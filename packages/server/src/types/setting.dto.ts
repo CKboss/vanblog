@@ -38,7 +38,8 @@ export interface MenuSetting {
 }
 
 export type StorageType = 'picgo' | 'local';
-export type StaticType = 'img' | 'customPage';
+/** `file` = 附件管理（任意文件），与图片共用 statics 表和 /static 静态服务。 */
+export type StaticType = 'img' | 'customPage' | 'file';
 export type CompressFormat = 'webp' | 'avif';
 export interface LoginSetting {
   enableMaxLoginRetry: boolean;
@@ -90,10 +91,13 @@ export interface SearchStaticOption {
   page: number;
   pageSize: number;
   view: 'admin' | 'public';
+  /** 可选：按文件名模糊搜索（附件管理用） */
+  name?: string;
 }
 export const StoragePath: Record<StaticType, string> = {
   img: `img`,
   customPage: `customPage`,
+  file: `file`,
 };
 export class StaticSetting {
   storageType: StorageType;

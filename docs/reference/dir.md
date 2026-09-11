@@ -8,7 +8,7 @@ oder: 3
 
 | 容器内目录                 | 说明                                                        |
 | -------------------------- | ----------------------------------------------------------- |
-| `/app/static`              | 图床中数据的存放路径，使用内置图床请务必映射好！            |
+| `/app/static`              | 静态数据存放路径：`img/`（图床）、`file/`（[附件](../features/attachment.md)）、`customPage/`（自定义页面）、`export/`（打包导出）。使用内置图床或附件请务必映射好！ |
 | `/var/log`                 | 日志的存放路径，包括 access 日志、 Caddy 日志和前台服务日志 |
 | `/root/.config/caddy`      | Caddy 配置存储路径                                          |
 | `/root/.local/share/caddy` | Caddy 证书存储路径                                          |

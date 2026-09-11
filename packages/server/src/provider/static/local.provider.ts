@@ -1,5 +1,6 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { StaticType, StoragePath } from 'src/types/setting.dto';
+import { ATTACHMENT_FOLDER } from 'src/utils/attachment';
 import * as fs from 'fs';
 import * as path from 'path';
 import { config } from 'src/config';
@@ -19,6 +20,8 @@ export class LocalProvider {
   async saveFile(fileName: string, buffer: Buffer, type: StaticType, toRootPath?: boolean) {
     if (type == 'img') {
       return await this.saveImg(fileName, buffer, type, toRootPath);
+    } else if (type == 'file') {
+      return await this.saveAttachment(fileName, buffer, type);
     } else if (type == 'customPage') {
       const storagePath = StoragePath[type];
       const realName = normalizeCustomPageRel(fileName);
@@ -80,6 +83,26 @@ export class LocalProvider {
     };
   }
 
+  /**
+   * 附件（任意文件）：原样落盘，不做压缩、不探测尺寸，只记录大小。
+   * fileName 由上层 `buildStoredFileName()` 生成（`<md5>.<安全文件名>`），
+   * 这里再挡一次分隔符，避免有人直接调用 provider 写出目录外。
+   */
+  async saveAttachment(fileName: string, buffer: Buffer, type: StaticType) {
+    if (!fileName || /[\\/]/.test(fileName) || fileName.includes('..')) {
+      throw new BadRequestException('非法的附件文件名！');
+    }
+    const storagePath = StoragePath[type] || ATTACHMENT_FOLDER;
+    const dir = path.join(config.staticPath, storagePath);
+    checkOrCreate(dir);
+    const byteLength = buffer.byteLength;
+    fs.writeFileSync(path.join(dir, fileName), buffer);
+    return {
+      meta: { size: formatBytes(byteLength), bytes: byteLength },
+      realPath: `/static/${storagePath}/${fileName}`,
+    };
+  }
+
   async deleteCustomPageFolder(name: string) {
     const storagePath = StoragePath['customPage'];
     const srcPath = path.join(config.staticPath, storagePath, name);
@@ -131,6 +154,24 @@ export class LocalProvider {
         success: false,
         error: err,
       };
+    }
+  }
+
+  /** 打包全部附件（仿「导出全部图片」），产物放在 /static/export/ 下。 */
+  async exportAllAttachments() {
+    const folder = ATTACHMENT_FOLDER;
+    const src = path.join(config.staticPath, folder);
+    checkOrCreate(src);
+    const zipName = `export-${folder}-${dayjs().format('YYYY-MM-DD')}.zip`;
+    const dst = path.join(config.staticPath, 'export', zipName);
+    checkOrCreateByFilePath(dst);
+    const dstSrc = `/static/export/${zipName}`;
+    try {
+      await compressing.zip.compressDir(src, dst);
+      return { success: true, path: dstSrc };
+    } catch (err) {
+      console.log(err);
+      return { success: false, error: err };
     }
   }
 }

@@ -47,6 +47,7 @@ import { Static, StaticSchema } from './scheme/static.schema';
 import { SettingProvider } from './provider/setting/setting.provider';
 import { StaticProvider } from './provider/static/static.provider';
 import { ImgController } from './controller/admin/img/img.controller';
+import { FileController } from './controller/admin/file/file.controller';
 import { LocalProvider } from './provider/static/local.provider';
 import { SettingController } from './controller/admin/setting/setting.controller';
 import { PicgoProvider } from './provider/static/picgo.provider';
@@ -135,6 +136,7 @@ import { initJwt } from './utils/initJwt';
     AnalysisController,
     SettingController,
     ImgController,
+    FileController,
     CaddyController,
     LogController,
     CollaboratorController,

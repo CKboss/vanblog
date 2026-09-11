@@ -499,6 +499,32 @@ export async function deleteAllIMG() {
     method: 'DELETE',
   });
 }
+/** 附件管理：列表（支持按文件名模糊搜索） */
+export async function getAttachments(page = 1, pageSize = 10, name = undefined) {
+  const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (name) {
+    query.set('name', name);
+  }
+  return request(`/api/admin/file?${query.toString()}`, {
+    method: 'GET',
+  });
+}
+export async function getAllAttachments() {
+  return request(`/api/admin/file/all`, {
+    method: 'GET',
+  });
+}
+export async function deleteAttachmentBySign(sign) {
+  return request(`/api/admin/file/${sign}`, {
+    method: 'DELETE',
+  });
+}
+/** 打包全部附件，返回 /static/export/xxx.zip */
+export async function exportAllAttachments() {
+  return request(`/api/admin/file/export`, {
+    method: 'POST',
+  });
+}
 export async function getStaticSetting() {
   return request(`/api/admin/setting/static`, {
     method: 'GET',

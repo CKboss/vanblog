@@ -17,6 +17,7 @@ import { WebsiteProvider } from './provider/website/website.provider';
 import { initJwt } from './utils/initJwt';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { applyStaticAssetHeaders } from './utils/imgCompress';
+import { ATTACHMENT_FOLDER } from './utils/attachment';
 
 async function bootstrap() {
   const jwtSecret = await initJwt();
@@ -34,6 +35,8 @@ async function bootstrap() {
   checkOrCreate(globalConfig.codeRunnerPath);
   checkOrCreate(globalConfig.staticPath);
   checkOrCreate(path.join(globalConfig.staticPath, 'img'));
+  // 附件管理（任意文件）
+  checkOrCreate(path.join(globalConfig.staticPath, ATTACHMENT_FOLDER));
   checkOrCreate(path.join(globalConfig.staticPath, 'tmp'));
   checkOrCreate(path.join(globalConfig.staticPath, 'export'));
 

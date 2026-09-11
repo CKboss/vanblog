@@ -38,6 +38,10 @@ const PERMISSION_OPTIONS = [
     value: 'img:delete',
   },
   {
+    label: '删除-附件',
+    value: 'file:delete',
+  },
+  {
     label: '所有权限',
     value: 'all',
   },

@@ -15,6 +15,7 @@ import '../../style/code-dark.css';
 import '../../style/custom-container.css';
 import { emoji } from './emoji';
 import { imgUploadPlugin, uploadImg } from './imgUpload';
+import { fileUploadPlugin } from './fileUpload';
 import { transferRemotePlugin } from './transferRemote';
 import './index.less';
 import './mermaid-safety.css';
@@ -100,6 +101,7 @@ export default function EditorComponent(props: {
       mermaidForEditor({ locale: cn }),
       tocViewportGuard(),
       imgUploadPlugin(setLoading),
+      fileUploadPlugin(setLoading),
       transferRemotePlugin(setLoading, props.onChange),
       emoji(),
       insertMore(),

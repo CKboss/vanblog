@@ -48,6 +48,13 @@ export default [
     component: './Static/img',
   },
   {
+    name: '附件管理',
+    icon: 'paperclip',
+    path: '/static/file',
+    hideInBreadcrumb: true,
+    component: './Static/file',
+  },
+  {
     name: '站点管理',
     icon: 'tool',
     path: '/site',

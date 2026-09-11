@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { compressImgToWebp, CWEBP_QUALITY } from './webp';
 import { compressImgToAvif, tryLoadSharp } from './avif';
+import { attachmentHeadersFor, isAttachmentPath } from './attachment';
 
 export const COMPRESS_FORMATS = ['webp', 'avif'] as const;
 export type CompressFormat = (typeof COMPRESS_FORMATS)[number];
@@ -66,6 +67,14 @@ export function applyStaticAssetHeaders(
   const type = contentTypeForExt(ext);
   if (type) {
     res.setHeader('Content-Type', type);
+  }
+  // 附件目录（<static>/file）里的文件：一律 nosniff；
+  // html/svg/js 这类能在本站源上执行的类型再强制下载，避免上传变成存储型 XSS。
+  if (isAttachmentPath(filePath)) {
+    const headers = attachmentHeadersFor(filePath);
+    for (const name of Object.keys(headers)) {
+      res.setHeader(name, headers[name]);
+    }
   }
 }
 

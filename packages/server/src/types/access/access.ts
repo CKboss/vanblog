@@ -6,7 +6,8 @@ export type LimitPermission =
   | 'draft:create'
   | 'draft:delete'
   | 'draft:update'
-  | 'img:delete';
+  | 'img:delete'
+  | 'file:delete';
 
 export type Permission = LimitPermission | 'all';
 
@@ -19,6 +20,7 @@ export const permissionPathMap: Record<LimitPermission, string> = {
   'draft:delete': 'delete-/api/admin/draft/:id',
   'draft:update': 'put-/api/admin/draft/:id',
   'img:delete': 'delete-/api/admin/img/:sign',
+  'file:delete': 'delete-/api/admin/file/:sign',
 };
 
 export const pathPermissionMap: Record<string, LimitPermission> = {
@@ -30,6 +32,7 @@ export const pathPermissionMap: Record<string, LimitPermission> = {
   'delete-/api/admin/draft/:id': 'draft:delete',
   'put-/api/admin/draft/:id': 'draft:update',
   'delete-/api/admin/img/:sign': 'img:delete',
+  'delete-/api/admin/file/:sign': 'file:delete',
 };
 
 export const permissionRoutes = Object.values(permissionPathMap);
@@ -46,6 +49,9 @@ export const publicRoutes = [
   'get-/api/admin/draft/:id',
   'get-/api/admin/img/all',
   'get-/api/admin/img',
+  'get-/api/admin/file/all',
+  'get-/api/admin/file',
+  'post-/api/admin/file/upload',
   'get-/api/admin/collaborator/list',
   'post-/api/admin/img/upload',
   'post-/api/admin/article/searchByLink',

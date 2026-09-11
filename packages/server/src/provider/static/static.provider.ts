@@ -19,6 +19,14 @@ import { checkTrue } from 'src/utils/checkTrue';
 import { compressExt, compressImg, resolveCompressFormat } from 'src/utils/imgCompress';
 import { normalizeCustomPageRel } from 'src/utils/customPagePath';
 import {
+  assertAttachmentSize,
+  attachmentExtOf,
+  buildStoredFileName,
+  decodeUploadFileName,
+  displayFileName,
+} from 'src/utils/attachment';
+import { escapeRegExp } from 'src/utils/regex';
+import {
   applyImageUrlMap,
   classifyImageUrl,
   collectSiteHosts,
@@ -55,6 +63,10 @@ export class StaticProvider {
     customPathname?: string,
     updateConfig?: UploadConfig,
   ) {
+    if (type == 'file') {
+      // 附件走独立分支：不加水印、不压缩、不按图片去重。
+      return await this.uploadAttachment(file);
+    }
     const { buffer } = file;
     const arr = file.originalname.split('.');
     const fileType = arr[arr.length - 1];
@@ -129,6 +141,43 @@ export class StaticProvider {
       isNew: true,
     };
   }
+
+  /**
+   * 附件上传（任意文件）：
+   * - 只存本地（`<static>/file/`），不走 PicGo/OSS，多数图床不支持非图片文件；
+   * - 按内容 MD5 去重，同一份文件重复上传返回同一个 URL；
+   * - 文件名安全化后存成 `<md5>.<原名>`，URL 里保留原名便于识别。
+   */
+  async uploadAttachment(file: any) {
+    const buffer = file?.buffer;
+    assertAttachmentSize(buffer?.byteLength);
+    const sign = encryptFileMD5(buffer);
+    const existing = await this.getOneBySignAndType(sign, 'file');
+    if (existing) {
+      return {
+        src: existing.realPath,
+        isNew: false,
+        name: displayFileName(existing.name),
+      };
+    }
+    const fileName = buildStoredFileName(sign, decodeUploadFileName(file?.originalname));
+    const realPath = await this.saveFile(
+      attachmentExtOf(fileName),
+      fileName,
+      buffer,
+      'file',
+      sign,
+    );
+    if (!realPath) {
+      throw new HttpException('上传失败', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+    return {
+      src: realPath,
+      isNew: true,
+      name: displayFileName(fileName),
+    };
+  }
+
   async importItems(items: Static[]) {
     for (const each of items) {
       const oldItem = await this.getOneBySign(each.sign);
@@ -295,6 +344,16 @@ export class StaticProvider {
       throw new NotImplementedException('其他图床暂不支持打包导出！');
     }
   }
+
+  /** 打包全部附件；附件只存本地，所以不受图床设置影响。 */
+  async exportAllAttachments() {
+    const { success, path } = await this.localProvider.exportAllAttachments();
+    if (success && path) {
+      return path;
+    }
+    throw new HttpException({ statusCode: 500, message: '打包错误！' }, 500);
+  }
+
   async saveFile(
     fileType: string,
     fileName: string,
@@ -305,7 +364,8 @@ export class StaticProvider {
   ) {
     const storageSetting = await this.settingProvider.getStaticSetting();
     let storageType = storageSetting?.storageType || 'local';
-    if (type == 'customPage') {
+    if (type == 'customPage' || type == 'file') {
+      // 自定义页面和附件都只落本地：PicGo/OSS 图床基本只接受图片。
       storageType = 'local';
     }
     switch (storageType) {
@@ -349,6 +409,13 @@ export class StaticProvider {
   async getOneBySign(sign: string) {
     return await this.staticModel.findOne({ sign }).exec();
   }
+  /**
+   * 同一份内容既可能是图片也可能是附件，去重要按类型区分，
+   * 否则上传附件会命中同内容的图片记录、返回 /static/img/... 的路径。
+   */
+  async getOneBySignAndType(sign: string, staticType: StaticType) {
+    return await this.staticModel.findOne({ sign, staticType }).exec();
+  }
   async getAll(type: StaticType, view: 'admin' | 'public') {
     return await this.staticModel.find({ staticType: type }, this.getView(view)).exec();
   }
@@ -359,6 +426,11 @@ export class StaticProvider {
     const query: any = {};
     if (option.staticType) {
       query.staticType = option.staticType;
+    }
+    const keyword = String(option.name ?? '').trim();
+    if (keyword) {
+      // 存的是 `<md5>.<原名>`，按子串匹配即可；转义避免用户输入变成非法正则。
+      query.name = { $regex: escapeRegExp(keyword), $options: 'i' };
     }
     const paging = sanitizePagination(option.page, option.pageSize);
     const total = await this.staticModel.count(query);
