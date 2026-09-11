@@ -2,14 +2,17 @@
  * Homepage / list cards render markdown before「阅读全文」.
  *
  * With `<!-- more -->`, everything before the marker is the excerpt (unchanged).
- * Without it, the card used to take `content.substring(0, 50)`. That cut could
- * land inside `[text](url)` (issue #410): the Viewer then showed raw brackets
- * plus a truncated autolink instead of the complete href and link text.
+ * Without it, the card falls back to the first `DEFAULT_OVERVIEW_CHARS`
+ * characters of the content — the editor tells authors this is the automatic
+ * summary, so the budget is a product decision (200 chars), not a rendering
+ * detail. The original 50-char cut also landed inside `[text](url)` (issue
+ * #410): the Viewer then showed raw brackets plus a truncated autolink instead
+ * of the complete href and link text.
  *
- * Keep the 50-character budget, but if the cut splits an inline link or image,
+ * So: keep the character budget, but if the cut splits an inline link or image,
  * include the rest of that construct so parse and href stay complete.
  */
-export const DEFAULT_OVERVIEW_CHARS = 50;
+export const DEFAULT_OVERVIEW_CHARS = 200;
 
 export function articleOverviewMarkdown(
   content: string,
@@ -34,7 +37,17 @@ function completeTruncatedInlineLinks(source: string, maxChars: number): string 
       end = Math.max(end, range.end);
     }
   }
-  return source.slice(0, end);
+  return source.slice(0, keepSurrogatePairsWhole(source, end));
+}
+
+/** Never cut between a surrogate pair, or the excerpt ends with a broken emoji. */
+function keepSurrogatePairsWhole(source: string, end: number): number {
+  if (end <= 0 || end >= source.length) {
+    return end;
+  }
+  const last = source.charCodeAt(end - 1);
+  // High surrogate at the boundary means its low surrogate got cut off.
+  return last >= 0xd800 && last <= 0xdbff ? end - 1 : end;
 }
 
 function inlineLinkRanges(source: string): { start: number; end: number }[] {

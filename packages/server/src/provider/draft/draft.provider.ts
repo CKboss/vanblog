@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CreateArticleDto } from 'src/types/article.dto';
@@ -199,9 +199,8 @@ export class DraftProvider {
   }
   async publish(id: number, options: PublishDraftDto) {
     const draft = await this.getById(id);
-    if (!draft.content.includes('<!-- more -->')) {
-      throw new ForbiddenException('未包含 more 标记，请修改后再发布！');
-    }
+    // 没有 <!-- more --> 也允许发布：前台会自动截取正文前 200 字作为摘要
+    // （packages/website/utils/articleExcerpt.ts 的 DEFAULT_OVERVIEW_CHARS）。
     const createArticleDto: CreateArticleDto = {
       title: draft.title,
       content: draft.content,
