@@ -428,6 +428,16 @@ export async function updateArticle(id, body) {
     data: body,
   });
 }
+/**
+ * 给历史上没有「自定义路径名」的文章批量补上标题拼音（/post/<pinyin>）。
+ * 只填空值，不会覆盖已有别名，因此可以重复执行；dryRun=true 时只预演不写库。
+ */
+export async function backfillArticlePathname(dryRun = false) {
+  return request(`/api/admin/article/backfill-pathname`, {
+    method: 'POST',
+    data: { dryRun },
+  });
+}
 export async function updateDraft(id, body) {
   return request(`/api/admin/draft/${id}`, {
     method: 'PUT',

@@ -93,17 +93,21 @@ describe('pathnameFromFrontMatter (#383 / #487)', () => {
     assert.equal(pathnameFromFrontMatter({ aliases: 'my-old-post' }), undefined);
   });
 
-  it('states Hugo /post/:slug, default numeric id, and SEO migration', () => {
+  it('states Hugo /post/:slug, pinyin default, and SEO migration', () => {
     assert.equal(PATHNAME_FIELD.name, 'pathname');
     assert.equal(PATHNAME_FIELD.label, '自定义路径名');
     assert.match(PATHNAME_FIELD.placeholder, /Hugo/);
     assert.match(PATHNAME_FIELD.placeholder, /id/i);
+    assert.match(PATHNAME_FIELD.placeholder, /拼音/);
     assert.match(PATHNAME_FIELD.tooltip, /\/post\/\[自定义路径名\]/);
     assert.match(PATHNAME_FIELD.tooltip, /Hugo/);
     assert.match(PATHNAME_FIELD.tooltip, /:slug/);
     assert.match(PATHNAME_FIELD.tooltip, /SEO/);
     assert.match(PATHNAME_FIELD.tooltip, /数字 id|数字 ID/);
     assert.match(PATHNAME_FIELD.tooltip, /没有站点级|没有.*固定链接模板/);
+    // 留空不再是"退回数字 id"，而是按标题生成拼音；已有别名不随标题变动
+    assert.match(PATHNAME_FIELD.tooltip, /留空则按标题自动生成汉语拼音路径/);
+    assert.match(PATHNAME_FIELD.tooltip, /不会随标题修改而变动/);
   });
 
   it('wires import parse + shared PathnameField on create / import / edit / publish', () => {

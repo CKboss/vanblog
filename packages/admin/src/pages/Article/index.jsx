@@ -1,10 +1,10 @@
 import ImportArticleModal from '@/components/ImportArticleModal';
 import NewArticleModal from '@/components/NewArticleModal';
-import { getArticlesByOption } from '@/services/van-blog/api';
+import { backfillArticlePathname, getArticlesByOption } from '@/services/van-blog/api';
 import { batchExport, batchDelete } from '@/services/van-blog/batch';
 import { useNum } from '@/services/van-blog/useNum';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
-import { Button, Space, message } from 'antd';
+import { Button, Modal, Space, message } from 'antd';
 import RcResizeObserver from 'rc-resize-observer';
 import { useMemo, useRef, useState } from 'react';
 import { history } from 'umi';
@@ -15,6 +15,7 @@ export default () => {
   const [colKeys, setColKeys] = useState(articleObjAll);
   const [simplePage, setSimplePage] = useState(false);
   const [simpleSearch, setSimpleSearch] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const [pageSize, setPageSize] = useNum(10, 'article-page-size');
   const searchSpan = useMemo(() => {
     if (!simpleSearch) {
@@ -23,6 +24,32 @@ export default () => {
       return 24;
     }
   }, [simpleSearch]);
+
+  /** 给没有自定义路径名的老文章补上标题拼音，已有别名不动。 */
+  const handleBackfillPathname = () => {
+    Modal.confirm({
+      title: '批量生成拼音路径名？',
+      content:
+        '为所有「自定义路径名」为空的文章按标题生成汉语拼音路径（重名自动追加 -2、-3）。已有路径名不会被修改，旧的 /post/数字id 链接依然可用。',
+      okText: '生成',
+      cancelText: '取消',
+      onOk: async () => {
+        setBackfilling(true);
+        try {
+          const res = await backfillArticlePathname(false);
+          const data = res?.data || {};
+          message.success(
+            `已生成 ${data.updated || 0} 个路径名（扫描 ${data.scanned || 0} 篇，跳过 ${
+              data.skipped || 0
+            } 篇）`,
+          );
+          actionRef?.current?.reload();
+        } finally {
+          setBackfilling(false);
+        }
+      },
+    });
+  };
   return (
     <PageContainer
       title={null}
@@ -197,6 +224,13 @@ export default () => {
                 message.success('导入成功！');
               }}
             />,
+            <Button
+              key="backfillPathnameBtn"
+              loading={backfilling}
+              onClick={handleBackfillPathname}
+            >
+              生成拼音路径
+            </Button>,
           ]}
         />
       </RcResizeObserver>

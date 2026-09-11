@@ -8,7 +8,7 @@ order: 2
 
 Hugo 里常用 `permalinks.post = "/post/:slug"`。VanBlog **没有**全局固定链接模板，而是按篇设置「自定义路径名 / slug」（字段名 `pathname`）。
 
-默认地址是 `/post/<数字ID>`。把自定义路径名填成旧文章的 slug 后，发布地址就是 `/post/<slug>`，搜索引擎已收录的旧链接可以继续打开。数字 ID 地址（`/post/123`）始终可用，两种地址指向同一篇。
+路径名留空时，VanBlog 会按标题自动生成汉语拼音地址（`/post/<pinyin-slug>`，重名追加 `-2`、`-3`）；标题里没有任何可用字符时才退回 `/post/<数字ID>`。把自定义路径名填成旧文章的 slug 后，发布地址就是 `/post/<slug>`，搜索引擎已收录的旧链接可以继续打开。数字 ID 地址（`/post/123`）始终可用，两种地址指向同一篇。
 
 在这些地方填写：
 
@@ -17,7 +17,7 @@ Hugo 里常用 `permalinks.post = "/post/:slug"`。VanBlog **没有**全局固�
 - 发布草稿
 - 文章表格「操作 → 修改信息」，或编辑器右上角「修改信息」
 
-没有 `slug` 字段、只靠文件名生成 URL 的文章，导入后请手动补上自定义路径名。VanBlog 不会解析 `/post/:year/:month/:title` 这类站点级规则，也不会改写数字 ID 路由。
+没有 `slug` 字段、只靠文件名生成 URL 的文章，导入后请手动补上自定义路径名，或在「文章管理」点 **生成拼音路径** 一次性批量补齐（只填空值，不覆盖已有别名）。VanBlog 不会解析 `/post/:year/:month/:title` 这类站点级规则，也不会改写数字 ID 路由。
 
 见 [文章管理](../features/article.md)、[迁移助手](../advanced/migrate.md) 与 [搜索引擎优化](../advanced/seo.md)。
 

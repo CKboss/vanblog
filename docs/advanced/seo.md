@@ -19,7 +19,7 @@ VanBlog 内置一些搜索引擎优化策略，开箱即用，无需任何配置
 
 ## 从其他博客迁移时保留旧 URL
 
-VanBlog 没有 Hugo 那种站点级 `permalinks` 模板。按篇文章设置「自定义路径名 / slug」后，发布地址就是 `/post/<slug>`，默认则是 `/post/<数字ID>`。从 Hugo（`post = "/post/:slug"`）迁过来时，把旧 slug 填进去即可让搜索引擎已收录的链接继续打开。见 [从 Hugo 迁移固定链接](../faq/usage.md#从-hugo-迁移固定链接)。
+VanBlog 没有 Hugo 那种站点级 `permalinks` 模板。按篇文章设置「自定义路径名 / slug」后，发布地址就是 `/post/<slug>`；留空则会按标题自动生成汉语拼音路径（`/post/<pinyin-slug>`，重名追加 `-2`、`-3`），只有标题里没有可用字符时才退回 `/post/<数字ID>`。数字 ID 地址始终可用，所以补了别名也不会让旧链接失效。从 Hugo（`post = "/post/:slug"`）迁过来时，把旧 slug 填进去即可让搜索引擎已收录的链接继续打开。见 [从 Hugo 迁移固定链接](../faq/usage.md#从-hugo-迁移固定链接)。
 
 ## meta 标签
 

@@ -145,6 +145,28 @@ export class ArticleController {
       data,
     };
   }
+
+  /**
+   * 给历史上没有路径别名的文章批量补上标题拼音，链接从 `/post/<id>` 变成
+   * `/post/<pinyin-slug>`。只填空值，不会覆盖已有别名，因此可以重复执行；
+   * 旧的 `/post/<id>` 依旧能访问（getByIdOrPathname 会回退到数字 id）。
+   * `dryRun: true` 时只返回将要发生的改动，不写库。
+   */
+  @Post('backfill-pathname')
+  async backfillPathname(@Body() body: { dryRun?: boolean | string }) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改文章！' };
+    }
+    const dryRun = body?.dryRun === true || body?.dryRun === 'true';
+    const data = await this.articleProvider.backfillPathname({ dryRun });
+    if (!dryRun && data.updated > 0) {
+      this.isrProvider.activeAll('回填文章路径别名触发增量渲染！');
+    }
+    return {
+      statusCode: 200,
+      data,
+    };
+  }
   @Delete('/:id')
   async delete(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {

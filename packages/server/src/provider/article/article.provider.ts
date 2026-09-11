@@ -1,4 +1,10 @@
-import { Inject, Injectable, forwardRef, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  forwardRef,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CreateArticleDto, SearchArticleOption, UpdateArticleDto } from 'src/types/article.dto';
@@ -7,6 +13,8 @@ import { parseImgLinksOfMarkdown } from 'src/utils/parseImgOfMarkdown';
 import { wordCount } from 'src/utils/wordCount';
 import { parseNumericId, tryParseNumericId } from 'src/utils/numericId';
 import { sanitizePagination, UNLIMITED_PAGE_SIZE } from 'src/utils/pagination';
+import { slugCandidates, titleToSlug } from 'src/utils/slug';
+import { assertUsablePathname, normalizePathname } from 'src/utils/articlePathname';
 import {
   prepareRewriteBases,
   rewriteBaseUrlInDocuments,
@@ -115,11 +123,114 @@ export class ArticleProvider {
     const createdData = new this.articleModel(createArticleDto);
     const newId = id || (await this.getNewId());
     createdData.id = newId;
+    createdData.pathname = await this.resolvePathnameForCreate(createArticleDto, newId);
     if (!skipUpdateWordCount) {
       this.metaProvider.updateTotalWords('新建文章');
     }
     const res = createdData.save();
     return res;
+  }
+
+  /**
+   * Alias used in the public URL `/post/<pathname>`.
+   *
+   * A manually provided alias is validated and has to be free. Otherwise the
+   * title is turned into a pinyin slug and the first unused candidate wins
+   * (`my-post`, `my-post-2`, …, `my-post-<id>`). Titles without any URL-safe
+   * character (or titles that would slugify to a bare number) keep the plain
+   * `/post/<id>` URL.
+   */
+  private async resolvePathnameForCreate(
+    createArticleDto: CreateArticleDto,
+    id: number,
+  ): Promise<string> {
+    const manual = normalizePathname(createArticleDto?.pathname);
+    if (manual) {
+      assertUsablePathname(manual);
+      if (await this.isPathnameTaken(manual)) {
+        throw new BadRequestException(`路径别名 "${manual}" 已被其它文章占用`);
+      }
+      return manual;
+    }
+    for (const candidate of slugCandidates(titleToSlug(createArticleDto?.title), id)) {
+      if (!(await this.isPathnameTaken(candidate))) {
+        return candidate;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Soft-deleted articles keep occupying their alias: restoring one must not
+   * collide with a slug handed out in the meantime.
+   */
+  private async isPathnameTaken(pathname: string, excludeId?: number): Promise<boolean> {
+    if (!pathname) {
+      return false;
+    }
+    const filter: any = { pathname };
+    if (excludeId != null) {
+      filter.id = { $ne: excludeId };
+    }
+    const hit = await this.articleModel.findOne(filter, { id: 1 }).exec();
+    return !!hit;
+  }
+
+  /**
+   * Give pinyin aliases to articles that predate this feature (or whose title
+   * produced no slug). Existing aliases are never touched, so re-running is
+   * safe; `dryRun` reports the same picks without writing.
+   */
+  async backfillPathname(options?: { dryRun?: boolean }): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    updated: number;
+    skipped: number;
+    items: { id: number; title: string; pathname: string }[];
+  }> {
+    const dryRun = options?.dryRun === true;
+    const articles = await this.articleModel
+      .find(
+        {
+          $or: [{ pathname: '' }, { pathname: null }, { pathname: { $exists: false } }],
+          deleted: { $ne: true },
+        },
+        { id: 1, title: 1 },
+      )
+      .sort({ id: 1 })
+      .exec();
+    const items: { id: number; title: string; pathname: string }[] = [];
+    // dryRun writes nothing, so duplicates have to be blocked in memory to
+    // report the same slugs a real run would pick.
+    const pending = new Set<string>();
+    let skipped = 0;
+    for (const article of articles) {
+      const doc: any = article;
+      let picked = '';
+      for (const candidate of slugCandidates(titleToSlug(doc.title), doc.id)) {
+        if (pending.has(candidate) || (await this.isPathnameTaken(candidate))) {
+          continue;
+        }
+        picked = candidate;
+        break;
+      }
+      if (!picked) {
+        skipped += 1;
+        continue;
+      }
+      pending.add(picked);
+      if (!dryRun) {
+        await this.articleModel.updateOne({ id: doc.id }, { pathname: picked });
+      }
+      items.push({ id: doc.id, title: doc.title, pathname: picked });
+    }
+    return {
+      dryRun,
+      scanned: articles.length,
+      updated: items.length,
+      skipped,
+      items,
+    };
   }
   async searchArticlesByLink(link: string) {
     const artciles = await this.articleModel.find(
@@ -1010,11 +1121,22 @@ export class ArticleProvider {
     skipUpdateWordCount?: boolean,
   ) {
     const numericId = parseNumericId(id);
+    const patch: UpdateArticleDto = { ...updateArticleDto };
+    if (patch.pathname !== undefined) {
+      // 别名只在显式传入时才校验/改写：标题变化不会重新生成 slug，
+      // 否则已经分享出去的 /post/<pathname> 会全部失效。
+      const nextPathname = normalizePathname(patch.pathname);
+      assertUsablePathname(nextPathname);
+      if (await this.isPathnameTaken(nextPathname, numericId)) {
+        throw new BadRequestException(`路径别名 "${nextPathname}" 已被其它文章占用`);
+      }
+      patch.pathname = nextPathname;
+    }
     const res = await this.articleModel.updateOne(
       { id: numericId },
       {
-        ...updateArticleDto,
-        updatedAt: updateArticleDto.updatedAt || new Date(),
+        ...patch,
+        updatedAt: patch.updatedAt || new Date(),
       },
     );
     if (!skipUpdateWordCount) {

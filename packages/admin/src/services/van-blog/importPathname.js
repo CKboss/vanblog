@@ -1,9 +1,11 @@
 /**
  * Resolve a custom article pathname from Markdown Front Matter.
  *
- * Create-article already accepts an optional `pathname` string with no extra
- * sanitizing (empty → `/post/<id>`). Import reuses that: only string/number
- * values are kept, whitespace is trimmed, and nothing else is rewritten.
+ * Create-article accepts an optional `pathname` string. Import reuses that:
+ * only string/number values are kept, whitespace is trimmed, and nothing else
+ * is rewritten. The server validates the value (single segment, not a bare
+ * number, not taken) and, when it is empty, derives a pinyin slug from the
+ * title instead of falling back to `/post/<id>`.
  *
  * Preference:
  * 1. `pathname` — VanBlog's own field (re-import / explicit override)
@@ -20,9 +22,9 @@
 const PATHNAME_FIELD = Object.freeze({
   name: 'pathname',
   label: '自定义路径名',
-  placeholder: '例如 Hugo 的 slug；留空则用数字 id',
+  placeholder: '例如 Hugo 的 slug；留空则按标题生成拼音，而不是数字 id',
   tooltip:
-    '发布后地址为 /post/[自定义路径名]，对应 Hugo 的 permalinks.post = "/post/:slug"。从 Hugo 迁移时把旧 slug 填到这里，可保持旧 URL、不影响 SEO。留空则用数字 id。数字 ID 地址始终可用；没有站点级固定链接模板。',
+    '发布后地址为 /post/[自定义路径名]，对应 Hugo 的 permalinks.post = "/post/:slug"。从 Hugo 迁移时把旧 slug 填到这里，可保持旧 URL、不影响 SEO。留空则按标题自动生成汉语拼音路径（重名依次追加 -2、-3，最后兜底 -文章id）；标题里没有可用字符时才退回数字 id。已填的别名不会随标题修改而变动，数字 id 地址始终可用；没有站点级固定链接模板。',
 });
 
 function asPathname(value) {

@@ -114,6 +114,8 @@ describe('ArticleProvider.create pathname (#383)', () => {
         return this;
       };
     };
+    // create() 会先确认别名没被占用，桩模型要能回答 findOne({ pathname })
+    Model.findOne = jest.fn(() => ({ exec: async () => null }));
     const provider = createProvider(Model);
     jest.spyOn(provider, 'getNewId').mockResolvedValue(42);
 
