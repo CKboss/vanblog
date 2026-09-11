@@ -49,7 +49,9 @@ export default [
   },
   {
     name: '附件管理',
-    icon: 'paperclip',
+    // 必须写 paper-clip：umi 的 icon 解析是 toHump(首字母大写) + 'Outlined'，
+    // 'paperclip' 会拼出不存在的 PaperclipOutlined，菜单里就会显示成纯文本。
+    icon: 'paper-clip',
     path: '/static/file',
     hideInBreadcrumb: true,
     component: './Static/file',

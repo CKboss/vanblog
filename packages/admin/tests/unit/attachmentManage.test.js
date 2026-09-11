@@ -14,6 +14,10 @@ describe('附件管理：后台入口', () => {
     assert.match(routes, /name: '附件管理'/);
     assert.match(routes, /path: '\/static\/file'/);
     assert.match(routes, /component: '\.\/Static\/file'/);
+    // umi 的解析规则是 toHump(首字母大写) + 'Outlined'：
+    // 'paperclip' 会拼出不存在的 PaperclipOutlined，菜单里就直接显示成 "paperclip附件管理"。
+    assert.match(routes, /icon: 'paper-clip'/);
+    assert.doesNotMatch(routes, /icon: 'paperclip'/);
     // 顺序上紧跟图片管理，方便找
     assert.ok(routes.indexOf("name: '图片管理'") < routes.indexOf("name: '附件管理'"));
   });
