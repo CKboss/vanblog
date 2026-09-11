@@ -1,11 +1,29 @@
 import dayjs from "dayjs";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import CopyToClipboard from "react-copy-to-clipboard";
+import toast from "react-hot-toast";
 import { encodeQuerystring } from "../../utils/encode";
 import PostViewer from "../PostViewer";
 import { getTarget } from "../Link/tools";
 import { checkLogin } from "../../utils/auth";
 import { COUNT_LOADING_PLACEHOLDER } from "../../utils/countPlaceholder";
+import { CopyIcon, LinkIcon } from "../CopyIcons";
+import {
+  SITE_NAME_COPY_LABEL,
+  TITLE_COPY_CLASS,
+  TITLE_COPY_LABEL,
+  TITLE_COPY_TOAST,
+  TITLE_LINK_COPY_CLASS,
+  TITLE_LINK_COPY_LABEL,
+  TITLE_LINK_COPY_TOAST,
+  TITLE_SELECTABLE_CLASS,
+  articleUrl,
+} from "./titleCopyA11y";
+
+/** Shared look for the small icon buttons that sit next to a title. */
+const TITLE_ACTION_BUTTON_CLASS =
+  "bg-transparent border-0 appearance-none p-1 cursor-pointer text-gray-400 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-hover transition-colors";
 
 export function Title(props: {
   type: "article" | "about" | "overview";
@@ -21,27 +39,75 @@ export function Title(props: {
     }
     return false;
   }, [props]);
+  const isAbout = props.type == "about";
+  // The public host is unknown during SSR; the button is only clickable client-side.
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    setOrigin(`${location.protocol}//${location.host}`);
+  }, []);
+  const shareUrl = useMemo(
+    () => articleUrl(origin, props.id),
+    [origin, props.id]
+  );
   return (
-    <div className="flex justify-center post-card-title ">
-      {props.type != "about" ? (
+    <div className="flex justify-center post-card-title group/title relative">
+      {!isAbout ? (
         <Link href={`/post/${props.id}`} target={getTarget(newTab)} style={{width:"90%"}} title={props.title}>
           <div
             className={`text-lg block font-medium overflow-hidden text-ellipsis whitespace-nowrap px-5  text-center mb-2 mt-2 dark:text-dark text-gray-700 ${
               showEditButton ? "ml-8" : ""
-            } md:text-${props.type == "overview" ? "xl" : "2xl"} ua ua-link`}
+            } md:text-${props.type == "overview" ? "xl" : "2xl"} ua ua-link ${TITLE_SELECTABLE_CLASS}`}
           >
             {props.title}
           </div>
         </Link>
       ) : (
         <div
-          className={`text-lg block font-medium mb-2 mt-2 dark:text-dark text-gray-700 md:text-2xl ua ua-link  select-none ${
+          className={`text-lg block font-medium mb-2 mt-2 dark:text-dark text-gray-700 md:text-2xl ua ua-link ${TITLE_SELECTABLE_CLASS} ${
             showEditButton ? "ml-12 mr-4" : ""
           }`}
         >
           {props.title}
         </div>
       )}
+      <div
+        className={`title-copy-actions absolute right-1 top-1/2 -translate-y-1/2 flex items-center transition-opacity opacity-100 md:opacity-0 md:group-hover/title:opacity-100 md:group-focus-within/title:opacity-100 ${
+          showEditButton ? "mr-10" : ""
+        }`}
+      >
+        <CopyToClipboard
+          text={props.title}
+          onCopy={() => {
+            toast.success(TITLE_COPY_TOAST, { className: "toast" });
+          }}
+        >
+          <button
+            type="button"
+            aria-label={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
+            title={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
+            className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_COPY_CLASS}`}
+          >
+            <CopyIcon />
+          </button>
+        </CopyToClipboard>
+        {!isAbout && (
+          <CopyToClipboard
+            text={shareUrl}
+            onCopy={() => {
+              toast.success(TITLE_LINK_COPY_TOAST, { className: "toast" });
+            }}
+          >
+            <button
+              type="button"
+              aria-label={TITLE_LINK_COPY_LABEL}
+              title={TITLE_LINK_COPY_LABEL}
+              className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_LINK_COPY_CLASS}`}
+            >
+              <LinkIcon />
+            </button>
+          </CopyToClipboard>
+        )}
+      </div>
       {showEditButton && (
         <a
           className="flex items-center"

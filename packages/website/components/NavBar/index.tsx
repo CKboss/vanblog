@@ -2,6 +2,8 @@ import Link from "next/link";
 import Headroom from "headroom.js";
 import { useRouter } from "next/router";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import CopyToClipboard from "react-copy-to-clipboard";
+import toast from "react-hot-toast";
 import SearchCard, { SearchCardHandle } from "../SearchCard";
 import ThemeButton from "../ThemeButton";
 import KeyCard from "../KeyCard";
@@ -11,6 +13,12 @@ import { ThemeContext } from "../../utils/themeContext";
 import RssButton from "../RssButton";
 import Item from "./item";
 import { encodeQuerystring } from "../../utils/encode";
+import { CopyIcon } from "../CopyIcons";
+import {
+  SITE_NAME_COPY_CLASS,
+  SITE_NAME_COPY_LABEL,
+  SITE_NAME_COPY_TOAST,
+} from "../PostCard/titleCopyA11y";
 import {
   HEADER_ACTION_LABELS,
   ICON_ACTION_BUTTON_CLASS,
@@ -85,7 +93,7 @@ export default function (props: {
         >
           <div
             data-nav-site-name={NAV_SITE_NAME_MOBILE}
-            className={`${NAV_SITE_NAME_MOBILE_CLASS} cursor-pointer select-none dark:text-dark md:hidden`}
+            className={`${NAV_SITE_NAME_MOBILE_CLASS} cursor-pointer select-text dark:text-dark md:hidden`}
           >
             <Link href="/">
               <div>{props.siteName}</div>
@@ -137,14 +145,31 @@ export default function (props: {
             )}
           </div>
           {props.headerLeftContent == "siteName" && (
-            <Link href="/">
-              <div
-                data-nav-site-name={NAV_SITE_NAME_DESKTOP}
-                className={`${NAV_SITE_NAME_DESKTOP_CLASS} text-gray-800 cursor-pointer select-none text-lg dark:text-dark lg:text-xl font-medium  mr-4 hidden md:block`}
+            <div className="hidden md:flex md:items-center mr-4 group/site-name">
+              <Link href="/">
+                <div
+                  data-nav-site-name={NAV_SITE_NAME_DESKTOP}
+                  className={`${NAV_SITE_NAME_DESKTOP_CLASS} text-gray-800 cursor-pointer select-text text-lg dark:text-dark lg:text-xl font-medium`}
+                >
+                  {props.siteName}
+                </div>
+              </Link>
+              <CopyToClipboard
+                text={props.siteName}
+                onCopy={() => {
+                  toast.success(SITE_NAME_COPY_TOAST, { className: "toast" });
+                }}
               >
-                {props.siteName}
-              </div>
-            </Link>
+                <button
+                  type="button"
+                  aria-label={SITE_NAME_COPY_LABEL}
+                  title={SITE_NAME_COPY_LABEL}
+                  className={`${SITE_NAME_COPY_CLASS} bg-transparent border-0 appearance-none p-1 ml-1 cursor-pointer text-gray-400 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-hover transition-opacity opacity-0 focus:opacity-100 group-hover/site-name:opacity-100 group-focus-within/site-name:opacity-100`}
+                >
+                  <CopyIcon />
+                </button>
+              </CopyToClipboard>
+            </div>
           )}
           {/* 第二个flex */}
           <div className="flex justify-between h-full flex-grow nav-content">
