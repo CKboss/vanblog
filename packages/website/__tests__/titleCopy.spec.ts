@@ -94,6 +94,20 @@ describe("article / about title markup", () => {
     // 触屏没有 hover，小屏保持可见
     expect(title).toMatch(/opacity-100 md:opacity-0/);
   });
+
+  it("lays the actions out in a grid cell so they never cover 编辑", () => {
+    // 旧实现用 absolute right-1 定位，登录态下复制按钮会压在「编辑」两个字上；
+    // 现在标题行是三列网格（左占位 / 标题 / 右操作），标题仍然视觉居中。
+    expect(title).toMatch(/grid-cols-\[1fr_minmax\(0,auto\)_1fr\]/);
+    expect(title).not.toMatch(/absolute right-1/);
+    expect(title).toMatch(/post-card-title-actions justify-self-end/);
+
+    const actionsIndex = title.indexOf("post-card-title-actions");
+    const editIndex = title.indexOf("<div>编辑</div>");
+    expect(actionsIndex).toBeGreaterThan(-1);
+    // 「编辑」在操作格内部，和复制按钮同一行、互不重叠
+    expect(editIndex).toBeGreaterThan(actionsIndex);
+  });
 });
 
 describe("navbar site name markup", () => {

@@ -50,79 +50,83 @@ export function Title(props: {
     [origin, props.id]
   );
   return (
-    <div className="flex justify-center post-card-title group/title relative">
+    // 三列网格：左右等宽的占位列把标题顶在正中，右侧操作列（复制按钮 + 编辑）
+    // 独立成格，因此不会像绝对定位那样压在「编辑」文字上。
+    <div className="grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center post-card-title group/title">
+      <span aria-hidden="true" />
       {!isAbout ? (
-        <Link href={`/post/${props.id}`} target={getTarget(newTab)} style={{width:"90%"}} title={props.title}>
+        <Link
+          href={`/post/${props.id}`}
+          target={getTarget(newTab)}
+          className="min-w-0 max-w-full"
+          title={props.title}
+        >
           <div
-            className={`text-lg block font-medium overflow-hidden text-ellipsis whitespace-nowrap px-5  text-center mb-2 mt-2 dark:text-dark text-gray-700 ${
-              showEditButton ? "ml-8" : ""
-            } md:text-${props.type == "overview" ? "xl" : "2xl"} ua ua-link ${TITLE_SELECTABLE_CLASS}`}
+            className={`text-lg block font-medium overflow-hidden text-ellipsis whitespace-nowrap px-5  text-center mb-2 mt-2 dark:text-dark text-gray-700 md:text-${
+              props.type == "overview" ? "xl" : "2xl"
+            } ua ua-link ${TITLE_SELECTABLE_CLASS}`}
           >
             {props.title}
           </div>
         </Link>
       ) : (
         <div
-          className={`text-lg block font-medium mb-2 mt-2 dark:text-dark text-gray-700 md:text-2xl ua ua-link ${TITLE_SELECTABLE_CLASS} ${
-            showEditButton ? "ml-12 mr-4" : ""
-          }`}
+          className={`text-lg block font-medium mb-2 mt-2 dark:text-dark text-gray-700 md:text-2xl ua ua-link ${TITLE_SELECTABLE_CLASS}`}
         >
           {props.title}
         </div>
       )}
-      <div
-        className={`title-copy-actions absolute right-1 top-1/2 -translate-y-1/2 flex items-center transition-opacity opacity-100 md:opacity-0 md:group-hover/title:opacity-100 md:group-focus-within/title:opacity-100 ${
-          showEditButton ? "mr-10" : ""
-        }`}
-      >
-        <CopyToClipboard
-          text={props.title}
-          onCopy={() => {
-            toast.success(TITLE_COPY_TOAST, { className: "toast" });
-          }}
-        >
-          <button
-            type="button"
-            aria-label={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
-            title={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
-            className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_COPY_CLASS}`}
-          >
-            <CopyIcon />
-          </button>
-        </CopyToClipboard>
-        {!isAbout && (
+      <div className="post-card-title-actions justify-self-end flex items-center shrink-0 ml-1 md:ml-2">
+        <span className="flex items-center transition-opacity opacity-100 md:opacity-0 md:group-hover/title:opacity-100 md:group-focus-within/title:opacity-100">
           <CopyToClipboard
-            text={shareUrl}
+            text={props.title}
             onCopy={() => {
-              toast.success(TITLE_LINK_COPY_TOAST, { className: "toast" });
+              toast.success(TITLE_COPY_TOAST, { className: "toast" });
             }}
           >
             <button
               type="button"
-              aria-label={TITLE_LINK_COPY_LABEL}
-              title={TITLE_LINK_COPY_LABEL}
-              className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_LINK_COPY_CLASS}`}
+              aria-label={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
+              title={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
+              className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_COPY_CLASS}`}
             >
-              <LinkIcon />
+              <CopyIcon />
             </button>
           </CopyToClipboard>
+          {!isAbout && (
+            <CopyToClipboard
+              text={shareUrl}
+              onCopy={() => {
+                toast.success(TITLE_LINK_COPY_TOAST, { className: "toast" });
+              }}
+            >
+              <button
+                type="button"
+                aria-label={TITLE_LINK_COPY_LABEL}
+                title={TITLE_LINK_COPY_LABEL}
+                className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_LINK_COPY_CLASS}`}
+              >
+                <LinkIcon />
+              </button>
+            </CopyToClipboard>
+          )}
+        </span>
+        {showEditButton && (
+          <a
+            className="flex items-center shrink-0 ml-2"
+            href={
+              props.type === "about"
+                ? "/admin/editor?type=about"
+                : `/admin/editor?type=article&id=${props.id}`
+            }
+            target="_blank"
+          >
+            <div className=" text-dark dark:text-gray-700">
+              <div>编辑</div>
+            </div>
+          </a>
         )}
       </div>
-      {showEditButton && (
-        <a
-          className="flex items-center"
-          href={
-            props.type === "about"
-              ? "/admin/editor?type=about"
-              : `/admin/editor?type=article&id=${props.id}`
-          }
-          target="_blank"
-        >
-          <div className=" text-dark dark:text-gray-700">
-            <div>编辑</div>
-          </div>
-        </a>
-      )}
     </div>
   );
 }
