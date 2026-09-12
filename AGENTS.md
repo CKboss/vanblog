@@ -1118,7 +1118,66 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - 文档：`docs/features/markdown.md` 把这 6 项从「不支持」挪到「支持」，新增「单个 `~` 的行为变化」
   「用的是哪些插件」两节，以及提示块图标与预览 TOC 的说明。
 
-### 7.15 测试基线（本分支最后一次全量运行的结果）
+### 7.15 第二轮清理：性能 + 审计遗留项
+
+接着 §7.10（性能）与 §7.11（审计）往下做，把「未修清单」里能低风险拿下的都清了。
+
+**前台（website）**
+- **真 404**：`/post/<不存在>` 与 `/page/abc`、`/page/0`、`/page/999` 以前都返回 **200 + 软 404**，
+  既骗搜索引擎，也会在后端抖动时把 ISR 缓存里的好页面替换掉。现在 `getStaticProps` 返回 `notFound: true`；
+  `api/getArticles.ts` 里区分「后端 404（确实没有）」与「后端 5xx/网络错误（抛出去，让 ISR 保留旧页面）」。
+- **参数编码**：`getArticlesByOption` 原来手拼 `k=v&` 再用只转义 `#`/`/` 的 `encodeQuerystring`，
+  于是分类名 `a&b` 变成 `category=a`、标签 `C++` 被服务端按空格解出来 → 标签页显示"此标签不存在"。
+  统一改 `URLSearchParams`；`api/search.ts` 的搜索词加 `encodeURIComponent`（搜 `C#` 以前等于搜 `C`）；
+  文章 id 加 `isSafeArticleParam()`（Next 会把 `%2F` 解码成 `/`，拼进后端 URL 就能打到 `/api/admin/**`）。
+- **ISR 触发地址**：server 侧原来是 `encodeURI(base + url)`，而 `encodeURI` **不编码 `#`**，
+  文章别名里允许 `#` → 增量渲染悄悄失败。改成 `URLSearchParams`，并支持 `VAN_BLOG_REVALIDATE_SECRET`；
+  `pages/api/revalidate.ts` 增加路径校验（必须 `/` 开头、禁 `..`、禁 `//`、禁协议、禁控制字符、限长）
+  与可选密钥（单独部署 website 镜像时这个路由是公网可达的）。
+- **封面 preload**：文章页给封面加 `<link rel="preload" as="image">`（它是 LCP 元素）。
+- **百度统计** 改 `strategy="lazyOnload"`（GA 本来就有 strategy）。
+- **摘要截断**：`<!-- more -->` 出现在围栏代码/行内代码里时不再当截断标记
+  （`findMoreMarker()`，教程类文章以前会被截成半个代码块，把后面的内容全吞掉）。
+- **TOC scroll-spy 闭包过期**：滚动监听只注册一次（`[]` 依赖）却闭包了 `items`，
+  客户端从文章 A 跳到 B 后仍用 A 的标题 → 高亮错行 + 每次滚动把地址栏 hash 改成 A 的标题。
+  改成 `itemsRef` + 卸载时 `throttle.cancel()`。
+- **AuthorCard 的 headroom 泄漏**：`useEffect` 没有依赖数组也没有清理，每次渲染都新建实例 + 再挂一个
+  scroll 监听。改成有依赖 + `headroom.destroy()`。
+
+**服务端（server）**
+- **流水线不会再卡死保存**：`runCodeByPipelineId` 的 Promise 只监听 `message`，脚本不发消息
+  （死循环 / await 卡住 / `<codeRunner>/<id>.js` 被删导致子进程起不来）就永远 pending，
+  而 `dispatchEvent` 是被 `await` 的 → **保存任何文章都永久挂住**。现在加了 30s 超时
+  （`VANBLOG_PIPELINE_TIMEOUT_MS`）+ `error`/`exit` 监听 + SIGKILL。
+  `addDeps` 的 `spawnSync('pnpm','add')` 改成异步 `spawn`（同步等待会把事件循环卡死十几秒，
+  和 §7.6 备份踩的是同一个坑），并校验依赖名不以 `-` 开头（参数注入）。
+- **`getNewId()` 的锁**：4 个 provider 都补了 `try/finally`。以前 `find()` 抛一次错，
+  `idLock` 就永远是 `true`，之后所有新建请求都在 `while (this.idLock) await sleep(10)` 里空转，
+  只能重启进程。
+- **计数改原子 `$inc`**：`meta.addViewer`（每次页面浏览都调）与 `visit.add` 原来是「读出来 +1 再写回」，
+  并发下互相覆盖、永久少算。`visit.add` 先试原子 `$inc`，当天没记录才按上一天的累计值建新行，
+  并对并发建行做了 E11000 回退。
+- **改站点信息不再无条件重启前台/评论**：`websiteProvider.restart()` 先算一遍 `loadEnv()` 与上次比对，
+  一样就跳过（`stop()` 会杀进程组再由 exit 钩子拉起 next，期间公网是 down 的；改个站点描述不值得停站）；
+  `run()` 加了并发保护（重叠的 restart 会 spawn 两个 next 抢 3001）。`walineProvider.restart()` 同理比对 env。
+- **图片链接解析**：`parseImgLinksOfMarkdown` 原来遍历**每个捕获分组**、只用 `includes('http')` 过滤，
+  于是 `![参见 https://docs…](https://cdn/real.png)` 会把 **alt 文本**当链接、`![a](url "title")` 会返回
+  `url "title"`、代码块里的示例也算 —— 失败的被报成「文章里有失效图片」，成功的还往 statics 插垃圾记录。
+  改成只取 URL 分组 + 用 `maskCodeRegions` 跳过代码区。`transferRemoteImages.extractImageRefs`
+  同样加代码区屏蔽（「本地化远程图片」以前会改坏教程里的示例）。
+- **`markdownExport`**：`\bsrc=` 会匹配到 `data-src`（懒加载占位图被当成真图，真 src 反而没改，
+  导出的 mdz 离线打开是坏图）→ 改 `(?<![-\w])src`；`decodeURIComponent` 遇到 `%zb` 会抛 URIError
+  让整个导出 500 → 统一走 `safeDecodeURIComponent`。
+- **`backupCodec`**：`{$date: "乱七八糟"}` 不会抛错只会得到 Invalid Date，被当 1970 写进库、
+  再次编码时又抛 RangeError → 现在回落到 `NOT_EXTENDED_JSON`（保持原样）。
+- **加密文章解锁限流**：`POST /api/public/article/:id` 是明文比较且完全公开，可以无限速爆破。
+  新增 `utils/attemptLimit.ts`（内存计数，同 IP + 同文章 10 分钟 20 次，成功即清零）→ 429。
+- **Swagger 可关**：`VANBLOG_SWAGGER=false`（默认仍开启，保持既有行为）。
+
+**测试**：server 新增 `utils/attemptLimit.spec.ts`(4)、`utils/imgLinkParse.spec.ts`(7)；
+website 新增 `__tests__/robustness.spec.ts`(12)。基线见 §7.16。
+
+### 7.16 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
@@ -1135,7 +1194,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.15 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.16 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

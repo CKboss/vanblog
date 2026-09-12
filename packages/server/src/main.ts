@@ -115,8 +115,12 @@ async function bootstrap() {
     .setDescription('API Token 请在后台设置页面获取，请添加到请求头的 token 字段中进行鉴权。')
     .setVersion('1.0')
     .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('swagger', app, document);
+  // Swagger 默认仍然开着（保持既有行为），但它等于把整个后台 API 面摊给未登录用户，
+  // 生产环境建议关掉：VANBLOG_SWAGGER=false
+  if (process.env.VANBLOG_SWAGGER !== 'false') {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('swagger', app, document);
+  }
   const { port, host } = getListenTarget(DEFAULT_SERVER_PORT, globalConfig.serverHost);
   if (host) {
     await app.listen(port, host);

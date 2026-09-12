@@ -25,13 +25,56 @@ export function articleOverviewMarkdown(
   // front matter 是元信息不是正文，摘要里出现 `--- title: …` 会很难看，
   // 而且会被当成 setext 标题（编辑器里有 frontmatter 插件，前台没有）
   content = stripFrontMatter(content);
-  if (content.includes("<!-- more -->")) {
-    return content.split("<!-- more -->")[0];
+  const cut = findMoreMarker(content);
+  if (cut >= 0) {
+    return content.slice(0, cut);
   }
   if (content.length <= maxChars) {
     return content;
   }
   return completeTruncatedInlineLinks(content, maxChars);
+}
+
+export const MORE_MARKER = "<!-- more -->";
+
+/**
+ * 找到真正起作用的 `<!-- more -->` 位置，跳过围栏代码块与行内代码里的。
+ * 教程类文章经常把标记本身写在代码示例里，以前会在那里截断，
+ * 于是列表卡片渲染出一个没闭合的 ``` ，把后面的内容全吞掉。
+ */
+export function findMoreMarker(content: string): number {
+  const text = String(content ?? "");
+  let index = text.indexOf(MORE_MARKER);
+  if (index < 0) {
+    return -1;
+  }
+  const fence = /(^|\n)\s{0,3}(?:`{3,}|~{3,})[^\n]*\n/g;
+  const codeRanges: Array<[number, number]> = [];
+  let match: RegExpExecArray | null;
+  let openStart = -1;
+  while ((match = fence.exec(text)) !== null) {
+    if (openStart < 0) {
+      openStart = match.index;
+    } else {
+      codeRanges.push([openStart, match.index + match[0].length]);
+      openStart = -1;
+    }
+  }
+  if (openStart >= 0) {
+    codeRanges.push([openStart, text.length]);
+  }
+  const inline = /`[^`\n]*`/g;
+  while ((match = inline.exec(text)) !== null) {
+    codeRanges.push([match.index, match.index + match[0].length]);
+  }
+  const inCode = (at: number) => codeRanges.some(([from, to]) => at >= from && at < to);
+  while (index >= 0) {
+    if (!inCode(index)) {
+      return index;
+    }
+    index = text.indexOf(MORE_MARKER, index + MORE_MARKER.length);
+  }
+  return -1;
 }
 
 function completeTruncatedInlineLinks(source: string, maxChars: number): string {

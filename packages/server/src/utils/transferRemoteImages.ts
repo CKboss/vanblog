@@ -1,3 +1,4 @@
+import { maskCodeRegions } from './markdownExport';
 export type ImageRef = {
   url: string;
   raw: string;
@@ -26,17 +27,22 @@ export function extractImageRefs(content: string): ImageRef[] {
   if (!content) {
     return [];
   }
+  // 「本地化远程图片」以前会连代码块/行内代码里的示例一起改写并去下载，
+  // 教程类文章里的 ```md 示例会被悄悄改成本地链接（内容损坏）。
+  // 做法与导出功能一致：把代码区涂黑成等长占位，用占位串跑正则拿偏移，再回原文取真实内容。
+  const masked = maskCodeRegions(content);
   const refs: ImageRef[] = [];
-  let match: RegExpExecArray | null;
-  const markdown = new RegExp(MARKDOWN_IMAGE.source, 'g');
-  while ((match = markdown.exec(content)) !== null) {
-    refs.push({ url: (match[2] || '').trim(), raw: match[0], index: match.index });
-  }
-  const html = new RegExp(HTML_IMAGE.source, 'gi');
-  while ((match = html.exec(content)) !== null) {
-    const url = (match[1] || match[2] || match[3] || '').trim();
-    refs.push({ url, raw: match[0], index: match.index });
-  }
+  const collect = (source: string, flags: string, pick: (m: RegExpExecArray) => string) => {
+    const re = new RegExp(source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(masked)) !== null) {
+      const raw = content.slice(match.index, match.index + match[0].length);
+      const exact = new RegExp(source, flags.replace('g', '')).exec(raw);
+      refs.push({ url: (exact ? pick(exact) : '').trim(), raw, index: match.index });
+    }
+  };
+  collect(MARKDOWN_IMAGE.source, 'g', (m) => m[2] || '');
+  collect(HTML_IMAGE.source, 'gi', (m) => m[1] || m[2] || m[3] || '');
   return refs.sort((a, b) => a.index - b.index);
 }
 

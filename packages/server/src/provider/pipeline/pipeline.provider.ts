@@ -1,3 +1,8 @@
+/** 单个流水线的执行上限：超时直接杀进程，避免 await 永久挂起。 */
+const PIPELINE_TIMEOUT_MS = Number(process.env.VANBLOG_PIPELINE_TIMEOUT_MS || 30000);
+/** 安装依赖的上限。 */
+const DEPS_INSTALL_TIMEOUT_MS = Number(process.env.VANBLOG_DEPS_INSTALL_TIMEOUT_MS || 300000);
+
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -9,7 +14,7 @@ import { sleep } from 'src/utils/sleep';
 import { spawnSync } from 'child_process';
 import { config } from 'src/config/index';
 import { writeFileSync, rmSync } from 'fs';
-import { fork } from 'child_process';
+import {fork, spawn} from 'child_process';
 import { LogProvider } from '../log/log.provider';
 
 export interface CodeResult {
@@ -70,13 +75,18 @@ export class PipelineProvider {
       await sleep(10);
     }
     this.idLock = true;
+    try {
     const maxObj = await this.pipelineModel.find({}).sort({ id: -1 }).limit(1);
     let res = 1;
     if (maxObj.length) {
       res = maxObj[0].id + 1;
     }
-    this.idLock = false;
-    return res;
+      return res;
+    } finally {
+      // 一次查询失败就会让 idLock 永远为 true，之后所有新建请求都在 while 里空转，
+      // 只能重启进程才能恢复 —— 所以必须放在 finally 里释放
+      this.idLock = false;
+    }
   }
 
   async createPipeline(pipeline: CreatePipelineDto) {
@@ -172,16 +182,76 @@ export class PipelineProvider {
     }
     const traceId = new Date().getTime();
     this.logger.log(`[${traceId}]开始运行流水线: ${id} ${JSON.stringify(data, null, 2)}`);
-    const run = new Promise((resolve, reject) => {
-      const subProcess = fork(this.getPathById(id));
-      subProcess.send(data || {});
-      subProcess.on('message', (msg: CodeResult) => {
-        if (msg.status === 'error') {
-          subProcess.kill('SIGINT');
-          reject(msg);
-        } else {
-          resolve(msg);
+    const run = new Promise<CodeResult>((resolve, reject) => {
+      let settled = false;
+      const finish = (ok: boolean, payload: any) => {
+        if (settled) {
+          return;
         }
+        settled = true;
+        clearTimeout(timer);
+        if (ok) {
+          resolve(payload);
+        } else {
+          reject(payload);
+        }
+      };
+      const subProcess = fork(this.getPathById(id));
+      // 没有超时和 error/exit 监听时，只要脚本不 postMessage（死循环、await 卡住、
+      // 或者 <codeRunner>/<id>.js 已经被删导致子进程起不来），这个 Promise 就永远 pending。
+      // 而 dispatchEvent 是被 await 的 —— 结果是**保存任何文章都会永久卡住**。
+      const timer = setTimeout(() => {
+        try {
+          subProcess.kill('SIGKILL');
+        } catch {
+          // 进程可能已经没了
+        }
+        finish(false, {
+          status: 'error',
+          message: `流水线执行超时（超过 ${PIPELINE_TIMEOUT_MS / 1000}s 未返回结果）`,
+          output: [],
+          logs: [],
+        } as CodeResult);
+      }, PIPELINE_TIMEOUT_MS);
+      try {
+        subProcess.send(data || {});
+      } catch (err) {
+        finish(false, {
+          status: 'error',
+          message: `无法向流水线进程发送数据：${(err as Error)?.message || err}`,
+          output: [],
+          logs: [],
+        } as CodeResult);
+        return;
+      }
+      subProcess.on('message', (msg: CodeResult) => {
+        if (msg?.status === 'error') {
+          try {
+            subProcess.kill('SIGINT');
+          } catch {
+            // ignore
+          }
+          finish(false, msg);
+        } else {
+          finish(true, msg);
+        }
+      });
+      subProcess.on('error', (err: Error) => {
+        finish(false, {
+          status: 'error',
+          message: `流水线进程启动失败：${err?.message || err}`,
+          output: [],
+          logs: [],
+        } as CodeResult);
+      });
+      subProcess.on('exit', (code) => {
+        // 正常路径下 message 已经先 settle 了，这里只兜「没发消息就退出」的情况
+        finish(false, {
+          status: 'error',
+          message: `流水线进程退出（code=${code}）且没有返回结果`,
+          output: [],
+          logs: [],
+        } as CodeResult);
       });
     });
     try {
@@ -198,19 +268,42 @@ export class PipelineProvider {
 
   async addDeps(deps: string[]) {
     for (const dep of deps) {
+      // 依赖名会作为 argv 传给 pnpm，`-` 开头会被当成参数（参数注入），先挡掉
+      if (typeof dep !== 'string' || dep.startsWith('-') || !/^[a-zA-Z0-9@/._^~>-]*$/.test(dep)) {
+        this.logger.warn(`跳过不合法的依赖名：${String(dep).slice(0, 80)}`);
+        continue;
+      }
       try {
-        const r = spawnSync(`pnpm`, ['add', dep], {
-          cwd: this.runnerPath,
-          shell: process.platform === 'win32',
-          env: {
-            ...process.env,
-          },
+        // 不能用 spawnSync：`pnpm add` 动辄十几秒，同步等待会把整个事件循环卡死，
+        // 期间所有 HTTP 请求（包括前台页面）都不响应。和 §7.6 备份的教训一样。
+        const output = await new Promise<string>((resolve) => {
+          let out = '';
+          const child = spawn('pnpm', ['add', dep], {
+            cwd: this.runnerPath,
+            shell: process.platform === 'win32',
+            env: { ...process.env },
+          });
+          const killTimer = setTimeout(() => {
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              // ignore
+            }
+          }, DEPS_INSTALL_TIMEOUT_MS);
+          child.stdout?.on('data', (d) => (out += String(d)));
+          child.stderr?.on('data', (d) => (out += String(d)));
+          child.on('error', (err) => {
+            clearTimeout(killTimer);
+            resolve(`${out}\n${err?.message || err}`);
+          });
+          child.on('close', () => {
+            clearTimeout(killTimer);
+            resolve(out);
+          });
         });
-        console.log(r.output.toString());
+        this.logger.log(`安装流水线依赖 ${dep}：${output.slice(0, 500)}`);
       } catch (e) {
-        // console.log(e.output.map(a => a.toString()).join(''));
-        console.log(e);
-        // this.logger.error(e);
+        this.logger.error(`安装流水线依赖 ${dep} 失败：${(e as Error)?.message || e}`);
       }
     }
   }

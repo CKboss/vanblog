@@ -115,6 +115,14 @@ export class WalineProvider {
     this.run();
   }
   async restart(reason: string) {
+    // waline 的环境变量只来自站点名/站点地址与评论设置，改别的站点信息不必重启评论服务
+    const before = JSON.stringify(this.env || {});
+    await this.loadEnv();
+    const after = JSON.stringify(this.env || {});
+    if (this.ctx && before === after) {
+      this.logger.log(`${reason}：waline 环境变量未变化，跳过重启`);
+      return;
+    }
     this.logger.log(`${reason}重启 waline`);
     if (this.ctx) {
       await this.stop();

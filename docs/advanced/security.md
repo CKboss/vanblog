@@ -50,14 +50,20 @@ order: 9
 | `VAN_BLOG_IP_GEO_TIMEOUT` | `3000` | 归属地查询超时（毫秒）。以前没有超时，离线环境下每次登录都要干等外网 |
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | 设 `true` 恢复「任何域名都批准按需证书」的旧行为（多域名/CDN 场景才需要） |
 | `VAN_BLOG_BACKUP_PATH` | `<log>/vanblog-backups` | 整站备份与导出归档的存放目录，必须在静态目录之外 |
+| `VANBLOG_SWAGGER` | 空（= 开启） | 设 `false` 关闭 `/swagger` 与 `/swagger-json`。它默认公开，等于把整个后台 API 面摊给未登录用户，生产环境建议关掉 |
+| `VAN_BLOG_REVALIDATE_SECRET` | 空 | 设了之后，前台的 `/api/revalidate` 必须带同名 `secret` 才生效（server 会自动带上）。一体式镜像里该路由不可达，**单独部署 website 镜像时建议设置** |
+| `VANBLOG_PIPELINE_TIMEOUT_MS` | `30000` | 单个流水线的执行上限；超时直接杀进程，避免保存文章时被卡死 |
+| `VANBLOG_DEPS_INSTALL_TIMEOUT_MS` | `300000` | 流水线安装依赖（`pnpm add`）的上限 |
 
 ## 已知限制（尚未处理）
 
 - 文章/分类的**加密密码是明文存储**、用 `==` 比较，且解锁接口没有次数限制（可离线爆破）。
 - 管理员口令用的是 sha256 套 sha256（带每用户 salt），**不是 bcrypt/argon2**：数据库或备份泄露后可以被 GPU 快速爆破。
-- 除登录外**没有全局限流**，公开接口可以被高频调用。
+- 加密文章的解锁接口已有次数限制（同一 IP + 同一文章 10 分钟 20 次），但**其它公开接口仍没有全局限流**。
 - Swagger（`/swagger`、`/swagger-json`）默认公开，等于把整个后台 API 面暴露给未登录用户。
 - 没有全局 `ValidationPipe`（`class-validator` 不是依赖），参数校验靠各处手写；目前的净化中间件是「黑名单」而不是「白名单」。
+- 后台的 `/init` 接口没有守卫，靠「库里有没有用户」判断是否已初始化（初始化窗口内的 TOCTOU）。
+- API Token 有效期 100 年，只能靠手动吊销。
 
 ::: warning 部署建议
 

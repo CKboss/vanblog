@@ -64,6 +64,10 @@ const PostPages = (props: PostPagesProps) => {
           name="keywords"
           content={getArticlesKeyWord([props.article]).join(",")}
         ></meta>
+        {props.article.cover ? (
+          // 封面是文章页的 LCP 元素，提前 preload 省掉「HTML→CSS→发现图片」的往返
+          <link rel="preload" as="image" href={props.article.cover} />
+        ) : null}
         {articleShareImageMeta(props.article.cover, props.siteUrl).map(
           (tag, index) =>
             "property" in tag ? (
@@ -135,9 +139,12 @@ export async function getStaticPaths() {
 
 export async function getStaticProps({
   params,
-}: any): Promise<{ props: PostPagesProps; revalidate?: number }> {
-  return {
-    props: await getPostPagesProps(params.id),
-    ...revalidate,
-  };
+}: any): Promise<{ props?: PostPagesProps; notFound?: boolean; revalidate?: number }> {
+  const props = await getPostPagesProps(params.id);
+  if (!props?.article) {
+    // 以前是渲染 Custom404 但返回 200：既骗搜索引擎（软 404），
+    // 也会在后端抖动时把 ISR 缓存里的好页面换成这个软 404
+    return { notFound: true, ...revalidate };
+  }
+  return { props, ...revalidate };
 }

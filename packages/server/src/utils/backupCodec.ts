@@ -182,8 +182,15 @@ function decodeExtendedJson(value: Record<string, any>): any {
     switch (key) {
       case '$oid':
         return new ObjectId(String(inner));
-      case '$date':
-        return new Date(typeof inner === 'string' ? inner : inner?.$numberLong ?? inner);
+      case '$date': {
+        const date = new Date(typeof inner === 'string' ? inner : inner?.$numberLong ?? inner);
+        // `new Date('乱七八糟')` 不会抛错，只会得到 Invalid Date：
+        // 直接返回会被当成 1970-01-01 写进库，之后再编码还会抛 RangeError。
+        if (Number.isNaN(date.getTime())) {
+          return NOT_EXTENDED_JSON;
+        }
+        return date;
+      }
       case '$numberDecimal':
         return Decimal128.fromString(String(inner));
       case '$numberLong':

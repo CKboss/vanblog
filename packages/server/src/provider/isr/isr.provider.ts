@@ -78,9 +78,25 @@ export class ISRProvider {
     }, 1000);
   }
 
+  /**
+   * 拼 revalidate 请求地址。
+   * 以前是 `encodeURI(this.base + url)`：encodeURI 不会编码 `#`、`&`、`?`，
+   * 而文章别名里允许出现 `#`（见 utils/articlePathname.ts），那样后面的路径会被截断，
+   * 增量渲染就悄悄失败了。改成 URLSearchParams，并且带上可选的共享密钥
+   * （website 的 /api/revalidate 在单独部署时是公网可达的）。
+   */
+  buildRevalidateUrl(url: string): string {
+    const params = new URLSearchParams({ path: url });
+    const secret = process.env.VAN_BLOG_REVALIDATE_SECRET;
+    if (secret) {
+      params.set('secret', secret);
+    }
+    return `http://127.0.0.1:3001/api/revalidate?${params.toString()}`;
+  }
+
   async testConn() {
     try {
-      await axios.get(encodeURI(this.base + '/'));
+      await axios.get(this.buildRevalidateUrl('/'));
       return true;
     } catch {
       return false;
@@ -213,7 +229,7 @@ export class ISRProvider {
 
   async activeUrl(url: string, log: boolean) {
     try {
-      await axios.get(encodeURI(this.base + url));
+      await axios.get(this.buildRevalidateUrl(url));
       if (log) {
         this.logger.log(`触发增量渲染成功！ ${url}`);
       }

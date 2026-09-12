@@ -54,23 +54,21 @@ export class MetaProvider {
     return { visited: newVisited, viewer: newViewer };
   }
   async addViewer(isNew: boolean, pathname: string, isNewByPath: boolean) {
-    const old = await this.getAll();
-    const ov = old.viewer || 0;
-    const oldVisited = old.visited || 0;
-    const newViewer = ov + 1;
-    let newVisited = oldVisited;
     let isNewVisitorByArticle = false;
-    if (isTrue(isNew)) {
-      newVisited += 1;
-    }
     if (isTrue(isNewByPath)) {
       isNewVisitorByArticle = true;
     }
-    // 这个是 meta 的
-    await this.update({
-      viewer: newViewer,
-      visited: newVisited,
-    });
+    // 原子自增：原来是「读出来 +1 再写回」，两个访客同时打开同一个页面时
+    // 会互相覆盖，计数永久少算（这个接口每次页面浏览都会调，并发很常见）
+    const inc: Record<string, number> = { viewer: 1 };
+    if (isTrue(isNew)) {
+      inc.visited = 1;
+    }
+    const updated = await this.metaModel
+      .findOneAndUpdate({}, { $inc: inc }, { new: true })
+      .exec();
+    const newViewer = updated?.viewer || 0;
+    const newVisited = updated?.visited || 0;
     // 更新文章的
     const r = /\/post\//;
     const isArticlePath = r.test(pathname);

@@ -15,19 +15,26 @@ export class VisitProvider {
     const { isNew, pathname } = createViewerDto;
     // 这里的 isNew 代表是对于这个文章来说有没有访问过。
     const today = dayjs().format('YYYY-MM-DD');
-    const todayData = await this.findByDateAndPath(today, pathname);
-    if (todayData) {
-      // 有今天的，直接在今天的基础上 +1 就行了
-      return await this.visitModel.updateOne(
-        { _id: todayData._id },
-        {
-          viewer: todayData.viewer + 1,
-          visited: isNew ? todayData.visited + 1 : todayData.visited,
-          lastVisitedTime: new Date(),
-        },
-      );
-    } else {
-      // 没有今天的，找到能找到的上一天，然后加一，并创建今天的。
+    // 先试**原子**自增：原来「先查再写回」在并发下会互相覆盖（同一天同一页面的
+    // 两个访客同时进来，只记一次）。命中当天记录时一条 $inc 就够了。
+    const inc: Record<string, number> = { viewer: 1 };
+    if (isNew) {
+      inc.visited = 1;
+    }
+    const bumped = await this.visitModel
+      .findOneAndUpdate(
+        { date: today, pathname },
+        { $inc: inc, $set: { lastVisitedTime: new Date() } },
+        { new: true },
+      )
+      .exec();
+    if (bumped) {
+      return bumped;
+    }
+    {
+      // 今天还没有记录：沿用上一天的累计值 +1 建一条新的。
+      // 并发首次访问可能同时走到这里，第二条 create 会撞唯一性/产生重复行，
+      // 所以捕获后回退到上面的原子 $inc。
       const lastData = await this.getLastData(pathname);
       const lastVisit = lastData?.visited || 0;
       const lastViewer = lastData?.viewer || 0;
@@ -38,7 +45,21 @@ export class VisitProvider {
         pathname: pathname,
         lastVisitedTime: new Date(),
       });
-      return await createdData.save();
+      try {
+        return await createdData.save();
+      } catch (err) {
+        const retry = await this.visitModel
+          .findOneAndUpdate(
+            { date: today, pathname },
+            { $inc: inc, $set: { lastVisitedTime: new Date() } },
+            { new: true },
+          )
+          .exec();
+        if (retry) {
+          return retry;
+        }
+        throw err;
+      }
     }
   }
 

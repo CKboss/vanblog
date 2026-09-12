@@ -72,7 +72,24 @@ export class WebsiteProvider {
     }
     return { VAN_BLOG_ALLOW_DOMAINS: urls.join(','), ...isrEnv };
   }
+  /** 上一次真正用于启动前台进程的环境变量（用来判断有没有必要重启）。 */
+  private lastEnvJson = '';
+  private starting: Promise<any> | null = null;
+
   async restart(reason: string) {
+    // 保存**任何**站点信息都会走到这里，而 stop() 会杀掉整个进程组、再由 exit 钩子重新拉起 next，
+    // 期间公网是打不开的（几秒钟）。但真正需要重启的只有影响 loadEnv() 的字段
+    // （图床域名白名单 VAN_BLOG_ALLOW_DOMAINS、ISR 设置），改个站点描述完全不必停站。
+    let nextEnvJson = '';
+    try {
+      nextEnvJson = JSON.stringify(await this.loadEnv());
+    } catch {
+      nextEnvJson = '';
+    }
+    if (this.ctx && nextEnvJson && nextEnvJson === this.lastEnvJson) {
+      this.logger.log(`${reason}：前台环境变量未变化，跳过重启`);
+      return;
+    }
     this.logger.log(`${reason}重启 website`);
     if (this.ctx) {
       await this.stop();
@@ -110,7 +127,13 @@ export class WebsiteProvider {
         );
       }
     }
+    // 并发保护：loadEnv() 是 await 的，两次重叠的 restart 会在 `this.ctx == null` 判断之间
+    // 各自 spawn 一个 next，两个进程抢 3001 端口
+    if (this.starting) {
+      await this.starting.catch(() => undefined);
+    }
     const loadEnvs = await this.loadEnv();
+    this.lastEnvJson = JSON.stringify(loadEnvs);
     this.logger.log(JSON.stringify(loadEnvs, null, 2));
     if (this.ctx == null) {
       this.ctx = spawn(cmd, args, {

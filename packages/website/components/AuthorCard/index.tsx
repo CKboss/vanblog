@@ -34,7 +34,10 @@ export default function (props: { option: AuthorCardProps }) {
   }, [theme, props]);
   useEffect(() => {
     const el = document.querySelector("#author-card");
-    if (el) {
+    if (!el) {
+      return;
+    }
+    {
       const headroom = new Headroom(el, {
         classes: {
           initial: `side-bar${props.option.showSubMenu == "true" ? "" : " no-submenu"
@@ -46,8 +49,13 @@ export default function (props: { option: AuthorCardProps }) {
         },
       });
       headroom.init();
+      // 原来这个 effect 没有依赖数组、也没有清理函数：每次渲染（切换主题、路由跳转）
+      // 都会新建一个 Headroom 实例并再挂一个 scroll 监听，越用越多。
+      return () => {
+        headroom.destroy();
+      };
     }
-  });
+  }, [props.option.showSubMenu]);
   return (
     <div id="author-card" className="sticky ">
       <div className="w-52 flex flex-col justify-center items-center bg-white pt-6  pb-4 card-shadow ml-2 dark:bg-dark dark:card-shadow-dark">

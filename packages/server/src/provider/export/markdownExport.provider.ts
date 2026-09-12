@@ -22,6 +22,7 @@ import {
   safeExportName,
   toRelativeLink,
   uniqueAssetName,
+  safeDecodeURIComponent,
 } from 'src/utils/markdownExport';
 
 /** 单个外链图片的抓取上限：超时 / 体积 / 重定向次数 */
@@ -275,7 +276,7 @@ export class MarkdownExportProvider {
 
   private remoteFileName(pathname: string): string {
     const base = path.basename(String(pathname || '').split('?')[0]);
-    return base && base !== '/' ? decodeURIComponent(base) : 'image';
+    return base && base !== '/' ? safeDecodeURIComponent(base) : 'image';
   }
 
   private renderReport(report: ExportReport): string {

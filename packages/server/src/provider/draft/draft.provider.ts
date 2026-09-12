@@ -284,12 +284,17 @@ export class DraftProvider {
       await sleep(10);
     }
     this.idLock = true;
+    try {
     const maxObj = await this.draftModel.find({}).sort({ id: -1 }).limit(1);
     let res = 1;
     if (maxObj.length) {
       res = maxObj[0].id + 1;
     }
-    this.idLock = false;
-    return res;
+      return res;
+    } finally {
+      // 一次查询失败就会让 idLock 永远为 true，之后所有新建请求都在 while 里空转，
+      // 只能重启进程才能恢复 —— 所以必须放在 finally 里释放
+      this.idLock = false;
+    }
   }
 }

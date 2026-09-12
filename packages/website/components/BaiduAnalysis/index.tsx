@@ -11,7 +11,11 @@ export default function (props: { id: string }) {
   return (
     <>
       {props.id != "" && (
-        <Script src={`https://hm.baidu.com/hm.js?${props.id}`} async></Script>
+        // lazyOnload：第三方统计不该和水合/首屏渲染抢资源（load 之后再加载）
+        <Script
+          src={`https://hm.baidu.com/hm.js?${encodeURIComponent(props.id)}`}
+          strategy="lazyOnload"
+        ></Script>
       )}
     </>
   );

@@ -1,4 +1,6 @@
 import {
+  HttpException,
+  HttpStatus,
   NotFoundException, Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -13,6 +15,8 @@ import { version } from 'src/utils/loadConfig';
 import { CustomPageProvider } from 'src/provider/customPage/customPage.provider';
 import { encode } from 'js-base64';
 import { asQueryString } from 'src/utils/sanitizeRequest';
+import { consumeAttempt, resetAttempts } from 'src/utils/attemptLimit';
+import { pickSocketIp } from 'src/provider/log/utils';
 import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePagination } from 'src/utils/pagination';
@@ -81,8 +85,21 @@ export class PublicController {
   async getArticleByIdOrPathnameWithPassword(
     @Param('id') id: number | string,
     @Body() body: { password: string },
+    @Req() req?: any,
   ) {
+    // 加密文章的密码是明文比较，接口又完全公开：不限次数的话可以无限速爆破。
+    const key = `unlock-${pickSocketIp(req)}-${String(id).slice(0, 80)}`;
+    const attempt = consumeAttempt(key, { max: 20, windowMs: 10 * 60 * 1000 });
+    if (!attempt.allowed) {
+      throw new HttpException(
+        `尝试次数过多，请 ${attempt.retryAfterSeconds} 秒后再试`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     const data = await this.articleProvider.getByIdWithPassword(id, body?.password);
+    if (data) {
+      resetAttempts(key);
+    }
     return {
       statusCode: 200,
       data: data,

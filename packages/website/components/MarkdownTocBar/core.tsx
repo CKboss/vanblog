@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import throttle from "lodash/throttle";
 import { getEl, NavItem } from "./tools";
 import { scrollTo } from "../../utils/scroll";
@@ -45,6 +45,12 @@ export default function (props: {
     }
     window.history.replaceState(null, "", next);
   }
+  // items 放在 ref 里：滚动监听只注册一次（[] 依赖），
+  // 客户端从文章 A 跳到文章 B 时，闭包里如果还是 A 的 items，
+  // getEl 全部落空，最后 top 会停在 A 的**最后一个**标题上 —— 高亮错行，
+  // 而且每次滚动都把地址栏的 hash 改成上一篇文章的标题。
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const handleScroll = throttle((ev: Event) => {
     ev.stopPropagation();
     ev.preventDefault();
@@ -52,8 +58,9 @@ export default function (props: {
     let top: any = null;
     let topEl: any = null;
     let lastMin = 9999999999;
-    for (const each of items) {
-      const el: any = getEl(each, items);
+    const currentItems = itemsRef.current;
+    for (const each of currentItems) {
+      const el: any = getEl(each, currentItems);
 
       if (!topEl) {
         top = each;
@@ -107,6 +114,8 @@ export default function (props: {
     window.addEventListener("scroll", handleScroll);
     return () => {
       window.removeEventListener("scroll", handleScroll);
+      // 节流里可能还排着一次调用，卸载后执行会读到已销毁的 DOM
+      handleScroll.cancel?.();
     };
   }, []);
 

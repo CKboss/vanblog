@@ -25,6 +25,15 @@ export interface ImageRef {
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 
 /** 把代码块与行内代码「涂黑」成等长占位符，偏移量保持不变。 */
+/** `decodeURIComponent` 遇到 `%zb` 这种坏转义会抛 URIError，一次就让整个导出 500。 */
+export function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function maskCodeRegions(source: string): string {
   const NUL = '\u0000';
   const lines = source.split('\n');
@@ -159,7 +168,9 @@ export function extractImageRefs(source: string): ImageRef[] {
     if (isMasked(masked, m.index, m.index + m[0].length)) {
       continue;
     }
-    const srcRe = /\bsrc\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i;
+    // `\bsrc` 会匹配到 `data-src`（`-` 之后仍是词边界），于是懒加载占位图被当成真图，
+    // 真正的 src 反而留在原样（导出的 mdz 离线打开就是坏图）
+    const srcRe = /(?<![-\w])src\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i;
     const sm = srcRe.exec(m[0]);
     if (!sm) {
       continue;
@@ -242,7 +253,7 @@ export function classifyImageUrl(rawUrl: string, baseUrl?: string): ClassifiedIm
     return { kind: 'skip', reason: 'data URI，已内嵌在正文里' };
   }
   if (url.startsWith('/static/')) {
-    return { kind: 'local', staticRel: decodeURIComponent(url.slice('/static/'.length)) };
+    return { kind: 'local', staticRel: safeDecodeURIComponent(url.slice('/static/'.length)) };
   }
   if (/^https?:\/\//i.test(url) || url.startsWith('//')) {
     const absolute = url.startsWith('//') ? `https:${url}` : url;
@@ -254,7 +265,7 @@ export function classifyImageUrl(rawUrl: string, baseUrl?: string): ClassifiedIm
     }
     const sameSite = baseUrl ? sameOrigin(parsed, baseUrl) : false;
     if (parsed.pathname.startsWith('/static/') && sameSite) {
-      return { kind: 'local', staticRel: decodeURIComponent(parsed.pathname.slice('/static/'.length)) };
+      return { kind: 'local', staticRel: safeDecodeURIComponent(parsed.pathname.slice('/static/'.length)) };
     }
     return { kind: 'remote', absolute: parsed.toString() };
   }

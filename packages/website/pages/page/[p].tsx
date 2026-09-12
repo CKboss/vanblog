@@ -99,9 +99,21 @@ export async function getStaticPaths() {
 
 export async function getStaticProps({
   params,
-}: any): Promise<{ props: PagePagesProps; revalidate?: number }> {
-  return {
-    props: await getPagePagesProps(params.p),
-    ...revalidate,
-  };
+}: any): Promise<{ props?: PagePagesProps; notFound?: boolean; revalidate?: number }> {
+  const raw = String(params?.p ?? "");
+  // /page/abc、/page/0、/page/-3 以前都会渲染成第 1 页并返回 200，
+  // current 还是 NaN（分页高亮丢失、下一页链接变成 /page/NaN）
+  if (!/^\d+$/.test(raw)) {
+    return { notFound: true, ...revalidate };
+  }
+  const page = parseInt(raw, 10);
+  if (!Number.isFinite(page) || page < 1) {
+    return { notFound: true, ...revalidate };
+  }
+  const props = await getPagePagesProps(raw);
+  if (!props?.articles?.length) {
+    // 超出范围的页码给真 404，别做成 200 的软 404 污染 ISR 缓存
+    return { notFound: true, ...revalidate };
+  }
+  return { props, ...revalidate };
 }

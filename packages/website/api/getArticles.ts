@@ -15,12 +15,16 @@ export interface GetArticleOption {
 export const getArticlesByOption = async (
   option: GetArticleOption
 ): Promise<{ articles: Article[]; total: number; totalWordCount?: number }> => {
-  let queryString = "";
+  // 手拼 `k=v&` 只转义了 # 和 /（utils/encode.ts），`&` 在值里不需要转义却会截断参数：
+  // 分类名 `a&b` 会变成 category=a，标签 `C++` 会被服务端按空格解出来。统一用 URLSearchParams。
+  const params = new URLSearchParams();
   for (const [k, v] of Object.entries(option)) {
-    queryString += `${k}=${v}&`;
+    if (v === undefined || v === null) {
+      continue;
+    }
+    params.append(k, String(v));
   }
-  queryString = queryString.substring(0, queryString.length - 1);
-  queryString = encodeQuerystring(queryString);
+  const queryString = params.toString();
   try {
     const url = `${config.baseUrl}api/public/article?${queryString}`;
     const res = await fetch(url);
@@ -86,10 +90,38 @@ export const getArticlesByTag = async (tagName: string) => {
     }
   }
 };
+/**
+ * 文章标识只允许「一段路径」：Next 的动态参数会把 %2F 解码成 /，
+ * 直接拼进后端 URL 就能让 fetch 打到 /api/admin/**（虽然还要 JWT，但没必要留这个口子）。
+ */
+export const isSafeArticleParam = (id: unknown): boolean => {
+  const text = String(id ?? "");
+  return (
+    text.length > 0 &&
+    text.length <= 200 &&
+    !text.includes("/") &&
+    !text.includes("\\") &&
+    !text.includes("..") &&
+    !text.includes("#") &&
+    !text.includes("?")
+  );
+};
+
 export const getArticleByIdOrPathname = async (id: string) => {
+  if (!isSafeArticleParam(id)) {
+    return {};
+  }
   try {
-    const url = `${config.baseUrl}api/public/article/${id}`;
+    const url = `${config.baseUrl}api/public/article/${encodeURIComponent(String(id))}`;
     const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 404) {
+        // 确实没有这篇文章
+        return {};
+      }
+      // 5xx / 网关错误：抛出去让 ISR 保留上一次的页面，别把好页面换成软 404
+      throw new Error(`后端返回 ${res.status}`);
+    }
     const { data } = await res.json();
     const { article, pre, next } = data;
     const r: any = { article };
@@ -104,10 +136,10 @@ export const getArticleByIdOrPathname = async (id: string) => {
     if (process.env.isBuild == "t") {
       console.log("无法连接，采用默认值");
       return {};
-    } else {
-      // console.log(err);
-      return {};
     }
+    // 运行时**不要吞掉**：以前两个分支都 return {}，于是一次后端抖动
+    // 就会被当成「文章不存在」，把 ISR 缓存里的好页面替换成 200 的软 404
+    throw err;
   }
 };
 export const getArticleByIdOrPathnameWithPassword = async (
