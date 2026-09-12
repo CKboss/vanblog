@@ -1,5 +1,5 @@
 import { deleteDonate, getDonate, updateDonate } from '@/services/van-blog/api';
-import { EditableProTable } from '@ant-design/pro-components';
+import { EditableProTable } from '@ant-design/pro-table';
 import { Modal, Spin } from 'antd';
 import { useRef, useState } from 'react';
 

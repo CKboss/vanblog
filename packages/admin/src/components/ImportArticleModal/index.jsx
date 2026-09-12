@@ -1,12 +1,6 @@
 import { createArticle, getAllCategories } from '@/services/van-blog/api';
 import { parseMarkdownFile } from '@/services/van-blog/parseMarkdownFile';
-import {
-  ModalForm,
-  ProFormDateTimePicker,
-  ProFormSelect,
-  ProFormText,
-  ProFormTextArea,
-} from '@ant-design/pro-components';
+import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormText, ProFormTextArea } from '@ant-design/pro-form';
 import { stopMenuKeydown } from '@/services/van-blog/editableKeyboard';
 import { Button, Form, Upload } from 'antd';
 import moment from 'moment';

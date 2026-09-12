@@ -1,5 +1,5 @@
 import { getLog } from '@/services/van-blog/api';
-import { ProTable } from '@ant-design/pro-components';
+import { ProTable } from '@ant-design/pro-table';
 import { Tag } from 'antd';
 import { useRef } from 'react';
 

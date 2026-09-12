@@ -1,5 +1,6 @@
 import { createApiToken, getAllApiTokens, deleteApiToken } from '@/services/van-blog/api';
-import { ModalForm, ProFormText, ProTable } from '@ant-design/pro-components';
+import { ModalForm, ProFormText } from '@ant-design/pro-form';
+import { ProTable } from '@ant-design/pro-table';
 import { Button, Card, message, Modal, Space, Typography } from 'antd';
 
 import { useRef } from 'react';

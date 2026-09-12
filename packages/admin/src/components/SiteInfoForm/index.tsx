@@ -1,11 +1,5 @@
 import { BAIDU_ANALYSIS_FIELD, GA_ANALYSIS_FIELD } from '@/utils/analysisFields';
-import {
-  ProFormDateTimePicker,
-  ProFormDigit,
-  ProFormSelect,
-  ProFormText,
-  ProFormTextArea,
-} from '@ant-design/pro-components';
+import { ProFormDateTimePicker, ProFormDigit, ProFormSelect, ProFormText, ProFormTextArea } from '@ant-design/pro-form';
 import UrlFormItem from '../UrlFormItem';
 
 export default function (props: {

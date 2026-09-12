@@ -4,7 +4,7 @@ import {
   TAG_FIELD_TOOLTIP,
   TAG_TOKEN_SEPARATORS,
 } from '@/services/van-blog/tagTokens';
-import { ProFormSelect } from '@ant-design/pro-components';
+import { ProFormSelect } from '@ant-design/pro-form';
 
 export default function TagSelectField({ name, ...rest }) {
   return (

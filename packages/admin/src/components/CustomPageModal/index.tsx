@@ -1,4 +1,4 @@
-import { ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-components';
+import { ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 import { Alert, Modal } from 'antd';
 
 import { createCustomPage, updateCustomPage } from '@/services/van-blog/api';

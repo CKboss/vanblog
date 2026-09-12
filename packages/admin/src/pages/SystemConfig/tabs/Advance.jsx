@@ -5,7 +5,7 @@ import {
   updateISRConfig,
   updateLoginConfig,
 } from '@/services/van-blog/api';
-import { ProForm, ProFormDigit, ProFormSelect } from '@ant-design/pro-components';
+import { ProForm, ProFormDigit, ProFormSelect } from '@ant-design/pro-form';
 import { Alert, Button, Card, message, Modal } from 'antd';
 import { useState } from 'react';
 export default function (props) {

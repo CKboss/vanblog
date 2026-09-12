@@ -1,10 +1,53 @@
-//@ts-ignore
-import data from '@emoji-mart/data';
-//@ts-ignore
-import i18n from '@emoji-mart/data/i18n/zh.json';
-import Picker from '@emoji-mart/react';
 import { BytemdPlugin } from 'bytemd';
 import { render } from 'react-dom';
+
+/**
+ * 表情选择器改成**首次点击才加载**：`@emoji-mart/data` 是全量 emoji 元数据（几百 KB），
+ * 以前 `editorEffect` 一进来就把 Picker 渲染好（只是用 CSS 藏起来），
+ * 于是每次打开编辑器都要下载它，而绝大多数人从不点表情按钮。
+ */
+let currentEditor: any = null;
+let pickerPromise: Promise<void> | null = null;
+
+function ensurePicker(container: Element): Promise<void> {
+  if (container.getAttribute('data-emoji-ready') === 'true') {
+    return Promise.resolve();
+  }
+  if (!pickerPromise) {
+    pickerPromise = Promise.all([
+      import('@emoji-mart/react'),
+      // @ts-ignore 数据文件没有类型声明
+      import('@emoji-mart/data'),
+      // @ts-ignore 同上
+      import('@emoji-mart/data/i18n/zh.json'),
+    ])
+      .then((mods: any[]) => {
+        const Picker = mods[0]?.default ?? mods[0];
+        const data = mods[1]?.default ?? mods[1];
+        const i18n = mods[2]?.default ?? mods[2];
+        const el = (
+          // @ts-ignore
+          <Picker
+            i18n={i18n}
+            data={data}
+            onEmojiSelect={(c: any) => {
+              if (c?.native && currentEditor) {
+                currentEditor.replaceSelection(c.native);
+              }
+            }}
+          />
+        );
+        render(el, container);
+        container.setAttribute('data-emoji-ready', 'true');
+      })
+      .catch((err) => {
+        // 失败要把 promise 清掉，否则再点也不会有反应
+        pickerPromise = null;
+        throw err;
+      });
+  }
+  return pickerPromise;
+}
 
 const EMOJI_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 1024 1024"><path d="M510.944 960c-247.04 0-448-200.96-448-448s200.992-448 448-448 448 200.96 448 448-200.96 448-448 448zm0-832c-211.744 0-384 172.256-384 384s172.256 384 384 384 384-172.256 384-384-172.256-384-384-384z"/><path d="M512 773.344c-89.184 0-171.904-40.32-226.912-110.624-10.88-13.92-8.448-34.016 5.472-44.896 13.888-10.912 34.016-8.48 44.928 5.472 42.784 54.688 107.136 86.048 176.512 86.048 70.112 0 134.88-31.904 177.664-87.552 10.784-14.016 30.848-16.672 44.864-5.888 14.016 10.784 16.672 30.88 5.888 44.864C685.408 732.32 602.144 773.344 512 773.344zM368 515.2c-26.528 0-48-21.472-48-48v-64c0-26.528 21.472-48 48-48s48 21.472 48 48v64c0 26.496-21.504 48-48 48zm288 0c-26.496 0-48-21.472-48-48v-64c0-26.528 21.504-48 48-48s48 21.472 48 48v64c0 26.496-21.504 48-48 48z"/></svg>';
@@ -26,19 +69,12 @@ const handleClick = (event: Event) => {
 
 export const emoji = (): BytemdPlugin => ({
   editorEffect: (ctx) => {
-    const el = (
-      // @ts-ignore
-      <Picker
-        i18n={i18n}
-        data={data}
-        onEmojiSelect={(c) => {
-          if (c?.native) {
-            ctx.editor.replaceSelection(c?.native);
-          }
-        }}
-      />
-    );
+    // 只建容器、不渲染 Picker（见文件头注释）；编辑器实例留给 onEmojiSelect 用
+    currentEditor = ctx.editor;
     const container = ctx.root.querySelector('.bytemd-toolbar-left');
+    if (!container) {
+      return;
+    }
     const targetEl = document.createElement('div');
     targetEl.className = 'emoji-container hidden';
     // 获取一下 left 的位置
@@ -47,9 +83,6 @@ export const emoji = (): BytemdPlugin => ({
       targetEl.style.left = `${actionEl.offsetLeft}px`;
     }
     container.appendChild(targetEl);
-    if (container) {
-      render(el, targetEl);
-    }
   },
   actions: [
     {
@@ -59,6 +92,11 @@ export const emoji = (): BytemdPlugin => ({
         type: 'action',
         click: ({ root }) => {
           const el = root.querySelector('.emoji-container');
+          if (!el) {
+            return;
+          }
+          // 第一次点才去下载 emoji 数据并渲染选择器
+          ensurePicker(el).catch(() => undefined);
 
           if (el.classList.contains('hidden')) {
             // 显示的话点击外面就关闭

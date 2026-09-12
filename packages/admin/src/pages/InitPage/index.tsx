@@ -7,7 +7,7 @@ import { useHistory } from 'umi';
 //@ts-ignore
 import styles from './index.less';
 
-import { ProFormText, StepsForm } from '@ant-design/pro-components';
+import { ProFormText, StepsForm } from '@ant-design/pro-form';
 
 import SiteInfoForm from '@/components/SiteInfoForm';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';

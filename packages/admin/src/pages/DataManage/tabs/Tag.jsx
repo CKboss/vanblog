@@ -1,5 +1,6 @@
 import { deleteTag, getTags, updateTag } from '@/services/van-blog/api';
-import { ModalForm, ProFormText, ProTable } from '@ant-design/pro-components';
+import { ModalForm, ProFormText } from '@ant-design/pro-form';
+import { ProTable } from '@ant-design/pro-table';
 import { message, Modal } from 'antd';
 import { useRef } from 'react';
 const columns = [

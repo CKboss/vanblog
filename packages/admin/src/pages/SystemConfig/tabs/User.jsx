@@ -2,7 +2,8 @@ import CollaboratorModal, { getPermissionLabel } from '@/components/Collaborator
 import Tags from '@/components/Tags';
 import { deleteCollaborator, getAllCollaborators, updateUser } from '@/services/van-blog/api';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';
-import { ProForm, ProFormText, ProTable } from '@ant-design/pro-components';
+import { ProForm, ProFormText } from '@ant-design/pro-form';
+import { ProTable } from '@ant-design/pro-table';
 import { Button, Card, message, Modal, Space } from 'antd';
 import { useRef } from 'react';
 import { history, useModel } from 'umi';

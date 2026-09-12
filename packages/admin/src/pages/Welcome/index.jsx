@@ -1,17 +1,28 @@
 import { useTab } from '@/services/van-blog/useTab';
 import { PageContainer } from '@ant-design/pro-layout';
 import style from './index.less';
-import Article from './tabs/article';
-import OverView from './tabs/overview';
-import Viewer from './tabs/viewer';
+import { lazy, Suspense } from 'react';
+import { Spin } from 'antd';
+
+// 三个 tab 都用 @ant-design/plots（G2，几百 KB）。静态 import 的话，
+// 一进后台首页就会把三份图表代码全下载下来，而用户一次只看一个 tab。
+const Article = lazy(() => import('./tabs/article'));
+const OverView = lazy(() => import('./tabs/overview'));
+const Viewer = lazy(() => import('./tabs/viewer'));
+
+const tabFallback = (
+  <div style={{ padding: 48, textAlign: 'center' }}>
+    <Spin />
+  </div>
+);
 const Welcome = () => {
   const [tab, setTab] = useTab('overview', 'tab');
 
   // const { initialState } = useModel('@@initialState');
   const tabMap = {
-    overview: <OverView />,
-    viewer: <Viewer />,
-    article: <Article />,
+    overview: <Suspense fallback={tabFallback}><OverView  /></Suspense>,
+    viewer: <Suspense fallback={tabFallback}><Viewer  /></Suspense>,
+    article: <Suspense fallback={tabFallback}><Article  /></Suspense>,
   };
   // const showCommentBtn = useMemo(() => {
   //   const url = initialState?.walineServerUrl;

@@ -3,7 +3,7 @@ import TipTitle from '@/components/TipTitle';
 import { getWelcomeData } from '@/services/van-blog/api';
 import { useNum } from '@/services/van-blog/useNum';
 import { Area } from '@ant-design/plots';
-import { ProCard, StatisticCard } from '@ant-design/pro-components';
+import { ProCard, StatisticCard } from '@ant-design/pro-card';
 import { Spin } from 'antd';
 import RcResizeObserver from 'rc-resize-observer';
 import { useCallback, useEffect, useMemo, useState } from 'react';

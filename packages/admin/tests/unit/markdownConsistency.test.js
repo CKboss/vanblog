@@ -67,7 +67,8 @@ describe('编辑器预览 与 前台渲染：插件与流水线', () => {
   it('渲染类插件两边都在（缺一个就会出现预览与发布不一致）', () => {
     const shared = [
       ['gfm', /gfm\(/],
-      ['math', /math\(/],
+      // 编辑器里的 KaTeX 改成按需加载了（正文有公式才 import），所以匹配动态导入
+      ['math', /import\('@bytemd\/plugin-math-ssr'\)|math\(/],
       ['highlight', /highlightSsr\(\)/],
       ['mermaid', /mermaid/],
       ['customContainer', /customContainer\(\)/],

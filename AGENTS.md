@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固、一键脚本修复、后台性能优化。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -1033,13 +1033,51 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   （「已是最新」返回 0；沙箱里补一个假的 docker-compose，免得脚本去写 `/usr/local/bin`）。
   七个脚本测试文件共 **259 条断言全绿**。
 
-### 7.13 测试基线（本分支最后一次全量运行的结果）
+### 7.13 后台（packages/admin）性能优化
+
+先量后改：`umi build` 出 dist **27MB**，`umi.js`（每个页面都要下载的入口）**1133KB**，
+编辑器路由包 ~1748KB（里面塞着 KaTeX 和 emoji 全量数据），dist 里还躺着**三份 mermaid**（5.6MB）。
+
+- **35 个文件从 `@ant-design/pro-components` 桶式导入改成具体包**（pro-table / pro-form / pro-layout /
+  pro-card / pro-descriptions）。桶会把没用到的 ProList、ProDescriptions 等一起拖进来。
+  映射时注意：`EditableProTable`/`ActionType`/`ProColumns` 在 **pro-table**，
+  `ModalForm`/`StepsForm`/`ProFormXxx` 在 **pro-form**，`StatisticCard` 在 **pro-card**，
+  `PageContainer` 在 **pro-layout**；`Modal` 其实该从 antd 来；
+  `useRefFunction` 是 pro-utils 的内部 hook（没有独立依赖），在 `DataManage/tabs/Menu.tsx` 里就地实现了。
+- **编辑器 KaTeX 按需**：删掉 `import math from '@bytemd/plugin-math-ssr'` 与 `import 'katex/dist/katex.css'`，
+  改成 `hasMath`（与前台同一套嗅探正则）为真时 `Promise.all([import(...), import('katex/dist/katex.css')])`
+  → `setMathPlugin`，插件数组里用 `...(mathPlugin ? [mathPlugin] : [])` 展开，
+  **`useMemo` 依赖数组必须带上 `mathPlugin`**（漏了就一直不刷新）。
+- **表情选择器按需**：`components/Editor/emoji.tsx` 以前在 `editorEffect` 里就把 Picker 渲染好（CSS 藏起来），
+  等于每次打开编辑器都下载 `@emoji-mart/data`。现在 `editorEffect` 只建容器 + 记住 `ctx.editor`，
+  **首次点击**才 `ensurePicker()`（三个 `import()` 并行，成功后打 `data-emoji-ready` 标记，失败要把
+  `pickerPromise` 置回 null，否则再点没反应）。
+- **mermaid 只留一条加载路径**：`plugins/mermaidSafety.ts` 的 `importMermaidModule()` 原来有三个回退
+  （`mermaid.min.js` / `mermaid.js` / `mermaid`）——**webpack 会给每个 `import()` 各打一份产物**，
+  所以 dist 里有三份 mermaid；而第三个走的正是文件注释里写明会导致 #391 崩溃的 core ESM 入口。
+  mermaid 版本锁死 10.6.1，`dist/mermaid.min.js` 必然存在，回退纯属负担，已删。
+- **首页三个统计 tab 改 `React.lazy` + `Suspense`**：它们都 import `@ant-design/plots`（G2），
+  静态导入会让「一进后台」就下载三份图表代码，而用户一次只看一个 tab。
+- **`targets: { ie: 11 }` → `{ chrome: 80 }`**：IE11 目标会把大量 core-js polyfill 打进 `umi.js`。
+- **图片管理页**：网格与列表的 antd `<Image>` 加 `loading="lazy"` + `decoding="async"`（一页最多 60 张）。
+  网格本来就用 `getThumbLink()` 缩略图、点开预览才拉原图（§7.5），这次只是补上懒加载。
+- 实测结果：dist 27MB → **24MB**；`umi.js` 1133KB → **1077KB**；编辑器路由首包 ~1748KB → **~911KB**，
+  KaTeX(280KB)/emoji(81KB)/mermaid(2.8MB) 各自独立成按需 chunk；`/admin`、`/admin/editor`、
+  `/admin/article`、`/admin/static/img`、`/admin/welcome` 全部 200，webpack 编译无错。
+- 本来就已经开着、**别关**的：`dynamicImport`（路由分包）、`hash`、`ignoreMomentLocale`、`esbuild`、
+  `mfsu` + `webpack5`（dev 编译加速）、`nodeModulesTransform: none`、`exportStatic`。
+- 测试：`packages/admin/tests/unit/adminPerf.test.js`(8) —— 钉死「不许再出现 pro-components 桶导入」
+  「KaTeX/emoji/mermaid 必须动态导入且只有一处」「首页 tab 必须 lazy」「targets 不许回到 ie:11」
+  「图片必须 lazy+async」。注意断言要**排除注释**（注释里会写旧写法，否则自己匹配自己）。
+- 文档：`docs/advanced/performance.md` 新增「后台管理界面」一节（含前后对比表）。
+
+### 7.14 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 519 用例：518 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 49 文件 / 435 用例全绿 |
-| admin `node --test tests/unit` | 54 文件 / 222 用例全绿 |
+| admin `node --test tests/unit` | 61 文件 / 230 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
@@ -1050,7 +1088,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.13 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.14 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

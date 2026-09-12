@@ -1,5 +1,5 @@
 import { PATHNAME_FIELD } from '@/services/van-blog/importPathname';
-import { ProFormText } from '@ant-design/pro-components';
+import { ProFormText } from '@ant-design/pro-form';
 
 export default function PathnameField({ name = PATHNAME_FIELD.name, id, fieldProps }) {
   const fieldId = id || name;

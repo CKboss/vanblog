@@ -1,6 +1,6 @@
 import CustomPageModal from '@/components/CustomPageModal';
 import { deleteCustomPageByPath, getCustomPages } from '@/services/van-blog/api';
-import { ProTable } from '@ant-design/pro-components';
+import { ProTable } from '@ant-design/pro-table';
 import { Button, Card, message, Modal, Space } from 'antd';
 import { useRef } from 'react';
 import { Link } from 'umi';

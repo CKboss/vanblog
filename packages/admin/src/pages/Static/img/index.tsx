@@ -11,7 +11,7 @@ import {
   replaceImgBySign,
   searchArtclesByLink,
 } from '@/services/van-blog/api';
-import { PageContainer } from '@ant-design/pro-components';
+import { PageContainer } from '@ant-design/pro-layout';
 import {
   Button,
   Empty,
@@ -391,6 +391,8 @@ const ImgPage = () => {
       render: (_: any, record: StaticItem) => (
         <Image
           fallback={errorImg}
+          loading="lazy"
+          decoding="async"
           src={getThumbLink(record)}
           preview={{ src: getImgLink(record.realPath) }}
           style={{ maxHeight: 48, maxWidth: 64, objectFit: 'contain' }}
@@ -686,6 +688,10 @@ const ImgPage = () => {
                     >
                       <Image
                         fallback={errorImg}
+                        // 一页最多 60 张，全部立即加载会一次性拉几 MB；
+                        // 网格视图用的已经是缩略图，再加上懒加载与异步解码
+                        loading="lazy"
+                        decoding="async"
                         style={{ maxHeight: thumbMode ? 72 : 200 }}
                         width={'auto'}
                         height={'auto'}

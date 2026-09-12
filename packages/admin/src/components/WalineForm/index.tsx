@@ -1,13 +1,7 @@
 import { getWalineConfig, updateWalineConfig } from '@/services/van-blog/api';
 import { WALINE_EMAIL_FIELDS } from '@/utils/walineEmailFields';
 import { parseWalineOtherConfigJson } from '@/utils/walineOtherConfig';
-import {
-  ProForm,
-  ProFormDigit,
-  ProFormSelect,
-  ProFormText,
-  ProFormTextArea,
-} from '@ant-design/pro-components';
+import { ProForm, ProFormDigit, ProFormSelect, ProFormText, ProFormTextArea } from '@ant-design/pro-form';
 import { message, Modal } from 'antd';
 import { useState } from 'react';
 export default function (props: {}) {

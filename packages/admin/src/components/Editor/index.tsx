@@ -1,14 +1,13 @@
 // import breaks from '@bytemd/plugin-breaks';
 import frontmatter from '@bytemd/plugin-frontmatter';
 import gfm from '@bytemd/plugin-gfm';
-import math from '@bytemd/plugin-math-ssr';
 import { highlightSsr } from './highlightSsr';
 import mediumZoom from '@bytemd/plugin-medium-zoom';
 import { Editor } from '@bytemd/react';
 import { Spin } from 'antd';
 import 'bytemd/dist/index.css';
-import 'katex/dist/katex.css';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { BytemdPlugin } from 'bytemd';
 import '../../style/github-markdown.css';
 import '../../style/code-light.css';
 import '../../style/code-dark.css';
@@ -66,13 +65,40 @@ export default function EditorComponent(props: {
   const themeClass = navTheme.toLowerCase().includes('dark') ? 'dark' : 'light';
   const softLineBreaksRef = useRef(props.softLineBreaks);
   softLineBreaksRef.current = props.softLineBreaks;
+  /**
+   * KaTeX 只在正文真的有公式时才加载（`@bytemd/plugin-math-ssr` + `katex.css` 合计数百 KB）。
+   * 嗅探规则和前台一致：宁可误判（多下一个 chunk）也不能漏判（公式显示成原文）。
+   */
+  const [mathPlugin, setMathPlugin] = useState<BytemdPlugin | null>(null);
+  const hasMath = /\$\$|(^|[^\\\w$])\$(?!\s)[^$\n]+?\$/.test(props.value || '');
+  useEffect(() => {
+    if (!hasMath || mathPlugin) {
+      return;
+    }
+    let cancelled = false;
+    Promise.all([import('@bytemd/plugin-math-ssr'), import('katex/dist/katex.css')])
+      .then((mods: any[]) => {
+        if (cancelled) {
+          return;
+        }
+        const factory = mods[0]?.default ?? mods[0];
+        setMathPlugin(() => factory({ locale: cn }));
+      })
+      .catch(() => {
+        // 加载失败就保持原文显示，不要让编辑器崩掉
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMath, mathPlugin]);
+
   const plugins = useMemo(() => {
     return withSafeViewerEffects([
+      ...(mathPlugin ? [mathPlugin] : []),
       customContainer(),
       gfm({ locale: cn }),
       highlightSsr(),
       frontmatter(),
-      math({ locale: cn }),
       mediumZoom(),
       mermaidForEditor({ locale: cn }),
       tocViewportGuard(),
@@ -95,7 +121,7 @@ export default function EditorComponent(props: {
         getEnabled: () => softLineBreaksRef.current === true || softLineBreaksRef.current === 'open',
       }),
     ]);
-  }, [themeClass]);
+  }, [themeClass, mathPlugin]);
 
   return (
     <div style={{ height: '100%', minHeight: 0 }} className={`editor-shell ${themeClass}`}>

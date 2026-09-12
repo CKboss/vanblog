@@ -7,8 +7,9 @@ import {
   getAttachments,
   searchArtclesByLink,
 } from '@/services/van-blog/api';
-import type { ActionType, ProColumns } from '@ant-design/pro-components';
-import { PageContainer, ProTable } from '@ant-design/pro-components';
+import type { ActionType, ProColumns } from '@ant-design/pro-table';
+import { PageContainer } from '@ant-design/pro-layout';
+import { ProTable } from '@ant-design/pro-table';
 import { Button, message, Modal, Space, Table } from 'antd';
 import { useMemo, useRef, useState } from 'react';
 import { history, useModel } from 'umi';

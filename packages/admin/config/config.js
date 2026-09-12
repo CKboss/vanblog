@@ -33,8 +33,11 @@ export default defineConfig({
   dynamicImport: {
     loading: '@ant-design/pro-layout/es/PageLoading',
   },
+  // 后台不再兼容 IE11：`targets: { ie: 11 }` 会把大量 core-js polyfill 打进
+  // 每个页面都要下载的 umi.js（实测 1.1MB）。antd 4 与 ProComponents 本身在 IE11 下
+  // 也有大量问题，实际上早就没人用 IE 管理博客了。
   targets: {
-    ie: 11,
+    chrome: 80,
   },
   // umi routes: https://umijs.org/docs/routing
   routes,

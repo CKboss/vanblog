@@ -144,20 +144,17 @@ function globalMermaid(): MermaidRenderer | undefined {
 }
 
 async function importMermaidModule(): Promise<unknown> {
-  const loaders = [
-    () => import('mermaid/dist/mermaid.min.js'),
-    () => import('mermaid/dist/mermaid.js'),
-    () => import('mermaid'),
-  ];
-  let lastError: unknown;
-  for (let i = 0; i < loaders.length; i += 1) {
-    try {
-      return await loaders[i]();
-    } catch (err) {
-      lastError = err;
-    }
+  // 只加载 UMD 压缩版。以前这里有三个回退：mermaid.min.js / mermaid.js / mermaid，
+  // webpack 会为**每个** import() 各打一份产物，于是 dist 里躺着 2.8MB + 2.7MB + 1.3MB
+  // 三份 mermaid（运行时只用得上第一份），构建也因此慢一大截。
+  // 而最后一个 `import('mermaid')` 走的正是上面注释里说的 core ESM 入口 —— #391 崩溃的那条路径，
+  // 留作"回退"等于把已知会崩的代码也打进包。mermaid 版本锁死在 10.6.1，
+  // dist/mermaid.min.js 必然存在，不需要回退。
+  try {
+    return await import('mermaid/dist/mermaid.min.js');
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('failed to import mermaid');
   }
-  throw lastError || new Error('failed to import mermaid');
 }
 
 function loadMermaid(config: Record<string, unknown> = {}): Promise<MermaidRenderer> {

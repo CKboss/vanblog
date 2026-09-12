@@ -1,5 +1,5 @@
 import { getLog, getPipelineConfig } from '@/services/van-blog/api';
-import { ProTable } from '@ant-design/pro-components';
+import { ProTable } from '@ant-design/pro-table';
 import { Modal, Tag } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { history } from 'umi';

@@ -1,7 +1,13 @@
 import { getMenu, updateMenu } from '@/services/van-blog/api';
-import { EditableProTable, useRefFunction } from '@ant-design/pro-components';
+import { EditableProTable } from '@ant-design/pro-table';
+// useRefFunction 只是 pro-utils 里的一个小 hook，为了不再拉整个 pro-components 桶，这里就地实现
+const useRefFunction = <T extends (...args: any[]) => any>(fn: T) => {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: any[]) => ref.current(...args), []) as T;
+};
 import { message, Modal, Spin } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 type DataSourceType = {
   id: React.Key;
   name: string;

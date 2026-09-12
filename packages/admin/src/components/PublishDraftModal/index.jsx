@@ -1,5 +1,6 @@
 import { publishDraft } from '@/services/van-blog/api';
-import { Modal, ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-components';
+import { Modal } from 'antd';
+import { ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 import { message } from 'antd';
 import PathnameField from '../PathnameField';
 export default function (props) {

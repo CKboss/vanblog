@@ -1,4 +1,4 @@
-import { ProCard, StatisticCard } from '@ant-design/pro-components';
+import { ProCard, StatisticCard } from '@ant-design/pro-card';
 import { Spin } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getWelcomeData } from '@/services/van-blog/api';

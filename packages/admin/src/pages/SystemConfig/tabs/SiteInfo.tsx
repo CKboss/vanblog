@@ -1,7 +1,7 @@
 import SiteInfoForm from '@/components/SiteInfoForm';
 import { getSiteInfo, updateSiteInfo } from '@/services/van-blog/api';
 import { useTab } from '@/services/van-blog/useTab';
-import { ProForm } from '@ant-design/pro-components';
+import { ProForm } from '@ant-design/pro-form';
 import { Card, message, Modal } from 'antd';
 export default function () {
   const [tab, setTab] = useTab('basic', 'siteInfoTab');

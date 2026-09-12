@@ -57,11 +57,36 @@ Markdown 渲染管线里有三个「重」依赖，以前是**静态 import**，
 - Apple 风格皮肤是纯 CSS（`styles/apple.css`），不引入任何运行时 JS。
 - 生产环境 Caddy 已开 `encode zstd gzip`，文本资源走压缩传输。
 
+## 后台管理界面（`/admin`）
+
+后台是 umi3 + antd4 的单页应用，优化重点是「进后台的第一屏」和「打开编辑器」：
+
+| 项 | 优化前 | 优化后 |
+| --- | --- | --- |
+| `dist` 总体积 | 27 MB | **24 MB** |
+| `umi.js`（每个页面都要下载） | 1133 KB | **1077 KB** |
+| 编辑器路由首包 | ~1748 KB（内含 KaTeX、emoji 数据） | **~911 KB**，KaTeX(280 KB) / emoji(81 KB) / mermaid(2.8 MB) 全部按需 |
+| dist 里的 mermaid 副本 | 3 份（约 5.6 MB） | **1 份** |
+
+做法：
+
+- **不再从 `@ant-design/pro-components` 这个巨型桶里导入**（35 个文件全部改成 `pro-table` / `pro-form` / `pro-layout` / `pro-card` / `pro-descriptions` 具体包）。桶会把用不到的 ProList、ProDescriptions 等一起拖进来。
+- **KaTeX 按需**：编辑器只在正文里出现 `$…$` / `$$` 时才 `import('@bytemd/plugin-math-ssr')` 和 `katex.css`，嗅探规则与前台一致。
+- **表情选择器按需**：以前一进编辑器就把 `@emoji-mart/data`（全量 emoji 元数据）渲染成隐藏的 Picker，现在**第一次点表情按钮**才下载并渲染。
+- **mermaid 只留一条加载路径**：原来有 `mermaid.min.js` / `mermaid.js` / `mermaid` 三个 `import()` 回退，webpack 会**各打一份产物**（dist 里三份 mermaid，构建也更慢），而最后一个走的正是已知会导致 #391 崩溃的 core ESM 入口。mermaid 版本是锁定的，`dist/mermaid.min.js` 必然存在，不需要回退。
+- **首页三个统计 tab 懒加载**：它们都用 `@ant-design/plots`（G2），静态导入会让一进后台就下载三份图表代码，而用户一次只看一个 tab。现在 `React.lazy` + `Suspense`。
+- **不再兼容 IE11**：`targets: { ie: 11 }` 会把大量 core-js polyfill 打进每页都下载的 `umi.js`。后台改成 `chrome: 80` 基线（antd4 + ProComponents 在 IE11 下本来也问题一堆）。
+- **图片管理页**：网格与列表的 `<Image>` 加 `loading="lazy"` + `decoding="async"`（一页最多 60 张），网格视图用的本来就是 300px 缩略图、点开预览才拉原图。
+
+原本就开着、不要关掉的：`dynamicImport`（路由级分包）、`hash`（产物指纹 + 长缓存）、`ignoreMomentLocale`、`esbuild`（压缩器）、`mfsu` + `webpack5`（开发时编译加速）、`nodeModulesTransform: none`。
+
 ## 想继续压的话
 
 - `highlight.js` 用的是 lowlight 的 common 语言集（约 35 种），如果站点只用少数几种语言，可以换成 `highlight.js/lib/core` + 手动注册，能再省几十 KB。
 - `polyfills`（89 KB / gzip 30 KB）是 Next 为老浏览器准备的，可按 browserslist 调整。
 - 全局 CSS 目前一份（gzip 约 17 KB），其中 `code-light.css` / `code-dark.css` 只有文章页用得到，可以改成按页引入。
+- 后台还有两个大头是**按需**加载的：monaco 编辑器（代码/自定义页面，约 2.7 MB + 各语言 worker）和 mermaid（2.8 MB）。它们只在对应页面/内容出现时才下载，但如果想进一步瘦身，可以考虑 monaco 只保留实际用到的语言 worker（`typescript` 的 worker 有 4.8 MB）。
+- 后台的 `@ant-design/plots`（G2）目前只在首页统计用，换成轻量图表库可以再省几百 KB。
 
 ::: warning 别做的事
 

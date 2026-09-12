@@ -1,7 +1,7 @@
 import { getImgLink } from '@/pages/Static/img/tools';
 import { errorImg } from '@/pages/Static/img';
 import UploadBtn from '@/components/UploadBtn';
-import { ProFormText } from '@ant-design/pro-components';
+import { ProFormText } from '@ant-design/pro-form';
 import { Button, Form, Image, Space, message } from 'antd';
 
 export const COVER_FIELD = {
