@@ -937,6 +937,168 @@ html.dark [data-ui="apple"] .vanblog-link-card {
   padding: 9px 13px !important;
 }
 
+/* ------------------------------------------------------------------ 搜索浮层 */
+/* 覆盖层是 sheet，必须有表面和投影 —— 这不属于「不要框」的范畴。
+   之前 .card-shadow 被统一改成透明背景，把整个搜索面板也弄没了（用户报的"看不见搜索框"）。 */
+[data-ui="apple"] .vanblog-search-overlay {
+  background: rgba(0, 0, 0, 0.32) !important;
+  -webkit-backdrop-filter: saturate(120%) blur(8px);
+  backdrop-filter: saturate(120%) blur(8px);
+}
+
+[data-ui="apple"] .card-shadow.vanblog-search-panel,
+[data-ui="apple"] .card-shadow-dark.vanblog-search-panel {
+  background: var(--ap-surface) !important;
+  border: 0 !important;
+  border-radius: var(--ap-radius-card) !important;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28) !important;
+  padding: 18px 20px !important;
+  max-width: 640px !important;
+}
+
+html.dark [data-ui="apple"] .card-shadow.vanblog-search-panel,
+html.dark [data-ui="apple"] .card-shadow-dark.vanblog-search-panel {
+  background: var(--ap-surface) !important;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65) !important;
+}
+
+/* 输入行：Apple 全局搜索那种「大字号 + 无框 + 一道发丝线」 */
+[data-ui="apple"] .vanblog-search-panel .search-dialog-input {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  font-size: 21px !important;
+  line-height: 1.35 !important;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ap-text) !important;
+  padding: 4px 0 !important;
+}
+
+[data-ui="apple"] .vanblog-search-panel .search-dialog-input::placeholder {
+  color: var(--ap-text-3) !important;
+}
+
+[data-ui="apple"] .vanblog-search-panel .search-dialog-input:focus {
+  outline: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* 放大镜与清除按钮：压淡，和文字同一层级 */
+[data-ui="apple"] .vanblog-search-panel svg {
+  color: var(--ap-text-3);
+  fill: var(--ap-text-3);
+}
+
+[data-ui="apple"] .vanblog-search-panel button {
+  color: var(--ap-text-3) !important;
+}
+
+[data-ui="apple"] .vanblog-search-panel button:hover {
+  color: var(--ap-accent) !important;
+}
+
+/* 输入行与结果之间那道线 */
+[data-ui="apple"] .vanblog-search-panel hr {
+  border: 0 !important;
+  border-top: 1px solid var(--ap-hairline) !important;
+  margin: 14px 0 !important;
+  background: transparent !important;
+}
+
+/* 结果列表：去掉虚线行，改成圆角行 + hover 浅灰（Apple 的列表交互） */
+[data-ui="apple"] .vanblog-search-panel a[data-search-result] > div {
+  border: 0 !important;
+  border-radius: 10px !important;
+  padding: 9px 12px !important;
+  transition: background 0.2s var(--ap-ease);
+}
+
+[data-ui="apple"] .vanblog-search-panel a[data-search-result]:hover > div {
+  background: var(--ap-surface-3) !important;
+}
+
+[data-ui="apple"] .vanblog-search-panel a[data-search-result] > div > div:first-child {
+  font-size: 13px !important;
+  color: var(--ap-text-3) !important;
+}
+
+[data-ui="apple"] .vanblog-search-panel a[data-search-result] > div > div:last-child {
+  font-size: 17px !important;
+  color: var(--ap-text) !important;
+}
+
+/* 空结果提示 */
+[data-ui="apple"] .vanblog-search-panel .mt-16 > div {
+  color: var(--ap-text-3) !important;
+  font-size: 15px !important;
+}
+
+/* Ctrl+K / Esc 快捷键提示：无边框浅灰小胶囊（导航栏里那个也一样） */
+[data-ui="apple"] span[class*="border-gray-300"][class*="rounded-md"] {
+  border: 0 !important;
+  background: var(--ap-surface-3) !important;
+  color: var(--ap-text-3) !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+}
+
+[data-ui="apple"] span[class*="border-gray-300"][class*="rounded-md"] kbd {
+  background: transparent !important;
+  color: inherit !important;
+  font-family: var(--ap-font);
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------- 导航下拉菜单 / 社交浮层 */
+/* 同样是覆盖层：必须有表面 + 投影，否则内容会直接叠在页面上（和搜索框一个毛病） */
+[data-ui="apple"] .card-shadow.vanblog-nav-dropdown {
+  background: var(--ap-surface) !important;
+  border: 0 !important;
+  border-radius: var(--ap-radius-img) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16) !important;
+  padding: 6px !important;
+  overflow: hidden;
+}
+
+html.dark [data-ui="apple"] .card-shadow.vanblog-nav-dropdown {
+  background: var(--ap-surface) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55) !important;
+}
+
+[data-ui="apple"] .vanblog-nav-dropdown a,
+[data-ui="apple"] .vanblog-nav-dropdown li {
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  color: var(--ap-text-2) !important;
+  transition: background 0.2s var(--ap-ease), color 0.2s var(--ap-ease);
+}
+
+[data-ui="apple"] .vanblog-nav-dropdown a:hover,
+[data-ui="apple"] .vanblog-nav-dropdown li:hover {
+  background: var(--ap-surface-3) !important;
+  color: var(--ap-text) !important;
+}
+
+/* 社交（微信二维码）悬浮卡 */
+[data-ui="apple"] .card-shadow.vanblog-social-popover {
+  background: var(--ap-surface) !important;
+  border: 0 !important;
+  border-radius: var(--ap-radius-card) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18) !important;
+  padding: 10px !important;
+}
+
+html.dark [data-ui="apple"] .card-shadow.vanblog-social-popover {
+  background: var(--ap-surface) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6) !important;
+}
+
+[data-ui="apple"] .vanblog-social-popover img {
+  border-radius: 10px !important;
+}
+
 /* 移动端：字号与间距收紧一档，别显得空旷 */
 @media (max-width: 767px) {
   [data-ui="apple"] {
@@ -972,6 +1134,14 @@ html.dark [data-ui="apple"] .vanblog-link-card {
   [data-ui="apple"] #author-card img {
     width: 44px !important;
     height: 44px !important;
+  }
+  [data-ui="apple"] .card-shadow.vanblog-search-panel {
+    width: 92% !important;
+    min-width: 0 !important;
+    padding: 14px 16px !important;
+  }
+  [data-ui="apple"] .vanblog-search-panel .search-dialog-input {
+    font-size: 18px !important;
   }
 }
 

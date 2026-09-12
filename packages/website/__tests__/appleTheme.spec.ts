@@ -240,6 +240,112 @@ describe('Apple 皮肤：标题操作区不能抢戏', () => {
   });
 });
 
+describe('Apple 皮肤：搜索浮层（Ctrl+K）', () => {
+  it('面板有表面和投影，不会被 .card-shadow 的透明规则吃掉', () => {
+    expect(css).toMatch(
+      /\.card-shadow\.vanblog-search-panel[\s\S]{0,300}?background: var\(--ap-surface\) !important/,
+    );
+    expect(css).toMatch(
+      /\.card-shadow\.vanblog-search-panel[\s\S]{0,300}?box-shadow: 0 24px 64px/,
+    );
+    // 这条规则必须写在「.card-shadow 一律透明」之后，否则层叠会输
+    expect(css.indexOf('.card-shadow.vanblog-search-panel')).toBeGreaterThan(
+      css.indexOf('[data-ui="apple"] .card-shadow,'),
+    );
+    // 暗色也要有自己的表面
+    expect(css).toMatch(
+      /html\.dark \[data-ui="apple"\] \.card-shadow\.vanblog-search-panel[\s\S]{0,200}?--ap-surface/,
+    );
+  });
+
+  it('遮罩是半透明黑 + 背景模糊', () => {
+    expect(css).toMatch(
+      /\.vanblog-search-overlay\s*\{[^}]*background: rgba\(0, 0, 0, 0\.32\) !important/,
+    );
+    expect(css).toMatch(/\.vanblog-search-overlay\s*\{[^}]*backdrop-filter: saturate\(120%\) blur\(8px\)/);
+  });
+
+  it('输入框：21px、无框无底、占位符用次要灰', () => {
+    expect(css).toMatch(
+      /\.search-dialog-input\s*\{[^}]*background: transparent !important/,
+    );
+    expect(css).toMatch(/\.search-dialog-input\s*\{[^}]*border: 0 !important/);
+    expect(css).toMatch(/\.search-dialog-input\s*\{[^}]*font-size: 21px !important/);
+    expect(css).toMatch(/\.search-dialog-input::placeholder\s*\{[^}]*--ap-text-3/);
+  });
+
+  it('结果行去掉虚线，改圆角 + hover 浅灰', () => {
+    expect(css).toMatch(/a\[data-search-result\] > div\s*\{[^}]*border: 0 !important/);
+    expect(css).toMatch(/a\[data-search-result\] > div\s*\{[^}]*border-radius: 10px/);
+    expect(css).toMatch(
+      /a\[data-search-result\]:hover > div\s*\{[^}]*background: var\(--ap-surface-3\)/,
+    );
+  });
+
+  it('快捷键提示（Ctrl+K / Esc）是无边框浅灰小胶囊', () => {
+    expect(css).toMatch(
+      /span\[class\*="border-gray-300"\]\[class\*="rounded-md"\]\s*\{[^}]*border: 0 !important/,
+    );
+    expect(css).toMatch(
+      /span\[class\*="border-gray-300"\]\[class\*="rounded-md"\]\s*\{[^}]*--ap-surface-3/,
+    );
+  });
+
+  it('组件上挂了钩子 class，小屏不会顶满', () => {
+    const search = read('components/SearchCard/index.tsx');
+    expect(search).toContain('vanblog-search-overlay');
+    expect(search).toContain('vanblog-search-panel');
+    const mobile = css.slice(css.indexOf('@media (max-width: 767px)'));
+    expect(mobile).toMatch(/vanblog-search-panel[\s\S]{0,200}?width: 92% !important/);
+  });
+});
+
+describe('Apple 皮肤：所有覆盖层都要有表面（不能透明）', () => {
+  // 这几个组件都用 .card-shadow 当面板底色，而皮肤把 .card-shadow 统一改成了透明，
+  // 所以每一个都必须有「更具体 + 排在后面」的还原规则，否则会变成看不见的浮层。
+  const overlays = [
+    { hook: 'vanblog-search-panel', file: 'components/SearchCard/index.tsx' },
+    { hook: 'vanblog-nav-dropdown', file: 'components/NavBar/item.tsx' },
+    { hook: 'vanblog-social-popover', file: 'components/SocialIcon/index.tsx' },
+  ];
+
+  for (const { hook, file } of overlays) {
+    it(`${hook} 有表面、投影，且规则排在透明规则之后`, () => {
+      expect(read(file)).toContain(hook);
+      const rule = new RegExp(
+        `\\.card-shadow\\.${hook}[\\s\\S]{0,300}?background: var\\(--ap-surface\\) !important`,
+      );
+      expect(css).toMatch(rule);
+      expect(css).toMatch(new RegExp(`\\.card-shadow\\.${hook}[\\s\\S]{0,300}?box-shadow:`));
+      expect(css.indexOf(`.card-shadow.${hook}`)).toBeGreaterThan(
+        css.indexOf('[data-ui="apple"] .card-shadow,'),
+      );
+      // 暗色也要有自己的表面
+      expect(css).toContain(`html.dark [data-ui="apple"] .card-shadow.${hook}`);
+    });
+  }
+
+  it('皮肤里没有别的 card-shadow 组件被漏掉（清单对照）', () => {
+    // 这些是允许透明的：内容直接坐在画布上
+    const allowedTransparent = [
+      'components/AuthorCard/index.tsx',
+      'components/PostCard/index.tsx',
+      'components/Toc/index.tsx',
+      'pages/timeline.tsx',
+      'pages/link.tsx',
+      'pages/tag.tsx',
+      'pages/category.tsx',
+      'pages/tag/[tag].tsx',
+      'pages/category/[category].tsx',
+    ];
+    // LinkCard 用浅灰填充，不是透明
+    expect(css).toMatch(/\.vanblog-link-card,[\s\S]{0,200}?--ap-surface-3/);
+    for (const file of allowedTransparent) {
+      expect(read(file)).toContain('card-shadow');
+    }
+  });
+});
+
 describe('Apple 皮肤：接线', () => {
   it('Layout 按 uiStyle 输出 data-ui，并同步到 <html>', () => {
     const layout = read('components/Layout/index.tsx');

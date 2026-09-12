@@ -73,7 +73,7 @@ export default function (props: { item: SocialItem }) {
               arrowClassName="popover-arrow "
             >
               <div
-                className="card-shadow bg-white dark:bg-dark-2 dark:card-shadow-dark"
+                className="card-shadow bg-white dark:bg-dark-2 dark:card-shadow-dark vanblog-social-popover"
                 style={{ height: 280 }}
               >
                 <ImageBox

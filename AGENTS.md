@@ -734,21 +734,30 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   **整份皮肤现在只剩这几处单边发丝线**：导航底部、列表条目之间、文章元信息下、引用块左边(2px)、
   表格行之间、页脚上方、移动端抽屉右边。`appleTheme.spec.ts` 加了守卫：出现任何四面包围的
   `border: … solid`（除 `border: 0` 与滚动条的 `transparent` 技巧）、或单边线没用 `--ap-hairline`，测试直接红。
+- **第二版又被抓到一个 bug**：搜索浮层（右上角放大镜 / `Ctrl`+`K`）在 apple 主题下**整块透明、看不见输入框**。
+  原因是我把 `.card-shadow` 一刀切成 `background: transparent !important`，而搜索面板正是
+  `bg-white … card-shadow`。**教训：覆盖层（sheet / 弹窗 / 抽屉）必须有表面 + 投影，不属于「不要框」的范畴。**
+  修法：给 `components/SearchCard` 加 `vanblog-search-overlay` / `vanblog-search-panel` 两个钩子，
+  用**更具体**的选择器 `.card-shadow.vanblog-search-panel` 把表面/圆角/投影写回来（并且必须排在
+  `.card-shadow` 那条透明规则之后），再按 Apple 全局搜索的样子做：遮罩 `rgba(0,0,0,.32)` + `blur(8px)`、
+  面板白色 sheet（暗色 `#1d1d1f`）+ `0 24px 64px` 投影、输入框 21px 无框、下面一道发丝线、
+  结果行去虚线改圆角 + hover 浅灰（`a[data-search-result] > div`）、`Ctrl K`/`Esc` 提示改无边框浅灰小胶囊。
+  `appleTheme.spec.ts` 里加了守卫，其中一条专门断言「面板规则必须写在透明规则之后」，防止层叠再翻车。
 - 已知残留：`pages/404.tsx` 没用 `Layout`（自带 markup），拿不到 `data-ui`，所以 `.vanblog-notfound`
   那几条目前是死代码。要么以后让 404 走 Layout，要么删掉。
 - e2e 已验证：`GET /api/admin/meta/site` → `PUT uiStyle=default/apple/乱填` → 首页 `data-ui` 依次是
   `default`/`apple`/`apple`（非法值回落），其余 19 个 siteInfo 字段没被 PUT 冲掉；
   `/`、`/timeline`、`/category`、`/tag`、`/about`、`/link`、`/post/<slug>` 全 200，无 Next 运行时报错。
 - 文档：`docs/features/config.md` 新增「界面风格（Apple 风格）」整节（含逐项说明与令牌表）。
-- 测试：`packages/website/__tests__/appleTheme.spec.ts`(26，含「不许出现框」「标题操作区不能抢戏」两组守卫)、
-  `packages/admin/tests/unit/appleTheme.test.js`(4)。
+- 测试：`packages/website/__tests__/appleTheme.spec.ts`(32，含「不许出现框」「标题操作区不能抢戏」
+  「搜索浮层」三组守卫)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
 
 ### 7.9 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 511 用例：510 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 47 文件 / 398 用例全绿 |
+| website `vitest run` | 47 文件 / 404 用例全绿 |
 | admin `node --test tests/unit` | 50 文件 / 184 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

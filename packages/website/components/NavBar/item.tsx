@@ -87,7 +87,7 @@ function LinkItemWithChildren(props: {
         />
 
         <div
-          className="card-shadow bg-white block transition-all dark:text-dark dark:bg-dark-1 dark:card-shadow-dark"
+          className="card-shadow bg-white block transition-all dark:text-dark dark:bg-dark-1 dark:card-shadow-dark vanblog-nav-dropdown"
           style={{
             position: "absolute",
             minWidth: 100,
