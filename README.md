@@ -22,6 +22,78 @@
 	<strong>Demo(后台账号密码均为 demo): </strong>  <a target="_blank" href='https://blog-demo.mereith.com'>blog-demo.mereith.com</a>
 </p>
 
+> **🍴 这是 [Mereithhh/van-blog](https://github.com/Mereithhh/vanblog) 的 fork（`CKboss/vanblog`，分支 `dev/dsh`）**
+> 在上游 master `ccd708ce`（v0.54.0+）之上增加了 10 项功能，并做了性能优化与安全加固。
+> 下面这段是本分支的内容，**其余部分（含文档站、演示站、打赏与捐赠名单）均归原作者所有**。
+> 想直接看本分支加了什么，跳到 [本分支新增内容](#本分支新增内容)。
+
+## 本分支新增内容
+
+### 功能
+
+| 功能 | 说明 | 文档 |
+| --- | --- | --- |
+| **拼音文章路径** | 新建文章按标题自动生成 `/post/<pinyin-slug>`，重名自动 `-2`/`-3`；历史文章可在后台一键回填；`/post/<数字 id>` 永远可用，改标题不会改别名（已分享的链接不失效） | [文章](docs/features/article.md) |
+| **标题可选中 + 一键复制** | 列表页/文章页/关于页的标题可复制标题与文章链接，导航栏站点名同样可复制 | [AGENTS.md §7.2](AGENTS.md) |
+| **自动摘要** | 没写 `<!-- more -->` 时自动取正文前 200 字，不会切断链接和 emoji；草稿发布也不再因为没有 more 标记而报错 | [编辑器](docs/features/editor.md) |
+| **附件管理** | 上传任意文件生成 URL（按内容去重），html/svg/js 等类型强制下载 + `nosniff`，可搜索引用、批量导出 | [附件](docs/features/attachment.md) |
+| **图片管线** | 长边 1920 自动缩放、300px 缩略图、**隐写水印**（抗压缩/转码，可检测）、原地替换图片而 URL 不变、小图/大图/列表三种视图、批量引用查询；移除了「全部删除」按钮 | [图床](docs/features/image-storage.md) |
+| **整站备份 / 恢复** | 一个高压缩归档（zstd → xz → gzip 自动选择）打包**全部集合 + 评论库 + 图床/附件/自定义页面**；支持不解压查看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引） | [备份](docs/advanced/backup.md) |
+| **单篇导出 `.md` / `.mdz`** | `.md` 是原样正文；`.mdz` 是 Typora 风格带图包（相对链接 + `<标题>.assets/`）；外链图片自动抓取，抓不到会保留原链接并生成说明清单；文章/草稿/编辑器未保存内容/关于页都能导 | [备份](docs/advanced/backup.md) |
+| **Apple 风格前台皮肤** | 后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 `[data-ui="apple"]` 作用域，不影响自定义 CSS；深浅色都有令牌可调 | [配置](docs/features/config.md) |
+| **Markdown 一致性** | 编辑器预览与前台渲染对齐：front matter 不再被渲染成正文、两边共用同一份 sanitize 白名单（代码块复制按钮/行号在预览里也生效）、未知容器标题回落一致 | [Markdown](docs/features/markdown.md) |
+
+### 性能
+
+| 目标 | 结果 |
+| --- | --- |
+| 前台首屏 JS（`next build` First Load） | 首页 432 → **286 kB**，文章页 427 → **281 kB**，友链页 418 → **172 kB**；KaTeX / mermaid / TOC 数学全部按需加载 |
+| 前台图片与静态资源 | 正文图片 `lazy` + `decoding=async`、封面 `fetchpriority=high`；图床图片改为 `max-age=3600, stale-while-revalidate=604800`（此前是 `max-age=0`，每次翻页都重新请求） |
+| 后台 `dist` | 27 MB → **24 MB**；`umi.js` 1133 → **1077 KB**；编辑器路由首包 ~1748 → **~911 KB**；mermaid 从 3 份产物减到 1 份 |
+| 一键脚本 | `backup` 支持 `--consistent`（先停 MongoDB）、`restore` 会校验压缩包完整性并自动删掉 `mongod.lock`；常规操作不再 `down -v`（那会删卷） |
+
+细节见 [前台性能](docs/advanced/performance.md)。
+
+### 安全
+
+做过一轮四路并行审计（认证与权限 / 文件与上传 / 注入与数据暴露 / 功能正确性），修复内容包括：公开接口的 Mongo 操作符注入、搜索接口的正则注入与 500、图床上传任意文件导致的同源存储型 XSS、导出接口的重定向 SSRF、加密文章经由搜索/RSS/解锁接口的三处泄露、导出归档匿名可下载、登录限流可被伪造头绕过、演示站下的管线 RCE、备份恢复的半恢复与进程崩溃等。约束与可调开关见 [安全与加固](docs/advanced/security.md)。
+
+### 本地开发（不需要 docker，也不需要 sudo）
+
+```bash
+./dev-env.sh bootstrap   # 下载 Node 20 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地骨架
+./dev-env.sh install     # 装依赖（--frozen-lockfile，不改 lockfile）
+./dev-env.sh start       # MongoDB:27017 + server:3000 + website:3001 + admin:3002 一起起
+./dev-env.sh status      # 状态；另有 logs / stop / restart / db
+```
+
+工具链、数据库、数据目录、日志全部在仓库内（`.tools/`、`vanblog_dev/`，已本地忽略），整套环境可以随目录搬走，也不会污染系统。
+
+**[AGENTS.md](AGENTS.md)** 是给人和 AI 编码代理看的运行手册：环境搭建、日常操作、跑测试、故障排查速查表、以及本分支每一项改动的**根因和踩过的坑**（改代码前请先读它）。
+
+### 测试
+
+| 套件 | 命令 | 现状 |
+| --- | --- | --- |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | 519 用例（1 个既有用例需联网拉字体，离线必失败） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | 49 文件 / 435 用例 |
+| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | 61 文件 / 230 用例 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | 7 文件 / 259 条断言 |
+
+三套测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
+
+### 与上游同步
+
+```bash
+git fetch origin            # origin = 上游 Mereithhh/vanblog（只 fetch，不 push、不打 tag）
+git rebase origin/master    # 或 merge，按需
+git push ckboss dev/dsh     # ckboss = 本 fork
+```
+
+上游的发版 tag（`v*` 产品、`doc*` 官网）是作者专用的，本分支不会推送任何 tag。
+
+---
+
 ## 预览图
 
 ![前台-白色](/img/合并.png)
