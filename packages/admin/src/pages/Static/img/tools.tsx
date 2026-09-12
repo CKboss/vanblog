@@ -44,6 +44,9 @@ export const mergeMetaInfo = (item: StaticItem) => {
     storageType: '存储',
     url: '外链',
     size: '大小',
+    thumb: '缩略图',
+    thumbWidth: '缩略图宽',
+    thumbHeight: '缩略图高',
   };
   const KeyDic = {
     local: '本地',
@@ -70,4 +73,13 @@ export const downloadImg = (name, url) => {
   const link = getImgLink(url);
   tag.href = link;
   tag.dispatchEvent(new MouseEvent('click'));
+};
+
+/**
+ * 列表用的小图：有缩略图就用缩略图（一般 10KB 左右），没有就退回原图。
+ * 点开预览时仍然看原图（见 index.tsx 里的 preview.src）。
+ */
+export const getThumbLink = (item: StaticItem) => {
+  const thumb = (item as any)?.meta?.thumb;
+  return typeof thumb === 'string' && thumb ? thumb : item?.realPath;
 };

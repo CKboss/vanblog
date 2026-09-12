@@ -18,6 +18,7 @@ import { initJwt } from './utils/initJwt';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { applyStaticAssetHeaders } from './utils/imgCompress';
 import { ATTACHMENT_FOLDER } from './utils/attachment';
+import { THUMB_FOLDER } from './types/setting.dto';
 
 async function bootstrap() {
   const jwtSecret = await initJwt();
@@ -35,6 +36,8 @@ async function bootstrap() {
   checkOrCreate(globalConfig.codeRunnerPath);
   checkOrCreate(globalConfig.staticPath);
   checkOrCreate(path.join(globalConfig.staticPath, 'img'));
+  // 图片管理列表用的缩略图
+  checkOrCreate(path.join(globalConfig.staticPath, 'img', THUMB_FOLDER));
   // 附件管理（任意文件）
   checkOrCreate(path.join(globalConfig.staticPath, ATTACHMENT_FOLDER));
   checkOrCreate(path.join(globalConfig.staticPath, 'tmp'));

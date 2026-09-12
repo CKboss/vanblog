@@ -1,5 +1,10 @@
 import { MenuItem } from './menu.dto';
 
+/** 长边超过这个像素就等比缩小（"1080p 级"）。 */
+export const DEFAULT_MAX_IMAGE_EDGE = 1920;
+/** 图片管理列表用的缩略图宽度。 */
+export const DEFAULT_THUMB_WIDTH = 300;
+
 export const defaultStaticSetting: StaticSetting = {
   storageType: 'local',
   picgoConfig: null,
@@ -8,6 +13,12 @@ export const defaultStaticSetting: StaticSetting = {
   compressFormat: 'webp',
   waterMarkText: null,
   picgoPlugins: null,
+  enableResize: true,
+  maxImageEdge: DEFAULT_MAX_IMAGE_EDGE,
+  enableThumb: true,
+  thumbWidth: DEFAULT_THUMB_WIDTH,
+  enableStegoWaterMark: true,
+  stegoWaterMarkText: null,
 };
 
 export type SettingType =
@@ -99,6 +110,8 @@ export const StoragePath: Record<StaticType, string> = {
   customPage: `customPage`,
   file: `file`,
 };
+/** 缩略图放在图片目录下的这个子目录里，跟着图片一起备份/导出。 */
+export const THUMB_FOLDER = 'thumb';
 export class StaticSetting {
   storageType: StorageType;
   picgoConfig: any;
@@ -108,4 +121,18 @@ export class StaticSetting {
   enableWebp: boolean;
   /** Output format when enableWebp is on. Default webp. */
   compressFormat?: CompressFormat;
+  /** 上传时是否把大图缩到 maxImageEdge 以内（只缩不放）。 */
+  enableResize?: boolean;
+  /** 长边上限，0 表示不限制。默认 1920。 */
+  maxImageEdge?: number;
+  /** 是否为图片生成缩略图（图片管理列表用）。 */
+  enableThumb?: boolean;
+  /** 缩略图宽度，默认 300。 */
+  thumbWidth?: number;
+  /** 隐写水印（肉眼不可见，可从图片里提取回来）。 */
+  enableStegoWaterMark?: boolean;
+  /** 隐写内容，留空则写「域名|上传者|时间」。 */
+  stegoWaterMarkText?: string;
+  /** 隐写密钥，首次启用时自动生成并持久化；换密钥后旧图读不出来。 */
+  stegoKey?: string;
 }

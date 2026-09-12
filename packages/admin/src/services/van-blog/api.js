@@ -500,6 +500,37 @@ export async function deleteAllIMG() {
   });
 }
 /** 附件管理：列表（支持按文件名模糊搜索） */
+export async function backfillThumbnails(force = false) {
+  return request('/api/admin/img/thumb/backfill', {
+    method: 'POST',
+    data: { force },
+  });
+}
+
+export async function detectStegoBySign(sign) {
+  return request('/api/admin/img/stego/detect', {
+    method: 'POST',
+    data: { sign },
+  });
+}
+
+/**
+ * 上传一张图直接验水印。umi-request 传 FormData 不太稳，这里用 fetch，
+ * 和 UploadBtn / 附件上传保持一致（token 放在 header 里）。
+ */
+export async function detectStegoByFile(file) {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  const res = await fetch('/api/admin/img/stego/detect', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      token: window.localStorage.getItem('token') || 'null',
+    },
+  });
+  return res.json();
+}
+
 export async function getAttachments(page = 1, pageSize = 10, name = undefined) {
   const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   if (name) {

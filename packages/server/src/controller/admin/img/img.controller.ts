@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Query,
+  Request,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -43,6 +44,7 @@ export class ImgController {
     @Query('favicon') favicon?: string,
     @Query('waterMarkText') waterMarkText?: string,
     @Query('withWaterMark') withWaterMark?: string,
+    @Request() req?: any,
   ) {
     let isFavicon = false;
     if (favicon && favicon == 'true') {
@@ -53,7 +55,59 @@ export class ImgController {
       withWaterMark: checkTrue(withWaterMark),
       waterMarkText,
     };
-    const res = await this.staticProvider.upload(file, 'img', isFavicon, undefined, updateConfig);
+    // 隐写水印默认写「域名|上传者|时间」，这两样只有控制器里拿得到。
+    const siteInfo = await this.metaProvider.getSiteInfo();
+    const context = {
+      uploader: req?.user?.nickname || req?.user?.name || '',
+      baseUrl: siteInfo?.baseUrl,
+      author: siteInfo?.author,
+    };
+    const res = await this.staticProvider.upload(
+      file,
+      'img',
+      isFavicon,
+      undefined,
+      updateConfig,
+      context,
+    );
+    return {
+      statusCode: 200,
+      data: res,
+    };
+  }
+
+  /**
+   * 为存量图片补缩略图（新上传的会自动生成）。只处理本地存储的图片。
+   */
+  @Post('thumb/backfill')
+  async backfillThumbnails(@Body() body: { force?: boolean }) {
+    if (config.demo && config.demo == 'true') {
+      return {
+        statusCode: 401,
+        message: '演示站禁止修改此项！',
+      };
+    }
+    const res = await this.staticProvider.backfillThumbnails({ force: checkTrue(body?.force) });
+    return {
+      statusCode: 200,
+      data: res,
+    };
+  }
+
+  /**
+   * 检测隐写水印：body 里给 sign 就查图床里那张，或者直接上传一张图来验。
+   * 只读操作，不写任何文件。
+   */
+  @Post('stego/detect')
+  @UseInterceptors(FileInterceptor('file'))
+  async detectStego(
+    @UploadedFile() file: any,
+    @Body() body: { sign?: string },
+  ) {
+    const res = await this.staticProvider.detectStegoWatermark({
+      sign: body?.sign,
+      buffer: file?.buffer,
+    });
     return {
       statusCode: 200,
       data: res,

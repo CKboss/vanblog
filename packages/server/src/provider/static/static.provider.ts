@@ -1,4 +1,11 @@
-import { HttpException, HttpStatus, Injectable, NotImplementedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotImplementedException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { SearchStaticOption, StaticType, StorageType } from 'src/types/setting.dto';
@@ -13,10 +20,14 @@ import { ImgMeta } from 'src/types/img';
 import { formatBytes } from 'src/utils/size';
 import { sanitizePagination } from 'src/utils/pagination';
 import axios from 'axios';
-import { UploadConfig } from 'src/types/upload';
+import { UploadConfig, UploadContext } from 'src/types/upload';
 import { addWaterMarkToIMG } from 'src/utils/watermark';
 import { checkTrue } from 'src/utils/checkTrue';
 import { compressExt, compressImg, resolveCompressFormat } from 'src/utils/imgCompress';
+import { capImageResolution } from 'src/utils/imgResize';
+import { generateThumbnail } from 'src/utils/thumbnail';
+import { buildStegoPayload, parseThumbWidth, resolveMaxImageEdge } from 'src/utils/imageOptions';
+import { embedStegoWatermark, extractStegoWatermark } from 'src/utils/stegoWatermark';
 import { normalizeCustomPageRel } from 'src/utils/customPagePath';
 import {
   assertAttachmentSize,
@@ -38,6 +49,7 @@ import {
 } from 'src/utils/transferRemoteImages';
 @Injectable()
 export class StaticProvider {
+  logger = new Logger(StaticProvider.name);
   constructor(
     @InjectModel('Static')
     private staticModel: Model<StaticDocument>,
@@ -62,6 +74,7 @@ export class StaticProvider {
     isFavicon?: boolean,
     customPathname?: string,
     updateConfig?: UploadConfig,
+    context?: UploadContext,
   ) {
     if (type == 'file') {
       // 附件走独立分支：不加水印、不压缩、不按图片去重。
@@ -74,6 +87,8 @@ export class StaticProvider {
     let currentSign = encryptFileMD5(buf);
     const staticConfigInDB = await this.settingProvider.getStaticSetting();
     let compressSuccess = true;
+    /** 这张图有没有成功写入隐写水印（返回给前端只是提示用）。 */
+    let stegoEmbedded = false;
     const compressFormat = resolveCompressFormat(staticConfigInDB?.compressFormat);
     if (type == 'img') {
       try {
@@ -91,6 +106,47 @@ export class StaticProvider {
         }
       } catch (err) {
         // console.log(err);
+      }
+
+      // 顺序很重要：先缩放，再隐写，最后有损压缩。
+      // 缩放会重采样、把块均值格点打乱，所以必须放在隐写之前；
+      // 隐写用的是块均值调制（不是 LSB），压成有损 webp 之后仍然读得出来。
+      if (checkTrue(staticConfigInDB.enableResize)) {
+        try {
+          const maxEdge = resolveMaxImageEdge(staticConfigInDB.maxImageEdge);
+          const resized = await capImageResolution(buf, maxEdge, fileType);
+          if (resized.resized) {
+            buf = resized.buffer;
+            currentSign = encryptFileMD5(buf);
+          }
+        } catch (err) {
+          this.logger.warn(`缩放失败，按原图继续：${(err as Error)?.message}`);
+        }
+      }
+
+      if (checkTrue(staticConfigInDB.enableStegoWaterMark) && fileType != 'gif') {
+        try {
+          const key = await this.settingProvider.getStegoKey();
+          const text = buildStegoPayload({
+            custom: staticConfigInDB.stegoWaterMarkText,
+            baseUrl: context?.baseUrl,
+            author: context?.author,
+            uploader: context?.uploader,
+          });
+          const stegoRes = await embedStegoWatermark(buf, text, key);
+          if (stegoRes.embedded) {
+            buf = stegoRes.buffer;
+            stegoEmbedded = true;
+            currentSign = encryptFileMD5(buf);
+          } else if (
+            stegoRes.reason &&
+            !['image-too-small', 'unsupported-format'].includes(stegoRes.reason)
+          ) {
+            this.logger.warn(`隐写水印未写入：${stegoRes.reason}`);
+          }
+        } catch (err) {
+          this.logger.warn(`隐写水印失败，按原图继续：${(err as Error)?.message}`);
+        }
       }
 
       if (checkTrue(staticConfigInDB.enableWebp)) {
@@ -125,13 +181,40 @@ export class StaticProvider {
       type == 'img' && checkTrue(staticConfigInDB.enableWebp) && compressSuccess
         ? compressExt(compressFormat)
         : fileType;
+    const storedFileName = isFavicon ? `favicon.${storedType}` : fileName;
+
+    // 缩略图给后台图片管理用：列表加载小图而不是原图，翻几十张也快。
+    let extraMeta: Record<string, any> | undefined;
+    if (type == 'img' && !isFavicon && checkTrue(staticConfigInDB.enableThumb)) {
+      try {
+        const thumb = await generateThumbnail(
+          buf,
+          parseThumbWidth(staticConfigInDB.thumbWidth),
+          fileType,
+        );
+        if (thumb.ok) {
+          const thumbPath = await this.localProvider.saveThumb(
+            storedFileName,
+            thumb.buffer,
+            thumb.ext,
+          );
+          extraMeta = { thumb: thumbPath, thumbWidth: thumb.width, thumbHeight: thumb.height };
+        } else if (thumb.reason && !['disabled', 'unsupported'].includes(thumb.reason)) {
+          this.logger.warn(`缩略图生成失败：${thumb.reason}`);
+        }
+      } catch (err) {
+        this.logger.warn(`缩略图生成失败：${(err as Error)?.message}`);
+      }
+    }
+
     const realPath = await this.saveFile(
       storedType,
-      isFavicon ? `favicon.${storedType}` : fileName,
+      storedFileName,
       buf,
       type,
       currentSign,
       isFavicon,
+      extraMeta,
     );
     if (!realPath) {
       throw new HttpException('上传失败', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -139,6 +222,7 @@ export class StaticProvider {
     return {
       src: realPath,
       isNew: true,
+      stego: stegoEmbedded,
     };
   }
 
@@ -361,6 +445,7 @@ export class StaticProvider {
     type: StaticType,
     sign: string,
     toRootPath?: boolean,
+    extraMeta?: Record<string, any>,
   ) {
     const storageSetting = await this.settingProvider.getStaticSetting();
     let storageType = storageSetting?.storageType || 'local';
@@ -375,6 +460,7 @@ export class StaticProvider {
           buffer,
           type,
           toRootPath,
+          extraMeta,
         );
         if (type != 'customPage') {
           await this.createInDB({
@@ -474,13 +560,117 @@ export class StaticProvider {
     const toDeleteData = await this.staticModel.findOne({ sign }).exec();
     const storageType = toDeleteData.storageType;
     switch (storageType) {
-      case 'local':
+      case 'local': {
         await this.localProvider.deleteFile(toDeleteData.name, toDeleteData.staticType);
+        // 缩略图跟着原图一起删，别留孤儿文件
+        const thumb = (toDeleteData?.meta as any)?.thumb;
+        if (thumb) {
+          await this.localProvider.deleteStaticFile(thumb);
+        }
         break;
+      }
       case 'picgo':
         console.log('实际上只删了数据库，网盘上还有的。');
     }
     return await this.staticModel.deleteOne({ sign }).exec();
+  }
+
+  /** 缩略图地址；没生成过就是 null（前端回退到原图）。 */
+  static thumbOf(item: any): string | null {
+    const thumb = item?.meta?.thumb;
+    return typeof thumb === 'string' && thumb ? thumb : null;
+  }
+
+  /**
+   * 为存量图片补缩略图（新上传的会自动生成）。
+   * 只处理本地存储的图片；远程图床（PicGo/OSS）没有本地文件，直接跳过。
+   */
+  async backfillThumbnails(options?: { force?: boolean }) {
+    const setting = await this.settingProvider.getStaticSetting();
+    const width = parseThumbWidth(setting?.thumbWidth);
+    const all = await this.getAll('img', 'admin');
+    const result = {
+      total: all.length,
+      generated: 0,
+      existed: 0,
+      skipped: 0,
+      failed: 0,
+      width,
+    };
+    for (const item of all) {
+      const existing = StaticProvider.thumbOf(item);
+      if (existing && !options?.force && (await this.localProvider.staticFileExists(existing))) {
+        result.existed += 1;
+        continue;
+      }
+      if (item?.storageType && item.storageType !== 'local') {
+        result.skipped += 1;
+        continue;
+      }
+      try {
+        const buffer = await this.localProvider.readStaticFile(item.realPath);
+        const thumb = await generateThumbnail(buffer, width, item.fileType);
+        if (!thumb.ok) {
+          result.failed += 1;
+          continue;
+        }
+        const baseName = String(item.realPath || '').split('/').pop();
+        const thumbPath = await this.localProvider.saveThumb(baseName, thumb.buffer, thumb.ext);
+        await this.staticModel
+          .updateOne(
+            { sign: item.sign, staticType: 'img' },
+            {
+              $set: {
+                'meta.thumb': thumbPath,
+                'meta.thumbWidth': thumb.width,
+                'meta.thumbHeight': thumb.height,
+              },
+            },
+          )
+          .exec();
+        result.generated += 1;
+      } catch (err) {
+        result.failed += 1;
+      }
+    }
+    this.logger.log(`补缩略图完成：${JSON.stringify(result)}`);
+    return result;
+  }
+
+  /**
+   * 检测隐写水印：
+   * - 传 sign：读本站图床里那张（仅本地存储）；
+   * - 传 buffer：直接检测上传上来的文件（后台「上传一张图验证」）。
+   * magic + CRC 都对才算命中，所以不会误报。
+   */
+  async detectStegoWatermark(input: { sign?: string; buffer?: Buffer }) {
+    let buffer = input?.buffer;
+    let item: any = null;
+    if (!buffer && input?.sign) {
+      item = await this.staticModel.findOne({ sign: input.sign, staticType: 'img' }).exec();
+      if (!item) {
+        throw new BadRequestException('找不到这张图片！');
+      }
+      if (item.storageType && item.storageType !== 'local') {
+        return {
+          found: false,
+          reason: 'not-local',
+          name: item.name,
+          realPath: item.realPath,
+        };
+      }
+      buffer = await this.localProvider.readStaticFile(item.realPath);
+    }
+    if (!buffer) {
+      throw new BadRequestException('没有可检测的图片！');
+    }
+    const key = await this.settingProvider.getStegoKey();
+    const res = await extractStegoWatermark(buffer, key);
+    return {
+      ...res,
+      name: item?.name,
+      realPath: item?.realPath,
+    };
   }
   async deleteAllIMG() {
     // 调试用的

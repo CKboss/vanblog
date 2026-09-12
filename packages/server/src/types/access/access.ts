@@ -54,5 +54,7 @@ export const publicRoutes = [
   'post-/api/admin/file/upload',
   'get-/api/admin/collaborator/list',
   'post-/api/admin/img/upload',
+  // 只读：检测图片里的隐写水印（协作者也能用来验图）
+  'post-/api/admin/img/stego/detect',
   'post-/api/admin/article/searchByLink',
 ];
