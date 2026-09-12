@@ -21,7 +21,9 @@ const customContainerPlugin = () => (tree) => {
       if (node.type == "containerDirective") {
         const { attributes, name: tagName } = node;
         const data = node.data ??= {};
-        const title = attributes?.title || CUSTOM_CONTAINER_TITLE[tagName];
+        // 和后台编辑器一致：写了 title 用它，其次查内置映射，最后回落到容器名本身
+        const title =
+          attributes?.title || CUSTOM_CONTAINER_TITLE[tagName] || tagName;
         const cls = `custom-container ${tagName}`;
 
         data.hName = "div";

@@ -10,6 +10,7 @@ import { LinkTarget } from "./linkTarget";
 import { Heading } from "./heading";
 import { Img } from "./img";
 import { sanitizeMarkdownSchema } from "../../utils/markdownSanitize";
+import { stripFrontMatter } from "../../utils/frontMatter";
 import { useContext, useMemo } from "react";
 import { ThemeContext } from "../../utils/themeContext";
 import { isDarkPaintTheme } from "../../utils/mermaidTheme";
@@ -35,6 +36,6 @@ export default function ({ content }: { content: string }) {
     [theme],
   );
   return <div className="markdown-body">
-    <Viewer key={paintKey} value={content} plugins={plugins} remarkRehype={{ allowDangerousHtml: true }} sanitize={sanitize} />
+    <Viewer key={paintKey} value={stripFrontMatter(content)} plugins={plugins} remarkRehype={{ allowDangerousHtml: true }} sanitize={sanitize} />
   </div>
 }

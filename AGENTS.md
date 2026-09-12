@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -761,17 +761,53 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - e2e 已验证：`GET /api/admin/meta/site` → `PUT uiStyle=default/apple/乱填` → 首页 `data-ui` 依次是
   `default`/`apple`/`apple`（非法值回落），其余 19 个 siteInfo 字段没被 PUT 冲掉；
   `/`、`/timeline`、`/category`、`/tag`、`/about`、`/link`、`/post/<slug>` 全 200，无 Next 运行时报错。
-- 文档：`docs/features/config.md` 新增「界面风格（Apple 风格）」整节（含逐项说明与令牌表）。
+- 文档：`docs/features/config.md` 新增「界面风格（Apple 风格）」整节（含逐项说明与令牌表）；
+  `docs/features/markdown.md`（新页）是 Markdown 支持范围矩阵（支持 / 不支持 / front matter / 安全），见 §7.9。
 - 测试：`packages/website/__tests__/appleTheme.spec.ts`(39，含「不许出现框」「标题操作区不能抢戏」
   「所有覆盖层都要有表面」「用户反馈的三个细节」四组守卫)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
 
-### 7.9 测试基线（本分支最后一次全量运行的结果）
+### 7.9 Markdown：编辑器预览与前台渲染的一致性
+
+- 两边共用 bytemd 流水线：`remark-parse → remark-rehype({allowDangerousHtml:true}) → rehype-raw →
+  rehype-sanitize(schema) → 插件 rehype → stringify`。所以一致性只取决于三件事：
+  **插件清单**、**sanitize 白名单**、**共享插件的实现**。实测矩阵写在 `docs/features/markdown.md`。
+- 这轮查出并修掉的不一致：
+  1. **front matter（最严重）**：编辑器有 `@bytemd/plugin-frontmatter` 会把它解析掉，前台没有 →
+     正文开头的 `---\ntitle: …\n---` 在文章页被渲染成 `<hr>` + 一个巨大的 setext 标题
+     `<h2>title: xxx tags: [a, b]</h2>`。修法不是加依赖，而是新增 `utils/frontMatter.ts`
+     （website 与 server 各一份、逻辑一致），在三处剥掉：`components/Markdown`（渲染）、
+     `utils/articleExcerpt`（摘要）、server `MarkdownProvider.getDescription`（RSS）。
+     剥完顺手吃掉紧随的空行，否则摘要会以 `\n` 开头。
+  2. **编辑器 sanitize 落后于前台**：前台的 canonical schema 放行 `button` + `type/disabled`、
+     `dataLine`（代码块行号）、`title`、`ariaLabel/ariaHidden`，并过滤 `on*` 事件属性；
+     编辑器那份是早期手写的，这些都没有 → **编辑器预览里代码块没有复制按钮、没有行号、没有 tooltip**。
+     修法：新建 `packages/admin/src/components/Editor/markdownSanitize.ts`（与前台同构），
+     删掉 `Editor/index.tsx` 里那份内联 schema。
+  3. **未知容器标题回落**：`::: foo`（不在映射表里）编辑器回落成容器名、前台回落成 `undefined`
+     → 前台补 `|| tagName`。
+  4. `linkTarget.tsx` / `rawHTML.tsx` 两份实现只有引号风格差异，功能一致（已逐个 diff 核对，不用动）。
+- **有意保留的差异**：前台 `heading.tsx` 会生成 `id` / `markdown-heading` class / 悬停 `#` 永久链接（91 行），
+  编辑器版只设 `data-id`（18 行）→ 预览里标题没有锚点和 `#`，可接受；`codeBlock.tsx` 前台用
+  `react-hot-toast` + `codeCopyA11y`，编辑器用 antd `message`，行为等价。
+- 两边**都不支持**（一致地不支持，文档给了替代写法）：`==高亮==`、`X^2^` / `H~2~O`、`:emoji:` 短代码、
+  定义列表、GitHub Alerts `> [!NOTE]`、`[[toc]]`。要补必须**两边同时加插件**，别再出现单边支持。
+- 两边**都支持**（逐项实测 ✅）：GFM 表格与对齐、任务列表、删除线、自动链接、**脚注**（remark-gfm 3 自带）、
+  KaTeX 行内与块级、mermaid、`::: tip/info/note/warning/danger` 容器、代码高亮 + 行号 + 复制按钮、
+  `<u> <mark> <kbd> <center> <font color> <button> <details> <iframe>`、`<!-- more -->`。
+- 回归测试：`packages/admin/tests/unit/markdownConsistency.test.js`(7) 把「两份 sanitize 白名单逐项对齐」
+  「渲染类插件两边都在」「front matter 两边都不显示」「编辑器独有插件不该出现在前台」「未知容器回落一致」钉死；
+  另有 `packages/website/__tests__/frontMatter.spec.ts`(7)、
+  `packages/server/src/provider/markdown/markdown.provider.frontmatter.spec.ts`(3)。
+- 实测方法（可复用）：建一篇 pathname 固定的探针文章 → 正文塞满各种语法 → 抓 `/post/<pathname>` 的 HTML
+  逐项 grep → **测完删文章**（别留在站上）。
+
+### 7.10 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 511 用例：510 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 47 文件 / 411 用例全绿 |
-| admin `node --test tests/unit` | 50 文件 / 184 用例全绿 |
+| server `jest` | 514 用例：513 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 48 文件 / 418 用例全绿 |
+| admin `node --test tests/unit` | 53 文件 / 192 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -781,7 +817,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.9 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.10 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

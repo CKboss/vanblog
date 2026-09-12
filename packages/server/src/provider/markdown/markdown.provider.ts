@@ -1,3 +1,4 @@
+import { stripFrontMatter } from 'src/utils/frontMatter';
 import { Injectable, Logger } from '@nestjs/common';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js';
@@ -50,6 +51,7 @@ export class MarkdownProvider {
   }
 
   getDescription(content: string) {
-    return content.split('<!-- more -->')[0];
+    // 导入/粘贴进来的正文可能带 YAML front matter，那是元信息不是内容
+    return stripFrontMatter(content).split('<!-- more -->')[0];
   }
 }

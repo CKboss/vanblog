@@ -33,33 +33,9 @@ import { mermaidForEditor } from './plugins/mermaidSafety';
 import { withSafeViewerEffects } from './plugins/previewSafety';
 import { tocViewportGuard } from './plugins/tocViewport';
 import { mobileToolbarPlugin } from './plugins/mobileToolbar';
+import { sanitizeMarkdownSchema as sanitize } from './markdownSanitize';
 import { softLineBreaksPlugin } from './plugins/softLineBreaks';
 import './mobile-toolbar.css';
-
-// Keep extra tags / strip list aligned with website/utils/markdownSanitize.ts (#490).
-const sanitize = (schema) => {
-  schema.protocols.src.push('data');
-  schema.tagNames.push('center');
-  schema.tagNames.push('iframe');
-  schema.tagNames.push('section');
-  schema.tagNames.push('u');
-  schema.tagNames.push('font');
-  schema.tagNames = schema.tagNames.filter((tag) => tag !== 'script');
-  schema.strip = Array.from(new Set([...(schema.strip || []), 'script']));
-  // remark-rehype already prefixes footnote ids; a second prefix breaks hrefs.
-  schema.clobberPrefix = '';
-  schema.attributes['*'].push('style');
-  schema.attributes['*'].push('src');
-  schema.attributes['*'].push('scrolling');
-  schema.attributes['*'].push('border');
-  schema.attributes['*'].push('frameborder');
-  schema.attributes['*'].push('framespacing');
-  schema.attributes['*'].push('allowfullscreen');
-  schema.attributes.font = Array.from(
-    new Set([...(schema.attributes.font || []), 'color', 'size', 'face']),
-  );
-  return schema;
-};
 
 async function uploadEditorImages(files: File[], setLoading: (loading: boolean) => void) {
   setLoading(true);

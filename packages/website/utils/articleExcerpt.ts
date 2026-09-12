@@ -1,3 +1,4 @@
+import { stripFrontMatter } from "./frontMatter";
 /**
  * Homepage / list cards render markdown before「阅读全文」.
  *
@@ -21,6 +22,9 @@ export function articleOverviewMarkdown(
   if (!content) {
     return content;
   }
+  // front matter 是元信息不是正文，摘要里出现 `--- title: …` 会很难看，
+  // 而且会被当成 setext 标题（编辑器里有 frontmatter 插件，前台没有）
+  content = stripFrontMatter(content);
   if (content.includes("<!-- more -->")) {
     return content.split("<!-- more -->")[0];
   }
