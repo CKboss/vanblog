@@ -13,6 +13,7 @@
  * - 事件处理属性过滤（`on*`）→ 前台有这道兜底，编辑器没有
  * `packages/admin/tests/unit/markdownConsistency.test.js` 会把两份文件的白名单对齐钉死。
  */
+// mark = `==高亮==`；dl/dt/dd = 定义列表（remark-definition-list）
 export const MARKDOWN_EXTRA_TAG_NAMES = [
   'center',
   'iframe',
@@ -20,6 +21,10 @@ export const MARKDOWN_EXTRA_TAG_NAMES = [
   'button',
   'u',
   'font',
+  'mark',
+  'dl',
+  'dt',
+  'dd',
 ] as const;
 
 export const MARKDOWN_FORBIDDEN_TAG_NAMES = ['script'] as const;

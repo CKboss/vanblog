@@ -8,6 +8,7 @@ import { LinkTarget } from "./linkTarget";
 import { Heading } from "./heading";
 import { Img } from "./img";
 import MarkdownView from "./MarkdownView";
+import { extraSyntax } from "./extraSyntax";
 
 /**
  * 不含 KaTeX / mermaid 的渲染器。绝大多数文章（以及所有列表页摘要）都走这一份，
@@ -17,7 +18,9 @@ export default function MarkdownBase(props: { content: string }) {
   const plugins = useMemo(
     () => [
       rawHTML(),
-      gfm(),
+      // singleTilde:false —— 单个 `~x~` 让给下标（remark-supersub），删除线仍用 `~~x~~`
+      gfm({ singleTilde: false }),
+      extraSyntax(),
       highlightSsr(),
       customContainer(),
       customCodeBlock(),

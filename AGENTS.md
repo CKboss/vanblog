@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固、一键脚本修复、后台性能优化。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固、一键脚本修复、后台性能优化、补齐 6 种 markdown 语法。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -789,8 +789,8 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - **有意保留的差异**：前台 `heading.tsx` 会生成 `id` / `markdown-heading` class / 悬停 `#` 永久链接（91 行），
   编辑器版只设 `data-id`（18 行）→ 预览里标题没有锚点和 `#`，可接受；`codeBlock.tsx` 前台用
   `react-hot-toast` + `codeCopyA11y`，编辑器用 antd `message`，行为等价。
-- 两边**都不支持**（一致地不支持，文档给了替代写法）：`==高亮==`、`X^2^` / `H~2~O`、`:emoji:` 短代码、
-  定义列表、GitHub Alerts `> [!NOTE]`、`[[toc]]`。要补必须**两边同时加插件**，别再出现单边支持。
+- 两边**都不支持**的 6 种语法后来补齐了（见 §7.14）：`==高亮==`、`X^2^` / `H~2~O`、`:emoji:` 短代码、
+  定义列表、GitHub Alerts `> [!NOTE]`、`[[toc]]`。原则不变：**要补必须两边同时加插件**。
 - 两边**都支持**（逐项实测 ✅）：GFM 表格与对齐、任务列表、删除线、自动链接、**脚注**（remark-gfm 3 自带）、
   KaTeX 行内与块级、mermaid、`::: tip/info/note/warning/danger` 容器、代码高亮 + 行号 + 复制按钮、
   `<u> <mark> <kbd> <center> <font color> <button> <details> <iframe>`、`<!-- more -->`。
@@ -1071,12 +1071,59 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   「图片必须 lazy+async」。注意断言要**排除注释**（注释里会写旧写法，否则自己匹配自己）。
 - 文档：`docs/advanced/performance.md` 新增「后台管理界面」一节（含前后对比表）。
 
-### 7.14 测试基线（本分支最后一次全量运行的结果）
+### 7.14 补齐 6 种 markdown 语法（两边同时加，用标准插件）
+
+用户要求把「两边都缺」的语法补上，并且要用最标准/最新的插件。实现落在**两份必须一致**的文件里：
+`packages/website/components/Markdown/extraSyntax.ts` 与
+`packages/admin/src/components/Editor/plugins/extraSyntax.ts`（后者只把前台的
+`normalizeHeadingText` / `headingHashHref` 换成本地等价实现）。
+
+- **版本选择**：bytemd 1.21 锁 unified 10 / remark-parse 10 / mdast v3，所以只能用同一世代的插件
+  （更高大版本已经是 mdast v4 / unified 11）：`remark-supersub@1`、`remark-gemoji@7`
+  （package.json 明确 peer `unified ^10`、`@types/mdast ^3`）、`remark-definition-list@1`
+  （micromark-extension-definition-list 1 = micromark 3 世代）、
+  `remark-github-blockquote-alert@2`、`micromark-extension-mark@1` + `mdast-util-mark@1`、
+  `mdast-util-toc` 未采用（见下）。两个包都装了**同样的 7 个依赖**。
+- **`==高亮==`**：npm 上的 `remark-mark` 是 `0.0.0` 占位包，不能用；正确做法是自己按 remark 插件的
+  标准写法把官方的 micromark/mdast 扩展对拼起来（和 remark-gfm/remark-math 一样）。
+  ⚠️ 导出名不是 `mark`：是 `pandocMark` / `pandocMarkFromMarkdown` / `pandocMarkToMarkdown`，
+  而且它们是**扩展对象不是工厂函数**（micromark 那个两种形态都可能，所以按 `typeof` 判断）。
+- **踩坑：data 字段名**。unified 10 世代的 remark-parse 读的是 `fromMarkdownExtensions` /
+  `toMarkdownExtensions`；写成 remark 15 的 `mdastUtilFromMarkdownExtensions` **不会报错、只会静默失效**
+  （表现是 `==高亮==` 变成纯文本，`==` 被吃掉）。`remark-definition-list` 的源码可以当参照。
+- **定义列表**：mdast 节点是 `defList` / `defListTerm` / `defListDescription`，remark-rehype 不认识，
+  必须把官方 handler 传进去：`remarkRehype={{ allowDangerousHtml: true, handlers: defListHastHandlers }}`
+  （前台在 `MarkdownView.tsx`，后台在 `Editor/index.tsx`）。不传的话会被当未知节点摊成
+  `<div><div>术语</div>…</div>`。
+- **`~x~` 冲突**：GFM 的删除线默认吃单波浪，`remark-supersub` 的下标抢不到（**插件顺序换过来也没用**，
+  实测两种顺序都是 `<del>`）。解法是 `gfm({ singleTilde: false })` —— `@bytemd/plugin-gfm`
+  会把除 `locale` 之外的选项**原样转发给 remark-gfm**（看它的 `index.d.ts` 就知道），所以不用换掉插件。
+  **这是行为变更**：单个 `~x~` 从删除线变成下标，删除线要写 `~~x~~`（本来就是 GFM 标准写法）。
+  文档里单独开了一节说明。
+- **`[[toc]]`**：标准的 `remark-toc` 只认**标题**形式的标记（`## 目录`），不认 `[[toc]]`；
+  而且它用 github-slugger 生成锚点，与本站标题 id 规则（`normalizeHeadingText` 原文）对不上，
+  链接会点不动。所以自己实现：扫描顶层段落找 `[[toc]]`/`[toc]`，用与 Heading 插件**同一个**
+  `headingHashHref()` 生成锚点，产出标准的嵌套 `list`/`listItem`/`link` mdast 节点。
+  没有标题时直接删掉标记；后台预览里点不动（预览的标题只有 `data-id` 没有 `id`），已写进文档。
+- **sanitize 白名单**：两份 schema 都加了 `mark` / `dl` / `dt` / `dd`（GitHub 默认表里没有 `mark`）。
+  **故意不放行 `svg`**：提示块插件的标题图标是内联 `<svg>`，会被剥掉，改用
+  `styles/markdown-extra.css` 的 `::before` 画等效图标 —— 放行 svg 等于给正文多开一个 XSS 面。
+- **样式**：`remark-github-blockquote-alert/alert.css` + 自己的 `markdown-extra.css`
+  （前台在 `pages/_app.tsx` 引入，后台在 `Editor/index.tsx` 引入；两份 css 内容一致）。
+- 实测（建临时文章 → 抓 `/post/syntax-check` → 删文章）：`<mark>`、`<sup>`、`<sub>`、`<del>`、
+  😄/🚀、`<dl><dt><dd>`、`markdown-alert-note`/`-warning`、`[[toc]]` 生成的嵌套列表与锚点全部正确。
+- 测试：`packages/website/__tests__/extraSyntax.spec.ts`(15，**用真实管线渲染**逐项断言 + 两份文件
+  的插件链/字段名/sanitize/CSS 一致性)，`markdownConsistency.test.js` 增加 `extraSyntax()`、
+  `singleTilde: false`、`handlers: defListHastHandlers` 的比对。
+- 文档：`docs/features/markdown.md` 把这 6 项从「不支持」挪到「支持」，新增「单个 `~` 的行为变化」
+  「用的是哪些插件」两节，以及提示块图标与预览 TOC 的说明。
+
+### 7.15 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 519 用例：518 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 49 文件 / 435 用例全绿 |
+| website `vitest run` | 50 文件 / 450 用例全绿 |
 | admin `node --test tests/unit` | 61 文件 / 230 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
@@ -1088,7 +1135,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.14 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.15 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

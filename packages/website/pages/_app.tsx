@@ -1,4 +1,9 @@
 import "../styles/globals.css";
+// GitHub 风格提示块（> [!NOTE] 等）的样式。它的图标本来是内联 <svg>，
+// 但 sanitize 白名单不放行 svg（正文里能塞 svg 就等于多一个 XSS 面），
+// 所以 styles/markdown-extra.css 用 ::before 补了等效的图标。
+import "remark-github-blockquote-alert/alert.css";
+import "../styles/markdown-extra.css";
 import "../styles/side-bar.css";
 import "../styles/toc.css";
 import "../styles/var.css";

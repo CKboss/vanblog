@@ -17,6 +17,7 @@
  * - Site-wide JS/HTML still belongs in 定制化, not the article body.
  * - Admins are trusted authors; this is not a comment-field sanitizer.
  */
+// mark = `==高亮==`；dl/dt/dd = 定义列表（remark-definition-list）
 export const MARKDOWN_EXTRA_TAG_NAMES = [
   "center",
   "iframe",
@@ -24,6 +25,10 @@ export const MARKDOWN_EXTRA_TAG_NAMES = [
   "button",
   "u",
   "font",
+  "mark",
+  "dl",
+  "dt",
+  "dd",
 ] as const;
 
 export const MARKDOWN_FORBIDDEN_TAG_NAMES = ["script"] as const;

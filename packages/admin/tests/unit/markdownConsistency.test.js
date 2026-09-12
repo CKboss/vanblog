@@ -76,14 +76,20 @@ describe('编辑器预览 与 前台渲染：插件与流水线', () => {
       ['codeBlock', /customCodeBlock\(\)/],
       ['linkTarget', /LinkTarget\(\)/],
       ['heading', /Heading\(\)/],
+      // 6 种补充语法（==高亮== / 上下标 / :emoji: / 定义列表 / GitHub 提示块 / [[toc]]）
+      ['extraSyntax', /extraSyntax\(\)/],
     ];
     for (const [name, re] of shared) {
       assert.ok(re.test(editor), `编辑器缺少 ${name}`);
       assert.ok(re.test(viewer), `前台缺少 ${name}`);
     }
-    // 两边都开 allowDangerousHtml，否则 rawHTML 不生效
-    assert.match(editor, /remarkRehype=\{\{ allowDangerousHtml: true \}\}/);
-    assert.match(viewer, /remarkRehype=\{\{ allowDangerousHtml: true \}\}/);
+    // 两边都开 allowDangerousHtml（否则 rawHTML 不生效），并且都要把定义列表的
+    // hast handler 传给 remark-rehype（否则 dl/dt/dd 会被当未知节点摊成 div）
+    assert.match(editor, /remarkRehype=\{\{ allowDangerousHtml: true, handlers: defListHastHandlers \}\}/);
+    assert.match(viewer, /remarkRehype=\{\{\s*allowDangerousHtml: true,\s*\/\/[\s\S]*?handlers: defListHastHandlers,\s*\}\}/);
+    // 单个 ~x~ 归下标，删除线用 ~~x~~：两边必须一致，否则预览和发布不一样
+    assert.match(editor, /singleTilde: false/);
+    assert.ok((viewer.match(/singleTilde: false/g) || []).length >= 2, '前台 Base/Rich 两个变体都要关单波浪删除线');
   });
 
   it('front matter：编辑器用插件解析，前台渲染前剥掉，两边都不会显示成正文', () => {

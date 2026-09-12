@@ -5,6 +5,7 @@ import { stripFrontMatter } from "../../utils/frontMatter";
 import { ThemeContext } from "../../utils/themeContext";
 import { isDarkPaintTheme } from "../../utils/mermaidTheme";
 import type { BytemdPlugin } from "bytemd";
+import { defListHastHandlers } from "remark-definition-list";
 
 export const sanitize = sanitizeMarkdownSchema;
 
@@ -27,7 +28,12 @@ export default function MarkdownView(props: {
         key={paintKey}
         value={stripFrontMatter(props.content)}
         plugins={props.plugins}
-        remarkRehype={{ allowDangerousHtml: true }}
+        remarkRehype={{
+          allowDangerousHtml: true,
+          // 定义列表的 mdast 节点（defList/defListTerm/defListDescription）不是标准类型，
+          // 要把官方给的 hast handler 传给 remark-rehype，否则会被当未知节点摊成 <div>
+          handlers: defListHastHandlers,
+        }}
         sanitize={sanitize}
       />
     </div>

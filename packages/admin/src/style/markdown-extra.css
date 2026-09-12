@@ -1,0 +1,61 @@
+/*
+ * 新增 markdown 语法的补充样式。
+ *
+ * 1) GitHub 提示块（`> [!NOTE]`）：`remark-github-blockquote-alert` 自带的 alert.css
+ *    会把标题里的图标画成内联 <svg>，但正文的 sanitize 白名单**不放行 svg**
+ *    （放开 svg 等于给正文多一个 XSS 面），图标会被剥掉。这里用 ::before 补回来。
+ * 2) 定义列表（`术语` + `: 定义`）：浏览器默认的 <dl> 缩进很宽，收窄一点更像 GitHub。
+ * 3) `==高亮==`：<mark> 在深色模式下要换个底色，否则黄底黑字很刺眼。
+ */
+
+.markdown-body .markdown-alert-title::before {
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.markdown-body .markdown-alert-note .markdown-alert-title::before {
+  content: "ⓘ";
+}
+
+.markdown-body .markdown-alert-tip .markdown-alert-title::before {
+  content: "💡";
+}
+
+.markdown-body .markdown-alert-important .markdown-alert-title::before {
+  content: "❕";
+}
+
+.markdown-body .markdown-alert-warning .markdown-alert-title::before {
+  content: "⚠";
+}
+
+.markdown-body .markdown-alert-caution .markdown-alert-title::before {
+  content: "⛔";
+}
+
+.markdown-body dl {
+  margin: 1em 0;
+}
+
+.markdown-body dt {
+  font-weight: 600;
+  margin-top: 0.5em;
+}
+
+.markdown-body dd {
+  margin: 0.25em 0 0.5em 1.5em;
+}
+
+.markdown-body mark {
+  padding: 0.1em 0.25em;
+  border-radius: 3px;
+  background-color: #fff3a3;
+  color: inherit;
+}
+
+html.dark .markdown-body mark {
+  background-color: #6b5900;
+  color: #f5f5f7;
+}

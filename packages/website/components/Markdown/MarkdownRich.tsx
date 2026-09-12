@@ -12,6 +12,7 @@ import { Img } from "./img";
 import { mermaidForViewer } from "./mermaidViewer";
 import { ThemeContext } from "../../utils/themeContext";
 import MarkdownView from "./MarkdownView";
+import { extraSyntax } from "./extraSyntax";
 
 /** 正文里有数学公式或 mermaid 时才加载这一份（含 KaTeX；mermaid 再按需二次懒加载）。 */
 export default function MarkdownRich(props: { content: string }) {
@@ -19,7 +20,8 @@ export default function MarkdownRich(props: { content: string }) {
   const plugins = useMemo(
     () => [
       rawHTML(),
-      gfm(),
+      gfm({ singleTilde: false }),
+      extraSyntax(),
       highlightSsr(),
       math(),
       mermaidForViewer({ theme }),

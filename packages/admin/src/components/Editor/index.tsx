@@ -23,6 +23,10 @@ import { insertMore } from './insertMore';
 import { cn } from './locales';
 import { useModel } from 'umi';
 import { customContainer } from './plugins/customContainer';
+import { extraSyntax } from './plugins/extraSyntax';
+import { defListHastHandlers } from 'remark-definition-list';
+import 'remark-github-blockquote-alert/alert.css';
+import '../../style/markdown-extra.css';
 import { historyIcon } from './history';
 import rawHTML from './rawHTML';
 import { Heading } from './plugins/heading';
@@ -96,7 +100,9 @@ export default function EditorComponent(props: {
     return withSafeViewerEffects([
       ...(mathPlugin ? [mathPlugin] : []),
       customContainer(),
-      gfm({ locale: cn }),
+      // singleTilde:false —— 单个 `~x~` 让给下标（remark-supersub），删除线仍用 `~~x~~`
+      gfm({ locale: cn, singleTilde: false }),
+      extraSyntax(),
       highlightSsr(),
       frontmatter(),
       mediumZoom(),
@@ -132,7 +138,7 @@ export default function EditorComponent(props: {
           onChange={props.onChange}
           locale={cn}
           mode="auto"
-          remarkRehype={{ allowDangerousHtml: true }}
+          remarkRehype={{ allowDangerousHtml: true, handlers: defListHastHandlers }}
           sanitize={sanitize}
           uploadImages={(files: File[]) => uploadEditorImages(files, setLoading)}
         />
