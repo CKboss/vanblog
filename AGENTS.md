@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -801,12 +801,58 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - 实测方法（可复用）：建一篇 pathname 固定的探针文章 → 正文塞满各种语法 → 抓 `/post/<pathname>` 的 HTML
   逐项 grep → **测完删文章**（别留在站上）。
 
-### 7.10 测试基线（本分支最后一次全量运行的结果）
+### 7.10 前台性能优化（首屏 JS −34%，图片长缓存）
+
+- **重依赖全部改成按需加载**（这是最大头）：以前 `components/Markdown/index.tsx` 静态 import 了
+  `@bytemd/plugin-math-ssr`（KaTeX 275KB）和 `@bytemd/plugin-mermaid`（含 d3 等 1MB+），
+  于是**每个渲染 markdown 的页面**都要下载它们，哪怕这篇文章一个公式都没有。现在：
+  - `components/Markdown/` 拆成 `MarkdownView.tsx`（共用外壳，零重依赖）+ `MarkdownBase.tsx`
+    （gfm/highlight/容器/rawHTML/heading/img）+ `MarkdownRich.tsx`（Base + KaTeX + mermaid），
+    `index.tsx` 只做 `needsRichMarkdown(content)` 嗅探再用 `next/dynamic` 二选一。
+  - mermaid 连 Rich 里也不静态引：`mermaidForViewer` 的 `viewerEffect` 先看有没有
+    `.language-mermaid`，有才 `import("@bytemd/plugin-mermaid")`（数学文章的页面不会白背 mermaid）。
+  - `components/MarkdownTocBar/tocMath.ts` 以前静态 import KaTeX（**这是首页 275KB 的真凶**，
+    因为 PostCard → TocMobile/TocDrawer → MarkdownTocBar → tocMath），改成 `ensureTocMathLoaded()`
+    动态 import + `onTocMathReady()` 订阅，`core.tsx` 用 `mathTick` state 触发重渲染。
+  - **列表页只用轻量渲染器**：PostCard 的摘要走 `dynamic(() => import("../Markdown/MarkdownBase"))`；
+    文章页/关于页把自己的 `dynamic(() => import("../Markdown"))` 通过新 prop `markdownRenderer` 传进来。
+    ⚠️ **PostCard 里千万不能静态 import `../Markdown`**：实测首页 First Load JS 从 286kB 涨回 432kB。
+- 嗅探规则（`needsRichMarkdown`）：mermaid 围栏（带 `\b` 词边界，避免 ```mermaidx 误判）、`$$`、
+  或行内 `$…$`（`$` 后不能是空白，和 remark-math 的规则一致）。**只判断「有没有 `$`」是不行的**：
+  `$PATH`、`5$` 太常见，实测会让首页白背 KaTeX。已知可接受误判：同一行出现两个 `$`。
+- 图片：正文图片由 `Markdown/img.tsx` 的 rehype 插件统一加 `loading="lazy"` + `decoding="async"`；
+  封面（LCP）加 `fetchPriority="high"`；`ImageBox` 本来就有 lazy，补了 `decoding`（注意别重复声明 loading）。
+- **静态资源缓存头**（server `utils/imgCompress.ts` 的 `applyStaticAssetHeaders`）：原来只有
+  `Cache-Control: public, max-age=0`，等于每次翻页都重新问一遍。现在
+  `<static>/img/**` → `public, max-age=3600, stale-while-revalidate=604800`（**不能写 immutable**：
+  「替换图片」是同名覆盖），其余静态文件 → `public, max-age=300, must-revalidate`。
+- `_app.tsx` 的访客统计（初始化 + 每次路由切换）挪进 `requestIdleCallback`，不和水合/导航抢主线程。
+- `next.config.js`：`poweredByHeader:false`、`swcMinify:true`，并加了类型检查逃生口
+  `VANBLOG_SKIP_TYPECHECK=true`（`isBuild=t` 时也放行，和官方镜像的构建命令一致）。
+- **顺手发现：`next build` 在这个仓库里本来是失败的**（dev 不做全量类型检查所以看不出来），
+  已修 5 处：`mermaidViewer.ts`（viewerEffect 参数缺 `file`）、`MarkdownTocBar/scrollToHeading.ts`
+  （`Element` vs `HTMLElement`，把 `getEl` 收窄成 `HeadingLookup`）、`PageNav/a11y.ts`
+  （`FocusableEl` vs `EventTarget`，`event.target as unknown`）、`WaLine/core.tsx`
+  （`Record<string, unknown>` 展开污染对象字面量，加类型断言）、`api/getAllData.ts`
+  （`SiteInfo` 缺 `uiStyle`，是我上一轮加皮肤时漏的）。`__tests__/*.spec.ts` 里还有约 27 处类型错误没动
+  （不影响运行，只影响严格构建），所以留了上面那个开关。
+- 实测（`next build` 的 First Load JS）：首页 432→**286 kB**、文章页 427→**281 kB**、
+  关于页 430→**284 kB**、友链页 418→**172 kB**（−59%）、分类/标签/时间线 168 kB 不变；
+  首页实际资源 26 个 / 原始 1541 KB / gzip 459 KB（原 1825 KB / 538 KB），KaTeX chunk 不再被引用。
+  TTFB：首页与分类页 5–11 ms，时间线 ~140 ms。
+- e2e 验证：数学文章（`class="katex"` SSR 出现 13 处）、临时冒烟文章（mermaid 代码块进 DOM、
+  KaTeX 渲染、hljs 高亮、行号、复制按钮全在，且页面里没有内联 mermaid 源码）→ 测完已删文章；
+  `/ /post/1 /about /timeline /category /link` 全 200。
+- 文档：`docs/advanced/performance.md`（新页，含数据、原理和「别做的事」清单）。
+- 测试：`packages/website/__tests__/perfBudget.spec.ts`(14，守卫懒加载结构、嗅探规则、图片属性、
+  构建配置)、`packages/server/src/utils/staticCache.spec.ts`(4)。
+
+### 7.11 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 514 用例：513 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 48 文件 / 418 用例全绿 |
+| server `jest` | 518 用例：517 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 49 文件 / 433 用例全绿 |
 | admin `node --test tests/unit` | 53 文件 / 192 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
@@ -817,7 +863,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.10 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.11 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

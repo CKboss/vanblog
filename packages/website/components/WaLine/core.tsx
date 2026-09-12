@@ -33,7 +33,12 @@ export default function (props: {
           if (cancelled) {
             return;
           }
-          const extra = buildWalineInitOptions(setting);
+          // buildWalineInitOptions 返回 Record<string, unknown>，直接展开会让 TS
+          // 认为整个对象字面量的每个字段都可能是 unknown（`next build` 会因此失败）
+          const extra = buildWalineInitOptions(setting) as Record<
+            string,
+            string | boolean | number
+          >;
           state.wa = init({
             el: "#waline",
             serverURL: `${window.location.protocol}//${window.location.host}`,

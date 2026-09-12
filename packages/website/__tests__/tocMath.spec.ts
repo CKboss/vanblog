@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { parseNavStructure } from "../components/MarkdownTocBar/tools";
 import {
+  ensureTocMathLoaded,
   renderTocLabelHtml,
   tocLabelNeedsMath,
 } from "../components/MarkdownTocBar/tocMath";
@@ -32,6 +33,11 @@ function visibleLabelWithoutKatex(html: string): string {
 }
 
 describe("public TOC math labels (#264)", () => {
+  // KaTeX 现在是按需 import 的，测试里先等它加载完
+  beforeAll(async () => {
+    await ensureTocMathLoaded();
+  });
+
   it("keeps source $A$<$B$ on NavItem.text and renders KaTeX in the visible label", () => {
     const items = parseNavStructure(COMPARE_MD);
     expect(items).toHaveLength(1);

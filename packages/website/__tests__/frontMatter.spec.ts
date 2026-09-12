@@ -39,9 +39,10 @@ describe('stripFrontMatter', () => {
 
 describe('前台渲染链路上的 front matter 处理', () => {
   it('Viewer 渲染前先剥离（编辑器有 frontmatter 插件，前台没有）', () => {
-    const md = read('components/Markdown/index.tsx');
-    expect(md).toContain('stripFrontMatter');
-    expect(md).toMatch(/value=\{stripFrontMatter\(content\)\}/);
+    // 渲染外壳在 MarkdownView.tsx（Base / Rich 两个变体共用）
+    const view = read('components/Markdown/MarkdownView.tsx');
+    expect(view).toContain('stripFrontMatter');
+    expect(view).toMatch(/value=\{stripFrontMatter\(props\.content\)\}/);
   });
 
   it('未知容器名回落到容器名本身，和后台编辑器一致', () => {

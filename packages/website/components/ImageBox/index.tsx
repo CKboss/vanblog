@@ -34,6 +34,7 @@ export default function (props: {
             className={props.className}
             src={props.src}
             alt={props.alt}
+            decoding="async"
             onError={() => {
               setError(true);
             }}

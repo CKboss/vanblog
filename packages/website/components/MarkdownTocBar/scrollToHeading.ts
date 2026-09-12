@@ -153,7 +153,9 @@ export function waitForNavEl(
     observe?: (cb: () => void) => () => void;
   }
 ): Promise<HTMLElement | undefined> {
-  const getElement = options?.getElement ?? getEl;
+  // tools.getEl 用 querySelectorAll 拿的是 Element，实际只可能是 h1~h6（HTMLElement）；
+  // 不收窄的话 `next build` 会在这里报 Element 不能赋给 HTMLElement（dev 不做全量类型检查所以看不出来）
+  const getElement: HeadingLookup = options?.getElement ?? (getEl as HeadingLookup);
   const timeoutMs = options?.timeoutMs ?? 2000;
   const first = getElement(item, all);
   if (first) return Promise.resolve(first);

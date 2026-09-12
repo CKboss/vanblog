@@ -13,6 +13,13 @@ import { hasToc } from "../../utils/hasToc";
 import { getArticlesKeyWord } from "../../utils/keywords";
 import { revalidate } from "../../utils/loadConfig";
 import Custom404 from "../404";
+import dynamic from "next/dynamic";
+
+// 完整渲染器（按正文内容在 轻量/含 KaTeX+mermaid 之间挑）只由文章页/关于页引用，
+// 列表页不会因此背上 KaTeX。
+const FullMarkdown = dynamic(() => import("../../components/Markdown"), {
+  ssr: true,
+});
 
 export interface PostPagesProps {
   layoutProps: LayoutProps;
@@ -69,6 +76,7 @@ const PostPages = (props: PostPagesProps) => {
       {/* 皮肤作用域：styles/apple.css 用 .vanblog-article-page 收窄阅读栏宽 */}
       <div className="vanblog-article-page">
       <PostCard
+        markdownRenderer={FullMarkdown}
         showEditButton={props.layoutProps.showEditButton === "true"}
         showExpirationReminder={
           props.layoutProps.showExpirationReminder == "true"

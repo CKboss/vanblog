@@ -141,7 +141,10 @@ export function handlePageNavKeyDown(event: {
   if (items.length === 0) {
     return null;
   }
-  const active = event.target;
+  // items 的类型是可测试用的结构类型 FocusableEl，event.target 是 EventTarget，
+  // 两者「没有重叠」会让 `next build` 直接失败（dev 不做全量类型检查所以看不出来）。
+  // 收窄成 unknown：既能和 FocusableEl 比较，也满足 contains(node: unknown)。
+  const active = event.target as unknown;
   const current = items.findIndex(
     (el) =>
       el === active ||

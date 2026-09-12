@@ -127,7 +127,8 @@ export interface SiteInfo {
   defaultExpandAllCategories?: "true" | "false";
   friendLinkIntro?: string;
   friendLinkApplyContent?: string;
-  aboutTitle?: string;
+  aboutTitle?: string;  /** 前台界面风格：apple（默认）| default，见 styles/apple.css */
+  uiStyle?: "default" | "apple";
 }
 export interface MetaProps {
   links: LinkItem[];

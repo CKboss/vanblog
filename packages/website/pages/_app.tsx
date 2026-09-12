@@ -46,12 +46,22 @@ function MyApp({ Component, pageProps }: AppProps) {
     url: string,
     { shallow }: { shallow: boolean }
   ) => {
-    reloadViewer(`页面跳转`);
+    // 页面切换时优先保证新页面可用，统计请求排到空闲再发
+    const idle =
+      typeof window !== "undefined" && "requestIdleCallback" in window
+        ? (window as any).requestIdleCallback
+        : (cb: () => void) => window.setTimeout(cb, 800);
+    idle(() => reloadViewer(`页面跳转`));
   };
   useEffect(() => {
     if (!current.hasInit) {
       current.hasInit = true;
-      reloadViewer("初始化");
+      // 访客统计和首屏无关，等主线程空下来再发，别和水合/首次渲染抢资源
+      const idle =
+        typeof window !== "undefined" && "requestIdleCallback" in window
+          ? (window as any).requestIdleCallback
+          : (cb: () => void) => window.setTimeout(cb, 1200);
+      idle(() => reloadViewer("初始化"));
       router.events.on("routeChangeComplete", handleRouteChange);
     }
   }, [current, reloadViewer]);

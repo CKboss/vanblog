@@ -125,11 +125,14 @@ describe("markdown HTML sanitization (#490)", () => {
 
 describe("public Viewer and admin preview stay on the same HTML path (#490)", () => {
   it("public Markdown Viewer passes allowDangerousHtml and the shared sanitizer", () => {
-    const src = readSrc("components/Markdown/index.tsx");
-    expect(src).toMatch(/rawHTML\(\)/);
-    expect(src).toMatch(/remarkRehype=\{\{\s*allowDangerousHtml:\s*true/);
-    expect(src).toMatch(/sanitize={sanitize}/);
-    expect(src).toMatch(/sanitizeMarkdownSchema/);
+    // 渲染外壳（Base / Rich 共用）负责 allowDangerousHtml 与 sanitize
+    const view = readSrc("components/Markdown/MarkdownView.tsx");
+    expect(view).toMatch(/remarkRehype=\{\{\s*allowDangerousHtml:\s*true/);
+    expect(view).toMatch(/sanitize={sanitize}/);
+    expect(view).toMatch(/sanitizeMarkdownSchema/);
+    // rawHTML 插件在两个变体里都要有
+    expect(readSrc("components/Markdown/MarkdownBase.tsx")).toMatch(/rawHTML\(\)/);
+    expect(readSrc("components/Markdown/MarkdownRich.tsx")).toMatch(/rawHTML\(\)/);
   });
 
   it("keeps underline rules in the site CSS and the RSS copy", () => {

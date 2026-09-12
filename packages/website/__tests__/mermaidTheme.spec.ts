@@ -138,14 +138,27 @@ describe("public mermaid viewer wiring", () => {
   it("exposes a bytemd plugin whose viewerEffect paints with mermaid theme config", () => {
     const plugin = mermaidForViewer({ theme: "dark" });
     expect(typeof plugin.viewerEffect).toBe("function");
-    expect(plugin).toHaveProperty("actions");
+  });
+
+  it("viewerEffect 在没有 mermaid 代码块时直接返回，不会去下载 mermaid", () => {
+    const plugin: any = mermaidForViewer({ theme: "light" });
+    const queried: string[] = [];
+    const body = {
+      querySelector: (sel: string) => {
+        queried.push(sel);
+        return null; // 没有 .language-mermaid
+      },
+    } as unknown as HTMLElement;
+    expect(plugin.viewerEffect({ markdownBody: body })).toBeUndefined();
+    expect(queried).toContain(".language-mermaid");
   });
 
   it("public Markdown viewer uses mermaidForViewer instead of unthemed mermaid()", () => {
-    const src = readSrc("components/Markdown/index.tsx");
-    expect(src).toMatch(/mermaidForViewer\(\s*\{\s*theme/);
-    expect(src).toMatch(/key=\{paintKey\}/);
-    expect(src).not.toMatch(/mermaid\(\s*\)/);
+    // mermaid 只在完整版渲染器里（列表页用的 Base 不含）
+    const rich = readSrc("components/Markdown/MarkdownRich.tsx");
+    expect(rich).toMatch(/mermaidForViewer\(\s*\{\s*theme/);
+    expect(rich).not.toMatch(/mermaid\(\s*\)/);
+    expect(readSrc("components/Markdown/MarkdownView.tsx")).toMatch(/key=\{paintKey\}/);
   });
 });
 

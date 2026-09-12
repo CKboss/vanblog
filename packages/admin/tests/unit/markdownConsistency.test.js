@@ -9,7 +9,15 @@ const read = (rel) => readFileSync(path.join(repoRoot, rel), 'utf8');
 const SITE_SANITIZE = 'packages/website/utils/markdownSanitize.ts';
 const ADMIN_SANITIZE = 'packages/admin/src/components/Editor/markdownSanitize.ts';
 const EDITOR = 'packages/admin/src/components/Editor/index.tsx';
-const SITE_VIEWER = 'packages/website/components/Markdown/index.tsx';
+// 前台渲染器拆成了「按需选择器 + 外壳 + 轻量/完整两个变体」（性能优化，见 perfBudget.spec.ts），
+// 所以校验插件清单时要把这几个文件拼起来看。
+const SITE_VIEWER_FILES = [
+  'packages/website/components/Markdown/index.tsx',
+  'packages/website/components/Markdown/MarkdownView.tsx',
+  'packages/website/components/Markdown/MarkdownBase.tsx',
+  'packages/website/components/Markdown/MarkdownRich.tsx',
+];
+const SITE_VIEWER = SITE_VIEWER_FILES.map(read).join('\n');
 
 describe('编辑器预览 与 前台渲染：sanitize 白名单必须一致', () => {
   const site = read(SITE_SANITIZE);
@@ -54,7 +62,7 @@ describe('编辑器预览 与 前台渲染：sanitize 白名单必须一致', ()
 
 describe('编辑器预览 与 前台渲染：插件与流水线', () => {
   const editor = read(EDITOR);
-  const viewer = read(SITE_VIEWER);
+  const viewer = SITE_VIEWER;
 
   it('渲染类插件两边都在（缺一个就会出现预览与发布不一致）', () => {
     const shared = [
@@ -79,7 +87,7 @@ describe('编辑器预览 与 前台渲染：插件与流水线', () => {
 
   it('front matter：编辑器用插件解析，前台渲染前剥掉，两边都不会显示成正文', () => {
     assert.match(editor, /frontmatter\(\)/);
-    assert.match(viewer, /stripFrontMatter\(content\)/);
+    assert.match(viewer, /stripFrontMatter\(props\.content\)/);
   });
 
   it('编辑器独有的能力（不影响渲染一致性）有注释说明', () => {

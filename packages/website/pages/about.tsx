@@ -7,6 +7,13 @@ import PostCard from "../components/PostCard";
 import { LayoutProps } from "../utils/getLayoutProps";
 import { getAboutPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
+import dynamic from "next/dynamic";
+
+// 完整渲染器（按正文内容在 轻量/含 KaTeX+mermaid 之间挑）只由文章页/关于页引用，
+// 列表页不会因此背上 KaTeX。
+const FullMarkdown = dynamic(() => import("../components/Markdown"), {
+  ssr: true,
+});
 export interface About {
   updatedAt: string;
   content: string;
@@ -55,6 +62,7 @@ const AboutPage = (props: AboutPageProps) => {
       {/* 关于页是完整正文，不能被列表页的摘要截断规则裁掉 */}
       <div className="vanblog-article-page">
       <PostCard
+        markdownRenderer={FullMarkdown}
         setContent={() => {}}
         showExpirationReminder={
           props.layoutProps.showExpirationReminder == "true"

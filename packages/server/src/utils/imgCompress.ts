@@ -59,6 +59,21 @@ export function contentTypeForExt(ext: string): string | undefined {
   return undefined;
 }
 
+/**
+ * 图片（`<static>/img/**`）文件名带内容 md5 前缀，天然适合长缓存；
+ * 但「替换图片」功能会**用同名文件覆盖新内容**，所以不能写 `immutable`，
+ * 用「1 小时新鲜 + 7 天 stale-while-revalidate」：会话内翻页/回退都是内存命中，
+ * 过期后浏览器先用旧图立即渲染、后台再校验，替换过的图最迟下一次访问就更新。
+ */
+export const IMG_CACHE_CONTROL = 'public, max-age=3600, stale-while-revalidate=604800';
+/** 其余静态文件（自定义页面、导出包等）会被原地覆盖，只做短缓存。 */
+export const STATIC_CACHE_CONTROL = 'public, max-age=300, must-revalidate';
+
+export function cacheControlFor(filePath: string): string {
+  const normalized = String(filePath || '').replace(/\\/g, '/');
+  return normalized.includes('/img/') ? IMG_CACHE_CONTROL : STATIC_CACHE_CONTROL;
+}
+
 export function applyStaticAssetHeaders(
   res: { setHeader(name: string, value: string): void },
   filePath: string,
@@ -68,6 +83,8 @@ export function applyStaticAssetHeaders(
   if (type) {
     res.setHeader('Content-Type', type);
   }
+  // 没有缓存头时浏览器每次都要重新请求（原来只有 max-age=0），翻页/回退会反复拉图
+  res.setHeader('Cache-Control', cacheControlFor(filePath));
   // 附件目录（<static>/file）里的文件：一律 nosniff；
   // html/svg/js 这类能在本站源上执行的类型再强制下载，避免上传变成存储型 XSS。
   if (isAttachmentPath(filePath)) {

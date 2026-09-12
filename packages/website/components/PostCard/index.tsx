@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import AlertCard from "../AlertCard";
 import ArticleCover from "../ArticleCover";
 import CopyRight from "../CopyRight";
@@ -13,7 +13,21 @@ import { getTarget } from "../Link/tools";
 import TocMobile from "../TocMobile";
 import TocDrawer from "../TocDrawer";
 import { hasToc } from "../../utils/hasToc";
-import Markdown from "../Markdown";
+import dynamic from "next/dynamic";
+
+/**
+ * 列表摘要固定用**轻量渲染器**（MarkdownBase：不含 KaTeX / mermaid）。
+ * 摘要只有 200 字 / 4 行，里面不会有流程图，公式即使出现也只是显示成 `$E=mc^2$` 原文，
+ * 点进文章页仍是完整渲染。
+ *
+ * 文章页 / 关于页要完整渲染时，由页面自己把渲染器通过 `markdownRenderer` 传进来
+ * （见 pages/post/[id].tsx、pages/about.tsx）。**不要在 PostCard 里 import ../Markdown**：
+ * 只要这个模块被引用，它内部声明的两个 dynamic chunk（base + rich）就都会算进
+ * 每个用到 PostCard 的页面的首屏 JS —— 实测首页会因此多背 KaTeX 那 275KB。
+ */
+const OverviewMarkdown = dynamic(() => import("../Markdown/MarkdownBase"), {
+  ssr: true,
+});
 import { articleOverviewMarkdown } from "../../utils/articleExcerpt";
 
 export default function (props: {
@@ -43,6 +57,8 @@ export default function (props: {
   showExpirationReminder: boolean;
   showEditButton: boolean;
   cover?: string | null;
+  /** 正文渲染器；不传就用轻量版（列表摘要）。文章页会传完整版。 */
+  markdownRenderer?: React.ComponentType<{ content: string }>;
 }) {
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
@@ -128,7 +144,10 @@ export default function (props: {
             <>
               {showToc && <TocMobile content={calContent} />}
               {showToc && <TocDrawer content={calContent} />}
-              <Markdown content={calContent}></Markdown>
+              {(() => {
+                const Renderer = props.markdownRenderer || OverviewMarkdown;
+                return <Renderer content={calContent}></Renderer>;
+              })()}
             </>
           )}
         </div>

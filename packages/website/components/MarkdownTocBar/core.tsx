@@ -3,7 +3,7 @@ import throttle from "lodash/throttle";
 import { getEl, NavItem } from "./tools";
 import { scrollTo } from "../../utils/scroll";
 import { scrollElUntilSettled, scrollToNavHeading } from "./scrollToHeading";
-import { renderTocLabelHtml, tocLabelNeedsMath } from "./tocMath";
+import { onTocMathReady, renderTocLabelHtml, tocLabelNeedsMath } from "./tocMath";
 import {
   decodeHeadingHash,
   findNavItemByHash,
@@ -130,12 +130,16 @@ export default function (props: {
       window.removeEventListener("hashchange", jumpHash);
     };
   }, [items, props.headingOffset]);
+  // KaTeX 是按需加载的：加载完成后 mathTick 变化，标签重新渲染成公式
+  const [mathTick, setMathTick] = useState(0);
+  useEffect(() => onTocMathReady(() => setMathTick((n) => n + 1)), []);
   const labelHtml = useMemo(
     () =>
       items.map((each) =>
         tocLabelNeedsMath(each.text) ? renderTocLabelHtml(each.text) : null
       ),
-    [items]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, mathTick]
   );
 
   const jumpToItem = (each: NavItem) => {
