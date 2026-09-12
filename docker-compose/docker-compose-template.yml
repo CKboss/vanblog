@@ -10,6 +10,21 @@ services:
       EMAIL: vanblog_email
       # 本机反代时仅监听回环。默认留空（所有网卡），现有部署不用改
       # VAN_BLOG_SERVER_HOST: '127.0.0.1'
+      # ── 下面这些是可选调优项，取消注释即可（./vanblog.sh config 会重新生成本文件，
+      #    所以自定义项请一并写在这里，或留意脚本生成的 .bak 备份）──
+      # 整站备份 / 导出归档的存放目录。默认 <日志目录>/vanblog-backups，
+      # 也就是下面挂载的 vanblog_data_path/log，会随数据一起持久化。
+      # VAN_BLOG_BACKUP_PATH: '/var/log/vanblog-backups'
+      # 整站备份的 zstd 压缩等级（默认 19，越大越慢越小）
+      # VANBLOG_BACKUP_ZSTD_LEVEL: '19'
+      # 前台 ISR 增量渲染：改文章后自动重新生成页面（默认关闭，由 server 主动触发）
+      # VAN_BLOG_REVALIDATE: 'true'
+      # VAN_BLOG_REVALIDATE_TIME: '10'
+      # 登录日志的 IP 归属地查询要请求第三方 cip.cc；不想发就设 true 关掉
+      # VANBLOG_DISABLE_IP_GEO: 'true'
+      # VAN_BLOG_IP_GEO_TIMEOUT: '3000'
+      # caddy 按需证书的域名白名单来自站点设置；多域名/CDN 场景需要放开时设 true
+      # VANBLOG_CADDY_ASK_ALLOW_ALL: 'true'
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static

@@ -7,10 +7,11 @@
 #   Github: https://github.com/mereithhh/van-blog
 #========================================================
 
-VANBLOG_BASE_PATH="/var/vanblog"
-VANBLOG_DATA_PATH="${VANBLOG_BASE_PATH}/data"
-VANBLOG_DATA_PATH_RAW="\/var\/vanblog\/data"
-VANBLOG_SCRIPT_VERSION="v0.3.6"
+# 可以用环境变量覆盖（测试、以及想把安装目录放到别处的场景）；默认值不变。
+VANBLOG_BASE_PATH="${VANBLOG_BASE_PATH:-/var/vanblog}"
+VANBLOG_DATA_PATH="${VANBLOG_DATA_PATH:-${VANBLOG_BASE_PATH}/data}"
+VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-\/var\/vanblog\/data}"
+VANBLOG_SCRIPT_VERSION="v0.3.7"
 
 # Ordered fallbacks: docs host (historical default), then GitHub raw, then jsDelivr.
 COMPOSE_URL="https://vanblog.mereith.com/docker-compose-template.yml"
@@ -340,7 +341,10 @@ install_vanblog() {
     esac
   fi
 
-  chmod 777 -R $VANBLOG_DATA_PATH
+  # 不要 777：这个目录里有 MongoDB 数据文件、图床内容，以及 caddy 的证书**私钥**。
+  # 容器内进程是 root，宿主机上 755 就够用了。
+  chmod 755 "${VANBLOG_DATA_PATH}" 2>/dev/null || true
+  find "${VANBLOG_DATA_PATH}" -type d -exec chmod 755 {} + 2>/dev/null || true
 
   command -v docker >/dev/null 2>&1
   if [[ $? != 0 ]]; then
@@ -357,16 +361,23 @@ install_vanblog() {
   fi
 
 
-  if [[ $(docker compose | grep 'Usage') != "" ]]; then
-    echo -e "未找到 docker-compose ，尝试使用 docker compose 创建别名"
-    echo 'docker compose $@' > /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-    command -v docker-compose >/dev/null 2>&1
-    if [[ $? != 0 ]]; then
-      echo -e "${red}Docker Compose 别名创建失败${plain}，请手动安装 Docker Compose"
-      exit 0
+  # 只有在「没有 docker-compose 命令、但有 docker compose 子命令」时才建别名。
+  # 旧实现只要 docker compose 可用就无条件写 /usr/local/bin/docker-compose，
+  # 会把用户自己装的 docker-compose 覆盖掉。
+  if ! command -v docker-compose >/dev/null 2>&1; then
+    if [[ $(docker compose 2>/dev/null | grep 'Usage') != "" ]]; then
+      echo -e "未找到 docker-compose ，尝试使用 docker compose 创建别名"
+      echo 'docker compose "$@"' > /usr/local/bin/docker-compose
+      chmod +x /usr/local/bin/docker-compose
+      if ! command -v docker-compose >/dev/null 2>&1; then
+        echo -e "${red}Docker Compose 别名创建失败${plain}，请手动安装 Docker Compose"
+        return 1
+      fi
+      echo -e "${green}Docker Compose${plain} 别名创建成功"
+    else
+      echo -e "${red}未找到 docker compose（插件或独立二进制），请先安装${plain}"
+      return 1
     fi
-    echo -e "${green}Docker Compose${plain} 别名创建成功"
   fi
 
   config 0
@@ -424,6 +435,12 @@ config() {
     before_show_menu
     return 1
   fi
+  # 邮箱要用来申请证书，写错了 caddy 会一直签发失败，所以这里就拦住
+  if [[ ! "${vanblog_email}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+    echo -e "${red}邮箱格式不正确：${vanblog_email}${plain}"
+    before_show_menu
+    return 1
+  fi
 
   if [[ -z "${vanblog_http_port}" ]]; then
     vanblog_http_port=80
@@ -431,14 +448,30 @@ config() {
   if [[ -z "${vanblog_https_port}" ]]; then
     vanblog_https_port=443
   fi
+  # 端口写错会生成一个起不来的编排文件，而且报错信息很难看懂
+  for port_value in "${vanblog_http_port}" "${vanblog_https_port}"; do
+    if [[ ! "${port_value}" =~ ^[0-9]+$ ]] || ((port_value < 1 || port_value > 65535)); then
+      echo -e "${red}端口必须是 1-65535 之间的数字：${port_value}${plain}"
+      before_show_menu
+      return 1
+    fi
+  done
   # if [[ -z "${vanblog_version}" ]]; then
   #   vanblog_version="latest"
   # fi
 
+  # 重新生成会**覆盖**用户自己加的 environment / 卷映射（比如 VAN_BLOG_CDN_URL、
+  # VAN_BLOG_BACKUP_PATH），所以先把旧的存一份，并提示去哪里找
+  if [[ -f "${VANBLOG_BASE_PATH}/docker-compose.yaml" ]]; then
+    local compose_backup="${VANBLOG_BASE_PATH}/docker-compose.yaml.bak-$(date +"%Y%m%d%H%M%S")"
+    cp "${VANBLOG_BASE_PATH}/docker-compose.yaml" "${compose_backup}" >/dev/null 2>&1 || true
+    echo -e "> 已备份原有编排文件到 ${yellow}${compose_backup}${plain}（自定义的 environment / 卷映射需要重新加回来）"
+  fi
   rm ${VANBLOG_BASE_PATH}/docker-compose.yaml >/dev/null 2>&1
   cp ${VANBLOG_BASE_PATH}/docker-compose-template.yaml ${VANBLOG_BASE_PATH}/docker-compose.yaml >/dev/null 2>&1
   sed -i "s/vanblog_data_path/${VANBLOG_DATA_PATH_RAW}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
-  sed -i "s/vanblog_email/${vanblog_email}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
+  # 用 | 作分隔符：邮箱里出现 / 或 & 时 s///.../g 会被截断或展开
+  sed -i "s|vanblog_email|${vanblog_email}|g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   sed -i "s/vanblog_http_port/${vanblog_http_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   sed -i "s/vanblog_https_port/${vanblog_https_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   # sed -i "s/vanblog_domains/${vanblog_domains}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
@@ -460,7 +493,9 @@ restart() {
   echo -e "> 重启服务"
 
   cd $VANBLOG_BASE_PATH
-  docker-compose down -v
+  # 不能带 -v：那会删除编排文件里的卷。现在数据是 bind mount 所以侥幸没事，
+  # 但很多人会把 compose 改成命名卷，那时「重启」就等于删库。只有卸载才用 -v。
+  docker-compose down --remove-orphans
   docker-compose up -d
   if [[ $? == 0 ]]; then
     echo -e "${green}VanBlog 重启成功${plain}"
@@ -497,7 +532,8 @@ update() {
   old_version=$(get_container_version "${old_cid}")
 
   echo -e "> 停止并移除旧容器"
-  vanblog_compose down -v
+  # 同样不能带 -v：更新是常规操作，删卷等于删数据
+  vanblog_compose down --remove-orphans
   if [[ $? != 0 ]]; then
     echo -e "${red}停止容器失败${plain}"
     if [[ ${skip_menu} == 0 ]]; then
@@ -541,11 +577,13 @@ update() {
   fi
 
   if [[ -n "${old_image}" && "${new_image}" == "${old_image}" ]]; then
-    echo -e "${red}更新失败：运行中的容器仍使用旧镜像（版本 ${new_version:-未知}），未拉取到新版本${plain}"
+    # 镜像 id 没变通常就是「已经是最新版」，不是失败（旧实现报红色"更新失败"，
+    # 让人以为出了故障）。真的拉取失败在上面 pull 那一步就已经拦下了。
+    echo -e "${green}已经是最新版本${plain}（${yellow}${new_version:-未知}${plain}），容器已重启"
     if [[ ${skip_menu} == 0 ]]; then
       before_show_menu
     fi
-    return 1
+    return 0
   fi
 
   if [[ -n "${old_image}" ]]; then
@@ -835,7 +873,8 @@ start_vanblog() {
 stop_vanblog() {
   echo -e "> 停止 VanBlog"
 
-  cd $VANBLOG_BASE_PATH && docker-compose down -v
+  # 停止服务不该删卷（见 restart 里的说明）
+  cd $VANBLOG_BASE_PATH && docker-compose down --remove-orphans
   if [[ $? == 0 ]]; then
     echo -e "${green}VanBlog 停止成功${plain}"
   else
@@ -972,28 +1011,161 @@ clean_all() {
   fi
 }
 
-backup() {
-  echo -e "> 备份 vanblog"
-  name="vanblog-backup-$(date +"%Y%m%d%H%M%S").tar.gz"
-  cd $VANBLOG_BASE_PATH && tar czvf $name ./data
-  echo -e "${green}备份成功，文件名：${name}${plain} 所在路径：${VANBLOG_BASE_PATH}"
+is_gnu_tar() {
+  tar --version 2>/dev/null | head -n 1 | grep -q 'GNU tar'
 }
 
+human_size() {
+  local file="$1"
+  if command -v du >/dev/null 2>&1; then
+    du -h "${file}" 2>/dev/null | awk '{print $1}'
+  fi
+}
+
+# 备份整个数据目录（图床 + MongoDB 数据 + 日志 + caddy 证书），产物放在安装目录下，
+# 文件名形如 vanblog-backup-20260913-024500.tar.gz（卸载时会保留这些文件）。
+#
+# 用法：
+#   ./vanblog.sh backup                  热备份（MongoDB 不停，速度最快，可能不完全一致）
+#   ./vanblog.sh backup --consistent     先停 MongoDB 再打包（一致性最好，期间不可写）
+#   VANBLOG_BACKUP_CONSISTENT=1 ./vanblog.sh backup    同 --consistent（适合定时任务）
+backup() {
+  echo -e "> 备份 vanblog"
+
+  local consistent="${VANBLOG_BACKUP_CONSISTENT:-0}"
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+    --consistent) consistent=1 ;;
+    esac
+  done
+
+  if [[ ! -d "${VANBLOG_DATA_PATH}" ]]; then
+    echo -e "${red}未找到数据目录 ${VANBLOG_DATA_PATH}，无法备份${plain}"
+    return 1
+  fi
+
+  local name="vanblog-backup-$(date +"%Y%m%d%H%M%S").tar.gz"
+  local dest="${VANBLOG_BASE_PATH}/${name}"
+  local tar_opts=()
+  if is_gnu_tar; then
+    # 热备份时文件会变，GNU tar 会因此退出码 1 并刷屏警告，这里显式容忍
+    tar_opts+=(--warning=no-file-changed)
+  fi
+
+  local mongo_stopped=0
+  if [[ "${consistent}" == "1" ]]; then
+    echo -e "> 一致性备份：先停止 MongoDB"
+    if vanblog_compose stop mongo >/dev/null 2>&1; then
+      mongo_stopped=1
+      # 等 mongod 真正落盘退出，否则还是热备份
+      sleep 3
+    else
+      echo -e "${yellow}停止 MongoDB 失败（可能没在运行），继续热备份${plain}"
+    fi
+  else
+    echo -e "${yellow}提示：这是热备份，MongoDB 仍在运行。恢复时脚本会自动删掉 mongod.lock；${plain}"
+    echo -e "${yellow}      追求一致性请用 ./vanblog.sh backup --consistent${plain}"
+  fi
+
+  local rc=0
+  tar czf "${dest}" "${tar_opts[@]}" -C "${VANBLOG_BASE_PATH}" ./data || rc=$?
+
+  if [[ ${mongo_stopped} == 1 ]]; then
+    echo -e "> 重新启动 MongoDB"
+    vanblog_compose start mongo >/dev/null 2>&1 ||
+      echo -e "${red}MongoDB 启动失败，请手动执行 docker-compose start mongo${plain}"
+  fi
+
+  # GNU tar: 0=正常, 1=有文件在读取时被修改（热备份的正常现象）, >=2=真错误
+  if ((rc > 1)) || { ((rc == 1)) && ! is_gnu_tar; }; then
+    echo -e "${red}备份失败（tar 退出码 ${rc}）${plain}"
+    rm -f "${dest}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  echo -e "${green}备份成功${plain}，文件名：${yellow}${name}${plain} 大小：$(human_size "${dest}") 路径：${VANBLOG_BASE_PATH}"
+  if ((rc == 1)); then
+    echo -e "${yellow}注意：打包过程中有文件发生变化（热备份的正常现象），归档仍然可用${plain}"
+  fi
+  return 0
+}
+
+# 从 vanblog.sh backup 生成的 tar.gz 恢复整个数据目录。
+#
+# 用法：
+#   ./vanblog.sh restore                                  交互式（输入文件名 + 二次确认）
+#   VANBLOG_RESTORE_FILE=/path/to/vanblog-backup-xxx.tar.gz \
+#   VANBLOG_ASSUME_YES=1 ./vanblog.sh restore             非交互（适合脚本）
 restore() {
   echo -e "> 恢复 vanblog"
-  read -e -r -p "请输入备份文件名（含路径）: " path
-  # 检测空
-  if [ -z "$path" ]; then
-    echo -e "${red}输入为空${plain}"
-    exit 1
+
+  local path="${VANBLOG_RESTORE_FILE:-}"
+  # 分发入口会传一个 0 表示「不进菜单」，别把它当成文件路径
+  local arg
+  for arg in "$@"; do
+    if [[ -n "${arg}" && "${arg}" != "0" && "${arg}" != --* ]]; then
+      path="${arg}"
+    fi
+  done
+  if [[ -z "${path}" ]]; then
+    read -e -r -p "请输入备份文件名（含路径）: " path
   fi
-  # 停止 vanblog
+
+  if [[ -z "${path}" ]]; then
+    echo -e "${red}输入为空${plain}"
+    return 1
+  fi
+  if [[ ! -f "${path}" ]]; then
+    echo -e "${red}找不到备份文件：${path}${plain}"
+    return 1
+  fi
+  # 下载中断 / scp 没传完的包在这里就能发现，别等到解压一半才失败
+  if command -v gzip >/dev/null 2>&1 && ! gzip -t "${path}" >/dev/null 2>&1; then
+    echo -e "${red}${path} 不是完整的 gzip 压缩包（可能传输中断）${plain}"
+    return 1
+  fi
+
+  echo -e "${red}恢复会用备份覆盖 ${VANBLOG_DATA_PATH} 下的现有数据（图床、数据库、日志、证书），不可撤销。${plain}"
+  if [[ "${VANBLOG_ASSUME_YES:-0}" != "1" ]]; then
+    local input
+    read -e -r -p "确认恢复? [y/N] " input
+    case $input in
+    [yY][eE][sS] | [yY]) ;;
+    *)
+      echo "已取消恢复"
+      return 0
+      ;;
+    esac
+  fi
+
   echo -e "> 停止 vanblog 中..."
-  stop_vanblog
-  # 覆盖解压到目标路径
-  echo -e "> 覆盖解压到目标路径中..."
-  tar xzvf $path -C $VANBLOG_BASE_PATH
-  echo -e "${green}恢复成功${plain}，请手动启动 vanblog"
+  stop_vanblog 0
+
+  echo -e "> 覆盖解压到 ${VANBLOG_BASE_PATH} 中..."
+  if ! tar xzf "${path}" -C "${VANBLOG_BASE_PATH}"; then
+    echo -e "${red}解压失败，数据可能处于中间状态，请检查磁盘空间与备份文件${plain}"
+    return 1
+  fi
+
+  # 热备份打出来的 MongoDB 数据目录带着 mongod.lock，不删掉 mongod 会拒绝启动
+  # （表现是容器反复重启，日志里报 Unable to lock file）
+  if [[ -f "${VANBLOG_DATA_PATH}/data/mongo/mongod.lock" ]]; then
+    rm -f "${VANBLOG_DATA_PATH}/data/mongo/mongod.lock"
+    echo -e "> 已删除 mongod.lock（热备份的正常产物）"
+  fi
+
+  echo -e "${green}恢复成功${plain}"
+  if [[ "${VANBLOG_ASSUME_YES:-0}" == "1" ]]; then
+    start_vanblog 0
+  else
+    read -e -r -p "是否立即启动 VanBlog? [Y/n] " input
+    case $input in
+    [nN][oO] | [nN]) echo -e "请稍后手动执行 ${yellow}./vanblog.sh start${plain}" ;;
+    *) start_vanblog 0 ;;
+    esac
+  fi
+  return 0
 }
 
 show_usage() {
@@ -1128,10 +1300,12 @@ if [[ $# > 0 ]]; then
     exit $?
     ;;
   "backup")
-    backup 0
+    shift
+    backup 0 "$@"
     ;;
   "restore")
-    restore 0
+    shift
+    restore 0 "$@"
     ;;
   *) show_usage ;;
   esac

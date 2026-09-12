@@ -391,9 +391,11 @@ VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 sed -i 's/^NEXT_IMAGE_ID=.*/NEXT_IMAGE_ID=sha-old/' "${VANBLOG_TEST_STATE}"
 sed -i 's/^NEXT_VERSION=.*/NEXT_VERSION=0.53.0/' "${VANBLOG_TEST_STATE}"
 run_update
-assert_eq "${UPDATE_RC}" "1" "unchanged image exits 1"
-assert_not_contains "${UPDATE_OUT}" "VanBlog 更新并重启成功" "unchanged image does not print success"
-assert_contains "${UPDATE_OUT}" "仍使用旧镜像" "unchanged image prints error"
+# 镜像 id 没变 = 本来就是最新版：这是正常结果，不该报「更新失败」把人吓一跳
+# （真的拉取失败在 pull 那一步就已经拦下并返回 1 了）
+assert_eq "${UPDATE_RC}" "0" "unchanged image exits 0 (already latest)"
+assert_not_contains "${UPDATE_OUT}" "更新失败" "unchanged image is not reported as a failure"
+assert_contains "${UPDATE_OUT}" "已经是最新版本" "unchanged image prints already-latest"
 assert_file_not_contains "${VANBLOG_TEST_LOG}" "rmi sha-old" "unchanged image does not delete in-use/current image"
 
 # --- down failure ---

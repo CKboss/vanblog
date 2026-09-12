@@ -982,13 +982,65 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   `init` 接口无守卫（靠"库里有没有用户"判断）；API token 有效期 100 年。
 - `next build` 仍有约 27 处 `__tests__/*.spec.ts` 里的类型错误（不影响运行），所以留了 `VANBLOG_SKIP_TYPECHECK`。
 
-### 7.12 测试基线（本分支最后一次全量运行的结果）
+### 7.12 一键脚本 `scripts/vanblog.sh` 体检与修复（v0.3.6 → v0.3.7）
+
+这个脚本是用户 `curl | bash` 装的入口（**两份副本必须一致**：`scripts/vanblog.sh` 与
+`docs/.vuepress/public/vanblog.sh`，后者才是文档站真正下发的文件），它下载
+`docker-compose/docker-compose-template.yml` 并替换占位符来起容器。逐条查下来有这些问题，都已修：
+
+- 🔴 **`docker-compose down -v` 出现在 restart / stop / update / restore 四条常规路径上**。
+  `-v` 会删除编排里的卷：当前模板用的是 bind mount 所以侥幸没炸，但很多人会把 compose 改成命名卷
+  （官方文档也这么教），那时「重启」= 删库，「更新」= 删库，**恢复备份时也会先删一次卷**。
+  现在常规路径统一 `down --remove-orphans`，只有卸载（有二次确认）保留 `-v`。
+- 🔴 **`backup()` 不检查 tar 退出码**，失败也打印「备份成功」；`restore()` 同样如此，而且
+  不校验文件是否存在/是否完整 gzip、**没有二次确认**、路径不加引号（带空格就炸）、
+  输入为空时 `exit 1` 直接退出整个脚本。两个函数都重写了：
+  - `backup`：GNU tar 加 `--warning=no-file-changed`，退出码 1（"file changed as we read it"，热备份的正常现象）
+    容忍但会提示，≥2 判失败并删掉半成品；打印体积；新增 `--consistent`（先 `compose stop mongo`、
+    打包完再 start）与环境变量 `VANBLOG_BACKUP_CONSISTENT=1` 供定时任务使用。
+  - `restore`：`gzip -t` 先验完整性 → 二次确认（`VANBLOG_ASSUME_YES=1` 跳过）→ 停服务 → 解压（失败即返回 1，
+    不再谎报成功）→ **删掉 `mongod.lock`**（热备份的产物，不删 mongod 会拒绝启动、容器反复重启，
+    §4.3 手工流程里也写了这一步，脚本却一直没做）→ 询问是否立即启动；
+    支持 `VANBLOG_RESTORE_FILE=` 与位置参数，非交互可用。
+- 🟠 **`chmod 777 -R $VANBLOG_DATA_PATH`**：这个目录里有 MongoDB 数据文件、图床内容，
+  以及 **caddy 的证书私钥**，宿主机上任何用户都能读。改成 755（容器内是 root，够用）。
+- 🟠 **docker-compose 别名会覆盖用户已装的 docker-compose**：旧逻辑只要 `docker compose` 可用就无条件
+  `echo > /usr/local/bin/docker-compose`。改成「只在 `command -v docker-compose` 失败时才建」，
+  并且两者都没有时明确报错返回，而不是继续往下走到一堆看不懂的报错。别名脚本本身也修了
+  （`docker compose $@` → `docker compose "$@"`，带空格的参数以前会被拆词）。
+- 🟠 **`update()` 把「已经是最新版」报成红色"更新失败"**（镜像 id 没变就判定失败并返回 1），
+  自动化里会误告警。现在返回 0 并提示「已经是最新版本（版本号），容器已重启」；
+  真正的拉取失败在 `pull` 那一步就已经拦下。
+- 🟡 **`config()` 会用模板覆盖 `docker-compose.yaml`**，用户自己加的 `environment`（CDN 前缀、
+  备份目录等）和卷映射**静默丢失**。现在覆盖前先存一份 `docker-compose.yaml.bak-<时间戳>` 并提示。
+  同时补了输入校验：邮箱格式（要拿去申请证书）、端口必须是 1-65535 的数字；
+  `sed` 分隔符从 `/` 换成 `|`（邮箱里出现 `/`、`&` 时旧写法会截断或展开）。
+- 🟡 路径变量改成可被环境变量覆盖（`VANBLOG_BASE_PATH` / `VANBLOG_DATA_PATH` / `VANBLOG_DATA_PATH_RAW`，
+  默认值不变），既是测试需要，也方便把安装目录放别处。
+- 🟡 **运行镜像里没有 `zstd` / `xz`**：后台「整站备份」默认选 `zstd -19`，其次 `xz`，最后才 `gzip`，
+  探测不到就静默降级 → 用户以为在用高压缩。Dockerfile 运行阶段已加 `zstd xz`（`tar` 用 busybox 自带的够了）。
+- 🟡 编排模板补了注释掉的可选环境变量：`VAN_BLOG_BACKUP_PATH`、`VANBLOG_BACKUP_ZSTD_LEVEL`、
+  `VAN_BLOG_REVALIDATE(_TIME)`、`VANBLOG_DISABLE_IP_GEO`、`VAN_BLOG_IP_GEO_TIMEOUT`、
+  `VANBLOG_CADDY_ASK_ALLOW_ALL`（都是 §7.6/§7.11 新增的开关，以前用户只能手改 compose，
+  然后被 `config` 覆盖掉）。
+- 核对过**没问题**的部分：`backup`/`restore` 的路径拼接是对的（`cd $BASE && tar ./data` 正好等于
+  `$DATA`，因为 `DATA=$BASE/data`）；卸载流程会保留 `vanblog-backup-*` 并拒绝删除无效数据目录；
+  `reset_https` 那套 caddy/JSON 清理逻辑；下载回退（文档站 → GitHub raw → jsDelivr）与自更新。
+- 测试：新增 `scripts/tests/vanblog-backup-restore.test.sh`(34 条)，用假的 `docker`/`docker-compose`
+  记录调用 + **真实 tar** 跑完整的「备份 → 改数据 → 恢复 → 校验还原/删锁/自动启动」往返，
+  并断言常规路径不再出现 `down -v`、`chmod 777` 已消失、两份脚本一致、模板与 Dockerfile 已同步。
+  既有的 `vanblog-update.test.sh` / `vanblog-download-fallback.test.sh` 按新语义更新
+  （「已是最新」返回 0；沙箱里补一个假的 docker-compose，免得脚本去写 `/usr/local/bin`）。
+  七个脚本测试文件共 **259 条断言全绿**。
+
+### 7.13 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 519 用例：518 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 49 文件 / 435 用例全绿 |
 | admin `node --test tests/unit` | 54 文件 / 222 用例全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -998,7 +1050,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.12 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.13 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

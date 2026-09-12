@@ -60,7 +60,10 @@ RUN pnpm build:website
 #运行容器
 FROM node:18-alpine AS RUNNER
 WORKDIR /app
-RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-apps libc6-compat \
+# zstd / xz：后台「整站备份」默认用 zstd -19（其次 xz，最后才 gzip），
+# 镜像里没有这两个命令的话会静默降级成 gzip，压缩率和速度都差很多。
+# tar 用 busybox 自带的即可（备份/恢复只用 -cf -/-xf -/-xOf 这些基础能力）。
+RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-apps libc6-compat zstd xz \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
   && apk del tzdata

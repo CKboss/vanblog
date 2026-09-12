@@ -449,6 +449,13 @@ stub_install_vanblog() {
 exit 0
 EOF
   chmod +x "${TEST_DIR}/bin/docker"
+  # 脚本现在只有在「没有 docker-compose 命令」时才会去写 /usr/local/bin/docker-compose，
+  # 测试里不该碰真实路径，所以沙箱内直接提供一个假的 docker-compose
+  cat >"${TEST_DIR}/bin/docker-compose" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "${TEST_DIR}/bin/docker-compose"
 }
 
 # --- menu install (no args) still returns to the menu after config succeeds ---
