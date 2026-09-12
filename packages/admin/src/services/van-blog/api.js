@@ -500,6 +500,34 @@ export async function deleteAllIMG() {
   });
 }
 /** 附件管理：列表（支持按文件名模糊搜索） */
+/**
+ * 替换图片：新内容写回原来的 URL（文件名/后缀都不变），文章里的引用不用改。
+ * 走 fetch 是为了带 multipart 和 token header（和 UploadBtn 一致）。
+ */
+export async function replaceImgBySign(sign, file, withWaterMark = true) {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  const res = await fetch(
+    `/api/admin/img/${sign}/replace?withWaterMark=${withWaterMark ? 'true' : 'false'}`,
+    {
+      method: 'POST',
+      body: formData,
+      headers: {
+        token: window.localStorage.getItem('token') || 'null',
+      },
+    },
+  );
+  return res.json();
+}
+
+/** 批量查这批图片各被哪些文章引用（列表视图的「引用文章」列）。 */
+export async function getImgReferences(links) {
+  return request('/api/admin/img/references', {
+    method: 'POST',
+    data: { links },
+  });
+}
+
 export async function backfillThumbnails(force = false) {
   return request('/api/admin/img/thumb/backfill', {
     method: 'POST',

@@ -48,7 +48,13 @@ function createModelStub(initial: any[] = []) {
     exec: async () => {
       const doc = docs.find((item) => matches(item, query));
       if (doc && update?.$set) {
-        doc.meta = { ...(doc.meta || {}), ...flattenSet(update.$set) };
+        for (const [key, value] of Object.entries(update.$set)) {
+          if (key.startsWith('meta.')) {
+            doc.meta = { ...(doc.meta || {}), [key.slice('meta.'.length)]: value };
+          } else if (!key.includes('.')) {
+            doc[key] = value;
+          }
+        }
       }
       return { modifiedCount: doc ? 1 : 0 };
     },
@@ -63,15 +69,6 @@ function createModelStub(initial: any[] = []) {
     },
   }));
   return { model, docs };
-}
-
-/** {'meta.thumb': x} -> {thumb: x}，只够测试用 */
-function flattenSet(set: Record<string, any>) {
-  const out: Record<string, any> = {};
-  for (const [key, value] of Object.entries(set)) {
-    out[key.includes('.') ? key.split('.').pop() : key] = value;
-  }
-  return out;
 }
 
 interface StubOptions {
@@ -103,6 +100,7 @@ function createProvider(options: StubOptions = {}) {
   const saved: any[] = [];
   const thumbs: any[] = [];
   const deleted: string[] = [];
+  const overwritten: any[] = [];
   const localProvider = {
     saveFile: jest.fn(
       async (fileName: string, buffer: Buffer, type: string, toRoot?: boolean, extra?: any) => {
@@ -134,6 +132,11 @@ function createProvider(options: StubOptions = {}) {
       deleted.push(realPath);
       delete files[realPath];
     }),
+    overwriteStaticFile: jest.fn(async (realPath: string, buffer: Buffer) => {
+      files[realPath] = buffer;
+      overwritten.push({ realPath, bytes: buffer.byteLength });
+      return realPath;
+    }),
   };
   const picgoProvider = { saveFile: jest.fn() };
   const articleProvider = { getAll: jest.fn(async () => []) };
@@ -144,7 +147,18 @@ function createProvider(options: StubOptions = {}) {
     picgoProvider as any,
     articleProvider as any,
   );
-  return { provider, model, docs, settingProvider, localProvider, saved, thumbs, deleted, files };
+  return {
+    provider,
+    model,
+    docs,
+    settingProvider,
+    localProvider,
+    saved,
+    thumbs,
+    deleted,
+    overwritten,
+    files,
+  };
 }
 
 async function makeJpeg(width: number, height: number): Promise<Buffer> {
@@ -408,5 +422,150 @@ describe('deleteOneBySign', () => {
 
     expect(ctx.deleted).toEqual(['/static/img/del.webp', '/static/img/thumb/del.webp']);
     expect(ctx.docs).toHaveLength(0);
+  });
+});
+
+describe('replaceBySign', () => {
+  let photo: Buffer;
+  let replacement: Buffer;
+
+  beforeAll(async () => {
+    photo = await makeJpeg(900, 700);
+    // 换上去的是一张更小的 PNG（纯色即可，替换只关心流程）
+    replacement = await sharp({
+      create: { width: 640, height: 480, channels: 3, background: { r: 30, g: 160, b: 90 } },
+    })
+      .png()
+      .toBuffer();
+  });
+
+  async function uploadOne(settings: Record<string, any> = {}) {
+    const ctx = createProvider({ settings });
+    await ctx.provider.upload(
+      { originalname: 'photo.jpg', buffer: photo },
+      'img',
+      false,
+      undefined,
+      undefined,
+      { uploader: 'someone', baseUrl: 'https://blog.example.com' },
+    );
+    return ctx;
+  }
+
+  it('keeps the URL and swaps the content, re-encoding to the stored format', async () => {
+    const ctx = await uploadOne();
+    const before = { ...ctx.docs[0] };
+    expect(before.realPath.endsWith('.webp')).toBe(true);
+
+    const res: any = await ctx.provider.replaceBySign(
+      before.sign,
+      { originalname: 'replacement.png', buffer: replacement },
+      undefined,
+      { uploader: 'replacer', baseUrl: 'https://blog.example.com' },
+    );
+
+    // URL / 文件名一个字符都没变，文章里的链接不会断
+    expect(res.realPath).toBe(before.realPath);
+    expect(res.oldSign).toBe(before.sign);
+    expect(res.sign).not.toBe(before.sign);
+    expect(ctx.localProvider.overwriteStaticFile).toHaveBeenCalledWith(
+      before.realPath,
+      expect.any(Buffer),
+    );
+
+    // 传进来的是 PNG，落盘仍然是 webp（跟着原记录的后缀走）
+    const written = ctx.overwritten[0] && ctx.files[before.realPath];
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('webp');
+    expect(meta.width).toBe(640);
+
+    // 数据库记录同步更新
+    expect(ctx.docs[0].sign).toBe(res.sign);
+    expect(ctx.docs[0].fileType).toBe('webp');
+    expect(ctx.docs[0].realPath).toBe(before.realPath);
+    expect(ctx.docs[0].meta.width).toBe(640);
+    expect(ctx.docs[0].meta.thumb).toBeTruthy();
+  });
+
+  it('re-embeds the stego watermark with the new content', async () => {
+    const ctx = await uploadOne();
+    const sign = ctx.docs[0].sign;
+
+    const res: any = await ctx.provider.replaceBySign(
+      sign,
+      { originalname: 'replacement.png', buffer: replacement },
+      undefined,
+      { uploader: 'replacer', baseUrl: 'https://blog.example.com' },
+    );
+
+    expect(res.stego).toBe(true);
+    const detected = await extractStegoWatermark(ctx.files[res.realPath], STEGO_KEY);
+    expect(detected.found).toBe(true);
+    expect(detected.payload.startsWith('blog.example.com|replacer|')).toBe(true);
+  });
+
+  it('regenerates the thumbnail and drops the old one when thumbnails are off', async () => {
+    const ctx = await uploadOne();
+    const oldThumb = ctx.docs[0].meta.thumb;
+    expect(ctx.thumbs).toHaveLength(1);
+
+    await ctx.provider.replaceBySign(ctx.docs[0].sign, {
+      originalname: 'replacement.png',
+      buffer: replacement,
+    });
+    expect(ctx.thumbs).toHaveLength(2); // 替换后重做了一张
+    expect(ctx.docs[0].meta.thumb).toBe(oldThumb); // 同名覆盖，地址不变
+
+    // 关掉缩略图再替换：旧的要删掉，别留下和内容不一致的小图
+    const ctx2 = await uploadOne({ enableThumb: false });
+    await ctx2.provider.replaceBySign(ctx2.docs[0].sign, {
+      originalname: 'replacement.png',
+      buffer: replacement,
+    });
+    expect(ctx2.docs[0].meta.thumb).toBeUndefined();
+  });
+
+  it('refuses remote storage, unknown signs and missing files', async () => {
+    const ctx = createProvider({
+      docs: [
+        {
+          sign: 'remote',
+          name: 'r.png',
+          realPath: 'https://cdn.example.com/r.png',
+          staticType: 'img',
+          storageType: 'picgo',
+          meta: {},
+        },
+      ],
+    });
+
+    await expect(
+      ctx.provider.replaceBySign('remote', { originalname: 'x.png', buffer: replacement }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      ctx.provider.replaceBySign('nope', { originalname: 'x.png', buffer: replacement }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(ctx.provider.replaceBySign('remote', undefined)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(ctx.localProvider.overwriteStaticFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('countReferences', () => {
+  it('delegates to the article provider', async () => {
+    const ctx = createProvider({});
+    (ctx.provider as any).articleProvder = {
+      countArticlesByLinks: jest.fn(async (links: string[]) =>
+        links.reduce((acc: any, link) => {
+          acc[link] = { count: 1, articles: [{ id: 1, title: 'x' }] };
+          return acc;
+        }, {}),
+      ),
+    };
+
+    const res: any = await ctx.provider.countReferences(['/static/img/a.webp']);
+
+    expect(res['/static/img/a.webp'].count).toBe(1);
   });
 });

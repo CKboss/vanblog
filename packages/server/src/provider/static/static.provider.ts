@@ -28,6 +28,8 @@ import { capImageResolution } from 'src/utils/imgResize';
 import { generateThumbnail } from 'src/utils/thumbnail';
 import { buildStegoPayload, parseThumbWidth, resolveMaxImageEdge } from 'src/utils/imageOptions';
 import { embedStegoWatermark, extractStegoWatermark } from 'src/utils/stegoWatermark';
+import { canEncodeFormat, encodeImageToFormat, normalizeImageFormat } from 'src/utils/imgEncode';
+import { safeImageSize } from 'src/utils/imageMeta';
 import { normalizeCustomPageRel } from 'src/utils/customPagePath';
 import {
   assertAttachmentSize,
@@ -68,6 +70,109 @@ export class StaticProvider {
     }
     return this.publicView;
   }
+  /**
+   * 图片处理管线，`upload()` 和 `replaceBySign()` 共用：
+   * **可见水印 → 缩放 → 隐写水印 → 编码/压缩**。
+   *
+   * 顺序不能改：缩放会重采样、把隐写的块均值格点打乱，所以必须在隐写之前；
+   * 隐写用的是块均值调制（不是 LSB），必须赶在有损压缩之前写进去才读得回来。
+   *
+   * `forceFormat` 只给「替换图片」用：新内容要写回原来的 URL，后缀必须保持一致。
+   */
+  private async runImagePipeline(
+    input: Buffer,
+    fileType: string,
+    settings: any,
+    options?: {
+      updateConfig?: UploadConfig;
+      context?: UploadContext;
+      forceFormat?: string;
+    },
+  ): Promise<{ buffer: Buffer; sign: string; stego: boolean; compressSuccess: boolean }> {
+    let buf = input;
+    let compressSuccess = true;
+    let stego = false;
+    const compressFormat = resolveCompressFormat(settings?.compressFormat);
+    const forceFormat = options?.forceFormat
+      ? normalizeImageFormat(options.forceFormat)
+      : undefined;
+
+    try {
+      // 双保险：只有调用方要求水印、并且设置里也开着，才会加可见水印。
+      const updateConfig = options?.updateConfig;
+      if (updateConfig && updateConfig.withWaterMark && fileType != 'gif') {
+        if (settings && checkTrue(settings?.enableWaterMark)) {
+          const waterMarkText = updateConfig.waterMarkText || settings.waterMarkText;
+          if (waterMarkText && waterMarkText.trim() !== '') {
+            buf = await addWaterMarkToIMG(buf, waterMarkText);
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`可见水印失败，按原图继续：${(err as Error)?.message}`);
+    }
+
+    if (checkTrue(settings?.enableResize)) {
+      try {
+        const maxEdge = resolveMaxImageEdge(settings?.maxImageEdge);
+        const resized = await capImageResolution(buf, maxEdge, fileType);
+        if (resized.resized) {
+          buf = resized.buffer;
+        }
+      } catch (err) {
+        this.logger.warn(`缩放失败，按原图继续：${(err as Error)?.message}`);
+      }
+    }
+
+    if (checkTrue(settings?.enableStegoWaterMark) && fileType != 'gif') {
+      try {
+        const key = await this.settingProvider.getStegoKey();
+        const text = buildStegoPayload({
+          custom: settings?.stegoWaterMarkText,
+          baseUrl: options?.context?.baseUrl,
+          author: options?.context?.author,
+          uploader: options?.context?.uploader,
+        });
+        const stegoRes = await embedStegoWatermark(buf, text, key);
+        if (stegoRes.embedded) {
+          buf = stegoRes.buffer;
+          stego = true;
+        } else if (
+          stegoRes.reason &&
+          !['image-too-small', 'unsupported-format'].includes(stegoRes.reason)
+        ) {
+          this.logger.warn(`隐写水印未写入：${stegoRes.reason}`);
+        }
+      } catch (err) {
+        this.logger.warn(`隐写水印失败，按原图继续：${(err as Error)?.message}`);
+      }
+    }
+
+    if (forceFormat) {
+      // 替换：后缀必须和原文件一致，否则文章里的链接就断了。
+      try {
+        if (forceFormat === 'webp' || forceFormat === 'avif') {
+          buf = await compressImg(buf, forceFormat);
+        } else if (canEncodeFormat(forceFormat)) {
+          buf = await encodeImageToFormat(buf, forceFormat);
+        }
+        // gif 等不能重编码的格式：原样写入，免得丢掉动画
+      } catch (err) {
+        this.logger.warn(`替换时重新编码失败，写入原图：${(err as Error)?.message}`);
+        compressSuccess = false;
+      }
+    } else if (checkTrue(settings?.enableWebp)) {
+      try {
+        buf = await compressImg(buf, compressFormat);
+      } catch (err) {
+        // console.log(err);
+        compressSuccess = false;
+      }
+    }
+
+    return { buffer: buf, sign: encryptFileMD5(buf), stego, compressSuccess };
+  }
+
   async upload(
     file: any,
     type: StaticType,
@@ -91,73 +196,14 @@ export class StaticProvider {
     let stegoEmbedded = false;
     const compressFormat = resolveCompressFormat(staticConfigInDB?.compressFormat);
     if (type == 'img') {
-      try {
-        // 用加过水印的 buf 做计算，看看是不是有文件的。
-        if (updateConfig && updateConfig.withWaterMark && fileType != 'gif') {
-          // 双保险，只有这里开启水印并且设置中也开启了才有效。
-          const waterMarkConfigInDB = staticConfigInDB;
-          if (waterMarkConfigInDB && checkTrue(waterMarkConfigInDB?.enableWaterMark)) {
-            const waterMarkText = updateConfig.waterMarkText || waterMarkConfigInDB.waterMarkText;
-            if (waterMarkText && waterMarkText.trim() !== '') {
-              buf = await addWaterMarkToIMG(buffer, waterMarkText);
-              currentSign = encryptFileMD5(buf);
-            }
-          }
-        }
-      } catch (err) {
-        // console.log(err);
-      }
-
-      // 顺序很重要：先缩放，再隐写，最后有损压缩。
-      // 缩放会重采样、把块均值格点打乱，所以必须放在隐写之前；
-      // 隐写用的是块均值调制（不是 LSB），压成有损 webp 之后仍然读得出来。
-      if (checkTrue(staticConfigInDB.enableResize)) {
-        try {
-          const maxEdge = resolveMaxImageEdge(staticConfigInDB.maxImageEdge);
-          const resized = await capImageResolution(buf, maxEdge, fileType);
-          if (resized.resized) {
-            buf = resized.buffer;
-            currentSign = encryptFileMD5(buf);
-          }
-        } catch (err) {
-          this.logger.warn(`缩放失败，按原图继续：${(err as Error)?.message}`);
-        }
-      }
-
-      if (checkTrue(staticConfigInDB.enableStegoWaterMark) && fileType != 'gif') {
-        try {
-          const key = await this.settingProvider.getStegoKey();
-          const text = buildStegoPayload({
-            custom: staticConfigInDB.stegoWaterMarkText,
-            baseUrl: context?.baseUrl,
-            author: context?.author,
-            uploader: context?.uploader,
-          });
-          const stegoRes = await embedStegoWatermark(buf, text, key);
-          if (stegoRes.embedded) {
-            buf = stegoRes.buffer;
-            stegoEmbedded = true;
-            currentSign = encryptFileMD5(buf);
-          } else if (
-            stegoRes.reason &&
-            !['image-too-small', 'unsupported-format'].includes(stegoRes.reason)
-          ) {
-            this.logger.warn(`隐写水印未写入：${stegoRes.reason}`);
-          }
-        } catch (err) {
-          this.logger.warn(`隐写水印失败，按原图继续：${(err as Error)?.message}`);
-        }
-      }
-
-      if (checkTrue(staticConfigInDB.enableWebp)) {
-        try {
-          buf = await compressImg(buf, compressFormat);
-          currentSign = encryptFileMD5(buf);
-        } catch (err) {
-          // console.log(err);
-          compressSuccess = false;
-        }
-      }
+      const processed = await this.runImagePipeline(buf, fileType, staticConfigInDB, {
+        updateConfig,
+        context,
+      });
+      buf = processed.buffer;
+      currentSign = processed.sign;
+      compressSuccess = processed.compressSuccess;
+      stegoEmbedded = processed.stego;
 
       const hasFile = await this.getOneBySign(currentSign);
 
@@ -573,6 +619,110 @@ export class StaticProvider {
         console.log('实际上只删了数据库，网盘上还有的。');
     }
     return await this.staticModel.deleteOne({ sign }).exec();
+  }
+
+  /**
+   * 替换图片：新内容走同一套管线，但**写回原来的 URL**（文件名和后缀都不变），
+   * 文章里已经插入的链接因此不用改。只支持本地存储。
+   *
+   * 磁盘上的文件名仍然带着**旧内容**的 md5 前缀 —— 这是为了保住 URL；
+   * 数据库里的 sign 会更新成新内容的 md5（去重是按 sign 走的）。
+   */
+  async replaceBySign(
+    sign: string,
+    file: any,
+    updateConfig?: UploadConfig,
+    context?: UploadContext,
+  ) {
+    if (!file?.buffer) {
+      throw new BadRequestException('没有收到文件！');
+    }
+    const item = await this.staticModel.findOne({ sign, staticType: 'img' }).exec();
+    if (!item) {
+      throw new BadRequestException('找不到这张图片！');
+    }
+    if (item.storageType && item.storageType !== 'local') {
+      throw new BadRequestException('远程图床（PicGo / OSS）暂不支持替换，请删除后重新上传！');
+    }
+    const settings = await this.settingProvider.getStaticSetting();
+    const arr = String(file.originalname || '').split('.');
+    const fileType = arr.length > 1 ? arr[arr.length - 1].toLowerCase() : '';
+    const targetFormat = normalizeImageFormat(item.fileType);
+
+    const processed = await this.runImagePipeline(file.buffer, fileType, settings, {
+      updateConfig,
+      context,
+      forceFormat: targetFormat,
+    });
+
+    const realPath = item.realPath;
+    await this.localProvider.overwriteStaticFile(realPath, processed.buffer);
+
+    // 缩略图跟着重做（同名覆盖）；关掉缩略图时把旧的删掉，别留下和内容不一致的小图
+    const oldThumb = (item.meta as any)?.thumb;
+    let meta: any = { ...(item.meta as any) };
+    delete meta.thumb;
+    delete meta.thumbWidth;
+    delete meta.thumbHeight;
+    if (checkTrue(settings?.enableThumb)) {
+      try {
+        const thumb = await generateThumbnail(
+          processed.buffer,
+          parseThumbWidth(settings?.thumbWidth),
+          targetFormat,
+        );
+        if (thumb.ok) {
+          const baseName = String(realPath).split('/').pop();
+          const thumbPath = await this.localProvider.saveThumb(baseName, thumb.buffer, thumb.ext);
+          if (oldThumb && oldThumb !== thumbPath) {
+            await this.localProvider.deleteStaticFile(oldThumb);
+          }
+          meta = { ...meta, thumb: thumbPath, thumbWidth: thumb.width, thumbHeight: thumb.height };
+        }
+      } catch (err) {
+        this.logger.warn(`替换后生成缩略图失败：${(err as Error)?.message}`);
+      }
+    } else if (oldThumb) {
+      await this.localProvider.deleteStaticFile(oldThumb);
+    }
+
+    const sizeInfo = safeImageSize(processed.buffer, targetFormat);
+    meta = { ...meta, ...sizeInfo, size: formatBytes(processed.buffer.byteLength) };
+
+    const date = new Date();
+    await this.staticModel
+      .updateOne(
+        { sign, staticType: 'img' },
+        {
+          $set: {
+            sign: processed.sign,
+            fileType: targetFormat || item.fileType,
+            meta,
+            updatedAt: date,
+          },
+        },
+      )
+      .exec();
+
+    // sign 只是普通索引：新内容万一是库里已有的另一张图，这里只记日志不报错
+    const sameSign = await this.staticModel.find({ sign: processed.sign, staticType: 'img' }).exec();
+    if (sameSign.length > 1) {
+      this.logger.warn(`替换后 sign 与另外 ${sameSign.length - 1} 条记录重复：${processed.sign}`);
+    }
+
+    this.logger.log(`图片已替换：${realPath}（sign ${sign} -> ${processed.sign}）`);
+    return {
+      realPath,
+      sign: processed.sign,
+      oldSign: sign,
+      stego: processed.stego,
+      meta,
+    };
+  }
+
+  /** 批量查这些图片被哪些文章引用（列表页用；相对路径也能匹配到绝对链接）。 */
+  async countReferences(realPaths: string[]) {
+    return await this.articleProvder.countArticlesByLinks(realPaths);
   }
 
   /** 缩略图地址；没生成过就是 null（前端回退到原图）。 */

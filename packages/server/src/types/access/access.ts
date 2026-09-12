@@ -7,6 +7,7 @@ export type LimitPermission =
   | 'draft:delete'
   | 'draft:update'
   | 'img:delete'
+  | 'img:replace'
   | 'file:delete';
 
 export type Permission = LimitPermission | 'all';
@@ -20,6 +21,7 @@ export const permissionPathMap: Record<LimitPermission, string> = {
   'draft:delete': 'delete-/api/admin/draft/:id',
   'draft:update': 'put-/api/admin/draft/:id',
   'img:delete': 'delete-/api/admin/img/:sign',
+  'img:replace': 'post-/api/admin/img/:sign/replace',
   'file:delete': 'delete-/api/admin/file/:sign',
 };
 
@@ -32,6 +34,7 @@ export const pathPermissionMap: Record<string, LimitPermission> = {
   'delete-/api/admin/draft/:id': 'draft:delete',
   'put-/api/admin/draft/:id': 'draft:update',
   'delete-/api/admin/img/:sign': 'img:delete',
+  'post-/api/admin/img/:sign/replace': 'img:replace',
   'delete-/api/admin/file/:sign': 'file:delete',
 };
 
@@ -54,6 +57,8 @@ export const publicRoutes = [
   'post-/api/admin/file/upload',
   'get-/api/admin/collaborator/list',
   'post-/api/admin/img/upload',
+  // 只读：批量查图片被哪些文章引用（列表视图用）
+  'post-/api/admin/img/references',
   // 只读：检测图片里的隐写水印（协作者也能用来验图）
   'post-/api/admin/img/stego/detect',
   'post-/api/admin/article/searchByLink',

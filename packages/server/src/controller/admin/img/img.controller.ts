@@ -95,6 +95,56 @@ export class ImgController {
   }
 
   /**
+   * 批量查这批图片各被哪些文章引用（列表视图的「引用文章」列）。
+   * 传相对路径即可，正文里写绝对 URL 的也能命中。
+   */
+  @Post('references')
+  async references(@Body() body: { links?: string[] }) {
+    const links = Array.isArray(body?.links) ? body.links : [];
+    const res = await this.staticProvider.countReferences(links);
+    return {
+      statusCode: 200,
+      data: res,
+    };
+  }
+
+  /**
+   * 替换图片：新内容走完整管线（缩放 / 隐写 / 压缩），但写回**原来的 URL**，
+   * 文章里已插入的链接不用改。仅本地存储，需要 img:replace 权限。
+   */
+  @Post(':sign/replace')
+  @UseInterceptors(FileInterceptor('file'))
+  async replace(
+    @Param('sign') sign: string,
+    @UploadedFile() file: any,
+    @Query('withWaterMark') withWaterMark?: string,
+    @Query('waterMarkText') waterMarkText?: string,
+    @Request() req?: any,
+  ) {
+    if (config.demo && config.demo == 'true') {
+      return {
+        statusCode: 401,
+        message: '演示站禁止修改此项！',
+      };
+    }
+    const siteInfo = await this.metaProvider.getSiteInfo();
+    const res = await this.staticProvider.replaceBySign(
+      sign,
+      file,
+      { withWaterMark: checkTrue(withWaterMark), waterMarkText },
+      {
+        uploader: req?.user?.nickname || req?.user?.name || '',
+        baseUrl: siteInfo?.baseUrl,
+        author: siteInfo?.author,
+      },
+    );
+    return {
+      statusCode: 200,
+      data: res,
+    };
+  }
+
+  /**
    * 检测隐写水印：body 里给 sign 就查图床里那张，或者直接上传一张图来验。
    * 只读操作，不写任何文件。
    */

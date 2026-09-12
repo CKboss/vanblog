@@ -38,6 +38,10 @@ const PERMISSION_OPTIONS = [
     value: 'img:delete',
   },
   {
+    label: '替换-图片',
+    value: 'img:replace',
+  },
+  {
     label: '删除-附件',
     value: 'file:delete',
   },

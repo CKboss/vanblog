@@ -83,3 +83,24 @@ export const getThumbLink = (item: StaticItem) => {
   const thumb = (item as any)?.meta?.thumb;
   return typeof thumb === 'string' && thumb ? thumb : item?.realPath;
 };
+
+/** 去掉落盘名前面的 md5 前缀，列表里显示原始文件名。 */
+export const displayImgName = (name?: string) => {
+  const raw = String(name || '');
+  return raw.replace(/^[a-f0-9]{32}\./i, '') || raw || '-';
+};
+
+/** statics 表只存 updatedAt（新建时就是上传时间，替换后会刷新）。 */
+export const formatDateTime = (value: any) => {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  if (isNaN(date.getTime())) {
+    return String(value);
+  }
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+};

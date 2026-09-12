@@ -117,6 +117,14 @@ export class LocalProvider {
     return abs;
   }
 
+  /** 覆盖写入已有静态文件（「替换图片」用：URL 不变，只换内容）。 */
+  async overwriteStaticFile(realPath: string, buffer: Buffer) {
+    const abs = this.resolveStaticAbs(realPath);
+    checkOrCreateByFilePath(abs);
+    fs.writeFileSync(abs, buffer);
+    return realPath;
+  }
+
   async readStaticFile(realPath: string): Promise<Buffer> {
     const abs = this.resolveStaticAbs(realPath);
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {

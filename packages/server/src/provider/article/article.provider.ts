@@ -24,6 +24,7 @@ import { MetaProvider } from '../meta/meta.provider';
 import { VisitProvider } from '../visit/visit.provider';
 import { sleep } from 'src/utils/sleep';
 import { CategoryDocument } from 'src/scheme/category.schema';
+import { escapeRegExp } from 'src/utils/regex';
 
 export type ArticleView = 'admin' | 'public' | 'list';
 
@@ -249,6 +250,47 @@ export class ArticleProvider {
     );
     return artciles;
   }
+  /**
+   * 批量统计一批图片链接分别被哪些文章引用（图片管理列表要显示「引用文章」）。
+   * 一次 $regex 把候选文章捞出来，再在内存里逐个计数，避免每张图查一次库。
+   * 传相对路径（`/static/img/x.webp`）时，正文里写绝对 URL 的也能命中。
+   */
+  async countArticlesByLinks(links: string[]) {
+    const cleaned = Array.from(
+      new Set((links || []).map((link) => String(link || '').trim()).filter(Boolean)),
+    ).slice(0, 200);
+    const result: Record<string, { count: number; articles: { id: number; title: string }[] }> = {};
+    for (const link of cleaned) {
+      result[link] = { count: 0, articles: [] };
+    }
+    if (!cleaned.length) {
+      return result;
+    }
+    const pattern = cleaned.map(escapeRegExp).join('|');
+    const articles = await this.articleModel.find(
+      {
+        content: { $regex: pattern, $options: 'i' },
+        $or: [{ deleted: false }, { deleted: { $exists: false } }],
+      },
+      { _id: 0, id: 1, title: 1, content: 1 },
+    );
+    for (const article of articles) {
+      const content = String((article as any)?.content || '').toLowerCase();
+      for (const link of cleaned) {
+        if (!content.includes(link.toLowerCase())) {
+          continue;
+        }
+        const entry = result[link];
+        entry.count += 1;
+        // 列表里只显示前几篇，够用了
+        if (entry.articles.length < 10) {
+          entry.articles.push({ id: (article as any).id, title: (article as any).title });
+        }
+      }
+    }
+    return result;
+  }
+
   async getAllImageLinks() {
     const res = [];
     const articles = await this.articleModel.find({

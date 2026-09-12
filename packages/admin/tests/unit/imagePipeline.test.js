@@ -55,7 +55,75 @@ describe('图片管理：缩略图视图与工具栏', () => {
     assert.match(page, /getThumbLink/);
     assert.match(page, /src=\{thumbMode \? getThumbLink\(item\) : `\$\{item\.realPath\}`\}/);
     assert.match(page, /preview=\{\{ src: getImgLink\(item\.realPath\) \}\}/);
-    assert.match(page, /maxHeight: thumbMode \? 96 : 200/);
+  });
+
+  it('没有「全部删除」按钮（误点代价太大）', () => {
+    const page = read('src/pages/Static/img/index.tsx');
+    assert.doesNotMatch(page, /全部删除/);
+    assert.doesNotMatch(page, /deleteAllIMG/);
+    assert.doesNotMatch(page, /DEV ONLY/);
+  });
+
+  it('列表视图给出图片/时间/引用/替换/删除', () => {
+    const page = read('src/pages/Static/img/index.tsx');
+    assert.match(page, /<Radio.Button value="list">列表<\/Radio.Button>/);
+    assert.match(page, /listMode \? \(/);
+    for (const title of ['图片', '名称', '格式', '尺寸', '大小', '上传时间', '引用文章', '操作']) {
+      assert.match(page, new RegExp(`title: '${title}'`), `列表缺少列 ${title}`);
+    }
+    assert.match(page, /formatDateTime/);
+    assert.match(page, /displayImgName/);
+    // 行内操作
+    assert.match(page, /复制链接/);
+    assert.match(page, />Markdown</);
+    assert.match(page, /下载/);
+    assert.match(page, />替换</);
+    assert.match(page, /检测水印/);
+    assert.match(page, />\s*删除\s*</);
+    // 右键菜单也能替换
+    assert.match(page, /data="replace"/);
+    assert.match(page, /替换图片/);
+  });
+
+  it('引用文章按页批量查一次，不是每行一个请求', () => {
+    const page = read('src/pages/Static/img/index.tsx');
+    assert.match(page, /getImgReferences\(data\.map/);
+    assert.match(page, /if \(!listMode \|\| !data\.length\)/);
+    const api = read('src/services/van-blog/api.js');
+    assert.match(api, /export async function getImgReferences/);
+    assert.match(api, /\/api\/admin\/img\/references/);
+  });
+
+  it('替换保持原链接，并且要 img:replace 权限', () => {
+    const page = read('src/pages/Static/img/index.tsx');
+    assert.match(page, /replaceImgBySign/);
+    assert.match(page, /链接保持不变/);
+    assert.match(page, /img:replace/);
+    assert.match(page, /replaceInputRef/);
+
+    const api = read('src/services/van-blog/api.js');
+    assert.match(api, /export async function replaceImgBySign/);
+    assert.match(api, /\/api\/admin\/img\/\$\{sign\}\/replace/);
+
+    const modal = read('src/components/CollaboratorModal/index.tsx');
+    assert.match(modal, /label: '替换-图片'/);
+    assert.match(modal, /value: 'img:replace'/);
+
+    const access = readRepo('packages/server/src/types/access/access.ts');
+    assert.match(access, /'img:replace': 'post-\/api\/admin\/img\/:sign\/replace'/);
+    assert.match(access, /'post-\/api\/admin\/img\/:sign\/replace': 'img:replace'/);
+    // 引用统计是只读的，协作者也能用
+    assert.match(access, /'post-\/api\/admin\/img\/references'/);
+  });
+
+  it('小图模式一屏放更多张', () => {
+    const page = read('src/pages/Static/img/index.tsx');
+    assert.match(page, /thumb: \{ desktop: 60, mobile: 24 \}/);
+    assert.match(page, /thumb: \{ desktop: \[12, '7\.6%'\], mobile: \[6, '15%'\] \}/);
+    assert.match(page, /maxHeight: thumbMode \? 72 : 200/);
+    // 每页数量跟着模式走，不再由 resize 观察器写死 9/15
+    assert.match(page, /const pageSize = PAGE_SIZE\[viewMode\]/);
+    assert.doesNotMatch(page, /setPageSize/);
   });
 
   it('工具栏有补缩略图和检测水印，右键菜单能检测单张', () => {
@@ -154,6 +222,40 @@ describe('服务端：设置与密钥', () => {
     assert.match(options, /MIN_THUMB_WIDTH = 64/);
     assert.match(options, /MAX_THUMB_WIDTH = 1024/);
     assert.match(options, /\[domain, who, when\]\.filter\(Boolean\)\.join\('\|'\)/);
+  });
+});
+
+describe('服务端：替换图片', () => {
+  it('写回原 URL，并按原格式重新编码', () => {
+    const provider = readRepo('packages/server/src/provider/static/static.provider.ts');
+    assert.match(provider, /async replaceBySign/);
+    assert.match(provider, /forceFormat: targetFormat/);
+    assert.match(provider, /overwriteStaticFile\(realPath, processed\.buffer\)/);
+    // 远程图床不支持替换（URL 会变）
+    assert.match(provider, /远程图床（PicGo \/ OSS）暂不支持替换/);
+
+    const encode = readRepo('packages/server/src/utils/imgEncode.ts');
+    assert.match(encode, /export async function encodeImageToFormat/);
+    assert.match(encode, /canEncodeFormat/);
+
+    const local = readRepo('packages/server/src/provider/static/local.provider.ts');
+    assert.match(local, /async overwriteStaticFile/);
+    assert.match(local, /resolveStaticAbs\(realPath\)/);
+  });
+
+  it('上传和替换共用同一条管线', () => {
+    const provider = readRepo('packages/server/src/provider/static/static.provider.ts');
+    assert.match(provider, /private async runImagePipeline/);
+    // upload 和 replace 都调它，逻辑不会分叉
+    assert.equal(provider.match(/this\.runImagePipeline\(/g).length, 2);
+  });
+
+  it('批量统计引用只查一次库，并转义正则元字符', () => {
+    const article = readRepo('packages/server/src/provider/article/article.provider.ts');
+    assert.match(article, /async countArticlesByLinks/);
+    assert.match(article, /cleaned\.map\(escapeRegExp\)\.join\('\|'\)/);
+    assert.match(article, /\.slice\(0, 200\)/);
+    assert.match(article, /entry\.articles\.length < 10/);
   });
 });
 
