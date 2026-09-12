@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import { assertImageBuffer, fetchRemoteSafely } from 'src/utils/safeFetch';
 import compressing from 'compressing';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -194,6 +195,7 @@ export class MarkdownExportProvider {
       // 外链：抓一次，抓不到就保留原链接
       try {
         const safeUrl = await assertSafeRemoteUrl(classified.absolute || url);
+        // fetchRemote 内部会逐跳重新校验重定向，并要求内容真的是图片
         const buffer = await this.fetchRemote(safeUrl.toString());
         const assetName = uniqueAssetName(this.remoteFileName(safeUrl.pathname), taken);
         assetEntries.push({ source: buffer, relativePath: `${assetsDir}/${assetName}` });
@@ -258,20 +260,16 @@ export class MarkdownExportProvider {
   }
 
   private async fetchRemote(url: string): Promise<Buffer> {
-    const res = await axios.get(url, {
-      responseType: 'arraybuffer',
-      timeout: REMOTE_TIMEOUT_MS,
+    // 不能用 axios 的自动重定向：assertSafeRemoteUrl 只校验第一跳，
+    // 攻击者可以 302 到 127.0.0.1 / 169.254.169.254，把内网响应打进 zip 带回去。
+    const { buffer } = await fetchRemoteSafely(url, {
+      timeoutMs: REMOTE_TIMEOUT_MS,
+      maxBytes: REMOTE_MAX_BYTES,
       maxRedirects: 3,
-      maxContentLength: REMOTE_MAX_BYTES,
-      maxBodyLength: REMOTE_MAX_BYTES,
-      headers: { 'User-Agent': 'VanBlog-Export/1.0' },
-      // 非 2xx 交给 catch 统一处理
-      validateStatus: (status) => status >= 200 && status < 300,
+      userAgent: 'VanBlog-Export/1.0',
     });
-    const buffer = Buffer.from(res.data);
-    if (!buffer.length) {
-      throw new Error('抓到的是空文件');
-    }
+    // 再验一次魔数：不是图片就说明是重定向/伪装拿到的别的东西，不能进 zip
+    assertImageBuffer(buffer, url);
     return buffer;
   }
 

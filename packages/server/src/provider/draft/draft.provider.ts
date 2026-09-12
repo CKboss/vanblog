@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { safeSearchPattern } from 'src/utils/regex';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CreateArticleDto } from 'src/types/article.dto';
@@ -92,7 +93,8 @@ export class DraftProvider {
       const title = draft.title;
       const oldDraft = await this.findOneByTitle(title);
       if (oldDraft) {
-        this.updateById(oldDraft.id, { ...createDto, deleted: false });
+        // 同样必须 await，否则失败会变成 unhandledRejection 把进程带走
+        await this.updateById(oldDraft.id, { ...createDto, deleted: false });
       } else {
         await this.create(createDto);
       }
@@ -150,19 +152,19 @@ export class DraftProvider {
       const or: any = [];
       tags.forEach((t) => {
         or.push({
-          tags: { $regex: `${t}`, $options: 'i' },
+          tags: { $regex: safeSearchPattern(t), $options: 'i' },
         });
       });
       and.push({ $or: or });
     }
     if (option.category) {
       and.push({
-        category: { $regex: `${option.category}`, $options: 'i' },
+        category: { $regex: safeSearchPattern(option.category), $options: 'i' },
       });
     }
     if (option.title) {
       and.push({
-        title: { $regex: `${option.title}`, $options: 'i' },
+        title: { $regex: safeSearchPattern(option.title), $options: 'i' },
       });
     }
     if (option.startTime || option.endTime) {
@@ -199,6 +201,11 @@ export class DraftProvider {
   }
   async publish(id: number, options: PublishDraftDto) {
     const draft = await this.getById(id);
+    // 双击「发布」时第二次请求拿到的是 null（第一次已把草稿软删），
+    // 以前会在 draft.title 上抛 TypeError → 500，用户只看到「Internal server error」
+    if (!draft) {
+      throw new BadRequestException('草稿不存在或已经发布过了');
+    }
     // 没有 <!-- more --> 也允许发布：前台会自动截取正文前 200 字作为摘要
     // （packages/website/utils/articleExcerpt.ts 的 DEFAULT_OVERVIEW_CHARS）。
     const createArticleDto: CreateArticleDto = {
@@ -233,11 +240,17 @@ export class DraftProvider {
   }
 
   async searchByString(str: string): Promise<Draft[]> {
+    // 原来写的是 `*${str}*`：以 `*` 开头的正则本身就是非法的（"nothing to repeat"），
+    // 一调就 500；而且用户输入没转义。改成转义后的字面量「包含」匹配。
+    const pattern = safeSearchPattern(str);
+    if (!pattern) {
+      return [];
+    }
     return this.draftModel
       .find({
         $or: [
-          { content: { $regex: `*${str}*`, $options: 'i' } },
-          { title: { $regex: `*${str}*`, $options: 'i' } },
+          { content: { $regex: pattern, $options: 'i' } },
+          { title: { $regex: pattern, $options: 'i' } },
         ],
       })
       .exec();

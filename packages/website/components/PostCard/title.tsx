@@ -27,6 +27,12 @@ const TITLE_ACTION_BUTTON_CLASS =
 
 export function Title(props: {
   type: "article" | "about" | "overview";
+  /**
+   * 数字 id，只给后台「编辑」链接用。
+   * props.id 现在是拼音别名（/post/<slug>），后台编辑器只认数字 id，
+   * 直接把别名塞进去会打开一个空编辑器并提示「无效的文档 ID」。
+   */
+  numericId?: number | string;
   id: number | string;
   title: string;
   openArticleLinksInNewWindow: boolean;
@@ -117,7 +123,7 @@ export function Title(props: {
             href={
               props.type === "about"
                 ? "/admin/editor?type=about"
-                : `/admin/editor?type=article&id=${props.id}`
+                : `/admin/editor?type=article&id=${props.numericId ?? props.id}`
             }
             target="_blank"
           >

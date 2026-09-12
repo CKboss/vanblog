@@ -107,7 +107,7 @@ export class FileController {
     if (config.demo && config.demo == 'true') {
       return { statusCode: 401, message: '演示站禁止修改此项！' };
     }
-    const data = await this.staticProvider.deleteOneBySign(sign);
+    const data = await this.staticProvider.deleteOneBySign(sign, 'file');
     return {
       statusCode: 200,
       data,

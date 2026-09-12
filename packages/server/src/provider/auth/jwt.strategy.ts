@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { MetaProvider } from '../meta/meta.provider';
@@ -24,6 +24,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const moreDto = { ...payload };
     if (payload.sub != 0) {
       const user = await this.userProvider.getCollaboratorById(payload.sub);
+      if (!user) {
+        // 协作者已被删除但 token 还在有效期内：以前这里会读 user.permissions 直接 500
+        throw new UnauthorizedException('该协作者已不存在');
+      }
       moreDto.permissions = user.permissions;
       moreDto.nickname = user.nickname;
     } else {

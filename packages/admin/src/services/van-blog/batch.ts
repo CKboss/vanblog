@@ -15,18 +15,21 @@ export const batchDelete = (ids: string[], isDraft = false) => {
       title: '确定要删除选中内容吗？',
       content: '删除后无法恢复',
       onOk: async () => {
-        let cnt = 0;
-        for (const id of ids) {
-          const fn = isDraft ? deleteDraft : deleteArticle;
-
-          fn(id).finally(() => {
-            cnt = cnt + 1;
-            if (cnt >= ids.length) {
-              resolve(true);
-              return;
-            }
-          });
+        // 旧实现用 fn(id).finally() 计数：**失败也会 +1**，最后照样 resolve(true)，
+        // 于是 token 过期 / 服务端 500 / 演示站拦截时，界面同时弹「登录失效」和
+        // 「批量删除成功！」，而列表刷新后一条都没少。空选择还永远不 settle（转圈卡死）。
+        if (!ids.length) {
+          resolve(false);
+          return;
         }
+        const fn = isDraft ? deleteDraft : deleteArticle;
+        const settled = await Promise.allSettled(ids.map((id) => fn(id)));
+        const failed = settled.filter((r) => r.status === 'rejected').length;
+        if (failed) {
+          reject(new Error(`${failed} / ${ids.length} 条删除失败`));
+          return;
+        }
+        resolve(true);
       },
     });
   });

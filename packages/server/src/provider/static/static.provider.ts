@@ -1,3 +1,8 @@
+import { assertImageBuffer, fetchRemoteSafely } from 'src/utils/safeFetch';
+
+/** 单张远端图片的体积上限：以前没有上限，一个大文件就能把内存吃光。 */
+const MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024;
+import { assertUploadedImage, safeImageExtension } from 'src/utils/uploadLimits';
 import {
   BadRequestException,
   HttpException,
@@ -186,8 +191,19 @@ export class StaticProvider {
       return await this.uploadAttachment(file);
     }
     const { buffer } = file;
-    const arr = file.originalname.split('.');
-    const fileType = arr[arr.length - 1];
+    // multer/busboy 按 latin1 解码文件名，中文名会变成 `æµ‹è¯•.png` 这种乱码
+    // （附件分支早就修了，图片/自定义页面这条老路径一直没修）
+    const originalName = decodeUploadFileName(file.originalname);
+    const arr = originalName.split('.');
+    let fileType = arr[arr.length - 1];
+    if (type === 'img') {
+      // 图片接口在 publicRoutes 里（协作者可调），而 /static/img/** 是同源匿名可读的。
+      // 以前不校验内容：上传 evil.html 时管线每一步都失败并被 catch 掉，原始字节
+      // 被存成 <md5>.evil.html，再以 text/html 同源返回 → 存储型 XSS（可偷管理员 token）。
+      // 现在按**内容**判定类型，SVG 与非图片一律拒绝（要传非图片请走附件管理）。
+      const verified = assertUploadedImage(buffer, originalName);
+      fileType = safeImageExtension(fileType, verified.type);
+    }
     let buf = buffer;
     let currentSign = encryptFileMD5(buf);
     const staticConfigInDB = await this.settingProvider.getStaticSetting();
@@ -205,7 +221,8 @@ export class StaticProvider {
       compressSuccess = processed.compressSuccess;
       stegoEmbedded = processed.stego;
 
-      const hasFile = await this.getOneBySign(currentSign);
+      // 按 (sign, staticType) 去重：同内容的**附件**不该被当成已存在的图片
+      const hasFile = await this.getOneBySignAndType(currentSign, 'img');
 
       if (hasFile) {
         return {
@@ -216,9 +233,9 @@ export class StaticProvider {
     }
 
     const pureFileName = arr.slice(0, arr.length - 1).join('.');
-    let fileName = currentSign + '.' + file.originalname;
+    let fileName = currentSign + '.' + originalName;
     if (type == 'customPage') {
-      fileName = normalizeCustomPageRel(customPathname, file.originalname);
+      fileName = normalizeCustomPageRel(customPathname, originalName);
     }
     if (type == 'img' && checkTrue(staticConfigInDB.enableWebp) && compressSuccess) {
       fileName = currentSign + '.' + pureFileName + '.' + compressExt(compressFormat);
@@ -310,11 +327,22 @@ export class StaticProvider {
 
   async importItems(items: Static[]) {
     for (const each of items) {
-      const oldItem = await this.getOneBySign(each.sign);
-      if (!oldItem) {
-        await this.createInDB(each);
-      } else {
-        this.staticModel.updateOne({ _id: oldItem._id }, { each });
+      // 单条失败不应该让整次导入崩掉：以前这里既不 await、更新文档又写成 `{ each }`
+      // （`each` 不是 schema 字段，strict 模式剥掉后 driver 抛
+      // "Update document requires atomic operators"），未 await 就变成 unhandledRejection，
+      // Node 20 默认直接退出进程——接口已经回了「导入成功」，server 却在半路挂掉。
+      try {
+        const oldItem = await this.getOneBySign(each.sign);
+        if (!oldItem) {
+          await this.createInDB(each);
+        } else {
+          const { _id, ...fields } = each as any;
+          await this.staticModel.updateOne({ _id: oldItem._id }, { $set: fields });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `导入图片记录失败，已跳过：sign=${(each as any)?.sign} reason=${error?.message || error}`,
+        );
       }
     }
   }
@@ -326,24 +354,19 @@ export class StaticProvider {
   async fetchRemoteImage(
     link: string,
   ): Promise<{ buffer: Buffer; contentType?: string } | null> {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (compatible; VanBlog/1.0; +https://vanblog.mereith.com)',
-      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-    };
+    // 「转移外链图片」/「扫描文章图片」都走这里。以前是裸 axios + maxRedirects:5，
+    // 既不校验目标是不是内网，也不跟随重定向复查 → 管理员（或拿到 API token 的人）
+    // 可以让服务器去请求 169.254.169.254 / 127.0.0.1:2019，并把响应存进公开图床。
     const tryGet = async (url: string) => {
-      const res = await axios({
-        method: 'GET',
-        url,
-        responseType: 'arraybuffer',
-        timeout: 15000,
-        maxRedirects: 5,
-        headers,
+      const res = await fetchRemoteSafely(url, {
+        timeoutMs: 15000,
+        maxBytes: MAX_REMOTE_IMAGE_BYTES,
+        maxRedirects: 3,
+        userAgent: 'Mozilla/5.0 (compatible; VanBlog/1.0; +https://vanblog.mereith.com)',
       });
-      const contentType = String(res.headers?.['content-type'] || '');
-      return {
-        buffer: Buffer.isBuffer(res.data) ? res.data : Buffer.from(res.data),
-        contentType,
-      };
+      // 必须是真图片（魔数），否则丢弃：防止把内网文本响应存成图床文件
+      assertImageBuffer(res.buffer, url);
+      return { buffer: res.buffer, contentType: res.contentType };
     };
     try {
       return await tryGet(link);
@@ -351,7 +374,9 @@ export class StaticProvider {
       try {
         return await tryGet(encodeURI(link));
       } catch (retryErr) {
-        console.log(retryErr);
+        this.logger.warn(
+          `抓取远端图片失败：${link} reason=${(retryErr as Error)?.message || retryErr}`,
+        );
         return null;
       }
     }
@@ -577,8 +602,10 @@ export class StaticProvider {
     };
   }
   async deleteCustomPage(path: string) {
-    const folderName = path.replace('/', '');
-    // 直接删除文件夹
+    // 以前是 path.replace('/', '')：只去掉**第一个**斜杠，也不检查 `..`，
+    // 于是 `/a/../../../<目标>` 会被拼进 staticPath 再递归删除（rmSync recursive）。
+    // 统一走 normalizeCustomPageRel：任何 `..` 段直接 403。
+    const folderName = normalizeCustomPageRel(path);
     await this.localProvider.deleteCustomPageFolder(folderName);
   }
 
@@ -601,9 +628,17 @@ export class StaticProvider {
     return this.localProvider.deleteCustomPageFile(pathname, filePath);
   }
 
-  async deleteOneBySign(sign: string) {
+  async deleteOneBySign(sign: string, staticType?: string) {
     // 先删除实际上的。
-    const toDeleteData = await this.staticModel.findOne({ sign }).exec();
+    // 1) 记录不存在（重复点删除 / 列表过期）以前会在 .storageType 上抛 TypeError → 500；
+    // 2) 图片与附件可能同内容同 sign，必须按 staticType 限定，
+    //    否则「删图片」会把同 sign 的附件记录一起删掉（§7.4 明确禁止串味）。
+    const toDeleteData = await this.staticModel
+      .findOne(staticType ? { sign, staticType } : { sign })
+      .exec();
+    if (!toDeleteData) {
+      throw new BadRequestException('找不到该文件（可能已经被删除）');
+    }
     const storageType = toDeleteData.storageType;
     switch (storageType) {
       case 'local': {

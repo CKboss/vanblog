@@ -1,4 +1,8 @@
+/** 搜索类查询的时间上限：正文全文 $regex 扫描很贵，超时就放弃，别把库拖死。 */
+const SEARCH_MAX_TIME_MS = 5000;
+
 import {
+  Logger,
   BadRequestException,
   Inject,
   Injectable,
@@ -24,12 +28,14 @@ import { MetaProvider } from '../meta/meta.provider';
 import { VisitProvider } from '../visit/visit.provider';
 import { sleep } from 'src/utils/sleep';
 import { CategoryDocument } from 'src/scheme/category.schema';
-import { escapeRegExp } from 'src/utils/regex';
+import { escapeRegExp, safeSearchPattern } from 'src/utils/regex';
+import { asQueryString } from 'src/utils/sanitizeRequest';
 
 export type ArticleView = 'admin' | 'public' | 'list';
 
 @Injectable()
 export class ArticleProvider {
+  private readonly logger = new Logger(ArticleProvider.name);
   idLock = false;
   constructor(
     @InjectModel('Article')
@@ -236,7 +242,7 @@ export class ArticleProvider {
   async searchArticlesByLink(link: string) {
     const artciles = await this.articleModel.find(
       {
-        content: { $regex: link, $options: 'i' },
+        content: { $regex: safeSearchPattern(link), $options: 'i' },
         $or: [
           {
             deleted: false,
@@ -266,7 +272,11 @@ export class ArticleProvider {
     if (!cleaned.length) {
       return result;
     }
-    const pattern = cleaned.map(escapeRegExp).join('|');
+    // 单条链接限长：否则一个几 MB 的「链接」会拼出巨型 $regex，让每次查询都全表扫描
+    const pattern = cleaned
+      .map((link) => escapeRegExp(link.slice(0, 2048)))
+      .filter(Boolean)
+      .join('|');
     const articles = await this.articleModel.find(
       {
         content: { $regex: pattern, $options: 'i' },
@@ -473,15 +483,25 @@ export class ArticleProvider {
       const { id, ...createDto } = a;
       const oldArticle = await this.getById(id, 'admin');
       if (oldArticle) {
-        this.updateById(
-          oldArticle.id,
-          {
-            ...createDto,
-            deleted: false,
-            updatedAt: oldArticle.updatedAt || oldArticle.createdAt,
-          },
-          true,
-        );
+        // 必须 await：updateById 会因为路径名冲突等原因抛 BadRequestException，
+        // 不 await 就是 unhandledRejection → Node 20 直接退出进程（导入到一半 server 挂掉）
+        try {
+          await this.updateById(
+            oldArticle.id,
+            {
+              ...createDto,
+              deleted: false,
+              updatedAt: oldArticle.updatedAt || oldArticle.createdAt,
+            },
+            true,
+          );
+        } catch (error) {
+          this.logger.warn(
+            `导入文章失败，已跳过：id=${id} title=${(a as any)?.title} reason=${
+              error?.message || error
+            }`,
+          );
+        }
       } else {
         await this.create(
           {
@@ -556,6 +576,19 @@ export class ArticleProvider {
           },
         ],
       });
+      // 未鉴权的搜索不能变成「加密文章正文探测器」：
+      // 以前只排除 deleted/hidden，于是拿候选词反复搜 /api/public/search，
+      // 看加密文章的标题是否出现，就能一个词一个词地把受密码保护的正文试出来。
+      $and.push({
+        $or: [
+          { private: false },
+          { private: { $exists: false } },
+        ],
+      });
+      const privateCategories = await this.getPrivateCategoryNames();
+      if (privateCategories.length) {
+        $and.push({ category: { $nin: privateCategories } });
+      }
     }
     return await this.articleModel
       .find({
@@ -683,7 +716,7 @@ export class ArticleProvider {
       },
     ];
     const and = [];
-    let sort: any = { createdAt: -1 };
+    let sort: any = { createdAt: -1, id: -1 };
     if (isPublic) {
       $and.push({
         $or: [
@@ -699,16 +732,16 @@ export class ArticleProvider {
 
     if (option.sortTop) {
       if (option.sortTop == 'asc') {
-        sort = { top: 1 };
+        sort = { top: 1, id: -1 };
       } else {
-        sort = { top: -1 };
+        sort = { top: -1, id: -1 };
       }
     }
     if (option.sortViewer) {
       if (option.sortViewer == 'asc') {
-        sort = { viewer: 1 };
+        sort = { viewer: 1, id: -1 };
       } else {
-        sort = { viewer: -1 };
+        sort = { viewer: -1, id: -1 };
       }
     }
     if (option.sortCreatedAt) {
@@ -716,13 +749,14 @@ export class ArticleProvider {
         sort = { createdAt: 1 };
       }
     }
-    if (option.tags) {
-      const tags = option.tags.split(',');
+    const tagsParam = asQueryString(option.tags);
+    if (tagsParam) {
+      const tags = tagsParam.split(',');
       const or: any = [];
       tags.forEach((t) => {
         if (option.regMatch) {
           or.push({
-            tags: { $regex: `${t}`, $options: 'i' },
+            tags: { $regex: safeSearchPattern(t), $options: 'i' },
           });
         } else {
           or.push({
@@ -732,20 +766,22 @@ export class ArticleProvider {
       });
       and.push({ $or: or });
     }
-    if (option.category) {
+    const categoryParam = asQueryString(option.category);
+    if (categoryParam) {
       if (option.regMatch) {
         and.push({
-          category: { $regex: `${option.category}`, $options: 'i' },
+          category: { $regex: safeSearchPattern(categoryParam), $options: 'i' },
         });
       } else {
         and.push({
-          category: option.category,
+          category: categoryParam,
         });
       }
     }
-    if (option.title) {
+    const titleParam = asQueryString(option.title);
+    if (titleParam) {
       and.push({
-        title: { $regex: `${option.title}`, $options: 'i' },
+        title: { $regex: safeSearchPattern(titleParam), $options: 'i' },
       });
     }
     if (option.startTime || option.endTime) {
@@ -930,10 +966,18 @@ export class ArticleProvider {
   }
   async getByIdWithPassword(id: number | string, password: string): Promise<any> {
     const article: any = await this.getByIdOrPathname(id, 'admin');
-    if (!password) {
+    if (!article) {
       return null;
     }
-    if (!article) {
+    // 隐藏文章必须和 GET /api/public/article/:id 一样受 allowOpenHiddenPostByUrl 约束。
+    // 这个 POST 口子以前完全没检查 hidden，于是未登录也能拿到隐藏文章正文。
+    if (article.hidden) {
+      const siteInfo = await this.metaProvider.getSiteInfo();
+      if (!siteInfo?.allowOpenHiddenPostByUrl || siteInfo?.allowOpenHiddenPostByUrl == 'false') {
+        throw new NotFoundException('该文章是隐藏文章！');
+      }
+    }
+    if (!password) {
       return null;
     }
     const category =
@@ -941,17 +985,22 @@ export class ArticleProvider {
         name: article.category,
       })) || ({} as any);
 
-    const categoryPassword = category.private ? category.password : undefined;
-    const targetPassword = categoryPassword ? categoryPassword : article.password;
-    if (!targetPassword || targetPassword == '') {
-      return { ...(article?._doc || article), password: undefined };
-    } else {
-      if (targetPassword == password) {
-        return { ...(article?._doc || article), password: undefined };
-      } else {
-        return null;
-      }
+    const categoryPrivate = !!category.private;
+    const isPrivate = !!article.private || categoryPrivate;
+    const targetPassword = categoryPrivate ? category.password : article.password;
+    const plain = { ...(article?._doc || article), password: undefined };
+    if (!isPrivate) {
+      // 本来就没加密：GET 也会给全文
+      return plain;
     }
+    // 加密文章/加密分类：必须密码匹配才给正文。
+    // 旧实现在「标记了加密但没设密码」时直接返回全文，于是任何人随便填个密码
+    // 就能拿到 GET 接口特意抹掉 content 的那些文章（未鉴权的正文泄露）。
+    const supplied = asQueryString(password);
+    if (!targetPassword || !supplied || String(targetPassword) !== supplied) {
+      return null;
+    }
+    return plain;
   }
   async getByIdOrPathnameWithPreNext(id: string | number, view: ArticleView) {
     const curArticle = await this.getByIdOrPathname(id, view);
@@ -1085,14 +1134,28 @@ export class ArticleProvider {
     }));
   }
 
-  async searchByString(str: string, includeHidden: boolean): Promise<Article[]> {
+  /** 加密分类名列表（分类加密 = 分类下所有文章都加密）。 */
+  async getPrivateCategoryNames(): Promise<string[]> {
+    const categories = await this.categoryModal.find({ private: true }).exec();
+    return (categories || [])
+      .map((c: any) => String(c?.name))
+      .filter((name) => name && name !== 'undefined');
+  }
+
+  async searchByString(str: string | unknown, includeHidden: boolean): Promise<Article[]> {
+    // 用户输入必须转义：`(`/`[`/`*` 会让 Mongo 抛错变成 500，`(a+)+b` 可能灾难性回溯
+    const keyword = asQueryString(str) ?? '';
+    const pattern = safeSearchPattern(keyword);
+    if (!pattern) {
+      return [];
+    }
     const $and: any = [
       {
         $or: [
-          { content: { $regex: `${str}`, $options: 'i' } },
-          { title: { $regex: `${str}`, $options: 'i' } },
-          { category: { $regex: `${str}`, $options: 'i' } },
-          { tags: { $regex: `${str}`, $options: 'i' } },
+          { content: { $regex: pattern, $options: 'i' } },
+          { title: { $regex: pattern, $options: 'i' } },
+          { category: { $regex: pattern, $options: 'i' } },
+          { tags: { $regex: pattern, $options: 'i' } },
         ],
       },
       {
@@ -1122,13 +1185,17 @@ export class ArticleProvider {
       .find({
         $and,
       })
+      .maxTimeMS(SEARCH_MAX_TIME_MS)
       .exec();
-    const s = str.toLocaleLowerCase();
-    const titleData = rawData.filter((each) => each.title.toLocaleLowerCase().includes(s));
-    const contentData = rawData.filter((each) => each.content.toLocaleLowerCase().includes(s));
-    const categoryData = rawData.filter((each) => each.category.toLocaleLowerCase().includes(s));
+    const s = keyword.toLocaleLowerCase();
+    // 字段可能缺失（老数据 / JSON 导入 / category 没有默认值），
+    // 以前直接 .toLocaleLowerCase() 会抛 TypeError → 公开搜索 500，整站搜索都不可用
+    const text = (value: unknown) => String(value ?? '').toLocaleLowerCase();
+    const titleData = rawData.filter((each) => text(each.title).includes(s));
+    const contentData = rawData.filter((each) => text(each.content).includes(s));
+    const categoryData = rawData.filter((each) => text(each.category).includes(s));
     const tagData = rawData.filter((each) =>
-      each.tags.map((t) => t.toLocaleLowerCase()).includes(s),
+      (Array.isArray(each.tags) ? each.tags : []).map((t) => text(t)).includes(s),
     );
     const sortedData = [...titleData, ...contentData, ...tagData, ...categoryData];
     const resData = [];

@@ -1,3 +1,4 @@
+import { CategoryProvider } from '../category/category.provider';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { ArticleProvider } from '../article/article.provider';
@@ -19,6 +20,7 @@ export class RssProvider {
     private readonly metaProvider: MetaProvider,
     private readonly settingProvider: SettingProvider,
     private readonly markdownProvider: MarkdownProvider,
+    private readonly categoryProvider: CategoryProvider,
   ) {}
 
   async generateRssFeed(info?: string, delay?: number) {
@@ -38,9 +40,16 @@ export class RssProvider {
     this.logger.log(info + '重新生成 RSS 订阅');
     try {
       let articles = await this.articleProvider.getAll('public', false, false);
+      // 分类整体加密时，分类下的文章同样不能在 RSS 里给出全文。
+      // 以前只判断了 article.private，加密分类的文章正文会被原样发布到订阅源。
+      const allCategories = ((await this.categoryProvider.getAllCategories(true)) ||
+        []) as any[];
+      const privateCategories = new Set<string>(
+        allCategories.filter((c) => c?.private).map((c) => String(c?.name)),
+      );
       articles = articles.map((a: any) => {
         const article = a?._doc || a;
-        if (article.private) {
+        if (article.private || privateCategories.has(String(article.category))) {
           return { ...article, content: '此文章已加密' };
         } else {
           return article;
@@ -75,7 +84,7 @@ export class RssProvider {
         description: meta.siteInfo.siteDesc,
         id: siteUrl,
         link: siteUrl,
-        language: '	zh-cn',
+        language: 'zh-cn',
         image: siteLogo,
         favicon: favicon,
         copyright: `All rights reserved ${date.getFullYear()}, ${meta.siteInfo.author}`,

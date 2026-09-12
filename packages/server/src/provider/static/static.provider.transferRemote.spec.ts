@@ -1,6 +1,11 @@
 import { StaticProvider } from './static.provider';
 import * as imgCompress from 'src/utils/imgCompress';
 
+// fetchRemoteSafely 会对域名做 dns.lookup（防 SSRF），测试里固定解析到公网地址
+jest.mock('dns', () => ({
+  promises: { lookup: jest.fn(async () => ({ address: '93.184.216.34', family: 4 })) },
+  lookup: jest.fn((host, opts, cb) => cb(null, '93.184.216.34', 4)),
+}));
 jest.mock('src/utils/imgCompress', () => {
   const actual = jest.requireActual('src/utils/imgCompress');
   return {
@@ -52,7 +57,8 @@ function createProvider(staticSetting: any, stored: Array<{ realPath: string }> 
   return { provider, localProvider, saved };
 }
 
-const remotePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+// 远端抓回来的内容现在要过魔数校验，必须是合法图片
+const remotePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 
 describe('StaticProvider.transferRemoteImages (#434)', () => {
   beforeEach(() => {

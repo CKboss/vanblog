@@ -1,3 +1,4 @@
+import { config } from 'src/config';
 import { Body, Controller, Delete, Get, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -39,6 +40,10 @@ export class PipelineController {
   }
   @Post()
   async createPipeline(@Body() createPipelineDto: CreatePipelineDto) {
+    // 管线会 fork 子进程执行任意 JS，演示站必须禁掉（否则等于公开 RCE）
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const pipeline = await this.pipelineProvider.createPipeline(createPipelineDto);
     return {
       statusCode: 200,
@@ -47,6 +52,9 @@ export class PipelineController {
   }
   @Delete('/:id')
   async deletePipelineById(@Param('id') idString: string) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const id = parseInt(idString);
     const pipeline = await this.pipelineProvider.deletePipelineById(id);
     return {
@@ -59,6 +67,10 @@ export class PipelineController {
     @Param('id') idString: string,
     @Body() updatePipelineDto: CreatePipelineDto,
   ) {
+    // 同上
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const id = parseInt(idString);
     const pipeline = await this.pipelineProvider.updatePipelineById(id, updatePipelineDto);
     return {
@@ -68,6 +80,10 @@ export class PipelineController {
   }
   @Post('/trigger/:id')
   async triggerPipelineById(@Param('id') idString: string, @Body() triggerDto: { input?: any }) {
+    // 触发即执行任意 JS
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const id = parseInt(idString);
     const result = await this.pipelineProvider.triggerById(id, triggerDto.input);
     return {

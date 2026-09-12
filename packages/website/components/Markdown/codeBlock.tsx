@@ -33,9 +33,14 @@ export const codeBlockPlugin = () => (tree) => {
   visit(tree, (node) => {
     if (node.type === "element" && node.tagName === "pre") {
       const oldChildren = JSON.parse(JSON.stringify(node.children));
-      const codeProperties = oldChildren.find(
-        (child: any) => child.tagName === "code"
-      ).properties;
+      const codeNode = oldChildren.find((child: any) => child.tagName === "code");
+      // 正文里可以直接写 <pre>纯文本</pre>（sanitize 白名单允许 pre），
+      // 这种 pre 没有 code 子节点，以前会在 .properties 上抛 TypeError，
+      // 整篇文章的 SSR 直接 500（列表卡也会跟着炸）。
+      if (!codeNode) {
+        return;
+      }
+      const codeProperties = codeNode.properties || (codeNode.properties = {});
       let language = "";
       if (codeProperties.className) {
         for (const each of codeProperties.className) {

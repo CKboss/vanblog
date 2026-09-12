@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import {
+  Req, Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { CreateCategoryDto, ReorderCategoriesDto, UpdateCategoryDto } from 'src/types/category.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -18,13 +19,24 @@ export class CategoryController {
   ) {}
 
   @Get('/all')
-  async getAllTags(@Query('detail') withDetail?: string) {
+  async getAllTags(@Query('detail') withDetail?: string, @Req() req?: any) {
     let withAllData = false;
     if (withDetail && withDetail == 'true') withAllData = true;
     const data = await this.categoryProvider.getAllCategories(withAllData);
+    // 这个路由在 publicRoutes 里（协作者也能调），而 detail=true 会把**分类加密密码明文**
+    // 一起返回。协作者不该拿到，只有管理员需要（后台编辑分类时要回填）。
+    const isCollaborator = req?.user?.type === 'collaborator';
+    const safeData =
+      withAllData && isCollaborator && Array.isArray(data)
+        ? data.map((item: any) => {
+            const plain = typeof item?.toObject === 'function' ? item.toObject() : { ...item };
+            delete plain.password;
+            return plain;
+          })
+        : data;
     return {
       statusCode: 200,
-      data,
+      data: safeData,
     };
   }
 

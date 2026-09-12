@@ -26,6 +26,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as dayjs from 'dayjs';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { JSON_IMPORT_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
 import { diskStorage } from 'multer';
 import { removeID } from 'src/utils/removeId';
 import { ViewerProvider } from 'src/provider/viewer/viewer.provider';
@@ -45,7 +46,9 @@ const RESTORE_UPLOAD_OPTIONS = {
   storage: diskStorage({
     destination: (_req: any, _file: any, cb: (err: Error | null, dir?: string) => void) => {
       try {
-        const dir = path.join(config.staticPath, 'tmp');
+        // 不能放在 staticPath 下面：<static>/tmp/ 是匿名可下载的，而这里暂存的
+        // 是整站备份（含密码哈希与 jwt 密钥）。放到备份目录（不在静态目录内）。
+        const dir = path.join(config.backupPath, 'upload-tmp');
         fs.mkdirSync(dir, { recursive: true });
         cb(null, dir);
       } catch (err) {
@@ -91,6 +94,10 @@ export class BackupController {
 
   @Get('export')
   async getAll(@Res() res: Response) {
+    // 导出会打包整站数据
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const articles = await this.articleProvider.getAll('admin', true);
     const categoryDocs = await this.categoryProvider.getAllCategories(true);
     const categories = (categoryDocs || []).map((item) => toExportCategory(item));
@@ -213,21 +220,25 @@ export class BackupController {
     @UploadedFile() file: any,
     @Body() body: { name?: string; confirm?: string; withStatic?: string },
   ) {
+    // 整个方法体都要在 try 里：演示站/confirm 校验提前 return/throw 时，
+    // multer 已经把上传的归档（几百 MB）落到磁盘了，不清理就永久泄漏
+    const uploadedPath = file?.path;
+    try {
     if (config.demo && config.demo == 'true') {
       return { statusCode: 401, message: '演示站禁止修改此项！' };
     }
     if (!checkTrue(body?.confirm)) {
       throw new BadRequestException('恢复会覆盖当前全部数据，请带 confirm=true 再调用一次');
     }
-    let archivePath = file?.path;
-    let uploaded = Boolean(file?.path);
+    let archivePath = uploadedPath;
+    const uploaded = Boolean(uploadedPath);
     if (!archivePath) {
       if (!body?.name) {
         throw new BadRequestException('请指定要恢复的备份（name），或直接上传备份文件');
       }
       archivePath = this.fullBackupProvider.resolveArchive(body.name);
     }
-    try {
+    {
       const result = await this.fullBackupProvider.restore(
         archivePath,
         body?.withStatic === undefined ? true : checkTrue(body.withStatic),
@@ -245,9 +256,10 @@ export class BackupController {
           uploaded,
         },
       };
+    }
     } finally {
-      if (uploaded && archivePath) {
-        fs.rmSync(archivePath, { force: true });
+      if (uploadedPath) {
+        fs.rmSync(uploadedPath, { force: true });
       }
     }
   }
@@ -276,7 +288,7 @@ export class BackupController {
   }
 
   @Post('/import')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', JSON_IMPORT_UPLOAD_OPTIONS))
   async importAll(@UploadedFile() file: Express.Multer.File) {
     if (config.demo && config.demo == 'true') {
       return {

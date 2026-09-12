@@ -209,12 +209,14 @@ export class LocalProvider {
   }
   async exportAllImg() {
     const src = path.join(config.staticPath, 'img');
-    const dst = path.join(
-      config.staticPath,
-      'export',
-      `export-img-${dayjs().format('YYYY-MM-DD')}.zip`,
-    );
-    const dstSrc = `/static/export/export-img-${dayjs().format('YYYY-MM-DD')}.zip`;
+    // 归档不能再放在 <static>/export/ 下面：静态目录是**匿名可读**的，
+    // 而文件名只有日期（export-img-2026-09-12.zip），任何人都能猜出来把整个图床拖走
+    // （包括只被草稿/隐藏/已删除文章引用的图）。改放 config.backupPath/export/。
+    const zipName = `export-img-${dayjs().format('YYYY-MM-DD')}.zip`;
+    const exportDir = path.join(config.backupPath, 'export');
+    checkOrCreate(exportDir);
+    const dst = path.join(exportDir, zipName);
+    const dstSrc = zipName;
 
     const compressPromise = new Promise((resolve, reject) => {
       compressing.zip
@@ -248,9 +250,11 @@ export class LocalProvider {
     const src = path.join(config.staticPath, folder);
     checkOrCreate(src);
     const zipName = `export-${folder}-${dayjs().format('YYYY-MM-DD')}.zip`;
-    const dst = path.join(config.staticPath, 'export', zipName);
-    checkOrCreateByFilePath(dst);
-    const dstSrc = `/static/export/${zipName}`;
+    // 同上：不放静态目录，下载走鉴权接口
+    const exportDir = path.join(config.backupPath, 'export');
+    checkOrCreate(exportDir);
+    const dst = path.join(exportDir, zipName);
+    const dstSrc = zipName;
     try {
       await compressing.zip.compressDir(src, dst);
       return { success: true, path: dstSrc };

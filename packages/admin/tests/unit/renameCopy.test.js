@@ -38,7 +38,12 @@ describe('admin rename copy (#194)', () => {
 
   it('keeps category and tag rename API routes unchanged', () => {
     assert.match(apiSrc, /request\(`\/api\/admin\/category\/\$\{encodeQuerystring\(name\)\}`/);
-    assert.match(apiSrc, /request\(`\/api\/admin\/tag\/\$\{name\}\?value=\$\{value\}`/);
+    // 名字和新值都要编码：标签叫 `C#` 时，未编码的 `#` 会让路径被截断，
+    // 结果改到（或删掉）另一个叫 `C` 的标签，界面还提示成功
+    assert.match(
+      apiSrc,
+      /request\(`\/api\/admin\/tag\/\$\{encodeQuerystring\(name\)\}\?value=\$\{encodeQuerystring\(value\)\}`/,
+    );
     assert.match(categorySrc, /updateCategory\(record\.name, values\)/);
     assert.match(tagSrc, /updateTag\(record\.name, values\.newName\)/);
   });

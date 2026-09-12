@@ -18,6 +18,12 @@ describe('front matter（RSS/摘要用）', () => {
     expect(getDescription('没有 front matter<!-- more -->后面')).toBe('没有 front matter');
   });
 
+  it('以分隔线开头的正文不会被误删（数据丢失回归）', () => {
+    const src = '---\n\n# 大标题\n\n正文第一段\n\n---\n\n后半部分内容\n';
+    expect(hasFrontMatter(src)).toBe(false);
+    expect(stripFrontMatter(src)).toBe(src);
+  });
+
   it('server 端 RSS 描述确实走了 stripFrontMatter', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const src = require('fs').readFileSync(

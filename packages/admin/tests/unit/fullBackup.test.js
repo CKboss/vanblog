@@ -153,7 +153,10 @@ describe('整站备份：服务端', () => {
   it('备份目录即使在静态目录下也拦掉匿名访问', () => {
     const main = readRepo('packages/server/src/main.ts');
     assert.match(main, /backupUnderStatic/);
-    assert.match(main, /\/static\/export\/backups\//);
+    // 整个 /static/export/ 都匿名拒绝（导出归档以前放这里，文件名只有日期，谁都能猜）
+    assert.match(main, /\/static\/export\//);
+    // 上传/导出的临时目录同样不给匿名访问
+    assert.match(main, /\/static\/tmp\//);
     assert.match(main, /statusCode = 403/);
   });
 });

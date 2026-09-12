@@ -100,9 +100,11 @@ describe('runCwebp / compressImgToWebp', () => {
     expect(args).toEqual([
       '-q',
       '80',
-      expect.stringMatching(/^\/tmp\/temp\d+$/),
+      // 临时文件现在放在随机目录里（mkdtemp），不再是可预测的 /tmp/temp<时间戳>：
+      // 可预测名字会同毫秒并发互相覆盖，writeFileSync 还会跟随符号链接
+      expect.stringMatching(/vanblog-webp-[\w-]+\/in$/),
       '-o',
-      expect.stringMatching(/^\/tmp\/temp\d+\.webp$/),
+      expect.stringMatching(/vanblog-webp-[\w-]+\/out\.webp$/),
     ]);
     expect((options as { shell?: boolean } | undefined)?.shell).toBeFalsy();
     expect(JSON.parse(fs.readFileSync(recorder, 'utf8'))).toEqual(args);

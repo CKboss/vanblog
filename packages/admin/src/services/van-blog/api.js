@@ -280,7 +280,7 @@ export async function createCategory(body) {
   });
 }
 export async function updateCategory(name, value) {
-  return request(`/api/admin/category/${name}`, {
+  return request(`/api/admin/category/${encodeQuerystring(name)}`, {
     method: 'PUT',
     data: value,
   });
@@ -292,12 +292,12 @@ export async function reorderCategories(names) {
   });
 }
 export async function updateTag(name, value) {
-  return request(`/api/admin/tag/${name}?value=${value}`, {
+  return request(`/api/admin/tag/${encodeQuerystring(name)}?value=${encodeQuerystring(value)}`, {
     method: 'PUT',
   });
 }
 export async function deleteTag(name) {
-  return request(`/api/admin/tag/${name}`, {
+  return request(`/api/admin/tag/${encodeQuerystring(name)}`, {
     method: 'DELETE',
   });
 }
@@ -370,7 +370,7 @@ export async function updateDonate(body) {
   });
 }
 export async function deleteDonate(name) {
-  return request(`/api/admin/meta/reward/${name}`, {
+  return request(`/api/admin/meta/reward/${encodeQuerystring(name)}`, {
     method: 'DELETE',
   });
 }
@@ -731,5 +731,18 @@ export async function deleteApiToken(id) {
 export async function getAllApiTokens() {
   return request(`/api/admin/token`, {
     method: 'GET',
+  });
+}
+
+/**
+ * 下载「导出全部图片 / 导出全部附件」的归档。
+ * 归档不再放在匿名可读的 /static/export/ 下，必须带 token 走这个接口。
+ */
+export async function downloadExportArchive(name) {
+  return request(`/api/admin/export/archive?name=${encodeURIComponent(name)}`, {
+    method: 'GET',
+    responseType: 'blob',
+    getResponse: true,
+    timeout: 10 * 60 * 1000,
   });
 }

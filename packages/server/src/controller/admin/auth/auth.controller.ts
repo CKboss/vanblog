@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Request,
   Post,
@@ -33,12 +34,15 @@ export class AuthController {
     private readonly cacheProvider: CacheProvider,
     private readonly initProvider: InitProvider,
     private readonly pipelineProvider: PipelineProvider,
+    private readonly loginGuard: LoginGuard,
   ) {}
 
   @UseGuards(LoginGuard, AuthGuard('local'))
   @Post('/login')
   async login(@Request() request: any) {
     if (request?.user?.fail) {
+      // 只有**失败**才计数（旧实现连成功登录也计数，正常用户会被自己锁在门外）
+      await this.loginGuard.recordFailure(request);
       this.logProvider.login(request, false);
       throw new UnauthorizedException({
         statusCode: 401,
@@ -46,6 +50,7 @@ export class AuthController {
       });
     }
     // 能到这里登陆就成功了
+    await this.loginGuard.reset(request);
     this.logProvider.login(request, true);
     const data = await this.authProvider.login(request.user);
     this.pipelineProvider.dispatchEvent('login', data);
@@ -87,9 +92,19 @@ export class AuthController {
         message: '恢复密钥错误！',
       });
     }
+    // 这是「忘记密码」的自救通道，参数不校验的话：空密码会把账号密码哈希写成空串，
+    // 之后**任何密码都登不进来**，只能再去改库——自救工具反而把人锁死。
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    const password = typeof body?.password === 'string' ? body.password : '';
+    if (!name || name.length > 50) {
+      throw new BadRequestException('用户名不合法（1-50 个字符）');
+    }
+    if (!password || password.length > 200) {
+      throw new BadRequestException('密码不合法（1-200 个字符）');
+    }
     await this.userProvider.updateUser({
-      name: body.name,
-      password: body.password,
+      name,
+      password,
     });
     await this.initProvider.initRestoreKey();
     setTimeout(() => {

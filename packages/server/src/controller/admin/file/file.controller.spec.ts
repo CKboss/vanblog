@@ -95,7 +95,7 @@ describe('FileController', () => {
 
     await controller.delete(SIGN);
 
-    expect(staticProvider.deleteOneBySign).toHaveBeenCalledWith(SIGN);
+    expect(staticProvider.deleteOneBySign).toHaveBeenCalledWith(SIGN, 'file');
   });
 
   it('blocks writes on the demo site', async () => {

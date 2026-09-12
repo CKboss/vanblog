@@ -49,7 +49,8 @@ function createProvider(staticSetting: any) {
 
 const pngFile = {
   originalname: 'shot.png',
-  buffer: Buffer.from('fake-png'),
+  // 上传现在会按内容校验「真的是图片」，所以 fixture 必须是合法 PNG
+  buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
 };
 
 describe('StaticProvider upload compress format (#423)', () => {

@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -843,17 +843,152 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - e2e 验证：数学文章（`class="katex"` SSR 出现 13 处）、临时冒烟文章（mermaid 代码块进 DOM、
   KaTeX 渲染、hljs 高亮、行号、复制按钮全在，且页面里没有内联 mermaid 源码）→ 测完已删文章；
   `/ /post/1 /about /timeline /category /link` 全 200。
-- 文档：`docs/advanced/performance.md`（新页，含数据、原理和「别做的事」清单）。
+- 文档：`docs/advanced/performance.md`（新页，含数据、原理和「别做的事」清单）；
+  安全相关的用户文档在 `docs/advanced/security.md`（见 §7.11）。
 - 测试：`packages/website/__tests__/perfBudget.spec.ts`(14，守卫懒加载结构、嗅探规则、图片属性、
   构建配置)、`packages/server/src/utils/staticCache.spec.ts`(4)。
 
-### 7.11 测试基线（本分支最后一次全量运行的结果）
+### 7.11 全站 bug / 安全审计与修复（四路并行审计后的批量修复）
+
+用四个只读审计代理分别查了「认证与权限」「文件与上传」「注入与数据暴露」「功能正确性」，
+再逐条验证 + 修复。面向用户的说明在 `docs/advanced/security.md`，这里只记**改了什么、为什么**。
+
+**注入 / 输入校验**
+- 新增 `utils/sanitizeRequest.ts`：`stripOperatorKeys()`（递归删 `$*` / `__proto__` / `constructor` / `prototype`）
+  + `asQueryString()`，在 `main.ts` 里 `app.use(sanitizeRequestPayloads)` 挂到所有路由之前。
+  起因：项目**没有任何 ValidationPipe**，Express 的 qs 会把 `?category[$ne]=x` 变成对象直接进 Mongo 过滤器
+  （实测 `?category[$regex]=客$` 能拿到全站文章正文，`?path[$ne]=` 能把 custompages 文档连 `$__`/`_doc` 一起吐出来）。
+- `utils/regex.ts` 增加 `safeSearchPattern()`（转义 + trim + 200 字上限），接到**所有** `$regex` 站点：
+  `article.provider` 的 searchByString / getByOption(tags,category,title) / searchArticlesByLink、
+  `draft.provider` 同四处。实测修复前 `?value=(`、`[`、`*`、`a{2,1}` 全部 500；草稿搜索的
+  `` `*${str}*` `` 更是**任何输入都非法**（`*` 开头 = nothing to repeat）。搜索另加 `maxTimeMS(5000)`。
+- `searchByString` 的后置过滤改成 `String(value ?? '')`：`category` 没有 schema 默认值，
+  老数据/JSON 导入的文章缺字段时 `.toLocaleLowerCase()` 会抛 TypeError → 整站搜索 500。
+- 公开搜索**排除加密文章与加密分类**（`getPrivateCategoryNames()` + `$nin`）：否则可以拿候选词反复搜，
+  看加密文章标题是否出现，一个词一个词把受密码保护的正文试出来。
+
+**认证 / 权限**
+- `LoginGuard` 重写：只统计**失败**（计数移到 controller：失败 `recordFailure()`、成功 `reset()`）、
+  阈值读设置里的 `maxRetryTimes`/`durationSeconds`（原来写死 3/60）、没有设置行时**默认开启**（5 次 / 300 秒）、
+  key 用新的 `pickSocketIp()`（原来用 `pickClientIp()`，它优先读 cf-connecting-ip/x-real-ip/XFF，
+  客户端随便换一个头就能无限试密码，还能用受害者 IP 把对方锁死）。
+  原来还在限流路径上 `await getNetIp()` → 每次登录都同步请求第三方 `cip.cc`，**没有超时**。
+- `getNetIp()`：加 3 秒超时（`VAN_BLOG_IP_GEO_TIMEOUT`）、`VANBLOG_DISABLE_IP_GEO=true` 可完全关闭、
+  IP 拼进 URL 前 `encodeURIComponent`（值来自请求头）。
+- `validateUser()`：入参为空或算出的哈希为空、或库里存的哈希为空 → 直接失败。
+  起因：`encryptPassword()` 任一入参为空返回 `''`，而旧 `updateUser` 会把 `''` 写进库 →
+  **空密码可以登录**该账号。
+- `updateUser()` / `createCollaborator()` / `updateCollaborator()`：校验用户名密码（1-50 / 1-200），
+  只写白名单字段。旧实现 `{...dto}` 直接展开进 Mongo：`PUT /api/admin/auth` 能改自己的 `id`，
+  建协作者时 `{type:'admin'}` 能覆盖掉前面的 `type:'collaborator'`（等于造第二个管理员）。
+- `POST /api/admin/auth/restore`（忘记密码自救通道）同样校验：以前空密码会把账号写成空哈希，自救变自锁。
+- `AccessGuard`：`!user` 与 `catch` 分支从 `return true` 改成 `return false`（失败关门）。
+- `jwt.strategy`：协作者已删但 token 未过期时读 `user.permissions` 会 500 → 改成 401。
+- 分类列表 `?detail=true` 对**协作者**脱敏 `password`（这个路由在 publicRoutes 里，任何协作者都能调，
+  原来能读到所有加密分类的明文密码）。
+- `caddy/ask`（on-demand TLS 回调，必须无鉴权）加白名单：`siteInfo.baseUrl` + https 设置 + 已登记 subjects，
+  其余 403；`VANBLOG_CADDY_ASK_ALLOW_ALL=true` 可恢复旧行为。原来任何非 IPv4 域名都批准。
+- 演示站（`demo:'true'`）补上缺失的写操作拦截：**管线 create/update/delete/trigger（fork 执行任意 JS = RCE）**、
+  草稿增改删、customPage 上传、图片上传、ISR 触发/配置、旧版 JSON 备份导出。
+- waline 启动日志不再整份打印 env（里面有 `MONGO_PASSWORD`、`JWT_TOKEN`＝本站 jwt 签名密钥、`SMTP_PASS`），
+  改成敏感键打 `[REDACTED]`。
+- `main.ts` 加 `process.on('unhandledRejection'/'uncaughtException')` 记录：Node 20 默认未处理 rejection 直接退出，
+  项目里有大量 fire-and-forget 写库（每次页面浏览的计数、菜单清洗、sitemap…），一次 Mongo 抖动就能带走整个进程。
+
+**上传 / 文件 / 静态服务**
+- 新增 `utils/uploadLimits.ts`：`assertUploadedImage()`（按**内容**判定：魔数/image-size + 拒绝 SVG + 1 亿像素上限）、
+  `safeImageExtension()`、`IMAGE_UPLOAD_OPTIONS`（50MB + 后缀过滤）、`CUSTOM_PAGE_UPLOAD_OPTIONS`（200MB）、
+  `JSON_IMPORT_UPLOAD_OPTIONS`（200MB）。图床上传/替换/隐写检测三处 `FileInterceptor` 全部接上。
+  起因（审计里最严重的一条）：图片接口以前**不校验内容**，上传 `evil.html` 时管线每一步失败都被 catch，
+  原始字节被存成 `/static/img/<md5>.evil.html`，再被静态服务以 `text/html` **同源**返回 → 存储型 XSS →
+  偷管理员 token → 管线接口 RCE。实测现在 html / 假 png 都 400，真 png 正常。
+- `applyStaticAssetHeaders`：`nosniff` 覆盖**整个**静态目录（原来只在 `<static>/file/` 下），
+  html/svg/js/css 等类型无论在哪个子目录都强制下载。
+- 图片上传的 latin1 文件名（`decodeUploadFileName`）补到图片/自定义页面这条老路径（附件早就修了）。
+- `deleteOneBySign(sign, staticType?)`：记录不存在时返回可读 400（原来 `.storageType` 空指针 500），
+  并按 staticType 限定（图片与附件同内容同 sign 时会互相误删）；上传去重同样改成 `getOneBySignAndType(sign,'img')`。
+- `deleteCustomPage` 用 `normalizeCustomPageRel()`：原来 `path.replace('/','')` 只去掉第一个斜杠且不查 `..`，
+  配合 `rmSync(recursive)` 能递归删到静态目录外。
+- `utils/webp.ts`：临时文件改 `mkdtempSync`（随机目录、0600、`wx`），并加 `finally` 清理。
+  原来 `/tmp/temp${Date.now()}` 无 finally：压缩一失败整块 buffer 永久留在 /tmp（反复上传即可写满磁盘），
+  同毫秒并发互相覆盖，`writeFileSync` 还会跟随符号链接。
+- 「导出全部图片/附件」的归档从 `<static>/export/` 搬到 `config.backupPath/export/`，
+  新增鉴权下载 `GET /api/admin/export/archive?name=`（basename + `export-` 前缀校验，下载后删除），
+  后台两个入口改成 blob 下载（`services/van-blog/downloadArchive.ts`）。
+  原来归档匿名可读、文件名只有日期（实测 `GET /static/export/export-file-<日期>.zip` → 200），
+  而且 `ImgTab.jsx` 里 `link.href = data`（对象）等于**这个按钮一直是坏的**。
+  `main.ts` 的匿名拒绝清单扩到整个 `/static/export/` + `/static/tmp/` + `/static/upload-tmp/`。
+- 恢复上传的暂存目录从 `<static>/tmp` 搬到 `<backupPath>/upload-tmp`，并把整个 handler 包进 try/finally
+  （演示站/confirm 校验提前 return/throw 时，multer 已经把几百 MB 落盘了）。
+
+**SSRF**
+- 新增 `utils/safeFetch.ts`：`fetchRemoteSafely()`（`maxRedirects: 0` + **每一跳重新 `assertSafeRemoteUrl`** +
+  体积/超时上限）与 `detectImageByMagic()`/`assertImageBuffer()`。
+  `markdownExport.provider.fetchRemote` 与 `static.provider.fetchRemoteImage`（转移外链图片 / 扫描文章图片）都换成它。
+  起因：`assertSafeRemoteUrl` 只校验第一个 URL，而 axios 默认跟随 302 → 攻击者用自己的域名过检再跳
+  `169.254.169.254`/`127.0.0.1:2019`，响应体被打进 zip 回传（**可读回显**的 SSRF，协作者即可调用）。
+
+**备份 / 恢复（自己的功能，审计发现 4 处）**
+- 空集合恢复：没有 `insertMany` 就不会创建 `*__vanblog_restore` 临时集合，`rename` 抛
+  "Source collection does not exist" → **前面的集合已换、后面的原样不动**，变成看不懂的半恢复 + 500。
+  现在 0 条时显式 `db.createCollection(tmpName)`。
+- 恢复失败：`try/catch` 里 `tmp.drop()` 清残留，并抛 `BadRequestException`（带集合名）。
+- 导出失败：删掉半成品归档（否则备份列表里会出现一个坏归档）、子进程 `SIGKILL`、`BadRequestException`；
+  `tar` 退出码 1（"file changed as we read it"，`cp -al` 窗口里正好替换图片会碰到）不再当致命错误。
+- 压缩/解压管道给 `compressor.stdin` / `tar.stdin` 挂 `error` 监听：压缩器被 OOM kill 时写 stdin 会 EPIPE，
+  没有监听就是 unhandledRejection → 进程退出。
+- `FullBackupProvider` 加 `serialize()` 串行队列：临时集合名固定、归档名只精确到秒，
+  两个并发导出/恢复会互相截断却都返回"成功"。
+
+**功能 bug（非安全）**
+- `<pre>` 里没有 `<code>` 时 `codeBlock.tsx` 会在 `.properties` 上抛 TypeError → **整篇文章 SSR 500**，
+  列表卡也跟着炸（正文里直接写 `<pre>纯文本</pre>` 就能触发，而 sanitize 白名单允许 pre）。
+- `stripFrontMatter` 只在「每行都像 YAML」时才剥（`looksLikeYaml`）：原来只看 `---`，
+  正文以分隔线开头、后面又有一条分隔线时，**中间的标题和第一段会被整段删掉**（文章页/摘要/RSS 都受影响）。
+  这是上一轮 §7.9 我自己引入的，审计抓出来了。
+- 前台「编辑」按钮：`props.id` 现在是拼音别名，后台编辑器只认数字 id → 打开空编辑器 + "无效的文档 ID"。
+  新增 `numericId` prop（4 个调用点已传），只给编辑链接用，链接/复制仍是别名。
+- `utils/auth.ts checkLogin()` 第一行就 `return true`（真判断是死代码）→ 匿名访客也能看到「编辑」按钮。
+- `batch.ts batchDelete`：`fn(id).finally()` 把失败也计数 → token 过期/500 时同时弹「登录失效」和「批量删除成功！」，
+  实际一条没删；空选择还永远不 settle。改 `Promise.allSettled`。
+- 标签/分类/打赏的重命名与删除 URL 未编码：标签叫 `C#` 时 DELETE 变成 `/api/admin/tag/C`，
+  **改到/删掉另一个标签**，界面还提示成功。四处都加 `encodeQuerystring`。
+- 列表排序加唯一 tiebreaker（`{viewer:-1}` → `{viewer:-1, id:-1}`）：Mongo 排序不稳定，翻页会重复+漏行。
+- `POST /api/public/viewer`：缺 Referer 时 `new URL(undefined)` 抛错 → 未鉴权接口 500（每次页面浏览都调）；
+  现在 try/catch + 回落 query.path + 500 字限长。
+- `customPage` 公开接口：`{...mongooseDoc}` 会把 `$__`/`$isNew`/`_doc` 吐给公网，改成只返回 name/path/type/html；
+  `?path[$ne]=x` 由 500 变 404。前台拼 URL 补 `encodeURIComponent`。
+- 草稿 `publish()` 空值检查（双击发布 → 第二次 `draft.title` TypeError → 500）。
+- `setting.provider` 里 `const toInsert = defaultMenu` 会**就地修改导出常量**（init 之后拿到的默认菜单是被改过的）。
+- RSS `language: '\tzh-cn'` 里有个真制表符 → feed 校验不通过。
+- markdown 图片 `className += " img-zoom"` 在 className 不存在时得到 `"undefined img-zoom"`。
+- `importArticles` / `importDrafts` / `importItems` 三处未 await 的写操作：失败即 unhandledRejection → 进程退出；
+  `importItems` 的更新文档还写成 `{ each }`（非原子操作符，mongoose 静默剥成 `{}`，重复导入永远不更新）。
+
+**审计发现但本轮未修（记下来别忘）**
+- 计数（viewer/visited）是读-改-写而非 `$inc`，`visits` 表 `(date,pathname)` 没有唯一索引 → 并发首日访问会写重行、少计数。
+- 拼音别名上线后 `/post/<id>` 与 `/post/<slug>` 都返回 200 且无 canonical/redirect，访问量按 pathname 分家；
+  公开列表接口 `pageSize=-1` 会把全部文章正文一次拉走（前端静态生成也依赖它，不能简单封）。
+- `getNewId()` 的 idLock 提前释放且不是异常安全的（并发新建可能撞唯一索引；`find()` 抛错后锁永远不释放）。
+- 管线执行没有超时/`error`/`exit` 监听 → 脚本不发消息就让**保存文章**永久挂住；`spawnSync('pnpm','add')` 阻塞事件循环。
+- 改任意站点信息都会重启整个前台进程（`websiteProvider.restart`），且 `run()` 没有并发保护。
+- 「本地化远程图片」的 `extractImageRefs` 没有屏蔽代码块（导出那条路径有 `maskCodeRegions`）→ 会改坏文档里的示例；
+  `parseImgLinksOfMarkdown` 会把 alt 文本当成链接（导致误报失效图片 + 写入垃圾 statics 记录）。
+- 前台：TOC scroll-spy 闭包过期（客户端跳转后高亮/地址栏是上一篇的标题）、缺文章时返回 200 软 404 并污染 ISR 缓存、
+  `getArticles.ts` 手拼查询串未编码（标签 `C++` 会显示"此标签不存在"）、`/page/abc` 渲染成第 1 页、
+  多处 `.then(setLoading(false))` 没有 catch → 失败后转圈卡死、`pages/api/revalidate` 没有 secret（独立部署 website 镜像时可达）。
+- 安全侧遗留：文章/分类密码明文存储且 `==` 比较、解锁接口无次数限制；管理员口令是 sha256 套 sha256（非 bcrypt/argon2）；
+  除登录外无全局限流；`/swagger` 公开；没有全局 ValidationPipe（当前净化中间件是黑名单不是白名单）；
+  `init` 接口无守卫（靠"库里有没有用户"判断）；API token 有效期 100 年。
+- `next build` 仍有约 27 处 `__tests__/*.spec.ts` 里的类型错误（不影响运行），所以留了 `VANBLOG_SKIP_TYPECHECK`。
+
+### 7.12 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 518 用例：517 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 49 文件 / 433 用例全绿 |
-| admin `node --test tests/unit` | 53 文件 / 192 用例全绿 |
+| server `jest` | 519 用例：518 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 49 文件 / 435 用例全绿 |
+| admin `node --test tests/unit` | 54 文件 / 222 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -863,7 +998,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.11 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.12 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

@@ -262,7 +262,8 @@ export async function getCustomPageByPath(
   path: string
 ): Promise<CustomPage | null> {
   try {
-    const url = `${config.baseUrl}api/public/customPage?path=${path}`;
+    // path 必须编码：自定义页面路径里出现空格 / & / # 时原来会拼出错误的查询串
+    const url = `${config.baseUrl}api/public/customPage?path=${encodeURIComponent(path)}`;
     const res = await fetch(url);
     const { statusCode, data } = await res.json();
     if (statusCode == 200) {

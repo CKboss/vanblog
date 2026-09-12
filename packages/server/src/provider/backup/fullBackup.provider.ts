@@ -23,6 +23,24 @@ import { FullBackupManifest } from 'src/utils/backupCodec';
  */
 @Injectable()
 export class FullBackupProvider {
+  /**
+   * 备份 / 恢复 / 删除必须**串行**：
+   * - 恢复用的临时集合名是固定的 `<coll>__vanblog_restore`，两个并发恢复会互相 deleteMany，
+   *   结果是集合被静默截断；
+   * - 归档名只精确到秒，两个并发导出会写同一个文件名（后一个 truncate 前一个），
+   *   却都返回"成功"；
+   * - 恢复过程中导出会拿到一个正在被替换的库。
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
   logger = new Logger(FullBackupProvider.name);
 
   constructor(@InjectConnection() private readonly connection: Connection) {}
@@ -57,6 +75,10 @@ export class FullBackupProvider {
   }
 
   async export(format?: string): Promise<FullBackupResult> {
+    return this.serialize(() => this.doExport(format));
+  }
+
+  private async doExport(format?: string): Promise<FullBackupResult> {
     const result = await createFullBackup({
       client: this.client,
       staticPath: config.staticPath,
@@ -87,6 +109,10 @@ export class FullBackupProvider {
   }
 
   async restore(archivePath: string, withStatic = true): Promise<RestoreResult> {
+    return this.serialize(() => this.doRestore(archivePath, withStatic));
+  }
+
+  private async doRestore(archivePath: string, withStatic = true): Promise<RestoreResult> {
     const result = await restoreFullBackup({
       client: this.client,
       staticPath: config.staticPath,

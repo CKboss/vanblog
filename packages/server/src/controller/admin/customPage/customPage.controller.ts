@@ -14,6 +14,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { CUSTOM_PAGE_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -33,12 +34,16 @@ export class CustomPageController {
     private readonly staticProvider: StaticProvider,
   ) {}
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', CUSTOM_PAGE_UPLOAD_OPTIONS))
   async upload(
     @UploadedFile() file: any,
     @Query('path') pagePath: string,
     @Query('name') name: string,
   ) {
+    // 会往静态目录写文件
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     if (!file) {
       throw new HttpException('未收到上传文件', HttpStatus.BAD_REQUEST);
     }

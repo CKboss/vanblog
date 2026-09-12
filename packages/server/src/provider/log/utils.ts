@@ -148,10 +148,38 @@ export function pickClientIp(req: any): string {
   return ip;
 }
 
+/**
+ * IP 归属地查询是**第三方外网请求**（cip.cc），以前没有超时：
+ * 离线/被墙环境下 axios 会一直挂着，而登录日志和登录限流都 await 它，
+ * 结果就是一次登录卡住几十秒甚至几分钟。现在：
+ * - 3 秒超时（`VAN_BLOG_IP_GEO_TIMEOUT` 可调）；
+ * - `VANBLOG_DISABLE_IP_GEO=true` 可以完全关掉（不想把访客 IP 发给第三方就用它）；
+ * - 失败只影响日志里的归属地字段，不影响任何业务逻辑。
+ * 限流等**关键路径不要用这个函数**，用本地的 `pickClientIp()`。
+ */
+export const IP_GEO_TIMEOUT_MS = Number(process.env.VAN_BLOG_IP_GEO_TIMEOUT || 3000);
+
+/**
+ * 只取 TCP 套接字对端地址（不可被请求头伪造），供限流等安全判定使用。
+ * 注意：部署在反代（caddy）后面时它拿到的是反代地址，此时所有请求共享一个计数桶，
+ * 属于「更严格」的方向；需要按真实客户端 IP 限流时应改用可信代理层数解析。
+ */
+export function pickSocketIp(req: any): string {
+  const raw =
+    req?.socket?.remoteAddress || req?.connection?.remoteAddress || req?.ip || '';
+  return normalizeClientIp(String(raw));
+}
+
 export async function getNetIp(req: any) {
   const ip = pickClientIp(req);
+  if (!ip || process.env.VANBLOG_DISABLE_IP_GEO === 'true') {
+    return { address: '未获取', ip };
+  }
   try {
-    const { data } = await axios.get(`https://cip.cc/${ip}`);
+    // ip 来自 X-Forwarded-For 等请求头，必须编码后再拼进 URL
+    const { data } = await axios.get(`https://cip.cc/${encodeURIComponent(ip)}`, {
+      timeout: IP_GEO_TIMEOUT_MS,
+    });
     // const ipApi = got.got
     //   .get(`https://whois.pconline.com.cn/ipJson.jsp?ip=${ip}&json=true`)
     //   .buffer();

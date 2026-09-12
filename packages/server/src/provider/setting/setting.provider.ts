@@ -328,7 +328,9 @@ export class SettingProvider {
     const r = await this.settingModel.findOne({ type: 'menu' });
     if (!r) {
       // 没有的话需要清洗
-      const toInsert: MenuItem[] = defaultMenu;
+      // 不能直接引用导出常量：下面 push 会把它改掉，
+    // 而 init.provider 之后还会拿 defaultMenu 当「默认菜单」写库
+    const toInsert: MenuItem[] = [...defaultMenu];
       const meta = await this.metaProvider.getAll();
       const oldMenus = meta.menus;
       const d = Date.now();

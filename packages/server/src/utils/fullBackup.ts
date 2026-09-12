@@ -197,8 +197,27 @@ function tarCompress(stagingDir: string, outFile: string, spec: CompressorSpec):
       } catch {
         // ignore
       }
-      reject(new Error(message));
+      // 半成品归档必须删掉：否则「备份列表」里会多出一个损坏的归档，
+      // 用户以为能恢复，恢复时才报错
+      try {
+        fs.rmSync(outFile, { force: true });
+      } catch {
+        // ignore
+      }
+      for (const child of [tar, compressor]) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+      }
+      // 用户可见的错误一律 BadRequestException：普通 Error 会被 Nest 变成
+      // 500 + "Internal server error"，前端看不到原因
+      reject(new BadRequestException(message));
     };
+    // 压缩器被 OOM kill 时，往它 stdin 写会 EPIPE；没有 error 监听就是
+    // unhandledRejection → Node 20 直接退出进程（整个 server 挂掉）
+    compressor.stdin.on('error', (err: Error) => fail(`写入压缩器失败：${err.message}`));
     tar.stderr.on('data', (chunk) => {
       tarErr += chunk.toString();
     });
@@ -209,7 +228,9 @@ function tarCompress(stagingDir: string, outFile: string, spec: CompressorSpec):
     compressor.on('error', (err) => fail(`${spec.format} 压缩器启动失败：${err.message}`));
     out.on('error', (err) => fail(`写入备份文件失败：${err.message}`));
     tar.on('exit', (code) => {
-      if (code !== 0 && code !== null) {
+      // exit 1 = "file changed as we read it"：备份期间正好有图片被原地替换时会发生，
+      // 归档本身仍可用，不该当成致命错误（cp -al 硬链接窗口里尤其容易碰到）
+      if (code !== 0 && code !== null && code !== 1) {
         fail(`tar 退出码 ${code}：${tarErr.slice(0, 500)}`);
       }
     });
@@ -242,9 +263,18 @@ function decompressUntar(archivePath: string, destDir: string, spec: CompressorS
     const fail = (message: string) => {
       if (!settled) {
         settled = true;
-        reject(new Error(message));
+        for (const child of [decompressor, tar]) {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // ignore
+          }
+        }
+        reject(new BadRequestException(message));
       }
     };
+    // 同导出侧：tar 提前退出会让解压器写 stdin 时 EPIPE，不挂 error 就是进程级崩溃
+    tar.stdin.on('error', (err: Error) => fail(`解包写入失败：${err.message}`));
     decompressor.stderr.on('data', (c) => {
       decErr += c.toString();
     });
@@ -629,24 +659,48 @@ async function restoreCollection(
   ndjsonPath: string,
   indexPath: string,
 ): Promise<number> {
-  const tmp = db.collection(`${name}${RESTORE_SUFFIX}`);
+  const tmpName = `${name}${RESTORE_SUFFIX}`;
+  const tmp = db.collection(tmpName);
   await tmp.deleteMany({});
   let inserted = 0;
-  let batch: any[] = [];
-  for await (const line of readLines(ndjsonPath)) {
-    batch.push(decodeDoc(JSON.parse(line)));
-    if (batch.length >= INSERT_BATCH) {
+  try {
+    let batch: any[] = [];
+    for await (const line of readLines(ndjsonPath)) {
+      batch.push(decodeDoc(JSON.parse(line)));
+      if (batch.length >= INSERT_BATCH) {
+        await tmp.insertMany(batch, { ordered: false });
+        inserted += batch.length;
+        batch = [];
+      }
+    }
+    if (batch.length) {
       await tmp.insertMany(batch, { ordered: false });
       inserted += batch.length;
-      batch = [];
     }
+    if (!inserted) {
+      // 空集合（备份里 drafts / custompages / pipelines 常常是空的）：
+      // 没有 insertMany 就不会创建临时集合，rename 会抛
+      // "Source collection … does not exist"，于是**前面已经换好的集合留下、后面的原样不动**，
+      // 变成一个看不出原因的半恢复状态。这里显式建表。
+      try {
+        await db.createCollection(tmpName);
+      } catch {
+        // 已存在就忽略
+      }
+    }
+    // 原子替换目标集合：成功了才动原表，中途失败原数据还在
+    await tmp.rename(name, { dropTarget: true });
+  } catch (error) {
+    // 失败要把临时表清掉，否则残留的 *__vanblog_restore 会污染下一次恢复/备份
+    try {
+      await tmp.drop();
+    } catch {
+      // 本来就不存在
+    }
+    throw new BadRequestException(
+      `恢复集合 ${name} 失败：${(error as Error)?.message || error}`,
+    );
   }
-  if (batch.length) {
-    await tmp.insertMany(batch, { ordered: false });
-    inserted += batch.length;
-  }
-  // 原子替换目标集合：成功了才动原表，中途失败原数据还在
-  await tmp.rename(name, { dropTarget: true });
 
   if (fs.existsSync(indexPath)) {
     try {

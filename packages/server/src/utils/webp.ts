@@ -1,5 +1,7 @@
 import { spawnSync } from 'child_process';
-import { writeFileSync, readFileSync, rmSync } from 'fs';
+import { writeFileSync, readFileSync, rmSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 export const CWEBP_QUALITY = '80';
 
@@ -22,15 +24,17 @@ export function runCwebp(inputPath: string, outputPath: string) {
 }
 
 export const compressImgToWebp = async (srcImage: Buffer) => {
-  const filenameTemp = `temp${Date.now()}`;
-  const p = `/tmp/${filenameTemp}`;
-  const o = `/tmp/${filenameTemp}.webp`;
-  writeFileSync(p, srcImage);
-
-  runCwebp(p, o);
-
-  const f = readFileSync(o);
-  rmSync(p);
-  rmSync(o);
-  return f;
+  // 以前是 `/tmp/temp${Date.now()}`，而且**没有 finally**：
+  // cwebp 一失败（例如上传的根本不是图片）整块 buffer 就永久留在 /tmp，
+  // 反复上传即可写满磁盘；同毫秒并发还会互相覆盖，writeFileSync 也会跟随符号链接。
+  const dir = mkdtempSync(join(tmpdir(), 'vanblog-webp-'));
+  const p = join(dir, 'in');
+  const o = join(dir, 'out.webp');
+  try {
+    writeFileSync(p, srcImage, { mode: 0o600, flag: 'wx' });
+    await runCwebp(p, o);
+    return readFileSync(o);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 };

@@ -92,12 +92,19 @@ export default function () {
             setExporting(true);
             try {
               const { data } = await exportAllImgs();
-              const link = document.createElement('a');
-              link.href = data;
-              link.download = data.split('/').pop();
-              link.click();
-              setExporting(false);
+              // 后端返回的是 { success, path }，以前直接 link.href = data
+              // 会变成 "[object Object]"，这个按钮其实一直下不下来东西。
+              // 归档现在存在静态目录之外（匿名可读的 /static/export/ 已被封），
+              // 必须走带 token 的下载接口。
+              const name = data?.path;
+              if (!data?.success || !name) {
+                message.error('打包失败！');
+                return;
+              }
+              await saveExportArchive(name, '图片打包完成，已开始下载');
             } catch (err) {
+              // 空的 catch 会把失败吞掉，用户只看到按钮转圈结束
+              message.error(err?.message || '导出失败');
             } finally {
               setExporting(false);
             }

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getNetIp, isSkippedPrivateIp, pickClientIp } from './utils';
+import { getNetIp, isSkippedPrivateIp, pickClientIp, IP_GEO_TIMEOUT_MS} from './utils';
 
 jest.mock('axios');
 
@@ -54,7 +54,9 @@ describe('pickClientIp / getNetIp (#127)', () => {
     const result = await getNetIp(req);
     expect(result.ip).toBe(CLIENT_IP);
     expect(result.address).toBe('测试地址');
-    expect(mockedAxios.get).toHaveBeenCalledWith(`https://cip.cc/${CLIENT_IP}`);
+    expect(mockedAxios.get).toHaveBeenCalledWith(`https://cip.cc/${CLIENT_IP}`, {
+      timeout: IP_GEO_TIMEOUT_MS,
+    });
   });
 
   it('reads cf-connecting-ip regardless of header casing and surrounding whitespace', () => {
@@ -217,7 +219,9 @@ describe('pickClientIp / getNetIp (#127)', () => {
       }),
     );
     expect(result).toEqual({ address: '获取失败', ip: CLIENT_IP });
-    expect(mockedAxios.get).toHaveBeenCalledWith(`https://cip.cc/${CLIENT_IP}`);
+    expect(mockedAxios.get).toHaveBeenCalledWith(`https://cip.cc/${CLIENT_IP}`, {
+      timeout: IP_GEO_TIMEOUT_MS,
+    });
   });
 
   it('never hits a real cip.cc host from these tests', async () => {

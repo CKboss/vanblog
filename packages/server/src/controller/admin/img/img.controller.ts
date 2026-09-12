@@ -12,6 +12,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { IMAGE_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
 import { ApiTags } from '@nestjs/swagger';
 import { SearchStaticOption } from 'src/types/setting.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -38,7 +39,7 @@ export class ImgController {
     private readonly metaProvider: MetaProvider,
   ) {}
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMAGE_UPLOAD_OPTIONS))
   async upload(
     @UploadedFile() file: any,
     @Query('favicon') favicon?: string,
@@ -46,6 +47,9 @@ export class ImgController {
     @Query('withWaterMark') withWaterMark?: string,
     @Request() req?: any,
   ) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     let isFavicon = false;
     if (favicon && favicon == 'true') {
       isFavicon = true;
@@ -113,7 +117,7 @@ export class ImgController {
    * 文章里已插入的链接不用改。仅本地存储，需要 img:replace 权限。
    */
   @Post(':sign/replace')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMAGE_UPLOAD_OPTIONS))
   async replace(
     @Param('sign') sign: string,
     @UploadedFile() file: any,
@@ -149,7 +153,7 @@ export class ImgController {
    * 只读操作，不写任何文件。
    */
   @Post('stego/detect')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMAGE_UPLOAD_OPTIONS))
   async detectStego(
     @UploadedFile() file: any,
     @Body() body: { sign?: string },
@@ -257,7 +261,7 @@ export class ImgController {
         message: '演示站禁止修改此项！',
       };
     }
-    const res = await this.staticProvider.deleteOneBySign(sign);
+    const res = await this.staticProvider.deleteOneBySign(sign, 'img');
     return {
       statusCode: 200,
       data: res,

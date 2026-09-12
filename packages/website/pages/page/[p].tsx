@@ -52,6 +52,7 @@ const PagePages = (props: PagePagesProps) => {
             customCopyRight={null}
             top={article.top || 0}
             id={getArticlePath(article)}
+            numericId={article.id}
             key={article.id}
             title={article.title}
             updatedAt={new Date(article.updatedAt)}

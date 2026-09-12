@@ -17,8 +17,9 @@ export class AccessGuard implements CanActivate {
       const user = request.user;
       // console.log(key, user);
       if (!user) {
-        // 不管了让后面的处理
-        return true;
+        // 这个守卫只在 AdminGuard 链里跑（AuthGuard('jwt') → TokenGuard → AccessGuard），
+        // 走到这里说明拿不到已认证用户，必须**拒绝**（以前是 return true，等于失败开门）。
+        return false;
       }
       if (user.id == 0) {
         // 超管为 0
@@ -47,8 +48,9 @@ export class AccessGuard implements CanActivate {
         }
       }
     } catch (err) {
-      // 出了问题可能是 404 路由，就不管了。
-      return true;
+      // 判定过程出错时也要关门：404 路由本来就不会命中任何控制器方法
+      this.logger.warn(`权限判定异常，已拒绝：${err?.message || err}`);
+      return false;
     }
   }
 }

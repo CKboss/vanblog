@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import {
+  NotFoundException, Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { SortOrder } from 'src/types/sort';
@@ -11,6 +12,7 @@ import { VisitProvider } from 'src/provider/visit/visit.provider';
 import { version } from 'src/utils/loadConfig';
 import { CustomPageProvider } from 'src/provider/customPage/customPage.provider';
 import { encode } from 'js-base64';
+import { asQueryString } from 'src/utils/sanitizeRequest';
 import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePagination } from 'src/utils/pagination';
@@ -44,14 +46,26 @@ export class PublicController {
     };
   }
   @Get('/customPage')
-  async getOneByPath(@Query('path') path: string) {
-    const data = await this.customPageProvider.getCustomPageByPath(path);
-
+  async getOneByPath(@Query('path') path: unknown) {
+    // path 来自查询串：`?path[$ne]=/x` 会被解析成对象，直接进 findOne 会 500。
+    const rawPath = asQueryString(path);
+    if (!rawPath) {
+      throw new NotFoundException('找不到自定义页面');
+    }
+    const doc: any = await this.customPageProvider.getCustomPageByPath(rawPath);
+    if (!doc) {
+      throw new NotFoundException('找不到自定义页面');
+    }
+    // 不能 `{...doc}`：mongoose 文档展开后会把 `$__` / `$isNew` / `_doc` 这些内部结构
+    // 一起吐给公网（实测过），只挑真正需要的字段返回。
+    const data = typeof doc.toObject === 'function' ? doc.toObject() : doc;
     return {
       statusCode: 200,
       data: {
-        ...data,
-        html: data?.html ? encode(data?.html) : '',
+        name: data?.name,
+        path: data?.path,
+        type: data?.type,
+        html: data?.html ? encode(data.html) : '',
       },
     };
   }
@@ -93,16 +107,29 @@ export class PublicController {
     @Query('isNewByPath') isNewByPath: boolean,
     @Req() req: Request,
   ) {
+    // referer 可能缺失或是畸形百分号编码，`new URL(undefined)` / `decodeURIComponent('%')`
+    // 都会抛异常 → 这个未鉴权接口以前会直接 500
     const refer = req.headers.referer;
-    const url = new URL(refer);
-    if (!url.pathname || url.pathname == '') {
-      console.log('没找到 refer:', req.headers);
+    let pathname = '';
+    try {
+      if (refer) {
+        pathname = new URL(String(refer)).pathname || '';
+      }
+    } catch {
+      pathname = '';
     }
-    const data = await this.metaProvider.addViewer(
-      isNew,
-      decodeURIComponent(url.pathname),
-      isNewByPath,
-    );
+    if (!pathname) {
+      pathname = asQueryString((req.query as any)?.path) || '';
+    }
+    let decoded = pathname;
+    try {
+      decoded = decodeURIComponent(pathname);
+    } catch {
+      decoded = pathname;
+    }
+    // 路径限长，避免匿名调用往 visits 表里塞任意长的键
+    decoded = decoded.slice(0, 500);
+    const data = await this.metaProvider.addViewer(isNew, decoded, isNewByPath);
     return {
       statusCode: 200,
       data: data,

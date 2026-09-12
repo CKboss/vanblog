@@ -253,7 +253,7 @@ describe('服务端：替换图片', () => {
   it('批量统计引用只查一次库，并转义正则元字符', () => {
     const article = readRepo('packages/server/src/provider/article/article.provider.ts');
     assert.match(article, /async countArticlesByLinks/);
-    assert.match(article, /cleaned\.map\(escapeRegExp\)\.join\('\|'\)/);
+    assert.match(article, /escapeRegExp\(link\.slice\(0, 2048\)\)/);
     assert.match(article, /\.slice\(0, 200\)/);
     assert.match(article, /entry\.articles\.length < 10/);
   });

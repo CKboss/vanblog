@@ -31,6 +31,21 @@ describe('stripFrontMatter', () => {
     expect(stripFrontMatter('---\ntitle: x\n---')).toBe('');
   });
 
+  it('正文以分隔线开头、后面又有一条分隔线时，**不能**被当成 front matter 吃掉', () => {
+    // 这是审计发现的真实数据丢失：旧实现只看 `---`，于是
+    // 「--- + 空行 + 标题 + 正文 + ---」会把标题和第一段整段删掉
+    const src = '---\n\n# 大标题\n\n正文第一段\n\n---\n\n后半部分内容\n';
+    expect(hasFrontMatter(src)).toBe(false);
+    expect(stripFrontMatter(src)).toBe(src);
+  });
+
+  it('只有每行都像 YAML 才剥（markdown 标题、列表、句子都不算）', () => {
+    expect(hasFrontMatter('---\n# 这是标题\n---\n正文')).toBe(false);
+    expect(hasFrontMatter('---\n这是一句普通的话\n---\n正文')).toBe(false);
+    expect(hasFrontMatter('---\ntitle: x\ntags:\n  - a\n  - b\n---\n正文')).toBe(true);
+    expect(stripFrontMatter('---\ntitle: x\ntags:\n  - a\n---\n\n正文')).toBe('正文');
+  });
+
   it('摘要也不会以 front matter 开头', () => {
     const src = '---\ntitle: 标题\n---\n\n这是真正的摘要文字。';
     expect(articleOverviewMarkdown(src)).toBe('这是真正的摘要文字。');

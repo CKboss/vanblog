@@ -93,7 +93,23 @@ export class WalineProvider {
       ...otherEnv,
       ...walineConfigEnv,
     };
-    this.logger.log(`waline 配置： ${JSON.stringify(this.env, null, 2)}`);
+    // 不能整份打印：this.env 里有 MONGO_PASSWORD、JWT_TOKEN（就是本站的 jwt 签名密钥）、
+    // SMTP_PASS、WEBHOOK。日志一旦被人拿到（docker logs / 挂载的日志目录 / 日志采集），
+    // 等于交出数据库口令和签发管理员 token 的密钥。这里只打印键名和非敏感值。
+    const SECRET_ENV_KEYS = [
+      'MONGO_PASSWORD',
+      'MONGO_URI',
+      'JWT_TOKEN',
+      'SMTP_PASS',
+      'SMTP_USER',
+      'WEBHOOK',
+      'LOGIN',
+    ];
+    const safeEnv = Object.keys(this.env || {}).reduce((acc, key) => {
+      acc[key] = SECRET_ENV_KEYS.includes(key) ? '[REDACTED]' : this.env[key];
+      return acc;
+    }, {} as Record<string, unknown>);
+    this.logger.log(`waline 配置： ${JSON.stringify(safeEnv, null, 2)}`);
   }
   async init() {
     this.run();

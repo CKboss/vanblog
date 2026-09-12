@@ -140,7 +140,15 @@ describe('MarkdownExportProvider', () => {
 
   it('外链图片抓得到就打包，抓不到就保留原链接并写进导出说明', async () => {
     axios.get
-      .mockResolvedValueOnce({ data: Buffer.from('remote-bytes') })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+        // 抓回来的内容要过魔数校验，否则不会被打进 zip
+        data: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+          'base64',
+        ),
+      })
       .mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND'));
 
     const provider = makeProvider({

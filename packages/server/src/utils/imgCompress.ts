@@ -1,3 +1,4 @@
+import { DANGEROUS_INLINE_EXTENSIONS } from './uploadLimits';
 import { BadRequestException } from '@nestjs/common';
 import { compressImgToWebp, CWEBP_QUALITY } from './webp';
 import { compressImgToAvif, tryLoadSharp } from './avif';
@@ -85,14 +86,26 @@ export function applyStaticAssetHeaders(
   }
   // 没有缓存头时浏览器每次都要重新请求（原来只有 max-age=0），翻页/回退会反复拉图
   res.setHeader('Cache-Control', cacheControlFor(filePath));
-  // 附件目录（<static>/file）里的文件：一律 nosniff；
-  // html/svg/js 这类能在本站源上执行的类型再强制下载，避免上传变成存储型 XSS。
-  if (isAttachmentPath(filePath)) {
+  // nosniff 对整个静态目录都要加：以前只在 <static>/file 下加，
+  // 而 /static/img/** 是匿名同源可读的，一旦混进 html/svg 就能在本站源上执行。
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // 能在浏览器里执行的类型一律强制下载（不管它在 img/ 还是 file/ 下）。
+  if (isAttachmentPath(filePath) || isDangerousInlinePath(filePath)) {
     const headers = attachmentHeadersFor(filePath);
     for (const name of Object.keys(headers)) {
       res.setHeader(name, headers[name]);
     }
   }
+}
+
+/** 静态目录里任何位置的可执行/可渲染文本类型，都按「附件」处理（强制下载 + nosniff）。 */
+export function isDangerousInlinePath(filePath: string): boolean {
+  const ext = String(filePath || '')
+    .split('?')[0]
+    .toLowerCase()
+    .split('.')
+    .pop();
+  return DANGEROUS_INLINE_EXTENSIONS.includes(ext || '');
 }
 
 export async function compressImg(

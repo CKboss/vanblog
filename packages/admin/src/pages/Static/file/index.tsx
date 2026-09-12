@@ -1,3 +1,4 @@
+import { saveExportArchive } from '@/services/van-blog/downloadArchive';
 import TipTitle from '@/components/TipTitle';
 import UploadBtn from '@/components/UploadBtn';
 import {
@@ -177,19 +178,13 @@ export default () => {
           <Button
             onClick={async () => {
               const res: any = await exportAllAttachments();
-              const path = res?.data?.path;
-              if (!path) {
+              const name = res?.data?.path;
+              if (!name) {
                 message.error('打包失败！');
                 return;
               }
-              Modal.success({
-                title: '打包完成',
-                content: (
-                  <a href={getAttachmentLink(path)} target="_blank" rel="noreferrer">
-                    {path}
-                  </a>
-                ),
-              });
+              // 归档在服务器静态目录之外，必须走鉴权下载接口
+              await saveExportArchive(name, '附件打包完成，已开始下载');
             }}
           >
             导出全部附件

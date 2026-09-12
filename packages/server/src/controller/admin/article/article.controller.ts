@@ -85,6 +85,13 @@ export class ArticleController {
         message: '演示站禁止修改文章！',
       };
     }
+    // 质量赋值防护：`deleted` 只能由删除接口设置（否则只有 article:update 权限的
+    // 协作者可以 {"deleted":true} 批量软删全站，绕过 article:delete）；
+    // `viewer`/`visited`/`id` 是服务端维护的计数与主键，客户端不该能改。
+    delete (updateDto as any)?.deleted;
+    delete (updateDto as any)?.viewer;
+    delete (updateDto as any)?.visited;
+    delete (updateDto as any)?.id;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateArticle', updateDto);
     if (result.length > 0) {
       const lastResult = result[result.length - 1];

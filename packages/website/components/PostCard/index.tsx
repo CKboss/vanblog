@@ -59,6 +59,8 @@ export default function (props: {
   cover?: string | null;
   /** 正文渲染器；不传就用轻量版（列表摘要）。文章页会传完整版。 */
   markdownRenderer?: React.ComponentType<{ content: string }>;
+  /** 数字 id：后台「编辑」链接要用它（props.id 可能是拼音别名）。 */
+  numericId?: number | string;
 }) {
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
@@ -112,6 +114,7 @@ export default function (props: {
         <Title
           type={props.type}
           id={props.id}
+          numericId={props.numericId}
           title={props.title}
           openArticleLinksInNewWindow={props.openArticleLinksInNewWindow}
           showEditButton={props.showEditButton}

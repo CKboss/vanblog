@@ -74,6 +74,12 @@ export class DraftController {
 
   @Put('/:id')
   async update(@Param('id') id: number, @Body() updateDto: UpdateDraftDto) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
+    // 同文章接口：deleted 只能由删除接口设置，id 是服务端主键
+    delete (updateDto as any)?.deleted;
+    delete (updateDto as any)?.id;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateDraft', updateDto);
     if (result.length > 0) {
       const lastResult = result[result.length - 1];
@@ -93,6 +99,9 @@ export class DraftController {
 
   @Post()
   async create(@Req() req: any, @Body() createDto: CreateDraftDto) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const author = req?.user?.nickname || undefined;
     if (!createDto.author) {
       createDto.author = author;
@@ -138,6 +147,9 @@ export class DraftController {
   }
   @Delete('/:id')
   async delete(@Param('id') id: number) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
     const toDeleteDraft = await this.draftProvider.findById(id);
     const data = await this.draftProvider.deleteById(id);
     this.pipelineProvider.dispatchEvent('deleteDraft', toDeleteDraft);
