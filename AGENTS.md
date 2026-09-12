@@ -18,7 +18,7 @@
 ## 0. TL;DR
 
 ```bash
-# 首次：按 §3 把工具链放进 .tools/（Node 20 + pnpm 8 + mongod），然后
+./dev-env.sh bootstrap    # 首次：下载 Node 20 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地骨架
 ./dev-env.sh install      # 装依赖（--frozen-lockfile）
 ./dev-env.sh start        # MongoDB + server + admin + website 一起起
 ./dev-env.sh status       # 看状态
@@ -91,6 +91,7 @@ AGENTS.local.md             # 本机专属附录（若存在，不入库）
 ## 2. 日常操作
 
 ```bash
+./dev-env.sh bootstrap    # 首次准备工具链与本地骨架（可重复执行，已装好的会跳过）
 ./dev-env.sh install      # 装/更新依赖（--frozen-lockfile，不改 lockfile）
 ./dev-env.sh start        # 幂等启动：已在跑的会跳过
 ./dev-env.sh stop         # 停 server/admin/website/waline/mongod
@@ -155,7 +156,41 @@ git push -u mine <你的分支>
 
 ## 3. 从零重建（`.tools/` 或 `node_modules/` 不存在时）
 
-### 3.1 工具链
+一条命令就够：
+
+```bash
+./dev-env.sh bootstrap                        # Node 20 + pnpm 8 + MongoDB 7 + 本地骨架
+./dev-env.sh bootstrap --with-legacy-mongo    # 额外装 5.0/6.0，用于导入 FCV 4.4 的老备份（§4.2）
+```
+
+`bootstrap` 做的事（**幂等**，可以反复跑，已经装好的会跳过）：
+
+1. 下载并校验 **Node 20.19.5**（官方 `SHASUMS256.txt`）→ `.tools/node20`；
+2. 用这个 node 装 **pnpm 8.11.0** → `.tools/node_modules/pnpm`（与 `package.json` 的 `packageManager` 一致）；
+3. 下载并校验 **MongoDB 7.0.14**（`.tgz.sha256` sidecar）→ `.tools/mongodb`，并用 `ldd` 检查动态库；
+4. 建 `vanblog_dev/{logs,pids,mongo-data,static,codeRunner,pluginRunner}`、
+   `packages/website/public/static` 软链、`packages/server/config.yaml`、
+   `packages/server/tsconfig.dev.json`（都只在不存在时生成），并把这些本地文件补进 `.git/info/exclude`。
+
+可用的环境变量覆盖：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `VANBLOG_NODE_VERSION` | `20.19.5` | Node 版本 |
+| `VANBLOG_PNPM_VERSION` | `8.11.0` | 要和 `package.json` 的 `packageManager` 一致 |
+| `VANBLOG_MONGO_VERSION` | `7.0.14` | 日常使用的 mongod |
+| `VANBLOG_MONGO50_VERSION` / `VANBLOG_MONGO60_VERSION` | `5.0.34` / `6.0.29` | 仅 `--with-legacy-mongo` |
+| `VANBLOG_MONGO_PLATFORM` | `ubuntu2204` | 老发行版缺 `libssl3` 时可试 `ubuntu2004` |
+| `VANBLOG_NODE_DISTURL` | `https://npmmirror.com/mirrors/node` | Node tarball 源；海外可换 `https://nodejs.org/dist` |
+| `VANBLOG_MONGO_MIRROR` | `https://fastdl.mongodb.org/linux` | MongoDB tarball 源 |
+| `VANBLOG_PROXY` | 空 | 下载命令前缀，例如 `proxychains4 -q` |
+| `VANBLOG_KEEP_DOWNLOADS` | `0` | 设 `1` 保留下载的 tarball（默认装完就删） |
+| `VANBLOG_REGISTRY` | `https://registry.npmmirror.com` | npm registry（pnpm 安装与 `install` 都用它） |
+
+> 下载失败可以直接重跑：已经下完并校验通过的组件不会重来。
+> 需要手工安装（离线机器、或想把 tarball 放到别处）时，照下面两节做。
+
+### 3.1 工具链（手工）
 
 ```bash
 mkdir -p .tools && cd .tools
@@ -172,7 +207,7 @@ tar -xzf mongodb-linux-x86_64-ubuntu2204-7.0.14.tgz && mv mongodb-linux-x86_64-u
 > 换新机器时先 `ldd bin/mongod | grep "not found"` 确认。
 > 只有需要导入 FCV 4.4 的老备份时，才额外准备 5.0 / 6.0（见 §4.2）。
 
-### 3.2 本地 pnpm 8.11.0
+### 3.2 本地 pnpm 8.11.0（手工）
 
 ```bash
 cd .tools && printf '{"name":"vanblog-dev-tools","private":true,"dependencies":{"pnpm":"8.11.0"}}\n' > package.json
@@ -214,7 +249,7 @@ export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1           # 
 
 热 store 情况下整轮 install ≈ 6 min（其中 5 min 是 sqlite3 编译）；store 为空时还要加下载时间。
 
-### 3.5 `packages/server/config.yaml`（仓库已 gitignore，需要自己建）
+### 3.5 `packages/server/config.yaml`（仓库已 gitignore；`bootstrap` 会自动生成）
 
 ```yaml
 database:
@@ -238,7 +273,7 @@ pluginRunner:
 开发时建议加 `VANBLOG_DISABLE_WEBSITE=true`（`dev-env.sh` 已加）：它让 `ISRProvider.activeAll()`
 变成空操作，避免每次改文章都去触发前台全量渲染。
 
-### 3.6 `packages/server/tsconfig.dev.json`（某些机器上必须，否则 server 起不来）
+### 3.6 `packages/server/tsconfig.dev.json`（某些机器上必须；`bootstrap` 会自动生成）
 
 TypeScript 会自动向上扫描 `node_modules/@types`。如果**家目录**里存在
 `$HOME/node_modules/@types/bun`（bun-types 1.3.x）之类的新语法包，server 用的 **TS 4.9.5** 解析不了，
@@ -273,6 +308,7 @@ packages/website/public/static
 AGENTS.local.md
 ```
 
+`bootstrap` 会把这几条自动补进 `.git/info/exclude`（已存在的不会重复写）。
 验收标准：`git status --short` 里**不应该出现环境类文件**；出现别的改动说明是功能代码（见 §7）。
 注意 `dev-env.sh`、`AGENTS.md`、`CLAUDE.md` 是**入库的**。
 
@@ -405,7 +441,9 @@ curl -s "http://127.0.0.1:3001/api/comment?path=%2Fpost%2F1&page=1&pageSize=3" |
 | `ERROR [CaddyProvider] 关闭 https 自动重定向失败` | 本地没有 caddy | 无害，忽略 |
 | 前台页面空白 / 报未初始化 | 库是空的 | 去 3002 走初始化向导，或导入备份（§4） |
 | `./dev-env.sh: Permission denied` | 脚本丢了可执行位（被 `chmod 644` 过） | `chmod +x dev-env.sh`，或改用 `bash dev-env.sh ...` |
-| `./dev-env.sh` 报找不到 node / mongod | `.tools/` 还没准备 | 按 §3.1–3.2 下载工具链 |
+| `./dev-env.sh` 报找不到 node / pnpm / mongod | `.tools/` 还没准备 | `./dev-env.sh bootstrap`（可重复执行，见 §3） |
+| bootstrap 下载 Node/MongoDB 超时或校验失败 | 直连 `nodejs.org` / `fastdl.mongodb.org` 太慢 | 换源或走代理：`VANBLOG_PROXY="proxychains4 -q" ./dev-env.sh bootstrap`；Node 也可 `VANBLOG_NODE_DISTURL=https://nodejs.org/dist` |
+| bootstrap 装完 mongod 报缺动态库 | `ubuntu2204` 构建需要 `libssl3`/`libcrypto3` | 换 `VANBLOG_MONGO_PLATFORM=ubuntu2004` 重装（需要 `libssl1.1`） |
 | 3001/3002 页面报 500 / `[HPM] ECONNREFUSED ... :3000` | server 没起（或正在重启） | `./dev-env.sh status`，看 `vanblog_dev/logs/server-dev.log` |
 | 后台菜单显示成 `paperclip附件管理` 这种纯文本 | umi 把路由 `icon` 按 `toHump(首字母大写)+'Outlined'` 解析，拼不出真实图标就退回字符串 | 用能拼成真实 antd 图标的写法（`paper-clip` → `PaperClipOutlined`），并核对 `src/.umi/plugin-layout/icons.ts` |
 | 标题的复制按钮压在「编辑」上 | 复制按钮用了绝对定位，而「编辑」在文档流里 | 标题行是三列 grid、操作区同格（见 §7.2），别改回绝对定位 |

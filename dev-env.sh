@@ -2,6 +2,7 @@
 # VanBlog 本地开发环境脚本（工作区自包含，不依赖 docker / sudo / 全局 node）
 #
 # 用法:
+#   ./dev-env.sh bootstrap  首次准备: 下载 Node 20 / pnpm 8 / MongoDB 7 到 .tools/，并建好本地骨架
 #   ./dev-env.sh install    安装依赖 (pnpm 8 + Node 20, store 在 .tools/pnpm-store)
 #   ./dev-env.sh            启动全部 (MongoDB + server:3000 + website:3001 + admin:3002)
 #   ./dev-env.sh start      同上
@@ -206,7 +207,321 @@ do_logs() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# bootstrap: 把工具链装进 .tools/（Node 20 + pnpm 8 + MongoDB 7），并建好本地骨架
+#
+#   ./dev-env.sh bootstrap                     # 装 Node/pnpm/mongod + 建目录/软链/config.yaml
+#   ./dev-env.sh bootstrap --with-legacy-mongo # 额外装 5.0/6.0，用于导入 FCV 4.4 的老备份
+#
+# 可用环境变量覆盖（都有默认值）:
+#   VANBLOG_NODE_VERSION      默认 20.19.5
+#   VANBLOG_PNPM_VERSION      默认 8.11.0（要和 package.json 的 packageManager 一致）
+#   VANBLOG_MONGO_VERSION     默认 7.0.14
+#   VANBLOG_MONGO_PLATFORM    默认 ubuntu2204（老发行版缺 libssl3 时可试 ubuntu2004）
+#   VANBLOG_NODE_DISTURL      Node  tarball 源，默认 npmmirror 镜像；海外可换 https://nodejs.org/dist
+#   VANBLOG_MONGO_MIRROR      MongoDB tarball 源，默认 https://fastdl.mongodb.org/linux
+#   VANBLOG_PROXY             下载命令前缀，例如 "proxychains4 -q"
+#   VANBLOG_KEEP_DOWNLOADS=1  保留下载的 tarball（默认装完就删）
+# ---------------------------------------------------------------------------
+BOOTSTRAP_NODE_VERSION="${VANBLOG_NODE_VERSION:-20.19.5}"
+BOOTSTRAP_PNPM_VERSION="${VANBLOG_PNPM_VERSION:-8.11.0}"
+BOOTSTRAP_MONGO_VERSION="${VANBLOG_MONGO_VERSION:-7.0.14}"
+BOOTSTRAP_MONGO50_VERSION="${VANBLOG_MONGO50_VERSION:-5.0.34}"
+BOOTSTRAP_MONGO60_VERSION="${VANBLOG_MONGO60_VERSION:-6.0.29}"
+BOOTSTRAP_MONGO_PLATFORM="${VANBLOG_MONGO_PLATFORM:-ubuntu2204}"
+NODE_DIST_BASE="${VANBLOG_NODE_DISTURL:-https://npmmirror.com/mirrors/node}"
+MONGO_DIST_BASE="${VANBLOG_MONGO_MIRROR:-https://fastdl.mongodb.org/linux}"
+PROXY_CMD="${VANBLOG_PROXY:-}"
+KEEP_DOWNLOADS="${VANBLOG_KEEP_DOWNLOADS:-0}"
+
+host_arch_node() {
+  case "$(uname -m)" in
+    x86_64) echo "x64" ;;
+    aarch64 | arm64) echo "arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+host_arch_mongo() {
+  case "$(uname -m)" in
+    x86_64) echo "x86_64" ;;
+    aarch64 | arm64) echo "aarch64" ;;
+    *) return 1 ;;
+  esac
+}
+
+# fetch <url> <输出文件> [quiet]
+# 已经存在且非空就跳过（可重复执行）；配了 VANBLOG_PROXY 就走代理前缀。
+fetch() {
+  local url=$1 out=$2 quiet=${3:-}
+  if [ -s "$out" ]; then
+    [ -n "$quiet" ] || echo "    已缓存 $(basename "$out")，跳过下载"
+    return 0
+  fi
+  [ -n "$quiet" ] || echo "    下载 $url"
+  mkdir -p "$(dirname "$out")"
+  if [ -n "$PROXY_CMD" ]; then
+    # shellcheck disable=SC2086
+    $PROXY_CMD curl -fL --retry 3 --retry-delay 2 -C - -sS -o "$out" "$url"
+  else
+    curl -fL --retry 3 --retry-delay 2 -C - -sS -o "$out" "$url"
+  fi
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$out"
+    [ -n "$quiet" ] || echo "    !! 下载失败 (exit $rc)：$url"
+    return 1
+  fi
+  return 0
+}
+
+sha256_of() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+
+# check_sha256 <文件> <期望值>
+check_sha256() {
+  local got; got=$(sha256_of "$1")
+  [ -n "$got" ] && [ "$got" = "$2" ]
+}
+
+drop_tarball() {
+  [ "$KEEP_DOWNLOADS" = "1" ] || rm -f "$1"
+}
+
+install_node() {
+  if [ -x "$NODE" ] && [ "$("$NODE" -v 2>/dev/null)" = "v$BOOTSTRAP_NODE_VERSION" ]; then
+    echo "==> Node v$BOOTSTRAP_NODE_VERSION 已就绪，跳过"
+    return 0
+  fi
+  local arch; arch=$(host_arch_node) || { echo "!! 不支持的架构: $(uname -m)"; return 1; }
+  local name="node-v$BOOTSTRAP_NODE_VERSION-linux-$arch"
+  local tarball="$ROOT/.tools/$name.tar.xz"
+  echo "==> 安装 Node v$BOOTSTRAP_NODE_VERSION ($arch) 到 .tools/node20"
+  fetch "$NODE_DIST_BASE/v$BOOTSTRAP_NODE_VERSION/$name.tar.xz" "$tarball" || return 1
+
+  # 官方 SHASUMS256.txt 能拿到就校验（拿不到只警告，不阻断）
+  local sums="$ROOT/.tools/SHASUMS256-node-v$BOOTSTRAP_NODE_VERSION.txt" expected
+  if fetch "$NODE_DIST_BASE/v$BOOTSTRAP_NODE_VERSION/SHASUMS256.txt" "$sums" quiet; then
+    expected=$(grep " $name\.tar\.xz\$" "$sums" | awk '{print $1}' | head -1)
+    if [ -n "$expected" ]; then
+      if check_sha256 "$tarball" "$expected"; then
+        echo "    sha256 校验通过"
+      else
+        echo "!! sha256 校验失败，已删除下载文件；请检查网络/镜像后重试"
+        rm -f "$tarball"; return 1
+      fi
+    else
+      echo "    (SHASUMS256.txt 里没有这个文件名，跳过校验)"
+    fi
+  else
+    echo "    (拿不到 SHASUMS256.txt，跳过校验)"
+  fi
+
+  local tmp="$ROOT/.tools/.bootstrap-node.$$"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  tar -xf "$tarball" -C "$tmp" || { echo "!! 解压失败（文件可能不完整）"; rm -rf "$tmp"; return 1; }
+  [ -d "$tmp/$name" ] || { echo "!! 解压后没找到 $name 目录"; rm -rf "$tmp"; return 1; }
+  rm -rf "$ROOT/.tools/node20"
+  mv "$tmp/$name" "$ROOT/.tools/node20" && rm -rf "$tmp"
+  drop_tarball "$tarball"; rm -f "$sums"
+  echo "    已安装: $("$ROOT/.tools/node20/bin/node" -v)"
+}
+
+install_pnpm() {
+  if [ -f "$PNPM_CJS" ] && [ "$("$NODE" "$PNPM_CJS" -v 2>/dev/null)" = "$BOOTSTRAP_PNPM_VERSION" ]; then
+    echo "==> pnpm $BOOTSTRAP_PNPM_VERSION 已就绪，跳过"
+    return 0
+  fi
+  [ -x "$NODE" ] || { echo "!! 需要先装好 Node（.tools/node20）"; return 1; }
+  echo "==> 安装 pnpm $BOOTSTRAP_PNPM_VERSION 到 .tools/node_modules（registry: $REGISTRY）"
+  local pkg="$ROOT/.tools/package.json"
+  if [ ! -f "$pkg" ]; then
+    printf '{"name":"vanblog-dev-tools","private":true,"dependencies":{"pnpm":"%s"}}\n' \
+      "$BOOTSTRAP_PNPM_VERSION" > "$pkg"
+  fi
+  mkdir -p "$ROOT/.tools/home" "$ROOT/.tools/npm-cache"
+  HOME="$ROOT/.tools/home" PATH="$NODE_BIN:$PATH" \
+    "$NODE_BIN/npm" install --prefix "$ROOT/.tools" --cache "$ROOT/.tools/npm-cache" \
+      --registry "$REGISTRY" --no-audit --no-fund >/dev/null || {
+        echo "!! pnpm 安装失败，可手动执行:"
+        echo "   HOME=\$PWD/.tools/home PATH=\$PWD/.tools/node20/bin:\$PATH npm install --prefix \$PWD/.tools pnpm@$BOOTSTRAP_PNPM_VERSION"
+        return 1
+      }
+  echo "    已安装: pnpm $("$NODE" "$PNPM_CJS" -v)"
+}
+
+# install_mongo <版本> <目标目录名> [是否检查 ldd]
+install_mongo() {
+  local ver=$1 dir=$2
+  local bin="$ROOT/.tools/$dir/bin/mongod"
+  if [ -x "$bin" ]; then
+    echo "==> .tools/$dir 已就绪 ($("$bin" --version 2>/dev/null | head -1))，跳过"
+    return 0
+  fi
+  local arch; arch=$(host_arch_mongo) || { echo "!! 不支持的架构: $(uname -m)"; return 1; }
+  local platform="$BOOTSTRAP_MONGO_PLATFORM"
+  # 5.0/6.0 只用于导入老备份，官方只有 ubuntu2004/ubuntu2204 等构建，沿用同一个 platform
+  local name="mongodb-linux-$arch-$platform-$ver"
+  local url="$MONGO_DIST_BASE/$name.tgz"
+  local tarball="$ROOT/.tools/$name.tgz"
+  echo "==> 安装 MongoDB $ver ($arch/$platform) 到 .tools/$dir"
+  fetch "$url" "$tarball" || return 1
+
+  local sidecar="$tarball.sha256" expected
+  if fetch "$url.sha256" "$sidecar" quiet; then
+    expected=$(awk '{print $1}' "$sidecar" | head -1)
+    if [ -n "$expected" ]; then
+      if check_sha256 "$tarball" "$expected"; then
+        echo "    sha256 校验通过"
+      else
+        echo "!! sha256 校验失败，已删除下载文件"; rm -f "$tarball" "$sidecar"; return 1
+      fi
+    fi
+  else
+    echo "    (拿不到 .sha256，跳过校验)"
+  fi
+
+  local tmp="$ROOT/.tools/.bootstrap-mongo.$$"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  tar -xzf "$tarball" -C "$tmp" || { echo "!! 解压失败"; rm -rf "$tmp"; return 1; }
+  [ -d "$tmp/$name" ] || { echo "!! 解压后没找到 $name 目录"; rm -rf "$tmp"; return 1; }
+  rm -rf "$ROOT/.tools/$dir"
+  mv "$tmp/$name" "$ROOT/.tools/$dir" && rm -rf "$tmp"
+  drop_tarball "$tarball"; rm -f "$sidecar"
+
+  if [ -x "$bin" ]; then
+    echo "    已安装: $("$bin" --version 2>/dev/null | head -1)"
+    local missing; missing=$(ldd "$bin" 2>/dev/null | grep "not found" || true)
+    if [ -n "$missing" ]; then
+      echo "    !! mongod 缺动态库（跑不起来）:"
+      echo "$missing" | sed 's/^/       /'
+      echo "       ubuntu2204 构建需要 libssl3/libcrypto3；老发行版可试 VANBLOG_MONGO_PLATFORM=ubuntu2004"
+      return 1
+    fi
+  fi
+}
+
+# 建本地骨架：数据目录、前台静态软链、config.yaml、tsconfig.dev.json、.git/info/exclude
+bootstrap_skeleton() {
+  echo "==> 建本地目录骨架"
+  mkdir -p "$LOG_DIR" "$PID_DIR" "$MONGO_DATA" "$DEV_DIR/static" "$DEV_DIR/codeRunner" \
+    "$DEV_DIR/pluginRunner" "$ROOT/.tools/home" "$ROOT/.tools/pnpm-home" \
+    "$ROOT/.tools/npm-cache" "$ROOT/.tools/pnpm-store"
+
+  local link="$ROOT/packages/website/public/static"
+  if [ -L "$link" ] || [ -e "$link" ]; then
+    echo "    packages/website/public/static 已存在，跳过"
+  else
+    mkdir -p "$(dirname "$link")"
+    ln -sfn ../../../vanblog_dev/static "$link" \
+      && echo "    软链 packages/website/public/static -> ../../../vanblog_dev/static（让前台 dev 能出图）"
+  fi
+
+  # 下面两个文件属于 packages/server，只有在仓库根目录下跑 bootstrap 才有意义
+  if [ ! -d "$ROOT/packages/server" ]; then
+    echo "    (没找到 packages/server，跳过 config.yaml / tsconfig.dev.json；请在仓库根目录下运行)"
+    return 0
+  fi
+
+  local cfg="$ROOT/packages/server/config.yaml"
+  if [ -f "$cfg" ]; then
+    echo "    packages/server/config.yaml 已存在，跳过"
+  else
+    {
+      echo "# 由 dev-env.sh bootstrap 生成（仓库 .gitignore 已忽略此文件）"
+      echo "# 路径必须是绝对路径：server 进程的 cwd 是 packages/server"
+      echo "database:"
+      echo "  url: mongodb://localhost:27017/vanBlog?authSource=admin"
+      echo "static:"
+      echo "  path: $DEV_DIR/static"
+      echo "demo: 'false'"
+      echo "waline:"
+      echo "  db: waline"
+      echo "log: $LOG_DIR"
+      echo "codeRunner:"
+      echo "  path: $DEV_DIR/codeRunner"
+      echo "pluginRunner:"
+      echo "  path: $DEV_DIR/pluginRunner"
+    } > "$cfg" && echo "    已生成 packages/server/config.yaml" \
+      || echo "    !! 写入 packages/server/config.yaml 失败（磁盘/权限？）"
+  fi
+
+  # 限制 typeRoots，避免 TS 4.9 去解析家目录 node_modules/@types 里的新语法包（详见 AGENTS.md §3.6）
+  local tsc="$ROOT/packages/server/tsconfig.dev.json"
+  if [ -f "$tsc" ]; then
+    echo "    packages/server/tsconfig.dev.json 已存在，跳过"
+  else
+    {
+      echo "{"
+      echo '  "extends": "./tsconfig.build.json",'
+      echo '  "compilerOptions": {'
+      echo '    "typeRoots": ["./node_modules/@types", "../../node_modules/@types"],'
+      echo '    "tsBuildInfoFile": "./dist/.tsbuildinfo-dev"'
+      echo "  }"
+      echo "}"
+    } > "$tsc" && echo "    已生成 packages/server/tsconfig.dev.json" \
+      || echo "    !! 写入 packages/server/tsconfig.dev.json 失败（磁盘/权限？）"
+  fi
+
+  # 本地文件不要污染 git status：写进 .git/info/exclude（不动仓库的 .gitignore）
+  local exclude="$ROOT/.git/info/exclude"
+  if [ -f "$exclude" ]; then
+    local entry added=0
+    for entry in ".tools/" "vanblog_dev/" ".xdg-data/" ".pnpm-home/" \
+      "packages/server/tsconfig.dev.json" "packages/website/public/static" "AGENTS.local.md"; do
+      if ! grep -qxF "$entry" "$exclude"; then
+        echo "$entry" >> "$exclude"; added=1
+      fi
+    done
+    [ "$added" -eq 1 ] && echo "    已补全 .git/info/exclude（本地文件不进 git status）"
+  fi
+}
+
+do_bootstrap() {
+  local with_legacy=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --with-legacy-mongo) with_legacy=1 ;;
+      -h | --help)
+        sed -n '/^# bootstrap:/,/^# ---.*$/p' "$0" | sed 's/^# \{0,1\}//'
+        return 0 ;;
+      *) echo "未知参数: $arg（可用: --with-legacy-mongo）"; return 1 ;;
+    esac
+  done
+
+  local missing=0 tool
+  for tool in curl tar sha256sum; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "!! 缺少命令: $tool"; missing=1; }
+  done
+  command -v xz >/dev/null 2>&1 || { echo "!! 缺少命令: xz（解压 Node tarball 需要）"; missing=1; }
+  [ "$missing" -eq 0 ] || return 1
+
+  mkdir -p "$ROOT/.tools"
+  local failed=0
+  install_node || failed=1
+  if [ "$failed" -eq 0 ]; then
+    install_pnpm || failed=1
+  fi
+  install_mongo "$BOOTSTRAP_MONGO_VERSION" mongodb || failed=1
+  if [ "$with_legacy" -eq 1 ]; then
+    echo "==> 额外安装老版本 mongod（导入 FCV 4.4 备份时用，见 AGENTS.md §4.2）"
+    install_mongo "$BOOTSTRAP_MONGO50_VERSION" mongodb50 || failed=1
+    install_mongo "$BOOTSTRAP_MONGO60_VERSION" mongodb60 || failed=1
+  fi
+  bootstrap_skeleton
+
+  echo
+  if [ "$failed" -ne 0 ]; then
+    echo "!! bootstrap 有失败项，请按上面的提示处理后重跑（可重复执行，已装好的会跳过）"
+    return 1
+  fi
+  echo "==> bootstrap 完成。下一步:"
+  echo "    ./dev-env.sh install    # 安装依赖（约 6 分钟，其中 sqlite3 源码编译约 5 分钟）"
+  echo "    ./dev-env.sh start      # 启动 MongoDB + server + admin + website"
+  echo "    ./dev-env.sh status     # 查看状态"
+}
+
 case "${1:-start}" in
+  bootstrap) shift; do_bootstrap "$@" ;;
   install) do_install ;;
   start) do_start ;;
   stop) do_stop ;;
@@ -222,5 +537,5 @@ case "${1:-start}" in
           echo "   列出各集合条数、db.adminCommand({getParameter:1,featureCompatibilityVersion:1}) 等。"
           exit 1
         fi ;;
-  *) echo "用法: $0 {install|start|stop|restart|status|logs [server|website|admin|mongod]|db}"; exit 1 ;;
+  *) echo "用法: $0 {bootstrap [--with-legacy-mongo]|install|start|stop|restart|status|logs [server|website|admin|mongod]|db}"; exit 1 ;;
 esac
