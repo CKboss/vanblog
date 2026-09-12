@@ -62,4 +62,6 @@ export const publicRoutes = [
   // 只读：检测图片里的隐写水印（协作者也能用来验图）
   'post-/api/admin/img/stego/detect',
   'post-/api/admin/article/searchByLink',
+  // 只读：导出文章/草稿为 Markdown（含图片打包），协作者本来就能读这些内容
+  'post-/api/admin/export/markdown',
 ];

@@ -15,7 +15,8 @@ import {
   updateDraft,
 } from '@/services/van-blog/api';
 import { getPathname } from '@/services/van-blog/getPathname';
-import { parseMarkdownFile, parseObjToMarkdown } from '@/services/van-blog/parseMarkdownFile';
+import { parseMarkdownFile } from '@/services/van-blog/parseMarkdownFile';
+import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
 import { useCacheState } from '@/services/van-blog/useCacheState';
 import { handleEditorHotkey } from '@/services/van-blog/editableKeyboard';
 import { DownOutlined } from '@ant-design/icons';
@@ -260,13 +261,22 @@ export default function () {
     });
   };
   const handleExport = async () => {
-    const md = parseObjToMarkdown(currObj);
-    const data = new Blob([md]);
-    const url = URL.createObjectURL(data);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${currObj?.title || '关于'}.md`;
-    link.click();
+    // 关于页没有文章 id，走 raw：直接把当前编辑器内容交给服务端打包
+    if (type == 'about') {
+      await downloadMarkdownExport({ type: 'raw', title: currObj?.title || '关于', content: value });
+      return;
+    }
+    if (!currObj?.id) {
+      message.warning('还没保存过，先保存再导出（否则拿不到分类、标签、别名这些 front matter）');
+      return;
+    }
+    // 带上当前编辑器内容：未保存的改动也能导出来（所见即所得），元信息仍取自已保存的那份
+    await downloadMarkdownExport({
+      id: currObj.id,
+      type: type == 'draft' ? 'draft' : 'article',
+      title: currObj?.title,
+      content: value,
+    });
   };
   const handleImport = async (file) => {
     setLoading(true);

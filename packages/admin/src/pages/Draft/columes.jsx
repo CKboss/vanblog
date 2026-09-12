@@ -3,7 +3,7 @@ import PublishDraftModal from '@/components/PublishDraftModal';
 import UpdateModal from '@/components/UpdateModal';
 import { genActiveObj } from '@/services/van-blog/activeColTools';
 import { deleteDraft, getAllCategories, getDraftById, getTags } from '@/services/van-blog/api';
-import { parseObjToMarkdown } from '@/services/van-blog/parseMarkdownFile';
+import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
 import { message, Modal, Tag } from 'antd';
 import { history } from 'umi';
 export const columns = [
@@ -133,21 +133,14 @@ export const columns = [
                 action?.reload();
               }}
             />,
-            <a
-              key={'exportDraft' + record.id}
-              onClick={async () => {
-                const { data: obj } = await getDraftById(record.id);
-                const md = parseObjToMarkdown(obj);
-                const data = new Blob([md]);
-                const url = URL.createObjectURL(data);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `${record.title}.md`;
-                link.click();
-              }}
-            >
-              导出
-            </a>,
+              <a
+                key={'exportDraft' + record.id}
+                onClick={() =>
+                  downloadMarkdownExport({ id: record.id, type: 'draft', title: record.title })
+                }
+              >
+                导出
+              </a>,
             <a
               key={'deleteDraft' + record.id}
               onClick={() => {

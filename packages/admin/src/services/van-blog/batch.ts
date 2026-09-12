@@ -40,7 +40,8 @@ export const batchExport = async (ids: string[], isDraft = false) => {
 
 export const exportEachById = async (id: string, isDraft = false) => {
   const fn = isDraft ? getDraftById : getArticleById;
-  const { data: obj } = await getArticleById(id);
+  // 以前这里写死了 getArticleById，草稿批量导出实际去请求文章接口，导不出东西
+  const { data: obj } = await fn(id);
   const md = parseObjToMarkdown(obj);
   const data = new Blob([md]);
   const url = URL.createObjectURL(data);

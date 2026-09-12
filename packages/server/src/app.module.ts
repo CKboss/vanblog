@@ -34,6 +34,8 @@ import { InitMiddleware } from './provider/auth/init.middleware';
 import { NoStoreCacheMiddleware } from './provider/cache/no-store.middleware';
 import { BackupController } from './controller/admin/backup/backup.controller';
 import { FullBackupProvider } from './provider/backup/fullBackup.provider';
+import { MarkdownExportProvider } from './provider/export/markdownExport.provider';
+import { ExportController } from './controller/admin/export/export.controller';
 import { MenuMetaController } from './controller/admin/menu/menu.meta.controller';
 import { ScheduleModule } from '@nestjs/schedule';
 import { Viewer, ViewerSchema } from './scheme/viewer.schema';
@@ -133,6 +135,7 @@ import { initJwt } from './utils/initJwt';
     InitController,
     MenuMetaController,
     BackupController,
+    ExportController,
     MetaController,
     AnalysisController,
     SettingController,
@@ -151,6 +154,7 @@ import { initJwt } from './utils/initJwt';
   providers: [
     AppService,
     FullBackupProvider,
+    MarkdownExportProvider,
     ArticleProvider,
     CategoryProvider,
     MetaProvider,

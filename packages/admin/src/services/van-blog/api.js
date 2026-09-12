@@ -405,6 +405,22 @@ export async function getAllCollaboratorsList() {
     method: 'GET',
   });
 }
+/**
+ * 导出文章 / 草稿为 Markdown 压缩包（`<标题>.md` 原样 + `<标题>.mdz` 带图包）。
+ * 返回 `{ data: Blob, response }`，response 上有 `X-Export-Report` 头可以拿打包明细。
+ */
+export async function exportMarkdownZip(payload) {
+  return request('/api/admin/export/markdown', {
+    method: 'POST',
+    data: payload,
+    skipErrorHandler: true,
+    responseType: 'blob',
+    getResponse: true,
+    // 图多的文章打包 + 下载可能几十秒
+    timeout: 10 * 60 * 1000,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 整站备份：数据库（含 waline 评论）+ 本地静态文件（图床/附件/自定义页面）打成一个高压缩归档
 // ---------------------------------------------------------------------------

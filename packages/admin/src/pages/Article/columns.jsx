@@ -8,7 +8,7 @@ import {
   updateArticle,
 } from '@/services/van-blog/api';
 import { getPathname } from '@/services/van-blog/getPathname';
-import { parseObjToMarkdown } from '@/services/van-blog/parseMarkdownFile';
+import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
 import { message, Modal, Space, Switch, Tag } from 'antd';
 import { useState } from 'react';
 import { history } from 'umi';
@@ -236,16 +236,10 @@ export const columns = [
               />,
               <a
                 key={'exportArticle' + record.id}
-                onClick={async () => {
-                  const { data: obj } = await getArticleById(record.id);
-                  const md = parseObjToMarkdown(obj);
-                  const data = new Blob([md]);
-                  const url = URL.createObjectURL(data);
-                  const link = document.createElement('a');
-                  link.href = url;
-                  link.download = `${record.title}.md`;
-                  link.click();
-                }}
+                onClick={() =>
+                  // 服务端打包：.md（原样）+ .mdz（md 与图片），一个 zip 下载
+                  downloadMarkdownExport({ id: record.id, type: 'article', title: record.title })
+                }
               >
                 导出
               </a>,

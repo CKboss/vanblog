@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -656,13 +656,51 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   日期范围查询仍命中 53 条，`stegoKey` 的 sha256 与归档内一致）、上传恢复（multipart 2.7s，临时文件已清）、
   错误路径（非备份 / 截断 / 假 7z 都返回可读的 400）、删除。
 
-### 7.7 测试基线（本分支最后一次全量运行的结果）
+### 7.7 导出单篇文章（`.md` 原样 + `.mdz` 带图包）
+
+- 接口 `POST /api/admin/export/markdown`（`AdminGuard`；进了 `publicRoutes`，协作者可用——只读，而且他们本来就能读这些文章）：
+  body `{id?, type: 'article'|'draft'|'raw', title?, content?}`，回一个 zip；
+  `X-Export-Report` 头里带打包明细（前端要靠 `Access-Control-Expose-Headers` 才读得到）。
+- 产物：`<标题>.md`（**原样**：front matter + 正文，图片链接不动）、`<标题>.mdz`（**只有真有图片时才生成**：
+  本身就是个 zip = 链接改成相对路径的 md + `<标题>.assets/` 图片目录，Typora 风格）、
+  `导出说明.md`（只有出现跳过/失败图片时才生成）。外层再套一个 zip 一次性下载，免得浏览器拦多文件。
+- `type:'raw'` = 不查库，直接用调用方给的 title/content：**编辑器里未保存的改动**和**关于页**（没有文章 id）走这条路。
+- 图片识别（`utils/markdownExport.ts`）：`![]()`、`![](url "title")`、`![](<带空格 url>)`、`<img src>`、
+  引用式 `![][label]`（改的是定义行，用出处不动）。**代码块与行内代码里的图片语法一律跳过**：
+  做法是把代码区「涂黑」成等长 NUL 占位（`maskCodeRegions`），偏移量不变，再按偏移精确改写，所以不会误伤。
+- 偏移坑：`<img src="...">` 的值起点必须用 `/^\s*src\s*=\s*["']?/` 量前缀，**不能**用「匹配长度 − 值长度」倒推
+  （带引号时尾部还有一个引号，会整体偏一位，实测把 `src="/static/x.webp"` 改成了 `src="/x.assets/x.webp width=...`，
+  把闭引号吃掉了）。`![](...)` 的偏移可以用 `m[0].length - m[2].length - 1` 倒推（值确实在尾部）。
+- 文件名：标题里的空格与 `()[]{}'"#%` 换成 `-`（markdown 链接目标里有这些就得转义或百分号编码，
+  Typora/Obsidian/VSCode 支持程度不一致），于是链接可以直接写 `标题.assets/图.webp`，不做任何转义；
+  标题原文仍在 front matter 里，导入回来不丢。
+- front matter 自己拼（`buildFrontMatter`），比原来后台那份严谨：标题带冒号/空格会加引号、
+  `tags` 输出真正的 YAML 数组（旧实现 `tags: ${value}` 会把数组 toString 成 `a,b`）、补了 `pathname`、
+  `false`/空值不写。旧格式 js-yaml 也能读，但结构会丢。
+- 外链图片：axios 抓一次（超时 15s、单张 ≤50MB、≤3 次跳转）；**抓不到就保留原链接**并写进 `导出说明.md`，
+  不影响整体导出。抓之前过 `assertSafeRemoteUrl()`：只允许 http/https、字面量内网地址直接拒、
+  域名还要 `dns.lookup` 后确认没解析到内网（防 SSRF / DNS rebinding）——协作者也能调这个接口，所以必须挡。
+- 本地图片按**路径**塞进 zip（`compressing.zip.Stream` 的 `addEntry(path)`），不整块读进内存；
+  「本站域名的绝对地址」也算本地（`classifyImageUrl` 会比对 `siteInfo.baseUrl`）。
+- 后台：文章/草稿列表每行「导出」、编辑器「导出文章 / 导出草稿 / 导出关于」全部改成服务端打包
+  （`services/van-blog/exportMarkdown.tsx` 的 `downloadMarkdownExport()`：读报告头、解析 `filename*=UTF-8''`、
+  blob 里其实是 JSON 时报错要嗅探出来、有失败图片时弹窗列清单）。文件后缀必须是 `.tsx`（里面有 JSX，`.ts` 编译不过）。
+- 顺手修了 `batch.ts` 的 `exportEachById`：收了 `isDraft` 参数却写死 `getArticleById`，草稿批量导出等于在导文章。
+- 测试：`utils/markdownExport.spec.ts`(20)、`provider/export/markdownExport.provider.spec.ts`(9，会解包校验 mdz 内部结构、
+  外链成功/失败、raw、草稿、丢图、SSRF；`jest.mock('dns')` 让离线环境也能测外链)、
+  `packages/admin/tests/unit/markdownExport.test.js`(12)。
+- 本机 e2e：文章 46（11 张本地图）→ 11.04MB，11 张全在 `.assets/`，链接 0 处失配；文章 2（无图）→ 只有 `.md`；
+  文章 44（标题带空格 + 1 个 `<img>`）；草稿（`type:'draft'`）；边界文章（代码块假图 / 行内代码假图 / data URI /
+  坏外链 / 引用式 / 本站绝对地址 / 同一张图重复引用）全部符合预期；SSRF 三例（127.0.0.1、192.168.1.1、localhost）
+  全被拒且 axios 没被调用；400/401 错误路径齐全。
+
+### 7.8 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 474 用例：473 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| server `jest` | 511 用例：510 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 46 文件 / 372 用例全绿 |
-| admin `node --test tests/unit` | 43 文件 / 167 用例全绿 |
+| admin `node --test tests/unit` | 47 文件 / 179 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -672,7 +710,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.7 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.8 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
