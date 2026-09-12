@@ -1,0 +1,893 @@
+/* ==========================================================================
+   Apple 风格皮肤 —— 参考 https://developer.apple.com/news/ 的排版语言
+
+   规则全部挂在 [data-ui="apple"] 下（由 components/Layout 按站点设置 uiStyle 输出，
+   并同步到 <html data-ui>），后台「站点信息 → 界面风格」切回「默认」即整体失效。
+   这里**只改样式、不动结构**：所有选择器都写在既有组件的 class / id 上。
+
+   设计要点：
+   - 字体 SF Pro 栈，正文 17px / 1.6（Apple 的标志性正文字号）
+   - 画布 #f5f5f7、表面 #fff、文字 #1d1d1f、次要 #6e6e73、发丝线 #d2d2d7、强调 #0071e3
+   - 列表页：单列 980px，条目之间用发丝线分隔（而不是一张张浮起的卡片）
+   - 文章页：780px 阅读栏，标题层级靠字重区分，引用块做成浅灰 callout
+   - 导航栏：saturate(180%) blur(20px) 毛玻璃 + 底部发丝线
+   - 圆角：卡片 18px / 图片 12px / 按钮胶囊 980px
+   - 动效：0.3s cubic-bezier(.4,0,.2,1)，hover 抬升 + 封面轻微放大
+   ========================================================================== */
+
+[data-ui="apple"] {
+  /* Apple News 列表页是纯白底 + 发丝线分隔；#f5f5f7 只用在代码块/引用/chip 这些内嵌面 */
+  --ap-canvas: #ffffff;
+  --ap-surface: #ffffff;
+  --ap-surface-2: #fbfbfd;
+  --ap-surface-3: #f5f5f7;
+  --ap-text: #1d1d1f;
+  --ap-text-2: #6e6e73;
+  --ap-text-3: #86868b;
+  --ap-hairline: #d2d2d7;
+  --ap-hairline-soft: rgba(0, 0, 0, 0.08);
+  --ap-accent: #0071e3;
+  --ap-accent-hover: #0077ed;
+  --ap-nav-bg: rgba(255, 255, 255, 0.72);
+  --ap-radius-card: 18px;
+  --ap-radius-img: 12px;
+  --ap-radius-pill: 980px;
+  --ap-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --ap-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.1);
+  --ap-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ap-content: 980px;
+  --ap-read: 780px;
+  --ap-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "SF Pro Icons", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue",
+    "Microsoft YaHei", Arial, sans-serif;
+  --ap-font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+/* 暗色沿用站点已有的 html.dark 机制，只把令牌整体反转 */
+html.dark [data-ui="apple"] {
+  --ap-canvas: #000000;
+  --ap-surface: #1d1d1f;
+  --ap-surface-2: #161617;
+  --ap-surface-3: #2c2c2e;
+  --ap-text: #f5f5f7;
+  --ap-text-2: #a1a1a6;
+  --ap-text-3: #86868b;
+  --ap-hairline: #424245;
+  --ap-hairline-soft: rgba(255, 255, 255, 0.12);
+  --ap-accent: #2997ff;
+  --ap-accent-hover: #4dabff;
+  --ap-nav-bg: rgba(29, 29, 31, 0.72);
+  --ap-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --ap-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------------------------------------------------------------- 基础排版 */
+[data-ui="apple"],
+[data-ui="apple"] body,
+[data-ui="apple"] .markdown-body,
+[data-ui="apple"] button,
+[data-ui="apple"] input,
+[data-ui="apple"] textarea {
+  font-family: var(--ap-font);
+}
+
+[data-ui="apple"] {
+  background: var(--ap-canvas);
+  color: var(--ap-text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 17px;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+}
+
+/* <html> 上的 data-ui 是 Layout 挂载后同步过去的，负责 overscroll 区域的底色 */
+html[data-ui="apple"] {
+  background-color: var(--ap-canvas) !important;
+}
+html[data-ui="apple"].dark {
+  background-color: #000 !important;
+}
+
+[data-ui="apple"] ::selection {
+  background: rgba(0, 113, 227, 0.18);
+}
+html.dark [data-ui="apple"] ::selection {
+  background: rgba(41, 151, 255, 0.28);
+}
+
+[data-ui="apple"] :focus-visible {
+  outline: 2px solid var(--ap-accent);
+  outline-offset: 2px;
+}
+
+/* 细滚动条，别抢视觉 */
+[data-ui="apple"] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+[data-ui="apple"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 980px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  background-clip: content-box;
+  border: 3px solid transparent;
+}
+[data-ui="apple"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ 导航栏 */
+[data-ui="apple"] #nav {
+  background: var(--ap-nav-bg) !important;
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  box-shadow: none !important;
+  border-bottom: 1px solid var(--ap-hairline-soft);
+}
+
+[data-ui="apple"] #nav > div {
+  height: 52px !important;
+  border-bottom: 0 !important;
+}
+
+[data-ui="apple"] #nav a,
+[data-ui="apple"] #nav .nav-item,
+[data-ui="apple"] #nav li {
+  color: var(--ap-text-2);
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  transition: color 0.25s var(--ap-ease);
+}
+
+[data-ui="apple"] #nav a:hover,
+[data-ui="apple"] #nav .nav-item:hover,
+[data-ui="apple"] #nav .nav-item-current {
+  color: var(--ap-text) !important;
+}
+
+/* 站点名：Apple 那种中号半粗、不加装饰 */
+[data-ui="apple"] #nav .nav-bar-leading a div,
+[data-ui="apple"] #nav [class*="group/site-name"] a {
+  font-size: 19px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  color: var(--ap-text) !important;
+}
+
+/* 移动端抽屉菜单 */
+[data-ui="apple"] .bm-menu {
+  background: var(--ap-surface);
+  box-shadow: none;
+  border-right: 1px solid var(--ap-hairline-soft);
+}
+[data-ui="apple"] .bm-item {
+  color: var(--ap-text) !important;
+  font-size: 17px;
+}
+
+/* -------------------------------------------------------------------- 布局 */
+/* 列表类页面：作者卡片从右侧栏挪到页首，正文占满 980px */
+[data-ui="apple"] .vanblog-body {
+  width: 100%;
+}
+
+[data-ui="apple"] .vanblog-main {
+  max-width: var(--ap-content) !important;
+  width: 100%;
+}
+
+[data-ui="apple"] .vanblog-body:has(#author-card) {
+  flex-direction: column;
+  align-items: center;
+}
+
+[data-ui="apple"] .vanblog-body:has(#author-card) .vanblog-sider {
+  display: block !important;
+  order: -1;
+  width: 100% !important;
+  max-width: var(--ap-content);
+  margin: 0;
+}
+
+/* ------------------------------------------------- 作者卡片 -> 页首简介条 */
+[data-ui="apple"] #author-card {
+  position: static !important;
+  width: 100%;
+  transform: none !important;
+}
+
+[data-ui="apple"] #author-card > div {
+  width: 100% !important;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+  background: transparent !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 28px 0 24px !important;
+  border-bottom: 1px solid var(--ap-hairline);
+}
+
+[data-ui="apple"] #author-card > div > div {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 16px;
+  padding: 0 !important;
+  flex-wrap: wrap;
+}
+
+[data-ui="apple"] #author-card img {
+  width: 56px !important;
+  height: 56px !important;
+  border-radius: 50%;
+}
+
+[data-ui="apple"] #author-card .font-semibold {
+  font-size: 21px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  color: var(--ap-text) !important;
+  margin: 0 !important;
+}
+
+[data-ui="apple"] #author-card .text-sm {
+  font-size: 15px !important;
+  color: var(--ap-text-2) !important;
+  margin: 0 !important;
+  max-width: 60ch;
+}
+
+/* ---------------------------------------------------------------- 文章列表 */
+[data-ui="apple"] .post-card-wrapper {
+  margin-bottom: 0;
+}
+
+/* 条目之间用发丝线分隔，而不是一张张浮起的卡片 */
+[data-ui="apple"] .post-card-wrapper + .post-card-wrapper {
+  border-top: 1px solid var(--ap-hairline);
+}
+
+[data-ui="apple"] #post-card.post-card {
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 34px 0 !important;
+  overflow: visible;
+}
+
+/* 标题行：左对齐，操作按钮（复制/编辑）留在右侧 */
+[data-ui="apple"] .post-card-title {
+  display: flex !important;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+[data-ui="apple"] .post-card-title > span[aria-hidden="true"] {
+  display: none;
+}
+
+[data-ui="apple"] .post-card-title a {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+[data-ui="apple"] .post-card-title a > div,
+[data-ui="apple"] .post-card-title > div.ua-link {
+  font-size: 28px !important;
+  line-height: 1.2 !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.015em;
+  color: var(--ap-text) !important;
+  text-align: left !important;
+  padding: 0 !important;
+  margin: 0 0 8px !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  transition: color 0.25s var(--ap-ease);
+}
+
+[data-ui="apple"] .post-card-title a:hover > div {
+  color: var(--ap-accent) !important;
+}
+
+[data-ui="apple"] .post-card-title-actions {
+  margin: 6px 0 0 !important;
+}
+
+/* 元信息行（日期 / 分类 / 阅读数）：小字灰色，左对齐 */
+[data-ui="apple"] .post-card-sub-title {
+  text-align: left !important;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  font-size: 13px !important;
+  color: var(--ap-text-3) !important;
+  margin-bottom: 4px;
+}
+
+[data-ui="apple"] .post-card-sub-title span,
+[data-ui="apple"] .post-card-sub-title div {
+  color: var(--ap-text-3) !important;
+  font-size: 13px !important;
+}
+
+[data-ui="apple"] .post-card-sub-title > span {
+  padding: 0 12px 0 0 !important;
+  margin-right: 12px;
+}
+
+[data-ui="apple"] .post-card-sub-title > span ~ span {
+  border-color: var(--ap-hairline) !important;
+}
+
+[data-ui="apple"] .post-card-sub-title svg {
+  width: 13px;
+  height: 13px;
+  opacity: 0.65;
+}
+
+/* 摘要 */
+[data-ui="apple"] .post-card-wrapper .markdown-body {
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--ap-text-2);
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent;
+}
+
+/* 列表页只露 4 行，其余留给文章页（Apple News 的做法） */
+[data-ui="apple"] .post-card-wrapper .post-card > div > .markdown-body {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+[data-ui="apple"] .post-card-wrapper .markdown-body p {
+  margin: 0 0 8px;
+}
+
+/* 「阅读全文」：从描边方块改成 Apple 的蓝色文字链接 + 尖角括号 */
+[data-ui="apple"] .post-card div.flex.justify-center.mt-4 {
+  justify-content: flex-start !important;
+  margin-top: 14px !important;
+}
+
+[data-ui="apple"] .post-card div.flex.justify-center.mt-4 > a > div {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  color: var(--ap-accent) !important;
+  font-size: 17px !important;
+  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+[data-ui="apple"] .post-card div.flex.justify-center.mt-4 > a > div::after {
+  content: "›";
+  font-size: 19px;
+  line-height: 1;
+  transition: transform 0.25s var(--ap-ease);
+}
+
+[data-ui="apple"] .post-card div.flex.justify-center.mt-4 > a:hover > div {
+  color: var(--ap-accent-hover) !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+[data-ui="apple"]
+  .post-card
+  div.flex.justify-center.mt-4
+  > a:hover
+  > div::after {
+  transform: translateX(2px);
+}
+
+/* 列表里的标签 / 上一篇下一篇：去描边，做成安静的文字链接 */
+[data-ui="apple"] .post-card hr {
+  border-color: var(--ap-hairline) !important;
+  opacity: 1;
+  margin: 22px 0 14px;
+}
+
+/* ------------------------------------------------------------------ 文章页 */
+[data-ui="apple"] .vanblog-article-page {
+  max-width: var(--ap-read);
+  margin: 0 auto;
+  width: 100%;
+}
+
+[data-ui="apple"] .vanblog-article-page #post-card.post-card {
+  padding: 40px 0 48px !important;
+}
+
+[data-ui="apple"] .vanblog-article-page .post-card-title a > div,
+[data-ui="apple"] .vanblog-article-page .post-card-title > div.ua-link {
+  font-size: 40px !important;
+  line-height: 1.12 !important;
+  letter-spacing: -0.022em;
+  margin-bottom: 12px !important;
+}
+
+[data-ui="apple"] .vanblog-article-page .post-card-sub-title {
+  font-size: 14px !important;
+  padding-bottom: 20px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--ap-hairline);
+}
+
+[data-ui="apple"] .vanblog-article-page .post-card-sub-title span,
+[data-ui="apple"] .vanblog-article-page .post-card-sub-title div {
+  font-size: 14px !important;
+}
+
+/* 文章页正文不裁行、颜色更实 */
+[data-ui="apple"] .vanblog-article-page .markdown-body {
+  display: block !important;
+  -webkit-line-clamp: unset !important;
+  overflow: visible !important;
+  color: var(--ap-text);
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+/* 封面图 */
+[data-ui="apple"] .vanblog-article-page img,
+[data-ui="apple"] .post-card-wrapper img {
+  border-radius: var(--ap-radius-img);
+}
+html.dark [data-ui="apple"] .markdown-body img {
+  filter: brightness(0.92);
+}
+
+/* ------------------------------------------------------- Markdown 正文排版 */
+[data-ui="apple"] .markdown-body {
+  background: transparent !important;
+  color: var(--ap-text);
+}
+
+[data-ui="apple"] .markdown-body h1,
+[data-ui="apple"] .markdown-body h2,
+[data-ui="apple"] .markdown-body h3,
+[data-ui="apple"] .markdown-body h4,
+[data-ui="apple"] .markdown-body h5,
+[data-ui="apple"] .markdown-body h6 {
+  color: var(--ap-text) !important;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  border: 0 !important;
+  padding-bottom: 0 !important;
+  margin: 1.9em 0 0.6em !important;
+  background: transparent !important;
+}
+
+[data-ui="apple"] .markdown-body h1 {
+  font-size: 32px !important;
+}
+[data-ui="apple"] .markdown-body h2 {
+  font-size: 28px !important;
+}
+[data-ui="apple"] .markdown-body h3 {
+  font-size: 22px !important;
+}
+[data-ui="apple"] .markdown-body h4 {
+  font-size: 19px !important;
+}
+[data-ui="apple"] .markdown-body h5,
+[data-ui="apple"] .markdown-body h6 {
+  font-size: 17px !important;
+  color: var(--ap-text-2) !important;
+}
+
+[data-ui="apple"] .markdown-body p {
+  margin: 0 0 1.15em !important;
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+[data-ui="apple"] .markdown-body strong {
+  font-weight: 600;
+  color: var(--ap-text);
+}
+
+[data-ui="apple"] .markdown-body a {
+  color: var(--ap-accent) !important;
+  text-decoration: none !important;
+  border-bottom: 0 !important;
+  transition: color 0.2s var(--ap-ease);
+}
+[data-ui="apple"] .markdown-body a:hover {
+  color: var(--ap-accent-hover) !important;
+  text-decoration: underline !important;
+  text-underline-offset: 3px;
+}
+
+[data-ui="apple"] .markdown-body ul,
+[data-ui="apple"] .markdown-body ol {
+  padding-left: 1.4em !important;
+  margin: 0 0 1.15em !important;
+}
+[data-ui="apple"] .markdown-body li {
+  margin: 0.35em 0;
+  line-height: 1.6;
+}
+[data-ui="apple"] .markdown-body li::marker {
+  color: var(--ap-text-3);
+}
+
+/* 引用块：Apple 的浅灰圆角 callout */
+[data-ui="apple"] .markdown-body blockquote {
+  background: var(--ap-surface-3) !important;
+  border: 0 !important;
+  border-left: 3px solid var(--ap-accent) !important;
+  border-radius: 10px;
+  padding: 14px 18px !important;
+  margin: 0 0 1.15em !important;
+  color: var(--ap-text-2) !important;
+}
+[data-ui="apple"] .markdown-body blockquote p:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* 行内代码 / 代码块 */
+[data-ui="apple"] .markdown-body code {
+  font-family: var(--ap-font-mono);
+  font-size: 0.88em;
+  background: var(--ap-surface-3) !important;
+  border-radius: 6px;
+  padding: 0.15em 0.4em !important;
+  color: var(--ap-text) !important;
+  border: 0 !important;
+}
+
+[data-ui="apple"] .markdown-body pre {
+  background: var(--ap-surface-2) !important;
+  border: 1px solid var(--ap-hairline-soft);
+  border-radius: var(--ap-radius-img) !important;
+  padding: 16px 18px !important;
+  margin: 0 0 1.3em !important;
+  box-shadow: none !important;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+[data-ui="apple"] .markdown-body pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: 14px;
+  border-radius: 0;
+}
+
+/* 表格：发丝线 + 表头浅底 */
+[data-ui="apple"] .markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 1.3em;
+  font-size: 15px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--ap-hairline);
+}
+[data-ui="apple"] .markdown-body th {
+  background: var(--ap-surface-3) !important;
+  font-weight: 600;
+  color: var(--ap-text) !important;
+}
+[data-ui="apple"] .markdown-body th,
+[data-ui="apple"] .markdown-body td {
+  border: 1px solid var(--ap-hairline) !important;
+  padding: 9px 13px !important;
+}
+[data-ui="apple"] .markdown-body tr {
+  background: transparent !important;
+  border: 0 !important;
+}
+[data-ui="apple"] .markdown-body tr:nth-child(2n) {
+  background: var(--ap-surface-2) !important;
+}
+
+[data-ui="apple"] .markdown-body hr {
+  height: 1px !important;
+  background: var(--ap-hairline) !important;
+  border: 0 !important;
+  margin: 2.2em 0 !important;
+}
+
+/* 自定义容器（::: tip 等）：统一成 Apple 的浅灰圆角块 */
+[data-ui="apple"] .markdown-body .custom-container,
+[data-ui="apple"] .markdown-body [class*="custom-container"] {
+  border-radius: 12px !important;
+  border: 1px solid var(--ap-hairline-soft) !important;
+}
+
+/* -------------------------------------------------------------- TOC 右栏 */
+[data-ui="apple"] #toc-card {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-ui="apple"] #toc-card .side-bar,
+[data-ui="apple"] .vanblog-sider:has(#toc-card) .side-bar {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-ui="apple"] .vanblog-sider:has(#toc-card) {
+  width: 220px !important;
+  border-left: 1px solid var(--ap-hairline);
+  padding-left: 18px;
+  margin-left: 28px;
+}
+
+[data-ui="apple"] #toc-card a,
+[data-ui="apple"] .toc a {
+  color: var(--ap-text-2) !important;
+  font-size: 13px !important;
+  line-height: 1.5;
+  text-decoration: none !important;
+  transition: color 0.2s var(--ap-ease);
+}
+
+[data-ui="apple"] #toc-card a:hover,
+[data-ui="apple"] .toc a:hover {
+  color: var(--ap-accent) !important;
+}
+
+[data-ui="apple"] #toc-card .toc-active,
+[data-ui="apple"] .toc .toc-active,
+[data-ui="apple"] #toc-card [class*="active"] {
+  color: var(--ap-accent) !important;
+  font-weight: 500;
+}
+
+/* ---------------------------------------------------------------- 时间线 */
+[data-ui="apple"] .vanblog-timeline h2 {
+  font-size: 32px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  color: var(--ap-text) !important;
+}
+
+[data-ui="apple"] .vanblog-timeline .border-l {
+  border-color: var(--ap-hairline) !important;
+  border-left-width: 1px !important;
+}
+
+[data-ui="apple"] .vanblog-timeline-item {
+  position: relative;
+}
+
+[data-ui="apple"] .vanblog-timeline-item .text-lg {
+  font-size: 19px !important;
+  font-weight: 500;
+  color: var(--ap-text) !important;
+  transition: color 0.2s var(--ap-ease);
+}
+
+[data-ui="apple"] .vanblog-timeline-item:hover .text-lg {
+  color: var(--ap-accent) !important;
+}
+
+[data-ui="apple"] .vanblog-timeline-item .bg-gray-200 {
+  background: var(--ap-surface-3) !important;
+  border-radius: var(--ap-radius-pill) !important;
+  padding: 2px 10px !important;
+  color: var(--ap-text-2) !important;
+}
+
+/* ------------------------------------------------------------ 分类 / 标签 */
+[data-ui="apple"] .vanblog-category-list a,
+[data-ui="apple"] .vanblog-category-list button {
+  border-radius: var(--ap-radius-pill) !important;
+  transition: all 0.25s var(--ap-ease);
+}
+
+[data-ui="apple"] .vanblog-category-list [class*="rounded"] {
+  border-radius: var(--ap-radius-pill) !important;
+  border: 0 !important;
+  background: var(--ap-surface-3) !important;
+  color: var(--ap-text-2) !important;
+}
+
+[data-ui="apple"] .vanblog-category-list [class*="rounded"]:hover {
+  background: var(--ap-accent) !important;
+  color: #fff !important;
+}
+
+/* ------------------------------------------------------------------ 友链 */
+[data-ui="apple"] .vanblog-link-card {
+  background: var(--ap-surface) !important;
+  border: 1px solid var(--ap-hairline-soft) !important;
+  border-radius: var(--ap-radius-card) !important;
+  box-shadow: none !important;
+  transition: transform 0.3s var(--ap-ease), box-shadow 0.3s var(--ap-ease) !important;
+}
+
+[data-ui="apple"] .vanblog-link-card:hover {
+  transform: translateY(-3px) !important;
+  box-shadow: var(--ap-shadow-hover) !important;
+}
+
+[data-ui="apple"] .vanblog-link-card img {
+  border-radius: 50% !important;
+}
+
+/* ------------------------------------------------------------------ 分页 */
+[data-ui="apple"] .vanblog-main ul li > div[style] {
+  border-radius: var(--ap-radius-pill) !important;
+  background: transparent !important;
+  border: 1px solid var(--ap-hairline);
+  color: var(--ap-text-2) !important;
+  font-size: 14px;
+  transition: all 0.25s var(--ap-ease);
+}
+
+[data-ui="apple"] .vanblog-main ul li > div[style]:hover {
+  border-color: var(--ap-accent);
+  color: var(--ap-accent) !important;
+}
+
+[data-ui="apple"] .vanblog-main ul li > div[class*="bg-gray-700"],
+[data-ui="apple"] .vanblog-main ul li > div[class*="text-white"] {
+  background: var(--ap-accent) !important;
+  border-color: var(--ap-accent) !important;
+  color: #fff !important;
+  font-weight: 500;
+}
+
+[data-ui="apple"] .vanblog-main ul li > div[class*="opacity-40"] {
+  opacity: 0.35 !important;
+}
+
+[data-ui="apple"] .vanblog-main input[class*="w-12"] {
+  border-radius: var(--ap-radius-pill) !important;
+  border: 1px solid var(--ap-hairline);
+  background: transparent !important;
+  color: var(--ap-text-2) !important;
+}
+
+/* ------------------------------------------------------------------ 页脚 */
+[data-ui="apple"] footer {
+  border-top: 1px solid var(--ap-hairline);
+  margin-top: 48px !important;
+  padding-top: 22px !important;
+  font-size: 13px !important;
+  color: var(--ap-text-3) !important;
+}
+
+[data-ui="apple"] footer p,
+[data-ui="apple"] footer a,
+[data-ui="apple"] footer span {
+  color: var(--ap-text-3) !important;
+  font-size: 13px !important;
+}
+
+[data-ui="apple"] footer a:hover {
+  color: var(--ap-accent) !important;
+  text-decoration: none !important;
+}
+
+/* ------------------------------------------------------------------ 评论 */
+[data-ui="apple"] .wl-panel,
+[data-ui="apple"] .wl-card {
+  border-radius: var(--ap-radius-img) !important;
+  border-color: var(--ap-hairline-soft) !important;
+  background: var(--ap-surface) !important;
+}
+
+[data-ui="apple"] .wl-btn,
+[data-ui="apple"] button[class*="wl-"] {
+  border-radius: var(--ap-radius-pill) !important;
+}
+
+[data-ui="apple"] .wl-input,
+[data-ui="apple"] .wl-editor {
+  border-radius: 10px !important;
+}
+
+/* ---------------------------------------------------------------- 其它组件 */
+/* 通用卡片（AboutCard / SearchCard / AlertCard 等）统一成 Apple 表面 */
+[data-ui="apple"] .card-shadow {
+  box-shadow: none !important;
+  border: 1px solid var(--ap-hairline-soft);
+  border-radius: var(--ap-radius-card) !important;
+  background: var(--ap-surface) !important;
+}
+html.dark [data-ui="apple"] .card-shadow {
+  background: var(--ap-surface) !important;
+  border-color: var(--ap-hairline-soft);
+}
+
+/* 通用按钮：胶囊 */
+[data-ui="apple"] .post-card button[class*="rounded"],
+[data-ui="apple"] .vanblog-main button.border-2 {
+  border-radius: var(--ap-radius-pill) !important;
+}
+
+/* 返回顶部：圆形毛玻璃 */
+[data-ui="apple"] [class*="backToTop"] {
+  border-radius: 50% !important;
+  background: var(--ap-nav-bg) !important;
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--ap-hairline-soft);
+  box-shadow: var(--ap-shadow) !important;
+}
+
+/* 404 */
+[data-ui="apple"] .vanblog-notfound .text-xl {
+  font-size: 28px !important;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--ap-text) !important;
+}
+[data-ui="apple"] .vanblog-notfound a {
+  color: var(--ap-accent) !important;
+}
+
+/* 加密文章解锁卡片、打赏按钮等小块：胶囊 + 发丝线 */
+[data-ui="apple"] .post-card input {
+  border-radius: 10px !important;
+  border: 1px solid var(--ap-hairline) !important;
+  background: var(--ap-surface) !important;
+  color: var(--ap-text) !important;
+  padding: 8px 12px !important;
+}
+
+/* 移动端：字号与间距收紧一档，别显得空旷 */
+@media (max-width: 767px) {
+  [data-ui="apple"] {
+    font-size: 16px;
+  }
+  [data-ui="apple"] #post-card.post-card {
+    padding: 26px 0 !important;
+  }
+  [data-ui="apple"] .post-card-title a > div,
+  [data-ui="apple"] .post-card-title > div.ua-link {
+    font-size: 22px !important;
+  }
+  [data-ui="apple"] .vanblog-article-page .post-card-title a > div {
+    font-size: 28px !important;
+  }
+  [data-ui="apple"] .markdown-body h2 {
+    font-size: 22px !important;
+  }
+  [data-ui="apple"] .markdown-body h3 {
+    font-size: 19px !important;
+  }
+  [data-ui="apple"] .markdown-body p,
+  [data-ui="apple"] .markdown-body {
+    font-size: 16px;
+  }
+  [data-ui="apple"] .vanblog-sider:has(#toc-card) {
+    display: none !important;
+  }
+  [data-ui="apple"] #author-card > div {
+    padding: 20px 0 16px !important;
+    gap: 12px;
+  }
+  [data-ui="apple"] #author-card img {
+    width: 44px !important;
+    height: 44px !important;
+  }
+}
+
+/* 不支持 :has() 的老浏览器：作者卡片留在右侧栏、其余样式照常生效，不会错乱。 */

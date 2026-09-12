@@ -19,7 +19,7 @@ export default function CategoryList(props: {
   );
 
   return (
-    <div className="flex flex-col mt-2">
+    <div className="flex flex-col mt-2 vanblog-category-list">
       {names.length > 0 && (
         <div className="flex justify-end gap-3 mb-3 text-sm text-gray-500 dark:text-dark-400">
           <button

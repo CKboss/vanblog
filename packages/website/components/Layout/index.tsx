@@ -29,6 +29,14 @@ export default function (props: {
     console.log("关闭或刷新页面");
     localStorage.removeItem("saidHello");
   };
+  const uiStyle = props.option.uiStyle === "default" ? "default" : "apple";
+  // 皮肤挂在最外层容器的 data-ui 上（SSR 就带上，不会闪）；同时同步到 <html>，
+  // 这样 overscroll 区域和 body 背景也能跟着变。
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.ui = uiStyle;
+    }
+  }, [uiStyle]);
   useEffect(() => {
     if (!current.hasInit && !localStorage.getItem("saidHello")) {
       current.hasInit = true;
@@ -68,6 +76,7 @@ export default function (props: {
           theme,
         }}
       >
+        <div className="vb-root" data-ui={uiStyle}>
         <Toaster />
         {/* <ImageProvider> */}
           <NavBar
@@ -110,6 +119,7 @@ export default function (props: {
             />
           </div>
         {/* </ImageProvider> */}
+        </div>
       </ThemeContext.Provider>
       {props.option.enableCustomizing == "true" && (
         <CustomLayout

@@ -32,7 +32,7 @@ export default function (props: {
   const panelId = `timeline-articles-${encodeURIComponent(props.date)}`;
   return (
     <div
-      className="mb-4 overflow-hidden"
+      className="mb-4 overflow-hidden vanblog-timeline-item"
       data-timeline-item={props.date}
       data-expanded={expandControlAriaExpanded(visible)}
     >

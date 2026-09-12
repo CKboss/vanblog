@@ -1,0 +1,193 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+const root = join(__dirname, '..');
+const read = (p: string) => readFileSync(join(root, p), 'utf8');
+const css = read('styles/apple.css');
+
+/** 去掉注释与 @media 包裹，拿到所有顶层选择器 */
+function selectorsOf(source: string): string[] {
+  const noComments = source.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out: string[] = [];
+  const walk = (text: string) => {
+    // 展开 @media / @supports 块
+    const atRe = /@(media|supports)[^{]*\{([\s\S]*?)\n\}/g;
+    let m: RegExpExecArray | null;
+    let lastIndex = 0;
+    while ((m = atRe.exec(text))) {
+      collectRules(text.slice(lastIndex, m.index));
+      walk(m[2]);
+      lastIndex = m.index + m[0].length;
+    }
+    collectRules(text.slice(lastIndex));
+  };
+  const collectRules = (text: string) => {
+    const ruleRe = /([^{}]+)\{[^{}]*\}/g;
+    let r: RegExpExecArray | null;
+    while ((r = ruleRe.exec(text))) {
+      for (const part of r[1].split(',')) {
+        const sel = part.trim();
+        if (sel && !sel.startsWith('@')) {
+          out.push(sel);
+        }
+      }
+    }
+  };
+  walk(noComments);
+  return out;
+}
+
+describe('Apple 皮肤：设计令牌', () => {
+  it('亮色令牌是 Apple 官网那套色值', () => {
+    expect(css).toMatch(/\[data-ui="apple"\]\s*\{/);
+    expect(css).toContain('--ap-canvas: #ffffff');
+    expect(css).toContain('--ap-text: #1d1d1f');
+    expect(css).toContain('--ap-text-2: #6e6e73');
+    expect(css).toContain('--ap-hairline: #d2d2d7');
+    expect(css).toContain('--ap-accent: #0071e3');
+    expect(css).toContain('--ap-surface-3: #f5f5f7');
+    expect(css).toContain('--ap-radius-card: 18px');
+    expect(css).toContain('--ap-radius-pill: 980px');
+    expect(css).toContain('--ap-content: 980px');
+    expect(css).toContain('--ap-read: 780px');
+    expect(css).toContain('cubic-bezier(0.4, 0, 0.2, 1)');
+  });
+
+  it('暗色令牌整体反转（黑画布 + #2997ff 强调色）', () => {
+    expect(css).toMatch(/html\.dark \[data-ui="apple"\]\s*\{/);
+    const dark = css.slice(css.indexOf('html.dark [data-ui="apple"] {'));
+    expect(dark.slice(0, 900)).toContain('--ap-canvas: #000000');
+    expect(dark.slice(0, 900)).toContain('--ap-surface: #1d1d1f');
+    expect(dark.slice(0, 900)).toContain('--ap-accent: #2997ff');
+    expect(dark.slice(0, 900)).toContain('--ap-hairline: #424245');
+  });
+
+  it('SF Pro 字体栈 + 17px 正文（Apple 的标志性正文字号）', () => {
+    expect(css).toContain('-apple-system');
+    expect(css).toContain('"SF Pro Text"');
+    expect(css).toContain('PingFang SC');
+    expect(css).toMatch(/font-size: 17px/);
+    expect(css).toContain('line-height: 1.6');
+  });
+});
+
+describe('Apple 皮肤：不会漏到默认风格上', () => {
+  it('每条规则都带 [data-ui="apple"] 作用域', () => {
+    const leaked = selectorsOf(css).filter(
+      (sel) => !sel.includes('[data-ui="apple"]'),
+    );
+    expect(leaked).toEqual([]);
+  });
+
+  it('globals.css 引入了皮肤，且皮肤不 @import 别的文件', () => {
+    expect(read('styles/globals.css')).toContain('@import "./apple.css"');
+    expect(css).not.toContain('@import');
+  });
+});
+
+describe('Apple 皮肤：关键排版', () => {
+  it('导航栏是毛玻璃 + 发丝线，去掉原来的阴影', () => {
+    expect(css).toMatch(/#nav\s*\{[^}]*backdrop-filter: saturate\(180%\) blur\(20px\)/);
+    expect(css).toMatch(/#nav\s*\{[^}]*box-shadow: none !important/);
+    expect(css).toContain('--ap-nav-bg: rgba(255, 255, 255, 0.72)');
+    expect(css).toContain('height: 52px !important');
+  });
+
+  it('列表条目之间用发丝线分隔，卡片本身不再有阴影', () => {
+    expect(css).toContain('.post-card-wrapper + .post-card-wrapper');
+    expect(css).toMatch(
+      /\.post-card-wrapper \+ \.post-card-wrapper\s*\{\s*border-top: 1px solid var\(--ap-hairline\)/,
+    );
+    expect(css).toMatch(/#post-card\.post-card\s*\{[^}]*background: transparent !important/);
+    expect(css).toMatch(/#post-card\.post-card\s*\{[^}]*box-shadow: none !important/);
+  });
+
+  it('标题左对齐 28px/600，hover 变强调色，占位列隐藏', () => {
+    expect(css).toMatch(/\.post-card-title\s*\{[^}]*display: flex !important/);
+    expect(css).toContain('.post-card-title > span[aria-hidden="true"]');
+    expect(css).toContain('font-size: 28px !important');
+    expect(css).toMatch(/\.post-card-title a:hover > div\s*\{[^}]*--ap-accent/);
+  });
+
+  it('摘要 17px 且列表页最多 4 行，文章页不截断', () => {
+    expect(css).toContain('-webkit-line-clamp: 4');
+    expect(css).toMatch(
+      /\.vanblog-article-page \.markdown-body\s*\{[^}]*-webkit-line-clamp: unset !important/,
+    );
+  });
+
+  it('「阅读全文」变成蓝色文字链接 + 尖角括号', () => {
+    expect(css).toMatch(/div\.flex\.justify-center\.mt-4 > a > div::after\s*\{\s*content: "›"/);
+    expect(css).toMatch(/div\.flex\.justify-center\.mt-4\s*\{[^}]*justify-content: flex-start/);
+  });
+
+  it('作者卡片挪到页首当简介条（:has 判断，侧栏 order:-1）', () => {
+    expect(css).toContain('.vanblog-body:has(#author-card)');
+    expect(css).toMatch(/\.vanblog-body:has\(#author-card\)\s*\{[^}]*flex-direction: column/);
+    expect(css).toMatch(
+      /\.vanblog-body:has\(#author-card\) \.vanblog-sider\s*\{[^}]*order: -1/,
+    );
+    expect(css).toMatch(/#author-card\s*\{[^}]*position: static !important/);
+    expect(css).toMatch(/#author-card > div\s*\{[^}]*flex-direction: row !important/);
+  });
+
+  it('文章页 780px 阅读栏，标题 40px，元信息下有发丝线', () => {
+    expect(css).toMatch(/\.vanblog-article-page\s*\{[^}]*max-width: var\(--ap-read\)/);
+    expect(css).toContain('font-size: 40px !important');
+    expect(css).toMatch(
+      /\.vanblog-article-page \.post-card-sub-title\s*\{[^}]*border-bottom: 1px solid var\(--ap-hairline\)/,
+    );
+  });
+
+  it('Markdown 排版：字重区分标题、callout 引用、圆角代码块、发丝线表格', () => {
+    expect(css).toMatch(/\.markdown-body h2\s*\{[^}]*font-size: 28px !important/);
+    expect(css).toMatch(/\.markdown-body h3\s*\{[^}]*font-size: 22px !important/);
+    expect(css).toMatch(/\.markdown-body blockquote\s*\{[^}]*border-left: 3px solid var\(--ap-accent\)/);
+    expect(css).toMatch(/\.markdown-body pre\s*\{[^}]*border-radius: var\(--ap-radius-img\)/);
+    expect(css).toMatch(/\.markdown-body th\s*\{[^}]*--ap-surface-3/);
+    expect(css).toContain('.markdown-body a');
+  });
+
+  it('TOC 右栏、时间线、分类 chip、分页胶囊、友链卡片、页脚都有对应规则', () => {
+    expect(css).toContain('.vanblog-sider:has(#toc-card)');
+    expect(css).toContain('.vanblog-timeline h2');
+    expect(css).toContain('.vanblog-timeline-item');
+    expect(css).toContain('.vanblog-category-list');
+    expect(css).toContain('.vanblog-link-card');
+    expect(css).toMatch(/ul li > div\[style\]\s*\{[^}]*border-radius: var\(--ap-radius-pill\)/);
+    expect(css).toMatch(/footer\s*\{[^}]*border-top: 1px solid var\(--ap-hairline\)/);
+  });
+
+  it('移动端收一档字号，并隐藏 TOC 栏', () => {
+    expect(css).toContain('@media (max-width: 767px)');
+    const mobile = css.slice(css.indexOf('@media (max-width: 767px)'));
+    expect(mobile).toContain('font-size: 22px !important');
+    expect(mobile).toMatch(/\.vanblog-sider:has\(#toc-card\)\s*\{[^}]*display: none/);
+  });
+});
+
+describe('Apple 皮肤：接线', () => {
+  it('Layout 按 uiStyle 输出 data-ui，并同步到 <html>', () => {
+    const layout = read('components/Layout/index.tsx');
+    expect(layout).toContain('data-ui={uiStyle}');
+    expect(layout).toContain('document.documentElement.dataset.ui = uiStyle');
+    expect(layout).toContain('props.option.uiStyle === "default" ? "default" : "apple"');
+  });
+
+  it('LayoutBody 与文章页给了皮肤稳定的作用域 class', () => {
+    expect(read('components/LayoutBody/index.tsx')).toContain('vanblog-body');
+    expect(read('pages/post/[id].tsx')).toContain('vanblog-article-page');
+    expect(read('components/TimelineArchives/index.tsx')).toContain('vanblog-timeline');
+    expect(read('components/TimeLineItem/index.tsx')).toContain('vanblog-timeline-item');
+    expect(read('components/CategoryList/index.tsx')).toContain('vanblog-category-list');
+    expect(read('components/LinkCard/index.tsx')).toContain('vanblog-link-card');
+    expect(read('pages/404.tsx')).toContain('vanblog-notfound');
+  });
+
+  it('getLayoutProps 透传 uiStyle，缺省即 apple', () => {
+    const props = read('utils/getLayoutProps.ts');
+    expect(props).toContain('uiStyle: "apple" | "default"');
+    expect(props).toContain('siteInfo.uiStyle === "default" ? "default" : "apple"');
+  });
+});

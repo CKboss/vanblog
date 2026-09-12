@@ -4,7 +4,7 @@ export default function (props: {
 }) {
   return (
     <>
-      <div className="flex mx-auto justify-center">
+      <div className="flex mx-auto justify-center vanblog-body">
         <div className="flex-shrink flex-grow md:max-w-3xl xl:max-w-4xl w-full vanblog-main">
           {props.children}
         </div>

@@ -44,6 +44,8 @@ export interface LayoutProps {
   showExpirationReminder: "true" | "false";
   openArticleLinksInNewWindow: "true" | "false";
   showEditButton: "true" | "false";
+  /** apple（默认）| default —— 决定前台皮肤，见 styles/apple.css */
+  uiStyle: "apple" | "default";
   subMenuOffset: number;
   articlesPerPage: number;
   defaultExpandAllCategories: "true" | "false";
@@ -118,6 +120,9 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
   if (siteInfo.showEditButton && siteInfo.showEditButton == "false") {
     showEditButton = "false";
   }
+  // 只有后台显式选了「默认」才不是 apple 风格
+  const uiStyle: "apple" | "default" =
+    siteInfo.uiStyle === "default" ? "default" : "apple";
   let openArticleLinksInNewWindow: "true" | "false" = "false";
   if (
     siteInfo.openArticleLinksInNewWindow &&
@@ -164,6 +169,7 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
     showDonateButton,
     showRSS,
     showEditButton,
+    uiStyle,
     articlesPerPage: sanitizeArticlesPerPage(siteInfo.articlesPerPage),
     friendLinkIntro: resolvePageCopy(
       siteInfo.friendLinkIntro,

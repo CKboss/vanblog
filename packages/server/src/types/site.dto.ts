@@ -49,6 +49,11 @@ export class SiteInfo {
   friendLinkApplyContent?: string;
   /** About page title. Empty/unset keeps「关于我」. Body is still edited via 编辑关于. */
   aboutTitle?: string;
+  /**
+   * 前台界面风格：`apple` = Apple 开发者新闻页那种排版（默认），`default` = 原本的卡片风格。
+   * 只影响样式（website 的 styles/apple.css 挂在 [data-ui="apple"] 下），不动结构。
+   */
+  uiStyle?: 'default' | 'apple';
 }
 export interface updateUserDto {
   username: string;

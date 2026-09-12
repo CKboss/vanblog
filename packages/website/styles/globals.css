@@ -1,4 +1,5 @@
 @import "../components/NavBar/siteNameLayout.css";
+@import "./apple.css";
 
 @tailwind base;
 @tailwind components;

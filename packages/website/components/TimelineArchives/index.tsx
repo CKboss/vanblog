@@ -10,7 +10,7 @@ export default function TimelineArchives(props: {
     return null;
   }
   return (
-    <div className="flex flex-col mt-2">
+    <div className="flex flex-col mt-2 vanblog-timeline">
       {props.yearGroups.map((yearGroup) => {
         if (yearGroup.months.length === 0) {
           return (

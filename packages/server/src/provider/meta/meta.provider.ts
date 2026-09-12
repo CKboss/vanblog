@@ -152,6 +152,8 @@ export class MetaProvider {
       friendLinkIntro: sanitizePageCopy(siteInfo.friendLinkIntro, ''),
       friendLinkApplyContent: sanitizePageCopy(siteInfo.friendLinkApplyContent, ''),
       aboutTitle: sanitizePageCopy(siteInfo.aboutTitle, ''),
+      // 只有显式选了「默认风格」才不是 apple；老站点没这个字段 -> 直接用新风格
+      uiStyle: siteInfo.uiStyle === 'default' ? 'default' : 'apple',
     };
   }
 

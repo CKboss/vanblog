@@ -479,7 +479,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -694,13 +694,49 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   坏外链 / 引用式 / 本站绝对地址 / 同一张图重复引用）全部符合预期；SSRF 三例（127.0.0.1、192.168.1.1、localhost）
   全被拒且 axios 没被调用；400/401 错误路径齐全。
 
-### 7.8 测试基线（本分支最后一次全量运行的结果）
+### 7.8 前台 Apple 风格皮肤（后台可切换）
+
+- 新设置 `siteInfo.uiStyle`：`'apple'`（默认）| `'default'`。`MetaProvider.getSiteInfo()` 做归一化：
+  **只有显式写了 `default` 才不是 apple**，老站点没这个字段就直接吃新风格（后台「站点信息 → 布局设置 → 界面风格」可切回）。
+- website 接线：`utils/getLayoutProps.ts` 透传 `uiStyle` → `components/Layout` 在最外层输出
+  `<div class="vb-root" data-ui="apple">`，并用 effect 把它同步到 `<html data-ui>`
+  （SSR 就带上所以不闪；同步到 html 是为了 overscroll 区域的底色）。
+- 皮肤全部在 `packages/website/styles/apple.css`，**每条规则都带 `[data-ui="apple"]` 作用域**
+  （`__tests__/appleTheme.spec.ts` 有一条「不许漏」的守卫测试：解析出所有选择器，断言都含作用域），
+  只改样式、不动结构，也不会和用户的自定义 CSS 打架。
+- 为了给皮肤稳定挂载点，加了几个纯 class 钩子：`.vanblog-body`(LayoutBody 行容器)、
+  `.vanblog-article-page`(文章页包裹)、`.vanblog-timeline` / `.vanblog-timeline-item`、
+  `.vanblog-category-list`、`.vanblog-link-card`、`.vanblog-notfound`。
+- 令牌（改这些就能整体调色）：canvas `#fff`/`#000`、surface `#fff`/`#1d1d1f`、内嵌面 `#f5f5f7`/`#2c2c2e`、
+  text `#1d1d1f`/`#f5f5f7`、次要 `#6e6e73`、发丝线 `#d2d2d7`/`#424245`、强调 `#0071e3`/`#2997ff`、
+  圆角 18/12/980、列表宽 980px、阅读栏 780px、正文 17px/1.6、SF Pro 字体栈、`cubic-bezier(.4,0,.2,1)`。
+- 几个关键手法（改这块前先看懂）：
+  - 列表条目分隔线用**相邻兄弟**选择器 `.post-card-wrapper + .post-card-wrapper { border-top }` ——
+    文章页只有一张卡，自然不会有分隔线，不用去区分页面类型。
+  - 作者卡片从右侧栏挪到页首：`.vanblog-body:has(#author-card) { flex-direction: column }` +
+    `.vanblog-sider { order: -1; display: block !important }`（它原本是 `hidden lg:block`），
+    再 `#author-card { position: static !important }` 抵消 headroom.js 的 sticky。
+    文章页的 `#toc-card` 不受影响，仍是右栏（220px + 左侧发丝线）。
+  - 文章页正文**不能**被列表页的 4 行截断规则盖住（那条选择器更具体），所以文章页的
+    `display` / `-webkit-line-clamp` / `overflow` 都写了 `!important`。
+  - 分页单元格没有稳定 class（只有 Tailwind 工具类 + inline style），用 `ul li > div[style]` 命中普通格、
+    `div[class*="bg-gray-700"]` 命中当前页 —— 脆但有效，改分页组件时记得回来核对。
+  - `:has()` 要 Chrome 105+ / Safari 15.4+ / FF 121+；不支持时只是作者卡片留在右栏，不会错乱。
+- 已知残留：`pages/404.tsx` 没用 `Layout`（自带 markup），拿不到 `data-ui`，所以 `.vanblog-notfound`
+  那几条目前是死代码。要么以后让 404 走 Layout，要么删掉。
+- e2e 已验证：`GET /api/admin/meta/site` → `PUT uiStyle=default/apple/乱填` → 首页 `data-ui` 依次是
+  `default`/`apple`/`apple`（非法值回落），其余 19 个 siteInfo 字段没被 PUT 冲掉；
+  `/`、`/timeline`、`/category`、`/tag`、`/about`、`/link`、`/post/<slug>` 全 200，无 Next 运行时报错。
+- 文档：`docs/features/config.md` 新增「界面风格（Apple 风格）」整节（含逐项说明与令牌表）。
+- 测试：`packages/website/__tests__/appleTheme.spec.ts`(18)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
+
+### 7.9 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 511 用例：510 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 46 文件 / 372 用例全绿 |
-| admin `node --test tests/unit` | 47 文件 / 179 用例全绿 |
+| website `vitest run` | 47 文件 / 390 用例全绿 |
+| admin `node --test tests/unit` | 50 文件 / 184 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -710,7 +746,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.8 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.9 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

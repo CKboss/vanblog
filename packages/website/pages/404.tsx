@@ -14,7 +14,7 @@ export default function (props: { name?: string }) {
         style={{ top: 0, left: 0, bottom: 0, right: 0, position: "absolute" }}
       >
         <div
-          className="flex flex-col items-center justify-center select-none"
+          className="flex flex-col items-center justify-center select-none vanblog-notfound"
           style={{ transform: "translateY(-30%)" }}
         >
           <Image alt="logo" src="/logo.svg" width={200} height={200} />

@@ -66,6 +66,8 @@ const PostPages = (props: PostPagesProps) => {
             )
         )}
       </Head>
+      {/* 皮肤作用域：styles/apple.css 用 .vanblog-article-page 收窄阅读栏宽 */}
+      <div className="vanblog-article-page">
       <PostCard
         showEditButton={props.layoutProps.showEditButton === "true"}
         showExpirationReminder={
@@ -98,6 +100,7 @@ const PostPages = (props: PostPagesProps) => {
         hideDonate={props.layoutProps.showDonateButton == "false"}
         hideCopyRight={props.layoutProps.showCopyRight == "false"}
       ></PostCard>
+      </div>
     </Layout>
   );
 };

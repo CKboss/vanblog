@@ -220,6 +220,19 @@ export default function (props: {
             tooltip={'前台首页与 /page/n 每页展示的文章数量。默认 5，范围 1–50。分类/标签/时间线仍是完整列表。'}
           />
           <ProFormSelect
+            name={'uiStyle'}
+            label="界面风格"
+            placeholder={'Apple 风格'}
+            tooltip={
+              '前台展示页的视觉风格。Apple 风格参考 developer.apple.com/news：单列发丝线分隔的列表、SF Pro 字体、17px 正文、毛玻璃导航、苹果蓝强调色，并自动适配暗色模式。只改样式不改结构，随时可切回默认。'
+            }
+            valueEnum={{
+              apple: 'Apple 风格（推荐）',
+              default: '默认（原卡片风格）',
+            }}
+            fieldProps={{ defaultValue: 'apple' }}
+          />
+          <ProFormSelect
             name={'showSubMenu'}
             label="显示分类导航栏"
             placeholder={'隐藏'}
