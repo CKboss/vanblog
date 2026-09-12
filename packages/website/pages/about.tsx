@@ -52,6 +52,8 @@ const AboutPage = (props: AboutPageProps) => {
       option={props.layoutProps}
       sideBar={<AuthorCard option={props.authorCardProps} />}
     >
+      {/* 关于页是完整正文，不能被列表页的摘要截断规则裁掉 */}
+      <div className="vanblog-article-page">
       <PostCard
         setContent={() => {}}
         showExpirationReminder={
@@ -76,6 +78,7 @@ const AboutPage = (props: AboutPageProps) => {
         copyrightAggreement={props.layoutProps.copyrightAggreement}
         showEditButton={props.layoutProps.showEditButton === "true"}
       ></PostCard>
+      </div>
     </Layout>
   );
 };

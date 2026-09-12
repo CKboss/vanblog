@@ -346,6 +346,40 @@ describe('Apple 皮肤：所有覆盖层都要有表面（不能透明）', () =
   });
 });
 
+describe('Apple 皮肤：用户反馈的三个细节', () => {
+  it('元信息行（时间/分类/阅读量/评论量）之间不再画竖线', () => {
+    // Tailwind 的 divide-x 会给相邻 span 加 border-left，Apple 只靠间距分隔
+    expect(css).toMatch(
+      /\.post-card-sub-title > span ~ span\s*\{\s*border: 0 !important/,
+    );
+    expect(css).not.toMatch(/\.post-card-sub-title > span ~ span\s*\{[^}]*border-color/);
+    // 间距还在，不然几项会黏在一起
+    expect(css).toMatch(/\.post-card-sub-title > span\s*\{[^}]*padding: 0 18px 0 0 !important/);
+  });
+
+  it('摘要 4 行截断只作用于列表卡，关于页/文章页不受影响', () => {
+    expect(css).toMatch(
+      /\.post-card-wrapper:has\(\.post-card div\.flex\.justify-center\.mt-4\)[\s\S]{0,120}?-webkit-line-clamp: 4/,
+    );
+    // 关于页必须套上阅读栏作用域，否则会被列表规则裁掉
+    expect(read('pages/about.tsx')).toContain('vanblog-article-page');
+    expect(read('pages/post/[id].tsx')).toContain('vanblog-article-page');
+  });
+
+  it('时间线展开按钮：固定正方形 + flex 居中，「>」不会偏心', () => {
+    expect(css).toMatch(/\[data-expand-chevron\]\s*\{[^}]*display: inline-flex !important/);
+    expect(css).toMatch(/\[data-expand-chevron\]\s*\{[^}]*width: 22px !important/);
+    expect(css).toMatch(/\[data-expand-chevron\]\s*\{[^}]*height: 22px !important/);
+    expect(css).toMatch(/\[data-expand-chevron\]\s*\{[^}]*line-height: 1 !important/);
+    expect(css).toMatch(/\[data-expand-chevron\]\s*\{[^}]*border-radius: 50% !important/);
+    expect(css).toMatch(/\[data-expand-chevron\] > span\s*\{[^}]*align-items: center/);
+    // 组件里那个钩子还在（皮肤靠它定位）
+    expect(read('components/TimeLineItem/index.tsx')).toContain('data-expand-chevron');
+    // 早先那条给它加 padding 的规则已经删掉，否则又会顶偏
+    expect(css).not.toMatch(/\.vanblog-timeline-item \.bg-gray-200\s*\{[^}]*padding: 2px 10px/);
+  });
+});
+
 describe('Apple 皮肤：接线', () => {
   it('Layout 按 uiStyle 输出 data-ui，并同步到 <html>', () => {
     const layout = read('components/Layout/index.tsx');

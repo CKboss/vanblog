@@ -743,21 +743,34 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   面板白色 sheet（暗色 `#1d1d1f`）+ `0 24px 64px` 投影、输入框 21px 无框、下面一道发丝线、
   结果行去虚线改圆角 + hover 浅灰（`a[data-search-result] > div`）、`Ctrl K`/`Esc` 提示改无边框浅灰小胶囊。
   `appleTheme.spec.ts` 里加了守卫，其中一条专门断言「面板规则必须写在透明规则之后」，防止层叠再翻车。
+- **第三轮用户又提了 3 个细节**（都已修，并各留一条回归测试）：
+  1. 标题下元信息行（时间 / 分类 / 阅读量 / 评论量）中间的 `|` 要去掉 —— 那是 Tailwind `divide-x`
+     给相邻 `span` 加的 `border-left`；apple 下改成 `border: 0 !important` + 18px 间距。
+  2. 时间线月份行的展开按钮里 `>` 和外框不居中 —— 组件是 `inline-block` + **内联** `width:22.5` +
+     `text-lg leading-tight`，我原先那条 `.bg-gray-200 { padding: 2px 10px; 胶囊 }` 把它顶偏了。
+     现在用组件已有的 `data-expand-chevron` 钩子：固定 22px 正方形 + `display:inline-flex` 居中 +
+     `line-height:1` + 正圆浅灰底，内层 span 同样 flex 居中（旋转 90° 的那个）。
+  3. **关于页只显示一小截** —— 根因：我把摘要 `-webkit-line-clamp: 4` 写在
+     `.post-card-wrapper .post-card > div > .markdown-body` 上，而 `pages/about.tsx` 的 PostCard
+     没有 `.vanblog-article-page` 包裹（只有 `post/[id].tsx` 有），所以关于页正文被裁成 4 行。
+     两处都修：about.tsx 补上 `.vanblog-article-page` 包裹；截断规则改成只命中
+     `.post-card-wrapper:has(.post-card div.flex.justify-center.mt-4)`（即带「阅读全文」的列表卡）。
+     **教训：任何"只对列表生效"的样式都要用列表独有的特征来限定，别用"页面没包 class"来兜。**
 - 已知残留：`pages/404.tsx` 没用 `Layout`（自带 markup），拿不到 `data-ui`，所以 `.vanblog-notfound`
   那几条目前是死代码。要么以后让 404 走 Layout，要么删掉。
 - e2e 已验证：`GET /api/admin/meta/site` → `PUT uiStyle=default/apple/乱填` → 首页 `data-ui` 依次是
   `default`/`apple`/`apple`（非法值回落），其余 19 个 siteInfo 字段没被 PUT 冲掉；
   `/`、`/timeline`、`/category`、`/tag`、`/about`、`/link`、`/post/<slug>` 全 200，无 Next 运行时报错。
 - 文档：`docs/features/config.md` 新增「界面风格（Apple 风格）」整节（含逐项说明与令牌表）。
-- 测试：`packages/website/__tests__/appleTheme.spec.ts`(32，含「不许出现框」「标题操作区不能抢戏」
-  「搜索浮层」三组守卫)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
+- 测试：`packages/website/__tests__/appleTheme.spec.ts`(39，含「不许出现框」「标题操作区不能抢戏」
+  「所有覆盖层都要有表面」「用户反馈的三个细节」四组守卫)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
 
 ### 7.9 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 511 用例：510 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 47 文件 / 404 用例全绿 |
+| website `vitest run` | 47 文件 / 411 用例全绿 |
 | admin `node --test tests/unit` | 50 文件 / 184 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

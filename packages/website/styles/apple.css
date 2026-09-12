@@ -361,12 +361,14 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
 }
 
 [data-ui="apple"] .post-card-sub-title > span {
-  padding: 0 12px 0 0 !important;
-  margin-right: 12px;
+  padding: 0 18px 0 0 !important;
+  margin: 0 !important;
 }
 
+/* Tailwind 的 divide-x 会在相邻项之间画竖线（就是用户看到的「时间 | 博客 | 阅读量」里的 |）；
+   Apple 的元信息行只靠间距分隔，不画线 */
 [data-ui="apple"] .post-card-sub-title > span ~ span {
-  border-color: var(--ap-hairline) !important;
+  border: 0 !important;
 }
 
 [data-ui="apple"] .post-card-sub-title svg {
@@ -385,8 +387,13 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
   background: transparent;
 }
 
-/* 列表页只露 4 行，其余留给文章页（Apple News 的做法） */
-[data-ui="apple"] .post-card-wrapper .post-card > div > .markdown-body {
+/* 列表页只露 4 行，其余留给文章页 / 关于页（Apple News 的做法）。
+   用「有没有阅读全文按钮」判断是不是列表卡，别把整页正文裁掉。 */
+[data-ui="apple"]
+  .post-card-wrapper:has(.post-card div.flex.justify-center.mt-4)
+  .post-card
+  > div
+  > .markdown-body {
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
@@ -758,11 +765,48 @@ html.dark [data-ui="apple"] .markdown-body img {
   color: var(--ap-accent) !important;
 }
 
-[data-ui="apple"] .vanblog-timeline-item .bg-gray-200 {
+/* 展开/收起按钮：组件里是 inline-block + 内联 width:22.5 + text-lg + leading-tight，
+   再加 padding 就会让「>」偏离中心。改成固定正方形 + flex 居中，字形自然对齐。 */
+[data-ui="apple"] [data-expand-chevron] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  line-height: 1 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  border-radius: 50% !important;
   background: var(--ap-surface-3) !important;
-  border-radius: var(--ap-radius-pill) !important;
-  padding: 2px 10px !important;
   color: var(--ap-text-2) !important;
+  transition: background 0.2s var(--ap-ease), color 0.2s var(--ap-ease);
+}
+
+[data-ui="apple"] [data-expand-chevron] > span {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  line-height: 1 !important;
+}
+
+[data-ui="apple"] .vanblog-timeline-item button:hover [data-expand-chevron] {
+  background: var(--ap-accent) !important;
+  color: #fff !important;
+}
+
+/* 月份标题与「N篇」计数：Apple 的层级靠字号和颜色 */
+[data-ui="apple"] .vanblog-timeline-item button > div:first-child {
+  font-size: 21px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.015em;
+  color: var(--ap-text) !important;
+}
+
+[data-ui="apple"] .vanblog-timeline-item button > div.text-gray-400,
+[data-ui="apple"] .vanblog-timeline-item button > div[class*="text-gray-400"] {
+  font-size: 13px !important;
+  color: var(--ap-text-3) !important;
 }
 
 /* ------------------------------------------------------------ 分类 / 标签 */
