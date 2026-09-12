@@ -33,6 +33,7 @@ describe('BackupController.importAll', () => {
     const settingProvider = mockProvider();
     const staticProvider = mockProvider();
     const isrProvider = mockProvider();
+    const fullBackupProvider = mockProvider();
 
     const controller = new BackupController(
       articleProvider as any,
@@ -46,6 +47,7 @@ describe('BackupController.importAll', () => {
       settingProvider as any,
       staticProvider as any,
       isrProvider as any,
+      fullBackupProvider as any,
     );
 
     const backup = {
@@ -92,6 +94,7 @@ describe('BackupController.importAll', () => {
     const settingProvider = mockProvider();
     const staticProvider = mockProvider();
     const isrProvider = mockProvider();
+    const fullBackupProvider = mockProvider();
 
     const controller = new BackupController(
       articleProvider as any,
@@ -105,6 +108,7 @@ describe('BackupController.importAll', () => {
       settingProvider as any,
       staticProvider as any,
       isrProvider as any,
+      fullBackupProvider as any,
     );
 
     const backup = {

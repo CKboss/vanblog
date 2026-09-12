@@ -27,6 +27,33 @@ async function bootstrap() {
 
   app.use(json({ limit: '50mb' }));
 
+  // 整站备份里含数据库内容（密码哈希、jwt 密钥等），不能像图片那样匿名可下载。
+  // 备份默认放在 staticPath 之外（config.backupPath），这里是兜底：万一被配到静态目录里，
+  // 或者旧版本留在 <static>/export/backups/ 下的归档，都不给匿名访问；下载走鉴权接口。
+  const staticRoot = path.resolve(globalConfig.staticPath);
+  const backupRoot = path.resolve(globalConfig.backupPath);
+  const backupUnderStatic =
+    backupRoot.startsWith(staticRoot + path.sep)
+      ? '/static/' + path.relative(staticRoot, backupRoot).split(path.sep).join('/') + '/'
+      : null;
+  app.use((req, res, next) => {
+    if (
+      req.path.startsWith('/static/export/backups/') ||
+      (backupUnderStatic && req.path.startsWith(backupUnderStatic))
+    ) {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.end(
+        JSON.stringify({
+          statusCode: 403,
+          message: '整站备份只能通过后台的鉴权接口下载（/api/admin/backup/full/download）',
+        }),
+      );
+      return;
+    }
+    next();
+  });
+
   app.useStaticAssets(globalConfig.staticPath, {
     prefix: '/static/',
     setHeaders: applyStaticAssetHeaders,

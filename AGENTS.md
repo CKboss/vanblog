@@ -478,7 +478,8 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 
 ## 7. 本分支的功能改动（改这块代码前先读）
 
-本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）。
+本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -616,13 +617,52 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - 文档：`docs/features/image-storage.md`（大图自动缩放 / 缩略图 / 隐写水印 / 三种浏览模式 / 替换图片）、
   `docs/advanced/collaborator.md`、`docs/reference/dir.md`。
 
-### 7.6 测试基线（本分支最后一次全量运行的结果）
+### 7.6 整站备份 / 恢复（一个高压缩归档）
+
+- 新接口（都在 `AdminGuard` 后，协作者调不到）：`POST /api/admin/backup/full/export`（body `{format: auto|zstd|xz|gzip}`）、
+  `GET full/formats`、`GET full/list`、`POST full/inspect`、`POST full/restore`（`{name, confirm:'true'}` 或直接 multipart 上传）、
+  `POST full/delete`、`GET full/download?name=`（鉴权下载）。
+- 备份内容：主库**全部集合** + `waline` 评论库 + `<static>/{img,file,customPage}`（含缩略图）；
+  **不含** `export/`（会套娃）、`tmp/`、`rss/`、`sitemap/`、日志、证书。
+- 没有 `mongodump`/`mongorestore`（官方 server tarball 与 Alpine 镜像都不带），所以用 driver 逐集合导成 **NDJSON**，
+  BSON 类型按 canonical EJSON 编解码（`utils/backupCodec.ts`，按 `_bsontype` 判别，比 `instanceof` 稳）。
+  注意：`bson` 在 pnpm 严格 node_modules 下不能直接 require，`mongodb@5` 也不再导出 EJSON，所以自己实现了子集；
+  解码遵循「只有单键 `$xxx` 才当扩展 JSON」，构造失败就退回普通对象（脏数据不能把整次恢复带崩）。
+- 压缩：`zstd -19 --long=27 -T0` > `xz -9e -T0` > `gzip -9`，运行时探测、后缀跟着变。实测（53 篇 / 90 图 / 68.8MB 静态）：
+  gzip 66.00MB/5.4s、**zstd 65.91MB/33.9s**、xz 65.92MB/51.4s —— 图片已是 WebP，压缩率主要取决于数据库部分，
+  zstd 又小又快所以设为默认；等级可用 `VANBLOG_BACKUP_ZSTD_LEVEL` 调。恢复只要 ~3s。
+- 静态文件用 `cp -al` **硬链接**进暂存目录（同文件系统零额外空间、几乎瞬时），失败回退真实拷贝；
+  tar 与压缩器用 `spawn` 管道**全异步**——用 `spawnSync` 会把事件循环卡死几分钟，整个 API 都不响应。
+- 归档目录 = `config.backupPath`（新配置项 `backup.path` / `VAN_BLOG_BACKUP_PATH`，默认 `<log>/vanblog-backups`）。
+  **故意不放在 staticPath 下面**：静态目录匿名可读，而归档里有密码哈希和 jwt 密钥；`main.ts` 还留了一道兜底拦截
+  （万一被配进静态目录，或旧版本留在 `<static>/export/backups/` 的文件）。下载一律走 `full/download`。
+- 恢复：每个集合先导进 `<name>__vanblog_restore`，全部写成功后 `rename(dropTarget:true)` 原子替换，
+  再按备份里的 `*.indexes.json` 重建索引（跳过 `_id_`）；中途失败原数据还在，也不会留半张表。导出时会跳过残留的临时集合。
+- 上传恢复必须用 multer **diskStorage** 落到 `<static>/tmp`：默认内存存储会让 `file.path` 为空
+  （一开始就踩了，接口一直报「没有收到文件」），而且 65MB 全进内存；`finally` 里删临时文件。
+  装饰器里不能调实例方法，所以 multer 选项写成模块级常量。
+- 恢复后 **`tokens` 表也被覆盖 → 当前登录态立刻失效**（实测恢复完再调接口直接 401），必须重新登录；
+  `confirm=true` 是硬性要求，演示站一律拦；用户可见的错误一律抛 `BadRequestException`
+  （普通 `Error` 会被 Nest 变成 500 + "Internal server error"，前端就看不到原因）。
+- 顺手修了老 JSON 导出的 bug：`fs.writeFileSync('temp.json')` 写在进程 cwd（`packages/server/temp.json`），
+  而且**只有出错才删**，成功下载就把整站数据留在了代码目录里；改成系统 tmp 目录 + 无论成败都删。
+- 后台：`站点管理/系统设置/备份恢复` 顶部新增「整站备份与恢复」卡片（格式选择 / 导出 / 上传恢复 /
+  列表：体积·格式·内容·时间 + 下载·清单·恢复·删除），原来的 JSON 导入导出挪到下面的卡片并写清区别。
+- 测试：`utils/backupCodec.spec.ts`(7)、`utils/fullBackup.spec.ts`(10，用假 Mongo 跑完整的「打包 → 恢复到另一个目录」往返，
+  校验 BSON 类型、索引重建、静态文件、错误归档被拒)、`packages/admin/tests/unit/fullBackup.test.js`(12)。
+- 本机 e2e 已验证：导出（zstd 65.91MB / 29s）、inspect（不解压，0.04s）、鉴权下载、匿名访问 403/404、路径穿越 400、
+  **破坏性恢复**（删 8 篇文章 + 清空 visits/settings/waline 评论 + 删 2 个图片文件 → 恢复后全部回来：
+  articles 53、visits 8705、settings 6、waline Comment 3，13 个索引重建，`_id` 仍是 ObjectId、`createdAt` 仍是 Date、
+  日期范围查询仍命中 53 条，`stegoKey` 的 sha256 与归档内一致）、上传恢复（multipart 2.7s，临时文件已清）、
+  错误路径（非备份 / 截断 / 假 7z 都返回可读的 400）、删除。
+
+### 7.7 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 457 用例：456 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| server `jest` | 474 用例：473 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 46 文件 / 372 用例全绿 |
-| admin `node --test tests/unit` | 40 文件 / 155 用例全绿 |
+| admin `node --test tests/unit` | 43 文件 / 167 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -632,7 +672,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.6 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.7 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

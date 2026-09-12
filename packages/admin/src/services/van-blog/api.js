@@ -405,6 +405,52 @@ export async function getAllCollaboratorsList() {
     method: 'GET',
   });
 }
+// ---------------------------------------------------------------------------
+// 整站备份：数据库（含 waline 评论）+ 本地静态文件（图床/附件/自定义页面）打成一个高压缩归档
+// ---------------------------------------------------------------------------
+export async function getFullBackupFormats() {
+  return request('/api/admin/backup/full/formats', { method: 'GET' });
+}
+
+export async function exportFullBackup(format = 'auto') {
+  return request('/api/admin/backup/full/export', {
+    method: 'POST',
+    data: { format },
+    // 大站点打包可能要几分钟，别被默认超时掐掉
+    timeout: 30 * 60 * 1000,
+  });
+}
+
+export async function listFullBackups() {
+  return request('/api/admin/backup/full/list', { method: 'GET' });
+}
+
+export async function inspectFullBackup(name) {
+  return request('/api/admin/backup/full/inspect', { method: 'POST', data: { name } });
+}
+
+export async function restoreFullBackup(name) {
+  return request('/api/admin/backup/full/restore', {
+    method: 'POST',
+    data: { name, confirm: 'true' },
+    timeout: 30 * 60 * 1000,
+  });
+}
+
+export async function deleteFullBackup(name) {
+  return request('/api/admin/backup/full/delete', { method: 'POST', data: { name } });
+}
+
+/** 归档不在静态目录下，下载必须带 token，所以走 blob 再触发浏览器保存。 */
+export async function downloadFullBackup(name) {
+  return request(`/api/admin/backup/full/download?name=${encodeURIComponent(name)}`, {
+    method: 'GET',
+    skipErrorHandler: true,
+    responseType: 'blob',
+    timeout: 30 * 60 * 1000,
+  });
+}
+
 export async function importAll() {
   return request(`/api/admin/backup/import`, {
     method: 'POST',

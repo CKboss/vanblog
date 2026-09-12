@@ -9,6 +9,6 @@ oder: 3
 | 容器内目录                 | 说明                                                        |
 | -------------------------- | ----------------------------------------------------------- |
 | `/app/static`              | 静态数据存放路径：`img/`（图床，其中 `img/thumb/` 是[缩略图](../features/image-storage.md#缩略图)）、`file/`（[附件](../features/attachment.md)）、`customPage/`（自定义页面）、`export/`（打包导出）。使用内置图床或附件请务必映射好！ |
-| `/var/log`                 | 日志的存放路径，包括 access 日志、 Caddy 日志和前台服务日志 |
+| `/var/log`                 | 日志的存放路径，包括 access 日志、 Caddy 日志和前台服务日志；后台[整站备份](../advanced/backup.md#整站备份推荐)默认写在 `/var/log/vanblog-backups/`（可用 `backup.path` 改） |
 | `/root/.config/caddy`      | Caddy 配置存储路径                                          |
 | `/root/.local/share/caddy` | Caddy 证书存储路径                                          |
