@@ -132,9 +132,15 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
   border-bottom: 1px solid var(--ap-hairline-soft);
 }
 
-[data-ui="apple"] #nav > div {
+/* 只有第一行（主导航）压到 52px；分类子菜单那行保持自己的高度 */
+[data-ui="apple"] #nav > div:first-child {
   height: 52px !important;
-  border-bottom: 0 !important;
+}
+
+/* 导航内部不再有任何横线（原来主行和子菜单行各有一条 border-b），
+   整条导航只靠自身底部那道发丝线收尾 */
+[data-ui="apple"] #nav [class*="border"] {
+  border-color: transparent !important;
 }
 
 [data-ui="apple"] #nav a,
@@ -213,8 +219,8 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
   background: transparent !important;
   box-shadow: none !important;
   margin: 0 !important;
-  padding: 28px 0 24px !important;
-  border-bottom: 1px solid var(--ap-hairline);
+  padding: 26px 0 22px !important;
+  border-bottom: 0 !important;
 }
 
 [data-ui="apple"] #author-card > div > div {
@@ -259,7 +265,7 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
 [data-ui="apple"] #post-card.post-card {
   background: transparent !important;
   box-shadow: none !important;
-  border-radius: 0 !important;
+  border: 0 !important;
   padding: 34px 0 !important;
   overflow: visible;
 }
@@ -302,7 +308,38 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
 }
 
 [data-ui="apple"] .post-card-title-actions {
-  margin: 6px 0 0 !important;
+  margin: 8px 0 0 !important;
+}
+
+/* 组件里「编辑」写死了 text-dark（近黑）+ 默认字号，在 Apple 排版里太重。
+   统一压成 13px 次要灰、常规字重，hover 才变强调色，和复制图标同一层级。 */
+[data-ui="apple"] .post-card-title-actions a,
+[data-ui="apple"] .post-card-title-actions a div,
+[data-ui="apple"] .post-card-title-actions a > div > div {
+  color: var(--ap-text-3) !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+[data-ui="apple"] .post-card-title-actions a:hover,
+[data-ui="apple"] .post-card-title-actions a:hover div {
+  color: var(--ap-accent) !important;
+}
+
+[data-ui="apple"] .post-card-title-actions button {
+  color: var(--ap-text-3) !important;
+  padding: 2px !important;
+}
+
+[data-ui="apple"] .post-card-title-actions button:hover {
+  color: var(--ap-accent) !important;
+}
+
+[data-ui="apple"] .post-card-title-actions svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* 元信息行（日期 / 分类 / 阅读数）：小字灰色，左对齐 */
@@ -398,6 +435,40 @@ html.dark [data-ui="apple"] ::-webkit-scrollbar-thumb {
   > a:hover
   > div::after {
   transform: translateX(2px);
+}
+
+/* 组件里各种装饰性描边（虚线下划线、彩色左边条、灰框）在 Apple 风格下一律抹平，
+   需要层次感就用浅灰填充，不用线框。 */
+[data-ui="apple"] .post-card .border-dashed,
+[data-ui="apple"] .post-card .border-white,
+[data-ui="apple"] .post-card .border-gray-100,
+[data-ui="apple"] .post-card .border-gray-200,
+[data-ui="apple"] .post-card .border-gray-300,
+[data-ui="apple"] .post-card [class*="border-dark"],
+[data-ui="apple"] .post-card [class*="border-hr-dark"] {
+  border-color: transparent !important;
+}
+
+/* 过期提醒 / 警示块：原来是 border-l-4 彩色左边条 + 白底，改成 Apple 的浅灰内嵌块 */
+[data-ui="apple"] .post-card [class*="border-l-4"],
+[data-ui="apple"] .post-card [class*="border-red"] {
+  border: 0 !important;
+  background: var(--ap-surface-3) !important;
+  border-radius: var(--ap-radius-img) !important;
+  padding: 14px 16px !important;
+  color: var(--ap-text-2) !important;
+}
+
+/* 上一篇 / 下一篇：安静的蓝色文字链接 */
+[data-ui="apple"] .post-card a[class*="border-dashed"] {
+  color: var(--ap-accent) !important;
+  font-size: 15px !important;
+  border: 0 !important;
+}
+
+[data-ui="apple"] .post-card a[class*="border-dashed"]:hover {
+  text-decoration: underline !important;
+  text-underline-offset: 3px;
 }
 
 /* 列表里的标签 / 上一篇下一篇：去描边，做成安静的文字链接 */
@@ -537,7 +608,7 @@ html.dark [data-ui="apple"] .markdown-body img {
 [data-ui="apple"] .markdown-body blockquote {
   background: var(--ap-surface-3) !important;
   border: 0 !important;
-  border-left: 3px solid var(--ap-accent) !important;
+  border-left: 2px solid var(--ap-hairline) !important;
   border-radius: 10px;
   padding: 14px 18px !important;
   margin: 0 0 1.15em !important;
@@ -559,8 +630,8 @@ html.dark [data-ui="apple"] .markdown-body img {
 }
 
 [data-ui="apple"] .markdown-body pre {
-  background: var(--ap-surface-2) !important;
-  border: 1px solid var(--ap-hairline-soft);
+  background: var(--ap-surface-3) !important;
+  border: 0 !important;
   border-radius: var(--ap-radius-img) !important;
   padding: 16px 18px !important;
   margin: 0 0 1.3em !important;
@@ -582,9 +653,7 @@ html.dark [data-ui="apple"] .markdown-body img {
   width: 100%;
   margin: 0 0 1.3em;
   font-size: 15px;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid var(--ap-hairline);
+  border: 0;
 }
 [data-ui="apple"] .markdown-body th {
   background: var(--ap-surface-3) !important;
@@ -593,15 +662,16 @@ html.dark [data-ui="apple"] .markdown-body img {
 }
 [data-ui="apple"] .markdown-body th,
 [data-ui="apple"] .markdown-body td {
-  border: 1px solid var(--ap-hairline) !important;
-  padding: 9px 13px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--ap-hairline) !important;
+  padding: 10px 12px !important;
 }
 [data-ui="apple"] .markdown-body tr {
   background: transparent !important;
   border: 0 !important;
 }
 [data-ui="apple"] .markdown-body tr:nth-child(2n) {
-  background: var(--ap-surface-2) !important;
+  background: transparent !important;
 }
 
 [data-ui="apple"] .markdown-body hr {
@@ -614,8 +684,10 @@ html.dark [data-ui="apple"] .markdown-body img {
 /* 自定义容器（::: tip 等）：统一成 Apple 的浅灰圆角块 */
 [data-ui="apple"] .markdown-body .custom-container,
 [data-ui="apple"] .markdown-body [class*="custom-container"] {
-  border-radius: 12px !important;
-  border: 1px solid var(--ap-hairline-soft) !important;
+  border-radius: var(--ap-radius-img) !important;
+  border: 0 !important;
+  background: var(--ap-surface-3) !important;
+  padding: 14px 16px !important;
 }
 
 /* -------------------------------------------------------------- TOC 右栏 */
@@ -632,9 +704,9 @@ html.dark [data-ui="apple"] .markdown-body img {
 
 [data-ui="apple"] .vanblog-sider:has(#toc-card) {
   width: 220px !important;
-  border-left: 1px solid var(--ap-hairline);
-  padding-left: 18px;
-  margin-left: 28px;
+  border-left: 0 !important;
+  padding-left: 24px;
+  margin-left: 20px;
 }
 
 [data-ui="apple"] #toc-card a,
@@ -714,16 +786,12 @@ html.dark [data-ui="apple"] .markdown-body img {
 
 /* ------------------------------------------------------------------ 友链 */
 [data-ui="apple"] .vanblog-link-card {
-  background: var(--ap-surface) !important;
-  border: 1px solid var(--ap-hairline-soft) !important;
-  border-radius: var(--ap-radius-card) !important;
-  box-shadow: none !important;
-  transition: transform 0.3s var(--ap-ease), box-shadow 0.3s var(--ap-ease) !important;
+  transition: transform 0.3s var(--ap-ease) !important;
 }
 
 [data-ui="apple"] .vanblog-link-card:hover {
-  transform: translateY(-3px) !important;
-  box-shadow: var(--ap-shadow-hover) !important;
+  transform: translateY(-2px) !important;
+  box-shadow: none !important;
 }
 
 [data-ui="apple"] .vanblog-link-card img {
@@ -731,26 +799,27 @@ html.dark [data-ui="apple"] .markdown-body img {
 }
 
 /* ------------------------------------------------------------------ 分页 */
+/* 分页：Apple 不会给页码套描边胶囊 —— 安静文字，当前页用浅灰填充 + 半粗 */
 [data-ui="apple"] .vanblog-main ul li > div[style] {
   border-radius: var(--ap-radius-pill) !important;
   background: transparent !important;
-  border: 1px solid var(--ap-hairline);
+  border: 0 !important;
   color: var(--ap-text-2) !important;
   font-size: 14px;
   transition: all 0.25s var(--ap-ease);
 }
 
 [data-ui="apple"] .vanblog-main ul li > div[style]:hover {
-  border-color: var(--ap-accent);
   color: var(--ap-accent) !important;
+  background: var(--ap-surface-3) !important;
 }
 
 [data-ui="apple"] .vanblog-main ul li > div[class*="bg-gray-700"],
 [data-ui="apple"] .vanblog-main ul li > div[class*="text-white"] {
-  background: var(--ap-accent) !important;
-  border-color: var(--ap-accent) !important;
-  color: #fff !important;
-  font-weight: 500;
+  background: var(--ap-surface-3) !important;
+  border: 0 !important;
+  color: var(--ap-text) !important;
+  font-weight: 600;
 }
 
 [data-ui="apple"] .vanblog-main ul li > div[class*="opacity-40"] {
@@ -759,8 +828,8 @@ html.dark [data-ui="apple"] .markdown-body img {
 
 [data-ui="apple"] .vanblog-main input[class*="w-12"] {
   border-radius: var(--ap-radius-pill) !important;
-  border: 1px solid var(--ap-hairline);
-  background: transparent !important;
+  border: 0 !important;
+  background: var(--ap-surface-3) !important;
   color: var(--ap-text-2) !important;
 }
 
@@ -804,16 +873,32 @@ html.dark [data-ui="apple"] .markdown-body img {
 }
 
 /* ---------------------------------------------------------------- 其它组件 */
-/* 通用卡片（AboutCard / SearchCard / AlertCard 等）统一成 Apple 表面 */
-[data-ui="apple"] .card-shadow {
+/* 通用卡片（AuthorCard / SearchCard / AlertCard / CopyRight 等）：一律**去框去阴影**，
+   靠留白和发丝线分隔 —— Apple 排版的核心就是不用描边框。
+   （之前给 .card-shadow 描了 1px 边，而 #post-card 又把圆角清成 0，
+     结果每篇文章外面套一个直角框，就是这次要修的问题。） */
+[data-ui="apple"] .card-shadow,
+[data-ui="apple"] .card-shadow-dark {
   box-shadow: none !important;
-  border: 1px solid var(--ap-hairline-soft);
-  border-radius: var(--ap-radius-card) !important;
-  background: var(--ap-surface) !important;
+  border: 0 !important;
+  background: transparent !important;
 }
-html.dark [data-ui="apple"] .card-shadow {
-  background: var(--ap-surface) !important;
-  border-color: var(--ap-hairline-soft);
+
+/* 例外一：文章正文内部的小块（过期提醒 / 版权 / 打赏 / 解锁）需要「内嵌面」，
+   Apple 的做法是浅灰填充 + 圆角，**不描边** */
+[data-ui="apple"] .vanblog-article-page .card-shadow,
+[data-ui="apple"] .vanblog-article-page .card-shadow-dark {
+  background: var(--ap-surface-3) !important;
+  border-radius: var(--ap-radius-img) !important;
+}
+
+/* 例外二：友链卡片要有边界感，用浅灰填充 + 18px 圆角，同样不描边 */
+[data-ui="apple"] .vanblog-link-card,
+html.dark [data-ui="apple"] .vanblog-link-card {
+  background: var(--ap-surface-3) !important;
+  border: 0 !important;
+  border-radius: var(--ap-radius-card) !important;
+  box-shadow: none !important;
 }
 
 /* 通用按钮：胶囊 */
@@ -828,7 +913,7 @@ html.dark [data-ui="apple"] .card-shadow {
   background: var(--ap-nav-bg) !important;
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
-  border: 1px solid var(--ap-hairline-soft);
+  border: 0 !important;
   box-shadow: var(--ap-shadow) !important;
 }
 
@@ -846,10 +931,10 @@ html.dark [data-ui="apple"] .card-shadow {
 /* 加密文章解锁卡片、打赏按钮等小块：胶囊 + 发丝线 */
 [data-ui="apple"] .post-card input {
   border-radius: 10px !important;
-  border: 1px solid var(--ap-hairline) !important;
-  background: var(--ap-surface) !important;
+  border: 0 !important;
+  background: var(--ap-surface-3) !important;
   color: var(--ap-text) !important;
-  padding: 8px 12px !important;
+  padding: 9px 13px !important;
 }
 
 /* 移动端：字号与间距收紧一档，别显得空旷 */

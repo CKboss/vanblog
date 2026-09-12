@@ -143,7 +143,9 @@ describe('Apple 皮肤：关键排版', () => {
   it('Markdown 排版：字重区分标题、callout 引用、圆角代码块、发丝线表格', () => {
     expect(css).toMatch(/\.markdown-body h2\s*\{[^}]*font-size: 28px !important/);
     expect(css).toMatch(/\.markdown-body h3\s*\{[^}]*font-size: 22px !important/);
-    expect(css).toMatch(/\.markdown-body blockquote\s*\{[^}]*border-left: 3px solid var\(--ap-accent\)/);
+    expect(css).toMatch(
+      /\.markdown-body blockquote\s*\{[^}]*border-left: 2px solid var\(--ap-hairline\)/,
+    );
     expect(css).toMatch(/\.markdown-body pre\s*\{[^}]*border-radius: var\(--ap-radius-img\)/);
     expect(css).toMatch(/\.markdown-body th\s*\{[^}]*--ap-surface-3/);
     expect(css).toContain('.markdown-body a');
@@ -164,6 +166,77 @@ describe('Apple 皮肤：关键排版', () => {
     const mobile = css.slice(css.indexOf('@media (max-width: 767px)'));
     expect(mobile).toContain('font-size: 22px !important');
     expect(mobile).toMatch(/\.vanblog-sider:has\(#toc-card\)\s*\{[^}]*display: none/);
+  });
+});
+
+describe('Apple 皮肤：不许出现「框」', () => {
+  /** 所有带 solid 的 border 声明（含单边） */
+  const solidBorders = () =>
+    (css.match(/border(-top|-bottom|-left|-right)?:\s*[^;{}]*solid[^;{}]*/g) || []).map(
+      (item) => item.trim(),
+    );
+
+  it('没有任何四面包围的描边（Apple 靠留白和发丝线，不靠线框）', () => {
+    const boxes = solidBorders().filter((decl) => decl.startsWith('border:'));
+    // 只允许两种：抹平用的 `border: 0`，以及滚动条滑块那种 `border: 3px solid transparent`
+    // （transparent + background-clip: content-box 是把滑块收窄的技巧，肉眼看不到边）
+    expect(
+      boxes.filter((decl) => !/border:\s*0/.test(decl) && !/transparent/.test(decl)),
+    ).toEqual([]);
+  });
+
+  it('保留的单边线一律是发丝线，且只用在分隔处', () => {
+    const edges = solidBorders().filter(
+      (decl) => !decl.startsWith('border:') || /transparent/.test(decl),
+    );
+    expect(edges.length).toBeGreaterThan(0);
+    for (const decl of edges) {
+      // 单边线只准用发丝线变量（或滚动条那种 transparent 技巧）
+      expect(/var\(--ap-hairline|transparent/.test(decl)).toBe(true);
+    }
+  });
+
+  it('通用卡片去框去底，只有友链/正文内嵌块用浅灰填充', () => {
+    expect(css).toMatch(
+      /\.card-shadow,\s*\n\[data-ui="apple"\] \.card-shadow-dark\s*\{[^}]*border: 0 !important/,
+    );
+    expect(css).toMatch(/\.card-shadow,[\s\S]{0,200}?background: transparent !important/);
+    expect(css).toMatch(/\.vanblog-link-card,[\s\S]{0,200}?--ap-surface-3/);
+    expect(css).toMatch(/\.vanblog-article-page \.card-shadow,[\s\S]{0,200}?--ap-surface-3/);
+  });
+
+  it('文章卡本身不带框（这条曾经是直角框的来源）', () => {
+    expect(css).toMatch(/#post-card\.post-card\s*\{[^}]*border: 0 !important/);
+    expect(css).not.toMatch(/#post-card\.post-card\s*\{[^}]*border-radius: 0/);
+  });
+
+  it('导航内部不留横线，只有整条导航底部一道发丝线', () => {
+    expect(css).toMatch(/#nav \[class\*="border"\]\s*\{\s*border-color: transparent !important/);
+    expect(css).toMatch(/#nav\s*\{[^}]*border-bottom: 1px solid var\(--ap-hairline-soft\)/);
+  });
+
+  it('表格/代码块/自定义容器/分页/输入框都不描边', () => {
+    expect(css).toMatch(/\.markdown-body table\s*\{[^}]*border: 0;/);
+    expect(css).toMatch(/\.markdown-body pre\s*\{[^}]*border: 0 !important/);
+    expect(css).toMatch(/custom-container"\]\s*\{[^}]*border: 0 !important/);
+    expect(css).toMatch(/ul li > div\[style\]\s*\{[^}]*border: 0 !important/);
+    expect(css).toMatch(/\.post-card input\s*\{[^}]*border: 0 !important/);
+  });
+});
+
+describe('Apple 皮肤：标题操作区不能抢戏', () => {
+  it('「编辑」压成 13px 次要灰、常规字重，hover 才变强调色', () => {
+    expect(css).toMatch(
+      /\.post-card-title-actions a,[\s\S]{0,300}?color: var\(--ap-text-3\) !important/,
+    );
+    expect(css).toMatch(/\.post-card-title-actions a,[\s\S]{0,300}?font-size: 13px !important/);
+    expect(css).toMatch(/\.post-card-title-actions a,[\s\S]{0,300}?font-weight: 400 !important/);
+    expect(css).toMatch(/\.post-card-title-actions a:hover,[\s\S]{0,200}?--ap-accent/);
+  });
+
+  it('复制图标按钮同样压淡、图标缩到 14px', () => {
+    expect(css).toMatch(/\.post-card-title-actions button\s*\{[^}]*--ap-text-3/);
+    expect(css).toMatch(/\.post-card-title-actions svg\s*\{[^}]*width: 14px/);
   });
 });
 

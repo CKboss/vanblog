@@ -722,20 +722,33 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   - 分页单元格没有稳定 class（只有 Tailwind 工具类 + inline style），用 `ul li > div[style]` 命中普通格、
     `div[class*="bg-gray-700"]` 命中当前页 —— 脆但有效，改分页组件时记得回来核对。
   - `:has()` 要 Chrome 105+ / Safari 15.4+ / FF 121+；不支持时只是作者卡片留在右栏，不会错乱。
+- **第一版被用户否掉了（"丑爆了"）**，两个具体问题和修法，改这块务必记住：
+  1. 我给 `.card-shadow` 加了 `border: 1px solid` 想做"卡片感"，而 `#post-card` 同时带 `.card-shadow`
+     又被 id 规则强制 `border-radius: 0` → **每篇文章外面套一个直角描边框**。Apple 的层次是
+     **留白 + 发丝线 + 浅灰填充，不靠线框**：现在 `.card-shadow` 一律 `border: 0` + `background: transparent`，
+     只有两处例外用 `--ap-surface-3` 浅灰填充（友链卡片、文章正文里的提醒/版权/打赏小块），仍然不描边。
+  2. 标题右侧「编辑」在组件里写死 `text-dark`（近黑）+ 默认字号，视觉过重 → 皮肤里压成
+     13px / `--ap-text-3` / 400 字重，hover 才变强调色；复制图标同步压淡、svg 缩到 14px。
+  顺带抹平的描边：导航内部两条 `border-b`（主行 + 分类子菜单行）、分页胶囊、代码块、表格外框与斑马纹、
+  自定义容器、输入框、返回顶部、过期提醒的 `border-l-4` 彩色左边条（改成浅灰内嵌块）、TOC 左竖线。
+  **整份皮肤现在只剩这几处单边发丝线**：导航底部、列表条目之间、文章元信息下、引用块左边(2px)、
+  表格行之间、页脚上方、移动端抽屉右边。`appleTheme.spec.ts` 加了守卫：出现任何四面包围的
+  `border: … solid`（除 `border: 0` 与滚动条的 `transparent` 技巧）、或单边线没用 `--ap-hairline`，测试直接红。
 - 已知残留：`pages/404.tsx` 没用 `Layout`（自带 markup），拿不到 `data-ui`，所以 `.vanblog-notfound`
   那几条目前是死代码。要么以后让 404 走 Layout，要么删掉。
 - e2e 已验证：`GET /api/admin/meta/site` → `PUT uiStyle=default/apple/乱填` → 首页 `data-ui` 依次是
   `default`/`apple`/`apple`（非法值回落），其余 19 个 siteInfo 字段没被 PUT 冲掉；
   `/`、`/timeline`、`/category`、`/tag`、`/about`、`/link`、`/post/<slug>` 全 200，无 Next 运行时报错。
 - 文档：`docs/features/config.md` 新增「界面风格（Apple 风格）」整节（含逐项说明与令牌表）。
-- 测试：`packages/website/__tests__/appleTheme.spec.ts`(18)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
+- 测试：`packages/website/__tests__/appleTheme.spec.ts`(26，含「不许出现框」「标题操作区不能抢戏」两组守卫)、
+  `packages/admin/tests/unit/appleTheme.test.js`(4)。
 
 ### 7.9 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 511 用例：510 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 47 文件 / 390 用例全绿 |
+| website `vitest run` | 47 文件 / 398 用例全绿 |
 | admin `node --test tests/unit` | 50 文件 / 184 用例全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
