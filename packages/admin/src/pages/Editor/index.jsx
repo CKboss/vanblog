@@ -365,7 +365,9 @@ export default function () {
                             您可以在{' '}
                             <a
                               onClick={() => {
-                                history.push('/site/setting?subTab=layout');
+                                // `subTab` 这个 key 没人读（SystemConfig 读 `tab`、SiteInfo 读
+                                // `siteInfoTab`），以前点「布局配置」只会停在默认的「基本设置」。
+                                history.push('/site/setting?tab=siteInfo&siteInfoTab=layout');
                               }}
                             >
                               布局配置

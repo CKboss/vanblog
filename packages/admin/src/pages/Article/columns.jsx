@@ -199,7 +199,10 @@ export const columns = [
                             您可以在{' '}
                             <a
                               onClick={() => {
-                                history.push('/site/setting?subTab=layout');
+                                // 以前推的是 `?subTab=layout`，但 SystemConfig 读 `tab`、
+                                // SiteInfo 读 `siteInfoTab`，没人读 subTab：
+                                // 点「布局配置」只会停在默认的「站点配置 → 基本设置」。
+                                history.push('/site/setting?tab=siteInfo&siteInfoTab=layout');
                               }}
                             >
                               布局配置

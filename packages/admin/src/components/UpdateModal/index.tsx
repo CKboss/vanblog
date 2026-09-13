@@ -1,4 +1,5 @@
 import { getAllCategories, updateArticle, updateDraft } from '@/services/van-blog/api';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 import { Form, message, Modal } from 'antd';
 import moment from 'moment';
@@ -55,21 +56,30 @@ export default function (props: {
           return false;
         }
         setLoading(true);
-        if (type == 'article') {
-          await updateArticle(currObj?.id, values);
-          onFinish();
-          message.success('修改文章成功！');
-          setLoading(false);
-        } else if (type == 'draft') {
-          await updateDraft(currObj?.id, values);
-          onFinish();
-          message.success('修改草稿成功！');
-          setLoading(false);
-        } else {
+        // 这个 setLoading 是 Editor 页面传进来的（编辑器的 Spin）。以前服务端一拒绝
+        // （比如 pathname 重复 → 400）await 直接抛出去，下面的 setLoading(false)
+        // 永远执行不到 → 编辑器一直转圈、整个页面卡死，只能刷新。
+        try {
+          if (type == 'article') {
+            await updateArticle(currObj?.id, values);
+            onFinish();
+            message.success('修改文章成功！');
+          } else if (type == 'draft') {
+            await updateDraft(currObj?.id, values);
+            onFinish();
+            message.success('修改草稿成功！');
+          } else {
+            return false;
+          }
+          return true;
+        } catch (err) {
+          // 全局 errorHandler 弹过服务端原因时不再叠加提示；这里返回 false 让弹窗留着，
+          // 用户改完能直接再提交一次。
+          reportRequestError(message, err, '修改失败，请检查填写的内容！');
           return false;
+        } finally {
+          setLoading(false);
         }
-
-        return true;
       }}
       layout="horizontal"
       labelCol={{ span: 6 }}

@@ -1,10 +1,11 @@
 import NumSelect from '@/components/NumSelect';
 import TipTitle from '@/components/TipTitle';
 import { getWelcomeData } from '@/services/van-blog/api';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { useNum } from '@/services/van-blog/useNum';
 import { Area } from '@ant-design/plots';
 import { ProCard, StatisticCard } from '@ant-design/pro-card';
-import { Spin } from 'antd';
+import { message, Spin } from 'antd';
 import RcResizeObserver from 'rc-resize-observer';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import style from '../index.less';
@@ -13,7 +14,9 @@ const { Statistic } = StatisticCard;
 const OverView = () => {
   const [data, setData] = useState();
   const [loading, setLoading] = useState(true);
-  const [num, setNum] = useNum(5);
+  // 必须带唯一 token：三个 tab 都不传时 key 全是 `...-undefined`，
+  // 在概览改「近 30 天」会把文章/访客 tab 的条数一起改掉。
+  const [num, setNum] = useNum(5, 'welcome-overview');
   const [responsive, setResponsive] = useState(false);
   const fetchData = useCallback(async () => {
     const { data: res } = await getWelcomeData('overview', num);
@@ -21,9 +24,11 @@ const OverView = () => {
   }, [setData, num]);
   useEffect(() => {
     setLoading(true);
-    fetchData().then(() => {
-      setLoading(false);
-    });
+    // 以前只有 .then()：接口一失败（401/500/断网）就没人把 loading 收掉，
+    // 整个概览页的 Spin 会永远转下去，看起来像后台卡死。
+    fetchData()
+      .catch((err) => reportRequestError(message, err, '统计数据加载失败，请稍后重试！'))
+      .finally(() => setLoading(false));
   }, [fetchData, setLoading]);
 
   const eachData = useMemo(() => {

@@ -87,9 +87,9 @@
 
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | 519 用例（1 个既有用例需联网拉字体，离线必失败） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | 49 文件 / 435 用例 |
-| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | 61 文件 / 230 用例 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | 530 用例（1 个既有用例需联网拉字体，离线必失败） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | 51 文件 / 462 用例 |
+| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | 65 文件 / 248 用例 |
 | 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | 7 文件 / 259 条断言 |
 
 三套测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。

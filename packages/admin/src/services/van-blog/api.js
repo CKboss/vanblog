@@ -177,8 +177,16 @@ export async function createCustomFile(path, subPath) {
     method: 'POST',
   });
 }
+/**
+ * 新建自定义页面里的文件夹。
+ * 以前这里 POST 的是 `customPage/file`（和上面的 createCustomFile 一模一样），
+ * 服务端对应的路由是 `POST /api/admin/customPage/folder`，
+ * 所以点「新建文件夹」实际会建出一个空文件。
+ * 目前唯一的调用方是 Code 页面里被注释掉的那段工具栏（死代码），
+ * 这也是这个错地址一直没被发现的原因 —— 接口既然导出了就得是对的。
+ */
 export async function createCustomFolder(path, subPath) {
-  return request(`/api/admin/customPage/file?path=${path}&subPath=${subPath}`, {
+  return request(`/api/admin/customPage/folder?path=${path}&subPath=${subPath}`, {
     method: 'POST',
   });
 }

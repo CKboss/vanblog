@@ -9,7 +9,11 @@ export default function () {
   const { current } = useRef({ hasInit: false });
   const src = useMemo(() => {
     if (initialState?.version && initialState?.version == 'dev') {
-      return 'http://192.168.5.11:8360/ui';
+      // dev 下后台跑在 3002 且没有 /ui 代理，必须直连 server 拉起的 waline（同机 8360）。
+      // 以前这里写死了一台机器的内网 IP：换机器 / 换网段评论管理页就是一片空白，
+      // 而且等于把私有地址提交进了仓库。改成按当前访问的主机名拼，端口仍是 waline 默认的 8360。
+      const { protocol, hostname } = window.location;
+      return `${protocol}//${hostname}:8360/ui`;
     } else {
       return '/ui/';
     }

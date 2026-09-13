@@ -1174,16 +1174,59 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   新增 `utils/attemptLimit.ts`（内存计数，同 IP + 同文章 10 分钟 20 次，成功即清零）→ 429。
 - **Swagger 可关**：`VANBLOG_SWAGGER=false`（默认仍开启，保持既有行为）。
 
+**后台（admin）**
+- **转圈卡死一族**：`Welcome/tabs/{overview,viewer,article}.jsx`、`components/UpdateModal`、
+  `pages/Code`（含 Ctrl+S 路径）、`SystemConfig/tabs/Backup.jsx`（旧版 JSON 导出用了
+  `skipErrorHandler`，全局 handler 会把错误抛回来）、`SystemConfig/tabs/ImgTab.jsx` 的扫描按钮
+  都是 `.then(() => setLoading(false))` 或空 `catch`：请求一失败（401/500/离线）loading 永远不清，
+  而且 UpdateModal 失败会让**编辑器整页冻住**（Spin 是 Editor 注入的）。
+  统一改成 try/catch/finally，并新增共享helper `services/van-blog/requestError.js` 的
+  `reportRequestError(messageApi, err, fallback)`：只在全局 errorHandler **没有**提示过服务端消息时
+  才补一条兜底提示（复用已有的 `shouldShowRequestError`），避免双重弹窗。
+- **顺带发现一个真 bug**：`ImgTab.jsx` 用了 `saveExportArchive` 却**没有 import**
+  （上一轮 §7.11 我改导出下载时，插入 import 的 `if` 判断没断言替换成功，静默失败了）→
+  「导出全部本地图床内容」按钮一直抛 ReferenceError。**教训：用脚本改代码时，
+  `s.replace()` 之后要断言确实变了，不能只 `if ... in s`。**
+- `LogoutButton`：登出返回 401（token 已失效）时既不跳转也不清 localStorage → 半登录状态。
+  现在无论如何都清 token + 跳转。
+- 深链与 umi `base:'/admin/'`：`Welcome/tabs/viewer.jsx` 写 `<Link to="/admin/site/setting">`
+  会渲染成 `/admin/admin/...`（catch-all 404）；`Article/columns.jsx` 与 `Editor/index.jsx`
+  推的 `?subTab=layout` **没人读**（SystemConfig 读 `tab`，SiteInfo 读 `siteInfoTab`）→
+  统一改成 `/site/setting?tab=siteInfo&siteInfoTab=layout|more`。
+- `DataManage/tabs/Tag.jsx`：任何搜索都会把列表替换成 `[{key:input,name:input}]`，
+  凭空造出一个不存在的标签，它的重命名/删除在服务端 no-op 却提示成功 → 改成对真实列表做模糊过滤
+  + `locale.emptyText`。
+- `services/van-blog/useNum.js`：三个 Welcome tab 都不传 token → 全部落到同一个
+  `van-blog-admin-num-undefined`，在「概览」改近 30 天会**悄悄改掉另外两个 tab 的条数**。
+  现在各自带 token，并做一次性迁移（把旧 key 的值复制到三个新 key 后删掉旧 key）。
+- `SystemConfig/tabs/Caddy.jsx`：`location.reload()` / `location.replace('http://…')` 的定时器
+  在 `await setHttpsConfig` **之前**就排上了，catch 里也不取消 → 更新失败浏览器照样切协议。
+  改成只在成功后排。另外 `import lodash from 'lodash'` → `lodash/isEqual`（`UrlFormItem` 的
+  `lodash/debounce` 也一并改了，桶式导入会把整个 lodash 拖进 chunk）。
+- `pages/InitPage/index.tsx`：把 `statusCode == 500` 当成功，但服务端是用
+  `throw new HttpException('已初始化', 500)` 表达的 → 请求直接 reject，那个分支是死代码。
+  改成 try/catch 并识别「已初始化」文案，引导去登录。
+- `api.js createCustomFolder` POST 的是**文件**接口（服务端文件夹路由是 `/customPage/folder`）；
+  目前唯一引用在 `Code/index.tsx` 被注释掉的工具栏里，属于死代码，但仍已修正并用测试钉住。
+- `useEditorCache.js` 少了 `return`（hook 恒返回 undefined）。
+- `pages/CommentManage/index.jsx` 的评论 iframe 在 `version=='dev'` 时指向一个**硬编码的内网地址**
+  （上游遗留）→ 改成按 `window.location` 推导 `//<host>:8360/ui`。
+- 测试：新增 `tests/unit/adminRobustness.test.js`(18)：以上每件的源码契约（断言前先剔除注释行）、
+  全仓扫描「不许再有 `<Link to="/admin/...">`」、深链 key 与 SystemConfig/SiteInfo 实际读取的 key 对齐、
+  顺序断言（先清 token 再跳转、先 await 再排定时器），以及 3 条 `require()` 真实模块的行为测试
+  （`reportRequestError` 只在全局没提示过时才补提示）。
+
 **测试**：server 新增 `utils/attemptLimit.spec.ts`(4)、`utils/imgLinkParse.spec.ts`(7)；
-website 新增 `__tests__/robustness.spec.ts`(12)。基线见 §7.16。
+website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustness.test.js`(18)。
+基线见 §7.16。
 
 ### 7.16 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 519 用例：518 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 50 文件 / 450 用例全绿 |
-| admin `node --test tests/unit` | 61 文件 / 230 用例全绿 |
+| server `jest` | 530 用例：529 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 51 文件 / 462 用例全绿 |
+| admin `node --test tests/unit` | 65 文件 / 248 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

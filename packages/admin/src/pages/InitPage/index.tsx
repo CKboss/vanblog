@@ -46,22 +46,41 @@ const InitPage = () => {
                 },
                 siteInfo,
               };
-              const res = await fetchInit(newData);
-              if (res?.statusCode == 200 || res?.statusCode == 500) {
-                Modal.success({
-                  title: '初始化成功!',
-                  content:
-                    '首次使用请记得去后台 “站点管理/评论管理” 中注册一下评论系统的管理员账号哦！评论通知等设置可在 “系统设置/评论设置” 中找到。',
-                  onOk: () => {
-                    history.push('/user/login');
-                  },
-                  onCancel: () => {
-                    history.push('/user/login');
-                  },
-                });
-                return true;
+              const goLogin = () => {
+                history.push('/user/login');
+              };
+              // 服务端判断「已经初始化过」的方式是 throw new HttpException('已初始化', 500)，
+              // 也就是一个 HTTP 500：umi-request 会 reject（body 在 err.data 上），
+              // 根本走不到下面这个 if。以前写成 `statusCode == 500` 也算成功，
+              // 那段「已初始化就去登录页」的分支等于死代码 —— 用户只看到一条报错弹不出登录页。
+              try {
+                const res = await fetchInit(newData);
+                if (res?.statusCode == 200) {
+                  Modal.success({
+                    title: '初始化成功!',
+                    content:
+                      '首次使用请记得去后台 “站点管理/评论管理” 中注册一下评论系统的管理员账号哦！评论通知等设置可在 “系统设置/评论设置” 中找到。',
+                    onOk: goLogin,
+                    onCancel: goLogin,
+                  });
+                  return true;
+                }
+                return false;
+              } catch (err) {
+                const info = (err as any)?.data || (err as any)?.info || {};
+                const status = info?.statusCode ?? (err as any)?.response?.status;
+                if (status == 500 && String(info?.message || '').includes('已初始化')) {
+                  Modal.info({
+                    title: '本站已经初始化过了',
+                    content: '初始化只能执行一次，接下来请直接登录。',
+                    onOk: goLogin,
+                    onCancel: goLogin,
+                  });
+                  return true;
+                }
+                // 其它失败全局 errorHandler 已经弹过原因了，这里让表单留着方便重试
+                return false;
               }
-              return false;
             }}
           >
             <StepsForm.StepForm name="step1" title="配置用户">

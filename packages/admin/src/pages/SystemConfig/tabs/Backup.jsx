@@ -76,13 +76,22 @@ export default function (props) {
 
   const handleOutPut = async () => {
     setLoading(true);
-    const data = await exportAll();
-    const url = URL.createObjectURL(data);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `备份-${moment().format('YYYY-MM-DD')}.json`;
-    link.click();
-    setLoading(false);
+    // exportAll 带 skipErrorHandler，全局不会弹提示，而这里以前直接 await 且不 catch：
+    // 导出失败时异常一路抛出去，setLoading(false) 执行不到 → 页面卡在 Spin 上。
+    // 和下面几个整站备份的处理保持一致（try / catch / finally）。
+    try {
+      const data = await exportAll();
+      const url = URL.createObjectURL(data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `备份-${moment().format('YYYY-MM-DD')}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      message.error('导出失败！');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleFullExport = async () => {

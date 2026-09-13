@@ -7,7 +7,8 @@ import {
 } from '@/services/van-blog/api';
 import ProForm, { ProFormSwitch } from '@ant-design/pro-form';
 import { Alert, Button, Card, Input, message, Modal, Row, Space, Spin } from 'antd';
-import lodash from 'lodash';
+// 只用到 isEqual，整包 `import lodash from 'lodash'` 会把 lodash 全家桶拖进这个路由包
+import isEqual from 'lodash/isEqual';
 import { useMemo, useState } from 'react';
 import { useModel } from 'umi';
 
@@ -26,16 +27,17 @@ export default function (props) {
   const updateHttpsConfig = async (data) => {
     setLoading(true);
     try {
-      if (data.redirect) {
-        setTimeout(() => {
-          window.location.reload();
-        }, 2000);
-      } else {
-        setTimeout(() => {
-          window.location.replace(`http://${location.host}${location.pathname}`);
-        }, 2000);
-      }
+      // 以前这两个 setTimeout 排在 `await setHttpsConfig` 之前，而且 catch 里也没取消：
+      // 更新失败（比如 caddy 没起、配置写不进去）浏览器照样在 2 秒后 reload / 切协议，
+      // 用户被甩到另一个协议上，还以为是自己点成功了。必须等接口真的成功再跳。
       await setHttpsConfig(data);
+      setTimeout(() => {
+        if (data.redirect) {
+          window.location.reload();
+        } else {
+          window.location.replace(`http://${location.host}${location.pathname}`);
+        }
+      }, 2000);
       message.success('更改成功！将自动刷新至新协议');
       // let text = '关闭成功，现在可以通过 http 访问了。';
       // if (data.redirect) {
@@ -141,7 +143,7 @@ export default function (props) {
               setLoading(false);
               return;
             }
-            const eq = lodash.isEqual(curData, data);
+            const eq = isEqual(curData, data);
 
             if (eq) {
               Modal.warning({

@@ -2,7 +2,8 @@ import { errorImg } from '@/pages/Static/img';
 import { getImgLink } from '@/pages/Static/img/tools';
 import { ProFormText } from '@ant-design/pro-form';
 import { Image, message } from 'antd';
-import { debounce } from 'lodash';
+// 按需引入：`from 'lodash'` 是桶式导入，会把整个 lodash 拖进这个 chunk
+import debounce from 'lodash/debounce';
 import { useEffect, useMemo, useState } from 'react';
 import UploadBtn from '../UploadBtn';
 

@@ -169,13 +169,16 @@ export const remarkTocMarker = () => (tree: any) => {
 export function extraSyntax(): BytemdPlugin {
   return {
     remark: (processor) =>
+      // 这两个是「返回 transformer 的函数」，运行时就是标准的 unified 插件，
+      // 但 bytemd 带的 unified 类型只认 PluggableList/Plugin 的签名，直接传会报类型错，
+      // 所以按插件签名断言一次（行为已由 extraSyntax.spec.ts 的真实渲染测试覆盖）。
       processor
-        .use(remarkMark)
-        .use(markToHtml)
-        .use(remarkSupersub)
-        .use(remarkGemoji)
-        .use(remarkDefinitionList)
-        .use(remarkAlert)
-        .use(remarkTocMarker),
+        .use(remarkMark as any)
+        .use(markToHtml as any)
+        .use(remarkSupersub as any)
+        .use(remarkGemoji as any)
+        .use(remarkDefinitionList as any)
+        .use(remarkAlert as any)
+        .use(remarkTocMarker as any),
   };
 }

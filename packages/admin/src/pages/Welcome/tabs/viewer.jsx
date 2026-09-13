@@ -1,9 +1,10 @@
 import { ProCard, StatisticCard } from '@ant-design/pro-card';
-import { Spin } from 'antd';
+import { message, Spin } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getWelcomeData } from '@/services/van-blog/api';
 import ArticleList from '@/components/ArticleList';
 import { getRecentTimeDes } from '@/services/van-blog/tool';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { Link } from 'umi';
 import TipTitle from '@/components/TipTitle';
 import style from '../index.less';
@@ -15,16 +16,18 @@ const Viewer = () => {
   const [data, setData] = useState();
   const [loading, setLoading] = useState(true);
   const [responsive, setResponsive] = useState(false);
-  const [num, setNum] = useNum(5);
+  // 必须带唯一 token：三个 tab 都不传时 key 全是 `...-undefined`，互相串数据
+  const [num, setNum] = useNum(5, 'welcome-viewer');
   const fetchData = useCallback(async () => {
     const { data: res } = await getWelcomeData('viewer', 5, num);
     setData(res);
   }, [setData, num]);
   useEffect(() => {
     setLoading(true);
-    fetchData().then(() => {
-      setLoading(false);
-    });
+    // 以前只有 .then()：接口失败时 loading 永远收不掉，整页 Spin 转不停
+    fetchData()
+      .catch((err) => reportRequestError(message, err, '统计数据加载失败，请稍后重试！'))
+      .finally(() => setLoading(false));
   }, [fetchData, setLoading]);
 
   const recentHref = useMemo(() => {
@@ -77,7 +80,10 @@ const Viewer = () => {
                 if (data?.enableBaidu) {
                   return <span>已开启</span>;
                 } else {
-                  return <Link to={`/admin/site/setting?siteInfoTab=more`}>未配置</Link>;
+                  // umi 配了 base: '/admin/'，<Link> 里的路径是相对 base 的：
+                  // 写成 `/admin/site/setting` 会渲染成 /admin/admin/... 直接 404。
+                  // 外层 tab 由 SystemConfig 的 `tab` 读，内层由 SiteInfo 的 `siteInfoTab` 读。
+                  return <Link to={`/site/setting?tab=siteInfo&siteInfoTab=more`}>未配置</Link>;
                 }
               },
               status: data?.enableBaidu ? 'success' : 'error',
@@ -101,7 +107,7 @@ const Viewer = () => {
                 if (data?.enableGA) {
                   return <span>已开启</span>;
                 } else {
-                  return <Link to={`/admin/site/setting?siteInfoTab=more`}>未配置</Link>;
+                  return <Link to={`/site/setting?tab=siteInfo&siteInfoTab=more`}>未配置</Link>;
                 }
               },
               status: data?.enableGA ? 'success' : 'error',

@@ -1,7 +1,8 @@
 import { ProCard, StatisticCard } from '@ant-design/pro-card';
-import { Spin } from 'antd';
+import { message, Spin } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { getWelcomeData } from '@/services/van-blog/api';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import style from '../index.less';
 import NumSelect from '@/components/NumSelect';
 import { Pie, Column } from '@ant-design/plots';
@@ -12,16 +13,18 @@ const ArticleTab = () => {
   const [data, setData] = useState();
   const [loading, setLoading] = useState(true);
   const [responsive, setResponsive] = useState(false);
-  const [num, setNum] = useNum(5);
+  // 必须带唯一 token：三个 tab 都不传时 key 全是 `...-undefined`，互相串数据
+  const [num, setNum] = useNum(5, 'welcome-article');
   const fetchData = useCallback(async () => {
     const { data: res } = await getWelcomeData('article', 5, 5, num);
     setData(res);
   }, [setData, num]);
   useEffect(() => {
     setLoading(true);
-    fetchData().then(() => {
-      setLoading(false);
-    });
+    // 以前只有 .then()：接口失败时 loading 永远收不掉，整页 Spin 转不停
+    fetchData()
+      .catch((err) => reportRequestError(message, err, '统计数据加载失败，请稍后重试！'))
+      .finally(() => setLoading(false));
   }, [fetchData, setLoading]);
   const pieConfig = {
     data: data?.categoryPieData || [],

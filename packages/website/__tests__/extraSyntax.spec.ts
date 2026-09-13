@@ -109,8 +109,11 @@ describe("编辑器与前台必须完全一致", () => {
   const admin = read("../admin/src/components/Editor/plugins/extraSyntax.ts");
 
   it("两边挂的插件与顺序一致", () => {
+    // 插件都带 `as any` 断言（bytemd 的 unified 类型不认「返回 transformer 的函数」）
     const chain = (src: string) =>
-      (src.match(/\.use\(([A-Za-z]+)\)/g) || []).join(" > ");
+      (src.match(/\.use\(([A-Za-z]+)(?: as any)?\)/g) || [])
+        .map((call) => call.replace(/\.use\(| as any\)|\)/g, ""))
+        .join(" > ");
     expect(chain(admin)).toBe(chain(site));
     expect(chain(site)).toContain("remarkMark");
     expect(chain(site)).toContain("remarkSupersub");

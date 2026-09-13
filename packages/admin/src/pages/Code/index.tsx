@@ -12,6 +12,7 @@ import {
   getPipelineConfig,
 } from '@/services/van-blog/api';
 import { handleEditorHotkey } from '@/services/van-blog/editableKeyboard';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { DownOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-layout';
 import { Alert, Button, Dropdown, Menu, message, Modal, Space, Spin, Tag, Tree } from 'antd';
@@ -46,9 +47,15 @@ export default function () {
   };
 
   useEffect(() => {
-    getPipelineConfig().then(({ data }) => {
-      setPipelineConfig(data);
-    });
+    // 缺 catch 时接口一失败就是一个未处理的 promise rejection；
+    // data 为空也要退回 []，否则下面拼操作菜单时 pipelineConfig.map 会抛。
+    getPipelineConfig()
+      .then(({ data }) => {
+        setPipelineConfig(data || []);
+      })
+      .catch(() => {
+        setPipelineConfig([]);
+      });
   }, []);
   const language = useMemo(() => {
     if (type == 'pipeline') {
@@ -138,21 +145,29 @@ export default function () {
   const handleUpload = async () => {};
   const fetchFileData = async (node: any) => {
     setEditorLoading(true);
-    const { data } = await getCustomPageFileDataByPath(path, node.key);
-    setValue(data);
-    setEditorLoading(false);
+    try {
+      const { data } = await getCustomPageFileDataByPath(path, node.key);
+      setValue(data);
+    } catch (err) {
+      // 读文件失败时以前直接抛出去，editorLoading 永远是 true → 编辑器一直转圈
+      reportRequestError(message, err, '读取文件内容失败！');
+    } finally {
+      setEditorLoading(false);
+    }
   };
   const fetchData = useCallback(async () => {
     if (!path && !id) {
       message.error('无有效信息，无法获取数据！');
       return;
-    } else {
+    }
+    // 三个分支各自 setXxxLoading(true) 后直接 await，接口一失败就没人收尾：
+    // 目录树 / 编辑器的 Spin 会永远转下去（页面看起来就是卡死）。
+    try {
       if (isFolder) {
         setTreeLoading(true);
         setCurrObj({ name: path });
         const { data } = await getCustomPageFolderTreeByPath(path);
         if (data) setTreeData(data);
-        setTreeLoading(false);
       } else if (type == 'pipeline') {
         if (!id) {
           message.error('无有效信息，无法获取数据！');
@@ -164,7 +179,6 @@ export default function () {
           setCurrObj(data);
           setValue(data?.script || '');
         }
-        setEditorLoading(false);
       } else {
         setEditorLoading(true);
         const { data } = await getCustomPageByPath(path);
@@ -172,8 +186,12 @@ export default function () {
           setCurrObj(data);
           setValue(data?.html || '');
         }
-        setEditorLoading(false);
       }
+    } catch (err) {
+      reportRequestError(message, err, '获取数据失败！');
+    } finally {
+      setTreeLoading(false);
+      setEditorLoading(false);
     }
   }, [setCurrObj, setValue, path]);
   const handleSave = async () => {
@@ -183,22 +201,24 @@ export default function () {
       });
       return;
     }
-    if (type == 'file') {
-      setEditorLoading(true);
-      await updateCustomPage({ ...currObj, html: value });
+    // Ctrl+S 走的也是这个函数：保存失败（比如自定义页面被删了）时以前会把
+    // editorLoading 永远留在 true，编辑器再也点不动，只能刷新页面。
+    setEditorLoading(true);
+    try {
+      if (type == 'file') {
+        await updateCustomPage({ ...currObj, html: value });
+        message.success('当前编辑器内文件保存成功！');
+      } else if (type == 'pipeline') {
+        await updatePipelineById(currObj.id, { script: value });
+        message.success('当前编辑器内脚本保存成功！');
+      } else {
+        await updateCustomPageFileInFolder(path, node?.key, value);
+        message.success('当前编辑器内文件保存成功！');
+      }
+    } catch (err) {
+      reportRequestError(message, err, '保存失败！');
+    } finally {
       setEditorLoading(false);
-      message.success('当前编辑器内文件保存成功！');
-    } else if (type == 'pipeline') {
-      setEditorLoading(true);
-      await updatePipelineById(currObj.id, { script: value });
-      setEditorLoading(false);
-      message.success('当前编辑器内脚本保存成功！');
-    } else {
-      setEditorLoading(true);
-      await updateCustomPageFileInFolder(path, node?.key, value);
-      setEditorLoading(false);
-      message.success('当前编辑器内文件保存成功！');
-      return;
     }
   };
 

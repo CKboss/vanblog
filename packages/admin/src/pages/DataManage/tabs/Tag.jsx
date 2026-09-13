@@ -110,7 +110,14 @@ export default function () {
         request={async (params = {}) => {
           let data = await fetchData();
           if (params?.name) {
-            data = [{ key: params?.name, name: params?.name }];
+            // 以前是 `data = [{ key: params.name, name: params.name }]`：
+            // 不管搜什么都会「造」出一行并不存在的标签，它的重命名/删除打到服务端
+            // 匹配不到任何文章，却照样 toast「更新成功」，用户以为改掉了其实什么都没发生。
+            // 改成在真实标签里做模糊过滤，没有命中就让 ProTable 显示「暂无数据」。
+            const keyword = String(params.name).trim().toLowerCase();
+            data = keyword
+              ? data.filter((item) => String(item.name).toLowerCase().includes(keyword))
+              : data;
           }
           return {
             data,
@@ -121,6 +128,7 @@ export default function () {
             total: data.length,
           };
         }}
+        locale={{ emptyText: '没有匹配的标签' }}
       />
     </>
   );

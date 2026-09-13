@@ -1,6 +1,10 @@
 import StaticForm from '@/components/StaticForm';
 import WatchMarkForm from '@/components/WaterMarkForm';
 import { exportAllImgs, rewriteArticleBaseUrl, scanImgsOfArticles } from '@/services/van-blog/api';
+// 「导出全部本地图床内容」用到了 saveExportArchive，但一直没 import：
+// 点下去就是 ReferenceError，再被 catch 吞成一句看不懂的报错，压缩包永远下不下来。
+import { saveExportArchive } from '@/services/van-blog/downloadArchive';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { Alert, Button, Card, Input, message, Modal, Table, Typography } from 'antd';
 import { useState } from 'react';
 
@@ -28,8 +32,8 @@ export default function () {
             try {
               const { data } = await scanImgsOfArticles();
               message.success(`扫描成功！共 ${data?.total || 0} 项`);
-              setLoading(false);
-              const { errorLinks } = data;
+              // data 为空时直接解构会抛 TypeError，被下面的 catch 吞掉就只剩「按钮不转了」
+              const { errorLinks } = data || {};
               if (errorLinks && errorLinks.length) {
                 Modal.info({
                   title: '失效链接：',
@@ -72,6 +76,10 @@ export default function () {
                 });
               }
             } catch (err) {
+              // 只 setLoading(false) 等于把失败静默吞掉：用户点了扫描，
+              // 按钮转完圈什么也没发生，看不出是接口挂了还是没扫到东西。
+              reportRequestError(message, err, '扫描失败！');
+            } finally {
               setLoading(false);
             }
           }}
