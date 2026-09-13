@@ -101,6 +101,15 @@ RUN pnpm config set fetch-timeout 600000 -g
 # ⚠️ 只装 admin 及其依赖（`--filter <pkg>...`）：整仓安装会把 packages/server 的依赖
 #    也拉进来（@swagger-api/apidom → tree-sitter/tree-sitter-yaml/tree-sitter-json 三个
 #    原生模块），在 alpine 上要用 node-gyp 现编译，慢且容易卡；admin 构建根本用不到它们。
+# ⚠️ alpine/musl 下这三个原生模块（tree-sitter 系列，来自 @swagger-api/apidom 的传递依赖）
+# 用 node-gyp 现场编译时会**卡死**：实测 node-gyp 进程活着、11 个线程全在 sleep、
+# 没有任何 make/cc1plus 子进程，十分钟不动，整个 stage 挂住（同样的 Dockerfile 在
+# GitHub Actions 的 glibc 宿主 + BuildKit 下能正常编过，所以这是 rootless podman/musl
+# 这一侧的问题）。admin 的产物是纯静态文件、website 也不会 import 它们，
+# 所以在**这两个 alpine stage 里跳过编译**最省事：用 pnpm 的 never-built-dependencies，
+# 只影响镜像构建，不动仓库里的 package.json（本机开发照常编译）。
+# 注意 sharp 不在名单里 —— 它靠预编译二进制，跳过 install 脚本反而会坏。
+RUN printf 'never-built-dependencies[]=tree-sitter\nnever-built-dependencies[]=tree-sitter-json\nnever-built-dependencies[]=tree-sitter-yaml\n' >> /app/.npmrc
 RUN pnpm install --frozen-lockfile --filter "@vanblog/admin..."
 
 # RUN sed -i 's/\/assets/\/admin\/assets/g' dist/admin/index.html
@@ -187,6 +196,15 @@ RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 # 同理：只装 website 及其依赖（sharp 是它自己的依赖，仍然会装上）
 # ⚠️ website 的包名是 @vanblog/theme-default（不是 @vanblog/website），过滤名写错会一个包都装不上
+# ⚠️ alpine/musl 下这三个原生模块（tree-sitter 系列，来自 @swagger-api/apidom 的传递依赖）
+# 用 node-gyp 现场编译时会**卡死**：实测 node-gyp 进程活着、11 个线程全在 sleep、
+# 没有任何 make/cc1plus 子进程，十分钟不动，整个 stage 挂住（同样的 Dockerfile 在
+# GitHub Actions 的 glibc 宿主 + BuildKit 下能正常编过，所以这是 rootless podman/musl
+# 这一侧的问题）。admin 的产物是纯静态文件、website 也不会 import 它们，
+# 所以在**这两个 alpine stage 里跳过编译**最省事：用 pnpm 的 never-built-dependencies，
+# 只影响镜像构建，不动仓库里的 package.json（本机开发照常编译）。
+# 注意 sharp 不在名单里 —— 它靠预编译二进制，跳过 install 脚本反而会坏。
+RUN printf 'never-built-dependencies[]=tree-sitter\nnever-built-dependencies[]=tree-sitter-json\nnever-built-dependencies[]=tree-sitter-yaml\n' >> /app/.npmrc
 RUN pnpm install --frozen-lockfile --filter "@vanblog/theme-default..."
 RUN pnpm build:website
 

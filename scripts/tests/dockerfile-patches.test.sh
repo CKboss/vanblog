@@ -389,6 +389,30 @@ PYFILTER
   fi
 fi
 
+
+# ---------- 11) alpine stage 跳过 tree-sitter 编译，glibc 的 server stage 不跳 ----------
+# 这三个原生模块（@swagger-api/apidom 的传递依赖）在 musl + rootless podman 下用 node-gyp
+# 编译会**卡死**（进程活着、线程全 sleep、没有 make 子进程），把整个 stage 挂住。
+# admin 产物是静态文件、website 也不 import 它们，所以跳过；server 是 glibc 且是真运行时，
+# 保持照常编译。
+for st in admin_builder website_builder; do
+  if stage_body "${st}" | grep -q "never-built-dependencies\[\]=tree-sitter"; then
+    pass "${st} 跳过 tree-sitter 系列的原生编译（musl 下 node-gyp 会卡死）"
+  else
+    fail "${st} 没有跳过 tree-sitter 编译：alpine 下 pnpm install 会挂住"
+  fi
+done
+if stage_body server_builder | grep -q "never-built-dependencies"; then
+  fail "server_builder 也跳过了原生编译（它是 glibc，能正常编，而且它是真运行时）"
+else
+  pass "server_builder 照常编译原生模块（glibc + 运行时确实需要）"
+fi
+if stage_body website_builder | grep -q "never-built-dependencies\[\]=sharp"; then
+  fail "sharp 被加进了 never-built-dependencies：它靠 install 脚本取预编译二进制，跳过会坏"
+else
+  pass "没有把 sharp 一起跳过（它靠 install 脚本拿预编译二进制）"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
