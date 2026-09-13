@@ -42,6 +42,14 @@ assert_eq "$(cmp -s "${SCRIPT}" "${PUBLIC_SCRIPT}" && echo same || echo diff)" "
 setup_case() {
   TEST_DIR="$(mktemp -d)"
   CMDLOG="${TEST_DIR}/commands.log"
+  # ⚠️ 必须 export：假 git/docker/docker-compose 是**子进程**，它们靠 "${CMDLOG}" 记命令；
+  #    不 export 的话它们写到空文件名，CMDLOG 永远是空的 —— 于是所有
+  #    assert_not_contains 都"通过"（空文件当然不含任何东西），assert_file_contains 全挂。
+  export CMDLOG
+  # ⚠️ 前面的用例会定义 docker()/curl() **shell 函数**来当桩，而函数会一直留在同一个 shell 里、
+  #    并且优先级高于 PATH 里的假二进制 —— 不清掉的话后续用例的调用不会写进 CMDLOG，
+  #    表现为"明明脚本是对的，断言却说日志里没有"（这次就是这么查了半天）。
+  unset -f docker curl git docker-compose 2>/dev/null || true
   : >"${CMDLOG}"
   mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/vanblog"
   cat >"${TEST_DIR}/bin/git" <<'GIT'
@@ -273,6 +281,48 @@ rm -rf "${VANBLOG_DATA_PATH}/data/mongo"
 mkdir -p "${VANBLOG_DATA_PATH}/data/mongo/subdir"
 touch "${VANBLOG_DATA_PATH}/data/mongo/subdir/x.txt"
 assert_eq "$(pick_mongo_image)" "mongo:7.0" "目录里只有无关文件时仍算全新安装"
+
+
+# ---------- Alpine 源探测（和 pnpm 源同一套逻辑：实测谁快用谁）----------
+setup_case
+source_script
+curl() {
+  local u="${*: -1}"
+  case "${u}" in
+  *mirrors.aliyun.com*) echo "200 0.310" ;;
+  *tuna.tsinghua*) echo "200 0.520" ;;
+  *dl-cdn.alpinelinux.org*) echo "200 9.800" ;;
+  *) return 1 ;;
+  esac
+}
+VANBLOG_ALPINE_MIRROR=""
+detect_alpine_mirror >"${TEST_DIR}/alp.log" 2>&1
+assert_eq "${VANBLOG_ALPINE_MIRROR}" "https://mirrors.aliyun.com/alpine" "Alpine 源选最快的那个"
+assert_contains "$(cat "${TEST_DIR}/alp.log")" "dl-cdn.alpinelinux.org" "探测过程会打印官方源的延迟（对比才看得出为什么换）"
+curl() { return 1; }
+VANBLOG_ALPINE_MIRROR=""
+detect_alpine_mirror >"${TEST_DIR}/alp2.log" 2>&1
+assert_eq "${VANBLOG_ALPINE_MIRROR}" "" "都探测不到时留空（用官方源），而不是填一个猜的地址"
+VANBLOG_ALPINE_MIRROR="none"
+detect_alpine_mirror >"${TEST_DIR}/alp3.log" 2>&1
+assert_eq "${VANBLOG_ALPINE_MIRROR}" "" "VANBLOG_ALPINE_MIRROR=none 强制用官方源"
+VANBLOG_ALPINE_MIRROR="https://my.mirror/alpine"
+detect_alpine_mirror >"${TEST_DIR}/alp4.log" 2>&1
+assert_eq "${VANBLOG_ALPINE_MIRROR}" "https://my.mirror/alpine" "用户指定的 Alpine 源优先，不探测"
+unset -f curl
+
+# 构建时必须把它传进镜像
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_SRC_COMMIT="abc1234"
+VANBLOG_BUILD_MODE="fast"
+VANBLOG_NPM_REGISTRY="https://registry.example/"
+VANBLOG_ALPINE_MIRROR="https://mirrors.example/alpine"
+build_vanblog_image >/dev/null 2>&1
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_ALPINE_MIRROR=https://mirrors.example/alpine" \
+  "构建时传入 Alpine 源"
+assert_file_contains "${SCRIPT}" "detect_alpine_mirror" "构建前会探测 Alpine 源"
 
 
 echo

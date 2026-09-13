@@ -285,6 +285,42 @@ PYCHK
   fi
 done
 
+
+# ---------- 8) Alpine 源可切换（国内直连 dl-cdn 会让构建"卡死"在 apk add）----------
+if grep -qE '^ARG VAN_BLOG_ALPINE_MIRROR=' "${DOCKERFILE}"; then
+  pass "全局声明了 VAN_BLOG_ALPINE_MIRROR（留空 = 官方源）"
+else
+  fail "缺少全局 ARG VAN_BLOG_ALPINE_MIRROR"
+fi
+# 三个 alpine stage 都要：重新 ARG + 在任何 apk add 之前换源
+ALPINE_STAGES=$(grep -c '^FROM node:20-alpine AS ' "${DOCKERFILE}")
+REWRITE=$(grep -c 'etc/apk/repositories' "${DOCKERFILE}")
+if [[ "${ALPINE_STAGES}" -ge 3 && "${REWRITE}" -ge 3 ]]; then
+  pass "${ALPINE_STAGES} 个 alpine stage 都有换源步骤（${REWRITE} 处）"
+else
+  fail "alpine stage ${ALPINE_STAGES} 个但换源只有 ${REWRITE} 处"
+fi
+# ⚠️ VERSION_ID 是三段（3.23.4），仓库路径只有两段（v3.23）——直接拼会 404，
+#    apk 随后报 "python3 (no such package)"，看起来像镜像源坏了，其实是路径错了。
+if grep -q "cut -d. -f1,2" "${DOCKERFILE}"; then
+  pass "换源时把 VERSION_ID 截成两段（3.23.4 → v3.23）"
+else
+  fail "没有把 VERSION_ID 截成两段：会拼出 v3.23.4 这种不存在的路径（404 → no such package）"
+fi
+# 换源必须在 apk add 之前（同一 stage 内的先后顺序）
+ORDER_OK=1
+while IFS= read -r ln; do
+  stage_line="${ln%%:*}"
+  awk -v start="${stage_line}" 'NR>start && /etc\/apk\/repositories/ { found=NR }
+       NR>start && /^RUN .*apk add/ { if (!found || NR<found) bad=1 }
+       END { exit bad?1:0 }' "${DOCKERFILE}" || ORDER_OK=0
+done < <(grep -n '^FROM node:20-alpine AS ' "${DOCKERFILE}")
+if [[ "${ORDER_OK}" == "1" ]]; then
+  pass "每个 stage 都是先换源再 apk add"
+else
+  fail "有 stage 在换源之前就 apk add 了"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

@@ -27,6 +27,10 @@ IMAGE_TAG="${IMAGE_TAG:-vanblog:local-test}"
 SMOKE_HTTP_PORT="${SMOKE_HTTP_PORT:-18080}"
 SMOKE_KEEP="${SMOKE_KEEP:-0}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+# Alpine 源：官方 dl-cdn 在国内经常 10 秒以上（构建会看起来卡死在 apk add），
+# 默认走阿里云镜像；ALPINE_MIRROR=none 表示用官方源
+ALPINE_MIRROR="${ALPINE_MIRROR-https://mirrors.aliyun.com/alpine}"
+[[ "${ALPINE_MIRROR}" == "none" ]] && ALPINE_MIRROR=""
 DO_BUILD=1
 DO_SMOKE=1
 STAGE=""
@@ -86,6 +90,7 @@ if [[ "${DO_BUILD}" == "1" ]]; then
     --build-arg "VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000"
     --build-arg "VAN_BLOG_NPM_REGISTRY=${NPM_REGISTRY}"
     --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${ADMIN_BUILD_SCRIPT}"
+    --build-arg "VAN_BLOG_ALPINE_MIRROR=${ALPINE_MIRROR}"
   )
   if [[ -n "${STAGE}" ]]; then
     say "> 只构建 stage ${yellow}${STAGE}${plain}（不打 tag，层缓存照样留着）"
@@ -95,6 +100,7 @@ if [[ "${DO_BUILD}" == "1" ]]; then
   fi
   say "> 构建 ${yellow}${IMAGE_TAG}${plain}（版本 ${VERSION_LABEL}，首次约 15-40 分钟）"
   say "  admin 堆档位：${yellow}${ADMIN_BUILD_SCRIPT}${plain}，pnpm 源：${yellow}${NPM_REGISTRY}${plain}"
+  say "  Alpine 源：${yellow}${ALPINE_MIRROR:-官方 dl-cdn}${plain}"
   "${ENGINE}" build "${BUILD_ARGS[@]}" -t "${IMAGE_TAG}" . || die "镜像构建失败"
   say "${green}镜像构建成功${plain}：${IMAGE_TAG}"
   "${ENGINE}" images "${IMAGE_TAG}" --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' 2>/dev/null ||

@@ -42,6 +42,8 @@
    #   VAN_BLOG_BUILD_SERVER         构建期的 server 地址，**必须是个合法 URL**（默认 http://127.0.0.1:3000）
    #   VAN_BLOG_NPM_REGISTRY         pnpm 源（默认 https://registry.npmmirror.com；海外机器可换 npmjs）
    #   VAN_BLOG_ADMIN_BUILD_SCRIPT   admin 构建档位：build（堆 4096MB）或 build:lowmem（1536MB，小内存机器用）
+   #   VAN_BLOG_ALPINE_MIRROR        Alpine 软件源（留空=官方 dl-cdn；国内建议 https://mirrors.aliyun.com/alpine，
+   #                                 否则构建会卡在 apk add 那一步十几分钟）
    docker build \
      --build-arg VAN_BLOG_VERSIONS=dev/dsh \
      --build-arg VAN_BLOG_ADMIN_BUILD_SCRIPT=build \

@@ -12,6 +12,7 @@
 
 - 代码基线：`Mereithhh/vanblog`，本分支从 master `ccd708ce`（v0.54.0+）起
 - 验证过的环境：Ubuntu 22.04 / 24.04，x86_64，**没有 docker 组权限、sudo 需要密码**
+- **开发要点（用户定的）：不用刻意兼容原版 VanBlog，一切以当前开发环境能跑的版本为基准** → 见 §6.0
 
 ---
 
@@ -460,6 +461,39 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ---
 
 ## 6. 铁律 / 不要做
+
+### 6.0 版本基准与兼容性取向（**用户明确定的开发要点**）
+
+> **不用刻意去兼容原版 VanBlog。以当前开发环境能跑的软件版本为基准。**
+
+含义与边界：
+
+- **基准 = 本机开发环境实测能跑的那套版本**（下表）。Dockerfile、compose 模板、安装脚本、
+  CI 都以这张表为准，**不要为了"和上游一致"而降级**，也不要保留只为上游服务的兼容分支。
+- 已经按这条原则处理过的：镜像默认 `EMAIL` 不再是上游作者的邮箱；示例 compose 的 `image:`
+  指向本 fork 的 ghcr 而不是 `mereith/van-blog`；后台「关于」页与 14 处帮助文档链接指向本分支；
+  页脚署名指向本分支；`node:18`（上游用的、已 EOL）升到 `node:20`；
+  全新安装的 mongo 默认 `7.0`（上游钉的 `4.4.16` 早在 2024-02 就 EOL）。
+- **不属于"兼容上游"、因此仍然要保留的**：保护**用户自己的现有数据**。
+  `pick_mongo_image()` 在检测到已有 mongo 数据目录时保持原 tag，不是留恋上游的 4.4，
+  而是因为数据目录与 FCV 绑定、直接换大版本 mongod 会拒绝启动（看起来像数据全丢）。
+  同理，`--offline` 的老式数据目录 tar 备份也保留（站点起不来时它是唯一能用的手段）。
+- 与下面第 3、9 条**不冲突**：那两条是"别动这套已验证的基准"（pnpm 8 / lockfile v6.0、
+  FCV 保持 6.0），正是本原则的另一面 —— 基准是本机跑得通的组合，不是越新越好。
+
+**当前基准（本机实测全绿的那套）**
+
+| 组件 | 版本 | 备注 |
+| --- | --- | --- |
+| Node | **20.19.5**（`.tools/node20`） | 系统 Node ≥23 会让 `@nestjs/cli` 9 崩（`util.isObject` 被移除） |
+| pnpm | **8.11.0** | lockfile v6.0；升 9/10 要重写 lockfile 并重算补丁 hash |
+| MongoDB | **7.0.14**，FCV **6.0** | 镜像/compose 的默认 tag 用 `mongo:7.0` |
+| sharp | 0.32.6 | 有 Node 20 的 prebuild；升 Node 22 必须先升 sharp 0.33+ |
+| TypeScript | 4.9.5 | |
+| NestJS | 9.x | |
+| Next.js | 13.5.x（pages router） | |
+| umi | 3.5.x（admin） | 两个 pnpm 补丁是为它的 MFSU 老解析器打的 |
+| Alpine | 3.23（`node:20-alpine` 带的） | 仓库路径是 `v3.23`（两段），而 `VERSION_ID` 是 `3.23.4`（三段） |
 
 1. **不要用系统 Node（≥23）跑 server/admin/website**，一律 `.tools/node20`。
 2. **不要为了本地环境去改仓库跟踪的文件**（`config/config.js`、`config/proxy.js`、`next.config.js`、
@@ -1938,10 +1972,16 @@ Dockerfile 用 `ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build` + `RUN pnpm run ${VAN_BLO
 registry 探测的四种情形（npmmirror 快 / npmjs 快 / 一个不可达 / 都不可达）+ 用户指定、
 并发与串行两种模式的 docker 命令（串行必须正好 4 次 build、三个 `--target`）、
 劝退路径（返回 1、一次 docker build 都不跑、提示里给出两条出路、`VANBLOG_FORCE_BUILD=true` 时照跑并提醒 OOM）。
-`dockerfile-patches.test.sh` 从 21 涨到 30 条（两个新 ARG 的默认值、四个 stage 都重新声明过 ARG、
+`dockerfile-patches.test.sh` 从 21 涨到 40 条（两个新 ARG 的默认值、四个 stage 都重新声明过 ARG、
 admin 用 `${VAN_BLOG_ADMIN_BUILD_SCRIPT}`、两档脚本都存在且都带堆上限）。
 
-⚠️ 写 shell 测试踩到两个坑，记一下：
+⚠️ 写 shell 测试踩到的坑（都真踩过，别再踩）：
+- **假命令的日志文件必须 `export`**：假 `docker`/`git` 是子进程，靠 `"${CMDLOG}"` 记命令；
+  不 export 时它们写到空文件名，CMDLOG 永远是空的 —— 于是所有 `assert_not_contains`
+  都"通过"（空文件当然什么都不含），`assert_file_contains` 全挂。**空的 CMDLOG 会让
+  一批否定断言变成假绿**，比测试失败更危险。
+- **shell 函数桩会跨用例残留**：某个用例里定义过 `docker() { … }`，后面的用例即使把假二进制
+  放进 PATH 也不会被调用（函数优先级高于 PATH）。`setup_case` 里要 `unset -f docker curl git …`。
 - **别把新用例追加到文件末尾** —— 这些测试文件的结尾是 `echo passed=… ; exit 0`，
   追加在后面永远不会执行（我第一次就是这么写的，92 条里只跑了 45 条还以为过了）。
 - **别用 `OUT="$(fn)"` 断言函数设置的全局变量** —— 命令替换是子 shell，赋值会丢；
@@ -2515,7 +2555,24 @@ cd /tmp/absim && pnpm install --frozen-lockfile      # 与镜像里完全相同�
 cd packages/admin && pnpm run build                  # EXIT=0 才算过
 ```
 
-**测试**：`scripts/tests/build-image-local.test.sh`（30 条静态契约）—— 构建参数必须和 CI 一致
+**Alpine 源也要能换**（同一类问题，同一套解法）：Dockerfile 三个 alpine stage 里
+`apk add` 走的是官方 `dl-cdn.alpinelinux.org`，国内实测 **8-10 秒才回一个索引**，
+构建会看起来"卡死"在 `apk add python3 make g++` 那一步（我本地第一次构建就卡了 8 分钟）。
+现在：`ARG VAN_BLOG_ALPINE_MIRROR`（留空=官方源），每个 alpine stage 在**第一条 apk 之前**
+按镜像自己的 Alpine 版本重写 `/etc/apk/repositories`；`vanblog.sh` 的 `detect_alpine_mirror`
+和 pnpm 源一样实测延迟后自动选（本机实测 aliyun 321ms / tuna 416ms / 官方 8001ms）；
+`build-image-local.sh` 默认用 aliyun，`ALPINE_MIRROR=none` 可关掉。
+⚠️ 两个只有真构建才会暴露的坑：
+1. **不要用 sed 改 `/etc/apk/repositories`**：Alpine 是 busybox sed，GNU 的 `\?` 可选分组不认；
+   而且原行是 `https://dl-cdn.alpinelinux.org/alpine/v3.23/main`，把主机名换成
+   `https://mirrors.aliyun.com/alpine` 会拼出 **`/alpine/alpine/`** 双段路径 → 404。
+   直接按 `VERSION_ID` 重写整个文件最稳。
+2. **`VERSION_ID` 是三段（`3.23.4`），仓库路径只有两段（`v3.23`）** —— 直接拼会 404，
+   然后 apk 报 `python3 (no such package)`，看起来像"镜像源坏了"，其实是路径错了。
+   必须 `cut -d. -f1,2`。探测延迟时也别写死某个 `v3.x`（基础镜像的 Alpine 版本会漂），
+   用 `latest-stable`。
+
+**测试**：`scripts/tests/build-image-local.test.sh`（32 条静态契约）—— 构建参数必须和 CI 一致
 （四个 build-arg 一个都不能少，否则"本地测过了"是假的）、支持 `--target` 单层构建、
 引擎探测要看 `docker info` 而不是只看命令存在、冒烟测试必须覆盖上面那 6 个故障特征 +
 关键路径 + 停机耗时 + RestartCount、`trap cleanup EXIT` 在、默认端口 18080（不撞正在跑的站点）、
@@ -2529,7 +2586,7 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 14 文件 / 656 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 14 文件 / 669 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

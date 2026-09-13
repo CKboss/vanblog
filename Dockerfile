@@ -24,6 +24,11 @@
 #                        `build:lowmem`（1536MB，给小内存机器）。
 ARG VAN_BLOG_NPM_REGISTRY=https://registry.npmmirror.com
 ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build
+# VAN_BLOG_ALPINE_MIRROR  Alpine 软件源镜像（留空 = 官方 dl-cdn.alpinelinux.org）。
+#   国内直连官方源实测要 10 秒以上（构建会看起来"卡死"在 apk add 那一步），
+#   换 mirrors.aliyun.com/alpine 实测 0.39s。三个 alpine stage 都会用到。
+#   ⚠️ BuildKit 规则：FROM 之前的 ARG 是全局的，但 stage 里要用必须**再 ARG 一次**。
+ARG VAN_BLOG_ALPINE_MIRROR=
 
 FROM node:20-alpine AS admin_builder
 ARG VAN_BLOG_NPM_REGISTRY
@@ -38,6 +43,23 @@ ENV NODE_OPTIONS='--max_old_space_size=4096 --openssl-legacy-provider'
 ENV EEE=production
 WORKDIR /app
 USER root
+ARG VAN_BLOG_ALPINE_MIRROR
+# 换 Alpine 源必须在第一条 apk add **之前**；留空就不动（用官方源）。
+# ⚠️ 不用 sed 改 /etc/apk/repositories：Alpine 用的是 **busybox sed**，
+#    它不支持 GNU 的 `\?` 可选分组，写 `s|https\?://dl-cdn…|` 匹配不上，
+#    结果 apk 拿着空/错的源报 `python3 (no such package)`（实测踩过）。
+#    直接按镜像自己的 Alpine 版本重写这个文件，确定性最高。
+RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
+      . /etc/os-release; \
+      # ⚠️ VERSION_ID 是三段（3.23.4），而仓库路径只有两段（v3.23）——
+      #    直接拼会得到 .../v3.23.4/main → HTTP 404 → apk 报 "no such package"。
+      apk_ver="$(printf '%s' "${VERSION_ID}" | cut -d. -f1,2)"; \
+      printf '%s\n%s\n' \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/main" \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/community" \
+        > /etc/apk/repositories; \
+      echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
+    fi
 RUN apk add --update python3 make g++ && rm -rf /var/cache/apk/*
 # ⚠️ 这一层以前是 `COPY ./packages/admin/ ./` + `pnpm i`（**独立安装、没有 lockfile**），
 # 结果每次构建都重新解析依赖版本，和仓库里锁定的版本对不上。真实事故：
@@ -90,6 +112,23 @@ FROM node:20-alpine AS website_builder
 ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
+ARG VAN_BLOG_ALPINE_MIRROR
+# 换 Alpine 源必须在第一条 apk add **之前**；留空就不动（用官方源）。
+# ⚠️ 不用 sed 改 /etc/apk/repositories：Alpine 用的是 **busybox sed**，
+#    它不支持 GNU 的 `\?` 可选分组，写 `s|https\?://dl-cdn…|` 匹配不上，
+#    结果 apk 拿着空/错的源报 `python3 (no such package)`（实测踩过）。
+#    直接按镜像自己的 Alpine 版本重写这个文件，确定性最高。
+RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
+      . /etc/os-release; \
+      # ⚠️ VERSION_ID 是三段（3.23.4），而仓库路径只有两段（v3.23）——
+      #    直接拼会得到 .../v3.23.4/main → HTTP 404 → apk 报 "no such package"。
+      apk_ver="$(printf '%s' "${VERSION_ID}" | cut -d. -f1,2)"; \
+      printf '%s\n%s\n' \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/main" \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/community" \
+        > /etc/apk/repositories; \
+      echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
+    fi
 RUN apk add --no-cache python3 make g++ libc6-compat vips-dev fftw-dev
 COPY ./package.json ./
 COPY ./pnpm-lock.yaml ./
@@ -126,6 +165,23 @@ WORKDIR /app
 # zstd / xz：后台「整站备份」默认用 zstd -19（其次 xz，最后才 gzip），
 # 镜像里没有这两个命令的话会静默降级成 gzip，压缩率和速度都差很多。
 # tar 用 busybox 自带的即可（备份/恢复只用 -cf -/-xf -/-xOf 这些基础能力）。
+ARG VAN_BLOG_ALPINE_MIRROR
+# 换 Alpine 源必须在第一条 apk add **之前**；留空就不动（用官方源）。
+# ⚠️ 不用 sed 改 /etc/apk/repositories：Alpine 用的是 **busybox sed**，
+#    它不支持 GNU 的 `\?` 可选分组，写 `s|https\?://dl-cdn…|` 匹配不上，
+#    结果 apk 拿着空/错的源报 `python3 (no such package)`（实测踩过）。
+#    直接按镜像自己的 Alpine 版本重写这个文件，确定性最高。
+RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
+      . /etc/os-release; \
+      # ⚠️ VERSION_ID 是三段（3.23.4），而仓库路径只有两段（v3.23）——
+      #    直接拼会得到 .../v3.23.4/main → HTTP 404 → apk 报 "no such package"。
+      apk_ver="$(printf '%s' "${VERSION_ID}" | cut -d. -f1,2)"; \
+      printf '%s\n%s\n' \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/main" \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/community" \
+        > /etc/apk/repositories; \
+      echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
+    fi
 RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-apps libc6-compat zstd xz \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \

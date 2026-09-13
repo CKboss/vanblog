@@ -66,6 +66,9 @@ VANBLOG_INSTALL_MODE="${VANBLOG_INSTALL_MODE:-auto}"
 VANBLOG_BUILD_MODE="${VANBLOG_BUILD_MODE:-auto}"
 VANBLOG_FORCE_BUILD="${VANBLOG_FORCE_BUILD:-false}"
 VANBLOG_NPM_REGISTRY="${VANBLOG_NPM_REGISTRY:-}"
+# Alpine 软件源镜像（构建时传给 Dockerfile 的 VAN_BLOG_ALPINE_MIRROR）。
+# 留空 = 自动探测；设成 "none" = 强制用官方源。
+VANBLOG_ALPINE_MIRROR="${VANBLOG_ALPINE_MIRROR:-}"
 # 下面几个由探测函数填，只用于日志与测试
 VANBLOG_HOST_CPUS=""
 VANBLOG_HOST_MEM_MB=""
@@ -469,6 +472,53 @@ detect_npm_registry() {
   fi
 }
 
+# 探测 Alpine 源：官方 dl-cdn 在国内经常要 10 秒以上，构建会看起来"卡死"在 apk add。
+# 和 pnpm 源一样：实测谁快用谁，都不可达就用官方源。
+detect_alpine_mirror() {
+  if [[ "${VANBLOG_ALPINE_MIRROR}" == "none" ]]; then
+    VANBLOG_ALPINE_MIRROR=""
+    echo -e "> Alpine 源：${yellow}官方 dl-cdn${plain}（VANBLOG_ALPINE_MIRROR=none）"
+    return 0
+  fi
+  if [[ -n "${VANBLOG_ALPINE_MIRROR}" ]]; then
+    echo -e "> Alpine 源：${yellow}${VANBLOG_ALPINE_MIRROR}${plain}（VANBLOG_ALPINE_MIRROR 指定）"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    VANBLOG_ALPINE_MIRROR=""
+    return 0
+  fi
+  local candidates=(
+    "https://mirrors.aliyun.com/alpine"
+    "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+    "https://dl-cdn.alpinelinux.org/alpine"
+  )
+  local url probe ms best="" best_ms=-1
+  echo -e "> 探测 Alpine 源延迟："
+  for url in "${candidates[@]}"; do
+    # 用 latest-stable 而不是写死某个 v3.x：基础镜像的 Alpine 版本会随 node:20-alpine 漂移
+    # （现在已经是 3.23 了），写死版本号会让探测结果和实际构建用的路径对不上。
+    probe="$(curl -sS -o /dev/null -m 8 -w '%{http_code} %{time_total}' \
+      "${url}/latest-stable/main/x86_64/APKINDEX.tar.gz" 2>/dev/null || true)"
+    if [[ "${probe%% *}" != "200" ]]; then
+      echo -e "    ${url} -> ${red}不可达${plain}"
+      continue
+    fi
+    ms="$(awk -v x="${probe#* }" 'BEGIN { printf "%d", x * 1000 }')"
+    echo -e "    ${url} -> ${ms}ms"
+    if (( best_ms < 0 || ms < best_ms )); then
+      best_ms="${ms}"; best="${url}"
+    fi
+  done
+  # 官方源就算"可达"也常常慢到不可用：只有它是唯一选项时才用
+  VANBLOG_ALPINE_MIRROR="${best}"
+  if [[ -z "${best}" ]]; then
+    echo -e "${yellow}  三个 Alpine 源都探测失败，构建时用官方源（可能很慢）${plain}"
+  else
+    echo -e "> Alpine 源：${yellow}${best}${plain}（实测 ${best_ms}ms）"
+  fi
+}
+
 build_vanblog_image() {
   if ! command -v docker >/dev/null 2>&1; then
     echo -e "${red}未找到 docker，无法构建镜像${plain}"
@@ -495,6 +545,7 @@ build_vanblog_image() {
     echo -e "${yellow}按 VANBLOG_FORCE_BUILD=true 继续，但很可能在 admin 或 website 构建时 OOM${plain}"
   fi
   detect_npm_registry
+  detect_alpine_mirror
 
   local version_arg="${VANBLOG_BRANCH}-${VANBLOG_SRC_COMMIT:-unknown}"
   # VAN_BLOG_BUILD_SERVER 必须传：Dockerfile 里它是 ARG → ENV VAN_BLOG_SERVER_URL，
@@ -508,6 +559,7 @@ build_vanblog_image() {
     --build-arg "VAN_BLOG_BUILD_SERVER=${build_server}"
     --build-arg "VAN_BLOG_NPM_REGISTRY=${VANBLOG_NPM_REGISTRY}"
     --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${VANBLOG_ADMIN_BUILD_SCRIPT}"
+    --build-arg "VAN_BLOG_ALPINE_MIRROR=${VANBLOG_ALPINE_MIRROR}"
   )
 
   if [[ "${VANBLOG_BUILD_PARALLEL}" == "true" ]]; then

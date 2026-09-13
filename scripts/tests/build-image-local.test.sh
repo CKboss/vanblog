@@ -34,6 +34,8 @@ has "传版本号 build-arg" 'VAN_BLOG_VERSIONS='
 has "传 server 地址 build-arg（空值会让 next build 挂）" 'VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000'
 has "传 pnpm 源 build-arg" 'VAN_BLOG_NPM_REGISTRY='
 has "传 admin 构建档位 build-arg" 'VAN_BLOG_ADMIN_BUILD_SCRIPT='
+has "传 Alpine 源 build-arg（国内直连 dl-cdn 会卡在 apk add）" 'VAN_BLOG_ALPINE_MIRROR='
+has "Alpine 源可以用 ALPINE_MIRROR=none 关掉" 'ALPINE_MIRROR-https://mirrors.aliyun.com/alpine'
 has "支持只构建单个 stage（迭代时快得多）" '--target'
 
 # 引擎：docker 组常常是空的，podman rootless 是免 sudo 的那条路
