@@ -2661,6 +2661,13 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 - 杀掉 `podman build` 之后，**容器里的进程会变成孤儿继续跑**（见过一个 `apk add` 挂了一个多小时），
   下次构建会和它抢资源；清理时要按 PID 杀，别用 `pkill -f`（模式里带工作区路径会把自己杀掉，§6 第 4 条）。
 
+⚠️ **一个恢复后才会出现的行为**（不是 bug，但会误导排查）：server 的 JWT 密钥是**启动时**从
+`settings` 读的（`initJwt`），整站恢复会把 `settings` 换成备份里的那份 → 进程内存里的密钥和库里的
+对不上。后果：**恢复完立刻用库里的密钥签 token 会 401**，重启容器后才对得上。
+用户侧没有影响（`TokenGuard` 还会查 `tokens` 表，恢复后旧 token 一并失效；重新登录用的仍是
+内存里那把密钥，登录/签发/校验三者自洽），但**任何"恢复后马上调 /api/admin/**"的自动化脚本
+都必须先重启容器**，否则会误判成"鉴权坏了"。
+
 **验证结果**（本机 podman，镜像 `vanblog:local-test`，导入的是用户那份 66MB 生产整站备份）：
 初始化 → 登录 → `full/inspect` → `full/restore`（含静态文件）全部成功；
 前台首页/归档/关于/文章页/中文别名文章页、后台 `/admin`、`/api/public/meta`、
@@ -2670,6 +2677,10 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 （`Cannot find module` / `caddy process exited` / `loading initial config` / `Reached heap limit` /
 `ERR_INVALID_URL` / `降级使用` / `unhandledRejection` / `ByteString`）；
 恢复后自动触发全量渲染；`docker stop` 在宽限期内优雅退出（SIGTERM 转发验证）。
+重启容器后**后台鉴权链路也实测通过**：`/api/admin/meta`（返回 `version: local@b90c2498`）、
+`/api/admin/article?page=1`（返回恢复出来的真实文章标题）、`/api/admin/backup/full/list`
+（列出刚导入的归档）全部 200。静态文件也核对过：恢复出来 68MB 的 `static/`，
+`/static/img/<hash>.webp` 直接 200 且 content-type 正确。
 
 **测试**：`scripts/tests/build-image-local.test.sh`（35 条静态契约）—— 构建参数必须和 CI 一致
 （四个 build-arg 一个都不能少，否则"本地测过了"是假的）、支持 `--target` 单层构建、
