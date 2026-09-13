@@ -2753,6 +2753,34 @@ Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 
 ⚠️ 写这个测试时踩到：整站备份目录是 `<数据目录>/log/vanblog-backups`，**不是** `data/log/...`
 （`full_backup_dir()` 的实现是 `${VANBLOG_DATA_PATH}/log/vanblog-backups`），路径写错断言就会假失败。
 
+### 7.33.1 文档死链检查与 CHANGELOG（补做的收尾）
+
+- **新增 `scripts/tests/docs-links.test.sh`**：`vuepress build` **不会**报相对路径写错
+  （`./init.md` 打成 `./initt.md` 照样构建成功，用户点进去才 404），所以自己查：
+  相对链接指向的文件存在、带 `#锚点` 的链接在目标文件里真有那个标题、
+  `<!-- @include: -->` 引用的片段存在、站内图片在 `docs/.vuepress/public` 下存在。
+  第一次跑就在 195 条站内链接里查出 **7 处死锚点**：`editor.md#代码高亮`（全站没有这个标题）、
+  `editor.md#在-markdown-里写-html`（真身在 `faq/usage.md#文章里写的-html-不生效`）、
+  `env.md#环境变量`（那只是 frontmatter 的 title，不是标题）、`draft.md#创建草稿`（实际叫「新建草稿」）、
+  `get-started.md#一键脚本部署`（那是个 `@tab`，不是标题；真实标题是「部署方式」）×2。全部改掉。
+  ⚠️ 写这个检查器有两个坑：**`@/` 别名**指 docs 根（不是相对路径）；
+  **标题可能藏在 `@include` 的 snippet 里**（`get-started.md#调整-nginx-缓存` 的标题其实在
+  `bt-panel.snippet.md`），不递归展开就会误报死链。
+  仓库根的 `README.md`/`CHANGELOG.md`/`AGENTS.md` 是 **GitHub 渲染**的，不是文档站页面，
+  里面的 `/img/x.png` 指仓库根的 `img/`，而不是 `docs/.vuepress/public/img/`（第一版按文档站规则解析，
+  把 README 的预览图误判成死链）。
+- **文档里的环境变量全部核对过**：39 个 `VAN_BLOG_*` / `VANBLOG_*` 在
+  server/website/admin/cli 源码、Dockerfile、compose、脚本、entrypoint、start.js 里都能找到，
+  已固化成守卫（`docs-consistency.test.sh` 第 9 组），以后文档写了个代码不读的变量会直接红。
+- **截图**：install/backup/update 那几页的截图来自上游图床（仍可访问），但内容已经和本分支不符
+  （假"有新版本"警报、备份页没有整站备份、页脚与「关于」指向上游）。没法在本机重截图，
+  所以在 `update.md` 与 `get-started.md` 各加了一段 `::: info` **明确列出截图与本分支的差异**，
+  并把"升级前备份"改成推荐整站备份。
+- **CHANGELOG** 的 fork 区块补齐了这一整轮（一键脚本 v0.5.0 的每一条、镜像的 6 项、
+  容器运行时的 6 项、compose、本地构建脚本、文档对齐），以及三个"只有镜像里才暴露"的修复
+  （前台 502 / 中文别名 500 / robots 404）。⚠️ 里面的测试数字要**跑完再写**，
+  第一版凭印象写了 778，实际是 752。
+
 ### 7.34 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
@@ -2760,7 +2788,7 @@ Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 59 文件 / 550 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 16 文件 / 746 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 17 文件 / 752 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

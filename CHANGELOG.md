@@ -27,6 +27,9 @@
 - 访问量计数改成原子 `$inc`（并发下不再互相覆盖、永久少算）；改站点信息不再无条件重启前台（环境变量没变就跳过，省掉几秒停站）；流水线装依赖不再用 `spawnSync` 阻塞事件循环。
 
 **修复**
+- **前台整站 502，而 `/admin` 与 `/api` 正常**：Next 13 的 standalone server 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID，于是它只绑那个网卡 IP，而 caddy 反代的是 `127.0.0.1:3001`。现在 `WebsiteProvider` 显式传 `HOSTNAME=0.0.0.0`（可用 `VANBLOG_WEBSITE_HOST` 覆盖）。
+- **中文别名的文章 500**：规范地址 308 重定向把中文直接塞进 `Location`，而 HTTP 头只能是 Latin-1 → Node `setHeader` 抛 `Cannot convert argument to a ByteString`。新增 `utils/encodeLocationPath.ts`（纯 ASCII 原样返回，避免把已编码的 `%xx` 再编成 `%25xx`；含非 ASCII 时按 `/` 分段编码）。**假数据永远测不出来**，只有真实数据里有中文别名才会踩到。
+- **`/robots.txt` 404**：动态 robots 由 server 提供，但 caddy 模板没有这条路由，落到 catch-all 转给前台。⚠️ 而且模板里有 `srv0(:443)` 与 `srv1(:80)` **两套路由**，只补一套就变成"HTTPS 正常、HTTP 404"。现在两个都补了，并有守卫测试要求两套路由完全对齐。
 - **前台页脚署名**：`Powered By VanBlog <版本>` 改指本分支仓库，后面跟一个「增强修改版」链到 README 的改动清单（以前指向上游文档站，访客点进去看到的说明与本站实际行为对不上）。
 - **后台「有新版本！」假警报**：源码构建的版本号是 `dev/dsh@<sha>`，老代码用字符串比较（`'dev/dsh@…' >= 'v0.54.0'` 首字符 d<v）判定"有新版本"，于是每次进后台都弹一次。现在只有两边都是正式发布号时才按数字段比较。
 - **后台 14 处帮助文档链接**改指仓库内 `docs/**.md`（与运行的代码同版本）：上游文档站改过目录结构，其中 **6 处已经 404**（编辑器帮助文档、协作者、ISR、评论设置、HTTPS 等页签）。另有两处 anchor 在本分支文档里不存在（`升级方法`、`外置图床`），改为只链到文件。
@@ -42,12 +45,46 @@
 - 评论（匿名可写）的渲染链路比正文严得多：原始 HTML 不解析、白名单不含 `img`/`iframe`/`style`/`svg`、链接强制 `nofollow noopener noreferrer`、服务端重新校验每个字段（显式拒绝 `javascript:` 等 scheme、剥双向控制符）、蜜罐 + 三重限流、公开接口不返回邮箱/IP/UA。[安全与加固](docs/advanced/security.md)
 
 **部署与开发**
+
+- 一键脚本 **v0.5.0**：
+  - `backup` **默认改成整站备份**（调 server 接口，产出 `vanblog-full-*.tar.zst`：一致性快照、NDJSON 跨版本可恢复、可预览清单）；原来的"打包数据目录"降级为 `backup --offline`（另有 `--offline --consistent` 先停 mongo）。`--format zstd|xz|gzip` 可选。站点没起时**不静默降级**，而是报错并给出两条路。
+  - `restore` 支持**一步恢复整站备份**：不带参数会列出服务器上的归档让你选；给名字时不上传（接口直接读服务器上的文件），给本地路径才 multipart 上传；`--no-static` 只恢复数据库。恢复前先 `full/inspect` 打印清单，恢复走接口**不停服**（server 自己按集合原子替换 + 重建索引 + 触发全量渲染）。认证支持 `VANBLOG_ADMIN_TOKEN`，或交互输入账号密码由脚本**本地派生口令**（明文不出本机，且只试一次不触发登录限流）。
+  - 新增 `status` 子命令与 `--help`：一屏看清脚本版本、安装/数据目录、编排里的 vanblog 与 mongo 镜像、mongo 数据是否存在、HTTP 端口、接口探活、`docker-compose ps`、各目录占用、整站备份数量与最近三个归档、磁盘剩余（含挂载点）。全部只读。
+  - `config` **不再把镜像悄悄换回上游官方版**（以前改个邮箱/端口就会把本分支镜像替换成 `mereith/van-blog:latest`，所有分支功能消失且无提示）；现在沿用编排里现有的镜像。
+  - MongoDB 版本按"有没有数据"决定：全新安装用 `mongo:7.0`（上游钉的 4.4.16 早已 EOL），**已有数据目录时保持原 tag**（数据目录与 FCV 绑定，直接换大版本 mongod 会拒绝启动），并打印两条升级路径；`VANBLOG_MONGO_IMAGE` 可覆盖（老机器不支持 avx 就用 4.4.16）。
+  - `restart`/`start`/`stop` **如实返回 docker-compose 的退出码**（以前永远返回 0，到处打印"成功"；离线恢复还会因此在 mongod 没停的情况下解压覆盖数据目录）。现在停不下来就不解压。
+  - 自更新加固：`bash -n` + 首尾标志校验（截断的下载不再能覆盖掉唯一一份可用脚本）、下载到 `mktemp`（不再用固定的 `/tmp/vanblog.sh`）、版本相同不替换、覆盖与 `exec` 都用脚本自身的绝对路径。
+  - 下载不再关闭 TLS 校验（原来 wget 带 `--no-check-certificate`，而下载的正是编排模板与脚本自己）；wget 失败退 curl，而不是退到"不校验"。
+  - 构建时自动探测四个下载源并传给 Dockerfile：pnpm 源、Alpine 软件源（官方 dl-cdn 实测 8 秒起，会让构建看起来卡死在 `apk add`）、node-gyp 的 Node 头文件源、sharp/libvips 预编译包源。
+  - 其它修复：`VANBLOG_DATA_PATH_RAW` 以前写死 `/var/vanblog/data`（换数据目录后编排文件与 backup/restore 各写各的地方）；邮箱里的 `&` 会被 sed 展开成整个匹配（ACME 拿到非法地址、HTTPS 一直签不出来）；`get_compose_http_port` 会把 `"3000:8080"` 当成映射到 80；`clone_or_update_source` 克隆前无条件 `rm -rf` 源码目录；编排模板校验太松（截断的模板能过，会生成一份没有 mongo 的编排文件）；docker 装不上时 `exit 0`；卸载只删上游镜像（现在连本分支镜像、本地 tag 与自建 shim 一起清，且只删自己写的 shim）；SELinux Enforcing 时给出提示。
+- **镜像**：
+  - 四个构建阶段 `node:18` → **`node:20`**（18 已于 2025-04 EOL）。**没有升到 22/24**：Node 23 移除了 `util.isObject`（`@nestjs/cli` 9 在用），而 sharp 0.32.6 没有 Node 22 的 prebuild。
+  - server 阶段从 glibc 换成 **alpine**（与 runner 同一个 libc：以前 glibc 编出来的原生模块拷进 alpine runner 根本加载不了，只能靠"回退去用前台那份 musl sharp"绕路）。
+  - 新增 **`waline_builder`** 阶段：`sqlite3@5.1.7` 没有 Node 20（ABI 115）的预编译包（node:18 时代有，所以是升 Node 暴露出来的），必须现场编译；放在独立阶段编好、runner 只拷 `node_modules`，**编译器不进最终镜像**。
+  - sharp 走 **npmmirror 的预编译包**（含 musl 版），不再从 github.com 下载（国内直接 aborted）。⚠️ sharp 只认环境变量，写 npmrc 没用（pnpm 8 不会把自定义键转成 `npm_config_*`），所以是用 Dockerfile 的 `ENV` 传的。server/website 两个阶段因此不再需要 gcc + vips-dev，**server 阶段的 apk 从 218 个包降到 1 个**。
+  - admin/website 两个 alpine 阶段跳过 `tree-sitter{,-json,-yaml}` 的编译：它们是 `swagger-ui-react@3.52.5` 带进来的**幽灵传递依赖**（源码与 dist 里没有任何一处 import），而在 musl 下 node-gyp 会**卡死**（进程活着、线程全 sleep、没有 make 子进程）。admin 的 `pnpm install` 从"永远不结束"变成 2m24s。
+  - 两个阶段改成按包过滤安装（`--filter "@vanblog/admin..."` / `"@vanblog/theme-default..."`），不再把整仓依赖都装一遍；仍然 `--frozen-lockfile`。
+  - **caddy 配置自适应**：Caddy 2.11 把 on-demand TLS 的 `ask` 换成了 `permission` 模块，旧写法会让它**拒绝加载整份配置**。新增 `scripts/caddyConfig.js` 生成两种写法，entrypoint 各跑一次 `caddy validate`，用通过的那个（结构是拿镜像里 `caddy adapt` 的输出对照的）。邮箱替换也在解析后的对象上做，不再是文本 sed。
+  - caddy 主配置起不来时**降级**到 `caddyFallbackTemplate.json`（同一份路由、去掉 `apps.tls`，HTTP 仍可用、443 走自签），而不是像以前那样整个容器"在跑但 80/443 全没监听"。
+  - `HEALTHCHECK` 探 **caddy 的 80 端口**（一条检查覆盖 caddy → server → 前台 → 后台静态文件），用镜像自带的 node（镜像里没有 curl），`start-period=180s`；补 `EXPOSE 443`。
+  - 镜像默认 `EMAIL` 从上游作者的邮箱改成空（没设 EMAIL 的用户以前会拿作者地址去注册 Let's Encrypt 账户）；caddy 的 admin API 从 `0.0.0.0:2019` 收到 `127.0.0.1`。
+- **容器运行时**：
+  - server 崩了容器**跟着退出**（以前 `start.js` 只打印一行"已停止"就不管了，容器停在 Up 状态而里面没有任何服务，`restart: always` 永远不触发）。
+  - `docker stop` 现在**真的优雅**：entrypoint 用 `exec node start.js`（node 当 PID 1 直接收 SIGTERM）、`start.js` 接 SIGTERM/SIGINT/SIGHUP 并转发给子进程、`main.ts` 同样接三个信号依次停 waline / 前台 / `app.close()`。以前三处都只接 SIGINT，而且转发用的 `process.kill(-pid)` 会抛 ESRCH（子进程没有独立进程组），每次停容器都等满 10 秒宽限期再 SIGKILL，**正在写的备份/导出/恢复上传会被截断**。
+  - `/var/log` 里的 stdio 日志按 20MB 轮转（以前无限追加，而 `/var/log` 是挂到宿主机数据目录的卷，跑几个月能把磁盘写满进而拖垮 mongo）。`vanblog-stdio.log` 保留 —— 后台「查看日志」读的就是它。
+  - waline 崩溃后**自动重启**（2s×n 退避、5 次上限、稳定运行 1 分钟后重置计数、主动 stop 时不重启）。以前只打一行日志，评论会一直 502 而容器看起来正常。
+  - `initJwt`（启动后第一次碰库）连不上 mongo 时重试 10 次×3 秒，不再一次失败就让容器崩溃循环；`depends_on` 只保证启动顺序，不保证 mongod 已可连接。
+  - 「忘记密码」的恢复密钥 `restore.key` 以 **0600** 写入（它在挂到宿主机的 `/var/log` 下，还会被脚本备份一起打包）。
+- **compose**：两个服务都加 json-file 日志上限（`10m × 3`，否则容器 stdout 也会无限增长写满宿主机分区）；vanblog `depends_on: mongo`；mongo 版本改成占位符由脚本决定，并写明"不要直接换 `latest`"（4.4 → 8.x 没有直升路径）；示例 compose 的镜像改成本分支的 ghcr。
+- **本地构建与验证**：新增 `./scripts/build-image-local.sh`（构建 + 冒烟测试，支持 docker 与 **podman rootless 免 sudo**、单层构建、小内存档位）。冒烟测试起临时 mongo + 容器，逐个打关键路径，然后**扫日志里历史上真炸过的特征**（`Cannot find module` / `caddy process exited` / `Reached heap limit` / `ERR_INVALID_URL` / `降级使用` …），再看 `RestartCount`、健康检查与 `docker stop` 耗时（接近宽限期就说明 SIGTERM 没转发）。构建后必须 `image exists` 复核 —— **被 SIGTERM 打断的 `podman build` 会返回 0**，只信退出码会宣布"构建成功"而镜像根本不存在。
+- **文档**：安装/备份/升级/FAQ 与脚本的真实行为对齐（原来还在教 `docker-compose down -v`，那会删卷；安装地址指向上游脚本，装出来是官方版）；新增 [本地构建与验证镜像](docs/advanced/local-build.md)；补 [整站备份](docs/advanced/backup.md) 的脚本用法与三种备份对比表；修 7 处死锚点与 README 预览图路径。
+
 - **后台「关于」页指向本分支**：标注「增强修改版」，列出 9 条主要增强点，链接改指 `CKboss/vanblog` 的 `dev/dsh`（Github / 提交历史 / CHANGELOG / 改动总览 / 仓库内文档 / 开发手册 / 本分支 Issues）；底部单独一块**致谢原始项目**（@Mereithhh 的上游仓库、官方文档站、交流群、打赏），并注明上游文档描述的是官方镜像的行为。
 
 - 一键脚本 `vanblog.sh` v0.4.0：**从本分支源码克隆并本地 `docker build`**（本 fork 没有发布镜像），`update` 改成 fetch + 重建且构建失败不停机，编排模板优先用仓库里那份，卸载会清源码目录；`VANBLOG_USE_UPSTREAM_IMAGE=true` 可回到官方镜像。
 - 一键脚本 v0.3.7 体检：`backup --consistent`、`restore` 校验压缩包并清 `mongod.lock`、常规操作不再 `down -v`（那会删卷）。
 - `./dev-env.sh bootstrap`：一条命令备好 Node 20 + pnpm 8 + MongoDB 7，全程不需要 docker 与 sudo。
-- 测试：server 562 用例、website 52 文件 / 484、admin 71 文件 / 272、部署脚本 8 文件 / 306 条断言。
+- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **17 文件 / 752 条断言**；文档站 `vuepress build` 通过
 
 ### ✨ Features | 新功能
 

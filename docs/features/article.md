@@ -30,7 +30,7 @@ order: 1
 
 ::: warning 使用草稿
 
-由于内置的增量渲染，新建的文章会**马上展示在前台页面**，所以更推荐的做法是 [先创建一个*草稿*](./draft.md#创建草稿)，然后再发布这个草稿。
+由于内置的增量渲染，新建的文章会**马上展示在前台页面**，所以更推荐的做法是 [先创建一个*草稿*](./draft.md#新建草稿)，然后再发布这个草稿。
 
 :::
 
@@ -147,7 +147,7 @@ order: 1
 
 在文章页面的表格点击编辑按钮，即可跳转到编辑器编辑文章。
 
-正文支持 CommonMark / GFM，也可以直接嵌入常见 HTML（如 `<u>`、`<font>`、`<center>`、带 `style` 的标签、`<iframe>`）。前台与后台预览同一套管线；`<script>` 和事件处理属性会被去掉，站点级 JS 请用 [定制化](../advanced/customizing.md)。详见 [编辑器 · 在 Markdown 里写 HTML](./editor.md#在-markdown-里写-html)。
+正文支持 CommonMark / GFM，也可以直接嵌入常见 HTML（如 `<u>`、`<font>`、`<center>`、带 `style` 的标签、`<iframe>`）。前台与后台预览同一套管线；`<script>` 和事件处理属性会被去掉，站点级 JS 请用 [定制化](../advanced/customizing.md)。详见 [编辑器 · 在 Markdown 里写 HTML](../faq/usage.md#文章里写的-html-不生效)。
 
 ![文章编辑](https://pic.mereith.com/img/577da489715c94c183247ba63887aac5.clipboard-2022-08-30.png)
 

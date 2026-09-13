@@ -191,6 +191,52 @@ else
   fail "文档里有裸尖括号（会让文档站构建失败）：$(printf '%s' "${BAD_ANGLES}" | head -3 | tr '\n' ' ')"
 fi
 
+
+# ---------- 9) 文档里写的每个环境变量，代码里都必须真的读它 ----------
+# 范围是**全部** docs/*.md（不只是部署那几份）：server / website / admin / Dockerfile /
+# compose / 脚本 / entrypoint / start.js 里任一处出现即算数。
+# 上一轮人工核过 39 个全对得上，这里把它固化成守卫，防止以后文档写了个不存在的变量。
+ENV_CHECK="$("${PY:-python3}" - <<'PYENV' "${ROOT}"
+import os, re, subprocess, sys
+root = sys.argv[1]
+out = subprocess.run(["grep", "-rhoE", "VAN_BLOG_[A-Z_]+|VANBLOG_[A-Z_]+", "docs/", "--include=*.md"],
+                     capture_output=True, text=True, cwd=root).stdout.split()
+names = sorted({v for v in out if not v.endswith("_")})
+roots = ["packages/server/src", "packages/website", "packages/admin/src", "packages/cli",
+         "Dockerfile", "entrypoint.sh", "scripts/start.js", "scripts/vanblog.sh",
+         "scripts/build-image-local.sh", "scripts/caddyConfig.js", "docker-compose",
+         "caddyTemplate.json", "caddyFallbackTemplate.json"]
+corpus = []
+for r in roots:
+    p = os.path.join(root, r)
+    if os.path.isfile(p):
+        corpus.append(open(p, encoding="utf-8", errors="ignore").read())
+        continue
+    for dp, dn, fn in os.walk(p):
+        dn[:] = [d for d in dn if d not in ("node_modules", ".next", "dist", ".umi", ".umi-production")]
+        for f in fn:
+            if f.endswith((".ts", ".tsx", ".js", ".jsx", ".json", ".yml", ".yaml", ".sh")):
+                try:
+                    corpus.append(open(os.path.join(dp, f), encoding="utf-8", errors="ignore").read())
+                except OSError:
+                    pass
+text = "".join(corpus)
+missing = [v for v in names if v not in text]
+print("total=%d" % len(names))
+for m in missing:
+    hits = subprocess.run(["grep", "-rl", m, "docs/", "--include=*.md"],
+                          capture_output=True, text=True, cwd=root).stdout.split()
+    print("missing %s (%s)" % (m, ", ".join(hits[:3])))
+PYENV
+)"
+env_total="$(printf '%s\n' "${ENV_CHECK}" | sed -n 's/^total=//p')"
+env_missing="$(printf '%s\n' "${ENV_CHECK}" | grep '^missing ' | head -6)"
+if [[ -n "${env_total}" && "${env_total}" -ge 20 && -z "${env_missing}" ]]; then
+  pass "文档里 ${env_total} 个 VAN_BLOG_*/VANBLOG_* 变量代码里都真的在读"
+else
+  fail "文档写了代码里不存在的环境变量（共 ${env_total:-0} 个变量）：${env_missing}"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

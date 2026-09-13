@@ -146,7 +146,7 @@ Hugo 里常用 `permalinks.post = "/post/:slug"`。VanBlog **没有**全局固�
 
 文章里写 ` ```asm `（或 `nasm` / `x86asm`）时，以前几乎没有关键字、寄存器、注释颜色：ByteMD 用的 highlight.js common 集不含汇编。现已补上 Intel/NASM（`asm` / `assembly` / `nasm` / `x86asm` / `intel` / `x86`）和 ARM（`arm` / `armasm`），前台和后台预览同一套。请升级到包含该增强的版本（[#294](https://github.com/Mereithhh/vanblog/issues/294)）。
 
-语法标签见 [编辑器](../features/editor.md#代码高亮)。围栏行号见 [前台代码块没有行号](#前台代码块没有行号)。夜间对比度见 [前台代码块对比度不足](#前台代码块对比度不足)。
+语法标签见 [编辑器](../features/editor.md)。围栏行号见 [前台代码块没有行号](#前台代码块没有行号)。夜间对比度见 [前台代码块对比度不足](#前台代码块对比度不足)。
 
 ## 前台分页方向键和无障碍
 
@@ -258,7 +258,7 @@ iPhone Safari（曾在 iPhone 11 Pro 上报告）点顶栏搜索图标后，页�
 
 Markdown 里写了 `<u>下划线</u>`、`<font color="red">` 或 `<center>` 后，前台可能只剩纯文本、没有样式。这是 ByteMD 默认的 GitHub sanitizer 会丢掉这些标签导致的，已修复（[#490](https://github.com/Mereithhh/vanblog/issues/490)）：文章正文会解析 HTML，并保留常见格式/嵌入标签；`<script>`、`onclick` / `onerror` 和 `javascript:` 链接仍会被去掉。请升级到包含该修复的版本。
 
-整站要插入脚本请用 [定制化](../advanced/customizing.md)，完整页面用 [自定义页面](../advanced/custom-page.md)，不要指望文章正文执行 JS。语法与允许范围见 [编辑器](../features/editor.md#在-markdown-里写-html)。
+整站要插入脚本请用 [定制化](../advanced/customizing.md)，完整页面用 [自定义页面](../advanced/custom-page.md)，不要指望文章正文执行 JS。语法与允许范围见 [编辑器](../faq/usage.md#文章里写的-html-不生效)。
 
 ## 前台 Markdown 链接文字或网址显示不完整
 
@@ -388,7 +388,7 @@ VanBlog 自 `v0.42.0` 已舍弃 `VAN_BLOG_ALLOW_DOMAINS` 环境变量，如果�
 
 比如用了 `xyx.com` 这个域名访问访问，那需要设置 `VAN_BLOG_ALLOW_DOMAINS` 为 `xyz.com`，比如用了 `localhost` 访问，那需要设置为 `localhost`，如果多个域名用英文逗号分隔，不支持通配符。
 
-请参考 [启动配置](../reference/env.md#环境变量)
+请参考 [启动配置](../reference/env.md)
 
 ## 按一次回车为什么不换行
 
