@@ -69,6 +69,10 @@ VANBLOG_NPM_REGISTRY="${VANBLOG_NPM_REGISTRY:-}"
 # Alpine 软件源镜像（构建时传给 Dockerfile 的 VAN_BLOG_ALPINE_MIRROR）。
 # 留空 = 自动探测；设成 "none" = 强制用官方源。
 VANBLOG_ALPINE_MIRROR="${VANBLOG_ALPINE_MIRROR:-}"
+# node-gyp 下载 Node 头文件的地址（原生模块 tree-sitter / sharp 要用）。
+# Alpine/musl 下 node-gyp 默认去 unofficial-builds.nodejs.org，国内经常连不上，
+# 于是 `pnpm install` 整个失败。留空 = 跟着 pnpm 源自动选（用 npmmirror 就配 cdn.npmmirror）。
+VANBLOG_NODE_DIST_URL="${VANBLOG_NODE_DIST_URL:-}"
 # 下面几个由探测函数填，只用于日志与测试
 VANBLOG_HOST_CPUS=""
 VANBLOG_HOST_MEM_MB=""
@@ -546,6 +550,16 @@ build_vanblog_image() {
   fi
   detect_npm_registry
   detect_alpine_mirror
+  # node-gyp 的头文件源跟着 pnpm 源走：用 npmmirror 就用它的 CDN（实测 3.4MB/s，
+  # 比 npmmirror.com/mirrors 与 nodejs.org 快 6 倍），用 npmjs 就不设（走 node-gyp 默认）
+  if [[ -z "${VANBLOG_NODE_DIST_URL}" ]]; then
+    case "${VANBLOG_NPM_REGISTRY}" in
+    *npmmirror*)
+      VANBLOG_NODE_DIST_URL="https://cdn.npmmirror.com/binaries/node"
+      echo -e "> node-gyp 头文件源：${yellow}${VANBLOG_NODE_DIST_URL}${plain}（跟随 pnpm 源）"
+      ;;
+    esac
+  fi
 
   local version_arg="${VANBLOG_BRANCH}-${VANBLOG_SRC_COMMIT:-unknown}"
   # VAN_BLOG_BUILD_SERVER 必须传：Dockerfile 里它是 ARG → ENV VAN_BLOG_SERVER_URL，
@@ -560,6 +574,7 @@ build_vanblog_image() {
     --build-arg "VAN_BLOG_NPM_REGISTRY=${VANBLOG_NPM_REGISTRY}"
     --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${VANBLOG_ADMIN_BUILD_SCRIPT}"
     --build-arg "VAN_BLOG_ALPINE_MIRROR=${VANBLOG_ALPINE_MIRROR}"
+    --build-arg "VAN_BLOG_NODE_DIST_URL=${VANBLOG_NODE_DIST_URL}"
   )
 
   if [[ "${VANBLOG_BUILD_PARALLEL}" == "true" ]]; then

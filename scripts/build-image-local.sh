@@ -31,6 +31,10 @@ NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 # 默认走阿里云镜像；ALPINE_MIRROR=none 表示用官方源
 ALPINE_MIRROR="${ALPINE_MIRROR-https://mirrors.aliyun.com/alpine}"
 [[ "${ALPINE_MIRROR}" == "none" ]] && ALPINE_MIRROR=""
+# node-gyp 头文件源：musl 下默认走 unofficial-builds.nodejs.org，国内连不上会让
+# pnpm install 整个失败（tree-sitter / sharp 编译不了）。NODE_DIST_URL=none 可关掉。
+NODE_DIST_URL="${NODE_DIST_URL-https://cdn.npmmirror.com/binaries/node}"
+[[ "${NODE_DIST_URL}" == "none" ]] && NODE_DIST_URL=""
 DO_BUILD=1
 DO_SMOKE=1
 STAGE=""
@@ -91,6 +95,7 @@ if [[ "${DO_BUILD}" == "1" ]]; then
     --build-arg "VAN_BLOG_NPM_REGISTRY=${NPM_REGISTRY}"
     --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${ADMIN_BUILD_SCRIPT}"
     --build-arg "VAN_BLOG_ALPINE_MIRROR=${ALPINE_MIRROR}"
+    --build-arg "VAN_BLOG_NODE_DIST_URL=${NODE_DIST_URL}"
   )
   if [[ -n "${STAGE}" ]]; then
     say "> 只构建 stage ${yellow}${STAGE}${plain}（不打 tag，层缓存照样留着）"
@@ -100,7 +105,7 @@ if [[ "${DO_BUILD}" == "1" ]]; then
   fi
   say "> 构建 ${yellow}${IMAGE_TAG}${plain}（版本 ${VERSION_LABEL}，首次约 15-40 分钟）"
   say "  admin 堆档位：${yellow}${ADMIN_BUILD_SCRIPT}${plain}，pnpm 源：${yellow}${NPM_REGISTRY}${plain}"
-  say "  Alpine 源：${yellow}${ALPINE_MIRROR:-官方 dl-cdn}${plain}"
+  say "  Alpine 源：${yellow}${ALPINE_MIRROR:-官方 dl-cdn}${plain}，node-gyp 头文件源：${yellow}${NODE_DIST_URL:-node-gyp 默认}${plain}"
   "${ENGINE}" build "${BUILD_ARGS[@]}" -t "${IMAGE_TAG}" . || die "镜像构建失败"
   say "${green}镜像构建成功${plain}：${IMAGE_TAG}"
   "${ENGINE}" images "${IMAGE_TAG}" --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' 2>/dev/null ||

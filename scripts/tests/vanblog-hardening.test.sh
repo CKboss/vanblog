@@ -325,6 +325,39 @@ assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_ALPINE_MIRROR=https://mir
 assert_file_contains "${SCRIPT}" "detect_alpine_mirror" "构建前会探测 Alpine 源"
 
 
+# ---------- node-gyp 头文件源跟着 pnpm 源走 ----------
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_SRC_COMMIT="abc1234"
+VANBLOG_BUILD_MODE="fast"
+VANBLOG_NPM_REGISTRY="https://registry.npmmirror.com"
+VANBLOG_NODE_DIST_URL=""
+build_vanblog_image >/dev/null 2>&1
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_NODE_DIST_URL=https://cdn.npmmirror.com/binaries/node" \
+  "用 npmmirror 时自动配上它的 node 头文件 CDN"
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_SRC_COMMIT="abc1234"
+VANBLOG_BUILD_MODE="fast"
+VANBLOG_NPM_REGISTRY="https://registry.npmjs.org"
+VANBLOG_NODE_DIST_URL=""
+build_vanblog_image >/dev/null 2>&1
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_NODE_DIST_URL= " \
+  "用 npmjs 时不强行改 node-gyp 的默认地址（海外机器直连更快）"
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_SRC_COMMIT="abc1234"
+VANBLOG_BUILD_MODE="fast"
+VANBLOG_NPM_REGISTRY="https://registry.npmmirror.com"
+VANBLOG_NODE_DIST_URL="https://my.node.mirror"
+build_vanblog_image >/dev/null 2>&1
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_NODE_DIST_URL=https://my.node.mirror" \
+  "用户显式指定的头文件源优先"
+
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

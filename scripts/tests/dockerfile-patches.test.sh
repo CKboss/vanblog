@@ -155,7 +155,7 @@ for f in package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json; do
     fail "admin_builder 没有拷 ./${f} —— 缺了它 --frozen-lockfile 装不起来"
   fi
 done
-if stage_body admin_builder | grep -qE '^RUN pnpm install --frozen-lockfile[[:space:]]*$'; then
+if stage_body admin_builder | grep -qE '^RUN pnpm install --frozen-lockfile( --filter [^ ]+)?[[:space:]]*$'; then
   pass "admin_builder 用 --frozen-lockfile 安装（版本可复现，不会漂移）"
 else
   fail "admin_builder 没有用 --frozen-lockfile —— 依赖版本会漂移（cytoscape 那次事故就是这么来的）"
@@ -311,14 +311,82 @@ fi
 ORDER_OK=1
 while IFS= read -r ln; do
   stage_line="${ln%%:*}"
-  awk -v start="${stage_line}" 'NR>start && /etc\/apk\/repositories/ { found=NR }
-       NR>start && /^RUN .*apk add/ { if (!found || NR<found) bad=1 }
+  awk -v start="${stage_line}" '
+       NR<=start { next }
+       /^[[:space:]]*#/ { next }
+       /^FROM / { exit }
+       /etc\/apk\/repositories/ { found=NR }
+       /^RUN .*apk add/ { if (!found || NR<found) bad=1 }
        END { exit bad?1:0 }' "${DOCKERFILE}" || ORDER_OK=0
 done < <(grep -n '^FROM node:20-alpine AS ' "${DOCKERFILE}")
 if [[ "${ORDER_OK}" == "1" ]]; then
   pass "每个 stage 都是先换源再 apk add"
 else
   fail "有 stage 在换源之前就 apk add 了"
+fi
+
+
+# ---------- 9) node-gyp 的头文件源可切换（musl 默认走 unofficial-builds，国内连不上）----------
+if grep -qE '^ARG VAN_BLOG_NODE_DIST_URL=' "${DOCKERFILE}"; then
+  pass "全局声明了 VAN_BLOG_NODE_DIST_URL"
+else
+  fail "缺少全局 ARG VAN_BLOG_NODE_DIST_URL"
+fi
+DIST_STAGES=$(grep -c 'npm config set disturl' "${DOCKERFILE}")
+if [[ "${DIST_STAGES}" -ge 3 ]]; then
+  pass "三个构建 stage 都会设置 node-gyp 的 disturl（${DIST_STAGES} 处）"
+else
+  fail "只有 ${DIST_STAGES} 个 stage 设了 disturl，应该 3 个（admin/website/server 都会装原生模块）"
+fi
+# 必须在 pnpm install 之前设置，否则装 tree-sitter/sharp 时还是走默认地址
+ORDER_OK=1
+while IFS= read -r ln; do
+  sl="${ln%%:*}"
+  # ⚠️ 跳过注释行：Dockerfile 里解释性注释正好写着 `pnpm install`，
+  #    不跳过的话"顺序检查"会被注释命中（本仓库第五次踩"断言前先剥注释"这个坑）
+  awk -v start="${sl}" '
+    NR<=start { next }
+    /^[[:space:]]*#/ { next }
+    /^FROM / { exit }
+    /npm config set disturl/ { found=NR }
+    /pnpm install|pnpm i / { if (!found || NR<found) bad=1 }
+    END { exit bad?1:0 }' "${DOCKERFILE}" || ORDER_OK=0
+done < <(grep -n '^FROM node:20' "${DOCKERFILE}")
+if [[ "${ORDER_OK}" == "1" ]]; then
+  pass "每个 stage 都是先设 disturl 再 pnpm install"
+else
+  fail "有 stage 在 pnpm install 之后才设 disturl（原生模块照样会去连 unofficial-builds）"
+fi
+
+
+# ---------- 10) --filter 的包名必须和 package.json 里的真名一致 ----------
+# 这个坑很阴：过滤名写错（比如把 website 写成 @vanblog/website，而它其实叫
+# @vanblog/theme-default）不会报错，只是**一个包都不装**，然后在 `umi build` /
+# `next build` 那一步才炸，错误信息完全指不到根因。
+PY_BIN="$(command -v python3 || command -v python)"
+if [[ -n "${PY_BIN}" ]]; then
+  FILTER_CHECK="$("${PY_BIN}" - <<'PYFILTER'
+import json, re, sys
+dockerfile = open("Dockerfile", encoding="utf-8").read()
+names = {}
+for pkg in ["admin", "website", "server", "cli", "waline"]:
+    try:
+        names[pkg] = json.load(open("packages/%s/package.json" % pkg, encoding="utf-8"))["name"]
+    except Exception:
+        pass
+bad = []
+for m in re.finditer(r'pnpm install --frozen-lockfile --filter "([^"]+)"', dockerfile):
+    spec = m.group(1).rstrip(".")
+    if spec not in names.values():
+        bad.append("过滤名 %s 不是任何 workspace 包的真名（真名有：%s）" % (spec, ", ".join(sorted(names.values()))))
+print("\n".join(bad) if bad else "ok")
+PYFILTER
+)"
+  if [[ "${FILTER_CHECK}" == "ok" ]]; then
+    pass "--filter 用的包名和 package.json 里的真名一致"
+  else
+    fail "${FILTER_CHECK}"
+  fi
 fi
 
 echo

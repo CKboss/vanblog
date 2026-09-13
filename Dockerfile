@@ -29,6 +29,12 @@ ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build
 #   换 mirrors.aliyun.com/alpine 实测 0.39s。三个 alpine stage 都会用到。
 #   ⚠️ BuildKit 规则：FROM 之前的 ARG 是全局的，但 stage 里要用必须**再 ARG 一次**。
 ARG VAN_BLOG_ALPINE_MIRROR=
+# VAN_BLOG_NODE_DIST_URL  node-gyp 下载 Node 头文件的地址（留空 = node-gyp 自己的默认值）。
+#   Alpine/musl 下 node-gyp 默认去 unofficial-builds.nodejs.org，国内经常连不上，
+#   于是 tree-sitter / sharp 这类原生模块编译失败，`pnpm install` 整个 stage 就挂了
+#   （报错是 FetchError: request to https://unofficial-builds.nodejs.org/... failed）。
+#   npmmirror 有全套头文件：https://npmmirror.com/mirrors/node
+ARG VAN_BLOG_NODE_DIST_URL=
 
 FROM node:20-alpine AS admin_builder
 ARG VAN_BLOG_NPM_REGISTRY
@@ -78,6 +84,13 @@ COPY ./pnpm-workspace.yaml ./
 COPY ./tsconfig.base.json ./
 COPY ./patches ./patches
 COPY ./packages/admin ./packages/admin
+ARG VAN_BLOG_NODE_DIST_URL
+# 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
+# unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
+RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
+      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
+      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+    fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
@@ -85,7 +98,11 @@ RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 # --frozen-lockfile：版本必须和仓库锁的一致，不一致就直接失败（而不是悄悄装个新版）
-RUN pnpm install --frozen-lockfile
+# ⚠️ 只装 admin 及其依赖（`--filter <pkg>...`）：整仓安装会把 packages/server 的依赖
+#    也拉进来（@swagger-api/apidom → tree-sitter/tree-sitter-yaml/tree-sitter-json 三个
+#    原生模块），在 alpine 上要用 node-gyp 现编译，慢且容易卡；admin 构建根本用不到它们。
+RUN pnpm install --frozen-lockfile --filter "@vanblog/admin..."
+
 # RUN sed -i 's/\/assets/\/admin\/assets/g' dist/admin/index.html
 # 堆上限写在 package.json 的脚本里（cross-env 会整体替换 NODE_OPTIONS，
 # 镜像的 ENV 传不进去，见 §7.24）。低内存机器用 build:lowmem 那一档。
@@ -97,6 +114,13 @@ ARG VAN_BLOG_NPM_REGISTRY
 ENV NODE_OPTIONS=--max_old_space_size=4096
 WORKDIR /app
 COPY ./packages/server/ .
+ARG VAN_BLOG_NODE_DIST_URL
+# 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
+# unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
+RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
+      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
+      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+    fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
@@ -148,13 +172,22 @@ ARG VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000
 ENV VAN_BLOG_SERVER_URL=${VAN_BLOG_BUILD_SERVER}
 ARG VAN_BLOG_VERSIONS
 ENV VAN_BLOG_VERSION=${VAN_BLOG_VERSIONS}
+ARG VAN_BLOG_NODE_DIST_URL
+# 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
+# unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
+RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
+      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
+      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+    fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
 RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
-RUN pnpm install --frozen-lockfile
+# 同理：只装 website 及其依赖（sharp 是它自己的依赖，仍然会装上）
+# ⚠️ website 的包名是 @vanblog/theme-default（不是 @vanblog/website），过滤名写错会一个包都装不上
+RUN pnpm install --frozen-lockfile --filter "@vanblog/theme-default..."
 RUN pnpm build:website
 
 
@@ -186,6 +219,12 @@ RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-ap
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
   && apk del tzdata
+ARG VAN_BLOG_NODE_DIST_URL
+# runner 也会 `pnpm i`（cli 与 waline），原生模块编译同样需要头文件源
+RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
+      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
+      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+    fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
