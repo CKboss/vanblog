@@ -82,7 +82,10 @@ describe('Apple 皮肤：不会漏到默认风格上', () => {
 
   it('globals.css 引入了皮肤，且皮肤不 @import 别的文件', () => {
     expect(read('styles/globals.css')).toContain('@import "./apple.css"');
-    expect(css).not.toContain('@import');
+    // 剔除注释再判断：apple.css 里有一段注释专门解释「为什么远程字体样式表不能用 @import」，
+    // 断言要盯的是**真的 @import 语句**，不是提到这个词
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(withoutComments).not.toContain('@import');
   });
 });
 

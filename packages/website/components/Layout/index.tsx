@@ -30,6 +30,11 @@ export default function (props: {
     localStorage.removeItem("saidHello");
   };
   const uiStyle = props.option.uiStyle === "default" ? "default" : "apple";
+  // Apple 皮肤用的中文字体（Maple Mono NF CN）来自 zeoseven 的字体 CSS。
+  // 用 <link> 而不是在 CSS 里 @import：@import 必须位于样式表最前面，而 apple.css
+  // 是被 globals.css 内联进来的，内联后远程 @import 会被浏览器**静默丢弃**；
+  // <link> 没有位置限制，还能配 preconnect 提前建连。只在皮肤开启时才加载。
+  const appleFontCss = "https://static.zeoseven.com/zsft/442/main/result.css";
   // 皮肤挂在最外层容器的 data-ui 上（SSR 就带上，不会闪）；同时同步到 <html>，
   // 这样 overscroll 区域和 body 背景也能跟着变。
   useEffect(() => {
@@ -76,6 +81,14 @@ export default function (props: {
           theme,
         }}
       >
+        {uiStyle === "apple" ? (
+          <Head>
+            <link rel="preconnect" href="https://static.zeoseven.com" crossOrigin="anonymous" />
+            <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="anonymous" />
+            <link rel="dns-prefetch" href="https://static.zeoseven.com" />
+            <link rel="stylesheet" href={appleFontCss} />
+          </Head>
+        ) : null}
         <div className="vb-root" data-ui={uiStyle}>
         <Toaster />
         {/* <ImageProvider> */}

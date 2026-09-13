@@ -1,4 +1,28 @@
 /* ==========================================================================
+   字体：Maple Mono（拉丁子集自己声明，中文/Nerd Font 子集由 Layout 里那个
+   <link> 加载的 zeoseven 字体 CSS 提供，family 名是 'Maple Mono NF CN'）
+
+   ⚠️ 远程字体样式表**不要**用 @import 写在这里：CSS 规范要求 @import 必须在
+   所有其它规则之前，而 apple.css 是被 globals.css 用 @import 内联进来的
+   （前面还有 siteNameLayout.css 与 Tailwind 产物），内联后远程 @import 就不再
+   处于首位 → 浏览器会**静默丢弃**它，字体加载不上还不报错。
+   所以远程那份走 components/Layout 里的 <link rel="stylesheet">（还能配 preconnect）。
+   @font-face 没有位置要求，放这里是安全的。
+   ========================================================================== */
+
+/* maple-mono-latin-400-normal */
+@font-face {
+  font-family: "Maple Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff2")
+      format("woff2"),
+    url("https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff")
+      format("woff");
+}
+
+/* ==========================================================================
    Apple 风格皮肤 —— 参考 https://developer.apple.com/news/ 的排版语言
 
    规则全部挂在 [data-ui="apple"] 下（由 components/Layout 按站点设置 uiStyle 输出，
@@ -37,11 +61,15 @@
   --ap-ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ap-content: 980px;
   --ap-read: 780px;
-  --ap-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-    "SF Pro Icons", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue",
-    "Microsoft YaHei", Arial, sans-serif;
-  --ap-font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+  /* Maple Mono 打头，后面整串保留原来的 SF Pro / 苹方 / 雅黑栈作为兜底：
+     远程字体没加载上（离线、CDN 被墙、用户装了拦截插件）时不会退化成浏览器默认的衬线/无衬线怪样子。
+     想换回系统字体，把这两行开头的 'Maple Mono NF CN', 'Maple Mono', 删掉即可。 */
+  --ap-font: "Maple Mono NF CN", "Maple Mono", -apple-system,
+    BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "SF Pro Icons",
+    "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", "Microsoft YaHei",
+    Arial, sans-serif;
+  --ap-font-mono: "Maple Mono NF CN", "Maple Mono", "SF Mono", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 /* 暗色沿用站点已有的 html.dark 机制，只把令牌整体反转 */
@@ -63,6 +91,12 @@ html.dark [data-ui="apple"] {
 }
 
 /* ---------------------------------------------------------------- 基础排版 */
+[data-ui="apple"],
+[data-ui="apple"] body,
+/* 挂在皮肤根节点上让全站继承（<html data-ui> 与 .vb-root 都会命中）。
+   不需要像自定义 CSS 那样再写 `p, span, div { font-family: … }`：
+   那种写法会把下面代码块用的 --ap-font-mono 一起覆盖掉，
+   而且 span/div 选择器太宽，第三方组件（评论区、播放器）也会被波及。 */
 [data-ui="apple"],
 [data-ui="apple"] body,
 [data-ui="apple"] .markdown-body,

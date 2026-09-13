@@ -38,6 +38,41 @@ Apple 风格具体做了这些事：
 - **时间线**：年份 32px/600，竖轨改成发丝线，条目 hover 变蓝；月份行的展开按钮是 22px 正圆浅灰底、`>` 用 flex 居中（组件原本是 `inline-block` + 内联宽度 + `text-lg`，直接加圆角和内边距会让箭头偏心）。
 - **元信息行**（标题下的 时间 / 分类 / 阅读量 / 评论量）：去掉 Tailwind `divide-x` 画的竖线，只留 18px 间距 —— Apple 的元信息行不画分隔线。
 - **关于页**：和文章页一样套 `.vanblog-article-page` 作用域（780px 阅读栏、40px 标题、正文不被列表页的「摘要 4 行」规则裁掉）。摘要截断现在只作用于**带「阅读全文」按钮的列表卡**。
+- **字体**：Apple 风格下全站用 **Maple Mono**（中文/Nerd Font 子集是 `Maple Mono NF CN`），
+  拉丁子集的 `@font-face` 写在 `styles/apple.css` 里（jsDelivr 的 fontsource），
+  中文子集那份样式表由 `components/Layout` 用 `<link rel="stylesheet">` 加载（zeoseven 字体 CDN），
+  **只在皮肤开启时才加载**，并配了 `preconnect` / `dns-prefetch` 提前建连。
+
+  两个实现细节值得知道：
+
+  1. 字体是写在**令牌**里的（`--ap-font` / `--ap-font-mono`），Maple Mono 打头，
+     后面完整保留原来的 SF Pro / 苹方 / 微软雅黑栈。所以远程字体加载不上（离线、CDN 不可达、
+     装了拦截插件）时会优雅退回系统字体，不会出现「正文变成浏览器默认衬线体」这种事故；
+     代码块走 `--ap-font-mono`，也不会被正文字体覆盖。
+  2. 字体挂在皮肤根节点（`[data-ui="apple"]`、`[data-ui="apple"] body`）上靠**继承**生效，
+     不需要 `p, span, div { font-family: … }` 那种宽选择器 —— 宽选择器会把代码块的 mono 令牌
+     和第三方组件（评论区、播放器）一起覆盖掉。
+
+  ::: tip 想换字体 / 自己托管
+
+  - 换字体：改 `styles/apple.css` 里 `--ap-font` 与 `--ap-font-mono` 的开头几项即可，
+    想完全回到系统字体就把 `"Maple Mono NF CN", "Maple Mono",` 删掉。
+  - 换成别的字体源：改 `components/Layout/index.tsx` 里的 `appleFontCss` 常量（就一处）。
+  - **自己托管**（不依赖任何第三方 CDN）：把字体文件放进 `packages/website/public/fonts/`，
+    在 `apple.css` 里加对应的 `@font-face`（`src: url("/fonts/xxx.woff2")`），
+    再把那个 `<link>` 去掉即可。中文字体建议用**分包**（按 unicode-range 切成几十个小文件），
+    否则单文件十几 MB 会拖慢首屏。
+
+  :::
+
+  ::: warning 不要用 `@import url(...)` 引远程字体样式表
+
+  CSS 规范要求 `@import` 必须位于样式表**所有其它规则之前**。而 `apple.css` 是被 `globals.css`
+  用 `@import` 内联进来的（它前面还有 `siteNameLayout.css` 和 Tailwind 产物），
+  内联之后远程 `@import` 就不再处于首位 → 浏览器会**静默丢弃**它：字体加载不上，控制台也不报错。
+  所以远程那份走 `<link>`。仓库里有测试盯着这条（样式文件里不允许出现远程 `@import`）。
+
+  :::
 - **分类/标签**：胶囊 chip，浅灰底、选中/hover 蓝底白字。
 - **分页**：无描边的安静文字，hover 浅灰胶囊，当前页浅灰填充 + 半粗。
 - **友链卡片**：`#f5f5f7` 浅灰填充 + 18px 圆角、无描边，hover 只抬升 2px（原来是 -8px，太跳）。
