@@ -1994,7 +1994,26 @@ VANBLOG_INSTALL_MODE=auto（默认）→ 先 docker pull；失败才退回源码
 `Docker_IMG` 最终值由 `prepare_vanblog_image` 决定，`ensure_compose_image` 再写进编排文件
 （ghcr 地址带斜杠，sed 分隔符是 `|`，这个以前就处理过了）。
 
-**测试**：`vanblog-source-install.test.sh` 从 92 涨到 124 条 —— 默认模式与默认镜像地址、
+⚠️ **镜像名必须全小写**：`github.repository` 是 `CKboss/vanblog`，**owner 带大写字母**，
+而 ghcr（和 Docker 一样）要求镜像引用全小写 —— 直接拼会得到 `ghcr.io/CKboss/vanblog`
+→ `invalid reference format`，而且是在构建之后才报，白烧几十分钟 runner。
+Actions 表达式里**没有 `lower()` 函数**，所以用一个 shell step `tr '[:upper:]' '[:lower:]'`
+算出 `steps.image.outputs.name`，并在同一个 step 里校验（发现大写立刻 `::error::` 退出）。
+
+另外加了一个「打印本次构建参数」step：镜像名 / 标签 / 架构 / 版本 / 三个 build-arg / 磁盘可用。
+远程 CI 失败时看不到本地环境，先把生效参数打出来能省掉一轮猜测
+（第一次跑就失败了，而 `actions/jobs/<id>/logs` 对未认证请求返回 **403**，
+即使仓库是 public 也拿不到日志 —— 只能靠 workflow 自己把信息吐到可见的 step 输出里）。
+
+**排查第一次构建失败时顺手验证的一件事**：在 `/tmp` 里按 `website_builder` 的目录结构
+（根 `package.json` + `pnpm-lock.yaml` + `pnpm-workspace.yaml` + `tsconfig.base.json` +
+`patches/` + 只有 `packages/website`）跑**完全相同**的命令
+`pnpm install --frozen-lockfile --ignore-scripts` → **EXIT=0**，
+说明钉死版本之后的 lockfile 是同步的，失败与它无关。
+（注意：`pnpm install --frozen-lockfile --lockfile-only` 是个**弱验证**，它只写 lockfile，
+不能代替真装一次。要验就按上面那样搭个最小工作区。）
+
+**测试**：`vanblog-source-install.test.sh` 从 92 涨到 133 条 —— 默认模式与默认镜像地址、
 auto 拉到镜像时**一次 build 和 clone 都不发**、auto 拉不到时退回构建并说明、
 image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull 都不发、
 `VANBLOG_IMAGE_REF` 覆盖、`VANBLOG_USE_UPSTREAM_IMAGE` 仍然优先、编排文件写入 ghcr 地址、
@@ -2005,6 +2024,8 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
 假 docker stub 也加了 `DOCKER_PULL_FAIL=1` 来模拟拉取失败。
 ⚠️ 又踩了一次「`OUT="$(fn)"` 是子 shell，全局赋值会丢」的坑（§7.25 记过），
 这次改成 `fn >"$LOG" 2>&1` 再读文件。
+⚠️ 还有一条：`assert_file_contains` 的针是 **grep BRE**，里面的 `*`、`[`、`]` 都要转义
+（`v*` 会变成"零个或多个 v"，`[:upper:]` 会被当成字符类），否则会误报"文件里没有"。
 
 ### 7.27 测试基线（本分支最后一次全量运行的结果）
 
@@ -2013,7 +2034,7 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 431 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 435 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

@@ -46,8 +46,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # github.repository = <owner>/<repo>，ghcr 要求全小写
-  IMAGE_NAME: ${{ github.repository }}
+  # ⚠️ 不能直接用 ${{ github.repository }} 当镜像名：ghcr（和 Docker 一样）要求
+  #    镜像引用**全小写**，而这个仓库的 owner 是 `CKboss`，带大写字母。
+  #    直接拼会得到 ghcr.io/CKboss/vanblog → `invalid reference format`，
+  #    而且报错发生在构建之后，白白浪费几十分钟 runner。
+  #    Actions 表达式里没有 lower() 函数，所以下面用一个 shell step 算出小写名。
 
 # 同一个 ref 上只跑一次：新的运行会把还在跑的旧运行取消掉，省 runner 时间
 concurrency:
@@ -66,6 +69,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: 镜像名（ghcr 要求全小写）
+        id: image
+        run: |
+          raw="${{ github.repository }}"
+          name="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "镜像：${REGISTRY}/${name}"
+          # 早点失败，别等构建完才发现引用非法
+          case "${name}" in
+            *[A-Z]*) echo "::error::镜像名仍含大写字母：${name}" ; exit 1 ;;
+          esac
 
       - name: 版本标签（写进镜像的 VAN_BLOG_VERSION，后台「关于」与页脚会显示）
         id: ver
@@ -107,7 +122,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
           tags: |
             # latest：dev/dsh 的手动构建，以及任何 v* 发版标签，都指向它
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev/dsh' || startsWith(github.ref, 'refs/tags/') }}
@@ -116,6 +131,20 @@ jobs:
             # 发版标签本身（如 v0.55.0-fork.1）
             type=raw,value=${{ steps.ver.outputs.safe_ref }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
+
+      # 把最终生效的值全打出来：构建失败时（尤其是 20-40 分钟之后才失败的那种）
+      # 光看 "Build and push" 的红色叉没用，得先确认参数本身是不是对的。
+      - name: 打印本次构建参数
+        run: |
+          echo "镜像      ：${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
+          echo "标签      ："
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/  - /'
+          echo "架构      ：${{ steps.plat.outputs.platforms }}"
+          echo "版本      ：${{ steps.ver.outputs.version }}"
+          echo "构建参数  ：VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000"
+          echo "          VAN_BLOG_NPM_REGISTRY=https://registry.npmjs.org"
+          echo "          VAN_BLOG_ADMIN_BUILD_SCRIPT=build"
+          echo "磁盘可用  ：$(df -h /var/lib/docker 2>/dev/null | tail -1 || df -h / | tail -1)"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -142,6 +171,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "镜像：${{ env.REGISTRY }}/${{ steps.image.outputs.name }}" >> "$GITHUB_STEP_SUMMARY"
           echo "架构：${{ steps.plat.outputs.platforms }}" >> "$GITHUB_STEP_SUMMARY"
           echo "版本：${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"

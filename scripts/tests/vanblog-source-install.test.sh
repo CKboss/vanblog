@@ -490,6 +490,14 @@ if [[ -f "${WORKFLOW}" ]]; then
   fi
   assert_file_contains "${WORKFLOW}" "# branches:" "把分支触发的写法留在注释里，需要时能直接放开"
   assert_file_contains "${WORKFLOW}" "# paths:" "注释里给了 paths 过滤的写法（只想在代码变化时构建）"
+  # ghcr（和 Docker 一样）要求镜像引用全小写，而仓库 owner 是 CKboss —— 直接拼
+  # ${{ github.repository }} 会得到 ghcr.io/CKboss/vanblog，构建几十分钟后才报
+  # invalid reference format。必须有一个 step 把它转小写。
+  # ⚠️ 针里的 [ ] 要转义：assert_file_contains 走的是 grep（BRE），[:upper:] 会被当成字符类
+  assert_file_contains "${WORKFLOW}" "tr '\[:upper:\]' '\[:lower:\]'" "镜像名强制转小写（owner 带大写字母）"
+  assert_not_contains "$(cat "${WORKFLOW}")" 'images: \${{ env.REGISTRY }}/\${{ env.IMAGE_NAME }}' "不再直接用大写的 github.repository 当镜像名"
+  assert_file_contains "${WORKFLOW}" "steps.image.outputs.name" "meta 与摘要都用小写后的镜像名"
+  assert_file_contains "${WORKFLOW}" "打印本次构建参数" "构建前把生效的参数打出来（失败时好排查）"
 else
   fail "缺少 .github/workflows/publish-ghcr.yml"
 fi
