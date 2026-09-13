@@ -821,6 +821,44 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   用户那段自定义 CSS 此前**根本没生效**（`CustomLayout` 只在 `enableCustomizing == "true"` 时渲染）。
   整合进皮肤后不再依赖那个开关。
 
+### 7.8.2 Apple 皮肤「看起来只有黑白灰」的修法
+
+用户反馈：主页只有黑和白，很单调。查下来的**事实**（不是审美问题，是数据 + 设计问题）：
+
+- 库里 53 篇文章 **一张 `cover` 都没设**，而列表卡只在 `type == "article"` 时才渲染 `ArticleCover`
+  → 首页**一张图都没有**；
+- 皮肤为了「去盒子化」（§7.8 的 3fabc05a）把卡片阴影/背景都去掉了，条目之间只剩发丝线；
+- 元信息行里所有 `span/div` 被强制成 `--ap-text-3`（灰），图标也是灰的；
+- 每页只有 5 篇（`articlesPerPage=5`），信息量本来就少。
+
+于是「白底 + 黑标题 + 灰摘要 + 发丝线」= 用户说的单调。修法是补**低饱和的颜色与图像**，
+而不是改配色体系（Apple 的语言本来就是中性色为主 + 少量彩色）：
+
+1. **列表缩略图**（`utils/firstImage.ts` + `components/PostCard/ListThumb.tsx`）：
+   `cover` 优先，没有就取正文首图。⚠️ 要用**完整正文** `content` 而不是 `calContent`
+   （摘要只有 200 字，首图常常在后面）。本站图床的图换成 `/static/img/thumb/<同名>`（§7.5 的缩略图），
+   `onError` 回退原图，再失败就整块不渲染。取图要**屏蔽代码区**（教程里的 `![示例](…)` 不算），
+   且只接受 `http(s)` / `//` / `/static/`，`data:` 与相对路径一律不要。
+   桌面端 `float: right`（文字左图右），窄屏不浮动、排在标题上方。
+2. **标签彩色胶囊**（`utils/tagColor.ts`）：色相 = 标签名哈希（稳定），
+   以 CSS 变量 `--chip-h` 下发，浅色 `hsl(h 76% 95%)/hsl(h 62% 33%)`、深色 `hsl(h 42% 20%)/hsl(h 72% 74%)`
+   —— 用变量而不是内联颜色，是因为**内联样式做不了暗色适配**。
+   ⚠️ 列表页原来**没有把 `tags` 传给 PostCard**（接口是返回 tags 的），所以一个胶囊都渲染不出来，
+   `pages/index.tsx` 与 `pages/page/[p].tsx` 都补了 `tags={article.tags}`。
+3. **页首作者条**换成两层径向渐变面板（蓝 + 品红，8~10% 不透明度）+ 18px 圆角，头像加强调色描边。
+4. 元信息行的 **svg 图标**染成 `--ap-accent`（`opacity: .72`），文字仍保持灰色。
+
+**作用域纪律**：`.post-card-thumb-wrap` / `.post-card-chips` 这两个节点对两种皮肤都会渲染，
+但 `globals.css` 里默认 `display: none`，只有 `[data-ui="apple"]` 下才显示 ——
+默认皮肤的版面一个像素都不变。测试里钉了这条（`__tests__/appleSkinRichness.spec.ts`）。
+
+**别搞错的两件事**：
+- 公开列表接口带 `toListView=true` 时**不返回 content**（只有 tags/cover/title 等），
+  那是 `getStaticPaths` 用的；真正的列表数据是不带 `toListView` 的那次请求，content 是有的。
+  调试时别拿 `toListView=true` 的返回去判断"列表页有没有正文"。
+- 首页只有 5 张卡（`articlesPerPage=5`），所以"10 篇里 4 篇有图"在首页只会出现 2 张缩略图，
+  这不是 bug。
+
 ### 7.9 Markdown：编辑器预览与前台渲染的一致性
 
 - 两边共用 bytemd 流水线：`remark-parse → remark-rehype({allowDangerousHtml:true}) → rehype-raw →
@@ -1479,7 +1517,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 53 文件 / 490 用例全绿 |
+| website `vitest run` | 54 文件 / 504 用例全绿 |
 | admin `node --test tests/unit` | 73 套件 / 283 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |

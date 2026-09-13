@@ -7,6 +7,10 @@ import Reward from "../Reward";
 import TopPinIcon from "../TopPinIcon";
 import UnLockCard from "../UnLockCard";
 import CommentArea from "../CommentArea";
+import ListThumb from "./ListThumb";
+import { listCardImage } from "../../utils/firstImage";
+import { tagChipStyle } from "../../utils/tagColor";
+import { encodeQuerystring } from "../../utils/encode";
 
 import { PostBottom } from "./bottom";
 import { SubTitle, Title } from "./title";
@@ -113,6 +117,20 @@ export default function (props: {
     return false;
   }, [props.type, props.content]);
 
+  // 列表卡的缩略图：cover 优先，没有就取**正文首图**。
+  // 用完整正文而不是 calContent（摘要只有 200 字，首图常常在后面）。
+  // 本站 53 篇文章一张 cover 都没设，而 Apple 皮肤的列表是「白底 + 发丝线 + 灰字」，
+  // 没有图就只剩黑白灰 —— 这是「看起来很单调」的主因之一。
+  const listImage = useMemo(
+    () => (props.type == "overview" ? listCardImage(props.cover, content) : null),
+    [props.type, props.cover, content],
+  );
+  // 标签做成柔和的彩色胶囊（Apple 的做法：大面积中性色 + 少量低饱和彩色）
+  const overviewTags = useMemo(
+    () => (props.type == "overview" ? (props.tags || []).filter(Boolean).slice(0, 3) : []),
+    [props.type, props.tags],
+  );
+
   return (
     <div className="post-card-wrapper">
       <div
@@ -120,6 +138,16 @@ export default function (props: {
         id="post-card"
         className="overflow-hidden post-card bg-white card-shadow py-4 px-1 sm:px-3 md:py-6 md:px-5 dark:bg-dark  dark:nav-shadow-dark"
       >
+        {listImage ? (
+          // 桌面端 CSS 让它浮动到右侧（文字左、图右，Apple News 的排法）；
+          // 窄屏时不浮动，就排在标题上方
+          <ListThumb
+            key={listImage.src}
+            src={listImage.src}
+            fallback={listImage.fallback}
+            alt={props.title}
+          />
+        ) : null}
         {props.type == "article" && (
           <ArticleCover src={props.cover} alt={props.title} />
         )}
@@ -143,6 +171,17 @@ export default function (props: {
           catelog={props.catelog}
           enableComment={props.enableComment}
         />
+        {overviewTags.length > 0 && (
+          <div className="post-card-chips">
+            {overviewTags.map((tag) => (
+              <Link key={tag} href={`/tag/${encodeQuerystring(tag)}`}>
+                <span className="post-card-chip" style={tagChipStyle(tag)}>
+                  {tag}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
         <div className="text-sm md:text-base  text-gray-600 mt-4 mx-2">
           {props.type == "article" && (
             <AlertCard

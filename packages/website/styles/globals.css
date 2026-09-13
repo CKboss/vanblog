@@ -574,3 +574,11 @@ html.dark .van-comment-more-hint {
   margin-top: 0.75rem;
   text-align: center;
 }
+
+/* ---------- 列表卡的缩略图与标签胶囊 ----------
+   这两块 DOM 对两种皮肤都会渲染，但**只有 Apple 皮肤显示**（样式在 apple.css 里）。
+   默认皮肤的版面因此完全不变 —— 要给它也开图，把 display 改掉即可。 */
+.post-card-thumb-wrap,
+.post-card-chips {
+  display: none;
+}

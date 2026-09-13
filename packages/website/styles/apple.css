@@ -1224,3 +1224,121 @@ html.dark [data-ui="apple"] .card-shadow.vanblog-social-popover {
 }
 
 /* 不支持 :has() 的老浏览器：作者卡片留在右侧栏、其余样式照常生效，不会错乱。 */
+
+/* ==========================================================================
+   让列表页不再只有黑白灰（2026-09 追加）
+
+   问题：本站 53 篇文章一张 cover 都没设，列表页于是只剩「白底 + 黑标题 + 灰摘要 +
+   发丝线」，非常单调。Apple 的排版确实是中性色为主，但它从来不是**只有**中性色 ——
+   Apple News 的列表有封面图，Apple 的标签/徽章用低饱和的彩色胶囊，页面顶部常有
+   柔和的渐变。所以这里补三样，全部只在 [data-ui="apple"] 下生效：
+
+   1. 列表缩略图：cover 优先，没有就取正文首图（utils/firstImage.ts），
+      本站图床的图自动换成 300px 缩略图，取不到再回退原图，都失败就整块不渲染。
+   2. 标签彩色胶囊：色相由标签名哈希得到（同名标签永远同色），低饱和底色 + 同色相深字。
+   3. 页首作者条：从「透明 + 发丝线」换成两层柔和的径向渐变面板，给页面一个色彩锚点。
+   另外把元信息行的图标染成强调色（文字仍是灰的）—— 只加一点点颜色，不喧宾夺主。
+   ========================================================================== */
+
+/* --- 1. 列表缩略图：桌面端文字左、图右（Apple News 的排法） --- */
+[data-ui="apple"] .post-card-thumb-wrap {
+  display: block;
+  float: right;
+  width: 208px;
+  margin: 2px 0 14px 28px;
+}
+
+[data-ui="apple"] .post-card-thumb {
+  display: block;
+  width: 208px;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: 12px;
+  background: var(--ap-surface-3);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  transition: transform 0.3s var(--ap-ease), box-shadow 0.3s var(--ap-ease);
+}
+
+[data-ui="apple"] .post-card-wrapper:hover .post-card-thumb {
+  transform: scale(1.025);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.14);
+}
+
+/* 窄屏：不浮动，图排在标题上方（和 Apple News 移动端一致） */
+@media (max-width: 640px) {
+  [data-ui="apple"] .post-card-thumb-wrap {
+    float: none;
+    width: 100%;
+    margin: 0 0 14px;
+  }
+
+  [data-ui="apple"] .post-card-thumb {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+}
+
+/* --- 2. 标签彩色胶囊 --- */
+[data-ui="apple"] .post-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+[data-ui="apple"] .post-card-chip {
+  --chip-h: 210;
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.25;
+  letter-spacing: 0;
+  background: hsl(var(--chip-h) 76% 95%);
+  color: hsl(var(--chip-h) 62% 33%);
+  transition: background 0.2s var(--ap-ease), transform 0.2s var(--ap-ease);
+}
+
+[data-ui="apple"] .post-card-chips a:hover .post-card-chip {
+  background: hsl(var(--chip-h) 76% 90%);
+  transform: translateY(-1px);
+}
+
+html.dark [data-ui="apple"] .post-card-chip {
+  background: hsl(var(--chip-h) 42% 20%);
+  color: hsl(var(--chip-h) 72% 74%);
+}
+
+html.dark [data-ui="apple"] .post-card-chips a:hover .post-card-chip {
+  background: hsl(var(--chip-h) 42% 26%);
+}
+
+/* --- 3. 元信息行的图标染成强调色（文字仍保持灰，只加一点点颜色） --- */
+[data-ui="apple"] .post-card-sub-title svg {
+  fill: var(--ap-accent) !important;
+  color: var(--ap-accent);
+  opacity: 0.72;
+}
+
+/* --- 4. 页首作者条：两层柔和径向渐变，给页面一个色彩锚点 --- */
+[data-ui="apple"] #author-card > div {
+  background:
+    radial-gradient(120% 160% at 0% 0%, rgba(0, 113, 227, 0.1), transparent 58%),
+    radial-gradient(120% 160% at 100% 0%, rgba(255, 55, 95, 0.08), transparent 55%),
+    var(--ap-surface-2) !important;
+  border-radius: 18px !important;
+  padding: 24px 26px !important;
+  margin: 4px 0 6px !important;
+}
+
+html.dark [data-ui="apple"] #author-card > div {
+  background:
+    radial-gradient(120% 160% at 0% 0%, rgba(10, 132, 255, 0.18), transparent 58%),
+    radial-gradient(120% 160% at 100% 0%, rgba(255, 69, 105, 0.14), transparent 55%),
+    var(--ap-surface) !important;
+}
+
+/* 头像加一圈强调色描边，小面积高饱和，Apple 的个人卡片就是这么做的 */
+[data-ui="apple"] #author-card img {
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.16);
+}
