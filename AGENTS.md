@@ -768,6 +768,36 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - 测试：`packages/website/__tests__/appleTheme.spec.ts`(39，含「不许出现框」「标题操作区不能抢戏」
   「所有覆盖层都要有表面」「用户反馈的三个细节」四组守卫)、`packages/admin/tests/unit/appleTheme.test.js`(4)。
 
+### 7.8.1 Apple 皮肤的字体：Maple Mono（令牌驱动 + `<link>` 加载）
+
+用户要求把「自定义 CSS 里那份 Maple Mono 字体」直接整合进皮肤。做法与两个坑：
+
+- **写在令牌里，不写宽选择器**：`--ap-font` / `--ap-font-mono` 以 `"Maple Mono NF CN", "Maple Mono"`
+  打头，后面**完整保留**原来的 SF Pro / 苹方 / 雅黑栈；字体规则挂在 `[data-ui="apple"]` 与
+  `[data-ui="apple"] body` 上靠继承生效。
+  ⚠️ 用户原稿里那种 `p, span, div { font-family: … }` 不能用：它会把代码块的 `--ap-font-mono`
+  一起覆盖掉，还会波及第三方组件（评论区、播放器）。
+- **远程字体样式表走 `<link>`，不能写 `@import`**：CSS 规范要求 `@import` 在所有其它规则之前，
+  而 `apple.css` 是被 `globals.css` 内联进来的（前面还有 `siteNameLayout.css` 与 Tailwind 产物），
+  内联后远程 `@import` 不在首位 → 浏览器**静默丢弃**，字体加载不上且不报错。
+  用户原稿正好踩了这个（`@font-face` 写在 `@import` 前面）。现在：拉丁子集的 `@font-face`
+  放 `apple.css`（位置无关），中文子集那份 zeoseven CSS 由 `components/Layout` 用
+  `<link rel="stylesheet">` 加载，**只在 `uiStyle === 'apple'` 时**加载，并配 preconnect/dns-prefetch。
+  `__tests__/appleSkinFont.spec.ts` 会扫所有 css 文件，禁止出现远程 `@import`。
+- ⚠️ 已有测试 `appleTheme.spec.ts` 里有一条 `expect(css).not.toContain('@import')`：
+  它是针对**整份文件文本**的，所以我在 apple.css 里写「为什么不能用 @import」的注释会把它打红。
+  已改成先剔除 `/* … */` 再断言（教训同 §7.15：源码级断言要先剔注释）。
+- **实测发现**：`zeoseven.com` 可解析可访问，但**本机解析不了 `static.zeoseven.com`**
+  （`No address associated with hostname`，走代理也是 SSL_ERROR_SYSCALL），
+  所以中文子集在这台机器上加载不到 → 会退回兜底字体栈（这正是保留完整 fallback 的意义）。
+  jsDelivr 的拉丁子集正常（`latin-400-normal.woff2` → 200 / 74KB）。
+  npm 上没有 `maple-mono-nf-cn` / `maple-font` 包，`subframe7536/maple-font` 仓库里也没有构建产物
+  （字体在 GitHub Releases 里，jsDelivr 的 `/gh/` 只能取仓库文件），所以要自己托管得从 Release 下载。
+  换字体源只需改 `components/Layout/index.tsx` 里的 `appleFontCss` 常量（就一处）。
+- 顺带确认：站点的 `siteInfo.customCss` 是**空的**、`enableCustomizing` 也没开 —— 也就是说
+  用户那段自定义 CSS 此前**根本没生效**（`CustomLayout` 只在 `enableCustomizing == "true"` 时渲染）。
+  整合进皮肤后不再依赖那个开关。
+
 ### 7.9 Markdown：编辑器预览与前台渲染的一致性
 
 - 两边共用 bytemd 流水线：`remark-parse → remark-rehype({allowDangerousHtml:true}) → rehype-raw →
@@ -1426,7 +1456,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 52 文件 / 484 用例全绿 |
+| website `vitest run` | 53 文件 / 489 用例全绿 |
 | admin `node --test tests/unit` | 72 套件 / 277 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |

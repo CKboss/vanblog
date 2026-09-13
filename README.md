@@ -52,7 +52,7 @@
 <tr><td>评论</td>
 <td><b>内置评论系统</b></td><td>不再必须外挂 Waline：评论存在本站 Mongo、走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/批量/按状态与关键词筛选）。可选 <code>内置 / Waline / 关闭</code>，<b>老站点升级默认保持 Waline</b>；支持从 Waline 导出文件<b>一键导入</b>（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞）与<b>只导出已通过评论</b></td><td><a href="docs/features/comment.md">评论系统</a></td></tr>
 <tr><td rowspan="2">观感与部署</td>
-<td><b>Apple 风格前台皮肤</b></td><td>后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 <code>[data-ui="apple"]</code> 作用域，不影响自定义 CSS；深浅色都有令牌可调</td><td><a href="docs/features/config.md">配置</a></td></tr>
+<td><b>Apple 风格前台皮肤</b></td><td>后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 <code>[data-ui="apple"]</code> 作用域，不影响自定义 CSS；深浅色都有令牌可调；全站字体为 <b>Maple Mono</b>（写在 <code>--ap-font</code> / <code>--ap-font-mono</code> 令牌里，远程字体加载不上会自动退回 SF Pro / 苹方 / 雅黑）</td><td><a href="docs/features/config.md">配置</a></td></tr>
 <tr><td><b>一键安装装的是本分支</b></td><td>脚本从 <code>CKboss/vanblog</code> 的 <code>dev/dsh</code> 克隆源码并本地 <code>docker build</code>（本分支没有发布镜像）。上游脚本拉的是官方镜像，<b>不含这里的任何改动</b></td><td><a href="#一键脚本部署">部署</a></td></tr>
 </table>
 
@@ -177,7 +177,7 @@
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **587** 用例（1 个既有用例需联网拉字体，离线必失败） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **52 文件 / 484** 用例 |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **53 文件 / 489** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **72 套件 / 277** 用例 |
 | 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 313** 条断言 |
 
