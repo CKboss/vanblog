@@ -2742,6 +2742,12 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 - `docs/advanced/local-build.md` 存在、覆盖 `build-image-local.sh` / podman / `SHARP_DIST_HOST` /
   `aardvark-dns` / `publish-ghcr`，且被安装文档链接到。
 
+⚠️ **改文档也要跑一次文档站构建**（`cd docs && pnpm run docs:build`，约 22 秒）：
+Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 并**整站构建失败**。
+这次就是 `<https://github.com/<owner>/<repo>/...>` 这种"自动链接里套占位符"炸的 ——
+占位符要么放进反引号，要么别用尖括号自动链接。守卫测试里加了一条：
+扫所有入库 md，代码块与行内代码之外不许出现白名单以外的尖括号标签。
+
 另外 `vanblog-hardening.test.sh` 加了 12 条 `status` 的断言（有数据/空环境两种情形、
 提示语里不许出现 `bash backup`、dispatcher 真的有 `status` 与 `--help`）。
 ⚠️ 写这个测试时踩到：整站备份目录是 `<数据目录>/log/vanblog-backups`，**不是** `data/log/...`
@@ -2754,7 +2760,7 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 59 文件 / 550 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 16 文件 / 745 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 16 文件 / 746 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

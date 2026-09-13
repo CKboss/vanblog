@@ -145,6 +145,52 @@ else
   fail "安装文档没有链接本地构建文档"
 fi
 
+
+# ---------- 8) Markdown 里不能有"裸的尖括号占位符"（会让文档站构建失败）----------
+# 真踩过：`<https://github.com/<owner>/<repo>/...>` 这种自动链接里套占位符，
+# vue 编译器把 `<owner>` 当成没闭合的标签 → `[vite:vue] Element is missing end tag` →
+# 整个文档站构建失败。占位符要么放进反引号，要么就别用尖括号自动链接。
+# 合法的 HTML 标签（img/kbd/strong/p/br/a/code/details/summary/table 等）放行。
+BAD_ANGLES="$("${PY:-python3}" - <<'PYANGLE'
+import re, subprocess, sys
+allowed = {
+    "img", "p", "br", "strong", "em", "code", "pre", "kbd", "a", "details", "summary",
+    "table", "thead", "tbody", "tr", "td", "th", "div", "span", "sup", "sub", "b", "i",
+    "ul", "ol", "li", "h1", "h2", "h3", "h4", "center", "video", "source", "AutoCatalog",
+    "Badge", "CodeGroup", "CodeGroupItem", "FontIcon", "Icon", "Tabs", "Tab",
+}
+fence = re.compile(r"^\s*(```|~~~)")
+angle = re.compile(r"</?([A-Za-z][A-Za-z0-9_-]*)[^>]*>|<[^>\s]{1,40}>")
+files = subprocess.run(["git", "ls-files", "docs/**/*.md", "docs/*.md", "README.md"],
+                       capture_output=True, text=True, cwd=sys.argv[1]).stdout.split()
+bad = []
+for path in files:
+    try:
+        lines = open(path, encoding="utf-8").read().split("\n")
+    except OSError:
+        continue
+    in_code = False
+    for n, line in enumerate(lines, 1):
+        if fence.match(line):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        no_inline = re.sub(r"`[^`]*`", "", line)
+        for m in angle.finditer(no_inline):
+            tag = (m.group(1) or "").strip("/")
+            if tag in allowed:
+                continue
+            bad.append("%s:%d %s" % (path, n, m.group(0)))
+print("\n".join(bad[:10]))
+PYANGLE
+ "${ROOT}")"
+if [[ -z "${BAD_ANGLES}" ]]; then
+  pass "文档里没有会让 vue 编译失败的裸尖括号占位符"
+else
+  fail "文档里有裸尖括号（会让文档站构建失败）：$(printf '%s' "${BAD_ANGLES}" | head -3 | tr '\n' ' ')"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

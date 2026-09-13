@@ -162,7 +162,10 @@ mermaid 要的 `./dist/cytoscape.umd.js` 没被导出）—— 那种问题只�
 
 ::: tip ghcr 包默认是私有的
 
-第一次发布后要去 <https://github.com/<owner>/<repo>/pkgs/container/vanblog> →
+第一次发布后要去仓库的 package 页面（`https://github.com/<owner>/<repo>/pkgs/container/vanblog`）→
 Package settings → Change visibility 改成 **Public**，否则别人 `docker pull` 会 `denied`。
+⚠️ 这个 URL 在 Markdown 里**不要用尖括号自动链接**包起来：里面还有 `<owner>/<repo>` 占位，
+vue 编译器会把 `<owner>` 当成没闭合的标签，整个文档站构建直接失败
+（`[vite:vue] Element is missing end tag`）。
 
 :::
