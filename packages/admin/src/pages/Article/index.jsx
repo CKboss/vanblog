@@ -1,3 +1,4 @@
+import CoverBackfillModal from '@/components/CoverBackfillModal';
 import ImportArticleModal from '@/components/ImportArticleModal';
 import NewArticleModal from '@/components/NewArticleModal';
 import { backfillArticlePathname, getArticlesByOption } from '@/services/van-blog/api';
@@ -232,6 +233,14 @@ export default () => {
             >
               生成拼音路径
             </Button>,
+            // 与其它批量操作并排：组件自带按钮 + 弹窗，打开就先跑 dryRun 预览，
+            // 写入成功后留在弹窗里给「撤销本次改动」，同时 reload 列表让新封面立刻可见
+            <CoverBackfillModal
+              key="coverBackfillBtn"
+              onFinish={() => {
+                actionRef?.current?.reload();
+              }}
+            />,
           ]}
         />
       </RcResizeObserver>

@@ -811,3 +811,43 @@ export async function deleteComment(id) {
     method: 'DELETE',
   });
 }
+
+// ---------------------------------------------------------------------------
+// 从正文首图批量回填文章封面（预览 → 写入 → 撤销）。
+// 两个函数都刻意不带 skipErrorHandler：失败（含演示站回的 statusCode:401
+// 「演示站禁止修改此项！」）由全局 errorHandler 弹出服务端的具体原因，
+// 业务代码里再用 reportRequestError 兜底，避免同一次失败弹两条 toast。
+// ---------------------------------------------------------------------------
+
+/**
+ * 用文章正文里的第一张可用图片补 cover 字段。
+ *
+ * body: { dryRun, onlyMissing, ids }
+ * - `dryRun: true` 只统计与预览、不写库，界面打开弹窗时先发这一次；
+ *   服务端默认是 false（真的写库），所以这里必须由调用方显式传值。
+ * - `onlyMissing` 默认 true：只补 cover 为空的文章，已有封面不动。
+ * - `ids` 不传表示全部；界面里用户勾掉某几篇后，确认写入时把选中的 id 传回来。
+ *
+ * 返回 data: { scanned, matched, changed, skippedNoImage, skippedHasCover, dryRun,
+ *              items: [{ id, title, cover, previousCover }] }（items 最多 200 条）
+ */
+export async function backfillCoversFromContent(body) {
+  return request('/api/admin/article/covers/from-content', {
+    method: 'POST',
+    data: body,
+  });
+}
+
+/**
+ * 撤销一次回填：items 是 `[{ id, cover }]`，其中 cover 要填**旧值**
+ * （即预览/写入响应里的 previousCover，服务端原样写回）。
+ * 组装载荷用 coverBackfill.js 的 toRevertPayload()，别在界面里手拼字段。
+ *
+ * 返回 data: { reverted, skipped }（skipped = 当前值已经等于旧值的，比如用户又手动改过）
+ */
+export async function revertBackfilledCovers(items) {
+  return request('/api/admin/article/covers/revert', {
+    method: 'POST',
+    data: { items },
+  });
+}
