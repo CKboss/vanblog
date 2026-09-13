@@ -1518,31 +1518,311 @@ backup() {
   return 0
 }
 
-# 从 vanblog.sh backup 生成的 tar.gz 恢复整个数据目录。
+# ── 整站备份（vanblog-full-*）的一步恢复 ────────────────────────────────────
+# 这类归档是 **server 自己**导出的：各集合的 NDJSON + waline 库 + 图床/附件/自定义页面，
+# zstd/xz/gzip 压缩，旁边还有一个 sidecar 清单。它**只能**用 server 的恢复接口还原
+# （按集合原子替换 + 重建索引 + 触发全量渲染），直接解压到数据目录是错的：
+# 那是 mongo 的数据文件布局，不是 NDJSON。
+# 所以脚本走 HTTP；如果归档本来就在服务器的备份目录里，直接传名字（几百 MB 也不用上传）。
+
+# 宿主机上对应容器 <log>/vanblog-backups 的目录（compose 把 <data>/log 挂到 /var/log）
+full_backup_dir() {
+  printf '%s' "${VANBLOG_BACKUP_DIR:-${VANBLOG_DATA_PATH}/log/vanblog-backups}"
+}
+
+# 从编排文件里读 vanblog 服务映射到容器 80 的宿主机端口
+get_compose_http_port() {
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  [[ -f "${compose_file}" ]] || return 1
+  local block
+  block="$(awk '/^[[:space:]]*vanblog:[[:space:]]*$/{f=1;next} f&&/^  [A-Za-z0-9_-]+:[[:space:]]*$/{f=0} f' "${compose_file}")"
+  # ports 里形如 - "8080:80" / - 8080:80 / - "8080:80/tcp"
+  printf '%s\n' "${block}" | grep -oE '[0-9]+:80(/tcp)?' | head -1 | cut -d: -f1
+}
+
+vanblog_api_base() {
+  if [[ -n "${VANBLOG_API_BASE:-}" ]]; then
+    printf '%s' "${VANBLOG_API_BASE%/}"
+    return 0
+  fi
+  local port
+  port="$(get_compose_http_port)"
+  printf 'http://127.0.0.1:%s' "${port:-80}"
+}
+
+sha256_hex() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+
+json_string() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '"%s"' "${s}"
+}
+
+# 必须和 packages/admin/src/services/van-blog/encryptPwd.js 逐字节一致：
+#   u = username.toLowerCase()
+#   sha256( u + sha256(sha256(sha256(sha256(password)))) + sha256(u) )
+# 服务端存的是这个派生值再套一层 salt 的结果，所以脚本必须自己算，不能明文传密码。
+derive_login_password() {
+  local u h1 h2 h3 h4 hu
+  u="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  h1="$(sha256_hex "$2")"
+  h2="$(sha256_hex "${h1}")"
+  h3="$(sha256_hex "${h2}")"
+  h4="$(sha256_hex "${h3}")"
+  hu="$(sha256_hex "${u}")"
+  sha256_hex "${u}${h4}${hu}"
+}
+
+# 拿管理员 token：优先用 VANBLOG_ADMIN_TOKEN，否则用账号密码登录换。
+vanblog_admin_token() {
+  if [[ -n "${VANBLOG_ADMIN_TOKEN:-}" ]]; then
+    printf '%s' "${VANBLOG_ADMIN_TOKEN}"
+    return 0
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo -e "${red}本机没有 sha256sum，无法在本地算登录口令。${plain}" >&2
+    echo -e "改用 ${yellow}VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore${plain}（token 在浏览器 F12 → Application → Local Storage → token）" >&2
+    return 1
+  fi
+  local user pass derived resp token
+  read -e -r -p "后台用户名: " user
+  if [[ -z "${user}" ]]; then
+    echo -e "${red}用户名为空${plain}" >&2
+    return 1
+  fi
+  read -e -r -s -p "后台密码: " pass
+  echo >&2
+  if [[ -z "${pass}" ]]; then
+    echo -e "${red}密码为空${plain}" >&2
+    return 1
+  fi
+  derived="$(derive_login_password "${user}" "${pass}")"
+  # ⚠️ 登录接口有失败次数限制（连续失败会被锁一段时间），所以**只试一次，不重试**
+  resp="$(curl -sS -m 30 -X POST "$(vanblog_api_base)/api/admin/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":$(json_string "${user}"),\"password\":\"${derived}\"}" 2>&1)"
+  token="$(printf '%s' "${resp}" |
+    grep -oE '"token"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 |
+    sed 's/.*"token"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  if [[ -z "${token}" ]]; then
+    echo -e "${red}登录失败${plain}：$(printf '%s' "${resp}" | head -c 200)" >&2
+    echo -e "${yellow}连续失败会被限流锁定。也可以设 VANBLOG_ADMIN_TOKEN=<token> 跳过登录。${plain}" >&2
+    return 1
+  fi
+  printf '%s' "${token}"
+}
+
+# 判断目标是「整站备份」还是脚本自己打的「数据目录 tar.gz」
+is_full_backup_target() {
+  local base
+  base="$(basename "$1")"
+  case "${base}" in
+  vanblog-full-*) return 0 ;;
+  vanblog-backup-*.tar.gz | *.tgz) return 1 ;;
+  esac
+  case "${base}" in
+  *.tar.zst | *.zst | *.tar.xz) return 0 ;;
+  esac
+  return 1
+}
+
+# 列出服务器备份目录里的整站备份，让用户挑一个；输出**归档名**（不是路径），
+# 这样恢复时走 name= 分支，不用把几百 MB 再上传一遍。
+pick_full_backup() {
+  local dir
+  dir="$(full_backup_dir)"
+  if [[ ! -d "${dir}" ]]; then
+    echo -e "${yellow}没找到备份目录 ${dir}（可能站点还没备份过，或数据目录不在本机）${plain}" >&2
+    return 1
+  fi
+  local -a files=()
+  local f
+  while IFS= read -r f; do
+    # 排除 sidecar 清单（vanblog-full-xxx.tar.zst.manifest.json），它不是可恢复的归档
+    [[ -n "${f}" ]] || continue
+    case "${f}" in
+    *.manifest.json) continue ;;
+    esac
+    files+=("${f}")
+  done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo -e "${yellow}${dir} 里没有 vanblog-full-* 归档${plain}" >&2
+    return 1
+  fi
+  echo -e "> 服务器上可恢复的整站备份（${yellow}${dir}${plain}）：" >&2
+  local i=1
+  for f in "${files[@]}"; do
+    local size
+    size="$(du -h "${f}" 2>/dev/null | cut -f1)"
+    printf '  %2d) %-52s %8s  %s\n' "${i}" "$(basename "${f}")" "${size:-?}" "$(date -r "${f}" '+%Y-%m-%d %H:%M' 2>/dev/null)" >&2
+    i=$((i + 1))
+  done
+  local choice
+  read -e -r -p "选择要恢复的备份编号（回车取消）: " choice >&2
+  if [[ -z "${choice}" ]]; then
+    return 1
+  fi
+  if ! [[ "${choice}" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#files[@]} )); then
+    echo -e "${red}编号超出范围${plain}" >&2
+    return 1
+  fi
+  basename "${files[$((choice - 1))]}"
+}
+
+# 把接口返回的 JSON 排版一下：有 python3 就缩进美化，没有就原样打印。
+# ⚠️ 别用 sed 硬拆（我第一版是 `s/,"/,\n/g`，嵌套对象会被拆得支离破碎、根本没法读）。
+# 也**不硬依赖** jq/python3：小机器上不一定有，退化成一行的原始 JSON 也比报错好。
+pretty_json() {
+  local input out
+  input="$(cat)"
+  if command -v python3 >/dev/null 2>&1; then
+    if out="$(printf '%s' "${input}" | python3 -c 'import json,sys
+try:
+    print(json.dumps(json.load(sys.stdin), ensure_ascii=False, indent=2))
+except Exception:
+    raise SystemExit(1)' 2>/dev/null)"; then
+      printf '%s\n' "${out}" | sed 's/^/  /'
+      return 0
+    fi
+  fi
+  printf '%s\n' "${input}"
+}
+
+restore_full_backup() {
+  local target="$1"
+  local with_static="${2:-true}"
+  local base
+  base="$(vanblog_api_base)"
+  echo -e "> 整站恢复（走 server 接口）：${yellow}${base}${plain}"
+
+  local code
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null || echo 000)"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}）。${plain}"
+    echo -e "${red}整站恢复必须经过 server 的接口（它要按集合原子替换并重建索引），请先 ${yellow}./vanblog.sh start${red} 再试。${plain}"
+    return 1
+  fi
+
+  local token
+  token="$(vanblog_admin_token)" || return 1
+
+  local upload=0
+  if [[ -f "${target}" ]]; then
+    upload=1
+    echo -e "> 备份文件：${yellow}${target}${plain}（$(du -h "${target}" 2>/dev/null | cut -f1)，将上传到服务器）"
+  else
+    echo -e "> 备份名称：${yellow}${target}${plain}（服务器备份目录里已有，不需要上传）"
+    if [[ ! -f "$(full_backup_dir)/${target}" ]]; then
+      echo -e "${yellow}  注意：宿主机 $(full_backup_dir) 里没看到这个文件，将交给 server 自己在它的备份目录里找${plain}"
+    fi
+  fi
+
+  # 恢复前先把清单打出来：备份是什么时候的、里面有哪些集合，避免恢复错版本
+  local inspect_body inspect_resp
+  if [[ ${upload} -eq 0 ]]; then
+    inspect_body="{\"name\":$(json_string "${target}")}"
+    inspect_resp="$(curl -sS -m 60 -X POST "${base}/api/admin/backup/full/inspect" \
+      -H "token: ${token}" -H 'Content-Type: application/json' -d "${inspect_body}" 2>&1)"
+    if printf '%s' "${inspect_resp}" | grep -q '"statusCode":200'; then
+      echo -e "> 备份清单："
+      printf '%s' "${inspect_resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//' | pretty_json | head -60
+    else
+      echo -e "${yellow}  读不出清单（$(printf '%s' "${inspect_resp}" | head -c 160)），继续前请确认这个归档是本功能导出的${plain}"
+    fi
+  fi
+
+  echo -e "${red}恢复会用这份备份覆盖当前【全部】数据：数据库所有集合、waline 评论库、图床/附件/自定义页面。不可撤销。${plain}"
+  if [[ "${with_static}" != "true" ]]; then
+    echo -e "${yellow}（--no-static：这次只恢复数据库，保留当前图床与附件）${plain}"
+  fi
+  if [[ "${VANBLOG_ASSUME_YES:-0}" != "1" ]]; then
+    local input
+    read -e -r -p "确认恢复? 输入 yes 继续: " input
+    if [[ "${input}" != "yes" ]]; then
+      echo "已取消恢复"
+      return 0
+    fi
+  fi
+
+  echo -e "> 开始恢复（大备份可能要几分钟，请勿中断）..."
+  local resp
+  if [[ ${upload} -eq 1 ]]; then
+    resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
+      -H "token: ${token}" \
+      -F "file=@${target}" \
+      -F "confirm=true" \
+      -F "withStatic=${with_static}" 2>&1)"
+  else
+    resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
+      -H "token: ${token}" -H 'Content-Type: application/json' \
+      -d "{\"name\":$(json_string "${target}"),\"confirm\":\"true\",\"withStatic\":\"${with_static}\"}" 2>&1)"
+  fi
+
+  if printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+    echo -e "${green}恢复成功${plain}"
+    printf '%s' "${resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//' | pretty_json | head -80
+    echo -e "> server 已触发全量重渲染（ISR），前台页面会在几分钟内刷新到新数据"
+    return 0
+  fi
+  echo -e "${red}恢复失败${plain}："
+  printf '%s\n' "${resp}" | head -c 800
+  echo
+  return 1
+}
+
+# 恢复。两种归档自动分流：
+#   vanblog-full-*（server 导出的整站备份）→ 走 HTTP 接口，**不停服**
+#   vanblog-backup-*.tar.gz（本脚本 backup 打的数据目录 tar 包）→ 停服后离线解压
 #
 # 用法：
-#   ./vanblog.sh restore                                  交互式（输入文件名 + 二次确认）
-#   VANBLOG_RESTORE_FILE=/path/to/vanblog-backup-xxx.tar.gz \
-#   VANBLOG_ASSUME_YES=1 ./vanblog.sh restore             非交互（适合脚本）
+#   ./vanblog.sh restore                       列出服务器备份目录里的整站备份，选一个恢复
+#   ./vanblog.sh restore <归档名>              一步恢复（归档在服务器备份目录里，不上传）
+#   ./vanblog.sh restore /path/to/vanblog-full-xxx.tar.zst   本地文件，走上传
+#   ./vanblog.sh restore <归档名> --no-static  只恢复数据库，保留当前图床/附件
+#   VANBLOG_ASSUME_YES=1 ./vanblog.sh restore <归档名>       非交互（跳过 yes 确认）
+#   VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore …       跳过账号密码登录
+#   VANBLOG_API_BASE=http://127.0.0.1:8080 ./vanblog.sh restore …  手动指定接口地址
+#   VANBLOG_RESTORE_FILE=/path/to/vanblog-backup-xxx.tar.gz ./vanblog.sh restore   老格式
 restore() {
   echo -e "> 恢复 vanblog"
 
   local path="${VANBLOG_RESTORE_FILE:-}"
+  local with_static="true"
   # 分发入口会传一个 0 表示「不进菜单」，别把它当成文件路径
   local arg
   for arg in "$@"; do
-    if [[ -n "${arg}" && "${arg}" != "0" && "${arg}" != --* ]]; then
-      path="${arg}"
-    fi
+    case "${arg}" in
+    --no-static) with_static="false" ;;
+    --with-static) with_static="true" ;;
+    0 | --*) : ;;
+    *)
+      if [[ -n "${arg}" ]]; then
+        path="${arg}"
+      fi
+      ;;
+    esac
   done
+
+  # 没给参数：先把服务器上现成的整站备份列出来让选（这是最常见的一步恢复场景）
   if [[ -z "${path}" ]]; then
-    read -e -r -p "请输入备份文件名（含路径）: " path
+    path="$(pick_full_backup)" || path=""
+  fi
+  if [[ -z "${path}" ]]; then
+    read -e -r -p "请输入备份名称或文件路径（回车取消）: " path
   fi
 
   if [[ -z "${path}" ]]; then
     echo -e "${red}输入为空${plain}"
     return 1
   fi
+
+  # 整站备份（vanblog-full-*）走 server 接口；脚本自己打的数据目录 tar.gz 走下面的离线流程
+  if is_full_backup_target "${path}"; then
+    restore_full_backup "${path}" "${with_static}"
+    return $?
+  fi
+
   if [[ ! -f "${path}" ]]; then
     echo -e "${red}找不到备份文件：${path}${plain}"
     return 1
@@ -1605,6 +1885,12 @@ show_usage() {
   echo "./vanblog.sh stop                       - 停止 VanBlog"
   echo "./vanblog.sh restart                    - 重启 VanBlog"
   echo "./vanblog.sh update                     - 更新 VanBlog"
+  echo "./vanblog.sh restore                    - 从整站备份恢复（列出服务器上的备份让你选）"
+  echo "./vanblog.sh restore <名称|路径>        - 一步恢复：名称=服务器备份目录里的归档（不上传）；"
+  echo "                                          路径=本地文件（走上传）。也支持 vanblog-backup-*.tar.gz 老格式"
+  echo "    可选：--no-static 只恢复数据库、保留当前图床；VANBLOG_ASSUME_YES=1 跳过确认"
+  echo "    认证：VANBLOG_ADMIN_TOKEN=<token> 跳过登录，否则交互输入后台账号密码"
+  echo "    接口：默认从编排文件读 http 端口，也可用 VANBLOG_API_BASE=http://127.0.0.1:8080 指定"
   echo "./vanblog.sh log                        - 查看 VanBlog 日志"
   echo "./vanblog.sh uninstall                  - 卸载 VanBlog"
   echo "./vanblog.sh reset_https                - 重置 https 设置"

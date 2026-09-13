@@ -2201,14 +2201,68 @@ caddy 这次漂了，`zstd`/`xz`/`libwebp-tools`/`libavif-apps` 同样可能漂�
 ⚠️ 改了依赖之后**必须**在仓库根跑一次 `pnpm install`（不是 `--lockfile-only`），
 否则本地 `node_modules` 里没有 multer，而 `--frozen-lockfile` 在 CI 里会直接失败。
 
-### 7.29 测试基线（本分支最后一次全量运行的结果）
+### 7.29 一键脚本一步恢复整站备份（`./vanblog.sh restore`）
+
+以前脚本的 `restore` 只认自己 `backup` 打出来的 `vanblog-backup-*.tar.gz`（数据目录的原始 tar 包，
+停服 → 解压覆盖 → 删 `mongod.lock` → 起服）。而 §7.6 的**整站备份** `vanblog-full-*.tar.zst`
+是 server 导出的「各集合 NDJSON + waline 库 + 图床/附件 + sidecar 清单」，
+**直接解压到数据目录是错的**（那是 mongo 的数据文件布局，不是 NDJSON），只能走 server 的
+`POST /api/admin/backup/full/restore`。所以脚本现在按目标自动分流：
+
+```
+vanblog-full-*  / *.tar.zst / *.zst / *.tar.xz  → HTTP 接口恢复（不停服）
+vanblog-backup-*.tar.gz / *.tgz                 → 原来的离线解压流程（停服）
+```
+
+**用法**：
+
+```bash
+./vanblog.sh restore                    # 不带参数：列出服务器备份目录里的归档，选一个
+./vanblog.sh restore <归档名>            # 一步恢复；归档在服务器上时**不上传**（走 name=）
+./vanblog.sh restore /path/to/x.tar.zst # 本地文件走 multipart 上传
+./vanblog.sh restore <归档名> --no-static   # 只恢复数据库，保留当前图床/附件
+VANBLOG_ASSUME_YES=1 VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore <归档名>   # 全自动
+```
+
+**几个实现要点**：
+
+- **优先用 `name=` 而不是上传**：归档本来就在服务器备份目录
+  （宿主机 `${VANBLOG_DATA_PATH}/log/vanblog-backups`，容器里的 `<log>/vanblog-backups`）时，
+  传名字让 server 自己读，几百 MB 也省掉一次传输。只有给的是本地路径才上传。
+- **认证**：`VANBLOG_ADMIN_TOKEN` 优先；否则交互式输入账号密码，脚本本地按
+  `packages/admin/src/services/van-blog/encryptPwd.js` 的算法派生口令
+  （`u=lower(username)`；`sha256(u + sha256(sha256(sha256(sha256(p)))) + sha256(u))`，
+  用 `printf '%s' | sha256sum` 实现，**明文密码不出本机**）。
+  ⚠️ 派生逻辑必须和后台逐字节一致，`scripts/tests/vanblog-restore.test.sh` 会真的调 node
+  跑 `js-sha256` 做对照（含中文用户名/中文密码/混合大小写三组），别凭记忆改。
+  ⚠️ 登录接口有失败限流（§7.18），所以**只试一次、不重试**。
+- **接口地址**：从编排文件里读 vanblog 服务映射到容器 80 的宿主机端口（`get_compose_http_port`），
+  拼 `http://127.0.0.1:<port>`；`VANBLOG_API_BASE` 可覆盖。恢复前先探 `/api/public/meta`，
+  不通就明确提示「先 `./vanblog.sh start`」而不是丢一个 curl 错误。
+- **恢复前先 `full/inspect`** 把清单打出来（备份时间、各集合条数、静态文件数），确认没选错版本。
+- **确认要输 `yes`**（不是 y），`VANBLOG_ASSUME_YES=1` 才跳过 —— 这一步会覆盖全部数据。
+- 恢复成功后 server 自己会 `isrProvider.activeAll('整站恢复触发全量渲染！')`，
+  **脚本不需要重启容器**，也不要 `stop_vanblog`（测试里断言了走接口这条路一次 stop 都不发）。
+- **JSON 输出别用 sed 硬拆**：第一版 `s/,"/,\n/g` 把嵌套对象拆得支离破碎。
+  现在 `pretty_json` 有 python3 就 `json.dumps(indent=2)`，没有就原样打印一行
+  （不硬依赖 jq/python3：小机器上不一定有）。
+- 备份列表要**排除 `*.manifest.json`** sidecar（`vanblog-full-*` 这个 glob 会把它一起匹配上，
+  第一版就把清单文件列成了一个"可恢复的备份"）。
+- ⚠️ 脚本开头有 root 检查，所以本机验证要么用测试（`VANBLOG_SKIP_MAIN=1` + `source`），
+  要么就别指望直接 `./vanblog.sh restore` 跑通。
+
+**端到端实测过**（本机 dev，接口指到 :3000）：先把某篇文章的 `cover` 清空做成可观测的改动，
+再 `restore <归档名>` → 脚本打印清单与「恢复成功」，数据库里那篇文章的封面**回来了**、
+16 篇有封面的文章数也复原 ✓。
+
+### 7.30 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 10 文件 / 465 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 11 文件 / 501 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2218,7 +2272,7 @@ caddy 这次漂了，`zstd`/`xz`/`libwebp-tools`/`libavif-apps` 同样可能漂�
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.29 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.30 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
