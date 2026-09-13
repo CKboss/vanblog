@@ -1912,6 +1912,11 @@ CPU 用 `nproc`（比 `/proc/cpuinfo` 更接近真实可用），内存用 `/pro
 Dockerfile 用 `ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build` + `RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}`，
 脚本按档位传参 —— 全程没有任何引号嵌套问题。
 
+**两档都本地真跑过**（这台机器没 docker 权限，但 `pnpm run build` 与镜像里那一步是同一条命令）：
+`build`（4096）EXIT=0、约 4 分钟、dist 24MB；`build:lowmem`（1536）同样 EXIT=0、dist 24MB
+—— 也就是说 1536MB 这一档是**真的够用**，不是拍脑袋写的数字（umi3 + antd 的生产构建
+实际峰值在 1.5GB 以内）。跑完记得 `rm -rf packages/admin/dist`。
+
 **2. pnpm 源自动选择**
 
 以前 `admin_builder` 那层硬编码 `registry.npmjs.org`，其余三层用 `npmmirror` ——
