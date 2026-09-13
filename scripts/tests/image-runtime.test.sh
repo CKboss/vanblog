@@ -279,6 +279,57 @@ else
   fail "Dockerfile 没有 HEALTHCHECK"
 fi
 
+# ---------- 6) compose 文件：日志上限、启动顺序、镜像 ----------
+# Docker 默认的 json-file 驱动会把容器 stdout 无限期留着，跑几个月能把宿主机
+# /var/lib/docker 那个分区写满（和数据卷不在一起，很多人根本想不到去查）。
+for cf in "${ROOT}/docker-compose/docker-compose-template.yml" "${ROOT}/docker-compose/docker-compose.yml"; do
+  name="$(basename "${cf}")"
+  if "${PY}" - "${cf}" <<'PYCOMPOSE'
+import sys
+try:
+    import yaml
+except ImportError:
+    print("skip")
+    raise SystemExit(0)
+data = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+svcs = data.get("services") or {}
+bad = []
+if "vanblog" not in svcs or "mongo" not in svcs:
+    bad.append("缺少 vanblog 或 mongo 服务")
+for name, svc in svcs.items():
+    log = svc.get("logging") or {}
+    opts = log.get("options") or {}
+    if log.get("driver") != "json-file" or not opts.get("max-size") or not opts.get("max-file"):
+        bad.append("%s 没有 json-file + max-size/max-file（容器日志会无限增长写满磁盘）" % name)
+if "mongo" not in (svcs.get("vanblog", {}).get("depends_on") or []):
+    bad.append("vanblog 没有 depends_on: mongo（首次启动会在连不上库时反复重启）")
+for b in bad:
+    print("bad " + b)
+if not bad:
+    print("ok 两个服务都有日志上限，vanblog depends_on mongo")
+PYCOMPOSE
+  then :; fi
+done >"${TMP}.compose" 2>&1
+while read -r status rest; do
+  case "${status}" in
+    ok) pass "compose：${rest}" ;;
+    bad) fail "compose：${rest}" ;;
+    skip) echo "NOTE: 没有 pyyaml，跳过 compose 结构检查" ;;
+    "") ;;
+    *) fail "无法解析的 compose 检查输出：${status} ${rest}" ;;
+  esac
+done <"${TMP}.compose"
+rm -f "${TMP}.compose"
+
+# 模板里的占位符必须都还在（脚本的 sed 靠它们）
+for ph in vanblog_image vanblog_email vanblog_data_path vanblog_http_port vanblog_https_port; do
+  if grep -q "${ph}" "${ROOT}/docker-compose/docker-compose-template.yml"; then
+    pass "模板保留占位符 ${ph}"
+  else
+    fail "模板里 ${ph} 占位符不见了，脚本的 sed 会失效"
+  fi
+done
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

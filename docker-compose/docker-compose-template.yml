@@ -4,6 +4,19 @@ services:
   vanblog:
     image: vanblog_image
     restart: always
+    # 先起 mongo：server 连不上库会退出，容器重启几次才稳定，首次安装时看着像失败
+    depends_on:
+      - mongo
+    logging:
+      # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：
+      # 博客的访问日志 + server 日志跑上几个月能吃掉几个 G，小机器会被直接写满磁盘
+      # （而且是宿主机 /var/lib/docker 那个分区，跟数据卷不在一起，很多人不会想到去查）。
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # 小内存机器（1-2G）可以给两个服务各设一个上限，避免互相把对方挤到 OOM：
+    # mem_limit: 768m
     environment:
       TZ: 'Asia/Shanghai'
       # 邮箱地址，用于自动申请 https 证书
@@ -40,8 +53,22 @@ services:
       - vanblog_https_port:443
   mongo:
     # 某些机器不支持 avx 会报错，所以默认用 v4 版本。有的话用最新的。
+    # ⚠️ 4.4 已经 EOL（不再有安全更新），但**不要随手升大版本**：数据目录与
+    # featureCompatibilityVersion 绑定，4.4 → 5.0 → 6.0 要逐级升且每级都要改 FCV，
+    # 直接换镜像 tag 会让 mongod 拒绝启动（表现是容器反复重启）。
+    # 真要升级：先用后台「整站备份」导出 vanblog-full-* 归档（NDJSON，跨版本可恢复），
+    # 换新 tag 起一个空库，再用 ./vanblog.sh restore 恢复。
     image: mongo:4.4.16
     restart: always
+    logging:
+      # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：
+      # 博客的访问日志 + server 日志跑上几个月能吃掉几个 G，小机器会被直接写满磁盘
+      # （而且是宿主机 /var/lib/docker 那个分区，跟数据卷不在一起，很多人不会想到去查）。
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # mem_limit: 512m
     environment:
       TZ: 'Asia/Shanghai'
     volumes:

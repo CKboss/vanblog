@@ -2,10 +2,23 @@ version: '3'
 
 services:
   vanblog:
-    # 阿里云镜像源
+    # 本 fork 的镜像（GitHub Actions 构建发布，含本分支全部改动）
+    image: ghcr.io/ckboss/vanblog:dev-dsh
+    # 上游官方镜像（**不含**本分支改动）：
+    # image: mereith/van-blog:latest
+    # 阿里云镜像源（上游）：
     # image: registry.cn-beijing.aliyuncs.com/mereith/van-blog:latest
-    image: mereith/van-blog:latest
     restart: always
+    depends_on:
+      - mongo
+    logging:
+      # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：
+      # 博客的访问日志 + server 日志跑上几个月能吃掉几个 G，小机器会被直接写满磁盘
+      # （而且是宿主机 /var/lib/docker 那个分区，跟数据卷不在一起，很多人不会想到去查）。
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       TZ: 'Asia/Shanghai'
       # 邮箱地址，用于自动申请 https 证书
@@ -46,6 +59,14 @@ services:
     # 某些机器不支持 avx 会报错，所以默认用 v4 版本。有的话用最新的。
     image: mongo:4.4.16
     restart: always
+    logging:
+      # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：
+      # 博客的访问日志 + server 日志跑上几个月能吃掉几个 G，小机器会被直接写满磁盘
+      # （而且是宿主机 /var/lib/docker 那个分区，跟数据卷不在一起，很多人不会想到去查）。
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       TZ: 'Asia/Shanghai'
     volumes:
