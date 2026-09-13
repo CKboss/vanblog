@@ -250,6 +250,35 @@ else
   fail "Dockerfile 没有 COPY caddyFallbackTemplate.json，entrypoint 的兜底会落空"
 fi
 
+# ---------- 5) 健康检查与端口声明 ----------
+if grep -qE '^EXPOSE 443$' "${DOCKERFILE}"; then
+  pass "EXPOSE 443（caddy 确实监听 443，只声明 80 会误导）"
+else
+  fail "Dockerfile 没有 EXPOSE 443"
+fi
+if grep -qE '^HEALTHCHECK ' "${DOCKERFILE}"; then
+  pass "有 HEALTHCHECK（前面两次事故都会表现为 unhealthy，而不是"容器在跑但打不开"）"
+  # 探的必须是 caddy 的 80（覆盖整条请求路径），不是 server 的 3000
+  if grep -A6 '^HEALTHCHECK ' "${DOCKERFILE}" | grep -q "port:80"; then
+    pass "HEALTHCHECK 探 caddy 的 80 端口（覆盖 caddy → server/前台/后台 整条链路）"
+  else
+    fail "HEALTHCHECK 没有探 80 端口：caddy 挂了也检查不出来"
+  fi
+  if grep -A6 '^HEALTHCHECK ' "${DOCKERFILE}" | grep -q "start-period"; then
+    pass "HEALTHCHECK 给了 start-period（小机器冷启动慢，不然一起来就 unhealthy）"
+  else
+    fail "HEALTHCHECK 没有 start-period"
+  fi
+  # 镜像里没有 curl，检查命令只能用 node
+  if grep -A6 '^HEALTHCHECK ' "${DOCKERFILE}" | grep -qE '\bcurl\b'; then
+    fail "HEALTHCHECK 用了 curl，但镜像里没装 curl（会永远 unhealthy）"
+  else
+    pass "HEALTHCHECK 没有依赖镜像里不存在的 curl"
+  fi
+else
+  fail "Dockerfile 没有 HEALTHCHECK"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

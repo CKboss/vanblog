@@ -173,5 +173,15 @@ VOLUME /root/.config/caddy
 VOLUME /root/.local/share/caddy
 
 EXPOSE 80
+EXPOSE 443
+
+# 健康检查探的是 **caddy 的 80 端口**而不是 server 的 3000：这样一条检查覆盖整条请求路径
+# （caddy → server / 前台 / 后台静态文件）。前面两次事故（caddy 配置加载失败、server 缺
+# multer 起不来）在这个检查下都会直接显示成 unhealthy/restarting，而不是"容器在跑但打不开"。
+# ⚠️ 镜像里没有 curl，用自带的 node 发请求；start-period 给足，小机器冷启动 + 首次连 mongo 很慢。
+# 注意 Docker 自身不会因为 unhealthy 就重启容器（restart 策略只看退出码），
+# 所以这个检查纯粹是给人和编排系统看的信号，不会引入重启风暴。
+HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
+  CMD node -e "require('http').get({host:'127.0.0.1',port:80,path:'/',timeout:8000},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1)).on('timeout',function(){this.destroy();process.exit(1)})" || exit 1
 ENTRYPOINT [ "sh","entrypoint.sh" ]
 # CMD [ "entrypoint.sh" ]
