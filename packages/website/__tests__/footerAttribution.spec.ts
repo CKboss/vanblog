@@ -52,7 +52,9 @@ describe("版本号从哪来（页脚与后台「关于」显示的那个）", (
     // 这两个名字不一样是上游就有的设定，改一边就会让版本号显示成 dev
     const dockerfile = read("Dockerfile");
     expect(dockerfile).toContain("ARG VAN_BLOG_VERSIONS");
-    expect(dockerfile).toContain("ENV VAN_BLOG_VERSION ${VAN_BLOG_VERSIONS}");
+    // ENV 现在统一用 key=value 形式（buildkit 会对 `ENV key value` 报 LegacyKeyValueFormat 警告）
+    expect(dockerfile).toContain("ENV VAN_BLOG_VERSION=${VAN_BLOG_VERSIONS}");
+    expect(dockerfile).not.toContain("ENV VAN_BLOG_VERSION ${VAN_BLOG_VERSIONS}");
   });
 
   it("前台从接口取版本号，取不到也退回 dev（不会渲染成 undefined）", () => {

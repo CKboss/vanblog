@@ -1721,13 +1721,22 @@ remark 包要靠补丁补出 `main`/`module`，见 §7.14），而 `website_buil
    已实测：加了这份声明后 `pnpm install --lockfile-only` **不会改动 `pnpm-lock.yaml`**，
    所以 `--frozen-lockfile` 依然通过。别看到 WARN 就把它删了，删了镜像就构建不出来。
 
+**还要把被补丁的包钉死到精确版本**：`packages/admin/package.json` 与 `packages/website/package.json`
+里 `remark-supersub` 与 `remark-github-blockquote-alert` 已从 `^1.0.0` / `^2.1.0` 改成
+`1.0.0` / `2.1.0`（`pnpm-lock.yaml` 同步只改了 4 行 specifier，`--frozen-lockfile` 依然通过）。
+原因：`patchedDependencies` 的键是 `name@精确版本`，website 那层有 lockfile 兜底，
+但 **admin 那层是独立安装、没有 lockfile**，写成 `^2.1.0` 的话上游一发布 2.1.1 就会解析到新版 →
+补丁不匹配 → pnpm 8 直接 `ERR_PNPM_PATCH_NOT_APPLIED` 让镜像构建失败。
+（查过 registry：这两个包目前 1.0.0 / 2.1.0 就是最新版，所以现在是"防患于未然"。）
+守卫测试里有 4 条断言盯着这件事，谁把 `^` 加回来就会红。
+
 顺手把 Dockerfile 的 18 条 buildkit 警告清了：阶段名统一小写
 （`ADMIN_BUILDER`→`admin_builder`、`SERVER_BUILDER`、`WEBSITE_BUILDER`、`RUNNER`→`runner`）、
 `FROM … as` 的大小写统一成 `AS`、`ENV key value` 全部改成 `ENV key=value`。
 ⚠️ 改阶段名要同步改所有 `COPY --from=`，还有 `scripts/tests/dockerfile-alpine-sharp.test.sh`
 里按名字切 stage 的 awk（已同步）。
 
-**新增 `scripts/tests/dockerfile-patches.test.sh`（17 条断言）**，专门守这类问题：
+**新增 `scripts/tests/dockerfile-patches.test.sh`（21 条断言）**，专门守这类问题：
 根 manifest 声明的每个补丁文件都在仓库里、`pnpm-lock.yaml` 记录了同样的 `dep -> path`、
 `packages/admin/package.json` 与根声明**逐条一致**、`website_builder` 与 `admin_builder`
 都真的有 `COPY ./patches ./patches`（**整行精确匹配**，否则 `COPY ./patches-REMOVED` 也能蒙过去 ——
@@ -1751,7 +1760,7 @@ remark 包要靠补丁补出 `main`/`module`，见 §7.14），而 `website_buil
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 56 文件 / 537 用例全绿 |
 | admin `node --test tests/unit` | 81 套件 / 322 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 330 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 334 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

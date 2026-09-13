@@ -87,6 +87,21 @@ for name in sorted(os.listdir(os.path.join(root, "packages"))):
                 "packages/admin/package.json mirrors patchedDependencies %s -> %s" % (dep, rel),
             )
 
+# 被补丁的包必须**钉死到补丁对应的精确版本**：pnpm 的 patchedDependencies 键是 name@version，
+# 而 admin_builder 那层是独立安装（没有 lockfile 兜底），写成 ^2.1.0 的话上游一发布 2.1.1
+# 就会解析到新版 → 补丁不匹配 → pnpm 8 直接 ERR_PNPM_PATCH_NOT_APPLIED，镜像构建失败。
+for dep, rel in patches.items():
+    name, _, ver = dep.partition("@")
+    for consumer_name, _hit in consumers:
+        pkg = manifest("packages/%s/package.json" % consumer_name) or {}
+        deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+        if name in deps:
+            emit(
+                deps[name] == ver,
+                "packages/%s pins %s to the patched version %s (found %r)"
+                % (consumer_name, name, ver, deps[name]),
+            )
+
 emit(
     bool(consumers),
     "workspace packages depending on patched deps: %s"

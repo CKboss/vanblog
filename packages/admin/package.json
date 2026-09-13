@@ -95,8 +95,8 @@
     "remark-definition-list": "^1.2.0",
     "remark-directive": "^2.0.1",
     "remark-gemoji": "^7.0.1",
-    "remark-github-blockquote-alert": "^2.1.0",
-    "remark-supersub": "^1.0.0",
+    "remark-github-blockquote-alert": "2.1.0",
+    "remark-supersub": "1.0.0",
     "umi": "^3.5.41",
     "unist-util-visit": "^4.1.2"
   },

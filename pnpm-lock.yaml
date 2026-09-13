@@ -236,10 +236,10 @@ importers:
         specifier: ^7.0.1
         version: 7.0.1
       remark-github-blockquote-alert:
-        specifier: ^2.1.0
+        specifier: 2.1.0
         version: 2.1.0(patch_hash=pj777fzbhhnxmp737gfr7i2kmu)
       remark-supersub:
-        specifier: ^1.0.0
+        specifier: 1.0.0
         version: 1.0.0(patch_hash=kvrxlgnqbsodiutlscyjuprm4i)
       umi:
         specifier: ^3.5.41
@@ -643,13 +643,13 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1
       remark-github-blockquote-alert:
-        specifier: ^2.1.0
+        specifier: 2.1.0
         version: 2.1.0(patch_hash=pj777fzbhhnxmp737gfr7i2kmu)
       remark-rehype:
         specifier: ^10.1.0
         version: 10.1.0
       remark-supersub:
-        specifier: ^1.0.0
+        specifier: 1.0.0
         version: 1.0.0(patch_hash=kvrxlgnqbsodiutlscyjuprm4i)
       sharp:
         specifier: 0.32.6
