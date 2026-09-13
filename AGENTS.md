@@ -1550,12 +1550,83 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 线上实测：四个响应头都在；带 XFF 的公开写接口第 31 次开始 429；`/api/admin/init` 第 6 次开始 429；
 错误密码登录仍是 401（说明旧格式校验路径正常）。
 
-### 7.19 测试基线（本分支最后一次全量运行的结果）
+### 7.20 SEO：canonical / 301 / 结构化数据 / sitemap lastmod / robots
+
+面向用户的完整说明在 `docs/advanced/seo.md`，这里只记**改了什么、为什么、有哪些坑**。
+
+**1. 重复内容（最大的一条）**：一篇文章有 `/post/<数字id>` 和 `/post/<别名>` 两个入口，
+以前**两个都返回 200 且没有 canonical**，搜索引擎会当成两份内容把权重拆开，阅读量也按 pathname 分家
+（这就是 §7.11 里挂着的 M2）。现在：
+- `pages/post/[id].tsx` 的 `getStaticProps` 里，`params.id !== getArticlePath(article)` 就
+  `redirect: { destination, permanent: true }` → Next 返回 **308**（Google 按 301 同等处理）。
+  没有别名的文章 `canonical === String(id)`，不会跳。
+- `components/Layout` 统一输出 `<link rel="canonical">`（用 `useRouter().asPath` 算，
+  **去掉 query 与 hash**、`/page/1` 规范到 `/`、多余斜杠收敛）。放在 Layout 是为了**一处生效全站**，
+  不用改 8 个页面。⚠️ 站点 URL 没配时**不输出** canonical：错误的绝对地址比没有更糟。
+- 评论的 path 键与这件事无关（那边用数字 id + 服务端等价展开，见 §7.16），301 不会影响评论。
+
+**2. sitemap 带上了 lastmod / changefreq / priority**（以前只有 `<loc>`）：
+`getSiteEntries()` 一次取全部文章的 `updatedAt || createdAt`，文章 0.8/weekly、首页 1.0/daily、
+时间线 0.7、分类 0.5、标签 0.4、分页从 0.4 递减到 0.2、自定义页 0.6；
+聚合页的 lastmod 用「最新文章更新时间」。并按 URL 去重（`/page/1` 与首页重复）。
+- **加密文章与加密分类下的文章不进 sitemap**：正文对爬虫不可见，收录进来是浪费抓取配额 +
+  薄内容（thin content）拉低质量评分。隐藏文章本来就被 `getAll('list', false, false)` 排除了。
+- 拿不到分类信息时按「没有加密分类」处理，**不让整份 sitemap 生成失败**。
+
+**3. sitemap/RSS 的生成以前被 `VANBLOG_DISABLE_WEBSITE` 挡死了** —— 这两个是 **server 自己写的静态文件**，
+和前台 Next 进程无关，但 `isrProvider.activeAll()` 第一件事就是 `if (VANBLOG_DISABLE_WEBSITE) return`，
+于是「前台没起 / server 单独部署」时它们**永远不更新**（本机开发环境正好复现：sitemap 里还留着
+早就删掉的探针文章 `/post/53`、`/post/52`）。修法是把两行生成挪到守卫**之前**。
+⚠️ 本开发环境 `VANBLOG_DISABLE_WEBSITE=true`，所以想验证 sitemap/RSS 必须走
+`POST /api/admin/isr`（且要等 60s / 3min 的防抖），别以为改了代码没生效。
+
+**4. robots.txt 改成 server 动态生成**（`controller/public/robots.controller.ts`，路由就是 `/robots.txt`）：
+`Sitemap:` 必须是**绝对 URL**，静态文件不知道域名 —— 这就是以前 robots.txt 里根本没有 Sitemap 行的原因。
+- 删掉了 `packages/website/public/robots.txt` 与那个手误的 `robot.txt`；
+  ⚠️ **必须删**：Next 的 `public/` 静态文件优先于 rewrites，留着就会把动态路由盖掉。
+- 生产由 caddy `handle /robots.txt → 127.0.0.1:3000`，开发由 `next.config.js` 的 rewrite 兜；
+  同时补了 `/sitemap.xml` 的 rewrite（生产是 caddy 的 `uri replace`）。
+- Disallow 补齐：`/api/`、`/admin`、`/swagger`、`/swagger-json`、`/static/export|tmp|upload-tmp`，
+  并显式 `Allow: /static/`（图床要能被收录）。
+- ⚠️ `washUrl('')` 返回的是 `'https://'`（它给没协议的串补 `https://`，`new URL` 抛错后原样返回），
+  直接用会写出 `Sitemap: https:///sitemap.xml`。所以要用 `/^https?:\/\/[^/\s]/i` 验一遍再写。
+- 带 `Cache-Control: public, max-age=3600`（爬虫请求频繁）。
+
+**5. meta 与结构化数据**（`utils/seo.ts`，全是纯函数 + 19 条单测）：
+- **每篇文章自己的 description**：`toPlainText(content, 160)` 把正文压成纯文本
+  （围栏代码整块丢掉、行内代码留内容、图片换 alt、链接留文字、剥掉 markdown 记号与残留 HTML、
+  压掉 `<!-- more -->`），超长时优先在句读处截断补省略号。以前所有页面共用站点描述，摘要千篇一律。
+- 文章页：`og:type=article`、`article:published_time/modified_time/section/tag`、`twitter:title/description`；
+  Layout 全站输出 `og:url`(=canonical)、`og:site_name`、`og:locale`、`og:title`、`og:description`。
+  （`next/head` 会按 name/property 去重，页面级的会盖掉 Layout 的同名标签，所以不会有两个 description。）
+- **JSON-LD**：文章页 `BlogPosting` + `BreadcrumbList`（首页→分类→文章），首页 `WebSite`+`Blog`。
+  ⚠️ 非法日期**直接省略字段**，绝不写 `Invalid Date`（那会让整段结构化数据校验失败）；
+  序列化走 `JSON.stringify` 且把 `<` 换成 `\u003c`，堵死从 JSON-LD 逃出 `</script>` 的路。
+- `LayoutProps` 新增 `siteUrl` / 复用已有的 `siteName`（⚠️ `siteName` 本来就存在，
+  我第一遍又加了一次，TS 直接报 Duplicate identifier —— 加字段前先 grep）。
+
+**6. RSS/Atom/JSON Feed 小修**：分类/标签的 `domain` 以前是 `https://域名//category/x`（双斜杠、中文没编码）；
+标签现在也作为 `<category>` 输出（以前只有分类，53 篇文章 → 108 条 category）；
+`language` 改规范的 `zh-CN`；KaTeX 样式表从 **0.5.1（2016 年，已失效）** 升到 0.16.9。
+
+**测试**：`utils/seo.ts` 19 条（website）、`sitemap.provider.spec.ts` 追加 6 条、
+新增 `controller/public/robots.controller.spec.ts` 5 条。
+基线：server 610（609 绿 + 1 个既有离线字体用例）、website 55 文件 / 528、admin 77 套件 / 306、
+脚本 8 文件 / 313。
+
+**实测**（本机站点 URL 指向的是生产域名，所以 canonical/og 里出现的是那个域名，属正常）：
+`/post/1` → 308 → `/post/jiang-paddleocr-zhuan-wei-onnx-yun-xing` → 200；
+文章页有 canonical、独立 description、`og:type=article`、`article:published_time`、`article:tag`
+与 2 段 JSON-LD（BlogPosting + BreadcrumbList）；首页有 WebSite+Blog 与 canonical；
+`/robots.txt` 200 且带 `Sitemap:` 行；`/sitemap.xml` 79 条 URL、76 条 lastmod、79 条 changefreq/priority，
+且已删除的探针文章不再出现；`feed.xml` 的 `language` 为 zh-CN、category domain 无双斜杠。
+
+### 7.21 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 599 用例：598 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 54 文件 / 509 用例全绿 |
+| server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 55 文件 / 528 用例全绿 |
 | admin `node --test tests/unit` | 77 套件 / 306 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
@@ -1567,7 +1638,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.19 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.21 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

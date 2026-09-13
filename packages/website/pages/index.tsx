@@ -1,3 +1,4 @@
+import { jsonLdString, websiteJsonLd } from "../utils/seo";
 import useCommentProvider from "../hooks/useCommentProvider";
 import AuthorCard, { AuthorCardProps } from "../components/AuthorCard";
 import Layout from "../components/Layout";
@@ -26,6 +27,23 @@ const Home = (props: IndexPageProps) => {
       sideBar={<AuthorCard option={props.authorCardProps}></AuthorCard>}
     >
       <Head>
+        {/* 首页的站点级结构化数据：告诉搜索引擎这是一个博客、作者与站点名是什么 */}
+        {props.layoutProps.siteUrl ? (
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{
+              __html: jsonLdString(
+                websiteJsonLd({
+                  siteName: props.layoutProps.siteName,
+                  siteUrl: props.layoutProps.siteUrl,
+                  description: props.layoutProps.description,
+                  authorName: props.authorCardProps?.author,
+                  logoUrl: props.layoutProps.logo,
+                }),
+              ),
+            }}
+          />
+        ) : null}
         <meta
           name="keywords"
           content={getArticlesKeyWord(props.articles).join(",")}

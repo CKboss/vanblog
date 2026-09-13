@@ -30,7 +30,7 @@
 
 ## 本分支新增内容
 
-**一句话版本**：内置评论系统（可替代外挂 Waline）· 补齐 6 种 markdown 语法 · 整站备份/恢复与单篇 `.mdz` 带图导出 ·
+**一句话版本**：内置评论系统（可替代外挂 Waline）· SEO 加固（canonical/301、JSON-LD、sitemap lastmod、动态 robots）· 补齐 6 种 markdown 语法 · 整站备份/恢复与单篇 `.mdz` 带图导出 ·
 图片管线（缩放/缩略图/隐写水印/原地替换）· 拼音文章别名 · Apple 风格前台皮肤 ·
 前台首屏 JS 砍掉约 1/3 · 一键安装改成构建**本分支**源码 · 一批会让站点卡死/白屏/数据少算的 bug 修掉了。
 
@@ -49,6 +49,8 @@
 <tr><td rowspan="2">备份与迁移</td>
 <td><b>整站备份 / 恢复</b></td><td>一个高压缩归档（zstd → xz → gzip 自动选择）打包<b>全部集合 + 评论库 + 图床/附件/自定义页面</b>；支持不解压查看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引）</td><td><a href="docs/advanced/backup.md">备份</a></td></tr>
 <tr><td><b>单篇导出 <code>.md</code> / <code>.mdz</code></b></td><td><code>.md</code> 是原样正文；<code>.mdz</code> 是 Typora 风格带图包（相对链接 + <code>&lt;标题&gt;.assets/</code>）；外链图片自动抓取，抓不到会保留原链接并生成说明清单；文章/草稿/编辑器未保存内容/关于页都能导</td><td><a href="docs/advanced/backup.md">备份</a></td></tr>
+<tr><td>SEO</td>
+<td><b>搜索引擎优化</b></td><td><code>/post/&lt;数字id&gt;</code> <b>301 到别名</b>（以前两个地址都返回 200，被当成重复内容拆权重）；全站 <code>canonical</code>（去 query/hash，<code>/page/1</code> 归一到 <code>/</code>）；文章页独立 <code>description</code>（正文前 160 字压成纯文本）+ <code>og:type=article</code> + <code>article:*</code>；<b>JSON-LD 结构化数据</b>（文章页 <code>BlogPosting</code> + 面包屑，首页 <code>WebSite</code>+<code>Blog</code>）；sitemap 补上 <code>lastmod</code>/<code>changefreq</code>/<code>priority</code> 且不再收录加密文章；<code>robots.txt</code> 改由 server 动态生成并带 <code>Sitemap:</code> 绝对地址；RSS 修掉双斜杠、补标签分类、<code>zh-CN</code>、KaTeX 样式表从失效的 0.5.1 升到 0.16.9</td><td><a href="docs/advanced/seo.md">SEO</a></td></tr>
 <tr><td>评论</td>
 <td><b>内置评论系统</b></td><td>不再必须外挂 Waline：评论存在本站 Mongo、走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/批量/按状态与关键词筛选）。可选 <code>内置 / Waline / 关闭</code>，<b>老站点升级默认保持 Waline</b>；支持从 Waline 导出文件<b>一键导入</b>（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞）与<b>只导出已通过评论</b></td><td><a href="docs/features/comment.md">评论系统</a></td></tr>
 <tr><td rowspan="2">观感与部署</td>
@@ -176,8 +178,8 @@
 
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **599** 用例（1 个既有用例需联网拉字体，离线必失败） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **54 文件 / 510** 用例 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **55 文件 / 528** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **77 套件 / 306** 用例 |
 | 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 313** 条断言 |
 

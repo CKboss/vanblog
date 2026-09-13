@@ -63,15 +63,19 @@ export class ISRProvider {
     this.logger.log('触发全量渲染完成！');
   }
   async activeAll(info?: string, delay?: number, activeConfig?: ActiveConfig) {
-    if (process.env['VANBLOG_DISABLE_WEBSITE'] === 'true') {
-      return;
-    }
     if (this.timer) {
       clearTimeout(this.timer);
     }
     this.timer = setTimeout(() => {
+      // 订阅源与站点地图是 **server 自己生成的静态文件**，和前台 Next 进程无关。
+      // 以前整个方法被 VANBLOG_DISABLE_WEBSITE 挡在最外面，于是「前台没起 / server 单独部署」时
+      // sitemap.xml 与 feed.xml **永远不更新** —— 爬虫拿到的是旧数据（本站开发环境就复现了：
+      // sitemap 里还留着早已删除的文章）。所以把这两个生成挪到守卫之前。
       this.rssProvider.generateRssFeed(info || '', delay);
       this.sitemapProvider.generateSiteMap(info || '', delay);
+      if (process.env['VANBLOG_DISABLE_WEBSITE'] === 'true') {
+        return;
+      }
       this.activeWithRetry(() => {
         this.activeAllFn(info, activeConfig);
       });

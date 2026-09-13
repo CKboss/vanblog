@@ -86,6 +86,10 @@
     uri replace /feed.xml /rss/feed.xml
     reverse_proxy 127.0.0.1:3000
   }
+  # robots.txt 由 server 动态生成（要写绝对 URL 的 Sitemap: 行，静态文件做不到）
+  handle /robots.txt {
+    reverse_proxy 127.0.0.1:3000
+  }
   handle /sitemap.xml {
     uri replace /sitemap.xml /sitemap/sitemap.xml
     reverse_proxy 127.0.0.1:3000

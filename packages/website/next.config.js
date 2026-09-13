@@ -16,6 +16,17 @@ const rewites =
               source: "/api/:path*",
               destination: "http://127.0.0.1:3000/api/:path*", // Proxy to Backend
             },
+            {
+              // robots.txt 由 server 动态生成（Sitemap: 必须是绝对 URL，静态文件不知道域名）
+              source: "/robots.txt",
+              destination: "http://127.0.0.1:3000/robots.txt",
+            },
+            {
+              // sitemap 同理：server 生成到 <static>/sitemap/sitemap.xml，
+              // 生产环境由 caddy 把 /sitemap.xml 重写到 /sitemap/sitemap.xml
+              source: "/sitemap.xml",
+              destination: "http://127.0.0.1:3000/static/sitemap/sitemap.xml",
+            },
           ];
         },
       }

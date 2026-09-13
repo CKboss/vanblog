@@ -13,6 +13,8 @@ import {
 } from "./pageCopy";
 export interface LayoutProps {
   description: string;
+  /** 站点绝对地址（后台「站点信息 → 网站 URL」）：canonical / og:url / JSON-LD 都要用它 */
+  siteUrl: string;
   ipcNumber: string;
   since: string;
   ipcHref: string;
@@ -158,6 +160,7 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
     logoDark: siteInfo.siteLogoDark || "",
     showExpirationReminder: showExpirationReminder,
     description: siteInfo.siteDesc || "",
+    siteUrl: String(siteInfo.baseUrl || "").trim().replace(/\/+$/, ""),
     menus: data?.menus || defaultMenu,
     categories: data.meta.categories,
     showSubMenu: showSubMenu ? "true" : "false",

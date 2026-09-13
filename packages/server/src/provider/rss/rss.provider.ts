@@ -84,7 +84,8 @@ export class RssProvider {
         description: meta.siteInfo.siteDesc,
         id: siteUrl,
         link: siteUrl,
-        language: 'zh-cn',
+        // 语言标签用规范写法（RFC 5646 是大小写不敏感，但 zh-CN 更常见也更保险）
+        language: 'zh-CN',
         image: siteLogo,
         favicon: favicon,
         copyright: `All rights reserved ${date.getFullYear()}, ${meta.siteInfo.author}`,
@@ -98,13 +99,25 @@ export class RssProvider {
       });
       for (const article of articles) {
         const url = `${siteUrl}post/${article.pathname || article.id}`;
+        // siteUrl 已经被 washUrl 处理成带尾斜杠的形式，这里再拼一个 '/' 会变成双斜杠
+        const base = siteUrl.replace(/\/+$/, '');
         const category = {
           name: article.category,
-          domain: `${siteUrl}/category/${article.category}`,
+          domain: `${base}/category/${encodeURIComponent(article.category || '')}`,
         };
+        // 标签也一并给出去：feed 阅读器（以及部分聚合站）会拿 category 做分组
+        const categories = [category].concat(
+          (Array.isArray(article.tags) ? article.tags : [])
+            .filter((t: any) => typeof t === 'string' && t.trim())
+            .slice(0, 10)
+            .map((t: string) => ({
+              name: t,
+              domain: `${base}/tag/${encodeURIComponent(t)}`,
+            })),
+        );
         const html = `<div class="markdown-body rss">
       <link rel="stylesheet" href="${siteUrl}markdown.css">
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.5.1/katex.min.css">
+      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.6.0/build/styles/default.min.css">
       ${this.markdownProvider
         .renderMarkdown(article.content)
@@ -119,7 +132,7 @@ export class RssProvider {
           description: this.markdownProvider.renderMarkdown(
             this.markdownProvider.getDescription(article.content),
           ),
-          category: [category],
+          category: categories,
           content: html,
           author: [author],
           contributor: [author],

@@ -1,7 +1,7 @@
 import Head from "next/head";
 import BackToTopBtn from "../BackToTop";
 import NavBar from "../NavBar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import BaiduAnalysis from "../BaiduAnalysis";
 import GaAnalysis from "../gaAnalysis";
 import { LayoutProps } from "../../utils/getLayoutProps";
@@ -9,6 +9,8 @@ import { LayoutProps } from "../../utils/getLayoutProps";
 import { RealThemeType, ThemeContext } from "../../utils/themeContext";
 import CustomLayout from "../CustomLayout";
 import { APPLE_FONT_CSS_URL, APPLE_FONT_PRECONNECT_HOSTS } from "../../utils/appleFont";
+import { canonicalUrl } from "../../utils/seo";
+import { useRouter } from "next/router";
 import { Toaster } from "react-hot-toast";
 import Footer from "../Footer";
 import NavBarMobile from "../NavBarMobile";
@@ -24,6 +26,7 @@ export default function (props: {
   // console.log("script", decode(props.option.customScript as string));
   const [isOpen, setIsOpen] = useState(false);
   const { current } = useRef({ hasInit: false });
+  const { asPath } = useRouter();
   // Stable SSR value; ThemeButton applies the stored / default theme before paint.
   const [theme, setTheme] = useState<RealThemeType>("auto-light");
   const handleClose = () => {
@@ -31,6 +34,12 @@ export default function (props: {
     localStorage.removeItem("saidHello");
   };
   const uiStyle = props.option.uiStyle === "default" ? "default" : "apple";
+  // canonical 用当前路由算，query 与 hash 一律去掉；站点 URL 没配就干脆不输出
+  // （输出一个错误的绝对地址比不输出更糟）
+  const canonical = useMemo(
+    () => (props.option.siteUrl ? canonicalUrl(props.option.siteUrl, asPath) : ""),
+    [props.option.siteUrl, asPath],
+  );
   // Apple 皮肤的中文字体（Maple Mono NF CN）来自远程字体 CSS。
   //
   // ⚠️ 它**必须异步加载**：普通 <link rel="stylesheet"> 是渲染阻塞的，而这个域名
@@ -89,6 +98,19 @@ export default function (props: {
         <link rel="icon" href={props.option.favicon}></link>
         <meta name="description" content={props.option.description}></meta>
         <meta name="robots" content="index, follow"></meta>
+        {/* canonical：一篇文章有 /post/<数字id> 和 /post/<拼音别名> 两个入口，
+            分页还有 /page/1 == /，没有 canonical 的话搜索引擎会当成重复内容、把权重拆开。
+            文章页另外做了 301（见 pages/post/[id].tsx），canonical 是第二道保险。 */}
+        {canonical ? <link rel="canonical" href={canonical} /> : null}
+        {canonical ? <meta property="og:url" content={canonical} /> : null}
+        {props.option.siteName ? (
+          <meta property="og:site_name" content={props.option.siteName} />
+        ) : null}
+        <meta property="og:locale" content="zh_CN" />
+        {props.title ? <meta property="og:title" content={props.title} /> : null}
+        {props.option.description ? (
+          <meta property="og:description" content={props.option.description} />
+        ) : null}
       </Head>
       <BackToTopBtn></BackToTopBtn>
       {props.option.baiduAnalysisID != "" &&

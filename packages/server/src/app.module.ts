@@ -88,6 +88,7 @@ import { NativeComment, NativeCommentSchema } from './scheme/comment.schema';
 import { CommentProvider } from './provider/comment/comment.provider';
 import { PublicCommentController } from './controller/public/comment.controller';
 import { CommentController } from './controller/admin/comment/comment.controller';
+import { RobotsController } from './controller/public/robots.controller';
 import { PipelineProvider } from './provider/pipeline/pipeline.provider';
 import { PipelineController } from './controller/admin/pipeline/pipeline.controller';
 import { TokenController } from './controller/admin/token/token.controller';
@@ -157,7 +158,8 @@ import { initJwt } from './utils/initJwt';
     PipelineController,
     TokenController,
     PublicCommentController,
-    CommentController
+    CommentController,
+    RobotsController
   ],
   providers: [
     AppService,
