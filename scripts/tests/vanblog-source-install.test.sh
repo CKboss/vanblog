@@ -132,7 +132,20 @@ clone_or_update_source >/dev/null 2>&1
 VANBLOG_SRC_COMMIT="abc1234"
 OUT="$(build_vanblog_image 2>&1)"
 assert_eq "$?" "0" "构建镜像成功"
-assert_file_contains "${CMDLOG}" "build --build-arg VAN_BLOG_VERSIONS=dev/dsh-abc1234 -t vanblog:dev-dsh" "构建参数带分支与 commit"
+# VAN_BLOG_BUILD_SERVER 现在是**必传**的：Dockerfile 把它 ARG → ENV VAN_BLOG_SERVER_URL，
+# 而前台 utils/loadConfig.ts 在模块顶层 new URL(它)；不传就是空串，next build 会在
+# "Collecting page data" 阶段抛 ERR_INVALID_URL（曾经真的这么炸过一次）。
+assert_file_contains "${CMDLOG}" "build --build-arg VAN_BLOG_VERSIONS=dev/dsh-abc1234 --build-arg VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000 -t vanblog:dev-dsh" "构建参数带分支、commit 与默认 server 地址"
+
+# --- 用户显式指定 server 地址时以用户为准 ---
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_BUILD_SERVER="http://192.0.2.10:3000"
+VANBLOG_SRC_COMMIT="abc1234"
+build_vanblog_image >/dev/null 2>&1
+assert_eq "$?" "0" "带自定义 server 地址构建成功"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_BUILD_SERVER=http://192.0.2.10:3000" "用户指定的 server 地址优先于默认值"
 assert_contains "${OUT}" "镜像构建完成" "构建成功有提示"
 
 # --- 没有 Dockerfile 就不要瞎构建 ---

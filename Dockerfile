@@ -54,7 +54,10 @@ COPY ./patches ./patches
 COPY ./packages/website ./packages/website
 ENV isBuild=t
 ENV VAN_BLOG_ALLOW_DOMAINS="pic.mereith.com"
-ARG VAN_BLOG_BUILD_SERVER
+# 默认值必须有：不传这个 build-arg 时 ENV 会变成**空串**，
+# 前台 utils/loadConfig.ts 在模块顶层 new URL('') → next build 的
+# "Collecting page data" 阶段直接 ERR_INVALID_URL 失败（栈里只有 chunk 编号，很难查）。
+ARG VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000
 ENV VAN_BLOG_SERVER_URL=${VAN_BLOG_BUILD_SERVER}
 ARG VAN_BLOG_VERSIONS
 ENV VAN_BLOG_VERSION=${VAN_BLOG_VERSIONS}

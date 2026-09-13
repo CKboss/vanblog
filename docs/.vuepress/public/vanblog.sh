@@ -274,16 +274,16 @@ build_vanblog_image() {
 
   local version_arg="${VANBLOG_BRANCH}-${VANBLOG_SRC_COMMIT:-unknown}"
   echo -e "> 构建镜像 ${yellow}${VANBLOG_IMAGE_TAG}${plain}（首次约 5-20 分钟，取决于机器与网络）"
-  if [[ -n "${VANBLOG_BUILD_SERVER:-}" ]]; then
-    docker build \
-      --build-arg "VAN_BLOG_VERSIONS=${version_arg}" \
-      --build-arg "VAN_BLOG_BUILD_SERVER=${VANBLOG_BUILD_SERVER}" \
-      -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
-  else
-    docker build \
-      --build-arg "VAN_BLOG_VERSIONS=${version_arg}" \
-      -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
-  fi
+  # VAN_BLOG_BUILD_SERVER 必须传：Dockerfile 里它是 ARG → ENV VAN_BLOG_SERVER_URL，
+  # 而前台 utils/loadConfig.ts 在**模块顶层** new URL(它)。不传就是空串，
+  # next build 会在 "Collecting page data" 阶段抛 ERR_INVALID_URL 直接失败。
+  # 构建期这个地址其实是连不上的（容器里还没有 server），页面会走兜底数据，
+  # 运行时再由 runner 阶段的 ENV 覆盖成真实地址，所以这里给个合法值就够了。
+  local build_server="${VANBLOG_BUILD_SERVER:-http://127.0.0.1:3000}"
+  docker build \
+    --build-arg "VAN_BLOG_VERSIONS=${version_arg}" \
+    --build-arg "VAN_BLOG_BUILD_SERVER=${build_server}" \
+    -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
   echo -e "${green}镜像构建完成${plain}：${VANBLOG_IMAGE_TAG}（${version_arg}）"
   return 0
 }

@@ -187,6 +187,27 @@ else
   fail "cannot tell what build context vanblog.sh uses; verify ./patches is copied into it"
 fi
 
+# ---------- 6) 构建期环境变量不能是空串（否则 next build 在收集页面数据时炸） ----------
+# Dockerfile: ARG VAN_BLOG_BUILD_SERVER → ENV VAN_BLOG_SERVER_URL，前台 utils/loadConfig.ts
+# 在**模块顶层** new URL(它)。不传 build-arg 就是空串 → ERR_INVALID_URL，
+# 报在 "Failed to collect page data for /about"，栈里只有 webpack chunk 编号，极难定位。
+if grep -qE '^ARG VAN_BLOG_BUILD_SERVER=https?://[^[:space:]]+' "${DOCKERFILE}"; then
+  pass "Dockerfile gives ARG VAN_BLOG_BUILD_SERVER a usable default"
+else
+  fail "ARG VAN_BLOG_BUILD_SERVER has no default -> empty ENV breaks 'next build' page-data collection"
+fi
+
+if grep -q -- '--build-arg "VAN_BLOG_BUILD_SERVER=' "${SCRIPT}"; then
+  pass "vanblog.sh always passes VAN_BLOG_BUILD_SERVER"
+else
+  fail "vanblog.sh may skip VAN_BLOG_BUILD_SERVER; the build then gets an empty server URL"
+fi
+if grep -q 'if \[\[ -n "\${VANBLOG_BUILD_SERVER:-}" \]\]; then' "${SCRIPT}"; then
+  fail "vanblog.sh still has the conditional build-arg branch (empty by default)"
+else
+  pass "vanblog.sh no longer conditions the build-arg on the user setting it"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

@@ -1753,14 +1753,84 @@ remark 包要靠补丁补出 `main`/`module`，见 §7.14），而 `website_buil
 我做负向对照时用它还原 Dockerfile，结果把没提交的修复一起冲掉了，只能重做一遍。
 要还原就用之前 `cp` 出来的备份。
 
-### 7.23 测试基线（本分支最后一次全量运行的结果）
+### 7.23 源码构建第二道坎：`VAN_BLOG_SERVER_URL` 为空让 `next build` 挂掉
+
+补丁问题解决后，构建往前走了一大步（`pnpm install --frozen-lockfile` 过了、
+`✓ Compiled successfully`），然后死在**收集页面数据**阶段：
+
+```
+TypeError [ERR_INVALID_URL]: Invalid URL
+    at new URL (node:internal/url:676:13)
+    at 485 (/app/packages/website/.next/server/chunks/324.js:6:9051)
+  input: '',            ← 关键线索：传给 new URL 的是**空串**
+Error: Failed to collect page data for /about
+```
+
+**成因链**（每一环单看都"合理"）：
+
+1. `packages/website/utils/loadConfig.ts` 在**模块顶层**执行
+   `new URL(process.env.VAN_BLOG_SERVER_URL ?? "http://localhost:3000")`；
+2. `??` **只拦 undefined/null，拦不住空串**；
+3. Dockerfile 是 `ARG VAN_BLOG_BUILD_SERVER` + `ENV VAN_BLOG_SERVER_URL=${VAN_BLOG_BUILD_SERVER}`
+   —— **不传这个 build-arg 时 ENV 就是空串**，不是"未定义"；
+4. 上游 CI 三个 workflow 都显式传了 `VAN_BLOG_BUILD_SERVER=http://localhost:3000`，所以从没暴露；
+   而本分支的 `scripts/vanblog.sh` 只在**用户自己设了** `VANBLOG_BUILD_SERVER` 时才传 → 默认路径必炸。
+
+栈里只有一串 webpack chunk 编号（`chunks/324.js:6:9051`），完全看不出是环境变量为空 ——
+唯一有用的线索是 `input: ''`。
+
+**三层一起修**（少一层都还会以别的方式炸）：
+
+1. `Dockerfile`：`ARG VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000` 给默认值；
+2. `scripts/vanblog.sh`：**总是**传 `--build-arg VAN_BLOG_BUILD_SERVER=…`
+   （默认 `http://127.0.0.1:3000`，用户设了 `VANBLOG_BUILD_SERVER` 就用用户的），
+   删掉原来那个"没设就不传"的分支；两份脚本仍要字节一致；
+3. `utils/loadConfig.ts`：抽出纯函数 `resolveServerUrl()`，**空串 / 纯空白 / 非法 URL /
+   非 http(s) 协议一律回退默认值**（`new URL("localhost:3000")` 不会抛，它把 `localhost`
+   当协议，所以必须显式校验 `url.protocol`）。
+
+⚠️ **修的时候我自己踩了第二个坑，而且是全站 500 级别的**：兜底分支直接
+`return DEFAULT_SERVER_URL`，而常量写的是 `"http://localhost:3000"`（**没有尾斜杠**）。
+调用方全是 `` `${config.baseUrl}api/public/meta` `` 这种拼法（路径不带前导斜杠，见
+`api/getAllData.ts`、`api/getArticles.ts`），于是拼出 `http://localhost:3000api/public/meta`
+→ `new URL()` 抛 `ERR_INVALID_URL` → **前台每个页面都 500**。
+以前那个尾斜杠是 `new URL(x).toString()` 顺带补上的，兜底分支绕过了它就漏了。
+现在：默认值本身带尾斜杠，且 `resolveServerUrl` 对**任何**输入都保证结果以 `/` 结尾
+（`https://host/api` 这种带前缀的也要补，否则会拼成 `…/apiapi/…`）。
+测试里有一条不变式：九种输入 × `base.endsWith("/")` × `new URL(base + "api/public/meta")` 不抛。
+
+**教训**：凡是"原来由某个函数顺带保证的格式"（这里是尾斜杠），加兜底分支时必须把那个格式一起兜住；
+改完**必须真的 curl 几个页面**，光看测试绿不算（这次测试是绿的，页面全 500）。
+
+**本地怎么复现/验证**（这台机器没有 docker 权限）：
+
+```bash
+cd packages/website
+isBuild=t VAN_BLOG_SERVER_URL='' NEXT_TELEMETRY_DISABLED=1 ./node_modules/.bin/next build
+```
+
+- `isBuild=t` 必须带：否则 `next build` 会跑类型检查，撞上 `mdast-util-mark` 依赖自身的
+  类型错误（既有问题，见 §7.10）而失败，跟本问题无关。
+- 期望结果：日志里出现「无法连接，采用默认值」，然后 `✓ Generating static pages (8/8)`、`EXIT=0`。
+  **构建期连不上 server 是正常的**（容器里那时候还没有 server），页面走兜底数据，
+  运行时再由 runner 阶段的 ENV 覆盖成真实地址 —— 上游 CI 也是这么构建的。
+- ⚠️ 跑完 `next build` 之后 **`next dev` 会 500**：生产和开发共用 `.next` 目录。
+  必须 `rm -rf packages/website/.next` 再 `./dev-env.sh start`。
+
+**新增/扩充的测试**：`packages/website/__tests__/serverUrlConfig.spec.ts`（6 条：空值回退、
+非法与非 http 协议回退、合法地址规范化、尾斜杠不变式、源码里不再有裸 `new URL(process.env…)`、
+Dockerfile 与两份脚本都带默认值）；`scripts/tests/dockerfile-patches.test.sh` +3（ARG 默认值、
+脚本总传 build-arg、不再有"没设就不传"的分支）；`vanblog-source-install.test.sh` 的构建参数断言
+改成同时校验两个 `--build-arg`，并新增"用户自定义 server 地址优先"的用例。
+
+### 7.24 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 56 文件 / 537 用例全绿 |
+| website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 81 套件 / 322 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 334 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 339 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -1770,7 +1840,7 @@ remark 包要靠补丁补出 `main`/`module`，见 §7.14），而 `website_buil
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.23 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.24 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
