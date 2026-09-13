@@ -63,7 +63,15 @@ export default defineConfig({
   nodeModulesTransform: {
     type: 'none',
   },
-  mfsu: {},
+  // MFSU（开发时把 node_modules 预打包成 Module Federation 远程包）**必须关掉**：
+  // 它用老版 resolve 解析裸包名，遇到只有 `exports` 没有 `main` 的 ESM 包
+  // （remark-supersub、remark-github-blockquote-alert）就拿不到 filePath，直接
+  // `AssertionError: filePath not found of xxx`，mf-va_remoteEntry.js 生不出来，
+  // 后台整页报 ScriptExternalLoadError 打不开。改成子路径导入也不行——webpack 5 会按
+  // exports 映射校验，`./lib/index.js` 不在 exports 里（Module not found）。
+  // MFSU 没有 exclude 选项（只有 output/mfName/exportAllMembers/chunks/ignoreNodeBuiltInModules），
+  // 所以只能整体关掉。生产构建（umi build）本来就不用 MFSU，不受影响。
+  mfsu: false,
   webpack5: {},
   exportStatic: {},
   chainWebpack(memo, { env, webpack, createCSSRule }) {
