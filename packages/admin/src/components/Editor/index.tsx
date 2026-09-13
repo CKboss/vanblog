@@ -27,6 +27,9 @@ import { extraSyntax } from './plugins/extraSyntax';
 import { defListHastHandlers } from 'remark-definition-list';
 import 'remark-github-blockquote-alert/alert.css';
 import '../../style/markdown-extra.css';
+import '../../style/apple-preview.css';
+import useApplePreviewFont from './useApplePreviewFont';
+import { getSiteInfo } from '@/services/van-blog/api';
 import { historyIcon } from './history';
 import rawHTML from './rawHTML';
 import { Heading } from './plugins/heading';
@@ -67,6 +70,28 @@ export default function EditorComponent(props: {
   const { initialState } = useModel('@@initialState');
   const navTheme = initialState.settings.navTheme;
   const themeClass = navTheme.toLowerCase().includes('dark') ? 'dark' : 'light';
+  // 前台皮肤是 Apple 风格时，预览也用同一套字体（Maple Mono），做到所见即所得。
+  // 站点设置里没有这个字段（/api/admin/meta 只返回 version/user/baseUrl 等），
+  // 所以单独取一次 /api/admin/meta/site；取不到就当默认皮肤，不影响编辑器其它功能。
+  const [appleSkin, setAppleSkin] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getSiteInfo()
+      .then((res: any) => {
+        const uiStyle = res?.data?.uiStyle;
+        // 与前台 components/Layout 的判定一致：只有显式 'default' 才是默认皮肤
+        if (alive) {
+          setAppleSkin(uiStyle !== undefined && uiStyle !== 'default');
+        }
+      })
+      .catch(() => {
+        // 拿不到设置就保持默认皮肤，别把编辑器搞挂
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  useApplePreviewFont(appleSkin);
   const softLineBreaksRef = useRef(props.softLineBreaks);
   softLineBreaksRef.current = props.softLineBreaks;
   /**
@@ -130,7 +155,12 @@ export default function EditorComponent(props: {
   }, [themeClass, mathPlugin]);
 
   return (
-    <div style={{ height: '100%', minHeight: 0 }} className={`editor-shell ${themeClass}`}>
+    <div
+      style={{ height: '100%', minHeight: 0 }}
+      // apple 皮肤下加 vanblog-apple-preview：style/apple-preview.css 只在这个作用域里生效，
+      // 而且只作用于 .bytemd-preview（预览面板），不动左侧 CodeMirror 编辑区
+      className={`editor-shell ${themeClass}${appleSkin ? ' vanblog-apple-preview' : ''}`}
+    >
       <Spin spinning={loading} className="editor-wrapper">
         <Editor
           value={props.value}

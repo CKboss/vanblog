@@ -803,6 +803,20 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - 字体源集中在 `utils/appleFont.ts`（`APPLE_FONT_CSS_URL` + `APPLE_FONT_PRECONNECT_HOSTS`）。
   `APPLE_FONT_CSS_URL = null` 时 `<link>` 与 preconnect 都不输出 —— 这是**自托管**的入口
   （从 maple-font 的 GitHub Releases 下 NF-CN，按 unicode-range 分包放进 `public/fonts/`）。
+- **后台编辑器预览也用同一套字体**（`packages/admin/src/style/apple-preview.css` +
+  `components/Editor/useApplePreviewFont.ts`），做到所见即所得：
+  - 两个包不共享构建产物，所以字体栈是**复制的两份**；`packages/admin/tests/unit/editorFont.test.js`
+    会把 `--ap-font` / `--ap-font-mono` 两边逐项比对（改一边忘了另一边就会红）。
+  - 作用域只有 `.vanblog-apple-preview .bytemd-preview`：**只影响预览面板**，
+    不动左侧 CodeMirror 编辑区（改它会影响写代码的手感），也不外泄到后台其它页面（表格/表单仍是 antd 默认字体）。
+    代码相关（`code`/`pre`/`kbd`/`tt`）走 `--ap-font-mono`，不被正文字体盖掉。
+  - 皮肤判定：`/api/admin/meta` 的返回里**没有** `uiStyle`（只有 version/user/baseUrl/enableComment/allowDomains），
+    所以编辑器挂载时单独取一次 `/api/admin/meta/site`（`getSiteInfo()`），判定规则与前台一致
+    （只有显式 `'default'` 才算默认皮肤）。取不到就退回默认皮肤，**不能让编辑器白屏**（`.catch` 兜住）。
+  - 远程字体样式表的注入是**非阻塞**的（`media='print'` → load 后翻 `all`，另有 1.5s 兜底定时器 +
+    error 时摘掉节点），并用模块级引用计数，避免反复进出编辑器插拔 `<link>`。
+    后台是 umi + React 17，直接操作 DOM 就行，不像前台要绕 `next/head` 丢函数 prop 的问题。
+    `APPLE_FONT_CSS_URL = null` 时一个字节都不发（自托管入口，与前台同义）。
 - 顺带确认：站点的 `siteInfo.customCss` 是**空的**、`enableCustomizing` 也没开 —— 也就是说
   用户那段自定义 CSS 此前**根本没生效**（`CustomLayout` 只在 `enableCustomizing == "true"` 时渲染）。
   整合进皮肤后不再依赖那个开关。
@@ -1466,7 +1480,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 |---|---|
 | server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 53 文件 / 490 用例全绿 |
-| admin `node --test tests/unit` | 72 套件 / 277 用例全绿 |
+| admin `node --test tests/unit` | 73 套件 / 283 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

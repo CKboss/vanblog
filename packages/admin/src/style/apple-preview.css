@@ -1,0 +1,60 @@
+/* ==========================================================================
+   后台编辑器预览的字体：与前台 Apple 皮肤保持一致（Maple Mono）
+
+   前台的令牌在 packages/website/styles/apple.css 里（--ap-font / --ap-font-mono），
+   两个包不共享构建产物，所以这里**复制同一份字体栈**——改字体时要同时改两处
+   （packages/admin/tests/unit/editorFont.test.js 会盯着两边一致）。
+
+   ⚠️ 作用域只在 `.vanblog-apple-preview`（Editor 外壳）里的**预览面板**：
+   - 不影响后台其它页面（表格、表单、菜单仍是 antd 默认字体）；
+   - 不改左侧的编辑区（CodeMirror 有自己的等宽字体设置，动它会影响写代码的手感）。
+   ========================================================================== */
+
+/* maple-mono-latin-400-normal：拉丁子集（中文/NF 子集由 useApplePreviewFont 注入的
+   远程样式表提供，family 名是 'Maple Mono NF CN'）。@font-face 没有位置要求。 */
+@font-face {
+  font-family: 'Maple Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff2')
+      format('woff2'),
+    url('https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff')
+      format('woff');
+}
+
+.vanblog-apple-preview {
+  /* Maple Mono 打头，后面完整保留前台那套 SF Pro / 苹方 / 雅黑兜底：
+     远程字体加载不上（离线、CDN 不可达、DNS 不通）时不会退化成浏览器默认字体 */
+  --ap-font: 'Maple Mono NF CN', 'Maple Mono', -apple-system, BlinkMacSystemFont,
+    'SF Pro Text', 'SF Pro Display', 'SF Pro Icons', 'PingFang SC', 'Hiragino Sans GB',
+    'Helvetica Neue', 'Microsoft YaHei', Arial, sans-serif;
+  --ap-font-mono: 'Maple Mono NF CN', 'Maple Mono', 'SF Mono', ui-monospace, SFMono-Regular,
+    Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+.vanblog-apple-preview .bytemd-preview,
+.vanblog-apple-preview .bytemd-preview .markdown-body,
+.vanblog-apple-preview .bytemd-preview h1,
+.vanblog-apple-preview .bytemd-preview h2,
+.vanblog-apple-preview .bytemd-preview h3,
+.vanblog-apple-preview .bytemd-preview h4,
+.vanblog-apple-preview .bytemd-preview h5,
+.vanblog-apple-preview .bytemd-preview h6,
+.vanblog-apple-preview .bytemd-preview p,
+.vanblog-apple-preview .bytemd-preview li,
+.vanblog-apple-preview .bytemd-preview blockquote,
+.vanblog-apple-preview .bytemd-preview table,
+.vanblog-apple-preview .bytemd-preview th,
+.vanblog-apple-preview .bytemd-preview td {
+  font-family: var(--ap-font);
+}
+
+/* 代码相关一律走 mono 令牌，别被正文字体盖掉 */
+.vanblog-apple-preview .bytemd-preview code,
+.vanblog-apple-preview .bytemd-preview pre,
+.vanblog-apple-preview .bytemd-preview kbd,
+.vanblog-apple-preview .bytemd-preview tt,
+.vanblog-apple-preview .bytemd-preview .van-comment-content code {
+  font-family: var(--ap-font-mono);
+}

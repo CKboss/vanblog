@@ -70,6 +70,10 @@ Apple 风格具体做了这些事：
      `document.createElement` + `setAttribute` 把子元素搬进 `<head>` 的，函数类型的 prop 不会被带过去；
      而且命中缓存时可能在监听挂上之前就加载完了。`onLoad` 只是锦上添花。
 
+  开启 Apple 风格时，**后台编辑器的预览面板**也会用同一套字体（只影响预览，不动左侧编辑区和后台其它页面），
+  详见 [编辑器](editor.md)。换字体源要同时改两处：前台 `packages/website/utils/appleFont.ts`
+  与后台 `packages/admin/src/components/Editor/useApplePreviewFont.ts`（有测试盯着一致性）。
+
   ::: tip 想换字体 / 自己托管
 
   - 换字体：改 `styles/apple.css` 里 `--ap-font` 与 `--ap-font-mono` 的开头几项即可，
