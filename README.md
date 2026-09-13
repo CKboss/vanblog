@@ -150,6 +150,11 @@ git push ckboss dev/dsh     # ckboss = 本 fork
 curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
+> `raw.githubusercontent.com` 对**分支**地址有几分钟的 CDN 缓存：刚推完就装可能拿到上一版脚本。
+> 想确保拿到最新的，把 `dev/dsh` 换成具体 commit：
+> `https://raw.githubusercontent.com/CKboss/vanblog/<commit-sha>/scripts/vanblog.sh`
+> （脚本自己的 `update_script` 也走同一组地址，同样受这个缓存影响。）
+
 ::: warning 装的是本分支，不是上游镜像
 
 上游那份脚本（`vanblog.mereith.com/vanblog.sh`）拉的是官方镜像 `mereith/van-blog:latest`，
