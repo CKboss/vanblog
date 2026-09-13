@@ -1167,7 +1167,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ### 7.12.1 一键安装改成「装本分支源码构建的镜像」（v0.3.7 → v0.4.0）
 
 脚本以前拉的是官方镜像 `mereith/van-blog:latest`，也就是**上游 master**，本分支的改动一个都不在里面；
-README 里的 curl 也指向作者的文档站与上游 raw。本分支没有发布镜像，所以改成：
+README 里的 curl 也指向作者的文档站与上游 raw。当时本分支还没有发布镜像，所以改成：
 
 ```
 克隆 https://github.com/CKboss/vanblog.git 的 dev/dsh（浅克隆到 <安装目录>/src）
@@ -1949,14 +1949,63 @@ admin 用 `${VAN_BLOG_ADMIN_BUILD_SCRIPT}`、两档脚本都存在且都带堆�
 - `source_script` 里要**把新加的环境变量一起 unset**，否则上一个用例设的
   `VANBLOG_BUILD_SERVER` 会漏到下一个用例（我这次就被它坑了一条断言）。
 
-### 7.26 测试基线（本分支最后一次全量运行的结果）
+### 7.26 把镜像发布到 ghcr.io：让安装回到「docker pull 就能装」
+
+**动机**：上游用户从来不需要构建 —— 作者在 CI 里构建好镜像推到 Docker Hub，用户只 `docker pull`。
+本分支没有发布镜像，一键脚本就只能 clone + 本地 `docker build`，于是**构建从 CI 挪到了用户机器上**，
+内存要求也跟着挪过去（umi build 峰值 1.5-2GB、next build 2-4GB，BuildKit 还会并发跑三个 stage）。
+1C1G 的机器"跑"得动（三个 node 进程一共 ~120MB），但"装"不上 —— 这才是根因。
+
+**`.github/workflows/publish-ghcr.yml`**：push 到 `dev/dsh`、打 `v*` tag、或手动 dispatch 时，
+构建并推到 `ghcr.io/ckboss/vanblog`，标签有 `latest` / `dev-dsh` / `dev-dsh-<短sha>`（tag 事件则用 tag 名）。
+- **只用 `secrets.GITHUB_TOKEN`**（`permissions: packages: write`），不需要配任何 secret ——
+  上游的 `release.yml` 用的是作者的 `DOCKERHUB_USERNAME/TOKEN`，fork 里没有，跑不起来。
+- 默认**只出 `linux/amd64`**：arm64 要 QEMU 模拟，next/umi 的生产构建慢好几倍还容易超时。
+  `workflow_dispatch` 有 `platforms` 输入可以手动加 `linux/arm64`。
+- 构建参数：`VAN_BLOG_VERSIONS=<分支>@<短sha>`、`VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000`
+  （⚠️ 必须传，见 §7.23）、`VAN_BLOG_NPM_REGISTRY=https://registry.npmjs.org`
+  （GitHub 的 runner 在海外，直连 npmjs 比走 npmmirror 快 —— 与本地开发相反）、
+  `VAN_BLOG_ADMIN_BUILD_SCRIPT=build`。
+- `cache-from/cache-to: type=gha` 让重建快很多；`concurrency` 限制同分支只跑一次。
+- ⚠️ **ghcr 的 package 默认是 private 且绑定仓库**：第一次跑完要去
+  `https://github.com/CKboss/vanblog/pkgs/container/vanblog` → Package settings →
+  Change visibility → **Public**，否则别人 `docker pull` 会要求登录。
+  workflow 的 step summary 里也写了这条提醒。
+
+**`scripts/vanblog.sh` 改成「镜像优先，源码兜底」**：
+
+```
+VANBLOG_USE_UPSTREAM_IMAGE=true  → 上游官方镜像（优先级最高，不含本分支改动）
+VANBLOG_INSTALL_MODE=image       → 只拉 VANBLOG_IMAGE_REF，拉不到就失败（不偷偷构建）
+VANBLOG_INSTALL_MODE=source      → 只 clone + 本地构建
+VANBLOG_INSTALL_MODE=auto（默认）→ 先 docker pull；失败才退回源码构建
+```
+
+`auto` 的退回是有意义的：镜像还没发布、机器不通 ghcr.io、或者架构不匹配（只发了 amd64
+而机器是 arm64）时，`docker pull` 会失败，脚本打印原因后走 §7.25 的自适应源码构建。
+`Docker_IMG` 最终值由 `prepare_vanblog_image` 决定，`ensure_compose_image` 再写进编排文件
+（ghcr 地址带斜杠，sed 分隔符是 `|`，这个以前就处理过了）。
+
+**测试**：`vanblog-source-install.test.sh` 从 92 涨到 124 条 —— 默认模式与默认镜像地址、
+auto 拉到镜像时**一次 build 和 clone 都不发**、auto 拉不到时退回构建并说明、
+image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull 都不发、
+`VANBLOG_IMAGE_REF` 覆盖、`VANBLOG_USE_UPSTREAM_IMAGE` 仍然优先、编排文件写入 ghcr 地址、
+以及 workflow 文件本身的契约（`packages: write`、ghcr.io、用 GITHUB_TOKEN、
+**不再引用 DOCKERHUB_TOKEN**、四个 build-arg 都在、gha 缓存、Public 可见性提醒）。
+⚠️ 既有用例里有几条是断言"prepare 之后 Docker_IMG 变成本地 tag"的，默认模式改成 auto 之后
+它们会走到 pull 分支 —— 已全部显式钉上 `VANBLOG_INSTALL_MODE=source`。
+假 docker stub 也加了 `DOCKER_PULL_FAIL=1` 来模拟拉取失败。
+⚠️ 又踩了一次「`OUT="$(fn)"` 是子 shell，全局赋值会丢」的坑（§7.25 记过），
+这次改成 `fn >"$LOG" 2>&1` 再读文件。
+
+### 7.27 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 394 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 426 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -1966,7 +2015,7 @@ admin 用 `${VAN_BLOG_ADMIN_BUILD_SCRIPT}`、两档脚本都存在且都带堆�
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.26 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.27 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

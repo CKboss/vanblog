@@ -1,0 +1,133 @@
+# 把本分支构建成镜像推到 ghcr.io，让安装脚本回到「docker pull 就能装」。
+#
+# 为什么要这个：上游是作者在自己的 CI 里构建好镜像再发布的，用户只需要 pull；
+# 而本分支以前没有发布镜像，一键脚本只能 clone 源码 + 本地 docker build ——
+# 于是构建从 CI 挪到了用户机器上，1C2G 的小机器根本装不了（umi build 峰值 1.5-2GB、
+# next build 2-4GB，而 BuildKit 还会并发跑三个 stage）。
+#
+# ⚠️ ghcr 的包**默认是 private** 且与仓库绑定。第一次跑完这个 workflow 之后，
+#    要去 https://github.com/CKboss?tab=packages 找到 vanblog 这个 package，
+#    Package settings → Danger Zone → Change visibility → Public，
+#    否则别人 docker pull 会要求登录（脚本探测到拉不动就会退回源码构建）。
+#
+# 用 GITHUB_TOKEN 就够了，不需要配任何 secret。
+name: publish-ghcr
+
+on:
+  push:
+    branches:
+      - dev/dsh
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: '构建架构（逗号分隔）。加 arm64 会走 QEMU 模拟，慢好几倍且容易超时'
+        required: false
+        default: 'linux/amd64'
+      extra_tag:
+        description: '额外打一个标签（留空则只按分支名/tagName 打）'
+        required: false
+        default: ''
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository = <owner>/<repo>，ghcr 要求全小写
+  IMAGE_NAME: ${{ github.repository }}
+
+# 只留最近 3 次运行，省 Actions 额度
+concurrency:
+  group: publish-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # 三个 stage 串行算下来（amd64）大约 20-40 分钟；留足余量
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 版本标签（写进镜像的 VAN_BLOG_VERSION，后台「关于」与页脚会显示）
+        id: ver
+        run: |
+          sha="$(git rev-parse --short HEAD)"
+          ref_name="${GITHUB_REF_NAME}"
+          # 分支名里的 / 不能直接当 tag 用
+          safe_ref="$(printf '%s' "${ref_name}" | tr '/' '-')"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "safe_ref=${safe_ref}" >> "$GITHUB_OUTPUT"
+          echo "version=${safe_ref}@${sha}" >> "$GITHUB_OUTPUT"
+          echo "构建版本：${safe_ref}@${sha}"
+
+      - name: 决定构建架构
+        id: plat
+        run: |
+          if [ -n "${{ inputs.platforms }}" ]; then
+            echo "platforms=${{ inputs.platforms }}" >> "$GITHUB_OUTPUT"
+          else
+            # 默认只出 amd64：arm64 要 QEMU 模拟，next/umi 的构建慢好几倍还容易超时
+            echo "platforms=linux/amd64" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: contains(steps.plat.outputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev/dsh' }}
+            type=raw,value=dev-dsh,enable=${{ github.ref == 'refs/heads/dev/dsh' }}
+            type=raw,value=dev-dsh-${{ steps.ver.outputs.sha }},enable=${{ github.ref == 'refs/heads/dev/dsh' }}
+            type=raw,value=${{ steps.ver.outputs.safe_ref }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ steps.plat.outputs.platforms }}
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub 的 runner 在海外，直连 npmjs 比走 npmmirror 快；
+          # 这个值会覆盖 Dockerfile 里 npmmirror 的默认值（见 §7.25）
+          build-args: |
+            VAN_BLOG_VERSIONS=${{ steps.ver.outputs.version }}
+            VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000
+            VAN_BLOG_NPM_REGISTRY=https://registry.npmjs.org
+            VAN_BLOG_ADMIN_BUILD_SCRIPT=build
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 摘要
+        run: |
+          echo "### 已推送" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "架构：${{ steps.plat.outputs.platforms }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "版本：${{ steps.ver.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> ⚠️ 第一次发布后记得把 package 可见性改成 **Public**：" >> "$GITHUB_STEP_SUMMARY"
+          echo "> https://github.com/${{ github.repository }}/pkgs/container/vanblog → Package settings → Change visibility" >> "$GITHUB_STEP_SUMMARY"

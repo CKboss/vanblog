@@ -1,16 +1,33 @@
-::: warning 本 fork 没有发布镜像
+::: warning 下面的镜像是上游官方版
 
 下面的 `image: mereith/van-blog:latest` 是**上游官方镜像**，不包含本 fork（`CKboss/vanblog` 的
-`dev/dsh` 分支）的任何改动。想用本分支有两种方式：
+`dev/dsh` 分支）的任何改动。想用本分支有三种方式：
 
-1. **一键脚本（推荐）**：它会克隆本分支源码、本地 `docker build`、再用本地 tag 起容器。
+1. **一键脚本（推荐）**：默认 `docker pull ghcr.io/ckboss/vanblog:dev-dsh`（GitHub Actions 构建发布，
+   小机器也装得动），拉不到时自动退回「克隆源码 + 本地构建」。
 
    ```bash
    curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh \
      && chmod +x vanblog.sh && ./vanblog.sh
    ```
 
-2. **自己构建镜像**，然后把编排文件里的 `image:` 换成本地 tag：
+2. **直接拉本分支镜像**，把编排文件里的 `image:` 换掉即可（不需要构建，1C1G 也能跑）：
+
+   ```bash
+   docker pull ghcr.io/ckboss/vanblog:dev-dsh
+   # 也有 dev-dsh-<短sha> 与 latest 两个标签；只发布了 linux/amd64
+   ```
+
+   ::: tip 拉不动？
+
+   ghcr 的 package 默认是 **private**。如果 `docker pull` 报 `denied` 或 `not found`，
+   说明仓库主还没把它改成公开：`https://github.com/CKboss/vanblog/pkgs/container/vanblog`
+   → Package settings → Danger Zone → Change visibility → Public。
+   在那之前脚本会自动退回源码构建。
+
+   :::
+
+3. **自己构建镜像**，然后把编排文件里的 `image:` 换成本地 tag：
 
    ```bash
    git clone --depth 1 -b dev/dsh https://github.com/CKboss/vanblog.git

@@ -71,6 +71,10 @@ echo "docker $*" >>"${CMDLOG}"
 if [[ "${DOCKER_BUILD_FAIL:-0}" == "1" && "$1" == "build" ]]; then
   exit 1
 fi
+if [[ "${DOCKER_PULL_FAIL:-0}" == "1" && "$1" == "pull" ]]; then
+  echo "Error response from daemon: manifest unknown" >&2
+  exit 1
+fi
 exit 0
 DOCKER
 
@@ -92,6 +96,7 @@ source_script() {
   unset VANBLOG_USE_UPSTREAM_IMAGE VANBLOG_REPO VANBLOG_BRANCH VANBLOG_SRC_DIR VANBLOG_IMAGE_TAG
   # 构建相关的新变量也要清：用例之间不能互相污染
   unset VANBLOG_BUILD_SERVER VANBLOG_BUILD_MODE VANBLOG_FORCE_BUILD VANBLOG_NPM_REGISTRY
+  unset VANBLOG_INSTALL_MODE VANBLOG_IMAGE_REF DOCKER_PULL_FAIL
   # shellcheck disable=SC1090
   source "${SCRIPT}"
 }
@@ -161,9 +166,10 @@ if [[ $? -ne 0 ]]; then pass "缺 Dockerfile 时构建失败"; else fail "缺 Do
 assert_contains "${OUT}" "没有 Dockerfile" "缺 Dockerfile 有明确报错"
 assert_not_contains "$(cat "${CMDLOG}")" "docker build" "缺 Dockerfile 时不会调用 docker build"
 
-# --- prepare_vanblog_image：把 Docker_IMG 换成本地 tag ---
+# --- prepare_vanblog_image（源码模式）：把 Docker_IMG 换成本地 tag ---
 setup_case
 source_script
+export VANBLOG_INSTALL_MODE=source
 Docker_IMG="mereith/van-blog:latest"
 prepare_vanblog_image >/dev/null 2>&1
 assert_eq "$?" "0" "准备镜像成功"
@@ -174,6 +180,7 @@ assert_file_contains "${CMDLOG}" "docker build" "源码模式会本地构建"
 # --- 构建失败必须返回非 0（安装/更新会据此中止，不会拿旧镜像糊弄）---
 setup_case
 source_script
+export VANBLOG_INSTALL_MODE=source
 export DOCKER_BUILD_FAIL=1
 OUT="$(prepare_vanblog_image 2>&1)"
 RC=$?
@@ -195,6 +202,7 @@ unset VANBLOG_USE_UPSTREAM_IMAGE
 # --- 生成的编排文件里写的是本地 tag（斜杠不再被转义）---
 setup_case
 source_script
+export VANBLOG_INSTALL_MODE=source
 prepare_vanblog_image >/dev/null 2>&1
 cp "${TEMPLATE_FIXTURE}" "${VANBLOG_BASE_PATH}/docker-compose-template.yaml"
 vanblog_email="a@b.com" vanblog_http_port=80 vanblog_https_port=443
@@ -208,6 +216,7 @@ assert_file_not_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" 'vanblog_ima
 # --- 自定义 tag 里带斜杠也不会破坏 sed（分隔符是 | ）---
 setup_case
 source_script
+export VANBLOG_INSTALL_MODE=source
 export VANBLOG_IMAGE_TAG="ckboss/vanblog:dev-dsh"
 prepare_vanblog_image >/dev/null 2>&1
 cp "${TEMPLATE_FIXTURE}" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
@@ -375,6 +384,104 @@ VANBLOG_FORCE_BUILD="true"
 OUT="$(build_vanblog_image 2>&1)"
 assert_eq "$?" "0" "VANBLOG_FORCE_BUILD=true 时照跑"
 assert_contains "${OUT}" "OOM" "强行构建时要提醒可能 OOM"
+
+# --- 默认走「拉镜像」，源码构建只是兜底 ---
+setup_case
+source_script
+assert_eq "${VANBLOG_INSTALL_MODE}" "auto" "默认安装模式是 auto（先拉镜像）"
+assert_eq "${VANBLOG_IMAGE_REF}" "ghcr.io/ckboss/vanblog:dev-dsh" "默认镜像是本分支的 ghcr 地址"
+Docker_IMG="mereith/van-blog:latest"
+# ⚠️ 不能用 OUT="$(prepare_vanblog_image)"：命令替换是子 shell，Docker_IMG 的赋值会丢
+prepare_vanblog_image >"${TEST_DIR}/prep.log" 2>&1
+OUT="$(cat "${TEST_DIR}/prep.log")"
+assert_eq "$?" "0" "auto 模式准备镜像成功"
+assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:dev-dsh" "auto 模式用 ghcr 镜像，不再是上游镜像"
+assert_file_contains "${CMDLOG}" "pull ghcr.io/ckboss/vanblog:dev-dsh" "auto 模式会 docker pull"
+assert_not_contains "$(cat "${CMDLOG}")" "docker build" "拉到镜像就不该本地构建（小机器装得动的前提）"
+assert_not_contains "$(cat "${CMDLOG}")" "git clone" "拉到镜像就不该克隆源码"
+
+# --- auto 模式拉不到镜像时退回源码构建 ---
+setup_case
+source_script
+export DOCKER_PULL_FAIL=1
+Docker_IMG="mereith/van-blog:latest"
+prepare_vanblog_image >"${TEST_DIR}/prep2.log" 2>&1
+RC=$?
+OUT="$(cat "${TEST_DIR}/prep2.log")"
+assert_eq "${RC}" "0" "拉不到镜像时退回源码构建仍然成功"
+assert_eq "${Docker_IMG}" "vanblog:dev-dsh" "退回源码构建后 Docker_IMG 是本地 tag"
+assert_file_contains "${CMDLOG}" "docker build" "退回路径确实构建了"
+assert_contains "${OUT}" "源码构建" "退回时日志里说清楚"
+unset DOCKER_PULL_FAIL
+
+# --- image 模式：拉不到就直接失败，绝不偷偷构建（用户明确说了只要镜像）---
+setup_case
+source_script
+export VANBLOG_INSTALL_MODE=image
+export DOCKER_PULL_FAIL=1
+OUT="$(prepare_vanblog_image 2>&1)"
+if [[ $? -ne 0 ]]; then pass "image 模式拉不到镜像时返回非 0"; else fail "image 模式拉不到镜像时返回非 0"; fi
+assert_not_contains "$(cat "${CMDLOG}")" "docker build" "image 模式不会退回构建"
+unset DOCKER_PULL_FAIL
+
+# --- source 模式：一次 pull 都不发 ---
+setup_case
+source_script
+export VANBLOG_INSTALL_MODE=image
+prepare_vanblog_image >/dev/null 2>&1
+assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:dev-dsh" "image 模式用指定的镜像地址"
+setup_case
+source_script
+export VANBLOG_INSTALL_MODE=source
+prepare_vanblog_image >/dev/null 2>&1
+assert_eq "${Docker_IMG}" "vanblog:dev-dsh" "source 模式用本地构建的 tag"
+assert_not_contains "$(cat "${CMDLOG}")" "docker pull" "source 模式不拉镜像"
+
+# --- 自定义镜像地址（自己的 registry / 特定 sha）---
+setup_case
+source_script
+export VANBLOG_IMAGE_REF="ghcr.io/ckboss/vanblog:dev-dsh-abc1234"
+prepare_vanblog_image >/dev/null 2>&1
+assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:dev-dsh-abc1234" "VANBLOG_IMAGE_REF 生效"
+assert_file_contains "${CMDLOG}" "pull ghcr.io/ckboss/vanblog:dev-dsh-abc1234" "按自定义地址拉取"
+unset VANBLOG_IMAGE_REF
+
+# --- 上游官方镜像仍然优先级最高 ---
+setup_case
+source_script
+export VANBLOG_USE_UPSTREAM_IMAGE=true
+Docker_IMG="mereith/van-blog:latest"
+prepare_vanblog_image >/dev/null 2>&1
+assert_eq "${Docker_IMG}" "mereith/van-blog:latest" "VANBLOG_USE_UPSTREAM_IMAGE=true 时不碰 ghcr"
+assert_not_contains "$(cat "${CMDLOG}")" "pull ghcr.io" "上游镜像模式不会去拉本分支镜像"
+unset VANBLOG_USE_UPSTREAM_IMAGE
+
+# --- 编排文件里写的是 ghcr 地址（含斜杠，sed 分隔符是 | ）---
+setup_case
+source_script
+prepare_vanblog_image >/dev/null 2>&1
+cp "${TEMPLATE_FIXTURE}" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
+ensure_compose_image
+assert_file_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "image: ghcr.io/ckboss/vanblog:dev-dsh" "编排文件写入 ghcr 镜像"
+assert_file_not_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "mereith/van-blog" "编排文件不再指向官方镜像"
+
+# --- 发布 workflow：用 GITHUB_TOKEN，不需要额外 secret ---
+WORKFLOW="${ROOT}/.github/workflows/publish-ghcr.yml"
+if [[ -f "${WORKFLOW}" ]]; then
+  pass "存在 publish-ghcr workflow"
+  assert_file_contains "${WORKFLOW}" "packages: write" "workflow 有推包权限"
+  assert_file_contains "${WORKFLOW}" "ghcr.io" "推到 ghcr.io"
+  assert_file_contains "${WORKFLOW}" "secrets.GITHUB_TOKEN" "用自带的 GITHUB_TOKEN（不需要配 secret）"
+  assert_not_contains "$(cat "${WORKFLOW}")" "DOCKERHUB_TOKEN" "不再依赖上游的 Docker Hub 凭据"
+  assert_file_contains "${WORKFLOW}" "VAN_BLOG_VERSIONS" "构建时写入版本号"
+  assert_file_contains "${WORKFLOW}" "VAN_BLOG_BUILD_SERVER" "构建时传入 server 地址（空值会让 next build 挂）"
+  assert_file_contains "${WORKFLOW}" "VAN_BLOG_NPM_REGISTRY" "构建时指定 pnpm 源"
+  assert_file_contains "${WORKFLOW}" "cache-from: type=gha" "用 Actions 缓存加速重建"
+  assert_file_contains "${WORKFLOW}" "Public" "提醒把 package 可见性改成 Public（否则别人拉不动）"
+else
+  fail "缺少 .github/workflows/publish-ghcr.yml"
+fi
+
 
 echo
 echo "passed=${PASS} failed=${FAIL}"

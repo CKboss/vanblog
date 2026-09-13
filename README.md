@@ -55,7 +55,7 @@
 <td><b>内置评论系统</b></td><td>不再必须外挂 Waline：评论存在本站 Mongo、走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/批量/按状态与关键词筛选）。可选 <code>内置 / Waline / 关闭</code>，<b>老站点升级默认保持 Waline</b>；支持从 Waline 导出文件<b>一键导入</b>（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞）与<b>只导出已通过评论</b></td><td><a href="docs/features/comment.md">评论系统</a></td></tr>
 <tr><td rowspan="2">观感与部署</td>
 <td><b>Apple 风格前台皮肤</b></td><td>后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 <code>[data-ui="apple"]</code> 作用域，不影响自定义 CSS；深浅色都有令牌可调；列表页有<b>缩略图</b>（没设封面就取正文首图，自动用 300px 缩略图；没图的文章就是<b>纯文字卡</b>，不放假图；后台可<b>一键从正文首图批量补封面</b>，先预览、可逐篇取消、可精确撤销）、<b>标签彩色胶囊</b>（色相由标签名哈希，同名同色）、渐变作者条；深色模式重做了表面层级（顶边高光 + 1px 环，因为纯黑底上投影看不见），不再只有黑白灰；全站字体为 <b>Maple Mono</b>（写在 <code>--ap-font</code> / <code>--ap-font-mono</code> 令牌里，远程字体<b>非阻塞</b>加载，加载不上会自动退回 SF Pro / 苹方 / 雅黑）；<b>后台编辑器预览同字体</b>，所见即所得</td><td><a href="docs/features/config.md">配置</a></td></tr>
-<tr><td><b>一键安装装的是本分支</b></td><td>脚本从 <code>CKboss/vanblog</code> 的 <code>dev/dsh</code> 克隆源码并本地 <code>docker build</code>（本分支没有发布镜像）。上游脚本拉的是官方镜像，<b>不含这里的任何改动</b></td><td><a href="#一键脚本部署">部署</a></td></tr>
+<tr><td><b>一键安装装的是本分支</b></td><td>脚本默认 <code>docker pull ghcr.io/ckboss/vanblog:dev-dsh</code>（GitHub Actions 构建发布，<b>小机器也能装</b>）；拉不到时自动退回「克隆源码 + 本地构建」，并按实测 CPU/内存决定并发还是串行。上游脚本拉的是官方镜像，<b>不含这里的任何改动</b></td><td><a href="#一键脚本部署">部署</a></td></tr>
 </table>
 
 ### 修掉的 bug（都是真实撞到的）
@@ -205,7 +205,7 @@
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **57 文件 / 543** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **82 套件 / 326** 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **9 文件 / 394** 条断言 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **9 文件 / 426** 条断言 |
 
 三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 
@@ -272,10 +272,16 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 ::: warning 装的是本分支，不是上游镜像
 
 上游那份脚本（`vanblog.mereith.com/vanblog.sh`）拉的是官方镜像 `mereith/van-blog:latest`，
-里面**没有**本 fork 的任何改动。本分支没有发布 Docker 镜像，所以这里的脚本改成：
-**克隆 `CKboss/vanblog` 的 `dev/dsh` → 本地 `docker build` → 用本地 tag 起容器**。
-首次构建大约 5–20 分钟（多阶段：admin / server / website 各自 `pnpm i` + build），
-之后 `./vanblog.sh update` 会拉最新源码重新构建；构建失败不会动正在跑的容器。
+里面**没有**本 fork 的任何改动。这里的脚本装的是 `CKboss/vanblog` 的 `dev/dsh`：
+
+1. **默认先拉镜像**：`ghcr.io/ckboss/vanblog:dev-dsh`（由 `.github/workflows/publish-ghcr.yml`
+   在 GitHub 的 runner 上构建发布）。本机只需要 `docker pull`，**1C1G 的小机器也装得动**。
+2. **拉不到就自动退回源码构建**（镜像还没发布、网络到不了 ghcr.io、或没有对应架构的镜像）：
+   克隆 `dev/dsh` → 本地 `docker build` → 用本地 tag 起容器。构建前会实测 CPU 与可用内存，
+   决定并发还是串行、admin 用 4096MB 还是 1536MB 的堆；可用内存不足 1.8GB 时直接劝退
+   （并给出「用官方镜像」与「强行构建」两条出路），不让你白等 20 分钟。
+
+之后 `./vanblog.sh update` 会拉新镜像（或重新构建）；失败不会动正在跑的容器。
 
 :::
 
@@ -287,7 +293,9 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 | `VANBLOG_BRANCH` | `dev/dsh` | 分支 |
 | `VANBLOG_SRC_DIR` | `/var/vanblog/src` | 源码目录（构建缓存，可反复更新） |
 | `VANBLOG_IMAGE_TAG` | `vanblog:dev-dsh` | 本地构建出的镜像 tag |
-| `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 就回到官方镜像（不含本分支改动） |
+| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:dev-dsh` | 本分支镜像地址（可换成自己的 registry 或某个 sha 标签） |
+| `VANBLOG_INSTALL_MODE` | `auto` | `auto` 先拉镜像、失败退回源码构建；`image` 只拉（拉不到就报错）；`source` 只本地构建 |
+| `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 就回到官方镜像（不含本分支改动，优先级最高） |
 | `VANBLOG_BUILD_SERVER` | 空 | 构建期写入前台访问后端的地址（`VAN_BLOG_SERVER_URL`） |
 
 ```bash

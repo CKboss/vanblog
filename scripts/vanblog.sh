@@ -14,11 +14,20 @@ VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-\/var\/vanblog\/data}"
 VANBLOG_SCRIPT_VERSION="v0.4.0"
 
 # ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
-# 本分支（CKboss/vanblog 的 dev/dsh）**没有发布 Docker 镜像**，所以一键安装做的是：
-#   克隆源码 → 本地 docker build → 用本地 tag 起容器
-# 而不是去拉官方的 mereith/van-blog:latest（那是上游 master，不含本分支的改动）。
-# 想回到官方镜像：VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh
-# 想换分支/换仓库：VANBLOG_BRANCH=xxx VANBLOG_REPO=xxx ./vanblog.sh
+# 装的是本分支（CKboss/vanblog 的 dev/dsh），**不是**官方的 mereith/van-blog:latest
+# （那是上游 master，不含本分支的任何改动）。
+#
+# 默认走「拉镜像」：ghcr.io/ckboss/vanblog:dev-dsh 由 .github/workflows/publish-ghcr.yml
+# 在 GitHub 的 runner 上构建并发布，本机只需要 docker pull —— 这样 1C1G 的小机器也能装
+# （源码构建要跑 umi + next 的生产构建，峰值 1.5-4GB，小机器必挂）。
+#
+# 拉不到就**自动退回源码构建**（镜像还没发布 / 网络不通 ghcr / 架构没有对应镜像，
+# 比如只发布了 amd64 而机器是 arm64）。也可以手动指定：
+#   VANBLOG_INSTALL_MODE=image   ./vanblog.sh   # 只拉镜像，拉不到就报错
+#   VANBLOG_INSTALL_MODE=source  ./vanblog.sh   # 只源码构建（改了代码想自己出一个镜像时）
+#   VANBLOG_IMAGE_REF=<ref>      ./vanblog.sh   # 换镜像地址（自己的 registry / 特定 sha）
+#   VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh  # 用上游官方镜像（不含本分支改动）
+# 想换分支/换仓库（只对源码构建有意义）：VANBLOG_BRANCH=xxx VANBLOG_REPO=xxx ./vanblog.sh
 VANBLOG_REPO="${VANBLOG_REPO:-https://github.com/CKboss/vanblog.git}"
 VANBLOG_BRANCH="${VANBLOG_BRANCH:-dev/dsh}"
 VANBLOG_SRC_DIR="${VANBLOG_SRC_DIR:-${VANBLOG_BASE_PATH}/src}"
@@ -38,6 +47,10 @@ VANBLOG_SRC_COMMIT=""
 #     lowmem   串行构建，admin 堆上限 1536MB（<3.5GB 内存）
 #   VANBLOG_FORCE_BUILD=true   内存太小本来会劝退，加这个就照跑（后果自负）
 #   VANBLOG_NPM_REGISTRY=<url> 留空则自动探测（见 detect_npm_registry）
+# 本分支镜像的地址（由 publish-ghcr workflow 推送）
+VANBLOG_IMAGE_REF="${VANBLOG_IMAGE_REF:-ghcr.io/ckboss/vanblog:dev-dsh}"
+# auto=先拉镜像，拉不到退回源码构建；image=只拉；source=只构建
+VANBLOG_INSTALL_MODE="${VANBLOG_INSTALL_MODE:-auto}"
 VANBLOG_BUILD_MODE="${VANBLOG_BUILD_MODE:-auto}"
 VANBLOG_FORCE_BUILD="${VANBLOG_FORCE_BUILD:-false}"
 VANBLOG_NPM_REGISTRY="${VANBLOG_NPM_REGISTRY:-}"
@@ -463,14 +476,53 @@ build_vanblog_image() {
 }
 
 # 安装与更新都走这里：源码模式下把 Docker_IMG 换成本地构建出来的 tag
+# 拉本分支的镜像。返回非 0 表示拉不到（还没发布 / 不通 ghcr / 架构不匹配）。
+pull_fork_image() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo -e "${red}未找到 docker，无法拉取镜像${plain}"
+    return 1
+  fi
+  echo -e "> 拉取本分支镜像 ${yellow}${VANBLOG_IMAGE_REF}${plain}"
+  if docker pull "${VANBLOG_IMAGE_REF}"; then
+    return 0
+  fi
+  echo -e "${yellow}  拉取失败（镜像可能还没发布、网络到不了 ghcr.io，或没有对应架构的镜像）${plain}"
+  return 1
+}
+
+# 源码构建（克隆 + 本地 docker build）。低配机器上很慢且可能 OOM，见 choose_build_profile。
+build_from_source() {
+  clone_or_update_source || return 1
+  build_vanblog_image || return 1
+  Docker_IMG="${VANBLOG_IMAGE_TAG}"
+  return 0
+}
+
 prepare_vanblog_image() {
   if use_upstream_image; then
     echo -e "> 按 VANBLOG_USE_UPSTREAM_IMAGE=true 使用官方镜像 ${yellow}${Docker_IMG}${plain}（不含本分支改动）"
     return 0
   fi
-  clone_or_update_source || return 1
-  build_vanblog_image || return 1
-  Docker_IMG="${VANBLOG_IMAGE_TAG}"
+  case "${VANBLOG_INSTALL_MODE}" in
+    image)
+      pull_fork_image || return 1
+      Docker_IMG="${VANBLOG_IMAGE_REF}"
+      ;;
+    source)
+      echo -e "> 按 VANBLOG_INSTALL_MODE=source 走源码构建"
+      build_from_source || return 1
+      ;;
+    *)
+      # auto：先试镜像（几秒钟的事），拉不到再退回源码构建（十几分钟起）
+      if pull_fork_image; then
+        Docker_IMG="${VANBLOG_IMAGE_REF}"
+      else
+        echo -e "> 退回${yellow}源码构建${plain}（首次约 15-40 分钟，取决于机器与网络）"
+        build_from_source || return 1
+      fi
+      ;;
+  esac
+  echo -e "> 将使用镜像 ${yellow}${Docker_IMG}${plain}"
   return 0
 }
 
