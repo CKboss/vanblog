@@ -460,6 +460,49 @@ else
   pass "模板里没有写死的 mongo:4.4"
 fi
 
+
+# ---------- 10) caddy 两个 server（:443 与 :80）的路由必须对齐 ----------
+# 真实事故：/robots.txt 只加进了 srv0(:443)，srv1(:80) 没有 → HTTP 访问 robots.txt 落到
+# catch-all 被转给前台，返回 404（而 server 自己是 200）。HTTPS 正常、HTTP 不正常，很难查。
+"${PY}" - "${ROOT}/caddyTemplate.json" <<'PYROUTES' >"${TMP}.routes" 2>&1
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+servers = d["apps"]["http"]["servers"]
+def paths(srv):
+    out = set()
+    for r in srv.get("routes", []):
+        for m in r.get("match", []) or []:
+            for p in m.get("path", []) or []:
+                out.add(p)
+    return out
+names = sorted(servers)
+sets = {n: paths(servers[n]) for n in names}
+base = set.intersection(*sets.values()) if sets else set()
+bad = []
+for n in names:
+    missing = base - sets[n]
+    extra = sets[n] - base
+    if missing:
+        bad.append("%s 缺少其它 server 都有的路由: %s" % (n, sorted(missing)))
+for must in ["/robots.txt", "/sitemap.xml", "/api/*", "/static/*", "/admin*"]:
+    for n in names:
+        if must not in sets[n]:
+            bad.append("%s 没有 %s 路由" % (n, must))
+for b in bad:
+    print("bad " + b)
+if not bad:
+    print("ok %d 个 server(%s) 的路径路由完全对齐，共 %d 条" % (len(names), ",".join(names), len(base)))
+PYROUTES
+while read -r st rest; do
+  case "${st}" in
+    ok) pass "caddy 路由：${rest}" ;;
+    bad) fail "caddy 路由：${rest}" ;;
+    "") ;;
+    *) fail "无法解析的路由检查输出：${st} ${rest}" ;;
+  esac
+done <"${TMP}.routes"
+rm -f "${TMP}.routes"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

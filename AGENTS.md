@@ -2599,7 +2599,79 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
    只是**一个包都不装**，然后在 `next build` 才炸，错误信息完全指不到根因 ——
    现在有测试会拿每个 `packages/*/package.json` 的 name 去核对 Dockerfile 里的过滤名。
 
-**测试**：`scripts/tests/build-image-local.test.sh`（34 条静态契约）—— 构建参数必须和 CI 一致
+### 7.32.1 本地真跑一遍（构建 → 起栈 → 导入整站备份 → 验证）抓到的 6 个问题
+
+`vanblog_dev/pipeline.sh`（本机脚本，不入库）把「预拉基础镜像 → 构建 → 起 mongo+vanblog →
+首次初始化 → 用 server 接口导入 `vanblog-full-*.tar.zst` → 逐项验证」串成一条。
+第一遍跑下来，**单元测试和 CI 构建全绿的情况下**，站点仍然是坏的 —— 下面每一条都是只有
+真把镜像跑起来才会暴露的：
+
+1. **Caddy 2.11 换了 on-demand TLS 的写法**：`tls.automation.on_demand.ask` 被
+   `on_demand.permission = {module:"http", endpoint:...}` 取代，旧写法让 caddy **拒绝加载整份配置**
+   （`on-demand TLS cannot be enabled without a permission module to prevent abuse`），
+   于是走降级配置：HTTP 能用、HTTPS 变自签证书。
+   修法不是猜版本，而是 `scripts/caddyConfig.js` 生成两种形式、entrypoint 各跑一次
+   `caddy validate`，用通过的那个（新形式的结构是拿镜像里 `caddy adapt` 的输出对照出来的，
+   不是猜的）。邮箱替换也搬进这个脚本，在**解析后的对象**上改，不再用 sed。
+2. **前台整站 502，而 /admin 与 /api 正常**：Next 13 的 standalone server 用 `HOSTNAME`
+   决定监听地址，容器里 `HOSTNAME` 就是容器 ID → 它只绑那个网卡 IP，
+   而 caddy 反代的是 `127.0.0.1:3001` → 502。修法是 `WebsiteProvider` spawn 时显式
+   `HOSTNAME: '0.0.0.0'`（放在 `...loadEnvs` 之后，保证不被覆盖；可用 `VANBLOG_WEBSITE_HOST` 改）。
+3. **`/robots.txt` 404**：动态 robots 是 server 提供的（`3000/robots.txt` → 200），
+   但 caddy 模板里没有这条路由，落到 catch-all 转给前台 → 404。
+   ⚠️ 而且模板里有**两个 server**：`srv0(:443)` 和 `srv1(:80)`，只补 srv0 的话
+   "HTTPS 正常、HTTP 404"，更难查。现在两个都补了，并且加了守卫测试：
+   **两个 server 的路径路由必须完全对齐**（`/robots.txt`、`/sitemap.xml`、`/api/*`、`/static/*`、`/admin*` 逐个点名）。
+4. **中文别名的文章 500**（这份生产数据里 16 篇）：SEO 那轮加的规范地址 308 重定向
+   把 `Location: /post/<pathname>` 直接塞了中文，而 HTTP 头只能是 Latin-1 →
+   Node `setHeader` 抛 `Cannot convert argument to a ByteString` → 整篇 500。
+   新增 `utils/encodeLocationPath.ts`：纯 ASCII 原样返回（避免把已编码的 `%xx` 再编成 `%25xx`），
+   含非 ASCII 时按 `/` 分段 `encodeURIComponent`。**假数据永远测不出这个**，
+   所以既加了工具的单测，也加了"重定向必须过这个函数"的源码守卫，
+   还在本机栈里用真实数据里那篇 `Qt自定义控件与提升法(prompted)` 跑通了 200。
+5. **waline 装不上（Node 20 的连带后果）**：`@waline/vercel` → `think-model-sqlite` → `sqlite3@5.1.7`，
+   而 sqlite3 5.1.7 **没有 Node 20（ABI 115）的预编译包**（node:18 时代有，所以以前不用编），
+   于是退回 node-gyp 现场编译 —— 而 runner 阶段故意不装编译器 → 构建失败。
+   修法：单独的 `waline_builder` 阶段装 `python3 make g++` 编好，runner 只 `COPY node_modules`，
+   **编译器不进最终镜像**。
+6. **sharp 只能靠环境变量改源**：它默认从 `github.com/lovell/sharp{,-libvips}/releases` 下预编译包，
+   国内 `Installation error: aborted`。翻它的 `install/libvips.js` 才确认它读的是
+   `process.env.npm_config_sharp_libvips_binary_host`，而 **pnpm 8 不会把 .npmrc 里的自定义键
+   转成 `npm_config_*` 传给 install 脚本** —— `npm config set -g` 和项目 `.npmrc` 两条路都试过，都没用，
+   只有 Dockerfile 的 `ENV` 有效。npmmirror 把两套二进制都镜像了、**musl 版也有**
+   （`/-/binary/sharp/v0.32.6/sharp-v0.32.6-napi-v7-linuxmusl-x64.tar.gz`、
+   `/-/binary/sharp-libvips/v8.14.5/libvips-8.14.5-linuxmusl-x64.tar.gz`，逐个 HEAD 过 200），
+   于是 server/website 两个 stage 都不再需要 gcc+vips-dev：**server 阶段的 apk 从 218 个包降到 1 个**。
+
+**这台机器上跑 rootless podman 的额外坑**（都属于环境，不进产品代码，但记下来省时间）：
+- `docker` 组是空的、daemon 却在跑 → `docker` 命令一律 EACCES；**podman 4.9.3 rootless 可用**
+  （`/etc/subuid` 有 `ckboss:100000:65536`），免 sudo。需要把 `XDG_RUNTIME_DIR`/`HOME`/`TMPDIR`
+  指到工作区里（默认 `/run/user/1000` 写不了），`registries.conf` 配镜像加速。
+- **公共加速站拉大 blob 会静默卡死**：`node:20`（350MB）在第 1 个站上超时、第 2 个站才成功；
+  `mongo:7.0` 试到第 6 次才成。所以 `pipeline.sh` 是多站轮换 + 每次 `timeout` + 拉完 `podman tag` 回标准名。
+  ⚠️ podman 4.9 的 `pull` **没有 `--retry`**（写了直接 rc=125）。
+- **容器内拉大包也会卡**：`apk add gcc/vips-dev`（218 个包）卡在 `Installing gcc` 十几分钟，
+  进程 `read/write` 都是 0 字节；小文件（APKINDEX、pnpm 的 2827 个包）却很快。
+  固定 MTU=1500、换 pasta 后端都没稳定解决 → 最终解法是**别在容器里下大包**（见上面第 6 条）。
+- **没有 aardvark-dns**（`/usr/libexec/podman/` 里只有 catatonit/quadlet/rootlessport），
+  所以自定义网络里**容器名解析不了**（server 报 `getaddrinfo EAI_AGAIN vb-mongo`）。
+  本机栈改成取 mongo 容器的 IP 直连 + `--add-host` 兜底。
+- **被 SIGTERM 打断的 `podman build` 会返回 0**：日志停在半截却打印"构建成功"。
+  所以 `build-image-local.sh` 在构建后必须再 `image exists` 确认一次。
+- 杀掉 `podman build` 之后，**容器里的进程会变成孤儿继续跑**（见过一个 `apk add` 挂了一个多小时），
+  下次构建会和它抢资源；清理时要按 PID 杀，别用 `pkill -f`（模式里带工作区路径会把自己杀掉，§6 第 4 条）。
+
+**验证结果**（本机 podman，镜像 `vanblog:local-test`，导入的是用户那份 66MB 生产整站备份）：
+初始化 → 登录 → `full/inspect` → `full/restore`（含静态文件）全部成功；
+前台首页/归档/关于/文章页/中文别名文章页、后台 `/admin`、`/api/public/meta`、
+`/sitemap.xml`、`/rss/feed.xml` 全部 200；库里 `articles`、`nativecomments`(3)、
+`waline.Comment`(3)、`users`（已被备份里的真实用户替换）、16 篇有封面的文章都在；
+容器 `RestartCount=0`、健康检查通过、日志里没有那 8 类已知故障特征
+（`Cannot find module` / `caddy process exited` / `loading initial config` / `Reached heap limit` /
+`ERR_INVALID_URL` / `降级使用` / `unhandledRejection` / `ByteString`）；
+恢复后自动触发全量渲染；`docker stop` 在宽限期内优雅退出（SIGTERM 转发验证）。
+
+**测试**：`scripts/tests/build-image-local.test.sh`（35 条静态契约）—— 构建参数必须和 CI 一致
 （四个 build-arg 一个都不能少，否则"本地测过了"是假的）、支持 `--target` 单层构建、
 引擎探测要看 `docker info` 而不是只看命令存在、冒烟测试必须覆盖上面那 6 个故障特征 +
 关键路径 + 停机耗时 + RestartCount、`trap cleanup EXIT` 在、默认端口 18080（不撞正在跑的站点）、
@@ -2613,7 +2685,7 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 14 文件 / 669 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 15 文件 / 709 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
