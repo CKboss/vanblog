@@ -69,7 +69,7 @@ assert_contains_in() {
   fi
 }
 
-assert_contains_in "${WEBSITE_STAGES}" "node:18-alpine" "website builder uses node:18-alpine"
+assert_contains_in "${WEBSITE_STAGES}" "node:20-alpine" "website builder uses node:20-alpine"
 assert_contains_in "${WEBSITE_STAGES}" "SHARP_IGNORE_GLOBAL_LIBVIPS=1" "website builder ignores Alpine system libvips"
 assert_contains_in "${WEBSITE_STAGES}" "vips-dev" "website builder installs vips-dev"
 assert_contains_in "${WEBSITE_STAGES}" "libc6-compat" "website builder installs libc6-compat"
@@ -90,7 +90,7 @@ fi
 python3 - "${DOCKERFILE}" <<'PY' && pass "SHARP_IGNORE_GLOBAL_LIBVIPS is set before website pnpm install" || fail "SHARP_IGNORE_GLOBAL_LIBVIPS is set before website pnpm install"
 import sys
 text = open(sys.argv[1], encoding="utf-8").read()
-start = text.find("FROM node:18-alpine AS website_builder")
+start = text.find("FROM node:20-alpine AS website_builder")
 end = text.find("\nFROM ", start + 1)
 if start < 0 or end < 0:
     raise SystemExit(1)

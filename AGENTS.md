@@ -2385,14 +2385,83 @@ waline 自动重启与上限与 stopping 标记、initJwt 重试、restore.key 0
 另外别把字面量旗标写进用户可见的提示语里（我写了"别用 --no-check-certificate 绕过"，
 结果守卫断言把它当成了"又关掉校验了"）。
 
-### 7.31 测试基线（本分支最后一次全量运行的结果）
+### 7.31 基础镜像与运行时版本对齐（哪些能升、哪些不能）
+
+用户问"Dockerfile 里的镜像是不是过时了、要不要和开发环境对齐"。答案是**部分过时，但不能一路升到最新** ——
+每一项都有一条具体的依赖链卡着。先把事实摆出来（2026-09）：
+
+| 组件 | 原来 | 现状 | 本机开发环境 | 这次怎么处理 |
+| --- | --- | --- | --- | --- |
+| Node（4 个 stage） | `node:18` / `node:18-alpine` | **2025-04 EOL**，无安全更新 | v20.19.5 | **升到 node:20** ✅ |
+| MongoDB（compose） | `mongo:4.4.16` | **2024-02 EOL**，无安全更新 | 7.0.14（FCV 6.0） | 模板改占位符，**新装 7.0 / 有数据保持原样** ✅ |
+| pnpm | 8.11.0（corepack + `packageManager`） | pnpm 8 已停维护，lockfile 是 v6.0 格式 | 8.11.0 | 不动 ⛔（见下） |
+| sharp | 0.32.6 | 0.32 线不再维护 | 0.32.6 | 不动 ⛔（与 Node 版本绑定） |
+| caddy | `apk add caddy`（不钉版本） | 每次构建都重新掷骰子 | — | 不动，但已有**降级模板**兜底（§7.28） |
+| NestJS / Next / umi | 9.x / 13.5 / 3.5 | 都落后好几个大版本 | 同左 | 不动 ⛔ |
+
+**为什么 Node 停在 20，不是 22 或 24**（两条硬约束，Dockerfile 里也写了注释，别让人顺手升上去）：
+
+1. **Node 23 移除了 `util.isObject`，而 `@nestjs/cli` 9 还在用它** → Node 24 上 `nest build` 直接崩。
+   本机开发环境固定在 node20 就是这个原因（§3.6）。
+2. **sharp 0.32.6 的预编译二进制只覆盖到 Node 20**（NODE_MODULE_VERSION 115）；Node 22 是 127 →
+   没有 prebuild，而 **runner 阶段没装 `vips-dev`**（只有 website_builder 装了），
+   于是图片处理会在运行时加载失败。要升 22 必须**同时**把 sharp 升到 0.33+ 并重新验证
+   Alpine/musl 的 prebuild（§7.10 有一整节讲 alpine + sharp 的坑）。
+
+Node 20 这一档是**本机验证过的**：server 610 用例、admin `umi build`（EXIT=0，dist 24MB）、
+website `next build`（EXIT=0，8 个页面）全在 v20.19.5 上跑通；`--openssl-legacy-provider`
+在 20 上照常需要且照常有效；sharp 0.32.6 有 Node 20 的 prebuild。
+⚠️ Node 20 本身也已经在 2026-04 EOL 了 —— 所以这只是"止损"，真正的目标是
+「sharp 0.33 + @nestjs/cli 10 + Node 22」一起升，那要单独一轮（见下面的路线图）。
+
+**MongoDB 为什么不能直接换 tag**：数据目录与 `featureCompatibilityVersion` 绑定，
+4.4 的 datadir 换成 `mongo:7.0` 起来，mongod 会**直接拒绝启动**（容器反复重启，看起来像数据全丢，
+其实把 tag 换回去就好了）。而且 mongoose 7.6 / driver 5.9 官方只支持到 server 7.0，
+`mongo:latest`（8.x）根本不是受支持的目标。
+
+所以做法是**把版本决定权交给脚本，按"有没有数据"分流**：
+
+- 模板里改成占位符 `vanblog_mongo_image`；
+- `pick_mongo_image()`：`${VANBLOG_DATA_PATH}/data/mongo` 里有真实数据
+  （`WiredTiger` / `mongod.lock` / `storage.bson` / `collection-*` / `index-*` / `_mdb_catalog.wt` /
+  `diagnostic.data`）→ **保持现有编排文件里的 tag**，连 `VANBLOG_MONGO_IMAGE` 覆盖都不听；
+  目录不存在或只有无关文件 → 用 `VANBLOG_MONGO_IMAGE`（默认 `mongo:7.0`）；
+- `config` 替换占位符并说明选了哪个；沿用的是 4.x/5.x 时额外打印两条升级路径
+  （阶梯 setFCV，或 `backup` → 空库 → `restore` 的整站备份迁移）；
+- 模板里没有占位符（比如回退到了上游的旧模板）时**不硬改**，只提示一句。
+- ⚠️ 备份迁移这条路是**自洽**的：迁移时新数据目录是空的，所以 `pick_mongo_image` 会自动给出新版本，
+  不需要用户去改代码或加特殊参数。
+- 老机器不支持 avx（跑不了 5.0+）：`VANBLOG_MONGO_IMAGE=mongo:4.4.16`。
+
+**这次刻意没升的（各自卡在哪）**：
+
+| 想升的东西 | 卡在哪 | 要怎么做 |
+| --- | --- | --- |
+| Node 22 | sharp 0.32.6 没有 Node 22 的 prebuild；runner 没装 vips-dev | sharp → 0.33.x，确认 musl prebuild，再升 node:22-alpine |
+| pnpm 9/10 | lockfile 是 v6.0，升 pnpm 会重写整个 lockfile（`patchedDependencies` 的 hash 也要重算） | 单独一轮：升 pnpm → `pnpm install` 重生成 lockfile → 验证两个补丁仍生效 → 全量测试 |
+| NestJS 10/11 | 装饰器与 `@nestjs/swagger` 6 的 API 变化、`multer` 版本、`mongoose` 版本联动 | 单独一轮，改动面很大 |
+| Next 14/15 | pages → app router、`next.config` 变化、ISR 行为变化；前台所有页面都要过一遍 | 单独一轮 |
+| umi 4 | 配置格式与插件体系全变（MFSU、`mfsu:{}`、两个 pnpm 补丁的必要性都要重新评估） | 单独一轮，最重 |
+| caddy 钉版本 | `apk add caddy=X-rN` 会随 Alpine 仓库滚动失效；钉官方 release 二进制要维护 sha256 | 已有降级模板兜底，优先级低 |
+
+**测试**：`image-runtime.test.sh` 加了"不许再出现 `FROM node:18`、四个 stage 都是 node:20、
+不许贸然出现 node:22+、Dockerfile 里必须写明为什么停在 20"；`vanblog-hardening.test.sh` 加了
+`get_compose_mongo_image` / `pick_mongo_image` 的七种情形（无数据、有数据、有数据+覆盖、
+空目录、只有无关文件、读现有 tag、默认值）；`vanblog-source-install.test.sh` 的 config 模拟
+补上了 mongo 占位符替换，并断言生成的编排文件里**没有残留占位符**、`image:` 行不是 mongo:4.x。
+⚠️ 那条断言只能用 `^[[:space:]]*image:[[:space:]]*mongo:4\.` 判断 —— 模板注释里正好写着
+`mongo:4.4.16`（讲升级路径），全文搜子串会把注释当成配置命中（又一次"断言前要剥注释"的变体）。
+⚠️ 升 Node 之后 `dockerfile-alpine-sharp.test.sh` 里三处写死的 `node:18-alpine` 也要跟着改，
+不然它会红 —— 那个测试是按 stage 名切 Dockerfile 正文的，基础镜像名写死在里面。
+
+### 7.32 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 13 文件 / 610 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 13 文件 / 626 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2402,7 +2471,7 @@ waline 自动重启与上限与 stopping 标记、initJwt 重试、restore.key 0
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.31 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.32 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

@@ -57,7 +57,10 @@ services:
       - 443:443
   mongo:
     # 某些机器不支持 avx 会报错，所以默认用 v4 版本。有的话用最新的。
-    image: mongo:4.4.16
+    # 全新部署用 7.0；如果你的数据目录是 4.4 时代建起来的，**保持 4.4.16**，
+    # 直接换 tag 会让 mongod 拒绝启动（见 docker-compose-template.yml 里的说明）。
+    # 老机器不支持 avx 也只能用 4.4。
+    image: mongo:7.0
     restart: always
     logging:
       # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：

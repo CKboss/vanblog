@@ -143,6 +143,7 @@
 | `VANBLOG_FORCE_BUILD` | `false` | 可用内存 <1.8GB 时脚本会**直接劝退**（源码构建几乎必然 OOM）；设 `true` 强行构建 |
 | `VANBLOG_NPM_REGISTRY` | 空（自动探测） | 构建用的 pnpm 源。留空时脚本会实测 `npmmirror` 与 `npmjs` 的延迟，取更快的那个 |
 | `VAN_BLOG_ADMIN_BUILD_SCRIPT` | `build` | Dockerfile 的构建参数：admin 用 `build`（堆 4096MB）还是 `build:lowmem`（1536MB） |
+| `VANBLOG_MONGO_IMAGE` | `mongo:7.0` | **只在全新安装时生效**：已有 MongoDB 数据的安装会保持原 tag（换大版本 mongod 会拒绝启动）。老机器不支持 avx 就设 `mongo:4.4.16` |
 
 ### 版本号（页脚与后台「关于」显示的那个）
 
@@ -205,7 +206,7 @@
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **57 文件 / 543** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **82 套件 / 326** 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **13 文件 / 610** 条断言 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **13 文件 / 626** 条断言 |
 
 三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 

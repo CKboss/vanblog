@@ -52,13 +52,18 @@ services:
       - vanblog_http_port:80
       - vanblog_https_port:443
   mongo:
-    # 某些机器不支持 avx 会报错，所以默认用 v4 版本。有的话用最新的。
-    # ⚠️ 4.4 已经 EOL（不再有安全更新），但**不要随手升大版本**：数据目录与
-    # featureCompatibilityVersion 绑定，4.4 → 5.0 → 6.0 要逐级升且每级都要改 FCV，
-    # 直接换镜像 tag 会让 mongod 拒绝启动（表现是容器反复重启）。
-    # 真要升级：先用后台「整站备份」导出 vanblog-full-* 归档（NDJSON，跨版本可恢复），
-    # 换新 tag 起一个空库，再用 ./vanblog.sh restore 恢复。
-    image: mongo:4.4.16
+    # 这个 tag 由 ./vanblog.sh 在生成编排文件时填入（占位符 vanblog_mongo_image）：
+    #   - **全新安装** → mongo:7.0（4.4 早在 2024-02 就 EOL 了，没有安全更新；
+    #     mongoose 7.6 / driver 5.9 官方支持到 7.0，本机开发环境也是 7.0.14）
+    #   - **已有数据** → 保持你现在用的那个 tag，绝不擅自改
+    # ⚠️ 为什么不能随手升：数据目录与 featureCompatibilityVersion 绑定，
+    #   4.4 → 8.x 没有直升路径，直接换 tag 会让 mongod 拒绝启动（容器反复重启，
+    #   看起来像数据全丢）。要升级只有两条路：
+    #     a) 阶梯升级 5.0 → 6.0 → 7.0，每级都要 setFCV；
+    #     b) 用整站备份迁移：./vanblog.sh backup（NDJSON，跨版本可恢复）→
+    #        换新 tag 起一个空库 → ./vanblog.sh restore <归档名>。
+    #   某些老机器不支持 avx，跑不了 5.0+，那种情况用 VANBLOG_MONGO_IMAGE=mongo:4.4.16 指定。
+    image: vanblog_mongo_image
     restart: always
     logging:
       # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：

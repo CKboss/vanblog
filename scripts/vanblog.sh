@@ -55,6 +55,12 @@ VANBLOG_SRC_COMMIT=""
 #   VANBLOG_NPM_REGISTRY=<url> 留空则自动探测（见 detect_npm_registry）
 # 本分支镜像的地址（由 publish-ghcr workflow 推送）
 VANBLOG_IMAGE_REF="${VANBLOG_IMAGE_REF:-ghcr.io/ckboss/vanblog:dev-dsh}"
+# 全新安装时用的 MongoDB 镜像。mongo 4.4 在 2024-02 就 EOL 了（没有安全更新），
+# 而 mongoose 7.6 / driver 5.9 官方支持到 7.0，本机开发环境跑的也是 7.0.14。
+# ⚠️ 这个值**只在全新安装时生效**：已有数据目录的安装会保持原 tag（见 pick_mongo_image），
+# 因为数据目录与 featureCompatibilityVersion 绑定，直接换大版本 mongod 会拒绝启动。
+# 老机器不支持 avx（跑不了 5.0+）就设 VANBLOG_MONGO_IMAGE=mongo:4.4.16。
+VANBLOG_MONGO_IMAGE="${VANBLOG_MONGO_IMAGE:-mongo:7.0}"
 # auto=先拉镜像，拉不到退回源码构建；image=只拉；source=只构建
 VANBLOG_INSTALL_MODE="${VANBLOG_INSTALL_MODE:-auto}"
 VANBLOG_BUILD_MODE="${VANBLOG_BUILD_MODE:-auto}"
@@ -106,6 +112,38 @@ get_compose_vanblog_image() {
     in_svc && $1 ~ /^[a-zA-Z0-9_]+:$/ && $1 != "image:" { in_svc=0 }
     in_svc && $1 == "image:" { print $2; exit }
   ' "${compose_file}"
+}
+
+# 现有编排文件里 mongo 用的镜像（没有编排文件时输出空）
+get_compose_mongo_image() {
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  [[ -f "${compose_file}" ]] || return 0
+  awk '
+    /^[[:space:]]*mongo:[[:space:]]*$/ { in_svc=1; next }
+    in_svc && /^[[:space:]]*image:[[:space:]]*/ { print $2; exit }
+    in_svc && /^[[:space:]]{0,4}[A-Za-z0-9_-]+:[[:space:]]*$/ { in_svc=0 }
+  ' "${compose_file}"
+}
+
+# mongo 数据目录里有没有真实数据（决定能不能换版本）
+mongo_datadir_has_data() {
+  local dir="${VANBLOG_DATA_PATH}/data/mongo"
+  [[ -d "${dir}" ]] || return 1
+  ls -A "${dir}" 2>/dev/null |
+    grep -qE '^(WiredTiger|mongod\.lock|storage\.bson|collection-|index-|_mdb_catalog\.wt|diagnostic\.data)'
+}
+
+# 挑 mongo 镜像：
+#   已有数据 → **保持现有 tag**（换大版本 mongod 会拒绝启动，看起来像数据全丢）
+#   全新安装 → VANBLOG_MONGO_IMAGE（默认 mongo:7.0）
+pick_mongo_image() {
+  local existing
+  existing="$(get_compose_mongo_image)"
+  if [[ -n "${existing}" && "${existing}" != "vanblog_mongo_image" ]] && mongo_datadir_has_data; then
+    printf '%s' "${existing}"
+    return 0
+  fi
+  printf '%s' "${VANBLOG_MONGO_IMAGE}"
 }
 
 align_compose_latest_image() {
@@ -986,6 +1024,26 @@ config() {
   sed -i "s|vanblog_email|${email_sed}|g" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
   sed -i "s/vanblog_http_port/${vanblog_http_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   sed -i "s/vanblog_https_port/${vanblog_https_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
+  # mongo 版本：已有数据就保持现状，全新安装才用新默认值
+  local mongo_image
+  mongo_image="$(pick_mongo_image)"
+  if grep -q "vanblog_mongo_image" "${VANBLOG_BASE_PATH}/docker-compose.yaml"; then
+    sed -i "s|vanblog_mongo_image|${mongo_image}|g" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  else
+    echo -e "${yellow}> 编排模板里没有 vanblog_mongo_image 占位符（可能是上游旧模板），mongo 版本保持模板原样${plain}"
+  fi
+  if mongo_datadir_has_data; then
+    echo -e "> 检测到已有 MongoDB 数据，沿用 ${yellow}${mongo_image}${plain}（不擅自升级大版本）"
+    case "${mongo_image}" in
+    mongo:4.* | mongo:5.*)
+      echo -e "${yellow}  ${mongo_image} 已经 EOL（无安全更新）。升级只有两条路：${plain}"
+      echo -e "${yellow}    a) 阶梯升级 5.0 → 6.0 → 7.0，每级都要 setFCV；${plain}"
+      echo -e "${yellow}    b) 整站备份迁移：$0 backup → VANBLOG_MONGO_IMAGE=mongo:7.0 起空库 → $0 restore <归档名>${plain}"
+      ;;
+    esac
+  else
+    echo -e "> 全新安装，MongoDB 用 ${yellow}${mongo_image}${plain}（可用 VANBLOG_MONGO_IMAGE 覆盖；老机器不支持 avx 就设 mongo:4.4.16）"
+  fi
   # sed -i "s/vanblog_domains/${vanblog_domains}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   # sed -i "s/vanblog_version/${vanblog_version}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   # 用 | 作分隔符：镜像名里带 / （官方镜像、或自定义 tag 如 ckboss/vanblog:dev-dsh）时，

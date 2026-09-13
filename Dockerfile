@@ -1,6 +1,17 @@
 # 具体每个服务的去看 packages 里面的 Dockerfile
 # 这个是 all in one 的。
 #
+# ── 基础镜像版本为什么是 node:20 ──────────────────────────────────────────
+# Node 18 已于 2025-04 EOL（不再有安全更新），所以四个 stage 全部升到 20。
+# **没有直接上 22/24**，因为两条硬约束：
+#   1. Node 23 移除了 `util.isObject`，而 @nestjs/cli 9 还在用它 →
+#      Node 24 上 `nest build` 直接崩（本机开发环境就是因此固定在 node20，见 AGENTS §3.6）。
+#   2. sharp 0.32.6 的预编译二进制只覆盖到 Node 20（NODE_MODULE_VERSION 115）；
+#      Node 22 是 127 → 没有 prebuild，而 runner 阶段没装 vips-dev，
+#      图片处理会在运行时加载失败。要升 22 必须同时把 sharp 升到 0.33+。
+# Node 20 这一档是**本机开发环境验证过的**（node v20.19.5：server 610 用例、
+# admin `umi build`、website `next build` 全通过），sharp 0.32.6 也有 20 的 prebuild。
+#
 # 全局构建参数（⚠️ BuildKit 的规则：FROM 之前声明的 ARG 属于"全局"，
 #   在具体 stage 里要用必须**再 ARG 一次**，否则取到的是空值）。
 #   scripts/vanblog.sh 会自动探测本机网络与配置后传这些参数。
@@ -14,7 +25,7 @@
 ARG VAN_BLOG_NPM_REGISTRY=https://registry.npmmirror.com
 ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build
 
-FROM node:18-alpine AS admin_builder
+FROM node:20-alpine AS admin_builder
 ARG VAN_BLOG_NPM_REGISTRY
 ARG VAN_BLOG_ADMIN_BUILD_SCRIPT
 # ⚠️ 这里的 NODE_OPTIONS 对 `pnpm build` **不起作用**：admin 的 build 脚本是
@@ -59,7 +70,7 @@ RUN pnpm install --frozen-lockfile
 WORKDIR /app/packages/admin
 RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}
 
-FROM node:18 AS server_builder
+FROM node:20 AS server_builder
 ARG VAN_BLOG_NPM_REGISTRY
 ENV NODE_OPTIONS=--max_old_space_size=4096
 WORKDIR /app
@@ -75,7 +86,7 @@ RUN pnpm build
 
 # 前台：Alpine + sharp。musl 版本号可能是 1.2.4_git*，sharp 0.31 会报
 # Installation error: Invalid Version。用 0.32.6 + 官方 musl prebuild，并装 vips 编译兜底。
-FROM node:18-alpine AS website_builder
+FROM node:20-alpine AS website_builder
 ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
@@ -109,7 +120,7 @@ RUN pnpm build:website
 
 
 #运行容器
-FROM node:18-alpine AS runner
+FROM node:20-alpine AS runner
 ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 # zstd / xz：后台「整站备份」默认用 zstd -19（其次 xz，最后才 gzip），

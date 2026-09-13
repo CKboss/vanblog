@@ -47,6 +47,12 @@
      --build-arg VAN_BLOG_ADMIN_BUILD_SCRIPT=build \
      -t vanblog:dev-dsh .
 
+   # ⚠️ MongoDB 的版本不能随手换：数据目录与 featureCompatibilityVersion 绑定，
+   #    4.4 的数据目录换成 mongo:7.0 会让 mongod 直接拒绝启动（看起来像数据全丢）。
+   #    要升级走「整站备份 → 新 tag 起空库 → 恢复」，或 5.0→6.0→7.0 阶梯升级并逐级 setFCV。
+   #    另外 mongoose 7.6 / driver 5.9 官方只支持到 server 7.0，不要用 mongo:latest（8.x）。
+   #    老机器 CPU 不支持 avx 的话，5.0+ 起不来，只能用 mongo:4.4.16。
+
    # 内存小于 6GB 的机器建议**串行**构建（一次只跑一个重活），否则三个 stage 并发会 OOM：
    for stage in admin_builder server_builder website_builder; do
      docker build --target "$stage" . || break

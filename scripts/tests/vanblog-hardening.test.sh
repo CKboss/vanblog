@@ -251,6 +251,30 @@ assert_file_contains "${SCRIPT}" 'docker rmi -f "${VANBLOG_IMAGE_TAG}"' "卸载�
 assert_file_contains "${SCRIPT}" "已移除本脚本创建的 docker-compose 兼容 shim" "卸载会清掉自己建的 shim（且只清自己建的）"
 assert_file_contains "${SCRIPT}" "getenforce" "SELinux Enforcing 时会提示（bind mount 没有 :z）"
 
+# ---------- mongo 版本：已有数据绝不擅自换大版本 ----------
+setup_case
+source_script
+printf 'services:\n  vanblog:\n    image: x\n  mongo:\n    image: mongo:4.4.16\n' \
+  >"${VANBLOG_BASE_PATH}/docker-compose.yaml"
+assert_eq "$(get_compose_mongo_image)" "mongo:4.4.16" "能读出现有编排文件里的 mongo 版本"
+assert_eq "$(pick_mongo_image)" "mongo:7.0" "全新安装（没有数据目录）用受支持的 mongo:7.0"
+mkdir -p "${VANBLOG_DATA_PATH}/data/mongo"
+touch "${VANBLOG_DATA_PATH}/data/mongo/WiredTiger" "${VANBLOG_DATA_PATH}/data/mongo/mongod.lock"
+assert_eq "$(pick_mongo_image)" "mongo:4.4.16" \
+  "已有数据时保持原版本（换大版本 mongod 会拒绝启动，看起来像数据全丢）"
+assert_eq "$(VANBLOG_MONGO_IMAGE=mongo:6.0 pick_mongo_image)" "mongo:4.4.16" \
+  "已有数据时连环境变量覆盖也不听（要走升级就得先迁数据）"
+rm -rf "${VANBLOG_DATA_PATH}/data/mongo"
+mkdir -p "${VANBLOG_DATA_PATH}/data/mongo"
+assert_eq "$(pick_mongo_image)" "mongo:7.0" "空的数据目录算全新安装（这正是备份迁移升级的路径）"
+assert_eq "$(VANBLOG_MONGO_IMAGE=mongo:6.0 pick_mongo_image)" "mongo:6.0" "全新安装时 VANBLOG_MONGO_IMAGE 生效"
+# 只有 mongo 的空壳文件不算数据（比如上次启动失败留下的 mongod.lock）
+rm -rf "${VANBLOG_DATA_PATH}/data/mongo"
+mkdir -p "${VANBLOG_DATA_PATH}/data/mongo/subdir"
+touch "${VANBLOG_DATA_PATH}/data/mongo/subdir/x.txt"
+assert_eq "$(pick_mongo_image)" "mongo:7.0" "目录里只有无关文件时仍算全新安装"
+
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

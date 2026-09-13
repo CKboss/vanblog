@@ -209,9 +209,25 @@ vanblog_email="a@b.com" vanblog_http_port=80 vanblog_https_port=443
 sed -i "s/vanblog_data_path/\/var\/vanblog\/data/g" "${VANBLOG_BASE_PATH}/docker-compose-template.yaml"
 cp "${VANBLOG_BASE_PATH}/docker-compose-template.yaml" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
 sed -i "s|vanblog_image|${Docker_IMG}|g" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
+# 这一段是在**模拟** config 里的 sed 序列，所以脚本新增的替换也要跟着补上
+sed -i "s|vanblog_mongo_image|$(pick_mongo_image)|g" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
 assert_file_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "image: vanblog:dev-dsh" "编排文件用本地镜像 tag"
 assert_file_not_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "mereith/van-blog" "编排文件不再指向官方镜像"
 assert_file_not_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" 'vanblog_image' "占位符已被替换"
+assert_file_not_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" 'vanblog_mongo_image' \
+  "mongo 占位符也被替换（否则 compose 会去拉一个不存在的镜像）"
+if grep -qE 'image: mongo:[0-9]' "${VANBLOG_BASE_PATH}/docker-compose.yaml"; then
+  pass "生成的编排文件里 mongo 是一个具体版本"
+else
+  fail "生成的编排文件里 mongo 版本不对：$(grep -A1 'mongo:' "${VANBLOG_BASE_PATH}/docker-compose.yaml" | tail -1)"
+fi
+# ⚠️ 只能用"行首是 image:"的方式判断：模板的注释里正好写着 mongo:4.4.16（讲升级路径），
+#    全文搜子串会把注释当成配置命中
+if grep -qE '^[[:space:]]*image:[[:space:]]*mongo:4\.' "${VANBLOG_BASE_PATH}/docker-compose.yaml"; then
+  fail "全新安装不该再落到 EOL 的 mongo:4.x"
+else
+  pass "全新安装不会落到 EOL 的 mongo:4.x"
+fi
 
 # --- 自定义 tag 里带斜杠也不会破坏 sed（分隔符是 | ）---
 setup_case

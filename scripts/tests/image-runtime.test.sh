@@ -401,6 +401,48 @@ else
   fail "restore.key 没有收紧权限"
 fi
 
+
+# ---------- 8) 基础镜像版本：不许再用已 EOL 的 node:18 ----------
+# Node 18 在 2025-04 就 EOL 了（不再有安全更新）。升到 20 是"和开发环境对齐"的最小一步：
+# 本机 node v20.19.5 上 server 610 用例、admin umi build、website next build 全部验证过，
+# 且 sharp 0.32.6 有 Node 20 的 prebuild（NODE_MODULE_VERSION 115）。
+# 不能直接上 22/24：Node 23 移除了 util.isObject（@nestjs/cli 9 在用），
+# 而 sharp 0.32.6 没有 Node 22（127）的 prebuild、runner 阶段又没装 vips-dev。
+if grep -qE '^FROM node:18' "${DOCKERFILE}"; then
+  fail "Dockerfile 里还有 node:18（2025-04 已 EOL，无安全更新）"
+else
+  pass "Dockerfile 里没有 node:18"
+fi
+node20_stages=$(grep -cE '^FROM node:20(-alpine)? AS ' "${DOCKERFILE}")
+if [[ "${node20_stages}" -ge 4 ]]; then
+  pass "四个 stage 都用 node:20（${node20_stages} 处）"
+else
+  fail "node:20 的 stage 只有 ${node20_stages} 个，应该至少 4 个"
+fi
+if grep -qE '^FROM node:(2[2-9]|[3-9][0-9])' "${DOCKERFILE}"; then
+  fail "Dockerfile 用了 node:22+：@nestjs/cli 9 需要 util.isObject（Node 23 移除），且 sharp 0.32.6 没有对应 prebuild"
+else
+  pass "没有贸然升到 node:22+（nestjs-cli 与 sharp 都还没跟上）"
+fi
+if grep -q 'util.isObject' "${DOCKERFILE}" || grep -q 'sharp 0.32.6' "${DOCKERFILE}"; then
+  pass "Dockerfile 里记录了不能升 22/24 的原因"
+else
+  fail "Dockerfile 没有说明为什么停在 node:20（下一个人会顺手升上去然后构建失败）"
+fi
+
+# ---------- 9) mongo 版本：模板用占位符，脚本按"有没有数据"决定 ----------
+TEMPLATE="${ROOT}/docker-compose/docker-compose-template.yml"
+if grep -q 'image: vanblog_mongo_image' "${TEMPLATE}"; then
+  pass "编排模板里 mongo 是占位符（版本由脚本决定，而不是写死一个 EOL 版本）"
+else
+  fail "编排模板里 mongo 不是占位符 vanblog_mongo_image"
+fi
+if grep -qE 'image: mongo:4\.4' "${TEMPLATE}"; then
+  fail "模板里还写死着 mongo:4.4（2024-02 就 EOL 了）"
+else
+  pass "模板里没有写死的 mongo:4.4"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
