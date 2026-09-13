@@ -343,7 +343,10 @@ assert_file_contains "${VANBLOG_TEST_LOG}" "up -d" "success path brings stack up
 assert_file_contains "${VANBLOG_TEST_LOG}" "rmi sha-old" "success path deletes unused old image"
 assert_file_not_contains "${VANBLOG_TEST_LOG}" "rmi_while_running" "success path never rmi while running"
 
-# command order: down before pull before up; rmi only after down
+# command order: pull before down before up; rmi only after down
+# （以前是 down → pull → up：先停机再拉镜像/构建，整段时间站点是停的。
+#   现在改成先备好新镜像再停，停机只剩重启那几秒；旧状态的采集仍在 pull 之前，
+#   否则"版本有没有变"就比不出来了。）
 order_ok=1
 down_n="$(grep -n 'docker-compose down' "${VANBLOG_TEST_LOG}" | head -n1 | cut -d: -f1)"
 pull_n="$(grep -n 'pulled vanblog' "${VANBLOG_TEST_LOG}" | head -n1 | cut -d: -f1)"
@@ -351,10 +354,10 @@ up_n="$(grep -n 'up -d' "${VANBLOG_TEST_LOG}" | head -n1 | cut -d: -f1)"
 rmi_n="$(grep -n 'rmi sha-old' "${VANBLOG_TEST_LOG}" | head -n1 | cut -d: -f1)"
 if [[ -z "${down_n}" || -z "${pull_n}" || -z "${up_n}" || -z "${rmi_n}" ]]; then
   order_ok=0
-elif [[ "${down_n}" -ge "${pull_n}" || "${pull_n}" -ge "${up_n}" || "${rmi_n}" -le "${down_n}" ]]; then
+elif [[ "${pull_n}" -ge "${down_n}" || "${down_n}" -ge "${up_n}" || "${rmi_n}" -le "${down_n}" ]]; then
   order_ok=0
 fi
-assert_eq "${order_ok}" "1" "order is down → pull → up, rmi after down"
+assert_eq "${order_ok}" "1" "order is pull → down → up, rmi after down"
 
 if grep -q 'rmi_while_running' "${VANBLOG_TEST_LOG}"; then
   fail "no docker rmi while container still running"
@@ -410,7 +413,11 @@ sed -i 's/^DOWN_FAIL=.*/DOWN_FAIL=1/' "${VANBLOG_TEST_STATE}"
 run_update
 assert_eq "${UPDATE_RC}" "1" "down failure exits 1"
 assert_not_contains "${UPDATE_OUT}" "VanBlog 更新并重启成功" "down failure does not print success"
-assert_file_not_contains "${VANBLOG_TEST_LOG}" "pulled vanblog" "down failure does not pull"
+# 新顺序下 pull 发生在 down 之前，所以"down 失败时没 pull"不再是有效不变式
+# （先拉镜像对正在跑的容器没有任何影响）。真正要保证的是：down 失败就**不再 up**，
+# 不会把栈停在一个半死不活的状态；而且旧容器全程没被动过。
+assert_file_contains "${VANBLOG_TEST_LOG}" "pulled vanblog" "down 失败前镜像已经拉好（对运行中的容器无影响）"
+assert_file_not_contains "${VANBLOG_TEST_LOG}" "up -d" "down failure does not bring the stack up"
 assert_file_not_contains "${VANBLOG_TEST_LOG}" "rmi_while_running" "down failure never rmi while running"
 
 # --- China mirror compose is aligned to Docker Hub latest ---

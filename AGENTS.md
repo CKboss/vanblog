@@ -2027,6 +2027,37 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
 ⚠️ 还有一条：`assert_file_contains` 的针是 **grep BRE**，里面的 `*`、`[`、`]` 都要转义
 （`v*` 会变成"零个或多个 v"，`[:upper:]` 会被当成字符类），否则会误报"文件里没有"。
 
+**镜像发布成功之后，脚本这边还要配套改三件事**（都是审查时发现的，不是可选项）：
+
+1. **`update` 的顺序：先备好新镜像，再停旧容器。** 旧实现是先
+   `vanblog_compose down --remove-orphans` 再 pull/build —— 拉镜像几十秒、源码构建 15-40 分钟，
+   整段时间**站点是停的**；构建失败时更是"白白停机一次，再把旧容器起回来"。
+   现在改成：上游模式先 `pull vanblog`、本分支模式先 `prepare_vanblog_image` +
+   `ensure_compose_image`，**都成功之后**才 down/up。准备失败直接返回，
+   正在跑的容器全程不动，停机时间只剩重启那几秒。
+   ⚠️ `old_cid/old_image/old_version` 的采集必须放在 **prepare/pull 之前**：
+   否则"版本有没有变"就比不出来了 —— 先 pull 再读，读到的已经是新版本，
+   于是永远打印"已经是最新版本"，更新成功也报不出来（我第一版就是这么改错的，
+   `vanblog-update.test.sh` 的 success path 三条断言立刻红了，是它拦住的）。
+   读的是**运行中容器**的镜像 id，先 pull 一个新 tag 不会影响它。
+   同理，`vanblog-update.test.sh` 里"down 失败时没 pull"这条旧不变式也失效了：
+   现在 pull 在 down 之前，先拉镜像对运行中的容器无影响，真正要保证的是
+   **down 失败就不再 up**（不把栈停在半死不活的状态）。
+2. **拉取失败要按原因给具体下一步**：`pull_fork_image` 把 `docker pull` 的输出接住再打印，
+   然后按关键字分流 —— `denied/unauthorized/authentication` → 提示 ghcr 包默认 private，
+   给出 package 设置页地址与"Change visibility → Public"；`no matching manifest`/`not found`
+   → 提示是架构问题（目前只发布 linux/amd64）并说明怎么用 workflow_dispatch 出 arm64；
+   其它 → 通用解释（还没发布 / 网络不通）。笼统一句"拉取失败"等于让人自己猜。
+3. **从本地构建切到拉镜像后，旧的本地镜像会一直占着磁盘**（~1.5GB）。
+   `hint_stale_local_image` 只在"当前用的不是本地 tag 且本地 tag 还存在"时提示
+   `docker rmi vanblog:dev-dsh`，**不自动删** —— 删镜像不可逆，而且用户可能还想切回源码模式。
+
+**测试**：`vanblog-source-install.test.sh` 133 → 147 条，包含
+「`update()` 函数体里 `prepare_vanblog_image` 的行号必须小于 `down --remove-orphans` 的行号」
+这种**源码顺序断言**（用 awk 切出函数体再比行号，比重放整个 update 流程稳）、
+准备失败时一次 down 都不发生、三种拉取失败各自的关键字提示、
+以及"仍在用本地镜像时不许提示删除"（否则等于让人删掉正在用的镜像）。
+
 ### 7.27 admin_builder 必须走 lockfile：cytoscape 事故的始末
 
 CI 上第一次真正跑到 admin 构建时挂在这里：
@@ -2099,7 +2130,7 @@ cd packages/admin && pnpm run build               # → EXIT=0，dist 24MB，无
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 441 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 456 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

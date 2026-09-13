@@ -483,11 +483,42 @@ pull_fork_image() {
     return 1
   fi
   echo -e "> 拉取本分支镜像 ${yellow}${VANBLOG_IMAGE_REF}${plain}"
-  if docker pull "${VANBLOG_IMAGE_REF}"; then
+  # 把输出接住再打出来，这样才能按失败原因给出**具体**的下一步，
+  # 而不是笼统一句"拉取失败"（ghcr 的包默认 private、架构不匹配，都是常见原因）
+  local out rc
+  out="$(docker pull "${VANBLOG_IMAGE_REF}" 2>&1)"
+  rc=$?
+  [[ -n "${out}" ]] && printf '%s\n' "${out}"
+  if [[ ${rc} -eq 0 ]]; then
     return 0
   fi
-  echo -e "${yellow}  拉取失败（镜像可能还没发布、网络到不了 ghcr.io，或没有对应架构的镜像）${plain}"
+  case "${out}" in
+    *denied*|*unauthorized*|*authentication*)
+      echo -e "${yellow}  看起来是权限问题：ghcr 的 package 默认是 private。${plain}"
+      echo -e "${yellow}  去 https://github.com/CKboss/vanblog/pkgs/container/vanblog${plain}"
+      echo -e "${yellow}  → Package settings → Danger Zone → Change visibility → Public${plain}"
+      ;;
+    *"no matching manifest"*|*"not found"*)
+      echo -e "${yellow}  没有匹配本机架构（$(uname -m 2>/dev/null || echo 未知)）的镜像：目前只发布 linux/amd64。${plain}"
+      echo -e "${yellow}  arm64 机器可以在 Actions 里手动触发 publish-ghcr 并把 platforms 填成 linux/arm64。${plain}"
+      ;;
+    *)
+      echo -e "${yellow}  拉取失败（镜像可能还没发布，或网络到不了 ghcr.io）${plain}"
+      ;;
+  esac
   return 1
+}
+
+# 从本地构建切到拉镜像之后，旧的本地镜像会一直占着磁盘（~1.5GB）。
+# 只提示、不自动删：删镜像是不可逆操作，而且用户可能还想切回去。
+hint_stale_local_image() {
+  command -v docker >/dev/null 2>&1 || return 0
+  [[ "${Docker_IMG}" == "${VANBLOG_IMAGE_TAG}" ]] && return 0
+  if docker image inspect "${VANBLOG_IMAGE_TAG}" >/dev/null 2>&1; then
+    echo -e "> 检测到以前源码构建留下的本地镜像 ${yellow}${VANBLOG_IMAGE_TAG}${plain}（现在已改用 ${Docker_IMG}）"
+    echo -e "  确认新容器正常后可以删掉它腾空间：${yellow}docker rmi ${VANBLOG_IMAGE_TAG}${plain}"
+  fi
+  return 0
 }
 
 # 源码构建（克隆 + 本地 docker build）。低配机器上很慢且可能 OOM，见 choose_build_profile。
@@ -523,6 +554,7 @@ prepare_vanblog_image() {
       ;;
   esac
   echo -e "> 将使用镜像 ${yellow}${Docker_IMG}${plain}"
+  hint_stale_local_image
   return 0
 }
 
@@ -891,10 +923,40 @@ update() {
     align_compose_latest_image
   fi
 
+  # 先记录旧容器/镜像/版本：必须在新镜像准备好**之前**采集，
+  # 否则「版本有没有变」的比较就失去意义（pull 之后读到的已经是新版本，
+  # 于是永远显示"已经是最新版本"）。读的是**运行中容器**的镜像 id，
+  # 先 pull 一个新 tag 不会影响它。
   local old_cid old_image old_version
   old_cid=$(get_vanblog_container_id)
   old_image=$(get_container_image_id "${old_cid}")
   old_version=$(get_container_version "${old_cid}")
+
+  # ⚠️ 顺序很重要：**先把新镜像准备好，再停旧容器**。
+  # 旧实现是先 down 再 pull/build —— 拉镜像要几十秒，源码构建要 15-40 分钟，
+  # 整段时间站点是停的；构建失败时更是「白白停机一次，再把旧容器起回来」。
+  # 现在准备失败就直接返回，正在跑的容器**全程不动**，停机时间只剩重启那几秒。
+  if use_upstream_image; then
+    echo -e "> 拉取最新官方镜像"
+    if ! vanblog_compose pull vanblog; then
+      echo -e "${red}拉取镜像失败，保持原容器不动${plain}"
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 1
+    fi
+  else
+    # 本分支：默认 auto —— 先 docker pull ghcr 镜像，拉不到才退回克隆源码 + 本地构建
+    echo -e "> 准备本分支镜像（${VANBLOG_INSTALL_MODE} 模式）"
+    if ! prepare_vanblog_image; then
+      echo -e "${red}更新失败：新镜像没准备好，保持原容器与原镜像不动${plain}"
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 1
+    fi
+    ensure_compose_image
+  fi
 
   echo -e "> 停止并移除旧容器"
   # 同样不能带 -v：更新是常规操作，删卷等于删数据
@@ -905,32 +967,6 @@ update() {
       before_show_menu
     fi
     return 1
-  fi
-
-  if use_upstream_image; then
-    echo -e "> 拉取最新镜像"
-    vanblog_compose pull vanblog
-    if [[ $? != 0 ]]; then
-      echo -e "${red}拉取镜像失败${plain}"
-      vanblog_compose up -d >/dev/null 2>&1 || true
-      if [[ ${skip_menu} == 0 ]]; then
-        before_show_menu
-      fi
-      return 1
-    fi
-  else
-    # 源码模式：更新 = 拉最新源码 + 重新构建镜像。
-    # 构建失败就不要动容器（旧镜像还在），直接把服务起回来，避免更新失败变成停机。
-    echo -e "> 从源码更新（${VANBLOG_REPO} ${VANBLOG_BRANCH}）"
-    if ! prepare_vanblog_image; then
-      echo -e "${red}更新失败：源码构建未成功，保持原镜像${plain}"
-      vanblog_compose up -d >/dev/null 2>&1 || true
-      if [[ ${skip_menu} == 0 ]]; then
-        before_show_menu
-      fi
-      return 1
-    fi
-    ensure_compose_image
   fi
 
   echo -e "> 启动新容器"

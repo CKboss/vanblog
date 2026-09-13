@@ -503,6 +503,69 @@ else
 fi
 
 
+# --- 镜像发布成功之后：脚本这边的配套改动 ---
+# 1) update 必须「先备好新镜像，再停旧容器」：拉镜像几十秒、源码构建 15-40 分钟，
+#    旧顺序是先 down 再 pull/build，整段时间站点是停的；构建失败还白白停机一次。
+setup_case
+source_script
+UPDATE_BODY="$(awk '/^update\(\) \{/,/^\}/' "${SCRIPT}")"
+PREP_LINE="$(printf '%s\n' "${UPDATE_BODY}" | grep -n 'prepare_vanblog_image' | head -1 | cut -d: -f1)"
+DOWN_LINE="$(printf '%s\n' "${UPDATE_BODY}" | grep -n 'down --remove-orphans' | head -1 | cut -d: -f1)"
+PULL_LINE="$(printf '%s\n' "${UPDATE_BODY}" | grep -n 'vanblog_compose pull vanblog' | head -1 | cut -d: -f1)"
+if [[ -n "${PREP_LINE}" && -n "${DOWN_LINE}" && "${PREP_LINE}" -lt "${DOWN_LINE}" ]]; then
+  pass "update 里 prepare_vanblog_image 在 down 之前（先备好镜像再停机）"
+else
+  fail "update 里 prepare_vanblog_image(${PREP_LINE}) 必须在 down(${DOWN_LINE}) 之前"
+fi
+if [[ -n "${PULL_LINE}" && "${PULL_LINE}" -lt "${DOWN_LINE}" ]]; then
+  pass "上游镜像模式也是先 pull 再 down"
+else
+  fail "上游镜像模式的 pull(${PULL_LINE}) 也应在 down(${DOWN_LINE}) 之前"
+fi
+assert_contains "${UPDATE_BODY}" "保持原容器与原镜像不动" "准备失败时明确说明不动正在跑的容器"
+
+# 2) 准备失败时一次 down 都不该发生（站点不受影响）
+setup_case
+source_script
+export VANBLOG_INSTALL_MODE=image
+export DOCKER_PULL_FAIL=1
+cp "${TEMPLATE_FIXTURE}" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
+update skip >/dev/null 2>&1
+if [[ $? -ne 0 ]]; then pass "拉不到镜像时 update 返回非 0"; else fail "拉不到镜像时 update 返回非 0"; fi
+assert_not_contains "$(cat "${CMDLOG}")" "down --remove-orphans" "拉不到镜像时不会停掉正在跑的容器"
+assert_not_contains "$(cat "${CMDLOG}")" "docker build" "image 模式下不会偷偷构建"
+unset DOCKER_PULL_FAIL
+
+# 3) 拉取失败要按原因给出具体下一步（ghcr 包默认 private / 架构不匹配）
+setup_case
+source_script
+docker() { echo "Error response from daemon: denied: requested access to the resource is denied"; return 1; }
+OUT="$(pull_fork_image 2>&1)"
+assert_contains "${OUT}" "Change visibility" "denied 时提示把 package 改成 Public"
+assert_contains "${OUT}" "pkgs/container/vanblog" "denied 时给出 package 设置页地址"
+docker() { echo "Error: no matching manifest for linux/arm64/v8"; return 1; }
+OUT="$(pull_fork_image 2>&1)"
+assert_contains "${OUT}" "架构" "架构不匹配时说清楚是架构问题"
+assert_contains "${OUT}" "linux/arm64" "架构不匹配时告诉用户怎么出 arm64 镜像"
+docker() { echo "Error: dial tcp: i/o timeout"; return 1; }
+OUT="$(pull_fork_image 2>&1)"
+assert_contains "${OUT}" "网络到不了 ghcr.io" "其它失败给出通用解释"
+
+# 4) 从本地构建切到拉镜像后，提示清掉旧镜像（只提示，不自动删）
+setup_case
+source_script
+Docker_IMG="ghcr.io/ckboss/vanblog:dev-dsh"
+VANBLOG_IMAGE_TAG="vanblog:dev-dsh"
+docker() { [[ "$1 $2" == "image inspect" ]] && return 0 || return 1; }
+OUT="$(hint_stale_local_image 2>&1)"
+assert_contains "${OUT}" "docker rmi vanblog:dev-dsh" "提示怎么删旧的本地镜像"
+assert_contains "${OUT}" "确认新容器正常后" "强调要等新容器正常再删"
+# 用的还是本地 tag 时不该提示（否则等于让人删掉正在用的镜像）
+Docker_IMG="vanblog:dev-dsh"
+OUT="$(hint_stale_local_image 2>&1)"
+if [[ -z "${OUT}" ]]; then pass "仍在用本地镜像时不提示删除"; else fail "仍在用本地镜像时不该提示删除"; fi
+
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 [[ ${FAIL} -eq 0 ]]
