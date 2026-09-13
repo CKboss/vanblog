@@ -358,6 +358,36 @@ assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_NODE_DIST_URL=https://my.
   "用户显式指定的头文件源优先"
 
 
+# ---------- status 子命令（文档里写了，就必须真的存在且可用）----------
+setup_case
+source_script
+mkdir -p "${VANBLOG_DATA_PATH}/log/vanblog-backups" "${VANBLOG_DATA_PATH}/data/static"
+cp "${ROOT}/docker-compose/docker-compose-template.yml" "${VANBLOG_BASE_PATH}/docker-compose-template.yaml"
+sed -e "s|vanblog_image|ghcr.io/ckboss/vanblog:dev-dsh|" \
+    -e "s|vanblog_mongo_image|mongo:7.0|" \
+    -e "s|vanblog_data_path|${VANBLOG_DATA_PATH}|g" \
+    -e "s|vanblog_http_port|8080|" -e "s|vanblog_https_port|8443|" \
+    "${VANBLOG_BASE_PATH}/docker-compose-template.yaml" >"${VANBLOG_BASE_PATH}/docker-compose.yaml"
+head -c 50000 /dev/urandom >"${VANBLOG_DATA_PATH}/log/vanblog-backups/vanblog-full-20260101-000000.tar.zst"
+OUT="$(show_status 0 2>&1)"
+assert_eq "$?" "0" "status 返回 0"
+assert_contains "${OUT}" "ghcr.io/ckboss/vanblog:dev-dsh" "status 显示编排里的镜像"
+assert_contains "${OUT}" "mongo:7.0" "status 显示 mongo 版本"
+assert_contains "${OUT}" "8080" "status 显示 HTTP 端口"
+assert_contains "${OUT}" "1 个归档" "status 统计整站备份数量"
+assert_contains "${OUT}" "磁盘剩余" "status 显示磁盘剩余（磁盘满是"博客突然挂掉"最常见的原因之一）"
+assert_not_contains "${OUT}" "bash backup" "提示语里不会出现 $0 被 source 时的 'bash'（要用 VANBLOG_SELF_NAME）"
+# 什么都没装的时候也不能崩
+setup_case
+source_script
+OUT2="$(show_status 0 2>&1)"
+assert_eq "$?" "0" "空环境下 status 也返回 0"
+assert_contains "${OUT2}" "不存在" "空环境下明确说安装目录不存在"
+# dispatcher 真的接了这两个入口
+assert_file_contains "${SCRIPT}" '"status")' "dispatcher 支持 status 子命令"
+assert_file_contains "${SCRIPT}" '"-h" | "--help" | "help")' "dispatcher 支持 --help"
+
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

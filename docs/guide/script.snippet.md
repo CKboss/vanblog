@@ -1,31 +1,86 @@
-你可以运行下方命令，通过脚本一键部署 VanBlog。
+你可以运行下方命令，通过脚本一键部署 VanBlog（本分支 `CKboss/vanblog` 的 `dev/dsh`）。
 
 ```bash
-curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
-如果文档站不可达，也可以从 GitHub 下载同一份脚本：
+::: info 也可以用文档站的地址
+
+`curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh` 下载到的是**上游作者的脚本**：
+它会装官方镜像 `mereith/van-blog:latest`，不含本分支的任何改动（整站备份/恢复、SEO、
+封面回填、镜像里的十几处部署修复……）。要用本分支，就用上面那条 GitHub 地址。
+
+:::
+
+脚本下载编排模板时会按顺序尝试：**本分支 GitHub raw → 上游文档站 → 上游 GitHub raw → jsDelivr**，
+任一成功即继续。⚠️ 如果只有上游那几个源可达，拿到的是上游模板（mongo 写死 4.4.16、没有日志上限、
+没有 `depends_on`），脚本会提示一句"模板里没有 mongo 占位符"，功能仍可用，但建议排查网络后重跑 `config`。
+详见 [部署常见问题](../faq/deploy.md#一键脚本下载编排文件失败)。
+
+## 装的是什么
+
+| 项 | 默认值 | 怎么改 |
+| --- | --- | --- |
+| 安装模式 | `auto`：先拉镜像，拉不到再 clone 源码本地构建 | `VANBLOG_INSTALL_MODE=image\|source\|auto` |
+| 镜像 | `ghcr.io/ckboss/vanblog:dev-dsh` | `VANBLOG_IMAGE_REF=...`（也可指向本地 tag 或镜像加速地址） |
+| MongoDB | 全新安装用 `mongo:7.0`；**已有数据目录时保持你现在的版本不变** | `VANBLOG_MONGO_IMAGE=mongo:4.4.16`（老机器 CPU 不支持 avx 时用这个） |
+| 数据目录 | `/var/vanblog` | 安装时交互输入，或 `VANBLOG_DATA_PATH` / `VANBLOG_BASE_PATH` |
+| 端口 | 安装时交互输入（HTTP/HTTPS） | 之后用 `./vanblog.sh config` 改 |
+
+镜像由 GitHub Actions（`publish-ghcr`）构建发布。**ghcr 的包默认是私有的**，如果 `docker pull` 报
+`denied`/`not found`，去 <https://github.com/CKboss/vanblog/pkgs/container/vanblog> →
+Package settings → Change visibility 改成 Public；国内拉 ghcr 慢的话，可以配镜像加速后用
+`VANBLOG_IMAGE_REF=<加速地址>/ckboss/vanblog:dev-dsh ./vanblog.sh`。
+
+## 源码构建（拉不到镜像时）
+
+`auto` 模式会自动退回源码构建，也可以直接指定：
 
 ```bash
-curl -L https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ```
 
-安装过程中下载 `docker-compose` 模板时，脚本会按顺序尝试文档站、GitHub raw、jsDelivr，某一源成功即继续，无需手动选镜像。详见 [部署常见问题](../faq/deploy.md#一键脚本下载编排文件失败)。
+构建要 15-40 分钟、比较吃内存，脚本会按机器内存自动选档位（admin 的 webpack 堆：≥6GB 用 4096MB，
+否则 1536MB），并自动探测最快的源：
 
-如果未来需要再次运行脚本，可直接运行：
+| 变量 | 作用 | 默认 |
+| --- | --- | --- |
+| `VANBLOG_NPM_REGISTRY` | pnpm 源 | 空 = 实测 `npmmirror` 与 `npmjs` 延迟后取快的 |
+| `VANBLOG_ALPINE_MIRROR` | 容器内 Alpine 软件源 | 空 = 实测 aliyun / tuna / 官方后取快的（`none` 强制官方） |
+| `VANBLOG_NODE_DIST_URL` | node-gyp 的 Node 头文件源 | 空 = 用 npmmirror 时自动配 `cdn.npmmirror.com/binaries/node` |
+| `VANBLOG_SHARP_DIST_HOST` | sharp / libvips 预编译包源 | 空 = 用 npmmirror 时自动配 `registry.npmmirror.com/-/binary`（`none` 用官方 GitHub） |
+| `VAN_BLOG_ADMIN_BUILD_SCRIPT` | admin 构建档位 | `build`（4096MB）/ `build:lowmem`（1536MB） |
+| `VANBLOG_BUILD_PARALLEL` | 是否并行构建三个前端 | 内存够才并行 |
+
+这几个源都是可选的：海外机器什么都不设也行（默认走官方源，更快）。
+
+## 装完之后
+
+启动完毕请 [完成初始化](./init.md)。之后常用命令：
 
 ```bash
-./vanblog.sh
+./vanblog.sh              # 交互菜单
+./vanblog.sh install      # 安装/重装（也可以直接用交互菜单选 1）
+./vanblog.sh status       # 状态
+./vanblog.sh log          # 日志
+./vanblog.sh backup       # 整站备份（一致性快照，见下）
+./vanblog.sh restore      # 从整站备份恢复
+./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）
+./vanblog.sh --help       # 全部命令
 ```
+
+数据都在安装目录里（默认 `/var/vanblog`）：`data/static` 图床与附件、`data/mongo` 数据库、
+`log` 日志（**整站备份归档也在 `log/vanblog-backups/`**）、`caddy/` 证书与配置、
+`docker-compose.yaml` 编排文件。备份/恢复见 [备份与迁移](./backup.md)。
 
 ![脚本演示](https://pic.mereith.com/img/74047a8387a2d2ba4e3e7cefca67815f.clipboard-2023-06-27.webp)
 
-启动完毕后，请 [完成初始化](./init.md)。
-
 ::: tip
 
-1. 只推荐在纯 Linux 环境下使用此脚本,宝塔面板也可以使用。脚本推出不久，未经过广泛测试，如有问题请反馈！
-1. 如果你想在外部访问数据库，请参考 [部署常见问题 → 如何从外部访问数据库](../faq/deploy.md#如何在外部访问数据库)。
+1. 只推荐在纯 Linux 环境下使用此脚本，宝塔面板也可以用。脚本需要 root（会检查 `id -u`）。
+1. 如果你想在外部访问数据库，请参考 [部署常见问题 → 如何从外部访问数据库](../faq/deploy.md#如何在外部访问数据库)（**注意不要用 `down -v`**）。
 1. 反代时只需要反代映射的 HTTP 端口，详见 [反代配置](../reference/reverse-proxy.md)。由于 VanBlog 是一个整体，无需考虑内部的 Caddy。
+1. 想在本机构建并冒烟测试镜像（不发布、不装到生产），用 `./scripts/build-image-local.sh`，
+   见 [本地构建镜像](../advanced/local-build.md)。
 
 :::

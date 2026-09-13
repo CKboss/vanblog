@@ -136,7 +136,7 @@ if diff -q "${SCRIPT}" "${PUBLIC_SCRIPT}" >/dev/null 2>&1; then
 else
   fail "两份 vanblog.sh 不一致"
 fi
-assert_contains "${SRC}" 'VANBLOG_SCRIPT_VERSION="v0.4.0"' "脚本版本号已更新"
+assert_contains "${SRC}" 'VANBLOG_SCRIPT_VERSION="v0.5.0"' "脚本版本号已更新"
 TEMPLATE="$(cat "${ROOT}/docker-compose/docker-compose-template.yml")"
 assert_contains "${TEMPLATE}" "VAN_BLOG_BACKUP_PATH" "编排模板里说明了备份目录变量"
 assert_contains "${TEMPLATE}" "VANBLOG_DISABLE_IP_GEO" "编排模板里说明了 IP 归属地开关"

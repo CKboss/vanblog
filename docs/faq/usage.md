@@ -421,7 +421,7 @@ VanBlog 自 `v0.42.0` 已舍弃 `VAN_BLOG_ALLOW_DOMAINS` 环境变量，如果�
 成功或失败都会打印明确提示。成功后请用 `http://IP` 或 `http://域名` 访问；浏览器若仍跳 https，清一下缓存。
 
 ```bash
-curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh reset_https
+curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh reset_https
 ```
 
 如果你是自己用 docker 部署的，在 vanblog 容器里执行（无 TTY 也可，会用默认 MongoDB 地址）：
@@ -440,7 +440,7 @@ docker compose restart vanblog
 请先用选项 20 更新到最新脚本，再卸载。新脚本只会删除安装数据（`data/`）和编排文件，**不会**删除 `vanblog-backup-*`，也不会动安装目录以外的备份；删除前会列出将保留的备份并要求确认。
 
 ```bash
-curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh uninstall
+curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh uninstall
 ```
 
 卸载完成后，备份仍在 `/var/vanblog/vanblog-backup-*`（若安装目录里只剩下备份，目录本身也会保留）。请尽快把备份拷到别处再重装。

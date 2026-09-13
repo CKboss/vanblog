@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# 文档与脚本的一致性守卫。
+#
+# 这类漂移已经发生过好几次：脚本的默认行为改了（backup 从"打包数据目录"变成"整站备份"、
+# 镜像换成 ghcr、mongo 版本改成按数据目录决定），而文档还写着旧命令；更糟的是文档里
+# 还留着 `docker-compose down -v` 这种**会删卷**的命令。测试比人记得牢。
+set -u
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SCRIPT="${ROOT}/scripts/vanblog.sh"
+PUBLIC_SCRIPT="${ROOT}/docs/.vuepress/public/vanblog.sh"
+FORK_SCRIPT_URL="https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh"
+
+PASS=0
+FAIL=0
+fail() { echo "FAIL: $*"; FAIL=$((FAIL + 1)); }
+pass() { echo "PASS: $*"; PASS=$((PASS + 1)); }
+assert_eq() { if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (got '$1', want '$2')"; fi; }
+
+echo "== 安装/备份/恢复文档一致性 =="
+
+# ---------- 0) 两份脚本必须字节一致 ----------
+if cmp -s "${SCRIPT}" "${PUBLIC_SCRIPT}"; then
+  pass "scripts/vanblog.sh 与 docs/.vuepress/public/vanblog.sh 字节一致"
+else
+  fail "两份 vanblog.sh 不一致（文档站提供下载的那份会是旧的）"
+fi
+
+# ---------- 1) 文档里出现的每个子命令，脚本都得真的支持 ----------
+SUBS="$(grep -oE '^  "[a-z_-]+"\)' "${SCRIPT}" | tr -d ' ")' | sort -u)"
+DOC_CMDS="$(grep -rhoE '\./vanblog\.sh [a-z_-]+' "${ROOT}/docs" --include='*.md' 2>/dev/null |
+  awk '{print $2}' | sort -u)"
+missing=""
+for c in ${DOC_CMDS}; do
+  printf '%s\n' "${SUBS}" | grep -qx "${c}" || missing="${missing} ${c}"
+done
+if [[ -z "${missing}" ]]; then
+  pass "文档里出现的子命令脚本都支持（$(printf '%s' "${DOC_CMDS}" | tr '\n' ' ')）"
+else
+  fail "文档写了脚本不支持的子命令:${missing}"
+fi
+# 反向：脚本新增的子命令应该在文档里出现过（status 这种新命令最容易漏）
+for c in backup restore status update install config log; do
+  if printf '%s' "${DOC_CMDS}" | grep -qx "${c}"; then
+    pass "子命令 ${c} 在文档里有出现"
+  else
+    fail "子命令 ${c} 脚本里有、文档里没提"
+  fi
+done
+
+# ---------- 2) 绝不能教用户敲 `down -v` ----------
+# 允许出现在"不要这样做"的警告里，不允许出现在可复制的代码块里
+BAD_V="$(grep -rn 'down -v' "${ROOT}/docs" --include='*.md' 2>/dev/null |
+  grep -vE '不要|千万|danger|删除编排里的卷|删库|只有.*uninstall')"
+if [[ -z "${BAD_V}" ]]; then
+  pass "文档里没有教人用 docker-compose down -v（只在警告里出现）"
+else
+  fail "文档里还有 down -v 的用法：$(printf '%s' "${BAD_V}" | head -2 | cut -c1-100)"
+fi
+
+# ---------- 3) 安装文档必须指向本分支的脚本，而不是上游的 ----------
+UPSTREAM_HITS="$(grep -rn 'vanblog\.mereith\.com/vanblog\.sh' "${ROOT}/docs/guide" "${ROOT}/docs/faq" \
+  --include='*.md' 2>/dev/null | grep -v '上游' || true)"
+if [[ -z "${UPSTREAM_HITS}" ]]; then
+  pass "guide/faq 里没有把上游脚本地址当成安装命令（会装成官方版）"
+else
+  fail "还有文档让人从上游地址下脚本：$(printf '%s' "${UPSTREAM_HITS}" | head -2 | cut -c1-110)"
+fi
+if grep -rqF "${FORK_SCRIPT_URL}" "${ROOT}/docs/guide/script.snippet.md"; then
+  pass "安装文档给的是本分支的脚本地址"
+else
+  fail "安装文档里没有本分支的脚本地址"
+fi
+
+# ---------- 4) 安装/备份文档提到的 VANBLOG_* 变量，脚本或编排模板里必须真的有 ----------
+# ⚠️ 只查这几份"部署侧"的文档：VANBLOG_DISABLE_WEBSITE / VANBLOG_SWAGGER / 各种限流变量
+#    是 **server** 的环境变量，写在 features/config.md 里，本来就不该出现在 vanblog.sh 中。
+DOC_VARS="$(grep -rhoE 'VANBLOG_[A-Z_]+' \
+  "${ROOT}/docs/guide/script.snippet.md" "${ROOT}/docs/guide/backup.md" \
+  "${ROOT}/docs/guide/update.md" "${ROOT}/docs/advanced/backup.md" \
+  "${ROOT}/docs/advanced/local-build.md" 2>/dev/null | sort -u)"
+COMPOSE_TPL="${ROOT}/docker-compose/docker-compose-template.yml"
+unknown=""
+for v in ${DOC_VARS}; do
+  if grep -qF "${v}" "${SCRIPT}" || grep -qF "${v}" "${COMPOSE_TPL}"; then
+    continue
+  fi
+  unknown="${unknown} ${v}"
+done
+if [[ -z "${unknown}" ]]; then
+  pass "文档里的 VANBLOG_* 变量脚本都认（$(printf '%s' "${DOC_VARS}" | wc -w) 个）"
+else
+  fail "文档提到脚本里不存在的变量:${unknown}"
+fi
+
+# ---------- 5) 文档写的默认值要和脚本一致 ----------
+# ⚠️ `${VAR:-default}` 里 cut -d: -f2- 会多带一个 `-`，要把开头的 `-` 去掉
+img_default="$(grep -oE 'VANBLOG_IMAGE_REF:-[^}]+' "${SCRIPT}" | head -1 | cut -d: -f2- | sed 's/^-//')"
+mongo_default="$(grep -oE 'VANBLOG_MONGO_IMAGE:-[^}]+' "${SCRIPT}" | head -1 | cut -d: -f2- | sed 's/^-//')"
+if grep -rqF "${img_default}" "${ROOT}/docs/guide/script.snippet.md"; then
+  pass "文档写的默认镜像与脚本一致（${img_default}）"
+else
+  fail "文档里的默认镜像与脚本不一致（脚本是 ${img_default}）"
+fi
+if grep -rqF "${mongo_default}" "${ROOT}/docs/guide/script.snippet.md"; then
+  pass "文档写的默认 mongo 与脚本一致（${mongo_default}）"
+else
+  fail "文档里的默认 mongo 与脚本不一致（脚本是 ${mongo_default}）"
+fi
+
+# ---------- 6) backup/restore 的文档要说清"默认是整站备份" ----------
+if grep -qF 'backup --offline' "${ROOT}/docs/guide/backup.md" &&
+  grep -qF 'vanblog-full-' "${ROOT}/docs/guide/backup.md"; then
+  pass "备份文档区分了整站备份（默认）与 --offline 目录快照"
+else
+  fail "备份文档没写清默认是整站备份、--offline 才是目录快照"
+fi
+if grep -qF 'JWT' "${ROOT}/docs/guide/backup.md" || grep -qF '重新登录' "${ROOT}/docs/guide/backup.md"; then
+  pass "备份文档提醒了恢复后要重新登录后台（JWT 密钥是启动时读的）"
+else
+  fail "备份文档没提恢复后需要重新登录"
+fi
+if grep -qF 'down -v' "${ROOT}/docs/guide/update.md" && grep -qF '不要' "${ROOT}/docs/guide/update.md"; then
+  pass "升级文档明确警告了 down -v"
+else
+  fail "升级文档没有 down -v 的警告"
+fi
+
+# ---------- 7) 本地构建文档存在且被安装文档链接到 ----------
+if [[ -f "${ROOT}/docs/advanced/local-build.md" ]]; then
+  pass "有 docs/advanced/local-build.md（本地构建与验证镜像）"
+  for kw in "build-image-local.sh" "podman" "SHARP_DIST_HOST" "aardvark-dns" "publish-ghcr"; do
+    if grep -qF "${kw}" "${ROOT}/docs/advanced/local-build.md"; then
+      pass "本地构建文档覆盖 ${kw}"
+    else
+      fail "本地构建文档没提 ${kw}"
+    fi
+  done
+else
+  fail "缺少 docs/advanced/local-build.md"
+fi
+if grep -qF "local-build.md" "${ROOT}/docs/guide/script.snippet.md"; then
+  pass "安装文档链接到了本地构建文档"
+else
+  fail "安装文档没有链接本地构建文档"
+fi
+
+echo
+echo "passed=${PASS} failed=${FAIL}"
+if [[ "${FAIL}" -ne 0 ]]; then
+  exit 1
+fi
+exit 0

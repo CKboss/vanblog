@@ -17,7 +17,7 @@ VANBLOG_DATA_PATH="${VANBLOG_DATA_PATH:-${VANBLOG_BASE_PATH}/data}"
 _vb_data_sed="${VANBLOG_DATA_PATH//\\/\\\\}"
 _vb_data_sed="${_vb_data_sed//&/\\&}"
 VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-${_vb_data_sed//|/\\|}}"
-VANBLOG_SCRIPT_VERSION="v0.4.0"
+VANBLOG_SCRIPT_VERSION="v0.5.0"
 
 # ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
 # 装的是本分支（CKboss/vanblog 的 dev/dsh），**不是**官方的 mereith/van-blog:latest
@@ -756,6 +756,10 @@ is_valid_compose_template() {
 #   在别的目录里执行就会写错地方、exec 到的还是旧脚本）。
 VANBLOG_SELF_PATH="${VANBLOG_SELF_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/$(basename "${BASH_SOURCE[0]}")}"
 [[ -f "${VANBLOG_SELF_PATH}" ]] || VANBLOG_SELF_PATH="./vanblog.sh"
+# 给用户看的命令名。⚠️ 不要用 $0：脚本被 source（测试、或别人在自己的 shell 里加载）时
+# $0 是 "bash"，提示语会变成"跑一次 bash backup"这种鬼话。
+VANBLOG_SELF_NAME="$(basename "${VANBLOG_SELF_PATH}")"
+[[ "${VANBLOG_SELF_NAME}" == "vanblog.sh" ]] || VANBLOG_SELF_NAME="./vanblog.sh"
 
 is_valid_vanblog_script() {
   local file="$1"
@@ -2309,6 +2313,86 @@ restore() {
   return 0
 }
 
+# 一眼看清"装了什么、跑着没有、数据多大、备份在哪、磁盘还剩多少"。
+# 全部只读，不改任何东西，也不需要站点在跑。
+show_status() {
+  echo -e "> VanBlog 状态"
+  echo -e "  脚本版本  ：${VANBLOG_SCRIPT_VERSION}"
+  echo -e "  安装目录  ：${VANBLOG_BASE_PATH}$([[ -d "${VANBLOG_BASE_PATH}" ]] || echo -e " ${red}(不存在)${plain}")"
+  echo -e "  数据目录  ：${VANBLOG_DATA_PATH}$([[ -d "${VANBLOG_DATA_PATH}" ]] || echo -e " ${red}(不存在)${plain}")"
+
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  if [[ -f "${compose_file}" ]]; then
+    echo -e "  编排镜像  ：${yellow}$(get_compose_vanblog_image 2>/dev/null || echo 未知)${plain}"
+    local mongo_img
+    mongo_img="$(get_compose_mongo_image 2>/dev/null)"
+    echo -e "  编排 mongo：${yellow}${mongo_img:-未知}${plain}"
+    if mongo_datadir_has_data; then
+      echo -e "  mongo 数据：已有（升级大版本前请先做整站备份，见 backup 的说明）"
+    else
+      echo -e "  mongo 数据：数据目录是空的（全新安装，会用 ${VANBLOG_MONGO_IMAGE}）"
+    fi
+    local http_port
+    http_port="$(get_compose_http_port 2>/dev/null)"
+    echo -e "  HTTP 端口 ：${http_port:-未知}"
+    if [[ -n "${http_port}" ]]; then
+      local base code
+      base="$(vanblog_api_base 2>/dev/null)"
+      code="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+      [[ -n "${code}" ]] || code="000"
+      if [[ "${code}" == "200" ]]; then
+        echo -e "  站点接口  ：${green}${base} → 200${plain}"
+      else
+        echo -e "  站点接口  ：${red}${base} → ${code}（没在跑？先 ${VANBLOG_SELF_NAME} start）${plain}"
+      fi
+    fi
+  else
+    echo -e "  ${yellow}没有找到编排文件（${compose_file}），可能还没安装${plain}"
+  fi
+
+  if command -v docker-compose >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then
+    echo -e "  容器状态  ："
+    (cd "${VANBLOG_BASE_PATH}" 2>/dev/null && docker-compose ps 2>/dev/null | sed 's/^/    /') ||
+      echo -e "    ${yellow}(拿不到，docker-compose ps 失败)${plain}"
+  fi
+
+  # 目录占用：数据/日志/备份分开看，磁盘写满时最有用
+  if [[ -d "${VANBLOG_DATA_PATH}" ]]; then
+    echo -e "  目录占用  ："
+    local d
+    for d in data/static data/mongo log caddy; do
+      if [[ -d "${VANBLOG_DATA_PATH}/${d}" || -d "${VANBLOG_BASE_PATH}/${d}" ]]; then
+        local real="${VANBLOG_DATA_PATH}/${d}"
+        [[ -d "${real}" ]] || real="${VANBLOG_BASE_PATH}/${d}"
+        printf '    %-14s %s\n' "${d}" "$(du -sh "${real}" 2>/dev/null | cut -f1)"
+      fi
+    done
+  fi
+
+  local bdir
+  bdir="$(full_backup_dir 2>/dev/null)"
+  if [[ -d "${bdir}" ]]; then
+    local count total
+    count="$(ls -1 "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -v 'manifest.json' | wc -l | tr -d ' ')"
+    total="$(du -sh "${bdir}" 2>/dev/null | cut -f1)"
+    echo -e "  整站备份  ：${count} 个归档，共 ${total}（${bdir}）"
+    ls -1t "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -v 'manifest.json' | head -3 |
+      while read -r f; do printf '    %s  %s\n' "$(basename "${f}")" "$(human_size "${f}")"; done
+  else
+    echo -e "  整站备份  ：还没有（${bdir} 不存在，跑一次 ${VANBLOG_SELF_NAME} backup）"
+  fi
+
+  # 安装目录还不存在时 df 会失败，退回看根分区（磁盘满是最常见的"博客突然挂掉"原因之一）
+  local df_target="${VANBLOG_BASE_PATH}"
+  [[ -d "${df_target}" ]] || df_target="/"
+  echo -e "  磁盘剩余  ：$(df -h "${df_target}" 2>/dev/null | tail -1 | awk '{print $4" 可用 / 共 "$2"（已用 "$5"），挂载点 "$6}')"
+
+  if [[ $# == 0 ]]; then
+    before_show_menu
+  fi
+  return 0
+}
+
 show_usage() {
   echo "VanBlog 管理脚本使用方法: "
   echo "--------------------------------------------------------"
@@ -2319,6 +2403,7 @@ show_usage() {
   echo "./vanblog.sh stop                       - 停止 VanBlog"
   echo "./vanblog.sh restart                    - 重启 VanBlog"
   echo "./vanblog.sh update                     - 更新 VanBlog"
+  echo "./vanblog.sh status                     - 状态总览（镜像/容器/端口/接口/目录占用/备份/磁盘）"
   echo "./vanblog.sh backup                     - 整站备份（走 server 接口，一致性快照，默认 zstd）"
   echo "./vanblog.sh backup --format xz|gzip    - 换压缩格式"
   echo "./vanblog.sh backup --offline           - 打包数据目录（站点起不来时兜底，含 caddy 证书）"
@@ -2448,6 +2533,13 @@ if [[ $# > 0 ]]; then
     ;;
   "log")
     show_log 0
+    ;;
+  "status")
+    show_status 0
+    ;;
+  "-h" | "--help" | "help")
+    show_usage
+    exit 0
     ;;
   "update_script")
     update_script 0

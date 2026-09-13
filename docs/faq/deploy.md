@@ -134,7 +134,9 @@ Cloudflare 等 CDN 不要对 HTML 开「缓存全部」；改完后清边缘缓�
 请先更新到最新脚本（菜单 **20. 更新此脚本**，或重新下载）。新脚本会按顺序尝试：
 
 1. `https://vanblog.mereith.com/docker-compose-template.yml`
-1. GitHub raw：`https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml`
+1. 本分支 GitHub raw：`https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml`
+1. 上游文档站与上游 GitHub raw / jsDelivr（兜底，拿到的是**上游模板**：镜像是官方版、mongo 是 4.4.16，
+   没有本分支的日志上限、`depends_on`、mongo 版本占位符这些改动）
 1. jsDelivr：`https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml`
 
 某一地址成功就会继续安装，并打印实际使用的 URL。全部失败才会报错退出。更新脚本自身也使用同一套回退。
@@ -142,7 +144,7 @@ Cloudflare 等 CDN 不要对 HTML 开「缓存全部」；改完后清边缘缓�
 若连文档站上的 `vanblog.sh` 都下不下来，可以用 GitHub raw：
 
 ```bash
-curl -L https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
 这与 Docker Hub / 镜像仓库拉取失败不是同一类问题。
@@ -181,7 +183,19 @@ curl -sSL https://get.daocloud.io/docker | sh
 
 ![添加端口](https://www.mereith.com/static/img/e2bc119c1408d50f73a2da526dec96c8.clipboard-2022-09-02.png)
 
-然后运行 `docker-compose down -v && docker-compose up -d` 重启容器，就可以通过 27017 端口访问 mongoDB 了。
+然后重启容器，就可以通过 27017 端口访问 mongoDB 了：
+
+```bash
+docker-compose down && docker-compose up -d
+```
+
+::: danger 千万不要顺手加 `-v`
+
+`docker-compose down -v` 会**删除编排里的卷**。现在默认是 bind mount（数据在宿主机目录里）所以侥幸没事，
+但只要有人把编排改成了命名卷，`-v` 就等于删库。重启请用不带 `-v` 的 `down`；
+只有 `./vanblog.sh uninstall`（卸载）才应该用 `-v`，而且它会先让你确认。
+
+:::
 
 具体访问方式可以自行查阅资料，我一般都是用 [mongoDBCompass](https://www.mongodb.com/try/download/compass) 这个工具。
 

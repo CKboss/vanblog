@@ -41,15 +41,22 @@ order: -3
 请切换到部署 VanBlog 的目录下（docker-compose.yaml 存放的路径下），然后运行下面的命令。
 
 ```bash
-# 关闭原有服务
-docker-compose down -v
-# 删除原有镜像
-docker rmi mereith/van-blog:latest
-# 重新拉取最新镜像
-docker pull mereith/van-blog:latest
-# 重新启动服务
+# 拉取新镜像（本分支的镜像；上游官方镜像是 mereith/van-blog:latest）
+docker-compose pull
+# 关闭原有服务 —— ⚠️ 不要加 -v，那会删掉编排里的卷
+docker-compose down
+# 用新镜像重新启动
 docker-compose up -d
+# 确认没问题后再清理悬空的旧镜像（可选）
+docker image prune -f
 ```
+
+::: danger 不要写 `docker-compose down -v`
+
+`-v` 会**删除编排里的卷**。现在默认是 bind mount（数据在宿主机目录）所以侥幸没事，
+但只要编排被改成命名卷，`-v` 就等于删库。升级请用不带 `-v` 的 `down`。
+
+:::
 
 ::: note
 
@@ -111,21 +118,22 @@ VanBlog 会在前台和后台的最下方展示版本信息。
 
 ::: tip 如何回滚
 
-您可以通过指定镜像的版本号来实现，比如您想回滚到 `v0.29.0`，那您可以修改编排中的：
+本分支每次构建都会打三个 tag：`latest`、`dev-dsh`、以及带提交号的 `dev-dsh-<短sha>`。
+回滚就是把编排里的 `image:` 换成某个具体提交号，然后
+`docker-compose pull && docker-compose down && docker-compose up -d`（**不要加 `-v`**）。
 
-`mereith/van-blog:latest` 为 `mereith/van-blog:v0.29.0` ，然后运行：
-
-```bash
-docker-compose down -v && docker-compose up -d
-```
+如果数据也需要回滚，用整站备份：`./vanblog.sh restore vanblog-full-<时间戳>.tar.zst`，
+详见 [备份与迁移](./backup.md)。
 
 :::
 
 ::: info 原理
 
-流程：删除原有老版本镜像 -> 下载新版镜像 -> 删除老容器 -> 用新镜像起一个新容器。
+`./vanblog.sh update` 的顺序是：**先准备新镜像，再停旧容器** ——
+拉取（或源码构建）失败时旧容器还在跑，不会出现"更新到一半站点没了"；
+成功之后才 `down` / `up -d`，停机时间只有重启那几秒，并且只删除已经没人用的旧镜像。
 
-在这个过程中因为数据已经映射到了本地文件系统，所以删除容器/镜像并不会丢失数据（容器或服务本身是无状态的）。
+数据都映射在宿主机目录里，所以删除容器/镜像不会丢数据（容器本身是无状态的）。
 
 :::
 

@@ -11,46 +11,90 @@ icon: retweet
 
 @tab 脚本部署时
 
-迁移 `/var/vanblog` 目录到新机器，然后运行脚本重启服务即可。
+`./vanblog.sh backup` 默认做的**就是后台那套「整站备份」**（同一个接口、同一种归档），
+产出 `vanblog-full-<时间戳>.tar.zst`，落在 `<数据目录>/log/vanblog-backups/`：
 
 ```bash
-# 执行一键脚本自动打包备份文件
-curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh backup
-# 复制备份文件到新机器后，再次执行一键脚本恢复备份即可
-curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh restore
+./vanblog.sh backup                     # 整站备份（默认 zstd，一致性快照）
+./vanblog.sh backup --format xz         # 换压缩格式：zstd / xz / gzip
+./vanblog.sh restore                    # 不带参数：列出服务器上的归档，选一个恢复
+./vanblog.sh restore vanblog-full-20260913-140955.tar.zst     # 一步恢复（不上传，秒级开始）
+./vanblog.sh restore /path/to/vanblog-full-xxx.tar.zst        # 本地文件（走上传）
+./vanblog.sh restore <归档名> --no-static                     # 只恢复数据库，保留当前图床/附件
 ```
 
-脚本备份写在安装目录（默认 `/var/vanblog/vanblog-backup-*.tar.gz`），内容是整个数据目录：图床 `data/static`、MongoDB 数据 `data/mongo`、日志 `log`（后台「整站备份」的归档默认也在 `log/vanblog-backups/` 里）、caddy 证书 `caddy/`。卸载只会删除数据目录和编排文件，**不会**删掉这些备份，也不会动安装目录外的备份目录。卸载前仍建议先把备份拷到别处。
+**它比"打包数据目录"好在哪**：由 server 在运行中导出，不会拍到 mongod 写了一半的数据文件；
+格式是 NDJSON，**不绑 MongoDB 版本**（4.4 → 6.0 → 7.0 都能恢复进去，而数据目录 tar 换个大版本
+mongod 会直接拒绝启动）；恢复前还能读清单看每个集合多少条，不会恢复错版本。
+恢复走接口、**不需要停服**，结束后自动触发一次全量渲染。
 
 ```bash
-./vanblog.sh backup                # 热备份：MongoDB 不停，最快，但数据文件可能不完全一致
-./vanblog.sh backup --consistent   # 一致性备份：先停 MongoDB 再打包（期间不可写，几十秒）
-./vanblog.sh restore               # 交互式恢复：输入文件名 → 二次确认 → 解压 → 询问是否启动
-
-# 定时任务里用（不交互）：
-VANBLOG_BACKUP_CONSISTENT=1 ./vanblog.sh backup
-VANBLOG_RESTORE_FILE=/var/vanblog/vanblog-backup-20260913025300.tar.gz VANBLOG_ASSUME_YES=1 ./vanblog.sh restore
+# 定时任务（不交互）：token 从浏览器 F12 → Application → Local Storage → token 取
+VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 ./vanblog.sh backup
+# 不想用 token 就让脚本交互问账号密码（本地按后台同一套算法派生口令，明文不出本机）
+./vanblog.sh backup
 ```
 
-恢复时脚本会自动做几件容易踩的事：校验压缩包完整性（下载/传输中断的包会直接报错，而不是解压到一半失败）、删掉热备份带出来的 `mongod.lock`（不删的话 mongod 会拒绝启动、容器反复重启）、失败时返回非 0 并且不会谎报「恢复成功」。
+::: warning 整站备份不含 caddy 证书
 
-::: tip 也可以用后台的「整站备份」
+归档里是**数据库全部集合 + waline 评论库 + 图床/附件/自定义页面**，不含 caddy 的证书与配置
+（那些在数据目录里，证书到期会自动重签，一般不用备）。要连证书一起备，用下面的 `--offline`。
 
-脚本备份是**目录级**快照（含 MongoDB 原始数据文件，跨版本恢复要注意 FCV，见 [导入官方备份](../advanced/migrate.md)）；后台的 [整站备份](../advanced/backup.md#整站备份推荐) 打的是跨版本的逻辑归档（zstd 压缩、含索引、可在任意新装实例上「上传并恢复」）。两者不通用，重要数据建议都留一份。
+:::
+
+### 目录级快照（兜底：站点起不来时）
+
+```bash
+./vanblog.sh backup --offline                # 打包整个数据目录（热备份，最快）
+./vanblog.sh backup --offline --consistent   # 先停 MongoDB 再打包（一致性好，几十秒不可写）
+./vanblog.sh restore /var/vanblog/vanblog-backup-<时间戳>.tar.gz   # 恢复：停服 → 解压覆盖 → 起服
+```
+
+产出 `vanblog-backup-<时间戳>.tar.gz`，内容是整个数据目录：图床 `data/static`、
+MongoDB 数据文件 `data/mongo`、日志 `log`（整站备份的归档也在里面）、caddy 证书 `caddy/`。
+脚本会自动处理几件容易踩的事：校验压缩包完整性、删掉热备份带出来的 `mongod.lock`
+（不删 mongod 会拒绝启动）、**停不下来就不解压**（mongod 还在写的时候覆盖它的数据文件会直接损坏数据库）。
+
+::: tip 两种方式怎么选
+
+| | 整站备份（默认） | 目录级快照（`--offline`） |
+| --- | --- | --- |
+| 一致性 | server 运行中导出，一致 | 热备份不一致；`--consistent` 要停库 |
+| 跨版本恢复 | ✅ NDJSON，不绑 MongoDB 版本 | ❌ 换大版本 mongod 拒绝启动 |
+| 含 caddy 证书 | ❌ | ✅ |
+| 需要站点在跑 | ✅（要调接口） | ❌ |
+| 恢复是否停服 | 不停 | 停 |
+
+**日常备份用默认的整站备份**；站点起不来、或者要连证书一起搬机器时才用 `--offline`。
+两种都留一份最稳妥（它们互不通用）。
+
+:::
+
+卸载只会删除数据目录和编排文件，**不会**删掉这些备份。卸载前仍建议先把备份拷到别处。
+
+::: warning 恢复之后要重新登录后台
+
+整站恢复会把 `settings`（含 JWT 密钥）和 `tokens` 一起换成备份里的内容，而 server 的 JWT 密钥是
+**启动时**读的 —— 所以恢复前登录的会话会失效，重新登录一次即可（登录/签发/校验仍然自洽，不影响使用）。
+如果你有"恢复后立刻调 `/api/admin/**`"的自动化脚本，需要先重启容器让密钥对齐，否则会拿到 401。
 
 :::
 
 @tab docker 手动部署时
 
-`docker` 部署的 VanBlog 所有的状态都存储在持久化目录中，所以只需要备份/迁移持久化目录。
+`docker` 部署的 VanBlog 所有状态都在持久化目录里，所以**目录级**备份就是把它整个拷走：
 
-将映射到宿主机的持久化目录进行备份或迁移到新机器上即可。
+```bash
+docker-compose stop                                   # 建议先停，避免拍到写了一半的数据文件
+tar czf vanblog-data-$(date +%Y%m%d%H%M%S).tar.gz -C /path/to/vanblog .
+```
 
-::: tip
+迁移到新机器：解包到对应目录，用同一份 `docker-compose.yaml` 起起来即可
+（⚠️ MongoDB 大版本要和原来一致，否则 mongod 会拒绝启动）。
 
-迁移映射的目录到新机器的对应目录后，再用一模一样的 `docker-compose` 启动就好了。
-
-:::
+**更推荐**的是用后台/接口做整站备份（跨版本、跨部署方式都能恢复）：
+`站点管理/系统设置/备份恢复 → 导出整站备份`，或者在容器里直接调接口，
+详见 [整站备份](../advanced/backup.md#整站备份推荐)。
 
 ::::
 
@@ -61,13 +105,6 @@ VANBLOG_RESTORE_FILE=/var/vanblog/vanblog-backup-20260913025300.tar.gz VANBLOG_A
 **数据库全部集合 + waline 评论 + 图床图片与缩略图 + 附件 + 自定义页面**。
 
 在新机器上装好 VanBlog、走完初始化向导后，进同一个页面点 **上传备份并恢复**，就能把整站还原出来（含索引）。详见 [导入导出](../advanced/backup.md#整站备份推荐)。
-
-::: tip 两种方式怎么选
-
-- 目录级快照（`vanblog.sh backup` / 直接拷持久化目录）：最完整，但恢复时 MongoDB 版本要对得上。
-- 后台整站备份：逻辑备份，跨版本、跨部署方式都能恢复，体积也更小；不含 Caddy 证书与日志。
-
-:::
 
 ## 更多
 

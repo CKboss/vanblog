@@ -2689,14 +2689,72 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 容器名带 PID（并发跑两次不会互拆）、mongo 版本走 `pick_mongo_image`、
 且**不许硬编码内网地址或某个镜像加速站**。
 
-### 7.33 测试基线（本分支最后一次全量运行的结果）
+### 7.33 安装 / 备份 / 恢复文档的对齐与一致性守卫
+
+文档漂移过好几轮了（脚本的默认行为改了，文档还写着旧命令），而且**文档里还留着会删卷的命令**。
+这次一次性对齐，并加了守卫测试，以后漂了会直接红。
+
+**改了什么**：
+
+- `docs/guide/script.snippet.md`（安装入口，被 `get-started.md` include）：下载地址从上游
+  `vanblog.mereith.com/vanblog.sh` 改成**本分支** raw（下载上游脚本会装成官方镜像，
+  本分支的改动一个都没有，还专门写了一段说明两者的区别）；补上"装的是什么"表
+  （安装模式 / 镜像 / mongo / 数据目录 / 端口）、源码构建的四个源变量
+  （npm / alpine / node 头文件 / sharp）、装完之后的常用命令、数据目录布局。
+- `docs/guide/backup.md`：**默认备份已经是整站备份**这件事必须写清楚 —— 原文说
+  `vanblog.sh backup` 打的是目录级 tar 包（现在是 `--offline` 才有），`VANBLOG_BACKUP_CONSISTENT=1`
+  这种旧用法也一并改成 `--offline --consistent`；补了 `--format`、按名字恢复、`--no-static`、
+  token/交互两种认证、cron 写法，以及一张"整站备份 vs 目录快照"的对比表
+  （一致性 / 跨版本 / 含不含 caddy 证书 / 要不要站点在跑 / 恢复停不停服）。
+  ⚠️ 还补了一条**恢复之后要重新登录后台**的说明（JWT 密钥是启动时读的，见 §7.32.1）。
+- `docs/guide/update.md` 与 `docs/faq/update.md`：删掉 `docker-compose down -v`
+  （`-v` 会删编排里的卷；现在是 bind mount 所以侥幸没事，一旦有人改成命名卷就是删库），
+  换成 `pull → down → up -d`，并加 `::: danger` 警告；升级顺序说明改成
+  "**先把新镜像准备好再停容器**"；回滚改成"用带提交号的 `dev-dsh-<sha>` tag"或"整站备份恢复"。
+- `docs/faq/deploy.md`：编排模板的来源顺序改成"本分支 raw 优先"，并说明退到上游模板会拿到什么
+  （mongo 写死 4.4.16、没有日志上限/`depends_on`/mongo 占位符）；外部访问数据库那节的 `down -v` 同样去掉。
+- `docs/advanced/backup.md`：那张"与一键脚本备份的区别"的表已经过时（脚本默认就是整站备份了），
+  改成"后台 / 一键脚本 / 目录快照"三者对比。
+- 新增 `docs/advanced/local-build.md`：本地构建与冒烟测试怎么做（§7.32 那套的用户视角版本），
+  含 podman rootless、国内三个下载源、冒烟测试查什么、"真起一个站导入整站备份"的完整命令，
+  以及那张踩坑表（无 aardvark-dns → 用容器 IP、Next 的 HOSTNAME、恢复后 JWT 401、
+  robots 只在 srv0 有路由、sitemap 恢复后要等一会儿、被 SIGTERM 打断的 podman build 返回 0）。
+- `scripts/vanblog.sh` 新增 **`status` 子命令**与 `--help`/`-h`/`help` 入口：
+  一屏看清脚本版本、安装/数据目录、编排里的 vanblog 与 mongo 镜像、mongo 数据是否存在、
+  HTTP 端口、站点接口探活、`docker-compose ps`、各目录占用、整站备份数量与最近三个归档、
+  磁盘剩余（含挂载点）。全部只读。⚠️ 提示语里**不要用 `$0`**：被 source 时它是 `bash`，
+  会打印出"跑一次 bash backup"这种东西，改用 `VANBLOG_SELF_NAME`。
+  脚本版本号 v0.4.0 → **v0.5.0**（`update_script` 靠它判断要不要替换）。
+
+**守卫测试** `scripts/tests/docs-consistency.test.sh`（25 条）：
+
+- 文档里出现的每个 `./vanblog.sh <子命令>` 都必须在 dispatcher 里存在；反过来
+  `backup/restore/status/update/install/config/log` 这几个必须在文档里出现过（新命令最容易漏文档）；
+- **任何文档都不许教人敲 `down -v`**（只允许出现在"不要这样做"的警告行里）；
+- `guide/`、`faq/` 里不许把上游脚本地址当安装命令；安装文档必须给本分支地址；
+- 安装/备份这几份文档提到的 `VANBLOG_*` 变量必须在脚本或编排模板里存在
+  （⚠️ 只查这几份：`VANBLOG_DISABLE_WEBSITE`/`VANBLOG_SWAGGER`/各种限流变量是 **server** 的，
+  写在 `features/config.md`，本来就不该出现在 vanblog.sh 里 —— 第一版检查范围太大，误报一片）；
+- 文档写的默认镜像 / 默认 mongo 必须和脚本里的默认值一致
+  （⚠️ 提取 `${VAR:-default}` 时 `cut -d: -f2-` 会多带一个 `-`，要 `sed 's/^-//'`）；
+- 备份文档必须同时出现 `backup --offline` 与 `vanblog-full-`（证明写清了两种备份）、
+  必须提醒恢复后重新登录；升级文档必须有 `down -v` 的警告；
+- `docs/advanced/local-build.md` 存在、覆盖 `build-image-local.sh` / podman / `SHARP_DIST_HOST` /
+  `aardvark-dns` / `publish-ghcr`，且被安装文档链接到。
+
+另外 `vanblog-hardening.test.sh` 加了 12 条 `status` 的断言（有数据/空环境两种情形、
+提示语里不许出现 `bash backup`、dispatcher 真的有 `status` 与 `--help`）。
+⚠️ 写这个测试时踩到：整站备份目录是 `<数据目录>/log/vanblog-backups`，**不是** `data/log/...`
+（`full_backup_dir()` 的实现是 `${VANBLOG_DATA_PATH}/log/vanblog-backups`），路径写错断言就会假失败。
+
+### 7.34 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 59 文件 / 550 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 15 文件 / 709 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 16 文件 / 745 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2706,7 +2764,7 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.33 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.34 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
