@@ -8,6 +8,7 @@ import {
   toThumbnailUrl,
 } from "../utils/firstImage";
 import { tagChipStyle, tagHue } from "../utils/tagColor";
+import { coverGlyph, coverHue, coverStyle } from "../utils/coverPlaceholder";
 
 const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
 
@@ -102,6 +103,43 @@ describe("标签彩色胶囊", () => {
   });
 });
 
+describe("渐变占位封面（没图的文章也有色块）", () => {
+  it("色相由标题哈希得出，同一篇永远同色", () => {
+    expect(coverHue("手动档汽车的几种起步方式")).toBe(coverHue("手动档汽车的几种起步方式"));
+    expect(coverHue("A")).not.toBe(coverHue("B"));
+    expect(coverHue("")).toBeGreaterThanOrEqual(0);
+  });
+
+  it("取首字时会剥掉 [分类] 前缀与 markdown 记号；拉丁标题取第一个单词", () => {
+    expect(coverGlyph("[摄影]2025冬日下的天马山")).toBe("2025");
+    expect(coverGlyph("# **快速**掌握手动挡")).toBe("快");
+    expect(coverGlyph("How to ride a bike")).toBe("How");
+    expect(coverGlyph("VanBlog: a blog system")).toBe("VanBlog");
+    expect(coverGlyph("   ")).toBe("·");
+    expect(coverGlyph("超长标题超长标题超长标题")).toBe("超");
+    // `+` 属于标识符字符集，所以 C++ 会整个留下（比只取 "C" 更有辨识度）
+    expect(coverGlyph("C++ 入门")).toBe("C++");
+    expect(coverGlyph("#1 号文章")).toBe("1");
+  });
+
+  it("色相仍然走 CSS 变量（暗色版本写在 CSS 里）", () => {
+    expect(coverStyle("生活")["--chip-h"]).toBe(String(tagHue("生活")));
+    const apple = read("styles/apple.css");
+    expect(apple).toContain(".post-card-cover-fallback");
+    expect(apple).toContain("hsl(var(--chip-h)");
+    expect(apple).toContain('html.dark [data-ui="apple"] .post-card-cover-fallback');
+    // 纯 CSS 斜纹，不引任何图片资源
+    expect(apple).toContain("repeating-linear-gradient");
+    expect(apple).not.toMatch(/post-card-cover-fallback[^}]*url\(/);
+  });
+
+  it("列表卡永远渲染封面块：有图用图，没图用占位", () => {
+    const postCard = read("components/PostCard/index.tsx");
+    expect(postCard).toContain('src={listImage ? listImage.src : null}');
+    expect(postCard).toMatch(/props\.type == "overview" && \(\s*\/\//);
+  });
+});
+
 describe("接线：只有 Apple 皮肤显示，默认皮肤版面不变", () => {
   const postCard = read("components/PostCard/index.tsx");
   const globals = read("styles/globals.css");
@@ -131,12 +169,13 @@ describe("接线：只有 Apple 皮肤显示，默认皮肤版面不变", () => 
     }
   });
 
-  it("缩略图加载失败会回退原图，原图也失败就整块不渲染", () => {
+  it("缩略图失败会回退原图，原图也失败就用渐变占位封面（绝不留空白）", () => {
     const thumb = read("components/PostCard/ListThumb.tsx");
     expect(thumb).toContain("onError");
     expect(thumb).toContain("setCurrent(props.fallback)");
     expect(thumb).toContain("setFailed(true)");
-    expect(thumb).toContain("if (failed || !current)");
+    expect(thumb).toContain("<CoverFallback title={props.title} />");
+    expect(thumb).toContain("if (!current || failed)");
     expect(thumb).toContain('loading="lazy"');
   });
 });

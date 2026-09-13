@@ -74,20 +74,30 @@
 
 /* 暗色沿用站点已有的 html.dark 机制，只把令牌整体反转 */
 html.dark [data-ui="apple"] {
+  /* 层级必须是「越抬越亮」：canvas < surface < surface-2 < surface-3。
+     原来 surface-2(#161617) 比 surface(#1d1d1f) 还**暗**，本该凸起的面看起来是凹下去的，
+     这是「深色模式很平、没有层次」的主因之一。数值参考 Apple 的暗色系统
+     （#000 / #1c1c1e / #2c2c2e / #3a3a3c）。 */
   --ap-canvas: #000000;
-  --ap-surface: #1d1d1f;
-  --ap-surface-2: #161617;
-  --ap-surface-3: #2c2c2e;
+  --ap-surface: #1c1c1e;
+  --ap-surface-2: #2c2c2e;
+  --ap-surface-3: #3a3a3c;
   --ap-text: #f5f5f7;
   --ap-text-2: #a1a1a6;
-  --ap-text-3: #86868b;
-  --ap-hairline: #424245;
-  --ap-hairline-soft: rgba(255, 255, 255, 0.12);
+  --ap-text-3: #8e8e93;
+  /* 发丝线改成半透明白：实色 #424245 在纯黑底上太重，会把版面切成一块块 */
+  --ap-hairline: rgba(255, 255, 255, 0.16);
+  --ap-hairline-soft: rgba(255, 255, 255, 0.09);
   --ap-accent: #2997ff;
   --ap-accent-hover: #4dabff;
-  --ap-nav-bg: rgba(29, 29, 31, 0.72);
+  --ap-nav-bg: rgba(28, 28, 30, 0.72);
   --ap-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   --ap-shadow-hover: 0 12px 32px rgba(0, 0, 0, 0.55);
+  /* 暗色下投影几乎看不见（黑底上的黑影子），Apple 的做法是改用两道「光学」信号：
+     顶边 1px 高光（模拟从上方打的光）+ 1px 半透明环（把面从背景里勾出来）。 */
+  --ap-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --ap-ring: 0 0 0 1px rgba(255, 255, 255, 0.07);
+  --ap-elevated: 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
 /* ---------------------------------------------------------------- 基础排版 */
@@ -1341,4 +1351,150 @@ html.dark [data-ui="apple"] #author-card > div {
 /* 头像加一圈强调色描边，小面积高饱和，Apple 的个人卡片就是这么做的 */
 [data-ui="apple"] #author-card img {
   box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.16);
+}
+
+/* ==========================================================================
+   渐变占位封面 + 深色模式层次（2026-09 追加）
+   ========================================================================== */
+
+/* --- 渐变占位封面：没有图的文章也有色块，一屏版面节奏统一，且零网络请求 --- */
+[data-ui="apple"] .post-card-cover-fallback {
+  --chip-h: 210;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 208px;
+  aspect-ratio: 16 / 10;
+  border-radius: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(115% 120% at 18% 8%, hsl(var(--chip-h) 90% 72% / 0.95), transparent 58%),
+    linear-gradient(
+      135deg,
+      hsl(var(--chip-h) 68% 54%),
+      hsl(calc(var(--chip-h) + 44) 70% 42%)
+    );
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  transition: transform 0.3s var(--ap-ease), box-shadow 0.3s var(--ap-ease);
+}
+
+/* 一层极淡的斜纹，避免大色块看起来"死平"（纯 CSS，不引图片） */
+[data-ui="apple"] .post-card-cover-fallback::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0.07) 0 2px,
+    transparent 2px 9px
+  );
+}
+
+[data-ui="apple"] .post-card-wrapper:hover .post-card-cover-fallback {
+  transform: scale(1.025);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.14);
+}
+
+[data-ui="apple"] .post-card-cover-glyph {
+  position: relative;
+  z-index: 1;
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: rgba(255, 255, 255, 0.94);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.28);
+}
+
+/* 窄屏时占位封面跟着变成通栏（和真图同一套断点） */
+@media (max-width: 640px) {
+  [data-ui="apple"] .post-card-cover-fallback {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+
+  [data-ui="apple"] .post-card-cover-glyph {
+    font-size: 44px;
+  }
+}
+
+/* 深色下降低饱和、压暗亮度：纯黑底上高饱和大色块会很刺眼 */
+html.dark [data-ui="apple"] .post-card-cover-fallback {
+  background:
+    radial-gradient(115% 120% at 18% 8%, hsl(var(--chip-h) 60% 46% / 0.9), transparent 58%),
+    linear-gradient(
+      135deg,
+      hsl(var(--chip-h) 42% 30%),
+      hsl(calc(var(--chip-h) + 44) 44% 22%)
+    );
+  box-shadow: var(--ap-inset-highlight), var(--ap-ring), 0 10px 26px rgba(0, 0, 0, 0.5);
+}
+
+html.dark [data-ui="apple"] .post-card-cover-glyph {
+  color: rgba(255, 255, 255, 0.86);
+}
+
+/* --- 深色模式的层次：顶边高光 + 1px 环，替代在黑底上看不见的投影 --- */
+html.dark [data-ui="apple"] #author-card > div,
+html.dark [data-ui="apple"] #toc-card > div,
+html.dark [data-ui="apple"] .markdown-body pre,
+html.dark [data-ui="apple"] .van-comment-form input,
+html.dark [data-ui="apple"] .van-comment-form textarea,
+html.dark [data-ui="apple"] .vanblog-search-panel,
+html.dark [data-ui="apple"] .vanblog-nav-dropdown,
+html.dark [data-ui="apple"] .vanblog-social-popover {
+  box-shadow: var(--ap-inset-highlight), var(--ap-ring) !important;
+}
+
+/* 浮层（搜索面板 / 下拉 / 气泡）比贴地的面再多一层投影，拉开"离地高度" */
+html.dark [data-ui="apple"] .vanblog-search-panel,
+html.dark [data-ui="apple"] .vanblog-nav-dropdown,
+html.dark [data-ui="apple"] .vanblog-social-popover {
+  box-shadow: var(--ap-inset-highlight), var(--ap-ring), var(--ap-elevated) !important;
+  background: var(--ap-surface-2) !important;
+}
+
+/* 导航栏：底部发丝线换成"暗线 + 高光"双层，毛玻璃在纯黑底上才有边界感 */
+html.dark [data-ui="apple"] #nav {
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08) !important;
+  border-bottom: 0 !important;
+}
+
+/* 代码块 / 引用块 / 表格：从背景里抬起来一层（surface → surface-2） */
+html.dark [data-ui="apple"] .markdown-body pre {
+  background: var(--ap-surface-2) !important;
+}
+
+html.dark [data-ui="apple"] .markdown-body blockquote {
+  background: var(--ap-surface) !important;
+  border-left-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+html.dark [data-ui="apple"] .markdown-body th {
+  background: var(--ap-surface-2) !important;
+}
+
+/* 列表条目之间的发丝线在深色下再淡一点，避免"格子纸"感 */
+html.dark [data-ui="apple"] .post-card-wrapper + .post-card-wrapper {
+  border-top-color: var(--ap-hairline-soft) !important;
+}
+
+/* 按钮：深色下用环 + 高光代替投影，hover 时抬一层 */
+html.dark [data-ui="apple"] .van-comment-submit button[type="submit"] {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset;
+}
+
+/* 图片在纯黑底上容易"糊成一片"，加一道极淡的环把边界勾出来 */
+html.dark [data-ui="apple"] .markdown-body img {
+  box-shadow: var(--ap-ring);
+}
+
+/* 缩略图与占位封面共用同一套 hover 抬升，深色下阴影加深 */
+html.dark [data-ui="apple"] .post-card-thumb {
+  box-shadow: var(--ap-ring), 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+html.dark [data-ui="apple"] .post-card-wrapper:hover .post-card-thumb {
+  box-shadow: var(--ap-ring), 0 14px 32px rgba(0, 0, 0, 0.62);
 }

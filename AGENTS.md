@@ -852,6 +852,22 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 但 `globals.css` 里默认 `display: none`，只有 `[data-ui="apple"]` 下才显示 ——
 默认皮肤的版面一个像素都不变。测试里钉了这条（`__tests__/appleSkinRichness.spec.ts`）。
 
+**5. 渐变占位封面**（`utils/coverPlaceholder.ts`）：连正文都没图的文章按**标题哈希**出色相，
+渲染「双色渐变 + 极淡斜纹（`repeating-linear-gradient`，纯 CSS 不引图）+ 标题首字」。
+这样一屏里每张卡都有色块，不会一半有图一半空着。`ListThumb` 因此改成**总是渲染**：
+有图用图 → 缩略图失败退原图 → 原图也失败退占位封面。
+首字规则要注意：中日韩取 1 个字，拉丁/数字取开头连续的 `[A-Za-z0-9&#+._-]+`（最多 8 字符）——
+用 `split(/\s/)` 的话 `2025冬日下的天马山` 会得到 `2025冬日下的` 这种半截词。
+
+**6. 深色模式的层次**：暗色令牌原来是**反的**（`--ap-surface-2` #161617 比 `--ap-surface` #1d1d1f 还暗），
+本该凸起的面看起来是凹的 → 整个暗色页很平。改成单调递增 `#000 < #1c1c1e < #2c2c2e < #3a3a3c`
+（Apple 暗色系统的数值），并新增两个暗色专用令牌：
+`--ap-inset-highlight`（顶边 1px 高光）与 `--ap-ring`（1px 半透明环）。
+⚠️ **纯黑底上投影是看不见的**，所以暗色的"抬升"必须靠高光 + 环来表达，浮层再叠一层投影拉开离地高度。
+发丝线从实色 `#424245` 换成 `rgba(255,255,255,.16)`（实色在黑底太重，会把版面切成格子）。
+`__tests__/appleTheme.spec.ts` 里有一条断言会**计算四个表面色的相对亮度并要求单调递增**，
+以后谁再把层级调反就会红。
+
 **别搞错的两件事**：
 - 公开列表接口带 `toListView=true` 时**不返回 content**（只有 tags/cover/title 等），
   那是 `getStaticPaths` 用的；真正的列表数据是不带 `toListView` 的那次请求，content 是有的。
@@ -1517,7 +1533,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 54 文件 / 504 用例全绿 |
+| website `vitest run` | 54 文件 / 509 用例全绿 |
 | admin `node --test tests/unit` | 73 套件 / 283 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |

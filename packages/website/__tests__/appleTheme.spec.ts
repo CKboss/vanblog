@@ -1,8 +1,13 @@
+import assert from "node:assert";
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
 const root = join(__dirname, '..');
+function assertToken(m: any, token: string) {
+  if (!m) throw new Error(`找不到令牌 --${token}`);
+}
+
 const read = (p: string) => readFileSync(join(root, p), 'utf8');
 const css = read('styles/apple.css');
 
@@ -54,13 +59,41 @@ describe('Apple 皮肤：设计令牌', () => {
     expect(css).toContain('cubic-bezier(0.4, 0, 0.2, 1)');
   });
 
+  it('暗色的表面层级必须「越抬越亮」，且有高光/环令牌', () => {
+    // 原来 surface-2(#161617) 比 surface(#1d1d1f) 还暗 —— 本该凸起的面看起来是凹的，
+    // 这就是「深色模式很平」的主因。现在必须单调递增。
+    const dark = css.slice(css.indexOf('html.dark [data-ui="apple"] {'));
+    const valueOf = (token) => {
+      const m = dark.match(new RegExp(`--${token}:\\s*([^;]+);`));
+      assertToken(m, token);
+      return m[1].trim();
+    };
+    const luminance = (hex) => {
+      const n = hex.replace('#', '');
+      const [r, g, b] = [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const canvas = luminance(valueOf('ap-canvas'));
+    const surface = luminance(valueOf('ap-surface'));
+    const surface2 = luminance(valueOf('ap-surface-2'));
+    const surface3 = luminance(valueOf('ap-surface-3'));
+    assert.ok(canvas < surface, 'canvas 要暗于 surface');
+    assert.ok(surface < surface2, 'surface 要暗于 surface-2');
+    assert.ok(surface2 < surface3, 'surface-2 要暗于 surface-3');
+    // 暗色下投影看不见，必须有顶边高光 + 1px 环这两个替代信号
+    expect(css).toContain('--ap-inset-highlight: inset 0 1px 0 rgba(255, 255, 255');
+    expect(css).toContain('--ap-ring: 0 0 0 1px rgba(255, 255, 255');
+    // 发丝线改成半透明白（实色在纯黑底上太重，会把版面切成一块块）
+    expect(valueOf('ap-hairline')).toMatch(/^rgba\(255, 255, 255/);
+  });
+
   it('暗色令牌整体反转（黑画布 + #2997ff 强调色）', () => {
     expect(css).toMatch(/html\.dark \[data-ui="apple"\]\s*\{/);
     const dark = css.slice(css.indexOf('html.dark [data-ui="apple"] {'));
     expect(dark.slice(0, 900)).toContain('--ap-canvas: #000000');
-    expect(dark.slice(0, 900)).toContain('--ap-surface: #1d1d1f');
+    expect(dark.slice(0, 900)).toContain('--ap-surface: #1c1c1e');
     expect(dark.slice(0, 900)).toContain('--ap-accent: #2997ff');
-    expect(dark.slice(0, 900)).toContain('--ap-hairline: #424245');
+    expect(dark.slice(0, 900)).toContain('--ap-hairline: rgba(255, 255, 255, 0.16)');
   });
 
   it('SF Pro 字体栈 + 17px 正文（Apple 的标志性正文字号）', () => {
