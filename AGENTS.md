@@ -1554,9 +1554,9 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 54 文件 / 510 用例全绿 |
-| admin `node --test tests/unit` | 73 套件 / 283 用例全绿 |
+| server `jest` | 599 用例：598 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 54 文件 / 509 用例全绿 |
+| admin `node --test tests/unit` | 77 套件 / 306 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
