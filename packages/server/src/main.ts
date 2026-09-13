@@ -152,12 +152,38 @@ async function bootstrap() {
     metaProvider.updateTotalWords('首次启动');
     const walineProvider = app.get(WalineProvider);
     walineProvider.init();
-    process.on('SIGINT', async () => {
-      await walineProvider.stop();
-      await websiteProvider.stop();
-      console.log('检测到关闭信号，优雅退出！');
-      process.exit();
-    });
+    // ⚠️ 必须同时接 SIGTERM：`docker stop`（以及 compose down / 更新 / 升级）发的都是 SIGTERM，
+    // 以前只接了 SIGINT，于是每次停容器都是"等满 10 秒宽限期再 SIGKILL"，
+    // 正在写的整站备份 / 导出归档 / 恢复上传会被硬生生截断（留下没有 sidecar 清单的半截归档）。
+    // start.js 现在会把收到的信号转发成 SIGTERM，所以这里必须真的处理它。
+    let shuttingDown = false;
+    const gracefulShutdown = async (signal: string) => {
+      if (shuttingDown) {
+        return;
+      }
+      shuttingDown = true;
+      console.log(`检测到 ${signal}，优雅退出！`);
+      // 每个 stop 都要单独兜住：一个失败不该让另一个跳过，更不该让进程卡住不退出
+      try {
+        await walineProvider.stop();
+      } catch (err) {
+        console.error(`停止 waline 失败：${(err as Error)?.message}`);
+      }
+      try {
+        await websiteProvider.stop();
+      } catch (err) {
+        console.error(`停止前台进程失败：${(err as Error)?.message}`);
+      }
+      try {
+        await app.close();
+      } catch (err) {
+        console.error(`关闭 HTTP 服务失败：${(err as Error)?.message}`);
+      }
+      process.exit(0);
+    };
+    process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+    process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+    process.on('SIGHUP', () => void gracefulShutdown('SIGHUP'));
     // 触发增量渲染生成静态页面，防止升级后内容为空
     const isrProvider = app.get(ISRProvider);
     isrProvider.activeAll('首次启动触发全量渲染！', 1000, {

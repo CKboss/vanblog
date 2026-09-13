@@ -2255,14 +2255,129 @@ VANBLOG_ASSUME_YES=1 VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore <归档名
 再 `restore <归档名>` → 脚本打印清单与「恢复成功」，数据库里那篇文章的封面**回来了**、
 16 篇有封面的文章数也复原 ✓。
 
-### 7.30 测试基线（本分支最后一次全量运行的结果）
+### 7.30 部署审计（2026-09）：一次性修掉的 12 个坑
+
+用户装完之后"打不开设置页面"，顺着这条线把**部署全链路**审了一遍（脚本 / Dockerfile /
+entrypoint / start.js / compose / caddy 模板 / 运行时 provider）。下面每条都是**已修**的，
+按"用户会看到什么"排序。
+
+**A. 容器"在跑但没人服务"这一类（最坑，因为 `docker ps` 一切正常）**
+
+1. **server 崩了容器不退出**：`start.js` 的 `ctx.on('exit')` 只打印一行"已停止"，自己不退出 →
+   server 挂了（比如缺 multer 那次）容器仍然 Up，`restart: always` 永远不触发。
+   现在子进程退出时父进程**以同样的退出码退出**。
+2. **caddy 起不来没人管**：`entrypoint.sh` 不检查 `caddy start` 的退出码（zerossl 那次就是这样，
+   80/443 全没了而容器"正常"）。现在先 `caddy validate`，失败就**降级**到
+   `caddyFallbackTemplate.json`（同一份路由表、去掉 `apps.tls`，HTTP 仍可用、443 走自签），
+   并把 Caddy 版本打进日志让人来报。
+3. **waline 崩了不会自己起来**：`waline.provider.ts` 的 exit 处理只打日志
+   （而 `website.provider.ts` 一直有自动重启）→ 评论静默 502 直到重启容器。
+   现在自动重启，带 2s×n 的退避、**5 次上限**、稳定运行超过 1 分钟就重置计数，
+   主动 `stop()` 时不会重启（否则关不掉）。
+4. **没有健康检查**：加了 `HEALTHCHECK`，探的是 **caddy 的 80 端口**（不是 server 的 3000），
+   这样一条检查覆盖 caddy → server → 前台 → 后台静态文件整条链路；用镜像自带的 node 发请求
+   （**镜像里没有 curl**），`start-period=180s` 给小机器留冷启动时间。
+   ⚠️ Docker 本身不会因为 unhealthy 就重启容器，所以它只是给人看的信号，不会引入重启风暴。
+
+**B. 停机与数据完整性**
+
+5. **`docker stop` 从来不优雅**：PID 1 是 `sh`，SIGTERM 被它吃掉；`start.js` 只接 SIGINT，
+   而且转发用的是 `process.kill(-ctx.pid)` —— 子进程没有 `detached: true`，**没有独立进程组**，
+   这句直接抛 ESRCH；`main.ts` 也只接了 SIGINT。三处叠加的结果是每次停容器都等满 10 秒宽限期
+   再 SIGKILL，**正在写的整站备份/导出/恢复上传被截断**（留下没有 sidecar 清单的半截归档）。
+   修法：entrypoint 用 `exec node start.js`（node 当 PID 1 直接收 SIGTERM）、
+   `start.js` 接 SIGTERM/SIGINT/SIGHUP 并用 `ctx.kill('SIGTERM')` 转发 + 等子进程 + 超时硬退、
+   `main.ts` 同样接三个信号并依次停 waline / 前台 / `app.close()`（每步单独 try，一个失败不影响其它）。
+6. **`restart`/`start_vanblog`/`stop_vanblog` 永远返回 0**：不管 docker-compose 成没成功都打印
+   "成功"，安装与 config 流程因此到处误报；更危险的是**离线恢复**（老的 `vanblog-backup-*.tar.gz`）
+   靠它判断"服务停了吗"，停不下来照样解压覆盖数据目录 = **mongod 还在写的时候动它的数据文件**。
+   现在三个函数都把 docker-compose 的退出码返回出去，恢复流程停不下来就直接中止。
+7. **`/var/log` 无限增长**：`start.js` 把 server/前台/waline 的每个输出块**同时**写进
+   stdout/stderr/stdio 三个文件，而 `/var/log` 是挂到宿主机数据目录的卷 → 跑几个月把磁盘写满，
+   然后 mongod 写失败、整站挂掉。现在按 `VAN_BLOG_STDIO_LOG_MAX_BYTES`（默认 20MB）轮转，
+   只留一份 `.old`。⚠️ `vanblog-stdio.log` **不能不写**：后台「查看日志」读的就是它
+   （`log.provider.ts` 的 `systemLogPath`），所以是轮转而不是删掉。
+8. **`restore.key` 是 0644**：它写在挂载到宿主机的 `/var/log` 下，还会被 `vanblog.sh backup`
+   一起打包 —— 而它是「忘记密码」的恢复密钥。现在以 **0600** 写入（并额外 `chmodSync`，
+   因为文件已存在时 `writeFileSync` 的 mode 不生效）。
+
+**C. 装错东西 / 装不上**
+
+9. **`config` 会把镜像悄悄换回上游官方版**：`config` 用 `Docker_IMG` 重写 `image:` 行，
+   而 `Docker_IMG` 只在 `pre_check` 里被设成 `mereith/van-blog:latest`，这条路径又不经过
+   `prepare_vanblog_image` → **改个邮箱/端口就把本 fork 换成了上游镜像**，所有分支功能消失，
+   而且没有任何提示。现在优先沿用编排文件里现有的镜像，没有才去准备。
+   ⚠️ 顺带踩到一个 `set -u` 坑：新代码里引用 `Docker_IMG` 必须写成 `${Docker_IMG:-}`，
+   否则在被 source 的场景下会 `unbound variable` 直接中断，配置改到一半停下。
+10. **首次启动可能崩溃循环**：`initJwt` 是启动后第一次碰数据库，发生在 `unhandledRejection`
+    兜底装上之前，而且只连一次；compose 的 `depends_on` 只保证"先启动 mongo 容器"，
+    不保证 mongod 已经能接受连接（首次初始化数据目录/慢磁盘要几秒到几十秒）→
+    未捕获 rejection → 进程退出 → 容器重启 → 再退出。现在最多重试 10 次、每次间隔 3 秒。
+    compose 里也补了 `depends_on: [mongo]` 与两个服务的**日志上限**
+    （`json-file` + `max-size: 10m` + `max-file: 3`，否则容器 stdout 也会无限增长）。
+11. **自更新可能把唯一一份可用脚本毁掉**：`is_valid_vanblog_script` 只 grep 一个版本号，
+    截断到 20 行的下载也能通过，然后 `mv` 覆盖 + `exec`；而且用的是 `./vanblog.sh`
+    （CWD 相对路径，在别的目录里执行会写错地方）。现在校验 `bash -n` + 首尾标志
+    （`show_menu` 定义与文件末尾的调用都在），下载到 `mktemp` 出来的临时文件
+    （固定的 `/tmp/vanblog.sh` 可被软链攻击，而脚本是 root 跑的），版本相同就不替换，
+    覆盖与 exec 都用 `VANBLOG_SELF_PATH`（由 `BASH_SOURCE` 推出的绝对路径）。
+12. **wget 下载关掉了 TLS 校验**：`download_url_to_file` 用 `wget --no-check-certificate`，
+    而下载的正是**编排模板和脚本自己**（还会被 exec）→ 等于允许中间人塞一份进来。
+    现在正常校验，wget 失败退 curl，而不是退到"不校验"。
+
+**顺手修的小问题**：`VANBLOG_DATA_PATH_RAW` 以前写死 `/var/vanblog/data`，用
+`VANBLOG_DATA_PATH` 换目录后编排文件与 backup/restore 各写各的地方（现在跟着变量走并正确转义）；
+邮箱里的 `&` 会被 sed 当成"整个匹配"展开（`a&b@x.com` → `avanblog_emailb@x.com`，
+ACME 拿到非法地址，HTTPS 一直签不出来）；`get_compose_http_port` 的 `[0-9]+:80` 会把
+`"3000:8080"` 里的 `3000:80` 当成匹配（restore 于是去探错端口）；`clone_or_update_source`
+在克隆前无条件 `rm -rf "${VANBLOG_SRC_DIR}"`（指向自己的源码树时整个删掉，现在要求是 git 仓库
+或在安装目录下）；编排模板校验只看 `services:`/`vanblog:`（截断的模板能过，会生成一份**没有 mongo**
+的编排文件）；docker 装不上时 `exit 0`（自动化流程会误判成功，现在 `exit 1` 并检查 `docker info`）；
+卸载只删上游镜像（本分支 ghcr 镜像、本地构建 tag、自建 shim 都留着，现在一起清，
+且**只删自己写的 shim**）；caddy 的 admin API 监听 `0.0.0.0:2019`（同网络任何容器都能改写全部路由与
+TLS，改成 `127.0.0.1`）；镜像默认 `EMAIL` 是上游作者的邮箱（没设 EMAIL 的用户会拿它注册
+Let's Encrypt 账户，改成空值）；SELinux Enforcing 时给出提示（bind mount 没有 `:z`，
+mongo/caddy 会被 AVC 拒绝而反复重启）。
+
+**审计到但这次没动的（记下来）**：
+- `server_builder` / `cli` / `waline` 三个 stage 仍然是**独立安装、没有 lockfile**
+  （§7.27 的 cytoscape 教训只应用到了 admin）。server 的依赖都是 semver 区间，
+  每次构建都重新解析 → 上游发个新 minor 就可能让镜像构建或运行出问题。
+  没顺手改是因为 pnpm 的符号链接布局：runner 现在直接 `COPY --from=server_builder /app/node_modules`，
+  换成 workspace 布局后必须同时拷 `/app/node_modules`（.pnpm 真身）与
+  `/app/packages/server/node_modules`（软链层）并保持相对路径一致，还要改 `start.js` 的 cwd ——
+  改动面大且本机没有 docker 权限验证。**缓解**：镜像由 CI 构建、构建失败就发不出来，
+  所以漂移会在发布时暴露，不会到用户手上。
+- 流水线的依赖装在 `/app/codeRunner`（不在卷里），每次重建容器都要重新下载；镜像里没有 `git`，
+  git URL 形式的依赖永远装不上。
+- runner 里是 Node 18（已 EOL）、容器以 root 运行、`PORT` 被 `isr.provider.ts` 硬编码成 3001
+  （改 PORT 会同时弄坏 ISR 与 caddy→前台的代理）。
+- mongo 钉在 4.4.16（EOL 无安全更新）。**不要直接换 `latest`**：数据目录与 FCV 绑定，
+  4.4 → 8.x 没有直升路径，mongod 会拒绝启动，看起来像数据全丢。要升级必须走
+  5.0 → 6.0 → 7.0 阶梯并逐级改 FCV，或者用整站备份（NDJSON，跨版本可恢复）迁到新库。
+  模板里的注释已经这么写了。
+
+**测试**：新增 `scripts/tests/vanblog-hardening.test.sh`（36 条，覆盖 B1/B2/B3/M1/M2/M3/m1/m2/m3/M5/m4），
+`image-runtime.test.sh` 从 19 涨到 42（caddy admin 回环、EMAIL 默认值、main.ts 三个信号、
+waline 自动重启与上限与 stopping 标记、initJwt 重试、restore.key 0600、EXPOSE/HEALTHCHECK），
+`start-js.test.sh`（15 条，真的起 stub 子进程验证退出码传播、SIGTERM 转发、超时硬退、日志轮转）。
+脚本合计 **13 文件 / %s 条断言**；server 610（609 绿 + 1 个既有离线字体用例）；
+本地三个服务改完全程 200。
+
+⚠️ 这轮又踩了两次同一个坑：**反向断言前必须剥掉注释**（新写的注释里引用了旧代码），
+而且剥注释的 `sed` **不能用 `#` 当分隔符**（`s#^[[:space:]]*#.*##` 会被解析成
+"把行首空白替换成 `.*`"，注释根本没剥掉，表现是"明明改了却还报有旧代码"）。
+另外别把字面量旗标写进用户可见的提示语里（我写了"别用 --no-check-certificate 绕过"，
+结果守卫断言把它当成了"又关掉校验了"）。
+
+### 7.31 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 11 文件 / 501 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 13 文件 / 588 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2272,7 +2387,7 @@ VANBLOG_ASSUME_YES=1 VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore <归档名
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.30 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.31 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

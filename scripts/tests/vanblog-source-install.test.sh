@@ -550,6 +550,9 @@ assert_contains "${OUT}" "linux/arm64" "架构不匹配时告诉用户怎么出 
 docker() { echo "Error: dial tcp: i/o timeout"; return 1; }
 OUT="$(pull_fork_image 2>&1)"
 assert_contains "${OUT}" "网络到不了 ghcr.io" "其它失败给出通用解释"
+assert_contains "${OUT}" "VANBLOG_IMAGE_REF" "网络类失败给出「换镜像加速地址」这条路"
+assert_contains "${OUT}" "docker save" "网络类失败给出「大机器 save / 本机 load」这条路"
+assert_contains "${OUT}" "VANBLOG_INSTALL_MODE=source" "网络类失败给出「源码构建」这条路"
 
 # 4) 从本地构建切到拉镜像后，提示清掉旧镜像（只提示，不自动删）
 setup_case

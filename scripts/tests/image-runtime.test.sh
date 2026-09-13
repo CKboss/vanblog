@@ -330,6 +330,77 @@ for ph in vanblog_image vanblog_email vanblog_data_path vanblog_http_port vanblo
   fi
 done
 
+
+# ---------- 7) 容器运行时的几处加固（部署审计 2026-09）----------
+# caddy 的 admin API 以前监听 0.0.0.0:2019：同一 compose 网络里的任何容器
+# （或 host 网络模式下宿主机上的任何进程）都能改写全部路由与 TLS 配置。
+for cf in "${ROOT}/caddyTemplate.json" "${ROOT}/caddyFallbackTemplate.json"; do
+  if grep -qF '"admin":{"listen":"127.0.0.1:2019"}' "${cf}"; then
+    pass "$(basename "${cf}")：caddy admin API 只监听回环"
+  else
+    fail "$(basename "${cf}")：caddy admin API 没有收敛到 127.0.0.1:2019"
+  fi
+done
+
+# 镜像默认 EMAIL 不能是上游作者的邮箱：没设 EMAIL 的用户会拿它去注册 Let's Encrypt 账户
+if grep -qF 'ENV EMAIL=""' "${DOCKERFILE}"; then
+  pass "镜像默认 EMAIL 为空（不会拿上游作者的邮箱去注册 ACME 账户）"
+else
+  fail "镜像里仍然烘焙了非空的默认 EMAIL"
+fi
+if grep -qF 'vanblog@mereith.com' "${DOCKERFILE}"; then
+  fail "Dockerfile 里还留着上游作者的邮箱"
+else
+  pass "Dockerfile 里没有上游作者的邮箱"
+fi
+
+# server 必须处理 SIGTERM：docker stop 发的就是它，只接 SIGINT 等于每次停容器都被 SIGKILL
+MAIN_TS="${ROOT}/packages/server/src/main.ts"
+if grep -qF "process.on('SIGTERM'" "${MAIN_TS}"; then
+  pass "main.ts 处理 SIGTERM（docker stop / 更新 / 升级不再等满宽限期后被硬杀）"
+else
+  fail "main.ts 没有处理 SIGTERM"
+fi
+if grep -qF "process.on('SIGINT'" "${MAIN_TS}"; then
+  pass "main.ts 仍然处理 SIGINT"
+else
+  fail "main.ts 丢了 SIGINT 处理"
+fi
+
+# waline 崩溃后要能自己起来（前台进程一直有这个行为，waline 没有 → 评论静默 502）
+WALINE_TS="${ROOT}/packages/server/src/provider/waline/waline.provider.ts"
+if grep -qF "scheduleRestart" "${WALINE_TS}"; then
+  pass "waline 退出后会自动重启"
+else
+  fail "waline 退出后不会重启：评论会一直 502，而容器看起来是正常的"
+fi
+if grep -qF "restartAttempts >= 5" "${WALINE_TS}"; then
+  pass "waline 自动重启有次数上限（不会崩溃循环刷日志）"
+else
+  fail "waline 自动重启没有次数上限"
+fi
+if grep -qF "this.stopping = true" "${WALINE_TS}"; then
+  pass "主动 stop 时不会再自动重启"
+else
+  fail "主动 stop 之后还会被自动重启"
+fi
+
+# 启动时第一次连库要重试：compose 的 depends_on 只保证启动顺序，不保证 mongod 已可连接
+JWT_TS="${ROOT}/packages/server/src/utils/initJwt.ts"
+if grep -qF "attempt <= 10" "${JWT_TS}" || grep -qF "attempt < 10" "${JWT_TS}"; then
+  pass "initJwt 连不上 MongoDB 时会重试（否则首次启动就是崩溃循环）"
+else
+  fail "initJwt 仍然只连一次：首次启动遇到慢 mongod 会直接崩溃循环"
+fi
+
+# 「忘记密码」的恢复密钥写在挂载到宿主机的 /var/log 下，必须 0600
+INIT_TS="${ROOT}/packages/server/src/provider/init/init.provider.ts"
+if grep -qF "mode: 0o600" "${INIT_TS}"; then
+  pass "restore.key 以 0600 写入（/var/log 是宿主机挂载卷，0644 等于谁都能读）"
+else
+  fail "restore.key 没有收紧权限"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

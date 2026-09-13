@@ -149,7 +149,10 @@ ENV NODE_ENV=production
 ENV VAN_BLOG_SERVER_URL="http://127.0.0.1:3000"
 ENV VAN_BLOG_ALLOW_DOMAINS="pic.mereith.com"
 ENV VAN_BLOG_DATABASE_URL="mongodb://mongo:27017/vanBlog?authSource=admin"
-ENV EMAIL="vanblog@mereith.com"
+# ⚠️ 以前这里默认填了上游作者的邮箱：没设 EMAIL 的用户会拿**作者的地址**去注册
+# Let's Encrypt 账户（到期提醒也发给作者）。留空是安全的 —— Caddy 的 acme issuer
+# 允许没有联系邮箱，entrypoint.sh 也会把空值/占位符/非法值统一处理成空。
+ENV EMAIL=""
 ENV VAN_BLOG_WALINE_DB="waline"
 # 复制静态文件
 WORKDIR /app/admin

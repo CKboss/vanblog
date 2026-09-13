@@ -129,7 +129,48 @@ export class WalineProvider {
     }
     await this.run();
   }
+  /** 主动停止时不要再自动重启 */
+  private stopping = false;
+  private restartAttempts = 0;
+  private restartTimer: NodeJS.Timeout | null = null;
+
+  private scheduleRestart() {
+    if (this.stopping) {
+      return;
+    }
+    if (this.restartAttempts >= 5) {
+      this.logger.error(
+        'Waline 已连续退出 5 次，停止自动重启。请在后台重新保存一次评论设置，或重启容器；' +
+          '如果不需要 waline，把评论系统切到「内置」即可。',
+      );
+      return;
+    }
+    this.restartAttempts += 1;
+    const delay = Math.min(30000, 2000 * this.restartAttempts);
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+    }
+    this.restartTimer = setTimeout(async () => {
+      this.restartTimer = null;
+      if (this.stopping || this.ctx) {
+        return;
+      }
+      this.logger.log(`第 ${this.restartAttempts} 次尝试重新拉起 Waline（${delay}ms 后）`);
+      try {
+        await this.run();
+      } catch (err) {
+        this.logger.error(`重新拉起 Waline 失败：${(err as Error)?.message}`);
+        this.scheduleRestart();
+      }
+    }, delay);
+  }
+
   async stop() {
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (!this.ctx) {
       return;
     }
@@ -167,6 +208,8 @@ export class WalineProvider {
     this.logger.log('waline 停止成功！');
   }
   async run(): Promise<any> {
+    // 重新拉起（自动重启或后台改了评论设置）时要允许后续再次自动重启
+    this.stopping = false;
     // 评论系统不是 waline（内置评论或已关闭）时不必拉起这个子进程：
     // 省一个常驻 node 进程和 8360 端口，也避免退出钩子把它反复拉起来。
     try {
@@ -192,9 +235,19 @@ export class WalineProvider {
       this.ctx.on('message', (message) => {
         this.logger.log(message);
       });
-      this.ctx.on('exit', () => {
+      const startedAt = Date.now();
+      this.ctx.on('exit', (code: number | null, signal: string | null) => {
         this.ctx = null;
-        this.logger.warn('Waline 进程退出');
+        this.logger.warn(`Waline 进程退出（code=${code} signal=${signal}）`);
+        // ⚠️ 以前这里只打一行日志就完事了：waline 一旦被 OOM 杀掉或启动时连不上库，
+        // /comment*、/ui 就会一直 502，而 server 还活着 → restart:always 永远不触发，
+        // 用户只会看到"评论发不出去"，直到重启容器。前台进程（website.provider）
+        // 是一直有自动重启的，这里对齐它的行为，但加上退避与次数上限，避免崩溃循环刷日志。
+        if (Date.now() - startedAt > 60 * 1000) {
+          // 稳定跑过一分钟才算"正常运行后退出"，重置计数
+          this.restartAttempts = 0;
+        }
+        this.scheduleRestart();
       });
       this.ctx.stdout.on('data', (data) => {
         const t = data.toString();

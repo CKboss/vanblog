@@ -10,7 +10,13 @@
 # 可以用环境变量覆盖（测试、以及想把安装目录放到别处的场景）；默认值不变。
 VANBLOG_BASE_PATH="${VANBLOG_BASE_PATH:-/var/vanblog}"
 VANBLOG_DATA_PATH="${VANBLOG_DATA_PATH:-${VANBLOG_BASE_PATH}/data}"
-VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-\/var\/vanblog\/data}"
+# 写进编排文件时要作为 sed 的**替换文本**，所以 & \ | 都得转义（分隔符用 |）。
+# ⚠️ 这里以前是写死的 `\/var\/vanblog\/data`：一旦用 VANBLOG_DATA_PATH 换了目录，
+# 编排文件里的卷还是指向 /var/vanblog/data，而 backup/restore/reset_https 操作的是新目录，
+# 两边各写各的 —— 表现是"数据不见了"，其实是写到了两个地方。
+_vb_data_sed="${VANBLOG_DATA_PATH//\\/\\\\}"
+_vb_data_sed="${_vb_data_sed//&/\\&}"
+VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-${_vb_data_sed//|/\\|}}"
 VANBLOG_SCRIPT_VERSION="v0.4.0"
 
 # ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
@@ -288,7 +294,17 @@ clone_or_update_source() {
   else
     echo -e "> 克隆源码 ${VANBLOG_REPO} (${VANBLOG_BRANCH})"
     mkdir -p "$(dirname "${VANBLOG_SRC_DIR}")"
-    rm -rf "${VANBLOG_SRC_DIR}"
+    # ⚠️ 这个 rm -rf 以前是无条件的：如果用户把 VANBLOG_SRC_DIR 指到自己解压的源码树
+    # （没有 .git），整个目录会被删掉。uninstall 里同样的操作是有护栏的，这里也要有。
+    if [[ -e "${VANBLOG_SRC_DIR}" ]]; then
+      if [[ -d "${VANBLOG_SRC_DIR}/.git" || "${VANBLOG_SRC_DIR}" == "${VANBLOG_BASE_PATH}/src" ]]; then
+        rm -rf "${VANBLOG_SRC_DIR}"
+      else
+        echo -e "${red}${VANBLOG_SRC_DIR} 已存在，但既不是 git 仓库也不在 ${VANBLOG_BASE_PATH} 下，${plain}"
+        echo -e "${red}为避免误删你自己的文件，不会自动删除。请手动清理或换一个 VANBLOG_SRC_DIR。${plain}"
+        return 1
+      fi
+    fi
     git clone --depth 1 --branch "${VANBLOG_BRANCH}" "${VANBLOG_REPO}" "${VANBLOG_SRC_DIR}" || return 1
   fi
 
@@ -504,6 +520,12 @@ pull_fork_image() {
       ;;
     *)
       echo -e "${yellow}  拉取失败（镜像可能还没发布，或网络到不了 ghcr.io）${plain}"
+      echo -e "${yellow}  国内机器拉 ghcr.io 经常超时，三条路：${plain}"
+      echo -e "    1) 走镜像加速：${green}VANBLOG_IMAGE_REF=<你的 ghcr 镜像地址>/ckboss/vanblog:dev-dsh $0${plain}"
+      echo -e "       （例如 ghcr.nju.edu.cn 这类公共加速域名，能不能用取决于当下网络，别写死在脚本里）"
+      echo -e "    2) 在大机器上 ${green}docker pull${plain} + ${green}docker save${plain}，拷到本机 ${green}docker load${plain}，"
+      echo -e "       然后 ${green}VANBLOG_INSTALL_MODE=image VANBLOG_IMAGE_REF=vanblog:dev-dsh $0${plain}"
+      echo -e "    3) 直接源码构建：${green}VANBLOG_INSTALL_MODE=source $0${plain}（15-40 分钟，吃内存）"
       ;;
   esac
   return 1
@@ -582,27 +604,57 @@ is_valid_compose_template() {
   if [[ ! -s "${file}" ]]; then
     return 1
   fi
-  grep -q "services:" "${file}" && grep -q "vanblog:" "${file}"
+  # 只 grep services:/vanblog: 是不够的：下载被截断时前几十行就有这两个词，
+  # 校验通过后 config 会把它 sed 成一份**没有 mongo 服务**的编排文件，
+  # 起栈时一半成功一半失败，而脚本还会打印"成功"。
+  grep -q "services:" "${file}" || return 1
+  grep -q "vanblog:" "${file}" || return 1
+  grep -q "mongo:" "${file}" || return 1
+  # 占位符也必须在，否则 config 的 sed 无处可替，最后留下一份跑不起来的编排文件
+  local ph
+  for ph in vanblog_image vanblog_data_path vanblog_http_port vanblog_https_port; do
+    grep -q "${ph}" "${file}" || return 1
+  done
+  return 0
 }
+
+# 脚本自己的绝对路径：自更新要覆盖的是**这一份**，而不是当前工作目录下的同名文件
+# （以前是 `mv -f /tmp/vanblog.sh ./vanblog.sh && exec ./vanblog.sh`，
+#   在别的目录里执行就会写错地方、exec 到的还是旧脚本）。
+VANBLOG_SELF_PATH="${VANBLOG_SELF_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/$(basename "${BASH_SOURCE[0]}")}"
+[[ -f "${VANBLOG_SELF_PATH}" ]] || VANBLOG_SELF_PATH="./vanblog.sh"
 
 is_valid_vanblog_script() {
   local file="$1"
   if [[ ! -s "${file}" ]]; then
     return 1
   fi
-  grep -q "VANBLOG_SCRIPT_VERSION" "${file}"
+  bash -n "${file}" >/dev/null 2>&1 || return 1
+  grep -q "VANBLOG_SCRIPT_VERSION" "${file}" || return 1
+  grep -q "^show_menu()" "${file}" || return 1
+  tail -n 20 "${file}" | grep -q "show_menu" || return 1
+  return 0
 }
 
 download_url_to_file() {
   local url="$1"
   local dest="$2"
+  # ⚠️ 以前这里给 wget 加了 --no-check-certificate：下载的是**编排模板和脚本自己**，
+  # 关掉校验等于允许中间人塞一份进来（而脚本是 root 跑的、还会 exec 新脚本）。
+  # 现在正常校验；wget 失败（比如老机器的 CA 包过期）就退到 curl，而不是退到"不校验"。
   if command -v wget >/dev/null 2>&1; then
-    wget -t 2 --no-check-certificate -T 10 -O "${dest}" "${url}" >/dev/null 2>&1
-    return $?
+    if wget -t 2 -T 10 -O "${dest}" "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
   fi
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --connect-timeout 10 --retry 2 -o "${dest}" "${url}" >/dev/null 2>&1
     return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    echo -e "${red}wget 与 curl 都没能下载 ${url}（TLS 证书校验是开启的，请不要绕过它；${plain}"
+    echo -e "${red}如果本机 CA 证书过期，先更新 ca-certificates 再重试）${plain}"
+    return 1
   fi
   echo -e "${red}未找到 wget 或 curl，无法下载${plain}"
   return 1
@@ -659,22 +711,47 @@ download_script() {
 update_script() {
   echo -e "> 更新脚本"
 
-  if ! download_script /tmp/vanblog.sh; then
+  # ⚠️ 不要下载到固定路径 /tmp/vanblog.sh：那是全局可写目录，
+  # 先放一个指向 /root/xxx 的软链再让 curl -o 跟随，就能覆盖任意文件（脚本是 root 跑的）。
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/vanblog-script.XXXXXX")" || {
+    echo -e "${red}无法创建临时文件${plain}"
+    return 1
+  }
+  if ! download_script "${tmp}"; then
+    rm -f "${tmp}"
     echo -e "${red}脚本获取失败，请检查本机能否连接文档站、GitHub 或 jsDelivr${plain}"
     return 1
   fi
-  new_version=$(cat /tmp/vanblog.sh | grep "VANBLOG_SCRIPT_VERSION" | head -n 1 | awk -F "=" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
+  if ! is_valid_vanblog_script "${tmp}"; then
+    rm -f "${tmp}"
+    echo -e "${red}下载到的脚本不完整或语法有误，已丢弃（不会覆盖当前这份）${plain}"
+    return 1
+  fi
+  new_version=$(grep "VANBLOG_SCRIPT_VERSION" "${tmp}" | head -n 1 | awk -F "=" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
   if [ ! -n "$new_version" ]; then
+    rm -f "${tmp}"
     echo -e "脚本获取失败，已下载的文件无法解析版本号"
     return 1
   fi
-  echo -e "当前最新版本为: ${new_version}"
-  mv -f /tmp/vanblog.sh ./vanblog.sh && chmod a+x ./vanblog.sh
+  echo -e "当前最新版本为: ${new_version}（本机 ${VANBLOG_SCRIPT_VERSION}）"
+  if [[ "${new_version}" == "${VANBLOG_SCRIPT_VERSION}" ]]; then
+    rm -f "${tmp}"
+    echo -e "${green}已经是最新版本，无需替换${plain}"
+    return 0
+  fi
+  if ! cp "${tmp}" "${VANBLOG_SELF_PATH}"; then
+    rm -f "${tmp}"
+    echo -e "${red}写入 ${VANBLOG_SELF_PATH} 失败${plain}"
+    return 1
+  fi
+  rm -f "${tmp}"
+  chmod a+x "${VANBLOG_SELF_PATH}"
 
   echo -e "3s后执行新脚本"
   sleep 3s
   clear
-  exec ./vanblog.sh
+  exec bash "${VANBLOG_SELF_PATH}"
   exit 0
 }
 
@@ -698,6 +775,16 @@ install_soft() {
 
 install_vanblog() {
   install_base
+
+  # SELinux enforcing 时，编排文件里的 bind mount 没有 :z/:Z 标记，
+  # mongod 与 caddy 会因为 AVC 拒绝读写数据目录而反复重启 —— 而这类失败
+  # 在脚本这边只表现为"起不来"，很难想到是 SELinux。这里提前说一声。
+  if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+    echo -e "${yellow}检测到 SELinux 处于 Enforcing：本编排文件的 bind mount 没有打 :z 标记，${plain}"
+    echo -e "${yellow}mongo/caddy 可能因 AVC 拒绝而无法读写 ${VANBLOG_DATA_PATH}。${plain}"
+    echo -e "${yellow}若容器反复重启，先看 ${yellow}ausearch -m avc -ts recent${plain}${yellow}，"
+    echo -e "${yellow}必要时给卷加 :z，或临时 setenforce 0 验证。${plain}"
+  fi
 
   echo -e "> 安装 VanBlog"
 
@@ -736,7 +823,15 @@ install_vanblog() {
     command -v docker >/dev/null 2>&1
     if [[ $? != 0 ]]; then
       echo -e "${red}Docker 安装失败${plain}"
-      exit 0
+      # ⚠️ 以前这里是 exit 0：cloud-init / ansible 会认为安装成功，
+      # 然后后面每一步都失败，日志里却看不到真正的起因。
+      exit 1
+    fi
+    # 有 docker 命令不等于 daemon 起来了（非 systemd 的机器、或 service 启动失败）
+    if ! docker info >/dev/null 2>&1; then
+      echo -e "${red}Docker 命令已安装，但 daemon 连不上（docker info 失败）。${plain}"
+      echo -e "${red}请先启动 docker 服务再重试；非 systemd 的机器需要手动 dockerd。${plain}"
+      exit 1
     fi
     echo -e "${green}Docker${plain} 安装成功"
   fi
@@ -859,11 +954,36 @@ config() {
     cp "${VANBLOG_BASE_PATH}/docker-compose.yaml" "${compose_backup}" >/dev/null 2>&1 || true
     echo -e "> 已备份原有编排文件到 ${yellow}${compose_backup}${plain}（自定义的 environment / 卷映射需要重新加回来）"
   fi
-  rm ${VANBLOG_BASE_PATH}/docker-compose.yaml >/dev/null 2>&1
-  cp ${VANBLOG_BASE_PATH}/docker-compose-template.yaml ${VANBLOG_BASE_PATH}/docker-compose.yaml >/dev/null 2>&1
-  sed -i "s/vanblog_data_path/${VANBLOG_DATA_PATH_RAW}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
-  # 用 | 作分隔符：邮箱里出现 / 或 & 时 s///.../g 会被截断或展开
-  sed -i "s|vanblog_email|${vanblog_email}|g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
+  # ⚠️ 下面会用 Docker_IMG 重写 image: 行，而 Docker_IMG 只在 pre_check 里被设成
+  # **上游官方镜像**，这条路径又不经过 prepare_vanblog_image —— 于是"改个邮箱/端口"
+  # 就会把本 fork 的镜像悄悄换成 mereith/van-blog:latest，本分支的功能全部消失
+  # （数据还在，但装的东西被换了，而且没有任何提示）。
+  # 规则：现有编排文件里已经有 image 就**沿用**，没有才去准备镜像。
+  local current_image
+  current_image="$(get_compose_vanblog_image 2>/dev/null)"
+  if [[ -n "${current_image}" && "${current_image}" != "vanblog_image" ]]; then
+    # ⚠️ 这里必须写 ${Docker_IMG:-}：Docker_IMG 是 pre_check 里才赋值的普通变量，
+    # 在 set -u 的环境下（有人 source 这个脚本、或测试里）直接引用会 unbound variable 中断，
+    # 结果就是"改个配置"改到一半退出，编排文件停在旧状态。
+    if [[ "${current_image}" != "${Docker_IMG:-}" ]]; then
+      echo -e "> 沿用编排文件里现有的镜像 ${yellow}${current_image}${plain}（不改回官方镜像）"
+    fi
+    Docker_IMG="${current_image}"
+  elif ! use_upstream_image; then
+    echo -e "> 编排文件里还没有镜像，先准备本分支镜像"
+    prepare_vanblog_image || return 1
+  fi
+
+  rm "${VANBLOG_BASE_PATH}/docker-compose.yaml" >/dev/null 2>&1
+  cp "${VANBLOG_BASE_PATH}/docker-compose-template.yaml" "${VANBLOG_BASE_PATH}/docker-compose.yaml" >/dev/null 2>&1
+  # 用 | 作分隔符（路径里有 /），替换文本里的 & \ | 已转义
+  sed -i "s|vanblog_data_path|${VANBLOG_DATA_PATH_RAW}|g" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  # ⚠️ 邮箱里的 & 在 sed 替换文本中会被展开成"整个匹配"：a&b@x.com 会变成
+  # `EMAIL: avanblog_emailb@x.com`，ACME 拿到非法地址，HTTPS 证书一直签不出来。
+  local email_sed="${vanblog_email//\\/\\\\}"
+  email_sed="${email_sed//&/\\&}"
+  email_sed="${email_sed//|/\\|}"
+  sed -i "s|vanblog_email|${email_sed}|g" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
   sed -i "s/vanblog_http_port/${vanblog_http_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   sed -i "s/vanblog_https_port/${vanblog_https_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   # sed -i "s/vanblog_domains/${vanblog_domains}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
@@ -890,13 +1010,23 @@ restart() {
   cd $VANBLOG_BASE_PATH
   # 不能带 -v：那会删除编排文件里的卷。现在数据是 bind mount 所以侥幸没事，
   # 但很多人会把 compose 改成命名卷，那时「重启」就等于删库。只有卸载才用 -v。
+  # ⚠️ 这两步的返回码以前被丢掉了：不管 docker-compose 成没成功都打印"重启成功"、
+  # 函数都返回 0。后果是端口被占/镜像拉不下来/caddy 崩溃循环时，安装与 config 流程
+  # 照样报成功，而调用方（比如 restore 的"先停服再解压"）也判断不出停没停。
   docker-compose down --remove-orphans
+  local down_rc=$?
   docker-compose up -d
-  if [[ $? == 0 ]]; then
+  local up_rc=$?
+  if [[ ${up_rc} == 0 && ${down_rc} == 0 ]]; then
     echo -e "${green}VanBlog 重启成功${plain}"
     echo -e "默认管理面板地址：${yellow}域名:站点访问端口/admin${plain}"
   else
-    echo -e "${red}重启失败，可能是因为启动时间超过了两秒，请稍后查看日志信息${plain}"
+    echo -e "${red}重启失败（down=${down_rc} up=${up_rc}），请查看日志：${yellow}$0 log${plain}"
+    echo -e "${red}常见原因：80/443 端口被占用、镜像拉取失败、磁盘满、caddy 配置加载失败${plain}"
+    if [[ $# == 0 ]]; then
+      before_show_menu
+    fi
+    return 1
   fi
 
   if [[ $# == 0 ]]; then
@@ -1277,32 +1407,47 @@ reset_https() {
 start_vanblog() {
   echo -e "> 启动 VanBlog"
 
-  cd $VANBLOG_BASE_PATH && docker-compose up -d
-  if [[ $? == 0 ]]; then
+  cd "${VANBLOG_BASE_PATH}" && docker-compose up -d
+  local rc=$?
+  if [[ ${rc} == 0 ]]; then
     echo -e "${green}VanBlog 启动成功${plain}"
   else
-    echo -e "${red}启动失败，请稍后查看日志信息${plain}"
+    echo -e "${red}启动失败（docker-compose 退出码 ${rc}），请查看日志：${yellow}$0 log${plain}"
+    echo -e "${red}常见原因：80/443 已被别的进程或另一套 vanblog 占用、镜像没拉下来、磁盘满${plain}"
+    if command -v docker >/dev/null 2>&1; then
+      local others
+      others="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E ':80->|:443->' | head -3)"
+      if [[ -n "${others}" ]]; then
+        echo -e "${yellow}当前占用 80/443 的容器：${plain}"
+        printf '%s\n' "${others}" | sed 's/^/    /'
+      fi
+    fi
   fi
 
   if [[ $# == 0 ]]; then
     before_show_menu
   fi
+  return ${rc}
 }
 
 stop_vanblog() {
   echo -e "> 停止 VanBlog"
 
   # 停止服务不该删卷（见 restart 里的说明）
-  cd $VANBLOG_BASE_PATH && docker-compose down --remove-orphans
-  if [[ $? == 0 ]]; then
+  cd "${VANBLOG_BASE_PATH}" && docker-compose down --remove-orphans
+  local rc=$?
+  if [[ ${rc} == 0 ]]; then
     echo -e "${green}VanBlog 停止成功${plain}"
   else
-    echo -e "${red}停止失败，请稍后查看日志信息${plain}"
+    echo -e "${red}停止失败（docker-compose 退出码 ${rc}），请稍后查看日志信息${plain}"
   fi
 
   if [[ $# == 0 ]]; then
     before_show_menu
   fi
+  # 必须把失败传出去：restore 的离线恢复靠它判断"是不是真的停下来了"，
+  # 停不下来还去解压覆盖数据目录 = mongod 还在写的时候动它的数据文件
+  return ${rc}
 }
 
 show_log() {
@@ -1407,7 +1552,19 @@ uninstall_vanblog() {
     fi
     remove_vanblog_install_files || true
   fi
+  # 三种来源的镜像都清：上游官方、本分支 ghcr、本地构建的 tag。
+  # 以前只删上游那个，换成本分支镜像之后卸载会留下 1.5GB+ 的悬空镜像。
   docker rmi -f mereith/van-blog:latest >/dev/null 2>&1 || true
+  docker rmi -f "${VANBLOG_IMAGE_REF}" >/dev/null 2>&1 || true
+  docker rmi -f "${VANBLOG_IMAGE_TAG}" >/dev/null 2>&1 || true
+  # 只删**本脚本自己写的** shim（内容就是 `docker compose "$@"`），
+  # 用户自己装的 docker-compose 绝不能碰
+  if [[ -f /usr/local/bin/docker-compose ]] &&
+    grep -qF 'docker compose "$@"' /usr/local/bin/docker-compose 2>/dev/null &&
+    [[ "$(wc -l </usr/local/bin/docker-compose 2>/dev/null)" -le 2 ]]; then
+    rm -f /usr/local/bin/docker-compose
+    echo -e "> 已移除本脚本创建的 docker-compose 兼容 shim"
+  fi
   clean_all
 
   if [[ -d "${VANBLOG_BASE_PATH}" ]]; then
@@ -1537,7 +1694,12 @@ get_compose_http_port() {
   local block
   block="$(awk '/^[[:space:]]*vanblog:[[:space:]]*$/{f=1;next} f&&/^  [A-Za-z0-9_-]+:[[:space:]]*$/{f=0} f' "${compose_file}")"
   # ports 里形如 - "8080:80" / - 8080:80 / - "8080:80/tcp"
-  printf '%s\n' "${block}" | grep -oE '[0-9]+:80(/tcp)?' | head -1 | cut -d: -f1
+  # ⚠️ 别写成 '[0-9]+:80'：那会把 "3000:8080" 里的 3000:80 也匹配上，
+  # 于是 restore 去探一个错误的端口，然后告诉你"站点没起，请先 start"。
+  # 容器端口必须是**完整的** 80（后面跟引号、/tcp 或行尾）。
+  printf '%s\n' "${block}" |
+    grep -oE '[0-9]+:80(/tcp)?["'"'"']?[[:space:]]*$' |
+    head -1 | grep -oE '^[0-9]+'
 }
 
 vanblog_api_base() {
@@ -1847,7 +2009,11 @@ restore() {
   fi
 
   echo -e "> 停止 vanblog 中..."
-  stop_vanblog 0
+  if ! stop_vanblog 0; then
+    echo -e "${red}停不下来就不解压：mongod 还在运行时覆盖它的数据目录会直接损坏数据库。${plain}"
+    echo -e "${red}请先排查（${yellow}$0 log${red}），确认容器已停再重试。${plain}"
+    return 1
+  fi
 
   echo -e "> 覆盖解压到 ${VANBLOG_BASE_PATH} 中..."
   if ! tar xzf "${path}" -C "${VANBLOG_BASE_PATH}"; then

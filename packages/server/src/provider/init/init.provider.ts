@@ -85,7 +85,14 @@ export class InitProvider {
     await this.cacheProvider.set('restoreKey', key);
     const filePath = path.join('/var/log/', 'restore.key');
     try {
-      fs.writeFileSync(filePath, key, { encoding: 'utf-8' });
+      // mode 0o600：这个文件是「忘记密码」的恢复密钥，而 /var/log 是**挂载到宿主机**的卷，
+      // 默认 0644 意味着宿主机上任何用户都能读到它，而且它还会被 vanblog.sh backup 一起打包。
+      fs.writeFileSync(filePath, key, { encoding: 'utf-8', mode: 0o600 });
+      try {
+        fs.chmodSync(filePath, 0o600); // 文件已存在时 writeFileSync 的 mode 不生效
+      } catch {
+        // 权限改不动（比如挂载盘不支持）不该让整个启动失败
+      }
     } catch (err) {
       this.logger.error('写入恢复密钥到文件失败！');
     }
