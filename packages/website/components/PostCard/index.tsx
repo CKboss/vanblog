@@ -138,17 +138,16 @@ export default function (props: {
         id="post-card"
         className="overflow-hidden post-card bg-white card-shadow py-4 px-1 sm:px-3 md:py-6 md:px-5 dark:bg-dark  dark:nav-shadow-dark"
       >
-        {props.type == "overview" && (
-          // 桌面端 CSS 让它浮动到右侧（文字左、图右，Apple News 的排法）；
-          // 窄屏时不浮动，就排在标题上方。没有图的文章会拿到「渐变占位封面」，
-          // 于是一屏里每张卡都有色块，不会出现一半有图一半空着的破碎感。
+        {listImage ? (
+          // 桌面端 CSS 让它浮动到右侧（文字左、图右，Apple News 的排法）；窄屏时不浮动，
+          // 排在标题上方。没有图的文章就是**纯文字卡**，不放假图（见 ListThumb 的注释）。
           <ListThumb
-            key={`${props.id}-${listImage ? listImage.src : "placeholder"}`}
-            src={listImage ? listImage.src : null}
-            fallback={listImage ? listImage.fallback : null}
-            title={props.title}
+            key={listImage.src}
+            src={listImage.src}
+            fallback={listImage.fallback}
+            alt={props.title}
           />
-        )}
+        ) : null}
         {props.type == "article" && (
           <ArticleCover src={props.cover} alt={props.title} />
         )}

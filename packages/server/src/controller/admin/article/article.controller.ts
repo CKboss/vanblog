@@ -159,6 +159,42 @@ export class ArticleController {
    * 旧的 `/post/<id>` 依旧能访问（getByIdOrPathname 会回退到数字 id）。
    * `dryRun: true` 时只返回将要发生的改动，不写库。
    */
+  /**
+   * 从正文首图批量回填封面。默认 dryRun=false 会真的写库，所以后台会先自己发一次
+   * dryRun=true 拿预览；演示站禁止。
+   */
+  @Post('covers/from-content')
+  async backfillCoversFromContent(
+    @Body() body: { dryRun?: boolean; onlyMissing?: boolean; ids?: number[] },
+  ) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
+    const data = await this.articleProvider.backfillCoversFromContent({
+      dryRun: body?.dryRun === true,
+      onlyMissing: body?.onlyMissing !== false,
+      ids: Array.isArray(body?.ids) ? body.ids : undefined,
+    });
+    // 封面变了要触发增量渲染，否则前台得等下一次 ISR 才看得到（用户会以为没生效）
+    if (!data.dryRun && data.changed > 0) {
+      this.isrProvider.activeAll(`回填封面 ${data.changed} 篇，触发增量渲染`);
+    }
+    return { statusCode: 200, data };
+  }
+
+  /** 撤销一次回填：把 cover 写回之前记录的旧值 */
+  @Post('covers/revert')
+  async revertCovers(@Body() body: { items?: Array<{ id: number; cover: string }> }) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
+    const data = await this.articleProvider.revertCovers(Array.isArray(body?.items) ? body.items : []);
+    if (data.reverted > 0) {
+      this.isrProvider.activeAll(`撤销封面回填 ${data.reverted} 篇，触发增量渲染`);
+    }
+    return { statusCode: 200, data };
+  }
+
   @Post('backfill-pathname')
   async backfillPathname(@Body() body: { dryRun?: boolean | string }) {
     if (config.demo && config.demo == 'true') {

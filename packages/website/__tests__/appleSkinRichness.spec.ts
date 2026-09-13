@@ -8,7 +8,6 @@ import {
   toThumbnailUrl,
 } from "../utils/firstImage";
 import { tagChipStyle, tagHue } from "../utils/tagColor";
-import { coverHue, coverOrbs, coverStyle } from "../utils/coverPlaceholder";
 
 const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
 
@@ -103,59 +102,37 @@ describe("标签彩色胶囊", () => {
   });
 });
 
-describe("渐变占位封面（没图的文章也有色块）", () => {
-  it("色相由标题哈希得出，同一篇永远同色", () => {
-    expect(coverHue("手动档汽车的几种起步方式")).toBe(coverHue("手动档汽车的几种起步方式"));
-    expect(coverHue("A")).not.toBe(coverHue("B"));
-    expect(coverHue("")).toBeGreaterThanOrEqual(0);
-  });
+describe("没有图的文章就是纯文字卡（不放假图）", () => {
+  const postCard = read("components/PostCard/index.tsx");
 
-  it("不放任何标题文字（中文取一个字像乱码，而标题就在封面旁边）", () => {
-    const thumb = read("components/PostCard/ListThumb.tsx");
-    expect(thumb).not.toContain("post-card-cover-glyph");
-    expect(thumb).not.toContain("coverGlyph");
-    // 纯装饰，读屏不该念出东西
-    expect(thumb).toContain('aria-hidden="true"');
+  it("占位封面这套东西整个删掉了：按标题哈希的色相不承载任何信息，还假装自己是缩略图", () => {
+    expect(() => read("utils/coverPlaceholder.ts")).toThrow();
+    expect(postCard).not.toContain("coverPlaceholder");
+    expect(read("components/PostCard/ListThumb.tsx")).not.toContain("post-card-cover-fallback");
+    expect(read("styles/apple.css")).not.toContain("post-card-cover-fallback");
     expect(read("styles/apple.css")).not.toContain("post-card-cover-glyph");
   });
 
-  it("光斑位置由标题稳定推出，且落在画面内（相邻卡片构图不至于完全一样）", () => {
-    const a = coverOrbs("手动档汽车的几种起步方式");
-    const b = coverOrbs("手动档汽车的几种起步方式");
-    expect(a).toEqual(b);
-    const c = coverOrbs("为 ClaudeCode 接入第三方 LLM");
-    expect(c).not.toEqual(a);
-    for (const t of ["A", "摄影分享", "x".repeat(60), ""]) {
-      const o = coverOrbs(t);
-      expect(o.ax).toBeGreaterThanOrEqual(10);
-      expect(o.ax).toBeLessThanOrEqual(48);
-      expect(o.ay).toBeGreaterThanOrEqual(6);
-      expect(o.ay).toBeLessThanOrEqual(46);
-      expect(o.bx).toBeGreaterThanOrEqual(54);
-      expect(o.bx).toBeLessThanOrEqual(94);
-      expect(o.by).toBeGreaterThanOrEqual(22);
-      expect(o.by).toBeLessThanOrEqual(78);
-      for (const v of Object.values(o)) {
-        expect(Number.isFinite(v)).toBe(true);
-      }
-    }
+  it("ListThumb 没有图 / 图挂了都返回 null，绝不留空框或破图标", () => {
+    const thumb = read("components/PostCard/ListThumb.tsx");
+    expect(thumb).toContain("if (failed || !current) {\n    return null;");
+    expect(thumb).toContain("setCurrent(props.fallback)");
+    expect(thumb).toContain("setFailed(true)");
+    expect(thumb).toContain('loading="lazy"');
   });
 
-  it("色相仍然走 CSS 变量（暗色版本写在 CSS 里）", () => {
-    expect(coverStyle("生活")["--chip-h"]).toBe(String(tagHue("生活")));
-    const apple = read("styles/apple.css");
-    expect(apple).toContain(".post-card-cover-fallback");
-    expect(apple).toContain("hsl(var(--chip-h)");
-    expect(apple).toContain('html.dark [data-ui="apple"] .post-card-cover-fallback');
-    // 纯 CSS 斜纹，不引任何图片资源
-    expect(apple).toContain("repeating-linear-gradient");
-    expect(apple).not.toMatch(/post-card-cover-fallback[^}]*url\(/);
+  it("PostCard 只在拿到图的时候渲染 ListThumb", () => {
+    expect(postCard).toContain("{listImage ? (");
+    expect(postCard).not.toContain('src={listImage ? listImage.src : null}');
   });
 
-  it("列表卡永远渲染封面块：有图用图，没图用占位", () => {
-    const postCard = read("components/PostCard/index.tsx");
-    expect(postCard).toContain('src={listImage ? listImage.src : null}');
-    expect(postCard).toMatch(/props\.type == "overview" && \(\s*\/\//);
+  it("真正的解法是让文章有真图：后台「从正文首图补封面」接口存在", () => {
+    const server = read("../server/src/controller/admin/article/article.controller.ts");
+    expect(server).toContain("@Post('covers/from-content')");
+    expect(server).toContain("@Post('covers/revert')");
+    // 回填后要触发 ISR，否则前台得等下一次重验证才看得到
+    expect(server).toContain("回填封面");
+    expect(server).toContain("isrProvider.activeAll");
   });
 });
 
@@ -188,13 +165,12 @@ describe("接线：只有 Apple 皮肤显示，默认皮肤版面不变", () => 
     }
   });
 
-  it("缩略图失败会回退原图，原图也失败就用渐变占位封面（绝不留空白）", () => {
+  it("缩略图失败会回退原图，原图也失败就整块不渲染", () => {
     const thumb = read("components/PostCard/ListThumb.tsx");
     expect(thumb).toContain("onError");
     expect(thumb).toContain("setCurrent(props.fallback)");
     expect(thumb).toContain("setFailed(true)");
-    expect(thumb).toContain("<CoverFallback title={props.title} />");
-    expect(thumb).toContain("if (!current || failed)");
+    expect(thumb).not.toContain("CoverFallback");
     expect(thumb).toContain('loading="lazy"');
   });
 });

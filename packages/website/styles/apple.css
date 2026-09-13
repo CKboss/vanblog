@@ -1357,70 +1357,13 @@ html.dark [data-ui="apple"] #author-card > div {
    渐变占位封面 + 深色模式层次（2026-09 追加）
    ========================================================================== */
 
-/* --- 渐变占位封面：没有图的文章也有色块，一屏版面节奏统一，且零网络请求 --- */
-[data-ui="apple"] .post-card-cover-fallback {
-  --chip-h: 210;
-  --orb-ax: 22%;
-  --orb-ay: 18%;
-  --orb-bx: 76%;
-  --orb-by: 62%;
-  position: relative;
-  width: 208px;
-  aspect-ratio: 16 / 10;
-  border-radius: 12px;
-  overflow: hidden;
-  /* 三层：两个由标题哈希定位的光斑（所以每篇构图略有差别）+ 一层对角底色渐变。
-     不放任何文字：标题就在封面旁边，重复；中文取一个字又像乱码。 */
-  background:
-    radial-gradient(58% 82% at var(--orb-ax) var(--orb-ay), hsl(var(--chip-h) 92% 76% / 0.9), transparent 62%),
-    radial-gradient(
-      54% 78% at var(--orb-bx) var(--orb-by),
-      hsl(calc(var(--chip-h) + 48) 88% 60% / 0.72),
-      transparent 64%
-    ),
-    linear-gradient(135deg, hsl(var(--chip-h) 68% 54%), hsl(calc(var(--chip-h) + 44) 70% 40%));
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
-  transition: transform 0.3s var(--ap-ease), box-shadow 0.3s var(--ap-ease);
-}
 
-/* 一层极淡的斜纹，避免大色块看起来"死平"（纯 CSS，不引图片） */
-[data-ui="apple"] .post-card-cover-fallback::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    115deg,
-    rgba(255, 255, 255, 0.07) 0 2px,
-    transparent 2px 9px
-  );
-}
 
-[data-ui="apple"] .post-card-wrapper:hover .post-card-cover-fallback {
-  transform: scale(1.025);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.14);
-}
 
 /* 窄屏时占位封面跟着变成通栏（和真图同一套断点） */
 @media (max-width: 640px) {
-  [data-ui="apple"] .post-card-cover-fallback {
-    width: 100%;
-    aspect-ratio: 16 / 9;
-  }
 }
 
-/* 深色下降低饱和、压暗亮度：纯黑底上高饱和大色块会很刺眼 */
-html.dark [data-ui="apple"] .post-card-cover-fallback {
-  /* 深色下降饱和、压暗：纯黑底上高饱和大色块很刺眼，光斑亮度也一起收 */
-  background:
-    radial-gradient(58% 82% at var(--orb-ax) var(--orb-ay), hsl(var(--chip-h) 58% 44% / 0.85), transparent 62%),
-    radial-gradient(
-      54% 78% at var(--orb-bx) var(--orb-by),
-      hsl(calc(var(--chip-h) + 48) 52% 36% / 0.7),
-      transparent 64%
-    ),
-    linear-gradient(135deg, hsl(var(--chip-h) 42% 30%), hsl(calc(var(--chip-h) + 44) 44% 20%));
-  box-shadow: var(--ap-inset-highlight), var(--ap-ring), 0 10px 26px rgba(0, 0, 0, 0.5);
-}
 
 /* --- 深色模式的层次：顶边高光 + 1px 环，替代在黑底上看不见的投影 --- */
 html.dark [data-ui="apple"] #author-card > div,

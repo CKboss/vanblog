@@ -1,6 +1,7 @@
 /** 搜索类查询的时间上限：正文全文 $regex 扫描很贵，超时就放弃，别把库拖死。 */
 const SEARCH_MAX_TIME_MS = 5000;
 
+import { pickCoverFromContent } from 'src/utils/coverFromContent';
 import { verifyAccessPassword } from 'src/utils/crypto';
 import {
   Logger,
@@ -1255,6 +1256,120 @@ export class ArticleProvider {
       this.metaProvider.updateTotalWords('更新文章');
     }
     return res;
+  }
+
+  /**
+   * 批量把「正文首图」写进 cover 字段。
+   *
+   * 默认只补 cover 为空的文章（`onlyMissing`），默认先 `dryRun` 让后台预览。
+   * 返回的 items 带 `previousCover`，配合 revertCovers() 可以**精确撤销**这一次改动
+   * （把旧值原样写回，而不是简单地清空 —— 万一某篇本来就有封面，清空等于破坏数据）。
+   */
+  async backfillCoversFromContent(option?: {
+    dryRun?: boolean;
+    onlyMissing?: boolean;
+    ids?: number[];
+  }): Promise<{
+    scanned: number;
+    matched: number;
+    changed: number;
+    skippedNoImage: number;
+    skippedHasCover: number;
+    dryRun: boolean;
+    items: Array<{ id: number; title: string; cover: string; previousCover: string }>;
+  }> {
+    const dryRun = option?.dryRun === true;
+    const onlyMissing = option?.onlyMissing !== false;
+    const filter: any = { deleted: false };
+    const ids = Array.isArray(option?.ids)
+      ? option.ids.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v >= 0)
+      : [];
+    if (ids.length) {
+      filter.id = { $in: ids.slice(0, 500) };
+    }
+
+    const articles = await this.articleModel
+      .find(filter, { id: 1, title: 1, cover: 1, content: 1 })
+      .exec();
+
+    const result = {
+      scanned: articles.length,
+      matched: 0,
+      changed: 0,
+      skippedNoImage: 0,
+      skippedHasCover: 0,
+      dryRun,
+      items: [] as Array<{ id: number; title: string; cover: string; previousCover: string }>,
+    };
+
+    for (const article of articles as any[]) {
+      const previousCover = String(article?.cover ?? '').trim();
+      if (previousCover && onlyMissing) {
+        result.skippedHasCover += 1;
+        continue;
+      }
+      const cover = pickCoverFromContent(article?.content);
+      if (!cover) {
+        result.skippedNoImage += 1;
+        continue;
+      }
+      if (cover === previousCover) {
+        result.skippedHasCover += 1;
+        continue;
+      }
+      result.matched += 1;
+      if (result.items.length < 200) {
+        result.items.push({
+          id: Number(article.id),
+          title: String(article?.title ?? '').slice(0, 120),
+          cover,
+          previousCover,
+        });
+      }
+      if (!dryRun) {
+        await this.articleModel
+          .updateOne({ id: article.id }, { cover, updatedAt: new Date() })
+          .exec();
+        result.changed += 1;
+      }
+    }
+
+    if (!dryRun && result.changed) {
+      this.logger.log(`从正文首图回填封面：扫描 ${result.scanned} 篇，写入 ${result.changed} 篇`);
+    }
+    return result;
+  }
+
+  /**
+   * 撤销一次回填：把 cover 写回调用方给的旧值。
+   * 只认「id + 期望的当前值」都匹配的记录，避免把用户后来手动改过的封面又覆盖掉。
+   */
+  async revertCovers(
+    items: Array<{ id: number; cover: string }>,
+  ): Promise<{ reverted: number; skipped: number }> {
+    const list = Array.isArray(items) ? items.slice(0, 500) : [];
+    let reverted = 0;
+    let skipped = 0;
+    for (const item of list) {
+      const id = Number(item?.id);
+      if (!Number.isFinite(id)) {
+        skipped += 1;
+        continue;
+      }
+      const previous = typeof item?.cover === 'string' ? item.cover : '';
+      const res = await this.articleModel
+        .updateOne(
+          { id, cover: { $ne: previous } },
+          { cover: previous, updatedAt: new Date() },
+        )
+        .exec();
+      if (res?.modifiedCount) {
+        reverted += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+    return { reverted, skipped };
   }
 
   async getNewId() {
