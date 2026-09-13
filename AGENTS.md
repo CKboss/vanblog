@@ -2454,14 +2454,82 @@ website `next build`（EXIT=0，8 个页面）全在 v20.19.5 上跑通；`--ope
 ⚠️ 升 Node 之后 `dockerfile-alpine-sharp.test.sh` 里三处写死的 `node:18-alpine` 也要跟着改，
 不然它会红 —— 那个测试是按 stage 名切 Dockerfile 正文的，基础镜像名写死在里面。
 
-### 7.32 测试基线（本分支最后一次全量运行的结果）
+### 7.32 怎么在本地构建并冒烟测试镜像（`scripts/build-image-local.sh`）
+
+前面连着四轮镜像问题（缺 multer、caddy zerossl、admin OOM、cytoscape）都是**用户装的时候才炸**的，
+因为本机没有 docker 权限、只能做静态检查。所以补了一个本地构建 + 冒烟测试脚本。
+
+```bash
+./scripts/build-image-local.sh                       # 构建 + 冒烟测试
+./scripts/build-image-local.sh --build-only          # 只构建
+./scripts/build-image-local.sh --stage admin_builder # 只构建某一层（迭代时快得多，不打 tag 也会留层缓存）
+./scripts/build-image-local.sh --smoke-only          # 只测已有镜像
+./scripts/build-image-local.sh --lowmem              # admin 用 1536MB 堆
+ENGINE=podman IMAGE_TAG=vanblog:local-test SMOKE_HTTP_PORT=18080 ./scripts/build-image-local.sh
+```
+
+**引擎怎么选**：脚本先试 `docker info`（有命令不等于 daemon 连得上），连不上就退 **podman**。
+这台机器的实际情况是：docker daemon 在跑、`docker` 组存在但**没有任何成员**，当前用户不在里面 →
+`docker` 命令一律 `permission denied /var/run/docker.sock`；而 **podman 4.9.3 + buildah 是装好的**，
+rootless 可用（`/etc/subuid` 里有 `ckboss:100000:65536`），**不需要 sudo、不需要加组**。
+想用 docker 就一次性 `sudo usermod -aG docker $USER` 再重新登录。
+
+⚠️ **rootless podman 在受限环境里的两个坑**（都是实测）：
+1. 需要能写 `/run/user/<uid>` 与 `/proc/<pid>/uid_map`。在只允许写工作区的沙箱里会报
+   `mkdir /run/user/1000/libpod: permission denied` 或 `newuidmap: open of uid_map failed`；
+   把 `XDG_RUNTIME_DIR` / `HOME` / `TMPDIR` 指到工作区里可以绕过前者，后者需要沙箱放开。
+2. **docker.io 直连超时**（`registry-1.docker.io … i/o timeout`）。实测可用的公共加速：
+   `docker.m.daocloud.io`（和本仓库 `vanblog.sh` 里 GitHub 加速用的是同一家）。
+   podman 配 `~/.config/containers/registries.conf`：
+   ```toml
+   unqualified-search-registries = ["docker.io"]
+   [[registry]]
+   prefix = "docker.io"
+   location = "docker.m.daocloud.io"
+   ```
+   docker 则配 `/etc/docker/daemon.json` 的 `registry-mirrors`。
+   ⚠️ 脚本里**不写死任何镜像站**（各机器网络不同），需要时用 `NPM_REGISTRY=` 或引擎自己的配置。
+
+**冒烟测试查什么**（起一套临时 mongo + vanblog，测完自动拆，`SMOKE_KEEP=1` 可保留）：
+- 关键路径逐个打：`/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、
+  `/rss/feed.xml`、`/post/1`、`/timeline`（200/301/302/308/404 都算通 —— 404 说明
+  caddy → server/前台这条链路是活的，比连接被拒强）；
+- **扫日志里的已知故障特征**，每条都是真炸过的：`Cannot find module`（multer）、
+  `caddy process exited` / `loading initial config`（zerossl）、`Reached heap limit`（admin OOM）、
+  `ERR_INVALID_URL`（空的 VAN_BLOG_SERVER_URL）、`Failed to collect page data`、
+  `unhandledRejection`、`降级使用`（entrypoint 走了 caddy 降级模板 = 主配置没加载成功）；
+- 容器状态：`RestartCount` 必须是 0（有进程在崩就会被 restart 拉起）、healthcheck 状态、
+  `State.Running`；
+- **优雅停机耗时**：`docker stop -t 20` 后计时，<15s 说明 SIGTERM 被正确转发，
+  接近 20s 说明信号没转发、进程被硬杀（§7.30 修的就是这个，这里把它变成可回归的检查）。
+- mongo 版本调 `vanblog.sh` 的 `pick_mongo_image()` 拿，和真实安装走同一条逻辑。
+
+**没有容器引擎时的替代办法**（这轮之前一直这么干，抓到了 cytoscape 那个问题）：
+按 Dockerfile 里某一层的**目录结构和命令**在 `/tmp` 复刻一遍。例如验 `admin_builder`：
+
+```bash
+rm -rf /tmp/absim && mkdir -p /tmp/absim/packages
+cp package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json /tmp/absim/
+cp -r patches /tmp/absim/ && cp -r packages/admin /tmp/absim/packages/
+cd /tmp/absim && pnpm install --frozen-lockfile      # 与镜像里完全相同的命令
+cd packages/admin && pnpm run build                  # EXIT=0 才算过
+```
+
+**测试**：`scripts/tests/build-image-local.test.sh`（30 条静态契约）—— 构建参数必须和 CI 一致
+（四个 build-arg 一个都不能少，否则"本地测过了"是假的）、支持 `--target` 单层构建、
+引擎探测要看 `docker info` 而不是只看命令存在、冒烟测试必须覆盖上面那 6 个故障特征 +
+关键路径 + 停机耗时 + RestartCount、`trap cleanup EXIT` 在、默认端口 18080（不撞正在跑的站点）、
+容器名带 PID（并发跑两次不会互拆）、mongo 版本走 `pick_mongo_image`、
+且**不许硬编码内网地址或某个镜像加速站**。
+
+### 7.33 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 13 文件 / 626 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 14 文件 / 656 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2471,7 +2539,7 @@ website `next build`（EXIT=0，8 个页面）全在 v20.19.5 上跑通；`--ope
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.32 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.33 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

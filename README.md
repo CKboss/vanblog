@@ -186,6 +186,27 @@
 
 完整清单见 [安全与加固 · 已知未修项](docs/advanced/security.md)。
 
+### 本地构建并冒烟测试镜像
+
+改到 `Dockerfile` / `entrypoint.sh` / `scripts/start.js` / `caddyTemplate.json` 这类**只有镜像里才会暴露**的东西时，
+别只跑单元测试 —— 前面几个镜像问题（缺依赖、caddy 配置加载失败、构建 OOM）在本地测试里全是绿的：
+
+```bash
+./scripts/build-image-local.sh                       # 构建 + 冒烟测试（起临时 mongo + 容器，测完自动拆）
+./scripts/build-image-local.sh --stage admin_builder # 只构建某一层，迭代快得多
+./scripts/build-image-local.sh --build-only          # 只构建
+ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限时用 podman（rootless，免 sudo）
+```
+
+冒烟测试会逐个打 `/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、`/rss/feed.xml`，
+然后**扫容器日志里历史上真炸过的特征**（`Cannot find module`、`caddy process exited`、
+`Reached heap limit`、`ERR_INVALID_URL`、`降级使用`…），再看 `RestartCount`、healthcheck 状态，
+以及 `docker stop` 的耗时（接近宽限期就说明 SIGTERM 没被转发，进程是被硬杀的）。
+
+> docker.io 在国内常常直连超时。podman 配 `~/.config/containers/registries.conf`、
+> docker 配 `/etc/docker/daemon.json` 的 `registry-mirrors` 指到一个可用的加速地址即可；
+> 脚本本身不写死任何镜像站。
+
 ### 本地开发（不需要 docker，也不需要 sudo）
 
 ```bash
@@ -206,7 +227,7 @@
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **57 文件 / 543** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **82 套件 / 326** 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **13 文件 / 626** 条断言 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **14 文件 / 656** 条断言 |
 
 三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 
