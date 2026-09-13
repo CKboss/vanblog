@@ -205,7 +205,7 @@
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **57 文件 / 543** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **82 套件 / 326** 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **9 文件 / 426** 条断言 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **9 文件 / 432** 条断言 |
 
 三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 
@@ -276,6 +276,8 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 
 1. **默认先拉镜像**：`ghcr.io/ckboss/vanblog:dev-dsh`（由 `.github/workflows/publish-ghcr.yml`
    在 GitHub 的 runner 上构建发布）。本机只需要 `docker pull`，**1C1G 的小机器也装得动**。
+   镜像**不是每次 push 都重建**（一次要 20–40 分钟 runner，而多数提交只是文档）：
+   要发新版就去 Actions 页面手动 `Run workflow`，或者推一个 `v*` 标签。
 2. **拉不到就自动退回源码构建**（镜像还没发布、网络到不了 ghcr.io、或没有对应架构的镜像）：
    克隆 `dev/dsh` → 本地 `docker build` → 用本地 tag 起容器。构建前会实测 CPU 与可用内存，
    决定并发还是串行、admin 用 4096MB 还是 1536MB 的堆；可用内存不足 1.8GB 时直接劝退

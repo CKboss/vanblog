@@ -1956,8 +1956,16 @@ admin 用 `${VAN_BLOG_ADMIN_BUILD_SCRIPT}`、两档脚本都存在且都带堆�
 内存要求也跟着挪过去（umi build 峰值 1.5-2GB、next build 2-4GB，BuildKit 还会并发跑三个 stage）。
 1C1G 的机器"跑"得动（三个 node 进程一共 ~120MB），但"装"不上 —— 这才是根因。
 
-**`.github/workflows/publish-ghcr.yml`**：push 到 `dev/dsh`、打 `v*` tag、或手动 dispatch 时，
-构建并推到 `ghcr.io/ckboss/vanblog`，标签有 `latest` / `dev-dsh` / `dev-dsh-<短sha>`（tag 事件则用 tag 名）。
+**`.github/workflows/publish-ghcr.yml`**：**手动 dispatch** 或**推 `v*` tag** 时构建并推到
+`ghcr.io/ckboss/vanblog`，标签有 `latest` / `dev-dsh` / `dev-dsh-<短sha>`（tag 事件则用 tag 名，
+并且 tag 也会更新 `latest`）。
+
+⚠️ **不在 push 分支时自动构建**：一次构建要 20-40 分钟 runner，而这个分支一天能推几十次
+（大多是文档与测试），每次 push 都发一版既浪费额度也没意义。要自动化的话，
+workflow 里已经留好了注释掉的 `branches:` + `paths:` 过滤段（只在 `packages/**`、`patches/**`、
+`Dockerfile`、`pnpm-lock.yaml`、`package.json` 变化时构建），放开即可。
+**副作用要说清楚**：`dev-dsh` 标签对应的是**最后一次手动发版时的代码**，不等于分支最新提交；
+想装最新提交得用 `VANBLOG_INSTALL_MODE=source ./vanblog.sh` 自己构建。
 - **只用 `secrets.GITHUB_TOKEN`**（`permissions: packages: write`），不需要配任何 secret ——
   上游的 `release.yml` 用的是作者的 `DOCKERHUB_USERNAME/TOKEN`，fork 里没有，跑不起来。
 - 默认**只出 `linux/amd64`**：arm64 要 QEMU 模拟，next/umi 的生产构建慢好几倍还容易超时。
@@ -2005,7 +2013,7 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 426 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 432 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

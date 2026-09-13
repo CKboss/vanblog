@@ -18,6 +18,11 @@
    # 也有 dev-dsh-<短sha> 与 latest 两个标签；只发布了 linux/amd64
    ```
 
+   镜像**不是每次 push 都重建**（一次构建 20–40 分钟 runner 时间，而多数提交只是文档改动）：
+   要发新版就去仓库的 **Actions → publish-ghcr → Run workflow** 手动触发，或者推一个 `v*` 标签。
+   所以 `dev-dsh` 标签对应的是**最后一次手动发版时的代码**，不一定等于分支最新提交；
+   想要最新提交就自己构建（见下面第 3 种方式），或用 `VANBLOG_INSTALL_MODE=source ./vanblog.sh`。
+
    ::: tip 拉不动？
 
    ghcr 的 package 默认是 **private**。如果 `docker pull` 报 `denied` 或 `not found`，

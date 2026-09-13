@@ -11,12 +11,26 @@
 #    否则别人 docker pull 会要求登录（脚本探测到拉不动就会退回源码构建）。
 #
 # 用 GITHUB_TOKEN 就够了，不需要配任何 secret。
+#
+# ── 什么时候构建 ────────────────────────────────────────────────────────
+# **不是每次 push 都构建**：一次构建要 20-40 分钟的 runner 时间，而这个分支
+# 一天能推几十次（大多是文档和测试），没必要每次都出一个镜像。所以只在两种情况下跑：
+#   1. 手动触发（Actions 页面 → publish-ghcr → Run workflow）—— 平时想发一版就点这个；
+#   2. 推 `v*` 标签 —— 当作正式发版。
+# 想在 push 时也自动发，把下面注释掉的 branches 段放开即可（也可以配 paths 过滤，
+# 只在 packages/**、Dockerfile、patches/**、pnpm-lock.yaml 变化时才构建）。
 name: publish-ghcr
 
 on:
   push:
-    branches:
-      - dev/dsh
+    # branches:
+    #   - dev/dsh
+    # paths:
+    #   - 'packages/**'
+    #   - 'patches/**'
+    #   - 'Dockerfile'
+    #   - 'pnpm-lock.yaml'
+    #   - 'package.json'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -35,7 +49,7 @@ env:
   # github.repository = <owner>/<repo>，ghcr 要求全小写
   IMAGE_NAME: ${{ github.repository }}
 
-# 只留最近 3 次运行，省 Actions 额度
+# 同一个 ref 上只跑一次：新的运行会把还在跑的旧运行取消掉，省 runner 时间
 concurrency:
   group: publish-ghcr-${{ github.ref }}
   cancel-in-progress: true
@@ -95,9 +109,11 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev/dsh' }}
+            # latest：dev/dsh 的手动构建，以及任何 v* 发版标签，都指向它
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev/dsh' || startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=dev-dsh,enable=${{ github.ref == 'refs/heads/dev/dsh' }}
             type=raw,value=dev-dsh-${{ steps.ver.outputs.sha }},enable=${{ github.ref == 'refs/heads/dev/dsh' }}
+            # 发版标签本身（如 v0.55.0-fork.1）
             type=raw,value=${{ steps.ver.outputs.safe_ref }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
 

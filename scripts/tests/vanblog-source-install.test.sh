@@ -478,6 +478,18 @@ if [[ -f "${WORKFLOW}" ]]; then
   assert_file_contains "${WORKFLOW}" "VAN_BLOG_NPM_REGISTRY" "构建时指定 pnpm 源"
   assert_file_contains "${WORKFLOW}" "cache-from: type=gha" "用 Actions 缓存加速重建"
   assert_file_contains "${WORKFLOW}" "Public" "提醒把 package 可见性改成 Public（否则别人拉不动）"
+  # 触发策略：**不是每次 push 都构建**（一次 20-40 分钟 runner，而文档类提交占大多数）
+  assert_file_contains "${WORKFLOW}" "workflow_dispatch" "支持手动触发（平时发版就点这个）"
+  # ⚠️ assert_file_contains 走的是 grep（正则），`*` 要转义，否则 v* 会匹配成"零个或多个 v"
+  assert_file_contains "${WORKFLOW}" "- 'v\*'" "打 v* 标签时构建（当作正式发版）"
+  # 分支 push 触发必须是被注释掉的，不能是活的
+  if grep -qE '^ *branches:' "${WORKFLOW}"; then
+    fail "workflow 又变成每次 push 分支都构建了（branches: 不该是生效状态）"
+  else
+    pass "分支 push 不会触发构建（branches: 只以注释形式存在）"
+  fi
+  assert_file_contains "${WORKFLOW}" "# branches:" "把分支触发的写法留在注释里，需要时能直接放开"
+  assert_file_contains "${WORKFLOW}" "# paths:" "注释里给了 paths 过滤的写法（只想在代码变化时构建）"
 else
   fail "缺少 .github/workflows/publish-ghcr.yml"
 fi
