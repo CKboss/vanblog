@@ -1631,7 +1631,7 @@ JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：*
 `/robots.txt` 200 且带 `Sitemap:` 行；`/sitemap.xml` 79 条 URL、76 条 lastmod、79 条 changefreq/priority，
 且已删除的探针文章不再出现；`feed.xml` 的 `language` 为 zh-CN、category domain 无双斜杠。
 
-### 7.21 后台「关于」页与文档链接的归属
+### 7.21 归属：后台「关于」页、页脚署名、文档链接与版本号
 
 `packages/admin/src/pages/About.tsx` 以前整页都指向**上游**（Mereithhh/van-blog + 作者文档站），
 但这个后台跑的是本 fork 的代码：点「提交BUG」会开到上游仓库报本分支才有的问题，
@@ -1644,6 +1644,25 @@ JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：*
   上游更新日志、官方交流群、打赏入口，并注明「上游文档与更新日志描述的是**官方镜像**的行为，
   与本分支不完全一致」。
 - 上游地址集中在文件顶部的常量里，换分支/换仓库只改一处。
+
+**前台页脚同样处理**（`components/Footer/index.tsx`）：`Powered By VanBlog <version>`
+以前链到上游文档站，访客点进去看到的说明与本站实际行为对不上（评论系统、皮肤、SEO 全不一样）。
+现在链到 `https://github.com/CKboss/vanblog`，后面跟一个 ` · 增强修改版` 链到 README 的
+「本分支新增内容」锚点。**项目名仍然叫 VanBlog** —— 它确实是 VanBlog，本分支遵循上游 GPL v3，
+致谢在 README / CHANGELOG / 后台「关于」页都有。
+⚠️ 改这段 markup 时保留 `ua ua-link` 两个类，且**不许加 `hover:scale-*`**
+（§7.10 的性能/动效不变式里有测试盯着 `.ua` 元素不能带缩放）。
+
+**版本号（页脚与「关于」页显示的那个）**：来自 server 的 `process.env.VAN_BLOG_VERSION`，
+没设就回退 `'dev'`（`utils/loadConfig.ts:49`）—— 所以本地源码直跑显示 `dev` 是**正常的**，不是 bug。
+- 官方镜像：构建时写死；
+- 本仓库 `vanblog.sh` 源码构建：`--build-arg VAN_BLOG_VERSIONS=dev/dsh@<sha>`；
+- 本地开发：`dev-env.sh` 启动 server 时注入 `VAN_BLOG_VERSION=dev/dsh@<短sha>`（git 不可用则退回 `dev/dsh`）；
+- 前台从接口拿（`getLayoutProps` 里 `data?.version || "dev"`），拿不到也不会渲染成 `undefined`。
+- ⚠️ Dockerfile 里**构建参数是复数 `VAN_BLOG_VERSIONS`、环境变量是单数 `VAN_BLOG_VERSION`**
+  （`ARG VAN_BLOG_VERSIONS` → `ENV VAN_BLOG_VERSION ${VAN_BLOG_VERSIONS}`），这是上游就有的设定，
+  别"顺手统一"，改一边版本号就退回 dev。测试里钉了这两个名字同时存在。
+- ⚠️ 改完 `dev-env.sh` 的环境变量必须 `./dev-env.sh restart` 才生效（server 只在启动时读一次）。
 
 **顺带清掉了一批死链**：后台里指向 `vanblog.mereith.com/<path>.html` 的**帮助文档链接共 14 处**，
 实测其中 **6 处已经 404**（`/feature/basic/editor.html`、`/feature/advance/collaborator.html`、
@@ -1667,7 +1686,7 @@ CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）�
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 55 文件 / 530 用例全绿 |
+| website `vitest run` | 56 文件 / 537 用例全绿 |
 | admin `node --test tests/unit` | 79 套件 / 316 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |

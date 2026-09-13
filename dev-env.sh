@@ -24,6 +24,14 @@ set -uo pipefail
 cd "$(dirname "$0")"
 ROOT=$PWD
 
+# 页脚与后台「关于」显示的版本号来自环境变量 VAN_BLOG_VERSION（server 的 utils/loadConfig.ts:
+#   export const version = process.env['VAN_BLOG_VERSION'] || 'dev'）。
+# 官方镜像在构建时用 --build-arg VAN_BLOG_VERSIONS=<tag> 写死（注意 Dockerfile 里构建参数是
+# 复数 VERSIONS、注入的环境变量是单数 VERSION），源码直跑时没人设它，就会显示 "dev"。
+# 本地开发给一个能对上代码的标签：分支名 + 短 sha。
+_git_sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)
+VERSION_LABEL="dev/dsh${_git_sha:+@$_git_sha}"
+
 NODE_BIN="$ROOT/.tools/node20/bin"
 NODE="$NODE_BIN/node"
 PNPM_CJS="$ROOT/.tools/node_modules/pnpm/bin/pnpm.cjs"
@@ -130,7 +138,7 @@ do_start() {
   # server 用本地的 tsconfig.dev.json（限制 typeRoots 在仓库内），
   # 避免 TS 4.9 去解析家目录 node_modules/@types/bun 里的 bun-types 而报语法错误。
   start_svc server "server  (:3000)" "$LOG_DIR/server-dev.log" \
-    bash -c "cd '$ROOT/packages/server' && exec env VANBLOG_DISABLE_WEBSITE=true ./node_modules/.bin/nest start --watch -p tsconfig.dev.json"
+    bash -c "cd '$ROOT/packages/server' && exec env VANBLOG_DISABLE_WEBSITE=true VAN_BLOG_VERSION='$VERSION_LABEL' ./node_modules/.bin/nest start --watch -p tsconfig.dev.json"
   start_svc admin "admin   (:3002)" "$LOG_DIR/admin-dev.log" \
     "$NODE" "$PNPM_CJS" --filter @vanblog/admin dev
   start_svc website "website (:3001)" "$LOG_DIR/website-dev.log" \

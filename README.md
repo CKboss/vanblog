@@ -139,6 +139,26 @@
 | `VANBLOG_DISABLE_IP_GEO` | 空 | 设 `true` 关闭登录日志的 IP 归属地查询（不再把访客 IP 发给第三方） |
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | 设 `true` 恢复「任何域名都批准按需证书」（多域名/CDN 场景） |
 | `VANBLOG_REPO` / `VANBLOG_BRANCH` / `VANBLOG_SRC_DIR` / `VANBLOG_IMAGE_TAG` | `CKboss/vanblog` / `dev/dsh` / `<base>/src` / `vanblog:dev-dsh` | 一键脚本的源码来源与本地镜像 tag |
+
+### 版本号（页脚与后台「关于」显示的那个）
+
+页脚的 `Powered By VanBlog xxx` 和后台「关于」页的版本标签，都来自 server 的
+`process.env.VAN_BLOG_VERSION`，**没设就显示 `dev`**（`packages/server/src/utils/loadConfig.ts`）。
+这是上游就有的机制，不是本分支新增的变量，列在这里是因为很多人会问「这个 dev 是什么」：
+
+| 部署方式 | 版本号从哪来 | 显示成 |
+| --- | --- | --- |
+| 官方镜像 | 镜像构建时写死 | 形如 `v0.54.0` |
+| 本仓库的 `vanblog.sh` 源码构建 | 构建时传 `--build-arg VAN_BLOG_VERSIONS=dev/dsh@<sha>` | `dev/dsh@1a2b3c4` |
+| 本地开发（`./dev-env.sh`） | 启动时按当前 git 提交算 | `dev/dsh@dd4414a3` |
+| 什么都不设 | 回退 | `dev` |
+
+⚠️ 两个名字**故意不一样**，别"顺手统一"：Dockerfile 的构建参数是复数
+`VAN_BLOG_VERSIONS`，注入容器的环境变量是单数 `VAN_BLOG_VERSION`
+（`ARG VAN_BLOG_VERSIONS` → `ENV VAN_BLOG_VERSION ${VAN_BLOG_VERSIONS}`）。改一边就会让版本号退回 `dev`。
+
+前台是从接口拿版本号的（`/api/admin/meta` 与站点信息里的 `version`），取不到同样退回 `dev`，
+不会渲染成 `undefined`。
 | `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 用官方镜像（不含本分支改动） |
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（兜底限流） |
 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作的上限 |
@@ -179,7 +199,7 @@
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **55 文件 / 530** 用例 |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **56 文件 / 537** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **79 套件 / 316** 用例 |
 | 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 313** 条断言 |
 
