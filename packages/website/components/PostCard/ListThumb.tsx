@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { coverGlyph, coverStyle } from "../../utils/coverPlaceholder";
+import { coverStyle } from "../../utils/coverPlaceholder";
 
 /**
  * 列表卡右侧的封面块。
@@ -7,16 +7,14 @@ import { coverGlyph, coverStyle } from "../../utils/coverPlaceholder";
  * 三种状态，永远**不留空白**：
  * 1. 有图（cover 或正文首图）→ 优先用 300px 缩略图；
  * 2. 缩略图不存在（老图没跑过「补缩略图」）→ 回退原图；
- * 3. 原图也挂了，或者这篇文章根本没有图 → **渐变占位封面**（标题哈希出色相 + 首字）。
+ * 3. 原图也挂了，或者这篇文章根本没有图 → **抽象渐变占位封面**（色相与光斑位置都由标题哈希得出）。
+ *    刻意不放标题文字：中文标题取一个字像乱码，而标题就印在封面旁边，再写一遍是冗余。
  *
  * 只有 Apple 皮肤会显示它（CSS 里控制），默认皮肤的版面完全不变。
  */
 function CoverFallback({ title }: { title: string }) {
-  return (
-    <div className="post-card-cover-fallback" style={coverStyle(title)} aria-hidden="true">
-      <span className="post-card-cover-glyph">{coverGlyph(title)}</span>
-    </div>
-  );
+  // aria-hidden：它是纯装饰，读屏不该念出任何东西（标题本身已经在卡片上了）
+  return <div className="post-card-cover-fallback" style={coverStyle(title)} aria-hidden="true" />;
 }
 
 export default function ListThumb(props: {

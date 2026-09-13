@@ -8,7 +8,7 @@ import {
   toThumbnailUrl,
 } from "../utils/firstImage";
 import { tagChipStyle, tagHue } from "../utils/tagColor";
-import { coverGlyph, coverHue, coverStyle } from "../utils/coverPlaceholder";
+import { coverHue, coverOrbs, coverStyle } from "../utils/coverPlaceholder";
 
 const read = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
 
@@ -110,16 +110,35 @@ describe("渐变占位封面（没图的文章也有色块）", () => {
     expect(coverHue("")).toBeGreaterThanOrEqual(0);
   });
 
-  it("取首字时会剥掉 [分类] 前缀与 markdown 记号；拉丁标题取第一个单词", () => {
-    expect(coverGlyph("[摄影]2025冬日下的天马山")).toBe("2025");
-    expect(coverGlyph("# **快速**掌握手动挡")).toBe("快");
-    expect(coverGlyph("How to ride a bike")).toBe("How");
-    expect(coverGlyph("VanBlog: a blog system")).toBe("VanBlog");
-    expect(coverGlyph("   ")).toBe("·");
-    expect(coverGlyph("超长标题超长标题超长标题")).toBe("超");
-    // `+` 属于标识符字符集，所以 C++ 会整个留下（比只取 "C" 更有辨识度）
-    expect(coverGlyph("C++ 入门")).toBe("C++");
-    expect(coverGlyph("#1 号文章")).toBe("1");
+  it("不放任何标题文字（中文取一个字像乱码，而标题就在封面旁边）", () => {
+    const thumb = read("components/PostCard/ListThumb.tsx");
+    expect(thumb).not.toContain("post-card-cover-glyph");
+    expect(thumb).not.toContain("coverGlyph");
+    // 纯装饰，读屏不该念出东西
+    expect(thumb).toContain('aria-hidden="true"');
+    expect(read("styles/apple.css")).not.toContain("post-card-cover-glyph");
+  });
+
+  it("光斑位置由标题稳定推出，且落在画面内（相邻卡片构图不至于完全一样）", () => {
+    const a = coverOrbs("手动档汽车的几种起步方式");
+    const b = coverOrbs("手动档汽车的几种起步方式");
+    expect(a).toEqual(b);
+    const c = coverOrbs("为 ClaudeCode 接入第三方 LLM");
+    expect(c).not.toEqual(a);
+    for (const t of ["A", "摄影分享", "x".repeat(60), ""]) {
+      const o = coverOrbs(t);
+      expect(o.ax).toBeGreaterThanOrEqual(10);
+      expect(o.ax).toBeLessThanOrEqual(48);
+      expect(o.ay).toBeGreaterThanOrEqual(6);
+      expect(o.ay).toBeLessThanOrEqual(46);
+      expect(o.bx).toBeGreaterThanOrEqual(54);
+      expect(o.bx).toBeLessThanOrEqual(94);
+      expect(o.by).toBeGreaterThanOrEqual(22);
+      expect(o.by).toBeLessThanOrEqual(78);
+      for (const v of Object.values(o)) {
+        expect(Number.isFinite(v)).toBe(true);
+      }
+    }
   });
 
   it("色相仍然走 CSS 变量（暗色版本写在 CSS 里）", () => {
