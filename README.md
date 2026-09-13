@@ -23,53 +23,131 @@
 </p>
 
 > **🍴 这是 [Mereithhh/van-blog](https://github.com/Mereithhh/vanblog) 的 fork（`CKboss/vanblog`，分支 `dev/dsh`）**
-> 在上游 master `ccd708ce`（v0.54.0+）之上增加了 10 项功能，并做了性能优化与安全加固。
+> 在上游 master `ccd708ce`（v0.54.0+）之上有 **37 个提交、291 个文件、+27k 行**：
+> 12 项新功能、一轮四路安全审计加两轮遗留项清理、前后台性能优化，以及一批真实使用中撞到的 UI/健壮性 bug 修复。
 > 下面这段是本分支的内容，**其余部分（含文档站、演示站、打赏与捐赠名单）均归原作者所有**。
-> 想直接看本分支加了什么，跳到 [本分支新增内容](#本分支新增内容)。
+> 只想看改了什么 → [本分支新增内容](#本分支新增内容)；只想装 → [一键脚本部署](#一键脚本部署)。
 
 ## 本分支新增内容
 
+**一句话版本**：内置评论系统（可替代外挂 Waline）· 补齐 6 种 markdown 语法 · 整站备份/恢复与单篇 `.mdz` 带图导出 ·
+图片管线（缩放/缩略图/隐写水印/原地替换）· 拼音文章别名 · Apple 风格前台皮肤 ·
+前台首屏 JS 砍掉约 1/3 · 一键安装改成构建**本分支**源码 · 一批会让站点卡死/白屏/数据少算的 bug 修掉了。
+
 ### 功能
 
-| 功能 | 说明 | 文档 |
-| --- | --- | --- |
-| **拼音文章路径** | 新建文章按标题自动生成 `/post/<pinyin-slug>`，重名自动 `-2`/`-3`；历史文章可在后台一键回填；`/post/<数字 id>` 永远可用，改标题不会改别名（已分享的链接不失效） | [文章](docs/features/article.md) |
-| **标题可选中 + 一键复制** | 列表页/文章页/关于页的标题可复制标题与文章链接，导航栏站点名同样可复制 | [AGENTS.md §7.2](AGENTS.md) |
-| **自动摘要** | 没写 `<!-- more -->` 时自动取正文前 200 字，不会切断链接和 emoji；草稿发布也不再因为没有 more 标记而报错 | [编辑器](docs/features/editor.md) |
-| **附件管理** | 上传任意文件生成 URL（按内容去重），html/svg/js 等类型强制下载 + `nosniff`，可搜索引用、批量导出 | [附件](docs/features/attachment.md) |
-| **图片管线** | 长边 1920 自动缩放、300px 缩略图、**隐写水印**（抗压缩/转码，可检测）、原地替换图片而 URL 不变、小图/大图/列表三种视图、批量引用查询；移除了「全部删除」按钮 | [图床](docs/features/image-storage.md) |
-| **整站备份 / 恢复** | 一个高压缩归档（zstd → xz → gzip 自动选择）打包**全部集合 + 评论库 + 图床/附件/自定义页面**；支持不解压查看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引） | [备份](docs/advanced/backup.md) |
-| **单篇导出 `.md` / `.mdz`** | `.md` 是原样正文；`.mdz` 是 Typora 风格带图包（相对链接 + `<标题>.assets/`）；外链图片自动抓取，抓不到会保留原链接并生成说明清单；文章/草稿/编辑器未保存内容/关于页都能导 | [备份](docs/advanced/backup.md) |
-| **Apple 风格前台皮肤** | 后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 `[data-ui="apple"]` 作用域，不影响自定义 CSS；深浅色都有令牌可调 | [配置](docs/features/config.md) |
-| **Markdown 一致性** | 编辑器预览与前台渲染对齐：front matter 不再被渲染成正文、两边共用同一份 sanitize 白名单（代码块复制按钮/行号在预览里也生效）、未知容器标题回落一致 | [Markdown](docs/features/markdown.md) |
-| **内置评论系统** | 不再必须外挂 Waline：评论存在本站 Mongo，走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/按状态与关键词筛选）。可选 `内置 / Waline / 关闭`，老站点升级默认保持 Waline；支持**从 Waline 导出文件一键导入**（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞），以及**只导出已通过评论**的接口。整站备份自动包含评论（动态枚举集合）。安全上比正文更严：原始 HTML 不解析、白名单不含 `img`/`iframe`/`style`、链接强制 `nofollow noopener`、蜜罐 + 同 IP 限流 + 关键词转待审、公开接口不返回邮箱/IP/UA | [评论系统](docs/features/comment.md) |
-| **补齐 6 种 markdown 语法** | `==高亮==`、`X^2^` / `H~2~O`、`:smile:` 短代码、定义列表、GitHub 提示块 `> [!NOTE]`、`[[toc]]` 文内目录；编辑器与前台用**同一套插件**（按 bytemd 的 unified 10 世代选版本），不会再出现预览与发布不一致。注意：单个 `~x~` 现在是下标，删除线要写 `~~x~~` | [Markdown](docs/features/markdown.md) |
+<table>
+<tr><th>分组</th><th>功能</th><th>说明</th><th>文档</th></tr>
+<tr><td rowspan="4">内容创作</td>
+<td><b>拼音文章路径</b></td><td>新建文章按标题自动生成 <code>/post/&lt;pinyin-slug&gt;</code>，重名自动 <code>-2</code>/<code>-3</code>；历史文章可在后台一键回填；<code>/post/&lt;数字 id&gt;</code> 永远可用，改标题不会改别名（已分享的链接不失效）</td><td><a href="docs/features/article.md">文章</a></td></tr>
+<tr><td><b>补齐 6 种 markdown 语法</b></td><td><code>==高亮==</code>、<code>X^2^</code> / <code>H~2~O</code>、<code>:smile:</code> 短代码、定义列表、GitHub 提示块 <code>&gt; [!NOTE]</code>、<code>[[toc]]</code> 文内目录。编辑器与前台用<b>同一套插件</b>（按 bytemd 的 unified 10 世代挑版本），不会再出现预览与发布不一致</td><td><a href="docs/features/markdown.md">Markdown</a></td></tr>
+<tr><td><b>Markdown 一致性</b></td><td>编辑器预览与前台渲染对齐：front matter 不再被渲染成正文、两边共用同一份 sanitize 白名单（代码块复制按钮/行号在预览里也生效）、未知容器标题回落一致</td><td><a href="docs/features/markdown.md">Markdown</a></td></tr>
+<tr><td><b>标题可选中 + 一键复制</b> / <b>自动摘要</b></td><td>列表页、文章页、关于页的标题可复制标题与链接，导航栏站点名同样可复制；没写 <code>&lt;!-- more --&gt;</code> 时自动取正文前 200 字，不会切断链接和 emoji</td><td><a href="docs/features/editor.md">编辑器</a></td></tr>
+<tr><td rowspan="2">媒体与附件</td>
+<td><b>图片管线</b></td><td>长边 1920 自动缩放、300px 缩略图、<b>隐写水印</b>（抗压缩/转码，可检测）、原地替换图片而 URL 不变、小图/大图/列表三种视图、批量引用查询；移除了「全部删除」按钮</td><td><a href="docs/features/image-storage.md">图床</a></td></tr>
+<tr><td><b>附件管理</b></td><td>上传任意文件生成 URL（按内容去重），html/svg/js 等类型强制下载 + <code>nosniff</code>，可搜索引用、批量导出</td><td><a href="docs/features/attachment.md">附件</a></td></tr>
+<tr><td rowspan="2">备份与迁移</td>
+<td><b>整站备份 / 恢复</b></td><td>一个高压缩归档（zstd → xz → gzip 自动选择）打包<b>全部集合 + 评论库 + 图床/附件/自定义页面</b>；支持不解压查看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引）</td><td><a href="docs/advanced/backup.md">备份</a></td></tr>
+<tr><td><b>单篇导出 <code>.md</code> / <code>.mdz</code></b></td><td><code>.md</code> 是原样正文；<code>.mdz</code> 是 Typora 风格带图包（相对链接 + <code>&lt;标题&gt;.assets/</code>）；外链图片自动抓取，抓不到会保留原链接并生成说明清单；文章/草稿/编辑器未保存内容/关于页都能导</td><td><a href="docs/advanced/backup.md">备份</a></td></tr>
+<tr><td>评论</td>
+<td><b>内置评论系统</b></td><td>不再必须外挂 Waline：评论存在本站 Mongo、走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/批量/按状态与关键词筛选）。可选 <code>内置 / Waline / 关闭</code>，<b>老站点升级默认保持 Waline</b>；支持从 Waline 导出文件<b>一键导入</b>（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞）与<b>只导出已通过评论</b></td><td><a href="docs/features/comment.md">评论系统</a></td></tr>
+<tr><td rowspan="2">观感与部署</td>
+<td><b>Apple 风格前台皮肤</b></td><td>后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 <code>[data-ui="apple"]</code> 作用域，不影响自定义 CSS；深浅色都有令牌可调</td><td><a href="docs/features/config.md">配置</a></td></tr>
+<tr><td><b>一键安装装的是本分支</b></td><td>脚本从 <code>CKboss/vanblog</code> 的 <code>dev/dsh</code> 克隆源码并本地 <code>docker build</code>（本分支没有发布镜像）。上游脚本拉的是官方镜像，<b>不含这里的任何改动</b></td><td><a href="#一键脚本部署">部署</a></td></tr>
+</table>
+
+### 修掉的 bug（都是真实撞到的）
+
+**前台**
+
+- 顶部导航：悬停别的标签时，那条下划线会**比当前页的低约 2px 并且更宽更粗** —— 下划线是画在带 `hover:scale-110` 的 `<li>` 上的伪元素，一放大整条线就跟着位移。缩放挪到文字上，并加了 CSS 兜底与源码守卫。
+- 侧栏作者卡：`headroom` 每次渲染都新建一个实例并再挂一个 scroll 监听（越用越多）；补清理时又踩到 headroom 0.12 的 `init()` 把 `scrollTracker` 放在 `setTimeout(100)` 里，StrictMode 的「挂载→清理→再挂载」会让 `destroy()` 抛 `TypeError`（表现是**一滚动就报错**），现在统一走安全的 `stopHeadroom()`。
+- 文章目录高亮：客户端从文章 A 跳到 B 之后仍用 A 的标题列表 → 高亮错行，而且每次滚动都把地址栏 hash 改成上一篇文章的标题。
+- 摘要：`<!-- more -->` 写在代码块里时会被当成截断标记，列表卡片渲染出**没闭合的围栏**，把后面的内容全吞掉。
+- 不存在的文章、`/page/abc`、`/page/0`、超范围页码以前都返回 **200 + 软 404**（骗搜索引擎，还会在后端抖动时把 ISR 缓存里的好页面替换掉）→ 现在是真 404；后端 5xx/网络错误不再被当成「文章不存在」。
+- 标签 `C++` 显示「此标签不存在」、分类 `a&b` 只查到 `a`、搜索 `C#` 实际搜 `C`：查询串是手拼的且只转义了 `#` 和 `/` → 统一 `URLSearchParams`。
+- 内置评论刚上线时 `/link` 页写死了 Waline 组件（切到内置后子进程已停 → 评论区一片空白），以及评论按「别名」存、按「数字 id」查导致**明明有评论却一条都不显示** → 现在所有评论区走同一个入口，评论统一以数字 id 为键、服务端把两种路径当同一篇展开。
+
+**后台**
+
+- **转圈卡死一族**（6 处）：`.then(() => setLoading(false))` 没有 `catch`，请求一失败就永远转圈；其中改文章路径冲突（400）会让**编辑器整页冻住**；旧版 JSON 导出用了 `skipErrorHandler`（全局 handler 会把错误抛回来）同样卡死。统一 try/catch/finally + 共享的错误提示helper（不会双重弹窗）。
+- 「导出全部本地图床内容」按钮一直抛 `ReferenceError`（用了 `saveExportArchive` 却没 import）。
+- 登出返回 401（token 已失效）时既不跳转也不清 localStorage → 半登录状态。
+- `<Link to="/admin/site/setting">` 在 umi `base:'/admin/'` 下渲染成 `/admin/admin/...` → catch-all 404；`?subTab=layout` 是**没人读的 key**（应读 `tab`/`siteInfoTab`），深链一直落错标签页。
+- 标签管理里任何搜索都会**凭空造出一个不存在的标签**，它的重命名/删除在服务端 no-op 却提示成功。
+- 三个概览 tab 共用同一个 localStorage key（`van-blog-admin-num-undefined`），在「概览」改近 30 天会**悄悄改掉另外两个 tab 的条数**。
+- HTTPS 设置页在 `await` **之前**就排好了 `location.replace('http://…')` 且失败不取消 → 更新失败浏览器照样切协议。
+- 初始化页把 `statusCode == 500` 当成功，但服务端是用 `throw HttpException('已初始化', 500)` 表达的 → 那个分支是死代码，现在会正确引导去登录。
+- 评论管理页在 dev 下指向一个**硬编码的内网地址**（上游遗留）→ 改成按当前主机名推导。
+- 后台整页白屏（`ScriptExternalLoadError: timeout /mf-va_remoteEntry.js`）：umi3 的 MFSU 解析不了只有 `exports`、没有 `main` 的 ESM 包 → 用 `patches/` 里两个 pnpm patch 补上 `main`，MFSU 恢复，dev 冷启动保持 ~25s。
 
 ### 性能
 
 | 目标 | 结果 |
 | --- | --- |
 | 前台首屏 JS（`next build` First Load） | 首页 432 → **286 kB**，文章页 427 → **281 kB**，友链页 418 → **172 kB**；KaTeX / mermaid / TOC 数学全部按需加载 |
-| 前台图片与静态资源 | 正文图片 `lazy` + `decoding=async`、封面 `fetchpriority=high`；图床图片改为 `max-age=3600, stale-while-revalidate=604800`（此前是 `max-age=0`，每次翻页都重新请求） |
-| 后台 `dist` | 27 MB → **24 MB**；`umi.js` 1133 → **1077 KB**；编辑器路由首包 ~1748 → **~911 KB**；mermaid 从 3 份产物减到 1 份 |
+| 前台图片与静态资源 | 正文图片 `lazy` + `decoding=async`、封面 `preload` + `fetchpriority=high`；图床图片改为 `max-age=3600, stale-while-revalidate=604800`（此前是 `max-age=0`，每次翻页都重新请求） |
+| 后台 `dist` | 27 MB → **24 MB**；`umi.js` 1133 → **1077 KB**；编辑器路由首包 ~1748 → **~911 KB**；mermaid 从 3 份产物减到 1 份；`lodash` 桶式导入改按需 |
+| 第三方脚本 | 百度统计改 `strategy="lazyOnload"`，不再和水合抢资源 |
+| 服务端 | 访问量计数改**原子 `$inc`**（并发下不再互相覆盖、永久少算）；改站点信息不再无条件重启前台进程（环境变量没变就跳过，省掉几秒停站）；流水线依赖安装不再用 `spawnSync` 阻塞事件循环 |
 | 一键脚本 | `backup` 支持 `--consistent`（先停 MongoDB）、`restore` 会校验压缩包完整性并自动删掉 `mongod.lock`；常规操作不再 `down -v`（那会删卷） |
-| 第二轮 | 不存在的文章/页码返回**真 404**（原来是 200 软 404，还会污染 ISR 缓存）；后端故障不再被当成「文章不存在」；文章封面 `preload`；第三方统计改 `lazyOnload`；标签 `C++`、分类 `a&b`、搜索 `C#` 不再因为查询串没编码而查错；改站点信息不再无条件重启前台（环境变量没变就跳过） |
 
 细节见 [前台性能](docs/advanced/performance.md)。
 
 ### 安全
 
-做过一轮四路并行审计（认证与权限 / 文件与上传 / 注入与数据暴露 / 功能正确性），并做了第二轮清理。修复内容包括：
+做过一轮四路并行审计（认证与权限 / 文件与上传 / 注入与数据暴露 / 功能正确性），之后又清了两轮遗留项：
 
 - 公开接口的 Mongo 操作符注入、搜索接口的正则注入与 500、图床上传任意文件导致的同源存储型 XSS、导出接口的重定向 SSRF；
-- 加密文章经由搜索 / RSS / 解锁接口的三处泄露，解锁接口现在限次（同 IP + 同文章 10 分钟 20 次）；
+- 加密文章经由搜索 / RSS / 解锁接口的三处泄露；解锁接口现在**限次**（同 IP + 同文章 10 分钟 20 次）；
 - 导出归档匿名可下载、登录限流可被伪造头绕过、演示站下的管线 RCE、备份恢复的半恢复与进程崩溃；
-- 流水线执行加了超时与 `error`/`exit` 监听（以前脚本不返回就会**永久卡住保存文章**）、依赖安装不再用 `spawnSync` 阻塞事件循环；
-- 访问量计数改成原子 `$inc`（并发下不再互相覆盖、永久少算）、`getNewId()` 的锁改成 `try/finally`（一次查询失败不会让所有新建请求空转到重启）；
-- 图片链接解析不再把 alt 文本 / 代码块里的示例当成真图片（以前会误报「失效图片」并往库里插垃圾记录）；
-- `/swagger` 可用 `VANBLOG_SWAGGER=false` 关闭，`/api/revalidate` 支持共享密钥与路径校验。
+- 流水线执行加了超时与 `error`/`exit` 监听（以前脚本不返回就会**永久卡住保存文章**）；`getNewId()` 的锁改成 `try/finally`（一次查询失败不会让所有新建请求空转到重启进程）；
+- 图片链接解析不再把 alt 文本 / 代码块里的示例当成真图片（以前会误报「失效图片」并往库里插垃圾记录）；「本地化远程图片」也不再改坏教程里的 ```md 示例；
+- `/swagger` 可用 `VANBLOG_SWAGGER=false` 关闭；`/api/revalidate` 支持共享密钥与路径校验（单独部署 website 镜像时它是公网可达的）；ISR 触发地址改用 `URLSearchParams`（`encodeURI` 不编码 `#`，而文章别名允许 `#`，以前会静默失效）；
+- **评论系统**（匿名可写，所以比正文严得多）：原始 HTML 根本不解析、白名单不含 `img`/`iframe`/`style`/`svg`、链接强制 `rel="nofollow noopener noreferrer"`、服务端重新校验每个字段（含显式拒绝 `javascript:` 等非 http(s) scheme、剥掉双向控制符防 RLO 伪装）、蜜罐 + 同 IP 频率/每日/重复内容三重限制、公开接口不返回邮箱/IP/UA。
 
 约束、可调开关与**已知未修项**都写在 [安全与加固](docs/advanced/security.md)。
+
+### ⚠️ 行为变化（升级前看一眼）
+
+| 变化 | 说明 |
+| --- | --- |
+| 单个 `~x~` 现在是**下标** | 为了让 `H~2~O` 可用，关掉了 GFM 的单波浪删除线。删除线请写 `~~x~~`（这本来就是 CommonMark/GFM 的标准写法） |
+| 不存在的文章/页码返回 **404** | 以前是 200 + 软 404。如果你有监控按「200 才算正常」，注意这个变化 |
+| 评论的 path 键用**数字 id** | 内置评论写入 `/post/<数字id>`；查询时服务端会把 `/post/<id>` 与 `/post/<别名>` 当同一篇展开，所以历史数据两种形式都认 |
+| 后台 dev 依赖两个 **pnpm patch** | `patches/` 给 `remark-supersub`、`remark-github-blockquote-alert` 补了 `main` 字段（MFSU 需要）。升级这两个包时 patch 会失效并**明确报错**，重新 `pnpm patch` 一次即可；实在不行把 `mfsu` 设为 `false`（dev 冷启动 ~25s → ~2min） |
+| 一键脚本装的是**本分支源码构建**的镜像 | 不再是 `mereith/van-blog:latest`。想回到官方镜像：`VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh` |
+| 「失效图片」报告变准了 | 以前会把 alt 文本里的 URL、代码块里的示例也当成图片去请求，于是误报 + 往 `statics` 插垃圾记录 |
+| 改站点信息不再重启前台 | 只有影响前台环境变量的字段（图床域名白名单、ISR 设置）变了才重启 |
+
+### 新增环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `VANBLOG_SWAGGER` | 空（开启） | 设 `false` 关闭 `/swagger` 与 `/swagger-json`（生产环境建议关） |
+| `VAN_BLOG_REVALIDATE_SECRET` | 空 | 设了之后前台 `/api/revalidate` 必须带同名 `secret`（server 会自动带上） |
+| `VANBLOG_PIPELINE_TIMEOUT_MS` | `30000` | 单个流水线的执行上限，超时直接杀进程 |
+| `VANBLOG_DEPS_INSTALL_TIMEOUT_MS` | `300000` | 流水线安装依赖的上限 |
+| `VAN_BLOG_BACKUP_PATH` | `<log>/vanblog-backups` | 整站备份与导出归档目录（必须在静态目录之外） |
+| `VANBLOG_BACKUP_ZSTD_LEVEL` | `19` | 整站备份的 zstd 压缩等级 |
+| `VANBLOG_DISABLE_IP_GEO` | 空 | 设 `true` 关闭登录日志的 IP 归属地查询（不再把访客 IP 发给第三方） |
+| `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | 设 `true` 恢复「任何域名都批准按需证书」（多域名/CDN 场景） |
+| `VANBLOG_REPO` / `VANBLOG_BRANCH` / `VANBLOG_SRC_DIR` / `VANBLOG_IMAGE_TAG` | `CKboss/vanblog` / `dev/dsh` / `<base>/src` / `vanblog:dev-dsh` | 一键脚本的源码来源与本地镜像 tag |
+| `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 用官方镜像（不含本分支改动） |
+
+完整清单（含上游原有的）见 [安全与加固](docs/advanced/security.md) 和 [配置](docs/features/config.md)。
+
+### 已知限制（还没做的）
+
+- **评论**：内置系统目前没有邮件 / webhook 通知（Waline 有）、没有点赞 UI（`likeCount` 已经存着）、没有验证码；从 Waline 迁移需要手动调导入接口。
+- `/post/<数字id>` 与 `/post/<别名>` 仍然都返回 200，没有 canonical / 301，阅读量按 pathname 分开统计。
+- 公开列表接口仍支持 `pageSize=-1` 全量拉取（前端静态生成依赖它）。
+- 口令仍是 sha256 套 sha256（不是 bcrypt/argon2）；文章与分类的访问密码是**明文存储**、用 `==` 比较。
+- 除了登录与文章解锁，没有全局速率限制；没有全局 `ValidationPipe`（参数校验靠各处手写）。
+- `/api/admin/init` 没有守卫，靠「库里有没有用户」判断是否已初始化。
+- API Token 有效期 100 年，只能手动吊销。
+
+完整清单见 [安全与加固 · 已知未修项](docs/advanced/security.md)。
 
 ### 本地开发（不需要 docker，也不需要 sudo）
 
@@ -77,23 +155,23 @@
 ./dev-env.sh bootstrap   # 下载 Node 20 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地骨架
 ./dev-env.sh install     # 装依赖（--frozen-lockfile，不改 lockfile）
 ./dev-env.sh start       # MongoDB:27017 + server:3000 + website:3001 + admin:3002 一起起
-./dev-env.sh status      # 状态；另有 logs / stop / restart / db
+./dev-env.sh status      # 状态；另有 logs / stop / restart / db / backup
 ```
 
 工具链、数据库、数据目录、日志全部在仓库内（`.tools/`、`vanblog_dev/`，已本地忽略），整套环境可以随目录搬走，也不会污染系统。
 
-**[AGENTS.md](AGENTS.md)** 是给人和 AI 编码代理看的运行手册：环境搭建、日常操作、跑测试、故障排查速查表、以及本分支每一项改动的**根因和踩过的坑**（改代码前请先读它）。
+**[AGENTS.md](AGENTS.md)** 是给人和 AI 编码代理看的运行手册：环境搭建、日常操作、跑测试、故障排查速查表，以及本分支每一项改动的**根因和踩过的坑**（改代码前请先读它）。
 
 ### 测试
 
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | 530 用例（1 个既有用例需联网拉字体，离线必失败） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | 51 文件 / 462 用例 |
-| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | 65 文件 / 248 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | 7 文件 / 259 条断言 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **562** 用例（1 个既有用例需联网拉字体，离线必失败） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **52 文件 / 484** 用例 |
+| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **71 文件 / 272** 用例 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 306** 条断言 |
 
-三套测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
+三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 
 ### 与上游同步
 

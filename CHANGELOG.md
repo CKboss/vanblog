@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+### 🍴 本 fork（`CKboss/vanblog` 分支 `dev/dsh`）的改动
+
+> 下面这些**只存在于本 fork**，不在上游 `Mereithhh/vanblog` 的任何发布里。
+> 详细说明见 [README · 本分支新增内容](README.md#本分支新增内容)、[AGENTS.md](AGENTS.md) 与各功能文档。
+
+**新功能**
+
+- **内置评论系统**：评论存在本站 Mongo、走本站接口，前台自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台原生管理页（审核 / 编辑 / 删除 / 批量 / 按状态与关键词筛选）。后台「评论设置」三选一：`内置 / Waline / 关闭`；老站点升级默认保持 Waline，切换不迁移数据。支持从 Waline 导出文件**一键导入**（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞、`data:` 图片折叠成 alt）与**只导出已通过评论**。[评论系统](docs/features/comment.md)
+- **补齐 6 种 markdown 语法**：`==高亮==`、`X^2^` / `H~2~O`、`:smile:` 短代码、定义列表、GitHub 提示块 `> [!NOTE]`、`[[toc]]`。编辑器与前台用同一套插件（按 bytemd 的 unified 10 世代挑版本）。⚠️ 单个 `~x~` 现在是下标，删除线要写 `~~x~~`。[Markdown](docs/features/markdown.md)
+- **整站备份 / 恢复**：一个高压缩归档（zstd → xz → gzip）打包全部集合 + 评论库 + 图床/附件/自定义页面，支持不解压看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引）。[备份](docs/advanced/backup.md)
+- **单篇导出 `.md` / `.mdz`**：`.mdz` 是 Typora 风格带图包（相对链接 + `<标题>.assets/`），外链图片自动抓取，抓不到会保留原链接并生成说明清单。
+- **图片管线**：长边 1920 自动缩放、300px 缩略图、隐写水印（抗压缩/转码、可检测）、原地替换而 URL 不变、小图/大图/列表三种视图、批量引用查询。[图床](docs/features/image-storage.md)
+- **附件管理**：任意文件上传生成 URL（按内容去重），html/svg/js 强制下载 + `nosniff`，可搜索引用、批量导出。[附件](docs/features/attachment.md)
+- **拼音文章路径**：新建文章自动生成 `/post/<pinyin-slug>`，重名自动 `-2`/`-3`，历史文章可一键回填；`/post/<数字 id>` 永远可用。[文章](docs/features/article.md)
+- **Apple 风格前台皮肤**：后台一键切换，纯 CSS 且每条规则都带 `[data-ui="apple"]` 作用域，不影响自定义 CSS。[配置](docs/features/config.md)
+- **自动摘要**：没写 `<!-- more -->` 时取正文前 200 字，不会切断链接与 emoji。
+- **标题可选中 + 一键复制**（标题与文章链接），导航栏站点名同样可复制。
+
+**性能**
+
+- 前台首屏 JS：首页 432 → 286 kB、文章页 427 → 281 kB、友链页 418 → 172 kB（KaTeX / mermaid / TOC 数学按需加载）；正文图片 `lazy`、封面 `preload` + `fetchpriority=high`；图床静态资源从 `max-age=0` 改成 `max-age=3600, stale-while-revalidate=604800`。[前台性能](docs/advanced/performance.md)
+- 后台 `dist` 27 → 24 MB，`umi.js` 1133 → 1077 KB，编辑器路由首包 ~1748 → ~911 KB，mermaid 从 3 份产物减到 1 份，`lodash` 改按需引入。
+- 访问量计数改成原子 `$inc`（并发下不再互相覆盖、永久少算）；改站点信息不再无条件重启前台（环境变量没变就跳过，省掉几秒停站）；流水线装依赖不再用 `spawnSync` 阻塞事件循环。
+
+**修复**
+
+- 前台：导航栏悬停下划线与当前页那条**不在同一水平线**（缩放画在了带下划线的 `<li>` 上）；侧栏 headroom 实例与 scroll 监听泄漏，以及 StrictMode 下 `destroy()` 抛错导致「一滚动就报错」；文章目录高亮在客户端跳转后仍用上一篇的标题（还会把地址栏 hash 改成上一篇文章）；代码块里的 `<!-- more -->` 会把摘要截成半个围栏；不存在的文章与非法页码返回 200 软 404（还会污染 ISR 缓存）；标签 `C++` / 分类 `a&b` / 搜索 `C#` 因查询串未编码而查错。
+- 后台：6 处「请求失败就永远转圈」（其中改路径冲突会让编辑器整页冻住）；「导出全部本地图床内容」按钮抛 `ReferenceError`（漏 import）；登出 401 时半登录状态；`/admin/admin/...` 死链与没人读的 `?subTab=` 深链；标签搜索凭空造出不存在的标签；三个概览 tab 共用同一个 localStorage key 互相串数；HTTPS 设置更新失败仍切换协议；初始化页把 500 当成功（死分支）；评论管理页 dev 下指向硬编码内网地址；后台整页白屏（MFSU 解析不了 exports-only 的 ESM 包，用 `patches/` 两个 pnpm patch 修好）。
+- 服务端：流水线不返回时会**永久卡住保存文章**（补超时与 `error`/`exit` 监听）；`getNewId()` 一次查询失败就让所有新建请求空转到重启（改 `try/finally`）；图片链接解析把 alt 文本与代码块示例当成真图片（误报失效图片 + 往库里插垃圾记录）；「本地化远程图片」会改坏教程里的 ```md 示例；导出时 `\bsrc=` 误匹配 `data-src`、坏的百分号转义让整个导出 500；备份恢复时非法 `$date` 被写成 1970。
+
+**安全**
+
+- 公开接口的 Mongo 操作符注入、搜索接口正则注入与 500、图床上传任意文件导致的同源存储型 XSS、导出接口重定向 SSRF；加密文章经搜索 / RSS / 解锁接口的三处泄露；导出归档匿名可下载；登录限流可被伪造头绕过；演示站下的管线 RCE；备份恢复的半恢复与进程崩溃。
+- 加密文章解锁接口限次（同 IP + 同文章 10 分钟 20 次）；`/swagger` 可用 `VANBLOG_SWAGGER=false` 关闭；`/api/revalidate` 支持共享密钥与路径校验；ISR 触发地址改用 `URLSearchParams`（`encodeURI` 不编码 `#`，而文章别名允许 `#`）。
+- 评论（匿名可写）的渲染链路比正文严得多：原始 HTML 不解析、白名单不含 `img`/`iframe`/`style`/`svg`、链接强制 `nofollow noopener noreferrer`、服务端重新校验每个字段（显式拒绝 `javascript:` 等 scheme、剥双向控制符）、蜜罐 + 三重限流、公开接口不返回邮箱/IP/UA。[安全与加固](docs/advanced/security.md)
+
+**部署与开发**
+
+- 一键脚本 `vanblog.sh` v0.4.0：**从本分支源码克隆并本地 `docker build`**（本 fork 没有发布镜像），`update` 改成 fetch + 重建且构建失败不停机，编排模板优先用仓库里那份，卸载会清源码目录；`VANBLOG_USE_UPSTREAM_IMAGE=true` 可回到官方镜像。
+- 一键脚本 v0.3.7 体检：`backup --consistent`、`restore` 校验压缩包并清 `mongod.lock`、常规操作不再 `down -v`（那会删卷）。
+- `./dev-env.sh bootstrap`：一条命令备好 Node 20 + pnpm 8 + MongoDB 7，全程不需要 docker 与 sudo。
+- 测试：server 562 用例、website 52 文件 / 484、admin 71 文件 / 272、部署脚本 8 文件 / 306 条断言。
+
 ### ✨ Features | 新功能
 
 - 前台文章页底部的标签链接前增加标签图标，避免被当成普通文字链接。图标跟随现有灰色文字、悬停下划线和夜间模式颜色；加密未解锁时仍不展示标签。首页列表卡片本来就不显示这行标签，行为不变。[#178](https://github.com/Mereithhh/vanblog/issues/178)
