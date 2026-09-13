@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- 后台「关于」页改为指向本分支（`CKboss/vanblog` 的 `dev/dsh`），标注「增强修改版」并列出主要增强点；
+  底部单独一块致谢原始项目。同时把后台里 14 处指向上游文档站的帮助链接改指仓库内 `docs/`（其中 6 处上游地址已 404）。
 ### 🍴 本 fork（`CKboss/vanblog` 分支 `dev/dsh`）的改动
 
 > 下面这些**只存在于本 fork**，不在上游 `Mereithhh/vanblog` 的任何发布里。

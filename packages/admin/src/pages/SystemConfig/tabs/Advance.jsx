@@ -75,7 +75,8 @@ export default function (props) {
             <a
               rel="noreferrer"
               target="_blank"
-              href="https://vanblog.mereith.com/feature/advance/isr.html"
+              // 上游这个地址已经 404
+              href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/isr.md"
             >
               帮助文档
             </a>

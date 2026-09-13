@@ -381,10 +381,10 @@ export default function () {
             key="docBtn"
             onClick={() => {
               if (type == 'pipeline') {
-                window.open('https://vanblog.mereith.com/features/pipeline.html', '_blank');
+                window.open('https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/pipeline.md', '_blank');
               } else {
                 window.open(
-                  'https://vanblog.mereith.com/advanced/custom-page.html',
+                  'https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/custom-page.md',
                   '_blank',
                 );
               }

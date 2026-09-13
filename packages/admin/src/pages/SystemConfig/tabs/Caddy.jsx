@@ -71,7 +71,8 @@ export default function (props) {
               <a
                 target={'_blank'}
                 rel="noreferrer"
-                href="https://vanblog.mereith.com/guide/https.html"
+                // 上游这个地址已经 404
+                href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/https.md"
               >
                 相关文档
               </a>
@@ -100,7 +101,7 @@ export default function (props) {
             <p>
               如果不小心开启了此选项后关不掉，可以参考：
               <a
-                href="https://vanblog.mereith.com/faq/usage.html#开启了-https-重定向后关不掉"
+                href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/faq/usage.md#开启了-https-重定向后关不掉"
                 target="_blank"
               >
                 开启了 https 重定向后关不掉

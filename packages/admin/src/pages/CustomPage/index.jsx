@@ -112,7 +112,7 @@ export default function () {
           </p>
           <a
             target="_blank"
-            href="https://vanblog.mereith.com/advanced/custom-page.html"
+            href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/custom-page.md"
             rel="noreferrer"
           >
             帮助文档

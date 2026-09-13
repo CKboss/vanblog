@@ -87,7 +87,7 @@ export default function () {
                         <a
                           target="_blank"
                           rel="noreferrer"
-                          href="https://vanblog.mereith.com/advanced/token.html"
+                          href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/token.md"
                         >
                           相关文档
                         </a>

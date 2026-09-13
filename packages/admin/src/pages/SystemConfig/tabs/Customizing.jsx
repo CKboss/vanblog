@@ -68,7 +68,8 @@ export default function () {
           <p>{helpMap[tab]}</p>
           <a
             target="_blank"
-            href="https://vanblog.mereith.com/feature/advance/customizing.html"
+            // 上游这个地址已经 404，统一改指本分支仓库里的文档（与正在运行的代码同版本）
+            href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/customizing.md"
             rel="noreferrer"
           >
             帮助文档

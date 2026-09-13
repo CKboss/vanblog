@@ -249,7 +249,8 @@ export default function () {
             <a
               target={'_blank'}
               rel="noreferrer"
-              href="https://vanblog.mereith.com/feature/basic/editor.html#%E4%B8%80%E9%94%AE%E6%8F%92%E5%85%A5-more-%E6%A0%87%E8%AE%B0"
+              // 上游文档站的这个深链已经失效（文档结构变了），改指本分支仓库里的文档
+              href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/editor.md"
             >
               相关文档
             </a>
@@ -453,7 +454,8 @@ export default function () {
           key: 'helpBtn',
           label: '帮助文档',
           onClick: () => {
-            window.open('https://vanblog.mereith.com/feature/basic/editor.html', '_blank');
+            // 上游文档站的这个地址已经 404，改指本分支仓库里的文档（跟着代码一起版本化）
+            window.open('https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/editor.md', '_blank');
           },
         },
       ]}

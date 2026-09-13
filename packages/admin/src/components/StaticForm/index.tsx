@@ -68,7 +68,7 @@ export default function (props: {}) {
               name="picgoConfig"
               label={
                 <a
-                  href="https://vanblog.mereith.com/feature/basic/pic.html#%E5%A4%96%E7%BD%AE%E5%9B%BE%E5%BA%8A"
+                  href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/image-storage.md"
                   target={'_blank'}
                   rel="norefferrer"
                 >

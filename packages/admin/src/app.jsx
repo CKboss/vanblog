@@ -97,7 +97,9 @@ export async function getInitialState() {
                 {`更新日志:\t`}
                 <a
                   target={'_blank'}
-                  href="https://vanblog.mereith.com/ref/changelog.html"
+                  // 更新日志看仓库里的 CHANGELOG.md：里面有本分支专门的 🍴 区块，
+                  // 上游那份不含本分支的任何改动
+                  href="https://github.com/CKboss/vanblog/blob/dev/dsh/CHANGELOG.md"
                   rel="noreferrer"
                 >
                   点击查看
@@ -107,7 +109,7 @@ export async function getInitialState() {
                 {`更新方法:\t`}
                 <a
                   target={'_blank'}
-                  href="https://vanblog.mereith.com/guide/update.html#%E5%8D%87%E7%BA%A7%E6%96%B9%E6%B3%95"
+                  href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/guide/update.md"
                   rel="noreferrer"
                 >
                   点击查看

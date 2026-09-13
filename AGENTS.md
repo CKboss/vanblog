@@ -1621,13 +1621,44 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 `/robots.txt` 200 且带 `Sitemap:` 行；`/sitemap.xml` 79 条 URL、76 条 lastmod、79 条 changefreq/priority，
 且已删除的探针文章不再出现；`feed.xml` 的 `language` 为 zh-CN、category domain 无双斜杠。
 
-### 7.21 测试基线（本分支最后一次全量运行的结果）
+### 7.21 后台「关于」页与文档链接的归属
+
+`packages/admin/src/pages/About.tsx` 以前整页都指向**上游**（Mereithhh/van-blog + 作者文档站），
+但这个后台跑的是本 fork 的代码：点「提交BUG」会开到上游仓库报本分支才有的问题，
+点「更新日志」看到的是上游发版记录（本分支的改动一条都不在里面）。现在分两块：
+
+- **上半页 = 本分支**：`增强修改版` 标签、`CKboss/vanblog` 的 `dev/dsh` 分支说明、GPL v3 声明、
+  9 条主要增强点（`FORK_HIGHLIGHTS`），链接指向本分支的 Github / 提交历史 / CHANGELOG.md /
+  README 的「本分支新增内容」锚点 / 仓库内 `docs/` / `AGENTS.md` / 本地 `/swagger` / 本分支 Issues。
+- **下半页 = 原始项目**（`Divider` 分隔）：致谢 @Mereithhh，保留上游 Github、官方文档站、
+  上游更新日志、官方交流群、打赏入口，并注明「上游文档与更新日志描述的是**官方镜像**的行为，
+  与本分支不完全一致」。
+- 上游地址集中在文件顶部的常量里，换分支/换仓库只改一处。
+
+**顺带清掉了一批死链**：后台里指向 `vanblog.mereith.com/<path>.html` 的**帮助文档链接共 14 处**，
+实测其中 **6 处已经 404**（`/feature/basic/editor.html`、`/feature/advance/collaborator.html`、
+`/feature/advance/isr.html`、`/feature/advance/customizing.html`、`/feature/basic/comment.html`、
+`/guide/https.html`）—— 上游文档站改过目录结构（`feature/basic/*` → `features/*`、
+`feature/advance/*` → `advanced/*`）。全部改指**本分支仓库里的 `docs/**.md`**（与正在运行的代码同版本），
+CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）。
+⚠️ 锚点别乱带：`guide/update.md` 里没有「升级方法」这个标题、`image-storage.md` 里没有「外置图床」，
+所以这两条**去掉了 anchor**，只链到文件。
+⚠️ 「关于」页里保留的上游链接是**刻意的**（致谢 + 官方入口），别当成漏改的死链一起清掉；
+`tests/unit/aboutPage.test.js` 会做全仓扫描：除 `pages/About.tsx` 外不许再出现
+`vanblog.mereith.com/<小写路径>`，同时会**逐个检查新链接指向的仓库文件真实存在**
+（别把一批死链换成另一批死链）。
+
+⚠️ 验证后台文案时注意：umi dev 的 JSX 文本子节点会被 babel 转成 `\uXXXX` 转义
+（`children: "\u589E\u5F3A\u4FEE\u6539\u7248"`），直接 `grep 中文` 在 chunk 里搜不到，
+但数组/字符串字面量是原样的 —— 别据此误判"改动没生效"。
+
+### 7.22 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 55 文件 / 528 用例全绿 |
-| admin `node --test tests/unit` | 77 套件 / 306 用例全绿 |
+| admin `node --test tests/unit` | 78 套件 / 314 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
@@ -1638,7 +1669,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.21 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.22 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

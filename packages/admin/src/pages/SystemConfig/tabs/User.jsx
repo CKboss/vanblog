@@ -136,7 +136,8 @@ export default function () {
                         <a
                           target="_blank"
                           rel="noreferrer"
-                          href="https://vanblog.mereith.com/feature/advance/collaborator.html"
+                          // 上游这个地址已经 404
+                          href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/collaborator.md"
                         >
                           帮助文档
                         </a>

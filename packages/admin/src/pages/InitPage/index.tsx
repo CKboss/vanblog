@@ -28,7 +28,7 @@ const InitPage = () => {
               <a
                 target={'_blank'}
                 rel="noreferrer"
-                href="https://vanblog.mereith.com/feature/basic/setting.html"
+                href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/config.md"
               >
                 帮助文档
               </a>

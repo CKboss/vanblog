@@ -53,7 +53,8 @@ export default function () {
             <a
               target={'_blank'}
               rel="noreferrer"
-              href="https://vanblog.mereith.com/feature/basic/comment.html"
+              // 上游这个地址已经 404；本分支的评论文档同时覆盖内置评论与 Waline
+              href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/comment.md"
             >
               帮助文档
             </a>
