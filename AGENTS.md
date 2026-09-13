@@ -1710,23 +1710,23 @@ remark 包要靠补丁补出 `main`/`module`，见 §7.14），而 `website_buil
 `patchedDependencies` → 两个包不会被补丁 → umi3 的 MFSU 解析器报
 `AssertionError: filePath not found of remark-github-blockquote-alert`，构建同样失败。
 
-修法（两处都要，缺一不可）：
+修法：`admin_builder` 与 `website_builder` 都加 `COPY ./patches ./patches`。
 
-1. `admin_builder` 与 `website_builder` 都加 `COPY ./patches ./patches`；
-2. `packages/admin/package.json` **自己也要声明一份**同样的 `pnpm.patchedDependencies`
-   （路径同样写 `patches/xxx.patch`，相对各自的 manifest）。
-   ⚠️ 副作用：在仓库根跑 `pnpm install` 时 pnpm 会打一条 WARN
-   `The field "pnpm" was found in packages/admin/package.json. This will not take effect.`
-   —— 这是**预期行为**，workspace 模式下由根 manifest 说了算，那份声明只在 Docker 的独立安装里生效。
-   已实测：加了这份声明后 `pnpm install --lockfile-only` **不会改动 `pnpm-lock.yaml`**，
-   所以 `--frozen-lockfile` 依然通过。别看到 WARN 就把它删了，删了镜像就构建不出来。
+⚠️ **当时的第二半修法已废弃，别再照做**：我一度让 `packages/admin/package.json` 也镜像声明一份
+`pnpm.patchedDependencies`（因为那一层是独立安装、看不到根 manifest），代价是每次在仓库根跑
+`pnpm install` 都会打一条 `The field "pnpm" was found in packages/admin/package.json.
+This will not take effect.`。后来 `admin_builder` 改成了**和 website_builder 一样的 workspace
+安装 + `--frozen-lockfile`**（见 §7.27），根 manifest 直接可见，那份镜像声明就成了纯噪音，已删除
+（WARN 也随之消失）。守卫测试现在断言的是**反面**：`packages/admin/package.json` 里
+不许再出现 `pnpm.patchedDependencies`。
 
 **还要把被补丁的包钉死到精确版本**：`packages/admin/package.json` 与 `packages/website/package.json`
 里 `remark-supersub` 与 `remark-github-blockquote-alert` 已从 `^1.0.0` / `^2.1.0` 改成
 `1.0.0` / `2.1.0`（`pnpm-lock.yaml` 同步只改了 4 行 specifier，`--frozen-lockfile` 依然通过）。
-原因：`patchedDependencies` 的键是 `name@精确版本`，website 那层有 lockfile 兜底，
-但 **admin 那层是独立安装、没有 lockfile**，写成 `^2.1.0` 的话上游一发布 2.1.1 就会解析到新版 →
-补丁不匹配 → pnpm 8 直接 `ERR_PNPM_PATCH_NOT_APPLIED` 让镜像构建失败。
+原因：`patchedDependencies` 的键是 `name@精确版本`，写成 `^2.1.0` 的话上游一发布 2.1.1
+就可能解析到新版 → 补丁不匹配 → pnpm 8 直接 `ERR_PNPM_PATCH_NOT_APPLIED` 让构建失败。
+（当时 admin 那层还是独立安装、连 lockfile 都没有，风险更大；改成 workspace 安装后
+lockfile 也会兜一层，但精确版本这条仍然保留 —— 补丁本来就是版本相关的。）
 （查过 registry：这两个包目前 1.0.0 / 2.1.0 就是最新版，所以现在是"防患于未然"。）
 守卫测试里有 4 条断言盯着这件事，谁把 `^` 加回来就会红。
 
@@ -2027,14 +2027,79 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
 ⚠️ 还有一条：`assert_file_contains` 的针是 **grep BRE**，里面的 `*`、`[`、`]` 都要转义
 （`v*` 会变成"零个或多个 v"，`[:upper:]` 会被当成字符类），否则会误报"文件里没有"。
 
-### 7.27 测试基线（本分支最后一次全量运行的结果）
+### 7.27 admin_builder 必须走 lockfile：cytoscape 事故的始末
+
+CI 上第一次真正跑到 admin 构建时挂在这里：
+
+```
+error in ./node_modules/.pnpm/mermaid@10.6.1/node_modules/mermaid/dist/mindmap-definition-617cf8dd.js
+Module not found: Error: Package path ./dist/cytoscape.umd.js is not exported from
+package /app/node_modules/.pnpm/mermaid@10.6.1/node_modules/cytoscape
+  (see exports field in .../cytoscape/package.json)
+```
+
+**根因不是 mermaid，是「没有 lockfile」**：`admin_builder` 那一层当时是独立安装
+（`COPY ./packages/admin/ ./` + `pnpm i`），**每次构建都重新解析依赖版本**。
+`mermaid@10.6.1`（admin 里钉的是精确版本）内部要 `cytoscape/dist/cytoscape.umd.js`；
+仓库 lockfile 锁的是 `cytoscape@3.27.0`，它的 `exports` 里**有**这条子路径，
+而独立安装解析到的更新版 cytoscape 把 `exports` 收紧了 → webpack 找不到模块。
+
+对照证据很硬：**`website_builder` 一直用 `--frozen-lockfile`，从来没出过这个问题**，
+而且就在同一次失败的构建里它成功了（76.3s，8 个页面全生成、路由表都打出来了）。
+所以修法不是给 cytoscape 加 override 或再写一个补丁，而是**让 admin 也走 lockfile**：
+
+```dockerfile
+FROM node:18-alpine AS admin_builder
+COPY ./package.json ./            # 根 manifest（带 patchedDependencies）
+COPY ./pnpm-lock.yaml ./
+COPY ./pnpm-workspace.yaml ./
+COPY ./tsconfig.base.json ./
+COPY ./patches ./patches
+COPY ./packages/admin ./packages/admin
+RUN pnpm install --frozen-lockfile
+WORKDIR /app/packages/admin
+RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}
+```
+
+**连带必须改的一处**：runner 取产物的路径从 `/app/dist/` 变成 **`/app/packages/admin/dist/`**
+（布局从「admin 就是 /app」变成「workspace 根是 /app」）。⚠️ 这个忘了改的话镜像**能构建成功**，
+但后台页面全是 404 —— 比构建失败更难查。
+
+顺带的好处：依赖版本可复现、与本地开发和 website/server 层完全一致，不会再有「CI 挂了本地好的」；
+根 manifest 的 `patchedDependencies` 直接生效（admin 里那份镜像声明因此删掉，WARN 也没了）；
+manifest 与 lockfile 不同步时 `--frozen-lockfile` 会**立刻失败**，而不是悄悄装个新版本。
+
+⚠️ 代价：这一层现在也受 lockfile 约束 —— 改了 `packages/admin/package.json` 的依赖之后
+**必须**在仓库根跑一次 `pnpm install`（或 `--lockfile-only`）更新 lockfile，
+否则镜像构建会报 `ERR_PNPM_OUTDATED_LOCKFILE`。
+
+**本地怎么验证**（没有 docker 权限也能验，这一层的命令就是普通 pnpm）：
+
+```bash
+rm -rf /tmp/absim && mkdir -p /tmp/absim/packages
+cp package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json /tmp/absim/
+cp -r patches /tmp/absim/ && cp -r packages/admin /tmp/absim/packages/
+cd /tmp/absim && pnpm install --frozen-lockfile   # → EXIT=0，装到 cytoscape@3.27.0
+cd packages/admin && pnpm run build               # → EXIT=0，dist 24MB，无 Module not found
+```
+
+实测就是这么过的：装完 `node_modules/.pnpm/` 下确实是 `cytoscape@3.27.0`（lockfile 锁的那个），
+构建 EXIT=0，日志里 `cytoscape` / `Module not found` 出现 **0 次**。
+
+**守卫**（`dockerfile-patches.test.sh` 30 → 36 条）：admin_builder 必须拷
+`package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.base.json` / `patches`、
+必须用 `--frozen-lockfile`、必须 `WORKDIR /app/packages/admin`、runner 必须从
+`/app/packages/admin/dist/` 取产物；另外 `packages/admin/package.json` 里**不许**再有
+`pnpm.patchedDependencies`（§7.22 那个已废弃的做法）。
+
+### 7.28 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 435 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 441 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2044,7 +2109,7 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.27 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.28 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

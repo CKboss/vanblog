@@ -133,12 +133,5 @@
   },
   "engines": {
     "node": "^18.0.0 || >= 20.0.0"
-  },
-  "pnpm": {
-    "//": "这一份声明是给 Dockerfile 的 ADMIN_BUILDER 用的：那一层只 COPY packages/admin 再独立 pnpm i，看不到仓库根的 package.json，而根上那份 patchedDependencies 才是开发者本地生效的那份。两处必须同时存在，且路径都相对各自的 manifest（都是 patches/xxx.patch）。",
-    "patchedDependencies": {
-      "remark-supersub@1.0.0": "patches/remark-supersub@1.0.0.patch",
-      "remark-github-blockquote-alert@2.1.0": "patches/remark-github-blockquote-alert@2.1.0.patch"
-    }
   }
 }

@@ -79,13 +79,15 @@ for name in sorted(os.listdir(os.path.join(root, "packages"))):
     if not hit:
         continue
     consumers.append((name, hit))
+    # admin 现在也走 workspace 安装（--frozen-lockfile），能看到根 manifest，
+    # 所以它自己**不该**再声明一份：多写一份只会让每次 pnpm install 打一条 WARN，
+    # 而且容易和根上那份不同步（历史上就是为了让独立安装生效才加的）。
     if name == "admin":
         own = (pkg.get("pnpm") or {}).get("patchedDependencies") or {}
-        for dep, rel in patches.items():
-            emit(
-                own.get(dep) == rel,
-                "packages/admin/package.json mirrors patchedDependencies %s -> %s" % (dep, rel),
-            )
+        emit(
+            not own,
+            "packages/admin/package.json 不再重复声明 patchedDependencies（workspace 安装看得到根 manifest）",
+        )
 
 # 被补丁的包必须**钉死到补丁对应的精确版本**：pnpm 的 patchedDependencies 键是 name@version，
 # 而 admin_builder 那层是独立安装（没有 lockfile 兜底），写成 ^2.1.0 的话上游一发布 2.1.1
@@ -139,6 +141,34 @@ if stage_body admin_builder | grep -qE '^COPY \./patches \./patches[[:space:]]*$
   pass "admin_builder copies ./patches"
 else
   fail "admin_builder does NOT copy ./patches -> MFSU cannot resolve the ESM-only remark packages"
+fi
+
+# admin_builder 以前是「只拷 packages/admin + pnpm i」的**独立安装**，没有 lockfile，
+# 每次构建都重新解析依赖版本。真实事故：mermaid 10.6.1 要 cytoscape/dist/cytoscape.umd.js，
+# lockfile 锁的 cytoscape 3.27.0 的 exports 里有这条路径，但新解析到的版本没有 →
+# `Module not found: Package path ./dist/cytoscape.umd.js is not exported`，构建失败。
+# website_builder 一直用 --frozen-lockfile，所以从来没这个问题。
+for f in package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json; do
+  if stage_body admin_builder | grep -qE "^COPY \\./${f} "; then
+    pass "admin_builder 拷了 ./${f}（workspace 安装需要）"
+  else
+    fail "admin_builder 没有拷 ./${f} —— 缺了它 --frozen-lockfile 装不起来"
+  fi
+done
+if stage_body admin_builder | grep -qE '^RUN pnpm install --frozen-lockfile[[:space:]]*$'; then
+  pass "admin_builder 用 --frozen-lockfile 安装（版本可复现，不会漂移）"
+else
+  fail "admin_builder 没有用 --frozen-lockfile —— 依赖版本会漂移（cytoscape 那次事故就是这么来的）"
+fi
+if stage_body admin_builder | grep -qE '^WORKDIR /app/packages/admin[[:space:]]*$'; then
+  pass "admin_builder 在 packages/admin 目录下构建"
+else
+  fail "admin_builder 没有切到 packages/admin 目录"
+fi
+if grep -qE '^COPY --from=admin_builder /app/packages/admin/dist/ ' "${DOCKERFILE}"; then
+  pass "runner 从 /app/packages/admin/dist/ 取后台产物（跟着 workspace 布局改了）"
+else
+  fail "runner 还在从旧路径 /app/dist/ 取 admin 产物，镜像里会没有后台页面"
 fi
 
 # server / runner 不依赖补丁包，拷不拷都行，只提示

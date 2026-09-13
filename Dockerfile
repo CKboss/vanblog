@@ -28,24 +28,35 @@ ENV EEE=production
 WORKDIR /app
 USER root
 RUN apk add --update python3 make g++ && rm -rf /var/cache/apk/*
-COPY ./packages/admin/ ./
-# ⚠️ 必须把仓库根的 patches/ 一起拷进来：admin 直接依赖 remark-supersub 与
-# remark-github-blockquote-alert，这两个包只有 exports 字段、没有 main/module，
-# umi3 的 MFSU 用老解析器会报 `filePath not found of remark-github-blockquote-alert`
-# 让构建直接失败。补丁声明写在 packages/admin/package.json 的 pnpm.patchedDependencies 里
-# —— 这一层是**独立安装**（只 COPY 了 admin 目录，没有仓库根的 package.json），
-# 看不到根上那份声明，所以两处都得写，路径都相对各自的 manifest。
+# ⚠️ 这一层以前是 `COPY ./packages/admin/ ./` + `pnpm i`（**独立安装、没有 lockfile**），
+# 结果每次构建都重新解析依赖版本，和仓库里锁定的版本对不上。真实事故：
+#   Module not found: Package path ./dist/cytoscape.umd.js is not exported from
+#   package .../mermaid@10.6.1/node_modules/cytoscape
+# mermaid 10.6.1 要 `cytoscape/dist/cytoscape.umd.js`，而 lockfile 锁的是 cytoscape 3.27.0
+# （exports 里有这个路径）；独立安装解析到了更新版的 cytoscape，exports 变了就找不到文件。
+# website_builder 用 `--frozen-lockfile` 所以从来没这个问题 —— 这也说明**必须走 lockfile**。
+# 现在改成和 website_builder 一样的 workspace 安装：拷根 manifest + lockfile + workspace +
+# patches，`pnpm install --frozen-lockfile`，再进 packages/admin 构建。
+# 好处：版本可复现、和本地开发完全一致、根 manifest 的 patchedDependencies 也直接生效
+# （所以 packages/admin/package.json 里那份镜像声明已经删掉，不再需要，也不再打 WARN）。
+COPY ./package.json ./
+COPY ./pnpm-lock.yaml ./
+COPY ./pnpm-workspace.yaml ./
+COPY ./tsconfig.base.json ./
 COPY ./patches ./patches
+COPY ./packages/admin ./packages/admin
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
 RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
-RUN pnpm i
+# --frozen-lockfile：版本必须和仓库锁的一致，不一致就直接失败（而不是悄悄装个新版）
+RUN pnpm install --frozen-lockfile
 # RUN sed -i 's/\/assets/\/admin\/assets/g' dist/admin/index.html
 # 堆上限写在 package.json 的脚本里（cross-env 会整体替换 NODE_OPTIONS，
 # 镜像的 ENV 传不进去，见 §7.24）。低内存机器用 build:lowmem 那一档。
+WORKDIR /app/packages/admin
 RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}
 
 FROM node:18 AS server_builder
@@ -142,7 +153,8 @@ ENV EMAIL="vanblog@mereith.com"
 ENV VAN_BLOG_WALINE_DB="waline"
 # 复制静态文件
 WORKDIR /app/admin
-COPY --from=admin_builder /app/dist/ ./
+# admin 现在是 workspace 安装，产物在 packages/admin/dist 下（以前独立安装时是 /app/dist）
+COPY --from=admin_builder /app/packages/admin/dist/ ./
 COPY caddyTemplate.json /app/caddyTemplate.json
 # 复制入口文件
 WORKDIR /app
