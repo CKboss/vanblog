@@ -1142,7 +1142,15 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   客户端从文章 A 跳到 B 后仍用 A 的标题 → 高亮错行 + 每次滚动把地址栏 hash 改成 A 的标题。
   改成 `itemsRef` + 卸载时 `throttle.cancel()`。
 - **AuthorCard 的 headroom 泄漏**：`useEffect` 没有依赖数组也没有清理，每次渲染都新建实例 + 再挂一个
-  scroll 监听。改成有依赖 + `headroom.destroy()`。
+  scroll 监听。改成有依赖 + 清理。
+  ⚠️ **清理里绝对不能直接调 `headroom.destroy()`**（第一版就是这么写的，结果「一滚动就报错」）：
+  headroom 0.12 的 `init()` 把 `scrollTracker` 的创建放在 `setTimeout(…, 100)` 里（等浏览器恢复滚动位置），
+  所以「刚 init 就 destroy」时 `this.scrollTracker` 还是 `undefined`，`destroy()` 会抛
+  `TypeError: Cannot read properties of undefined`；React 18 StrictMode 的「挂载 → 立刻清理 → 再挂载」
+  正好命中这个窗口，而清理函数里抛错会冒到 commit 阶段。另外 `destroy()` 会把 `classes` 里所有类名
+  （`side-bar` 等）从元素上摘掉，StrictMode 下新实例挂在**同一个元素**上，旧实例的延迟清理会把新实例
+  刚加的类一起删掉。所以现在统一走 `utils/headroom.ts` 的 `stopHeadroom()`：只停 `scrollTracker`
+  （try/catch 包住），并在 250ms 后补一次，覆盖那个 100ms 竞态。`NavBar` 的同类用法也一起换了。
 
 **服务端（server）**
 - **流水线不会再卡死保存**：`runCodeByPipelineId` 的 Promise 只监听 `message`，脚本不发消息
@@ -1225,7 +1233,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 530 用例：529 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 51 文件 / 462 用例全绿 |
+| website `vitest run` | 51 文件 / 463 用例全绿 |
 | admin `node --test tests/unit` | 65 文件 / 248 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |

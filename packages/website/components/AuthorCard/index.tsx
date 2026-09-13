@@ -51,8 +51,9 @@ export default function (props: { option: AuthorCardProps }) {
       headroom.init();
       // 原来这个 effect 没有依赖数组、也没有清理函数：每次渲染（切换主题、路由跳转）
       // 都会新建一个 Headroom 实例并再挂一个 scroll 监听，越用越多。
+      // 清理时不能直接 headroom.destroy()，见 utils/headroom.ts 的说明。
       return () => {
-        headroom.destroy();
+        stopHeadroom(headroom);
       };
     }
   }, [props.option.showSubMenu]);

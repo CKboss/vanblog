@@ -1,3 +1,4 @@
+import { stopHeadroom } from "../../utils/headroom";
 import Link from "next/link";
 import Headroom from "headroom.js";
 import { useRouter } from "next/router";
@@ -69,7 +70,11 @@ export default function (props: {
       setHeadroom(headroom);
     }
     return () => {
-      headroom?.destroy();
+      // 同 AuthorCard：headroom 的 scrollTracker 是 init() 里 setTimeout(100) 建的，
+      // 太早 destroy() 会抛 TypeError（StrictMode 的挂载→清理→再挂载正好命中）
+      if (headroom) {
+        stopHeadroom(headroom);
+      }
     };
   }, [headroom, setHeadroom]);
 

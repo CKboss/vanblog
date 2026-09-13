@@ -81,10 +81,43 @@ describe("运行时资源与监听器", () => {
     expect(core).toContain("handleScroll.cancel?.()");
   });
 
-  it("作者卡的 headroom 只建一次并且会销毁", () => {
-    const card = read("components/AuthorCard/index.tsx");
-    expect(card).toContain("headroom.destroy()");
+  it("作者卡的 headroom 只建一次，并且用安全的方式停掉", () => {
+    // 断言前剔除注释：新注释里正好引用了「不能直接 headroom.destroy()」这句旧写法
+    const code = (file: string) =>
+      read(file)
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+        .join("\n");
+    const card = code("components/AuthorCard/index.tsx");
+    expect(card).toContain("stopHeadroom(headroom)");
+    expect(card).not.toContain("headroom.destroy()");
     expect(card).toContain("}, [props.option.showSubMenu]);");
+    // 导航栏是同一类用法，同样不能直接 destroy
+    const nav = code("components/NavBar/index.tsx");
+    expect(nav).toContain("stopHeadroom(headroom)");
+    expect(nav).not.toContain("headroom.destroy()");
+  });
+
+  it("stopHeadroom 容忍 scrollTracker 还没建好（headroom 的 init 有 100ms 竞态）", async () => {
+    const { stopHeadroom } = await import("../utils/headroom");
+    // 没有 scrollTracker：不能抛
+    expect(() => stopHeadroom({})).not.toThrow();
+    expect(() => stopHeadroom(undefined)).not.toThrow();
+    // destroy 自己抛：也不能冒出来
+    expect(() =>
+      stopHeadroom({ scrollTracker: { destroy: () => { throw new Error("boom"); } } }),
+    ).not.toThrow();
+    let immediate = 0;
+    stopHeadroom({ scrollTracker: { destroy: () => { immediate += 1; } } });
+    expect(immediate).toBe(1);
+    // 100ms 竞态：init 的 setTimeout 之后才建好 tracker，补的那次要能摘掉监听
+    let late2Calls = 0;
+    const late: any = {};
+    stopHeadroom(late);
+    late.scrollTracker = { destroy: () => { late2Calls += 1; } };
+    expect(late2Calls).toBe(0);
+    await new Promise((r) => setTimeout(r, 320));
+    expect(late2Calls).toBe(1);
   });
 
   it("第三方统计延后到 load 之后", () => {
