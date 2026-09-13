@@ -2123,14 +2123,92 @@ cd packages/admin && pnpm run build               # → EXIT=0，dist 24MB，无
 `/app/packages/admin/dist/` 取产物；另外 `packages/admin/package.json` 里**不许**再有
 `pnpm.patchedDependencies`（§7.22 那个已废弃的做法）。
 
-### 7.28 测试基线（本分支最后一次全量运行的结果）
+### 7.28 镜像跑起来才暴露的两个问题：幻影依赖与 caddy 模板漂移
+
+镜像发布、`docker pull` 成功、容器起来了 —— 然后**打不开任何页面**。日志里是两条独立的致命错误，
+都属于"本地/dev 永远碰不到，只有真镜像才会暴露"的类型。
+
+**1. `Cannot find module 'multer'`（server 直接崩，我的代码引入的）**
+
+```
+Error: Cannot find module 'multer'
+Require stack: /app/server/controller/admin/backup/backup.controller.js
+```
+
+`backup.controller.ts` 里 `import { diskStorage } from 'multer'`（整站备份的恢复上传要落盘，
+不能用默认的内存存储），但 **`multer` 从来没写进 `packages/server/package.json`** ——
+它只是 `@nestjs/platform-express` 的间接依赖（典型的**幻影依赖 / phantom dependency**）。
+pnpm 的严格布局下间接依赖是不可见的，镜像里 `/app/node_modules` 又是从 server_builder
+直接 COPY 过来的，于是启动即崩。
+
+修法：`packages/server/package.json` 显式声明 `"multer": "1.4.4-lts.1"`
+（**和 `@nestjs/platform-express@9` 用的是同一个版本**，避免装两份），并刷新 `pnpm-lock.yaml`。
+顺带把上传的 `limits` 收紧了：原来只有 `fileSize: 8GB`（备份确实可能很大），
+但 multer 1.x 的主要 DoS 面是**不限数量的 parts/fields/files** —— 一个几十万个空 part 的
+multipart 请求能打满事件循环。现在补了 `files: 1 / fields: 8 / parts: 32 / headerPairs: 64`。
+
+⚠️ 关于版本：`pnpm install` 会提示 `Multer 1.x is impacted by a number of vulnerabilities,
+patched in 2.x`。这里**故意留在 1.4.4-lts.1**：它是 Nest 9 的 platform-express 自己钉的版本，
+换成 2.x 会让一个应用里出现两份 multer、而且 `FileInterceptor` 走的是 1.x；
+这个接口是 AdminGuard 保护的，加上上面的 limits，风险面可控。
+
+⚠️ **本地为什么没暴露**：本地 dev 用 tsc watch + `nest start`，解析路径和镜像里不一样，
+`require.resolve('multer', {paths:['packages/server']})` 在本机其实也是 **MODULE_NOT_FOUND** ——
+也就是说"本地能跑"根本不能证明依赖声明是对的。所以有了下面这个扫描。
+
+**新增 `scripts/tests/image-runtime.test.sh`**（专门守"只有真镜像才会暴露"的问题）：
+扫描 `packages/{server,website,admin,cli,waline}` 的源码，把所有
+`import … from 'x'` / `require('x')` 的裸包名和各自 `package.json` 的
+`dependencies + devDependencies` 对账（排除 Node 内建模块、`src/` 与 `@/` 路径别名、
+umi 运行时注入的 `umi`/`@@/exports`、以及 `.css/.less/.json` 这类资源），
+**断言前先剥掉注释**（`utils/ip.ts` 里有一行被注释掉的 `// import publicIp from 'public-ip'`，
+不剥就会误报）。现在五个包全绿：0 个幻影依赖。
+
+**2. `tls.issuance.zerossl: json: unknown field "email"`（caddy 起不来 → 没有 HTTP 入口）**
+
+```
+Error: loading initial config: … provisioning automation policy 0: …
+       position 1: loading module 'zerossl': decoding module config:
+       tls.issuance.zerossl: json: unknown field "email"
+Error: caddy process exited with error: exit status 1
+```
+
+`caddyTemplate.json` 的 `apps.tls.automation.policies[0].issuers` 里有两个签发器：
+`{"email":"VAN_BLOG_EMAIL","module":"acme"}` 和 `{"email":"VAN_BLOG_EMAIL","module":"zerossl"}`。
+**较新的 Caddy 已经把 zerossl 模块的 `email` 字段去掉了**，于是整份配置加载失败、
+caddy 进程退出 —— 容器还"在跑"，但 80/443 全都没了，比 server 崩了更难查
+（`docker ps` 看着是正常的）。
+
+根因是**版本漂移**：runner 阶段是 `apk add --no-cache caddy`，装的是构建当时的最新版；
+上游镜像是在 Caddy 还接受 `email` 的时候构建的，所以一直没暴露。**每次重新构建镜像都会
+重新掷一次这个骰子。**
+
+修法：把 zerossl 那个 issuer 删掉，只留 acme（Let's Encrypt）。
+理由：配置**加载失败 = 全站没有入口**，而"多一个签发器兜底"的收益远小于这个风险；
+新版 zerossl 要 API key/EAB，没有凭据时它在签发阶段也会失败，留着只是增加噪音。
+`on_demand` 与 `on_demand.ask`（`/api/admin/caddy/ask`，§7.18 加的按需证书白名单）**原样保留**。
+`image-runtime.test.sh` 会盯着：模板必须是合法 JSON、issuers 里不许再有 zerossl、
+必须有 acme 且带 email 占位、`on_demand.ask` 不许消失。
+
+⚠️ 同类风险的通用教训：**镜像里由包管理器"装最新版"的东西（apk/apt 的系统包）都是漂移源**。
+caddy 这次漂了，`zstd`/`xz`/`libwebp-tools`/`libavif-apps` 同样可能漂。
+要彻底稳，得把 caddy 也钉版本（Alpine 的 `apk add caddy=2.x.y-rN` 会随仓库滚动而失效，
+更可靠的是从官方 release 下载固定版本的二进制并校验 sha256）—— 这次没做，先记下。
+
+**验证**：`packages/server` 全量 jest、`src/utils/cacheControl.spec.ts`（它本来就会读
+`caddyTemplate.json` 断言 /admin 的 no-store 头）、`backup.controller.spec.ts` 全绿；
+本地 server 重启后 `/api/admin/backup/full/formats` 返回 200（证明 multer 装对了、能跑）。
+⚠️ 改了依赖之后**必须**在仓库根跑一次 `pnpm install`（不是 `--lockfile-only`），
+否则本地 `node_modules` 里没有 multer，而 `--frozen-lockfile` 在 CI 里会直接失败。
+
+### 7.29 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 456 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 10 文件 / 465 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2140,7 +2218,7 @@ cd packages/admin && pnpm run build               # → EXIT=0，dist 24MB，无
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.28 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.29 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

@@ -425,6 +425,9 @@ importers:
       mongoose:
         specifier: ^7.6.6
         version: 7.6.6
+      multer:
+        specifier: 1.4.4-lts.1
+        version: 1.4.4-lts.1
       passport:
         specifier: ^0.6.0
         version: 0.6.0
@@ -22438,6 +22441,7 @@ packages:
   /multer@1.4.4-lts.1:
     resolution: {integrity: sha512-WeSGziVj6+Z2/MwQo3GvqzgR+9Uc+qt8SwHKh3gvNPiISKfsMfG4SvCOFYlxxgkXt7yIV2i1yczehm0EOKIxIg==}
     engines: {node: '>= 6.0.0'}
+    deprecated: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x. You should upgrade to the latest 2.x version.
     dependencies:
       append-field: 1.0.0
       busboy: 1.6.0

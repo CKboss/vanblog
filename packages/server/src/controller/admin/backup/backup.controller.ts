@@ -65,7 +65,17 @@ const RESTORE_UPLOAD_OPTIONS = {
       );
     },
   }),
-  limits: { fileSize: 8 * 1024 * 1024 * 1024 },
+  // fileSize 放宽到 8GB 是因为整站备份（含图床）可能很大；但**其它维度必须收紧**：
+  // multer 1.x 的主要 DoS 面是"不限数量的 parts/fields/files"，一个恶意 multipart
+  // 请求能用几十万个空 part 把事件循环和内存打满。这个接口只有管理员能用，
+  // 但也不该让它成为放大器。
+  limits: {
+    fileSize: 8 * 1024 * 1024 * 1024,
+    files: 1,
+    fields: 8,
+    parts: 32,
+    headerPairs: 64,
+  },
 };
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
 import { availableFormats, pickSpec } from 'src/utils/fullBackup';
