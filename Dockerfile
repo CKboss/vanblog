@@ -156,6 +156,9 @@ WORKDIR /app/admin
 # admin 现在是 workspace 安装，产物在 packages/admin/dist 下（以前独立安装时是 /app/dist）
 COPY --from=admin_builder /app/packages/admin/dist/ ./
 COPY caddyTemplate.json /app/caddyTemplate.json
+# 降级模板：主配置因为 Caddy 版本漂移加载失败时用它（去掉 apps.tls，HTTP 仍可用）。
+# 没有它的话，一次 caddy 配置不兼容就会让整个站点没有任何监听，而容器看起来是"运行中"。
+COPY caddyFallbackTemplate.json /app/caddyFallbackTemplate.json
 # 复制入口文件
 WORKDIR /app
 COPY ./scripts/start.js ./

@@ -18,6 +18,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DOCKERFILE="${ROOT}/Dockerfile"
 PY=$(command -v python3 || command -v python)
 
 PASS=0
@@ -169,6 +170,84 @@ if grep -qE '^\s+multer:' "${ROOT}/pnpm-lock.yaml"; then
   pass "pnpm-lock.yaml 里有 multer（server_builder 走 --frozen-lockfile 也能装上）"
 else
   fail "pnpm-lock.yaml 里没有 multer"
+fi
+
+
+# ---------- 4) 容器入口：caddy 起不来时要降级，不能让容器"在跑但没监听" ----------
+ENTRY="${ROOT}/entrypoint.sh"
+FALLBACK="${ROOT}/caddyFallbackTemplate.json"
+
+if sh -n "${ENTRY}" 2>/dev/null; then
+  pass "entrypoint.sh 语法正确（sh -n）"
+else
+  fail "entrypoint.sh 语法错误"
+fi
+# 不能用 set -e：caddy 失败时要降级继续，否则 restart:always 会变成崩溃循环
+if grep -qE '^\s*set -e' "${ENTRY}"; then
+  fail "entrypoint.sh 用了 set -e（caddy 失败会直接让容器退出，变成崩溃循环）"
+else
+  pass "entrypoint.sh 没有 set -e（caddy 失败可以降级继续）"
+fi
+grep -q 'caddy validate --config /app/caddy.json' "${ENTRY}" \
+  && pass "先 caddy validate 再 start（配置不兼容时能提前发现）" \
+  || fail "没有先 validate 就 start：配置错了只会看到 caddy 退出"
+grep -q 'caddyFallbackTemplate.json' "${ENTRY}" \
+  && pass "主配置失败时降级到 caddyFallbackTemplate.json" \
+  || fail "缺少降级路径：caddy 配置一旦不兼容，容器就没有任何监听"
+grep -qE '^exec node start.js' "${ENTRY}" \
+  && pass "用 exec 启动 node（PID 1 能直接收到 SIGTERM，docker stop 不会等满 10s 再 SIGKILL）" \
+  || fail "node 不是 exec 启动的：docker stop 会硬杀，正在写的备份/上传会被截断"
+grep -q 'vanblog_email' "${ENTRY}" \
+  && pass "会识别没被替换的 EMAIL 占位符（否则 caddy 拿非法邮箱去注册 ACME）" \
+  || fail "没有处理 EMAIL 占位符 vanblog_email"
+grep -q 's|VAN_BLOG_EMAIL|' "${ENTRY}" \
+  && pass "替换 EMAIL 用 | 当 sed 分隔符（地址里有 / 或 & 也不会写坏配置）" \
+  || fail "替换 EMAIL 的 sed 分隔符不是 |"
+
+if [[ -f "${FALLBACK}" ]]; then
+  pass "仓库里有 caddyFallbackTemplate.json"
+  TMP3="$(mktemp)"
+  "${PY}" - "${ROOT}/caddyTemplate.json" "${FALLBACK}" >"${TMP3}" <<'PYFB'
+import json, sys
+main = json.load(open(sys.argv[1], encoding="utf-8"))
+fb = json.load(open(sys.argv[2], encoding="utf-8"))
+bad = []
+if "tls" in fb.get("apps", {}):
+    bad.append("降级模板里还有 apps.tls（那正是最容易随 Caddy 版本漂移而失效的部分）")
+m_routes = main["apps"]["http"]["servers"]["srv0"]["routes"]
+f_routes = fb["apps"]["http"]["servers"]["srv0"]["routes"]
+if len(m_routes) != len(f_routes):
+    bad.append("降级模板的路由数(%d)与主模板(%d)不一致，会少代理一些路径"
+               % (len(f_routes), len(m_routes)))
+listens = [tuple(s.get("listen") or []) for s in fb["apps"]["http"]["servers"].values()]
+if (":80",) not in listens:
+    bad.append("降级模板没有监听 :80")
+if not any(":443" in l for l in listens):
+    bad.append("降级模板没有监听 :443（自签证书也比没有强）")
+if bad:
+    for b in bad:
+        print("bad " + b)
+else:
+    print("ok 降级模板：无 apps.tls、路由与主模板一致(%d 条)、同时监听 80/443" % len(f_routes))
+PYFB
+  while read -r st rest; do
+    case "${st}" in
+      ok) pass "${rest}" ;;
+      bad) fail "${rest}" ;;
+      "") ;;
+      *) fail "无法解析的降级模板检查输出：${st} ${rest}" ;;
+    esac
+  done <"${TMP3}"
+  rm -f "${TMP3}"
+else
+  fail "缺少 caddyFallbackTemplate.json"
+fi
+
+# 降级模板必须真的进镜像，否则 entrypoint 里的兜底是空的
+if grep -qE '^COPY caddyFallbackTemplate\.json /app/caddyFallbackTemplate\.json$' "${DOCKERFILE}"; then
+  pass "Dockerfile 把降级模板拷进了镜像"
+else
+  fail "Dockerfile 没有 COPY caddyFallbackTemplate.json，entrypoint 的兜底会落空"
 fi
 
 echo
