@@ -91,12 +91,12 @@ html.dark [data-ui="apple"] {
 }
 
 /* ---------------------------------------------------------------- 基础排版 */
-[data-ui="apple"],
-[data-ui="apple"] body,
-/* 挂在皮肤根节点上让全站继承（<html data-ui> 与 .vb-root 都会命中）。
+/* 字体挂在皮肤根节点上让全站继承（<html data-ui> 与 .vb-root 都会命中）。
    不需要像自定义 CSS 那样再写 `p, span, div { font-family: … }`：
    那种写法会把下面代码块用的 --ap-font-mono 一起覆盖掉，
-   而且 span/div 选择器太宽，第三方组件（评论区、播放器）也会被波及。 */
+   而且 span/div 选择器太宽，第三方组件（评论区、播放器）也会被波及。
+   （这里原来因为脚本改动的锚点没对准，把前两个选择器和这段注释**重复**了一遍，
+     渲染结果一样但很容易看错，已清理。） */
 [data-ui="apple"],
 [data-ui="apple"] body,
 [data-ui="apple"] .markdown-body,
