@@ -132,3 +132,32 @@ describe("运行时资源与监听器", () => {
     expect(read("pages/post/[id].tsx")).toContain('rel="preload" as="image"');
   });
 });
+
+describe("导航栏的下划线对齐", () => {
+  it("带 ua（下划线）的元素不能有 hover 缩放，缩放要放在里面的文字上", () => {
+    // li 一旦被 scale(1.1)，它的 :before 横线会跟着下移 ~2px 并变宽变粗，
+    // 于是「悬停的横线」和「当前页的横线」不在同一条水平线上
+    for (const file of ["components/NavBar/item.tsx", "components/NavBar/index.tsx"]) {
+      const src = read(file);
+      src
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .forEach((line) => {
+          if (line.includes(" ua") && /hover:scale-/.test(line)) {
+            throw new Error(`${file} 里带 ua 的元素又加上了 hover 缩放：${line.trim()}`);
+          }
+        });
+      expect(src).toContain("group-hover:scale-110");
+    }
+  });
+
+  it("CSS 里有兜底：.ua 自身不允许 transform", () => {
+    const css = read("styles/globals.css");
+    expect(css).toMatch(/\.ua,\s*\.ua:hover \{\s*transform: none;\s*\}/);
+    // 当前页与悬停用的是同一条 :before，bottom 只能有一处定义
+    // （行首锚定，否则 `.nav-item-current.ua:before` 也会被算进来）
+    expect(css.match(/^\.ua:before \{$/gm)?.length).toBe(1);
+    expect(css.match(/bottom: 2px;/g)?.length).toBe(1);
+    expect(css).toContain(".nav-item-current.ua:before");
+  });
+});

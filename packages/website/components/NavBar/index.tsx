@@ -244,12 +244,16 @@ export default function (props: {
                   <li
                     key={catelog}
                     className={withNavCurrentClass(
-                      "flex items-center h-full md:px-2 hover:text-gray-900 dark:hover:text-dark-hover transform hover:scale-110 cursor-pointer transition-all ua",
+                      // 同 NavBar/item.tsx：带 ua（下划线）的元素不能被 scale，
+                      // 否则悬停横线会和当前页横线错开；缩放放到里面的文字上
+                      "group flex items-center h-full md:px-2 hover:text-gray-900 dark:hover:text-dark-hover cursor-pointer transition-all ua",
                       state.current
                     )}
                   >
                     <Link href={href} aria-current={state.ariaCurrent}>
-                      <div>{catelog}</div>
+                      <div className="transform transition-transform duration-200 group-hover:scale-110">
+                        {catelog}
+                      </div>
                     </Link>
                   </li>
                 );

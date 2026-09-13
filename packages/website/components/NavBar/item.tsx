@@ -17,11 +17,15 @@ function LinkItemAtom(props: {
   const cls = withNavCurrentClass(
     props.cls
       ? props.cls
-      : `nav-item transform hover:scale-110 dark:border-nav-dark  dark:transition-all ua`,
+      // ⚠️ 缩放**不能**加在这个 li 上：下划线是它的 :before 伪元素（`bottom: 2px`），
+      // 一旦 li 被 scale(1.1)，整条横线会跟着往下移 ~2px、还会变宽变粗，
+      // 于是「悬停的横线」和「当前页的横线」不在同一条水平线上。
+      // 缩放交给里面的文字（group-hover），li 只当定位参照，横线就稳了。
+      : `nav-item group dark:border-nav-dark  dark:transition-all ua`,
     state.current,
     props.variant
   );
-  const clsA = `h-full flex items-center px-2 md:px-4 `;
+  const clsA = `h-full flex items-center px-2 md:px-4 transform transition-transform duration-200 group-hover:scale-110 `;
   if (item.value.includes("http")) {
     return (
       <li

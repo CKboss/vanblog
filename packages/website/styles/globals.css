@@ -223,6 +223,16 @@ body .ua-link::before {
   left: 0;
   right: 0;
 }
+/*
+ * 兜底：带下划线的元素自己**不能**有 transform。
+ * `:before` 是相对它定位的，一旦被 scale，横线会整体下移（还会变宽变粗），
+ * 于是「悬停时的横线」和「当前页那条横线」不在同一水平线上。
+ * 需要放大效果就放到里面的文字上（NavBar 用的是 group-hover:scale-110）。
+ */
+.ua,
+.ua:hover {
+  transform: none;
+}
 .nav-item-current.ua:before {
   width: 100%;
   left: 0;
