@@ -218,7 +218,11 @@ export default function (props: {
           }}
         ></div>
       </div>
-      {props.type != "overview" && props.enableComment && commentProvider === "builtin" && (
+      {/* enableComment 是字符串 "true"/"false"，直接当条件用会对 "false" 也为真，
+          那样评论关闭时还是会去加载评论区的 chunk（组件内部虽然会返回 null） */}
+      {props.type != "overview" &&
+        String(props.enableComment) !== "false" &&
+        commentProvider === "builtin" && (
         <Comment
           path={commentPath}
           enable={String(props.enableComment) !== "false"}

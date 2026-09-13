@@ -1,10 +1,13 @@
 import WalineForm from '@/components/WalineForm';
 import { Alert, Card } from 'antd';
+import CommentSystem from './CommentSystem';
 
 export default function () {
   return (
     <>
-      <Card title="评论设置">
+      {/* 「评论系统」放在最前面：provider 决定下面这张 Waline 表单是否真的生效 */}
+      <CommentSystem />
+      <Card title="Waline 评论设置">
         <Alert
           type="info"
           message={

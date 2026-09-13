@@ -754,3 +754,60 @@ export async function downloadExportArchive(name) {
     timeout: 10 * 60 * 1000,
   });
 }
+
+// ---------------------------------------------------------------------------
+// 内置评论：评论系统设置 + 评论管理。
+// 六个函数都刻意不带 skipErrorHandler：失败（含演示站的 statusCode:401
+// 「演示站禁止修改此项！」）由全局 errorHandler 弹出服务端的具体原因，
+// 业务代码里再用 reportRequestError 兜底，避免同一次失败弹两条 toast。
+// ---------------------------------------------------------------------------
+
+/** 读评论系统设置（provider: builtin | waline | off，决定评论管理页走哪个分支） */
+export async function getCommentSetting() {
+  return request('/api/admin/setting/comment', {
+    method: 'GET',
+  });
+}
+/** 保存评论系统设置；provider 切到/切离 waline 时服务端会顺带启停 waline 子进程 */
+export async function updateCommentSetting(body) {
+  return request('/api/admin/setting/comment', {
+    method: 'PUT',
+    data: body,
+  });
+}
+/**
+ * 评论列表（分页）。params: { page, pageSize, status, path, keyword }，
+ * 空值不进 query（status 不传 = 服务端的「全部」，即不含已删除）。
+ * 响应里带 counts（各状态全局计数），状态页签不用另发一次请求。
+ */
+export async function getComments(params) {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v !== undefined && v !== null && v !== '') {
+      query.set(k, String(v));
+    }
+  }
+  const qs = query.toString();
+  return request(`/api/admin/comment${qs ? `?${qs}` : ''}`, {
+    method: 'GET',
+  });
+}
+/** 各状态评论数：{ pending, approved, spam, deleted } */
+export async function getCommentCounts() {
+  return request('/api/admin/comment/counts', {
+    method: 'GET',
+  });
+}
+/** 改评论：body 可带 { status, content, nick, isAuthor } */
+export async function updateComment(id, body) {
+  return request(`/api/admin/comment/${id}`, {
+    method: 'PUT',
+    data: body,
+  });
+}
+/** 删评论（软删；删顶层评论会连带软删它下面的回复） */
+export async function deleteComment(id) {
+  return request(`/api/admin/comment/${id}`, {
+    method: 'DELETE',
+  });
+}

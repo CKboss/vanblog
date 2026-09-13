@@ -1,11 +1,24 @@
+import { getCommentSetting } from '@/services/van-blog/api';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { PageContainer } from '@ant-design/pro-layout';
-import { Button, Modal, Space, Spin } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button, message, Modal, Result, Space, Spin } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { history, useModel } from 'umi';
 import TipTitle from '../../components/TipTitle';
+import BuiltinComments from './BuiltinComments';
+
+/**
+ * 评论管理页：先读 /api/admin/setting/comment，再按 provider 分三个分支——
+ * - waline ：维持原来的内嵌 Waline 后台（iframe），一行没动；
+ * - builtin：VanBlog 自己的评论管理面板（BuiltinComments）；
+ * - off    ：评论已关闭的占位页，按钮跳到「系统设置 → 评论设置」。
+ * 以前这个页面只有 Waline 一种形态，设置接口失败时也不能白屏，所以加载失败给重试入口。
+ */
 export default function () {
   const { initialState } = useModel('@@initialState');
   const [loading, setLoading] = useState(true);
+  const [settingLoading, setSettingLoading] = useState(true);
+  const [setting, setSetting] = useState(null);
   const { current } = useRef({ hasInit: false });
   const src = useMemo(() => {
     if (initialState?.version && initialState?.version == 'dev') {
@@ -49,7 +62,33 @@ export default function () {
       ),
     });
   };
+
+  const fetchSetting = useCallback(async () => {
+    setSettingLoading(true);
+    try {
+      const { data } = await getCommentSetting();
+      setSetting(data || null);
+    } catch (err) {
+      // 全局 errorHandler 已弹过服务端原因；这里兜底并留 null，渲染重试入口而不是误判成「已关闭」
+      reportRequestError(message, err, '读取评论设置失败！');
+      setSetting(null);
+    } finally {
+      setSettingLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
+    fetchSetting();
+  }, [fetchSetting]);
+
+  const provider = setting?.provider;
+
+  // 「首次使用」提示只在 Waline 分支弹：内容是 Waline 专属的（注册管理员等），
+  // 对内置评论 / 已关闭毫无意义，弹出来只会挡住真正的管理界面。
+  useEffect(() => {
+    if (provider !== 'waline') {
+      return;
+    }
     if (!current.hasInit) {
       current.hasInit = true;
       if (!localStorage.getItem('CommentTipped')) {
@@ -57,45 +96,123 @@ export default function () {
         showTips();
       }
     }
-  }, [current]);
-  return (
-    <PageContainer
-      className="editor-full"
-      style={{ overflow: 'hidden' }}
-      title={null}
-      extra={
-        <Space>
-          <Button
-            type="primary"
-            onClick={() => {
-              history.push(`/site/setting?tab=waline`);
+  }, [provider, current]);
+
+  const goSetting = () => {
+    history.push(`/site/setting?tab=waline`);
+  };
+
+  if (settingLoading) {
+    return (
+      <PageContainer title={null} header={{ title: null, ghost: true }}>
+        <div style={{ padding: '120px 0', textAlign: 'center' }}>
+          <Spin spinning />
+        </div>
+      </PageContainer>
+    );
+  }
+
+  if (!setting) {
+    return (
+      <PageContainer title={null} header={{ title: null, ghost: true }}>
+        <Result
+          status="warning"
+          title="读取评论设置失败"
+          subTitle="没能拿到评论系统配置（网络异常或登录已失效），请重试。"
+          extra={
+            <Button type="primary" onClick={fetchSetting}>
+              重试
+            </Button>
+          }
+        />
+      </PageContainer>
+    );
+  }
+
+  // provider === 'waline'：以下是原有的内嵌 Waline 管理页，保持原样
+  if (provider === 'waline') {
+    return (
+      <PageContainer
+        className="editor-full"
+        style={{ overflow: 'hidden' }}
+        title={null}
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              onClick={() => {
+                history.push(`/site/setting?tab=waline`);
+              }}
+            >
+              设置
+            </Button>
+            <Button onClick={showTips}>帮助</Button>
+          </Space>
+        }
+        header={{
+          title: (
+            <TipTitle
+              title="评论管理"
+              tip="基于内嵌的 Waline，首个注册的用户即为管理员。未来会用自己的实现替代 Waline"
+            />
+          ),
+        }}
+      >
+        <Spin spinning={loading}>
+          <iframe
+            onLoad={() => {
+              setLoading(false);
             }}
-          >
-            设置
+            title="waline 后台"
+            src={src}
+            width="100%"
+            height={'100%'}
+          ></iframe>
+        </Spin>
+      </PageContainer>
+    );
+  }
+
+  // provider === 'builtin'：内置评论的管理面板
+  if (provider === 'builtin') {
+    return (
+      <PageContainer
+        title={null}
+        extra={
+          <Space>
+            <Button type="primary" onClick={goSetting}>
+              设置
+            </Button>
+            <Button onClick={() => fetchSetting()}>刷新</Button>
+          </Space>
+        }
+        header={{
+          title: (
+            <TipTitle
+              title="评论管理"
+              tip="VanBlog 内置评论系统：访客无需注册即可发表，在这里审核、编辑与删除。与 Waline 的评论数据互不相通"
+            />
+          ),
+        }}
+      >
+        <BuiltinComments />
+      </PageContainer>
+    );
+  }
+
+  // provider === 'off'（含意外值兜底）：评论功能已关闭
+  return (
+    <PageContainer title={null} header={{ title: null, ghost: true }}>
+      <Result
+        status="info"
+        title="评论系统已关闭"
+        subTitle="前台目前不展示任何评论入口，历史评论也不再显示。可在「系统设置 → 评论设置」里切换到内置评论或 Waline。"
+        extra={
+          <Button type="primary" onClick={goSetting}>
+            前往设置
           </Button>
-          <Button onClick={showTips}>帮助</Button>
-        </Space>
-      }
-      header={{
-        title: (
-          <TipTitle
-            title="评论管理"
-            tip="基于内嵌的 Waline，首个注册的用户即为管理员。未来会用自己的实现替代 Waline"
-          />
-        ),
-      }}
-    >
-      <Spin spinning={loading}>
-        <iframe
-          onLoad={() => {
-            setLoading(false);
-          }}
-          title="waline 后台"
-          src={src}
-          width="100%"
-          height={'100%'}
-        ></iframe>
-      </Spin>
+        }
+      />
     </PageContainer>
   );
 }
