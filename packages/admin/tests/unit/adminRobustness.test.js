@@ -329,3 +329,20 @@ describe('requestError：兜底提示不与全局提示重复', () => {
     assert.equal(reportRequestError(undefined, err, '导出失败！'), true);
   });
 });
+
+describe('后台文档外壳：语言标签', () => {
+  it('document.ejs 的 lang 必须是规范的 zh-CN（原来是 cn，根本不是语言子标签）', () => {
+    // document.ejs 是 HTML 外壳，注释形式是 <!-- -->，不适用这里剥 // 注释的辅助函数，直接读原文
+    const ejs = read('src/pages/document.ejs');
+    assert.match(ejs, /<html lang="zh-CN">/);
+    assert.doesNotMatch(ejs, /<html lang="cn">/);
+    // 别退回到只有 zh：BCP 47 里 zh 是宏语言，简繁与发音规则都不明确
+    assert.doesNotMatch(ejs, /<html lang="zh">/);
+  });
+
+  it('前台也一致（两个包的 html 语言标签不该各写各的）', () => {
+    // 注意 readRepo 的根是 packages/（不是仓库根），路径别多写一层 packages
+    const doc = readRepo('website/pages/_document.tsx');
+    assert.match(doc, /<Html lang="zh-CN"/);
+  });
+});

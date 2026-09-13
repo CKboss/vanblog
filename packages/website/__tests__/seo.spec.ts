@@ -176,6 +176,28 @@ describe("接线", () => {
     expect(index).toContain("application/ld+json");
   });
 
+  it("html lang 是规范的 BCP 47 标签，且与 og:locale / RSS language 一致", () => {
+    const doc = read("pages/_document.tsx");
+    expect(doc).toContain('<Html lang="zh-CN"');
+    // 注意别写成 not.toContain('lang="zh"')：zh-CN 本身就包含这个子串
+    expect(doc).not.toMatch(/<Html lang="zh">/);
+    // 回归守卫：JSX 注释写在 return ( … ) 的**顶层**会让括号变成对象字面量，整站 500。
+    // 这次改 lang 就踩了（vitest 只把文件当文本读，编译不出来，所以测试全绿页面却全挂）。
+    expect(doc).not.toMatch(/return\s*\(\s*\{\//);
+    expect(doc).not.toContain('lang="cn"');
+    // og:locale 用下划线形式（Open Graph 的规范写法），RSS 用 zh-CN
+    expect(read("components/Layout/index.tsx")).toContain('property="og:locale" content="zh_CN"');
+    expect(read("../server/src/provider/rss/rss.provider.ts")).toContain("language: 'zh-CN'");
+    // JSON-LD 的 inLanguage 也要跟着
+    expect(read("utils/seo.ts")).toContain('input.lang || "zh-CN"');
+  });
+
+  it("后台外壳的 lang 也修了（原来是 cn，根本不是语言子标签）", () => {
+    const ejs = read("../admin/src/pages/document.ejs");
+    expect(ejs).toContain('<html lang="zh-CN">');
+    expect(ejs).not.toMatch(/<html lang="cn">/);
+  });
+
   it("站点 URL 与站点名进了 LayoutProps（canonical 的数据来源）", () => {
     const src = read("utils/getLayoutProps.ts");
     expect(src).toContain("siteUrl: string;");

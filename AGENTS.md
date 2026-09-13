@@ -1605,7 +1605,17 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 - `LayoutProps` 新增 `siteUrl` / 复用已有的 `siteName`（⚠️ `siteName` 本来就存在，
   我第一遍又加了一次，TS 直接报 Duplicate identifier —— 加字段前先 grep）。
 
-**6. RSS/Atom/JSON Feed 小修**：分类/标签的 `domain` 以前是 `https://域名//category/x`（双斜杠、中文没编码）；
+**6. `<html lang>`**：前台 `_document.tsx` 原来是 `lang="zh"`（BCP 47 里 `zh` 是宏语言，
+简繁与发音规则都不明确），后台 `document.ejs` 更离谱，是 **`lang="cn"`** —— `cn` 根本不是语言子标签
+（ISO 639-1 里中文是 `zh`，`CN` 是国家代码），浏览器/读屏/搜索引擎只能当未知语言处理。
+两处都改成规范的 `zh-CN`，与 `og:locale=zh_CN`、RSS 的 `<language>zh-CN</language>`、
+JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：**JSX 注释写在
+`return (` 的顶层**（`return ( {/* … */} <Html …> )`）会让整个括号变成对象字面量，
+**全站 500**；而 vitest 只把文件当文本读，测试照样全绿 —— 所以改完必须
+`tsc --noEmit` + 真的 curl 一次首页。`__tests__/seo.spec.ts` 里加了一条
+`expect(doc).not.toMatch(/return\s*\(\s*\{\//)` 当守卫。
+
+**7. RSS/Atom/JSON Feed 小修**：分类/标签的 `domain` 以前是 `https://域名//category/x`（双斜杠、中文没编码）；
 标签现在也作为 `<category>` 输出（以前只有分类，53 篇文章 → 108 条 category）；
 `language` 改规范的 `zh-CN`；KaTeX 样式表从 **0.5.1（2016 年，已失效）** 升到 0.16.9。
 
@@ -1657,8 +1667,8 @@ CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）�
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 55 文件 / 528 用例全绿 |
-| admin `node --test tests/unit` | 78 套件 / 314 用例全绿 |
+| website `vitest run` | 55 文件 / 530 用例全绿 |
+| admin `node --test tests/unit` | 79 套件 / 316 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

@@ -112,6 +112,13 @@ VanBlog 没有 Hugo 那种站点级 `permalinks` 模板。按篇文章设置「�
   `article:section`（分类）、`article:tag`（每个标签一条）、`twitter:title`、`twitter:description`
 - 文章设置了[题头图](../features/article.md)时，文章页会带上 `og:image`、`twitter:image` 和 `twitter:card=summary_large_image`，方便飞书 / 知乎等抓取分享预览。相对路径会拼上站点「网站 Url」。没有题头图时不加这些标签。
 
+## 语言标签
+
+前台 `<html lang="zh-CN">`、后台同样 `zh-CN`，与 `og:locale=zh_CN`、RSS 的
+`<language>zh-CN</language>` 和 JSON-LD 的 `inLanguage` 一致。
+（之前前台是 `zh`、后台是 `cn`：`zh` 在 BCP 47 里是宏语言，简繁与发音规则都不明确；
+`cn` 根本不是语言子标签，浏览器与读屏只能当未知语言处理。）
+
 ## a 标签
 
 所有前台页面，能用 a 标签的都用了 a 标签，以方便爬取。
