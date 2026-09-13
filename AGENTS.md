@@ -1664,6 +1664,15 @@ JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：*
   别"顺手统一"，改一边版本号就退回 dev。测试里钉了这两个名字同时存在。
 - ⚠️ 改完 `dev-env.sh` 的环境变量必须 `./dev-env.sh restart` 才生效（server 只在启动时读一次）。
 
+**顺手修掉一个假警报**：`app.jsx` 的「有新版本！」横幅原来是
+`if (version && latestVersion && version != 'dev') { if (version >= latestVersion) {} else {弹} }`。
+源码构建的版本号是 `dev/dsh@1a2b3c4`（不是 `dev`），拦不住；而 `'dev/dsh@…' >= 'v0.54.0'`
+是**字符串比较**，首字符 `'d' < 'v'` → 结论「有新版本」，**每次进后台都弹一次假警报**
+（本仓库的 `vanblog.sh` 源码构建同样会中）。而且字符串比较连 `0.9.0` vs `0.10.0` 都判反。
+现在逻辑挪到 `src/services/van-blog/version.js`（CJS，可被 node:test 直接 require）：
+`isReleaseVersion()` 只认 `^v?\d+\.\d+`，`compareVersions()` 按 major/minor/patch 数字段比，
+`shouldNotifyNewVersion()` 要求**两边都是发布号**且 current < latest 才弹。
+
 **顺带清掉了一批死链**：后台里指向 `vanblog.mereith.com/<path>.html` 的**帮助文档链接共 14 处**，
 实测其中 **6 处已经 404**（`/feature/basic/editor.html`、`/feature/advance/collaborator.html`、
 `/feature/advance/isr.html`、`/feature/advance/customizing.html`、`/feature/basic/comment.html`、
@@ -1687,7 +1696,7 @@ CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）�
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 56 文件 / 537 用例全绿 |
-| admin `node --test tests/unit` | 79 套件 / 316 用例全绿 |
+| admin `node --test tests/unit` | 80 套件 / 322 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

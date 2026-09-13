@@ -1,4 +1,5 @@
 import Footer from '@/components/Footer';
+import { shouldNotifyNewVersion } from '@/services/van-blog/version';
 import { HomeOutlined, LogoutOutlined, ProjectOutlined } from '@ant-design/icons';
 import { PageLoading, SettingDrawer } from '@ant-design/pro-layout';
 import { message, Modal, notification } from 'antd';
@@ -76,10 +77,12 @@ export async function getInitialState() {
       ),
     });
   }
-  // 来一个横幅提示
-  if (version && latestVersion && version != 'dev') {
-    if (version >= latestVersion) {
-    } else {
+  // 来一个横幅提示。
+  // ⚠️ 别改回字符串比较：源码构建的版本号形如 `dev/dsh@1a2b3c4`，
+  //    `'dev/dsh@…' >= 'v0.54.0'` 首字符 'd' < 'v' → 每次进后台都弹假警报；
+  //    而且字符串比较连 `0.9.0` 与 `0.10.0` 都会判错。见 services/van-blog/version.js。
+  if (shouldNotifyNewVersion(version, latestVersion)) {
+    {
       const skipVersion = localStorage.getItem('skipVersion');
       if (skipVersion != latestVersion) {
         // 老的
