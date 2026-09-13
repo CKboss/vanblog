@@ -60,6 +60,8 @@ function makeFakeModels(setting: CommentSetting = SETTING) {
     findOne: () => ({
       exec: async () => ({ id: 42, deleted: false, hidden: false, pathname: 'hello' }),
     }),
+    // expandPostPaths() 会批量查文章，默认返回空（等价路径就退回它自己）
+    find: () => ({ exec: async () => [] }),
   };
 
   const metaModel: any = {
@@ -509,5 +511,89 @@ describe('从 Waline 导入 / 导出', () => {
     expect(all.map((c: any) => c.id)).toEqual([1, 2, 3]);
     // 非法状态值退回 approved，不会因为拼错参数就把待审评论导出去
     expect((await provider.exportComments('bogus')).map((c: any) => c.id)).toEqual([1]);
+  });
+});
+
+
+describe('评论路径：/post/<数字id> 与 /post/<别名> 视为同一篇', () => {
+  const withArticle = () => {
+    const fake = makeFakeModels();
+    (fake.provider as any).articleModel = {
+      findOne: () => ({ exec: async () => ({ id: 7, deleted: false, hidden: false }) }),
+      find: () => ({
+        exec: async () => [{ id: 7, pathname: 'zen-me-ba-shou-ji', deleted: false }],
+      }),
+    };
+    return fake;
+  };
+
+  it('按别名查，能查到存在数字 id 下的评论', async () => {
+    const { provider, comments } = withArticle();
+    comments.push({
+      id: 1,
+      path: '/post/7',
+      rootId: 0,
+      status: 'approved',
+      nick: '张三',
+      content: '历史评论',
+      createdAt: new Date(),
+    });
+    const res = await provider.listByPath({ path: '/post/zen-me-ba-shou-ji' });
+    expect(res.data.map((c) => c.content)).toEqual(['历史评论']);
+  });
+
+  it('按数字 id 查，也能查到存在别名下的评论', async () => {
+    const { provider, comments } = withArticle();
+    comments.push({
+      id: 2,
+      path: '/post/zen-me-ba-shou-ji',
+      rootId: 0,
+      status: 'approved',
+      nick: '李四',
+      content: '新评论',
+      createdAt: new Date(),
+    });
+    const res = await provider.listByPath({ path: '/post/7' });
+    expect(res.data.map((c) => c.content)).toEqual(['新评论']);
+  });
+
+  it('批量计数时两种路径都返回同一个总数，不会各算一半', async () => {
+    const { provider, comments } = withArticle();
+    comments.push(
+      { id: 1, path: '/post/7', rootId: 0, status: 'approved', nick: 'a', content: 'x', createdAt: new Date() },
+      {
+        id: 2,
+        path: '/post/zen-me-ba-shou-ji',
+        rootId: 0,
+        status: 'approved',
+        nick: 'b',
+        content: 'y',
+        createdAt: new Date(),
+      },
+    );
+    // 假的 aggregate 不支持 $in，这里直接验证展开逻辑本身
+    const expanded = await (provider as any).expandPostPaths([
+      '/post/7',
+      '/post/zen-me-ba-shou-ji',
+      '/link',
+    ]);
+    expect(expanded.get('/post/7')).toEqual(
+      expect.arrayContaining(['/post/7', '/post/zen-me-ba-shou-ji']),
+    );
+    expect(expanded.get('/post/zen-me-ba-shou-ji')).toEqual(
+      expect.arrayContaining(['/post/7', '/post/zen-me-ba-shou-ji']),
+    );
+    // 非文章路径（/link、/about）原样返回，不做展开
+    expect(expanded.get('/link')).toEqual(['/link']);
+  });
+
+  it('文章查不到时退回原路径，不会把全部评论混在一起', async () => {
+    const fake = makeFakeModels();
+    (fake.provider as any).articleModel = {
+      findOne: () => ({ exec: async () => null }),
+      find: () => ({ exec: async () => [] }),
+    };
+    const expanded = await (fake.provider as any).expandPostPaths(['/post/999']);
+    expect(expanded.get('/post/999')).toEqual(['/post/999']);
   });
 });

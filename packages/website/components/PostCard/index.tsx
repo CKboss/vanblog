@@ -66,10 +66,16 @@ export default function (props: {
 }) {
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
-  // 评论挂载路径，规则与 SubTitle 里的 dataPath 保持一致
+  // 内置评论的规范键：**数字 id**。
+  // 一篇文章有 /post/<数字id> 和 /post/<拼音别名> 两个访问路径，别名还可能被改；
+  // 用数字 id 存评论才不会在改别名之后「评论凭空消失」（waline 时代的历史评论
+  // 也正好是数字形式）。服务端查询时还会把两种路径当同一篇展开，所以老数据也认。
   const commentPath = useMemo(
-    () => (props.type == "about" ? "/about" : "/post/" + props.id),
-    [props.type, props.id],
+    () =>
+      props.type == "about"
+        ? "/about"
+        : "/post/" + (props.numericId ?? props.id),
+    [props.type, props.id, props.numericId],
   );
   const showDonate = useMemo(() => {
     if (lock) {
@@ -131,6 +137,7 @@ export default function (props: {
           openArticleLinksInNewWindow={props.openArticleLinksInNewWindow}
           type={props.type}
           id={props.id}
+          numericId={props.numericId}
           updatedAt={props.updatedAt}
           createdAt={props.createdAt}
           catelog={props.catelog}

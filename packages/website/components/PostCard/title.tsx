@@ -145,6 +145,8 @@ export function SubTitle(props: {
   catelog: string;
   enableComment: "true" | "false";
   id: number | string;
+  /** 数字 id：内置评论用它当规范键（别名可能会改，数字 id 不会） */
+  numericId?: number | string;
   openArticleLinksInNewWindow: boolean;
 }) {
   const iconSize = "16";
@@ -159,6 +161,14 @@ export function SubTitle(props: {
       return "/post/" + props.id;
     }
   }, [props]);
+  // waline 用 dataPath（保持上游行为不变，别把它已有的评论弄丢）；
+  // 内置评论用数字 id 这个规范键
+  const builtinCommentPath = useMemo(() => {
+    if (props.type == "about") {
+      return "/about";
+    }
+    return "/post/" + (props.numericId ?? props.id);
+  }, [props.type, props.id, props.numericId]);
   return (
     <div className="text-center text-xs md:text-sm divide-x divide-gray-400 text-gray-400 dark:text-dark post-card-sub-title">
       <span className="inline-flex px-2 items-center">
@@ -253,7 +263,7 @@ export function SubTitle(props: {
           </span>
           {commentProvider === "builtin" ? (
             // 内置评论：评论数由本站接口批量返回（50ms 内的请求会合并成一次 /counts）
-            <CommentCount path={dataPath} />
+            <CommentCount path={builtinCommentPath} />
           ) : commentProvider === "off" ? null : (
             // waline：这个 span 由 @waline/client 自己填充，必须原样保留
             <span className="waline-comment-count" data-path={dataPath}>

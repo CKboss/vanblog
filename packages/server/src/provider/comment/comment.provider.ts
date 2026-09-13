@@ -387,6 +387,59 @@ export class CommentProvider {
 
   // ---------- 查询 ----------
 
+  /**
+   * 一篇文章对外有**两个**访问路径：`/post/<数字id>` 和 `/post/<拼音别名>`（两个都返回 200）。
+   * 评论是按 path 存的，历史评论（尤其从 waline 导入的）可能记在其中任意一个下面，
+   * 前台又可能用另一个来查 —— 所以查询前先把同一篇文章的所有等价路径展开，
+   * 否则就会出现「库里明明有评论，页面上却一条都不显示」。
+   * 写入永远用调用方传来的那一个（前台传的是数字 id 这种不会变的规范键）。
+   */
+  private async expandPostPaths(paths: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    const postKeys = paths
+      .filter((p) => p.startsWith('/post/'))
+      .map((p) => decodeURIComponent(p.slice('/post/'.length)));
+    const nums = Array.from(
+      new Set(postKeys.filter((k) => /^\d+$/.test(k)).map((k) => Number(k))),
+    );
+    const slugs = Array.from(new Set(postKeys.filter((k) => !/^\d+$/.test(k))));
+    let articles: any[] = [];
+    if (nums.length || slugs.length) {
+      const or: any[] = [];
+      if (nums.length) {
+        or.push({ id: { $in: nums } });
+      }
+      if (slugs.length) {
+        or.push({ pathname: { $in: slugs } });
+      }
+      // 不过滤 deleted：文章删了评论也不该凭空消失（后台还能看到）
+      articles = await this.articleModel.find({ $or: or }).exec();
+    }
+    for (const path of paths) {
+      const set = new Set<string>([path]);
+      if (path.startsWith('/post/')) {
+        let key = path.slice('/post/'.length);
+        try {
+          key = decodeURIComponent(key);
+        } catch {
+          // 坏的转义就按原样比
+        }
+        const article = articles.find(
+          (a) => String(a?.id) === key || (a?.pathname && String(a.pathname) === key),
+        );
+        if (article) {
+          set.add(`/post/${article.id}`);
+          if (article.pathname) {
+            set.add(`/post/${encodeURIComponent(String(article.pathname))}`);
+            set.add(`/post/${article.pathname}`);
+          }
+        }
+      }
+      out.set(path, Array.from(set));
+    }
+    return out;
+  }
+
   /** 文章页的评论列表：顶层分页，每条带上它的回复 */
   async listByPath(option: QueryCommentOption): Promise<{
     total: number;
@@ -399,9 +452,15 @@ export class CommentProvider {
     const pageSize = Math.min(50, Math.max(1, Number(option?.pageSize) || 20));
     const sort = option?.sort === 'desc' ? -1 : 1;
 
-    const total = await this.commentModel.countDocuments({ path, rootId: 0, status: 'approved' });
+    const variants = (await this.expandPostPaths([path])).get(path) || [path];
+    const pathFilter = variants.length > 1 ? { $in: variants } : path;
+    const total = await this.commentModel.countDocuments({
+      path: pathFilter,
+      rootId: 0,
+      status: 'approved',
+    });
     const roots = await this.commentModel
-      .find({ path, rootId: 0, status: 'approved' })
+      .find({ path: pathFilter, rootId: 0, status: 'approved' })
       .sort({ createdAt: sort, id: sort })
       .skip((page - 1) * pageSize)
       .limit(pageSize)
@@ -411,7 +470,7 @@ export class CommentProvider {
     }
     const rootIds = roots.map((r) => r.id);
     const children = await this.commentModel
-      .find({ path, rootId: { $in: rootIds }, status: 'approved' })
+      .find({ path: pathFilter, rootId: { $in: rootIds }, status: 'approved' })
       .sort({ createdAt: 1, id: 1 })
       .exec();
     const byRoot = new Map<number, CommentDocument[]>();
@@ -453,18 +512,22 @@ export class CommentProvider {
     if (!cleaned.length) {
       return {};
     }
+    const expanded = await this.expandPostPaths(cleaned);
+    const all = Array.from(new Set([...expanded.values()].flat()));
     const rows = await this.commentModel
       .aggregate([
-        { $match: { path: { $in: cleaned }, status: 'approved' } },
+        { $match: { path: { $in: all }, status: 'approved' } },
         { $group: { _id: '$path', count: { $sum: 1 } } },
       ])
       .exec();
+    const countOf = new Map<string, number>();
+    for (const row of rows as any[]) {
+      countOf.set(String(row?._id), Number(row?.count) || 0);
+    }
     const out: Record<string, number> = {};
     for (const p of cleaned) {
-      out[p] = 0;
-    }
-    for (const row of rows as any[]) {
-      out[String(row?._id)] = Number(row?.count) || 0;
+      // 同一篇文章的两个路径加起来才是它真正的评论数
+      out[p] = (expanded.get(p) || [p]).reduce((sum, variant) => sum + (countOf.get(variant) || 0), 0);
     }
     return out;
   }

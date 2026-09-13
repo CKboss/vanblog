@@ -106,7 +106,7 @@ describe("内置评论的前台接线", () => {
     expect(area).toContain('provider === "off"');
     expect(postCard).toContain("<CommentArea");
     expect(title).toContain('className="waline-comment-count"');
-    expect(title).toContain("<CommentCount path={dataPath} />");
+    expect(title).toContain("<CommentCount path={builtinCommentPath} />");
   });
 
   it("直接渲染 waline 组件的地方必须被 provider 条件门住", () => {
@@ -186,6 +186,17 @@ describe("内置评论的前台接线", () => {
     expect(api).toContain("setTimeout(");
     expect(api).toContain("paths.join(\",\")");
     expect(api).toContain("slice(0, 50)");
+  });
+
+  it("内置评论用数字 id 当规范键（别名可以改，数字 id 不会）", () => {
+    // 一篇文章有 /post/<数字id> 和 /post/<别名> 两个入口；用别名存评论的话，
+    // 改一次别名就等于把评论弄丢（waline 时代的历史评论也全是数字形式）
+    expect(postCard).toContain('"/post/" + (props.numericId ?? props.id)');
+    expect(postCard).toContain("numericId={props.numericId}");
+    expect(title).toContain('"/post/" + (props.numericId ?? props.id)');
+    expect(title).toContain("<CommentCount path={builtinCommentPath} />");
+    // waline 那条路径保持不变，别把它已有的评论弄丢
+    expect(title).toContain('data-path={dataPath}');
   });
 
   it("身份记忆只存昵称/邮箱/主页，且不存内容", () => {

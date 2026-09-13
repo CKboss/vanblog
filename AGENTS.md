@@ -1284,6 +1284,18 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
     限流复用 `utils/attemptLimit.ts`。
   - 公开接口的返回里**没有** `email`/`ip`/`ua`/`reason`（`CommentProvider.toPublic` 收口），
     这些只在后台可见；昵称/主页在组件里当文本渲染，主页还要在客户端再校验一次 `^https?://`。
+- ⚠️ **评论的 path 键用「数字 id」，而且服务端要做等价展开**（`expandPostPaths()`）：
+  一篇文章有 `/post/<数字id>` 和 `/post/<拼音别名>` 两个入口（都返回 200），别名还能改。
+  一开始前台用 `getArticlePath()`（有别名就返回别名）当键，而 waline 时代的历史评论全是
+  `/post/7` 这种数字形式 → 页面上「库里明明有评论，一条都不显示」。现在：
+  **写入**统一用 `/post/<numericId>`（`PostCard` 与 `SubTitle` 都用 `numericId ?? id`），
+  **查询/计数**先把同一篇文章的所有等价路径展开成 `$in`，所以两种形式的老数据都认。
+  waline 那条路径（`data-path={dataPath}`）**故意保持不变**，别把它已有的评论弄丢。
+- **导航栏的下划线**：`.ua:before`（`bottom: 2px`）是画在 `<li>` 上的，所以**这个 li 绝对不能有
+  transform**。原来 li 上挂着 `hover:scale-110`，一悬停整条横线就往下移 ~2px 并且变宽变粗，
+  和「当前页那条横线」不在同一水平线上。修法：缩放挪到里面的文字（`group` + `group-hover:scale-110`），
+  再在 `globals.css` 里加一条兜底 `.ua, .ua:hover { transform: none }`，
+  以后谁再把缩放加回去也不会错位。`__tests__/robustness.spec.ts` 有源码级守卫。
 - **所有评论区都走 `components/CommentArea`**（三选一的分支收在里面）。
   ⚠️ 别再在任何页面直接渲染 waline 组件：`pages/link.tsx` 原来就是写死的，
   站点切到内置评论后 waline 子进程已被停掉，友链页的评论区就是一片空白/报错。
@@ -1326,8 +1338,8 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 562 用例：561 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 52 文件 / 481 用例全绿 |
+| server `jest` | 566 用例：565 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 52 文件 / 484 用例全绿 |
 | admin `node --test tests/unit` | 71 文件 / 272 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
