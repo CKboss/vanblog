@@ -147,13 +147,35 @@ git push ckboss dev/dsh     # ckboss = 本 fork
 ### 一键脚本部署
 
 ```bash
-curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
-文档站不可达时，可用 GitHub raw：
+::: warning 装的是本分支，不是上游镜像
+
+上游那份脚本（`vanblog.mereith.com/vanblog.sh`）拉的是官方镜像 `mereith/van-blog:latest`，
+里面**没有**本 fork 的任何改动。本分支没有发布 Docker 镜像，所以这里的脚本改成：
+**克隆 `CKboss/vanblog` 的 `dev/dsh` → 本地 `docker build` → 用本地 tag 起容器**。
+首次构建大约 5–20 分钟（多阶段：admin / server / website 各自 `pnpm i` + build），
+之后 `./vanblog.sh update` 会拉最新源码重新构建；构建失败不会动正在跑的容器。
+
+:::
+
+可用的环境变量（都有默认值，直接跑就行）：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `VANBLOG_REPO` | `https://github.com/CKboss/vanblog.git` | 源码仓库 |
+| `VANBLOG_BRANCH` | `dev/dsh` | 分支 |
+| `VANBLOG_SRC_DIR` | `/var/vanblog/src` | 源码目录（构建缓存，可反复更新） |
+| `VANBLOG_IMAGE_TAG` | `vanblog:dev-dsh` | 本地构建出的镜像 tag |
+| `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 就回到官方镜像（不含本分支改动） |
+| `VANBLOG_BUILD_SERVER` | 空 | 构建期写入前台访问后端的地址（`VAN_BLOG_SERVER_URL`） |
 
 ```bash
-curl -L https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+# 例：换分支 / 换镜像 tag
+VANBLOG_BRANCH=dev/dsh VANBLOG_IMAGE_TAG=vanblog:dev-dsh ./vanblog.sh install
+# 例：只想先用官方镜像把站点跑起来
+VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh install
 ```
 
 将来如果需要再次运行脚本，可以运行：

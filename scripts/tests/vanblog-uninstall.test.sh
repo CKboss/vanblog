@@ -268,6 +268,36 @@ else
   fail "invalid data path does not wipe backup directory"
 fi
 
+# --- 源码模式下克隆出来的 src 目录也要一起清掉 ---
+setup_case
+source_script
+# 每个用例的 TEST_DIR 都是新的，而 VANBLOG_SRC_DIR 是 source 时按当时的 BASE_PATH 定下来的，
+# 会被上一个用例的值污染 —— 这里显式对齐到当前用例
+VANBLOG_SRC_DIR="${VANBLOG_BASE_PATH}/src"
+mkdir -p "${VANBLOG_SRC_DIR}/.git"
+echo "clone" >"${VANBLOG_SRC_DIR}/Dockerfile"
+remove_vanblog_install_files >/dev/null 2>&1
+if [[ -e "${VANBLOG_SRC_DIR}" ]]; then
+  fail "卸载会删掉源码目录"
+else
+  pass "卸载会删掉源码目录"
+fi
+
+# 用户把源码目录指到安装目录之外时，绝不能删
+setup_case
+source_script
+OUTSIDE="${TEST_DIR}/my-own-src"
+mkdir -p "${OUTSIDE}/.git"
+VANBLOG_SRC_DIR="${OUTSIDE}"
+VANBLOG_DATA_PATH="${VANBLOG_BASE_PATH}/data"
+mkdir -p "${VANBLOG_DATA_PATH}"
+remove_vanblog_install_files >/dev/null 2>&1
+if [[ -d "${OUTSIDE}/.git" ]]; then
+  pass "安装目录之外的源码目录不会被删"
+else
+  fail "安装目录之外的源码目录不会被删"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

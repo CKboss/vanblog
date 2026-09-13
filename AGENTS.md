@@ -481,7 +481,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 ## 7. 本分支的功能改动（改这块代码前先读）
 
 本分支在上游 master `ccd708ce` 之上实现了下面这些需求（`git log --oneline ccd708ce..HEAD` 可查）：
-拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固、一键脚本修复、后台性能优化、补齐 6 种 markdown 语法。
+拼音链接、标题可复制、自动摘要、附件管理、两个 UI 修复、图片管线（缩放/缩略图/隐写水印/列表视图）、整站备份与恢复、单篇文章导出（md + 带图 mdz）、前台 Apple 风格皮肤、Markdown 编辑器/前台渲染一致性、前台性能优化（按需加载 + 缓存头）、全站 bug 与安全加固、一键脚本修复（并改成从本分支源码构建镜像）、后台性能优化、补齐 6 种 markdown 语法、内置评论系统。
 **别把它们当成脏改动回退掉。**
 
 ### 7.1 文章链接默认带标题拼音（`/post/<pinyin-slug>`）
@@ -984,7 +984,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   `init` 接口无守卫（靠"库里有没有用户"判断）；API token 有效期 100 年。
 - `next build` 仍有约 27 处 `__tests__/*.spec.ts` 里的类型错误（不影响运行），所以留了 `VANBLOG_SKIP_TYPECHECK`。
 
-### 7.12 一键脚本 `scripts/vanblog.sh` 体检与修复（v0.3.6 → v0.3.7）
+### 7.12 一键脚本 `scripts/vanblog.sh` 体检与修复（v0.3.6 → v0.3.7；安装来源的改动见 §7.12.1）
 
 这个脚本是用户 `curl | bash` 装的入口（**两份副本必须一致**：`scripts/vanblog.sh` 与
 `docs/.vuepress/public/vanblog.sh`，后者才是文档站真正下发的文件），它下载
@@ -1034,6 +1034,39 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   既有的 `vanblog-update.test.sh` / `vanblog-download-fallback.test.sh` 按新语义更新
   （「已是最新」返回 0；沙箱里补一个假的 docker-compose，免得脚本去写 `/usr/local/bin`）。
   七个脚本测试文件共 **259 条断言全绿**。
+
+### 7.12.1 一键安装改成「装本分支源码构建的镜像」（v0.3.7 → v0.4.0）
+
+脚本以前拉的是官方镜像 `mereith/van-blog:latest`，也就是**上游 master**，本分支的改动一个都不在里面；
+README 里的 curl 也指向作者的文档站与上游 raw。本分支没有发布镜像，所以改成：
+
+```
+克隆 https://github.com/CKboss/vanblog.git 的 dev/dsh（浅克隆到 <安装目录>/src）
+  → docker build -t vanblog:dev-dsh（--build-arg VAN_BLOG_VERSIONS=<branch>-<shortsha>）
+  → 编排文件里的 image: 用这个本地 tag
+```
+
+- 新增可调项（都能用环境变量覆盖）：`VANBLOG_REPO` / `VANBLOG_BRANCH` / `VANBLOG_SRC_DIR` /
+  `VANBLOG_IMAGE_TAG` / `VANBLOG_USE_UPSTREAM_IMAGE`（设 `true` 回到官方镜像）/ `VANBLOG_BUILD_SERVER`。
+- `update` 在源码模式下是「fetch + `checkout -f FETCH_HEAD` + 重新 build」，**不是 `docker pull`**；
+  构建失败会保留旧镜像并把容器起回来，不会让更新变成停机。
+  用 `checkout -f FETCH_HEAD` 而不是 `pull`：源码目录只当构建缓存，有本地改动时 pull 会卡住；
+  `git clean -fdq` 只在源码目录是默认的 `<base>/src` 时才做（用户指到别处就不能乱删）。
+- 编排模板优先用**源码里那份**（含本分支新增的可选环境变量注释）；下载回退顺序改成
+  本分支 raw → 上游文档站 → 上游 GitHub raw → jsDelivr（`vanblog-download-fallback.test.sh` 的
+  URL 顺序断言也跟着改成 4 个）。
+- `Docker_IMG` 不再转义斜杠，写入编排文件的 `sed` 分隔符从 `/` 换成 `|`，
+  这样自定义 tag（如 `ckboss/vanblog:dev-dsh`）也不会被截断。
+- 卸载会把源码目录一起删掉（仅限「在安装目录下且确实是 git clone」的那种，防止误删用户目录）。
+- ⚠️ 两份脚本副本必须**逐字节一致**（多个测试用 `cmp -s` 盯着）：改完记得
+  `cp scripts/vanblog.sh docs/.vuepress/public/vanblog.sh`。
+- 测试：新增 `scripts/tests/vanblog-source-install.test.sh`(41，假的 git/docker/docker-compose，不联网)，
+  覆盖默认值、克隆与更新两条路径、构建参数、缺 Dockerfile、构建失败返回非 0、
+  官方镜像模式完全不碰 git/docker、编排文件写入本地 tag（含带斜杠的 tag）、
+  `ensure_compose_image` 改写旧镜像行、有源码时不再联网下模板、卸载清源码目录。
+  `vanblog-download-fallback.test.sh` 与 `vanblog-update.test.sh` 的 harness 里必须设
+  `VANBLOG_USE_UPSTREAM_IMAGE=true`，否则用例会去真克隆/真构建而**挂住**（踩过，一次 7 分钟超时）。
+- 脚本测试总量：8 个文件 / 304 条断言全绿。
 
 ### 7.13 后台（packages/admin）性能优化
 

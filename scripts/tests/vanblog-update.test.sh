@@ -307,6 +307,10 @@ EOF
 
 source_script() {
   export VANBLOG_SKIP_MAIN=1
+  # 这个文件测的是「官方镜像」那条更新路径（compose pull + 比较镜像 id）。
+  # 源码构建那条路径在 vanblog-source-install.test.sh 里用假的 git/docker 测。
+  export VANBLOG_USE_UPSTREAM_IMAGE=true
+  export VANBLOG_SRC_DIR="${TEST_DIR}/src"
   # shellcheck disable=SC1090
   source "${SCRIPT}"
 }

@@ -1,3 +1,25 @@
+::: warning 本 fork 没有发布镜像
+
+下面的 `image: mereith/van-blog:latest` 是**上游官方镜像**，不包含本 fork（`CKboss/vanblog` 的
+`dev/dsh` 分支）的任何改动。想用本分支有两种方式：
+
+1. **一键脚本（推荐）**：它会克隆本分支源码、本地 `docker build`、再用本地 tag 起容器。
+
+   ```bash
+   curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh \
+     && chmod +x vanblog.sh && ./vanblog.sh
+   ```
+
+2. **自己构建镜像**，然后把编排文件里的 `image:` 换成本地 tag：
+
+   ```bash
+   git clone --depth 1 -b dev/dsh https://github.com/CKboss/vanblog.git
+   cd vanblog
+   docker build --build-arg VAN_BLOG_VERSIONS=dev/dsh -t vanblog:dev-dsh .
+   ```
+
+:::
+
 ### 1.安装依赖
 
 如果你没有安装 `docker` 和 `docker-compose`，可以通过以下命令一键安装：

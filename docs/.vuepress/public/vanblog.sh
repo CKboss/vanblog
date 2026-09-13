@@ -11,9 +11,27 @@
 VANBLOG_BASE_PATH="${VANBLOG_BASE_PATH:-/var/vanblog}"
 VANBLOG_DATA_PATH="${VANBLOG_DATA_PATH:-${VANBLOG_BASE_PATH}/data}"
 VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-\/var\/vanblog\/data}"
-VANBLOG_SCRIPT_VERSION="v0.3.7"
+VANBLOG_SCRIPT_VERSION="v0.4.0"
+
+# ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
+# 本分支（CKboss/vanblog 的 dev/dsh）**没有发布 Docker 镜像**，所以一键安装做的是：
+#   克隆源码 → 本地 docker build → 用本地 tag 起容器
+# 而不是去拉官方的 mereith/van-blog:latest（那是上游 master，不含本分支的改动）。
+# 想回到官方镜像：VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh
+# 想换分支/换仓库：VANBLOG_BRANCH=xxx VANBLOG_REPO=xxx ./vanblog.sh
+VANBLOG_REPO="${VANBLOG_REPO:-https://github.com/CKboss/vanblog.git}"
+VANBLOG_BRANCH="${VANBLOG_BRANCH:-dev/dsh}"
+VANBLOG_SRC_DIR="${VANBLOG_SRC_DIR:-${VANBLOG_BASE_PATH}/src}"
+VANBLOG_IMAGE_TAG="${VANBLOG_IMAGE_TAG:-vanblog:dev-dsh}"
+VANBLOG_USE_UPSTREAM_IMAGE="${VANBLOG_USE_UPSTREAM_IMAGE:-false}"
+# 构建时写进镜像的 VAN_BLOG_VERSION（后台「关于」里能看到），形如 dev/dsh@1a2b3c4
+VANBLOG_SRC_COMMIT=""
 
 # Ordered fallbacks: docs host (historical default), then GitHub raw, then jsDelivr.
+# 本分支的 raw 地址排在最前面：模板里有本分支新增的可选环境变量注释，
+# 上游那份没有；下载不到再依次退回上游文档站 / GitHub / jsDelivr。
+COMPOSE_URL_FORK="https://raw.githubusercontent.com/CKboss/vanblog/${VANBLOG_BRANCH}/docker-compose/docker-compose-template.yml"
+SCRIPT_URL_FORK="https://raw.githubusercontent.com/CKboss/vanblog/${VANBLOG_BRANCH}/scripts/vanblog.sh"
 COMPOSE_URL="https://vanblog.mereith.com/docker-compose-template.yml"
 COMPOSE_URL_GITHUB="https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml"
 COMPOSE_URL_JSDELIVR="https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml"
@@ -167,13 +185,13 @@ pre_check() {
         Get_Docker_URL="get.docker.com"
         GITHUB_URL="dn-dao-github-mirror.daocloud.io"
         Get_Docker_Argu=" "
-        Docker_IMG="mereith\/van-blog:latest"
+        Docker_IMG="mereith/van-blog:latest"
     else
         echo "使用中国镜像"
         Get_Docker_URL="vanblog.mereith.com/docker.sh"
         GITHUB_URL="github.com"
         Get_Docker_Argu=" -s docker --mirror Aliyun"
-        Docker_IMG="registry.cn-beijing.aliyuncs.com\/mereith\/van-blog:latest"
+        Docker_IMG="registry.cn-beijing.aliyuncs.com/mereith/van-blog:latest"
     fi
 
 }
@@ -195,12 +213,111 @@ confirm() {
 }
 
 compose_template_urls() {
-  printf '%s\n' "${COMPOSE_URL}" "${COMPOSE_URL_GITHUB}" "${COMPOSE_URL_JSDELIVR}"
+  printf '%s\n' "${COMPOSE_URL_FORK}" "${COMPOSE_URL}" "${COMPOSE_URL_GITHUB}" "${COMPOSE_URL_JSDELIVR}"
 }
 
 script_urls() {
-  printf '%s\n' "${SCRIPT_URL}" "${SCRIPT_URL_GITHUB}" "${SCRIPT_URL_JSDELIVR}"
+  printf '%s\n' "${SCRIPT_URL_FORK}" "${SCRIPT_URL}" "${SCRIPT_URL_GITHUB}" "${SCRIPT_URL_JSDELIVR}"
 }
+
+# ---------- 从源码构建本分支的镜像 ----------
+
+use_upstream_image() {
+  [[ "${VANBLOG_USE_UPSTREAM_IMAGE}" == "true" ]]
+}
+
+vanblog_src_template() {
+  printf '%s' "${VANBLOG_SRC_DIR}/docker-compose/docker-compose-template.yml"
+}
+
+clone_or_update_source() {
+  if ! command -v git >/dev/null 2>&1; then
+    echo -e "正在安装 git"
+    install_soft git
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    echo -e "${red}缺少 git，无法获取源码${plain}"
+    return 1
+  fi
+
+  if [[ -d "${VANBLOG_SRC_DIR}/.git" ]]; then
+    echo -e "> 更新源码 ${VANBLOG_REPO} (${VANBLOG_BRANCH})"
+    git -C "${VANBLOG_SRC_DIR}" fetch --depth 1 origin "${VANBLOG_BRANCH}" || return 1
+    # 用 FETCH_HEAD 而不是 pull：源码目录只当构建缓存用，
+    # 里面若有本地改动（或上次构建留下的产物）会把 pull 卡住
+    git -C "${VANBLOG_SRC_DIR}" checkout -f FETCH_HEAD || return 1
+    # 只有默认目录才敢清未跟踪文件（用户指到别处时不能乱删东西）
+    if [[ "${VANBLOG_SRC_DIR}" == "${VANBLOG_BASE_PATH}/src" ]]; then
+      git -C "${VANBLOG_SRC_DIR}" clean -fdq >/dev/null 2>&1 || true
+    fi
+  else
+    echo -e "> 克隆源码 ${VANBLOG_REPO} (${VANBLOG_BRANCH})"
+    mkdir -p "$(dirname "${VANBLOG_SRC_DIR}")"
+    rm -rf "${VANBLOG_SRC_DIR}"
+    git clone --depth 1 --branch "${VANBLOG_BRANCH}" "${VANBLOG_REPO}" "${VANBLOG_SRC_DIR}" || return 1
+  fi
+
+  VANBLOG_SRC_COMMIT="$(git -C "${VANBLOG_SRC_DIR}" rev-parse --short HEAD 2>/dev/null)"
+  echo -e "> 源码版本：${yellow}${VANBLOG_BRANCH}@${VANBLOG_SRC_COMMIT:-未知}${plain}"
+  return 0
+}
+
+build_vanblog_image() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo -e "${red}未找到 docker，无法构建镜像${plain}"
+    return 1
+  fi
+  if [[ ! -f "${VANBLOG_SRC_DIR}/Dockerfile" ]]; then
+    echo -e "${red}${VANBLOG_SRC_DIR} 里没有 Dockerfile，无法构建镜像${plain}"
+    return 1
+  fi
+
+  local version_arg="${VANBLOG_BRANCH}-${VANBLOG_SRC_COMMIT:-unknown}"
+  echo -e "> 构建镜像 ${yellow}${VANBLOG_IMAGE_TAG}${plain}（首次约 5-20 分钟，取决于机器与网络）"
+  if [[ -n "${VANBLOG_BUILD_SERVER:-}" ]]; then
+    docker build \
+      --build-arg "VAN_BLOG_VERSIONS=${version_arg}" \
+      --build-arg "VAN_BLOG_BUILD_SERVER=${VANBLOG_BUILD_SERVER}" \
+      -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
+  else
+    docker build \
+      --build-arg "VAN_BLOG_VERSIONS=${version_arg}" \
+      -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
+  fi
+  echo -e "${green}镜像构建完成${plain}：${VANBLOG_IMAGE_TAG}（${version_arg}）"
+  return 0
+}
+
+# 安装与更新都走这里：源码模式下把 Docker_IMG 换成本地构建出来的 tag
+prepare_vanblog_image() {
+  if use_upstream_image; then
+    echo -e "> 按 VANBLOG_USE_UPSTREAM_IMAGE=true 使用官方镜像 ${yellow}${Docker_IMG}${plain}（不含本分支改动）"
+    return 0
+  fi
+  clone_or_update_source || return 1
+  build_vanblog_image || return 1
+  Docker_IMG="${VANBLOG_IMAGE_TAG}"
+  return 0
+}
+
+# 编排文件里的 image: 要和当前模式一致（例如从官方镜像切到本地构建，或反之）
+ensure_compose_image() {
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  [[ -f "${compose_file}" ]] || return 0
+  if grep -q "vanblog_image" "${compose_file}"; then
+    sed -i "s|vanblog_image|${Docker_IMG}|g" "${compose_file}"
+    return 0
+  fi
+  local current
+  current="$(get_compose_vanblog_image)"
+  if [[ -n "${current}" && "${current}" != "${Docker_IMG}" ]]; then
+    echo -e "> 编排文件里的镜像 ${yellow}${current}${plain} 与当前模式不一致，改成 ${yellow}${Docker_IMG}${plain}"
+    sed -i "s|image:[[:space:]]*${current//|/\\|}|image: ${Docker_IMG}|" "${compose_file}"
+  fi
+  return 0
+}
+
+
 
 is_valid_compose_template() {
   local file="$1"
@@ -257,6 +374,12 @@ download_with_fallback() {
 
 download_compose_template() {
   local dest="${1:-${VANBLOG_BASE_PATH}/docker-compose-template.yaml}"
+  # 已经克隆过源码就直接用仓库里的模板：不依赖网络，也不会误用上游那份
+  local local_template
+  local_template="$(vanblog_src_template)"
+  if [[ -s "${local_template}" ]] && is_valid_compose_template "${local_template}"; then
+    cp "${local_template}" "${dest}" && return 0
+  fi
   local urls=()
   local line
   while IFS= read -r line; do
@@ -380,6 +503,17 @@ install_vanblog() {
     fi
   fi
 
+  # 源码模式：克隆本分支并本地构建镜像（Docker_IMG 会被换成本地 tag）。
+  # 必须在 config 之前，因为 config 会把 Docker_IMG 写进编排文件。
+  if ! prepare_vanblog_image; then
+    echo -e "${red}安装失败：未能准备好 VanBlog 镜像${plain}"
+    echo -e "如果只想先用官方镜像跑起来，可以： ${yellow}VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh${plain}"
+    if [[ $# == 0 ]]; then
+      before_show_menu
+    fi
+    return 1
+  fi
+
   config 0
   if [[ $? != 0 ]]; then
     echo -e "${red}安装失败：未能下载编排文件${plain}"
@@ -476,7 +610,10 @@ config() {
   sed -i "s/vanblog_https_port/${vanblog_https_port}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   # sed -i "s/vanblog_domains/${vanblog_domains}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
   # sed -i "s/vanblog_version/${vanblog_version}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
-  sed -i "s/vanblog_image/${Docker_IMG}/g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
+  # 用 | 作分隔符：镜像名里带 / （官方镜像、或自定义 tag 如 ckboss/vanblog:dev-dsh）时，
+  # s///.../ 会被截断。Docker_IMG 现在一律不转义斜杠。
+  sed -i "s|vanblog_image|${Docker_IMG}|g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
+  ensure_compose_image
 
   mkdir -p $VANBLOG_DATA_PATH
 
@@ -524,7 +661,9 @@ update() {
     return 1
   fi
 
-  align_compose_latest_image
+  if use_upstream_image; then
+    align_compose_latest_image
+  fi
 
   local old_cid old_image old_version
   old_cid=$(get_vanblog_container_id)
@@ -542,15 +681,30 @@ update() {
     return 1
   fi
 
-  echo -e "> 拉取最新镜像"
-  vanblog_compose pull vanblog
-  if [[ $? != 0 ]]; then
-    echo -e "${red}拉取镜像失败${plain}"
-    vanblog_compose up -d >/dev/null 2>&1 || true
-    if [[ ${skip_menu} == 0 ]]; then
-      before_show_menu
+  if use_upstream_image; then
+    echo -e "> 拉取最新镜像"
+    vanblog_compose pull vanblog
+    if [[ $? != 0 ]]; then
+      echo -e "${red}拉取镜像失败${plain}"
+      vanblog_compose up -d >/dev/null 2>&1 || true
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 1
     fi
-    return 1
+  else
+    # 源码模式：更新 = 拉最新源码 + 重新构建镜像。
+    # 构建失败就不要动容器（旧镜像还在），直接把服务起回来，避免更新失败变成停机。
+    echo -e "> 从源码更新（${VANBLOG_REPO} ${VANBLOG_BRANCH}）"
+    if ! prepare_vanblog_image; then
+      echo -e "${red}更新失败：源码构建未成功，保持原镜像${plain}"
+      vanblog_compose up -d >/dev/null 2>&1 || true
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 1
+    fi
+    ensure_compose_image
   fi
 
   echo -e "> 启动新容器"
@@ -593,6 +747,9 @@ update() {
   echo -e "${green}VanBlog 更新并重启成功${plain}"
   if [[ -n "${old_version}" || -n "${new_version}" ]]; then
     echo -e "版本：${yellow}${old_version:-未知} -> ${new_version:-未知}${plain}"
+  fi
+  if ! use_upstream_image && [[ -n "${VANBLOG_SRC_COMMIT}" ]]; then
+    echo -e "源码：${yellow}${VANBLOG_BRANCH}@${VANBLOG_SRC_COMMIT}${plain}（镜像 ${VANBLOG_IMAGE_TAG}）"
   fi
   echo -e "默认管理面板地址：${yellow}域名:站点访问端口${plain}"
 
@@ -926,6 +1083,14 @@ remove_vanblog_install_files() {
     echo -e "> 删除安装数据 ${data_path}"
     rm -rf "${data_path}"
   fi
+  # 源码模式会在安装目录下留一份 git clone（构建缓存），卸载时一并清掉。
+  # 只清「确实在安装目录下、且真的是我们克隆出来的」那个，避免用户把
+  # VANBLOG_SRC_DIR 指到自己别的目录时被误删。
+  local src_dir="${VANBLOG_SRC_DIR}"
+  if [[ -n "${src_dir}" && "${src_dir}" == "${VANBLOG_BASE_PATH}"/* && -d "${src_dir}/.git" ]]; then
+    echo -e "> 删除源码目录 ${src_dir}"
+    rm -rf "${src_dir}"
+  fi
   for compose in \
     docker-compose.yaml \
     docker-compose.yml \
@@ -1186,11 +1351,20 @@ show_usage() {
   echo "--------------------------------------------------------"
   echo "./vanblog.sh update_script              - 更新此脚本"
   echo "--------------------------------------------------------"
+  echo "装的是哪个版本（默认从源码构建本分支，不用官方镜像）："
+  echo "  VANBLOG_REPO=${VANBLOG_REPO}"
+  echo "  VANBLOG_BRANCH=${VANBLOG_BRANCH}"
+  echo "  VANBLOG_SRC_DIR=${VANBLOG_SRC_DIR}"
+  echo "  VANBLOG_IMAGE_TAG=${VANBLOG_IMAGE_TAG}"
+  echo "  VANBLOG_USE_UPSTREAM_IMAGE=${VANBLOG_USE_UPSTREAM_IMAGE}  # true = 改用官方 mereith/van-blog:latest"
+  echo "  VANBLOG_BUILD_SERVER=<url>            # 可选：构建期写入前台访问后端的地址"
+  echo "--------------------------------------------------------"
 }
 
 show_menu() {
   echo -e "
     ${green}VanBlog 管理脚本${plain} ${red}${VANBLOG_SCRIPT_VERSION}${plain}
+    安装来源：${yellow}${VANBLOG_REPO}${plain} 分支 ${yellow}${VANBLOG_BRANCH}${plain}$([[ "${VANBLOG_USE_UPSTREAM_IMAGE}" == "true" ]] && echo "（已改为使用官方镜像）" || echo "（本地构建镜像 ${VANBLOG_IMAGE_TAG}）")
     --- https://github.com/mereithhh/van-blog ---
     ${green}1.${plain}  安装 VanBlog
     ${green}2.${plain}  修改配置
