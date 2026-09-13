@@ -19,31 +19,31 @@ function makeFakeModels(setting: CommentSetting = SETTING) {
   let nextId = 1;
 
   const commentModel: any = {
-    // mongoose 的 query 是 thenable，所以这里直接返回 Promise 就能被 await；
-    // 只实现测试用得到的那部分过滤（status / rootId）
+    // mongoose 的 query 既能 await 又能 .exec()，而且链上每一环都还是 query；
+    // 这里实现测试用得到的过滤（status / rootId / sourceId.$in）与 sort/skip/limit
     find: (filter?: any) => {
-      const apply = () =>
-        comments.filter(
-          (c) =>
-            (!filter?.status || c.status === filter.status) &&
-            (filter?.rootId === undefined || (c.rootId || 0) === filter.rootId),
-        );
-      // 真实的 mongoose query 既能 await 又能 .exec()，这里两种都支持
+      const statusOk = (c: any) => {
+        const want = filter?.status;
+        if (!want) return true;
+        if (typeof want === 'string') return c.status === want;
+        if (want.$ne !== undefined) return c.status !== want.$ne;
+        if (Array.isArray(want.$in)) return want.$in.includes(c.status);
+        return true;
+      };
+      const match = (c: any) =>
+        statusOk(c) &&
+        (filter?.rootId === undefined || (c.rootId || 0) === filter.rootId) &&
+        (!filter?.sourceId?.$in || filter.sourceId.$in.includes(String(c.sourceId)));
       const query = (rows: any[]) => {
         const promise = Promise.resolve(rows);
-        return Object.assign(promise, { exec: () => promise });
+        return Object.assign(promise, {
+          exec: () => promise,
+          sort: () => query(rows),
+          limit: () => query(rows),
+          skip: () => query(rows),
+        });
       };
-      const rows = apply();
-      return {
-        // 有的查询是 .sort().exec()（取回复），有的是 .sort().skip().limit().exec()（分页）
-        sort: () => {
-          const sorted = query(rows);
-          return Object.assign(sorted, {
-            limit: () => query(rows),
-            skip: () => ({ limit: () => query(rows) }),
-          });
-        },
-      };
+      return query(comments.filter(match));
     },
     findOne: (q: any) => ({ exec: async () => comments.find((c) => c.id === q?.id) || null }),
     create: async (doc: any) => {
@@ -350,5 +350,164 @@ describe('CommentProvider：对外字段与查询', () => {
     };
     await expect(provider.getNewId()).rejects.toThrow('db down');
     expect((provider as any).idLock).toBe(false);
+  });
+});
+
+describe('从 Waline 导入 / 导出', () => {
+  const { extractWalineComments, stripDataUriImages } = require('./comment.provider');
+
+  const row = (over: any = {}) => ({
+    objectId: 'oid-' + Math.random().toString(36).slice(2, 8),
+    url: '/post/1',
+    nick: '张三',
+    mail: 'a@b.com',
+    link: 'https://example.com',
+    comment: '历史评论内容',
+    status: 'approved',
+    insertedAt: '2024-07-07T07:35:20.795Z',
+    ip: '203.0.113.5',
+    ua: 'test-ua',
+    pid: null,
+    rid: null,
+    ...over,
+  });
+
+  it('能认出三种导出形状', () => {
+    const a = row();
+    expect(extractWalineComments([a])).toHaveLength(1);
+    expect(extractWalineComments({ Comment: [a] })).toHaveLength(1);
+    expect(
+      extractWalineComments({ type: 'waline', tables: ['Comment'], data: { Comment: [a, a] } }),
+    ).toHaveLength(2);
+    expect(extractWalineComments(null)).toHaveLength(0);
+    expect(extractWalineComments('垃圾')).toHaveLength(0);
+    expect(extractWalineComments({ data: { Comment: 'not-an-array' } })).toHaveLength(0);
+  });
+
+  it('默认只导入 approved，待审/垃圾要显式开启才导', async () => {
+    const { provider, comments } = makeFakeModels();
+    const payload = {
+      data: {
+        Comment: [
+          row({ status: 'approved' }),
+          row({ status: 'waiting' }),
+          row({ status: 'spam' }),
+        ],
+      },
+    };
+    const res = await provider.importFromWaline(payload);
+    expect(res.imported).toBe(1);
+    expect(res.skippedNotApproved).toBe(2);
+    expect(comments.map((c: any) => c.status)).toEqual(['approved']);
+
+    const withAll = makeFakeModels();
+    const res2 = await withAll.provider.importFromWaline(payload, { includeNonApproved: true });
+    expect(res2.imported).toBe(3);
+    // waline 的 waiting → pending，未知/垃圾 → spam，绝不默认放行
+    expect(withAll.comments.map((c: any) => c.status).sort()).toEqual([
+      'approved',
+      'pending',
+      'spam',
+    ]);
+  });
+
+  it('按 sourceId 幂等：同一份导两次不会翻倍', async () => {
+    const { provider, comments } = makeFakeModels();
+    const payload = { Comment: [row({ objectId: 'fixed-1' }), row({ objectId: 'fixed-2' })] };
+    const first = await provider.importFromWaline(payload);
+    expect(first.imported).toBe(2);
+    const second = await provider.importFromWaline(payload);
+    expect(second.imported).toBe(0);
+    expect(second.skippedDuplicate).toBe(2);
+    expect(comments).toHaveLength(2);
+    expect(comments[0].source).toBe('waline');
+    expect(comments[0].sourceId).toBe('fixed-1');
+  });
+
+  it('保留原始时间与点赞数，并记录 ip/ua', async () => {
+    const { provider, comments } = makeFakeModels();
+    await provider.importFromWaline([
+      row({ insertedAt: '2024-07-07T07:35:20.795Z', like: 7, ip: '198.51.100.9', ua: 'old-ua' }),
+    ]);
+    expect(comments[0].createdAt.toISOString()).toBe('2024-07-07T07:35:20.795Z');
+    expect(comments[0].likeCount).toBe(7);
+    expect(comments[0].ip).toBe('198.51.100.9');
+    expect(comments[0].ua).toBe('old-ua');
+  });
+
+  it('两层结构：rid/pid 映射到本站数字 id', async () => {
+    const { provider, comments } = makeFakeModels();
+    await provider.importFromWaline({
+      Comment: [
+        row({ objectId: 'root-1' }),
+        row({ objectId: 'child-1', rid: 'root-1', pid: 'root-1', nick: '回复者', comment: '回复内容' }),
+      ],
+    });
+    const root = comments.find((c: any) => c.sourceId === 'root-1');
+    const child = comments.find((c: any) => c.sourceId === 'child-1');
+    expect(root.rootId).toBe(0);
+    expect(child.rootId).toBe(root.id);
+    expect(child.parentId).toBe(root.id);
+    expect(child.replyToNick).toBe('张三');
+  });
+
+  it('邮箱坏了不丢整条历史评论，只清空邮箱', async () => {
+    const { provider, comments } = makeFakeModels();
+    const res = await provider.importFromWaline([row({ mail: 'not-an-email' })]);
+    expect(res.imported).toBe(1);
+    expect(comments[0].email).toBe('');
+    expect(res.errors.join('')).toContain('邮箱格式不合法');
+  });
+
+  it('主页地址坏了也只丢地址不丢评论', async () => {
+    const { provider, comments } = makeFakeModels();
+    const res = await provider.importFromWaline([row({ link: 'javascript:alert(1)' })]);
+    expect(res.imported).toBe(1);
+    expect(comments[0].site).toBe('');
+  });
+
+  it('data: URI 图片折叠成 alt，避免几十 KB base64 进库', async () => {
+    expect(stripDataUriImages('前 ![截图](data:image/png;base64,AAAA) 后')).toBe('前 截图 后');
+    expect(stripDataUriImages('![alt](data:image/gif;base64,BBB "标题")')).toBe('alt');
+    expect(stripDataUriImages('![](data:image/png;base64,CCC)')).toBe('图片');
+    expect(stripDataUriImages('普通 ![图](https://x.example/a.png) 不动')).toBe(
+      '普通 ![图](https://x.example/a.png) 不动',
+    );
+    const { provider, comments } = makeFakeModels();
+    await provider.importFromWaline([
+      row({ comment: `看 ![](data:image/png;base64,${'A'.repeat(30000)})` }),
+    ]);
+    expect(comments[0].content).toBe('看 图片');
+  });
+
+  it('dryRun 只统计不写库', async () => {
+    const { provider, comments } = makeFakeModels();
+    const res = await provider.importFromWaline([row(), row()], { dryRun: true });
+    expect(res.imported).toBe(2);
+    expect(res.dryRun).toBe(true);
+    expect(comments).toHaveLength(0);
+  });
+
+  it('导入不要求文章存在（/link、/about 这类页面的历史评论要能进来）', async () => {
+    const { provider, comments } = makeFakeModels();
+    (provider as any).articleModel = { findOne: () => ({ exec: async () => null }) };
+    const res = await provider.importFromWaline([row({ url: '/link' })]);
+    expect(res.imported).toBe(1);
+    expect(comments[0].path).toBe('/link');
+  });
+
+  it('导出默认只有 approved，status=all 才带其它状态', async () => {
+    const { provider, comments } = makeFakeModels();
+    comments.push(
+      { id: 1, path: '/post/1', status: 'approved', nick: 'a', content: 'x', createdAt: new Date() },
+      { id: 2, path: '/post/1', status: 'pending', nick: 'b', content: 'y', createdAt: new Date() },
+      { id: 3, path: '/post/1', status: 'spam', nick: 'c', content: 'z', createdAt: new Date() },
+    );
+    const onlyApproved = await provider.exportComments();
+    expect(onlyApproved.map((c: any) => c.id)).toEqual([1]);
+    const all = await provider.exportComments('all');
+    expect(all.map((c: any) => c.id)).toEqual([1, 2, 3]);
+    // 非法状态值退回 approved，不会因为拼错参数就把待审评论导出去
+    expect((await provider.exportComments('bogus')).map((c: any) => c.id)).toEqual([1]);
   });
 });

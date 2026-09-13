@@ -1297,7 +1297,19 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
      教训：脚本化改数组后一定要 `grep ',,'` 或直接看编译结果。
   3. bytemd 的 `plugins` 数组要的是 `{remark}/{rehype}` 形状的对象，裸的 unified transformer
      会报 `Type '(tree:any)=>void' has no properties in common with type 'BytemdPlugin'`。
-- 测试：`provider/comment/comment.provider.spec.ts`(21，用假 model 跑校验/审核/限流/隐私字段/查询)，
+- **从 Waline 导入 / 导出**（`importFromWaline()` / `exportComments()`，接口
+  `POST /api/admin/comment/import/waline`、`GET /api/admin/comment/export`）：
+  导入吃三种形状（VanBlog 的 waline 备份 `{type:'waline',data:{Comment:[]}}`、`{Comment:[]}`、裸数组），
+  **默认只导 approved**、按 `sourceId`(=waline objectId) **幂等**、保留 `insertedAt`→`createdAt`
+  与 `like`→`likeCount`、`rid/pid` 映射成两层结构、走与本站发表**同一套校验**（导入不是后门）、
+  支持 `dryRun`。两条容错是刻意的：历史数据里**邮箱格式不合法只清空邮箱、不丢整条**；
+  `data:image/...;base64` 的图片折叠成 alt（否则一条几十 KB base64 进库，而白名单里根本没有 `img`，
+  前台只会显示字面量）。导出**默认只给 approved**，`status=all` 才带其它状态，非法状态值退回 approved。
+  schema 为此加了 `source` / `sourceId`(带索引) / `likeCount` 三个字段。
+- **备份覆盖评论**：`utils/fullBackup.ts` 的 `dumpDatabase()` 是 `db.collections()` **动态枚举**，
+  所以 `nativecomments` 自动进备份（实测清单里 `vanBlog.nativecomments 3 条` + `waline.Comment 3 条`，
+  两个库都在）。⚠️ 备份**包含所有状态**（含待审/垃圾/已删除），这是对的 —— 只要"正式显示的"用 export 接口。
+- 测试：`provider/comment/comment.provider.spec.ts`(32，用假 model 跑校验/审核/限流/隐私字段/查询/导入导出)，
   website `__tests__/comment.spec.ts`(15，渲染安全 + 接线契约)。另外用脚本对**运行中的服务**做过
   端到端验证（发表/回复/嵌套/计数/待审/放行/删除/注入 payload/PII 不泄露）。
 - 文档：`docs/features/comment.md`（两套系统对比、审核策略、反垃圾参数、安全设计、接口清单）。

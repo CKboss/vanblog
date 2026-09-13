@@ -27,6 +27,27 @@ const htmlAsText = (node: any): void => {
   node.children.forEach(htmlAsText);
 };
 
+/**
+ * 评论里不放行图片（白名单里没有 `img`：防追踪像素与钓鱼图），
+ * 但如果不处理，`![alt](data:image/png;base64,AAAA…)` 会以**字面量**渲染出来，
+ * 页面上就出现一大坨 base64。所以把 image 节点折叠成它的 alt 文本。
+ */
+const collapseImages = (node: any): void => {
+  if (!node || !Array.isArray(node.children)) {
+    return;
+  }
+  node.children = node.children.map((child: any) =>
+    child?.type === "image"
+      ? { type: "text", value: String(child.alt || child.title || "图片") }
+      : child,
+  );
+  node.children.forEach(collapseImages);
+};
+
+const collapseImagesPlugin = {
+  remark: (processor: any) => processor.use(() => (tree: any) => collapseImages(tree)),
+};
+
 const escapeRawHtmlPlugin = {
   remark: (processor: any) => processor.use(() => (tree: any) => htmlAsText(tree)),
 };
@@ -56,6 +77,7 @@ function getCommentProcessor() {
       // 原始 HTML 必须留在文本里而不是被解析成节点。
       plugins: [
         gfm({ singleTilde: false }),
+        collapseImagesPlugin,
         escapeRawHtmlPlugin,
         commentLinkGuardPlugin,
       ],

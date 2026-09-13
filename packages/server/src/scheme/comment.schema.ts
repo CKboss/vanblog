@@ -67,6 +67,18 @@ export class NativeComment extends Document {
   @Prop()
   ua: string;
 
+  /** 数据来源：'' = 本站发表，'waline' = 从 Waline 导入 */
+  @Prop({ default: '' })
+  source: string;
+
+  /** 来源系统里的主键（Waline 的 objectId）。用来做**幂等导入**：重复导入同一份不会翻倍 */
+  @Prop({ index: true, default: '' })
+  sourceId: string;
+
+  /** Waline 的 like 字段；本站暂时没有点赞 UI，只是别把数据丢了 */
+  @Prop({ default: 0 })
+  likeCount: number;
+
   @Prop({
     index: true,
     default: () => new Date(),

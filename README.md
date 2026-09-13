@@ -42,7 +42,7 @@
 | **单篇导出 `.md` / `.mdz`** | `.md` 是原样正文；`.mdz` 是 Typora 风格带图包（相对链接 + `<标题>.assets/`）；外链图片自动抓取，抓不到会保留原链接并生成说明清单；文章/草稿/编辑器未保存内容/关于页都能导 | [备份](docs/advanced/backup.md) |
 | **Apple 风格前台皮肤** | 后台「站点信息 → 界面风格」一键切换（默认开启）：纯 CSS、每条规则都带 `[data-ui="apple"]` 作用域，不影响自定义 CSS；深浅色都有令牌可调 | [配置](docs/features/config.md) |
 | **Markdown 一致性** | 编辑器预览与前台渲染对齐：front matter 不再被渲染成正文、两边共用同一份 sanitize 白名单（代码块复制按钮/行号在预览里也生效）、未知容器标题回落一致 | [Markdown](docs/features/markdown.md) |
-| **内置评论系统** | 不再必须外挂 Waline：评论存在本站 Mongo，走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/按状态与关键词筛选）。可选 `内置 / Waline / 关闭`，老站点升级默认保持 Waline。安全上比正文更严：原始 HTML 不解析、白名单不含 `img`/`iframe`/`style`、链接强制 `nofollow noopener`、蜜罐 + 同 IP 限流 + 关键词转待审、公开接口不返回邮箱/IP/UA | [评论系统](docs/features/comment.md) |
+| **内置评论系统** | 不再必须外挂 Waline：评论存在本站 Mongo，走本站接口，前台是自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台是原生管理页（审核/编辑/删除/按状态与关键词筛选）。可选 `内置 / Waline / 关闭`，老站点升级默认保持 Waline；支持**从 Waline 导出文件一键导入**（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞），以及**只导出已通过评论**的接口。整站备份自动包含评论（动态枚举集合）。安全上比正文更严：原始 HTML 不解析、白名单不含 `img`/`iframe`/`style`、链接强制 `nofollow noopener`、蜜罐 + 同 IP 限流 + 关键词转待审、公开接口不返回邮箱/IP/UA | [评论系统](docs/features/comment.md) |
 | **补齐 6 种 markdown 语法** | `==高亮==`、`X^2^` / `H~2~O`、`:smile:` 短代码、定义列表、GitHub 提示块 `> [!NOTE]`、`[[toc]]` 文内目录；编辑器与前台用**同一套插件**（按 bytemd 的 unified 10 世代选版本），不会再出现预览与发布不一致。注意：单个 `~x~` 现在是下标，删除线要写 `~~x~~` | [Markdown](docs/features/markdown.md) |
 
 ### 性能

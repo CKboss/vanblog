@@ -589,7 +589,321 @@ export class CommentProvider {
     return { deleted: res?.modifiedCount || ids.length };
   }
 
+  // ---------- 导入 / 导出 ----------
+
+  /**
+   * 从 Waline 导出的 JSON 导入评论。
+   *
+   * 接受三种形状（都是从真实导出文件里见到的）：
+   * 1. VanBlog 的 waline 备份：`{ type:'waline', tables:[...], data:{ Comment:[...] } }`
+   * 2. `{ Comment: [...] }`
+   * 3. 直接一个数组 `[...]`
+   *
+   * 设计要点：
+   * - **默认只导入 `status === 'approved'`**（正式显示的评论）；待审/垃圾要一起导就显式传
+   *   `includeNonApproved: true`，它们会按 waline 的状态映射成 pending/spam，不会混进公开列表。
+   * - **幂等**：按 `sourceId`（waline 的 objectId）去重，重复导入同一份文件不会翻倍。
+   * - 保留原始时间（`insertedAt` → `createdAt`），否则导入后所有评论都变成"刚刚"，
+   *   列表顺序和文章页的时间线全乱。
+   * - 两层结构：waline 的 `rid` 是根评论 objectId、`pid` 是直接父评论 objectId，
+   *   先建顶层拿到本站数字 id，再做 objectId → id 的映射建回复。
+   * - 每行都走与本站发表**同一套校验**（路径、昵称、邮箱、主页、内容、控制字符/双向控制符），
+   *   导入不是绕过安全的后门。
+   */
+  async importFromWaline(
+    payload: unknown,
+    options?: { includeNonApproved?: boolean; dryRun?: boolean },
+  ): Promise<{
+    total: number;
+    imported: number;
+    skippedNotApproved: number;
+    skippedDuplicate: number;
+    skippedInvalid: number;
+    dryRun: boolean;
+    errors: string[];
+  }> {
+    const rows = extractWalineComments(payload);
+    const includeNonApproved = !!options?.includeNonApproved;
+    const dryRun = !!options?.dryRun;
+    const result = {
+      total: rows.length,
+      imported: 0,
+      skippedNotApproved: 0,
+      skippedDuplicate: 0,
+      skippedInvalid: 0,
+      dryRun,
+      errors: [] as string[],
+    };
+    if (!rows.length) {
+      return result;
+    }
+
+    const existing = await this.commentModel
+      .find({ sourceId: { $in: rows.map((r) => String(r?.objectId || '')).filter(Boolean) } })
+      .exec();
+    const seen = new Set(existing.map((c: any) => String(c.sourceId)));
+
+    const statusOf = (raw: unknown): CommentStatus => {
+      const value = String(raw ?? '').toLowerCase();
+      if (value === 'approved') return 'approved';
+      if (value === 'spam') return 'spam';
+      return 'pending'; // waline 的 waiting 以及任何未知值都当待审，绝不默认放行
+    };
+
+    // 过滤 + 校验，分成顶层与回复两批
+    type Prepared = {
+      row: any;
+      path: string;
+      nick: string;
+      email: string;
+      site: string;
+      content: string;
+      status: CommentStatus;
+      createdAt: Date;
+      sourceId: string;
+      isReply: boolean;
+      rid: string;
+      pid: string;
+    };
+    const prepared: Prepared[] = [];
+    for (const row of rows) {
+      const sourceId = String(row?.objectId || '');
+      const status = statusOf(row?.status);
+      if (status !== 'approved' && !includeNonApproved) {
+        result.skippedNotApproved += 1;
+        continue;
+      }
+      if (sourceId && seen.has(sourceId)) {
+        result.skippedDuplicate += 1;
+        continue;
+      }
+      try {
+        const path = this.assertPath(row?.url);
+        const nick = this.assertNick(row?.nick || '匿名');
+        // 历史数据里邮箱格式不合法很常见（老版本 waline 不校验）。
+        // 不能因为邮箱坏了就把整条评论丢掉 —— 邮箱只在后台可见，清空即可。
+        let email = '';
+        try {
+          email = this.assertEmail(row?.mail, false);
+        } catch {
+          email = '';
+          if (result.errors.length < 20) {
+            result.errors.push(`${sourceId || '(无 objectId)'}：邮箱格式不合法，已清空后导入`);
+          }
+        }
+        // 主页地址同理：坏了就丢掉地址，不留评论
+        let site = '';
+        try {
+          site = this.assertSite(row?.link);
+        } catch {
+          site = '';
+        }
+        // data: URI 的图片（老 waline 里直接把截图塞成 base64）在评论里既不放行也不该存：
+        // 一条就几十 KB，还会被原样发给每个访客。前台渲染器本来就会把图片折叠成 alt，
+        // 所以导入时直接折叠，内容长度也就回到正常范围了。
+        const content = this.assertContent(stripDataUriImages(String(row?.comment ?? '')), 20000);
+        const createdAt = toValidDate(row?.insertedAt) || new Date();
+        prepared.push({
+          row,
+          path,
+          nick,
+          email,
+          site,
+          content,
+          status,
+          createdAt,
+          sourceId,
+          isReply: !!(row?.rid || row?.pid),
+          rid: String(row?.rid || ''),
+          pid: String(row?.pid || ''),
+        });
+        if (sourceId) {
+          seen.add(sourceId);
+        }
+      } catch (err) {
+        result.skippedInvalid += 1;
+        if (result.errors.length < 20) {
+          result.errors.push(
+            `${sourceId || '(无 objectId)'}：${(err as Error)?.message || err}`.slice(0, 200),
+          );
+        }
+      }
+    }
+
+    if (dryRun) {
+      result.imported = prepared.length;
+      return result;
+    }
+
+    // 先建顶层，建立 objectId → 本站数字 id 的映射
+    const idByObjectId = new Map<string, number>();
+    const roots = prepared.filter((p) => !p.isReply);
+    const replies = prepared.filter((p) => p.isReply);
+    for (const item of roots) {
+      const doc = await this.insertImported(item, 0, 0, '');
+      if (item.sourceId) {
+        idByObjectId.set(item.sourceId, doc.id);
+      }
+      result.imported += 1;
+    }
+    for (const item of replies) {
+      const rootKey = item.rid || item.pid;
+      const parentKey = item.pid || item.rid;
+      const rootId = idByObjectId.get(rootKey) || 0;
+      const parentId = idByObjectId.get(parentKey) || rootId;
+      const parent = parentId
+        ? await this.commentModel.findOne({ id: parentId }).exec()
+        : null;
+      const doc = await this.insertImported(item, rootId, parentId, parent?.nick || '');
+      if (item.sourceId) {
+        idByObjectId.set(item.sourceId, doc.id);
+      }
+      result.imported += 1;
+    }
+    this.logger.log(
+      `从 Waline 导入评论完成：共 ${result.total} 条，导入 ${result.imported}，` +
+        `跳过非正式 ${result.skippedNotApproved}，跳过重复 ${result.skippedDuplicate}，` +
+        `非法 ${result.skippedInvalid}`,
+    );
+    return result;
+  }
+
+  private async insertImported(
+    item: {
+      row: any;
+      path: string;
+      nick: string;
+      email: string;
+      site: string;
+      content: string;
+      status: CommentStatus;
+      createdAt: Date;
+      sourceId: string;
+    },
+    rootId: number,
+    parentId: number,
+    replyToNick: string,
+  ) {
+    const id = await this.getNewId();
+    const row = item.row || {};
+    return await this.commentModel.create({
+      id,
+      path: item.path,
+      articleId: 0,
+      rootId,
+      parentId,
+      replyToNick,
+      nick: item.nick,
+      email: item.email,
+      site: item.site,
+      content: item.content,
+      status: item.status,
+      reason: item.status === 'approved' ? '' : '从 Waline 导入',
+      isAuthor: false,
+      ip: String(row.ip || '').slice(0, 64),
+      ua: String(row.ua || '').slice(0, 300),
+      source: 'waline',
+      sourceId: item.sourceId,
+      likeCount: Number(row.like) > 0 ? Number(row.like) : 0,
+      createdAt: item.createdAt,
+      updatedAt: item.createdAt,
+    });
+  }
+
+  /**
+   * 导出评论。**默认只导出正式显示的（approved）** —— 待审 / 垃圾 / 已删除默认不导出，
+   * 需要时显式传 `status=all` 或具体状态。
+   * 导出的字段是管理视角的（含 email/ip/ua/status/source），所以这个接口在 AdminGuard 后面。
+   */
+  async exportComments(status: string = 'approved') {
+    const filter: any =
+      status === 'all'
+        ? { status: { $ne: 'deleted' } }
+        : { status: ['approved', 'pending', 'spam', 'deleted'].includes(status) ? status : 'approved' };
+    const rows = await this.commentModel.find(filter).sort({ createdAt: 1, id: 1 }).exec();
+    return rows.map((r: any) => {
+      const raw: any = r?._doc || r;
+      return {
+        id: raw.id,
+        path: raw.path,
+        articleId: raw.articleId || 0,
+        rootId: raw.rootId || 0,
+        parentId: raw.parentId || 0,
+        replyToNick: raw.replyToNick || '',
+        nick: raw.nick,
+        email: raw.email || '',
+        site: raw.site || '',
+        content: raw.content,
+        status: raw.status,
+        isAuthor: !!raw.isAuthor,
+        ip: raw.ip || '',
+        ua: raw.ua || '',
+        source: raw.source || '',
+        sourceId: raw.sourceId || '',
+        likeCount: Number(raw.likeCount) || 0,
+        createdAt: raw.createdAt,
+      };
+    });
+  }
+
   async getById(id: number) {
     return await this.commentModel.findOne({ id: Number(id) }).exec();
   }
+}
+
+
+/**
+ * 把 `![alt](data:image/png;base64,…)` 折叠成 alt 文本。
+ * base64 字符集里没有 `)`，所以 `[^)]*` 足够；同时兼容 `<data:...>` 写法。
+ */
+export function stripDataUriImages(text: string): string {
+  return String(text ?? '').replace(
+    /!\[([^\]]*)\]\(\s*<?data:[^)>]*>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/gi,
+    (_match, alt) => {
+      const label = String(alt ?? '').trim();
+      return label || '图片';
+    },
+  );
+}
+
+/** Waline 的 `insertedAt` 可能是 ISO 串、毫秒数或 `{$date: ...}`；解析不出来就返回 null */
+function toValidDate(raw: unknown): Date | null {
+  let value: any = raw;
+  if (value && typeof value === 'object' && '$date' in (value as any)) {
+    value = (value as any).$date;
+  }
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const date = new Date(value as any);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * 从各种形状的导出文件里取出 Comment 行。
+ * 只认数组，且数组里必须是对象；其它一律当空，避免把奇怪的结构塞进后续校验。
+ */
+export function extractWalineComments(payload: unknown): any[] {
+  const pickArray = (value: unknown): any[] =>
+    Array.isArray(value) ? value.filter((item) => item && typeof item === 'object') : [];
+
+  if (Array.isArray(payload)) {
+    return pickArray(payload);
+  }
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  const obj = payload as Record<string, any>;
+  // VanBlog 的 waline 备份：{ type:'waline', tables:[...], data:{ Comment:[...] } }
+  if (obj.data && typeof obj.data === 'object') {
+    const fromData = pickArray(obj.data.Comment ?? obj.data.comments ?? obj.data.comment);
+    if (fromData.length) {
+      return fromData;
+    }
+  }
+  const direct = pickArray(obj.Comment ?? obj.comments ?? obj.comment);
+  if (direct.length) {
+    return direct;
+  }
+  return [];
 }

@@ -108,6 +108,73 @@ PUT    /api/admin/comment/:id                # { status?, content?, nick?, isAut
 DELETE /api/admin/comment/:id                # 删顶层会连带删它的回复（软删）
 ```
 
+### 从 Waline 导入历史评论
+
+后台接口 `POST /api/admin/comment/import/waline`（需要管理员 token）可以直接吃 Waline 导出的 JSON，
+支持三种形状：
+
+1. VanBlog 的 waline 备份文件：`{ type:'waline', tables:[...], data:{ Comment:[...] } }`
+2. `{ Comment: [...] }`
+3. 裸数组 `[...]`
+
+行为约定：
+
+| 项 | 说明 |
+| --- | --- |
+| **默认只导入正式显示的** | 只导 `status === 'approved'`；waline 的 `waiting` / `spam` 默认跳过。要一起导就传 `{ payload, includeNonApproved: true }`，它们会映射成 `pending` / `spam`，**不会**混进公开列表 |
+| **幂等** | 按 waline 的 `objectId`（存成 `sourceId`）去重，同一份文件重复导入不会翻倍 |
+| **保留原始时间** | `insertedAt` → `createdAt`，导入后时间线顺序不变（否则全变成"刚刚"） |
+| **保留点赞数** | waline 的 `like` → `likeCount`（本站暂时没有点赞 UI，只是不丢数据） |
+| **两层结构** | waline 的 `rid`（根）/ `pid`（直接父级）映射成本站的数字 id，回复关系保留 |
+| **走同一套校验** | 导入不是绕过后门：路径、昵称、内容、控制字符、双向控制符一样要过 |
+| **容错** | 历史数据里邮箱格式不合法很常见 —— 只清空邮箱，**不丢整条**评论；主页地址坏了同理 |
+| **data: 图片会折叠** | 老 waline 里把截图直接塞成 base64 的评论（一条几十 KB），导入时折叠成 alt 文本；反正评论白名单里没有 `img`，前台本来也只会显示字面量 |
+| **不要求文章存在** | `/link`、`/about` 这类页面的历史评论也能进来（本站发表评论才要求文章真实存在） |
+| **dryRun** | 传 `{ payload, dryRun: true }` 只统计不写库，先看看会导入多少条 |
+
+```bash
+# 先空跑看看
+curl -X POST "$BASE/api/admin/comment/import/waline" -H "token: $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{"payload": $(cat waline.json), "dryRun": true}"
+# 正式导入
+curl -X POST "$BASE/api/admin/comment/import/waline" -H "token: $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{"payload": $(cat waline.json)}"
+```
+
+返回：`{ total, imported, skippedNotApproved, skippedDuplicate, skippedInvalid, dryRun, errors[] }`。
+
+::: tip 导入后记得切换模式
+
+导入只是把数据写进内置评论表；前台要显示，还得在「评论设置」里把模式切到**内置评论**。
+反过来，切回 Waline 也随时可以 —— 两边数据互不覆盖。
+
+:::
+
+### 导出评论
+
+`GET /api/admin/comment/export`（需要管理员 token）：
+
+- **默认只导出正式显示的（`status=approved`）**，待审 / 垃圾 / 已删除不导出；
+- 要全部就传 `?status=all`，也可以传 `pending` / `spam` / `deleted` 单独导某一类；
+- 加 `?download=1` 会带附件头，浏览器直接存成 `vanblog-comments-<status>-<时间>.json`；
+- 导出是**管理视角**的字段（含 email / ip / ua / status / source / sourceId），所以这个接口在管理员鉴权后面，不要把它暴露到前台。
+
+### 备份会不会带上评论？
+
+会。整站备份（`/api/admin/backup/full/export` 或 `scripts/vanblog.sh backup`）是按
+`db.collections()` **动态枚举**所有集合的，所以内置评论的 `nativecomments` 自动就在里面；
+同时 waline 那个库也会一起备（`waline.Comment` / `waline.Users`），静态目录一起打包。
+清单（`*.manifest.json`）里能看到每个集合的条数与字节数。
+
+::: warning 备份与导出的区别
+
+**备份包含所有状态**的评论（含待审 / 垃圾 / 已删除）—— 备份就该是完整的，否则恢复之后数据就少了。
+只想要"正式显示的评论"用的是上面的 **export** 接口（默认 `approved`）。
+
+:::
+
 ### 相关环境变量
 
 评论本身不需要额外环境变量。选 Waline 时它会照旧用 `waline.db` 配置与站点信息里的 SMTP 设置。

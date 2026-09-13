@@ -54,6 +54,15 @@ describe("评论内容渲染：轻量 markdown + 严格白名单", () => {
     expect(html).toContain('target="_blank"');
   });
 
+  it("图片语法折叠成 alt 文本（不会吐出一大坨 base64）", () => {
+    const html = renderCommentHtml(
+      "看图 ![截图](data:image/png;base64,AAAAAA) 结束",
+    );
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("base64");
+    expect(html).toContain("截图");
+  });
+
   it("javascript: 链接会被 sanitize 掉", () => {
     const html = renderCommentHtml("[x](javascript:alert(1))");
     expect(html).not.toContain("javascript:");
