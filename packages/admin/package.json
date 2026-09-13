@@ -6,6 +6,7 @@
   "scripts": {
     "analyze": "cross-env NODE_OPTIONS=\"--max_old_space_size=4096\" ANALYZE=1 umi build",
     "build": "cross-env NODE_OPTIONS=\"--openssl-legacy-provider --max_old_space_size=4096\" umi build",
+    "build:lowmem": "cross-env NODE_OPTIONS=\"--openssl-legacy-provider --max_old_space_size=1536\" umi build",
     "deploy": "npm run build && npm run gh-pages",
     "dev": "cross-env NODE_OPTIONS=--openssl-legacy-provider npm run start:dev",
     "gh-pages": "gh-pages -d dist",

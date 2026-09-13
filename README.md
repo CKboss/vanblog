@@ -139,6 +139,10 @@
 | `VANBLOG_DISABLE_IP_GEO` | 空 | 设 `true` 关闭登录日志的 IP 归属地查询（不再把访客 IP 发给第三方） |
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | 设 `true` 恢复「任何域名都批准按需证书」（多域名/CDN 场景） |
 | `VANBLOG_REPO` / `VANBLOG_BRANCH` / `VANBLOG_SRC_DIR` / `VANBLOG_IMAGE_TAG` | `CKboss/vanblog` / `dev/dsh` / `<base>/src` / `vanblog:dev-dsh` | 一键脚本的源码来源与本地镜像 tag |
+| `VANBLOG_BUILD_MODE` | `auto` | 镜像构建档位：`auto` 按实测 CPU/内存决定；`fast` 并发构建（≥7GB 且 ≥4 核）；`balanced` 串行；`lowmem` 串行 + admin 堆降到 1536MB |
+| `VANBLOG_FORCE_BUILD` | `false` | 可用内存 <1.8GB 时脚本会**直接劝退**（源码构建几乎必然 OOM）；设 `true` 强行构建 |
+| `VANBLOG_NPM_REGISTRY` | 空（自动探测） | 构建用的 pnpm 源。留空时脚本会实测 `npmmirror` 与 `npmjs` 的延迟，取更快的那个 |
+| `VAN_BLOG_ADMIN_BUILD_SCRIPT` | `build` | Dockerfile 的构建参数：admin 用 `build`（堆 4096MB）还是 `build:lowmem`（1536MB） |
 
 ### 版本号（页脚与后台「关于」显示的那个）
 
@@ -201,7 +205,7 @@
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **610** 用例（1 个既有用例需联网拉字体，离线必失败） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **57 文件 / 543** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **82 套件 / 326** 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **9 文件 / 339** 条断言 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **9 文件 / 394** 条断言 |
 
 三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 

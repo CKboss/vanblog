@@ -1868,14 +1868,90 @@ cd packages/admin && ../../../.tools/node_modules/.bin/pnpm build   # 约 4 分�
 补封面弹窗、关于页、编辑器字体）—— 以前只跑过 dev（MFSU）与单元测试。
 ⚠️ 跑完记得 `rm -rf packages/admin/dist`（在 .gitignore 里，但别留着占地方）。
 
-### 7.25 测试基线（本分支最后一次全量运行的结果）
+### 7.25 低配机器自适应构建 + pnpm 源自动选择
+
+两个都是"源码构建在真机上跑不起来 / 跑得太慢"的问题。
+
+**1. 低配机器：`docker build` 默认并发跑三个重 stage**
+
+BuildKit 会**并发**构建互不依赖的 stage：`admin_builder`（umi build，峰值 1.5-2GB）、
+`server_builder`（nest build，~1GB）、`website_builder`（next build，2-4GB）。
+在 1C2G 的小机器上三个一起跑必然 OOM，而且失败点在第 10-20 分钟，排查成本极高。
+
+`scripts/vanblog.sh` 现在构建前先量本机（`detect_host_resources`）：
+CPU 用 `nproc`（比 `/proc/cpuinfo` 更接近真实可用），内存用 `/proc/meminfo` 的
+**`MemAvailable`**（含可回收 cache，比 `MemFree` 靠谱），拿不到再退 `MemTotal` / `free -m`；
+**docker 自己有配额时以配额为准**（`docker info --format '{{.MemTotal}}'`，Docker Desktop
+默认只给 2GB，宿主机 32GB 也没用）。
+
+然后 `classify_build_profile <cpus> <mem_mb>`（**纯函数，可喂假数据测试**）定档：
+
+| 条件 | 档位 | 行为 |
+| --- | --- | --- |
+| 可用内存 <1.8GB | 劝退 | 不跑 `docker build`，直接返回 1 并给出两条出路（见下） |
+| <3.5GB | `lowmem` | 串行 + admin 用 `build:lowmem`（堆 1536MB） |
+| CPU <2 | `balanced` | 串行（并发只会互相抢 CPU，不会更快），admin 满堆 |
+| <7GB 或 <4 核 | `balanced` | 串行 |
+| 其余 | `fast` | 并发（最快） |
+
+**串行怎么实现**：BuildKit 没有暴露"限制 stage 并发"的开关，所以改成**分步构建** ——
+先 `docker build --target admin_builder` / `server_builder` / `website_builder` 各跑一次
+（一次只有一个重活），最后一次全量 `docker build` 三步全部命中缓存、只组装 runner。
+⚠️ 中间步骤**不要 `-t`**：打了 tag 会多留三个 1-2GB 的镜像，小机器磁盘吃不消；
+不打 tag 层缓存照样生效。
+
+**劝退时给两条出路**（不是简单报错）：
+`VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh`（用官方镜像，能跑起来但不含本分支改动）
+或 `VANBLOG_FORCE_BUILD=true ./vanblog.sh`（我知道会失败，还是要试）。
+⚠️ 内存探测失败（返回 0）时**不劝退**，按保守的串行档走 —— 宁可慢，不要莫名其妙不给装。
+
+**admin 堆上限怎么传进去**：不能靠 Dockerfile 的 `ENV NODE_OPTIONS`（cross-env 会整体替换，
+见 §7.24），也不要用 `cross-env-shell` 拼 `${VAR:-default}`（实测三层引号传递后输出是空的）。
+最终方案是**换脚本名**：`package.json` 里放两档
+`build`（`--max_old_space_size=4096`）与 `build:lowmem`（`1536`），
+Dockerfile 用 `ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build` + `RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}`，
+脚本按档位传参 —— 全程没有任何引号嵌套问题。
+
+**2. pnpm 源自动选择**
+
+以前 `admin_builder` 那层硬编码 `registry.npmjs.org`，其余三层用 `npmmirror` ——
+国内直连 npmjs 只有 200-350KB/s，这就是 admin 的 `pnpm i` 跑了 563 秒还没完、
+而 website 那层只用 138 秒的原因（实测本机：npmmirror 207ms vs npmjs 1965ms，差 9.5 倍）。
+
+现在四层统一用 `ARG VAN_BLOG_NPM_REGISTRY`（默认 npmmirror），由脚本探测后传入：
+`detect_npm_registry` 拿一个真实存在的小包（`/cross-env`）当探针，各 8 秒超时比 `time_total`，
+取更快的；某个源不可达就用另一个；**两个都不可达**（构建机不通外网）就用默认值并明确提示。
+用户可以用 `VANBLOG_NPM_REGISTRY=<url>` 直接指定（此时不探测）。
+海外机器上 npmjs 更快，探测会自动选它 —— 别把它写死成 npmmirror。
+
+⚠️ **BuildKit 的 ARG 作用域**：`FROM` 之前声明的 ARG 是"全局"的，但**在具体 stage 里要用必须
+再 `ARG <name>` 一次**，否则取到空值（表现是 `pnpm config set registry  -g` 然后回退默认源，
+很难发现）。四个 stage 都补了，守卫测试会数"用了变量的 stage 数 == 重新声明过的 stage 数"。
+
+**测试**（`scripts/tests/vanblog-source-install.test.sh` 从 43 条涨到 92 条）：
+八种 CPU/内存组合的档位判定、三种手动档位、资源探测的取值形状、
+registry 探测的四种情形（npmmirror 快 / npmjs 快 / 一个不可达 / 都不可达）+ 用户指定、
+并发与串行两种模式的 docker 命令（串行必须正好 4 次 build、三个 `--target`）、
+劝退路径（返回 1、一次 docker build 都不跑、提示里给出两条出路、`VANBLOG_FORCE_BUILD=true` 时照跑并提醒 OOM）。
+`dockerfile-patches.test.sh` 从 21 涨到 30 条（两个新 ARG 的默认值、四个 stage 都重新声明过 ARG、
+admin 用 `${VAN_BLOG_ADMIN_BUILD_SCRIPT}`、两档脚本都存在且都带堆上限）。
+
+⚠️ 写 shell 测试踩到两个坑，记一下：
+- **别把新用例追加到文件末尾** —— 这些测试文件的结尾是 `echo passed=… ; exit 0`，
+  追加在后面永远不会执行（我第一次就是这么写的，92 条里只跑了 45 条还以为过了）。
+- **别用 `OUT="$(fn)"` 断言函数设置的全局变量** —— 命令替换是子 shell，赋值会丢；
+  要断言就 `fn >"$LOG" 2>&1` 然后再看变量。
+- `source_script` 里要**把新加的环境变量一起 unset**，否则上一个用例设的
+  `VANBLOG_BUILD_SERVER` 会漏到下一个用例（我这次就被它坑了一条断言）。
+
+### 7.26 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 339 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 394 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -1885,7 +1961,7 @@ cd packages/admin && ../../../.tools/node_modules/.bin/pnpm build   # 约 4 分�
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.25 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.26 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

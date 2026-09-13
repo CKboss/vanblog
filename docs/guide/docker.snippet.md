@@ -15,7 +15,21 @@
    ```bash
    git clone --depth 1 -b dev/dsh https://github.com/CKboss/vanblog.git
    cd vanblog
-   docker build --build-arg VAN_BLOG_VERSIONS=dev/dsh -t vanblog:dev-dsh .
+   # 可选的构建参数：
+   #   VAN_BLOG_VERSIONS             版本号标签（后台「关于」与页脚显示），如 dev/dsh@1a2b3c4
+   #   VAN_BLOG_BUILD_SERVER         构建期的 server 地址，**必须是个合法 URL**（默认 http://127.0.0.1:3000）
+   #   VAN_BLOG_NPM_REGISTRY         pnpm 源（默认 https://registry.npmmirror.com；海外机器可换 npmjs）
+   #   VAN_BLOG_ADMIN_BUILD_SCRIPT   admin 构建档位：build（堆 4096MB）或 build:lowmem（1536MB，小内存机器用）
+   docker build \
+     --build-arg VAN_BLOG_VERSIONS=dev/dsh \
+     --build-arg VAN_BLOG_ADMIN_BUILD_SCRIPT=build \
+     -t vanblog:dev-dsh .
+
+   # 内存小于 6GB 的机器建议**串行**构建（一次只跑一个重活），否则三个 stage 并发会 OOM：
+   for stage in admin_builder server_builder website_builder; do
+     docker build --target "$stage" . || break
+   done
+   docker build -t vanblog:dev-dsh .   # 前三步命中缓存，只组装最终镜像
    ```
 
 :::

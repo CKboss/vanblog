@@ -90,6 +90,8 @@ source_script() {
   export VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
   export VANBLOG_DATA_PATH="${TEST_DIR}/vanblog/data"
   unset VANBLOG_USE_UPSTREAM_IMAGE VANBLOG_REPO VANBLOG_BRANCH VANBLOG_SRC_DIR VANBLOG_IMAGE_TAG
+  # 构建相关的新变量也要清：用例之间不能互相污染
+  unset VANBLOG_BUILD_SERVER VANBLOG_BUILD_MODE VANBLOG_FORCE_BUILD VANBLOG_NPM_REGISTRY
   # shellcheck disable=SC1090
   source "${SCRIPT}"
 }
@@ -135,7 +137,9 @@ assert_eq "$?" "0" "构建镜像成功"
 # VAN_BLOG_BUILD_SERVER 现在是**必传**的：Dockerfile 把它 ARG → ENV VAN_BLOG_SERVER_URL，
 # 而前台 utils/loadConfig.ts 在模块顶层 new URL(它)；不传就是空串，next build 会在
 # "Collecting page data" 阶段抛 ERR_INVALID_URL（曾经真的这么炸过一次）。
-assert_file_contains "${CMDLOG}" "build --build-arg VAN_BLOG_VERSIONS=dev/dsh-abc1234 --build-arg VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000 -t vanblog:dev-dsh" "构建参数带分支、commit 与默认 server 地址"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_VERSIONS=dev/dsh-abc1234" "构建参数带分支与 commit"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000" "默认 server 地址"
+assert_file_contains "${CMDLOG}" "-t vanblog:dev-dsh" "镜像 tag"
 
 # --- 用户显式指定 server 地址时以用户为准 ---
 setup_case
@@ -241,6 +245,136 @@ if cmp -s "${SCRIPT}" "${PUBLIC_SCRIPT}"; then
 else
   fail "scripts/vanblog.sh 与 docs 公开副本一致"
 fi
+
+# 这个文件原来的断言助手没有"正则匹配"，补一个（只在本段用）
+assert_match() {
+  local value="$1" pattern="$2" label="$3"
+  if [[ "${value}" =~ ${pattern} ]]; then
+    pass "${label}"
+  else
+    fail "${label} (value '${value}' !~ ${pattern})"
+  fi
+}
+
+# --- 低配机器自适应：档位判定（纯函数，喂假数据） ---
+setup_case
+source_script
+classify_build_profile 1 1024
+assert_eq "${VANBLOG_BUILD_VIABLE}" "false" "1核1G：判定为不该源码构建"
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "1核1G：串行"
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build:lowmem" "1核1G：admin 用 1536MB 堆"
+classify_build_profile 1 3000
+assert_eq "${VANBLOG_BUILD_VIABLE}" "true" "1核3G：可行"
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build:lowmem" "1核3G：admin 降堆"
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "1核3G：串行"
+classify_build_profile 1 16000
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build" "1核16G：内存够就用满堆"
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "1核16G：仍然串行（并发只会抢 CPU）"
+classify_build_profile 4 6000
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "4核6G：串行（三个 stage 会互相挤内存）"
+classify_build_profile 8 24000
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "true" "8核24G：并发（最快）"
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build" "8核24G：admin 满堆"
+classify_build_profile 2 0
+assert_eq "${VANBLOG_BUILD_VIABLE}" "true" "拿不到内存信息时不劝退（宁可试一次）"
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "拿不到内存信息时保守串行"
+
+# --- 手动档位优先于自动判定 ---
+setup_case
+source_script
+VANBLOG_BUILD_MODE="lowmem"
+choose_build_profile
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build:lowmem" "VANBLOG_BUILD_MODE=lowmem 生效"
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "lowmem 一定串行"
+VANBLOG_BUILD_MODE="fast"
+choose_build_profile
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "true" "VANBLOG_BUILD_MODE=fast 生效"
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build" "fast 用满堆"
+VANBLOG_BUILD_MODE="balanced"
+choose_build_profile
+assert_eq "${VANBLOG_BUILD_PARALLEL}" "false" "balanced 串行"
+assert_eq "${VANBLOG_ADMIN_BUILD_SCRIPT}" "build" "balanced 用满堆"
+assert_contains "${VANBLOG_BUILD_REASON}" "手动指定" "手动档位要在日志里说明是手动指定"
+
+# --- 资源探测：真跑一次，值必须合理 ---
+setup_case
+source_script
+detect_host_resources
+assert_match "${VANBLOG_HOST_CPUS}" '^[1-9][0-9]*$' "探测到 CPU 核数（${VANBLOG_HOST_CPUS}）"
+assert_match "${VANBLOG_HOST_MEM_MB}" '^[0-9][0-9]*$' "探测到可用内存 MB（${VANBLOG_HOST_MEM_MB}）"
+
+# --- pnpm 源自动探测 ---
+setup_case
+source_script
+curl() { local u="${@: -1}"; case "$u" in *npmmirror*) echo "0.420" ;; *npmjs*) echo "1.870" ;; esac; }
+VANBLOG_NPM_REGISTRY=""
+detect_npm_registry >"${TEST_DIR}/r1.log" 2>&1
+assert_eq "${VANBLOG_NPM_REGISTRY}" "https://registry.npmmirror.com" "npmmirror 更快时选 npmmirror"
+curl() { local u="${@: -1}"; case "$u" in *npmmirror*) echo "2.500" ;; *npmjs*) echo "0.300" ;; esac; }
+VANBLOG_NPM_REGISTRY=""
+detect_npm_registry >/dev/null 2>&1
+assert_eq "${VANBLOG_NPM_REGISTRY}" "https://registry.npmjs.org" "npmjs 更快时选 npmjs（海外机器）"
+curl() { local u="${@: -1}"; case "$u" in *npmmirror*) return 1 ;; *npmjs*) echo "0.800" ;; esac; }
+VANBLOG_NPM_REGISTRY=""
+detect_npm_registry >/dev/null 2>&1
+assert_eq "${VANBLOG_NPM_REGISTRY}" "https://registry.npmjs.org" "npmmirror 不可达时退回 npmjs"
+curl() { return 1; }
+VANBLOG_NPM_REGISTRY=""
+# ⚠️ 不能用 OUT="$(detect_npm_registry)"：命令替换是子 shell，函数里对全局变量的赋值会丢
+detect_npm_registry >"${TEST_DIR}/reg.log" 2>&1
+assert_eq "${VANBLOG_NPM_REGISTRY}" "https://registry.npmmirror.com" "两个源都不可达时用默认值"
+assert_file_contains "${TEST_DIR}/reg.log" "都探测失败" "两个源都不可达时要说清楚"
+VANBLOG_NPM_REGISTRY="https://my.registry.example/"
+detect_npm_registry >"${TEST_DIR}/reg2.log" 2>&1
+assert_eq "${VANBLOG_NPM_REGISTRY}" "https://my.registry.example/" "用户显式指定时不探测"
+assert_file_contains "${TEST_DIR}/reg2.log" "VANBLOG_NPM_REGISTRY 指定" "日志里说明是用户指定"
+
+# --- 构建命令：四个 build-arg 都要传，串行模式要分四步 ---
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_SRC_COMMIT="abc1234"
+VANBLOG_BUILD_MODE="fast"
+VANBLOG_NPM_REGISTRY="https://registry.example/"
+build_vanblog_image >/dev/null 2>&1
+assert_eq "$?" "0" "并发模式构建成功"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_NPM_REGISTRY=https://registry.example/" "传入自动选出的 pnpm 源"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_ADMIN_BUILD_SCRIPT=build" "并发模式用满堆脚本"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_BUILD_SERVER=http://127.0.0.1:3000" "仍然传 server 地址"
+assert_not_contains "$(cat "${CMDLOG}")" "--target" "并发模式不分步"
+
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_SRC_COMMIT="abc1234"
+VANBLOG_BUILD_MODE="lowmem"
+VANBLOG_NPM_REGISTRY="https://registry.example/"
+OUT="$(build_vanblog_image 2>&1)"
+assert_eq "$?" "0" "串行模式构建成功"
+assert_file_contains "${CMDLOG}" "--target admin_builder" "串行：先单独构建 admin"
+assert_file_contains "${CMDLOG}" "--target server_builder" "串行：再单独构建 server"
+assert_file_contains "${CMDLOG}" "--target website_builder" "串行：再单独构建 website"
+assert_file_contains "${CMDLOG}" "--build-arg VAN_BLOG_ADMIN_BUILD_SCRIPT=build:lowmem" "串行低内存档用 1536MB 堆"
+assert_eq "$(grep -c 'docker build' "${CMDLOG}")" "4" "串行模式一共四次 docker build（三个 target + 一次组装）"
+assert_contains "${OUT}" "串行" "日志里说明走的是串行"
+
+# --- 内存太小时要劝退，并给出两条出路 ---
+setup_case
+source_script
+clone_or_update_source >/dev/null 2>&1
+VANBLOG_BUILD_MODE=""
+VANBLOG_FORCE_BUILD="false"
+detect_host_resources() { VANBLOG_HOST_CPUS=1; VANBLOG_HOST_MEM_MB=1024; }
+OUT="$(build_vanblog_image 2>&1)"
+assert_eq "$?" "1" "1G 内存下直接返回失败，不浪费 20 分钟"
+assert_contains "${OUT}" "VANBLOG_USE_UPSTREAM_IMAGE=true" "劝退时给出「用官方镜像」这条路"
+assert_contains "${OUT}" "VANBLOG_FORCE_BUILD=true" "劝退时给出「强行构建」这条路"
+assert_file_not_contains "${CMDLOG}" "build" "劝退时一次 docker build 都不该跑"
+
+VANBLOG_FORCE_BUILD="true"
+OUT="$(build_vanblog_image 2>&1)"
+assert_eq "$?" "0" "VANBLOG_FORCE_BUILD=true 时照跑"
+assert_contains "${OUT}" "OOM" "强行构建时要提醒可能 OOM"
 
 echo
 echo "passed=${PASS} failed=${FAIL}"

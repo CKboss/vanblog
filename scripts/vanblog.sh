@@ -27,6 +27,28 @@ VANBLOG_USE_UPSTREAM_IMAGE="${VANBLOG_USE_UPSTREAM_IMAGE:-false}"
 # 构建时写进镜像的 VAN_BLOG_VERSION（后台「关于」里能看到），形如 dev/dsh@1a2b3c4
 VANBLOG_SRC_COMMIT=""
 
+# ── 构建资源自适应（低配机器也能装）────────────────────────────────────
+# docker build 默认会**并发**跑 admin / server / website 三个 stage，
+# 每个都是重活（umi build 峰值 1.5-2GB、next build 2-4GB）。在 1C2G 的小机器上
+# 三个一起跑必然 OOM，而且报错点在很后面（构建 10 分钟之后），排查成本极高。
+# 所以构建前先量一量本机，再决定并发/串行与堆上限。
+#   VANBLOG_BUILD_MODE=auto|fast|balanced|lowmem   默认 auto（按实测资源决定）
+#     fast     并发构建，admin 堆上限 4096MB（≥7GB 内存且 ≥4 核）
+#     balanced 串行构建，admin 堆上限 4096MB（3-7GB，或核少但内存够）
+#     lowmem   串行构建，admin 堆上限 1536MB（<3.5GB 内存）
+#   VANBLOG_FORCE_BUILD=true   内存太小本来会劝退，加这个就照跑（后果自负）
+#   VANBLOG_NPM_REGISTRY=<url> 留空则自动探测（见 detect_npm_registry）
+VANBLOG_BUILD_MODE="${VANBLOG_BUILD_MODE:-auto}"
+VANBLOG_FORCE_BUILD="${VANBLOG_FORCE_BUILD:-false}"
+VANBLOG_NPM_REGISTRY="${VANBLOG_NPM_REGISTRY:-}"
+# 下面几个由探测函数填，只用于日志与测试
+VANBLOG_HOST_CPUS=""
+VANBLOG_HOST_MEM_MB=""
+VANBLOG_BUILD_PARALLEL="true"
+VANBLOG_ADMIN_BUILD_SCRIPT="build"
+VANBLOG_BUILD_VIABLE="true"
+VANBLOG_BUILD_REASON=""
+
 # Ordered fallbacks: docs host (historical default), then GitHub raw, then jsDelivr.
 # 本分支的 raw 地址排在最前面：模板里有本分支新增的可选环境变量注释，
 # 上游那份没有；下载不到再依次退回上游文档站 / GitHub / jsDelivr。
@@ -262,6 +284,124 @@ clone_or_update_source() {
   return 0
 }
 
+# 量一量本机：CPU 核数与可用内存（MB）。docker 自己有配额时以配额为准。
+detect_host_resources() {
+  local cpus mem_mb docker_mem_mb
+  cpus="$(nproc 2>/dev/null || true)"
+  if [[ -z "${cpus}" && -r /proc/cpuinfo ]]; then
+    cpus="$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"
+  fi
+  VANBLOG_HOST_CPUS="${cpus:-1}"
+
+  mem_mb=0
+  if [[ -r /proc/meminfo ]]; then
+    # MemAvailable 比 MemFree 靠谱（含可回收的 page cache）
+    mem_mb="$(awk '/^MemAvailable:/ {printf "%d", $2/1024; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+    if [[ -z "${mem_mb}" || "${mem_mb}" -eq 0 ]]; then
+      mem_mb="$(awk '/^MemTotal:/ {printf "%d", $2/1024; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+    fi
+  elif command -v free >/dev/null 2>&1; then
+    mem_mb="$(free -m 2>/dev/null | awk '/^Mem:/ {print $7}')"
+  fi
+
+  # Docker Desktop / 有 cgroup 配额时，容器能用的内存比宿主机小得多
+  docker_mem_mb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)"
+  if [[ "${docker_mem_mb}" =~ ^[0-9]+$ ]] && (( docker_mem_mb > 0 )); then
+    docker_mem_mb=$((docker_mem_mb / 1024 / 1024))
+    if (( docker_mem_mb < mem_mb )); then
+      mem_mb="${docker_mem_mb}"
+    fi
+  fi
+  VANBLOG_HOST_MEM_MB="${mem_mb:-0}"
+}
+
+# 纯判定：给定核数与可用内存，决定并发/串行、admin 用哪档堆、以及要不要劝退。
+# 拆成独立函数是为了能被测试喂假数据（1 核 1GB 这种场景本机造不出来）。
+classify_build_profile() {
+  local cpus="${1:-1}" mem="${2:-0}"
+  VANBLOG_BUILD_VIABLE="true"
+  if (( mem > 0 && mem < 1800 )); then
+    # 1.8GB 以下：umi/next 的生产构建各自都要 1GB 以上，基本没有成功可能。
+    # 直接劝退比让人等 20 分钟再失败好（VANBLOG_FORCE_BUILD=true 可以强行继续）。
+    VANBLOG_BUILD_VIABLE="false"
+    VANBLOG_BUILD_PARALLEL="false"; VANBLOG_ADMIN_BUILD_SCRIPT="build:lowmem"
+    VANBLOG_BUILD_REASON="可用内存仅 ${mem}MB：源码构建几乎必然 OOM"
+  elif (( mem > 0 && mem < 3500 )); then
+    VANBLOG_BUILD_PARALLEL="false"; VANBLOG_ADMIN_BUILD_SCRIPT="build:lowmem"
+    VANBLOG_BUILD_REASON="可用内存 ${mem}MB（<3.5GB）：串行构建 + admin 堆降到 1536MB"
+  elif (( cpus < 2 )); then
+    VANBLOG_BUILD_PARALLEL="false"; VANBLOG_ADMIN_BUILD_SCRIPT="build"
+    VANBLOG_BUILD_REASON="只有 ${cpus} 核：串行构建（并发只会互相抢 CPU，不会更快）"
+  elif (( mem < 7000 || cpus < 4 )); then
+    VANBLOG_BUILD_PARALLEL="false"; VANBLOG_ADMIN_BUILD_SCRIPT="build"
+    VANBLOG_BUILD_REASON="可用内存 ${mem}MB / ${cpus} 核：串行构建，避免三个 stage 互相挤内存"
+  else
+    VANBLOG_BUILD_PARALLEL="true"; VANBLOG_ADMIN_BUILD_SCRIPT="build"
+    VANBLOG_BUILD_REASON="可用内存 ${mem}MB / ${cpus} 核：并发构建（最快）"
+  fi
+}
+
+# 按实测资源选档位；VANBLOG_BUILD_MODE 不是 auto 时听用户的。
+choose_build_profile() {
+  detect_host_resources
+  local cpus="${VANBLOG_HOST_CPUS}" mem="${VANBLOG_HOST_MEM_MB}"
+
+  VANBLOG_BUILD_VIABLE="true"
+  if [[ "${VANBLOG_BUILD_MODE}" == "fast" ]]; then
+    VANBLOG_BUILD_PARALLEL="true"; VANBLOG_ADMIN_BUILD_SCRIPT="build"
+    VANBLOG_BUILD_REASON="VANBLOG_BUILD_MODE=fast（手动指定：并发构建，admin 堆 4096MB）"
+  elif [[ "${VANBLOG_BUILD_MODE}" == "balanced" ]]; then
+    VANBLOG_BUILD_PARALLEL="false"; VANBLOG_ADMIN_BUILD_SCRIPT="build"
+    VANBLOG_BUILD_REASON="VANBLOG_BUILD_MODE=balanced（手动指定：串行构建，admin 堆 4096MB）"
+  elif [[ "${VANBLOG_BUILD_MODE}" == "lowmem" ]]; then
+    VANBLOG_BUILD_PARALLEL="false"; VANBLOG_ADMIN_BUILD_SCRIPT="build:lowmem"
+    VANBLOG_BUILD_REASON="VANBLOG_BUILD_MODE=lowmem（手动指定：串行构建，admin 堆 1536MB）"
+  else
+    classify_build_profile "${cpus}" "${mem}"
+  fi
+}
+
+# 实测哪个 pnpm 源快就用哪个：拿一个真实存在的小包当探针，比 time_total。
+# 以前 admin 那层在 Dockerfile 里硬编码 registry.npmjs.org，国内直连只有 200-350KB/s，
+# 是它 `pnpm i` 比 website 层慢 4 倍的原因；而写死 npmmirror 对海外用户又未必最快。
+detect_npm_registry() {
+  if [[ -n "${VANBLOG_NPM_REGISTRY}" ]]; then
+    echo -e "> pnpm 源：${yellow}${VANBLOG_NPM_REGISTRY}${plain}（VANBLOG_NPM_REGISTRY 指定）"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    VANBLOG_NPM_REGISTRY="https://registry.npmmirror.com"
+    echo -e "> pnpm 源：${yellow}${VANBLOG_NPM_REGISTRY}${plain}（没有 curl，用默认值）"
+    return 0
+  fi
+  local candidates=("https://registry.npmmirror.com" "https://registry.npmjs.org")
+  local url seconds ms best="" best_ms=-1
+  echo -e "> 探测 pnpm 源延迟（各 8 秒超时）："
+  for url in "${candidates[@]}"; do
+    seconds="$(curl -sS -o /dev/null -m 8 -w '%{time_total}' "${url}/cross-env" 2>/dev/null || true)"
+    if [[ -z "${seconds}" ]]; then
+      echo -e "    ${url} -> ${red}不可达${plain}"
+      continue
+    fi
+    ms="$(awk -v x="${seconds}" 'BEGIN { printf "%d", x * 1000 }')"
+    echo -e "    ${url} -> ${ms}ms"
+    if (( best_ms < 0 || ms < best_ms )); then
+      best_ms="${ms}"; best="${url}"
+    fi
+  done
+  if [[ -z "${best}" ]]; then
+    best="https://registry.npmmirror.com"
+    best_ms=""
+    echo -e "${yellow}  两个源都探测失败（可能是构建机不通外网），用默认值 ${best}${plain}"
+  fi
+  VANBLOG_NPM_REGISTRY="${best}"
+  if [[ -n "${best_ms}" ]]; then
+    echo -e "> pnpm 源：${yellow}${VANBLOG_NPM_REGISTRY}${plain}（实测 ${best_ms}ms）"
+  else
+    echo -e "> pnpm 源：${yellow}${VANBLOG_NPM_REGISTRY}${plain}（未实测）"
+  fi
+}
+
 build_vanblog_image() {
   if ! command -v docker >/dev/null 2>&1; then
     echo -e "${red}未找到 docker，无法构建镜像${plain}"
@@ -272,18 +412,52 @@ build_vanblog_image() {
     return 1
   fi
 
+  choose_build_profile
+  echo -e "> 本机：${yellow}${VANBLOG_HOST_CPUS} 核 / ${VANBLOG_HOST_MEM_MB}MB 可用内存${plain}"
+  echo -e "> 构建档位：${yellow}${VANBLOG_BUILD_PARALLEL:+并发}${plain}${VANBLOG_BUILD_REASON}"
+  if [[ "${VANBLOG_BUILD_VIABLE}" != "true" ]]; then
+    if [[ "${VANBLOG_FORCE_BUILD}" != "true" ]]; then
+      echo -e "${red}${VANBLOG_BUILD_REASON}${plain}"
+      echo -e "${red}源码构建在这个配置上基本不可能成功（umi 与 next 的生产构建各自都要 1GB 以上）。${plain}"
+      echo -e "两条路："
+      echo -e "  1) ${green}VANBLOG_USE_UPSTREAM_IMAGE=true $0${plain}   # 用官方镜像（不含本分支改动，但能跑起来）"
+      echo -e "  2) ${green}VANBLOG_FORCE_BUILD=true $0${plain}          # 我知道会失败，还是想试"
+      echo -e "     （也可以换一台 ≥2GB 内存的机器构建，再把镜像 save/load 过去）"
+      return 1
+    fi
+    echo -e "${yellow}按 VANBLOG_FORCE_BUILD=true 继续，但很可能在 admin 或 website 构建时 OOM${plain}"
+  fi
+  detect_npm_registry
+
   local version_arg="${VANBLOG_BRANCH}-${VANBLOG_SRC_COMMIT:-unknown}"
-  echo -e "> 构建镜像 ${yellow}${VANBLOG_IMAGE_TAG}${plain}（首次约 5-20 分钟，取决于机器与网络）"
   # VAN_BLOG_BUILD_SERVER 必须传：Dockerfile 里它是 ARG → ENV VAN_BLOG_SERVER_URL，
   # 而前台 utils/loadConfig.ts 在**模块顶层** new URL(它)。不传就是空串，
   # next build 会在 "Collecting page data" 阶段抛 ERR_INVALID_URL 直接失败。
   # 构建期这个地址其实是连不上的（容器里还没有 server），页面会走兜底数据，
   # 运行时再由 runner 阶段的 ENV 覆盖成真实地址，所以这里给个合法值就够了。
   local build_server="${VANBLOG_BUILD_SERVER:-http://127.0.0.1:3000}"
-  docker build \
-    --build-arg "VAN_BLOG_VERSIONS=${version_arg}" \
-    --build-arg "VAN_BLOG_BUILD_SERVER=${build_server}" \
-    -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
+  local -a build_args=(
+    --build-arg "VAN_BLOG_VERSIONS=${version_arg}"
+    --build-arg "VAN_BLOG_BUILD_SERVER=${build_server}"
+    --build-arg "VAN_BLOG_NPM_REGISTRY=${VANBLOG_NPM_REGISTRY}"
+    --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${VANBLOG_ADMIN_BUILD_SCRIPT}"
+  )
+
+  if [[ "${VANBLOG_BUILD_PARALLEL}" == "true" ]]; then
+    echo -e "> 构建镜像 ${yellow}${VANBLOG_IMAGE_TAG}${plain}（并发，约 5-20 分钟）"
+    docker build "${build_args[@]}" -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
+  else
+    # 串行：一次只跑一个重活。先逐个 --target 构建三个 builder（不打 tag，
+    # BuildKit 仍然会把层写进缓存），最后一次全量构建会全部命中缓存、只组装 runner。
+    echo -e "> 构建镜像 ${yellow}${VANBLOG_IMAGE_TAG}${plain}（串行，约 15-40 分钟；小机器上更稳）"
+    local stage
+    for stage in admin_builder server_builder website_builder; do
+      echo -e ">   [1/4] 单独构建 ${yellow}${stage}${plain}（其余 stage 此时不占资源）"
+      docker build "${build_args[@]}" --target "${stage}" "${VANBLOG_SRC_DIR}" || return 1
+    done
+    echo -e ">   [4/4] 组装最终镜像（前三步命中缓存，很快）"
+    docker build "${build_args[@]}" -t "${VANBLOG_IMAGE_TAG}" "${VANBLOG_SRC_DIR}" || return 1
+  fi
   echo -e "${green}镜像构建完成${plain}：${VANBLOG_IMAGE_TAG}（${version_arg}）"
   return 0
 }

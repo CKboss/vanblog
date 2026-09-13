@@ -1,6 +1,22 @@
 # 具体每个服务的去看 packages 里面的 Dockerfile
 # 这个是 all in one 的。
+#
+# 全局构建参数（⚠️ BuildKit 的规则：FROM 之前声明的 ARG 属于"全局"，
+#   在具体 stage 里要用必须**再 ARG 一次**，否则取到的是空值）。
+#   scripts/vanblog.sh 会自动探测本机网络与配置后传这些参数。
+#
+# VAN_BLOG_NPM_REGISTRY  pnpm 源。默认 npmmirror（国内快一个数量级）；
+#                        脚本会实测两个源的连通性与延迟，把更快的传进来。
+#                        以前 admin 那层硬编码 registry.npmjs.org，是它 `pnpm i`
+#                        比 website 层慢 4 倍的原因。
+# VAN_BLOG_ADMIN_BUILD_SCRIPT  admin 用哪个构建脚本：`build`（堆上限 4096MB）或
+#                        `build:lowmem`（1536MB，给小内存机器）。
+ARG VAN_BLOG_NPM_REGISTRY=https://registry.npmmirror.com
+ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build
+
 FROM node:18-alpine AS admin_builder
+ARG VAN_BLOG_NPM_REGISTRY
+ARG VAN_BLOG_ADMIN_BUILD_SCRIPT
 # ⚠️ 这里的 NODE_OPTIONS 对 `pnpm build` **不起作用**：admin 的 build 脚本是
 # `cross-env NODE_OPTIONS=--openssl-legacy-provider umi build`，cross-env 会**整体替换**
 # 而不是追加，于是 --max_old_space_size 被丢掉，Node 按"可用内存"启发式给了个很小的堆，
@@ -23,21 +39,24 @@ COPY ./patches ./patches
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
-RUN pnpm config set registry https://registry.npmjs.org -g
+RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 RUN pnpm i
 # RUN sed -i 's/\/assets/\/admin\/assets/g' dist/admin/index.html
-RUN pnpm build
+# 堆上限写在 package.json 的脚本里（cross-env 会整体替换 NODE_OPTIONS，
+# 镜像的 ENV 传不进去，见 §7.24）。低内存机器用 build:lowmem 那一档。
+RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}
 
 FROM node:18 AS server_builder
+ARG VAN_BLOG_NPM_REGISTRY
 ENV NODE_OPTIONS=--max_old_space_size=4096
 WORKDIR /app
 COPY ./packages/server/ .
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
-RUN pnpm config set registry https://registry.npmmirror.com -g
+RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 RUN pnpm i
@@ -46,6 +65,7 @@ RUN pnpm build
 # 前台：Alpine + sharp。musl 版本号可能是 1.2.4_git*，sharp 0.31 会报
 # Installation error: Invalid Version。用 0.32.6 + 官方 musl prebuild，并装 vips 编译兜底。
 FROM node:18-alpine AS website_builder
+ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
 RUN apk add --no-cache python3 make g++ libc6-compat vips-dev fftw-dev
@@ -70,7 +90,7 @@ ENV VAN_BLOG_VERSION=${VAN_BLOG_VERSIONS}
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
-RUN pnpm config set registry https://registry.npmmirror.com -g
+RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 RUN pnpm install --frozen-lockfile
@@ -79,6 +99,7 @@ RUN pnpm build:website
 
 #运行容器
 FROM node:18-alpine AS runner
+ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 # zstd / xz：后台「整站备份」默认用 zstd -19（其次 xz，最后才 gzip），
 # 镜像里没有这两个命令的话会静默降级成 gzip，压缩率和速度都差很多。
@@ -90,7 +111,7 @@ RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-ap
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
 RUN pnpm config set network-timeout 600000 -g
-RUN pnpm config set registry https://registry.npmmirror.com -g
+RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 # 复制 cli 工具

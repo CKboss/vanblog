@@ -208,6 +208,53 @@ else
   pass "vanblog.sh no longer conditions the build-arg on the user setting it"
 fi
 
+# ---------- 7) 构建资源自适应相关的 ARG（低配机器与 pnpm 源）----------
+# 全局 ARG 在 FROM 之前声明；⚠️ BuildKit 规则：stage 里要用必须**再 ARG 一次**，
+# 否则取到的是空值（表现是 `pnpm config set registry  -g`，然后回退到默认源）。
+if grep -qE '^ARG VAN_BLOG_NPM_REGISTRY=https?://' "${DOCKERFILE}"; then
+  pass "全局声明了 VAN_BLOG_NPM_REGISTRY 且带默认值"
+else
+  fail "缺少全局 ARG VAN_BLOG_NPM_REGISTRY=<默认源>"
+fi
+if grep -qE '^ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build$' "${DOCKERFILE}"; then
+  pass "全局声明了 VAN_BLOG_ADMIN_BUILD_SCRIPT 且默认 build"
+else
+  fail "缺少全局 ARG VAN_BLOG_ADMIN_BUILD_SCRIPT=build"
+fi
+
+# 每个用到 registry 的 stage 都必须重新 ARG 一次
+STAGES_WITH_REGISTRY=$(grep -c 'pnpm config set registry \${VAN_BLOG_NPM_REGISTRY}' "${DOCKERFILE}")
+STAGES_WITH_ARG=$(awk '/^FROM /{stage=$0; has=0} /^ARG VAN_BLOG_NPM_REGISTRY$/{has=1}
+  /pnpm config set registry/{if (has) print stage}' "${DOCKERFILE}" | wc -l)
+if [[ "${STAGES_WITH_REGISTRY}" -ge 4 && "${STAGES_WITH_REGISTRY}" == "${STAGES_WITH_ARG}" ]]; then
+  pass "${STAGES_WITH_REGISTRY} 处 registry 设置都在重新声明过 ARG 的 stage 里"
+else
+  fail "有 stage 用了 registry 变量却没重新 ARG（会取到空值）：用了 ${STAGES_WITH_REGISTRY} 处，声明齐的 ${STAGES_WITH_ARG} 处"
+fi
+
+# admin 的构建脚本必须可切换（低内存机器用 build:lowmem）
+if grep -qE '^RUN pnpm run \$\{VAN_BLOG_ADMIN_BUILD_SCRIPT\}$' "${DOCKERFILE}"; then
+  pass "admin_builder 用 VAN_BLOG_ADMIN_BUILD_SCRIPT 决定构建档位"
+else
+  fail "admin_builder 没有用 VAN_BLOG_ADMIN_BUILD_SCRIPT（低内存机器没法降堆）"
+fi
+
+# 两档构建脚本都得存在，且都带堆上限（cross-env 会整体替换 NODE_OPTIONS，见 §7.24）
+for script in build "build:lowmem"; do
+  if "${PY}" - "${ROOT}/packages/admin/package.json" "${script}" <<'PYCHK'
+import json, sys
+d = json.load(open(sys.argv[1]))
+cmd = d.get("scripts", {}).get(sys.argv[2], "")
+ok = "umi build" in cmd and "--max_old_space_size=" in cmd and "--openssl-legacy-provider" in cmd
+raise SystemExit(0 if ok else 1)
+PYCHK
+  then
+    pass "packages/admin 的 ${script} 脚本存在且带堆上限与 openssl-legacy-provider"
+  else
+    fail "packages/admin 缺少可用的 ${script} 脚本"
+  fi
+done
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
