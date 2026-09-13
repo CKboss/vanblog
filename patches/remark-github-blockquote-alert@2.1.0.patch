@@ -1,0 +1,14 @@
+diff --git a/package.json b/package.json
+index 840fc13796e471ab8d42f031fd0959361ed721fa..618bfd766c898c1030f883158d9339e587b727af 100644
+--- a/package.json
++++ b/package.json
+@@ -71,5 +71,8 @@
+     "remark-rehype": "^11.0.0",
+     "tsbb": "^4.2.5",
+     "unified": "^11.0.4"
+-  }
++  },
++  "main": "lib/index.js",
++  "module": "lib/index.js",
++  "style": "alert.css"
+ }

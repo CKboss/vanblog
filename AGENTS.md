@@ -108,7 +108,8 @@ kill -- -"$(cat vanblog_dev/pids/server.pid)"; rm -f vanblog_dev/pids/server.pid
 ./dev-env.sh start        # 只会把 server 拉起来
 ```
 
-编译耗时参考（冷启动）：admin(umi，**MFSU 已关**，见 §5 与 §7.14) ≈ 2 min，website(next) ≈ 5–30 s，server(nest/tsc) ≈ 20–40 s；
+编译耗时参考（冷启动）：admin(umi+MFSU，依赖 `patches/` 里两个补丁，见 §5 与 §7.14) ≈ 25s + MFSU 首次 ~1.5 min，
+website(next) ≈ 5–30 s，server(nest/tsc) ≈ 20–40 s；
 热缓存后整套 stop→start ≈ 30 s。
 
 ### 2.1 跑测试（改代码后必做）
@@ -445,7 +446,7 @@ curl -s "http://127.0.0.1:3001/api/comment?path=%2Fpost%2F1&page=1&pageSize=3" |
 | bootstrap 下载 Node/MongoDB 超时或校验失败 | 直连 `nodejs.org` / `fastdl.mongodb.org` 太慢 | 换源或走代理：`VANBLOG_PROXY="proxychains4 -q" ./dev-env.sh bootstrap`；Node 也可 `VANBLOG_NODE_DISTURL=https://nodejs.org/dist` |
 | bootstrap 装完 mongod 报缺动态库 | `ubuntu2204` 构建需要 `libssl3`/`libcrypto3` | 换 `VANBLOG_MONGO_PLATFORM=ubuntu2004` 重装（需要 `libssl1.1`） |
 | 3001/3002 页面报 500 / `[HPM] ECONNREFUSED ... :3000` | server 没起（或正在重启） | `./dev-env.sh status`，看 `vanblog_dev/logs/server-dev.log` |
-| 后台 3002 白屏 / `ScriptExternalLoadError: Loading script failed (timeout: /mf-va_remoteEntry.js)` | umi3 的 **MFSU** 解析不了只有 `exports`、没有 `main` 的 ESM 包（`remark-supersub`、`remark-github-blockquote-alert`），预打包直接 `AssertionError: filePath not found of xxx` | 已在 `packages/admin/config/config.js` 里 `mfsu: false`（**不要打开**）；子路径导入也不行（webpack 5 按 exports 校验，`./lib/index.js` 不在 exports 里）；MFSU 没有 exclude 选项。改了之后要 `rm -rf packages/admin/src/.umi/.cache` 再重启 |
+| 后台 3002 白屏 / `ScriptExternalLoadError: Loading script failed (timeout: /mf-va_remoteEntry.js)` | umi3 的 **MFSU** 只读 `main`/`module`、不认 `exports` 映射，遇到 ESM-only 包就 `AssertionError: filePath not found of xxx`，远程包生不出来 | 靠根目录 `patches/` 里两个 pnpm patch 给 `remark-supersub` / `remark-github-blockquote-alert` 补 `main`。**升级这两个包会让 patch 失效**（pnpm 会报错）：重新 `pnpm patch <pkg>@<ver>` 补一次，或临时 `mfsu: false`（dev 冷启动 25s→2min）。改完都要 `rm -rf packages/admin/src/.umi/.cache` 再重启 |
 | 后台菜单显示成 `paperclip附件管理` 这种纯文本 | umi 把路由 `icon` 按 `toHump(首字母大写)+'Outlined'` 解析，拼不出真实图标就退回字符串 | 用能拼成真实 antd 图标的写法（`paper-clip` → `PaperClipOutlined`），并核对 `src/.umi/plugin-layout/icons.ts` |
 | 标题的复制按钮压在「编辑」上 | 复制按钮用了绝对定位，而「编辑」在文档流里 | 标题行是三列 grid、操作区同格（见 §7.2），别改回绝对定位 |
 | 「检测隐写水印」总说没有水印 | 图被缩放/裁剪过；或上传时开关是关的；或换过 `stegoKey` | 属预期行为，见 `docs/features/image-storage.md` 的鲁棒性对照表 |
@@ -1121,10 +1122,16 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   试过改成子路径导入 `pkg/lib/index.js` —— **也不行**：webpack 5 会按 `exports` 映射校验，
   而 `./lib/index.js` 没被 export，报 Module not found。MFSU 又没有 exclude 选项
   （只有 output/mfName/exportAllMembers/chunks/ignoreNodeBuiltInModules），
-  所以最终 `mfsu: false` 整体关掉。生产构建（`umi build`）本来就不用 MFSU，不受影响；
-  代价是后台 dev 冷启动从 ~25s 变成 ~2min（umi 自己会提示"启动时间有点慢，试试 MFSU"，忽略它）。
-  改完要 `rm -rf packages/admin/src/.umi/.cache` 再重启，否则旧的坏产物还在。
-  想恢复 MFSU 的话，可行路径是把这两个包 vendor 进 `src/`（都是 MIT、各几十行）或给它们打 pnpm patch 补 `main`。
+  **最终解法是 pnpm patch**（`patches/remark-supersub@1.0.0.patch`、
+  `patches/remark-github-blockquote-alert@2.1.0.patch`，在根 `package.json` 的
+  `pnpm.patchedDependencies` 里登记）：只给这两个包补上 `main`/`module`（`exports` 优先级更高，
+  正常解析行为完全不变），MFSU 就能解析了 —— 现在 `mfsu: {}` 重新打开，dev 冷启动仍是 ~25s。
+  复现命令：`pnpm patch <pkg>@<ver>` → 改临时目录里的 package.json → `pnpm patch-commit <dir>`。
+  ⚠️ **升级这两个包会让 patch 失效**（pnpm install 会明确报错），届时重新 patch 一次，
+  或者临时把 `mfsu` 设成 `false`（代价：dev 冷启动 ~2min；生产构建 `umi build` 不用 MFSU，不受影响）。
+  无论怎么改，都要 `rm -rf packages/admin/src/.umi/.cache` 再重启，否则坏的预打包产物会被继续复用。
+  实测：MFSU `Compiled successfully in 1.42m`、`mf-va_remoteEntry.js` 200（218KB）、
+  `/admin` 与 `/admin/editor` 200、生产构建 exit=0（dist 24MB / umi.js 1078KB，与关 MFSU 时一致）。
 - 测试：`packages/website/__tests__/extraSyntax.spec.ts`(15，**用真实管线渲染**逐项断言 + 两份文件
   的插件链/字段名/sanitize/CSS 一致性)，`markdownConsistency.test.js` 增加 `extraSyntax()`、
   `singleTilde: false`、`handlers: defListHastHandlers` 的比对。

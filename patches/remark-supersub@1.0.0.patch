@@ -1,0 +1,13 @@
+diff --git a/package.json b/package.json
+index 8d00d94d352559281705dd7f315e296bc1ca7251..5bc7bd2e78f0d54f1c1abf06edb3cc55081ab0ea 100644
+--- a/package.json
++++ b/package.json
+@@ -23,5 +23,7 @@
+   "dependencies": {
+     "unist-util-visit": "^4.0.0"
+   },
+-  "gitHead": "a1bfb2a02cd6c9c2385a732f95ae44f07d03284f"
++  "gitHead": "a1bfb2a02cd6c9c2385a732f95ae44f07d03284f",
++  "main": "lib/index.js",
++  "module": "lib/index.js"
+ }

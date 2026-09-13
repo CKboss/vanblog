@@ -63,15 +63,20 @@ export default defineConfig({
   nodeModulesTransform: {
     type: 'none',
   },
-  // MFSU（开发时把 node_modules 预打包成 Module Federation 远程包）**必须关掉**：
-  // 它用老版 resolve 解析裸包名，遇到只有 `exports` 没有 `main` 的 ESM 包
-  // （remark-supersub、remark-github-blockquote-alert）就拿不到 filePath，直接
-  // `AssertionError: filePath not found of xxx`，mf-va_remoteEntry.js 生不出来，
-  // 后台整页报 ScriptExternalLoadError 打不开。改成子路径导入也不行——webpack 5 会按
-  // exports 映射校验，`./lib/index.js` 不在 exports 里（Module not found）。
-  // MFSU 没有 exclude 选项（只有 output/mfName/exportAllMembers/chunks/ignoreNodeBuiltInModules），
-  // 所以只能整体关掉。生产构建（umi build）本来就不用 MFSU，不受影响。
-  mfsu: false,
+  // MFSU（开发时把 node_modules 预打包成 Module Federation 远程包）。
+  //
+  // ⚠️ 它能开着的前提是根目录 `patches/` 里那两个 pnpm patch：
+  // umi3 的 MFSU 用老版 resolve 解析裸包名，只读 `main`/`module`，**不认 `exports` 映射**。
+  // `remark-supersub`、`remark-github-blockquote-alert` 是 ESM-only、只有 exports 没有 main，
+  // 于是 MFSU 预打包直接 `AssertionError: filePath not found of xxx`，
+  // mf-va_remoteEntry.js 生不出来，后台整页 `ScriptExternalLoadError` 白屏。
+  // 两个 patch 只是给它们补上 `main`/`module`（exports 优先级更高，正常解析行为不变）。
+  //
+  // 如果升级这两个包导致 patch 失效（pnpm 会明确报错），要么重新 `pnpm patch` 一次，
+  // 要么把这里改成 `mfsu: false`（代价：dev 冷启动 ~25s 变 ~2min；生产构建不用 MFSU，不受影响）。
+  // 改成子路径导入（pkg/lib/index.js）是**行不通**的：webpack 5 会按 exports 校验，
+  // 而 ./lib/index.js 没被 export，会报 Module not found。
+  mfsu: {},
   webpack5: {},
   exportStatic: {},
   chainWebpack(memo, { env, webpack, createCSSRule }) {

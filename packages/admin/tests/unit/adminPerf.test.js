@@ -96,6 +96,28 @@ describe('后台性能：构建配置与图片', () => {
     assert.match(img, /thumbMode \? getThumbLink\(item\) : `\$\{item\.realPath\}`/);
   });
 
+  it('MFSU 依赖的两个 pnpm patch 必须在（否则后台整页白屏）', () => {
+    // umi3 的 MFSU 只读 main/module、不认 exports 映射：这两个 ESM-only 包没有 main，
+    // 预打包会 AssertionError，mf-va_remoteEntry.js 生不出来 → ScriptExternalLoadError 白屏。
+    const rootPkg = JSON.parse(read('../../package.json'));
+    const patched = rootPkg?.pnpm?.patchedDependencies || {};
+    assert.ok(patched['remark-supersub@1.0.0'], '缺少 remark-supersub 的 patch 登记');
+    assert.ok(
+      patched['remark-github-blockquote-alert@2.1.0'],
+      '缺少 remark-github-blockquote-alert 的 patch 登记',
+    );
+    for (const rel of Object.values(patched)) {
+      assert.match(read(`../../${rel}`), /\+.*"main": "lib\/index\.js"/);
+    }
+    // MFSU 是开着的（关掉的话 dev 冷启动从 ~25s 变 ~2min）
+    assert.match(read('config/config.js'), /mfsu: \{\}/);
+    // 已安装的包里确实带上了 main（patch 生效）
+    for (const pkg of ['remark-supersub', 'remark-github-blockquote-alert']) {
+      const installed = require(`${adminRoot}/node_modules/${pkg}/package.json`);
+      assert.equal(installed.main, 'lib/index.js', `${pkg} 的 patch 没生效`);
+    }
+  });
+
   it('路由级代码分割与产物指纹仍然开着', () => {
     const cfg = read('config/config.js');
     assert.match(cfg, /dynamicImport: \{/);

@@ -4,6 +4,14 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  remark-github-blockquote-alert@2.1.0:
+    hash: pj777fzbhhnxmp737gfr7i2kmu
+    path: patches/remark-github-blockquote-alert@2.1.0.patch
+  remark-supersub@1.0.0:
+    hash: kvrxlgnqbsodiutlscyjuprm4i
+    path: patches/remark-supersub@1.0.0.patch
+
 importers:
 
   .:
@@ -229,10 +237,10 @@ importers:
         version: 7.0.1
       remark-github-blockquote-alert:
         specifier: ^2.1.0
-        version: 2.1.0
+        version: 2.1.0(patch_hash=pj777fzbhhnxmp737gfr7i2kmu)
       remark-supersub:
         specifier: ^1.0.0
-        version: 1.0.0
+        version: 1.0.0(patch_hash=kvrxlgnqbsodiutlscyjuprm4i)
       umi:
         specifier: ^3.5.41
         version: 3.5.41(react-router@5.3.4)
@@ -636,13 +644,13 @@ importers:
         version: 3.0.1
       remark-github-blockquote-alert:
         specifier: ^2.1.0
-        version: 2.1.0
+        version: 2.1.0(patch_hash=pj777fzbhhnxmp737gfr7i2kmu)
       remark-rehype:
         specifier: ^10.1.0
         version: 10.1.0
       remark-supersub:
         specifier: ^1.0.0
-        version: 1.0.0
+        version: 1.0.0(patch_hash=kvrxlgnqbsodiutlscyjuprm4i)
       sharp:
         specifier: 0.32.6
         version: 0.32.6
@@ -27043,12 +27051,13 @@ packages:
       - supports-color
     dev: false
 
-  /remark-github-blockquote-alert@2.1.0:
+  /remark-github-blockquote-alert@2.1.0(patch_hash=pj777fzbhhnxmp737gfr7i2kmu):
     resolution: {integrity: sha512-J392jmIP684d7iGsENN0uguL10IGbRdc8bTUSrd/jOLzdWkwg721Fj3JPQGN8tF6fTIrE5HHOIA3nBuwuaeuPQ==}
     engines: {node: '>=16'}
     dependencies:
       unist-util-visit: 5.1.0
     dev: false
+    patched: true
 
   /remark-math@4.0.0:
     resolution: {integrity: sha512-lH7SoQenXtQrvL0bm+mjZbvOk//YWNuyR+MxV18Qyv8rgFmMEGNuB0TSCQDkoDaiJ40FCnG8lxErc/zhcedYbw==}
@@ -27107,11 +27116,12 @@ packages:
       mdast-util-to-markdown: 0.6.5
     dev: true
 
-  /remark-supersub@1.0.0:
+  /remark-supersub@1.0.0(patch_hash=kvrxlgnqbsodiutlscyjuprm4i):
     resolution: {integrity: sha512-3SYsphMqpAWbr8AZozdcypozinl/lly3e7BEwPG3YT5J9uZQaDcELBF6/sr/OZoAlFxy2nhNFWSrZBu/ZPRT3Q==}
     dependencies:
       unist-util-visit: 4.1.2
     dev: false
+    patched: true
 
   /remark@13.0.0:
     resolution: {integrity: sha512-HDz1+IKGtOyWN+QgBiAT0kn+2s6ovOxHyPAFGKVE81VSzJ+mq7RwHFledEvB5F1p4iJvOah/LOKdFuzvRnNLCA==}
