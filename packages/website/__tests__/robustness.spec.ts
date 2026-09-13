@@ -90,11 +90,15 @@ describe("运行时资源与监听器", () => {
         .join("\n");
     const card = code("components/AuthorCard/index.tsx");
     expect(card).toContain("stopHeadroom(headroom)");
+    // 用了就必须真的 import 了（曾经漏掉 import，vitest 走 esbuild 不做类型检查，
+    // 于是测试全绿、浏览器里却是 ReferenceError）
+    expect(card).toContain('import { stopHeadroom } from "../../utils/headroom"');
     expect(card).not.toContain("headroom.destroy()");
     expect(card).toContain("}, [props.option.showSubMenu]);");
     // 导航栏是同一类用法，同样不能直接 destroy
     const nav = code("components/NavBar/index.tsx");
     expect(nav).toContain("stopHeadroom(headroom)");
+    expect(nav).toContain('import { stopHeadroom } from "../../utils/headroom"');
     expect(nav).not.toContain("headroom.destroy()");
   });
 

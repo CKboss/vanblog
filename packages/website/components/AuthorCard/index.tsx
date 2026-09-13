@@ -1,3 +1,4 @@
+import { stopHeadroom } from "../../utils/headroom";
 import Link from "next/link";
 import { useContext, useEffect, useMemo } from "react";
 import Headroom from "headroom.js";

@@ -1151,6 +1151,12 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   （`side-bar` 等）从元素上摘掉，StrictMode 下新实例挂在**同一个元素**上，旧实例的延迟清理会把新实例
   刚加的类一起删掉。所以现在统一走 `utils/headroom.ts` 的 `stopHeadroom()`：只停 `scrollTracker`
   （try/catch 包住），并在 250ms 后补一次，覆盖那个 100ms 竞态。`NavBar` 的同类用法也一起换了。
+  ⚠️ 这次还漏了 `AuthorCard` 的 `import`（浏览器里直接 `ReferenceError: stopHeadroom is not defined`）：
+  插 import 的判断写成了 `if 'utils/headroom' not in s`，而我自己的注释里就有 "见 utils/headroom.ts"
+  → 条件不成立、import 被跳过；而 **vitest 走 esbuild 不做类型检查**，463 个测试全绿也发现不了。
+  教训：脚本化改代码时（1）插入 import 的判断要针对 **import 语句本身**，别拿标识符名去 `in` 整个文件；
+  （2）改完必须跑一次 `tsc --noEmit`（或 `next build`），单测绿不等于能跑；
+  （3）测试里断言「用了某个 helper」时，顺手断言它的 import 也在。
 
 **服务端（server）**
 - **流水线不会再卡死保存**：`runCodeByPipelineId` 的 Promise 只监听 `message`，脚本不发消息
