@@ -183,7 +183,14 @@ describe("接线", () => {
     expect(doc).not.toMatch(/<Html lang="zh">/);
     // 回归守卫：JSX 注释写在 return ( … ) 的**顶层**会让括号变成对象字面量，整站 500。
     // 这次改 lang 就踩了（vitest 只把文件当文本读，编译不出来，所以测试全绿页面却全挂）。
-    expect(doc).not.toMatch(/return\s*\(\s*\{\//);
+    // ⚠️ 断言前必须先剥注释：_document.tsx 里的说明文字正好写了「不能写成 return ( {/* … */} …」，
+    //    不剥就会自己匹配自己（这仓库踩过好几次同一个坑）。
+    const codeOnly = doc
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/return\s*\(\s*\{\//);
     expect(doc).not.toContain('lang="cn"');
     // og:locale 用下划线形式（Open Graph 的规范写法），RSS 用 zh-CN
     expect(read("components/Layout/index.tsx")).toContain('property="og:locale" content="zh_CN"');
