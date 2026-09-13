@@ -1,6 +1,12 @@
 # 具体每个服务的去看 packages 里面的 Dockerfile
 # 这个是 all in one 的。
 FROM node:18-alpine AS admin_builder
+# ⚠️ 这里的 NODE_OPTIONS 对 `pnpm build` **不起作用**：admin 的 build 脚本是
+# `cross-env NODE_OPTIONS=--openssl-legacy-provider umi build`，cross-env 会**整体替换**
+# 而不是追加，于是 --max_old_space_size 被丢掉，Node 按"可用内存"启发式给了个很小的堆，
+# 构建到一半就 `FATAL ERROR: Reached heap limit Allocation failed`（实测 ~486MB 就炸）。
+# 真正的修复在 packages/admin/package.json 的 build 脚本里（两个 flag 都写死）。
+# 这行保留是给 pnpm i / postinstall(umi g tmp) 这些不走 cross-env 的步骤用的。
 ENV NODE_OPTIONS='--max_old_space_size=4096 --openssl-legacy-provider'
 ENV EEE=production
 WORKDIR /app

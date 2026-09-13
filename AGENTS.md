@@ -1823,13 +1823,58 @@ Dockerfile 与两份脚本都带默认值）；`scripts/tests/dockerfile-patches
 脚本总传 build-arg、不再有"没设就不传"的分支）；`vanblog-source-install.test.sh` 的构建参数断言
 改成同时校验两个 `--build-arg`，并新增"用户自定义 server 地址优先"的用例。
 
-### 7.24 测试基线（本分支最后一次全量运行的结果）
+### 7.24 源码构建第三道坎：admin 构建 OOM（cross-env 把堆上限吃掉了）
+
+补丁（§7.22）与空 server URL（§7.23）都过了之后，构建死在 `admin_builder` 的 `pnpm build`：
+
+```
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+[27:0x…] 59779 ms: Mark-sweep (reduce) 475.9 (486.1) -> 475.4 (486.9) MB
+```
+
+**486MB 就炸**，而 Dockerfile 的 admin_builder 明明写了
+`ENV NODE_OPTIONS='--max_old_space_size=4096 --openssl-legacy-provider'`。原因是：
+
+```jsonc
+// packages/admin/package.json
+"build": "cross-env NODE_OPTIONS=--openssl-legacy-provider umi build"
+```
+
+`cross-env NODE_OPTIONS=X` 是**整体替换**这个变量，不是追加 —— 镜像 ENV 里的
+`--max_old_space_size=4096` 被直接丢掉。于是 Node 退回"按可用内存启发式决定堆上限"，
+而 `docker build` 会**并发跑 admin / server / website 三个 stage**，可用内存被挤掉，
+启发式就给了个几百 MB 的堆，构建到一半必然 OOM。
+
+修法（改脚本，不是改 Dockerfile）：
+
+```jsonc
+"build":   "cross-env NODE_OPTIONS=\"--openssl-legacy-provider --max_old_space_size=4096\" umi build",
+"analyze": "cross-env NODE_OPTIONS=\"--max_old_space_size=4096\" ANALYZE=1 umi build"
+```
+
+⚠️ 两个 flag 必须在**同一个** `NODE_OPTIONS` 赋值里（带引号），分成两次 `cross-env` 只会保留一个。
+Dockerfile 里那行 ENV **保留**（`pnpm i` 与 `postinstall` 的 `umi g tmp` 不走 cross-env，仍然吃它），
+但已在原处注明它对 `pnpm build` 不起作用 —— 否则下一个人会以为调 ENV 就能调构建内存。
+`tests/unit/buildMemory.test.js`（4 条）盯着这件事：build/analyze 都带堆上限、两个 flag 在同一个赋值里、
+不许退回旧写法、Dockerfile 的 ENV 与说明注释都还在。
+
+**本地已真跑过一次生产构建验证**（这台机器没有 docker 权限，但 `pnpm build` 与镜像里那一步是同一条命令）：
+
+```bash
+cd packages/admin && ../../../.tools/node_modules/.bin/pnpm build   # 约 4 分钟，EXIT=0，dist 24MB
+```
+
+顺带这也是**第一次**验证本分支所有后台改动能过生产构建（markdown 插件、评论管理页、
+补封面弹窗、关于页、编辑器字体）—— 以前只跑过 dev（MFSU）与单元测试。
+⚠️ 跑完记得 `rm -rf packages/admin/dist`（在 .gitignore 里，但别留着占地方）。
+
+### 7.25 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
-| admin `node --test tests/unit` | 81 套件 / 322 用例全绿 |
+| admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 339 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
@@ -1840,7 +1885,7 @@ Dockerfile 与两份脚本都带默认值）；`scripts/tests/dockerfile-patches
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.24 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.25 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
