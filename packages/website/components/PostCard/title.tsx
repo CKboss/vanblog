@@ -1,3 +1,5 @@
+import CommentCount from "../Comment/Count";
+import useCommentProvider from "../../hooks/useCommentProvider";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -149,6 +151,7 @@ export function SubTitle(props: {
   const iconClass =
     "mr-1 fill-gray-400 dark:text-dark dark:group-hover:text-dark-hover group-hover:text-gray-900 ";
 
+  const commentProvider = useCommentProvider();
   const dataPath = useMemo(() => {
     if (props.type == "about") {
       return "/about";
@@ -248,9 +251,15 @@ export function SubTitle(props: {
               ></path>
             </svg>
           </span>
-          <span className="waline-comment-count" data-path={dataPath}>
-            {COUNT_LOADING_PLACEHOLDER}
-          </span>
+          {commentProvider === "builtin" ? (
+            // 内置评论：评论数由本站接口批量返回（50ms 内的请求会合并成一次 /counts）
+            <CommentCount path={dataPath} />
+          ) : commentProvider === "off" ? null : (
+            // waline：这个 span 由 @waline/client 自己填充，必须原样保留
+            <span className="waline-comment-count" data-path={dataPath}>
+              {COUNT_LOADING_PLACEHOLDER}
+            </span>
+          )}
         </span>
       )}
     </div>

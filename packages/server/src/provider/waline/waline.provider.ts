@@ -167,6 +167,17 @@ export class WalineProvider {
     this.logger.log('waline 停止成功！');
   }
   async run(): Promise<any> {
+    // 评论系统不是 waline（内置评论或已关闭）时不必拉起这个子进程：
+    // 省一个常驻 node 进程和 8360 端口，也避免退出钩子把它反复拉起来。
+    try {
+      const commentSetting = await this.settingProvider.getCommentSetting();
+      if (commentSetting?.provider !== 'waline') {
+        this.logger.log(`评论系统为 ${commentSetting?.provider}，跳过启动 waline`);
+        return;
+      }
+    } catch (err) {
+      this.logger.warn(`读取评论设置失败，按 waline 处理：${(err as Error)?.message || err}`);
+    }
     await this.loadEnv();
     const base = '../waline/node_modules/@waline/vercel/vanilla.js';
     if (this.ctx == null) {

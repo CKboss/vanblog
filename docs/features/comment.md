@@ -4,13 +4,117 @@ icon: comments
 order: 4
 ---
 
-VanBlog 内嵌了 [Waline 评论系统](https://waline.js.org/)，你不需要任何额外的配置或额外部署，开箱即用。
+VanBlog 现在支持**两套**评论系统，在后台 `站点管理 / 系统设置 / 评论设置` 里三选一：
 
-评论系统默认开启，在后台 `站点管理/系统设置/站点配置/高级设置` 中可以控制评论系统的开关。
+| 模式 | 说明 |
+| --- | --- |
+| **内置评论**（builtin） | 评论存在本站的 Mongo 里，走本站接口，不需要额外进程 / 端口 / 数据库。**全新安装默认用它** |
+| **Waline** | 上游那套外挂评论：server 会拉起一个 waline 子进程（端口 8360，独立的 `waline` 库），前台用 `@waline/client`，后台评论页是它的 `/ui` iframe |
+| **关闭**（off） | 前台不渲染任何评论区 |
+
+评论总开关仍在 `站点管理/系统设置/站点配置/高级设置`。
 
 ![评论系统开关](https://pic.mereith.com/img/4ab797b4096a953d9d27ebf6a4a2b0dc.clipboard-2022-08-25.png)
 
-## 配置
+::: warning 老站点升级 / 切换模式
+
+- 升级上来、还没有这条设置的站点**默认按 Waline 处理**，已有评论不会消失。
+- 切换模式**不迁移数据**：内置评论在 `vanBlog` 库的 `nativecomments` 集合，Waline 在独立的 `waline` 库。
+  切过去老评论就不显示了（数据还在，切回来就还在）。
+- 切到内置或关闭时，waline 子进程会被停掉（省一个常驻 node 进程和 8360 端口）；切回 Waline 会自动拉起。
+
+:::
+
+## 内置评论
+
+### 内置评论有什么
+
+- 两层结构：顶层评论 + 回复（回复「回复」也归到同一个顶层，显示成「回复 @某人」）
+- 分页加载（每页 20 条，「加载更多」往下翻）
+- 昵称 / 邮箱 / 个人主页，浏览器本地记住（只记这三项，不记评论内容）
+- 基础 Markdown：**粗体**、*斜体*、`行内代码`、代码块、引用、列表、链接、删除线
+- 评论数显示在文章卡片的元信息行（批量取，一屏十几篇也只发一个请求）
+- 博主标识：邮箱与站点信息里的 `authorEmail` 一致的评论会打上「博主」标签，并且直通审核
+- 深色模式与 Apple 风格皮肤都已适配
+
+### 审核
+
+后台可选三种策略：
+
+| 策略 | 行为 |
+| --- | --- |
+| `先发后审`（默认） | 直接显示；命中规则自动转「待审」，后台放行后才出现 |
+| `先审后发` | 全部先待审 |
+| `不审核` | 全部直接显示，只提供删除 |
+
+「先发后审」下会自动转待审的情况：
+
+- 命中后台配置的**关键词**（大小写不敏感，最多 200 个）
+- 内容里含**外链**（可在设置里关掉这条规则）
+- 蜜罐字段被填写 → 直接判**垃圾**（对用户仍显示「待审」，不暴露判定逻辑）
+
+### 反垃圾与限流
+
+| 措施 | 默认值 |
+| --- | --- |
+| 同 IP 每 10 分钟最多 | 10 条（设置里可调，上限 1000） |
+| 同 IP 每天最多 | 50 条 |
+| 同 IP + 同内容 5 分钟内 | 只允许 1 条 |
+| 单条长度 | 2000 字（设置里可调，上限 20000） |
+| 蜜罐字段 | 有（视觉上不可见、不可聚焦、读屏也读不到） |
+| 演示站 | 禁止发表评论 |
+
+评论只能发在**真实存在且未隐藏**的文章下（路径会去库里核对），所以机器人没法靠编造路径灌库。
+
+### 安全
+
+评论是**匿名任何人**都能写的内容，所以渲染链路比正文严格得多：
+
+1. **原始 HTML 根本不被解析**：渲染器不开 `allowDangerousHtml`，`<b>x</b>` 会按字面量显示。
+   同时 html 节点会被转成文本节点（remark-rehype 默认是直接丢弃，那样用户写的东西会凭空消失）。
+2. **严格白名单**（`utils/commentSanitize.ts`）：只留排版标签，**没有 `img`**（防追踪像素/钓鱼图）、
+   没有 `iframe`/`style`/`svg`/`math`/`form`/`input`/`button`，`script`/`style` 等连内容一起丢掉；
+   属性只允许 `a` 的 `href/title/rel/target` 与代码高亮需要的 `className`，**没有 `style`、没有 `id`、没有 `data-*`**。
+3. **链接加固**：所有评论里的链接统一 `target="_blank"` + `rel="nofollow noopener noreferrer"`
+   （防 tab-nabbing，也不给评论区传 SEO 权重）；协议只允许 `http/https/mailto`。
+4. **服务端再校验一遍**（不信任前端）：路径必须 `/` 开头且不含 `..`；昵称剥掉尖括号与控制字符；
+   邮箱校验格式；个人主页**显式拒绝任何非 http/https 的 scheme**（`javascript:`、`data:`、`vbscript:`…，
+   不依赖 `new URL()` 碰巧解析失败）；内容拒绝控制字符、剥掉双向控制符（U+202A~202E、U+2066~2069，
+   防 RLO 伪装昵称与链接）、限长。
+5. **不泄露隐私**：公开接口的返回里**没有** `email` / `ip` / `ua` / `reason`；这些只在后台可见。
+   昵称与主页在组件里一律当文本渲染，主页链接只在客户端再校验一次 `^https?://` 才变成 `<a>`。
+6. **反注入**：所有进 Mongo 的字段都做了类型收敛（对象型入参会被拒），后台的关键词搜索会转义正则元字符，
+   排序字段只接受白名单值。
+
+### 接口
+
+公开（无需登录）：
+
+```
+GET  /api/public/comments/setting            # provider / moderation / requireEmail / maxContentLength
+GET  /api/public/comments?path=&page=&pageSize=&sort=
+GET  /api/public/comments/counts?paths=/post/a,/post/b
+POST /api/public/comments                    # { path, parentId?, nick, email?, site?, content, hp? }
+```
+
+后台（需要管理员 token）：
+
+```
+GET    /api/admin/setting/comment            # 完整设置（含关键词）
+PUT    /api/admin/setting/comment            # 切换模式时会自动启停 waline 子进程
+GET    /api/admin/comment?status=&path=&keyword=&page=&pageSize=
+GET    /api/admin/comment/counts
+PUT    /api/admin/comment/:id                # { status?, content?, nick?, isAuthor? }
+DELETE /api/admin/comment/:id                # 删顶层会连带删它的回复（软删）
+```
+
+### 相关环境变量
+
+评论本身不需要额外环境变量。选 Waline 时它会照旧用 `waline.db` 配置与站点信息里的 SMTP 设置。
+
+## Waline（外挂）
+
+### 配置
 
 您可以在后台 `站点管理/系统设置/评论设置` 中对评论的一些功能进行配置：
 
@@ -24,7 +128,7 @@ VanBlog 内嵌了 [Waline 评论系统](https://waline.js.org/)，你不需要�
 - 未登录的匿名评论会被服务端拒绝，前台评论框也会隐藏匿名输入项。
 - 保存后会立即把配置传给内嵌 Waline 并重启评论进程，无需再手动重启 VanBlog。
 
-## 消息通知
+### 消息通知
 
 内嵌的评论系统可以通过邮件或者 `webhook` 进行消息通知，具体来说：
 

@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
+  CommentModeration,
+  CommentProvider,
+  CommentSetting,
+  PublicCommentSetting,
   HttpsSetting,
   ISRSetting,
   LayoutSetting,
@@ -207,6 +211,82 @@ export class SettingProvider {
       ...plain,
       forceLoginComment: isForceLoginCommentEnabled(plain?.forceLoginComment),
     } as WalineSetting;
+  }
+
+  /**
+   * 评论设置。
+   *
+   * 没有这一行（老站点升级上来）时**默认 waline**，保持既有行为不变：
+   * 那些站点的评论数据在 waline 库里，直接切成内置会让评论区凭空变空。
+   * 全新安装由 init 流程显式写入 `provider: 'builtin'`（见 init.provider）。
+   */
+  async getCommentSetting(): Promise<CommentSetting> {
+    const fallback: CommentSetting = {
+      provider: 'waline',
+      moderation: 'post',
+      keywords: [],
+      requireEmail: false,
+      pendingOnLink: true,
+      maxContentLength: 2000,
+      rateLimitPer10Min: 10,
+    };
+    const res = await this.settingModel.findOne({ type: 'comment' }).exec();
+    const value = (res?.value || {}) as Partial<CommentSetting>;
+    const provider: CommentProvider =
+      value.provider === 'builtin' || value.provider === 'off' || value.provider === 'waline'
+        ? value.provider
+        : fallback.provider;
+    const moderation: CommentModeration =
+      value.moderation === 'pre' || value.moderation === 'none' || value.moderation === 'post'
+        ? value.moderation
+        : fallback.moderation;
+    return {
+      ...fallback,
+      ...value,
+      provider,
+      moderation,
+      keywords: Array.isArray(value.keywords)
+        ? value.keywords.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim()).slice(0, 200)
+        : [],
+      requireEmail: value.requireEmail === true,
+      pendingOnLink: value.pendingOnLink !== false,
+      maxContentLength:
+        Number(value.maxContentLength) > 0 ? Math.min(Number(value.maxContentLength), 20000) : fallback.maxContentLength,
+      rateLimitPer10Min:
+        Number(value.rateLimitPer10Min) > 0
+          ? Math.min(Number(value.rateLimitPer10Min), 1000)
+          : fallback.rateLimitPer10Min,
+    };
+  }
+
+  /** 给前台用的那份：不含关键词等规则细节 */
+  async getPublicCommentSetting(): Promise<PublicCommentSetting> {
+    const setting = await this.getCommentSetting();
+    return {
+      provider: setting.provider,
+      moderation: setting.moderation,
+      requireEmail: setting.requireEmail,
+      maxContentLength: setting.maxContentLength,
+    };
+  }
+
+  async updateCommentSetting(dto: Partial<CommentSetting>) {
+    const oldValue = await this.getCommentSetting();
+    const newValue: CommentSetting = { ...oldValue, ...(dto || {}) };
+    // provider / moderation 只接受枚举值，乱填会退回旧值
+    if (!['builtin', 'waline', 'off'].includes(newValue.provider)) {
+      newValue.provider = oldValue.provider;
+    }
+    if (!['post', 'pre', 'none'].includes(newValue.moderation)) {
+      newValue.moderation = oldValue.moderation;
+    }
+    if (!Array.isArray(newValue.keywords)) {
+      newValue.keywords = oldValue.keywords;
+    }
+    if (!oldValue || !(await this.settingModel.findOne({ type: 'comment' }).exec())) {
+      return await this.settingModel.create({ type: 'comment', value: newValue });
+    }
+    return await this.settingModel.updateOne({ type: 'comment' }, { value: newValue });
   }
 
   async getWalineSetting(): Promise<WalineSetting> {

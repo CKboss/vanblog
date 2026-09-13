@@ -232,3 +232,335 @@ body .ua-link::before {
 #nav li a {
   word-break: keep-all;
 }
+
+/* ---------- 内置评论 ---------- */
+
+.van-comment {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+html.dark .van-comment {
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+.van-comment-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.van-comment-total {
+  color: rgba(0, 0, 0, 0.45);
+  font-weight: 400;
+}
+
+html.dark .van-comment-total {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.van-comment-fields {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr;
+  margin-bottom: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .van-comment-fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.van-comment-form input,
+.van-comment-form textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+html.dark .van-comment-form input,
+html.dark .van-comment-form textarea {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.van-comment-form input:focus,
+.van-comment-form textarea:focus {
+  outline: none;
+  border-color: rgba(0, 122, 255, 0.65);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+}
+
+.van-comment-form textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: inherit;
+}
+
+/* 蜜罐：留在 DOM 里（脚本会填），但真人既看不见也点不到、读屏也读不到 */
+.van-comment-hp {
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.van-comment-submit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.van-comment-hint,
+.van-comment-replying {
+  font-size: 0.8rem;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+html.dark .van-comment-hint,
+html.dark .van-comment-replying {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.van-comment-replying button,
+.van-comment-actions button,
+.van-comment-pager button {
+  border: none;
+  background: none;
+  color: rgba(0, 122, 255, 0.95);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 6px;
+}
+
+html.dark .van-comment-replying button,
+html.dark .van-comment-actions button,
+html.dark .van-comment-pager button {
+  color: #6cb2ff;
+}
+
+.van-comment-submit button[type="submit"] {
+  border: none;
+  border-radius: 999px;
+  padding: 0.45rem 1.1rem;
+  background: #007aff;
+  color: #fff;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.van-comment-submit button[type="submit"]:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.van-comment-submit button[type="submit"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.van-comment-notice {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+}
+
+.van-comment-notice-ok {
+  background: rgba(52, 199, 89, 0.12);
+  color: #1a7f37;
+}
+
+.van-comment-notice-err {
+  background: rgba(255, 59, 48, 0.12);
+  color: #b42318;
+}
+
+html.dark .van-comment-notice-ok {
+  color: #7ee2a8;
+}
+
+html.dark .van-comment-notice-err {
+  color: #ff9d97;
+}
+
+.van-comment-list,
+.van-comment-children {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.van-comment-children {
+  margin: 0.6rem 0 0;
+  padding-left: 0.9rem;
+  border-left: 2px solid rgba(0, 0, 0, 0.08);
+}
+
+html.dark .van-comment-children {
+  border-left-color: rgba(255, 255, 255, 0.12);
+}
+
+.van-comment-item {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+
+.van-comment-avatar {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0a84ff, #5e5ce6);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.van-comment-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.van-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.van-comment-nick {
+  font-weight: 600;
+  color: inherit;
+}
+
+.van-comment-badge {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.14);
+  color: #0a63c9;
+}
+
+html.dark .van-comment-badge {
+  color: #8cc4ff;
+}
+
+.van-comment-reply-to,
+.van-comment-time {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 0.78rem;
+}
+
+html.dark .van-comment-reply-to,
+html.dark .van-comment-time {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.van-comment-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.van-comment-anchor {
+  color: rgba(0, 0, 0, 0.3);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+html.dark .van-comment-anchor {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* 评论里的 markdown：比正文更紧凑，且不允许图片（白名单里就没有 img） */
+.van-comment-content {
+  font-size: 0.9rem;
+  line-height: 1.75;
+  margin-top: 0.25rem;
+  word-break: break-word;
+}
+
+.van-comment-content p {
+  margin: 0.25em 0;
+}
+
+.van-comment-content pre {
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.05);
+  overflow-x: auto;
+  font-size: 0.82rem;
+}
+
+html.dark .van-comment-content pre {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.van-comment-content code {
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 0.85em;
+}
+
+html.dark .van-comment-content code {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.van-comment-content pre code {
+  padding: 0;
+  background: none;
+}
+
+.van-comment-content blockquote {
+  margin: 0.4em 0;
+  padding-left: 0.75em;
+  border-left: 3px solid rgba(0, 0, 0, 0.15);
+  color: rgba(0, 0, 0, 0.6);
+}
+
+html.dark .van-comment-content blockquote {
+  border-left-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.van-comment-empty,
+.van-comment-loading,
+.van-comment-more-hint {
+  font-size: 0.85rem;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 0.75rem;
+}
+
+html.dark .van-comment-empty,
+html.dark .van-comment-loading,
+html.dark .van-comment-more-hint {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.van-comment-pager {
+  margin-top: 0.75rem;
+  text-align: center;
+}

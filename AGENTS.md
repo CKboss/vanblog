@@ -1254,7 +1254,55 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustness.test.js`(18)。
 基线见 §7.16。
 
-### 7.16 测试基线（本分支最后一次全量运行的结果）
+### 7.16 内置评论系统（builtin，可替代外挂 Waline）
+
+上游的评论是外挂的 Waline：server 用 `spawn` 拉起一个子进程（端口 8360、独立的 `waline` 库），
+前台加载 `@waline/client`，后台评论页是它的 `/ui` iframe，caddy 还要转发 `/comment`、`/ui` 等路径。
+现在多了一套**内置评论**：数据在 `vanBlog` 库的 `nativecomments` 集合，接口是本站的
+`/api/public/comments*` 与 `/api/admin/comment*`，前台是自研 React 组件，后台是原生管理页。
+
+- **三选一**，存在 settings 的 `type: 'comment'` 行里：`builtin` / `waline` / `off`。
+  ⚠️ **没有这一行时默认 `waline`**（老站点升级后评论不会凭空消失）；
+  **全新安装**由 `init.provider` 显式写入 `provider: 'builtin'`。
+  切换模式时 `setting.controller` 会顺手启停 waline 子进程；`walineProvider.run()` 里也有一道
+  守卫（provider 不是 waline 就直接 return，连退出钩子的自动重启一起挡住）。
+  两套数据互不迁移。
+- 数据模型是**两层**：顶层 `rootId = 0`，回复挂到所属顶层（回复「回复」也归同一顶层，
+  用 `parentId` + `replyToNick` 显示「回复 @某人」）。无限嵌套在移动端没法看，也和 Waline 表现一致。
+- **安全是重点**（评论是匿名可写的）：
+  - 渲染端不开 `allowDangerousHtml`，原始 HTML 根本不解析；再补一个 remark 插件把 html 节点
+    转成 text 节点 —— remark-rehype 默认是**直接丢弃** html 节点，那样用户写的内容会凭空消失。
+  - `utils/commentSanitize.ts` 的白名单比正文严得多：无 `img`（追踪像素/钓鱼图）、无
+    `iframe/style/svg/math/form/input/button`，属性只留 `a[href|title|rel|target]` 与代码高亮的
+    `className`，没有 `style`/`id`/`data-*`；`script`/`style` 等连内容一起 strip。
+  - 链接统一 `target=_blank` + `rel="nofollow noopener noreferrer"`（防 tab-nabbing，也不给评论区传权重）。
+  - 服务端**不信任前端**：path 必须 `/` 开头且无 `..`、文章必须真实存在且未隐藏（否则机器人可以
+    往编造路径灌库）、昵称剥尖括号与控制字符、邮箱格式校验、`site` **显式拒绝非 http/https 的 scheme**
+    （不能只靠 `new URL()` 碰巧解析失败）、内容拒绝控制字符并剥掉双向控制符（RLO 伪装）、限长。
+  - 反垃圾：蜜罐字段（对外只说「待审」，不暴露判定）、同 IP 每 10 分钟 N 条（默认 10）、
+    每天 50 条、同 IP+同内容 5 分钟 1 条、关键词命中与含外链自动转待审、演示站禁止评论。
+    限流复用 `utils/attemptLimit.ts`。
+  - 公开接口的返回里**没有** `email`/`ip`/`ua`/`reason`（`CommentProvider.toPublic` 收口），
+    这些只在后台可见；昵称/主页在组件里当文本渲染，主页还要在客户端再校验一次 `^https?://`。
+- **前台接线注意性能**：`PostCard` 里的评论区是 `dynamic(() => import("../Comment"), { ssr: false })`。
+  评论渲染用 bytemd 的 `getProcessor`，静态 import 会把 markdown 管线拖进 PostCard 的 chunk，
+  首页 First Load JS 立刻回涨（和「PostCard 不许 import ../Markdown」是同一条约束）。
+  评论数走 `utils/commentApi.ts` 的**批量合并**：50ms 内的请求合成一次 `/counts?paths=…`（上限 50 个）。
+- 坑记录：
+  1. `CommentProvider` 一开始注入了 `ArticleProvider` + `MetaProvider`，Nest 直接报
+     `A circular dependency has been detected inside AppModule`（Article ↔ Meta 本来就互相引用，
+     新加一条边把潜在环暴露了）→ 改成**直接注入 model**（`Article`/`Meta`）。
+  2. 往 `app.module.ts` 的数组里插元素时，正则的插入点已经带逗号，结果写成 `TokenController,,`
+     —— JS 数组的**空洞**会让 Nest 报成"循环依赖"（错误信息完全不指向真因）。
+     教训：脚本化改数组后一定要 `grep ',,'` 或直接看编译结果。
+  3. bytemd 的 `plugins` 数组要的是 `{remark}/{rehype}` 形状的对象，裸的 unified transformer
+     会报 `Type '(tree:any)=>void' has no properties in common with type 'BytemdPlugin'`。
+- 测试：`provider/comment/comment.provider.spec.ts`(21，用假 model 跑校验/审核/限流/隐私字段/查询)，
+  website `__tests__/comment.spec.ts`(15，渲染安全 + 接线契约)。另外用脚本对**运行中的服务**做过
+  端到端验证（发表/回复/嵌套/计数/待审/放行/删除/注入 payload/PII 不泄露）。
+- 文档：`docs/features/comment.md`（两套系统对比、审核策略、反垃圾参数、安全设计、接口清单）。
+
+### 7.17 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
@@ -1271,7 +1319,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.16 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.17 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

@@ -25,6 +25,7 @@ export type SettingType =
   | 'static'
   | 'https'
   | 'waline'
+  | 'comment'
   | 'layout'
   | 'login'
   | 'menu'
@@ -35,9 +36,42 @@ export type SettingValue =
   | StaticSetting
   | HttpsSetting
   | WalineSetting
+  | CommentSetting
   | LayoutSetting
   | VersionSetting
   | ISRSetting;
+
+/** 评论用哪一套：内置（本站 Mongo + 本站接口）/ Waline（外挂子进程）/ 关闭 */
+export type CommentProvider = 'builtin' | 'waline' | 'off';
+
+/**
+ * 审核策略：
+ * - `post` 先发后审：默认直接显示，命中规则（关键词 / 频率 / 蜜罐 / 带外链）自动转待审
+ * - `pre`  先审后发：一律待审，后台放行才显示
+ * - `none` 不审核：全部直接显示（只提供删除）
+ */
+export type CommentModeration = 'post' | 'pre' | 'none';
+
+export interface CommentSetting {
+  provider: CommentProvider;
+  moderation: CommentModeration;
+  /** 命中即转待审的关键词（大小写不敏感，支持子串） */
+  keywords: string[];
+  /** 是否必填邮箱 */
+  requireEmail: boolean;
+  /** 评论里出现外链时是否转待审 */
+  pendingOnLink: boolean;
+  /** 单条内容长度上限 */
+  maxContentLength: number;
+  /** 同一 IP 每 10 分钟最多发几条 */
+  rateLimitPer10Min: number;
+}
+
+/** 可以给前台的评论设置（不含关键词等规则细节） */
+export type PublicCommentSetting = Pick<
+  CommentSetting,
+  'provider' | 'moderation' | 'requireEmail' | 'maxContentLength'
+>;
 
 export interface ISRSetting {
   mode: 'delay' | 'onDemand';

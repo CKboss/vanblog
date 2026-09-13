@@ -2,7 +2,13 @@ import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
 
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config/index';
-import { LayoutSetting, LoginSetting, StaticSetting, WalineSetting } from 'src/types/setting.dto';
+import {
+  CommentSetting,
+  LayoutSetting,
+  LoginSetting,
+  StaticSetting,
+  WalineSetting,
+} from 'src/types/setting.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { ISRProvider } from 'src/provider/isr/isr.provider';
 import { SettingProvider } from 'src/provider/setting/setting.provider';
@@ -43,6 +49,46 @@ export class SettingController {
       data: res,
     };
   }
+  @Get('comment')
+  async getCommentSetting() {
+    return {
+      statusCode: 200,
+      data: await this.settingProvider.getCommentSetting(),
+    };
+  }
+
+  /**
+   * 切换评论系统：
+   * - 切到 `waline` → 把 waline 子进程拉起来；
+   * - 切到 `builtin` / `off` → 停掉它（省一个 node 进程和 8360 端口）。
+   * 两边的评论数据互不影响（内置在 vanBlog 库的 comments 集合，waline 在 waline 库）。
+   */
+  @Put('comment')
+  async updateCommentSetting(@Body() body: CommentSetting) {
+    if (config.demo && config.demo == 'true') {
+      return {
+        statusCode: 401,
+        message: '演示站禁止修改此项！',
+      };
+    }
+    const before = await this.settingProvider.getCommentSetting();
+    const res = await this.settingProvider.updateCommentSetting(body || ({} as CommentSetting));
+    const after = await this.settingProvider.getCommentSetting();
+    if (before.provider !== after.provider) {
+      if (after.provider === 'waline') {
+        await this.walineProvider.restart('评论系统切换为 waline，');
+      } else {
+        await this.walineProvider.stop();
+        this.walineProvider.logger.log(`评论系统切换为 ${after.provider}，已停止 waline 子进程`);
+      }
+    }
+    return {
+      statusCode: 200,
+      data: after,
+      res,
+    };
+  }
+
   @Put('waline')
   async updateWalineSetting(@Body() body: WalineSetting) {
     if (config.demo && config.demo == 'true') {

@@ -83,6 +83,10 @@ import {
   PublicOldCustomPageRedirectController,
 } from './controller/customPage/customPage.controller';
 import { Pipeline, PipelineSchema } from './scheme/pipeline.schema';
+import { NativeComment, NativeCommentSchema } from './scheme/comment.schema';
+import { CommentProvider } from './provider/comment/comment.provider';
+import { PublicCommentController } from './controller/public/comment.controller';
+import { CommentController } from './controller/admin/comment/comment.controller';
 import { PipelineProvider } from './provider/pipeline/pipeline.provider';
 import { PipelineController } from './controller/admin/pipeline/pipeline.controller';
 import { TokenController } from './controller/admin/token/token.controller';
@@ -106,6 +110,7 @@ import { initJwt } from './utils/initJwt';
       { name: Token.name, schema: TokenSchema },
       { name: Category.name, schema: CategorySchema },
       { name: Pipeline.name, schema: PipelineSchema },
+      { name: NativeComment.name, schema: NativeCommentSchema },
     ]),
     JwtModule.registerAsync({
       useFactory: async () => {
@@ -150,6 +155,8 @@ import { initJwt } from './utils/initJwt';
     PublicOldCustomPageRedirectController,
     PipelineController,
     TokenController,
+    PublicCommentController,
+    CommentController
   ],
   providers: [
     AppService,
@@ -189,6 +196,7 @@ import { initJwt } from './utils/initJwt';
     TokenGuard,
     WebsiteProvider,
     PipelineProvider,
+    CommentProvider
   ],
 })
 export class AppModule implements NestModule {

@@ -58,6 +58,9 @@ export class InitProvider {
         },
         categories: [],
       });
+      // 全新安装默认用**内置评论**（不依赖 waline 子进程）；
+      // 老站点升级时没有这条设置，SettingProvider 会回落到 waline，评论数据不受影响。
+      await this.settingProvider.updateCommentSetting({ provider: 'builtin' });
       await this.settingProvider.updateMenuSetting({ data: defaultMenu });
       // 运行 waline
       this.walineProvider.init();
