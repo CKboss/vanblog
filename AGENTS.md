@@ -1696,7 +1696,7 @@ CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）�
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 56 文件 / 537 用例全绿 |
-| admin `node --test tests/unit` | 80 套件 / 322 用例全绿 |
+| admin `node --test tests/unit` | 81 套件 / 322 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
