@@ -1,6 +1,7 @@
 /** 搜索类查询的时间上限：正文全文 $regex 扫描很贵，超时就放弃，别把库拖死。 */
 const SEARCH_MAX_TIME_MS = 5000;
 
+import { verifyAccessPassword } from 'src/utils/crypto';
 import {
   Logger,
   BadRequestException,
@@ -997,7 +998,9 @@ export class ArticleProvider {
     // 旧实现在「标记了加密但没设密码」时直接返回全文，于是任何人随便填个密码
     // 就能拿到 GET 接口特意抹掉 content 的那些文章（未鉴权的正文泄露）。
     const supplied = asQueryString(password);
-    if (!targetPassword || !supplied || String(targetPassword) !== supplied) {
+    // 常量时间比较（原来的 !== 会因短路而泄露长度/前缀信息），
+    // 并且同时支持历史的明文密码与将来的 scrypt 哈希
+    if (!verifyAccessPassword(targetPassword, supplied)) {
       return null;
     }
     return plain;

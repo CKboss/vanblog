@@ -1,3 +1,4 @@
+import { rateLimitMiddleware, securityHeadersMiddleware } from './utils/rateLimit';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -201,6 +202,10 @@ import { initJwt } from './utils/initJwt';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
+    // 安全响应头 + 全局兜底限流（容器内部回环调用放行）
+    consumer
+      .apply(securityHeadersMiddleware, rateLimitMiddleware)
+      .forRoutes({ path: '*', method: RequestMethod.ALL });
     consumer.apply(NoStoreCacheMiddleware).forRoutes({
       path: '*',
       method: RequestMethod.ALL,

@@ -131,7 +131,13 @@ describe('安全加固：认证与权限', () => {
     assert.match(user, /密码不合法/);
     assert.doesNotMatch(user, /\.\.\.updateUserDto,\n\s*password:/);
     assert.doesNotMatch(user, /type: 'collaborator',\n\s*\.\.\.collaboratorDto/);
-    assert.match(user, /if \(!encrypted \|\| !user\.password\)/);
+    // 口令校验走统一入口：scrypt（新）与 sha256（旧）都认，登录成功后自动升级
+    assert.match(user, /verifyUserPassword\(user\.password, name, password, user\.salt\)/);
+    assert.match(user, /hashSecret\(passwordInput\)/);
+    // 不再「算出哈希再去 Mongo 里查」——那样只能支持一种存储格式
+    assert.doesNotMatch(user, /findOne\(\{ name, password: encrypted \}\)/);
+    // 空口令一律拒绝（空哈希曾经等于空密码可登录）
+    assert.match(user, /typeof password !== 'string' \|\| !password/);
     assert.match(user, /pickPermissions/);
   });
 
@@ -187,13 +193,77 @@ describe('安全加固：认证与权限', () => {
   });
 });
 
+describe('安全加固：口令哈希 / 限流 / 响应头 / 全量拉取', () => {
+  it('口令存 scrypt，且校验兼容旧格式（否则升级会把所有人锁在门外）', () => {
+    const crypto = read('packages/server/src/utils/crypto.ts');
+    assert.match(crypto, /scryptSync/);
+    assert.match(crypto, /timingSafeEqual/);
+    assert.match(crypto, /export function verifyUserPassword/);
+    assert.match(crypto, /export function verifyAccessPassword/);
+    // 存储格式自描述，便于以后调参数或换 KDF
+    assert.match(crypto, /scrypt\$/);
+    // 参数上限：库被改过也不能构造出让进程 OOM 的哈希
+    assert.match(crypto, /N > 1048576/);
+    // 空口令不能被哈希成空串（空哈希曾经等于空密码可登录）
+    assert.match(crypto, /if \(!value\) \{\n    return '';/);
+    // 初始化管理员也走 scrypt
+    assert.match(read('packages/server/src/provider/init/init.provider.ts'), /hashSecret\(user\.password\)/);
+  });
+
+  it('全局限流：分档、回环放行必须要求「无转发头」、出错放行', () => {
+    const rl = read('packages/server/src/utils/rateLimit.ts');
+    assert.match(rl, /VANBLOG_RATE_LIMIT_PER_MIN/);
+    assert.match(rl, /VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN/);
+    assert.match(rl, /VANBLOG_INIT_LIMIT_PER_10MIN/);
+    assert.match(rl, /Retry-After/);
+    // 只看 socket 会出事：一体式镜像里 caddy 转发来的请求 socket 全是 127.0.0.1
+    assert.match(rl, /x-forwarded-for/);
+    assert.match(rl, /x-real-ip/);
+    // fail-open：限流组件自己出错时放行，不拿可用性换防护
+    assert.match(rl, /return next\(\);\n  \}\n\}/);
+    assert.match(read('packages/server/src/app.module.ts'), /securityHeadersMiddleware, rateLimitMiddleware/);
+  });
+
+  it('安全响应头下发，但没有半成品 CSP；X-Frame-Options 是 SAMEORIGIN 不是 DENY', () => {
+    const rl = read('packages/server/src/utils/rateLimit.ts');
+    assert.match(rl, /X-Content-Type-Options', 'nosniff'/);
+    assert.match(rl, /X-Frame-Options', 'SAMEORIGIN'/);
+    assert.match(rl, /Referrer-Policy/);
+    assert.match(rl, /Permissions-Policy/);
+    // 后台要 iframe 同源的 waline /ui，DENY 会直接白屏
+    assert.doesNotMatch(rl, /X-Frame-Options', 'DENY'/);
+    assert.doesNotMatch(rl, /Content-Security-Policy/);
+    const caddy = read('CaddyfileTemplate');
+    assert.match(caddy, /X-Content-Type-Options "nosniff"/);
+    assert.doesNotMatch(caddy, /Content-Security-Policy/);
+  });
+
+  it('pageSize=-1 只给内部调用；API Token 不再是 100 年', () => {
+    const pub = read('packages/server/src/controller/public/public.controller.ts');
+    assert.match(pub, /const unlimited = isInternalRequest\(req\);/);
+    assert.match(pub, /allowUnlimited: unlimited/);
+    assert.doesNotMatch(pub, /allowUnlimited: true,/);
+    const rl = read('packages/server/src/utils/rateLimit.ts');
+    assert.match(rl, /VAN_BLOG_INTERNAL_TOKEN/);
+    const token = read('packages/server/src/provider/token/token.provider.ts');
+    assert.doesNotMatch(token, /365 \* 100/);
+    assert.match(token, /VANBLOG_API_TOKEN_TTL_DAYS/);
+  });
+
+  it('没有偷偷打开 CORS（那会让任意站点带着用户 token 调后台接口）', () => {
+    assert.doesNotMatch(read('packages/server/src/main.ts'), /enableCors/);
+  });
+});
+
 describe('安全加固：加密内容与恢复', () => {
   it('加密文章不会通过搜索/POST 解锁接口/RSS 泄露', () => {
     const article = read('packages/server/src/provider/article/article.provider.ts');
     assert.match(article, /getPrivateCategoryNames/);
     assert.match(article, /category: \{ \$nin: privateCategories \}/);
     assert.match(article, /const isPrivate = !!article\.private \|\| categoryPrivate;/);
-    assert.match(article, /String\(targetPassword\) !== supplied/);
+    // 访问密码改成常量时间比较（原来的 !== 会因短路泄露长度/前缀），且兼容历史明文与 scrypt
+    assert.match(article, /verifyAccessPassword\(targetPassword, supplied\)/);
+    assert.doesNotMatch(article, /String\(targetPassword\) !== supplied/);
     assert.match(read('packages/server/src/provider/rss/rss.provider.ts'), /privateCategories\.has/);
   });
 

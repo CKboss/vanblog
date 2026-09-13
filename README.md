@@ -104,6 +104,10 @@
 - 流水线执行加了超时与 `error`/`exit` 监听（以前脚本不返回就会**永久卡住保存文章**）；`getNewId()` 的锁改成 `try/finally`（一次查询失败不会让所有新建请求空转到重启进程）；
 - 图片链接解析不再把 alt 文本 / 代码块里的示例当成真图片（以前会误报「失效图片」并往库里插垃圾记录）；「本地化远程图片」也不再改坏教程里的 ```md 示例；
 - `/swagger` 可用 `VANBLOG_SWAGGER=false` 关闭；`/api/revalidate` 支持共享密钥与路径校验（单独部署 website 镜像时它是公网可达的）；ISR 触发地址改用 `URLSearchParams`（`encodeURI` 不编码 `#`，而文章别名允许 `#`，以前会静默失效）；
+- **管理员口令改存 scrypt**（原来是 sha256 套 sha256 的快哈希，库泄露后可被 GPU 高速爆破）。**迁移是透明的**：新旧格式都认，登录成功时自动升级，用户不用改密码；
+- **全局限流**：`/api/admin/init*` 10 分钟 5 次、`/api/public/**` 写操作每分钟 30 次、全局每分钟 600 次（都可调），命中返回 429 + `Retry-After`；容器内部回环调用放行（判据要求「回环 **且** 无 `X-Forwarded-For`」，反代后的真实客户端不会被误放行），限流组件出错时 fail-open；
+- **安全响应头**：`nosniff`、`X-Frame-Options: SAMEORIGIN`（后台要 iframe 同源的 waline `/ui`，所以不是 DENY）、`Referrer-Policy`、`Permissions-Policy`，并隐藏 caddy 的 `Server` 头；
+- 公开文章列表的 `pageSize=-1`（一次拉走全站正文）现在只允许内部调用；**API Token 有效期从 100 年改成默认 1 年**（`VANBLOG_API_TOKEN_TTL_DAYS` 可调，已签发的不受影响）；文章解锁密码改成常量时间比较；
 - **评论系统**（匿名可写，所以比正文严得多）：原始 HTML 根本不解析、白名单不含 `img`/`iframe`/`style`/`svg`、链接强制 `rel="nofollow noopener noreferrer"`、服务端重新校验每个字段（含显式拒绝 `javascript:` 等非 http(s) scheme、剥掉双向控制符防 RLO 伪装）、蜜罐 + 同 IP 频率/每日/重复内容三重限制、公开接口不返回邮箱/IP/UA。
 
 约束、可调开关与**已知未修项**都写在 [安全与加固](docs/advanced/security.md)。
@@ -134,6 +138,11 @@
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | 设 `true` 恢复「任何域名都批准按需证书」（多域名/CDN 场景） |
 | `VANBLOG_REPO` / `VANBLOG_BRANCH` / `VANBLOG_SRC_DIR` / `VANBLOG_IMAGE_TAG` | `CKboss/vanblog` / `dev/dsh` / `<base>/src` / `vanblog:dev-dsh` | 一键脚本的源码来源与本地镜像 tag |
 | `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 用官方镜像（不含本分支改动） |
+| `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（兜底限流） |
+| `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作的上限 |
+| `VANBLOG_INIT_LIMIT_PER_10MIN` | `5` | 每 IP 每 10 分钟对 `/api/admin/init*` 的上限 |
+| `VAN_BLOG_INTERNAL_TOKEN` | 空 | 前后端分离部署时的内部令牌：带 `x-vanblog-internal` 头才允许 `pageSize=-1`（一体式镜像回环直连自动放行） |
+| `VANBLOG_API_TOKEN_TTL_DAYS` | `365` | 新签发 API Token 的有效期（原来是 100 年） |
 
 完整清单（含上游原有的）见 [安全与加固](docs/advanced/security.md) 和 [配置](docs/features/config.md)。
 
@@ -142,10 +151,11 @@
 - **评论**：内置系统目前没有邮件 / webhook 通知（Waline 有）、没有点赞 UI（`likeCount` 已经存着）、没有验证码；从 Waline 迁移需要手动调导入接口。
 - `/post/<数字id>` 与 `/post/<别名>` 仍然都返回 200，没有 canonical / 301，阅读量按 pathname 分开统计。
 - 公开列表接口仍支持 `pageSize=-1` 全量拉取（前端静态生成依赖它）。
-- 口令仍是 sha256 套 sha256（不是 bcrypt/argon2）；文章与分类的访问密码是**明文存储**、用 `==` 比较。
-- 除了登录与文章解锁，没有全局速率限制；没有全局 `ValidationPipe`（参数校验靠各处手写）。
-- `/api/admin/init` 没有守卫，靠「库里有没有用户」判断是否已初始化。
-- API Token 有效期 100 年，只能手动吊销。
+- **文章 / 分类的访问密码仍是明文存储**（校验已常量时间、解锁接口已限次）。没直接换哈希是因为后台表单会把密码回填到输入框，改哈希必须同时改前端语义（留空 = 不修改），要做得前后端一起改。
+- **没有 CSP**：内联样式 + bytemd 注入的脚本 + 可选第三方统计，严 CSP 会把站点搞坏，要先给内联样式发 nonce 才能上。
+- 没有全局 `ValidationPipe`（`class-validator` 不是依赖），参数校验靠各处手写；净化中间件是黑名单不是白名单。
+- `/api/admin/init` 仍靠「库里有没有用户」判断是否已初始化（现在有 10 分钟 5 次的限流兜着）。
+- `/swagger` 默认公开（可用 `VANBLOG_SWAGGER=false` 关）。
 
 完整清单见 [安全与加固 · 已知未修项](docs/advanced/security.md)。
 
@@ -166,10 +176,10 @@
 
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **562** 用例（1 个既有用例需联网拉字体，离线必失败） |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **587** 用例（1 个既有用例需联网拉字体，离线必失败） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **52 文件 / 484** 用例 |
-| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **71 文件 / 272** 用例 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 306** 条断言 |
+| admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **72 套件 / 277** 用例 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 313** 条断言 |
 
 三套 JS 测试都要用 `.tools/node20`（系统 Node ≥ 23 会因为 `util.isObject` 被移除而崩）。
 

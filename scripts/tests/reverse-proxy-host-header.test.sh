@@ -528,6 +528,25 @@ else
   fail "docs/changelog.md documents #469"
 fi
 
+# --- 内置 Caddyfile 模板的安全响应头 ---
+CADDY_TEMPLATE="${ROOT}/CaddyfileTemplate"
+assert_file_contains() {
+  local file="$1" needle="$2" label="$3"
+  if grep -q -- "${needle}" "${file}" 2>/dev/null; then pass "${label}"; else fail "${label} (missing: ${needle})"; fi
+}
+assert_file_not_contains() {
+  local file="$1" needle="$2" label="$3"
+  if grep -q -- "${needle}" "${file}" 2>/dev/null; then fail "${label} (unexpected: ${needle})"; else pass "${label}"; fi
+}
+assert_file_contains "${CADDY_TEMPLATE}" 'X-Content-Type-Options "nosniff"' "Caddy 模板下发 nosniff"
+assert_file_contains "${CADDY_TEMPLATE}" 'X-Frame-Options "SAMEORIGIN"' "Caddy 模板下发 X-Frame-Options（SAMEORIGIN：后台要 iframe 同源的 waline /ui）"
+assert_file_contains "${CADDY_TEMPLATE}" 'Referrer-Policy "strict-origin-when-cross-origin"' "Caddy 模板下发 Referrer-Policy"
+assert_file_contains "${CADDY_TEMPLATE}" 'Permissions-Policy' "Caddy 模板下发 Permissions-Policy"
+assert_file_contains "${CADDY_TEMPLATE}" '-Server' "Caddy 模板隐藏 Server 头"
+# CSP 是刻意不加的：内联样式 + 可选第三方统计会被打坏，要做得先给内联样式发 nonce
+assert_file_not_contains "${CADDY_TEMPLATE}" 'Content-Security-Policy' "Caddy 模板不半成品地上 CSP"
+assert_file_contains "${CADDY_TEMPLATE}" 'trusted_proxies private_ranges' "反代信任私网段的设置还在（限流靠 XFF 取真实 IP）"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

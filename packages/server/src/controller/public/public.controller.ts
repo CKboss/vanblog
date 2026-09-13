@@ -20,6 +20,7 @@ import { pickSocketIp } from 'src/provider/log/utils';
 import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePagination } from 'src/utils/pagination';
+import { isInternalRequest } from 'src/utils/rateLimit';
 
 @ApiTags('public')
 @Controller('/api/public/')
@@ -180,6 +181,7 @@ export class PublicController {
   }
   @Get('article')
   async getByOption(
+    @Req() req: any,
     @Query('page') page: number,
     @Query('pageSize') pageSize: number | undefined,
     @Query('toListView') toListView = false,
@@ -191,8 +193,13 @@ export class PublicController {
     @Query('sortTop') sortTop?: SortOrder,
   ) {
     const defaultPageSize = await this.metaProvider.getArticlesPerPage();
+    // `pageSize=-1` 会把**全部文章连正文**一次性拉走（前台静态生成需要它），
+    // 但匿名访客也能调，等于一个现成的「拖库 + 打爆内存」按钮。
+    // 现在只允许本站内部调用（回环直连，或带 VAN_BLOG_INTERNAL_TOKEN），
+    // 其它一律夹到 MAX_PAGE_SIZE；正常翻页与分类/标签页都不受影响。
+    const unlimited = isInternalRequest(req);
     const paging = sanitizePagination(page, pageSize, {
-      allowUnlimited: true,
+      allowUnlimited: unlimited,
       defaultPageSize,
     });
     const option = {

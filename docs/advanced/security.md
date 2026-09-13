@@ -54,16 +54,82 @@ order: 9
 | `VAN_BLOG_REVALIDATE_SECRET` | 空 | 设了之后，前台的 `/api/revalidate` 必须带同名 `secret` 才生效（server 会自动带上）。一体式镜像里该路由不可达，**单独部署 website 镜像时建议设置** |
 | `VANBLOG_PIPELINE_TIMEOUT_MS` | `30000` | 单个流水线的执行上限；超时直接杀进程，避免保存文章时被卡死 |
 | `VANBLOG_DEPS_INSTALL_TIMEOUT_MS` | `300000` | 流水线安装依赖（`pnpm add`）的上限 |
+| `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（兜底限流，挡扫描器与失控客户端） |
+| `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作（POST/PUT/DELETE）的上限 |
+| `VANBLOG_INIT_LIMIT_PER_10MIN` | `5` | 每 IP 每 10 分钟对 `/api/admin/init*` 的调用上限 |
+| `VAN_BLOG_INTERNAL_TOKEN` | 空 | 前后端分离部署时的内部令牌：带上 `x-vanblog-internal: <token>` 的请求才允许 `pageSize=-1`（一体式镜像里回环直连自动放行，不需要设） |
+| `VANBLOG_API_TOKEN_TTL_DAYS` | `365` | 新签发 API Token 的有效期（天）。原来是 100 年，等于永不过期；已签发的 token 不受影响 |
+
+## 口令存储：scrypt（登录时自动迁移）
+
+管理员与协作者的口令以前是 `sha256(sha256(username + 浏览器端派生值) + salt + sha256(username + salt))`。
+纯 sha256 是**快哈希**：拿到库（或整站备份）之后可以用 GPU 每秒试几十亿次。现在改成 **scrypt**
+（`N=16384, r=8, p=1`，每次校验要吃 16MB 内存），存储格式自描述：
+
+```
+scrypt$16384$8$1$<salt base64>$<hash base64>
+```
+
+- **迁移是透明的**：校验函数同时认新格式与旧格式，登录成功时顺手把旧哈希升级成 scrypt
+  （`UserProvider.updateSalt()` 本来就每次登录轮换盐）。用户不需要改密码，也不用停机跑脚本。
+- 客户端不用改：scrypt 的输入仍然是浏览器端派生出来的那个值。
+- 新建用户、改密码、建/改协作者、「忘记密码」恢复通道都直接写 scrypt。
+- 只有一处仍是旧格式：`washUserWithSalt()`（把更老的「无盐」数据洗成带盐的）。它的输入是
+  **上一代服务端哈希**，拿不到浏览器端派生值，没法直接换；等该用户下次登录成功就会自动升级。
+- 校验时会检查 scrypt 参数上限（`N ≤ 2^20`、`128*N*r ≤ 64MB`）：库被改过也不至于构造出
+  一个让进程 OOM 的哈希。
+- 空口令一律拒绝（空哈希曾经等于「空密码可登录」）。
+
+## 限流
+
+| 范围 | 默认 | 环境变量 |
+| --- | --- | --- |
+| 登录 | LoginGuard（既有） | — |
+| 加密文章解锁 | 同 IP + 同文章 10 分钟 20 次 | — |
+| 发表评论 | 10 分钟 N 次 + 每天 50 次 + 同内容 5 分钟 1 次 | 后台「评论设置」 |
+| `/api/admin/init*` | 10 分钟 5 次 | `VANBLOG_INIT_LIMIT_PER_10MIN` |
+| `/api/public/**` 写操作 | 每分钟 30 次 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` |
+| 全局兜底 | 每分钟 600 次 | `VANBLOG_RATE_LIMIT_PER_MIN` |
+
+两条设计原则：
+
+- **容器内部回环直连放行**（前台 SSR、waline、ISR 触发都要高频调公开接口）。判据要求
+  「socket 是回环 **且** 请求里没有 `X-Forwarded-For` / `X-Real-IP`」—— 经过 caddy/nginx
+  转发的一定带转发头，所以反代后面的真实客户端不会被误放行。
+- **fail-open**：限流组件自己抛错时放行。宁可少挡一次，也不能因为一个计数器把整站变成 500。
+
+命中限流返回 `429` 并带 `Retry-After`。
+
+## 其它加固
+
+- **安全响应头**（caddy 模板与 Nest 中间件都下发）：`X-Content-Type-Options: nosniff`、
+  `X-Frame-Options: SAMEORIGIN`（不是 DENY：后台要 iframe 同源的 waline `/ui`）、
+  `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`，并隐藏 caddy 的 `Server` 头。
+- **`pageSize=-1` 收敛**：公开文章列表以前允许任何人一次性把**全部文章连正文**拉走
+  （一个现成的拖库 + 打爆内存按钮）。现在只有内部调用（回环直连，或带
+  `x-vanblog-internal: <VAN_BLOG_INTERNAL_TOKEN>`）可以，其它一律夹到 `MAX_PAGE_SIZE`。
+  前台静态生成走的是容器内回环，一体式部署不需要任何配置；前后端分离部署时给两边配同一个
+  `VAN_BLOG_INTERNAL_TOKEN` 即可。
+- **API Token 有效期**：原来是 **100 年**（等于永不过期，泄露一次长期有效）。新签发的默认 1 年，
+  可用 `VANBLOG_API_TOKEN_TTL_DAYS` 调；已签发的 token 不受影响（各自的 `expiresIn` 已经写在库里），
+  需要的话在后台吊销。
+- **文章解锁的密码比较改成常量时间**（原来的 `!==` 会因短路泄露长度/前缀信息），
+  并且同时支持明文（历史数据）与 scrypt 哈希。
 
 ## 已知限制（尚未处理）
 
-- 文章/分类的**加密密码是明文存储**、用 `==` 比较，且解锁接口没有次数限制（可离线爆破）。
-- 管理员口令用的是 sha256 套 sha256（带每用户 salt），**不是 bcrypt/argon2**：数据库或备份泄露后可以被 GPU 快速爆破。
-- 加密文章的解锁接口已有次数限制（同一 IP + 同一文章 10 分钟 20 次），但**其它公开接口仍没有全局限流**。
-- Swagger（`/swagger`、`/swagger-json`）默认公开，等于把整个后台 API 面暴露给未登录用户。
-- 没有全局 `ValidationPipe`（`class-validator` 不是依赖），参数校验靠各处手写；目前的净化中间件是「黑名单」而不是「白名单」。
-- 后台的 `/init` 接口没有守卫，靠「库里有没有用户」判断是否已初始化（初始化窗口内的 TOCTOU）。
-- API Token 有效期 100 年，只能靠手动吊销。
+- **文章 / 分类的访问密码仍是明文存储**。校验已经常量时间、解锁接口已限次，但没有直接换成哈希：
+  后台「修改信息」表单会把存着的密码**回填到输入框**，改成哈希就必须同时改前端语义
+  （留空 = 不修改），否则会把密码改成哈希串、或把文章意外解锁。要做就得前后端一起改。
+- **没有 CSP**。前台/后台都有大量内联样式、bytemd 注入的脚本与可选的第三方统计，
+  严 CSP 会直接把站点搞坏，松 CSP 又等于没有；要做必须先给内联样式发 nonce（`next/script` 也要一并改）。
+- **没有全局 `ValidationPipe`**（`class-validator` 不是依赖），参数校验靠各处手写；
+  请求净化中间件是「黑名单」而不是「白名单」。
+- `/api/admin/init` 仍然靠「库里有没有用户」判断是否已初始化（初始化窗口内的 TOCTOU），
+  现在只有 10 分钟 5 次的限流兜着。
+- `/swagger` 默认公开（可用 `VANBLOG_SWAGGER=false` 关闭），等于把整个后台 API 面摊给未登录用户。
+- `/post/<数字id>` 与 `/post/<别名>` 都返回 200，没有 canonical / 301，阅读量按 pathname 分开统计。
+- website 的 `__tests__` 里还有约 27 个类型错误，构建时靠 `VANBLOG_SKIP_TYPECHECK=true` / `isBuild=t` 绕过。
 
 ::: warning 部署建议
 

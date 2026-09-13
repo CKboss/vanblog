@@ -10,7 +10,7 @@ import { Model } from 'mongoose';
 import { UpdateUserDto } from 'src/types/user.dto';
 import { User, UserDocument } from 'src/scheme/user.schema';
 import { Collaborator } from 'src/types/collaborator';
-import { encryptPassword, makeSalt, washPassword } from 'src/utils/crypto';
+import { encryptPassword, hashSecret, makeSalt, verifyUserPassword, washPassword } from 'src/utils/crypto';
 
 function assertCollaboratorName(name: unknown): string {
   const value = typeof name === 'string' ? name.trim() : '';
@@ -54,6 +54,9 @@ export class UserProvider {
   }
   async washUserWithSalt() {
     // 如果没加盐的老版本，给改成带加盐的。
+    // 注意这里**只能**继续用旧的 sha256 方案：输入是「上一代服务端哈希」，
+    // 拿不到浏览器端派生值，没法直接换成 scrypt。等用户下次登录成功时，
+    // updateSalt() 会自动把它升级成 scrypt。
     const users = await this.userModel.find({
       $or: [
         {
@@ -85,25 +88,30 @@ export class UserProvider {
     if (!user) {
       return null;
     } else {
-      const encrypted = encryptPassword(name, password, user.salt);
-      if (!encrypted || !user.password) {
+      // 不再拿算出来的哈希去 Mongo 里查（那样只能支持一种格式），
+      // 改成取出用户后在 JS 里校验：新格式 scrypt、旧格式 sha256 都认。
+      if (!verifyUserPassword(user.password, name, password, user.salt)) {
         return null;
       }
-      const result = await this.userModel.findOne({ name, password: encrypted }).exec();
-      if (result) {
-        this.updateSalt(result, password);
-      }
-      return result;
+      // 登录成功顺手轮换盐；旧格式的哈希会在这一刻被升级成 scrypt
+      this.updateSalt(user, password);
+      return user;
     }
   }
 
   async updateSalt(user: User, passwordInput: string) {
     const newSalt = makeSalt();
+    const hashed = hashSecret(passwordInput);
+    if (!hashed) {
+      // 绝不把空哈希写进库（空哈希曾经等于「空密码可登录」）
+      return;
+    }
     await this.userModel.updateOne(
       { id: user.id },
       {
+        // salt 仍然轮换：旧格式校验要用它，新格式自带盐，留着不影响
         salt: newSalt,
-        password: encryptPassword(user.name, passwordInput, newSalt),
+        password: hashed,
       },
     );
   }
@@ -126,7 +134,7 @@ export class UserProvider {
     if (!password || password.length > 200) {
       throw new BadRequestException('密码不合法（1-200 个字符）');
     }
-    const nextPassword = encryptPassword(name, password, currUser.salt);
+    const nextPassword = hashSecret(password);
     if (!nextPassword) {
       // 理论上到不了这里（上面已经挡掉空值），留一道兜底：绝不把空哈希写进库
       throw new BadRequestException('密码不合法，未做任何修改');
@@ -169,7 +177,7 @@ export class UserProvider {
       throw new ForbiddenException('已有为该用户名的协作者，不可重复创建！');
     }
     const salt = makeSalt();
-    const encrypted = encryptPassword(name, password, salt);
+    const encrypted = hashSecret(password);
     if (!encrypted) {
       throw new BadRequestException('密码不合法，未创建协作者');
     }
@@ -193,7 +201,7 @@ export class UserProvider {
     }
     const password = assertCollaboratorPassword(collaboratorDto?.password);
     const salt = makeSalt();
-    const encrypted = encryptPassword(oldData.name, password, salt);
+    const encrypted = hashSecret(password);
     if (!encrypted) {
       throw new BadRequestException('密码不合法，未修改协作者');
     }

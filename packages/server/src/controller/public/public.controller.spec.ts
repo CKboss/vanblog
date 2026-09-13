@@ -1,5 +1,10 @@
 import { PublicController } from './public.controller';
 import { DEFAULT_ARTICLES_PER_PAGE } from 'src/utils/articlesPerPage';
+import { MAX_PAGE_SIZE } from 'src/utils/pagination';
+
+// MAX_PAGE_SIZE 只在「显式给了一个超大 pageSize」时才是上限；pageSize=-1 对外部请求
+// 是「无效值」，会退回站点设置的每页条数
+void MAX_PAGE_SIZE;
 
 function createController(siteInfo: Record<string, unknown> = {}) {
   const articleProvider = {
@@ -42,10 +47,18 @@ function createController(siteInfo: Record<string, unknown> = {}) {
   return { controller, articleProvider, metaProvider, categoryProvider };
 }
 
+/** 容器内部调用（前台 SSR / 构建）：回环直连且没有转发头 */
+const internalReq = { socket: { remoteAddress: '127.0.0.1' }, headers: {} } as any;
+/** 经反代进来的真实客户端：socket 是回环，但带 X-Forwarded-For */
+const externalReq = {
+  socket: { remoteAddress: '127.0.0.1' },
+  headers: { 'x-forwarded-for': '203.0.113.9' },
+} as any;
+
 describe('PublicController article list page size (#346)', () => {
   it('uses the site setting as the default pageSize when the query omits it', async () => {
     const { controller, articleProvider } = createController({ articlesPerPage: 10 });
-    await controller.getByOption(1 as any, undefined as any);
+    await controller.getByOption(internalReq, 1 as any, undefined as any);
     expect(articleProvider.getByOption).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, pageSize: 10 }),
       true,
@@ -54,7 +67,7 @@ describe('PublicController article list page size (#346)', () => {
 
   it('defaults to 5 when the site has no articlesPerPage setting', async () => {
     const { controller, articleProvider } = createController({});
-    await controller.getByOption(1 as any, undefined as any);
+    await controller.getByOption(internalReq, 1 as any, undefined as any);
     expect(articleProvider.getByOption).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, pageSize: DEFAULT_ARTICLES_PER_PAGE }),
       true,
@@ -63,23 +76,61 @@ describe('PublicController article list page size (#346)', () => {
 
   it('clamps a huge configured default so list queries cannot DoS', async () => {
     const { controller, articleProvider } = createController({ articlesPerPage: 9999 });
-    await controller.getByOption(2 as any, undefined as any);
+    await controller.getByOption(internalReq, 2 as any, undefined as any);
     expect(articleProvider.getByOption).toHaveBeenCalledWith(
       expect.objectContaining({ page: 2, pageSize: 50 }),
       true,
     );
   });
 
+  it('只允许内部调用用 pageSize=-1，外部请求一律夹到上限', async () => {
+    const { controller, articleProvider } = createController({ articlesPerPage: 10 });
+    await controller.getByOption(externalReq, 1 as any, -1 as any);
+    // -1（拉全站）对外部请求无效，退回站点设置的每页条数（并且不会超过 MAX_PAGE_SIZE）
+    expect(articleProvider.getByOption).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, pageSize: 10 }),
+      true,
+    );
+
+    articleProvider.getByOption.mockClear();
+    // 带内部令牌也算内部（前后端分离部署时 website 容器不在回环上）
+    process.env.VAN_BLOG_INTERNAL_TOKEN = 'test-token';
+    try {
+      await controller.getByOption(
+        { socket: { remoteAddress: '203.0.113.9' }, headers: { 'x-vanblog-internal': 'test-token' } } as any,
+        1 as any,
+        -1 as any,
+      );
+      expect(articleProvider.getByOption).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 1, pageSize: -1 }),
+        true,
+      );
+      articleProvider.getByOption.mockClear();
+      // 令牌不对就还是夹住
+      await controller.getByOption(
+        { socket: { remoteAddress: '203.0.113.9' }, headers: { 'x-vanblog-internal': 'wrong' } } as any,
+        1 as any,
+        -1 as any,
+      );
+      expect(articleProvider.getByOption).toHaveBeenCalledWith(
+        expect.objectContaining({ page: 1, pageSize: 10 }),
+        true,
+      );
+    } finally {
+      delete process.env.VAN_BLOG_INTERNAL_TOKEN;
+    }
+  });
+
   it('still honors an explicit pageSize query (including unlimited -1)', async () => {
     const { controller, articleProvider } = createController({ articlesPerPage: 10 });
-    await controller.getByOption(1 as any, 8 as any);
+    await controller.getByOption(internalReq, 1 as any, 8 as any);
     expect(articleProvider.getByOption).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, pageSize: 8 }),
       true,
     );
 
     articleProvider.getByOption.mockClear();
-    await controller.getByOption(1 as any, -1 as any);
+    await controller.getByOption(internalReq, 1 as any, -1 as any);
     expect(articleProvider.getByOption).toHaveBeenCalledWith(
       expect.objectContaining({ page: 1, pageSize: -1 }),
       true,

@@ -7,7 +7,7 @@ import { UserDocument } from 'src/scheme/user.schema';
 import { WalineProvider } from '../waline/waline.provider';
 import { SettingProvider } from '../setting/setting.provider';
 import { version } from '../../utils/loadConfig';
-import { encryptPassword, makeSalt } from 'src/utils/crypto';
+import { encryptPassword, hashSecret, makeSalt } from 'src/utils/crypto';
 import { defaultMenu } from 'src/types/menu.dto';
 import { CacheProvider } from '../cache/cache.provider';
 import fs from 'fs';
@@ -42,7 +42,8 @@ export class InitProvider {
       await this.userModel.create({
         id: 0,
         name: user.username,
-        password: encryptPassword(user.username, user.password, salt),
+        // scrypt：与登录校验一致（verifyUserPassword 认新格式）
+        password: hashSecret(user.password),
         mickname: user?.nickname || user.username,
         type: 'admin',
         salt,

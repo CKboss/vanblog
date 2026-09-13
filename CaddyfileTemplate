@@ -15,6 +15,17 @@
 
 
 (van) {
+  # 安全响应头（零风险的那几项）。
+  # 不加 CSP：前台/后台都有大量内联样式与可选的第三方统计脚本，
+  # 严 CSP 会直接把站点搞坏，松 CSP 等于没有；要做就得先给内联样式发 nonce。
+  # X-Frame-Options 用 SAMEORIGIN 而不是 DENY：后台会把同源的 waline /ui 放进 iframe。
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), interest-cohort=()"
+    -Server
+  }
   encode zstd gzip
 	log {
 		output file /var/log/vanblog-access.log

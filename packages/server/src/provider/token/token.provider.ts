@@ -33,8 +33,14 @@ export class TokenProvider {
 
   async createAPIToken(name: string) {
     this.logger.log(`创建 API Token`);
-    // 100年过期
-    const expiresIn = 3600 * 24 * 365 * 100;
+    // 原来是 100 年 —— 等于永不过期，泄露一次就长期有效，还没法靠时间自愈。
+    // 默认改成 1 年，可用 VANBLOG_API_TOKEN_TTL_DAYS 调（1 天 ~ 100 年）。
+    // 已经签发出去的 token 不受影响（各自的 expiresIn 已经写在库里）。
+    const ttlDays = Math.min(
+      Math.max(Number(process.env.VANBLOG_API_TOKEN_TTL_DAYS) || 365, 1),
+      36500,
+    );
+    const expiresIn = 3600 * 24 * ttlDays;
     const token = this.jwtService.sign(
       {
         sub: 0,

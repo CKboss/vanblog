@@ -1367,14 +1367,68 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
   端到端验证（发表/回复/嵌套/计数/待审/放行/删除/注入 payload/PII 不泄露）。
 - 文档：`docs/features/comment.md`（两套系统对比、审核策略、反垃圾参数、安全设计、接口清单）。
 
-### 7.17 测试基线（本分支最后一次全量运行的结果）
+### 7.18 第三轮安全加固：口令哈希、全局限流、响应头、`pageSize=-1`
+
+接着 §7.11 / §7.15 往下清「已知未修项」，这一轮拿下四件大的。
+
+**1. 管理员/协作者口令 → scrypt（登录时自动迁移）**
+- 原来是 `sha256(sha256(username + 浏览器端派生值) + salt + sha256(username + salt))`：
+  纯 sha256 是**快哈希**，库或整站备份泄露后可以用 GPU 每秒试几十亿次。
+- 现在存 `scrypt$16384$8$1$<salt b64>$<hash b64>`（自描述格式，以后想调参数或换 argon2 也能识别旧格式）。
+  选 scrypt 而不是 argon2/bcrypt：**node:crypto 自带，不加依赖**（argon2 要原生编译，alpine 镜像里风险大）。
+- **迁移是透明的**：`verifyUserPassword()` 新旧格式都认，登录成功时 `updateSalt()` 顺手升级成 scrypt。
+  用户不用改密码、不用停机跑脚本。客户端也不用改（scrypt 的输入仍是浏览器端派生值）。
+- ⚠️ `validateUser()` 原来是「算出哈希再去 Mongo 里 `findOne({name, password})`」，那样只能支持一种格式。
+  改成先按 name 取出用户、在 JS 里校验。**别再改回用查询比密码**。
+- `washUserWithSalt()`（把更老的无盐数据洗成带盐）**只能**继续用旧方案：它的输入是上一代服务端哈希，
+  拿不到浏览器端派生值。等该用户下次登录就会自动升级 —— 代码里写了注释，别"顺手统一"掉。
+- `verifySecret()` 会校验 scrypt 参数上限（`N ≤ 2^20`、`128*N*r ≤ 64MB`）：库被改过也不至于构造出
+  一个让进程 OOM 的哈希。空口令一律拒绝（空哈希曾经等于空密码可登录）。
+
+**2. 全局限流中间件**（`utils/rateLimit.ts`，在 `app.module.configure()` 里最先 apply）
+- 分档：`/api/admin/init*` 10 分钟 5 次、`/api/public/**` 写操作每分钟 30 次、全局每分钟 600 次
+  （都有环境变量）。命中返回 429 + `Retry-After`。
+- **回环直连放行**：前台 SSR / waline / ISR 触发都是高频内部调用，不能被自己限死。
+  判据是「socket 是回环 **且** 没有 `X-Forwarded-For` / `X-Real-IP`」——
+  ⚠️ 只看 socket 会出事：一体式镜像里 caddy 转发过来的请求 socket 全是 127.0.0.1，
+  那样等于**对所有真实用户放行**。经过反代的一定带转发头，所以真实客户端跑不掉。
+- **fail-open**：限流组件自己抛错就放行。别为了防护把可用性搭进去。
+- 复用 §7.15 的 `utils/attemptLimit.ts`（桶数超过 2 万会整体清空，是刻意的软失败）。
+
+**3. 安全响应头**（Nest 中间件 + `CaddyfileTemplate` 都下发）
+- `X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、
+  `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`、caddy `-Server`。
+- ⚠️ `X-Frame-Options` 必须是 **SAMEORIGIN 而不是 DENY**：后台的评论管理页会把同源的 waline `/ui`
+  放进 iframe，DENY 会直接白屏。
+- **刻意不加 CSP**：内联样式 + bytemd 注入的脚本 + 可选第三方统计，严 CSP 会把站点搞坏，
+  松 CSP 等于没有。要做必须先给内联样式发 nonce。测试里钉了「不许半成品地上 CSP」。
+
+**4. `pageSize=-1` 收敛 + API Token 有效期**
+- 公开文章列表原来允许任何人 `pageSize=-1` 把**全部文章连正文**一次拉走（前台静态生成需要它）。
+  现在只有 `isInternalRequest()`（回环直连，或带 `x-vanblog-internal: <VAN_BLOG_INTERNAL_TOKEN>`）
+  可以，其它夹到 `MAX_PAGE_SIZE`。一体式部署零配置；前后端分离时两边配同一个 token。
+- API Token 原来是 **100 年**过期（等于永不过期）。新签发默认 1 年（`VANBLOG_API_TOKEN_TTL_DAYS`），
+  已签发的不受影响（`expiresIn` 已写在库里）。
+- 文章解锁的密码比较改成**常量时间**（`verifyAccessPassword()`），同时兼容历史明文与将来的哈希。
+  ⚠️ 文章/分类密码**没有**改成哈希存储：后台「修改信息」表单会把存着的密码回填到输入框，
+  改哈希必须同时改前端语义（留空 = 不修改），否则会把密码写成哈希串或把文章意外解锁。要做得前后端一起改。
+
+**5. CORS**：`main.ts` 里**没有** `enableCors`，也就是默认同源策略 ✓ 别顺手"加个 CORS 方便调试"，
+那会让任意站点能带着用户的 token 调后台接口。
+
+测试：`utils/crypto.spec.ts`(11)、`utils/rateLimit.spec.ts`(9)；
+`scripts/tests/reverse-proxy-host-header.test.sh` 增加 7 条 Caddyfile 断言（42 → 49）。
+线上实测：四个响应头都在；带 XFF 的公开写接口第 31 次开始 429；`/api/admin/init` 第 6 次开始 429；
+错误密码登录仍是 401（说明旧格式校验路径正常）。
+
+### 7.19 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 566 用例：565 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 52 文件 / 484 用例全绿 |
-| admin `node --test tests/unit` | 71 文件 / 272 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
+| admin `node --test tests/unit` | 72 套件 / 277 用例全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -1384,7 +1438,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.17 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.19 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
