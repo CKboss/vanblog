@@ -1613,8 +1613,122 @@ human_size() {
 #   ./vanblog.sh backup                  热备份（MongoDB 不停，速度最快，可能不完全一致）
 #   ./vanblog.sh backup --consistent     先停 MongoDB 再打包（一致性最好，期间不可写）
 #   VANBLOG_BACKUP_CONSISTENT=1 ./vanblog.sh backup    同 --consistent（适合定时任务）
+# 老路径：直接把数据目录打成 tar.gz（含 mongo 数据文件、图床、caddy 证书与配置、日志）。
+# 现在是**兜底**手段：站点起不来、或者你想连 caddy 证书一起备的时候用它。
+# 日常备份请用整站备份（backup_full）—— 那才是一致的、跨版本可恢复的快照。
+# ── 整站备份（默认路径）────────────────────────────────────────────────────
+# 调 server 的 POST /api/admin/backup/full/export：由 server 自己把**所有集合**导出成
+# NDJSON、带上 waline 评论库与图床/附件/自定义页面，压缩成一个 vanblog-full-*.tar.zst，
+# 并写一份 sidecar 清单。相比打包数据目录，它有三个实打实的好处：
+#   1. **一致**：由 server 在运行中导出，不会拍到 mongod 写了一半的数据文件
+#      （热 tar 的老路径要么不一致，要么得先停 mongo）；
+#   2. **跨版本可恢复**：NDJSON 不绑 MongoDB 版本，mongo 4.4 → 6.0 → 7.0 都能恢复进去，
+#      而数据目录 tar 包换个大版本 mongod 直接拒绝启动；
+#   3. **可预览**：恢复前能读清单看每个集合多少条，不会恢复错版本。
+# 代价：需要站点在跑 + 管理员凭据；而且**不含 caddy 的证书与配置**（那些在数据目录里），
+# 想连证书一起备就用 --offline。
+backup_full() {
+  local format="${1:-zstd}"
+  case "${format}" in
+  zstd | xz | gzip) ;;
+  *)
+    echo -e "${red}不支持的压缩格式：${format}（可选 zstd / xz / gzip）${plain}"
+    return 1
+    ;;
+  esac
+
+  local base
+  base="$(vanblog_api_base)"
+  echo -e "> 整站备份（走 server 接口）：${yellow}${base}${plain}，压缩格式 ${yellow}${format}${plain}"
+
+  local code
+  # ⚠️ 不要写成 `$(curl … || echo 000)`：curl 连接失败时 -w 已经输出过 000，
+  #    再补一个就变成 "000000"（restore 那边踩过一次）
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}），整站备份需要 server 在跑。${plain}"
+    echo -e "两条路："
+    echo -e "  1) ${green}./vanblog.sh start${plain} 之后再 ${green}./vanblog.sh backup${plain}"
+    echo -e "  2) 站点起不来时改用离线打包（连 caddy 证书一起备，但是一致性差一些）："
+    echo -e "     ${green}./vanblog.sh backup --offline${plain}          # 热备份"
+    echo -e "     ${green}./vanblog.sh backup --offline --consistent${plain}  # 先停 mongo，一致性好"
+    return 1
+  fi
+
+  local token
+  token="$(vanblog_admin_token)" || return 1
+
+  echo -e "> 开始导出（大站点可能要几分钟：要遍历全部集合并压缩）..."
+  local resp
+  resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/export" \
+    -H "token: ${token}" -H 'Content-Type: application/json' \
+    -d "{\"format\":\"${format}\"}" 2>&1)"
+
+  if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+    echo -e "${red}整站备份失败${plain}："
+    printf '%s\n' "${resp}" | head -c 600
+    echo
+    echo -e "${yellow}如果是因为站点起不来，可以用 ${plain}${green}./vanblog.sh backup --offline${plain}"
+    return 1
+  fi
+
+  local data name size seconds docs files colls
+  data="$(printf '%s' "${resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//')"
+  pick() { printf '%s' "${data}" | grep -oE "\"$1\":(\"[^\"]*\"|[0-9.]+)" | head -1 | sed 's/.*://; s/"//g'; }
+  name="$(pick name)"
+  size="$(pick size)"
+  seconds="$(pick seconds)"
+  docs="$(printf '%s' "${data}" | grep -oE '"documents":[0-9]+' | head -1 | cut -d: -f2)"
+  files="$(printf '%s' "${data}" | grep -oE '"files":[0-9]+' | head -1 | cut -d: -f2)"
+  colls="$(printf '%s' "${data}" | grep -oE '"collections":[0-9]+' | head -1 | cut -d: -f2)"
+
+  echo -e "${green}整站备份成功${plain}"
+  echo -e "  归档    ：${yellow}${name:-未知}${plain}（${size:-?}，用时 ${seconds:-?}s）"
+  echo -e "  内容    ：${colls:-?} 个集合 / ${docs:-?} 条文档 / ${files:-?} 个静态文件"
+  local host_path="$(full_backup_dir)/${name}"
+  if [[ -n "${name}" && -f "${host_path}" ]]; then
+    echo -e "  宿主机路径：${yellow}${host_path}${plain}"
+  else
+    echo -e "  服务器目录：${yellow}$(full_backup_dir)${plain}（容器内 <日志目录>/vanblog-backups）"
+  fi
+  echo -e "  恢复    ：${green}./vanblog.sh restore ${name}${plain}"
+  echo -e "  ${yellow}注意：这份归档不含 caddy 的证书与配置（它们在数据目录里）。要连证书一起备，用 --offline。${plain}"
+  return 0
+}
+
+# backup 的入口：默认走整站备份，--offline 才打包数据目录
 backup() {
-  echo -e "> 备份 vanblog"
+  local mode="${VANBLOG_BACKUP_MODE:-api}"
+  local format="${VANBLOG_BACKUP_FORMAT:-zstd}"
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+    --offline) mode="offline" ;;
+    --api | --full) mode="api" ;;
+    --consistent) : ;; # 由 backup_offline 自己解析
+    --format) : ;; # 值在下一个参数
+    0 | --*) : ;;
+    *)
+      # --format 后面的值
+      if [[ "${prev_was_format:-0}" == "1" ]]; then
+        format="${arg}"
+        prev_was_format=0
+      fi
+      ;;
+    esac
+    [[ "${arg}" == "--format" ]] && prev_was_format=1
+  done
+
+  if [[ "${mode}" == "offline" ]]; then
+    backup_offline "$@"
+    return $?
+  fi
+  backup_full "${format}"
+}
+
+backup_offline() {
+  echo -e "> 备份 vanblog（离线：打包数据目录）"
 
   local consistent="${VANBLOG_BACKUP_CONSISTENT:-0}"
   local arg
@@ -1859,7 +1973,8 @@ restore_full_backup() {
   echo -e "> 整站恢复（走 server 接口）：${yellow}${base}${plain}"
 
   local code
-  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null || echo 000)"
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
   if [[ "${code}" != "200" ]]; then
     echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}）。${plain}"
     echo -e "${red}整站恢复必须经过 server 的接口（它要按集合原子替换并重建索引），请先 ${yellow}./vanblog.sh start${red} 再试。${plain}"
@@ -2051,6 +2166,10 @@ show_usage() {
   echo "./vanblog.sh stop                       - 停止 VanBlog"
   echo "./vanblog.sh restart                    - 重启 VanBlog"
   echo "./vanblog.sh update                     - 更新 VanBlog"
+  echo "./vanblog.sh backup                     - 整站备份（走 server 接口，一致性快照，默认 zstd）"
+  echo "./vanblog.sh backup --format xz|gzip    - 换压缩格式"
+  echo "./vanblog.sh backup --offline           - 打包数据目录（站点起不来时兜底，含 caddy 证书）"
+  echo "./vanblog.sh backup --offline --consistent  - 先停 mongo 再打包（一致性好，会有短暂停机）"
   echo "./vanblog.sh restore                    - 从整站备份恢复（列出服务器上的备份让你选）"
   echo "./vanblog.sh restore <名称|路径>        - 一步恢复：名称=服务器备份目录里的归档（不上传）；"
   echo "                                          路径=本地文件（走上传）。也支持 vanblog-backup-*.tar.gz 老格式"

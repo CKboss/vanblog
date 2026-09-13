@@ -58,7 +58,48 @@ icon: right-to-bracket
 
 **故意不放在 `/app/static` 下面**：静态目录是匿名可访问的，而备份里有密码哈希和 jwt 密钥。后台列表里的「下载」走鉴权接口，猜 URL 拿不到（直接访问会被拦掉）。
 
-### 用一键脚本一步恢复（推荐）
+### 用一键脚本做整站备份（推荐）
+
+```bash
+./vanblog.sh backup                     # 整站备份（默认 zstd）
+./vanblog.sh backup --format xz         # 换压缩格式：zstd / xz / gzip
+./vanblog.sh backup --offline           # 兜底：直接打包数据目录（站点起不来时用）
+./vanblog.sh backup --offline --consistent   # 先停 mongo 再打包（一致性好，短暂停机）
+```
+
+**默认走的是 server 的整站备份接口**（和后台「系统设置 → 备份」是同一套逻辑），
+产出 `vanblog-full-<时间戳>.tar.zst` + 一份 sidecar 清单，落在
+`<数据目录>/log/vanblog-backups/`。相比"打包数据目录"，它有三个实打实的好处：
+
+| | 整站备份（默认） | 数据目录 tar（`--offline`） |
+| --- | --- | --- |
+| 一致性 | 由 server 在运行中导出，**不会拍到 mongod 写了一半的文件** | 热备份不一致；`--consistent` 要先停 mongo |
+| 跨版本恢复 | NDJSON，**不绑 MongoDB 版本**（4.4 → 6.0 → 7.0 都能恢复进去） | 数据目录换个大版本 mongod 直接拒绝启动 |
+| 可预览 | 恢复前能读清单看每个集合多少条 | 只能整包解开看 |
+| 包含 caddy 证书与配置 | ❌ 不含 | ✅ 含（整个数据目录） |
+| 需要站点在跑 | ✅ 需要（要调接口） | ❌ 不需要 |
+
+所以：**日常备份用默认的整站备份**；只有在站点起不来、或者你想连 caddy 的证书一起备的时候，
+才用 `--offline`。
+
+备份成功后会打印归档名、大小、内容统计（多少个集合 / 多少条文档 / 多少个静态文件）、
+**宿主机上的完整路径**，以及对应的恢复命令：
+
+```
+整站备份成功
+  归档    ：vanblog-full-20260913-181937.tar.zst（65.91 MB，用时 29.9s）
+  内容    ：15 个集合 / 9838 条文档 / 185 个静态文件
+  宿主机路径：/var/vanblog/data/log/vanblog-backups/vanblog-full-20260913-181937.tar.zst
+  恢复    ：./vanblog.sh restore vanblog-full-20260913-181937.tar.zst
+```
+
+站点没起时不会偷偷打个 tar 糊弄你，而是明确报错并给出两条路（先 `start`，或改用 `--offline`）。
+
+认证与接口地址的规则和恢复完全一样：`VANBLOG_ADMIN_TOKEN` 优先，否则交互输入账号密码
+（本地按后台同一套算法派生口令，明文不出本机）；接口地址默认从编排文件读端口，
+也可用 `VANBLOG_API_BASE` 指定。
+
+## 用一键脚本一步恢复（推荐）
 
 整站备份（`vanblog-full-*.tar.zst`）以前只能在后台「系统设置 → 备份」里点恢复，
 或者自己调接口。现在 `vanblog.sh` 直接支持：

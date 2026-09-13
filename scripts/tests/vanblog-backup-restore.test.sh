@@ -67,7 +67,7 @@ EOS
 
 # ---------- 1) 备份 ----------
 LOG="${TEST_DIR}/backup.log"; : > "${LOG}"
-OUT="$(run_snippet "${LOG}" "" 'backup 0 --consistent; echo "rc=$?"')"
+OUT="$(run_snippet "${LOG}" "" 'backup 0 --offline --consistent; echo "rc=$?"')"
 assert_contains "${OUT}" "备份成功" "一致性备份成功"
 assert_contains "${OUT}" "rc=0" "备份返回 0"
 assert_contains "${OUT}" "先停止 MongoDB" "一致性模式会先停 MongoDB"
@@ -87,13 +87,13 @@ fi
 
 # ---------- 2) 热备份（默认）不停 mongo，并给出提示 ----------
 LOG2="${TEST_DIR}/hot.log"; : > "${LOG2}"
-OUT2="$(run_snippet "${LOG2}" "" 'backup 0; echo "rc=$?"')"
+OUT2="$(run_snippet "${LOG2}" "" 'backup 0 --offline; echo "rc=$?"')"
 assert_contains "${OUT2}" "热备份" "默认是热备份并给出提示"
 assert_not_contains "$(cat "${LOG2}")" "stop mongo" "热备份不会停 mongo"
 assert_contains "${OUT2}" "rc=0" "热备份返回 0"
 
 # ---------- 3) 数据目录不存在要报错 ----------
-OUT3="$(run_snippet "${TEST_DIR}/x.log" "export VANBLOG_DATA_PATH=\"${TEST_DIR}/missing\"" 'backup 0; echo "rc=$?"')"
+OUT3="$(run_snippet "${TEST_DIR}/x.log" "export VANBLOG_DATA_PATH=\"${TEST_DIR}/missing\"" 'backup 0 --offline; echo "rc=$?"')"
 assert_contains "${OUT3}" "未找到数据目录" "数据目录缺失时报错"
 assert_contains "${OUT3}" "rc=1" "数据目录缺失返回 1"
 

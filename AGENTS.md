@@ -2201,7 +2201,7 @@ caddy 这次漂了，`zstd`/`xz`/`libwebp-tools`/`libavif-apps` 同样可能漂�
 ⚠️ 改了依赖之后**必须**在仓库根跑一次 `pnpm install`（不是 `--lockfile-only`），
 否则本地 `node_modules` 里没有 multer，而 `--frozen-lockfile` 在 CI 里会直接失败。
 
-### 7.29 一键脚本一步恢复整站备份（`./vanblog.sh restore`）
+### 7.29 一键脚本的整站备份与一步恢复（`./vanblog.sh backup` / `restore`）
 
 以前脚本的 `restore` 只认自己 `backup` 打出来的 `vanblog-backup-*.tar.gz`（数据目录的原始 tar 包，
 停服 → 解压覆盖 → 删 `mongod.lock` → 起服）。而 §7.6 的**整站备份** `vanblog-full-*.tar.zst`
@@ -2254,6 +2254,21 @@ VANBLOG_ASSUME_YES=1 VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore <归档名
 **端到端实测过**（本机 dev，接口指到 :3000）：先把某篇文章的 `cover` 清空做成可观测的改动，
 再 `restore <归档名>` → 脚本打印清单与「恢复成功」，数据库里那篇文章的封面**回来了**、
 16 篇有封面的文章数也复原 ✓。
+
+**备份也一起换了**：`./vanblog.sh backup` 现在默认调 `POST /api/admin/backup/full/export`
+产出 `vanblog-full-*.tar.zst`（和后台「系统设置 → 备份」同一套逻辑），老的"打包数据目录"
+降级成 `--offline`（另有 `--offline --consistent` 先停 mongo）。理由是那张对比表里的三件事：
+一致性（不会拍到 mongod 写一半的数据文件）、跨版本可恢复（NDJSON 不绑 MongoDB 版本，
+而数据目录 tar 换大版本 mongod 直接拒启）、可预览（恢复前能读清单）。
+⚠️ 整站备份**不含 caddy 的证书与配置**（那些在数据目录里），所以要备证书必须 `--offline` ——
+脚本每次备份成功都会把这句话打出来，别让用户以为"备了就是全备了"。
+`--format zstd|xz|gzip` 透传给接口，非法值直接拒（不发请求）。
+站点没起时**不偷偷降级**成打 tar：明确报错 + 给出 `start` 与 `--offline` 两条路
+（静默降级会让人以为拿到的是一致性快照，其实不是）。
+认证与接口地址复用 restore 那套（`VANBLOG_ADMIN_TOKEN` / 交互派生口令 / `VANBLOG_API_BASE`）。
+⚠️ 探活那段别写成 `$(curl … || echo 000)`：curl 连接失败时 `-w '%{http_code}'` 已经输出过 `000`，
+再补一个就变成 `000000`（restore 那边先踩的，两处都改了）。
+实测：本机 dev 上 `backup 0` 产出 65.91MB / 29.9s / 15 集合 / 9838 文档 / 185 文件 ✓。
 
 ### 7.30 部署审计（2026-09）：一次性修掉的 12 个坑
 
@@ -2377,7 +2392,7 @@ waline 自动重启与上限与 stopping 标记、initJwt 重试、restore.key 0
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 57 文件 / 543 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 13 文件 / 588 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 13 文件 / 610 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

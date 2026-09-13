@@ -71,6 +71,8 @@ case "\${args}" in
   */api/public/meta*) printf '200' ;;
   */api/admin/auth/login*) printf '{"statusCode":200,"data":{"token":"tok-from-login"}}' ;;
   */api/admin/backup/full/inspect*) printf '{"statusCode":200,"data":{"kind":"vanblog-full-backup","createdAt":"2026-09-13T09:23:37.560Z","databases":{"vanBlog":{"collections":{"articles":{"count":59}}}}}}' ;;
+  */api/admin/backup/full/export*)
+    printf '{"statusCode":200,"data":{"name":"vanblog-full-20260913-181937.tar.zst","bytes":69111933,"size":"65.91 MB","format":"zstd","compressor":"zstd -19","seconds":29.9,"totals":{"databases":2,"collections":15,"documents":9838,"files":185}}}' ;;
   */api/admin/backup/full/restore*)
     printf '{"statusCode":200,"data":{"restoredAt":"2026-09-13T09:30:00.000Z","seconds":12.3,"uploaded":false,"databases":{"vanBlog":{"collections":15,"documents":9838}},"static":{"files":185},"notes":[]}}' ;;
   *) printf '{"statusCode":500}' ;;
@@ -209,6 +211,72 @@ VANBLOG_ASSUME_YES=1
 OUT="$(restore 0 "${TEST_DIR}/backups/vanblog-backup-20260101000000.tar.gz" 2>&1)"
 assert_contains "$(cat "${CMDLOG}")" "stop_vanblog" "老格式仍然停服后离线解压"
 assert_not_contains "$(cat "${APILOG}")" "full/restore" "老格式不会调用整站恢复接口"
+
+# --- 整站备份：默认走 server 接口，--offline 才打包数据目录 ---
+setup_case
+source_script
+install_fake_curl
+OUT="$(backup 0 2>&1)"
+assert_eq "$?" "0" "默认整站备份成功"
+assert_file_contains "${APILOG}" "/api/admin/backup/full/export" "调用了整站备份接口"
+assert_file_contains "${APILOG}" '"format":"zstd"' "默认压缩格式是 zstd"
+assert_file_contains "${APILOG}" "token: test-token" "带上了管理员 token"
+assert_contains "${OUT}" "vanblog-full-20260913-181937.tar.zst" "输出里有归档名"
+assert_contains "${OUT}" "65.91 MB" "输出里有归档大小"
+assert_contains "${OUT}" "9838" "输出里有文档条数（能看出备了多少东西）"
+assert_contains "${OUT}" "./vanblog.sh restore" "输出里给出恢复命令"
+assert_contains "${OUT}" "不含 caddy 的证书" "说清楚整站备份不含 caddy 证书（要备证书得用 --offline）"
+assert_not_contains "$(cat "${CMDLOG}")" "tar" "整站备份不会去打包数据目录"
+
+# --- --format 透传与非法值 ---
+setup_case
+source_script
+install_fake_curl
+backup 0 --format gzip >/dev/null 2>&1
+assert_file_contains "${APILOG}" '"format":"gzip"' "--format gzip 透传给接口"
+setup_case
+source_script
+install_fake_curl
+OUT="$(backup 0 --format 7z 2>&1)"
+if [[ $? -ne 0 ]]; then pass "非法压缩格式直接拒绝"; else fail "非法压缩格式直接拒绝"; fi
+assert_contains "${OUT}" "zstd / xz / gzip" "拒绝时列出可选格式"
+assert_not_contains "$(cat "${APILOG}")" "full/export" "非法格式时不会调接口"
+
+# --- 站点没起：给出两条明确的路，而不是默默打个 tar ---
+setup_case
+source_script
+cat >"${TEST_DIR}/curl" <<'FAKE'
+#!/usr/bin/env bash
+args="$*"
+case "${args}" in
+  */api/public/meta*) printf '000' ;;
+  *) printf '{}' ;;
+esac
+exit 0
+FAKE
+chmod +x "${TEST_DIR}/curl"
+export PATH="${TEST_DIR}:${PATH}"
+OUT="$(backup 0 2>&1)"
+if [[ $? -ne 0 ]]; then pass "接口不通时备份返回非 0"; else fail "接口不通时备份返回非 0"; fi
+assert_contains "${OUT}" "./vanblog.sh start" "提示先启动站点"
+assert_contains "${OUT}" "backup --offline" "提示离线打包这条路"
+assert_contains "${OUT}" "--consistent" "提示离线也有一致性模式"
+assert_not_contains "${OUT}" "000000" "HTTP 状态码没有被重复拼接成 000000"
+
+# --- --offline 走老路径：打包数据目录，不调接口 ---
+setup_case
+source_script
+install_fake_curl
+# backup_offline 有两处路径要求：先检查 VANBLOG_DATA_PATH 存在，
+# 再打包 `-C ${VANBLOG_BASE_PATH} ./data`。默认布局下两者是同一个目录
+# （DATA_PATH=BASE_PATH/data），但本用例的 harness 把它们设成了两处，所以都要建。
+mkdir -p "${VANBLOG_BASE_PATH}/data" "${VANBLOG_DATA_PATH}"
+echo x >"${VANBLOG_BASE_PATH}/data/f.txt"
+OUT="$(backup 0 --offline 2>&1)"
+assert_eq "$?" "0" "离线备份成功"
+assert_not_contains "$(cat "${APILOG}")" "full/export" "离线模式不调整站备份接口"
+assert_contains "${OUT}" "vanblog-backup-" "离线模式仍然产出 vanblog-backup-*.tar.gz"
+
 
 echo
 echo "passed=${PASS} failed=${FAIL}"
