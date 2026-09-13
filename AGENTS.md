@@ -1690,14 +1690,68 @@ CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）�
 （`children: "\u589E\u5F3A\u4FEE\u6539\u7248"`），直接 `grep 中文` 在 chunk 里搜不到，
 但数组/字符串字面量是原样的 —— 别据此误判"改动没生效"。
 
-### 7.22 测试基线（本分支最后一次全量运行的结果）
+### 7.22 镜像构建：pnpm 补丁必须进构建上下文（源码构建的第一道坎）
+
+用 `scripts/vanblog.sh` 的源码构建装的时候，`docker build` 在这里直接失败：
+
+```
+> [website_builder 15/16] RUN pnpm install --frozen-lockfile:
+ENOENT: no such file or directory, open '/app/patches/remark-supersub@1.0.0.patch'
+```
+
+**根因**：`pnpm.patchedDependencies` 写在**仓库根**的 `package.json` 里（那两个 ESM-only 的
+remark 包要靠补丁补出 `main`/`module`，见 §7.14），而 `website_builder` 那一层只
+`COPY` 了 `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.base.json` /
+`packages/website` —— **没有 `patches/`**。workspace 安装读得到根 manifest 的声明，
+却找不到补丁文件，于是 ENOENT。
+
+**还有一个躲在后面的同类问题**：`admin_builder` 那一层是 `COPY ./packages/admin/ ./` 然后
+`pnpm i`，属于**独立安装**（没有仓库根 manifest），所以它**根本看不到**根上的
+`patchedDependencies` → 两个包不会被补丁 → umi3 的 MFSU 解析器报
+`AssertionError: filePath not found of remark-github-blockquote-alert`，构建同样失败。
+
+修法（两处都要，缺一不可）：
+
+1. `admin_builder` 与 `website_builder` 都加 `COPY ./patches ./patches`；
+2. `packages/admin/package.json` **自己也要声明一份**同样的 `pnpm.patchedDependencies`
+   （路径同样写 `patches/xxx.patch`，相对各自的 manifest）。
+   ⚠️ 副作用：在仓库根跑 `pnpm install` 时 pnpm 会打一条 WARN
+   `The field "pnpm" was found in packages/admin/package.json. This will not take effect.`
+   —— 这是**预期行为**，workspace 模式下由根 manifest 说了算，那份声明只在 Docker 的独立安装里生效。
+   已实测：加了这份声明后 `pnpm install --lockfile-only` **不会改动 `pnpm-lock.yaml`**，
+   所以 `--frozen-lockfile` 依然通过。别看到 WARN 就把它删了，删了镜像就构建不出来。
+
+顺手把 Dockerfile 的 18 条 buildkit 警告清了：阶段名统一小写
+（`ADMIN_BUILDER`→`admin_builder`、`SERVER_BUILDER`、`WEBSITE_BUILDER`、`RUNNER`→`runner`）、
+`FROM … as` 的大小写统一成 `AS`、`ENV key value` 全部改成 `ENV key=value`。
+⚠️ 改阶段名要同步改所有 `COPY --from=`，还有 `scripts/tests/dockerfile-alpine-sharp.test.sh`
+里按名字切 stage 的 awk（已同步）。
+
+**新增 `scripts/tests/dockerfile-patches.test.sh`（17 条断言）**，专门守这类问题：
+根 manifest 声明的每个补丁文件都在仓库里、`pnpm-lock.yaml` 记录了同样的 `dep -> path`、
+`packages/admin/package.json` 与根声明**逐条一致**、`website_builder` 与 `admin_builder`
+都真的有 `COPY ./patches ./patches`（**整行精确匹配**，否则 `COPY ./patches-REMOVED` 也能蒙过去 ——
+第一版就是这么漏的）、每个 `COPY --from=` 都能对上已声明的阶段、阶段名与 `ENV` 形式合规、
+`vanblog.sh` 确实从源码树构建。三个负向对照都验过：删掉 website 的 COPY、删掉 admin 的 COPY、
+把 `--from` 改成不存在的阶段名，测试都会红。
+
+⚠️ **本机跑不了 `docker build`**（没有 docker 组权限，daemon socket 拒绝连接），所以这一类改动
+只能靠静态断言 + `pnpm` 的最小复现实验来验证：想确认「独立安装认不认 manifest 里的
+`patchedDependencies`」，建一个只有一个小依赖的临时项目、把补丁和声明拷进去跑
+`pnpm install --ignore-scripts`，然后看 `node_modules/<pkg>/package.json` 里有没有
+补丁加的 `main` 字段（实测 `remark-supersub` 装完是 `main: lib/index.js`，即补丁生效）。
+⚠️ 还有一点血的教训：**别对含未提交改动的文件跑 `git checkout <file>`** ——
+我做负向对照时用它还原 Dockerfile，结果把没提交的修复一起冲掉了，只能重做一遍。
+要还原就用之前 `cp` 出来的备份。
+
+### 7.23 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 56 文件 / 537 用例全绿 |
 | admin `node --test tests/unit` | 81 套件 / 322 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 9 文件 / 330 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -1707,7 +1761,7 @@ CHANGELOG 那条指仓库根的 `CHANGELOG.md`（里面有 🍴 fork 区块）�
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.22 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.23 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

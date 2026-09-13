@@ -43,19 +43,19 @@ assert_file_not_contains() {
   fi
 }
 
-# Isolate the WEBSITE_BUILDER stage so ADMIN/SERVER/RUNNER lines cannot
+# Isolate the website_builder stage so ADMIN/SERVER/runner lines cannot
 # satisfy the assertions.
 WEBSITE_STAGES="$(awk '
   BEGIN { keep=0 }
   $0 ~ /^FROM / { keep=0 }
-  $0 ~ /^FROM .* AS WEBSITE_BUILDER/ { keep=1 }
+  $0 ~ /^FROM .* AS website_builder/ { keep=1 }
   keep { print }
 ' "${DOCKERFILE}")"
 
 if [[ -z "${WEBSITE_STAGES}" ]]; then
-  fail "Dockerfile defines WEBSITE_BUILDER stage"
+  fail "Dockerfile defines website_builder stage"
 else
-  pass "Dockerfile defines WEBSITE_BUILDER stage"
+  pass "Dockerfile defines website_builder stage"
 fi
 
 assert_contains_in() {
@@ -90,7 +90,7 @@ fi
 python3 - "${DOCKERFILE}" <<'PY' && pass "SHARP_IGNORE_GLOBAL_LIBVIPS is set before website pnpm install" || fail "SHARP_IGNORE_GLOBAL_LIBVIPS is set before website pnpm install"
 import sys
 text = open(sys.argv[1], encoding="utf-8").read()
-start = text.find("FROM node:18-alpine AS WEBSITE_BUILDER")
+start = text.find("FROM node:18-alpine AS website_builder")
 end = text.find("\nFROM ", start + 1)
 if start < 0 or end < 0:
     raise SystemExit(1)
@@ -107,17 +107,17 @@ assert_file_not_contains "${WEBSITE_PKG}" '"sharp": "^0.31.' "website no longer 
 assert_file_contains "${LOCKFILE}" "/sharp@0.32.6:" "lockfile resolves sharp 0.32.6"
 assert_file_not_contains "${LOCKFILE}" "/sharp@0.31.3:" "lockfile no longer pins sharp 0.31.3"
 
-# RUNNER needs musl compat for Next/sharp native binaries copied from the builder.
-RUNNER_STAGE="$(awk '
+# runner needs musl compat for Next/sharp native binaries copied from the builder.
+runner_STAGE="$(awk '
   BEGIN { keep=0 }
   $0 ~ /^FROM / { keep=0 }
-  $0 ~ /^FROM .* AS RUNNER/ { keep=1 }
+  $0 ~ /^FROM .* AS runner/ { keep=1 }
   keep { print }
 ' "${DOCKERFILE}")"
-assert_contains_in "${RUNNER_STAGE}" "libc6-compat" "runner installs libc6-compat for sharp/next native binaries"
-assert_contains_in "${RUNNER_STAGE}" "libavif-apps" "runner installs libavif-apps (avifenc) for AVIF fallback"
-assert_contains_in "${RUNNER_STAGE}" "libwebp-tools" "runner still installs libwebp-tools (cwebp)"
-assert_contains_in "${RUNNER_STAGE}" "COPY --from=WEBSITE_BUILDER" "runner still copies website from WEBSITE_BUILDER"
+assert_contains_in "${runner_STAGE}" "libc6-compat" "runner installs libc6-compat for sharp/next native binaries"
+assert_contains_in "${runner_STAGE}" "libavif-apps" "runner installs libavif-apps (avifenc) for AVIF fallback"
+assert_contains_in "${runner_STAGE}" "libwebp-tools" "runner still installs libwebp-tools (cwebp)"
+assert_contains_in "${runner_STAGE}" "COPY --from=website_builder" "runner still copies website from website_builder"
 
 echo
 echo "passed=${PASS} failed=${FAIL}"
