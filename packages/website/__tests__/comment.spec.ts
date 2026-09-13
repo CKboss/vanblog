@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { renderCommentHtml } from "../components/Comment/Content";
 import {
@@ -90,16 +90,72 @@ describe("内置评论的前台接线", () => {
   const api = read("utils/commentApi.ts");
 
   it("评论区是动态加载的（不能把 markdown 管线拖进首页 chunk）", () => {
-    expect(postCard).toContain('dynamic(() => import("../Comment")');
-    expect(postCard).toContain("ssr: false");
+    const area = read("components/CommentArea/index.tsx");
+    expect(area).toContain('dynamic(() => import("../Comment")');
+    expect(area).toContain("ssr: false");
+    // PostCard 只静态引入很轻的 CommentArea，不许直接静态引入 Comment
+    expect(postCard).toContain('import CommentArea from "../CommentArea"');
     expect(postCard).not.toMatch(/^import Comment from/m);
+    expect(postCard).not.toContain('import("../Comment")');
   });
 
   it("三种评论系统互斥渲染，waline 的计数 span 原样保留", () => {
-    expect(postCard).toContain('commentProvider === "builtin"');
-    expect(postCard).toContain('commentProvider === "waline"');
+    const area = read("components/CommentArea/index.tsx");
+    expect(area).toContain('provider === "builtin"');
+    expect(area).toContain('provider === "waline"');
+    expect(area).toContain('provider === "off"');
+    expect(postCard).toContain("<CommentArea");
     expect(title).toContain('className="waline-comment-count"');
     expect(title).toContain("<CommentCount path={dataPath} />");
+  });
+
+  it("直接渲染 waline 组件的地方必须被 provider 条件门住", () => {
+    // /link 页踩过这个坑：写死 waline 组件，切到内置评论后子进程已停 → 评论区一片空白。
+    // 规则：除了统一入口 CommentArea，任何渲染 WaLine/Waline 的文件都必须带
+    // `commentProvider === "waline"` 这个条件（列表页那个 visible={false} 的隐形实例也一样）。
+    const walk = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          out.push(...walk(full));
+        } else if (/\.(tsx|ts|jsx|js)$/.test(entry.name)) {
+          out.push(full);
+        }
+      }
+      return out;
+    };
+    const offenders: string[] = [];
+    for (const file of [
+      ...walk(join(__dirname, "..", "pages")),
+      ...walk(join(__dirname, "..", "components")),
+    ]) {
+      if (file.includes("components/WaLine/") || file.includes("components/CommentArea/")) {
+        continue; // WaLine 自身与统一入口除外
+      }
+      const raw = readFileSync(file, "utf8");
+      // 剔除注释：JS 行注释、块注释、以及 JSX 的 {/* … */}（注释里提到组件名不算渲染）
+      const src = raw
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+        .join("\n");
+      if (/<WaLine[\s>]/.test(src) || /<Waline[\s>]/.test(src)) {
+        if (!src.includes('commentProvider === "waline"')) {
+          offenders.push(file);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("列表页那个「隐形 waline」只在 waline 模式下初始化（内置模式评论数走本站接口）", () => {
+    for (const page of ["pages/index.tsx", "pages/page/[p].tsx"]) {
+      const src = read(page);
+      expect(src).toContain('commentProvider === "waline"');
+      expect(src).toContain("visible={false}");
+    }
   });
 
   it("表单带蜜罐字段，且蜜罐对真人不可见/不可聚焦", () => {

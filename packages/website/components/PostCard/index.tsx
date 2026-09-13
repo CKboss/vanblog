@@ -6,8 +6,7 @@ import CopyRight from "../CopyRight";
 import Reward from "../Reward";
 import TopPinIcon from "../TopPinIcon";
 import UnLockCard from "../UnLockCard";
-import WaLine from "../WaLine";
-import useCommentProvider from "../../hooks/useCommentProvider";
+import CommentArea from "../CommentArea";
 
 import { PostBottom } from "./bottom";
 import { SubTitle, Title } from "./title";
@@ -27,13 +26,6 @@ import dynamic from "next/dynamic";
  * 只要这个模块被引用，它内部声明的两个 dynamic chunk（base + rich）就都会算进
  * 每个用到 PostCard 的页面的首屏 JS —— 实测首页会因此多背 KaTeX 那 275KB。
  */
-/**
- * 内置评论区**必须动态加载**：它内部用 bytemd 的 getProcessor 渲染评论里的 markdown，
- * 静态 import 会把 markdown 管线拖进 PostCard 的 chunk，首页 First Load JS 立刻回涨
- * （和「PostCard 不要 import ../Markdown」是同一条约束）。评论只在文章页出现，
- * 而文章页本来就已经加载了 MarkdownBase/MarkdownRich，所以这里几乎不增加成本。
- */
-const Comment = dynamic(() => import("../Comment"), { ssr: false });
 
 const OverviewMarkdown = dynamic(() => import("../Markdown/MarkdownBase"), {
   ssr: true,
@@ -74,9 +66,7 @@ export default function (props: {
 }) {
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
-  // 评论系统类型（builtin / waline / off，客户端才知道）与评论挂载路径，
-  // 路径规则与 SubTitle 里的 dataPath 保持一致
-  const commentProvider = useCommentProvider();
+  // 评论挂载路径，规则与 SubTitle 里的 dataPath 保持一致
   const commentPath = useMemo(
     () => (props.type == "about" ? "/about" : "/post/" + props.id),
     [props.type, props.id],
@@ -218,18 +208,10 @@ export default function (props: {
           }}
         ></div>
       </div>
-      {/* enableComment 是字符串 "true"/"false"，直接当条件用会对 "false" 也为真，
-          那样评论关闭时还是会去加载评论区的 chunk（组件内部虽然会返回 null） */}
-      {props.type != "overview" &&
-        String(props.enableComment) !== "false" &&
-        commentProvider === "builtin" && (
-        <Comment
-          path={commentPath}
-          enable={String(props.enableComment) !== "false"}
-        />
-      )}
-      {props.type != "overview" && commentProvider === "waline" && (
-        <WaLine enable={props.enableComment} visible={true} />
+      {props.type != "overview" && (
+        // 三选一的分支逻辑收在 CommentArea 里（enableComment 是字符串 "true"/"false"，
+        // 直接当条件用会对 "false" 也为真，那边做了显式比较）
+        <CommentArea path={commentPath} enable={props.enableComment} visible={true} />
       )}
     </div>
   );

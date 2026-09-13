@@ -1,3 +1,4 @@
+import useCommentProvider from "../../hooks/useCommentProvider";
 import Head from "next/head";
 import { getPublicMeta } from "../../api/getAllData";
 import AuthorCard, { AuthorCardProps } from "../../components/AuthorCard";
@@ -21,6 +22,7 @@ export interface PagePagesProps {
   articles: Article[];
 }
 const PagePages = (props: PagePagesProps) => {
+  const commentProvider = useCommentProvider();
   if (props.articles.length == 0) {
     return <Custom404 name="页码" />;
   }
@@ -72,7 +74,12 @@ const PagePages = (props: PagePagesProps) => {
         more={"/page"}
         pageSize={props.layoutProps.articlesPerPage}
       ></PageNav>
-      <Waline enable={props.layoutProps.enableComment} visible={false} />
+      {/* visible={false}：这里初始化 waline 客户端只为了填充卡片上的
+          .waline-comment-count。内置评论模式下评论数走本站 /counts 接口（CommentCount），
+          而 waline 子进程已被停掉，所以只在 waline 模式下才渲染 */}
+      {commentProvider === "waline" && (
+        <Waline enable={props.layoutProps.enableComment} visible={false} />
+      )}
     </Layout>
   );
 };

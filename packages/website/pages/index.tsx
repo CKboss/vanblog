@@ -1,3 +1,4 @@
+import useCommentProvider from "../hooks/useCommentProvider";
 import AuthorCard, { AuthorCardProps } from "../components/AuthorCard";
 import Layout from "../components/Layout";
 import PageNav from "../components/PageNav";
@@ -17,6 +18,7 @@ export interface IndexPageProps {
   articles: Article[];
 }
 const Home = (props: IndexPageProps) => {
+  const commentProvider = useCommentProvider();
   return (
     <Layout
       option={props.layoutProps}
@@ -64,7 +66,12 @@ const Home = (props: IndexPageProps) => {
         more={"/page"}
         pageSize={props.layoutProps.articlesPerPage}
       ></PageNav>
-      <Waline enable={props.layoutProps.enableComment} visible={false} />
+      {/* visible={false}：这里初始化 waline 客户端只为了填充卡片上的
+          .waline-comment-count。内置评论模式下评论数走本站 /counts 接口（CommentCount），
+          而 waline 子进程已被停掉，所以只在 waline 模式下才渲染 */}
+      {commentProvider === "waline" && (
+        <Waline enable={props.layoutProps.enableComment} visible={false} />
+      )}
     </Layout>
   );
 };

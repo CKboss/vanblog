@@ -4,7 +4,7 @@ import AuthorCard, { AuthorCardProps } from "../components/AuthorCard";
 import Layout from "../components/Layout";
 import LinkCard from "../components/LinkCard";
 import Markdown from "../components/Markdown";
-import WaLine from "../components/WaLine";
+import CommentArea from "../components/CommentArea";
 import { LayoutProps } from "../utils/getLayoutProps";
 import { getLinkPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
@@ -71,7 +71,13 @@ const LinkPage = (props: LinkPageProps) => {
           </div>
         </div>
       </div>
-      <WaLine enable={props.layoutProps.enableComment} visible={true} />
+      {/* 友链页也走统一入口 CommentArea：以前这里写死了 waline 组件，
+          站点切到内置评论后 waline 子进程已经停了，评论区就是一片空白/报错 */}
+      <CommentArea
+        path="/link"
+        enable={props.layoutProps.enableComment}
+        visible={true}
+      />
     </Layout>
   );
 };

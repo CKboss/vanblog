@@ -1284,7 +1284,15 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
     限流复用 `utils/attemptLimit.ts`。
   - 公开接口的返回里**没有** `email`/`ip`/`ua`/`reason`（`CommentProvider.toPublic` 收口），
     这些只在后台可见；昵称/主页在组件里当文本渲染，主页还要在客户端再校验一次 `^https?://`。
-- **前台接线注意性能**：`PostCard` 里的评论区是 `dynamic(() => import("../Comment"), { ssr: false })`。
+- **所有评论区都走 `components/CommentArea`**（三选一的分支收在里面）。
+  ⚠️ 别再在任何页面直接渲染 waline 组件：`pages/link.tsx` 原来就是写死的，
+  站点切到内置评论后 waline 子进程已被停掉，友链页的评论区就是一片空白/报错。
+  列表页（`pages/index.tsx`、`pages/page/[p].tsx`）那个 `visible={false}` 的**隐形 waline 实例**
+  只是为了让 `@waline/client` 去填 `.waline-comment-count`，内置模式下评论数走本站
+  `/counts` 接口（`components/Comment/Count.tsx`），所以它必须被 `commentProvider === "waline"` 门住。
+  `__tests__/comment.spec.ts` 会全仓扫描这条规则（扫描前先剔除 `//`、`/* */` 与 JSX 的 `{/* */}`，
+  否则注释里提到组件名会被误伤）。
+- **前台接线注意性能**：评论区在 `CommentArea` 里是 `dynamic(() => import("../Comment"), { ssr: false })`。
   评论渲染用 bytemd 的 `getProcessor`，静态 import 会把 markdown 管线拖进 PostCard 的 chunk，
   首页 First Load JS 立刻回涨（和「PostCard 不许 import ../Markdown」是同一条约束）。
   评论数走 `utils/commentApi.ts` 的**批量合并**：50ms 内的请求合成一次 `/counts?paths=…`（上限 50 个）。
@@ -1318,9 +1326,9 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 530 用例：529 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 51 文件 / 463 用例全绿 |
-| admin `node --test tests/unit` | 65 文件 / 248 用例全绿 |
+| server `jest` | 562 用例：561 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 52 文件 / 481 用例全绿 |
+| admin `node --test tests/unit` | 71 文件 / 272 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 7 文件 / 259 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
