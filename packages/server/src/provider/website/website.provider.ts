@@ -140,6 +140,12 @@ export class WebsiteProvider {
         env: {
           ...process.env,
           ...loadEnvs,
+          // ⚠️ Next 13 的 standalone server 用 HOSTNAME 决定监听地址，而容器里 HOSTNAME
+          // 就是容器 ID（例如 97c3c6689770）→ 它只绑到那个网卡 IP，
+          // caddy 反代 127.0.0.1:3001 直接 **502**，前台整站打不开（后台和 /api 却正常，
+          // 因为它们走的是 server 的 3000）。必须显式绑 0.0.0.0（Next 官方 Docker 示例也是这么写的）。
+          // 放在 ...loadEnvs 之后，保证不会被别的东西覆盖；确有需要可用 VANBLOG_WEBSITE_HOST 指定。
+          HOSTNAME: process.env.VANBLOG_WEBSITE_HOST || '0.0.0.0',
         },
         cwd: websiteRoot,
         detached: true,

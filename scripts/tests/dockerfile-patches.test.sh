@@ -402,10 +402,49 @@ for st in admin_builder website_builder; do
     fail "${st} 没有跳过 tree-sitter 编译：alpine 下 pnpm install 会挂住"
   fi
 done
-if stage_body server_builder | grep -q "never-built-dependencies"; then
-  fail "server_builder 也跳过了原生编译（它是 glibc，能正常编，而且它是真运行时）"
+# server_builder 现在也是 alpine（musl），同样会卡在 tree-sitter 的 node-gyp 上，所以也跳过；
+# 但它的 sharp 必须**从源码编**（装了 vips-dev），因为它是真运行时，图片处理要用。
+if stage_body server_builder | grep -q "never-built-dependencies\[\]=tree-sitter"; then
+  pass "server_builder 也跳过 tree-sitter（musl 下同样会卡死；源码里没有任何地方 import 它）"
 else
-  pass "server_builder 照常编译原生模块（glibc + 运行时确实需要）"
+  fail "server_builder 没有跳过 tree-sitter：musl 下 pnpm i 会挂住"
+fi
+# ⚠️ 用剥掉注释的 stage 正文判断：注释里正好写着"以前这里还装 vips-dev"，
+#    不剥的话断言会被注释满足（本仓库第六次踩这个坑）
+SB_CODE="$(stage_body server_builder | sed 's|^[[:space:]]*#.*||')"
+if printf '%s' "${SB_CODE}" | grep -q "sharp_binary_host"; then
+  pass "server_builder 配了 sharp 预编译源（不用去 github.com 下，也不用现编）"
+else
+  fail "server_builder 没配 sharp_binary_host：sharp 会去 github.com 下载，国内直接 aborted"
+fi
+if printf '%s' "${SB_CODE}" | grep -qE "apk add[^#]*vips-dev"; then
+  fail "server_builder 还在装 vips-dev（200+ 个 apk 包，本地构建最容易卡死的一步；用预编译包就不需要）"
+else
+  pass "server_builder 不再装 vips-dev/fftw-dev（apk 只留 libc6-compat，避免拉大包卡死）"
+fi
+WB_CODE="$(stage_body website_builder | sed 's|^[[:space:]]*#.*||')"
+if printf '%s' "${WB_CODE}" | grep -q "sharp_binary_host"; then
+  pass "website_builder 也配了 sharp 预编译源"
+else
+  fail "website_builder 没配 sharp_binary_host"
+fi
+if grep -qE '^ARG VAN_BLOG_SHARP_DIST_HOST=' "${DOCKERFILE}"; then
+  pass "全局声明了 VAN_BLOG_SHARP_DIST_HOST（留空=官方 GitHub，CI 上更快）"
+else
+  fail "缺少全局 ARG VAN_BLOG_SHARP_DIST_HOST"
+fi
+if stage_body server_builder | grep -q "SHARP_IGNORE_GLOBAL_LIBVIPS=1"; then
+  pass "server_builder 设了 SHARP_IGNORE_GLOBAL_LIBVIPS（和 website_builder 一致）"
+else
+  fail "server_builder 没有 SHARP_IGNORE_GLOBAL_LIBVIPS"
+fi
+# 四个 stage 必须同一个 libc：runner 是 alpine，构建阶段若是 glibc，
+# 原生模块 COPY 进 runner 后加载不了（只能靠回退到前台那份 musl sharp 绕路）
+GLIBC_STAGES=$(grep -cE '^FROM node:20 AS ' "${DOCKERFILE}")
+if [[ "${GLIBC_STAGES}" -eq 0 ]]; then
+  pass "四个 stage 全是 alpine（和 runner 同一个 libc，原生模块不会白编）"
+else
+  fail "还有 ${GLIBC_STAGES} 个 glibc stage：编出来的原生模块在 alpine runner 里加载不了"
 fi
 if stage_body website_builder | grep -q "never-built-dependencies\[\]=sharp"; then
   fail "sharp 被加进了 never-built-dependencies：它靠 install 脚本取预编译二进制，跳过会坏"

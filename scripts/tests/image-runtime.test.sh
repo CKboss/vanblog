@@ -191,6 +191,23 @@ fi
 grep -q 'caddy validate --config /app/caddy.json' "${ENTRY}" \
   && pass "先 caddy validate 再 start（配置不兼容时能提前发现）" \
   || fail "没有先 validate 就 start：配置错了只会看到 caddy 退出"
+# ⚠️ `--adapter json` 在镜像里的 caddy 上是 `unrecognized config adapter`，
+#    加了它主配置永远校验失败、每次都降级成无 TLS（实测踩过）
+# ⚠️ 剥掉注释再断言：entrypoint 的注释里正好写着"不要加 --adapter json"，
+#    不剥就会自己匹配自己（本仓库第七次踩这个坑）
+ENTRY_CODE="$(sed 's|^[[:space:]]*#.*||' "${ENTRY}")"
+if printf '%s' "${ENTRY_CODE}" | grep -q -- '--adapter json'; then
+  fail "entrypoint 又加回了 --adapter json（这个 caddy 不认，会让主配置永远校验失败）"
+else
+  pass "caddy validate 没有画蛇添足地指定 --adapter json"
+fi
+# Next 13 standalone 用 HOSTNAME 决定监听地址；容器里那是容器 ID，只绑那个 IP → caddy 反代 502
+WPROV="${ROOT}/packages/server/src/provider/website/website.provider.ts"
+if grep -q "HOSTNAME: process.env.VANBLOG_WEBSITE_HOST || '0.0.0.0'" "${WPROV}"; then
+  pass "前台子进程显式绑 HOSTNAME=0.0.0.0（否则 caddy 反代 127.0.0.1:3001 会 502，前台整站打不开）"
+else
+  fail "前台子进程没有显式绑 HOSTNAME：容器里 Next 只监听容器 ID 那个地址，前台会 502"
+fi
 grep -q 'caddyFallbackTemplate.json' "${ENTRY}" \
   && pass "主配置失败时降级到 caddyFallbackTemplate.json" \
   || fail "缺少降级路径：caddy 配置一旦不兼容，容器就没有任何监听"

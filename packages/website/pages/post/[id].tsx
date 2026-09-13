@@ -6,6 +6,7 @@ import PostCard from "../../components/PostCard";
 import Toc from "../../components/Toc";
 import { Article } from "../../types/article";
 import { articleShareImageMeta } from "../../utils/articleCover";
+import { encodeLocationPath } from "../../utils/encodeLocationPath";
 import { getArticlePath } from "../../utils/getArticlePath";
 import {
   articleJsonLd,
@@ -247,7 +248,13 @@ export async function getStaticProps({
     // 访问的是 /post/<数字id> 而这篇文章有别名 → 301 到别名（别名才是规范地址）。
     // Next 对 permanent:true 返回 308，搜索引擎按 301 同等处理。
     return {
-      redirect: { destination: `/post/${canonical}`, permanent: true },
+      // ⚠️ 必须过 encodeLocationPath：自定义别名是中文时，Location 头里出现非 Latin-1 字符，
+      //    Node 的 setHeader 会抛 "Cannot convert argument to a ByteString"，这篇文章直接 500
+      //    （本地用假数据测不出来，只有真实数据里有中文别名才会踩到）。
+      redirect: {
+        destination: `/post/${encodeLocationPath(canonical)}`,
+        permanent: true,
+      },
       ...revalidate,
     };
   }

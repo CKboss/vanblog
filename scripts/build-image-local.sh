@@ -34,6 +34,18 @@ ALPINE_MIRROR="${ALPINE_MIRROR-https://mirrors.aliyun.com/alpine}"
 # node-gyp 头文件源：musl 下默认走 unofficial-builds.nodejs.org，国内连不上会让
 # pnpm install 整个失败（tree-sitter / sharp 编译不了）。NODE_DIST_URL=none 可关掉。
 NODE_DIST_URL="${NODE_DIST_URL-https://cdn.npmmirror.com/binaries/node}"
+# sharp 的预编译二进制源（默认 npmmirror，含 musl 版）；SHARP_DIST_HOST=none 用官方 GitHub
+SHARP_DIST_HOST="${SHARP_DIST_HOST-https://registry.npmmirror.com/-/binary}"
+[[ "${SHARP_DIST_HOST}" == "none" ]] && SHARP_DIST_HOST=""
+# 真正传给 Dockerfile 的是这两个（sharp 的 install 脚本只认环境变量）
+_base="${SHARP_DIST_HOST}"
+if [[ -n "${_base}" ]]; then
+  SHARP_BINARY_HOST="${SHARP_BINARY_HOST:-${_base}/sharp}"
+  SHARP_LIBVIPS_HOST="${SHARP_LIBVIPS_HOST:-${_base}/sharp-libvips}"
+else
+  SHARP_BINARY_HOST="${SHARP_BINARY_HOST:-https://github.com/lovell/sharp/releases/download}"
+  SHARP_LIBVIPS_HOST="${SHARP_LIBVIPS_HOST:-https://github.com/lovell/sharp-libvips/releases/download}"
+fi
 [[ "${NODE_DIST_URL}" == "none" ]] && NODE_DIST_URL=""
 DO_BUILD=1
 DO_SMOKE=1
@@ -96,6 +108,9 @@ if [[ "${DO_BUILD}" == "1" ]]; then
     --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${ADMIN_BUILD_SCRIPT}"
     --build-arg "VAN_BLOG_ALPINE_MIRROR=${ALPINE_MIRROR}"
     --build-arg "VAN_BLOG_NODE_DIST_URL=${NODE_DIST_URL}"
+    --build-arg "VAN_BLOG_SHARP_DIST_HOST=${SHARP_DIST_HOST}"
+    --build-arg "VAN_BLOG_SHARP_BINARY_HOST=${SHARP_BINARY_HOST}"
+    --build-arg "VAN_BLOG_SHARP_LIBVIPS_HOST=${SHARP_LIBVIPS_HOST}"
   )
   if [[ -n "${STAGE}" ]]; then
     say "> 只构建 stage ${yellow}${STAGE}${plain}（不打 tag，层缓存照样留着）"
@@ -106,7 +121,13 @@ if [[ "${DO_BUILD}" == "1" ]]; then
   say "> 构建 ${yellow}${IMAGE_TAG}${plain}（版本 ${VERSION_LABEL}，首次约 15-40 分钟）"
   say "  admin 堆档位：${yellow}${ADMIN_BUILD_SCRIPT}${plain}，pnpm 源：${yellow}${NPM_REGISTRY}${plain}"
   say "  Alpine 源：${yellow}${ALPINE_MIRROR:-官方 dl-cdn}${plain}，node-gyp 头文件源：${yellow}${NODE_DIST_URL:-node-gyp 默认}${plain}"
+  say "  sharp 预编译源：${yellow}${SHARP_DIST_HOST:-官方 GitHub Releases}${plain}"
   "${ENGINE}" build "${BUILD_ARGS[@]}" -t "${IMAGE_TAG}" . || die "镜像构建失败"
+  # ⚠️ 光看退出码不够：被 SIGTERM 打断的 podman build 实测会**退出 0**，
+  #    日志停在半截（apk 装到 18/218）却报"构建成功"。所以必须再确认镜像真的存在。
+  if ! "${ENGINE}" image exists "${IMAGE_TAG}" 2>/dev/null; then
+    die "构建命令返回 0，但镜像 ${IMAGE_TAG} 并不存在（多半是构建被打断了）—— 请重新构建"
+  fi
   say "${green}镜像构建成功${plain}：${IMAGE_TAG}"
   "${ENGINE}" images "${IMAGE_TAG}" --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' 2>/dev/null ||
     "${ENGINE}" images "${IMAGE_TAG}" 2>/dev/null | head -3

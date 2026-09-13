@@ -73,6 +73,10 @@ VANBLOG_ALPINE_MIRROR="${VANBLOG_ALPINE_MIRROR:-}"
 # Alpine/musl 下 node-gyp 默认去 unofficial-builds.nodejs.org，国内经常连不上，
 # 于是 `pnpm install` 整个失败。留空 = 跟着 pnpm 源自动选（用 npmmirror 就配 cdn.npmmirror）。
 VANBLOG_NODE_DIST_URL="${VANBLOG_NODE_DIST_URL:-}"
+# sharp / sharp-libvips 预编译二进制的下载源。sharp 默认从 github.com 下，国内直接 aborted。
+# npmmirror 两套都镜像了（含 musl 版），所以用预编译包就不必在镜像里装 gcc+vips 现编。
+# 设成 none 表示用官方 GitHub（海外/CI 更快）。
+VANBLOG_SHARP_DIST_HOST="${VANBLOG_SHARP_DIST_HOST:-}"
 # 下面几个由探测函数填，只用于日志与测试
 VANBLOG_HOST_CPUS=""
 VANBLOG_HOST_MEM_MB=""
@@ -550,6 +554,17 @@ build_vanblog_image() {
   fi
   detect_npm_registry
   detect_alpine_mirror
+  # sharp 的预编译二进制源同样跟着 pnpm 源走
+  if [[ -z "${VANBLOG_SHARP_DIST_HOST}" ]]; then
+    case "${VANBLOG_NPM_REGISTRY}" in
+    *npmmirror*)
+      VANBLOG_SHARP_DIST_HOST="https://registry.npmmirror.com/-/binary"
+      echo -e "> sharp 预编译源：${yellow}${VANBLOG_SHARP_DIST_HOST}${plain}（跟随 pnpm 源，免编译免 GitHub）"
+      ;;
+    esac
+  elif [[ "${VANBLOG_SHARP_DIST_HOST}" == "none" ]]; then
+    VANBLOG_SHARP_DIST_HOST=""
+  fi
   # node-gyp 的头文件源跟着 pnpm 源走：用 npmmirror 就用它的 CDN（实测 3.4MB/s，
   # 比 npmmirror.com/mirrors 与 nodejs.org 快 6 倍），用 npmjs 就不设（走 node-gyp 默认）
   if [[ -z "${VANBLOG_NODE_DIST_URL}" ]]; then
@@ -568,13 +583,26 @@ build_vanblog_image() {
   # 构建期这个地址其实是连不上的（容器里还没有 server），页面会走兜底数据，
   # 运行时再由 runner 阶段的 ENV 覆盖成真实地址，所以这里给个合法值就够了。
   local build_server="${VANBLOG_BUILD_SERVER:-http://127.0.0.1:3000}"
+  # sharp 的 install 脚本只认环境变量，所以真正传进镜像的是这两个具体 host
+  local sharp_binary_host sharp_libvips_host
+  if [[ -n "${VANBLOG_SHARP_DIST_HOST}" ]]; then
+    sharp_binary_host="${VANBLOG_SHARP_DIST_HOST}/sharp"
+    sharp_libvips_host="${VANBLOG_SHARP_DIST_HOST}/sharp-libvips"
+  else
+    sharp_binary_host="https://github.com/lovell/sharp/releases/download"
+    sharp_libvips_host="https://github.com/lovell/sharp-libvips/releases/download"
+  fi
   local -a build_args=(
+
     --build-arg "VAN_BLOG_VERSIONS=${version_arg}"
     --build-arg "VAN_BLOG_BUILD_SERVER=${build_server}"
     --build-arg "VAN_BLOG_NPM_REGISTRY=${VANBLOG_NPM_REGISTRY}"
     --build-arg "VAN_BLOG_ADMIN_BUILD_SCRIPT=${VANBLOG_ADMIN_BUILD_SCRIPT}"
     --build-arg "VAN_BLOG_ALPINE_MIRROR=${VANBLOG_ALPINE_MIRROR}"
     --build-arg "VAN_BLOG_NODE_DIST_URL=${VANBLOG_NODE_DIST_URL}"
+    --build-arg "VAN_BLOG_SHARP_DIST_HOST=${VANBLOG_SHARP_DIST_HOST}"
+    --build-arg "VAN_BLOG_SHARP_BINARY_HOST=${sharp_binary_host}"
+    --build-arg "VAN_BLOG_SHARP_LIBVIPS_HOST=${sharp_libvips_host}"
   )
 
   if [[ "${VANBLOG_BUILD_PARALLEL}" == "true" ]]; then

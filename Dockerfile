@@ -35,6 +35,19 @@ ARG VAN_BLOG_ALPINE_MIRROR=
 #   （报错是 FetchError: request to https://unofficial-builds.nodejs.org/... failed）。
 #   npmmirror 有全套头文件：https://npmmirror.com/mirrors/node
 ARG VAN_BLOG_NODE_DIST_URL=
+# VAN_BLOG_SHARP_DIST_HOST  sharp / sharp-libvips 预编译二进制的下载源（留空 = 官方 GitHub Releases）。
+#   sharp 的 install 脚本默认从 github.com/lovell/sharp{,-libvips}/releases 下载，
+#   国内直接 `Installation error: aborted` → 整个 pnpm install 失败（本地构建实测）。
+#   npmmirror 把两套二进制都镜像了，而且**musl 版也有**：
+#     <host>/sharp/v0.32.6/sharp-v0.32.6-napi-v7-linuxmusl-x64.tar.gz
+#     <host>/sharp-libvips/v8.14.5/libvips-8.14.5-linuxmusl-x64.tar.gz
+#   用预编译包就不需要在镜像里装 gcc + vips-dev 从源码编 —— 那可是 200 多个 apk 包，
+#   而 apk 拉大包恰恰是本地构建最容易卡死的地方。
+ARG VAN_BLOG_SHARP_DIST_HOST=
+# 上面这个是给脚本用的"一个开关"（npmmirror 的 binary 根地址）；真正生效的是下面两个，
+# 它们分别对应 sharp 自己的 prebuild 和它依赖的 libvips 预编译包，默认就是官方 GitHub Releases。
+ARG VAN_BLOG_SHARP_BINARY_HOST=https://github.com/lovell/sharp/releases/download
+ARG VAN_BLOG_SHARP_LIBVIPS_HOST=https://github.com/lovell/sharp-libvips/releases/download
 
 FROM node:20-alpine AS admin_builder
 ARG VAN_BLOG_NPM_REGISTRY
@@ -118,11 +131,51 @@ RUN pnpm install --frozen-lockfile --filter "@vanblog/admin..."
 WORKDIR /app/packages/admin
 RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}
 
-FROM node:20 AS server_builder
+# server 也用 **alpine**（和 runner 同一个 libc）。以前这里是 glibc 的 node:20，有两个真问题：
+#   1. sharp 的 install 脚本要从 github.com 下 libvips 预编译包，国内网络直接
+#      `Installation error: aborted` → 整个 `pnpm i` 失败（本地构建实测）。
+#      alpine 这条线有现成解法：装 vips-dev 从源码编（和 website_builder 一样），全程不碰 GitHub。
+#   2. glibc 编出来的 node_modules 被 COPY 进 alpine 的 runner，原生模块（sharp）根本加载不了，
+#      只能靠"回退去用前台那份 musl sharp"绕路兜底。同一个 libc 构建就没这问题。
+FROM node:20-alpine AS server_builder
 ARG VAN_BLOG_NPM_REGISTRY
 ENV NODE_OPTIONS=--max_old_space_size=4096
+# 强制 sharp 用它自己下载的 libvips，别去链系统的（和 website_builder 一致）
+ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
 WORKDIR /app
+ARG VAN_BLOG_ALPINE_MIRROR
+# 换 Alpine 源必须在第一条 apk add **之前**（同 admin/website 两个 stage 的说明）
+RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
+      . /etc/os-release; \
+      apk_ver="$(printf '%s' "${VERSION_ID}" | cut -d. -f1,2)"; \
+      printf '%s\n%s\n' \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/main" \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/community" \
+        > /etc/apk/repositories; \
+      echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
+    fi
+# 只装 libc6-compat（musl 兼容层，很小）。
+# ⚠️ 以前这里还装 python3/make/g++/vips-dev/fftw-dev 好让 sharp 从源码编（218 个 apk 包）：
+#    一是 apk 拉 gcc 这种大包在本地构建时反复静默卡死，二是既然 sharp 有 musl 预编译包，
+#    就没必要在镜像里现编。真编不了的时候报错也比卡二十分钟强。
+RUN apk add --no-cache libc6-compat
+ARG VAN_BLOG_SHARP_DIST_HOST
+# sharp 走预编译二进制（含 musl 版），不用在镜像里编译 → 不需要 vips-dev/gcc。
+# ⚠️ 必须用 **ENV**，不要指望 npmrc：sharp 的 install/libvips.js 直接读
+#    `process.env.npm_config_sharp_libvips_binary_host`（本地翻过它的源码确认），
+#    而 pnpm 8 并不会把 .npmrc 里的自定义键转成 npm_config_* 传给 install 脚本 ——
+#    实测无论写全局 npmrc（npm config set -g）还是项目 /app/.npmrc，sharp 照样去
+#    github.com 下载然后 `Installation error: aborted`。ENV 是进程环境，一定传得到。
+ARG VAN_BLOG_SHARP_BINARY_HOST
+ARG VAN_BLOG_SHARP_LIBVIPS_HOST
+ENV npm_config_sharp_binary_host=${VAN_BLOG_SHARP_BINARY_HOST}
+ENV npm_config_sharp_libvips_binary_host=${VAN_BLOG_SHARP_LIBVIPS_HOST}
+RUN echo "sharp 预编译源: ${npm_config_sharp_binary_host}" && \
+    echo "libvips 预编译源: ${npm_config_sharp_libvips_binary_host}"
 COPY ./packages/server/ .
+# tree-sitter 系列（swagger-ui-react 带进来的幽灵传递依赖，源码里没有任何地方 import）
+# 在 musl 下用 node-gyp 编译会卡死，这里跳过；不影响运行时。sharp 不在名单里。
+RUN printf 'never-built-dependencies[]=tree-sitter\nnever-built-dependencies[]=tree-sitter-json\nnever-built-dependencies[]=tree-sitter-yaml\n' >> /app/.npmrc
 ARG VAN_BLOG_NODE_DIST_URL
 # 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
 # unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
@@ -162,7 +215,22 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
         > /etc/apk/repositories; \
       echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
     fi
-RUN apk add --no-cache python3 make g++ libc6-compat vips-dev fftw-dev
+# 去掉 vips-dev/fftw-dev：sharp 用 musl 预编译包（见上面的 sharp_binary_host），
+# 不再需要从源码编；保留 python3/make/g++ 给其它可能要编译的原生模块兜底。
+RUN apk add --no-cache python3 make g++ libc6-compat
+ARG VAN_BLOG_SHARP_DIST_HOST
+# sharp 走预编译二进制（含 musl 版），不用在镜像里编译 → 不需要 vips-dev/gcc。
+# ⚠️ 必须用 **ENV**，不要指望 npmrc：sharp 的 install/libvips.js 直接读
+#    `process.env.npm_config_sharp_libvips_binary_host`（本地翻过它的源码确认），
+#    而 pnpm 8 并不会把 .npmrc 里的自定义键转成 npm_config_* 传给 install 脚本 ——
+#    实测无论写全局 npmrc（npm config set -g）还是项目 /app/.npmrc，sharp 照样去
+#    github.com 下载然后 `Installation error: aborted`。ENV 是进程环境，一定传得到。
+ARG VAN_BLOG_SHARP_BINARY_HOST
+ARG VAN_BLOG_SHARP_LIBVIPS_HOST
+ENV npm_config_sharp_binary_host=${VAN_BLOG_SHARP_BINARY_HOST}
+ENV npm_config_sharp_libvips_binary_host=${VAN_BLOG_SHARP_LIBVIPS_HOST}
+RUN echo "sharp 预编译源: ${npm_config_sharp_binary_host}" && \
+    echo "libvips 预编译源: ${npm_config_sharp_libvips_binary_host}"
 COPY ./package.json ./
 COPY ./pnpm-lock.yaml ./
 COPY ./pnpm-workspace.yaml ./
@@ -210,6 +278,42 @@ RUN pnpm build:website
 
 
 #运行容器
+# ── waline 的依赖单独编 ────────────────────────────────────────────────────
+# @waline/vercel 依赖 think-model-sqlite → sqlite3@5.1.7，而 sqlite3 5.1.7 **没有
+# Node 20（NODE_MODULE_VERSION 115）的预编译包**（node:18 时代是有的，所以以前不用编），
+# 于是它会退回 node-gyp 现场编译 —— 需要 python3/make/g++。
+# 放在独立的构建阶段里编，编完只把 node_modules 拷进 runner：
+# 最终镜像里不会留下编译器（体积、攻击面都更小），这一层也容易被缓存复用。
+FROM node:20-alpine AS waline_builder
+ARG VAN_BLOG_NPM_REGISTRY
+ARG VAN_BLOG_ALPINE_MIRROR
+# 换 Alpine 源必须在第一条 apk add **之前**（同其它 stage 的说明）
+RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
+      . /etc/os-release; \
+      apk_ver="$(printf '%s' "${VERSION_ID}" | cut -d. -f1,2)"; \
+      printf '%s\n%s\n' \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/main" \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/community" \
+        > /etc/apk/repositories; \
+      echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
+    fi
+RUN apk add --no-cache python3 make g++
+WORKDIR /app/waline
+COPY ./packages/waline/ ./
+ARG VAN_BLOG_NODE_DIST_URL
+# sqlite3 现场编译同样要下 Node 头文件（musl 默认走 unofficial-builds，国内连不上）
+RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
+      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
+      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+    fi
+RUN corepack enable
+RUN corepack prepare pnpm@8.11.0 --activate
+RUN pnpm config set network-timeout 600000 -g
+RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
+RUN pnpm config set fetch-retries 20 -g
+RUN pnpm config set fetch-timeout 600000 -g
+RUN pnpm i
+
 FROM node:20-alpine AS runner
 ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
@@ -253,10 +357,11 @@ RUN pnpm config set fetch-timeout 600000 -g
 WORKDIR /app/cli
 COPY ./packages/cli/ ./
 RUN pnpm i
-# 安装 waline
+# waline：依赖在 waline_builder 阶段编好了（sqlite3 需要编译器，别塞进最终镜像），
+# 这里只拷 package.json 与 node_modules
 WORKDIR /app/waline
-COPY ./packages/waline/ ./
-RUN pnpm i
+COPY ./packages/waline/package.json ./
+COPY --from=waline_builder /app/waline/node_modules ./node_modules
 # 复制 server
 WORKDIR /app/server
 COPY --from=server_builder /app/node_modules ./node_modules
@@ -286,6 +391,9 @@ COPY caddyTemplate.json /app/caddyTemplate.json
 # 降级模板：主配置因为 Caddy 版本漂移加载失败时用它（去掉 apps.tls，HTTP 仍可用）。
 # 没有它的话，一次 caddy 配置不兼容就会让整个站点没有任何监听，而容器看起来是"运行中"。
 COPY caddyFallbackTemplate.json /app/caddyFallbackTemplate.json
+# 生成 caddy 配置的小工具：on-demand TLS 在 Caddy 2.11 换了写法（ask → permission），
+# 由它按 caddy 自己的 validate 结果挑形式，避免 apk 的 caddy 版本漂移把 HTTPS 弄坏。
+COPY ./scripts/caddyConfig.js /app/caddyConfig.js
 # 复制入口文件
 WORKDIR /app
 COPY ./scripts/start.js ./

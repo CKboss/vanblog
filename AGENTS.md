@@ -2572,7 +2572,34 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
    必须 `cut -d. -f1,2`。探测延迟时也别写死某个 `v3.x`（基础镜像的 Alpine 版本会漂），
    用 `latest-stable`。
 
-**测试**：`scripts/tests/build-image-local.test.sh`（32 条静态契约）—— 构建参数必须和 CI 一致
+**本地真构建时又抓到的三件事（都只有真跑才会暴露）**：
+
+1. **公共镜像站拉大 blob 会静默卡死**：`node:20`（debian，350MB+）在 `docker.m.daocloud.io`
+   上拉到一半就不动了 —— 进度行停在那里、不报错、也不超时，`du` 看存储 40 秒 0 字节增长。
+   小镜像（`node:20-alpine` 50MB）反而一次就过。解法是**多站轮换 + 每次限时**：
+   `docker.1ms.run` / `docker.m.daocloud.io` / `dockerproxy.net` / `hub.rat.dev` 依次试，
+   每次 `timeout 300`，拉下来立刻 `podman tag` 成 `docker.io/library/<name>` 再删掉带站名的 tag。
+   实测：node:20 第 1 次（1ms.run）超时、第 2 次（daocloud）成功；node:20-alpine 走 1ms.run 一次过。
+   ⚠️ podman 4.9 的 `pull` **没有 `--retry`**（那是后来加的），写了会直接 rc=125，重试要靠外层循环。
+2. **admin/website 两个 alpine stage 里 tree-sitter 系列会把 node-gyp 卡死**：
+   进程活着、11 个线程全 sleep、**没有任何 make/cc1plus 子进程**，十几分钟不动，整个 stage 挂住。
+   同一份 Dockerfile 在 GitHub Actions 上能编过，所以是 musl + rootless podman 这一侧的问题。
+   查清了来源：`packages/admin` 的 `swagger-ui-react@3.52.5` 传递依赖 `@swagger-api/apidom-*` →
+   `tree-sitter` / `tree-sitter-json` / `tree-sitter-yaml`。**全仓库源码与 dist 里没有任何一处
+   import 它们**（`grep -rl "apidom\|tree-sitter" packages/*/src packages/*/dist` 是空的），
+   属于纯粹的幽灵传递依赖 —— 所以在这两个 stage 的 `/app/.npmrc` 里写
+   `never-built-dependencies[]=tree-sitter{,-json,-yaml}` 跳过编译是安全的，
+   而且**只影响镜像构建**（不动仓库的 package.json，本机开发照常编译）。
+   ⚠️ 别把 `sharp` 一起加进去：它靠 install 脚本取预编译二进制，跳过脚本反而会坏。
+   加了之后 admin 的 `pnpm install` 从"永远不结束"变成 **2m24s** ✓
+3. **顺带把两个 stage 改成按包过滤安装**：`pnpm install --frozen-lockfile --filter "@vanblog/admin..."`。
+   原来是整仓安装，会把 `packages/server` 的依赖也拉进来（就是 tree-sitter 的来源之一），
+   admin 构建根本用不到。⚠️ **过滤名必须和 package.json 里的真名一致**：
+   website 那个包叫 `@vanblog/theme-default`（不是 `@vanblog/website`），写错不会报错，
+   只是**一个包都不装**，然后在 `next build` 才炸，错误信息完全指不到根因 ——
+   现在有测试会拿每个 `packages/*/package.json` 的 name 去核对 Dockerfile 里的过滤名。
+
+**测试**：`scripts/tests/build-image-local.test.sh`（34 条静态契约）—— 构建参数必须和 CI 一致
 （四个 build-arg 一个都不能少，否则"本地测过了"是假的）、支持 `--target` 单层构建、
 引擎探测要看 `docker info` 而不是只看命令存在、冒烟测试必须覆盖上面那 6 个故障特征 +
 关键路径 + 停机耗时 + RestartCount、`trap cleanup EXIT` 在、默认端口 18080（不撞正在跑的站点）、

@@ -63,6 +63,8 @@ has "trap 里清理容器与临时目录" "trap cleanup EXIT"
 has "默认端口避开 80/443（不撞正在跑的站点）" "SMOKE_HTTP_PORT:-18080"
 has "容器名带 PID（并发跑两次不会互相拆）" 'vanblog-smoke-$$'
 has "可以保留容器排查" "SMOKE_KEEP"
+# 被 SIGTERM 打断的 podman build 会退出 0（实测），只信退出码就会宣布"构建成功"
+has "构建后确认镜像真的存在（podman build 被打断时也会返回 0）" 'image exists "${IMAGE_TAG}"'
 has "mongo 版本跟着脚本的 pick_mongo_image 走（和真实安装一致）" "pick_mongo_image"
 
 # 不该有的东西
