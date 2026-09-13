@@ -2683,7 +2683,7 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 57 文件 / 543 用例全绿 |
+| website `vitest run` | 59 文件 / 550 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 15 文件 / 709 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
