@@ -43,7 +43,21 @@ Apple 风格具体做了这些事：
   中文子集那份样式表由 `components/Layout` 用 `<link rel="stylesheet">` 加载（zeoseven 字体 CDN），
   **只在皮肤开启时才加载**，并配了 `preconnect` / `dns-prefetch` 提前建连。
 
-  两个实现细节值得知道：
+  **加载方式是非阻塞的**：远程字体样式表用 `<link rel="stylesheet" media="print">` 引入，
+  浏览器会以低优先级下载且**不阻塞首屏渲染**；水合后由一个 `useEffect` 把 `media` 改成 `all`，
+  配合 `font-display: swap`，效果是「先按兜底字体渲染，字体到了再无缝换上」。
+  另外配了 `preconnect` / `dns-prefetch` 提前建连，以及 `<noscript>` 兜底（关掉 JS 时没有水合）。
+
+  ::: warning 为什么必须异步
+
+  普通的 `<link rel="stylesheet">` 是**渲染阻塞**的。而这个字体域名在部分网络下解析不了
+  （实测有机器上 `static.zeoseven.com` DNS 失败，而 `zeoseven.com` 本身是通的）——
+  阻塞加载会让首屏一直白屏等到浏览器超时。异步加载之后，最坏情况只是**用兜底字体**，
+  页面照常渲染。
+
+  :::
+
+  三个实现细节值得知道：
 
   1. 字体是写在**令牌**里的（`--ap-font` / `--ap-font-mono`），Maple Mono 打头，
      后面完整保留原来的 SF Pro / 苹方 / 微软雅黑栈。所以远程字体加载不上（离线、CDN 不可达、
@@ -52,16 +66,24 @@ Apple 风格具体做了这些事：
   2. 字体挂在皮肤根节点（`[data-ui="apple"]`、`[data-ui="apple"] body`）上靠**继承**生效，
      不需要 `p, span, div { font-family: … }` 那种宽选择器 —— 宽选择器会把代码块的 mono 令牌
      和第三方组件（评论区、播放器）一起覆盖掉。
+  3. 翻 `media` 靠的是那个 `useEffect`，**不是** `<link>` 上的 `onLoad`：`next/head` 是用
+     `document.createElement` + `setAttribute` 把子元素搬进 `<head>` 的，函数类型的 prop 不会被带过去；
+     而且命中缓存时可能在监听挂上之前就加载完了。`onLoad` 只是锦上添花。
 
   ::: tip 想换字体 / 自己托管
 
   - 换字体：改 `styles/apple.css` 里 `--ap-font` 与 `--ap-font-mono` 的开头几项即可，
     想完全回到系统字体就把 `"Maple Mono NF CN", "Maple Mono",` 删掉。
-  - 换成别的字体源：改 `components/Layout/index.tsx` 里的 `appleFontCss` 常量（就一处）。
-  - **自己托管**（不依赖任何第三方 CDN）：把字体文件放进 `packages/website/public/fonts/`，
-    在 `apple.css` 里加对应的 `@font-face`（`src: url("/fonts/xxx.woff2")`），
-    再把那个 `<link>` 去掉即可。中文字体建议用**分包**（按 unicode-range 切成几十个小文件），
-    否则单文件十几 MB 会拖慢首屏。
+  - 换成别的字体源：改 `utils/appleFont.ts` 里的 `APPLE_FONT_CSS_URL`（就一处，
+    preconnect 的域名列表 `APPLE_FONT_PRECONNECT_HOSTS` 也在那里）。
+  - **自己托管**（不依赖任何第三方 CDN，也顺带绕开 DNS 不可达的风险）：
+    从 [maple-font 的 GitHub Releases](https://github.com/subframe7536/maple-font/releases)
+    下载 NF-CN 变体，放进 `packages/website/public/fonts/`，在 `apple.css` 里按 **unicode-range 分包**
+    声明 `@font-face`（中文务必分包，否则单文件十几 MB 会拖慢首屏；npm 上没有现成的
+    `maple-mono-nf-cn` 包，仓库里也只有 Release 产物），然后把 `APPLE_FONT_CSS_URL` 设成 `null`
+    —— 代码里已经支持：为 `null` 时那个 `<link>` 和 preconnect 都不会输出。
+  - 想完全用系统字体：把 `--ap-font` / `--ap-font-mono` 开头的
+    `"Maple Mono NF CN", "Maple Mono",` 删掉，并把 `APPLE_FONT_CSS_URL` 设为 `null`。
 
   :::
 

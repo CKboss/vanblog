@@ -36,11 +36,21 @@ describe("Apple 皮肤的字体集成（Maple Mono）", () => {
   });
 
   it("中文字体样式表用 <link> 加载（@import 会被内联顺序坑掉），且只在皮肤开启时加载", () => {
-    expect(layout).toContain('rel="stylesheet" href={appleFontCss}');
-    expect(layout).toContain("static.zeoseven.com/zsft/442/main/result.css");
-    expect(layout).toContain('uiStyle === "apple" ? (');
-    expect(layout).toContain('rel="preconnect" href="https://static.zeoseven.com"');
-    expect(layout).toContain('rel="preconnect" href="https://cdn.jsdelivr.net"');
+    expect(layout).toContain("APPLE_FONT_CSS_URL");
+    expect(read("utils/appleFont.ts")).toContain("static.zeoseven.com/zsft/442/main/result.css");
+    expect(layout).toContain('uiStyle === "apple" && appleFontCss ? (');
+    expect(layout).toContain("APPLE_FONT_PRECONNECT_HOSTS");
+  });
+
+  it("远程字体样式表是**非阻塞**加载的（域名解析不了时不能把首屏拖成白屏）", () => {
+    // media="print" 让浏览器低优先级取、不阻塞渲染；水合后由 useEffect 翻成 all
+    expect(layout).toContain('media="print"');
+    expect(layout).toContain('link[rel="stylesheet"][href="${appleFontCss}"]');
+    expect(layout).toContain('link.media = "all"');
+    // 关 JS 的客户端没有水合，得有 noscript 兜底
+    expect(layout).toContain("<noscript>");
+    // 翻 media 的 effect 必须依赖 uiStyle，切皮肤时才会重跑
+    expect(layout).toMatch(/\}, \[uiStyle, appleFontCss\]\);/);
   });
 
   it("样式表里不许出现远程 @import（内联后不在首位就会被浏览器静默丢弃）", () => {

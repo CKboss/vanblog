@@ -177,7 +177,7 @@
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
 | server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **587** 用例（1 个既有用例需联网拉字体，离线必失败） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **53 文件 / 489** 用例 |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **53 文件 / 490** 用例 |
 | admin（node:test） | `cd packages/admin && node --test tests/unit/*.test.js` | **72 套件 / 277** 用例 |
 | 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **8 文件 / 313** 条断言 |
 

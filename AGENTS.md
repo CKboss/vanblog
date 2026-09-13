@@ -794,6 +794,15 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   npm 上没有 `maple-mono-nf-cn` / `maple-font` 包，`subframe7536/maple-font` 仓库里也没有构建产物
   （字体在 GitHub Releases 里，jsDelivr 的 `/gh/` 只能取仓库文件），所以要自己托管得从 Release 下载。
   换字体源只需改 `components/Layout/index.tsx` 里的 `appleFontCss` 常量（就一处）。
+- **远程字体样式表必须异步加载**（`media="print"` → 水合后 `useEffect` 翻成 `all`，配 `<noscript>` 兜底）。
+  普通 `<link rel="stylesheet">` 是**渲染阻塞**的，而 `static.zeoseven.com` 在部分网络下 DNS 就解析不了
+  （本机实测如此）→ 阻塞加载等于首屏白屏等到超时。异步之后最坏只是用兜底字体。
+  ⚠️ 翻 media 靠的是 `useEffect`，**不是** `<link onLoad>`：`next/head` 用
+  `document.createElement` + `setAttribute` 搬子元素，函数 prop 不会被带过去；
+  命中缓存时也可能在监听挂上之前就加载完了。
+- 字体源集中在 `utils/appleFont.ts`（`APPLE_FONT_CSS_URL` + `APPLE_FONT_PRECONNECT_HOSTS`）。
+  `APPLE_FONT_CSS_URL = null` 时 `<link>` 与 preconnect 都不输出 —— 这是**自托管**的入口
+  （从 maple-font 的 GitHub Releases 下 NF-CN，按 unicode-range 分包放进 `public/fonts/`）。
 - 顺带确认：站点的 `siteInfo.customCss` 是**空的**、`enableCustomizing` 也没开 —— 也就是说
   用户那段自定义 CSS 此前**根本没生效**（`CustomLayout` 只在 `enableCustomizing == "true"` 时渲染）。
   整合进皮肤后不再依赖那个开关。
@@ -1456,7 +1465,7 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 587 用例：586 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 53 文件 / 489 用例全绿 |
+| website `vitest run` | 53 文件 / 490 用例全绿 |
 | admin `node --test tests/unit` | 72 套件 / 277 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 8 文件 / 313 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
