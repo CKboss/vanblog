@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+（暂无）
+
+## [v2026.09] - 2026-09-14
+
+本 fork 的第一个正式版本。基线是上游 master `ccd708ce`（v0.54.0+），在此之上累积了
+内置评论系统、整站备份/恢复、图片管线、SEO、Apple 风格前台皮肤、以及一整轮部署与镜像加固。
+
+
 ### 🍴 本 fork（`CKboss/vanblog` 分支 `dev/dsh`）的改动
 
 > 下面这些**只存在于本 fork**，不在上游 `Mereithhh/vanblog` 的任何发布里。

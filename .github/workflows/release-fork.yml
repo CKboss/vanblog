@@ -1,0 +1,129 @@
+name: release
+
+# 本 fork 的发版流程。
+#
+# ⚠️ 上游的 .github/workflows/release.yml 已删除，**不要加回来**：它同样由 `v*` tag 触发，
+# 但做的是作者自己的事 —— 登录 DockerHub 推 `mereith/van-blog:<版本>` 与 `:latest`、
+# `curl -X POST $VERSIONURL`（往作者的版本服务器上报版本）、
+# 还有两步 `kubectl set image deployment/van-blog …`（**部署到作者的集群**）。
+# 在 fork 里这些步骤要么因为缺 secret 失败、要么就是往别人家推东西，都不该跑。
+# 镜像发布由 publish-ghcr.yml 负责（同样由 `v*` tag 触发，推到本仓库的 ghcr）。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布/重建 Release 的 tag（例如 v2026.09）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 确定 tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "${tag}" ]; then
+            echo "::error::拿不到 tag"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "发布 tag：${tag}"
+
+      # 发布说明直接取 CHANGELOG.md 里对应 tag 的那一节（人工写好的，比自动生成的提交列表有用）。
+      # 找不到就退回 [Unreleased] 一节，再找不到就用自动生成的提交列表。
+      - name: 从 CHANGELOG 提取发布说明
+        id: notes
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          python3 - "$tag" "${GITHUB_REPOSITORY}" <<'PY' > RELEASE_BODY.md
+          import re, sys
+          tag, repo = sys.argv[1], sys.argv[2]
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          # 按 `## [xxx]` 切段：parts = [前言, 标题1, 正文1, 标题2, 正文2, ...]
+          parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
+          sections = {}
+          for i in range(1, len(parts) - 1, 2):
+              sections[parts[i].strip()] = parts[i + 1].strip()
+          body = sections.get(tag) or sections.get('Unreleased') or ''
+          if not body:
+              print('（CHANGELOG 里没有找到 %s 或 Unreleased 一节，下面用自动生成的提交列表）' % tag)
+          else:
+              # CHANGELOG 里的相对链接（docs/xxx.md、README.md#锚点）在 Release 页面上是死的，
+              # 统一改写成指向这个 tag 的绝对地址。
+              base = 'https://github.com/%s/blob/%s/' % (repo, tag)
+              def fix(m):
+                  target = m.group(1)
+                  if target.startswith(('http://', 'https://', '#', 'mailto:')):
+                      return m.group(0)
+                  return '](' + base + target.lstrip('/') + ')'
+              body = re.sub(r'\]\(([^)\s]+)\)', fix, body)
+              print(body)
+          PY
+          lines=$(wc -l < RELEASE_BODY.md)
+          echo "发布说明 ${lines} 行"
+          head -5 RELEASE_BODY.md
+
+      - name: 附上发布说明里的镜像信息
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo
+            echo "---"
+            echo
+            echo "## 镜像"
+            echo
+            echo "本 tag 会同时触发 \`publish-ghcr\` 构建并推送镜像："
+            echo
+            echo '```'
+            echo "ghcr.io/${repo_lc}:latest"
+            echo "ghcr.io/${repo_lc}:${tag}"
+            echo '```'
+            echo
+            echo "一键脚本（也可以直接从本 Release 的附件下载 \`vanblog.sh\`）："
+            echo
+            echo '```bash'
+            echo "curl -L https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${tag}/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh"
+            echo '```'
+            echo
+            echo "换机器搬站（装完自动从整站备份恢复）："
+            echo
+            echo '```bash'
+            echo "VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install"
+            echo '```'
+          } >> RELEASE_BODY.md
+
+      - name: 创建 / 更新 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: RELEASE_BODY.md
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            scripts/vanblog.sh
+            docker-compose/docker-compose-template.yml
+
+      - name: 打印结果
+        run: |
+          echo "Release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${{ steps.tag.outputs.tag }}"
+          echo "镜像构建：Actions → publish-ghcr（同一个 tag 触发）"

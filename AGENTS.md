@@ -504,7 +504,17 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
    要杀就先 `pgrep` 出 pid，排除 `$$` 与 `$PPID` 再 `kill`。
 5. **mongod 的 `--dbpath/--logpath/--pidfilepath` 必须绝对路径**（`--fork` 之后 cwd 会变）。
 6. **不要把 pnpm store 放到别的文件系统**（跨设备无法硬链接，装包会退化成全量复制）。
-7. **不要执行 `pnpm release` / `pnpm release-doc`，不要 push `v*`、`doc*`、`test*` tag**（作者专用）。
+7. **不要执行 `pnpm release` / `pnpm release-doc`**（作者的发版工具，会改版本号并提交），
+   也**不要把 `.github/workflows/release.yml`（上游那份）加回来**：它由 `v*` tag 触发，
+   会登录 DockerHub 推 `mereith/van-blog:<版本>`、`curl -X POST $VERSIONURL` 往作者的版本服务器上报、
+   还有两步 `kubectl set image deployment/van-blog …` **部署到作者的集群** —— 在 fork 里这些
+   要么因为缺 secret 失败，要么就是往别人家推东西。本 fork 用的是
+   `.github/workflows/release-fork.yml`（同样由 `v*` 触发，只用 `GITHUB_TOKEN` 建 Release，
+   发布说明取 CHANGELOG 里对应 tag 的那一节并把相对链接改写成绝对地址，附件带
+   `vanblog.sh` 与编排模板）。
+   `doc*` / `test*` tag 仍然是作者专用的（分别触发 deploy-docs 与 test 工作流），不要推。
+   `v*` tag 现在可以推：它会同时触发 `release-fork`（建 Release）与 `publish-ghcr`
+   （构建并推 `latest` + `<tag>` 两个镜像 tag）。
 8. **不要往 `origin`（上游 `Mereithhh/vanblog`）push**，只推自己的 fork。
 9. **不要把 FCV 升到 7.0**，除非明确需要且接受不可回退。
 10. **不要把 `vanblog_dev/`、`.tools/` 里的东西提交进 git**：前者可能含真实博客数据
