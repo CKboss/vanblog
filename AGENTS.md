@@ -2839,6 +2839,57 @@ articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面
 ⚠️ 用例之间要 `unset INIT_MODE/LOGIN_FAIL/RESTORE_FAIL/...`：漏了一个 `INIT_MODE`，
 后面所有用例都会走"已初始化"分支去交互登录、读到 EOF 失败，表现为一片莫名其妙的 rc=1。
 
+### 7.35.1 交互菜单与 `--help` 重写（以及一次差点删掉半个脚本的教训）
+
+菜单和 `show_usage` 都停在几个版本以前了：菜单门头还写着上游仓库地址、
+"安装来源"那行谎称默认是**本地构建镜像**（现在默认是拉 ghcr 镜像、拉不到才构建）、
+没有 `status` 入口；`show_usage` 里 `backup`/`restore` 各有两条互相矛盾的条目（旧的"备份 VanBlog"
+和新的"整站备份"并存），还写着"默认从源码构建本分支，不用官方镜像"。
+
+**菜单**现在长这样（编号全部保持不变 —— 文档和用户都按编号操作，`6` 是更新、`20` 是更新脚本）：
+
+```
+    VanBlog 管理脚本 v0.5.0
+    本分支  ：CKboss/vanblog 分支 dev/dsh（上游项目 Mereithhh/van-blog）
+    安装目录：/var/vanblog    数据目录：/var/vanblog/data
+    镜像来源：ghcr.io/ckboss/vanblog:dev-dsh
+              模式 auto：先拉镜像，拉不到再从源码构建
+    状态    ：● 运行中  http://<域名或服务器IP>:80（后台在后面加 /admin）
+    ── 安装与日常 ──   1 安装/重装  2 修改配置  3/4/5 启停重启  6 更新  7 日志  13 状态总览
+    ── 备份与恢复 ──   10 备份（整站备份）  11 恢复（不停服）  12 重置整站（新机器推荐）
+    ── 其它 ──         8 卸载（不删备份）  9 重置 https  20 更新脚本  30 使用说明  0 退出
+```
+
+新加的**状态行**（`menu_state_line`）会探一次 `<宿主机端口>/api/public/meta`（超时 3 秒），
+三种结果：`未安装`（没有编排文件）/ `● 运行中` + 访问地址 / `○ 接口不通` + 端口与状态码 +
+"用 3 启动、7 看日志、13 看总览"。这样一进菜单就知道现在是什么情况，不用先跑一遍 status。
+
+**`show_usage`** 重写成分组的详解：安装与日常 / 备份·恢复·重置（每个子命令的**全部参数**与
+注意事项，包括"恢复不停服""恢复后要重新登录""老 tar.gz 会走离线恢复且停不下来就不解压"）/
+环境变量（按"装什么、放在哪、构建用哪个源、备份与恢复、其它"分组）/ 常见场景配方
+（新机器装机、换机器一步搬站、cron 定时备份、升级、回滚镜像、站点打不开怎么查、磁盘满了）/
+约定（退出码语义、需要 root、破坏性操作要输完整 yes、各路径的含义）。
+⚠️ 正文用**引号 heredoc**（`<<'USAGE'`）：里面有大量 `$VAR`、`$(...)` 形式的示例，
+不加引号会被当场展开甚至执行（`$(date)` 这种示例会真的跑一遍）。
+需要显示实际默认值的几行单独 `echo` 在最后。
+
+**守卫**（`docs-consistency.test.sh` 27 → 48 条）：dispatcher 里每个子命令都必须出现在 `--help` 里；
+菜单必须有 13/状态总览、12/重置整站、"整站备份"字样、状态行；菜单门头不许再是上游仓库地址、
+不许再谎称默认本地构建；`--help` 必须覆盖 `VANBLOG_INSTALL_MODE`/`VANBLOG_MONGO_IMAGE`/
+`VANBLOG_RESTORE_FROM`/`VANBLOG_ADMIN_TOKEN`/`VANBLOG_ASSUME_YES`/`VANBLOG_ALPINE_MIRROR`
+以及"退出码/换机器/定时"这几段；不许再有旧的重复 `backup` 条目和"默认从源码构建"的说法。
+
+⚠️⚠️ **一次差点毁掉半个脚本的教训**：用 `s.index('show_menu() {')` 定位函数头，
+结果匹配到的是 **`before_show_menu() {`**（子串！），于是"从函数头替换到菜单 read 行"
+把中间的 `install_base`/`install_soft`/`install_vanblog`/`selinux`/`config`/`restart`/…
+**1853 行全删了**，而且 `bash -n` 还是通过的（语法没错，只是函数没了）。
+发现是因为随手一测 `get_compose_http_port` 报 command not found。
+规矩：
+1. 定位函数一律用**换行锚定**（`'\nshow_menu() {\n'`）并断言 `count == 1`；
+2. 改完**先做完整性检查再落盘**：行数变化量要合理，并且逐个确认关键函数还在
+   （现在这段检查列了 53 个函数名，缺一个就 assert 失败）；
+3. 大改之前 `cp` 一份备份（这次靠 `git checkout` 救回来的，但如果已经 commit 过中间态就更麻烦）。
+
 ### 7.36 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
@@ -2846,7 +2897,7 @@ articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 59 文件 / 550 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 803 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 824 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

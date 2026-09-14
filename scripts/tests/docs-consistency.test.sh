@@ -237,6 +237,76 @@ else
   fail "文档写了代码里不存在的环境变量（共 ${env_total:-0} 个变量）：${env_missing}"
 fi
 
+
+# ---------- 10) 交互菜单与 --help 不能和脚本的实际能力脱节 ----------
+MENU="$(awk '/^show_menu\(\) \{/,/^\}$/' "${SCRIPT}")"
+USAGE_TEXT="$(awk '/^show_usage\(\) \{/,/^\}$/' "${SCRIPT}")"
+MENU_CODE="$(printf '%s' "${MENU}" | sed 's|^[[:space:]]*#.*||')"
+
+if [[ -n "${MENU}" && -n "${USAGE_TEXT}" ]]; then
+  pass "能切出 show_menu / show_usage 两个函数体"
+else
+  fail "切不出 show_menu 或 show_usage 的函数体（检查器的 awk 范围要跟着改）"
+fi
+
+# 每个 dispatcher 支持的子命令都必须在 --help 里出现
+DISPATCH="$(grep -oE '^  "[a-z_-]+"\)' "${SCRIPT}" | tr -d ' ")' | sort -u)"
+miss_usage=""
+for c in ${DISPATCH}; do
+  printf '%s' "${USAGE_TEXT}" | grep -qF "${c}" || miss_usage="${miss_usage} ${c}"
+done
+if [[ -z "${miss_usage}" ]]; then
+  pass "--help 覆盖了 dispatcher 的全部子命令（$(printf '%s' ${DISPATCH} | wc -w) 个）"
+else
+  fail "--help 里没写这些子命令:${miss_usage}"
+fi
+
+# 菜单要有状态总览与重置整站这两个新入口
+for item in "13." "状态总览" "12." "重置整站" "整站备份"; do
+  if printf '%s' "${MENU_CODE}" | grep -qF "${item}"; then
+    pass "菜单里有「${item}」"
+  else
+    fail "菜单里缺「${item}」"
+  fi
+done
+# 菜单顶上的状态行（装没装、跑没跑、从哪访问）
+if grep -qF 'menu_state_line' "${SCRIPT}" && printf '%s' "${MENU_CODE}" | grep -qF 'menu_state_line'; then
+  pass "菜单会显示运行状态行（未安装 / 运行中 / 接口不通）"
+else
+  fail "菜单没有运行状态行"
+fi
+# 不许再把上游仓库当自己的门头，也不许再谎称默认是本地构建
+if printf '%s' "${MENU_CODE}" | grep -qF -- '--- https://github.com/mereithhh/van-blog ---'; then
+  fail "菜单门头还是上游仓库地址（应指向本分支，上游只作为「上游项目」出现）"
+else
+  pass "菜单门头指向本分支（上游只作为出处提及）"
+fi
+if printf '%s' "${MENU_CODE}" | grep -qF '本地构建镜像 ${VANBLOG_IMAGE_TAG}'; then
+  fail "菜单还说默认是本地构建镜像（现在默认是拉 ghcr 镜像，拉不到才构建）"
+else
+  pass "菜单描述的镜像来源与默认行为一致"
+fi
+# --help 里要有常用环境变量与场景配方，否则等于没写
+for kw in VANBLOG_INSTALL_MODE VANBLOG_MONGO_IMAGE VANBLOG_RESTORE_FROM VANBLOG_ADMIN_TOKEN \
+          VANBLOG_ASSUME_YES VANBLOG_ALPINE_MIRROR 退出码 换机器 定时; do
+  if printf '%s' "${USAGE_TEXT}" | grep -qF "${kw}"; then
+    pass "--help 里有「${kw}」"
+  else
+    fail "--help 里缺「${kw}」"
+  fi
+done
+# usage 里不该再有重复/过时的条目
+if printf '%s' "${USAGE_TEXT}" | grep -c 'backup  *- 备份 VanBlog' | grep -q '^0$'; then
+  pass "--help 里没有遗留的旧「backup - 备份 VanBlog」重复条目"
+else
+  fail "--help 里还有旧的重复 backup 条目"
+fi
+if printf '%s' "${USAGE_TEXT}" | grep -qF '默认从源码构建本分支'; then
+  fail "--help 还说默认从源码构建（现在默认先拉镜像）"
+else
+  pass "--help 对默认安装方式的描述是新的"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

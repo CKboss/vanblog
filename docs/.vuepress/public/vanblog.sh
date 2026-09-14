@@ -2697,69 +2697,178 @@ reset() {
 }
 
 show_usage() {
-  echo "VanBlog 管理脚本使用方法: "
+  # ⚠️ 这里用**引号 heredoc**（<<'USAGE'）：正文里有大量 `$VAR`、`$(...)` 形式的示例，
+  #    用不加引号的 heredoc 会被当场展开甚至执行。需要显示实际默认值的几行单独 echo。
+  cat <<'USAGE'
+VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https://github.com/Mereithhh/van-blog）
+
+用法： ./vanblog.sh [子命令] [参数]        不带参数 = 交互菜单
+      ./vanblog.sh --help | -h | help    显示本页
+
+──────────────────────── 安装与日常 ────────────────────────
+  install                 安装 / 重装。默认「先拉镜像，拉不到再从源码构建」。
+                          装完如果设了 VANBLOG_RESTORE_FROM=<归档>，会顺手把整站备份恢复上去。
+  config                  重新生成编排文件（邮箱、HTTP/HTTPS 端口、镜像、mongo 版本）。
+                          ⚠️ 会覆盖你手写的 environment / 卷映射，改前会自动存一份 .bak-<时间戳>。
+                          ⚠️ 不会把镜像换回上游官方版（沿用编排文件里现有的那个）。
+  start | stop | restart  启动 / 停止 / 重启（restart 不带 -v，不会删卷）。
+                          三者都如实返回 docker-compose 的退出码，失败时打印排查方向。
+  update                  更新：**先把新镜像准备好，再停容器**（拉取/构建失败时旧站点还在跑），
+                          只删已经没人用的旧镜像，只有版本确实前进才报成功。
+  status                  状态总览（只读）：脚本版本、安装/数据目录、编排里的 vanblog 与 mongo 镜像、
+                          mongo 数据是否存在、HTTP 端口、接口探活、容器状态、各目录占用、
+                          整站备份数量与最近三个归档、磁盘剩余。
+  log                     查看日志（docker-compose logs）。
+  uninstall               卸载。会问确认；**不删备份**；顺带清掉本分支镜像、本地构建 tag 与自建 shim。
+  reset_https             重置 https 设置（证书签不出来、域名换过、caddy 配置被改坏时用）。
+  update_script           更新此脚本自身（校验语法与首尾标志，版本相同不替换）。
+
+──────────────────────── 备份 / 恢复 / 重置 ────────────────────────
+  backup                          整站备份（默认）：调 server 接口导出
+                                  vanblog-full-<时间戳>.tar.zst 到 <数据目录>/log/vanblog-backups/。
+                                  一致性快照、NDJSON 跨 MongoDB 版本可恢复、可预览清单。
+        --format zstd|xz|gzip     换压缩格式（默认 zstd）
+        --offline                 改成打包整个数据目录（vanblog-backup-*.tar.gz）：
+                                  站点起不来时的兜底，也是唯一**包含 caddy 证书**的方式
+        --offline --consistent    先停 mongo 再打包（一致性好，几十秒不可写）
+        --verbose                 打印完整 JSON（默认只给摘要）
+  restore                         从整站备份恢复。不带参数 = 列出服务器备份目录里的归档让你选编号。
+        restore <归档名>           归档在服务器备份目录里 → 不上传，秒级开始（几百 MB 也一样）
+        restore <本地路径>         本地文件 → multipart 上传
+        --no-static               只恢复数据库，保留当前图床/附件
+        --with-static             显式恢复静态文件（默认就是恢复）
+        --verbose                 打印完整清单 JSON
+                                  ⚠️ 恢复**不停服**：server 按集合原子替换 + 重建索引 + 触发全量渲染。
+                                  ⚠️ 恢复后要重新登录后台（JWT 密钥是启动时读的）；
+                                     自动化脚本恢复后调 /api/admin/** 需要先重启一次容器。
+                                  老的 vanblog-backup-*.tar.gz 会自动走离线恢复（停服解压），
+                                  并且**停不下来就不解压**（mongod 还在写时覆盖数据文件会损坏数据库）。
+  reset                           新机器上一条命令把整站搬过来：
+                                  探活 → 没初始化就用随机口令的临时账号初始化 → 登录 →
+                                  打印清单 → 要 yes → 恢复 → 重启容器 → 逐项核对 → 打印结果。
+        reset <归档名|本地路径>     指定归档（不给就列出服务器上的让你选）
+        --no-static               只恢复数据库
+        --no-restart              恢复完不重启（那就得自己重启一次）
+        --verbose                 打印完整清单 JSON
+                                  ⚠️ 恢复失败时会把临时管理员账号打印出来，不会把你锁在门外。
+
+──────────────────────── 环境变量 ────────────────────────
+  装什么：
+    VANBLOG_INSTALL_MODE=auto|image|source   默认 auto：先拉镜像，拉不到再源码构建
+    VANBLOG_IMAGE_REF=<ref>                  默认 ghcr.io/ckboss/vanblog:dev-dsh（可指镜像加速地址）
+    VANBLOG_USE_UPSTREAM_IMAGE=true          改用上游官方镜像（不含本分支任何改动）
+    VANBLOG_MONGO_IMAGE=mongo:7.0            **只在全新安装时生效**；已有数据目录会保持原 tag
+                                             （数据目录与 FCV 绑定，直接换大版本 mongod 会拒绝启动）
+                                             老机器 CPU 不支持 avx 就设 mongo:4.4.16
+    VANBLOG_RESTORE_FROM=<归档>              install 之后自动 reset（换机器一步到位）
+  放在哪：
+    VANBLOG_BASE_PATH=/var/vanblog           安装目录（编排文件、离线备份 tar 包）
+    VANBLOG_DATA_PATH=<dir>                  数据目录（默认 <安装目录>/data）
+    VANBLOG_BACKUP_DIR=<dir>                 整站备份目录（默认 <数据目录>/log/vanblog-backups）
+    VANBLOG_SRC_DIR=<dir>                    源码构建时的克隆目录
+  构建时用哪个源（留空 = 自动实测延迟后选最快的；海外机器什么都不用设）：
+    VANBLOG_NPM_REGISTRY                     pnpm 源（npmmirror / npmjs）
+    VANBLOG_ALPINE_MIRROR                    容器内 Alpine 软件源（none = 官方 dl-cdn）
+    VANBLOG_NODE_DIST_URL                    node-gyp 的 Node 头文件源（none = 默认）
+    VANBLOG_SHARP_DIST_HOST                  sharp / libvips 预编译包源（none = 官方 GitHub）
+    VAN_BLOG_ADMIN_BUILD_SCRIPT=build|build:lowmem   admin 的 webpack 堆：4096MB / 1536MB
+  备份与恢复：
+    VANBLOG_ADMIN_TOKEN=<token>              跳过账号密码登录（浏览器 F12 → Application → Local Storage → token）
+    VANBLOG_API_BASE=http://127.0.0.1:80     站点接口地址（默认从编排文件读映射到容器 80 的宿主机端口）
+    VANBLOG_ASSUME_YES=1                     跳过所有 yes 确认（定时任务用）
+    VANBLOG_VERBOSE=1                        打印完整 JSON
+    VANBLOG_BACKUP_FORMAT=zstd|xz|gzip       backup 的压缩格式
+    VANBLOG_BACKUP_CONSISTENT=1              等价于 backup --offline --consistent
+    VANBLOG_RESTORE_FILE=<路径>              等价于 restore <路径>（老写法，仍支持）
+    VANBLOG_RESET_INIT_USER / _PASS          reset 自动初始化用的临时账号（默认随机口令）
+  其它：
+    VANBLOG_SKIP_MAIN=1                      只加载函数不执行主流程（写测试用）
+
+──────────────────────── 常见场景 ────────────────────────
+  新机器装机：            ./vanblog.sh install
+  换机器搬站（一步）：     VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
+  换机器搬站（两步）：     ./vanblog.sh install && ./vanblog.sh reset /path/to/vanblog-full-xxx.tar.zst
+  每天凌晨三点整站备份：   0 3 * * * VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 /var/vanblog/vanblog.sh backup >> /var/log/vanblog-backup.cron.log 2>&1
+  升级：                  ./vanblog.sh update
+  回滚镜像：              把编排里的 image 改成 ghcr.io/ckboss/vanblog:dev-dsh-<短sha>，再 restart
+  站点打不开怎么查：       ./vanblog.sh status → ./vanblog.sh log
+                          （status 会告诉你接口通不通、容器在不在、磁盘满没满）
+  证书 / HTTPS 出问题：    ./vanblog.sh reset_https
+  磁盘满了：              ./vanblog.sh status 看各目录占用；整站备份归档和日志是大头
+
+──────────────────────── 约定 ────────────────────────
+  退出码：0 = 成功；非 0 = 失败（可以在自动化里判断）。
+          ⚠️ 生命周期命令以前无论成败都返回 0，导致到处打印"成功"；现在如实返回。
+  需要 root（脚本开头会检查 id -u）。
+  所有写操作前都会确认；破坏性操作（卸载、恢复、重置）要输入完整的 yes。
+  路径与文件：
+    <安装目录>/docker-compose.yaml            编排文件（config 会重新生成，旧的存成 .bak-<时间戳>）
+    <数据目录>/data/static                    图床与附件
+    <数据目录>/data/mongo                     MongoDB 数据文件
+    <数据目录>/log                            日志（容器里的 /var/log）
+    <数据目录>/log/vanblog-backups            整站备份归档 + .manifest.json 清单
+    <安装目录>/caddy/{config,data}            caddy 配置与证书
+
+USAGE
+  echo "本机实际取值："
+  echo "  VANBLOG_BASE_PATH=${VANBLOG_BASE_PATH}"
+  echo "  VANBLOG_DATA_PATH=${VANBLOG_DATA_PATH}"
+  echo "  整站备份目录=$(full_backup_dir 2>/dev/null)"
+  echo "  VANBLOG_INSTALL_MODE=${VANBLOG_INSTALL_MODE:-auto}   VANBLOG_IMAGE_REF=${VANBLOG_IMAGE_REF}"
+  echo "  VANBLOG_MONGO_IMAGE=${VANBLOG_MONGO_IMAGE}（仅全新安装生效）"
+  echo "  VANBLOG_REPO=${VANBLOG_REPO}   VANBLOG_BRANCH=${VANBLOG_BRANCH}"
+  echo "  VANBLOG_SRC_DIR=${VANBLOG_SRC_DIR}   VANBLOG_IMAGE_TAG=${VANBLOG_IMAGE_TAG}"
   echo "--------------------------------------------------------"
-  echo "./vanblog.sh                            - 显示管理菜单"
-  echo "./vanblog.sh install                    - 安装 VanBlog"
-  echo "./vanblog.sh config                     - 修改 VanBlog 配置"
-  echo "./vanblog.sh start                      - 启动 VanBlog"
-  echo "./vanblog.sh stop                       - 停止 VanBlog"
-  echo "./vanblog.sh restart                    - 重启 VanBlog"
-  echo "./vanblog.sh update                     - 更新 VanBlog"
-  echo "./vanblog.sh status                     - 状态总览（镜像/容器/端口/接口/目录占用/备份/磁盘）"
-  echo "./vanblog.sh reset                      - 从整站备份重置整个站点（新机器上一条命令：自动初始化+恢复+重启+核对）"
-  echo "./vanblog.sh reset <归档名|本地路径>     - 指定归档重置；--no-static 只恢复数据库，--no-restart 不重启"
-  echo "./vanblog.sh backup                     - 整站备份（走 server 接口，一致性快照，默认 zstd）"
-  echo "./vanblog.sh backup --format xz|gzip    - 换压缩格式"
-  echo "./vanblog.sh backup --offline           - 打包数据目录（站点起不来时兜底，含 caddy 证书）"
-  echo "./vanblog.sh backup --offline --consistent  - 先停 mongo 再打包（一致性好，会有短暂停机）"
-  echo "./vanblog.sh restore                    - 从整站备份恢复（列出服务器上的备份让你选）"
-  echo "./vanblog.sh restore <名称|路径>        - 一步恢复：名称=服务器备份目录里的归档（不上传）；"
-  echo "                                          路径=本地文件（走上传）。也支持 vanblog-backup-*.tar.gz 老格式"
-  echo "    可选：--no-static 只恢复数据库、保留当前图床；VANBLOG_ASSUME_YES=1 跳过确认"
-  echo "    认证：VANBLOG_ADMIN_TOKEN=<token> 跳过登录，否则交互输入后台账号密码"
-  echo "    接口：默认从编排文件读 http 端口，也可用 VANBLOG_API_BASE=http://127.0.0.1:8080 指定"
-  echo "./vanblog.sh log                        - 查看 VanBlog 日志"
-  echo "./vanblog.sh uninstall                  - 卸载 VanBlog"
-  echo "./vanblog.sh reset_https                - 重置 https 设置"
-  echo "./vanblog.sh backup                     - 备份 VanBlog"
-  echo "./vanblog.sh restore                    - 恢复 VanBlog"
-  echo "--------------------------------------------------------"
-  echo "./vanblog.sh update_script              - 更新此脚本"
-  echo "--------------------------------------------------------"
-  echo "装的是哪个版本（默认从源码构建本分支，不用官方镜像）："
-  echo "  VANBLOG_REPO=${VANBLOG_REPO}"
-  echo "  VANBLOG_BRANCH=${VANBLOG_BRANCH}"
-  echo "  VANBLOG_SRC_DIR=${VANBLOG_SRC_DIR}"
-  echo "  VANBLOG_IMAGE_TAG=${VANBLOG_IMAGE_TAG}"
-  echo "  VANBLOG_USE_UPSTREAM_IMAGE=${VANBLOG_USE_UPSTREAM_IMAGE}  # true = 改用官方 mereith/van-blog:latest"
-  echo "  VANBLOG_BUILD_SERVER=<url>            # 可选：构建期写入前台访问后端的地址"
-  echo "--------------------------------------------------------"
+}
+
+# 菜单顶上那一行运行状态：一眼看出"装没装、跑没跑、从哪儿访问"。
+# 只探一次接口（超时 3 秒），不给菜单增加明显延迟。
+menu_state_line() {
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  if [[ ! -f "${compose_file}" ]]; then
+    echo -e "    状态    ：${yellow}未安装${plain}（${VANBLOG_BASE_PATH} 下没有编排文件，选 1 安装）"
+    return 0
+  fi
+  local port code
+  port="$(get_compose_http_port 2>/dev/null)"
+  if [[ -z "${port}" ]]; then
+    echo -e "    状态    ：${yellow}读不出端口映射${plain}（编排文件可能被改坏了，选 2 重新生成）"
+    return 0
+  fi
+  code="$(curl -sS -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" == "200" ]]; then
+    echo -e "    状态    ：${green}● 运行中${plain}  http://<域名或服务器IP>:${port}（后台在后面加 /admin）"
+  else
+    echo -e "    状态    ：${red}○ 接口不通${plain}（127.0.0.1:${port} → ${code}；用 3 启动、7 看日志、13 看总览）"
+  fi
 }
 
 show_menu() {
   echo -e "
     ${green}VanBlog 管理脚本${plain} ${red}${VANBLOG_SCRIPT_VERSION}${plain}
-    安装来源：${yellow}${VANBLOG_REPO}${plain} 分支 ${yellow}${VANBLOG_BRANCH}${plain}$([[ "${VANBLOG_USE_UPSTREAM_IMAGE}" == "true" ]] && echo "（已改为使用官方镜像）" || echo "（本地构建镜像 ${VANBLOG_IMAGE_TAG}）")
-    --- https://github.com/mereithhh/van-blog ---
-    ${green}1.${plain}  安装 VanBlog
-    ${green}2.${plain}  修改配置
-    ${green}3.${plain}  启动服务
-    ${green}4.${plain}  停止服务
-    ${green}5.${plain}  重启服务
-    ${green}6.${plain}  更新
-    ${green}7.${plain}  查看日志
-    ${green}8.${plain}  卸载
-    ${green}9.${plain}  重置 https 设置
-    ${green}10.${plain} 备份 VanBlog
-    ${green}11.${plain} 恢复 VanBlog
-    ${green}12.${plain} 从整站备份重置整站（新机器推荐）
-    ————————————————-
-    ${green}20.${plain} 更新此脚本
-    ${green}30.${plain} 查看脚本使用说明
+    本分支  ：${yellow}CKboss/vanblog${plain} 分支 ${yellow}${VANBLOG_BRANCH}${plain}（上游项目 Mereithhh/van-blog）
+    安装目录：${VANBLOG_BASE_PATH}    数据目录：${VANBLOG_DATA_PATH}
+    镜像来源：${yellow}${VANBLOG_IMAGE_REF}${plain}$([[ "${VANBLOG_USE_UPSTREAM_IMAGE:-}" == "true" ]] && echo "（已切到上游官方镜像，不含本分支改动）")
+              模式 ${VANBLOG_INSTALL_MODE:-auto}：先拉镜像，拉不到再从源码构建$( [[ -n "${VANBLOG_RESTORE_FROM:-}" ]] && echo "；装完自动恢复 ${VANBLOG_RESTORE_FROM}")
+$(menu_state_line)
+    ${green}── 安装与日常 ──────────────────────────────${plain}
+    ${green}1.${plain}  安装 / 重装 VanBlog
+    ${green}2.${plain}  修改配置（邮箱 / HTTP·HTTPS 端口 / 镜像 / mongo 版本）
+    ${green}3.${plain}  启动服务        ${green}4.${plain}  停止服务        ${green}5.${plain}  重启服务
+    ${green}6.${plain}  更新（先把新镜像准备好，再停容器；失败时旧站点还在跑）
+    ${green}7.${plain}  查看日志        ${green}13.${plain} 状态总览（镜像/容器/接口/目录占用/备份/磁盘）
+    ${green}── 备份与恢复 ──────────────────────────────${plain}
+    ${green}10.${plain} 备份（整站备份：一致性快照、跨 MongoDB 版本可恢复、可预览清单）
+    ${green}11.${plain} 恢复（从整站备份恢复，${yellow}不停服${plain}；不带参数会列出归档让你选）
+    ${green}12.${plain} 重置整站（${yellow}新机器推荐${plain}：自动初始化 + 恢复 + 重启 + 逐项核对）
+    ${green}── 其它 ──────────────────────────────────${plain}
+    ${green}8.${plain}  卸载（会问确认；${yellow}不删备份${plain}）
+    ${green}9.${plain}  重置 https 设置（证书签不出来 / 换过域名 / caddy 配置被改坏时）
+    ${green}20.${plain} 更新此脚本      ${green}30.${plain} 使用说明（全部子命令、参数、环境变量与场景配方）
     ${green}0.${plain}  退出脚本
     "
-  echo && read -ep "请输入选择 [0-30]: " num
+echo && read -ep "请输入选择 [0-30]: " num
 
   case "${num}" in
   0)
@@ -2800,6 +2909,9 @@ show_menu() {
     ;;
   12)
     reset
+    ;;
+  13)
+    show_status
     ;;
   20)
     update_script
