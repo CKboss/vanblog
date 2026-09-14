@@ -199,6 +199,35 @@ docker-compose down && docker-compose up -d
 
 具体访问方式可以自行查阅资料，我一般都是用 [mongoDBCompass](https://www.mongodb.com/try/download/compass) 这个工具。
 
+## 换机器 / 重装，最快的方式是什么
+
+用**整站备份 + `reset`**，不要再去拷数据目录（那要求两边的 MongoDB 大版本一致，很容易翻车）：
+
+```bash
+# 旧机器：出一份整站备份（一致性快照，跨 MongoDB 版本可恢复）
+./vanblog.sh backup
+# 把 vanblog-full-*.tar.zst 拷到新机器（scp / U 盘都行）
+
+# 新机器：装 + 恢复一步到位
+VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
+# 或者先装再重置
+./vanblog.sh install && ./vanblog.sh reset /path/to/vanblog-full-xxx.tar.zst
+```
+
+`reset` 会自动完成"初始化 → 登录 → 恢复 → 重启 → 核对"整条链：新站点是空库时，
+恢复接口在鉴权后面，**没初始化就没法登录、没法登录就没法恢复**，脚本用一个随机口令的
+临时账号把这个死结解开，恢复成功后该账号就被备份里的真实账号覆盖了（用你原来的账号登录）。
+
+::: tip 证书不用搬
+
+caddy 的证书不在整站备份里，但**不需要搬**：新机器上首次访问域名时会按需重新签发
+（前提是域名已经解析到新机器、80/443 可达）。真要连证书一起搬，用 `./vanblog.sh backup --offline`
+打目录级快照，它包含 `caddy/` 目录。
+
+:::
+
+详见 [备份与迁移](../guide/backup.md#换新机器一条命令把整站搬过去)。
+
 ## 部署后无法访问后台
 
 可以按照下面的步骤进行排查：

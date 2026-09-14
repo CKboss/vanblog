@@ -910,6 +910,25 @@ install_soft() {
     (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install $* selinux-utils -y)
 }
 
+# 装完顺手从整站备份重置：新机器上"装 + 初始化 + 恢复 + 核对"一步到位。
+#   VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
+#   VANBLOG_RESTORE_FROM=<归档名> ./vanblog.sh install      # 归档已在服务器备份目录里
+# 没设这个变量时行为完全不变。
+install_and_maybe_reset() {
+  install_vanblog "$@"
+  local rc=$?
+  if [[ ${rc} -ne 0 ]]; then
+    return ${rc}
+  fi
+  if [[ -n "${VANBLOG_RESTORE_FROM:-}" ]]; then
+    echo
+    echo -e "> 检测到 ${yellow}VANBLOG_RESTORE_FROM${plain}，安装完成后直接从整站备份重置站点"
+    reset 0 "${VANBLOG_RESTORE_FROM}"
+    return $?
+  fi
+  return 0
+}
+
 install_vanblog() {
   install_base
 
@@ -1832,7 +1851,8 @@ backup_full() {
 
   local data name size seconds docs files colls
   data="$(printf '%s' "${resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//')"
-  pick() { printf '%s' "${data}" | grep -oE "\"$1\":(\"[^\"]*\"|[0-9.]+)" | head -1 | sed 's/.*://; s/"//g'; }
+  # 只削掉开头的 "key": 与首尾引号（`sed 's/.*://'` 会把 ISO 时间戳削成 54.882Z）
+  pick() { printf '%s' "${data}" | grep -oE "\"$1\":(\"[^\"]*\"|[0-9.]+)" | head -1 | sed -E "s/^\"$1\"://; s/^\"//; s/\"$//"; }
   name="$(pick name)"
   size="$(pick size)"
   seconds="$(pick seconds)"
@@ -2043,6 +2063,7 @@ vanblog_admin_token() {
     echo -e "${yellow}连续失败会被限流锁定。也可以设 VANBLOG_ADMIN_TOKEN=<token> 跳过登录。${plain}" >&2
     return 1
   fi
+  # 前缀 INIT 用来告诉父 shell"这次是真的做了初始化"（子 shell 里设的变量传不回去）
   printf '%s' "${token}"
 }
 
@@ -2122,6 +2143,62 @@ except Exception:
   printf '%s\n' "${input}"
 }
 
+# 把整站备份的 inspect / restore 响应压成几行摘要。
+# 完整 JSON 太吵：一次 reset 能打印上百行，屏幕上全是 `},` 和字段名，
+# 真正要看的就那几项（备份时间、集合/文档/文件数、各集合条数）。
+# 要看全文用 --verbose（或 VANBLOG_VERBOSE=1）。
+summarize_backup_json() {
+  local data="$1"
+  local pick
+  pick() {
+    # ⚠️ 不能用 `sed 's/.*://'` 去掉键名：ISO 时间戳里全是冒号
+    #    （2026-09-13T06:09:54.882Z 会被削成 54.882Z）。只削掉开头的 "key": 与首尾引号。
+    printf '%s' "${data}" | grep -oE "\"$1\":(\"[^\"]*\"|[0-9.]+)" | head -1 |
+      sed -E "s/^\"$1\"://; s/^\"//; s/\"$//"
+  }
+  local name created fmt size secs colls docs files
+  name="$(pick name)"
+  created="$(pick createdAt)"
+  fmt="$(pick format)"
+  size="$(pick size)"
+  secs="$(pick seconds)"
+  colls="$(printf '%s' "${data}" | grep -oE '"collections":[0-9]+' | head -1 | cut -d: -f2)"
+  docs="$(printf '%s' "${data}" | grep -oE '"documents":[0-9]+' | head -1 | cut -d: -f2)"
+  files="$(printf '%s' "${data}" | grep -oE '"files":[0-9]+' | head -1 | cut -d: -f2)"
+  [[ -n "${name}" ]] && echo -e "    归档    ：${yellow}${name}${plain}"
+  [[ -n "${created}" ]] && echo -e "    备份时间：${created}"
+  local meta=""
+  [[ -n "${fmt}" ]] && meta="格式 ${fmt}"
+  [[ -n "${size}" ]] && meta="${meta:+${meta}，}大小 ${size}"
+  [[ -n "${secs}" ]] && meta="${meta:+${meta}，}耗时 ${secs}s"
+  [[ -n "${meta}" ]] && echo -e "    ${meta}"
+  if [[ -n "${colls}${docs}${files}" ]]; then
+    echo -e "    内容    ：${colls:-?} 个集合 / ${docs:-?} 条文档 / ${files:-?} 个静态文件"
+  fi
+  # 各集合条数（最多列 10 个，多的省略）
+  local pairs
+  pairs="$(printf '%s' "${data}" | grep -oE '"[A-Za-z_][A-Za-z0-9_]*":\{"count":[0-9]+' |
+    sed -E 's/^"//; s/":\{"count":/ /' | head -10)"
+  if [[ -n "${pairs}" ]]; then
+    echo -e "    各集合  ："
+    printf '%s\n' "${pairs}" | while read -r cname cnum; do
+      [[ -n "${cname}" ]] && printf '      %-18s %s\n' "${cname}" "${cnum}"
+    done
+  fi
+  return 0
+}
+
+# 打印备份响应：默认摘要，--verbose 时给完整 JSON
+print_backup_json() {
+  local data="$1"
+  if [[ "${VANBLOG_VERBOSE:-0}" == "1" ]]; then
+    printf '%s' "${data}" | pretty_json | head -120
+  else
+    summarize_backup_json "${data}"
+    echo -e "    ${yellow}（完整清单加 --verbose）${plain}"
+  fi
+}
+
 restore_full_backup() {
   local target="$1"
   local with_static="${2:-true}"
@@ -2160,7 +2237,7 @@ restore_full_backup() {
       -H "token: ${token}" -H 'Content-Type: application/json' -d "${inspect_body}" 2>&1)"
     if printf '%s' "${inspect_resp}" | grep -q '"statusCode":200'; then
       echo -e "> 备份清单："
-      printf '%s' "${inspect_resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//' | pretty_json | head -60
+      print_backup_json "$(printf '%s' "${inspect_resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//')"
     else
       echo -e "${yellow}  读不出清单（$(printf '%s' "${inspect_resp}" | head -c 160)），继续前请确认这个归档是本功能导出的${plain}"
     fi
@@ -2195,7 +2272,7 @@ restore_full_backup() {
 
   if printf '%s' "${resp}" | grep -q '"statusCode":200'; then
     echo -e "${green}恢复成功${plain}"
-    printf '%s' "${resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//' | pretty_json | head -80
+    print_backup_json "$(printf '%s' "${resp}" | sed 's/^{"statusCode":200,"data"://; s/}$//')"
     echo -e "> server 已触发全量重渲染（ISR），前台页面会在几分钟内刷新到新数据"
     return 0
   fi
@@ -2229,6 +2306,7 @@ restore() {
     case "${arg}" in
     --no-static) with_static="false" ;;
     --with-static) with_static="true" ;;
+    --verbose) export VANBLOG_VERBOSE=1 ;;
     0 | --*) : ;;
     *)
       if [[ -n "${arg}" ]]; then
@@ -2393,6 +2471,231 @@ show_status() {
   return 0
 }
 
+# ── 从整站备份「重置」整个站点（新机器上一条命令搞定）──────────────────────
+# 痛点：换新机器时流程是"装 → 打开后台走向导初始化 → 登录 → 上传备份 → 恢复"，
+# 而初始化建的那个账号马上又会被备份里的真实账号覆盖 —— 纯属白走一趟。
+# 更麻烦的是恢复接口在 AdminGuard 后面，**没初始化就没法登录，也就没法恢复**（鸡生蛋）。
+# 所以这里把整条链自动化：探活 → 没初始化就用随机口令的临时账号初始化 → 登录拿 token →
+# 恢复整站备份 → 重启容器（让 server 重新读取恢复后的 JWT 密钥）→ 验证 → 打印结果。
+#
+# 临时账号只是"敲门用"的：恢复会把 users 集合整个换成备份里的那份，所以恢复成功后
+# 用**你原来的账号**登录；万一恢复失败，脚本会把临时账号打印出来，让你至少能进后台。
+
+# 随机口令（临时管理员用）
+random_password() {
+  local n="${1:-18}"
+  local raw
+  if command -v openssl >/dev/null 2>&1; then
+    raw="$(openssl rand -base64 32 2>/dev/null)"
+  fi
+  if [[ -z "${raw:-}" ]]; then
+    raw="$(head -c 96 /dev/urandom 2>/dev/null | base64 2>/dev/null)"
+  fi
+  printf '%s' "${raw}" | tr -dc 'A-Za-z0-9' | head -c "${n}"
+}
+
+# 站点还没初始化时自动初始化，并把可用的 admin token 打到 stdout（提示走 stderr）。
+# 已经初始化过就退回正常的登录流程（VANBLOG_ADMIN_TOKEN 或交互输入账号密码）。
+# 用法：ensure_admin_token <临时用户名> <临时口令>
+# ⚠️ 账号口令必须由**调用方**生成并保存成全局变量：这个函数是在
+# `token="$(ensure_admin_token …)"` 这种命令替换里跑的，也就是**子 shell**，
+# 在里面设的变量出了子 shell 就没了（恢复失败时就打印不出临时账号，
+# 用户在新机器上连后台都进不去）。
+ensure_admin_token() {
+  local base init_user init_pass derived resp token
+  base="$(vanblog_api_base)"
+  init_user="$1"
+  init_pass="$2"
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo -e "${red}本机没有 sha256sum，无法在本地派生登录口令。${plain}" >&2
+    echo -e "${yellow}请用 VANBLOG_ADMIN_TOKEN=<token> 指定（浏览器 F12 → Application → Local Storage → token）${plain}" >&2
+    return 1
+  fi
+  derived="$(derive_login_password "${init_user}" "${init_pass}")"
+
+  resp="$(curl -sS -m 60 -X POST "${base}/api/admin/init" \
+    -H 'Content-Type: application/json' \
+    -d "{\"user\":{\"username\":$(json_string "${init_user}"),\"password\":\"${derived}\",\"nickname\":$(json_string "重置初始化")},\"siteInfo\":{\"author\":\"vanblog\",\"siteName\":\"VanBlog\",\"siteDesc\":\"reset\",\"baseUrl\":\"${base}/\"}}" 2>&1)"
+
+  if printf '%s' "${resp}" | grep -q '已初始化'; then
+    echo -e "> 站点已经初始化过了，用现有账号登录" >&2
+    vanblog_admin_token
+    return $?
+  fi
+  if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+    echo -e "${red}初始化失败：$(printf '%s' "${resp}" | head -c 300)${plain}" >&2
+    return 1
+  fi
+  echo -e "> 站点是全新的，已用临时账号 ${yellow}${init_user}${plain} 完成初始化（恢复成功后会被备份里的账号覆盖）" >&2
+
+  # 登录拿 token（只试一次：登录接口有失败限流）
+  resp="$(curl -sS -m 30 -X POST "${base}/api/admin/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":$(json_string "${init_user}"),\"password\":\"${derived}\"}" 2>&1)"
+  token="$(printf '%s' "${resp}" |
+    grep -oE '"token"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 |
+    sed 's/.*"token"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  if [[ -z "${token}" ]]; then
+    echo -e "${red}临时账号登录失败：$(printf '%s' "${resp}" | head -c 200)${plain}" >&2
+    echo -e "${yellow}临时账号：${init_user} / ${init_pass}${plain}" >&2
+    return 1
+  fi
+  # 前缀 INIT 用来告诉父 shell「这次真的做了初始化」（子 shell 里设的变量传不回去）
+  printf 'INIT %s' "${token}"
+}
+
+# 站点重置后核对一下：接口通不通、站点名对不对、文章有多少篇
+verify_after_reset() {
+  local base="$1"
+  local code name arts
+  code="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "  ${red}✗${plain} /api/public/meta → ${code}"
+    return 1
+  fi
+  echo -e "  ${green}✓${plain} /api/public/meta → 200"
+  name="$(curl -sS -m 20 "${base}/api/public/meta" 2>/dev/null |
+    grep -oE '"siteName"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 |
+    sed 's/.*:[[:space:]]*"//; s/"$//')"
+  [[ -n "${name}" ]] && echo -e "  ${green}✓${plain} 站点名：${yellow}${name}${plain}"
+  for path in / /admin /sitemap.xml /robots.txt; do
+    code="$(curl -sS -m 40 -o /dev/null -w '%{http_code}' "${base}${path}" 2>/dev/null)"
+    case "${code}" in
+    200 | 301 | 302 | 308) echo -e "  ${green}✓${plain} ${path} → ${code}" ;;
+    *) echo -e "  ${yellow}!${plain} ${path} → ${code}（刚恢复完可能还在渲染，稍后再试）" ;;
+    esac
+  done
+  arts="$(curl -sS -m 40 "${base}/api/public/articles?page=1&pageSize=1" 2>/dev/null |
+    grep -oE '"total"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$')"
+  [[ -n "${arts}" ]] && echo -e "  ${green}✓${plain} 前台可见文章：${arts} 篇"
+  return 0
+}
+
+reset_from_backup() {
+  local target="$1"
+  local with_static="${2:-true}"
+  local do_restart="${3:-1}"
+  local base
+  base="$(vanblog_api_base)"
+
+  echo -e "> 从整站备份重置整个站点：${yellow}${base}${plain}"
+  local code
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "${red}站点接口不通（${base} → ${code}）。重置需要 server 在跑：先 ${yellow}${VANBLOG_SELF_NAME} start${red}（或先 install）。${plain}"
+    return 1
+  fi
+
+  # 没初始化就自动初始化，然后拿到 token。
+  # 临时账号在**这里**（父 shell）生成并记住，恢复失败时要打印给用户
+  RESET_TEMP_USER="${VANBLOG_RESET_INIT_USER:-reset-init}"
+  RESET_TEMP_PASS="${VANBLOG_RESET_INIT_PASS:-$(random_password 18)}"
+  local token
+  RESET_DID_INIT=0
+  token="$(ensure_admin_token "${RESET_TEMP_USER}" "${RESET_TEMP_PASS}")" || {
+    echo -e "${yellow}临时管理员账号（如果初始化其实成功了，可以用它进后台排查）：${RESET_TEMP_USER} / ${RESET_TEMP_PASS}${plain}"
+    return 1
+  }
+  if [[ -z "${token}" ]]; then
+    echo -e "${red}拿不到管理员 token，无法恢复${plain}"
+    return 1
+  fi
+  if [[ "${token}" == INIT\ * ]]; then
+    RESET_DID_INIT=1
+    token="${token#INIT }"
+  fi
+  # restore_full_backup 优先用这个环境变量，不会再问一遍账号密码
+  VANBLOG_ADMIN_TOKEN="${token}" restore_full_backup "${target}" "${with_static}"
+  local rc=$?
+  if [[ ${rc} -ne 0 ]]; then
+    echo -e "${red}恢复失败。${plain}"
+      if [[ "${RESET_DID_INIT:-0}" == "1" ]]; then
+      echo -e "${yellow}临时管理员账号（还能进后台排查）：${RESET_TEMP_USER} / ${RESET_TEMP_PASS}${plain}"
+    fi
+    return ${rc}
+  fi
+
+  if [[ "${do_restart}" == "1" ]]; then
+    echo -e "> 重启容器，让 server 重新读取恢复后的 JWT 密钥"
+    echo -e "  ${yellow}（不重启的话，恢复前登录的会话会失效，而且用备份里的密钥签的 token 验不过）${plain}"
+    if restart 0; then
+      echo -e "  ${green}✓${plain} 已重启"
+    else
+      echo -e "  ${yellow}!${plain} 重启失败，请手动 ${VANBLOG_SELF_NAME} restart 后再验证"
+    fi
+    # 等接口回来
+    local i
+    for i in $(seq 1 40); do
+      code="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+      [[ "${code}" == "200" ]] && break
+      sleep 3
+    done
+  fi
+
+  echo -e "> 核对结果"
+  verify_after_reset "${base}"
+
+  echo
+  echo -e "${green}整站重置完成${plain}"
+  echo -e "  站点地址：${yellow}${base}/${plain}（后台 ${yellow}${base}/admin${plain}）"
+  if [[ "${RESET_DID_INIT:-0}" == "1" ]]; then
+    echo -e "  登录账号：${yellow}用备份里原来的账号${plain}（初始化用的临时账号 ${RESET_TEMP_USER} 已被覆盖）"
+  fi
+  echo -e "  ${yellow}提示：前台页面由 ISR 逐步生成，个别页面第一次访问会慢一点，属正常。${plain}"
+  return 0
+}
+
+reset() {
+  local with_static="true"
+  local do_restart=1
+  local target=""
+  local args=()
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+    --no-static) with_static="false" ;;
+    --with-static) with_static="true" ;;
+    --no-restart) do_restart=0 ;;
+    --verbose) export VANBLOG_VERBOSE=1 ;;
+    0) : ;; # 菜单传进来的占位
+    --*) echo -e "${red}未知参数：${arg}${plain}"; return 1 ;;
+    *) args+=("${arg}") ;;
+    esac
+  done
+
+  if [[ ${#args[@]} -gt 0 ]]; then
+    target="${args[0]}"
+    # 给的是名字但在本地也能找到同名文件时，优先按本地文件上传（新机器上常见）
+    if [[ ! -f "${target}" && -f "$(full_backup_dir)/${target}" ]]; then
+      target="$(full_backup_dir)/${target}"
+      echo -e "> 在服务器备份目录里找到了 ${yellow}$(basename "${target}")${plain}，直接用服务器上的文件（不上传）"
+      target="$(basename "${target}")"
+    fi
+  else
+    echo -e "> 没有指定归档，列出服务器备份目录里的整站备份："
+    target="$(pick_full_backup)" || return 1
+    if [[ -z "${target}" ]]; then
+      echo -e "${red}备份目录里没有整站备份。${plain}"
+      echo -e "把归档拷到 ${yellow}$(full_backup_dir)${plain} 之后再来，或者直接指定路径："
+      echo -e "  ${green}${VANBLOG_SELF_NAME} reset /path/to/vanblog-full-xxx.tar.zst${plain}"
+      return 1
+    fi
+  fi
+
+  echo -e "> 将要重置整站，来源：${yellow}${target}${plain}，静态文件：${yellow}${with_static}${plain}"
+  if [[ "${VANBLOG_ASSUME_YES:-0}" != "1" ]]; then
+    read -e -r -p "这会**覆盖当前站点的全部数据**，确认继续？(yes/no): " ans
+    if [[ "${ans}" != "yes" ]]; then
+      echo -e "${yellow}已取消${plain}"
+      return 1
+    fi
+  fi
+
+  reset_from_backup "${target}" "${with_static}" "${do_restart}"
+}
+
 show_usage() {
   echo "VanBlog 管理脚本使用方法: "
   echo "--------------------------------------------------------"
@@ -2404,6 +2707,8 @@ show_usage() {
   echo "./vanblog.sh restart                    - 重启 VanBlog"
   echo "./vanblog.sh update                     - 更新 VanBlog"
   echo "./vanblog.sh status                     - 状态总览（镜像/容器/端口/接口/目录占用/备份/磁盘）"
+  echo "./vanblog.sh reset                      - 从整站备份重置整个站点（新机器上一条命令：自动初始化+恢复+重启+核对）"
+  echo "./vanblog.sh reset <归档名|本地路径>     - 指定归档重置；--no-static 只恢复数据库，--no-restart 不重启"
   echo "./vanblog.sh backup                     - 整站备份（走 server 接口，一致性快照，默认 zstd）"
   echo "./vanblog.sh backup --format xz|gzip    - 换压缩格式"
   echo "./vanblog.sh backup --offline           - 打包数据目录（站点起不来时兜底，含 caddy 证书）"
@@ -2448,6 +2753,7 @@ show_menu() {
     ${green}9.${plain}  重置 https 设置
     ${green}10.${plain} 备份 VanBlog
     ${green}11.${plain} 恢复 VanBlog
+    ${green}12.${plain} 从整站备份重置整站（新机器推荐）
     ————————————————-
     ${green}20.${plain} 更新此脚本
     ${green}30.${plain} 查看脚本使用说明
@@ -2460,7 +2766,7 @@ show_menu() {
     exit 0
     ;;
   1)
-    install_vanblog
+    install_and_maybe_reset
     ;;
   2)
     config
@@ -2492,6 +2798,9 @@ show_menu() {
   11)
     restore
     ;;
+  12)
+    reset
+    ;;
   20)
     update_script
     ;;
@@ -2513,7 +2822,7 @@ pre_check
 if [[ $# > 0 ]]; then
   case $1 in
   "install")
-    install_vanblog 0
+    install_and_maybe_reset 0
     ;;
   "config")
     config 0
@@ -2558,6 +2867,11 @@ if [[ $# > 0 ]]; then
   "restore")
     shift
     restore 0 "$@"
+    ;;
+  "reset")
+    shift
+    reset 0 "$@"
+    exit $?
     ;;
   *) show_usage ;;
   esac

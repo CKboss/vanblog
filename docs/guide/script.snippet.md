@@ -65,9 +65,25 @@ VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ./vanblog.sh log          # 日志
 ./vanblog.sh backup       # 整站备份（一致性快照，见下）
 ./vanblog.sh restore      # 从整站备份恢复
+./vanblog.sh reset        # 换新机器：自动初始化 + 恢复整站备份 + 重启 + 核对（一条命令）
 ./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）
 ./vanblog.sh --help       # 全部命令
 ```
+
+::: tip 从旧机器的整站备份直接装起
+
+```bash
+# 装完顺手把整站备份恢复上去，不用再进后台走向导
+VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
+# 或者装完之后单独跑
+./vanblog.sh reset /path/to/vanblog-full-xxx.tar.zst
+```
+
+`reset` 会自动处理"没初始化就没法登录、没法登录就没法恢复"这个死结：站点是全新的时候，
+它用一个随机口令的临时账号完成初始化，恢复成功后那个账号就被备份里的真实账号覆盖了。
+详见 [备份与迁移 → 换新机器](./backup.md#换新机器一条命令把整站搬过去)。
+
+:::
 
 数据都在安装目录里（默认 `/var/vanblog`）：`data/static` 图床与附件、`data/mongo` 数据库、
 `log` 日志（**整站备份归档也在 `log/vanblog-backups/`**）、`caddy/` 证书与配置、

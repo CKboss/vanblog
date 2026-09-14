@@ -49,6 +49,8 @@
 - 一键脚本 **v0.5.0**：
   - `backup` **默认改成整站备份**（调 server 接口，产出 `vanblog-full-*.tar.zst`：一致性快照、NDJSON 跨版本可恢复、可预览清单）；原来的"打包数据目录"降级为 `backup --offline`（另有 `--offline --consistent` 先停 mongo）。`--format zstd|xz|gzip` 可选。站点没起时**不静默降级**，而是报错并给出两条路。
   - `restore` 支持**一步恢复整站备份**：不带参数会列出服务器上的归档让你选；给名字时不上传（接口直接读服务器上的文件），给本地路径才 multipart 上传；`--no-static` 只恢复数据库。恢复前先 `full/inspect` 打印清单，恢复走接口**不停服**（server 自己按集合原子替换 + 重建索引 + 触发全量渲染）。认证支持 `VANBLOG_ADMIN_TOKEN`，或交互输入账号密码由脚本**本地派生口令**（明文不出本机，且只试一次不触发登录限流）。
+  - 新增 **`reset`：新机器上从整站备份一步重置整站**（`./vanblog.sh reset <归档名|本地路径>`，或 `VANBLOG_RESTORE_FROM=<归档> ./vanblog.sh install` 装完顺手恢复）。它自动解开"恢复接口在鉴权后面、而全新站点没有账号"这个死结：站点没初始化时用**随机口令的临时账号**初始化 → 登录 → 打印备份清单 → 恢复 → **重启容器**（让 server 重新读取恢复后的 JWT 密钥）→ 逐项核对（接口/站点名/首页/后台/robots/sitemap/文章数）→ 告诉你"用备份里原来的账号登录"。恢复失败时会把临时账号打印出来，不至于把你锁在新机器外面。参数：`--no-static`、`--no-restart`、`--verbose`。
+  - 备份清单默认只打**摘要**（归档名/备份时间/格式大小耗时/集合文档文件数/各集合条数），`--verbose` 才给完整 JSON —— 原来一次恢复要刷 114 行，屏幕上全是 `},`。
   - 新增 `status` 子命令与 `--help`：一屏看清脚本版本、安装/数据目录、编排里的 vanblog 与 mongo 镜像、mongo 数据是否存在、HTTP 端口、接口探活、`docker-compose ps`、各目录占用、整站备份数量与最近三个归档、磁盘剩余（含挂载点）。全部只读。
   - `config` **不再把镜像悄悄换回上游官方版**（以前改个邮箱/端口就会把本分支镜像替换成 `mereith/van-blog:latest`，所有分支功能消失且无提示）；现在沿用编排里现有的镜像。
   - MongoDB 版本按"有没有数据"决定：全新安装用 `mongo:7.0`（上游钉的 4.4.16 早已 EOL），**已有数据目录时保持原 tag**（数据目录与 FCV 绑定，直接换大版本 mongod 会拒绝启动），并打印两条升级路径；`VANBLOG_MONGO_IMAGE` 可覆盖（老机器不支持 avx 就用 4.4.16）。
@@ -84,7 +86,7 @@
 - 一键脚本 `vanblog.sh` v0.4.0：**从本分支源码克隆并本地 `docker build`**（本 fork 没有发布镜像），`update` 改成 fetch + 重建且构建失败不停机，编排模板优先用仓库里那份，卸载会清源码目录；`VANBLOG_USE_UPSTREAM_IMAGE=true` 可回到官方镜像。
 - 一键脚本 v0.3.7 体检：`backup --consistent`、`restore` 校验压缩包并清 `mongod.lock`、常规操作不再 `down -v`（那会删卷）。
 - `./dev-env.sh bootstrap`：一条命令备好 Node 20 + pnpm 8 + MongoDB 7，全程不需要 docker 与 sudo。
-- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **17 文件 / 752 条断言**；文档站 `vuepress build` 通过
+- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **18 文件 / 803 条断言**；文档站 `vuepress build` 通过
 
 ### ✨ Features | 新功能
 

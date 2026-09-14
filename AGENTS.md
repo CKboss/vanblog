@@ -2781,14 +2781,72 @@ Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 
   （前台 502 / 中文别名 500 / robots 404）。⚠️ 里面的测试数字要**跑完再写**，
   第一版凭印象写了 778，实际是 752。
 
-### 7.34 测试基线（本分支最后一次全量运行的结果）
+### 7.35 `reset`：新机器上从整站备份一步重置整站
+
+用户反馈："新机器上重置太繁琐 —— 要先初始化，再重新载入旧的备份包"。根因是个**死结**：
+恢复接口在 `AdminGuard` 后面，而全新站点没有账号 → 没账号就没法登录 → 没法登录就没法恢复；
+而后台的初始化向导建出来的账号，又会在恢复时被备份里的 `users` 集合整个覆盖 —— 白走一趟。
+
+`./vanblog.sh reset [归档名|本地路径]` 把整条链自动化：
+
+```
+探活 /api/public/meta
+  → POST /api/admin/init（随机口令的临时账号，只在"还没初始化"时做）
+  → POST /api/admin/auth/login 拿 token（只试一次，登录有限流）
+  → POST /api/admin/backup/full/inspect 打印清单（默认摘要，--verbose 给全文）
+  → 要用户输 yes（VANBLOG_ASSUME_YES=1 跳过）
+  → POST /api/admin/backup/full/restore（名字 → 服务器本地读；路径 → multipart 上传）
+  → restart（让 server 重新读取恢复后的 JWT 密钥，见 §7.32.1）
+  → 核对：meta / 站点名 / 首页 / 后台 / robots / sitemap / 文章数
+  → 打印站点地址 + "用备份里原来的账号登录"
+```
+
+还能在安装时一步到位：`VANBLOG_RESTORE_FROM=<归档> ./vanblog.sh install`
+（`install_and_maybe_reset` 包装了 `install_vanblog`，**菜单入口和命令行入口都要走它**，
+只改一个的话从菜单装就不会自动恢复）。
+
+**实现上踩到的两个坑**（都写成了测试）：
+
+1. ⚠️ **命令替换里的全局变量会丢**：`token="$(ensure_admin_token)"` 是子 shell，
+   在里面设的 `RESET_TEMP_USER/PASS` 出了子 shell 就没了 → 恢复失败时打印不出临时账号，
+   用户在新机器上**连后台都进不去**。改成：临时账号在**父 shell**（`reset_from_backup`）里
+   生成并保存，函数只负责回传 token；"这次真的做了初始化"用 **`INIT ` 前缀**回传
+   （父 shell 剥掉前缀并置 `RESET_DID_INIT=1`）。
+   ⚠️ 加前缀时**只能加在 `ensure_admin_token` 上**：`vanblog_admin_token` 也被 `restore` 用着，
+   给它加前缀会让 restore 把 `INIT xxx` 整个当 token 发出去（第一版就这么改错了，
+   而 restore 的测试因为走 `VANBLOG_ADMIN_TOKEN` 早退分支没抓到 —— 现在有专门的守卫断言）。
+2. ⚠️ **摘要解析不能用 `sed 's/.*://'`**：ISO 时间戳 `2026-09-13T06:09:54.882Z` 里全是冒号，
+   会被削成 `54.882Z`。要按 `^"key":` 精确削前缀。
+
+**输出为什么默认是摘要**：一次 reset 原来打印 **114 行**，其中绝大多数是 inspect/restore 的
+完整 JSON（屏幕上全是 `},`），真正要看的就 5 项。现在默认摘要（归档名/备份时间/格式大小耗时/
+集合文档文件数/各集合条数，约 10 行），`--verbose` 或 `VANBLOG_VERBOSE=1` 才给全文。
+
+**实测**（本机 podman 起的真镜像 + 用户那份 66MB 生产整站备份，全新空库）：
+`reset` 一条命令跑通，rc=0；库里 `users` 变成 `['JiangOil']`（临时账号被覆盖）、13 个集合、
+articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面；
+`/`、`/admin`、`/api/public/meta`、`/robots.txt` 全 200，站点名恢复成 `酱_油 aka JiangOil`；
+重启后用**恢复出来的 JWT 密钥**签的 token 调 `/api/admin/meta`、`/api/admin/article` 都是 200
+（证明 restart 那一步是必要的）；`/sitemap.xml` 恢复后立刻访问是 404、约一两分钟后 200
+（生成有延迟，核对函数会提示"刚恢复完可能还在渲染"而不是报失败）。
+
+**测试**：`scripts/tests/vanblog-reset.test.sh`（51 条）—— 全新站点自动初始化并恢复、
+已初始化时不重复初始化而用现有 token、`--no-restart` 不调 restart、输 no 时连初始化都不做
+（不会留下一个临时账号）、归档在服务器目录时不上传、本地路径走 `-F file=@`、
+恢复失败时打印临时账号、初始化失败/接口不通时明确报错且不乱调接口、
+`INIT` 前缀只在 `ensure_admin_token` 里、随机口令长度与字符集、摘要与 `--verbose` 两种输出、
+以及 install 的两个入口都接了 `VANBLOG_RESTORE_FROM`。
+⚠️ 用例之间要 `unset INIT_MODE/LOGIN_FAIL/RESTORE_FAIL/...`：漏了一个 `INIT_MODE`，
+后面所有用例都会走"已初始化"分支去交互登录、读到 EOF 失败，表现为一片莫名其妙的 rc=1。
+
+### 7.36 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 59 文件 / 550 用例全绿 |
 | admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 17 文件 / 752 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 803 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -2798,7 +2856,7 @@ Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.34 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.36 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。
