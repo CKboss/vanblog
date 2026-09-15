@@ -2998,7 +2998,7 @@ settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传�
 |---|---|
 | server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 60 文件 / 558 用例全绿 |
-| admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
+| admin `node --test tests/unit` | 83 套件 / 343 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 824 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
