@@ -15,6 +15,7 @@ import { Article, ArticleDocument } from 'src/scheme/article.schema';
 import { Meta, MetaDocument } from 'src/scheme/meta.schema';
 import { config } from 'src/config';
 import { consumeAttempt } from 'src/utils/attemptLimit';
+import { scaleLimit } from 'src/utils/clusterRole';
 import { pickSocketIp } from '../log/utils';
 import { sleep } from 'src/utils/sleep';
 import { asQueryString } from 'src/utils/sanitizeRequest';
@@ -133,7 +134,8 @@ export class CommentProvider {
 
     const ip = pickSocketIp(req);
     const limit = consumeAttempt(`comment-${ip}`, {
-      max: Math.max(1, setting.rateLimitPer10Min),
+      // 计数器是每进程一份：多进程时按 worker 数摊薄，全局阈值才等于设置值
+      max: scaleLimit(Math.max(1, setting.rateLimitPer10Min)),
       windowMs: RATE_WINDOW_MS,
     });
     if (!limit.allowed) {
@@ -142,7 +144,10 @@ export class CommentProvider {
       );
     }
     // 每 IP 每天最多 50 条：防止长时间低频灌库
-    const daily = consumeAttempt(`comment-day-${ip}`, { max: 50, windowMs: 24 * 60 * 60 * 1000 });
+    const daily = consumeAttempt(`comment-day-${ip}`, {
+      max: scaleLimit(50),
+      windowMs: 24 * 60 * 60 * 1000,
+    });
     if (!daily.allowed) {
       throw new BadRequestException('今天评论太多了，请明天再来');
     }

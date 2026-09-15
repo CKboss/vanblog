@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { pickClientIp, pickSocketIp } from 'src/provider/log/utils';
 import { consumeAttempt } from './attemptLimit';
+import { scaleLimit } from './clusterRole';
 
 /**
  * 粗粒度的全局速率限制 + 安全响应头。
@@ -57,6 +58,13 @@ export const STATIC_LIMIT_PER_MIN = envInt(
 );
 
 /** 这个路径算不算"静态资源"（只认前缀，别用正则去猜后缀，省 CPU 也少误判） */
+/**
+ * ⚠️ 上面这些阈值都是**每进程**的内存计数器：多进程（VANBLOG_CLUSTER_WORKERS>1）时，
+ * 同一个 IP 的请求被轮流分到 N 个 worker，每个都只看到 1/N，于是"每分钟 600 次"
+ * 实际上会变成 N×600 次 —— 限流器等于被悄悄放宽了 N 倍（登录爆破那一条更是安全问题）。
+ * 所以取用时统一过一道 `scaleLimit()`（按 worker 数摊薄，单进程时除数是 1，值不变）。
+ * 摊薄是近似的（round-robin 不均匀），但偏差方向是"更严"，对限流来说是安全的那一侧。
+ */
 export function isStaticAssetPath(path: string): boolean {
   return typeof path === 'string' && path.startsWith('/static/');
 }
@@ -115,7 +123,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
 
     if (path.startsWith('/api/admin/init')) {
       const hit = consumeAttempt(`rl-init-${ip}`, {
-        max: INIT_LIMIT_PER_10MIN,
+        max: scaleLimit(INIT_LIMIT_PER_10MIN),
         windowMs: 10 * 60 * 1000,
       });
       if (!hit.allowed) {
@@ -125,7 +133,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
 
     if (path.startsWith('/api/public/') && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
       const hit = consumeAttempt(`rl-public-write-${ip}`, {
-        max: PUBLIC_WRITE_LIMIT_PER_MIN,
+        max: scaleLimit(PUBLIC_WRITE_LIMIT_PER_MIN),
         windowMs: 60 * 1000,
       });
       if (!hit.allowed) {
@@ -136,7 +144,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
     // 静态资源走独立桶：一张图也算一次请求，混在全局桶里会把正常的图文页面限死
     if (isStaticAssetPath(path)) {
       const hit = consumeAttempt(`rl-static-${ip}`, {
-        max: STATIC_LIMIT_PER_MIN,
+        max: scaleLimit(STATIC_LIMIT_PER_MIN),
         windowMs: 60 * 1000,
       });
       if (!hit.allowed) {
@@ -146,7 +154,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
     }
 
     const global = consumeAttempt(`rl-global-${ip}`, {
-      max: GLOBAL_LIMIT_PER_MIN,
+      max: scaleLimit(GLOBAL_LIMIT_PER_MIN),
       windowMs: 60 * 1000,
     });
     if (!global.allowed) {

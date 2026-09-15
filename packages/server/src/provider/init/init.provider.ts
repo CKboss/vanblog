@@ -17,9 +17,19 @@ import { WebsiteProvider } from '../website/website.provider';
 import { CategoryDocument } from 'src/scheme/category.schema';
 import { CustomPageDocument } from 'src/scheme/customPage.schema';
 import e from 'express';
+/** 「是否已初始化」的缓存时长；0 = 永久（直到进程重启或显式失效） */
+function envNonNegativeInt(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  if (!Number.isFinite(raw) || raw < 0) return fallback;
+  return Math.floor(raw);
+}
+
+export const INIT_CACHE_MS = envNonNegativeInt('VANBLOG_INIT_CACHE_MS', 5 * 60 * 1000);
+
 @Injectable()
 export class InitProvider {
   logger = new Logger(InitProvider.name);
+  private hasInitedCache: { value: boolean; at: number } | null = null;
   constructor(
     @InjectModel('Meta') private metaModel: Model<MetaDocument>,
     @InjectModel('User') private userModel: Model<UserDocument>,
@@ -60,6 +70,9 @@ export class InitProvider {
         },
         categories: [],
       });
+      // 刚建好管理员：立刻把"已初始化"写进缓存，
+      // 否则最长要等一个 TTL 才会生效，期间 /api/admin/init 还能被再调一次
+      this.hasInitedCache = { value: true, at: Date.now() };
       // 全新安装默认用**内置评论**（不依赖 waline 子进程）；
       // 老站点升级时没有这条设置，SettingProvider 会回落到 waline，评论数据不受影响。
       await this.settingProvider.updateCommentSetting({ provider: 'builtin' });
@@ -74,12 +87,45 @@ export class InitProvider {
     }
   }
 
+  /**
+   * 站点初始化过了吗？
+   *
+   * 这个方法挂在 **InitMiddleware** 上，也就是**每一个 API 请求**都要跑一次
+   * （`/api/admin/init` 与几个被 exclude 的路由除外）。以前每次都
+   * `userModel.findOne({})` —— 一次数据库往返，而且把**整份用户文档连密码哈希一起**
+   * 读进内存再丢掉。
+   *
+   * 现在两件事都改了：
+   *  1. 只投影 `_id`（判断"有没有用户"不需要密码哈希）；
+   *  2. 结果缓存 `VANBLOG_INIT_CACHE_MS`（默认 5 分钟）。缓存对 true/false 都生效，
+   *     而"初始化完成"这一刻由 `init()` 直接把缓存置成 true，所以刚初始化完不会读到旧值；
+   *     `/api/admin/init` 也就仍然会在已初始化时拒绝（见 init.controller）。
+   *
+   * 为什么带 TTL 而不是永久缓存：这个结论只可能被**绕过 API 的改动**推翻
+   * （手工删库、整站恢复）。API 层面管理员账号是删不掉的
+   * （`UserProvider.deleteCollaborator` 的过滤条件是 `type: 'collaborator'`），
+   * 所以正常路径下缓存永远不会错；给个 TTL 只是让"有人手工动了库"这种情况能自愈。
+   * 设成 0 表示永久缓存（直到进程重启）。
+   */
   async checkHasInited() {
-    const user = await this.userModel.findOne({}).exec();
-    if (!user) {
-      return false;
+    const cached = this.hasInitedCache;
+    if (cached && (INIT_CACHE_MS <= 0 || Date.now() - cached.at < INIT_CACHE_MS)) {
+      return cached.value;
     }
-    return true;
+    const user = await this.userModel.findOne({}, { _id: 1 }).lean().exec();
+    const value = !!user;
+    // ⚠️ 只缓存 **true**：false 缓存下来会让多实例部署下"别的进程刚完成初始化"这件事
+    // 最长延迟一个 TTL 才被看到（那期间所有请求都回「未初始化」）。
+    // 未初始化的站点本来也没有流量，这一次查询省不掉也无所谓。
+    if (value) {
+      this.hasInitedCache = { value: true, at: Date.now() };
+    }
+    return value;
+  }
+
+  /** 让"是否已初始化"的缓存立刻失效（手工动过 users 集合时用） */
+  invalidateInitCache() {
+    this.hasInitedCache = null;
   }
   async initRestoreKey() {
     const key = makeSalt();

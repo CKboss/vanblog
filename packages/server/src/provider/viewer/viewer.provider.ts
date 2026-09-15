@@ -14,14 +14,18 @@ export class ViewerProvider {
   }
 
   async createOrUpdate(createViewerDto: createViewerDto) {
-    const { date } = createViewerDto;
-    const oldData = await this.viewerModel.findOne({ date });
-    if (!oldData) {
-      const createdData = new this.viewerModel(createViewerDto);
-      return createdData.save();
-    } else {
-      return this.viewerModel.updateOne({ date }, createViewerDto);
-    }
+    const { date, ...rest } = createViewerDto;
+    // 一次 upsert 取代「先 findOne 再 create / updateOne」：
+    //  - 少一次数据库往返（这个函数在每日 cron 与浏览统计里都会用到）；
+    //  - `date` 上有唯一索引（见 statsMaintenance.provider），并发下也不会插出两行同日快照，
+    //    而「先查再建」在并发首访时必然会（visits 那张表就是这么攒出重复行的）。
+    return this.viewerModel
+      .updateOne(
+        { date },
+        { $set: rest, $setOnInsert: { date, createdAt: new Date() } },
+        { upsert: true },
+      )
+      .exec();
   }
 
   async getViewerGrid(num: number) {

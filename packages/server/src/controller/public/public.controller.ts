@@ -16,6 +16,7 @@ import { CustomPageProvider } from 'src/provider/customPage/customPage.provider'
 import { encode } from 'js-base64';
 import { asQueryString } from 'src/utils/sanitizeRequest';
 import { consumeAttempt, resetAttempts } from 'src/utils/attemptLimit';
+import { scaleLimit } from 'src/utils/clusterRole';
 import { pickSocketIp } from 'src/provider/log/utils';
 import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
@@ -91,7 +92,9 @@ export class PublicController {
   ) {
     // 加密文章的密码是明文比较，接口又完全公开：不限次数的话可以无限速爆破。
     const key = `unlock-${pickSocketIp(req)}-${String(id).slice(0, 80)}`;
-    const attempt = consumeAttempt(key, { max: 20, windowMs: 10 * 60 * 1000 });
+    // 加密文章的密码尝试次数：计数器是每进程一份，多进程时要摊薄，
+    // 否则 N 个 worker = N 倍的爆破预算
+    const attempt = consumeAttempt(key, { max: scaleLimit(20), windowMs: 10 * 60 * 1000 });
     if (!attempt.allowed) {
       throw new HttpException(
         `尝试次数过多，请 ${attempt.retryAfterSeconds} 秒后再试`,

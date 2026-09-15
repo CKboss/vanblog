@@ -96,6 +96,9 @@ import { PipelineProvider } from './provider/pipeline/pipeline.provider';
 import { PipelineController } from './controller/admin/pipeline/pipeline.controller';
 import { TokenController } from './controller/admin/token/token.controller';
 import { initJwt } from './utils/initJwt';
+import { ViewStatsProvider } from './provider/stats/viewStats.provider';
+import { configuredWorkerCount, scaleLimit } from './utils/clusterRole';
+import { StatsMaintenanceProvider } from './provider/stats/statsMaintenance.provider';
 
 /** 环境变量转数字：非法/缺失就用默认值（连接参数写错成 NaN 会让驱动直接抛） */
 function num(value: string | undefined, fallback: number): number {
@@ -117,7 +120,13 @@ function num(value: string | undefined, fallback: number): number {
       serverSelectionTimeoutMS: num(process.env.VANBLOG_MONGO_SERVER_SELECTION_TIMEOUT_MS, 10000),
       connectTimeoutMS: num(process.env.VANBLOG_MONGO_CONNECT_TIMEOUT_MS, 10000),
       socketTimeoutMS: num(process.env.VANBLOG_MONGO_SOCKET_TIMEOUT_MS, 120000),
-      maxPoolSize: num(process.env.VANBLOG_MONGO_MAX_POOL_SIZE, 100),
+      // ⚠️ 连接池是**每进程**的：多进程部署时 N 个 worker × 100 条连接会把 mongod 的连接数
+      // 顶上去（而 mongod 低于 64000 fd 就会告警）。这里按 worker 数摊薄，
+      // 让"整站对 mongod 的连接总数"仍然约等于配置值；单进程时除数是 1，行为不变。
+      maxPoolSize: Math.max(
+        10,
+        scaleLimit(num(process.env.VANBLOG_MONGO_MAX_POOL_SIZE, 100), configuredWorkerCount()),
+      ),
       retryWrites: true,
       retryReads: true,
     }),
@@ -196,6 +205,8 @@ function num(value: string | undefined, fallback: number): number {
     DraftProvider,
     PicgoProvider,
     VisitProvider,
+    ViewStatsProvider,
+    StatsMaintenanceProvider,
     TagProvider,
     UserProvider,
     AuthProvider,

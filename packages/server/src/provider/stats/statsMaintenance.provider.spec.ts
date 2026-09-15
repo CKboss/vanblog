@@ -1,0 +1,423 @@
+import { StatsMaintenanceProvider } from './statsMaintenance.provider';
+
+/**
+ * 统计表维护：去重合并 → 建唯一索引 → 按保留期清理。
+ *
+ * 用一个内存假 Mongo（能报索引列表、能建/删索引、能跑那条固定的去重 aggregate）
+ * 把三件事的行为钉住：
+ *  - **幂等**：已经建好唯一索引时整轮只花一次 listIndexes，一行数据都不动；
+ *  - **顺序**：先去重再建索引（反过来 createIndex 必然 E11000 失败）；
+ *  - **不在请求路径上**：启动钩子 fire-and-forget，且只跑一次；
+ *  - **保留期默认关**：`VANBLOG_VISIT_RETENTION_DAYS` 不给值时一行都不删。
+ */
+
+type Doc = Record<string, any>;
+
+function createFakeCollection(name: string, docs: Doc[] = [], indexes: Doc[] = []) {
+  const state = {
+    docs,
+    indexes: [{ v: 2, key: { _id: 1 }, name: '_id_' }, ...indexes],
+    log: [] as string[],
+  };
+  const collection: any = {
+    collectionName: name,
+    indexes: async () => {
+      state.log.push(`${name}.indexes`);
+      return state.indexes.map((i) => ({ ...i }));
+    },
+    createIndex: async (keys: Doc, options: any = {}) => {
+      state.log.push(`${name}.createIndex(${JSON.stringify(keys)},unique=${!!options.unique})`);
+      const clash = state.indexes.find(
+        (i) => i.name === options.name && JSON.stringify(i.key) !== JSON.stringify(keys),
+      );
+      if (clash) throw new Error(`Index with name: ${options.name} already exists with a different name`);
+      state.indexes.push({ v: 2, key: keys, name: options.name, unique: options.unique });
+      return options.name;
+    },
+    dropIndex: async (indexName: string) => {
+      state.log.push(`${name}.dropIndex(${indexName})`);
+      const before = state.indexes.length;
+      state.indexes = state.indexes.filter((i) => i.name !== indexName);
+      if (state.indexes.length === before) throw new Error(`index not found with name [${indexName}]`);
+      return true;
+    },
+  };
+  return { state, collection };
+}
+
+function createFake(options: {
+  visitDocs?: Doc[];
+  viewerDocs?: Doc[];
+  visitIndexes?: Doc[];
+  viewerIndexes?: Doc[];
+  env?: Record<string, string | undefined>;
+}) {
+  const visits = createFakeCollection('visits', options.visitDocs ?? [], options.visitIndexes ?? []);
+  const viewers = createFakeCollection(
+    'viewers',
+    options.viewerDocs ?? [],
+    options.viewerIndexes ?? [],
+  );
+  const opLog: string[] = [];
+  const deleted: Doc[] = [];
+
+  const makeModel = (fake: ReturnType<typeof createFakeCollection>, kind: string) => {
+    const model: any = {
+      collection: fake.collection,
+      aggregate: (pipeline: Doc[]) => ({
+        allowDiskUse: () => ({
+          exec: async () => {
+            opLog.push(`${kind}.aggregate`);
+            // 只实现去重那一条管道：group by {date,pathname} + match n>1
+            const groups = new Map<string, Doc[]>();
+            for (const doc of fake.state.docs) {
+              const key = JSON.stringify([doc.date, doc.pathname]);
+              groups.set(key, [...(groups.get(key) || []), doc]);
+            }
+            return [...groups.values()]
+              .filter((g) => g.length > 1)
+              .map((g) => ({ _id: { date: g[0].date, pathname: g[0].pathname }, n: g.length }));
+          },
+        }),
+      }),
+      find: (filter: Doc) => ({
+        lean: () => ({
+          exec: async () => {
+            opLog.push(`${kind}.find`);
+            return fake.state.docs.filter(
+              (d) => d.date === filter.date && d.pathname === filter.pathname,
+            );
+          },
+        }),
+      }),
+      updateOne: (filter: Doc, update: Doc) => ({
+        exec: async () => {
+          opLog.push(`${kind}.updateOne`);
+          const doc = fake.state.docs.find((d) => String(d._id) === String(filter._id));
+          if (doc && update.$set) Object.assign(doc, update.$set);
+          return { matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0 };
+        },
+      }),
+      deleteMany: (filter: Doc) => ({
+        exec: async () => {
+          opLog.push(`${kind}.deleteMany`);
+          if (filter._id?.$in) {
+            const ids = filter._id.$in.map(String);
+            const before = fake.state.docs.length;
+            fake.state.docs = fake.state.docs.filter((d) => !ids.includes(String(d._id)));
+            return { deletedCount: before - fake.state.docs.length };
+          }
+          // 保留期那一条：{date: {$gte, $lt}}
+          const range = filter.date as any;
+          const before = fake.state.docs.length;
+          const removed = fake.state.docs.filter(
+            (d) =>
+              typeof d.date === 'string' &&
+              (!range.$gte || d.date >= range.$gte) &&
+              (!range.$lt || d.date < range.$lt),
+          );
+          deleted.push(...removed);
+          fake.state.docs = fake.state.docs.filter((d) => !removed.includes(d));
+          return { deletedCount: before - fake.state.docs.length };
+        },
+      }),
+    };
+    return model;
+  };
+
+  const savedEnv: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(options.env || {})) {
+    savedEnv[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  const provider = new StatsMaintenanceProvider(
+    makeModel(visits, 'visits'),
+    makeModel(viewers, 'viewers'),
+  );
+  const restoreEnv = () => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
+  return { provider, visits, viewers, opLog, deleted, restoreEnv };
+}
+
+/** 本机线上实测到的那两对重复行（createdAt 相差 9 毫秒） */
+const dupDocs = (): Doc[] => [
+  { _id: 'k1', date: '2026-02-28', pathname: '/', viewer: 2270, visited: 898, lastVisitedTime: new Date('2026-02-28T15:42:24.345Z'), createdAt: new Date('2026-02-28T01:12:06.529Z') },
+  { _id: 'k2', date: '2026-02-28', pathname: '/', viewer: 2266, visited: 898, lastVisitedTime: new Date('2026-02-28T01:12:06.538Z'), createdAt: new Date('2026-02-28T01:12:06.538Z') },
+  { _id: 'k3', date: '2025-02-03', pathname: '/', viewer: 624, visited: 222, lastVisitedTime: new Date('2025-02-03T10:28:04.389Z'), createdAt: new Date('2025-02-03T07:07:39.272Z') },
+  { _id: 'k4', date: '2025-02-03', pathname: '/', viewer: 623, visited: 221, lastVisitedTime: new Date('2025-02-03T07:07:39.280Z'), createdAt: new Date('2025-02-03T07:07:39.280Z') },
+  { _id: 'ok', date: '2026-09-16', pathname: '/post/1', viewer: 295, visited: 257, lastVisitedTime: new Date('2026-09-16T01:00:00Z'), createdAt: new Date('2026-09-16T00:00:00Z') },
+];
+
+describe('StatsMaintenanceProvider：去重 + 唯一索引', () => {
+  it('合并重复行（取 max）并建上 {date,pathname} 唯一索引', async () => {
+    const fake = createFake({
+      visitDocs: dupDocs(),
+      viewerIndexes: [{ v: 2, key: { date: 1 }, name: 'date_1' }],
+    });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dedup.groups).toBe(2);
+      expect(res.dedup.dropped).toBe(2);
+      expect(fake.visits.state.docs).toHaveLength(3);
+      // 保留 lastVisitedTime 最新的那一行，值是两行的 max
+      const kept2026 = fake.visits.state.docs.find((d) => d.date === '2026-02-28');
+      expect(kept2026).toMatchObject({ _id: 'k1', viewer: 2270, visited: 898 });
+      const kept2025 = fake.visits.state.docs.find((d) => d.date === '2025-02-03');
+      expect(kept2025).toMatchObject({ _id: 'k3', viewer: 624, visited: 222 });
+      // 没有重复的行不能被动
+      expect(fake.visits.state.docs.find((d) => d._id === 'ok')?.viewer).toBe(295);
+
+      const uniq = fake.visits.state.indexes.find(
+        (i) => JSON.stringify(i.key) === JSON.stringify({ date: 1, pathname: 1 }),
+      );
+      expect(uniq?.unique).toBe(true);
+      expect(res.indexes.find((i) => i.collection === 'visits')?.created).toBe(true);
+      expect(res.indexes.find((i) => i.collection === 'visits')?.error).toBeUndefined();
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('viewers 的非唯一 date_1 被换成唯一索引（同名替换，不增加索引体积）', async () => {
+    const fake = createFake({
+      visitDocs: [],
+      visitIndexes: [{ v: 2, key: { date: 1, pathname: 1 }, name: 'date_1_pathname_1', unique: true }],
+      viewerIndexes: [{ v: 2, key: { date: 1 }, name: 'date_1' }],
+    });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      const viewerIdx = res.indexes.find((i) => i.collection === 'viewers')!;
+      expect(viewerIdx.replaced).toBe(true);
+      expect(viewerIdx.created).toBe(true);
+      expect(fake.viewers.state.log).toContain('viewers.dropIndex(date_1)');
+      expect(fake.viewers.state.indexes.find((i) => i.name === 'date_1')?.unique).toBe(true);
+      // 同一个键不能留下两个索引
+      expect(
+        fake.viewers.state.indexes.filter((i) => JSON.stringify(i.key) === JSON.stringify({ date: 1 })),
+      ).toHaveLength(1);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('幂等：唯一索引已经在了，就一次 listIndexes 也不动数据', async () => {
+    const fake = createFake({
+      visitDocs: dupDocs(),
+      visitIndexes: [{ v: 2, key: { date: 1, pathname: 1 }, name: 'date_1_pathname_1', unique: true }],
+      viewerIndexes: [{ v: 2, key: { date: 1 }, name: 'date_1', unique: true }],
+    });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dedup.skipped).toBe(true);
+      expect(res.dedup.groups).toBe(0);
+      expect(fake.visits.state.docs).toHaveLength(5);
+      expect(fake.opLog).not.toContain('visits.aggregate');
+      expect(fake.opLog).not.toContain('visits.deleteMany');
+      expect(res.indexes.every((i) => i.created === false)).toBe(true);
+      expect(fake.visits.state.log).toEqual(['visits.indexes']);
+      expect(fake.viewers.state.log).toEqual(['viewers.indexes']);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('同一个进程里只跑一次（启动钩子被反复调用也不会重复扫全表）', async () => {
+    const fake = createFake({ visitDocs: dupDocs() });
+    try {
+      await fake.provider.runStartupMaintenance('第一次');
+      const scans = fake.opLog.filter((l) => l === 'visits.aggregate').length;
+      const second = await fake.provider.runStartupMaintenance('第二次');
+      expect(second.dedup.skipped).toBe(true);
+      expect(fake.opLog.filter((l) => l === 'visits.aggregate').length).toBe(scans);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('dry run 只打印不动数据，也不建索引', async () => {
+    const fake = createFake({
+      visitDocs: dupDocs(),
+      env: { VANBLOG_VISITS_DEDUP_DRY_RUN: 'true' },
+    });
+    try {
+      expect(fake.provider.dedupDryRun).toBe(true);
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dedup.groups).toBe(2);
+      expect(res.dedup.dropped).toBe(0);
+      expect(fake.visits.state.docs).toHaveLength(5);
+      expect(
+        fake.visits.state.indexes.some(
+          (i) => JSON.stringify(i.key) === JSON.stringify({ date: 1, pathname: 1 }),
+        ),
+      ).toBe(false);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('VANBLOG_VISITS_DEDUP=false 时不去重（但仍然尝试建索引，并把风险写进日志）', async () => {
+    const fake = createFake({ visitDocs: dupDocs(), env: { VANBLOG_VISITS_DEDUP: 'false' } });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dedup.skipped).toBe(true);
+      expect(fake.visits.state.docs).toHaveLength(5);
+      expect(fake.opLog).not.toContain('visits.aggregate');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('建唯一索引失败（期间又产生了重复行）时把原来的非唯一索引补回去', async () => {
+    const fake = createFake({
+      visitDocs: dupDocs(),
+      visitIndexes: [{ v: 2, key: { pathname: 1 }, name: 'pathname_1' }],
+      viewerIndexes: [{ v: 2, key: { date: 1 }, name: 'date_1' }],
+    });
+    try {
+      // 让 createIndex 第一次就失败：模拟"去重之后又有并发插入了重复行"
+      const realCreate = fake.visits.collection.createIndex;
+      let failed = false;
+      fake.visits.collection.createIndex = async (keys: Doc, opts: Doc) => {
+        if (!failed && opts?.unique) {
+          failed = true;
+          throw Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+        }
+        return realCreate(keys, opts);
+      };
+      const res = await fake.provider.ensureUniqueIndex(
+        'visits',
+        { collection: fake.visits.collection } as any,
+        { pathname: 1 },
+        'pathname_1',
+      );
+      expect(res.error).toContain('E11000');
+      expect(res.error).toContain('已恢复原来的非唯一索引');
+      // 补回来的是**非唯一**的那个，查询不会退化成全表扫
+      const restored = fake.visits.state.indexes.find((i) => i.name === 'pathname_1');
+      expect(restored).toBeDefined();
+      expect(restored?.unique).toBeFalsy();
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('启动钩子不 await（不阻塞 listen），里面失败也不往外抛', async () => {
+    const fake = createFake({ visitDocs: dupDocs() });
+    try {
+      fake.visits.collection.indexes = async () => {
+        throw new Error('boom');
+      };
+      fake.viewers.collection.indexes = async () => {
+        throw new Error('boom');
+      };
+      // 同步返回（不是 Promise）=> Nest 不会等它，listen 不被拖住
+      expect(fake.provider.onApplicationBootstrap()).toBeUndefined();
+      await new Promise((r) => setTimeout(r, 30));
+      // 内部错误被 catch 住了（没有变成 unhandledRejection）。
+      // 读不到索引列表时按"还没有唯一索引"处理，所以去重照常跑了一遍——
+      // 它本身是幂等的，重复行该合并还是合并了
+      expect(fake.visits.state.docs).toHaveLength(3);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+});
+
+describe('StatsMaintenanceProvider：保留期清理', () => {
+  const NOW = new Date('2026-09-16T12:00:00+08:00');
+  const rows = () => [
+    { _id: 'a', date: '2024-07-07', pathname: '/', viewer: 1, visited: 1 },
+    { _id: 'b', date: '2026-06-18', pathname: '/', viewer: 2, visited: 2 },
+    { _id: 'c', date: '2026-06-19', pathname: '/', viewer: 3, visited: 3 },
+    { _id: 'd', date: '2026-09-16', pathname: '/', viewer: 4, visited: 4 },
+    { _id: 'e', date: null, pathname: '/', viewer: 5, visited: 5 },
+    { _id: 'f', pathname: '/', viewer: 6, visited: 6 },
+  ];
+
+  it('默认不设环境变量：一行都不删', async () => {
+    const fake = createFake({ visitDocs: rows(), viewerDocs: rows(), env: { VANBLOG_VISIT_RETENTION_DAYS: undefined } });
+    try {
+      expect(fake.provider.retentionDays).toBe(0);
+      const res = await fake.provider.pruneStats('测试', NOW);
+      expect(res).toEqual({ enabled: false, effectiveDays: 0, cutoff: null, visits: 0, viewers: 0 });
+      expect(fake.visits.state.docs).toHaveLength(6);
+      expect(fake.opLog).not.toContain('visits.deleteMany');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('保留 90 天：删掉 cutoff 之前的，边界那一天留下，date 为 null/缺失的也留下', async () => {
+    const fake = createFake({
+      visitDocs: rows(),
+      viewerDocs: rows(),
+      env: { VANBLOG_VISIT_RETENTION_DAYS: '90' },
+    });
+    try {
+      const res = await fake.provider.pruneStats('测试', NOW);
+      expect(res.enabled).toBe(true);
+      expect(res.effectiveDays).toBe(90);
+      expect(res.cutoff).toBe('2026-06-19');
+      expect(res.visits).toBe(2); // 2024-07-07 与 2026-06-18
+      expect(res.viewers).toBe(2);
+      const left = fake.visits.state.docs.map((d) => d._id).sort();
+      expect(left).toEqual(['c', 'd', 'e', 'f']);
+      expect(fake.deleted.map((d) => d._id).sort()).toEqual(['a', 'a', 'b', 'b']);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('保留期设得再短也不会动最近 30 天', async () => {
+    const fake = createFake({
+      visitDocs: rows(),
+      env: { VANBLOG_VISIT_RETENTION_DAYS: '1', VANBLOG_VISIT_RETENTION_MIN_KEEP_DAYS: '30' },
+    });
+    try {
+      const res = await fake.provider.pruneStats('测试', NOW);
+      expect(res.effectiveDays).toBe(30);
+      expect(res.cutoff).toBe('2026-08-18');
+      // 2024-07-07 / 2026-06-18 / 2026-06-19 三行都在 30 天之外
+      expect(res.visits).toBe(3);
+      expect(fake.visits.state.docs.map((d) => d._id)).toContain('d');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('非法值回落到默认（0 = 不删）', async () => {
+    const fake = createFake({
+      visitDocs: rows(),
+      env: { VANBLOG_VISIT_RETENTION_DAYS: 'abc' },
+    });
+    try {
+      expect(fake.provider.retentionDays).toBe(0);
+      const res = await fake.provider.pruneStats('测试', NOW);
+      expect(res.enabled).toBe(false);
+      expect(fake.visits.state.docs).toHaveLength(6);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('重复跑是幂等的（第二次删 0 行）', async () => {
+    const fake = createFake({
+      visitDocs: rows(),
+      viewerDocs: rows(),
+      env: { VANBLOG_VISIT_RETENTION_DAYS: '90' },
+    });
+    try {
+      await fake.provider.pruneStats('第一次', NOW);
+      const second = await fake.provider.pruneStats('第二次', NOW);
+      expect(second.visits).toBe(0);
+      expect(second.viewers).toBe(0);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+});

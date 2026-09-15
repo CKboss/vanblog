@@ -10,6 +10,21 @@ import { VisitDocument } from 'src/scheme/visit.schema';
 export class VisitProvider {
   constructor(@InjectModel('Visit') private visitModel: Model<VisitDocument>) {}
 
+  /**
+   * 记一次「某条路径今天被访问了一下」。
+   *
+   * ⚠️ 这**不再是浏览热路径**：每次页面浏览现在走
+   * `provider/stats/viewStats.provider.ts`（进程内攒一批，一轮 flush 一次 bulkWrite），
+   * 一次浏览从 8 次 Mongo 命令降到 ~0.2 次。这里保留的是"单次、立刻落库"的写法，
+   * 语义与批量那条路一致（当天没有行时从最近一天的累计值 +1 建新行），
+   * 也是 `test/stats-maintenance.e2e-spec.ts` 用来复现并发首访重复行的入口。
+   *
+   * 下面那段 catch 重复键的兜底**依赖 `{date,pathname}` 上的唯一索引**
+   * （由 `provider/stats/statsMaintenance.provider.ts` 在启动时去重后建）。
+   * 索引不存在时它永远不会触发 —— 那正是改动前的状态：并发首访静默产生重复行
+   * （本机线上实测到 2 组），之后 `findOneAndUpdate({date,pathname})` 只更新其中一行。
+   * 实测：没有唯一索引时 8 个并发首访 = 8 行；有了唯一索引 = 1 行且 viewer 正好是 8（一次不丢）。
+   */
   async add(createViewerDto: createVisitDto): Promise<any> {
     // 先找一下有没有今天的，有的话就在今天的基础上加1。
     const { isNew, pathname } = createViewerDto;

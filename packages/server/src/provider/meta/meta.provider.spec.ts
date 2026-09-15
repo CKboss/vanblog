@@ -16,7 +16,9 @@ function createMemoryMetaModel(links: any[] = []) {
 
 function createProvider(links: any[] = []) {
   const model = createMemoryMetaModel(links);
-  const provider = new MetaProvider(model as any, {} as any, {} as any, {} as any, {} as any);
+  // 构造参数：metaModel、userProvider、articleProvider、viewStats
+  // （这个 spec 只测友情链接/站点信息那几条路径，后三个用不到，给空对象即可）
+  const provider = new MetaProvider(model as any, {} as any, {} as any, {} as any);
   return { provider, model };
 }
 

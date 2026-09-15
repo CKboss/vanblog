@@ -15,14 +15,12 @@ import {
 } from 'src/utils/social';
 import { LinkItem } from 'src/types/link.dto';
 import { UserProvider } from '../user/user.provider';
-import { VisitProvider } from '../visit/visit.provider';
 import { ArticleProvider } from '../article/article.provider';
-import dayjs from 'dayjs';
-import { isTrue } from 'src/utils/isTrue';
 import { invalidatePublicMetaCache } from 'src/utils/publicMetaCache';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePageCopy } from 'src/utils/pageCopy';
-import { ViewerProvider } from '../viewer/viewer.provider';
+import { isTrue } from 'src/utils/isTrue';
+import { ViewStatsProvider } from '../stats/viewStats.provider';
 @Injectable()
 export class MetaProvider {
   logger = new Logger(MetaProvider.name);
@@ -31,10 +29,9 @@ export class MetaProvider {
     @InjectModel('Meta')
     private metaModel: Model<MetaDocument>,
     private readonly userProvider: UserProvider,
-    private readonly visitProvider: VisitProvider,
-    private readonly viewProvider: ViewerProvider,
     @Inject(forwardRef(() => ArticleProvider))
     private readonly articleProvider: ArticleProvider,
+    private readonly viewStats: ViewStatsProvider,
   ) {}
 
   async updateTotalWords(reason: string) {
@@ -46,62 +43,37 @@ export class MetaProvider {
     }, 1000 * 30);
   }
 
+  /**
+   * 站点累计访问量。
+   *
+   * ⚠️ 不能直接读 `metas`：浏览计数现在是**攒一批再写**的（见 ViewStatsProvider），
+   * 库里那一份最多落后一个 flush 周期。这里返回「库里的值 + 还没落库的增量」，
+   * 也就是此刻真实的累计值 —— 与改动前（每次都先写库再读）对外表现一致。
+   * 顺带把 `findOne()` 全文档换成了只取两个数字的投影查询。
+   */
   async getViewer() {
-    const old = await this.getAll();
-    const ov = old.viewer || 0;
-    const oldVisited = old.visited || 0;
-    const newViewer = ov;
-    const newVisited = oldVisited;
-    return { visited: newVisited, viewer: newViewer };
+    const { viewer, visited } = await this.viewStats.projection();
+    return { visited, viewer };
   }
+
+  /**
+   * 记一次页面浏览。
+   *
+   * 改动前这里是「一次浏览 = 8 次 Mongo 命令 / 4 次写」（实测，见 ViewStatsProvider 的注释）：
+   * metas 自增、文章自增（先按别名 findOne、按数字 id 再 findOne、然后 updateOne）、
+   * 当天 viewers 快照（findOne + updateOne）、当天 visits（findAndModify，
+   * 当天第一次还要多一次 getLastData + insert）。
+   * 现在全部交给 ViewStatsProvider 在进程内合并，一轮 flush 固定 4 次命令。
+   *
+   * 返回值仍然是 `{visited, viewer}`（键顺序也别动：公开接口的响应体是逐字节对比过的）。
+   */
   async addViewer(isNew: boolean, pathname: string, isNewByPath: boolean) {
-    let isNewVisitorByArticle = false;
-    if (isTrue(isNewByPath)) {
-      isNewVisitorByArticle = true;
-    }
-    // 原子自增：原来是「读出来 +1 再写回」，两个访客同时打开同一个页面时
-    // 会互相覆盖，计数永久少算（这个接口每次页面浏览都会调，并发很常见）
-    const inc: Record<string, number> = { viewer: 1 };
-    if (isTrue(isNew)) {
-      inc.visited = 1;
-    }
-    const updated = await this.metaModel
-      .findOneAndUpdate({}, { $inc: inc }, { new: true })
-      .exec();
-    const newViewer = updated?.viewer || 0;
-    const newVisited = updated?.visited || 0;
-    // 更新文章的
-    const r = /\/post\//;
-    const isArticlePath = r.test(pathname);
-    if (isArticlePath) {
-      await this.articleProvider.updateViewerByPathname(
-        pathname.replace('/post/', ''),
-        isNewByPath,
-      );
-    }
-    // 还需要增加每天的
-    // ⚠️ 这两处是"发出去就不管"的写入（不能拖慢访客请求），但**必须挂 catch**：
-    // 以前没有，Mongo 抖一下就是一个 unhandledRejection，只在全局兜底日志里留一行，
-    // 谁也看不出是哪次统计写失败了 —— 计数就这么静默丢掉。
-    this.viewProvider
-      .createOrUpdate({
-        date: dayjs().format('YYYY-MM-DD'),
-        viewer: newViewer,
-        visited: newVisited,
-      })
-      .catch((err) =>
-        this.logger.warn(`写入每日访客统计失败（不影响访问）：${err?.message || err}`),
-      );
-    //增加每个路径的。
-    this.visitProvider
-      .add({
-        pathname: pathname,
-        isNew: isNewVisitorByArticle,
-      })
-      .catch((err) =>
-        this.logger.warn(`写入路径访问统计失败（不影响访问）：${err?.message || err}`),
-      );
-    return { visited: newVisited, viewer: newViewer };
+    const projected = await this.viewStats.record({
+      pathname,
+      isNewVisitor: isTrue(isNew),
+      isNewForPath: isTrue(isNewByPath),
+    });
+    return { visited: projected.visited, viewer: projected.viewer };
   }
 
   async getAll() {
@@ -147,6 +119,9 @@ export class MetaProvider {
   async update(updateMetaDto: Partial<Meta>) {
     // 公开 meta 接口有 5 秒进程内缓存，写完主动失效，免得后台改完要等 TTL 才看得见
     invalidatePublicMetaCache();
+    // 整站恢复走的就是这条路：metas 的累计访问量被整份替换掉了，
+    // 浏览统计投影用的基数必须作废，否则恢复后的访问量会带着恢复前的旧基数
+    this.viewStats.invalidateBase();
     return this.metaModel.updateOne({}, updateMetaDto);
   }
   async getAbout() {

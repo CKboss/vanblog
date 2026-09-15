@@ -16,6 +16,11 @@ import { UserProvider } from './provider/user/user.provider';
 import { SettingProvider } from './provider/setting/setting.provider';
 import { WebsiteProvider } from './provider/website/website.provider';
 import { initJwt } from './utils/initJwt';
+import { ViewStatsProvider } from './provider/stats/viewStats.provider';
+import cluster from 'node:cluster';
+import os from 'node:os';
+import { isPrimaryInstance, resolveClusterWorkers, CLUSTER_ENV } from './utils/clusterRole';
+import { startClusterPrimary } from './utils/clusterBootstrap';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { sanitizeRequestPayloads } from './utils/sanitizeRequest';
 import { applyStaticAssetHeaders } from './utils/imgCompress';
@@ -149,63 +154,99 @@ async function bootstrap() {
   websiteProvider.init();
 
   const initProvider = app.get(InitProvider);
-  initProvider.initVersion();
-  initProvider.initRestoreKey();
+  const walineProvider = app.get(WalineProvider);
+  // ⚠️ 多进程（VANBLOG_CLUSTER_WORKERS>1）时，下面这些**只能跑一次**的东西必须由主实例来做：
+  // 写版本号、生成 restore.key、各种数据清洗、拉起 waline 子进程、触发首轮 ISR/RSS/sitemap。
+  // 单进程时 `cluster.isPrimary === true`，这个判断永远为真，行为与以前完全一致。
+  const primary = isPrimaryInstance(cluster);
+  if (primary) {
+    initProvider.initVersion();
+    initProvider.initRestoreKey();
+  }
   if (await initProvider.checkHasInited()) {
+    if (!primary) {
+      console.log('cluster worker：跳过启动期的数据清洗与子进程拉起（由主实例负责）');
+    }
     // 新版本自动启动图床压缩功能
-    await initProvider.washStaticSetting();
+    if (primary) await initProvider.washStaticSetting();
     // 老版本自定义数据洗一下
-    await initProvider.washCustomPage();
+    if (primary) await initProvider.washCustomPage();
     // 老版本的分类数据洗一下
-    await initProvider.washCategory();
+    if (primary) await initProvider.washCategory();
     const userProvider = app.get(UserProvider);
     // 老版本没加盐的用户数据洗一下。
-    userProvider.washUserWithSalt();
+    if (primary) userProvider.washUserWithSalt();
     const settingProvider = app.get(SettingProvider);
     // 老版本菜单数据洗一下。
-    settingProvider.washDefaultMenu();
+    if (primary) settingProvider.washDefaultMenu();
     const metaProvider = app.get(MetaProvider);
-    metaProvider.updateTotalWords('首次启动');
-    const walineProvider = app.get(WalineProvider);
-    walineProvider.init();
-    // ⚠️ 必须同时接 SIGTERM：`docker stop`（以及 compose down / 更新 / 升级）发的都是 SIGTERM，
-    // 以前只接了 SIGINT，于是每次停容器都是"等满 10 秒宽限期再 SIGKILL"，
-    // 正在写的整站备份 / 导出归档 / 恢复上传会被硬生生截断（留下没有 sidecar 清单的半截归档）。
-    // start.js 现在会把收到的信号转发成 SIGTERM，所以这里必须真的处理它。
-    let shuttingDown = false;
-    const gracefulShutdown = async (signal: string) => {
-      if (shuttingDown) {
-        return;
-      }
-      shuttingDown = true;
-      console.log(`检测到 ${signal}，优雅退出！`);
-      // 每个 stop 都要单独兜住：一个失败不该让另一个跳过，更不该让进程卡住不退出
-      try {
-        await walineProvider.stop();
-      } catch (err) {
-        console.error(`停止 waline 失败：${(err as Error)?.message}`);
-      }
-      try {
-        await websiteProvider.stop();
-      } catch (err) {
-        console.error(`停止前台进程失败：${(err as Error)?.message}`);
-      }
-      try {
-        await app.close();
-      } catch (err) {
-        console.error(`关闭 HTTP 服务失败：${(err as Error)?.message}`);
-      }
-      process.exit(0);
-    };
-    process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
-    process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
-    process.on('SIGHUP', () => void gracefulShutdown('SIGHUP'));
+    if (primary) metaProvider.updateTotalWords('首次启动');
+    if (primary) walineProvider.init();
     // 触发增量渲染生成静态页面，防止升级后内容为空
-    const isrProvider = app.get(ISRProvider);
-    isrProvider.activeAll('首次启动触发全量渲染！', 1000, {
-      forceActice: true,
-    });
+    // ⚠️ 只有主实例做：一轮全量渲染是 ~130 次串行重渲染 + 重新生成 RSS/sitemap（写同一批文件），
+    // 每个 worker 都来一遍等于把这份活乘以核数
+    if (primary) {
+      const isrProvider = app.get(ISRProvider);
+      isrProvider.activeAll('首次启动触发全量渲染！', 1000, {
+        forceActice: true,
+      });
+    }
   }
+
+  // ⚠️ 信号处理**必须在 checkHasInited() 这个 if 外面**：
+  //  - cluster 的 worker 收不到终端信号，是主进程转发过来的 SIGTERM，未初始化的实例也一样要能退；
+  //  - 以前它在 if 里面，于是"还没初始化的站点"收到 SIGTERM 什么都不做，
+  //    docker 要等满宽限期再 SIGKILL；
+  //  - worker 更要靠它把攒在内存里的浏览统计写掉（ViewStatsProvider）。
+  // ⚠️ 必须同时接 SIGTERM：`docker stop`（以及 compose down / 更新 / 升级）发的都是 SIGTERM，
+  // 以前只接了 SIGINT，于是每次停容器都是"等满 10 秒宽限期再 SIGKILL"，
+  // 正在写的整站备份 / 导出归档 / 恢复上传会被硬生生截断（留下没有 sidecar 清单的半截归档）。
+  // start.js 现在会把收到的信号转发成 SIGTERM，所以这里必须真的处理它。
+  let shuttingDown = false;
+  // 三个信号都接：SIGINT（Ctrl-C）、SIGTERM（docker stop / watch 重启）、SIGHUP（终端断开）
+  const gracefulShutdown = async (signal: string) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`检测到 ${signal}，优雅退出！`);
+    // ⚠️ 必须**在关库之前**把还没落库的浏览计数写掉：这些计数是攒在进程内存里的
+    // （见 provider/stats/viewStats.provider.ts），SIGTERM 时不 flush 就等于白丢一段访问量。
+    // ViewStatsProvider 自己也实现了 onApplicationShutdown 兜底，这里是保证顺序的那一次。
+    try {
+      const viewStats = app.get(ViewStatsProvider);
+      viewStats.stopTimer();
+      const summary = await viewStats.flush(`优雅退出(${signal})`);
+      // 总是打印（哪怕这一轮没有待写入的）：停机时"计数到底有没有落库"必须能在日志里查到，
+      // 否则真丢了访问量也看不出是哪一步没做
+      console.log(
+        `浏览统计落库：${summary.events} 次浏览 / ${summary.ops} 次 Mongo 命令（${signal}）`,
+      );
+    } catch (err) {
+      console.error(`写入待落库的浏览统计失败：${(err as Error)?.message}`);
+    }
+    // 每个 stop 都要单独兜住：一个失败不该让另一个跳过，更不该让进程卡住不退出
+    try {
+      await walineProvider.stop();
+    } catch (err) {
+      console.error(`停止 waline 失败：${(err as Error)?.message}`);
+    }
+    try {
+      await websiteProvider.stop();
+    } catch (err) {
+      console.error(`停止前台进程失败：${(err as Error)?.message}`);
+    }
+    try {
+      await app.close();
+    } catch (err) {
+      console.error(`关闭 HTTP 服务失败：${(err as Error)?.message}`);
+    }
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+  process.on('SIGHUP', () => void gracefulShutdown('SIGHUP'));
+
   setTimeout(() => {
     console.log(host ? `应用已启动，端口: ${port}，监听: ${host}` : `应用已启动，端口: ${port}`);
     console.log('API 端点地址: http://<domain>/api');
@@ -214,4 +255,44 @@ async function bootstrap() {
     console.log('开源地址: https://github.mereith/mereithhh/van-blog');
   }, 3000);
 }
-bootstrap();
+/**
+ * 多进程开关：`VANBLOG_CLUSTER_WORKERS`（默认 **1** = 今天的单进程行为）。
+ *
+ * 单进程 Node 是动态请求的实测天花板（AGENTS §7.44：一万条连接拿 caddy 直服的静态图片
+ * 0.8 秒全部 200，同样一万条连接打反代到 Node 的动态接口，30 秒只完成 1600 个）。
+ * cluster 能把动态吞吐乘以核数，但代价是**内存也乘以核数**（每个 worker 一份完整的
+ * Nest 应用 + mongoose 连接池 + Next 的 ISR 缓存），所以默认关着，由部署者按机器决定。
+ *
+ * 打开之后由主实例独占的东西（`isPrimaryInstance()` 守卫）：
+ * 每小时 ISR cron、每日 viewer 结算与统计清理、启动期数据清洗、restore.key、
+ * waline / website 两个子进程、首轮全量渲染。
+ * 按 worker 数摊薄的东西：内存限流与登录防爆破阈值（`scaleLimit`）、mongoose 连接池上限。
+ * 仍然每进程一份、但**语义正确**的东西：浏览统计缓冲（都是原子 $inc）、publicMetaCache。
+ */
+const clusterWorkers = resolveClusterWorkers(process.env[CLUSTER_ENV], os.cpus().length);
+
+async function startPrimary() {
+  // ⚠️ jwt 密钥必须由主进程先解析好再 fork：全新安装时 N 个 worker 同时跑
+  // "没有就生成一个"，即便有原子 upsert 兜着，也让它们全部走"读已存在的"这条分支更稳。
+  global.jwtSecret = await initJwt();
+  // eslint-disable-next-line no-console
+  console.log(
+    `[cluster] 主进程启动 ${clusterWorkers} 个 worker（${CLUSTER_ENV}=${clusterWorkers}）`,
+  );
+  startClusterPrimary(clusterWorkers, cluster as any, {
+    // eslint-disable-next-line no-console
+    log: (message) => console.log(`[cluster] ${message}`),
+    // eslint-disable-next-line no-console
+    error: (message) => console.error(`[cluster] ${message}`),
+  });
+}
+
+if (clusterWorkers > 1 && cluster.isPrimary) {
+  startPrimary().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(`[cluster] 主进程启动失败：${(err as Error)?.message || err}`);
+    process.exit(1);
+  });
+} else {
+  bootstrap();
+}

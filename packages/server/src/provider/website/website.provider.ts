@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChildProcess, spawn } from 'node:child_process';
+import cluster from 'node:cluster';
+import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { applyRuntimeCdnPrefix, getWebsiteRoot } from 'src/utils/cdnUrl';
 import { MetaProvider } from '../meta/meta.provider';
 import { SettingProvider } from '../setting/setting.provider';
@@ -74,7 +76,23 @@ export class WebsiteProvider {
   }
   /** 上一次真正用于启动前台进程的环境变量（用来判断有没有必要重启）。 */
   private lastEnvJson = '';
+  /**
+   * 启动互斥量。
+   * ⚠️ 这个字段以前**从来没有被赋过值**（死代码）：`run()` 里只有
+   * `if (this.starting) await this.starting`，而没人写过 `this.starting = ...`，
+   * 于是两次重叠的 restart 会各自 spawn 一个 next，两个进程抢 3001 端口。
+   */
   private starting: Promise<any> | null = null;
+  /**
+   * 主动停止时不要再自动重启。
+   * ⚠️ waline 那边一直有这个标志，website 没有 —— 于是优雅停机时
+   * `stop()` 杀掉的子进程，会被它自己的 `exit` 钩子重新拉起来，
+   * 而且因为 spawn 是 `detached: true`，这个"复活"的前台进程会脱离进程组活下来：
+   * server 已经退了，3001 上还有一个 next 在接客（多实例部署下还会继续触发 ISR 之类的活）。
+   */
+  private stopping = false;
+  private restartAttempts = 0;
+  private restartTimer: NodeJS.Timeout | null = null;
 
   async restart(reason: string) {
     // 保存**任何**站点信息都会走到这里，而 stop() 会杀掉整个进程组、再由 exit 钩子重新拉起 next，
@@ -91,25 +109,130 @@ export class WebsiteProvider {
       return;
     }
     this.logger.log(`${reason}重启 website`);
+    // 后台明确要求的重启：把崩溃退避计数清零，别让它被之前的崩溃次数挡住
+    this.restartAttempts = 0;
     if (this.ctx) {
       await this.stop();
+    }
+    // ⚠️ 必须显式 run：stop() 现在会置 stopping=true，exit 钩子不会再自动拉起
+    try {
+      await this.run();
+    } catch (err) {
+      // 调用方（更新站点信息 / 更新 ISR 设置 / 初始化）都是"发出去就不管"地调 restart()，
+      // 这里必须自己兜住：否则前台就停在"已经杀掉、没起来"的状态，
+      // 而外面只会看到一条全局 unhandledRejection 日志
+      this.logger.error(
+        `${reason}重启 website 失败：${(err as Error)?.message || err}，将按退避重试`,
+      );
+      this.scheduleRestart();
     }
   }
   async restore(reason: string) {
     this.logger.log(`${reason}`);
     if (this.ctx) this.ctx = null;
+    this.stopping = false;
     await this.run();
   }
   async stop(noMessage?: boolean) {
-    if (this.ctx) {
-      this.ctx.unref();
-      process.kill(-this.ctx.pid);
-      this.ctx = null;
-      if (noMessage) return;
+    this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    const child = this.ctx;
+    this.ctx = null;
+    if (!child) {
+      return;
+    }
+    child.unref?.();
+    // 等它真的退出（2 秒不退就 SIGKILL）：以前 kill 完立刻返回，
+    // 优雅停机那边紧接着 app.close() + process.exit(0)，
+    // 子进程可能还没来得及死就变成孤儿进程继续占着 3001
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      child.once('exit', finish);
+      const kill = (signal: NodeJS.Signals) => {
+        try {
+          // detached + 进程组：要杀的是整组（next 会 fork 出 worker）
+          process.kill(-child.pid as number, signal);
+        } catch {
+          try {
+            child.kill(signal);
+          } catch {
+            finish();
+          }
+        }
+      };
+      kill('SIGTERM');
+      setTimeout(() => {
+        if (!settled) kill('SIGKILL');
+        setTimeout(finish, 200);
+      }, 2000).unref?.();
+    });
+    if (!noMessage) {
       this.logger.log('website 停止成功！');
     }
   }
   async run(): Promise<any> {
+    // 真正的启动互斥：重叠调用（restart 与 exit 钩子撞在一起）只会 spawn 一次
+    if (this.starting) {
+      return this.starting;
+    }
+    const task = this.doRun();
+    this.starting = task;
+    try {
+      return await task;
+    } finally {
+      if (this.starting === task) {
+        this.starting = null;
+      }
+    }
+  }
+
+  /** 崩溃后的有界退避重启（对齐 waline 的做法：最多连续 5 次，间隔 2s/4s/…最多 30s） */
+  private scheduleRestart() {
+    if (this.stopping) {
+      return;
+    }
+    if (this.restartAttempts >= 5) {
+      this.logger.error(
+        'website 已连续退出 5 次，停止自动重启。请检查前台构建产物与 3001 端口占用，' +
+          '或在后台改一次站点信息触发重启。',
+      );
+      return;
+    }
+    this.restartAttempts += 1;
+    const delay = Math.min(30000, 2000 * this.restartAttempts);
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+    }
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopping || this.ctx) {
+        return;
+      }
+      this.logger.log(`第 ${this.restartAttempts} 次尝试重新拉起 website（${delay}ms 后）`);
+      this.run().catch((err) => {
+        this.logger.error(`重新拉起 website 失败：${(err as Error)?.message || err}`);
+        this.scheduleRestart();
+      });
+    }, delay);
+    this.restartTimer.unref?.();
+  }
+
+  private async doRun(): Promise<any> {
+    // ⚠️ 前台子进程只能有一份：每个 worker 都 spawn 一个 next 会抢 3001 端口
+    if (!isPrimaryInstance(cluster)) {
+      this.logger.log('cluster worker：跳过启动 website（由主实例负责）');
+      return;
+    }
+    // 重新拉起（自动重启或后台改了设置）时要允许后续再次自动重启
+    this.stopping = false;
     if (process.env['VANBLOG_DISABLE_WEBSITE'] === 'true') {
       this.logger.log('无 website 模式');
       return;
@@ -127,16 +250,12 @@ export class WebsiteProvider {
         );
       }
     }
-    // 并发保护：loadEnv() 是 await 的，两次重叠的 restart 会在 `this.ctx == null` 判断之间
-    // 各自 spawn 一个 next，两个进程抢 3001 端口
-    if (this.starting) {
-      await this.starting.catch(() => undefined);
-    }
     const loadEnvs = await this.loadEnv();
     this.lastEnvJson = JSON.stringify(loadEnvs);
     this.logger.log(JSON.stringify(loadEnvs, null, 2));
+    // loadEnv() 是 await 的：回来之后必须再看一眼，可能已经有别的调用把进程起起来了
     if (this.ctx == null) {
-      this.ctx = spawn(cmd, args, {
+      const child = spawn(cmd, args, {
         env: {
           ...process.env,
           ...loadEnvs,
@@ -151,17 +270,36 @@ export class WebsiteProvider {
         detached: true,
         shell: process.platform === 'win32',
       });
-      this.ctx.on('message', (message) => {
+      this.ctx = child;
+      child.on('message', (message) => {
         this.logger.log(message);
       });
-      this.ctx.on('exit', async () => {
-        await this.restore('website 进程退出，自动重启');
+      const startedAt = Date.now();
+      child.on('exit', (code: number | null, signal: string | null) => {
+        // ⚠️ 只认"当前这个子进程"的退出事件。
+        // restart() 会先 stop()（把 ctx 置空）再 run()（换成新进程），
+        // 旧进程的 exit 是**异步**到的；以前无条件 restore() → 把 ctx 置空 → 再 spawn 一个，
+        // 于是新旧两个 next 抢 3001，或者在优雅停机时把刚杀掉的进程复活成孤儿。
+        if (this.ctx !== child) {
+          return;
+        }
+        this.ctx = null;
+        if (this.stopping) {
+          this.logger.log('website 是主动停掉的，不再自动重启');
+          return;
+        }
+        this.logger.warn(`website 进程退出（code=${code} signal=${signal}），准备自动重启`);
+        if (Date.now() - startedAt > 60 * 1000) {
+          // 稳定跑过一分钟才算"正常运行后退出"，重置退避计数
+          this.restartAttempts = 0;
+        }
+        this.scheduleRestart();
       });
-      this.ctx.stdout.on('data', (data) => {
+      child.stdout?.on('data', (data) => {
         const t: string = data.toString();
         this.logger.log(t.substring(0, t.length - 1));
       });
-      this.ctx.stderr.on('data', (data) => {
+      child.stderr?.on('data', (data) => {
         const t: string = data.toString();
 
         let showLog = true;
@@ -173,7 +311,7 @@ export class WebsiteProvider {
         }
       });
     } else {
-      this.logger.log('Website 启动成功！');
+      this.logger.log('Website 已经在运行，跳过重复启动');
     }
   }
 }

@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChildProcess, spawn } from 'node:child_process';
+import cluster from 'node:cluster';
+import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { config } from 'src/config';
 import { WalineSetting } from 'src/types/setting.dto';
 import { makeSalt } from 'src/utils/crypto';
@@ -208,6 +210,11 @@ export class WalineProvider {
     this.logger.log('waline 停止成功！');
   }
   async run(): Promise<any> {
+    // ⚠️ 子进程只能有一份：多进程部署时每个 worker 都 spawn 一个 waline 会抢 8360 端口
+    if (!isPrimaryInstance(cluster)) {
+      this.logger.log('cluster worker：跳过启动 waline（由主实例负责）');
+      return;
+    }
     // 重新拉起（自动重启或后台改了评论设置）时要允许后续再次自动重启
     this.stopping = false;
     // 评论系统不是 waline（内置评论或已关闭）时不必拉起这个子进程：

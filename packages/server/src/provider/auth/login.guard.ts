@@ -8,6 +8,7 @@ import {
 import dayjs from 'dayjs';
 import { CacheProvider } from '../cache/cache.provider';
 import { pickSocketIp } from '../log/utils';
+import { scaleLimit } from 'src/utils/clusterRole';
 import { SettingProvider } from '../setting/setting.provider';
 
 /** 没有任何登录设置（全新站点）时用的默认值。 */
@@ -71,10 +72,15 @@ export class LoginGuard implements CanActivate {
   private async resolveLimits() {
     const setting = await this.settingProvider.getLoginSetting();
     const enabled = setting ? setting.enableMaxLoginRetry !== false : true;
-    const max =
+    // ⚠️ 失败计数存在 CacheProvider（**每进程内存**）里：多进程部署时同一个 IP 的尝试
+    // 会被轮流分到 N 个 worker，每个都只看到 1/N ⇒ 实际的爆破预算变成 N 倍。
+    // 这里按 worker 数摊薄（单进程时除数是 1，值不变）；摊薄是近似的，
+    // 但偏差方向是"更严"，对防爆破来说是安全的那一侧。
+    const configuredMax =
       Number(setting?.maxRetryTimes) > 0
         ? Number(setting.maxRetryTimes)
         : DEFAULT_MAX_LOGIN_RETRY;
+    const max = scaleLimit(configuredMax);
     const windowSeconds =
       Number(setting?.durationSeconds) > 0
         ? Number(setting.durationSeconds)
