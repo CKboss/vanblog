@@ -178,8 +178,17 @@ export default function ThemeTab() {
           </Button>
           {r.source === 'upload' ? (
             <Popconfirm
-              title={`删除主题「${r.name}」？`}
-              description={active === r.id ? '正在使用中，先切换到别的主题' : '会同时删掉它的 CSS 文件'}
+              // ⚠️ antd 4.24 的 Popconfirm **没有** description（那是 antd 5.1 才加的），
+              //    传了会被忽略、还可能被透传到 DOM 上变成未知属性。提示语要放进 title。
+              title={
+                <span>
+                  删除主题「{r.name}」？
+                  <br />
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>
+                    {active === r.id ? '正在使用中，先切换到别的主题' : '会同时删掉它的 CSS 文件'}
+                  </span>
+                </span>
+              }
               disabled={active === r.id}
               onConfirm={() => handleDelete(r.id)}
             >

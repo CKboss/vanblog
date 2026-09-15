@@ -45,6 +45,20 @@ describe('主题（前台皮肤）：后台管理页', () => {
     assert.match(tab, /docs\/features\/theme\.md/);
   });
 
+  it('只用 antd 4.24 真有的 prop（Popconfirm 没有 description，那是 antd 5.1 才加的）', () => {
+    const tab = read('src/pages/SystemConfig/tabs/Theme.jsx');
+    // Popconfirm 传了 description 不会报错，只会被静默忽略（提示语就消失了），
+    // 所以只能靠断言盯住。Alert 的 description 是合法的，别一起误伤。
+    const popconfirms = tab.split('<Popconfirm').slice(1);
+    for (const chunk of popconfirms) {
+      const head = chunk.split('>')[0];
+      assert.doesNotMatch(head, /description=/);
+    }
+    assert.ok(popconfirms.length >= 1, '应该至少有一个 Popconfirm');
+    // Modal 的 open 在 antd 4.23+ 是合法别名，这里确认用的是它而不是已废弃的 visible
+    assert.match(tab, /open=\{uploadOpen\}/);
+  });
+
   it('内置主题不给删除按钮，正在使用的也不给', () => {
     const tab = code(read('src/pages/SystemConfig/tabs/Theme.jsx'));
     assert.match(tab, /r\.source === 'upload' \? \(/);
