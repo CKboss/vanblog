@@ -31,12 +31,14 @@ export function themeTokenHeader() {
   return { token: window.localStorage.getItem('token') || 'null' };
 }
 
-/** 取某个上传主题的 CSS 原文（内置主题没有独立文件，服务端会 404） */
+/**
+ * 取某个上传主题的 CSS 原文（内置主题没有独立文件，服务端会 404）。
+ *
+ * ⚠️ 走普通的 JSON 接口，**不要**加 `responseType: 'text'` / `parseResponse: false`：
+ * 后台 umi 的 request 配了 errorConfig.adaptor，它对每个响应都要看到 `{statusCode,data}`，
+ * 拿到裸文本会直接抛 BizError（`parseResponse` 在 adaptor 之后才起作用，救不回来）。
+ * 返回结构是 `{statusCode:200, data:{id,name,url,hash,size,css}}`。
+ */
 export async function getThemeCss(id) {
-  return request(`/api/admin/theme/${encodeURIComponent(id)}/css`, {
-    method: 'GET',
-    responseType: 'text',
-    // 服务端直接回 text/css，不要被 umi 当 JSON 解析
-    parseResponse: false,
-  });
+  return request(`/api/admin/theme/${encodeURIComponent(id)}/css`, { method: 'GET' });
 }

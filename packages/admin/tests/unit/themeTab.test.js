@@ -58,8 +58,11 @@ describe('主题（前台皮肤）：后台管理页', () => {
     assert.match(svc, /\/api\/admin\/theme\/active/);
     assert.match(svc, /THEME_UPLOAD_ACTION = '\/api\/admin\/theme\/upload'/);
     assert.match(svc, /localStorage\.getItem\('token'\)/);
-    // 取 CSS 原文时不能被 umi 当 JSON 解析
-    assert.match(svc, /parseResponse: false/);
+    // ⚠️ 取 CSS 原文必须走**普通 JSON 接口**：umi 的 errorConfig.adaptor 会对每个响应
+    //    跑 adaptAdminResponse，拿到裸 text/css 就抛 BizError（parseResponse 在 adaptor
+    //    之后才生效，救不回来）。所以这里断言的是"没有"那两个开关。
+    assert.doesNotMatch(svc, /parseResponse/);
+    assert.doesNotMatch(svc, /responseType: 'text'/);
   });
 
   it('站点配置里的「界面风格」会列出上传的主题，但初始化向导阶段不去调鉴权接口', () => {
@@ -92,6 +95,16 @@ describe('主题（前台皮肤）：服务端接线', () => {
     const provider = code(readRepo('packages/server/src/provider/theme/theme.provider.ts'));
     assert.match(provider, /activeAll\(/);
     assert.match(provider, /updateSiteInfo\(\{ uiStyle: id \}/);
+  });
+
+  it('后台看 CSS 走 JSON 信封，公开的 theme.css 才是 text/css', () => {
+    const adminCtl = code(readRepo('packages/server/src/controller/admin/theme/theme.controller.ts'));
+    // 后台接口必须回 {statusCode, data:{css}}，否则 umi 的 adaptor 会抛 BizError
+    assert.match(adminCtl, /statusCode: 200,\s*data: \{[\s\S]*?css: text,/);
+    assert.doesNotMatch(adminCtl, /res\.type\('text\/css/);
+    const pub = code(readRepo('packages/server/src/controller/public/theme.controller.ts'));
+    // 给浏览器当样式表的那份必须是裸 CSS
+    assert.match(pub, /text\/css/);
   });
 
   it('公开接口用稳定地址 + ETag/no-cache（换主题不依赖页面重新渲染）', () => {

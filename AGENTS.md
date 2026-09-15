@@ -2973,6 +2973,17 @@ CSS 分词虽然把注释当分隔符、`java/*x*/script:` 严格说不会变成
 `<link rel="stylesheet" href="/api/public/theme.css?v=warm-paper"/>`，经前台代理取 CSS → 200；
 磁盘上 `vanblog_dev/static/themes/warm-paper-28381fac.css` 在。测完已切回 apple（主题文件保留）。
 
+⚠️ **后台接口一律回 JSON 信封 `{statusCode, data}`，别直接回裸文本**：
+后台 umi 的 `request` 配了 `errorConfig.adaptor`（`services/van-blog/requestError.js` 的
+`adaptAdminResponse`），它会对**每一个**响应跑一遍，拿不到 `{statusCode,data}` 就判定失败并抛
+**BizError**。第一版「查看 CSS」的接口直接 `res.type('text/css').send(css)`，
+点一下就报 `读取 CSS 失败：BizError`；而服务层的 `parseResponse: false` / `responseType: 'text'`
+**救不回来**（adaptor 在它之前就跑完了）。修法：`GET /api/admin/theme/:id/css` 改成回
+`{statusCode:200, data:{id,name,url,hash,size,css}}`，前台读 `res.data.css`；
+真正要给浏览器当样式表用的 `/api/public/theme.css` 仍然必须是裸 `text/css`（那是 `<link>`，不走 umi）。
+另外 `size` 要用 `Buffer.byteLength` 而不是 `text.length`：主题里有中文注释时字符数比字节数小，
+和列表里显示的上传大小对不上，看着像文件被改小了。
+
 **测试**：`packages/server/src/provider/theme/theme.provider.spec.ts`（25 条，mock 掉
 settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传落盘与元数据、同 id 覆盖删旧文件、
 只有改到当前主题才触发渲染、启用写 uiStyle、内置/在用的不给删）；
@@ -2987,7 +2998,7 @@ settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传�
 |---|---|
 | server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 60 文件 / 558 用例全绿 |
-| admin `node --test tests/unit` | 83 套件 / 342 用例全绿 |
+| admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 824 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

@@ -7,7 +7,6 @@ import {
   NotFoundException,
   Param,
   Post,
-  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -16,7 +15,6 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { Response } from 'express';
 import { config } from 'src/config';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { ApiToken } from 'src/provider/swagger/token';
@@ -103,9 +101,18 @@ export class ThemeController {
     return { statusCode: 200, data, message: '已删除' };
   }
 
-  /** 看某个上传主题的 CSS 原文（后台"查看/复制"用；内置主题返回 404，它们在前台产物里） */
+  /**
+   * 看某个上传主题的 CSS 原文（后台「查看/复制」用；内置主题返回 404，它们在前台产物里）。
+   *
+   * ⚠️ 这里**必须**用和其它接口一样的 JSON 信封 `{statusCode, data}`，不能直接回 text/css：
+   * 后台 umi 的 `request` 配了 `errorConfig.adaptor`，它会对**每一个**响应跑一遍
+   * `adaptAdminResponse(resData)`，拿到的不是 `{statusCode,data}` 就判定失败并抛 **BizError**
+   * （前台第一版点「查看 CSS」就是这么炸的，`parseResponse: false` 也救不回来 —— adaptor 在
+   * 它之前就跑完了）。真正要给浏览器当样式表用的那份是公开的 `/api/public/theme.css`，
+   * 那个才必须是 text/css。
+   */
   @Get('/:id/css')
-  async css(@Param('id') id: string, @Res() res: Response) {
+  async css(@Param('id') id: string) {
     const theme = await this.themeProvider.findOne(id);
     if (!theme) {
       throw new NotFoundException(`没有这个主题：${id}`);
@@ -120,6 +127,18 @@ export class ThemeController {
     } catch {
       throw new NotFoundException('主题文件不在了（可能被手工删掉），重新上传一次即可');
     }
-    res.type('text/css; charset=utf-8').send(text);
+    return {
+      statusCode: 200,
+      data: {
+        id: theme.id,
+        name: theme.name,
+        url: theme.url,
+        hash: theme.hash,
+        // 用字节数而不是字符数：列表里显示的是上传时记的字节数，
+        // 主题里有中文注释时两者会差一截，看着像"文件被改小了"
+        size: Buffer.byteLength(text, 'utf8'),
+        css: text,
+      },
+    };
   }
 }

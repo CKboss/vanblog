@@ -96,12 +96,19 @@ export default function ThemeTab() {
       return;
     }
     try {
-      const text = await getThemeCss(record.id);
-      setCssTitle(`${record.name}（${record.id}）`);
-      setCssText(typeof text === 'string' ? text : JSON.stringify(text, null, 2));
+      const res = await getThemeCss(record.id);
+      if (res?.statusCode !== 200) {
+        // 后端用 NotFoundException 时 umi 会抛错，但也可能返回信封里的错误，两边都兜住
+        message.error(res?.message || '读取 CSS 失败');
+        return;
+      }
+      setCssTitle(`${res.data?.name || record.name}（${record.id}）`);
+      setCssText(res.data?.css ?? '');
       setCssOpen(true);
     } catch (e) {
-      message.error(`读取 CSS 失败：${e?.message || e}`);
+      // umi 的 BizError/HttpError 都只有 message，直接把后端的话带出来，别只显示 "BizError"
+      const detail = e?.data?.message || e?.message || String(e);
+      message.error(`读取 CSS 失败：${detail}`);
     }
   };
 
