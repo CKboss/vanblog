@@ -554,6 +554,9 @@ export interface BackupListEntry {
   manifest?: FullBackupManifest | null;
 }
 
+/** 整站备份归档本体的文件名（不含 .manifest.json / .sha256 之类的 sidecar） */
+export const FULL_BACKUP_ARCHIVE_RE = /^vanblog-full-.+\.tar\.(zst|xz|gz)$/;
+
 /** 列出已有的整站备份（读 sidecar，不解压）。 */
 export function listFullBackups(backupDir: string): BackupListEntry[] {
   const dir = backupDir;
@@ -562,7 +565,11 @@ export function listFullBackups(backupDir: string): BackupListEntry[] {
   }
   return fs
     .readdirSync(dir)
-    .filter((name) => name.startsWith('vanblog-full-') && !name.endsWith('.manifest.json'))
+    // ⚠️ 只认归档本体，别用"排除已知 sidecar"的写法：sidecar 会越来越多
+    // （.manifest.json 是清单，.sha256 是 vanblog.sh 写的校验和），
+    // 少排除一个就会在后台「备份恢复」列表里多出一条假归档
+    // （格式认不出来，点恢复只会得到"无法识别压缩格式"）。
+    .filter((name) => FULL_BACKUP_ARCHIVE_RE.test(name))
     .map((name) => {
       const full = path.join(dir, name);
       const stat = fs.statSync(full);

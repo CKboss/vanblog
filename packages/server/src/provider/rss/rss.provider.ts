@@ -11,10 +11,23 @@ import { config } from 'src/config';
 import { MarkdownProvider } from '../markdown/markdown.provider';
 import { washUrl } from 'src/utils/washUrl';
 
+/** 订阅源默认保留多少条（0 = 不限制）。可用 VANBLOG_RSS_ITEM_LIMIT 覆盖。 */
+export const DEFAULT_RSS_ITEM_LIMIT = 50;
+
 @Injectable()
 export class RssProvider {
   logger = new Logger(RssProvider.name);
   timer = null;
+
+  static itemLimit(): number {
+    const raw = process.env.VANBLOG_RSS_ITEM_LIMIT;
+    if (raw === undefined || raw === '') {
+      return DEFAULT_RSS_ITEM_LIMIT;
+    }
+    const n = Number(raw);
+    // 负数/NaN 一律当默认值；0 是合法的（表示不限制）
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_RSS_ITEM_LIMIT;
+  }
   constructor(
     private readonly articleProvider: ArticleProvider,
     private readonly metaProvider: MetaProvider,
@@ -40,6 +53,24 @@ export class RssProvider {
     this.logger.log(info + '重新生成 RSS 订阅');
     try {
       let articles = await this.articleProvider.getAll('public', false, false);
+      // ⚠️ 订阅源只保留**最新 N 条**。以前是把全站文章连正文全部渲染一遍：
+      // 实测 53 篇的 markdown-it + highlight.js + katex = **135ms 同步阻塞事件循环**，
+      // 三份 feed 各约 350KB（全文、无条数上限），而这件事每小时跑一次、每次启动跑一次、
+      // 每次编辑文章后 3 分钟再跑一次。文章只会越来越多，这是一条线性增长的定时炸弹。
+      // 50 条对阅读器来说已经很宽裕（多数阅读器只显示最新几十条），
+      // 想全量就把 VANBLOG_RSS_ITEM_LIMIT 设成 0。
+      const limit = RssProvider.itemLimit();
+      const totalArticles = articles.length;
+      if (limit > 0 && articles.length > limit) {
+        articles = [...articles]
+          .sort((a: any, b: any) => {
+            const ta = new Date(a?.createdAt || 0).getTime();
+            const tb = new Date(b?.createdAt || 0).getTime();
+            return tb - ta;
+          })
+          .slice(0, limit);
+        this.logger.log(`订阅源只保留最新 ${limit} 条（共 ${totalArticles} 篇，其余不进 feed）`);
+      }
       // 分类整体加密时，分类下的文章同样不能在 RSS 里给出全文。
       // 以前只判断了 article.private，加密分类的文章正文会被原样发布到订阅源。
       const allCategories = ((await this.categoryProvider.getAllCategories(true)) ||
@@ -142,10 +173,14 @@ export class RssProvider {
       }
       const rssPath = path.join(config.staticPath, 'rss');
 
-      fs.mkdirSync(rssPath, { recursive: true });
-      fs.writeFileSync(path.join(rssPath, 'feed.json'), feed.json1());
-      fs.writeFileSync(path.join(rssPath, 'feed.xml'), feed.rss2());
-      fs.writeFileSync(path.join(rssPath, 'atom.xml'), feed.atom1());
+      await fs.promises.mkdir(rssPath, { recursive: true });
+      // 三份序列化结果各约 350KB（大站更大），writeFileSync 会把事件循环按住一会儿；
+      // 这里本来就在异步函数里，没有理由用同步 IO。
+      await Promise.all([
+        fs.promises.writeFile(path.join(rssPath, 'feed.json'), feed.json1()),
+        fs.promises.writeFile(path.join(rssPath, 'feed.xml'), feed.rss2()),
+        fs.promises.writeFile(path.join(rssPath, 'atom.xml'), feed.atom1()),
+      ]);
     } catch (err) {
       this.logger.error('生成订阅源失败！');
       this.logger.error(JSON.stringify(err, null, 2));

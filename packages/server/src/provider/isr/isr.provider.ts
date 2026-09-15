@@ -18,6 +18,18 @@ export class ISRProvider {
   base = 'http://127.0.0.1:3001/api/revalidate?path=';
   logger = new Logger(ISRProvider.name);
   timer = null;
+  /**
+   * 全量渲染的互斥量。一轮 storm ≈ 130 次**串行**重渲染（每篇文章的 id 与别名两条路径
+   * + 分页 + 分类 + 标签 + 6 个固定页），而触发点有 25 处以上（保存/删除文章、批量改标签、
+   * 分类增删改、社交信息、菜单、站点配置、布局、主题切换、JSON 导入、整站恢复、初始化、手动…），
+   * 每小时还有一次定时触发。以前只有 1 秒防抖、**没有互斥**：连着保存 10 篇文章就能叠出
+   * 好几轮同时跑的 storm，把前台和 server 一起拖死（前台每个页面渲染又要回调 server 的公开接口）。
+   */
+  private stormRunning = false;
+  private stormQueued: { info?: string; activeConfig?: ActiveConfig } | null = null;
+  /** 单次请求最多允许连续追加几轮，避免"一直在改"时无限串下去 */
+  private stormChain = 0;
+  private static readonly STORM_CHAIN_MAX = 3;
   constructor(
     private readonly articleProvider: ArticleProvider,
     private readonly rssProvider: RssProvider,
@@ -30,6 +42,49 @@ export class ISRProvider {
       this.logger.debug(`延时自动更新模式，阻止按需 ISR`);
       return;
     }
+    if (this.stormRunning) {
+      // 已经有一轮在跑：把"还要再跑一轮"记下来，等它跑完再补一轮（多次请求合并成一次），
+      // 绝不并发起第二轮。补的那一轮会重新读取当前数据，所以合并不会丢更新。
+      this.stormQueued = { info, activeConfig };
+      this.logger.warn(
+        `上一轮全量渲染还在进行，本轮已合并到它结束后（来源：${info || '未注明'}）`,
+      );
+      return;
+    }
+    this.stormRunning = true;
+    try {
+      await this.runStorm(info, activeConfig);
+    } catch (err) {
+      // 全量渲染本质上是"尽力而为"：失败了不往上抛（调用方有 25 处以上，
+      // 谁忘了 catch 就是一条 unhandledRejection），而且每小时的定时任务会兜底重跑。
+      // 互斥量在 finally 里释放，所以下一次触发不会被一次失败永久卡住。
+      this.logger.error(
+        `全量渲染失败（来源：${info || '未注明'}）：${(err as Error)?.message || err}`,
+      );
+    } finally {
+      this.stormRunning = false;
+    }
+    const queued = this.stormQueued;
+    this.stormQueued = null;
+    if (queued && this.stormChain < ISRProvider.STORM_CHAIN_MAX) {
+      this.stormChain += 1;
+      this.logger.log(
+        `补跑一轮全量渲染（第 ${this.stormChain} 次追加，来源：${queued.info || '未注明'}）`,
+      );
+      await this.activeAllFn(queued.info, queued.activeConfig);
+    } else if (queued) {
+      this.logger.warn(
+        `已连续追加 ${ISRProvider.STORM_CHAIN_MAX} 轮全量渲染，丢弃后续请求（来源：${
+          queued.info || '未注明'
+        }）——通常说明有人在批量改数据，下一小时的定时任务会兜底`,
+      );
+    }
+    if (this.stormChain > 0 && !this.stormQueued) {
+      this.stormChain = 0;
+    }
+  }
+
+  private async runStorm(info?: string, activeConfig?: ActiveConfig) {
     if (info) {
       this.logger.log(info);
     } else {
@@ -98,9 +153,20 @@ export class ISRProvider {
     return `http://127.0.0.1:3001/api/revalidate?${params.toString()}`;
   }
 
+  /**
+   * 单次 revalidate 请求的超时。
+   * ⚠️ 以前 axios 完全没有超时：前台卡住一个页面（比如某篇文章渲染要 500ms 变成几十秒），
+   * 这个 await 就永远不返回 —— 串行的 storm 会**永久停在半路**，
+   * 而下一小时的定时任务或下一次编辑又会起一轮，越堆越多。
+   */
+  private get requestTimeoutMs(): number {
+    const raw = Number(process.env.VANBLOG_ISR_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 10000;
+  }
+
   async testConn() {
     try {
-      await axios.get(this.buildRevalidateUrl('/'));
+      await axios.get(this.buildRevalidateUrl('/'), { timeout: this.requestTimeoutMs });
       return true;
     } catch {
       return false;
@@ -116,7 +182,16 @@ export class ISRProvider {
         this.logger.warn(`第${t}次重试触发增量渲染！来源：${info || '首次启动触发全量渲染！'}`);
       }
       if (r) {
-        fn(info);
+        // ⚠️ 以前是 `fn(info)` 就完事：不 await、不 catch。
+        // fn 里是 activeAllFn（现在带互斥），不 await 的话调用方以为"触发完了"，
+        // 而它抛出的 rejection 只能靠全局 unhandledRejection 兜着（日志里一行，谁也不知道哪轮失败了）。
+        try {
+          await fn(info);
+        } catch (err) {
+          this.logger.error(
+            `触发全量渲染时出错（来源：${info || '未注明'}）：${(err as Error)?.message || err}`,
+          );
+        }
         succ = true;
         break;
       } else {
@@ -233,7 +308,7 @@ export class ISRProvider {
 
   async activeUrl(url: string, log: boolean) {
     try {
-      await axios.get(this.buildRevalidateUrl(url));
+      await axios.get(this.buildRevalidateUrl(url), { timeout: this.requestTimeoutMs });
       if (log) {
         this.logger.log(`触发增量渲染成功！ ${url}`);
       }

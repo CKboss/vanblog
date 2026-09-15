@@ -79,16 +79,27 @@ export class MetaProvider {
       );
     }
     // 还需要增加每天的
-    this.viewProvider.createOrUpdate({
-      date: dayjs().format('YYYY-MM-DD'),
-      viewer: newViewer,
-      visited: newVisited,
-    });
+    // ⚠️ 这两处是"发出去就不管"的写入（不能拖慢访客请求），但**必须挂 catch**：
+    // 以前没有，Mongo 抖一下就是一个 unhandledRejection，只在全局兜底日志里留一行，
+    // 谁也看不出是哪次统计写失败了 —— 计数就这么静默丢掉。
+    this.viewProvider
+      .createOrUpdate({
+        date: dayjs().format('YYYY-MM-DD'),
+        viewer: newViewer,
+        visited: newVisited,
+      })
+      .catch((err) =>
+        this.logger.warn(`写入每日访客统计失败（不影响访问）：${err?.message || err}`),
+      );
     //增加每个路径的。
-    this.visitProvider.add({
-      pathname: pathname,
-      isNew: isNewVisitorByArticle,
-    });
+    this.visitProvider
+      .add({
+        pathname: pathname,
+        isNew: isNewVisitorByArticle,
+      })
+      .catch((err) =>
+        this.logger.warn(`写入路径访问统计失败（不影响访问）：${err?.message || err}`),
+      );
     return { visited: newVisited, viewer: newViewer };
   }
 

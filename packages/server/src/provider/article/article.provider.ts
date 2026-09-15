@@ -5,6 +5,11 @@ const SEARCH_MAX_RESULTS = 200;
 
 import { pickCoverFromContent } from 'src/utils/coverFromContent';
 import { safeDecodeURIComponent } from 'src/utils/safeDecode';
+import {
+  articleDefaultsStage,
+  orderPublicArticles,
+  topSortSpec,
+} from 'src/utils/publicArticleOrder';
 import { verifyAccessPassword } from 'src/utils/crypto';
 import {
   Logger,
@@ -822,39 +827,23 @@ export class ArticleProvider {
     const paging = sanitizePagination(option.page, option.pageSize, { allowUnlimited: true });
     option.page = paging.page;
     option.pageSize = paging.pageSize;
-    let articlesQuery = this.articleModel.find(query, view).sort(sort);
-    if (option.pageSize != UNLIMITED_PAGE_SIZE && !isPublic) {
-      articlesQuery = articlesQuery.skip(paging.skip).limit(option.pageSize);
-    }
+    // 公开列表要不要在**数据库里**完成"置顶优先 + 分页"（见 orderPublicArticles 的说明）
+    const wantDbPaging = isPublic && option.pageSize != UNLIMITED_PAGE_SIZE;
 
-    let articles = await articlesQuery.exec();
-    // public 下 包括所有的，
-    if (isPublic && option.pageSize != UNLIMITED_PAGE_SIZE) {
-      // 把 top 的诺到前面去
-      const topArticles = articles.filter((a: any) => {
-        const top = a?._doc?.top || a?.top;
-        return Boolean(top) && top != '';
-      });
-      const notTopArticles = articles.filter((a: any) => {
-        const top = a?._doc?.top || a?.top;
-        return !Boolean(top) || top == '';
-      });
-      const sortedTopArticles = topArticles.sort((a: any, b: any) => {
-        const topA = a?._doc?.top || a?.top;
-        const topB = b?._doc?.top || b?.top;
-        if (topA > topB) {
-          return -1;
-        } else if (topB > topA) {
-          return 1;
-        } else {
-          return 0;
-        }
-      });
-      articles = [...sortedTopArticles, ...notTopArticles];
-      const skip = paging.skip;
-      const rawEnd = skip + option.pageSize;
-      const end = rawEnd > articles.length - 1 ? articles.length : rawEnd;
-      articles = articles.slice(skip, end);
+    let articles: any[];
+    if (wantDbPaging) {
+      articles = await this.findPublicPage(query, view, sort, paging.skip, option.pageSize);
+    } else {
+      let articlesQuery = this.articleModel.find(query, view).sort(sort);
+      if (option.pageSize != UNLIMITED_PAGE_SIZE && !isPublic) {
+        articlesQuery = articlesQuery.skip(paging.skip).limit(option.pageSize);
+      }
+      articles = await articlesQuery.exec();
+      if (isPublic && option.pageSize != UNLIMITED_PAGE_SIZE) {
+        // 理论上走不到这里（wantDbPaging 已经覆盖了同样的条件），留着是为了
+        // findPublicPage 内部聚合失败回退时仍然有正确的语义。
+        articles = orderPublicArticles(articles, paging.skip, option.pageSize);
+      }
     }
     // withWordCount 只会返回当前分页的文字数量
 
@@ -910,6 +899,94 @@ export class ArticleProvider {
 
     resData.total = total;
     return resData;
+  }
+
+  /**
+   * 公开列表页的取数：把"置顶优先 + 分页"整件事交给 MongoDB。
+   *
+   * 以前的做法是**把整个集合连正文捞回 Node**，在 JS 里分成置顶/非置顶两组、排序、拼接，
+   * 最后才 `slice(skip, end)`。explain 实测：内存 SORT、examined=106、returned=53
+   * （≈200KB），而调用方只要 5 条 —— 每翻一页、每次 ISR 重渲染都要重来一遍，
+   * 而且成本随文章数**线性增长**（1000 篇 × 5KB 就是每次 5MB + 一次 JS 全排序）。
+   *
+   * 现在改成聚合管道：`$match → $addFields(isTop/topRank) → $sort → $skip → $limit → $project`，
+   * 排序语义与原来**逐条对齐**（见 orderPublicArticles 与 topSortSpec 的对照测试）：
+   * 置顶组永远按 top 值**降序**排在最前（原来的 JS 就是这么写的，即使调用方传了
+   * sortTop=asc 也不影响置顶组内部的顺序），非置顶组按调用方给的 sort 排。
+   *
+   * ⚠️ 聚合失败时回退到原来的 JS 路径：这是全站最热的读路径，
+   * 宁可慢一点也不能因为一个管道写法问题让整个列表 500。
+   */
+  private async findPublicPage(
+    query: any,
+    view: any,
+    sort: any,
+    skip: number,
+    limit: number,
+  ): Promise<any[]> {
+    try {
+      const rows = await this.articleModel
+        .aggregate([
+          { $match: query },
+          {
+            // top 可能是数字、数字字符串、''、null 或者干脆没有这个字段（老数据）。
+            // "置顶"的判据要和原来 JS 的 `Boolean(top) && top != ''` 一致。
+            $addFields: {
+              isTop: {
+                $let: {
+                  vars: { t: { $ifNull: ['$top', null] } },
+                  in: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $ne: ['$$t', null] },
+                          { $ne: ['$$t', ''] },
+                          { $ne: ['$$t', 0] },
+                          { $ne: ['$$t', false] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          {
+            // 非置顶的一律给 0，这样它们在 $sort 里是常量，顺序完全由后面的 sort 键决定
+            $addFields: {
+              topRank: {
+                $cond: [
+                  { $eq: ['$isTop', 1] },
+                  // ⚠️ 参数名是 `to`，不是 `targetType`：写错时 Mongo 报
+                  // "$convert found an unknown argument: targetType"，而下面的 catch 会
+                  // 静默回退到内存分页 —— 功能"看起来正常"，优化却根本没生效。
+                  // 所以每次改这个管道，都要确认日志里**没有**"回退到内存分页"。
+                  { $convert: { input: '$top', to: 'double', onError: 0, onNull: 0 } },
+                  0,
+                ],
+              },
+            },
+          },
+          // 聚合返回的是原始 BSON，不会应用 schema 默认值；补齐后才能和 find() 的
+          // 响应形状逐字段一致（否则老文档会少一个 cover: "" 之类的字段）
+          articleDefaultsStage(),
+          { $sort: topSortSpec(sort) },
+          { $skip: skip },
+          { $limit: limit },
+          { $project: view },
+        ])
+        .allowDiskUse(true)
+        .exec();
+      return rows;
+    } catch (err) {
+      this.logger.warn(
+        `公开列表的聚合分页失败，回退到内存分页：${(err as Error)?.message || err}`,
+      );
+      const all = await this.articleModel.find(query, view).sort(sort).exec();
+      return orderPublicArticles(all, skip, limit);
+    }
   }
 
   async getByIdOrPathname(id: string | number, view: ArticleView) {
