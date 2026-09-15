@@ -3688,6 +3688,32 @@ cp 会报 `are the same file` 并非 0 退出、整层构建失败；用 `tar -c
 清理临时 mongo 目录时还会撞上 root 属主文件的 `Permission denied`。
 本机验证请改用 `vanblog_dev/run-image-stack.sh`（用容器 IP + `--add-host`，不依赖 `--link`）。
 
+### 7.43.1 后台日志渲染的存储型 XSS（`ansi-to-html` 的 escapeXML 默认是关的）
+
+`packages/admin/src/components/TerminalDisplay/index.tsx` 是**整个后台唯一一处**
+`dangerouslySetInnerHTML`：它把「日志管理 → 系统日志」的文本经 `ansi-to-html` 转成带颜色的
+HTML 再塞进 `<code>`。而这个库的 `escapeXML` **默认值是 `false`**（`lib/ansi_to_html.js:21`
+的 defaults 里写着），也就是日志里的 `<`、`>`、`&` 会原样成为标签。
+
+日志里能不能出现访客可控的字符串？能：404 的请求路径、上传的文件名、评论作者、
+以及被 pipe 进 server 日志的 website/waline 子进程输出里的 URL。任何一条进了系统日志，
+下一个打开那个页面的管理员就会执行攻击者的脚本 —— 而后台 token 放在 localStorage 里，
+等于直接把管理员会话交出去（比"能改文章"严重得多）。
+
+修法是一行：`new convert({ escapeXML: true })`。ANSI 颜色照常渲染（这正是这个库的用途），
+只是尖括号变实体。测试 `packages/admin/tests/unit/terminalDisplayXss.test.js`（3 条）
+不只断言源码写了这个选项，还**用真库跑**：`<img src=x onerror=alert(1)>` 必须变成 `&lt;img`，
+颜色 span 必须还在，而且**默认配置的对照组必须仍然漏出真标签**（否则无法证明这个修复有必要）。
+第三条断言盯着"全后台只允许这一处 `dangerouslySetInnerHTML`"，以后谁再加第二处就会红，
+逼他先想清楚"这里的数据是谁写的"。
+
+⚠️ 写这条断言时踩了两个 grep 的坑：`src/.umi/.cache/.mfsu/*.async.js` 与
+`src/.umi-production/.cache/webpack/*.pack` 里都能搜到这个字符串（打包产物），
+必须同时 `--exclude-dir=.umi --exclude-dir=.umi-production` **和**限定源码后缀 ——
+只限定后缀不够（mfsu 的产物就是 `.js`），只排除目录也不够（`.pack` 不是源码后缀但照样命中）。
+另外 `escapeXML: true` 会把中文也转成实体（`红了` → `&#x7EA2;&#x4E86;`），
+所以断言颜色时要用英文样例，别断言"输出里包含中文原文"。
+
 ### 7.44 IO 与并发（C10K）：先测再改，改完再测
 
 用户要"IO 性能优化，C10K 更好"。这一节的做法是**先建一个可复现的压测台，再动代码**，
@@ -3782,7 +3808,7 @@ cp 会报 `are the same file` 并非 0 退出、整层构建失败；用 `tar -c
 |---|---|
 | server `jest` | 699 用例：698 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 62 文件 / 622 用例全绿 |
-| admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
+| admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1106 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 
