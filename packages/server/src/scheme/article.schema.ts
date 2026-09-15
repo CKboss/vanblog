@@ -41,10 +41,12 @@ export class Article extends Document {
   @Prop({ default: false, index: true })
   deleted: boolean;
 
-  @Prop({ default: 0 })
+  // 这三个字段是后台「阅读排行 / 最近浏览」和列表按热度排序的依据，
+  // 没索引时每次都是全表扫 + 内存排序（explain 里能看到 SORT 阶段），文章一多就顶不住。
+  @Prop({ default: 0, index: true })
   viewer: number;
 
-  @Prop({ default: 0 })
+  @Prop({ default: 0, index: true })
   visited: number;
 
   @Prop()
@@ -53,7 +55,7 @@ export class Article extends Document {
   @Prop({ default: '' })
   cover?: string;
 
-  @Prop()
+  @Prop({ index: true })
   lastVisitedTime: Date;
 
   @Prop({

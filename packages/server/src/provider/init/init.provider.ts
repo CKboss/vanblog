@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { config } from 'src/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { InitDto } from 'src/types/init.dto';
@@ -83,7 +84,11 @@ export class InitProvider {
   async initRestoreKey() {
     const key = makeSalt();
     await this.cacheProvider.set('restoreKey', key);
-    const filePath = path.join('/var/log/', 'restore.key');
+    // ⚠️ 以前写死 '/var/log/'：容器里正好有这个目录所以看不出来，
+    //    但本机/裸机部署（日志目录由 config.log 决定）就一直写失败，
+    //    密钥只存在于 stdout 日志里 —— 而「忘记密码」流程指着这个文件。
+    const logDir = config.log || '/var/log';
+    const filePath = path.join(logDir, 'restore.key');
     try {
       // mode 0o600：这个文件是「忘记密码」的恢复密钥，而 /var/log 是**挂载到宿主机**的卷，
       // 默认 0644 意味着宿主机上任何用户都能读到它，而且它还会被 vanblog.sh backup 一起打包。

@@ -97,10 +97,29 @@ import { PipelineController } from './controller/admin/pipeline/pipeline.control
 import { TokenController } from './controller/admin/token/token.controller';
 import { initJwt } from './utils/initJwt';
 
+/** 环境变量转数字：非法/缺失就用默认值（连接参数写错成 NaN 会让驱动直接抛） */
+function num(value: string | undefined, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 @Module({
   imports: [
     MongooseModule.forRoot(config.mongoUrl, {
+      // autoIndex 必须留着：这个项目没有迁移工具，索引全靠启动时同步
+      // （本轮新加的 visits 复合索引、articles 的三个统计索引就是靠它建起来的）。
       autoIndex: true,
+      // ⚠️ 以前什么都不配，全用驱动默认值：
+      //   - serverSelectionTimeoutMS 默认 30s → mongod 重启时每个请求都要干等 30 秒才失败；
+      //   - socketTimeoutMS 默认 0（**永不超时**）→ 网络黑洞（宿主挂起/VPN 断）时，
+      //     已借出的连接会一直卡着，连接池 100 个socket 全部占满 = 整站假死，只能等 TCP 自己放弃。
+      // 默认值都留了余量，避免误伤长任务（整站备份/恢复、大集合导出）；可用环境变量再调。
+      serverSelectionTimeoutMS: num(process.env.VANBLOG_MONGO_SERVER_SELECTION_TIMEOUT_MS, 10000),
+      connectTimeoutMS: num(process.env.VANBLOG_MONGO_CONNECT_TIMEOUT_MS, 10000),
+      socketTimeoutMS: num(process.env.VANBLOG_MONGO_SOCKET_TIMEOUT_MS, 120000),
+      maxPoolSize: num(process.env.VANBLOG_MONGO_MAX_POOL_SIZE, 100),
+      retryWrites: true,
+      retryReads: true,
     }),
     MongooseModule.forFeature([
       { name: Article.name, schema: ArticleSchema },

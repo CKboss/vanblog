@@ -2,6 +2,7 @@
 const SEARCH_MAX_TIME_MS = 5000;
 
 import { pickCoverFromContent } from 'src/utils/coverFromContent';
+import { safeDecodeURIComponent } from 'src/utils/safeDecode';
 import { verifyAccessPassword } from 'src/utils/crypto';
 import {
   Logger,
@@ -364,14 +365,14 @@ export class ArticleProvider {
         return;
       }
     }
-    const oldViewer = article.viewer || 0;
-    const oldVIsited = article.visited || 0;
-    const newViewer = oldViewer + 1;
-    const newVisited = isNew ? oldVIsited + 1 : oldVIsited;
-    const nowTime = new Date();
+    // ⚠️ 以前是「读出来 +1 再写回绝对值」：两个人同时看同一篇文章，后写的会覆盖先写的，
+    //    阅读量**永久少计**。visit / meta 两个 provider 早就改成原子 $inc 了，这里漏了。
     await this.articleModel.updateOne(
       { id: article.id },
-      { visited: newVisited, viewer: newViewer, lastVisitedTime: nowTime },
+      {
+        $inc: isNew ? { viewer: 1, visited: 1 } : { viewer: 1 },
+        $set: { lastVisitedTime: new Date() },
+      },
     );
   }
 
@@ -380,14 +381,13 @@ export class ArticleProvider {
     if (!article) {
       return;
     }
-    const oldViewer = article.viewer || 0;
-    const oldVIsited = article.visited || 0;
-    const newViewer = oldViewer + 1;
-    const newVisited = isNew ? oldVIsited + 1 : oldVIsited;
-    const nowTime = new Date();
+    // 同上：原子 $inc，别再读出来 +1 写回绝对值（并发会丢计数）
     await this.articleModel.updateOne(
       { id: id },
-      { visited: newVisited, viewer: newViewer, lastVisitedTime: nowTime },
+      {
+        $inc: isNew ? { viewer: 1, visited: 1 } : { viewer: 1 },
+        $set: { lastVisitedTime: new Date() },
+      },
     );
   }
 
@@ -933,7 +933,9 @@ export class ArticleProvider {
     return await this.articleModel
       .findOne(
         {
-          pathname: decodeURIComponent(pathname),
+          // ⚠️ 不能直接 decodeURIComponent：别名来自 URL，`%25` 这种就能让它抛 URIError，
+          //    公开接口因此 500（实测过）。解不开就按字面值查，最多 404。
+          pathname: safeDecodeURIComponent(pathname),
           $and,
         },
         this.getView(view),
