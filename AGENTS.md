@@ -3163,7 +3163,7 @@ keep 不是正整数就 `return 0`、`rm -f "${dir:?}/..."` 带 `:?` 保护（di
 | 项 | 实测 | 暂缓原因 |
 | --- | --- | --- |
 | 首页/分页把**全文**塞进 `__NEXT_DATA__` | HTML 114KB（gzip 33KB），`__NEXT_DATA__` 占 31.8%（gzip 后 **54.8%**）；5 篇 content 25KB，卡片只要 3.3KB 摘要 → **87% 白送**；模拟修完 gzip −31.8% | 要在 server 侧出 `excerpt`：把 `utils/articleExcerpt.ts`（围栏感知的 `findMoreMarker`、200 字回退、截断链接修复、代理对安全）移植过去，并让 `markdown.provider.getDescription` 改为委托它，否则两份实现会漂。跨 server+website，得配"两边摘要一致"的对照测试；还要处理 9 篇没有 `<!-- more -->` 的文章（#410 那个"卡片里露出 `[文字](url)` 括号"的回归就出在这条路径上） |
-| ByteMD **编辑器**进了每个 markdown 页面的首屏 JS | 服务端 chunk 1148 个模块，含 9 个 `codemirror-ssr`（源码 1.97MB）、57 个 `@popperjs/core`；`bytemd`/`codemirror-ssr`/`@bytemd/react` 都**没有 `sideEffects` 字段**，webpack 不敢丢；生产估计 150–250KB min+gz（**没有生产构建，未实测**） | 两条路都要跑生产构建对比：① 摘要在服务端渲染成 HTML（和上一条一起做最划算，注意仍要过 `sanitizeMarkdownSchema`）②内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标 `sideEffects:false`。另外 `dynamic(..., {ssr:true})` 在首页的**初始** script 列表里 —— 它一点都不 defer |
+| ~~ByteMD **编辑器**进了每个 markdown 页面的首屏 JS~~ **这条判断是错的，已被生产构建推翻**（见 §7.45）：那个"1148 个模块、含 9 个 codemirror-ssr"的证据来自 **dev/server chunk**，不是浏览器下载的产物。真跑 `next build` 后逐个 chunk 搜 `CodeMirror`/`tippy`/`popper`/编辑器工具栏字符串，**一个都没有** —— 编辑器本来就没进客户端包。原来的记录：| 两条路都要跑生产构建对比：① 摘要在服务端渲染成 HTML（和上一条一起做最划算，注意仍要过 `sanitizeMarkdownSchema`）②内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标 `sideEffects:false`。另外 `dynamic(..., {ssr:true})` 在首页的**初始** script 列表里 —— 它一点都不 defer |
 | `/timeline` 带 42.5KB 没人读的数据 | pageProps 73.5KB 里 `sortedArticles`(21.3KB) + `yearGroup.articles`(21.2KB) 都无读者（`TimelineArchives` 只在 `months.length===0` 时才读，实测 4 个年份组一个都不满足） | gzip 后只省 6.6%（两份 JSON 高度相似），收益主要在解析/内存；要同步改 `timelineMonths` 的测试与"没有日期的文章"回退路径 |
 | 每张卡片一个未合并的阅读量请求 | 5 次串行 XHR（89ms vs 并行 36ms），每次回 220B 的**整个 visit 文档**只为显示一个整数，而这数字 pageProps 里已经有 | 要加批量接口（或并进 `/comments/counts` 那种 50ms 合并器，`commentApi.ts:96-146` 是现成范例）；顺带把初始值从 pageProps 里 seed，省掉卡片上 `"..."` → 数字的抖动 |
 | apple 皮肤 46KB CSS 在全局表里 | 全局 CSS 72.7KB（gzip 16.3KB）：apple 46.2KB + markdown 相关 43KB；用 `default`/自定义主题时那 46KB 纯浪费，且 markdown 那部分在 `/link`、`/tag`、`/category`、`/timeline` 上也用不到 | 现在主题机制已经有 `/api/public/theme.css` 这条路，内置 apple 也可以走；但 apple.css 依赖"在 Tailwind 之后引入"的顺序，挪成 `<link>` 要对两种皮肤做视觉对比 |
@@ -3802,12 +3802,136 @@ HTML 再塞进 `<code>`。而这个库的 `escapeXML` **默认值是 `false`**�
 公开写接口另有 30/min 的限制，收益不大）；没动 mongo 的 `maxPoolSize`（100 对单进程 Node 够用，
 真正的瓶颈不在连接数）；没开 Node cluster（见上）；没给 caddy 加缓存插件（标准版没有）。
 
+### 7.45 前台"打开顺滑"这一轮（生产构建实测，不是 dev 数字）
+
+⚠️ **先纠正一条错误结论**：§7.38.2 里写"ByteMD 编辑器进了每个 markdown 页面的首屏 JS，
+估计 150–250KB"——**错的**。那份证据（chunk 里 1148 个模块、9 个 `codemirror-ssr`、
+57 个 `@popperjs/core`）取自 **dev/server chunk**：dev 产物没压缩、没 tree-shake，
+`.next/` 里连 `BUILD_ID` 都是空的。**跑了真 `next build` 之后逐个 chunk 搜
+`CodeMirror` / `tippy` / `popper` / 编辑器工具栏字符串，一个都没有** —— 编辑器本来就没进客户端包。
+教训：谈"首屏 JS 里有什么"，只能用生产构建的产物；dev chunk 的模块清单只能当线索，不能当结论。
+（`MarkdownView.tsx` 仍然改成不 import `@bytemd/react` 那个桶、改用内联的 viewer-only 模块
+`MarkdownViewer.tsx`，并加了 spec 钉住 —— 这是防以后有人把编辑器拽回来，不是在修一个现存问题。）
+
+**真正的大头是 highlight.js**：222,215 B 原文 / **65,890 B gzip**，以前只要页面渲染 markdown 就会带上，
+哪怕整篇一个代码块都没有。现在渲染器从两档变三档：`Markdown/index.tsx` 在原有
+Base/Rich（靠嗅探 mermaid 围栏与行内公式）之外加了 **`MarkdownPlain`**（不含 highlight.js / KaTeX / mermaid），
+由新的 `utils/hasFencedCode.ts` 决定走哪一档 —— 嗅探**宁可误判也不能漏判**：
+误判只是多下载一个 chunk，漏判会让代码块没有高亮。
+
+**实测（生产构建，页面 HTML 引用到的全部资源 gzip 之和）**：
+
+| 页面 | 改造前 | 改造后 | 变化 |
+| --- | --- | --- | --- |
+| `/` | 458,979 B | **398,286 B** | **−13.2%** |
+| `/link` | 429,632 B | **373,583 B** | **−13.0%** |
+| `/about` | 445,336 B | **390,850 B** | **−12.2%** |
+| `/timeline` | 251,698 B | 246,837 B | −1.9% |
+| `/tag` | 239,239 B | 234,379 B | −2.0% |
+
+产物里核对过：53 篇文章中**仍有 8 篇**带 `hljs-*` 的 token span、且那些页面照样引用 hljs chunk
+（有代码块的文章不受影响），首页与 `/link`、`/about`、`/tag`、`/timeline` 不再引用。
+全局 CSS 的 hash 前后完全相同（`d9c0aa857e98492b.css`）—— 这轮改动是纯 JS 的，不可能影响样式。
+Next 自己的 First Load JS 表几乎不动（`/` 297→293 kB），因为它**不统计 `dynamic(...,{ssr:true})`
+的 chunk** —— 这也正是上一条错误结论的来源，看这张表会以为什么都没变。
+
+**阅读量数字：既慢又是错的**。每张列表卡都渲染一个 `<PostViewer>`，它在 `useEffect` 里
+无条件请求 `GET /api/public/article/viewer/:id`：首页 5 张卡 = 5 次串行 XHR，
+每次回一个 ~220B 的**整条 visit 文档**只为显示一个整数，而且卡片先显示 `"..."` 再跳成数字
+（每张卡一次文字位移）。改成从 pageProps 里已有的 `article.viewer` 直接渲染 +
+`utils/viewerApi.ts` 合并后台刷新（抄的是评论数那套 50ms 合并器的写法）。
+浏览器实测：首页客户端请求 **42 → 37**（正好少掉那 5 个），卡片首屏就是
+145/127/87/71/86 而不是 `...` → 38/10/2/1/3。
+⚠️ **而且旧数字是错的**：那个接口读的是"按 pathname 记的 visit 台账"，
+在引入拼音别名之后**同一篇文章被拆成了两条**（数字 id 一条、别名一条），
+而 `article.viewer` 是原子 `$inc` 的累计值 —— 卡片以前显示的是**半截计数**。
+（把这两套台账合并是 server 侧的事，见 §7.46，不要在前台打补丁。）
+
+**`revalidate` 加了下限与 NaN 兜底**：`VAN_BLOG_REVALIDATE_TIME` 以前直接 `parseInt` 塞进配置，
+delay 模式默认 **10 秒**（有流量的页面每 10 秒一次完整 SSR + 两次 API 调用），
+写成非数字还会得到 NaN 让 Next 在构建期报错。现在夹到最小值；
+按需模式另给一个很长的兜底 revalidate —— `fallback:"blocking"` + `revalidate:{}` 的组合
+意味着**按需生成的页面永不过期**，一旦 revalidate 触发丢了就会一直旧下去，
+有了兜底就能自愈（代价是最坏情况下内容旧一个周期，比"永远旧"好）。
+
+顺手：`components/WaLine/index.tsx` 以前在**渲染函数体内**调 `dynamic()`，
+每次渲染都产生一个新的组件类型 → 子组件被反复 remount；已提到模块作用域（有 spec 钉住）。
+
+**没做的一件事（不是风险问题，是 Next 13 不支持）**：把 apple.css（46KB）与 markdown 专用的那几张表
+从全局阻塞样式里拆出来。pages router 只会产出**一份全局 CSS**，不支持按页引入 CSS，
+试过的写法被 Next 直接拒了，所以改动已回退而不是半成品交上来。
+皮肤字体自托管（解决 FOUT 与那个本机解析不出来的 preconnect 域名）仍然是正解，
+需要字体文件与 unicode-range 切子集，留在 §7.40 C-16。
+
+### 7.46 server 资源占用与逻辑/安全漏洞这一轮（全部有实测）
+
+**浏览统计从"每次浏览 8 条命令 / 4 次写"降到 ~1 条**：一次文章页浏览原来要在
+metas、articles、viewers、visits 四个集合里记同一件事（无批量、无防抖）。
+现在 `utils/viewStatsBuffer.ts` + `provider/stats/` 在内存里合并计数，
+按 5 秒定时、进程退出、以及缓冲超阈值三种时机落库。
+用 mongod 的 `serverStatus().metrics.commands` 差值实测（同一套协议、N=6/6s、扣掉噪声）：
+**8.00 命令 / 4.00 写每次浏览 → ~1.0 命令 / 0.8 写**（1 浏览/秒）；
+一个刷新窗口内 20 次浏览是 0.20 命令/次，100 次是 0.05。
+**退出不丢数**：SIGTERM 现在会打印`浏览统计落库（优雅退出(SIGTERM)）：6 次浏览 → 4 次 Mongo 命令`
+（以前要么 48 条命令，要么硬杀时一条都不落）。
+
+**`visits` 的数据完整性漏洞**：`VisitProvider.add` 里那段"重复键兜底"依赖一个
+**根本不存在的** `{date,pathname}` 唯一索引（`listIndexes` 实测只有非唯一单列索引），
+所以并发首访会**静默产生重复行**，之后 `findOneAndUpdate({date,pathname})` 改的是任意一行。
+真 mongod 上复现过：8 个并发首访 → 8 行。现在 `utils/statsMaintenance.ts` 在启动时合并重复组
+并建唯一索引（幂等、有日志、不在请求路径里跑）。
+⚠️ **合并取 max 而不是 sum**：`visits.viewer/visited` 是**按路径的累计快照**、不是当天增量
+（`add()` 用 `getLastData(pathname).viewer + 1` 起新的一天），线上那两组重复数据也印证了 ——
+同一天两行是 2270 与 2266，**求和会得到 4536，正好是真实值的两倍**。
+max 还天然幂等、并发安全（`max(max(a,b),b)=max(a,b)`），重复启动或多实例都不会把数字吹大。
+开发库上首次运行合并了 2 组、建了 `visits.date_1_pathname_1` 唯一索引与 `viewers.date_1` 唯一索引；
+之后每次启动都是"重复组 0 个、合并删除 0 行；索引已存在"。重复组：**2 → 0**。
+
+**可选的保留期**：两张台账以前**永不清理**（本机 8750 条 visit 跨 800 天，索引已 ~0.88MB）。
+`VANBLOG_VISIT_RETENTION_DAYS` 默认 **0 = 永不删除**（不静默改行为），
+挂在已有的每日 ViewerTask 上（不新增定时器），无论设多少都保留最近若干天，删了多少会打日志。
+
+**去掉每请求的浪费**：`InitMiddleware` 以前**每个 API 请求**都 `users.findOne({})`
+（顺带把密码哈希读进内存），现在缓存"是否已初始化"，于是
+`GET /api/public/article/viewer/:id` 从 2 次 find 降到 1 次；
+`initJwt` 以前在 `main.ts` 与 JwtModule 工厂里**各连一次**且两次都不 `client.close()`
+（每次泄漏一个 MongoClient 与它的 SDAM 定时器），现在只连一次、复用密钥 ——
+启动日志从两条连接变成一条连接 + 一条"复用已读取的 jwt 密钥（不再新建 MongoClient）"；
+`LogProvider.searchLog` 以前每次打开后台日志页都**整文件逐行读 + 逐行 JSON.parse**，
+现在用 `utils/logTail.ts` 限界，响应形状不变。
+
+**安全**：picgo 的插件安装改成 `VANBLOG_ALLOW_PICGO_PLUGINS` 开关，**默认关**，关着的时候给明确报错。
+picgo 1.5.6 拖进来的 `git-clone@0.1.0`（命令注入，**上游无修复**）与 `decompress`（路径穿越，无修复）
+意味着"后台可配的插件字符串"= 拿到后台会话就能在容器里 root 执行；
+picgo 其余上传链路不受影响。website 子进程的重启竞态也修了：
+`stop()` 置空 ctx 并 kill，但子进程的 exit 处理器会无条件 respawn ——
+优雅停机时可能留下一个 detached 的孤儿进程；现在照 waline 的做法加了 `stopping` 标志，
+那个**从未被赋值**的 `starting` 互斥量变成真的，respawn 也加了有限退避。
+
+**cluster 模式**（`VANBLOG_CLUSTER_WORKERS`，**默认 1 = 与今天完全一致**）：
+单进程 Node 是动态请求的实测天花板（§7.44：一万并发拿静态图 1.2 秒，拿要反代的动态接口就不行）。
+`utils/clusterRole.ts` 把两个 cron、两次子进程 spawn、启动期的 wash、首轮全量 ISR/RSS、
+统计维护都限定在 primary；限流/登录/尝试次数的预算与 mongoose `maxPoolSize` 按 worker 数均摊；
+primary 先解出 JWT 密钥再 fork，并转发 SIGTERM、对不退的 worker 补 SIGKILL。
+⚠️ **诚实的保留**：本机没有生产镜像可跑，多进程路径只有"注入假对象的单元测试"，
+**从未真的以 N>1 跑起来过**；而且内存随 worker 数近似线性增长，这与"占用更低"是相反的 ——
+所以默认值保持 1，要用得自己压测过再开。
+
+**测试**：server jest **885 用例、883 绿** + 2 个既有的 `utils/watermark.spec.ts` 离线字体用例
+（基线是 699/698，也就是 **+186 条**），分布在 viewStatsBuffer、viewStats.provider、
+statsMaintenance.provider、statsMaintenance、logTail、log.provider.tail、initJwt、init.provider、
+picgo.provider、clusterRole、clusterBootstrap、website.provider.respawn、audit-hardening-round2；
+`tsc -p tsconfig.dev.json --noEmit` 干净。
+⚠️ CI 的 `server-test.yml` 用的是**显式 testPathPattern 白名单**，新 spec 不加进去就永远不会在 CI 跑 ——
+本轮补了 9 个 token（`viewStatsBuffer|viewStats.provider|statsMaintenance|logTail|initJwt|init.provider|picgo.provider|clusterRole|clusterBootstrap`）。
+以后加 spec 文件都要顺手改这里。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 699 用例：698 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 62 文件 / 622 用例全绿 |
+| server `jest` | 885 用例：883 绿（另 2 个是 `utils/watermark.spec.ts` 的离线字体用例），1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 67 文件 / 672 用例全绿 |
 | admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1106 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
