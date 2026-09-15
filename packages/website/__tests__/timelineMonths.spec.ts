@@ -231,3 +231,85 @@ describe("timeline page wires year and month sections", () => {
     expect(tag).toMatch(/Object\.keys\(props\.sortedArticles\)/);
   });
 });
+
+describe("时间线不再往 pageProps 里塞重复数据", () => {
+  // 实测：/timeline 的 __NEXT_DATA__ 从 73.8KB 降到 30.5KB（-59%），
+  // HTML 从 156,653B 降到 114,160B。省下来的是"同一批文章的两份拷贝"：
+  // 年份组里既带 months（按月分好的文章）又带 articles（整年的文章），
+  // 而组件只在 months 为空时才读 articles。
+  const dated = {
+    "2026": [
+      { id: 1, title: "a", createdAt: "2026-03-05T00:00:00.000Z" },
+      { id: 2, title: "b", createdAt: "2026-03-06T00:00:00.000Z" },
+      { id: 3, title: "c", createdAt: "2026-01-02T00:00:00.000Z" },
+    ],
+  };
+
+  it("有月份分组时 articles 为空，count 仍然准确", () => {
+    const groups = groupTimelineByYearAndMonth(dated as any);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].count).toBe(3);
+    expect(groups[0].articles).toEqual([]);
+    expect(groups[0].months.map((m) => m.month)).toEqual([3, 1]);
+    expect(groups[0].months[0].articles.map((a: any) => a.id)).toEqual([2, 1]);
+  });
+
+  it("整年都解析不出日期时，兜底分支仍然带上 articles（组件这时才读它）", () => {
+    const undated = {
+      "2021": [
+        { id: 9, title: "x", createdAt: "不是日期" },
+        { id: 8, title: "y" },
+      ],
+    };
+    const groups = groupTimelineByYearAndMonth(undated as any);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].months).toEqual([]);
+    expect(groups[0].count).toBe(2);
+    expect(groups[0].articles.map((a: any) => a.id)).toEqual([9, 8]);
+  });
+
+  it("describeTimelineArchives 的计数来自 count，不再依赖 articles.length", () => {
+    const outline = describeTimelineArchives(dated as any);
+    expect(outline.years[0].count).toBe(3);
+  });
+
+  it("组件显示的是 count（articles 已经是空数组了）", () => {
+    const html = renderToStaticMarkup(
+      createElement(TimelineArchives, {
+        yearGroups: groupTimelineByYearAndMonth(dated as any),
+        openArticleLinksInNewWindow: false,
+      } as any)
+    );
+    expect(html).toContain("3篇");
+  });
+
+  it("timeline 页的 props 里没有 sortedArticles，取数函数也不再返回它", () => {
+    const page = readSrc("pages/timeline.tsx");
+    const props = readSrc("utils/getPageProps.ts");
+    expect(page).not.toMatch(/^\s*sortedArticles: Record<string, Article\[\]>;/m);
+    // 取数函数内部仍然要用它来分组，但不能再放进返回值
+    const fn = props.slice(
+      props.indexOf("export async function getTimeLinePageProps"),
+      props.indexOf("export async function getTagPageProps")
+    );
+    expect(fn).toContain("groupTimelineByYearAndMonth(sortedArticles)");
+    // ⚠️ 断言前剥注释：return 块上方那句解释"为什么不再返回 sortedArticles"的注释
+    //    本身就含这个词，不剥掉的话 not.toContain 会被自己的注释满足（本仓库第 9 次踩）。
+    const noComments = (src: string) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((l) => !/^\s*\/\//.test(l))
+        .join("\n");
+    expect(noComments(fn.slice(fn.indexOf("return {")))).not.toContain(
+      "sortedArticles"
+    );
+  });
+
+  it("分类页与标签页的 sortedArticles 不受影响（它们真的在用）", () => {
+    const category = readSrc("pages/category/[category].tsx");
+    const tag = readSrc("pages/tag/[tag].tsx");
+    expect(category).toMatch(/sortedArticles/);
+    expect(tag).toMatch(/sortedArticles/);
+  });
+});

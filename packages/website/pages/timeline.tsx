@@ -9,7 +9,9 @@ import { revalidate } from "../utils/loadConfig";
 export interface TimeLinePageProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
-  sortedArticles: Record<string, Article[]>;
+  // ⚠️ 这里以前还带一个 sortedArticles（按年份分好组的全部文章），但页面只用 yearGroups，
+  // 那份数据会被原样序列化进 __NEXT_DATA__ 与客户端路由的 JSON（实测 21.3KB，
+  // 占 /timeline pageProps 的 29%），没有任何读者。
   yearGroups: TimelineYearGroup<Article>[];
   wordTotal: number;
 }

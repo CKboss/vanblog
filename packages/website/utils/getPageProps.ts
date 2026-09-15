@@ -48,7 +48,8 @@ export async function getTimeLinePageProps(): Promise<TimeLinePageProps> {
   return {
     layoutProps,
     authorCardProps,
-    sortedArticles,
+    // sortedArticles 不再往 pageProps 里塞：它已经被 yearGroups 完整表达，
+    // 多塞一份等于让每个访客下载 21KB 没人读的数据（见 TimeLinePageProps 的说明）。
     yearGroups,
     wordTotal,
   };

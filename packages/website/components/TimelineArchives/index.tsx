@@ -37,7 +37,7 @@ export default function TimelineArchives(props: {
               <h2 className="text-xl md:text-2xl font-bold dark:text-dark">
                 {yearGroup.label}
               </h2>
-              <div className="ml-2 text-sm md:text-base text-gray-400 font-normal dark:text-dark-400">{`${yearGroup.articles.length}篇`}</div>
+              <div className="ml-2 text-sm md:text-base text-gray-400 font-normal dark:text-dark-400">{`${yearGroup.count}篇`}</div>
             </div>
             <div className="pl-3 md:pl-4 border-l border-gray-200 dark:border-dark-2">
               {yearGroup.months.map((monthGroup) => (

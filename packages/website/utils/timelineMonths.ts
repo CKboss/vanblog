@@ -14,6 +14,18 @@ export interface TimelineMonthGroup<T extends TimelineArticleLike = Article> {
 export interface TimelineYearGroup<T extends TimelineArticleLike = Article> {
   year: number;
   label: string;
+  /**
+   * 这一年的文章数。**不要**用 `articles.length` 代替它：
+   * 有月份分组时 `articles` 是空数组（见下），只有"整年都解析不出日期"的兜底分支才会填充。
+   */
+  count: number;
+  /**
+   * 仅在 `months.length === 0`（该年所有文章都解析不出日期）时才有内容。
+   * ⚠️ 以前这里**总是**带上整年的文章数组，而它和 months 里的内容是同一批文章的两份拷贝 ——
+   * 实测 /timeline 的 pageProps 73.5KB 里有 42.5KB（58%）是没人读的重复数据
+   * （`TimelineArchives` 只在 months 为空时才读它），白白塞进 `__NEXT_DATA__`
+   * 和客户端路由的 JSON 里。现在按需填充。
+   */
   articles: T[];
   months: TimelineMonthGroup<T>[];
 }
@@ -124,11 +136,13 @@ export function groupTimelineByYearAndMonth<T extends TimelineArticleLike>(
       return {
         year,
         label: String(year),
-        articles,
+        count: articles.length,
+        // 有月份分组就不必再带一份同样的文章（组件在 months 非空时根本不读 articles）
+        articles: months.length > 0 ? [] : articles,
         months,
       };
     })
-    .filter((group) => group.articles.length > 0);
+    .filter((group) => group.count > 0);
 }
 
 export function describeTimelineArchives(
@@ -139,7 +153,7 @@ export function describeTimelineArchives(
     years: groups.map((yearGroup) => ({
       year: yearGroup.year,
       label: yearGroup.label,
-      count: yearGroup.articles.length,
+      count: yearGroup.count,
       fallbackYearOnly: yearGroup.months.length === 0,
       months: yearGroup.months.map((monthGroup) => ({
         month: monthGroup.month,
