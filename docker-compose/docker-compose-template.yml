@@ -84,6 +84,23 @@ services:
       # 否则正常读者会成片看到 429。
       # VANBLOG_RATE_LIMIT_PER_MIN: '3000'
       # VANBLOG_STATIC_LIMIT_PER_MIN: '30000'
+      # ── 下面这些默认值都等于"和以前一样"，不写就是不启用 ──
+      # 浏览统计的落库节奏：攒够这么多毫秒 / 这么多条就写一次库（默认 5000 / 1000）。
+      # 一次落库固定 4-6 条 Mongo 命令，与攒了多少次浏览无关；调大更省库，代价是
+      # 后台趋势图与 /api/public/meta 的计数最多落后一个周期。设 0 = 每次浏览立刻写。
+      # VANBLOG_VIEW_FLUSH_MS: '5000'
+      # VANBLOG_VIEW_FLUSH_MAX_EVENTS: '1000'
+      # 访问统计保留天数。**默认 0 = 一行都不删**；最近 30 天无论怎么设都会保留。
+      # 参考：本站 8767 行里，90 天的设置会删掉 6520 行（74%）。
+      # VANBLOG_VISIT_RETENTION_DAYS: '365'
+      # 多进程（cluster）。默认 1 = 单进程，与以前完全一致。
+      # ⚠️ 打开前请自己压测：每个 worker 一份完整应用，内存近似线性增长；
+      #    限流与连接池会按 worker 数摊薄（这是对的，否则阈值会被悄悄放宽 N 倍）。
+      # VANBLOG_CLUSTER_WORKERS: '2'
+      # picgo 第三方插件安装。**默认关闭**：picgo 1.5.6 依赖的 git-clone（命令注入）与
+      # decompress（路径穿越）都没有修复版本，而插件名来自后台的一个输入框。
+      # 内置的图床（本地/阿里OSS/七牛/又拍云/sm.ms/github…）都不需要插件。
+      # VANBLOG_ALLOW_PICGO_PLUGINS: 'true'
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static

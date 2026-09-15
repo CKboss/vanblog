@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   formatCountDisplay,
   resolveArticleViewer,
@@ -61,7 +61,6 @@ export default function PostViewer(props: {
   // 挂载后再纠正 —— 绝大多数访客不会有任何变化。
   const [noViewer, setNoViewer] = useState(false);
   const refresh: ViewerRefreshMode = props.refresh ?? (hasSeed ? "never" : "idle");
-  const { current } = useRef({ hasInit: false });
 
   useEffect(() => {
     // 把 pageProps 的值播进模块级缓存：同一次会话里来回跳转不必重复请求
@@ -74,10 +73,14 @@ export default function PostViewer(props: {
   }, [props.id, props.initialViewer, hasSeed]);
 
   useEffect(() => {
-    if (refresh === "never" || current.hasInit) {
+    if (refresh === "never") {
       return;
     }
-    current.hasInit = true;
+    // ⚠️ 这里**不能**再加 `useRef({hasInit:false})` 那种"只跑一次"的门闩：
+    // 这个 effect 有清理函数（取消 idle 回调），而 React 18 的 StrictMode 在开发模式下
+    // 会 mount → unmount → remount，门闩会让第一次的调度被取消后**再也不重排**，
+    // `/about` 的阅读量就永远停在 `...`（实测踩过，headless Chrome 抓到的）。
+    // 重复请求由 utils/viewerApi.ts 的模块级缓存 + 50ms 合并窗口兜住，不需要门闩。
     const cancel = onIdle(() => {
       const cached = getCachedViewerRecord(props.id);
       if (cached) {

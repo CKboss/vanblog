@@ -241,6 +241,17 @@ describe("接线：pageProps 里的 viewer 一路传到 PostViewer", () => {
     expect(src).toMatch(/hasSeed \? "never" : "idle"/);
   });
 
+  it("idle 刷新的 effect 不能带「只跑一次」的门闩（StrictMode 下会让它永远不触发）", () => {
+    // React 18 StrictMode 在开发模式会 mount → unmount → remount；带清理函数的 effect
+    // 如果配一个 useRef 门闩，第一次调度被 cleanup 取消后就再也不会重排。
+    // 实测 /about 的阅读量因此永远停在 "..."（headless Chrome 抓到的）。
+    const src = strip(readSrc("components/PostViewer/index.tsx"));
+    expect(src).not.toContain("hasInit");
+    expect(src).not.toContain("useRef");
+    expect(src).toContain("return cancel;");
+    expect(src).toMatch(/if \(refresh === "never"\) \{\s*return;\s*\}/);
+  });
+
   it("初始 state 只来自 props（模块级缓存在 SSR 是跨请求共享的，不能在渲染期读）", () => {
     const src = strip(readSrc("components/PostViewer/index.tsx"));
     expect(src).toMatch(/useState<ViewerRecord \| null>\(\s*hasSeed \?/);

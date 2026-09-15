@@ -3868,7 +3868,7 @@ delay 模式默认 **10 秒**（有流量的页面每 10 秒一次完整 SSR + �
 **浏览统计从"每次浏览 8 条命令 / 4 次写"降到 ~1 条**：一次文章页浏览原来要在
 metas、articles、viewers、visits 四个集合里记同一件事（无批量、无防抖）。
 现在 `utils/viewStatsBuffer.ts` + `provider/stats/` 在内存里合并计数，
-按 5 秒定时、进程退出、以及缓冲超阈值三种时机落库。
+按 `VANBLOG_VIEW_FLUSH_MS`（默认 5000，`0` = 不缓冲直接写）、进程退出、以及攒够 `VANBLOG_VIEW_FLUSH_MAX_EVENTS`（默认 1000）三种时机落库。
 用 mongod 的 `serverStatus().metrics.commands` 差值实测（同一套协议、N=6/6s、扣掉噪声）：
 **8.00 命令 / 4.00 写每次浏览 → ~1.0 命令 / 0.8 写**（1 浏览/秒）；
 一个刷新窗口内 20 次浏览是 0.20 命令/次，100 次是 0.05。
@@ -3917,8 +3917,7 @@ primary 先解出 JWT 密钥再 fork，并转发 SIGTERM、对不退的 worker �
 **从未真的以 N>1 跑起来过**；而且内存随 worker 数近似线性增长，这与"占用更低"是相反的 ——
 所以默认值保持 1，要用得自己压测过再开。
 
-**测试**：server jest **885 用例、883 绿** + 2 个既有的 `utils/watermark.spec.ts` 离线字体用例
-（基线是 699/698，也就是 **+186 条**），分布在 viewStatsBuffer、viewStats.provider、
+**测试**：server jest **885 用例、884 绿 + 1 个既有失败**（基线 699/698，也就是 **+186 条**，0 回归），分布在 viewStatsBuffer、viewStats.provider、
 statsMaintenance.provider、statsMaintenance、logTail、log.provider.tail、initJwt、init.provider、
 picgo.provider、clusterRole、clusterBootstrap、website.provider.respawn、audit-hardening-round2；
 `tsc -p tsconfig.dev.json --noEmit` 干净。
@@ -3926,11 +3925,29 @@ picgo.provider、clusterRole、clusterBootstrap、website.provider.respawn、aud
 本轮补了 9 个 token（`viewStatsBuffer|viewStats.provider|statsMaintenance|logTail|initJwt|init.provider|picgo.provider|clusterRole|clusterBootstrap`）。
 以后加 spec 文件都要顺手改这里。
 
+**本轮新增的环境变量（默认值全部等于今天的行为，不设置就什么都不变）**：
+`VANBLOG_VIEW_FLUSH_MS`(5000) · `VANBLOG_VIEW_FLUSH_MAX_EVENTS`(1000) ·
+`VANBLOG_VISITS_DEDUP`(开) · `VANBLOG_VISITS_DEDUP_DRY_RUN`(关) ·
+`VANBLOG_VISIT_RETENTION_DAYS`(0=永不删) · `VANBLOG_VISIT_RETENTION_MIN_KEEP_DAYS`(30) ·
+`VANBLOG_INIT_CACHE_MS`(300000) · `VANBLOG_LOG_SCAN_MAX_LINES`(20000) ·
+`VANBLOG_LOG_SCAN_MAX_BYTES`(8MB) · `VANBLOG_ALLOW_PICGO_PLUGINS`(关) ·
+`VANBLOG_CLUSTER_WORKERS`(1)。
+
+**留给下一轮的两条（都量化过）**：
+
+- `line-reader` 与 `@types/line-reader` 现在**已经没人用了**（`searchLog` 改成尾部限界读取之后），
+  可以由管依赖的人删掉。
+- `visits.date_1`(163,840 B) 与 `visits.pathname_1`(122,880 B) 现在是**纯冗余前缀索引**
+  （分别是 `date_1_pathname_1` 与 `pathname_1_date_-1` 的前缀）。删掉它们（同时要去掉那两个
+  `@Prop` 的 `index:true`，否则 `autoIndex` 会重建）能让 `totalIndexSize` 从 1,175,552 B 降到
+  ~888,832 B —— **低于本轮改动前的 937,984 B** —— 并少两次写放大。本轮没做，
+  因为要先把所有 `visits` 查询 explain 一遍。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 885 用例：883 绿（另 2 个是 `utils/watermark.spec.ts` 的离线字体用例），1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| server `jest` | 885 用例：**884 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 的字体用例，见 §2.1）。⚠️ 负载高时可能是 883 绿 + 2 失败 —— 那个套件的两个 `Jimp.loadFont` 用例分别要 12.4s / 19.5s，超时线 20s，**单独跑 `jest src/utils/watermark.spec.ts` 时 5/5 全绿**。看到 2 个失败先确认是不是都在 watermark.spec.ts，别当成自己改坏了 |
 | website `vitest run` | 67 文件 / 672 用例全绿 |
 | admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1106 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
