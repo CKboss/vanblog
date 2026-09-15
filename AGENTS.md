@@ -3305,6 +3305,132 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
   现在先剥注释、只取真正的 `RUN apk add` 行，正向断言 python3/make/g++/libc6-compat 在，
   反向断言 vips-dev/fftw-dev 不在。23 条全绿。
 
+### 7.40 审计遗留清单（已量化、待决策，别重复审计）
+
+三个方向并行审过一轮（前台性能 / server 运行时与 DB / 依赖·镜像·CI·泄密面）。
+已落地的见 §7.38.1–§7.38.4；下面是**查清了但故意没动**的，按"性价比 ÷ 风险"排序。
+每条都带实测数字，动手前不用再查一遍。
+
+**A. 依赖与镜像（要动就得能跑构建；本会话 podman 用不了，所以整批推后）**
+
+1. **镜像的 server/waline/cli 三个 stage 不用 lockfile**（`Dockerfile:175+192` 直接 `pnpm i`，
+   `packages/server/` 下没有 pnpm-lock.yaml）：镜像不可复现，`mongoose ^7.6.6` / `axios ^1.6.2` /
+   `express ^4.18.2` / `@nestjs/* ^9.4.3` 每次构建都重新解析 —— 今天构建可能悄悄带上 mongoose 7.8.x
+   （是"意外修好"，同样也可能意外坏）。**这也意味着下面所有依赖升级在改成 lockfile 之前都不保证进得了镜像。**
+   改法照抄同一个 Dockerfile 里 admin_builder 的写法（workspace manifests + `--frozen-lockfile --filter`）。
+2. **免费的 semver 内安全升级**（目标版本都已确认在 npmmirror 上）：axios → 1.16.0（SSRF
+   CVE-2024-39338 等 12+ 高危，用于抓远程图片与 IP 归属地）、jws → 3.2.3（**HMAC 校验缺陷**，
+   它就是后台会话的签名链）、mongoose → 7.8.9（3 条搜索/sanitizeFilter 注入；代码里没用
+   `$where`/`$nor`/`sanitizeFilter`，实际可利用性低，但升级是免费的）、next → 13.5.9
+   （缓存投毒 GHSA-gp8f-8m3g-qvj9，零代码补丁版本）、express/body-parser/qs/send 用 pnpm overrides
+   提到 4.21.2 / 1.20.3 / 6.16 / 0.19（body-parser DoS 在**每一个** urlencoded POST 上，含登录）、
+   @waline/vercel 1.31.7 → 1.41.6（koa 2.14.2 的 **critical ReDoS + Host 注入**打在匿名评论接口上）、
+   mermaid 10.6.1 → 10.9.3、katex → 0.16.21、dompurify → 3.2.4、prismjs → 1.30.0、
+   compressing → 1.10.5、`markdown-it-katex`（2016 年就弃坑、XSS **无修复版本**）→ `@traptitech/markdown-it-katex`。
+   sharp 0.32.6 → 0.35.4 顺带能**删掉整套 `VAN_BLOG_SHARP_*_HOST` 构建参数**（≥0.33 的预编译包
+   走 npm optionalDependencies），并解开 Node 22 的路。
+3. **runner 里带进了 394 个 dev 包 ≈ 121MB**（typescript 自己就 64MB，还有 webpack/jest/ts-node/
+   supertest/@nestjs/cli）：`Dockerfile:192` 全量 `pnpm i` → `:367` 把整个 node_modules 拷进 runner。
+   构建后加一句 `pnpm prune --prod` 即可。
+4. **没用 `pnpm fetch`，且源码在 install 之前 COPY**（admin `:99`→`:126`，website `:242`→`:276`）：
+   改一行源码就作废整个下载+安装层。改成 manifests → `pnpm fetch --frozen-lockfile` → 源码 →
+   `pnpm install --offline`，国内网络下本地构建提速最明显。
+5. **接受的风险（要写进文档而不是偷偷留着）**：nest 9（EOL；`@nestjs/common` 的 Content-Type
+   上传 RCE 只在 ≥10.4.16 修，multer 1.4.4-lts.1 的 3 条 DoS 只在 2.x 修 —— 但所有上传路由都在
+   AdminGuard 后面，且 Nest 的 guard 先于 FileInterceptor 跑，**没有匿名入口**）；
+   picgo 1.5.6（拖进来的 `git-clone@0.1.0` 命令注入**无修复版本**，而
+   `picgo.provider.ts:33-52` 会安装后台配置的 picgo 插件 ⇒ "拿到后台会话 → 容器内 root" 链条，
+   要么升 picgo 3.x 要么把插件安装功能关掉/加白名单）；umi3 / antd4 / React17 / next13 的整体迁移；
+   waline 那 249MB 里绝大部分是**永远加载不到的死适配器**（mysql2 RCE、protobufjs、leancloud 那批
+   公告都是噪音，但体积是真的，上游不拆就没法减）。
+
+**B. server 运行时（改动语义或要迁移数据，需要单独决策）**
+
+6. **公开文章列表把整个集合连正文捞回来**：`getByOption` 只在 `!isPublic` 时 skip/limit
+   （`article.provider.ts:817-820`），然后在 **JS 里**排序/过滤/切置顶，再 `count(query)`。
+   explain：内存 SORT、examined=106、returned=53（≈200KB）。本轮只修了 N+1（分类改一次查完）、
+   `countTotalWords` 加 `{content:1}` 投影、`searchByString` 加 `.limit(200)`；
+   把置顶排序与分页推进 Mongo 是下一步，难点是要同时保证前后台两个视图的排序语义不变。
+7. **每次浏览 ~11 次 Mongo 操作 / 4 次写**，散在 metas、articles、viewers、visits 四个集合，
+   无批量无防抖；`visits`/`viewers` **永不清理**（实测 visits 8748 条跨 800 天，索引 0.88MB
+   已经接近压缩后数据 1.21MB 的七成）；`visit.provider.add` 的"重复键兜底"依赖一个**并不存在**的
+   `{date,pathname}` 唯一索引（listIndexes 实测只有非唯一索引）⇒ 并发首访会静默产生重复行。
+   要做就得先写去重迁移再加唯一索引，顺带考虑 TTL 或按年清理。
+8. **ISR 风暴没有护栏**：25+ 处调 `activeAll`，只有 1s 防抖、**没有 in-flight 互斥**，
+   `activeWithRetry` 不 await 不 catch，`testConn`/`activeUrl` 的 axios **没有超时**；
+   一轮 ~130 次串行重渲染（含 6 篇**已删除**文章的 id 与别名两条路径）。
+   本机还实测到**两个 server 进程同时跑 cron**（watch 重启留下的孤儿），说明定时任务也没有多实例保护。
+9. **RSS 全量同步渲染**：实测 53 篇 markdown-it+hljs+katex = **135ms 阻塞事件循环**，
+   三份 feed 各约 350KB（**全文、无条数上限**），每小时 + 每次启动 + 每次编辑后 3 分钟各跑一遍。
+   应该限条数（20–30）并改异步/增量。
+10. 运行时杂项：`express.json({limit:'50mb'})` 挂在**所有**路由（评论只要几 KB，只有备份恢复/上传才要大）；
+   无 request-id / 无 API 访问日志 / 无慢查询日志（ISR 风暴或 30s serverSelection 卡顿时无法归因）；
+   `InitMiddleware` 每个请求都 `userModel.findOne({})`（还把密码哈希读进内存）；
+   `initJwt` 在 `main.ts` 与 JwtModule 工厂里**各跑一次**且两次都不 `client.close()`（泄漏 MongoClient
+   与它的 SDAM 定时器）；website 子进程的 `exit` 处理器在优雅停机时会把刚杀掉的进程**再拉起来**
+   （waline 有 `stopping` 标志，website 没有），而它的 `starting` 互斥量**从未被赋值**（死代码）。
+
+**C. 前台（量化过，改动面较大或需要视觉回归对比）**
+
+11. **首页/分页把全文塞进 `__NEXT_DATA__`**：HTML 114KB（gzip 33KB），`__NEXT_DATA__` 占 31.8%
+    （gzip 后占 **54.8%**）；5 篇 content 25KB，卡片只需要 3.3KB 摘要 ⇒ **87% 白送**，
+    模拟修完 gzip −31.8%。要在 server 出 `excerpt`：把 `utils/articleExcerpt.ts`
+    （围栏感知的 `findMoreMarker`、200 字回退、截断链接修复、代理对安全）移植过去，
+    并让 `markdown.provider.getDescription` 委托它，否则两份实现会漂；
+    还要照顾 9 篇没有 `<!-- more -->` 的文章（#410 那个"卡片里露出 `[文字](url)` 括号"就出在这条路径）。
+12. **ByteMD 的编辑器进了每个 markdown 页面的首屏 JS**：服务端 chunk 1148 个模块，含 9 个
+    `codemirror-ssr`（源码 1.97MB）、57 个 `@popperjs/core`；`bytemd`/`codemirror-ssr`/`@bytemd/react`
+    **都没有 `sideEffects` 字段**，webpack 不敢丢（生产估计 150–250KB min+gz，**未实测**：
+    本机没有生产构建）。两条路：①摘要在服务端渲染成 HTML（和第 11 条一起做最划算，
+    注意仍要过 `sanitizeMarkdownSchema`）②内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标
+    `sideEffects:false`。另外 `dynamic(...,{ssr:true})` 在首页的**初始** script 列表里 —— 它一点不 defer。
+13. `/timeline` 带 **42.5KB 没人读**的数据（pageProps 73.5KB 里 `sortedArticles` 21.3KB +
+    `yearGroup.articles` 21.2KB 都无读者：`TimelineArchives` 只在 `months.length===0` 时才读，
+    实测 4 个年份组一个都不满足）；gzip 后只省 6.6%，收益主要在解析与内存。
+14. 每张卡片一个未合并的阅读量请求：5 次串行 XHR（89ms vs 并行 36ms），每次回 220B 的
+    **整个 visit 文档**只为显示一个整数，而这数字 pageProps 里已经有（还会先显示 `"..."` 再跳成数字）。
+    范例就在仓库里：`commentApi.ts:96-146` 的 50ms 合并器。
+15. apple 皮肤 46KB CSS 在全局样式表里（全局 CSS 72.7KB / gzip 16.3KB，另有 markdown 相关 43KB
+    在 `/link`、`/tag`、`/category`、`/timeline` 上根本用不到）。现在已经有
+    `/api/public/theme.css` 这条路，内置 apple 也可以走；但 apple.css 依赖"在 Tailwind 之后引入"
+    的顺序，挪成 `<link>` 要对两种皮肤做视觉对比。
+16. 字体走 `static.zeoseven.com`：本机 DNS 解析不出来（每页一次 preconnect + 一个 stylesheet 卡在 DNS 上），
+    而且 CSS 是水合后才从 `media="print"` 提升的 ⇒ 字体下载**最早也要等 JS 跑完**，没有 preload，FOUT 必然。
+    正解是自托管到 `public/fonts/`（`utils/appleFont.ts:8-10` 的注释里就写着这条路）+ 给覆盖站名/导航的
+    2–3 个子集加 `preload`；CJK 按 unicode-range 切子集比较费事，切错会掉字形。
+17. **`revalidate` 没有下限**：`VAN_BLOG_REVALIDATE_TIME` 默认 **10 秒**且 `parseInt` 不做 NaN 兜底；
+    `fallback:"blocking"` + `revalidate:{}` 组合下，按需生成的页面**永不过期**（丢了 revalidate 触发就一直旧）。
+    建议夹到 ≥60 秒，并给按需模式一个兜底的长 revalidate（如 3600）。
+
+**D. 运维（小、安全，随时可做）**
+
+18. **mongo 没有 healthcheck**：加 `mongosh … || mongo …` 的 ping（4.4 没有 mongosh、7.0 没有 mongo，
+    必须两个都试）+ `depends_on: condition: service_healthy`，能干掉模板注释里自己承认的
+    "首次启动 server 连不上库、容器要重启几次才稳"。⚠️ `condition:` 需要 docker-compose ≥1.27
+    或 compose v2（脚本在缺 v1 时会别名到 v2，但 Ubuntu 20.04 自带的 1.25 会解析失败）⇒
+    要么在脚本里加版本判断，要么保留列表形式做回退。
+19. **备份没有校验和，也没有空间预检**：manifest 里没有 sha256（损坏要等到恢复时才由 zstd/xz/gzip
+    的 CRC 发现）；导出前不看磁盘剩余（ENOSPC 会优雅失败并清掉半成品，但大站上已经白等几分钟）。
+    便宜的做法：manifest 里写 sha256 + 一个 `vanblog.sh verify <归档>`（流式解压 + 解析 manifest）。
+20. **没有内置的定时备份**：`--keep` 有了，但调度还得用户自己写 crontab（脚本里只有一条可复制的配方）。
+    可以加一个 `./vanblog.sh install-cron`（写 crontab 时默认带上 KEEP=7）。
+    实测数据供决策：整站归档 **66MB**（zstd -19），目录级快照 **356MB**；40GB 的 VPS 每天备一次、
+    `--keep 7` ≈ 460MB（没问题），不带 keep ≈ **24GB/年**（不行）。
+21. `TZ: 'Asia/Shanghai'` 在两个服务里都是硬编码（非中国时区用户要手改，且 `config` 会覆盖）；
+    `version: '3'` 在 compose v2 下已废弃（纯噪音）；`Dockerfile:376` 有一层 `cd /app/website && cd ..`
+    的空操作、`:62` 有 `ENV EEE=production` 的拼写错误（都在 builder 阶段，不影响产物）；
+    基础镜像全是浮动 tag（`node:20-alpine` ×5，没有 digest 钉住）。
+22. **安装脚本的下载回退会退到上游**：`vanblog.sh:91-98` 在拉不到本分支的编排模板/脚本时，
+    会回退到 `vanblog.mereith.com`、`Mereithhh` 的 raw、jsDelivr —— 而国内网络下
+    raw.githubusercontent 常常不通（本分支的 URL 恰好就是它），于是用户**静默地用上了上游版本**，
+    丢掉本分支全部加固（日志上限、mongo 7 默认、整站备份、ghcr 镜像）。
+    应该在上游回退**之前**插一个 fork 可达的镜像（jsDelivr 的 `gh/CKboss/vanblog@dev/dsh`，
+    或者 release-fork 已经挂在 Release 上的附件）。另外 `:976` 会把
+    `vanblog.mereith.com/docker.sh` 用 root 管道执行（上游遗留，至少要在文档里点明）。
+23. **`/swagger` 默认公开**（`VANBLOG_SWAGGER=false` 可关，模板里已给出注释掉的开关）：
+    等于把整个后台 API 面摊给未登录用户，robots 的 disallow 不是访问控制。
+    没直接默认关掉是因为后台「关于」页与「Token 管理」页各有一个跳 `/swagger` 的链接。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
