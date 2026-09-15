@@ -10,7 +10,10 @@
 
 **性能**
 
-- **打开 HTTP/3(QUIC) 并给 caddy 的上游加连接池**：容器里的 caddy 在 `:443` 上**本来就是 HTTP/1.1 + HTTP/2**（Caddy v2 在 TLS 监听上默认启用 h2），只是 HTTP/3 默认关着 —— 现在 `:443` 那个 server 显式声明 `protocols: ["h1","h2","h3"]`，编排文件也映射了 **UDP 443**（QUIC 跑在 UDP 上；老安装跑一次 `./vanblog.sh config` 再 `restart` 就有，`./vanblog.sh status` 会直接告诉你 QUIC 端口映射了没有）。UDP 没放行也**不会坏**：caddy 照样发 `Alt-Svc`，浏览器试连失败自动退回 HTTP/2。caddy → Node 的上游仍是 HTTP/1.1（Nest/Next 默认不支持 h2c），但补上了连接池 `keep_alive{idle_timeout 60s, max_idle_conns 64, max_idle_conns_per_host 32}` —— Go 的默认值只有 2，并发一上来就不停地开关上游连接。实测（本机跑真 caddy 2.11.4，与镜像同版本）：日志出现 `protocols:["h1","h2","h3"]`、`curl --http2` 拿到 `HTTP/2 200` 且响应头带 `alt-svc: h3=":443"; ma=2592000`、gzip 生效、20 个并发 0.47s。压缩仍是 zstd+gzip（Caddy 不支持 brotli，zstd 已是最优）。`/docs`、反向代理文档里都写清了"外层再套一层反代时，访客用的是外层的协议"。
+- **让 HTTP/3(QUIC) 真的能用，并给 caddy 的上游加连接池**：容器里的 caddy 在 `:443` 上**本来就是 HTTP/1.1 + HTTP/2 + HTTP/3**（实测 caddy 2.11.4：不写 `protocols` 时默认就是 `["h1","h2","h3"]`，并且已经在发 `alt-svc: h3=":443"`），明文 `:80` 才是只有 HTTP/1.1（caddy 会打印 "HTTP/2 skipped because it requires TLS"）。**真正挡住 HTTP/3 的是编排文件没有映射 UDP 443** —— QUIC 跑在 UDP 上，端口没发布，浏览器收到 Alt-Svc 也连不上，只能永远用 HTTP/2。现在模板加了 `vanblog_https_port:443/udp`（TCP 那条保留），老安装跑一次 `./vanblog.sh config` 再 `restart` 就有，`./vanblog.sh status` 会直接告诉你 QUIC 端口映射了没有。UDP 没放行也**不会坏**：浏览器试连失败自动退回 HTTP/2。另外在 `:443` 上把 `protocols: ["h1","h2","h3"]` **显式写出来**，这不是"打开"而是"钉住"—— 免得将来某个版本改默认值时悄悄把 h3 拿掉。caddy → Node 的上游仍是 HTTP/1.1（Nest/Next 默认不支持 h2c），但补上了连接池 `keep_alive{idle_timeout 60s, max_idle_conns 64, max_idle_conns_per_host 32}` —— Go 的默认值只有 2，并发一上来就不停地开关上游连接。实测（本机跑真 caddy 2.11.4，与镜像同版本）：日志出现 `protocols:["h1","h2","h3"]`、`curl --http2` 拿到 `HTTP/2 200` 且响应头带 `alt-svc: h3=":443"; ma=2592000`、gzip 生效、20 个并发 0.47s。压缩仍是 zstd+gzip（Caddy 不支持 brotli，zstd 已是最优）。`/docs`、反向代理文档里都写清了"外层再套一层反代时，访客用的是外层的协议"。
+- **全站补上安全响应头**：caddy 模板里原来**只有** `/admin*` 与 `/api/admin*` 的 `Cache-Control`，一个安全头都没有 —— server 自己会给 `/api/**`、`/static/**` 下发 `nosniff` 等头，但**前台页面（caddy → website:3001 的 HTML）一个都没有**。现在两个 server 的全局路由（`route[0]`，无 matcher，与 `encode` 并列）都加了 `headers` 处理器：`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`X-Frame-Options: SAMEORIGIN`（不是 DENY，后台要 iframe 同源的 waline `/ui`）、`Permissions-Policy`，并 `delete: ["Server"]`；`deferred: true` 保证反代响应和 caddy 自己的 5xx 也带上。`set` 是覆盖不是追加，所以 `/api/**` 上不会和 server 已有的头重复。
+
+- **备份保留策略 `--keep N`**：`./vanblog.sh backup --keep 7`（或 `VANBLOG_BACKUP_KEEP=7`）在备份**成功之后**只保留最新 N 份，其余连同 `.manifest.json` 一起删掉，并打印删了哪些、释放了多少。以前脚本和 server 都只管写不管删，一份整站备份几十 MB，配 cron 每天备一次一个月就是 2GB，小盘机器迟早被撑满（而磁盘满会让 mongod、caddy、导出一齐出各种奇怪的错）。边界都朝"宁可少删"的方向定：只删自己认识的归档名、只在备份成功后清理、`--keep` 为空/0/非数字时完全不清理（默认行为不变），离线模式清理的是安装目录里的 `vanblog-backup-*`，与整站备份互不干扰。
 
 **修复**
 
@@ -108,7 +111,7 @@
 - 一键脚本 `vanblog.sh` v0.4.0：**从本分支源码克隆并本地 `docker build`**（本 fork 没有发布镜像），`update` 改成 fetch + 重建且构建失败不停机，编排模板优先用仓库里那份，卸载会清源码目录；`VANBLOG_USE_UPSTREAM_IMAGE=true` 可回到官方镜像。
 - 一键脚本 v0.3.7 体检：`backup --consistent`、`restore` 校验压缩包并清 `mongod.lock`、常规操作不再 `down -v`（那会删卷）。
 - `./dev-env.sh bootstrap`：一条命令备好 Node 20 + pnpm 8 + MongoDB 7，全程不需要 docker 与 sudo。
-- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **19 文件 / 836 条断言**；文档站 `vuepress build` 通过
+- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **19 文件 / 858 条断言**；文档站 `vuepress build` 通过
 
 ### ✨ Features | 新功能
 

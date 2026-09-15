@@ -3000,13 +3000,20 @@ settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传�
 
 | 位置 | 改之前 | 改之后 |
 | --- | --- | --- |
-| 访客 → caddy `:443` | **h1 + h2**（Caddy v2 在 TLS 监听上默认就开 h2，不是 1.1）；**h3 关着**（2.6+ 支持但要显式写 `protocols`） | `protocols: ["h1","h2","h3"]` |
+| 访客 → caddy `:443` | **h1 + h2 + h3 全都已经开着**（实测 2.11.4：不写 `protocols` 时默认就是这三个，且已在发 `alt-svc: h3`）；真正挡住 h3 的是**编排文件没映射 UDP 443** | 显式写 `protocols: ["h1","h2","h3"]`（**钉住默认值**，不是"打开"） |
 | 访客 → caddy `:80` | h1（明文没有 h2/h3） | 不变（h3 只在 srv0 上开，明文开 QUIC 没意义） |
 | caddy → server:3000 / website:3001 | HTTP/1.1，**连接池用 Go 默认值**（`MaxIdleConnsPerHost = 2`） | HTTP/1.1 + `keep_alive{idle_timeout:60s, max_idle_conns:64, max_idle_conns_per_host:32}`（28 处） |
 | caddy → waline:8360 | 带 `trusted_proxies` | **原样不动**（低流量，少一处改动就少一处读配置的噪音） |
 | 压缩 | `zstd` + `gzip`，prefer zstd | 不变（Caddy 不支持 brotli，zstd 已是最优） |
 
-**HTTP/3 光在 caddy 里开是不够的**：QUIC 跑在 UDP 上，编排文件必须映射 `443/udp`，
+⚠️ **我一开始判断错了，实测才纠正过来**：我以为 "caddy 的 HTTP/3 默认是关的、要显式写 `protocols`"，
+于是把加 `protocols` 当成了本次的主要优化。用真 caddy 跑对照实验才发现**不是**：
+不写 `protocols` 的 TLS 监听，日志就是 `protocols:["h1","h2","h3"]`，响应头也有
+`alt-svc: h3=":8443"; ma=2592000`；而写了 `protocols h1 h2` 的那个对照实例就没有 alt-svc。
+也就是说 h3 早就"开"着，**访客用不上它纯粹是因为 QUIC 的 UDP 443 没有从容器发布出来**。
+教训：涉及"某软件默认开没开某特性"，别靠记忆，起两个实例做 A/B 对照，看日志和响应头。
+
+**HTTP/3 真正缺的那一环**：QUIC 跑在 UDP 上，编排文件必须映射 `443/udp`，
 否则浏览器永远只能用到 h2。已在 `docker-compose-template.yml` 加了
 `- vanblog_https_port:443/udp`（TCP 那条保留，不是替换）。**没放行 UDP 也不会坏** ——
 caddy 照样发 `Alt-Svc`，浏览器试连失败自动退回 h2，所以这是个安全的默认。
@@ -3075,6 +3082,46 @@ tar xzf /tmp/caddy.tar.gz -C /tmp/caddybin && /tmp/caddybin/caddy version   # v2
 （外层反代决定访客协议、nginx 不能反代 UDP 所以 QUIC 过不去、Cloudflare 在边缘终结 h3）；
 `docs/advanced/rss.md` 补上三条短地址与 `/rss/...` 的改写关系。
 
+### 7.38.1 安全响应头 + 备份保留策略（本轮审计里已落地的两项）
+
+**全站安全响应头**：`caddyTemplate.json` 里原本**只有** `/admin*` 与 `/api/admin*` 两条
+`headers` 处理器（都是 `Cache-Control`），一个安全头都没有。server 自己的中间件
+（`utils/rateLimit.ts`）会给 `/api/**`、`/static/**` 下发 `nosniff` / `Referrer-Policy` /
+`X-Frame-Options` / `Permissions-Policy`，但**前台页面的 HTML 是 caddy → website:3001 直接反代的，
+一个头都没有**（实测直连 3001 的安全头数量 = 0）。而 `docs/advanced/security.md` 写着
+"caddy 模板与 Nest 中间件都下发" —— 文档在说谎。
+
+修法：在两个 server 的 `route[0]`（无 matcher 的全局路由，与 `encode` 并列）各插一个 `headers`
+处理器：`deferred: true` + `delete: ["Server"]` + `set` 那四个头。三个要点：
+
+- `deferred: true` 不能少：否则反代回来的响应、以及 caddy 自己的 5xx 都不会带上；
+- 用 `set`（覆盖）而不是 `add`（追加），所以 `/api/**` 上不会和 server 已有的头重复；
+- `X-Frame-Options` 保持 `SAMEORIGIN` 而不是 `DENY`（后台要 iframe 同源的 waline `/ui`）。
+
+实测：用改过的模板生成的配置起真 caddy（本机把监听改成 8080/8443，因为非 root 绑不了 80/443，
+还得 `auto_https disable_redirects`，否则 caddy 会去绑 :80 做跳转然后 permission denied），
+前台首页四个头齐了。**没加 HSTS**：一旦 TLS 出问题会把站长锁在门外，属于用户自己该决定的事。
+
+**备份保留策略**：`prune_old_backups <full|offline> <keep>` + `backup --keep N` /
+`VANBLOG_BACKUP_KEEP`。以前**整个仓库没有任何清理逻辑**（脚本和 server 都只管写不管删），
+而文档又教用户配 cron 每天备 —— 一份 66MB，一个月 2GB。边界全部朝"宁可少删"定：
+只认 `vanblog-full-*.tar.*` / `vanblog-backup-*.tar.*` 两种名字、只在备份 `rc == 0` 之后清理、
+keep 不是正整数就 `return 0`、`rm -f "${dir:?}/..."` 带 `:?` 保护（dir 为空时不会退化成
+`rm -f /xxx`）、连带删同名 `.manifest.json` sidecar（不删的话 `restore` 的列表里会出现孤儿清单）。
+排序用 `ls -1t`（比 `find -printf` 可移植）。
+⚠️ 体积显示踩了个小坑：`human_size` 收的是**文件路径**（内部走 `du -h`）而不是字节数，
+把字节数传给它只会得到空串（`|| echo` 也救不了，因为它 exit 0）；新加了 `human_bytes <n>`
+（纯 awk）用于"删完之后报总共释放多少"。
+
+**顺手更正 `docs/advanced/security.md` 的"已知限制"清单**（两条已经过时，留着会误导人）：
+
+- "`/post/<数字id>` 与 `/post/<别名>` 都返回 200，没有 canonical / 301" —— 实测 `/post/53`
+  → **308** 跳到拼音别名，首页也有 `link rel="canonical"`，早就修好了；
+- "website 的 `__tests__` 里还有约 27 个类型错误，靠 `VANBLOG_SKIP_TYPECHECK` 绕过" ——
+  实测 `packages/website` 跑 `tsc --noEmit` 报 115 个错，**全部来自本机 `~/node_modules/bun-types`**
+  （TS 4.9 解析不了它的新语法，见 §3.6），仓库代码 0 个类型错误。
+  副作用：website 没有 server 那样的 `tsconfig.dev.json`，所以本机没法把 tsc 当门禁用。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
@@ -3082,7 +3129,7 @@ tar xzf /tmp/caddy.tar.gz -C /tmp/caddybin && /tmp/caddybin/caddy version   # v2
 | server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 60 文件 / 558 用例全绿 |
 | admin `node --test tests/unit` | 83 套件 / 343 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 836 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 858 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

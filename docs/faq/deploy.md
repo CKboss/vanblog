@@ -201,15 +201,16 @@ docker-compose down && docker-compose up -d
 
 ## 用的是 HTTP/1.1 还是 HTTP/2 / HTTP/3
 
-容器里的 caddy 在 **HTTPS（:443）上默认就是 HTTP/1.1 + HTTP/2**，本分支还额外打开了 **HTTP/3(QUIC)**：
-`caddyTemplate.json` 的 `:443` server 上有 `"protocols": ["h1","h2","h3"]`。明文的 `:80` 只有 HTTP/1.1
-（HTTP/2、3 都要求 TLS）。caddy 到容器内 Node（server:3000 / website:3001）的上游仍是 HTTP/1.1 ——
+容器里的 caddy 在 **HTTPS（:443）上默认就是 HTTP/1.1 + HTTP/2 + HTTP/3**（Caddy 2.6 起 QUIC 就是默认开的，
+`caddyTemplate.json` 里把 `"protocols": ["h1","h2","h3"]` 显式写出来是为了钉住这个默认值）。
+明文的 `:80` 只有 HTTP/1.1 —— caddy 自己的日志会写 `HTTP/2 skipped because it requires TLS`。caddy 到容器内 Node（server:3000 / website:3001）的上游仍是 HTTP/1.1 ——
 Nest(Express) 与 Next standalone 默认都不支持 h2c，改成 h2 没有收益；上游连接开了连接池
 （`keep_alive.max_idle_conns_per_host: 32`，Go 默认只有 2，并发一上来会不停开关连接）。
 
-**HTTP/3 要能用，还得满足两个条件：**
+**HTTP/3 要真的能用，还得满足两个条件**（caddy 里开着只是第一步）：
 
-1. 编排文件里映射了 **UDP** 443（QUIC 跑在 UDP 上）。新装自带；**老安装需要跑一次
+1. 编排文件里映射了 **UDP** 443 —— QUIC 跑在 UDP 上，端口没发布的话，浏览器收到 `Alt-Svc`
+   也连不上，只能永远用 HTTP/2。新装自带；**老安装需要跑一次
    `./vanblog.sh config` 重新生成编排文件**，然后 `./vanblog.sh restart`。
    `./vanblog.sh status` 会直接告诉你：
 

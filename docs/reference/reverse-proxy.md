@@ -43,8 +43,8 @@ ports:
 
 ## 协议：HTTP/2 与 HTTP/3 在哪一层生效
 
-VanBlog 容器里的 caddy 在 `:443` 上启用了 `h1 / h2 / h3`（HTTP/3 需要编排文件映射
-**UDP** 443，新装自带；老安装跑一次 `./vanblog.sh config` 再 `restart`）。
+VanBlog 容器里的 caddy 在 `:443` 上默认就是 `h1 / h2 / h3`（HTTP/3 要真的可用，还需要编排文件映射
+**UDP** 443 —— QUIC 走 UDP，新装自带；老安装跑一次 `./vanblog.sh config` 再 `restart`）。
 
 **一旦你在前面又套了一层反代，访客用的就是外层的协议**，caddy 那层的 h2/h3 只对
 "外层 → caddy"这一跳有意义：

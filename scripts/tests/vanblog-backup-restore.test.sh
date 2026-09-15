@@ -144,5 +144,89 @@ DOCKERFILE="$(cat "${ROOT}/Dockerfile")"
 assert_contains "${DOCKERFILE}" "zstd xz" "运行镜像装了 zstd/xz（否则整站备份会静默降级成 gzip）"
 
 echo
+# ---------------------------------------------------------------------------
+# 备份保留策略（--keep N / VANBLOG_BACKUP_KEEP）
+# 背景：一份整站备份几十 MB，配了 cron 每天备一次一个月就是 2GB，而仓库里
+# 以前**没有任何清理逻辑**（脚本和 server 都只管写不管删），小盘机器迟早被撑满。
+# ---------------------------------------------------------------------------
+echo
+echo "== 备份保留策略 =="
+
+PRUNE_DIR="${TEST_DIR}/prune"
+mkdir -p "${PRUNE_DIR}/data/log/vanblog-backups"
+BK="${PRUNE_DIR}/data/log/vanblog-backups"
+for i in 1 2 3 4 5; do
+  head -c 1200 /dev/urandom >"${BK}/vanblog-full-2026090${i}-010101.tar.zst"
+  echo '{}' >"${BK}/vanblog-full-2026090${i}-010101.manifest.json"
+  # 用 mtime 决定新旧（prune 按 ls -1t 排序）
+  touch -d "2026-09-0${i}" "${BK}/vanblog-full-2026090${i}-010101.tar.zst" \
+    "${BK}/vanblog-full-2026090${i}-010101.manifest.json"
+done
+echo "不要删我" >"${BK}/restore-me.txt"
+echo "不要删我" >"${BK}/vanblog-backup-20260901-010101.tar.gz" # 离线备份不属于 full 那一类
+
+(
+  export VANBLOG_SKIP_MAIN=1 VANBLOG_BASE_PATH="${PRUNE_DIR}" VANBLOG_DATA_PATH="${PRUNE_DIR}/data"
+  # shellcheck disable=SC1090
+  source "${SCRIPT}" >/dev/null 2>&1
+  prune_old_backups full 2
+) >"${TEST_DIR}/prune.out" 2>&1
+
+left="$(ls -1 "${BK}" | tr '\n' ' ')"
+assert_contains "${left}" "vanblog-full-20260905-010101.tar.zst" "保留策略：最新的一份留着"
+assert_contains "${left}" "vanblog-full-20260904-010101.tar.zst" "保留策略：第二新的留着"
+if [[ "${left}" == *"vanblog-full-20260903"* || "${left}" == *"vanblog-full-20260902"* || "${left}" == *"vanblog-full-20260901-010101.tar.zst"* ]]; then
+  fail "保留策略：超出份数的旧归档应该被删掉（实际剩下：${left}）"
+else
+  pass "保留策略：超出份数的旧归档被删掉了"
+fi
+# 被删归档的 sidecar 要一起删（否则 restore 列表里会出现孤儿清单），
+# 但**留下的**那两份的清单必须还在 —— 别把断言写成"一个 manifest 都不许有"。
+if [[ "${left}" == *"vanblog-full-20260903-010101.manifest.json"* ||
+  "${left}" == *"vanblog-full-20260902-010101.manifest.json"* ||
+  "${left}" == *"vanblog-full-20260901-010101.manifest.json"* ]]; then
+  fail "保留策略：被删归档的 .manifest.json 应该一起删（实际剩下：${left}）"
+else
+  pass "保留策略：连带删掉了被删归档的 .manifest.json"
+fi
+assert_contains "${left}" "vanblog-full-20260905-010101.manifest.json" "保留策略：留下的归档，清单也留着"
+assert_contains "${left}" "vanblog-full-20260904-010101.manifest.json" "保留策略：第二新的清单也留着"
+assert_contains "${left}" "restore-me.txt" "保留策略：不认识的文件一概不动"
+assert_contains "${left}" "vanblog-backup-20260901-010101.tar.gz" "保留策略：full 模式不碰离线备份归档"
+assert_contains "$(cat "${TEST_DIR}/prune.out")" "删掉 3 份" "保留策略：报告了删掉几份"
+assert_contains "$(cat "${TEST_DIR}/prune.out")" "释放" "保留策略：报告了释放多少空间"
+
+# keep=0 / 非数字 / 比现有份数还大：都不该删任何东西
+for k in 0 abc 99; do
+  before="$(ls -1 "${BK}" | wc -l | tr -d ' ')"
+  (
+    export VANBLOG_SKIP_MAIN=1 VANBLOG_BASE_PATH="${PRUNE_DIR}" VANBLOG_DATA_PATH="${PRUNE_DIR}/data"
+    # shellcheck disable=SC1090
+    source "${SCRIPT}" >/dev/null 2>&1
+    prune_old_backups full "${k}"
+  ) >"${TEST_DIR}/prune-${k}.out" 2>&1
+  after="$(ls -1 "${BK}" | wc -l | tr -d ' ')"
+  if [[ "${before}" == "${after}" ]]; then
+    pass "keep=${k} 时不删任何东西（${before} → ${after}）"
+  else
+    fail "keep=${k} 时删了东西（${before} → ${after}）"
+  fi
+done
+
+# 只删自己认识的两种归档名，且只在备份目录里删（不递归）
+SRC_PRUNE="$(awk '/^prune_old_backups\(\) \{/,/^\}/' "${SCRIPT}")"
+assert_contains "${SRC_PRUNE}" "vanblog-full-*.tar.*" "prune 只认整站备份的文件名"
+assert_contains "${SRC_PRUNE}" "vanblog-backup-*.tar.*" "prune 只认离线备份的文件名"
+assert_contains "${SRC_PRUNE}" '*[!0-9]*) return 0' "keep 不是正整数就什么都不做"
+assert_contains "${SRC_PRUNE}" 'rm -f "${dir:?}/${name}"' "删除路径带 :? 保护（dir 为空时不会变成 rm -f /xxx）"
+
+# 只在备份成功之后清理：失败时删旧备份等于把最后的恢复点也弄没了
+SRC_BACKUP="$(awk '/^backup\(\) \{/,/^\}/' "${SCRIPT}")"
+assert_contains "${SRC_BACKUP}" 'if [[ ${rc} -eq 0 && -n "${keep}" ]]' "只有备份成功才清理"
+assert_contains "${SRC_BACKUP}" '--keep) keep="${arg}"' "支持 --keep N"
+assert_contains "${SRC_BACKUP}" 'VANBLOG_BACKUP_KEEP' "支持 VANBLOG_BACKUP_KEEP 环境变量（cron 用）"
+assert_contains "$(cat "${SCRIPT}")" "VANBLOG_BACKUP_KEEP=7" "--help 里写了这个环境变量"
+
+
 echo "passed=${PASS} failed=${FAIL}"
 [[ ${FAIL} -eq 0 ]]

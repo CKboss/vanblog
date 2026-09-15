@@ -1775,6 +1775,21 @@ is_gnu_tar() {
   tar --version 2>/dev/null | head -n 1 | grep -q 'GNU tar'
 }
 
+# 把字节数格式化成人能读的形式（human_size 收的是**文件路径**，走 du；
+# 这个收的是数字 —— 清理备份时要先算总量再打印，那时文件已经删了）
+human_bytes() {
+  local n="${1:-0}"
+  case "${n}" in
+  '' | *[!0-9]*) n=0 ;;
+  esac
+  awk -v b="${n}" 'BEGIN {
+    if (b < 1024) { printf "%d B", b }
+    else if (b < 1048576) { printf "%.1f KB", b / 1024 }
+    else if (b < 1073741824) { printf "%.1f MB", b / 1048576 }
+    else { printf "%.2f GB", b / 1073741824 }
+  }'
+}
+
 human_size() {
   local file="$1"
   if command -v du >/dev/null 2>&1; then
@@ -1875,33 +1890,106 @@ backup_full() {
 }
 
 # backup 的入口：默认走整站备份，--offline 才打包数据目录
+# 备份保留策略：只留最新的 N 份，其余删掉（连带同名的 .manifest.json）。
+#
+# 为什么要有这个：整站备份一份就是几十 MB（本站实测 66MB），配了 cron 每天备一次的话
+# 一个月就是 2GB —— 而**整个仓库里以前没有任何清理逻辑**，脚本和 server 都只管写不管删，
+# 小盘机器迟早被备份撑满，而"磁盘满"会让 mongod、caddy、导出全都出各种奇怪的错。
+#
+# 安全边界（宁可少删，不可多删）：
+#   - 只删**自己认识的归档名**：vanblog-full-*.tar.* / vanblog-backup-*.tar.*，别的一概不动；
+#   - 只在备份目录里删，不递归子目录；
+#   - keep 不是正整数就什么都不做（默认行为完全不变）；
+#   - 只在新备份**成功之后**才调用（失败时删旧备份等于把最后的恢复点也弄没了）。
+prune_old_backups() {
+  local kind="$1" keep="$2"
+  local dir pattern
+  case "${kind}" in
+  full)
+    dir="$(full_backup_dir 2>/dev/null)"
+    pattern='vanblog-full-*.tar.*'
+    ;;
+  offline)
+    dir="${VANBLOG_BASE_PATH}"
+    pattern='vanblog-backup-*.tar.*'
+    ;;
+  *) return 0 ;;
+  esac
+  [[ -n "${dir}" && -d "${dir}" ]] || return 0
+  case "${keep}" in
+  '' | *[!0-9]*) return 0 ;;
+  esac
+  [[ "${keep}" -gt 0 ]] || return 0
+
+  # ls -1t 按修改时间从新到旧；备份名里没有空格，这样比 find -printf 更可移植
+  local -a all
+  mapfile -t all < <(cd "${dir}" 2>/dev/null && ls -1t ${pattern} 2>/dev/null)
+  local total=${#all[@]}
+  if [[ ${total} -le ${keep} ]]; then
+    echo -e "  保留策略：现有 ${total} 份 ≤ ${keep}，不用清理"
+    return 0
+  fi
+  local i removed=0 freed=0 name size sidecar pretty
+  for ((i = keep; i < total; i++)); do
+    name="${all[$i]}"
+    [[ -n "${name}" ]] || continue
+    size=$( (stat -c %s "${dir}/${name}" 2>/dev/null || echo 0) )
+    pretty="$(human_size "${dir}/${name}" 2>/dev/null)"
+    [[ -n "${pretty}" ]] || pretty="$(human_bytes "${size}")"
+    if rm -f "${dir:?}/${name}"; then
+      removed=$((removed + 1))
+      freed=$((freed + size))
+      # 整站备份的清单是同名 sidecar，留着会变成孤儿（还会被 restore 的列表当成归档）
+      sidecar="${dir}/${name%.tar.*}.manifest.json"
+      [[ -f "${sidecar}" ]] && rm -f "${sidecar}"
+      echo -e "  ${yellow}已删除${plain} ${name}（${pretty}）"
+    fi
+  done
+  echo -e "  保留策略：留最新 ${keep} 份，删掉 ${removed} 份，释放 $(human_bytes "${freed}")"
+  return 0
+}
+
 backup() {
   local mode="${VANBLOG_BACKUP_MODE:-api}"
   local format="${VANBLOG_BACKUP_FORMAT:-zstd}"
-  local arg
+  # 保留份数：--keep N 或 VANBLOG_BACKUP_KEEP=N；留空/0 = 不清理（默认行为不变）
+  local keep="${VANBLOG_BACKUP_KEEP:-}"
+  local arg prev=""
   for arg in "$@"; do
     case "${arg}" in
     --offline) mode="offline" ;;
     --api | --full) mode="api" ;;
     --consistent) : ;; # 由 backup_offline 自己解析
-    --format) : ;; # 值在下一个参数
+    --format | --keep) : ;; # 值在下一个参数
     0 | --*) : ;;
     *)
-      # --format 后面的值
-      if [[ "${prev_was_format:-0}" == "1" ]]; then
-        format="${arg}"
-        prev_was_format=0
-      fi
+      case "${prev}" in
+      --format) format="${arg}" ;;
+      --keep) keep="${arg}" ;;
+      esac
       ;;
     esac
-    [[ "${arg}" == "--format" ]] && prev_was_format=1
+    prev="${arg}"
   done
 
+  local rc=0
   if [[ "${mode}" == "offline" ]]; then
     backup_offline "$@"
-    return $?
+    rc=$?
+  else
+    backup_full "${format}"
+    rc=$?
   fi
-  backup_full "${format}"
+  # ⚠️ 只在备份**成功**之后清理：失败时把旧备份删了，等于连最后的恢复点都没了
+  if [[ ${rc} -eq 0 && -n "${keep}" ]]; then
+    echo -e "> 按保留策略清理旧备份（--keep ${keep}）"
+    if [[ "${mode}" == "offline" ]]; then
+      prune_old_backups offline "${keep}"
+    else
+      prune_old_backups full "${keep}"
+    fi
+  fi
+  return ${rc}
 }
 
 backup_offline() {
@@ -2759,6 +2847,10 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
         --offline                 改成打包整个数据目录（vanblog-backup-*.tar.gz）：
                                   站点起不来时的兜底，也是唯一**包含 caddy 证书**的方式
         --offline --consistent    先停 mongo 再打包（一致性好，几十秒不可写）
+        --keep N                  备份**成功后**只保留最新 N 份，其余删掉（连带 .manifest.json）。
+                                  配 cron 必备：一份整站备份几十 MB，不清理迟早撑满磁盘。
+                                  留空或 0 = 不清理（默认）。只删 vanblog-full-* / vanblog-backup-*，
+                                  别的文件一概不动。也可用 VANBLOG_BACKUP_KEEP=N。
         --verbose                 打印完整 JSON（默认只给摘要）
   restore                         从整站备份恢复。不带参数 = 列出服务器备份目录里的归档让你选编号。
         restore <归档名>           归档在服务器备份目录里 → 不上传，秒级开始（几百 MB 也一样）
@@ -2807,6 +2899,7 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
     VANBLOG_VERBOSE=1                        打印完整 JSON
     VANBLOG_BACKUP_FORMAT=zstd|xz|gzip       backup 的压缩格式
     VANBLOG_BACKUP_CONSISTENT=1              等价于 backup --offline --consistent
+    VANBLOG_BACKUP_KEEP=7                    等价于 backup --keep 7（只留最新 7 份）
     VANBLOG_RESTORE_FILE=<路径>              等价于 restore <路径>（老写法，仍支持）
     VANBLOG_RESET_INIT_USER / _PASS          reset 自动初始化用的临时账号（默认随机口令）
   其它：
@@ -2816,7 +2909,8 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
   新机器装机：            ./vanblog.sh install
   换机器搬站（一步）：     VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
   换机器搬站（两步）：     ./vanblog.sh install && ./vanblog.sh reset /path/to/vanblog-full-xxx.tar.zst
-  每天凌晨三点整站备份：   0 3 * * * VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 /var/vanblog/vanblog.sh backup >> /var/log/vanblog-backup.cron.log 2>&1
+  每天凌晨三点整站备份（留 7 份）：
+                          0 3 * * * VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/log/vanblog-backup.cron.log 2>&1
   升级：                  ./vanblog.sh update
   回滚镜像：              把编排里的 image 改成 ghcr.io/ckboss/vanblog:dev-dsh-<短sha>，再 restart
   站点打不开怎么查：       ./vanblog.sh status → ./vanblog.sh log

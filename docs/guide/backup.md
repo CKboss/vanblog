@@ -100,6 +100,29 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 
 :::
 
+### 别把磁盘备满：保留策略
+
+一份整站备份就是几十 MB（本站实测 66MB），配了 cron 每天备一次，一个月就是 2GB。
+所以**自动备份一定要带保留份数**：
+
+```bash
+# 备份成功后只保留最新 7 份，其余连 .manifest.json 一起删掉
+./vanblog.sh backup --keep 7
+
+# cron 里用环境变量（等价）
+0 3 * * * VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/log/vanblog-backup.cron.log 2>&1
+```
+
+几条边界，都是为了"宁可少删，不可多删"：
+
+- 只删它自己认识的归档名（`vanblog-full-*.tar.*` / 离线模式的 `vanblog-backup-*.tar.*`），
+  备份目录里的其它文件一概不动；
+- 只在**新备份成功之后**才清理 —— 备份失败时删旧归档，等于把最后的恢复点也弄没了；
+- `--keep` 留空或写 0 就是不清理（默认行为），写非数字也不清理；
+- 离线模式（`--offline --keep N`）清理的是安装目录里的 `vanblog-backup-*`，两者互不干扰。
+
+`./vanblog.sh status` 会显示当前有多少份整站备份、最近三个归档是哪些，以及磁盘还剩多少。
+
 ### 目录级快照（兜底：站点起不来时）
 
 ```bash

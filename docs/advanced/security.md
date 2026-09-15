@@ -102,7 +102,8 @@ scrypt$16384$8$1$<salt base64>$<hash base64>
 
 ## 其它加固
 
-- **安全响应头**（caddy 模板与 Nest 中间件都下发）：`X-Content-Type-Options: nosniff`、
+- **安全响应头**（caddy 模板对**所有**响应下发，Nest 中间件对 `/api/**`、`/static/**` 也下发；
+  `set` 是覆盖不是追加，所以不会重复）：`X-Content-Type-Options: nosniff`、
   `X-Frame-Options: SAMEORIGIN`（不是 DENY：后台要 iframe 同源的 waline `/ui`）、
   `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`，并隐藏 caddy 的 `Server` 头。
 - **`pageSize=-1` 收敛**：公开文章列表以前允许任何人一次性把**全部文章连正文**拉走
@@ -128,8 +129,12 @@ scrypt$16384$8$1$<salt base64>$<hash base64>
 - `/api/admin/init` 仍然靠「库里有没有用户」判断是否已初始化（初始化窗口内的 TOCTOU），
   现在只有 10 分钟 5 次的限流兜着。
 - `/swagger` 默认公开（可用 `VANBLOG_SWAGGER=false` 关闭），等于把整个后台 API 面摊给未登录用户。
-- `/post/<数字id>` 与 `/post/<别名>` 都返回 200，没有 canonical / 301，阅读量按 pathname 分开统计。
-- website 的 `__tests__` 里还有约 27 个类型错误，构建时靠 `VANBLOG_SKIP_TYPECHECK=true` / `isBuild=t` 绕过。
+- ~~`/post/<数字id>` 与 `/post/<别名>` 都返回 200，没有 canonical / 301~~ —— **已经修好了**：
+  数字 id 现在 308 跳到拼音别名，页面也带 `link rel="canonical"`，阅读量按规范化后的 pathname 统计。
+  见 [SEO](./seo.md)。
+- ~~website 的 `__tests__` 里还有约 27 个类型错误~~ —— **已经清干净了**：`tsc --noEmit` 在
+  `packages/website` 上报的 115 个错误全部来自本机 `~/node_modules/bun-types`（TS 4.9 解析不了它的
+  新语法，见 AGENTS §3.6），仓库代码本身 0 个类型错误。
 
 ::: warning 部署建议
 

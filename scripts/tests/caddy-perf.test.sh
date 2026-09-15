@@ -46,7 +46,10 @@ check_templates() {
   fi
 }
 
-# ---------- 1) HTTP/3 只开在 :443 那个 server 上 ----------
+# ---------- 1) HTTP/3 的 protocols 只钉在 :443 那个 server 上 ----------
+# ⚠️ 实测 caddy 2.11.4：不写 protocols 时 TLS 监听默认就是 ["h1","h2","h3"] 并且已经在发
+#    alt-svc: h3。所以这条断言的意义是"钉住默认值"，不是"打开功能"；
+#    真正让访客用上 HTTP/3 的是编排文件里的 UDP 443 映射（见第 4 条）。
 check_templates '
 import json, sys
 bad = []
@@ -59,7 +62,7 @@ for p in sys.argv[1:3]:
     if "protocols" in s1:
         bad.append("%s: srv1（明文 :80）不该开 h3，protocols=%r" % (p, s1.get("protocols")))
 print("OK" if not bad else "; ".join(bad))
-' "两份模板的 :443 都开了 h1/h2/h3，明文 :80 没有"
+' "两份模板的 :443 都显式钉住 h1/h2/h3（caddy 默认就是这三个，写出来是防将来默认值变），明文 :80 没有"
 
 # ---------- 2) 上游连接池只加在两个热点上游上 ----------
 check_templates '
@@ -135,6 +138,58 @@ for p in sys.argv[1:3]:
                 bad.append("%s %s %s: rewrite=%r 应为 %r" % (p, name, m[0], found, want))
 print("OK" if not bad else "; ".join(bad[:4]))
 ' "/feed.xml、/atom.xml、/feed.json 三条 rewrite 的 find 都与路由路径一致"
+
+# ---------- 3.5) 全局安全响应头（前台页面以前一个都没有）----------
+check_templates '
+import json, sys
+WANT = {
+    "X-Content-Type-Options": ["nosniff"],
+    "Referrer-Policy": ["strict-origin-when-cross-origin"],
+    "X-Frame-Options": ["SAMEORIGIN"],
+}
+bad = []
+for p in sys.argv[1:3]:
+    d = json.load(open(p, encoding="utf-8"))
+    for name, s in d["apps"]["http"]["servers"].items():
+        r0 = s["routes"][0]
+        if r0.get("match"):
+            bad.append("%s %s: route[0] 应该是无 matcher 的全局路由" % (p, name))
+            continue
+        hs = [h for h in r0.get("handle", []) if h.get("handler") == "headers"]
+        if not hs:
+            bad.append("%s %s: 全局路由里没有 headers 处理器" % (p, name))
+            continue
+        resp = hs[0].get("response") or {}
+        got = resp.get("set") or {}
+        for k, v in WANT.items():
+            if got.get(k) != v:
+                bad.append("%s %s: %s = %r（应为 %r）" % (p, name, k, got.get(k), v))
+        if "Permissions-Policy" not in got:
+            bad.append("%s %s: 缺 Permissions-Policy" % (p, name))
+        # deferred 很关键：不然反代回来的响应和 caddy 自己的 5xx 都不会带上这些头
+        if not resp.get("deferred"):
+            bad.append("%s %s: headers 没有 deferred:true" % (p, name))
+        if "Server" not in (resp.get("delete") or []):
+            bad.append("%s %s: 没有 delete Server 头" % (p, name))
+        # 原来的 /admin* 缓存头不能被顶掉
+        admin_cache = 0
+        # ⚠️ /admin* 的 headers 处理器在 **subroute 里面**，内层路由自己没有 match，
+        #    所以要把外层的路径一路带下去，否则永远数不到（第一版就是这么误报的）。
+        def walk(routes, outer=None):
+            global admin_cache
+            for r in routes:
+                m = (r.get("match") or [{}])[0].get("path") or outer
+                for h in r.get("handle", []):
+                    if h.get("handler") == "headers" and m and any("admin" in x for x in m):
+                        if (h.get("response") or {}).get("set", {}).get("Cache-Control"):
+                            admin_cache += 1
+                    if h.get("handler") == "subroute":
+                        walk(h.get("routes", []), m)
+        walk(s["routes"])
+        if admin_cache < 2:
+            bad.append("%s %s: /admin* 与 /api/admin* 的 Cache-Control 头少了（%d）" % (p, name, admin_cache))
+print("OK" if not bad else "; ".join(bad[:4]))
+' "两份模板的所有 server 都全局下发安全响应头（deferred + delete Server），且没顶掉 /admin* 的缓存头"
 
 # ---------- 4) 编排文件要映射 UDP 443，否则浏览器用不上 HTTP/3 ----------
 if grep -qE '^[[:space:]]*-[[:space:]]*vanblog_https_port:443/udp[[:space:]]*$' "${COMPOSE}"; then
