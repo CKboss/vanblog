@@ -199,6 +199,47 @@ docker-compose down && docker-compose up -d
 
 具体访问方式可以自行查阅资料，我一般都是用 [mongoDBCompass](https://www.mongodb.com/try/download/compass) 这个工具。
 
+## 用的是 HTTP/1.1 还是 HTTP/2 / HTTP/3
+
+容器里的 caddy 在 **HTTPS（:443）上默认就是 HTTP/1.1 + HTTP/2**，本分支还额外打开了 **HTTP/3(QUIC)**：
+`caddyTemplate.json` 的 `:443` server 上有 `"protocols": ["h1","h2","h3"]`。明文的 `:80` 只有 HTTP/1.1
+（HTTP/2、3 都要求 TLS）。caddy 到容器内 Node（server:3000 / website:3001）的上游仍是 HTTP/1.1 ——
+Nest(Express) 与 Next standalone 默认都不支持 h2c，改成 h2 没有收益；上游连接开了连接池
+（`keep_alive.max_idle_conns_per_host: 32`，Go 默认只有 2，并发一上来会不停开关连接）。
+
+**HTTP/3 要能用，还得满足两个条件：**
+
+1. 编排文件里映射了 **UDP** 443（QUIC 跑在 UDP 上）。新装自带；**老安装需要跑一次
+   `./vanblog.sh config` 重新生成编排文件**，然后 `./vanblog.sh restart`。
+   `./vanblog.sh status` 会直接告诉你：
+
+   ```text
+   HTTPS 端口：443（TCP+UDP 都已映射，HTTP/3 可用；云主机还需在安全组放行 UDP 443）
+   ```
+
+2. 云主机的安全组 / 防火墙放行 **UDP 443**。没放行也**不会坏**：caddy 照样发 `Alt-Svc`，
+   浏览器试连 QUIC 失败会自动退回 HTTP/2。
+
+**怎么验证：**
+
+```bash
+# 看 HTTP 版本与 Alt-Svc（有 h3 就说明 QUIC 已启用）
+curl -sI --http2 https://你的域名/ | grep -iE '^HTTP|^alt-svc'
+#   HTTP/2 200
+#   alt-svc: h3=":443"; ma=2592000
+```
+
+浏览器里按 F12 → Network → 右键表头勾选 **Protocol** 一列，刷新后能看到 `h2` 或 `h3`。
+在线工具（如 HTTP/3 Test）也可以直接测。
+
+::: tip 站点在别的反代后面时
+
+如果你在 VanBlog 前面还套了 nginx / NPM / Cloudflare，那么访客用的是**外层反代**的协议：
+外层没开 HTTP/2 就还是 1.1，QUIC 也过不去（nginx 不能反代 UDP）。这时要在外层开
+`listen 443 ssl; http2 on;`，配置见[反向代理](../reference/reverse-proxy.md)。
+
+:::
+
 ## 换机器 / 重装，最快的方式是什么
 
 用**整站备份 + `reset`**，不要再去拷数据目录（那要求两边的 MongoDB 大版本一致，很容易翻车）：

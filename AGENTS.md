@@ -2992,14 +2992,97 @@ settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传�
 内置与在用的不给删、服务层地址与 token、界面风格下拉在初始化阶段不调鉴权接口、服务端注册与文件位置、
 文档与示例主题存在且示例本身不会被自己的校验拒掉）。
 
-### 7.37 测试基线（本分支最后一次全量运行的结果）
+### 7.38 caddy 的协议与连接池优化（HTTP/2 已有、HTTP/3 打开、上游连接池、/atom.xml 修复）
+
+用户问："caddy 中用的 http 是不是还是 1.1，这个服务器的配置能不能优化？"
+
+**先把事实查清楚**（读 `caddyTemplate.json` + 用真 caddy 跑起来看日志，不猜）：
+
+| 位置 | 改之前 | 改之后 |
+| --- | --- | --- |
+| 访客 → caddy `:443` | **h1 + h2**（Caddy v2 在 TLS 监听上默认就开 h2，不是 1.1）；**h3 关着**（2.6+ 支持但要显式写 `protocols`） | `protocols: ["h1","h2","h3"]` |
+| 访客 → caddy `:80` | h1（明文没有 h2/h3） | 不变（h3 只在 srv0 上开，明文开 QUIC 没意义） |
+| caddy → server:3000 / website:3001 | HTTP/1.1，**连接池用 Go 默认值**（`MaxIdleConnsPerHost = 2`） | HTTP/1.1 + `keep_alive{idle_timeout:60s, max_idle_conns:64, max_idle_conns_per_host:32}`（28 处） |
+| caddy → waline:8360 | 带 `trusted_proxies` | **原样不动**（低流量，少一处改动就少一处读配置的噪音） |
+| 压缩 | `zstd` + `gzip`，prefer zstd | 不变（Caddy 不支持 brotli，zstd 已是最优） |
+
+**HTTP/3 光在 caddy 里开是不够的**：QUIC 跑在 UDP 上，编排文件必须映射 `443/udp`，
+否则浏览器永远只能用到 h2。已在 `docker-compose-template.yml` 加了
+`- vanblog_https_port:443/udp`（TCP 那条保留，不是替换）。**没放行 UDP 也不会坏** ——
+caddy 照样发 `Alt-Svc`，浏览器试连失败自动退回 h2，所以这是个安全的默认。
+老安装要跑一次 `./vanblog.sh config` 重新生成编排文件；`show_status` 会直接告诉用户
+QUIC 端口映射了没有（新增 `get_compose_https_port` / `compose_has_quic_port`，
+注意端口解析不能被新加的 `/udp` 行带偏，有测试钉着）。
+
+**顺手挖出一个真 bug**：`/atom.xml` 那条路由的 rewrite 是从 `/feed.xml` 复制来的，
+`find` 写成了 `/feed.xml` —— 永远匹配不上，于是 `/atom.xml` 直接 **404**，
+而 `docs/advanced/rss.md` 明明把它当公开地址写着（`/feed.xml`、`/feed.json` 都是好的，
+所以这个坏法特别隐蔽）。已改成 `find: "/atom.xml" → replace: "/rss/atom.xml"`，
+并把三条短地址一起写进测试。实测：改之前 `/atom.xml` 经 caddy 是 404、`/rss/atom.xml` 是 200。
+
+**怎么在没有容器的情况下验证 caddy 配置**（这次的关键手法，值得记住）：
+本会话里 podman 已经用不了了（`failed to open 2048 locks in /libpod_rootless_lock_1000: permission denied`，
+沙箱不给写默认 runtime 目录），但 caddy 是**单个静态 Go 二进制**，直接下载就能在宿主机跑：
+
+```bash
+proxychains4 -q curl -sSL -o /tmp/caddy.tar.gz \
+  https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz
+tar xzf /tmp/caddy.tar.gz -C /tmp/caddybin && /tmp/caddybin/caddy version   # v2.11.4，与镜像里同版本
+```
+
+于是能做到**真验证**而不是"看着像对"：
+
+1. `node scripts/caddyConfig.js caddyTemplate.json permission <email>` 生成配置
+   （⚠️ 必须先生成再 validate：裸模板里是 `ask` 形式，caddy 2.11 会拒绝
+   —— "on-demand TLS cannot be enabled without a permission module"），
+   再把 `logging` 段去掉（本机没有 `/var/log` 写权限），`caddy validate` → **Valid configuration**
+   （主模板与降级模板都过）。
+2. 真起一个 caddy（`tls internal` + `auto_https disable_redirects`，因为非 root 绑不了 :80）
+   反代到本机 dev server:3000，然后：
+   - 日志里出现 `"server running","name":"srv0","protocols":["h1","h2","h3"]` ✓
+   - `curl -k --http2 https://127.0.0.1:8443/api/public/meta` → **HTTP/2 200**，
+     响应头有 **`alt-svc: h3=":8443"; ma=2592000`**（h3 已启用并对外广告）✓
+   - `--http1.1` 对照 → HTTP/1.1 200 ✓；`Accept-Encoding: gzip` → `content-encoding: gzip` ✓
+   - 20 个并发请求走连接池：0.47s ✓
+3. Caddyfile 的 `keepalive` 不接受 `on`（`bad duration value 'on'`），要写时长；
+   用 `caddy adapt` 把 Caddyfile 翻成 JSON，才能确定 `transport` 的确切形状：
+   `{"protocol":"http","versions":["1.1"],"keep_alive":{"idle_timeout":60000000000,"max_idle_conns":64,"max_idle_conns_per_host":32}}`
+   （时间单位是**纳秒**）。⚠️ 别凭记忆写 JSON 字段名，用 `caddy adapt` 反查最快。
+
+**故意没做的事**（都有理由，别再当"待优化"提出来）：
+
+- **上游不开 h2c**：Nest(Express) 与 Next standalone 默认都不支持 HTTP/2，开了反而要改上游启动方式；
+  本机回环上 h1.1 + 连接池已经够了。
+- **不让 caddy 直接 `file_server` 服务 `/static/*`**：虽然能省掉一跳 Node，但静态目录的
+  Cache-Control / ETag / content-type / 缩略图逻辑现在都在 server 里，搬一部分到 caddy
+  会出现两处真相，得不偿失。
+- **不给主路由加 `trusted_proxies`**：客户端 IP 的正确性已经在应用层处理
+  （`provider/log/utils` 优先 `CF-Connecting-IP`，有测试），反代场景的写法在
+  `docs/reference/reverse-proxy.md` 里；在 caddy 里默认信任私网段会让局域网客户端能伪造 XFF。
+- **不动 `read_timeout` / `write_timeout`**：不设限是有意的 —— 整站备份下载、Markdown 导出
+  都是大响应，设小了会在传输中途被掐断。
+- **不调 `encode.minimum_length`**：Caddy 默认 512 字节已经合理。
+
+**测试**：`scripts/tests/caddy-perf.test.sh`（12 条）—— 两份模板的 srv0 都有 h1/h2/h3 且 srv1 没有、
+热点上游的 `transport.keep_alive` 参数齐全而 waline 上游保持原样且没丢 `trusted_proxies`、
+三条订阅源 rewrite 的 `find` 与路由路径一致、编排模板映射了 UDP 443 且 TCP 那条还在、
+脚本有那两个新函数且 status 会提 HTTP/3、用模板生成的编排文件端口解析不被 UDP 行带偏、
+以及**本机有 caddy 二进制时真的跑一遍 `caddy validate`**（没有就跳过并说明）。
+
+**文档**：`docs/faq/deploy.md` 新增"用的是 HTTP/1.1 还是 HTTP/2 / HTTP/3"（含 `curl -I --http2`
+看 `alt-svc`、浏览器 Network 的 Protocol 列、UDP 443 的两个前提、老安装要重跑 config）；
+`docs/reference/reverse-proxy.md` 新增"协议：HTTP/2 与 HTTP/3 在哪一层生效"
+（外层反代决定访客协议、nginx 不能反代 UDP 所以 QUIC 过不去、Cloudflare 在边缘终结 h3）；
+`docs/advanced/rss.md` 补上三条短地址与 `/rss/...` 的改写关系。
+
+### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 60 文件 / 558 用例全绿 |
 | admin `node --test tests/unit` | 83 套件 / 343 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 824 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 836 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
@@ -3009,7 +3092,7 @@ settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传�
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.37 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.39 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

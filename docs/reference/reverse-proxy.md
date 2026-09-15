@@ -41,6 +41,23 @@ ports:
 
 :::
 
+## 协议：HTTP/2 与 HTTP/3 在哪一层生效
+
+VanBlog 容器里的 caddy 在 `:443` 上启用了 `h1 / h2 / h3`（HTTP/3 需要编排文件映射
+**UDP** 443，新装自带；老安装跑一次 `./vanblog.sh config` 再 `restart`）。
+
+**一旦你在前面又套了一层反代，访客用的就是外层的协议**，caddy 那层的 h2/h3 只对
+"外层 → caddy"这一跳有意义：
+
+- 外层是 nginx / NPM：请显式开 HTTP/2（nginx ≥ 1.25.1 用 `http2 on;`，更早的版本写
+  `listen 443 ssl http2;`），否则访客仍然是 HTTP/1.1。
+- **QUIC/HTTP/3 过不去**：nginx 不能反代 UDP。要么让访客直连 VanBlog 的 443（含 UDP），
+  要么用支持 HTTP/3 的边缘（如 Cloudflare，它会在边缘终结 QUIC，回源仍是 h1/h2）。
+- 外层到 VanBlog 的这一跳走 HTTP/1.1 就够了（本机/内网，延迟极低），不必折腾 h2c ——
+  容器里的 Nest 与 Next 默认也不支持 h2c。
+- 外层记得转发 `X-Forwarded-For` / `X-Forwarded-Proto` 与原始 `Host`（下面各节的配置里都有），
+  否则访问统计会记成反代的 IP、站内绝对链接会变成 http。
+
 ## 反代方式
 
 ### nginx-proxy-manager

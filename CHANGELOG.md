@@ -2,7 +2,19 @@
 
 ## [Unreleased]
 
-（暂无）
+> 下面是 `v2026.09` 打标之后累积的改动，还没发版。
+
+**新功能**
+
+- **插件式前台主题（换肤）**：后台 `系统设置 → 主题` 里上传一份 CSS 就是一个新主题，点「启用」后前台**刷新即生效** —— 不用改代码、不用重新构建、不用重启容器。主题 id 会写到 `<html data-ui="…">` 与 `.vb-root` 上，所以每份主题都用 `[data-ui="<id>"]` 收窄作用域，多个主题共存、随时切换、互不残留；暗色跟着站点已有的 `html.dark` 机制走。内置的 `Apple 风格` 与 `默认` 仍打包在前台产物里，上传的主题存 `<图床目录>/themes/<id>-<hash8>.css`（跟着静态目录一起备份），由 `GET /api/public/theme.css` 以**固定地址 + ETag/no-cache** 提供 —— 这样换主题不依赖静态页面有没有重新渲染完。上传时做安全校验（≤512KB、只收 `.css`、拒绝 `javascript:` / `expression()` / `behavior:` / `-moz-binding` / `</style>` / `<script>`，远程 `@import` 允许但警告），并且**扫描的是去掉注释之后的文本**：示例主题的注释里就会写"javascript: 会被拒绝"，扫原文会把它自己拒掉。`站点配置 → 界面风格` 的下拉框也会列出上传的主题。附一份可直接上传的示例主题与开发文档（含从零写一个主题的教程、稳定钩子表、限制与接口）。[主题](docs/features/theme.md)
+
+**性能**
+
+- **打开 HTTP/3(QUIC) 并给 caddy 的上游加连接池**：容器里的 caddy 在 `:443` 上**本来就是 HTTP/1.1 + HTTP/2**（Caddy v2 在 TLS 监听上默认启用 h2），只是 HTTP/3 默认关着 —— 现在 `:443` 那个 server 显式声明 `protocols: ["h1","h2","h3"]`，编排文件也映射了 **UDP 443**（QUIC 跑在 UDP 上；老安装跑一次 `./vanblog.sh config` 再 `restart` 就有，`./vanblog.sh status` 会直接告诉你 QUIC 端口映射了没有）。UDP 没放行也**不会坏**：caddy 照样发 `Alt-Svc`，浏览器试连失败自动退回 HTTP/2。caddy → Node 的上游仍是 HTTP/1.1（Nest/Next 默认不支持 h2c），但补上了连接池 `keep_alive{idle_timeout 60s, max_idle_conns 64, max_idle_conns_per_host 32}` —— Go 的默认值只有 2，并发一上来就不停地开关上游连接。实测（本机跑真 caddy 2.11.4，与镜像同版本）：日志出现 `protocols:["h1","h2","h3"]`、`curl --http2` 拿到 `HTTP/2 200` 且响应头带 `alt-svc: h3=":443"; ma=2592000`、gzip 生效、20 个并发 0.47s。压缩仍是 zstd+gzip（Caddy 不支持 brotli，zstd 已是最优）。`/docs`、反向代理文档里都写清了"外层再套一层反代时，访客用的是外层的协议"。
+
+**修复**
+
+- **`/atom.xml` 一直是 404**：caddy 里这条路由的 rewrite 是从 `/feed.xml` 复制来的，`find` 写成了 `/feed.xml`，永远匹配不上，于是请求原样打到 server 上 404 —— 而 `/feed.xml`、`/feed.json` 都是好的，文档里也把 `/atom.xml` 当公开地址写着，所以特别隐蔽。现在三条短地址（`/feed.xml`、`/atom.xml`、`/feed.json`）都正确改写到 `/rss/...`，并写进了测试。
 
 ## [v2026.09] - 2026-09-14
 
@@ -17,7 +29,6 @@
 
 **新功能**
 
-- **插件式前台主题（换肤）**：后台 `系统设置 → 主题` 里上传一份 CSS 就是一个新主题，点「启用」后前台**刷新即生效** —— 不用改代码、不用重新构建、不用重启容器。主题 id 会写到 `<html data-ui="…">` 与 `.vb-root` 上，所以每份主题都用 `[data-ui="<id>"]` 收窄作用域，多个主题共存、随时切换、互不残留；暗色跟着站点已有的 `html.dark` 机制走。内置的 `Apple 风格` 与 `默认` 仍打包在前台产物里，上传的主题存 `<图床目录>/themes/<id>-<hash8>.css`（跟着静态目录一起备份），由 `GET /api/public/theme.css` 以**固定地址 + ETag/no-cache** 提供 —— 这样换主题不依赖静态页面有没有重新渲染完。上传时做安全校验（≤512KB、只收 `.css`、拒绝 `javascript:` / `expression()` / `behavior:` / `-moz-binding` / `</style>` / `<script>`，远程 `@import` 允许但警告），并且**扫描的是去掉注释之后的文本**：示例主题的注释里就会写"javascript: 会被拒绝"，扫原文会把它自己拒掉。`站点配置 → 界面风格` 的下拉框也会列出上传的主题。附一份可直接上传的示例主题与开发文档（含从零写一个主题的教程、稳定钩子表、限制与接口）。[主题](docs/features/theme.md)
 - **内置评论系统**：评论存在本站 Mongo、走本站接口，前台自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台原生管理页（审核 / 编辑 / 删除 / 批量 / 按状态与关键词筛选）。后台「评论设置」三选一：`内置 / Waline / 关闭`；老站点升级默认保持 Waline，切换不迁移数据。支持从 Waline 导出文件**一键导入**（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞、`data:` 图片折叠成 alt）与**只导出已通过评论**。[评论系统](docs/features/comment.md)
 - **补齐 6 种 markdown 语法**：`==高亮==`、`X^2^` / `H~2~O`、`:smile:` 短代码、定义列表、GitHub 提示块 `> [!NOTE]`、`[[toc]]`。编辑器与前台用同一套插件（按 bytemd 的 unified 10 世代挑版本）。⚠️ 单个 `~x~` 现在是下标，删除线要写 `~~x~~`。[Markdown](docs/features/markdown.md)
 - **整站备份 / 恢复**：一个高压缩归档（zstd → xz → gzip）打包全部集合 + 评论库 + 图床/附件/自定义页面，支持不解压看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引）。[备份](docs/advanced/backup.md)
@@ -97,7 +108,7 @@
 - 一键脚本 `vanblog.sh` v0.4.0：**从本分支源码克隆并本地 `docker build`**（本 fork 没有发布镜像），`update` 改成 fetch + 重建且构建失败不停机，编排模板优先用仓库里那份，卸载会清源码目录；`VANBLOG_USE_UPSTREAM_IMAGE=true` 可回到官方镜像。
 - 一键脚本 v0.3.7 体检：`backup --consistent`、`restore` 校验压缩包并清 `mongod.lock`、常规操作不再 `down -v`（那会删卷）。
 - `./dev-env.sh bootstrap`：一条命令备好 Node 20 + pnpm 8 + MongoDB 7，全程不需要 docker 与 sudo。
-- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **18 文件 / 824 条断言**；文档站 `vuepress build` 通过
+- 测试：server 610 用例（609 绿 + 1 个既有离线字体用例）、website 59 文件 / 550、admin 82 套件 / 326、部署脚本 **19 文件 / 836 条断言**；文档站 `vuepress build` 通过
 
 ### ✨ Features | 新功能
 

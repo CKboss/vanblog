@@ -51,6 +51,11 @@ services:
       # 前面的是映射到宿主机的端口号，改端口的话该前面的
       - vanblog_http_port:80
       - vanblog_https_port:443
+      # ⚠️ 这条是给 HTTP/3(QUIC) 用的：caddy 已经在 :443 上启用了 h1/h2/h3，
+      # 但 QUIC 跑在 **UDP** 上，不映射这个端口浏览器就只能用 HTTP/2。
+      # 映射了但云厂商安全组/防火墙没放行 UDP vanblog_https_port 也没关系 ——
+      # caddy 照样发 Alt-Svc，浏览器试连失败会自动退回 HTTP/2，不影响访问。
+      - vanblog_https_port:443/udp
   mongo:
     # 这个 tag 由 ./vanblog.sh 在生成编排文件时填入（占位符 vanblog_mongo_image）：
     #   - **全新安装** → mongo:7.0（4.4 早在 2024-02 就 EOL 了，没有安全更新；

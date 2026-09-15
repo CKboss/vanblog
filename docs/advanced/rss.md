@@ -15,6 +15,9 @@ VanBlog 内置了 `RSS feed 生成器` ，开箱即用。
 - `<your-site-url>/feed.json`: JSON 1.1 格式
 - `<your-site-url>/atom.xml`: Atom 1.0 格式
 
+这三个短地址由 caddy 改写到 `/rss/...`（`/feed.xml → /rss/feed.xml`、`/atom.xml → /rss/atom.xml`、
+`/feed.json → /rss/feed.json`），直接访问 `/rss/` 下的原始地址也一样。
+
 导航栏右上角会默认出现 `RSS` 按钮。您可以在后台的 `布局设置` 中关闭此按钮。
 
 VanBlog 包含后端 Markdown 渲染器，因此你可以在支持 HTML 内容的 RSS 阅读器上获得与网页相近的体验。

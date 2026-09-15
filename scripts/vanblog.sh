@@ -1993,6 +1993,24 @@ get_compose_http_port() {
     head -1 | grep -oE '^[0-9]+'
 }
 
+# HTTPS 端口（宿主机侧），以及有没有映射 QUIC 用的 UDP 端口
+get_compose_https_port() {
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  [[ -f "${compose_file}" ]] || return 1
+  local block
+  block="$(awk '/^[[:space:]]*vanblog:[[:space:]]*$/{f=1;next} f&&/^  [A-Za-z0-9_-]+:[[:space:]]*$/{f=0} f' "${compose_file}")"
+  # 只认映射到容器 443 的那条，且要区分 tcp / udp
+  printf '%s\n' "${block}" |
+    grep -oE '[0-9]+:443(/(tcp|udp))?["'"'"']?[[:space:]]*$' |
+    head -1 | grep -oE '^[0-9]+'
+}
+
+compose_has_quic_port() {
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  [[ -f "${compose_file}" ]] || return 1
+  grep -qE '[0-9]+:443/udp' "${compose_file}"
+}
+
 vanblog_api_base() {
   if [[ -n "${VANBLOG_API_BASE:-}" ]]; then
     printf '%s' "${VANBLOG_API_BASE%/}"
@@ -2413,6 +2431,16 @@ show_status() {
     local http_port
     http_port="$(get_compose_http_port 2>/dev/null)"
     echo -e "  HTTP 端口 ：${http_port:-未知}"
+    local https_port
+    https_port="$(get_compose_https_port 2>/dev/null)"
+    if [[ -n "${https_port}" ]]; then
+      # caddy 在 :443 上开了 h1/h2/h3，但 QUIC 走 UDP：没映射这个端口的话浏览器只能用 HTTP/2
+      if compose_has_quic_port; then
+        echo -e "  HTTPS 端口：${https_port}（TCP+UDP 都已映射，${green}HTTP/3 可用${plain}；云主机还需在安全组放行 UDP ${https_port}）"
+      else
+        echo -e "  HTTPS 端口：${https_port}（${yellow}只映射了 TCP${plain}，浏览器只能用 HTTP/2；跑一次 ${VANBLOG_SELF_NAME} config 重新生成编排文件即可加上 UDP）"
+      fi
+    fi
     if [[ -n "${http_port}" ]]; then
       local base code
       base="$(vanblog_api_base 2>/dev/null)"
