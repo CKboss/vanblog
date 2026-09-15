@@ -277,22 +277,58 @@ fi
 
 assert_eq "$(cmp -s "${SCRIPT}" "${PUBLIC_SCRIPT}" && echo same || echo diff)" "same" "scripts/vanblog.sh matches docs public copy"
 
-# --- fallback order: fork raw (dev/dsh) → docs host → upstream GitHub raw → jsDelivr ---
+# --- fallback order: **fork 优先** ---
+# 本分支三源（GitHub raw → jsDelivr gh/CKboss → Release 附件）全部试过之后，
+# 才允许退到上游（文档站 → 上游 raw → 上游 jsDelivr）。原因：本分支的 raw 地址就是
+# raw.githubusercontent.com，国内常常不通 —— 以前的顺序会在那里静默退到上游产物。
 setup_case
 source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 mapfile -t COMPOSE_URL_LIST < <(compose_template_urls)
 mapfile -t SCRIPT_URL_LIST < <(script_urls)
-assert_eq "${#COMPOSE_URL_LIST[@]}" "4" "compose fallback list has 4 URLs"
-assert_eq "${COMPOSE_URL_LIST[0]}" "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml" "compose primary is the fork raw file on dev/dsh"
-assert_eq "${COMPOSE_URL_LIST[1]}" "https://vanblog.mereith.com/docker-compose-template.yml" "compose second is docs host"
-assert_eq "${COMPOSE_URL_LIST[2]}" "https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml" "compose third is upstream GitHub raw"
-assert_eq "${COMPOSE_URL_LIST[3]}" "https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml" "compose fourth is jsDelivr"
-assert_eq "${#SCRIPT_URL_LIST[@]}" "4" "script fallback list has 4 URLs"
-assert_eq "${SCRIPT_URL_LIST[0]}" "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh" "script primary is the fork raw file on dev/dsh"
-assert_eq "${SCRIPT_URL_LIST[1]}" "https://vanblog.mereith.com/vanblog.sh" "script second is docs host"
-assert_eq "${SCRIPT_URL_LIST[2]}" "https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh" "script third is upstream GitHub raw"
-assert_eq "${SCRIPT_URL_LIST[3]}" "https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/scripts/vanblog.sh" "script fourth is jsDelivr"
+assert_eq "${#COMPOSE_URL_LIST[@]}" "6" "compose fallback list has 6 URLs"
+assert_eq "${COMPOSE_URL_LIST[0]}" "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml" "compose #1 is the fork raw file on dev/dsh"
+assert_eq "${COMPOSE_URL_LIST[1]}" "https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml" "compose #2 is the fork's jsDelivr mirror (raw is often blocked in CN)"
+assert_eq "${COMPOSE_URL_LIST[2]}" "https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml" "compose #3 is the fork's Release asset (release-fork.yml attaches docker-compose-template.yml)"
+assert_eq "${COMPOSE_URL_LIST[3]}" "https://vanblog.mereith.com/docker-compose-template.yml" "compose #4 (first upstream) is the docs host"
+assert_eq "${COMPOSE_URL_LIST[4]}" "https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml" "compose #5 is upstream GitHub raw"
+assert_eq "${COMPOSE_URL_LIST[5]}" "https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml" "compose #6 is upstream jsDelivr"
+assert_eq "${#SCRIPT_URL_LIST[@]}" "6" "script fallback list has 6 URLs"
+assert_eq "${SCRIPT_URL_LIST[0]}" "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh" "script #1 is the fork raw file on dev/dsh"
+assert_eq "${SCRIPT_URL_LIST[1]}" "https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/scripts/vanblog.sh" "script #2 is the fork's jsDelivr mirror"
+assert_eq "${SCRIPT_URL_LIST[2]}" "https://github.com/CKboss/vanblog/releases/latest/download/vanblog.sh" "script #3 is the fork's Release asset (release-fork.yml attaches vanblog.sh)"
+assert_eq "${SCRIPT_URL_LIST[3]}" "https://vanblog.mereith.com/vanblog.sh" "script #4 (first upstream) is the docs host"
+assert_eq "${SCRIPT_URL_LIST[4]}" "https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh" "script #5 is upstream GitHub raw"
+assert_eq "${SCRIPT_URL_LIST[5]}" "https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/scripts/vanblog.sh" "script #6 is upstream jsDelivr"
+# 不变式：前三个必须都是 fork 自己的源（CKboss），后三个才轮到上游
+fork_first_ok=1
+for u in "${COMPOSE_URL_LIST[@]:0:3}" "${SCRIPT_URL_LIST[@]:0:3}"; do
+  [[ "${u}" == *"CKboss/vanblog"* ]] || fork_first_ok=0
+done
+for u in "${COMPOSE_URL_LIST[@]:3:3}" "${SCRIPT_URL_LIST[@]:3:3}"; do
+  [[ "${u}" == *"CKboss"* ]] && fork_first_ok=0
+done
+if [[ "${fork_first_ok}" == "1" ]]; then
+  pass "前三条回退全是 fork 源、后三条才到上游（不会在 fork 镜像没试完时静默用上游产物）"
+else
+  fail "前三条回退全是 fork 源、后三条才到上游"
+fi
+
+# --- VANBLOG_RELEASE_TAG 覆盖：钉住 tag 时走 releases/download/<tag>/ ---
+setup_case
+VANBLOG_RELEASE_TAG="v2026.09" source_script
+mapfile -t TAGGED_COMPOSE < <(compose_template_urls)
+mapfile -t TAGGED_SCRIPT < <(script_urls)
+assert_eq "${TAGGED_COMPOSE[2]}" "https://github.com/CKboss/vanblog/releases/download/v2026.09/docker-compose-template.yml" "VANBLOG_RELEASE_TAG pins the compose Release asset URL"
+assert_eq "${TAGGED_SCRIPT[2]}" "https://github.com/CKboss/vanblog/releases/download/v2026.09/vanblog.sh" "VANBLOG_RELEASE_TAG pins the script Release asset URL"
+unset VANBLOG_RELEASE_TAG
+
+# --- VANBLOG_BRANCH 覆盖：jsDelivr 的分支跟着走 ---
+setup_case
+VANBLOG_BRANCH="dev/other" source_script
+mapfile -t BR_COMPOSE < <(compose_template_urls)
+assert_eq "${BR_COMPOSE[1]}" "https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/other/docker-compose/docker-compose-template.yml" "jsDelivr fallback follows VANBLOG_BRANCH"
+unset VANBLOG_BRANCH
 
 # --- primary success: only first URL, valid compose, prints which URL worked ---
 setup_case
@@ -312,7 +348,7 @@ else
   pass "primary success does not request fallback URLs"
 fi
 
-# --- failed primary + successful secondary writes a valid compose file ---
+# --- failed primary + successful secondary (fork jsDelivr) writes a valid compose file ---
 setup_case
 source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
@@ -320,52 +356,60 @@ printf '%s\n' "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-c
 run_download_compose
 assert_eq "${DOWNLOAD_RC}" "0" "secondary success exits 0"
 assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml" "secondary path reports primary failure"
-assert_contains "${DOWNLOAD_OUT}" "下载成功: https://vanblog.mereith.com/docker-compose-template.yml" "secondary success prints the docs host URL"
-assert_not_contains "${DOWNLOAD_OUT}" "jsdelivr" "secondary success does not try jsDelivr"
+assert_contains "${DOWNLOAD_OUT}" "下载成功: https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml" "secondary success prints the fork's jsDelivr URL"
+assert_not_contains "${DOWNLOAD_OUT}" "vanblog.mereith.com" "secondary success never reaches the upstream docs host"
 assert_not_contains "${DOWNLOAD_OUT}" "下载失败，已尝试全部地址" "secondary success is not an all-fail"
 assert_file_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "services:" "secondary success writes services"
 assert_file_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "vanblog_email" "secondary success writes template placeholders"
 assert_file_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "mongo:" "secondary success writes mongo service"
-if [[ "$(url_attempt_order | tr '\n' ' ')" == "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml https://vanblog.mereith.com/docker-compose-template.yml " ]]; then
-  pass "wget order is fork raw then docs host"
+if [[ "$(url_attempt_order | tr '\n' ' ')" == "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml " ]]; then
+  pass "wget order is fork raw then fork jsDelivr"
 else
-  fail "wget order is fork raw then docs host (got: $(url_attempt_order | tr '\n' '|'))"
+  fail "wget order is fork raw then fork jsDelivr (got: $(url_attempt_order | tr '\n' '|'))"
 fi
-if grep -q 'jsdelivr' "${VANBLOG_TEST_LOG}"; then
-  fail "stopped after first successful fallback"
+if grep -q 'mereith' "${VANBLOG_TEST_LOG}"; then
+  fail "stopped after first successful fallback (no upstream requested)"
 else
-  pass "stopped after first successful fallback"
+  pass "stopped after first successful fallback (no upstream requested)"
 fi
 
-# --- HTML/invalid primary is rejected and GitHub fallback is used ---
+# --- HTML/invalid primary is rejected and the fork's jsDelivr is used (still no upstream) ---
 setup_case
 source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 printf '%s\n' "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml" >"${VANBLOG_TEST_INVALID_URLS}"
 run_download_compose
-assert_eq "${DOWNLOAD_RC}" "0" "invalid primary then docs host exits 0"
+assert_eq "${DOWNLOAD_RC}" "0" "invalid primary then fork jsDelivr exits 0"
 assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml" "HTML primary is treated as unavailable"
-assert_contains "${DOWNLOAD_OUT}" "下载成功: https://vanblog.mereith.com/docker-compose-template.yml" "HTML primary falls through to the docs host"
+assert_contains "${DOWNLOAD_OUT}" "下载成功: https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml" "HTML primary falls through to the fork's jsDelivr, not upstream"
 assert_file_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "services:" "HTML primary still yields valid compose"
 assert_file_not_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "<html>" "HTML error page is not kept"
 
-# --- first two fail, jsDelivr succeeds ---
+# --- all three fork sources fail → first upstream (docs host) is used, and only then ---
 setup_case
 source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 cat >"${VANBLOG_TEST_FAIL_URLS}" <<EOF
 https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml
-https://vanblog.mereith.com/docker-compose-template.yml
-https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml
+https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml
+https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml
 EOF
 run_download_compose
-assert_eq "${DOWNLOAD_RC}" "0" "jsDelivr fallback exits 0"
-assert_contains "${DOWNLOAD_OUT}" "下载成功: https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml" "jsDelivr success prints CDN URL"
-assert_file_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "vanblog:" "jsDelivr success writes compose"
+assert_eq "${DOWNLOAD_RC}" "0" "upstream docs-host fallback exits 0"
+assert_contains "${DOWNLOAD_OUT}" "下载成功: https://vanblog.mereith.com/docker-compose-template.yml" "after all fork sources fail, the docs host wins"
+assert_file_contains "${TEST_DIR}/vanblog/docker-compose-template.yaml" "vanblog:" "docs-host fallback writes compose"
 if [[ "$(url_attempt_order | wc -l | tr -d ' ')" == "4" ]]; then
-  pass "all four compose URLs attempted before jsDelivr success"
+  pass "exactly the 3 fork URLs then the docs host were attempted"
 else
-  fail "all four compose URLs attempted before jsDelivr success (got $(url_attempt_order | wc -l))"
+  fail "exactly the 3 fork URLs then the docs host were attempted (got $(url_attempt_order | wc -l))"
+fi
+# 上游源只该在 fork 三源都失败之后出现（顺序不变式）
+first_upstream_line="$(grep -n 'mereith' "${VANBLOG_TEST_LOG}" | head -1 | cut -d: -f1)"
+last_fork_line="$(grep -n 'CKboss' "${VANBLOG_TEST_LOG}" | tail -1 | cut -d: -f1)"
+if [[ -n "${first_upstream_line}" && -n "${last_fork_line}" && "${first_upstream_line}" -gt "${last_fork_line}" ]]; then
+  pass "upstream URLs are only requested after every fork URL failed"
+else
+  fail "upstream URLs are only requested after every fork URL failed"
 fi
 
 # --- all compose URLs fail: non-zero and clear error, no leftover compose ---
@@ -374,6 +418,8 @@ source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 cat >"${VANBLOG_TEST_FAIL_URLS}" <<EOF
 https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml
+https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml
+https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml
 https://vanblog.mereith.com/docker-compose-template.yml
 https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml
 https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml
@@ -382,17 +428,19 @@ run_download_compose "${TEST_DIR}/vanblog/docker-compose-template.yaml"
 assert_eq "${DOWNLOAD_RC}" "1" "all-fail exits 1"
 assert_contains "${DOWNLOAD_OUT}" "下载失败，已尝试全部地址" "all-fail prints clear error"
 assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml" "all-fail mentions the fork raw URL"
+assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml" "all-fail mentions the fork jsDelivr URL"
+assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml" "all-fail mentions the fork Release asset URL"
 assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://vanblog.mereith.com/docker-compose-template.yml" "all-fail mentions docs host"
 assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml" "all-fail mentions GitHub"
-assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml" "all-fail mentions jsDelivr"
+assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml" "all-fail mentions upstream jsDelivr"
 assert_not_contains "${DOWNLOAD_OUT}" "下载成功:" "all-fail does not print success"
 if [[ -e "${TEST_DIR}/vanblog/docker-compose-template.yaml" ]]; then
   fail "all-fail does not leave a compose template"
 else
   pass "all-fail does not leave a compose template"
 fi
-if [[ "$(url_attempt_order | wc -l | tr -d ' ')" == "4" ]]; then
-  pass "all-fail tries every compose URL"
+if [[ "$(url_attempt_order | wc -l | tr -d ' ')" == "6" ]]; then
+  pass "all-fail tries every compose URL (6)"
 else
   fail "all-fail tries every compose URL (got $(url_attempt_order | wc -l))"
 fi
@@ -403,6 +451,8 @@ source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 cat >"${VANBLOG_TEST_FAIL_URLS}" <<EOF
 https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml
+https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml
+https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml
 https://vanblog.mereith.com/docker-compose-template.yml
 https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml
 https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml
@@ -413,16 +463,16 @@ assert_eq "${CONFIG_RC}" "1" "config all-fail exits 1"
 assert_contains "${CONFIG_OUT}" "下载编排文件失败" "config all-fail prints compose download error"
 assert_not_contains "${CONFIG_OUT}" "请输入您的邮箱" "config all-fail does not continue to prompts"
 
-# --- script self-update: failed fork raw + successful docs host ---
+# --- script self-update: failed fork raw + successful fork jsDelivr (never upstream) ---
 setup_case
 source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 printf '%s\n' "https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh" >"${VANBLOG_TEST_FAIL_URLS}"
 cat "${SCRIPT}" >"${VANBLOG_TEST_PAYLOAD}"
 run_download_script "${TEST_DIR}/vanblog.sh"
-assert_eq "${DOWNLOAD_RC}" "0" "script docs-host fallback exits 0"
-assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh" "script fallback reports the fork URL failure"
-assert_contains "${DOWNLOAD_OUT}" "下载成功: https://vanblog.mereith.com/vanblog.sh" "script fallback prints the docs host URL"
+assert_eq "${DOWNLOAD_RC}" "0" "script fork-jsDelivr fallback exits 0"
+assert_contains "${DOWNLOAD_OUT}" "该地址不可用: https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh" "script fallback reports the fork raw URL failure"
+assert_contains "${DOWNLOAD_OUT}" "下载成功: https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/scripts/vanblog.sh" "script fallback uses the fork's jsDelivr before any upstream"
 assert_file_contains "${TEST_DIR}/vanblog.sh" "VANBLOG_SCRIPT_VERSION" "script fallback writes a vanblog script"
 assert_file_contains "${TEST_DIR}/vanblog.sh" "download_compose_template" "script fallback writes current helper"
 
@@ -432,6 +482,8 @@ source_script
 VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
 cat >"${VANBLOG_TEST_FAIL_URLS}" <<EOF
 https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh
+https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/scripts/vanblog.sh
+https://github.com/CKboss/vanblog/releases/latest/download/vanblog.sh
 https://vanblog.mereith.com/vanblog.sh
 https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh
 https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/scripts/vanblog.sh

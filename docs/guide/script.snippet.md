@@ -12,9 +12,13 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 
 :::
 
-脚本下载编排模板时会按顺序尝试：**本分支 GitHub raw → 上游文档站 → 上游 GitHub raw → jsDelivr**，
-任一成功即继续。⚠️ 如果只有上游那几个源可达，拿到的是上游模板（mongo 写死 4.4.16、没有日志上限、
-没有 `depends_on`），脚本会提示一句"模板里没有 mongo 占位符"，功能仍可用，但建议排查网络后重跑 `config`。
+脚本下载编排模板（以及更新脚本自身）时按「**fork 优先**」的顺序尝试：**本分支 GitHub raw →
+本分支 jsDelivr（`gh/CKboss/vanblog@dev/dsh`）→ 本分支 GitHub Release 附件 → 上游文档站 →
+上游 GitHub raw → 上游 jsDelivr**，任一成功即继续并打印实际用的 URL。前三个 fork 源都排在
+上游之前：raw.githubusercontent.com 在部分网络（尤其中国大陆）经常不通，以前的顺序会在那里
+**静默退到上游**，装出来的就是不含本分支任何加固的官方产物。⚠️ 如果最后落到上游那三个兜底源，
+拿到的是上游模板（mongo 写死 4.4.16、没有日志上限、没有 healthcheck / `depends_on`），
+脚本会提示一句"模板里没有 mongo 占位符"，功能仍可用，但建议排查网络后重跑 `config`。
 详见 [部署常见问题](../faq/deploy.md#一键脚本下载编排文件失败)。
 
 ## 装的是什么
@@ -63,9 +67,11 @@ VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ./vanblog.sh install      # 安装/重装（也可以直接用交互菜单选 1）
 ./vanblog.sh status       # 状态
 ./vanblog.sh log          # 日志
-./vanblog.sh backup       # 整站备份（一致性快照，见下）
+./vanblog.sh backup       # 整站备份（一致性快照，见下；导出前有磁盘空间预检）
+./vanblog.sh verify       # 校验备份归档（完整性 + sha256 + 内容清单，不解压落盘）
 ./vanblog.sh restore      # 从整站备份恢复
 ./vanblog.sh reset        # 换新机器：自动初始化 + 恢复整站备份 + 重启 + 核对（一条命令）
+./vanblog.sh install-cron # 定时备份：每天一次写进 root 的 crontab（幂等；--remove 移除）
 ./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）
 ./vanblog.sh --help       # 全部命令
 ```
@@ -86,14 +92,19 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 :::
 
 数据都在安装目录里（默认 `/var/vanblog`）：`data/static` 图床与附件、`data/mongo` 数据库、
-`log` 日志（**整站备份归档也在 `log/vanblog-backups/`**）、`caddy/` 证书与配置、
-`docker-compose.yaml` 编排文件。备份/恢复见 [备份与迁移](./backup.md)。
+`log` 日志（**整站备份归档也在 `log/vanblog-backups/`**，旁边是 `.manifest.json` 清单与
+`.sha256` 校验和；`install-cron` 的备份日志是 `log/vanblog-backup-cron.log`）、`caddy/` 证书与配置、
+`docker-compose.yaml` 编排文件、`vanblog-cron.env`（`install-cron` 写的定时备份 token，0600）。
+备份/恢复/定时备份见 [备份与迁移](./backup.md)。
 
 ![脚本演示](https://pic.mereith.com/img/74047a8387a2d2ba4e3e7cefca67815f.clipboard-2023-06-27.webp)
 
 ::: tip
 
 1. 只推荐在纯 Linux 环境下使用此脚本，宝塔面板也可以用。脚本需要 root（会检查 `id -u`）。
+1. ⚠️ 机器上没有 docker 时，脚本会把**上游作者主机**的 `docker.sh` 用 root 管道进 bash 执行
+   （`bash <(curl …)`，上游遗留行为）；不放心就先自己装好 docker 再跑脚本，见
+   [部署常见问题](../faq/deploy.md#如何安装-docker)。
 1. 如果你想在外部访问数据库，请参考 [部署常见问题 → 如何从外部访问数据库](../faq/deploy.md#如何在外部访问数据库)（**注意不要用 `down -v`**）。
 1. 反代时只需要反代映射的 HTTP 端口，详见 [反代配置](../reference/reverse-proxy.md)。由于 VanBlog 是一个整体，无需考虑内部的 Caddy。
 1. 想在本机构建并冒烟测试镜像（不发布、不装到生产），用 `./scripts/build-image-local.sh`，

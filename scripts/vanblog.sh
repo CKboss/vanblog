@@ -17,7 +17,7 @@ VANBLOG_DATA_PATH="${VANBLOG_DATA_PATH:-${VANBLOG_BASE_PATH}/data}"
 _vb_data_sed="${VANBLOG_DATA_PATH//\\/\\\\}"
 _vb_data_sed="${_vb_data_sed//&/\\&}"
 VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-${_vb_data_sed//|/\\|}}"
-VANBLOG_SCRIPT_VERSION="v0.5.0"
+VANBLOG_SCRIPT_VERSION="v0.6.0"
 
 # ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
 # 装的是本分支（CKboss/vanblog 的 dev/dsh），**不是**官方的 mereith/van-blog:latest
@@ -85,11 +85,28 @@ VANBLOG_ADMIN_BUILD_SCRIPT="build"
 VANBLOG_BUILD_VIABLE="true"
 VANBLOG_BUILD_REASON=""
 
-# Ordered fallbacks: docs host (historical default), then GitHub raw, then jsDelivr.
-# 本分支的 raw 地址排在最前面：模板里有本分支新增的可选环境变量注释，
-# 上游那份没有；下载不到再依次退回上游文档站 / GitHub / jsDelivr。
+# Ordered fallbacks —— **fork 优先**：本分支的三个源（GitHub raw → jsDelivr → Release 附件）
+# 全部试过之后，才允许退到上游作者的源（文档站 → GitHub raw → jsDelivr）。
+# 为什么：本分支的 raw 地址就是 raw.githubusercontent.com，而它在国内网络下常常不通；
+# 以前的顺序会在它失败后**静默退到上游**（vanblog.mereith.com / Mereithhh raw / jsDelivr），
+# 用户就此装上了不含本分支任何加固（日志上限、mongo 7 默认、整站备份、ghcr 镜像）的上游产物。
+# jsDelivr 的 gh/CKboss/vanblog@dev/dsh/… 与 Release 附件（release-fork.yml 挂的
+# vanblog.sh / docker-compose-template.yml，tag 约定 v*，默认取 latest）都是 fork 自己的可达镜像。
+# 下载成功后仍然会打印"实际用的是哪个 URL"，并且照旧做完整性校验（bash -n / 占位符）。
+VANBLOG_RELEASE_TAG="${VANBLOG_RELEASE_TAG:-latest}"
 COMPOSE_URL_FORK="https://raw.githubusercontent.com/CKboss/vanblog/${VANBLOG_BRANCH}/docker-compose/docker-compose-template.yml"
 SCRIPT_URL_FORK="https://raw.githubusercontent.com/CKboss/vanblog/${VANBLOG_BRANCH}/scripts/vanblog.sh"
+COMPOSE_URL_FORK_JSDELIVR="https://cdn.jsdelivr.net/gh/CKboss/vanblog@${VANBLOG_BRANCH}/docker-compose/docker-compose-template.yml"
+SCRIPT_URL_FORK_JSDELIVR="https://cdn.jsdelivr.net/gh/CKboss/vanblog@${VANBLOG_BRANCH}/scripts/vanblog.sh"
+# GitHub 的 releases/latest/download/<asset> 会自动 302 到最新 Release 的同名附件；
+# 钉住某个 tag（VANBLOG_RELEASE_TAG=v2026.09）时走 releases/download/<tag>/<asset>
+if [[ "${VANBLOG_RELEASE_TAG}" == "latest" ]]; then
+  COMPOSE_URL_FORK_RELEASE="https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml"
+  SCRIPT_URL_FORK_RELEASE="https://github.com/CKboss/vanblog/releases/latest/download/vanblog.sh"
+else
+  COMPOSE_URL_FORK_RELEASE="https://github.com/CKboss/vanblog/releases/download/${VANBLOG_RELEASE_TAG}/docker-compose-template.yml"
+  SCRIPT_URL_FORK_RELEASE="https://github.com/CKboss/vanblog/releases/download/${VANBLOG_RELEASE_TAG}/vanblog.sh"
+fi
 COMPOSE_URL="https://vanblog.mereith.com/docker-compose-template.yml"
 COMPOSE_URL_GITHUB="https://raw.githubusercontent.com/Mereithhh/vanblog/master/docker-compose/docker-compose-template.yml"
 COMPOSE_URL_JSDELIVR="https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml"
@@ -97,6 +114,9 @@ SCRIPT_URL="https://vanblog.mereith.com/vanblog.sh"
 SCRIPT_URL_GITHUB="https://raw.githubusercontent.com/Mereithhh/vanblog/master/scripts/vanblog.sh"
 SCRIPT_URL_JSDELIVR="https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/scripts/vanblog.sh"
 GITHUB_URL="dn-dao-github-mirror.daocloud.io"
+# ⚠️ 装 docker 时脚本会把 ${Get_Docker_URL}（CN 分支 = 上游作者主机上的 docker.sh）
+# 用 root 通过 `bash <(curl …)` 管道执行 —— 这是上游遗留行为，文档里有明确警告
+# （docs/guide/script.snippet.md），不放心的用户应先自行安装 docker 再跑本脚本。
 Get_Docker_URL="vanblog.mereith.com/docker.sh"
 Get_Docker_Argu=" -s docker --mirror Aliyun"
 
@@ -155,6 +175,136 @@ pick_mongo_image() {
     return 0
   fi
   printf '%s' "${VANBLOG_MONGO_IMAGE}"
+}
+
+# ── depends_on 长格式（condition: service_healthy）的兼容性 ─────────────────
+# 长格式要 docker-compose ≥1.27 或 compose v2 才解析得了：1.25（Ubuntu 20.04 自带）
+# 对 v3.x 文件里的 depends_on **只认字符串列表**（实测 1.25.5 的 config_schema_v3.4.json：
+# depends_on = list_of_strings），写上 condition 整个文件直接解析失败、栈起不来。
+# 版本号字符串五花八门（1.25.5 / v2.20.2 / 本脚本自建的 shim……），所以**不猜版本、直接实测**：
+# 拿一个用 condition 的最小临时编排文件跑一次 `docker-compose config`，退出码 0 = 支持。
+# 探测文件带 version: '3.4'，与真正生成的编排文件同形状 —— 某些 1.27+ 对带版本号文件
+# 仍按老 schema 校验的话，实测结果也如实反映"这台机器解析不了"。结果缓存，config 只探测一次。
+VANBLOG_COMPOSE_COND_SUPPORT=""
+
+compose_supports_depends_condition() {
+  if [[ -n "${VANBLOG_COMPOSE_COND_SUPPORT}" ]]; then
+    [[ "${VANBLOG_COMPOSE_COND_SUPPORT}" == "yes" ]]
+    return $?
+  fi
+  VANBLOG_COMPOSE_COND_SUPPORT="no"
+  if command -v docker-compose >/dev/null 2>&1; then
+    local probe
+    probe="$(mktemp "${TMPDIR:-/tmp}/vanblog-cond-probe.XXXXXX" 2>/dev/null)" || probe=""
+    if [[ -n "${probe}" ]]; then
+      cat >"${probe}" <<'YML'
+version: '3.4'
+services:
+  probe_a:
+    image: alpine:3
+    depends_on:
+      probe_b:
+        condition: service_healthy
+  probe_b:
+    image: alpine:3
+YML
+      if docker-compose -f "${probe}" config >/dev/null 2>&1; then
+        VANBLOG_COMPOSE_COND_SUPPORT="yes"
+      fi
+      rm -f "${probe}"
+    fi
+  fi
+  [[ "${VANBLOG_COMPOSE_COND_SUPPORT}" == "yes" ]]
+}
+
+# mongo 服务块里有没有 healthcheck（service_healthy 的前提：没有健康检查的依赖，
+# compose v2 会直接拒绝启动 dependents；老 v1 则根本走不到这一步）
+compose_mongo_has_healthcheck() {
+  local compose_file="$1"
+  awk '
+    /^  mongo:[[:space:]]*$/ { f = 1; next }
+    f && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { f = 0 }
+    f && /^    healthcheck:/ { print "yes"; exit }
+  ' "${compose_file}" 2>/dev/null | grep -q yes
+}
+
+# 把编排文件里 vanblog→mongo 的 depends_on 同步成本机 compose 支持的形状：
+#   支持长格式 + 文件是列表形式 + mongo 有 healthcheck → 升级成 condition: service_healthy
+#   不支持长格式 + 文件是长格式                        → 降级回列表形式（并打印原因）
+#   其余情况一律不动（用户手改过的异形 depends_on 不碰，改不动就保持现状）
+# awk 重写到临时文件、确认成功且非空才 mv：sed/awk 出任何岔子都不会把编排文件改坏。
+apply_depends_on_form() {
+  local compose_file="$1"
+  [[ -f "${compose_file}" ]] || return 0
+  local has_long=0 has_list=0
+  grep -qE '^        condition:[[:space:]]*service_healthy' "${compose_file}" && has_long=1
+  grep -qE '^      - mongo[[:space:]]*$' "${compose_file}" && has_list=1
+  local tmp rc
+  if compose_supports_depends_condition; then
+    if [[ ${has_list} -eq 1 ]]; then
+      if compose_mongo_has_healthcheck "${compose_file}"; then
+        tmp="${compose_file}.depends.$$"
+        awk '
+          /^    depends_on:[[:space:]]*$/ {
+            print
+            if ((getline nxt) > 0) {
+              if (nxt ~ /^      - mongo[[:space:]]*$/) {
+                print "      mongo:"
+                print "        condition: service_healthy"
+                upgraded = 1
+              } else { print nxt }
+            }
+            next
+          }
+          { print }
+          END { exit(upgraded ? 0 : 3) }
+        ' "${compose_file}" >"${tmp}" 2>/dev/null
+        rc=$?
+        if [[ ${rc} -eq 0 && -s "${tmp}" ]]; then
+          mv -f "${tmp}" "${compose_file}"
+          echo -e "> depends_on 已升级为长格式：vanblog 会等 mongo ${green}健康检查通过${plain}再启动（本机 compose 实测支持 condition）"
+        else
+          rm -f "${tmp}"
+        fi
+      else
+        echo -e "> 编排文件里 mongo 没有 healthcheck（可能是旧模板），depends_on 保持列表形式：只保证 mongo 先启动，不等它就绪"
+      fi
+    fi
+  else
+    if [[ ${has_long} -eq 1 ]]; then
+      tmp="${compose_file}.depends.$$"
+      awk '
+        /^    depends_on:[[:space:]]*$/ {
+          if ((getline nxt) > 0) {
+            if (nxt ~ /^      mongo:[[:space:]]*$/) {
+              if ((getline nxt2) > 0 && nxt2 ~ /^        condition:[[:space:]]*service_healthy[[:space:]]*$/) {
+                print "    depends_on:"
+                print "      - mongo"
+                downgraded = 1
+                next
+              }
+              print "    depends_on:"; print nxt; print nxt2; next
+            }
+            print "    depends_on:"; print nxt; next
+          }
+          print "    depends_on:"
+          next
+        }
+        { print }
+        END { exit(downgraded ? 0 : 3) }
+      ' "${compose_file}" >"${tmp}" 2>/dev/null
+      rc=$?
+      if [[ ${rc} -eq 0 && -s "${tmp}" ]]; then
+        mv -f "${tmp}" "${compose_file}"
+        echo -e "> ${yellow}本机 docker-compose 不支持 depends_on 的 condition 长格式（<1.27 且非 compose v2，实测 docker-compose config 失败），已降级为列表形式：mongo 先启动但 vanblog 不等它就绪（server 自己会重试连库）${plain}"
+      else
+        rm -f "${tmp}"
+      fi
+    else
+      echo -e "> 本机 docker-compose 较老（不支持 depends_on.condition，实测），编排文件保持列表形式：mongo 先启动但 vanblog 不等它就绪（server 自己会重试连库）"
+    fi
+  fi
+  return 0
 }
 
 align_compose_latest_image() {
@@ -303,11 +453,23 @@ confirm() {
 }
 
 compose_template_urls() {
-  printf '%s\n' "${COMPOSE_URL_FORK}" "${COMPOSE_URL}" "${COMPOSE_URL_GITHUB}" "${COMPOSE_URL_JSDELIVR}"
+  printf '%s\n' \
+    "${COMPOSE_URL_FORK}" \
+    "${COMPOSE_URL_FORK_JSDELIVR}" \
+    "${COMPOSE_URL_FORK_RELEASE}" \
+    "${COMPOSE_URL}" \
+    "${COMPOSE_URL_GITHUB}" \
+    "${COMPOSE_URL_JSDELIVR}"
 }
 
 script_urls() {
-  printf '%s\n' "${SCRIPT_URL_FORK}" "${SCRIPT_URL}" "${SCRIPT_URL_GITHUB}" "${SCRIPT_URL_JSDELIVR}"
+  printf '%s\n' \
+    "${SCRIPT_URL_FORK}" \
+    "${SCRIPT_URL_FORK_JSDELIVR}" \
+    "${SCRIPT_URL_FORK_RELEASE}" \
+    "${SCRIPT_URL}" \
+    "${SCRIPT_URL_GITHUB}" \
+    "${SCRIPT_URL_JSDELIVR}"
 }
 
 # ---------- 从源码构建本分支的镜像 ----------
@@ -1167,6 +1329,9 @@ config() {
   # 用 | 作分隔符：镜像名里带 / （官方镜像、或自定义 tag 如 ckboss/vanblog:dev-dsh）时，
   # s///.../ 会被截断。Docker_IMG 现在一律不转义斜杠。
   sed -i "s|vanblog_image|${Docker_IMG}|g" ${VANBLOG_BASE_PATH}/docker-compose.yaml
+  # depends_on 的形状按本机 compose 的实际解析能力定（模板提交的是所有版本都能解析的
+  # 列表形式；本机支持 condition 长格式就升级成「等 mongo 健康检查通过」，见函数注释）
+  apply_depends_on_form "${VANBLOG_BASE_PATH}/docker-compose.yaml"
   ensure_compose_image
 
   mkdir -p $VANBLOG_DATA_PATH
@@ -1797,6 +1962,605 @@ human_size() {
   fi
 }
 
+# ── 备份完整性：sha256 sidecar 与 verify 子命令 ─────────────────────────────
+# server 导出的 manifest 里**没有**校验和（packages/server/src/utils/fullBackup.ts
+# 只写 totals.archiveBytes，已核实没有 sha256/checksum 字段），归档坏了要等到恢复时
+# 才由 zstd/xz/gzip 的 CRC 发现。所以校验这件事在脚本侧补：
+#   - 脚本自己做的备份（backup / backup --offline）成功后写 <归档>.sha256 sidecar
+#     （格式同 sha256sum 输出："hex  文件名"），拷归档去别处时把 sidecar 一起带上；
+#   - `verify` 优先用它比对；**没有 sidecar 的归档（server 导出/旧归档）照常校验**
+#     完整性与内容，只是明说"没有 sha256 记录，跳过比对" —— 恢复流程完全不受影响。
+
+# 给归档记 sha256 sidecar。失败不影响备份本身（备份已经成功了，别反过来报错）。
+write_sha256_sidecar() {
+  local file="$1"
+  [[ -f "${file}" ]] || return 0
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo -e "  ${yellow}本机没有 sha256sum，跳过校验和记录（verify 时会明说没法比对）${plain}"
+    return 0
+  fi
+  local hex
+  hex="$(sha256sum "${file}" 2>/dev/null | cut -d' ' -f1)"
+  if [[ -n "${hex}" ]] && printf '%s  %s\n' "${hex}" "$(basename "${file}")" >"${file}.sha256"; then
+    chmod 0644 "${file}.sha256" 2>/dev/null || true
+    echo -e "  校验和  ：已写入 ${yellow}$(basename "${file}").sha256${plain}（${VANBLOG_SELF_NAME} verify 时比对；拷走归档时记得带上它）"
+  else
+    rm -f "${file}.sha256" 2>/dev/null || true
+    echo -e "  ${yellow}写 ${file}.sha256 失败（不影响备份本身）${plain}"
+  fi
+  return 0
+}
+
+# 归档的压缩格式（按扩展名，和 server 的 detectFormat 同一套优先级）
+archive_format_of() {
+  local name
+  name="$(basename "$1" | tr '[:upper:]' '[:lower:]')"
+  case "${name}" in
+  *.tar.zst | *.zst) printf 'zstd' ;;
+  *.tar.xz | *.xz) printf 'xz' ;;
+  *.tar.gz | *.tgz | *.gz) printf 'gzip' ;;
+  *) printf '' ;;
+  esac
+}
+
+# 流式完整性测试（-t：解压流走一遍 CRC/帧校验，**不落盘**）。
+# 返回 127 = 本机没有对应解压工具（调用方要区分"没法验"与"验不过"）。
+archive_integrity_test() {
+  local fmt="$1" file="$2" rc
+  case "${fmt}" in
+  zstd)
+    command -v zstd >/dev/null 2>&1 || return 127
+    # --long=27 对齐 server 的解压参数（它用 `zstd -19 --long=27` 压缩）；
+    # 老 zstd（<1.3.2）不认识 --long，去掉再试一次，别把"工具老"误报成"归档坏"
+    zstd -t -q --long=27 "${file}" >/dev/null 2>&1
+    rc=$?
+    if [[ ${rc} -ne 0 ]]; then
+      zstd -t -q "${file}" >/dev/null 2>&1
+      rc=$?
+    fi
+    return ${rc}
+    ;;
+  xz)
+    command -v xz >/dev/null 2>&1 || return 127
+    xz -t "${file}" >/dev/null 2>&1
+    ;;
+  gzip)
+    command -v gzip >/dev/null 2>&1 || return 127
+    gzip -t "${file}" >/dev/null 2>&1
+    ;;
+  *) return 2 ;;
+  esac
+}
+
+# 列出归档成员名（流式解压 | tar -t，不落盘）。管道退出码 = tar 的：
+# 截断的归档 tar 会以 "Unexpected EOF" 非 0 退出，这里顺带就是结构校验。
+archive_list_members() {
+  local fmt="$1" file="$2"
+  local -a tar_opts=(-tf -)
+  # GNU tar 读别的工具打的归档可能碰到未知扩展头，压掉警告；
+  # BusyBox tar 不认识 --warning=*，所以只有 GNU tar 才加（is_gnu_tar 的用武之地）
+  if is_gnu_tar; then
+    tar_opts+=(--warning=no-unknown-keyword)
+  fi
+  case "${fmt}" in
+  zstd)
+    local -a zf=(-dc -q)
+    if command -v zstd >/dev/null 2>&1 && zstd --help 2>&1 | grep -q -- '--long'; then
+      zf+=(--long=27)
+    fi
+    zstd "${zf[@]}" "${file}" 2>/dev/null | tar "${tar_opts[@]}" 2>/dev/null
+    ;;
+  xz)
+    xz -dc "${file}" 2>/dev/null | tar "${tar_opts[@]}" 2>/dev/null
+    ;;
+  gzip)
+    gzip -dc "${file}" 2>/dev/null | tar "${tar_opts[@]}" 2>/dev/null
+    ;;
+  *) return 2 ;;
+  esac
+}
+
+# 校验单个归档：完整性 → sha256 → 成员清单。打一行 OK/FAIL 摘要，FAIL 返回 1。
+# 整站备份（vanblog-full-* / *.tar.zst / *.tar.xz）的预期成员按 server 的打包结构核对
+# （tar -C staging . ⇒ ./manifest.json、./db/<库>/<集合>.ndjson、./static/<img|file|customPage>/…）；
+# 目录级快照（vanblog-backup-*.tar.gz）预期 ./data/ 树。
+verify_one_archive() {
+  local file="$1"
+  local base
+  base="$(basename "${file}")"
+  if [[ ! -f "${file}" ]]; then
+    echo -e "  ${red}FAIL${plain} ${base}：文件不存在"
+    return 1
+  fi
+  local fmt
+  fmt="$(archive_format_of "${file}")"
+  if [[ -z "${fmt}" ]]; then
+    echo -e "  ${red}FAIL${plain} ${base}：认不出压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）"
+    return 1
+  fi
+  local size
+  size="$(human_size "${file}")"
+  local -a problems=() notes=()
+
+  # 1) 流式完整性（不解压落盘就能抓住截断/损坏）
+  archive_integrity_test "${fmt}" "${file}"
+  case $? in
+  0) notes+=("${fmt} 完整性 ✓") ;;
+  127) problems+=("本机没有 ${fmt} 解压工具，无法校验") ;;
+  *) problems+=("${fmt} 完整性校验失败（归档可能被截断或损坏）") ;;
+  esac
+
+  # 2) sha256 sidecar（有就比对；没有就明说跳过，不假装比过）
+  local sidecar="${file}.sha256"
+  if [[ -f "${sidecar}" ]]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      local want got
+      want="$(awk 'NR==1{print $1}' "${sidecar}" 2>/dev/null)"
+      got="$(sha256sum "${file}" 2>/dev/null | cut -d' ' -f1)"
+      if [[ -n "${want}" && "${want}" == "${got}" ]]; then
+        notes+=("sha256 ✓")
+      else
+        problems+=("sha256 不匹配（记录 ${want:0:12}…，实际 ${got:0:12}…）")
+      fi
+    else
+      notes+=("有 .sha256 但本机没有 sha256sum，未比对")
+    fi
+  else
+    notes+=("无 sha256 记录（server 导出/旧归档），跳过比对")
+  fi
+
+  # 3) 成员清单
+  local members kind
+  members="$(archive_list_members "${fmt}" "${file}")"
+  case "${base}" in
+  vanblog-full-*) kind="full" ;;
+  vanblog-backup-*) kind="offline" ;;
+  *)
+    case "${fmt}" in
+    zstd | xz) kind="full" ;; # .tar.zst/.tar.xz 只有整站备份会产
+    *) kind="generic" ;;
+    esac
+    ;;
+  esac
+  if [[ -z "${members}" ]]; then
+    problems+=("列不出成员（tar 结构损坏或不是 tar 归档）")
+  elif [[ "${kind}" == "full" ]]; then
+    if printf '%s\n' "${members}" | grep -qE '(^|/)manifest\.json$'; then
+      notes+=("manifest ✓")
+    else
+      problems+=("缺 manifest.json（不是整站备份导出的归档？）")
+    fi
+    local ndjson_n
+    ndjson_n="$(printf '%s\n' "${members}" | grep -cE '(^|/)db/[^/]+/[^/]+\.ndjson$' || true)"
+    if [[ "${ndjson_n}" =~ ^[0-9]+$ && "${ndjson_n}" -gt 0 ]]; then
+      notes+=("NDJSON ${ndjson_n} 个 ✓")
+    else
+      problems+=("一个 db/<库>/<集合>.ndjson 都没有（数据库部分是空的？）")
+    fi
+    if printf '%s\n' "${members}" | grep -qE '(^|/)static/'; then
+      notes+=("静态目录 ✓")
+    else
+      # 不算失败：img/file/customPage 是"存在才打包"（fullBackup.ts BACKUP_STATIC_FOLDERS），
+      # 全新空站可以一个都没有
+      notes+=("无 static/ 树（空站点属正常）")
+    fi
+    if [[ ! -f "${file}.manifest.json" ]]; then
+      notes+=("旁边没有 .manifest.json（不影响恢复；inspect 要解包才能读清单）")
+    fi
+  elif [[ "${kind}" == "offline" ]]; then
+    if printf '%s\n' "${members}" | grep -qE '(^|/)data/'; then
+      notes+=("数据目录树 ✓")
+    else
+      problems+=("缺 ./data/ 树（目录级快照应打包整个数据目录）")
+    fi
+  else
+    notes+=("非 vanblog 备份文件名，只验了压缩完整性与 tar 结构")
+  fi
+
+  if [[ ${#problems[@]} -gt 0 ]]; then
+    local why
+    why="$(printf '%s；' "${problems[@]}")"
+    echo -e "  ${red}FAIL${plain} ${base}（${size:-?}）：${why%；}"
+    return 1
+  fi
+  local info
+  info="$(printf '%s，' ${notes[@]+"${notes[@]}"})"
+  echo -e "  ${green}OK${plain}   ${base}（${size:-?}）：${info%，}"
+  return 0
+}
+
+# ./vanblog.sh verify [归档名|路径]…
+# 不带参数 = 校验备份目录里的全部 vanblog-full-* 归档（排除 .manifest.json / .sha256 sidecar）。
+# 任一归档 FAIL → 退出码非 0（可以放进监控/cron）。
+verify() {
+  local -a targets=()
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+    0 | --*) continue ;; # 菜单/分发入口传进来的占位与未知开关
+    esac
+    [[ -n "${arg}" ]] && targets+=("${arg}")
+  done
+  if [[ ${#targets[@]} -eq 0 ]]; then
+    local dir f
+    dir="$(full_backup_dir)"
+    if [[ ! -d "${dir}" ]]; then
+      echo -e "${red}备份目录不存在：${dir}${plain}（还没备份过，或数据目录不在本机）"
+      return 1
+    fi
+    while IFS= read -r f; do
+      [[ -n "${f}" ]] || continue
+      case "${f}" in
+      *.manifest.json | *.sha256) continue ;; # sidecar 不是归档
+      esac
+      targets+=("${f}")
+    done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
+    if [[ ${#targets[@]} -eq 0 ]]; then
+      echo -e "${yellow}${dir} 里没有可校验的 vanblog-full-* 归档${plain}（先跑 ${VANBLOG_SELF_NAME} backup）"
+      return 0
+    fi
+    echo -e "> 校验备份目录里的全部归档（${#targets[@]} 个）：${dir}"
+  else
+    echo -e "> 校验 ${#targets[@]} 个归档"
+  fi
+  local ok=0 bad=0 t resolved
+  for t in ${targets[@]+"${targets[@]}"}; do
+    if [[ -f "${t}" ]]; then
+      resolved="${t}"
+    elif [[ -f "$(full_backup_dir)/${t}" ]]; then
+      resolved="$(full_backup_dir)/${t}"
+    else
+      echo -e "  ${red}FAIL${plain} ${t}：本地找不到（既不是路径，也不在 $(full_backup_dir)/ 里）"
+      bad=$((bad + 1))
+      continue
+    fi
+    if verify_one_archive "${resolved}"; then
+      ok=$((ok + 1))
+    else
+      bad=$((bad + 1))
+    fi
+  done
+  echo
+  if [[ ${bad} -gt 0 ]]; then
+    echo -e "> 校验完成：${green}OK ${ok}${plain}，${red}FAIL ${bad}${plain} —— FAIL 的归档别拿来恢复（重新备份，或换更早的一份并先 verify）"
+    return 1
+  fi
+  echo -e "> 校验完成：${green}OK ${ok}${plain}，FAIL 0"
+  return 0
+}
+
+# ── 定时整站备份：./vanblog.sh install-cron ────────────────────────────────
+# 以前 --keep 有了、文档里也教了 cron 配方，但调度得用户自己手写 crontab ——
+# 而手写最容易错的三件事（token 放哪、忘带 ASSUME_YES/KEEP、把已有 crontab 覆盖掉）
+# 这里都收进一个幂等的子命令：
+#   install-cron              每天 03:00 整站备份、留 7 份（VANBLOG_BACKUP_KEEP 覆盖默认）
+#   install-cron --hour 5 --keep 14
+#   install-cron --remove     从 root 的 crontab 移除（token 文件保留，路径会打印出来）
+#   install-cron --force      参数变了就替换旧条目（默认参数不同会拒绝，让你显式决定）
+# token 的存放（诚实的权衡）：备份接口在 AdminGuard 后面，cron 里没法交互输密码，
+# 所以 VANBLOG_ADMIN_TOKEN（环境变量或安装时交互输入）会写进
+# <安装目录>/vanblog-cron.env（**0600，仅 root 可读**），cron 行 source 它。
+# 这意味着一个长期有效的管理员 token 明文落盘 —— 文档（docs/guide/backup.md）里写明了
+# 这个权衡与作废方法；不提供 token 也能装（备份会在登录一步失败并写进日志，
+# env 文件里留了怎么补的注释），不假装"装好了就能用"。
+VANBLOG_CRON_MARKER="# vanblog-backup-cron"
+
+vanblog_cron_env_file() { printf '%s/vanblog-cron.env' "${VANBLOG_BASE_PATH}"; }
+vanblog_cron_log_file() { printf '%s/log/vanblog-backup-cron.log' "${VANBLOG_DATA_PATH}"; }
+
+# 要写进 crontab 的那一行（env 文件里带 ASSUME_YES/KEEP/TOKEN 的 export）
+vanblog_cron_line() { # <hour>
+  printf '%s' "0 $1 * * * . '$(vanblog_cron_env_file)' && '${VANBLOG_SELF_PATH}' backup >> '$(vanblog_cron_log_file)' 2>&1 ${VANBLOG_CRON_MARKER}"
+}
+
+# 读现有 crontab 到 CURRENT_CRONTAB。
+# ⚠️ 关键安全边界：只有**确定**"没有 crontab"（stderr 里写 no crontab）才敢当空表写回；
+# 其它失败（cron 服务没起、权限问题、实现差异）一律中止 —— 宁可不装，绝不覆盖用户已有的任务。
+CURRENT_CRONTAB=""
+read_current_crontab() {
+  local mixed rc
+  mixed="$(crontab -l 2>&1)"
+  rc=$?
+  if [[ ${rc} -eq 0 ]]; then
+    CURRENT_CRONTAB="${mixed}"
+    return 0
+  fi
+  if printf '%s' "${mixed}" | grep -qi 'no crontab'; then
+    CURRENT_CRONTAB=""
+    return 0
+  fi
+  echo -e "${red}读取现有 crontab 失败：$(printf '%s' "${mixed}" | head -c 200)${plain}" >&2
+  echo -e "${red}为了不覆盖你已有的定时任务，这次不写入 crontab。${plain}" >&2
+  return 1
+}
+
+install_cron() {
+  local action="install" hour="" keep="${VANBLOG_BACKUP_KEEP:-7}" force=0
+  local arg prev=""
+  for arg in "$@"; do
+    case "${arg}" in
+    --remove) action="remove" ;;
+    --force) force=1 ;;
+    --hour | --keep) : ;; # 值在下一个参数
+    *)
+      case "${prev}" in
+      --hour) hour="${arg}" ;;
+      --keep) keep="${arg}" ;;
+      *)
+        # ⚠️ 菜单占位 `0` 的豁免必须放在"上一个参数不是 --hour/--keep"之后：
+        # 否则 `--keep 0` 里的 0 会被当成占位符吞掉，keep 静默保持默认值 7
+        # （而 --keep 0 本该被下面的正整数校验拦下来）
+        case "${arg}" in
+        0 | --*) : ;;
+        esac
+        ;;
+      esac
+      ;;
+    esac
+    prev="${arg}"
+  done
+  hour="${hour:-3}"
+  case "${hour}" in
+  '' | *[!0-9]*)
+    echo -e "${red}--hour 必须是 0-23 的数字：${hour}${plain}"
+    return 1
+    ;;
+  esac
+  if ((hour > 23)); then
+    echo -e "${red}--hour 必须是 0-23 的数字：${hour}${plain}"
+    return 1
+  fi
+  case "${keep}" in
+  '' | *[!0-9]*)
+    echo -e "${red}--keep 必须是正整数：${keep}${plain}"
+    return 1
+    ;;
+  esac
+  if ((keep < 1)); then
+    echo -e "${red}--keep 必须是正整数：${keep}${plain}"
+    return 1
+  fi
+
+  local envf logf line
+  envf="$(vanblog_cron_env_file)"
+  logf="$(vanblog_cron_log_file)"
+  line="$(vanblog_cron_line "${hour}")"
+
+  if ! command -v crontab >/dev/null 2>&1; then
+    echo -e "${red}本机没有 crontab 命令${plain}（Debian/Ubuntu：apt install cron；CentOS/RHEL：yum install cronie）"
+    echo -e "装好 cron 后重跑 ${green}${VANBLOG_SELF_NAME} install-cron${plain}；或手动把下面两件事做掉："
+    echo -e "  1) 建 token 文件（0600）：${yellow}${envf}${plain}，内容至少一行 export VANBLOG_ADMIN_TOKEN='<token>'"
+    echo -e "  2) 把这一行加进 root 的 crontab（crontab -e）："
+    echo -e "     ${yellow}${line}${plain}"
+    return 1
+  fi
+
+  if ! read_current_crontab; then
+    return 1
+  fi
+  local existing
+  existing="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -F "${VANBLOG_CRON_MARKER}" | head -1)"
+
+  if [[ "${action}" == "remove" ]]; then
+    if [[ -z "${existing}" ]]; then
+      echo -e "> root 的 crontab 里没有 VanBlog 定时备份条目（标记 ${VANBLOG_CRON_MARKER}），不用移除"
+      return 0
+    fi
+    if ! printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER}" | crontab -; then
+      echo -e "${red}写回 crontab 失败，原样未动${plain}"
+      return 1
+    fi
+    echo -e "${green}已从 root 的 crontab 移除定时备份条目${plain}"
+    echo -e "  ${yellow}token 文件还在 ${envf}（里面有管理员 token），确认不再需要就手动 rm 掉${plain}"
+    return 0
+  fi
+
+  if [[ -n "${existing}" ]]; then
+    if [[ "${force}" != 1 ]]; then
+      if [[ "${existing}" == "${line}" ]]; then
+        echo -e "${green}已经装过了：crontab 里已有同样的条目，不会重复添加${plain}"
+        echo -e "  ${existing}"
+        echo -e "  要改参数：${VANBLOG_SELF_NAME} install-cron --force --hour ${hour}（--keep 改保留份数）；要删：--remove"
+        return 0
+      fi
+      echo -e "${yellow}crontab 里已经有一条 VanBlog 定时备份（参数不同），不会添加第二条：${plain}"
+      echo -e "  现有：${existing}"
+      echo -e "  想要：${line}"
+      echo -e "确认要换成新的就加 ${green}--force${plain}（或先 ${VANBLOG_SELF_NAME} install-cron --remove）"
+      return 1
+    fi
+    CURRENT_CRONTAB="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER}")"
+    echo -e "> --force：先移除旧条目再写入新的"
+  fi
+
+  # ── token：环境变量优先，其次交互输入；都没有也照装，但明说后果 ──
+  local token="${VANBLOG_ADMIN_TOKEN:-}"
+  local token_from="环境变量 VANBLOG_ADMIN_TOKEN"
+  if [[ -z "${token}" ]] && [[ -t 0 ]]; then
+    echo -e "后台管理员 token（浏览器 F12 → Application → Local Storage → token）。"
+    echo -e "直接回车 = 暂不提供：定时备份会在登录一步失败（错误会写进日志），之后按 ${envf} 里的注释补上。"
+    read -e -r -s -p "token: " token
+    echo
+    token_from="交互输入"
+  fi
+
+  # ── env 文件（0600，root-only）：cron 行 source 的就是它 ──
+  mkdir -p "${VANBLOG_BASE_PATH}" 2>/dev/null || true
+  mkdir -p "$(dirname "${logf}")" 2>/dev/null || true
+  if ! (
+    umask 077
+    {
+      echo "# VanBlog 定时备份的环境文件（root-only 0600）。"
+      echo "# crontab 里带 ${VANBLOG_CRON_MARKER} 标记的那一行会 source 这个文件。"
+      echo "# ⚠️ 里面的 token 等价于管理员登录态，长期明文落盘；怀疑泄露就作废它"
+      echo "#    （后台重新登录/删除对应 token），然后重跑 install-cron --force。"
+      echo "export VANBLOG_ASSUME_YES=1"
+      echo "export VANBLOG_BACKUP_KEEP=${keep}"
+      if [[ -n "${token}" ]]; then
+        printf "export VANBLOG_ADMIN_TOKEN='%s'\n" "${token//\'/\'\\\'\'}"
+      else
+        echo "# ⚠️ 还没配 token：定时备份会在登录一步失败（看 $(basename "${logf}") 日志）。"
+        echo "# 浏览器 F12 → Application → Local Storage → token 复制一个，取消下一行注释并粘贴："
+        echo "# export VANBLOG_ADMIN_TOKEN='把token粘贴到这里'"
+      fi
+    } >"${envf}"
+  ); then
+    echo -e "${red}写 ${envf} 失败${plain}"
+    return 1
+  fi
+  chmod 600 "${envf}" 2>/dev/null || true
+
+  echo -e "> 将向 ${yellow}root 的 crontab${plain} 添加（已有任务原样保留，只在末尾追加这一行）："
+  echo -e "    ${line}"
+  echo -e "  计划    ：每天 $(printf '%02d:00' "${hour}") 整站备份，成功后只保留最新 ${keep} 份"
+  echo -e "  日志    ：${logf}"
+  if [[ -n "${token}" ]]; then
+    echo -e "  token   ：来自${token_from}，已写入 ${envf}（0600，仅 root 可读）"
+    echo -e "  ${yellow}⚠️ 权衡：管理员 token 从此长期明文落盘；作废方法见该文件头部注释与 docs/guide/backup.md${plain}"
+  else
+    echo -e "  token   ：${red}未提供${plain} —— 定时备份会在登录一步失败（错误写进日志）；"
+    echo -e "            按 ${envf} 里的注释补一行 export VANBLOG_ADMIN_TOKEN='…' 即可生效"
+  fi
+  if [[ "${VANBLOG_ASSUME_YES:-0}" != "1" ]]; then
+    local input
+    read -e -r -p "确认写入 crontab? [y/N] " input
+    case ${input} in
+    [yY][eE][sS] | [yY]) ;;
+    *)
+      echo "已取消（crontab 未改动）"
+      return 0
+      ;;
+    esac
+  fi
+
+  if ! {
+    [[ -n "${CURRENT_CRONTAB}" ]] && printf '%s\n' "${CURRENT_CRONTAB}"
+    printf '%s\n' "${line}"
+  } | crontab -; then
+    echo -e "${red}写入 crontab 失败${plain}"
+    return 1
+  fi
+  # 写回之后读一遍确认（crontab 可能被别的东西管着，或 - 输入不被支持）
+  if crontab -l 2>/dev/null | grep -qF "${VANBLOG_CRON_MARKER}"; then
+    echo -e "${green}定时备份已安装${plain}：每天 $(printf '%02d:00' "${hour}")，保留 ${keep} 份"
+    echo -e "  想现在试跑一次：${green}${VANBLOG_SELF_NAME} backup${plain}（看输出），或等今晚看 ${logf}"
+    echo -e "  移除：${green}${VANBLOG_SELF_NAME} install-cron --remove${plain}"
+    return 0
+  fi
+  echo -e "${red}写入后在 crontab 里没找到条目（这台机器的 crontab 可能被别的管理器接管）${plain}"
+  return 1
+}
+
+
+
+# ── 备份前的磁盘空间预检 ────────────────────────────────────────────────────
+# server 导出时 ENOSPC 会优雅失败并清掉半成品，但大站上已经白等几分钟；离线 tar 更糟：
+# 磁盘满会留下一个**截断的归档**。所以发起备份前先在宿主机侧量一次。
+# 估算原则（诚实优先，算不出来就明说并放行，不假装检查过）：
+#   full    ：有上一个整站归档 → 用它的大小（最有依据）；
+#             没有 → 静态目录实际占用 + 数据库导出按固定 64MB 猜
+#             （NDJSON+zstd -19 之后，64MB 够覆盖几十万条文档的库；本站 9838 条文档
+#               + 185 个文件实测整包 66MB，静态部分占大头）；
+#   offline ：数据目录实际占用（tar.gz 对已压缩的图片几乎不再缩小，算上界）。
+# 判定：free < 估算+margin → 中止（非 0）；free < 估算×2+margin → 警告但继续。
+# margin 默认 256MB：VANBLOG_BACKUP_SPACE_MARGIN_MB 覆盖；
+# VANBLOG_BACKUP_SKIP_SPACE_CHECK=1 完全跳过（cron 里宁可备出来也不被拦时用）。
+VANBLOG_SPACE_EST_BYTES=""
+VANBLOG_SPACE_EST_SRC=""
+
+backup_space_estimate() { # <full|offline> → 设上面两个全局；算不出返回 1
+  local kind="$1" est src=""
+  VANBLOG_SPACE_EST_BYTES=""
+  VANBLOG_SPACE_EST_SRC=""
+  if [[ "${kind}" == "full" ]]; then
+    local dir latest static_kb
+    dir="$(full_backup_dir 2>/dev/null)"
+    latest=""
+    if [[ -n "${dir}" && -d "${dir}" ]]; then
+      latest="$(ls -1t "${dir}"/vanblog-full-*.tar.* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | head -1)"
+    fi
+    if [[ -n "${latest}" && -f "${latest}" ]]; then
+      est="$(wc -c <"${latest}" 2>/dev/null)"
+      src="上一个归档 $(basename "${latest}") 的大小"
+    else
+      static_kb="$(du -sk "${VANBLOG_DATA_PATH}/data/static" 2>/dev/null | awk '{print $1}')"
+      case "${static_kb}" in
+      '' | *[!0-9]*)
+        # 静态目录都读不到：只能纯猜数据库部分，明说依据
+        est=$((64 * 1024 * 1024))
+        src="静态目录读不到，只按数据库导出 64MB 猜"
+        ;;
+      *)
+        est=$((static_kb * 1024 + 64 * 1024 * 1024))
+        src="静态目录 $(human_bytes $((static_kb * 1024))) + 数据库导出按 64MB 猜"
+        ;;
+      esac
+    fi
+  else
+    local data_kb
+    data_kb="$(du -sk "${VANBLOG_DATA_PATH}" 2>/dev/null | awk '{print $1}')"
+    case "${data_kb}" in
+    '' | *[!0-9]*) return 1 ;;
+    esac
+    est=$((data_kb * 1024))
+    src="数据目录实际占用（tar.gz 对已压缩内容几乎不再缩小）"
+  fi
+  case "${est}" in
+  '' | *[!0-9]*) return 1 ;;
+  esac
+  [[ "${est}" -gt 0 ]] || return 1
+  VANBLOG_SPACE_EST_BYTES="${est}"
+  VANBLOG_SPACE_EST_SRC="${src}"
+  return 0
+}
+
+check_backup_space() { # <full|offline> <目标目录>
+  local kind="$1" dir="$2"
+  if [[ "${VANBLOG_BACKUP_SKIP_SPACE_CHECK:-0}" == "1" ]]; then
+    echo -e "> 空间预检：按 VANBLOG_BACKUP_SKIP_SPACE_CHECK=1 跳过"
+    return 0
+  fi
+  if ! backup_space_estimate "${kind}"; then
+    echo -e "${yellow}> 空间预检：算不出估算值（du 与历史归档都不可用），跳过检查直接备份 —— 没有假装检查过${plain}"
+    return 0
+  fi
+  # df 的目标：备份目录可能是导出时才创建的，不存在就往上找存在的父目录
+  local probe="${dir}"
+  while [[ -n "${probe}" && "${probe}" != "/" && ! -d "${probe}" ]]; do
+    probe="$(dirname "${probe}")"
+  done
+  [[ -n "${probe}" ]] || probe="/"
+  local free_kb
+  free_kb="$(df -Pk "${probe}" 2>/dev/null | awk 'NR==2 {print $4}')"
+  case "${free_kb}" in
+  '' | *[!0-9]*)
+    echo -e "${yellow}> 空间预检：df 读不出 ${probe} 的剩余空间，跳过检查直接备份${plain}"
+    return 0
+    ;;
+  esac
+  local free_b=$((free_kb * 1024))
+  local margin_mb="${VANBLOG_BACKUP_SPACE_MARGIN_MB:-256}"
+  case "${margin_mb}" in
+  '' | *[!0-9]*) margin_mb=256 ;;
+  esac
+  local est="${VANBLOG_SPACE_EST_BYTES}"
+  local need=$((est + margin_mb * 1024 * 1024))
+  local warn_at=$((est * 2 + margin_mb * 1024 * 1024))
+  if ((free_b < need)); then
+    echo -e "${red}> 空间预检不通过，已中止备份：${plain}"
+    echo -e "${red}    预计需要约 $(human_bytes "${est}")（${VANBLOG_SPACE_EST_SRC}）+ $(human_bytes $((margin_mb * 1024 * 1024))) 余量，${plain}"
+    echo -e "${red}    而 ${probe} 只剩 $(human_bytes "${free_b}")。${plain}"
+    echo -e "${red}    清出空间再试；余量可用 VANBLOG_BACKUP_SPACE_MARGIN_MB 调整（设 0 = 只要装得下就备）。${plain}"
+    return 1
+  fi
+  if ((free_b < warn_at)); then
+    echo -e "${yellow}> 空间预检：剩余 $(human_bytes "${free_b}") 偏紧（预计需要约 $(human_bytes "${est}")，${VANBLOG_SPACE_EST_SRC}），继续备份；建议清理磁盘或调低 --keep${plain}"
+    return 0
+  fi
+  echo -e "> 空间预检通过：预计需要约 $(human_bytes "${est}")（${VANBLOG_SPACE_EST_SRC}），${probe} 剩 $(human_bytes "${free_b}")"
+  return 0
+}
+
 # 备份整个数据目录（图床 + MongoDB 数据 + 日志 + caddy 证书），产物放在安装目录下，
 # 文件名形如 vanblog-backup-20260913-024500.tar.gz（卸载时会保留这些文件）。
 #
@@ -1847,6 +2611,9 @@ backup_full() {
     return 1
   fi
 
+  # 空间预检放在要 token 之前：别让用户输完密码才告诉他磁盘不够
+  check_backup_space full "$(full_backup_dir)" || return 1
+
   local token
   token="$(vanblog_admin_token)" || return 1
 
@@ -1881,6 +2648,8 @@ backup_full() {
   local host_path="$(full_backup_dir)/${name}"
   if [[ -n "${name}" && -f "${host_path}" ]]; then
     echo -e "  宿主机路径：${yellow}${host_path}${plain}"
+    # 脚本侧补的校验和：server 的 manifest 里没有 sha256（见 write_sha256_sidecar 注释）
+    write_sha256_sidecar "${host_path}"
   else
     echo -e "  服务器目录：${yellow}$(full_backup_dir)${plain}（容器内 <日志目录>/vanblog-backups）"
   fi
@@ -1921,9 +2690,11 @@ prune_old_backups() {
   esac
   [[ "${keep}" -gt 0 ]] || return 0
 
-  # ls -1t 按修改时间从新到旧；备份名里没有空格，这样比 find -printf 更可移植
+  # ls -1t 按修改时间从新到旧；备份名里没有空格，这样比 find -printf 更可移植。
+  # ⚠️ `<归档>.sha256` sidecar（vanblog-full-x.tar.zst.sha256）**匹配** `*.tar.*` 这个 glob，
+  # 不过滤就会把校验和文件当成一份归档参与计数/删除（保留策略会算错、还删不到正主）
   local -a all
-  mapfile -t all < <(cd "${dir}" 2>/dev/null && ls -1t ${pattern} 2>/dev/null)
+  mapfile -t all < <(cd "${dir}" 2>/dev/null && ls -1t ${pattern} 2>/dev/null | grep -vE '\.(sha256|manifest\.json)$')
   local total=${#all[@]}
   if [[ ${total} -le ${keep} ]]; then
     echo -e "  保留策略：现有 ${total} 份 ≤ ${keep}，不用清理"
@@ -1942,6 +2713,8 @@ prune_old_backups() {
       # 整站备份的清单是同名 sidecar，留着会变成孤儿（还会被 restore 的列表当成归档）
       sidecar="${dir}/${name%.tar.*}.manifest.json"
       [[ -f "${sidecar}" ]] && rm -f "${sidecar}"
+      # sha256 sidecar（脚本备份时写的 <归档>.sha256）也一起删，别留孤儿
+      [[ -f "${dir}/${name}.sha256" ]] && rm -f "${dir}/${name}.sha256"
       echo -e "  ${yellow}已删除${plain} ${name}（${pretty}）"
     fi
   done
@@ -2008,6 +2781,9 @@ backup_offline() {
     return 1
   fi
 
+  # 目录级快照动辄几百 MB（数据目录整个打包），磁盘满会得到一个截断的 tar.gz —— 先量一次
+  check_backup_space offline "${VANBLOG_BASE_PATH}" || return 1
+
   local name="vanblog-backup-$(date +"%Y%m%d%H%M%S").tar.gz"
   local dest="${VANBLOG_BASE_PATH}/${name}"
   local tar_opts=()
@@ -2048,6 +2824,7 @@ backup_offline() {
   fi
 
   echo -e "${green}备份成功${plain}，文件名：${yellow}${name}${plain} 大小：$(human_size "${dest}") 路径：${VANBLOG_BASE_PATH}"
+  write_sha256_sidecar "${dest}"
   if ((rc == 1)); then
     echo -e "${yellow}注意：打包过程中有文件发生变化（热备份的正常现象），归档仍然可用${plain}"
   fi
@@ -2199,10 +2976,11 @@ pick_full_backup() {
   local -a files=()
   local f
   while IFS= read -r f; do
-    # 排除 sidecar 清单（vanblog-full-xxx.tar.zst.manifest.json），它不是可恢复的归档
+    # 排除 sidecar：清单（vanblog-full-xxx.tar.zst.manifest.json）与校验和
+    # （vanblog-full-xxx.tar.zst.sha256）都不是可恢复的归档
     [[ -n "${f}" ]] || continue
     case "${f}" in
-    *.manifest.json) continue ;;
+    *.manifest.json | *.sha256) continue ;;
     esac
     files+=("${f}")
   done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
@@ -2567,10 +3345,10 @@ show_status() {
   bdir="$(full_backup_dir 2>/dev/null)"
   if [[ -d "${bdir}" ]]; then
     local count total
-    count="$(ls -1 "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -v 'manifest.json' | wc -l | tr -d ' ')"
+    count="$(ls -1 "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | wc -l | tr -d ' ')"
     total="$(du -sh "${bdir}" 2>/dev/null | cut -f1)"
     echo -e "  整站备份  ：${count} 个归档，共 ${total}（${bdir}）"
-    ls -1t "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -v 'manifest.json' | head -3 |
+    ls -1t "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | head -3 |
       while read -r f; do printf '    %s  %s\n' "$(basename "${f}")" "$(human_size "${f}")"; done
   else
     echo -e "  整站备份  ：还没有（${bdir} 不存在，跑一次 ${VANBLOG_SELF_NAME} backup）"
@@ -2827,6 +3605,9 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
   config                  重新生成编排文件（邮箱、HTTP/HTTPS 端口、镜像、mongo 版本）。
                           ⚠️ 会覆盖你手写的 environment / 卷映射，改前会自动存一份 .bak-<时间戳>。
                           ⚠️ 不会把镜像换回上游官方版（沿用编排文件里现有的那个）。
+                          生成时会实测本机 docker-compose：支持 depends_on 长格式（≥1.27/compose v2）
+                          就把「vanblog 等 mongo 健康检查通过再启动」写进去；老版本（如 Ubuntu 20.04
+                          的 1.25）保持列表形式并打印一行说明（mongo 的 healthcheck 两种情况下都有）。
   start | stop | restart  启动 / 停止 / 重启（restart 不带 -v，不会删卷）。
                           三者都如实返回 docker-compose 的退出码，失败时打印排查方向。
   update                  更新：**先把新镜像准备好，再停容器**（拉取/构建失败时旧站点还在跑），
@@ -2839,7 +3620,7 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
   reset_https             重置 https 设置（证书签不出来、域名换过、caddy 配置被改坏时用）。
   update_script           更新此脚本自身（校验语法与首尾标志，版本相同不替换）。
 
-──────────────────────── 备份 / 恢复 / 重置 ────────────────────────
+──────────────────────── 备份 / 恢复 / 重置 / 校验 / 定时 ────────────────────────
   backup                          整站备份（默认）：调 server 接口导出
                                   vanblog-full-<时间戳>.tar.zst 到 <数据目录>/log/vanblog-backups/。
                                   一致性快照、NDJSON 跨 MongoDB 版本可恢复、可预览清单。
@@ -2852,6 +3633,10 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
                                   留空或 0 = 不清理（默认）。只删 vanblog-full-* / vanblog-backup-*，
                                   别的文件一概不动。也可用 VANBLOG_BACKUP_KEEP=N。
         --verbose                 打印完整 JSON（默认只给摘要）
+                                  ⚠️ 导出前有磁盘空间预检：估算值（上一个归档的大小，或静态目录
+                                     +64MB）加余量超过剩余空间就拒绝备份（非 0 退出），只是偏紧
+                                     则警告后继续；估算不出来会明说"跳过检查"，不假装查过。
+                                  成功后脚本会记一份 <归档>.sha256 校验和（verify 时比对）。
   restore                         从整站备份恢复。不带参数 = 列出服务器备份目录里的归档让你选编号。
         restore <归档名>           归档在服务器备份目录里 → 不上传，秒级开始（几百 MB 也一样）
         restore <本地路径>         本地文件 → multipart 上传
@@ -2871,6 +3656,24 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
         --no-restart              恢复完不重启（那就得自己重启一次）
         --verbose                 打印完整清单 JSON
                                   ⚠️ 恢复失败时会把临时管理员账号打印出来，不会把你锁在门外。
+  verify                          校验备份归档（**不解压落盘**），三步：
+                                    a) 流式过一遍解压器（zstd/xz/gzip -t）——截断/损坏当场发现
+                                    b) sha256 比对——只有**本脚本**做的备份才有 <归档>.sha256 记录；
+                                       server 导出的 manifest 里没有校验和，没有记录就明说跳过
+                                    c) 列成员清单：manifest.json、各集合 NDJSON、静态树在不在
+        verify <归档名|路径>…      校验指定的归档（名字会在备份目录里找）；
+                                  不带参数 = 校验备份目录里的**全部** vanblog-full-* 归档
+                                  任一归档 FAIL → 退出码非 0（可以放进监控/cron）。
+  install-cron                    把「每天一次整站备份」装进 root 的 crontab（幂等：
+                                  已有同样的条目就不重复加；参数不同会拒绝并让你显式 --force）。
+        --hour N                  每天几点跑（0-23，默认 3）
+        --keep N                  备份成功后保留最新 N 份（默认 VANBLOG_BACKUP_KEEP 或 7）
+        --remove                  从 crontab 移除（token 文件保留，路径会打印出来）
+        --force                   用新参数替换已有条目
+                                  token 取 VANBLOG_ADMIN_TOKEN（或安装时交互输入），写进
+                                  <安装目录>/vanblog-cron.env（0600 仅 root），cron 行 source 它。
+                                  ⚠️ 权衡：管理员 token 长期明文落盘；怀疑泄露就作废它再 --force。
+                                  没有 crontab 命令/不给 token 都会明说后果，不假装装好了。
 
 ──────────────────────── 环境变量 ────────────────────────
   装什么：
@@ -2881,6 +3684,9 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
                                              （数据目录与 FCV 绑定，直接换大版本 mongod 会拒绝启动）
                                              老机器 CPU 不支持 avx 就设 mongo:4.4.16
     VANBLOG_RESTORE_FROM=<归档>              install 之后自动 reset（换机器一步到位）
+    VANBLOG_RELEASE_TAG=latest               下载回退里本分支 Release 附件用哪个 tag（默认 latest；
+                                             回退顺序：本分支 raw → 本分支 jsDelivr → 本分支 Release
+                                             → 上游文档站 → 上游 raw → 上游 jsDelivr）
   放在哪：
     VANBLOG_BASE_PATH=/var/vanblog           安装目录（编排文件、离线备份 tar 包）
     VANBLOG_DATA_PATH=<dir>                  数据目录（默认 <安装目录>/data）
@@ -2900,6 +3706,8 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
     VANBLOG_BACKUP_FORMAT=zstd|xz|gzip       backup 的压缩格式
     VANBLOG_BACKUP_CONSISTENT=1              等价于 backup --offline --consistent
     VANBLOG_BACKUP_KEEP=7                    等价于 backup --keep 7（只留最新 7 份）
+    VANBLOG_BACKUP_SPACE_MARGIN_MB=256       备份前空间预检的余量（MB）：剩余 < 估算+余量 → 拒绝备份
+    VANBLOG_BACKUP_SKIP_SPACE_CHECK=1        完全跳过空间预检（估算不出来时本来就会明说并放行）
     VANBLOG_RESTORE_FILE=<路径>              等价于 restore <路径>（老写法，仍支持）
     VANBLOG_RESET_INIT_USER / _PASS          reset 自动初始化用的临时账号（默认随机口令）
   其它：
@@ -2910,7 +3718,10 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
   换机器搬站（一步）：     VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
   换机器搬站（两步）：     ./vanblog.sh install && ./vanblog.sh reset /path/to/vanblog-full-xxx.tar.zst
   每天凌晨三点整站备份（留 7 份）：
-                          0 3 * * * VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/log/vanblog-backup.cron.log 2>&1
+                          VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron --hour 3 --keep 7
+                          （一条命令写进 root 的 crontab；token 存 0600 的 vanblog-cron.env，
+                            移除用 install-cron --remove。手写 crontab 的等价行见 docs/guide/backup.md）
+  校验备份还能不能用：      ./vanblog.sh verify            # 全部归档；或 verify <归档名|路径>
   升级：                  ./vanblog.sh update
   回滚镜像：              把编排里的 image 改成 ghcr.io/ckboss/vanblog:dev-dsh-<短sha>，再 restart
   站点打不开怎么查：       ./vanblog.sh status → ./vanblog.sh log
@@ -2925,10 +3736,12 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
   所有写操作前都会确认；破坏性操作（卸载、恢复、重置）要输入完整的 yes。
   路径与文件：
     <安装目录>/docker-compose.yaml            编排文件（config 会重新生成，旧的存成 .bak-<时间戳>）
+    <安装目录>/vanblog-cron.env               install-cron 写的定时备份环境（0600，含管理员 token）
     <数据目录>/data/static                    图床与附件
     <数据目录>/data/mongo                     MongoDB 数据文件
     <数据目录>/log                            日志（容器里的 /var/log）
-    <数据目录>/log/vanblog-backups            整站备份归档 + .manifest.json 清单
+    <数据目录>/log/vanblog-backup-cron.log    定时备份的输出日志（install-cron 写的 cron 行重定向到这）
+    <数据目录>/log/vanblog-backups            整站备份归档 + .manifest.json 清单 + .sha256 校验和
     <安装目录>/caddy/{config,data}            caddy 配置与证书
 
 USAGE
@@ -2984,6 +3797,8 @@ $(menu_state_line)
     ${green}10.${plain} 备份（整站备份：一致性快照、跨 MongoDB 版本可恢复、可预览清单）
     ${green}11.${plain} 恢复（从整站备份恢复，${yellow}不停服${plain}；不带参数会列出归档让你选）
     ${green}12.${plain} 重置整站（${yellow}新机器推荐${plain}：自动初始化 + 恢复 + 重启 + 逐项核对）
+    ${green}14.${plain} 定时备份（写进 root 的 crontab：每天一次整站备份，默认保留 7 份，幂等）
+    ${green}15.${plain} 校验备份（不解压验证归档：压缩完整性 + sha256 + 内容清单）
     ${green}── 其它 ──────────────────────────────────${plain}
     ${green}8.${plain}  卸载（会问确认；${yellow}不删备份${plain}）
     ${green}9.${plain}  重置 https 设置（证书签不出来 / 换过域名 / caddy 配置被改坏时）
@@ -3034,6 +3849,12 @@ echo && read -ep "请输入选择 [0-30]: " num
     ;;
   13)
     show_status
+    ;;
+  14)
+    install_cron
+    ;;
+  15)
+    verify
     ;;
   20)
     update_script
@@ -3097,6 +3918,16 @@ if [[ $# > 0 ]]; then
   "backup")
     shift
     backup 0 "$@"
+    ;;
+  "verify")
+    shift
+    verify "$@"
+    exit $?
+    ;;
+  "install-cron")
+    shift
+    install_cron "$@"
+    exit $?
     ;;
   "restore")
     shift

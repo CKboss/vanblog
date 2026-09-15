@@ -3248,7 +3248,8 @@ mongod 重启时每个请求要干等半分钟）、`connectTimeoutMS` 10s、`so
 审计还查了依赖、镜像、编排、CI 与泄密面。这一节记**已经落地的**；剩下的按优先级列在
 §7.40「审计遗留清单」里，都是量化过的，别当"没人发现"重复提。
 
-**入库文件里的生产标识已脱敏**：`codebonobo.tech`（生产域名）与 `JiangOil`（真实后台用户名）
+**入库文件里的生产标识已脱敏**：生产域名与真实后台用户名（两个字符串本身**不要写进这份文档**，
+否则等于一边脱敏一边又抄回去 —— 第一版就是这么干的）
 以前出现在 3 个 server spec、1 个脚本测试、2 篇文档和 AGENTS 里 —— 不是凭据，但把公开 fork
 和生产站点绑在了一起，还白送攻击者一个准确的用户名（登录有限流，喷洒成本变高，但没必要送）。
 统一换成 `example.com` / `blogadmin` / `示例站点`。
@@ -3404,22 +3405,28 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
 
 **D. 运维（小、安全，随时可做）**
 
+> **2026-09-15 更新：18、19、20、22 已落地，见 §7.41**（21、23 仍待定）。
+
 18. **mongo 没有 healthcheck**：加 `mongosh … || mongo …` 的 ping（4.4 没有 mongosh、7.0 没有 mongo，
     必须两个都试）+ `depends_on: condition: service_healthy`，能干掉模板注释里自己承认的
     "首次启动 server 连不上库、容器要重启几次才稳"。⚠️ `condition:` 需要 docker-compose ≥1.27
     或 compose v2（脚本在缺 v1 时会别名到 v2，但 Ubuntu 20.04 自带的 1.25 会解析失败）⇒
-    要么在脚本里加版本判断，要么保留列表形式做回退。
+    要么在脚本里加版本判断，要么保留列表形式做回退。**→ 已落地（§7.41 A）**
 19. **备份没有校验和，也没有空间预检**：manifest 里没有 sha256（损坏要等到恢复时才由 zstd/xz/gzip
     的 CRC 发现）；导出前不看磁盘剩余（ENOSPC 会优雅失败并清掉半成品，但大站上已经白等几分钟）。
     便宜的做法：manifest 里写 sha256 + 一个 `vanblog.sh verify <归档>`（流式解压 + 解析 manifest）。
+    **→ 已落地（§7.41 B）：走的是"脚本侧"这条腿 —— `verify` 子命令 + `<归档>.sha256` sidecar +
+    备份前空间预检；server 的 manifest 里仍然没有 sha256（本轮不许动 packages/，遗留见 §7.41）**
 20. **没有内置的定时备份**：`--keep` 有了，但调度还得用户自己写 crontab（脚本里只有一条可复制的配方）。
     可以加一个 `./vanblog.sh install-cron`（写 crontab 时默认带上 KEEP=7）。
     实测数据供决策：整站归档 **66MB**（zstd -19），目录级快照 **356MB**；40GB 的 VPS 每天备一次、
-    `--keep 7` ≈ 460MB（没问题），不带 keep ≈ **24GB/年**（不行）。
+    `--keep 7` ≈ 460MB（没问题），不带 keep ≈ **24GB/年**（不行）。**→ 已落地（§7.41 C）**
 21. `TZ: 'Asia/Shanghai'` 在两个服务里都是硬编码（非中国时区用户要手改，且 `config` 会覆盖）；
     `version: '3'` 在 compose v2 下已废弃（纯噪音）；`Dockerfile:376` 有一层 `cd /app/website && cd ..`
     的空操作、`:62` 有 `ENV EEE=production` 的拼写错误（都在 builder 阶段，不影响产物）；
     基础镜像全是浮动 tag（`node:20-alpine` ×5，没有 digest 钉住）。
+    （小注：`version` 本轮从 `'3'` 改成了 `'3.4'` —— 不是处理"噪音"问题，是 healthcheck 的
+    `start_period` 在 v1 的 3.0–3.3 schema 里不存在，见 §7.41 A；"删掉 version"仍然没做。）
 22. **安装脚本的下载回退会退到上游**：`vanblog.sh:91-98` 在拉不到本分支的编排模板/脚本时，
     会回退到 `vanblog.mereith.com`、`Mereithhh` 的 raw、jsDelivr —— 而国内网络下
     raw.githubusercontent 常常不通（本分支的 URL 恰好就是它），于是用户**静默地用上了上游版本**，
@@ -3427,9 +3434,166 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
     应该在上游回退**之前**插一个 fork 可达的镜像（jsDelivr 的 `gh/CKboss/vanblog@dev/dsh`，
     或者 release-fork 已经挂在 Release 上的附件）。另外 `:976` 会把
     `vanblog.mereith.com/docker.sh` 用 root 管道执行（上游遗留，至少要在文档里点明）。
+    **→ 已落地（§7.41 E）：fork 三源优先（raw → jsDelivr → Release 附件），docker.sh 的文档
+    警告也加了；管道执行本身保留（取舍见 §7.41 E）**
 23. **`/swagger` 默认公开**（`VANBLOG_SWAGGER=false` 可关，模板里已给出注释掉的开关）：
     等于把整个后台 API 面摊给未登录用户，robots 的 disallow 不是访问控制。
     没直接默认关掉是因为后台「关于」页与「Token 管理」页各有一个跳 `/swagger` 的链接。
+
+### 7.41 运维五件套（§7.40 D 组的落地）：mongo healthcheck、verify、空间预检、install-cron、fork 优先回退
+
+一键脚本 **v0.5.0 → v0.6.0**，编排模板同步改。五件事都只在脚本/模板/文档层，**没动 packages/**
+（server 侧的两个遗留见文末"没做的事"）。测试从 19 文件/859 条涨到 **22 文件/1105+ 条**，
+新增 `vanblog-compose-health.test.sh`(56) / `vanblog-verify.test.sh`(79) / `vanblog-install-cron.test.sh`(100)，
+重写 `vanblog-download-fallback.test.sh` 的顺序断言(67→78)。
+
+**A. mongo healthcheck + depends_on 的长/短形式（D-18）**
+
+- 模板给 mongo 加了 `healthcheck`：`test` 是 `mongosh --quiet --eval 'db.runCommand({ping:1}).ok' || mongo …`
+  的 CMD-SHELL —— **两个 shell 必须都试**（4.4.16 没有 mongosh；6.0 起没有 legacy mongo；5.0 两个都有），
+  `interval 10s / timeout 5s / retries 5 / start_period 40s`。
+- ⚠️ **`start_period` 逼着 version 从 `'3'` 提到 `'3.4'`**：不是凭记忆定的，是拉了 docker-compose
+  1.25.5 的 schema 逐个查的 —— `config_schema_v3.0.json` 的 healthcheck 定义
+  `additionalProperties:false` 且**没有** `start_period`（3.1/3.2/3.3 同样没有，3.4 起才有）。
+  也就是说保持 `version: '3'` 的话，Ubuntu 20.04 的 1.25 会把**整个模板**拒掉 —— 比没有
+  healthcheck 严重得多。3.4 的门槛是 docker-compose ≥1.16（2017-08）/ Engine ≥17.09；
+  现模板本来就要求 ≥1.10（`version: '3'`），实际抬高的只是 2017 年前的古董。compose v2 忽略 version。
+- **方向选择（模板提交哪种形式）**：`depends_on` 的 `condition: service_healthy` 长格式在
+  1.25.5 的 v3.x schema 里**只是 list_of_strings**（同样实拉 schema 核实过；长格式是 compose spec
+  合并后、1.27+ 才回来的）。所以模板**提交列表形式**（所有版本都解析得了），由
+  `./vanblog.sh config` 生成编排文件时**实测**本机再决定升不升级 —— 反方向（模板写死长格式、
+  老机器降级）会把"现有安装解析失败"变成默认路径，是更容易搞坏人的那个方向。
+- **探测不猜版本号**（`compose_supports_depends_condition`）：`docker-compose version` 的输出格式
+  太乱（1.25.5 / v2.20.2 / 脚本自建的 shim），改成拿一个带 `condition:` 的最小临时编排文件跑
+  `docker-compose -f probe config`，退出码 0 = 支持；探测文件带 `version: '3.4'`，与真实生成物
+  同形状（万一某个 1.27 对带版本号文件仍按老 schema 校验，实测结果也如实反映）。结果缓存在
+  `VANBLOG_COMPOSE_COND_SUPPORT`，一次 config 只探一次。
+- `apply_depends_on_form` 四个分支：支持+列表+**mongo 有 healthcheck** → 升级（没有 healthcheck
+  绝不升级：compose v2 对没有健康检查的依赖会直接拒绝启动 dependents）；不支持+长格式 → 降级并
+  打印一行原因；不支持+列表 → 保持并打印一行说明；异形（用户手改过）→ 原样不动。改写用 awk 写到
+  临时文件、**退出码为"确实改了"且文件非空才 mv**（awk 的 END 里 `exit(3)` 表示形状没匹配上），
+  任何岔子都不会把编排文件改坏。升降级后的文件都用 pyyaml 反解断言过形状。
+- 集成点：`config()` 在全部 sed 替换之后、`ensure_compose_image` 之前调用。
+
+**B. 备份完整性：`verify` 子命令 + `<归档>.sha256` sidecar（D-19 前半）**
+
+- **先核实了 server 侧**：`packages/server/src/utils/fullBackup.ts` / `backupCodec.ts` /
+  `fullBackup.provider.ts` 里 grep `sha256|checksum|hash` **零命中** —— manifest 只有
+  `totals.archiveBytes`，没有校验和。所以按任务要求走脚本侧，server 一行没动。
+- `./vanblog.sh verify [归档名|路径]…`（不带参数 = 备份目录里全部 `vanblog-full-*`）三步，
+  全程**不解压落盘**：① `zstd -t -q --long=27` / `xz -t` / `gzip -t` 流式完整性（`--long=27`
+  对齐 server 的解压参数；老 zstd 不认 `--long` 时去掉重试一次，别把"工具老"误报成"归档坏"）；
+  ② `.sha256` sidecar 有就比对，没有就**明说跳过**（后台/接口导出的归档没有 sidecar，照常校验、
+  恢复不受影响）；③ 流式解压 | `tar -tf -` 列成员，按 server 的打包结构核对
+  （`tar -cf - -C staging .` ⇒ `./manifest.json`、`./db/<库>/<集合>.ndjson`、`./static/<img|file|customPage>/`）。
+  成员预期分了"失败"与"只提示"两档：缺 manifest / 一个 NDJSON 都没有 = FAIL；缺 `static/` 树 = 提示
+  （BACKUP_STATIC_FOLDERS 是"存在才打包"，空站点 legitimately 没有）；旁边缺 `.manifest.json` = 提示。
+  `vanblog-backup-*.tar.gz`（offline）按 `./data/` 树核对；陌生文件名只做完整性+结构，并明说。
+  汇总一行 OK/FAIL 计数，任一 FAIL → rc 非 0（可进监控）。
+- **sidecar 的写入方**：只有**脚本自己**做的备份才写（`backup_full` 在接口成功后对宿主机路径算
+  sha256；`backup_offline` 在 tar 成功后写）。格式与 `sha256sum` 输出一致（`hex␣␣basename`），
+  `sha256sum -c` 直接可用；记 basename 而不是全路径，归档拷去别处 sidecar 跟着走。
+- ⚠️ **`.sha256` 会匹配 `vanblog-full-*.tar.*` 这个 glob**（`x.tar.zst.sha256`）：
+  prune 的份数计数、status 的归档计数、restore/reset 的选择列表、verify 的全目录扫描**四处**都要
+  过滤它（prune 还要在删归档时连带删 sidecar）。第一版就漏了计数这处，测试用"3 个归档 + 3 个
+  sidecar、keep=2 应删 1 份"钉住了。
+- ⚠️ server 的 `listFullBackups()` 只排除 `.manifest.json`，**不排除 `.sha256`** —— 后台
+  「备份恢复」页会把这些小文件列成"归档"（恢复它会报"无法识别压缩格式"，无害但难看）。
+  本轮不许动 packages/，已报给父代理转给 server 侧（一行 filter 的事）。
+
+**C. 磁盘空间预检（D-19 后半）**
+
+- `check_backup_space <full|offline> <目标目录>` 挂在 `backup_full`（探活之后、要 token 之前 ——
+  别让用户输完密码才告诉他磁盘不够）与 `backup_offline`（确认数据目录存在之后）。
+- 估算的诚实阶梯：full = 上一个归档的大小（最有依据）→ 静态目录 `du -sk` + 64MB 数据库固定猜测
+  → 静态目录都读不到就只按 64MB 猜并明说依据；offline = 数据目录 `du -sk`（tar.gz 对已压缩的
+  图片几乎不再缩小，算上界）。判定：`free < est+margin` → **中止**（rc 1，打印估算依据/剩余/
+  怎么调）；`free < est*2+margin` → 警告但继续；`VANBLOG_BACKUP_SPACE_MARGIN_MB`（默认 256）
+  覆盖余量，`VANBLOG_BACKUP_SKIP_SPACE_CHECK=1` 跳过。**估算或 df 拿不到 → 明说"跳过检查直接
+  备份"并放行**，绝不假装检查过（测试里用 df/du 桩函数专门钉了这两条诚实路径）。
+- `df -Pk`（POSIX 格式，两行定长列）取 Available，不依赖 GNU 的 `--output`；目标目录不存在时
+  往上找存在的父目录（备份目录是导出时才建的）。
+
+**D. `install-cron`：内置定时整站备份（D-20）**
+
+- 行为：默认每天 03:00、`KEEP=7`（`VANBLOG_BACKUP_KEEP` 覆盖默认，`--hour N`/`--keep N` 覆盖参数）、
+  `VANBLOG_ASSUME_YES=1`、日志 `<数据目录>/log/vanblog-backup-cron.log`；`--remove` 移除；
+  `--force` 换参数。写入前**展示整行**再确认。cron 行形如
+  `0 3 * * * . '<安装目录>/vanblog-cron.env' && '<脚本绝对路径>' backup >> '<日志>' 2>&1 # vanblog-backup-cron`。
+- **幂等**的三态：crontab 里已有**同样**的标记行 → rc 0 +"不会重复添加"；已有但**参数不同** →
+  rc 1 拒绝，给 `--force`/`--remove` 两条路（不悄悄出现两条每天各备一次的条目）；没有 → 追加。
+- **绝不毁已有 crontab**：`crontab -l` 成功 → 原样保留 + 末尾追加；失败但 stderr 是
+  "no crontab" → 当空表；**其它失败**（服务没起/权限）→ 拒绝安装（宁可不装）。写入走
+  `{ 旧表; 新行; } | crontab -`，写完**回读确认**标记在，不在就报失败不装蒜。
+- **token 的诚实处理**：备份接口在 AdminGuard 后面，cron 没法交互输密码 ⇒ token 必须落盘。
+  取 `VANBLOG_ADMIN_TOKEN`（环境变量）或 tty 下交互输入（`read -e -r -s`，不回显），写进
+  `<安装目录>/vanblog-cron.env`，`umask 077` + chmod 600；**单引号做 shell 转义**（`to'k` →
+  `'to'\''k'`，测试里 source 回来比对原值）。文件头注释与 docs/guide/backup.md 都写明了权衡
+  （长期有效的管理员 token 明文落盘）与作废方法。**不给 token 也装**，但打印红字"备份会在登录
+  一步失败"、env 文件里留注释掉的模板行 —— 失败的备份会写进日志，比"静默不跑"诚实。
+  没有 `crontab` 命令 → rc 1 + 可照抄的手工步骤（含标记，之后 install-cron 还能识别）。
+- ⚠️ 踩到一个小坑：参数解析里 `0|--*) :;;`（菜单占位豁免）排在 `*)` 之前，会把 `--keep 0` 的
+  `0` 当占位符**吞掉**，keep 静默保持默认 7 —— 而 `--keep 0` 本该被正整数校验拦下（保留 0 份
+  等于备完就删）。改成"先看上一个参数是不是 `--hour/--keep`，不是才豁免 0"。
+- ⚠️ 测 tty 交互（`read -s` 不回显）要用 util-linux 的 `script -qec` 起真 pty；而 **`script` 会把
+  自己 stdin 的管道字节原样回显到输出开头**（child 还没 read 就出现了），"不回显"的断言必须看
+  **提示符之后**的文本，不能整段搜 token（第一版就这么误报了）。
+
+**E. fork 优先的下载回退（D-22）**
+
+- 顺序从「fork raw → 上游文档站 → 上游 raw → 上游 jsDelivr」改成 6 条：
+  「fork raw → **fork jsDelivr**（`cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/...`）→
+  **fork Release 附件**（`github.com/CKboss/vanblog/releases/latest/download/{vanblog.sh,
+  docker-compose-template.yml}`，`VANBLOG_RELEASE_TAG` 可钉成 `releases/download/<tag>/`）→
+  上游文档站 → 上游 raw → 上游 jsDelivr」。资产名与 tag 约定是读 `release-fork.yml`
+  （`files: scripts/vanblog.sh + docker-compose/docker-compose-template.yml`，`v*` tag）+
+  GitHub API 实测确认的（v2026.09 的 Release 上就挂着这两个名字）。
+- **两个 fork 镜像都实测可达**（本机直连）：jsDelivr 的 `@dev/dsh` 分支 URL → **200**
+  （带斜杠的分支名 jsDelivr 解析没问题）；`releases/latest/download/vanblog.sh` → **302** 到
+  `releases/download/v2026.09/vanblog.sh`。
+- `download_with_fallback` 的"打印实际用的 URL + 下载后校验（`bash -n`/占位符/首尾标志）"原样保留，
+  只是候选列表变长；`vanblog-download-fallback.test.sh` 全部顺序断言重写，并加了一条**顺序不变式**：
+  前三条必须都是 CKboss 源、后三条不许含 CKboss —— 谁再把上游挪到 fork 前面，测试直接红。
+- **docker.sh 的处理是"文档点明"而不是改行为**：`bash <(curl -sL https://${Get_Docker_URL})` 以 root
+  管道执行作者主机的脚本仍是上游遗留行为，但它只在"机器上没有 docker"时触发；换掉它（比如内置
+  get.docker.com）超出本轮范围，按任务要求在 `docs/guide/script.snippet.md` 与
+  `docs/faq/deploy.md#如何安装-docker` 各放了一条明确警告（不放心就先自己装 docker）。
+
+**菜单/帮助/文档**：菜单加 `14. 定时备份`、`15. 校验备份`（**老编号一个没动**，13 之前原样）；
+dispatcher 加 `"verify"` / `"install-cron"`；`show_usage`（引号 heredoc，`<<'USAGE'` 规则照旧）加了
+两个子命令的全部参数、三个新环境变量、场景配方（install-cron 一行代替手写 cron）、路径约定
+（vanblog-cron.env / cron 日志 / .sha256）。文档：`docs/guide/backup.md`（verify、空间预检、
+install-cron 与 token 权衡、每周 verify 的 cron 配方）、`docs/faq/deploy.md`（新回退顺序、
+healthcheck 与 depends_on 两种形状对照表、docker.sh 警告）、`docs/guide/script.snippet.md`
+（回退顺序、常用命令、docker.sh 警告、目录清单）。`docs/reference/dir.md` **没改**：它是容器内
+目录映射表，本轮新增的文件（cron env/.sha256/cron 日志）全在宿主机侧，容器内路径一个没变。
+
+**没做的事（都有原因，别当遗漏）**：
+
+- **server 的 manifest 里仍然没有 sha256**：任务边界是"不许动 packages/"，脚本侧 sidecar 已覆盖
+  "脚本做的备份"；后台/接口直接导出的归档依旧只有 CRC 兜底（verify 会明说"无 sha256 记录"）。
+  要补就是 `fullBackup.ts` 写完归档后补一个 `crypto.createHash('sha256')` 流 + manifest 加字段，
+  以及 `listFullBackups` 顺手排除 `.sha256`（B 节末尾那条）。
+- **verify 没有"下载回来验"**：只验本机/备份目录里已有的文件；从 server 拉归档是 restore 的事。
+- **healthcheck 没在真 mongo 容器里跑过**：本会话 podman/docker 不可用。test 命令的行为是按
+  mongo shell 的退出码语义推的（连不上 → 非 0；4.4 无 mongosh → 127 → `||` 兜底），schema 兼容性
+  是拉 1.25.5 的 JSON schema 核实的，但 `docker-compose up` 后的真实 healthy 翻转**没有实测**。
+- **install-cron 没在真 cron 守护进程下跑过一夜**：假 crontab 测的是脚本与 crontab CLI 的契约；
+  cron 行本身的语法是标准 POSIX 五段 + `.` source，风险低但未实测。
+
+**测试**：`vanblog-compose-health.test.sh`(56) —— 模板内容/剥注释后的反向断言/pyyaml 形状、
+探测函数的支持/不支持/缓存/没有 docker-compose 四种情况、升级/降级/幂等/无 healthcheck 不动/
+异形不动、config 集成（v2 与 1.25 两种假 compose 各跑一遍完整 config）；
+`vanblog-verify.test.sh`(79) —— **真 tar+zstd/xz/gzip** 造的 server 形状归档三种格式全过、
+真截断（`head -c` 一半）必 FAIL、篡改一个字节由 sha256 抓住、缺 NDJSON/缺 manifest FAIL、
+缺 static 只提示、offline 与陌生文件名两条路、按名/按路径/找不到/空目录、prune 与列表的
+sidecar 过滤、offline+mock-curl 的 full 两种备份都写 sidecar 且 verify 能闭环、预检的
+通过/中止/偏紧/margin 覆盖/skip/df 失败/估算失败（df、du 用桩函数摆布剩余空间）；
+`vanblog-install-cron.test.sh`(100) —— 假 crontab 二进制（记录 stdin）跑真流程：全新安装/
+幂等/参数不同拒绝/--force 替换/--remove 保留其它条目/`crontab -l` 故障时拒写/写入丢失时不报成功/
+没有 crontab 命令/没有 token 的诚实路径/env 文件 0600+单引号转义+source 还原/tty 交互输入
+（`script` 起真 pty）/参数校验/dispatcher 与菜单与 --help 接线/老菜单编号不变。
+既有套件只改了两处断言：download-fallback 的顺序（67→78 条）与 backup-restore 的版本号 v0.6.0。
 
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
@@ -3438,7 +3602,7 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
 | server `jest` | 657 用例：656 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 61 文件 / 578 用例全绿 |
 | admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 859 条断言全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1105 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

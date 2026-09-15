@@ -17,6 +17,7 @@ icon: retweet
 ```bash
 ./vanblog.sh backup                     # 整站备份（默认 zstd，一致性快照）
 ./vanblog.sh backup --format xz         # 换压缩格式：zstd / xz / gzip
+./vanblog.sh verify                     # 校验备份目录里的全部归档（不解压落盘）
 ./vanblog.sh restore                    # 不带参数：列出服务器上的归档，选一个恢复
 ./vanblog.sh restore vanblog-full-20260913-140955.tar.zst     # 一步恢复（不上传，秒级开始）
 ./vanblog.sh restore /path/to/vanblog-full-xxx.tar.zst        # 本地文件（走上传）
@@ -41,6 +42,45 @@ VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 ./vanblog.sh backup
 （那些在数据目录里，证书到期会自动重签，一般不用备）。要连证书一起备，用下面的 `--offline`。
 
 :::
+
+### 备份前：磁盘空间预检
+
+导出大归档最怕磁盘满：server 那边 ENOSPC 会优雅失败并清掉半成品，但大站上你已经白等了几分钟；
+`--offline` 的目录级快照更糟 —— 磁盘满会留下一个**截断的 tar.gz**。所以脚本在发起备份之前
+先在宿主机侧量一次：
+
+- **估算**：备份目录里有上一个整站归档就用它的大小（最有依据）；没有就用
+  「静态目录实际占用 + 数据库导出按 64MB 估」；
+- **判定**：目标文件系统剩余 < 估算 + 余量 → **拒绝备份**（非 0 退出）；只是偏紧 → 警告后继续；
+- **诚实**：估算或 `df` 拿不到时会明说「跳过检查直接备份」，不会假装检查过。
+
+余量默认 256MB，用 `VANBLOG_BACKUP_SPACE_MARGIN_MB` 覆盖；`VANBLOG_BACKUP_SKIP_SPACE_CHECK=1`
+完全跳过（定时任务里宁可备出来也不被拦时用，但更建议配合 `--keep` 控制总量）。
+
+### 这份归档还能用吗：verify 与 sha256
+
+server 导出的 manifest 里**没有校验和**（损坏要等到恢复解包时才由 zstd/xz/gzip 的 CRC 发现），
+所以脚本侧补了一层：
+
+- 凡是**经脚本**做的备份（`backup` 与 `backup --offline`），成功后都会在归档旁边写一个
+  `<归档>.sha256`（格式同 `sha256sum` 输出）。把归档拷去别处（scp/U 盘/对象存储）时
+  **把 sidecar 一起带上**，异地也能验；
+- `./vanblog.sh verify [归档名|路径]…` 做三件事，全程**不解压落盘**：
+  1. 流式过一遍解压器（`zstd -t` / `xz -t` / `gzip -t`）—— 截断或损坏的归档当场抓住；
+  2. 有 `.sha256` 记录就比对（没有记录会明说跳过 —— 后台/接口直接导出的归档没有 sidecar，
+     **照常校验**，恢复也不受影响）；
+  3. 列出归档成员，核对预期内容都在：`manifest.json`、各集合的 `db/<库>/<集合>.ndjson`、
+     `static/` 树（空站点没有静态树属正常，只提示不算失败）。
+
+```bash
+./vanblog.sh verify                       # 校验备份目录里的全部归档
+./vanblog.sh verify vanblog-full-20260913-140955.tar.zst   # 按名字（在备份目录里找）
+./vanblog.sh verify /path/to/xxx.tar.zst  # 按路径（比如刚 scp 到新机器的）
+```
+
+输出是每归档一行的 OK/FAIL 摘要 + 总计；**任一归档 FAIL → 退出码非 0**，
+可以直接放进监控或 cron（例如每周验一次最老的归档）。FAIL 的归档别拿来恢复 ——
+重新备一份，或换更早的一份并先 verify。
 
 ### 换新机器：一条命令把整站搬过去
 
@@ -100,23 +140,71 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 
 :::
 
-### 别把磁盘备满：保留策略
+### 定时备份：install-cron 一条命令装好
 
-一份整站备份就是几十 MB（本站实测 66MB），配了 cron 每天备一次，一个月就是 2GB。
-所以**自动备份一定要带保留份数**：
+手写 crontab 最容易错三件事：token 放哪、忘带 `VANBLOG_ASSUME_YES`/`VANBLOG_BACKUP_KEEP`、
+以及 `crontab` 用法不对把已有任务覆盖掉。所以脚本内置了：
 
 ```bash
-# 备份成功后只保留最新 7 份，其余连 .manifest.json 一起删掉
+VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保留 7 份
+./vanblog.sh install-cron --hour 5 --keep 14              # 换时间/份数
+./vanblog.sh install-cron --remove                        # 移除
+./vanblog.sh install-cron --force --hour 5                # 参数变了，替换旧条目
+```
+
+它的行为，条条都是为了"不闯祸"：
+
+- **幂等**：crontab 里已有一条同样的就明说"不会重复添加"；已有一条但参数不同时**拒绝**，
+  要你显式 `--force`（或先 `--remove`），绝不悄悄出现两条每天各备一次的条目；
+- **绝不覆盖已有 crontab**：只在末尾追加自己的行（带 `# vanblog-backup-cron` 标记）；
+  `crontab -l` 读出**不是**"没有 crontab"的其它错误时，宁可拒绝安装也不写回；
+  写入后还会回读确认，读不到就报失败，不假装装好了；
+- **写入前先展示**将要添加的整行，确认后（`VANBLOG_ASSUME_YES=1` 跳过）才写；
+- 备份输出记到 `<数据目录>/log/vanblog-backup-cron.log`，成功失败都留痕；
+- 没有 `crontab` 命令的机器会明说，并给出可照抄的手工步骤。
+
+**token 放哪（诚实的权衡）**：备份接口在登录态后面，cron 里没法交互输密码，所以
+`VANBLOG_ADMIN_TOKEN`（环境变量或安装时交互输入，输入不回显）会写进
+`<安装目录>/vanblog-cron.env`，权限 **0600（仅 root 可读）**，cron 行 source 它。
+这意味着**一个长期有效的管理员 token 明文落盘**：拿到 root 的人本来就能为所欲为，所以这只在
+"服务器被拿到 root"之外多暴露了一点（比如备份盘/快照被单独读走）。怀疑泄露就让它作废
+（后台重新登录签发新 token、删掉旧的），再 `install-cron --force` 重写一次。
+不给 token 也能装，但脚本会明说：备份会在登录一步失败（错误进日志），按 env 文件里的注释补上即可。
+
+不想用 `install-cron` 的话，手写 crontab 的等价配方（token 千万别直接写在 crontab 行里，
+`crontab -l` 谁都能看）：
+
+```bash
+# /root/vanblog-cron.env（chmod 600）：
+#   export VANBLOG_ADMIN_TOKEN='<token>'
+0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup.cron.log 2>&1
+```
+
+建议再配一个每周校验（退出码非 0 就是有归档坏了，可接监控）：
+
+```bash
+30 4 * * 0 /var/vanblog/vanblog.sh verify >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
+```
+
+### 别把磁盘备满：保留策略
+
+一份整站备份就是几十 MB（本站实测 66MB），配了 cron 每天备一次，一个月就是 2GB；
+不带保留份数的话一年能吃掉 ~24GB。所以**自动备份一定要带保留份数**
+（`install-cron` 默认就带 `KEEP=7`）：
+
+```bash
+# 备份成功后只保留最新 7 份，其余连 .manifest.json / .sha256 一起删掉
 ./vanblog.sh backup --keep 7
 
-# cron 里用环境变量（等价）
-0 3 * * * VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/log/vanblog-backup.cron.log 2>&1
+# cron 里用环境变量（等价；token 的放法见上面 install-cron 一节，别写进 crontab 行）
+0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup.cron.log 2>&1
 ```
 
 几条边界，都是为了"宁可少删，不可多删"：
 
 - 只删它自己认识的归档名（`vanblog-full-*.tar.*` / 离线模式的 `vanblog-backup-*.tar.*`），
-  备份目录里的其它文件一概不动；
+  备份目录里的其它文件一概不动；`.manifest.json` 与 `.sha256` 是 sidecar，不参与"份数"计数，
+  正主的归档被删时才跟着删；
 - 只在**新备份成功之后**才清理 —— 备份失败时删旧归档，等于把最后的恢复点也弄没了；
 - `--keep` 留空或写 0 就是不清理（默认行为），写非数字也不清理；
 - 离线模式（`--offline --keep N`）清理的是安装目录里的 `vanblog-backup-*`，两者互不干扰。

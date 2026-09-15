@@ -131,20 +131,30 @@ Cloudflare 等 CDN 不要对 HTML 开「缓存全部」；改完后清边缘缓�
 
 一键安装 / `config` 需要下载 `docker-compose-template.yml`。旧脚本只请求 `https://vanblog.mereith.com/docker-compose-template.yml`，部分网络（例如北美）即使能上网也连不上该主机，于是报「下载脚本失败」（[#115](https://github.com/Mereithhh/vanblog/issues/115)）。
 
-请先更新到最新脚本（菜单 **20. 更新此脚本**，或重新下载）。新脚本会按顺序尝试：
+请先更新到最新脚本（菜单 **20. 更新此脚本**，或重新下载）。新脚本按「**fork 优先**」的顺序尝试，
+任一处成功即继续，并打印实际使用的 URL：
 
-1. `https://vanblog.mereith.com/docker-compose-template.yml`
 1. 本分支 GitHub raw：`https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml`
-1. 上游文档站与上游 GitHub raw / jsDelivr（兜底，拿到的是**上游模板**：镜像是官方版、mongo 是 4.4.16，
-   没有本分支的日志上限、`depends_on`、mongo 版本占位符这些改动）
-1. jsDelivr：`https://cdn.jsdelivr.net/gh/Mereithhh/vanblog@master/docker-compose/docker-compose-template.yml`
+1. 本分支 jsDelivr 镜像：`https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml`
+   （raw.githubusercontent.com 在部分网络下经常不通，jsDelivr 通常可达）
+1. 本分支 GitHub Release 附件：`https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml`
+   （`release-fork` 工作流每次发版都会把模板与 `vanblog.sh` 挂在 Release 上；
+   可用 `VANBLOG_RELEASE_TAG=v2026.09` 钉住某个 tag）
+1. 上游文档站 `vanblog.mereith.com`（**兜底**）
+1. 上游 GitHub raw（**兜底**）
+1. 上游 jsDelivr（**兜底**）
 
-某一地址成功就会继续安装，并打印实际使用的 URL。全部失败才会报错退出。更新脚本自身也使用同一套回退。
+⚠️ 后三条拿到的是**上游模板**：镜像是官方版、mongo 是 4.4.16，没有本分支的日志上限、
+`depends_on`、mongo healthcheck、mongo 版本占位符这些改动。脚本会提示「模板里没有 mongo
+占位符」，功能仍可用，但建议排查网络后重跑 `config` —— 这也是为什么前三个 fork 源
+排在上游**之前**：以前 raw 不通时会静默退到上游，用户就此装上了不含本分支任何加固的产物。
 
-若连文档站上的 `vanblog.sh` 都下不下来，可以用 GitHub raw：
+若连文档站上的 `vanblog.sh` 都下不下来，可以用 GitHub raw 或 jsDelivr：
 
 ```bash
 curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+# raw 不通时（常见于中国大陆网络）：
+curl -L https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
 这与 Docker Hub / 镜像仓库拉取失败不是同一类问题。
@@ -166,6 +176,45 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 ```bash
 curl -sSL https://get.daocloud.io/docker | sh
 ```
+
+::: warning 一键脚本装 docker 的方式
+
+`./vanblog.sh install` 发现机器上没有 docker 时，会把**上游作者主机**上的
+`vanblog.mereith.com/docker.sh`（CN 分支；海外分支是 `get.docker.com`）**用 root 通过
+`bash <(curl …)` 管道执行** —— 这是上游遗留行为，等于把 root 交给那个远端脚本当时的内容。
+不放心的话，先自己装好 docker（发行版仓库、`get.docker.com` 或上面的 daocloud 脚本，
+装之前都可以先下载下来读一遍），再跑 `./vanblog.sh`：脚本检测到 docker 已存在就不会再碰这一步。
+
+:::
+
+## 编排文件里的 mongo healthcheck 与 depends_on
+
+新生成的编排文件里，mongo 带了一个健康检查：
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ping:1}).ok' || mongo --quiet --eval 'db.runCommand({ping:1}).ok'"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 40s
+```
+
+两个 shell 都要试是因为镜像 tag 不固定：`mongo:4.4.16` **没有** `mongosh`，`mongo:6.0/7.0`
+**没有** legacy `mongo` shell，`||` 短路让同一个 test 在哪个版本上都能用。`start_period`
+给首次启动（初始化数据目录 / 崩溃后回放 journal）留了 40 秒宽限，期间的失败不计入 `retries`。
+
+vanblog 服务对 mongo 的 `depends_on` 有两种形状，脚本会按你机器的 compose **实测**选择
+（`config` 时拿一个带 `condition:` 的临时文件跑一次 `docker-compose config`，看退出码，不猜版本号）：
+
+| 你的 docker-compose | 生成的 depends_on | 行为 |
+| --- | --- | --- |
+| ≥1.27 或 compose v2（`docker compose`） | 长格式 `mongo: {condition: service_healthy}` | vanblog **等 mongo 健康检查通过**才启动，首次安装不再"重启几次才稳" |
+| 更老（如 Ubuntu 20.04 自带的 1.25） | 列表形式 `- mongo` | 只保证 mongo 先启动，不等就绪；server 自己会重试连库（10 次 × 3 秒），多等几秒属正常 |
+
+模板里**提交的是列表形式**（所有版本都解析得了的方向），长格式是脚本在你机器上实测支持后
+才升级上去的 —— 反过来（模板写死长格式）会让 Ubuntu 20.04 这类老 compose 直接解析失败、
+整个栈起不来。老安装跑一次 `./vanblog.sh config` 就能拿到 healthcheck 与（如果支持的话）长格式。
 
 ## 如何在外部访问数据库
 
@@ -248,7 +297,9 @@ curl -sI --http2 https://你的域名/ | grep -iE '^HTTP|^alt-svc'
 ```bash
 # 旧机器：出一份整站备份（一致性快照，跨 MongoDB 版本可恢复）
 ./vanblog.sh backup
-# 把 vanblog-full-*.tar.zst 拷到新机器（scp / U 盘都行）
+# 拷走之前先验一遍（完整性 + sha256 + 内容清单，不解压落盘），到新机器上还可以再验一次
+./vanblog.sh verify
+# 把 vanblog-full-*.tar.zst（连同同名 .sha256 / .manifest.json）拷到新机器（scp / U 盘都行）
 
 # 新机器：装 + 恢复一步到位
 VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install

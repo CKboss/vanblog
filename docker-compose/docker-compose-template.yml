@@ -1,10 +1,26 @@
-version: '3'
+# ⚠️ version 是 '3.4' 而不是 '3'：mongo 的 healthcheck 用了 start_period，
+# 而 docker-compose v1 对 `version: '3'`（= 文件格式 3.0）的 schema 里**没有**这个键
+# （additionalProperties:false，1.25 实测直接拒绝；start_period 从 3.4 才进 schema）。
+# 3.4 需要 docker-compose ≥1.16 / Docker Engine ≥17.09（2017 年后的机器都满足）；
+# compose v2 会忽略 version（只打一行 obsolete 警告）。
+version: '3.4'
 
 services:
   vanblog:
     image: vanblog_image
     restart: always
-    # 先起 mongo：server 连不上库会退出，容器重启几次才稳定，首次安装时看着像失败
+    # 先起 mongo：server 连不上库会退出，容器重启几次才稳定，首次安装时看着像失败。
+    # 这里**故意提交列表形式**（只保证启动顺序，不等待就绪），而不是
+    # `depends_on: {mongo: {condition: service_healthy}}` 长格式，方向是这样选的：
+    #   - 长格式要 docker-compose ≥1.27 或 compose v2 才解析得了（Ubuntu 20.04 自带的
+    #     1.25 对 v3.x 文件里 depends_on 只认字符串列表，直接报错、整个栈起不来）——
+    #     把长格式写死在模板里 = 把老机器上的**现有安装**搞坏的方向；
+    #   - 列表形式在所有版本下都能解析，最坏只是"不等 mongo 就绪"（server 自己
+    #     会重试连库 10×3s，见 initJwt）。
+    # 所以由 ./vanblog.sh 在生成 docker-compose.yaml 时**实测本机 compose**
+    # （拿一个带 condition 的最小临时文件跑 `docker-compose config`，看退出码，
+    # 不猜版本号）：支持就自动升级成长格式「等 mongo 健康检查通过再起 vanblog」
+    # （配合下面 mongo 的 healthcheck），不支持就保持列表形式并打印一行说明。
     depends_on:
       - mongo
     logging:
@@ -86,6 +102,20 @@ services:
     #   某些老机器不支持 avx，跑不了 5.0+，那种情况用 VANBLOG_MONGO_IMAGE=mongo:4.4.16 指定。
     image: vanblog_mongo_image
     restart: always
+    # mongo 健康检查：给 vanblog 的 `depends_on: condition: service_healthy` 用
+    # （./vanblog.sh config 在本机 compose 支持时才升级成那个长格式），
+    # 也让 `docker ps` 能看出 mongo 是"真的能接受连接"而不是"进程活着但还在回放 journal"。
+    # ⚠️ test 必须**两个 shell 都试**：镜像 tag 是脚本填的占位符（vanblog_mongo_image），
+    # 用户可能钉在 mongo:4.4.16（**没有** mongosh，命令找不到退 127 → 落到 || 后面的
+    # legacy mongo），也可能用 mongo:7.0（**没有** legacy mongo shell，反之亦然）；
+    # 5.0 两个都有、6.0 起只有 mongosh。ping 通了输出 1、退出码 0；连不上（还在启动/
+    # 正在回放）退出码非 0 → 记一次失败，start_period 内的失败不计入 retries。
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ping:1}).ok' || mongo --quiet --eval 'db.runCommand({ping:1}).ok'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     logging:
       # Docker 默认的 json-file 驱动会把容器 stdout **无限期**留着：
       # 博客的访问日志 + server 日志跑上几个月能吃掉几个 G，小机器会被直接写满磁盘
