@@ -52,7 +52,8 @@ describe('主题（前台皮肤）：后台管理页', () => {
   });
 
   it('服务层用的是 admin 接口，token 从 localStorage 取', () => {
-    const svc = code(read('src/services/van-blog/theme.js'));
+    // ⚠️ 是 skinTheme.js：同目录的 theme.js 是后台**明暗模式**的工具，别覆盖它
+    const svc = code(read('src/services/van-blog/skinTheme.js'));
     assert.match(svc, /\/api\/admin\/theme\/all/);
     assert.match(svc, /\/api\/admin\/theme\/active/);
     assert.match(svc, /THEME_UPLOAD_ACTION = '\/api\/admin\/theme\/upload'/);
@@ -119,6 +120,22 @@ describe('主题（前台皮肤）：服务端接线', () => {
     assert.match(dto, /id: 'default'/);
     assert.match(dto, /id: 'apple'/);
     assert.match(dto, /source: 'builtin'/);
+  });
+});
+
+describe('主题：不要和后台的明暗模式搞混', () => {
+  it('services/van-blog/theme.js 仍然是明暗模式工具（皮肤接口在 skinTheme.js）', () => {
+    // ⚠️ 用 code() 剥掉注释再断言：skinTheme.js 的注释里正好写了
+    //    "别和 theme.js 搞混，那个是 getInitTheme / decodeAutoTheme …"，
+    //    不剥的话 doesNotMatch 会被自己的注释满足（这个坑本仓库已经踩过八次）。
+    const dark = code(read('src/services/van-blog/theme.js'));
+    assert.match(dark, /getInitTheme/);
+    assert.match(dark, /decodeAutoTheme/);
+    assert.match(dark, /beforeSwitchTheme/);
+    assert.doesNotMatch(dark, /api\/admin\/theme/);
+    const skin = code(read('src/services/van-blog/skinTheme.js'));
+    assert.match(skin, /api\/admin\/theme\/all/);
+    assert.doesNotMatch(skin, /getInitTheme/);
   });
 });
 

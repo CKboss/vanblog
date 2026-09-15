@@ -2942,6 +2942,17 @@ controller/admin/theme/, controller/public/theme.controller.ts}`、
 规矩：新建文件前先 `ls` / `git status` 看它在不在，或者直接用 write 工具
 （它会拒绝覆盖没读过的文件 —— 这次是我用 heredoc 绕过了这道保护）。
 我的测试已改名 `customTheme.spec.ts`，原文件用 `git checkout` 还原。
+**同样的事故当天又发生了第二次，而且被提交推了出去**：`packages/admin/src/services/van-blog/theme.js`
+本来就是后台**明暗模式**的工具（`getInitTheme` / `decodeAutoTheme` / `mapTheme` / `beforeSwitchTheme`，
+被 `app.jsx` 与 `ThemeButton` 用着），我用 `cat >` 写皮肤接口时把它整个覆盖了 ——
+`git status` 里它是 ` M`（已跟踪文件被改），不是 `??`，这本来就是最明显的信号。
+现象是后台编译报
+`export 'beforeSwitchTheme' … was not found in './services/van-blog/theme'`。
+修法：`git show HEAD~1:<path> > <path>` 还原，皮肤接口挪到 **`skinTheme.js`**，
+并加了一条"两个文件各是什么、不许互相污染"的断言。
+**规矩（写进这里，别再犯）**：新建文件前一律先 `ls` 目标路径 / 看 `git status` 是 `??` 还是 ` M`；
+要用 heredoc 写文件就先确认它不存在；命名时避开仓库里已有的同名词
+（"theme" 在本仓库指**明暗模式**，皮肤相关的文件一律用 `skin`/`customTheme` 前缀）。
 
 ⚠️ **校验要扫"去掉注释之后"的文本**：示例主题的注释里就写着
 "javascript: / expression() / <script> 会被拒绝"，扫原文会把自己家的 demo 拒掉
@@ -2976,7 +2987,7 @@ settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传�
 |---|---|
 | server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 60 文件 / 558 用例全绿 |
-| admin `node --test tests/unit` | 83 套件 / 341 用例全绿 |
+| admin `node --test tests/unit` | 83 套件 / 342 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 824 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 

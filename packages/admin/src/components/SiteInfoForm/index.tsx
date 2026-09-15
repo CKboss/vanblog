@@ -1,5 +1,5 @@
 import { BAIDU_ANALYSIS_FIELD, GA_ANALYSIS_FIELD } from '@/utils/analysisFields';
-import { listThemes } from '@/services/van-blog/theme';
+import { listThemes } from '@/services/van-blog/skinTheme';
 import { ProFormDateTimePicker, ProFormDigit, ProFormSelect, ProFormText, ProFormTextArea } from '@ant-design/pro-form';
 import UrlFormItem from '../UrlFormItem';
 

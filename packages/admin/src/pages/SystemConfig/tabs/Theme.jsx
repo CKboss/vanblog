@@ -5,7 +5,7 @@ import {
   listThemes,
   THEME_UPLOAD_ACTION,
   themeTokenHeader,
-} from '@/services/van-blog/theme';
+} from '@/services/van-blog/skinTheme';
 import { Alert, Button, Card, Input, message, Modal, Popconfirm, Space, Table, Tag, Typography, Upload } from 'antd';
 import moment from 'moment';
 import { useEffect, useState } from 'react';
