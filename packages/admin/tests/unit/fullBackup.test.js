@@ -172,7 +172,8 @@ describe('整站备份：文档', () => {
     assert.match(doc, /恢复会覆盖当前站点/);
     assert.match(doc, /需要重新登录/);
     assert.match(doc, /__vanblog_restore/);
-    assert.match(doc, /与一键脚本备份的区别/);
+    // 这一节的标题改过：现在讲的是「后台 / 一键脚本 / 目录快照」三者怎么选
+    assert.match(doc, /三种备份怎么选|与一键脚本备份的区别/);
     // 体积实测数据留着，方便别人判断该选哪个格式
     assert.match(doc, /65\.91 MB/);
 

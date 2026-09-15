@@ -2900,13 +2900,83 @@ articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面
    （现在这段检查列了 53 个函数名，缺一个就 assert 失败）；
 3. 大改之前 `cp` 一份备份（这次靠 `git checkout` 救回来的，但如果已经 commit 过中间态就更麻烦）。
 
-### 7.36 测试基线（本分支最后一次全量运行的结果）
+### 7.36 插件式前台主题（后台上传一份 CSS 就能换肤）
+
+用户要的是："apple 主题是不是一个 css 文件？能不能做成插件式的 —— 后台上传/选择主题，
+前台刷新后自动生效，并且在项目里补上主题怎么实现的文档和一个 demo 教程。"
+
+**答案与做法**：apple 主题确实就是一份 CSS（`packages/website/styles/apple.css`，1430 行，
+被 `globals.css` `@import` 进产物，所有规则挂在 `[data-ui="apple"]` 下）。现在把这套约定
+**通用化**成了主题系统：
+
+| 层 | 做了什么 |
+| --- | --- |
+| 数据 | `siteInfo.uiStyle` 从 `'default' \| 'apple'` 放宽成 `string`（就是主题 id）；上传主题的元数据存 `settings` 的 `{type:'theme', value:{themes:[…]}}`（不新建集合，整站备份也不用多一张表） |
+| 文件 | CSS 落在 `<staticPath>/themes/<id>-<hash8>.css`（hash = sha1 前 8 位）。**文件名带 hash**：同 id 覆盖上传后 URL 变化，中间层缓存自然失效；旧文件在写新文件**之后**才删（先删后写的话中途失败会把正在用的主题弄没） |
+| 服务端 | `ThemeProvider`（list/upload/activate/remove/getActive）+ `ThemeController`（`/api/admin/theme/*`）+ `PublicThemeController`（`/api/public/theme`、`/api/public/theme.css`） |
+| 校验 | `validateThemeCss()`（纯函数，好测）：≤512KB、拒 NUL、拒 `javascript:` / `expression(` / `behavior:` / `-moz-binding` / `</style>` / `<script>`；远程 `@import` 放行但警告；没有 `[data-ui=` 也警告 |
+| 前台 | `getLayoutProps` 原样透传主题 id；`Layout` 把 id 写到 `<html data-ui>` 与 `.vb-root`，非内置主题额外挂 `<link href="/api/public/theme.css?v=<id>">` |
+| 后台 | `系统设置 → 主题` 新标签页（列表 / 上传弹窗 / 启用 / 删除 / 查看 CSS）；`站点配置 → 界面风格` 的下拉框动态列出上传的主题（**初始化向导阶段不调**，那时没登录态，调 `/api/admin/**` 必 401） |
+| 文档 | `docs/features/theme.md`（原理 + 从零写一个主题的教程 + 稳定钩子表 + 限制 + 接口 + FAQ）与可直接上传的示例主题 `docs/.vuepress/public/theme-demo.css`（「暖纸」，含亮/暗两套令牌） |
+
+**两个关键取舍**（都是被"前台是静态生成的"逼出来的）：
+
+1. **主题 CSS 走 `GET /api/public/theme.css` 这个固定地址**，而不是直接链
+   `/static/themes/<id>-<hash>.css`：前台的 `<link href>` 在渲染时就写死进 HTML 了，
+   href 里带 hash 就意味着"换主题必须等所有页面重新渲染完"。固定地址 + `ETag`（内容 hash）
+   + `Cache-Control: no-cache` 之后，浏览器每次廉价协商（没变 304、变了拿新的），
+   **刷新即生效**，不依赖 ISR 跑没跑完。内置主题没有独立文件，返回 **204**
+   （不是 404 —— 前台挂着 link 也不该报错）。
+2. **启用主题仍然触发一次 `isrProvider.activeAll(…, {forceActice:true})`**：
+   页面里的 `data-ui` 值本身变了，静态 HTML 必须重渲染才对得上。两件事互补。
+
+⚠️ **命名撞车**：仓库里 "theme" 有两个不相干的含义 —— `packages/website/utils/theme.ts`
+（+ `__tests__/theme.spec.ts`）是**明暗模式**（`html.dark`、`applyThemeClass`、`getAutoTheme`），
+本节说的是**皮肤**。皮肤相关的代码在 `packages/server/src/{types/theme.dto.ts, provider/theme/,
+controller/admin/theme/, controller/public/theme.controller.ts}`、
+`packages/website/__tests__/customTheme.spec.ts`、`packages/admin/src/pages/SystemConfig/tabs/Theme.jsx`。
+动手前先确认自己改的是哪一个。
+
+⚠️ **一次真实事故**：我用 `cat > packages/website/__tests__/theme.spec.ts` 写新测试，
+把**已有的 13 个明暗模式测试整个覆盖掉了**（全量跑从 552 掉到 545 才发现）。
+规矩：新建文件前先 `ls` / `git status` 看它在不在，或者直接用 write 工具
+（它会拒绝覆盖没读过的文件 —— 这次是我用 heredoc 绕过了这道保护）。
+我的测试已改名 `customTheme.spec.ts`，原文件用 `git checkout` 还原。
+
+⚠️ **校验要扫"去掉注释之后"的文本**：示例主题的注释里就写着
+"javascript: / expression() / <script> 会被拒绝"，扫原文会把自己家的 demo 拒掉
+（第一次实测上传就是这么失败的）。去注释时**替换成空串而不是空格**：
+CSS 分词虽然把注释当分隔符、`java/*x*/script:` 严格说不会变成 `javascript:`，
+但安全扫描宁可保守（正常 CSS 里不可能出现这种写法）。
+
+⚠️ **`getSiteInfo()` 的归一化会吃掉自定义主题**：原来写的是
+`uiStyle: siteInfo.uiStyle === 'default' ? 'default' : 'apple'` —— 前台读的是 `getAll()`
+的原始值所以看着正常，但后台表单初值等走 `getSiteInfo()` 的地方会一律显示成 Apple 风格，
+让人以为没存上。已改成原样保留、缺省 apple（`appleTheme.test.js` 里钉旧行为的那条断言一起改了）。
+
+**实测**（本机 dev，server :3000 / 前台 :3001）：上传示例主题 →
+`{id: warm-paper, url: /static/themes/warm-paper-28381fac.css, size: 5521, warnings: []}`；
+启用 → `/api/public/theme` 返回 `uiStyle: warm-paper`；`/api/public/theme.css` → 200，带
+`ETag: W/"28381fac"` 与 `Cache-Control: no-cache`、5521 字节；带 `If-None-Match` 再请求 → **304**；
+前台首页 HTML 里出现 `data-ui="warm-paper"` 与
+`<link rel="stylesheet" href="/api/public/theme.css?v=warm-paper"/>`，经前台代理取 CSS → 200；
+磁盘上 `vanblog_dev/static/themes/warm-paper-28381fac.css` 在。测完已切回 apple（主题文件保留）。
+
+**测试**：`packages/server/src/provider/theme/theme.provider.spec.ts`（25 条，mock 掉
+settings/meta/isr 与静态目录：校验规则、slug、内置排序、上传落盘与元数据、同 id 覆盖删旧文件、
+只有改到当前主题才触发渲染、启用写 uiStyle、内置/在用的不给删）；
+`packages/website/__tests__/customTheme.spec.ts`（6 条接线断言）；
+`packages/admin/tests/unit/themeTab.test.js`（15 条：标签页注册、五个动作都接上、上传弹窗写清规则、
+内置与在用的不给删、服务层地址与 token、界面风格下拉在初始化阶段不调鉴权接口、服务端注册与文件位置、
+文档与示例主题存在且示例本身不会被自己的校验拒掉）。
+
+### 7.37 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 610 用例：609 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 59 文件 / 550 用例全绿 |
-| admin `node --test tests/unit` | 82 套件 / 326 用例全绿 |
+| server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 60 文件 / 558 用例全绿 |
+| admin `node --test tests/unit` | 83 套件 / 341 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 18 文件 / 824 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
@@ -2917,7 +2987,7 @@ articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面
 ## 8. 给 AI 代理的额外提示
 
 1. 动手前先 `git log --oneline -10` + `git status`，确认自己在哪个分支、有没有未提交的东西。
-2. 改完代码**必须跑测试**（§2.1），并对照 §7.36 的基线判断是不是自己弄坏的。
+2. 改完代码**必须跑测试**（§2.1），并对照 §7.37 的基线判断是不是自己弄坏的。
 3. 需要改本地环境时，**新建文件 + 写进 `.git/info/exclude`**，不要改仓库跟踪的文件（§6.2）。
 4. 提交信息用 Conventional Commits；一个需求一个提交，交叉文件的改动尽量按功能拆开
    （必要时用 `git apply --cached` 做 hunk 级暂存）。

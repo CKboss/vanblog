@@ -50,10 +50,14 @@ export class SiteInfo {
   /** About page title. Empty/unset keeps「关于我」. Body is still edited via 编辑关于. */
   aboutTitle?: string;
   /**
-   * 前台界面风格：`apple` = Apple 开发者新闻页那种排版（默认），`default` = 原本的卡片风格。
-   * 只影响样式（website 的 styles/apple.css 挂在 [data-ui="apple"] 下），不动结构。
+   * 前台主题 id，会写到前台最外层容器与 <html> 的 `data-ui` 上。
+   * - `apple`（默认）：Apple 开发者新闻页那种排版，样式打包在前台的 styles/apple.css 里；
+   * - `default`：原本的卡片风格，不加任何主题样式；
+   * - 其它值：后台「系统设置 → 主题」上传的**自定义主题 id**，样式由
+   *   `/api/public/theme.css` 提供，主题自己用 `[data-ui="<id>"]` 收窄作用域。
+   * 只影响样式，不动 DOM 结构；随时可以切回去。
    */
-  uiStyle?: 'default' | 'apple';
+  uiStyle?: string;
 }
 export interface updateUserDto {
   username: string;

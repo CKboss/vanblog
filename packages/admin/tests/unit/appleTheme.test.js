@@ -7,6 +7,15 @@ const adminRoot = path.join(__dirname, '../..');
 const repoRoot = path.join(adminRoot, '../..');
 const read = (rel) => readFileSync(path.join(adminRoot, rel), 'utf8');
 const readRepo = (rel) => readFileSync(path.join(repoRoot, rel), 'utf8');
+/**
+ * 断言前剔除注释：新代码的注释里正好引用了旧写法（"以前这里写的是 …"），
+ * 不剥掉的话 doesNotMatch 会被自己的注释满足 —— 这个坑本仓库已经踩过七次了。
+ */
+const code = (src) =>
+  src
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//') && !line.trim().startsWith('*'))
+    .join('\n');
 
 describe('Apple 界面风格：后台开关', () => {
   it('站点信息表单里有「界面风格」下拉，两个选项都在', () => {
@@ -22,17 +31,18 @@ describe('Apple 界面风格：后台开关', () => {
 });
 
 describe('Apple 界面风格：服务端', () => {
-  it('siteInfo 类型里有 uiStyle，且只有 default/apple 两种', () => {
+  it('siteInfo 类型里有 uiStyle，且放宽成 string（要能放自定义主题 id）', () => {
     const dto = readRepo('packages/server/src/types/site.dto.ts');
-    assert.match(dto, /uiStyle\?: 'default' \| 'apple';/);
+    assert.match(dto, /uiStyle\?: string;/);
+    // default / apple 仍然是内置的两个，文档注释里要写清楚
+    assert.match(dto, /自定义主题 id/);
   });
 
-  it('getSiteInfo 归一化：只有显式 default 才不是 apple（老站点没这个字段也走新风格）', () => {
-    const provider = readRepo('packages/server/src/provider/meta/meta.provider.ts');
-    assert.match(
-      provider,
-      /uiStyle: siteInfo\.uiStyle === 'default' \? 'default' : 'apple',/,
-    );
+  it('getSiteInfo 保留自定义主题 id，缺省仍是 apple', () => {
+    const provider = code(readRepo('packages/server/src/provider/meta/meta.provider.ts'));
+    // ⚠️ 不能再用「非 default 一律压成 apple」那种写法，否则上传的主题一启用就被吃掉
+    assert.doesNotMatch(provider, /uiStyle: siteInfo\.uiStyle === 'default' \? 'default' : 'apple'/);
+    assert.match(provider, /uiStyle: String\(siteInfo\.uiStyle \?\? ''\)\.trim\(\) \|\| 'apple'/);
   });
 });
 

@@ -17,6 +17,7 @@
 
 **新功能**
 
+- **插件式前台主题（换肤）**：后台 `系统设置 → 主题` 里上传一份 CSS 就是一个新主题，点「启用」后前台**刷新即生效** —— 不用改代码、不用重新构建、不用重启容器。主题 id 会写到 `<html data-ui="…">` 与 `.vb-root` 上，所以每份主题都用 `[data-ui="<id>"]` 收窄作用域，多个主题共存、随时切换、互不残留；暗色跟着站点已有的 `html.dark` 机制走。内置的 `Apple 风格` 与 `默认` 仍打包在前台产物里，上传的主题存 `<图床目录>/themes/<id>-<hash8>.css`（跟着静态目录一起备份），由 `GET /api/public/theme.css` 以**固定地址 + ETag/no-cache** 提供 —— 这样换主题不依赖静态页面有没有重新渲染完。上传时做安全校验（≤512KB、只收 `.css`、拒绝 `javascript:` / `expression()` / `behavior:` / `-moz-binding` / `</style>` / `<script>`，远程 `@import` 允许但警告），并且**扫描的是去掉注释之后的文本**：示例主题的注释里就会写"javascript: 会被拒绝"，扫原文会把它自己拒掉。`站点配置 → 界面风格` 的下拉框也会列出上传的主题。附一份可直接上传的示例主题与开发文档（含从零写一个主题的教程、稳定钩子表、限制与接口）。[主题](docs/features/theme.md)
 - **内置评论系统**：评论存在本站 Mongo、走本站接口，前台自研组件（两层回复、分页、基础 Markdown、博主标识、深色模式），后台原生管理页（审核 / 编辑 / 删除 / 批量 / 按状态与关键词筛选）。后台「评论设置」三选一：`内置 / Waline / 关闭`；老站点升级默认保持 Waline，切换不迁移数据。支持从 Waline 导出文件**一键导入**（默认只导正式显示的、按 objectId 幂等、保留原始时间与点赞、`data:` 图片折叠成 alt）与**只导出已通过评论**。[评论系统](docs/features/comment.md)
 - **补齐 6 种 markdown 语法**：`==高亮==`、`X^2^` / `H~2~O`、`:smile:` 短代码、定义列表、GitHub 提示块 `> [!NOTE]`、`[[toc]]`。编辑器与前台用同一套插件（按 bytemd 的 unified 10 世代挑版本）。⚠️ 单个 `~x~` 现在是下标，删除线要写 `~~x~~`。[Markdown](docs/features/markdown.md)
 - **整站备份 / 恢复**：一个高压缩归档（zstd → xz → gzip）打包全部集合 + 评论库 + 图床/附件/自定义页面，支持不解压看清单、鉴权下载、上传恢复（逐集合原子替换 + 重建索引）。[备份](docs/advanced/backup.md)
@@ -35,7 +36,8 @@
 - 访问量计数改成原子 `$inc`（并发下不再互相覆盖、永久少算）；改站点信息不再无条件重启前台（环境变量没变就跳过，省掉几秒停站）；流水线装依赖不再用 `spawnSync` 阻塞事件循环。
 
 **修复**
-- **前台整站 502，而 `/admin` 与 `/api` 正常**：Next 13 的 standalone server 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID，于是它只绑那个网卡 IP，而 caddy 反代的是 `127.0.0.1:3001`。现在 `WebsiteProvider` 显式传 `HOSTNAME=0.0.0.0`（可用 `VANBLOG_WEBSITE_HOST` 覆盖）。
+- **自定义主题会被 `getSiteInfo()` 吃掉**：`meta.provider` 里 `uiStyle` 的归一化写的是"非 `default` 一律压成 `apple`"，于是上传的主题一启用，凡是走 `getSiteInfo()` 的地方（后台表单初值等）都显示成 Apple 风格，看着像没存上。现在原样保留主题 id，缺省仍是 `apple`。
+- **前台页脚署名**，而 `/admin` 与 `/api` 正常**：Next 13 的 standalone server 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID，于是它只绑那个网卡 IP，而 caddy 反代的是 `127.0.0.1:3001`。现在 `WebsiteProvider` 显式传 `HOSTNAME=0.0.0.0`（可用 `VANBLOG_WEBSITE_HOST` 覆盖）。
 - **中文别名的文章 500**：规范地址 308 重定向把中文直接塞进 `Location`，而 HTTP 头只能是 Latin-1 → Node `setHeader` 抛 `Cannot convert argument to a ByteString`。新增 `utils/encodeLocationPath.ts`（纯 ASCII 原样返回，避免把已编码的 `%xx` 再编成 `%25xx`；含非 ASCII 时按 `/` 分段编码）。**假数据永远测不出来**，只有真实数据里有中文别名才会踩到。
 - **`/robots.txt` 404**：动态 robots 由 server 提供，但 caddy 模板没有这条路由，落到 catch-all 转给前台。⚠️ 而且模板里有 `srv0(:443)` 与 `srv1(:80)` **两套路由**，只补一套就变成"HTTPS 正常、HTTP 404"。现在两个都补了，并有守卫测试要求两套路由完全对齐。
 - **前台页脚署名**：`Powered By VanBlog <版本>` 改指本分支仓库，后面跟一个「增强修改版」链到 README 的改动清单（以前指向上游文档站，访客点进去看到的说明与本站实际行为对不上）。

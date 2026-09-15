@@ -1,4 +1,5 @@
 import { MenuItem } from './menu.dto';
+import { ThemeSetting } from './theme.dto';
 
 /** 长边超过这个像素就等比缩小（"1080p 级"）。 */
 export const DEFAULT_MAX_IMAGE_EDGE = 1920;
@@ -22,6 +23,7 @@ export const defaultStaticSetting: StaticSetting = {
 };
 
 export type SettingType =
+  | 'theme'
   | 'static'
   | 'https'
   | 'waline'
@@ -33,6 +35,7 @@ export type SettingType =
   | 'isr';
 
 export type SettingValue =
+  | ThemeSetting
   | StaticSetting
   | HttpsSetting
   | WalineSetting

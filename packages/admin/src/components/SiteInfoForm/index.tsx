@@ -1,4 +1,5 @@
 import { BAIDU_ANALYSIS_FIELD, GA_ANALYSIS_FIELD } from '@/utils/analysisFields';
+import { listThemes } from '@/services/van-blog/theme';
 import { ProFormDateTimePicker, ProFormDigit, ProFormSelect, ProFormText, ProFormTextArea } from '@ant-design/pro-form';
 import UrlFormItem from '../UrlFormItem';
 
@@ -218,12 +219,45 @@ export default function (props: {
             label="界面风格"
             placeholder={'Apple 风格'}
             tooltip={
-              '前台展示页的视觉风格。Apple 风格参考 developer.apple.com/news：单列发丝线分隔的列表、SF Pro 字体、17px 正文、毛玻璃导航、苹果蓝强调色，并自动适配暗色模式。只改样式不改结构，随时可切回默认。'
+              '前台展示页的视觉风格。Apple 风格参考 developer.apple.com/news：单列发丝线分隔的列表、SF Pro 字体、17px 正文、毛玻璃导航、苹果蓝强调色，并自动适配暗色模式。只改样式不改结构，随时可切回默认。除了内置的两个，这里还会列出「系统设置 → 主题」里上传的自定义主题（上传/管理请去那个页签）。'
             }
-            valueEnum={{
-              apple: 'Apple 风格（推荐）',
-              default: '默认（原卡片风格）',
-            }}
+            // 初始化向导阶段还没有登录态，调 /api/admin/** 一定 401，所以那时只给内置项
+            request={
+              props.isInit
+                ? undefined
+                : async () => {
+                    const builtin = [
+                      { label: 'Apple 风格（推荐）', value: 'apple' },
+                      { label: '默认（原卡片风格）', value: 'default' },
+                    ];
+                    try {
+                      const res = await listThemes();
+                      const list = res?.data?.themes || [];
+                      if (!list.length) return builtin;
+                      // 内置的排前面，上传的按服务端给的顺序跟在后面
+                      const order = (id) => (id === 'apple' ? 0 : id === 'default' ? 1 : 2);
+                      return [...list]
+                        .sort((a, b) => order(a.id) - order(b.id))
+                        .map((t) => ({
+                          label:
+                            t.source === 'builtin'
+                              ? `${t.name}`
+                              : `${t.name}（自定义·${t.id}）`,
+                          value: t.id,
+                        }));
+                    } catch (e) {
+                      return builtin;
+                    }
+                  }
+            }
+            valueEnum={
+              props.isInit
+                ? {
+                    apple: 'Apple 风格（推荐）',
+                    default: '默认（原卡片风格）',
+                  }
+                : undefined
+            }
             fieldProps={{ defaultValue: 'apple' }}
           />
           <ProFormSelect

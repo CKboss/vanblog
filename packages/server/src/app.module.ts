@@ -34,6 +34,9 @@ import { InitProvider } from './provider/init/init.provider';
 import { InitMiddleware } from './provider/auth/init.middleware';
 import { NoStoreCacheMiddleware } from './provider/cache/no-store.middleware';
 import { BackupController } from './controller/admin/backup/backup.controller';
+import { ThemeProvider } from './provider/theme/theme.provider';
+import { ThemeController } from './controller/admin/theme/theme.controller';
+import { PublicThemeController } from './controller/public/theme.controller';
 import { FullBackupProvider } from './provider/backup/fullBackup.provider';
 import { MarkdownExportProvider } from './provider/export/markdownExport.provider';
 import { ExportController } from './controller/admin/export/export.controller';
@@ -129,6 +132,8 @@ import { initJwt } from './utils/initJwt';
   controllers: [
     AppController,
     PublicController,
+    PublicThemeController,
+    ThemeController,
     AboutMetaController,
     LinkMetaController,
     RewardMetaController,
@@ -163,6 +168,7 @@ import { initJwt } from './utils/initJwt';
   ],
   providers: [
     AppService,
+    ThemeProvider,
     FullBackupProvider,
     MarkdownExportProvider,
     ArticleProvider,

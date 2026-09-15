@@ -33,7 +33,10 @@ export default function (props: {
     console.log("关闭或刷新页面");
     localStorage.removeItem("saidHello");
   };
-  const uiStyle = props.option.uiStyle === "default" ? "default" : "apple";
+  // 内置皮肤只有 default / apple；其它值都是后台上传的自定义主题 id，原样写到 data-ui 上，
+  // 主题 CSS 自己用 [data-ui="<id>"] 收窄作用域。空值仍按历史默认 apple 处理。
+  const uiStyle = String(props.option.uiStyle || "").trim() || "apple";
+  const isBuiltinTheme = uiStyle === "default" || uiStyle === "apple";
   // canonical 用当前路由算，query 与 hash 一律去掉；站点 URL 没配就干脆不输出
   // （输出一个错误的绝对地址比不输出更糟）
   const canonical = useMemo(
@@ -155,6 +158,14 @@ export default function (props: {
               <link rel="stylesheet" href={appleFontCss} />
             </noscript>
           </Head>
+        ) : null}
+        {/* 自定义主题：稳定地址 + 服务端 ETag/no-cache，切主题后刷新即生效，
+            不必等 ISR 把所有页面重新渲染一遍（内置主题的样式打包在产物里，不需要 link） */}
+        {!isBuiltinTheme ? (
+          <link
+            rel="stylesheet"
+            href={`/api/public/theme.css?v=${encodeURIComponent(uiStyle)}`}
+          />
         ) : null}
         <div className="vb-root" data-ui={uiStyle}>
         <Toaster />

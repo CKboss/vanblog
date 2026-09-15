@@ -8,12 +8,14 @@ import Customizing from './tabs/Customizing';
 import ImgTab from './tabs/ImgTab';
 import Migrate from './tabs/migrate';
 import SiteInfo from './tabs/SiteInfo';
+import Theme from './tabs/Theme';
 import User from './tabs/User';
 import WalineTab from './tabs/WalineTab';
 import Token from './tabs/Token';
 export default function () {
   const tabMap = {
     siteInfo: <SiteInfo />,
+    theme: <Theme />,
     customizing: <Customizing />,
     backup: <Backup />,
     user: <User />,
@@ -37,6 +39,10 @@ export default function () {
         {
           tab: '站点配置',
           key: 'siteInfo',
+        },
+        {
+          tab: '主题',
+          key: 'theme',
         },
         {
           tab: '定制化',

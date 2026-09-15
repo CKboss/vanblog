@@ -1,0 +1,139 @@
+/* ============================================================================
+ * VanBlog 示例主题：「暖纸」（warm-paper）
+ * ----------------------------------------------------------------------------
+ * 这是一份**可以直接上传就用**的最小可用主题，用来演示主题的写法与约定。
+ * 上传方式：后台「系统设置 → 主题 → 上传主题（.css）」，主题 id 填 warm-paper
+ * （或者留空，让它用文件名 warm-paper.css 推出来），然后点「启用」，前台刷新即可。
+ *
+ * 三条铁规矩：
+ *   1. 所有规则都写在 [data-ui="warm-paper"] 下面 —— 前台会把这个 id 写到 <html> 和
+ *      最外层容器上。不这么做的话，切回别的主题时你的样式会残留。
+ *   2. 只能写样式。javascript: / expression() / <script> 会被服务端拒绝，
+ *      单个文件上限 512KB。要引字体用远程 @import，而且必须写在文件最前面。
+ *   3. 暗色模式跟着站点已有的机制：html.dark。所以暗色令牌写在
+ *      html.dark [data-ui="warm-paper"] 下面。
+ * ==========================================================================*/
+
+/* ---------------------------------------------------------------------------
+ * 第 1 步：定义一套自己的设计令牌（CSS 变量）
+ * 后面所有规则都引用这些变量，改配色只需要动这一段。
+ * -------------------------------------------------------------------------*/
+[data-ui='warm-paper'] {
+  --wp-bg: #f7f3ec; /* 页面底色：暖白的纸 */
+  --wp-surface: #fffdf8; /* 卡片/内容面 */
+  --wp-text: #2f2a24; /* 正文 */
+  --wp-muted: #7d7367; /* 次要文字 */
+  --wp-accent: #b4552d; /* 强调色：砖红 */
+  --wp-hairline: rgba(47, 42, 36, 0.12); /* 发丝线 */
+  --wp-radius: 10px;
+  --wp-font: 'Songti SC', 'Noto Serif SC', Georgia, 'Times New Roman', serif;
+}
+
+/* 暗色：只反转令牌，下面的规则一条都不用改 */
+html.dark [data-ui='warm-paper'] {
+  --wp-bg: #1c1917;
+  --wp-surface: #262220;
+  --wp-text: #ece5da;
+  --wp-muted: #a89c8d;
+  --wp-accent: #e08a5f;
+  --wp-hairline: rgba(236, 229, 218, 0.14);
+}
+
+/* ---------------------------------------------------------------------------
+ * 第 2 步：铺底色与基础排版
+ * .vb-root 是前台最外层容器；.vanblog-body 是内容区；.vanblog-main 是主栏。
+ * -------------------------------------------------------------------------*/
+[data-ui='warm-paper'] .vb-root {
+  background: var(--wp-bg);
+  color: var(--wp-text);
+  font-family: var(--wp-font);
+}
+
+[data-ui='warm-paper'] .vanblog-body,
+[data-ui='warm-paper'] .vanblog-main {
+  background: transparent;
+}
+
+/* 链接与强调色 */
+[data-ui='warm-paper'] a {
+  color: var(--wp-accent);
+}
+[data-ui='warm-paper'] a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+[data-ui='warm-paper'] ::selection {
+  background: color-mix(in srgb, var(--wp-accent) 28%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+ * 第 3 步：列表页（首页 / 分类 / 标签）
+ * 前台的文章卡片带 .ua 前缀的类名（utility-assembly），这里只做视觉调整，
+ * ⚠️ 别给带 .ua 的元素加 hover 缩放（仓库里有测试守着这条）。
+ * -------------------------------------------------------------------------*/
+[data-ui='warm-paper'] .vanblog-category-list a,
+[data-ui='warm-paper'] .vanblog-timeline-item {
+  border-color: var(--wp-hairline);
+}
+
+/* 时间线（归档页）的年份标题 */
+[data-ui='warm-paper'] .vanblog-timeline h2,
+[data-ui='warm-paper'] .vanblog-timeline h3 {
+  color: var(--wp-text);
+  letter-spacing: 0.02em;
+}
+
+/* ---------------------------------------------------------------------------
+ * 第 4 步：文章页
+ * .vanblog-article-page 是文章页的稳定作用域；正文里的图片、代码块、引用都能改。
+ * -------------------------------------------------------------------------*/
+[data-ui='warm-paper'] .vanblog-article-page {
+  line-height: 1.85;
+}
+
+[data-ui='warm-paper'] .vanblog-article-page img {
+  border-radius: var(--wp-radius);
+  border: 1px solid var(--wp-hairline);
+}
+
+[data-ui='warm-paper'] .vanblog-article-page blockquote {
+  border-left: 3px solid var(--wp-accent);
+  background: color-mix(in srgb, var(--wp-accent) 6%, transparent);
+  padding: 10px 16px;
+  border-radius: 0 var(--wp-radius) var(--wp-radius) 0;
+  color: var(--wp-muted);
+}
+
+[data-ui='warm-paper'] .vanblog-article-page pre,
+[data-ui='warm-paper'] .vanblog-article-page code {
+  border-radius: 6px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 第 5 步：侧栏作者卡片与友链卡片
+ * -------------------------------------------------------------------------*/
+[data-ui='warm-paper'] #author-card,
+[data-ui='warm-paper'] .vanblog-link-card {
+  background: var(--wp-surface);
+  border: 1px solid var(--wp-hairline);
+  border-radius: var(--wp-radius);
+}
+
+[data-ui='warm-paper'] .vanblog-sider {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * 第 6 步：窄屏适配（前台是 Tailwind 断点：sm 640 / md 768 / lg 1024）
+ * -------------------------------------------------------------------------*/
+@media (max-width: 767px) {
+  [data-ui='warm-paper'] .vanblog-article-page {
+    line-height: 1.75;
+    font-size: 16px;
+  }
+}
+
+/* 404 页 */
+[data-ui='warm-paper'] .vanblog-notfound {
+  color: var(--wp-muted);
+}

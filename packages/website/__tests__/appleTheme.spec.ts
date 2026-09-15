@@ -421,7 +421,29 @@ describe('Apple 皮肤：接线', () => {
     const layout = read('components/Layout/index.tsx');
     expect(layout).toContain('data-ui={uiStyle}');
     expect(layout).toContain('document.documentElement.dataset.ui = uiStyle');
-    expect(layout).toContain('props.option.uiStyle === "default" ? "default" : "apple"');
+    // 主题 id 原样透传（以前是把非 default 的值全压成 apple，自定义主题会被吃掉）
+    expect(layout).toContain(
+      'String(props.option.uiStyle || "").trim() || "apple"'
+    );
+    expect(layout).toContain('const isBuiltinTheme = uiStyle === "default" || uiStyle === "apple"');
+  });
+
+  it("自定义主题：Layout 挂 /api/public/theme.css，内置主题不挂", () => {
+    const layout = read("components/Layout/index.tsx");
+    // 只有非内置主题才引入外部样式表；用稳定地址 + 服务端 ETag，
+    // 这样切主题后刷新即生效，不必等 ISR 把所有页面重新渲染一遍。
+    expect(layout).toContain("{!isBuiltinTheme ? (");
+    expect(layout).toContain("/api/public/theme.css?v=");
+    expect(layout).toContain('encodeURIComponent(uiStyle)');
+    // 内置主题的样式打包在产物里，不该再多一个请求
+    expect(layout).not.toContain('uiStyle === "apple" && appleFontCss ? (\n          <link rel="stylesheet" href={`/api/public/theme.css');
+  });
+
+  it("自定义主题不会顺带引入 Apple 皮肤专属的远程字体", () => {
+    const layout = read("components/Layout/index.tsx");
+    // apple 字体只在 uiStyle === "apple" 时加载；自定义主题要用什么字体由它自己的 CSS 决定
+    expect(layout).toContain('uiStyle !== "apple"');
+    expect(layout).toContain('uiStyle === "apple" && appleFontCss');
   });
 
   it('LayoutBody 与文章页给了皮肤稳定的作用域 class', () => {
@@ -436,7 +458,9 @@ describe('Apple 皮肤：接线', () => {
 
   it('getLayoutProps 透传 uiStyle，缺省即 apple', () => {
     const props = read('utils/getLayoutProps.ts');
-    expect(props).toContain('uiStyle: "apple" | "default"');
-    expect(props).toContain('siteInfo.uiStyle === "default" ? "default" : "apple"');
+    expect(props).toContain('uiStyle: string;');
+    // 缺省仍是 apple，但自定义主题 id 不能被压成 apple
+    expect(props).toContain('String(siteInfo.uiStyle || "").trim() || "apple"');
+    expect(props).not.toContain('siteInfo.uiStyle === "default" ? "default" : "apple"');
   });
 });

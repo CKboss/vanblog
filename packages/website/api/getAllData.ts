@@ -128,7 +128,8 @@ export interface SiteInfo {
   friendLinkIntro?: string;
   friendLinkApplyContent?: string;
   aboutTitle?: string;  /** 前台界面风格：apple（默认）| default，见 styles/apple.css */
-  uiStyle?: "default" | "apple";
+  /** 主题 id：default / apple（内置）或后台上传的自定义主题 id */
+  uiStyle?: string;
 }
 export interface MetaProps {
   links: LinkItem[];

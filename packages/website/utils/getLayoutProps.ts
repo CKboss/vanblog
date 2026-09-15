@@ -46,8 +46,11 @@ export interface LayoutProps {
   showExpirationReminder: "true" | "false";
   openArticleLinksInNewWindow: "true" | "false";
   showEditButton: "true" | "false";
-  /** apple（默认）| default —— 决定前台皮肤，见 styles/apple.css */
-  uiStyle: "apple" | "default";
+  /**
+   * 主题 id，会写到 data-ui 上。apple（默认）/ default 是内置皮肤（见 styles/apple.css），
+   * 其它值是后台「系统设置 → 主题」上传的自定义主题，样式来自 /api/public/theme.css。
+   */
+  uiStyle: string;
   subMenuOffset: number;
   articlesPerPage: number;
   defaultExpandAllCategories: "true" | "false";
@@ -122,9 +125,9 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
   if (siteInfo.showEditButton && siteInfo.showEditButton == "false") {
     showEditButton = "false";
   }
-  // 只有后台显式选了「默认」才不是 apple 风格
-  const uiStyle: "apple" | "default" =
-    siteInfo.uiStyle === "default" ? "default" : "apple";
+  // ⚠️ 以前这里把除 "default" 之外的所有值都压成 "apple"，自定义主题 id 会被吃掉。
+  //    现在原样透传：空值仍按历史默认 apple 处理，其它值（含自定义主题 id）保持不变。
+  const uiStyle: string = String(siteInfo.uiStyle || "").trim() || "apple";
   let openArticleLinksInNewWindow: "true" | "false" = "false";
   if (
     siteInfo.openArticleLinksInNewWindow &&

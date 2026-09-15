@@ -115,6 +115,12 @@ def resolve(base_file, target):
             cand = cand[: -len(".html")] + ".md"
         if os.path.isdir(cand):
             cand = os.path.join(cand, "README.md")
+        if os.path.exists(cand):
+            return cand
+        # 站点绝对路径也可能指向 public 目录下的静态资源（例如 /theme-demo.css）
+        pub = os.path.join(docs, ".vuepress", "public", rel)
+        if os.path.exists(pub):
+            return pub
         return cand
     if target.startswith("@/"):
         # vuepress 的 @ 别名 = docs 根目录

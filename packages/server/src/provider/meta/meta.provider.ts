@@ -150,8 +150,12 @@ export class MetaProvider {
       friendLinkIntro: sanitizePageCopy(siteInfo.friendLinkIntro, ''),
       friendLinkApplyContent: sanitizePageCopy(siteInfo.friendLinkApplyContent, ''),
       aboutTitle: sanitizePageCopy(siteInfo.aboutTitle, ''),
-      // 只有显式选了「默认风格」才不是 apple；老站点没这个字段 -> 直接用新风格
-      uiStyle: siteInfo.uiStyle === 'default' ? 'default' : 'apple',
+      // 主题 id：`default` / `apple` 是内置的，**其它值是后台上传的自定义主题 id，必须原样保留**。
+      // ⚠️ 以前这里写的是 `=== 'default' ? 'default' : 'apple'`，把非 default 的值一律压成 apple ——
+      // 自定义主题一启用就会被吃掉（前台读的是 getAll() 的原始值所以看着正常，
+      // 但后台表单、以及任何走 getSiteInfo() 的地方都会显示成 Apple 风格，让人以为没存上）。
+      // 老站点没这个字段时仍然默认 apple。
+      uiStyle: String(siteInfo.uiStyle ?? '').trim() || 'apple',
     };
   }
 
