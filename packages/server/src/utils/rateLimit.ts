@@ -24,7 +24,8 @@ import { consumeAttempt } from './attemptLimit';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
 
-function envInt(name: string, fallback: number, min: number, max: number): number {
+/** 读一个正整数环境变量：非法/缺失/越界都夹回合理范围（导出去给 main.ts 复用，别再写一份） */
+export function envInt(name: string, fallback: number, min: number, max: number): number {
   const raw = Number(process.env[name]);
   if (!Number.isFinite(raw) || raw <= 0) {
     return fallback;
@@ -35,6 +36,30 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 export const INIT_LIMIT_PER_10MIN = envInt('VANBLOG_INIT_LIMIT_PER_10MIN', 5, 1, 1000);
 export const PUBLIC_WRITE_LIMIT_PER_MIN = envInt('VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN', 30, 1, 100000);
 export const GLOBAL_LIMIT_PER_MIN = envInt('VANBLOG_RATE_LIMIT_PER_MIN', 600, 1, 1000000);
+/**
+ * 静态资源（`/static/**`：图床图片、缩略图、附件、自定义页面资源）的独立预算，
+ * 默认是全局值的 **10 倍**。
+ *
+ * 为什么必须分开：全局限流挂在 `path: '*'` 上，**每一次图片请求都算一次**。
+ * 一篇带 10 张图的文章 = 11 次计数，600/分钟 只够 **~50 次页面浏览/分钟/IP** ——
+ * 在公司 NAT、校园网、或者 CDN 回源 IP 没被正确识别（所有访客共用一个 IP）的场景下，
+ * 正常读者会被成片 429，看起来像"站点挂了"。压测时第一眼看到的就是这个：
+ * 2000 个请求里 1600 多个是 429，全被限流器挡住，测的根本不是栈的容量。
+ *
+ * 不给"无限"是因为静态目录仍然是最便宜的刷流量入口；给一个宽 10 倍的独立桶，
+ * 既能扛住正常的图片密集页面，又不至于让某个人把带宽刷爆。
+ */
+export const STATIC_LIMIT_PER_MIN = envInt(
+  'VANBLOG_STATIC_LIMIT_PER_MIN',
+  GLOBAL_LIMIT_PER_MIN * 10,
+  1,
+  10000000,
+);
+
+/** 这个路径算不算"静态资源"（只认前缀，别用正则去猜后缀，省 CPU 也少误判） */
+export function isStaticAssetPath(path: string): boolean {
+  return typeof path === 'string' && path.startsWith('/static/');
+}
 
 export function isLoopbackRequest(req: any): boolean {
   const socketIp = pickSocketIp(req);
@@ -106,6 +131,18 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
       if (!hit.allowed) {
         return tooManyRequests(res, hit.retryAfterSeconds, '请求过于频繁，请稍后再试');
       }
+    }
+
+    // 静态资源走独立桶：一张图也算一次请求，混在全局桶里会把正常的图文页面限死
+    if (isStaticAssetPath(path)) {
+      const hit = consumeAttempt(`rl-static-${ip}`, {
+        max: STATIC_LIMIT_PER_MIN,
+        windowMs: 60 * 1000,
+      });
+      if (!hit.allowed) {
+        return tooManyRequests(res, hit.retryAfterSeconds, '请求过于频繁，请稍后再试');
+      }
+      return next();
     }
 
     const global = consumeAttempt(`rl-global-${ip}`, {

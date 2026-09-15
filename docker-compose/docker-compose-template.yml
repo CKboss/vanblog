@@ -9,6 +9,17 @@ services:
   vanblog:
     image: vanblog_image
     restart: always
+    # 这个容器里同时跑着 caddy（要扛住所有客户端连接 + 到三个上游的连接）与 Node，
+    # 高并发下文件描述符是第一道天花板。Docker 默认继承 daemon 的限制，
+    # 但某台机器把 daemon 配成 1024 的话，几千并发就会莫名其妙 connection refused。
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # start.js 收到 SIGTERM 后会给子进程 8 秒优雅退出（VAN_BLOG_SHUTDOWN_TIMEOUT_MS），
+    # server 自己还要停 waline、停 website、关 mongo 连接。docker 默认只等 10 秒就 SIGKILL，
+    # 余量太薄 —— 稍微慢一点的机器就会在关连接的半途被砍。给到 30 秒。
+    stop_grace_period: 30s
     # 先起 mongo：server 连不上库会退出，容器重启几次才稳定，首次安装时看着像失败。
     # 这里**故意提交列表形式**（只保证启动顺序，不等待就绪），而不是
     # `depends_on: {mongo: {condition: service_healthy}}` 长格式，方向是这样选的：
@@ -60,6 +71,19 @@ services:
       # VANBLOG_SWAGGER: 'false'
       # next/image 允许优化的远程域名（逗号分隔）。默认空 = 只优化本站图片。
       # VAN_BLOG_ALLOW_DOMAINS: 'cdn.example.com'
+      # libuv 线程池大小（镜像里默认 16）：sharp 的图片编解码、fs 异步操作、
+      # crypto 的 scrypt 都在这个池子里，Node 默认只有 4 —— 图片站并发处理时会排队。
+      # 只有在 CPU 核多、图片流量大时才值得往上调（经验值：核数的 2-4 倍）。
+      # UV_THREADPOOL_SIZE: '32'
+      # 上游 keep-alive 超时（毫秒，默认 65000）。**必须大于反代的空闲超时**
+      # （本编排里 caddy 是 60s），否则会偶发 ECONNRESET / 502。
+      # VANBLOG_KEEP_ALIVE_TIMEOUT_MS: '65000'
+      # 全局限流：每 IP 每分钟请求数（默认 600）。静态资源走独立桶，
+      # 默认是它的 10 倍（VANBLOG_STATIC_LIMIT_PER_MIN 可单独调）。
+      # 站点在 CDN / 大 NAT 后面、访客共用少量出口 IP 时，这两个值都要往上调，
+      # 否则正常读者会成片看到 429。
+      # VANBLOG_RATE_LIMIT_PER_MIN: '3000'
+      # VANBLOG_STATIC_LIMIT_PER_MIN: '30000'
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static
@@ -83,6 +107,14 @@ services:
     # 慢盘或库大一点就会在 flush 中途被杀。WiredTiger 有 journal，重启会回放，
     # 真损坏的概率不高（主要风险是宿主机断电），但多给 50 秒是免费的保险。
     stop_grace_period: 60s
+    # 高并发下文件描述符是第一道天花板：每条客户端连接、每个上游连接、每个打开的文件
+    # 都要一个 fd。mongod 自己也会检查（低于 64000 会打警告）。
+    # Docker 默认继承 daemon 的限制（通常已经很大），但显式写出来才不会因为
+    # 某台机器的 daemon 配了 1024 而在几千并发时莫名其妙 connection refused。
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     # 内存限制（默认注释掉）。2GB 小机建议 mongo 768m + vanblog 768m：
     #   - mongo 别给到 512m 以下：WiredTiger 的缓存最小就要 256MB，再加连接与 journal 开销；
     #     真要吃紧就配 command: ["mongod","--wiredTigerCacheSizeGB","0.25"]

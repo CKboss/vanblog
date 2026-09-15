@@ -191,6 +191,53 @@ for p in sys.argv[1:3]:
 print("OK" if not bad else "; ".join(bad[:4]))
 ' "两份模板的所有 server 都全局下发安全响应头（deferred + delete Server），且没顶掉 /admin* 的缓存头"
 
+# ---------- 3.6) 图床图片由 caddy 直接发（不再穿过 Node）----------
+check_templates '
+import json, sys
+IMG = ["/static/img/*.webp", "/static/img/thumb/*.webp"]
+bad = []
+for p in sys.argv[1:3]:
+    d = json.load(open(p, encoding="utf-8"))
+    for name, s in d["apps"]["http"]["servers"].items():
+        routes = s["routes"]
+        img_idx = proxy_idx = None
+        for i, r in enumerate(routes):
+            paths = (r.get("match") or [{}])[0].get("path") or []
+            if any(x.startswith("/static/img/") for x in paths):
+                img_idx = i
+                hs = [h for h in (r.get("handle") or [])]
+                if not hs or hs[0].get("handler") != "subroute":
+                    bad.append("%s %s: /static/img 路由不是 subroute" % (p, name)); continue
+                inner = [h.get("handler") for h in hs[0]["routes"][0]["handle"]]
+                if inner != ["headers", "vars", "file_server"]:
+                    bad.append("%s %s: 处理器链是 %r，应为 headers/vars/file_server" % (p, name, inner))
+                hdr = hs[0]["routes"][0]["handle"][0]["response"]["set"].get("Cache-Control")
+                if not hdr or "max-age=3600" not in hdr[0] or "stale-while-revalidate=604800" not in hdr[0]:
+                    bad.append("%s %s: 缓存头与 server 原来发的不一致：%r" % (p, name, hdr))
+                if hs[0]["routes"][0]["handle"][1].get("root") != "/app":
+                    bad.append("%s %s: file_server 的 root 不是 /app" % (p, name))
+                for want in IMG:
+                    if want not in paths:
+                        bad.append("%s %s: 少了 %s" % (p, name, want))
+                # 只允许图片扩展名：附件/自定义页面/导出目录必须继续走 server
+                # （那边有 nosniff、强制下载、匿名 403 等安全逻辑）
+                for x in paths:
+                    if not any(x.endswith(e) for e in (".webp",".png",".jpg",".jpeg",".gif",".avif",".ico")):
+                        bad.append("%s %s: 匹配了非图片扩展名 %s" % (p, name, x))
+                if any("/static/file" in x or "/static/export" in x or "/static/tmp" in x for x in paths):
+                    bad.append("%s %s: 绝不能直服 file/export/tmp 目录" % (p, name))
+            if paths == ["/static/*"]:
+                proxy_idx = i
+        if img_idx is None:
+            bad.append("%s %s: 没有 /static/img 直服路由" % (p, name))
+        if proxy_idx is None:
+            bad.append("%s %s: 原来的 /static/* 反代路由不见了" % (p, name))
+        elif img_idx is not None and img_idx > proxy_idx:
+            bad.append("%s %s: 直服路由(%d)必须排在 /static/* 反代(%d)之前，否则永远匹配不到"
+                       % (p, name, img_idx, proxy_idx))
+print("OK" if not bad else "; ".join(bad[:4]))
+' "两份模板都由 caddy 直发图床图片（只认图片扩展名、缓存头与 server 一致、排在 /static/* 反代之前）"
+
 # ---------- 4) 编排文件要映射 UDP 443，否则浏览器用不上 HTTP/3 ----------
 if grep -qE '^[[:space:]]*-[[:space:]]*vanblog_https_port:443/udp[[:space:]]*$' "${COMPOSE}"; then
   pass "编排模板映射了 vanblog_https_port:443/udp（QUIC 用）"

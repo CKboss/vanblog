@@ -87,3 +87,41 @@ describe('文章别名解码走安全函数', () => {
     expect(src).toContain('safeDecodeURIComponent');
   });
 });
+
+describe('上游 keep-alive 超时必须长于反代的空闲超时', () => {
+  // Node 的 server.keepAliveTimeout 默认只有 **5 秒**，而 caddy 模板里上游连接的
+  // 空闲超时是 60 秒 —— 反代把连接留在池里，Node 却在 5 秒后主动关掉，
+  // 于是偶发 ECONNRESET / 502，且只在"流量有间歇"时出现，极难复现。
+  it('main.ts 显式设置了 keepAliveTimeout / headersTimeout', () => {
+    const src = code(read('main.ts'));
+    expect(src).toContain('httpServer.keepAliveTimeout = keepAliveTimeout');
+    expect(src).toContain('httpServer.headersTimeout = keepAliveTimeout + 1000');
+    expect(src).toContain("envInt('VANBLOG_KEEP_ALIVE_TIMEOUT_MS', 65000");
+  });
+
+  it('默认值 65s 大于 caddy 模板里上游的 60s 空闲超时', () => {
+    const main = read('main.ts');
+    const m = /VANBLOG_KEEP_ALIVE_TIMEOUT_MS',\s*(\d+)/.exec(main);
+    expect(m).not.toBeNull();
+    const nodeMs = Number(m![1]);
+    const caddy = JSON.parse(
+      // root = packages/server/src，仓库根还要再上两级（这个 off-by-one 又踩了一次）
+      readFileSync(join(root, '../../../caddyTemplate.json'), 'utf8'),
+    ) as any;
+    // 从模板里把上游 keep_alive.idle_timeout（纳秒）找出来
+    let idleNs = 0;
+    const walk = (routes: any[]) => {
+      for (const r of routes) {
+        for (const h of r.handle || []) {
+          if (h.handler === 'reverse_proxy' && h.transport?.keep_alive?.idle_timeout) {
+            idleNs = h.transport.keep_alive.idle_timeout;
+          }
+          if (h.handler === 'subroute') walk(h.routes || []);
+        }
+      }
+    };
+    for (const srv of Object.values(caddy.apps.http.servers) as any[]) walk(srv.routes);
+    expect(idleNs).toBeGreaterThan(0);
+    expect(nodeMs).toBeGreaterThan(idleNs / 1e6);
+  });
+});

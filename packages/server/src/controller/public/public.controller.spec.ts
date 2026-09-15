@@ -1,4 +1,5 @@
 import { PublicController } from './public.controller';
+import { invalidatePublicMetaCache } from 'src/utils/publicMetaCache';
 import { DEFAULT_ARTICLES_PER_PAGE } from 'src/utils/articlesPerPage';
 import { MAX_PAGE_SIZE } from 'src/utils/pagination';
 
@@ -7,6 +8,9 @@ import { MAX_PAGE_SIZE } from 'src/utils/pagination';
 void MAX_PAGE_SIZE;
 
 function createController(siteInfo: Record<string, unknown> = {}) {
+  // 每造一份新的假数据就清一次缓存：同一个 it 里可能建好几个 controller，
+  // 模块级缓存会让后一个拿到前一个的响应（表现为「期望 50 收到 5」这种）。
+  invalidatePublicMetaCache();
   const articleProvider = {
     getByOption: jest.fn().mockResolvedValue({ articles: [{ id: 1 }], total: 12 }),
     getTotalNum: jest.fn().mockResolvedValue(12),
@@ -136,6 +140,13 @@ describe('PublicController article list page size (#346)', () => {
       true,
     );
   });
+});
+
+// ⚠️ /api/public/meta 现在有进程内短缓存（默认 5 秒）。它是**模块级**的，
+// 不清就会跨用例复用：第一个用例的 payload 会被后面所有用例拿到，
+// 表现为"期望 5 收到 12"这种莫名其妙的失败。所以每个用例前显式失效一次。
+beforeEach(() => {
+  invalidatePublicMetaCache();
 });
 
 describe('PublicController.getBuildMeta articlesPerPage (#346)', () => {

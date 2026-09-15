@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { envInt } from './utils/rateLimit';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { MetaProvider } from './provider/meta/meta.provider';
@@ -126,6 +127,21 @@ async function bootstrap() {
     await app.listen(port, host);
   } else {
     await app.listen(port);
+  }
+
+  // ⚠️ 上游 keep-alive 的超时**必须长于反代的空闲超时**，否则会出现经典的竞态：
+  // caddy 把一条空闲连接留在池里（本仓库的模板配的是 60s），而 Node 默认
+  // `keepAliveTimeout` 只有 **5 秒** —— 5 秒后 Node 主动关连接，caddy 却可能刚好
+  // 在这一刻把请求写上去，结果就是偶发的 ECONNRESET / 502，而且只在"流量有间歇"时出现，
+  // 极难复现。这里设成 65s（比 caddy 的 60s 长），headersTimeout 再大 1s
+  // （Node 要求 headersTimeout > keepAliveTimeout，否则慢客户端能占着连接不放）。
+  const keepAliveTimeout = envInt('VANBLOG_KEEP_ALIVE_TIMEOUT_MS', 65000, 1000, 600000);
+  const httpServer = app.getHttpServer();
+  if (httpServer) {
+    httpServer.keepAliveTimeout = keepAliveTimeout;
+    httpServer.headersTimeout = keepAliveTimeout + 1000;
+    // Node 18+ 的默认值是 300s；显式写出来，免得哪天默认值变了没人注意
+    httpServer.requestTimeout = envInt('VANBLOG_REQUEST_TIMEOUT_MS', 300000, 5000, 3600000);
   }
 
   const websiteProvider = app.get(WebsiteProvider);

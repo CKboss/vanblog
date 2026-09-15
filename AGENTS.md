@@ -3688,14 +3688,102 @@ cp 会报 `are the same file` 并非 0 退出、整层构建失败；用 `tar -c
 清理临时 mongo 目录时还会撞上 root 属主文件的 `Permission denied`。
 本机验证请改用 `vanblog_dev/run-image-stack.sh`（用容器 IP + `--add-host`，不依赖 `--link`）。
 
+### 7.44 IO 与并发（C10K）：先测再改，改完再测
+
+用户要"IO 性能优化，C10K 更好"。这一节的做法是**先建一个可复现的压测台，再动代码**，
+每一步都有前后对比数字 —— 因为"并发优化"最容易变成凭感觉加参数。
+
+**压测台**：`vanblog_dev/loadtest.cjs`（本机脚本，不入库）。自己写而不用 ab/wrk 是因为要的是
+几个能直接对上代码的指标：并发扫描下的 rps/p50/p95/p99、**socket 层错误**（ECONNRESET/EPIPE，
+用来抓 keep-alive 竞态）、状态码分布（429 说明测的是限流器不是栈）、以及
+"一万条连接先全部挂住、再一起发请求"的 C10K 模式。⚠️ 客户端与服务端同机，CPU 是抢的，
+**绝对值偏保守，但前后对比有效**（同机、同数据、同脚本）。
+被测对象是**真镜像起的真栈**（mongo 7.0 + vanblog 容器，数据用 `reset` 从那份 66MB 生产整站备份灌进去，
+53 篇公开文章 + 93 个静态文件），不是 dev 服务器。
+
+**第一件事是发现"测的根本不是栈"**：默认配置下 2000 个混合请求里 **1600+ 个是 429** ——
+全局限流（每 IP 每分钟 600）挂在 `path: '*'` 上，**每一张图片也算一次**。
+一篇带 10 张图的文章 = 11 次计数，600/分钟只够 ~50 次浏览/分钟/IP；
+在公司 NAT、校园网、或 CDN 回源 IP 没被识别（所有访客共用一个出口 IP）的场景下，
+正常读者会成片看到 429，看起来像站点挂了。
+→ 静态资源改走**独立桶**（`/static/**`，默认是全局的 10 倍，`VANBLOG_STATIC_LIMIT_PER_MIN` 可调）。
+实测：只压静态资源 3000 个请求 **全部 200**（改造前会在 600 个之后开始 429）；
+混合流量里成功响应从 375/2000 提升到 **1426/2000**（同一套限流参数）。
+
+**改的四件事与实测**：
+
+1. **图床图片由 caddy 直接发**（`file_server`），不再穿过 Node。
+   两份 caddy 模板都在全局路由之后、`/static/*` 反代之前插了一条路由：
+   只匹配 `/static/img/` 与 `/static/img/thumb/` 下的**图片扩展名**
+   （webp/png/jpg/jpeg/gif/avif/ico），`root /app` + 与 server 完全一致的缓存头
+   `public, max-age=3600, stale-while-revalidate=604800`。
+   ⚠️ 只放图片扩展名是**安全边界**：`/static/file/`（附件）、`/static/export/`、`/static/tmp/`、
+   `/static/upload-tmp/` 一律继续走 server —— 那边有 nosniff、对 html/svg/js 强制下载、
+   以及对导出/临时目录的匿名 403。实测 `/static/export/x.zip` 仍然是 **403**，没被直服放出去。
+   实测收益（同一张 1.08MB 的 webp，并发 50 × 800 请求）：
+   Node 718.8 rps / p50 37ms / p95 183ms → **caddy 1556.4 rps / p50 24ms / p95 56ms**
+   （**2.17 倍吞吐，p95 降 69%**）；单请求 18.4ms → **2.4ms**。
+   更重要的是这些字节**不再经过 Node 的事件循环**。
+2. **上游 keep-alive 超时必须长于反代的空闲超时**：Node 的 `server.keepAliveTimeout` 默认只有
+   **5 秒**，而 caddy 模板里上游空闲超时是 60 秒 —— 反代把连接留在池里，Node 却先关，
+   于是偶发 ECONNRESET / 502，且只在"流量有间歇"时出现，极难复现。
+   现在显式设 65s（`VANBLOG_KEEP_ALIVE_TIMEOUT_MS`）、`headersTimeout` 再大 1s
+   （Node 要求 headersTimeout > keepAliveTimeout），`requestTimeout` 显式 300s。
+   有一条测试直接**读 caddy 模板里的 `keep_alive.idle_timeout`（纳秒）和 main.ts 的默认值做对比**，
+   保证以后改任何一边都会被钉住。
+3. **`UV_THREADPOOL_SIZE=16`**（镜像 ENV）：sharp 的编解码、fs 异步操作、crypto 的 scrypt
+   都跑在 libuv 线程池里，Node 默认只有 **4** —— 图片站并发处理时表现为"CPU 很闲但一直在排队"。
+   ⚠️ 第一版把这个 ENV 加到了 **website_builder** 阶段（因为 `VAN_BLOG_ALLOW_DOMAINS` 那个锚点
+   在文件里出现两次，`replace(...,1)` 命中了第一次）—— 对最终镜像毫无作用，
+   是进容器 `echo $UV_THREADPOOL_SIZE` 发现是空的才抓到。**多阶段 Dockerfile 里加 ENV，
+   一定要确认落在哪个 stage，并且进容器实测一次。**
+4. **`/api/public/meta` 并行化 + 5 秒进程内缓存**：这个接口是全站最热的一次读
+   （前台每个页面渲染都要调），而它内部有 **7 个互相独立的 Mongo 查询，以前是串行 await**。
+   改成 `Promise.all` 之后总耗时≈最慢的那一个；再加 `utils/publicMetaCache.ts`
+   （默认 5s，`VANBLOG_PUBLIC_META_CACHE_MS=0` 可关），后台改站点信息/总字数时主动失效。
+   ⚠️ 模块级缓存会**跨 jest 用例复用**：加了缓存之后 public.controller.spec 立刻红了 5 个
+   （"期望 5 收到 12"这种），修法是在 `createController()` 里失效一次（每个夹具都干净），
+   而不是去调 TTL。
+
+   顺带：编排模板给两个服务都加了 `ulimits.nofile` 65536（高并发下 fd 是第一道天花板，
+   mongod 自己低于 64000 也会告警），vanblog 服务加了 `stop_grace_period: 30s`
+   （start.js 给子进程 8 秒优雅退出，docker 默认只等 10 秒，余量太薄）。
+
+**C10K 实测结论（要诚实区分"连接层"与"应用层"）**：
+
+| 场景 | 结果 |
+| --- | --- |
+| 一万条连接**同时挂住** | 全部建立成功，用时 **1.1 秒**，0 拒绝（宿主与容器 fd 上限都是 1048576，somaxconn 4096） |
+| 一万条连接上同时请求 **caddy 直服的静态图片** | **10000/10000 全部 200，用时 0.8 秒**，0 失败 |
+| 一万条连接上同时请求 `/api/public/meta`（改造前） | 30 秒内只完成 1600 个，其余客户端超时 |
+| 一万条连接上同时请求 `/robots.txt`（极轻，但要反代到 Node） | 30 秒完成 4397 个 |
+| 混合流量并发扫描（改造前 → 改造后） | c=50：225→**259 rps**、336→**396 Mbps**；c=200：259→**284 rps**、p50 364→**262ms**、p95 2357→**1572ms**；c=500：246→**270 rps**；c=1000：200→**272 rps**、250→**420 Mbps**、**101 个 502 → 0** |
+
+也就是说：**连接层（caddy）本来就能扛 C10K**，静态内容直服之后"一万并发拿图片"是 0.8 秒的事；
+真正的天花板是 **Node 应用层（单进程单核）** —— 凡是反代到 Node 的请求，
+一万并发就要排队几十秒。要继续往上抬只有三条路，按性价比排序：
+① 把更多东西挪出 Node（图片已做；ISR 生成的 HTML 本身就是静态文件，
+   理论上也能让 caddy 直接发 `.next/` 里的产物，但要处理 revalidate 语义，风险高）；
+② 给热点动态接口加缓存（meta 已做，`/api/public/comments/setting`、分类/标签列表同理）；
+③ **Node 多进程（cluster）** —— 这是唯一能真正把动态吞吐乘以核数的办法，
+   但前提是先解决 §7.40 B-8 里那批"多实例会重复执行"的东西：
+   cron（每小时 ISR、每日 viewer 结算）、`initJwt`、waline/website 子进程的 spawn、
+   ISR 的 in-flight 互斥（现在是**进程内**变量，多进程下形同虚设）。
+   本机压测时就实测到过**两个 server 进程同时在跑 cron**（watch 重启留下的孤儿），
+   所以这件事不是"加个 cluster 就完事"，得先做单实例选主（DB 锁或 env 指定 primary）。
+
+**没做的事**（都是有意的）：没加 `express.json` 的分路由限流（GET 不解析 body，
+公开写接口另有 30/min 的限制，收益不大）；没动 mongo 的 `maxPoolSize`（100 对单进程 Node 够用，
+真正的瓶颈不在连接数）；没开 Node cluster（见上）；没给 caddy 加缓存插件（标准版没有）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 690 用例：689 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| server `jest` | 699 用例：698 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 62 文件 / 622 用例全绿 |
 | admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1105 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1106 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

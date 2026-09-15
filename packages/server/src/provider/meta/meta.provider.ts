@@ -19,6 +19,7 @@ import { VisitProvider } from '../visit/visit.provider';
 import { ArticleProvider } from '../article/article.provider';
 import dayjs from 'dayjs';
 import { isTrue } from 'src/utils/isTrue';
+import { invalidatePublicMetaCache } from 'src/utils/publicMetaCache';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePageCopy } from 'src/utils/pageCopy';
 import { ViewerProvider } from '../viewer/viewer.provider';
@@ -144,6 +145,8 @@ export class MetaProvider {
   }
 
   async update(updateMetaDto: Partial<Meta>) {
+    // 公开 meta 接口有 5 秒进程内缓存，写完主动失效，免得后台改完要等 TTL 才看得见
+    invalidatePublicMetaCache();
     return this.metaModel.updateOne({}, updateMetaDto);
   }
   async getAbout() {
@@ -197,6 +200,7 @@ export class MetaProvider {
   }
 
   async updateSiteInfo(updateSiteInfoDto: UpdateSiteInfoDto) {
+    invalidatePublicMetaCache();
     // @ts-ignore eslint-disable-next-line @typescript-eslint/ban-ts-comment
     const { name, password, ...updateDto } = updateSiteInfoDto;
     const oldSiteInfo = await this.getSiteInfo();

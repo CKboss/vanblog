@@ -5,6 +5,7 @@ import {
   isInternalRequest,
   isLoopbackRequest,
   rateLimitMiddleware,
+  isStaticAssetPath,
   securityHeadersMiddleware,
 } from './rateLimit';
 
@@ -234,5 +235,62 @@ describe('安全响应头', () => {
     const r = res();
     securityHeadersMiddleware(req(), r, () => undefined);
     expect(r.out.headers['Content-Security-Policy']).toBeUndefined();
+  });
+});
+
+describe('静态资源走独立限流桶', () => {
+  // 全局限流挂在 path:'*' 上，一张图也算一次：一篇带 10 张图的文章 = 11 次计数，
+  // 600/分钟只够 ~50 次浏览/分钟/IP —— 公司 NAT、校园网、或 CDN 回源 IP 没被识别时，
+  // 正常读者会成片 429。所以静态资源必须有自己（宽 10 倍）的桶。
+  const mkReq = (path: string, ip = '203.0.113.7') =>
+    ({
+      path,
+      method: 'GET',
+      headers: { 'x-forwarded-for': ip },
+      socket: { remoteAddress: '10.0.0.9' },
+      ip,
+    }) as any;
+  const mkRes = () => {
+    const res: any = { statusCode: 0, body: undefined, headers: {} };
+    res.status = (c: number) => { res.statusCode = c; return res; };
+    res.json = (b: any) => { res.body = b; return res; };
+    res.setHeader = (k: string, v: string) => { res.headers[k] = v; };
+    res.getHeader = (k: string) => res.headers[k];
+    return res;
+  };
+
+  it('isStaticAssetPath 只认 /static/ 前缀', () => {
+    expect(isStaticAssetPath('/static/img/a.webp')).toBe(true);
+    expect(isStaticAssetPath('/static/img/thumb/a.webp')).toBe(true);
+    expect(isStaticAssetPath('/api/public/meta')).toBe(false);
+    expect(isStaticAssetPath('/')).toBe(false);
+    expect(isStaticAssetPath('/statics/x')).toBe(false);
+    expect(isStaticAssetPath(undefined as any)).toBe(false);
+  });
+
+  it('刷静态资源不会把 API 的桶吃掉', () => {
+    const { rateLimitMiddleware } = require('./rateLimit');
+    // 打满静态桶的量（远超全局 600），然后再请求一次 API：API 必须仍然放行
+    for (let i = 0; i < 700; i += 1) {
+      const res = mkRes();
+      rateLimitMiddleware(mkReq(`/static/img/f-${i}.webp`), res, () => undefined);
+    }
+    const apiRes = mkRes();
+    let apiPassed = false;
+    rateLimitMiddleware(mkReq('/api/public/meta'), apiRes, () => { apiPassed = true; });
+    expect(apiPassed).toBe(true);
+    expect(apiRes.statusCode).not.toBe(429);
+  });
+
+  it('静态桶自己的上限仍然生效（不是无限）', () => {
+    const { rateLimitMiddleware, STATIC_LIMIT_PER_MIN, GLOBAL_LIMIT_PER_MIN } = require('./rateLimit');
+    expect(STATIC_LIMIT_PER_MIN).toBe(GLOBAL_LIMIT_PER_MIN * 10);
+    let blocked = 0;
+    for (let i = 0; i < STATIC_LIMIT_PER_MIN + 50; i += 1) {
+      const res = mkRes();
+      rateLimitMiddleware(mkReq(`/static/img/many-${i}.webp`, '198.51.100.9'), res, () => undefined);
+      if (res.statusCode === 429) blocked += 1;
+    }
+    expect(blocked).toBeGreaterThan(0);
   });
 });

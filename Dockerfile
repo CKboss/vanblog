@@ -417,6 +417,14 @@ ENV VAN_BLOG_SERVER_URL="http://127.0.0.1:3000"
 # 通过你的 /_next/image 提供内容，还白白多一个 SSRF 面）。默认留空 = 只优化本站图片；
 # 真要允许远程域名，在编排文件里设 VAN_BLOG_ALLOW_DOMAINS=a.com,b.com。
 ENV VAN_BLOG_ALLOW_DOMAINS=""
+# libuv 线程池：sharp 的图片解码/编码、fs 的异步操作、crypto 的 scrypt/pbkdf2 都跑在这个池子里，
+# 而 Node 的默认大小是 **4**。图片站一并发上传/补缩略图时，4 个线程就是硬瓶颈
+# （表现是"CPU 明明很闲，图片处理却在排队"）。16 是个稳妥的默认：吃得下并发图片处理，
+# 又不至于在小机器上把内存和上下文切换打爆；要调就在编排文件里覆盖。
+# ⚠️ 必须设在**进程启动前**（ENV / 容器环境变量），运行时改无效 —— libuv 只在初始化时读一次。
+# ⚠️ 这个 ENV 必须放在 **runner** 阶段：放在 website_builder 里对最终镜像毫无作用
+#    （第一版就放错了 stage，容器里 `echo $UV_THREADPOOL_SIZE` 是空的才发现）。
+ENV UV_THREADPOOL_SIZE=16
 ENV VAN_BLOG_DATABASE_URL="mongodb://mongo:27017/vanBlog?authSource=admin"
 # ⚠️ 以前这里默认填了上游作者的邮箱：没设 EMAIL 的用户会拿**作者的地址**去注册
 # Let's Encrypt 账户（到期提醒也发给作者）。留空是安全的 —— Caddy 的 acme issuer

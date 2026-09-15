@@ -21,6 +21,7 @@ import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePagination } from 'src/utils/pagination';
 import { isInternalRequest } from 'src/utils/rateLimit';
+import { readPublicMetaCache, writePublicMetaCache } from 'src/utils/publicMetaCache';
 
 @ApiTags('public')
 @Controller('/api/public/')
@@ -250,14 +251,26 @@ export class PublicController {
 
   @Get('/meta')
   async getBuildMeta() {
-    const tags = await this.tagProvider.getAllTags(false);
-    const meta = await this.metaProvider.getAll();
+    // 这个接口是全站最热的一次读（前台每个页面渲染都要调），内容却只在后台改配置时才变，
+    // 所以先查进程内短缓存（默认 5 秒，见 utils/publicMetaCache.ts）。
+    const cached = readPublicMetaCache();
+    if (cached) {
+      return cached;
+    }
+    // ⚠️ 这 7 个读互相独立，以前是**串行 await**（7 次 Mongo 往返排队等），
+    // 高并发下延迟直接翻好几倍。改成并行后总耗时≈最慢的那一个。
+    const [tags, meta, categories, menuRes, totalArticles, totalWordCount, LayoutSetting] =
+      await Promise.all([
+        this.tagProvider.getAllTags(false),
+        this.metaProvider.getAll(),
+        this.categoryProvider.getPublicCategoryNames(),
+        this.settingProvider.getMenuSetting(),
+        this.articleProvider.getTotalNum(false),
+        this.metaProvider.getTotalWords(),
+        this.settingProvider.getLayoutSetting(),
+      ]);
     const metaDoc = (meta as any)?._doc || meta;
-    const categories = await this.categoryProvider.getPublicCategoryNames();
-    const { data: menus } = await this.settingProvider.getMenuSetting();
-    const totalArticles = await this.articleProvider.getTotalNum(false);
-    const totalWordCount = await this.metaProvider.getTotalWords();
-    const LayoutSetting = await this.settingProvider.getLayoutSetting();
+    const { data: menus } = menuRes;
     const LayoutRes = this.settingProvider.encodeLayoutSetting(LayoutSetting);
     const siteInfo = {
       ...(metaDoc?.siteInfo || {}),
@@ -276,9 +289,11 @@ export class PublicController {
       totalWordCount,
       ...(LayoutSetting ? { layout: LayoutRes } : {}),
     };
-    return {
+    const res = {
       statusCode: 200,
       data,
     };
+    writePublicMetaCache(res);
+    return res;
   }
 }
