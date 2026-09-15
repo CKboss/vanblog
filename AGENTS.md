@@ -3122,12 +3122,133 @@ keep 不是正整数就 `return 0`、`rm -f "${dir:?}/..."` 带 `:?` 保护（di
   （TS 4.9 解析不了它的新语法，见 §3.6），仓库代码 0 个类型错误。
   副作用：website 没有 server 那样的 `tsconfig.dev.json`，所以本机没法把 tsc 当门禁用。
 
+### 7.38.2 第二轮性能审计（已落地的 5 项 + 明确暂缓的 6 项）
+
+三个方向并行审（前台 / server 运行时与 DB / 依赖·CI·运维），下面只记**已改的**与**为什么不改**。
+实测数据都在 `docs/advanced/performance.md` 的"第二轮"一节。
+
+**已改（website）：**
+
+1. **列表摘要里的原图 → 缩略图**。首页摘要里嵌着 3,497,836 B 与 1,076,400 B 两张 webp，
+   而对应缩略图是 14,098 B / 8,076 B；同一张图的缩略图还被 `ListThumb` 另外请求了一次
+   （一张图下载两遍：8KB + 1MB）。`loading="lazy"` 只是推迟，没有省。
+   新增 `utils/excerptThumbs.ts`（`toThumbPath` / `withThumbnailImages`，markdown 与内联 `<img>`
+   两种写法都处理；外链、`/static/file/`、子目录、带 `?`/`#` 的一律不动），
+   只在 `PostCard` 的 **overview 分支**用 —— 文章页正文必须保持原图。
+   `components/Markdown/img.tsx` 的 rehype 插件给缩略图补 `data-zoom-src`（medium-zoom 1.1 支持，
+   所以"省流量"和"点开看大图"不冲突），并注册一次 `error` 回退到原图（老图片可能没补过缩略图）。
+   ⚠️ `data-zoom-src` **只能在 rehype 插件里加**：bytemd 管线是 `sanitize → 插件`，
+   写在 markdown 里的 `data-*` 会先被 `rehype-sanitize` 删掉。
+   **实测：首页那两张图 4.57MB → 22KB（208 倍）。**
+2. **`getPublicMeta()` 加 5s TTL + 并发合并**（`__resetPublicMetaCache()` 是给测试用的）。
+   一轮 ISR 全量重渲染 ~130 个页面、每页调一次、同一份 8.3KB 串行拉 130 次（~1MB）；
+   接口只发 ETag 不发 Cache-Control，undici 也复用不了。模式抄的是 `utils/commentApi.ts`。
+   ⚠️ **只缓存成功结果**：构建期连不上 server 会走默认值分支，缓存了它整个构建就都是空数据。
+3. **封面 CLS**：`.article-cover img { aspect-ratio: 21/9; height: auto }`。
+   `ArticleCover` 的 `<img>` 没有宽高、`.article-cover` 以前一条 CSS 都没有 → 盒子高度先 0
+   再跳到 `min(缩放高, 320px)`，而它正是被 preload 的 LCP（16/53 篇有封面）。
+4. **GA 判据收紧**：`shouldInjectGa` 与 `describeGaInjection` 都要求 `^G-…|UA-…$`。
+   本站 `gaAnalysisId` 里填的是别家统计的 id，以前照样请求 `gtag/js?id=…` → **200 / 242,542 B**，
+   为一个不存在的媒体资源白下载。⚠️ 组件调的是 `describeGaInjection`，只改 `shouldInjectGa` 没用
+   （我的第一版就只改了前者，测试立刻抓到）。
+5. **`largePageDataBytes` 10MB → 256KB**：Next 13 默认 128KB，抬 80 倍等于关掉唯一的告警
+   （现有最大是 `/timeline` 的 73KB）。顺带说明：`website.provider.ts` 把
+   `The value at .experimental has an` / `Invalid next.config.js options` 两条 stderr 过滤掉了，
+   所以这类配置告警在生产日志里也看不见。
+
+**已改（server）**：见 §7.38.3。
+
+**明确暂缓（都量化过，别当"没人发现"重复提）：**
+
+| 项 | 实测 | 暂缓原因 |
+| --- | --- | --- |
+| 首页/分页把**全文**塞进 `__NEXT_DATA__` | HTML 114KB（gzip 33KB），`__NEXT_DATA__` 占 31.8%（gzip 后 **54.8%**）；5 篇 content 25KB，卡片只要 3.3KB 摘要 → **87% 白送**；模拟修完 gzip −31.8% | 要在 server 侧出 `excerpt`：把 `utils/articleExcerpt.ts`（围栏感知的 `findMoreMarker`、200 字回退、截断链接修复、代理对安全）移植过去，并让 `markdown.provider.getDescription` 改为委托它，否则两份实现会漂。跨 server+website，得配"两边摘要一致"的对照测试；还要处理 9 篇没有 `<!-- more -->` 的文章（#410 那个"卡片里露出 `[文字](url)` 括号"的回归就出在这条路径上） |
+| ByteMD **编辑器**进了每个 markdown 页面的首屏 JS | 服务端 chunk 1148 个模块，含 9 个 `codemirror-ssr`（源码 1.97MB）、57 个 `@popperjs/core`；`bytemd`/`codemirror-ssr`/`@bytemd/react` 都**没有 `sideEffects` 字段**，webpack 不敢丢；生产估计 150–250KB min+gz（**没有生产构建，未实测**） | 两条路都要跑生产构建对比：① 摘要在服务端渲染成 HTML（和上一条一起做最划算，注意仍要过 `sanitizeMarkdownSchema`）②内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标 `sideEffects:false`。另外 `dynamic(..., {ssr:true})` 在首页的**初始** script 列表里 —— 它一点都不 defer |
+| `/timeline` 带 42.5KB 没人读的数据 | pageProps 73.5KB 里 `sortedArticles`(21.3KB) + `yearGroup.articles`(21.2KB) 都无读者（`TimelineArchives` 只在 `months.length===0` 时才读，实测 4 个年份组一个都不满足） | gzip 后只省 6.6%（两份 JSON 高度相似），收益主要在解析/内存；要同步改 `timelineMonths` 的测试与"没有日期的文章"回退路径 |
+| 每张卡片一个未合并的阅读量请求 | 5 次串行 XHR（89ms vs 并行 36ms），每次回 220B 的**整个 visit 文档**只为显示一个整数，而这数字 pageProps 里已经有 | 要加批量接口（或并进 `/comments/counts` 那种 50ms 合并器，`commentApi.ts:96-146` 是现成范例）；顺带把初始值从 pageProps 里 seed，省掉卡片上 `"..."` → 数字的抖动 |
+| apple 皮肤 46KB CSS 在全局表里 | 全局 CSS 72.7KB（gzip 16.3KB）：apple 46.2KB + markdown 相关 43KB；用 `default`/自定义主题时那 46KB 纯浪费，且 markdown 那部分在 `/link`、`/tag`、`/category`、`/timeline` 上也用不到 | 现在主题机制已经有 `/api/public/theme.css` 这条路，内置 apple 也可以走；但 apple.css 依赖"在 Tailwind 之后引入"的顺序，挪成 `<link>` 要对两种皮肤做视觉对比 |
+| 字体走 `static.zeoseven.com` | 本机 DNS 解析不出来：每页一次 preconnect + 一个 stylesheet 卡在 DNS 上；而且 CSS 是水合后才从 `media="print"` 提升的，字体下载**最早也要等 JS 跑完**（没有 preload，FOUT 必然） | 正解是自托管到 `public/fonts/`（`utils/appleFont.ts:8-10` 的注释里就写着这条路）+ 给覆盖站名/导航的 2–3 个子集加 `preload`；CJK 按 unicode-range 切子集比较费事，切错了会掉字形 |
+
+**⚠️ 一个不是代码问题、但影响最大的**：本站 `layout.html`（后台「定制化」里的自定义 HTML，
+存在库里、随 `/api/public/meta` 下发）里塞了一堆第三方脚本 —— 一个 **798,345 B 的 MathJax**
+（而公式早就由 KaTeX 在服务端渲染了，纯属重复）、gtag 与百度统计**各加载两次**
+（一次来自 `layout.html`，一次来自 `siteInfo` 里的统计 ID 字段）、两个 51la 属性且
+`screenRecord:true`（会话录制）、一个 `mapmyvisitors.com` 的 `<img>`（本机实测 >8s 超时）、
+几个没有宽高的计数器 `<img>`。这些是**站点数据**不是仓库代码，改法是在后台把那段 HTML 清一清
+（MathJax 那条删掉就省 798KB），代码侧能做的兜底（GA 判据）已经做了。
+
+### 7.38.3 server 运行时审计（已落地的 5 项）
+
+1. **`GET /api/public/article/%25` → 500**（未鉴权公开接口，一个百分号就能让它报错）：
+   `getByPathName` 里裸调 `decodeURIComponent`，`%` 抛 URIError。新增 `utils/safeDecode.ts`
+   （解不开原样返回 + 限长 500），实测 `%25`→404、`%zz`→400、`%2525`/`a%2Fb`/`..%2f..%2fetc`→404，
+   而真的百分号编码别名（`%E4%B8%AD%E6%96%87`）仍然解得开。
+2. **文章阅读量是"读出来 +1 写回绝对值"** → 并发看同一篇会**永久少计**。
+   `visit` / `meta` 两个 provider 早就改成原子 `$inc` 了，文章这边漏了。
+   `updateViewerByPathname` 与 `updateViewer` 现在都是 `$inc` + `$set lastVisitedTime`。
+3. **恢复密钥写死 `/var/log/restore.key`**：容器里正好有这个目录所以看不出来，
+   裸机部署（日志目录由 `config.log` 决定）就一直写失败 —— 本机日志里失败了 **19 次**，
+   密钥只存在于 stdout。改成 `config.log || '/var/log'`，权限仍 0600。
+4. **热查询没索引**：`visits` 只有单列索引，`{pathname} + sort(date:-1) + limit 1`
+   （公开接口每次浏览都查）被 planner 选成"`date_1` 倒着扫再过滤"——
+   explain 实测一个 6 天没访问的路径 **examined=125**，天数越久越多，冷路径等于扫全表。
+   加 `{pathname:1, date:-1}` 复合索引后 **examined=1**。
+   `articles.viewer/visited/lastVisitedTime` 也没索引，后台"阅读排行/最近浏览"每次全表扫 + 内存 SORT
+   （explain 里有 SORT 阶段，examined=106）；加索引后按 viewer 排序 **examined=5、无 SORT 阶段**。
+   ⚠️ `autoIndex: true` 必须留着：项目没有迁移工具，索引全靠启动时同步。
+5. **`schedule/count.task.ts` 是死代码**（从未在 `app.module` 注册，grep 零引用），已删。
+   它想做的"每 5 分钟刷字数缓存"本来就由启动时 + 每次增删改后 30s 的 `updateTotalWords` 覆盖，
+   真注册上去等于每 5 分钟把全部文章连正文捞一遍。
+
+顺手：mongoose 连接不再全用驱动默认值 —— `serverSelectionTimeoutMS` 10s（默认 30，
+mongod 重启时每个请求要干等半分钟）、`connectTimeoutMS` 10s、`socketTimeoutMS` 120s
+（默认 **0 = 永不超时**：网络黑洞时借出的连接一直卡着，池子 100 个占满就是整站假死）、
+`maxPoolSize` 100、`retryWrites/retryReads` on，四个都能用 `VANBLOG_MONGO_*` 覆盖，
+且解析成非数字时回落默认值（不能把 NaN 交给驱动）。socket 超时故意给得宽，
+免得误伤整站备份/恢复/大集合导出这类长任务。
+
+**server 侧已量化但暂缓的**（都是"要么改接口语义、要么要迁移数据"，需要单独决策）：
+
+- **公开文章列表把整个集合连正文捞回来**：`getByOption` 只在 `!isPublic` 时才 skip/limit
+  （`article.provider.ts:817-820`），然后在 **JS 里**排序/过滤/切置顶，再 `count(query)`，
+  再对每篇文章 `categoryModal.findOne` 一次（N+1）。explain：内存 SORT、examined=106、returned=53
+  （全部公开文章连正文 ≈200KB），`pageSize=-1`（前台静态生成）时 N+1 覆盖全部文章。
+  **本轮只修了 N+1**（复用已有的 `getPrivateCategoryNames()` 一次查完做成 Set）、
+  `countTotalWords` 加 `{content:1}` 投影、`searchByString` 加 `.limit(200)`；
+  把置顶排序与分页推进 Mongo 是下一步（要同时保证前后台两个视图的排序语义不变）。
+- **每次浏览 ~11 次 Mongo 操作 / 4 次写**，分散在 metas、articles、viewers、visits 四个集合，
+  无批量、无防抖；`visits`/`viewers` **永不清理**（实测 visits 8748 条、跨 800 天，
+  索引 0.88MB 已大于压缩后的数据 1.21MB 的 70%），而且 `visit.provider.add` 的
+  "重复键兜底"依赖一个**并不存在**的 `{date,pathname}` 唯一索引（listIndexes 实测只有非唯一的
+  `date_1`/`pathname_1`），并发首访会静默产生重复行。要做得先写一个去重迁移再加唯一索引。
+- **ISR 风暴没有护栏**：25+ 处调用 `activeAll`，只有 1s 防抖、**没有 in-flight 互斥**，
+  `activeWithRetry` 不 await 也不 catch，`testConn`/`activeUrl` 的 axios **没有超时**；
+  一轮 ~130 次串行重渲染（含 6 篇已删除文章的 id 与别名两条路径）。
+  本机还实测到**两个 server 进程同时在跑 cron**（watch 重启留下的孤儿进程），
+  说明定时任务也没有多实例保护。
+- **RSS 每次全量同步渲染**：实测 53 篇 markdown-it+hljs+katex = **135ms 同步阻塞事件循环**，
+  三份 feed 各约 350KB（**全文、无条数上限**），每小时 + 每次启动 + 每次编辑后 3 分钟各跑一遍。
+  应该限条数（20–30）并改成异步/增量。
+- `express.json({limit:'50mb'})` 挂在**所有**路由上（评论只需要几 KB，只有备份恢复/上传才要大）；
+  无 request-id / 无 API 访问日志 / 无慢查询日志；`InitMiddleware` 每个请求都
+  `userModel.findOne({})`（还把密码哈希读进内存）；`initJwt` 在 `main.ts` 与 JwtModule 工厂里
+  **各跑一次**且两次都不 `client.close()`（泄漏 MongoClient 与它的 SDAM 定时器）；
+  website 子进程的 `exit` 处理器在优雅停机时会把刚杀掉的进程**再拉起来**
+  （waline 有 `stopping` 标志，website 没有），而它的 `starting` 互斥量**从未被赋值**（死代码）。
+
+**测试**：server `utils/safeDecode.spec.ts`(9) + `provider/article/article.provider.viewer.spec.ts`(5)
++ `audit-hardening.spec.ts`(8)；website `__tests__/frontPageWeight.spec.ts`(20)。
+⚠️ 写 jest 的源码级断言时注意 `__dirname` 就是 `src/`（ts-jest 直接跑源码，没有 dist 那一层），
+`join(__dirname, '..')` 会让所有 `read()` 都 ENOENT。
+⚠️ vitest 里 `vi.useFakeTimers()` 只能开在需要它的那个用例里：另一个用例的 fetch 桩用了真实
+`setTimeout`，假定时器一开它就永远不触发（表现为"测试超时 5000ms"而不是断言失败，很容易看错方向）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 635 用例：634 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 60 文件 / 558 用例全绿 |
+| server `jest` | 657 用例：656 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 61 文件 / 578 用例全绿 |
 | admin `node --test tests/unit` | 83 套件 / 343 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 858 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |

@@ -206,7 +206,52 @@ const defaultMeta: MetaProps = {
   },
 };
 
+/**
+ * `/api/public/meta` 的进程内短缓存。
+ *
+ * 为什么需要：server 每次保存文章都会触发一次全量重渲染（ISR），
+ * 一轮要渲染 ~130 个页面（每篇文章的 id 与别名两条路径 + 分页 + 分类 + 标签 + 6 个固定页），
+ * 而**每个页面都会调一次 getPublicMeta** —— 同一份 8KB 的 meta 被重复拉 130 次（~1MB），
+ * 而且是串行的。接口本身只发 ETag、不发 Cache-Control，undici 也没法复用。
+ *
+ * 5 秒 TTL 足够把一轮重渲染里的重复请求压成 1 次，又不会让后台改完站点信息看到旧数据
+ * （改完本来就靠 revalidate 触发重渲染，5 秒的窗口在里面看不见）。
+ * ⚠️ 只缓存**成功**的结果：构建期连不上 server 时走的是默认值分支，
+ * 那个不能缓存，否则整个构建过程都会拿着空数据渲染。
+ */
+const META_CACHE_TTL_MS = 5000;
+let metaCache: { at: number; data: PublicMetaProp } | null = null;
+let metaInflight: Promise<PublicMetaProp> | null = null;
+
+export function __resetPublicMetaCache() {
+  metaCache = null;
+  metaInflight = null;
+}
+
 export async function getPublicMeta(): Promise<PublicMetaProp> {
+  const now = Date.now();
+  if (metaCache && now - metaCache.at < META_CACHE_TTL_MS) {
+    return metaCache.data;
+  }
+  // 并发调用共享同一个请求（一轮重渲染里多个页面是并行进来的）
+  if (metaInflight) {
+    return metaInflight;
+  }
+  metaInflight = fetchPublicMeta().then(
+    (data) => {
+      metaInflight = null;
+      metaCache = { at: Date.now(), data };
+      return data;
+    },
+    (err) => {
+      metaInflight = null;
+      throw err;
+    },
+  );
+  return metaInflight;
+}
+
+async function fetchPublicMeta(): Promise<PublicMetaProp> {
   try {
     const url = `${config.baseUrl}api/public/meta`;
     const res = await fetch(url);

@@ -9,6 +9,7 @@ import UnLockCard from "../UnLockCard";
 import CommentArea from "../CommentArea";
 import ListThumb from "./ListThumb";
 import { listCardImage } from "../../utils/firstImage";
+import { withThumbnailImages } from "../../utils/excerptThumbs";
 import { tagChipStyle } from "../../utils/tagColor";
 import { encodeQuerystring } from "../../utils/encode";
 
@@ -105,7 +106,9 @@ export default function (props: {
       if (props.private) {
         return "该文章已加密，点击 `阅读全文` 并输入密码后方可查看。";
       }
-      return articleOverviewMarkdown(content);
+      // 列表摘要里的图换成 300px 缩略图（原图实测能到 3.5MB，摘要里根本看不清）；
+      // 点开放大仍然是原图（img.tsx 会补 data-zoom-src）。文章页正文不走这个分支。
+      return withThumbnailImages(articleOverviewMarkdown(content));
     } else {
       return content.replace("<!-- more -->", "");
     }

@@ -89,7 +89,12 @@ module.exports = withBundleAnalyzer({
     ignoreDuringBuilds: skipChecks,
   },
   experimental: {
-    largePageDataBytes: 1024 * 1024 * 10,
+    // Next 13 的默认值是 128KB。以前这里抬到了 10MB（80 倍），
+    // 结果是**把唯一会报警的机制关掉了**：列表页把全文塞进 pageProps、
+    // /timeline 把没人读的文章数组塞两份，都不会再有任何提示。
+    // 256KB 对现有页面绰绰有余（最大的是 /timeline 的 73KB），
+    // 再超出去说明有人往 pageProps 里塞了不该塞的东西，那时就该看到构建告警。
+    largePageDataBytes: 256 * 1024,
   },
   images: {
     domains: getAllowDomains(),

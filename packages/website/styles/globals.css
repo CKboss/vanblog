@@ -1,6 +1,16 @@
 @import "../components/NavBar/siteNameLayout.css";
 @import "./apple.css";
 
+/* 文章封面：它是文章页的 LCP 元素（pages/post/[id].tsx 还专门 preload 了它），
+   但 <img> 没有 width/height、`.article-cover` 以前也一条 CSS 都没有 ——
+   于是盒子高度先是 0，图片解码完再跳到 min(缩放后高度, 320px)，
+   每次进文章页都必然产生一次布局位移（CLS）。这里用 aspect-ratio 先把位置占住：
+   object-cover 本来就按这个比例裁，视觉结果不变，只是不再跳。 */
+.article-cover img {
+  aspect-ratio: 21 / 9;
+  height: auto;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

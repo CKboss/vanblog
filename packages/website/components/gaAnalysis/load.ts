@@ -39,8 +39,19 @@ export function normalizeGaAnalysisId(id?: string | null): string {
   return trimmed;
 }
 
+/**
+ * 只有**看起来真的是 GA 测量 ID**（G-… / UA-…）才注入。
+ *
+ * 以前是"非空就注入"：本站的 gaAnalysisId 里填的其实是另一家统计（51la）的 id，
+ * 于是每个页面都会去请求 `gtag/js?id=<那串东西>` —— 实测返回 200 且 **242KB**，
+ * 为一个根本不存在的 GA 媒体资源白白下载。认不出格式时什么都不注入才是对的。
+ */
 export function shouldInjectGa(id?: string | null): boolean {
-  return normalizeGaAnalysisId(id) !== "";
+  const normalized = normalizeGaAnalysisId(id);
+  if (!normalized) {
+    return false;
+  }
+  return new RegExp(`^${GA_MEASUREMENT_ID_RE.source}$`, "i").test(normalized);
 }
 
 export function buildGaScriptSrc(id: string): string {
@@ -61,7 +72,9 @@ export function describeGaInjection(
   id?: string | null
 ): GaScriptInjection | null {
   const normalized = normalizeGaAnalysisId(id);
-  if (!normalized) {
+  // ⚠️ 必须和 shouldInjectGa 用同一个判据：组件实际调的是这个函数，
+  //    只收紧 shouldInjectGa 的话，填错的 id 照样会注入（一个 242KB 的请求打到不存在的媒体资源上）。
+  if (!shouldInjectGa(id)) {
     return null;
   }
   return {

@@ -80,6 +80,63 @@ Markdown 渲染管线里有三个「重」依赖，以前是**静态 import**，
 
 原本就开着、不要关掉的：`dynamicImport`（路由级分包）、`hash`（产物指纹 + 长缓存）、`ignoreMomentLocale`、`esbuild`（压缩器）、`mfsu` + `webpack5`（开发时编译加速）、`nodeModulesTransform: none`。
 
+## 列表页的图片与数据（第二轮，实测）
+
+第一轮压的是"首屏 JS 里有什么"，这一轮压的是"列表页到底下载了多少字节"。
+
+**摘要里的图换成缩略图。** 列表卡片渲染的摘要（200 字那段 markdown）里嵌的是**原图**：
+实测首页一个摘要里就有 3,497,836 B 和 1,076,400 B 两张 webp，而它们对应的 300px 缩略图
+只有 14,098 B 和 8,076 B —— 同一张图的缩略图还被卡片右侧的 `ListThumb` 另外请求了一次，
+等于一张图下载两遍（一遍 8KB、一遍 1MB）。`loading="lazy"` 只是把它推迟到滚动时，并没有省掉。
+
+现在 `PostCard` 的 overview 分支会把摘要里的 `/static/img/<name>` 改写成
+`/static/img/thumb/<name>`（`utils/excerptThumbs.ts`，markdown 与内联 `<img>` 两种写法都处理，
+外链、别的目录、已经是缩略图的一律不动）。**首页那两张图：4.57 MB → 22 KB（208 倍）。**
+文章页正文一律保持原图 —— 读者点开文章就是要看大图。
+
+点开放大也不受影响：`components/Markdown/img.tsx` 的 rehype 插件会给缩略图补一个
+`data-zoom-src` 指回原图（medium-zoom 1.1 支持这个属性），并且注册一次 `error` 监听 ——
+老图片万一没生成过缩略图，加载失败会自动换回原图，不会在卡片上留一个破图标。
+⚠️ `data-zoom-src` **必须在 rehype 插件里加**：bytemd 的管线是 `sanitize → 插件`，
+写在 markdown 里的 `data-*` 会先被 `rehype-sanitize` 删掉。
+
+**`getPublicMeta()` 加了 5 秒进程内缓存。** server 每次保存文章都会触发一轮全量重渲染，
+一轮约 130 个页面（每篇文章的 id 与别名两条路径 + 分页 + 分类 + 标签 + 6 个固定页），
+而**每个页面都会调一次** `getPublicMeta` —— 同一份 8.3KB 的 meta 被串行重复拉 130 次（约 1MB）。
+接口只发 ETag、不发 Cache-Control，undici 也没法复用。现在加了 TTL 缓存 + 并发合并
+（同一个模式在 `utils/commentApi.ts` 里早就有了）：一轮重渲染里 130 次变 1 次。
+只缓存**成功**的结果 —— 构建期连不上 server 时走的是默认值分支，那个不能缓存，
+否则整个构建过程都会拿着空数据渲染。
+
+**封面图的布局位移（CLS）修掉了。** `ArticleCover` 的 `<img>` 没有 width/height，
+而 `.article-cover` 在样式表里**一条规则都没有**，所以盒子高度先是 0、图片解码完再跳到
+`min(缩放后高度, 320px)` —— 每次进文章页必然产生一次位移，而这恰好是
+`pages/post/[id].tsx` 专门 preload 的 LCP 元素（53 篇里有 16 篇有封面）。
+现在 `.article-cover img` 有 `aspect-ratio: 21/9; height: auto`：`object-cover` 本来就按这个比例裁，
+视觉不变，只是不再跳。彻底的做法是上传时把宽高存下来（server 已经在跑 sharp），那是后话。
+
+**认不出格式的 GA 测量 ID 不再注入。** `gaAnalysisId` 里填的如果不是 `G-…` / `UA-…`
+（比如把别家统计的 id 填进了 GA 字段），以前照样会去请求
+`gtag/js?id=<那串东西>` —— 实测返回 200 且 **242,542 B**，为一个根本不存在的 GA 媒体资源白下载。
+现在 `shouldInjectGa` 与 `describeGaInjection` 用同一个判据：格式不对就什么都不注入。
+⚠️ 两个函数必须一起改：组件实际调的是 `describeGaInjection`，只收紧 `shouldInjectGa` 没用。
+
+**`experimental.largePageDataBytes` 从 10MB 收回 256KB。** Next 13 默认 128KB，
+抬到 10MB（80 倍）等于把**唯一会报警的机制**关掉了：列表页把全文塞进 pageProps、
+`/timeline` 把没人读的文章数组塞两份，都不会再有任何提示。现有最大的页面是 `/timeline` 的 73KB，
+256KB 绰绰有余；真超了说明有人往 pageProps 里塞了不该塞的东西，那时就该看到构建告警。
+
+### 第二轮实测到的、还没动的
+
+| 项 | 实测 | 为什么还没动 |
+| --- | --- | --- |
+| 首页/分页把**全文**塞进 `__NEXT_DATA__` | 首页 HTML 114KB（gzip 33KB），其中 `__NEXT_DATA__` 占 31.8%（gzip 后占 **54.8%**）；5 篇文章的 content 共 25KB，而卡片只需要 3.3KB 摘要 —— **87% 是白送的** | 要在 server 侧提供 `excerpt`（把 `utils/articleExcerpt.ts` 那套围栏感知、200 字回退、截断链接修复移植过去），改动跨 server + website，得配一份"两边摘要一致"的对照测试 |
+| ByteMD 的**编辑器**进了每个渲染 markdown 页面的首屏 JS | 服务端 chunk 里 1148 个模块，含 9 个 `codemirror-ssr`、57 个 `@popperjs/core`；`bytemd` / `codemirror-ssr` / `@bytemd/react` 都**没有 `sideEffects` 字段**，webpack 不敢丢 | 要么把摘要在服务端渲染成 HTML（和上一条一起做最划算），要么内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标 `sideEffects: false`；两种都要跑生产构建对比 |
+| `/timeline` 带了 42.5KB 没人读的数据 | pageProps 73.5KB 里 `sortedArticles`（21.3KB）与 `yearGroup.articles`（21.2KB）都没有读者，占 58% | 删字段要同步改 `utils/timelineMonths.ts` 的测试；gzip 后只省 6.6%（两份 JSON 高度相似），收益主要在解析与内存 |
+| 每张卡片一个未合并的阅读量请求 | 5 次串行 XHR（89ms vs 并行 36ms），每次返回 220B 的**整个 visit 文档**只为显示一个整数，而这个数字 pageProps 里已经有了 | 需要加一个批量接口（或并进已有的 `/comments/counts` 那种合并器），属于接口改动 |
+| apple 皮肤 46KB CSS 在全局样式表里 | 全局 CSS 72.7KB（gzip 16.3KB），其中 apple 46.2KB + markdown 相关 43KB；用 `default` 或自定义主题时那 46KB 是纯浪费 | 挪成按主题加载要处理"apple.css 依赖在 Tailwind 之后引入"的顺序问题，得对两种皮肤做视觉对比 |
+| 字体走 `static.zeoseven.com` | 本机 DNS 解析不出来，每页都有一次 preconnect + 一个 stylesheet 请求卡在 DNS 上；而且 CSS 是水合后才提升的，字体下载**最早也要等 JS 跑完** | 正确解法是把字体自托管到 `public/fonts/`（代码注释里就写着这条路），CJK 按 unicode-range 切子集比较费事 |
+
 ## 想继续压的话
 
 - `highlight.js` 用的是 lowlight 的 common 语言集（约 35 种），如果站点只用少数几种语言，可以换成 `highlight.js/lib/core` + 手动注册，能再省几十 KB。

@@ -1,5 +1,7 @@
 /** 搜索类查询的时间上限：正文全文 $regex 扫描很贵，超时就放弃，别把库拖死。 */
 const SEARCH_MAX_TIME_MS = 5000;
+/** 单次搜索最多返回多少条（见 searchByString 里的说明） */
+const SEARCH_MAX_RESULTS = 200;
 
 import { pickCoverFromContent } from 'src/utils/coverFromContent';
 import { safeDecodeURIComponent } from 'src/utils/safeDecode';
@@ -545,9 +547,15 @@ export class ArticleProvider {
       },
     ];
     const articles = await this.articleModel
-      .find({
-        $and,
-      })
+      .find(
+        {
+          $and,
+        },
+        // 只算字数，却把**每篇文章的全部字段**（含正文里所有其它内容）都拉回来：
+        // explain 显示 examined=106 个完整文档 ≈ 200KB，而真正用到的只有 content。
+        // 这个函数在每次启动、以及每次增删改文章后 30 秒都会跑一遍。
+        { content: 1 },
+      )
       .exec();
     articles.forEach((a) => {
       total = total + wordCount(a?.content || '');
@@ -853,15 +861,16 @@ export class ArticleProvider {
     const total = await this.articleModel.count(query).exec();
     // 过滤私有文章
     if (isPublic) {
+      // ⚠️ 以前这里是 **N+1**：循环里对每篇文章 `await categoryModal.findOne({name})`，
+      //    一页 10 篇就是 10 次额外查询，而 `pageSize=-1`（前台静态生成）是**全部文章**各查一次。
+      //    分类表一共就那么几条，一次查完做成 Set 就够了（getPrivateCategoryNames 已有现成实现）。
+      const privateCategories = new Set(await this.getPrivateCategoryNames());
       const tmpArticles: any[] = [];
       for (const a of articles) {
         //@ts-ignore
         const isPrivateInArticle = a?._doc?.private || a?.private;
-        const category = await this.categoryModal.findOne({
-          //@ts-ignore
-          name: a?._doc?.category || a?.category,
-        });
-        const isPrivateInCategory = category?.private || false;
+        //@ts-ignore
+        const isPrivateInCategory = privateCategories.has(a?._doc?.category || a?.category);
         const isPrivate = isPrivateInArticle || isPrivateInCategory;
         if (isPrivate) {
           tmpArticles.push({
@@ -1191,6 +1200,10 @@ export class ArticleProvider {
       .find({
         $and,
       })
+      // 搜索没有分页：一个单字查询能匹配全站所有文章，于是一次请求就把整个语料库
+      // （连正文）拉进 Node，再做 O(n²) 去重。maxTimeMS 只挡住了慢查询，挡不住"查得快但查得多"。
+      // 搜索结果超过这个数量对用户已经没有意义（前台也只显示一屏），所以直接在库里截断。
+      .limit(SEARCH_MAX_RESULTS)
       .maxTimeMS(SEARCH_MAX_TIME_MS)
       .exec();
     const s = keyword.toLocaleLowerCase();
