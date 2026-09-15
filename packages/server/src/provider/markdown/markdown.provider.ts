@@ -1,4 +1,4 @@
-import { stripFrontMatter } from 'src/utils/frontMatter';
+import { articleOverviewMarkdown } from 'src/utils/articleExcerpt';
 import { Injectable, Logger } from '@nestjs/common';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js';
@@ -51,7 +51,11 @@ export class MarkdownProvider {
   }
 
   getDescription(content: string) {
-    // 导入/粘贴进来的正文可能带 YAML front matter，那是元信息不是内容
-    return stripFrontMatter(content).split('<!-- more -->')[0];
+    // 委托给共享的 articleOverviewMarkdown：RSS 的 description 与前台列表摘要是同一个
+    // 产品语义（`<!-- more -->` 之前；没有标记就取前 200 字），两份实现必漂移 ——
+    // 这里的旧实现 `stripFrontMatter(content).split('<!-- more -->')[0]` 就会在
+    // 代码块里的示例标记处截断，还会把没有标记的全文整个塞进 description。
+    // 剥 front matter 的逻辑也在那条链里（articleExcerpt → frontMatter）。
+    return articleOverviewMarkdown(content);
   }
 }

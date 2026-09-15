@@ -64,6 +64,14 @@ export default function (props: {
   showExpirationReminder: boolean;
   showEditButton: boolean;
   cover?: string | null;
+  /**
+   * 服务端算好的列表摘要（列表接口带 withExcerpt 时下发，此时 content 不再进
+   * __NEXT_DATA__）。语义与 articleOverviewMarkdown 逐字符一致，对照测试在
+   * __tests__/articleExcerptParity.spec.ts；缺失（老缓存页）时回退本地计算。
+   */
+  excerpt?: string;
+  /** 服务端算好的正文首图（同上）；缺失时回退本地扫 content。cover 仍然优先。 */
+  firstImage?: string;
   /** 正文渲染器；不传就用轻量版（列表摘要）。文章页会传完整版。 */
   markdownRenderer?: React.ComponentType<{ content: string }>;
   /** 数字 id：后台「编辑」链接要用它（props.id 可能是拼音别名）。 */
@@ -108,7 +116,9 @@ export default function (props: {
       }
       // 列表摘要里的图换成 300px 缩略图（原图实测能到 3.5MB，摘要里根本看不清）；
       // 点开放大仍然是原图（img.tsx 会补 data-zoom-src）。文章页正文不走这个分支。
-      return withThumbnailImages(articleOverviewMarkdown(content));
+      // 摘要优先用 server 算好的 props.excerpt（withExcerpt 的列表响应里没有 content，
+      // 首页因此少背 25KB 全文）；老缓存页没有这个字段就照旧本地算，两边结果一致。
+      return withThumbnailImages(props.excerpt ?? articleOverviewMarkdown(content));
     } else {
       return content.replace("<!-- more -->", "");
     }
@@ -121,12 +131,17 @@ export default function (props: {
   }, [props.type, props.content]);
 
   // 列表卡的缩略图：cover 优先，没有就取**正文首图**。
-  // 用完整正文而不是 calContent（摘要只有 200 字，首图常常在后面）。
+  // 首图优先用 server 算好的 props.firstImage（withExcerpt 的列表响应里没有 content，
+  // 本地扫不到图）；老缓存页没有这个字段才回退到本地扫完整正文 —— 都不是 calContent
+  // （摘要只有 200 字，首图常常在后面）。
   // 本站 53 篇文章一张 cover 都没设，而 Apple 皮肤的列表是「白底 + 发丝线 + 灰字」，
   // 没有图就只剩黑白灰 —— 这是「看起来很单调」的主因之一。
   const listImage = useMemo(
-    () => (props.type == "overview" ? listCardImage(props.cover, content) : null),
-    [props.type, props.cover, content],
+    () =>
+      props.type == "overview"
+        ? listCardImage(props.cover, content, props.firstImage)
+        : null,
+    [props.type, props.cover, props.firstImage, content],
   );
   // 标签做成柔和的彩色胶囊（Apple 的做法：大面积中性色 + 少量低饱和彩色）
   const overviewTags = useMemo(

@@ -143,7 +143,11 @@ describe("接线：只有 Apple 皮肤显示，默认皮肤版面不变", () => 
 
   it("缩略图只在列表卡渲染，用的是完整正文而不是 200 字摘要", () => {
     expect(postCard).toContain("<ListThumb");
-    expect(postCard).toMatch(/props\.type == "overview" \? listCardImage\(props\.cover, content\)/);
+    // 首图优先用 server 从**完整正文**算好的 props.firstImage（列表响应不再带 content），
+    // 缺失时回退本地扫 content —— 无论哪条路都不是 calContent（200 字摘要里常常没有首图）
+    expect(postCard).toMatch(
+      /props\.type == "overview"\s*\?\s*listCardImage\(props\.cover, content, props\.firstImage\)/
+    );
     expect(postCard).not.toContain("listCardImage(props.cover, calContent)");
   });
 

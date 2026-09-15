@@ -72,6 +72,8 @@ const Home = (props: IndexPageProps) => {
             catelog={article.category}
             tags={article.tags}
             content={article.content || ""}
+            excerpt={article.excerpt}
+            firstImage={article.firstImage}
             type={"overview"}
             enableComment={props.layoutProps.enableComment}
             copyrightAggreement={props.layoutProps.copyrightAggreement}

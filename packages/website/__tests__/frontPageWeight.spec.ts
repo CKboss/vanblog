@@ -81,7 +81,11 @@ describe("fullSizeOfThumb（放大时要看原图）", () => {
 describe("接线", () => {
   it("列表摘要走缩略图，文章页正文不走", () => {
     const card = strip(read("components/PostCard/index.tsx"));
-    expect(card).toContain("withThumbnailImages(articleOverviewMarkdown(content))");
+    // 摘要优先用 server 下发的 excerpt（withExcerpt 的列表响应里没有 content，
+    // 首页因此不再把 25KB 全文塞进 __NEXT_DATA__）；老缓存页回退本地计算
+    expect(card).toContain(
+      "withThumbnailImages(props.excerpt ?? articleOverviewMarkdown(content))"
+    );
     // 文章页那条分支（type != overview）必须保持原样：读者点开文章就是要看大图
     expect(card).toContain('content.replace("<!-- more -->", "")');
   });

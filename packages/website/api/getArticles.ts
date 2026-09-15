@@ -11,6 +11,8 @@ export interface GetArticleOption {
   sortCreatedAt?: SortOrder;
   sortTop?: SortOrder;
   withWordCount?: boolean;
+  /** 让服务端直接下发列表摘要（excerpt/firstImage），列表响应不再带全文 content */
+  withExcerpt?: boolean;
 }
 export const getArticlesByOption = async (
   option: GetArticleOption

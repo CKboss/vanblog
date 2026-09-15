@@ -28,6 +28,11 @@ export async function getIndexPageProps(): Promise<IndexPageProps> {
   const pageSize = sanitizeArticlesPerPage(data.meta.siteInfo?.articlesPerPage);
   const { articles } = await getArticlesByOption({
     page: 1,
+    // 列表卡只需要摘要和首图，让 server 直接算好（withExcerpt）并把全文 content 剥掉：
+    // 首页以前把 5 篇全文（25,053 B）塞进 __NEXT_DATA__，而卡片只渲染 3,263 B 摘要，
+    // 87% 白送（__NEXT_DATA__ 占首页 gzip 体积 54.8%）。
+    toListView: true,
+    withExcerpt: true,
     pageSize,
   });
   return {
@@ -196,6 +201,9 @@ export async function getPagePagesProps(
   const pageSize = sanitizeArticlesPerPage(data.meta.siteInfo?.articlesPerPage);
   const { articles } = await getArticlesByOption({
     page: currPage,
+    // 同 getIndexPageProps：分页页也是列表卡，只要摘要不要全文
+    toListView: true,
+    withExcerpt: true,
     pageSize,
   });
   return {

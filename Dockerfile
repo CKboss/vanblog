@@ -172,7 +172,17 @@ ENV npm_config_sharp_binary_host=${VAN_BLOG_SHARP_BINARY_HOST}
 ENV npm_config_sharp_libvips_binary_host=${VAN_BLOG_SHARP_LIBVIPS_HOST}
 RUN echo "sharp 预编译源: ${npm_config_sharp_binary_host}" && \
     echo "libvips 预编译源: ${npm_config_sharp_libvips_binary_host}"
-COPY ./packages/server/ .
+# ⚠️ 以前这里是 `COPY ./packages/server/ .` + `pnpm i`：packages/server 底下**没有 lockfile**，
+# 于是每次构建都现场解析 `^` 范围 —— mongoose/axios/express/@nestjs 全都可能漂到新版本。
+# 后果是镜像不可复现，而且"依赖升级"是在构建时随机发生的（可能意外修好一个漏洞，
+# 也可能意外炸掉一个 API）。现在和 admin_builder / website_builder 一样走
+# workspace + `--frozen-lockfile`：装的就是仓库里 pnpm-lock.yaml 钉住的那些版本。
+COPY ./package.json ./
+COPY ./pnpm-lock.yaml ./
+COPY ./pnpm-workspace.yaml ./
+COPY ./tsconfig.base.json ./
+COPY ./patches ./patches
+COPY ./packages/server ./packages/server
 # tree-sitter 系列（swagger-ui-react 带进来的幽灵传递依赖，源码里没有任何地方 import）
 # 在 musl 下用 node-gyp 编译会卡死，这里跳过；不影响运行时。sharp 不在名单里。
 RUN printf 'never-built-dependencies[]=tree-sitter\nnever-built-dependencies[]=tree-sitter-json\nnever-built-dependencies[]=tree-sitter-yaml\n' >> /app/.npmrc
@@ -189,8 +199,29 @@ RUN pnpm config set network-timeout 600000 -g
 RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
-RUN pnpm i
+RUN pnpm install --frozen-lockfile --filter "@vanblog/server..."
+WORKDIR /app/packages/server
 RUN pnpm build
+# ⚠️ 别想着用 node-linker=hoisted 把 node_modules 摊平后直接拷给 runner（试过了，两个坑）：
+#   1) 扁平布局会让 `types-ramda` 这种**间接**依赖出现在顶层，TypeScript 就能解析到它了 ——
+#      而 `types-ramda@0.29.6` 的 .d.ts 用了 **TS 5.0 的 `const` 类型参数**，本仓库是 TS 4.9.5，
+#      `nest build` 当场报 24 个 TS1434 语法错误（`skipLibCheck` 救不了：它跳过类型检查，不跳过解析）。
+#      默认的符号链接布局下它躺在 `.pnpm/` 里、顶层看不见，TS 解析不到就当 any 放过，所以一直没炸。
+#   2) hoisted + --filter 实测装出 **2313 个包 / 2.0GB**，比原来的独立安装（~300MB）大得多，
+#      而且 `pnpm prune --prod` 在 workspace 里会弹交互确认（"will be removed and reinstalled
+#      from scratch. Proceed?"），非 TTY 构建里它什么也没干就退出了 —— dev 依赖一个没少。
+# 正解是 `pnpm deploy`：它就是为"把某个 workspace 包连同**生产依赖**导出成一个自包含目录"设计的。
+# 产物 /deploy/node_modules 里的符号链接全部指向**同一棵** .pnpm/（相对路径、自包含），
+# 所以 runner 只拷这一份就能跑；实测 175MB、34 个顶层包，typescript/jest/webpack/ts-node 全都不在。
+WORKDIR /app
+RUN pnpm --filter @vanblog/server deploy --prod /deploy && \
+    echo "deploy 产物：$(du -sh /deploy/node_modules | cut -f1)，顶层包 $(ls /deploy/node_modules | wc -l) 个" && \
+    for m in typescript jest webpack ts-node @nestjs/cli; do \
+      if [ -e /deploy/node_modules/$m ]; then echo "⚠️ dev 依赖没摘干净：$m"; fi; \
+    done && \
+    for m in @nestjs/core mongoose express axios sharp; do \
+      if [ ! -e /deploy/node_modules/$m ]; then echo "✗ 缺运行时依赖：$m"; exit 1; fi; \
+    done
 
 # 前台：Alpine + sharp。musl 版本号可能是 1.2.4_git*，sharp 0.31 会报
 # Installation error: Invalid Version。用 0.32.6 + 官方 musl prebuild，并装 vips 编译兜底。
@@ -368,8 +399,9 @@ COPY ./packages/waline/package.json ./
 COPY --from=waline_builder /app/waline/node_modules ./node_modules
 # 复制 server
 WORKDIR /app/server
-COPY --from=server_builder /app/node_modules ./node_modules
-COPY --from=server_builder /app/dist/src/ ./
+# node_modules 来自 `pnpm deploy --prod` 的自包含产物（只有生产依赖，175MB 而不是 2.0GB）
+COPY --from=server_builder /deploy/node_modules ./node_modules
+COPY --from=server_builder /app/packages/server/dist/src/ ./
 # 复制 website
 WORKDIR /app/website
 COPY --from=website_builder  /app/packages/website/.next/standalone/ ./

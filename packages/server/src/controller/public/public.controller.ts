@@ -187,6 +187,7 @@ export class PublicController {
     @Query('toListView') toListView = false,
     @Query('regMatch') regMatch = false,
     @Query('withWordCount') withWordCount = false,
+    @Query('withExcerpt') withExcerpt = false,
     @Query('category') category?: string,
     @Query('tags') tags?: string,
     @Query('sortCreatedAt') sortCreatedAt?: SortOrder,
@@ -212,6 +213,8 @@ export class PublicController {
       sortTop,
       sortCreatedAt,
       withWordCount,
+      // 前台首页/分页用「toListView + withExcerpt」拿摘要而不再拿全文（见 getByOption）
+      withExcerpt,
     };
     // 三个 sort 是完全排他的。
     const data = await this.articleProvider.getByOption(option, true);

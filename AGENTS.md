@@ -3314,7 +3314,7 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
 
 **A. 依赖与镜像（要动就得能跑构建；本会话 podman 用不了，所以整批推后）**
 
-1. **镜像的 server/waline/cli 三个 stage 不用 lockfile**（`Dockerfile:175+192` 直接 `pnpm i`，
+1. **镜像的 server stage 不用 lockfile**（**已落地，见 §7.43**；waline / cli 两个 stage 仍未 lockfile 化）。原始记录：（`Dockerfile:175+192` 直接 `pnpm i`，
    `packages/server/` 下没有 pnpm-lock.yaml）：镜像不可复现，`mongoose ^7.6.6` / `axios ^1.6.2` /
    `express ^4.18.2` / `@nestjs/* ^9.4.3` 每次构建都重新解析 —— 今天构建可能悄悄带上 mongoose 7.8.x
    （是"意外修好"，同样也可能意外坏）。**这也意味着下面所有依赖升级在改成 lockfile 之前都不保证进得了镜像。**
@@ -3330,7 +3330,7 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
    compressing → 1.10.5、`markdown-it-katex`（2016 年就弃坑、XSS **无修复版本**）→ `@traptitech/markdown-it-katex`。
    sharp 0.32.6 → 0.35.4 顺带能**删掉整套 `VAN_BLOG_SHARP_*_HOST` 构建参数**（≥0.33 的预编译包
    走 npm optionalDependencies），并解开 Node 22 的路。
-3. **runner 里带进了 394 个 dev 包 ≈ 121MB**（typescript 自己就 64MB，还有 webpack/jest/ts-node/
+3. ~~runner 里带进了 394 个 dev 包 ≈ 121MB~~ **已落地，见 §7.43**（deploy 之后 server 的 node_modules 是 191.6MB / 34 个顶层包）。原始记录：（typescript 自己就 64MB，还有 webpack/jest/ts-node/
    supertest/@nestjs/cli）：`Dockerfile:192` 全量 `pnpm i` → `:367` 把整个 node_modules 拷进 runner。
    构建后加一句 `pnpm prune --prod` 即可。
 4. **没用 `pnpm fetch`，且源码在 install 之前 COPY**（admin `:99`→`:126`，website `:242`→`:276`）：
@@ -3595,12 +3595,105 @@ sidecar 过滤、offline+mock-curl 的 full 两种备份都写 sidecar 且 verif
 （`script` 起真 pty）/参数校验/dispatcher 与菜单与 --help 接线/老菜单编号不变。
 既有套件只改了两处断言：download-fallback 的顺序（67→78 条）与 backup-restore 的版本号 v0.6.0。
 
+### 7.42 服务端文章摘要（withExcerpt）：列表页不再下发全文（§7.40 C-11 的落地）
+
+前台首页/分页以前把每篇列表文章的**全文**带回浏览器：`getIndexPageProps` / `getPagePagesProps`
+调 `getArticlesByOption` 时没传 `toListView`，5 篇正文 25,053 B 全进 `__NEXT_DATA__`，
+而卡片只渲染 3,263 B 摘要（**87% 白送**；`__NEXT_DATA__` 占首页 gzip 的 54.8%）。
+
+现在摘要在 **server** 算：`packages/server/src/utils/articleExcerpt.ts` 是
+`packages/website/utils/articleExcerpt.ts` 的**逐字符移植**（围栏感知的 `findMoreMarker`、
+200 字回退、#410 的截断链接补全、代理对安全），并且只 import 已有的 `./frontMatter`（不重复实现）。
+公开列表接口 `GET /api/public/article` 新增 **`withExcerpt`** 开关（显式 opt-in，
+**不传时响应一个字节都不变** —— 实测 `cmp` 逐字节相同），与 `toListView` 搭配时列表项带
+`excerpt` + `firstImage`（`pickCoverFromContent(content,{preferLocal:false})`，
+与前台 `firstImageOfMarkdown` 同规则），`content` / `password` 剥掉。
+
+⚠️ 两个顺序不能错：
+
+1. **先过滤私密文章，再算摘要**（provider 里的顺序反了就会把加密正文的前 200 字放进公开列表）；
+2. 聚合分页与 `find()` 回退两条路径的**字段形状必须一致**（有专门的 spec 逐字段对比 +
+   真 API A/B 钉住；唯一差别是 JSON 键的插入顺序，对消费者不可见）。
+
+前台 `PostCard` 用 `props.excerpt ?? articleOverviewMarkdown(content)`、
+`listCardImage(cover, content, props.firstImage)` —— **保留本地回退**，
+老的 ISR 缓存页与文章页照旧工作。`hasToc` 那条确认过：`showToc` 对 `type === "overview"`
+恒为 false，所以列表卡从来不需要正文来算目录。
+
+**两边一致性由 `packages/website/__tests__/articleExcerptParity.spec.ts`（38 用例，
+跨包 import 两个实现跑同一组向量）钉住 —— 改任何一边都必须同步**：
+more 标记 / 标记在围栏代码块里 / front matter / 200 字回退 / 截在 `[文字](url)` 中间 /
+截在 emoji 代理对中间 / 空与 undefined / CJK 按字符不按字节，外加 13 组首图向量
+（全站 53 篇跑下来 server 与 website 的 firstImage **0 处不一致**，16 篇有首图）。
+
+`markdown.provider.getDescription`（RSS 用）改为委托共享实现，两份实现不会再漂。
+**一处有意的可见变化**：9 篇没有 `<!-- more -->` 的文章，RSS 的 description 从"渲染后的全文"
+变成"渲染后的 200 字摘要"（与 §7.3 的全站摘要语义一致；全文仍在 `content:encoded` 里，
+阅读器不会丢内容），44 篇有标记的**逐字节不变**。
+
+实测（真跑，不是推算）：首页 HTML 114,485 → **92,228 B**，gzip 33,156 → **22,661 B（−31.7%，
+与审计预测的 −31.8% 吻合）**；`__NEXT_DATA__` 36,297 → **14,040 B**（gzip −55.5%）；
+pageProps 里的正文 25,053 → **0 B**，换成 3,263 B 摘要。
+把 `__NEXT_DATA__` / buildId / dev 的 `?ts=` 归一化之后，首页 HTML 与改前**逐字节一致**；
+5 张卡片的可见标题/摘要文字/图片地址全部相同；`/page/2` gzip −25.7%；
+文章页、admin 列表接口、tag/category 接口全部不变（admin 加 `withExcerpt` 也无效，
+这个 flag 只加在公开控制器上）。
+
+已知的小分歧（当前数据没踩到）：server 的 `HTML_IMAGE` 用 `\\bsrc`（会匹配 `data-src=`）
+而 website 用 `(?<![-\\w])src`，且 server 拒绝超过 2000 字符的 URL；53 篇里没有 `data-src`。
+没去动 `transferRemoteImages`（改它会连带改变"远程图片本地化"的行为，是另一个决策）。
+
+### 7.43 镜像的 server 依赖：workspace + frozen lockfile + pnpm deploy（§7.40 A-1/A-3 的落地）
+
+以前 `server_builder` 是 `COPY ./packages/server/ .` + `pnpm i`：**没有 lockfile**，
+每次构建现场解析 `^` 范围（mongoose/axios/express/@nestjs 都可能漂），镜像不可复现，
+而且"依赖升级"是在构建时随机发生的。另外 `pnpm i` 装的是全量（含 devDependencies），
+runner 又把整个 `node_modules` 拷进生产镜像 —— 实测 394 个 dev 包 ≈ **121MB**
+（typescript 自己 64MB，还有 webpack/jest/ts-node/supertest/@nestjs/cli）。
+
+现在和 admin_builder / website_builder 一样走 workspace：拷根 manifests（`package.json`、
+`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`tsconfig.base.json`、`patches/`）+ `packages/server`，
+`pnpm install --frozen-lockfile --filter "@vanblog/server..."` → `pnpm build` →
+**`pnpm --filter @vanblog/server deploy --prod /deploy`**，runner 只拷
+`/deploy/node_modules`（**191.6MB / 34 个顶层包**，typescript、jest 都不在）与
+`/app/packages/server/dist/src/`。
+
+⚠️ **别走 `node-linker=hoisted` 那条路**（试过了，两个坑，Dockerfile 注释里也写着）：
+
+1. 扁平布局会把 `types-ramda` 这种**间接**依赖抬到顶层，于是 TypeScript 能解析到它了 ——
+   而 `types-ramda@0.29.6` 的 `.d.ts` 用了 **TS 5.0 的 `const` 类型参数**，本仓库是 TS 4.9.5，
+   `nest build` 当场 24 个 TS1434 语法错误（`skipLibCheck` 救不了：它跳过类型检查，不跳过解析）。
+   默认的符号链接布局下它躺在 `.pnpm/` 里、顶层解析不到，TS 当 any 放过，所以一直没炸。
+2. hoisted + `--filter` 实测装出 **2313 个包 / 2.0GB**，而 `pnpm prune --prod` 在 workspace 里会
+   **弹交互确认**（"will be removed and reinstalled from scratch. Proceed?"），
+   非 TTY 构建里它什么也没干就退出了 —— dev 依赖一个没少，而那一层构建居然还算"成功"
+   （日志里只有 `prune 前：2.0G`，`prune 后` 那行永远没出现）。
+   **教训：构建日志里出现交互式提问，就等于那一步没做。**
+
+`pnpm deploy` 是关键：它就是为"把某个 workspace 包连同**生产依赖**导出成自包含目录"设计的，
+产物里的符号链接全部指向**同一棵** `.pnpm/`（相对路径、自包含），所以 runner 只拷一份就能跑。
+顺带一个坑：合并同名目录**不能用 `cp -a`** —— 这些文件与目标目录是同一个 inode（硬链接），
+cp 会报 `are the same file` 并非 0 退出、整层构建失败；用 `tar -cf - -h … | tar -xf - …` 覆盖即可。
+
+**验证**（podman 在本会话恢复可用之后做的，不再靠"看起来对"）：
+`build-image-local.sh --stage server_builder` 单阶段通过；完整镜像构建通过（5 个 stage 全绿）；
+进 stage 镜像核对 `/deploy/node_modules` = 191.6M / 34 个顶层包、`.pnpm` 自包含、
+`mongoose` 的符号链接指向 `.pnpm/mongoose@7.6.6/...`、typescript 与 jest 都不在、
+`dist/src/main.js` 存在、**sharp 的 musl 预编译 `.node` 在**（说明 `npm_config_sharp_*_host`
+那套 ENV 仍然生效）；再用这个镜像起一整套栈（mongo 7.0 + vanblog），
+`/`、`/admin`、`/api/public/meta`、`/api/public/theme`、`/robots.txt`、`/sitemap.xml`、
+`/feed.xml` 全部 200，容器内 `require.resolve('@nestjs/core')` 与 `require.resolve('sharp')` 都成功。
+⚠️ `build-image-local.sh` 的**冒烟测试在本机跑不起来**，原因与本次改动无关：
+它给 `podman run` 传了 `--link`（这个 podman 版本不认：`Error: unknown flag: --link`），
+清理临时 mongo 目录时还会撞上 root 属主文件的 `Permission denied`。
+本机验证请改用 `vanblog_dev/run-image-stack.sh`（用容器 IP + `--add-host`，不依赖 `--link`）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 657 用例：656 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
-| website `vitest run` | 61 文件 / 578 用例全绿 |
+| server `jest` | 690 用例：689 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
+| website `vitest run` | 62 文件 / 622 用例全绿 |
 | admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1105 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |

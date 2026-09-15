@@ -4,6 +4,7 @@ const SEARCH_MAX_TIME_MS = 5000;
 const SEARCH_MAX_RESULTS = 200;
 
 import { pickCoverFromContent } from 'src/utils/coverFromContent';
+import { articleOverviewMarkdown } from 'src/utils/articleExcerpt';
 import { safeDecodeURIComponent } from 'src/utils/safeDecode';
 import {
   articleDefaultsStage,
@@ -21,7 +22,12 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { CreateArticleDto, SearchArticleOption, UpdateArticleDto } from 'src/types/article.dto';
+import {
+  ArticleExcerptFields,
+  CreateArticleDto,
+  SearchArticleOption,
+  UpdateArticleDto,
+} from 'src/types/article.dto';
 import { Article, ArticleDocument } from 'src/scheme/article.schema';
 import { parseImgLinksOfMarkdown } from 'src/utils/parseImgOfMarkdown';
 import { wordCount } from 'src/utils/wordCount';
@@ -716,7 +722,12 @@ export class ArticleProvider {
   async getByOption(
     option: SearchArticleOption,
     isPublic: boolean,
-  ): Promise<{ articles: Article[]; total: number; totalWordCount?: number }> {
+  ): Promise<{
+    // withExcerpt 时列表项会多出 excerpt/firstImage 两个现算字段（见 ArticleExcerptFields）
+    articles: Array<Article & ArticleExcerptFields>;
+    total: number;
+    totalWordCount?: number;
+  }> {
     const query: any = {};
     const $and: any = [
       {
@@ -821,7 +832,8 @@ export class ArticleProvider {
     if (option.toListView) {
       view = this.listView;
     }
-    if (option.withWordCount) {
+    if (option.withWordCount || option.withExcerpt) {
+      // 两个开关都需要正文才能算（字数 / 摘要），先按完整视图取，算完再在下面剥掉。
       view = isPublic ? this.publicView : this.adminView;
     }
     const paging = sanitizePagination(option.page, option.pageSize, { allowUnlimited: true });
@@ -886,7 +898,32 @@ export class ArticleProvider {
       });
       resData.totalWordCount = totalWordCount;
     }
-    if (option.withWordCount && option.toListView) {
+    if (option.withExcerpt) {
+      // 为什么在 server 出摘要：首页/分页页以前把每篇列表文章的**全文**塞进前台的
+      // __NEXT_DATA__（实测首页 5 篇正文 25,053 B，卡片只渲染 3,263 B 摘要，87% 白送；
+      // __NEXT_DATA__ 占首页 gzip 体积的 54.8%）。摘要语义与前台**逐字符一致**：
+      // utils/articleExcerpt.ts 是 website/utils/articleExcerpt.ts 的移植，
+      // 对照测试在 website/__tests__/articleExcerptParity.spec.ts。
+      // ⚠️ 必须放在上面「过滤私密文章」**之后**跑：私密文章的 content 已被置空，
+      //    先算摘要再过滤会把加密正文的前 200 字泄进未鉴权的公开列表。
+      articles = articles.map((a: any) => {
+        const doc = a?._doc || a;
+        const content = typeof doc?.content === 'string' ? doc.content : '';
+        if (!content) {
+          return doc;
+        }
+        const item: any = { ...doc, excerpt: articleOverviewMarkdown(content) };
+        // 卡片缩略图兜底：正文里文档顺序的第一张可用图。preferLocal 关掉才和前台
+        // listCardImage 的取值规则一致（前台不按本站图床优先）；cover 存在时前台仍优先
+        // cover，这个字段只在「没设 cover」时补位。
+        const firstImage = pickCoverFromContent(content, { preferLocal: false });
+        if (firstImage) {
+          item.firstImage = firstImage;
+        }
+        return item;
+      });
+    }
+    if ((option.withWordCount || option.withExcerpt) && option.toListView) {
       // 重置视图
       resData.articles = articles.map((a: any) => ({
         ...(a?._doc || a),

@@ -74,12 +74,23 @@ export function firstImageOfMarkdown(content: string | null | undefined): string
 /**
  * 列表卡的缩略图地址：有 cover 用 cover，否则用正文首图；本站图床的换成缩略图。
  * 返回 null 表示这张卡不显示图（版面保持原样，不留空框）。
+ *
+ * `serverFirstImage`：列表接口带 withExcerpt 时 server 已经算好的「正文首图」
+ * （server 用 pickCoverFromContent(content, {preferLocal:false})，取值规则与这里的
+ * firstImageOfMarkdown 一致，对照测试见 __tests__/articleExcerptParity.spec.ts）。
+ * 给了它就不用再扫正文 —— 那种响应里 content 已被剥掉，本地根本扫不到；
+ * 没给（老缓存页 / 文章页）就照旧从 content 里找。
  */
 export function listCardImage(
   cover: string | null | undefined,
   content: string | null | undefined,
+  serverFirstImage?: string | null,
 ): { src: string; fallback: string | null } | null {
-  const raw = String(cover ?? "").trim() || firstImageOfMarkdown(content);
+  const raw =
+    String(cover ?? "").trim() ||
+    (serverFirstImage != null
+      ? String(serverFirstImage).trim()
+      : firstImageOfMarkdown(content));
   if (!raw || !isUsableImageUrl(raw)) return null;
   const thumb = toThumbnailUrl(raw);
   return { src: thumb, fallback: thumb === raw ? null : raw };
