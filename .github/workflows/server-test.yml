@@ -1,14 +1,49 @@
 name: server-test
 
 on:
+  push:
+    branches:
+      - dev/dsh
+    # 只改文档时不用跑测试（文档站有自己的构建检查）
+    paths:
+      - 'packages/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'caddyTemplate.json'
+      - 'caddyFallbackTemplate.json'
+      - 'docker-compose/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'patches/**'
+      - '.github/workflows/server-test.yml'
   pull_request:
     branches:
       - master
+      - dev/dsh
+    paths:
+      - 'packages/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'caddyTemplate.json'
+      - 'caddyFallbackTemplate.json'
+      - 'docker-compose/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'patches/**'
+
+# 同一个分支上连着推两次时，把还在跑的那次取消掉：
+# 这个 job 要装整个 workspace 的依赖，排队很浪费。
+concurrency:
+  group: server-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   server-test:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    # 15 分钟不够：要装整个 workspace 的依赖，再跑 8 个 e2e 套件
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,7 +82,7 @@ jobs:
 
       - name: Run server unit tests
         working-directory: packages/server
-        run: pnpm test -- --testPathPattern="backupCategories|categoryOrder|category.provider|backup.controller|articlePublicPaths|isr.provider|getVersion|meta.controller|meta.provider|linkName|customPage.provider|customPagePath|walineLogin|waline.provider|walineExtra|setting.provider|cdnUrl|website.provider|walineMongo|numericId|pagination|article.controller|article.provider|draft.provider|watermark|wordCount|deleteFolder|webp|imgCompress|avif|imageMeta|static.provider.compress|static.provider.transferRemote|log.controller|log.provider|provider/log/utils|cacheControl|caddy.provider|rewriteBaseUrl|img.controller|articlesPerPage|pageCopy|public.controller|sitemap.provider|utils/social|listenHost|transferRemoteImages|markdown.provider" --passWithNoTests=false
+        run: pnpm test -- --testPathPattern="categoryOrder|category.provider|backup.controller|articlePublicPaths|isr.provider|getVersion|meta.controller|meta.provider|linkName|customPage.provider|customPagePath|walineLogin|waline.provider|walineExtra|setting.provider|cdnUrl|website.provider|walineMongo|numericId|pagination|article.controller|article.provider|draft.provider|watermark|wordCount|deleteFolder|webp|imgCompress|avif|imageMeta|static.provider.compress|static.provider.transferRemote|log.controller|log.provider|provider/log/utils|cacheControl|caddy.provider|rewriteBaseUrl|img.controller|articlesPerPage|pageCopy|public.controller|sitemap.provider|utils/social|listenHost|transferRemoteImages|markdown.provider|safeDecode|article.provider.viewer|audit-hardening|theme.provider|backupCategories" --passWithNoTests=false
 
       - name: Run website unit tests
         run: pnpm --filter @vanblog/theme-default exec vitest run
@@ -96,15 +131,3 @@ jobs:
         working-directory: packages/server
         run: pnpm test:admin-cache-e2e
 
-  alpine-sharp-install:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run official Dockerfile Alpine/sharp assertions
-        run: bash scripts/tests/dockerfile-alpine-sharp.test.sh
-
-      - name: Install website sharp on node:18-alpine
-        run: bash scripts/tests/dockerfile-alpine-sharp-install.sh

@@ -95,7 +95,7 @@ SHA_DIR="$(ls -d "${ROOT}"/node_modules/.pnpm/js-sha256@*/node_modules/js-sha256
 if [[ -n "${NODE_BIN}" && -n "${SHA_DIR}" ]]; then
   setup_case
   source_script
-  for pair in "JiangOil|test-password-123" "admin|p@ss w0rd" "用户甲|密码漢字"; do
+  for pair in "blogadmin|test-password-123" "admin|p@ss w0rd" "用户甲|密码漢字"; do
     u="${pair%%|*}"
     pw="${pair##*|}"
     js="$(U="${u}" P="${pw}" SHA="${SHA_DIR}" "${NODE_BIN}" -e '

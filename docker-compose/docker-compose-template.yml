@@ -38,6 +38,12 @@ services:
       # VAN_BLOG_IP_GEO_TIMEOUT: '3000'
       # caddy 按需证书的域名白名单来自站点设置；多域名/CDN 场景需要放开时设 true
       # VANBLOG_CADDY_ASK_ALLOW_ALL: 'true'
+      # 关掉 /swagger（它默认公开，等于把整个后台 API 面摊给未登录用户；robots 的
+      # disallow 不是访问控制）。⚠️ 后台「关于」页与「Token 管理」页各有一个跳 /swagger 的链接，
+      # 关掉之后那两个链接会 404 —— 所以这里默认**不关**，你自己决定。
+      # VANBLOG_SWAGGER: 'false'
+      # next/image 允许优化的远程域名（逗号分隔）。默认空 = 只优化本站图片。
+      # VAN_BLOG_ALLOW_DOMAINS: 'cdn.example.com'
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static
@@ -57,6 +63,16 @@ services:
       # caddy 照样发 Alt-Svc，浏览器试连失败会自动退回 HTTP/2，不影响访问。
       - vanblog_https_port:443/udp
   mongo:
+    # mongod 干净关闭通常只要几秒，但 docker 默认只给 10 秒就 SIGKILL ——
+    # 慢盘或库大一点就会在 flush 中途被杀。WiredTiger 有 journal，重启会回放，
+    # 真损坏的概率不高（主要风险是宿主机断电），但多给 50 秒是免费的保险。
+    stop_grace_period: 60s
+    # 内存限制（默认注释掉）。2GB 小机建议 mongo 768m + vanblog 768m：
+    #   - mongo 别给到 512m 以下：WiredTiger 的缓存最小就要 256MB，再加连接与 journal 开销；
+    #     真要吃紧就配 command: ["mongod","--wiredTigerCacheSizeGB","0.25"]
+    #   - ⚠️ 开了 mem_limit 之后**整站备份可能被 OOM 杀**：导出用的是
+    #     `zstd -19 --long=27 -T0`（多线程 + 128MB 窗口），峰值能到 1GB 上下。
+    #     限制内存时请把压缩等级调低：VANBLOG_BACKUP_ZSTD_LEVEL: '12'（vanblog 服务的环境变量里设）
     # 这个 tag 由 ./vanblog.sh 在生成编排文件时填入（占位符 vanblog_mongo_image）：
     #   - **全新安装** → mongo:7.0（4.4 早在 2024-02 就 EOL 了，没有安全更新；
     #     mongoose 7.6 / driver 5.9 官方支持到 7.0，本机开发环境也是 7.0.14）

@@ -71,19 +71,39 @@ assert_contains_in() {
 
 assert_contains_in "${WEBSITE_STAGES}" "node:20-alpine" "website builder uses node:20-alpine"
 assert_contains_in "${WEBSITE_STAGES}" "SHARP_IGNORE_GLOBAL_LIBVIPS=1" "website builder ignores Alpine system libvips"
-assert_contains_in "${WEBSITE_STAGES}" "vips-dev" "website builder installs vips-dev"
-assert_contains_in "${WEBSITE_STAGES}" "libc6-compat" "website builder installs libc6-compat"
-assert_contains_in "${WEBSITE_STAGES}" "fftw-dev" "website builder installs fftw-dev"
-assert_contains_in "${WEBSITE_STAGES}" "python3" "website builder still has python3 for node-gyp fallback"
-assert_contains_in "${WEBSITE_STAGES}" "make" "website builder still has make for node-gyp fallback"
-assert_contains_in "${WEBSITE_STAGES}" "g++" "website builder still has g++ for node-gyp fallback"
+# ⚠️⚠️ 这几条以前是**假绿**：它们在整个 stage 文本里搜 "vips-dev" / "fftw-dev"，
+# 而 stage 里恰好有一行注释写着「去掉 vips-dev/fftw-dev：sharp 用 musl 预编译包」——
+# 于是断言匹配到的是**说明为什么没有装**的那句注释，结论正好反了。
+# 这个坑本仓库已经踩过很多次（"守卫断言匹配到了描述陷阱的注释"），
+# 规矩：断言前**先剥注释**，并且只针对真正的那条 `RUN apk add` 行。
+WEBSITE_APK_LINE="$(printf '%s\n' "${WEBSITE_STAGES}" |
+  sed 's|^[[:space:]]*#.*||' |
+  grep -E '^[[:space:]]*RUN apk add' | head -1)"
+
+if [[ -n "${WEBSITE_APK_LINE}" ]]; then
+  pass "website builder 有一条 RUN apk add（${WEBSITE_APK_LINE##*apk add}）"
+else
+  fail "website builder 里找不到 RUN apk add 行"
+fi
+
+for pkg in libc6-compat python3 make g++; do
+  assert_contains_in "${WEBSITE_APK_LINE}" "${pkg}" "apk add 装了 ${pkg}（node-gyp 兜底 + musl 兼容）"
+done
+for pkg in vips-dev fftw-dev; do
+  if printf '%s' "${WEBSITE_APK_LINE}" | grep -qF -- "${pkg}"; then
+    fail "apk add 不该再装 ${pkg}（sharp 走 musl 预编译包，装了会白白拖慢构建）"
+  else
+    pass "apk add 没有 ${pkg}（sharp 用预编译二进制）"
+  fi
+done
 assert_contains_in "${WEBSITE_STAGES}" "pnpm install --frozen-lockfile" "website builder keeps frozen lockfile"
 assert_contains_in "${WEBSITE_STAGES}" "pnpm@8.11.0" "website builder pins pnpm 8.11.0 (repo packageManager, not latest)"
 
-if [[ "${WEBSITE_STAGES}" == *"apk add"* ]] && [[ "${WEBSITE_STAGES}" == *"vips-dev"* ]]; then
-  pass "website builder apk add includes vips-dev"
+# 同上：注释里出现 vips-dev 不算数，只看真正的 apk 行
+if printf '%s' "${WEBSITE_APK_LINE}" | grep -q "apk add"; then
+  pass "website builder 确实在镜像里装系统包（而不是靠源码编译 sharp）"
 else
-  fail "website builder apk add includes vips-dev"
+  fail "website builder 的 apk add 行没解析出来"
 fi
 
 # ENV must be set before pnpm install in the website builder stage.

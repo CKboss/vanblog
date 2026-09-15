@@ -75,7 +75,7 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
     各集合  ：articles 59 · statics 93 · visits 8746 …
 恢复成功
 > 核对结果
-  ✓ /api/public/meta → 200     ✓ 站点名：酱_油 aka JiangOil
+  ✓ /api/public/meta → 200     ✓ 站点名：示例站点 aka blogadmin
   ✓ / → 200                    ✓ /admin → 200
 整站重置完成
   登录账号：用备份里原来的账号（初始化用的临时账号 reset-init 已被覆盖）

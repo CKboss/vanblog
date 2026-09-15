@@ -2833,9 +2833,9 @@ Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 
 集合文档文件数/各集合条数，约 10 行），`--verbose` 或 `VANBLOG_VERBOSE=1` 才给全文。
 
 **实测**（本机 podman 起的真镜像 + 用户那份 66MB 生产整站备份，全新空库）：
-`reset` 一条命令跑通，rc=0；库里 `users` 变成 `['JiangOil']`（临时账号被覆盖）、13 个集合、
+`reset` 一条命令跑通，rc=0；库里 `users` 变成 `['blogadmin']`（临时账号被覆盖）、13 个集合、
 articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面；
-`/`、`/admin`、`/api/public/meta`、`/robots.txt` 全 200，站点名恢复成 `酱_油 aka JiangOil`；
+`/`、`/admin`、`/api/public/meta`、`/robots.txt` 全 200，站点名恢复成 `示例站点 aka blogadmin`；
 重启后用**恢复出来的 JWT 密钥**签的 token 调 `/api/admin/meta`、`/api/admin/article` 都是 200
 （证明 restart 那一步是必要的）；`/sitemap.xml` 恢复后立刻访问是 404、约一两分钟后 200
 （生成有延迟，核对函数会提示"刚恢复完可能还在渲染"而不是报失败）。
@@ -3243,14 +3243,76 @@ mongod 重启时每个请求要干等半分钟）、`connectTimeoutMS` 10s、`so
 ⚠️ vitest 里 `vi.useFakeTimers()` 只能开在需要它的那个用例里：另一个用例的 fetch 桩用了真实
 `setTimeout`，假定时器一开它就永远不触发（表现为"测试超时 5000ms"而不是断言失败，很容易看错方向）。
 
+### 7.38.4 仓库卫生与 CI（三方向审计的收尾）
+
+审计还查了依赖、镜像、编排、CI 与泄密面。这一节记**已经落地的**；剩下的按优先级列在
+§7.40「审计遗留清单」里，都是量化过的，别当"没人发现"重复提。
+
+**入库文件里的生产标识已脱敏**：`codebonobo.tech`（生产域名）与 `JiangOil`（真实后台用户名）
+以前出现在 3 个 server spec、1 个脚本测试、2 篇文档和 AGENTS 里 —— 不是凭据，但把公开 fork
+和生产站点绑在了一起，还白送攻击者一个准确的用户名（登录有限流，喷洒成本变高，但没必要送）。
+统一换成 `example.com` / `blogadmin` / `示例站点`。
+⚠️ 脱敏之后 `stego.spec.ts` 的"小图降级重复次数"用例红了：它断言 `repetition < 3`，
+而载荷从 45 字节变成 42 字节之后，400×400 就放得下 3 份了 —— **断言隐式依赖了测试数据的长度**。
+改成显式构造 70 字节的载荷，并把窗口写在注释里（≤50 字节 → 3 份放得下；200 字节 → 1 份都放不下）。
+`scripts/tests/build-image-local.test.sh` 里那条"不许有内网地址"的断言原本把**具体那个内网 IP**
+写进了测试文件（等于把地址本身提交进公开仓库），改成匹配整个 RFC1918 段的正则。
+
+**镜像里 next/image 的默认允许域名清空**：`Dockerfile` 两处
+`ENV VAN_BLOG_ALLOW_DOMAINS="pic.mereith.com"` → `""`。原值是**上游作者的图床域名**，
+意味着每个 fork 部署的图片优化器默认都会去别人域名取图；那个域名一旦过期被注册，
+就等于让第三方通过你的 `/_next/image` 提供内容（还顺带放大 next 13 图片优化器的那批公告）。
+`getAllowDomains()` 对空值在生产环境返回 `[]`，所以清空是安全的；要允许远程域名在编排文件里设。
+
+**`.dockerignore` 补上本机目录**：以前本地构建的上下文是 **27GB**（`.tools` 1.9G + `vanblog_dev` 25G），
+而 CI 上干净 checkout 只有 ~35MB —— 每次 build 都要先把这堆打包送给 daemon。
+顺带一个隐私问题：`AGENTS.local.md`（代理地址、生产域名、密钥路径）会随上下文 tar 包一起进 daemon
+（好在 Dockerfile 没有 `COPY .`，进不了镜像，已核实）。
+
+**编排模板**：mongo 加 `stop_grace_period: 60s`（docker 默认 10s 就 SIGKILL，慢盘/大库会在 flush
+中途被杀；WiredTiger 有 journal 所以真损坏不多见，但多给 50 秒是免费保险）；
+`mem_limit` 那段注释补上了**关键的相互作用**：整站备份在 vanblog 容器里跑
+`zstd -19 --long=27 -T0`（多线程 + 128MB 窗口），峰值能到 1GB 上下 ——
+开了 768m 限制又不降压缩等级，备份会被 OOM 杀掉（`VANBLOG_BACKUP_ZSTD_LEVEL: '12'`）。
+另外把 `VANBLOG_SWAGGER` 与 `VAN_BLOG_ALLOW_DOMAINS` 作为**注释掉的**可选项写进模板：
+swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后台「关于」页与「Token 管理」页
+各有一个跳 `/swagger` 的链接，默认关掉会让那两个链接 404 —— 所以交给用户自己决定，
+而不是替他们关。
+
+**CI 从"六个从没跑过的工作流"收敛到四个有用的**：GitHub API 实测这个 fork 一共只跑过 3 次
+（publish-ghcr ×2、release ×1），其余六个工作流从未执行。
+
+- 删掉 `test.yml` / `test-arm.yml` / `local-build.yml` / `deploy-docs.yml`：它们都是**作者的基础设施**
+  —— 推 `docker.io/mereith/van-blog:*`、`kubectl set image` 到作者的集群、刷作者的 CDN，
+  而且用的还是不存在的 secrets、已废弃的 `::set-output`（VERSION 恒为空）、
+  `test.yml` 甚至推 `test-${VERSION}` 标签却部署 `van-blog:${VERSION}`（对不上）。
+  和之前删掉的 `release.yml` 是同一类东西。
+- 删掉 `scripts/sync-aliyuncs.sh` 与根 `package.json` 里的 `sync-aliyun` / `release:local` /
+  `build:test`（都是作者的发布链路）。
+- `server-test.yml` 与 `admin-e2e.yml` 以前只在 `pull_request → master` 时触发，
+  而开发全在 `dev/dsh` 上、从不发 PR ⇒ **永远不跑**。现在加了 `push: dev/dsh`（带 paths 过滤，
+  纯文档提交不触发）、`concurrency`（同分支连推时取消上一次，这个 job 要装整个 workspace，
+  排队很浪费）、server-test 超时 15→30 分钟，并把本轮新增的 5 个 spec
+  （safeDecode / article.provider.viewer / audit-hardening / theme.provider）加进 jest 的
+  `testPathPattern`（否则 CI 根本不跑它们）。
+- 删掉 `alpine-sharp-install` 这个 job 与它的脚本：它 grep `FROM node:18-alpine AS WEBSITE_BUILDER`
+  （Dockerfile 现在是 `node:20-alpine AS website_builder`），实测提取结果 start=-1、
+  python 直接抛错 ⇒ **100% 失败**；而且它还断言 `vips-dev`，而那正是我们**故意去掉**的
+  （sharp 走 musl 预编译包）。
+- ⚠️ 修掉 `dockerfile-alpine-sharp.test.sh` 里 3 条**假绿**断言：它们在整个 stage 文本里搜
+  `vips-dev` / `fftw-dev`，而 stage 里正好有一行注释写着"去掉 vips-dev/fftw-dev…" ——
+  断言匹配到的是**解释为什么没装**的那句注释，结论正好反了（谁删掉 libc6-compat 它照样绿）。
+  现在先剥注释、只取真正的 `RUN apk add` 行，正向断言 python3/make/g++/libc6-compat 在，
+  反向断言 vips-dev/fftw-dev 不在。23 条全绿。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 657 用例：656 绿，1 个既有失败（`utils/watermark.spec.ts` 需要联网拉字体，见 §2.1） |
 | website `vitest run` | 61 文件 / 578 用例全绿 |
-| admin `node --test tests/unit` | 83 套件 / 343 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 858 条断言全绿 |
+| admin `node --test tests/unit` | 83 套件 / 344 用例全绿 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 19 文件 / 859 条断言全绿 |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。

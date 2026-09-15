@@ -20,8 +20,18 @@
 
 - **备份保留策略 `--keep N`**：`./vanblog.sh backup --keep 7`（或 `VANBLOG_BACKUP_KEEP=7`）在备份**成功之后**只保留最新 N 份，其余连同 `.manifest.json` 一起删掉，并打印删了哪些、释放了多少。以前脚本和 server 都只管写不管删，一份整站备份几十 MB，配 cron 每天备一次一个月就是 2GB，小盘机器迟早被撑满（而磁盘满会让 mongod、caddy、导出一齐出各种奇怪的错）。边界都朝"宁可少删"的方向定：只删自己认识的归档名、只在备份成功后清理、`--keep` 为空/0/非数字时完全不清理（默认行为不变），离线模式清理的是安装目录里的 `vanblog-backup-*`，与整站备份互不干扰。
 
+**安全 / 仓库卫生**
+
+- **镜像不再默认允许上游作者的图床域名**：`Dockerfile` 里两处 `ENV VAN_BLOG_ALLOW_DOMAINS="pic.mereith.com"` 改成空。原值意味着每个 fork 部署的 `next/image` 优化器都会去别人的域名取图 —— 那个域名一旦过期被注册，就等于让第三方通过你的 `/_next/image` 提供内容（还放大了 next 13 图片优化器的那批公告）。空值在生产环境等于"只优化本站图片"（`getAllowDomains()` 已验证），要允许远程域名在编排文件里设 `VAN_BLOG_ALLOW_DOMAINS`。
+- **入库文件里的生产标识脱敏**：生产域名与真实后台用户名以前出现在 3 个 server spec、1 个脚本测试、2 篇文档与 AGENTS 里，统一换成 `example.com` / `blogadmin`。另外 `build-image-local.test.sh` 里那条"不许有内网地址"的断言原本把**具体那个内网 IP** 写进了测试文件（等于把地址提交进公开仓库），改成匹配整个 RFC1918 段的正则。
+- **`.dockerignore` 补上本机目录**：本地构建上下文从 **27GB**（`.tools` 1.9G + `vanblog_dev` 25G）降到与 CI 干净 checkout 相当的量级；顺带不再把 `AGENTS.local.md`（含代理地址、生产域名、密钥路径）随上下文 tar 包送进 daemon。
+- **mongo 加 `stop_grace_period: 60s`**：docker 默认 10 秒就 SIGKILL，慢盘或库大一点会在 flush 中途被杀（WiredTiger 有 journal，真损坏不多见，但这是免费保险）。`mem_limit` 的注释补上了关键的相互作用：整站备份在容器里跑 `zstd -19 --long=27 -T0`，峰值近 1GB，**开了内存限制又不降压缩等级，备份会被 OOM 杀掉**。
+- **CI 从"六个从没跑过的工作流"收敛到四个有用的**（GitHub API 实测这个 fork 一共只跑过 3 次）：删掉 `test.yml` / `test-arm.yml` / `local-build.yml` / `deploy-docs.yml`（都是作者的基础设施 —— 推 `mereith/van-blog`、`kubectl set image` 到作者的集群、刷作者的 CDN，用的还是不存在的 secrets 与已废弃的 `::set-output`）与 `scripts/sync-aliyuncs.sh`；`server-test.yml` / `admin-e2e.yml` 以前只在 `pull_request → master` 触发而开发全在 `dev/dsh` 上 ⇒ **永远不跑**，现在加了 `push: dev/dsh`（带 paths 过滤）、`concurrency`、超时 15→30 分钟，并把新增的 spec 加进 jest 的 `testPathPattern`；删掉那个**必然失败**的 `alpine-sharp-install` job（grep 的是 `node:18-alpine AS WEBSITE_BUILDER`，早已改成 `node:20-alpine AS website_builder`）。
+- **修掉 3 条假绿断言**：`dockerfile-alpine-sharp.test.sh` 在整个 stage 文本里搜 `vips-dev`/`fftw-dev`，而 stage 里正好有一行注释写着"去掉 vips-dev/fftw-dev…" —— 断言匹配到的是**解释为什么没装**的注释，结论正好反了（删掉 `libc6-compat` 它照样绿）。现在先剥注释、只取真正的 `RUN apk add` 行做正反两向断言。
+
 **修复**
 
+- **`stego.spec.ts` 的降级用例隐式依赖测试数据长度**：断言 `repetition < 3`，而载荷从 45 字节缩到 42 字节后 400×400 就放得下 3 份了（脱敏之后才暴露）。改成显式构造 70 字节载荷，并把窗口写进注释（≤50 字节 → 3 份放得下；200 字节 → 1 份都放不下）。
 - **`/atom.xml` 一直是 404**：caddy 里这条路由的 rewrite 是从 `/feed.xml` 复制来的，`find` 写成了 `/feed.xml`，永远匹配不上，于是请求原样打到 server 上 404 —— 而 `/feed.xml`、`/feed.json` 都是好的，文档里也把 `/atom.xml` 当公开地址写着，所以特别隐蔽。现在三条短地址（`/feed.xml`、`/atom.xml`、`/feed.json`）都正确改写到 `/rss/...`，并写进了测试。
 
 ## [v2026.09] - 2026-09-14

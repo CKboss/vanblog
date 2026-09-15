@@ -241,7 +241,11 @@ COPY ./tsconfig.base.json ./
 COPY ./patches ./patches
 COPY ./packages/website ./packages/website
 ENV isBuild=t
-ENV VAN_BLOG_ALLOW_DOMAINS="pic.mereith.com"
+# ⚠️ 以前默认值是上游作者的图床域名 pic.mereith.com：那意味着**每个 fork 部署**的
+# next/image 优化器都会去别人的域名取图（域名一旦过期被别人注册，就等于让第三方
+# 通过你的 /_next/image 提供内容，还白白多一个 SSRF 面）。默认留空 = 只优化本站图片；
+# 真要允许远程域名，在编排文件里设 VAN_BLOG_ALLOW_DOMAINS=a.com,b.com。
+ENV VAN_BLOG_ALLOW_DOMAINS=""
 # 默认值必须有：不传这个 build-arg 时 ENV 会变成**空串**，
 # 前台 utils/loadConfig.ts 在模块顶层 new URL('') → next build 的
 # "Collecting page data" 阶段直接 ERR_INVALID_URL 失败（栈里只有 chunk 编号，很难查）。
@@ -376,7 +380,11 @@ COPY --from=website_builder  /app/packages/website/.next/static ./packages/websi
 RUN  cd  /app/website  && cd ..
 ENV NODE_ENV=production
 ENV VAN_BLOG_SERVER_URL="http://127.0.0.1:3000"
-ENV VAN_BLOG_ALLOW_DOMAINS="pic.mereith.com"
+# ⚠️ 以前默认值是上游作者的图床域名 pic.mereith.com：那意味着**每个 fork 部署**的
+# next/image 优化器都会去别人的域名取图（域名一旦过期被别人注册，就等于让第三方
+# 通过你的 /_next/image 提供内容，还白白多一个 SSRF 面）。默认留空 = 只优化本站图片；
+# 真要允许远程域名，在编排文件里设 VAN_BLOG_ALLOW_DOMAINS=a.com,b.com。
+ENV VAN_BLOG_ALLOW_DOMAINS=""
 ENV VAN_BLOG_DATABASE_URL="mongodb://mongo:27017/vanBlog?authSource=admin"
 # ⚠️ 以前这里默认填了上游作者的邮箱：没设 EMAIL 的用户会拿**作者的地址**去注册
 # Let's Encrypt 账户（到期提醒也发给作者）。留空是安全的 —— Caddy 的 acme issuer

@@ -55,7 +55,7 @@ describe('crc32', () => {
 
 describe('payload codec', () => {
   it('round-trips text', () => {
-    const text = 'codebonobo.tech|JiangOil|2026-09-12T07:40:00Z';
+    const text = 'example.com|blogadmin|2026-09-12T07:40:00Z';
     const bytes = encodePayload(text);
     expect(bytes).not.toBeNull();
     expect(Buffer.from(bytes!.slice(0, 4)).toString('ascii')).toBe(STEGO_MAGIC);
@@ -65,7 +65,7 @@ describe('payload codec', () => {
   });
 
   it('keeps CJK payloads intact', () => {
-    const text = '酱_油 aka JiangOil|2026-09-12';
+    const text = '示例站点 aka blogadmin|2026-09-12';
     expect(decodePayload(encodePayload(text)!)).toBe(text);
   });
 
@@ -122,7 +122,7 @@ describe('block geometry', () => {
 });
 
 describe('embed / extract', () => {
-  const text = 'codebonobo.tech|JiangOil|2026-09-12T07:40:00Z';
+  const text = 'example.com|blogadmin|2026-09-12T07:40:00Z';
 
   it('round-trips on a plain RGBA buffer', () => {
     const width = 640;
@@ -210,12 +210,20 @@ describe('embed / extract', () => {
   it('falls back to a weaker repetition on smaller images', () => {
     const width = 400;
     const height = 400;
+    // ⚠️ 这个用例测的是「图放不下 3 份时降级重复次数」，所以载荷**必须足够长**：
+    // 用上面那个 42 字的短载荷时，400×400 完全放得下 3 份，repetition 就不是 <3 了
+    // （把测试数据里的域名/用户名脱敏成更短的字符串之后，这条就红了 —— 断言依赖了数据长度）。
+    // 200 字节正好是隐写载荷的上限（见 docs/features/image-storage.md）。
+    // 长度要落在「400×400 放不下 3 份、但放得下 2 份」这个窗口里：
+    // 太短（≤50 字节）→ 3 份也放得下，repetition 不小于 3；
+    // 太长（200 字节）→ 连 1 份都放不下，embedded 直接是 false。
+    const longText = `${text}|${'x'.repeat(40)}`.slice(0, 70);
     const rgba = makeRgba(width, height, 21);
-    const res = embedStegoIntoRgba(rgba, width, height, text, { key: KEY });
+    const res = embedStegoIntoRgba(rgba, width, height, longText, { key: KEY });
 
     expect(res.embedded).toBe(true);
     expect(res.repetition).toBeLessThan(3);
-    expect(extractStegoFromRgba(rgba, width, height, { key: KEY }).payload).toBe(text);
+    expect(extractStegoFromRgba(rgba, width, height, { key: KEY }).payload).toBe(longText);
   });
 
   it('keeps embedding idempotent for the same input', () => {

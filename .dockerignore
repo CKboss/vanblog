@@ -18,3 +18,21 @@ logs
 **/*/.DS_Store
 **/*/.env
 **/*/.umi-production
+
+# ── 本机专用目录：不放进构建上下文 ────────────────────────────────
+# 少了这几行，本地构建的上下文是 **27GB**（.tools 1.9G + vanblog_dev 25G），
+# 而 CI 上干净 checkout 只有 ~35MB —— 每次 build 都要先把这堆东西打包发给 daemon。
+# 顺带一个隐私问题：AGENTS.local.md 里有代理地址、生产域名、密钥路径，
+# 它会随上下文 tar 包一起送到 daemon（虽然 Dockerfile 没有 `COPY .`，进不了镜像）。
+.tools/
+vanblog_dev/
+.pnpm-home/
+.xdg-data/
+AGENTS.local.md
+dev-env.sh
+# 构建镜像用不到的仓库内容
+docs/
+img/
+.github/
+*.md
+packages/website/public/static

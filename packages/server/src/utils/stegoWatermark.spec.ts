@@ -9,7 +9,7 @@ const sharp = require('sharp');
 jest.setTimeout(90000);
 
 const KEY = 'stego-integration-key';
-const TEXT = 'www.codebonobo.tech|JiangOil|2026-09-12T07:40:00Z';
+const TEXT = 'www.example.com|blogadmin|2026-09-12T07:40:00Z';
 
 async function makeNoiseImage(width: number, height: number, format = 'jpeg'): Promise<Buffer> {
   const data = Buffer.alloc(width * height * 3);
@@ -74,10 +74,10 @@ describe('image option parsing', () => {
 
     const payload = buildStegoPayload({
       baseUrl: 'https://www.example.com/',
-      uploader: 'JiangOil',
+      uploader: 'blogadmin',
       now: new Date('2026-09-12T07:40:00.123Z'),
     });
-    expect(payload).toBe('www.example.com|JiangOil|2026-09-12T07:40:00Z');
+    expect(payload).toBe('www.example.com|blogadmin|2026-09-12T07:40:00Z');
 
     expect(
       buildStegoPayload({ custom: '  自定义水印  ', baseUrl: 'https://a.com', uploader: 'x' }),

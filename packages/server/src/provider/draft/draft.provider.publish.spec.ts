@@ -52,7 +52,7 @@ describe('DraftProvider.publish without a <!-- more --> marker', () => {
         content: LONG_BODY,
         tags: ['随笔'],
         category: '博客',
-        author: 'JiangOil',
+        author: 'blogadmin',
         deleted: false,
       },
     ]);
@@ -65,7 +65,7 @@ describe('DraftProvider.publish without a <!-- more --> marker', () => {
     expect(created[0]).toMatchObject({
       title: '没有 more 的草稿',
       category: '博客',
-      author: 'JiangOil',
+      author: 'blogadmin',
       pathname: 'my-slug',
       hidden: false,
     });

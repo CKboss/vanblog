@@ -1,9 +1,43 @@
 name: admin-e2e
 
 on:
+  push:
+    branches:
+      - dev/dsh
+    # 只改文档时不用跑测试（文档站有自己的构建检查）
+    paths:
+      - 'packages/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'caddyTemplate.json'
+      - 'caddyFallbackTemplate.json'
+      - 'docker-compose/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'patches/**'
+      - '.github/workflows/admin-e2e.yml'
   pull_request:
     branches:
       - master
+      - dev/dsh
+    paths:
+      - 'packages/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'caddyTemplate.json'
+      - 'caddyFallbackTemplate.json'
+      - 'docker-compose/**'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'patches/**'
+
+# 同一个分支上连着推两次时，把还在跑的那次取消掉：
+# 这个 job 要装整个 workspace 的依赖，排队很浪费。
+concurrency:
+  group: admin-e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   admin-e2e:
