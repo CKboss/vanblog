@@ -1,4 +1,4 @@
-import { Viewer } from "@bytemd/react";
+import MarkdownViewer from "./MarkdownViewer";
 import { useContext } from "react";
 import { sanitizeMarkdownSchema } from "../../utils/markdownSanitize";
 import { stripFrontMatter } from "../../utils/frontMatter";
@@ -10,11 +10,14 @@ import { defListHastHandlers } from "remark-definition-list";
 export const sanitize = sanitizeMarkdownSchema;
 
 /**
- * 编辑器/前台共用的渲染外壳。
+ * 前台渲染 markdown 的共用外壳（Base / Rich / Plain 三个变体都走这里）。
  *
- * 刻意**不在这里 import 任何重量级插件**（math / mermaid）：这个文件会被
- * MarkdownBase 和 MarkdownRich 两边复用，重插件由各自的文件按需引入，
+ * 刻意**不在这里 import 任何重量级插件**（math / mermaid / highlight）：这个文件会被
+ * 各个变体复用，重插件由各自的文件按需引入，
  * 这样 next/dynamic 才能把它们切成独立 chunk（见 ./index.tsx）。
+ *
+ * 渲染器是 ./MarkdownViewer（内联的 Viewer），**不是** `@bytemd/react`：
+ * 那个包的入口会把 bytemd 的 Editor 一起拖进依赖图，详见 MarkdownViewer.tsx 的注释。
  */
 export default function MarkdownView(props: {
   content: string;
@@ -24,7 +27,7 @@ export default function MarkdownView(props: {
   const paintKey = isDarkPaintTheme(theme) ? "dark" : "light";
   return (
     <div className="markdown-body">
-      <Viewer
+      <MarkdownViewer
         key={paintKey}
         value={stripFrontMatter(props.content)}
         plugins={props.plugins}

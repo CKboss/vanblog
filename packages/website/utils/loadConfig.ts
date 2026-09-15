@@ -43,14 +43,78 @@ export function resolveServerUrl(raw?: string | null): string {
   }
 }
 
+/**
+ * ISR 的时间兜底（秒）。
+ *
+ * ## 为什么有下限
+ *
+ * 以前是 `parseInt(process.env.VAN_BLOG_REVALIDATE_TIME || "10")`，两个问题：
+ *
+ * 1. **没有 NaN 守卫**。这个环境变量是 server 从后台设置里读出来直接塞进子进程环境的
+ *    （`website.provider.ts`：`VAN_BLOG_REVALIDATE_TIME: isrConfig.delay`），而后台那个
+ *    输入框是自由填写的 `ProFormDigit`。填了空 / 非法值时 `parseInt` 得到 `NaN`，
+ *    `{ revalidate: NaN }` 会被 Next 当成"没有 revalidate"，于是**延时模式静默退化成
+ *    永不过期** —— 而延时模式恰恰会阻止按需 ISR（server 那边
+ *    `isr.provider.ts`：`if (isrConfig?.mode == 'delay') { 阻止按需 ISR; return }`），
+ *    结果是页面**再也不会更新**，而且没有任何报错。
+ * 2. **下限太低**。`revalidate: 10` 意味着有流量时每个页面每 10 秒重渲染一次，
+ *    本站一轮是 ~130 个路由（每篇文章的数字 id 与拼音别名两条路径 + 分页 + 分类 +
+ *    标签 + 6 个固定页），而**每次重渲染都要回调 server 的公开接口**
+ *    （`getPublicMeta` 有 5s 进程内缓存也扛不住 10s 一轮）。这正是 server 那边
+ *    要加"风暴互斥 + 每小时兜底"的原因。
+ *
+ * 取 60 秒：博客正文改完 1 分钟内可见，重渲染频率降到原来的 1/6。
+ * ⚠️ 后台那个输入框的 tooltip 还写着"默认为 10 秒"（`packages/admin` 不在本次改动范围内），
+ * 文档与 tooltip 需要同步（见 docs/advanced/isr.md）。
+ */
+export const MIN_REVALIDATE_SECONDS = 60;
+/** 延时模式下环境变量缺失 / 非法时的取值（以前是 10）。 */
+export const DEFAULT_REVALIDATE_SECONDS = 60;
+/**
+ * 按需模式（server 主动触发 ISR）下的"长保险"：24 小时。
+ *
+ * 以前按需模式返回的是 `{}`（即 `revalidate: false`），配合 `fallback: "blocking"`，
+ * 一个按需生成的页面**永远不会因为时间而过期**。正常路径下 server 每次保存都会触发
+ * `/api/revalidate`，所以看不出问题；但只要那一次触发丢了（website 容器正在重启、
+ * 网络抖了一下、或者那轮"风暴"被合并掉），这个页面就会**一直停在旧内容上**，
+ * 除了手动点后台的"手动触发"没有任何自愈手段。
+ * 24 小时的兜底让最坏情况从"永久陈旧"变成"最多陈旧一天"，代价是每天每页多一次
+ * 后台重渲染（ISR 是懒触发 + 串行的，不会形成风暴）。
+ */
+export const ON_DEMAND_REVALIDATE_SECONDS = 24 * 60 * 60;
+
+/**
+ * 把环境变量里的秒数收敛成一个可用的 revalidate 值：
+ * 空 / 非数字 / NaN / 小于下限 → 取下限；小数向下取整。
+ */
+export function resolveRevalidateSeconds(
+  raw?: string | null,
+  fallbackSeconds: number = DEFAULT_REVALIDATE_SECONDS,
+): number {
+  const floor = Math.max(1, Math.floor(MIN_REVALIDATE_SECONDS));
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return Math.max(floor, Math.floor(fallbackSeconds));
+  }
+  const parsed = Number.parseInt(text, 10);
+  if (!Number.isFinite(parsed)) {
+    return Math.max(floor, Math.floor(fallbackSeconds));
+  }
+  return parsed < floor ? floor : Math.floor(parsed);
+}
+
 // 从环境变量中读取.
 export const config = {
   baseUrl: resolveServerUrl(process.env.VAN_BLOG_SERVER_URL),
 };
 
-// 改为服务端触发 isr
-// export const revalidate = {};
+/**
+ * `VAN_BLOG_REVALIDATE` 由 server 按后台的 ISR 模式设置：
+ * 延时模式 → `"true"` + `VAN_BLOG_REVALIDATE_TIME=<秒>`；按需模式 → `"false"`（不带 TIME）。
+ * 两种模式现在都返回一个**数字** revalidate，区别只是数值：
+ * 延时模式用用户设的值（带下限），按需模式用 24 小时的长保险。
+ */
 export const revalidate =
   process.env.VAN_BLOG_REVALIDATE == "true"
-    ? { revalidate: parseInt(process.env.VAN_BLOG_REVALIDATE_TIME || "10") }
-    : {};
+    ? { revalidate: resolveRevalidateSeconds(process.env.VAN_BLOG_REVALIDATE_TIME) }
+    : { revalidate: ON_DEMAND_REVALIDATE_SECONDS };

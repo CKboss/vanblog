@@ -117,7 +117,10 @@ describe("PostViewer and comment count markup (#230)", () => {
     );
 
     const src = readSrc("components/PostViewer/index.tsx");
-    expect(src).toMatch(/useState<number \| null>\(null\)/);
+    // 初始值只能是 pageProps 播下来的记录或 null —— 不能是 0（#230），
+    // 也不能在渲染期读 viewerApi 的模块级缓存（那个缓存是进程内共享的，
+    // SSR 时读它会把上一个请求的数据带进这一次的 HTML）。
+    expect(src).toMatch(/useState<ViewerRecord \| null>\(/);
     expect(src).not.toMatch(/useState\(0\)/);
     expect(src).toMatch(/formatCountDisplay/);
   });

@@ -64,6 +64,7 @@ const PagePages = (props: PagePagesProps) => {
             content={article.content || ""}
             excerpt={article.excerpt}
             firstImage={article.firstImage}
+            viewer={article.viewer}
             type={"overview"}
             enableComment={props.layoutProps.enableComment}
             private={article.private}

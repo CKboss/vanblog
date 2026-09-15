@@ -22,9 +22,14 @@ import { hasToc } from "../../utils/hasToc";
 import dynamic from "next/dynamic";
 
 /**
- * 列表摘要固定用**轻量渲染器**（MarkdownBase：不含 KaTeX / mermaid）。
+ * 列表摘要用**轻量渲染器**（不含 KaTeX / mermaid / highlight.js）。
  * 摘要只有 200 字 / 4 行，里面不会有流程图，公式即使出现也只是显示成 `$E=mc^2$` 原文，
  * 点进文章页仍是完整渲染。
+ *
+ * 默认走 MarkdownPlain（连 highlight.js 都不带：那个 chunk 生产构建 222KB / gzip 66KB，
+ * 而 `dynamic(..., { ssr: true })` 会把它放进首页的初始 script 列表）；
+ * 只有摘要里**真的有围栏代码块**时才换成 MarkdownBase，保证这种情况下高亮与改动前一致
+ * （嗅探用 utils/hasFencedCode，宁可误判也不能漏判）。
  *
  * 文章页 / 关于页要完整渲染时，由页面自己把渲染器通过 `markdownRenderer` 传进来
  * （见 pages/post/[id].tsx、pages/about.tsx）。**不要在 PostCard 里 import ../Markdown**：
@@ -32,10 +37,15 @@ import dynamic from "next/dynamic";
  * 每个用到 PostCard 的页面的首屏 JS —— 实测首页会因此多背 KaTeX 那 275KB。
  */
 
-const OverviewMarkdown = dynamic(() => import("../Markdown/MarkdownBase"), {
+const OverviewMarkdown = dynamic(() => import("../Markdown/MarkdownPlain"), {
+  ssr: true,
+});
+// 摘要里出现围栏代码块时才用得到（绝大多数页面不会加载它）
+const OverviewCodeMarkdown = dynamic(() => import("../Markdown/MarkdownBase"), {
   ssr: true,
 });
 import { articleOverviewMarkdown } from "../../utils/articleExcerpt";
+import { hasFencedCode } from "../../utils/hasFencedCode";
 
 export default function (props: {
   id: number | string;
@@ -76,6 +86,12 @@ export default function (props: {
   markdownRenderer?: React.ComponentType<{ content: string }>;
   /** 数字 id：后台「编辑」链接要用它（props.id 可能是拼音别名）。 */
   numericId?: number | string;
+  /**
+   * 服务端下发的阅读量（`article.viewer`）。给了它，卡片上的阅读量首帧就是真数字：
+   * 不再闪 `...`、不再有宽度跳变，也不再为每张卡发一个 XHR
+   * （首页原来是 5 个请求换 5 个整数，见 utils/viewerApi.ts）。
+   */
+  viewer?: number | null;
 }) {
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
@@ -123,6 +139,13 @@ export default function (props: {
       return content.replace("<!-- more -->", "");
     }
   }, [props, lock, content]);
+
+  // 列表摘要的渲染器：默认不含 highlight.js；摘要里真有围栏代码块才换回 MarkdownBase。
+  // 文章页 / 关于页传了 markdownRenderer，这里的嗅探结果用不上（也不会去跑正则）。
+  const overviewRenderer = useMemo(
+    () => (hasFencedCode(calContent) ? OverviewCodeMarkdown : OverviewMarkdown),
+    [calContent],
+  );
 
   const showToc = useMemo(() => {
     if (!hasToc(props.content)) return false;
@@ -184,6 +207,7 @@ export default function (props: {
           type={props.type}
           id={props.id}
           numericId={props.numericId}
+          viewer={props.viewer}
           updatedAt={props.updatedAt}
           createdAt={props.createdAt}
           catelog={props.catelog}
@@ -219,7 +243,7 @@ export default function (props: {
               {showToc && <TocMobile content={calContent} />}
               {showToc && <TocDrawer content={calContent} />}
               {(() => {
-                const Renderer = props.markdownRenderer || OverviewMarkdown;
+                const Renderer = props.markdownRenderer || overviewRenderer;
                 return <Renderer content={calContent}></Renderer>;
               })()}
             </>

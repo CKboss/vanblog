@@ -1,5 +1,8 @@
 import dynamic from "next/dynamic";
 import { sanitizeMarkdownSchema } from "../../utils/markdownSanitize";
+import { hasFencedCode } from "../../utils/hasFencedCode";
+
+export { hasFencedCode };
 
 // 保留原来的导出（有测试和外部引用在用）
 export const sanitize = sanitizeMarkdownSchema;
@@ -34,10 +37,21 @@ export function needsRichMarkdown(content: string): boolean {
   );
 }
 
+const MarkdownPlain = dynamic(() => import("./MarkdownPlain"), { ssr: true });
 const MarkdownBase = dynamic(() => import("./MarkdownBase"), { ssr: true });
 const MarkdownRich = dynamic(() => import("./MarkdownRich"), { ssr: true });
 
 export default function Markdown(props: { content: string }) {
-  const Renderer = needsRichMarkdown(props.content) ? MarkdownRich : MarkdownBase;
+  // 三选一（嗅探都是纯字符串判断，SSR 同步完成）：
+  //   有公式 / 流程图 → Rich（KaTeX；mermaid 仍二次懒加载）
+  //   有围栏代码块    → Base（highlight.js：生产构建 185KB 原始 / 66KB gzip）
+  //   都没有          → Plain（连 highlight.js 都不带）
+  // 大多数页面（友链页的申请说明、没有代码的文章）走 Plain，
+  // 首屏因此不会下载 highlight.js —— 它以前在每个渲染 markdown 的页面上都下载。
+  const Renderer = needsRichMarkdown(props.content)
+    ? MarkdownRich
+    : hasFencedCode(props.content)
+      ? MarkdownBase
+      : MarkdownPlain;
   return <Renderer content={props.content} />;
 }

@@ -181,6 +181,7 @@ const PostPages = (props: PostPagesProps) => {
         top={props.article.top || 0}
         id={getArticlePath(props.article)}
         numericId={props.article.id}
+        viewer={props.article.viewer}
         key={props.article.title}
         title={props.article.title}
         updatedAt={new Date(props.article.updatedAt)}

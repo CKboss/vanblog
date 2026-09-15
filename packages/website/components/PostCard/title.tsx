@@ -147,6 +147,12 @@ export function SubTitle(props: {
   id: number | string;
   /** 数字 id：内置评论用它当规范键（别名可能会改，数字 id 不会） */
   numericId?: number | string;
+  /**
+   * 服务端已经算好的阅读量（`article.viewer`，列表接口与文章接口都会下发）。
+   * 传下去 `<PostViewer>` 就能首帧出数字：不用等 XHR，也不会闪 `...`。
+   * 没有它（例如 `/about`）时 PostViewer 会在浏览器空闲时补一次请求。
+   */
+  viewer?: number | null;
   openArticleLinksInNewWindow: boolean;
 }) {
   const iconSize = "16";
@@ -242,7 +248,11 @@ export function SubTitle(props: {
             ></path>
           </svg>
         </span>
-        <PostViewer shouldAddViewer={props.type != "overview"} id={props.id} />
+        <PostViewer
+          shouldAddViewer={props.type != "overview"}
+          id={props.id}
+          initialViewer={props.viewer ?? null}
+        />
       </span>
       {props.enableComment != "false" && (
         <span className="inline-flex px-2 items-center">
