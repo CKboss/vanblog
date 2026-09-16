@@ -4196,12 +4196,147 @@ tsc 0 错。⚠️ CI 的 testPathPattern 白名单要补
 - `scripts/vanblog.sh` 与它的文档双胞胎 `docs/.vuepress/public/vanblog.sh`：同一处注释一起改，
   `cmp -s` 确认仍然逐字节一致（这两个文件必须同步，见 §7.41）。
 
+### 7.50 基础包盘点：落后多少、哪些能升、哪些必须单独立项
+
+用户问"几个基础包是不是落后很多"。答案是**是**，而且落后得比想象的多。盘点方法：
+逐个包用 `npm view <pkg> version --registry=npmmirror` 取最新版，与 `package.json` 里
+**声明的范围**和**实际解析到的版本**三方对比（脚本 `/tmp/survey.cjs`，本机不入库），
+按"落后几个大版本"排序。⚠️ 光看"落后几个大版本"会误判优先级 —— 还要看
+**上游是否还在发安全补丁**、**升级会不会牵连运行时行为**、**有没有测试网兜底**。
+
+| 落后 | 包 | 当前 | 最新 | 上游维护状态 | 判断 |
+| --- | --- | --- | --- | --- | --- |
+| −3 | `@nestjs/common` / `core` / `platform-express` / `testing` | 9.4.3 | 12.0.3 | **9 早已停止维护**（Nest 只维护最近两个大版本） | **升，但只到 10**（见下） |
+| −3 | `@nestjs/mongoose` | 9.2.2 | 12.0.0 | 同上 | 跟随 common 到 10 |
+| −6 | `@nestjs/swagger` | 6.3.0 | 12.0.1 | 同上 | 跟随到 7（配套 `swagger-ui-express` 5） |
+| −10 | `@nestjs/schedule` | 2.2.3 | 12.0.2 | 同上（版本号跟 Nest 大版本走，所以差得最夸张） | 跟随到 4/5 |
+| −2 | `@nestjs/passport` | 9.0.3 | 12.0.0 | 同上 | 跟随到 10 |
+| −2 | `mongoose` | 7.8.12 | 9.10.1 | 7 仍在维护但已老 | **升到 8**（`@nestjs/mongoose` 10 的 peer 支持 `^7.4 \|\| ^8`；9 要配 nestjs/mongoose 12，跨太多） |
+| −3 | `typescript` | 4.9.5 | **7.0.2** | 4.9 早已停更 | **已升到 5.9.3**（不是 7：TS 7 是 Go 重写的新编译器，ts-jest / @nestjs/cli / IDE 生态还没跟上；6.0 同理） |
+| −3 | `next` | 13.5.11 | 16.3.5 | **13 已停止维护**（Vercel 只给最近 2–3 个大版本打补丁） | 下一步升到 **14**（pages router 完整保留、React 18 不动）；15/16 要 React 19，而 `@bytemd/react` 的 peer 只到 React 18，会连带把编辑器/渲染器一起拖下水 |
+| −1 | `react` / `react-dom`（website） | 18.2.0 | 19.3.0 | 18 仍在维护 | 暂不动（与 Next 15 绑定） |
+| −2 | `react` / `react-dom`（admin） | **17.0.2** | 19.3.0 | **17 已停止维护** | 属于 admin 大改造，单独立项 |
+| −1 | `umi`（admin） | 3.5.41 | 4.7.18 | **3 已停止维护** | 单独立项（配置体系、路由约定、插件全变） |
+| −2 | `antd`（admin） | 4.24.15 | 6.6.4 | 4 只收严重问题 | 单独立项（`visible`→`open`、less→cssinjs、Form/Table API 全变，100+ 文件） |
+| −1 | `@ant-design/pro-components` / `pro-layout` | 1.1.25 / 6.38.22 | 2.8.10 / 7.22.7 | 跟随 antd | 与 antd 一起动 |
+| −1 | `express` | 4.21.2 | 5.2.1 | 4 仍在维护（安全补丁还有） | **暂不动**：Express 5 换了 path-to-regexp v8，`path: '*'` 这种裸通配不再合法，而本仓库 `app.module.ts` 有 **4 处** `forRoutes({ path: '*' })`；这也是 Nest 只能停在 10 的原因（Nest 11 起默认 Express 5） |
+| −1 | `multer` | 1.4.4-lts.1 | 2.4.0 | **1.x 已停更、带已知漏洞** | 与 Nest 11 绑定（`@nestjs/platform-express` 10 声明的是 multer 1.x，强行 override 到 2 会破坏 `FileInterceptor` 的类型与行为） |
+| −2 | `picgo` | 1.5.6 | 3.0.2 | 1.x 带着 `git-clone`/`decompress` 两个**无修复版本**的漏洞 | 已在 §7.46 用 `VANBLOG_ALLOW_PICGO_PLUGINS` 默认关闭缓解；升 3.x 是另一次依赖树重排（Node 版本、插件 API 全变），单独立项 |
+| −1 | `jimp` | 0.22.10 | 1.6.1 | 0.22 老但仍在 | 中等：1.x 是重写版，API 全变（水印那条链路要重写），而且它需要联网拉字体（本机离线跑不了那套测试） |
+| −2 | `markdown-it` | 13.0.2 | 15.0.2 | 13 老 | 中等：14 起改了导出形态与部分插件签名，牵连 `markdown-it-katex` 替代品、task-lists、锚点等一整串插件 |
+| −2 | `mermaid` | 10.9.3 | 12.0.0 | 10 已老 | 中等：11/12 改了 API 与主题结构，前台的三重懒加载与 `mermaidSafety` 都要跟着改 |
+| −1 | `tailwindcss`（website） | 3.3.5 | 4.3.3 | 3 仍在维护 | 中等：4 换了引擎（Oxide）与配置形态（CSS-first），全站样式要回归验证 |
+| −1 | `compressing` | 1.10.0 | 2.1.3 | — | 低优先：整站备份那条链路（NDJSON + zstd）已经不依赖它做主要工作 |
+| −1 | `katex` | 0.16.21 | 0.18.7 | 0.16 仍在维护 | 低优先：0.17/0.18 有 API 与字体变化，前台/后台/RSS 三处都要跟着调 |
+| 0 | `@waline/vercel` | 1.41.6 | 1.41.6 | — | 已是最新（上一轮刚升） |
+| 0 | `rxjs` / `highlight.js` / `bytemd` | 7.8.1 / 11.9.0 / 1.21.0 | 7.8.2 / 11.12.0 / 1.22.0 | — | 补丁级，随手可升 |
+
+**为什么 Nest 只升到 10、不是一步到 12**（这个判断有具体证据，不是保守）：
+Nest 11 起默认用 **Express 5**，而 Express 5 换了 path-to-regexp v8 —— 裸 `*` 通配不再合法。
+本仓库 `src/app.module.ts` 里有 **4 处** `forRoutes({ path: '*', method: RequestMethod.ALL })`
+（安全响应头 + 限流 + NoStoreCache + InitMiddleware 都挂在这上面），还有 `main.ts` 里
+按前缀挂 JSON body 解析器的逻辑。跨到 Express 5 意味着这些通配全部要改写成新语法并逐个验证
+中间件顺序（顺序错了会出现"限流没生效"这类静默故障），这是一次独立的、要单独压测的迁移，
+不该和"离开已停更的 Nest 9"这件事挤在一起。**先把 9 → 10 拿到手（离开无补丁版本），
+Express 5 / Nest 11+ 单独立项。**
+
+**升级面实测很小**（这是敢动的底气）：server 有 316 个 `.ts` 文件，但真正直接碰 Nest API 的只有
+约 30 个 —— `@nestjs/testing` 5 个、`FileInterceptor`/multer 7 个、`AuthGuard`/`CanActivate` 7 个、
+Interceptor 6 个、`MiddlewareConsumer` 2 个、生命周期钩子 2 个、`SwaggerModule`/`DocumentBuilder` 1 个、
+`MongooseModule.forRoot` 1 个、`@Cron` 2 个（`schedule/isr.task.ts` 每小时、`schedule/viewer.task.ts` 每日）。
+没有用 `SchedulerRegistry`、`ModuleRef`、自定义 `ExceptionFilter`。
+再加上 **942 条 server 测试**这张网，风险是可控的。
+
+**这一轮实际做了的**：TypeScript 4.9.5 → **5.9.3**（连带 `ts-jest` 29.0.5 → 29.4.12，
+因为 ts-jest 29.0.x 的 peer 是 `typescript >=4.3 <5`，不升它装不上 TS 5；
+`@types/node` 18 → **24**，与镜像里的 Node 24 对齐）。
+TS 5 立刻挖出 **48 个类型问题**（server **7** + website **41**），说明这四年多的类型检查确实欠了账。
+⚠️ 其中 server 那 7 个**一开始只量到 2 个** —— 原因见 §7.51 的 incremental 缓存陷阱，
+这也是为什么"升编译器版本"这类改动的验证必须用全新的 tsBuildInfoFile。
+处理方式与逐条原因见 §7.51。
+
+⚠️ **admin 故意留在 TS 4.9**：它绑着 umi 3 + antd 4 + React 17 那一整套，
+单独把它的 TypeScript 抬到 5 只会得到一堆没法独立修的类型错误（umi 3 自己的 `.d.ts` 就不干净）。
+admin 的升级是一个独立项目：umi 3 → 4、antd 4 → 6、React 17 → 19，100+ 个文件、
+配置体系与路由约定全变，而且**必须配可视化回归测试**（后台没有 e2e 覆盖，playwright 在本机装不了浏览器）。
+
+### 7.51 TypeScript 4.9 → 5.9：48 个类型错误、一个真 bug、以及一个会让审计少算的缓存陷阱
+
+**升了什么**：server 与 website 的 `typescript` → **5.9.3**、`ts-jest` 29.0.5 → **29.4.12**
+（29.0.x 的 peer 是 `typescript >=4.3 <5`，不升它根本装不上 TS 5）、`@types/node` 18 → **24**
+（与镜像里的 Node 24 对齐）。**admin 故意留在 4.9**：它绑着 umi 3 + antd 4 + React 17，
+而 umi 3 自己的 `.d.ts` 就不是 TS 5 干净的，单独抬它的版本只会得到一堆无法独立修好的错误。
+没升 6.0/7.0：TS 7 是 Go 重写的新编译器，ts-jest / @nestjs/cli / 编辑器生态都还没跟上。
+
+⚠️ **incremental 缓存会让"升编译器版本"的审计少算错误**（这条是本轮最贵的教训）：
+`tsconfig` 里有 `incremental: true`（website 还有 `composite: true`），
+`tsc --noEmit` 会**复用它认为没变的文件的旧诊断结果**。本机 server 的
+`dist/.tsbuildinfo-dev` 是 nest watcher 用 **CLI 自带的 TS** 写的，
+我第一次跑 CLI 的 tsc 时，有 5 个文件直接回放了"空诊断" ⇒ **报 2 个错误，实际是 7 个**。
+**规则：审计编译器版本升级，必须 `--tsBuildInfoFile /tmp/xxx.tsbuildinfo` 指到一个新文件
+（或先删掉 buildinfo）再跑，否则数字是假的。** website 同理（它有 `tsconfig.tsbuildinfo`，
+但**别删它** —— :3001 的 dev server 在用；用 `--tsBuildInfoFile` 指到别处即可）。
+
+**server 的 7 个（含一个真 bug）**：
+
+1. `controller/admin/collaborator/collaborator.controller.ts:44` 的 **TS2872「这个表达式恒为真」** ——
+   **这是真 bug，不只是类型噪音**。原来写的是 `data: [adminUser, ...data] || [adminUser]`：
+   数组字面量永远为真 ⇒ `|| [adminUser]` 是**永远不可达的死代码**；
+   而且万一 `data` 真的是 nullish，`...data` 会**先抛异常**，根本走不到那个兜底。
+   因为 mongoose 的 `find()` 永远 resolve 成数组（没有协作者时就是 `[]`），
+   原本想要的"只有管理员"这种情况已经被 `[adminUser, ...[]]` 覆盖了 ⇒ 删掉死分支即可，
+   **行为可证明不变**。⚠️ TS2872 这一类错误十有八九是"漏了个 `()`"或"写了个永真判断"，
+   看到就去读那行代码，别当成噪音压掉。
+2. `utils/fullBackup.ts` 两处（整站备份归档链路）：`@types/node` 24 给 `fs.WriteStream`
+   的事件表加了强类型（`'drain'` 的监听器是 `() => void`），而 Promise 的 `resolve` 是
+   `(value: unknown) => void` ⇒ TS2345，包一层无参回调即可；**旁边那句 `stream.end(resolve)`
+   更阴** —— 它以前能编译只是因为落进了 `end(chunk: any, cb?)` 这个重载，
+   也就是 `resolve` 在**类型上被当成了一个数据块**，而运行时被当成回调用。两处都改成显式包装。
+3. **5 × TS2742**（"inferred type … cannot be named without a reference to
+   `.pnpm/mongodb@5.9.2/…`"）：mongoose 的 `deleteOne` 返回类型引用了**mongoose 自己那份嵌套的
+   mongodb**，TS 5.9 的声明发射没法可移植地命名它。修法是给 `deleteByPath` /
+   `deleteOneBySign` 显式标注 `Promise<DeleteResult>`（`DeleteResult` 从 server **自己直接依赖的**
+   `mongodb` 引入，与 mongoose 那份结构完全相同、运行时零变化），三个 controller 上的错误随之自动消失。
+   ⚠️ 这个套路会复现：任何"mongoose 方法的返回类型泄漏了 mongodb 内部类型"的地方都是同一个修法。
+
+**website 的 41 个**：
+
+- **TS6307（6 个）**来自 §7.42 那个**跨包 parity spec**（`articleExcerptParity.spec.ts` 直接 import
+  server 的源码）。修法是把这些文件**显式列进 `tsconfig.json` 的 `include`**
+  （5 个 server utils + admin 的 `relativeTime.js`），**不是**把 spec 排除掉 ——
+  排除等于放弃对它的类型检查。⚠️ 一旦把 server 源码拉进 website 项目，就会撞上
+  website 的 `target: es5`（于是 `transferRemoteImages.ts` 里的 `for (const x of set)` 报 TS2802），
+  这时要在**调用点**改（`Array.from(set)`），**不要动 `target`** ——
+  Next 用 SWC 编译，改 target 有可能影响产物。
+- **`mdast-util-mark@1.0.0` 在 node_modules 里发的是 `.ts` 源码**，`skipLibCheck` 管不到
+  （它只跳过 `.d.ts`），TS 5 于是去检查了别人的包并报 2 个错。
+  正解是加一份**环境声明** `types/mdast-util-mark.d.ts` 把模块类型接管过来（并有 spec 钉住），
+  而不是在依赖里塞 `@ts-ignore`。
+- 其余约 30 个都在 spec 里：mock 对象缺字段、推断类型过窄、TS 5 拒绝的强转。
+  修法是**把 mock 与类型写诚实**（补字段、用 `satisfies`、加真的类型守卫），
+  **不许**用 `any` / `@ts-ignore` / `@ts-expect-error` / 放宽 `exclude` 压掉 ——
+  测试里被压掉的类型错误，正好会掩盖这个测试本来要抓的回归。
+- 另外两个 shipped 文件：`utils/getPageProps.ts` 给 timeline 载荷标注
+  `Record<string, Article[]>`（TS 5.9 不再把无返回类型的 async 函数推成 `any`，
+  而是回退到约束上界，与 `TimeLinePageProps` 对不上）；
+  `utils/mermaidTheme.ts` 把结构化参数如实收窄成 `Node & {…}` 并去掉 `as Node` 强转
+  （生产上唯一的调用方传的就是 bytemd 的真实 `markdownBody`，收窄只是把运行时一直成立的事实写出来）。
+
+**验证**：server 与 website 的 `tsc --noEmit` 在**全新 tsBuildInfoFile** 下都是 **0 错误**；
+server jest **942 用例 / 941 绿 + 1 个既有的 watermark 离线字体用例**
+（`markdownExport.spec.ts` 在全量并行时抖了一次，单独跑 28/28、重跑全量也过 ——
+与 watermark 同一类负载抖动，别当成回归）；website vitest **69 文件 / 684**（+1 文件 +5 用例）；
+admin **347**；脚本 **22 文件 / 1110**。
+⚠️ 顺带一个"分裂大脑"被消掉了：`nest build` 一直用的是 **CLI 自带的 TS 5.x**
+（@nestjs/cli 升到 11 之后），而项目声明的是 4.9.5 —— 也就是构建与本机类型检查用的不是同一个编译器。
+现在两边都是 5.9。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 938 用例：**937 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例，见 §2.1；负载高时可能 2 个失败，单独跑 5/5 绿） |
-| website `vitest run` | 68 文件 / 679 用例全绿 |
+| website `vitest run` | 69 文件 / 684 用例全绿 |
 | admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
