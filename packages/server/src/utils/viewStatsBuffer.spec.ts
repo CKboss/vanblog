@@ -187,3 +187,121 @@ describe('ViewStatsAggregator.merge：写库失败时退回增量', () => {
     expect(merged.days[0].paths.get('/post/hello')).toEqual({ viewer: 2, visited: 0 });
   });
 });
+
+describe('ViewStatsAggregator：内存上限（写库一直失败时也不能无限长）', () => {
+  /**
+   * 这条为什么必须有：写库失败时增量会被 `merge()` 退回，而退回时 `events` 记 0，
+   * 于是 `VANBLOG_VIEW_FLUSH_MAX_EVENTS`（靠 `pending` 判断）在失败期间**完全不生效** ——
+   * Mongo 挂着的这段时间里，每 5 秒 take()→失败→merge() 回来，路径键只增不减，
+   * 而唯一的清除路径（写成功）永远走不到。一个客户端在这段时间里刷 N 个不同路径
+   * （`POST /api/public/viewer?pathname=/post/<随机串>` 就够，匿名可达），
+   * 就能让常驻进程稳定长内存。
+   */
+  // 用非文章路径：一次 add 只产生一个 day.paths 键，数字才好算
+  // （文章路径会同时产生 articles 键，那种"两种键共用预算"的情况由最后一条用例覆盖）
+  const manyPaths = (a: ViewStatsAggregator, n: number, date = '2026-09-16') => {
+    for (let i = 0; i < n; i += 1) {
+      a.add(ev(`/flood-${i}`, { date }));
+    }
+  };
+
+  it('默认不限（与改动前一致）：不设 maxRetainedKeys 时 30000 条路径全都留着', () => {
+    const a = new ViewStatsAggregator();
+    manyPaths(a, 30000);
+    expect(a.retainedKeys()).toBe(30000);
+    expect(a.countRetainedKeys()).toBe(30000);
+    expect(a.dropped.pathEntries).toBe(0);
+  });
+
+  it('设了上限就封住：热路径上 add() 也不会让表长过上限', () => {
+    const a = new ViewStatsAggregator({ maxRetainedKeys: 100 });
+    manyPaths(a, 30000);
+    expect(a.retainedKeys()).toBeLessThanOrEqual(100);
+    expect(a.countRetainedKeys()).toBeLessThanOrEqual(100);
+    // 30000 个路径键只有 100 个能留下
+    expect(a.dropped.pathEntries + a.dropped.articleEntries).toBeGreaterThan(29000);
+  });
+
+  it('站点级累计值一条都不丢：被丢的只是"按路径"的那部分', () => {
+    const a = new ViewStatsAggregator({ maxRetainedKeys: 50 });
+    manyPaths(a, 5000);
+    // metas 的 $inc 靠 site：5000 次浏览就是 5000，丢路径不能影响它
+    expect(a.pendingSite()).toEqual({ viewer: 5000, visited: 0 });
+    const batch = a.take();
+    expect(batch.site).toEqual({ viewer: 5000, visited: 0 });
+    // DayBatch 的不变量：各天 site 之和 === batch.site（跨零点算每日快照要靠它）
+    const sum = batch.days.reduce((acc, d) => acc + d.site.viewer, 0);
+    expect(sum).toBe(batch.site.viewer);
+  });
+
+  it('丢的是最老那天的路径，新的一天保住（趋势图的最近一段不能先没）', () => {
+    const a = new ViewStatsAggregator({ maxRetainedKeys: 100 });
+    // 用非文章路径：一次 add 只产生一个 day.paths 键，淘汰顺序才可预期
+    // （文章路径会同时产生 articles 键，两种键共用同一个预算）
+    for (let i = 0; i < 100; i += 1) {
+      a.add(ev(`/old-${i}`, { date: '2026-09-15' }));
+    }
+    for (let i = 0; i < 100; i += 1) {
+      a.add(ev(`/new-${i}`, { date: '2026-09-16' }));
+    }
+    expect(a.retainedKeys()).toBe(100);
+    const batch = a.take();
+    const oldDay = batch.days.find((d) => d.date === '2026-09-15');
+    const newDay = batch.days.find((d) => d.date === '2026-09-16');
+    expect(newDay?.paths.size).toBe(100);
+    expect(oldDay?.paths.size).toBe(0);
+    // 那一天的 site 仍然在（见上一条的不变量：各天 site 之和 === batch.site）
+    expect(oldDay?.site.viewer).toBe(100);
+    expect(batch.days.reduce((acc, d) => acc + d.site.viewer, 0)).toBe(batch.site.viewer);
+  });
+
+  it('merge() 退回时同样受上限约束（这才是那个洞：失败期间 pending 一直是 0）', () => {
+    const a = new ViewStatsAggregator({ maxRetainedKeys: 100 });
+    manyPaths(a, 5000);
+    const batch = a.take();
+    expect(a.isEmpty()).toBe(true);
+    // 模拟"写库失败"：provider 就是这样把整批退回来的（events 记 0）
+    a.merge({ ...batch, events: 0 });
+    expect(a.pending).toBe(0);
+    expect(a.isEmpty()).toBe(false);
+    expect(a.retainedKeys()).toBeLessThanOrEqual(100);
+    expect(a.countRetainedKeys()).toBeLessThanOrEqual(100);
+    // 站点累计值仍然完好
+    expect(a.pendingSite()).toEqual({ viewer: 5000, visited: 0 });
+  });
+
+  it('反复"退回 → 再攒"也不会累积（连续 20 轮失败后仍然在上限内）', () => {
+    const a = new ViewStatsAggregator({ maxRetainedKeys: 200 });
+    for (let round = 0; round < 20; round += 1) {
+      manyPaths(a, 1000);
+      const batch = a.take();
+      a.merge({ ...batch, events: 0 });
+      expect(a.retainedKeys()).toBeLessThanOrEqual(200);
+    }
+    expect(a.countRetainedKeys()).toBe(a.retainedKeys());
+    expect(a.pendingSite().viewer).toBe(20000);
+  });
+
+  it('文章键与路径键共用同一个预算，且 O(1) 计数器不会漂移', () => {
+    const a = new ViewStatsAggregator({ maxRetainedKeys: 10 });
+    for (let i = 0; i < 100; i += 1) {
+      a.add(ev(`/post/a-${i}`));
+      a.add(ev(`/not-an-article-${i}`)); // 只进 days.paths，不进 articles
+    }
+    expect(a.retainedKeys()).toBeLessThanOrEqual(10);
+    expect(a.countRetainedKeys()).toBe(a.retainedKeys());
+    const batch = a.take();
+    expect(batch.articles.size + batch.days[0].paths.size).toBeLessThanOrEqual(10);
+    expect(a.retainedKeys()).toBe(0);
+    expect(a.countRetainedKeys()).toBe(0);
+  });
+
+  it('非法的上限值（NaN / 负数）当作"不限"，不会把统计全丢光', () => {
+    for (const bad of [NaN, -5, Infinity]) {
+      const a = new ViewStatsAggregator({ maxRetainedKeys: bad as number });
+      manyPaths(a, 500);
+      expect(a.retainedKeys()).toBe(500);
+      expect(a.dropped.pathEntries).toBe(0);
+    }
+  });
+});

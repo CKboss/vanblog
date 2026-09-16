@@ -22,6 +22,16 @@ export type TransferRemoteResult = {
 const MARKDOWN_IMAGE =
   /!\[([^\]]*)\]\(\s*<?([^\s)>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
 const HTML_IMAGE = /<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+/**
+ * 同两个模式的「非全局」版本。
+ *
+ * ⚠️ 以前是每匹配到一张图就 `new RegExp(source, flags)` **现场编译一个**：
+ * 一篇有 20 张图的文章 = 2 + 2×20 = 42 次正则编译，而 `extractImageRefs`
+ * 现在跑在**每一次公开列表请求的每一篇文章**上（`pickCoverFromContent` 取首图，
+ * 见 ArticleProvider.getByOption 的 withExcerpt）。模式是模块级常量，编译一次就够。
+ */
+const MARKDOWN_IMAGE_ONCE = new RegExp(MARKDOWN_IMAGE.source, '');
+const HTML_IMAGE_ONCE = new RegExp(HTML_IMAGE.source, 'i');
 
 export function extractImageRefs(content: string): ImageRef[] {
   if (!content) {
@@ -32,17 +42,20 @@ export function extractImageRefs(content: string): ImageRef[] {
   // 做法与导出功能一致：把代码区涂黑成等长占位，用占位串跑正则拿偏移，再回原文取真实内容。
   const masked = maskCodeRegions(content);
   const refs: ImageRef[] = [];
-  const collect = (source: string, flags: string, pick: (m: RegExpExecArray) => string) => {
-    const re = new RegExp(source, flags);
+  const collect = (re: RegExp, once: RegExp, pick: (m: RegExpExecArray) => string) => {
+    // 复用的是模块级的全局正则：必须每次归零 lastIndex（上一次调用中途抛错也会留下状态）。
+    // 这里全程同步、没有 await，所以不存在两次调用交错的问题。
+    re.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(masked)) !== null) {
       const raw = content.slice(match.index, match.index + match[0].length);
-      const exact = new RegExp(source, flags.replace('g', '')).exec(raw);
+      const exact = once.exec(raw);
       refs.push({ url: (exact ? pick(exact) : '').trim(), raw, index: match.index });
     }
+    re.lastIndex = 0;
   };
-  collect(MARKDOWN_IMAGE.source, 'g', (m) => m[2] || '');
-  collect(HTML_IMAGE.source, 'gi', (m) => m[1] || m[2] || m[3] || '');
+  collect(MARKDOWN_IMAGE, MARKDOWN_IMAGE_ONCE, (m) => m[2] || '');
+  collect(HTML_IMAGE, HTML_IMAGE_ONCE, (m) => m[1] || m[2] || m[3] || '');
   return refs.sort((a, b) => a.index - b.index);
 }
 

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import { pickClientIp, pickSocketIp } from 'src/provider/log/utils';
+import { pickSocketIp } from 'src/provider/log/utils';
+import { pickTrustedClientIp } from './trustedProxy';
 import { consumeAttempt } from './attemptLimit';
 import { scaleLimit } from './clusterRole';
 
@@ -117,7 +118,13 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
     if (isLoopbackRequest(req)) {
       return next();
     }
-    const ip = pickClientIp(req) || pickSocketIp(req) || 'unknown';
+    // ⚠️ 体量类限流用 `pickTrustedClientIp()`（见 utils/trustedProxy.ts 的说明）：
+    // 以前是 `pickClientIp(req) || pickSocketIp(req)`，而 pickClientIp 优先读
+    // cf-connecting-ip / x-real-ip / x-forwarded-for —— 全是客户端可控的头，
+    // 于是"每个请求换一个头"就能把四档限流全部绕过（实测 20/20 放行）。
+    // ⚠️ 防爆破类的计数（登录 / 评论 / 文章解锁）**不要**换成这个函数，
+    // 它们继续用 pickSocketIp()：那边的收益正是"换一个 key 重新开始"，理由见 trustedProxy.ts。
+    const ip = pickTrustedClientIp(req);
     const path = String((req as any).path || (req as any).url || '');
     const method = String(req.method || 'GET').toUpperCase();
 

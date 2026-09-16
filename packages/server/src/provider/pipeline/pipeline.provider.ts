@@ -1,7 +1,20 @@
-/** 单个流水线的执行上限：超时直接杀进程，避免 await 永久挂起。 */
-const PIPELINE_TIMEOUT_MS = Number(process.env.VANBLOG_PIPELINE_TIMEOUT_MS || 30000);
-/** 安装依赖的上限。 */
-const DEPS_INSTALL_TIMEOUT_MS = Number(process.env.VANBLOG_DEPS_INSTALL_TIMEOUT_MS || 300000);
+import { envPositiveInt } from 'src/utils/envNumber';
+
+/**
+ * 单个流水线的执行上限：超时直接杀进程，避免 await 永久挂起。
+ *
+ * ⚠️ 以前是裸的 `Number(process.env.X || 30000)`：env 写成 `30s` / `abc` 时得到 **NaN**，
+ * 而 `setTimeout(fn, NaN)` 在 Node 里等于 1ms ⇒ 流水线刚 fork 出来就被判"超时"杀掉，
+ * 报错信息还印着 `超过 NaNs 未返回结果`（看起来像流水线自己写错了，实际是 env 打错了）。
+ */
+const PIPELINE_TIMEOUT_MS = envPositiveInt('VANBLOG_PIPELINE_TIMEOUT_MS', 30000, 1000, 3600000);
+/** 安装依赖的上限（同样要防 NaN，见上面）。 */
+const DEPS_INSTALL_TIMEOUT_MS = envPositiveInt(
+  'VANBLOG_DEPS_INSTALL_TIMEOUT_MS',
+  300000,
+  1000,
+  7200000,
+);
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Logger } from '@nestjs/common';
@@ -15,6 +28,8 @@ import { spawnSync } from 'child_process';
 import { config } from 'src/config/index';
 import { writeFileSync, rmSync } from 'fs';
 import {fork, spawn} from 'child_process';
+import cluster from 'node:cluster';
+import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { LogProvider } from '../log/log.provider';
 
 export interface CodeResult {
@@ -33,7 +48,16 @@ export class PipelineProvider {
     private pipelineModel: Model<PipelineDocument>,
     private readonly logProvider: LogProvider,
   ) {
-    this.init();
+    // ⚠️ 只由主实例做：`init()` 会跑 `checkAllDeps()`（对每个依赖执行 `pnpm add`，
+    // cwd 是共享的 codeRunnerPath）与 `saveAllScripts()`（写同一批 <id>.js 文件）。
+    // 多进程时每个 worker 都来一遍 ⇒ N 个 `pnpm add` 同时改同一个 node_modules
+    // （pnpm 自己都不保证并发安全），以及 N 份内容相同但互相截断的写文件。
+    // 单进程时 isPrimaryInstance() 恒为真，行为与以前完全一致。
+    if (isPrimaryInstance(cluster)) {
+      this.init();
+    } else {
+      this.logger.log('cluster worker：跳过流水线的依赖安装与脚本落盘（由主实例负责）');
+    }
   }
 
   checkEvent(eventName: string) {

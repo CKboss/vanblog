@@ -27,7 +27,6 @@ import * as path from 'path';
 import * as dayjs from 'dayjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JSON_IMPORT_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
-import { diskStorage } from 'multer';
 import { removeID } from 'src/utils/removeId';
 import { ViewerProvider } from 'src/provider/viewer/viewer.provider';
 import { VisitProvider } from 'src/provider/visit/visit.provider';
@@ -38,45 +37,10 @@ import { ApiToken } from 'src/provider/swagger/token';
 import { ISRProvider } from 'src/provider/isr/isr.provider';
 import { collectCategoriesFromBackup, toExportCategory } from 'src/utils/backupCategories';
 
-/**
- * 恢复用的上传选项：备份可能有几百 MB，**必须落盘**（默认的内存存储会把它整个读进内存，
- * 而且 `file.path` 为空）。装饰器在类实例化之前求值，所以这里用模块级常量。
- */
-const RESTORE_UPLOAD_OPTIONS = {
-  storage: diskStorage({
-    destination: (_req: any, _file: any, cb: (err: Error | null, dir?: string) => void) => {
-      try {
-        // 不能放在 staticPath 下面：<static>/tmp/ 是匿名可下载的，而这里暂存的
-        // 是整站备份（含密码哈希与 jwt 密钥）。放到备份目录（不在静态目录内）。
-        const dir = path.join(config.backupPath, 'upload-tmp');
-        fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-      } catch (err) {
-        cb(err as Error);
-      }
-    },
-    filename: (_req: any, file: any, cb: (err: Error | null, name?: string) => void) => {
-      const matched = String(file?.originalname || '').match(/\.(tar\.(zst|xz|gz)|tgz)$/i);
-      cb(
-        null,
-        `restore-upload-${Date.now()}-${Math.round(Math.random() * 1e6)}${
-          matched ? matched[0] : '.tar'
-        }`,
-      );
-    },
-  }),
-  // fileSize 放宽到 8GB 是因为整站备份（含图床）可能很大；但**其它维度必须收紧**：
-  // multer 1.x 的主要 DoS 面是"不限数量的 parts/fields/files"，一个恶意 multipart
-  // 请求能用几十万个空 part 把事件循环和内存打满。这个接口只有管理员能用，
-  // 但也不该让它成为放大器。
-  limits: {
-    fileSize: 8 * 1024 * 1024 * 1024,
-    files: 1,
-    fields: 8,
-    parts: 32,
-    headerPairs: 64,
-  },
-};
+// 恢复用的 multer 上传选项搬到了 `src/utils/restoreUpload.ts`：
+// 初始化页的 `POST /api/admin/init/restore`（匿名可达，仅未初始化时开放）要用**同一份**限额，
+// 两边各写一份迟早会漂（一边 8GB 一边 200MB，大站就会在初始化页莫名其妙地 413）。
+import { RESTORE_UPLOAD_OPTIONS } from 'src/utils/restoreUpload';
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
 import { availableFormats, pickSpec } from 'src/utils/fullBackup';
 import { checkTrue } from 'src/utils/checkTrue';
@@ -253,7 +217,10 @@ export class BackupController {
         archivePath,
         body?.withStatic === undefined ? true : checkTrue(body.withStatic),
       );
-      this.isrProvider.activeAll('整站恢复触发全量渲染！');
+      // ⚠️ delay 必须给：`activeAll` 会把它转交给 RSS 与 sitemap 两个生成器，
+      // 不传就是"RSS 3 分钟 / sitemap 1 分钟"之后才写文件（且会被后续任何一次 activeAll 重置），
+      // 恢复完立刻去看 /feed.xml 会 404。`main.ts` 启动时传的也是 1000。
+      this.isrProvider.activeAll('整站恢复触发全量渲染！', 1000);
       return {
         statusCode: 200,
         data: {
@@ -264,6 +231,8 @@ export class BackupController {
           backupCreatedAt: result.manifest.createdAt,
           notes: result.notes,
           uploaded,
+          // 流水线依赖只在启动时装（不在请求路径上跑 pnpm add），前台据此提示"重启一次"
+          needsRestartForPipelineDeps: Boolean(result.needsRestartForPipelineDeps),
         },
       };
     }

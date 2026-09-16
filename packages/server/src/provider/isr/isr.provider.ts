@@ -66,21 +66,27 @@ export class ISRProvider {
     }
     const queued = this.stormQueued;
     this.stormQueued = null;
-    if (queued && this.stormChain < ISRProvider.STORM_CHAIN_MAX) {
-      this.stormChain += 1;
-      this.logger.log(
-        `补跑一轮全量渲染（第 ${this.stormChain} 次追加，来源：${queued.info || '未注明'}）`,
-      );
-      await this.activeAllFn(queued.info, queued.activeConfig);
-    } else if (queued) {
-      this.logger.warn(
-        `已连续追加 ${ISRProvider.STORM_CHAIN_MAX} 轮全量渲染，丢弃后续请求（来源：${
-          queued.info || '未注明'
-        }）——通常说明有人在批量改数据，下一小时的定时任务会兜底`,
-      );
-    }
-    if (this.stormChain > 0 && !this.stormQueued) {
-      this.stormChain = 0;
+    try {
+      if (queued && this.stormChain < ISRProvider.STORM_CHAIN_MAX) {
+        this.stormChain += 1;
+        this.logger.log(
+          `补跑一轮全量渲染（第 ${this.stormChain} 次追加，来源：${queued.info || '未注明'}）`,
+        );
+        await this.activeAllFn(queued.info, queued.activeConfig);
+      } else if (queued) {
+        this.logger.warn(
+          `已连续追加 ${ISRProvider.STORM_CHAIN_MAX} 轮全量渲染，丢弃后续请求（来源：${
+            queued.info || '未注明'
+          }）——通常说明有人在批量改数据，下一小时的定时任务会兜底`,
+        );
+      }
+    } finally {
+      // ⚠️ 必须在 finally 里收：补跑那一轮如果抛错（例如读 ISR 设置时 Mongo 正好不可用），
+      // 链计数就会永远停在 >0，之后每一轮 storm 都会少追加几次，
+      // 而日志里只会看到"已连续追加 3 轮，丢弃后续请求"这种莫名其妙的话。
+      if (this.stormChain > 0 && !this.stormQueued) {
+        this.stormChain = 0;
+      }
     }
   }
 
@@ -131,9 +137,12 @@ export class ISRProvider {
       if (process.env['VANBLOG_DISABLE_WEBSITE'] === 'true') {
         return;
       }
-      this.activeWithRetry(() => {
-        this.activeAllFn(info, activeConfig);
-      });
+      // ⚠️ 箭头函数**必须 return**：`activeWithRetry` 里那句 `await fn(info)` 以前
+      // await 的是 undefined（花括号里没有 return），于是它自己的 try/catch 与
+      // "第 N 次重试"日志形同虚设 —— activeAllFn 的失败只能落到全局 unhandledRejection
+      // 兜底里，看不出是哪一轮、哪个来源。现在真的 await 到 storm 结束，
+      // 失败会带上来源被打出来，重试循环也不会在 storm 还在跑的时候就返回。
+      this.activeWithRetry(() => this.activeAllFn(info, activeConfig), info);
     }, 1000);
   }
 
@@ -234,7 +243,18 @@ export class ISRProvider {
     }
   }
 
-  // 修改文章牵扯太多，暂时不用这个方法。
+  /**
+   * ⚠️ **当前不可达**：全仓库没有任何调用方（"修改文章牵扯太多，暂时不用这个方法"）。
+   * 保留是因为它是一个合理的未来入口（只重渲染受影响的几页，而不是全量 storm）。
+   * 如果哪天要接上去，先注意：
+   *  - 下面所有 `activeUrl()` 都是**故意不 await** 的（并发触发，互不等待），
+   *    而 `activeUrl` 自己会 catch，所以不会漏 rejection；
+   *  - 但 `activePath('page')` 会读库（`sitemapProvider.getPageUrls()` → 文章总数），
+   *    以前既不 await 也不 catch ⇒ 一次 DB 抖动就是一条没有来源的 unhandledRejection，
+   *    现在补了带来源的 `.catch`；
+   *  - `article.tags` / `article.category` 在 `article` 为 null 时会抛（`getByIdOrPathnameWithPreNext`
+   *    找不到文章时返回的 article 可能是空的），接上去之前要先判空。
+   */
   async activeArticleById(id: number, event: 'create' | 'delete' | 'update', beforeObj?: Article) {
     const { article, pre, next } = await this.articleProvider.getByIdOrPathnameWithPreNext(
       id,
@@ -289,20 +309,28 @@ export class ISRProvider {
     // 干脆就都触发了。
     // if (event == 'create' || event == 'delete') {
     this.logger.log('触发全部 page 页增量渲染！');
-    this.activePath('page');
+    // 不 await（与其它 activeUrl 一样是并发触发），但必须 catch：它会读库
+    this.activePath('page').catch((err) =>
+      this.logger.error(
+        `触发全部 page 页增量渲染失败（activeArticleById, id=${id}）：${
+          (err as Error)?.message || err
+        }`,
+      ),
+    );
     // }
   }
 
   async activeAbout(info: string) {
     this.activeWithRetry(() => {
       this.logger.log(info);
-      this.activeUrl(`/about`, false);
+      // 同上：不 return 就等于没 await，重试与错误归因都拿不到结果
+      return this.activeUrl(`/about`, false);
     }, info);
   }
   async activeLink(info: string) {
     this.activeWithRetry(() => {
       this.logger.log(info);
-      this.activeUrl(`/link`, false);
+      return this.activeUrl(`/link`, false);
     }, info);
   }
 

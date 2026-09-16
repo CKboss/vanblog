@@ -77,8 +77,11 @@ export class InitProvider {
       // 老站点升级时没有这条设置，SettingProvider 会回落到 waline，评论数据不受影响。
       await this.settingProvider.updateCommentSetting({ provider: 'builtin' });
       await this.settingProvider.updateMenuSetting({ data: defaultMenu });
-      // 运行 waline
-      this.walineProvider.init();
+      // 运行 waline（不 await：初始化接口不该被子进程启动拖住），但必须 catch ——
+      // `run()` 里有 DB 读（评论设置），reject 就是一条没有来源的 unhandledRejection
+      this.walineProvider.init().catch((err) =>
+        this.logger.error(`初始化后启动评论服务失败：${(err as Error)?.message || err}`),
+      );
       // 重启前台
       this.websiteProvider.restart('初始化');
       return '初始化成功!';

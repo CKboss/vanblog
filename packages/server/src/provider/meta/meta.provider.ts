@@ -37,9 +37,21 @@ export class MetaProvider {
   async updateTotalWords(reason: string) {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(async () => {
-      const total = await this.articleProvider.countTotalWords();
-      await this.update({ totalWordCount: total });
-      this.logger.log(`${reason}触发更新字数缓存：当前文章总字数: ${total}`);
+      // ⚠️ 这个 async 回调以前**没有 try/catch**，而它是被 fire-and-forget 调用的
+      // （文章新建/更新/删除/导入、以及启动时）：30 秒后 Mongo 抖一下，
+      // `countTotalWords()` 或 `update()` 一 reject 就是一条**没有上下文**的全局
+      // unhandledRejection，而字数缓存会一直停在旧值上，直到下一次增删改文章 ——
+      // 后台首页那个"总字数"就这么静默错下去，日志里看不出是这件事失败了。
+      try {
+        const total = await this.articleProvider.countTotalWords();
+        await this.update({ totalWordCount: total });
+        this.logger.log(`${reason}触发更新字数缓存：当前文章总字数: ${total}`);
+      } catch (err) {
+        this.logger.error(
+          `更新字数缓存失败（来源：${reason}）：${(err as Error)?.message || err}` +
+            '——总字数会停在上一次的值，直到下一次增删改文章',
+        );
+      }
     }, 1000 * 30);
   }
 

@@ -1,4 +1,90 @@
-import {
+import mongoose from 'mongoose';
+import * as directMongoDb from 'mongodb';
+
+/**
+ * 整站备份用的 BSON <-> JSON 编解码（canonical EJSON 的子集，够 VanBlog 用）。
+ *
+ * 为什么不直接用 EJSON：`bson` 在 pnpm 的严格 node_modules 下不能从 server 直接 require，
+ * `mongodb@5` 也没有再导出 EJSON。这里按 `_bsontype` 判别（比 instanceof 稳，
+ * 避免 mongodb / mongoose 各自持有一份类导致判断失败），写出来的格式和 canonical EJSON 一致，
+ * 所以将来换成官方 EJSON 也能读。
+ *
+ * 解码时遵循 EJSON 的规则：**只有当对象里仅有那一个 `$` 键时才还原成 BSON 类型**，
+ * 免得把用户文章里恰好叫 `$date` 的字段误伤。
+ *
+ * ⚠️⚠️ **解码时必须用 mongoose 那一份驱动的 BSON 构造器**（下面 `pickBsonSource` 的说明）。
+ */
+
+/**
+ * 解码要还原的 12 个 BSON 类型（与 canonical EJSON 的键一一对应）。
+ */
+const BSON_CTOR_NAMES = [
+  'ObjectId',
+  'Binary',
+  'Code',
+  'DBRef',
+  'Decimal128',
+  'Double',
+  'Int32',
+  'Long',
+  'MaxKey',
+  'MinKey',
+  'BSONRegExp',
+  'Timestamp',
+] as const;
+
+export type BsonCtors = Record<(typeof BSON_CTOR_NAMES)[number], any>;
+
+/**
+ * 这些构造器**必须来自 mongoose 实际在用的那份驱动**，不能来自 server 直接依赖的
+ * `mongodb@5.9.1`。
+ *
+ * 事故现场（mongoose 7→8 升级之后才暴露，见 AGENTS §7.52）：
+ *  - `provider/backup/fullBackup.provider.ts` 用的是 `connection.getClient()`，
+ *    也就是 **mongoose 8 自带的 driver = mongodb 6.20.0 = bson 6.x**；
+ *  - 而这个文件以前 `import { ObjectId, … } from 'mongodb'`，拿到的是
+ *    **server 直接依赖的 mongodb 5.9.1 = bson 5.x**；
+ *  - 于是"恢复整站备份"时，`decodeDoc()` 造出来的 `ObjectId`/`Binary` 是 bson 5 的实例，
+ *    交给 driver 6 的序列化器就报
+ *    **`Unsupported BSON version, bson types must be from bson 6.x.x`** ⇒ 恢复第一个集合
+ *    （articles）就 400，整个恢复功能不可用。
+ *  - mongoose 7 时代两边同为 bson 5，所以这个坑一直潜伏着；而
+ *    `test/backup-restore.e2e-spec.ts` 只覆盖了 JSON 导入导出，**没有 BSON 往返**，
+ *    所以升级时没被测出来。
+ *
+ * 修法：优先从 `mongoose.mongo`（mongoose 自己 require 的那份 driver 模块）取构造器 ——
+ * 它的 bson 主版本**按定义**与写库时用的序列化器一致，以后再升 mongoose 也不会再漂。
+ * 直接依赖的 `mongodb` 只作为"mongoose.mongo 万一缺了某个构造器"时的兜底。
+ *
+ * 导出侧（`encodeDoc`）本来就按 `_bsontype` 鸭子判别、不做 instanceof，
+ * 所以**不管文档里的 BSON 实例来自哪一份 bson，编码结果都一样** ⇒
+ * 已经写出去的归档（含线上那批）不需要重做，这次改动也不动归档格式。
+ */
+function pickBsonSource(): { ctors: BsonCtors; label: string } {
+  const candidates: Array<{ label: string; mod: any }> = [
+    { label: 'mongoose.mongo', mod: (mongoose as any)?.mongo },
+    { label: 'mongodb(direct)', mod: directMongoDb },
+  ];
+  for (const candidate of candidates) {
+    const mod = candidate.mod;
+    if (mod && BSON_CTOR_NAMES.every((name) => typeof mod[name] === 'function')) {
+      return { ctors: mod as BsonCtors, label: candidate.label };
+    }
+  }
+  // 理论上到不了这里（直接依赖的 mongodb 一定有这些导出）；真到了就说明依赖树坏了，
+  // 与其在恢复时才炸，不如在加载时把话说清楚。
+  throw new Error(
+    '无法解析 BSON 构造器：mongoose.mongo 与直接依赖的 mongodb 都缺少 ' +
+      BSON_CTOR_NAMES.join('/'),
+  );
+}
+
+const bsonSource = pickBsonSource();
+
+/** 当前用的是哪一份 bson（测试与排障用；生产环境应当恒为 `mongoose.mongo`） */
+export const BSON_SOURCE_LABEL = bsonSource.label;
+
+const {
   BSONRegExp,
   Binary,
   Code,
@@ -11,19 +97,7 @@ import {
   MinKey,
   ObjectId,
   Timestamp,
-} from 'mongodb';
-
-/**
- * 整站备份用的 BSON <-> JSON 编解码（canonical EJSON 的子集，够 VanBlog 用）。
- *
- * 为什么不直接用 EJSON：`bson` 在 pnpm 的严格 node_modules 下不能从 server 直接 require，
- * `mongodb@5` 也没有再导出 EJSON。这里按 `_bsontype` 判别（比 instanceof 稳，
- * 避免 mongodb / mongoose 各自持有一份类导致判断失败），写出来的格式和 canonical EJSON 一致，
- * 所以将来换成官方 EJSON 也能读。
- *
- * 解码时遵循 EJSON 的规则：**只有当对象里仅有那一个 `$` 键时才还原成 BSON 类型**，
- * 免得把用户文章里恰好叫 `$date` 的字段误伤。
- */
+} = bsonSource.ctors;
 
 export const BACKUP_KIND = 'vanblog-full-backup';
 export const BACKUP_VERSION = 1;
@@ -123,6 +197,14 @@ export function encodeDoc(value: any): any {
   }
   if (value instanceof Date) {
     return { $date: value.toISOString() };
+  }
+  if (value instanceof RegExp) {
+    // ⚠️ 驱动会把库里的 BSON regex **还原成原生 RegExp**（promoteValues 默认开），
+    // 而原生 RegExp 既没有 `_bsontype`、`Object.keys()` 也是空的 —— 以前它会掉进下面
+    // "普通对象"那个分支被编码成 `{}`，也就是**这个字段的值被静默丢掉**
+    // （恢复之后那条正则变成空对象，看不出任何报错）。
+    // canonical EJSON 的写法就是 `$regularExpression`，`decodeDoc` 一直都认它。
+    return { $regularExpression: { pattern: value.source, options: value.flags } };
   }
   if (Buffer.isBuffer(value)) {
     return { $binary: { base64: value.toString('base64'), subType: '00' } };

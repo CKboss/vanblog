@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { ViewStatsProvider } from './viewStats.provider';
 
 /**
@@ -16,8 +17,15 @@ import { ViewStatsProvider } from './viewStats.provider';
 
 type Doc = Record<string, any>;
 
-const TODAY = '2026-09-16';
-const YESTERDAY = '2026-09-15';
+// ⚠️ 这两个值必须是**动态**的，不能写死：Provider 给每次浏览打日期用的是
+// `dayjs().format('YYYY-MM-DD')`（真实当天），而这里以前写死了 `'2026-09-16'`。
+// 写死的那一天一旦过去（本机就是在 00:24 跨过零点时炸的），种下去的 fixtures 全成了
+// "昨天"的数据 ⇒ 每一条按 TODAY 取的断言都红，看起来像"浏览统计被改坏了"，
+// 实际与代码无关。CI 在什么时刻跑就什么时候炸，是个纯粹的定时炸弹。
+const TODAY = dayjs().format('YYYY-MM-DD');
+const YESTERDAY = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+/** "更早的某一天"（测试种子数据里的历史行），同样要跟着当前日期走 */
+const LAST_WEEK = dayjs().subtract(6, 'day').format('YYYY-MM-DD');
 
 function matches(doc: Doc, filter: Doc): boolean {
   for (const [key, value] of Object.entries(filter || {})) {
@@ -341,7 +349,7 @@ describe('ViewStatsProvider：落库结果与"逐次写"完全一致', () => {
   it('visits 是"按路径累计"：新的一天从上一天的值接着加，不会在零点掉回 1', async () => {
     const fake = createFake({
       visits: [
-        { date: '2026-09-10', pathname: '/post/hello', viewer: 30, visited: 4 },
+        { date: LAST_WEEK, pathname: '/post/hello', viewer: 30, visited: 4 },
         { date: YESTERDAY, pathname: '/post/hello', viewer: 42, visited: 7 },
       ],
     });

@@ -3,7 +3,7 @@
 # 归档全部用**真的** tar + zstd/xz/gzip 现场打（不 mock 压缩器）：
 # verify 的价值就在于抓住真截断/真损坏，假归档测不出这个。
 # 结构按 server 的打包方式造（tar -C staging . ⇒ ./manifest.json、./db/<库>/<集合>.ndjson、
-# ./static/<img|file|customPage>/…，见 packages/server/src/utils/fullBackup.ts）。
+# ./static/<img|file|customPage|themes>/…，见 packages/server/src/utils/fullBackup.ts）。
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

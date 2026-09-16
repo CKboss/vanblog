@@ -269,6 +269,10 @@ export class AppModule implements NestModule {
       .exclude(
         { path: '/api/admin/img/upload', method: RequestMethod.POST },
         { path: '/api/admin/init/upload', method: RequestMethod.POST },
+        // 初始化页直接上传整站备份恢复：站点**还没初始化**时必须能用，
+        // 而 InitMiddleware 对未初始化的站点一律回 `{statusCode:233,'未初始化!'}`。
+        // 安全性由控制器自己保证（处理器内 checkHasInited + 单飞互斥 + 归档校验）。
+        { path: '/api/admin/init/restore', method: RequestMethod.POST },
         { path: '/api/admin/caddy/ask', method: RequestMethod.GET },
       )
       .forRoutes({

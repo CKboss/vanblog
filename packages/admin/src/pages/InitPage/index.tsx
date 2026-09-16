@@ -12,6 +12,7 @@ import { ProFormText, StepsForm } from '@ant-design/pro-form';
 import SiteInfoForm from '@/components/SiteInfoForm';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';
 import { useRef } from 'react';
+import RestoreFromBackup from './RestoreFromBackup';
 
 const InitPage = () => {
   const history = useHistory();
@@ -21,6 +22,27 @@ const InitPage = () => {
   return (
     <div className={styles.container}>
       <div className={styles.content}>
+        {/* 「用备份恢复」放在向导**前面**且完全独立：手里有整站备份的用户
+            一个初始化字段都不用填（管理员账号、站点设置、文章、图片全在归档里）。
+            它不读任何表单状态，所以也不影响「站点已初始化 → 跳走」的重定向逻辑。 */}
+        <ProCard title="已有整站备份？直接恢复" style={{ marginBottom: 16 }}>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="上传 full 备份归档，一步恢复整个旧站点"
+            description={
+              <div>
+                管理员账号、站点设置、文章、图片<b>全部来自备份文件</b>，
+                不需要填写下面初始化向导的任何信息；恢复完成后用备份里的账号密码登录。
+              </div>
+            }
+          />
+          <RestoreFromBackup />
+        </ProCard>
+        <div style={{ textAlign: 'center', color: '#999', margin: '4px 0 20px' }}>
+          —— 或者，手动初始化 ——
+        </div>
         <ProCard
           title={
             <div>

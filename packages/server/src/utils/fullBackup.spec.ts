@@ -157,7 +157,13 @@ describe('compression format helpers', () => {
   });
 
   it('never backs up regenerable static folders', () => {
-    expect(BACKUP_STATIC_FOLDERS).toEqual(['img', 'file', 'customPage']);
+    // ⚠️ 这条以前钉的是 ['img','file','customPage'] —— 那个清单**就是 bug**：
+    // 后台上传的主题 CSS 在 <static>/themes/ 下，不在清单里 ⇒ 主题从来不进归档，
+    // 而主题的元数据在库里，恢复后后台显示"主题在、已启用"，CSS 却 404（静默退回默认皮肤）。
+    // 现在补上 themes；完整的分类守卫（含"未知新目录必须让测试红"）在
+    // src/audit-hardening-round3-backup.spec.ts。
+    expect(BACKUP_STATIC_FOLDERS).toEqual(['img', 'file', 'customPage', 'themes']);
+    expect(BACKUP_STATIC_FOLDERS).toContain('themes');
     expect(BACKUP_STATIC_FOLDERS).not.toContain('export');
     expect(BACKUP_STATIC_FOLDERS).not.toContain('tmp');
   });

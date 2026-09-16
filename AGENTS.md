@@ -4660,7 +4660,7 @@ admin 87 套件/347 → **94/363**（本轮之后含 init 恢复功能共 383）
     无效日期从"比较器返回 NaN、顺序由引擎决定"改成确定性地排最后（有意加固，有测试）。
 12. **`useMemo(..., [props])` 全仓清扫**（props 对象每次渲染换引用 = memo 形同虚设）：
     PostCard(calContent/showDonate)、title(newTab/dataPath)、bottom(show)、about(捐赠表拼接+dayjs)、
-    NavBar(picUrl)、AuthorCard(logoUrl)、Reward(payUrl)、SocialIcon(weChatUrl)、post/[id](jsonLd)
+    NavBar(picUrl)、AuthorCard(logoUrl)、Reward(payUrl)、SocialIcon(weChatUrl)、post/[id] 的 jsonLd
     全部改成具体字段依赖，输出不变。⚠️ 这条以后还会再长出来：**新代码里 `useMemo`/`useEffect` 的依赖
     永远不要写 `props` 整个对象**（`renderMemoDeps.spec.ts` 钉住，含反向断言）。
 
@@ -4723,13 +4723,332 @@ TerminalDisplay 的 escapeXML · firstImage 的 `scan()` 提前 break 限住了�
 而 §7.53 之后"带 Next 14 类型的 tsc 0 错误"已经是等价关卡）；waline 模式没有活体跑过（本站用内置评论）；
 所有 ms 数字都是在有并行构建负载的机器上量的，只作方向参考 —— **字节数、监听器数量、复杂度结论是硬的**。
 
+### 7.55 第三轮加固：三个"恢复看起来成功了其实没成"的真 bug、限流可被一个请求头绕过、以及热路径 3.7–96×
+
+这一轮的主题是用户原话「检查一下代码中的逻辑，加固强化代码，并看看能否通过优化算法的方式提升运行效率」。
+中途插进来三件更急的（整站恢复 400、初始化页直接恢复、主题不进备份），一并记在这里。
+所有效率结论都带前后数字与产生它的命令；量不出来的明说"推理未实测"。
+
+#### A. 整站恢复 400：`Unsupported BSON version`（mongoose 8 升级的潜伏账单）
+
+`utils/backupCodec.ts` 的 12 个 BSON 构造器来自 server **直接依赖的 `mongodb@5.9.1`**（bson 5.x），
+而恢复走的是 `fullBackup.provider.ts` 的 `connection.getClient()` = **mongoose 8.24.4 自带的 driver 6.20.0**（bson 6.x），
+bson 6 的序列化器拒绝外来主版本的实例 ⇒ 恢复第一个集合就 400，**整个"整站恢复"不可用**。
+两行就能复现：`mongoose.mongo.BSON.serialize({_id: new (require('mongodb').ObjectId)(…)})` 抛那句错，
+换成 `new mongoose.mongo.ObjectId(…)` 正常。⚠️ mongoose 7 时代两边同为 bson 5，所以一直"是对的"；
+而备份的 e2e **只覆盖 JSON 导入导出、从来没有 BSON 往返**，升级时测不出来。
+修法：构造器改从 **`mongoose.mongo`** 取（它的 bson 主版本按定义与写库时一致，以后再升 mongoose 也不会漂），
+直接依赖只作兜底；`BSON_SOURCE_LABEL` 导出给测试与排障。**导出侧一行没改**（`encodeDoc` 按 `_bsontype`
+鸭子判别、不做 instanceof）⇒ **已有归档照常能恢复、归档格式不变**。
+⚠️ 顺带挖出一个更安静的数据丢失：driver 会把 BSON regex **提升成原生 RegExp**，而原生 RegExp 没有 `_bsontype`、
+`Object.keys()` 也是空的 ⇒ `encodeDoc` 让它掉进"普通对象"分支、**编码成 `{}`**。
+也就是"任何正则值的字段，在每一份写出去的归档里都是空的"，恢复后是空对象、零报错。
+现在按 canonical `{$regularExpression:{pattern,options}}` 写（解码侧本来就认）。
+**反证跑过**：把构造器候选顺序临时改回直接依赖 ⇒ 3 条用例当场红，报的就是生产那句 `BSONVersionError`。
+真归档实测（隔离 mongod:27018，**不碰开发库** —— 恢复按 manifest 里的库名写库，指到 27017 等于覆盖真数据）：
+2750 ms 恢复 13 集合 / 9830 条，articles 59（**公开 53**）、statics **93**、后台账号来自归档。
+**容器级也验过**（镜像重建后）：全新空库 → `POST /api/admin/init/restore` 上传 69MB 真归档 →
+HTTP 201 / 3.75 s / `initialized:true`、`counts.articles=59`、`counts.statics=93`；
+恢复后 meta 200 且是真实站点、列表 `total:53`、SSR 文章页 200/78,830B、原图 200/1,076,400B、
+`/`//admin//timeline//link//tag//sitemap.xml/waline 全 200；**再调一次 → 403**；日志零异常。
+
+#### B. 初始化页直接上传整站备份恢复（新接口）
+
+用户原话：「在 init 页面上也补充一个使用备份文件恢复的功能，直接上传 full 备份就重启整个旧的网站。
+这样我就不用一次一次填无用信息了。」
+
+契约：`POST /api/admin/init/restore`，multipart 字段 **`file`**，**匿名可用、只在未初始化时开放**。
+成功回 `{statusCode:200,data:{restoredAt,seconds,databases,static,backupCreatedAt,notes[],counts:{…},
+adminUserFromArchive,initialized,needsRestartForPipelineDeps}}`；
+错误 **400**（没文件 / 文件名不匹配 `^vanblog-full-.+\.tar\.(zst|xz|gz)$` / 清单读不出 / 成员含 `..` / 没有解压器 /
+**归档版本比本程序新**）、**403**（已初始化，提示去「备份与恢复」）、**409**（另一个恢复在跑）、
+演示站回 `{statusCode:401,message:'演示站禁止修改此项！'}`（HTTP 200 信封，与其它演示站守卫同形状）。
+⚠️ **前台要看 `data.initialized`，不能只看 HTTP 200**：归档里没有 users 时恢复会"成功"但站点仍未初始化。
+
+护栏（匿名 + 破坏性，所以比一般接口多）：`InitController` 整个不挂 `AdminGuard`（新路由继承），
+限流的 `/api/admin/init` 前缀桶（5 次/10 分钟/IP）自动覆盖；`app.module.ts` 的 `InitMiddleware` 加了一条
+`.exclude()`（否则未初始化时它自己会先用 233 挡掉）—— ⚠️ **四处 `forRoutes({path:'*'})` 与中间件顺序一个字没动**，
+且有源码级测试钉住；处理器内**再查一次** `checkHasInited()` 且排在最前（对已初始化站点不透露处理细节）；
+**同步获取的布尔单飞锁**（并发第二个 409）；写库前依次校验 文件名白名单 → `inspectFullBackup()` →
+新的 `assertRestorableArchive()`（`decompress | tar -tf -` 列成员，拒绝绝对路径与任何 `..` 段 ——
+⚠️ **不依赖 tar 自己拒绝穿越**：本机是 GNU tar 会拒，容器里是 **busybox tar**，而这条接口匿名）；
+临时归档在 `finally` 里删；上传限额与后台那条**共用同一份** `RESTORE_UPLOAD_OPTIONS`（已抽到 `utils/restoreUpload.ts`，
+8GB/1 文件/8 字段/32 parts）—— 两边各写一份迟早会漂（一边 8GB 一边 200MB，大站就会在初始化页莫名 413）。
+⚠️ 单飞锁的两个坑都踩过并有测试：锁必须在**第一个 await 之前**拿到（promise 版本会在几个 await 之后才落锁，
+两个请求双双通过）；释放必须**判断归属**（第一版在 finally 里无条件放锁，被 409 挡掉的请求把**正在跑那次的锁**放了，
+第三个请求就能进来 —— 是并发用例抓出来的）。
+失败状态：所有校验都在第一次写之前 ⇒ 坏归档不留数据；中途失败时恢复是"先写 `<coll>__vanblog_restore` 再 rename"，
+库里仍没有 users ⇒ **站点仍未初始化、可重试**，不会"半恢复却被当成已初始化"。
+老归档兼容：闸门只有 `isFullBackupManifest()`（`kind` 对、`version <= 1`、`databases` 是对象），
+**缺字段一律回落而不是拒绝**（没有 `static.themes` 就是不恢复主题；少某个集合 ⇒ counts 那项为 0；
+`totals` 形状变了无所谓，恢复路径不读它；某集合的 `.ndjson` 缺失 ⇒ notes 里加一条继续）。
+**只有"版本比本程序新"才拒绝** —— 宁可不恢复，也不按不认识的格式乱写。
+前端（`packages/admin/src/pages/InitPage/RestoreFromBackup.tsx` + `restoreCore.js`）：卡片在向导**之前**、
+不需要填任何字段，`beforeUpload` 拦下 → `Modal.confirm` → XHR 上传（真实进度 + "正在恢复…"独立阶段，
+进行中禁用按钮防双击），成功按 `initialized` 分支（true 才清 token 跳登录并提示"凭据是备份里的那套"；
+false 留在向导并说明"数据已恢复但没有管理员账号"），失败按 409/403/429/400-版本过新 分别给提示。
+
+#### C. 主题 CSS 从来不进整站备份（你问出来的那个）
+
+`utils/fullBackup.ts` 的 `BACKUP_STATIC_FOLDERS` 是**手写清单**，以前只有 `['img','file','customPage']`，
+而后台上传的主题在 `<static>/themes/<id>-<hash8>.css` ⇒ **主题文件从来不进归档**；
+但主题元数据在 `settings`、启用状态在 `metas.siteInfo.uiStyle`，两者都随库备份 ⇒
+换机器恢复后**后台显示主题存在且已启用**、`/api/public/theme` 照常列出它，只有 `/static/themes/…` 没了 ⇒
+`/api/public/theme.css` **404**、前台静默退回默认皮肤：一次零报错的数据丢失。
+（`docs/features/theme.md` 里那句"上传的主题会被备份吗？会。"当时只对 `--offline` 目录快照成立，对整站归档是错的 —— 已更正。）
+修法是清单加 `'themes'`（导出与恢复两个循环都迭代这个常量，恢复侧本来就有 `existsSync` 跳过 ⇒ **老归档照常恢复**）。
+**真正值钱的是守卫**：`audit-hardening-round3-backup.spec.ts` 把"静态目录下能出现什么"变成两张有理由的清单
+（用户数据 `img/file/customPage/themes` 必须都在；可再生或临时的 `rss/sitemap/tmp/upload-tmp/export` 必须都不在，各写理由），
+并**从源码里抠出代码会建的每个静态子目录**（`main.ts` 的 `path.join(staticPath,'x')` 与 `'/static/x/'` 403 前缀、
+`theme.provider` 的 `THEME_SUBDIR`、`ATTACHMENT_FOLDER`/`THUMB_FOLDER`），本机静态目录存在时也扫真实目录 ——
+**出现第三类（谁都没登记）就红并点名**。反证跑过：把 `themes` 从分类里删掉 ⇒ 3 条用例红。
+⚠️ `src/utils/fullBackup.spec.ts` 原来钉的就是那份三元素清单 —— **那条断言本身即 bug**，已改并留注释。
+
+#### D. 恢复之后流水线跑不起来（以及对上一条结论的自我更正）
+
+⚠️ 先更正一句一度说错的话：`PipelineProvider.init()`（= `checkAllDeps()` + `saveAllScripts()`）**是**在启动时跑的 ——
+由 provider 自己的**构造函数**调用（第一遍只 grep 了外部调用方所以没看到）。所以"启动时按库重写脚本"本来就成立。
+真缺口更窄但仍真：启动时读的是**那一刻**的库，新机器上是空的 ⇒ 恢复把 `pipelines` 填上了、磁盘上却没有
+`<codeRunnerPath>/<id>.js`，而 `runCodeByPipelineId` **fork 的就是那个文件**，且 `dispatchEvent` 被 await ⇒
+表现为"保存文章卡到 `VANBLOG_PIPELINE_TIMEOUT_MS`"。修法：`FullBackupProvider.doRestore()` 成功后调
+**`saveAllScripts()`**（放 provider 里 ⇒ 两条恢复路由自动一致；`@Optional()` 注入；失败只 WARN 不影响恢复结果）。
+⚠️ 故意**不加** `isPrimaryInstance()`：这不是启动期的活，而是"谁做了恢复谁收尾"，加了守卫反而会让非主实例的恢复被跳过。
+⚠️ **只调 `saveAllScripts()`、不调 `init()`/`checkAllDeps()`**：后者会在请求路径上跑 `pnpm add`（十几秒到几分钟、要外网）。
+**所以要讲清楚：带第三方依赖的流水线仍需一次重启**（依赖只在启动与后台新建/编辑时装）⇒
+响应里加了 `needsRestartForPipelineDeps`（判据：恢复后 `pipelines` 至少 1 条，一次 `countDocuments({})`；
+读失败 ⇒ false + WARN）。顺带修掉一个 cluster 隐患：构造函数里的 `init()` 现在只由主实例跑
+（以前 N 个 worker 各跑一遍 ⇒ **N 个 `pnpm add` 同时改同一个 `codeRunnerPath/node_modules`**）。
+冲突语义：`saveOrUpdateScriptToRunnerPath` 是无条件 `writeFileSync`，**库是唯一事实来源**；
+被删的流水线会留孤儿 `<id>.js`（无害，不清理）。
+
+#### E. 恢复后 RSS/sitemap 迟到（容器演练抓到的）
+
+容器演练时 `/feed.xml` 是 **404**、`/app/static/rss/` 是空的，而 sitemap 只是**碰巧**被整点 cron 补上。
+根因是两个词：`activeAll(info, delay)` 会把 `delay` 转发给 `generateRssFeed`/`generateSiteMap`，
+而它们的默认值是 **3 分钟 / 1 分钟**，且任何后续 `activeAll` 都会**重置**这个定时器；两条恢复路由都没传 delay
+⇒ 恢复完最快也要 3 分钟后才有 feed，期间每次页面重验证还会把它继续往后推。
+现在两条路由都传 `1000`（与 `main.ts` 启动时一致）。
+**顺带答清了一个我原本猜错的问题**：`generateRssFeed` **只**被 `ISRProvider.activeAll` 的防抖定时器调用，
+所以每小时的 ISR cron 也会重新生成 RSS（不是"只有改文章才生成"）—— 它从来不会"永远缺失"，只是最多迟到并被反复推迟。
+
+#### F. 限流可以被一个请求头绕过（安全，默认行为变更）
+
+`utils/rateLimit.ts` 以前用 `pickClientIp(req) || pickSocketIp(req)` 当四档限流桶的 key，
+而 `pickClientIp` 优先读 `cf-connecting-ip` / `true-client-ip` / `x-real-ip` / `x-forwarded-for` ——
+**全是客户端可控的**，caddy 也不剥客户端自带的 `cf-connecting-ip` ⇒ 每个请求换一个头就能无限绕过
+全局/静态/公开写/初始化四档限流（在 G-1 修好之前还顺带给了无限的 key churn）。
+仓库自己就矛盾：`pickSocketIp` 的文档写"供限流等安全判定使用"，`pickClientIp` 的写"限流等关键路径不要用这个函数"，
+而 `LoginGuard.keyOf`、`comment.provider`、`public.controller` 三处都**正确**地用了 socket IP。
+不能简单换成 socket IP：那样反代后面**全站共用一个 600/分钟桶**，正是 §7.44 压测到、
+并专门给静态资源开 10 倍桶才缓解的那场 429 风暴。所以按"可信代理"做，
+新工具 `utils/trustedProxy.ts` + **`VANBLOG_TRUST_FORWARDED_HEADERS`**：
+
+| 值 | 行为 |
+| --- | --- |
+| **`auto`（默认）** | 只有**套接字对端是回环/私网**时才采信转发头，且只信**一跳**：取 `x-forwarded-for` 的**最右**一项（可信代理追加的、它亲眼看到的对端），没有 XFF 才退到 `x-real-ip`，都没有就用套接字地址。对端是公网 ⇒ 转发头一律忽略 |
+| `always` | 旧行为（始终采信 CDN 头），给"CF/隧道直连源站、对端就是公网代理 IP"的部署 |
+| `never` | 只认套接字地址。⚠️ 反代后面全站共用一个桶，会 429 风暴，除非把限额一起抬上去 |
+
+私网判定是新写的真 CIDR：`127/8`、`::1`、`::ffff:127/8`、`10/8`、`172.16/12`、`192.168/16`、`fc00::/7`、`fe80::/10`。
+**docker/podman 不需要额外网段**（docker 默认 `172.17/16` 与自定义 `172.18–172.31` 都在 `172.16/12` 里，
+podman 的 `10.88/16` 在 `10/8` 里，Docker Desktop 的 `192.168.65.x` 在 `192.168/16` 里）。
+**故意排除**两个：`169.254/16`（云元数据 `169.254.169.254` 就在这里，同 L2 邻居也不可信）与
+**CGNAT `100.64/10`**（运营商级 NAT 是公网侧共享段，信它等于让一整片用户互相顶替）。
+⚠️ **不要复用 `provider/log/utils.ts` 的 `isSkippedPrivateIp()` 做信任判断**：它把 `10.x` 里**只有 `10.7.*`** 当私网
+（上游遗留），还把 `172.32` 算进 `172.16/12`。用于日志归属无伤大雅，用于信任判定是错的（有测试钉住这个分歧）。
+**哪些调用点变了、哪些故意不变**（最容易被下一个人改错的地方）：变的只有 `rateLimit.ts` 的四档**体量**限流；
+**登录防爆破（`LoginGuard.keyOf`）、评论三档、文章解锁继续只用 socket IP** —— 那三类是防爆破计数，
+攻击者的收益正是"换一个 key 重新开始"，而 all-in-one 部署下对端就是 127.0.0.1（caddy 拨 `127.0.0.1:3000`，
+模板里没有 `header_up` 覆盖）⇒ `auto` 在那里**会**采信头，而 caddy 不剥客户端自带的 `cf-connecting-ip`，
+所以换过去等于把"无限试密码 + 用受害者 IP 把对方锁在门外"重新打开。
+实测（进程内伪造 req，**不打 :3000** —— 活体灌流量会顶掉别人在用的桶；限额设 5/分钟、每场景 20 请求）：
+公网对端 + 轮换 `cf-connecting-ip`：旧 **20 通过 / 0 拦 / 20 个桶** → 新 **5 / 15 / 1 个桶**（绕过被堵死）；
+轮换 XFF 同样；回环对端 + 两个**固定**真实客户端：旧 **1 个桶**（两个客户端互相顶替，
+而且任何人都能伪造最左项来**栽赃**某个 IP）→ 新 **2 个独立桶**；`/static/**` 桶 + 轮换 CDN 头：桶数 20 → 1。
+
+#### G. 内存增长：常驻进程里能被外部输入撑大的三处
+
+先把 `packages/server/src` 里**所有**模块级与 provider 级可变状态枚举了一遍
+（grep 模块级 `let`/`const` 集合 + 每一处 `this.x.push/set/add`）：能被外部撑大的只有三处，
+其余都是单槽缓存或启动期常量（`publicMetaCache`、`init.hasInitedCache`（只缓存 true）、
+`getVersion`（失败 TTL + epoch 守卫）、`initJwt.cached`（**reject 时自己清掉**，所以启动抖动能重试）、
+`fullBackup.cachedAvailable`、ISR 的 `stormQueued`（单槽合并）/`stormChain`（≤3）/`timer`、`rss.timer`、
+`caddy.subjects`、`waline.env`/`website.lastEnvJson`（整体替换）、`requestId`（**没有存储**）、
+`viewStats.pendingSnapshots`（每轮 flush 取走清空，上界是失败的天数））。
+
+1. **`utils/attemptLimit.ts`（限流/登录/评论/解锁共用的桶表）**：改动前**没人删** —— 只有同 key 再来才替换，
+   于是每个只来过一次的 IP（扫描器、NAT 池、IPv6 /64）永久留桶；超过 20000 条时执行 **`buckets.clear()`**。
+   实测 20000 桶 = **7.3 MB**（80 字长 key 384 B/桶）。⚠️ **`clear()` 才是真问题**：20 万个一次性 key
+   ⇒ 旧实现触发 **9 次全表清空**，每次把进程里**所有人**的登录爆破窗口、评论频率、全局限流一起归零 ——
+   匿名客户端可以不停地给自己重新武装限流，而且 key 里有它选的字节（`POST /api/public/article/<80个任意字符>`）。
+   现在：桶内存 `windowMs`、惰性清扫过期（≤1 次/分钟，满表时另有 1 秒节流）、
+   超限**按 count 从小到大淘汰**到 90% 水位（洪水桶 count=1，正在被限流的桶 count>1 ⇒ 热桶一条不动；
+   ⚠️ 不能按插入序淘汰 —— 那样第一个被踢的恰好是"用得最久、count 最高"的，等于把正在被限流的客户端放出来），
+   key 归一化到 160 字。实测同样 20 万 key：**0 次 clear + 18 万次优雅淘汰**，同样停在 20000 桶 / 7.3 MB；
+   插入中位数 1.3 µs，满表最坏一次 3.68 ms（节流后 ~2 ms）。
+2. **浏览统计累加器**：洞在"写库失败"这条路上 —— 失败阶段把增量 `merge()` 退回时 `events` 记 0
+   （为了不让日志虚高），而 `pending`（`VANBLOG_VIEW_FLUSH_MAX_EVENTS` 比的那个数）返回的正是 `count`
+   ⇒ **失败期间封顶完全不生效**：每 5 秒 take → 失败 → merge 回来，路径键只增不减，唯一清除路径不可达。
+   匿名接口就能造 pathname。实测 10 万不同路径 = 20 万键 = **+23.4 MB**；40 万 = 80 万键 = **+92.4 MB**（121 B/键）线性无上界。
+   现在 **`VANBLOG_VIEW_MAX_RETAINED_KEYS`**（默认 **20000**，`0` = 不限 = 旧行为），`add()` 与 `merge()` 两条路都封顶，
+   O(1) 键计数（⚠️ 不能为封顶检查去遍历所有天，`add()` 是每次浏览都跑的热路径）。
+   取舍明确：**站点级累计值与每天的 `day.site` 一条不丢**（前者决定 metas 的 `$inc`，后者是跨零点每日快照的不变量），
+   先丢最老那天的路径条目、再丢文章条目；丢了多少记在 `aggregator.dropped`，每轮 flush 最多一条 WARN（带增量与累计）——
+   **绝不静默丢**。实测 40 万路径 + 上限 20000 ⇒ **3.2 MB**，`pendingSite()` 仍精确等于 400000。
+   ⚠️ 自己写的护栏第一版有性能坑：每次 add 都 `Array.from(day.paths.keys())` 物化两万键数组再删一条
+   ⇒ 40 万次 add 从 0.94 s 变成 **138 s**；改成 Map 惰性迭代器 + 单天快速路径后回到 ~1 s
+   （**教训：给热路径加护栏，护栏本身也要量**）。⚠️ 仍有一个已知代价：封顶生效时 40 万次 add 要 16.7 s（~42 µs/次，
+   超线性，与 V8 Map 在约 78 万次删除后的 tombstone 遍历一致）；只在"Mongo 写失败 **且** 待处理路径 >2 万"时才走到，
+   且此时内存与正确性都是精确的。建议的后续修法是"一次淘汰到 90% 水位"而不是每次只淘汰超出的条数（摊平淘汰与 tombstone）。
+3. **后台仪表盘的 `num` 参数**：`?overviewDataNum=abc` → NaN → `for (let i = NaN; i >= 0; i--)` 一次不跑 ⇒
+   **200 + 一整屏 0**（错误与"没有访问量"分不出来）；`=999999999` → 先 push 十亿个日期字符串、再把十亿元素的 `$in`
+   发给 Mongo。实测每单位 num **15.4–26 µs**、每单位滞留 120–370 B；num=100000 卡 1.60 s、num=300000 卡 **4.62 s**，
+   外推 1e9 是数十 GB / 数小时 ⇒ **一个后台 GET（或一枚泄漏的 API token，而 `/swagger` 默认公开）就能把单进程 server OOM 掉**。
+   现在 `sanitizeDataNum(value, fallback, max=3650)`（`utils/pagination.ts`）：非法回落 5、合法夹到 `[0,3650]`（0 仍合法 = 只看今天）。
+   活体实测（临时 token、只读、用完撤销并复验 401）：`=30` → 200 / **3307 B**（与 §7.48 记录的同一查询逐字节同长）；
+   `=abc` → 200 / 807 B 且是**真数据**；`=999999999` → 200 / 78016 B / **119 ms**。
+   ⚠️ 夹在**控制器**而不是 provider：`viewer.provider.spec.ts:190` 钉住了"num=0/NaN/负数与旧算法一致"的对拍，
+   改 provider 会破坏那条钉子 ⇒ provider 直接调用时仍会按 num 分配，**HTTP 边界已堵上**，这条记在"已知但未改"。
+
+#### H. 热路径：公开列表每次请求都要跑的纯函数（3.7–96×）
+
+§7.42 之后摘要与首图在 **server** 算，所以这几条是"每次列表请求 × 每篇文章"的开销。
+量具 `vanblog_dev/audit-hotpath-bench.cjs`（读 dist、跑真库 53 篇 = 100169 B 正文，中位数，7–15 轮）：
+
+| 场景 | 前 | 后 | |
+| --- | --- | --- | --- |
+| 一页 5 篇（摘要 + 首图） | 0.407 ms | **0.110 ms** | 3.7× |
+| 全 53 篇 `pickCoverFromContent` | 6.404 ms | **1.75 ms** | 3.7× |
+| 全 53 篇 `maskCodeRegions` | 5.803 ms | **1.602 ms** | 3.6× |
+| 全 53 篇 `extractImageRefs` | 6.030 ms | **1.277 ms** | 4.7× |
+| 合成 493 KB 单篇、无 `<!-- more -->`：摘要 | 6.072 ms | **0.063 ms** | **96×**（O(正文) → O(200)） |
+| 合成 493 KB：`maskCodeRegions` | 44.34 ms | **4.57 ms** | 9.7× |
+| 640 KB 正文的摘要（复杂度扫描） | 4.707 ms | **0.047 ms** | 已与正文长度无关 |
+
+四处改动，**输出逐字节不变**：① `inlineLinkRanges`/`findLinkOpen` 接受 `limit`，"补全被截断的链接"只扫到截断点
+（以前为了找一个跨过第 200 字的链接，把整篇一个字符一个字符走完）；② `findMoreMarker` 的两个代码区正则
+以"**最后一个标记的位置**"为右边界（可证等价：包含某标记的代码区起点必然 ≤ 该标记；只找到开栏就停时走的仍是
+原来那句 `push([openStart, text.length])`，区间更大、判定一致）；③ `maskInlineCode` 从逐字符 `result += ch`
+改成 indexOf+slice，且"正文里既无反引号也无波浪线"时直接返回原文（两次原生扫描换掉 split+逐行+join 的三份全量拷贝）；
+④ `extractImageRefs` 把 4 个正则提到模块级 —— 以前**每次调用编译 2 个、每匹配到一张图再编译 1 个**，
+一篇 20 图的文章 = 42 次正则编译，而它跑在每次列表请求的每篇文章上。
+⚠️ 复用模块级全局正则必须每次归零 `lastIndex`（上次调用中途抛错会留下状态），有用例钉住。
+**两层"零行为变化"证据**：`audit-hardening-round3-equivalence.spec.ts` 把**改动前的实现逐字冻结在 spec 里**当参照物，
+在 **461 个向量**上对拍（未闭合围栏/反引号、`~~~`、缩进 3 与 4 格、标记在行内代码与围栏里、CRLF、front matter、
+截在代理对中间、2000 字 URL、引用式图片、三种引号的 `<img src>`、转义与嵌套方括号、带标题/括号标题的链接
++ 400 个固定种子随机文档 + 40 个长文），覆盖 `findMoreMarker`/`articleOverviewMarkdown`/`maskCodeRegions`
+（含"输出长度必须等于输入长度"这条 `extractImageRefs` 偏移量赖以成立的硬约束）/`extractImageRefs`（JSON 逐字相同）/
+`pickCoverFromContent`（两种 `preferLocal`）。⚠️ 每条都带**反证断言**（向量里确实有 >50 个"标记在代码区里"、
+>50 个被涂黑的文档、>50 个图片引用），否则对拍可能是空的 —— 这就是 §7.52 那次
+"explain reducer 白名单静默变成 `{}`、38 条记录全废"的同一个陷阱。活体：53 篇全走一遍列表接口（6 页），
+每条 `excerpt`/`firstImage` 与冻结实现**逐字节相同**（0 处不一致），`content`/`password` 仍被剥掉。
+同一条路上顺手修的：`searchByString` 的去重是 `resData.includes(e)` ⇒ **O(k²)**，k 上限 800
+（4 个字段各过滤一遍 × 200 条上限）⇒ 最多 32 万次引用比较，而搜索是匿名接口；改成 Set（O(k)，顺序与按引用去重一致）。
+
+#### I. 导入批量化（§7.40 B-7 / §7.48 的遗留项）
+
+`VisitProvider.import` / `ViewerProvider.import` 原来每条先 `findOne` 再 `updateOne`/`save`、**串行**；
+本机那份生产备份 visits 有 8770 条 ⇒ 一万七千多次串行往返。现在 500 条一批
+`bulkWrite(updateOne + upsert, {ordered:true})`，**失败回落到原样的逐条写法**（一条坏数据不该让整次导入白跑；
+回落幂等，因为更新是绝对值 `$set`）。实测（`test/import-batch.e2e-spec.ts`，真 mongod + 一次性库）：
+visits 8772 条 **17544 → 18 次命令（975×）**、墙钟 51.4 s → 35.3 s；viewers 800 条 **1600 → 2 次**、2.26 s → 0.48 s。
+正确性在真服务器上**逐行对拍**：8772 行与老写法逐字段相同，含两个刻意边界 ——
+备份里**没有 `createdAt`** 的行（upsert **不会**自动套 mongoose schema 默认值，必须显式 `$setOnInsert`）、
+**两行共用同一个 `{date,pathname}`**（就是"并发首访产生重复行"那个老 bug 的形状；`ordered:true` 保住
+"第一条插入、第二条覆盖"，无序执行会两条都走插入撞唯一索引）。另钉住：重复导入幂等；强制批量失败 ⇒ 回落 + WARN + 结果一致。
+⚠️ 两条量具教训：① **别用 `serverStatus().metrics.commands` 数命令** —— 那是全服务器累计值，本机同时跑着开发栈，
+差值里全是别人的噪音（第一版两边都读到 0 ⇒ 比较是空的，又一次"假绿"）；用驱动的 `monitorCommands`。
+② **别用 `expect(JSON.stringify(8772行)).toBe(…)`** —— 失败时 jest 吐 2.6 MB diff，真正的差异反而看不见；改成逐行比、只打第一处不同。
+公共构造器 `utils/bulkUpsert.ts`：唯一键只进 filter 与 `$setOnInsert`（同时进 `$set` 会撞 "would create a conflict"）、
+`_id` 只在插入时用（更新 `_id` 正是老写法在"同唯一键不同 _id"时会抛的 immutable field 错误）、`__v` 丢掉、空 `$set` 不发。
+
+#### J. 静默失败（这一类本仓库踩过太多次，逐条列）
+
+1. **ISR 的"已经 await 且 catch 了"是假的**：`activeAll` 传给 `activeWithRetry` 的是
+   `() => { this.activeAllFn(info, activeConfig); }` —— 花括号里**没有 return** ⇒ `await fn(info)` await 的是 `undefined`：
+   try/catch 永远看不到 storm 结果，重试日志与 `succ` 标志形同虚设，而 `activeAllFn` 第一句
+   （`settingProvider.getISRSetting()`，在内部 try **之外**）一 reject 就溜成无来源的 unhandledRejection。
+   `activeAbout`/`activeLink` 同形状。另外"补跑一轮"的递归在 try/finally 之外 ⇒ 抛错会让 `stormChain` 永远 >0，
+   之后每轮都少追加几次还打一句莫名其妙的"已连续追加 3 轮，丢弃后续请求"。三处补 return（并传 `info` 让错误带来源），递归包进 try/finally。
+2. **sitemap 是 RSS 那个没被修到的孪生兄弟**：`generateSiteMapFn` 从 `setTimeout` 里发出去就不管，
+   **整段没有 try/catch**，`streamToPromise(…).then(…)` 也**没有 `.catch`** ⇒ Mongo 抖一下或写盘失败（ENOSPC/只读挂载）
+   只留一条无来源的 unhandledRejection，而 `sitemap.xml` 一直停在旧内容（爬虫继续拿到早已删除的文章）。
+   它还在 async 函数里用 `mkdirSync`/`writeFileSync`（RSS 那边的注释正好写着"没有理由用同步 IO"），
+   并**原地覆盖** `sitemap.xml` ⇒ 并发爬虫可能读到半截 XML。现在整段兜错 + 带来源 ERROR、await stream promise
+   （先挂 promise 再 `end()`）、`fs.promises`、写 `sitemap.xml.tmp-<pid>` 再 `rename`（同文件系统内原子）。
+   活体验证：`sitemap.xml` 重新生成（15397 B）、`GET /sitemap/sitemap.xml` 200 且是合法 XML、目录里**没有残留 `.tmp-<pid>`**。
+3. **env 里的数字没有 NaN 兜底，两处都会静默退化**：`VAN_BLOG_IP_GEO_TIMEOUT=3s` → `Number('3s')` = NaN →
+   axios 把 `timeout: NaN` 当成**没设超时**（NaN 是 falsy）⇒ IP 归属地查询变回它当初要修的样子（离线时每次登录干等外网）；
+   `VANBLOG_PIPELINE_TIMEOUT_MS` / `VANBLOG_DEPS_INSTALL_TIMEOUT_MS` 同理 → `setTimeout(fn, NaN)` ≈ 1 ms ⇒
+   **流水线刚 fork 出来就被判超时杀掉**，报错还印着"超过 **NaN**s 未返回结果"（看着像用户脚本写错了）。
+   新的 `utils/envNumber.ts`（`envPositiveInt`，语义与既有 `rateLimit.envInt` 一致）接上这三处
+   （geo 100ms–10min、pipeline 1s–1h、deps 1s–2h）。其余 env 数字位点逐个查过，都已有守卫。
+4. **字数缓存会静默停在旧值**：`MetaProvider.updateTotalWords()` 的 `setTimeout` 回调是 async 且没有 try/catch，
+   30 秒后 Mongo 抖一下就是一条无上下文的 unhandledRejection，而后台首页的"总字数"从此不更新（直到下次增删改文章）。
+   同类：`dispatchEvent('afterUpdateArticle'|'deleteArticle')` 三处不 await 也不 catch（而 `dispatchEvent` 的第一句 DB 读在 try **之外**；
+   `before*` 事件是 await 的，会正常 500）；`init.provider.ts:81` 的 `walineProvider.init()`。都补了带来源标签的 catch/try。
+5. **打错流水线 id 得到"没有这条"而不是错误**：`pipeline.controller` 四处裸 `parseInt(idString)`，
+   NaN 进 `{id: NaN}` 什么都匹配不到 ⇒ `{statusCode:200,data:null}`（与"不存在"分不出来），删除则是静默 no-op。
+   改成 `parsePipelineId()` → 400 + 明确文案（10 种垃圾输入都测：`12abc`、`1e3`、`0x10`、30 位数字…），新旧行为都钉住。
+6. 日志卫生：`caddy.provider.ts` 的空 `catch (err) {}`、`markdown.provider.ts` 高亮失败走 `console.log(e)`、
+   `local.provider.ts` 七处 `console.log`（含删文件/删目录/导出三条失败路径）、`rss.provider.ts` 一句死代码
+   `walineSetting?.authorEmail;` —— 全部改成 logger 或删掉。
+7. **死代码**：`article.provider.ts` 的 `washViewerInfoByVisitProvider` / `washViewerInfoToVisitProvider`
+   （**零调用方**、都是"每篇文章一次 `visitProvider.getByArticleId`/`rewriteToday`"的 N+1 形状、还直接改统计口径）已删除。
+   `isr.provider.activeArticleById` **保留**（自己的注释写着"暂时不用"，是个合理的未来入口），
+   但补上了它 fire-and-forget 的 `activePath('page')`（一次 DB 读）的 `.catch`，并注明当前不可达与接线前要查什么。
+
+#### K. 一个会在任何日期过去之后炸的测试（顺手拆掉的定时炸弹）
+
+`src/provider/stats/viewStats.provider.spec.ts` 里硬编码了 `const TODAY = '2026-09-16'` / `YESTERDAY = '2026-09-15'`，
+而 provider 用 `dayjs()` 给事件打日期 ⇒ **过了午夜，9 条断言在零代码改动的情况下变红**，
+看起来完全像"viewStats 被改坏了"（本轮就发生在 00:24）。现在日期由 `dayjs()` 计算（历史种子行另有 `LAST_WEEK`）。
+⚠️ 通用教训：**任何断言里出现字面日期，都要问一句"明天还成立吗"**；CI 会在任何一天撞上它。
+
+#### L. 量过但**故意不改**的（别重复审计）
+
+| 项 | 实测/依据 | 不改的原因 |
+| --- | --- | --- |
+| `utils/logTail.ts` 尾部限界读取 | 1.3MB/6765 行 → 48 ms；10.6MB → 160 ms（读满 4.1MB 就停）；**52.9MB/27 万行 → 187 ms，与 10.6MB 基本相同** ⇒ `maxBytes=8MB` 真是硬上限。后台第一页（10 行）**2.0 ms** | 成本主要是"4MB → 2 万个 JS 字符串"（chunk 从 64KB 调到 1MB 只快 13%），是必要开销；深翻页才碰到，且后台专用 |
+| `utils/sanitizeRequest.ts` 每请求深扫 | 典型 query 0.002 ms；真实 23.5KB 文章 body 0.004 ms；**200 层嵌套** 0.002 ms（深度上限 8 直接返回 undefined，不炸栈）；1 万键 body 4.8 ms（线性） | O(节点数) + 深度上限，构造不出二次方或爆栈。⚠️ 要知道的行为：嵌套超过 8 层被静默替换成 `undefined`；逐个查过 DTO，最深合法嵌套约 5 层 |
+| `provider/cache/cache.provider.ts`（登录失败窗口） | 183 B/条 ⇒ 10 万个不同来源 IP ≈ 17.5 MB，**永不清理** | key 只可能是套接字地址（伪造不了；反代后面全站就一个 key），上界是"进程存活期内真实出现过的 IP 数"；任何淘汰都会削弱防爆破 |
+| `static.provider.importItems` | 93 条 ⇒ ~186 次串行往返 ≈ 0.5 s | per-item try/catch（"跳过坏的继续"）是要害语义，改批量要做逐操作错误映射；收益是后台导入快半秒 |
+| `importArticles`/`importDrafts`/`washCustomPage`/`updateTagByName`/`saveAllScripts`/`ISRProvider.activeUrls` 的串行 await | — | 前两个会调 `updateById`（别名唯一性校验 + 字数/ISR 副作用），并行化会自己和自己竞争；`activeUrls` 串行是**明确记录过的决定** |
+| `searchByString` 仍把 ≤200 篇**全文**捞回来 | 公开搜索的响应里就包含 `content` | 加投影会改公开响应形状。剩下是四趟 `toLocaleLowerCase()`（最多约 1MB）；改正则 `i` 能省分配，但大小写折叠在非 ASCII 上与 `toLowerCase()` 不等价（İ、ß、开尔文符号），公开搜索不值得冒险 |
+| `main.ts` 的 `bootstrap()` 不带 `.catch()` | `unhandledRejection` 兜底装在 bootstrap **内部**（`await initJwt()` 之后） | `initJwt`/`NestFactory.create` 失败时带裸栈退出、由 docker 重启 —— arguably 是对的（响亮地失败）；cluster 分支有 `.catch` |
+| `getViewerGrid` 直接调用时仍按 num 分配 | 见 G-3 | NaN/负数行为被 `viewer.provider.spec.ts:190` 的旧算法对拍钉住；夹在 HTTP 边界是唯一不破坏那条钉子的做法 |
+| `articleKeyOf` 的怪癖（`/a/post/b` → `/ab`） | 真实路由只有 `/post/<slug>` | 怪癖只导致一次"匹配不到任何文档"的静默 no-op；改它会改统计口径，源码注释已明确推迟 |
+
+#### 本轮新增的环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `VANBLOG_TRUST_FORWARDED_HEADERS` | `auto` | **默认行为变更（安全修复）**：四档体量限流只在"对端是回环/私网"时采信转发头，且只取 XFF 最右一项。`always` = 旧行为，`never` = 只认套接字地址。见 F 段 |
+| `VANBLOG_VIEW_MAX_RETAINED_KEYS` | `20000` | **默认行为变更（内存封顶）**：写库持续失败时浏览统计最多保留这么多"路径/文章"键（≈3.2 MB），超出按"最老那天的路径 → 文章"丢弃并打 WARN；站点级累计与每日快照**永不丢**。`0` = 不限 = 旧行为 |
+
+（其余各段没有新增环境变量；`VAN_BLOG_IP_GEO_TIMEOUT`、`VANBLOG_PIPELINE_TIMEOUT_MS`、
+`VANBLOG_DEPS_INSTALL_TIMEOUT_MS` 语义不变，只是非法值不再退化成 NaN。）
+
+#### 测试与量具
+
+server jest **1125 用例 / 1124 绿 + 1 个既有的 watermark 离线字体用例**（基线 961/960 ⇒ **+164 条，0 回归**；套件 116 个）；
+`tsc`（全新 buildinfo）**0 错误**，连 `test/` 一起查的那份配置也 0 错误。
+新 spec：`audit-hardening-round3{,-equivalence,-bson,-backup,-initrestore,-pipeline}.spec.ts`
+（都带 `audit-hardening` 前缀 ⇒ CI 白名单自动覆盖）、`utils/envNumber.spec.ts`、`utils/trustedProxy` 相关用例；
+新 env 开关量具（不给变量就整套跳过，库名硬护栏拒绝真实库）：`test/backup-restore-bson.e2e-spec.ts`、
+`test/import-batch.e2e-spec.ts`、`test/init-restore.e2e-spec.ts`（⚠️ 护栏**拒绝 27017** —— 恢复按 manifest 的库名写库，
+指到开发库等于覆盖真数据）。本机量具（不入库）：`vanblog_dev/audit-hotpath-bench.cjs`、`audit-attemptlimit-mem.cjs`、
+`audit-memory-stores.cjs`、`audit-ratelimit-ip.cjs`。
+⚠️ **入库的压测台在 `scripts/benchmark/`**（`loadtest.cjs` + `measure.sh`），
+访问性能报告 `docs/advanced/benchmark.md` 的每个数字都由它产生，可复现。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 938 用例：**937 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例，见 §2.1；负载高时可能 2 个失败，单独跑 5/5 绿） |
+| server `jest` | 1125 用例：**1124 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；负载高时可能 2 个失败，单独跑全绿）；套件 116 个 |
 | website `vitest run` | 77 文件 / 748 用例全绿 |
-| admin `node --test tests/unit` | 94 套件 / 363 用例全绿（⚠️ Node 24 要 `--test-reporter=tap` 才有汇总行） |
+| admin `node --test tests/unit` | 103 套件 / 397 用例全绿（⚠️ Node 24 要 `--test-reporter=tap` 才有汇总行） |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 

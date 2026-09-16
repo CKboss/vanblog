@@ -252,8 +252,9 @@ ThemeProvider.upload()                       packages/server/src/provider/theme/
   "按 type 存一份 value" 的形状（`static`/`isr`/`menu`/`waline`…），加一个 `type: 'theme'`
   比新建 schema + 注册模块更省事，也不会让整站备份多一张表。
 - **文件放在图床目录（`<static>/themes/`）**：这个目录本来就挂载到宿主机、由 caddy 直接服务，
-  也会被 `vanblog.sh backup --offline` 一起打包；整站备份（`vanblog-full-*`）同样包含静态目录，
-  所以换机器时主题会跟着走。
+  也会被 `vanblog.sh backup --offline` 一起打包；整站备份（`vanblog-full-*`）**现在**同样包含它
+  （`BACKUP_STATIC_FOLDERS` 里的 `themes`，2026-09 才补上，此前主题 CSS 不进归档），
+  所以换机器时主题会跟着走。⚠️ 用**旧归档**恢复时仍然会缺主题文件，见下面「常见问题」。
 
 ## 常见问题
 
@@ -274,5 +275,11 @@ ThemeProvider.upload()                       packages/server/src/provider/theme/
 （它把阅读栏收窄、正文调到 17px）。
 
 **上传的主题会被备份吗？**
-会。文件在图床目录里，整站备份（`./vanblog.sh backup`）和目录级快照（`--offline`）都包含它；
-元数据在数据库的 settings 里，也一起备份。
+会 —— 但**这一条是后来才成立的**。CSS 文件在图床目录下的 `themes/` 里，整站备份（`./vanblog.sh backup`）
+和目录级快照（`--offline`）现在都包含它；元数据在数据库的 `settings` 里，也一起备份。
+
+⚠️ **早于该修复导出的整站归档里没有 `themes/`**（当时 `BACKUP_STATIC_FOLDERS` 只打包 `img/file/customPage`）。
+用那种归档恢复到新机器，主题列表和"使用中"标记都在（它们在库里），CSS 却没了 ⇒
+`/api/public/theme.css` 404、前台静默用回默认皮肤，而且**一条报错都没有**。
+判断办法：`./vanblog.sh verify <归档>` 看成员里有没有 `static/themes/`；
+补法：在后台把那几个主题的 CSS 重新上传一次（id 与启用状态不受影响）。

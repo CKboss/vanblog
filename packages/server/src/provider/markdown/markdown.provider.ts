@@ -38,7 +38,14 @@ export class MarkdownProvider {
               '</code></pre>'
             );
           } catch (e) {
-            console.log(e);
+            // 以前是 console.log(e)：高亮失败会退回"转义后的纯代码块"（行为是对的），
+            // 但那条错误只进 stdout、不进结构化日志，后台日志页里看不到，
+            // 于是"某个语言的代码块没有高亮"永远查不出原因。
+            this.logger.warn(
+              `代码高亮失败，已退回纯文本代码块（lang=${lang || '未指定'}）：${
+                (e as Error)?.message || e
+              }`,
+            );
           }
           return (
             '<pre class="hljs" style="background: #f3f3f3;padding: 8px;"><code>' +

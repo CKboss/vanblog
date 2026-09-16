@@ -82,8 +82,27 @@ describe('整站备份：后台页面', () => {
 describe('整站备份：服务端', () => {
   it('只备份该备份的静态目录，归档不落在静态目录下', () => {
     const util = readRepo('packages/server/src/utils/fullBackup.ts');
-    assert.match(util, /BACKUP_STATIC_FOLDERS = \['img', 'file', 'customPage'\]/);
-    assert.doesNotMatch(util, /BACKUP_STATIC_FOLDERS = \[[^\]]*'export'/);
+    // ⚠️ 这条以前钉的是字面量 `['img', 'file', 'customPage']`，于是新增 `themes/`
+    // （后台上传的主题 CSS 就存在那儿）时没人想起来改它 —— 主题文件从此不进归档，
+    // 而主题的**元数据**在 settings 集合里照样恢复：结果是"恢复成功、后台显示主题还在、
+    // `/api/public/theme.css` 却 404"的**静默数据丢失**。所以改成按语义分类断言：
+    // 用户数据目录必须全在清单里，派生/临时目录必须不在 —— 加新目录时这条会自动逼你想清楚。
+    const m = /BACKUP_STATIC_FOLDERS = \[([^\]]*)\]/.exec(util);
+    assert.ok(m, '找不到 BACKUP_STATIC_FOLDERS');
+    const folders = m[1]
+      .split(',')
+      .map((x) => x.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean);
+    for (const need of ['img', 'file', 'customPage', 'themes']) {
+      assert.ok(
+        folders.includes(need),
+        `用户数据目录 ${need} 不在整站备份清单里 —— 恢复后会静默丢文件（themes 就是这么丢过一次）`,
+      );
+    }
+    for (const banned of ['export', 'tmp', 'upload-tmp', 'rss', 'sitemap']) {
+      // rss/sitemap 启动时会重新生成，tmp/upload-tmp 是暂存，export 是旧的匿名下载目录（已 403）
+      assert.ok(!folders.includes(banned), `${banned} 是派生或临时目录，不该进归档`);
+    }
 
     const config = readRepo('packages/server/src/config/index.ts');
     assert.match(config, /backupPath: string;/);
@@ -133,8 +152,19 @@ describe('整站备份：服务端', () => {
     assert.match(controller, /checkTrue\(body\?\.confirm\)/);
     assert.match(controller, /演示站禁止修改此项/);
     assert.match(controller, /RESTORE_UPLOAD_OPTIONS/);
-    assert.match(controller, /diskStorage/);
-    assert.match(controller, /fileSize: 8 \* 1024 \* 1024 \* 1024/);
+    // 上传选项（落盘 + 8GB + parts 收紧）从控制器私有搬进了共享模块
+    // `utils/restoreUpload.ts`，让「init 页直接上传恢复」复用同一份 ——
+    // 两条恢复路径的限额必须完全一致（一边 8GB 一边 200MB 的话，大站会在
+    // init 页莫名其妙 413）。所以对着**定义处**断言，并钉住两个控制器都 import 它。
+    const upload = readRepo('packages/server/src/utils/restoreUpload.ts');
+    assert.match(upload, /diskStorage/);
+    assert.match(upload, /fileSize: 8 \* 1024 \* 1024 \* 1024/);
+    assert.match(upload, /files: 1/);
+    assert.match(upload, /parts: 32/);
+    const initController = readRepo('packages/server/src/controller/admin/init/init.controller.ts');
+    const sharedImport = /import \{ RESTORE_UPLOAD_OPTIONS \} from 'src\/utils\/restoreUpload'/;
+    assert.match(controller, sharedImport);
+    assert.match(initController, sharedImport);
     // 上传的临时文件必须删掉
     assert.match(controller, /fs\.rmSync\(archivePath, \{ force: true \}\)/);
     // 老的 JSON 导出以前把 temp.json 写在 cwd 且成功后不删

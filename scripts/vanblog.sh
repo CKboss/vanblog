@@ -2062,7 +2062,7 @@ archive_list_members() {
 
 # 校验单个归档：完整性 → sha256 → 成员清单。打一行 OK/FAIL 摘要，FAIL 返回 1。
 # 整站备份（vanblog-full-* / *.tar.zst / *.tar.xz）的预期成员按 server 的打包结构核对
-# （tar -C staging . ⇒ ./manifest.json、./db/<库>/<集合>.ndjson、./static/<img|file|customPage>/…）；
+# （tar -C staging . ⇒ ./manifest.json、./db/<库>/<集合>.ndjson、./static/<img|file|customPage|themes>/…）；
 # 目录级快照（vanblog-backup-*.tar.gz）预期 ./data/ 树。
 verify_one_archive() {
   local file="$1"
@@ -2140,7 +2140,7 @@ verify_one_archive() {
     if printf '%s\n' "${members}" | grep -qE '(^|/)static/'; then
       notes+=("静态目录 ✓")
     else
-      # 不算失败：img/file/customPage 是"存在才打包"（fullBackup.ts BACKUP_STATIC_FOLDERS），
+      # 不算失败：img/file/customPage/themes 是"存在才打包"（fullBackup.ts BACKUP_STATIC_FOLDERS），
       # 全新空站可以一个都没有
       notes+=("无 static/ 树（空站点属正常）")
     fi

@@ -1,13 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import dayjs from 'dayjs';
 import { Model } from 'mongoose';
 import { createVisitDto } from 'src/types/visit.dto';
 import { Visit } from 'src/scheme/visit.schema';
 import { VisitDocument } from 'src/scheme/visit.schema';
+import { buildUpsertOps, chunkArray } from 'src/utils/bulkUpsert';
 
 @Injectable()
 export class VisitProvider {
+  private readonly logger = new Logger(VisitProvider.name);
   constructor(@InjectModel('Visit') private visitModel: Model<VisitDocument>) {}
 
   /**
@@ -134,7 +136,41 @@ export class VisitProvider {
     return null;
   }
 
+  /**
+   * 导入 `visits`（整站 JSON 导入的一步）。
+   *
+   * ⚠️ 以前是"每条先 findOne 再 updateOne/save"的**串行**循环：本机那份生产备份里
+   * visits 有 8,770 条 ⇒ 一万七千多次串行往返，实测整段要跑十几秒，
+   * 全程占着一个 HTTP 请求（后台导入进度条就卡在这里）。
+   * 现在按 500 条一批做 `bulkWrite(updateOne + upsert, {ordered:true})`：
+   * 语义与老写法逐条对齐（见 `utils/bulkUpsert.ts` 的说明），往返次数从 2N 降到 N/500。
+   *
+   * 失败**回落到老的逐条写法**：批量里混进一条坏数据（类型不对、字段超长）时，
+   * 整批会一起失败，回落能保证"最多丢那一条"，而不是"整次导入白跑"。
+   * 回落是幂等的：upsert + `$set` 绝对值，重复应用同一批数据结果不变。
+   */
   async import(data: Visit[]) {
+    if (!Array.isArray(data) || data.length === 0) {
+      return;
+    }
+    for (const chunk of chunkArray(data)) {
+      try {
+        await this.visitModel.bulkWrite(buildUpsertOps(chunk as any[], ['pathname', 'date']), {
+          ordered: true,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `批量导入 visits 失败（${chunk.length} 条），回落到逐条写入：${
+            (err as Error)?.message || err
+          }`,
+        );
+        await this.importSequentially(chunk);
+      }
+    }
+  }
+
+  /** 改动前的实现，原样保留，只作为批量失败时的回落路径 */
+  private async importSequentially(data: Visit[]) {
     for (const each of data) {
       const oldData = await this.visitModel.findOne({
         pathname: each.pathname,

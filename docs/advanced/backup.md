@@ -25,8 +25,11 @@ icon: right-to-bracket
 | 图床图片 + 缩略图 | `/app/static/img/`（含 `img/thumb/`） |
 | 附件 | `/app/static/file/`，见 [附件管理](../features/attachment.md) |
 | 自定义页面 | `/app/static/customPage/` |
+| 上传的主题 | `/app/static/themes/`（`<id>-<hash8>.css`），见 [主题](../features/theme.md) |
 
-不含：`export/`（旧导出包，避免套娃）、`tmp/`、`rss/`、`sitemap/`（都能再生成）、日志、Caddy 证书。
+不含（都是可再生或临时的，理由写在 `packages/server/src/utils/fullBackup.ts` 的 `BACKUP_STATIC_FOLDERS` 注释里，并有测试守卫这份分类）：`rss/`、`sitemap/`（启动与每次改动后重新生成）、`tmp/`、`upload-tmp/`（备份/恢复与上传的暂存目录）、`export/`（旧导出包，匿名访问已被 403 拦掉，内容按需重新导出）、日志、Caddy 证书。
+
+> ⚠️ 静态目录下**新增**任何子目录时，必须同时在 `BACKUP_STATIC_FOLDERS`（用户数据）或那份注释的"故意不备份"清单里表态：`packages/server/src/audit-hardening-round3-backup.spec.ts` 会把"代码会建、但两边都没登记"的目录判成失败。主题 CSS 就是因为没人登记而**长期没进归档**的 —— 元数据在库里、文件不在，恢复之后后台显示主题已启用，`/api/public/theme.css` 却 404，前台静默退回默认皮肤。
 
 ### 压缩格式
 
@@ -128,6 +131,26 @@ icon: right-to-bracket
   所以要输入 `yes`；自动化场景用 `VANBLOG_ASSUME_YES=1`。
 - 恢复前脚本会先调 `full/inspect` 把**备份清单**打出来（备份时间、各集合条数、静态文件数），
   确认没选错版本再动手。
+
+### 在新机器的初始化页直接恢复（不用先建管理员）
+
+全新安装不必先走完初始化向导再到后台恢复：初始化页可以直接上传一份 `vanblog-full-*.tar.zst`，
+接口是 `POST /api/admin/init/restore`（multipart 字段名 `file`，无需登录，**只在站点还没初始化时开放**）。
+它会恢复数据库 + 静态目录（图床、附件、自定义页面、主题），然后自动拉起评论服务、按恢复后的库重启前台、
+触发一次全量渲染（含 RSS 与 sitemap），返回里的 `counts` 就是这次恢复进来的条数。
+
+几条要知道的：
+
+- **看 `data.initialized`，不要只看 HTTP 200**：归档里没有 `users` 时恢复会成功，但站点仍然是"未初始化"，
+  这时应该继续走向导创建账号。
+- 已经初始化过的站点会被拒（403），请登录后用后台的「备份与恢复」。同时只允许一个恢复在跑（第二个 409）。
+- 上传前会校验：文件名要形如 `vanblog-full-20260913-140955.tar.zst`、能读出清单、
+  且归档成员里没有绝对路径或 `..`（防穿越，不依赖 tar 的具体实现）。任一条不过就是 400，**此时还没写过任何数据**。
+- **老归档照样能恢复**：清单里缺 `static/themes` 之类的字段只会"少恢复那部分"，不会失败；
+  只有"归档版本比本程序新"才会被拒绝。
+- ⚠️ **带第三方依赖的流水线要再重启一次**：恢复会立刻按库里的数据把流水线脚本写回 `<codeRunner>/`，
+  但依赖安装（`pnpm add`）只在启动时做、不在请求路径上跑。响应里的 `needsRestartForPipelineDeps: true`
+  就是这个意思；不重启的话，只用内置能力的流水线可以跑，`require()` 第三方包的会报 MODULE_NOT_FOUND。
 
 ## 恢复
 

@@ -35,8 +35,29 @@ import {
 
 /** 归档目录名（实际位置由 `config.backupPath` 决定，默认 `<log>/vanblog-backups`）。 */
 export const BACKUP_DIRNAME = 'vanblog-backups';
-/** 只备份这些静态子目录：export（旧归档）、tmp、rss、sitemap 都是可再生的，不进去。 */
-export const BACKUP_STATIC_FOLDERS = ['img', 'file', 'customPage'];
+/**
+ * 只备份这些静态子目录 —— 判据是「**用户数据**，删了就没了」：
+ *  - `img`        图床图片与缩略图（上传的原图无法再生）
+ *  - `file`       附件管理里的任意文件
+ *  - `customPage` 自定义页面的 HTML/资源
+ *  - `themes`     **后台上传的主题 CSS**（`provider/theme/theme.provider.ts` 的
+ *                 `THEME_SUBDIR`，文件名 `<id>-<hash8>.css`）。⚠️ 这一条是补上的：
+ *                 以前只有前三个，于是主题 CSS 从来不进归档，而主题的**元数据**
+ *                 （settings 里的 `{type:'theme'}` 列表）与启用状态（`metas.siteInfo.uiStyle`）
+ *                 都在数据库里 ⇒ 换新机器恢复之后，后台显示主题存在且已启用、
+ *                 `/api/public/theme` 也照常列出它，但 `/static/themes/<id>-<hash>.css`
+ *                 已经没了，`/api/public/theme.css` 404，前台**静默地**退回默认皮肤。
+ *                 这是一次"看起来成功的恢复"，属于最难发现的那类数据丢失。
+ *
+ * 故意**不**备份的目录（都是可再生 / 临时 / 不该带走的）：
+ *  - `rss`、`sitemap`：server 启动与每次改动后都会重新生成（rss.provider / sitemap.provider）
+ *  - `tmp`、`upload-tmp`：上传与整站备份/恢复的暂存目录（里面可能正躺着另一个整站归档）
+ *  - `export`：旧的导出归档目录，`main.ts` 现在对匿名请求直接 403，内容按需重新导出
+ *
+ * ⚠️ 新增静态子目录时必须同步更新这里的分类，
+ * `src/audit-hardening-round3-backup.spec.ts` 会把"两边都没列到的目录"判成失败。
+ */
+export const BACKUP_STATIC_FOLDERS = ['img', 'file', 'customPage', 'themes'];
 const RESTORE_SUFFIX = '__vanblog_restore';
 const INSERT_BATCH = 500;
 
@@ -636,6 +657,113 @@ export async function inspectFullBackup(
   } catch {
     return null;
   }
+}
+
+/**
+ * 列出归档里的成员名（只解到 `tar -t`，**不落盘**）。
+ *
+ * 为什么需要它：`POST /api/admin/init/restore` 是**匿名可达**的（只在站点未初始化时开放），
+ * 而恢复会把归档解包到工作目录。GNU tar 默认会拒绝含 `..` 的成员
+ * （`Member name contains '..'`，退出码 2 ⇒ `decompressUntar` 会失败），
+ * 但容器里跑的是 **busybox tar**，行为不能靠猜 —— 所以在解包之前自己把成员名过一遍，
+ * 不依赖 tar 的具体实现。
+ */
+export function listArchiveMembers(archivePath: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const format = detectFormat(archivePath);
+    if (!format) {
+      reject(new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）'));
+      return;
+    }
+    const spec = specFor(format);
+    if (!spec) {
+      reject(new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`));
+      return;
+    }
+    const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
+    const tar = spawn('tar', ['-tf', '-']);
+    let out = '';
+    let decErr = '';
+    let tarErr = '';
+    let settled = false;
+    const fail = (message: string) => {
+      if (settled) return;
+      settled = true;
+      for (const child of [decompressor, tar]) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // 进程可能已经没了
+        }
+      }
+      reject(new BadRequestException(message));
+    };
+    tar.stdin.on('error', (err: Error) => fail(`读取归档失败：${err.message}`));
+    decompressor.stderr.on('data', (c) => {
+      decErr += c.toString();
+    });
+    tar.stderr.on('data', (c) => {
+      tarErr += c.toString();
+    });
+    decompressor.stdout.pipe(tar.stdin);
+    tar.stdout.on('data', (c) => {
+      out += c.toString();
+    });
+    decompressor.on('error', () => fail(`解压器起不来（${spec.decompress[0]}）`));
+    tar.on('error', (err: Error) => fail(`tar 起不来：${err.message}`));
+    tar.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      if (code !== 0) {
+        fail(`读不出归档成员表（tar 退出码 ${code}）：${(tarErr || decErr).slice(0, 300)}`);
+        return;
+      }
+      resolve(
+        out
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean),
+      );
+    });
+    decompressor.on('close', (code) => {
+      if (code !== 0) {
+        fail(`解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`);
+      }
+    });
+  });
+}
+
+/**
+ * 找出会写到解包目录**之外**的成员名：绝对路径（含 Windows 盘号）或任何一段是 `..`。
+ * 全都安全时返回 null。
+ */
+export function findUnsafeArchiveMember(members: string[]): string | null {
+  for (const raw of members || []) {
+    const name = String(raw);
+    if (!name) continue;
+    if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name)) {
+      return name;
+    }
+    if (name.split(/[\\/]/).some((seg) => seg === '..')) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/**
+ * 恢复前的归档成员检查：不安全就抛 400，**此时还没有写任何东西**。
+ * 返回成员条数（调用方可以拿去打日志）。
+ */
+export async function assertRestorableArchive(archivePath: string): Promise<number> {
+  const members = await listArchiveMembers(archivePath);
+  const unsafe = findUnsafeArchiveMember(members);
+  if (unsafe) {
+    throw new BadRequestException(
+      `备份归档里有会写到解包目录之外的成员（${unsafe}），已拒绝恢复`,
+    );
+  }
+  return members.length;
 }
 
 export interface RestoreFullBackupOptions {

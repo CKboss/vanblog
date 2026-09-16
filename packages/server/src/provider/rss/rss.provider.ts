@@ -92,7 +92,6 @@ export class RssProvider {
       if (walineSetting && walineSetting?.authorEmail) {
         email = walineSetting?.authorEmail;
       }
-      walineSetting?.authorEmail;
       const author = {
         name: meta.siteInfo.author,
         email,

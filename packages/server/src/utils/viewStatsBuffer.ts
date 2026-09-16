@@ -86,6 +86,30 @@ function bump(target: PathDelta, viewer: number, visited: number): void {
   target.visited += visited;
 }
 
+export interface ViewStatsAggregatorOptions {
+  /**
+   * 写库失败时被 `merge()` 退回的增量，最多保留多少个"键"
+   * （各天的路径条目 + 文章条目之和）。`0` = 不限（改动前的行为）。
+   *
+   * ⚠️ 为什么必须有这个上限：退回时 `events` 记的是 **0**（免得日志里的"多少次浏览"虚高），
+   * 而 `pending`（也就是 `VANBLOG_VIEW_FLUSH_MAX_EVENTS` 那个封顶）返回的就是 `events` 累计值 ——
+   * 于是在 Mongo 持续写不进去的这段时间里，**没有任何东西给这张表封顶**：
+   * 每 5 秒 take() 出去、失败、再 merge() 回来，路径键只增不减。
+   * 一个客户端在这段时间里刷 N 个不同路径（`/post/<随机串>` 就够），
+   * 就能让常驻进程按 N 条 ×（键字符串 + PathDelta + Map 条目）稳定长内存，
+   * 而且**移除路径永远不可达**（只有写成功才会清空）。
+   */
+  maxRetainedKeys?: number;
+}
+
+/** 被上限丢掉的东西（累计值，供调用方打日志/上报；只增不减） */
+export interface ViewStatsDropped {
+  /** 丢掉了多少条"某天某路径"的增量 */
+  pathEntries: number;
+  /** 丢掉了多少条"某篇文章"的增量 */
+  articleEntries: number;
+}
+
 /**
  * 进程内的浏览增量累加器。
  *
@@ -98,6 +122,19 @@ export class ViewStatsAggregator {
   private days = new Map<string, DayBatch>();
   private dayOrder: string[] = [];
   private count = 0;
+  /**
+   * `articles.size + Σ day.paths.size` 的增量维护值。
+   * ⚠️ 必须在 O(1) 内拿到：`add()` 是每次页面浏览都跑的热路径，
+   * 不能为了封顶检查去遍历所有天。`retainedKeys()` 与它的对账由单测钉住。
+   */
+  private keyCount = 0;
+  private readonly maxRetainedKeys: number;
+  readonly dropped: ViewStatsDropped = { pathEntries: 0, articleEntries: 0 };
+
+  constructor(options: ViewStatsAggregatorOptions = {}) {
+    const raw = Number(options.maxRetainedKeys);
+    this.maxRetainedKeys = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+  }
 
   add(event: ViewEvent): void {
     const viewerInc = 1;
@@ -109,9 +146,13 @@ export class ViewStatsAggregator {
 
     const key = articleKeyOf(event.pathname);
     if (key !== null && key !== '') {
-      const article = this.articles.get(key) || emptyDelta();
-      bump(article, viewerInc, pathVisitedInc);
-      this.articles.set(key, article);
+      const article = this.articles.get(key);
+      if (article) {
+        bump(article, viewerInc, pathVisitedInc);
+      } else {
+        this.articles.set(key, { viewer: viewerInc, visited: pathVisitedInc });
+        this.keyCount += 1;
+      }
     }
 
     let day = this.days.get(event.date);
@@ -121,9 +162,17 @@ export class ViewStatsAggregator {
       this.dayOrder.push(event.date);
     }
     bump(day.site, viewerInc, visitedInc);
-    const path = day.paths.get(event.pathname) || emptyDelta();
-    bump(path, viewerInc, pathVisitedInc);
-    day.paths.set(event.pathname, path);
+    const path = day.paths.get(event.pathname);
+    if (path) {
+      bump(path, viewerInc, pathVisitedInc);
+    } else {
+      day.paths.set(event.pathname, { viewer: viewerInc, visited: pathVisitedInc });
+      this.keyCount += 1;
+    }
+    // 正常的热路径上也要有界：除了"写库失败退回"，
+    // "flush 追不上请求"（Mongo 卡住但没报错）同样会让这张表长大。
+    // 上限没到时这里只是一次整数比较。
+    this.enforceCap();
   }
 
   /** 攒了多少次浏览还没落库 */
@@ -164,6 +213,7 @@ export class ViewStatsAggregator {
     this.days = new Map<string, DayBatch>();
     this.dayOrder = [];
     this.count = 0;
+    this.keyCount = 0;
     return batch;
   }
 
@@ -175,9 +225,13 @@ export class ViewStatsAggregator {
     this.count += batch.events;
     bump(this.site, batch.site.viewer, batch.site.visited);
     for (const [key, delta] of batch.articles) {
-      const current = this.articles.get(key) || emptyDelta();
-      bump(current, delta.viewer, delta.visited);
-      this.articles.set(key, current);
+      const current = this.articles.get(key);
+      if (current) {
+        bump(current, delta.viewer, delta.visited);
+      } else {
+        this.articles.set(key, { viewer: delta.viewer, visited: delta.visited });
+        this.keyCount += 1;
+      }
     }
     for (const day of batch.days || []) {
       let target = this.days.get(day.date);
@@ -188,9 +242,84 @@ export class ViewStatsAggregator {
       }
       bump(target.site, day.site.viewer, day.site.visited);
       for (const [pathname, delta] of day.paths) {
-        const current = target.paths.get(pathname) || emptyDelta();
-        bump(current, delta.viewer, delta.visited);
-        target.paths.set(pathname, current);
+        const current = target.paths.get(pathname);
+        if (current) {
+          bump(current, delta.viewer, delta.visited);
+        } else {
+          target.paths.set(pathname, { viewer: delta.viewer, visited: delta.visited });
+          this.keyCount += 1;
+        }
+      }
+    }
+    // 退回是这张表唯一"可能一次长大很多"的入口（一批最多 maxPending 条），必须封顶
+    this.enforceCap();
+  }
+
+  /** 当前保留了多少个"路径/文章"键（O(1)；与真实条数的对账由单测钉住） */
+  retainedKeys(): number {
+    return this.keyCount;
+  }
+
+  /** 真实条数（遍历用，只给测试与诊断用，别放进热路径） */
+  countRetainedKeys(): number {
+    let n = this.articles.size;
+    for (const day of this.days.values()) {
+      n += day.paths.size;
+    }
+    return n;
+  }
+
+  /**
+   * 超过上限时丢掉一部分增量，把内存封住。
+   *
+   * 丢什么、留什么（都是"尽量不丢事实"的取舍）：
+   *  - **站点级累计值一条不丢**（`site` 只有两个数字，而它决定 metas 的 `$inc`
+   *    与每日快照的绝对值 —— 后台首页那个总访问量必须继续是对的）；
+   *  - **每天的 `day.site` 一条不丢**：`DayBatch` 的不变量是"各天 site 之和 === batch.site"，
+   *    跨零点时靠它算每天的快照，丢了会让趋势图出现假的跳变，所以宁可留着一个
+   *    "路径表为空的那一天"（几乎不占内存，`flushVisits` 对空表直接返回 0）；
+   *  - 先丢**最老那天**的路径条目，再丢文章条目（文章的 viewer 是累计值，
+   *    少一次自增只是那篇文章的阅读量偏低，不会像趋势图那样出现跳变）。
+   *
+   * 丢了多少记在 `dropped` 里，由 provider 打一条 WARN —— **绝不静默丢**，
+   * 否则"统计数字比实际低"这件事永远查不出来（这一类静默失败本仓库踩过很多次）。
+   */
+  private enforceCap(): void {
+    if (this.maxRetainedKeys <= 0) {
+      return;
+    }
+    let over = this.keyCount - this.maxRetainedKeys;
+    if (over <= 0) {
+      return;
+    }
+    // ⚠️ 全程用 Map 的**惰性迭代器**，不要 `Array.from(keys())`：
+    // 这个函数在每次 add() 之后都会跑，而稳态下 `over` 通常只有 1 ——
+    // 物化一份两万个键的数组再删一条，实测把 40 万次 add 从 0.9 秒拖到 138 秒。
+    // （Map 允许在迭代中 delete：被删的条目不会再被访问，其余条目照常迭代。）
+    // 单天时（绝大多数情况）不必物化 + 排序：这也是"超过上限之后每次 add 都要淘汰"的
+    // 热路径，第一版每次都 `Array.from(keys()).sort()`，实测 40 万次 add 从 0.94s 变成 138s
+    // （配合惰性迭代器之后降到 16.7s，加上这条快速路径才回到与不设上限同一量级）
+    const dates =
+      this.days.size === 1 ? [this.dayOrder[this.dayOrder.length - 1]] : Array.from(this.days.keys()).sort();
+    for (const date of dates) {
+      if (over <= 0) break;
+      const day = this.days.get(date);
+      if (!day) continue;
+      for (const pathname of day.paths.keys()) {
+        if (over <= 0) break;
+        day.paths.delete(pathname);
+        this.keyCount -= 1;
+        this.dropped.pathEntries += 1;
+        over -= 1;
+      }
+    }
+    if (over > 0) {
+      for (const key of this.articles.keys()) {
+        if (over <= 0) break;
+        this.articles.delete(key);
+        this.keyCount -= 1;
+        this.dropped.articleEntries += 1;
+        over -= 1;
       }
     }
   }

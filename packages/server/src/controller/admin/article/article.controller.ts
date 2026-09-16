@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Logger,
   Param,
   Post,
   Put,
@@ -25,6 +26,7 @@ import { sanitizePagination } from 'src/utils/pagination';
 @UseGuards(...AdminGuard)
 @Controller('/api/admin/article')
 export class ArticleController {
+  private readonly logger = new Logger(ArticleController.name);
   constructor(
     private readonly articleProvider: ArticleProvider,
     private readonly isrProvider: ISRProvider,
@@ -107,7 +109,14 @@ export class ArticleController {
       previousPathname: before?.pathname,
     });
     const updatedArticle = await this.articleProvider.getById(id, 'admin');
-    this.pipelineProvider.dispatchEvent('afterUpdateArticle', updatedArticle);
+    // 事后事件故意不 await（不该拖慢保存接口），但必须 catch：
+    // `dispatchEvent` 的第一句 `getPipelinesByEvent()` 在它自己的 try **之外**，
+    // 一次 DB 抖动就是一条没有来源的 unhandledRejection（`before*` 事件是 await 的，会正常 500）
+    this.pipelineProvider.dispatchEvent('afterUpdateArticle', updatedArticle).catch((err) =>
+      this.logger.error(
+        `流水线事件 afterUpdateArticle 分发失败（文章 ${id}）：${(err as Error)?.message || err}`,
+      ),
+    );
     return {
       statusCode: 200,
       data,
@@ -138,7 +147,13 @@ export class ArticleController {
     this.isrProvider.activeAll('创建文章触发增量渲染！', undefined, {
       postId: data.id,
     });
-    this.pipelineProvider.dispatchEvent('afterUpdateArticle', data);
+    this.pipelineProvider.dispatchEvent('afterUpdateArticle', data).catch((err) =>
+      this.logger.error(
+        `流水线事件 afterUpdateArticle 分发失败（新建文章 ${data?.id}）：${
+          (err as Error)?.message || err
+        }`,
+      ),
+    );
     return {
       statusCode: 200,
       data,
@@ -216,7 +231,11 @@ export class ArticleController {
       return { statusCode: 401, message: '演示站禁止删除文章！' };
     }
     const toDeleteArticle = await this.articleProvider.getById(id, 'admin');
-    this.pipelineProvider.dispatchEvent('deleteArticle', toDeleteArticle);
+    this.pipelineProvider.dispatchEvent('deleteArticle', toDeleteArticle).catch((err) =>
+      this.logger.error(
+        `流水线事件 deleteArticle 分发失败（文章 ${id}）：${(err as Error)?.message || err}`,
+      ),
+    );
 
     const data = await this.articleProvider.deleteById(id);
     this.isrProvider.activeAll('删除文章触发增量渲染！', undefined, {

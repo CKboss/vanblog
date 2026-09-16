@@ -34,7 +34,12 @@ export class CaddyProvider {
   clearLog() {
     try {
       fs.writeFileSync('/var/log/caddy.log', '');
-    } catch (err) {}
+    } catch (err) {
+      // 以前是空的 `catch (err) {}`：清不掉日志（文件不存在、只读挂载、权限）与
+      // "清成功了"在外部看完全一样。这件事本身无关紧要，但空 catch 会掩盖真问题，
+      // 所以至少留一行（debug 级，别刷屏）。
+      this.logger.debug(`清空 caddy.log 失败（忽略）：${(err as Error)?.message || err}`);
+    }
   }
   async addSubject(domain: string) {
     if (!this.subjects.includes(domain)) {

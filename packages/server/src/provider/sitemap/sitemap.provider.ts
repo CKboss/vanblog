@@ -36,20 +36,40 @@ export class SiteMapProvider {
 
   async generateSiteMapFn(info?: string) {
     this.logger.log(info + '重新生成 SiteMap ');
-    const entries = await this.getSiteEntries();
-    const siteInfo = await this.metaProvider.getSiteInfo();
-    const baseUrl = siteInfo?.baseUrl || '';
-    const smStream = new SitemapStream({ hostname: washUrl(baseUrl) });
-    entries.forEach((entry) => {
-      smStream.write(entry);
-    });
-    streamToPromise(smStream).then((sm) => {
+    // ⚠️ 这个方法是从 setTimeout 里"发出去就不管"地调的（见 generateSiteMap），
+    // 所以它**必须自己兜住所有错误**：以前整段既没有 try/catch，
+    // `streamToPromise(...).then(...)` 也没有 `.catch`，于是
+    //  - Mongo 抖一下（getSiteEntries / getSiteInfo 抛错）⇒ 只留一条全局 unhandledRejection，
+    //    日志里看不出是 sitemap，而 sitemap.xml 会一直停在旧内容上（爬虫继续拿到已删除的文章）；
+    //  - 写盘失败（ENOSPC / 只读挂载）⇒ 同样是一条没有来源的 rejection。
+    // RSS 那边（rss.provider.generateRssFeedFn）一直是有 try/catch 的，这里是漏掉的孪生兄弟。
+    try {
+      const entries = await this.getSiteEntries();
+      const siteInfo = await this.metaProvider.getSiteInfo();
+      const baseUrl = siteInfo?.baseUrl || '';
+      const smStream = new SitemapStream({ hostname: washUrl(baseUrl) });
+      entries.forEach((entry) => {
+        smStream.write(entry);
+      });
+      // 先挂上 promise 再 end()（顺序不能反），然后 await 它 —— 原来是
+      // `.then(...)` 且不 catch，写盘失败就是一条无主的 rejection
+      const done = streamToPromise(smStream);
+      smStream.end();
+      const sm = await done;
       const sitemapPath = path.join(config.staticPath, 'sitemap');
-
-      fs.mkdirSync(sitemapPath, { recursive: true });
-      fs.writeFileSync(path.join(sitemapPath, 'sitemap.xml'), sm);
-    });
-    smStream.end();
+      // 本来就在 async 函数里，没有理由用同步 IO 把事件循环按住（大站的 sitemap 有几百 KB）。
+      await fs.promises.mkdir(sitemapPath, { recursive: true });
+      // 先写临时文件再 rename：`/sitemap/sitemap.xml` 是匿名可直接下载的静态文件，
+      // 原地覆盖会让并发的爬虫读到半截 XML（解析失败比读到旧文件糟得多）；
+      // 同一文件系统内的 rename 是原子的。
+      const tmpPath = path.join(sitemapPath, `sitemap.xml.tmp-${process.pid}`);
+      await fs.promises.writeFile(tmpPath, sm);
+      await fs.promises.rename(tmpPath, path.join(sitemapPath, 'sitemap.xml'));
+    } catch (err) {
+      this.logger.error(
+        `生成 SiteMap 失败（来源：${info || '未注明'}）：${(err as Error)?.message || err}`,
+      );
+    }
   }
   async getArticleUrls() {
     const articles = await this.articleProvider.getAll('list', false, false);

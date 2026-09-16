@@ -83,3 +83,26 @@ export function sanitizePagination(
 
   return { page: safePage, pageSize: safePageSize, skip };
 }
+
+/**
+ * 「要多少条 / 多少天」这类**数量参数**的清洗（后台仪表盘的 `overviewDataNum`、
+ * `viewerDataNum`、`articleTabDataNum`，以及其它同类 query 参数）。
+ *
+ * 为什么不能直接把 `parseInt(query)` 交给业务代码：
+ *  - `?overviewDataNum=abc` → NaN → `for (let i = NaN; i >= 0; i--)` 一次都不跑 →
+ *    接口回 200 + **一整屏 0**，看起来像"站点没有访问量"（错误与空结果无法区分）；
+ *  - `?overviewDataNum=999999999` → 那个循环会先 `push` 十亿个日期字符串，
+ *    再把十亿元素的 `$in` 发给 Mongo ⇒ 单次请求把常驻进程的堆吃光（OOM 是整进程一起死）。
+ *
+ * 所以：非法值（NaN / 负数 / 非数字 / 无穷）回落 `fallback`，合法值夹到 `[0, max]`。
+ * `0` 是合法的（"只看今天"），与 `sanitizePagination` 里 `pageSize` 的语义不同。
+ */
+export const MAX_DATA_NUM = 3650;
+
+export function sanitizeDataNum(value: unknown, fallback: number, max: number = MAX_DATA_NUM): number {
+  const n = coerceFiniteInt(value);
+  if (n === null || n < 0) {
+    return fallback;
+  }
+  return Math.min(n, max);
+}

@@ -463,28 +463,14 @@ export class ArticleProvider {
       .limit(num);
   }
 
-  async washViewerInfoByVisitProvider() {
-    // 用 visitProvider 里面的数据洗一下 article 的。
-    const articles = await this.getAll('list', true);
-    for (const a of articles) {
-      const visitData = await this.visitProvider.getByArticleId(a.id);
-      if (visitData) {
-        const updateDto = {
-          viewer: visitData.viewer,
-          visited: visitData.visited,
-        };
-        await this.updateById(a.id, updateDto);
-      }
-    }
-  }
-
-  async washViewerInfoToVisitProvider() {
-    // 用 visitProvider 里面的数据洗一下 article 的。
-    const articles = await this.getAll('list', true);
-    for (const a of articles) {
-      await this.visitProvider.rewriteToday(`/post/${a.id}`, a.viewer, a.visited);
-    }
-  }
+  // ⚠️ 这里以前有两个方法：`washViewerInfoByVisitProvider()`（用 visits 台账覆盖文章的阅读量）
+  // 与 `washViewerInfoToVisitProvider()`（反过来把文章的阅读量写回今天的 visits 行）。
+  // 已删除，原因：① **零调用方**（全仓库 grep 只有定义本身）；② 都是"每篇文章一次
+  // `visitProvider.getByArticleId` / `rewriteToday`"的 N+1 形状；③ 它们直接改**统计口径**
+  // （visits.viewer/visited 是按路径的累计快照，而 article.viewer 是原子 $inc 的累计值，
+  // 两套台账在引入拼音别名之后本来就不是一一对应，见 §7.45）。
+  // 留着的风险正是"以后有人不明就里接上去"，把两套台账互相覆盖一遍。
+  // 真要合并这两套台账，见 §7.40 B-7 —— 那是一次需要单独决策的数据迁移，不是一个 wash 方法。
 
   async importArticles(articles: Article[]) {
     // 先获取一遍新的 id
@@ -1336,11 +1322,18 @@ export class ArticleProvider {
       (Array.isArray(each.tags) ? each.tags : []).map((t) => text(t)).includes(s),
     );
     const sortedData = [...titleData, ...contentData, ...tagData, ...categoryData];
-    const resData = [];
+    // ⚠️ 以前是 `for (const e of sortedData) if (!resData.includes(e)) resData.push(e)`：
+    // `includes` 是线性扫描，于是去重是 **O(k²)**（k = 命中数，上限 4×SEARCH_MAX_RESULTS=800
+    // ⇒ 最多 32 万次对象引用比较）。Set 按引用去重、保留插入顺序，结果数组**逐项相同**，
+    // 复杂度降到 O(k)。搜索是公开接口（`GET /api/public/search`），单字查询必然打满 k。
+    const seen = new Set<Article>();
+    const resData: Article[] = [];
     for (const e of sortedData) {
-      if (!resData.includes(e)) {
-        resData.push(e);
+      if (seen.has(e)) {
+        continue;
       }
+      seen.add(e);
+      resData.push(e);
     }
     return resData;
   }

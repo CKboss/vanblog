@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { envPositiveInt } from 'src/utils/envNumber';
 
 function headerValue(req: any, name: string): unknown {
   const headers = req?.headers;
@@ -105,6 +106,13 @@ function firstPublicIp(candidates: string[]): string | undefined {
  * Visitor IP for login / audit logs.
  * Prefer Cloudflare's CF-Connecting-IP (and True-Client-IP) over edge/VPS
  * addresses that show up in X-Real-IP / X-Forwarded-For / req.ip.
+ *
+ * ⚠️ **这个函数读的四个头全是客户端可控的**（caddy 只会往 X-Forwarded-For 里追加真实对端，
+ * 不会剥掉客户端自带的 cf-connecting-ip），所以它**只适合做日志归属**，不适合做任何安全判定：
+ *  - 体量类限流（全局/静态/公开写/初始化）→ 用 `utils/trustedProxy.ts` 的 `pickTrustedClientIp()`
+ *    （只在"对端是回环/私网"时采信转发头，且只取 XFF 的最右一项）；
+ *  - 防爆破类计数（登录、评论频率、加密文章解锁）→ 用下面的 `pickSocketIp()`；
+ *  - 需要"这个请求是不是站内服务发的" → 用 `utils/rateLimit.ts` 的 `isInternalRequest()`。
  */
 export function pickClientIp(req: any): string {
   const fromCdn = firstPublicIp([
@@ -155,14 +163,25 @@ export function pickClientIp(req: any): string {
  * - 3 秒超时（`VAN_BLOG_IP_GEO_TIMEOUT` 可调）；
  * - `VANBLOG_DISABLE_IP_GEO=true` 可以完全关掉（不想把访客 IP 发给第三方就用它）；
  * - 失败只影响日志里的归属地字段，不影响任何业务逻辑。
- * 限流等**关键路径不要用这个函数**，用本地的 `pickClientIp()`。
+ * 限流等**关键路径不要用这个函数**（它会发外网请求），用本地的 `pickSocketIp()`。
  */
-export const IP_GEO_TIMEOUT_MS = Number(process.env.VAN_BLOG_IP_GEO_TIMEOUT || 3000);
+// ⚠️ 必须是"校验过再交出去"：`Number('3s')` 是 NaN，而 axios 把 `timeout: NaN`
+// 当成**没设超时**（NaN 是 falsy）⇒ 一个写错的 env 就能把这个函数悄悄变回
+// 它当初要修的那个样子（离线环境下每次登录都要干等外网）。
+export const IP_GEO_TIMEOUT_MS = envPositiveInt('VAN_BLOG_IP_GEO_TIMEOUT', 3000, 100, 600000);
 
 /**
- * 只取 TCP 套接字对端地址（不可被请求头伪造），供限流等安全判定使用。
- * 注意：部署在反代（caddy）后面时它拿到的是反代地址，此时所有请求共享一个计数桶，
- * 属于「更严格」的方向；需要按真实客户端 IP 限流时应改用可信代理层数解析。
+ * 只取 TCP 套接字对端地址（**不可被请求头伪造**）。
+ *
+ * 用在哪：**防爆破/防刷类**计数 —— `LoginGuard.keyOf`、`comment.provider` 的三档、
+ * `public.controller` 的加密文章解锁。这些地方攻击者的收益正是"换一个 key 重新开始"，
+ * 而反代（caddy）追加 XFF 时**不会剥掉**客户端自带的 `cf-connecting-ip`/`x-real-ip`，
+ * 所以哪怕对端可信，采信转发头也等于把"无限试密码 + 用受害者 IP 把对方锁在门外"重新打开。
+ *
+ * ⚠️ **体量类**限流（全局/静态/公开写/初始化）不要直接用这个函数：反代后面所有访客会共用
+ * 一个 600/分钟 的桶（§7.44 那场 429 风暴）。那边用 `utils/trustedProxy.ts` 的
+ * `pickTrustedClientIp()`，它按 `VANBLOG_TRUST_FORWARDED_HEADERS`（默认 `auto`）决定
+ * 要不要采信转发头、以及采信到哪一跳。
  */
 export function pickSocketIp(req: any): string {
   const raw =

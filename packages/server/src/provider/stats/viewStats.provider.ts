@@ -78,6 +78,22 @@ function envNonNegativeInt(name: string, fallback: number, max: number): number 
   return Math.min(Math.trunc(raw), max);
 }
 
+/**
+ * 写库失败时被退回累加器的增量，最多保留多少个"路径/文章"键（`0` = 不限）。
+ *
+ * ⚠️ 不设上限就是**常驻进程里唯一一条能无限长内存的路**：退回时 `events` 记 0
+ * （免得日志虚高），所以 `VANBLOG_VIEW_FLUSH_MAX_EVENTS` 那个封顶在失败期间根本不生效 ——
+ * Mongo 写不进去的这段时间里，每 5 秒 take()→失败→merge() 回来，路径键只增不减，
+ * 而清除只在写成功时发生。默认 20000 条 ≈ 2.5 MB（实测每条 ~120 B：
+ * 路径字符串 + PathDelta + Map 条目）。
+ */
+export const DEFAULT_VIEW_MAX_RETAINED_KEYS = 20000;
+export const VIEW_MAX_RETAINED_KEYS = envNonNegativeInt(
+  'VANBLOG_VIEW_MAX_RETAINED_KEYS',
+  DEFAULT_VIEW_MAX_RETAINED_KEYS,
+  10000000,
+);
+
 export interface FlushSummary {
   reason: string;
   events: number;
@@ -96,7 +112,9 @@ export interface ViewStatsCounters {
 @Injectable()
 export class ViewStatsProvider implements OnModuleInit, OnModuleDestroy, OnApplicationShutdown {
   logger = new Logger(ViewStatsProvider.name);
-  private readonly aggregator = new ViewStatsAggregator();
+  private readonly aggregator = new ViewStatsAggregator({
+    maxRetainedKeys: VIEW_MAX_RETAINED_KEYS,
+  });
   /** 上一轮 flush 之后库里的 metas 累计值；null 表示库里根本没有 metas 文档（站点没初始化） */
   private base: PathDelta | null = null;
   /** base 到底读过没有（与"读过了但是 null"区分开，否则每次投影都要再查一次库） */
@@ -271,11 +289,36 @@ export class ViewStatsProvider implements OnModuleInit, OnModuleDestroy, OnAppli
     this.counters.flushes += 1;
     this.counters.ops += ops;
     this.counters.events += batch.events;
+    this.reportDropped();
     const ms = Date.now() - startedAt;
     this.logger.debug(
       `浏览统计落库（${reason}）：${batch.events} 次浏览 → ${ops} 次 Mongo 命令，耗时 ${ms}ms`,
     );
     return { reason, events: batch.events, ops, ms };
+  }
+
+  /**
+   * 被内存上限丢掉的增量必须**看得见**：静默丢计数的表现是"统计数字比实际低"，
+   * 而这种问题从来没人能事后查出来。每轮 flush 最多打一条（有增量才打）。
+   */
+  private lastReportedDropped = { pathEntries: 0, articleEntries: 0 };
+  private reportDropped(): void {
+    const dropped = this.aggregator.dropped;
+    const newPaths = dropped.pathEntries - this.lastReportedDropped.pathEntries;
+    const newArticles = dropped.articleEntries - this.lastReportedDropped.articleEntries;
+    if (newPaths <= 0 && newArticles <= 0) {
+      return;
+    }
+    this.lastReportedDropped = {
+      pathEntries: dropped.pathEntries,
+      articleEntries: dropped.articleEntries,
+    };
+    this.counters.errors += 1;
+    this.logger.warn(
+      `浏览统计的内存上限（VANBLOG_VIEW_MAX_RETAINED_KEYS=${VIEW_MAX_RETAINED_KEYS}）已经丢掉 ` +
+        `${newPaths} 条路径增量、${newArticles} 条文章增量（累计 ${dropped.pathEntries}/${dropped.articleEntries}）——` +
+        '说明写库连续失败了一段时间；站点总访问量（metas）没有丢，丢的是按路径/按文章的那部分',
+    );
   }
 
   private stageFailed(stage: string, err: unknown) {

@@ -1,11 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { createViewerDto } from 'src/types/viewer.dto';
 import { Viewer, ViewerDocument } from 'src/scheme/viewer.schema';
 import dayjs from 'dayjs';
+import { buildUpsertOps, chunkArray } from 'src/utils/bulkUpsert';
 @Injectable()
 export class ViewerProvider {
+  private readonly logger = new Logger(ViewerProvider.name);
   constructor(@InjectModel('Viewer') private viewerModel: Model<ViewerDocument>) {}
 
   async create(createViewerDto: createViewerDto): Promise<Viewer> {
@@ -144,7 +146,31 @@ export class ViewerProvider {
   async findByDate(date: string): Promise<Viewer> {
     return this.viewerModel.findOne({ date }).exec();
   }
+  /**
+   * 导入 `viewers`（每日快照）。与 `VisitProvider.import` 同一套改造：
+   * 原来是"每条 findOne + updateOne/save"的串行循环（800 天 = 1600 次串行往返），
+   * 现在按批 upsert，失败回落到老的逐条写法（幂等，可重复应用）。
+   */
   async import(data: Viewer[]) {
+    if (!Array.isArray(data) || data.length === 0) {
+      return;
+    }
+    for (const chunk of chunkArray(data)) {
+      try {
+        await this.viewerModel.bulkWrite(buildUpsertOps(chunk as any[], ['date']), { ordered: true });
+      } catch (err) {
+        this.logger.warn(
+          `批量导入 viewers 失败（${chunk.length} 条），回落到逐条写入：${
+            (err as Error)?.message || err
+          }`,
+        );
+        await this.importSequentially(chunk);
+      }
+    }
+  }
+
+  /** 改动前的实现，原样保留，只作为批量失败时的回落路径 */
+  private async importSequentially(data: Viewer[]) {
     for (const each of data) {
       const oldData = await this.viewerModel.findOne({
         date: each.date,

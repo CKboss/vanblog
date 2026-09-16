@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { StaticType, StoragePath, THUMB_FOLDER } from 'src/types/setting.dto';
 import { ATTACHMENT_FOLDER } from 'src/utils/attachment';
 import { thumbNameFor } from 'src/utils/thumbnail';
@@ -18,6 +18,8 @@ import { checkOrCreateFile } from 'src/utils/checkFile';
 import { normalizeCustomPageRel, resolveCustomPageAbs } from 'src/utils/customPagePath';
 @Injectable()
 export class LocalProvider {
+  private readonly logger = new Logger(LocalProvider.name);
+
   async saveFile(
     fileName: string,
     buffer: Buffer,
@@ -164,7 +166,11 @@ export class LocalProvider {
         fs.rmSync(abs);
       }
     } catch (err) {
-      console.log('删除静态文件失败：', realPath);
+      // 以前是 console.log：只进 stdout，后台日志页里看不到，
+      // 于是"图床记录删了、文件还躺在磁盘上"这种半成功状态查不出来
+      this.logger.warn(
+        `删除静态文件失败（${realPath}）：${(err as Error)?.message || err}`,
+      );
     }
   }
 
@@ -194,7 +200,7 @@ export class LocalProvider {
     try {
       rmDir(srcPath);
     } catch (err) {
-      console.log('删除实际文件夹失败：', name);
+      this.logger.warn(`删除实际文件夹失败（${name}）：${(err as Error)?.message || err}`);
     }
   }
 
@@ -204,7 +210,10 @@ export class LocalProvider {
       const srcPath = path.join(config.staticPath, storagePath, fileName);
       fs.rmSync(srcPath);
     } catch (err) {
-      console.log('删除实际文件失败：', fileName, '可能是更新版本后没映射静态文件目录导致的');
+      this.logger.warn(
+        `删除实际文件失败（${fileName}）：${(err as Error)?.message || err}` +
+          '（可能是更新版本后没映射静态文件目录导致的）',
+      );
     }
   }
   async exportAllImg() {
@@ -230,13 +239,15 @@ export class LocalProvider {
     });
     try {
       const r = await Promise.all([compressPromise]);
-      console.log(r);
+      this.logger.debug(`导出图床压缩包完成：${JSON.stringify(r)}`);
       return {
         success: true,
         path: dstSrc,
       };
     } catch (err) {
-      console.log(err);
+      // 以前是 console.log(err) 然后返回 success:false —— 调用方只看 success 标志，
+      // 失败原因只进 stdout，后台日志页里查不到
+      this.logger.error(`导出图床压缩包失败：${(err as Error)?.message || err}`);
       return {
         success: false,
         error: err,
@@ -259,7 +270,7 @@ export class LocalProvider {
       await compressing.zip.compressDir(src, dst);
       return { success: true, path: dstSrc };
     } catch (err) {
-      console.log(err);
+      this.logger.error(`导出全部图片失败：${(err as Error)?.message || err}`);
       return { success: false, error: err };
     }
   }

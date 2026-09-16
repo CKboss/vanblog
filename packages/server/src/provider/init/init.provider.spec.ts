@@ -115,7 +115,10 @@ describe('init() 之后 /api/admin/init 必须继续拒绝', () => {
     userModel: { create: jest.fn(async () => ({})) } as any,
     categoryModal: {} as any,
     customPageModal: {} as any,
-    walineProvider: { init: jest.fn() } as any,
+    // ⚠️ 必须是 async 桩：真的 `WalineProvider.init()` 返回 Promise，
+    // 而 init.provider 现在给它挂了 `.catch`（fire-and-forget 的 rejection 要有来源）。
+    // 返回 undefined 的桩会让 `.catch` 当场 TypeError —— §7.52 里 waline.restart 踩过同一个坑。
+    walineProvider: { init: jest.fn(async () => undefined) } as any,
     settingProvider: {
       updateCommentSetting: jest.fn(async () => undefined),
       updateMenuSetting: jest.fn(async () => undefined),
@@ -154,12 +157,27 @@ describe('init() 之后 /api/admin/init 必须继续拒绝', () => {
     expect(await provider.checkHasInited()).toBe(true);
   });
 
+  /**
+   * InitController 现在有 7 个构造参数（新增的 4 个只被 `POST /api/admin/init/restore` 用到，
+   * 那些用例在 src/audit-hardening-round3-initrestore.spec.ts 里）。
+   */
+  const makeController = (initProvider: any, staticProvider: any = {}, isrProvider: any = {}) =>
+    new InitController(
+      initProvider,
+      staticProvider as any,
+      isrProvider as any,
+      { backupDir: () => '/tmp/vanblog-backups', restore: jest.fn() } as any,
+      { init: jest.fn() } as any,
+      { restart: jest.fn() } as any,
+      { invalidateBase: jest.fn() } as any,
+    );
+
   it('已初始化时 POST /api/admin/init 抛 500「已初始化」', async () => {
     const initProvider = {
       checkHasInited: jest.fn(async () => true),
       init: jest.fn(),
     } as any;
-    const controller = new InitController(initProvider, {} as any, { activeAll: jest.fn() } as any);
+    const controller = makeController(initProvider, {}, { activeAll: jest.fn() });
     await expect(controller.initSystem({} as any)).rejects.toBeInstanceOf(HttpException);
     await expect(controller.initSystem({} as any)).rejects.toThrow('已初始化');
     expect(initProvider.init).not.toHaveBeenCalled();
@@ -170,7 +188,7 @@ describe('init() 之后 /api/admin/init 必须继续拒绝', () => {
       checkHasInited: jest.fn(async () => false),
       init: jest.fn(async () => 'ok'),
     } as any;
-    const controller = new InitController(initProvider, {} as any, { activeAll: jest.fn() } as any);
+    const controller = makeController(initProvider, {}, { activeAll: jest.fn() });
     const res = await controller.initSystem({} as any);
     expect(res).toEqual({ statusCode: 200, message: '初始化成功!' });
     expect(initProvider.init).toHaveBeenCalledTimes(1);
@@ -178,7 +196,7 @@ describe('init() 之后 /api/admin/init 必须继续拒绝', () => {
 
   it('已初始化时 /api/admin/init/upload 也拒绝（不能借上传接口写文件）', async () => {
     const initProvider = { checkHasInited: jest.fn(async () => true) } as any;
-    const controller = new InitController(initProvider, { upload: jest.fn() } as any, {} as any);
+    const controller = makeController(initProvider, { upload: jest.fn() }, {});
     await expect(controller.uploadImg({} as any, 'false')).rejects.toThrow('已初始化');
   });
 });
