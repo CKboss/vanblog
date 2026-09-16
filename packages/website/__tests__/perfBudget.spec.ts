@@ -119,10 +119,35 @@ describe("性能：图片与首屏", () => {
 });
 
 describe("性能：构建配置", () => {
-  it("关掉 X-Powered-By、开 swcMinify，并保留类型检查的逃生口", () => {
+  it("关掉 X-Powered-By、SWC 压缩是 Next 14 默认、类型检查只认显式逃生口", () => {
     const cfg = read("next.config.js");
     expect(cfg).toContain("poweredByHeader: false");
-    expect(cfg).toContain("swcMinify: true");
+    // Next 14 起 swcMinify 默认就是 true（Next 15 移除了该配置项），
+    // 配置里**不应该再写** `swcMinify: true`——写了也只是复述默认值。
+    // 压缩没被关掉的证据：没有出现 swcMinify: false。
+    expect(cfg).not.toContain("swcMinify: false");
     expect(cfg).toContain("VANBLOG_SKIP_TYPECHECK");
+    // 类型检查不许再挂在 isBuild=t 上（那会让官方镜像构建跳过 tsc）；
+    // isBuild 只剩 api/*.ts 的「构建期连不上 server 用默认数据」兜底语义（§7.23）。
+    const code = cfg
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
+      .join("\n");
+    expect(code).not.toMatch(/skipChecks[\s\S]*isBuild|isBuild[\s\S]*skipChecks/);
+    expect(code).toContain(
+      'process.env.VANBLOG_SKIP_TYPECHECK === "true"',
+    );
+    // images 的允许名单迁到了 remotePatterns（Next 14 弃用 domains），语义不变：
+    // VAN_BLOG_ALLOW_DOMAINS 为空 ⇒ 生产只优化本站图片（空数组，不是放行所有）。
+    expect(code).toContain("remotePatterns: getImageRemotePatterns()");
+    expect(code).not.toMatch(/^\s*domains:/m);
+  });
+
+  it("next 已升到 14.x 且 react 仍是 18（Next 15 要 React 19，@bytemd 的 peer 只到 18）", () => {
+    // 读**已安装**的 package.json，不是声明的范围
+    const next = require("next/package.json");
+    const react = require("react/package.json");
+    expect(String(next.version)).toMatch(/^14\./);
+    expect(String(react.version)).toMatch(/^18\./);
   });
 });

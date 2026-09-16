@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import {
   Controller,
   INestApplication,
@@ -13,6 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { diskStorage } from 'multer';
 import request from 'supertest';
+import { decodeUploadFileName, sanitizeAttachmentName } from './attachment';
 import {
   assertUploadedImage,
   CUSTOM_PAGE_UPLOAD_OPTIONS,
@@ -36,11 +37,19 @@ import {
  *  3. `limits.fileSize` 触发 multer 的 `LIMIT_FILE_SIZE`，仍然被 platform-express 的
  *     `transformException` 映射成 **413**；
  *  4. 不限类型的通用上传（自定义页面 / JSON 导入那条路）照样放行 `.html`；
- *  5. `diskStorage`（整站备份恢复用的那种）照样把文件按回调生成的名字落到磁盘。
+ *  5. `diskStorage`（整站备份恢复用的那种）照样把文件按回调生成的名字落到磁盘；
+ *  6. **中文文件名**（浏览器按 UTF-8 字节发、busboy 默认按 latin1 交上来）经过
+ *     `decodeUploadFileName()` 之后仍然是正确的名字 —— multer 2.4.0 实测仍不传
+ *     `defParamCharset`（busboy 1.6 默认 nullDecoder = latin1），修复层还在我们这边；
+ *  7. **multer 2.4.0 的新行为**：按 WHATWG HTML 规范把文件名里的 `%0A`/`%0D`/`%22`
+ *     反转义回真字符（multer 1.x 原样保留）。`sanitizeAttachmentName()` 会把引号剥掉，
+ *     落盘名不受影响 —— 这里钉住"反转义真的发生了 + 消毒层接得住"。
  *
- * ⚠️ 还有一条**版本钉子**（最后一个用例）：`@nestjs/platform-express` 被**故意钉在 10.4.17**，
- * 因为 10.4.18+ 把依赖换成了 multer 2.x、10.4.22 还把 express 抬到 4.22.1（见 AGENTS 的
- * 依赖升级记录）。谁要往上抬 platform-express，这个用例会红，逼他把上面 5 条重跑一遍。
+ * ⚠️ 还有一条**版本钉子**（最后一个用例）：multer 1.x 已停更且带一串已知 CVE，
+ * 2.0.2（platform-express 10.4.22 自己钉的版本）也有 2026 年披露的 8 个 CVE（全部在
+ * 2.3.0 修复），所以根 override 把 `multer@2.0.2` 抬到 `^2.4.0`。这个用例断言
+ * **树里只有一份 multer/express**（platform-express 解析到的与我们 require 到的是
+ * 同一个 realpath），谁把 override 弄丢、让两份副本回来，这里会红。
  */
 
 /** 1x1 的合法 PNG（imageSize 认得出来） */
@@ -50,6 +59,21 @@ const PNG_1x1 = Buffer.from(
 );
 
 const DISK_DIR = join(tmpdir(), `vanblog-upload-spec-${process.pid}`);
+
+/**
+ * 手工拼 multipart 正文：filename 以 **UTF-8 字节**写进头部，与真实浏览器发的一致。
+ * （supertest 的 `.attach` 走 form-data 库，对非 ASCII 文件名的处理与浏览器不同，
+ * 所以中文文件名这条必须手拼字节，量的才是生产上真实的 wire format。）
+ */
+function multipartBody(boundary: string, filenameHeader: string, content: Buffer): Buffer {
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${filenameHeader}"\r\n` +
+      `Content-Type: image/png\r\n\r\n`,
+    'utf8',
+  );
+  return Buffer.concat([head, content, Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')]);
+}
 
 @Controller()
 class UploadProbeController {
@@ -79,6 +103,18 @@ class UploadProbeController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 1024 } }))
   tiny(@UploadedFile() file: Express.Multer.File) {
     return { size: file?.size };
+  }
+
+  @Post('probe/name')
+  @UseInterceptors(FileInterceptor('file', IMAGE_UPLOAD_OPTIONS))
+  name(@UploadedFile() file: Express.Multer.File) {
+    const raw = String(file?.originalname ?? '');
+    return {
+      raw,
+      decoded: decodeUploadFileName(raw),
+      sanitized: sanitizeAttachmentName(raw),
+      size: file?.size,
+    };
   }
 
   @Post('probe/disk')
@@ -185,7 +221,35 @@ describe('上传管线（FileInterceptor + multer，真发 multipart 请求）',
     expect(readFileSync(res.body.path).equals(payload)).toBe(true);
   });
 
-  it('版本钉子：platform-express 10.x + express 4.x + multer 1.x（要抬版本就先把上面几条重跑一遍）', () => {
+  it('中文文件名：UTF-8 字节过 busboy/multer 2 之后仍被 decodeUploadFileName 修复', async () => {
+    const boundary = '----specCJKBoundary';
+    const res = await request(app.getHttpServer())
+      .post('/probe/name')
+      .set('Content-Type', `multipart/form-data; boundary=${boundary}`)
+      .send(multipartBody(boundary, '测试.png', PNG_1x1))
+      .expect(201);
+    // 契约是「解码后的名字正确」，不钉中间层：multer 2.4.0 实测仍不给 busboy 传
+    // defParamCharset（默认 latin1 ⇒ raw 是 mojibake，由我们的修复函数还原）；
+    // 就算未来 multer 改成 utf8 直解，这条仍然应该绿。
+    expect(res.body.decoded).toBe('测试.png');
+    expect(res.body.size).toBe(PNG_1x1.length);
+  });
+
+  it('multer 2.4.0 按 WHATWG 反转义文件名里的 %22：消毒层把引号剥掉', async () => {
+    const boundary = '----specEscapeBoundary';
+    const res = await request(app.getHttpServer())
+      .post('/probe/name')
+      .set('Content-Type', `multipart/form-data; boundary=${boundary}`)
+      .send(multipartBody(boundary, 'evil%22.png', PNG_1x1))
+      .expect(201);
+    // multer 1.x 会原样保留 `evil%22.png`；2.4.0 的 decodeFormDataName 把
+    // %0A/%0D/%22 反转义成真字符 ⇒ raw 里出现引号。这是 multer 2 的**真实行为变化**，
+    // 钉住它 + 钉住 sanitizeAttachmentName 接得住（图片落盘名是 md5+白名单后缀，本来就不受影响）。
+    expect(res.body.raw).toBe('evil".png');
+    expect(res.body.sanitized).toBe('evil.png');
+  });
+
+  it('版本钉子：platform-express 10.x + express 4.x + multer 2.x，且树里只有一份 express/multer', () => {
     // 读**已安装**的 package.json，不是声明的范围
     const platformExpress = require('@nestjs/platform-express/package.json');
     const express = require('express/package.json');
@@ -195,9 +259,30 @@ describe('上传管线（FileInterceptor + multer，真发 multipart 请求）',
     expect(String(common.version)).toMatch(/^10\./);
     // Express 5 会换 path-to-regexp v8，app.module.ts 里 4 处 `forRoutes({ path: '*' })` 会失配
     expect(String(express.version)).toMatch(/^4\./);
-    // platform-express 10.4.18+ 依赖 multer 2.x；钉住 1 .x 就是钉住 10.4.17
-    expect(String(multer.version)).toMatch(/^1\./);
-    expect(String(platformExpress.dependencies.express)).toBe(express.version);
-    expect(String(platformExpress.dependencies.multer)).toBe(multer.version);
+    // multer 1.x 停更且带已知 CVE；platform-express 10.4.22 自己钉的 2.0.2 也有
+    // 2026-03..09 披露的 8 个 CVE（全部在 2.3.0 修复），根 override `multer@2.0.2 → ^2.4.0`
+    // 把 platform-express 与 server 两边收敛到同一份 2.4.0。退回 1.x 或 2.0.2 都要先重跑上面几条。
+    expect(String(multer.version)).toMatch(/^2\./);
+    // multer 2 自己不带类型（types/typings 为空，实测装上的 2.4.0），类型来自 @types/multer 2.x
+    expect(multer.types ?? multer.typings).toBeUndefined();
+    const typesMulter = require('@types/multer/package.json');
+    expect(String(typesMulter.version)).toMatch(/^2\./);
+
+    // **单副本断言**：platform-express 上下文解析到的 express/multer 必须与我们这里
+    // require 到的是同一份（realpath 相同）。根 override（`express@4.22.1 → ^4.22.1`、
+    // `multer@2.0.2 → ^2.4.0`）是唯一保证 —— override 一丢，platform-express 钉死的
+    // 4.22.1/2.0.2 会和 server 的新解析分裂成两份副本，这条会立刻红。
+    const platformDir = dirname(require.resolve('@nestjs/platform-express/package.json'));
+    const fromPlatform = (mod: string) =>
+      realpathSync(require.resolve(mod, { paths: [platformDir] }));
+    expect(fromPlatform('express/package.json')).toBe(
+      realpathSync(require.resolve('express/package.json')),
+    );
+    expect(fromPlatform('multer/package.json')).toBe(
+      realpathSync(require.resolve('multer/package.json')),
+    );
+    // 声明版本仍是 Nest 发布时钉的那些（证明上面的单副本靠 override 收敛，而不是读错了包）
+    expect(String(platformExpress.dependencies.express)).toMatch(/^4\./);
+    expect(String(platformExpress.dependencies.multer)).toMatch(/^2\./);
   });
 });

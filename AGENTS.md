@@ -496,7 +496,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 | MongoDB | **7.0.14**，FCV **6.0** | 镜像/compose 的默认 tag 用 `mongo:7.0` |
 | sharp | 0.32.6 | 有 Node 20 的 prebuild；升 Node 22 必须先升 sharp 0.33+ |
 | TypeScript | **5.9.3**（server、website）/ **4.9.5**（admin，随 umi3，勿单独升） | 升级明细与三类结构性陷阱见 §7.51 |
-| NestJS | **10.x**（common/core/testing 10.4.22，platform-express **精确钉 10.4.17**） | 停在 10：Nest 11 = Express 5 = path-to-regexp v8，`app.module.ts` 那 4 处 `path:'*'` 会失配（§7.50/§7.52） |
+| NestJS | **10.x**（common/core/testing 10.4.22，platform-express **10.4.22**） | 停在 10：Nest 11 = Express 5 = path-to-regexp v8，`app.module.ts` 那 4 处 `path:'*'` 会失配（§7.50/§7.52） |
 | mongoose | **8.24.4**（自带 driver mongodb 6.20.0） | `@nestjs/mongoose` 10 的 peer 是 `^7.4 \|\| ^8`；mongoose 9 要配 `@nestjs/mongoose` 12（§7.52） | **→ 已升（§7.52）**
 | sharp | **0.35.4** | 0.33 起预编译改成 npm optionalDependencies、无 install 脚本（§7.47） |
 | Next.js | 13.5.x（pages router） | |
@@ -4397,7 +4397,9 @@ TypeScript 5.9.3、@nestjs/cli 11.0.24。**根 `pnpm.overrides` 一条都没改*
 **"限流悄悄不生效"这种静默故障**；`main.ts` 还按前缀挂了 50mb/1mb 两个 JSON 解析器，顺序错了同样静默。
 **Express 5 / Nest 11 单独立项。**
 
-⚠️ **`@nestjs/platform-express` 必须精确钉 `10.4.17`，不能写 `^10`**（JSON 写不了注释，所以记在这里）：
+⚠️ **（本段已被 §7.53 作废：platform-express 现在是 10.4.22 + multer 2.4.0）**
+下面这段是当时的判断与依据，保留是为了说明"为什么曾经钉死"，以及那个前提是怎么被推翻的：
+**`@nestjs/platform-express` 必须精确钉 `10.4.17`，不能写 `^10`**（JSON 写不了注释，所以记在这里）：
 逐版本读 registry 的 dependencies 才知道 —— 10.4.15/16/17 是 `{body-parser 1.20.3, express 4.21.2, multer 1.4.4-lts.1}`，
 **10.4.18 起换成 multer 2.0.0/2.0.1/2.0.2，10.4.22（最新 10.x）还把 express 抬到 4.22.1**。
 两个后果：① "multer 2 要等 Nest 11"这个判断**对 10.4.18+ 不成立**（我原来就是这么以为的，被实测推翻）；
@@ -4520,12 +4522,73 @@ dev 栈三端口 200、watcher `Found 0 errors`、重启后日志里
 `nest build` exit 0；`pnpm deploy --prod` 自带断言通过，产物 203.3M / 顶层 33 个包）。
 **环境变量无增删改；`Dockerfile` / `.github/workflows` / `docker-compose` 都不需要动**；根 `package.json` 未改。
 
+### 7.53 multer 2 + Next 14：一次"升级反而装上有漏洞版本"的陷阱，与生产构建不再跳过类型检查
+
+**A. multer 1.4.4-lts.1 → 2.4.0**（1.x 停更、被标 deprecated，而它在**每一条上传路径**上：
+图片 / 附件 / 主题 / 自定义页面 / 整站备份恢复 / JSON 导入）。
+
+⚠️ **本轮最重要的一个发现：照着"升到 multer 2"去做，装上的恰好是个有漏洞的版本。**
+`@nestjs/platform-express@10.4.22` 的 dependencies 里写的是**精确的 `multer: 2.0.2`**，
+而 2.0.2 有 **8 条 2026-03 至 2026-09 公布的高/中危 CVE**（CVE-2026-3520 / -3304 / -2359 / -5079 /
+-5038 / -77078 / -77063 / -82333），**全部在 ≥2.3.0 才修**。所以只把直接依赖写成 `multer: ^2.0.2`
+是不够的 —— pnpm 会给 platform-express 装它自己声明的 2.0.2，树里出现**两份 multer**，
+而真正跑 `FileInterceptor` 的是 platform-express 那份（也就是有漏洞的那份）。
+修法：根 `pnpm.overrides` 加 **`"multer@2.0.2": "^2.4.0"`**，把两处声明收敛成**单份 2.4.0**。
+**通用教训：升级一个被框架精确钉住的传递依赖时，"改自己的 package.json"往往没用，
+必须用 override 收敛，并且事后核对树里只有一份、而且跑的是那一份。**
+
+连带处理的三件事（都逐条核过 lockfile，不是照着旧记录改）：
+
+- **express 4.21.2 → 4.22.3，单份**：override 的键从 `express@4.18.2` 改成 `express@4.22.1 → ^4.22.1`
+  （platform-express 10.4.22 声明的是精确 `4.22.1`，旧键匹配不上就会留下两份）。
+  选最新补丁版而不是留在 4.21.2 的依据：查了公告，4.21.2 与 4.22.x 都**没有**在世的通告
+  （CVE-2024-51999 触及 <4.22.0 但**已被撤回 WITHDRAWN**）；`4.17.1` 仍然只在 admin 的 umi 工具链下。
+  单份性用 `readlink` 核过 platform-express 自己的 express 链接指向 `express@4.22.3`。
+- **body-parser**：platform-express 10.4.22 精确钉 `1.20.4`，而 1.20.4 有 CVE-2026-12590（低危，1.20.6 修）
+  ⇒ 加 override `"body-parser@1.20.4": "^1.20.8"`，server 树里现在单份 **1.20.8**；
+  同时**删掉**了已经失效的 `"body-parser@1.20.2"` 键（lockfile 里没有任何包再声明 1.20.2）。
+- ⚠️ **`"send@0.18.0": "^0.19.0"` 这条 override 差点被当成失效删掉 —— 删了之后 lockfile 立刻证明它不是**：
+  send 0.18.0 会从 `serve-static@1.15.0 ← @umijs/plugin-openapi ← umi`（admin 工具链）那条链上重新冒出来
+  （CVE-2024-43799，低危 XSS）。已恢复。
+  **教训：判断一条 override 是否"失效"，唯一可靠的方法是删掉它再看 lockfile，不能靠读依赖声明。**
+
+**multer 2.4 的一个真实行为变化**（已加用例钉住）：它对上传文件名的 **WHATWG unescape** 处理与 1.x 不同
+（含 CJK 文件名、`%22` 这类转义的路径），所以 `uploadPipeline.spec.ts` 除了更新那条**版本钉子**
+（platform-express ^10 + express ^4 + **multer ^2**，谁再动就会红），还补了 CJK 文件名与 `%22` 两个用例。
+另外 `@types/multer` 必须一起升到 `^2.2.0` —— **multer 2 自己不带类型**（实测安装包的 `types`/`typings` 字段为空）。
+
+**B. Next 13.5.11 → 14.2.35**（Next 13 已在 Vercel 的支持窗口之外）。**没有一步到 15**：
+15 要 React 19，而 `@bytemd/react` 的 peer 只到 React 18，会把编辑器/渲染器一起拖下水。
+React 仍是 **18.2.0**。配套：`@next/bundle-analyzer` 与 `eslint-config-next` 也跟着升到 14.2.35（同大版本）。
+`next.config.js` 的三处迁移：`images.domains` → **`images.remotePatterns`**（14 里 domains 已弃用；
+只写 hostname 的条目与原来"任意协议/端口"的语义一致，**`VAN_BLOG_ALLOW_DOMAINS` 为空时仍然只允许本站图片**
+这条硬化保持不变，见 §7.38）；**`swcMinify` 删掉**（14 起是默认值，该选项已被忽略）；
+`experimental.largePageDataBytes` 保留（14 仍然认，它是 §7.42/§7.45 那条"列表页不许再塞全文"的回归护栏）。
+⚠️ 前台 dev 进程（:3001）是升级前启动的，**跑的还是旧 next 的 inode**，`dev-env.sh` 没有 supervisor 不会自换 ——
+所以升级后必须重启 dev 栈才能做前台的活体测量（本轮的 Next 14 生产证据来自 `next build` 与镜像构建）。
+
+**C. 生产镜像构建不再跳过类型检查**（这是个藏了很久的洞）：
+Dockerfile 的 website stage 设了 `ENV isBuild=t`，而 `next.config.js` 把 `isBuild === "t"` 同时映射成
+`typescript.ignoreBuildErrors = true` **和** `eslint.ignoreDuringBuilds = true` ——
+也就是**官方镜像构建一直在跳过前台的类型检查**，而它上面那行注释写的恰恰是"正式构建不要开"。
+现在 `typescript.ignoreBuildErrors` **只**由显式的 `VANBLOG_SKIP_TYPECHECK=true` 控制（本地量体积时用），
+不再跟 `isBuild` 挂钩 ⇒ **镜像构建从此会真的做类型检查**（TS 5.9 清零之后这个拐杖已经不需要了，见 §7.51）。
+⚠️ `isBuild=t` 这个 ENV **本身要保留**：`api/getAllData.ts` 等处用它做"构建期后端不可达"的降级，
+去掉会破坏构建（§7.23）—— 这次只解开了它与类型检查的耦合。
+`eslint.ignoreDuringBuilds` 仍然是 true，原因很实在：**`packages/website` 根本没有 `.eslintrc`**
+（仓库里只有 server 与 admin 有 lint 配置），所以没有可开启的 lint 路径；要补 lint 得先建配置，属另一件事。
+
+**实测**：server `tsc`（全新 buildinfo）**0 错误**、`jest` **961 用例 / 960 绿 + 1 个既有的 watermark 字体用例**
+（959 → 961，新增的是 multer 2 的文件名用例）；website `tsc`（全新 buildinfo，Next 14 的类型）**0 错误**、
+`vitest` **69 文件 / 686**（`perfBudget.spec.ts` 里那条钉 `swcMinify` 的断言随迁移更新）；
+dev 栈三端口 200、server watcher `Found 0 errors` 并在新依赖上重启成功。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 938 用例：**937 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例，见 §2.1；负载高时可能 2 个失败，单独跑 5/5 绿） |
-| website `vitest run` | 69 文件 / 685 用例全绿 |
+| website `vitest run` | 69 文件 / 686 用例全绿 |
 | admin `node --test tests/unit` | 87 套件 / 347 用例全绿（⚠️ Node 24 换了 `node --test` 的默认 reporter，要 `--test-reporter=tap` 才有 `# tests` 汇总行） |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |

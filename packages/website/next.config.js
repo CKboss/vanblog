@@ -44,6 +44,13 @@ const getAllowDomains = () => {
     return [];
   }
 };
+// Next 14 起 images.domains 已弃用，改用 images.remotePatterns。
+// 只写 hostname（不写 protocol/port/pathname）= 三者全放行，与旧 domains 的
+// 匹配语义逐项等价（domains 也是"任意协议、任意端口、任意路径"）。
+// ⚠️ 空数组的语义必须保留：VAN_BLOG_ALLOW_DOMAINS 为空 ⇒ 生产构建只优化本站图片
+// （AGENTS §7.38 的刻意收紧），不是"允许所有远程域名"。
+const getImageRemotePatterns = () =>
+  getAllowDomains().map((hostname) => ({ hostname }));
 const getCdnUrl = () => {
   if (isDev) {
     return {};
@@ -66,38 +73,45 @@ const adminNoStoreHeaders = [
   { key: "Expires", value: "0" },
 ];
 
-// 仓库里有历史遗留的类型错误（多数在 __tests__/*.spec.ts，也有几处在组件里），
-// 会让 `next build` 直接失败——dev 模式不做全量类型检查，所以平时看不出来。
-// 官方镜像的构建命令是 `cross-env isBuild=t next build`，因此这里在 isBuild 时放行；
-// 本地想复现严格检查就去掉 isBuild，或用 VANBLOG_SKIP_TYPECHECK=true 单独跳过。
-// 清单见 AGENTS.md §7.10。
-const skipChecks =
-  process.env.VANBLOG_SKIP_TYPECHECK === "true" || process.env.isBuild === "t";
+// TS 5.9 之后本包 `tsc --noEmit` 是 0 错误（AGENTS §7.51），所以**生产构建不再跳过
+// 类型检查**：skipChecks 只认显式逃生口 VANBLOG_SKIP_TYPECHECK=true（本地量体积用）。
+// ⚠️ 以前这里还挂了 `process.env.isBuild === "t"`（官方镜像构建命令带的），等于镜像
+// 构建一直在裸奔。isBuild=t 仍然在用，但它管的是 api/getAllData.ts 等「构建期连不上
+// server 就用默认数据」的兜底（AGENTS §7.23），跟类型检查无关，别再挂回来。
+const skipChecks = process.env.VANBLOG_SKIP_TYPECHECK === "true";
 
 module.exports = withBundleAnalyzer({
   reactStrictMode: true,
   output: "standalone",
-  swcMinify: true,
+  // Next 14 起 swcMinify 默认就是 true（Next 15 里该配置项被移除），无需再写。
   poweredByHeader: false,
-  // 仓库里有几处历史类型错误会让 `next build` 直接失败（dev 不做全量类型检查所以看不出来）。
-  // 需要先把包出出来测体积时，可以 VANBLOG_SKIP_TYPECHECK=true next build 跳过；
-  // 正式构建不要开。清单见 AGENTS.md §7.10。
+  // 类型检查在正式构建里是**开着**的：TS 5.9 之后本包 `tsc --noEmit` 为 0 错误（AGENTS §7.51），
+  // 以前 `isBuild=t` 一并跳过类型检查的拐杖已经撤掉；
+  // 只保留 VANBLOG_SKIP_TYPECHECK=true 这个显式逃生口（本地量体积时用）。
   typescript: {
     ignoreBuildErrors: skipChecks,
   },
   eslint: {
-    ignoreDuringBuilds: skipChecks,
+    // 本包没有 .eslintrc*（仓库的 lint 配置只在 server/admin），`next lint` 只会交互式
+    // 提示创建配置，next build 的 lint 步骤没有可执行的配置可跑。
+    // 实测（next 14.2.35 源码 dist/lib/eslint/runLintCheck.js:274）：即使设成 false，
+    // 无配置时构建也只 warn「No ESLint configuration detected」不会失败，所以这里保持
+    // true 只是省掉一条每次构建都出现的无效警告；引入 lint 基线是另一个独立项目。
+    ignoreDuringBuilds: true,
   },
   experimental: {
-    // Next 13 的默认值是 128KB。以前这里抬到了 10MB（80 倍），
+    // Next 13/14 的默认值都是 128KB（14.2.35 的 config-shared.js:127 实测仍是 128*1000，
+    // 且构建日志会把它列在 Experiments 里）。以前这里抬到了 10MB（80 倍），
     // 结果是**把唯一会报警的机制关掉了**：列表页把全文塞进 pageProps、
     // /timeline 把没人读的文章数组塞两份，都不会再有任何提示。
     // 256KB 对现有页面绰绰有余（最大的是 /timeline 的 73KB），
     // 再超出去说明有人往 pageProps 里塞了不该塞的东西，那时就该看到构建告警。
+    // ⚠️ 这个阈值在 Next 14 仍然真实生效：把副本里的值改成 1KB 重新构建，
+    // 4 个页面立刻打出 "exceeds the threshold of 1.02 kB"（A/B 实测，见升级记录）。
     largePageDataBytes: 256 * 1024,
   },
   images: {
-    domains: getAllowDomains(),
+    remotePatterns: getImageRemotePatterns(),
   },
   async headers() {
     // Defense in depth if /admin is ever routed to Next.js; public pages stay cacheable.
