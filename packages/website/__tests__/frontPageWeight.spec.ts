@@ -101,7 +101,10 @@ describe("接线", () => {
 
   it("封面图有 aspect-ratio，不再是 LCP 元素上的布局位移", () => {
     const css = read("styles/globals.css");
-    expect(css).toMatch(/\.article-cover img \{[^}]*aspect-ratio/s);
+    // 不带 /s（dotAll）标志：website 项目 target 是 es5，TS 5 对 /s 报 TS1501；
+    // 而这条正则里根本没有裸 `.`（只有转义的 \. 和字符类 [^}]），/s 从来就是空操作，
+    // 去掉后匹配行为逐字节不变。
+    expect(css).toMatch(/\.article-cover img \{[^}]*aspect-ratio/);
     // 组件本身没有 width/height，所以必须靠 CSS 占位
     expect(read("components/ArticleCover/index.tsx")).toContain('className="block w-full max-h-80 object-cover"');
   });

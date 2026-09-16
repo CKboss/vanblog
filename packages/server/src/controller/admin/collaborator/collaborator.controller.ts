@@ -41,7 +41,11 @@ export class CollaboratorController {
     const data = await this.userProvider.getAllCollaborators(true);
     return {
       statusCode: 200,
-      data: [adminUser, ...data] || [adminUser],
+      // 以前这里写的是 `[adminUser, ...data] || [adminUser]`：数组字面量永远为真，
+      // `|| [adminUser]` 是不可达的死代码（TS 5 的 TS2872 把它抓了出来）。
+      // mongoose 的 find() 永远 resolve 成数组，没有协作者时就是 []，
+      // 展开后自然得到 [adminUser] —— 原意图已经被覆盖，删掉死分支即可，行为不变。
+      data: [adminUser, ...data],
     };
   }
   @Delete('/:id')

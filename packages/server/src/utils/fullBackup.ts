@@ -380,12 +380,18 @@ async function dumpCollection(
   for await (const doc of cursor) {
     const line = `${JSON.stringify(encodeDoc(doc))}\n`;
     if (!stream.write(line)) {
-      await new Promise((resolve) => stream.once('drain', resolve));
+      // @types/node 24 给 fs.WriteStream 的事件表加了强类型（'drain' 的监听器是 () => void），
+      // 而 Promise 的 resolve 是 (value: unknown) => void，直接塞进去会报 TS2345
+      // （目标签名参数太少）。包一层无参回调即可，运行时行为与原来完全一致。
+      await new Promise<void>((resolve) => stream.once('drain', () => resolve()));
     }
     count += 1;
     bytes += Buffer.byteLength(line);
   }
-  await new Promise((resolve) => stream.end(resolve));
+  // 同上：原来写 `stream.end(resolve)`，运行时 Node 把函数实参当回调（行为正确），
+  // 但类型上是撞进了 `end(chunk: any, cb?)` 重载 —— resolve 被当成待写数据。
+  // 显式写成回调，类型与运行时语义一致，行为不变。
+  await new Promise<void>((resolve) => stream.end(() => resolve()));
 
   let indexes: any[] = [];
   try {

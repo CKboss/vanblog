@@ -32,6 +32,8 @@ import { compressExt, compressImg, resolveCompressFormat } from 'src/utils/imgCo
 import { capImageResolution } from 'src/utils/imgResize';
 import { generateThumbnail } from 'src/utils/thumbnail';
 import { buildStegoPayload, parseThumbWidth, resolveMaxImageEdge } from 'src/utils/imageOptions';
+// 显式标注删除方法的返回类型，避开 mongoose 自带 mongodb 副本的不可移植路径（TS2742）。
+import type { DeleteResult } from 'mongodb';
 import { embedStegoWatermark, extractStegoWatermark } from 'src/utils/stegoWatermark';
 import { canEncodeFormat, encodeImageToFormat, normalizeImageFormat } from 'src/utils/imgEncode';
 import { safeImageSize } from 'src/utils/imageMeta';
@@ -628,7 +630,7 @@ export class StaticProvider {
     return this.localProvider.deleteCustomPageFile(pathname, filePath);
   }
 
-  async deleteOneBySign(sign: string, staticType?: string) {
+  async deleteOneBySign(sign: string, staticType?: string): Promise<DeleteResult> {
     // 先删除实际上的。
     // 1) 记录不存在（重复点删除 / 列表过期）以前会在 .storageType 上抛 TypeError → 500；
     // 2) 图片与附件可能同内容同 sign，必须按 staticType 限定，

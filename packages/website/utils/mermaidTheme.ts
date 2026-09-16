@@ -121,9 +121,14 @@ export function applyMermaidThemeToTree(
 }
 
 export function watchMermaidContainers(
-  root: {
+  // MutationObserver.observe 只接受真正的 Node，所以这里把参数如实收窄成
+  // 「Node + 结构化 querySelectorAll」。以前是纯结构类型 + `root as Node` 强转，
+  // TS 5 报 TS2352（结构替身与 Node 没有足够重叠）。生产上唯一的调用方传的是
+  // bytemd 的 markdownBody（真实 HTMLElement），类型收窄只是把运行时一直成立
+  // 的事实写出来 —— 行为零变化。
+  root: Node & {
     querySelectorAll: (selector: string) => ArrayLike<{ classList: { add: (n: string) => void; remove: (n: string) => void }; setAttribute: (n: string, v: string) => void }>;
-  } & { ownerDocument?: Document },
+  },
   isDark: boolean
 ): () => void {
   applyMermaidThemeToTree(root, isDark);
@@ -131,6 +136,6 @@ export function watchMermaidContainers(
     return () => undefined;
   }
   const obs = new MutationObserver(() => applyMermaidThemeToTree(root, isDark));
-  obs.observe(root as Node, { childList: true, subtree: true });
+  obs.observe(root, { childList: true, subtree: true });
   return () => obs.disconnect();
 }

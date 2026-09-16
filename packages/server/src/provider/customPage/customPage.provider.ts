@@ -1,6 +1,10 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+// 显式标注删除方法的返回类型：mongoose 内部用的是它自己那份 mongodb 驱动
+// （.pnpm/mongodb@5.9.2），TS 5.9 在声明文件里无法可移植地引用那个深层路径（TS2742）。
+// 用本包直接依赖的 mongodb 的 DeleteResult 标注 —— 两者结构完全相同，行为不变。
+import type { DeleteResult } from 'mongodb';
 import { CustomPage, CustomPageDocument } from 'src/scheme/customPage.schema';
 
 @Injectable()
@@ -50,7 +54,7 @@ export class CustomPageProvider {
   async getAll() {
     return await this.customPageModal.find({}, { html: 0 });
   }
-  async deleteByPath(path: string) {
+  async deleteByPath(path: string): Promise<DeleteResult> {
     return await this.customPageModal.deleteOne({ path });
   }
 }

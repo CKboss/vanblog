@@ -1,9 +1,25 @@
 import { describe, it, expect } from "vitest";
 import { headingRehypePlugin, isFootnotesHeading } from "../components/Markdown/heading";
 
+/**
+ * hast 风格的测试替身类型：插件会**原地改写**这棵树（往 properties 里写
+ * id / data-id / class，往 children 里追加永久链接 <a>）。不给局部类型时，
+ * 对象字面量会被推断成 `properties: {}` 这类窄形状，断言读插件写入的字段
+ * 就全是 TS2339。真实的 hast `Properties` 本来就是开放索引签名，这里的
+ * `Record<string, unknown>` 与运行时事实一致；断言一行未改。
+ */
+type HastNode = {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+type HastRoot = { type: string; children: HastNode[] };
+
 describe("heading plugin anchors", () => {
   it("strips trailing spaces from id and data-id", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {
@@ -20,7 +36,7 @@ describe("heading plugin anchors", () => {
   });
 
   it("uses the full visible text when a heading has inline markdown", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {
@@ -43,7 +59,7 @@ describe("heading plugin anchors", () => {
   });
 
   it("does not rewrite the GFM footnotes section heading", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {
@@ -62,7 +78,7 @@ describe("heading plugin anchors", () => {
   });
 
   it("leaves already-clean titles unchanged", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {
@@ -78,7 +94,7 @@ describe("heading plugin anchors", () => {
   });
 
   it("adds a selectable permalink with an encoded hash href", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {
@@ -103,7 +119,7 @@ describe("heading plugin anchors", () => {
   });
 
   it("encodes spaces in the permalink href and keeps the raw id", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {

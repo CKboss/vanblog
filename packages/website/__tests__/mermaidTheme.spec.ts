@@ -45,7 +45,10 @@ function mockEl(className = "") {
     },
     getAttribute: (name: string) => attrs[name],
     get className() {
-      return [...classes].join(" ");
+      // Array.from 而不是 [...classes]：website 项目 target 是 es5，Set 的展开
+      // 语法会报 TS2802；Array.from 走 lib（esnext）类型，运行时语义一致
+      // （同样的插入顺序）。
+      return Array.from(classes).join(" ");
     },
   };
 }

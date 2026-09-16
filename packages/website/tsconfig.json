@@ -28,7 +28,13 @@
   "include": [
     "next-env.d.ts",
     "**/*.ts",
-    "**/*.tsx"
+    "**/*.tsx",
+    "../server/src/utils/articleExcerpt.ts",
+    "../server/src/utils/frontMatter.ts",
+    "../server/src/utils/coverFromContent.ts",
+    "../server/src/utils/transferRemoteImages.ts",
+    "../server/src/utils/markdownExport.ts",
+    "../admin/src/services/van-blog/relativeTime.js"
   ],
   "exclude": [
     "node_modules"

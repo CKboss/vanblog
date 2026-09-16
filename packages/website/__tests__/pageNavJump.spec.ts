@@ -330,13 +330,17 @@ describe("PageNav jump does not break #542 a11y", () => {
   });
 
   it("does not treat the jump input as an arrow-key page-nav target", () => {
-    const items = [0, 1].map((i) => ({
-      id: i,
-      focus: () => {
-        throw new Error("jump input must not move page-link focus");
-      },
-    }));
-    const jumpInput = { id: "jump" };
+    // 同 pageNavA11y.spec：target 形参是 EventTarget，替身用真 EventTarget 承载
+    // id/focus（handler 只做引用比较），类型诚实且行为不变。
+    const items = [0, 1].map((i) =>
+      Object.assign(new EventTarget(), {
+        id: i,
+        focus: () => {
+          throw new Error("jump input must not move page-link focus");
+        },
+      })
+    );
+    const jumpInput = Object.assign(new EventTarget(), { id: "jump" });
     expect(
       handlePageNavKeyDown({
         key: "ArrowRight",

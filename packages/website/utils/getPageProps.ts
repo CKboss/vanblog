@@ -20,6 +20,7 @@ import {
 import { LinkPageProps } from "../pages/link";
 import { isListedPublicCategory } from "./publicCategories";
 import { groupTimelineByYearAndMonth } from "./timelineMonths";
+import { Article } from "../types/article";
 
 export async function getIndexPageProps(): Promise<IndexPageProps> {
   const data = await getPublicMeta();
@@ -47,7 +48,14 @@ export async function getTimeLinePageProps(): Promise<TimeLinePageProps> {
   const data = await getPublicMeta();
   const layoutProps = getLayoutProps(data);
   const authorCardProps = getAuthorCardProps(data);
-  const sortedArticles = (await getArticlesByTimeLine()) || {};
+  // /api/public/timeline 返回「年份 → 该年文章列表」。显式标注元素类型：
+  // 取数函数没有返回类型时结果是 any，TS 5.9 不再把 T 推断成 any，而是回退到
+  // 约束上界 TimelineArticleLike，与 TimeLinePageProps 声明的
+  // TimelineYearGroup<Article>[] 对不上（content 可选 vs 必填）。
+  // 这里的标注与 server 端 getTimeLineInfo 自己的 `Record<string, Article[]>`
+  // 以及下游组件（TimelineArchives/TimeLineItem/ArticleList）的既有契约一致。
+  const sortedArticles: Record<string, Article[]> =
+    (await getArticlesByTimeLine()) || {};
   const yearGroups = groupTimelineByYearAndMonth(sortedArticles);
   const wordTotal = data.totalWordCount;
   return {

@@ -5,7 +5,10 @@ import remarkGemoji from "remark-gemoji";
 import remarkDefinitionList from "remark-definition-list";
 import { remarkAlert } from "remark-github-blockquote-alert";
 import { pandocMark } from "micromark-extension-mark";
-import { pandocMarkFromMarkdown, pandocMarkToMarkdown } from "mdast-util-mark";
+// 经 ./mdastUtilMark 中转而不是直接 import "mdast-util-mark"：那个包把编译不过的
+// 源码 index.ts 发进了 npm 包，TS 5 会命中它（详见该文件顶部的说明）。中转的
+// 运行时就是包的 index.js（main 指向的文件），行为一字不变。
+import { pandocMarkFromMarkdown, pandocMarkToMarkdown } from "./mdastUtilMark";
 import { normalizeHeadingText } from "../../utils/headingText";
 import { headingHashHref } from "../../utils/headingHash";
 

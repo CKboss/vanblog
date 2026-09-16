@@ -179,12 +179,18 @@ describe("PageNav arrow-key focus", () => {
 
   it("ArrowLeft / ArrowRight move among focusable controls via the shared handler", () => {
     const focused: number[] = [];
-    const items = [0, 1, 2].map((i) => ({
-      id: i,
-      focus: () => {
-        focused.push(i);
-      },
-    }));
+    // handlePageNavKeyDown 的 target 形参是 EventTarget（生产上传入的是真实 DOM 事件
+    // 的 target）。替身用真正的 EventTarget 承载 id/focus：handler 对 target 只做
+    // 引用相等比较（el === active）与可选的 contains() 探测，与普通对象字面量的
+    // 行为完全一致，但类型是诚实的（裸 {id,focus} 字面量不是 EventTarget，TS2739）。
+    const items = [0, 1, 2].map((i) =>
+      Object.assign(new EventTarget(), {
+        id: i,
+        focus: () => {
+          focused.push(i);
+        },
+      })
+    );
     const currentTarget = {
       querySelectorAll: (selector: string) => {
         expect(selector).toBe(`[${PAGE_NAV_ITEM_ATTR}]`);

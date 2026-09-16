@@ -68,10 +68,11 @@ const createFakeLoadEnv = (
     setTimeout: (cb) => {
       const id = nextId++;
       timeouts.push({ id, cb });
-      return id as unknown as ReturnType<typeof setTimeout>;
+      // GaLoadSchedulerEnv 的句柄已按浏览器事实定成 number，不再需要双重断言。
+      return id;
     },
     clearTimeout: (id) => {
-      const index = timeouts.findIndex((task) => task.id === (id as number));
+      const index = timeouts.findIndex((task) => task.id === id);
       if (index >= 0) {
         timeouts.splice(index, 1);
       }

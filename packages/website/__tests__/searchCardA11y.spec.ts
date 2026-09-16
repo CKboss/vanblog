@@ -283,12 +283,16 @@ describe("search dialog Tab cycle", () => {
 
   it("cycles Tab / Shift+Tab among input, clear, and results — not a page-behind node", () => {
     const focused: string[] = [];
-    const make = (id: string) => ({
-      id,
-      focus: () => {
-        focused.push(id);
-      },
-    });
+    // handleSearchDialogKeyDown 的 target 形参是 EventTarget（生产上是真实 DOM 事件的
+    // target）。替身用真正的 EventTarget 承载 id/focus：handler 内部只做引用相等与
+    // 可选 contains() 探测（indexOfSearchFocusable），行为与普通对象一致、类型诚实。
+    const make = (id: string) =>
+      Object.assign(new EventTarget(), {
+        id,
+        focus: () => {
+          focused.push(id);
+        },
+      });
     const input = make("input");
     const clear = make("clear");
     const r1 = make("r1");
@@ -304,7 +308,7 @@ describe("search dialog Tab cycle", () => {
       querySelector: () => input,
     };
 
-    let active: unknown = r2;
+    let active: EventTarget = r2;
     const fire = (key: string, shiftKey = false) => {
       let prevented = false;
       const action = handleSearchDialogKeyDown({
@@ -362,18 +366,21 @@ describe("search result arrows and Enter", () => {
 
   it("ArrowDown / ArrowUp move among ArticleList result links via the shared handler", () => {
     const focused: string[] = [];
-    const input = {
+    // 同上：target 形参是 EventTarget，替身用真 EventTarget 承载 id/focus。
+    const input = Object.assign(new EventTarget(), {
       id: "input",
       focus: () => {
         focused.push("input");
       },
-    };
-    const results = ["r0", "r1"].map((id) => ({
-      id,
-      focus: () => {
-        focused.push(id);
-      },
-    }));
+    });
+    const results = ["r0", "r1"].map((id) =>
+      Object.assign(new EventTarget(), {
+        id,
+        focus: () => {
+          focused.push(id);
+        },
+      })
+    );
 
     const currentTarget = {
       querySelectorAll: (selector: string) => {
@@ -386,7 +393,7 @@ describe("search result arrows and Enter", () => {
       },
     };
 
-    let active: unknown = input;
+    let active: EventTarget = input;
     const fire = (key: string) =>
       handleSearchDialogKeyDown({
         key,

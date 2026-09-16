@@ -1,6 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { isInPageHashHref, linkTargetRehypePlugin } from "../components/Markdown/linkTarget";
 
+/**
+ * hast 风格的测试替身类型（同 headingPlugin.spec 的理由）：插件会往 properties 里
+ * **写入** target / rel，裸对象字面量只会推断出它初始有的那几个键，断言读新写入
+ * 的字段就是 TS2339。真实的 hast Properties 是开放索引签名，Record<string, unknown>
+ * 与运行时一致；断言不变。
+ */
+type HastNode = {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+type HastRoot = { type: string; children: HastNode[] };
+
 describe("isInPageHashHref", () => {
   it("treats fragment-only hrefs as in-page", () => {
     expect(isInPageHashHref("#user-content-fn-1")).toBe(true);
@@ -17,7 +32,7 @@ describe("isInPageHashHref", () => {
 
 describe("linkTarget plugin", () => {
   it("does not force target=_blank on footnote hash links", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {
@@ -43,7 +58,7 @@ describe("linkTarget plugin", () => {
   });
 
   it("still opens external links in a new tab", () => {
-    const tree = {
+    const tree: HastRoot = {
       type: "root",
       children: [
         {

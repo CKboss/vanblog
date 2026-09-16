@@ -25,11 +25,14 @@ describe("headingScrollTop", () => {
 
 describe("scrollElUntilSettled", () => {
   it("re-scrolls when heading offsetTop grows after images load", async () => {
-    const el = { offsetTop: 240 } as HTMLElement;
+    // HTMLElement.offsetTop 是只读的（TS2540），而本用例恰恰要在 waitFrame 里改写它
+    // 模拟「图片加载后标题位置变低」。替身保持普通对象（可写），只在调用处断言一次
+    // 当作 HTMLElement 传入 —— scrollElUntilSettled 对 el 只读 offsetTop，行为不变。
+    const el = { offsetTop: 240 };
     const jumps: number[] = [];
     let t = 0;
     let scrollY = 0;
-    await scrollElUntilSettled(el, 0, {
+    await scrollElUntilSettled(el as HTMLElement, 0, {
       initialDuration: 0,
       settleMs: 200,
       now: () => t,

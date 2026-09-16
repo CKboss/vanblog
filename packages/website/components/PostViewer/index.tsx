@@ -31,12 +31,18 @@ function onIdle(cb: () => void, timeout: number): () => void {
   if (typeof window === "undefined") {
     return () => {};
   }
+  // TS 5.9 的 lib.dom 把 requestIdleCallback 声明成 Window 的必有成员，于是
+  // `"requestIdleCallback" in window` 的 false 分支被收窄成 never，下面的
+  // setTimeout 回退在类型上"不可达"（TS2339: Property 'setTimeout' does not
+  // exist on type 'never'）。但老浏览器（如 Safari < 16.4）确实没有它，回退
+  // 必须保留 —— 用一个不参与该收窄的别名拿到同一个 window 对象，运行时零变化。
+  const win = window;
   if ("requestIdleCallback" in window) {
     const handle = (window as any).requestIdleCallback(cb, { timeout });
     return () => (window as any).cancelIdleCallback?.(handle);
   }
-  const handle = window.setTimeout(cb, timeout);
-  return () => window.clearTimeout(handle);
+  const handle = win.setTimeout(cb, timeout);
+  return () => win.clearTimeout(handle);
 }
 
 export default function PostViewer(props: {

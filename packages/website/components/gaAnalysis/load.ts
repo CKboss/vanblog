@@ -108,8 +108,12 @@ export type GaLoadSchedulerEnv = {
     opts?: { timeout?: number }
   ) => number;
   cancelIdleCallback?: (id: number) => void;
-  setTimeout: (cb: () => void, ms?: number) => ReturnType<typeof setTimeout>;
-  clearTimeout: (id: ReturnType<typeof setTimeout>) => void;
+  // 句柄按浏览器事实定成 number：这个调度器只在客户端跑（见下方注释 "Never called
+  // during SSR"），真实注入的是 window 定时器，window.setTimeout 返回 number。
+  // 以前写 ReturnType<typeof setTimeout>，在同时加载了 @types/node 的程序里会选中
+  // NodeJS.Timeout —— 与运行时不符，还逼着测试写 `id as number` 这种断言。
+  setTimeout: (cb: () => void, ms?: number) => number;
+  clearTimeout: (id: number) => void;
 };
 
 /**
@@ -122,7 +126,7 @@ export function scheduleGaScriptLoad(
 ): () => void {
   let cancelled = false;
   let idleHandle: number | undefined;
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let timeoutHandle: number | undefined;
   let loadListener: (() => void) | undefined;
 
   const runWhenIdle = () => {

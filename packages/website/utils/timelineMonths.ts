@@ -1,7 +1,18 @@
 import { Article } from "../types/article";
 
-export type TimelineArticleLike = Pick<Article, "title" | "id" | "createdAt"> &
-  Partial<Article>;
+/**
+ * `createdAt` 实际可能的输入：公开接口下发的是 ISO 字符串，但调用方（以及测试
+ * fixture）手里可能已经是 Date 或时间戳。`parseTimelineDate` 与
+ * `sortByCreatedAtDesc` 对这三种本来就都接受（运行时行为从未变过）——
+ * 以前类型写成 `Article["createdAt"]`（string）没跟上事实，导致给
+ * `groupTimelineByYearAndMonth` 传 Date 的测试在 TS 5 下报 TS2345。
+ */
+export type TimelineDateInput = Article["createdAt"] | Date | number;
+
+export type TimelineArticleLike = Pick<Article, "title" | "id"> &
+  Partial<Omit<Article, "id" | "title" | "createdAt">> & {
+    createdAt: TimelineDateInput;
+  };
 
 export interface TimelineMonthGroup<T extends TimelineArticleLike = Article> {
   year: number;
@@ -65,7 +76,7 @@ export function timelineMonthKey(year: number, month: number): string {
 }
 
 export function parseTimelineDate(
-  createdAt: unknown
+  createdAt: TimelineDateInput | null | undefined
 ): { year: number; month: number } | null {
   if (createdAt == null || createdAt === "") {
     return null;

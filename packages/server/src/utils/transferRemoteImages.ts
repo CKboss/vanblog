@@ -74,7 +74,11 @@ export function collectSiteHosts(siteBaseUrl?: string, extraHosts?: Array<string
   };
   add(siteBaseUrl);
   extraHosts?.forEach(add);
-  return [...hosts];
+  // Array.from 而不是 [...hosts]：本文件还会被 website 项目（target es5，无
+  // downlevelIteration）跨包类型检查（__tests__/articleExcerptParity.spec.ts），
+  // Set 的展开语法在那里报 TS2802。两者运行时语义完全一致（同样的插入顺序），
+  // server 自己的产物（target es2017）行为不变。
+  return Array.from(hosts);
 }
 
 export function classifyImageUrl(
