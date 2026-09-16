@@ -7,6 +7,7 @@ import { getNetIp, getPlatform } from './utils';
 import { config } from 'src/config';
 import path from 'path';
 import { checkOrCreate } from 'src/utils/checkFolder';
+import { RotatingFileStream } from 'src/utils/logRotate';
 import { sanitizePagination } from 'src/utils/pagination';
 import { readLogTailLines } from 'src/utils/logTail';
 import { Pipeline } from 'src/scheme/pipeline.schema';
@@ -37,20 +38,43 @@ const scanLogger = new Logger('LogProvider');
 export class LogProvider {
   logger = null;
   logPath = path.join(config.log, 'vanblog-event.log');
+  /** 轮转流。声明在 logPath 之后，因为构造函数里要用它 */
+  private readonly eventLogStream = new RotatingFileStream(this.logPath);
   systemLogPath = path.join('/var/log/', 'vanblog-stdio.log');
   constructor() {
     checkOrCreate(config.log);
+    // 轮转失败不能影响写日志（RotatingFileStream 内部已经兜住了），但要在别处留一条痕迹
+    this.eventLogStream.onRotateError = (err) => {
+      scanLogger.warn(`事件日志轮转失败（不影响继续写）：${(err as Error)?.message || err}`);
+    };
     const streams = [
       {
-        stream: fs.createWriteStream(this.logPath, {
-          flags: 'a+',
-        }),
+        // ⚠️ 以前这里是裸的 `fs.createWriteStream(this.logPath, { flags: 'a+' })`：
+        // 事件日志**只增不减**，跑得久了会吃满磁盘，而磁盘满的表现是
+        // "备份写不出来、图片存不进去、mongod 变只读"，排查时完全看不出根因。
+        // logTail 只限界了**读**（后台翻日志不会因文件大而卡死），没限界**写**。
+        // 现在按大小轮转：VANBLOG_EVENT_LOG_MAX_MB（默认 20）× (VANBLOG_EVENT_LOG_KEEP+1)（默认 3+1）
+        // ⇒ 事件日志总量上界约 80MB。
+        stream: this.eventLogStream,
       },
       { stream: process.stdout },
     ];
     this.logger = pino({ level: 'debug' }, pino.multistream(streams));
     this.logger.info({ event: 'start' });
   }
+  /**
+   * 优雅停机时把缓冲里的事件日志刷出去。
+   * ⚠️ `createWriteStream` 的写入是异步的：不 flush 的话进程退出会丢掉最后几条 ——
+   * 而"最后几条"往往正是关机前那次失败的原因。
+   */
+  async onModuleDestroy() {
+    try {
+      await this.eventLogStream.close();
+    } catch {
+      // 停机路径上不抛
+    }
+  }
+
   async runPipeline(
     pipeline: Pipeline,
     input: any,

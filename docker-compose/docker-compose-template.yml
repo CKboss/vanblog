@@ -20,6 +20,9 @@ services:
     # server 自己还要停 waline、停 website、关 mongo 连接。docker 默认只等 10 秒就 SIGKILL，
     # 余量太薄 —— 稍微慢一点的机器就会在关连接的半途被砍。给到 30 秒。
     stop_grace_period: 30s
+    # ⚠️ 这里**故意不写 healthcheck**：镜像里已经有 HEALTHCHECK 指令（打 `/api/public/health`），
+    # 编排里再写一份就是两处需要同步维护的真相。容器日志的大小上限也已经在下面那个
+    # logging 块里管着了（10m × 3），事件日志另有一套按大小轮转（VANBLOG_EVENT_LOG_MAX_MB）。
     # 先起 mongo：server 连不上库会退出，容器重启几次才稳定，首次安装时看着像失败。
     # 这里**故意提交列表形式**（只保证启动顺序，不等待就绪），而不是
     # `depends_on: {mongo: {condition: service_healthy}}` 长格式，方向是这样选的：
@@ -130,6 +133,12 @@ services:
       # 而路径名是匿名接口就能造的 ⇒ 常驻进程会稳定长内存（实测 40 万条不同路径 = +92.4MB）。
       # 超出的按"最老那天 → 文章"丢弃并打 WARN；站点级总访问量与每日快照**永不丢**。0 = 不限（旧行为）。
       # VANBLOG_VIEW_MAX_RETAINED_KEYS: '20000'
+      # 事件日志（vanblog-event.log）的大小轮转：单份上限 MB × (保留份数 + 1) = 总量上界。
+      # 默认 20 × 4 ≈ 80MB。⚠️ 这个文件以前**只增不减**，跑久了会吃满磁盘，
+      # 而磁盘满的表现是"备份写不出来、图片存不进去、mongod 变只读"，排查时看不出根因。
+      # （容器 stdout 那一份由下面的 logging.max-size 管，两套是分开的。）
+      # VANBLOG_EVENT_LOG_MAX_MB: '20'
+      # VANBLOG_EVENT_LOG_KEEP: '3'
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static

@@ -18,6 +18,7 @@ import { DraftProvider } from './provider/draft/draft.provider';
 import { MetaProvider } from './provider/meta/meta.provider';
 import { TagProvider } from './provider/tag/tag.provider';
 import { PublicController } from './controller/public/public.controller';
+import { HealthController } from './controller/public/health.controller';
 import { AboutMetaController } from './controller/admin/about/about.meta.controller';
 import { LinkMetaController } from './controller/admin/link/link.meta.controller';
 import { RewardMetaController } from './controller/admin/reward/reward.meta.controller';
@@ -165,6 +166,7 @@ function num(value: string | undefined, fallback: number): number {
   controllers: [
     AppController,
     PublicController,
+    HealthController,
     PublicThemeController,
     ThemeController,
     AboutMetaController,
@@ -274,6 +276,9 @@ export class AppModule implements NestModule {
         // 安全性由控制器自己保证（处理器内 checkHasInited + 单飞互斥 + 归档校验）。
         { path: '/api/admin/init/restore', method: RequestMethod.POST },
         { path: '/api/admin/caddy/ask', method: RequestMethod.GET },
+        // 健康检查：**未初始化也必须返回 200**，否则全新安装在走完向导之前
+        // 会一直被编排系统判定为不健康、可能被反复重启。它不透露业务数据。
+        { path: '/api/public/health', method: RequestMethod.GET },
       )
       .forRoutes({
         path: '*',

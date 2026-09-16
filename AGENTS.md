@@ -5042,11 +5042,103 @@ server jest **1125 用例 / 1124 绿 + 1 个既有的 watermark 离线字体用�
 ⚠️ **入库的压测台在 `scripts/benchmark/`**（`loadtest.cjs` + `measure.sh`），
 访问性能报告 `docs/advanced/benchmark.md` 的每个数字都由它产生，可复现。
 
+### 7.56 两处运维缺口：事件日志无限增长、以及"容器还活着 ≠ 服务还活着"
+
+这一轮是随手可修的那类（用户原话「看其中是否有安全隐患或性能漏洞，并尝试修掉可以随手处理的问题」），
+挑的是**此前没被系统看过、且会随时间必然出事**的两处。
+
+#### A. 事件日志只增不减（磁盘迟早被吃满）
+
+`LogProvider` 用 pino 的 multistream 往 `<log>/vanblog-event.log` 里**追加**，而且是一个长开的
+`createWriteStream(path, {flags:'a+'})` ⇒ 这个文件**永远只涨不缩**。
+`utils/logTail.ts` 只限界了**读**（后台翻日志不会因为文件大而卡死，§7.48），**没限界写**。
+磁盘满的表现是"备份写不出来、图片存不进去、mongod 变只读"，而根因在日志上 —— 极难联想到。
+（容器 stdout 那一份早就有 `logging.max-size: 10m / max-file: 3` 管着，事件日志这份没有。）
+
+现在按**大小**轮转：`utils/logRotate.ts` 的 `RotatingFileStream`（pino.multistream 只要求目标有
+`write()`，所以不必继承 stream —— 这也让它能被单测直接驱动）。
+`VANBLOG_EVENT_LOG_MAX_MB`（默认 20）× (`VANBLOG_EVENT_LOG_KEEP`+1)（默认 3+1）⇒ **总量上界约 80MB**。
+停机时 `onModuleDestroy` 会 `close()`（内部先 flush）—— 不 flush 的话**最后几条事件日志会丢**，
+而"最后几条"往往正是关机前那次失败的原因。
+
+⚠️ **两个实现陷阱（都是被测试抓出来的，不是想出来的）**：
+
+1. **`createWriteStream` 是异步打开文件的**，所以"超过阈值就立刻 `renameSync`"会白转一次：
+   那一刻原路径上还没有文件可改名，随后旧流的写入落进**新**文件 ⇒ 历史文件是空的、当前文件混着两轮内容。
+   而"**进程重启时日志已经超过阈值、第一条写入就触发轮转**"恰恰是现实场景
+   （字节初值是从 `statSync` 读的，就是为了不因重启而永远转不动）。
+   修法：轮转改成"**标记 + 在安全点执行**" —— 只在流已 `open` 且没有在飞写入时才动手。
+2. **只等"没有在飞写入"会把轮转饿死**：日志密集时 `pending` 可能永远不为 0。
+   所以加了强制余量：超过阈值 `ROTATE_SLACK_BYTES`(64KB) 就**哪怕有写入在飞也转**
+   （代价是那几条落进历史文件 —— 不丢、不串，只是历史文件比阈值大一点）。
+   ⚠️ 测这条分支时数据量必须**真的超过 64KB**：第一版只写 10KB，走的是"等排空"的正常路径，
+   断言 `rotations > 1` 失败，看着像轮转坏了，其实是测试形状不对。
+   同理，"一口气同步写 2000 条"也不是真实形状（pino 是随时间持续写的），
+   要按"分轮写、每轮等落盘"来测。
+3. 字节数是**自己累加**的，不是每次 `statSync`：这个 `write()` 在每条事件日志上都会跑，
+   加一次系统调用等于给所有日志写入加税。
+
+#### B. 健康检查：容器 Up 不等于服务活着
+
+**先更正一个我自己说错的判断**：我一度说"vanblog 容器没有 healthcheck"—— 错。
+它**在镜像里**（Dockerfile 的 `HEALTHCHECK` 指令），只是**编排里没有**，
+而这是本仓库的**约定**：`scripts/tests/vanblog-compose-health.test.sh` 里就有一条断言
+"vanblog 服务没有 healthcheck（镜像自己有 HEALTHCHECK 指令，编排里不重复）"。
+我按自己的判断往 compose 里加了一份，那条测试立刻红了 —— **测试替我记住了约定**。
+（顺带：我还差点加了第二份 `logging` 块，而两个服务**早就有** `max-size: 10m / max-file: 3`；
+YAML 的重复键会静默覆盖，属于"看着生效其实没生效"的那类坑。）
+
+真正的问题在**探测内容**：原来的 HEALTHCHECK 打的是 `/`，判据是 `statusCode < 500` ⇒
+**前台 404、API 全挂、连不上 mongo，它都算健康**。现在：
+
+- 新增 `GET /api/public/health`（`controller/public/health.controller.ts`）：
+  返回 `{status, version, uptimeSeconds, mongo, mongoState, mongoStateText, mongoPingMs,
+  memoryRssMb, heapUsedMb, now}`；**mongo ping 不通时返回 503**（这样 `<500` 的判据才有意义），
+  其余情况 200。
+- ⚠️ **未初始化也必须 200**（payload 里带状态），否则全新安装在走完向导之前会一直被判定为不健康、
+  可能被编排系统反复重启 ⇒ 它被加进了 `InitMiddleware` 的 `.exclude()`。
+- **不能被缓存**（`Cache-Control: no-store`）：健康检查的意义就在"此刻"，被 caddy/CDN 缓存住等于没有。
+- **探测要便宜**：mongo `ping` 带 800ms 超时、结果缓存 5 秒、并发探测合并成一个 ——
+  healthcheck 通常 30 秒一次，但这个端点是匿名的，别人也能拿它打你。
+- Dockerfile 的 HEALTHCHECK 路径从 `/` 改成 `/api/public/health`（判据不变，仍是 `<500`）。
+  走 caddy 的 80 端口 ⇒ 顺带把"caddy 起没起、反代通不通"一起验了。
+- ⚠️ mongoose 的 `readyState` 语义是 **0=disconnected、1=connected、2=connecting、3=disconnecting**
+  （第一版注释写反了，把 1 当成断开 —— **错误的注释比没有注释更糟**）。
+  所以除了数字还多给一个 `mongoStateText`，别让运维去背数字含义。
+
+活体实测：`GET :3000/api/public/health` → 200、
+`{status:'ok', mongo:'up', mongoStateText:'connected', mongoPingMs:1, memoryRssMb:263}`、
+响应头带 `Cache-Control: no-store` 与 `x-request-id`。
+
+#### 本轮顺带查过但**降级/不做**的
+
+- **远程图片本地化的 SSRF**：`StaticProvider.transferRemoteImages` 会去抓正文里的外链图片，
+  没有内网地址过滤。查了调用方 —— 是**后台**路径，而后台本来就能通过流水线执行任意代码
+  （§7.46 之后插件安装还默认关着），所以这不构成提权，**优先级降下来**；
+  真要修应该与 picgo 的外链抓取一起加"目标地址不得是回环/私网/云元数据"的过滤。
+- **`/api/admin/init` 的 check-then-act 竞态**（§7.40 里记着的那条）：init/restore 已经有单飞锁了，
+  `initSystem` 还没有。窗口被 5 次/10 分钟的 init 限流压得很小，且最坏结果是"两个并发初始化写同一条 meta"，
+  不是数据损坏 ⇒ 这轮没动，留给下一轮（照抄 init/restore 的同步布尔锁即可）。
+- **删掉死依赖 `swagger-ui-express`**（全树 0 处 import，`@nestjs/swagger` 8 用的是自带的
+  `swagger-ui-dist 5.18.2`）：需要改 package.json + 重装，而本机 pnpm store 里
+  `path-to-regexp` 那个内容地址仍是坏的（§7.53 的记录），这轮不冒险，留给下一次干净的依赖批次。
+
+**测试**：新增 `utils/logRotate.spec.ts`（8 条：阈值触发、历史后移与最老删除、重启后按现有大小接着算、
+多字节按字节计、持续写入反复轮转且单份有上界、`rotateLogFiles` 对不存在的文件不抛、write 永不抛）
+与 `controller/public/health.controller.spec.ts`（5 条：200/503 两种状态、探测缓存 5 秒只 ping 一次、
+`InitMiddleware` 的 exclude 与 controllers 注册、`no-store` + Dockerfile 的 HEALTHCHECK 路径 +
+**编排里故意不重复写 healthcheck 这个约定本身**）。
+server jest **1138 用例 / 1137 绿 + 1 个既有的 watermark 离线字体用例**（套件 118 个）；
+`tsc` 0 错误；`vanblog-compose-health.test.sh` 56/0。
+⚠️ 写 health 的 spec 时又踩了一次 **repoRoot off-by-one**：`__dirname` 是
+`packages/server/src/controller/public`，要往上 **5** 级才到仓库根，我写了 4 级 ⇒ 全部 ENOENT。
+这个坑 AGENTS 里已经记过，还是踩了 —— 所以那条注释现在连"怎么数"都写出来了。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 1125 用例：**1124 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；负载高时可能 2 个失败，单独跑全绿）；套件 116 个 |
+| server `jest` | 1138 用例：**1137 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；负载高时可能 2 个失败，单独跑全绿）；套件 118 个 |
 | website `vitest run` | 77 文件 / 748 用例全绿 |
 | admin `node --test tests/unit` | 103 套件 / 397 用例全绿（⚠️ Node 24 要 `--test-reporter=tap` 才有汇总行） |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
