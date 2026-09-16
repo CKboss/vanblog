@@ -5106,6 +5106,18 @@ YAML 的重复键会静默覆盖，属于"看着生效其实没生效"的那类�
   （第一版注释写反了，把 1 当成断开 —— **错误的注释比没有注释更糟**）。
   所以除了数字还多给一个 `mongoStateText`，别让运维去背数字含义。
 
+⚠️ **一个只在本地 podman 上才看得见的坑**：Dockerfile 里的 `HEALTHCHECK` 在**最终 `runner` 阶段**
+（第 507 行，阶段起于第 392 行），但 **podman/buildah 4.9.3 构建出来的镜像 `Config.Healthcheck` 是 `null`** ——
+buildah 会静默丢掉这条指令，而 GitHub Actions 用的 **docker buildx 会保留**。
+所以"本地 podman 镜像没有健康检查、Actions 产出的镜像有"是预期行为，不是 Dockerfile 写错了；
+反过来说，**用 podman 部署的人拿不到镜像级 healthcheck**，需要的话得在编排里自己写一份
+（compose 模板里那条断言"编排里不重复"针对的是 docker 用户）。
+验证 HEALTHCHECK 只能在**容器里实跑那条命令**：`podman exec vb-app sh -c '<那条 node -e>'`，
+正常 → 退出码 0，把端口指错（连接被拒）→ 退出码 **1**，404 路径 → 退出码 0（判据是 `<500`，
+所以 404 仍算健康 —— 这正是端点必须在 mongo 挂时返回 **503** 的理由）。
+⚠️ 量这个退出码时别写 `podman exec … | head; echo $?` —— 那拿到的是 **`head` 的退出码**，
+两边都会显示 0（本轮就这么"假绿"过一次，改成先重定向再读 `$?` 才对）。
+
 活体实测：`GET :3000/api/public/health` → 200、
 `{status:'ok', mongo:'up', mongoStateText:'connected', mongoPingMs:1, memoryRssMb:263}`、
 响应头带 `Cache-Control: no-store` 与 `x-request-id`。
