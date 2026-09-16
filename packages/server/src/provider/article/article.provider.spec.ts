@@ -100,7 +100,9 @@ function createPagedArticleModel() {
   return {
     skipValues,
     find: jest.fn().mockReturnValue(query),
-    count: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
+    // 桩模型**只**提供 countDocuments：mongoose 8 已经删掉 Model.count()，
+    // provider 里若退回 count() 这里会直接 TypeError（而不是静默走桩）。
+    countDocuments: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
   };
 }
 

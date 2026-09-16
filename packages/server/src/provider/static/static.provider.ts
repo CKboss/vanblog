@@ -592,7 +592,9 @@ export class StaticProvider {
       query.name = { $regex: escapeRegExp(keyword), $options: 'i' };
     }
     const paging = sanitizePagination(option.page, option.pageSize);
-    const total = await this.staticModel.count(query);
+    // mongoose 8 删掉了 Model.count()（走 `count` 命令），换成 countDocuments()
+    // （`$match + $group` 聚合）；同一个 query，计数语义不变。
+    const total = await this.staticModel.countDocuments(query);
     const items = await this.staticModel
       .find(query, this.getView(option.view))
       .sort({ updatedAt: -1 })

@@ -55,7 +55,9 @@ function createListModel(docs: any[]) {
     };
     return q;
   });
-  const count = jest.fn(() => ({ exec: async () => docs.length }));
+  // 只提供 countDocuments（mongoose 8 已删掉 Model.count()）：桩上留着 count
+  // 会让"provider 退回 count()"这种回归静默通过。
+  const countDocuments = jest.fn(() => ({ exec: async () => docs.length }));
   const aggregate = jest.fn((pipeline: any[]) => ({
     allowDiskUse: () => ({
       exec: async () => {
@@ -71,7 +73,7 @@ function createListModel(docs: any[]) {
       },
     }),
   }));
-  return { find, count, aggregate };
+  return { find, countDocuments, aggregate };
 }
 
 function createProvider(model: any) {

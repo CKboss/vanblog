@@ -45,7 +45,11 @@ function createStaticModelStub(initial: any[] = []) {
     exec: async () => docs.find((doc) => matches(doc, query)) || null,
   }));
   model.find = jest.fn((query: any) => chainable(docs.filter((doc) => matches(doc, query))));
-  model.count = jest.fn(async (query: any) => docs.filter((doc) => matches(doc, query)).length);
+  // 桩模型**只**提供 countDocuments：mongoose 8 已经删掉 Model.count()，
+  // provider 里若退回 count() 这里会直接 TypeError（而不是静默走桩）。
+  model.countDocuments = jest.fn(async (query: any) =>
+    docs.filter((doc) => matches(doc, query)).length,
+  );
   model.deleteOne = jest.fn((query: any) => ({
     exec: async () => {
       const idx = docs.findIndex((doc) => matches(doc, query));

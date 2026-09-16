@@ -28,7 +28,13 @@ function createMemoryMetaModel(links: any[] = []) {
 
 async function createApp() {
   const model = createMemoryMetaModel();
-  const metaProvider = new MetaProvider(model as any, {} as any, {} as any, {} as any, {} as any);
+  // MetaProvider 只有 4 个构造参数 (metaModel, userProvider, articleProvider, viewStats)，
+  // 这里以前传了 5 个（TS2554）；而 viewStats 不能是空对象 —— update() 会调
+  // viewStats.invalidateBase()。这个 e2e 既不在默认 jest 里也不在 tsc 的 include 里，
+  // 所以烂了很久没人发现。
+  const metaProvider = new MetaProvider(model as any, {} as any, {} as any, {
+    invalidateBase: () => undefined,
+  } as any);
   const allow = { canActivate: () => true };
   const moduleRef = await Test.createTestingModule({
     controllers: [LinkMetaController],

@@ -615,7 +615,10 @@ export class ArticleProvider {
       .find({
         $and,
       })
-      .count();
+      // ⚠️ mongoose 8 删掉了 `count()`（它发的是 `count` 命令），一律用
+      // `countDocuments()`（`$match + $group` 聚合）。同样的过滤条件计数一致，
+      // 本机 explain 前后对比过：命中的索引与 examined 数不变。
+      .countDocuments();
   }
 
   getView(view: ArticleView) {
@@ -859,7 +862,9 @@ export class ArticleProvider {
     }
     // withWordCount 只会返回当前分页的文字数量
 
-    const total = await this.articleModel.count(query).exec();
+    // mongoose 8 删掉了 Model.count()（走 `count` 命令），换成 countDocuments()
+    // （`$match + $group` 聚合）；同一个 query，计数语义不变。
+    const total = await this.articleModel.countDocuments(query).exec();
     // 过滤私有文章
     if (isPublic) {
       // ⚠️ 以前这里是 **N+1**：循环里对每篇文章 `await categoryModal.findOne({name})`，

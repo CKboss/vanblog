@@ -496,7 +496,9 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 | MongoDB | **7.0.14**，FCV **6.0** | 镜像/compose 的默认 tag 用 `mongo:7.0` |
 | sharp | 0.32.6 | 有 Node 20 的 prebuild；升 Node 22 必须先升 sharp 0.33+ |
 | TypeScript | **5.9.3**（server、website）/ **4.9.5**（admin，随 umi3，勿单独升） | 升级明细与三类结构性陷阱见 §7.51 |
-| NestJS | 9.x | |
+| NestJS | **10.x**（common/core/testing 10.4.22，platform-express **精确钉 10.4.17**） | 停在 10：Nest 11 = Express 5 = path-to-regexp v8，`app.module.ts` 那 4 处 `path:'*'` 会失配（§7.50/§7.52） |
+| mongoose | **8.24.4**（自带 driver mongodb 6.20.0） | `@nestjs/mongoose` 10 的 peer 是 `^7.4 \|\| ^8`；mongoose 9 要配 `@nestjs/mongoose` 12（§7.52） | **→ 已升（§7.52）**
+| sharp | **0.35.4** | 0.33 起预编译改成 npm optionalDependencies、无 install 脚本（§7.47） |
 | Next.js | 13.5.x（pages router） | |
 | umi | 3.5.x（admin） | 两个 pnpm 补丁是为它的 MFSU 老解析器打的 |
 | Alpine | 3.24.1（`node:24-alpine` 带的，容器内实测） | 仓库路径是 `v3.24`（两段），而 `VERSION_ID` 是 `3.24.1`（三段） |
@@ -2495,7 +2497,7 @@ website `next build`（EXIT=0，8 个页面）全在 v20.19.5 上跑通；`--ope
 | --- | --- | --- |
 | Node 22 | sharp 0.32.6 没有 Node 22 的 prebuild；runner 没装 vips-dev | sharp → 0.33.x，确认 musl prebuild，再升 node:22-alpine |
 | pnpm 9/10 | lockfile 是 v6.0，升 pnpm 会重写整个 lockfile（`patchedDependencies` 的 hash 也要重算） | 单独一轮：升 pnpm → `pnpm install` 重生成 lockfile → 验证两个补丁仍生效 → 全量测试 |
-| NestJS 10/11 | 装饰器与 `@nestjs/swagger` 6 的 API 变化、`multer` 版本、`mongoose` 版本联动 | 单独一轮，改动面很大 |
+| NestJS 10/11 | 装饰器与 `@nestjs/swagger` 6 的 API 变化、`multer` 版本、`mongoose` 版本联动 | 单独一轮，改动面很大 | **→ 已升（§7.52）**
 | Next 14/15 | pages → app router、`next.config` 变化、ISR 行为变化；前台所有页面都要过一遍 | 单独一轮 |
 | umi 4 | 配置格式与插件体系全变（MFSU、`mfsu:{}`、两个 pnpm 补丁的必要性都要重新评估） | 单独一轮，最重 |
 | caddy 钉版本 | `apk add caddy=X-rN` 会随 Alpine 仓库滚动失效；钉官方 release 二进制要维护 sha256 | 已有降级模板兜底，优先级低 |
@@ -3970,7 +3972,7 @@ picgo.provider、clusterRole、clusterBootstrap、website.provider.respawn、aud
 
 ⚠️ **override 要按版本作用域写，别一把梭**：`express@4.18.2 → 4.21.2`、
 `body-parser@1.20.2 → ^1.20.3`、`send@0.18.0 → ^0.19.0`、`dompurify@3 → ^3.2.4`、
-`dompurify@2 → ^2.5.4`。仓库里同时存在 express 4.17.1（swagger-ui-express 带的）、
+`dompurify@2 → ^2.5.4`。仓库里同时存在 express 4.17.1（**umi-dev/umi-core 带的**，属 admin 工具链 —— 本轮实测更正：早先记成 swagger-ui-express 带的，是错的）、
 send 0.17.1、qs 6.5.3/6.7.0（那几个已经死掉的 request 适配器带的）——
 全局 override 会把这些一起拽走，只有改动量没有安全收益。
 dompurify 有消费者钉 `^2`，所以 2.x 在**它自己那条线里**升到 2.5.9，不强推到 3。
@@ -4206,12 +4208,12 @@ tsc 0 错。⚠️ CI 的 testPathPattern 白名单要补
 
 | 落后 | 包 | 当前 | 最新 | 上游维护状态 | 判断 |
 | --- | --- | --- | --- | --- | --- |
-| −3 | `@nestjs/common` / `core` / `platform-express` / `testing` | 9.4.3 | 12.0.3 | **9 早已停止维护**（Nest 只维护最近两个大版本） | **升，但只到 10**（见下） |
+| −3 | `@nestjs/common` / `core` / `platform-express` / `testing` | 9.4.3 | 12.0.3 | **9 早已停止维护**（Nest 只维护最近两个大版本） | **升，但只到 10**（见下） | **→ 已升（§7.52）**
 | −3 | `@nestjs/mongoose` | 9.2.2 | 12.0.0 | 同上 | 跟随 common 到 10 |
 | −6 | `@nestjs/swagger` | 6.3.0 | 12.0.1 | 同上 | 跟随到 7（配套 `swagger-ui-express` 5） |
-| −10 | `@nestjs/schedule` | 2.2.3 | 12.0.2 | 同上（版本号跟 Nest 大版本走，所以差得最夸张） | 跟随到 4/5 |
-| −2 | `@nestjs/passport` | 9.0.3 | 12.0.0 | 同上 | 跟随到 10 |
-| −2 | `mongoose` | 7.8.12 | 9.10.1 | 7 仍在维护但已老 | **升到 8**（`@nestjs/mongoose` 10 的 peer 支持 `^7.4 \|\| ^8`；9 要配 nestjs/mongoose 12，跨太多） |
+| −10 | `@nestjs/schedule` | 2.2.3 | 12.0.2 | 同上（版本号跟 Nest 大版本走，所以差得最夸张） | 跟随到 4/5 | **→ 已升（§7.52）**
+| −2 | `@nestjs/passport` | 9.0.3 | 12.0.0 | 同上 | 跟随到 10 | **→ 已升（§7.52）**
+| −2 | `mongoose` | 7.8.12 | 9.10.1 | 7 仍在维护但已老 | **升到 8**（`@nestjs/mongoose` 10 的 peer 支持 `^7.4 \|\| ^8`；9 要配 nestjs/mongoose 12，跨太多） | **→ 已升（§7.52）**
 | −3 | `typescript` | 4.9.5 | **7.0.2** | 4.9 早已停更 | **已升到 5.9.3**（不是 7：TS 7 是 Go 重写的新编译器，ts-jest / @nestjs/cli / IDE 生态还没跟上；6.0 同理） |
 | −3 | `next` | 13.5.11 | 16.3.5 | **13 已停止维护**（Vercel 只给最近 2–3 个大版本打补丁） | 下一步升到 **14**（pages router 完整保留、React 18 不动）；15/16 要 React 19，而 `@bytemd/react` 的 peer 只到 React 18，会连带把编辑器/渲染器一起拖下水 |
 | −1 | `react` / `react-dom`（website） | 18.2.0 | 19.3.0 | 18 仍在维护 | 暂不动（与 Next 15 绑定） |
@@ -4374,6 +4376,149 @@ admin **347**；脚本 **22 文件 / 1110**。
 ⚠️ 顺带一个"分裂大脑"被消掉了：`nest build` 一直用的是 **CLI 自带的 TS 5.x**
 （@nestjs/cli 升到 11 之后），而项目声明的是 4.9.5 —— 也就是构建与本机类型检查用的不是同一个编译器。
 现在两边都是 5.9。
+
+### 7.52 NestJS 9 → 10 + mongoose 7 → 8：一个必须改的 API、一个刻意钉死的补丁号、两个会让审计"假绿"的量具陷阱
+
+**为什么升**：Nest 只维护最近两个大版本，9 早已出窗；mongoose 7 同理。这与 §7.49 换掉 EOL 的
+`node:20-alpine` 是同一类暴露 —— **框架层本身拿不到安全补丁**，只是藏在 `package.json` 里不显眼。
+
+**装上的版本**（读的是 `node_modules/<pkg>/package.json`，不是声明的范围）：
+`@nestjs/common|core|testing` 9.4.3 → **10.4.22**；`@nestjs/platform-express` → **10.4.17（精确钉死）**；
+`@nestjs/mongoose` 9.2.2 → **10.1.0**；`@nestjs/swagger` 6.3.0 → **8.1.1**（swagger-ui-dist 4.18.2 → 5.18.2）；
+`@nestjs/schedule` 2.2.3 → **5.0.1**（cron 2.3.1 → 3.5.0，且不再拖 uuid）；`@nestjs/passport` → **10.0.3**；
+`@nestjs/jwt` 10.2.0 → **11.0.2**；`mongoose` 7.8.12 → **8.24.4**（自带 driver mongodb 5.9.2 → **6.20.0**）。
+**未动**：express 4.21.2（**树里只有单份**）、multer 1.4.4-lts.1、passport 0.6.0、直接依赖的 mongodb 5.9.1、
+TypeScript 5.9.3、@nestjs/cli 11.0.24。**根 `pnpm.overrides` 一条都没改**；lockfile 里
+`path-to-regexp` 只有 0.1.x 与 3.3.0，**没有 v8** —— 这就是"确实还在 Express 4"的证据。
+
+**为什么停在 10 不到 11/12**：Nest 11 = Express 5 = path-to-regexp v8，裸 `*` 不再合法，
+而 `src/app.module.ts` 有 **4 处** `forRoutes({ path: '*', method: RequestMethod.ALL })`
+（request-id、安全头+限流、NoStoreCache、InitMiddleware），中间件失配的表现是
+**"限流悄悄不生效"这种静默故障**；`main.ts` 还按前缀挂了 50mb/1mb 两个 JSON 解析器，顺序错了同样静默。
+**Express 5 / Nest 11 单独立项。**
+
+⚠️ **`@nestjs/platform-express` 必须精确钉 `10.4.17`，不能写 `^10`**（JSON 写不了注释，所以记在这里）：
+逐版本读 registry 的 dependencies 才知道 —— 10.4.15/16/17 是 `{body-parser 1.20.3, express 4.21.2, multer 1.4.4-lts.1}`，
+**10.4.18 起换成 multer 2.0.0/2.0.1/2.0.2，10.4.22（最新 10.x）还把 express 抬到 4.22.1**。
+两个后果：① "multer 2 要等 Nest 11"这个判断**对 10.4.18+ 不成立**（我原来就是这么以为的，被实测推翻）；
+② 根 override 的键是 `express@4.18.2`，而 platform-express 声明的是**精确** `4.22.1`，键匹配不上 ⇒
+树里会同时出现 express 4.21.2 与 4.22.1，**两份 express**。钉在 10.4.17 就一条 override 都不用改。
+**后续（单独立项，安全上是正收益）**：`pnpm deploy` 那步已经打出 `WARN deprecated multer@1.4.4-lts.1`，
+1.x 停更且带已知漏洞，而它在**每一条上传路径**上（图片/附件/主题/自定义页面/整站备份恢复/JSON 导入）。
+上 multer 2 要一起改：platform-express → `^10.4.22`；直接依赖 `multer` → `^2.0.2`
+（`backup.controller.ts` 从它 import `diskStorage`，不跟着走就是两份 multer）；`@types/multer` → `^2.x`
+（**multer 2 自己不带类型**，实测 `types`/`typings` 为空）；override 键 `express@4.18.2` → `express@4.22.1`
+（或去掉 override 让 server 自己的 `^4.18.2` 解析到 4.22.x，关键是**只留一份 express**）。
+验收网已经在了：`src/utils/uploadPipeline.spec.ts` 里那条**版本钉子**用例会故意变红。
+
+**唯一必须改的生产代码：mongoose 8 删掉了 `count()`。** 装好后实测
+`typeof mongoose.Model.count === 'undefined'`、`Query.prototype.count` 同样没了
+（`ensureIndex`、`Model.remove` 也一并移除）。4 个调用点换成 `countDocuments()`：
+`article.provider.ts:618`（`getTotalNum`）、`article.provider.ts:862`（`getByOption`）、
+`draft.provider.ts:195`、`static.provider.ts:595`。
+**换法有代价，量过**（`count` 走 count 命令、有元数据捷径；`countDocuments` 走 `$match+$group` 聚合）：
+四个场景的计数**一个都没变**（53/53、53/53、0/0、91/91，各 30 次交替取中位数），
+中位耗时 **+0.19…+0.40 ms/次**（都发生在同时还要取一页文档的列表接口上）；
+explain：老命令是经典规划器 `IXSCAN[deleted_1] → FETCH`，`countDocuments` 是 SBE 聚合、
+命中**同一批索引**（`deleted_1`/`hidden_1`/`private_1`），`collectionScans: 0`；
+statics 那条走**纯索引**的 `COUNT_SCAN[staticType_1]`。**没有引入任何全表扫描。**
+⚠️ 这次特意"先改代码、再装依赖"，于是能把两件事分开量：mongoose 7 下 `count` vs `countDocuments`
+的 48 个接口抓取**逐字节相同**，确认后面的差异只来自框架升级。
+`strictQuery` 默认值也没变（mongoose 8 的 `lib/schema.js:583` 与 7 的 `:563` 是同一句 `: false`，
+运行时探针对真实 `ArticleSchema`/`VisitSchema` 都报 `false`）—— 这条若变成 `true`，
+非 schema 字段的过滤条件会被**静默丢弃**，属于"结果变多"的最坏静默故障。
+
+**Nest 10 的两处可见变化（都不是 bug，但必须记下来，否则下次做接口 diff 会以为是回归）**：
+
+1. **内置异常体的 JSON 键顺序变了**（键、值、字节长度都不变，只有顺序 ⇒ ETag 变）：
+   `{"statusCode":401,"message":"Unauthorized"}` → `{"message":"Unauthorized","statusCode":401}`。
+   机制在 `@nestjs/common/exceptions/http.exception.js` 的 `createBody()`。
+   **只影响 Nest 内置 `HttpException` 生成的错误体**；控制器自己拼的 `{statusCode:200,data}`
+   一个字节没变（48 个抓取里所有 200 响应都逐字节相同），body-parser 的 413 也没变（express 层）。
+2. **`/swagger-json` 的文档元数据变准了**（71,183 → 71,241 B，8 处）：嵌套 DTO 的 `required` 从
+   "每个属性上写 `required:true`"（OpenAPI 3 里不合法）改成父级数组；两条路由补上了 `tags`；
+   重名的 `operationId`（`/api/admin/audit` 与 `/api/admin/log` 都叫 `LogController_get`）消歧成 `[0]`/`[1]`。
+   **`openapi` 仍 3.0.0、121 条 path 与 16 个 schema 的名字列表完全一致**，`/swagger` 的 HTML 逐字节相同。
+
+**mongoose 8 的 `autoIndex` 与 §7.48 的索引瘦身没有打架**（这条最担心的，实测过）：
+换完原样重启，13 个集合的 `listIndexes` **一个索引都没变**（名字/键/unique/sparse/partialFilterExpression 全同），
+文档数也没变；启动维护照旧打印"冗余前缀索引：无可删（`date_1`/`pathname_1` 都不存在）"与
+"`visits.date_1_pathname_1`=已存在, `viewers.date_1`=已存在" ⇒ **没把删掉的两个前缀索引建回来，
+也没在去重之前抢建唯一索引**。
+
+**38 条查询逐条对拍**（不是看 release notes）：只读量具挂 `Query.prototype.exec` 与
+`Aggregate.prototype.exec`，把 21 个 provider 调用产生的 38 条查询的 filter/projection/options
+与 `explain('executionStats')` 全量落盘，mongoose 7.8.12 与 8.24.4 各跑一遍：
+**38/38 条记录相同、21/21 个结果摘要相同、35/35 个 `planCacheKey`+`queryHash` 相同**。
+原始 diff 只有 11 处文本差异，全在 SBE 的 `slotBasedPlan.slots` 串里，且都是内嵌的
+`s3 = <epoch ms> (NOW)` 与槽位的哈希序渲染 —— 归一化后为 0（索引边界 `KS(140104)…KS(14FE04)` 逐字符相同）。
+
+⚠️ **本轮最贵的两条量具教训（都造成过"假绿"）**：
+
+1. **explain 摘要用白名单会静默变成空对象**：第一版 reducer 只白名单了内层键
+   （`winningPlan`/`indexName`/`stage`…），**漏了顶层的 `queryPlanner`/`executionStats`/`stages`** ⇒
+   38 条记录的 explain 全是 `{}`，于是"前后完全一致"这个结论**当时是空的**（数字还特别干净）。
+   修法是改成**黑名单**（只丢时间戳/serverInfo/command/ok 这类），并在脚本里写明"不要再改回白名单"。
+   这与 §7.51 的 buildinfo 陷阱、`$convert` 参数名拼错导致 9 路 A/B 全废是同一类。
+2. **`countDocuments()` 会忽略 `explain` 选项、直接返回一个数字**（实测返回 `0`）。
+   所以"给查询加 explain"这个通用套路对 count 类操作是**假绿**的：两边都拿到 `0`，看着完全一致。
+   要对 count 显式解释两种形态（`$match+$group` 聚合，以及用 `db.command({explain:{count:…,query:…}})` 取老命令的计划）。
+   顺带：`mongoose.Model.collection` 是包装对象，它上面 `.db` 是 `undefined`，
+   要用 `model.collection.collection` 或 `mongoose.connection.db`。
+
+**新增 3 个 spec / 17 条用例，钉的都是"升级会静默弄坏"的东西**：
+
+- `src/utils/uploadPipeline.spec.ts`（6 条）：用仓库**真实的** `IMAGE_UPLOAD_OPTIONS` /
+  `CUSTOM_PAGE_UPLOAD_OPTIONS` 起最小 Nest 应用，supertest 发**真的 multipart**，断言处理器拿到
+  `Express.Multer.File`（buffer 与发出的字节相等）、`assertUploadedImage()` 认出 png、
+  fileFilter 拒 `.html` 仍是 **400**、`limits.fileSize` 仍被 platform-express 的 `transformException`
+  映射成 **413**、`diskStorage` 照回调名落盘且字节一致，最后一条是**版本钉子**
+  （platform-express ^10 + express ^4 + multer ^1，且声明版本 == 实装版本）。
+  ⚠️ 为什么以前零覆盖：**Nest 的执行顺序是 guard 在 interceptor 之前**，上传接口全在 `AdminGuard` 后面，
+  匿名请求连 multer 都碰不到（直接 401）—— 942 条里没有任何一条真的发过 multipart。
+- `src/schedule/cronRegistration.spec.ts`（6 条）：向 `SchedulerRegistry` 要证据 —— 恰好 2 个 job、
+  表达式就是源码里的 `0 0 */1 * * *` 与 `0 0 * * *`、都 `running`、后 4 次严格整点且间隔 3,600,000 ms、
+  后 3 次严格 00:00 且间隔 86,400,000 ms，并用 `fireOnTick()` 真的打到 `ISRTask.handleCron`
+  （`activeAll('定时触发 ISR')`）与 `ViewerTask.handleCron`（`getViewer` + `createOrUpdate` + `pruneStats`）。
+  调度器升级最坏的失败方式就是"应用照常起、接口全 200、cron 从此不跑"，日志里一个字都不会有。
+  ⚠️ 坑：**schedule 5 里不写 name 的 `@Cron`，job 键是 `crypto.randomUUID()`**（每次跑都不一样），
+  所以只能按"表达式 + 触发后谁被调到"绑定身份，**不要断言 job 名字**。
+- `src/provider/token/token.provider.jwt.spec.ts`（5 条）：用与 `app.module.ts` **同形状**的
+  `JwtModule.registerAsync({useFactory})` + 真 `JwtService`，只桩掉 Mongo 模型与 `SettingProvider`。
+  断言登录 token 是 HS256 三段、`exp - iat` 等于登录设置的 `expiresIn`（7 天默认与 60 秒覆盖都测）、
+  token 行按 `{userId, token, expiresIn}` 落库；API token 是 `role:'admin'` + 365 天 + `userId 666666`；
+  反向两例：换密钥验不过、篡改 payload 验不过。为什么必须单测：**签 token 这条路本机无法用 HTTP 验**
+  （登录要密码、API Token 要先登录才能建），`@nestjs/jwt` 10 → 11 若悄悄坏了，只会表现为"下次登不进后台"。
+
+**顺手复活了 3 个早就编译不过的 e2e**：`test/word-count|friend-link|page-copy.e2e-spec.ts` 都报
+`TS2554: Expected 4 arguments, but got 5`（`MetaProvider` 只有 4 个构造参数，`articleProvider` 被塞到第 5 位），
+修完又接连暴露 `viewStats.invalidateBase is not a function`、`categoryModal.find is not a function`、
+以及 `walineProvider.restart(...).catch` 的 `Cannot read properties of undefined (reading 'catch')`（桩返回 `undefined` ⇒ 接口 500）。
+**为什么烂了这么久没人知道**：这三份文件同时被两道关卡漏掉 —— 默认 `jest` 是 `rootDir: src` +
+`testRegex .*\.spec\.ts$`（不含 `test/`），而 `tsconfig.build.json` 又 `exclude: ["test", "**/*spec.ts"]`。
+现在 1/1 + 4/4 + 2/2 全绿。**建议给 CI 补一条把 `src/**/*.spec.ts` 与 `test/**` 一起 typecheck 的命令**
+（本轮用的临时配置：`extends tsconfig.json` + `include: ["src/**/*.ts","test/**/*.ts"]`，实测 0 错误，
+它已经抓出了这 3 个 TS2554），否则这类腐烂还会继续攒。
+⚠️ 桩模型**只**提供 `countDocuments`、不再同时留 `count`：留着的话"provider 退回 `count()`"这种回归会静默通过
+（改名之后 5 条用例立刻炸出 `TypeError: …countDocuments is not a function`，这正是"新路径真的跑了"的证据）。
+
+**两条对旧记录的更正**：① `swagger-ui-express` 是**死依赖** —— 全树（server src/test、website、admin、
+scripts、Dockerfile）**0 处 import**，而 `@nestjs/swagger` 8.1.1 的 deps 里是 `swagger-ui-dist 5.18.2`
+（6.3.0 当年也是用 `swagger-ui-dist`，从来没 peer `swagger-ui-express`）⇒ 它白占一份
+`swagger-ui-dist@4.19.1` + 一个 express peer 链接，**可以删**（本轮没动）。
+② §7.47 说"express 4.17.1 是 swagger-ui-express 带的"**归属错了**：lockfile 显示它在
+**umi-dev/umi-core**（admin 工具链）下面，同排还有 `serve-static 1.14.1`。按版本作用域写 override 的结论不变。
+
+**实测汇总**：server `jest` **959 用例 / 958 绿 + 1 个既有的 watermark 离线字体用例**（942 → 959 = 新增 17 条；
+套件 105 → 108）；`tsc --noEmit`（全新 buildinfo）**exit 0**，连 spec 与 `test/` 一起查的那份配置也 **exit 0**；
+website vitest **69 文件 / 685**、website `tsc --noEmit` **exit 0**（这条重要：website 的 include 里有 5 个 server 源文件）；
+两个"真 mongod"量具全绿（stats-maintenance 7/7、opscount 6/6，各用一次性库、库名有硬护栏）；
+dev 栈三端口 200、watcher `Found 0 errors`、重启后日志里
+`E11000|IndexOptionsConflict|Auto-index|MongooseError|Cannot find module|is not a function` **0 次命中**；
+48 个只读接口抓取 **37/48 逐字节相同**，11 处差异全部归到上面那两类，且升级后连抓两次 **48/48 相同**（自身确定性）；
+镜像 `[2/5] server_builder` 完整通过（frozen-lockfile 安装 25.1s ⇒ package.json 与 lockfile 一致；
+`nest build` exit 0；`pnpm deploy --prod` 自带断言通过，产物 203.3M / 顶层 33 个包）。
+**环境变量无增删改；`Dockerfile` / `.github/workflows` / `docker-compose` 都不需要动**；根 `package.json` 未改。
 
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 

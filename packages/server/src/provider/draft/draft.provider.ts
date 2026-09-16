@@ -192,7 +192,9 @@ export class DraftProvider {
       .skip(paging.skip)
       .limit(paging.pageSize)
       .exec();
-    const total = await this.draftModel.count(query).exec();
+    // mongoose 8 删掉了 Model.count()（走 `count` 命令），换成 countDocuments()
+    // （`$match + $group` 聚合）；同一个 query，计数语义不变。
+    const total = await this.draftModel.countDocuments(query).exec();
 
     return {
       drafts,

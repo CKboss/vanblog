@@ -38,10 +38,12 @@ function createMemoryArticleModel(initial: any[] = []) {
       const matched = () => findMatching(query);
       return {
         exec: async () => matched(),
-        count: async () => matched().length,
+        // mongoose 8 删掉了 Query.count()，只提供 countDocuments
+        countDocuments: async () => matched().length,
       };
     }),
-    count: jest.fn(async (query: any) => findMatching(query).length),
+    // 同理：桩上不再提供 Model.count()，退回旧 API 会直接 TypeError
+    countDocuments: jest.fn(async (query: any) => findMatching(query).length),
     updateOne: jest.fn((query: any, patch: any) => {
       const exec = async () => {
         const target = docs.find((item) => item.id === query.id);
@@ -103,16 +105,25 @@ describe('public 总字数 matches published editor counts (e2e #293)', () => {
     const metaRef: { current: MetaProvider | null } = { current: null };
     const articleProvider = new ArticleProvider(
       model as any,
-      {} as any,
+      // 第 2 个参数是 categoryModel：getTotalNum() 现在会先查"加密分类"
+      // （article.provider.ts 的 getPrivateCategoryNames，后加的安全修复），
+      // 传 {} 会 TypeError。这个场景没有加密分类，桩成空结果即可。
+      { find: () => ({ exec: async () => [] }) } as any,
       { updateTotalWords: (reason: string) => metaRef.current!.updateTotalWords(reason) } as any,
       {} as any,
     );
+    // MetaProvider 的构造参数是 (metaModel, userProvider, articleProvider, viewStats)。
+    // 这里以前多传了一个参数、articleProvider 落在第 5 位（TS2554，而且
+    // this.articleProvider 会拿到 {}，updateTotalWords 根本跑不通）—— 这个 e2e
+    // 既不在默认 jest 里、也不在 tsc 的 include 里，所以烂了很久没人发现。
     const metaProvider = new MetaProvider(
       metaModel as any,
       {} as any,
-      {} as any,
-      {} as any,
       articleProvider,
+      // 第 4 个参数是 ViewStatsProvider：MetaProvider.update() 会调
+      // viewStats.invalidateBase()（这个 e2e 写成时还没有这个依赖），
+      // 传 {} 会让它抛 TypeError。这里只需要一个不炸的桩。
+      { invalidateBase: () => undefined } as any,
     );
     metaRef.current = metaProvider;
 
