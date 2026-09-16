@@ -71,7 +71,7 @@ rootless podman 需要 `/etc/subuid` 里有你的用户（发行版一般已经�
    ```
 
    docker 则配 `/etc/docker/daemon.json` 的 `registry-mirrors`。
-   ⚠️ 公共加速站拉**大 blob**（`node:20` 350MB、`mongo:7.0` 500MB）时可能传到一半就静默卡死
+   ⚠️ 公共加速站拉**大 blob**（`node:24` 约 400MB、`mongo:7.0` 500MB）时可能传到一半就静默卡死
    —— 进度行不动、不报错、也不超时。遇到就多换几个站重试，或先单独 `pull` 再构建。
 
 1. **Alpine 软件源**：官方 `dl-cdn.alpinelinux.org` 实测经常 8-10 秒才回一个索引，

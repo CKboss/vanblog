@@ -19,7 +19,7 @@
 ## 0. TL;DR
 
 ```bash
-./dev-env.sh bootstrap    # 首次：下载 Node 20 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地骨架
+./dev-env.sh bootstrap    # 首次：下载 Node 24 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地骨架
 ./dev-env.sh install      # 装依赖（--frozen-lockfile）
 ./dev-env.sh start        # MongoDB + server + admin + website 一起起
 ./dev-env.sh status       # 看状态
@@ -34,9 +34,15 @@
 | waline 评论 | http://localhost:8360 | 由 server 自动拉起的子进程 |
 | MongoDB | 127.0.0.1:27017 | 免安装版 mongod，数据在 `vanblog_dev/mongo-data` |
 
-**铁律**：不要用系统默认的 Node（≥23）跑本项目——`util.isObject` 在 Node 23 被移除，`@nestjs/cli`
-会直接崩。一律用 `.tools/node20`；`dev-env.sh` 已经处理好了，手工敲命令时记得
-`export PATH=$PWD/.tools/node20/bin:$PATH`。
+**一律用 `.tools/node24`**（v24.21.0，与镜像里的 `node:24-alpine` 同一个大版本），
+`dev-env.sh` 已经处理好了；手工敲命令时记得 `export PATH=$PWD/.tools/node24/bin:$PATH`。
+用仓库自带的那份而不是系统 Node，是为了版本可复现（不同机器的系统 Node 大版本可能不同）。
+
+⚠️ **历史（这条曾经是真铁律，现在已解除，别再照抄）**：以前必须停在 Node 20，因为
+**Node 23 移除了 `util.isObject`，而 `@nestjs/cli` 9 的依赖链在用它**，Node 24 上 `nest build`
+直接 `Error  (0 , util_1.isObject) is not a function`。把 `@nestjs/cli` / `@nestjs/schematics`
+升到 **11** 之后就没这个问题了（它们只在构建期用，运行时的 `@nestjs/core` 仍是 9，行为不变）。
+详见 §7.49 与 Dockerfile 头部注释。
 
 ---
 
@@ -47,7 +53,7 @@
 | 常规做法 | 在没有特权的机器上为什么不行 |
 |---|---|
 | `docker run mongo` | 用户不在 `docker` 组，`/var/run/docker.sock` 权限拒绝；`sudo` 需要密码 |
-| 系统 node（24/23） | Node ≥ 23 移除了 `util.isObject`，`@nestjs/cli` 崩溃；项目 `engines` 要求 `^18 \|\| >=20` |
+| 系统 node | 版本随机器漂移，不可复现（`util.isObject` 那条老理由已经随 @nestjs/cli 11 失效，见 §7.49） |
 | 全局 pnpm（9/10/12） | 会写 `~/.local/share/pnpm`（沙箱/权限受限），且本仓库 lockfile 是 v6.0（pnpm 8 格式），大版本不一致会改写 lockfile |
 | 写 `~/.npm`、`/var/vanblog-dev` | 官方文档里的 `/var/vanblog-dev/*` 需要 root；沙箱通常只允许写工作区 |
 
@@ -58,7 +64,7 @@
 
 ```
 .tools/                     # 工具链
-  node20/                   # Node v20.19.5（唯一用于跑本项目的 node）
+  node24/                   # Node v24.21.0（唯一用于跑本项目的 node；node20/ 是历史遗留，可删）
   node_modules/pnpm/        # pnpm 8.11.0（与 package.json 的 packageManager 一致）
   mongodb/bin/mongod        # 7.0.14，日常使用
   mongodb50/ mongodb60/     # 5.0.34 / 6.0.29，只在导入老备份做 FCV 升级时用
@@ -81,7 +87,7 @@ AGENTS.local.md             # 本机专属附录（若存在，不入库）
 
 | 组件 | 版本 | 备注 |
 |---|---|---|
-| Node | 20.19.5 | `.tools/node20/bin/node` |
+| Node | 24.21.0 | `.tools/node24/bin/node`（镜像里是 `node:24-alpine`，同一个大版本） |
 | pnpm | 8.11.0 | `.tools/node_modules/pnpm/bin/pnpm.cjs` |
 | mongod | 7.0.14 | 数据 FCV 建议停在 6.0（见 §4.2） |
 | registry | 默认 `registry.npmmirror.com` | 可用 `VANBLOG_REGISTRY` 覆盖成 `https://registry.npmjs.org` |
@@ -115,10 +121,10 @@ website(next) ≈ 5–30 s，server(nest/tsc) ≈ 20–40 s；
 
 ### 2.1 跑测试（改代码后必做）
 
-三套测试互相独立，都要用 `.tools/node20`：
+三套测试互相独立，都要用 `.tools/node24`：
 
 ```bash
-export R=$PWD HOME=$PWD/.tools/home PATH="$PWD/.tools/node20/bin:$PATH"
+export R=$PWD HOME=$PWD/.tools/home PATH="$PWD/.tools/node24/bin:$PATH"
 
 # server: jest + ts-jest（全量约 1 min）
 (cd packages/server && ./node_modules/.bin/jest)
@@ -161,13 +167,13 @@ git push -u mine <你的分支>
 一条命令就够：
 
 ```bash
-./dev-env.sh bootstrap                        # Node 20 + pnpm 8 + MongoDB 7 + 本地骨架
+./dev-env.sh bootstrap                        # Node 24 + pnpm 8 + MongoDB 7 + 本地骨架
 ./dev-env.sh bootstrap --with-legacy-mongo    # 额外装 5.0/6.0，用于导入 FCV 4.4 的老备份（§4.2）
 ```
 
 `bootstrap` 做的事（**幂等**，可以反复跑，已经装好的会跳过）：
 
-1. 下载并校验 **Node 20.19.5**（官方 `SHASUMS256.txt`）→ `.tools/node20`；
+1. 下载并校验 **Node 24.21.0**（官方 `SHASUMS256.txt`）→ `.tools/node24`；
 2. 用这个 node 装 **pnpm 8.11.0** → `.tools/node_modules/pnpm`（与 `package.json` 的 `packageManager` 一致）；
 3. 下载并校验 **MongoDB 7.0.14**（`.tgz.sha256` sidecar）→ `.tools/mongodb`，并用 `ldd` 检查动态库；
 4. 建 `vanblog_dev/{logs,pids,mongo-data,static,codeRunner,pluginRunner}`、
@@ -196,9 +202,9 @@ git push -u mine <你的分支>
 
 ```bash
 mkdir -p .tools && cd .tools
-# Node 20（nodejs.org 直连一般可用；也可用 https://npmmirror.com/mirrors/node/v20.19.5/）
+# Node 24（nodejs.org 直连一般可用；也可用 https://registry.npmmirror.com/-/binary/node/v24.21.0/）
 curl -LO https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-x64.tar.xz
-tar -xf node-v20.19.5-linux-x64.tar.xz && mv node-v20.19.5-linux-x64 node20
+tar -xJf node-v24.21.0-linux-x64.tar.xz && mv node-v24.21.0-linux-x64 node24
 
 # MongoDB（fastdl.mongodb.org 在部分网络下很慢/易断，必要时走你自己的代理）
 curl -sSLO https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2204-7.0.14.tgz
@@ -213,15 +219,15 @@ tar -xzf mongodb-linux-x86_64-ubuntu2204-7.0.14.tgz && mv mongodb-linux-x86_64-u
 
 ```bash
 cd .tools && printf '{"name":"vanblog-dev-tools","private":true,"dependencies":{"pnpm":"8.11.0"}}\n' > package.json
-HOME=$PWD/home PATH=$PWD/node20/bin:$PATH \
+HOME=$PWD/home PATH=$PWD/node24/bin:$PATH \
   npm install --prefix "$PWD" --cache "$PWD/npm-cache" --registry https://registry.npmmirror.com
-./node20/bin/node ./node_modules/pnpm/bin/pnpm.cjs -v   # 期望 8.11.0
+./node24/bin/node ./node_modules/pnpm/bin/pnpm.cjs -v   # 期望 8.11.0
 ```
 
 ### 3.3 关键环境变量（`dev-env.sh` 已内置，手工执行时也要带）
 
 ```bash
-export PATH="$ROOT/.tools/node20/bin:$PATH"
+export PATH="$ROOT/.tools/node24/bin:$PATH"
 export HOME="$ROOT/.tools/home"                    # 隔离 HOME：picgo 等会写 ~/.picgo
 export PNPM_HOME="$ROOT/.tools/pnpm-home"
 export npm_config_cache="$ROOT/.tools/npm-cache"
@@ -431,7 +437,7 @@ curl -s "http://127.0.0.1:3001/api/comment?path=%2Fpost%2F1&page=1&pageSize=3" |
 | 症状 | 原因 | 处理 |
 |---|---|---|
 | `nest start --watch` 打印 `Found 115 errors`，3000 不监听 | 家目录 `@types/*`（如 bun-types）被 TS 4.9 自动纳入 | 用 `-p tsconfig.dev.json`（§3.6） |
-| `@nestjs/cli` 崩、报 `util.isObject is not a function` | 用了系统 Node ≥ 23 | 换 `.tools/node20` |
+| `@nestjs/cli` 崩、报 `util.isObject is not a function` | `@nestjs/cli` 还是 9（Node 23 移除了这个 API） | 把 `@nestjs/cli`/`@nestjs/schematics` 升到 11（见 §7.49），**不要**退回 Node 20 |
 | pnpm 启动即 `Permission denied ... pnpm/global/v11` | 全局 pnpm 版本太新、要写 `~/.local/share/pnpm` | 用 `.tools/node_modules/pnpm/bin/pnpm.cjs` + 隔离 HOME |
 | `sharp: Installation error: Request timed out` | 直连 GitHub 下载 libvips | 设 `npm_config_sharp_libvips_binary_host` / `npm_config_sharp_binary_host`（§3.3） |
 | node-gyp `common.gypi not found` | 头文件下载失败 | 设 `npm_config_disturl`，并清掉 `.tools/home/.cache/node-gyp` |
@@ -485,7 +491,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 
 | 组件 | 版本 | 备注 |
 | --- | --- | --- |
-| Node | **20.19.5**（`.tools/node20`） | 系统 Node ≥23 会让 `@nestjs/cli` 9 崩（`util.isObject` 被移除） |
+| Node | **24.21.0**（`.tools/node24`） | 与镜像里的 `node:24-alpine` 同大版本；Node 20 已于 2026-04-30 EOL（见 §7.49） |
 | pnpm | **8.11.0** | lockfile v6.0；升 9/10 要重写 lockfile 并重算补丁 hash |
 | MongoDB | **7.0.14**，FCV **6.0** | 镜像/compose 的默认 tag 用 `mongo:7.0` |
 | sharp | 0.32.6 | 有 Node 20 的 prebuild；升 Node 22 必须先升 sharp 0.33+ |
@@ -493,9 +499,9 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 | NestJS | 9.x | |
 | Next.js | 13.5.x（pages router） | |
 | umi | 3.5.x（admin） | 两个 pnpm 补丁是为它的 MFSU 老解析器打的 |
-| Alpine | 3.23（`node:20-alpine` 带的） | 仓库路径是 `v3.23`（两段），而 `VERSION_ID` 是 `3.23.4`（三段） |
+| Alpine | 3.24.1（`node:24-alpine` 带的，容器内实测） | 仓库路径是 `v3.24`（两段），而 `VERSION_ID` 是 `3.24.1`（三段） |
 
-1. **不要用系统 Node（≥23）跑 server/admin/website**，一律 `.tools/node20`。
+1. **一律用 `.tools/node24`** 跑 server/admin/website（与镜像同大版本；系统 Node 版本随机器漂移，不可复现）。
 2. **不要为了本地环境去改仓库跟踪的文件**（`config/config.js`、`config/proxy.js`、`next.config.js`、
    `tsconfig*.json` 等）。环境需要覆盖时就新建本地文件 + 写进 `.git/info/exclude`；
    只有**真正的功能改动**才应该出现在 `git diff` 里（当前有哪些见 §7）。
@@ -2452,7 +2458,7 @@ waline 自动重启与上限与 stopping 标记、initJwt 重试、restore.key 0
 **为什么 Node 停在 20，不是 22 或 24**（两条硬约束，Dockerfile 里也写了注释，别让人顺手升上去）：
 
 1. **Node 23 移除了 `util.isObject`，而 `@nestjs/cli` 9 还在用它** → Node 24 上 `nest build` 直接崩。
-   本机开发环境固定在 node20 就是这个原因（§3.6）。
+   本机开发环境曾经因此固定在 node20 —— **这条约束已随 @nestjs/cli 升到 11 而解除**，现在开发环境是 node24（§7.49）。
 2. **sharp 0.32.6 的预编译二进制只覆盖到 Node 20**（NODE_MODULE_VERSION 115）；Node 22 是 127 →
    没有 prebuild，而 **runner 阶段没装 `vips-dev`**（只有 website_builder 装了），
    于是图片处理会在运行时加载失败。要升 22 必须**同时**把 sharp 升到 0.33+ 并重新验证
@@ -2494,7 +2500,7 @@ website `next build`（EXIT=0，8 个页面）全在 v20.19.5 上跑通；`--ope
 | umi 4 | 配置格式与插件体系全变（MFSU、`mfsu:{}`、两个 pnpm 补丁的必要性都要重新评估） | 单独一轮，最重 |
 | caddy 钉版本 | `apk add caddy=X-rN` 会随 Alpine 仓库滚动失效；钉官方 release 二进制要维护 sha256 | 已有降级模板兜底，优先级低 |
 
-**测试**：`image-runtime.test.sh` 加了"不许再出现 `FROM node:18`、四个 stage 都是 node:20、
+**测试**：`image-runtime.test.sh` 加了"不许再出现已 EOL 的 `FROM node:18`/`node:20`、所有 stage 的 Node 大版本必须一致且 ≥ 24、
 不许贸然出现 node:22+、Dockerfile 里必须写明为什么停在 20"；`vanblog-hardening.test.sh` 加了
 `get_compose_mongo_image` / `pick_mongo_image` 的七种情形（无数据、有数据、有数据+覆盖、
 空目录、只有无关文件、读现有 tag、默认值）；`vanblog-source-install.test.sh` 的 config 模拟
@@ -4109,6 +4115,86 @@ bodyLimit 12、requestId 18、viewer.provider 9、analysis.provider 7、statsMai
 website vitest **68 文件 / 679 全绿**（+1 文件 viewportZoomA11y）；backup-e2e 6/6、isr-e2e 2/2；
 tsc 0 错。⚠️ CI 的 testPathPattern 白名单要补
 `bodyLimit|requestId|viewer.provider|analysis.provider` 四个 token（已补）。
+
+### 7.49 基础镜像升到 Node 24：两个挡路的约束、它们的解法、以及全部实测
+
+**为什么必须升**：Node 20 的官方 EOL 是 **2026-04-30**（`github.com/nodejs/Release/blob/main/schedule.json`），
+本仓库在它过期之后又用了四个多月 —— 也就是**运行时本身已经不再有任何安全补丁**。
+这跟前面几轮修的依赖漏洞是同一类问题，只是藏得更深（`FROM node:20-alpine` 看着人畜无害）。
+可选目标里 v22 的 EOL 是 2027-04-30（只剩七个多月，且已进 maintenance），
+**v24 是当前 active LTS，EOL 2028-04-30** ⇒ 直接上 24，不要在 22 上再停一次。
+
+**挡路的两条硬约束（都是真的撞过，不是推测）**：
+
+1. **`util.isObject` 在 Node 23 被移除**，而 `@nestjs/cli` **9** 的依赖链在用它 ⇒
+   Node 24 上 `nest build` 直接 `Error  (0 , util_1.isObject) is not a function`，server stage 构建失败。
+   **解法：`@nestjs/cli` 与 `@nestjs/schematics` 升到 11**（实测装上 11.0.24）。
+   ⚠️ 关键判断：它们是**只在构建期用**的 devDependency，运行时的 `@nestjs/core` 仍然是 **9**，
+   所以运行时行为一点没变 —— 这也是这个升级风险低的原因。
+   ⚠️ 副作用要知道：CLI 11 自带 TypeScript 5.x，`nest build` 用的是**它自带的那个**，
+   而项目声明的是 4.9.5、本机 `tsc -p tsconfig.dev.json` 用的也是 4.9.5。
+   两条编译路径都要保持 0 错误（本项目实测都过）。
+2. **sharp 0.32.6 的预编译二进制只到 NODE_MODULE_VERSION 115（Node 20）**，而 runner 阶段没装
+   `vips-dev`，升上去会让图片处理在**运行时**加载失败（构建期还看不出来，最阴的一类）。
+   **解法：sharp 升到 0.35**（§7.47）—— 0.33 起预编译改成 **N-API + npm optionalDependencies**
+   （`@img/sharp-<平台>`），一份产物跨 Node 版本通用，musl 版也在。
+   ⚠️ 平台包是 **optional** 依赖：装不上时 npm/pnpm 只 warn 不 fail，要到第一次 `require('sharp')` 才炸，
+   所以必须在**镜像里**真跑一次编解码，不能只看构建成功。
+
+**另外两处顺带确认的**：
+
+- admin 的 umi3/webpack4 需要 `--openssl-legacy-provider`（webpack4 用 md4 算 chunk hash）。
+  这个开关在 Node 24 上**仍然有效**（OpenSSL 3 的 legacy provider 里带 MD4），admin stage 实测构建通过
+  （那次失败的构建里 `[1/5]` 28 步全过，才轮到 `[2/5]` server 挂 —— 顺序本身就是证据）。
+- waline 的 `better-sqlite3` 在 musl 上没有预编译包、每次都要 node-gyp 现场编译；
+  Node 24 的头文件在 `unofficial-builds.nodejs.org` 上有，**实测编译通过**（Alpine 的 Python 3.14 +
+  `py3-setuptools` 提供的 distutils）。⚠️ 这一步很慢（单是编译就好几分钟），别以为卡死了。
+- `require('punycode')` 在 Node 24 上**仍可用**，只是打 DEP0040 弃用警告
+  （waline 的 jsdom 链会触发；`util._extend` 同理）。都是噪音，不是故障。
+
+**验证（全部实跑，逐条可复现）**：
+
+| 项 | 结果 |
+| --- | --- |
+| 五个 stage 的完整镜像构建 | **成功**（`node:24-alpine`，Alpine 3.24.1，Node v24.21.0） |
+| 镜像体积 | 808 MB（Node 20 版）→ **854 MB**（Node 24 版），+46 MB：基础镜像本体更大 + better-sqlite3 按新 ABI 重编 |
+| 起真栈 + 灌入那份 66MB 生产整站备份 | `reset` 成功，53 篇文章、站点信息恢复 |
+| 容器内 sharp | webp **编解码往返正常**（48×32 → 元数据读回一致） |
+| SSR（Next 13.5.11 on Node 24） | 文章页 **200 / 78,767 B / 17.8ms**，`__NEXT_DATA__` 正常，正文渲染出来了 |
+| 全部关键路径 | `/`、`/admin`、`/timeline`、`/link`、`/tag`、`/api/public/meta`、`/api/public/theme.css`(204)、`/api/public/comments/setting`(waline) 全 200 |
+| RSS / sitemap | 重启后 `/feed.xml` 200（291,675 B）、`/atom.xml` 200（298,575 B）、`/sitemap.xml` 200（15,397 B），日志确认"首次启动触发全量渲染"且 50 条上限仍生效 |
+| 本轮新功能 | `x-request-id` 照常回显；1.2MB JSON 打登录仍 **413** |
+| 运行时错误 | 容器日志里**没有**任何 `is not a function` / `Cannot find module`（唯一的 ERROR 是我自己那条故意的 413 测试） |
+| 本机测试**在 Node 24 上重跑** | server **942 用例 / 941 绿 + 1 个既有 watermark 字体用例**；website **68 文件 / 679**；admin **347**；脚本 **22 文件 / 1110** —— 与 Node 20 上的结果一致 |
+
+⚠️ **一个测出来的坑（我自己的）**：`/sitemap.xml` 与 `/feed.xml` 一开始是 **404**，
+看着像 Node 24 的回归。真实原因是测试流程：`reset --no-restart` 恢复数据后没有重启，
+而 RSS/sitemap 是**启动期首轮全量渲染**才生成的（`/app/static/rss` 目录存在但是空的）。
+`podman restart` 之后两个都 200 了。**教训：恢复数据后不重启，就不要拿 RSS/sitemap 判断健康度。**
+
+⚠️ **Node 24 换了 `node --test` 的默认 reporter**：admin 那套测试在 Node 24 上
+直接跑 `node --test tests/unit/*.test.js` **不再输出 `# tests / # pass / # fail` 汇总行**
+（默认从 TAP 换成了 spec），看起来像"什么都没跑"。要汇总就显式加 `--test-reporter=tap`。
+本仓库的文档与 CI 命令都按这个更新了。
+
+**同时改掉的配套**（少一处就会留下"生产 24、开发/测试 20"的盲点）：
+
+- `dev-env.sh`：`.tools/node20` → `.tools/node24`，引导安装版本 `20.19.5` → `24.21.0`，
+  安装目录名由版本号推导（`BOOTSTRAP_NODE_MAJOR`）。
+  ⚠️ 踩到的坑：`NODE_BIN` 在文件**第 39 行**赋值，而 `BOOTSTRAP_NODE_*` 配置块在**第 240 行** ——
+  直接引用会得到空值、路径变成 `.tools/node/bin`。现在在 39 行就地推导大版本
+  （优先级：显式大版本 > `VANBLOG_NODE_VERSION` 的大版本 > 24），与后面的安装逻辑一致。
+- `.github/workflows/{server-test,admin-e2e}.yml`：`node-version: 20` → `24`。
+- `scripts/tests/image-runtime.test.sh`：把"必须停在 node:20、出现 node:22+ 就 fail"整段
+  换成"**所有 stage 的 Node 大版本必须一致且 ≥ 24**、出现已 EOL 的 node:18/node:20 就 fail、
+  Dockerfile 里必须留着 `util.isObject` 这条历史说明"。
+  这条测试当初正是为了拦住"下一个人顺手升 Node"，现在它的职责变成拦住"悄悄滑回 EOL 版本"，
+  并在注释里写清 v20/v22/v24 的 EOL 日期，**2027 年之后要记得往上抬**。
+- `dockerfile-patches.test.sh` / `dockerfile-alpine-sharp.test.sh`：`^FROM node:20-alpine` 这类
+  **写死版本号**的匹配全部改成 `^FROM node:[0-9]+-alpine`（断言的是"每个 alpine stage 都有换源步骤"
+  这个不变量，而不是具体版本），以后升 Node 不用再改测试。
+- `scripts/vanblog.sh` 与它的文档双胞胎 `docs/.vuepress/public/vanblog.sh`：同一处注释一起改，
+  `cmp -s` 确认仍然逐字节一致（这两个文件必须同步，见 §7.41）。
 
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 

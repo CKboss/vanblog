@@ -293,7 +293,7 @@ else
   fail "缺少全局 ARG VAN_BLOG_ALPINE_MIRROR"
 fi
 # 三个 alpine stage 都要：重新 ARG + 在任何 apk add 之前换源
-ALPINE_STAGES=$(grep -c '^FROM node:20-alpine AS ' "${DOCKERFILE}")
+ALPINE_STAGES=$(grep -cE '^FROM node:[0-9]+-alpine AS ' "${DOCKERFILE}")
 REWRITE=$(grep -c 'etc/apk/repositories' "${DOCKERFILE}")
 if [[ "${ALPINE_STAGES}" -ge 3 && "${REWRITE}" -ge 3 ]]; then
   pass "${ALPINE_STAGES} 个 alpine stage 都有换源步骤（${REWRITE} 处）"
@@ -318,7 +318,7 @@ while IFS= read -r ln; do
        /etc\/apk\/repositories/ { found=NR }
        /^RUN .*apk add/ { if (!found || NR<found) bad=1 }
        END { exit bad?1:0 }' "${DOCKERFILE}" || ORDER_OK=0
-done < <(grep -n '^FROM node:20-alpine AS ' "${DOCKERFILE}")
+done < <(grep -nE '^FROM node:[0-9]+-alpine AS ' "${DOCKERFILE}")
 if [[ "${ORDER_OK}" == "1" ]]; then
   pass "每个 stage 都是先换源再 apk add"
 else
@@ -351,7 +351,7 @@ while IFS= read -r ln; do
     /npm config set disturl/ { found=NR }
     /pnpm install|pnpm i / { if (!found || NR<found) bad=1 }
     END { exit bad?1:0 }' "${DOCKERFILE}" || ORDER_OK=0
-done < <(grep -n '^FROM node:20' "${DOCKERFILE}")
+done < <(grep -nE '^FROM node:[0-9]+' "${DOCKERFILE}")
 if [[ "${ORDER_OK}" == "1" ]]; then
   pass "每个 stage 都是先设 disturl 再 pnpm install"
 else
@@ -440,7 +440,7 @@ else
 fi
 # 四个 stage 必须同一个 libc：runner 是 alpine，构建阶段若是 glibc，
 # 原生模块 COPY 进 runner 后加载不了（只能靠回退到前台那份 musl sharp 绕路）
-GLIBC_STAGES=$(grep -cE '^FROM node:20 AS ' "${DOCKERFILE}")
+GLIBC_STAGES=$(grep -cE '^FROM node:[0-9]+ AS ' "${DOCKERFILE}")
 if [[ "${GLIBC_STAGES}" -eq 0 ]]; then
   pass "四个 stage 全是 alpine（和 runner 同一个 libc，原生模块不会白编）"
 else

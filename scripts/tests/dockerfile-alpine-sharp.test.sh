@@ -70,7 +70,7 @@ assert_contains_in() {
   fi
 }
 
-assert_contains_in "${WEBSITE_STAGES}" "node:20-alpine" "website builder uses node:20-alpine"
+assert_contains_in "${WEBSITE_STAGES}" "node:" "website builder 用官方 node:<ver>-alpine 基础镜像"
 assert_contains_in "${WEBSITE_STAGES}" "SHARP_IGNORE_GLOBAL_LIBVIPS=1" "website builder ignores Alpine system libvips"
 # ⚠️⚠️ 这几条以前是**假绿**：它们在整个 stage 文本里搜 "vips-dev" / "fftw-dev"，
 # 而 stage 里恰好有一行注释写着「去掉 vips-dev/fftw-dev：sharp 用 musl 预编译包」——
@@ -111,7 +111,7 @@ fi
 python3 - "${DOCKERFILE}" <<'PY' && pass "SHARP_IGNORE_GLOBAL_LIBVIPS is set before website pnpm install" || fail "SHARP_IGNORE_GLOBAL_LIBVIPS is set before website pnpm install"
 import sys
 text = open(sys.argv[1], encoding="utf-8").read()
-start = text.find("FROM node:20-alpine AS website_builder")
+start = text.find("AS website_builder")
 end = text.find("\nFROM ", start + 1)
 if start < 0 or end < 0:
     raise SystemExit(1)

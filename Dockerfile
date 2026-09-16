@@ -1,19 +1,33 @@
 # 具体每个服务的去看 packages 里面的 Dockerfile
 # 这个是 all in one 的。
 #
-# ── 基础镜像版本为什么是 node:20 ──────────────────────────────────────────
-# Node 18 已于 2025-04 EOL（不再有安全更新），所以四个 stage 全部升到 20。
-# **没有直接上 22/24**，因为两条硬约束：
-#   1. Node 23 移除了 `util.isObject`，而 @nestjs/cli 9 还在用它 →
-#      Node 24 上 `nest build` 直接崩（本机开发环境就是因此固定在 node20，见 AGENTS §3.6）。
-#   2. ~~sharp 0.32.6 的预编译二进制只覆盖到 Node 20（NODE_MODULE_VERSION 115）~~
-#      **这条限制已经解除**：sharp 现在是 0.35.x，预编译包按平台发（@img/sharp-<平台>），
-#      Node 22 的 ABI 有对应产物。升 22 剩下的只是"把 5 个 stage 的基础镜像一起换 + 全量重验"，
-#      与 sharp 无关了。
-#      Node 22 是 127 → 没有 prebuild，而 runner 阶段没装 vips-dev，
-#      图片处理会在运行时加载失败。要升 22 必须同时把 sharp 升到 0.33+。
-# Node 20 这一档是**本机开发环境验证过的**（node v20.19.5：server 610 用例、
-# admin `umi build`、website `next build` 全通过），sharp 0.32.6 也有 20 的 prebuild。
+# ── 基础镜像版本为什么是 node:24 ──────────────────────────────────────────
+# 官方生命周期（github.com/nodejs/Release/blob/main/schedule.json）：
+#   v20 Iron    EOL 2026-04-30  ← 已过期，不再有安全补丁（本仓库曾在它过期后还用了四个多月）
+#   v22 Jod     EOL 2027-04-30
+#   v24 Krypton EOL 2028-04-30（2025-10-28 起 LTS）
+# 所以五个 stage 全部用 node:24-alpine。⚠️ 2027 年之后要再往上抬，
+# 别像 node:20 那样悄悄过期了才发现（scripts/tests/image-runtime.test.sh 会拦住）。
+#
+# 曾经挡住升级的两条硬约束现在都解除了，**别再拿它们当理由停在旧版本**：
+#   1. Node 23 移除了 `util.isObject`，而 @nestjs/cli **9** 的依赖链在用它 ⇒
+#      Node 24 上 `nest build` 直接 `Error  (0 , util_1.isObject) is not a function`。
+#      修法：`@nestjs/cli` / `@nestjs/schematics` 升到 **11**。
+#      ⚠️ 它们是**只在构建期用**的 devDependency，运行时的 `@nestjs/core` 仍然是 9，
+#      所以运行时行为一点没变（这也是为什么这个升级风险很低）。
+#      注：CLI 11 自带的 TypeScript 是 5.x，而本项目声明的是 4.9.5 ——
+#      `nest build` 用 CLI 自带的那个，本机 `tsc -p tsconfig.dev.json` 用项目的 4.9.5，
+#      两者都要保持 0 错误（AGENTS §3.6 说了本机那份 tsconfig 为什么必须存在）。
+#   2. sharp 0.32.6 的预编译二进制只到 NODE_MODULE_VERSION 115（Node 20），
+#      而 runner 阶段没装 vips-dev，升 22 会让图片处理在**运行时**加载失败。
+#      修法：sharp 升到 **0.35**，预编译改成 N-API + npm optionalDependencies
+#      （`@img/sharp-<平台>`），一份产物跨 Node 版本通用、musl 版也在
+#      （已在镜像里实测 webp 编解码往返正常）。
+# admin 的 umi3/webpack4 需要 `--openssl-legacy-provider`（webpack4 用 md4 算 chunk hash），
+# 这个开关在 Node 24 上**仍然有效**（OpenSSL 3 的 legacy provider 里带 MD4），实测构建通过。
+# waline 的 better-sqlite3 在 musl 上没有预编译包、每次都要 node-gyp 现场编译，
+# Node 24 的头文件在 unofficial-builds 上有（已实测编译通过），
+# 但那个 stage 必须装 `py3-setuptools`（Alpine 的 Python 3.12+ 没有 distutils，node-gyp 9 还要它）。
 #
 # 全局构建参数（⚠️ BuildKit 的规则：FROM 之前声明的 ARG 属于"全局"，
 #   在具体 stage 里要用必须**再 ARG 一次**，否则取到的是空值）。
@@ -52,7 +66,7 @@ ARG VAN_BLOG_SHARP_DIST_HOST=
 ARG VAN_BLOG_SHARP_BINARY_HOST=https://github.com/lovell/sharp/releases/download
 ARG VAN_BLOG_SHARP_LIBVIPS_HOST=https://github.com/lovell/sharp-libvips/releases/download
 
-FROM node:20-alpine AS admin_builder
+FROM node:24-alpine AS admin_builder
 ARG VAN_BLOG_NPM_REGISTRY
 ARG VAN_BLOG_ADMIN_BUILD_SCRIPT
 # ⚠️ 这里的 NODE_OPTIONS 对 `pnpm build` **不起作用**：admin 的 build 脚本是
@@ -140,7 +154,7 @@ RUN pnpm run ${VAN_BLOG_ADMIN_BUILD_SCRIPT}
 #      alpine 这条线有现成解法：装 vips-dev 从源码编（和 website_builder 一样），全程不碰 GitHub。
 #   2. glibc 编出来的 node_modules 被 COPY 进 alpine 的 runner，原生模块（sharp）根本加载不了，
 #      只能靠"回退去用前台那份 musl sharp"绕路兜底。同一个 libc 构建就没这问题。
-FROM node:20-alpine AS server_builder
+FROM node:24-alpine AS server_builder
 ARG VAN_BLOG_NPM_REGISTRY
 ENV NODE_OPTIONS=--max_old_space_size=4096
 # 强制 sharp 用它自己下载的 libvips，别去链系统的（和 website_builder 一致）
@@ -237,7 +251,7 @@ RUN pnpm --filter @vanblog/server deploy --prod /deploy && \
 
 # 前台：Alpine + sharp。musl 版本号可能是 1.2.4_git*，sharp 0.31 会报
 # Installation error: Invalid Version。用 0.32.6 + 官方 musl prebuild，并装 vips 编译兜底。
-FROM node:20-alpine AS website_builder
+FROM node:24-alpine AS website_builder
 ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 ENV SHARP_IGNORE_GLOBAL_LIBVIPS=1
@@ -340,7 +354,7 @@ RUN pnpm build:website
 # 于是它会退回 node-gyp 现场编译 —— 需要 python3/make/g++。
 # 放在独立的构建阶段里编，编完只把 node_modules 拷进 runner：
 # 最终镜像里不会留下编译器（体积、攻击面都更小），这一层也容易被缓存复用。
-FROM node:20-alpine AS waline_builder
+FROM node:24-alpine AS waline_builder
 ARG VAN_BLOG_NPM_REGISTRY
 ARG VAN_BLOG_ALPINE_MIRROR
 # 换 Alpine 源必须在第一条 apk add **之前**（同其它 stage 的说明）
@@ -375,7 +389,7 @@ RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
 RUN pnpm i
 
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 ARG VAN_BLOG_NPM_REGISTRY
 WORKDIR /app
 # zstd / xz：后台「整站备份」默认用 zstd -19（其次 xz，最后才 gzip），

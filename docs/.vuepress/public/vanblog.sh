@@ -666,7 +666,7 @@ detect_alpine_mirror() {
   local url probe ms best="" best_ms=-1
   echo -e "> 探测 Alpine 源延迟："
   for url in "${candidates[@]}"; do
-    # 用 latest-stable 而不是写死某个 v3.x：基础镜像的 Alpine 版本会随 node:20-alpine 漂移
+    # 用 latest-stable 而不是写死某个 v3.x：基础镜像的 Alpine 版本会随 node:24-alpine 漂移
     # （现在已经是 3.23 了），写死版本号会让探测结果和实际构建用的路径对不上。
     probe="$(curl -sS -o /dev/null -m 8 -w '%{http_code} %{time_total}' \
       "${url}/latest-stable/main/x86_64/APKINDEX.tar.gz" 2>/dev/null || true)"

@@ -421,30 +421,51 @@ fi
 
 # ---------- 8) 基础镜像版本：不许再用已 EOL 的 node:18 ----------
 # Node 18 在 2025-04 就 EOL 了（不再有安全更新）。升到 20 是"和开发环境对齐"的最小一步：
-# 本机 node v20.19.5 上 server 610 用例、admin umi build、website next build 全部验证过，
-# 且 sharp 0.32.6 有 Node 20 的 prebuild（NODE_MODULE_VERSION 115）。
-# 不能直接上 22/24：Node 23 移除了 util.isObject（@nestjs/cli 9 在用），
-# 而 sharp 0.32.6 没有 Node 22（127）的 prebuild、runner 阶段又没装 vips-dev。
-if grep -qE '^FROM node:18' "${DOCKERFILE}"; then
-  fail "Dockerfile 里还有 node:18（2025-04 已 EOL，无安全更新）"
+# ── Node 基础镜像：必须是**仍在维护期内**的 LTS ─────────────────────────────
+# 官方生命周期（https://github.com/nodejs/Release/blob/main/schedule.json）：
+#   v20 Iron    EOL 2026-04-30   ← 已经过期，不再有安全补丁
+#   v22 Jod     EOL 2027-04-30   （2025-10-21 起进入 maintenance）
+#   v24 Krypton EOL 2028-04-30   （2025-10-28 起 LTS，2026-10-20 进 maintenance）
+# 现在用的是 24。⚠️ 2027 年之后要把这里往上抬，别让它像 node:20 那样悄悄过期四个多月。
+#
+# 曾经挡住升级的两件事都已经解决（不要再拿它们当理由停在旧版本）：
+#   1. `util.isObject` 在 **Node 23 被移除**，而 @nestjs/cli 9 的依赖链在用它 ⇒
+#      `nest build` 在 Node 24 上直接 `Error (0 , util_1.isObject) is not a function`。
+#      修法是把 **@nestjs/cli / @nestjs/schematics 升到 11**（只在构建期用的 devDependency，
+#      运行时的 @nestjs/core 仍然是 9，不影响任何运行时行为）。
+#   2. sharp 0.32.6 的预编译包只到 NODE_MODULE_VERSION 115（Node 20）。
+#      升到 **sharp 0.35** 之后预编译改成 N-API + npm optionalDependencies（@img/sharp-<平台>），
+#      一份产物跨 Node 版本通用，musl 版也在（已在镜像里实测编解码往返正常）。
+# 另外 admin 的 umi3/webpack4 需要 `--openssl-legacy-provider`（md4 哈希），
+# 这个开关在 Node 24 上**仍然有效**（OpenSSL 3 的 legacy provider 里有 MD4），已实测构建通过。
+NODE_MAJOR_MIN=24
+mapfile -t FROM_LINES < <(grep -oE '^FROM node:[0-9]+' "${DOCKERFILE}" | grep -oE '[0-9]+$')
+if [[ ${#FROM_LINES[@]} -lt 4 ]]; then
+  fail "只找到 ${#FROM_LINES[@]} 个 node 基础镜像 stage，应该至少 4 个"
 else
-  pass "Dockerfile 里没有 node:18"
+  pass "找到 ${#FROM_LINES[@]} 个 node stage"
 fi
-node20_stages=$(grep -cE '^FROM node:20(-alpine)? AS ' "${DOCKERFILE}")
-if [[ "${node20_stages}" -ge 4 ]]; then
-  pass "四个 stage 都用 node:20（${node20_stages} 处）"
+uniq_majors=$(printf '%s\n' "${FROM_LINES[@]}" | sort -u | tr '\n' ' ')
+if [[ "$(printf '%s\n' "${FROM_LINES[@]}" | sort -u | wc -l)" -ne 1 ]]; then
+  fail "各 stage 的 Node 大版本不一致（${uniq_majors}）：构建期与运行期的 ABI/语法差异会带来极难查的问题"
 else
-  fail "node:20 的 stage 只有 ${node20_stages} 个，应该至少 4 个"
+  pass "所有 stage 统一用 node:${uniq_majors% }"
 fi
-if grep -qE '^FROM node:(2[2-9]|[3-9][0-9])' "${DOCKERFILE}"; then
-  fail "Dockerfile 用了 node:22+：@nestjs/cli 9 需要 util.isObject（Node 23 移除），且 sharp 0.32.6 没有对应 prebuild"
+for m in "${FROM_LINES[@]}"; do
+  if [[ "${m}" -lt "${NODE_MAJOR_MIN}" ]]; then
+    fail "有 stage 用 node:${m}，低于 ${NODE_MAJOR_MIN}（v20 已于 2026-04-30 EOL，v22 于 2027-04-30 EOL）"
+  fi
+done
+if grep -qE '^FROM node:(18|20)(-alpine)?( |$)' "${DOCKERFILE}"; then
+  fail "Dockerfile 里还有已 EOL 的 node:18/node:20"
 else
-  pass "没有贸然升到 node:22+（nestjs-cli 与 sharp 都还没跟上）"
+  pass "没有已 EOL 的 node:18 / node:20"
 fi
-if grep -q 'util.isObject' "${DOCKERFILE}" || grep -q 'sharp 0.32.6' "${DOCKERFILE}"; then
-  pass "Dockerfile 里记录了不能升 22/24 的原因"
+# 升过一次的坑要留在文件里，否则下一个人遇到 isObject 报错会以为是新问题
+if grep -q 'util.isObject' "${DOCKERFILE}"; then
+  pass "Dockerfile 里记录了 Node 23+ 移除 util.isObject 这件事（以及 @nestjs/cli 要 11+）"
 else
-  fail "Dockerfile 没有说明为什么停在 node:20（下一个人会顺手升上去然后构建失败）"
+  fail "Dockerfile 没有记录 util.isObject / @nestjs/cli 版本要求（下次升 Node 会重新踩一遍）"
 fi
 
 # ---------- 9) mongo 版本：模板用占位符，脚本按"有没有数据"决定 ----------

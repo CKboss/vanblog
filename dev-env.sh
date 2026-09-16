@@ -13,7 +13,11 @@
 #   ./dev-env.sh db     巡检数据库（mongod 版本 / FCV / 各集合条数 / 站点信息）
 #
 # 说明:
-#   - Node 使用 .tools/node20 (v20.19.5)。系统默认的 Node 24 会让 @nestjs/cli 崩溃
+#   - Node 使用 .tools/node24（与镜像里的 node:24-alpine 对齐）。
+#     ⚠️ 历史：这里曾经固定在 node20，因为 **Node 23 移除了 util.isObject，而 @nestjs/cli 9 在用它**，
+#     Node 24 上 `nest build` 会直接崩。@nestjs/cli 升到 11 之后这个约束没了（见 Dockerfile 头部注释），
+#     所以现在开发环境与生产镜像用同一个大版本，避免"测试跑 20、生产跑 24"这种盲点。
+#     Node 20 已于 2026-04-30 EOL，不要退回去。
 #     (util.isObject 在 Node 23 被移除)，Node 18/20 才是本项目验证过的版本。
 #   - pnpm 使用 .tools/node_modules/pnpm (8.11.0，与 package.json 的 packageManager 一致)。
 #   - MongoDB 使用 .tools/mongodb (7.0.14) 的免安装版，数据目录 vanblog_dev/mongo-data；
@@ -32,7 +36,13 @@ ROOT=$PWD
 _git_sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)
 VERSION_LABEL="dev/dsh${_git_sha:+@$_git_sha}"
 
-NODE_BIN="$ROOT/.tools/node20/bin"
+# Node 的大版本决定 .tools 下的目录名。⚠️ 这一行在 BOOTSTRAP_NODE_* 配置块（下面 ~200 行处）
+# **之前**执行，所以不能直接引用 BOOTSTRAP_NODE_MAJOR —— 那样它还是空值，
+# 路径会变成 .tools/node/bin（我自己第一版就这么写错了）。这里就地推导，
+# 并且与后面安装逻辑用的是同一套优先级：显式大版本 > VANBLOG_NODE_VERSION 的大版本 > 24。
+_NODE_MAJOR="${BOOTSTRAP_NODE_MAJOR:-${VANBLOG_NODE_VERSION:-24.21.0}}"
+_NODE_MAJOR="${_NODE_MAJOR%%.*}"
+NODE_BIN="$ROOT/.tools/node${_NODE_MAJOR}/bin"
 NODE="$NODE_BIN/node"
 PNPM_CJS="$ROOT/.tools/node_modules/pnpm/bin/pnpm.cjs"
 # 数据库版本说明：
@@ -231,7 +241,11 @@ do_logs() {
 #   VANBLOG_PROXY             下载命令前缀，例如 "proxychains4 -q"
 #   VANBLOG_KEEP_DOWNLOADS=1  保留下载的 tarball（默认装完就删）
 # ---------------------------------------------------------------------------
-BOOTSTRAP_NODE_VERSION="${VANBLOG_NODE_VERSION:-20.19.5}"
+# 与镜像里的 node:24-alpine 对齐（Node 20 已于 2026-04-30 EOL；@nestjs/cli 升到 11 之后
+# 就不再需要停在 20 了 —— 当年卡住的是 Node 23 移除 util.isObject 而 CLI 9 在用它）。
+BOOTSTRAP_NODE_VERSION="${VANBLOG_NODE_VERSION:-24.21.0}"
+# 安装目录按大版本命名，避免"目录叫 node24、里面装的是 20"这种要命的错配
+BOOTSTRAP_NODE_MAJOR="${BOOTSTRAP_NODE_MAJOR:-${BOOTSTRAP_NODE_VERSION%%.*}}"
 BOOTSTRAP_PNPM_VERSION="${VANBLOG_PNPM_VERSION:-8.11.0}"
 BOOTSTRAP_MONGO_VERSION="${VANBLOG_MONGO_VERSION:-7.0.14}"
 BOOTSTRAP_MONGO50_VERSION="${VANBLOG_MONGO50_VERSION:-5.0.34}"
@@ -303,7 +317,7 @@ install_node() {
   local arch; arch=$(host_arch_node) || { echo "!! 不支持的架构: $(uname -m)"; return 1; }
   local name="node-v$BOOTSTRAP_NODE_VERSION-linux-$arch"
   local tarball="$ROOT/.tools/$name.tar.xz"
-  echo "==> 安装 Node v$BOOTSTRAP_NODE_VERSION ($arch) 到 .tools/node20"
+  echo "==> 安装 Node v$BOOTSTRAP_NODE_VERSION ($arch) 到 .tools/node${BOOTSTRAP_NODE_MAJOR}"
   fetch "$NODE_DIST_BASE/v$BOOTSTRAP_NODE_VERSION/$name.tar.xz" "$tarball" || return 1
 
   # 官方 SHASUMS256.txt 能拿到就校验（拿不到只警告，不阻断）
@@ -328,10 +342,10 @@ install_node() {
   rm -rf "$tmp"; mkdir -p "$tmp"
   tar -xf "$tarball" -C "$tmp" || { echo "!! 解压失败（文件可能不完整）"; rm -rf "$tmp"; return 1; }
   [ -d "$tmp/$name" ] || { echo "!! 解压后没找到 $name 目录"; rm -rf "$tmp"; return 1; }
-  rm -rf "$ROOT/.tools/node20"
-  mv "$tmp/$name" "$ROOT/.tools/node20" && rm -rf "$tmp"
+  rm -rf "$ROOT/.tools/node${BOOTSTRAP_NODE_MAJOR}"
+  mv "$tmp/$name" "$ROOT/.tools/node${BOOTSTRAP_NODE_MAJOR}" && rm -rf "$tmp"
   drop_tarball "$tarball"; rm -f "$sums"
-  echo "    已安装: $("$ROOT/.tools/node20/bin/node" -v)"
+  echo "    已安装: $("$ROOT/.tools/node${BOOTSTRAP_NODE_MAJOR:-24}/bin/node" -v)"
 }
 
 install_pnpm() {
