@@ -17,6 +17,9 @@
     "paths": {
       "react": [
         "./node_modules/@types/react"
+      ],
+      "mdast-util-mark": [
+        "./node_modules/mdast-util-mark/index.d.ts"
       ]
     },
     "skipLibCheck": true,

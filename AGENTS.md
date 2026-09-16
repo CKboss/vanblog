@@ -495,7 +495,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 | pnpm | **8.11.0** | lockfile v6.0；升 9/10 要重写 lockfile 并重算补丁 hash |
 | MongoDB | **7.0.14**，FCV **6.0** | 镜像/compose 的默认 tag 用 `mongo:7.0` |
 | sharp | 0.32.6 | 有 Node 20 的 prebuild；升 Node 22 必须先升 sharp 0.33+ |
-| TypeScript | 4.9.5 | |
+| TypeScript | **5.9.3**（server、website）/ **4.9.5**（admin，随 umi3，勿单独升） | 升级明细与三类结构性陷阱见 §7.51 |
 | NestJS | 9.x | |
 | Next.js | 13.5.x（pages router） | |
 | umi | 3.5.x（admin） | 两个 pnpm 补丁是为它的 MFSU 老解析器打的 |
@@ -4308,10 +4308,30 @@ admin 的升级是一个独立项目：umi 3 → 4、antd 4 → 6、React 17 →
   website 的 `target: es5`（于是 `transferRemoteImages.ts` 里的 `for (const x of set)` 报 TS2802），
   这时要在**调用点**改（`Array.from(set)`），**不要动 `target`** ——
   Next 用 SWC 编译，改 target 有可能影响产物。
-- **`mdast-util-mark@1.0.0` 在 node_modules 里发的是 `.ts` 源码**，`skipLibCheck` 管不到
-  （它只跳过 `.d.ts`），TS 5 于是去检查了别人的包并报 2 个错。
-  正解是加一份**环境声明** `types/mdast-util-mark.d.ts` 把模块类型接管过来（并有 spec 钉住），
-  而不是在依赖里塞 `@ts-ignore`。
+- **`mdast-util-mark@1.0.0` 把源码 `index.ts` 一起发进了 npm 包**（没有 `types` 字段、`main: index.js`），
+  而 TS 解析 main 时会先做 **`.js` → `.ts` 替代**，于是永远命中那份源码 —— 它对着**已安装的**依赖树
+  编译不过（`mdast-util-to-markdown@1.5.0` 把 `Info` 改成要求 TrackFields、
+  `micromark-util-types@1.1.0` 的 `ConstructName` 联合里没有 `'mark'`；作者是按 1.2.x 时代的类型写的），
+  而 `skipLibCheck` **管不到 `.ts`**（它只跳 `.d.ts`）。四种办法里三种是死路，都实测过：
+  ① 改 node_modules（不持久）；② pnpm patch（要动 lockfile）；
+  ③ **ambient `declare module`——实测无效**：文件解析成功时根本轮不到 ambient
+  （用 `--listFilesOnly` 看到 `index.ts` 仍在程序里，随后删掉了那份 `.d.ts`）；
+  ④ `paths` 指到 `index.js` 或目录 —— 同样被 `.js→.ts` 替代规则带回 `index.ts`。
+  **最终修法**：tsconfig `paths` 把裸包名映射到包内**编译成品 `index.d.ts`**
+  （`paths` 的查找**先于** node_modules，且字面 `.d.ts` 目标不会被替代规则带走），
+  运行时导入统一收拢到 `components/Markdown/mdastUtilMark.ts` 这个 ESM 再导出漏斗，
+  `extraSyntax.ts` 只 import 漏斗。⚠️ 两个坑：
+  **别改成 `require("mdast-util-mark/index.js")` 中转** —— 该包是 `"type": "module"`，
+  Next dev 会直接拒绝（"ESM packages need to be imported"），前台当场 500
+  （本轮真的 500 了约 6 分钟，恢复后所有路径复验 200）；
+  也**别把 `paths` 指到 `.d.ts` 却不做漏斗** —— Next 会把 tsconfig paths 镜像成 webpack alias，
+  那样会把一个声明文件当成空运行时模块打进去，`==高亮==` 直接失效。
+  实测 webpack 的 TsconfigPathsPlugin **没有**把裸导入劫持到 `.d.ts`：
+  新编译出的 chunk 里是真实的 `index.js` 函数体（`enterMark`），页面 200。
+  新 spec `__tests__/mdastUtilMarkTypes.spec.ts`（6 例）钉住：漏斗导出与真包运行时对象**引用相等**、
+  `remarkMark` 真正消费的那几个字段、版本仍是 1.0.0、**tsconfig 的 paths 条目还在**
+  （删掉它会静默把 `index.ts` 问题带回来）、以及官方 `index.d.ts` 的值导出面与漏斗一致。
+  ⚠️ 升级这个包时必须重核官方 `index.d.ts` 并跑一次 `next build` 确认别名行为没变。
 - 其余约 30 个都在 spec 里：mock 对象缺字段、推断类型过窄、TS 5 拒绝的强转。
   修法是**把 mock 与类型写诚实**（补字段、用 `satisfies`、加真的类型守卫），
   **不许**用 `any` / `@ts-ignore` / `@ts-expect-error` / 放宽 `exclude` 压掉 ——
@@ -4322,7 +4342,31 @@ admin 的升级是一个独立项目：umi 3 → 4、antd 4 → 6、React 17 →
   `utils/mermaidTheme.ts` 把结构化参数如实收窄成 `Node & {…}` 并去掉 `as Node` 强转
   （生产上唯一的调用方传的就是 bytemd 的真实 `markdownBody`，收窄只是把运行时一直成立的事实写出来）。
 
-**验证**：server 与 website 的 `tsc --noEmit` 在**全新 tsBuildInfoFile** 下都是 **0 错误**；
+**@types/node 18 → 24 把一批"松类型"收紧了**（这三类以后还会再遇到）：
+
+- `fs.WriteStream` 的事件表变成强类型（`'drain'` 的监听器是 `() => void`）⇒ 不能直接把 Promise 的
+  `resolve`（`(value: unknown) => void`）传进去，包一层 `() => resolve()`。
+- `ReturnType<typeof setTimeout>` 在**同时装了 @types/node 的前端项目**里会选中 **`NodeJS.Timeout`**，
+  而浏览器里的 `window.setTimeout` 返回的是 `number` ⇒ 纯浏览器调度器应按事实写 `number`
+  （`components/gaAnalysis/load.ts` 改了类型源头，spec 里两处 `as unknown as` / `as number` 强转随之删掉）。
+- lib.dom 把 `requestIdleCallback` 声明成 **Window 必有成员** ⇒ `"requestIdleCallback" in window`
+  的 else 分支被收窄成 **`never`**，可老浏览器（Safari < 16.4）确实没有它、`setTimeout` 回退必须保留。
+  修法是先取一个**不参与收窄的别名**（`const win = window;`）再判断，运行时零变化。
+
+⚠️ **一条长期耦合要知道**：为了修 TS6307，website 的 `include` 里现在列着 5 个 **server** 源文件
+（`articleExcerpt` / `frontMatter` / `coverFromContent` / `transferRemoteImages` / `markdownExport`.ts）
+与 admin 的 `relativeTime.js`。这意味着**这 5 个 server 文件从此也要在 website 的 `target: es5` 下干净**
+（`next build` 同样会查）—— **别在里面写 Set/Map 的展开或 `for..of` 迭代器**，要用 `Array.from()`
+（`transferRemoteImages.collectSiteHosts` 已经这么改并留了注释；server 自己的 es2017 产物语义不变）。
+`relativeTime.js` 只是被"列进来"，没有开 `checkJs`，所以不检查。
+
+**验证**：server 与 website 的 `tsc --noEmit` 在**全新 tsBuildInfoFile** 下都是 **0 错误**
+（顺带：TS 5.9 已经能正常解析家目录那份 `bun-types` 了 —— §3.6 说的 115 个语法错误是 **TS 4.9 特有**的症状；
+`tsconfig.dev.json` 仍然保留，因为 dev 栈与两条 typecheck 命令都引用它，typeRoots 限制本身无害）；
+⚠️ 本轮**没有在开发机上单独跑 `next build`**（`.next` 被 :3001 的 dev server 占着，
+在原地构建会把 dev 打成 500，见 §7.23），但**随后的完整镜像构建里 `next build` 跑过并通过**，
+用该镜像起真栈后 `/`、`/admin`、`/api/public/meta`、`/robots.txt`、waline 评论接口全部 200、
+容器内 sharp 加载正常 —— 也就是"paths 映射会不会影响生产构建"这个疑问已经由镜像构建回答过了；
 server jest **942 用例 / 941 绿 + 1 个既有的 watermark 离线字体用例**
 （`markdownExport.spec.ts` 在全量并行时抖了一次，单独跑 28/28、重跑全量也过 ——
 与 watermark 同一类负载抖动，别当成回归）；website vitest **69 文件 / 684**（+1 文件 +5 用例）；
@@ -4336,12 +4380,21 @@ admin **347**；脚本 **22 文件 / 1110**。
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 938 用例：**937 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例，见 §2.1；负载高时可能 2 个失败，单独跑 5/5 绿） |
-| website `vitest run` | 69 文件 / 684 用例全绿 |
-| admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
+| website `vitest run` | 69 文件 / 685 用例全绿 |
+| admin `node --test tests/unit` | 87 套件 / 347 用例全绿（⚠️ Node 24 换了 `node --test` 的默认 reporter，要 `--test-reporter=tap` 才有 `# tests` 汇总行） |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
+
+**类型检查也要跑**（两条都必须 0 错误，见 §7.51）：
+
+```bash
+(cd packages/server  && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit)
+(cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json)
+# ⚠️ 刚升过编译器版本要摸底时，必须加 --tsBuildInfoFile /tmp/x.tsbuildinfo 跑一份全新缓存：
+#    incremental 会回放旧诊断，本轮就这样把 server 的 7 个错看成 2 个（§7.51）。
+```
 
 ---
 
