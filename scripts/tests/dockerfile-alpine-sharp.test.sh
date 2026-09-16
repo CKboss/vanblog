@@ -6,6 +6,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DOCKERFILE="${ROOT}/Dockerfile"
 WEBSITE_PKG="${ROOT}/packages/website/package.json"
+SERVER_PKG="${ROOT}/packages/server/package.json"
 LOCKFILE="${ROOT}/pnpm-lock.yaml"
 
 PASS=0
@@ -122,10 +123,37 @@ if env_at < 0 or install_at < 0 or env_at > install_at:
 PY
 
 assert_file_not_contains "${DOCKERFILE}" "pnpm@latest" "Dockerfile does not activate floating pnpm@latest"
-assert_file_contains "${WEBSITE_PKG}" '"sharp": "0.32.6"' "website pins sharp 0.32.6 (coerces Alpine musl 1.2.4_git*)"
+# ── sharp 的版本约定（2026-09 起）──────────────────────────────────────────
+# #413 的老修法是"把 sharp 钉死在 0.32.6"，因为那一版的安装脚本里有人给 musl 版本号
+# （形如 1.2.4_git20230717，不是合法 semver）加了 semverCoerce 兜底。
+# sharp 0.33 起**安装脚本整个没了**：预编译二进制改成 npm 的 optionalDependencies
+# （@img/sharp-<平台> + @img/sharp-libvips-<平台>），装包时不下载 libvips、不跑脚本，
+# 于是那条崩溃路径结构性消失，也就不需要再靠钉版本绕开它（代价是 0.32 那一串
+# libvips/libheif CVE 只能干看着）。所以现在钉的是"必须 >= 0.33"而不是"必须 == 0.32.6"。
+SHARP_TOO_OLD="$(python3 - "${WEBSITE_PKG}" "${SERVER_PKG}" <<'SHARPPY'
+import json, re, sys
+bad = []
+for path in sys.argv[1:]:
+    spec = json.load(open(path, encoding="utf-8"))["dependencies"].get("sharp", "")
+    nums = [int(x) for x in re.findall(r"\d+", spec)[:2]] + [0, 0]
+    if (nums[0], nums[1]) < (0, 33):
+        bad.append("%s -> %s" % (path, spec))
+print(",".join(bad))
+SHARPPY
+)"
+if [[ -z "${SHARP_TOO_OLD}" ]]; then
+  pass "website 与 server 声明的 sharp 都 >= 0.33（预编译走 optionalDependencies，不再有会崩的安装脚本）"
+else
+  fail "sharp 低于 0.33，会带回 #413 那个安装脚本：${SHARP_TOO_OLD}"
+fi
+assert_file_not_contains "${WEBSITE_PKG}" '"sharp": "0.32.6"' "website 不再钉死 0.32.6（那版带会在 Alpine 崩的安装脚本）"
 assert_file_not_contains "${WEBSITE_PKG}" '"sharp": "^0.31.' "website no longer depends on sharp 0.31"
-assert_file_contains "${LOCKFILE}" "/sharp@0.32.6:" "lockfile resolves sharp 0.32.6"
-assert_file_not_contains "${LOCKFILE}" "/sharp@0.31.3:" "lockfile no longer pins sharp 0.31.3"
+assert_file_not_contains "${LOCKFILE}" "/sharp@0.31.3" "lockfile no longer pins sharp 0.31.3"
+assert_file_not_contains "${LOCKFILE}" "/sharp@0.32." "lockfile 里不再有 0.32.x"
+assert_file_contains "${LOCKFILE}" "/sharp@0.3" "lockfile resolves a sharp 0.3x"
+# Alpine 运行镜像靠这两个 optionalDependency 拿到 musl 预编译产物（不再从 GitHub 下 libvips）
+assert_file_contains "${LOCKFILE}" "@img/sharp-linuxmusl-x64" "lockfile 里有 musl 版 sharp 预编译包（Alpine 运行镜像靠它）"
+assert_file_contains "${LOCKFILE}" "@img/sharp-libvips-linuxmusl-x64" "lockfile 里有 musl 版 libvips 预编译包"
 
 # runner needs musl compat for Next/sharp native binaries copied from the builder.
 runner_STAGE="$(awk '

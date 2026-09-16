@@ -6,7 +6,10 @@
 # **没有直接上 22/24**，因为两条硬约束：
 #   1. Node 23 移除了 `util.isObject`，而 @nestjs/cli 9 还在用它 →
 #      Node 24 上 `nest build` 直接崩（本机开发环境就是因此固定在 node20，见 AGENTS §3.6）。
-#   2. sharp 0.32.6 的预编译二进制只覆盖到 Node 20（NODE_MODULE_VERSION 115）；
+#   2. ~~sharp 0.32.6 的预编译二进制只覆盖到 Node 20（NODE_MODULE_VERSION 115）~~
+#      **这条限制已经解除**：sharp 现在是 0.35.x，预编译包按平台发（@img/sharp-<平台>），
+#      Node 22 的 ABI 有对应产物。升 22 剩下的只是"把 5 个 stage 的基础镜像一起换 + 全量重验"，
+#      与 sharp 无关了。
 #      Node 22 是 127 → 没有 prebuild，而 runner 阶段没装 vips-dev，
 #      图片处理会在运行时加载失败。要升 22 必须同时把 sharp 升到 0.33+。
 # Node 20 这一档是**本机开发环境验证过的**（node v20.19.5：server 610 用例、
@@ -159,6 +162,15 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
 #    一是 apk 拉 gcc 这种大包在本地构建时反复静默卡死，二是既然 sharp 有 musl 预编译包，
 #    就没必要在镜像里现编。真编不了的时候报错也比卡二十分钟强。
 RUN apk add --no-cache libc6-compat
+# ⚠️ 下面这组 sharp 预编译源的 ARG/ENV 从 **sharp 0.33 起已经不起作用**（现在是 0.35.x）：
+#    0.33 之前 sharp 有 install 脚本，会按 npm_config_sharp_binary_host / _libvips_binary_host
+#    去下载 libvips 的 tar.gz；0.33 起预编译二进制改成 npm 的 optionalDependencies
+#    （@img/sharp-linuxmusl-x64 + @img/sharp-libvips-linuxmusl-x64），装包时不下载、不跑脚本，
+#    只认 registry。所以这些 ENV 现在只是**无害的历史遗留**：留着是为了不打断
+#    vanblog.sh / build-image-local.sh / docs 里那条已经公开的环境变量链路
+#    （VANBLOG_SHARP_DIST_HOST / SHARP_DIST_HOST），真要清理得连脚本、文档、测试一起改。
+#    历史背景（#413）：Alpine 上 musl 版本号形如 1.2.4_git20230717，不是合法 semver，
+#    0.32 的安装脚本拿它跑 semver.lt 会抛 Invalid Version 把构建搞挂 —— 这条路径随安装脚本一起消失了。
 ARG VAN_BLOG_SHARP_DIST_HOST
 # sharp 走预编译二进制（含 musl 版），不用在镜像里编译 → 不需要 vips-dev/gcc。
 # ⚠️ 必须用 **ENV**，不要指望 npmrc：sharp 的 install/libvips.js 直接读
@@ -249,6 +261,15 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
 # 去掉 vips-dev/fftw-dev：sharp 用 musl 预编译包（见上面的 sharp_binary_host），
 # 不再需要从源码编；保留 python3/make/g++ 给其它可能要编译的原生模块兜底。
 RUN apk add --no-cache python3 make g++ libc6-compat
+# ⚠️ 下面这组 sharp 预编译源的 ARG/ENV 从 **sharp 0.33 起已经不起作用**（现在是 0.35.x）：
+#    0.33 之前 sharp 有 install 脚本，会按 npm_config_sharp_binary_host / _libvips_binary_host
+#    去下载 libvips 的 tar.gz；0.33 起预编译二进制改成 npm 的 optionalDependencies
+#    （@img/sharp-linuxmusl-x64 + @img/sharp-libvips-linuxmusl-x64），装包时不下载、不跑脚本，
+#    只认 registry。所以这些 ENV 现在只是**无害的历史遗留**：留着是为了不打断
+#    vanblog.sh / build-image-local.sh / docs 里那条已经公开的环境变量链路
+#    （VANBLOG_SHARP_DIST_HOST / SHARP_DIST_HOST），真要清理得连脚本、文档、测试一起改。
+#    历史背景（#413）：Alpine 上 musl 版本号形如 1.2.4_git20230717，不是合法 semver，
+#    0.32 的安装脚本拿它跑 semver.lt 会抛 Invalid Version 把构建搞挂 —— 这条路径随安装脚本一起消失了。
 ARG VAN_BLOG_SHARP_DIST_HOST
 # sharp 走预编译二进制（含 musl 版），不用在镜像里编译 → 不需要 vips-dev/gcc。
 # ⚠️ 必须用 **ENV**，不要指望 npmrc：sharp 的 install/libvips.js 直接读

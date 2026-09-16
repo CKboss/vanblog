@@ -43,7 +43,6 @@
     "@nestjs/platform-express": "^9.4.3",
     "@nestjs/schedule": "^2.2.3",
     "@nestjs/swagger": "^6.3.0",
-    "@types/line-reader": "^0.0.34",
     "@types/request-ip": "^0.0.37",
     "axios": "^1.16.0",
     "cheerio": "1.0.0-rc.12",
@@ -56,10 +55,8 @@
     "jimp": "^0.22.10",
     "js-base64": "^3.7.5",
     "js-sha256": "^0.9.0",
-    "line-reader": "^0.4.0",
     "lodash": "^4.17.21",
     "markdown-it": "^13.0.2",
-    "markdown-it-katex": "^2.0.3",
     "markdown-it-task-lists": "^2.1.1",
     "mongodb": "^5.9.1",
     "mongoose": "^7.8.9",
@@ -73,10 +70,11 @@
     "reflect-metadata": "^0.1.13",
     "rimraf": "^4.4.1",
     "rxjs": "^7.8.1",
-    "sharp": "0.32.6",
+    "sharp": "^0.35.4",
     "sitemap": "^7.1.1",
     "swagger-ui-express": "^4.6.3",
-    "yaml": "^2.3.4"
+    "yaml": "^2.3.4",
+    "@traptitech/markdown-it-katex": "^3.0.30"
   },
   "devDependencies": {
     "@nestjs/cli": "^9.5.0",

@@ -3,7 +3,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js';
 import taskLists from 'markdown-it-task-lists';
-import mk from 'markdown-it-katex';
+// ⚠️ 以前是 `markdown-it-katex`：那个包 2016 年就停止维护（2.0.3 至今仍是"最新"），
+// 带着一个**没有修复版本**的 XSS 公告，而且内部钉的是 katex 0.6。
+// `@traptitech/markdown-it-katex` 是社区维护的等价替代（同样的默认导出、同样的
+// markdown-it 插件签名，内部用 katex 0.16），前台/后台/RSS 三处的 katex 版本就此对齐。
+// 渲染出来的数学标记会从 katex 0.6 变成 0.16（class 仍是 .katex，样式表前台已经在加载）。
+import mk from '@traptitech/markdown-it-katex';
 
 // x86asm ships without aliases in highlight.js 11; users write ```asm / ```nasm.
 if (hljs.getLanguage('x86asm')) {
