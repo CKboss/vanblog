@@ -353,7 +353,12 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
         > /etc/apk/repositories; \
       echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
     fi
-RUN apk add --no-cache python3 make g++
+# ⚠️ 必须带 py3-setuptools：@waline/vercel 硬依赖 better-sqlite3，而它在 musl 上没有预编译包
+#    （只有 glibc 的 linux-x64），所以每次都要现场 node-gyp 编译。Alpine 3.20+ 自带的是
+#    Python 3.12，**distutils 已被移除**，而 corepack 里 pnpm 8 带的 node-gyp 9.4.1 仍然
+#    `from distutils.version import StrictVersion` ⇒ 编译必挂（ModuleNotFoundError: distutils），
+#    整个 stage 的 `pnpm i` 直接 exit 1。setuptools 会把 distutils 补回来。
+RUN apk add --no-cache python3 py3-setuptools make g++
 WORKDIR /app/waline
 COPY ./packages/waline/ ./
 ARG VAN_BLOG_NODE_DIST_URL

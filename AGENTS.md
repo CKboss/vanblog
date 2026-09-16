@@ -3943,14 +3943,93 @@ picgo.provider、clusterRole、clusterBootstrap、website.provider.respawn、aud
   ~888,832 B —— **低于本轮改动前的 937,984 B** —— 并少两次写放大。本轮没做，
   因为要先把所有 `visits` 查询 explain 一遍。
 
+### 7.47 依赖升级第二批：sharp 0.35、express 4.21、waline 1.41、katex 插件换掉维护者已弃坑的那个
+
+第一批（§7.43 之后那次）把"能进镜像"的前提做好了（server stage 按 lockfile 安装），
+这一批才真的把版本抬上去。**每条都读了装好的 `package.json` 确认解析结果，不是看范围猜的。**
+
+| 包 | 变化 | 装上的版本 | 为什么 |
+| --- | --- | --- | --- |
+| sharp（server + website） | `0.32.6` → `^0.35.4` | **0.35.4** | 0.32.6 那串 libvips/libheif CVE；顺带解开 Node 20 的锁 |
+| markdown-it-katex | → `@traptitech/markdown-it-katex` | **3.6.0** | 原包 2016 年起无人维护、XSS **无修复版本**、内部钉 katex 0.6 |
+| express | `^4.18.2` → override | **4.21.2** | 一串中高危；连带 body-parser/qs/send |
+| body-parser | override | **1.20.3+** | CVE-2024-45590，**每个 urlencoded POST（含登录）都过它** |
+| send | override | **0.19.x** | 模板注入 XSS |
+| @waline/vercel | `1.31.7` → `1.41.6` | **1.41.6** | 拖进来的 koa 有 **critical ReDoS**，打在**匿名**评论接口上 |
+| mermaid | `10.6.1` → `10.9.3` | **10.9.3** | 图渲染里的 XSS |
+| katex | `^0.16.9` → `^0.16.21` | **0.16.47** | mXSS |
+| dompurify | override（**按大版本分别钉**） | **3.4.15 / 2.5.9** | mXSS + 原型污染篡改 |
+| prismjs | override | **1.30.0** | DOM clobbering |
+| line-reader / @types/line-reader | **删除** | — | `searchLog` 改成尾部限界读取之后没人用了 |
+
+⚠️ **override 要按版本作用域写，别一把梭**：`express@4.18.2 → 4.21.2`、
+`body-parser@1.20.2 → ^1.20.3`、`send@0.18.0 → ^0.19.0`、`dompurify@3 → ^3.2.4`、
+`dompurify@2 → ^2.5.4`。仓库里同时存在 express 4.17.1（swagger-ui-express 带的）、
+send 0.17.1、qs 6.5.3/6.7.0（那几个已经死掉的 request 适配器带的）——
+全局 override 会把这些一起拽走，只有改动量没有安全收益。
+dompurify 有消费者钉 `^2`，所以 2.x 在**它自己那条线里**升到 2.5.9，不强推到 3。
+
+**sharp 0.33+ 是结构性变化，不是普通升级**（这条最容易踩）：
+0.33 之前 sharp 有 install 脚本，会去 GitHub（或 `npm_config_sharp_binary_host` 指的镜像）
+下载 libvips 的 tar.gz；**0.33 起预编译二进制改成 npm 的 optionalDependencies**
+（`@img/sharp-<平台>` + `@img/sharp-libvips-<平台>`），装包时不下载、不跑任何脚本，只认 registry。
+两个后果：
+
+1. **#413 那类故障从此不可能发生**，所以"把 sharp 钉死在 0.32.6"这个老修法可以退休了。
+   #413 的原始故障是 Alpine 上 detectLibc 读到的 musl 版本号形如 `1.2.4_git20230717`
+   （不是合法 semver），0.32 的安装脚本拿它跑 `semver.lt` 直接抛 `Invalid Version`，镜像构建挂掉。
+   实测新的包：`scripts` 里**没有** install/preinstall/postinstall，`install/libvips.js` 与
+   `lib/libvips.js` **都不存在**，`@img/sharp-linuxmusl-x64` 与 `@img/sharp-libvips-linuxmusl-x64`
+   都在 optionalDependencies 里（Alpine 运行镜像靠这两个）。
+   ⚠️ 平台预编译包是 **optional** 依赖：装不上时 npm/pnpm 只 warn 不 fail，
+   **要到第一次 `require('sharp')` 才炸** —— 所以测试里必须真跑一次编解码，光断言版本号不够。
+2. **Dockerfile 里那套 `VAN_BLOG_SHARP_DIST_HOST` / `npm_config_sharp_*_host` 从此失效**（inert）。
+   故意**没有删**：它牵连 `scripts/vanblog.sh`、`scripts/build-image-local.sh`、`dev-env.sh`、
+   三份文档和两个测试文件里已经公开的变量名，删它是一次独立的、要连文档一起改的清理，
+   不该和依赖升级挤在同一个提交里。Dockerfile 里已就地注明"从 0.33 起不起作用"。
+   顺带：**升 Node 22 的最后一个技术障碍没了**（0.32.6 的 prebuild 只到 NODE_MODULE_VERSION 115），
+   现在纯粹是"要不要把 5 个 stage 的基础镜像一起换 + 全量重验"的决策。
+
+**katex 插件换包的连带影响**：`@traptitech/markdown-it-katex` 是等价替代
+（同样的默认导出、同样的 markdown-it 插件签名），内部用 katex 0.16 ⇒
+**服务端渲染出的数学标记从 katex 0.6 变成 0.16**（class 仍是 `.katex`，
+前台/RSS 早就在加载 0.16 的样式表，所以以前是"0.6 的标记配 0.16 的样式"这种错配）。
+RSS 里的公式 HTML 会变，属于**有意的可见变化**；`markdown.provider` 与 `markdownExport`
+的用例一字未改仍然通过。
+
+⚠️ **waline stage 会因为 Python 3.12 挂掉**（升 @waline/vercel 时撞到，与本次改动无关但被它触发）：
+`@waline/vercel` **硬依赖** `better-sqlite3`，而 better-sqlite3 在 musl 上**没有预编译包**
+（只有 glibc 的 linux-x64），每次都要现场 node-gyp 编译；Alpine 3.20+ 自带 Python 3.12，
+**distutils 已被移除**，而 corepack 里 pnpm 8 带的 node-gyp 9.4.1 仍然
+`from distutils.version import StrictVersion` ⇒ `ModuleNotFoundError: No module named 'distutils'`
+⇒ 整个 stage 的 `pnpm i` exit 1、镜像构建失败。
+修法是在那个 stage 的 apk 里加 **`py3-setuptools`**（setuptools 会把 distutils 补回来）。
+⚠️ 同样的 distutils 报错在 admin stage 的 tree-sitter 上也会出现，但那里是**幻影依赖**、
+编译失败不影响构建结果，所以一直没暴露 —— **看到 gyp 报 distutils 先分清是不是致命路径**。
+
+**测试的连带更新**（两处都是"钉住旧世界"的断言，改成钉新世界而不是删掉）：
+`packages/website/__tests__/sharpAlpineInstall.spec.ts` 从 4 条变 6 条 ——
+钉"两个包的 sharp 都 >= 0.33"、"没有 install 脚本"、"`install/libvips.js` 不存在"、
+"musl 预编译包在 optionalDependencies 里"、"lockfile 里没有 0.31.3/0.32.x"、
+以及**真跑一次 webp 编解码**；`scripts/tests/dockerfile-alpine-sharp.test.sh` 同样换成
+">= 0.33 + musl 预编译包在 lockfile 里"（23 → 27 条断言）。
+⚠️ 升级后旧 spec 报的**不是版本不匹配**，而是
+`Package subpath './package.json' is not defined by "exports"` —— sharp 0.33+ 的 `exports` 只导出 `"."`，
+`require.resolve('sharp/package.json')` 会被 Node 直接拒掉。读已安装包的 package.json 要用**文件路径**，
+不要走 `require.resolve` 的子路径。
+
+**实测**：server 885（883 绿 + 2 个负载敏感的 watermark 离线字体用例；`markdownExport.spec.ts`
+同样会在全量并行时抖，单独跑 35/35 全绿）、website **67 文件 / 675**、admin **347**、
+脚本 **22 文件 / 1109**；本机 sharp 0.35.4 编解码往返正常；dev 栈重装后三个端口全 200、tsc 干净。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 885 用例：**884 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 的字体用例，见 §2.1）。⚠️ 负载高时可能是 883 绿 + 2 失败 —— 那个套件的两个 `Jimp.loadFont` 用例分别要 12.4s / 19.5s，超时线 20s，**单独跑 `jest src/utils/watermark.spec.ts` 时 5/5 全绿**。看到 2 个失败先确认是不是都在 watermark.spec.ts，别当成自己改坏了 |
-| website `vitest run` | 67 文件 / 672 用例全绿 |
+| website `vitest run` | 67 文件 / 675 用例全绿 |
 | admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1106 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
