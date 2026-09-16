@@ -51,7 +51,9 @@ const AboutPage = (props: AboutPageProps) => {
     } else {
       return `${props.about.content}${getDonateTableMarkdown(props.donates)}`;
     }
-  }, [props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[props] 等于没有 memo
+    // （捐赠表拼接 + dayjs 格式化会在每次重渲染时白跑一遍）
+  }, [props.donates, props.showDonateInfo, props.about]);
 
   return (
     <Layout

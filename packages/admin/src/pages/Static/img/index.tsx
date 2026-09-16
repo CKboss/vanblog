@@ -209,12 +209,15 @@ const ImgPage = () => {
     try {
       setLoading(true);
       await deleteImgBySign(sign);
-      setLoading(false);
       message.success(
         `删除成功！${target?.storageType == 'picgo' ? '但是 OSS 存储中并未删除哦' : '已彻底删除'}`,
       );
     } catch (err) {
       message.error('删除失败！');
+    } finally {
+      // ⚠️ 以前 setLoading(false) 只写在 try 的成功路径上：删除一失败，
+      // 整页的 Spin 就永远转下去（只能刷新页面），错误提示还被遮罩盖住。
+      setLoading(false);
     }
     fetchData();
   }

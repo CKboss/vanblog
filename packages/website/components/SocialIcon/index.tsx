@@ -21,7 +21,8 @@ export default function (props: { item: SocialItem }) {
       return props.item.value;
     }
     return "";
-  }, [theme, props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[theme, props] 等于没有 memo
+  }, [theme, props.item]);
   const arrowColor = useMemo(() => {
     if (theme.includes("dark")) {
       return "#1b1c1f";

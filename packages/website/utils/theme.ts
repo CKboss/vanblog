@@ -108,3 +108,20 @@ export const applyTheme = (
  * can still receive the admin「首次访问默认主题」value.
  */
 export const THEME_INIT_SCRIPT = `(function(){try{var stored=null;try{stored=localStorage.getItem("theme")}catch(e){}var theme="auto";if(stored==="dark"||stored==="light"){theme=stored}if(theme==="auto"){var prefersDark=false,prefersLight=false;try{prefersDark=window.matchMedia("(prefers-color-scheme: dark)").matches;prefersLight=window.matchMedia("(prefers-color-scheme: light)").matches}catch(e){}if(prefersDark){theme="dark"}else if(prefersLight){theme="light"}else{var hour=(new Date()).getHours();theme=(hour>18||hour<8)?"dark":"light"}}var root=document.documentElement;if(theme.indexOf("light")!==-1){root.classList.add("light");root.classList.remove("dark")}else{root.classList.add("dark");root.classList.remove("light")}}catch(e){}})();`;
+
+/**
+ * 「自动模式」的轮询间隔。
+ *
+ * 自动主题 = 跟着系统 prefers-color-scheme 或本地时间（18 点～8 点算夜间）走。
+ * 页面开着不动时靠这个定时器在边界处把 <html> 的 class 翻过去。
+ */
+export const AUTO_THEME_POLL_MS = 10000;
+
+/**
+ * 传进来的主题是不是「自动」家族的（auto / auto-light / auto-dark）。
+ * ThemeContext 里存的是**解析后**的值（getTheme("auto") → "auto-light"），
+ * 所以判断用 includes 而不是 ===。
+ */
+export function isAutoResolvedTheme(theme: unknown): boolean {
+  return typeof theme === "string" && theme.includes("auto");
+}

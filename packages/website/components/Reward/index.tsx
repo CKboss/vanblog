@@ -25,7 +25,8 @@ export default function (props: {
       r.push(props.weChatPay);
     }
     return r;
-  }, [theme, props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[theme, props] 等于没有 memo
+  }, [theme, props.aliPay, props.aliPayDark, props.weChatPay, props.weChatPayDark]);
 
   return (
     <div className="mt-8">

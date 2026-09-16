@@ -125,9 +125,15 @@ describe("markdown HTML sanitization (#490)", () => {
 
 describe("public Viewer and admin preview stay on the same HTML path (#490)", () => {
   it("public Markdown Viewer passes allowDangerousHtml and the shared sanitizer", () => {
-    // 渲染外壳（Base / Rich 共用）负责 allowDangerousHtml 与 sanitize
+    // 渲染外壳（Base / Rich 共用）负责 allowDangerousHtml 与 sanitize。
+    // remarkRehype 选项已提成模块级常量（内联对象字面量会让下游 useMemo
+    // 每次重渲染都 miss、把整篇文章重新 processSync），内容断言照旧。
     const view = readSrc("components/Markdown/MarkdownView.tsx");
-    expect(view).toMatch(/remarkRehype=\{\{\s*allowDangerousHtml:\s*true/);
+    expect(view).toMatch(
+      /const REMARK_REHYPE_OPTIONS = \{\s*allowDangerousHtml:\s*true,/,
+    );
+    expect(view).toMatch(/handlers: defListHastHandlers/);
+    expect(view).toMatch(/remarkRehype=\{REMARK_REHYPE_OPTIONS\}/);
     expect(view).toMatch(/sanitize={sanitize}/);
     expect(view).toMatch(/sanitizeMarkdownSchema/);
     // rawHTML 插件在两个变体里都要有

@@ -22,7 +22,7 @@ import { handleEditorHotkey } from '@/services/van-blog/editableKeyboard';
 import { DownOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-layout';
 import { Button, Dropdown, Input, Menu, message, Modal, Space, Tag, Upload } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { history } from 'umi';
 import moment from 'moment';
 
@@ -46,16 +46,24 @@ export default function () {
   const type = history.location.query?.type || 'article';
   const getCacheKey = () => `${type}-${history.location.query?.id || '0'}`;
 
+  // Ctrl+S 热键：把最新的 handleSave 放进 ref，window 监听只注册一次。
+  // 以前的依赖是 [currObj, value, type] —— value 每敲一个字符就变，
+  // 等于**每敲一键都 removeEventListener + addEventListener 一轮**（写作时持续抖动）。
+  const handleSaveRef = useRef(null);
   useEffect(() => {
+    const onKeyDown = (ev) => {
+      // Ctrl/Cmd+S saves. Edit keys reach title/form fields (#233, #390, #470).
+      handleEditorHotkey(ev, () => {
+        if (typeof handleSaveRef.current === 'function') {
+          handleSaveRef.current();
+        }
+      });
+    };
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [currObj, value, type]);
-  const onKeyDown = (ev) => {
-    // Ctrl/Cmd+S saves. Edit keys reach title/form fields (#233, #390, #470).
-    handleEditorHotkey(ev, handleSave);
-  };
+  }, []);
 
   const typeMap = {
     article: '文章',
@@ -261,6 +269,8 @@ export default function () {
       onOk: saveFn,
     });
   };
+  // 每次渲染都把最新的 handleSave 放进 ref（热键监听器只注册一次，见文件顶部）
+  handleSaveRef.current = handleSave;
   const handleExport = async () => {
     // 关于页没有文章 id，走 raw：直接把当前编辑器内容交给服务端打包
     if (type == 'about') {

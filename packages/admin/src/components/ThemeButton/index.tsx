@@ -3,23 +3,20 @@ import { useModel } from 'umi';
 import { beforeSwitchTheme } from '../../services/van-blog/theme';
 import style from './index.less';
 export default function (props: { showText: boolean }) {
-  const { current } = useRef<any>({ hasInit: false });
   const { current: currentTimer } = useRef<any>({ timer: null });
   const { initialState, setInitialState } = useModel('@@initialState');
   const setTheme = (newTheme: 'auto' | 'light' | 'dark') => {
-    clearTimer();
-    if (newTheme == 'auto') {
-      setTimer();
-    }
-    const newSettings = {
-      ...initialState?.settings,
-      navTheme: beforeSwitchTheme(newTheme),
-    };
-    setInitialState({
-      ...initialState,
+    const navTheme = beforeSwitchTheme(newTheme);
+    // 函数式更新：这个函数也会在 10s 轮询定时器里被调用，闭包里的 initialState
+    // 可能是很多轮渲染前的旧快照，直接展开会把并发更新的其它状态盖回去
+    setInitialState((prev: any) => ({
+      ...prev,
       theme: newTheme,
-      settings: newSettings,
-    });
+      settings: {
+        ...prev?.settings,
+        navTheme,
+      },
+    }));
   };
   const theme = useMemo(() => {
     return initialState?.theme || 'auto';
@@ -31,29 +28,26 @@ export default function (props: { showText: boolean }) {
     clearInterval(currentTimer.timer);
     currentTimer.timer = null;
   };
-  const setTimer = () => {
+  // 自动模式的定时轮询：与前台 website 的 ThemeButton 修的是同一个死功能 ——
+  // 旧实现的 effect 依赖里有 setTimer/clearTimer 这些**每次渲染都新建**的闭包，
+  // 于是每次重渲染 cleanup 都把 interval 清掉，而 body 被 hasInit 门闩挡住不重建：
+  // 「自动主题每 10s 重新评估（跟随系统深色/昼夜）」实际上从未生效，也没有任何报错。
+  // 现在定时器由这个只依赖 theme 值的 effect 独立管理。
+  useEffect(() => {
+    if (!String(theme).includes('auto')) {
+      clearTimer();
+      return undefined;
+    }
     clearTimer();
     currentTimer.timer = setInterval(() => {
-      // console.log('auto theme timer running');
       setTheme('auto');
     }, 10000);
-  };
-  useEffect(() => {
-    if (!current.hasInit) {
-      current.hasInit = true;
-      if (theme.includes('auto')) {
-        setTimer();
-      } else {
-        clearTimer();
-      }
-    }
     return () => {
       clearTimer();
     };
-  }, [current, clearTimer, theme, setTimer]);
+  }, [theme]);
 
   const handleSwitch = () => {
-    clearTimer();
     if (theme == 'light') {
       setTheme('dark');
     } else if (theme == 'dark') {

@@ -16,7 +16,7 @@ import { reportRequestError } from '@/services/van-blog/requestError';
 import { DownOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-layout';
 import { Alert, Button, Dropdown, Menu, message, Modal, Space, Spin, Tag, Tree } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { history } from 'umi';
 import PipelineModal from '../Pipeline/components/PipelineModal';
 import RunCodeModal from '../Pipeline/components/RunCodeModal';
@@ -40,6 +40,8 @@ export default function () {
   const path = history.location.query?.path;
   const id = history.location.query?.id;
   const isFolder = type == 'folder';
+  const menuTimerRef = useRef<any>(null);
+  const mountTimerRef = useRef<any>(null);
   const typeMap = {
     file: '单文件页面',
     folder: '多文件页面',
@@ -91,7 +93,7 @@ export default function () {
   };
 
   const onClickMenuChangeBtn = () => {
-    setTimeout(() => {
+    menuTimerRef.current = setTimeout(() => {
       updateEditorSize();
     }, 500);
   };
@@ -108,11 +110,18 @@ export default function () {
       if (menuBtnEl) {
         menuBtnEl.removeEventListener('click', onClickMenuChangeBtn);
       }
+      clearTimeout(menuTimerRef.current);
+      clearTimeout(mountTimerRef.current);
     };
   }, []);
 
   const updateEditorSize = () => {
     const el = document.querySelector('.ant-page-header');
+    if (!el) {
+      // 页头还没渲染出来（或已经卸载）：以前这里会对 null 调 getComputedStyle
+      // 直接抛 TypeError —— 在 resize 监听里抛，每拉一次窗口报一次
+      return;
+    }
     const fullWidthString = window.getComputedStyle(el).width;
     const fullWidth = parseInt(fullWidthString.replace('px', ''));
 
@@ -125,8 +134,16 @@ export default function () {
     setEditorHeight(`calc(100vh - ${HeaderHeight + 12}px)`);
   };
 
+  // Ctrl+S 保存的热键：把最新的 handleSave 放进 ref，监听器只注册一次。
+  // 以前的依赖是 [currObj, value, type] —— value 每敲一个字符就变，
+  // 等于**每敲一键都 removeEventListener + addEventListener 一轮**。
+  const handleSaveRef = useRef<any>(null);
   const onKeyDown = (ev) => {
-    handleEditorHotkey(ev, handleSave);
+    handleEditorHotkey(ev, () => {
+      if (typeof handleSaveRef.current === 'function') {
+        handleSaveRef.current();
+      }
+    });
   };
 
   useEffect(() => {
@@ -134,10 +151,10 @@ export default function () {
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [currObj, value, type]);
+  }, []);
 
   useEffect(() => {
-    setTimeout(() => {
+    mountTimerRef.current = setTimeout(() => {
       updateEditorSize();
     }, 300);
   }, []);
@@ -221,6 +238,8 @@ export default function () {
       setEditorLoading(false);
     }
   };
+  // 每次渲染都把最新的 handleSave 放进 ref（热键监听器只注册一次，见上）
+  handleSaveRef.current = handleSave;
 
   const actionMenu = (
     <Menu

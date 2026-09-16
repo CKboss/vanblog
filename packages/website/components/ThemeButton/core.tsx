@@ -1,5 +1,11 @@
-import { useContext, useLayoutEffect, useRef } from "react";
-import { applyTheme, getTheme, initTheme } from "../../utils/theme";
+import { useContext, useEffect, useLayoutEffect, useRef } from "react";
+import {
+  applyTheme,
+  getTheme,
+  initTheme,
+  isAutoResolvedTheme,
+  AUTO_THEME_POLL_MS,
+} from "../../utils/theme";
 import { ThemeContext } from "../../utils/themeContext";
 import {
   HEADER_ACTION_LABELS,
@@ -12,26 +18,19 @@ export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
   const { theme, setTheme: setState } = useContext(ThemeContext);
   const setTheme = (newTheme: "auto" | "light" | "dark") => {
     // console.log(`[setTheme] ${newTheme}`);
-    clearTimer();
-    localStorage.setItem("theme", newTheme);
+    try {
+      localStorage.setItem("theme", newTheme);
+    } catch {
+      // 隐私模式 / 被禁用的 localStorage：主题只在本次会话里生效
+    }
     // 设置真实的主题，然后把真实的主题搞到 state 里。
     const realTheme = getTheme(newTheme);
     applyTheme(realTheme, "setTheme", true);
     setState(realTheme);
-    if (realTheme.includes("auto")) {
-      setTimer();
-    }
   };
   const clearTimer = () => {
     clearInterval(currentTimer.timer);
     currentTimer.timer = null;
-  };
-  const setTimer = () => {
-    clearTimer();
-    currentTimer.timer = setInterval(() => {
-      const realTheme = getTheme("auto");
-      applyTheme(realTheme, "autoThemeTimer", true);
-    }, 10000);
   };
   const getThemeTitleAuto = () => {
     if ((theme as any) == "auto") {
@@ -44,23 +43,51 @@ export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
     }
   };
 
+  // 初始化：整个组件生命周期只跑一次（以前这个 effect 的依赖里有 setTheme/props
+  // 这些"每次渲染都换新引用"的值，等于每次渲染都重跑一遍，只是被门闩挡住而已）
   useLayoutEffect(() => {
-    if (!current.hasInit) {
-      current.hasInit = true;
-      if (!localStorage.getItem("theme")) {
-        // 第一次用默认的
-        setTheme(props.defaultTheme);
-        clearTimer();
-      } else {
-        const iTheme = initTheme();
-        setTheme(iTheme);
-        clearTimer();
-      }
+    if (current.hasInit) {
+      return;
     }
+    current.hasInit = true;
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem("theme");
+    } catch {
+      stored = null;
+    }
+    if (!stored) {
+      // 第一次用默认的
+      setTheme(props.defaultTheme);
+    } else {
+      setTheme(initTheme());
+    }
+  }, []);
+
+  // 自动模式的定时轮询：主题在 auto 家族里就每 10s 重新解析一次（跟着系统
+  // prefers-color-scheme / 昼夜边界翻 <html> 的 class），否则不挂定时器。
+  //
+  // ⚠️ 修复的死功能：旧实现把 setTimer/clearTimer 塞在一个依赖
+  // [current, setTheme, props, currentTimer, theme] 的 effect 里 —— setTheme
+  // 每次渲染都是新引用，于是**每次重渲染都会先 cleanup 把 interval 清掉**，
+  // 而 body 被 hasInit 门闩挡住不会重建。结果是自动模式的轮询定时器
+  // 从来活不过下一次渲染（点完「自动」后 setState 立刻触发的重渲染就把它杀了），
+  // 且没有任何报错。现在定时器由这个只依赖 `theme` 值的 effect 独立管理。
+  useEffect(() => {
+    if (!isAutoResolvedTheme(theme)) {
+      clearTimer();
+      return undefined;
+    }
+    clearTimer();
+    currentTimer.timer = setInterval(() => {
+      const realTheme = getTheme("auto");
+      applyTheme(realTheme, "autoThemeTimer", true);
+    }, AUTO_THEME_POLL_MS);
     return () => {
-      clearInterval(currentTimer.timer);
+      clearTimer();
     };
-  }, [current, setTheme, props, currentTimer, theme]);
+  }, [theme]);
+
   const handleSwitch = () => {
     if (theme == "light") {
       setTheme("dark");

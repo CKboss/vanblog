@@ -27,13 +27,30 @@ try {
 export const useNum = (defaultNum, token) => {
   const key = `van-blog-admin-num-${token}`;
   // 获取 localstroge 的
-  const localData = window.localStorage.getItem(key) || defaultNum;
-  const [num, setNum] = useState(parseInt(localData));
+  // ⚠️ parseInt 必须做 NaN 守卫：localStorage 里的值可以被写坏（旧版本 bug、
+  // 手改、别的代码写入了非数字），NaN 会一路流进分页组件（pageSize=NaN）
+  // 和图表的条数选择器，症状是"每页 NaN 条"这种很难归因的界面。
+  let localData = defaultNum;
+  try {
+    localData = window.localStorage.getItem(key) || defaultNum;
+  } catch (err) {
+    localData = defaultNum; // 隐私模式 / 被禁用的 localStorage
+  }
+  const parsed = parseInt(localData, 10);
+  const [num, setNum] = useState(Number.isFinite(parsed) ? parsed : defaultNum);
   return [
     num,
     (newNum) => {
-      window.localStorage.setItem(key, newNum);
-      setNum(newNum);
+      const next = parseInt(newNum, 10);
+      if (!Number.isFinite(next)) {
+        return; // 不把 NaN 写进 state / storage
+      }
+      try {
+        window.localStorage.setItem(key, String(next));
+      } catch (err) {
+        // 存不进去只影响"下次打开还记得"，不影响本次
+      }
+      setNum(next);
     },
   ];
 };

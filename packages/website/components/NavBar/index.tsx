@@ -61,7 +61,9 @@ export default function (props: {
       return props.logoDark;
     }
     return props.logo;
-  }, [theme, props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[theme, props] 里的 props
+    // 会让 memo 每次重渲染都失效
+  }, [theme, props.logo, props.logoDark]);
   useEffect(() => {
     const el = document.querySelector("#nav");
     if (el && !headroom) {

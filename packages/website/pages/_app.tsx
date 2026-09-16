@@ -33,19 +33,38 @@ function MyApp({ Component, pageProps }: AppProps) {
   const router = useRouter();
   const reloadViewer = useCallback(
     async (reason: string) => {
-      const pathname = window.location.pathname;
-      if (window.localStorage.getItem("noViewer")) {
-        const { viewer, visited } = await getPageview(pathname)
-        setGlobalState({ ...globalState, viewer: viewer, visited: visited });
-        return;
-      } else {
+      // ⚠️ 三个加固：
+      // 1. noViewer 的判据与 components/PostViewer 对齐（=== "true"）：
+      //    以前这里是「任意非空值都算开」（noViewer="false" 也会被当成 true），
+      //    同一个开关在两处语义不一致，排查统计问题时会把人绕晕。
+      // 2. 整段包 try/catch：统计接口/隐私模式的 localStorage 抛错时，
+      //    以前是一次**没人处理的 promise rejection**（idle 回调里没人 await），
+      //    控制台只有一行栈、页脚统计静默停更。
+      // 3. setGlobalState 不再展开闭包里的旧 globalState（这个 useCallback 以前
+      //    依赖 globalState、每次数都会换引用，而 router.events 里注册的又是
+      //    **第一次渲染**的闭包 —— 展开的永远是初始值；两个字段本来就会被覆盖，
+      //    直接整体替换，语义相同且不再依赖闭包新鲜度）。
+      try {
+        const pathname = window.location.pathname;
+        let noViewer = false;
+        try {
+          noViewer = window.localStorage.getItem("noViewer") === "true";
+        } catch {
+          noViewer = false; // 隐私模式 / 被禁用的 localStorage
+        }
+        if (noViewer) {
+          const { viewer, visited } = await getPageview(pathname);
+          setGlobalState({ viewer, visited });
+          return;
+        }
         console.log("[更新访客]", reason, pathname);
         const { viewer, visited } = await updatePageview(pathname);
-        setGlobalState({ ...globalState, viewer: viewer, visited: visited });
+        setGlobalState({ viewer, visited });
+      } catch (err) {
+        console.warn("[访客统计] 更新失败", err);
       }
-
     },
-    [globalState, setGlobalState]
+    []
   );
   const handleRouteChange = (
     url: string,

@@ -4583,13 +4583,153 @@ Dockerfile 的 website stage 设了 `ENV isBuild=t`，而 `next.config.js` 把 `
 `vitest` **69 文件 / 686**（`perfBudget.spec.ts` 里那条钉 `swcMinify` 的断言随迁移更新）；
 dev 栈三端口 200、server watcher `Found 0 errors` 并在新依赖上重启成功。
 
+### 7.54 前台/后台「泄漏 · 复杂度 · 静默失败」这一轮（23 项，全部有测试钉住）
+
+三类问题并行审：**客户端无界增长与按导航泄漏** / **渲染与数据路径的算法复杂度** / **静默失败的逻辑缺陷**。
+基线变化：website vitest 69 文件/686 → **77/748**，`tsc --noEmit`（全新 buildinfo）**0 错误**；
+admin 87 套件/347 → **94/363**（本轮之后含 init 恢复功能共 383）。无新增环境变量，
+**所有修复的默认行为都等于今天**，只有失败路径的渲染变了（占位符/错误文案，而不是假的 0、卡死的转圈、NaN）。
+
+**A. 泄漏（随导航次数线性增长的那些）**
+
+1. **medium-zoom 改全站单例**（新 `utils/imageZoom.ts`）：medium-zoom@1.1.0 每个实例创建时在
+   document/window 上挂 **4 个无法移除的全局监听**（click/keyup/scroll/resize —— `detach()` 只摘图片，
+   源码里那 4 个 addEventListener 是无条件的）。以前 `Markdown/img.tsx` 对**每张正文图**调一次 `m(img)`、
+   `ImageBox` 每次挂载调一次，且都没有清理 ⇒ SPA 每跳一页永久多一批（10 图文章 + 2 个 ImageBox ≈ 48 个/次导航，
+   200 次导航 ≈ 9600 个死监听，每次 scroll 全被调用一遍，闭包还钉着已卸载的 DOM）。
+   现在全站一个实例，图片随挂载/卸载 attach/detach（单测模拟 200 次导航 ×12 图：instances=1、attach/detach 各 2400）。
+   ⚠️ 顺带删掉 `ImageBox` 的 `hasInit` 门闩：**有清理函数的 effect + 门闩 = StrictMode 下永不重挂**
+   （与 PostViewer 里那条注释是同一个坑）。仓库里**不许再直接 import medium-zoom**（有全树扫描断言）。
+2. **`components/Toc/index.tsx` 的 headroom 没有清理** —— AuthorCard 同款 bug 的漏网之鱼：
+   每跳走一次文章页泄漏一个 window scroll 监听 + 一棵已卸载的 `#toc-card` 子树。修法同 AuthorCard
+   （`stopHeadroom` + 去门闩 + 依赖 `[props.showSubMenu]`）。
+3. **waline 生命周期重写**（新 `WaLine/lifecycle.ts`，纯函数 `startWalineSession(deps) → teardown`）：
+   旧实现 effect 依赖是 `[current, props]`（props 每次渲染换引用）⇒ 父组件任何一次重渲染都会 destroy 评论区，
+   而 `hasInit` 门闩让它**永不重建**；更糟的是若重渲染发生在 `loadCommentSetting()` 在飞时，
+   `cancelled` 会在门闩落下之后跳过 init ⇒ 该页 waline **永不初始化**。现在组件只依赖 `[enabled, visible]` 两个值。
+4. **评论数 / 阅读量两个合并器的三处同款缺陷**（`utils/commentApi.ts`、`utils/viewerApi.ts`）：
+   ① 一批超过 50 个 id 时，`slice(0,50)` 之后**整个 pending 集合被清空** ⇒ 溢出部分永远不请求、
+   静默解析成 0（评论数把"没查"渲染成"没有"）或 null（阅读量永远 `...`）；1000 个 id 的列表页 = 950 个假 0。
+   ② 请求失败被**永久缓存**（评论数缓存成 0、阅读量缓存成 null、评论设置缓存成 null ⇒ 一次网络抖动
+   就让整个会话的评论区静默关闭）。③ 模块级 Map **无上限**。
+   现在：溢出留在队列里逐批清空；失败**不入缓存**、评论数解析成 `undefined`（UI 保持 `…` 占位符，
+   **失败 ≠ 0**）、设置的 promise 在 null 时自清可重试；`COUNT_CACHE_MAX`/`VIEWER_CACHE_MAX` = 500 按插入序淘汰。
+   ⚠️ commentApi 里有三条**字面量**被测试钉着：`paths.join(",")`、`slice(0, COUNT_BATCH_MAX)`、`}, 50);`
+   （原来钉的是 `slice(0, 50)`，改成钉常量**并且**钉 `COUNT_BATCH_MAX === 50`，没有放宽）。
+5. **admin 表情选择器从第二个编辑器会话起静默失灵**：模块级 `pickerPromise` 把 Picker 只渲染进
+   **第一个**编辑器容器；SPA 里跳走再回来（新 DOM、没有 `data-emoji-ready`）时 `ensurePicker` 直接返回
+   已 resolved 的 promise ⇒ 按钮点了没反应，整页刷新才恢复。另外 `editorEffect` 没有清理：
+   模块级 `currentEditor` 钉住已卸载的 CodeMirror 实例、整棵 Picker React 树（emoji-mart 数据 MB 级）
+   挂在游离节点上、document 的 click 外点关闭监听也留着。现在缓存的是 **import() 的模块**（`loadEmojiMods`），
+   渲染按容器各做一次（带双检），effect 清理里重置 currentEditor、`unmountComponentAtNode`、摘容器与监听。
+6. **admin Code / Editor 页的 Ctrl+S 监听每敲一键重注册一轮**（依赖写了 `[currObj, value, type]`）⇒
+   现在只注册一次（`[]`），handleSave 走 ref。Code 页的 300/500ms `setTimeout` 补了卸载清理，
+   `updateEditorSize` 在 `.ant-page-header` 查不到时不再对 null 调 `getComputedStyle`（以前会在 resize 监听里抛）。
+7. **BackToTop**：卸载时 `onScroll.cancel()`（节流尾调用不再打到已卸载组件）；依赖 `[display]` → `[]`
+   （以前每次显隐都重建监听+节流器）；删掉 scroll 处理里的 `stopPropagation()`/`preventDefault()` ——
+   后者对不可取消的 scroll 是空操作（passive 下还刷控制台警告），**前者在 document 捕获监听里会把同一个
+   滚动事件从 window 监听器（TOC 高亮）手里拦走**，以前 TOC 只能靠节流缝隙收到事件。MarkdownTocBar 同样删掉。
+8. **「自动主题」的 10s 轮询在前后台都是死功能**：管理定时器的 effect 依赖里混着每次渲染新建的
+   setTheme/setTimer/props/theme 闭包 ⇒ cleanup 每次渲染都清掉 interval，而门闩又不重建 ——
+   "自动模式跟随系统深色/昼夜边界"**从未生效过，且无任何报错**。现在定时器由只依赖 `[theme]` 值的 effect 管理
+   （website 用 `utils/theme.ts` 新增的 `AUTO_THEME_POLL_MS`/`isAutoResolvedTheme`；
+   admin 的 `setInitialState` 改函数式更新 —— 轮询闭包里的 initialState 是旧快照）。
+
+**B. 算法复杂度（都有前后实测；当时机器上有并行构建负载，ms 只作方向参考）**
+
+9. **markdown 在每次重渲染时整篇重解析**（渲染路径上最大的一笔）：`MarkdownView` 在 JSX 里**现建**
+   remarkRehype 选项对象 ⇒ 下游 `MarkdownViewer` 的 `useMemo([value,sanitize,plugins,remarkRehype])`
+   按引用必然失效 ⇒ 每次重渲染都重建管线并 `processSync` 全文。而重渲染很频繁（`_app` 每次路由变化都
+   `setGlobalState` 访客统计、主题 context、任何父组件 state）。实测 7.9KB 文章一遍 ≈ **66ms**、31KB ≈ 209ms
+   （管线重建本身只有 0.05ms，贵在重解析）。同一篇文章页上这个全文解析实际发生**三遍**：正文 viewer、
+   `MarkdownTocBar/index`（`useMemo` 依赖 `[props]` ⇒ `parseNavStructure` 每渲染一次）、
+   `pages/post/[id].tsx` 里裸调的 `hasToc(content)`。修法：选项提成模块常量 `REMARK_REHYPE_OPTIONS`、
+   依赖改 `[props.content]`、`hasToc` 进 useMemo ⇒ 重渲染时 **0 次**重解析。渲染输出逐字节不变
+   （bytemdViewerOnly 的字节级对照与全部 markdown spec 照旧绿；website `htmlInMarkdown` 与 admin
+   `markdownConsistency` 两处旧 pin 按新形状**等价更新**，字段断言一项没少）。
+10. **排序比较器里反复 `new Date()`**：`timelineMonths.sortByCreatedAtDesc` 每次比较解析两次日期
+    （O(n log n) 次解析），且 `groupTimelineByYearAndMonth` 对已经有序的月份桶**又排了一次**。
+    改成装饰-排序-还原（新导出 `timelineTimestamp`，NaN→0 与旧守卫一致）+ 月份桶沿用年层排序结果。
+    实测 n=1,000：12.9→1.8ms；n=5,000：64.8→6.1ms；**n=20,000：308.2→26.3ms（~11.7×）**，输出逐项相同。
+11. **`washArticlesByKey` 从 O(键数×n) 改单遍分桶**（标签页/分类页每次 ISR 渲染都走它）：
+    旧实现对每个不同键 `filter` 全量数组（`getValueFn` 被反复调用、比较器里反复解析日期）。
+    现在值只算一次、首现序的键列表（Set）、单遍入桶、每桶装饰排序；宽松相等语义逐项保留
+    （null≡undefined 归到首现的原始键、`2024`≡`"2024"` 走字符串归一化键、数组键分支保留 `.includes` 语义）。
+    实测 n=2,000/D=10：16.9→6.2ms；**n=10,000/D=20：118.2→18.7ms（~6.3×）**，
+    `JSON.stringify(旧)===JSON.stringify(新)`（**含键序** —— 分类页直接依赖它）。
+    无效日期从"比较器返回 NaN、顺序由引擎决定"改成确定性地排最后（有意加固，有测试）。
+12. **`useMemo(..., [props])` 全仓清扫**（props 对象每次渲染换引用 = memo 形同虚设）：
+    PostCard(calContent/showDonate)、title(newTab/dataPath)、bottom(show)、about(捐赠表拼接+dayjs)、
+    NavBar(picUrl)、AuthorCard(logoUrl)、Reward(payUrl)、SocialIcon(weChatUrl)、post/[id](jsonLd)
+    全部改成具体字段依赖，输出不变。⚠️ 这条以后还会再长出来：**新代码里 `useMemo`/`useEffect` 的依赖
+    永远不要写 `props` 整个对象**（`renderMemoDeps.spec.ts` 钉住，含反向断言）。
+
+**C. 静默失败**
+
+13. **`api/getAllData.ts` 的 `fetchPublicMeta` 两处**：非 200/233 的响应把 `data`（**undefined**）
+    当成功的 `PublicMetaProp` 返回**并缓存 5s** ⇒ 下游在 `data.meta.siteInfo` 上炸出难归因的 TypeError；
+    而 `isBuild` 的连不上兜底值**与注释宣称相反地被缓存了** ⇒ `next build` 期间一次瞬时抖动
+    会把「VanBlog/作者名字」占位页烤进静态产物 5 秒。现在返回 `{data, fromFallback}`：
+    畸形 payload **抛错**（运行时让 ISR 保留旧页），兜底值**不入缓存**。
+14. **访客统计**：`api/pageview.ts` 畸形 payload 原样返回 undefined ⇒ `_app` 的解构 TypeError 变成
+    requestIdleCallback 里**没人处理的 rejection**（页脚统计静默停更，日志只有一行解构栈）。
+    现在 `normalizePageviewPayload()`（233→默认值；畸形→默认值 **+ console.warn**，留痕不静默）；
+    `_app.reloadViewer` 补 try/catch、`useCallback([])`（`router.events.on` 里注册的是首渲染闭包，
+    旧的 `{...globalState}` 展开的永远是初始值）、并且**把 `noViewer` 判据与 PostViewer 对齐成 `=== "true"`**
+    （以前一处 truthy 一处全等 ⇒ 同一个开关两种语义：`noViewer="false"` 在 _app 里不计数、在 PostViewer 里计数）。
+15. **搜索卡死**：`api/search.ts` 对错误体做 `data.data`（TypeError）而 SearchCard 无 catch ⇒
+    loading 永远 true（「搜索中...」卡死，**失败与加载中长得一样**）；且无过期响应守卫（慢的旧响应盖掉新结果）。
+    现在接口校验 `res.ok` + `Array.isArray(json?.data?.data)`，组件加请求序号守卫、错误态与
+    独立文案「搜索失败，请稍后再试」（**这是本轮唯一一处可见变化，且只在失败时**）。
+16. **评论数失败渲染成 0**：`Comment/Count.tsx` 失败分支 `setCount(0)`（与"没有评论"不可区分）⇒ 保持 `…` 占位。
+17. **Invalid Date 三处流出**：页脚渲染 `© NaN - 2026`；RunningTime 每秒刷新 `NaN天NaN小时…`
+    （且旧实现**没有依赖数组** ⇒ 每秒 setT→重渲染→重建 interval）；文章页 meta 的
+    `new Date(x).toISOString()` 对坏日期抛 RangeError ⇒ **整篇 SSR 500**。新增 `utils/safeDate.ts`
+    （`toSafeIsoString`），RunningTime 导出可单测的 `formatRunningTime`/`sinceYear`，无效 since 整行不渲染。
+    有效数据的可见输出不变（页脚文字相同，只是 React 的节点间注释分隔符合并了）。
+18. **TOC 滚动处理器**：items 为空时 `top.index` 每个滚动事件抛一次 TypeError（只在控制台）⇒ 加守卫。
+19. **admin 日志查看器**：`catch (err) {}` + 空 finally ⇒ 拉取失败（server 挂了、token 过期）与"没有日志"
+    渲染成一样、控制台零痕迹；`data.data.reverse()` 还会对畸形 payload 抛（抛进虚空）并原地改响应数组。
+    现在 error state + `<Alert>`（「日志拉取失败…每 5 秒会自动重试」）+ `console.error`，
+    `Array.isArray` 守卫，`lines.slice().reverse()`。
+20. **admin 图片删除失败 ⇒ 整页永久 Spin**（`setLoading(false)` 只在成功路径，错误 toast 被 Spin 挡住）⇒ 移到 finally。
+21. **admin `useNum.js`**：`parseInt(localStorage)` 无 NaN 守卫（坏值直通 `pageSize` 与图表条数）、
+    写入不设限、localStorage 访问无保护（隐私模式会抛）⇒ 读侧 `Number.isFinite` 回落默认、写侧拒绝非有限值、两侧 try/catch。
+22. **admin 表单数字下限**（"ISR 那个字段是一例，查查其它"）：`expiresIn` **原样进 JWT**
+    （server `token.provider.ts:62` 是 `loginSetting?.expiresIn || 7d`）⇒ 0/负数 = **token 出生即死**
+    （登录看着成功、下个请求被踢）；现在表单层 `min={60}` + 整数。ISR `delay` 同样 `min={1}` + 整数
+    （前台 60s 下限之外的第二道）。WaterMark/SiteInfo/CommentSystem 的数字字段查过，已有 min/max。
+23. **admin 流水线列表** `getPipelineConfig()` 无 catch（unhandled rejection，且 `pipelineConfig.find`
+    对 undefined 会在列渲染里抛）⇒ `.catch(() => setPipelineConfig([]))` + `data || []`。
+
+**查过没问题、别重复审的**：mermaidTheme 的 observer 断开链（mermaidViewer 返回 cleanup，import 竞态有 `cancelled` 守卫）·
+tocMath 的监听 Set（effect 返回值退订）· 代码块复制按钮（先移除再添加）· NavBar/AuthorCard 的 headroom（上一轮修过）·
+`WaLine/index.tsx` 的 dynamic 提升（已钉）· ListThumb 的 `onError`（只回退一次然后隐藏，不会循环）·
+ImageBox 的 onError → 占位图 · `pages/page/[p]` 的 parseInt 校验 · loadConfig 的 `resolveServerUrl`/revalidate 下限 ·
+评论表单的校验/蜂蜜字段/消毒链与 `renderCommentHtml` 的兜底转义 · Comment/Content 的模块级 processor 缓存（正确写法）·
+gaAnalysis `load.ts` 的 `.catch(() => {})`（有意且有注释：GTM 不可达不能抛进渲染）·
+`_app` 的 `router.events.on` 不移除（MyApp 永不卸载）· Layout 的 `[props]` effect（有门闩、清理幂等且便宜）·
+admin Welcome 的 tabs、Article 的 ProTable（服务端分页/排序）、Static/img 的 refs 批处理（有 cancelled 标志）·
+TerminalDisplay 的 escapeXML · firstImage 的 `scan()` 提前 break 限住了每次匹配的 `new RegExp`。
+
+**发现但没修（都写了理由）**：MarkdownTocBar 的 handleScroll 每渲染新建但只注册一次 ⇒ 注册的闭包留着首渲染的
+`props.headingOffset`（今天是常量 56/0，无害；正解是 offsetRef）；`getEl()` 每次节流滚动做 O(items) 次
+`querySelectorAll`（真实 TOC ~30 项可接受）；`washArticlesByKey` 的数组键分支保持 O(n×D)（为保 `.includes` 语义，
+真实数据 D 很小）；`services/van-blog/useTab.js` 拼 query 不做 `encodeURIComponent`（现有调用方全是 ASCII 键，
+修它是 3 行但牵动很多页面的 URL 状态）；`visited-<pathname>` 的 localStorage 键随访问路径增长（以站点页面数为上界，可接受）。
+
+⚠️ **本轮的度量边界（诚实说明）**：本机没有 playwright，所以 medium-zoom / waline / headroom 的泄漏规模是
+**读源码推得 + 单测钉住**，不是无头浏览器里数出来的；也没跑生产 `next build`（原地构建会把 dev 打成 500，
+而 §7.53 之后"带 Next 14 类型的 tsc 0 错误"已经是等价关卡）；waline 模式没有活体跑过（本站用内置评论）；
+所有 ms 数字都是在有并行构建负载的机器上量的，只作方向参考 —— **字节数、监听器数量、复杂度结论是硬的**。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 938 用例：**937 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例，见 §2.1；负载高时可能 2 个失败，单独跑 5/5 绿） |
-| website `vitest run` | 69 文件 / 686 用例全绿 |
-| admin `node --test tests/unit` | 87 套件 / 347 用例全绿（⚠️ Node 24 换了 `node --test` 的默认 reporter，要 `--test-reporter=tap` 才有 `# tests` 汇总行） |
+| website `vitest run` | 77 文件 / 748 用例全绿 |
+| admin `node --test tests/unit` | 94 套件 / 363 用例全绿（⚠️ Node 24 要 `--test-reporter=tap` 才有汇总行） |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 

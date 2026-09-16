@@ -86,7 +86,11 @@ describe('编辑器预览 与 前台渲染：插件与流水线', () => {
     // 两边都开 allowDangerousHtml（否则 rawHTML 不生效），并且都要把定义列表的
     // hast handler 传给 remark-rehype（否则 dl/dt/dd 会被当未知节点摊成 div）
     assert.match(editor, /remarkRehype=\{\{ allowDangerousHtml: true, handlers: defListHastHandlers \}\}/);
-    assert.match(viewer, /remarkRehype=\{\{\s*allowDangerousHtml: true,\s*\/\/[\s\S]*?handlers: defListHastHandlers,\s*\}\}/);
+    // 前台的 remarkRehype 选项提成了模块级常量 REMARK_REHYPE_OPTIONS（内联对象字面量
+    // 会让下游 MarkdownViewer 的 useMemo 每次重渲染都 miss、整篇重新 processSync），
+    // 字段内容必须与编辑器那边逐项一致
+    assert.match(viewer, /const REMARK_REHYPE_OPTIONS = \{\s*allowDangerousHtml: true,[\s\S]*?handlers: defListHastHandlers,\s*\};/);
+    assert.match(viewer, /remarkRehype=\{REMARK_REHYPE_OPTIONS\}/);
     // 单个 ~x~ 归下标，删除线用 ~~x~~：两边必须一致，否则预览和发布不一样
     assert.match(editor, /singleTilde: false/);
     assert.ok((viewer.match(/singleTilde: false/g) || []).length >= 2, '前台 Base/Rich 两个变体都要关单波浪删除线');

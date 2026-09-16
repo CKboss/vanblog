@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { renderCommentHtml } from "../components/Comment/Content";
+import { COUNT_BATCH_MAX } from "../utils/commentApi";
 import {
   COMMENT_ALLOWED_TAGS,
   COMMENT_STRIP_TAGS,
@@ -185,7 +186,8 @@ describe("内置评论的前台接线", () => {
     expect(api).toContain("/api/public/comments/counts");
     expect(api).toContain("setTimeout(");
     expect(api).toContain("paths.join(\",\")");
-    expect(api).toContain("slice(0, 50)");
+    expect(api).toContain("slice(0, COUNT_BATCH_MAX)");
+    expect(COUNT_BATCH_MAX).toBe(50);
   });
 
   it("内置评论用数字 id 当规范键（别名可以改，数字 id 不会）", () => {

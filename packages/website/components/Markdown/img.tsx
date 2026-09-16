@@ -1,6 +1,6 @@
 import { visit } from "unist-util-visit";
 import { BytemdPlugin } from "bytemd";
-import m from "medium-zoom"
+import { attachImageZoom } from "../../utils/imageZoom";
 import { STATIC_THUMB_PREFIX, STATIC_IMG_PREFIX } from "../../utils/excerptThumbs";
 
 /** 缩略图地址 → 原图地址（列表摘要用的是缩略图，点开放大要看原图） */
@@ -41,6 +41,11 @@ export function Img(): BytemdPlugin {
   return {
     rehype: (processor) => processor.use(ImgZoomPlugin),
     viewerEffect: ({ markdownBody }) => {
+      // ⚠️ 图片放大用的是 utils/imageZoom.ts 的**全站单例**，不是每张图一个
+      // mediumZoom() 实例：每个实例创建时会挂 4 个永远无法移除的全局监听
+      // （document click/keyup/scroll + window resize），以前每篇文章的每张图
+      // 一个实例、又没有清理，SPA 里每跳一页就永久多出一批监听。
+      const detachers: Array<() => void> = []
       markdownBody.querySelectorAll(".img-zoom").forEach((img: HTMLImageElement) => {
         if (img.getAttribute("data-zoomed")) return
         img.setAttribute("data-zoomed", "true")
@@ -57,8 +62,11 @@ export function Img(): BytemdPlugin {
             { once: true },
           )
         }
-        m(img)
+        detachers.push(attachImageZoom(img))
       })
+      return () => {
+        detachers.forEach((detach) => detach())
+      }
     }
   }
 }

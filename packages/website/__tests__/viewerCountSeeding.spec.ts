@@ -5,7 +5,10 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PostViewer from "../components/PostViewer";
 import {
+  VIEWER_BATCH_MAX,
   VIEWER_BATCH_WINDOW_MS,
+  VIEWER_CACHE_MAX,
+  cachedViewerSize,
   clearViewerCache,
   getCachedViewerRecord,
   pendingViewerIds,
@@ -256,5 +259,39 @@ describe("接线：pageProps 里的 viewer 一路传到 PostViewer", () => {
     const src = strip(readSrc("components/PostViewer/index.tsx"));
     expect(src).toMatch(/useState<ViewerRecord \| null>\(\s*hasSeed \?/);
     expect(src).not.toMatch(/useState\([^)]*getCachedViewerRecord/);
+  });
+});
+
+describe("viewerApi：批上限、失败重试与缓存上限（这轮加固）", () => {
+  it("一批超过 50 个 id：溢出进下一批，全部拿到真值（旧实现第 51 个之后永远 ...）", async () => {
+    const total = VIEWER_BATCH_MAX * 2 + 20; // 120
+    const ids = Array.from({ length: total }, (_, i) => i + 1);
+    const results = await Promise.all(ids.map((id) => requestArticleViewer(id)));
+    expect(calls).toHaveLength(total);
+    results.forEach((record, i) => {
+      expect(record?.viewer).toBe(ids[i] * 10);
+    });
+    expect(pendingViewerIds()).toEqual([]);
+  });
+
+  it("请求失败不写缓存：下一次调用会重试并在恢复后拿到真值", async () => {
+    mode = "fail";
+    const first = await requestArticleViewer(21);
+    expect(first).toBeNull();
+    expect(getCachedViewerRecord(21)).toBeUndefined(); // 失败没有被缓存钉死
+    mode = "ok";
+    const second = await requestArticleViewer(21);
+    expect(second?.viewer).toBe(210);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("缓存有上限：超过 VIEWER_CACHE_MAX 时按插入序淘汰最老的", () => {
+    const overflow = VIEWER_CACHE_MAX + 50;
+    for (let i = 1; i <= overflow; i += 1) {
+      seedArticleViewer(i, i);
+    }
+    expect(cachedViewerSize()).toBeLessThanOrEqual(VIEWER_CACHE_MAX);
+    expect(getCachedViewerRecord(1)).toBeUndefined(); // 最老的被淘汰
+    expect(getCachedViewerRecord(overflow)?.viewer).toBe(overflow); // 最新的还在
   });
 });

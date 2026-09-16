@@ -123,7 +123,9 @@ export default function (props: {
       return true;
     }
     return false;
-  }, [props, lock]);
+    // ⚠️ 依赖必须是**具体字段**而不是 props：props 对象每次渲染都是新引用，
+    // 以它为依赖等于 useMemo 完全失效（每次重渲染都重算）
+  }, [lock, props.hideDonate, props.pay, props.type, props.showDonateInAbout]);
 
   const calContent = useMemo(() => {
     if (props.type == "overview") {
@@ -138,7 +140,9 @@ export default function (props: {
     } else {
       return content.replace("<!-- more -->", "");
     }
-  }, [props, lock, content]);
+    // ⚠️ 同 showDonate：依赖写 props 会让 memo 失效 —— 文章页每次重渲染
+    // （访客统计 setState、主题切换都会触发）都要把全文 replace + 摘要正则重跑一遍
+  }, [props.type, props.private, props.excerpt, content]);
 
   // 列表摘要的渲染器：默认不含 highlight.js；摘要里真有围栏代码块才换回 MarkdownBase。
   // 文章页 / 关于页传了 markdownRenderer，这里的嗅探结果用不上（也不会去跑正则）。

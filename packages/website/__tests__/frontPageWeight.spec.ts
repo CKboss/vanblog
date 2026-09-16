@@ -195,6 +195,57 @@ describe("getPublicMeta 的进程内缓存", () => {
     expect(n).toBe(2);
     mod.__resetPublicMetaCache();
   });
+
+  it("statusCode 既不是 200 也不是 233（或 data 缺失）时抛错，不再返回 undefined", async () => {
+    // 旧实现 `return data` 会把 undefined 当 PublicMetaProp 用：
+    // 调用方在 `data.meta.siteInfo` 上炸出难归因的 TypeError，
+    // 而且 undefined 还会被当成"成功结果"缓存 5 秒。
+    global.fetch = (async () => ({
+      json: async () => ({ statusCode: 500, data: undefined }),
+    })) as any;
+    const mod = await import("../api/getAllData");
+    mod.__resetPublicMetaCache();
+    await expect(mod.getPublicMeta()).rejects.toThrow(/异常/);
+    mod.__resetPublicMetaCache();
+  });
+
+  it("构建期的默认值兜底**不入缓存**：server 恢复后立刻回到真数据", async () => {
+    const prev = process.env.isBuild;
+    process.env.isBuild = "t";
+    let fail = true;
+    let n = 0;
+    global.fetch = (async () => {
+      n += 1;
+      if (fail) {
+        throw new Error("server down");
+      }
+      return {
+        json: async () => ({
+          statusCode: 200,
+          data: { version: "real", totalWordCount: 1, menus: [], tags: [], totalArticles: 1, meta: {} },
+        }),
+      } as any;
+    }) as any;
+    try {
+      const mod = await import("../api/getAllData");
+      mod.__resetPublicMetaCache();
+      const fallback = await mod.getPublicMeta();
+      expect(fallback.version).not.toBe("real"); // 默认值兜底
+      expect(n).toBe(1);
+      // 旧实现会把兜底值缓存 5 秒：接下来 5 秒内渲染的所有页面都是空站点
+      fail = false;
+      const real = await mod.getPublicMeta();
+      expect(real.version).toBe("real");
+      expect(n).toBe(2);
+      mod.__resetPublicMetaCache();
+    } finally {
+      if (prev === undefined) {
+        delete process.env.isBuild;
+      } else {
+        process.env.isBuild = prev;
+      }
+    }
+  });
 });
 
 describe("图床前缀常量没有被写歪", () => {

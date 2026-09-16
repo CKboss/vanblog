@@ -39,7 +39,8 @@ export function PostBottom(props: {
       return true;
     }
     return false;
-  }, [props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[props] 等于没有 memo
+  }, [props.type, props.lock]);
   return show ? (
     <div className="mt-4">
       {props.tags && props.tags.length > 0 && (

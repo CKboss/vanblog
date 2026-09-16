@@ -216,12 +216,20 @@ const defaultMeta: MetaProps = {
  *
  * 5 秒 TTL 足够把一轮重渲染里的重复请求压成 1 次，又不会让后台改完站点信息看到旧数据
  * （改完本来就靠 revalidate 触发重渲染，5 秒的窗口在里面看不见）。
- * ⚠️ 只缓存**成功**的结果：构建期连不上 server 时走的是默认值分支，
- * 那个不能缓存，否则整个构建过程都会拿着空数据渲染。
+ * ⚠️ 只缓存**成功**的结果：构建期连不上 server 时走的是默认值分支（fromFallback），
+ * 那个不能缓存 —— 否则一次瞬时抖动会把「空站点」钉进缓存，接下来 5 秒内渲染的
+ * 页面全部被 `next build` 烤成占位数据（站名"VanBlog"、作者"作者名字"）。
+ * 以前的代码注释声称不缓存兜底值，但实际上兜底值走的是 resolve 路径、照样入缓存
+ * —— 这轮把注释和代码对齐了（fetchPublicMeta 返回 {data, fromFallback}）。
  */
 const META_CACHE_TTL_MS = 5000;
+interface MetaFetchResult {
+  data: PublicMetaProp;
+  /** true = 构建期连不上 server 的默认值兜底，**不入缓存** */
+  fromFallback: boolean;
+}
 let metaCache: { at: number; data: PublicMetaProp } | null = null;
-let metaInflight: Promise<PublicMetaProp> | null = null;
+let metaInflight: Promise<MetaFetchResult> | null = null;
 
 export function __resetPublicMetaCache() {
   metaCache = null;
@@ -235,49 +243,73 @@ export async function getPublicMeta(): Promise<PublicMetaProp> {
   }
   // 并发调用共享同一个请求（一轮重渲染里多个页面是并行进来的）
   if (metaInflight) {
-    return metaInflight;
+    const shared = await metaInflight;
+    return shared.data;
   }
-  metaInflight = fetchPublicMeta().then(
-    (data) => {
-      metaInflight = null;
-      metaCache = { at: Date.now(), data };
-      return data;
+  const inflight: Promise<MetaFetchResult> = fetchPublicMeta().then(
+    (result) => {
+      if (metaInflight === inflight) {
+        metaInflight = null;
+      }
+      if (!result.fromFallback) {
+        metaCache = { at: Date.now(), data: result.data };
+      }
+      return result;
     },
     (err) => {
-      metaInflight = null;
+      if (metaInflight === inflight) {
+        metaInflight = null;
+      }
       throw err;
     },
   );
-  return metaInflight;
+  metaInflight = inflight;
+  const result = await inflight;
+  return result.data;
 }
 
-async function fetchPublicMeta(): Promise<PublicMetaProp> {
+async function fetchPublicMeta(): Promise<MetaFetchResult> {
   try {
     const url = `${config.baseUrl}api/public/meta`;
     const res = await fetch(url);
     const { statusCode, data } = await res.json();
     if (statusCode == 233) {
       return {
-        version: version,
-        totalWordCount: 0,
-        menus: defaultMenu,
-        tags: [],
-        totalArticles: 0,
-        meta: defaultMeta,
+        data: {
+          version: version,
+          totalWordCount: 0,
+          menus: defaultMenu,
+          tags: [],
+          totalArticles: 0,
+          meta: defaultMeta,
+        },
+        // 233 = server 明确说「站点还没初始化」，是合法响应，可以缓存
+        fromFallback: false,
       };
     }
-    return data;
+    if (!data || typeof data !== "object") {
+      // 既不是 200 也不是 233、或 data 缺失：以前这里 `return data`（undefined），
+      // 调用方拿着 undefined 当 PublicMetaProp 用，会在 `data.meta.siteInfo`
+      // 上炸出难以归因的 TypeError，getPublicMeta 还会把 undefined 缓存 5 秒。
+      // 现在如实抛错：运行时让 ISR 保留旧页面，构建期走下面的默认值分支。
+      throw new Error(`meta 接口返回异常（statusCode=${statusCode}）`);
+    }
+    return { data, fromFallback: false };
   } catch (err) {
     if (process.env.isBuild == "t") {
       console.log("无法连接，采用默认值");
-      // 给一个默认的吧。
+      // 给一个默认的吧。⚠️ fromFallback：这个结果**不会**进缓存，
+      // 下一个页面会重新尝试连接（构建期 server 恢复后立刻回到真数据）。
       return {
-        version: version,
-        totalWordCount: 0,
-        tags: [],
-        menus: defaultMenu,
-        totalArticles: 0,
-        meta: defaultMeta,
+        data: {
+          version: version,
+          totalWordCount: 0,
+          tags: [],
+          menus: defaultMenu,
+          totalArticles: 0,
+          meta: defaultMeta,
+        },
+        fromFallback: true,
       };
     } else {
       throw err;

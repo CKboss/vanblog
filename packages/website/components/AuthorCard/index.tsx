@@ -32,7 +32,8 @@ export default function (props: { option: AuthorCardProps }) {
       return props.option.logoDark;
     }
     return props.option.logo;
-  }, [theme, props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[theme, props] 等于没有 memo
+  }, [theme, props.option.logo, props.option.logoDark]);
   useEffect(() => {
     const el = document.querySelector("#author-card");
     if (!el) {

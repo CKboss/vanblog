@@ -44,6 +44,12 @@ const SearchCard = forwardRef<
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [typing, setTyping] = useState(false);
+  // 搜索失败要和「暂无结果」区分开：以前接口一挂，loading 永远停在 true，
+  // 用户看到一行卡死的「搜索中...」，既不知道失败了也没法归因
+  const [failed, setFailed] = useState(false);
+  // 过期响应守卫：debounce 之后仍可能有两个请求在飞，
+  // 慢的旧响应后到会覆盖新结果（搜 "ab" 的结果盖掉 "abc" 的）
+  const seqRef = useRef(0);
   const overlayRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -113,11 +119,27 @@ const SearchCard = forwardRef<
     }
   }, [props.visible]);
   const onSearch = async (search: string) => {
+    const seq = ++seqRef.current;
     setTyping(false);
     setLoading(true);
-    const resultFromServer = await searchArticles(search);
-    setResult(resultFromServer);
-    setLoading(false);
+    try {
+      const resultFromServer = await searchArticles(search);
+      if (seq !== seqRef.current) {
+        return; // 已经有更新的搜索在飞/完成了，这个响应作废
+      }
+      setResult(resultFromServer);
+      setFailed(false);
+    } catch {
+      if (seq !== seqRef.current) {
+        return;
+      }
+      setResult([]);
+      setFailed(true);
+    } finally {
+      if (seq === seqRef.current) {
+        setLoading(false);
+      }
+    }
   };
   useDebounce(
     () => {
@@ -136,6 +158,8 @@ const SearchCard = forwardRef<
     let text = "";
     if (loading) {
       text = "搜索中...";
+    } else if (failed) {
+      text = "搜索失败，请稍后再试";
     } else {
       if (search.trim() == "") {
         text = "请输入并搜索";
@@ -250,6 +274,7 @@ const SearchCard = forwardRef<
               setSearch(ev.currentTarget.value);
               if (ev.currentTarget.value.trim() == "") {
                 setResult([]);
+                setFailed(false);
               }
             }}
             placeholder={SEARCH_INPUT_LABEL}
@@ -274,6 +299,7 @@ const SearchCard = forwardRef<
             onClick={() => {
               setSearch("");
               setResult([]);
+              setFailed(false);
               inputRef.current?.focus();
             }}
           >

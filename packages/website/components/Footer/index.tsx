@@ -1,5 +1,5 @@
 import ImageBox from "../ImageBox";
-import RunningTime from "../RunningTime";
+import RunningTime, { sinceYear } from "../RunningTime";
 import Viewer from "../Viewer";
 
 export default function ({
@@ -86,7 +86,13 @@ export default function ({
         </p>
 
         <p className="select-none footer-copy-right">
-          © {new Date(since).getFullYear()} - {new Date().getFullYear()}
+          {/* since 无效（后台没填/填错）时只显示当前年份：
+              以前这里会渲染出 "© NaN - 2026" */}
+          © {(() => {
+            const start = sinceYear(since);
+            const end = new Date().getFullYear();
+            return start === null ? end : `${start} - ${end}`;
+          })()}
         </p>
         <p className="select-none footer-viewer">
           <Viewer></Viewer>

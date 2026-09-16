@@ -46,7 +46,8 @@ export function Title(props: {
       return true;
     }
     return false;
-  }, [props]);
+    // 依赖写具体字段：props 对象每次渲染都是新引用，[props] 等于没有 memo
+  }, [props.type, props.openArticleLinksInNewWindow]);
   const isAbout = props.type == "about";
   // The public host is unknown during SSR; the button is only clickable client-side.
   const [origin, setOrigin] = useState("");
@@ -166,7 +167,7 @@ export function SubTitle(props: {
     } else {
       return "/post/" + props.id;
     }
-  }, [props]);
+  }, [props.type, props.id]);
   // waline 用 dataPath（保持上游行为不变，别把它已有的评论弄丢）；
   // 内置评论用数字 id 这个规范键
   const builtinCommentPath = useMemo(() => {

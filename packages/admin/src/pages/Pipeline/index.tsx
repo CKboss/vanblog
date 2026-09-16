@@ -12,9 +12,15 @@ export default function () {
   const actionRef = useRef<any>();
 
   useEffect(() => {
-    getPipelineConfig().then(({ data }) => {
-      setPipelineConfig(data);
-    });
+    // 缺 catch 时接口一失败就是一个未处理的 promise rejection；
+    // data 为空也要退回 []，否则下面 columns 里 pipelineConfig.find 会抛。
+    getPipelineConfig()
+      .then(({ data }) => {
+        setPipelineConfig(data || []);
+      })
+      .catch(() => {
+        setPipelineConfig([]);
+      });
   }, []);
 
   const columns = [

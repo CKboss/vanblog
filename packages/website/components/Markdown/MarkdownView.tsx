@@ -10,6 +10,24 @@ import { defListHastHandlers } from "remark-definition-list";
 export const sanitize = sanitizeMarkdownSchema;
 
 /**
+ * remark-rehype 的选项**必须是模块级常量**。
+ *
+ * MarkdownViewer 的 useMemo 依赖是 `[value, sanitize, plugins, remarkRehype]`
+ * （按引用比较）。以前这个对象字面量写在 JSX 里，MarkdownView 每次重渲染都产生
+ * 一个新引用 → memo 必失效 → **每次重渲染都重建 unified 管线并把整篇文章重新
+ * processSync 一遍**。而重渲染并不罕见：_app 的访客统计 setState、主题 context、
+ * 父组件任何 state 变化都会波及到这里。本机实测（31KB 的正文，负载中）：
+ * 一次 processSync ≈ 200ms 量级，白白重复。提出来之后，只有 content / plugins /
+ * 主题真的变了才会重新处理。渲染结果逐字节不变（同一份选项对象）。
+ */
+const REMARK_REHYPE_OPTIONS = {
+  allowDangerousHtml: true,
+  // 定义列表的 mdast 节点（defList/defListTerm/defListDescription）不是标准类型，
+  // 要把官方给的 hast handler 传给 remark-rehype，否则会被当未知节点摊成 <div>
+  handlers: defListHastHandlers,
+};
+
+/**
  * 前台渲染 markdown 的共用外壳（Base / Rich / Plain 三个变体都走这里）。
  *
  * 刻意**不在这里 import 任何重量级插件**（math / mermaid / highlight）：这个文件会被
@@ -31,12 +49,7 @@ export default function MarkdownView(props: {
         key={paintKey}
         value={stripFrontMatter(props.content)}
         plugins={props.plugins}
-        remarkRehype={{
-          allowDangerousHtml: true,
-          // 定义列表的 mdast 节点（defList/defListTerm/defListDescription）不是标准类型，
-          // 要把官方给的 hast handler 传给 remark-rehype，否则会被当未知节点摊成 <div>
-          handlers: defListHastHandlers,
-        }}
+        remarkRehype={REMARK_REHYPE_OPTIONS}
         sanitize={sanitize}
       />
     </div>

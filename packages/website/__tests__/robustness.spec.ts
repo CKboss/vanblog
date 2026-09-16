@@ -100,6 +100,43 @@ describe("运行时资源与监听器", () => {
     expect(nav).toContain("stopHeadroom(headroom)");
     expect(nav).toContain('import { stopHeadroom } from "../../utils/headroom"');
     expect(nav).not.toContain("headroom.destroy()");
+    // 文章页右侧的 TOC 卡也是同一类：它以前**既没有清理函数又带 hasInit 门闩**，
+    // 每次客户端路由跳走文章页，headroom 挂在 window 上的 scroll 监听都留在
+    // 页面里，闭包钉着已卸载的 #toc-card 整棵 DOM（每跳一次泄漏一份）
+    const toc = code("components/Toc/index.tsx");
+    expect(toc).toContain("stopHeadroom(headroom)");
+    expect(toc).toContain('import { stopHeadroom } from "../../utils/headroom"');
+    expect(toc).not.toContain("headroom.destroy()");
+    expect(toc).not.toContain("hasInit");
+  });
+
+  it("scroll 监听不再 stopPropagation/preventDefault（同一个滚动事件还有别的监听器）", () => {
+    // BackToTop 以前在 document 的**捕获**监听里 stopPropagation：
+    // 会把同一滚动事件拦下来，window 上的 TOC 高亮监听只能靠节流缝隙收到事件；
+    // preventDefault 对不可取消的 scroll 事件是空操作（passive 下还打控制台警告）。
+    const code = (file: string) =>
+      read(file)
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+        .join("\n");
+    const back = code("components/BackToTop/index.tsx");
+    expect(back).not.toContain("stopPropagation");
+    expect(back).not.toContain("preventDefault");
+    // BackToTop 卸载时要取消节流里排着的尾调用，且监听器只注册一次
+    expect(back).toContain("onScroll.cancel()");
+    expect(back).toMatch(/\}, \[\]\);/);
+    // TocBar 的**滚动处理函数**同样不许吞事件（文件里锚点点击的 preventDefault
+    // 是另一回事，必须保留，所以只看 handleScroll 那一段）
+    const tocCore = code("components/MarkdownTocBar/core.tsx");
+    const start = tocCore.indexOf("const handleScroll = throttle(");
+    const end = tocCore.indexOf("}, 100);", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const scrollFn = tocCore.slice(start, end);
+    expect(scrollFn).not.toContain("stopPropagation");
+    expect(scrollFn).not.toContain("preventDefault");
+    // items 为空时不许再 `top.index` 抛 TypeError（每个滚动事件抛一次）
+    expect(scrollFn).toMatch(/if \(!top\) \{\s*return;\s*\}/);
   });
 
   it("stopHeadroom 容忍 scrollTracker 还没建好（headroom 的 init 有 100ms 竞态）", async () => {

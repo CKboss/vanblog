@@ -27,7 +27,7 @@
  * `GET /api/public/article/viewer/:id` 返回的是 **visits 集合里「该 pathname 最近一天」
  * 的那份文档**（`visitProvider.getByArticleId` → `find({pathname}).sort({date:-1}).limit(1)`），
  * 而 visits 是**按 pathname 分家**的累计值。自从文章链接默认带拼音别名（§7.1）+
- * `/post/<数字id>` 301 到别名（§7.20）之后，同一篇文章有两本账：
+ * `/post/<数字id>` 301 到别名（§7.20））之后，同一篇文章有两本账：
  * `/post/53` 停在别名启用前，`/post/<别名>` 从 0 重新累计。
  * 而 pageProps 里的 `article.viewer` 是 `updateViewerByPathname()` 用原子 `$inc`
  * 维护的**唯一权威值**（两种路径进来都加到同一个字段上）。
@@ -38,25 +38,51 @@
  * 所以 `PostViewer` 在拿得到 seed 时**根本不刷新**（`refresh: "never"`）；
  * 这个合并器只在拿不到 seed 时才用。等 server 把按 pathname 分家的两本账合掉
  * （或提供批量接口）之后，把 `refresh` 打开就能直接复用这里的批处理。
+ *
+ * ## 这轮加固修掉的三个问题（与 commentApi 同款，都有测试钉住）
+ *
+ * 1. **一批超过 50 个 id 时溢出会被静默丢弃**：以前 `slice(0, VIEWER_BATCH_MAX)`
+ *    之后把整个 pending 清空，第 51 个之后的 id 不发请求、直接解析成 null（永远 `...`）。
+ *    现在溢出部分留在队列里，下一个窗口继续发。
+ * 2. **请求失败会被缓存成 null 且整个会话不再重试**：现在失败**不写缓存**，
+ *    组件保持占位符，下一次挂载还能重试（接口恢复后自愈）。
+ * 3. **缓存无上限**：模块级 Map 只增不减；现在超过 VIEWER_CACHE_MAX 按插入序
+ *    淘汰最老条目（seed 会在下一次渲染时重新播种，淘汰是安全的）。
  */
 
 import { getArticleViewer } from "../api/getArticleViewer";
 
 /** 与 commentApi 的 50ms 窗口保持一致：够把同一帧里挂载的卡片合并成一批，又不影响体感。 */
 export const VIEWER_BATCH_WINDOW_MS = 50;
-/** 一批最多发多少个请求（和 commentApi 的 paths.slice(0, 50) 同一个量级）。 */
+/** 一批最多发多少个请求（和 commentApi 的 COUNT_BATCH_MAX 同一个量级）。 */
 export const VIEWER_BATCH_MAX = 50;
+/** 缓存上限：正常站点远用不满；防御长会话/异常输入下的无界增长 */
+export const VIEWER_CACHE_MAX = 500;
 
 /** 接口回来的原始记录；`null` 表示 server 没有这篇的 visit 记录。 */
 export type ViewerRecord = { viewer?: number } | null;
 
+type ViewerWaiter = (record: ViewerRecord) => void;
+
 const viewerCache = new Map<string, ViewerRecord>();
-let pendingIds: string[] = [];
-let pendingResolvers: Array<() => void> = [];
+/** id → 等待解析的回调（同一 id 可有多次调用） */
+const pendingWaiters = new Map<string, ViewerWaiter[]>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function viewerKey(id: number | string): string {
   return String(id);
+}
+
+function setCachedViewer(id: string, record: ViewerRecord): void {
+  viewerCache.set(id, record);
+  while (viewerCache.size > VIEWER_CACHE_MAX) {
+    // Map 迭代序 = 插入序：删掉最老的一个（不用 for..of：本项目 target 是 es5）
+    const oldest = viewerCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    viewerCache.delete(oldest.value);
+  }
 }
 
 /**
@@ -74,7 +100,7 @@ export function seedArticleViewer(
   }
   const key = viewerKey(id);
   if (!viewerCache.has(key)) {
-    viewerCache.set(key, { viewer });
+    setCachedViewer(key, { viewer });
   }
 }
 
@@ -91,13 +117,12 @@ export function cachedViewerSize(): number {
 
 /** 还有多少个 id 在等这一批（测试用） */
 export function pendingViewerIds(): string[] {
-  return [...pendingIds];
+  return Array.from(pendingWaiters.keys());
 }
 
 export function clearViewerCache(): void {
   viewerCache.clear();
-  pendingIds = [];
-  pendingResolvers = [];
+  pendingWaiters.clear();
   if (flushTimer) {
     clearTimeout(flushTimer);
     flushTimer = null;
@@ -110,32 +135,54 @@ function scheduleFlush(): void {
   }
   flushTimer = setTimeout(() => {
     flushTimer = null;
-    const batch = pendingResolvers;
-    const ids = Array.from(new Set(pendingIds)).slice(0, VIEWER_BATCH_MAX);
-    pendingIds = [];
-    pendingResolvers = [];
-    // server 没有批量接口（也不允许加），所以一批里仍然是 N 个请求 ——
-    // 但它们**并行**发出、且都发生在首屏渲染之后，不再是一个个串起来的瀑布。
-    void Promise.all(
-      ids.map(async (id) => {
-        try {
-          const res = await getArticleViewer(id);
-          viewerCache.set(
-            id,
-            res && typeof res === "object" ? (res as ViewerRecord) : null,
-          );
-        } catch {
-          // 单篇失败不影响其它：缓存里留着 seed 的值（可能没有），
-          // 组件会继续显示 seed / 占位符，不会把已经显示的数字抹掉。
-          if (!viewerCache.has(id)) {
-            viewerCache.set(id, null);
-          }
-        }
-      }),
-    ).then(() => {
-      batch.forEach((done) => done());
-    });
+    void flushViewerBatch();
   }, VIEWER_BATCH_WINDOW_MS);
+}
+
+async function flushViewerBatch(): Promise<void> {
+  // 每批最多 VIEWER_BATCH_MAX 个 id；剩下的**留在队列里等下一批**
+  // （以前是 slice 之后整个清空 —— 第 51 个之后的 id 会永远停在占位符）
+  const ids = Array.from(pendingWaiters.keys()).slice(0, VIEWER_BATCH_MAX);
+  if (ids.length === 0) {
+    return;
+  }
+  const taken = new Map<string, ViewerWaiter[]>();
+  for (let i = 0; i < ids.length; i += 1) {
+    const id = ids[i];
+    const waiters = pendingWaiters.get(id);
+    if (waiters) {
+      taken.set(id, waiters);
+    }
+    pendingWaiters.delete(id);
+  }
+  if (pendingWaiters.size > 0 && !flushTimer) {
+    scheduleFlush();
+  }
+  // server 没有批量接口（也不允许加），所以一批里仍然是 N 个请求 ——
+  // 但它们**并行**发出、且都发生在首屏渲染之后，不再是一个个串起来的瀑布。
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const res = await getArticleViewer(id);
+        setCachedViewer(
+          id,
+          res && typeof res === "object" ? (res as ViewerRecord) : null,
+        );
+      } catch {
+        // 单篇失败**不写缓存**：以前会把 null 缓存下来，导致整个会话不再重试、
+        // 组件永远停在占位符。现在失败只影响这一次解析（null → 占位符），
+        // 已经缓存/播种过的值不受影响，下一次挂载还能重试。
+      }
+    }),
+  );
+  for (let i = 0; i < ids.length; i += 1) {
+    const id = ids[i];
+    const record = viewerCache.has(id) ? viewerCache.get(id) ?? null : null;
+    const waiters = taken.get(id) || [];
+    for (let j = 0; j < waiters.length; j += 1) {
+      waiters[j](record);
+    }
+  }
 }
 
 /**
@@ -151,8 +198,12 @@ export function requestArticleViewer(
     return Promise.resolve(viewerCache.get(key) ?? null);
   }
   return new Promise<ViewerRecord>((resolve) => {
-    pendingIds.push(key);
-    pendingResolvers.push(() => resolve(viewerCache.get(key) ?? null));
+    const waiters = pendingWaiters.get(key);
+    if (waiters) {
+      waiters.push(resolve);
+    } else {
+      pendingWaiters.set(key, [resolve]);
+    }
     scheduleFlush();
   });
 }

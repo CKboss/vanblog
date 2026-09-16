@@ -21,16 +21,22 @@ export default () => {
   const [display, setDisplay] = useState(false);
 
   useEffect(() => {
-    const onScroll = throttle((event: any) => {
-      event.stopPropagation();
-      event.preventDefault();
-
+    const onScroll = throttle(() => {
+      // 不再调 stopPropagation/preventDefault：scroll 事件不可取消（preventDefault
+      // 是空操作，passive 监听下还会打控制台警告）；而 stopPropagation 会截断
+      // 同一滚动事件对其它监听器（如 TOC 高亮）的派发。
       setDisplay(getScrollTop() > 300);
     }, 500);
 
     document.addEventListener("scroll", onScroll, true);
-    return () => document.removeEventListener("scroll", onScroll, true);
-  }, [display]);
+    return () => {
+      document.removeEventListener("scroll", onScroll, true);
+      // 节流可能还排着一次尾调用，卸载后执行会 setState 到已卸载组件
+      onScroll.cancel();
+    };
+    // 依赖为空：setDisplay 不读任何渲染期变量；以前写 [display] 会在按钮
+    // 出现/消失时反复重建监听与节流器（旧节流器里排着的尾调用还会照常触发）
+  }, []);
 
   return (
     <>

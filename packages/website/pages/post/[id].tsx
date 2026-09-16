@@ -22,6 +22,7 @@ import { getPostPagesProps } from "../../utils/getPageProps";
 import { hasToc } from "../../utils/hasToc";
 import { getArticlesKeyWord } from "../../utils/keywords";
 import { revalidate } from "../../utils/loadConfig";
+import { toSafeIsoString } from "../../utils/safeDate";
 import Custom404 from "../404";
 import dynamic from "next/dynamic";
 
@@ -57,6 +58,16 @@ const PostPages = (props: PostPagesProps) => {
     () => toPlainText(props?.article?.content, 160),
     [props?.article?.content],
   );
+  // Invalid Date 时 toISOString() 会抛 RangeError —— 以前直接写在 JSX 里，
+  // 一条坏日期数据就能让整篇文章在 SSR 阶段 500。这里统一走 NaN 守卫。
+  const publishedIso = useMemo(
+    () => toSafeIsoString(props?.article?.createdAt),
+    [props?.article?.createdAt],
+  );
+  const modifiedIso = useMemo(
+    () => toSafeIsoString(props?.article?.updatedAt),
+    [props?.article?.updatedAt],
+  );
   // 结构化数据：BlogPosting + 面包屑。有了它搜索引擎才可能给富摘要（发布时间、作者、配图）
   const jsonLd = useMemo(() => {
     const url = canonicalUrl(props.siteUrl, `/post/${getArticlePath(props.article)}`);
@@ -89,11 +100,16 @@ const PostPages = (props: PostPagesProps) => {
       list.push(breadcrumb);
     }
     return list;
-  }, [props, articleDescription]);
+    // ⚠️ 依赖写具体字段而不是 props：props 每次渲染都是新引用，
+    // 以它为依赖等于每次重渲染都把 JSON-LD 重新构建一遍
+  }, [props.siteUrl, props.article, props.author, props.layoutProps, articleDescription]);
   useEffect(() => {
     // nextjs 切换页面时，不会重新设置 content ，需要手动更新
     setContent(props?.article?.content || "")
   }, [props.article])
+  // hasToc 会把整篇正文过一遍 unified 管线来数标题 —— 以前直接写在 JSX 里，
+  // 每次重渲染（访客统计 setState、路由事件都会触发）都全文重解析一遍
+  const sideBarHasToc = useMemo(() => hasToc(content), [content]);
   if (!props.article) {
     return <Custom404 name="文章" />;
   }
@@ -102,7 +118,7 @@ const PostPages = (props: PostPagesProps) => {
       option={props.layoutProps}
       title={props.article.title}
       sideBar={
-        hasToc(content) ? (
+        sideBarHasToc ? (
           <Toc content={content} showSubMenu={props.showSubMenu} />
         ) : null
       }
@@ -125,16 +141,16 @@ const PostPages = (props: PostPagesProps) => {
         ) : null}
         <meta property="og:type" content="article" />
         <meta name="twitter:title" content={props.article.title} />
-        {props.article.createdAt ? (
+        {publishedIso ? (
           <meta
             property="article:published_time"
-            content={new Date(props.article.createdAt).toISOString()}
+            content={publishedIso}
           />
         ) : null}
-        {props.article.updatedAt ? (
+        {modifiedIso ? (
           <meta
             property="article:modified_time"
-            content={new Date(props.article.updatedAt).toISOString()}
+            content={modifiedIso}
           />
         ) : null}
         {props.article.category ? (

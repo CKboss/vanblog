@@ -51,9 +51,10 @@ export default function (props: {
   // 而且每次滚动都把地址栏的 hash 改成上一篇文章的标题。
   const itemsRef = useRef(items);
   itemsRef.current = items;
-  const handleScroll = throttle((ev: Event) => {
-    ev.stopPropagation();
-    ev.preventDefault();
+  const handleScroll = throttle((_ev: Event) => {
+    // 不再调 stopPropagation/preventDefault：scroll 事件本来就不可取消
+    // （preventDefault 是空操作，passive 监听下还会打控制台警告），
+    // 而 stopPropagation 会截断同一滚动事件对其它监听器的派发。
 
     let top: any = null;
     let topEl: any = null;
@@ -79,6 +80,11 @@ export default function (props: {
           topEl = el;
         }
       }
+    }
+    if (!top) {
+      // items 为空（正文一个标题都没有 / TOC 还没解析出来）时以前会在这里
+      // `top.index` 抛 TypeError —— 每个滚动事件抛一次，只留在控制台里。
+      return;
     }
     setCurrIndex(top.index);
     updateHash(top.text);

@@ -63,7 +63,9 @@ export default function (props) {
             name={'expiresIn'}
             label="登录凭证(Token)有效期(秒)"
             placeholder={'默认为 7 天'}
-            tooltip="默认为 7 天"
+            tooltip="默认为 7 天。最小 60 秒：这个值会原样进 JWT 的 expiresIn，0/负数会让签出来的 token 立刻过期（登录看起来成功、下一个请求就被踢回登录页），所以在表单这一层就夹住。"
+            min={60}
+            fieldProps={{ precision: 0 }}
           />
         </ProForm>
       </Card>
@@ -127,6 +129,8 @@ export default function (props) {
             name={'delay'}
             label="延时自动更新时间(秒)"
             tooltip="仅在「延时自动更新」模式下生效：每隔这么多秒，前台会尝试用最新的后端数据重新生成静态页面。\n\n前台会把这个值夹到最小 60 秒（填更小也按 60 算），填非数字会被忽略而不是让构建失败。\n\n默认的「按需更新」模式不看这个值：改文章时由后端主动触发重渲染，另外有一个 24 小时的兜底周期，万一某次触发丢了也能自愈。"
+            min={1}
+            fieldProps={{ precision: 0 }}
           />
         </ProForm>
       </Card>
