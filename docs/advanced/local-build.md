@@ -133,7 +133,7 @@ curl -X POST http://127.0.0.1:18080/api/admin/backup/full/restore -H "token: $TO
 | 现象 | 原因 | 解法 |
 | --- | --- | --- |
 | server 报 `getaddrinfo EAI_AGAIN vb-mongo` | rootless podman 没装 `aardvark-dns`，**容器名解析不了** | 用 mongo 容器的 IP，或 `--add-host vb-mongo:<IP>` |
-| 前台整站 502，`/admin` 与 `/api` 正常 | Next 13 standalone 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID | server 已显式传 `HOSTNAME=0.0.0.0`；自己起 Next 时也要设 |
+| 前台整站 502，`/admin` 与 `/api` 正常 | Next 13/14 standalone 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID | server 已显式传 `HOSTNAME=0.0.0.0`；自己起 Next 时也要设 |
 | 恢复后调 `/api/admin/**` 全是 401 | JWT 密钥是**启动时**读的，恢复把 `settings` 换成了备份里的 | 重启一次容器让密钥对齐（用户侧只需重新登录） |
 | `/robots.txt` 404 但 `/sitemap.xml` 200 | caddy 模板有 `srv0(:443)` 和 `srv1(:80)` **两套路由**，只补了一套 | 两个 server 的路由必须一致（有测试守着） |
 | `/sitemap.xml` 刚恢复完 404，一两分钟后 200 | 恢复后才开始生成 | 验证脚本要给足重试，别当故障 |

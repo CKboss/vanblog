@@ -499,7 +499,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 | NestJS | **10.x**（common/core/testing 10.4.22，platform-express **10.4.22**） | 停在 10：Nest 11 = Express 5 = path-to-regexp v8，`app.module.ts` 那 4 处 `path:'*'` 会失配（§7.50/§7.52） |
 | mongoose | **8.24.4**（自带 driver mongodb 6.20.0） | `@nestjs/mongoose` 10 的 peer 是 `^7.4 \|\| ^8`；mongoose 9 要配 `@nestjs/mongoose` 12（§7.52） | **→ 已升（§7.52）**
 | sharp | **0.35.4** | 0.33 起预编译改成 npm optionalDependencies、无 install 脚本（§7.47） |
-| Next.js | 13.5.x（pages router） | |
+| Next.js | **14.2.x**（pages router；15 要 React 19，被 @bytemd/react 的 peer 挡住，见 §7.53） | |
 | umi | 3.5.x（admin） | 两个 pnpm 补丁是为它的 MFSU 老解析器打的 |
 | Alpine | 3.24.1（`node:24-alpine` 带的，容器内实测） | 仓库路径是 `v3.24`（两段），而 `VERSION_ID` 是 `3.24.1`（三段） |
 
@@ -4215,14 +4215,14 @@ tsc 0 错。⚠️ CI 的 testPathPattern 白名单要补
 | −2 | `@nestjs/passport` | 9.0.3 | 12.0.0 | 同上 | 跟随到 10 | **→ 已升（§7.52）**
 | −2 | `mongoose` | 7.8.12 | 9.10.1 | 7 仍在维护但已老 | **升到 8**（`@nestjs/mongoose` 10 的 peer 支持 `^7.4 \|\| ^8`；9 要配 nestjs/mongoose 12，跨太多） | **→ 已升（§7.52）**
 | −3 | `typescript` | 4.9.5 | **7.0.2** | 4.9 早已停更 | **已升到 5.9.3**（不是 7：TS 7 是 Go 重写的新编译器，ts-jest / @nestjs/cli / IDE 生态还没跟上；6.0 同理） |
-| −3 | `next` | 13.5.11 | 16.3.5 | **13 已停止维护**（Vercel 只给最近 2–3 个大版本打补丁） | 下一步升到 **14**（pages router 完整保留、React 18 不动）；15/16 要 React 19，而 `@bytemd/react` 的 peer 只到 React 18，会连带把编辑器/渲染器一起拖下水 |
+| −3 | `next` | 13.5.11 | 16.3.5 | **13 已停止维护**（Vercel 只给最近 2–3 个大版本打补丁） | 下一步升到 **14**（pages router 完整保留、React 18 不动）；15/16 要 React 19，而 `@bytemd/react` 的 peer 只到 React 18，会连带把编辑器/渲染器一起拖下水 | （**已升到 14.2.35，见 §7.53**；15/16 仍需 React 19，与 @bytemd peer 冲突，维持单独立项）
 | −1 | `react` / `react-dom`（website） | 18.2.0 | 19.3.0 | 18 仍在维护 | 暂不动（与 Next 15 绑定） |
 | −2 | `react` / `react-dom`（admin） | **17.0.2** | 19.3.0 | **17 已停止维护** | 属于 admin 大改造，单独立项 |
 | −1 | `umi`（admin） | 3.5.41 | 4.7.18 | **3 已停止维护** | 单独立项（配置体系、路由约定、插件全变） |
 | −2 | `antd`（admin） | 4.24.15 | 6.6.4 | 4 只收严重问题 | 单独立项（`visible`→`open`、less→cssinjs、Form/Table API 全变，100+ 文件） |
 | −1 | `@ant-design/pro-components` / `pro-layout` | 1.1.25 / 6.38.22 | 2.8.10 / 7.22.7 | 跟随 antd | 与 antd 一起动 |
-| −1 | `express` | 4.21.2 | 5.2.1 | 4 仍在维护（安全补丁还有） | **暂不动**：Express 5 换了 path-to-regexp v8，`path: '*'` 这种裸通配不再合法，而本仓库 `app.module.ts` 有 **4 处** `forRoutes({ path: '*' })`；这也是 Nest 只能停在 10 的原因（Nest 11 起默认 Express 5） |
-| −1 | `multer` | 1.4.4-lts.1 | 2.4.0 | **1.x 已停更、带已知漏洞** | 与 Nest 11 绑定（`@nestjs/platform-express` 10 声明的是 multer 1.x，强行 override 到 2 会破坏 `FileInterceptor` 的类型与行为） |
+| −1 | `express` | 4.21.2 | 5.2.1 | 4 仍在维护（安全补丁还有） | **暂不动**：Express 5 换了 path-to-regexp v8，`path: '*'` 这种裸通配不再合法，而本仓库 `app.module.ts` 有 **4 处** `forRoutes({ path: '*' })`；这也是 Nest 只能停在 10 的原因（Nest 11 起默认 Express 5） | （**已升到 4.22.3 单副本，见 §7.53**；仍然留在 4.x —— Express 5 = path-to-regexp v8 的结论不变）
+| −1 | `multer` | 1.4.4-lts.1 | 2.4.0 | **1.x 已停更、带已知漏洞** | 与 Nest 11 绑定（`@nestjs/platform-express` 10 声明的是 multer 1.x，强行 override 到 2 会破坏 `FileInterceptor` 的类型与行为） | （**已升到 2.4.0，见 §7.53** —— 不必等 Nest 11：platform-express 10.4.18+ 原生就是 multer 2）
 | −2 | `picgo` | 1.5.6 | 3.0.2 | 1.x 带着 `git-clone`/`decompress` 两个**无修复版本**的漏洞 | 已在 §7.46 用 `VANBLOG_ALLOW_PICGO_PLUGINS` 默认关闭缓解；升 3.x 是另一次依赖树重排（Node 版本、插件 API 全变），单独立项 |
 | −1 | `jimp` | 0.22.10 | 1.6.1 | 0.22 老但仍在 | 中等：1.x 是重写版，API 全变（水印那条链路要重写），而且它需要联网拉字体（本机离线跑不了那套测试） |
 | −2 | `markdown-it` | 13.0.2 | 15.0.2 | 13 老 | 中等：14 起改了导出形态与部分插件签名，牵连 `markdown-it-katex` 替代品、task-lists、锚点等一整串插件 |

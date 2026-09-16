@@ -121,7 +121,7 @@ Markdown 渲染管线里有三个「重」依赖，以前是**静态 import**，
 现在 `shouldInjectGa` 与 `describeGaInjection` 用同一个判据：格式不对就什么都不注入。
 ⚠️ 两个函数必须一起改：组件实际调的是 `describeGaInjection`，只收紧 `shouldInjectGa` 没用。
 
-**`experimental.largePageDataBytes` 从 10MB 收回 256KB。** Next 13 默认 128KB，
+**`experimental.largePageDataBytes` 从 10MB 收回 256KB。** Next 13/14 默认 128KB（14.2.35 实测同值），
 抬到 10MB（80 倍）等于把**唯一会报警的机制**关掉了：列表页把全文塞进 pageProps、
 `/timeline` 把没人读的文章数组塞两份，都不会再有任何提示。现有最大的页面是 `/timeline` 的 73KB，
 256KB 绰绰有余；真超了说明有人往 pageProps 里塞了不该塞的东西，那时就该看到构建告警。
