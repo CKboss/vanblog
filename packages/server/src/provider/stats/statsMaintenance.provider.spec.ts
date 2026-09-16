@@ -584,3 +584,66 @@ describe('StatsMaintenanceProvider：删除 visits 冗余前缀索引', () => {
     }
   });
 });
+
+describe('集合还不存在时不要报"失败"', () => {
+  // 全新站点（刚装完 / 刚 reset 完）的第一次启动，visits 与 viewers 都还没被创建，
+  // Mongo 对 listIndexes 回 `ns does not exist`（错误码 26）。这是正常状态，
+  // 以前却一律打 WARN，于是新装站点的第一屏日志里挂着两条"读取索引列表失败"，
+  // 看着像出了事。现在要降级成一条说明性的 LOG，而真正的故障仍然是 WARN。
+  const { isNamespaceMissing } = require('./statsMaintenance.provider');
+
+  it('认得出各种形态的"命名空间不存在"', () => {
+    expect(isNamespaceMissing({ code: 26 })).toBe(true);
+    expect(isNamespaceMissing({ codeName: 'NamespaceNotFound' })).toBe(true);
+    expect(isNamespaceMissing({ message: 'ns does not exist: vanBlog.visits' })).toBe(true);
+    expect(isNamespaceMissing(new Error('ns does not exist: vanBlog.viewers'))).toBe(true);
+  });
+
+  it('不会把别的错误误判成"集合不存在"', () => {
+    expect(isNamespaceMissing(null)).toBe(false);
+    expect(isNamespaceMissing(undefined)).toBe(false);
+    expect(isNamespaceMissing({})).toBe(false);
+    expect(isNamespaceMissing({ code: 13, message: 'not authorized' })).toBe(false);
+    expect(isNamespaceMissing(new Error('connection refused'))).toBe(false);
+  });
+
+  it('listIndexes 遇到 ns 不存在时打 LOG 而不是 WARN，并返回空列表', async () => {
+    const { StatsMaintenanceProvider } = require('./statsMaintenance.provider');
+    const logs: string[] = [];
+    const warns: string[] = [];
+    const provider = Object.create(StatsMaintenanceProvider.prototype);
+    provider['logger'] = { log: (m: string) => logs.push(m), warn: (m: string) => warns.push(m) };
+    const model = {
+      collection: {
+        indexes: async () => {
+          const err: any = new Error('ns does not exist: vanBlog.visits');
+          err.code = 26;
+          throw err;
+        },
+      },
+    };
+    const out = await provider['listIndexes'](model, 'visits');
+    expect(out).toEqual([]);
+    expect(warns).toEqual([]);
+    expect(logs.join(' ')).toContain('还不存在');
+  });
+
+  it('真正的失败仍然走 WARN', async () => {
+    const { StatsMaintenanceProvider } = require('./statsMaintenance.provider');
+    const logs: string[] = [];
+    const warns: string[] = [];
+    const provider = Object.create(StatsMaintenanceProvider.prototype);
+    provider['logger'] = { log: (m: string) => logs.push(m), warn: (m: string) => warns.push(m) };
+    const model = {
+      collection: {
+        indexes: async () => {
+          throw new Error('not authorized on vanBlog');
+        },
+      },
+    };
+    const out = await provider['listIndexes'](model, 'visits');
+    expect(out).toEqual([]);
+    expect(logs).toEqual([]);
+    expect(warns.join(' ')).toContain('索引列表失败');
+  });
+});

@@ -132,6 +132,23 @@ export interface DropRedundantResult {
   errors: string[];
 }
 
+
+/**
+ * Mongo 的"命名空间不存在"（集合还没被创建过）。
+ * 优先看错误码 26（NamespaceNotFound），退化到消息文本 —— 不同 driver 版本给的字段不完全一样。
+ */
+export function isNamespaceMissing(err: unknown): boolean {
+  const e = err as { code?: number; codeName?: string; message?: string } | null;
+  if (!e) {
+    return false;
+  }
+  if (e.code === 26 || e.codeName === 'NamespaceNotFound') {
+    return true;
+  }
+  const msg = String(e.message || '');
+  return msg.includes('ns does not exist') || msg.includes('NamespaceNotFound');
+}
+
 @Injectable()
 export class StatsMaintenanceProvider implements OnApplicationBootstrap {
   logger = new Logger(StatsMaintenanceProvider.name);
@@ -252,6 +269,14 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
     try {
       return await model.collection.indexes();
     } catch (err) {
+      // ⚠️ 全新站点上这两个集合还不存在，Mongo 会回 `ns does not exist`（错误码 26）。
+      // 这是**正常情况**，不是故障：刚装完 / 刚 reset 完的第一次启动必然如此，
+      // 集合会在第一次写入时被创建。以前一律打 WARN，于是每个新装站点的第一屏日志里
+      // 都挂着两条"读取索引列表失败"，看起来像出了事 —— 其实什么都不用做。
+      if (isNamespaceMissing(err)) {
+        this.logger.log(`${collection} 集合还不存在（全新站点），本轮跳过索引维护`);
+        return [];
+      }
       this.logger.warn(`读取 ${collection} 索引列表失败：${(err as Error)?.message || err}`);
       return [];
     }
