@@ -4018,6 +4018,22 @@ RSS 里的公式 HTML 会变，属于**有意的可见变化**；`markdown.provi
 `require.resolve('sharp/package.json')` 会被 Node 直接拒掉。读已安装包的 package.json 要用**文件路径**，
 不要走 `require.resolve` 的子路径。
 
+⚠️ **这次升级让镜像从 721MB 涨到 808MB，全部来自 waline**：`/app/waline/node_modules` 是
+**332.7M**，而里面大约 170M 是这个部署**用不到**的东西 ——
+`@mathjax/mathjax-newcm-font` 49.3M + `@mathjax/src` 43.9M + `@mathjax/mathjax-tex-font` 9.4M
+（≈102M，waline 用它做**邮件通知里公式的服务端渲染**）、`leancloud-storage` 34.4M +
+`leancloud-realtime` 22.2M（≈57M，LeanCloud 存储适配器；本站用的是 mongo）、
+`better-sqlite3` 12M（SQLite 适配器，同样不用）。其余大头是 `core-js-pure` 15.5M、
+`ip2region` 11M、`jsdom` 8.5M、`moment` 4.8M。
+这些都是 `@waline/vercel` 的**硬依赖**，所以 `--prod` / `pnpm deploy` 那套对它们无效
+（waline 这个 stage 的 package.json 只有一个依赖、没有 devDependencies，本来就只装运行时依赖）。
+**裁剪是可行的方向但没有做**：在容器里把这 6 个目录改名移开之后，评论接口经 caddy 仍然 200，
+但那次验证**不扎实** —— 无法确认响应来自"移开之后重新拉起的 waline"还是"没被杀掉的旧进程"，
+也没有验证带公式的评论触发邮件通知时 MathJax 缺失会不会抛错（那正是它存在的理由）。
+要做就得：① 明确的构建开关（例如 `VAN_BLOG_WALINE_SLIM=true`）；② 构建后**真的启动一次 waline**
+并打它的接口，而不是只靠 `du` 变小就收工；③ 邮件通知路径的降级行为要写进文档
+（缺 MathJax 时带公式的评论邮件是报错、还是退化成纯文本）。在①②③齐了之前不要动。
+
 **实测**：server 885（883 绿 + 2 个负载敏感的 watermark 离线字体用例；`markdownExport.spec.ts`
 同样会在全量并行时抖，单独跑 35/35 全绿）、website **67 文件 / 675**、admin **347**、
 脚本 **22 文件 / 1109**；本机 sharp 0.35.4 编解码往返正常；dev 栈重装后三个端口全 200、tsc 干净。
