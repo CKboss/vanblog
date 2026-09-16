@@ -19,14 +19,17 @@ export class AnalysisProvider {
   ) {}
 
   async getOverViewTabData(num: number) {
-    const total = {
-      wordCount: await this.metaProvider.getTotalWords(),
-      articleNum: await this.articleProvider.getTotalNum(true),
-    };
-    const viewer = await this.viewProvider.getViewerGrid(num);
-    const siteInfo = await this.metaProvider.getSiteInfo();
+    // 四个读互不依赖，串行 await 时后台概览页要等"四次往返之和"；
+    // 并行之后总耗时 ≈ 最慢的那一个（与 §7.44 给 /api/public/meta 做的是同一件事）。
+    // 返回对象的字段与键顺序和原来逐字一致。
+    const [wordCount, articleNum, viewer, siteInfo] = await Promise.all([
+      this.metaProvider.getTotalWords(),
+      this.articleProvider.getTotalNum(true),
+      this.viewProvider.getViewerGrid(num),
+      this.metaProvider.getSiteInfo(),
+    ]);
     return {
-      total,
+      total: { wordCount, articleNum },
       viewer,
       link: {
         baseUrl: siteInfo.baseUrl,
@@ -36,20 +39,25 @@ export class AnalysisProvider {
   }
 
   async getViewerTabData(num: number): Promise<ViewerTabData> {
-    const siteInfo = await this.metaProvider.getSiteInfo();
+    // 六个互不依赖的读，一次并行取回（原来串行 6 次往返）
+    const [siteInfo, topViewer, topVisited, recentVisitArticles, lastVisitItem, totals] =
+      await Promise.all([
+        this.metaProvider.getSiteInfo(),
+        this.articleProvider.getTopViewer('list', num),
+        this.articleProvider.getTopVisited('list', num),
+        this.articleProvider.getRecentVisitedArticles(num, 'list'),
+        this.visitProvider.getLastVisitItem(),
+        this.metaProvider.getViewer(),
+      ]);
     const enableGA = Boolean(siteInfo.gaAnalysisId) && siteInfo.gaAnalysisId != '';
     const enableBaidu = Boolean(siteInfo.baiduAnalysisId) && siteInfo.baiduAnalysisId != '';
-    const topViewer = await this.articleProvider.getTopViewer('list', num);
-    const topVisited = await this.articleProvider.getTopVisited('list', num);
-    const recentVisitArticles = await this.articleProvider.getRecentVisitedArticles(num, 'list');
     let siteLastVisitedTime = null;
     let siteLastVisitedPathname = '';
-    const lastVisitItem = await this.visitProvider.getLastVisitItem();
     if (lastVisitItem) {
       siteLastVisitedTime = lastVisitItem.lastVisitedTime;
       siteLastVisitedPathname = lastVisitItem.pathname;
     }
-    const { viewer: totalViewer, visited: totalVisited } = await this.metaProvider.getViewer();
+    const { viewer: totalViewer, visited: totalVisited } = totals;
     let maxArticleVisited = 0;
     let maxArticleViewer = 0;
     if (topViewer && topViewer.length > 0) {
@@ -74,17 +82,21 @@ export class AnalysisProvider {
   }
 
   async getArticleTabData(num: number): Promise<ArticleTabData> {
-    const articleNum = await this.articleProvider.getTotalNum(true);
-    const wordNum = await this.metaProvider.getTotalWords();
-    const tagNum = (await this.tagProvider.getAllTags(true))?.length || 0;
-    const categoryNum = (await this.categoryProvider.getAllCategories())?.length || 0;
-    const categoryPieData = await this.categoryProvider.getPieData();
-    const columnData = await this.tagProvider.getColumnData(num, true);
+    // 同样：六个互不依赖的读一次并行取回
+    const [articleNum, wordNum, tags, categories, categoryPieData, columnData] =
+      await Promise.all([
+        this.articleProvider.getTotalNum(true),
+        this.metaProvider.getTotalWords(),
+        this.tagProvider.getAllTags(true),
+        this.categoryProvider.getAllCategories(),
+        this.categoryProvider.getPieData(),
+        this.tagProvider.getColumnData(num, true),
+      ]);
     return {
       articleNum,
       wordNum,
-      tagNum,
-      categoryNum,
+      tagNum: tags?.length || 0,
+      categoryNum: categories?.length || 0,
       categoryPieData,
       columnData,
     };

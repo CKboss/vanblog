@@ -1,4 +1,9 @@
 import { rateLimitMiddleware, securityHeadersMiddleware } from './utils/rateLimit';
+import {
+  makeRequestIdMiddleware,
+  resolveAccessLogFlag,
+  resolveSlowRequestMs,
+} from './utils/requestId';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -240,6 +245,17 @@ function num(value: string | undefined, fallback: number): number {
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
+    // request-id + 慢请求 / 5xx /（可选）访问日志：挂在**最前面**，
+    // 之后所有中间件（安全头、限流）产生的响应都带着同一个 id，
+    // 用户报障时报出响应头里的 x-request-id 就能在日志里定位到那一行
+    consumer
+      .apply(
+        makeRequestIdMiddleware({
+          slowMs: resolveSlowRequestMs(),
+          accessLog: resolveAccessLogFlag(),
+        }),
+      )
+      .forRoutes({ path: '*', method: RequestMethod.ALL });
     // 安全响应头 + 全局兜底限流（容器内部回环调用放行）
     consumer
       .apply(securityHeadersMiddleware, rateLimitMiddleware)

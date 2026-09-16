@@ -41,6 +41,10 @@ function createFakeCollection(name: string, docs: Doc[] = [], indexes: Doc[] = [
       if (state.indexes.length === before) throw new Error(`index not found with name [${indexName}]`);
       return true;
     },
+    stats: async () => {
+      state.log.push(`${name}.stats`);
+      return { totalIndexSize: state.indexes.length * 40960 };
+    },
   };
   return { state, collection };
 }
@@ -416,6 +420,165 @@ describe('StatsMaintenanceProvider：保留期清理', () => {
       const second = await fake.provider.pruneStats('第二次', NOW);
       expect(second.visits).toBe(0);
       expect(second.viewers).toBe(0);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+});
+
+describe('StatsMaintenanceProvider：删除 visits 冗余前缀索引', () => {
+  /** 本机线上（2026-09-16）的真实索引列表：两个单列前缀 + 两个复合 + 两个时间列 */
+  const liveIndexes = (): Doc[] => [
+    { v: 2, key: { date: 1 }, name: 'date_1' },
+    { v: 2, key: { pathname: 1 }, name: 'pathname_1' },
+    { v: 2, key: { lastVisitedTime: 1 }, name: 'lastVisitedTime_1' },
+    { v: 2, key: { createdAt: 1 }, name: 'createdAt_1' },
+    { v: 2, key: { pathname: 1, date: -1 }, name: 'pathname_1_date_-1' },
+    { v: 2, key: { date: 1, pathname: 1 }, name: 'date_1_pathname_1', unique: true },
+  ];
+  const viewerUniq = (): Doc[] => [{ v: 2, key: { date: 1 }, name: 'date_1', unique: true }];
+  const names = (fake: ReturnType<typeof createFake>) =>
+    fake.visits.state.indexes.map((i) => i.name).sort();
+
+  it('替代复合索引都在时：date_1 与 pathname_1 都被删掉，其它索引一根毫毛不动', async () => {
+    const fake = createFake({ visitIndexes: liveIndexes(), viewerIndexes: viewerUniq() });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dropped.skipped).toBe(false);
+      expect(res.dropped.dropped.sort()).toEqual(['date_1', 'pathname_1']);
+      expect(res.dropped.kept).toEqual([]);
+      expect(res.dropped.errors).toEqual([]);
+      // fake 的 stats 是 indexes.length * 40960：删完剩 5 个（含 _id_）
+      expect(res.dropped.totalIndexSize).toBe(5 * 40960);
+      expect(names(fake)).toEqual([
+        '_id_',
+        'createdAt_1',
+        'date_1_pathname_1',
+        'lastVisitedTime_1',
+        'pathname_1_date_-1',
+      ]);
+      expect(fake.visits.state.log).toContain('visits.dropIndex(date_1)');
+      expect(fake.visits.state.log).toContain('visits.dropIndex(pathname_1)');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('幂等：删过之后再跑一次启动维护，一个索引都不动、连多余的 listIndexes/stats 都没有', async () => {
+    // 模拟"删完之后重启"：索引列表里已经没有两个单列前缀
+    const after = liveIndexes().filter((i) => i.name !== 'date_1' && i.name !== 'pathname_1');
+    const fake = createFake({ visitIndexes: after, viewerIndexes: viewerUniq() });
+    try {
+      const res = await fake.provider.runStartupMaintenance('第二次启动');
+      expect(res.dropped.dropped).toEqual([]);
+      expect(res.dropped.kept).toEqual([]);
+      // 没有候选 => 不重新 listIndexes、不读 stats、更不 dropIndex
+      expect(fake.visits.state.log).toEqual(['visits.indexes']);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('安全护栏：{pathname:1,date:-1} 不存在时绝不删 pathname_1（date_1 有替代就照删）', async () => {
+    const fake = createFake({
+      visitIndexes: [
+        { v: 2, key: { date: 1 }, name: 'date_1' },
+        { v: 2, key: { pathname: 1 }, name: 'pathname_1' },
+        { v: 2, key: { date: 1, pathname: 1 }, name: 'date_1_pathname_1', unique: true },
+      ],
+      viewerIndexes: viewerUniq(),
+    });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dropped.dropped).toEqual(['date_1']);
+      expect(res.dropped.kept).toEqual([
+        { name: 'pathname_1', reason: '替代索引 {"pathname":1,"date":-1} 不存在' },
+      ]);
+      expect(names(fake)).toContain('pathname_1');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('唯一索引是这一轮刚建的（启动时那份列表里没有）：重新 listIndexes 之后再删', async () => {
+    const fake = createFake({
+      // 启动时读到的列表：只有 date_1，还没有唯一复合索引
+      visitIndexes: [{ v: 2, key: { date: 1 }, name: 'date_1' }],
+      viewerIndexes: viewerUniq(),
+    });
+    try {
+      // ensureUniqueIndex 刚把 date_1_pathname_1 建出来 —— 之后 listIndexes 就能看到它
+      fake.visits.collection.indexes = async () => [
+        { v: 2, key: { _id: 1 }, name: '_id_' },
+        { v: 2, key: { date: 1 }, name: 'date_1' },
+        { v: 2, key: { date: 1, pathname: 1 }, name: 'date_1_pathname_1', unique: true },
+      ];
+      const res = await fake.provider.dropRedundantVisitIndexes(
+        [{ v: 2, key: { date: 1 }, name: 'date_1' }],
+        { collection: 'visits', name: 'date_1_pathname_1', created: true, replaced: false },
+      );
+      expect(res.dropped).toEqual(['date_1']);
+      expect(res.kept).toEqual([]);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('VANBLOG_VISITS_DROP_REDUNDANT_INDEXES=false：一个都不删（kill-switch）', async () => {
+    const fake = createFake({
+      visitIndexes: liveIndexes(),
+      viewerIndexes: viewerUniq(),
+      env: { VANBLOG_VISITS_DROP_REDUNDANT_INDEXES: 'false' },
+    });
+    try {
+      expect(fake.provider.dropRedundantIndexes).toBe(false);
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dropped.skipped).toBe(true);
+      expect(res.dropped.dropped).toEqual([]);
+      expect(names(fake)).toEqual([
+        '_id_',
+        'createdAt_1',
+        'date_1',
+        'date_1_pathname_1',
+        'lastVisitedTime_1',
+        'pathname_1',
+        'pathname_1_date_-1',
+      ]);
+      expect(fake.visits.state.log).not.toContain('visits.dropIndex(date_1)');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('dry run 时整个删除步骤不跑（跟建索引同一个门槛）', async () => {
+    const fake = createFake({
+      visitIndexes: liveIndexes(),
+      viewerIndexes: viewerUniq(),
+      env: { VANBLOG_VISITS_DEDUP_DRY_RUN: 'true' },
+    });
+    try {
+      const res = await fake.provider.runStartupMaintenance('测试');
+      expect(res.dropped.skipped).toBe(true);
+      expect(names(fake)).toContain('date_1');
+      expect(names(fake)).toContain('pathname_1');
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('dropIndex 报"不存在"按成功处理；其它错误记进 errors 不往外抛', async () => {
+    const fake = createFake({ visitIndexes: liveIndexes(), viewerIndexes: viewerUniq() });
+    try {
+      const realDrop = fake.visits.collection.dropIndex;
+      fake.visits.collection.dropIndex = async (name: string) => {
+        if (name === 'date_1') throw new Error('index not found with name [date_1]');
+        if (name === 'pathname_1') throw new Error('SomeWeirdError: busy');
+        return realDrop(name);
+      };
+      const res = await fake.provider.runStartupMaintenance('测试');
+      // 别的实例已经删了 = 目的达成
+      expect(res.dropped.dropped).toEqual(['date_1']);
+      expect(res.dropped.errors).toEqual(['pathname_1: SomeWeirdError: busy']);
     } finally {
       fake.restoreEnv();
     }

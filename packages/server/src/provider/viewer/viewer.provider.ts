@@ -28,15 +28,45 @@ export class ViewerProvider {
       .exec();
   }
 
+  /**
+   * 后台「概览/访问趋势」的每日访客快照（累计 total + 每日增量 each）。
+   *
+   * ⚠️ 以前这里是标准的 **N+1**：num+1 天逐天串行 `findOne`（后台默认 num=5，
+   * 但趋势图可以要 30/90 天 —— 91 次串行往返）。现在一次
+   * `find({date:{$in:…}}).sort({date:1})` 全取回来（走 viewers 的 date 唯一索引），
+   * 再在 JS 里按天取值。**日期序列、循环方向、缺失天直接跳过的语义与原来逐字一致**，
+   * 返回对象逐字段相同（spec 里与旧算法的输出做 deep-equal 对比钉住）。
+   */
   async getViewerGrid(num: number) {
     const curDate = dayjs();
     const gridTotal = [];
     const tmpArr = [];
     const today = { viewer: 0, visited: 0 };
     const lastDay = { viewer: 0, visited: 0 };
+    // 与旧的逐日循环完全相同的日期序列：num 天前 → 今天（升序）。
+    // num 是 NaN / 负数时循环体一次都不执行、$in 是空数组 —— 与旧行为一致。
+    const dates: string[] = [];
+    for (let i = num; i >= 0; i--) {
+      dates.push(curDate.add(-1 * i, 'day').format('YYYY-MM-DD'));
+    }
+    const byDate = new Map<string, Viewer>();
+    if (dates.length) {
+      const rows = await this.viewerModel
+        .find({ date: { $in: dates } })
+        .sort({ date: 1 })
+        .exec();
+      for (const row of rows) {
+        const key = (row as any)?.date;
+        // date 上有唯一索引，正常一天最多一行；真有重复时保留第一行
+        // （旧的 findOne 无排序，重复时本来也只是"任意一行"，语义没有被收紧也没有被放宽）
+        if (typeof key === 'string' && !byDate.has(key)) {
+          byDate.set(key, row);
+        }
+      }
+    }
     for (let i = num; i >= 0; i--) {
       const last = curDate.add(-1 * i, 'day').format('YYYY-MM-DD');
-      const lastDayData = await this.findByDate(last);
+      const lastDayData = byDate.get(last);
       if (i == 0) {
         if (lastDayData) {
           today.viewer = lastDayData.viewer;

@@ -74,9 +74,14 @@ function MyApp({ Component, pageProps }: AppProps) {
   return (
     <>
       <Head>
+        {/* ⚠️ 不要再把 `user-scalable=no` / `maximum-scale=1` 加回来：
+            禁止缩放是 WCAG 1.4.4（Resize Text）失败项，低视力用户在手机上
+            就完全没法放大正文了。代价是 iOS Safari 会在聚焦 font-size < 16px
+            的输入框时自动放大页面 —— 这是可接受的行为（双击/双指仍可自由缩放），
+            仓库里没有任何测试或注释依赖"输入框不触发缩放"这个旧行为。 */}
         <meta
           name="viewport"
-          content="width=device-width, initial-scale=1, user-scalable=no"
+          content="width=device-width, initial-scale=1"
         />
       </Head>
       <GlobalContext.Provider

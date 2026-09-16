@@ -11,10 +11,19 @@ export class Visit extends Document {
   @Prop()
   viewer: number;
 
-  @Prop({ index: true })
+  // ⚠️ `date` / `pathname` **故意不写 `index: true`**：单列的 `date_1` / `pathname_1`
+  // 分别是 `{date:1,pathname:1}`（唯一，statsMaintenance 建）与 `{pathname:1,date:-1}`
+  // （下面显式声明）的**纯前缀重复** —— 实测各占 163,840 B / 122,880 B，
+  // explain 全量扫过一遍后没有任何查询需要它们（{date,pathname} 走唯一索引或
+  // pathname_1_date_-1，{pathname} 走 pathname_1_date_-1，{date:$range} 走
+  // date_1_pathname_1 的 date 前缀），却给每次写多加两个索引维护操作。
+  // 存量索引由 `provider/stats/statsMaintenance.provider.ts` 在启动维护里删除
+  // （kill-switch：`VANBLOG_VISITS_DROP_REDUNDANT_INDEXES`，默认开）。
+  // 把 `index: true` 加回来会让 `autoIndex` 每次启动重建它们，删了也白删。
+  @Prop()
   date: string;
 
-  @Prop({ index: true })
+  @Prop()
   pathname: string;
 
   @Prop({ index: true })

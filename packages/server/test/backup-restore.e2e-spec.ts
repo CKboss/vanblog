@@ -270,6 +270,10 @@ describe('backup restore keeps new-machine admin (#280)', () => {
       settingProvider as any,
       staticProvider as any,
       isrProvider as any,
+      // fullBackupProvider（整站备份，§7.6 加的第 12 个构造参数）：
+      // 这个 spec 只测 JSON 导出/导入路径，不碰 full/* 接口，给个空壳即可。
+      // 之前少传这个参数让整个套件编译失败（CI 的 backup-e2e 步骤一直是红的）。
+      {} as any,
     );
 
     const backup = {

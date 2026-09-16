@@ -3364,7 +3364,7 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
 9. **RSS 全量同步渲染**：实测 53 篇 markdown-it+hljs+katex = **135ms 阻塞事件循环**，
    三份 feed 各约 350KB（**全文、无条数上限**），每小时 + 每次启动 + 每次编辑后 3 分钟各跑一遍。
    应该限条数（20–30）并改异步/增量。
-10. 运行时杂项：`express.json({limit:'50mb'})` 挂在**所有**路由（评论只要几 KB，只有备份恢复/上传才要大）；
+10. 运行时杂项：~~`express.json({limit:'50mb'})` 挂在**所有**路由~~（**已落地 §7.48**：全局 1mb + 4 个内容前缀 50mb）；~~无 request-id / 无 API 访问日志 / 无慢查询日志~~（**已落地 §7.48**）；原始记录：`express.json({limit:'50mb'})` 挂在所有路由（评论只要几 KB，只有备份恢复/上传才要大）；
    无 request-id / 无 API 访问日志 / 无慢查询日志（ISR 风暴或 30s serverSelection 卡顿时无法归因）；
    `InitMiddleware` 每个请求都 `userModel.findOne({})`（还把密码哈希读进内存）；
    `initJwt` 在 `main.ts` 与 JwtModule 工厂里**各跑一次**且两次都不 `client.close()`（泄漏 MongoClient
@@ -3935,9 +3935,9 @@ picgo.provider、clusterRole、clusterBootstrap、website.provider.respawn、aud
 
 **留给下一轮的两条（都量化过）**：
 
-- `line-reader` 与 `@types/line-reader` 现在**已经没人用了**（`searchLog` 改成尾部限界读取之后），
+- ~~`line-reader` 与 `@types/line-reader` 已经没人用了~~ **已在 §7.47 那批依赖升级里删除**（`searchLog` 改成尾部限界读取之后），
   可以由管依赖的人删掉。
-- `visits.date_1`(163,840 B) 与 `visits.pathname_1`(122,880 B) 现在是**纯冗余前缀索引**
+- ~~`visits.date_1` 与 `visits.pathname_1` 是纯冗余前缀索引~~ **已落地，见 §7.48（totalIndexSize 实测 1,183,744 → 897,024 B）**。原始记录：`visits.date_1`(163,840 B) 与 `visits.pathname_1`(122,880 B) 是**纯冗余前缀索引**
   （分别是 `date_1_pathname_1` 与 `pathname_1_date_-1` 的前缀）。删掉它们（同时要去掉那两个
   `@Prop` 的 `index:true`，否则 `autoIndex` 会重建）能让 `totalIndexSize` 从 1,175,552 B 降到
   ~888,832 B —— **低于本轮改动前的 937,984 B** —— 并少两次写放大。本轮没做，
@@ -4022,12 +4022,84 @@ RSS 里的公式 HTML 会变，属于**有意的可见变化**；`markdown.provi
 同样会在全量并行时抖，单独跑 35/35 全绿）、website **67 文件 / 675**、admin **347**、
 脚本 **22 文件 / 1109**；本机 sharp 0.35.4 编解码往返正常；dev 栈重装后三个端口全 200、tsc 干净。
 
+### 7.48 收尾这一轮：索引瘦身、body 限额、request-id、N+1、viewport（全部有实测）
+
+**`visits` 删掉两个纯冗余前缀索引**：`date_1`(151,552 B) 与 `pathname_1`(135,168 B) 分别是
+`{date:1,pathname:1}`(唯一) 与 `{pathname:1,date:-1}` 的前缀。删之前把代码里**每一条** visits
+查询都 explain 了一遍（脚本 `vanblog_dev/explain-visits.cjs`，本机不入库）：所有 winningPlan
+删除前后不变（`{date,pathname}` 走 IXSCAN(pathname_1_date_-1) 或唯一索引，`{pathname}` 系走
+pathname_1_date_-1，resolveSeeds 走 DISTINCT_SCAN(pathname_1_date_-1)，getLastVisitItem 走
+lastVisitedTime_1）；唯一变化是保留期清理 `{date:$range}` 从 IXSCAN(date_1) 换成
+IXSCAN(date_1_pathname_1)（date 是它的前缀，仍是索引扫描、不是 COLLSCAN）。
+`find({})`（备份导出）与启动去重的 `$group` 本来就是 COLLSCAN，前后一致。
+实测 `totalIndexSize` **1,183,744 → 897,024 B**（低于上一轮改动前的 937,984 B），每次写少维护两个索引。
+实现在 `statsMaintenance.provider.ts` 的启动维护里（幂等、primary-only、不在请求路径上）：
+kill-switch `VANBLOG_VISITS_DROP_REDUNDANT_INDEXES`（默认开），
+**替代的复合索引不存在就拒删**并打 WARN；schema 里两个 `@Prop` 的 `index:true` 已去掉
+（否则 `autoIndex` 每次启动都把它们重建回来）。重启 4 次实测：第一次删除并打印 totalIndexSize，
+之后每次都是"无可删"。
+
+**JSON body 限额从"处处 50mb"改成"全局 1mb + 内容路由 50mb"**：登录、公开评论、访客计数这些
+**匿名可达**的接口不再敞着 50MB 的解析上限（内存风险 + 现成的 DoS 面）。大限额只挂 4 个
+AdminGuard 后面的前缀：`/api/admin/article|draft|customPage|pipeline`
+（正文可内嵌 base64 图、整页 HTML、脚本体）。实现是 `main.ts` 里"先给前缀挂大 `json()`、
+再全局挂小 `json()`" —— body-parser 解析过就置 `req._body`，第二个解析器直接跳过，
+**每请求最多解析一次**（有测试钉住）。⚠️ 上传/整站恢复/导入全是 **multipart(multer)**，
+根本不经过 `express.json`，那些限额（8GB 恢复 / 200MB JSON 导入 / 50MB 图片 / 200MB 自定义页面）
+一行没动（实测 2MB multipart 打上传接口是 401 而不是 413，证明 json 解析器确实跳过了）。
+实测矩阵：1.17MB → login/comments **413**；900KB → 401（过了解析器、被 guard 拦）；
+1.2MB → article/customPage **401**（大解析器放行）；51MB → article **413**（50mb 顶还在）。
+环境变量 `VANBLOG_JSON_BODY_LIMIT`(1mb) / `VANBLOG_JSON_BODY_LIMIT_LARGE`(50mb)，非法值回落默认。
+⚠️ 没能验证的：带凭据的 40MB 文章保存、8GB 恢复上传（不做写操作的凭据调用）；
+multipart 路径是"按构造未变"+ 其 spec 全绿，但没有真推过多 GB 的载荷。
+
+**request-id + 慢请求/5xx/可选访问日志**：`utils/requestId.ts`，注册在 app.module 中间件链
+**最前**（所以 429 也带 id）。入站 `x-request-id` 要过白名单 `^[A-Za-z0-9._-]{1,128}$` 才沿用
+（那个头客户端可控，不校验就是一个日志注入口子），否则 `randomUUID()`；响应头回显、
+`req.requestId` 可取。5xx 必打一条带 id 的 ERROR（实测 6 条
+`5xx 请求：<uuid> POST /api/admin/init 500 1ms`）；≥`VANBLOG_SLOW_REQUEST_MS`(默认 5000，0=关)
+打 WARN；`VANBLOG_ACCESS_LOG=true`(默认关) 每个非静态请求一行 INFO。
+开销约束：无同步文件 I/O、`performance.now()` 单调钟、每请求一个字符串 + 一个 finish 监听器，
+响应体零改动。⚠️ express 层的早退（json 解析器的 413、`useStaticAssets` 直发的 `/static/**`、
+`main.ts` 的静态 403 兜底）在 Nest 中间件**之前**就结束了，这些响应没有 `x-request-id`；
+慢请求那条路径由 jest 钉住（30ms 阈值 + 60ms 路由），**没有在活体栈上演示过**
+（不能带着改小的 env 重启 dev 栈）。
+
+**后台仪表盘两处**：`ViewerProvider.getViewerGrid` 的 N+1（num+1 次串行 findOne）改成一次
+`find({date:{$in}}).sort({date:1})`（31 天 = 31 次往返 → 1 次），缺失天、今天回落昨天、
+键顺序等语义**逐字保留**（包括 `today.viewer==0` 那个回落先在 i==1 跑、随后被 i==0 覆盖的怪癖）——
+spec 里与**旧算法的逐字拷贝**对拍 8 个场景，活体上用临时管理员 token 对
+`/api/admin/analysis?tab=overview&overviewDataNum=30` 做了新旧代码的响应 diff：
+**3,307 B 逐字节相同**（token 已撤销并复验 401）。`AnalysisProvider` 三个 tab 的独立读全部
+`Promise.all`（overview 4 / viewer 6 / article 6 个读），响应 `JSON.stringify` 的键顺序钉死不变。
+
+**前台 viewport 去掉缩放阻断（WCAG 1.4.4）**：`pages/_app.tsx` 的 `user-scalable=no` 删掉，
+只剩 `width=device-width, initial-scale=1`；仓库里没有任何测试/注释依赖旧行为（查过）。
+代价：iOS Safari 聚焦 <16px 的输入框会自动放大（本站确有 0.8–0.875rem 的输入样式），
+用户可双指缩回 —— 把输入框字号抬到 16px 属于视觉变更，本轮没动。
+新 spec 把字符串钉死并全树扫描 `pages/`+`components/` 防回归。
+
+**顺手修了一个先于本轮就红着的 CI 套件**：`test/backup-restore.e2e-spec.ts` 给 `BackupController`
+传 11 个构造参数（§7.6 那轮加了第 12 个 `fullBackupProvider` 时没更新它），整个 backup-e2e
+编译失败 ⇒ CI 里 `pnpm test:backup-e2e` **在本轮之前就是红的**。补 `{} as any` 后 6/6 绿。
+（这不是本轮引入的回归，但 CI 在跑它，所以记在这里。）
+
+**本轮新增环境变量**：`VANBLOG_VISITS_DROP_REDUNDANT_INDEXES`(开) ·
+`VANBLOG_JSON_BODY_LIMIT`(1mb) · `VANBLOG_JSON_BODY_LIMIT_LARGE`(50mb) ·
+`VANBLOG_SLOW_REQUEST_MS`(5000，0=关) · `VANBLOG_ACCESS_LOG`(关)。
+
+**测试**：server jest **938 用例、937 绿 + 1 个既有 watermark 字体失败**（基线 885，**+53**：
+bodyLimit 12、requestId 18、viewer.provider 9、analysis.provider 7、statsMaintenance +7）；
+website vitest **68 文件 / 679 全绿**（+1 文件 viewportZoomA11y）；backup-e2e 6/6、isr-e2e 2/2；
+tsc 0 错。⚠️ CI 的 testPathPattern 白名单要补
+`bodyLimit|requestId|viewer.provider|analysis.provider` 四个 token（已补）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 885 用例：**884 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 的字体用例，见 §2.1）。⚠️ 负载高时可能是 883 绿 + 2 失败 —— 那个套件的两个 `Jimp.loadFont` 用例分别要 12.4s / 19.5s，超时线 20s，**单独跑 `jest src/utils/watermark.spec.ts` 时 5/5 全绿**。看到 2 个失败先确认是不是都在 watermark.spec.ts，别当成自己改坏了 |
-| website `vitest run` | 67 文件 / 675 用例全绿 |
+| server `jest` | 938 用例：**937 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例，见 §2.1；负载高时可能 2 个失败，单独跑 5/5 绿） |
+| website `vitest run` | 68 文件 / 679 用例全绿 |
 | admin `node --test tests/unit` | 84 套件 / 347 用例全绿 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |

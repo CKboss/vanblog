@@ -26,12 +26,22 @@ import { mergeVisitGroup, planRetention, RetentionPlan, VisitLike } from 'src/ut
  *    贴 `unique: true`（那样 `autoIndex` 会在启动时先撞上重复行、报一次错、要等下一次启动才建好），
  *    而是显式 `createIndex` + 前置检查，一次启动就收敛，且**已经建好时只花一次 `listIndexes`**。
  *
+ * 4. **删掉两个纯前缀重复的单列索引**（`visits.date_1` / `visits.pathname_1`）：
+ *    它们分别是 `{date:1,pathname:1}`（唯一）与 `{pathname:1,date:-1}` 的前缀，
+ *    explain 全量扫过一遍后没有任何查询会选它们（{date,pathname} 走唯一索引或
+ *    pathname_1_date_-1，{pathname} 走 pathname_1_date_-1，{date:$range} 走
+ *    date_1_pathname_1 的 date 前缀，实测删除前后 winningPlan 不变），
+ *    却各占 ~150KB 并给每次写多加一个索引维护操作。
+ *    **只在替代的复合索引确实存在时才删**，绝不无条件删；schema 里那两个 `@Prop`
+ *    已经去掉 `index: true`，`autoIndex` 不会再把它们建回来。
+ *
  * ⚠️ 全部都不在请求路径上：去重与建索引只在启动时跑一次（`onApplicationBootstrap` 里
  * fire-and-forget，不阻塞 listen），清理挂在已有的每日 `ViewerTask` cron 上。
  *
  * 环境变量：
  *  - `VANBLOG_VISITS_DEDUP=false` 关掉启动去重（默认开）
  *  - `VANBLOG_VISITS_DEDUP_DRY_RUN=true` 只打印会合并什么，不真的写
+ *  - `VANBLOG_VISITS_DROP_REDUNDANT_INDEXES=false` 关掉冗余前缀索引的删除（默认开）
  *  - `VANBLOG_VISIT_RETENTION_DAYS`（默认 **0 = 永不删除**，行为与改动前完全一致）
  *  - `VANBLOG_VISIT_RETENTION_MIN_KEEP_DAYS`（默认 30）：无论上面设成多少，最近这些天一定保留
  */
@@ -41,8 +51,19 @@ const MAX_DUP_GROUPS = 20000;
 
 export const VISIT_UNIQUE_INDEX_KEYS = { date: 1, pathname: 1 };
 export const VISIT_UNIQUE_INDEX_NAME = 'date_1_pathname_1';
+/** schema 里显式声明的复合索引（`VisitSchema.index({pathname:1,date:-1})`），替代单列 pathname_1 */
+export const VISIT_COMPOUND_INDEX_KEYS = { pathname: 1, date: -1 };
 export const VIEWER_UNIQUE_INDEX_KEYS = { date: 1 };
 export const VIEWER_UNIQUE_INDEX_NAME = 'date_1';
+
+/** visits 上"单列前缀重复"的候选，以及各自必须由哪个复合索引替代才允许删 */
+const REDUNDANT_VISIT_INDEXES: Array<{
+  keys: Record<string, number>;
+  replacement: Record<string, number>;
+}> = [
+  { keys: { date: 1 }, replacement: VISIT_UNIQUE_INDEX_KEYS },
+  { keys: { pathname: 1 }, replacement: VISIT_COMPOUND_INDEX_KEYS },
+];
 
 export const RETENTION_DEFAULTS = { retentionDays: 0, minKeepDays: 30 };
 
@@ -99,6 +120,18 @@ export interface PruneResult {
   viewers: number;
 }
 
+export interface DropRedundantResult {
+  /** kill-switch 关着（`VANBLOG_VISITS_DROP_REDUNDANT_INDEXES=false`）或 dry run */
+  skipped: boolean;
+  /** 这次实际删掉的索引名 */
+  dropped: string[];
+  /** 找到了候选但"替代复合索引不存在"而保留的（安全护栏，绝不无条件删） */
+  kept: Array<{ name: string; reason: string }>;
+  /** 删完之后 collStats 的 totalIndexSize（读不到就是 null） */
+  totalIndexSize: number | null;
+  errors: string[];
+}
+
 @Injectable()
 export class StatsMaintenanceProvider implements OnApplicationBootstrap {
   logger = new Logger(StatsMaintenanceProvider.name);
@@ -106,6 +139,7 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
 
   readonly dedupEnabled = envFlag('VANBLOG_VISITS_DEDUP', true);
   readonly dedupDryRun = envFlag('VANBLOG_VISITS_DEDUP_DRY_RUN', false);
+  readonly dropRedundantIndexes = envFlag('VANBLOG_VISITS_DROP_REDUNDANT_INDEXES', true);
   readonly retentionDays = envNonNegative(
     'VANBLOG_VISIT_RETENTION_DAYS',
     RETENTION_DEFAULTS.retentionDays,
@@ -138,11 +172,13 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
   async runStartupMaintenance(reason: string): Promise<{
     dedup: DedupResult;
     indexes: IndexResult[];
+    dropped: DropRedundantResult;
   }> {
     if (this.startupDone) {
       return {
         dedup: { groups: 0, dropped: 0, dryRun: false, skipped: true, details: [] },
         indexes: [],
+        dropped: { skipped: true, dropped: [], kept: [], totalIndexSize: null, errors: [] },
       };
     }
     this.startupDone = true;
@@ -173,16 +209,24 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
     }
 
     const indexes: IndexResult[] = [];
+    let dropped: DropRedundantResult = {
+      skipped: true,
+      dropped: [],
+      kept: [],
+      totalIndexSize: null,
+      errors: [],
+    };
     if (!this.dedupDryRun) {
-      indexes.push(
-        await this.ensureUniqueIndex(
-          'visits',
-          this.visitModel,
-          VISIT_UNIQUE_INDEX_KEYS,
-          VISIT_UNIQUE_INDEX_NAME,
-          visitIndexes,
-        ),
+      const visitsUnique = await this.ensureUniqueIndex(
+        'visits',
+        this.visitModel,
+        VISIT_UNIQUE_INDEX_KEYS,
+        VISIT_UNIQUE_INDEX_NAME,
+        visitIndexes,
       );
+      indexes.push(visitsUnique);
+      // 冗余前缀索引只有在"替代的复合索引确实存在"时才删（唯一索引刚建好也算存在）
+      dropped = await this.dropRedundantVisitIndexes(visitIndexes, visitsUnique);
     }
     // viewers 的每日快照同理：upsert 要有唯一索引才不会被并发插成两行
     indexes.push(
@@ -201,7 +245,7 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
           .map((i) => `${i.collection}.${i.name}=${i.error ? `失败(${i.error})` : i.created ? (i.replaced ? '已改为唯一' : '已建唯一') : '已存在'}`)
           .join(', ')}`,
     );
-    return { dedup, indexes };
+    return { dedup, indexes, dropped };
   }
 
   private async listIndexes(model: Model<any>, collection: string): Promise<any[]> {
@@ -211,6 +255,102 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
       this.logger.warn(`读取 ${collection} 索引列表失败：${(err as Error)?.message || err}`);
       return [];
     }
+  }
+
+  /**
+   * 删掉 visits 上两个纯前缀重复的单列索引（`{date:1}` 与 `{pathname:1}`）。
+   *
+   * 安全护栏（每一条都有测试钉住）：
+   *  - **替代复合索引不存在就不删**：`{date:1}` 必须有 `{date:1,pathname:1}`（唯一），
+   *    `{pathname:1}` 必须有 `{pathname:1,date:-1}`；缺任何一个就保留并 WARN
+   *    （schema 去掉 `index: true` 之后 `autoIndex` 不会再建单列的，
+   *    复合的则一个来自 schema 声明、一个来自本 provider 的 ensureUniqueIndex）。
+   *  - 唯一索引是**这一轮刚建的**时，启动时那份索引列表里还没有它 —— 所以候选存在而
+   *    替代索引"看不到"时，会**重新 listIndexes 一次**再下结论（幂等重跑时没有候选，
+   *    一次多余的读取都不会发生）。
+   *  - `dropIndex` 报 "index not found"（别的实例已经删了）按成功处理；
+   *    其它错误记进 errors，不往外抛（启动维护失败不能影响服务）。
+   *  - 删完读一次 collStats，把 `totalIndexSize` 写进日志（本机实测
+   *    1,183,744 B → 预期 ~897,024 B，低于加唯一索引之前的 937,984 B）。
+   */
+  async dropRedundantVisitIndexes(
+    knownIndexes: any[],
+    visitsUniqueResult?: IndexResult | null,
+  ): Promise<DropRedundantResult> {
+    const out: DropRedundantResult = {
+      skipped: false,
+      dropped: [],
+      kept: [],
+      totalIndexSize: null,
+      errors: [],
+    };
+    if (!this.dropRedundantIndexes) {
+      out.skipped = true;
+      return out;
+    }
+    let indexes = Array.isArray(knownIndexes) ? knownIndexes : [];
+    const findCandidate = (keys: Record<string, number>) =>
+      indexes.find((i: any) => sameKeySpec(i.key, keys) && i.unique !== true);
+    // 常态（已经删过 / 全新安装）：一个候选都没有，直接返回，不多花任何一次数据库调用
+    if (!REDUNDANT_VISIT_INDEXES.some((c) => findCandidate(c.keys))) {
+      this.logger.log('[visits] 冗余前缀索引：无可删（date_1 / pathname_1 都不存在）');
+      return out;
+    }
+    // 唯一索引可能是这一轮 ensureUniqueIndex 刚建出来的（knownIndexes 里看不到）；
+    // ensureUniqueIndex 失败时它也可能真的不存在 —— 两种情况都重新读一次列表，以库里的真值为准
+    const uniqueJustCreated = Boolean(
+      visitsUniqueResult && !visitsUniqueResult.error && visitsUniqueResult.created,
+    );
+    const replacementMissing = REDUNDANT_VISIT_INDEXES.some(
+      (c) => findCandidate(c.keys) && !indexes.some((i: any) => sameKeySpec(i.key, c.replacement)),
+    );
+    if (uniqueJustCreated || replacementMissing) {
+      indexes = await this.listIndexes(this.visitModel, 'visits');
+    }
+    for (const cand of REDUNDANT_VISIT_INDEXES) {
+      const idx = findCandidate(cand.keys);
+      if (!idx) continue;
+      if (!indexes.some((i: any) => sameKeySpec(i.key, cand.replacement))) {
+        out.kept.push({
+          name: idx.name,
+          reason: `替代索引 ${JSON.stringify(cand.replacement)} 不存在`,
+        });
+        continue;
+      }
+      try {
+        await this.visitModel.collection.dropIndex(idx.name);
+        out.dropped.push(idx.name);
+      } catch (err) {
+        const msg = String((err as Error)?.message || err);
+        if (/index not found/i.test(msg)) {
+          out.dropped.push(idx.name); // 别的实例已经删了：目的达成
+        } else {
+          out.errors.push(`${idx.name}: ${msg.slice(0, 200)}`);
+        }
+      }
+    }
+    if (out.dropped.length) {
+      try {
+        const stats: any = await (this.visitModel.collection as any).stats();
+        const size = Number(stats?.totalIndexSize);
+        out.totalIndexSize = Number.isFinite(size) ? size : null;
+      } catch {
+        // collStats 读不到不影响删除本身
+      }
+      this.logger.log(
+        `[visits] 已删除冗余前缀索引：${out.dropped.join(', ')}` +
+          (out.totalIndexSize != null ? `；totalIndexSize 现为 ${out.totalIndexSize} B` : '') +
+          (out.errors.length ? `；失败 ${out.errors.join('; ')}` : ''),
+      );
+    }
+    if (out.kept.length) {
+      this.logger.warn(
+        `[visits] 冗余前缀索引暂不删除（安全护栏）：${out.kept
+          .map((k) => `${k.name}（${k.reason}）`)
+          .join(', ')}`,
+      );
+    }
+    return out;
   }
 
   /**

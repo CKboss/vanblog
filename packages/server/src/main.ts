@@ -23,6 +23,12 @@ import { isPrimaryInstance, resolveClusterWorkers, CLUSTER_ENV } from './utils/c
 import { startClusterPrimary } from './utils/clusterBootstrap';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { sanitizeRequestPayloads } from './utils/sanitizeRequest';
+import {
+  DEFAULT_JSON_BODY_LIMIT,
+  DEFAULT_JSON_BODY_LIMIT_LARGE,
+  LARGE_JSON_BODY_PREFIXES,
+  resolveBodyLimit,
+} from './utils/bodyLimit';
 import { applyStaticAssetHeaders } from './utils/imgCompress';
 import { ATTACHMENT_FOLDER } from './utils/attachment';
 import { THUMB_FOLDER } from './types/setting.dto';
@@ -47,7 +53,21 @@ async function bootstrap() {
     console.error(`[uncaughtException] ${error?.stack || error?.message || error}`);
   });
 
-  app.use(json({ limit: '50mb' }));
+  // JSON body 限额：全局默认只有 1mb（登录/评论/访客计数这些匿名接口不再敞着 50MB），
+  // 只有后台的"内容类"前缀（文章/草稿/自定义页面/管线，全部在 AdminGuard 后面）
+  // 单独挂 50mb 的解析器。multipart 上传（图片/附件/备份恢复/JSON 导入）不经过
+  // express.json，限额在 utils/uploadLimits.ts。细节与环境变量见 utils/bodyLimit.ts。
+  const jsonLimit = resolveBodyLimit(process.env.VANBLOG_JSON_BODY_LIMIT, DEFAULT_JSON_BODY_LIMIT);
+  const jsonLimitLarge = resolveBodyLimit(
+    process.env.VANBLOG_JSON_BODY_LIMIT_LARGE,
+    DEFAULT_JSON_BODY_LIMIT_LARGE,
+  );
+  const largeJsonParser = json({ limit: jsonLimitLarge });
+  for (const prefix of LARGE_JSON_BODY_PREFIXES) {
+    app.use(prefix, largeJsonParser);
+  }
+  // 已经解析过的 body（req._body=true）会被 body-parser 直接跳过：每个请求最多解析一次
+  app.use(json({ limit: jsonLimit }));
 
   // 所有路由之前先净化 query/params/body：删掉 `$` 开头的 Mongo 操作符键与原型污染键，
   // 否则公开接口上 `?category[$ne]=x` 这类查询对象会被直接塞进 Mongo 过滤器。

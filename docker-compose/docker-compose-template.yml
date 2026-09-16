@@ -101,6 +101,22 @@ services:
       # decompress（路径穿越）都没有修复版本，而插件名来自后台的一个输入框。
       # 内置的图床（本地/阿里OSS/七牛/又拍云/sm.ms/github…）都不需要插件。
       # VANBLOG_ALLOW_PICGO_PLUGINS: 'true'
+      # JSON 请求体上限。全局默认 1mb（登录、公开评论、访客计数这些匿名接口不再敞着
+      # 50MB 的解析上限）；后台 4 个内容前缀（文章/草稿/自定义页面/管线）保留 50mb，
+      # 因为正文可以内嵌 base64 图片、整页 HTML、脚本体。
+      # ⚠️ 图片上传、整站备份恢复/导入都是 multipart，不走 express.json，限额另算、未受影响。
+      # VANBLOG_JSON_BODY_LIMIT: '1mb'
+      # VANBLOG_JSON_BODY_LIMIT_LARGE: '50mb'
+      # 请求追踪：每个响应都会回显 x-request-id（报障时报出这个 id 就能在日志里定位同一行）。
+      # 超过这个毫秒数的请求会打一条 WARN 慢请求日志（0 = 关）；
+      # 5xx 永远会打一条带 id 的 ERROR。访问日志默认关（每个非静态请求一行，容易刷屏）。
+      # VANBLOG_SLOW_REQUEST_MS: '5000'
+      # VANBLOG_ACCESS_LOG: 'true'
+      # 启动时删掉 visits 上两个纯冗余的前缀索引（date_1 / pathname_1，被
+      # {date,pathname} 唯一索引与 {pathname,date} 复合索引完全覆盖）。
+      # 只在替代索引确实存在时才删，幂等；实测索引总量 1.18MB → 0.90MB，每次写少维护两个索引。
+      # 设 false 可以保留它们（代价是白占空间 + 每次写多两次索引维护）。
+      # VANBLOG_VISITS_DROP_REDUNDANT_INDEXES: 'false'
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static
