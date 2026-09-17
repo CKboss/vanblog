@@ -52,6 +52,18 @@ describe('后台编辑器预览的字体（与前台 Apple 皮肤一致）', () 
     assert.match(adminCss, /latin-400-normal\.woff2/);
   });
 
+  it('Maple Mono 的 CDN 版本钉死在 5.3.0，@latest 不许回来', () => {
+    // 注释里写着「不许改回 @latest」这句警告本身，所以剔除注释再断言
+    const cssCode = adminCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!cssCode.includes('@latest'), 'CDN 侧一发新版，@latest 会无声改变后台预览排版');
+    assert.match(cssCode, /maple-mono@5\.3\.0\/latin-400-normal\.woff2/);
+    assert.match(cssCode, /maple-mono@5\.3\.0\/latin-400-normal\.woff\b/);
+    // 与前台自托管那份同版本（@fontsource/maple-mono@5.3.0）：两边一起升，别一边漂
+    assert.match(siteCss, /maple-mono@5\.3\.0/);
+    // preconnect 与钉死后的 URL 同源（没换域名，仅在此确认）
+    assert.match(hook, /'https:\/\/cdn\.jsdelivr\.net'/);
+  });
+
   it('只作用于预览面板，不外泄到后台其它页面，也不动编辑区', () => {
     // 剔除 CSS 注释再判断：注释里正好写了「不动 CodeMirror 编辑区」这句话
     const cssCode = adminCss.replace(/\/\*[\s\S]*?\*\//g, '');

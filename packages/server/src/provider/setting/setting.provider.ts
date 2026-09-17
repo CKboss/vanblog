@@ -404,7 +404,8 @@ export class SettingProvider {
     await this.picgoProvider.initDriver();
     return res;
   }
-  async washDefaultMenu() {
+  /** @returns 是否重建了菜单设置（供迁移台账记 detail） */
+  async washDefaultMenu(): Promise<{ created: boolean; items?: number }> {
     const r = await this.settingModel.findOne({ type: 'menu' });
     if (!r) {
       // 没有的话需要清洗
@@ -424,6 +425,8 @@ export class SettingProvider {
       });
       await this.updateMenuSetting({ data: toInsert });
       this.logger.log('清洗老 menu 数据成功！');
+      return { created: true, items: toInsert.length };
     }
+    return { created: false };
   }
 }

@@ -38,6 +38,38 @@ export function toThumbnailUrl(src: string): string {
   return `/static/img/thumb/${src.slice("/static/img/".length)}`;
 }
 
+/**
+ * 从文章对象里取缩略图的 AVIF 地址（可选契约，server 侧 `VANBLOG_THUMB_AVIF` 默认关）。
+ *
+ * ⚠️ server 的**最终契约把字段嵌在 `meta.thumbAvif`**（静态项 meta 子对象，伴生
+ * `meta.thumbAvifBytes`），不是顶层 `thumbAvif`。这里两个位置都认、meta 优先：
+ * 只读顶层的话，字段上线那天 <picture> 也永远不会出现，而「缺失 = 输出不变」的保证
+ * 会让所有测试继续绿 —— 可选字段最坏的失败方式就是"存在但没被读到"，所以
+ * __tests__/readingTimeUi.spec.ts 用**带 meta.thumbAvif 的向量**钉住读取路径
+ * （那条测试在"字段存在却没被读"时必须红）。
+ *
+ * 只接受可用 URL（isUsableImageUrl 同一口径）；缺失/非法一律 null，
+ * ListThumb 收到 null 时渲染输出与没有这个契约时逐字节一致（有金标对照测试）。
+ */
+export function articleThumbAvif(source: unknown): string | null {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const s = source as {
+    thumbAvif?: unknown;
+    meta?: { thumbAvif?: unknown } | null;
+  };
+  for (const cand of [s.meta?.thumbAvif, s.thumbAvif]) {
+    if (typeof cand === "string") {
+      const t = cand.trim();
+      if (t && isUsableImageUrl(t)) {
+        return t;
+      }
+    }
+  }
+  return null;
+}
+
 export function firstImageOfMarkdown(content: string | null | undefined): string | null {
   const text = String(content ?? "");
   if (!text) return null;
@@ -85,13 +117,28 @@ export function listCardImage(
   cover: string | null | undefined,
   content: string | null | undefined,
   serverFirstImage?: string | null,
-): { src: string; fallback: string | null } | null {
+  thumbAvif?: string | null,
+): { src: string; fallback: string | null; avif?: string } | null {
+  const firstImage =
+    serverFirstImage != null ? String(serverFirstImage).trim() : null;
   const raw =
     String(cover ?? "").trim() ||
-    (serverFirstImage != null
-      ? String(serverFirstImage).trim()
-      : firstImageOfMarkdown(content));
+    (firstImage != null ? firstImage : firstImageOfMarkdown(content));
   if (!raw || !isUsableImageUrl(raw)) return null;
   const thumb = toThumbnailUrl(raw);
-  return { src: thumb, fallback: thumb === raw ? null : raw };
+  const out: { src: string; fallback: string | null; avif?: string } = {
+    src: thumb,
+    fallback: thumb === raw ? null : raw,
+  };
+  // AVIF 可选契约（article.thumbAvif，server 可能不发）：只在**选中的图就是 server 首图**
+  // 且地址可用时才带上 —— cover 胜出时 thumbAvif 不是那张图的 AVIF 版本，混用会让
+  // <picture> 的 <source> 与 <img> 显示两张不同的图。
+  // 字段缺失时返回对象**不含 avif 键**：ListThumb 的输出与没有这个契约时逐字节一致
+  // （旧断言 toEqual({src,fallback}) 也正是靠这一点保持绿色，没有为它放宽任何既有钉子）。
+  const avif =
+    firstImage && raw === firstImage ? String(thumbAvif ?? "").trim() : "";
+  if (avif && isUsableImageUrl(avif)) {
+    out.avif = avif;
+  }
+  return out;
 }

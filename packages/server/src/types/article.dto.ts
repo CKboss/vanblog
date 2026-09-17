@@ -15,6 +15,12 @@ export class CreateArticleDto {
   copyright?: string;
   pathname?: string;
   cover?: string;
+  /**
+   * 定时发布（P5）：ISO 字符串 / 毫秒数 / Date；null = 显式清除；键不存在 = 不设置。
+   * 未来时间 ⇒ 到点前所有公开面不可见（见 utils/publishAt.ts）。
+   * 入库前由 normalizePublishAt 校验，非法值 400。
+   */
+  publishAt?: Date | string | number | null;
 }
 export class UpdateArticleDto {
   title?: string;
@@ -33,6 +39,8 @@ export class UpdateArticleDto {
   copyright?: string;
   pathname?: string;
   cover?: string;
+  /** 定时发布（P5）：语义同 CreateArticleDto.publishAt（null=清除，undefined=不动） */
+  publishAt?: Date | string | number | null;
 }
 export class SearchArticleOption {
   page: number;

@@ -160,6 +160,101 @@ export async function deleteArticle(id) {
     method: 'DELETE',
   });
 }
+/**
+ * 回收站：软删除文章的列表（服务端分页；行内没有 content 字段）。
+ * skipErrorHandler：server 未实现该接口时（404）不要往全局 toast 里打错误风暴，
+ * 由 RecycleBin 组件在抽屉内用 Alert 展示失败原因。
+ */
+export async function getDeletedArticles(page = 1, pageSize = 10) {
+  return request(
+    `/api/admin/article/deleted?page=${encodeURIComponent(page)}&pageSize=${encodeURIComponent(pageSize)}`,
+    {
+      method: 'GET',
+      skipErrorHandler: true,
+    },
+  );
+}
+/**
+ * 从回收站恢复一篇文章；成功后 data 可能是文章本体也可能是 null。
+ * skipErrorHandler：失败文案由 RecycleBin 组件按状态码定制（404=已不在回收站、
+ * 403=缺 article:update 权限），全局 toast 只会甩一句原始 message。
+ */
+export async function restoreArticle(id) {
+  return request(`/api/admin/article/${encodeURIComponent(id)}/restore`, {
+    method: 'PUT',
+    skipErrorHandler: true,
+  });
+}
+/** 永久删除（purge）一篇已软删除的文章，不可撤销。只对回收站里的条目有效（否则 404）。 */
+export async function purgeArticle(id) {
+  return request(`/api/admin/article/${encodeURIComponent(id)}/purge`, {
+    method: 'DELETE',
+    skipErrorHandler: true,
+  });
+}
+/** 回收站：软删除草稿的列表。⚠️ 发布成功的草稿也会进这里（发布即归档，既有语义）。 */
+export async function getDeletedDrafts(page = 1, pageSize = 10) {
+  return request(
+    `/api/admin/draft/deleted?page=${encodeURIComponent(page)}&pageSize=${encodeURIComponent(pageSize)}`,
+    {
+      method: 'GET',
+      skipErrorHandler: true,
+    },
+  );
+}
+/** 从回收站恢复一个草稿（不会改动由它发布过的文章）。 */
+export async function restoreDraft(id) {
+  return request(`/api/admin/draft/${encodeURIComponent(id)}/restore`, {
+    method: 'PUT',
+    skipErrorHandler: true,
+  });
+}
+/** 永久删除一个已软删除的草稿，不可撤销（不影响由它发布的文章）。 */
+export async function purgeDraft(id) {
+  return request(`/api/admin/draft/${encodeURIComponent(id)}/purge`, {
+    method: 'DELETE',
+    skipErrorHandler: true,
+  });
+}
+/**
+ * 版本历史：某篇文章的版本列表（只有元数据，没有 content）。
+ * 响应 data 带 `enabled`（false = 功能关闭）；老 server 可能没有该字段甚至 404，
+ * 由 RevisionHistory 组件区分「未开启 / 空 / 失败」，skipErrorHandler 避免 toast 风暴。
+ */
+export async function getArticleRevisions(articleId) {
+  return request(`/api/admin/article/${encodeURIComponent(articleId)}/revisions`, {
+    method: 'GET',
+    skipErrorHandler: true,
+  });
+}
+/**
+ * 单个版本的完整内容（含 content，只读展示用）。
+ * ⚠️ 路径是**嵌套在文章下**的 `/api/admin/article/:id/revisions/:rid`，不是顶层 `/api/admin/revisions/:rid`
+ * —— 顶层那条**在 server 上不存在**（活体探测是 `Cannot GET` 404）。早期契约写错过一次，
+ * 结果「历史版本 → 查看」在生产上会 404；服务端还会校验"版本属于别的文章 → 404"，
+ * 所以 articleId 不是可选的装饰，它是路由与鉴权的一部分。
+ */
+export async function getRevisionById(articleId, revisionId) {
+  return request(
+    `/api/admin/article/${encodeURIComponent(articleId)}/revisions/${encodeURIComponent(revisionId)}`, {
+    method: 'GET',
+    skipErrorHandler: true,
+  });
+}
+/**
+ * 把文章恢复到某个版本（**PUT**，server 已确认）；服务端会先把当前状态存成新版本
+ * （响应 data 里带 snapshotRevisionId），所以恢复本身可撤销。
+ * 版本属于别的文章 → 404；skipErrorHandler：失败文案由组件按状态码定制。
+ */
+export async function restoreArticleRevision(articleId, revisionId) {
+  return request(
+    `/api/admin/article/${encodeURIComponent(articleId)}/revisions/${encodeURIComponent(revisionId)}/restore`,
+    {
+      method: 'PUT',
+      skipErrorHandler: true,
+    },
+  );
+}
 export async function createCollaborator(body) {
   return request('/api/admin/collaborator', {
     method: 'POST',

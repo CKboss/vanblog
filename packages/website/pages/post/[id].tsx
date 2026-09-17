@@ -8,6 +8,7 @@ import { Article } from "../../types/article";
 import { articleShareImageMeta } from "../../utils/articleCover";
 import { encodeLocationPath } from "../../utils/encodeLocationPath";
 import { getArticlePath } from "../../utils/getArticlePath";
+import { articleThumbAvif } from "../../utils/firstImage";
 import {
   articleJsonLd,
   breadcrumbJsonLd,
@@ -22,6 +23,7 @@ import { getPostPagesProps } from "../../utils/getPageProps";
 import { hasToc } from "../../utils/hasToc";
 import { getArticlesKeyWord } from "../../utils/keywords";
 import { revalidate } from "../../utils/loadConfig";
+import { RelatedArticle } from "../../utils/relatedArticles";
 import { toSafeIsoString } from "../../utils/safeDate";
 import Custom404 from "../404";
 import dynamic from "next/dynamic";
@@ -50,6 +52,11 @@ export interface PostPagesProps {
   };
   showSubMenu: "true" | "false";
   siteUrl: string;
+  /**
+   * 相关文章（详情 payload 的可选字段，api/getArticles.ts 已在边界 normalize：
+   * 最多 5 条、脏数据已剔除）。缺失时为 undefined，RelatedArticles 整块不渲染。
+   */
+  relatedArticles?: RelatedArticle[];
 }
 const PostPages = (props: PostPagesProps) => {
   const [content, setContent] = useState(props?.article?.content || "");
@@ -198,6 +205,9 @@ const PostPages = (props: PostPagesProps) => {
         id={getArticlePath(props.article)}
         numericId={props.article.id}
         viewer={props.article.viewer}
+        readingMinutes={props.article?.readingMinutes}
+        thumbAvif={articleThumbAvif(props.article)}
+        relatedArticles={props.relatedArticles}
         key={props.article.title}
         title={props.article.title}
         updatedAt={new Date(props.article.updatedAt)}

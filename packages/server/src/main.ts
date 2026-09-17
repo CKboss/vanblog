@@ -17,6 +17,8 @@ import { SettingProvider } from './provider/setting/setting.provider';
 import { WebsiteProvider } from './provider/website/website.provider';
 import { initJwt } from './utils/initJwt';
 import { ViewStatsProvider } from './provider/stats/viewStats.provider';
+import { MigrationKind, MigrationProvider } from './provider/migration/migration.provider';
+import { ArticleProvider } from './provider/article/article.provider';
 import cluster from 'node:cluster';
 import os from 'node:os';
 import { isPrimaryInstance, resolveClusterWorkers, CLUSTER_ENV } from './utils/clusterRole';
@@ -187,20 +189,68 @@ async function bootstrap() {
     if (!primary) {
       console.log('cluster worker：跳过启动期的数据清洗与子进程拉起（由主实例负责）');
     }
+    // 迁移台账（migrations 集合）：每次启动清洗都记一条 {key,kind,ranAt,durationMs,outcome,detail}，
+    // 让"这个实例对数据做过什么修复"可查（后台 GET /api/admin/migration/list）。
+    // ⚠️ 台账只是**可观测性**：幂等清洗与索引维护照旧每次启动都跑，绝不按台账跳过。
+    // ⚠️ app.get 用 try/catch：MigrationProvider 还没注册进 app.module 的过渡期里，
+    //    清洗照跑、只是不记账，绝不能让启动本身挂掉。
+    let migrations: MigrationProvider | undefined;
+    try {
+      migrations = app.get(MigrationProvider);
+    } catch {
+      migrations = undefined;
+    }
+    /** 台账在就包一层 run()（计时+记账），不在就原样跑；错误语义与今天完全一致（原样上抛）。 */
+    const wash = <T>(
+      key: string,
+      kind: MigrationKind,
+      task: () => Promise<T>,
+      detail?: (result: T) => unknown,
+    ): Promise<T> => {
+      if (migrations) {
+        return migrations.run({ key, kind }, task, detail ? { detail } : undefined);
+      }
+      return task();
+    };
     // 新版本自动启动图床压缩功能
-    if (primary) await initProvider.washStaticSetting();
+    if (primary)
+      await wash('wash:staticSetting', 'wash', () => initProvider.washStaticSetting(), (r) => r);
     // 老版本自定义数据洗一下
-    if (primary) await initProvider.washCustomPage();
+    if (primary)
+      await wash('wash:customPageType', 'wash', () => initProvider.washCustomPage(), (r) => r);
     // 老版本的分类数据洗一下
-    if (primary) await initProvider.washCategory();
+    if (primary)
+      await wash('wash:categoryFromMeta', 'wash', () => initProvider.washCategory(), (r) => r);
+    // P6 文章字数副本回填（readingMinutes/回收站/相关文章都靠它）。
+    // provider 自己往台账记 `backfill:articleWordCount`，所以这里不再包 wash()（会记重）。
+    // fire-and-forget：大站上要扫一遍正文，不该阻塞启动；失败由台账 WARN + 这里的 catch 留痕。
+    if (primary) {
+      const articleProvider = app.get(ArticleProvider);
+      articleProvider.backfillWordCounts().catch((err) =>
+        console.error(`回填文章字数副本失败：${(err as Error)?.message || err}`),
+      );
+    }
     const userProvider = app.get(UserProvider);
     // 老版本没加盐的用户数据洗一下。
-    if (primary) userProvider.washUserWithSalt();
+    // ⚠️ 保持 fire-and-forget（今天就没有 await，不能拖慢启动）；失败由台账 WARN + 这里的 catch 兜住，
+    //    不再依赖全局 unhandledRejection 兜底日志。
+    if (primary)
+      void wash('wash:userSalt', 'wash', () => userProvider.washUserWithSalt(), (r) => r).catch(
+        (err) => console.error(`清洗未加盐用户失败：${(err as Error)?.message || err}`),
+      );
     const settingProvider = app.get(SettingProvider);
-    // 老版本菜单数据洗一下。
-    if (primary) settingProvider.washDefaultMenu();
+    // 老版本菜单数据洗一下。（同上：保持 fire-and-forget）
+    if (primary)
+      void wash('wash:defaultMenu', 'wash', () => settingProvider.washDefaultMenu(), (r) => r).catch(
+        (err) => console.error(`清洗菜单数据失败：${(err as Error)?.message || err}`),
+      );
     const metaProvider = app.get(MetaProvider);
-    if (primary) metaProvider.updateTotalWords('首次启动');
+    // 总字数重算（30s 防抖后执行）：只有启动这一次记台账（每次增删改文章也调它，
+    // 但那不是"迁移"，记进去只会把台账刷爆）。
+    if (primary)
+      metaProvider.updateTotalWords('首次启动', {
+        migration: migrations ? { key: 'recompute:totalWords', kind: 'recompute' } : undefined,
+      });
     if (primary) walineProvider.init();
     // 触发增量渲染生成静态页面，防止升级后内容为空
     // ⚠️ 只有主实例做：一轮全量渲染是 ~130 次串行重渲染 + 重新生成 RSS/sitemap（写同一批文件），
@@ -210,6 +260,17 @@ async function bootstrap() {
       isrProvider.activeAll('首次启动触发全量渲染！', 1000, {
         forceActice: true,
       });
+    }
+    // 启动 1 分钟后把台账里所有 outcome==='error' 的条目汇总 WARN 一遍：
+    // fire-and-forget 的清洗（统计表维护、流水线脚本落盘）到那时基本都记完账了，
+    // 单条失败在 record() 时也已经各自 WARN 过 —— 这里是"点名汇总"，绝不静默。
+    if (primary && migrations) {
+      const ledger = migrations;
+      setTimeout(() => {
+        ledger.warnAboutErrors('启动后迁移台账检查').catch((err) =>
+          console.error(`读取迁移台账失败：${(err as Error)?.message || err}`),
+        );
+      }, 60 * 1000);
     }
   }
 

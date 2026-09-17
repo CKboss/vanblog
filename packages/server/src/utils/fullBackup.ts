@@ -323,8 +323,8 @@ function decompressUntar(archivePath: string, destDir: string, spec: CompressorS
   });
 }
 
-/** 只把归档里的某个文件解出来（读 manifest 用，不用整包解压）。 */
-function extractSingleFile(archivePath: string, entry: string, spec: CompressorSpec): Promise<string | null> {
+/** 只把归档里的某个文件解出来（读 manifest 用，不用整包解压）。导出给 utils/backupVerify.ts 复用。 */
+export function extractSingleFile(archivePath: string, entry: string, spec: CompressorSpec): Promise<string | null> {
   return new Promise((resolve) => {
     const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
     const tar = spawn('tar', ['-xOf', '-', entry]);
@@ -713,11 +713,17 @@ export function listArchiveMembers(archivePath: string): Promise<string[]> {
     tar.on('error', (err: Error) => fail(`tar 起不来：${err.message}`));
     tar.on('close', (code) => {
       if (settled) return;
-      settled = true;
       if (code !== 0) {
+        // ⚠️ 以前的写法是先 `settled = true` 再调 fail() —— 而 fail() 的第一行就是
+        // `if (settled) return`，于是**截断/损坏的归档会让这个 promise 永远不 settle**
+        // （tar 退出码非 0 → fail 变 no-op → 两个子进程都死了 → 事件循环排空 → 进程静默退出）。
+        // 实测：69MB 真 zstd 归档砍掉 1MB 后必现。它同时挂住 verifyFullBackup（P2）与
+        // assertRestorableArchive（两条恢复路由；匿名 init/restore 还会因此**永久占着单飞锁**）。
+        // fail() 自己会落 settled 标志，这里绝不能提前置位。
         fail(`读不出归档成员表（tar 退出码 ${code}）：${(tarErr || decErr).slice(0, 300)}`);
         return;
       }
+      settled = true;
       resolve(
         out
           .split('\n')

@@ -1,6 +1,7 @@
 import { Article } from "../types/article";
 import { encodeQuerystring } from "../utils/encode";
 import { config } from "../utils/loadConfig";
+import { normalizeRelatedArticles } from "../utils/relatedArticles";
 export type SortOrder = "asc" | "desc";
 export interface GetArticleOption {
   page: number;
@@ -132,6 +133,15 @@ export const getArticleByIdOrPathname = async (id: string) => {
     }
     if (next) {
       r.next = { title: next.title, id: next.id, pathname: next.pathname };
+    }
+    // 相关文章（可选契约，server 侧并行实现中）：payload 级或 article 级都认，
+    // 在 API 边界一次性 normalize（截到 5 条、剔脏数据），__NEXT_DATA__ 里只有干净数组；
+    // 字段缺失/为空时**不加这个键** —— 老 server 下 pageProps 逐字节不变。
+    const related = normalizeRelatedArticles(
+      (data as any)?.relatedArticles ?? (article as any)?.relatedArticles,
+    );
+    if (related.length) {
+      r.relatedArticles = related;
     }
     return r;
   } catch (err) {

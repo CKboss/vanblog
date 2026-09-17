@@ -62,6 +62,19 @@ export class DraftProvider {
     _id: 0,
   };
 
+  /** 回收站列表投影（P3）：不含 content。 */
+  deletedListView = {
+    id: 1,
+    title: 1,
+    category: 1,
+    tags: 1,
+    author: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: 1,
+    _id: 0,
+  };
+
   getView(view: DraftView) {
     let thisView: any = this.adminView;
     switch (view) {
@@ -263,7 +276,62 @@ export class DraftProvider {
   }
   async deleteById(id: number | string) {
     const numericId = parseNumericId(id);
-    return this.draftModel.updateOne({ id: numericId }, { deleted: true }).exec();
+    // deletedAt：回收站按"最近删除"排序（P3）。⚠️ 既有语义：**发布草稿也会走到这里**
+    // （publish() 的最后一步是软删草稿），所以回收站里会出现"已发布"的草稿 ——
+    // 恢复它只是把草稿副本拿回来，不会动已发布的文章。
+    return this.draftModel
+      .updateOne({ id: numericId }, { deleted: true, deletedAt: new Date() })
+      .exec();
+  }
+
+  /**
+   * 回收站列表（P3）：与文章同款语义。投影不含 content。
+   * 草稿没有 wordCount 存储副本（不公开、不进任何列表口径），要字数就恢复后看。
+   */
+  async getDeleted(page?: unknown, pageSize?: unknown): Promise<{
+    drafts: Array<Record<string, unknown>>;
+    total: number;
+  }> {
+    const paging = sanitizePagination(page, pageSize, { defaultPageSize: 20 });
+    const filter = { deleted: true };
+    const [rows, total] = await Promise.all([
+      this.draftModel
+        .find(filter, this.deletedListView)
+        .sort({ deletedAt: -1, updatedAt: -1, id: -1 })
+        .skip(paging.skip)
+        .limit(paging.pageSize)
+        .exec(),
+      this.draftModel.countDocuments(filter).exec(),
+    ]);
+    return { drafts: rows as any, total };
+  }
+
+  /** 取一条软删草稿（回收站操作用）。 */
+  async findDeletedById(id: number | string): Promise<Draft | null> {
+    const numericId = parseNumericId(id);
+    return this.draftModel.findOne({ id: numericId, deleted: true }).exec();
+  }
+
+  /** 恢复软删草稿；不在回收站里（或不存在）返回 null。草稿不上前台，没有 ISR/字数副作用。 */
+  async restoreById(id: number | string): Promise<Draft | null> {
+    const numericId = parseNumericId(id);
+    const res = await this.draftModel
+      .updateOne(
+        { id: numericId, deleted: true },
+        { deleted: false, deletedAt: null, updatedAt: new Date() },
+      )
+      .exec();
+    if (!res?.matchedCount) {
+      return null;
+    }
+    return this.findById(numericId);
+  }
+
+  /** 彻底删除（P3）：只接受已在回收站里的草稿；全站唯一的草稿硬删除入口。 */
+  async purgeById(id: number | string): Promise<{ purged: boolean; id: number }> {
+    const numericId = parseNumericId(id);
+    const res = await this.draftModel.deleteOne({ id: numericId, deleted: true }).exec();
+    return { purged: (res?.deletedCount || 0) > 0, id: numericId };
   }
 
   async updateCategoryName(oldName: string, newName: string) {

@@ -280,6 +280,8 @@ ThemeProvider.upload()                       packages/server/src/provider/theme/
 
 ⚠️ **早于该修复导出的整站归档里没有 `themes/`**（当时 `BACKUP_STATIC_FOLDERS` 只打包 `img/file/customPage`）。
 用那种归档恢复到新机器，主题列表和"使用中"标记都在（它们在库里），CSS 却没了 ⇒
-`/api/public/theme.css` 404、前台静默用回默认皮肤，而且**一条报错都没有**。
+`/api/public/theme.css` 会返回 **204 加一份空样式表**（读文件失败被服务端 `catch` 掉了，内置主题本来也走 204），
+前台静默用回默认皮肤，而且**一条报错都没有** —— 浏览器拿到的是一份合法的空 CSS，网络面板里也不是红色，
+唯一的线索是"皮肤看起来不对"。
 判断办法：`./vanblog.sh verify <归档>` 看成员里有没有 `static/themes/`；
 补法：在后台把那几个主题的 CSS 重新上传一次（id 与启用状态不受影响）。

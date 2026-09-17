@@ -164,12 +164,14 @@ describe('B10 · 其余两处 fire-and-forget 也带上了 catch', () => {
     error.mockRestore();
   });
 
-  it('article.controller 的三处事后事件都挂了 catch，且日志里带文章 id（源码级钉子）', () => {
+  it('article.controller 的每一处事后事件都挂了 catch，且日志里带文章 id（源码级钉子）', () => {
     const src = code(read('controller/admin/article/article.controller.ts'));
-    expect(src.split(".dispatchEvent('afterUpdateArticle'").length - 1).toBe(2);
+    // P3/P4 之后 afterUpdateArticle 共 4 处：update / create / 回收站 restore / 历史版本 restore；
+    // deleteArticle 仍是 1 处。不变量没变：**每一处** dispatchEvent 的数量 == 带来源 catch 日志的数量。
+    expect(src.split(".dispatchEvent('afterUpdateArticle'").length - 1).toBe(4);
     expect(src.split(".dispatchEvent('deleteArticle'").length - 1).toBe(1);
-    // 三处都必须紧跟 .catch，且日志带来源
-    expect(src.split('流水线事件 afterUpdateArticle 分发失败').length - 1).toBe(2);
+    // 每处都必须紧跟 .catch，且日志带来源
+    expect(src.split('流水线事件 afterUpdateArticle 分发失败').length - 1).toBe(4);
     expect(src.split('流水线事件 deleteArticle 分发失败').length - 1).toBe(1);
     expect(src).not.toMatch(/dispatchEvent\([^)]*\);\s*\n\s*return \{/);
   });

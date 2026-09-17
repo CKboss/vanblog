@@ -155,25 +155,31 @@ export class InitProvider {
     );
   }
 
-  async washStaticSetting() {
+  /** @returns 是否真的改了设置（供迁移台账记 detail） */
+  async washStaticSetting(): Promise<{ changed: boolean }> {
     // 新版加入了图床自动压缩功能，默认开启，需要洗一下。
+    // ⚠️ 这里以前有一句 `console.log(staticSetting)`（调试遗留）：每次启动都把整份
+    // 图床设置（含可能的对象存储密钥字段）打进 stdout，已删。
     const staticSetting = await this.settingProvider.getStaticSetting();
-    console.log(staticSetting);
     if (staticSetting && staticSetting.enableWebp === undefined) {
       this.logger.log('新版本自动开启图床压缩功能');
       await this.settingProvider.updateStaticSetting({
         enableWebp: true,
       });
+      return { changed: true };
     }
+    return { changed: false };
   }
 
-  async washCustomPage() {
+  /** @returns 清洗了多少条老数据（供迁移台账记 detail） */
+  async washCustomPage(): Promise<{ washed: number }> {
     // 老版本的 custom 表没带 type，洗一下加上
     const all = await this.customPageModal.find({
       type: {
         $exists: false,
       },
     });
+    let washed = 0;
     if (all && all.length) {
       for (const each of all) {
         this.logger.log(`清洗老版本自定义页面数据：${each.name}`);
@@ -185,11 +191,14 @@ export class InitProvider {
             type: 'file',
           },
         );
+        washed += 1;
       }
     }
+    return { washed };
   }
 
-  async washCategory() {
+  /** @returns 从 meta.categories 建了多少条分类（供迁移台账记 detail） */
+  async washCategory(): Promise<{ created: number }> {
     //! 因为新增了 category 的表，所以需要清洗数据。
     // 条件： meta.category 有数据，但 category 表为空。
     const meta = await this.metaModel.findOne();
@@ -209,7 +218,9 @@ export class InitProvider {
         i = i + 1;
       }
       this.logger.warn(`清洗完成！共 ${i} 条！`);
+      return { created: i - 1 };
     }
+    return { created: 0 };
   }
   async initVersion() {
     if (!version || version == 'dev') {

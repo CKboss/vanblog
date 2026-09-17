@@ -134,6 +134,7 @@ export class BackupController {
     if (config.demo && config.demo == 'true') {
       return { statusCode: 401, message: '演示站禁止修改此项！' };
     }
+    // 导出成功返回时**必然已通过写后校验**（校验失败会抛 400，见 FullBackupProvider.doExport）
     const result = await this.fullBackupProvider.export(body?.format);
     return {
       statusCode: 200,
@@ -146,6 +147,9 @@ export class BackupController {
         format: result.format,
         compressor: result.compressor,
         seconds: Number((result.ms / 1000).toFixed(1)),
+        // P2 写后校验结果（手动与 cron 走的都是这条路）
+        verified: result.verification?.ok === true,
+        verifySeconds: Number(((result.verification?.ms || 0) / 1000).toFixed(1)),
         totals: result.manifest.totals,
         databases: Object.fromEntries(
           Object.entries(result.manifest.databases).map(([name, item]) => [
@@ -156,6 +160,17 @@ export class BackupController {
         static: result.manifest.static,
       },
     };
+  }
+
+  /**
+   * 备份健康状态（P2）：最近一次成功/失败、连续失败次数、陈旧判定。
+   * **只在 AdminGuard 后面**：它暴露运维状态（备份节奏、失败原因），绝不上公开接口。
+   * cron 备份（vanblog.sh backup）失败时，这里是"不翻日志也能看见"的地方：
+   * consecutiveFailures > 0 且 lastFailureStage/lastFailureMessage 直接说明哪一步坏了。
+   */
+  @Get('full/status')
+  async fullStatus() {
+    return { statusCode: 200, data: this.fullBackupProvider.status() };
   }
 
   @Get('full/list')

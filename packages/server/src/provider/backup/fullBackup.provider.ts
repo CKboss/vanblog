@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { PipelineProvider } from '../pipeline/pipeline.provider';
 import * as fs from 'fs';
 import * as path from 'path';
+import cluster from 'node:cluster';
 import { config } from 'src/config';
 import {
   BackupListEntry,
@@ -15,6 +16,29 @@ import {
   restoreFullBackup,
 } from 'src/utils/fullBackup';
 import { FullBackupManifest } from 'src/utils/backupCodec';
+import { BackupVerifyResult, verifyFullBackup } from 'src/utils/backupVerify';
+import {
+  BackupStatusFile,
+  readBackupStatus,
+  recordBackupFailure,
+  recordBackupSuccess,
+  resolveStaleWarnHours,
+  staleBackupWarning,
+} from 'src/utils/backupStatus';
+import { isPrimaryInstance } from 'src/utils/clusterRole';
+
+/** `export()` 的返回：在 `FullBackupResult` 之外带写后校验的结果（P2）。 */
+export interface ExportOutcome extends FullBackupResult {
+  /** 写后校验（只有校验通过才会返回；不通过时 export() 直接抛 400） */
+  verification: BackupVerifyResult;
+}
+
+/** `status()` 的返回：状态文件 + 陈旧判定。 */
+export interface BackupStatusView extends BackupStatusFile {
+  staleWarnHours: number;
+  stale: boolean;
+  staleMessage: string | null;
+}
 
 /** `restore()` 的返回：在 `RestoreResult` 之外多一个给前台用的布尔值（见 doRestore）。 */
 export interface RestoreOutcome extends RestoreResult {
@@ -39,7 +63,7 @@ export interface RestoreOutcome extends RestoreResult {
  * 备份范围 = 主库（默认 `vanBlog`）+ 评论库（`waline`）+ `<static>/{img,file,customPage}`。
  */
 @Injectable()
-export class FullBackupProvider {
+export class FullBackupProvider implements OnApplicationBootstrap {
   /**
    * 备份 / 恢复 / 删除必须**串行**：
    * - 恢复用的临时集合名是固定的 `<coll>__vanblog_restore`，两个并发恢复会互相 deleteMany，
@@ -99,29 +123,131 @@ export class FullBackupProvider {
     return full;
   }
 
-  async export(format?: string): Promise<FullBackupResult> {
+  async export(format?: string): Promise<ExportOutcome> {
     return this.serialize(() => this.doExport(format));
   }
 
-  private async doExport(format?: string): Promise<FullBackupResult> {
-    const result = await createFullBackup({
-      client: this.client,
-      staticPath: config.staticPath,
-      dbName: this.dbName,
-      walineDbName: config.walineDB,
-      format: format || 'auto',
-      outDir: this.backupDir(),
-      logger: {
-        log: (message) => this.logger.log(message),
-        warn: (message) => this.logger.warn(message),
-      },
+  /**
+   * 导出 + **写后校验**（P2）。
+   *
+   * 手动导出与 cron 备份（vanblog.sh backup → POST full/export）走的都是这里，
+   * 所以两条路都被校验覆盖。校验不通过 = 这次备份失败：
+   *  - 状态文件记 failure（stage='verify'，consecutiveFailures+1）；
+   *  - ERROR 日志带全部原因；
+   *  - 抛 BadRequestException（用户/脚本能看到原因；归档保留在磁盘上供排障，
+   *    后台列表里它没有 sidecar 一致性问题，inspect 仍可用）。
+   */
+  private async doExport(format?: string): Promise<ExportOutcome> {
+    let result: FullBackupResult;
+    try {
+      result = await createFullBackup({
+        client: this.client,
+        staticPath: config.staticPath,
+        dbName: this.dbName,
+        walineDbName: config.walineDB,
+        format: format || 'auto',
+        outDir: this.backupDir(),
+        logger: {
+          log: (message) => this.logger.log(message),
+          warn: (message) => this.logger.warn(message),
+        },
+      });
+    } catch (err) {
+      const message = (err as Error)?.message || String(err);
+      this.recordFailureSafely('export', message, null);
+      this.logger.error(`整站备份失败：${message}`);
+      this.warnIfStale();
+      throw err;
+    }
+    // 写后校验：解压器全量读通 + 归档内 manifest 过闸门 + 计数一致且非零
+    // （检查项与理由见 utils/backupVerify.ts 文件头）
+    let verification: BackupVerifyResult;
+    try {
+      verification = await verifyFullBackup(result.path);
+    } catch (err) {
+      verification = null as any;
+      const message = `校验器异常：${(err as Error)?.message || err}`;
+      this.recordFailureSafely('verify', message, result.name);
+      this.logger.error(`整站备份校验异常（${result.name}）：${message}`);
+      this.warnIfStale();
+      throw new BadRequestException(`整站备份校验失败：${message}（归档已保留：${result.name}）`);
+    }
+    if (!verification.ok) {
+      const message = verification.issues.map((i) => `[${i.check}] ${i.message}`).join('；');
+      this.recordFailureSafely('verify', message, result.name);
+      // ERROR 必须带原因：cron 失败要能不翻归档就定位
+      this.logger.error(
+        `整站备份校验失败（${result.name}，${result.sizeText}）：${message}` +
+          `——归档已保留在 ${result.path} 供排障，但这次备份按失败计`,
+      );
+      this.warnIfStale();
+      throw new BadRequestException(
+        `整站备份校验失败：${message}（归档已保留：${result.name}）`,
+      );
+    }
+    recordBackupSuccess(this.backupDir(), {
+      name: result.name,
+      bytes: result.bytes,
+      verifyMs: verification.ms,
     });
     this.logger.log(
-      `整站备份完成：${result.name}（${result.sizeText}，${result.format}，耗时 ${(
-        result.ms / 1000
-      ).toFixed(1)}s）`,
+      `整站备份完成并通过校验：${result.name}（${result.sizeText}，${result.format}，` +
+        `打包+导出 ${(result.ms / 1000).toFixed(1)}s，校验 ${(verification.ms / 1000).toFixed(1)}s，` +
+        `${verification.members} 个归档成员）`,
     );
-    return result;
+    return { ...result, verification };
+  }
+
+  /** 状态文件写失败绝不能把备份流程带崩（backupStatus 内部已经吞了一层，这里再兜一层）。 */
+  private recordFailureSafely(
+    stage: 'export' | 'verify',
+    message: string,
+    name: string | null,
+  ): void {
+    try {
+      recordBackupFailure(this.backupDir(), { stage, message, name });
+    } catch (err) {
+      this.logger.warn(`写备份状态文件失败：${(err as Error)?.message || err}`);
+    }
+  }
+
+  /** 上次成功备份太旧（或从未成功）时 WARN。启动时与每次备份失败后各查一次。 */
+  private warnIfStale(): void {
+    try {
+      const message = staleBackupWarning(readBackupStatus(this.backupDir()));
+      if (message) {
+        this.logger.warn(`备份陈旧告警：${message}`);
+      }
+    } catch (err) {
+      this.logger.warn(`备份陈旧检查失败：${(err as Error)?.message || err}`);
+    }
+  }
+
+  /**
+   * 启动时检查一次备份新鲜度（只由主实例做，免得 N 个 worker 各 WARN 一遍）。
+   * 阈值 `VANBLOG_BACKUP_STALE_WARN_HOURS`（默认 **48**，0 = 关闭 = 旧行为）。
+   * ⚠️ 这是一个**默认开启的新 WARN**（只写日志，不改任何行为）：没有按时备份的实例
+   * 每次启动都会看到一行「备份陈旧告警」，这正是本功能的目的（备份坏了要吵出来）。
+   */
+  onApplicationBootstrap(): void {
+    if (!isPrimaryInstance(cluster)) {
+      return;
+    }
+    // 不阻塞启动：状态文件在慢盘上也要能读失败不惊动 listen
+    setTimeout(() => this.warnIfStale(), 5000);
+  }
+
+  /** 后台专用：备份健康状态（成功/失败时间、连续失败数、陈旧判定）。 */
+  status(): BackupStatusView {
+    const file = readBackupStatus(this.backupDir());
+    const staleWarnHours = resolveStaleWarnHours();
+    const staleMessage = staleBackupWarning(file, new Date(), staleWarnHours);
+    return {
+      ...file,
+      staleWarnHours,
+      stale: Boolean(staleMessage),
+      staleMessage,
+    };
   }
 
   list(): BackupListEntry[] {

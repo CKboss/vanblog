@@ -85,6 +85,11 @@ export const ARTICLE_AGG_DEFAULTS: Record<string, unknown> = {
   viewer: 0,
   visited: 0,
   cover: '',
+  // P6 的字数存储副本（schema default 0）：find() 会给缺失字段补上默认值，
+  // 聚合路径必须同样补齐，两条路径的响应形状才逐字段一致（§7.42 的钉子）。
+  // deletedAt/publishAt 的 default 是 null，mongoose 的查询水合不会把 null 默认值
+  // 物化进响应，且公开投影根本不含这两个字段 ⇒ 不进这张表（守卫 spec 也只收非 null 默认值）。
+  wordCount: 0,
 };
 
 /**

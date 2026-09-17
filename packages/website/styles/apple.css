@@ -1,6 +1,6 @@
 /* ==========================================================================
-   字体：Maple Mono（拉丁子集自己声明，中文/Nerd Font 子集由 Layout 里那个
-   <link> 加载的 zeoseven 字体 CSS 提供，family 名是 'Maple Mono NF CN'）
+   字体：Maple Mono（拉丁子集**自托管**在 public/fonts/，中文/Nerd Font 子集由
+   Layout 里那个 <link> 加载的 zeoseven 字体 CSS 提供，family 名是 'Maple Mono NF CN'）
 
    ⚠️ 远程字体样式表**不要**用 @import 写在这里：CSS 规范要求 @import 必须在
    所有其它规则之前，而 apple.css 是被 globals.css 用 @import 内联进来的
@@ -10,16 +10,25 @@
    @font-face 没有位置要求，放这里是安全的。
    ========================================================================== */
 
-/* maple-mono-latin-400-normal */
+/* maple-mono-latin-400-normal —— 自托管，不再走 jsDelivr CDN。
+   换掉 CDN 的三个理由：第三方运行时依赖（自托管博客不该依赖别人家 CDN 出首屏字体）、
+   @latest 漂移（CDN 侧发新版会悄悄改变排版甚至拿不到文件）、首屏多一条跨域连接。
+   来源与版本（已钉死；升级时改这里 + public/fonts/ 里的文件 + spec 里的 SHA-256）：
+   - 文件取自 fontsource npm 包 @fontsource/maple-mono@5.3.0（latin 子集 400 normal），
+     与 cdn.jsdelivr.net/fontsource/fonts/maple-mono@5.3.0/latin-400-normal.woff2 逐字节一致；
+   - 上游字体 subframe7536/maple-font v7.8（fontsource lastModified 2025-10-18）；
+   - SHA-256: 0f900ecac7020d4251bd5b7c963570d998f3dc1cd195e468f7c9d9902e5556a1；
+   - 许可证 SIL OFL 1.1（允许再分发），全文随字体放在 public/fonts/LICENSE-MapleMono.txt。
+   只保留 woff2、删掉原来的 .woff 兜底：Next 14 支持的浏览器（Chrome 64+ / Edge 79+ /
+   Firefox 67+ / Safari 12+）全部支持 woff2，.woff 只服务已经不存在的浏览器，
+   还多占 104,052 B 仓库体积。字体文件缺失/加载失败时的降级路径 = font-display: swap +
+   --ap-font / --ap-font-mono 令牌里完整保留的系统字体栈：文字永远渲染，只是不用 Maple Mono。 */
 @font-face {
   font-family: "Maple Mono";
   font-style: normal;
   font-display: swap;
   font-weight: 400;
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff2")
-      format("woff2"),
-    url("https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff")
-      format("woff");
+  src: url("/fonts/maple-mono-latin-400-normal.woff2") format("woff2");
 }
 
 /* ==========================================================================

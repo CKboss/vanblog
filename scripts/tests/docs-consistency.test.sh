@@ -27,7 +27,28 @@ else
 fi
 
 # ---------- 1) 文档里出现的每个子命令，脚本都得真的支持 ----------
-SUBS="$(grep -oE '^  "[a-z_-]+"\)' "${SCRIPT}" | tr -d ' ")' | sort -u)"
+# 子命令有两种形状，都要抠出来：
+#   a) 底部分发处的 `  "name")`（历史形状，两空格缩进 + 单独一行）
+#   b) pre_check **之前**那一行 `case "${1:-}" in a | b | c) … exec …/vanblog-drill.sh …`
+#      —— 免 root 的只读子命令（drill / verify-deep / backup-verify / backup-status）走这条：
+#      pre_check 既 `mkdir -p /var/vanblog` 又对非 root 直接 exit 1，放在分发处的话
+#      "校验一份自己拥有的归档"这种纯只读操作也会要求 root（而这台机器上 root 跑 podman
+#      看到的是另一套镜像存储，等于演练根本跑不了）。
+# 只认 a) 的后果是：文档里写了 ./vanblog.sh drill，这条守卫反而说脚本不支持它。
+SUBS="$(
+  {
+    grep -oE '^  "[a-z_-]+"\)' "${SCRIPT}" | tr -d ' ")'
+    grep -E '^case "\$\{1:-\}" in .*vanblog-drill\.sh' "${SCRIPT}" | head -1 |
+      sed -E 's/^case "\$\{1:-\}" in ([^)]*)\).*/\1/' | tr '|' '\n' | tr -d ' '
+  } | grep -v '^$' | sort -u
+)"
+for c in drill verify-deep backup-verify backup-status; do
+  if printf '%s\n' "${SUBS}" | grep -qx "${c}"; then
+    pass "vanblog.sh 支持 ${c}（转发给 scripts/vanblog-drill.sh，且在 pre_check 之前 ⇒ 不要求 root）"
+  else
+    fail "vanblog.sh 没有把 ${c} 转发给 vanblog-drill.sh（pre_check 之前那行 case 被删了/改名了？）"
+  fi
+done
 DOC_CMDS="$(grep -rhoE '\./vanblog\.sh [a-z_-]+' "${ROOT}/docs" --include='*.md' 2>/dev/null |
   awk '{print $2}' | sort -u)"
 missing=""
@@ -204,6 +225,7 @@ out = subprocess.run(["grep", "-rhoE", "VAN_BLOG_[A-Z_]+|VANBLOG_[A-Z_]+", "docs
 names = sorted({v for v in out if not v.endswith("_")})
 roots = ["packages/server/src", "packages/website", "packages/admin/src", "packages/cli",
          "Dockerfile", "entrypoint.sh", "scripts/start.js", "scripts/vanblog.sh",
+         "scripts/vanblog-drill.sh",
          "scripts/build-image-local.sh", "scripts/caddyConfig.js", "docker-compose",
          "caddyTemplate.json", "caddyFallbackTemplate.json"]
 corpus = []

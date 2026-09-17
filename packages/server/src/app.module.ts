@@ -19,6 +19,12 @@ import { MetaProvider } from './provider/meta/meta.provider';
 import { TagProvider } from './provider/tag/tag.provider';
 import { PublicController } from './controller/public/public.controller';
 import { HealthController } from './controller/public/health.controller';
+import { Migration, MigrationSchema } from './scheme/migration.schema';
+import { RevisionSchema } from './scheme/revision.schema';
+import { MigrationProvider } from './provider/migration/migration.provider';
+import { RevisionProvider } from './provider/revision/revision.provider';
+import { MigrationController } from './controller/admin/migration/migration.controller';
+import { PublishTask } from './schedule/publish.task';
 import { AboutMetaController } from './controller/admin/about/about.meta.controller';
 import { LinkMetaController } from './controller/admin/link/link.meta.controller';
 import { RewardMetaController } from './controller/admin/reward/reward.meta.controller';
@@ -150,6 +156,15 @@ function num(value: string | undefined, fallback: number): number {
       { name: Category.name, schema: CategorySchema },
       { name: Pipeline.name, schema: PipelineSchema },
       { name: NativeComment.name, schema: NativeCommentSchema },
+      // ⚠️ 这里的 `name` 是 **mongoose 模型 token**，必须与 provider 里
+      // `@InjectModel('…')` 的字符串**逐字一致**，不是类名：
+      //   MigrationProvider 用 @InjectModel('Migration')、RevisionProvider 用 @InjectModel('Revision')，
+      //   而 revision 的类名是 ArticleRevision ⇒ 写成 ArticleRevision.name 会让 Nest 启动时
+      //   抛 "can't resolve dependencies of the RevisionProvider (?)"，**tsc 是全绿的**
+      //   （token 是运行期字符串，类型检查看不见）—— 这个坑就是这么踩的。
+      // 集合名由 mongoose 从模型名推导：migrations / revisions。
+      { name: 'Migration', schema: MigrationSchema },
+      { name: 'Revision', schema: RevisionSchema },
     ]),
     JwtModule.registerAsync({
       useFactory: async () => {
@@ -199,7 +214,8 @@ function num(value: string | undefined, fallback: number): number {
     TokenController,
     PublicCommentController,
     CommentController,
-    RobotsController
+    RobotsController,
+    MigrationController,
   ],
   providers: [
     AppService,
@@ -242,7 +258,10 @@ function num(value: string | undefined, fallback: number): number {
     TokenGuard,
     WebsiteProvider,
     PipelineProvider,
-    CommentProvider
+    CommentProvider,
+    MigrationProvider,
+    RevisionProvider,
+    PublishTask,
   ],
 })
 export class AppModule implements NestModule {

@@ -485,7 +485,10 @@ describe('公开搜索：去重从 O(k²) 降到 O(k)，结果逐项不变', () 
     const limit = jest.fn(() => ({ maxTimeMS }));
     const find = jest.fn(() => ({ limit }));
     const { ArticleProvider } = require('./provider/article/article.provider');
-    const provider = new ArticleProvider({ find } as any, {} as any, undefined as any, undefined as any);
+    // P8 之后 searchByString 的公开路径还会查一次加密分类名单（categoryModal.find），
+    // 这里的钉子只关心去重复杂度，给个空名单的假分类模型即可
+    const categoryModal = { find: () => ({ exec: async () => [] }) };
+    const provider = new ArticleProvider({ find } as any, categoryModal as any, undefined as any, undefined as any);
     return { provider, find, limit, maxTimeMS };
   };
 

@@ -23,6 +23,9 @@ export class PublishDraftDto {
   private?: boolean;
   password?: string;
   copyright?: string;
+  /** 定时发布（P5）：发布草稿时也可以直接定一个未来时间；
+   *  归一化/校验发生在 articleProvider.create()（非法值 400，null=不定时）。 */
+  publishAt?: Date | string | number | null;
 }
 export class SearchDraftOption {
   page: number;

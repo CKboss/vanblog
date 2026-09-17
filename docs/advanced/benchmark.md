@@ -239,11 +239,55 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 | 时间线排序 / `washArticles` 算法 | n=20,000：**308 → 26 ms**；n=10,000：**118 → 19 ms** | §7.54 |
 | 摘要/首图热路径 | **3.7–96×**（输出逐字节不变，461 个向量对拍 + 53 篇活体逐字节比对） | §7.55 H |
 
+## 9.1 追加实测：caddy 直接发固定页的 ISR HTML（`VANBLOG_CADDY_SERVE_HTML`，默认关）
+
+第 10 节把"caddy 直接发 ISR 生成的 HTML"列为**剩下的最大吞吐杠杆**。它现在**部分实现了**，
+而且实现范围比想象的小得多 —— 因为调研发现动态路由有硬阻塞（见下）。数字来自同一台机器、
+同一份 53 篇真数据、同一个压测台，所以 A/B 有效（绝对值仍然偏保守）：
+
+| 场景 | 走 Node 反代 | caddy 直发 | |
+|---|---|---|---|
+| 首页扫描 c=200 × 500 | 279.8–316.1 rps，p50 131–143，p95 1485–1678，p99 1545–1763 | **1171.0–1246.9 rps**，p50 104–128，**p95 240–366**，p99 296–380 | **3.7–4.5× rps，p95 −78…−84%** |
+| 首页扫描 c=50 | 313.3 rps | **932.8 rps** | 2.98× |
+| 单请求 `/`（identity） | p50 8 ms | **p50 1 ms** | 8× |
+| 单请求 `/`（gzip） | p50 7 ms | **p50 3 ms** | 2.3× |
+| 单请求 `/about` | p50 6 ms | **p50 1 ms** | 6× |
+
+500/500 全 200、0 个 socket 错误。复现：
+
+```bash
+node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile home --c 200 --n 500
+node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile latency --paths /,/about,/api/public/meta --n 20
+```
+
+⚠️ **两条必须一起读的代价**（这也是它默认关的原因）：
+
+1. **开了以后这 6 条路径完全不受限流**：请求根本不进 Nest，所以不消耗 `VANBLOG_RATE_LIMIT_PER_MIN` 预算、
+   也不被任何限流器拦住。而**镜像里的标准 caddy 2.11.4 没有任何限流模块**
+   （`caddy list-modules | grep -ci 'rate.?limit'` → **0**；要限流得用 xcaddy 自编 `mholt/caddy-ratelimit`）。
+2. **只在 ISR 是 `onDemand` 模式时生效**：`delay` 模式下页面新鲜度 100% 靠流量驱动
+   （cron 与保存触发的重渲染风暴在 delay 模式下都被挡掉），直发会让页面**永久冻结**。
+   所以 provider 只在 `VANBLOG_CADDY_SERVE_HTML=true` **且** 模式是 onDemand 时才写哨兵文件，
+   并每 60 秒对账一次（模式变了会自动摘掉，不用重启）。
+
+**为什么动态路由（`/post/*` 等）明确不做** —— 五条阻塞全部在活体真数据栈上证过，不是推理：
+
+- **删掉的文章的 HTML 会永远留在磁盘上**：软删 + `res.revalidate` 之后，Next 从**内存**里的 notFound 记录回 404，
+  而那个 78,830 B 的 HTML 文件不会被删（next 14.2.35 的 `file-system-cache.js` 里没有任何 `unlink`）
+  ⇒ **caddy 会无限期地用 200 提供已删除的内容**。
+- **308 与 404 不留任何磁盘产物**：`/post/<数字id>` → 308 到别名（`X-Nextjs-Cache: HIT`，没有文件）；
+  不存在的文章 → 404，也没有文件。`file_server` 无法从磁盘还原状态码。
+- **notFound 只在内存里**（证过：MISS→HIT 且磁盘零写入）。
+- **加密文章的明文会留在磁盘上**，直到重渲染风暴重写它（证过：3,081 字明文 → 剥离后的 43,112 B 文件）。
+  窗口 = 改动到风暴完成：onDemand 下秒级、每小时 cron 兜底、**delay 模式下无上界**。
+- 因此代码里砌了一堵**自带解释的墙**：模板形状的用例里，任何人往那 6 条之外加路径都会抛错并点名这三个阻塞，
+  而不是给一个裸 diff。要扩大范围，得先在服务端做出"notFound/重定向时把文件删掉"的语义。
+
 ## 10. 已知边界与下一步（按性价比）
 
-1. **caddy 直接发 ISR 生成的 HTML**：图片已经直服，页面 HTML 还要过一趟 Node。`.next/` 里的产物本来就是
-   静态文件，理论上可由 caddy 直接发 + 用 revalidate 语义做失效。**这是剩下的最大吞吐杠杆**，
-   风险在 ISR 的 stale-while-revalidate 与按需触发语义。
+1. **caddy 直接发 ISR 生成的 HTML**：✅ **6 个固定页已实现**（`VANBLOG_CADDY_SERVE_HTML`，默认关，见第 9.1 节的实测与两条代价）。
+   **动态路由仍未做**，因为调研证明了硬阻塞（删除的文章的 HTML 永不删、308/404 不留产物、notFound 只在内存里）；
+   要扩大范围，得先在服务端做出"notFound/重定向时删掉文件"的语义，然后再评估。
 2. **打开 cluster**（`VANBLOG_CLUSTER_WORKERS`，默认 1）：代码与守卫都铺好了（cron / 子进程 spawn / 启动清洗 /
    首轮渲染都限定主实例，限流与连接池按 worker 数摊薄），但 **N>1 从未真跑过**，而且内存随 worker 数近似线性增长
    （与"占用更低"是相反的取舍）。打开前必须自己压一遍。

@@ -10,6 +10,7 @@ import PostViewer from "../PostViewer";
 import { getTarget } from "../Link/tools";
 import { checkLogin } from "../../utils/auth";
 import { COUNT_LOADING_PLACEHOLDER } from "../../utils/countPlaceholder";
+import { formatReadingTime } from "../../utils/readingTime";
 import { CopyIcon, LinkIcon } from "../CopyIcons";
 import {
   SITE_NAME_COPY_LABEL,
@@ -154,6 +155,11 @@ export function SubTitle(props: {
    * 没有它（例如 `/about`）时 PostViewer 会在浏览器空闲时补一次请求。
    */
   viewer?: number | null;
+  /**
+   * 服务端算好的阅读时间（分钟，整数 ≥ 1；列表与详情 payload 都会带）。
+   * 缺失/非法时**整段不渲染**（utils/readingTime.ts 收敛），不做客户端兜底计算。
+   */
+  readingMinutes?: number | null;
   openArticleLinksInNewWindow: boolean;
 }) {
   const iconSize = "16";
@@ -161,6 +167,10 @@ export function SubTitle(props: {
     "mr-1 fill-gray-400 dark:text-dark dark:group-hover:text-dark-hover group-hover:text-gray-900 ";
 
   const commentProvider = useCommentProvider();
+  const readingTimeLabel = useMemo(
+    () => formatReadingTime(props.readingMinutes),
+    [props.readingMinutes],
+  );
   const dataPath = useMemo(() => {
     if (props.type == "about") {
       return "/about";
@@ -229,6 +239,29 @@ export function SubTitle(props: {
           </Link>
         </span>
       )}
+      {readingTimeLabel ? (
+        <span
+          className="inline-flex px-2 items-center"
+          data-reading-time={props.readingMinutes ?? undefined}
+          title="阅读时间（服务端估算）"
+        >
+          <span className={iconClass}>
+            <svg
+              viewBox="0 0 1024 1024"
+              version="1.1"
+              xmlns="http://www.w3.org/2000/svg"
+              width={iconSize}
+              height={iconSize}
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64z m0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z" />
+              <path d="M686.1 628.6 545.9 544.7V336c0-4.4-3.6-8-8-8h-48c-4.4 0-8 3.6-8 8v242.1c0 2.6 1.3 5.1 3.5 6.6l168 100.5c3.8 2.3 8.8 1 11.1-2.7l24.9-41.8c2.3-3.8 1-8.8-2.7-11.1z" />
+            </svg>
+          </span>
+          {readingTimeLabel}
+        </span>
+      ) : null}
       <span className="inline-flex px-2 items-center">
         <span className={iconClass}>
           <svg

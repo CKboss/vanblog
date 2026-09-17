@@ -11,15 +11,25 @@
    ========================================================================== */
 
 /* maple-mono-latin-400-normal：拉丁子集（中文/NF 子集由 useApplePreviewFont 注入的
-   远程样式表提供，family 名是 'Maple Mono NF CN'）。@font-face 没有位置要求。 */
+   远程样式表提供，family 名是 'Maple Mono NF CN'）。@font-face 没有位置要求。
+
+   ⚠️ 版本钉死在 @5.3.0（= @fontsource/maple-mono@5.3.0，subframe7536/maple-font v7.8，
+   SIL OFL 1.1），与前台 packages/website 自托管的那份**同版本**。不许改回 @latest：
+   CDN 侧一发新版，后台预览的排版就会无声漂移（甚至拿不到文件），没人查得出来。
+
+   为什么后台这份留在 CDN、不像前台那样 vendor 进包：后台是登录后的管理界面，
+   不在任何读者的关键路径上；把同一个 74KB 字体再复制进第二个包换不来可测量的收益，
+   反而多一份会和前台 vendor 拷贝漂移的副本。离线/CDN 被墙时后台**只有预览面板**
+   退化到下面的系统字体兜底栈，编辑与管理功能完全不受影响。
+   （preconnect 'https://cdn.jsdelivr.net' 在 useApplePreviewFont.ts，与此 URL 同源。） */
 @font-face {
   font-family: 'Maple Mono';
   font-style: normal;
   font-display: swap;
   font-weight: 400;
-  src: url('https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff2')
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@5.3.0/latin-400-normal.woff2')
       format('woff2'),
-    url('https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff')
+    url('https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@5.3.0/latin-400-normal.woff')
       format('woff');
 }
 

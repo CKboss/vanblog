@@ -27,7 +27,9 @@ export default function (props) {
             password: values.pc,
             top: values.Ctop,
           });
-          message.success('发布成功！');
+          // 发布成功后草稿会被软删除进回收站（既有语义）：toast 里说清是「归档」，
+          // 免得用户以为草稿丢了，或以为从回收站恢复草稿能撤销这次发布。
+          message.success('发布成功！原草稿已自动移入草稿回收站（恢复它不会影响这篇已发布的文章）。');
           if (action && action.reload) {
             action.reload();
           }

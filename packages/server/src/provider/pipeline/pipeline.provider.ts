@@ -17,7 +17,7 @@ const DEPS_INSTALL_TIMEOUT_MS = envPositiveInt(
 );
 
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Logger } from '@nestjs/common';
+import { Logger, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { PipelineDocument } from 'src/scheme/pipeline.schema';
@@ -31,6 +31,7 @@ import {fork, spawn} from 'child_process';
 import cluster from 'node:cluster';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { LogProvider } from '../log/log.provider';
+import { MigrationProvider } from '../migration/migration.provider';
 
 export interface CodeResult {
   logs: string[];
@@ -47,6 +48,8 @@ export class PipelineProvider {
     @InjectModel('Pipeline')
     private pipelineModel: Model<PipelineDocument>,
     private readonly logProvider: LogProvider,
+    /** 迁移台账（可选注入：单测直接 `new` 时不传；record 永不抛错）。 */
+    @Optional() private readonly migration?: MigrationProvider,
   ) {
     // ⚠️ 只由主实例做：`init()` 会跑 `checkAllDeps()`（对每个依赖执行 `pnpm add`，
     // cwd 是共享的 codeRunnerPath）与 `saveAllScripts()`（写同一批 <id>.js 文件）。
@@ -89,9 +92,56 @@ export class PipelineProvider {
   }
 
   async init() {
-    // 检查一遍，安装依赖
-    this.checkAllDeps();
-    await this.saveAllScripts();
+    // 检查一遍，安装依赖。
+    // ⚠️ 以前这里是裸的 `this.checkAllDeps();`（floating promise，reject 只能靠全局
+    // unhandledRejection 兜底日志）。现在挂上迁移台账 + 带来源的 WARN：`pnpm add` 失败
+    // （离线/超时）会记成 `deps:pipelineStartup` outcome='error'，后台台账页一眼可见。
+    const depsStarted = Date.now();
+    this.checkAllDeps()
+      .then(async () => {
+        await this.migration?.record({
+          key: 'deps:pipelineStartup',
+          kind: 'sync',
+          outcome: 'ok',
+          durationMs: Date.now() - depsStarted,
+          detail: '启动期依赖检查/安装完成',
+        });
+      })
+      .catch(async (err) => {
+        this.logger.error(
+          `启动期流水线依赖安装失败（已配置的流水线可能跑不起来）：${
+            (err as Error)?.message || err
+          }`,
+        );
+        await this.migration?.record({
+          key: 'deps:pipelineStartup',
+          kind: 'sync',
+          outcome: 'error',
+          durationMs: Date.now() - depsStarted,
+          detail: (err as Error)?.message || String(err),
+        });
+      });
+    // 脚本落盘（库是唯一事实来源）：同步等待，记 `sync:pipelineScripts` 一条
+    const scriptsStarted = Date.now();
+    try {
+      await this.saveAllScripts();
+      await this.migration?.record({
+        key: 'sync:pipelineScripts',
+        kind: 'sync',
+        outcome: 'ok',
+        durationMs: Date.now() - scriptsStarted,
+        detail: '按库重写 <codeRunnerPath>/<id>.js 完成',
+      });
+    } catch (err) {
+      await this.migration?.record({
+        key: 'sync:pipelineScripts',
+        kind: 'sync',
+        outcome: 'error',
+        durationMs: Date.now() - scriptsStarted,
+        detail: (err as Error)?.message || String(err),
+      });
+      throw err;
+    }
   }
 
   async getNewId() {

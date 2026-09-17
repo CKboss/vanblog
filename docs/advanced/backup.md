@@ -29,7 +29,8 @@ icon: right-to-bracket
 
 不含（都是可再生或临时的，理由写在 `packages/server/src/utils/fullBackup.ts` 的 `BACKUP_STATIC_FOLDERS` 注释里，并有测试守卫这份分类）：`rss/`、`sitemap/`（启动与每次改动后重新生成）、`tmp/`、`upload-tmp/`（备份/恢复与上传的暂存目录）、`export/`（旧导出包，匿名访问已被 403 拦掉，内容按需重新导出）、日志、Caddy 证书。
 
-> ⚠️ 静态目录下**新增**任何子目录时，必须同时在 `BACKUP_STATIC_FOLDERS`（用户数据）或那份注释的"故意不备份"清单里表态：`packages/server/src/audit-hardening-round3-backup.spec.ts` 会把"代码会建、但两边都没登记"的目录判成失败。主题 CSS 就是因为没人登记而**长期没进归档**的 —— 元数据在库里、文件不在，恢复之后后台显示主题已启用，`/api/public/theme.css` 却 404，前台静默退回默认皮肤。
+> ⚠️ 静态目录下**新增**任何子目录时，必须同时在 `BACKUP_STATIC_FOLDERS`（用户数据）或那份注释的"故意不备份"清单里表态：`packages/server/src/audit-hardening-round3-backup.spec.ts` 会把"代码会建、但两边都没登记"的目录判成失败。主题 CSS 就是因为没人登记而**长期没进归档**的 —— 元数据在库里、文件不在，恢复之后后台显示主题已启用，`/api/public/theme.css` 却返回 **204 + 空样式表**
+（读文件失败被 `catch`，所以不是 404、控制台也没有任何报错），前台静默退回默认皮肤。
 
 ### 压缩格式
 
@@ -131,6 +132,69 @@ icon: right-to-bracket
   所以要输入 `yes`；自动化场景用 `VANBLOG_ASSUME_YES=1`。
 - 恢复前脚本会先调 `full/inspect` 把**备份清单**打出来（备份时间、各集合条数、静态文件数），
   确认没选错版本再动手。
+
+### 证明备份真的能恢复：`./vanblog.sh drill`
+
+> **为什么需要它**：`verify` 只能证明"这个文件是完整的"（`zstd -t` + 成员清单 + sha256），
+> **证明不了"它能被恢复成一个能用的站点"**。这两件事差得很远 —— 本项目就踩过两次：
+> 一次是恢复直接报 `Unsupported BSON version`（编解码用的 BSON 构造器与写库的驱动不是同一个大版本），
+> 一次是**上传的主题 CSS 从来不进归档**（元数据在库里、文件不在，恢复后后台显示主题已启用而 CSS 是空的）。
+> 两次都是"备份看着成功、恢复才发现坏了"，而 `verify` 一次都没报警。
+
+```bash
+./vanblog.sh drill                                   # 用备份目录里最新的那份
+./vanblog.sh drill /path/vanblog-full-xxx.tar.zst    # 指定一份
+./vanblog.sh drill <归档> --dry-run                  # 只打印计划，什么都不碰
+./vanblog.sh drill <归档> --keep                     # 演练完把一次性栈留着，打印怎么访问、怎么拆
+./vanblog.sh drill <归档> --image vanblog:local-test # 指定被测镜像
+```
+
+它会起一套**一次性**的 mongo + vanblog（命名卷、临时端口、与线上栈完全隔离，`trap` 保证任何失败路径都清理干净），
+等健康检查通过，然后**真的**把归档上传到 `POST /api/admin/init/restore`（也就是用户会走的那条生产路径，
+不是内部函数调用），再断言**语义**：
+
+| 断言 | 为什么这条重要 |
+| --- | --- |
+| 信封 `statusCode:200`、`counts.articles > 0` | 恢复接口本身通了 |
+| **信封里的 counts 与归档 manifest 对账**、manifest 自身求和一致 | "接口说恢复了 59 篇"与"归档里写了 59 篇"是两件事 |
+| meta 是真实站点（不是未初始化的 233 信封） | 站点信息真的回来了 |
+| **公开列表的 total == 从归档自己的 `articles.ndjson` 逐文档数出来的公开篇数** | 这是最硬的一条：它证明"库里的东西"与"归档里的东西"一致，而不是接口自己报了个好看的数字 |
+| 一个真实静态文件 200 且非空 | 图床/附件真的落盘了 |
+| **主题 CSS 能否取到**（归档里有 `static/themes/` 时） | 上面那次"主题不进归档"的回归，从此有真机覆盖 |
+| 容器日志里没有 BSON 指纹 / 模块缺失 / unhandledRejection | 静默失败也算失败 |
+| **第二次恢复必须 403** | 已初始化的站点不该再被这条匿名路由覆盖 |
+
+最后一行是机器可读的，方便接进 CI 或 cron：
+
+```
+RESULT: PASS pass=31 warn=0 fail=0 note=3
+```
+
+真机结果（podman 4.9.3 rootless、一份 65.9 MB 的归档）：健康检查 200 约 6 秒、恢复 **HTTP 201 / 服务端 3.2 秒 /
+端到端 4 秒**、`/static/themes/warm-paper-28381fac.css → 200, 5,521 B`（与 manifest 记的 `themes.bytes` 相符）、
+公开列表 `total 53 == 53`（从归档数出来的）、第二次恢复 403、演练后 0 个残留容器/卷/网络/临时目录。
+
+⚠️ 早于"主题进归档"那次修复的归档，drill 会把缺失的 `static/themes/` 报成**信息性 note**
+（"这份归档早于主题备份，真机恢复会丢上传的主题"）而不是静默通过 —— 因为它确实会丢。
+
+**坏归档也要演练**（`--skip-preflight` 让它真的走到端点）：截断的归档应该得到 **HTTP 400 + 退出码 1 + 完整清理**，
+而且**紧接着的好归档演练必须仍然通过**。后面这半句才是重点：曾经有个 bug 是坏归档会让恢复接口的
+单飞锁**永久卡死**（`listArchiveMembers` 在截断归档上永不 settle），于是"上传一个坏归档就能让整站再也恢复不了"，
+只有这个"坏归档之后还能恢复"的断言能抓到它。
+
+### 相关的三个子命令
+
+| 命令 | 要 root 吗 | 做什么 |
+| --- | --- | --- |
+| `./vanblog.sh verify <归档>` | **要** | 老命令，**行为不变**：只查结构（解压器自检、成员清单、sha256 边车），宽松。⚠️ 故意不升级成严格版，因为那会静默改掉现有 cron 的退出码 |
+| `./vanblog.sh verify-deep [归档…]` | 不要 | 先跑一遍 `verify`（输出行逐字保留），再加**语义层**：manifest 必须能**从归档内部**读出（只有边车不算，因为恢复读的是内部那份）、`kind` 对不对、`version > 1` 大声失败（比本程序新的格式恢复时会被拒）、每个声明的集合都有对应 `.ndjson`（缺 = WARN）、有没有不安全的成员路径（绝对路径或任何 `..` 段 = FAIL）、计数非零且自洽、`static/themes/` 在不在（不在就 WARN 并说清后果）、需要哪个解压器以及本机有没有、上传文件名白名单 |
+| `./vanblog.sh backup-verify` | 照 `backup` | 备份 → 用**目录差分**找到新归档 → 深度校验 → 陈旧检查 → 写台账 →（可选 `--drill`）。任何一步失败都非零退出，并明说"旧归档没有被清理"。**适合放进 cron**（`install-cron` 默认写的仍是 `backup`，要更严就自己改成这个） |
+| `./vanblog.sh backup-status` | 不要 | 回答"上次备份什么时候成功的、校验过没有"：文件系统 + 追加式台账 `<备份目录>/vanblog-verify-log.jsonl` + 服务端的 `backup-status.json`，**都不需要 token**；设了 `VANBLOG_ADMIN_TOKEN` 时才把 `GET /api/admin/backup/full/status` 当第三方意见，**两边不一致本身就是 WARN** |
+
+服务端那边也做了对应的事：**每次导出（手动与 cron 都算）写完就自校验**，失败会返回 HTTP 400、
+把状态记进 `<备份目录>/backup-status.json`（⚠️ 故意不写进数据库 —— 恢复会把库覆盖掉，
+状态跟着回退就等于"恢复之后看不到恢复之前那次备份失败了"）、打一条带原因的 ERROR；
+`VANBLOG_BACKUP_STALE_WARN_HOURS`（默认 48）控制"太久没有已校验的成功备份"的启动告警。
 
 ### 在新机器的初始化页直接恢复（不用先建管理员）
 

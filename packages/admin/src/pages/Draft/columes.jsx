@@ -146,9 +146,12 @@ export const columns = [
               onClick={() => {
                 Modal.confirm({
                   title: `确定删除草稿 "${record.title}" 吗？`,
+                  // 软删除：说清去向和撤销路径（回收站在本页工具栏）
+                  content:
+                    '删除后草稿会移入本页工具栏的「回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
                   onOk: async () => {
                     await deleteDraft(record.id);
-                    message.success('删除成功!');
+                    message.success('删除成功，已移入回收站（可恢复）!');
                     action?.reload();
                   },
                 });

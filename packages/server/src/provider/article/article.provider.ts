@@ -19,6 +19,7 @@ import {
   Injectable,
   forwardRef,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -35,6 +36,8 @@ import { parseNumericId, tryParseNumericId } from 'src/utils/numericId';
 import { sanitizePagination, UNLIMITED_PAGE_SIZE } from 'src/utils/pagination';
 import { slugCandidates, titleToSlug } from 'src/utils/slug';
 import { assertUsablePathname, normalizePathname } from 'src/utils/articlePathname';
+import { isFuturePublish, normalizePublishAt, visiblePublishFilter } from 'src/utils/publishAt';
+import { readingMinutesFromContent, readingMinutesFromUnits } from 'src/utils/readingTime';
 import {
   prepareRewriteBases,
   rewriteBaseUrlInDocuments,
@@ -42,12 +45,32 @@ import {
 } from 'src/utils/rewriteBaseUrl';
 import { MetaProvider } from '../meta/meta.provider';
 import { VisitProvider } from '../visit/visit.provider';
+import { RevisionProvider } from '../revision/revision.provider';
+import { MigrationProvider, MigrationKind } from '../migration/migration.provider';
 import { sleep } from 'src/utils/sleep';
 import { CategoryDocument } from 'src/scheme/category.schema';
 import { escapeRegExp, safeSearchPattern } from 'src/utils/regex';
 import { asQueryString } from 'src/utils/sanitizeRequest';
 
 export type ArticleView = 'admin' | 'public' | 'list';
+
+/** 相关文章（P6）：一次查询最多取多少候选（JS 里再排序取前 RELATED_MAX） */
+export const RELATED_CANDIDATE_LIMIT = 50;
+/** 相关文章最多返回几条（任务契约：max 5） */
+export const RELATED_MAX = 5;
+
+/** 公开详情 payload 里 relatedArticles 的条目形状（前台另一个 agent 按这个契约消费） */
+export interface RelatedArticleItem {
+  /** 数字 id 的字符串形式（本站文章的对外标识一直是数字 id，不是 mongo ObjectId） */
+  _id: string;
+  /** 同上，数字形式（与全仓库其它 payload 的 `id` 字段一致） */
+  id: number;
+  title: string;
+  pathname: string;
+  cover: string;
+  updatedAt: Date | null;
+  readingMinutes: number;
+}
 
 @Injectable()
 export class ArticleProvider {
@@ -60,6 +83,13 @@ export class ArticleProvider {
     @Inject(forwardRef(() => MetaProvider))
     private readonly metaProvider: MetaProvider,
     private readonly visitProvider: VisitProvider,
+    /**
+     * 文章历史版本（可选注入：单测/量具直接 `new ArticleProvider(...)` 时不传，
+     * 行为与引入该功能之前完全一致 —— 不记快照）。
+     */
+    @Optional() private readonly revisionProvider?: RevisionProvider,
+    /** 迁移台账（可选注入，同上）。只给后台触发的回填类修复记账用。 */
+    @Optional() private readonly migration?: MigrationProvider,
   ) {}
   publicView = {
     title: 1,
@@ -102,6 +132,9 @@ export class ArticleProvider {
     copyright: 1,
     pathname: 1,
     cover: 1,
+    // P5：后台列表/详情要能看到定时发布状态（publishAt > now = 待发布）。
+    // 只加在 adminView —— 公开面（publicView/listView）的响应形状不变。
+    publishAt: 1,
   };
 
   listView = {
@@ -122,6 +155,30 @@ export class ArticleProvider {
     copyright: 1,
     pathname: 1,
     cover: 1,
+    // P6：wordCount 存储副本 —— 列表投影不带 content，readingMinutes 靠它算
+    wordCount: 1,
+  };
+
+  /**
+   * 回收站列表投影（P3）：管理端列表需要的字段，**没有 content / password**。
+   * wordCount 是存储副本（P6 维护），publishAt 让后台能看出"删掉的是不是定时文章"。
+   */
+  deletedListView = {
+    id: 1,
+    title: 1,
+    pathname: 1,
+    category: 1,
+    tags: 1,
+    top: 1,
+    hidden: 1,
+    author: 1,
+    cover: 1,
+    wordCount: 1,
+    publishAt: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: 1,
+    _id: 0,
   };
 
   toPublic(oldArticles: Article[]) {
@@ -143,10 +200,18 @@ export class ArticleProvider {
     skipUpdateWordCount?: boolean,
     id?: number,
   ): Promise<Article> {
+    // P5：publishAt 入库前统一归一化（非法值 400，绝不存 Invalid Date；
+    // undefined=本次不设置，null=显式清除定时）
+    if (createArticleDto.publishAt !== undefined) {
+      (createArticleDto as any).publishAt = normalizePublishAt(createArticleDto.publishAt);
+    }
     const createdData = new this.articleModel(createArticleDto);
     const newId = id || (await this.getNewId());
     createdData.id = newId;
     createdData.pathname = await this.resolvePathnameForCreate(createArticleDto, newId);
+    // P6：正文字数副本入库（readingMinutes 在"投影不带正文"的查询里靠它算）。
+    // 老文档由启动回填补齐（backfillWordCounts，台账 key `backfill:articleWordCount`）。
+    createdData.wordCount = wordCount((createArticleDto as any)?.content || '');
     if (!skipUpdateWordCount) {
       this.metaProvider.updateTotalWords('新建文章');
     }
@@ -203,8 +268,39 @@ export class ArticleProvider {
    * Give pinyin aliases to articles that predate this feature (or whose title
    * produced no slug). Existing aliases are never touched, so re-running is
    * safe; `dryRun` reports the same picks without writing.
+   *
+   * 后台触发的数据修复 ⇒ 记一条迁移台账（`backfill:articlePathname`）；
+   * 台账没注入（单测直接 new）时行为与从前逐字节一致。
    */
   async backfillPathname(options?: { dryRun?: boolean }): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    updated: number;
+    skipped: number;
+    items: { id: number; title: string; pathname: string }[];
+  }> {
+    return this.withLedger(
+      'backfill:articlePathname',
+      'backfill',
+      () => this.doBackfillPathname(options),
+      (r) => ({ dryRun: r.dryRun, scanned: r.scanned, updated: r.updated, skipped: r.skipped }),
+    );
+  }
+
+  /** 台账在就包一层 run()（计时+记账+失败 WARN），不在就原样跑；错误语义不变（原样上抛）。 */
+  private withLedger<T>(
+    key: string,
+    kind: MigrationKind,
+    task: () => Promise<T>,
+    detail?: (result: T) => unknown,
+  ): Promise<T> {
+    if (this.migration) {
+      return this.migration.run({ key, kind }, task, detail ? { detail } : undefined);
+    }
+    return task();
+  }
+
+  private async doBackfillPathname(options?: { dryRun?: boolean }): Promise<{
     dryRun: boolean;
     scanned: number;
     updated: number;
@@ -358,7 +454,11 @@ export class ArticleProvider {
     return rewriteBaseUrlInDocuments(
       articles || [],
       async (id, content) => {
-        await this.articleModel.updateOne({ id }, { content, updatedAt: new Date() });
+        // 正文被改写 ⇒ P6 的字数副本同步重算
+        await this.articleModel.updateOne(
+          { id },
+          { content, wordCount: wordCount(content), updatedAt: new Date() },
+        );
       },
       bases.oldBase,
       bases.newBase,
@@ -542,6 +642,8 @@ export class ArticleProvider {
           },
         ],
       },
+      // P5：公开口径的总字数不含还没到点的定时文章（与 getTotalNum 同口径）
+      visiblePublishFilter(),
     ];
     const articles = await this.articleModel
       .find(
@@ -583,6 +685,8 @@ export class ArticleProvider {
           },
         ],
       });
+      // P5：公开口径的文章总数不含"还没到点"的定时文章
+      $and.push(visiblePublishFilter());
       // 未鉴权的搜索不能变成「加密文章正文探测器」：
       // 以前只排除 deleted/hidden，于是拿候选词反复搜 /api/public/search，
       // 看加密文章的标题是否出现，就能一个词一个词地把受密码保护的正文试出来。
@@ -652,6 +756,8 @@ export class ArticleProvider {
           },
         ],
       });
+      // P5：includeHidden=false 的调用方全是公开面（RSS/sitemap/tag/category/前台列表）
+      $and.push(visiblePublishFilter());
     }
 
     const articles = await this.articleModel
@@ -694,6 +800,8 @@ export class ArticleProvider {
                 },
               ],
             },
+            // P5：时间线（公开面）不含还没到点的定时文章
+            visiblePublishFilter(),
           ],
         },
         this.listView,
@@ -743,6 +851,9 @@ export class ArticleProvider {
           },
         ],
       });
+      // P5 定时发布：publishAt 还没到的文章对**所有公开面**不可见（与 hidden 同一个门槛，
+      // 过滤器共用 utils/publishAt.ts 的 visiblePublishFilter，逐路径钉子见 publishAt spec）
+      $and.push(visiblePublishFilter());
     }
 
     if (option.sortTop) {
@@ -880,6 +991,22 @@ export class ArticleProvider {
         }
       }
       articles = tmpArticles;
+      // P6：公开列表项带 readingMinutes（契约：toListView 列表与详情都有）。
+      // content 在手上（withExcerpt/withWordCount 流程）就现算；否则用存储副本 wordCount
+      // （listView 投影已带该字段）。私密文章不给：正文都藏了，阅读时长也不给。
+      // ⚠️ 必须在「过滤私密文章」之后跑（顺序反了会按加密正文算时长）。
+      articles = articles.map((a: any) => {
+        const doc = a?._doc || a;
+        if (doc?.private === true) {
+          return doc;
+        }
+        const content = typeof doc?.content === 'string' ? doc.content : null;
+        const minutes =
+          content != null
+            ? readingMinutesFromContent(content)
+            : readingMinutesFromUnits(Number(doc?.wordCount) || 0);
+        return { ...doc, readingMinutes: minutes };
+      });
     }
     const resData: any = {};
     if (option.withWordCount) {
@@ -1043,6 +1170,11 @@ export class ArticleProvider {
         ],
       },
     ];
+    // P5：公开详情（含 URL 直达 /post/<pathname>）里，publishAt 没到的文章一律
+    // 按"不存在"处理（404）；admin/list 视图不过滤 —— 后台必须能看到定时文章。
+    if (view === 'public') {
+      $and.push(visiblePublishFilter());
+    }
 
     return await this.articleModel
       .findOne(
@@ -1071,6 +1203,10 @@ export class ArticleProvider {
         ],
       },
     ];
+    // P5：同 getByPathName —— 只有 public 视图过滤未发布文章
+    if (view === 'public') {
+      $and.push(visiblePublishFilter());
+    }
 
     return await this.articleModel
       .findOne(
@@ -1086,6 +1222,12 @@ export class ArticleProvider {
     const article: any = await this.getByIdOrPathname(id, 'admin');
     if (!article) {
       return null;
+    }
+    // P5：这条解锁接口用 admin 视图取文（要读 password/private），公开的 publishAt
+    // 查询过滤帮不到它 —— 必须显式挡。与 hidden 不同：allowOpenHiddenPostByUrl
+    // **不放行**定时文章（到点前 URL 直达也不能确认它的存在，按 404 处理）。
+    if (isFuturePublish(article.publishAt)) {
+      throw new NotFoundException('找不到文章');
     }
     // 隐藏文章必须和 GET /api/public/article/:id 一样受 allowOpenHiddenPostByUrl 约束。
     // 这个 POST 口子以前完全没检查 hidden，于是未登录也能拿到隐藏文章正文。
@@ -1107,6 +1249,10 @@ export class ArticleProvider {
     const isPrivate = !!article.private || categoryPrivate;
     const targetPassword = categoryPrivate ? category.password : article.password;
     const plain = { ...(article?._doc || article), password: undefined };
+    // P6：解锁口返回全文时同样带 readingMinutes（与 GET 详情口径一致）
+    if (typeof (plain as any).content === 'string' && (plain as any).content) {
+      (plain as any).readingMinutes = readingMinutesFromContent((plain as any).content);
+    }
     if (!isPrivate) {
       // 本来就没加密：GET 也会给全文
       return plain;
@@ -1147,9 +1293,41 @@ export class ArticleProvider {
       }
     }
     const res: any = { article: curArticle };
+    // P6：公开详情 payload 加 readingMinutes 与 relatedArticles。
+    // 只在 public 视图上做（admin/list 视图的输出一个字节都不变）。
+    if (view === 'public') {
+      const content = (curArticle as any)?.content;
+      if (typeof content === 'string' && content) {
+        // mongoose 文档上挂新字段进不了 toJSON，转成普通对象（公开列表路径同款做法）；
+        // 私密文章 content 已被置 undefined，走不到这里 ⇒ 不给 readingMinutes
+        const plainArticle: any = { ...((curArticle as any)._doc || curArticle) };
+        plainArticle.readingMinutes = readingMinutesFromContent(plainArticle.content);
+        res.article = plainArticle;
+      }
+      try {
+        res.relatedArticles = await this.getRelatedArticles(curArticle as any);
+      } catch (err) {
+        // 相关文章是增强字段：算不出来不该把详情页带崩（前台缺字段就不渲染这一块）
+        this.logger.warn(
+          `相关文章计算失败（文章 ${id}）：${(err as Error)?.message || err}`,
+        );
+      }
+    }
     // 找它的前一个和后一个。
-    const preArticle = await this.getPreArticleByArticle(curArticle, 'list');
-    const nextArticle = await this.getNextArticleByArticle(curArticle, 'list');
+    // P8：加密分类名单只查一次，pre/next 共用（导航里不出现加密文章，理由见 getPre 注释）
+    const privateCategoryNames = await this.getPrivateCategoryNames();
+    const preArticle = await this.getPreArticleByArticle(
+      curArticle,
+      'list',
+      undefined,
+      privateCategoryNames,
+    );
+    const nextArticle = await this.getNextArticleByArticle(
+      curArticle,
+      'list',
+      undefined,
+      privateCategoryNames,
+    );
     if (preArticle) {
       res.pre = preArticle;
     }
@@ -1158,7 +1336,12 @@ export class ArticleProvider {
     }
     return res;
   }
-  async getPreArticleByArticle(article: Article, view: ArticleView, includeHidden?: boolean) {
+  async getPreArticleByArticle(
+    article: Article,
+    view: ArticleView,
+    includeHidden?: boolean,
+    excludeCategoryNames?: string[],
+  ) {
     const $and: any = [
       {
         $or: [
@@ -1183,6 +1366,18 @@ export class ArticleProvider {
           },
         ],
       });
+      // P5：上一篇/下一篇（公开详情页脚）也不能链到还没发布的文章
+      $and.push(visiblePublishFilter());
+      // P8：加密文章（private 或加密分类）不再出现在公开的上一篇/下一篇里。
+      // 正文一直有密码保护，但**标题和别名本身可能就是全部秘密**
+      // （与 §7.40 关掉的搜索/RSS/解锁口三处泄露同一类）。选择"整体省略"而不是
+      // "按解锁状态放行"：解锁状态是 per-IP 的尝试限额桶（attemptLimit），
+      // 而 pre/next 会被 ISR 静态化成所有人共享的页面 —— 按单个访客的解锁状态
+      // 渲染邻居在 ISR 模型下根本不成立，省略是唯一不泄密的选择。
+      $and.push({ $or: [{ private: false }, { private: { $exists: false } }] });
+      if (excludeCategoryNames?.length) {
+        $and.push({ category: { $nin: excludeCategoryNames } });
+      }
     }
     const result = await this.articleModel
       .find(
@@ -1198,7 +1393,12 @@ export class ArticleProvider {
     }
     return null;
   }
-  async getNextArticleByArticle(article: Article, view: ArticleView, includeHidden?: boolean) {
+  async getNextArticleByArticle(
+    article: Article,
+    view: ArticleView,
+    includeHidden?: boolean,
+    excludeCategoryNames?: string[],
+  ) {
     const $and: any = [
       {
         $or: [
@@ -1223,6 +1423,13 @@ export class ArticleProvider {
           },
         ],
       });
+      // P5：同 getPreArticleByArticle
+      $and.push(visiblePublishFilter());
+      // P8：同 getPreArticleByArticle（加密文章不进公开导航）
+      $and.push({ $or: [{ private: false }, { private: { $exists: false } }] });
+      if (excludeCategoryNames?.length) {
+        $and.push({ category: { $nin: excludeCategoryNames } });
+      }
     }
     const result = await this.articleModel
       .find(
@@ -1300,6 +1507,16 @@ export class ArticleProvider {
           },
         ],
       });
+      // P5：公开搜索搜不到还没到点的定时文章
+      $and.push(visiblePublishFilter());
+      // P8：公开搜索也不再返回加密文章的**标题**（正文从来没给过，但标题本身
+      // 可能就是秘密；getTotalNum 的公开计数口径早就排除了它们，搜索结果与计数
+      // 从此一致）。与 RSS/sitemap 的既有行为对齐。
+      $and.push({ $or: [{ private: false }, { private: { $exists: false } }] });
+      const privateCategoryNames = await this.getPrivateCategoryNames();
+      if (privateCategoryNames.length) {
+        $and.push({ category: { $nin: privateCategoryNames } });
+      }
     }
     const rawData = await this.articleModel
       .find({
@@ -1343,9 +1560,99 @@ export class ArticleProvider {
   }
   async deleteById(id: number | string) {
     const numericId = parseNumericId(id);
-    const res = await this.articleModel.updateOne({ id: numericId }, { deleted: true }).exec();
+    // deletedAt：回收站列表按"最近删除"排序（P3）。老数据没有这个字段，不回填；
+    // 排序里用 updatedAt 兜底。
+    const res = await this.articleModel
+      .updateOne({ id: numericId }, { deleted: true, deletedAt: new Date() })
+      .exec();
     this.metaProvider.updateTotalWords('删除文章');
     return res;
+  }
+
+  /**
+   * 回收站列表（P3）：软删文章的投影**不含 content/password** ——
+   * 列表接口贵的从来都是正文（§7.40 B-6 的教训）。wordCount 用存储副本
+   * （schema 字段，P6 维护 + 启动回填），拿不到副本的老文档回落 0。
+   */
+  async getDeleted(page?: unknown, pageSize?: unknown): Promise<{
+    articles: Array<Record<string, unknown>>;
+    total: number;
+  }> {
+    const paging = sanitizePagination(page, pageSize, { defaultPageSize: 20 });
+    const filter = { deleted: true };
+    const [rows, total] = await Promise.all([
+      this.articleModel
+        .find(filter, this.deletedListView)
+        // 最近删除的在前；没有 deletedAt 的老数据（历史软删）自然沉底，按 updatedAt 排
+        .sort({ deletedAt: -1, updatedAt: -1, id: -1 })
+        .skip(paging.skip)
+        .limit(paging.pageSize)
+        .exec(),
+      this.articleModel.countDocuments(filter).exec(),
+    ]);
+    return { articles: rows as any, total };
+  }
+
+  /** 取一条软删文章（回收站操作用；getById 会过滤 deleted，这里反之）。 */
+  async findDeletedById(id: number | string, view: ArticleView = 'admin'): Promise<Article | null> {
+    const numericId = parseNumericId(id);
+    return this.articleModel
+      .findOne({ id: numericId, deleted: true }, this.getView(view))
+      .exec();
+  }
+
+  /**
+   * 恢复软删文章（P3）。返回恢复后的文章；不在回收站里（或不存在）返回 null。
+   * 别名不会被抢占：`isPathnameTaken` 从来不排除软删文章（见其注释），
+   * 所以恢复时 pathname 一定还是自己的。
+   */
+  async restoreById(id: number | string): Promise<Article | null> {
+    const numericId = parseNumericId(id);
+    const res = await this.articleModel
+      .updateOne(
+        { id: numericId, deleted: true },
+        { deleted: false, deletedAt: null, updatedAt: new Date() },
+      )
+      .exec();
+    if (!res?.matchedCount) {
+      return null;
+    }
+    // 与 deleteById 对称：软删时重算了总字数（公开口径排除了它），恢复也要重算回来
+    this.metaProvider.updateTotalWords('恢复文章');
+    return this.getById(numericId, 'admin');
+  }
+
+  /**
+   * 彻底删除（P3）：**只接受已在回收站里的文章**（filter 带 deleted:true），
+   * 这是全站唯一的文章硬删除入口。文档移除后：
+   *  - 总字数重算（与软删同一套副作用；软删文章的 content 本来就计入 metas 的
+   *    历史口径里 —— countTotalWords 排除 deleted，所以 purge 本身不改总字数，
+   *    但重算无害且保持"文章集合变了就刷缓存"的既有约定）；
+   *  - 历史版本（revisions 集合）随文章一起清掉：文章都没了，留着正文副本
+   *    只会在每次整站备份里白白占体积。
+   * visits/评论等外部台账与既有软删一样**不动**（保持既有语义，不扩大破坏面）。
+   */
+  async purgeById(id: number | string): Promise<{ purged: boolean; id: number }> {
+    const numericId = parseNumericId(id);
+    const res = await this.articleModel.deleteOne({ id: numericId, deleted: true }).exec();
+    const purged = (res?.deletedCount || 0) > 0;
+    if (purged) {
+      this.metaProvider.updateTotalWords('彻底删除文章');
+      if (this.revisionProvider) {
+        try {
+          const removed = await this.revisionProvider.deleteForArticle(numericId);
+          if (removed > 0) {
+            this.logger.log(`彻底删除文章 ${numericId}：连带清理 ${removed} 条历史版本`);
+          }
+        } catch (err) {
+          // 版本清理失败不该把 purge 判为失败（文档已经删了），但必须留痕
+          this.logger.warn(
+            `彻底删除文章 ${numericId} 后清理历史版本失败：${(err as Error)?.message || err}`,
+          );
+        }
+      }
+    }
+    return { purged, id: numericId };
   }
 
   async updateCategoryName(oldName: string, newName: string) {
@@ -1359,6 +1666,7 @@ export class ArticleProvider {
     id: number | string,
     updateArticleDto: UpdateArticleDto,
     skipUpdateWordCount?: boolean,
+    opts?: { skipRevision?: boolean },
   ) {
     const numericId = parseNumericId(id);
     const patch: UpdateArticleDto = { ...updateArticleDto };
@@ -1371,6 +1679,28 @@ export class ArticleProvider {
         throw new BadRequestException(`路径别名 "${nextPathname}" 已被其它文章占用`);
       }
       patch.pathname = nextPathname;
+    }
+    // P5：显式给了 publishAt 才归一化/校验；键不存在 = 保持原值（管理端清空定时发 null）
+    if (patch.publishAt !== undefined) {
+      (patch as any).publishAt = normalizePublishAt(patch.publishAt);
+    }
+    // P6：正文变了就同步字数副本（只随 content 变；改标题/标签不会触发重算）
+    if (typeof patch.content === 'string') {
+      (patch as any).wordCount = wordCount(patch.content);
+    }
+    // 文章历史版本（P4）：旧状态被这次保存替换之前先拍快照。
+    //  - 只在 patch 真的带了 title/content 时才多读一次旧文档（比较后**变了才写**）；
+    //  - appendSafe 永不抛错：快照写失败只 WARN，绝不能把保存本身带崩；
+    //  - `opts.skipRevision`：恢复历史版本的流程自己记 'pre-restore' 快照，跳过这里的自动快照。
+    const touchesContent =
+      typeof patch.title === 'string' || typeof patch.content === 'string';
+    if (!opts?.skipRevision && touchesContent && this.revisionProvider?.enabled()) {
+      const before = await this.articleModel
+        .findOne({ id: numericId }, { title: 1, content: 1 })
+        .exec();
+      if (before) {
+        await this.revisionProvider.appendSafe(numericId, before as any, patch);
+      }
     }
     const res = await this.articleModel.updateOne(
       { id: numericId },
@@ -1393,6 +1723,34 @@ export class ArticleProvider {
    * （把旧值原样写回，而不是简单地清空 —— 万一某篇本来就有封面，清空等于破坏数据）。
    */
   async backfillCoversFromContent(option?: {
+    dryRun?: boolean;
+    onlyMissing?: boolean;
+    ids?: number[];
+  }): Promise<{
+    scanned: number;
+    matched: number;
+    changed: number;
+    skippedNoImage: number;
+    skippedHasCover: number;
+    dryRun: boolean;
+    items: Array<{ id: number; title: string; cover: string; previousCover: string }>;
+  }> {
+    return this.withLedger(
+      'backfill:articleCovers',
+      'backfill',
+      () => this.doBackfillCoversFromContent(option),
+      (r) => ({
+        dryRun: r.dryRun,
+        scanned: r.scanned,
+        matched: r.matched,
+        changed: r.changed,
+        skippedNoImage: r.skippedNoImage,
+        skippedHasCover: r.skippedHasCover,
+      }),
+    );
+  }
+
+  private async doBackfillCoversFromContent(option?: {
     dryRun?: boolean;
     onlyMissing?: boolean;
     ids?: number[];
@@ -1497,6 +1855,126 @@ export class ArticleProvider {
       }
     }
     return { reverted, skipped };
+  }
+
+  /**
+   * 给老文档回填 wordCount 副本（P6）。启动时由 main.ts 触发（主实例、fire-and-forget），
+   * 自己往迁移台账记 `backfill:articleWordCount` 一条。
+   *
+   * 幂等：只找「wordCount 字段还不存在」的文档 —— 新文档 create/update 都会算好写入
+   * （schema 也有 default 0），跑过一遍之后每次启动这条查询命中 0 行，
+   * 成本是一次无索引的集合扫描（不在请求路径上）。
+   * **含软删文档**：回收站列表也要显示 wordCount。
+   * ⚠️ 不碰 updatedAt：回填不是内容编辑，不该把文章顶到"最近更新"前面去。
+   */
+  async backfillWordCounts(): Promise<{ scanned: number; updated: number }> {
+    return this.withLedger(
+      'backfill:articleWordCount',
+      'backfill',
+      () => this.doBackfillWordCounts(),
+      (r) => r,
+    );
+  }
+
+  private async doBackfillWordCounts(): Promise<{ scanned: number; updated: number }> {
+    const docs = await this.articleModel
+      .find({ wordCount: { $exists: false } }, { id: 1, content: 1 })
+      .exec();
+    let updated = 0;
+    for (const doc of docs as any[]) {
+      await this.articleModel
+        .updateOne({ id: doc?.id }, { wordCount: wordCount(doc?.content || '') })
+        .exec();
+      updated += 1;
+    }
+    if (updated > 0) {
+      this.logger.log(`回填文章字数副本：扫描 ${docs.length} 篇，写入 ${updated} 篇`);
+    }
+    return { scanned: docs.length, updated };
+  }
+
+  /**
+   * 相关文章（P6）：**一次查询**取候选（共享 tag 或同 category，投影不含 content），
+   * JS 里按「共享标签数 → 同分类 → 更新时间」排。跑在 ISR 缓存页的取数里，
+   * 不是每请求热路径，但候选有上限（RELATED_CANDIDATE_LIMIT），不会随文章数线性恶化。
+   *
+   * 过滤口径与公开列表一致：排除自身、软删、隐藏、**未到点的定时文章**（visiblePublishFilter）。
+   * 私密文章不排除（标题/封面本来就出现在公开列表里），但绝不带正文。
+   */
+  async getRelatedArticles(
+    article: { id?: number; tags?: string[]; category?: string } | null | undefined,
+    limit: number = RELATED_MAX,
+    now: Date = new Date(),
+  ): Promise<RelatedArticleItem[]> {
+    const numericId = Number(article?.id);
+    if (!Number.isFinite(numericId)) {
+      return [];
+    }
+    const tags = Array.isArray(article?.tags)
+      ? article.tags.filter((t): t is string => typeof t === 'string' && t !== '').slice(0, 50)
+      : [];
+    const category = typeof article?.category === 'string' ? article.category : '';
+    const or: any[] = [];
+    if (tags.length) {
+      or.push({ tags: { $in: tags } });
+    }
+    if (category) {
+      or.push({ category });
+    }
+    if (!or.length) {
+      return [];
+    }
+    // P8：相关推荐是公开导航面 —— 加密文章（含加密分类）整体排除，口径与 pre/next 一致
+    const privateCategoryNames = await this.getPrivateCategoryNames();
+    const and: any[] = [
+      { $or: [{ deleted: false }, { deleted: { $exists: false } }] },
+      { $or: [{ hidden: false }, { hidden: { $exists: false } }] },
+      { $or: [{ private: false }, { private: { $exists: false } }] },
+      visiblePublishFilter(now),
+      { id: { $ne: numericId } },
+      { $or: or },
+    ];
+    if (privateCategoryNames.length) {
+      and.push({ category: { $nin: privateCategoryNames } });
+    }
+    const query: any = { $and: and };
+    const candidates = await this.articleModel
+      .find(query, {
+        id: 1,
+        title: 1,
+        pathname: 1,
+        cover: 1,
+        updatedAt: 1,
+        tags: 1,
+        category: 1,
+        wordCount: 1,
+        _id: 0, // ⚠️ 投影里没有 content（任务硬要求），也没有 password
+      })
+      .sort({ updatedAt: -1 })
+      .limit(RELATED_CANDIDATE_LIMIT)
+      .exec();
+    const tagSet = new Set(tags);
+    const scored = (candidates as any[]).map((c) => {
+      const doc: any = c?._doc || c;
+      const sharedTags = (Array.isArray(doc?.tags) ? doc.tags : []).filter((t: any) =>
+        tagSet.has(t),
+      ).length;
+      const sameCategory = category && doc?.category === category ? 1 : 0;
+      return { doc, score: sharedTags * 100 + sameCategory * 10 };
+    });
+    // candidates 已按 updatedAt 倒序，V8 的 sort 稳定 ⇒ 同分时新的在前（recency 兜底）
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, Math.max(0, limit)).map(({ doc }) => ({
+      // 契约里的 `_id`：本站文章的对外标识一直是数字 id（schema 的 id 字段），
+      // 这里给它的字符串形式，并同时带数字 id（与全仓库其它 payload 一致）
+      _id: String(doc?.id),
+      id: Number(doc?.id),
+      title: String(doc?.title ?? ''),
+      pathname: String(doc?.pathname ?? ''),
+      cover: String(doc?.cover ?? ''),
+      updatedAt: (doc?.updatedAt as Date) ?? null,
+      readingMinutes: readingMinutesFromUnits(Number(doc?.wordCount) || 0),
+    }));
   }
 
   async getNewId() {

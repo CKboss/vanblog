@@ -1020,6 +1020,11 @@ update_script() {
   if ! download_script "${tmp}"; then
     rm -f "${tmp}"
     echo -e "${red}脚本获取失败，请检查本机能否连接文档站、GitHub 或 jsDelivr${plain}"
+      # 服务端从本轮起会在写完后自校验归档（响应里带 verified / verifySeconds，
+      # 校验失败直接 HTTP 400），所以这里把它显式打出来：备份"成功"与"可恢复"是两件事。
+      if [ -n "${_vb_verified:-}" ]; then
+        echo -e "  自校验  ：${green}${_vb_verified}${plain}（耗时 ${_vb_verify_seconds:-?} 秒）"
+      fi
     return 1
   fi
   if ! is_valid_vanblog_script "${tmp}"; then
@@ -3872,6 +3877,12 @@ if [[ "${VANBLOG_SKIP_MAIN:-}" == "1" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# 只读/自包含的子命令在 pre_check **之前**就转交给 vanblog-drill.sh：
+# pre_check 会 `mkdir -p /var/vanblog` 且对非 root 直接 exit 1，而这些子命令
+# （恢复演练、深度校验、备份状态）既不写 /var/vanblog、也不需要 root 权限的 docker daemon
+# （rootless podman 就够），临时空间走 mktemp -d、演练存储走引擎管理的命名卷，
+# 所以没有理由被 root 门槛挡住。放在 dispatcher 里是没用的 —— dispatcher 在 pre_check 之后。
+case "${1:-}" in drill | verify-deep | backup-verify | backup-status) _vb_drill_sub="$1"; shift; exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vanblog-drill.sh" "${_vb_drill_sub}" "$@" ;; esac
 pre_check
 
 if [[ $# > 0 ]]; then

@@ -30,7 +30,12 @@ import { addWaterMarkToIMG } from 'src/utils/watermark';
 import { checkTrue } from 'src/utils/checkTrue';
 import { compressExt, compressImg, resolveCompressFormat } from 'src/utils/imgCompress';
 import { capImageResolution } from 'src/utils/imgResize';
-import { generateThumbnail } from 'src/utils/thumbnail';
+import {
+  generateAvifThumbIfEnabled,
+  generateThumbnail,
+  generateThumbnailAvif,
+  resolveThumbAvifEnabled,
+} from 'src/utils/thumbnail';
 import { buildStegoPayload, parseThumbWidth, resolveMaxImageEdge } from 'src/utils/imageOptions';
 // 显式标注删除方法的返回类型，避开 mongoose 自带 mongodb 副本的不可移植路径（TS2742）。
 import type { DeleteResult } from 'mongodb';
@@ -269,6 +274,27 @@ export class StaticProvider {
         }
       } catch (err) {
         this.logger.warn(`缩略图生成失败：${(err as Error)?.message}`);
+      }
+      // P7：AVIF 兄弟缩略图（VANBLOG_THUMB_AVIF，默认关；关闭时零成本 —— 不碰 sharp）。
+      // 失败只 WARN：webp 缩略图已经能用，AVIF 是渐进增强，绝不把上传带崩。
+      const avifThumb = await generateAvifThumbIfEnabled(
+        buf,
+        parseThumbWidth(staticConfigInDB.thumbWidth),
+        fileType,
+      );
+      if (avifThumb?.ok) {
+        const avifPath = await this.localProvider.saveThumb(
+          storedFileName,
+          avifThumb.buffer,
+          avifThumb.ext,
+        );
+        extraMeta = {
+          ...(extraMeta || {}),
+          thumbAvif: avifPath,
+          thumbAvifBytes: avifThumb.buffer.length,
+        };
+      } else if (avifThumb && !['disabled', 'unsupported'].includes(avifThumb.reason || '')) {
+        this.logger.warn(`AVIF 缩略图生成失败：${avifThumb.reason}`);
       }
     }
 
@@ -647,10 +673,14 @@ export class StaticProvider {
     switch (storageType) {
       case 'local': {
         await this.localProvider.deleteFile(toDeleteData.name, toDeleteData.staticType);
-        // 缩略图跟着原图一起删，别留孤儿文件
+        // 缩略图跟着原图一起删，别留孤儿文件（webp 与 AVIF 兄弟都算）
         const thumb = (toDeleteData?.meta as any)?.thumb;
         if (thumb) {
           await this.localProvider.deleteStaticFile(thumb);
+        }
+        const thumbAvif = (toDeleteData?.meta as any)?.thumbAvif;
+        if (thumbAvif) {
+          await this.localProvider.deleteStaticFile(thumbAvif);
         }
         break;
       }
@@ -699,10 +729,13 @@ export class StaticProvider {
 
     // 缩略图跟着重做（同名覆盖）；关掉缩略图时把旧的删掉，别留下和内容不一致的小图
     const oldThumb = (item.meta as any)?.thumb;
+    const oldThumbAvif = (item.meta as any)?.thumbAvif;
     let meta: any = { ...(item.meta as any) };
     delete meta.thumb;
     delete meta.thumbWidth;
     delete meta.thumbHeight;
+    delete meta.thumbAvif;
+    delete meta.thumbAvifBytes;
     if (checkTrue(settings?.enableThumb)) {
       try {
         const thumb = await generateThumbnail(
@@ -718,11 +751,32 @@ export class StaticProvider {
           }
           meta = { ...meta, thumb: thumbPath, thumbWidth: thumb.width, thumbHeight: thumb.height };
         }
+        // P7：替换后 AVIF 兄弟缩略图同样重做（开关关着就把旧的删掉，别留过期小图）
+        const avifThumb = await generateAvifThumbIfEnabled(
+          processed.buffer,
+          parseThumbWidth(settings?.thumbWidth),
+          targetFormat,
+        );
+        if (avifThumb?.ok) {
+          const baseName = String(realPath).split('/').pop();
+          const avifPath = await this.localProvider.saveThumb(baseName, avifThumb.buffer, avifThumb.ext);
+          if (oldThumbAvif && oldThumbAvif !== avifPath) {
+            await this.localProvider.deleteStaticFile(oldThumbAvif);
+          }
+          meta = { ...meta, thumbAvif: avifPath, thumbAvifBytes: avifThumb.buffer.length };
+        } else if (oldThumbAvif) {
+          await this.localProvider.deleteStaticFile(oldThumbAvif);
+        }
       } catch (err) {
         this.logger.warn(`替换后生成缩略图失败：${(err as Error)?.message}`);
       }
-    } else if (oldThumb) {
-      await this.localProvider.deleteStaticFile(oldThumb);
+    } else {
+      if (oldThumb) {
+        await this.localProvider.deleteStaticFile(oldThumb);
+      }
+      if (oldThumbAvif) {
+        await this.localProvider.deleteStaticFile(oldThumbAvif);
+      }
     }
 
     const sizeInfo = safeImageSize(processed.buffer, targetFormat);
@@ -770,6 +824,12 @@ export class StaticProvider {
     return typeof thumb === 'string' && thumb ? thumb : null;
   }
 
+  /** P7：AVIF 兄弟缩略图的 URL（meta.thumbAvif；没有就是 null —— 前台按"可选字段"处理）。 */
+  static thumbAvifOf(item: any): string | null {
+    const thumb = item?.meta?.thumbAvif;
+    return typeof thumb === 'string' && thumb ? thumb : null;
+  }
+
   /**
    * 为存量图片补缩略图（新上传的会自动生成）。
    * 只处理本地存储的图片；远程图床（PicGo/OSS）没有本地文件，直接跳过。
@@ -778,17 +838,48 @@ export class StaticProvider {
     const setting = await this.settingProvider.getStaticSetting();
     const width = parseThumbWidth(setting?.thumbWidth);
     const all = await this.getAll('img', 'admin');
+    // P7：AVIF 兄弟缩略图（VANBLOG_THUMB_AVIF，默认关）。
+    // 开关刚打开时，已有 webp 缩略图的存量图片也会在下一轮补图里带上 .avif 兄弟。
+    const avifEnabled = resolveThumbAvifEnabled();
     const result = {
       total: all.length,
       generated: 0,
       existed: 0,
       skipped: 0,
       failed: 0,
+      avifGenerated: 0,
       width,
+      avifEnabled,
     };
     for (const item of all) {
       const existing = StaticProvider.thumbOf(item);
+      const existingAvif = StaticProvider.thumbAvifOf(item);
       if (existing && !options?.force && (await this.localProvider.staticFileExists(existing))) {
+        // webp 缩略图已经在：只补缺失的 AVIF 兄弟（不重做 webp）
+        if (avifEnabled && !existingAvif) {
+          try {
+            const buffer = await this.localProvider.readStaticFile(item.realPath);
+            const avif = await generateThumbnailAvif(buffer, width, item.fileType);
+            if (avif.ok) {
+              const baseName = String(item.realPath || '').split('/').pop();
+              const avifPath = await this.localProvider.saveThumb(baseName, avif.buffer, avif.ext);
+              await this.staticModel
+                .updateOne(
+                  { sign: item.sign, staticType: 'img' },
+                  {
+                    $set: {
+                      'meta.thumbAvif': avifPath,
+                      'meta.thumbAvifBytes': avif.buffer.length,
+                    },
+                  },
+                )
+                .exec();
+              result.avifGenerated += 1;
+            }
+          } catch {
+            // AVIF 是增强项：失败不影响"webp 已存在"的结论，也不计入 failed
+          }
+        }
         result.existed += 1;
         continue;
       }
@@ -805,17 +896,22 @@ export class StaticProvider {
         }
         const baseName = String(item.realPath || '').split('/').pop();
         const thumbPath = await this.localProvider.saveThumb(baseName, thumb.buffer, thumb.ext);
+        const set: Record<string, unknown> = {
+          'meta.thumb': thumbPath,
+          'meta.thumbWidth': thumb.width,
+          'meta.thumbHeight': thumb.height,
+        };
+        if (avifEnabled) {
+          const avif = await generateThumbnailAvif(buffer, width, item.fileType);
+          if (avif.ok) {
+            const avifPath = await this.localProvider.saveThumb(baseName, avif.buffer, avif.ext);
+            set['meta.thumbAvif'] = avifPath;
+            set['meta.thumbAvifBytes'] = avif.buffer.length;
+            result.avifGenerated += 1;
+          }
+        }
         await this.staticModel
-          .updateOne(
-            { sign: item.sign, staticType: 'img' },
-            {
-              $set: {
-                'meta.thumb': thumbPath,
-                'meta.thumbWidth': thumb.width,
-                'meta.thumbHeight': thumb.height,
-              },
-            },
-          )
+          .updateOne({ sign: item.sign, staticType: 'img' }, { $set: set })
           .exec();
         result.generated += 1;
       } catch (err) {

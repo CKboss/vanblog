@@ -10,10 +10,18 @@ export type SharpEncoder = (input: Buffer) => {
 };
 
 /**
- * Official image: website already ships Alpine musl sharp@0.32.6 under
- * /app/website. Server is built on Debian, so its own node_modules/sharp
- * (if present) may be glibc and fail on musl — catch and try the next path.
- * Last resort: avifenc from apk `libavif-apps` (see root Dockerfile RUNNER).
+ * Sharp candidates for AVIF encoding.
+ *
+ * The server ships its own sharp **0.35.x** (prebuilt via npm optionalDependencies:
+ * `@img/sharp-linuxmusl-x64` on the Alpine runner, `@img/sharp-linux-x64` on glibc),
+ * so the plain `sharp` entry normally wins. The website paths remain as fallbacks
+ * for mixed/legacy installs where the server's own copy is missing or built for the
+ * wrong libc (the historical musl/glibc split from the sharp 0.32.6 era — that
+ * version is long gone; see AGENTS §7.47).
+ * Last resort: `avifenc` from apk `libavif-apps` (installed in the root Dockerfile
+ * RUNNER stage). Measured on sharp 0.35.4 / libvips 8.18.6: AVIF encode works
+ * out of the box (`sharp(...).avif({quality:50}).toBuffer()`); cost/size numbers
+ * live in utils/thumbnail.ts (`generateAvifThumbIfEnabled`) and the round report.
  */
 export function sharpAvifCandidates(): string[] {
   return [

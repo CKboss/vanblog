@@ -15,6 +15,7 @@ import { encodeQuerystring } from "../../utils/encode";
 
 import { PostBottom } from "./bottom";
 import { SubTitle, Title } from "./title";
+import RelatedArticles from "../RelatedArticles";
 import { getTarget } from "../Link/tools";
 import TocMobile from "../TocMobile";
 import TocDrawer from "../TocDrawer";
@@ -92,6 +93,19 @@ export default function (props: {
    * （首页原来是 5 个请求换 5 个整数，见 utils/viewerApi.ts）。
    */
   viewer?: number | null;
+  /**
+   * 服务端算好的阅读时间（分钟，整数 ≥ 1）。列表与详情 payload 都可能有；
+   * 缺失时 SubTitle 里那段「约 N 分钟」整块不渲染（不做客户端兜底计算）。
+   */
+  readingMinutes?: number | null;
+  /** 首图缩略图的 AVIF 版本（可选契约）；缺失时 ListThumb 输出与旧版一致。 */
+  thumbAvif?: string | null;
+  /**
+   * 相关文章（详情 payload 的 relatedArticles，最多 5 条）。只在 type=="article"
+   * 且未锁定时渲染；边界上统一 normalize（utils/relatedArticles.ts），
+   * 缺失/空数组/脏数据 → 整块不渲染。
+   */
+  relatedArticles?: unknown;
 }) {
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
@@ -166,9 +180,9 @@ export default function (props: {
   const listImage = useMemo(
     () =>
       props.type == "overview"
-        ? listCardImage(props.cover, content, props.firstImage)
+        ? listCardImage(props.cover, content, props.firstImage, props.thumbAvif)
         : null,
-    [props.type, props.cover, props.firstImage, content],
+    [props.type, props.cover, props.firstImage, props.thumbAvif, content],
   );
   // 标签做成柔和的彩色胶囊（Apple 的做法：大面积中性色 + 少量低饱和彩色）
   const overviewTags = useMemo(
@@ -190,6 +204,8 @@ export default function (props: {
             key={listImage.src}
             src={listImage.src}
             fallback={listImage.fallback}
+            avif={listImage.avif}
+            zoomSrc={listImage.fallback ?? listImage.src}
             alt={props.title}
           />
         ) : null}
@@ -212,6 +228,7 @@ export default function (props: {
           id={props.id}
           numericId={props.numericId}
           viewer={props.viewer}
+          readingMinutes={props.readingMinutes}
           updatedAt={props.updatedAt}
           createdAt={props.createdAt}
           catelog={props.catelog}
@@ -294,6 +311,14 @@ export default function (props: {
           pre={props.pre}
           openArticleLinksInNewWindow={props.openArticleLinksInNewWindow}
         />
+        {/* 相关文章：排在正文/版权/上一篇下一篇之后、评论区之前（"文章页末尾"）。
+            加密未解锁时不渲染 —— 锁定态的页面只该有解锁卡。 */}
+        {props.type == "article" && !lock ? (
+          <RelatedArticles
+            items={props.relatedArticles}
+            openArticleLinksInNewWindow={props.openArticleLinksInNewWindow}
+          />
+        ) : null}
         <div
           style={{
             height: props.type == "about" && !showDonate ? "16px" : "0",

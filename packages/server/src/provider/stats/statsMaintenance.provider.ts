@@ -1,11 +1,12 @@
 import cluster from 'node:cluster';
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { VisitDocument } from 'src/scheme/visit.schema';
 import { ViewerDocument } from 'src/scheme/viewer.schema';
 import { mergeVisitGroup, planRetention, RetentionPlan, VisitLike } from 'src/utils/statsMaintenance';
+import { MigrationProvider } from '../migration/migration.provider';
 
 /**
  * `visits` / `viewers` 两张统计表的维护：去重合并、唯一索引、按保留期清理。
@@ -66,6 +67,15 @@ const REDUNDANT_VISIT_INDEXES: Array<{
 ];
 
 export const RETENTION_DEFAULTS = { retentionDays: 0, minKeepDays: 30 };
+
+/** 迁移台账的 key（一个 key 一行，见 scheme/migration.schema.ts） */
+export const LEDGER_KEYS = {
+  dedupeVisits: 'dedupe:visits',
+  visitsUniqueIndex: 'index:visits.date_pathname.unique',
+  viewersUniqueIndex: 'index:viewers.date.unique',
+  dropRedundant: 'index:visits.dropRedundant',
+  pruneStats: 'prune:stats',
+} as const;
 
 function envFlag(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
@@ -169,6 +179,8 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
   constructor(
     @InjectModel('Visit') private visitModel: Model<VisitDocument>,
     @InjectModel('Viewer') private viewerModel: Model<ViewerDocument>,
+    /** 迁移台账（可选注入：单测直接 `new` 时不传；record 永不抛错）。 */
+    @Optional() private readonly migration?: MigrationProvider,
   ) {}
 
   /**
@@ -216,13 +228,41 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
     // 唯一索引已经在了 => 库里不可能有重复行，跳过整轮扫描（这是重跑时的常态）
     if (!visitsUnique) {
       if (this.dedupEnabled) {
-        dedup = await this.dedupVisits({ dryRun: this.dedupDryRun });
+        const started = Date.now();
+        try {
+          dedup = await this.dedupVisits({ dryRun: this.dedupDryRun });
+          await this.migration?.record({
+            key: LEDGER_KEYS.dedupeVisits,
+            kind: 'wash',
+            outcome: 'ok',
+            durationMs: Date.now() - started,
+            detail: { groups: dedup.groups, dropped: dedup.dropped, dryRun: dedup.dryRun },
+          });
+        } catch (err) {
+          await this.migration?.record({
+            key: LEDGER_KEYS.dedupeVisits,
+            kind: 'wash',
+            outcome: 'error',
+            durationMs: Date.now() - started,
+            detail: (err as Error)?.message || String(err),
+          });
+          throw err;
+        }
       } else {
         this.logger.warn(
           'visits 缺少 {date,pathname} 唯一索引，但 VANBLOG_VISITS_DEDUP=false 跳过了去重；' +
             '并发首访仍可能产生重复行',
         );
+        await this.migration?.recordSkipped(
+          { key: LEDGER_KEYS.dedupeVisits, kind: 'wash' },
+          'VANBLOG_VISITS_DEDUP=false 且唯一索引尚不存在',
+        );
       }
+    } else {
+      await this.migration?.recordSkipped(
+        { key: LEDGER_KEYS.dedupeVisits, kind: 'wash' },
+        '{date,pathname} 唯一索引已存在，库里不可能有重复行',
+      );
     }
 
     const indexes: IndexResult[] = [];
@@ -234,6 +274,7 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
       errors: [],
     };
     if (!this.dedupDryRun) {
+      const t0 = Date.now();
       const visitsUnique = await this.ensureUniqueIndex(
         'visits',
         this.visitModel,
@@ -242,19 +283,32 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
         visitIndexes,
       );
       indexes.push(visitsUnique);
+      await this.recordIndexResult(LEDGER_KEYS.visitsUniqueIndex, visitsUnique, Date.now() - t0);
       // 冗余前缀索引只有在"替代的复合索引确实存在"时才删（唯一索引刚建好也算存在）
+      const t1 = Date.now();
       dropped = await this.dropRedundantVisitIndexes(visitIndexes, visitsUnique);
+      await this.recordDropResult(dropped, Date.now() - t1);
+    } else {
+      await this.migration?.recordSkipped(
+        { key: LEDGER_KEYS.visitsUniqueIndex, kind: 'index' },
+        'VANBLOG_VISITS_DEDUP_DRY_RUN=true，本轮不做索引变更',
+      );
+      await this.migration?.recordSkipped(
+        { key: LEDGER_KEYS.dropRedundant, kind: 'index' },
+        'VANBLOG_VISITS_DEDUP_DRY_RUN=true，本轮不做索引变更',
+      );
     }
     // viewers 的每日快照同理：upsert 要有唯一索引才不会被并发插成两行
-    indexes.push(
-      await this.ensureUniqueIndex(
-        'viewers',
-        this.viewerModel,
-        VIEWER_UNIQUE_INDEX_KEYS,
-        VIEWER_UNIQUE_INDEX_NAME,
-        viewerIndexes,
-      ),
+    const t2 = Date.now();
+    const viewersUnique = await this.ensureUniqueIndex(
+      'viewers',
+      this.viewerModel,
+      VIEWER_UNIQUE_INDEX_KEYS,
+      VIEWER_UNIQUE_INDEX_NAME,
+      viewerIndexes,
     );
+    indexes.push(viewersUnique);
+    await this.recordIndexResult(LEDGER_KEYS.viewersUniqueIndex, viewersUnique, Date.now() - t2);
 
     this.logger.log(
       `[${reason}] 统计表维护完成：重复组 ${dedup.groups} 个、合并删除 ${dedup.dropped} 行` +
@@ -263,6 +317,90 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
           .join(', ')}`,
     );
     return { dedup, indexes, dropped };
+  }
+
+  /**
+   * 把一次 ensureUniqueIndex 的结果记进迁移台账：
+   * error → 'error'（record 内部会 WARN，绝不静默）、建了/替换了 → 'ok'、已存在 → 'skipped'。
+   * ⚠️ 只是记账：索引维护本身**每次启动照跑**，台账绝不反过来当"跑过就跳过"的闸门。
+   */
+  private async recordIndexResult(
+    key: string,
+    result: IndexResult,
+    durationMs: number,
+  ): Promise<void> {
+    if (!this.migration) {
+      return;
+    }
+    if (result.error) {
+      await this.migration.record({
+        key,
+        kind: 'index',
+        outcome: 'error',
+        durationMs,
+        detail: result.error,
+      });
+    } else if (result.created) {
+      await this.migration.record({
+        key,
+        kind: 'index',
+        outcome: 'ok',
+        durationMs,
+        detail: { created: true, replaced: result.replaced, name: result.name },
+      });
+    } else {
+      await this.migration.recordSkipped(
+        { key, kind: 'index' },
+        `唯一索引已存在（${result.name}），无需重建`,
+      );
+    }
+  }
+
+  /** 把一次冗余索引清理的结果记进台账（env 关闭 / 无可删 → skipped；部分失败 → error）。 */
+  private async recordDropResult(
+    result: DropRedundantResult,
+    durationMs: number,
+  ): Promise<void> {
+    if (!this.migration) {
+      return;
+    }
+    if (result.skipped) {
+      await this.migration.recordSkipped(
+        { key: LEDGER_KEYS.dropRedundant, kind: 'index' },
+        'VANBLOG_VISITS_DROP_REDUNDANT_INDEXES=false',
+      );
+      return;
+    }
+    const detail = {
+      dropped: result.dropped,
+      kept: result.kept,
+      errors: result.errors,
+      totalIndexSize: result.totalIndexSize,
+    };
+    if (result.errors.length) {
+      await this.migration.record({
+        key: LEDGER_KEYS.dropRedundant,
+        kind: 'index',
+        outcome: 'error',
+        durationMs,
+        detail,
+      });
+      return;
+    }
+    if (!result.dropped.length && !result.kept.length) {
+      await this.migration.recordSkipped(
+        { key: LEDGER_KEYS.dropRedundant, kind: 'index' },
+        '无可删的冗余前缀索引（date_1 / pathname_1 都不存在）',
+      );
+      return;
+    }
+    await this.migration.record({
+      key: LEDGER_KEYS.dropRedundant,
+      kind: 'index',
+      outcome: 'ok',
+      durationMs,
+      detail,
+    });
   }
 
   private async listIndexes(model: Model<any>, collection: string): Promise<any[]> {
@@ -497,11 +635,18 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
    * 挂在已有的每日 cron 上（`schedule/viewer.task.ts`），不额外开定时器。
    */
   async pruneStats(reason: string, now: Date = new Date()): Promise<PruneResult> {
+    const started = Date.now();
     const plan: RetentionPlan = planRetention(
       { retentionDays: this.retentionDays, minKeepDays: this.minKeepDays, now },
       RETENTION_DEFAULTS,
     );
     if (!plan.enabled || !plan.filter) {
+      // 默认（retentionDays=0）走这里：不删任何行，台账记 skipped（这是**破坏性**维护，
+      // 哪怕没开也要留下"确认过没开"的痕迹）
+      await this.migration?.recordSkipped(
+        { key: LEDGER_KEYS.pruneStats, kind: 'prune' },
+        `保留期未启用（VANBLOG_VISIT_RETENTION_DAYS=${this.retentionDays}），未删除任何行`,
+      );
       return {
         enabled: false,
         effectiveDays: plan.effectiveDays,
@@ -510,16 +655,36 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
         viewers: 0,
       };
     }
-    const [visitsRes, viewersRes] = await Promise.all([
-      this.visitModel.deleteMany(plan.filter as any).exec(),
-      this.viewerModel.deleteMany(plan.filter as any).exec(),
-    ]);
-    const visits = visitsRes?.deletedCount || 0;
-    const viewers = viewersRes?.deletedCount || 0;
+    let visits = 0;
+    let viewers = 0;
+    try {
+      const [visitsRes, viewersRes] = await Promise.all([
+        this.visitModel.deleteMany(plan.filter as any).exec(),
+        this.viewerModel.deleteMany(plan.filter as any).exec(),
+      ]);
+      visits = visitsRes?.deletedCount || 0;
+      viewers = viewersRes?.deletedCount || 0;
+    } catch (err) {
+      await this.migration?.record({
+        key: LEDGER_KEYS.pruneStats,
+        kind: 'prune',
+        outcome: 'error',
+        durationMs: Date.now() - started,
+        detail: `${reason}：${(err as Error)?.message || err}`,
+      });
+      throw err;
+    }
     this.logger.log(
       `[${reason}] 统计保留期 ${plan.effectiveDays} 天（含今天，删除 ${plan.cutoff} 之前的行）：` +
         `visits 删 ${visits} 行、viewers 删 ${viewers} 行`,
     );
+    await this.migration?.record({
+      key: LEDGER_KEYS.pruneStats,
+      kind: 'prune',
+      outcome: 'ok',
+      durationMs: Date.now() - started,
+      detail: { reason, effectiveDays: plan.effectiveDays, cutoff: plan.cutoff, visits, viewers },
+    });
     return {
       enabled: true,
       effectiveDays: plan.effectiveDays,

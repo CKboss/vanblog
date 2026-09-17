@@ -1,5 +1,14 @@
 import { getAllCategories, updateArticle, updateDraft } from '@/services/van-blog/api';
 import { reportRequestError } from '@/services/van-blog/requestError';
+import {
+  PAST_SCHEDULE_WARNING_TITLE,
+  PUBLISH_AT_HELP,
+  PUBLISH_AT_PLACEHOLDER,
+  PUBLISH_AT_TOOLTIP,
+  isPastSchedule,
+  normalizePublishAtForSave,
+  pastScheduleWarningText,
+} from '@/services/van-blog/schedule';
 import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 import { Form, message, Modal } from 'antd';
 import moment from 'moment';
@@ -9,6 +18,15 @@ import AuthorField from '../AuthorField';
 import CoverImageField from '../CoverImageField';
 import PathnameField from '../PathnameField';
 import TagSelectField from '../TagSelectField';
+
+/** antd4 的 DatePicker 只吃 moment：服务端给的 ISO 串要先转，坏值/空值给 null（清空显示）。 */
+function toMomentOrNull(value: any) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const m = moment(value);
+  return m.isValid() ? m : null;
+}
 
 export default function (props: {
   currObj: any;
@@ -22,7 +40,13 @@ export default function (props: {
   const controlled = typeof visible === 'boolean';
   const [form] = Form.useForm();
   useEffect(() => {
-    if (form && form.setFieldsValue) form.setFieldsValue(currObj);
+    // publishAt 从服务端来是 ISO 串（或 null）；DatePicker 需要 moment。
+    // 不合法或缺失都回落成 null，清空后才真的是「不定时」。
+    const values = {
+      ...(currObj || {}),
+      publishAt: type == 'article' ? toMomentOrNull(currObj?.publishAt) : undefined,
+    };
+    if (form && form.setFieldsValue) form.setFieldsValue(values);
   }, [currObj]);
   return (
     <ModalForm
@@ -55,13 +79,36 @@ export default function (props: {
         if (!currObj || !currObj.id) {
           return false;
         }
+        // 定时发布（publishAt）保存前归一化：
+        // - 清空必须真的发 **null**（undefined 会在 JSON 序列化时丢键 → 服务端永远清不掉定时）；
+        // - moment/字符串 → ISO 串（UTC）。
+        const submitValues: any = { ...values };
+        if (type == 'article') {
+          submitValues.publishAt = normalizePublishAtForSave(values?.publishAt);
+          // 选了过去的时间：警告而不是静默照存（服务端会视为已到期、直接发布）
+          if (values?.publishAt && isPastSchedule(values?.publishAt)) {
+            const proceed = await new Promise<boolean>((resolve) => {
+              Modal.confirm({
+                title: PAST_SCHEDULE_WARNING_TITLE,
+                content: pastScheduleWarningText(values?.publishAt),
+                okText: '仍要保存',
+                cancelText: '回去改时间',
+                onOk: () => resolve(true),
+                onCancel: () => resolve(false),
+              });
+            });
+            if (!proceed) {
+              return false;
+            }
+          }
+        }
         setLoading(true);
         // 这个 setLoading 是 Editor 页面传进来的（编辑器的 Spin）。以前服务端一拒绝
         // （比如 pathname 重复 → 400）await 直接抛出去，下面的 setLoading(false)
         // 永远执行不到 → 编辑器一直转圈、整个页面卡死，只能刷新。
         try {
           if (type == 'article') {
-            await updateArticle(currObj?.id, values);
+            await updateArticle(currObj?.id, submitValues);
             onFinish();
             message.success('修改文章成功！');
           } else if (type == 'draft') {
@@ -182,6 +229,24 @@ export default function (props: {
                   value: true,
                 },
               ];
+            }}
+          />
+          <ProFormDateTimePicker
+            width="md"
+            name="publishAt"
+            id="publishAt"
+            label="定时发布"
+            placeholder={PUBLISH_AT_PLACEHOLDER}
+            tooltip={PUBLISH_AT_TOOLTIP}
+            formItemProps={{
+              extra: PUBLISH_AT_HELP,
+            }}
+            showTime={{
+              defaultValue: moment('00:00:00', 'HH:mm:ss'),
+            }}
+            fieldProps={{
+              onKeyDown: stopMenuKeydown,
+              allowClear: true,
             }}
           />
           <ProFormText

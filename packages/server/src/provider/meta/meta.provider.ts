@@ -21,6 +21,8 @@ import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePageCopy } from 'src/utils/pageCopy';
 import { isTrue } from 'src/utils/isTrue';
 import { ViewStatsProvider } from '../stats/viewStats.provider';
+import { Optional } from '@nestjs/common';
+import { MigrationKind, MigrationProvider } from '../migration/migration.provider';
 @Injectable()
 export class MetaProvider {
   logger = new Logger(MetaProvider.name);
@@ -32,9 +34,18 @@ export class MetaProvider {
     @Inject(forwardRef(() => ArticleProvider))
     private readonly articleProvider: ArticleProvider,
     private readonly viewStats: ViewStatsProvider,
+    /**
+     * 迁移台账（可选注入：单测/量具直接 `new MetaProvider(...)` 时不传）。
+     * 只有**启动时**那一次总字数重算会记账（main.ts 传 opts.migration），
+     * 日常增删改文章触发的重算不记 —— 那不是迁移，记进去只会把台账刷爆。
+     */
+    @Optional() private readonly migrationProvider?: MigrationProvider,
   ) {}
 
-  async updateTotalWords(reason: string) {
+  async updateTotalWords(
+    reason: string,
+    opts?: { migration?: { key: string; kind: MigrationKind } },
+  ) {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(async () => {
       // ⚠️ 这个 async 回调以前**没有 try/catch**，而它是被 fire-and-forget 调用的
@@ -42,15 +53,33 @@ export class MetaProvider {
       // `countTotalWords()` 或 `update()` 一 reject 就是一条**没有上下文**的全局
       // unhandledRejection，而字数缓存会一直停在旧值上，直到下一次增删改文章 ——
       // 后台首页那个"总字数"就这么静默错下去，日志里看不出是这件事失败了。
+      const started = Date.now();
       try {
         const total = await this.articleProvider.countTotalWords();
         await this.update({ totalWordCount: total });
         this.logger.log(`${reason}触发更新字数缓存：当前文章总字数: ${total}`);
+        if (opts?.migration) {
+          // record() 永不抛错（写台账失败只 WARN），不用再包 try
+          await this.migrationProvider?.record({
+            ...opts.migration,
+            outcome: 'ok',
+            durationMs: Date.now() - started,
+            detail: { reason, total },
+          });
+        }
       } catch (err) {
         this.logger.error(
           `更新字数缓存失败（来源：${reason}）：${(err as Error)?.message || err}` +
             '——总字数会停在上一次的值，直到下一次增删改文章',
         );
+        if (opts?.migration) {
+          await this.migrationProvider?.record({
+            ...opts.migration,
+            outcome: 'error',
+            durationMs: Date.now() - started,
+            detail: `${reason}：${(err as Error)?.message || err}`,
+          });
+        }
       }
     }, 1000 * 30);
   }

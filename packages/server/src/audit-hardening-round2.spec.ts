@@ -202,12 +202,16 @@ describe('多进程（cluster）守卫', () => {
   it('main.ts 的启动期单例工作全部在 primary 判断里', () => {
     const src = code(read('main.ts'));
     expect(src).toContain('const primary = isPrimaryInstance(cluster);');
-    for (const needle of [
-      'if (primary) await initProvider.washStaticSetting();',
-      'if (primary) walineProvider.init();',
-    ]) {
-      expect(src).toContain(needle);
-    }
+    // P1 迁移台账之后，await 的清洗长成 `if (primary) await wash(key, 'wash', () => …)`、
+    // fire-and-forget 的长成 `if (primary) void wash(…).catch(…)` —— 不变量没变：
+    // 每一条都必须在 primary 守卫里（把守卫拆掉的改动会让下面的正则红）。
+    expect(src).toMatch(
+      /if \(primary\)\s+await wash\('wash:staticSetting', 'wash', \(\) => initProvider\.washStaticSetting\(\)/,
+    );
+    expect(src).toMatch(
+      /if \(primary\)\s+void wash\('wash:userSalt', 'wash', \(\) => userProvider\.washUserWithSalt\(\)/,
+    );
+    expect(src).toContain('if (primary) walineProvider.init();');
     expect(src).toMatch(/if \(primary\) \{\s*\n\s*initProvider\.initVersion\(\);\s*\n\s*initProvider\.initRestoreKey\(\);/);
     // 信号处理必须在 checkHasInited() 那个 if **外面**：worker 与未初始化的实例也要能优雅退出。
     // 结构判据：注册语句是函数体缩进（2 空格），在 if 里面会是 4 空格

@@ -8,6 +8,7 @@ import PostCard from "../../components/PostCard";
 import Waline from "../../components/WaLine";
 import { Article } from "../../types/article";
 import { getArticlePath } from "../../utils/getArticlePath";
+import { articleThumbAvif } from "../../utils/firstImage";
 import { LayoutProps } from "../../utils/getLayoutProps";
 import { getPagePagesProps } from "../../utils/getPageProps";
 import { getArticlesKeyWord } from "../../utils/keywords";
@@ -64,7 +65,9 @@ const PagePages = (props: PagePagesProps) => {
             content={article.content || ""}
             excerpt={article.excerpt}
             firstImage={article.firstImage}
+            thumbAvif={articleThumbAvif(article)}
             viewer={article.viewer}
+            readingMinutes={article.readingMinutes}
             type={"overview"}
             enableComment={props.layoutProps.enableComment}
             private={article.private}

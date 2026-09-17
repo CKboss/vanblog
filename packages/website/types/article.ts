@@ -30,4 +30,22 @@ export interface Article {
   viewer?: number;
   /** 访问次数（同上，前台暂时不显示） */
   visited?: number;
+  /**
+   * 服务端算好的阅读时间（分钟，整数 ≥ 1）。列表（toListView）与详情 payload 都会带。
+   * 可选契约：server 未实现 / 旧 ISR 缓存页没有它时 UI 什么都不渲染
+   * （见 utils/readingTime.ts —— 不做客户端兜底计算，列表响应里根本没有 content）。
+   */
+  readingMinutes?: number | null;
+  /**
+   * 缩略图的 AVIF 版本（可选契约，server `VANBLOG_THUMB_AVIF` 默认关）。
+   * ⚠️ server 最终契约嵌在 **`meta.thumbAvif`**；顶层字段保留为兼容位。
+   * 统一经 `utils/firstImage.articleThumbAvif()` 读取（两个位置都认，meta 优先），
+   * 缺失时 ListThumb 的渲染输出与没有这个契约时逐字节一致（金标对照测试钉住）。
+   */
+  thumbAvif?: string | null;
+  /** server 静态项的 meta 子对象（AVIF 契约的最终位置，见上） */
+  meta?: {
+    thumbAvif?: string | null;
+    thumbAvifBytes?: number | null;
+  } | null;
 }

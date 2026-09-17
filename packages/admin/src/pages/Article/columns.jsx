@@ -1,4 +1,5 @@
 import ColumnsToolBar from '@/components/ColumnsToolBar';
+import RevisionHistory from '@/components/RevisionHistory';
 import UpdateModal from '@/components/UpdateModal';
 import {
   deleteArticle,
@@ -9,6 +10,8 @@ import {
 } from '@/services/van-blog/api';
 import { getPathname } from '@/services/van-blog/getPathname';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
+import { formatDateTime } from '@/services/van-blog/formatTime';
+import { describeScheduledTag, isScheduled } from '@/services/van-blog/schedule';
 import { message, Modal, Space, Switch, Tag } from 'antd';
 import { useState } from 'react';
 import { history } from 'umi';
@@ -151,6 +154,26 @@ export const columns = [
     render: (_, record, __, action) => <HiddenSwitch record={record} action={action} />,
   },
   {
+    title: '定时发布',
+    key: 'publishAt',
+    dataIndex: 'publishAt',
+    width: 190,
+    hideInSearch: true,
+    tooltip:
+      '定时中的文章在到点之前对所有前台页面不可见（列表/搜索/RSS/sitemap 都不出现），到点后服务端会在一分钟内自动发布。以 publishAt 是否晚于当前时间为准。',
+    render: (_, record) => {
+      const text = describeScheduledTag(record?.publishAt);
+      // 没定时的显示 '-'：定时状态只由 publishAt 推导，服务端加没加指示字段都不影响这里
+      return text ? (
+        <Tag color="orange" data-article-scheduled-tag={String(record?.id)}>
+          {text}
+        </Tag>
+      ) : (
+        '-'
+      );
+    },
+  },
+  {
     title: '创建时间',
     dataIndex: 'createdAt',
     valueType: 'dateRange',
@@ -219,6 +242,27 @@ export const columns = [
                       cancelText: '返回',
                     });
                     ev.preventDefault();
+                  } else if (isScheduled(record?.publishAt)) {
+                    // 定时中的文章前台还不可见：别让「查看」看起来像已经发布了
+                    Modal.confirm({
+                      title: '此文章处于「定时待发布」状态！',
+                      content: (
+                        <div>
+                          <p>
+                            这篇文章定时于 <b>{formatDateTime(record?.publishAt)}</b>{' '}
+                            自动发布，在那之前它对所有前台页面不可见，现在打开会是 404 页面。
+                          </p>
+                          <p>想改时间或取消定时：编辑 →「修改信息」→「定时发布」。</p>
+                        </div>
+                      ),
+                      onOk: () => {
+                        window.open(`/post/${getPathname(record)}`, '_blank');
+                        return true;
+                      },
+                      okText: '仍然访问',
+                      cancelText: '返回',
+                    });
+                    ev.preventDefault();
                   }
                 }}
                 target="_blank"
@@ -246,11 +290,22 @@ export const columns = [
               >
                 导出
               </a>,
+              <RevisionHistory
+                key={'revisions' + record.id}
+                articleId={record?.id}
+                articleTitle={record?.title}
+                onRestored={() => {
+                  action?.reload();
+                }}
+              />,
               <a
                 key={'deleteArticle' + record.id}
                 onClick={() => {
                   Modal.confirm({
                     title: `确定删除 "${record.title}"吗？`,
+                    // 软删除：说清楚去向和撤销路径（回收站在本页工具栏）
+                    content:
+                      '删除后文章会移入本页工具栏的「回收站」，前台立刻不可见，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
                     onOk: async () => {
                       if (location.hostname == 'blog-demo.mereith.com') {
                         if ([28, 29].includes(record.id)) {
@@ -259,7 +314,7 @@ export const columns = [
                         }
                       }
                       await deleteArticle(record.id);
-                      message.success('删除成功!');
+                      message.success('删除成功，已移入回收站（可恢复）!');
                       action?.reload();
                     },
                   });
@@ -279,12 +334,13 @@ export const articleKeys = [
   'hidden',
   'id',
   'option',
+  'publishAt',
   'showTime',
   'tags',
   'title',
   'top',
   'viewer',
 ];
-export const articleKeysSmall = ['category', 'hidden', 'id', 'option', 'title'];
+export const articleKeysSmall = ['category', 'hidden', 'id', 'option', 'publishAt', 'title'];
 export const articleObjAll = genActiveObj(articleKeys, articleKeys);
 export const articleObjSmall = genActiveObj(articleKeysSmall, articleKeys);

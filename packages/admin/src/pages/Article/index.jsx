@@ -1,6 +1,7 @@
 import CoverBackfillModal from '@/components/CoverBackfillModal';
 import ImportArticleModal from '@/components/ImportArticleModal';
 import NewArticleModal from '@/components/NewArticleModal';
+import RecycleBin from '@/components/RecycleBin';
 import { backfillArticlePathname, getArticlesByOption } from '@/services/van-blog/api';
 import { batchExport, batchDelete } from '@/services/van-blog/batch';
 import { useNum } from '@/services/van-blog/useNum';
@@ -18,6 +19,7 @@ export default () => {
   const [simplePage, setSimplePage] = useState(false);
   const [simpleSearch, setSimpleSearch] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [recycleVisible, setRecycleVisible] = useState(false);
   const [pageSize, setPageSize] = useNum(10, 'article-page-size');
   const searchSpan = useMemo(() => {
     if (!simpleSearch) {
@@ -233,6 +235,9 @@ export default () => {
             >
               生成拼音路径
             </Button>,
+            <Button key="recycleBinBtn" onClick={() => setRecycleVisible(true)}>
+              回收站
+            </Button>,
             // 与其它批量操作并排：组件自带按钮 + 弹窗，打开就先跑 dryRun 预览，
             // 写入成功后留在弹窗里给「撤销本次改动」，同时 reload 列表让新封面立刻可见
             <CoverBackfillModal
@@ -244,6 +249,13 @@ export default () => {
           ]}
         />
       </RcResizeObserver>
+      {/* 回收站抽屉：恢复/永久删除后顺带刷新主列表（恢复的文章要立刻可见） */}
+      <RecycleBin
+        type="article"
+        visible={recycleVisible}
+        onClose={() => setRecycleVisible(false)}
+        onChanged={() => actionRef?.current?.reload()}
+      />
     </PageContainer>
   );
 };

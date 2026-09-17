@@ -1,5 +1,6 @@
 import ImportDraftModal from '@/components/ImportDraftModal';
 import NewDraftModal from '@/components/NewDraftModal';
+import RecycleBin from '@/components/RecycleBin';
 import { getDraftsByOption } from '@/services/van-blog/api';
 import { useNum } from '@/services/van-blog/useNum';
 import { PageContainer } from '@ant-design/pro-layout';
@@ -15,6 +16,7 @@ export default () => {
   const [colKeys, setColKeys] = useState(draftKeysObj);
   const [simplePage, setSimplePage] = useState(false);
   const [simpleSearch, setSimpleSearch] = useState(false);
+  const [recycleVisible, setRecycleVisible] = useState(false);
   const [pageSize, setPageSize] = useNum(10, 'draft-page-size');
   const searchSpan = useMemo(() => {
     if (!simpleSearch) {
@@ -182,9 +184,20 @@ export default () => {
                 message.success('导入成功！');
               }}
             />,
+            <Button key="draftRecycleBinBtn" onClick={() => setRecycleVisible(true)}>
+              回收站
+            </Button>,
           ]}
         />
       </RcResizeObserver>
+      {/* 草稿回收站：⚠️ 发布成功的草稿也会自动进去（发布即归档）；
+          抽屉里有常驻警示，恢复文案对「误删 / 发布归档」两种情况都说真话 */}
+      <RecycleBin
+        type="draft"
+        visible={recycleVisible}
+        onClose={() => setRecycleVisible(false)}
+        onChanged={() => actionRef?.current?.reload()}
+      />
     </PageContainer>
   );
 };

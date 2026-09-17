@@ -8,7 +8,11 @@ import { LayoutProps } from "../../utils/getLayoutProps";
 // import ImageProvider from "../ImageProvider";
 import { RealThemeType, ThemeContext } from "../../utils/themeContext";
 import CustomLayout from "../CustomLayout";
-import { APPLE_FONT_CSS_URL, APPLE_FONT_PRECONNECT_HOSTS } from "../../utils/appleFont";
+import {
+  APPLE_FONT_CSS_URL,
+  APPLE_FONT_LATIN_WOFF2,
+  APPLE_FONT_PRECONNECT_HOSTS,
+} from "../../utils/appleFont";
 import { canonicalUrl } from "../../utils/seo";
 import { useRouter } from "next/router";
 import { Toaster } from "react-hot-toast";
@@ -131,6 +135,23 @@ export default function (props: {
           theme,
         }}
       >
+        {/* 自托管的拉丁子集 woff2 是唯一进首屏关键路径的字体文件（apple.css 内联在全局
+            阻塞 CSS 里，站点名/导航的拉丁字符就用它），所以只 preload 这一个：
+            CJK 分包走下面那份异步 zeoseven CSS，preload 它们只会抢首屏带宽；
+            默认皮肤不引用 Maple Mono，preload 等于白发 74KB，所以按 uiStyle 收窄。
+            ⚠️ as="font" 必须带 crossOrigin：字体即使同源也按 CORS 模式抓取，
+            preload 的属性与实际抓取不一致时浏览器会丢弃预载、再下载一遍。 */}
+        {uiStyle === "apple" ? (
+          <Head>
+            <link
+              rel="preload"
+              href={APPLE_FONT_LATIN_WOFF2}
+              as="font"
+              type="font/woff2"
+              crossOrigin="anonymous"
+            />
+          </Head>
+        ) : null}
         {uiStyle === "apple" && appleFontCss ? (
           <Head>
             {APPLE_FONT_PRECONNECT_HOSTS.map((host) => (

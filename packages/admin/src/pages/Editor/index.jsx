@@ -1,6 +1,7 @@
 import Editor from '@/components/Editor';
 import EditorProfileModal from '@/components/EditorProfileModal';
 import PublishDraftModal from '@/components/PublishDraftModal';
+import RevisionHistory from '@/components/RevisionHistory';
 import Tags from '@/components/Tags';
 import UpdateModal from '@/components/UpdateModal';
 import { SaveTip } from '@/components/SaveTip';
@@ -17,6 +18,8 @@ import {
 import { getPathname } from '@/services/van-blog/getPathname';
 import { parseMarkdownFile } from '@/services/van-blog/parseMarkdownFile';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
+import { describeScheduledTag, isScheduled } from '@/services/van-blog/schedule';
+import { formatDateTime } from '@/services/van-blog/formatTime';
 import { useCacheState } from '@/services/van-blog/useCacheState';
 import { handleEditorHotkey } from '@/services/van-blog/editableKeyboard';
 import { DownOutlined } from '@ant-design/icons';
@@ -326,6 +329,23 @@ export default function () {
               },
             }
           : null,
+        // 历史版本（仅文章；服务端保留条数上限，功能关闭时抽屉里会平静说明）
+        type == 'article' && currObj?.id != null
+          ? {
+              key: 'revisionsBtn',
+              label: (
+                <RevisionHistory
+                  articleId={currObj?.id}
+                  articleTitle={currObj?.title}
+                  trigger={<a key={'revisionsTrigger' + currObj?.id}>历史版本</a>}
+                  onRestored={() => {
+                    // 恢复版本后重拉正文，编辑器里立刻是新内容
+                    fetchData(true);
+                  }}
+                />
+              ),
+            }
+          : null,
         type == 'draft'
           ? {
               key: 'publishBtn',
@@ -396,6 +416,28 @@ export default function () {
                     });
                     return;
                   }
+                  if (isScheduled(currObj?.publishAt)) {
+                    // 定时中的文章前台还不可见：别让「查看前台」看起来像已经发布了
+                    Modal.confirm({
+                      title: '此文章处于「定时待发布」状态！',
+                      content: (
+                        <div>
+                          <p>
+                            这篇文章定时于 <b>{formatDateTime(currObj?.publishAt)}</b>{' '}
+                            自动发布，在那之前它对所有前台页面不可见，现在打开会是 404 页面。
+                          </p>
+                          <p>想改时间或取消定时：「操作 → 修改信息 → 定时发布」。</p>
+                        </div>
+                      ),
+                      onOk: () => {
+                        window.open(`/post/${getPathname(currObj)}`, '_blank');
+                        return true;
+                      },
+                      okText: '仍然访问',
+                      cancelText: '返回',
+                    });
+                    return;
+                  }
                   url = `/post/${getPathname(currObj)}`;
                 } else {
                   url = '/about';
@@ -411,6 +453,13 @@ export default function () {
               onClick: () => {
                 Modal.confirm({
                   title: `确定删除 “${currObj.title}” 吗？`,
+                  // 文章与草稿现在都是软删除：说清去向和撤销路径
+                  content:
+                    type == 'article'
+                      ? '删除后文章会移入「文章管理 → 回收站」，前台立刻不可见，可随时恢复；只有在回收站里「永久删除」才不可撤销。'
+                      : type == 'draft'
+                        ? '删除后草稿会移入「草稿管理 → 回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。'
+                        : undefined,
                   onOk: async () => {
                     if (location.hostname == 'blog-demo.mereith.com' && type == 'article') {
                       if ([28, 29].includes(currObj.id)) {
@@ -420,11 +469,11 @@ export default function () {
                     }
                     if (type == 'article') {
                       await deleteArticle(currObj.id);
-                      message.success('删除文章成功！返回列表页！');
+                      message.success('删除文章成功，已移入回收站（可恢复）！返回列表页！');
                       history.push('/article');
                     } else if (type == 'draft') {
                       await deleteDraft(currObj.id);
-                      message.success('删除草稿成功！返回列表页！');
+                      message.success('删除草稿成功，已移入回收站（可恢复）！返回列表页！');
                       history.push('/draft');
                     }
                   },
@@ -486,6 +535,12 @@ export default function () {
                 <Tag color="green">{typeMap[type] || '-'}</Tag>
                 <Tag color="blue">{currObj?.category || '-'}</Tag>
                 <Tags tags={currObj?.tags} />
+                {/* 定时待发布：到点之前前台不可见，标题栏必须能一眼看出来 */}
+                {describeScheduledTag(currObj?.publishAt) ? (
+                  <Tag color="orange" data-editor-scheduled-tag>
+                    {describeScheduledTag(currObj?.publishAt)}
+                  </Tag>
+                ) : null}
               </>
             )}
           </Space>

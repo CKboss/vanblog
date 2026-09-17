@@ -4,6 +4,8 @@ import {
   Delete,
   Get,
   Logger,
+  NotFoundException,
+  Optional,
   Param,
   Post,
   Put,
@@ -19,8 +21,10 @@ import { ArticleProvider } from 'src/provider/article/article.provider';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { ISRProvider } from 'src/provider/isr/isr.provider';
 import { PipelineProvider } from 'src/provider/pipeline/pipeline.provider';
+import { RevisionProvider } from 'src/provider/revision/revision.provider';
 import { ApiToken } from 'src/provider/swagger/token';
 import { sanitizePagination } from 'src/utils/pagination';
+import { parseNumericId } from 'src/utils/numericId';
 @ApiTags('article')
 @ApiToken
 @UseGuards(...AdminGuard)
@@ -31,6 +35,8 @@ export class ArticleController {
     private readonly articleProvider: ArticleProvider,
     private readonly isrProvider: ISRProvider,
     private readonly pipelineProvider: PipelineProvider,
+    /** 历史版本（P4）。@Optional：模块未注册的过渡期里接口回 404 语义，其余路由不受影响。 */
+    @Optional() private readonly revisionProvider?: RevisionProvider,
   ) {}
 
   @Get('/')
@@ -70,6 +76,20 @@ export class ArticleController {
     };
   }
 
+  /**
+   * 回收站列表（P3）：软删文章，按最近删除排序。
+   * ⚠️ 必须声明在 `@Get('/:id')` **之前**：否则 'deleted' 会被当成 id 参数匹配走。
+   * 投影不含 content/password（见 ArticleProvider.deletedListView）。
+   */
+  @Get('deleted')
+  async getDeleted(@Query('page') page?: number, @Query('pageSize') pageSize?: number) {
+    const data = await this.articleProvider.getDeleted(page, pageSize);
+    return {
+      statusCode: 200,
+      data,
+    };
+  }
+
   @Get('/:id')
   async getOneByIdOrPathname(@Param('id') id: string) {
     const data = await this.articleProvider.getByIdOrPathname(id, 'admin');
@@ -94,6 +114,10 @@ export class ArticleController {
     delete (updateDto as any)?.viewer;
     delete (updateDto as any)?.visited;
     delete (updateDto as any)?.id;
+    // 同理：deletedAt 只由删除/恢复接口维护（P3），wordCount 是服务端算的存储副本（P6），
+    // 客户端塞值会污染回收站排序与 readingMinutes
+    delete (updateDto as any)?.deletedAt;
+    delete (updateDto as any)?.wordCount;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateArticle', updateDto);
     if (result.length > 0) {
       const lastResult = result[result.length - 1];
@@ -245,6 +269,180 @@ export class ArticleController {
     return {
       statusCode: 200,
       data,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 回收站（P3）：恢复 / 彻底删除。
+  // 权限：restore 走 article:update、purge 走 article:delete（见 types/access/access.ts；
+  // purge 与既有软删同一权限档，任务要求）。
+  // ---------------------------------------------------------------------------
+
+  /** 从回收站恢复：撤销软删，并把删除路径做过的副作用对称地做回来（字数缓存、ISR、事后事件）。 */
+  @Put('/:id/restore')
+  async restore(@Param('id') id: number) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改文章！' };
+    }
+    const restored: any = await this.articleProvider.restoreById(id);
+    if (!restored) {
+      throw new NotFoundException('回收站里没有这篇文章（可能已恢复或已彻底删除）');
+    }
+    // 与删除对称：删除时发过 deleteArticle 事件、重算过总字数、触发过 ISR，
+    // 恢复同样要让流水线/缓存/静态页知道"这篇文章回来了"。
+    this.pipelineProvider.dispatchEvent('afterUpdateArticle', restored).catch((err) =>
+      this.logger.error(
+        `流水线事件 afterUpdateArticle 分发失败（恢复文章 ${restored?.id}）：${
+          (err as Error)?.message || err
+        }`,
+      ),
+    );
+    this.isrProvider.activeAll('恢复文章触发增量渲染！', undefined, {
+      postId: restored.id,
+      previousPathname: restored.pathname,
+    });
+    return {
+      statusCode: 200,
+      data: restored,
+    };
+  }
+
+  /**
+   * 彻底删除（硬删）：**只对回收站里的文章生效**（先 DELETE /:id 软删，再 purge）。
+   * 这是全站唯一的文章硬删除入口；连带清理历史版本（见 ArticleProvider.purgeById）。
+   */
+  @Delete('/:id/purge')
+  async purge(@Param('id') id: number) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止删除文章！' };
+    }
+    // 先取软删文档（普通 getById 过滤 deleted，这里要反过来）：purge 之后文档就没了，
+    // ISR 需要它的 pathname 去失效 /post/<pathname> 与 /post/<id> 两条路径。
+    const target: any = await this.articleProvider.findDeletedById(id, 'list');
+    if (!target) {
+      throw new NotFoundException('只能彻底删除回收站里的文章（请先移入回收站）');
+    }
+    const data = await this.articleProvider.purgeById(id);
+    this.isrProvider.activeAll('彻底删除文章触发增量渲染！', undefined, {
+      postId: target.id,
+      previousPathname: target.pathname,
+    });
+    return {
+      statusCode: 200,
+      data,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 历史版本（P4，极简）：列表（元数据）/ 单条（含正文）/ 恢复。
+  // 快照本身由 ArticleProvider.updateById 在"保存真的改了 title/content"时自动写。
+  // ---------------------------------------------------------------------------
+
+  /** 某篇文章的历史版本列表（**不含 content**）。`enabled=false` 表示功能被 env 关闭（KEEP=0）。 */
+  @Get('/:id/revisions')
+  async listRevisions(
+    @Param('id') id: number,
+    @Query('page') page?: number,
+    @Query('pageSize') pageSize?: number,
+  ) {
+    const numericId = parseNumericId(id);
+    if (!this.revisionProvider) {
+      throw new NotFoundException('历史版本功能不可用（RevisionProvider 未注册）');
+    }
+    const data = await this.revisionProvider.listMeta(numericId, page, pageSize);
+    return {
+      statusCode: 200,
+      data: { ...data, enabled: this.revisionProvider.enabled() },
+    };
+  }
+
+  /** 单条历史版本（含 content）。revisionId 不属于这篇文章时按 404 处理（防跨文章越权读）。 */
+  @Get('/:id/revisions/:revisionId')
+  async getRevision(@Param('id') id: number, @Param('revisionId') revisionId: string) {
+    const numericId = parseNumericId(id);
+    if (!this.revisionProvider) {
+      throw new NotFoundException('历史版本功能不可用（RevisionProvider 未注册）');
+    }
+    const revision: any = await this.revisionProvider.getOne(numericId, revisionId);
+    if (!revision) {
+      throw new NotFoundException('找不到这条历史版本（或它不属于这篇文章）');
+    }
+    const doc = typeof revision.toObject === 'function' ? revision.toObject() : revision;
+    return {
+      statusCode: 200,
+      data: {
+        _id: String(doc._id),
+        articleId: Number(doc.articleId),
+        savedAt: doc.savedAt,
+        title: doc.title,
+        content: doc.content,
+        wordCount: doc.wordCount,
+        sizeBytes: doc.sizeBytes,
+        reason: doc.reason,
+      },
+    };
+  }
+
+  /**
+   * 恢复到某条历史版本。恢复本身**可撤销**：先把"恢复前的当前状态"记一条
+   * reason='pre-restore' 的快照，再写回历史版本的 title/content，
+   * 副作用与保存接口一致（字数缓存、ISR、afterUpdateArticle 事件）。
+   */
+  @Put('/:id/revisions/:revisionId/restore')
+  async restoreRevision(
+    @Param('id') id: number,
+    @Param('revisionId') revisionId: string,
+  ) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改文章！' };
+    }
+    const numericId = parseNumericId(id);
+    if (!this.revisionProvider) {
+      throw new NotFoundException('历史版本功能不可用（RevisionProvider 未注册）');
+    }
+    const revision: any = await this.revisionProvider.getOne(numericId, revisionId);
+    if (!revision) {
+      throw new NotFoundException('找不到这条历史版本（或它不属于这篇文章）');
+    }
+    const current: any = await this.articleProvider.getById(numericId, 'admin');
+    if (!current) {
+      throw new NotFoundException('找不到文章（回收站里的文章请先恢复再还原历史版本）');
+    }
+    // 1) 先给"恢复前的当前状态"拍快照（appendIfChanged：与目标一致时不会白记一条）
+    const snapshot = await this.revisionProvider.appendSafe(
+      numericId,
+      { title: current.title, content: current.content },
+      { title: revision.title, content: revision.content },
+      'pre-restore',
+    );
+    // 2) 写回历史版本（skipRevision：快照上一步已经记过，别让 updateById 再记一条重复的）
+    await this.articleProvider.updateById(
+      numericId,
+      { title: revision.title, content: revision.content },
+      false,
+      { skipRevision: true },
+    );
+    // 3) 与保存接口相同的对外副作用
+    const updated = await this.articleProvider.getById(numericId, 'admin');
+    this.isrProvider.activeAll('恢复历史版本触发增量渲染！', undefined, {
+      postId: numericId,
+      previousPathname: updated?.pathname,
+    });
+    this.pipelineProvider.dispatchEvent('afterUpdateArticle', updated).catch((err) =>
+      this.logger.error(
+        `流水线事件 afterUpdateArticle 分发失败（恢复历史版本，文章 ${numericId}）：${
+          (err as Error)?.message || err
+        }`,
+      ),
+    );
+    return {
+      statusCode: 200,
+      data: {
+        restored: true,
+        articleId: numericId,
+        revisionId: String(revision._id),
+        snapshotRevisionId: snapshot ? String((snapshot as any)._id) : null,
+      },
     };
   }
 }

@@ -12,6 +12,7 @@ import Waline from "../components/WaLine";
 import Head from "next/head";
 import { getArticlesKeyWord } from "../utils/keywords";
 import { getArticlePath } from "../utils/getArticlePath";
+import { articleThumbAvif } from "../utils/firstImage";
 export interface IndexPageProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
@@ -74,7 +75,9 @@ const Home = (props: IndexPageProps) => {
             content={article.content || ""}
             excerpt={article.excerpt}
             firstImage={article.firstImage}
+            thumbAvif={articleThumbAvif(article)}
             viewer={article.viewer}
+            readingMinutes={article.readingMinutes}
             type={"overview"}
             enableComment={props.layoutProps.enableComment}
             copyrightAggreement={props.layoutProps.copyrightAggreement}

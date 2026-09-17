@@ -4794,7 +4794,12 @@ false 留在向导并说明"数据已恢复但没有管理员账号"），失败
 而后台上传的主题在 `<static>/themes/<id>-<hash8>.css` ⇒ **主题文件从来不进归档**；
 但主题元数据在 `settings`、启用状态在 `metas.siteInfo.uiStyle`，两者都随库备份 ⇒
 换机器恢复后**后台显示主题存在且已启用**、`/api/public/theme` 照常列出它，只有 `/static/themes/…` 没了 ⇒
-`/api/public/theme.css` **404**、前台静默退回默认皮肤：一次零报错的数据丢失。
+`/api/public/theme.css` **返回 204 + 一份空样式表**、前台静默退回默认皮肤：一次零报错的数据丢失。
+⚠️ 这里我一开始写的是"404"，**是错的**，而且错得让问题看起来比实际好查：`theme.controller.ts:52-55`
+把读文件失败 `catch` 成了 204（内置主题本来也走 204，见 :42），所以浏览器拿到的是一份**合法的空 CSS**、
+控制台一条报错都没有、网络面板里也不是红色 —— 排查时唯一的线索是"皮肤看起来不对"。
+（这个更正是脚本那路在做真机 drill 时发现的：它必须把"当前主题有 url 但 theme.css 是 204"
+当作回归特征来断言，而不能等一个 404。）
 （`docs/features/theme.md` 里那句"上传的主题会被备份吗？会。"当时只对 `--offline` 目录快照成立，对整站归档是错的 —— 已更正。）
 修法是清单加 `'themes'`（导出与恢复两个循环都迭代这个常量，恢复侧本来就有 `existsSync` 跳过 ⇒ **老归档照常恢复**）。
 **真正值钱的是守卫**：`audit-hardening-round3-backup.spec.ts` 把"静态目录下能出现什么"变成两张有理由的清单
@@ -5160,13 +5165,378 @@ server jest **1138 用例 / 1137 绿 + 1 个既有的 watermark 离线字体用�
 `packages/server/src/controller/public`，要往上 **5** 级才到仓库根，我写了 4 级 ⇒ 全部 ENOENT。
 这个坑 AGENTS 里已经记过，还是踩了 —— 所以那条注释现在连"怎么数"都写出来了。
 
+### 7.57 功能补齐轮：迁移账本、备份可证明成功、恢复演练、回收站/版本历史/定时发布、私有文章元数据泄露、字体自托管、caddy 直发 HTML 的安全子集
+
+用户的要求是「极简、高可用、高性能、功能完善」，并点名了 11 项。这一轮按**文件所有权**切成四路并行
+（server / website+caddy / admin / scripts），我先定契约再派发，跨路的字段名与语义都写在派发里 ——
+事后看，**契约里唯一没写清的一处（AVIF 字段是 `meta.thumbAvif` 而不是顶层 `thumbAvif`）差点让功能静默失效**：
+前台的 `<picture>` 读不到字段时会走"缺字段 ⇒ HTML 逐字节不变"那条保证，于是**测试全绿而功能永远不激活**。
+教训：可选字段的"缺失即无变化"保证，必须配一条"存在但没被读到就让测试红"的用例（后来补了全链路用例）。
+
+#### A. 迁移账本（`migrations` 集合）
+
+以前所有数据修复都是**启动期的幂等 wash**（去重、建唯一索引、删冗余索引、回填拼音别名、重算字数…），
+**没有任何记录**：不知道某台机器跑过哪些、跑了多久、有没有失败，将来要做破坏性迁移也没有安全网。
+
+现在：`scheme/migration.schema.ts` + `provider/migration/migration.provider.ts`，**每个 key 一行**
+（`key` 上唯一索引，每次运行 upsert）：`{key, kind(wash|index|backfill|recompute|sync|prune), ranAt,
+durationMs, outcome(ok|skipped|error), detail(≤2000字), codeVersion, runs, firstRanAt, lastError, lastErrorAt}`。
+⚠️ **为什么不做"每次运行一行"**：wash 每次启动都跑，而开发时 watcher 一天能重启上百次 ⇒ 每次一行会无界增长。
+一行一 key + `runs` 计数 + `firstRanAt` + 保留 `lastError`，是"有历史但不无界"的最小形状（当前约 13 行）。
+`key` + `runs` 同时就是将来"破坏性迁移只跑一次"的闸门。
+⚠️ **账本只做可观测性，绝不用来跳过 wash**（有源码级测试钉住这条）—— 索引创建、幂等去重这些必须每次都跑。
+接进来的：`main.ts` 的 5 个 wash、`recompute:totalWords`、statsMaintenance 的 5 项（去重 / 两个唯一索引 /
+删冗余索引 / 每日清理）、pipeline 的 2 项（依赖检查 / 脚本同步）、后台触发的 3 个回填
+（`backfill:articlePathname|articleCovers|articleWordCount`）。
+`initVersion` 与 `initRestoreKey` **故意不记**（版本记账与密钥轮换，不是数据修复，记进去只会把台账刷爆）。
+端点：`GET /api/admin/migration/list`（AdminGuard，**协作者不可见**）；`outcome=error` 时 `record()` 立刻 WARN
+（绝不吞掉），启动 60 秒后 `main.ts` 打一条具名汇总。`record()` 自己不会抛，`run()` **原样重抛原始错误对象**
+（反证跑过：去掉重抛 ⇒ 用例红）。
+⚠️ 顺手修掉一个**密钥泄露到日志**的问题：`main.ts` 里有一句遗留的 `console.log(staticSetting)`，
+每次启动都把完整的图床设置（**含 OSS/七牛/又拍云的 accessKey**）打进 stdout ⇒ 进容器日志、进日志采集。已删。
+
+#### B. 让备份"可证明成功"（用户原话：不加密，但迭代时一定要确保备份能成功）
+
+**不做加密**（按用户要求），改为**每次写完就校验**：`utils/backupVerify.ts` 复用既有助手
+（`listArchiveMembers` / 新导出的 `extractSingleFile` / `isFullBackupManifest` / `detectFormat`），
+**没有第二个解析器、归档格式一个字节没动**。六道检查：① 解压器能读完整个流且 tar 能走完每个头；
+② **归档内部**的 `manifest.json` 能解析并通过 `isFullBackupManifest`（只有 sidecar 不算 —— 恢复读的是内部那份）；
+③ sidecar 与内部 manifest 一致、且 `archiveBytes` 等于文件真实大小；④ `totals` == 各集合计数/文档数/文件数之和，
+且每个声明的集合都有对应 `.ndjson` 成员；⑤ 静态文件数 == tar 清单里 `static/<folder>/` 的实际条目数；
+⑥ 非零（databases≥1、collections≥1、documents≥1、bytes>0；⚠️ **静态文件不要求非零** —— 全新站点可能一张图都没有）。
+
+挂在 `FullBackupProvider.doExport` ⇒ **手动与 cron 都覆盖**（`vanblog.sh backup` 打的就是同一个接口，
+已在 `scripts/vanblog.sh:2575,2622` 核过）。校验失败 ⇒ 记录状态（`stage='verify'`）+ 带原因的 ERROR +
+**HTTP 400**（归档保留用于取证，不删）。导出响应新增 `verified` / `verifySeconds`。
+持久状态写在 **`<backupPath>/backup-status.json`**（tmp+rename 原子写）—— ⚠️ **故意不写进数据库**：
+恢复会把库覆盖掉，状态跟着回退就等于"恢复之后看不到恢复之前那次备份失败了"。
+端点 `GET /api/admin/backup/full/status` → `{version,updatedAt,lastSuccessAt/Name/Bytes,lastVerifyMs,
+lastFailureAt/Stage/Name/Message,consecutiveFailures,staleWarnHours,stale,staleMessage}`。
+**cron 备份失败在哪能看到（不翻日志）**：① 该端点的 `consecutiveFailures>0` + `lastFailureStage/Message`（后台备份页）；
+② 导出接口返回 400 ⇒ `vanblog.sh backup` 打印 FAIL 并以非零退出进 cron 日志；③ server 的 ERROR 日志带完整原因。
+陈旧告警：`VANBLOG_BACKUP_STALE_WARN_HOURS`（默认 **48**，`0`=关）在启动时（仅主实例）与每次失败后检查。
+⚠️ **这是一个新的默认日志行**：没有近期"已校验备份"的实例启动时会多一条 WARN（只写日志、不改行为）。
+实测：真的 69,111,118 B / 226 成员归档 **ok:true 用 265–302 ms**；截断 1MB 的副本 `readThrough` 失败于 152 ms。
+
+⚠️ **顺带修掉一个严重的既有 bug**：`listArchiveMembers` 在**截断归档**上**永不 settle**
+（tar 的 close 先把 `settled=true` 置上，随后调用的 `fail()` 因为已 settled 而变成 no-op）。
+后果不止是校验挂住：匿名路由 `/api/admin/init/restore` 的 `assertRestorableArchive` 会**一直吊着请求并占着单飞锁**，
+直到进程重启 ⇒ **任何人上传一个坏归档就能永久锁死整站的恢复功能**。已修，gzip 与 zstd 两种格式都加了回归钉子。
+（脚本那路的负向 drill 从外部证明了这条：截断归档 → 400 + 退出 1 + 完整清理，**紧接着的好归档 drill 仍然通过**。）
+
+#### C. 回收站（文章 + 草稿）
+
+`deleted` 软删标记与"只有删除接口能设它"的权限守卫本来就在了，缺的只是**看/恢复/彻底删**三个端点。
+- `GET /api/admin/article/deleted?page=&pageSize=` → `{articles:[{id,title,pathname,category,tags,top,hidden,
+  author,cover,wordCount,publishAt,createdAt,updatedAt,deletedAt}],total}`；**投影不含 content/password**
+  （字数来自新的存量 `wordCount` 字段，所以不需要正文）；`deletedAt` 倒序，历史遗留的 `deletedAt:null` 行沉底
+  （用 `updatedAt` 兜底排序）；`pageSize` 默认 20、上限 100。
+- `PUT /api/admin/article/:id/restore`：不在回收站里 → 404；成功则 `deleted:false, deletedAt:null` +
+  重算字数 + ISR `activeAll`（文章 id 与原 pathname，正好对称于删除时的失活）+ 触发 `afterUpdateArticle` 流水线事件。
+- `DELETE /api/admin/article/:id/purge`：**必须已经软删**（否则 404）；权限 `article:delete`（与既有删除同档）；
+  连带删掉该文章的 revisions；⚠️ **故意不删** visits / 评论 / 图片文件 —— 与既有删除的副作用范围完全一致。
+- 草稿同形（`/api/admin/draft/deleted|:id/restore|:id/purge`，权限 `draft:update` / `draft:delete`）。
+- `deletedAt` 加进文章与草稿的 schema（可空，不回填）；控制器像剥 `deleted` 一样剥掉客户端传来的
+  `deletedAt` / `wordCount`（否则前端能自己伪造删除时间或字数）。
+- ⚠️ **确认了一件 admin 文案依赖的事**：既有 `DELETE /api/admin/article/:id` **是软删**
+  （`updateOne({id},{deleted:true,deletedAt:new Date()})`），所以后台那句"移入回收站（可恢复）"是真的；
+  硬删只存在于新的 `purge`。
+- ⚠️ **草稿回收站的坑（既有语义，不是本轮引入）**：**发布草稿会软删该草稿** ⇒ 草稿回收站里会出现
+  "其实已经成功发布"的条目，而**恢复它不会动那篇已发布的文章**（只是把旧草稿复活成一份可编辑草稿）。
+  文案必须说清楚，否则用户会以为"恢复了文章"，然后编辑并发布那份陈旧副本。
+
+#### D. 文章版本历史（按用户要求保持极简）
+
+极简的界定：**不做 diff、不做分支、不做逐键保存** —— 只有"最近 N 个保存过的状态，可看可回滚"。
+独立 `revisions` 集合（⚠️ **不嵌进文章文档**：那会让每次列表查询与每份备份都背上 N 份正文）。
+写入时机：**更新时且标题或正文真的变了**才快照（先比较再写；有钉子证明"只改 tags 的 patch 不会多读一次正文"），
+存的是**改之前**的状态 `{articleId,savedAt,title,content,wordCount,sizeBytes,reason:'update'|'pre-restore'}`。
+上限 `VANBLOG_ARTICLE_REVISIONS_KEEP`（默认 **10**，`0`=关=旧行为；⚠️ **默认是开的**，已标记），
+超出按 `{articleId,savedAt desc,_id desc}` skip+deleteMany 淘汰最老。`appendSafe` 保证写快照失败绝不影响保存本身。
+端点：`GET …/:id/revisions`（`{revisions:[元数据],total,enabled}`，`{content:0}` 投影；`enabled` 让前台能区分
+"功能关了"与"还没有历史版本"）；`GET …/:id/revisions/:revisionId`（含正文；**属于别的文章则 404**，ObjectId 已校验）；
+`PUT …/:id/revisions/:revisionId/restore` —— **先把当前状态快照成 `reason:'pre-restore'`**（内容相同则跳过）再写回
+（`updateById({skipRevision:true})`）+ ISR + `afterUpdateArticle`，响应带 `snapshotRevisionId` ⇒ **回滚本身可回滚**。
+存量实测（真的 59 篇语料，BSON 序列化，只读）：单条 revision 均值 **3,130 B**（p50 2,273 / p90 7,059 / max 23,841），
+59 篇 × 10 = **1,846,960 B ≈ 1.76 MB**。
+
+#### E. 定时发布
+
+新增可空 `publishAt`（文章 + 草稿的 DTO 都收）。**语义选择：查询级"到期前视为未发布"，而不是翻 `hidden`。**
+理由（这条比实现重要）：查询级过滤让"到期即可见"**自动成立**、不依赖任何"必须成功的写入"—— cron 挂了、
+进程挂了、容器没起来，文章到点照样可见；而翻 `hidden` 需要一个状态机（scheduledHidden？）外加 cron 与后台
+对同一个字段的竞争。`PublishTask`（每分钟，`isPrimaryInstance` 守卫）因此只做三件轻活：
+记录发布了什么、作废 publicMeta 缓存、`activeAll(delay=1000)`；扫描窗口 `(lastTick−5s, now]`、首次回看 120 秒、
+**窗口只在查询成功后才前移**（否则崩溃会漏发）。
+保存语义：ISO 字符串/毫秒/Date 都收；**`null` 清除**、**键缺失 = 不变**、垃圾字符串 → **400**（绝不静默变成 Invalid Date）。
+⚠️ 这两个语义不能混：前端清除定时器时**必须显式发 `null`**（`undefined` 会被 JSON.stringify 丢掉 ⇒ 永远清不掉）。
+`adminView` 投影新增 `publishAt`，前台"定时待发布 = `publishAt > now`"由后台自己推导。
+**泄露验证是活体做的**（用户最关心的就是"定时文章会不会提前泄露"）：建了一篇排到 **2030 年**的临时文章（#59），
+逐个面实测后**完整还原**：公开列表（find 与 aggregate 两条路径，total 仍是 53）✓、按 id 取详情 → 404 ✓、
+按 pathname 取详情 → 404 ✓、**密码解锁 POST → 404**（`allowOpenHiddenPostByUrl` 也绕不过，显式加了
+`isFuturePublish` 检查，因为那条路由走的是 admin view）✓、搜索无命中 ✓、时间线不出现 ✓、标签页不出现 ✓、
+相关文章不出现 ✓、`meta.totalArticles` 仍是 53 ✓。RSS 与 sitemap 走 `getAll(includeHidden=false)` 因而带同一个过滤器
+（**单测钉住，未活体观测** —— feed 文件按 ISR 的 3 分钟延迟才重写；这一条是"推理+单测"，不是实测）。
+
+#### F. 阅读时长与相关文章（前台观感，成本极低）
+
+- `readingMinutes`：公开列表项（`toListView`）与公开详情都带（解锁 POST 的响应也带）。
+  口径是 `utils/wordCount.ts`（CJK 一字算 1、拉丁一词算 1），除数 **350/分钟**（`VANBLOG_READING_SPEED_WPM`，
+  夹在 50–2000）—— 对代码多的中文文章偏保守。⚠️ **私有/加密文章不给 `readingMinutes`**：正文藏着，长度也就藏着
+  （前台有专门用例钉住"加密文章绝不出现 0 分钟标签"）。admin 视图的形状没变。
+- `relatedArticles`（只在公开详情）：`[{_id:string(数字id), id:number, title, pathname, cover, updatedAt, readingMinutes}]`，
+  最多 5 条，排序 = 共有标签 → 同分类 → 时间新近；**一次查询**（候选上限 50，排序在 JS 里做），
+  投影**不含 content 与 password**；排除自己 / 草稿（另一个集合）/ 软删 / hidden / 未到期 / 私有与私有分类的文章。
+  ⚠️ **公开的契约偏离**：本仓库文章的身份是 `id:number`，所以 `_id` 是**数字 id 的字符串形式**（两个字段都给，
+  两种消费写法都能用）。`cover` 没有时是 `""`。
+  实测（真库 53 篇公开文章，只读）：相关查询中位 **5.22 ms**、p90 7.99、max 23.45；explain examined 57 / returned ≤50 /
+  一次 FETCH+filter；5 条的载荷 1,276 B。列表侧 `readingMinutes` 的 map 开销 **37.6 µs**（整份 53 篇列表）。
+  两者都跑在 ISR 缓存的页面里，本来就不是每请求热点。
+- 这两件事都靠**新的存量 `wordCount` 字段**（create / updateById / rewriteBaseUrl 都维护，启动回填 wash 记进账本
+  为 `backfill:articleWordCount`，活体台账显示跑过且幂等）。列表投影因此多了 `wordCount`（**纯增量**的公开字段）。
+- ⚠️ **一个只有跨包联调才会暴露的坑（值得单独记）**：前台的归一化函数第一版会**显式写出值为 `undefined` 的键**
+  （空字符串封面 → `cover: undefined`）。`JSON.stringify` 静默丢掉它、React 渲染它也没事、所有单测都绿 ——
+  而 **Next 的 `getStaticProps` 序列化器拒绝它**，线上 SSR 直接 500：`Error serializing .relatedArticles[3].cover`。
+  只有当 server 的真实载荷（`cover:""`）撞上前台时才暴露。修法是按类修（**任何可选载荷的归一化都不得产出
+  undefined 值的键**）+ 用抓到的载荷形状做回归用例（断言逐键非 undefined、且 JSON 往返 `toStrictEqual`）。
+  **教训：可选载荷的归一化要按 Next 序列化器的约束来测，不能只测 `JSON.stringify`。**
+
+#### G. AVIF（先量后做，原图故意不做）
+
+先把环境查清而不是假设：本机 sharp **0.35.4**/libvips 8.18.6 **原生能编 AVIF**（`sharp(...).avif({quality:50}).toBuffer()` ✓），
+`avifenc` 本机没装，而 `Dockerfile:415` 的 runner 阶段确实 `apk add … libavif-apps`（读代码核过）。
+`utils/avif.ts` 里那句"sharp 0.32.6"的过时注释已按 0.35.x 重写。
+实测（6 张真图，`vanblog_dev/static/img`）：**300px 缩略图** avif q50 vs webp q70 = **−26.2…−41.3% 字节**
+（3,760–8,312 B vs 5,606–14,164 B），编码 601–1,296 ms（webp 31–628 ms）；
+⚠️ **极小图反而更大**（60×40 的图 +242%，AVIF 有约 294 B 的容器底噪 ⇒ 小图标应该继续用 webp）。
+**原图**：−36.6…−51.9% 字节，但 **每张 2.1 s 到 241 s CPU**（7360px 的那张要 241 秒）⇒ **数学上不成立，故意不做**
+（上传路径与回填都不能接受；唯一合理的形状是夜间任务，留给用户决定）。
+实现：`VANBLOG_THUMB_AVIF`（默认 **false**，垃圾值也回落 false）。开启后上传 / `backfillThumbnails` /
+`replaceBySign` 会在缩略图目录里多产一个 `.avif` 兄弟文件，静态条目多两个**可选**字段
+**`meta.thumbAvif`**（URL）与 `meta.thumbAvifBytes`；删图时一起删、替换时清掉旧的、回填只补 avif 不重生成 webp。
+编码失败只 WARN，绝不让上传失败。
+⚠️ **字段是嵌在 `meta` 里的**（不是顶层 `thumbAvif`）—— 前台第一版按顶层读，于是"缺字段 ⇒ HTML 逐字节不变"那条保证
+会让它**永远静默不生效而测试全绿**；现在前台按 `meta.thumbAvif` 优先、顶层作兼容，并补了**全链路用例**
+（喂带 `meta.thumbAvif` 的载荷 → helper → `listCardImage` → `renderToStaticMarkup` 必须含 `<picture>` 与
+`<source type="image/avif">`）—— 这条才是"字段上线了却没被读到就会红"的那道防线。
+
+#### H. 私有文章的元数据泄露（前台那路在联调时撞见的既有 bug）
+
+现象：把文章设为私有之后，**上一篇/下一篇导航里仍然带着它的标题与别名**（前台实测计数 3→2 而不是 →0）。
+根因：`getPreArticleByArticle` 过滤了 `hidden`/`deleted`，**没过滤 `private` 与私有分类**。
+只是元数据（标题+别名，不含正文），而且是**既有问题**；但加密文章的标题往往就是全部秘密
+（公开页面上挂一条"2026 年裁员名单"的邻居链接，不用密码也把事说了），与 §7.40 那三处加密文章泄露同一类。
+修法：**上一篇/下一篇、公开搜索、相关文章**三处都排除私有文章与私有分类的文章。
+⚠️ **选择"整个略去"而不是"按解锁状态显示"**，理由钉在代码里：解锁状态是**按 IP 的 attemptLimit 桶**，
+而 pre/next 与相关文章属于**被 ISR 静态化的共享页面** —— 每个访客不同的解锁状态在那里结构上不可能实现。
+⚠️ **这是有意的默认行为变更**（安全边界，不提供回退开关，沿用 §7.55-F 的先例）：公开搜索不再返回私有文章的标题
+（从此与 `getTotalNum`/RSS/sitemap 口径一致），pre/next 与相关文章同理。
+用户要的"每个公开面 × private 过滤 × publishAt 过滤"审计表（file:line 都在 `packages/server/src`）：
+
+| 面 | private | publishAt |
+| --- | --- | --- |
+| 公开列表 `getByOption` | 标题**按设计可见**（锁卡片：正文与密码剥掉、`private:true`）`article.provider.ts:966-1010` | ✅ `:804/:856`（agg 与 find 两条路径） |
+| 公开详情 GET | 文章本身可读但正文剥离（`:1283-1295`），密码走 POST | ✅ `:1176/:1208`（只作用于 public view） |
+| POST 解锁 | 密码强制（既有） | ✅ 硬 404 `:1229`（`allowOpenHiddenPostByUrl` **不能**绕过） |
+| 上一篇/下一篇 | ✅ **本轮修的** `:1377/:1429`（含分类 `$nin`） | ✅ `:1370/:1427` |
+| 公开搜索 | ✅ **本轮修的** `:1515`（分类 `$nin` `:1516-1519`） | ✅ `:1511` |
+| 时间线 | 标题按设计可见（与列表同一锁卡片口径） | ✅ `:760` |
+| 标签/分类页（`getAll`） | 标题按设计可见（listView 无正文） | ✅ `:689` |
+| RSS | ✅ 完全排除（既有）`rss.provider.ts:83` | ✅ 经 `getAll` `:689` |
+| sitemap | ✅ 完全排除（既有）`sitemap.provider.ts:137` | ✅ 经 `getAll` `:689` |
+| 相关文章（本轮新增） | ✅ `article.provider.ts:1932`（含 `$nin`） | ✅ `:1933` |
+| `meta.totalArticles` / `countTotalWords` | ✅ `getTotalNum :640-648`；⚠️ `countTotalWords` 把私有文章字数计入**站点总字数**（既有；只影响聚合值、不暴露单篇 ⇒ 本轮不动） | ✅ `:646/:650` |
+
+#### I. 前台字体自托管（去掉一个第三方运行时依赖）
+
+`styles/apple.css` 原来从 **`cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/…`** 取字体 ——
+三重问题：自托管博客引入第三方运行时依赖、**版本钉在 `@latest`**（CDN 侧一次发布就能静默改掉或弄坏排版）、
+以及在关键路径上多一次跨源连接。
+现在：`public/fonts/maple-mono-latin-400-normal.woff2`（74,088 B）+ `LICENSE-MapleMono.txt`（4,406 B），
+**仓库净增 78,494 B**。溯源做到了可核对：来自 `@fontsource/maple-mono@5.3.0`（= subframe7536/maple-font v7.8），
+**jsDelivr@5.3.0 与 npm@5.3.0 两份文件的 SHA-256 相同**（`0f900eca…556a1`），许可证文本与 npm 的 LICENSE、
+上游 OFL.txt 逐字节一致；**SIL OFL 1.1，可再分发**，要求"声明随文件附带"（已由 vendored LICENSE 满足），
+不要求网站可见署名，RFN 条款只限制改名派生（我们不改名）。
+`font-display: swap`；**`.woff` 回退被彻底删掉**（Next 14 支持的浏览器全都有 woff2：Chrome 64+/Edge 79+/
+Firefox 67+/Safari 12+）⇒ **现在没有非 woff2 的回退，这是有意的**，退化路径 = swap + `--ap-font`/`--ap-font-mono`
+里保留的完整系统字体栈（有测试钉住）。
+preload **只加一个文件**（latin-400-normal）：它是唯一被内联的 render-blocking `globals.css` 引用的字体，
+即唯一在首屏关键路径上的；CJK/zeoseven 那几包本来就是异步的（§7.8.1），preload 它们会从"可能根本解析不了的域名"
+那里抢首屏带宽。`crossOrigin="anonymous"` 必须带（字体即使在同源也是 CORS 模式取，不匹配会**下载两次**）。
+默认皮肤不发 preload（它不引用 Maple Mono）。
+效果：apple 皮肤下**代码侧 0 个第三方字体请求/连接**（原来是 1 次 preconnect + 1 次跨源 woff2，
+而且那次 woff2 要等 CSS 解析完才被发现），现在同源、且由 SSR head 里的 preload 与 CSS 解析并行启动。
+验证是在**全新的生产构建**上做的（硬链接副本 `/tmp/vb-build` + `next start -p 3005`，**没碰 :3001**）：
+产出的 `c6adcde7813067db.css` 里是 `src:url(/fonts/maple-mono-latin-400-normal.woff2) format("woff2")` + `font-display:swap`、
+**0 处 jsdelivr**；`/` 的 head 里有那条 preload，preconnect 只剩 `static.zeoseven.com`；`GET /fonts/…woff2` → 200 且 SHA-256 相符。
+删掉字体文件的退化也实测过：页面仍 200、字体 404（浏览器侧的 swap+栈行为**推理未实测** —— 本机没有浏览器）。
+⚠️ **一个我判断错、被前台那路用证据纠正的地方**：我看到源码干净但页面里仍有 jsdelivr，就断定是"`.next` 开发缓存陈旧"。
+错了 —— 那些字符串来自**数据库里的用户自定义 CSS**（`layout.css`，**base64 编码**，所以要解码才看得见）：
+1 个重复的 `@font-face`（2 个 jsdelivr `maple-mono@latest` URL）+ 1 个 render-blocking 的 zeoseven `@import`（CRLF 行尾，
+说明是粘贴进去的）。**教训：页面里的 `<style>` 可能来自数据库且是 base64 的，"源码干净"不等于"页面干净"，
+下结论前先解码。** 这属于用户数据，只能在后台「定制化」里清（代码侧的"保存时告警"进了待办）。
+⚠️ 后台包里还有**同一处** jsdelivr `@font-face`（`apple-preview.css` + `useApplePreviewFont.ts` 的 preconnect）：
+决定是**只把 `@latest` 钉成 `@5.3.0`、继续走 CDN**，不复制第二份字体文件 ——
+后台是要登录的、不在读者的关键路径上，为预览再塞 74 KB 进第二个包没有可测收益，而离线时退化成系统字体也只影响预览。
+
+#### J. caddy 直接发 ISR 生成的 HTML：调研结论 + 只做安全子集（默认关）
+
+这是"剩下的最大吞吐杠杆"，所以先调研再动手，而且**结论是否定的（对动态路由）**。
+产物位置：`/app/website/packages/website/.next/server/pages/<path>.html|.json|.meta`（standalone，next-server 的 cwd 就在那）；
+动态路由在构建期（`getStaticPaths`）或首次请求/revalidate 时落盘：`post/<拼音别名>.html`、`page/<N>.html`、
+`category/博客.html`（**UTF-8 文件名**）、`tag/<tag>.html`；活体容器里有 161 个 post 条目 = 53×3+2。
+200 的 `.meta` 内容是 `{"headers":{}}`。
+
+**五个阻塞点，全部在活体真数据栈上证过（不是推理）**：
+- **(a) 删掉的文章会永远留在磁盘上**：软删 + `res.revalidate` 之后，Next 从**内存**里的 notFound 记录回 404，
+  而那个 **78,830 B 的 HTML 文件不会被删** —— next 14.2.35 的 `file-system-cache.js` 里**没有任何 unlink** ⇒
+  caddy 会**无限期地用 200 提供已删除的内容**。这是 `/post/*` 的硬阻塞。
+- **(b) 308 与 404 不留任何磁盘产物**：`/post/<数字id>` → 308 到别名（`X-Nextjs-Cache: HIT`，**没有文件**）；
+  不存在的文章 → 404，也没有文件。`file_server` 无法从磁盘还原状态码。
+- **(c) notFound 只在内存里**（证过：MISS→HIT 且磁盘零写入，`find -newermt` 为空）。
+- **(d) delay 模式下新鲜度 100% 靠流量驱动**：cron storm 与保存触发的 storm 在 delay 模式下都被
+  `activeAllFn` 提前 return 挡掉 ⇒ 直发会让页面**永久冻结**。onDemand 模式下 storm 会重写文件
+  （证过：设为私有 → revalidate → caddy 立刻发出改动后的字节；caddy 侧没有缓存层，**失效就是文件被重写**；
+  ⚠️ `fs.writeFile` 非原子，存在极短的"读到半截"窗口）。
+- **(e) 加密文章的明文会留在磁盘上，直到 storm 重写它**（证过：3,081 字明文 → revalidate 后变成剥离过的 43,112 B 文件）。
+  泄露窗口 = 改动到 storm 完成：onDemand 下是秒级、每小时 cron 兜底、**delay 模式下无上界**。
+
+**因此只实现了最小安全子集，而且是双重门控、默认关**：只有 **6 个固定页**（`/`、`/about`、`/link`、`/timeline`、
+`/category`、`/tag`），只 GET/HEAD，带 preview cookie 一律绕过，文件缺失就落回既有的 catch-all 反代。
+路由组 `vanblog-serve-html` 插在**两份模板**（`caddyTemplate.json` + `caddyFallbackTemplate.json`）的 index 2、
+srv0 与 srv1 都有。运行期由一个**哨兵文件** `.vanblog-caddy-serve-html` 门控：`CaddyProvider` 只在
+`VANBLOG_CADDY_SERVE_HTML=true`（严格字符串）**且** ISR 模式 === `onDemand` 时才写它，
+每 60 秒对账一次（切到 delay 会**自动摘掉**，自愈、不用重启），`onModuleDestroy` 清定时器；
+`VANBLOG_CADDY_HTML_PAGES_DIR` 可覆盖（测试与前后端分离部署用；目录不存在就静默 no-op ⇒ 开发机不受影响）。
+回滚 = 关环境变量（重启，或靠对账 ≤60 秒）。响应头是 `Cache-Control: no-cache` + ETag/304
+（比 Next 的 `s-maxage=86400,stale-while-revalidate` 更严，内容新鲜度 = 磁盘 = 上一次 storm）。
+**"墙"是故意砌的**：模板形状的用例里，任何人往那 6 条之外加路径都会抛一个**自带解释**的错误
+（点名三个阻塞：不删文件的陈旧产物、重定向/404 无产物、加密明文窗口），而不是一个裸 diff。
+⚠️ **必须一起说的权衡**：开了这个开关，那 6 个固定页的请求由 caddy 直接回、**根本不进 Nest 的限流器** ⇒
+不消耗 `VANBLOG_RATE_LIMIT_PER_MIN` 预算、也不被限流。而**镜像里的标准 caddy 2.11.4 没有任何限流模块**
+（`caddy list-modules | grep -ci 'rate.?limit'` → **0**；要限流得用 xcaddy 自编 `mholt/caddy-ratelimit`）。
+所以"开这个开关 = 这 6 条路径没有限流"，**这正是默认关的正当理由**，文档必须这么写。
+实测（仓库自己的压测台、真镜像栈、真的 53 篇数据、同机 ⇒ 绝对值保守、A/B 有效）：
+首页扫描 c=200×500 —— 反代 **279.8–316.1 rps** / p50 131–143 / p95 1485–1678 / p99 1545–1763，
+直发 **1171.0–1246.9 rps** / p50 104–128 / p95 240–366 / p99 296–380 ⇒ **3.7–4.5× rps、p95 −78…−84%**，
+500/500 全 200、0 socket 错误；c=50：313.3 → 932.8 rps（2.98×）。单请求延迟：`/` p50 **8 → 1 ms**（identity）、
+7 → 3 ms（gzip）；`/about` 6 → 1 ms；`/api/public/meta` 不变（仍走 Node）。
+命令：`node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile home --c 200 --n 500`
+（延迟：`--profile latency --paths /,/about,/api/public/meta --n 20`）。
+另验：`caddy validate` 对两份改过的模板生成的配置都通过（真 caddy 2.11.4）；15 点正确性矩阵在活体容器上全绿
+（直发的头与 `X-Vanblog-Static-Html`、`/post` 仍走反代、308 保留、404 走反代、两种 preview cookie 都绕过、
+POST 绕过、gzip、`If-None-Match`→304、查询串、哨兵 OFF/ON/OFF 逐请求生效且零 reload、body 与磁盘文件逐字节相同、
+文件缺失时回落）。**没做**：`/post/*`、`/page/*`、`/category/[x]`、`/tag/[x]` 的直发 ——
+需要先有服务端"在 notFound/重定向的 revalidate 里删掉文件"的语义（server 的territory；最小的一步是
+notFound 时 unlink，然后再评估）。生产代码里**没有**做运行期的 caddy admin API 路由改写
+（哨兵设计让模板保持声明式、provider 只写一个文件；那些 PATCH 实验只用于验证且全部回滚了）。
+⚠️ 顺带一个 caddy 的脾气：用 node-fetch/undici 打它的 admin API（:2019）会得到
+`403 client is not allowed to access from origin ''`，**除非带 Origin 头**；**axios 不带 Origin 也能过** ⇒
+`CaddyProvider` 用的是 axios，不受影响，但下一个写 caddy 调用的人会踩。
+
+#### K. 恢复演练 `vanblog.sh drill`（"备份能成功"这件事从此有证据）
+
+动机是这一轮开头那两个 P0：**"备份看着成功、恢复才发现坏了"**（BSON 大版本、themes 不进归档），
+而 `vanblog.sh verify` 只验完整性（`zstd -t` + 成员清单 + sha256），**验不出这些**。
+新增 `scripts/vanblog-drill.sh`（2396 行，子命令 `drill` / `verify-deep` / `backup-verify` / `backup-status` / `help`），
+用 `VANBLOG_SKIP_MAIN=1` **source** `vanblog.sh` 来复用 `verify_one_archive`、归档/解压器助手、`full_backup_dir`、
+`backup`、颜色等 —— **一份实现、不会漂**。
+`drill` 起一套一次性 mongo + vanblog（命名卷 ⇒ root 拥有的 mongo 数据永远不会落在删不掉的宿主目录里；
+容器 IP + `--add-host` 而不是容器名 DNS（本机没有 aardvark-dns）；从不用 `--link`；`mktemp -d` 做临时空间；
+端口选择器跳过后听端口与临时端口段；任何名字/端口冲突**硬拒绝**；mongo 端口**永不为 27017**；trap 保证每条路径都清理），
+等 `/api/public/health`，失败时**把容器日志的错误行与尾部都打出来**，然后**真的**上传到
+`POST /api/admin/init/restore`（走用户会走的那条生产路径，不是内部函数调用），再断言**语义**：
+`statusCode`、`initialized`（false 是带解释的 WARN，不是失败）、`adminUserFromArchive`、`counts.articles>0`、
+**信封里的 counts 与归档 manifest 对账**、manifest 自身求和一致、`data.databases` 文档数、
+meta 是真实站点（不是 233）+ `meta.totalArticles`、**公开列表 total 与"从归档自己的 `articles.ndjson` 逐文档数出来的公开篇数"相等**、
+一个真实静态文件 200 且非空、**主题分支**、容器日志里扫 BSON 指纹、以及**第二次恢复必须 403**。
+活体（本机 podman 4.9.3 rootless）：
+- 用户那份**修复后**的归档 `vanblog-full-20260917-085458.tar.zst`（65.9 MB、234 成员）：
+  `RESULT: PASS pass=31 warn=0 fail=0 note=3`；health 200 约 6 秒、**HTTP 201 / 服务端 3.2 s / 端到端 4 s**、
+  counts 59/93/1/8772/800/8/9881、列表 **total 53 == 53**（从归档算出来的）、静态 200/823,370 B、
+  **`GET /static/themes/warm-paper-28381fac.css → 200, 5,521 B`（与 manifest 的 `themes.bytes=5521` 相符）**、
+  日志干净、第二次恢复 403 ⇒ **主题回归从此有真机覆盖**。
+- 修复前的 09-13 归档：`PASS pass=30 note=3`，其中"这份归档早于主题备份、真机恢复会丢主题"是**信息性 note**，
+  不是静默通过。
+- **负向 drill**（自己临时目录里的半截副本，34,558,170/69,116,341 B，`--skip-preflight` 让它真的走到端点）：
+  容器真的起了、33.0 MB 真的上传了 → **HTTP 400「读不出这个备份的清单…」**、退出 1、日志倾倒、**完整清理**
+  （0 个 `vb-drill*` 容器/卷/网络、0 个临时目录），**紧接着的好归档 drill 通过 ⇒ 单飞锁没被卡死**
+  （这正是 B 段那个 hang 的外部证明）。
+`verify-deep`：**不需要 root**，先跑 `verify_one_archive`（输出行逐字保留），再加语义层：
+manifest 必须能**从归档内部**读出（只有 sidecar = FAIL）、`kind`、`version > 1` 大声 FAIL、
+每个声明的集合都有 `.ndjson`（缺 = WARN，恢复会跳过）、不安全成员（`/…`、`C:\…`、任何 `..` 段）= FAIL、
+计数非零且自洽（Σcount vs `totals.documents`、Σstatic.files vs `totals.files`）、`static/themes/` 在不在
+（不在就 WARN 并说清后果）、需要哪个解压器以及本机有没有、上传文件名白名单（改过名的归档 = WARN：
+上传路径会 400，但按名恢复仍然可用）。
+`verify`（旧的那个）**故意保持不变**：仍然 root 门槛、仍然只查结构、仍然宽松 —— 因为 `verify-deep` 会对
+今天的 `verify` 放过的东西（归档内没有 manifest、`version>1`、零文档）判非零退出，**那会静默改掉现有用户 cron 的退出码**。
+`backup-verify` = 备份 → 用**目录差分**（不是解析人类可读输出）找到新归档 → 深度校验 → 陈旧检查 → 台账 →
+可选 `--drill`；任何一步失败都非零退出，并明说"旧归档没有被清理"。
+`backup-status` **不需要 token** 就能回答"上次备份什么时候成功的、校验过没有"：文件系统 +
+追加式 `<backup_dir>/vanblog-verify-log.jsonl` + server 的 `backup-status.json`；
+有 `VANBLOG_ADMIN_TOKEN` 时才把 admin 端点当**第三方意见**（头是 `token: <jwt>`，**永不打印**），
+**两边不一致本身就是 WARN**（名字、字节数、`consecutiveFailures`、`stale`）。
+⚠️ 台账文件名**故意不匹配 `vanblog-full-*`** —— 因为 prune/status/verify 都按那个前缀 glob，
+一个同前缀的兄弟文件会把 keep 计数撑大、**导致一份真归档被删掉**（有两条测试钉住它对枚举与 prune 计数都不可见）。
+⚠️ **root 门槛的位置**：`vanblog.sh:381` 的 `[[ $EUID -ne 0 ]] && exit 1` 在**子命令派发之前**，
+所以只读子命令也进不去（`verify` 一个用户自己的归档都要 root）。修法是在 `pre_check` **之前**插一行
+`case "${1:-}" in drill|verify-deep|backup-verify|backup-status) … exec vanblog-drill.sh …` ——
+放在 dispatcher 里是没用的（dispatcher 在 `pre_check` 之后）。**两份 `vanblog.sh` 都要改**（双胞胎必须逐字节一致）。
+⚠️ `scripts/tests/docs-consistency.test.sh` 是用 `grep -oE '^  "[a-z_-]+"\)'` 从 **dispatcher** 里抽支持的子命令的，
+所以这种 pre-`pre_check` 的 `case` 形式**不会被登记** ⇒ 一旦文档里写了 `./vanblog.sh drill`，那条守卫会红。
+已按"改测试的抽取逻辑"来解决（而不是往 3800 行的脚本里塞永远走不到的 dispatcher 分支去讨好一个 grep），
+并加了 4 条"这行转交被删掉/改名就红"的断言。
+脚本套件：**23 文件 / 1495 条断言，全绿**（基线 22/1110）；drill 的测试开活体段是 397 条。
+⚠️ 它自己抓到并修了 4 个同一族的 bug（都是"状态在子 shell 里丢了"）：两个端口都塌成 18500、
+`MANIFEST_SOURCE` 报 `none`（命令替换）、分类在文章之后读导致私有分类的文章被算成公开、
+以及**活体段假绿**（测试自己 unset 了 `VANBLOG_DRILL_HOME` ⇒ podman 看不到镜像 ⇒ 测试在环境预检里就死了却报通过）——
+现在加了"反空转"断言：负向 drill 必须**真的起了容器、真的走到了上传**。
+
+#### L. 本轮新增的环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `VANBLOG_ARTICLE_REVISIONS_KEEP` | `10` | 每篇文章保留多少个历史版本；`0` = 关 = 旧行为。⚠️ **默认是开的**（存量约 1.76 MB / 59 篇） |
+| `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48` | 距上次"已校验的成功备份"超过这么多小时就在启动与每次失败后 WARN；`0` = 关。⚠️ **新的默认日志行** |
+| `VANBLOG_THUMB_AVIF` | `false` | 缩略图额外产 `.avif` 兄弟文件（`meta.thumbAvif`）。⚠️ 小图反而更大（约 294 B 容器底噪），原图**故意不做**（最高 241 s/张 CPU） |
+| `VANBLOG_READING_SPEED_WPM` | `350` | 阅读时长的除数（夹在 50–2000） |
+| `VANBLOG_CADDY_SERVE_HTML` | `false` | caddy 直接发 6 个固定页的 ISR HTML。⚠️ 开了以后**这 6 条路径完全不受限流**（镜像里的 caddy 没有限流模块），且要求 ISR 是 onDemand 模式 |
+| `VANBLOG_CADDY_HTML_PAGES_DIR` | 自动 | 上面那个哨兵文件所在目录的覆盖（测试/前后端分离用） |
+| `VANBLOG_EVENT_LOG_MAX_MB` / `_KEEP` | `20` / `3` | 事件日志大小轮转（§7.56） |
+| `VANBLOG_DRILL_*` | — | drill 的引擎/镜像/前缀/端口/超时/保留/干跑等覆盖，见 `scripts/vanblog-drill.sh help` |
+| `VANBLOG_VERIFY_ALLOW_EMPTY` | 关 | 允许 `verify-deep` 对"零文档"的归档放行（新建空站的归档） |
+
+#### M. 测试、量具与**诚实的未验证清单**
+
+server jest **1275 用例 / 1274 绿 + 1 个既有的 watermark 离线字体用例**（132 套件；基线 1138 ⇒ **+137 条，0 新失败**）；
+website vitest **79 文件 / 788**（基线 77/748 ⇒ +40）；admin `node --test` **123 套件 / 465**（基线 103/397 ⇒ +68）；
+脚本 **23 文件 / 1495 断言**（基线 22/1110）；server 与 website 的 `tsc`（全新 buildinfo）都 **0 错误**。
+**7 组反证对照**（改回去 → 看着变红 → 改回来 → 绿，且 diff 逐字节核对）：P1 去掉原样重抛 / 翻转去重结论；
+P2 把校验调用打桩；P3-P4 去掉 purge 的 `deleted:true` 过滤 / 强制 `touchesContent` 为真；
+P5 去掉列表过滤与解锁检查；P6 去掉 `readingMinutes` 的 map 与相关文章的 publishAt 过滤；
+P7 把 env 默认翻成 true；P8 去掉三处 private 过滤。
+量具（本机、不入库）：`vanblog_dev/tmp/p2/{verify-bench.ts,measure-p4p6.cjs,revision-size.cjs,avif-bench.cjs}`。
+**未验证 / 未做（照实记）**：
+- RSS 与 sitemap 对 `publishAt` 的排除是**单测钉住 + 推理**，没有活体观测（feed 文件按 ISR 的 3 分钟延迟才重写）。
+- AVIF **没有在构建出来的镜像里跑过**（`Dockerfile:415` 的 `libavif-apps` 是读代码核的）；
+  而且开关默认关 ⇒ 本轮没有任何镜像级 AVIF 证据。
+- `meta.thumbAvif` 的**真实载荷**没验过（需要带 `VANBLOG_THUMB_AVIF=true` 重启 dev server，而重启是禁项）；
+  前台的读取路径是用"精确形状的载荷"钉住的。
+- 本轮**没有新增** env 开关的真库 e2e 套件（预算），改用 dev 栈的活体 HTTP 冒烟（全只读 + 一次已还原的往返）。
+- 浏览器侧的观感一律**推理未实测**（本机没有浏览器）：字体的 FOUT/swap、AVIF 协商、preload 复用。
+- `drill` 的 **docker** 引擎路径没有真跑过（本机没有 daemon、没有 docker 组、sudo 要密码）—— 引擎探测与 docker 专属
+  环境处理是用桩测的；`--keep` 也只做了单测（不想在本机留容器）。
+- 相关文章的候选查询是 FETCH+filter（examined ≈ 集合大小）：59–5000 篇规模没问题、且在 ISR 缓存里；
+  语料再涨 10 倍就该上复合索引。
+- `countTotalWords` 仍把私有文章的字数算进**站点总字数**（既有；只影响聚合值，不暴露单篇）⇒ 本轮故意不动。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 1138 用例：**1137 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；负载高时可能 2 个失败，单独跑全绿）；套件 118 个 |
+| server `jest` | 1275 用例：**1274 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；并发压满机器时另有 2 条负载敏感用例会假红，单独跑 43/43 全绿）；套件 132 个 |
 | website `vitest run` | 77 文件 / 748 用例全绿 |
-| admin `node --test tests/unit` | 103 套件 / 397 用例全绿（⚠️ Node 24 要 `--test-reporter=tap` 才有汇总行） |
+| admin `node --test tests/unit` | **123 套件 / 465 用例全绿**（⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 

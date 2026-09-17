@@ -52,7 +52,8 @@ export class UserProvider {
     }
     return await this.userModel.findOne({ id: 0 }).exec();
   }
-  async washUserWithSalt() {
+  /** @returns 洗了多少个未加盐的老账号（供迁移台账记 detail） */
+  async washUserWithSalt(): Promise<{ washed: number }> {
     // 如果没加盐的老版本，给改成带加盐的。
     // 注意这里**只能**继续用旧的 sha256 方案：输入是「上一代服务端哈希」，
     // 拿不到浏览器端派生值，没法直接换成 scrypt。等用户下次登录成功时，
@@ -74,7 +75,9 @@ export class UserProvider {
         const newPassword = washPassword(user.name, user.password, salt);
         await this.userModel.updateOne({ id: user.id }, { password: newPassword, salt });
       }
+      return { washed: users.length };
     }
+    return { washed: 0 };
   }
 
   async validateUser(name: string, password: string) {
