@@ -3,7 +3,7 @@
 ::: warning 镜像选择
 
 下面按 `映像/从 URL 添加` 演示的是**上游官方镜像** `mereith/van-blog`。本 fork
-（`CKboss/vanblog`）的镜像在 `ghcr.io/ckboss/vanblog`（标签 `dev-dsh` / `v2026.9.1` 等，
+（`CKboss/vanblog`）的镜像在 `ghcr.io/ckboss/vanblog`（标签 `dev-dsh` / `v2026.9.2` 等，
 不含在上游镜像里的功能见 [快速上手](../guide/get-started.md)），从 URL 添加时填
 `ghcr.io/ckboss/vanblog` 即可；拉不动多半是因为 ghcr 包还是 private 或群晖直连 ghcr 太慢，
 可以先在能访问的机器上 `docker pull` + `docker save`，再用 `映像/新增/从文件添加` 导入。

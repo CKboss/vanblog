@@ -102,7 +102,7 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 想用**发布版**而不是开发分支（更稳，且不受 raw 的分支缓存影响）：
 
 ```bash
-curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.1/vanblog.sh -o vanblog.sh \
+curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh -o vanblog.sh \
   && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
@@ -379,7 +379,7 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 
 请提到**本仓库**的 [issue](https://github.com/CKboss/vanblog/issues/new)。
 报问题时请带上：`./vanblog.sh status` 的输出、容器日志里的相关片段（`./vanblog.sh log`）、
-以及后台「关于」里显示的版本号（形如 `v2026.9.1@0ec01a5`，能直接对上 commit）。
+以及后台「关于」里显示的版本号（形如 `v2026.9.2@<短 sha>`：tag + 构建时的 commit，能直接对上）。
 
 如果是上游版本的问题（比如你装的是 `VANBLOG_USE_UPSTREAM_IMAGE=true`），请到
 [上游仓库](https://github.com/Mereithhh/van-blog/issues/new/choose)反馈。

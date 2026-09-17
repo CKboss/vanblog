@@ -17,7 +17,7 @@
 
    ```bash
    docker pull ghcr.io/ckboss/vanblog:dev-dsh
-   # 标签：v2026.9.1 等发布号 / latest / dev-dsh / dev-dsh-<短sha>（钉版本、回滚用）；只发布了 linux/amd64
+   # 标签：v2026.9.2 等发布号 / latest / dev-dsh / dev-dsh-<短sha>（钉版本、回滚用）；只发布了 linux/amd64
    ```
 
    镜像**不是每次 push 都重建**（一次构建 20–40 分钟 runner 时间，而多数提交只是文档改动）：

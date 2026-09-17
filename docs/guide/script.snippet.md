@@ -7,7 +7,7 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 想用**发布版**而不是开发分支（更稳，且不受 raw 的分支缓存影响）：
 
 ```bash
-curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.1/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
 ::: warning raw 地址有几分钟的 CDN 缓存
@@ -52,7 +52,7 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.1/vanblog.sh
 | `dev-dsh`（脚本默认） | 最后一次从 `dev/dsh` 分支**手动发版**时的代码 |
 | `dev-dsh-<短sha>` | 每次发版额外打的按提交号标签，**回滚/钉版本用这个** |
 | `latest` | `dev/dsh` 的手动构建，以及任何 `v*` 发版标签 |
-| `v2026.9.1` 等发布号 | 对应 tag 的发版构建 |
+| `v2026.9.2` 等发布号 | 对应 tag 的发版构建 |
 
 **ghcr 的包默认是私有的**，如果 `docker pull` 报
 `denied`/`not found`，去 <https://github.com/CKboss/vanblog/pkgs/container/vanblog> →

@@ -3,7 +3,7 @@
 ::: tip 镜像选择
 
 下面的 `image:` 用的是本分支镜像 `ghcr.io/ckboss/vanblog:dev-dsh`（也可钉
-`v2026.9.1` 这类发布号或 `dev-dsh-<短sha>`）。要装上游官方版就换成 `mereith/van-blog:latest`，
+`v2026.9.2` 这类发布号或 `dev-dsh-<短sha>`）。要装上游官方版就换成 `mereith/van-blog:latest`，
 但本分支的功能（整站备份/演练、健康检查语义、零接触初始化等）不在上游镜像里。
 ghcr 的包如果是 private，记得给集群配 imagePullSecret。
 
