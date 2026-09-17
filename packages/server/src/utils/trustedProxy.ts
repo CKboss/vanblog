@@ -201,3 +201,52 @@ export function pickTrustedClientIp(
   const forwarded = rightMostForwardedFor(req?.headers?.['x-forwarded-for']);
   return forwarded || socketIp || 'unknown';
 }
+
+/**
+ * 防爆破/防刷计数（登录、评论、加密文章解锁）该用哪个 IP。
+ *
+ * ⚠️ **更正一条早先写错的理由**（AGENTS §7.55 F）：当时把这三类计数固定在 `pickSocketIp()` 上，
+ * 理由是"采信转发头就等于换一个头就能无限试密码、还能用受害者 IP 把对方锁在门外"。
+ * 那个理由对**旧的** `pickClientIp()`（优先读 `cf-connecting-ip`/`x-real-ip`，也就是最左/客户端可控的那一项）
+ * 是成立的，但对 `pickTrustedClientIp()` 在默认 `auto` 模式下**不成立**：
+ * auto 只在"对端是回环/私网"时采信转发头，而且取的是 `x-forwarded-for` 的**最右一项**
+ * —— 那是可信代理（caddy）亲手追加的、它看到的对端。客户端自己塞的
+ * `X-Forwarded-For: <受害者>` 到 caddy 那里会变成 `<受害者>, <攻击者真实 IP>`，
+ * 最右一项仍然是攻击者自己 ⇒ 伪造头拿不到新预算，也栽赃不了别人（有 spec 证明）。
+ *
+ * 而**继续用套接字地址是有真实代价的**：一体式部署里 caddy 就在同一个容器、
+ * 从 `127.0.0.1` 拨到 `127.0.0.1:3000` ⇒ 套接字地址对**所有访客都是同一个** ⇒
+ * 全站共用一个桶。实测：5 个不同客户端各失败登录 1 次（一共 5 个请求），
+ * 第 6 个客户端带**正确密码**也被拒（"错误次数过多，请 300 秒后再试"）；
+ * 每 5 分钟花 5 个请求就能永久续期 ⇒ **后台永久拒绝服务**。
+ * 同形状：20 个请求就能把某篇加密文章对所有读者锁 10 分钟；
+ * 10 个请求/10 分钟（或 50 个/天）就能让全站不能评论。
+ * 另外评论的 `ip` 字段也是从套接字地址存的 ⇒ 生产库里**所有评论的 IP 都是 127.0.0.1**，
+ * 后台那一列与任何按 IP 的审核都失效。
+ *
+ * 所以默认改成 `trusted`，并留 `socket` 作为逃生口：如果运维的反代是**覆盖**而不是**追加**
+ * `X-Forwarded-For`（那样最右一项就变成客户端可控的了），把它设回 `socket` 更安全。
+ */
+export const BRUTE_FORCE_IP_SOURCE_ENV = 'VANBLOG_BRUTE_FORCE_IP_SOURCE';
+
+export type BruteForceIpSource = 'trusted' | 'socket';
+
+export function resolveBruteForceIpSource(
+  raw: string | undefined = process.env[BRUTE_FORCE_IP_SOURCE_ENV],
+): BruteForceIpSource {
+  // ⚠️ 只认 'socket' 这个字面值；写错的值一律按默认 'trusted'，不要静默变成最松的那种
+  return String(raw || '').trim().toLowerCase() === 'socket' ? 'socket' : 'trusted';
+}
+
+/**
+ * 防爆破计数的 key 用的 IP。永远返回非空字符串（拿不到就是 `'unknown'`）。
+ */
+export function bruteForceClientIp(
+  req: any,
+  source: BruteForceIpSource = resolveBruteForceIpSource(),
+): string {
+  if (source === 'socket') {
+    return pickSocketIp(req) || 'unknown';
+  }
+  return pickTrustedClientIp(req) || pickSocketIp(req) || 'unknown';
+}

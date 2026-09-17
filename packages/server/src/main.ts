@@ -1,4 +1,8 @@
 import { NestFactory } from '@nestjs/core';
+import {
+  backupFirstSegmentUnderStatic,
+  isGuardedStaticPath,
+} from 'src/utils/staticGuard';
 import { envInt } from './utils/rateLimit';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -78,21 +82,21 @@ async function bootstrap() {
   // 整站备份里含数据库内容（密码哈希、jwt 密钥等），不能像图片那样匿名可下载。
   // 备份默认放在 staticPath 之外（config.backupPath），这里是兜底：万一被配到静态目录里，
   // 或者旧版本留在 <static>/export/backups/ 下的归档，都不给匿名访问；下载走鉴权接口。
-  const staticRoot = path.resolve(globalConfig.staticPath);
-  const backupRoot = path.resolve(globalConfig.backupPath);
-  const backupUnderStatic =
-    backupRoot.startsWith(staticRoot + path.sep)
-      ? '/static/' + path.relative(staticRoot, backupRoot).split(path.sep).join('/') + '/'
-      : null;
+  // ⚠️ 判定必须走 `utils/staticGuard`：`req.path` 是**未解码、未归一化**的原始路径，
+  // 而 serve-static 在打开文件前会解码并归一化 —— 直接用 startsWith 比较字面前缀，
+  // 会被 `%65xport`、`export%2f`、`./export`、`//export`、`%2e/export` 等写法绕过，
+  // 实测能匿名拿到 `<static>/export/` 里的旧导出归档，以及 `<static>/tmp/` 里
+  // 整站恢复的暂存 NDJSON（含密码哈希与 jwt 密钥）。详见 staticGuard.ts 的注释。
+  const backupSegment = backupFirstSegmentUnderStatic(
+    globalConfig.staticPath,
+    globalConfig.backupPath,
+  );
   app.use((req, res, next) => {
     if (
-      // 导出归档（图片/附件/JSON）以前都在这里，匿名可读且文件名只有日期，
-      // 现在已经搬到 backupPath 下并改成鉴权下载；这条是旧文件的兜底
-      req.path.startsWith('/static/export/') ||
-      // 上传/导出的临时目录：里面可能是整站备份，匿名一律不给
-      req.path.startsWith('/static/tmp/') ||
-      req.path.startsWith('/static/upload-tmp/') ||
-      (backupUnderStatic && req.path.startsWith(backupUnderStatic))
+      // 导出归档（图片/附件/JSON）以前都在 <static>/export/，匿名可读且文件名只有日期，
+      // 现在搬到 backupPath 下并改成鉴权下载；这条是旧文件的兜底。
+      // tmp / upload-tmp 是上传与导出/恢复的临时目录，里面可能就是整站备份。
+      isGuardedStaticPath(req.path, backupSegment)
     ) {
       res.statusCode = 403;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');

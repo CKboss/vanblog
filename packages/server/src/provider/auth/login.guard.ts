@@ -8,6 +8,7 @@ import {
 import dayjs from 'dayjs';
 import { CacheProvider } from '../cache/cache.provider';
 import { pickSocketIp } from '../log/utils';
+import { bruteForceClientIp } from '../../utils/trustedProxy';
 import { scaleLimit } from 'src/utils/clusterRole';
 import { SettingProvider } from '../setting/setting.provider';
 
@@ -64,7 +65,13 @@ export class LoginGuard implements CanActivate {
    * 部署在反代后面时套接字地址是反代本身，此时所有请求共用一个桶（更严格，不会更松）。
    */
   private keyOf(req: any): string {
-    const ip = pickSocketIp(req);
+    // ⚠️ 以前这里固定用 pickSocketIp()，理由写在下面那段注释里，而那个理由是错的：
+    // 一体式部署里 caddy 从 127.0.0.1 拨过来 ⇒ 所有访客共用一个桶 ⇒
+    // 5 个请求就能把**带正确密码的人**锁在门外，且每 5 分钟可续期（后台永久 DoS）。
+    // 现在走 bruteForceClientIp()：默认 trusted（auto 模式下取 XFF 最右一跳，
+    // 客户端伪造的头会被 caddy 追加到自己 IP 的左边，所以既绕不过也栽赃不了），
+    // 反代是"覆盖 XFF"而不是"追加"的部署可以用 VANBLOG_BRUTE_FORCE_IP_SOURCE=socket 退回去。
+    const ip = bruteForceClientIp(req);
     return ip ? `login-${ip}` : 'login-unknown';
   }
 
@@ -104,7 +111,7 @@ export class LoginGuard implements CanActivate {
 
   /** 只读判断：当前是否还允许尝试登录。 */
   async inspect(req: any): Promise<{ allowed: boolean; ip: string; count: number; retryAfterSeconds: number }> {
-    const ip = pickSocketIp(req);
+    const ip = bruteForceClientIp(req);
     const key = this.keyOf(req);
     const { enabled, max, windowSeconds } = await this.resolveLimits();
     if (!enabled || !key) {

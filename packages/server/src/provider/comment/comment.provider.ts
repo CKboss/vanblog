@@ -17,6 +17,7 @@ import { config } from 'src/config';
 import { consumeAttempt } from 'src/utils/attemptLimit';
 import { scaleLimit } from 'src/utils/clusterRole';
 import { pickSocketIp } from '../log/utils';
+import { bruteForceClientIp } from '../../utils/trustedProxy';
 import { sleep } from 'src/utils/sleep';
 import { asQueryString } from 'src/utils/sanitizeRequest';
 
@@ -132,7 +133,7 @@ export class CommentProvider {
       return { comment: this.toPublic(spam), pending: true, reason: undefined };
     }
 
-    const ip = pickSocketIp(req);
+    const ip = bruteForceClientIp(req);
     const limit = consumeAttempt(`comment-${ip}`, {
       // 计数器是每进程一份：多进程时按 worker 数摊薄，全局阈值才等于设置值
       max: scaleLimit(Math.max(1, setting.rateLimitPer10Min)),
@@ -244,7 +245,9 @@ export class CommentProvider {
       status: data.status,
       reason: data.reason || '',
       isAuthor: data.isAuthor,
-      ip: pickSocketIp(data.req),
+      // ⚠️ 存库的 IP 也要用同一个来源：以前存套接字地址，反代后面**所有评论的 IP 都是 127.0.0.1**，
+      // 后台那一列与任何按 IP 的审核都失效
+      ip: bruteForceClientIp(data.req),
       ua: String(data.req?.headers?.['user-agent'] || '').slice(0, 300),
       createdAt: new Date(),
       updatedAt: new Date(),

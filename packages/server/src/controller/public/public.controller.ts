@@ -18,6 +18,8 @@ import { asQueryString } from 'src/utils/sanitizeRequest';
 import { consumeAttempt, resetAttempts } from 'src/utils/attemptLimit';
 import { scaleLimit } from 'src/utils/clusterRole';
 import { pickSocketIp } from 'src/provider/log/utils';
+import { bruteForceClientIp } from 'src/utils/trustedProxy';
+import { tryParseNumericId } from 'src/utils/numericId';
 import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePagination } from 'src/utils/pagination';
@@ -91,7 +93,17 @@ export class PublicController {
     @Req() req?: any,
   ) {
     // 加密文章的密码是明文比较，接口又完全公开：不限次数的话可以无限速爆破。
-    const key = `unlock-${pickSocketIp(req)}-${String(id).slice(0, 80)}`;
+    // ⚠️ key 里的 id **必须归一化**：路由参数是原始字符串，而下游用 `parseNumericId`（= `Number(id)`）
+    // 解析，同一个整数有无穷多种写法。以前直接拿原始串当 key，于是 `07`、`007`、`7.0`、`0x7`、
+    // `7e0`、`0b111`、`0o7`、`%207`、`0000000007` **每种都能拿到全新的 20 次尝试** ——
+    // 前导零还没有上界，等于 20 次/10 分钟的预算变成无限，只剩 30 次/分钟的公开写桶兜着
+    // （≈4.3 万次/天/IP，换源 IP 还能翻倍）。实测：把 `7` 打到 429 之后，
+    // 用 `0000000000007` 加正确密码仍然能拿到完整正文。
+    const rawId = String(id ?? '');
+    const numericId = tryParseNumericId(rawId);
+    const key = `unlock-${bruteForceClientIp(req)}-${
+      numericId !== null ? `#${numericId}` : `p:${rawId.slice(0, 80)}`
+    }`;
     // 加密文章的密码尝试次数：计数器是每进程一份，多进程时要摊薄，
     // 否则 N 个 worker = N 倍的爆破预算
     const attempt = consumeAttempt(key, { max: scaleLimit(20), windowMs: 10 * 60 * 1000 });

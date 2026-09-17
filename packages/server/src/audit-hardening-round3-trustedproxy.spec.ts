@@ -339,19 +339,42 @@ describe('哪些调用点用哪个 IP 函数（这条最容易被下一个人改
     expect(src).not.toContain('pickClientIp(req) || pickSocketIp(req)');
   });
 
-  it('防爆破类计数继续走 pickSocketIp（换成可信头就等于重开"无限试密码"）', () => {
+  // ⚠️⚠️ 这条钉子**被第四轮审计推翻了**，保留在这里是为了记录"当初的理由错在哪"。
+  //
+  // 原来它断言三类防爆破计数必须继续用 pickSocketIp()，理由是"换成可信头就等于重开
+  // 『换一个 X-Real-IP 就能无限试密码，还能用受害者 IP 把对方锁在门外』"。
+  // 那个理由对**旧的** pickClientIp()（优先读 cf-connecting-ip / x-real-ip，即客户端可控的那一项）成立，
+  // 但对 pickTrustedClientIp() 在默认 auto 模式下**不成立**：auto 只在对端是回环/私网时采信转发头，
+  // 而且取 XFF 的**最右一跳**（可信代理亲手追加的对端）。客户端塞的 `X-Forwarded-For: <受害者>`
+  // 经 caddy 会变成 `<受害者>, <攻击者>`，最右一项仍是攻击者自己 ⇒ 既绕不过也栽赃不了
+  // （见 utils/bruteForceIp.spec.ts 的活体形状用例）。
+  //
+  // 而坚持用套接字地址是有**真实代价**的：一体式部署里 caddy 从 127.0.0.1 拨到 127.0.0.1:3000，
+  // 于是所有访客共用一个桶 —— 实测 5 个不同客户端各失败登录 1 次（共 5 个请求），
+  // 第 6 个客户端带**正确密码**也被锁 300 秒，且每 5 分钟可续期 ⇒ 后台永久拒绝服务；
+  // 20 个请求锁死一篇加密文章；10 个请求/10 分钟让全站不能评论；
+  // 存库的评论 IP 也全是 127.0.0.1，后台那一列与按 IP 的审核全部失效。
+  //
+  // 所以现在走 bruteForceClientIp()（默认 trusted，VANBLOG_BRUTE_FORCE_IP_SOURCE=socket 可退回，
+  // 给"反代覆盖而非追加 XFF"的部署留逃生口）。
+  it('防爆破类计数走 bruteForceClientIp（默认 trusted；socket 是逃生口）', () => {
     const login = code(read('provider/auth/login.guard.ts'));
-    expect(login).toContain('pickSocketIp(req)');
-    expect(login).not.toContain('pickTrustedClientIp');
+    expect(login).toContain('bruteForceClientIp(req)');
+    expect(login).not.toMatch(/const ip = pickSocketIp\(req\);/);
     expect(login).not.toContain('pickClientIp');
 
     const comment = code(read('provider/comment/comment.provider.ts'));
-    expect(comment).toContain('const ip = pickSocketIp(req);');
-    expect(comment).not.toContain('pickTrustedClientIp');
+    expect(comment).toContain('const ip = bruteForceClientIp(req);');
+    // 存库的评论 IP 也必须是同一个来源，否则后台那一列永远是 127.0.0.1
+    expect(comment).toContain('ip: bruteForceClientIp(data.req)');
 
     const publicCtrl = code(read('controller/public/public.controller.ts'));
-    expect(publicCtrl).toContain('pickSocketIp(req)');
-    expect(publicCtrl).not.toContain('pickTrustedClientIp');
+    expect(publicCtrl).toMatch(/unlock-\$\{bruteForceClientIp\(req\)\}/);
+
+    // 逃生口本身也要在：只有字面 'socket' 才切回去，写错的值不会静默变成最松的那种
+    const proxy = code(read('utils/trustedProxy.ts'));
+    expect(proxy).toContain("=== 'socket' ? 'socket' : 'trusted'");
+    expect(proxy).toContain('VANBLOG_BRUTE_FORCE_IP_SOURCE');
   });
 
   it('两个 IP 函数的 docstring 都指向了新 helper（不再互相矛盾）', () => {
