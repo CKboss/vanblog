@@ -2326,6 +2326,89 @@ else
   rm -rf "${IG_TMP}"
 fi
 
+# ══════════════════════════ A16) 初始化密钥（setup key）：drill 必须带上它 ══════════════════════════
+# 背景（真炸过）：`VANBLOG_INIT_REQUIRE_SETUP_KEY` 默认开启之后，`POST /api/admin/init/restore`
+# 要求 multipart 里带 `setupKey` 字段，而 drill 不带 ⇒ 恢复必然 400 `setupKeyRequired`。
+# 它自己的 573 条断言全绿也没发现 —— 那些用例走的是**假 HTTP 层**，只有真起容器跑一次才炸。
+echo
+echo "-- 初始化密钥：取得到、送得出、且绝不外泄 --"
+
+SK_BIN="${TEST_DIR}/skbin"
+mkdir -p "${SK_BIN}"
+SK_KEY="U2V0dXBLZXkvc2hhcGUrdGVzdD09Cg==" # 32 字节 base64 的形状（含 + / =）
+
+# 场景 1：容器里的 setup.key 读得到（日志目录是命名卷，只能 exec 进去读）
+cat >"${SK_BIN}/fakeengine" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  exec) printf '%s' "${SK_KEY}" ;;
+  logs) echo "log without any key" ;;
+esac
+exit 0
+STUB
+chmod +x "${SK_BIN}/fakeengine"
+GOT="$(PATH="${SK_BIN}:${PATH}" drill_fetch_setup_key fakeengine vb-drill-app-x)"
+assert_eq "${GOT}" "${SK_KEY}" "容器内 setup.key 读得到时，取到的就是它"
+
+# 场景 2：文件读不到，从日志的密钥块兜底（每次启动 + 每 10 分钟重印）
+cat >"${SK_BIN}/fakeengine" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  exec) exit 1 ;;
+  logs)
+    echo "WARN [InitProvider] ============ VanBlog 初始化密钥（setup key） ============"
+    echo "初始化密钥： ${SK_KEY}"
+    echo "密钥文件： /var/log/setup.key（0600）"
+    ;;
+esac
+exit 0
+STUB
+GOT="$(PATH="${SK_BIN}:${PATH}" drill_fetch_setup_key fakeengine vb-drill-app-x)"
+assert_eq "${GOT}" "${SK_KEY}" "文件读不到时，从日志的「初始化密钥：」行兜底取到"
+
+# 场景 3：⚠️ 日志里同时有**别的** base64 秘密（restore.key / jwt），绝不能抓错 ——
+# 送错密钥比不送更难查（400 长得一模一样）
+cat >"${SK_BIN}/fakeengine" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  exec) exit 1 ;;
+  logs)
+    echo "恢复密钥（restore.key）： QUFBQXJlc3RvcmVLZXlOb3RUaGVTZXR1cEtleQ=="
+    echo "jwt secret: QkJCQmp3dFNlY3JldE5vdFRoZVNldHVwS2V5RUJB"
+    echo "初始化密钥： ${SK_KEY}"
+    ;;
+esac
+exit 0
+STUB
+GOT="$(PATH="${SK_BIN}:${PATH}" drill_fetch_setup_key fakeengine vb-drill-app-x)"
+assert_eq "${GOT}" "${SK_KEY}" "日志里有别的 base64 秘密时也只取初始化密钥（不抓错）"
+
+# 场景 4：两条路都拿不到 ⇒ 返回空（调用方 WARN，绝不猜一个值）
+cat >"${SK_BIN}/fakeengine" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  exec) exit 1 ;;
+  logs) echo "nothing here" ;;
+esac
+exit 0
+STUB
+GOT="$(PATH="${SK_BIN}:${PATH}" drill_fetch_setup_key fakeengine vb-drill-app-x)"
+assert_eq "${GOT}" "" "两条路都拿不到时返回空（调用方 WARN，不猜）"
+GOT="$(PATH="${SK_BIN}:${PATH}" drill_fetch_setup_key "" "")"
+assert_eq "${GOT}" "" "引擎/容器名为空时安全返回空（不炸）"
+
+# 源码级：密钥怎么送、怎么不外泄
+SK_SRC="$(cat "${SCRIPT}")"
+assert_contains "${SK_SRC}" '-F "setupKey=<${setup_key_file}"' '密钥走 curl 的 -F "字段<文件" 形式（值不进命令行）'
+assert_not_contains "${SK_SRC}" '-F "setupKey=${setup_key}"' "不许把密钥值直接写进命令行（ps 里谁都能看）"
+assert_contains "${SK_SRC}" '(umask 077; printf' "临时密钥文件用 umask 077 建（0600）"
+assert_contains "${SK_SRC}" 'rm -f "${setup_key_file}"' "请求发完就删临时密钥文件"
+assert_contains "${SK_SRC}" 'setup_key=""' "变量也立刻清掉（免得后面哪条调试输出带出去）"
+assert_contains "${SK_SRC}" '${#setup_key} 字节' "台账只记密钥**字节数**，不记内容"
+assert_contains "${SK_SRC}" 'grep -q "setupKey"' "4xx 且响应点名 setupKey 时有专门诊断"
+assert_contains "${SK_SRC}" 'setupKeyRequired' "诊断文案点名 setupKeyRequired 这个 wire 字段（用户不会去怀疑自己的备份）"
+assert_contains "${SK_SRC}" "grep -oE '初始化密钥： " "日志兜底锚在「初始化密钥：」标签上，不是裸抓 base64"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

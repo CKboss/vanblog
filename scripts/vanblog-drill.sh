@@ -1523,6 +1523,32 @@ drill_read_journal() { # <engine> <容器> → 打印 journal 内容（空 = 不
   "${eng}" exec "${c}" sh -c 'for p in /var/log/vanblog-backups/restore-journal.json /app/log/vanblog-backups/restore-journal.json; do if [ -f "$p" ]; then cat "$p" 2>/dev/null; exit 0; fi; done' 2>/dev/null
 }
 
+drill_fetch_setup_key() { # <engine> <容器> → 打印初始化密钥（拿不到就空）
+  # ⚠️ 这是**秘密**：只经 stdout 交给调用方，绝不进台账/日志（台账里只记字节数）。
+  # 为什么 drill 需要它：2026-09 起 `VANBLOG_INIT_REQUIRE_SETUP_KEY` **默认开启**，
+  # 未初始化站点的两条匿名初始化接口（`/api/admin/init`、`/api/admin/init/restore`）
+  # 都要求携带 `setupKey` 字段（后台初始化页有对应输入框）。drill 走的正是后者，
+  # 不带就是 400 `setupKeyRequired` —— 而 drill 的测试用假 HTTP 层，所以这个断链
+  # 在 573 条断言全绿的情况下溜了过去，只有真跑一次才炸。
+  local eng="$1" c="$2" key=""
+  [[ -n "${eng}" && -n "${c}" ]] || return 0
+  command -v "${eng}" >/dev/null 2>&1 || return 0
+  # 首选容器里的 0600 文件：日志目录是**命名卷**，宿主机上直接读不到，得 exec 进去读。
+  # 两个候选路径与 drill_read_journal 同一套（VAN_BLOG_LOG 可能被改到 /app/log）。
+  key="$("${eng}" exec "${c}" sh -c 'for p in /var/log/setup.key /app/log/setup.key; do if [ -f "$p" ]; then cat "$p" 2>/dev/null; exit 0; fi; done' 2>/dev/null | tr -d '\r\n')"
+  if [[ -n "${key}" ]]; then
+    printf '%s' "${key}"
+    return 0
+  fi
+  # 兜底：密钥块每次启动 + 每 VANBLOG_SETUP_KEY_REMIND_MINUTES（默认 10 分钟）重印一次，
+  # 所以日志里几乎一定在（server 自己也建议 `docker logs <容器> 2>&1 | grep 初始化密钥`）。
+  # ⚠️ 必须锚在「初始化密钥：」这个标签上：密钥是 32 字节的 base64，裸抓 base64 会把
+  #    restore.key、jwt 密钥之类一起抓进来 —— **送错密钥比不送更难查**（400 长得一样）。
+  "${eng}" logs "${c}" 2>&1 |
+    grep -oE '初始化密钥： *[A-Za-z0-9+/=]{20,}' | tail -1 |
+    sed -E 's/^初始化密钥： *//' | tr -d '\r\n'
+}
+
 drill_assert_journal() { # <journal 内容|空> [附注]
   local content="$1" caveat="${2:-}"
   local f0=${ASSERT_FAIL}
@@ -2179,7 +2205,8 @@ drill_print_plan() {
   say "  临时目录  ：${DRILL_TMP:-（未分配）}（放响应体与探测结果）"
   say "  步骤      ：成员级哈希预检（清单有 integrity 块时逐成员比对 + merkleRoot + 双清单；坏了直接拒绝演练）"
   say "              → 起 mongo → 起 vanblog（指向 mongo 容器 IP，不依赖容器名 DNS）→ 等 /api/public/health 200"
-  say "              → 确认站点**未**初始化（/api/public/meta 回 233 信封）→ POST /api/admin/init/restore 上传归档"
+  say "              → 确认站点**未**初始化（/api/public/meta 回 233 信封）→ 从容器内 setup.key 取初始化密钥"
+  say "              → POST /api/admin/init/restore 上传归档（multipart：file + setupKey；镜像默认要求密钥）"
   say "              → 断言恢复信封（statusCode/initialized/adminUserFromArchive/counts）"
   say "              → 与归档清单对账（条数、静态文件数）→ HTTP 探测恢复出来的站点"
   say "                 （meta 不是未初始化信封 / 文章列表 total 对上 / 抽一个静态文件 200 且非空 /"
@@ -2687,16 +2714,43 @@ cmd_drill() {
   fi
 
   # ── 9) 真上传恢复（用户真正会走的那条路）──────────────────────────────
-  step "POST /api/admin/init/restore（multipart 字段 file，匿名，${pretty}）"
+  step "POST /api/admin/init/restore（multipart 字段 file + setupKey，匿名，${pretty}）"
   local restore_body="${DRILL_TMP}/restore.json" t0 t1 elapsed
+  # 初始化密钥：镜像默认要求携带（见 drill_fetch_setup_key 的注释）。
+  # ⚠️ 密钥是秘密，所以走 curl 的 `-F "字段<文件"` 形式从 0600 临时文件里读 ——
+  #    这样它既不出现在 `ps` 的命令行里（`-F "setupKey=值"` 会），也不会被台账/日志带上。
+  local setup_key setup_key_file=""
+  setup_key="$(drill_fetch_setup_key "${eng}" "${DRILL_APP_NAME}")"
+  if [[ -n "${setup_key}" ]]; then
+    setup_key_file="${DRILL_TMP}/setup.key"
+    (umask 077; printf '%s' "${setup_key}" > "${setup_key_file}")
+    rec_pass "取到初始化密钥（setup key）" "${#setup_key} 字节，从容器内 setup.key 读到；不回显、不进命令行"
+  else
+    rec_warn "没取到初始化密钥" "容器内读不到 setup.key、日志里也没有「初始化密钥：」行。镜像默认要求携带（VANBLOG_INIT_REQUIRE_SETUP_KEY=true），此时恢复会 400 setupKeyRequired"
+  fi
+  setup_key="" # 用完立刻清掉变量，免得后面哪条调试输出把它带出去
   t0="$(date +%s)"
   local restore_ok=1
-  http_probe POST "${base}/api/admin/init/restore" "${restore_body}" 3600 \
-    -F "file=@${archive};filename=${upload_name};type=application/octet-stream" || restore_ok=0
+  if [[ -n "${setup_key_file}" ]]; then
+    http_probe POST "${base}/api/admin/init/restore" "${restore_body}" 3600 \
+      -F "file=@${archive};filename=${upload_name};type=application/octet-stream" \
+      -F "setupKey=<${setup_key_file}" || restore_ok=0
+  else
+    http_probe POST "${base}/api/admin/init/restore" "${restore_body}" 3600 \
+      -F "file=@${archive};filename=${upload_name};type=application/octet-stream" || restore_ok=0
+  fi
+  rm -f "${setup_key_file}" 2>/dev/null
   t1="$(date +%s)"
   elapsed=$((t1 - t0))
   local body
   body="$(cat "${restore_body}" 2>/dev/null)"
+
+  # 失败原因要点名：4xx 且响应里提到 setupKey ⇒ 是"密钥没带上/不对"，不是归档坏了。
+  # 没有这条的话，用户看到的是"恢复失败 HTTP 400"，会去怀疑自己的备份。
+  if [[ "${HTTP_CODE}" =~ ^4[0-9][0-9]$ ]] && printf '%s' "${body}" | grep -q "setupKey"; then
+    rec_fail "恢复接口接受请求（初始化密钥）" \
+      "HTTP ${HTTP_CODE} 且响应点名 setupKey：${body:0:200} —— 初始化密钥没带上或不对（镜像默认要求 VANBLOG_INIT_REQUIRE_SETUP_KEY=true）。drill 应从容器内 /var/log/setup.key 取（drill_fetch_setup_key），取不到会先 WARN"
+  fi
 
   if [[ ${restore_ok} -eq 0 ]]; then
     rec_fail "恢复请求送达" "curl 没能完成请求（HTTP ${HTTP_CODE}，${elapsed}s）—— 归档 ${pretty} 超过上传限额？caddy/反代超时？容器挂了？"
