@@ -77,6 +77,32 @@ else
 fi
 hasnt "没有把 docker.io 镜像加速写死（各机器网络不同，走环境变量/引擎配置）" "daocloud"
 
+# ── 冒烟测试怎么把 mongo 告诉 vanblog 容器（2026-09-17 实测炸过）─────────────
+# `podman run --link` 是 docker 的旧式互联，**podman 4.9 直接 `Error: unknown flag: --link`** ⇒
+# 在只有 podman 的机器上"构建成功、冒烟立刻 die"，一条镜像问题都测不到（本机就是这样发现的：
+# 镜像 892 MB 建好了，冒烟第一步就退出）。容器名 DNS 也不能指望 —— rootless podman
+# 常常没装 aardvark-dns（本机就没有）。现在走 vanblog-drill.sh 那条本机验证过的路：
+# 专用网络 + 取 mongo 的容器 IP + --add-host 把名字写进 /etc/hosts。
+# ⚠️ 负向断言必须打在**剥掉注释之后**的代码上：脚本里解释这个坑的注释本身就写着 `--link`，
+#    grep 整个文件会匹配到那段注释 ⇒ 与本仓库反复踩过的"守卫匹配到解释性注释"同一个坑。
+SMOKE_CODE="$(grep -vE '^[[:space:]]*#' "${SCRIPT}")"
+if printf '%s\n' "${SMOKE_CODE}" | grep -qE '(^|[[:space:]])--link([[:space:]"=]|$)'; then
+  fail "冒烟测试仍在用 --link（podman 不认这个 flag，冒烟一步都跑不了）"
+else
+  pass "冒烟测试没有用 docker 专有的 --link"
+fi
+has "冒烟测试建了专用网络（两个引擎都支持）" 'network create "${SMOKE_NET}"'
+has "冒烟测试把 mongo 的容器 IP 写进 /etc/hosts" '--add-host "${MONGO_NAME}:${MONGO_IP}"'
+has "取容器 IP 用两个引擎都认的 inspect 模板" '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+has "拿不到 IP 会重试一会儿再明确失败（网络插件给地址有延迟）" '30 秒都拿不到 mongo 的容器 IP'
+has "拆容器的时候也拆网络（不留垃圾网络）" 'network rm "${SMOKE_NET}"'
+# mongo 的数据用**命名卷**而不是宿主机 bind mount：mongod 在容器里是 root，rootless 引擎把它
+# 映射成宿主机上一个谁也不是的 uid（本机实测 100998），`journal/` 与 `diagnostic.data/`
+# 于是**非 root 删不掉** —— 每跑一次冒烟就在 /tmp 留一坨要 sudo 才能清的垃圾。
+has "mongo 数据挂命名卷（引擎自己回收）" '-v "${SMOKE_MONGO_VOL}:/data/db"'
+hasnt "mongo 数据不再 bind mount 到宿主机临时目录（会留下删不掉的 root 映射文件）" '${SMOKE_DATA}/mongo:/data/db'
+has "拆的时候连命名卷一起拆" 'volume rm "${SMOKE_MONGO_VOL}"'
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

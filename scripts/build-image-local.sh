@@ -138,17 +138,26 @@ fi
 
 SMOKE_NAME="vanblog-smoke-$$"
 MONGO_NAME="vanblog-smoke-mongo-$$"
+SMOKE_NET="vanblog-smoke-net-$$"
+# ⚠️ mongo 的数据**不要**用宿主机 bind mount：mongod 在容器里是 root，rootless 引擎会把它
+#    映射成一个宿主机上谁也不是的 uid（本机实测 100998），于是 `journal/` 与 `diagnostic.data/`
+#    这两个子目录**非 root 删不掉** —— 每跑一次冒烟就在 /tmp 里留一坨要 sudo 才能清的垃圾，
+#    与本脚本"临时资源一定拆干净"的契约相反。命名卷由引擎自己回收（vanblog-drill.sh 同款做法）。
+SMOKE_MONGO_VOL="vanblog-smoke-mongo-$$"
 SMOKE_DATA="$(mktemp -d)"
 FAILURES=0
 
 cleanup() {
   if [[ "${SMOKE_KEEP}" == "1" ]]; then
-    say "${yellow}> SMOKE_KEEP=1，容器保留：${SMOKE_NAME} / ${MONGO_NAME}（数据在 ${SMOKE_DATA}）${plain}"
-    say "  看完自己拆：${ENGINE} rm -f ${SMOKE_NAME} ${MONGO_NAME} && rm -rf ${SMOKE_DATA}"
+    say "${yellow}> SMOKE_KEEP=1，容器保留：${SMOKE_NAME} / ${MONGO_NAME}${plain}"
+    say "  （网络 ${SMOKE_NET}，mongo 数据在卷 ${SMOKE_MONGO_VOL}，其余在 ${SMOKE_DATA}）"
+    say "  看完自己拆：${ENGINE} rm -f ${SMOKE_NAME} ${MONGO_NAME} && ${ENGINE} network rm ${SMOKE_NET} && ${ENGINE} volume rm ${SMOKE_MONGO_VOL} && rm -rf ${SMOKE_DATA}"
     return 0
   fi
   "${ENGINE}" rm -f "${SMOKE_NAME}" >/dev/null 2>&1
   "${ENGINE}" rm -f "${MONGO_NAME}" >/dev/null 2>&1
+  "${ENGINE}" network rm "${SMOKE_NET}" >/dev/null 2>&1
+  "${ENGINE}" volume rm "${SMOKE_MONGO_VOL}" >/dev/null 2>&1
   rm -rf "${SMOKE_DATA}"
 }
 trap cleanup EXIT
@@ -164,7 +173,7 @@ check() { # check <描述> <条件命令...>
 }
 
 say "> 冒烟测试：起一套临时 mongo + vanblog（宿主机端口 ${SMOKE_HTTP_PORT}）"
-mkdir -p "${SMOKE_DATA}/mongo" "${SMOKE_DATA}/static" "${SMOKE_DATA}/log" \
+mkdir -p "${SMOKE_DATA}/static" "${SMOKE_DATA}/log" \
   "${SMOKE_DATA}/caddy-config" "${SMOKE_DATA}/caddy-data"
 
 # mongo 版本跟着编排模板走：全新数据目录，所以用脚本会挑的那个版本
@@ -173,13 +182,32 @@ MONGO_IMAGE="$(VANBLOG_SKIP_MAIN=1 VANBLOG_BASE_PATH="${SMOKE_DATA}" VANBLOG_DAT
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:7.0}"
 say "  mongo 镜像：${yellow}${MONGO_IMAGE}${plain}"
 
-"${ENGINE}" run -d --name "${MONGO_NAME}" -v "${SMOKE_DATA}/mongo:/data/db" "${MONGO_IMAGE}" >/dev/null \
+# ⚠️ 不能用 `podman run --link`（那是 docker 的旧式容器互联，podman 4.9 直接
+#    `Error: unknown flag: --link` ⇒ 冒烟测试在只有 podman 的机器上**一步都跑不了**，
+#    本脚本此前就是这样：构建成功、冒烟立刻 die）。
+# ⚠️ 也不要指望容器名 DNS：rootless podman 常常没装 aardvark-dns（本机就没有），
+#    名字解析不了。所以走 `scripts/vanblog-drill.sh` 里那条**本机验证过**的路：
+#    专用网络 + 取 mongo 的容器 IP + `--add-host` 把名字写进 /etc/hosts。
+"${ENGINE}" network create "${SMOKE_NET}" >/dev/null 2>&1 || die "建冒烟专用网络 ${SMOKE_NET} 失败"
+"${ENGINE}" run -d --name "${MONGO_NAME}" --network "${SMOKE_NET}" \
+  -v "${SMOKE_MONGO_VOL}:/data/db" "${MONGO_IMAGE}" >/dev/null \
   || die "起 mongo 失败"
+
+MONGO_IP=""
+for _ in $(seq 1 30); do
+  MONGO_IP="$("${ENGINE}" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${MONGO_NAME}" 2>/dev/null | head -1)"
+  [[ -n "${MONGO_IP}" ]] && break
+  sleep 1
+done
+[[ -n "${MONGO_IP}" ]] || die "30 秒都拿不到 mongo 的容器 IP（网络插件没给地址），--add-host 没法写"
+say "  mongo 容器 IP：${yellow}${MONGO_IP}${plain}（用 --add-host 写进 vanblog 容器的 /etc/hosts）"
+
 "${ENGINE}" run -d --name "${SMOKE_NAME}" \
   -e TZ=Asia/Shanghai \
   -e EMAIL="" \
   -e "VAN_BLOG_DATABASE_URL=mongodb://${MONGO_NAME}:27017/vanBlog?authSource=admin" \
-  --link "${MONGO_NAME}:${MONGO_NAME}" \
+  --network "${SMOKE_NET}" \
+  --add-host "${MONGO_NAME}:${MONGO_IP}" \
   -v "${SMOKE_DATA}/static:/app/static" \
   -v "${SMOKE_DATA}/log:/var/log" \
   -v "${SMOKE_DATA}/caddy-config:/root/.config/caddy" \
