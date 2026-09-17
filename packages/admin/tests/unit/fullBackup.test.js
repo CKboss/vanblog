@@ -131,8 +131,14 @@ describe('整站备份：服务端', () => {
     assert.match(util, /index\.name === '_id_'/);
     // 导出时不要把上次失败留下的临时集合也打进去
     assert.match(util, /name\.endsWith\(RESTORE_SUFFIX\)/);
-    // 静态文件用硬链接进暂存目录，不额外占空间
-    assert.match(util, /spawnSync\('cp', \['-al', src, dst\]/);
+    // 静态文件用硬链接进暂存目录，不额外占空间。
+    // ⚠️ 源必须是**解析过符号链接的真实路径**：图床是软链时 `cp -al static/img stage/static/img`
+    //    产出的归档里只有一个软链成员、零字节图片 ⇒ 写后校验必然失败
+    //    （表现为"图床是软链的站点根本备份不了"），而恢复侧一律拒绝软链成员。
+    assert.match(util, /fs\.realpathSync\(src\)/);
+    assert.match(util, /spawnSync\('cp', \['-al', realSrc, dst\]/);
+    // 硬链接失败（跨文件系统）要退化成真实拷贝，不能让整个备份失败
+    assert.match(util, /fs\.cpSync\(realSrc, dst, \{ recursive: true/);
   });
 
   it('数据库导出用 NDJSON + 扩展 JSON，BSON 类型能往返', () => {
@@ -182,12 +188,24 @@ describe('整站备份：服务端', () => {
 
   it('备份目录即使在静态目录下也拦掉匿名访问', () => {
     const main = readRepo('packages/server/src/main.ts');
-    assert.match(main, /backupUnderStatic/);
-    // 整个 /static/export/ 都匿名拒绝（导出归档以前放这里，文件名只有日期，谁都能猜）
-    assert.match(main, /\/static\/export\//);
-    // 上传/导出的临时目录同样不给匿名访问
-    assert.match(main, /\/static\/tmp\//);
+    const guard = readRepo('packages/server/src/utils/staticGuard.ts');
+    // 判定走共享的 staticGuard（不是在中间件里比字面前缀）
+    assert.match(main, /isGuardedStaticPath\(req\.path, backupSegment\)/);
+    assert.match(main, /backupFirstSegmentUnderStatic\(/);
     assert.match(main, /statusCode = 403/);
+    // 匿名一律 403 的静态子目录：导出归档 + 上传/导出/整站恢复的临时目录
+    // （tmp 里可能是恢复暂存的 NDJSON —— 含密码哈希与 jwt 密钥）
+    assert.match(guard, /GUARDED_STATIC_SEGMENTS = new Set\(\['export', 'tmp', 'upload-tmp'\]\)/);
+    // 按"解码 + 合并重复斜杠 + posix 归一化"之后的**第一个路径段**判定
+    assert.match(guard, /decodeURIComponent\(p\)/);
+    assert.match(guard, /path\.posix\.normalize\(p\)/);
+    // 归一化后逃出 /static/ 的写法（%2e%2e 之类）也按受控处理，不把判断权交给 serve-static
+    assert.match(guard, /export const ESCAPED/);
+    // ⚠️ 反证：不许退回字面前缀比较。`req.path` 是未解码、未归一化的原始路径，
+    //    而 serve-static 打开文件前会解码归一化 ⇒ `%65xport` / `export%2f` / `./export` /
+    //    `//export` 全能绕过（活体验证过：早先那次"已修"其实是装饰性的）
+    assert.doesNotMatch(main, /req\.path\.startsWith\(['"`]\/static\/export\//);
+    assert.doesNotMatch(main, /req\.url\.startsWith\(['"`]\/static\/export\//);
   });
 });
 

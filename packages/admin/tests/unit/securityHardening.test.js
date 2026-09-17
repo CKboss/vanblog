@@ -93,7 +93,11 @@ describe('安全加固：上传与静态文件', () => {
     const exp = read('packages/server/src/controller/admin/export/export.controller.ts');
     assert.match(exp, /@Get\('archive'\)/);
     assert.match(exp, /base !== path\.basename\(base\)/);
-    assert.match(read('packages/server/src/main.ts'), /\/static\/export\//);
+    // 旧的 <static>/export/ 兜底现在走共享守卫（比字面前缀更严：req.path 未解码未归一化，
+    // `%65xport` / `export%2f` / `./export` 都能绕过字面前缀 —— 详见 staticGuard.ts）
+    const main = read('packages/server/src/main.ts');
+    assert.match(main, /isGuardedStaticPath\(req\.path, backupSegment\)/);
+    assert.match(read('packages/server/src/utils/staticGuard.ts'), /'export', 'tmp', 'upload-tmp'/);
     assert.match(read('packages/admin/src/services/van-blog/downloadArchive.ts'), /downloadExportArchive/);
   });
 
