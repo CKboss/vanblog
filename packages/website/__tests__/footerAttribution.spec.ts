@@ -25,7 +25,7 @@ describe("页脚的 Powered By 指向本分支", () => {
 
   it("标明这是增强修改版，并给出「改了什么」的入口", () => {
     expect(footer).toContain("增强修改版");
-    expect(footer).toContain("README.md#本分支新增内容");
+    expect(footer).toContain("README.md#与上游的关系");
   });
 
   it("外链带 noreferrer + 新窗口，且保留 ua 类（性能不变式：.ua 不许有 hover:scale）", () => {

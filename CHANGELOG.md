@@ -146,7 +146,8 @@
 ### 🍴 本 fork（`CKboss/vanblog` 分支 `dev/dsh`）的改动
 
 > 下面这些**只存在于本 fork**，不在上游 `Mereithhh/vanblog` 的任何发布里。
-> 详细说明见 [README · 本分支新增内容](README.md#本分支新增内容)、[AGENTS.md](AGENTS.md) 与各功能文档。
+> 详细说明见 [README · 与上游的关系](README.md#与上游的关系)、[CHANGELOG.md](CHANGELOG.md)、[AGENTS.md](AGENTS.md) 与各功能文档。
+> （README 已改成以本项目为主视角，原来的「本分支新增内容」章节已并入 CHANGELOG 与 AGENTS。）
 
 **新功能**
 

@@ -1691,7 +1691,7 @@ JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：*
 
 - **上半页 = 本分支**：`增强修改版` 标签、`CKboss/vanblog` 的 `dev/dsh` 分支说明、GPL v3 声明、
   9 条主要增强点（`FORK_HIGHLIGHTS`），链接指向本分支的 Github / 提交历史 / CHANGELOG.md /
-  README 的「本分支新增内容」锚点 / 仓库内 `docs/` / `AGENTS.md` / 本地 `/swagger` / 本分支 Issues。
+  README 的「与上游的关系」锚点 / 仓库内 `docs/` / `AGENTS.md` / 本地 `/swagger` / 本分支 Issues。
 - **下半页 = 原始项目**（`Divider` 分隔）：致谢 @Mereithhh，保留上游 Github、官方文档站、
   上游更新日志、官方交流群、打赏入口，并注明「上游文档与更新日志描述的是**官方镜像**的行为，
   与本分支不完全一致」。
@@ -1700,7 +1700,13 @@ JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：*
 **前台页脚同样处理**（`components/Footer/index.tsx`）：`Powered By VanBlog <version>`
 以前链到上游文档站，访客点进去看到的说明与本站实际行为对不上（评论系统、皮肤、SEO 全不一样）。
 现在链到 `https://github.com/CKboss/vanblog`，后面跟一个 ` · 增强修改版` 链到 README 的
-「本分支新增内容」锚点。**项目名仍然叫 VanBlog** —— 它确实是 VanBlog，本分支遵循上游 GPL v3，
+「与上游的关系」锚点。
+⚠️ **README 重写过一次（改成以本项目为主视角，上游只留一个链接段），原来的「本分支新增内容」章节没了** ——
+而它的锚点被**代码**引用着两处：前台 `components/Footer/index.tsx` 与后台 `pages/About.tsx` 的 `FORK_README`
+（外加 `website/__tests__/footerAttribution.spec.ts` 的钉子）。
+⚠️ **`docs-links` 测试查不到这类死链**：它只扫 markdown 里的相对链接与图片，代码里的 URL 不在范围内。
+所以改 README 的标题时，必须 `grep -rn "旧锚点" packages/ --include=*.tsx --include=*.ts`
+（⚠️ 记得排除 `.next` 与 `.umi`，否则全是构建产物的假命中），否则访客点页脚的「增强修改版」会落到一个不存在的锚点。**项目名仍然叫 VanBlog** —— 它确实是 VanBlog，本分支遵循上游 GPL v3，
 致谢在 README / CHANGELOG / 后台「关于」页都有。
 ⚠️ 改这段 markup 时保留 `ua ua-link` 两个类，且**不许加 `hover:scale-*`**
 （§7.10 的性能/动效不变式里有测试盯着 `.ua` 元素不能带缩放）。
