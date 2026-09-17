@@ -8,8 +8,11 @@ import { StatsMaintenanceProvider } from './statsMaintenance.provider';
  *  - **幂等**：已经建好唯一索引时整轮只花一次 listIndexes，一行数据都不动；
  *  - **顺序**：先去重再建索引（反过来 createIndex 必然 E11000 失败）；
  *  - **不在请求路径上**：启动钩子 fire-and-forget，且只跑一次；
- *  - **保留期默认 365 天**（第四轮审计 B3 的默认行为变更：以前默认 0 = 永不删除；
- *    显式 `VANBLOG_VISIT_RETENTION_DAYS=0` 仍是逃生口，且只删按天的行、不碰站点级累计）。
+ *  - **保留期默认 3650 天 = 10 年**（第四轮审计 B3 的默认行为变更：以前默认 0 = 永不删除；
+ *    审计建议 365，站长定的是 10 年。显式 `VANBLOG_VISIT_RETENTION_DAYS=0` 仍是逃生口，
+ *    且只删按天的行、不碰站点级累计）。
+ *    ⚠️ 本文件里凡是要验"清理逻辑本身"的用例都**显式设** `VANBLOG_VISIT_RETENTION_DAYS`
+ *    （365 / 90 / 0），这样默认值将来再改也不会让覆盖失效；只有专门钉默认值的那几条才读默认。
  */
 
 type Doc = Record<string, any>;
@@ -220,8 +223,13 @@ describe('StatsMaintenanceProvider：去重 + 唯一索引', () => {
       const res = await fake.provider.runStartupMaintenance('测试');
       expect(res.dedup.skipped).toBe(true);
       expect(res.dedup.groups).toBe(0);
-      // 一行都不删 ⇒ 6 行全在（fixture 里最老的是 2024-07-07，距 NOW 约 800 天，在 10 年窗口内）
-      expect(fake.visits.state.docs).toHaveLength(rows().length);
+      // 一行都不动 ⇒ fixture 那 5 行原样都在（**连那两组重复行也没被合并** ——
+      // 唯一索引已存在时去重整个跳过，所以既没有 aggregate 也没有 deleteMany）。
+      // ⚠️ 这里必须用 `dupDocs()` 而不是下面保留期那组的 `rows()`：`rows` 是
+      // `describe('…保留期清理')` 里的局部 fixture，在本 describe 里根本不在作用域内
+      // （写成 `rows()` 会让整个文件 TS2304 编译失败 ⇒ 全套件一条都跑不了）。
+      expect(fake.visits.state.docs).toHaveLength(dupDocs().length);
+      expect(fake.visits.state.docs.map((d) => d._id)).toEqual(dupDocs().map((d) => d._id));
       expect(fake.opLog).not.toContain('visits.aggregate');
       expect(fake.opLog).not.toContain('visits.deleteMany');
       expect(res.indexes.every((i) => i.created === false)).toBe(true);
@@ -429,17 +437,28 @@ describe('StatsMaintenanceProvider：保留期清理', () => {
   });
 
   it('非法值回落到默认（B3 之后默认是 3650 天，不再是 0 = 不删）', async () => {
+    // ⚠️ 反证行（比 10 年窗口更老的一天；NOW=2026-09-16 ⇒ 2014-01-01 距今约 4640 天）。
+    // 少了它这条用例钉不住"回落值是 3650"：`res.enabled=true` 只说明回落值不是 0，
+    // 而 fixture 里最老的 2024-07-07（约 800 天）本来就落在窗口内 ⇒ 一行都不删，
+    // 于是回落成 36500（100 年）甚至"永远不删"都能全绿。有了这行，窗口必须**真的有限**才会绿。
+    const ancient = { _id: 'ancient', date: '2014-01-01', pathname: '/old-page', viewer: 9, visited: 9 };
     const fake = createFake({
-      visitDocs: rows(),
+      visitDocs: [...rows(), ancient],
+      viewerDocs: [...rows(), ancient],
       env: { VANBLOG_VISIT_RETENTION_DAYS: 'abc' },
     });
     try {
       expect(fake.provider.retentionDays).toBe(3650);
       const res = await fake.provider.pruneStats('测试', NOW);
       expect(res.enabled).toBe(true);
-      // ⚠️ 默认抬到 3650 天后，fixture 里最老的 2024-07-07（距 NOW 约 800 天）落在窗口内 ⇒ 一行都不删
-      expect(res.visits).toBe(0);
-      expect(fake.visits.state.docs).toHaveLength(5);
+      expect(res.effectiveDays).toBe(3650);
+      // 窗口内那 6 行一行都不删（含 date:null 与缺 date 的两行 —— 它们结构上永远不会被删），
+      // 只有超出窗口的那一行被删掉，visits 与 viewers 各一行
+      expect(res.visits).toBe(1);
+      expect(res.viewers).toBe(1);
+      expect(fake.visits.state.docs).toHaveLength(rows().length);
+      expect(fake.visits.state.docs.map((d) => d._id)).not.toContain('ancient');
+      expect(fake.visits.state.docs.map((d) => d._id)).toEqual(rows().map((d) => d._id));
     } finally {
       fake.restoreEnv();
     }

@@ -11,9 +11,16 @@ import { RETENTION_DEFAULTS } from './provider/stats/statsMaintenance.provider';
 
 /**
  * 第四轮安全审计修复钉子（浏览统计那一组）：B3 ——
- *  (a) visits/viewers 的保留期默认从「永不删除」改成 **365 天**
+ *  (a) visits/viewers 的保留期默认从「永不删除」改成 **3650 天（10 年）**
  *      （⚠️ 默认行为变更：只删按天的行，站点级累计与文章累计阅读量不受影响；
- *        显式 `VANBLOG_VISIT_RETENTION_DAYS=0` 是逃生口）；
+ *        显式 `VANBLOG_VISIT_RETENTION_DAYS=0` 是逃生口）。
+ *      审计建议的是 365 天，**站长定的是 10 年**（要保住长周期趋势），所以这里钉 3650：
+ *      谁再顺手改回 365 会红。诚实的代价写在实现注释里 —— 持续攻击下的理论稳态上限
+ *      是 5000 行/天 × 3650 × ~157 B ≈ 2.87 GB（365 天口径的 10 倍），真正压住它的是
+ *      (b) 那个每日新路径键上限，不是保留窗口。
+ *      ⚠️ "保留期逻辑本身"的覆盖**不依赖这个默认值**：
+ *      `provider/stats/statsMaintenance.provider.spec.ts` 用显式
+ *      `VANBLOG_VISIT_RETENTION_DAYS=365` 与 `=0` 各跑一遍，默认值改了那两条照样有效；
  *  (b) `ViewStatsAggregator` 给「**每天新建多少个路径键**」封顶
  *      （`VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY`，默认 5000，0 = 不限）：
  *      匿名 `POST /api/public/viewer` 用编造路径灌 visits 的永久增长被封住，
@@ -47,18 +54,33 @@ const ev = (
   date: opts.date || '2026-09-17',
 });
 
-describe('FIX B3(a)：保留期默认 365 天（默认行为变更）', () => {
+describe('FIX B3(a)：保留期默认 3650 天 = 10 年（默认行为变更，站长定的）', () => {
   it('RETENTION_DEFAULTS 翻新，minKeepDays=30 的兜底没动', () => {
-    expect(RETENTION_DEFAULTS).toEqual({ retentionDays: 365, minKeepDays: 30 });
+    expect(RETENTION_DEFAULTS).toEqual({ retentionDays: 3650, minKeepDays: 30 });
   });
 
   it('源码钉子：env 读取形状不变、注释里写明这是默认行为变更、显式 0 是逃生口', () => {
     const src = read('./provider/stats/statsMaintenance.provider.ts');
     // anonymous-writes 的 FINDING 钉子钉住的读取形状原样保留（只是默认值变了）
     expect(src).toMatch(/'VANBLOG_VISIT_RETENTION_DAYS',\s*\n\s*RETENTION_DEFAULTS\.retentionDays/);
-    expect(src).toMatch(/export const RETENTION_DEFAULTS = \{ retentionDays: 365, minKeepDays: 30 \};/);
+    expect(src).toMatch(/export const RETENTION_DEFAULTS = \{ retentionDays: 3650, minKeepDays: 30 \};/);
     expect(src).toContain('默认行为变更');
     expect(src).toContain('VANBLOG_VISIT_RETENTION_DAYS=0');
+  });
+
+  it('注释里的默认值不许与常量漂移（本轮就是漏改注释才出现"代码 3650 / 注释 365"）', () => {
+    const src = read('./provider/stats/statsMaintenance.provider.ts');
+    // 只抓"把默认值说成 365"的行：提到默认值或那个环境变量的行里不许出现裸 365。
+    // （`而 365 天对想留十年趋势的站长又太短` 这类**推理**是合法的，不在打击范围内。）
+    const stale = src
+      .split('\n')
+      .map((text, i) => ({ line: i + 1, text }))
+      .filter(({ text }) => /默认|RETENTION_DAYS/.test(text))
+      .filter(({ text }) => /(^|[^\d])365([^\d]|$)/.test(text));
+    expect(stale).toEqual([]);
+    // 反证：常量本身确实是 3650，且源码里写明这是站长定的
+    expect(src).toMatch(/retentionDays: 3650/);
+    expect(src).toContain('站长');
   });
 
   it('pruneStats/planRetention 的实现一个字节都没动（本修复只翻默认值）', () => {

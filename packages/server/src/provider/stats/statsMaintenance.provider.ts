@@ -43,7 +43,7 @@ import { MigrationProvider } from '../migration/migration.provider';
  *  - `VANBLOG_VISITS_DEDUP=false` 关掉启动去重（默认开）
  *  - `VANBLOG_VISITS_DEDUP_DRY_RUN=true` 只打印会合并什么，不真的写
  *  - `VANBLOG_VISITS_DROP_REDUNDANT_INDEXES=false` 关掉冗余前缀索引的删除（默认开）
- *  - `VANBLOG_VISIT_RETENTION_DAYS`（默认 **365**，⚠️ 第四轮审计 B3 起是默认行为变更：
+ *  - `VANBLOG_VISIT_RETENTION_DAYS`（默认 **3650** = 10 年，⚠️ 第四轮审计 B3 起是默认行为变更：
  *    以前默认 0 = 永不删除；显式设 `0` 仍可回到旧行为）
  *  - `VANBLOG_VISIT_RETENTION_MIN_KEEP_DAYS`（默认 30）：无论上面设成多少，最近这些天一定保留
  */
@@ -75,7 +75,7 @@ const REDUNDANT_VISIT_INDEXES: Array<{
  * 有 minKeepDays=30 兜底、且记迁移台账，只是默认关着。
  * 语义边界：只删**按天的行**（visits/viewers 里早于保留窗口的），站点级累计
  * （metas.viewer/visited）与文章自己的累计阅读量**不受影响**；仪表盘最长回看
- * 变成 365 天。显式设 `VANBLOG_VISIT_RETENTION_DAYS=0` 可以回到旧行为（永不删除）。
+ * 变成 3650 天。显式设 `VANBLOG_VISIT_RETENTION_DAYS=0` 可以回到旧行为（永不删除）。
  */
 // ⚠️ 默认 **3650 天（10 年）**：站长明确要求的。
 // 取舍要讲清楚 —— 0（永不删）意味着匿名 POST /api/public/viewer 用编造的路径名就能让 visits
@@ -648,7 +648,7 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
   }
 
   /**
-   * 按保留期删掉老的统计行。默认 `VANBLOG_VISIT_RETENTION_DAYS=365`（⚠️ 第四轮审计 B3
+   * 按保留期删掉老的统计行。默认 `VANBLOG_VISIT_RETENTION_DAYS=3650`（10 年；⚠️ 第四轮审计 B3
    * 起的默认行为变更：以前默认 0 = 永不删除，匿名编造路径能把 visits 无界撑大；
    * 显式设 `0` 仍是「永不删除」的逃生口）。删除范围只有**按天的行**：
    * metas.viewer/visited 与文章累计阅读量都不动；`minKeepDays`（默认 30）兜底，
