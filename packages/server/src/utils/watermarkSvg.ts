@@ -1,5 +1,3 @@
-import { envPositiveInt } from './envNumber';
-
 /**
  * 可见水印的**纯函数层**：样式解析（env / 覆盖项）、按图片尺寸的度量、SVG 构造。
  * 不依赖 sharp/jimp，全部可单测；栅格化与合成在 `utils/watermark.ts`。
@@ -132,8 +130,6 @@ export const WATERMARK_ENV = {
   shadowOpacity: 'VANBLOG_WATERMARK_SHADOW_OPACITY',
   marginRatio: 'VANBLOG_WATERMARK_MARGIN_RATIO',
   fontFamily: 'VANBLOG_WATERMARK_FONT_FAMILY',
-  fontMinPx: 'VANBLOG_WATERMARK_FONT_MIN_PX',
-  fontMaxPx: 'VANBLOG_WATERMARK_FONT_MAX_PX',
 } as const;
 
 /**

@@ -47,20 +47,25 @@ import {
  *
  * 字体依赖：SVG <text> 由 libvips 内置的 librsvg+pango+fontconfig 栅格化，**要系统字体**。
  * 生产镜像需要（Dockerfile runner 阶段 apk add）：`fontconfig ttf-dejavu wqy-zenhei`。
- * 缺字体时：文字不产生像素 → WARN（点名缺失字体与安装命令）+ 返回原图；
- * 只缺 CJK → WARN 点名字体（每进程一次），Latin 部分照常渲染。
- * ⚠️ "有没有字"不能光数 ink：corner 的底板、bar 的渐变条没字体也照常渲染。
- * 判定方法是**同画布渲染两次（带字/不带字）逐字节对比** —— 有差异才算文字真的画出来了。
+ * ⚠️ 容器实测（node:24-alpine 零字体）：librsvg **不会渲染成空白**，而是满屏 .notdef 豆腐块
+ * （'Ag…' 576 ink px、'水' 180 ink px），stderr 只有一句 Fontconfig error 就"成功"返回。
+ * 所以缺字体的降级不能靠"数 ink"，而是逐字符集探测（`Ag`/`水` vs 私用区 U+E001 逐字节对比）：
+ * Latin 探测失败 ⇒ WARN + 原图返回；文本含 CJK 且 CJK 探测失败 ⇒ WARN 点名 wqy-zenhei + 原图返回。
+ * **宁可不盖，也不能盖满图豆腐块。** 探测每进程一次（memo），ink 判空只是第二道防线。
  */
 
 const logger = new Logger('Watermark');
 
-/** sharp 能编码、且上传白名单里真实会出现的格式 → 编码参数（与 imgResize.ts 口径一致）。 */
+/** sharp 能编码、且上传白名单里真实会出现的格式 → 编码参数（质量口径与 imgResize.ts 一致）。 */
 const ENCODE_FORMATS: Record<string, any> = {
   jpeg: { quality: 90 },
   jpg: { quality: 90 },
   png: { compressionLevel: 9 },
-  webp: { quality: 90 },
+  // ⚠️ webp 特意加 effort:2（imgResize 用的是默认 effort:4）：水印这步是**在缩放之前**
+  // 按原始尺寸编码的，libwebp q90 在大图上极慢 —— 实测 6918×4617：effort:4 = 24.7s，
+  // effort:2 = 4.6s（5.4×），字节只 +2.0%；1920×1440：959→558ms，+0.3%；800×600：191→117ms，−1.2%。
+  // imgResize 不需要这个是因为它先缩到 ≤1920 再编码，永远碰不到大图 effort 成本。
+  webp: { quality: 90, effort: 2 },
   avif: { quality: 70 },
   tiff: { quality: 90 },
 };
@@ -74,8 +79,6 @@ export interface WatermarkOptions {
   style?: Partial<WatermarkStyle>;
   /** 指定 env 来源（默认 process.env；测试注入用） */
   env?: NodeJS.ProcessEnv;
-  /** 跳过 CJK 字体探测（测试用） */
-  skipCjkProbe?: boolean;
 }
 
 export interface WatermarkInk {
@@ -104,28 +107,36 @@ export interface GenerateWaterMarkOptions extends WatermarkOptions {
 }
 
 // ---------------------------------------------------------------------------
-// CJK 字体探测（每进程一次；结果 memo 化）
+// 字体覆盖探测（每进程一次；结果 memo 化）
 // ---------------------------------------------------------------------------
 
-let cjkProbePromise: Promise<boolean> | null = null;
+export interface FontCoverage {
+  latinOk: boolean;
+  cjkOk: boolean;
+}
+
+let coveragePromise: Promise<FontCoverage> | null = null;
 let cjkWarned = false;
+let latinWarned = false;
 let blankWarned = false;
 
 /** 测试钩子：清掉 memo 的探测结果与"只 WARN 一次"标志；可注入固定探测结果。 */
-export function __resetWatermarkCachesForTest(forcedProbeResult?: boolean): void {
-  cjkProbePromise = forcedProbeResult === undefined ? null : Promise.resolve(forcedProbeResult);
+export function __resetWatermarkCachesForTest(forced?: FontCoverage): void {
+  coveragePromise = forced === undefined ? null : Promise.resolve(forced);
   cjkWarned = false;
+  latinWarned = false;
   blankWarned = false;
 }
 
+const LATIN_PROBE_CHAR = 'Ag';
 const CJK_PROBE_CHAR = '水';
 /** 私用区码点：任何字体都不会给它真字形，只会渲染 .notdef（豆腐块）或空白。 */
 const NOTDEF_PROBE_CHAR = '\uE001';
 
-async function renderProbeRaw(sharp: any, char: string): Promise<Buffer | null> {
+async function renderProbeRaw(sharp: any, text: string): Promise<Buffer | null> {
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72">` +
-    `<text x="12" y="58" font-family="${DEFAULT_WATERMARK_FONT_FAMILY}" font-size="48" fill="#ffffff">${char}</text>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="72">` +
+    `<text x="12" y="58" font-family="${DEFAULT_WATERMARK_FONT_FAMILY}" font-size="48" fill="#ffffff">${text}</text>` +
     `</svg>`;
   const { data } = await sharp(Buffer.from(svg))
     .ensureAlpha()
@@ -135,31 +146,53 @@ async function renderProbeRaw(sharp: any, char: string): Promise<Buffer | null> 
 }
 
 /**
- * 系统里有没有能渲染汉字的字体：比较 `水` 与私用区码点 U+E001 的栅格结果。
- * 有 CJK 字体 ⇒ 一个是真字形、一个只能是 .notdef/空白 ⇒ 必然不同；
- * 没有（含"一个字体都没装"的容器）⇒ 两者同为豆腐块或同为空白 ⇒ 逐字节相等 ⇒ false。
- * 比"数 ink 像素"可靠：豆腐块与真汉字的 ink 量是重叠区间，分不开。
+ * 系统字体能不能渲染 Latin / CJK：分别比较 `Ag`、`水` 与私用区码点 U+E001 的栅格结果。
+ * 有对应字体 ⇒ 真字形 ≠ .notdef/空白；没有 ⇒ 两者逐字节相等（同为豆腐块或同为空白）。
+ *
+ * ⚠️ 为什么不能只"数 ink 像素"：**实测（node:24-alpine 容器，零字体）librsvg/pango
+ * 会把文字渲染成 .notdef 豆腐块而不是空白** —— 'Ag…' 576 ink px、'水' 180 ink px、
+ * stderr 打一句 `Fontconfig error: Cannot load default config file` 然后"成功"返回。
+ * 只数像素会把满图豆腐块当成"水印成功"合成进图片（比不加水印更糟的静默失败）。
+ * 豆腐块与真汉字的 ink **数量**也是重叠区间（48px 豆腐块 36px ink vs 真字 300+），
+ * 数量阈值分不开；同字体下 `水` 与 U+E001 的**逐字节相等**才是可靠判据。
  */
-export async function probeCjkFontAvailable(sharp: any): Promise<boolean> {
+export async function probeFontCoverage(sharp: any): Promise<FontCoverage> {
   try {
-    const [a, b] = await Promise.all([
+    const [latin, cjk, notdef] = await Promise.all([
+      renderProbeRaw(sharp, LATIN_PROBE_CHAR),
       renderProbeRaw(sharp, CJK_PROBE_CHAR),
       renderProbeRaw(sharp, NOTDEF_PROBE_CHAR),
     ]);
-    if (!a || !b) {
-      return false;
+    if (!latin || !cjk || !notdef) {
+      return { latinOk: false, cjkOk: false };
     }
-    return !a.equals(b);
+    return { latinOk: !latin.equals(notdef), cjkOk: !cjk.equals(notdef) };
   } catch {
-    return false;
+    return { latinOk: false, cjkOk: false };
   }
 }
 
-function getCjkProbe(sharp: any): Promise<boolean> {
-  if (!cjkProbePromise) {
-    cjkProbePromise = probeCjkFontAvailable(sharp);
+function getFontCoverage(sharp: any): Promise<FontCoverage> {
+  if (!coveragePromise) {
+    coveragePromise = probeFontCoverage(sharp);
   }
-  return cjkProbePromise;
+  return coveragePromise;
+}
+
+const FONT_INSTALL_HINT =
+  'Alpine 镜像请在 runner 阶段安装：apk add --no-cache fontconfig ttf-dejavu wqy-zenhei' +
+  '（Debian/Ubuntu: apt-get install fontconfig fonts-dejavu fonts-wqy-zenhei）。' +
+  `期望的 font-family 链：${DEFAULT_WATERMARK_FONT_FAMILY}`;
+
+function warnNoFonts(): void {
+  if (latinWarned) {
+    return;
+  }
+  latinWarned = true;
+  logger.warn(
+    '[watermark] 系统没有可用字体：SVG 文字只会渲染成 .notdef 豆腐块（实测零字体容器如此），' +
+      `已跳过水印、按原图返回（上传不受影响）。${FONT_INSTALL_HINT}`,
+  );
 }
 
 function warnCjkFontMissing(): void {
@@ -168,10 +201,8 @@ function warnCjkFontMissing(): void {
   }
   cjkWarned = true;
   logger.warn(
-    '[watermark] 水印文字含 CJK，但系统没有能渲染汉字的字体（探测字 "水" 无真字形）。' +
-      '请在镜像/主机安装字体（Alpine: apk add --no-cache fontconfig ttf-dejavu wqy-zenhei；' +
-      'Debian/Ubuntu: apt-get install fontconfig fonts-dejavu fonts-wqy-zenhei）。' +
-      `期望的 font-family 链：${DEFAULT_WATERMARK_FONT_FAMILY}。中文部分将渲染为空白/豆腐块。`,
+    '[watermark] 水印文字含 CJK，但系统没有能渲染汉字的字体（探测字 "水" 与 .notdef 逐字节相同），' +
+      `已跳过水印、按原图返回（上传不受影响）——宁可不盖，也不能盖满图豆腐块。${FONT_INSTALL_HINT}`,
   );
 }
 
@@ -182,9 +213,7 @@ function warnBlankRender(reason: string): void {
   blankWarned = true;
   logger.warn(
     `[watermark] ${reason} —— 水印文字未渲染出任何像素，按原图返回（上传不受影响）。` +
-      '最常见原因是系统未安装字体：librsvg/pango 经 fontconfig 找不到任何可用字体时 ' +
-      `<text> 不产生像素。期望的 font-family 链：${DEFAULT_WATERMARK_FONT_FAMILY}；` +
-      'Alpine 镜像请安装：apk add --no-cache fontconfig ttf-dejavu wqy-zenhei',
+      FONT_INSTALL_HINT,
   );
 }
 
@@ -282,6 +311,16 @@ export async function generateWaterMark(
   if (!text) {
     return null;
   }
+  // 与 addWaterMarkToIMG 同一道字体防线：缺字体时返回 null（而不是豆腐块画布）
+  const coverage = await getFontCoverage(sharp);
+  if (!coverage.latinOk) {
+    warnNoFonts();
+    return null;
+  }
+  if (containsCjk(text) && !coverage.cjkOk) {
+    warnCjkFontMissing();
+    return null;
+  }
   const fontSize = clampInt(options.fontSize ?? 64, 4, 4096);
   let widthFactor = options.widthFactor ?? 1;
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -342,7 +381,19 @@ async function compositeTile(
   format: string,
 ): Promise<Buffer | null> {
   const metrics = tileMetrics(width, height, style);
-  const step = metrics.step;
+  let step = metrics.step;
+  // 小图适配：图比一块砖还小时，砖缩到图内（单标记居中）；小于 52px 的图直接跳过
+  // （后台 tooltip 本来就写着"宽高小于 128px 的图片可能加不上"；48px 砖下限避免糊成墨点）。
+  const minSide = Math.min(width, height);
+  if (step > minSide) {
+    step = Math.max(48, minSide - 4);
+    if (step > minSide) {
+      logger.warn(
+        `[watermark] 图片过小（短边 ${minSide}px < 52px），无法排版水印，按原图返回`,
+      );
+      return null;
+    }
+  }
   let fontSize = metrics.fontSize;
   const maxExtent = step * TILE_EXTENT_FACTOR;
   let extent = rotatedMarkExtent(text, fontSize);
@@ -532,11 +583,17 @@ export async function addWaterMarkToIMG(
     }
     const style = resolveWatermarkStyle(options.style, env);
 
-    if (containsCjk(text) && !options.skipCjkProbe) {
-      const cjkOk = await getCjkProbe(sharp);
-      if (!cjkOk) {
-        warnCjkFontMissing();
-      }
+    // 字体覆盖探测（每进程一次，~15ms）：缺字体时**宁可不盖也不能盖豆腐块** ——
+    // 实测零字体容器里 librsvg/pango 会把所有字画成 .notdef 方块（不是空白），
+    // 所以这里必须逐字符集探测，失败就 WARN + 原图返回。见 probeFontCoverage 的注释。
+    const coverage = await getFontCoverage(sharp);
+    if (!coverage.latinOk) {
+      warnNoFonts();
+      return srcImage;
+    }
+    if (containsCjk(text) && !coverage.cjkOk) {
+      warnCjkFontMissing();
+      return srcImage;
     }
 
     const meta = await sharp(srcImage).metadata();

@@ -3,7 +3,7 @@ import {
   __resetWatermarkCachesForTest,
   addWaterMarkToIMG,
   generateWaterMark,
-  probeCjkFontAvailable,
+  probeFontCoverage,
   scanInk,
 } from './watermark';
 import { tileMetrics, cornerMetrics, resolveWatermarkStyle, withCopyrightPrefix, buildTileSvg } from './watermarkSvg';
@@ -616,12 +616,28 @@ describe('format preservation and EXIF orientation', () => {
     expect(stats.bounds.maxX).toBeGreaterThan(200 * 0.55);
   });
 
-  it('小图（100×80，比一块砖还小）不炸：尺寸不变，要么加上要么原样返回', async () => {
+  it('小图（100×80，比一块标准砖还小）：砖自动缩小，仍然加上水印、尺寸不变', async () => {
     const src = await solidPng(100, 80, 100);
     const out = await addWaterMarkToIMG(src, 'v.blog');
     const meta = await sharp(out).metadata();
     expect(meta.width).toBe(100);
     expect(meta.height).toBe(80);
+    // 单砖居中：确有 ink（白字 0.12 on gray100 → Δ≥10）
+    const original = await decodeRaw(src);
+    const marked = await decodeRaw(out);
+    expect(diffStats(original, marked).changed).toBeGreaterThan(50);
+  });
+
+  it('极小图（40×40，连 48px 砖下限都放不下）：原 buffer 原样返回（同一引用）+ WARN', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const src = await solidPng(40, 40, 100);
+      const out = await addWaterMarkToIMG(src, 'v.blog');
+      expect(out).toBe(src);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('[watermark]');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('极小图（24×24）corner 放不下 ⇒ 原 buffer 原样返回（同一引用）', async () => {
@@ -697,14 +713,17 @@ describe('CJK watermark text', () => {
 
   it('本机有 CJK 字体时：中文水印真的渲染出来了（对比旧实现的 5 个豆腐块）', async () => {
     const sharpMod: any = require('sharp');
-    const available = await probeCjkFontAvailable(sharpMod);
-    if (!available) {
-      // 本机没有 CJK 字体时明确说清楚（这台机器实测有 Noto Sans CJK SC，会走上面分支）
+    const coverage = await probeFontCoverage(sharpMod);
+    if (!coverage.cjkOk) {
+      // 本机没有 CJK 字体：行为必须是"跳过 + WARN"（宁可不盖也不盖豆腐块）
       // eslint-disable-next-line no-console
       console.warn(
-        '[watermark][SKIP] 本机没有 CJK 字体（fc-list :lang=zh 为空？），跳过中文渲染断言；容器验证见交付报告',
+        '[watermark][SKIP] 本机没有 CJK 字体（fc-list :lang=zh 为空？），走"跳过+WARN"分支；本机实测有 Noto Sans CJK SC 时走渲染分支',
       );
-      expect(warnSpy).not.toHaveBeenCalled(); // 没字体也不许炸
+      const srcBuf0 = await solidPng(400, 300, 128);
+      const out0 = await addWaterMarkToIMG(srcBuf0, '酱油的博客');
+      expect(out0).toBe(srcBuf0);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('wqy-zenhei');
       return;
     }
     const srcBuf = await solidPng(800, 600, 128);
@@ -724,15 +743,28 @@ describe('CJK watermark text', () => {
     expect(warnSpy).not.toHaveBeenCalled(); // 有字体 ⇒ 不该有任何 WARN
   });
 
-  it('探测不到 CJK 字体时：WARN 点名缺失字体与安装命令（上传不受影响）', async () => {
-    __resetWatermarkCachesForTest(false); // 强制探测结果 = 没有 CJK 字体
+  it('探测不到 CJK 字体时：跳过水印 + WARN 点名缺失字体与安装命令（宁可不盖，不盖豆腐块）', async () => {
+    __resetWatermarkCachesForTest({ latinOk: true, cjkOk: false });
     const srcBuf = await solidPng(400, 300, 128);
     const out = await addWaterMarkToIMG(srcBuf, '酱油的博客');
-    expect(Buffer.isBuffer(out)).toBe(true); // 不 throw、不失败
+    expect(out).toBe(srcBuf); // 原 buffer 同一引用：绝不产出豆腐块图
     const warned = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
     expect(warned).toContain('wqy-zenhei'); // 点名要装的字体
     expect(warned).toContain('fontconfig');
     expect(warned).toContain('水'); // 说明探测字
+  });
+
+  it('零字体容器（Latin 也渲染不出）：任何水印文字都跳过 + WARN 给出安装命令', async () => {
+    // 容器实测形状：零字体时 librsvg 输出满屏 .notdef 豆腐块（Latin 576 ink px、CJK 180 ink px），
+    // 只数 ink 会误判成功 —— 探测（vs U+E001 逐字节）才是防线
+    __resetWatermarkCachesForTest({ latinOk: false, cjkOk: false });
+    const srcBuf = await solidPng(400, 300, 128);
+    const out = await addWaterMarkToIMG(srcBuf, 'example.com');
+    expect(out).toBe(srcBuf);
+    const warned = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(warned).toContain('[watermark]');
+    expect(warned).toContain('ttf-dejavu');
+    expect(warned).toContain('fontconfig');
   });
 });
 
