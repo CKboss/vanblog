@@ -11,6 +11,7 @@ import {
 } from './controller/admin/init/init.controller';
 import { RESTORE_UPLOAD_OPTIONS } from './utils/restoreUpload';
 import { readFileSync } from 'fs';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 
 /**
  * `POST /api/admin/init/restore`：在初始化页直接上传整站备份恢复整站。
@@ -49,18 +50,7 @@ const mockedInvalidateMeta = publicMetaCache.invalidatePublicMetaCache as jest.M
 
 const root = __dirname;
 const read = (rel: string) => readFileSync(path.join(root, rel), 'utf8');
-const code = (src: string) =>
-  src
-    // ⚠️ 顺序必须是"先行注释、后块注释"。反过来的话，任何注释里出现的 `/*` 字节对
-    // （例如尾随注释 `// 只有 /static/img/<file>.{webp,…} 由 caddy 直服`）都会开启一个
-    // **假块注释**，把后面几十上百行真实代码一起吃掉 —— 本仓库已因此误判三次：
-    // 静态目录守卫只找到 1 个目录（实际 ≥6）、main.ts 的 primary 守卫钉子找不到那行、
-    // 以及这里的 keepAliveTimeout / caddy clearLog 两条钉子。
-    .split('\n')
-    .filter((l) => !/^\s*\/\//.test(l))
-    .map((l) => l.replace(/(\s|^)\/\/.*$/, '$1'))
-    .join('\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
+const code = stripCommentsForAnchor;
 
 const MANIFEST = {
   kind: 'vanblog-full-backup',

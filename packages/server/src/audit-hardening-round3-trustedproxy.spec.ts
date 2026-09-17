@@ -6,6 +6,7 @@ import {
 } from './utils/trustedProxy';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 
 /**
  * 限流的"该信哪个 IP"：`VANBLOG_TRUST_FORWARDED_HEADERS`（默认 `auto`）。
@@ -24,18 +25,7 @@ import { join } from 'path';
 
 const root = __dirname;
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
-const code = (src: string) =>
-  src
-    // ⚠️ 顺序必须是"先行注释、后块注释"。反过来的话，任何注释里出现的 `/*` 字节对
-    // （例如尾随注释 `// 只有 /static/img/<file>.{webp,…} 由 caddy 直服`）都会开启一个
-    // **假块注释**，把后面几十上百行真实代码一起吃掉 —— 本仓库已因此误判三次：
-    // 静态目录守卫只找到 1 个目录（实际 ≥6）、main.ts 的 primary 守卫钉子找不到那行、
-    // 以及这里的 keepAliveTimeout / caddy clearLog 两条钉子。
-    .split('\n')
-    .filter((l) => !/^\s*\/\//.test(l))
-    .map((l) => l.replace(/(\s|^)\/\/.*$/, '$1'))
-    .join('\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
+const code = stripCommentsForAnchor;
 
 describe('私网/回环判定（信任转发头的前提）', () => {
   const truthy: Array<[any, boolean]> = [

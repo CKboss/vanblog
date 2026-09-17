@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 
 /**
  * 这一轮「运行时占用 + 安全/逻辑漏洞」的加固，用源码级断言钉住。
@@ -12,17 +13,7 @@ import { join } from 'path';
 const root = __dirname;
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 /** 断言前剥掉注释：新写的注释里常常引用"以前是怎样的"，不剥会自己匹配自己 */
-const code = (src: string) =>
-  src
-    // ⚠️ 顺序必须是"先行注释、后块注释"。反过来的话，一行 `//` 注释里只要出现 `/*`
-    // （例如 main.ts 里那句 `/static/img/*.{webp,png,…}` 的说明），就会开启一个**假块注释**，
-    // 把后面几十上百行全部吃掉 —— 本仓库已经因此误判过两次：一次让"谁创建了哪些静态子目录"
-    // 的守卫只找到 1 个目录（实际 ≥6），一次让 main.ts 的 primary 守卫钉子找不到那行代码。
-    .split('\n')
-    .filter((l) => !/^\s*\/\//.test(l))
-    .map((l) => l.replace(/\/\/[^'"`]*$/, ''))
-    .join('\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
+const code = stripCommentsForAnchor;
 
 describe('每次浏览的数据库开销：合并写入', () => {
   it('MetaProvider.addViewer 不再自己写四个集合，而是交给 ViewStatsProvider', () => {

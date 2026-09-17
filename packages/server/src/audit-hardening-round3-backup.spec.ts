@@ -5,6 +5,7 @@ import { BACKUP_STATIC_FOLDERS } from './utils/fullBackup';
 import { ATTACHMENT_FOLDER } from './utils/attachment';
 import { THUMB_FOLDER } from './types/setting.dto';
 import { config } from './config';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 
 /**
  * 整站备份"哪些静态目录该进归档"的**分类守卫**。
@@ -56,12 +57,7 @@ const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
  * 都被剥掉了，本用例只抽到 1 个目录（阈值是 >=6），守卫当场变红。
  * 这不是假设：2026-09-17 就真发生了（main.ts 改写之后），所以顺序写死在这里。
  */
-const code = (src: string) =>
-  src
-    .split('\n')
-    .filter((l) => !/^\s*\/\//.test(l))
-    .join('\n')
-    .replace(/\/\*[\s\S]*?\*\//g, '');
+const code = stripCommentsForAnchor;
 
 /** `String.prototype.matchAll` 是 ES2020 的，而本项目 target 是 es2017 ⇒ 用 exec 循环 */
 function allMatches(re: RegExp, text: string, group = 1): string[] {
