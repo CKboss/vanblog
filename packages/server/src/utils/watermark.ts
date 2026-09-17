@@ -46,12 +46,21 @@ import {
  * 度量公式、样式、env 解析全部在 utils/watermarkSvg.ts（纯函数、全单测）。
  *
  * 字体依赖：SVG <text> 由 libvips 内置的 librsvg+pango+fontconfig 栅格化，**要系统字体**。
- * 生产镜像需要（Dockerfile runner 阶段 apk add）：`fontconfig ttf-dejavu wqy-zenhei`。
+ * 官方镜像**已经装了**（Dockerfile runner 阶段 `apk add fontconfig ttf-dejavu wqy-zenhei`，
+ * 2026-09 起；实测镜像 860 → 892 MB，`/usr/share/fonts` 28 MB，`fc-list` 0 → 25 条，
+ * `fc-match 'WenQuanYi Zen Hei'` → wqy-zenhei.ttc）。源码部署 / 自建镜像仍需要自己装，
+ * 所以下面的探测与 WARN 保留：它保护的是"没装字体的那台机器"。
  * ⚠️ 容器实测（node:24-alpine 零字体）：librsvg **不会渲染成空白**，而是满屏 .notdef 豆腐块
  * （'Ag…' 576 ink px、'水' 180 ink px），stderr 只有一句 Fontconfig error 就"成功"返回。
- * 所以缺字体的降级不能靠"数 ink"，而是逐字符集探测（`Ag`/`水` vs 私用区 U+E001 逐字节对比）：
+ * 在**装字体之前**的镜像里实测过后果：`example.com` 盖出 20,684 个变化像素、中文 8,170 个，
+ * 而且两段不同的中文（'酱油的博客' 与 '鼠标键盘垫'）产出**逐字节相同** —— 铁证是方块不是字。
+ * 所以缺字体的降级不能靠"数 ink"，而是逐字符集探测（`Ag`/`水` vs **等码点数**的私用区串逐字节对比）：
  * Latin 探测失败 ⇒ WARN + 原图返回；文本含 CJK 且 CJK 探测失败 ⇒ WARN 点名 wqy-zenhei + 原图返回。
  * **宁可不盖，也不能盖满图豆腐块。** 探测每进程一次（memo），ink 判空只是第二道防线。
+ * ⚠️ 探测的比较基准必须与探测文本**码点数相同**：第一版拿 `Ag` 比单个 U+E001，零字体时
+ * "两个方块 vs 一个方块"逐字节当然不同 ⇒ latinOk 恒真 ⇒ 照样盖满图方块（镜像内实测
+ * changedPx 32,699）。注入探测结果的单测当时全绿 —— 所以 spec 里另有一条**真跑探测**的用例
+ * （FONTCONFIG_FILE 指向空配置 + 子进程，因为 fontconfig 在进程内只初始化一次）。
  */
 
 const logger = new Logger('Watermark');
@@ -133,6 +142,23 @@ const CJK_PROBE_CHAR = '水';
 /** 私用区码点：任何字体都不会给它真字形，只会渲染 .notdef（豆腐块）或空白。 */
 const NOTDEF_PROBE_CHAR = '\uE001';
 
+/**
+ * 与 `text` **码点数相同**的私用区串，用作"这串到底有没有被真渲染出来"的比较基准。
+ *
+ * ⚠️ 字数必须对等，否则判据是坏的：零字体时 `Ag` 画成**两个**方块、单个 U+E001 画成**一个**方块，
+ * 两者逐字节当然不同 ⇒ 探测会得出"Latin 有字体"，于是照样把满图 .notdef 合成进去。
+ * 这不是推理，是**镜像内实测**（`FONTCONFIG_FILE` 指向不含任何字体目录的配置 ⇒ `fc-list` 0 条）：
+ * 单字基准下 `latinOk` 仍为 true，Latin 水印盖出 32,699 个变化像素；换成等长基准后正确跳过。
+ * CJK 那条一直是单字对单字（`水` vs U+E001），所以它没这个毛病 —— 也正因如此，
+ * 单元测试注入 `{latinOk:false}` 时全绿，而真探测在真容器里是错的：**注入探测结果的测试
+ * 证明不了探测本身**。下面配了一条真跑探测的用例（`watermark.spec.ts` 的 FONTCONFIG_FILE 那条）。
+ *
+ * 用 `[...text]` 而不是 `text.length`：代理对（emoji、CJK 扩展 B）是一个码点、两个 UTF-16 单元。
+ */
+export function notdefComparatorFor(text: string): string {
+  return NOTDEF_PROBE_CHAR.repeat([...String(text ?? '')].length);
+}
+
 async function renderProbeRaw(sharp: any, text: string): Promise<Buffer | null> {
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="72">` +
@@ -146,7 +172,7 @@ async function renderProbeRaw(sharp: any, text: string): Promise<Buffer | null> 
 }
 
 /**
- * 系统字体能不能渲染 Latin / CJK：分别比较 `Ag`、`水` 与私用区码点 U+E001 的栅格结果。
+ * 系统字体能不能渲染 Latin / CJK：分别比较 `Ag`、`水` 与**等码点数**的私用区串的栅格结果。
  * 有对应字体 ⇒ 真字形 ≠ .notdef/空白；没有 ⇒ 两者逐字节相等（同为豆腐块或同为空白）。
  *
  * ⚠️ 为什么不能只"数 ink 像素"：**实测（node:24-alpine 容器，零字体）librsvg/pango
@@ -158,15 +184,16 @@ async function renderProbeRaw(sharp: any, text: string): Promise<Buffer | null> 
  */
 export async function probeFontCoverage(sharp: any): Promise<FontCoverage> {
   try {
-    const [latin, cjk, notdef] = await Promise.all([
+    const [latin, cjk, latinNotdef, cjkNotdef] = await Promise.all([
       renderProbeRaw(sharp, LATIN_PROBE_CHAR),
       renderProbeRaw(sharp, CJK_PROBE_CHAR),
-      renderProbeRaw(sharp, NOTDEF_PROBE_CHAR),
+      renderProbeRaw(sharp, notdefComparatorFor(LATIN_PROBE_CHAR)),
+      renderProbeRaw(sharp, notdefComparatorFor(CJK_PROBE_CHAR)),
     ]);
-    if (!latin || !cjk || !notdef) {
+    if (!latin || !cjk || !latinNotdef || !cjkNotdef) {
       return { latinOk: false, cjkOk: false };
     }
-    return { latinOk: !latin.equals(notdef), cjkOk: !cjk.equals(notdef) };
+    return { latinOk: !latin.equals(latinNotdef), cjkOk: !cjk.equals(cjkNotdef) };
   } catch {
     return { latinOk: false, cjkOk: false };
   }

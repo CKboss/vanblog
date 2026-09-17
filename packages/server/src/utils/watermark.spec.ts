@@ -1,8 +1,13 @@
 import { Logger } from '@nestjs/common';
+import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   __resetWatermarkCachesForTest,
   addWaterMarkToIMG,
   generateWaterMark,
+  notdefComparatorFor,
   probeFontCoverage,
   scanInk,
 } from './watermark';
@@ -819,4 +824,126 @@ describe('regression anchors for the old jimp defects', () => {
     expect(svg).toContain('© v.blog');
     expect(svg.match(/<text /g)).toHaveLength(10);
   });
+});
+
+// ---------------------------------------------------------------------------
+// 字体覆盖探测：**真跑一遍**
+//
+// ⚠️ 上面 CJK 那组用例是**注入**探测结果的（`__resetWatermarkCachesForTest({latinOk:false,…})`），
+// 它们证明的是"探测说没字体时，行为是跳过 + WARN"，**证明不了探测本身对不对**。
+// 这个差别不是理论上的：探测的第一版拿 `Ag`（2 个字符）去和单个 U+E001 比，
+// 零字体时"两个方块 vs 一个方块"逐字节当然不同 ⇒ `latinOk` 恒为 true ⇒
+// 镜像里照样把满图 .notdef 合成进图片（容器内实测 changedPx 32,699）。注入结果的单测全绿。
+// 所以下面这条**在真环境里真跑探测**：用 FONTCONFIG_FILE 指向一个不含任何字体目录的配置，
+// 造出"零字体容器"，并且必须开子进程 —— fontconfig 在进程内只初始化一次，
+// jest 的 worker 可能已经渲染过别的用例，那时改环境变量根本不生效。
+// ---------------------------------------------------------------------------
+
+describe('字体覆盖探测（真环境，不注入结果）', () => {
+  it('notdefComparatorFor：比较基准必须与探测文本**码点数相同**', () => {
+    expect(notdefComparatorFor('Ag')).toBe('\uE001\uE001');
+    expect(notdefComparatorFor('水')).toBe('\uE001');
+    expect([...notdefComparatorFor('example.com')].length).toBe([...'example.com'].length);
+    // 代理对是一个码点、两个 UTF-16 单元：用 .length 会造出双倍基准，
+    // 逐字节比较就永远不相等 ⇒ 探测永远说"有字体"（与上面那个 bug 同一个形状）
+    expect('😀'.length).toBe(2);
+    expect([...notdefComparatorFor('😀')].length).toBe(1);
+    expect(notdefComparatorFor('')).toBe('');
+  });
+
+  it(
+    '零字体环境：真探测判 Latin 与 CJK 都不可用；而旧判据（单字基准）会说"有字体"',
+    () => {
+      const serverRoot = join(__dirname, '..', '..');
+      const watermarkPath = JSON.stringify(join(__dirname, 'watermark.ts'));
+      const svgPath = JSON.stringify(join(__dirname, 'watermarkSvg.ts'));
+      const script = [
+        "const sharp = require('sharp');",
+        `const { probeFontCoverage } = require(${watermarkPath});`,
+        `const { DEFAULT_WATERMARK_FONT_FAMILY } = require(${svgPath});`,
+        'const raster = (text) => {',
+        '  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="72">' +
+          '<text x="12" y="58" font-family="${DEFAULT_WATERMARK_FONT_FAMILY}" font-size="48" ' +
+          'fill="#ffffff">${text}</text></svg>`;',
+        '  return sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer({ resolveWithObject: true })',
+        '    .then((r) => r.data);',
+        '};',
+        '(async () => {',
+        '  const [latin, notdef1, notdef2, coverage] = await Promise.all([',
+        "    raster('Ag'), raster('\\uE001'), raster('\\uE001\\uE001'), probeFontCoverage(sharp),",
+        '  ]);',
+        "  process.stdout.write('PROBE ' + JSON.stringify({",
+        '    coverage,',
+        '    oldShapeSaysLatinOk: !latin.equals(notdef1),',
+        '    newShapeSaysLatinOk: !latin.equals(notdef2),',
+        '  }) + String.fromCharCode(10));',
+        '})().catch((e) => process.stdout.write("PROBE-ERR " + (e && e.message) + String.fromCharCode(10)));',
+      ].join('\n');
+
+      const runProbe = (extraEnv: NodeJS.ProcessEnv) => {
+        const res = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', '-e', script], {
+          cwd: serverRoot,
+          env: { ...process.env, TS_NODE_TRANSPILE_ONLY: 'true', ...extraEnv },
+          encoding: 'utf8',
+          timeout: 180000,
+        });
+        const line = `${res.stdout || ''}\n${res.stderr || ''}`
+          .split('\n')
+          .find((l) => l.startsWith('PROBE '));
+        if (!line) {
+          return null;
+        }
+        try {
+          return JSON.parse(line.slice('PROBE '.length));
+        } catch {
+          return null;
+        }
+      };
+
+      const dir = mkdtempSync(join(tmpdir(), 'vanblog-fontprobe-'));
+      const cfg = join(dir, 'empty-fonts.conf');
+      try {
+        writeFileSync(
+          cfg,
+          [
+            '<?xml version="1.0"?>',
+            '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">',
+            '<fontconfig>',
+            '  <!-- 负向对照：不含任何字体目录 ⇒ 这个进程里等价于"零字体容器" -->',
+            '  <dir>/nonexistent-font-dir-for-negative-control</dir>',
+            '</fontconfig>',
+            '',
+          ].join('\n'),
+        );
+        const control = runProbe({});
+        const noFonts = runProbe({ FONTCONFIG_FILE: cfg });
+        if (!control || !noFonts) {
+          // 跑不起来（没有 ts-node、spawn 失败…）就说清楚并跳过，绝不假装验过
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[watermark][SKIP] 子进程真探测跑不起来（ts-node 不可用？）—— 这条用例的价值就在于真跑，' +
+              '所以不做退化的假断言；镜像内的等价验证见交付记录',
+          );
+          return;
+        }
+        if (!control.coverage.latinOk) {
+          // eslint-disable-next-line no-console
+          console.warn('[watermark][SKIP] 本机对照组都没有 Latin 字体，形不成对照（零字体那半边无从证明）');
+          return;
+        }
+        // 对照组（本机有字体）：真字形 ≠ 方块，两种判据都说"有字体"
+        expect(control.newShapeSaysLatinOk).toBe(true);
+        expect(control.oldShapeSaysLatinOk).toBe(true);
+        // 零字体：等码点数判据必须说"没有"，于是上层跳过水印 + WARN + 返回原图
+        expect(noFonts.coverage).toEqual({ latinOk: false, cjkOk: false });
+        expect(noFonts.newShapeSaysLatinOk).toBe(false);
+        // ⚠️ 反证：旧判据（单字 U+E001 比 'Ag'）在**同一个零字体环境**里会说"有字体" ——
+        //    这就是那个 bug 本身，钉在这里，谁把基准改回单字就会红
+        expect(noFonts.oldShapeSaysLatinOk).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    240000,
+  );
 });
