@@ -30,7 +30,7 @@
 |---|---|---|
 | admin 后台 | http://localhost:3002 | 首次访问会走初始化向导 |
 | website 前台 | http://localhost:3001 | Next.js dev；`/api/*` 与 `/static/*` 都可用 |
-| server API | http://localhost:3000 | NestJS，Swagger 在 `/swagger` |
+| server API | http://localhost:3000 | NestJS；Swagger 在 `/swagger`，⚠️ **默认关**（要 `VANBLOG_SWAGGER=true` 才开，`9601faa4` 起，见 §7.65） |
 | waline 评论 | http://localhost:8360 | 由 server 自动拉起的子进程 |
 | MongoDB | 127.0.0.1:27017 | 免安装版 mongod，数据在 `vanblog_dev/mongo-data` |
 
@@ -137,9 +137,10 @@ export R=$PWD HOME=$PWD/.tools/home PATH="$PWD/.tools/node24/bin:$PATH"
 (cd packages/admin && node --test tests/unit/*.test.js)
 ```
 
-- **已知失败**：`packages/server/src/utils/watermark.spec.ts` 的
-  `composites text with a dot the same way (#322)` 需要 `Jimp.loadFont(Jimp.FONT_SANS_128_WHITE)`
-  从 CDN 拉字体，**离线环境会超时失败**。与业务改动无关，别去「修」它（要跑通就挂代理）。
+- ~~**已知失败**：`watermark.spec.ts` 的 `#322` 用例要 `Jimp.loadFont` 从 CDN 拉字体，离线会超时~~
+  **已作废（2026-09-17）**：可见水印整个重写成 sharp/libvips + SVG（§7.66），spec 不再调
+  `Jimp.loadFont`，那条"离线必红的既有失败"不复存在 —— 当前基线是 **0 失败**（§7.39）。
+  再看到"watermark 字体用例红"请当新问题查，别引用旧结论。
 - admin 的 `tests/e2e/*.spec.js` 需要 playwright 浏览器；安装时设了
   `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`，所以本机只跑 `tests/unit`。
 - admin 单测会断言 `docs/` 里的文案（例如必须出现「自定义路径名」「数字 id」「隐写水印」等），
@@ -632,6 +633,8 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   可见水印 → **缩放**（长边 ≤ `maxImageEdge`，默认 1920，只缩不放）→ **隐写水印** → 有损压缩（webp/avif）→
   生成缩略图 → 落盘 + 写库（`meta.thumb`）。缩放必须在隐写之前（重采样会打乱块均值格点），
   隐写必须在压缩之前（压完还要能读出来）。`upload()` 与 `replaceBySign()` 共用这个方法，别改分叉。
+  （⚠️ 可见水印的实现 2026-09 已从 jimp 重写成 sharp/libvips + SVG：默认**满图斜排平铺**、支持中文、
+  缺字体自动跳过 —— 旧文档里"右下角小字、不支持中文、128px 以下加不上"的说法全部作废，见 §7.66。）
 - 新代码：`utils/stego.ts`（纯算法：8x8 块均值格点量化 QIM、CRC32、mulberry32 排列、多数表决）、
   `utils/stegoWatermark.ts`（sharp/Jimp 适配：读 raw RGBA → 改像素 → 按原格式写回）、
   `utils/imgResize.ts`、`utils/thumbnail.ts`、`utils/imgEncode.ts`、`utils/imageOptions.ts`。
@@ -1163,6 +1166,10 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
 - 安全侧遗留：文章/分类密码明文存储且 `==` 比较、解锁接口无次数限制；管理员口令是 sha256 套 sha256（非 bcrypt/argon2）；
   除登录外无全局限流；`/swagger` 公开；没有全局 ValidationPipe（当前净化中间件是黑名单不是白名单）；
   `init` 接口无守卫（靠"库里有没有用户"判断）；API token 有效期 100 年。
+  （⚠️ 2026-09 盘点：这条清单已逐项清掉大半 —— 管理员口令与文章/分类密码都已是 scrypt（§7.18、§7.63）、
+  解锁接口有限流且爆破 key 已归一化（§7.64）、全局限流已就位并扩到静态/feed/sitemap/swagger（§7.18、§7.64）、
+  `/swagger` 默认关（§7.65）、`init` 有初始化密钥 + env 零接触初始化（§7.62）、API token 默认 1 年（§7.18）。
+  全局 ValidationPipe 仍未做。）
 - `next build` 仍有约 27 处 `__tests__/*.spec.ts` 里的类型错误（不影响运行），所以留了 `VANBLOG_SKIP_TYPECHECK`。
 
 ### 7.12 一键脚本 `scripts/vanblog.sh` 体检与修复（v0.3.6 → v0.3.7；安装来源的改动见 §7.12.1）
@@ -1420,7 +1427,12 @@ README 里的 curl 也指向作者的文档站与上游 raw。当时本分支还
   再次编码时又抛 RangeError → 现在回落到 `NOT_EXTENDED_JSON`（保持原样）。
 - **加密文章解锁限流**：`POST /api/public/article/:id` 是明文比较且完全公开，可以无限速爆破。
   新增 `utils/attemptLimit.ts`（内存计数，同 IP + 同文章 10 分钟 20 次，成功即清零）→ 429。
-- **Swagger 可关**：`VANBLOG_SWAGGER=false`（默认仍开启，保持既有行为）。
+  （⚠️ 后续两处加固：这个限流的 key 曾被 `07`/`0x7`/`7e0` 等 id 拼写绕过成"无限次"，现已归一化；
+  IP 也从 socket 换成可信客户端 IP —— 都见 §7.64。"明文比较"也已终结：密码本体改存 scrypt，见 §7.63。）
+- **Swagger 可关**：那一轮落地的是 `VANBLOG_SWAGGER=false` 可关（当时默认仍开启、"保持既有行为"）。
+  （⚠️ **默认值已被 HEAD 反转，别再照旧说法做**：`9601faa4` 起默认**关**，只认字面量
+  `VANBLOG_SWAGGER === 'true'` 才开，打错的值不会静默打开；两个深链 `/swagger` 的后台页面也已改掉。
+  理由与细节见 §7.65。）
 
 **后台（admin）**
 - **转圈卡死一族**：`Welcome/tabs/{overview,viewer,article}.jsx`、`components/UpdateModal`、
@@ -1593,6 +1605,10 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
 - 文章解锁的密码比较改成**常量时间**（`verifyAccessPassword()`），同时兼容历史明文与将来的哈希。
   ⚠️ 文章/分类密码**没有**改成哈希存储：后台「修改信息」表单会把存着的密码回填到输入框，
   改哈希必须同时改前端语义（留空 = 不修改），否则会把密码写成哈希串或把文章意外解锁。要做得前后端一起改。
+  （⚠️ **这条"没做"后来做了，正是按这里写的方案**：`9601faa4` 把访问密码改成 scrypt 存储、
+  任何接口都不再回显密码（后台只拿 `hasPassword` 布尔）、前端语义改成"留空 = 不修改，
+  清除要显式 `clearPassword`"；`e845c7a6` 再把存量明文洗成哈希的启动 wash 注册进 wash 链。
+  代价是**忘记即不可找回**。全部细节见 §7.63。）
 
 **5. CORS**：`main.ts` 里**没有** `enableCors`，也就是默认同源策略 ✓ 别顺手"加个 CORS 方便调试"，
 那会让任意站点能带着用户的 token 调后台接口。
@@ -3293,6 +3309,9 @@ mongod 重启时每个请求要干等半分钟）、`connectTimeoutMS` 10s、`so
 swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后台「关于」页与「Token 管理」页
 各有一个跳 `/swagger` 的链接，默认关掉会让那两个链接 404 —— 所以交给用户自己决定，
 而不是替他们关。
+（⚠️ **"交给用户决定"这个取舍后来被站长推翻**：`9601faa4` 把默认翻成关，挡路的那两个深链也一起修了
+——「关于」页改指仓库里的 API 文档，「Token 管理」页先探测 `/swagger-json` 再决定跳哪。见 §7.65。
+若你读到模板注释仍写着"它默认公开/默认不关"，那是待纠正的漂移，以 §7.65 为准。）
 
 **CI 从"六个从没跑过的工作流"收敛到四个有用的**：GitHub API 实测这个 fork 一共只跑过 3 次
 （publish-ghcr ×2、release ×1），其余六个工作流从未执行。
@@ -3453,6 +3472,9 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
 23. **`/swagger` 默认公开**（`VANBLOG_SWAGGER=false` 可关，模板里已给出注释掉的开关）：
     等于把整个后台 API 面摊给未登录用户，robots 的 disallow 不是访问控制。
     没直接默认关掉是因为后台「关于」页与「Token 管理」页各有一个跳 `/swagger` 的链接。
+    **→ 已落地（§7.65）：默认反转成关（`VANBLOG_SWAGGER === 'true'` 才开），两个深链页面同步改掉；
+    在此之前 `ef915775` 还先把 `/swagger` 与 `/swagger-json` 纳入了限流与安全头（§7.64）。
+    本条括号里"=false 可关"的写法已作废。**
 
 ### 7.41 运维五件套（§7.40 D 组的落地）：mongo healthcheck、verify、空间预检、install-cron、fork 优先回退
 
@@ -3904,6 +3926,9 @@ max 还天然幂等、并发安全（`max(max(a,b),b)=max(a,b)`），重复启�
 **可选的保留期**：两张台账以前**永不清理**（本机 8750 条 visit 跨 800 天，索引已 ~0.88MB）。
 `VANBLOG_VISIT_RETENTION_DAYS` 默认 **0 = 永不删除**（不静默改行为），
 挂在已有的每日 ViewerTask 上（不新增定时器），无论设多少都保留最近若干天，删了多少会打日志。
+（⚠️ **"默认 0" 已两易其值**：第四轮审计把它翻成 365，随后站长拍板改成 **3650 天 = 10 年**
+（`RETENTION_DEFAULTS = { retentionDays: 3650, minKeepDays: 30 }`），显式设 `0` 才是"永不删除"的逃生口。
+理由与诚实的代价（持续攻击下的稳态上限 ≈ 2.87 GB，真正压住它的是每日新路径上限而不是窗口）见 §7.65。）
 
 **去掉每请求的浪费**：`InitMiddleware` 以前**每个 API 请求**都 `users.findOne({})`
 （顺带把密码哈希读进内存），现在缓存"是否已初始化"，于是
@@ -4230,7 +4255,7 @@ tsc 0 错。⚠️ CI 的 testPathPattern 白名单要补
 | −1 | `express` | 4.21.2 | 5.2.1 | 4 仍在维护（安全补丁还有） | **暂不动**：Express 5 换了 path-to-regexp v8，`path: '*'` 这种裸通配不再合法，而本仓库 `app.module.ts` 有 **4 处** `forRoutes({ path: '*' })`；这也是 Nest 只能停在 10 的原因（Nest 11 起默认 Express 5） | （**已升到 4.22.3 单副本，见 §7.53**；仍然留在 4.x —— Express 5 = path-to-regexp v8 的结论不变）
 | −1 | `multer` | 1.4.4-lts.1 | 2.4.0 | **1.x 已停更、带已知漏洞** | 与 Nest 11 绑定（`@nestjs/platform-express` 10 声明的是 multer 1.x，强行 override 到 2 会破坏 `FileInterceptor` 的类型与行为） | （**已升到 2.4.0，见 §7.53** —— 不必等 Nest 11：platform-express 10.4.18+ 原生就是 multer 2）
 | −2 | `picgo` | 1.5.6 | 3.0.2 | 1.x 带着 `git-clone`/`decompress` 两个**无修复版本**的漏洞 | 已在 §7.46 用 `VANBLOG_ALLOW_PICGO_PLUGINS` 默认关闭缓解；升 3.x 是另一次依赖树重排（Node 版本、插件 API 全变），单独立项 |
-| −1 | `jimp` | 0.22.10 | 1.6.1 | 0.22 老但仍在 | 中等：1.x 是重写版，API 全变（水印那条链路要重写），而且它需要联网拉字体（本机离线跑不了那套测试） |
+| −1 | `jimp` | 0.22.10 | 1.6.1 | 0.22 老但仍在 | 中等：1.x 是重写版，API 全变（水印那条链路要重写），而且它需要联网拉字体（本机离线跑不了那套测试）。（⚠️ 2026-09 更新：**可见水印链路已重写成 sharp/libvips + SVG，不再用 jimp 也不再联网拉字体**，那条离线必红的测试用例已消失（§7.66、§7.39）；jimp 只剩隐写水印 `stegoWatermark.ts` 与 thumbnail/imgEncode/imgResize 的 sharp-缺失兜底还在用，升级 1.x 的理由更弱了） |
 | −2 | `markdown-it` | 13.0.2 | 15.0.2 | 13 老 | 中等：14 起改了导出形态与部分插件签名，牵连 `markdown-it-katex` 替代品、task-lists、锚点等一整串插件 |
 | −2 | `mermaid` | 10.9.3 | 12.0.0 | 10 已老 | 中等：11/12 改了 API 与主题结构，前台的三重懒加载与 `mermaidSafety` 都要跟着改 |
 | −1 | `tailwindcss`（website） | 3.3.5 | 4.3.3 | 3 仍在维护 | 中等：4 换了引擎（Oxide）与配置形态（CSS-first），全站样式要回归验证 |
@@ -4915,6 +4940,7 @@ podman 的 `10.88/16` 在 `10/8` 里，Docker Desktop 的 `192.168.65.x` 在 `19
    **200 + 一整屏 0**（错误与"没有访问量"分不出来）；`=999999999` → 先 push 十亿个日期字符串、再把十亿元素的 `$in`
    发给 Mongo。实测每单位 num **15.4–26 µs**、每单位滞留 120–370 B；num=100000 卡 1.60 s、num=300000 卡 **4.62 s**，
    外推 1e9 是数十 GB / 数小时 ⇒ **一个后台 GET（或一枚泄漏的 API token，而 `/swagger` 默认公开）就能把单进程 server OOM 掉**。
+   （⚠️ 括注里"`/swagger` 默认公开"已成历史：`ef915775` 把它纳入限流、`9601faa4` 把默认翻成关，见 §7.64/§7.65。）
    现在 `sanitizeDataNum(value, fallback, max=3650)`（`utils/pagination.ts`）：非法回落 5、合法夹到 `[0,3650]`（0 仍合法 = 只看今天）。
    活体实测（临时 token、只读、用完撤销并复验 401）：`=30` → 200 / **3307 B**（与 §7.48 记录的同一查询逐字节同长）；
    `=abc` → 200 / 807 B 且是**真数据**；`=999999999` → 200 / 78016 B / **119 ms**。
@@ -5025,7 +5051,7 @@ visits 8772 条 **17544 → 18 次命令（975×）**、墙钟 51.4 s → 35.3 s
 | `provider/cache/cache.provider.ts`（登录失败窗口） | 183 B/条 ⇒ 10 万个不同来源 IP ≈ 17.5 MB，**永不清理** | key 只可能是套接字地址（伪造不了；反代后面全站就一个 key），上界是"进程存活期内真实出现过的 IP 数"；任何淘汰都会削弱防爆破 |
 | `static.provider.importItems` | 93 条 ⇒ ~186 次串行往返 ≈ 0.5 s | per-item try/catch（"跳过坏的继续"）是要害语义，改批量要做逐操作错误映射；收益是后台导入快半秒 |
 | `importArticles`/`importDrafts`/`washCustomPage`/`updateTagByName`/`saveAllScripts`/`ISRProvider.activeUrls` 的串行 await | — | 前两个会调 `updateById`（别名唯一性校验 + 字数/ISR 副作用），并行化会自己和自己竞争；`activeUrls` 串行是**明确记录过的决定** |
-| `searchByString` 仍把 ≤200 篇**全文**捞回来 | 公开搜索的响应里就包含 `content` | 加投影会改公开响应形状。剩下是四趟 `toLocaleLowerCase()`（最多约 1MB）；改正则 `i` 能省分配，但大小写折叠在非 ASCII 上与 `toLowerCase()` 不等价（İ、ß、开尔文符号），公开搜索不值得冒险 |
+| `searchByString` 仍把 ≤200 篇**全文**捞回来 | 公开搜索的响应里就包含 `content` | 加投影会改公开响应形状。剩下是四趟 `toLocaleLowerCase()`（最多约 1MB）；改正则 `i` 能省分配，但大小写折叠在非 ASCII 上与 `toLowerCase()` 不等价（İ、ß、开尔文符号），公开搜索不值得冒险。（⚠️ 后续：§7.61 的静态搜索索引让前台搜索**不再走这条接口**，它降级成索引不可用时的兜底，命中频率大降，但接口本身仍匿名可达，这条账没销） |
 | `main.ts` 的 `bootstrap()` 不带 `.catch()` | `unhandledRejection` 兜底装在 bootstrap **内部**（`await initJwt()` 之后） | `initJwt`/`NestFactory.create` 失败时带裸栈退出、由 docker 重启 —— arguably 是对的（响亮地失败）；cluster 分支有 `.catch` |
 | `getViewerGrid` 直接调用时仍按 num 分配 | 见 G-3 | NaN/负数行为被 `viewer.provider.spec.ts:190` 的旧算法对拍钉住；夹在 HTTP 边界是唯一不破坏那条钉子的做法 |
 | `articleKeyOf` 的怪癖（`/a/post/b` → `/ab`） | 真实路由只有 `/post/<slug>` | 怪癖只导致一次"匹配不到任何文档"的静默 no-op；改它会改统计口径，源码注释已明确推迟 |
@@ -5106,6 +5132,11 @@ YAML 的重复键会静默覆盖，属于"看着生效其实没生效"的那类�
   返回 `{status, version, uptimeSeconds, mongo, mongoState, mongoStateText, mongoPingMs,
   memoryRssMb, heapUsedMb, now}`；**mongo ping 不通时返回 503**（这样 `<500` 的判据才有意义），
   其余情况 200。
+  （⚠️ **载荷形状后来变了**：`5b8771a2` 把 `uptimeSeconds`/`memoryRssMb`/`heapUsedMb` 收进
+  `detailsAllowed()` 门后（内部令牌 `x-vanblog-internal` 常量时间比较，或显式 `VANBLOG_HEALTH_DETAILS=true`），
+  匿名只剩 `{status, mongo, mongoState, mongoStateText, mongoPingMs, now}`；`9601faa4` 又把 `version`
+  恢复成**始终公开**（站长决定：版本号本来就渲染在每个前台页脚，藏它属于安全表演）。
+  所以现在匿名载荷 = 上述六项 + `version`。见 §7.64 与 §7.65。）
 - ⚠️ **未初始化也必须 200**（payload 里带状态），否则全新安装在走完向导之前会一直被判定为不健康、
   可能被编排系统反复重启 ⇒ 它被加进了 `InitMiddleware` 的 `.exclude()`。
 - **不能被缓存**（`Cache-Control: no-store`）：健康检查的意义就在"此刻"，被 caddy/CDN 缓存住等于没有。
@@ -5422,6 +5453,11 @@ srv0 与 srv1 都有。运行期由一个**哨兵文件** `.vanblog-caddy-serve-
 不消耗 `VANBLOG_RATE_LIMIT_PER_MIN` 预算、也不被限流。而**镜像里的标准 caddy 2.11.4 没有任何限流模块**
 （`caddy list-modules | grep -ci 'rate.?limit'` → **0**；要限流得用 xcaddy 自编 `mholt/caddy-ratelimit`）。
 所以"开这个开关 = 这 6 条路径没有限流"，**这正是默认关的正当理由**，文档必须这么写。
+（⚠️ **更正（`54e85eab`）：上面这段"权衡"字面为真、实质误导，已作废**。实测 700 请求的反代突发
+**0 个 429** —— 页面 HTML 在**任何一种模式下都从来不在限流器覆盖里**（反代模式 caddy 把页面请求转给
+:3001 的 Next，缓存命中的页面根本不碰 :3000 的 Nest；限流器当时只覆盖 `/api/*` 与 `/static/*`）。
+直发真正改变的是"爬虫来了谁烧 CPU"（Node 单事件循环 vs caddy sendfile），不是限流覆盖。
+"caddy 没有限流模块"仍是事实，但它不是这个开关的代价，只配当脚注。全文见 §7.60。）
 实测（仓库自己的压测台、真镜像栈、真的 53 篇数据、同机 ⇒ 绝对值保守、A/B 有效）：
 首页扫描 c=200×500 —— 反代 **279.8–316.1 rps** / p50 131–143 / p95 1485–1678 / p99 1545–1763，
 直发 **1171.0–1246.9 rps** / p50 104–128 / p95 240–366 / p99 296–380 ⇒ **3.7–4.5× rps、p95 −78…−84%**，
@@ -5436,6 +5472,8 @@ POST 绕过、gzip、`If-None-Match`→304、查询串、哨兵 OFF/ON/OFF 逐�
 需要先有服务端"在 notFound/重定向的 revalidate 里删掉文件"的语义（server 的territory；最小的一步是
 notFound 时 unlink，然后再评估）。生产代码里**没有**做运行期的 caddy admin API 路由改写
 （哨兵设计让模板保持声明式、provider 只写一个文件；那些 PATCH 实验只用于验证且全部回滚了）。
+（⚠️ 这条"没做"**后来做了**：`VANBLOG_CADDY_SERVE_HTML=all` + 服务端 ISR 失效产物清理器
+`artifactReaper`，正是沿着"最小的一步是 notFound 时 unlink"这条路线走完的 —— 见 §7.60。）
 ⚠️ 顺带一个 caddy 的脾气：用 node-fetch/undici 打它的 admin API（:2019）会得到
 `403 client is not allowed to access from origin ''`，**除非带 Origin 头**；**axios 不带 Origin 也能过** ⇒
 `CaddyProvider` 用的是 axios，不受影响，但下一个写 caddy 调用的人会踩。
@@ -5704,18 +5742,760 @@ title-anchor 数: 11 | 页面里 .katex 总数: 0
   所以"curl 到 200 且有几 KB"不等于拿到了那个 chunk —— 我按猜的名字取 chunk，grep 了半天 HTML。
   要确认真实 chunk 名，别去 umi.js 里正则匹配（那里面的字符串是**匹配用的正则**，不是文件名）。
 
-### 7.39 测试基线（本分支最后一次全量运行的结果）
+### 7.60 caddy 直发 HTML 扩到动态路由 + ISR 失效产物清理器（以及一条我们自己写错的限流结论）
+
+§7.57-J 只做了 6 个固定页的"安全子集"，把 `/post/* /page/* /category/* /tag/*` 留成"没做"清单；
+本节是那个功能的后半程（`54e85eab` 的提交信息是事实来源，代码在 `provider/isr/artifactReaper.ts`、
+`provider/isr/isr.provider.ts`、`provider/caddy/caddy.provider.ts` 与两份 caddy 模板）。
+
+#### 先说更正：那条"开了直发就不受限流"的结论是错的（字面为真、实质误导）
+
+我以前在**四处**（README 正文与 env 表、本文件 env 表、compose 模板注释、docs/advanced/benchmark.md）
+写着：开 `VANBLOG_CADDY_SERVE_HTML` 之后那些路径"不再受限流"，并把它当成默认关的正当理由。
+本轮实测推翻了这个权衡叙事：**700 个请求的反代模式页面突发产出 0 个 429** ——
+反代模式下 caddy 把页面请求转给 :3001 的 Next，缓存命中的页面**根本不碰 :3000 的 Nest**，
+而限流器从来只覆盖 `/api/*` 与 `/static/*`（后者还是 `ef915775` 当天才进覆盖的，见 §7.64）。
+也就是说**页面 HTML 在任何一种模式下都从来不在限流器覆盖里**，"直发会失去限流"暗示的覆盖损失不存在。
+直发真正改变的是**爬虫来了谁烧 CPU**：Node 的单事件循环 vs caddy 的 sendfile。
+"镜像里的标准 caddy 没有限流模块"（`caddy list-modules | grep -ci 'rate.?limit'` → 0）仍是事实，
+但它不是这个开关的代价，只配当脚注。⚠️ 教训：**"A 绕过了 B"这种安全叙事，先量 B 到底覆盖不覆盖 A**，
+否则会把一个不存在的损失写成决策依据（§7.57-J 的那段"必须一起说的权衡"已就地标注作废）。
+
+#### 动态路由直发的形状
+
+- env 语义：`VANBLOG_CADDY_SERVE_HTML=true` = 6 个固定页（第一轮语义不变）；`=all` = 再加
+  `/post/* /page/* /category/* /tag/*` 四个动态前缀；**其它任何值（包括打错的）一律当关**
+  （解析是纯函数、每个分支有单测）。
+- **双哨兵门控**：固定页看 `.vanblog-caddy-serve-html`，动态前缀额外看 `.vanblog-caddy-serve-html-dynamic`；
+  `CaddyProvider` 只在 level=all 且 ISR 是 onDemand 时才写动态哨兵，60 秒对账一次，
+  切到 delay 模式**自动摘掉**（自愈，不用重启）。
+- 模板里动态分支是 `try_files {http.request.uri.path}.html`：**文件在就直发**
+  （`Cache-Control: no-cache` + `X-Vanblog-Static-Html: dynamic`），**不在就落回 catch-all 反代** ⇒
+  308 与 404 仍然由 Node 发出（它们本来就不留磁盘产物）。preview cookie 照旧整体绕过。
+
+#### ISR 失效产物清理器（artifactReaper）：直发动态路由的前提
+
+Next 14.2.35 的 file-system-cache **只写不删**（源码里没有任何 unlink）：文章被删除/私有化/加密/
+改成定时发布后，revalidate 只把 notFound 记在**进程内存**里，旧 `.html`（连同全文的 `__NEXT_DATA__`）
+永远留在盘上，而 caddy 按文件直服看不见内存态 ⇒ **已删文章会被 200 永远发出去**。清理器就是补这个删除语义：
+
+- **触发**：挂在每一轮全量渲染风暴（storm）的尾部 + 主进程每 `VANBLOG_ISR_REAP_INTERVAL_MS`
+  （默认 15 分钟、下限 60 秒）的**周期对账**（primary-only，与 ISRTask 同理）。
+- **合格集来自 `SiteMapProvider.getSiteEntries()`** —— 与 sitemap 同一个源，而搜索索引（§7.61）的
+  文章集合也是它 ⇒ **清理器 / sitemap / 搜索索引三者不可能漂移**：一篇被删除、私有化或还没到
+  定时发布点的文章，从三者里同时消失。不复制谓词（复制的第二份必然漂移）。
+- **删什么**：不再合格路径的 `.html`/`.json`/`.meta` **三件套**一起删（绝不让 Next 看到半套产物）。
+- **安全边界（每条都有测试钉住）**：只碰 `post/ page/ category/ tag/` 四个前缀目录，6 个固定页的根级
+  `.html` 永远不扫不删；每个待删路径 resolve + 前缀检查（slug 是用户可影响的字符串，`..`/绝对路径/
+  越界一律拒绝）；pages 目录不存在（dev 机、前后端分离、`VANBLOG_DISABLE_WEBSITE`）= no-op；幂等；
+  **目录读失败记 error 而不是吞掉**（静默失败的清道夫 = 已删文章继续公开）；DB 读失败或集合空得可疑时
+  **跳过整轮删除**（拿不完整的合格集去对账比不删更危险）；盘上文件名是**解码后**的路径段
+  （实测容器里有 `category/博客.html`），合格集同样做 `decodeURIComponent`（孤立 `%` 解不了就按原样，
+  **宁可少删不误删**）。
+
+#### 当年五个阻塞点，现在各自的保证
+
+- **(a) 删文陈旧产物** → 清理器解决。负向对照记录在案：不做 unlink 时，caddy 对已删文章回 200
+  且正文里 10 个特征串全部命中。
+- **(b) 308/404 不留产物** → `try_files` 落回反代：`/post/53` 仍 308 到别名，`/post/never-existed`
+  与 `/page/999` 仍 404。
+- **(c) notFound 只在内存** → 同 (b)，状态码始终由 Node 发出。
+- **(d) delay 模式陈旧** → onDemand 门控，切 delay 自动摘哨兵。
+- **(e) 加密文章明文留盘** → 风暴重写 + 清理器：实测把文章设为私有后，产物先被重写成
+  **44,463 B** 的 gated 文件（`content.length=0`、无明文），随后被 reap，反代下发的是解锁页。
+- 模板形状的"墙"用例现在点名允许集、原始阻塞点、清理器的保证、以及为什么 `/api/*`、`/admin/*`、
+  `/c/*` 与更深的通配**永远不能加入**。
+
+#### 实测（真镜像栈 + 真的 53 篇语料）
+
+- 文章页 p50：**7 ms → 1–2 ms**（identity），7 → 3 ms（gzip）。
+- 突发 c=50：反代 **323.9 rps**（700/700 全 200）→ 直发 **2861.2 rps**（2000/2000 全 200，0.7 s 跑完），
+  **8.8×**。
+
+#### ⚠️ 结构上保证、但尚未活体验证的两行（照实记，别混进绿矩阵）
+
+1. **未来 `publishAt` 的文章不可从盘直发**：合格集继承 `visiblePublishFilter`，skip 与 reap 两个门都有
+   单测 —— 但容器级活体验证需要重建镜像。
+2. **删除 → 风暴 → 自动 unlink 的完整链**：集成测试在真实临时文件系统上证了 storm 尾部清理，
+   容器内的自动链要等清理器进镜像才存在。
+   ⚠️ "harness-proven"与"image-proven"的区别正是本项目以前烧过手的地方，所以这两行单列。
+
+### 7.61 站内搜索：静态索引 `/static/search/index.json` + `/search` 结果页（服务端搜索降级成兜底）
+
+#### 动机
+
+以前的"搜索"只有 SearchCard 浮层（右上角放大镜 / `Ctrl`+`K`）打匿名 `GET /api/public/search` →
+`ArticleProvider.searchByString`：对 title/tags/category/**content** 四个字段各跑一次 Mongo `$regex`
+（正则用不上索引、只能烧 CPU），`limit(200)` + `maxTimeMS(5000)`，候选整批拉进 Node 再做 JS `includes`
+复筛 —— **每一次按键都是一轮全表正则扫描**，热门词被 20 个人同时搜就是 20 轮；而且没有排序
+（返回顺序 = 库的返回顺序）、没有结果页、没有高亮。
+
+#### 实现
+
+- **server 生成紧凑静态索引** `<staticPath>/search/index.json`，由既有 `/static/**` 挂载点直接发
+  （不加 mount、不改 caddy，还能被 CDN 缓存）⇒ **匿名搜索的数据库成本降到 0**。
+- 生成时机：ISR 风暴尾部（与 RSS/sitemap 同一条路，成本被合并）+ **每小时 :05 的兜底 cron**
+  （primary-only；选 :05 是错开 :00 的整点 ISR cron）+ 60s 防抖入口（`delay=0` 合法，垃圾值回落 60s，
+  不会被 `setTimeout` 当 1ms 立刻跑 —— rss/sitemap 那句 `delay || 60*1000` 会把 0 变 60s，这里显式避开）。
+- **收录集合 = `SiteMapProvider.getSiteEntries()` 的 `/post/**` 条目**（与 sitemap、§7.60 的清理器同源，
+  三者不可能漂移）；内容来自 `getAll('public', false, false)` 投影（带 content、按 createdAt 倒序）。
+- **绝不下发 `content`**：索引里只有 ≤ `snippetChars` 的纯文本摘要（`markdownPlainText` 剥掉全部
+  markdown 语法；按 4× 过扫描取 markdown 再剥再硬截，否则没有 `<!-- more -->` 的文章会得到一堆几十字残摘要）。
+  键名刻意压短成 `u/t/s/c/g/d/w` —— 这个文件是**每个打开搜索的访客都要下载**的。
+  `SEARCH_INDEX_VERSION = 1`，改任何字段语义都要 +1（前台按它判断"这份索引我认不认"）。
+- env：`VANBLOG_SEARCH_INDEX`（总开关，`false` 完全关生成）、`VANBLOG_SEARCH_INDEX_MAX_DOCS`
+  （默认 2000、硬上限 20000，超出**最新优先**保留并置 `truncated`）、`VANBLOG_SEARCH_INDEX_SNIPPET_CHARS`
+  （默认 200，夹 50–500）。
+- **前台 `/search` 是 ISR 静态壳**：HTML 里不含任何结果（查询词构建期不可知，pages router 的静态页
+  拿不到 `?q=`；换 `getServerSideProps` 等于把"每次搜索渲染一页 + 回调公开接口"重新装回来），
+  搜索在浏览器里对着索引做：子串匹配 + 排序（`utils/searchRank.ts`）+ 高亮（`utils/searchHighlight.ts`）
+  + 客户端分页（每页 20 条）。SearchCard 浮层保留（即时结果仍走服务端接口），新增
+  **「查看全部结果」→ `/search?q=<关键词>`**。
+
+#### 降级矩阵：每一种都要**说出来**
+
+索引可能：还没生成过（全新安装）、生成失败停在旧版本、被 env 关掉、被 CDN 缓存成半截、格式升了版
+而前台是旧的 —— 每一种都干净地退回服务端 `/api/public/search`，且每种降级带一个**面向用户的理由串**
+（`explainBackend`，结果页显示"当前使用服务端搜索：索引文件不存在"并 `console.info` 一份）。
+⚠️ "静默退回"正是功能烂掉的方式：索引坏了半年没人知道，因为搜索看起来还能用。
+
+#### 实测（本机真库 53 篇、只读；量具 `vanblog_dev/search-index-live.ts`，数字取自 provider 头注释）
+
+| | 值 |
+| --- | --- |
+| 生成一轮（中位数，含查库） | **33 ms**（冷启动第一轮 70 ms；查库 28 ms，纯构建+序列化 CPU **5 ms**，每篇 0.62 ms/CPU 0.09 ms） |
+| `index.json` | **29,222 B**，gzip **13,705 B**（每篇 551 B / gzip 259 B） |
+| 1000 篇外推 | 原始 **611 KB**、gzip **126 KB**（⚠️ 两个口径：滑窗真文本 126 KB 偏乐观，按每篇线性外推 253 KB 偏悲观，真值居中） |
+| 对照：一次 `/api/public/search?value=的` | 19–28 ms（客户端索引搜索 **1 ms**） |
+| 对照：既有静态产物 | `rss/feed.xml` 285 KB→gzip 81 KB；`sitemap.xml` 15 KB→2.5 KB |
+
+#### ⚠️ 坑
+
+- 量字节要用 `Buffer.byteLength` 而不是 `string.length`（UTF-16 码元数，中文 1 字算 1 而 UTF-8 占 3 字节）——
+  第一版量具就这么把 29 KB 报成 16 KB。
+- **CJK 摘要压不动**：53 篇时 gzip/raw = 0.469（对照 sitemap.xml 的 0.164，那是重复的 ASCII URL）。
+  语料涨上去后这个文件会变成"每个搜索者都要下载的最大静态产物"，第一个该调的旋钮是
+  `VANBLOG_SEARCH_INDEX_SNIPPET_CHARS`（200 → 120 约省 40% 字节），其次才是 MAX_DOCS。
+- `searchIndex.realdb.spec.ts` 默认 `describe.skip`（要 `VANBLOG_SEARCH_REALDB_URL` 指到一次性库才跑），
+  §7.67 把 CI 改成全跑后它也**不会**在 CI 里碰真库。
+- 测试：server `searchIndex.provider.spec.ts`（846 行）+ realdb（300 行，默认跳）；website vitest
+  `searchIndex.spec`（482）/ `searchRank.spec`（311）/ `searchHighlight.spec`（394）/ `searchPageWiring.spec`（239）。
+  浏览器里的真实观感（高亮渲染、键盘导航）本机无浏览器，**未量**。
+
+### 7.62 零接触初始化：env 自动初始化 + 初始化密钥（setup key）+ 安装归因记录
+
+#### 动机
+
+`POST /api/admin/init` 与 `POST /api/admin/init/restore` 是**匿名**的，唯一闸门是"users 集合有没有行"。
+抢占一个全新实例只需要**一个请求**（限流只约束重试，而 IPv6 /64 让重试也近乎免费）。
+更糟的是此前**没有任何检测**：`initSystem` 什么都不记，事件日志只记登录不记安装，
+站长被抢占后的第一个信号是"我自己的密码不对了"。这是 §7.11 遗留清单里
+"`init` 接口无守卫（靠'库里有没有用户'判断）"那条的最终 closure。三层机制互补：
+
+#### 1) env 自动初始化（零接触）：让"敞开的窗口"根本不存在
+
+`VANBLOG_ADMIN_USER` + `VANBLOG_ADMIN_PASSWORD`（或 `_FILE`）⇒ 全新站点在**监听第一个 HTTP 请求之前**
+就完成初始化（`provider/init/envBootstrap.ts`）。契约：
+- `VANBLOG_ADMIN_PASSWORD_FILE`（一个路径，例如 Docker secret）**优先于**内联变量；secret 文件按标准
+  契约只 **trimEnd**（前导空白理论上是密码的一部分，尾部换行几乎一定是 `echo` 带进来的）；
+  内联密码按字面字节使用（compose 里的尾随空格属于操作者的字面值）。
+- 读不到文件**大声失败**，绝不静默回落到内联变量；凭据被拒绝也**大声失败**
+  （ERROR + 把"站点保持未初始化"的后果写进日志）—— "运营者给了凭据、站点却没初始化"必须当场可见。
+- 站点已初始化时这些变量被**忽略**（INFO 说明一句，免得轮换凭据的人疑惑）；密码本身**永不**进日志、
+  永不进迁移台账的 detail。
+- ⚠️ **不发明第二套密码策略**：`InitDto`/`initSystem` 在服务端对用户名/密码没有任何强度校验
+  （向导前端只有 `required: true`），所以这里拒绝的恰好是"向导也会拒绝的"（缺失/空白用户名、空密码）。
+  要加长度下限应当先加给向导本身，两边一起变。
+
+#### 2) 初始化密钥（setup key）：把"匿名抢先"变成"需要密钥"
+
+- 站点未初始化期间，每次启动用 `makeSalt()`（32 随机字节）生成密钥，写进 `<日志目录>/setup.key`
+  （mode 0600；日志目录通常是挂载卷），UX 刻意**镜像既有的 restore.key**（「忘记密码」流程，站长已经熟悉）。
+- 未初始化期间**反复** WARN 打印：启动一次 + 每 `VANBLOG_SETUP_KEY_REMIND_MINUTES`（默认 10 分钟，
+  显式 0 = 只印一次）重印，直到完成初始化。站长原话要求如此：全新实例可能放几个小时才有人来装，
+  而 docker logs 会滚动，**只印一次等于没印**。
+- 两条 init 路由必须携带密钥，比较用 `safeEqual`（常量时间）。
+- **生命周期**：初始化成功后这把密钥不再授予任何东西（两条路由对已初始化站点直接 403/500），
+  而日志目录还会被 `vanblog.sh backup` 打包 —— 留一个"看着像活密钥"的 0600 文件本身就是味道 ⇒
+  init/restore/env-bootstrap 成功后都 `clearSetupKey()` 删掉它，之后启动也不再生成。
+  **restore.key 不删**：它一直有用（忘记密码）。
+- **开关默认值有一段历史**：`VANBLOG_INIT_REQUIRE_SETUP_KEY` 首版默认 `false`（"升级不破坏走到一半的安装"），
+  站长随后拍板翻成**默认 `true`**（见 §7.65 第四项）。翻默认是**有意的破坏性变更**：升级时正走到一半的安装，
+  下一次提交会 400 —— 但密钥在日志里反复打印、400 消息自带指路（文件路径 + docker logs 命令），
+  逃生口是显式 `=false`。解析规则：未设置/空 ⇒ **开**；显式 `false/0/no/off` ⇒ 关；
+  **无法识别的值 ⇒ 开 + WARN 点名**（打错的 `=flase` 绝不许静默把保护关掉 —— 默认翻转之后，
+  "静默失败"这个本仓库记录在案的头号陷阱指向的正是"静默关闭"）。
+
+#### 3) 安装归因记录：被抢占时站长事后唯一的证据
+
+安装的一刻往**迁移台账**（migrations 集合，§7.57-A）写一条 `install:initialised`
+（时间、路由 = init / init/restore / env-bootstrap、套接字 IP、可信客户端 IP、UA、restore 的归档名 ≤200 字）
+并 WARN 一条。为什么复用台账而不是新建集合：台账已经是"每 key 一行、有界、后台可读
+（`GET /api/admin/migration/list`，AdminGuard 且协作者不可见）、outcome=error 必 WARN"的唯一持久记录面，
+这一行必须**活过日志轮转、不随日志级别被过滤**。后台 `InstallRecordBanner` 把它摆在首页第一屏
+（老站点台账里没有这一行 ⇒ 渲染 null，零噪音）。⚠️ 它是**归因**，不是防护 ——
+真要关掉窗口得用 env 自动初始化或 setup key。
+
+#### 测试与未量
+
+`provider/init/setupKey.spec.ts`（359 行）、`envBootstrap.spec.ts`（194）、`controller/admin/init/init.setupkey.spec.ts`
+（545）、`init.install.spec.ts`（582）、真库 e2e `test/setup-key-init.e2e-spec.ts`（559，独立配置
+`jest-setup-key-init.json`，带"拒绝 27017/真实库名"的硬护栏）、admin `initSetupKey.test.js`（239）。
+**未量**：真镜像 + 全新容器的活体抢占演练没有记录；"每 10 分钟重印"在多进程部署下的行为按
+primary-only 守卫推理，未活体观测。
+
+### 7.63 文章/分类访问密码 → scrypt：不回显、忘记即不可找回、启动 wash
+
+#### 动机
+
+文章/分类的「访问密码」历史上是**明文**存进 Mongo 的（拿到库或整站备份 = 拿到所有加密文章的密码），
+比较还曾是 `==`（§7.18 改成常量时间，但仍是明文）。§7.18 当时明确记了"为什么没改哈希"：
+后台「修改信息」表单会把存着的密码**回填**到输入框，改哈希必须同时改前端语义（留空 = 不修改），
+否则会把密码写成哈希串或把文章意外解锁 —— "要做得前后端一起改"。这一轮就是按那张图做完的
+（核心在 `9601faa4`，wash 注册在 `e845c7a6`）。
+
+#### 写入 / 下发 / 清除的契约（唯一真源 `utils/accessPassword.ts`）
+
+- **写入一律 scrypt**（`utils/crypto.ts` 的 `hashAccessPassword`，与管理员口令同一套自描述格式
+  `scrypt$16384$8$1$<salt b64>$<hash b64>`、常量时间比较）；`verifyAccessPassword` 同时认新哈希与
+  历史明文，所以**洗到一半的站点照样能解锁**（中断安全是构造出来的，不是测出来的）。
+  ⚠️ `hashAccessPasswordIdempotent`：已经是 scrypt 格式的输入**原样返回** —— 再哈希一次就变成
+  "密码是那串 scrypt 字符串"，文章**永久锁死且无法还原**。
+- **密文永不下发**。哈希不是"可以下发的东西"：它一样能让拿到响应的人离线爆破，而且表单一旦回填，
+  就等于把"服务端必须能读出密码"这个前提焊死。所有会序列化成响应的形状都走 `redactAccessSecret()` /
+  schema 的 toJSON transform，把 `password` 换成布尔 `hasPassword`；公开面（publicView/listView）
+  压根不 select password。**任何接口都不回显密码，后台只知道"设没设"。**
+- **留空 = 不修改，清除必须显式**（四象限，有测试逐格钉住）：
+
+  | 请求里的 password | clearPassword | 结果 |
+  |---|---|---|
+  | 缺键 / 空串 / 全空白 | 缺省或 false | **不动**（新建时为"不加密"） |
+  | 非空字符串 | 缺省或 false | 写入 scrypt 哈希 |
+  | 缺键 / 空串 | true | 写入 `''`（解除加密） |
+  | 非空字符串 | true | **400**（两种意图冲突） |
+
+  `clearPassword` 只认布尔 `true` 与字符串 `'true'`，其它真值（`1`、`'yes'`）一律当没传 ——
+  **宁可"没清掉"也不要"意外清掉"**。
+- **代价要讲给用户**：前端 `services/van-blog/accessPassword.js` 里那句
+  「密码以 scrypt 哈希存储，服务端也读不出来：忘记或清除之后无法找回，只能重新设置」是常驻文案，
+  测试钉住它必须出现在用户真的看得到的地方（表单 help、列表 tooltip、两个新建入口）。
+  **忘记即不可找回**，没有后门。
+
+#### 启动 wash（`e845c7a6`）
+
+`ArticleProvider.washAccessPasswords()` 挂进启动 wash 链、紧挨 `wash:userSalt`：**primary-only、
+fire-and-forget**，由 `main.ts` 的 `wash()` 包装器记迁移台账 `wash:accessPasswords`
+（provider 刻意**不自己记**，与 `washUserWithSalt` 一致，否则会记重）。同时洗 **articles 与 categories
+两个集合**；幂等（第二次跑报 washed=0）。
+⚠️ 一个小坑：wash 的 lambda 里要**重新** `app.get(ArticleProvider)`，不能复用 bootstrap 前面声明的
+const —— 那个 const 活在更窄的块作用域里（TS2552）；而且 lambda 内解析更懒（wash 在启动安定后才跑）。
+
+#### 测试与未量
+
+server：`utils/accessPassword.spec.ts`（298 行）、`provider/article/article.provider.accessPassword.spec.ts`
+（613）、真库 e2e `test/access-password.e2e-spec.ts`（611，独立配置 `jest-access-password.json`）；
+admin：`accessPassword.test.js`（363，含全部文案钉子）。⚠️ 同名不同义要当心：**响应形状**上的
+`hasPassword`（toJSON transform 产出）说的是"库里这篇/这个分类当前设没设密码"，而**管线前置事件
+payload** 里的 `hasPassword` 说的是"这份 DTO 带没带密码"—— 刻意保留同名是为了让"只看 hasPassword"
+的管线脚本在事件里也能跑，但写脚本的人必须知道区别。哈希化之后日志卫生更关键：明文时代日志好歹
+不是唯一副本，现在**日志若回显密码就成了明文唯一还活着的地方**，所以事件 payload 只带布尔、永不带值。
+scrypt 单次校验的耗时**未量**（参数与 §7.18 管理员口令相同：N=16384/r=8/p=1，每次尝试约 16 MB 内存硬化）。
+
+### 7.64 安全加固三连（第四轮审计的修复）：匿名 health 泄露、三个未鉴权洞、静态/feed/sitemap/swagger 进限流
+
+三个提交按发现顺序：`5b8771a2`（审计自己刚加的接口时发现）、`089bc55b`（匿名面进攻性审计 +
+一次性实例活体证明）、`ef915775`（第四轮进攻性审计，**推翻了仓库自己几轮来的一个"已修"声称**）。
+
+#### A. 匿名 health 不再泄露版本指纹与内存画像（`5b8771a2`）
+
+`GET /api/public/health`（§7.56 加的）曾把 `version`（= `v2026.9.1@0ec01a5`，**精确 tag + commit**）
+连同 `uptimeSeconds`/`memoryRssMb`/`heapUsedMb` 发给任何人。健康检查根本不需要这些：
+镜像 HEALTHCHECK 只测 `statusCode < 500`，`vanblog.sh drill` 只读 `status` 和 `mongo`。
+多出来的字段给未鉴权扫描器的是**精确的漏洞比对指纹** + 推断重启时机与负载的旁路。
+修法是 `detailsAllowed()` 门：正确的 `x-vanblog-internal` 令牌（常量时间比较）**或**显式
+`VANBLOG_HEALTH_DETAILS=true`（只认精确字符串 `true`，`TRUE`/`1` 保持关 —— 打错字不许静默打开披露）。
+匿名只剩 `{status, mongo, mongoState, mongoStateText, mongoPingMs, now}`，对编排与 drill 仍然够用；
+503 语义、`no-store`、5 秒探测缓存、并发探测合并全部不变。
+
+- ⚠️ **差点踩的坑（有 spec 钉死）**："是不是内部请求"的现成 helper `utils/rateLimit.ts:isInternalRequest()`
+  对**任何回环请求**返回 true —— 一体式部署里 caddy 拨的是 `127.0.0.1:3000`，用它等于把 details
+  发给每个匿名访客。这与 §7.55-F 限流选 IP 犯过的是**同一个混淆**。所以 `detailsAllowed` 只看令牌，
+  并钉住 `socket.remoteAddress = 127.0.0.1` **拿不到** details；错长度令牌、一字节之差、缺头、
+  服务端未配令牌，全部拒绝。
+- 顺带修了一条**说谎的 doc comment**：声称未初始化站点载荷带 `initialized:false` —— 该字段从未存在，
+  初始化状态一直由 `/api/public/meta` 的 233 信封表达（错误的注释比没有注释更糟）。
+- 实测：controller spec **10/10**（5 条新 gating 用例）；tsc 0 错（全新 buildinfo）；dev 栈活体：
+  匿名请求返回恰好六字段，带假 `x-vanblog-internal` 且服务端未配令牌仍拿不到 details。
+- BREAKING：外部监控面板要读 version/uptime/内存的，得带令牌或开 `VANBLOG_HEALTH_DETAILS`
+  （仓库内没有任何东西读它们）。
+- ⚠️ **其中 `version` 一项随后又被站长反转回"始终公开"**（理由见 §7.65 第二项）；
+  uptime/内存至今仍在门后。别按本段把 version 再"修"回去。
+
+#### B. 三个未鉴权洞（`089bc55b`，全部在一次性实例上活体证明：自建 mongod 于 27099 + 临时 server 端口，没有 POST 过 dev 栈、没碰 :27017）
+
+**B1. 静态目录 403 守卫可绕过，绕过后拿到的是真文件字节（HTTP 200）。**
+守卫比较的是 `req.path.startsWith('/static/export/')`，而 `req.path` 是 Express 的**原始** pathname
+（不做 percent 解码、不做点归一化），serve-static/send 却会**先解码归一化再开文件**。
+活体证明的绕过（对种在 `<static>/export/` 的文件）：`/static/%65xport/<file>`、`/static/export%2f<file>`、
+`/static/./export/<file>`、`/static//export/<file>`、`/static/%2e/export/<file>`、
+`/static/%74mp/full-restore-<id>/vanblog.ndjson`（**整站备份恢复的暂存目录** = 数据库 NDJSON，
+内含密码哈希与 jwt 密钥）、`/static/upload-tmp%2f<archive>`。而平拼写法 `/static/export/<file>`
+与 `/static/export/../export/<file>` 都正确 403 —— **守卫在所有人都会敲的那一种拼写上有效，
+这正是它长期没被发现的原因**。生产可达：caddy 只直服 `/static/img/*.{webp,png,jpg,jpeg,gif,avif,ico}`，
+其余 `/static/*` 全部带着原始 target 反代给 Node。⚠️ 更早一轮曾记录"导出归档匿名下载已修" ——
+**那次修复是装饰性的**，如实标注而不是悄悄改掉。
+修法（`utils/staticGuard.ts`）：解码（非法转义回落字面量）→ 折叠反斜杠与重复斜杠 → `path.posix.normalize`
+→ 比较 `/static/` 后的**第一个路径段**（不再是字符串前缀）。两处超出报告的加固：归一化后**逃出**
+`/static/` 的路径（`%2e%2e` 之类）返回哨兵一律拒绝（不把判断权交给 send 自己的 malicious-path 检查）；
+段先小写再比（大小写不敏感文件系统 + `%45xport`）。首段比较还顺手治好旧代码的误伤
+（`/static/exportx/` 以前按前缀 403，现在正确地 404）。修后活体复验：九种拼写全部 403、零内容泄露。
+
+**B2. 加密文章解锁的 20 次/10 分钟预算可以靠换 id 拼写绕过成"无限次"。**
+限流 key 用原始路径参数，而 `article.provider.ts` 用 `parseNumericId` = `Number(id)` 解析 ——
+一个整数有无穷多种拼法。活体证明：`7` 打满（429）之后，`07`、`007`、`7.0`、`0x7`、`7e0`、`0b111`、
+`0o7`、`%207`、`0000000007` **各拿到全新的 20 次**；`POST /api/public/article/0000000000007`
+带正确密码返回全文明文（而拼写 `7` 仍在 429）。前导零无上界 ⇒ 预算实际无限，唯一剩下的约束是
+30/min 公开写桶 ≈ **每 IP 每天 4.3 万次猜测**，再乘上源 IP 轮换。文章密码是用户自选的明文串 ⇒
+这等于每个加密文章的实用性泄露。修法：key 走 provider 同一个 `tryParseNumericId` 归一化
+（数字拼法全部归到 `#7`，别名归到 `p:<slug, 80 字>`），总预算 = 数字 20 次 + pathname 20 次 / 10 分钟，
+合法访客零感知。
+
+**B3. 三个防滥用计数器共享一个全站桶（caddy-回环拓扑下人人都是 127.0.0.1）。**
+登录 `login-<ip>`、评论 `comment-<ip>`/`comment-day-<ip>`、解锁 `unlock-<ip>-<id>` 都 key 在
+`pickSocketIp()` 上 —— 出厂拓扑里它对每个访客都是 `127.0.0.1`。活体证明：五个**不同**客户端 IP
+各失败登录一次，第六个客户端带**正确密码**被拒（401「错误次数过多！请 300 秒后再试」），
+且每 5 分钟 5 个请求就能无限续期 ⇒ **后台永久 DoS**。同形状：20 个请求把某加密文章对全体读者
+锁 10 分钟；10 请求/10 分钟（或 50/天）让全站评论瘫痪。另外评论存储的 `ip` 也来自 `pickSocketIp`
+⇒ 生产部署里每条评论的 IP 都是 127.0.0.1，后台 IP 列与按 IP 的审核全部失效。
+修这个洞需要**收回我上一轮写下并用测试钉住的一条理由**（"把这些计数器挪到 header 派生 IP 会重开
+'转个头就无限试密码 + 冒充受害者 IP 栽赃'"）：那对旧 `pickClientIp()`（优先信客户端可控的
+`cf-connecting-ip`/`x-real-ip`）成立，对默认 `auto` 模式的 `pickTrustedClientIp()` **不成立** ——
+后者只在 socket 对端是回环/私网时才信转发头，且取 XFF 的**最右**条目（可信代理追加的那条）。
+客户端伪造 `X-Forwarded-For: <victim>` 到 caddy 时变成 `<victim>, <attacker>`，key 仍是攻击者自己的地址
+⇒ 转头一无所获、也栽不了赃。旧的 round-3 spec **就地反转**，错误的理由与它的代价记录在断言上方而不是删掉。
+新入口 `bruteForceClientIp()` + `VANBLOG_BRUTE_FORCE_IP_SOURCE=trusted|socket`（默认 `trusted`；
+只有字面量 `socket` 才切换，打错保持在更安全的默认）。逃生口对应唯一一种推理不成立的部署：
+**覆写**（而不是追加）XFF 的代理会让最右条目重新变成客户端可控 —— 那样的运营者应设 `socket`
+并接受共享桶。`login.guard.ts`（keyOf 与 inspect）、`comment.provider.ts`（限流器 + 存储 IP）、
+解锁 key，四个调用点全换。
+
+测试：`utils/staticGuard.spec.ts`（24 条：九种绕过拼法拒绝、无辜目录放行（含 `/static/exportx/` 与
+`/static/EXPORTX/`）、裸 `/static` 不误判为逃逸、非法转义按字面量判、backup-under-static 兜底含
+`%76` 编码形、**守卫名单钉死** —— 新增静态目录必须做一次分类决定）；`utils/bruteForceIp.spec.ts`
+（默认与打错字、代理后两客户端拿到不同 key vs socket 模式全塌成 127.0.0.1、伪造 XFF 与
+`cf-connecting-ip` 被忽略、公网对端忽略一切转发头、永不返回空串、四个调用点的来源钉子）；
+`controller/public/unlockBruteforce.spec.ts`（3 条：key 归一化、`7` 的十一种拼法用**生产解析器**归到
+一个 key、别名按 80 字截断计数）。反转后的 round-3 spec **51/51**。server tsc 0 错（全新 buildinfo）。
+BREAKING：评论记录开始存真实客户端 IP（后台 IP 列的内容会变）。
+
+#### C. 静态/feed/sitemap/swagger 从来没在限流器与安全头覆盖里（`ef915775`）
+
+第四轮进攻性审计的发现，**它作废了本仓库几轮来的一个声称**。`app.useStaticAssets()` 与
+`SwaggerModule.setup()` 在 `app.listen()` **之前**执行，而 Nest 只在 `init()`（由 `listen()` 触发）里
+安装 `app.module.ts` 的中间件链，所以真实的 Express 栈是：
+
+```
+[json][sanitize][static403][express.static /static][/rss][/sitemap][swagger] … [request-id][securityHeaders][rateLimit][no-store][init][router]
+```
+
+静态与 swagger 的响应**在限流器跑起来之前就结束了**。审计员在一次性实例上把所有限流设成 5、
+每个请求都带 `X-Forwarded-For`（避开回环豁免）实测：
+
+```
+12 × GET /api/public/meta      -> 200 200 200 200 200 429 429 …（Nest 路由受限）
+12 × GET /static/img/probe.txt -> 200 × 12（静态完全不受限）
+12 × GET /swagger-json         -> 200 × 12（59.3 KB 随便拉）
+12 × GET /robots.txt           -> 429 × 12（同一个全局桶，已被占满）
+```
+
+⇒ `rateLimit.ts` 里的 `rl-static-<ip>` 桶（`VANBLOG_STATIC_LIMIT_PER_MIN`，默认 6000/min）是
+**从来不可达的死代码**；而"证明"过静态桶生效的两处记录 —— §7.44 的"图片流量不再共享 API 桶"与
+§7.55-F 的"旋转 CDN 头时 `/static/**` 桶数 20 → 1" —— 都是**拿合成请求直接调
+`rateLimitMiddleware`** 量出来的，这就是它们看起来活体的原因；在真实 HTTP 栈上它们从来不是活的。
+现实中 `/static/file/**` 附件、`/static/themes/**`、`/static/customPage/**` 完全没有速率限制，
+而镜像里的 caddy 2.11.4 没有限流模块 ⇒ **整台机器上最便宜的带宽耗尽向量**。静态与 swagger 的响应
+也从来没拿到过 `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / `X-Content-Type-Options`。
+
+- **修法**：一段 pre-Nest 中间件，紧贴 `useStaticAssets` 之前安装，匹配 `/static/`、`/rss/`、
+  `/sitemap/`、`/swagger`，先跑 `securityHeadersMiddleware` 再跑 `rateLimitMiddleware`，
+  外加 `app.disable('x-powered-by')`。两个要点：**不会双重计数**（这些路径的响应在这里结束，
+  到不了 Nest 里的同名中间件）；前缀判定对 **raw 与解码两种形式**都查 —— 与 B1 同一个理由，
+  否则等于把一小时前刚填掉的坑在更高一层重新挖开。内部流量不受影响：SSR/ISR 与 waline 子进程
+  经回环回调且不带转发头，`isLoopbackRequest` 整体豁免（刻意如此，否则前台渲染页面时会自己限死自己）。
+- **被否决的"结构上更干净"方案**：把 `useStaticAssets`/swagger 挪到 `await app.init()` 之后 ——
+  那会让静态请求穿过 `InitMiddleware`，未初始化站点回 233，向导刚上传的 logo 预览会坏，
+  还得再加一批 excludes；不值得。
+- 活体验证（dev 栈）：`GET /static/img/__probe__.png` 与 `GET /swagger-json` 都带四个安全头、
+  `X-Powered-By` 消失；`main.ts` tsc 0 错（全新 buildinfo）。限流那一半由
+  `audit-hardening-round4-security-staticguard.spec.ts` 钉住（发现当时留的 `xit('AFTER THE FIX …')`
+  占位由后续修复轮启用）。⚠️ 没有亲手灌爆共享 dev 栈去证明 429 —— 触发限流会破坏其他代理依赖的工作。
+- **爆炸半径（明说）**：`/static/**` 开始消耗静态桶（默认 6000/min = 全局桶 10 倍；§7.44 量过
+  图多的页面扛得住，但单一 NAT 出口后面的图库站应当**有意地**看一眼 `VANBLOG_STATIC_LIMIT_PER_MIN`
+  而不是继承它）；`/swagger` 与 `/swagger-json` 进 600/min 全局桶（人类没问题，爬 spec 的 CI 可能恼火）。
+- BREAKING：任何超限抓这些路径的东西（配错的 CDN origin-shield、爬 spec 的 CI）开始收到 429。
+
+### 7.65 站长定的四项决定（`9601faa4`）：保留期 10 年、版本号公开、swagger 默认关、初始化密钥默认要
+
+四项都是站长明确拍的板，理由都写在**常量旁边**而不只在提交信息里（防止下一个人"好心修回去"）。
+
+#### 1) 访问统计保留期 365 → **3650 天（10 年）**
+
+第四轮审计发现：匿名 `POST /api/public/viewer` 用编造的 pathname 能让 `visits` 集合**永久**增长
+（≈148 B/请求，30/min 公开写限流下 ≈ 6.8 MB/天/IP，再乘源 IP 轮换），而
+`RETENTION_DEFAULTS.retentionDays` 当时是 0 = 永不删除。审计建议 365；**站长选十年**，
+让长周期趋势活下来。诚实的代价写在代码注释里：持续攻击下的理论稳态上限变成
+5000 行/天 × 3650 × ~157 B ≈ **2.87 GB**（365 天口径的 10 倍）—— 真正压住它的是
+`VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY`（默认 5000，§7.55-G），**不是保留窗口**；
+而真实站点每天的路径数等于真实页面数，远低于上限。`VANBLOG_VISIT_RETENTION_DAYS=0`
+恢复旧的"永不删除"。语义边界不变：只删**按天的行**，站点级累计（metas.viewer/visited）与
+文章累计阅读量不受影响，`minKeepDays: 30` 仍然兜底。
+⚠️ 测试策略：钉 365 的 spec **更新而不是删除**；"清理逻辑本身"的覆盖改用**显式**
+`VANBLOG_VISIT_RETENTION_DAYS=365`（与 `=0`）来跑，默认值将来再改也不失效；
+e2e 的"ancient"种子行从 400 天前挪到 **4000 天前** —— 400 天现在落在窗口内，
+那条测试会"一行都不删也绿"。
+⚠️ 这个提交自己**没有全绿落地**：提交信息说"specs that pinned 365 were updated rather than deleted"，
+实际有两处没更新、一处注释半改，HEAD 红了，`08f89e6e` 才收尾（细节与教训在 §7.67）。
+
+#### 2) 版本号是公开的（部分反转 §7.64-A）
+
+站长裁定：**构建版本不是秘密**。它本来就渲染在每个前台页面的页脚、也由 `/api/public/meta` 下发，
+只在 `/api/public/health` 上藏它，用审计员的话说是 security theatre —— 攻击者从页脚就能读到 commit。
+所以匿名 health 载荷**重新包含 `version`**。仍然留在门后（内部令牌或 `VANBLOG_HEALTH_DETAILS`）的是
+`uptimeSeconds`、`memoryRssMb`、`heapUsedMb`：它们**没有**发布在任何其它地方，且真能推断重启时机与负载。
+这条分界线写进了 controller 的 doc comment，**两个方向都不许"再修一遍"**。
+
+#### 3) Swagger 默认关
+
+`VANBLOG_SWAGGER === 'true'` 才开（此前是"不等于字面量 `false` 就开"）。以前留着默认开的唯一理由是
+后台两个页面深链 `/swagger`，关掉会留死链 —— 这次把链一起修了：`About.tsx` 改指仓库里的 API 文档；
+`Token.tsx` **先探测 `/swagger-json`**，开着就打开 `/swagger`，关着就提示确切的环境变量名并打开文档。
+关掉买到什么：少一个匿名、此前不受限流（§7.64-C 之后已受限流）的 59 KB 响应；
+不再把 **111 条后台路由 + 登录请求的形状**白送给扫描器。
+⚠️ 全文所有"默认仍开启 / `=false` 可关 / 默认公开"的旧说法都已在原处标注作废（§0 表、§7.15、§7.38.4、
+§7.40-23、§7.55-G）；compose 模板注释若仍写"默认公开"，以本节为准。
+
+#### 4) 初始化密钥默认要（翻默认是有意的破坏性变更）
+
+`VANBLOG_INIT_REQUIRE_SETUP_KEY` 首版默认 `false`（"升级不破坏走到一半的安装"），站长拍板翻成
+**默认 `true`**，原话：「首次安装要用密钥为true，每次检查到当前未安装时都在terminal中显示秘钥」。
+后半句就是"未初始化期间每 10 分钟重印密钥"那条需求的出处（§7.62）。翻默认意味着升级时正走到一半的
+安装下一次提交会 400 —— 密钥在日志里反复打印、400 消息自带指路，逃生口是显式 `=false`；
+无法识别的值 ⇒ **开 + WARN 点名**，打错字绝不静默关保护。
+
+实测：server tsc 0 错（全新 buildinfo），四个受影响的 suite 绿（提交信息口径；HEAD 全量基线见 §7.39）。
+BREAKING：`VANBLOG_SWAGGER` 默认关；超过十年的按天 visit/viewer 行开始被每日维护任务清掉
+（此前什么都不删），`VANBLOG_VISIT_RETENTION_DAYS=0` 回旧行为。
+
+### 7.66 可见水印重写：jimp → sharp/libvips + SVG（满图平铺、支持中文、字体防线、镜像字体）
+
+#### 动机（旧实现的四个硬伤）
+
+旧的可见水印是 jimp + `.fnt` 位图字体：固定 500×150 画布盖右下角；**不支持中文**
+（后台有一道 `checkNoChinese` 硬闸门，弹窗文案是「目前水印文字不支持中文！因为用了纯 js 库节约资源」）；
+`Jimp.loadFont` 要**联网拉字体** —— 这就是 §7.39 老基线里那个"离线必红的 1 个既有失败"的出处；
+而且在**未按 EXIF 摆正**的像素上合成、EXIF 原样带回（手机竖拍照片的水印出现在错误角落、文字横躺）。
+
+#### 重写（核心在 `9601faa4`：`utils/watermark.ts` + 纯函数 `utils/watermarkSvg.ts`）
+
+- **sharp/libvips + SVG `<text>`**（由 libvips 内置的 librsvg + pango + fontconfig 栅格化）。
+  公共接缝不变：`addWaterMarkToIMG(srcImage, waterMarkText) => Promise<Buffer>`，唯一调用方仍是上传管线
+  （gif 在调用方就被排除）。EXIF 用无参 `.rotate()` 摆正（与 thumbnail/imgResize 的既有 sharp 路径一致）——
+  对竖拍照片是**可见修复**，不是回归。
+- **三条铁律**：① **绝不让上传失败** —— 任何异常（图坏、格式不支持、系统没字体、sharp 缺失）WARN
+  （带来源标签）并**返回原 buffer**；旧实现是直接 throw 的，只是调用点自己包了 try/catch 才没炸上传，
+  保护现在内建在这一层。② **保持输入格式**：jpeg→jpeg(q90)、png→png(level9)、webp→webp(q90)、
+  avif→avif(q70)、tiff→tiff(q90)，质量口径与 `imgResize.ts` 的 ENCODE_OPTIONS 一致；sharp 编不了的
+  （bmp/heic/ico/svg）WARN 后返回原图（⚠️ 行为差异：旧 jimp 能写 bmp，现在 bmp 不再加水印 ——
+  改存 png 字节会破坏 `.bmp` 扩展名契约）。③ **不放大、不重采样**。
+- **默认样式 tile：整图无缝斜排平铺**（旋转 −26°、白字 opacity 0.12 + 半透明深色阴影的双色调），
+  裁不掉、"一眼有水印但不破坏观感"；corner（右下角柔光底板）/ bar（底部渐变条）可选。
+  env：`VANBLOG_WATERMARK_STYLE` / `_POSITION` / `_SCALE` / `_OPACITY` / `_COLOR` / `_SHADOW_COLOR` /
+  `_SHADOW_OPACITY` / `_MARGIN_RATIO` / `_FONT_FAMILY`。字体栈
+  `DejaVu Sans, 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif` ⇒ **中文照常能盖**。
+  度量公式、样式与 env 解析全在 `watermarkSvg.ts`（纯函数、全单测）。
+
+#### 本轮收尾一：字体防线（缺字体 ⇒ WARN + 原图，**宁可不盖也不盖豆腐块**）
+
+⚠️ 容器实测（node:24-alpine **零字体**：没有 fontconfig、没有 `/usr/share/fonts`、`fc-list` 不存在）：
+librsvg **不会渲染成空白**，而是画**满屏 .notdef 豆腐块**（探测串 `'Ag…'` 576 ink px、`'水'` 180 ink px），
+stderr 只打一句 `Fontconfig error: Cannot load default config file` 然后"成功"返回 ⇒
+**"数 ink 像素"判不出来**（豆腐块与真字的 ink 数量区间重叠），而重写的**首版**只探测 CJK、
+且探不到也只 WARN **照样盖图** —— 于是 18 小时前刚发布的那个镜像在生产里的真实故障模式
+不是"水印静默失效"，而是**每张上传图都盖满豆腐块**（800×600 灰 PNG 实测：
+`example.com` 未被跳过，2,804 → **22,263 B**、20,684 px 被改；`酱油的博客` 2,804 → 10,290 B、8,170 px）。
+**决定性的量法**：渲染两个**不同的**等长中文串（`酱油的博客` vs `鼠标键盘垫`）得到**逐字节相同**的输出
+—— 没有字形只有盒子，无从区分；等长 Latin 串反而有差异（布局估计器给每个码点独立 advance，
+砖的几何会动），所以 CJK 对是干净的判别子、而 Latin 探测需要加宽到 160×72 的探针画布才装得下两个字形。
+修好后的防线是**逐字符集探测**（`37d40ef2`）：分别渲染 `Ag`、`水` 与私用区码点 **U+E001**
+（任何字体都不可能有它的真字形）的探针，**逐字节比较** —— 有对应字体时真字形 ≠ 盒子，没有时两者相等。
+两套字符集**都探**，每进程一次（约 15 ms，memo 化）：Latin 失败 ⇒ WARN 点名 `ttf-dejavu` + `fontconfig`
+并返回**原 buffer 的同一引用**（调用方不会把它误当成重编码过的图）；文本含 CJK 且 CJK 失败 ⇒
+WARN 点名 `wqy-zenhei` + 原图返回。**宁可不盖，也不能盖满图豆腐块**：不盖只是少个功能，
+盖豆腐是**损坏用户数据**。ink 判空只留作第二道防线；WARN 里附安装命令（Alpine/Debian 两种）
+与期望的 font-family 链。
+
+#### 本轮收尾二：性能与小图
+
+- **webp `effort: 2`**（imgResize 用默认 effort:4）：水印这步是**在缩放之前**按原始尺寸编码 webp q90 的，
+  libwebp 在大图上极慢 —— 实测 **6918×4617：effort:4 = 24.7 s → effort:2 = 4.6 s（5.4×），字节只 +2.0%**；
+  1920×1440：959 → 558 ms（+0.3%）；800×600：191 → 117 ms（−1.2%）。imgResize 不需要这个是因为
+  它先缩到 ≤1920 再编码，永远碰不到大图的 effort 成本。
+- **小图自动缩砖**：图比一块标准砖还小时，砖缩到图内（单标记居中）—— **100×80 也能盖上**；
+  只有**短边 < 52px** 才跳过（WARN + 原图；48px 砖下限避免糊成墨点）。旧文案"宽高小于 128px 可能加不上"作废。
+
+#### 本轮收尾三：Dockerfile 给镜像装字体（在此之前，可见水印在生产等于没有这个功能）
+
+runner 阶段的 apk add 新增 **`fontconfig ttf-dejavu wqy-zenhei`**：SVG 文字要的是**系统字体**
+（不是 npm 包、也不是前台自托管那份只给浏览器用的 woff2），而此前的镜像**零字体** ⇒
+在字体防线（上小节）修好之前，生产行为是"每张图盖满豆腐块"；防线修好之后是"全部跳过 + WARN" ——
+两种都等于**可见水印在生产环境不存在**（上传不失败、一张也盖不上），装上这三个包功能才真的可用。ttf-dejavu 管 Latin，
+wqy-zenhei 管中文（字体栈里 `Noto Sans CJK SC` 优先，但 font-noto-cjk 体积是它的十几倍，
+为一个水印字段不值；装了 wqy-zenhei 后 fontconfig 会逐字符自动回落到它）。
+守卫在 `scripts/tests/dockerfile-alpine-sharp.test.sh`：用 python 解析 runner 阶段**真正的那条 apk add 命令**
+（剥注释，含续行里的 shell 注释）再断言三个包都在 —— ⚠️ 断言必须打在解析出的命令上而不是 stage 文本上：
+stage 里就有一段注释写着这三个包名，直接 grep 文本会匹配到**解释为什么要装**的注释
+（与同文件当年 vips-dev 假绿是同一个坑，§7.38.4）。另有一条**漂移守卫**：代码里 `FONT_INSTALL_HINT`
+叫用户装的包、镜像实际装的包、字体栈点名的家族（DejaVu Sans / WenQuanYi Zen Hei）三方必须一致。
+负向对照（删掉字体行 → 守卫必须变红）已做过。
+
+**本轮真构建 + 真容器实测**（podman 4.9.3 rootless，`scripts/build-image-local.sh`，Node/Alpine 与线上一致）：
+
+| 量到的 | 数值 |
+| --- | --- |
+| 镜像体积 | **860 MB → 892 MB（+32 MB，+3.7%）** |
+| `/usr/share/fonts` | 27,989,228 B（≈28 MB） |
+| apk installed size | font-dejavu 9,990 KiB + font-wqy-zenhei 16 MiB + fontconfig 518 KiB |
+| `fc-list` 条数 | **0 → 25** |
+| `fc-match "DejaVu Sans"` | `DejaVuSans.ttf: "DejaVu Sans" "Book"` |
+| `fc-match "WenQuanYi Zen Hei"` | `wqy-zenhei.ttc: "WenQuanYi Zen Hei" "Regular"`（⇒ 中文真有字体，不是回落方块） |
+| 冒烟测试 | 8 条关键路径全通、8 条已知故障特征全空、0 重启、SIGTERM **1s** 内停机 |
+
+水印行为的三格对照（同一张 800×600 灰底 PNG，在**镜像里**跑 `addWaterMarkToIMG`，量"变了多少个像素"）：
+
+| 环境 | Latin `example.com` | CJK `酱油的博客` | 两段**不同**的等长中文 |
+| --- | --- | --- | --- |
+| 旧镜像（零字体、且只探 CJK） | 没跳过，**20,684 px 方块**（2,804 → 22,263 B） | 没跳过，**8,170 px 方块** | **逐字节相同** ⇒ 铁证是方块不是字 |
+| 新镜像（装了字体） | 真字形 17,521 px | 真字形 19,250 px | **不再相同** ⇒ 真字形 |
+| 新镜像 + 人为零字体（`FONTCONFIG_FILE` 指向空配置） | **跳过 + WARN，0 px** | 跳过 + WARN，0 px | 都等于原图 |
+
+⚠️⚠️ **第三格是"活体验证"抓到的一个真 bug，值得单独记**：第一次重建出来的镜像（字体已装、探测已加）
+在人为零字体下 **CJK 正确跳过了，Latin 却照样盖了 32,699 px 的方块**。原因是探测的比较基准字数不对等 ——
+拿 `Ag`（2 个字符）去和**单个** U+E001 比：零字体时"两个方块 vs 一个方块"逐字节当然不同 ⇒ `latinOk` 恒真。
+CJK 那条一直是单字对单字（`水` vs U+E001），所以没这个毛病，也因此**单元测试全绿** ——
+它们注入的是探测结果（`__resetWatermarkCachesForTest({latinOk:false})`），证明的是"探测说没字体时行为对"，
+**证明不了探测本身对不对**。修法是 `notdefComparatorFor(text)`：基准按 `[...text].length` 重复 U+E001
+（用码点数而不是 `.length`，代理对才算得对）。本机对拍数据（同一份 sharp、同一个字体栈）：
+
+```
+正常环境：ink_latin=949  ink_notdef2=335  latin_equals_notdef2=false  latin_equals_notdef1=false
+零字体  ：ink_latin=72   ink_notdef2=72   latin_equals_notdef2=true   latin_equals_notdef1=false
+                                                        ↑ 新判据对           ↑ 旧判据错（会说"有字体"）
+```
+
+顺带印证"数 ink 没用"：零字体时方块**有** ink（72 px），且 ink 量与字符数成正比（36 px/方块），
+和真字形的 949 px 是两个量级但**同一个符号**，阈值分不开。
+现在 `watermark.spec.ts` 里有一条**真跑探测**的用例（子进程 + `FONTCONFIG_FILE` 空配置；
+必须开子进程，因为 fontconfig 在进程内只初始化一次，jest worker 里改环境变量可能不生效），
+它同时钉住"新判据说没字体"与"旧判据会说有字体"，谁把基准改回单字就红。35/35 绿。
+**教训：注入式单测证明的是分支行为，证明不了探测器本身；探测器必须在真环境里真跑一遍。**
+
+#### 本轮收尾四：后台的中文闸门拆掉（`bfcdf331`）
+
+`checkNoChinese` 闸门与 `services/van-blog/checkString.ts` 整个删除（那是它唯一的调用方，
+且它用的还是早已废弃的 `escape()` —— 与其留着烂掉不如删干净）；
+两处过时文案改成事实：默认样式早已不是"右下角"而是**满图斜排平铺**、门槛不是 128px 而是**短边 52px**、
+中文支持、字号按图自动缩（缩到 8px 还放不下就跳过这一张 + WARN，不影响上传）。
+新增 `packages/admin/tests/unit/watermarkText.test.js` 钉住"闸门拆了且不许复活"。
+⚠️ 写这类"某段代码已不存在"的断言**必须先剥注释**：表单里留着一段解释"为什么拆闸门"的注释，
+里面就写着 `checkNoChinese`，直接 `doesNotMatch` 会匹配到注释而假红（server 侧同一个坑踩过四次，见 §7.67）。
+
+#### 测试
+
+`utils/watermark.spec.ts`（830 行规模，重写 + 本轮新增：小图 100×80 确有标记、40×40 跳过 + WARN、
+`__resetWatermarkCachesForTest` 注入 `{latinOk,cjkOk}` 走探测分支、零字体容器形状下"任何文字都跳过 +
+WARN 给安装命令"）；`utils/watermarkSvg.spec.ts`（353，纯函数度量/样式/env 解析）。
+CJK 渲染用例**自适应**两种本机：有 CJK 字体走渲染分支，没有则走"跳过 + WARN"分支并打
+`[watermark][SKIP]` 说明（本机实测有 Noto Sans CJK SC 时走渲染分支）。
+**未量**：平铺在浏览器里的真实观感（本机无浏览器）；旧 jimp 与新版在同一张图上的逐像素对比没有做
+（行为差异按代码与单测记录）。
+
+### 7.67 本轮测试基建收尾：anchorCode 换掉裸正则剥注释、CI 白名单拆除、两个 hermetic 修复、跨包锚点、一条从来没跑过的守卫、以及冒烟测试在 podman 上跑不了
+
+#### 三个红的 server 套件（HEAD 上就红着，本轮修绿）
+
+1. **保留期钉子没跟上 3650**（`08f89e6e`）：`audit-hardening-round4-fixes-viewstats.spec.ts` 两处仍断言
+   `{retentionDays: 365}`（`9601faa4` 的提交信息说"钉 365 的 spec 已更新而不是删除"—— 实际漏了两处）；
+   `statsMaintenance.provider.ts` 三处注释仍写"默认 365"而下面的常量已是 3650 ——
+   **正是这种漂移会让下一个读的人把代码"修"回注释的样子**。修法：注释改对，并**新增一条钉子**
+   "注释里的默认值不许与常量漂移"（凡提到默认值或那个 env 的行里不许出现裸 365；
+   刻意不打「365 天对想留十年趋势的站长太短」这类**推理**行）。顺带给"非法值回落默认"的用例
+   补上缺失的**反证行**：原 fixture 最老的行（2024-07-07，距 NOW 约 800 天）落在任何合理窗口内 ⇒
+   回落成 36500 天、甚至"永不删除但仍报 enabled"都能全绿；现在种一行 **2014-01-01**（约 4640 天）
+   并断言恰好它被删（visits 与 viewers 各一行），窗口必须**真的有限且真的是 3650** 才会绿。
+2. **`statsMaintenance.provider.spec.ts:224` 的 `rows()` 越界**：dedup 那个 `describe` 调用了
+   retention `describe` 里的局部 fixture `rows()` ⇒ **TS2304 让整个文件编译失败**，全套件一条都没跑 ——
+   "计数里看起来有这个套件、其实什么都没断言"。改成用它自己那份 `dupDocs()`，并连 `_id` 一起断言
+   （把"两组重复行也没被合并"钉成显式而不是隐含）。
+3. **"假块注释"第四次咬人**（`d79dea7e`）：`audit-hardening-round3-silent.spec.ts` 里
+   "caddy 的 clearLog 不再是空 catch"的钉子假红 —— 代码本身是对的。根因见下。
+
+#### 教训：裸正则剥注释为什么**必然**反复出事（本仓库已因此误判四次）
+
+源码锚点类 spec（断言"代码里确实写着 X"）必须先剥注释，否则注释里提过这句话也会让钉子变绿。
+八个 spec 各抄了一份"三步正则"剥注释（删整行 `//` → 截行尾 `//` → 删 `/*…*/`），
+它分不清注释与字符串，于是**任何出现在字符串 / 模板字符串 / 正则字面量里的 `/*` 两个字节都会开启一个
+假块注释，把后面几十上百行真代码一起吃掉**。四次事故：① `main.ts` 说明文字里的
+`/static/img/*.{webp,png,…}` 让静态目录守卫只找到 1 个目录（实际 ≥6）；② 同一处让 `main.ts` 的
+primary 守卫钉子找不到那行；③ `caddy.provider.ts` 尾随注释里的 `/static/img/<file>.{webp,…}`
+吃掉 keepAliveTimeout / clearLog 两条钉子；④ **本轮**：`caddy.provider.ts` 直发日志文案（模板字符串）里的
+`/post/* /page/* /category/* /tag/*` 开启假块注释，一路吞到 **138 行外**下一个真 `*/`，
+把整个 `clearLog()` 方法吃掉。**前三次的修法都是"调整三步正则的顺序"—— 那只是把雷换个位置埋**：
+只要源码里能写出 `/*` 这两个字节（日志文案、路径 glob、正则字面量都会写），裸正则就永远会误判。
+
+`d79dea7e` 按类修：共享的 `packages/server/src/test-utils/anchorCode.ts`，单遍扫描、真正跟踪上下文
+（行注释、块注释、单/双引号字符串、含 `${}` 递归嵌套的模板字符串、用"前一个有效 token"区分正则字面量
+与除号），八个 spec 改成 import 它。**删除规则刻意照抄旧实现**（整行注释连缩进带换行删、行尾注释保留
+`//` 前的空白、块注释整个删含换行），几十条既有钉子不用改写法；与旧实现只有两处不同，且都是旧 bug：
+字符串/模板/正则里的斜杠不再当注释；`foo();// bar` 这种斜杠前无空白的行尾注释现在也能剥掉
+（旧的 `(\s|^)` 要求前置空白）。实测（就 `caddy.provider.ts` 一个文件）：旧实现剥完剩 198 行、
+新实现 332 行，其中**真代码 194 → 328 行** —— 旧 helper 丢掉了约 **134 行真代码**。
+自带 **17 条钉子**：上述真实回归（含反证 —— 断言旧实现**确实**丢代码，对拍才不是空比较）、
+**全仓库对拍**（旧实现保留的每一行真代码新实现都还在；被标"丢了"的 11 行逐条核过，全是旧实现截断
+字符串产生的伪影，`realSourceLine=false`）、在 `caddy.provider.ts` 上确实救回 >50 行的证明、
+60 个文件上的幂等性。⚠️ `tsconfig.build.json` 已把 `src/test-utils` 排除（只给 spec 用，不进 dist）。
+
+#### CI：80 项 `--testPathPattern` 白名单拆除，默认全跑（`361509b9`）
+
+`.github/workflows/server-test.yml` 盘点：src 下 **169 个 spec 有 47 个从来没在 CI 跑过** ——
+包括 setupKey / accessPassword / staticGuard / bruteForceIp / artifactReaper / searchIndex / publishAt /
+revision / migration / health.controller / unlockBruteforce / mdzImport / logRotate / backupVerify
+这些**安全与备份**的钉子。白名单的问题是它**只会烂**：新增 spec 默认不跑，而"CI 绿了"让人以为全跑过
+（本项目已经因此让一条永久红的 e2e 混过 20 次，§7.58）。现在 `pnpm test -- --passWithNoTests=false`
+全跑，排除清单**为空**：要真库的 `searchIndex.realdb.spec.ts` 自己默认 `describe.skip`；
+`test/` 下的 e2e 被 jest `rootDir=src` + testRegex 天然排除（各有独立 `test:*-e2e` 命令、独立端口、
+"拒绝 27017/真实库名"的硬护栏）；walineMongo / fullBackup / initJwt / audit-hardening-round2 里的
+MongoClient 都是假的，不需要真库。
+
+#### 两个 hermetic 修复（`8ffa391a`；环境不给的东西，测试不许假红也不许假绿）
+
+- `vanblog-install-cron.test.sh` 的 tty 用例（3 条断言）：**有 `script` 命令 ≠ 能起 pty** ——
+  沙箱不给 `/dev/ptmx` 时得到 `script: failed to create pseudo-terminal: Permission denied`（exit 1），
+  pty 里的程序根本没跑起来，断言以"没提示 token / env 文件没写"的形式**假红** ——
+  从断言文本完全诊断不出来，看着像 install-cron 坏了，其实是环境不给 pty（本仓库被烧过的那类形状：
+  **一条谁都读不懂的永久红比没有更糟**）。现在先一次性真起 `script -qec true /dev/null` 预检，
+  起不来就打印**点名真实原因**的 NOTE 跳过（并说明普通终端/CI 上照跑）；
+  而**源码级钉子（`read -e -r -s -p "token: "`）挪出 pty 分支、无条件保留** ——
+  跳过交互用例不许把不需要 pty 的覆盖也丢掉。实测 97 passed/3 failed → **96/0**（4 条 pty 断言是跳过，不是删除）。
+- `vanblog-drill.test.sh` A14 的 4 条 dry-run 断言：dry-run 不建容器但**仍然探测引擎**，探不到就
+  FAIL + rc=1（「没有可用的容器引擎（docker daemon 连不上，也没有可用的 podman）」）。受限环境里这是
+  **常态而不是异常**（沙箱不给 `/dev/shm` 时 rootless podman 以
+  `failed to open 2048 locks in /libpod_rootless_lock_1000: permission denied` 起不来；
+  docker 组为空时人人 EACCES）。A14 要钉的是"vanblog.sh 把子命令转发给 drill 且退出码原样穿回来"，
+  不是"这台机器装了引擎" ⇒ 改用**本节专用假引擎**（与 A10 那组 dry-run 同一思路；按
+  `drill_resource_exists` 真正用的四种调用形状逐一给答案：`inspect --type container` / `volume inspect` /
+  `network inspect` 全 exit 1 = 什么都没占用，`image inspect` exit 0 = 镜像在本地、免得多一条无关 WARN）。
+  ⚠️ **不能复用 A10 的 `${FAKE_BIN}` stub** —— 它已被 A11 改写成"inspect 一律成功"
+  （那一节演的是"容器起不来但必须拆干净"），而 `drill_resource_exists` 把成功读成"存在" ⇒
+  名字冲突预检会误判 8 个 `vb-drill-*` 名字全被占用，让测试**因为第三个原因**变红。
+  另给"截断归档 rc=1"补了**原因**的反证断言（输出里不得出现「没有可用的容器引擎」也不得出现
+  「一次性资源名字没有冲突」）—— 否则环境不对的机器上它会**因为错误的原因变绿**（rc 横竖都是 1）。
+  修后 scripts/tests 全量：**24 文件 / 1741 条断言全绿**（drill 573、install-cron 96；见 §7.39）。
+
+#### 跨包锚点的教训："只改了 server"也必须跑 admin 那套（`fdd7913a`）
+
+admin 的 `node --test` 里有**读 server 源码**的跨包锚点（`fullBackup.test.js` / `securityHardening.test.js`），
+server 侧重构会让 admin 套件变红 —— 这次红了 **3 条**（575 tests / 572 passed）：
+① `089bc55b` 把静态守卫抽进 `utils/staticGuard.ts` 后，`main.ts` 里不再有 `backupUnderStatic` 与
+`'/static/export/'` 字面量；② `fullBackup.ts` 的 `cp -al` 源从 `src` 改成 `fs.realpathSync(src)` 解析后的
+`realSrc`（图床是软链时 `cp -al static/img stage/static/img` 产出的归档里只有一个软链成员、零字节图片 ⇒
+写后校验必然失败，"图床是软链的站点根本备份不了"），旧锚点钉的是变量名。修好的锚点改钉**接线**与
+**守卫为什么可靠**（`isGuardedStaticPath(req.path, backupSegment)`、
+`GUARDED_STATIC_SEGMENTS = new Set(['export','tmp','upload-tmp'])`、`decodeURIComponent`、
+`path.posix.normalize`、`ESCAPED` 哨兵、`realpathSync` + 跨文件系统时 `fs.cpSync` 兜底），
+并带反证：字面的 `req.path.startsWith('/static/export/')` **不许回来**。修后 admin **148 套件 / 579 全绿**。
+
+#### 一条从来没跑过的守卫：heredoc 参数写在结束符**之后**（`docs-consistency.test.sh`）
+
+修文档那轮把 `docs-consistency` 从 51/1 修到 52/0 之后，输出里始终多一句噪声：
+
+```
+scripts/tests/docs-consistency.test.sh: line 242: /home/…/vanblog: Is a directory
+```
+
+顺着这句挖下去发现的是**一条静默假绿的守卫**（"文档里不能有裸尖括号占位符"，就是防
+`<https://github.com/<owner>/<repo>/…>` 让 vue 报 `Element is missing end tag`、整个文档站构建失败的那条）：
+
+```bash
+BAD_ANGLES="$(python3 - <<'PYANGLE'
+  …用 sys.argv[1] 当 cwd 去 git ls-files…
+PYANGLE
+ "${ROOT}")"          # ⚠️ 参数写在 heredoc 结束符**之后**了
+```
+
+bash 把 heredoc 之后那个 `"${ROOT}"` 当成**一条新命令**执行（所以屏幕上那句 `Is a directory`），
+python 于是拿不到 `argv[1]` ⇒ `IndexError` ⇒ stdout 为空 ⇒ `[[ -z "${BAD_ANGLES}" ]]` 成立 ⇒
+**PASS**。也就是说这条守卫一直是绿的，而它扫描的文档份数是 **0**。
+
+修法有三层，缺一不可：① 参数前置（`python3 - "${ROOT}" <<'PYANGLE'`）；② python 先打一行
+`SCANNED=<份数>` 作为"我真跑了"的凭据，bash 检查它（`<20` 就算 FAIL —— docs/ 下有几十份）；
+③ 检查子进程退出码，非 0 直接 FAIL 并写明"这种情况以前会静默变成 PASS"。修完第一次真扫：**73 份**，
+并且立刻抓出一条真的（`docs/guide/script.snippet.md:58` 的 `<https://github.com/CKboss/vanblog/pkgs/container/vanblog>`）。
+
+那条其实是**合法**的 Markdown 自动链接（文档站带着它构建过、65 页全绿），会炸的是里面**再套一层尖括号**
+的形状。所以顺手把规则收窄成：`<http(s)://…>` / `<mailto:…>` 且**内部不含 `<`** 才放行。
+收窄之后做了负向对照（四种形状）：普通自动链接放行、`<https://github.com/<owner>/<repo>/x>` 拦下、
+`<VAN_BLOG_SERVER_URL>` 拦下、白名单标签放行。
+
+**教训（比这个 bug 本身值钱）**：`VAR="$(cmd <<'EOF' … EOF\n arg)"` 这种写法不会报错、不会警告，
+只会让守卫**安静地什么都不检查**。凡是"把子进程输出当判据"的守卫，都必须同时钉住
+"子进程真的跑了、而且扫到了东西"—— 否则它绿不绿与代码质量无关。本仓库这类"空转守卫"
+至此抓到两个（另一个是 `admin-e2e` 的 `continue-on-error`，§7.58）。
+
+#### 冒烟测试在 podman 上一步都跑不了：`--link` 是 docker 专有 flag
+
+本轮真去构建镜像才撞上：构建成功（892 MB），冒烟第一步就 `Error: unknown flag: --link` 直接 die。
+也就是说**在只有 rootless podman 的机器上（本机 docker 组是空的），`build-image-local.sh` 的冒烟半边
+从来没跑过** —— 而这个脚本存在的理由正写在它自己的开头注释里："镜像里的问题在本地跑测试是发现不了的，
+前面连着四轮都是用户装的时候才炸"。容器名 DNS 也不是出路：rootless podman 常常没有 aardvark-dns（本机就没有）。
+
+改成 `scripts/vanblog-drill.sh` 里那条**本机验证过**的路（那个脚本的注释早就写着
+"`podman run --link` 也不支持 ⇒ 直连 IP + `--add-host`"，只是没人回头改这个脚本）：
+专用网络 + `inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'` 取 mongo 的容器 IP
+（最多重试 30 秒，拿不到就**明确失败**而不是拿空值继续）+ `--add-host` 写进 `/etc/hosts`，
+拆容器时连网络一起拆。修完冒烟**真跑通**：8 条关键路径、8 条已知故障特征全空、0 重启、SIGTERM **1s** 内停机。
+
+顺带修掉一个每次跑都留垃圾的问题：mongo 的数据原来 bind mount 到宿主机临时目录，而 mongod 在容器里是 root，
+rootless 引擎把它映射成宿主机上一个谁也不是的 uid（本机实测 **100998**），于是 `journal/` 与
+`diagnostic.data/` **非 root 删不掉** —— 每跑一次冒烟就在 `/tmp` 留一坨要 sudo 才能清的东西，
+与脚本"临时资源一定拆干净"的契约相反（`/tmp` 里当时已经积了 8168 个 `tmp.*`）。改成**命名卷**，
+cleanup 里 `volume rm`，`SMOKE_KEEP=1` 时把拆卷的命令一起打印出来。复跑实测 0 条 `Permission denied`。
+
+守卫 `scripts/tests/build-image-local.test.sh` 从 35 条加到 **44 条**：不许再出现 `--link`、
+必须有 `network create` / `--add-host` / inspect 模板 / 拿不到 IP 的明确失败 / 拆网络 / 命名卷 /
+不许再 bind mount mongo 数据。⚠️ "不许再出现 `--link`"这条**必须打在剥掉注释之后的代码上** ——
+解释这个坑的注释本身就写着 `--link`，grep 整个文件会自己把自己判红。
+
+#### 本轮全量基线
+
+见 §7.39（2026-09-17 本机实测：server 0 失败、website/admin/脚本全绿、docs 守卫与两套 tsc 全过）。
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-17 本机实测）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | 1275 用例：**1274 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；并发压满机器时另有 2 条负载敏感用例会假红，单独跑 43/43 全绿）；套件 132 个 |
-| website `vitest run` | 77 文件 / 748 用例全绿 |
-| admin `node --test tests/unit` | **498 用例全绿**（⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
-| admin e2e（playwright） | **111 用例全绿**（37 个 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
-| admin playwright e2e | 未跑（没装浏览器） |
+| server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等 |
+| website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748） |
+| admin `node --test tests/unit` | **148 套件 / 579 用例全绿**（原 498 用例；⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1754 条断言全绿**（原 22 文件 / 1109 条；本轮 drill 573、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
+| 文档守卫 | `docs-links` **5/5**、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条本轮才第一次真的跑起来，实扫 **73 份**文档，见 §7.67）、`cd docs && pnpm run docs:build` **65 页成功** |
+| 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
+| 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
+| admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
+⚠️ **"只改了 server"也必须跑 admin 那套 `node --test`**：里面有读 server 源码的跨包锚点，
+server 重构会让它变红（§7.67，本轮就红了 3 条）。server 侧 CI 已改成**默认全跑 169 个 spec**
+（80 项白名单已拆除，此前 47 个 spec 从来没进过 CI，§7.67）。
 
 **类型检查也要跑**（两条都必须 0 错误，见 §7.51）：
 
