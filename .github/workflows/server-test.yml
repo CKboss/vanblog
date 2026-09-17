@@ -82,7 +82,20 @@ jobs:
 
       - name: Run server unit tests
         working-directory: packages/server
-        run: pnpm test -- --testPathPattern="categoryOrder|category.provider|backup.controller|articlePublicPaths|isr.provider|getVersion|meta.controller|meta.provider|linkName|customPage.provider|customPagePath|walineLogin|waline.provider|walineExtra|setting.provider|cdnUrl|website.provider|walineMongo|numericId|pagination|article.controller|article.provider|draft.provider|watermark|wordCount|deleteFolder|webp|imgCompress|avif|imageMeta|static.provider.compress|static.provider.transferRemote|log.controller|log.provider|provider/log/utils|cacheControl|caddy.provider|rewriteBaseUrl|img.controller|articlesPerPage|pageCopy|public.controller|sitemap.provider|utils/social|listenHost|transferRemoteImages|markdown.provider|safeDecode|article.provider.viewer|audit-hardening|theme.provider|articleExcerpt|publicArticleOrder|publicMetaCache|viewStatsBuffer|viewStats.provider|statsMaintenance|logTail|initJwt|init.provider|picgo.provider|clusterRole|clusterBootstrap|bodyLimit|requestId|viewer.provider|analysis.provider|uploadPipeline|cronRegistration|token.provider.jwt|attemptLimit|rateLimit|fullBackup|backupCodec|visit.provider|markdownExport|envNumber|bulkUpsert|restoreUpload|backupCategories" --passWithNoTests=false
+        # ⚠️ 这里以前是一条 80 项的 `--testPathPattern` 白名单。2026-09-17 盘点：
+        # **src 下 169 个 spec 里有 47 个从来没在 CI 跑过** —— 包括 setupKey / accessPassword /
+        # staticGuard / bruteForceIp / artifactReaper / searchIndex / publishAt / revision /
+        # migration / health.controller / unlockBruteforce / mdzImport / logRotate / backupVerify
+        # 这些安全与备份相关的钉子。白名单的问题是它只会烂：新增 spec 默认不跑，
+        # 而且"CI 绿了"会让人以为全都跑过了（本项目已经因此让一条永久红的 e2e 混了 20 次）。
+        # 所以改成**默认全跑**，确实不能在 CI 跑的才排除。目前排除清单为空，因为：
+        #   - 要真库的 `searchIndex.realdb.spec.ts` 自己默认 `describe.skip`
+        #     （要 VANBLOG_SEARCH_REALDB_URL 指到一次性库才跑）；
+        #   - `test/` 下那些要 mongod 的 e2e 被 jest 的 rootDir=src + testRegex 天然排除，
+        #     各有独立的 `test:*-e2e` 命令、独立端口与"拒绝 27017/真实库名"的硬护栏；
+        #   - walineMongo / fullBackup / initJwt / audit-hardening-round2 里的 MongoClient 都是假的，
+        #     不需要真库（本来就在白名单里、CI 一直是绿的）。
+        run: pnpm test -- --passWithNoTests=false
 
       - name: Run website unit tests
         run: pnpm --filter @vanblog/theme-default exec vitest run
