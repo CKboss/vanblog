@@ -172,7 +172,13 @@ fi
 # vue 编译器把 `<owner>` 当成没闭合的标签 → `[vite:vue] Element is missing end tag` →
 # 整个文档站构建失败。占位符要么放进反引号，要么就别用尖括号自动链接。
 # 合法的 HTML 标签（img/kbd/strong/p/br/a/code/details/summary/table 等）放行。
-BAD_ANGLES="$("${PY:-python3}" - <<'PYANGLE'
+# ⚠️ 参数必须写在 heredoc **之前**（`python3 - "${ROOT}" <<'PYANGLE'`）。
+# 以前它写在结束符 `PYANGLE` 之后另起一行（` "${ROOT}")"`），bash 会把它当成一条**新命令**执行
+# ⇒ 屏幕上多一句 `Is a directory`，而 python 拿不到 argv[1] ⇒ IndexError ⇒ stdout 为空
+# ⇒ 下面 `[[ -z "${BAD_ANGLES}" ]]` 成立 ⇒ **PASS 是假的**（这条守卫就这样空转了很久）。
+# 所以现在：① 参数前置；② python 先打一行 `SCANNED=<份数>` 作为"我真跑了"的凭据；
+# ③ bash 检查退出码与那个份数，任何一个不对都算 FAIL，绝不把"脚本自己挂了"读成"文档没问题"。
+BAD_ANGLES_RAW="$("${PY:-python3}" - "${ROOT}" <<'PYANGLE'
 import re, subprocess, sys
 allowed = {
     "img", "p", "br", "strong", "em", "code", "pre", "kbd", "a", "details", "summary",
@@ -202,12 +208,26 @@ for path in files:
             tag = (m.group(1) or "").strip("/")
             if tag in allowed:
                 continue
+            # 放行**不含占位符**的自动链接 `<https://…>`：那是合法 Markdown，文档站构建实测通过。
+            # 要拦的是它里面再套一层尖括号的形状（`<https://github.com/<owner>/<repo>/…>`）——
+            # vue 会把 `<owner>` 当成没闭合的标签，整个文档站构建失败（本守卫存在的原因）。
+            body = m.group(0)[1:-1]
+            if body.startswith(("http://", "https://", "mailto:")) and "<" not in body:
+                continue
             bad.append("%s:%d %s" % (path, n, m.group(0)))
+print("SCANNED=%d" % len(files))
 print("\n".join(bad[:10]))
 PYANGLE
- "${ROOT}")"
-if [[ -z "${BAD_ANGLES}" ]]; then
-  pass "文档里没有会让 vue 编译失败的裸尖括号占位符"
+)"
+ANGLE_RC=$?
+ANGLES_SCANNED="$(printf '%s\n' "${BAD_ANGLES_RAW}" | sed -n 's/^SCANNED=\([0-9]*\)$/\1/p' | head -1)"
+BAD_ANGLES="$(printf '%s\n' "${BAD_ANGLES_RAW}" | grep -v '^SCANNED=')"
+if [[ "${ANGLE_RC}" -ne 0 ]]; then
+  fail "裸尖括号检查脚本自己跑挂了（rc=${ANGLE_RC}）—— 这种情况以前会静默变成 PASS"
+elif [[ -z "${ANGLES_SCANNED}" || "${ANGLES_SCANNED}" -lt 20 ]]; then
+  fail "裸尖括号守卫没有真跑起来（只扫到 ${ANGLES_SCANNED:-0} 份文档；docs/ 下应该有几十份）"
+elif [[ -z "${BAD_ANGLES}" ]]; then
+  pass "文档里没有会让 vue 编译失败的裸尖括号占位符（真扫了 ${ANGLES_SCANNED} 份）"
 else
   fail "文档里有裸尖括号（会让文档站构建失败）：$(printf '%s' "${BAD_ANGLES}" | head -3 | tr '\n' ' ')"
 fi
