@@ -5941,8 +5941,41 @@ Next 14.2.35 的 file-system-cache **只写不删**（源码里没有任何 unli
 `provider/init/setupKey.spec.ts`（359 行）、`envBootstrap.spec.ts`（194）、`controller/admin/init/init.setupkey.spec.ts`
 （545）、`init.install.spec.ts`（582）、真库 e2e `test/setup-key-init.e2e-spec.ts`（559，独立配置
 `jest-setup-key-init.json`，带"拒绝 27017/真实库名"的硬护栏）、admin `initSetupKey.test.js`（239）。
-**未量**：真镜像 + 全新容器的活体抢占演练没有记录；"每 10 分钟重印"在多进程部署下的行为按
+**未量**：真镜像 + 全新容器的活体**抢占**演练没有记录；"每 10 分钟重印"在多进程部署下的行为按
 primary-only 守卫推理，未活体观测。
+
+#### ⚠️ 这个默认值把 `vanblog.sh drill` 打断了（同一个提交里，2026-09-17 才真跑出来）
+
+`VANBLOG_INIT_REQUIRE_SETUP_KEY` 默认开启意味着**两条**匿名初始化接口都要带 `setupKey`，
+其中就包括 `POST /api/admin/init/restore` —— 而 `scripts/vanblog-drill.sh`（"证明备份真能恢复"
+那条旗舰命令，与这个默认值**同一个提交** `9601faa4` 落地）从来不传它 ⇒ 恢复必然 400
+`setupKeyRequired`。它自己的 573 条断言全绿也没发现：那些用例驱动的是**假 HTTP 层**，
+只有真起容器才会撞到这道闸门（`287c671b` 修）。
+
+修法是按运维真会走的路取密钥（`drill_fetch_setup_key`）：先 `exec` 进 app 容器
+`cat /var/log/setup.key`（0600，在**命名卷**里，宿主机上读不到；`VAN_BLOG_LOG` 可能指到 `/app/log`
+所以两个路径都试），拿不到再从容器日志兜底 —— 密钥块启动印一次、之后每
+`VANBLOG_SETUP_KEY_REMIND_MINUTES`（默认 10 分钟）重印。⚠️ 兜底必须锚在字面标签
+`初始化密钥： ` 上，**不能裸抓 base64**：同一份日志里还有 `restore.key` 与 jwt 材料，形状一样，
+而**送错密钥比不送更难查**（400 长得完全相同）—— 这条有专门的钉子（日志里放两个诱饵秘密 + 真密钥，
+必须取出真的那个）。
+
+密钥全程当秘密处理：`umask 077` 写 0600 临时文件、用 curl 的 `-F "setupKey=<文件"` 送
+（**值不进命令行**，否则 `ps` 里谁都能看）、请求发完就删、变量立刻清空、台账只记**字节数**
+（实测 44 = 32 字节随机数的 base64）不记内容；两路都拿不到就 WARN 后不带密钥上传，绝不猜一个值。
+另外 4xx 且响应体里提到 `setupKey` 时给专门的诊断（点名 `setupKeyRequired` 与密钥来源），
+免得用户去怀疑自己的备份。
+
+**活体证据**（新镜像 + 那份 69 MB 生产整站备份 + `--keep`）：
+`RESULT: PASS pass=37 warn=1 fail=0 note=5`，台账里 `取到初始化密钥（setup key） —— 44 字节，
+从容器内 setup.key 读到；不回显、不进命令行`，恢复出来的站点在 `:18080` 上 200 且是真语料
+（`/api/public/meta` 回真站点信息、公开列表回真文章），第二次恢复正确地 403；
+唯一那条 WARN 是 `migrations` 集合的往返（归档早于该集合，恢复库里的 8 条是新 server 自己建的）。
+初始化成功后 `/var/log/setup.key` 被 server 自己删掉了（只剩 `restore.key`），与 §7.62 的生命周期一致。
+`scripts/tests/vanblog-drill.test.sh` 573 → **587 条断言全绿**（4 条取密钥的功能场景 + 9 条
+"密钥怎么送、怎么不外泄"的源码钉子）。
+**教训（与 §7.67 的 CI 白名单同一条）：假 HTTP 层能证明编排逻辑，证明不了 wire 契约；
+凡是"打真接口"的命令，必须至少真打一次。**
 
 ### 7.63 文章/分类访问密码 → scrypt：不回显、忘记即不可找回、启动 wash
 
@@ -6486,7 +6519,7 @@ cleanup 里 `volume rm`，`SMOKE_KEEP=1` 时把拆卷的命令一起打印出来
 | server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等 |
 | website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748） |
 | admin `node --test tests/unit` | **148 套件 / 579 用例全绿**（原 498 用例；⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1754 条断言全绿**（原 22 文件 / 1109 条；本轮 drill 573、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1768 条断言全绿**（原 22 文件 / 1109 条；本轮 drill 587、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
 | 文档守卫 | `docs-links` **5/5**、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条本轮才第一次真的跑起来，实扫 **73 份**文档，见 §7.67）、`cd docs && pnpm run docs:build` **65 页成功** |
 | 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
 | 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |

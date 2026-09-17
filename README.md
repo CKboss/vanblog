@@ -290,7 +290,7 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **84 文件 / 885 用例** |
 | admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **148 套件 / 579 用例**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
 | admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件；⚠️ 需要装浏览器，且默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开） |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **24 文件 / 1754 条断言** |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **24 文件 / 1768 条断言** |
 | 文档守卫 + 文档站 | `bash scripts/tests/docs-{links,consistency}.test.sh`；`cd docs && pnpm run docs:build` | 死链 5/5、一致性 52/0（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）、构建 65 页 |
 | 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | 两包各 **0 错** |
 | 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md) |
