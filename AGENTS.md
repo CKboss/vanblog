@@ -5506,7 +5506,7 @@ manifest 必须能**从归档内部**读出（只有 sidecar = FAIL）、`kind`�
 | `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48` | 距上次"已校验的成功备份"超过这么多小时就在启动与每次失败后 WARN；`0` = 关。⚠️ **新的默认日志行** |
 | `VANBLOG_THUMB_AVIF` | `false` | 缩略图额外产 `.avif` 兄弟文件（`meta.thumbAvif`）。⚠️ 小图反而更大（约 294 B 容器底噪），原图**故意不做**（最高 241 s/张 CPU） |
 | `VANBLOG_READING_SPEED_WPM` | `350` | 阅读时长的除数（夹在 50–2000） |
-| `VANBLOG_CADDY_SERVE_HTML` | `false` | caddy 直接发 6 个固定页的 ISR HTML。⚠️ 开了以后**这 6 条路径完全不受限流**（镜像里的 caddy 没有限流模块），且要求 ISR 是 onDemand 模式 |
+| `VANBLOG_CADDY_SERVE_HTML` | `false` | caddy 直发 ISR HTML：`true` = 6 个固定页，`all` = 再加 `/post` `/page` `/category` `/tag`（需失效产物清理器，见 §7.60），其它值当关。要求 ISR 是 onDemand 模式。⚠️ **不要**再写"开了就绕过限流"：页面 HTML 本来就不经限流器（见 §7.60 的更正） |
 | `VANBLOG_CADDY_HTML_PAGES_DIR` | 自动 | 上面那个哨兵文件所在目录的覆盖（测试/前后端分离用） |
 | `VANBLOG_EVENT_LOG_MAX_MB` / `_KEEP` | `20` / `3` | 事件日志大小轮转（§7.56） |
 | `VANBLOG_DRILL_*` | — | drill 的引擎/镜像/前缀/端口/超时/保留/干跑等覆盖，见 `scripts/vanblog-drill.sh help` |

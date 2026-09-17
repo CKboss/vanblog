@@ -153,13 +153,10 @@ services:
       # caddy 直接发 6 个固定页（/ /about /link /timeline /category /tag）的 ISR HTML，不过 Node。
       # 实测首页扫描 3.7–4.5× rps、p95 降 78–84%、单请求 / 的 p50 从 8ms 降到 1ms。
       # ⚠️ 默认关，而且**建议保持关**，除非你清楚这两条代价：
-      #   1) 开了以后这 6 条路径**完全不受限流**（请求根本不进 Nest），而镜像里的标准 caddy
-      #      没有任何限流模块（要限流得用 xcaddy 自编 mholt/caddy-ratelimit）；
-      #   2) 只在 ISR 是 **onDemand** 模式时生效（delay 模式的新鲜度靠流量驱动，直发会让页面永久冻结），
-      #      模式不符时哨兵文件会被自动摘掉（每 60 秒对账一次）。
-      # 动态路由（/post/* 等）**故意不支持**：删除的文章的 HTML 会永远留在磁盘上（Next 14 的缓存层没有 unlink），
-      # 而 308/404 不留任何磁盘产物 —— caddy 直发等于无限期用 200 提供已删除的内容。
-      # VANBLOG_CADDY_SERVE_HTML: 'false'
+      #   1) ⚠️ 更正：早先这里写"开了就完全不受限流"，字面为真但暗示了不存在的损失 ——
+      #      页面 HTML 本来就不经限流器（反代模式下 caddy → Next:3001，缓存命中不碰 Nest:3000，
+      #      实测 700 个反代页面请求 0 个 429）。限流器覆盖的一直只有 /api/* 与 /static/*。
+      #      直发真正改变的是"爬虫烧谁的 CPU"：Node 事件循环 → caddy sendfile。
     volumes:
       # 图床文件的存放地址，按需修改。
       - vanblog_data_path/data/static:/app/static

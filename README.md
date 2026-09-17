@@ -123,6 +123,7 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.1/vanblog.sh
 | `./vanblog.sh drill [归档]` | **恢复演练**：在一次性栈上真恢复一遍并断言语义（见下） |
 | `./vanblog.sh verify-deep` | 不需要 root 的语义校验（清单、版本、成员穿越、计数自洽、主题是否在包里…） |
 | `./vanblog.sh logs` / `status` | 日志 / 状态 |
+| `scripts/reset-waline.sh --generate` | 重置 waline 全部管理员密码（**不再有默认密码**；随机密码只显示一次，改库前要确认，邮箱默认不动）⚠️ 跑过 2026-09 之前的旧版就该视为凭据已泄露 —— 旧版把哈希硬编码在公开仓库里 |
 
 首次部署后浏览器打开 `http://<你的IP>`，按向导初始化站点与管理员账号即可。
 如果手上已有一份整站备份，**初始化页可以直接上传它恢复整站**，不用先填一遍向导。
@@ -159,8 +160,9 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 
 还有一个**默认关闭**的开关 `VANBLOG_CADDY_SERVE_HTML`：让 caddy 直接发 6 个固定页的 ISR HTML，
 实测 **3.7–4.5× rps、p95 降 78–84%**、首页单请求 p50 **8 → 1 ms**。为什么默认关、代价是什么、
-为什么动态路由明确不做，都写在报告第 9.1 节（一句话版本：那 6 条路径会**完全绕过限流**，
-而镜像里的标准 caddy 没有限流模块）。
+为什么动态路由曾经明确不做、以及现在靠什么保证安全（失效产物清理器），都写在报告第 9.1 节。
+⚠️ 顺便更正一句我早先写错的话：我曾说"开了直发这些路径就完全绕过限流"——**字面为真但暗示了一个不存在的损失**：
+**HTML 页面本来就不在限流覆盖范围内**：反代模式下 caddy 把页面请求转给 Next(:3001)，缓存命中的页面根本不碰 Nest(:3000) —— 实测 700 个反代页面请求 **0 个 429**。所以直发**不改变限流覆盖率（0 个百分点）**；限流器覆盖的一直只有 `/api/*` 与 `/static/*` 这些。真正变化的是"爬虫烧谁的 CPU"：Node 的单个事件循环 → caddy 的 sendfile。
 
 ## 备份与恢复：能演练才算数
 
@@ -229,7 +231,9 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 | `VANBLOG_ARTICLE_REVISIONS_KEEP` | `10` | 每篇文章保留多少历史版本（`0` = 关） |
 | `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48` | 太久没有"已校验的成功备份"就在启动与每次失败后 WARN（`0` = 关） |
 | `VANBLOG_THUMB_AVIF` | `false` | 缩略图额外产 `.avif`（省 26–41% 字节）。⚠️ 原图故意不做（实测最高 241 秒/张 CPU） |
-| `VANBLOG_CADDY_SERVE_HTML` | `false` | caddy 直发 6 个固定页（3.7–4.5× rps）。⚠️ 开了这 6 条路径就不受限流 |
+| `VANBLOG_CADDY_SERVE_HTML` | `false` | caddy 直发 ISR 生成的 HTML：`true` = 6 个固定页（3.7–4.5× rps），`all` = 再加 `/post` `/page` `/category` `/tag`（文章页突发 **8.8×**、p50 7→1–2 ms），其它值一律当关。要求 ISR 是 onDemand 模式（delay 模式会自动降级）。⚠️ 页面 HTML 本来就不经限流器（缓存命中不碰 Nest），所以直发不改变限流覆盖率 |
+| `VANBLOG_HEALTH_DETAILS` | `false` | 设 `true` 才在匿名的 `/api/public/health` 里返回版本号（含 commit）、uptime 与内存。⚠️ 默认关：那些字段等于把"这台机器跑的是哪个 commit"告诉扫描器 |
+| `VAN_BLOG_INTERNAL_TOKEN` | 空 | 内部令牌（`x-vanblog-internal` 头）。带上它也能读到上面的健康详情；⚠️ 回环地址**不**算内部 —— 一体式部署里 caddy 就是从 127.0.0.1 拨过来的 |
 | `VAN_BLOG_VERSION` | `dev` | 页脚与后台「关于」显示的版本号（镜像构建时写入；⚠️ Dockerfile 的构建参数是复数 `VAN_BLOG_VERSIONS`，两个名字**故意不一样**，别顺手统一） |
 
 ## 升级与回滚
