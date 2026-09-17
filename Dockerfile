@@ -412,7 +412,18 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
         > /etc/apk/repositories; \
       echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
     fi
+# fontconfig / ttf-dejavu / wqy-zenhei：**可见水印**要的。
+#   水印文字是 SVG <text>，由 sharp 内置的 libvips → librsvg → pango → fontconfig 栅格化，
+#   所以它要的是**系统字体**，不是 npm 包、也不是前台自托管的那份 woff2（那份只给浏览器用）。
+#   ⚠️ 缺字体不是"渲染成空白"：实测 node:24-alpine 零字体时 librsvg 会画**满屏 .notdef 豆腐块**
+#   （'Ag…' 576 ink px、'水' 180 ink px），stderr 只有一句 Fontconfig error 就"成功"返回 ——
+#   所以 `utils/watermark.ts` 是**逐字符集探测**（`Ag` / `水` 与私用区 U+E001 逐字节对比），
+#   探测不过就 WARN + 返回原图（宁可不盖，也不盖一张豆腐块图）。
+#   后果很直接：**镜像里没有这三个包 ⇒ 可见水印这个功能在生产环境等于不存在**（上传不失败，但一张都盖不上）。
+#   ttf-dejavu 管 Latin，wqy-zenhei 管中文（字体栈里 `Noto Sans CJK SC` 优先，但 font-noto-cjk
+#   体积是它的十几倍，为一个水印字段不值；装了 wqy-zenhei 后 fontconfig 会自动回落到它）。
 RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-apps libc6-compat zstd xz \
+  fontconfig ttf-dejavu wqy-zenhei \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
   && apk del tzdata

@@ -167,6 +167,81 @@ assert_contains_in "${runner_STAGE}" "libavif-apps" "runner installs libavif-app
 assert_contains_in "${runner_STAGE}" "libwebp-tools" "runner still installs libwebp-tools (cwebp)"
 assert_contains_in "${runner_STAGE}" "COPY --from=website_builder" "runner still copies website from website_builder"
 
+# ── 可见水印要的系统字体（2026-09 起）───────────────────────────────────────
+# 水印文字是 SVG <text>，由 sharp 内置的 libvips → librsvg → pango → fontconfig 栅格化，
+# 要的是**系统字体**（不是 npm 包，也不是前台自托管那份只给浏览器用的 woff2）。
+# 缺字体不是"渲染成空白"：零字体的 node:24-alpine 实测画**满屏 .notdef 豆腐块**，
+# 所以 utils/watermark.ts 改成逐字符集探测、探不过就 WARN + 返回原图 ——
+# 也就是说**镜像里少了这三个包，可见水印在生产环境等于没有这个功能**（上传不失败，一张也盖不上）。
+WATERMARK_TS="${ROOT}/packages/server/src/utils/watermark.ts"
+WATERMARK_SVG_TS="${ROOT}/packages/server/src/utils/watermarkSvg.ts"
+
+# ⚠️ 断言必须打在**真正那条 apk add 命令**上，不能打在 runner stage 的文本上：
+# stage 里就有一段注释写着「fontconfig ttf-dejavu wqy-zenhei：可见水印要的」，
+# 直接 grep stage 会匹配到那段解释为什么要装的注释 —— 与本文件上面 vips-dev 那次假绿同一个坑。
+RUNNER_APK="$(python3 - "${DOCKERFILE}" <<'PYAPK'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.find("AS runner")
+if start < 0:
+    raise SystemExit(1)
+lines = text[start:].split("\n")
+out, collecting = [], False
+for ln in lines:
+    s = ln.strip()
+    if not collecting:
+        if s.startswith("RUN") and "apk add" in s:
+            collecting = True
+        else:
+            continue
+    out.append(ln.split("#")[0])          # 剥掉注释（含续行里的 shell 注释）
+    if not ln.rstrip().endswith("\\"):    # 续行结束
+        break
+print(" ".join(out))
+PYAPK
+)"
+
+if [[ -n "${RUNNER_APK}" ]]; then
+  pass "解析出了 runner 真正的那条 apk add 命令（不是注释）"
+else
+  fail "解析不出 runner 的 apk add 命令 —— 下面几条字体断言会变成空断言"
+fi
+for pkg in fontconfig ttf-dejavu wqy-zenhei; do
+  assert_contains_in "${RUNNER_APK}" "${pkg}" "runner 的 apk add 真的装了 ${pkg}（可见水印的系统字体）"
+done
+
+# 漂移守卫：代码里那条"去装这些包"的 WARN 与镜像实际装的必须是同一批，
+# 且字体栈里点名的家族要有对应的包（否则探测过了也渲染不出对应字形）。
+python3 - "${WATERMARK_TS}" "${WATERMARK_SVG_TS}" "${RUNNER_APK}" <<'PYFONT' && pass "水印代码点名的字体包/字体族与镜像实际装的一致" || fail "水印代码点名的字体包/字体族与镜像实际装的不一致（改了一边忘了另一边）"
+import re, sys
+
+watermark = open(sys.argv[1], encoding="utf-8").read()
+svg = open(sys.argv[2], encoding="utf-8").read()
+apk = sys.argv[3]
+
+# 1) 代码里叫用户去装的那批包（FONT_INSTALL_HINT 里的 apk add 行）
+hint = re.search(r"apk add --no-cache ([^'\"（]+)", watermark)
+if not hint:
+    raise SystemExit(1)
+hinted = set(hint.group(1).split())
+expected = {"fontconfig", "ttf-dejavu", "wqy-zenhei"}
+if hinted != expected:
+    raise SystemExit(1)
+
+# 2) 镜像里真的装了这三个（apk 命令行，已剥注释）
+if not expected <= set(apk.split()):
+    raise SystemExit(1)
+
+# 3) 字体栈里点名的家族要有对应的包：DejaVu Sans ← ttf-dejavu，WenQuanYi Zen Hei ← wqy-zenhei
+#    （Noto Sans CJK SC 是故意不装的：font-noto-cjk 太大，pango 会逐字符回落到 wqy）
+family = re.search(r'DEFAULT_WATERMARK_FONT_FAMILY\s*=\s*\n?\s*"([^"]+)"', svg)
+if not family:
+    raise SystemExit(1)
+for name in ("DejaVu Sans", "WenQuanYi Zen Hei"):
+    if name not in family.group(1):
+        raise SystemExit(1)
+PYFONT
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
