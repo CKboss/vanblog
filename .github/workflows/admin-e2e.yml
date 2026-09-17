@@ -69,18 +69,20 @@ jobs:
         working-directory: packages/admin
         run: ./node_modules/.bin/playwright install --with-deps chromium
 
-      # ⚠️ 这个 job 自加入以来 **19/20 次失败、从未绿过**（固定卡在下面这一步），
-      # 而拉 job 日志需要 token，所以这里先补上"失败即留证"：把 playwright 的报告、
-      # trace 与各个 webServer 的输出都传成 artifact，下一次失败就能直接定位。
-      # 同时暂时标成非阻塞 —— 不是放弃，而是"永久红的 CI 会让每次发布都看起来有问题"，
-      # 拿到 artifact 定位并修好之后要把 continue-on-error 去掉（见 AGENTS 里的记录）。
+      # 这个 job 曾经 **19/20 次失败、从未绿过**，一度被临时标成 continue-on-error（永久红的 CI
+      # 会让每次发布都看起来有问题）。根因已在本地复现并修掉：不是基础设施问题，而是
+      # `toc-heading.spec.js` 抓到的一个**真 bug** —— TOC 公式插件的"已加载"通知不是粘性的，
+      # 而加载在首次渲染时就发起、订阅在 useEffect 里才发生，所以只要 import 先 resolve
+      # （esbuild 把动态 import 内联时是微任务级）通知就发给了空集合，标签永远停在 `$A$<$B$` 原文。
+      # 修复在 `packages/website/components/MarkdownTocBar/tocMath.ts`，本地全套 **111 passed**。
+      # 因此这里**恢复门禁**（去掉 continue-on-error）。下面的诊断步骤保留：
+      # 下次再红时，artifact 里有 playwright 报告与 trace，不必再靠 token 去捞 job 日志。
       - name: 先确认 playwright 配置能解析（便宜的早期信号）
         working-directory: packages/admin
         run: ./node_modules/.bin/playwright test --list 2>&1 | tail -20
 
       - name: Run admin mermaid e2e
         working-directory: packages/admin
-        continue-on-error: true
         run: |
           # 把 7 个 webServer 的启动情况先打出来：任何一个起不来，后面的用例会以
           # "页面打不开"的形式失败，而真正的原因只在 webServer 的 stderr 里。

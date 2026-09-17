@@ -5530,6 +5530,84 @@ P7 把 env 默认翻成 true；P8 去掉三处 private 过滤。
   语料再涨 10 倍就该上复合索引。
 - `countTotalWords` 仍把私有文章的字数算进**站点总字数**（既有；只影响聚合值，不暴露单篇）⇒ 本轮故意不动。
 
+### 7.58 `admin-e2e` 从来没绿过：根因是一个真的竞态 bug，以及"这套 e2e 该不该留"的答案
+
+用户的要求是「尝试修好 admin-e2e，找到原因，分析一下这个测试还有没有必要，有必要就修，没有就去掉」。
+
+#### 结论先说：**必须留**，而且它刚刚证明了自己的价值
+
+这套 e2e（37 个 spec / **111 条用例**）是仓库里**唯一**在真浏览器里渲染真实组件的测试：
+夹具不是手写副本，而是 `tests/e2e/build-fixture.mjs` 用 esbuild **从真源码打包**的
+（`serve-fixture.mjs` 启动时现打包，所以不存在"产物陈旧"），直接 import
+`website/components/MarkdownTocBar`、`TocDrawer`、`Markdown/heading` 与后台真实页面。
+而 admin 那 488 条 `node --test` 用例是**源码 grep + 纯逻辑**钉子，**没有 DOM**；server 那 1275 条也碰不到渲染。
+也就是说"编辑器里有 mermaid 时还能不能编辑"、"方向键会不会把光标移到错的输入框"、
+"TOC 标签里渲染出来的到底是公式还是 `$A$<$B$` 原文"这一类问题，**只有这套 e2e 能抓到**。
+每条用例还挂着 issue 号（#152 #177 #264 #311 #429 #489 #504…），是真 bug 的回归网。
+
+#### 诊断过程（含两个我自己走错的方向）
+
+CI 侧信息量为零：19/20 次失败、固定卡在 `pnpm test:e2e`，而**拉 job 日志需要 token**，
+`check-runs/annotations` 也是空的。所以只能在本地复现：
+- ⚠️ 默认端口 **3002 与开发栈的 admin 冲突**，7 个 webServer 的端口都要用环境变量改开
+  （`ADMIN_E2E_PORT` / `MERMAID_E2E_PORT` / `BACKUP_E2E_PORT` / `POST_ISR_E2E_PORT` /
+  `ADMIN_META_E2E_PORT` / `COMMENT_LOGIN_E2E_PORT` / `CATEGORY_RENAME_E2E_PORT`）。
+- 装 chromium：`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` 只是安装期跳过，之后
+  `./node_modules/.bin/playwright install chromium` 直连就能装；⚠️ 浏览器落到 `$HOME/.cache/ms-playwright`，
+  而本仓库的 `HOME` 是 `.tools/home`，跑测试要用同一个 HOME，否则会重复下载。
+- 本地 `CI=1`（与 GitHub 同条件：不复用已有 server、失败重试 2 次）跑出 **109 passed / 2 failed**，
+  失败两条都在 `[bytemd-fixture] › toc-heading.spec.js`（#264 的 KaTeX 标签）。
+  ⇒ **不是基础设施问题**。我一开始怀疑 `umi dev` 冷启动超过 webServer 的 240s 超时，**错了**：
+  整套本地 2.4 分钟就跑完；第二个猜测是 esbuild 处理不了懒加载的动态 import，**也错了**：
+  产物里 katex 出现 32 次、`plugin-math-ssr` 2 次，动态 import 已被内联成 `Promise.resolve().then(...)`。
+
+失败断言是 `.markdown-navigation .title-anchor` 里 filter `.katex` 的元素 `Received: hidden`。
+用一次性脚本（不改仓库里的 spec）起夹具服务 + chromium 把 DOM 与控制台打出来，拿到决定性证据：
+
+```
+title-anchor 数: 11 | 页面里 .katex 总数: 0
+ - "比较 $A$<$B$"                           → <span>比较 $A$&lt;$B$</span>
+ - "由方程 $F(x,y)=0$ 确定的隐函数 $y=y(x)$"  → <span>由方程 …原文…</span>
+[HTTP 404] /tall.svg      ← 唯一的外部错误，与公式无关（夹具里一张缺失的图）
+```
+
+`<span>原文</span>` 这个形状直接指向 `renderTocLabelHtml()` 在 `mathPluginFactory === null` 时走的分支；
+而 404 只有一个无关的 svg ⇒ 懒加载**没有**网络失败。
+
+#### 根因：**"发起加载"早于"订阅通知"，而通知不是粘性的**
+
+`MarkdownTocBar/core.tsx`：`labelHtml` 是 `useMemo`（**渲染期**）算的，里面调 `renderTocLabelHtml()`，
+首次遇到 `$` 就 `void ensureTocMathLoaded()`；而订阅在
+`useEffect(() => onTocMathReady(() => setMathTick(n => n + 1)), [])`（**渲染后**）。
+加载完成时 `listeners.forEach(cb => cb())` —— 若那一刻 `listeners` 还是空的，**通知就永久丢失**，
+`mathTick` 不再变化，标签永远停在原文。
+- 夹具里：esbuild 内联了 `import()` ⇒ promise 在**微任务**里 resolve ⇒ **必定早于 effect** ⇒ 确定性失败。
+- 生产里：那是一个真的网络分块（KaTeX ~275KB / gzip ~75KB，当初正是为了不把它拖进首屏才改懒加载），
+  比 effect 订阅慢 ⇒ **靠运气一直没暴露**。⚠️ 但只要分块被缓存命中、或将来打包器内联它，
+  线上就会静默退化成"TOC 里显示 `$A$<$B$` 原文"，**一条报错都没有**（当时 `.catch` 还是空的）。
+
+修法（产品侧，`packages/website/components/MarkdownTocBar/tocMath.ts`）：
+1. **把通知做成粘性的**：`onTocMathReady(cb)` 在 `listeners.add(cb)` 之后，若 `mathPluginFactory` 已存在
+   就**立刻回调一次**（`try/catch` 包住，单个订阅者出错不影响其它）。这是**按类修**而不是按调用点修 ——
+   任何将来的订阅者自动受保护。
+2. **加载失败不再静默**：空 `.catch` 改成一次性 `console.warn`（带错误对象）。
+   ⚠️ 这又是本仓库最常见的那一类：**静默失败**（§7.55 J、§7.56 都记过）。
+
+验证：新增 `packages/website/__tests__/tocMathSticky.spec.ts`（2 条：加载后再订阅必须立刻回调；
+订阅者抛错不影响其它订阅者、也不破坏已加载状态）；website vitest **80 文件 / 790 全绿**、tsc 0 错；
+`playwright test toc-heading` **17/17**（原先红的两条都绿）；**整套 e2e 本地 111 passed（2.4 分钟）**。
+⚠️ 单测里**故意不断言 `katex` 字样**：插件是打桩的，产不出真 KaTeX 标记 ——
+"标签里真的出现 `.katex`"由 e2e（真插件 + 真浏览器）钉住。**单测钉通知语义、e2e 钉渲染结果，
+两层各管一段、别互相冒充**（这也正是为什么这个 bug 只有 e2e 抓得到）。
+
+#### CI 侧的处置
+
+- 根因修好 ⇒ **摘掉 `continue-on-error`，恢复门禁**。
+- 上一轮加的诊断**全部保留**（`playwright test --list` 早期信号、7 个 webServer 清单打印、
+  `--reporter=list`、`if: always()` 上传 `playwright-report/` 与 `test-results/`（含 trace）保留 14 天）。
+- ⚠️ 一条要记住的教训：**带 `continue-on-error` 的步骤在 API 里显示 `success`** ⇒
+  "步骤绿了"不等于"测试过了"，真相只在 artifact 里。我上一轮就是靠步骤颜色误判过一次。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
@@ -5537,6 +5615,7 @@ P7 把 env 默认翻成 true；P8 去掉三处 private 过滤。
 | server `jest` | 1275 用例：**1274 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；并发压满机器时另有 2 条负载敏感用例会假红，单独跑 43/43 全绿）；套件 132 个 |
 | website `vitest run` | 77 文件 / 748 用例全绿 |
 | admin `node --test tests/unit` | **123 套件 / 465 用例全绿**（⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
+| admin e2e（playwright） | **111 用例全绿**（37 个 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
 

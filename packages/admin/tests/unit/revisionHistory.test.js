@@ -308,9 +308,11 @@ describe('RevisionHistory 组件接线（源码断言，已剔除注释）', () 
     assert.match(comp, /保存后再来查看历史版本/);
   });
 
-  it('详情加载失败给 Alert 而不是白屏', () => {
+  it('详情拉取走嵌套路由（带 articleId）；失败给 Alert 而不是白屏；详情面板展示「来源」', () => {
+    assert.match(comp, /await getRevisionById\(articleId, record\.id\)/);
     assert.match(comp, /setDetailError\(describeDetailFailure\(err\)\)/);
     assert.match(comp, /detailError \? \(/);
+    assert.match(comp, /来源 \{formatRevisionReason\(detail\.reason\)\}/);
   });
 });
 

@@ -10,10 +10,31 @@ import { sanitizeMarkdownSchema } from "../../utils/markdownSanitize";
 type MathPluginFactory = () => any;
 let mathPluginFactory: MathPluginFactory | null = null;
 let pending: Promise<void> | null = null;
+let loadFailureLogged = false;
 const listeners = new Set<() => void>();
 
+/**
+ * 订阅"公式插件已加载"。
+ *
+ * ⚠️ 这里必须是**粘性**的（已加载就立刻回调），否则会丢通知：
+ * `renderTocLabelHtml()` 在组件**首次渲染**的 useMemo 里就会调用 `ensureTocMathLoaded()`，
+ * 而订阅是在 `useEffect` 里才发生的 —— 也就是说"发起加载"早于"订阅通知"。
+ * 只要那个 import 在 effect 跑之前就 resolve（打包器把动态 import 内联时是微任务级、
+ * 或者分块已被浏览器缓存命中），`listeners.forEach` 面对的就是一个空集合，
+ * 通知发给了没人听 ⇒ `mathTick` 永不递增 ⇒ **TOC 标签永远停在 `$A$<$B$` 原文**，
+ * 而且一条报错都没有（`ensureTocMathLoaded` 的 `.catch` 还是静默的）。
+ * 生产环境之所以一直没暴露，只是因为真实网络分块比 effect 订阅慢 —— 那是运气，不是设计。
+ * admin 的 e2e（`toc-heading.spec.js`，esbuild 内联了动态 import）确定性地复现了它。
+ */
 export function onTocMathReady(cb: () => void): () => void {
   listeners.add(cb);
+  if (mathPluginFactory) {
+    try {
+      cb();
+    } catch {
+      // 单个订阅者出错不影响其它，也不影响已加载状态
+    }
+  }
   return () => {
     listeners.delete(cb);
   };
@@ -40,8 +61,14 @@ export function ensureTocMathLoaded(): Promise<void> {
           }
         });
       })
-      .catch(() => {
+      .catch((err) => {
         pending = null;
+        // ⚠️ 以前这里是空 catch：公式插件加载失败时，TOC 标签会静默停在 `$...$` 原文，
+        // 排查时唯一线索是"看起来没渲染公式"。留一条 warn，成本是一次性的。
+        if (typeof console !== 'undefined' && !loadFailureLogged) {
+          loadFailureLogged = true;
+          console.warn('[tocMath] @bytemd/plugin-math-ssr 加载失败，TOC 里的公式将按原文显示：', err);
+        }
       });
   }
   return pending;
