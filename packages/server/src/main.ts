@@ -3,7 +3,7 @@ import {
   backupFirstSegmentUnderStatic,
   isGuardedStaticPath,
 } from 'src/utils/staticGuard';
-import { envInt } from './utils/rateLimit';
+import { envInt, rateLimitMiddleware, securityHeadersMiddleware } from './utils/rateLimit';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { MetaProvider } from './provider/meta/meta.provider';
@@ -109,6 +109,53 @@ async function bootstrap() {
       return;
     }
     next();
+  });
+
+  // ⚠️⚠️ 这一段必须留在 `useStaticAssets` / `SwaggerModule.setup` **之前**。
+  //
+  // 原因（第四轮审计实测出来的，不是推理）：`useStaticAssets()` 与 `SwaggerModule.setup()`
+  // 都在 `app.listen()` 之前调用，而 Nest 只在 `init()`（由 `listen()` 触发）里才安装
+  // `app.module.ts` 的那串中间件（request-id → securityHeaders+rateLimit → no-store → init）。
+  // 所以真实的 Express 栈顺序是：
+  //   [json][sanitize][static403][express.static /static][/rss][/sitemap][swagger] … [request-id][securityHeaders][rateLimit][no-store][init][router]
+  // 静态与 swagger 的响应在限流器**之前**就结束了 ⇒
+  //   1) `rateLimit.ts` 里那个 `rl-static-<ip>` 桶（`VANBLOG_STATIC_LIMIT_PER_MIN`，默认 6000/分钟）
+  //      **永远执行不到，是死代码**；
+  //   2) `/static/**`（除 `/static/img/*.{webp,png,…}` 由 caddy 直服外，附件/主题/自定义页面都反代到 Node）
+  //      **完全没有限流**，而镜像里的 caddy 2.11.4 又没有任何限流模块 ⇒ 这是本机最便宜的带宽耗尽向量；
+  //   3) `/swagger` 与 `/swagger-json`（59.3 KB）也没有限流；
+  //   4) 静态与 swagger 的响应都拿不到 X-Frame-Options / Referrer-Policy / Permissions-Policy / nosniff。
+  //
+  // 实测（一次性实例，把三档限流都设成 5，每个请求都带 X-Forwarded-For 以避开回环豁免）：
+  //   12 × /api/public/meta      → 200 200 200 200 200 429 429 …   （Nest 路由确实被限）
+  //   12 × /static/img/probe.txt → 200 × 12                        （静态完全不受限）
+  //   12 × /swagger-json         → 200 × 12
+  //   12 × /robots.txt           → 429 × 12                        （同一个全局桶已满）
+  //
+  // ⚠️ 不会重复计数：这些路径根本到不了 Nest 那份中间件（响应在这里就结束了）。
+  // ⚠️ 也不影响 SSR/ISR/waline 的内部回环请求：它们从回环来且不带转发头，
+  //    `isLoopbackRequest` 会整档豁免（这是有意的，否则前台渲染会自己把自己限流）。
+  const PRE_NEST_LIMITED_PREFIXES = ['/static/', '/rss/', '/sitemap/', '/swagger'];
+  const matchesPreNestPrefix = (rawPath: string): boolean => {
+    // 与 staticGuard 同样的口径：原始路径可能是百分号编码的，解码后再比一次，
+    // 免得有人用 `%2Fstatic%2F…` 之类的写法从限流器旁边溜过去（静态层是会解码的）。
+    const candidates = [rawPath];
+    try {
+      const decoded = decodeURIComponent(rawPath);
+      if (decoded !== rawPath) {
+        candidates.push(decoded);
+      }
+    } catch {
+      // 解不开就只按字面判定
+    }
+    return candidates.some((p) => PRE_NEST_LIMITED_PREFIXES.some((prefix) => p.startsWith(prefix)));
+  };
+  app.disable('x-powered-by'); // 少送一个指纹；Express 默认在每个响应上带 X-Powered-By
+  app.use((req, res, next) => {
+    if (!matchesPreNestPrefix(req.path)) {
+      return next();
+    }
+    securityHeadersMiddleware(req, res, () => rateLimitMiddleware(req, res, next));
   });
 
   app.useStaticAssets(globalConfig.staticPath, {
