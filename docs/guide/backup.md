@@ -18,11 +18,24 @@ icon: retweet
 ./vanblog.sh backup                     # 整站备份（默认 zstd，一致性快照）
 ./vanblog.sh backup --format xz         # 换压缩格式：zstd / xz / gzip
 ./vanblog.sh verify                     # 校验备份目录里的全部归档（不解压落盘）
+./vanblog.sh backup-verify              # 备份 + 立刻深度校验 + 陈旧检查 + 台账（适合放 cron）
+./vanblog.sh drill                      # 恢复演练：一次性栈上真恢复一遍并断言语义（见下）
 ./vanblog.sh restore                    # 不带参数：列出服务器上的归档，选一个恢复
 ./vanblog.sh restore vanblog-full-20260913-140955.tar.zst     # 一步恢复（不上传，秒级开始）
 ./vanblog.sh restore /path/to/vanblog-full-xxx.tar.zst        # 本地文件（走上传）
 ./vanblog.sh restore <归档名> --no-static                     # 只恢复数据库，保留当前图床/附件
 ```
+
+::: tip 「备份成功」和「备份能恢复」是两件事
+
+`verify` 只能证明文件完整（解压器自检 + sha256 + 成员清单）；**`drill` 才证明它能被恢复成
+一个能用的站点**（起一套一次性 mongo + vanblog，真上传真恢复，然后对账：counts 与归档
+manifest 一致、公开列表的 total 等于从归档里逐文档数出来的公开篇数、主题 CSS 可取、
+第二次恢复必须 403……）。这四条校验类命令（`drill` / `verify-deep` / `backup-verify` /
+`backup-status`）都**不需要 root**。原理、输出示例与全部参数见
+[导入导出 → 证明备份真的能恢复](../advanced/backup.md#证明备份真的能恢复vanblogsh-drill)。
+
+:::
 
 **它比"打包数据目录"好在哪**：由 server 在运行中导出，不会拍到 mongod 写了一半的数据文件；
 格式是 NDJSON，**不绑 MongoDB 版本**（4.4 → 6.0 → 7.0 都能恢复进去，而数据目录 tar 换个大版本
@@ -185,6 +198,11 @@ VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保�
 ```bash
 30 4 * * 0 /var/vanblog/vanblog.sh verify >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
 ```
+
+想更严格，把每日备份那条 cron 的命令从 `backup` 换成 **`backup-verify`**：备份 → 深度校验 →
+陈旧检查（最新归档超过 7 天算陈旧，可调）→ 写追加式台账，任何一步失败都非零退出，
+并明说「旧归档没有被清理」。再定期（比如每月）跑一次 `./vanblog.sh drill` 做真恢复演练。
+这几条的环境变量见 [环境变量 → 恢复演练与校验](../reference/env.md#恢复演练与校验vanblogsh-drill--verify-deep--backup-verify--backup-status)。
 
 ### 别把磁盘备满：保留策略
 

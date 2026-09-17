@@ -28,3 +28,11 @@ VanBlog 支持忘记密码恢复，在登录页面点击`忘记密码`，输入�
 ```bash
 docker exec vanblog_vanblog_1 cat /var/log/restore.key
 ```
+
+## 别和这两个搞混
+
+- **`setup.key`（初始化密钥）**：同样在日志目录里，但它只服务于**未初始化期间**的
+  初始化/恢复接口（`VANBLOG_INIT_REQUIRE_SETUP_KEY`，新版默认开启），站点初始化成功后
+  就会被自动删除。它救不了忘记的登录密码，见 [初始化 → 初始化密钥](../guide/init.md#初始化密钥setup-key)。
+- **文章/分类的访问密码**：这部分密码只存 scrypt 哈希，**没有任何找回通道**（恢复密钥也救不了它），
+  忘了只能登录后台在「修改信息」里显式清除/重设，见 [加密文章](../advanced/encrypt.md)。

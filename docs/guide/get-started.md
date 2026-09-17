@@ -29,9 +29,10 @@ order: 1
 上面是上游 2022 年的截图，运行时的量级仍然适用（server + 前台 Next + caddy + mongo，
 空载几百 MB 内存）。**区别在构建**：本分支默认从 ghcr 拉镜像，不构建，1C1G 的机器也能装；
 只有拉不到镜像时才会退回源码构建，那时 admin 的 webpack 很吃内存 ——
-脚本会按机器内存自动选档位（≥6GB 用 4096MB 堆，否则 1536MB），
-也可以手动指定 `VAN_BLOG_ADMIN_BUILD_SCRIPT=build:lowmem`。
-2GB 以下的机器建议直接 [下载镜像或在大机器上构建](../advanced/local-build.md)。
+脚本会构建前**实测 CPU 与可用内存**再选档位（可用内存 <3.5GB 时 admin 堆降到 1536MB，
+否则 4096MB；内存与核数都够才并行构建三个前端，否则串行；可用内存 <1.8GB 直接劝退并给出
+两条出路，不让你白等 20 分钟），手动构建也可以用 `VAN_BLOG_ADMIN_BUILD_SCRIPT=build:lowmem`
+指定低内存档位。2GB 以下的机器建议直接 [下载镜像或在大机器上构建](../advanced/local-build.md)。
 
 :::
 
@@ -81,9 +82,9 @@ order: 1
 ::: warning 别把「未初始化」的站点长时间暴露在公网
 
 未初始化期间，匿名初始化接口是开着的，谁先请求谁就能把站点初始化成自己的。
-要么用零接触初始化把窗口关掉，要么打开初始化密钥
-（`VANBLOG_INIT_REQUIRE_SETUP_KEY=true`，密钥在日志目录 `setup.key` 与启动日志里），
-详见 [初始化](./init.md#初始化密钥setup-key)。
+新版**默认开启初始化密钥**（`VANBLOG_INIT_REQUIRE_SETUP_KEY`，密钥在日志目录 `setup.key`
+与启动日志里，每 10 分钟重印），匿名请求必须携带它；要彻底关掉这个窗口，用零接触初始化
+（`VANBLOG_ADMIN_USER` + `VANBLOG_ADMIN_PASSWORD`/`_FILE`）。详见 [初始化](./init.md)。
 
 :::
 
@@ -130,7 +131,8 @@ order: 1
 
 ## 新鲜安装的安全清单
 
-- [ ] **初始化窗口已经关上**：零接触初始化，或 `VANBLOG_INIT_REQUIRE_SETUP_KEY=true`（见 [初始化](./init.md)）。
+- [ ] **初始化窗口已经关上**：新版默认开启初始化密钥（`VANBLOG_INIT_REQUIRE_SETUP_KEY`），
+      确认你没有把它显式关掉；自动化装机可以直接用零接触初始化（见 [初始化](./init.md)）。
 - [ ] **反代 / CDN 场景**：确认 `VANBLOG_TRUST_FORWARDED_HEADERS`。默认 `auto`（对端是回环/私网才采信
       `X-Forwarded-For` 最右一跳）适合内置 caddy 与本机反代；**CDN/隧道直连源站**（对端是公网代理 IP）要设
       `always`，否则限流与登录防爆破会按代理的 IP 分桶，见 [反代](../reference/reverse-proxy.md)。

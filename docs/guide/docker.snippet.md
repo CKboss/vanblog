@@ -123,8 +123,9 @@ services:
       # VANBLOG_ADMIN_PASSWORD: 'a-strong-unique-password'
       # 推荐用文件（Docker secret）而不是内联；_FILE 优先于内联变量
       # VANBLOG_ADMIN_PASSWORD_FILE: '/run/secrets/vanblog_admin_password'
-      # ── 初始化密钥（可选）：匿名初始化接口必须携带日志目录里 setup.key 的密钥 ──
-      # VANBLOG_INIT_REQUIRE_SETUP_KEY: 'true'
+      # ── 初始化密钥：新版**默认开启**，匿名初始化必须携带 <日志目录>/setup.key 里的密钥
+      #    （日志里每 10 分钟重印一次）。确认不需要时才显式关闭：──
+      # VANBLOG_INIT_REQUIRE_SETUP_KEY: 'false'
     volumes:
       # 图床文件的存放地址，按需修改。
       - ${PWD}/data/static:/app/static

@@ -47,7 +47,8 @@
 **写作与内容**
 
 - Markdown 编辑器（bytemd，掘金同款）：图表（mermaid）、数学公式（KaTeX 服务端渲染）、代码高亮、TOC、`more` 摘要标记、
-  自定义高亮块、Emoji 选择器、剪贴板与本地图片一键上传、导入 md 建文章/草稿
+  自定义高亮块、Emoji 选择器、剪贴板与本地图片一键上传、导入 `.md`/`.mdz` 建文章/草稿（`.mdz` 图片自动入图床）、
+  导出 `.md` / Typora 图片包 `.mdz` / `.zip` 三选一
 - 草稿、加密文章与加密分类、隐藏文章、置顶、自定义文章路径（拼音别名 + 数字 id 自动 301）
 - **文章版本历史**（改标题/正文才快照，上限可配，回滚前会先存一份当前状态 ⇒ 回滚本身可回滚）
 - **定时发布**（`publishAt`；到期前在所有公开面都不可见，含搜索、RSS、sitemap、相关文章与密码解锁接口）
@@ -57,6 +58,7 @@
 **读者与前台**
 
 - 前台是静态页（SSG）+ **ISR 秒级增量渲染**：改一篇不用重建全站
+- **站内搜索**：静态索引（零数据库成本、可被 CDN 缓存）+ `/search` 结果页（排序/高亮/分页），索引不可用时自动回退服务端搜索
 - **阅读时长**、相关文章推荐、TOC 抽屉、代码复制、访客数/阅读量、暗黑模式（可自动切换）、响应式
 - Apple 风格皮肤（后台一键切换）；也可上传自己的主题 CSS（主题文件会随整站备份一起走）
 - SEO：自定义路径与 301、JSON-LD、OG/Twitter 卡片、sitemap、RSS（feed/atom/json）
@@ -122,11 +124,15 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.1/vanblog.sh
 | `./vanblog.sh backup-verify` | 备份 + **立刻深度校验** + 陈旧检查 + 台账（适合放 cron） |
 | `./vanblog.sh drill [归档]` | **恢复演练**：在一次性栈上真恢复一遍并断言语义（见下） |
 | `./vanblog.sh verify-deep` | 不需要 root 的语义校验（清单、版本、成员穿越、计数自洽、主题是否在包里…） |
-| `./vanblog.sh logs` / `status` | 日志 / 状态 |
+| `./vanblog.sh log` / `status` | 日志 / 状态 |
 | `scripts/reset-waline.sh --generate` | 重置 waline 全部管理员密码（**不再有默认密码**；随机密码只显示一次，改库前要确认，邮箱默认不动）⚠️ 跑过 2026-09 之前的旧版就该视为凭据已泄露 —— 旧版把哈希硬编码在公开仓库里 |
 
 首次部署后浏览器打开 `http://<你的IP>`，按向导初始化站点与管理员账号即可。
-如果手上已有一份整站备份，**初始化页可以直接上传它恢复整站**，不用先填一遍向导。
+如果手上已有一份整站备份，**初始化页可以直接上传它恢复整站**，不用先填一遍向导；
+也可以**零接触**：给容器设 `VANBLOG_ADMIN_USER` + `VANBLOG_ADMIN_PASSWORD`（或 `_FILE`），
+站点在监听第一个请求之前就完成初始化。未初始化期间匿名初始化接口默认要求**初始化密钥**
+（`VANBLOG_INIT_REQUIRE_SETUP_KEY`，新版默认开；密钥在日志目录 `setup.key` 与启动日志里，每 10 分钟重印），
+防止「谁先请求谁就把新站初始化成自己的」。
 
 ### 其他部署方式
 
@@ -207,7 +213,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 | 安全与加固 | [`docs/advanced/security.md`](docs/advanced/security.md) · [`docs/reference/secure.md`](docs/reference/secure.md) |
 | 协作者与权限、API Token | [`docs/advanced/collaborator.md`](docs/advanced/collaborator.md) · [`docs/advanced/token.md`](docs/advanced/token.md) |
 | 反代 / 目录结构 / 日志 | [`docs/reference/reverse-proxy.md`](docs/reference/reverse-proxy.md) · [`docs/reference/dir.md`](docs/reference/dir.md) · [`docs/reference/log.md`](docs/reference/log.md) |
-| API | [`docs/reference/api.md`](docs/reference/api.md)（运行时 `/swagger` 默认公开，可用 `VANBLOG_SWAGGER=false` 关） |
+| API | [`docs/reference/api.md`](docs/reference/api.md)（运行时 `/swagger` **默认关闭**，需要时 `VANBLOG_SWAGGER=true` 打开） |
 | 配置项与环境变量 | [`docs/reference/env.md`](docs/reference/env.md) · [`docs/reference/config.md`](docs/features/config.md) |
 | 从别的系统迁移 | [`docs/advanced/migrate.md`](docs/advanced/migrate.md) |
 | 常见问题 | [`docs/faq/deploy.md`](docs/faq/deploy.md) · [`docs/faq/usage.md`](docs/faq/usage.md) · [`docs/faq/update.md`](docs/faq/update.md) · [`docs/faq/password.md`](docs/faq/password.md) · [`docs/faq/customize.md`](docs/faq/customize.md) |
@@ -232,7 +238,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 | `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48` | 太久没有"已校验的成功备份"就在启动与每次失败后 WARN（`0` = 关） |
 | `VANBLOG_THUMB_AVIF` | `false` | 缩略图额外产 `.avif`（省 26–41% 字节）。⚠️ 原图故意不做（实测最高 241 秒/张 CPU） |
 | `VANBLOG_CADDY_SERVE_HTML` | `false` | caddy 直发 ISR 生成的 HTML：`true` = 6 个固定页（3.7–4.5× rps），`all` = 再加 `/post` `/page` `/category` `/tag`（文章页突发 **8.8×**、p50 7→1–2 ms），其它值一律当关。要求 ISR 是 onDemand 模式（delay 模式会自动降级）。⚠️ 页面 HTML 本来就不经限流器（缓存命中不碰 Nest），所以直发不改变限流覆盖率 |
-| `VANBLOG_HEALTH_DETAILS` | `false` | 设 `true` 才在匿名的 `/api/public/health` 里返回版本号（含 commit）、uptime 与内存。⚠️ 默认关：那些字段等于把"这台机器跑的是哪个 commit"告诉扫描器 |
+| `VANBLOG_HEALTH_DETAILS` | `false` | 设 `true` 才在匿名的 `/api/public/health` 里返回 uptime 与内存（**版本号始终公开**——它本来就渲染在每个前台页面的页脚上，藏它属于安全表演；uptime/内存能推断重启时机与负载，所以默认藏） |
 | `VAN_BLOG_INTERNAL_TOKEN` | 空 | 内部令牌（`x-vanblog-internal` 头）。带上它也能读到上面的健康详情；⚠️ 回环地址**不**算内部 —— 一体式部署里 caddy 就是从 127.0.0.1 拨过来的 |
 | `VAN_BLOG_VERSION` | `dev` | 页脚与后台「关于」显示的版本号（镜像构建时写入；⚠️ Dockerfile 的构建参数是复数 `VAN_BLOG_VERSIONS`，两个名字**故意不一样**，别顺手统一） |
 
@@ -243,10 +249,13 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 ./vanblog.sh config     # 改了环境变量之后重新生成 compose
 ```
 
-⚠️ 升级前先看 [CHANGELOG.md](CHANGELOG.md) 里的**「行为变化」**：本项目有几处是**故意改了默认值**的
-（限流的可信代理判定、浏览统计的内存封顶、事件日志会轮转、文章版本历史默认开、
-没有近期已校验备份时启动会多一条 WARN），以及一批安全修复会让**以前能做的事现在被拒**
-（公开搜索不再返回私有文章标题、上一篇/下一篇与相关文章不再包含私有文章）。
+⚠️ 升级前先看 [CHANGELOG.md](CHANGELOG.md) 里的**「行为变化」**与
+[`docs/guide/update.md`](docs/guide/update.md) 的对照表：本项目有几处是**故意改了默认值**的
+（访问密码改存 scrypt 哈希、**忘记即不可找回**；`/swagger` 默认关；访问统计默认只保留 10 年；
+整站恢复默认把静态目录修剪成与归档一致；事件日志会轮转改名；文章版本历史默认开；
+匿名初始化默认要求初始化密钥；限流的可信代理判定与覆盖范围；浏览统计的内存/行数封顶），
+以及一批安全修复会让**以前能做的事现在被拒**（公开搜索不再返回私有文章标题、
+上一篇/下一篇与相关文章不再包含私有文章、匿名登出不再触发流水线事件）。
 回滚方式与升级后常见问题见 [`docs/guide/update.md`](docs/guide/update.md) 与 [`docs/faq/update.md`](docs/faq/update.md)。
 
 ## 开发
@@ -277,11 +286,13 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 
 | 套件 | 命令 | 现状 |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **1275** 用例 / 132 套件（1 个既有用例需联网拉字体；⚠️ 机器被压满时另有 2 条负载敏感用例会假红，单独跑 43/43 全绿） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **80 文件 / 790** 用例 |
-| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **498** 用例（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行） |
-| admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件；⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开） |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **23 文件 / 1495** 条断言 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **169 套件 / 1951 用例**（1944 绿 + 7 跳过 + **0 失败**，59s；⚠️ 机器被压满时另有 2 条负载敏感用例会假红，单独跑就绿） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **84 文件 / 885 用例** |
+| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **148 套件 / 579 用例**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
+| admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件；⚠️ 需要装浏览器，且默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开） |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **24 文件 / 1754 条断言** |
+| 文档守卫 + 文档站 | `bash scripts/tests/docs-{links,consistency}.test.sh`；`cd docs && pnpm run docs:build` | 死链 5/5、一致性 52/0（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）、构建 65 页 |
+| 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | 两包各 **0 错** |
 | 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md) |
 
 用 `./dev-env.sh bootstrap` 装的工具链跑（Node 24 + pnpm 8 + MongoDB 7）；系统 Node 也可以，但版本要 ≥ 24
@@ -308,34 +319,38 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 
 - **备份是明文、且只落在本机**：归档里含密码哈希与 jwt 密钥；**没有异地副本**（S3/OSS/WebDAV 都没有），
   机器一起丢就全丢 —— 这是目前最大的单点。（"能不能恢复"现在有证据了：导出后自校验 + `drill` 演练。）
-- **文章/分类的访问密码仍是明文存储**（校验已常量时间、解锁接口已限次）。没直接换哈希是因为后台表单会把密码回填到输入框，
-  改哈希必须同时改前端语义（留空 = 不修改），得前后端一起动。
+- ~~文章/分类的访问密码仍是明文存储~~ —— **已修**：改存 scrypt 哈希、任何接口不回显（后台只给 `hasPassword` 布尔），
+  表单语义变成「留空 = 不修改、清除要显式开关」。代价：**忘记访问密码不再可找回**，只能后台清除/重设。
 - **没有 CSP**：内联样式 + bytemd 注入的脚本 + 可选第三方统计，严 CSP 会把站点搞坏，要先给内联样式发 nonce。
-- **搜索是子串匹配**：无索引、无排序、无中文分词、没有独立结果页 `/search`。也没有 `/metrics`（Prometheus 指标）。
+- **搜索仍是子串匹配**：现在有了静态索引（`/static/search/index.json`）+ `/search` 结果页（排序/高亮/分页，索引不可用时回退服务端搜索），
+  但没有中文分词、没有拼写容错、没有拼音；摘要 ≤200 字，正文深处的词要走服务端回退。也没有 `/metrics`（Prometheus 指标）。
 - **后台技术栈停更**：umi 3 + antd 4 + **React 17**；前台是 Next **14**（15/16 要 React 19，而 `@bytemd/react` 的 peer 只到 18）；
   Express 仍是 4.x（Nest 11 = Express 5 = path-to-regexp v8，而 `app.module.ts` 有 4 处 `path:'*'`）。
 - **`cluster` 默认关且 N>1 从未实跑**：守卫都铺好了，但内存随 worker 数近似线性增长，打开前必须自己压一遍。
 - **AVIF 只覆盖缩略图且默认关**（原图实测最高 241 秒/张 CPU，数学上不成立）；小图用 AVIF 反而更大。
-- **caddy 直发 HTML 只覆盖 6 个固定页且默认关**：动态路由有硬阻塞（删除的文章的 HTML 永远留在磁盘上、308/404 不留产物）。
+- **caddy 直发 HTML 默认关**：`true` 覆盖 6 个固定页，`all` 再覆盖 `/post/* /page/* /category/* /tag/*`（要求 ISR onDemand 模式）。
+  动态路由曾经的硬阻塞（删除文章的 HTML 永远留在磁盘上）现在由失效产物清理器（默认每 15 分钟对账）兜底，但这条路的活体验证还不如固定页充分。
 - **waline 让镜像大了约 330MB**，其中约 170MB 是这个部署用不到的（MathJax 三件套、LeanCloud、better-sqlite3）。
 - **前台全局 CSS 拆不开**：apple 皮肤 46KB + markdown 专用表约 27KB 对 `/link`、`/tag`、`/timeline` 是死重，
   被 Next 的 pages router 挡住（只允许在 `_app` 引第一方全局 CSS）。字体已自托管，
   但**站点数据里的自定义 CSS/HTML 仍可能引用第三方**（那是用户数据，只能在后台「定制化」里清）。
 - 内置评论没有邮件 / webhook 通知（Waline 有）、没有点赞 UI（`likeCount` 已存着）、没有验证码。
 - 没有全局 `ValidationPipe`（`class-validator` 不是依赖），参数校验靠各处手写；净化中间件是黑名单不是白名单。
-- `/api/admin/init` 仍靠「库里有没有用户」判断是否已初始化（有 10 分钟 5 次的限流兜着）。
-- `/swagger` 默认公开（可用 `VANBLOG_SWAGGER=false` 关）。
+- `/api/admin/init` 仍靠「库里有没有用户」判断是否已初始化，但现在有三层缓解：初始化密钥**默认开启**、
+  10 分钟 5 次的限流、零接触初始化（`VANBLOG_ADMIN_USER` 等）可以让窗口根本不存在。
 
 ### 路线图（按性价比）
 
 1. **异地备份**（S3/OSS/WebDAV 任选其一）—— 补上目前最大的单点
-2. **搜索质量**：构建期生成静态索引 + `/search` 结果页 + 关键词高亮
-3. **caddy 直发 HTML 扩到动态路由** —— 需要先在服务端做出"notFound / 重定向时删掉产物文件"的语义
+2. ~~**搜索质量**：构建期生成静态索引 + `/search` 结果页 + 关键词高亮~~ —— **已完成**（2026-09）
+3. ~~**caddy 直发 HTML 扩到动态路由**~~ —— **已完成**（`VANBLOG_CADDY_SERVE_HTML=all` + 失效产物清理器；默认仍关）
 4. **后台 2FA（TOTP）与会话管理**（"登出所有设备"）
 5. **`/metrics`** + 外部 uptime 探测告警（打 `/api/public/health` 即可，不用改代码）
 6. **cluster 压测**后再决定要不要默认开
-7. 从 WordPress / Hexo / Hugo / Markdown 目录导入（迁移是高频需求，底座都在：front-matter 解析 + 图片本地化 + JSON 导入）
+7. 从 WordPress / Hexo / Hugo / Markdown 目录导入（迁移是高频需求，底座都在：front-matter 解析 + 图片本地化 + JSON 导入 + `.mdz` 往返）
 8. 响应式图片 `srcset`（现在只有"缩略图 + 原图"两档）
+9. ~~**可见水印在镜像里补上系统字体**~~ —— **已完成**（2026-09）：镜像装了 `fontconfig ttf-dejavu wqy-zenhei`（860 → 892 MB），中文水印可用；缺字体的自建镜像是"跳过 + WARN"而不是盖满 `.notdef` 方块（旧镜像实测会盖）
+10. **自定义图片水印**（上传一张 logo 当水印）：文字水印已经够用，但品牌场景要图形；底座（sharp 合成 + 按图尺寸自适应 + 跳过过小图）都在
 
 ## 与上游的关系
 
@@ -363,7 +378,7 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 ## 问题反馈
 
 请提到**本仓库**的 [issue](https://github.com/CKboss/vanblog/issues/new)。
-报问题时请带上：`./vanblog.sh status` 的输出、容器日志里的相关片段（`./vanblog.sh logs`）、
+报问题时请带上：`./vanblog.sh status` 的输出、容器日志里的相关片段（`./vanblog.sh log`）、
 以及后台「关于」里显示的版本号（形如 `v2026.9.1@0ec01a5`，能直接对上 commit）。
 
 如果是上游版本的问题（比如你装的是 `VANBLOG_USE_UPSTREAM_IMAGE=true`），请到

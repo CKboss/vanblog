@@ -68,10 +68,12 @@ services:
       # VAN_BLOG_IP_GEO_TIMEOUT: '3000'
       # caddy 按需证书的域名白名单来自站点设置；多域名/CDN 场景需要放开时设 true
       # VANBLOG_CADDY_ASK_ALLOW_ALL: 'true'
-      # 关掉 /swagger（它默认公开，等于把整个后台 API 面摊给未登录用户；robots 的
-      # disallow 不是访问控制）。⚠️ 后台「关于」页与「Token 管理」页各有一个跳 /swagger 的链接，
-      # 关掉之后那两个链接会 404 —— 所以这里默认**不关**，你自己决定。
-      # VANBLOG_SWAGGER: 'false'
+      # 打开 /swagger（实时 API 文档）。⚠️ 2026-09 起**默认是关的**，且只认字面 'true'
+      # （打错的值不会静默打开）。默认关的理由：它等于把 111 条后台路由与登录请求的形状
+      # 摊给未登录用户，还是一个匿名、此前不受限流的 59KB 响应（robots 的 disallow 不是访问控制）。
+      # 后台「关于」页与「Token 管理」页会自己探测 /swagger-json：关着就改开仓库里的 API 文档
+      # 并点名这个变量，所以两种状态都不会留下死链接。临时排查完建议关回去。
+      # VANBLOG_SWAGGER: 'true'
       # next/image 允许优化的远程域名（逗号分隔）。默认空 = 只优化本站图片。
       # VAN_BLOG_ALLOW_DOMAINS: 'cdn.example.com'
       # libuv 线程池大小（镜像里默认 16）：sharp 的图片编解码、fs 异步操作、

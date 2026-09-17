@@ -67,8 +67,9 @@ Package settings → Change visibility 改成 Public；国内拉 ghcr 慢的话�
 VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ```
 
-构建要 15-40 分钟、比较吃内存，脚本会按机器内存自动选档位（admin 的 webpack 堆：≥6GB 用 4096MB，
-否则 1536MB），并自动探测最快的源：
+构建要 15-40 分钟、比较吃内存，脚本会按**实测的 CPU 与可用内存**自动选档位（admin 的 webpack 堆：
+可用内存 <3.5GB 用 1536MB，否则 4096MB；资源够才并行构建三个前端；可用内存 <1.8GB 直接劝退，
+`VANBLOG_FORCE_BUILD=true` 可以强行继续），并自动探测最快的源：
 
 | 变量 | 作用 | 默认 |
 | --- | --- | --- |
@@ -105,7 +106,7 @@ VANBLOG_INSTALL_MODE=source ./vanblog.sh
 （它们在检查之前就转交给 `scripts/vanblog-drill.sh` 执行）：「校验/演练一份自己拥有的归档」
 是只读操作，不该要求 root —— 而且 root 跑 podman 看到的是另一套镜像存储，演练反而跑不了。
 其中 `backup-verify` 因为要真的做一次备份，备份动作本身仍需要相应权限。
-这四条的详情见 [导入导出 → 相关的三个子命令](../advanced/backup.md#相关的三个子命令)。
+这四条的详情见 [导入导出 → 相关的四个子命令](../advanced/backup.md#相关的四个子命令)。
 
 ::: tip 从旧机器的整站备份直接装起
 
