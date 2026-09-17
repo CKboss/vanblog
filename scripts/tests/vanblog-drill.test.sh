@@ -1356,7 +1356,36 @@ VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" VANBLOG_BACKUP_DIR="${ST
   run_main verify-deep "${V2}" >"${TEST_DIR}/main3.out" 2>&1
 RC=$?
 assert_rc "${RC}" "1" "./vanblog.sh verify-deep 对坏归档返回非 0（退出码穿过 exec 传回来了）"
+# ⚠️ 从这里开始的 dry-run 一律带**本节专用的假引擎**，与 A10 那组同一个思路。
+# 原因（本机实测）：dry-run 虽然一个容器都不建，但**仍然会探测引擎**，探不到就
+# FAIL + rc=1（`没有可用的容器引擎（docker daemon 连不上，也没有可用的 podman）`）。
+# 在受限环境里这是常态而不是异常 —— 沙箱不给 /dev/shm 时 rootless podman 会以
+# `failed to open 2048 locks in /libpod_rootless_lock_1000: permission denied` 起不来，
+# docker 组为空时 docker 一律 EACCES。A14 要钉的是"vanblog.sh 把子命令转发给 drill、
+# 且退出码原样穿回来"，不是"这台机器装了引擎" ⇒ 用假引擎让它 hermetic。
+# ⚠️ 不能复用 ${FAKE_BIN} 里那个 stub：它已经被 A11 改写成"inspect 一律成功"
+#    （那一节要演的是"容器起不来但必须拆干净"），于是这里的**名字冲突预检**会认为
+#    vb-drill-* 全都已存在 ⇒ `一次性资源名字没有冲突` FAIL。所以单独造一个
+#    "什么都没占用"的 stub（按 drill_resource_exists 的四种调用形状逐一给答案）。
+DRY_BIN="${TEST_DIR}/drybin"
+mkdir -p "${DRY_BIN}"
+cat >"${DRY_BIN}/fakeengine" <<'STUB'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "inspect --type") exit 1 ;;  # 容器不存在 ⇒ 名字没被占用
+  "volume inspect") exit 1 ;;  # 卷不存在
+  "network inspect") exit 1 ;; # 网络不存在
+  "image inspect") exit 0 ;;   # 镜像在本地（免得 dry-run 多一条与本节无关的 WARN）
+esac
+case "$1" in
+  --version) echo "fakeengine version 9.9.9 (a14 dry-run stub)" ;;
+  info) exit 0 ;;              # drill_detect_engine 只要求 command -v 命中，这里顺便让 info 也过
+esac
+exit 0
+STUB
+chmod +x "${DRY_BIN}/fakeengine"
 VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" VANBLOG_BACKUP_DIR="${STATUS_DIR}" \
+  PATH="${DRY_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine \
   run_main drill --dry-run --image vanblog:test "${STATUS_DIR}/${GOOD_NAME}" >"${TEST_DIR}/main4.out" 2>&1
 RC=$?
 assert_rc "${RC}" "0" "./vanblog.sh drill --dry-run 能跑通"
@@ -1368,16 +1397,23 @@ else
   assert_contains "$(cat "${TEST_DIR}/main1.out")" "备份状态" "（同一条）只读子命令没有触发 pre_check"
 fi
 # --skip-preflight：坏归档也照样上传，用来演练 server 的护栏
-OUT="$(VANBLOG_BACKUP_DIR="${STATUS_DIR}" run_cli drill --dry-run --skip-preflight --image vanblog:test "${STATUS_DIR}/${GOOD_NAME}" 2>&1)"
+OUT="$(PATH="${DRY_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${STATUS_DIR}" \
+  run_cli drill --dry-run --skip-preflight --image vanblog:test "${STATUS_DIR}/${GOOD_NAME}" 2>&1)"
 assert_rc "$?" "0" "--skip-preflight 时 dry-run 照常通过"
 TRUNC_DIR="${TEST_DIR}/trunc2"
 mkdir -p "${TRUNC_DIR}"
 head -c $(( $(wc -c <"${GOOD}") / 2 )) "${GOOD}" >"${TRUNC_DIR}/vanblog-full-20260917-999999.tar.zst"
-OUT="$(VANBLOG_BACKUP_DIR="${TRUNC_DIR}" run_cli drill --dry-run --image vanblog:test "${TRUNC_DIR}/vanblog-full-20260917-999999.tar.zst" 2>&1)"
+OUT="$(PATH="${DRY_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${TRUNC_DIR}" \
+  run_cli drill --dry-run --image vanblog:test "${TRUNC_DIR}/vanblog-full-20260917-999999.tar.zst" 2>&1)"
 RC=$?
 assert_rc "${RC}" "1" "截断的归档：默认在预检就拦下（不用起容器就知道恢复不了）"
 assert_contains "${OUT}" "归档里的清单读得出来" "点名了清单读不出来"
-OUT="$(VANBLOG_BACKUP_DIR="${TRUNC_DIR}" run_cli drill --dry-run --skip-preflight --image vanblog:test "${TRUNC_DIR}/vanblog-full-20260917-999999.tar.zst" 2>&1)"
+# ⚠️ 上一条的 rc=1 必须来自**预检**而不是别的原因：假引擎排除了"没有引擎"，
+#    这条再排除"名字冲突"—— 否则一台环境不对的机器上它会因为错误的原因变绿（rc 都是 1）。
+assert_not_contains "${OUT}" "没有可用的容器引擎" "rc=1 的原因是归档坏，不是环境没有引擎"
+assert_not_contains "${OUT}" "一次性资源名字没有冲突" "rc=1 的原因也不是名字冲突"
+OUT="$(PATH="${DRY_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${TRUNC_DIR}" \
+  run_cli drill --dry-run --skip-preflight --image vanblog:test "${TRUNC_DIR}/vanblog-full-20260917-999999.tar.zst" 2>&1)"
 RC=$?
 assert_eq "${RC}" "0" "--skip-preflight 时不拦，交给 server 判（演练护栏要用这条）"
 assert_contains "${OUT}" "--skip-preflight" "但会明说预检被跳过了（不静默放宽）"

@@ -224,8 +224,20 @@ assert_not_contains "${OUT}" "to'k" "token 没有回显到输出里"
 
 # ---------- 10b) 真 tty 下的交互输入（read -s 不回显）----------
 # install_cron 只在 stdin 是 tty 时才提示输 token（cron/管道场景不打扰）；
-# 用 util-linux 的 script 起一个真 pty 来测这条路。没有 script 就跳过并说明。
-if command -v script >/dev/null 2>&1; then
+# 用 util-linux 的 script 起一个真 pty 来测这条路。
+# 源码级那条断言不需要 pty，所以**无条件**跑（跳过 pty 用例时覆盖不至于归零）。
+assert_contains "$(awk '/^install_cron\(\) \{/,/^\}/' "${SCRIPT}")" 'read -e -r -s -p "token: "' "源码级确认：token 的 read 带 -s（静默）"
+# ⚠️ 有 `script` 命令**不等于**能起 pty：受限环境（沙箱不给 /dev/ptmx）会得到
+#    `script: failed to create pseudo-terminal: Permission denied`。这时 pty 里的程序
+#    根本没跑起来，三条断言会以"没提示 token / env 文件没写"的形式**假红** ——
+#    看着像产品坏了，其实是环境不给 pty。所以先真起一次 pty 探一下（实测退出码 1），
+#    探不到就打印 NOTE 跳过，别把它算成失败。
+if ! command -v script >/dev/null 2>&1; then
+  echo "NOTE: 本机没有 script 命令，跳过 tty 交互输入用例（源码级断言已跑）"
+elif ! script -qec true /dev/null >/dev/null 2>&1; then
+  echo "NOTE: 本环境不允许分配 pty（$(script -qec true /dev/null 2>&1 >/dev/null | head -1)）——"
+  echo "      跳过 tty 交互输入用例；在能起 pty 的机器上（普通终端 / CI）这几条照跑"
+else
   fresh_case
   OUT="$(printf "tok.tty999\ny\n" | script -qec "bash -c 'source \"${SCRIPT}\" >/dev/null 2>&1; install_cron'" /dev/null 2>&1)"
   RC=$?
@@ -237,9 +249,6 @@ if command -v script >/dev/null 2>&1; then
   AFTER_PROMPT="${OUT#*token: }"
   assert_not_contains "${AFTER_PROMPT}" "tok.tty999" "提示符之后 token 没有再出现（read -s 关掉了 pty 回显）"
   assert_file_contains "${ENVF}" "export VANBLOG_ADMIN_TOKEN='tok.tty999'" "交互输入的 token 写进了 env 文件"
-  assert_contains "$(awk '/^install_cron\(\) \{/,/^\}/' "${SCRIPT}")" 'read -e -r -s -p "token: "' "源码级确认：token 的 read 带 -s（静默）"
-else
-  echo "NOTE: 本机没有 script 命令，跳过 tty 交互输入用例"
 fi
 
 # ---------- 11) 参数校验 ----------
