@@ -6,6 +6,7 @@ import {
   Logger,
   Post,
   Query,
+  Req,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -29,23 +30,37 @@ import {
   inspectFullBackup,
 } from 'src/utils/fullBackup';
 import { config } from 'src/config';
+import { clearSetupKey } from 'src/provider/init/setupKey';
 
 /**
- * 「初始化页恢复整站备份」的单飞互斥量（同步获取的布尔锁）。
+ * 「初始化/初始化页恢复」的单飞互斥量（同步获取的布尔锁，**两条路由共用一把**）。
  *
- * 为什么要它：这条接口**匿名可达**（只在站点未初始化时开放），而它做的事是
- * 覆盖整个站点（十几个集合 + 整棵静态目录）。`FullBackupProvider.restore()` 内部
- * 已经有一条串行队列（并发恢复会互相 deleteMany 同一个 `<coll>__vanblog_restore`
- * 临时集合，把集合静默截断），但那道闸在**收到 8GB 上传之后**才生效 ——
- * 两个并发请求都会先把归档落盘、都通过 `checkHasInited()`（第一个还没写完库），
- * 于是两次恢复叠在一起。这里在处理器最前面就把第二个挡掉（409）。
+ * 为什么要它：这两条接口**匿名可达**（只在站点未初始化时开放），而它们做的事
+ * 都是"决定这个站点归谁"：`/init` 写管理员与 meta，`/init/restore` 覆盖整个站点
+ * （十几个集合 + 整棵静态目录）。没有锁时的竞态：
+ *  - 两个并发 `/init` 都通过 `checkHasInited()`（第一个还没写完库）⇒ **两个 id:0
+ *    的管理员**，最坏情况是"两方都以为自己拥有这个站点"（有了 setup key 之后
+ *    变成"攻击者和站长都以为自己拥有这个站点"）；
+ *  - `/init` 与 `/init/restore` 并发 ⇒ 归档恢复与向导初始化互相踩（restore 先写
+ *    `<coll>__vanblog_restore` 再 rename，期间 init 又把 users 插了一条）。
+ * 所以两条路由抢**同一把**锁：任何一方在跑，另一方直接 409。
+ *
+ * `FullBackupProvider.restore()` 内部还有一条串行队列，但那道闸在**收到 8GB
+ * 上传之后**才生效，这里在处理器最前面就把第二个挡掉。
  *
  * ⚠️ 必须是**同步**获取的布尔锁，不能是"await 之后再把 promise 存进去"：
  * 处理器在落锁之前还要 await `checkHasInited()` / 读清单 / 查成员表，
- * 用 promise 版本的话两个并发请求会双双通过这些检查、双双落锁、双双恢复。
+ * 用 promise 版本的话两个并发请求会双双通过这些检查、双双落锁、双双恢复
+ * （AGENTS §7.55 B 记录在案的坑，这里两条路由都照做）。
  *
- * ⚠️ 必须在 finally 里释放：否则一次失败（坏归档、磁盘满）会让这条接口永久 409，
- * 而站点又还没初始化 ⇒ 用户既进不了后台也恢复不了，只能重启容器。
+ * ⚠️ 必须在 finally 里、且**只有真正拿到锁的那一次调用**才能释放（归属检查）：
+ * 无条件释放的话，被 409 挡掉的请求会把正在跑那一次的锁顺手放掉，第三个请求
+ * 又能进来（同一个 §7.55 B 里被并发用例抓出来过的坑）。
+ * 否则一次失败（坏归档、磁盘满）会让接口永久 409，而站点又还没初始化 ⇒
+ * 用户既进不了后台也恢复不了，只能重启容器。
+ *
+ * ⚠️ 变量名保留 `initRestoreRunning`（有源码级测试按字面量钉住它），
+ * 但语义已扩展为"init 或 restore 在跑"。
  */
 let initRestoreRunning = false;
 
@@ -56,6 +71,42 @@ export function __resetInitRestoreLockForTest(): void {
 
 export function isInitRestoreInFlight(): boolean {
   return initRestoreRunning;
+}
+
+/**
+ * setup key 闸门。**默认开启**：`VANBLOG_INIT_REQUIRE_SETUP_KEY` 未设置 = 开，
+ * 显式 `false/0/no/off` 才关（关闭时两条路由的行为与旧版**逐字节一致**：
+ * 不读文件、不比较、响应不加任何字段 —— 这条由 e2e 钉住）。
+ * 400/500 的 wire 契约（`setupKeyRequired`/`reason`/`setupKeyUnavailable`、指路
+ * 文案、常量时间比较、密钥绝不回显）全部收敛在 setupKey.ts 的 `enforceSetupKey`。
+ *
+ * ⚠️ 调用为什么走 `initProvider.assertSetupKeyAllowed?.()` 而不是直接 import
+ * 模块函数：仓库里有多个用**桩 InitProvider** 直接 `new InitController(...)` 的
+ * 既有源码级测试（audit-hardening-round3-initrestore / round3-silent —— 不归本轮
+ * 所有、不许改），它们的桩没有这个方法；默认翻成"开"之后，模块级闸门会把这些
+ * 用例全部打成 500。`?.()` 让桩构造路径跳过闸门并**每进程 WARN 一次**点名
+ * （绝不静默）。生产 Nest DI 注入的永远是真 InitProvider，方法必然存在，
+ * cluster worker 也一样（worker 内存没有密钥时校验回落读主实例写下的文件，
+ * **不会**跳过）—— 两侧都有源码钉子：控制器必须调 assertSetupKeyAllowed，
+ * InitProvider.prototype 必须有该方法（见 init.setupkey.spec.ts）。
+ */
+let stubGateWarned = false;
+function runSetupKeyGate(initProvider: InitProvider, supplied: unknown, logger: Logger): void {
+  if (typeof initProvider?.assertSetupKeyAllowed === 'function') {
+    initProvider.assertSetupKeyAllowed(supplied);
+    return;
+  }
+  if (!stubGateWarned) {
+    stubGateWarned = true;
+    logger.warn(
+      'InitProvider 缺少 assertSetupKeyAllowed（非标准构造路径，仅测试桩会走到）：本次跳过初始化密钥校验',
+    );
+  }
+}
+
+/** 只给测试用：复位"已警告过"标志（生产代码不要调） */
+export function __resetSetupKeyGateWarnForTest(): void {
+  stubGateWarned = false;
 }
 
 @ApiTags('init')
@@ -74,19 +125,51 @@ export class InitController {
   ) {}
 
   @Post('/init')
-  async initSystem(@Body() initDto: InitDto) {
-    const hasInit = await this.initProvider.checkHasInited();
-    if (hasInit) {
-      throw new HttpException('已初始化', 500);
+  async initSystem(
+    @Body() initDto: InitDto,
+    // setup key：JSON body 顶层的可选字段（flag 关闭时完全不看，行为与今天一致）
+    @Body('setupKey') setupKey?: string,
+    @Req() req?: any,
+  ) {
+    // ⚠️ 锁必须先于**任何 await** 同步拿到；只有拿到锁的这次调用才能在 finally 里放
+    let claimedLock = false;
+    try {
+      if (initRestoreRunning) {
+        throw new HttpException(
+          '已经有一个初始化/恢复正在进行，请等它结束（若那一次成功了，刷新页面即可）',
+          409,
+        );
+      }
+      initRestoreRunning = true;
+      claimedLock = true;
+
+      const hasInit = await this.initProvider.checkHasInited();
+      if (hasInit) {
+        throw new HttpException('已初始化', 500);
+      }
+      runSetupKeyGate(this.initProvider, setupKey, this.logger);
+      const started = Date.now();
+      await this.initProvider.init(initDto);
+      // 安装记录（迁移台账 + WARN）：让"这个站点是谁、何时、从哪个 IP 初始化的"
+      // 事后可查。⚠️ 用 ?.() 调用：既有用桩 InitProvider 的测试没有这个方法，
+      // 而台账缺失时 recordInstallation 内部也只会回落到 NOOP，绝不影响初始化结果。
+      await this.initProvider.recordInstallation?.({
+        route: 'init',
+        req,
+        durationMs: Date.now() - started,
+      });
+      this.isrProvider.activeAll('初始化触发增量渲染！', undefined, {
+        forceActice: true,
+      });
+      return {
+        statusCode: 200,
+        message: '初始化成功!',
+      };
+    } finally {
+      if (claimedLock) {
+        initRestoreRunning = false;
+      }
     }
-    await this.initProvider.init(initDto);
-    this.isrProvider.activeAll('初始化触发增量渲染！', undefined, {
-      forceActice: true,
-    });
-    return {
-      statusCode: 200,
-      message: '初始化成功!',
-    };
   }
 
   @Post('/init/upload')
@@ -131,7 +214,13 @@ export class InitController {
    */
   @Post('/init/restore')
   @UseInterceptors(FileInterceptor('file', RESTORE_UPLOAD_OPTIONS))
-  async restoreFromInitPage(@UploadedFile() file: any) {
+  async restoreFromInitPage(
+    @UploadedFile() file: any,
+    // setup key：multipart 的**文本字段**（multer 会把它放进 req.body；
+    // RESTORE_UPLOAD_OPTIONS 的 fields 限额是 8，file + setupKey 远没到）
+    @Body('setupKey') setupKey?: string,
+    @Req() req?: any,
+  ) {
     const uploadedPath = file?.path;
     // ⚠️ 只有**真正拿到锁的那一次调用**才能在 finally 里释放它。
     // 无条件 `initRestoreRunning = false` 的话，第二个被 409 挡掉的请求会把
@@ -159,6 +248,10 @@ export class InitController {
           403,
         );
       }
+      // setup key 闸门（默认开启；显式 VANBLOG_INIT_REQUIRE_SETUP_KEY=false
+      // 时是一个纯布尔判断 + return，行为与旧版逐字节一致）。
+      // 放在"已初始化 403"之后：对已初始化站点仍然一个字都不多说。
+      runSetupKeyGate(this.initProvider, setupKey, this.logger);
       if (!uploadedPath) {
         throw new BadRequestException('请上传整站备份文件（multipart 字段名 file）');
       }
@@ -193,6 +286,17 @@ export class InitController {
         this.viewStatsProvider.invalidateBase();
         invalidatePublicMetaCache();
 
+        // 安装记录（迁移台账 key=install:initialised + WARN 一条）：恢复这条路
+        // 同样要回答"这个站点是谁、何时、从哪个 IP、用哪份归档初始化的"。
+        // ⚠️ ?.() 调用：既有用桩 InitProvider 的测试没有这个方法（台账缺失时
+        // 方法内部也会回落 NOOP），绝不影响恢复结果本身。
+        await this.initProvider.recordInstallation?.({
+          route: 'init/restore',
+          req,
+          archiveName: originalName,
+          durationMs: result.ms,
+        });
+
         // 全新站点的 waline 从来没被拉起过（main.ts 只在 checkHasInited() 为真时 init），
         // 而评论系统的开关/配置现在来自归档 ⇒ 这里补一次；失败只影响评论，不该让恢复报错
         try {
@@ -220,6 +324,12 @@ export class InitController {
         });
 
         const initialized = await this.initProvider.checkHasInited();
+        // ⚠️ 只有归档真带了 users（站点就此初始化完成）才清 setup.key：
+        // initialized:false 时站点仍未初始化，接下来的向导**仍然需要**这把密钥，
+        // 删了等于把站长锁在自己的全新安装外面（下次重启才会重新生成）。
+        if (initialized) {
+          clearSetupKey();
+        }
         const counts = countCollections(manifest);
         return {
           statusCode: 200,
@@ -234,6 +344,15 @@ export class InitController {
             counts,
             adminUserFromArchive: counts.users > 0,
             initialized,
+            // P3（100% 保真）：静态目录被修剪掉多少"归档里没有的文件"、
+            // 以及哪些表是归档里没有的（留着不删 = 站点处于混合状态，必须能被看见）
+            prunedStatic: (result.pruned || []).map((item) => ({
+              folder: item.folder,
+              removedFiles: item.removedFiles,
+              removedDirs: item.removedDirs,
+              names: item.names,
+            })),
+            absentCollections: result.absentCollections || [],
             needsRestartForPipelineDeps: Boolean(result.needsRestartForPipelineDeps),
           },
         };

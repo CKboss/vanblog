@@ -7,10 +7,14 @@ import {
   useRef,
   useState,
 } from "react";
+import Link from "next/link";
 import { searchArticles } from "../../api/search";
 import { useDebounce } from "react-use";
 import ArticleList from "../ArticleList";
 import KeyCard from "../KeyCard";
+// ⚠️ 只从 utils/searchUrls 拿 URL helper：SearchCard 会被 Layout 引到每个页面上，
+// 而 utils/searchIndex 里那些索引校验与降级文案只有 /search 页用得到（见 searchUrls.ts）。
+import { searchPageUrl } from "../../utils/searchUrls";
 import {
   SEARCH_CLEAR_BUTTON_CLASS,
   SEARCH_CLEAR_LABEL,
@@ -31,6 +35,38 @@ import {
 export type SearchCardHandle = {
   openFromUserGesture: () => boolean;
 };
+
+/** 弹窗里"查看全部结果"的入口文案（单测按这个字符串找它） */
+export const SEARCH_VIEW_ALL_LABEL = "查看全部结果";
+
+/**
+ * 「查看全部结果」→ `/search?q=<关键词>`。
+ *
+ * 为什么加它（以及为什么**只**加它，没有重写这个弹窗）：弹窗是一个即时的下拉预览，
+ * 没有排序、没有分页、没有高亮，而 `/search` 页有（静态索引 + 三档排序 + `<mark>` 高亮 +
+ * 分页 + 可分享的 URL）。弹窗里搜到 20 条时，用户需要一个"往下翻"的去处。
+ *
+ * ⚠️ 用真的 `next/link`（`<a href>`），不是 `onClick` 的 div：键盘能到、能中键新开、
+ * 读屏软件念得出来。点击后关掉弹窗（`onClick` 里做的只是关弹窗，导航交给 Link）。
+ */
+export function ViewAllResultsLink(props: { query: string; onClick: () => void }) {
+  const query = String(props.query ?? "").trim();
+  if (!query) {
+    return null;
+  }
+  return (
+    <div className="mt-3 pt-2 border-t border-dashed border-gray-200 dark:border-dark-2 text-center">
+      <Link
+        href={searchPageUrl(query, 1)}
+        onClick={props.onClick}
+        className="text-sm text-gray-500 hover:text-gray-800 dark:text-dark-400 dark:hover:text-dark underline"
+        data-search-view-all=""
+      >
+        {`${SEARCH_VIEW_ALL_LABEL}（${query}）`}
+      </Link>
+    </div>
+  );
+}
 
 const SearchCard = forwardRef<
   SearchCardHandle,
@@ -187,12 +223,19 @@ const SearchCard = forwardRef<
             openArticleLinksInNewWindow={props.openArticleLinksInNewWindow}
             onClick={closeSearch}
           ></ArticleList>
+          <ViewAllResultsLink query={search} onClick={closeSearch} />
         </div>
       );
     } else {
       return (
         <div className="mt-16 text-center">
           <div className="text-gray-600 dark:text-dark select-none">{text}</div>
+          {/* 没有结果时也给出口：弹窗里搜不到 ≠ 全站搜不到
+              （弹窗走的是服务端 /api/public/search，而 /search 页有静态索引 + 排序 + 高亮，
+              两边的匹配面与大小写折叠规则并不完全相同，见 utils/searchRank.ts 的说明） */}
+          {!loading && !failed && search.trim() !== "" ? (
+            <ViewAllResultsLink query={search} onClick={closeSearch} />
+          ) : null}
         </div>
       );
     }

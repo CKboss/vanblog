@@ -1,4 +1,5 @@
 import { publishDraft } from '@/services/van-blog/api';
+import { passwordHelp, passwordPlaceholder, buildAccessPasswordPatch } from '@/services/van-blog/accessPassword';
 import { Modal } from 'antd';
 import { ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 import { message } from 'antd';
@@ -21,6 +22,18 @@ export default function (props) {
               content: '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
             });
             return;
+          }
+          // 发布 = 新建文章：选了「加密」却没填密码会造出一篇谁也打不开的文章
+          // （服务端存空密码，解锁口对"标记加密但没密码"一律拒绝），而密码不可找回。
+          const access = buildAccessPasswordPatch({
+            password: values?.pc,
+            hasPassword: false,
+            isCreate: true,
+            isPrivate: values?.private,
+          });
+          if (access.error) {
+            message.error(access.error);
+            return false;
           }
           await publishDraft(id, {
             ...values,
@@ -78,7 +91,8 @@ export default function (props) {
           autocomplete="new-password"
           id="password"
           name="pc"
-          placeholder="请输入密码"
+          placeholder={passwordPlaceholder({ isCreate: true })}
+          formItemProps={{ extra: passwordHelp({ isCreate: true }) }}
           dependencies={['private']}
           fieldProps={{
             autocomplete: 'new-password',

@@ -118,3 +118,61 @@ test('下拉组件用 antd4 的 overlay 写法（antd5 的 menu={{items}} 在 4.
   assert.match(src, /downloadMarkdownExport\(\{ \.\.\.\(payload \|\| \{\}\), format: key \}\)/);
   assert.match(src, /trigger=\{\['click'\]\}/);
 });
+
+test('classifyExportFailure：无图的 mdz 是"提示 + 可一键改导 md"，不是错误', () => {
+  const body = {
+    statusCode: 400,
+    code: 'NO_IMAGES_FOR_MDZ',
+    imageRefs: 0,
+    message: '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
+  };
+  const out = core.classifyExportFailure(body, 'mdz');
+  assert.equal(out.kind, 'no-images');
+  assert.equal(out.tone, 'info', '必须是 info，不能是 error（用户看到的就不该是红色报错）');
+  assert.equal(out.offerMd, true, '要提供"改为导出 .md"这一步操作');
+  assert.match(out.detail, /没有任何图片引用/);
+  assert.equal(out.message, body.message, '服务端的权威文案照实显示');
+
+  // 有图片引用但都不可打包（外链抓不到等）时，措辞不同、且带上数量
+  const withRefs = core.classifyExportFailure({ ...body, imageRefs: 3 }, 'mdz');
+  assert.match(withRefs.detail, /识别到 3 个图片引用/);
+
+  // md / zip 格式不会走到这个 code；万一服务端给了，也不该提议"改导 md"（本来就是 md）
+  assert.equal(core.classifyExportFailure(body, 'md').offerMd, false);
+});
+
+test('classifyExportFailure：其它失败仍是错误，且不提议改导 md', () => {
+  const out = core.classifyExportFailure({ statusCode: 400, message: '不支持的导出格式：pdf' }, 'zip');
+  assert.equal(out.kind, 'error');
+  assert.equal(out.tone, 'error');
+  assert.equal(out.offerMd, false);
+  assert.equal(out.message, '不支持的导出格式：pdf');
+  // 空/畸形 body 也不能崩
+  assert.equal(core.classifyExportFailure(null, 'mdz').kind, 'error');
+  assert.equal(core.classifyExportFailure({}, 'mdz').message, '导出失败！');
+});
+
+test('⚠️ 判据是机器可读的 code，不是中文文案（改文案不该让分支静默失效）', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', '..', 'src/services/van-blog/exportFormats.js'),
+    'utf8',
+  );
+  assert.match(src, /EXPORT_NO_IMAGES_CODE = 'NO_IMAGES_FOR_MDZ'/);
+  assert.match(src, /b\.code === EXPORT_NO_IMAGES_CODE/);
+  // 服务层必须走分类函数，而不是自己 message.error 一把梭
+  const tsx = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', '..', 'src/services/van-blog/exportMarkdown.tsx'),
+    'utf8',
+  );
+  assert.match(tsx, /classifyExportFailure\(parsed, format\)/);
+  assert.match(tsx, /failure\.kind === 'no-images'/);
+  assert.match(tsx, /改为导出 Markdown \(\.md\)/);
+  assert.match(tsx, /onOk: \(\) => downloadMarkdownExport\(\{ \.\.\.opts, format: 'md' \}\)/);
+  // 服务端也要带 code（否则前端只能匹配文案）
+  const ctrl = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', '..', '..', 'server/src/controller/admin/export/export.controller.ts'),
+    'utf8',
+  );
+  assert.match(ctrl, /code: 'NO_IMAGES_FOR_MDZ'/);
+  assert.match(ctrl, /imageRefs: report\.imageRefs/);
+});

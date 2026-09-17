@@ -24,6 +24,7 @@ import { PipelineDocument } from 'src/scheme/pipeline.schema';
 import { VanblogSystemEvent, VanblogSystemEventNames } from 'src/types/event';
 import { CreatePipelineDto, UpdatePipelineDto } from 'src/types/pipeline.dto';
 import { sleep } from 'src/utils/sleep';
+import { redactAccessSecretDeep } from 'src/utils/accessPassword';
 import { spawnSync } from 'child_process';
 import { config } from 'src/config/index';
 import { writeFileSync, rmSync } from 'fs';
@@ -254,8 +255,24 @@ export class PipelineProvider {
     if (!pipeline) {
       throw new NotFoundException('Pipeline not found');
     }
+    /**
+     * 事件 payload 的脱敏副本（G5）。**所有**出口一律用它，绝不用原始 `data`：
+     *  ① 下面的 `logger.log(JSON.stringify(...))` —— 服务端日志（有日志聚合器时读者远不止管理员）；
+     *  ② `subProcess.send(...)` —— IPC 给用户自己写的流水线脚本；
+     *  ③ `logProvider.runPipeline(..., input)` —— **持久化进 logs 集合**，后台「日志管理」直接展示。
+     * `beforeUpdateArticle` / `beforeUpdateDraft` 传进来的是客户端 DTO，里面的 `password`
+     * 是用户刚敲的**明文**。文章/分类密码哈希化之后，库里存的已经是 scrypt 哈希 ——
+     * 日志就会变成明文唯一还活着的地方，一次为了消灭明文的迁移反而把明文留在了日志表里。
+     *
+     * ⚠️ `redactAccessSecretDeep` 返回**新对象**，`data` 本身一个字节都不动：
+     *    控制器还要拿原 DTO 去写库（`updateById(id, updateDto)`）。
+     * ⚠️ 行为变更：脚本从此看不到 `password` / `clearPassword`，前置事件改成收到布尔
+     *    `submittedPassword`（= 这次请求有没有带新密码）。要判断文章是否加密请读 `private`。
+     *    脚本改写 DTO 后密码意图会不会丢，见 `carryAccessSecretFields`（控制器侧透传）。
+     */
+    const safeData: any = redactAccessSecretDeep(data);
     const traceId = new Date().getTime();
-    this.logger.log(`[${traceId}]开始运行流水线: ${id} ${JSON.stringify(data, null, 2)}`);
+    this.logger.log(`[${traceId}]开始运行流水线: ${id} ${JSON.stringify(safeData, null, 2)}`);
     const run = new Promise<CodeResult>((resolve, reject) => {
       let settled = false;
       const finish = (ok: boolean, payload: any) => {
@@ -288,7 +305,8 @@ export class PipelineProvider {
         } as CodeResult);
       }, PIPELINE_TIMEOUT_MS);
       try {
-        subProcess.send(data || {});
+        // 脱敏副本，见本函数开头 safeData 的注释（出口 ②）
+        subProcess.send(safeData || {});
       } catch (err) {
         finish(false, {
           status: 'error',
@@ -331,11 +349,12 @@ export class PipelineProvider {
     try {
       const result = (await run) as CodeResult;
       this.logger.log(`[${traceId}]运行流水线成功: ${id} ${JSON.stringify(result, null, 2)}`);
-      this.logProvider.runPipeline(pipeline, data, result);
+      // safeData：日志表里存的 input 也必须是脱敏副本（见本函数开头）
+      this.logProvider.runPipeline(pipeline, safeData, result);
       return result;
     } catch (err) {
       this.logger.error(`[${traceId}]运行流水线失败: ${id} ${JSON.stringify(err, null, 2)}`);
-      this.logProvider.runPipeline(pipeline, data, undefined, err);
+      this.logProvider.runPipeline(pipeline, safeData, undefined, err);
       throw err;
     }
   }

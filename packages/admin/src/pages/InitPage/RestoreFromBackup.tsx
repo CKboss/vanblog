@@ -12,6 +12,7 @@ import {
   describeRestoreFailure,
   parseRestoreResponse,
 } from './restoreCore';
+import { SETUP_KEY_FIELD, SETUP_KEY_HINTS } from './setupKeyCore';
 
 /**
  * init 页的「用整站备份恢复」卡片。
@@ -31,12 +32,27 @@ import {
  *      向导照常可用，提示用户继续走向导创建管理员账号；不清不写任何 token、不跳转
  *      —— 否则会把用户扔到一个没有任何账号的登录页上。
  *
+ * 初始化密钥（setup key）：服务端开 `VANBLOG_INIT_REQUIRE_SETUP_KEY=true` 时，
+ * 这条路由也要求密钥（multipart 文本字段 `setupKey`）。密钥值由父组件（InitPage）
+ * 统一管理 —— 与向导**共用同一个输入框与状态**：
+ *  - props.setupKey 有值就随 FormData 一起发；
+ *  - 服务端回 400 `setupKeyRequired:true` 时通过 props.onSetupKeyRequired 把
+ *    原话交给父组件显示输入框，本组件的 Modal 里也原样展示 message + 指路提示。
+ *
  * ⚠️ 不依赖初始化向导的任何字段：这张卡在 StepsForm 之外、渲染在它前面，
- * 用户一个输入框都不用碰。
+ * 用户一个输入框都不用碰（除非服务端真的要密钥）。
  */
 type Phase = 'idle' | 'uploading' | 'restoring';
 
-export default function RestoreFromBackup() {
+interface RestoreFromBackupProps {
+  /** 初始化密钥（服务端要求时由 InitPage 的共享输入框提供；可空 = 不带该字段） */
+  setupKey?: string;
+  /** 服务端回"需要初始化密钥"的 400 时回调（message 是服务端原话，需原样展示） */
+  onSetupKeyRequired?: (message: string) => void;
+}
+
+export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
+  const { setupKey, onSetupKeyRequired } = props;
   const history = useHistory();
   const [phase, setPhase] = useState<Phase>('idle');
   const [percent, setPercent] = useState(0);
@@ -51,6 +67,11 @@ export default function RestoreFromBackup() {
     setPercent(0);
     const form = new FormData();
     form.append(INIT_RESTORE_FILE_FIELD, file);
+    // 服务端要求初始化密钥时随包带上（multipart 文本字段；字段限额 8，远没到）
+    const key = String(setupKey == null ? '' : setupKey).trim();
+    if (key) {
+      form.append(SETUP_KEY_FIELD, key);
+    }
     const xhr = new XMLHttpRequest();
     xhr.open('POST', INIT_RESTORE_ENDPOINT);
     xhr.upload.onprogress = (event) => {
@@ -147,14 +168,23 @@ export default function RestoreFromBackup() {
         });
         return;
       }
-      const hints = describeRestoreFailure(xhr.status, result.message);
+      // 服务端在要初始化密钥：把原话交给父组件（显示共享输入框），
+      // 弹窗里也原样展示 message，并把「去哪找密钥」的提示放在最前面
+      if (result.setupKeyRequired) {
+        if (typeof onSetupKeyRequired === 'function') {
+          onSetupKeyRequired(result.message);
+        }
+      }
+      const hints = result.setupKeyRequired
+        ? SETUP_KEY_HINTS.concat(describeRestoreFailure(xhr.status, result.message))
+        : describeRestoreFailure(xhr.status, result.message);
       Modal.error({
-        title: '恢复失败',
+        title: result.setupKeyRequired ? '需要初始化密钥' : '恢复失败',
         width: 560,
         content: (
           <div>
             {/* 服务端的原话永远原样展示（409 在跑 / 403 已初始化 / 429 限流 /
-                400 校验失败的原因都在里面），提示只作补充 */}
+                400 校验失败/要密钥的原因都在里面），提示只作补充 */}
             <p>{result.message}</p>
             <ul style={{ paddingLeft: 20, color: '#888' }}>
               {hints.map((hint) => (

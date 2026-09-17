@@ -35,6 +35,34 @@ function fakeResult(name = 'vanblog-full-20260917-010101.tar.gz') {
   };
 }
 
+/** 校验结果的假对象：`integrity` 是 P1 之后必填的一块（老归档在真实代码里会走降级分支） */
+function fakeVerifyResult(overrides: Partial<backupVerifyModule.BackupVerifyResult> = {}) {
+  return {
+    ok: true,
+    ms: 7,
+    archiveBytes: 2048,
+    members: 9,
+    format: 'gzip',
+    checks: {} as any,
+    integrity: {
+      available: false,
+      merkleRootOk: null,
+      memberCountOk: null,
+      recordedMembers: null,
+      manifestCopyOk: null,
+      archiveSha256Ok: null,
+      archiveSha256: null,
+      frameChecksumOk: null,
+      frameChecksum: null,
+      membersChecked: null,
+      memberFindings: [],
+      notes: [],
+    } as any,
+    issues: [],
+    ...overrides,
+  } as backupVerifyModule.BackupVerifyResult;
+}
+
 function createProvider(dir: string) {
   const connection = { getClient: () => ({}), name: 'vanBlogTest' } as any;
   const provider = new FullBackupProvider(connection);
@@ -63,10 +91,11 @@ describe('FullBackupProvider 写后校验接线', () => {
     jest.spyOn(fullBackupModule, 'createFullBackup').mockResolvedValue(result as any);
     const verify = jest
       .spyOn(backupVerifyModule, 'verifyFullBackup')
-      .mockResolvedValue({ ok: true, ms: 7, archiveBytes: 2048, members: 9, format: 'gzip', checks: {} as any, issues: [] });
+      .mockResolvedValue(fakeVerifyResult());
 
     const outcome = await provider.export();
-    expect(verify).toHaveBeenCalledWith(result.path);
+    // 导出后默认做**成员级**深度校验（VANBLOG_BACKUP_VERIFY_DEEP，默认开）
+    expect(verify).toHaveBeenCalledWith(result.path, { deep: true });
     expect(outcome.verification.ok).toBe(true);
     const status = backupStatusModule.readBackupStatus(dir);
     expect(status.lastSuccessName).toBe(result.name);
@@ -79,15 +108,15 @@ describe('FullBackupProvider 写后校验接线', () => {
     const provider = createProvider(dir);
     const result = fakeResult();
     jest.spyOn(fullBackupModule, 'createFullBackup').mockResolvedValue(result as any);
-    jest.spyOn(backupVerifyModule, 'verifyFullBackup').mockResolvedValue({
-      ok: false,
-      ms: 3,
-      archiveBytes: 2048,
-      members: 0,
-      format: 'gzip',
-      checks: { readThrough: false } as any,
-      issues: [{ check: 'readThrough', message: '归档截断（CRC 失败）' }],
-    });
+    jest.spyOn(backupVerifyModule, 'verifyFullBackup').mockResolvedValue(
+      fakeVerifyResult({
+        ok: false,
+        ms: 3,
+        members: 0,
+        checks: { readThrough: false } as any,
+        issues: [{ check: 'readThrough', message: '归档截断（CRC 失败）' }],
+      }),
+    );
 
     await expect(provider.export()).rejects.toBeInstanceOf(BadRequestException);
     const status = backupStatusModule.readBackupStatus(dir);

@@ -8,6 +8,11 @@ import { sleep } from 'src/utils/sleep';
 import { UpdateCategoryDto } from 'src/types/category.dto';
 import { BackupCategory } from 'src/utils/backupCategories';
 import { applyCategoryNameOrder, nextCategoryOrder, sortCategoriesByOrder } from 'src/utils/categoryOrder';
+import {
+  hashAccessPasswordIdempotent,
+  isScryptHash,
+  resolveAccessPasswordWrite,
+} from 'src/utils/accessPassword';
 
 @Injectable()
 export class CategoryProvider {
@@ -86,7 +91,9 @@ export class CategoryProvider {
           patch.private = item.private;
         }
         if (item.password !== undefined) {
-          patch.password = item.password;
+          // 导入的备份里可能是明文（旧归档），也可能已经是哈希（新归档 / 导出后原样导回）：
+          // hashAccessPasswordIdempotent 两种都收敛成"一个哈希"，绝不二次哈希。
+          patch.password = hashAccessPasswordIdempotent(item.password);
         }
         if (item.hidden !== undefined) {
           patch.hidden = item.hidden;
@@ -117,7 +124,7 @@ export class CategoryProvider {
         name: item.name,
         type: item.type || 'category',
         private: item.private || false,
-        password: item.password || '',
+        password: hashAccessPasswordIdempotent(item.password || ''),
         hidden: item.hidden || false,
         order: typeof item.order === 'number' ? item.order : nextCategoryOrder(existing),
       });
@@ -198,6 +205,30 @@ export class CategoryProvider {
     if (dto.order !== undefined && (typeof dto.order !== 'number' || !Number.isFinite(dto.order))) {
       throw new NotAcceptableException('排序值无效！');
     }
+    // 访问密码（P1/P5）：与文章完全同一套规则（utils/accessPassword.ts）——
+    // 留空/缺键 = **不修改**，`clearPassword: true` = 解除加密，填了新值 = 存 scrypt 哈希。
+    // 分类密码是"该分类下所有文章"的解锁钥匙，明文存库的代价比单篇文章更大。
+    const passwordWrite = resolveAccessPasswordWrite(dto, 'update');
+    const patch: any = { ...dto };
+    delete patch.clearPassword;
+    if (passwordWrite.password === undefined) {
+      delete patch.password;
+    } else {
+      patch.password = passwordWrite.password;
+    }
+    // 顺手升级（P2）：这次没碰密码，但库里存的还是历史明文 —— 趁这次写一起换成哈希，
+    // 这样一台从不重启的站点也能收敛。读失败只 WARN，绝不把改名/改排序本身带崩。
+    if (passwordWrite.password === undefined) {
+      try {
+        const stored: any = await this.categoryModal.findOne({ name }, { password: 1 });
+        const legacy = stored?.password;
+        if (legacy !== undefined && legacy !== null && legacy !== '' && !isScryptHash(String(legacy))) {
+          patch.password = hashAccessPasswordIdempotent(legacy);
+        }
+      } catch {
+        // 忽略：启动 wash 会兜底
+      }
+    }
     if (dto.name && name != dto.name) {
       const existData = await this.categoryModal.findOne({
         name: dto.name,
@@ -211,12 +242,18 @@ export class CategoryProvider {
       await this.articleProvider.updateCategoryName(name, dto.name);
       await this.draftProvider.updateCategoryName(name, dto.name);
     }
+    // 只剩一个空 patch（比如请求里 password 是空串 = "不修改"，别的键都没有）：
+    // mongoose 的 updateOne 不接受"没有任何原子操作符"的更新文档，会直接抛错。
+    // 语义上这就是"没东西要改"，安静返回即可（改名那种带副作用的分支不可能走到这里）。
+    if (Object.keys(patch).length === 0) {
+      return { acknowledged: true, matchedCount: 0, modifiedCount: 0 } as any;
+    }
     await this.categoryModal.updateOne(
       {
         name: name,
       },
       {
-        ...dto,
+        ...patch,
       },
     );
   }

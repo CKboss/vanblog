@@ -106,7 +106,45 @@ function describeExportOutcome(report, format) {
   };
 }
 
+
+/**
+ * 导出失败时，先分清"这是错误"还是"这只是个提示"。
+ *
+ * ⚠️ 判据是服务端给的**机器可读 code**，不是中文文案 —— 靠匹配文案的分支改一个字就静默失效。
+ * `NO_IMAGES_FOR_MDZ` 是"这篇文章没有图片，所以没有 .mdz"：这不是失败，
+ * 用户想要的东西（正文）用 .md 就能拿到，所以应该**提示 + 一键改导 .md**，
+ * 而不是弹一个红色报错让人以为导出坏了。
+ */
+const EXPORT_NO_IMAGES_CODE = 'NO_IMAGES_FOR_MDZ';
+
+function classifyExportFailure(body, format) {
+  const b = body || {};
+  if (b.code === EXPORT_NO_IMAGES_CODE) {
+    const refs = Number(b.imageRefs) || 0;
+    return {
+      kind: 'no-images',
+      // 服务端的消息仍然照实显示（它是权威文案），但用 info 而不是 error
+      message: b.message || '这篇内容没有图片，所以没有 .mdz。',
+      tone: 'info',
+      offerMd: normalizeExportFormat(format) === 'mdz',
+      detail:
+        refs > 0
+          ? `正文里识别到 ${refs} 个图片引用，但都不是能打包进 .mdz 的本地/可抓取图片。`
+          : '正文里没有任何图片引用，.mdz 与 .md 的内容完全相同。',
+    };
+  }
+  return {
+    kind: 'error',
+    message: b.message || '导出失败！',
+    tone: 'error',
+    offerMd: false,
+    detail: '',
+  };
+}
+
 module.exports = {
+  EXPORT_NO_IMAGES_CODE,
+  classifyExportFailure,
   EXPORT_FORMATS,
   normalizeExportFormat,
   fallbackFileName,

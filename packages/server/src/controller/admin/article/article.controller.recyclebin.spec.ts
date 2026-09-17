@@ -118,6 +118,8 @@ function createController(overrides: {
     articleProvider,
     { activeAll } as any,
     { dispatchEvent } as any,
+    {} as any,
+    {} as any,
     revisionProvider,
   );
   return { controller, articleProvider, revisionProvider, activeAll, dispatchEvent };

@@ -117,6 +117,70 @@ export interface StaticSummary {
   bytes: number;
 }
 
+/**
+ * 单个归档成员的指纹（P1 防损坏）。
+ *
+ * `sha256` 为 null 的成员是**不可能有内容哈希**的那几类：
+ *  - `./manifest.json` 与 `./MANIFEST.copy.json`：清单不能包含自己的哈希（自指），
+ *    而副本与主清单**逐字节相同**，所以它俩的哈希同样不可知 —— 两份都记 null；
+ *    它们的完整性由「两份互为对照 + 各自的 JSON 能解析 + merkleRoot 覆盖这两行」保证。
+ *  - 硬链接成员（tar 里 size=0，内容指向同 inode 的另一个成员，那个成员有自己的哈希）。
+ *  - 设备 / FIFO 等特殊成员（VanBlog 的静态目录里不该有，真出现了也不该假装哈希过）。
+ */
+export interface MemberHash {
+  sha256: string | null;
+  bytes: number;
+}
+
+/**
+ * 归档的防损坏信息（P1）。⚠️ **可选字段**：这个块出现之前的所有归档都没有它，
+ * 校验侧必须"没有就降级、只说一句查不了"，绝不能拒绝老归档（见 `backupVerify.ts`）。
+ */
+export interface BackupIntegrity {
+  /** 目前只会是 'sha256'；写成字段是为了将来换算法时老工具还能读懂 */
+  algorithm: string;
+  /**
+   * 压缩器自带的内容校验位**实测**是否开启（不是假设）：
+   * zstd 读帧头描述符字节 bit2、xz 读 stream flags 的 check 类型、gzip 的 CRC32 是格式强制的。
+   * 名字里带 zstd 是历史原因（第一个实现只针对 zstd），语义是"本归档所用压缩器的内容校验位"。
+   */
+  zstdFrameChecksum: boolean;
+  /** `members` 表的指纹（算法见 `computeMerkleRoot`）：一个值就能判断整张表有没有被改/被截断 */
+  merkleRoot: string;
+  /** tar 流里的成员总数（**含目录项**，等于 `tar -tf <归档> | wc -l`） */
+  memberCount: number;
+  /**
+   * 键 = 成员名，**取自归档 tar 流本身的头部**（与 `tar -x` 落盘出来的路径逐字节一致）。
+   *
+   * ⚠️ 对绝大多数成员，这就是 `tar -tf` 打印的那一行（`./` 前缀）。有一处**实测到的差异**
+   * 必须写清楚：成员名里含**控制字符**时，GNU tar 的 `tar -tf` 会把它转义成八进制
+   * （`\302\233`）而 busybox tar 原样输出 —— 同一份归档在两种 tar 下打印结果不同
+   * （本机真站就有 10 个双重编码的中文图名带 C1 控制字节，实测复现）。
+   * 所以这里存**真实字节**（实现无关，也是唯一能拿去 `stat` / 解包比对的形式），
+   * 而不是某个 tar 的打印形式。
+   *
+   * ⚠️ **目录项不在表里**（目录没有内容可哈希），所以 `Object.keys(members).length`
+   * 一般小于 `memberCount`，两者之差就是目录项个数（真站实测：228 vs 239，差 11 个目录项）。
+   */
+  members: Record<string, MemberHash | null>;
+}
+
+/**
+ * 导出这台实例的身份信息（P1/P3）：恢复时用来发现"归档来自另一套配置"的静默错配。
+ *
+ * 最有价值的是 `walineDB`：`config.yaml` 的 `waline.db` 是**机器本地**的，
+ * 恢复按 manifest 里的库名写库 ⇒ 两边库名不同时，waline 那两张表会被写进一个
+ * 本实例根本不读的库里，而界面上一切正常（评论"消失"了却零报错）。
+ */
+export interface BackupSourceInfo {
+  codeVersion: string;
+  walineDB: string;
+  demo: boolean;
+  hostname: string;
+  staticPath: string;
+  codeRunnerPath: string;
+}
+
 export interface FullBackupManifest {
   kind: typeof BACKUP_KIND;
   version: number;
@@ -124,8 +188,19 @@ export interface FullBackupManifest {
   format: string;
   compressor: string;
   serverVersion?: string;
+  /** 防损坏信息；老归档没有（可选、追加，不改 version） */
+  integrity?: BackupIntegrity;
+  /** 导出实例的身份；老归档没有（可选、追加） */
+  source?: BackupSourceInfo;
   databases: Record<string, DatabaseSummary>;
   static: Record<string, StaticSummary>;
+  /**
+   * P6（可选，默认关）：归档里 `./caddy` 段的内容统计（caddy 的 TLS 证书与私钥）。
+   * 只有 `VANBLOG_BACKUP_INCLUDE_CADDY` 打开、且那台机器上真的读得到目录时才有这个字段。
+   * ⚠️ 与 `static` 分开记：它不在 staticPath 下面，也不该混进 `totals.files/staticBytes`
+   * （那两个数描述的是"站点静态资源"，运维与校验都按这个口径在用）。
+   */
+  caddy?: StaticSummary;
   totals: {
     databases: number;
     collections: number;
@@ -133,6 +208,8 @@ export interface FullBackupManifest {
     files: number;
     staticBytes: number;
     archiveBytes?: number;
+    /** 整份归档文件的 sha256（导出时流式算出并**回读复核**过）。老归档没有 */
+    archiveSha256?: string;
   };
 }
 

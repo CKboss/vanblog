@@ -53,6 +53,11 @@ green="${green:-\033[0;32m}"
 yellow="${yellow:-\033[0;33m}"
 plain="${plain:-\033[0m}"
 [[ -n "${VANBLOG_NO_COLOR:-}" ]] && { red=""; green=""; yellow=""; plain=""; }
+# cron-safe：stdout 不是 tty 时自动去色（cron 的邮件/日志里 ANSI 转义码没法读）。
+# 显式 VANBLOG_NO_COLOR= 优先；想要"管道里也带色"（比如 less -R）给 VANBLOG_FORCE_COLOR=1。
+if [[ -z "${VANBLOG_NO_COLOR:-}" && "${VANBLOG_FORCE_COLOR:-0}" != "1" && ! -t 1 ]]; then
+  red=""; green=""; yellow=""; plain=""
+fi
 
 say() { echo -e "$*"; }
 step() { echo -e "\n${yellow}== $* ==${plain}"; }
@@ -91,7 +96,11 @@ fi
 #   VANBLOG_DRILL_DRY_RUN=1    等价于 --dry-run
 #   VANBLOG_DRILL_NO_PULL=1    镜像不在本地就直接失败，不尝试 pull（离线机器/CI 用）
 #   VANBLOG_BACKUP_STALE_DAYS  最新归档超过这么多天就算"陈旧"（默认 7；0=不检查）
+#   VANBLOG_BACKUP_REVERIFY_DAYS  任何保留归档距上次「验证通过」超过这么多天就算过期
+#                              （默认 0=关；配合 backup-verify --all 做定期复验护栏）
 #   VANBLOG_VERIFY_ALLOW_EMPTY=1  "归档里一条文档都没有"从 FAIL 降级成 WARN
+#   VANBLOG_DRILL_SKIP_HASH=1  等价于 drill --skip-hash（跳过成员级哈希比对，会打 WARN）
+#   VANBLOG_FORCE_COLOR=1      管道里也保留颜色（默认：stdout 不是 tty 就自动去色，cron-safe）
 DRILL_ENGINE="${VANBLOG_DRILL_ENGINE:-${ENGINE:-}}"
 DRILL_IMAGE="${VANBLOG_DRILL_IMAGE:-}"
 DRILL_MONGO_IMAGE="${VANBLOG_DRILL_MONGO_IMAGE:-${VANBLOG_MONGO_IMAGE:-mongo:7.0}}"
@@ -103,7 +112,9 @@ DRILL_KEEP="${VANBLOG_DRILL_KEEP:-0}"
 DRILL_DRY_RUN="${VANBLOG_DRILL_DRY_RUN:-0}"
 DRILL_NO_PULL="${VANBLOG_DRILL_NO_PULL:-0}"
 DRILL_SKIP_PREFLIGHT="${VANBLOG_DRILL_SKIP_PREFLIGHT:-0}"
+DRILL_SKIP_HASH="${VANBLOG_DRILL_SKIP_HASH:-0}"
 DRILL_STALE_DAYS="${VANBLOG_BACKUP_STALE_DAYS:-7}"
+DRILL_REVERIFY_DAYS="${VANBLOG_BACKUP_REVERIFY_DAYS:-0}"
 DRILL_LOG_TAIL="${VANBLOG_DRILL_LOG_TAIL:-80}"
 
 # ── 断言台账 ────────────────────────────────────────────────────────────────
@@ -147,15 +158,16 @@ assert_table() {
 }
 
 # 汇总行（人和机器都能读；测试钉的就是这两行的形状）
-assert_summary() { # <标题>
-  local title="${1:-结果}"
+# 第 2 个参数是**人读行**的附注（例如"成员哈希：已校验"）：RESULT 机器行的形状一个字不变。
+assert_summary() { # <标题> [附注]
+  local title="${1:-结果}" extra="${2:-}"
   echo
   if [[ ${ASSERT_FAIL} -gt 0 ]]; then
-    echo -e "> ${title}：${red}FAIL${plain}（PASS ${ASSERT_PASS}，WARN ${ASSERT_WARN}，FAIL ${ASSERT_FAIL}，NOTE ${ASSERT_NOTE}）"
+    echo -e "> ${title}：${red}FAIL${plain}（PASS ${ASSERT_PASS}，WARN ${ASSERT_WARN}，FAIL ${ASSERT_FAIL}，NOTE ${ASSERT_NOTE}）${extra:+；${extra}}"
     echo "RESULT: FAIL pass=${ASSERT_PASS} warn=${ASSERT_WARN} fail=${ASSERT_FAIL} note=${ASSERT_NOTE}"
     return 1
   fi
-  echo -e "> ${title}：${green}PASS${plain}（PASS ${ASSERT_PASS}，WARN ${ASSERT_WARN}，FAIL 0，NOTE ${ASSERT_NOTE}）"
+  echo -e "> ${title}：${green}PASS${plain}（PASS ${ASSERT_PASS}，WARN ${ASSERT_WARN}，FAIL 0，NOTE ${ASSERT_NOTE}）${extra:+；${extra}}"
   echo "RESULT: PASS pass=${ASSERT_PASS} warn=${ASSERT_WARN} fail=0 note=${ASSERT_NOTE}"
   return 0
 }
@@ -168,11 +180,49 @@ assert_summary() { # <标题>
 # （这正是"用 grep 数 NDJSON"会错的地方：一篇讲 JSON 的文章会被当成已删除）。
 # awk 程序里不能出现单引号（整段是 bash 单引号字符串），改字符类时注意。
 _JSON_AWK_FUNCS='
-function _jstr(s, i,   out, c, n) {
+function _jhex2(c,   p) {
+  p = index("0123456789abcdef", tolower(c))
+  return (p > 0) ? p - 1 : 0
+}
+function _jutf8(cp,   out) {
+  # 把码点编回 UTF-8 字节。⚠️ 调用方必须 LC_ALL=C（gawk 在 UTF-8 locale 下
+  # sprintf("%c",192) 会输出两字节的 À，字节级比对就全错了）
+  out = ""
+  if (cp < 128) return out sprintf("%c", cp)
+  if (cp < 2048) return out sprintf("%c", 192 + int(cp / 64)) sprintf("%c", 128 + cp % 64)
+  if (cp < 65536) return out sprintf("%c", 224 + int(cp / 4096)) sprintf("%c", 128 + int(cp / 64) % 64) sprintf("%c", 128 + cp % 64)
+  return out sprintf("%c", 240 + int(cp / 262144)) sprintf("%c", 128 + int(cp / 4096) % 64) sprintf("%c", 128 + int(cp / 64) % 64) sprintf("%c", 128 + cp % 64)
+}
+function _jstr(s, i,   out, c, n, cp, lo, hex, j) {
+  # 完整的 JSON 字符串解码：\" \\ \/ \n \t \r \b \f 与 \uXXXX（含代理对）。
+  # ⚠️ 必须逐字节还原：integrity.members 的键是 tar 头里的**原始文件名**，
+  #    真站上就有 10 个双重编码 CJK 图名（含 U+009B 这类控制字符），
+  #    JSON 里可能以 \u009b 出现 —— 解码不回原始字节就会与真实成员名对不上，
+  #    那 10 个成员会被误报"缺失+多余"（假不符），或者更糟：被静默跳过。
   out = ""; n = length(s); i++
   while (i <= n) {
     c = substr(s, i, 1)
-    if (c == "\\") { out = out substr(s, i + 1, 1); i += 2; continue }
+    if (c == "\\") {
+      c = substr(s, i + 1, 1)
+      if (c == "n") { out = out "\n"; i += 2; continue }
+      if (c == "t") { out = out "\t"; i += 2; continue }
+      if (c == "r") { out = out "\r"; i += 2; continue }
+      if (c == "b") { out = out sprintf("%c", 8); i += 2; continue }
+      if (c == "f") { out = out sprintf("%c", 12); i += 2; continue }
+      if (c == "u") {
+        hex = substr(s, i + 2, 4); cp = 0
+        for (j = 1; j <= 4; j++) cp = cp * 16 + _jhex2(substr(hex, j, 1))
+        i += 6
+        if (cp >= 55296 && cp <= 56319 && substr(s, i, 2) == "\\u") {
+          hex = substr(s, i + 2, 4); lo = 0
+          for (j = 1; j <= 4; j++) lo = lo * 16 + _jhex2(substr(hex, j, 1))
+          if (lo >= 56320 && lo <= 57343) { cp = 65536 + (cp - 55296) * 1024 + (lo - 56320); i += 6 }
+        }
+        out = out _jutf8(cp)
+        continue
+      }
+      out = out c; i += 2; continue
+    }
     if (c == "\"") { RET_END = i; return out }
     out = out c; i++
   }
@@ -271,7 +321,9 @@ function _jtrim(s) { gsub(/^[ \t\r\n]+/, "", s); gsub(/[ \t\r\n]+$/, "", s); ret
 '
 
 _json_run() { # <mode:get|keys|len> <path>   ; JSON 从 stdin 进
-  awk -v mode="${1:-get}" -v path="${2:-}" "${_JSON_AWK_FUNCS}"'
+  # ⚠️ LC_ALL=C 是硬要求：整个扫描器按**字节**工作（substr/sprintf %c），
+  #    gawk 在 UTF-8 locale 下会按字符切、%c 会输出多字节 —— 成员名的字节级比对就废了
+  LC_ALL=C awk -v mode="${1:-get}" -v path="${2:-}" "${_JSON_AWK_FUNCS}"'
   { doc = doc $0 "\n" }
   END {
     v = _jwalk(doc, path)
@@ -529,14 +581,16 @@ drill_archive_theme_members() { # <members>
     sed -E 's#^\./##' | grep -v '/$' || true
 }
 
-# 归档里可以拿来探测的静态文件（优先原图，避开缩略图目录），输出 URL 路径
+# 归档里可以拿来探测的静态文件（优先原图，避开缩略图目录），输出 URL 路径。
+# ⚠️ 跳过名字里有反斜杠的成员：那是 tar -tf 对控制字符的**渲染转义**（真站有 10 个
+#    双重编码 CJK 图名会被渲染成 \302\233 这种文本），拿渲染名去 GET 必然 404/400。
 drill_archive_probe_static() { # <members>
   local m
   m="$(printf '%s\n' "${1:-}" |
     grep -E '(^|/)static/(img|file|customPage)/[^/]+$' |
-    grep -v '/thumb/' | head -1 | sed -E 's#^\./##')"
+    grep -v '/thumb/' | grep -v '\\' | head -1 | sed -E 's#^\./##')"
   if [[ -z "${m}" ]]; then
-    m="$(printf '%s\n' "${1:-}" | grep -E '(^|/)static/[^/]+/[^/]+$' | head -1 | sed -E 's#^\./##')"
+    m="$(printf '%s\n' "${1:-}" | grep -E '(^|/)static/[^/]+/[^/]+$' | grep -v '\\' | head -1 | sed -E 's#^\./##')"
   fi
   [[ -n "${m}" ]] && printf '/%s' "${m}"
 }
@@ -551,7 +605,7 @@ drill_expected_articles() { # <articles.ndjson 内容> <categories.ndjson 内容
   # ⚠️ 分类必须**先**读：文章要不要扣"私密分类"取决于分类表，
   #    先读文章的话 privcat 还是空的，私密分类里的文章会被算成公开（第一版就这么错过）。
   #    awk 的文件顺序因此与参数顺序相反，用 NR==FNR 判断"还在读第一个文件"。
-  awk "${_JSON_AWK_FUNCS}"'
+  LC_ALL=C awk "${_JSON_AWK_FUNCS}"'
   {
     line = $0
     if (line ~ /^[ \t]*$/) next
@@ -577,6 +631,965 @@ drill_expected_articles() { # <articles.ndjson 内容> <categories.ndjson 内容
     printf "total=%d public=%d loose=%d deleted=%d hidden=%d private=%d inprivcat=%d\n",
       total + 0, public + 0, loose + 0, deleted + 0, hidden + 0, priv + 0, inprivcat + 0
   }' <(printf '%s\n' "${cats}") <(printf '%s\n' "${arts}")
+}
+
+# ── 成员级完整性（manifest 的 integrity 块）──────────────────────────────────
+# 新版 server 在归档清单里写一个 integrity 块（旧归档没有 ⇒ 一切成员级检查都必须
+# **大声降级**，绝不让人把"没查"读成"查过且通过"）：
+#   integrity.algorithm          目前只有 sha256
+#   integrity.zstdFrameChecksum  压缩流是否带帧校验和（zstd -t 能不能抓住帧级损坏）
+#   integrity.merkleRoot         members 表的指纹：按键排序后每项 "<成员名>\n<sha256|字面量 null>\n"
+#                                顺序拼接再 sha256（与 server computeMerkleRoot 逐字节同构，
+#                                含 ./manifest.json 与 ./MANIFEST.copy.json 两行 null）
+#   integrity.memberCount        归档条目总数（**含目录项**；server 侧实测 == tar -tf | wc -l）
+#   integrity.members            { "<./路径>": {"sha256":"<hex>","bytes":N} | null }
+#                                键是 tar 头里的**原始字节名**；两份清单是 null（自指），
+#                                硬链接/设备是 {sha256:null} ⇒ 这些只查在不在，不比哈希
+# 归档里另有一份与 manifest.json **逐字节相同**的 ./MANIFEST.copy.json（互为对照的双清单），
+# 归档旁有 "<hex>  <文件名>" 形状的 .sha256 sidecar；server 还把整归档 sha256 记进
+# backup-status.json 的 lastSuccessSha256（目录级灾难之外的第三个参照）。
+#
+# ⚠️ 成员名的两个坑（都实测过，不是理论）：
+#   a) 路径带 ./ 前缀，匹配必须做前缀归一 —— 曾有一个锚定 ^static/themes/ 的检查
+#      对 182 个 img 成员匹配了 0 条：0 匹配的校验器照样"通过"，那是它最危险的形状
+#      ⇒ 本文件所有匹配都不锚定前缀，且有"匹配到 0 条就 FAIL"的自检。
+#   b) `tar -tf` 打印的名字是**渲染值**：GNU tar 把不可打印字节转义成 \302\233 这种
+#      文本（真站静态目录里就有 10 个双重编码 CJK 图名会中招），busybox 打原始字节；
+#      名字里有换行时 GNU 打 1 行、busybox 打 2 行。所以：
+#        · 哈希路径用 GNU tar --to-command 的 TAR_FILENAME（原始字节，环境变量不进渲染层）
+#          + NUL 分隔记录（bash 变量与行式列表都装不下带换行的名字，NUL 是唯一安全分隔符）；
+#        · 需要列表时优先读清单，其次用 --quoting-style=literal（GNU ≥1.23）拿原始字节；
+#        · tar -tf 的行数只当 sanity 数字用，并检测"不以 ./ 开头的行"（= 换行名碎片）。
+
+# integrity.members → NUL 分隔记录 "<路径>\t<sha256|->\t<bytes|->"（- = null/无内容）。
+# ⚠️ 键里有 .（articles.ndjson）不能走 json_get 的点号路径；键里还可能有 \t 之外的
+#    任何字节 ⇒ 输出到**文件**（bash 变量装不下 NUL），解析用 ${var%%$'\t'*} 而不是 read。
+drill_integrity_members() { # <manifest_json> → stdout（调用方重定向到文件）
+  printf '%s' "${1:-}" | LC_ALL=C awk "${_JSON_AWK_FUNCS}"'
+  { doc = doc $0 "\n" }
+  END {
+    m = _jwalk(doc, "integrity.members")
+    if (m == "") exit
+    # ⚠️ 手动走键，不用 _jkeys + split("\n")：成员名是文件名，**可以合法包含换行**，
+    #    按 \n 切键会把一个名字劈成两个假键（然后双双"匹配不到"——假不符）。
+    n = length(m); i = 1
+    while (i <= n && substr(m, i, 1) != "{") i++
+    if (i > n) exit
+    i++
+    while (i <= n) {
+      while (i <= n && substr(m, i, 1) ~ /[ \t\r\n,]/) i++
+      if (substr(m, i, 1) != "\"") break
+      k = _jstr(m, i); i = RET_END + 1
+      while (i <= n && substr(m, i, 1) ~ /[ \t\r\n]/) i++
+      if (substr(m, i, 1) != ":") break
+      v = _jraw(m, i + 1); i = RET_END
+      gsub(/^[ \t\r\n]+/, "", v); gsub(/[ \t\r\n]+$/, "", v)
+      if (v == "null" || v == "") { printf "%s\t-\t-%c", k, 0 }
+      else {
+        sha = _jval(v, "sha256"); gsub(/["]/, "", sha); gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", sha)
+        if (sha == "null" || sha == "") sha = "-"
+        by = _jval(v, "bytes"); gsub(/["]/, "", by); gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", by)
+        if (by == "null" || by == "") by = "-"
+        printf "%s\t%s\t%s%c", k, sha, by, 0
+      }
+      if (i >= n) break
+    }
+  }'
+}
+
+# merkle root：<声明成员记录文件> → 按键字节序排序，每项打成 "<键>\n<sha 或字面量 null>\n"，
+# 顺序拼接后 sha256。JS 的 .sort() 对 BMP 字符就是字节序（server 侧成员名全是 ASCII/BMP，
+# 若将来出现增补平面字符（emoji 文件名）排序口径会差 —— 那时 merkle 对不上会在 FAIL 信息里提示）。
+drill_compute_merkle() { # <记录文件（NUL 分隔 path\tsha[\tbytes]）>
+  local recfile="$1" rec rest fname sha payload rc=0
+  command -v sort >/dev/null 2>&1 && sort -z --help >/dev/null 2>&1 || { printf 'no-sort-z'; return 1; }
+  payload="$(mktemp "${VANBLOG_DRILL_TMPDIR:-${TMPDIR:-/tmp}}/vanblog-merkle.XXXXXX" 2>/dev/null)" || return 1
+  while IFS= read -r -d '' rec; do
+    [[ -n "${rec}" ]] || continue
+    fname="${rec%%$'\t'*}"
+    rest="${rec#*$'\t'}"
+    sha="${rest%%$'\t'*}"
+    if [[ -z "${fname}" ]]; then continue; fi
+    if [[ "${sha}" == "-" || "${sha}" == "null" ]]; then
+      printf '%s\nnull\n' "${fname}" >>"${payload}"
+    else
+      printf '%s\n%s\n' "${fname}" "${sha}" >>"${payload}"
+    fi
+  done < <(LC_ALL=C sort -z -t $'\t' -k1,1 <"${recfile}" 2>/dev/null)
+  sha256sum "${payload}" 2>/dev/null | cut -d' ' -f1 || rc=1
+  rm -f "${payload}" 2>/dev/null || true
+  return ${rc}
+}
+
+# tar 是否支持 --quoting-style=literal（GNU ≥1.23 支持；busybox 对未知选项直接报错）。
+# ⚠️ 不用 is_gnu_tar 推断：要的是"这个 tar 能不能打出原始字节名"，直接探测能力
+#    比猜品牌诚实（测试桩环境里会出现 GNU tar + is_gnu_tar=false 的组合）。
+DRILL_QUOTING_PROBED=""
+DRILL_QUOTING_OK=1
+drill_tar_supports_literal_quoting() {
+  if [[ -n "${DRILL_QUOTING_PROBED}" ]]; then
+    return "${DRILL_QUOTING_OK}"
+  fi
+  DRILL_QUOTING_PROBED=1
+  DRILL_QUOTING_OK=1
+  local pd pt
+  pd="$(mktemp -d "${VANBLOG_DRILL_TMPDIR:-${TMPDIR:-/tmp}}/vanblog-tarprobe.XXXXXX" 2>/dev/null)" || pd=""
+  if [[ -n "${pd}" ]]; then
+    pt="${pd}/probe.tar"
+    if tar -cf "${pt}" -T /dev/null 2>/dev/null && tar --quoting-style=literal -tf "${pt}" >/dev/null 2>&1; then
+      DRILL_QUOTING_OK=0
+    fi
+    rm -rf "${pd}" 2>/dev/null || true
+  fi
+  return "${DRILL_QUOTING_OK}"
+}
+
+# 把 GNU tar 默认渲染的成员名还原成原始字节（\302\233 八进制、\n \t \\ 等 C 转义）。
+# 只有"老 GNU tar（不支持 literal）"这条路才需要；名字里真有换行时渲染行还原后会
+# 裂成两行 —— 由调用方的碎片检测（不以 ./ 开头的行）如实报告。
+drill_unescape_tar_names() {
+  LC_ALL=C awk '
+  {
+    out = ""; n = length($0); i = 1
+    while (i <= n) {
+      c = substr($0, i, 1)
+      if (c != "\\") { out = out c; i++; continue }
+      c2 = substr($0, i + 1, 1)
+      if (c2 == "n") { out = out "\n"; i += 2; continue }
+      if (c2 == "t") { out = out "\t"; i += 2; continue }
+      if (c2 == "r") { out = out "\r"; i += 2; continue }
+      if (c2 == "\\") { out = out "\\"; i += 2; continue }
+      if (c2 == "a") { out = out sprintf("%c", 7); i += 2; continue }
+      if (c2 == "b") { out = out sprintf("%c", 8); i += 2; continue }
+      if (c2 == "f") { out = out sprintf("%c", 12); i += 2; continue }
+      if (c2 == "v") { out = out sprintf("%c", 11); i += 2; continue }
+      if (c2 ~ /[0-7]/) {
+        v = 0; j = i + 1
+        while (j <= n && j <= i + 3 && substr($0, j, 1) ~ /[0-7]/) { v = v * 8 + (index("01234567", substr($0, j, 1)) - 1); j++ }
+        out = out sprintf("%c", v); i = j; continue
+      }
+      out = out c2; i += 2
+    }
+    print out
+  }'
+}
+
+# 原始字节成员名列表：优先 --quoting-style=literal（GNU 默认渲染会把不可打印字节
+# 转义成 \302\233 文本，与清单键/raw 名对不上）；老 GNU 退化成"渲染 + 反转义"；
+# busybox 本来就打原始字节。
+drill_archive_members_raw() { # <archive> → 每行一个成员名（原始字节；含目录项，带结尾 /）
+  local file="$1" fmt dec extra=""
+  fmt="$(archive_format_of "${file}")"
+  [[ -n "${fmt}" ]] || return 2
+  dec="$(drill_decompress_cmd "${fmt}")" || return 2
+  command -v "${dec%% *}" >/dev/null 2>&1 || return 127
+  [[ "${fmt}" == "zstd" ]] && extra="$(drill_zstd_long_opt)"
+  local -a tar_opts=(-tf -)
+  local unescape=0
+  if drill_tar_supports_literal_quoting; then
+    tar_opts+=(--quoting-style=literal)
+  elif is_gnu_tar; then
+    unescape=1
+  fi
+  is_gnu_tar && tar_opts+=(--warning=no-unknown-keyword)
+  if ((unescape == 1)); then
+    # shellcheck disable=SC2086
+    ${dec} ${extra} "${file}" 2>/dev/null | tar "${tar_opts[@]}" 2>/dev/null | drill_unescape_tar_names
+  else
+    # shellcheck disable=SC2086
+    ${dec} ${extra} "${file}" 2>/dev/null | tar "${tar_opts[@]}" 2>/dev/null
+  fi
+}
+
+drill_extract_archive() { # <archive> <destdir> → 0 完整解出；非 0 = 解压/tar 失败
+  local file="$1" dest="$2" fmt dec extra=""
+  fmt="$(archive_format_of "${file}")"
+  [[ -n "${fmt}" ]] || return 2
+  dec="$(drill_decompress_cmd "${fmt}")" || return 2
+  command -v "${dec%% *}" >/dev/null 2>&1 || return 127
+  [[ "${fmt}" == "zstd" ]] && extra="$(drill_zstd_long_opt)"
+  local -a tar_opts=(-x -C "${dest}")
+  is_gnu_tar && tar_opts+=(--warning=no-unknown-keyword)
+  # shellcheck disable=SC2086
+  ${dec} ${extra} "${file}" 2>/dev/null | tar "${tar_opts[@]}" 2>/dev/null
+  # ⚠️ 两个退出码都要抓：普通赋值会刷新 PIPESTATUS，必须先整体拷成数组
+  local -a ps=("${PIPESTATUS[@]}")
+  [[ "${ps[0]}" -ne 0 ]] && return 1
+  return "${ps[1]:-1}"
+}
+
+# 对归档走**一遍**，逐成员产出 NUL 分隔记录 "<类型>\t<./成员名>\t<字节>\t<sha256|->"。
+# GNU tar 用 --to-command **边流边哈希**：不落盘、不需要与归档等大的临时空间
+# （server 侧自己解析 tar 流是同一个理由）；TAR_FILENAME 走环境变量 ⇒ 原始字节，
+# 名字里的控制字符/换行都原样保留。其它 tar（busybox）退化成"解包到临时目录再逐文件
+# 哈希"，解包前先查磁盘空间，不够就明说跳过（返回 2），绝不假装比过。
+# ⚠️ --to-command 只对**有内容的成员**触发（目录/符号链接不触发）⇒ 条目总数（memberCount
+#    的对账基准）另走一次 raw 列表；null 哈希成员的存在性也拿 raw 列表兜底。
+HASH_SCRATCH=""
+HASH_TSV=""
+HASH_MF=""
+HASH_COPY=""
+HASH_ENGINE="" # stream=GNU --to-command | extract=解包比对
+drill_hash_members() { # <archive> → 0 成功；1 归档读不完整；2 磁盘不够（已明说）；127 缺工具
+  local file="$1" fmt dec extra="" base_dir
+  HASH_TSV=""; HASH_MF=""; HASH_COPY=""; HASH_SCRATCH=""; HASH_ENGINE=""
+  fmt="$(archive_format_of "${file}")"
+  [[ -n "${fmt}" ]] || return 1
+  dec="$(drill_decompress_cmd "${fmt}")" || return 1
+  command -v "${dec%% *}" >/dev/null 2>&1 || return 127
+  command -v sha256sum >/dev/null 2>&1 || return 127
+  [[ "${fmt}" == "zstd" ]] && extra="$(drill_zstd_long_opt)"
+  base_dir="${VANBLOG_DRILL_TMPDIR:-${TMPDIR:-/tmp}}"
+  mkdir -p "${base_dir}" 2>/dev/null || base_dir="/tmp"
+  HASH_SCRATCH="$(mktemp -d "${base_dir}/vanblog-integ.XXXXXX" 2>/dev/null)" || return 2
+  HASH_TSV="${HASH_SCRATCH}/members.bin"
+  HASH_MF="${HASH_SCRATCH}/manifest.json"
+  HASH_COPY="${HASH_SCRATCH}/MANIFEST.copy.json"
+  : >"${HASH_TSV}"
+  if is_gnu_tar; then
+    HASH_ENGINE="stream"
+    # 每个有内容的成员走一次这个小脚本：常规文件算 sha256（两份清单顺手 tee 出来），
+    # 记录用 awk 的 ENVIRON 取原始字节名、以 NUL 结尾追加（shell printf 打 NUL 不可移植）。
+    cat >"${HASH_SCRATCH}/hash-member.sh" <<'HELPER'
+h='-'
+if [ "${TAR_FILETYPE:-?}" = f ]; then
+  case "${TAR_FILENAME:-}" in
+  ./manifest.json) h="$(tee "${TAR_MF_OUT}" | sha256sum | cut -d' ' -f1)" ;;
+  ./MANIFEST.copy.json) h="$(tee "${TAR_COPY_OUT}" | sha256sum | cut -d' ' -f1)" ;;
+  *) h="$(sha256sum | cut -d' ' -f1)" ;;
+  esac
+else
+  cat >/dev/null 2>&1 || true
+fi
+MEMBER_SHA="${h}" LC_ALL=C awk 'BEGIN{
+  printf "%s\t%s\t%s\t%s%c", ENVIRON["TAR_FILETYPE"], ENVIRON["TAR_FILENAME"], ENVIRON["TAR_SIZE"], ENVIRON["MEMBER_SHA"], 0 >> ENVIRON["TAR_HASH_OUT"]
+}' </dev/null
+HELPER
+    local -a tar_opts=(-x --to-command="sh ${HASH_SCRATCH}/hash-member.sh" --warning=no-unknown-keyword)
+    local -a ps
+    # shellcheck disable=SC2086
+    ${dec} ${extra} "${file}" 2>"${HASH_SCRATCH}/dec.err" |
+      TAR_HASH_OUT="${HASH_TSV}" TAR_MF_OUT="${HASH_MF}" TAR_COPY_OUT="${HASH_COPY}" \
+      tar "${tar_opts[@]}" 2>"${HASH_SCRATCH}/tar.err"
+    ps=("${PIPESTATUS[@]}")
+    if [[ "${ps[0]}" -ne 0 || "${ps[1]}" -ne 0 ]]; then
+      return 1
+    fi
+  else
+    HASH_ENGINE="extract"
+    local size_kb need_kb free_kb exdir p rel fp t s h
+    size_kb=$(( $(wc -c <"${file}" 2>/dev/null || echo 0) / 1024 ))
+    need_kb=$((size_kb * 8 + 524288))
+    free_kb="$(df -Pk "${base_dir}" 2>/dev/null | awk 'NR==2{print $4}')"
+    if [[ "${free_kb}" =~ ^[0-9]+$ ]] && ((free_kb < need_kb)); then
+      return 2
+    fi
+    exdir="${HASH_SCRATCH}/extract"
+    mkdir -p "${exdir}"
+    drill_extract_archive "${file}" "${exdir}" || return 1
+    [[ -f "${exdir}/manifest.json" ]] && cp "${exdir}/manifest.json" "${HASH_MF}" 2>/dev/null
+    [[ -f "${exdir}/MANIFEST.copy.json" ]] && cp "${exdir}/MANIFEST.copy.json" "${HASH_COPY}" 2>/dev/null
+    while IFS= read -r -d '' p; do
+      rel="${p}"
+      [[ "${rel}" == "." ]] && rel="./"
+      fp="${exdir}/${rel#./}"
+      t="?"; s=0; h="-"
+      if [[ "${rel}" == "./" || -d "${fp}" ]]; then
+        t="d"
+      elif [[ -L "${fp}" ]]; then
+        t="l"
+      elif [[ -f "${fp}" ]]; then
+        t="f"
+        s="$(wc -c <"${fp}" 2>/dev/null || echo 0)"
+        # ⚠️ 必须 `sha256sum <文件`（stdin 重定向）而不是把文件名当参数：
+        #    名字里有换行/反斜杠时 GNU sha256sum 会在输出行首加 "\" 并转义文件名，
+        #    hex 前面就混进一个反斜杠（fixture 实测踩过）
+        h="$(sha256sum <"${fp}" 2>/dev/null | cut -d' ' -f1)"
+        [[ -n "${h}" ]] || h="-"
+      fi
+      MEMBER_SHA="${h}" REC_TYPE="${t}" REC_NAME="${rel}" REC_SIZE="${s}" TAR_HASH_OUT="${HASH_TSV}" LC_ALL=C awk 'BEGIN{
+        printf "%s\t%s\t%s\t%s%c", ENVIRON["REC_TYPE"], ENVIRON["REC_NAME"], ENVIRON["REC_SIZE"], ENVIRON["MEMBER_SHA"], 0 >> ENVIRON["TAR_HASH_OUT"]
+      }' </dev/null
+    done < <(cd "${exdir}" 2>/dev/null && find . \( -type f -o -type l -o -type d \) -print0 2>/dev/null)
+  fi
+  return 0
+}
+
+drill_integ_cleanup() {
+  if [[ -n "${HASH_SCRATCH}" && -d "${HASH_SCRATCH}" ]]; then
+    rm -rf "${HASH_SCRATCH}" 2>/dev/null || true
+  fi
+  HASH_SCRATCH=""
+}
+
+# 坏成员按路径给一句"这是什么数据"：坏一张图和坏数据库 dump，处置方式完全不同
+drill_integ_bad_hint() { # <成员路径>
+  case "${1#./}" in
+  db/*) printf '这是数据库转储（NDJSON）：坏的是文章/评论/账号那部分数据' ;;
+  static/themes/*) printf '这是上传的主题 CSS' ;;
+  static/img/thumb/*) printf '这是缩略图（后台「图片管理 → 补缩略图」可以重新生成）' ;;
+  static/*) printf '这是静态文件（图片/附件/自定义页面）' ;;
+  manifest.json | MANIFEST.copy.json) printf '这是清单本身' ;;
+  *) printf '' ;;
+  esac
+}
+
+# 全局结果（verify-deep 与 drill 共用；⚠️ 放全局不放 stdout：调用方一旦用命令替换，
+#    子 shell 里的结论就丢了 —— MANIFEST_SOURCE 踩过的那个坑）
+INTEG_MODE="unavailable" # full=完成比对 | unavailable=没有 integrity 块 | skipped=--skip-hash | partial=部分 | failed=解不开
+INTEG_RC=0
+INTEG_DECLARED=0   # members 表键数
+INTEG_WITH_SHA=0   # 其中带哈希的成员数
+INTEG_HASHED=0     # 真正比对了哈希的成员数
+INTEG_MISMATCH=0
+INTEG_MISSING=0
+INTEG_UNEXPECTED=0
+INTEG_FRAGMENTS=0  # raw 列表里"不以 ./ 开头"的行（= 成员名里有换行的碎片）
+INTEG_BAD_PATH=""
+INTEG_BAD_EXPECTED=""
+INTEG_BAD_ACTUAL=""
+INTEG_BAD_KIND=""
+INTEG_MERKLE="unavailable"
+INTEG_COPY="unavailable"
+INTEG_COUNT="unavailable"
+INTEG_SECONDS=""
+INTEG_DETAIL=""
+INTEG_TOTAL=0 # 归档条目总数（含目录项；memberCount 的对账基准，来自 raw 列表）
+
+drill_archive_integrity() { # <archive> <manifest_json> [--skip-hash] → 0 没有 FAIL 级发现
+  local file="$1" manifest="$2" skip="${3:-}"
+  INTEG_MODE="unavailable"; INTEG_RC=0; INTEG_DECLARED=0; INTEG_WITH_SHA=0; INTEG_HASHED=0
+  INTEG_MISMATCH=0; INTEG_MISSING=0; INTEG_UNEXPECTED=0; INTEG_FRAGMENTS=0; INTEG_TOTAL=0
+  INTEG_BAD_PATH=""; INTEG_BAD_EXPECTED=""; INTEG_BAD_ACTUAL=""; INTEG_BAD_KIND=""
+  INTEG_MERKLE="unavailable"; INTEG_COPY="unavailable"; INTEG_COUNT="unavailable"
+  INTEG_SECONDS=""; INTEG_DETAIL=""
+
+  local algo merkle mcount zchk fmt
+  algo="$(json_get "${manifest}" integrity.algorithm)"
+  merkle="$(json_get "${manifest}" integrity.merkleRoot)"
+  mcount="$(json_get "${manifest}" integrity.memberCount)"
+  zchk="$(json_get "${manifest}" integrity.zstdFrameChecksum)"
+  fmt="$(archive_format_of "${file}")"
+
+  # 声明成员表 → NUL 记录文件（bash 变量装不下 NUL 与换行名）
+  local decl_file=""
+  decl_file="$(mktemp "${VANBLOG_DRILL_TMPDIR:-${TMPDIR:-/tmp}}/vanblog-decl.XXXXXX" 2>/dev/null)" || decl_file=""
+  if [[ -n "${decl_file}" ]]; then
+    drill_integrity_members "${manifest}" >"${decl_file}" 2>/dev/null || true
+  fi
+  local decl_n=0
+  [[ -n "${decl_file}" ]] && decl_n=$(( $(tr -dc '\0' <"${decl_file}" 2>/dev/null | wc -c | tr -d ' ') ))
+
+  if [[ -z "${algo}" && -z "${merkle}" && -z "${mcount}" && "${decl_n}" == "0" ]]; then
+    INTEG_MODE="unavailable"
+    INTEG_DETAIL="这份归档没有 integrity 块（早于成员级哈希），成员内容没比对过"
+    echo -e "    语义 NOTE 成员级哈希校验**不可用**：归档早于 integrity 块（旧归档）。"
+    echo -e "                 上面的结构/语义检查照常做了，但这个结论**不包含**逐成员内容比对 —— 别把 PASS 读成比它更强。"
+    echo -e "                 要成员级防护，用当前版本重新导出一份归档（server 现在导出时写 integrity 块 + 双清单 + .sha256）。"
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return 0
+  fi
+
+  # merkle：members 表自己的指纹（不需要解开归档内容；--skip-hash 时也照查）
+  if [[ -n "${merkle}" && "${merkle}" != "null" && "${decl_n}" -gt 0 ]]; then
+    local calc
+    calc="$(drill_compute_merkle "${decl_file}")"
+    if [[ "${calc}" == "${merkle}" ]]; then
+      INTEG_MERKLE="ok"
+      echo -e "    语义 PASS merkleRoot 与 members 表重算一致（${merkle:0:12}…）：清单里那张哈希表自身没被改/被截断"
+    elif [[ "${calc}" == "no-sort-z" ]]; then
+      echo -e "    ${yellow}语义 WARN${plain} 本机 sort 不支持 -z（NUL 分隔排序）：merkleRoot 没法重算 —— 这一项没查（不是通过）"
+    else
+      INTEG_MERKLE="mismatch"
+      INTEG_RC=1
+      echo -e "    ${red}语义 FAIL${plain} merkleRoot 对不上：清单声称 ${merkle:0:12}…，按 members 表重算 ${calc:0:12}…"
+      echo -e "                 ⇒ 清单与成员表互相矛盾：至少一处被改过或损坏，这份归档**不可信**，别当恢复点"
+      echo -e "                 （若成员名里有增补平面字符（如 emoji），两侧排序口径不同也会造成这个差异 —— 先看成员哈希是否全对）"
+    fi
+  elif [[ -n "${merkle}" && "${merkle}" != "null" ]]; then
+    INTEG_MERKLE="mismatch"
+    INTEG_RC=1
+    echo -e "    ${red}语义 FAIL${plain} integrity.merkleRoot 在、members 表却读不出来 ⇒ integrity 块损坏"
+  else
+    echo -e "    ${yellow}语义 WARN${plain} integrity 块里没有 merkleRoot（形状不完整）：这一项没查"
+  fi
+
+  # 帧校验和：决定"流式完整性测试"那一层到底护住了什么
+  if [[ "${fmt}" == "zstd" ]]; then
+    case "${zchk}" in
+    true) echo -e "    语义 NOTE zstd 帧校验和开着（zstdFrameChecksum=true）：结构校验的 zstd -t 抓得住压缩流损坏；成员哈希防的是「解得开但内容不对」" ;;
+    false) echo -e "    ${yellow}语义 WARN${plain} zstdFrameChecksum=false：压缩流没带帧校验和，zstd -t 抓损坏的能力变弱 —— 成员级哈希是唯一防线" ;;
+    esac
+  fi
+
+  if [[ "${skip}" == "--skip-hash" ]]; then
+    INTEG_MODE="skipped"
+    INTEG_DETAIL="--skip-hash：没有比对成员内容哈希（merkleRoot 照查了）"
+    echo -e "    ${yellow}语义 WARN${plain} 成员级内容哈希被 --skip-hash 跳过：这个结论不包含逐成员比对，不证明归档内容没坏"
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return ${INTEG_RC}
+  fi
+  if [[ -n "${algo}" && "${algo}" != "null" && "${algo}" != "sha256" ]]; then
+    INTEG_MODE="partial"
+    INTEG_DETAIL="algorithm=${algo} 不认识（只支持 sha256），成员内容没比对"
+    echo -e "    ${yellow}语义 WARN${plain} integrity.algorithm=${algo}：本脚本只认 sha256，成员内容比对跳过（**不是**通过）"
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return ${INTEG_RC}
+  fi
+
+  local t0 t1 hrc=0
+  t0="$(date +%s)"
+  drill_hash_members "${file}" || hrc=$?
+  t1="$(date +%s)"
+  INTEG_SECONDS=$((t1 - t0))
+  case "${hrc}" in
+  0) : ;;
+  127)
+    INTEG_MODE="partial"
+    INTEG_DETAIL="本机缺解压工具或 sha256sum，成员内容没比对"
+    echo -e "    ${yellow}语义 WARN${plain} 成员级哈希没做：本机缺解压工具或 sha256sum（跳过，不是通过）"
+    drill_integ_cleanup
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return ${INTEG_RC}
+    ;;
+  2)
+    INTEG_MODE="partial"
+    INTEG_DETAIL="临时磁盘空间不够解包，成员内容没比对"
+    echo -e "    ${yellow}语义 WARN${plain} 成员级哈希没做：本机 tar 不是 GNU tar 且临时目录磁盘不够解包（VANBLOG_DRILL_TMPDIR 指到大盘再跑；跳过，不是通过）"
+    drill_integ_cleanup
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return ${INTEG_RC}
+    ;;
+  *)
+    INTEG_MODE="failed"
+    INTEG_RC=1
+    INTEG_DETAIL="归档解不完整（解压或 tar 报错）：损坏或被截断"
+    echo -e "    ${red}语义 FAIL${plain} 归档解不完整（解压器/tar 报错）：损坏或被截断，成员级比对进行不下去"
+    if [[ -n "${HASH_SCRATCH}" && -s "${HASH_SCRATCH}/tar.err" ]]; then
+      head -3 "${HASH_SCRATCH}/tar.err" 2>/dev/null | sed 's/^/                 /'
+    fi
+    drill_integ_cleanup
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return 1
+    ;;
+  esac
+  if [[ ! -s "${HASH_TSV}" ]]; then
+    INTEG_MODE="partial"
+    INTEG_DETAIL="哈希记录是空的（本机 awk 不支持 NUL 输出？）：成员内容没比对"
+    echo -e "    ${yellow}语义 WARN${plain} 逐成员哈希记录为空：本机 awk/sh 组合产不出 NUL 分隔记录（跳过，不是通过）"
+    drill_integ_cleanup
+    [[ -n "${decl_file}" ]] && rm -f "${decl_file}" 2>/dev/null
+    return ${INTEG_RC}
+  fi
+
+  # raw 成员名列表（原始字节）：条目总数（memberCount 基准）+ null 成员的存在性兜底
+  local raw_list="" raw_line
+  raw_list="$(drill_archive_members_raw "${file}" 2>/dev/null)"
+  local -A RAW_EXISTS=()
+  while IFS= read -r raw_line; do
+    [[ -n "${raw_line}" ]] || continue
+    if [[ "${raw_line}" != ./* ]]; then
+      # server 归档的成员全部以 ./ 开头：不以 ./ 开头的行 = 换行名的后半截碎片
+      INTEG_FRAGMENTS=$((INTEG_FRAGMENTS + 1))
+      continue
+    fi
+    RAW_EXISTS["${raw_line}"]=1
+  done <<<"${raw_list}"
+  INTEG_TOTAL=$(( $(printf '%s\n' "${raw_list}" | grep -c . || true) - INTEG_FRAGMENTS ))
+  if ((INTEG_FRAGMENTS > 0)); then
+    echo -e "    ${yellow}语义 WARN${plain} 有 ${INTEG_FRAGMENTS} 个成员名里带换行（列表里显示为碎片行）：计数按碎片修正过，逐字节比对仍走 NUL 记录，不受影响"
+  fi
+
+  # 实际成员（哈希那遍的记录）→ 关联数组
+  local -A A_TYPE=() A_SHA=() A_SIZE=() SEEN=()
+  local rec ftype frest fname fsize fsha ntabs
+  while IFS= read -r -d '' rec; do
+    [[ -n "${rec}" ]] || continue
+    ftype="${rec%%$'\t'*}"
+    frest="${rec#*$'\t'}"
+    fname="${frest%%$'\t'*}"
+    frest="${frest#*$'\t'}"
+    fsize="${frest%%$'\t'*}"
+    fsha="${frest#*$'\t'}"
+    ntabs="${rec//[!$'\t']/}"
+    if [[ "${#ntabs}" -ne 3 ]]; then
+      echo -e "    ${yellow}语义 WARN${plain} 成员名里带制表符（记录字段数不对）：$(printf '%s' "${fname}" | head -c 60)… 的比对不可靠"
+    fi
+    A_TYPE["${fname}"]="${ftype:-?}"
+    A_SIZE["${fname}"]="${fsize:-0}"
+    A_SHA["${fname}"]="${fsha:--}"
+  done <"${HASH_TSV}"
+
+  # 声明 vs 实际：逐成员比对（哈希、字节、在不在），并记下**第一个**坏成员
+  local path sha bytes key act matched=0 first_done=0 rest
+  local miss_list="" unexp_list=""
+  while IFS= read -r -d '' rec; do
+    [[ -n "${rec}" ]] || continue
+    path="${rec%%$'\t'*}"
+    rest="${rec#*$'\t'}"
+    sha="${rest%%$'\t'*}"
+    bytes="${rest#*$'\t'}"
+    INTEG_DECLARED=$((INTEG_DECLARED + 1))
+    key="${path}"
+    if [[ -z "${A_TYPE["${key}"]+x}" && -z "${RAW_EXISTS["${key}"]+x}" ]]; then
+      # 前缀归一再试（./x 与 x 两种写法都要认；0 匹配的校验器 = 空转，下面有自检）
+      if [[ -n "${A_TYPE["./${path#./}"]+x}" || -n "${RAW_EXISTS["./${path#./}"]+x}" ]]; then
+        key="./${path#./}"
+      elif [[ -n "${A_TYPE["${path#./}"]+x}" || -n "${RAW_EXISTS["${path#./}"]+x}" ]]; then
+        key="${path#./}"
+      else
+        key=""
+      fi
+    fi
+    if [[ -z "${key}" ]]; then
+      INTEG_MISSING=$((INTEG_MISSING + 1))
+      [[ ${#miss_list} -lt 200 ]] && miss_list="${miss_list}${miss_list:+、}${path}"
+      if [[ ${first_done} -eq 0 ]]; then
+        first_done=1; INTEG_BAD_PATH="${path}"; INTEG_BAD_EXPECTED="${sha}"; INTEG_BAD_ACTUAL="MISSING"; INTEG_BAD_KIND="missing"
+      fi
+      continue
+    fi
+    matched=$((matched + 1))
+    SEEN["${key}"]=1
+    [[ -n "${A_TYPE["${key}"]+x}" ]] && SEEN["${key}"]=1
+    if [[ "${sha}" == "-" ]]; then
+      continue # null 成员（两份清单/硬链接/设备）：只查在不在，上面已经查到
+    fi
+    INTEG_WITH_SHA=$((INTEG_WITH_SHA + 1))
+    if [[ -z "${A_TYPE["${key}"]+x}" ]]; then
+      # 清单给了哈希，但 --to-command 没吐这个成员 ⇒ 它在归档里不是常规文件
+      INTEG_MISMATCH=$((INTEG_MISMATCH + 1))
+      if [[ ${first_done} -eq 0 ]]; then
+        first_done=1; INTEG_BAD_PATH="${path}"; INTEG_BAD_EXPECTED="常规文件（sha256 ${sha:0:12}…）"; INTEG_BAD_ACTUAL="不是常规文件（或没被解出）"; INTEG_BAD_KIND="type"
+      fi
+      continue
+    fi
+    act="${A_SHA["${key}"]:-}"
+    if [[ "${A_TYPE["${key}"]}" != "f" ]]; then
+      INTEG_MISMATCH=$((INTEG_MISMATCH + 1))
+      if [[ ${first_done} -eq 0 ]]; then
+        first_done=1; INTEG_BAD_PATH="${path}"; INTEG_BAD_EXPECTED="常规文件（sha256 ${sha:0:12}…）"; INTEG_BAD_ACTUAL="类型 ${A_TYPE["${key}"]}"; INTEG_BAD_KIND="type"
+      fi
+      continue
+    fi
+    INTEG_HASHED=$((INTEG_HASHED + 1))
+    if [[ "${act}" != "${sha}" ]]; then
+      INTEG_MISMATCH=$((INTEG_MISMATCH + 1))
+      if [[ ${first_done} -eq 0 ]]; then
+        first_done=1; INTEG_BAD_PATH="${path}"; INTEG_BAD_EXPECTED="${sha}"; INTEG_BAD_ACTUAL="${act}"; INTEG_BAD_KIND="hash"
+      fi
+    elif [[ "${bytes}" != "-" && -n "${A_SIZE["${key}"]:-}" && "${A_SIZE["${key}"]}" != "${bytes}" ]]; then
+      INTEG_MISMATCH=$((INTEG_MISMATCH + 1))
+      if [[ ${first_done} -eq 0 ]]; then
+        first_done=1; INTEG_BAD_PATH="${path}"; INTEG_BAD_EXPECTED="${bytes} B"; INTEG_BAD_ACTUAL="${A_SIZE["${key}"]} B"; INTEG_BAD_KIND="size"
+      fi
+    fi
+  done <"${decl_file}"
+
+  # 自检：声明里明明有带哈希的成员却一个都没匹配到 ⇒ 是**校验器**坏了（路径归一写错之类）。
+  # 一个静默匹配 0 条的校验器会让任何归档都"通过" —— 这正是本仓库踩过的最危险形状。
+  if ((INTEG_WITH_SHA > 0 && matched == 0)); then
+    INTEG_RC=1
+    echo -e "    ${red}语义 FAIL${plain} 校验器自检不过：清单声明了 ${INTEG_WITH_SHA} 个带哈希成员，却一个都没匹配到归档列表"
+    echo -e "                 （成员路径归一坏了？这是校验代码的 bug，不是归档问题 —— 0 匹配的比对等于没比）"
+  fi
+
+  # 归档里有、清单没声明的非目录成员（重新打包/往里塞东西的形状）
+  # ⚠️ 键展开不能写 ${!A[@]+"${!A[@]}"}：${!…}（间接/键展开）套 + 替代语法会被 bash
+  #    解析成"以整串为名的间接引用"，报 invalid variable name（实测踩过）
+  local k
+  if ((${#A_TYPE[@]} > 0)); then
+    for k in "${!A_TYPE[@]}"; do
+      [[ "${A_TYPE["${k}"]}" == d ]] && continue
+      [[ -n "${SEEN["${k}"]+x}" ]] && continue
+      [[ -n "${SEEN["./${k#./}"]+x}" ]] && continue
+      INTEG_UNEXPECTED=$((INTEG_UNEXPECTED + 1))
+      [[ ${#unexp_list} -lt 200 ]] && unexp_list="${unexp_list}${unexp_list:+、}${k}"
+      if [[ ${first_done} -eq 0 ]]; then
+        first_done=1; INTEG_BAD_PATH="${k}"; INTEG_BAD_EXPECTED="(清单没声明这个成员)"; INTEG_BAD_ACTUAL="归档里有"; INTEG_BAD_KIND="unexpected"
+      fi
+    done
+  fi
+  # raw 列表兜底一遍（符号链接/硬链接不进 A_TYPE，但也不该凭空多出来）。
+  # ⚠️ 有换行名碎片时跳过这个兜底：碎片的前半截（"./line1"）会被当成"多余成员"冤枉 ——
+  #    A_TYPE（NUL 记录，原始字节）那一轮 extras 检查不受影响，照做。
+  if ((INTEG_FRAGMENTS == 0)); then
+    if ((${#RAW_EXISTS[@]} > 0)); then
+      for k in "${!RAW_EXISTS[@]}"; do
+        case "${k}" in
+        */) continue ;; # 目录项
+        esac
+        [[ -n "${SEEN["${k}"]+x}" ]] && continue
+        [[ -n "${A_TYPE["${k}"]+x}" ]] && continue # 已经在上一轮记过
+        [[ -n "${SEEN["./${k#./}"]+x}" || -n "${A_TYPE["./${k#./}"]+x}" ]] && continue
+        INTEG_UNEXPECTED=$((INTEG_UNEXPECTED + 1))
+        [[ ${#unexp_list} -lt 200 ]] && unexp_list="${unexp_list}${unexp_list:+、}${k}"
+        if [[ ${first_done} -eq 0 ]]; then
+          first_done=1; INTEG_BAD_PATH="${k}"; INTEG_BAD_EXPECTED="(清单没声明这个成员)"; INTEG_BAD_ACTUAL="归档里有"; INTEG_BAD_KIND="unexpected"
+        fi
+      done
+    fi
+  else
+    echo -e "    ${yellow}语义 WARN${plain} 成员名里有换行：raw 列表的「多余成员」兜底检查这次跳过（A_TYPE 那轮照做了；换行名在行式列表里不可靠）"
+  fi
+
+  if ((INTEG_MISMATCH > 0 || INTEG_MISSING > 0 || INTEG_UNEXPECTED > 0)); then
+    INTEG_RC=1
+    if [[ -n "${INTEG_BAD_PATH}" ]]; then
+      local hint
+      hint="$(drill_integ_bad_hint "${INTEG_BAD_PATH}")"
+      echo -e "    ${red}语义 FAIL${plain} 成员级校验有发现（第一个坏成员）：${yellow}${INTEG_BAD_PATH}${plain}"
+      echo -e "                 期望 ${INTEG_BAD_EXPECTED:0:64} vs 实际 ${INTEG_BAD_ACTUAL:0:64}（${INTEG_BAD_KIND}）${hint:+ —— ${hint}}"
+    fi
+    echo -e "                 合计：哈希不符 ${INTEG_MISMATCH}，缺失 ${INTEG_MISSING}${miss_list:+（${miss_list:0:160}）}，多余 ${INTEG_UNEXPECTED}${unexp_list:+（${unexp_list:0:160}）}；带哈希成员 ${INTEG_WITH_SHA} 个、实比 ${INTEG_HASHED} 个"
+  elif ((INTEG_WITH_SHA == 0)); then
+    echo -e "    ${yellow}语义 WARN${plain} members 表里一个带哈希的成员都没有（全是 null？）：成员内容没比对，只查了存在性"
+  else
+    echo -e "    语义 PASS 成员级哈希：${INTEG_HASHED}/${INTEG_WITH_SHA} 个带哈希成员全部一致，声明的 ${INTEG_DECLARED} 个成员都在、没有多余（${HASH_ENGINE} 单遍比对，耗时 ${INTEG_SECONDS}s）"
+  fi
+
+  # 双清单：./manifest.json 与 ./MANIFEST.copy.json 必须逐字节相同
+  if [[ -f "${HASH_MF}" && -f "${HASH_COPY}" ]]; then
+    if cmp -s "${HASH_MF}" "${HASH_COPY}"; then
+      INTEG_COPY="ok"
+      echo -e "    语义 PASS 双清单一致：./manifest.json == ./MANIFEST.copy.json（逐字节，$(wc -c <"${HASH_MF}" 2>/dev/null | tr -d ' ') B）—— 互为对照，单份损坏能被识破"
+    else
+      INTEG_COPY="mismatch"
+      INTEG_RC=1
+      local h1 h2
+      h1="$(sha256sum "${HASH_MF}" 2>/dev/null | cut -d' ' -f1)"
+      h2="$(sha256sum "${HASH_COPY}" 2>/dev/null | cut -d' ' -f1)"
+      echo -e "    ${red}语义 FAIL${plain} 双清单不一致：./manifest.json（sha256 ${h1:0:12}…）≠ ./MANIFEST.copy.json（${h2:0:12}…）"
+      echo -e "                 ⇒ 两份里至少一份坏了。恢复读的是归档内的 manifest.json，坏的是它的话恢复行为不可测；这份归档别当恢复点"
+    fi
+  elif [[ -f "${HASH_MF}" ]]; then
+    INTEG_COPY="missing"
+    INTEG_RC=1
+    echo -e "    ${red}语义 FAIL${plain} 有 integrity 块（新格式）却缺 ./MANIFEST.copy.json：双清单防损坏失效（清单坏了无从对照）"
+  else
+    INTEG_COPY="missing"
+    INTEG_RC=1
+    echo -e "    ${red}语义 FAIL${plain} 归档里读不出 ./manifest.json（有 integrity 块但清单本体不见了）"
+  fi
+
+  # memberCount：= 归档条目总数（含目录项；server 实测 == tar -tf | wc -l）
+  if [[ "${mcount}" =~ ^[0-9]+$ ]]; then
+    if ((mcount == INTEG_TOTAL)); then
+      INTEG_COUNT="ok"
+      echo -e "    语义 PASS memberCount=${mcount} 与归档实际条目数一致（含目录项；members 表 ${INTEG_DECLARED} 键 = 非目录成员）"
+    elif ((INTEG_FRAGMENTS > 0)); then
+      echo -e "    ${yellow}语义 WARN${plain} memberCount=${mcount} vs 列表数 ${INTEG_TOTAL}：有换行名碎片，计数只能尽力而为 —— 没法下结论（成员哈希那几行才是硬证据）"
+    else
+      INTEG_COUNT="mismatch"
+      INTEG_RC=1
+      echo -e "    ${red}语义 FAIL${plain} memberCount=${mcount}，但归档实际列出 ${INTEG_TOTAL} 条（含目录项）⇒ 归档被增删过成员或重新打包过"
+    fi
+  else
+    echo -e "    ${yellow}语义 WARN${plain} integrity.memberCount 缺失或不是数字（${mcount:-空}）：这一项没查"
+  fi
+
+  if ((INTEG_RC == 0)); then
+    INTEG_MODE="full"
+    INTEG_DETAIL="${INTEG_HASHED} 个成员哈希全对（${HASH_ENGINE}，${INTEG_SECONDS}s；merkle ✓，双清单 ✓，memberCount ${mcount:-?} ✓）"
+  else
+    [[ "${INTEG_MODE}" == "unavailable" ]] && INTEG_MODE="full"
+    INTEG_DETAIL="哈希不符 ${INTEG_MISMATCH}、缺失 ${INTEG_MISSING}、多余 ${INTEG_UNEXPECTED}${INTEG_BAD_PATH:+；第一个坏成员 ${INTEG_BAD_PATH}}"
+  fi
+  drill_integ_cleanup
+  rm -f "${decl_file}" 2>/dev/null || true
+  return ${INTEG_RC}
+}
+
+# 整归档 sha256 的**外部参照**：.sha256 sidecar 与 server 的 backup-status.json。
+# 明说这次用了哪个参照；一个参照都没有时明说"跳过"（不是"通过"）。
+drill_archive_sha_refs() { # <archive> → 0 一致/无参照；1 有参照且不符
+  local file="$1" base dir sfile="" want_sidecar="" sidecar_name="" want_status="" local_sha="" used="" rc=0
+  base="$(basename "${file}")"
+  dir="$(dirname "${file}")"
+  if [[ -f "${file}.sha256" ]]; then
+    want_sidecar="$(awk 'NR==1{print $1}' "${file}.sha256" 2>/dev/null)"
+    sidecar_name="$(awk 'NR==1{print $2}' "${file}.sha256" 2>/dev/null)"
+  fi
+  [[ -n "${dir}" && -f "${dir}/backup-status.json" ]] && sfile="${dir}/backup-status.json"
+  if [[ -z "${sfile}" ]]; then
+    local bd
+    bd="$(full_backup_dir 2>/dev/null)"
+    [[ -n "${bd}" && -f "${bd}/backup-status.json" ]] && sfile="${bd}/backup-status.json"
+  fi
+  if [[ -n "${sfile}" ]]; then
+    local sj sname
+    sj="$(cat "${sfile}" 2>/dev/null)"
+    sname="$(json_get "${sj}" lastSuccessName)"
+    if [[ "${sname}" == "${base}" ]]; then
+      want_status="$(json_get "${sj}" lastSuccessSha256)"
+      [[ "${want_status}" == "null" ]] && want_status=""
+    fi
+  fi
+  if [[ -z "${want_sidecar}" && -z "${want_status}" ]]; then
+    echo -e "    语义 NOTE 整归档 sha256：没有任何参照可比（无 .sha256 sidecar；backup-status.json ${sfile:+在，但记的不是这份归档或没有 lastSuccessSha256}${sfile:-不在}）—— 这一项**跳过**，不是通过"
+    return 0
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo -e "    ${yellow}语义 WARN${plain} 本机没有 sha256sum：有参照也没法重算比对 —— 跳过，不是通过"
+    return 0
+  fi
+  local_sha="$(sha256sum <"${file}" 2>/dev/null | cut -d' ' -f1)"
+  if [[ -n "${want_sidecar}" ]]; then
+    used="sidecar"
+    if [[ "${want_sidecar}" == "${local_sha}" ]]; then
+      echo -e "    语义 PASS 整归档 sha256 与 .sha256 sidecar 一致（${local_sha:0:12}…）"
+      if [[ -n "${sidecar_name}" && "${sidecar_name}" != "${base}" ]]; then
+        echo -e "    ${yellow}语义 WARN${plain} sidecar 里记的文件名是 ${sidecar_name}，盘上是 ${base}（归档被改过名？sidecar 可能配错对象）"
+      fi
+    else
+      rc=1
+      echo -e "    ${red}语义 FAIL${plain} 整归档 sha256 与 .sha256 sidecar 不符：sidecar ${want_sidecar:0:12}… vs 实际 ${local_sha:0:12}… ⇒ 归档内容被改过或损坏"
+    fi
+  fi
+  if [[ -n "${want_status}" ]]; then
+    used="${used}${used:+ + }backup-status.json"
+    if [[ "${want_status}" == "${local_sha}" ]]; then
+      echo -e "    语义 PASS 整归档 sha256 与 backup-status.json 的 lastSuccessSha256 一致（${want_status:0:12}…）—— server 自己记的参照，与 sidecar 互为佐证"
+    else
+      rc=1
+      echo -e "    ${red}语义 FAIL${plain} 整归档 sha256 与 backup-status.json 不符：server 记 ${want_status:0:12}…，实际 ${local_sha:0:12}… ⇒ 盘上这份不是 server 当时写的那份"
+    fi
+  fi
+  echo -e "    语义 NOTE 这次整归档 sha256 用的参照：${used}（本地重算 ${local_sha:0:12}…）"
+  return ${rc}
+}
+
+# ── 演练侧的数据往返断言（P3：恢复 200 ≠ 每类数据都回来了）─────────────────
+drill_ndjson_count() { # <ndjson 内容> → 非空行数（NDJSON 一行一文档）
+  printf '%s\n' "${1:-}" | awk 'BEGIN{n=0} /[^ \t\r]/{n++} END{print n}'
+}
+
+# 软删除文章的构成：<articles.ndjson 内容> → "deleted=N withAt=M"
+# ⚠️ 用 JSON 扫描器取字段，不 grep 字面量（正文里出现 "deleted":true 是完全可能的）
+drill_deleted_stats() { # <articles.ndjson 内容>
+  LC_ALL=C awk "${_JSON_AWK_FUNCS}"'
+  {
+    line = $0
+    if (line ~ /^[ \t]*$/) next
+    if (_jval(line, "deleted") == "true") {
+      d++
+      at = _jval(line, "deletedAt")
+      if (at != "" && at != "null") w++
+    }
+  }
+  END { printf "deleted=%d withAt=%d\n", d + 0, w + 0 }' <<<"${1:-}"
+}
+
+# 在演练自己的 mongo 容器里数文档（这个库归演练所有 ⇒ 直连数数就是事实来源；
+# 管理端点要凭据，而演练**没有**凭据 —— 数不了的不装作数过，见 roundtrip 的 WARN 分支）
+drill_mongo_count() { # <engine> <容器> <db> <集合> [查询 JSON] → 打印数字；失败返回 1
+  local eng="$1" c="$2" db="$3" coll="$4" q="${5:-{\}}" out
+  [[ -n "${eng}" && -n "${c}" ]] || return 1
+  command -v "${eng}" >/dev/null 2>&1 || return 1
+  out="$("${eng}" exec "${c}" sh -c "if command -v mongosh >/dev/null 2>&1; then mongosh --quiet '${db}' --eval 'print(db.getCollection(\"${coll}\").countDocuments(${q}))'; else mongo --quiet '${db}' --eval 'print(db.getCollection(\"${coll}\").countDocuments(${q}))'; fi" 2>/dev/null | tail -1)"
+  if [[ "${out}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "${out}"
+    return 0
+  fi
+  return 1
+}
+
+# 一次 exec 数多个集合（mongosh 冷启动 1–2 秒，5 个计数分 5 次调用会把演练拖长 ~8 秒 ——
+# 实测过：合并成一条 --eval 后演练从 37.6s 回到 ~30s）。输出每行 "<标签>=<数字>"。
+drill_mongo_counts() { # <engine> <容器> <db> [<标签> <集合> <查询 JSON>]…
+  local eng="$1" c="$2" db="$3"
+  shift 3
+  [[ -n "${eng}" && -n "${c}" ]] || return 1
+  command -v "${eng}" >/dev/null 2>&1 || return 1
+  local js="" label coll q
+  while [[ $# -ge 3 ]]; do
+    label="$1"; coll="$2"; q="$3"; shift 3
+    # label/coll/q 全部来自脚本内部（不是用户输入），字符串拼接是安全的
+    js="${js}print('${label}='+db.getCollection('${coll}').countDocuments(${q}));"
+  done
+  [[ -n "${js}" ]] || return 1
+  "${eng}" exec "${c}" sh -c "if command -v mongosh >/dev/null 2>&1; then mongosh --quiet '${db}' --eval \"${js}\"; else mongo --quiet '${db}' --eval \"${js}\"; fi" 2>/dev/null |
+    grep -E '^[a-z_]+=[0-9]+$'
+}
+
+drill_counts_get() { # <counts 输出> <标签> → 数字（读不出打印空）
+  printf '%s\n' "${1:-}" | grep -E "^${2}=" | tail -1 | cut -d= -f2
+}
+
+# 集合往返：归档 NDJSON 行数 vs 恢复后库里的文档数（纯函数，测试直接喂数字）
+drill_assert_count_roundtrip() { # <集合名> <归档条数|absent> <恢复后条数|空> [说明]
+  local coll="$1" a="$2" r="$3" desc="${4:-}"
+  local f0=${ASSERT_FAIL}
+  if [[ "${a}" == "absent" ]]; then
+    if [[ "${r}" == "0" ]]; then
+      rec_note "${coll} 的往返" "归档里没有 ${coll}.ndjson（这份归档早于该集合，或集合为空没导出），恢复库里是 0 条 —— 无从对账，**如实说明**而不是静默跳过"
+    elif [[ "${r}" =~ ^[0-9]+$ ]]; then
+      rec_warn "${coll} 的往返" "归档里没有 ${coll}.ndjson，恢复库里却有 ${r} 条（镜像里的 server 自己建的？核对镜像版本与归档是否配套）"
+    else
+      rec_note "${coll} 的往返" "归档里没有 ${coll}.ndjson；恢复库里的条数也读不出来 —— 无从对账"
+    fi
+  elif ! [[ "${a}" =~ ^[0-9]+$ ]]; then
+    rec_warn "${coll} 的往返" "归档侧条数算不出来（${a}）—— 这一项**没有验证**"
+  elif ! [[ "${r}" =~ ^[0-9]+$ ]]; then
+    rec_warn "${coll} 的往返" "一次性库里读不出 ${coll} 的条数（容器里没有 mongosh/mongo？）：归档有 ${a} 条 —— 这一项**没有验证**（不是通过）"
+  elif [[ "${a}" == "${r}" ]]; then
+    rec_pass "${coll} 的往返" "归档 ${a} 条 == 恢复库 ${r} 条${desc:+（${desc}）}"
+  else
+    rec_fail "${coll} 的往返" "归档 ${a} 条 vs 恢复库 ${r} 条${desc:+（${desc}）} ⇒ 这类数据在恢复中丢了或多出来了"
+  fi
+  _no_new_fail "${f0}"
+}
+
+# 软删除文章往返：deleted:true 的行必须带着 deletedAt 回来，且不进公开列表
+# （公开列表那半句由上面 total==public 那条断言覆盖，这里对账的是回收站本身）
+drill_assert_deleted_roundtrip() { # <归档 deleted 数> <其中带 deletedAt> <恢复库 deleted 数> <其中 deletedAt:null>
+  local a="$1" aw="$2" r="$3" rn="$4"
+  local f0=${ASSERT_FAIL}
+  if ! [[ "${a}" =~ ^[0-9]+$ ]]; then
+    rec_warn "软删除文章的往返" "归档侧算不出 deleted:true 条数 —— 这一项**没有验证**"
+  elif ! [[ "${r}" =~ ^[0-9]+$ ]]; then
+    rec_warn "软删除文章的往返" "一次性库里读不出 deleted:true 条数（没有 mongosh/mongo？）—— 这一项**没有验证**（不是通过）"
+  elif [[ "${a}" != "${r}" ]]; then
+    rec_fail "软删除文章的往返" "归档 ${a} 条 deleted:true vs 恢复库 ${r} 条 ⇒ 回收站数据在恢复中丢了/多了"
+  elif [[ "${a}" == "0" ]]; then
+    rec_note "软删除文章的往返" "归档里没有 deleted:true 的文章（0 == 0 是空集对账，证明不了 deletedAt 行为）"
+  else
+    rec_pass "软删除文章的往返" "归档 ${a} 条 == 恢复库 ${r} 条；且公开列表已排除它们（上面「列表 total == 公开数」那条断言）"
+    if [[ "${rn}" =~ ^[0-9]+$ ]]; then
+      if [[ "${aw}" == "$((r - rn))" ]]; then
+        rec_pass "软删除文章的 deletedAt 也回来了" "归档 ${aw}/${a} 条带 deletedAt == 恢复库 $((r - rn))/${r} 条"
+      else
+        rec_fail "软删除文章的 deletedAt 也回来了" "归档 ${aw}/${a} 条带 deletedAt vs 恢复库 $((r - rn))/${r} 条 ⇒ deletedAt 字段丢了/变了（回收站里看不到删除时间）"
+      fi
+    else
+      rec_warn "软删除文章的 deletedAt 也回来了" "一次性库里读不出 deletedAt:null 的条数 —— 这一项**没有验证**"
+    fi
+  fi
+  _no_new_fail "${f0}"
+}
+
+# 静态树逐文件对账：归档的 ./static/**（四个用户数据目录）vs 容器里的实际文件。
+# 这条证明"恢复时先清后写"（prune-on-restore）：少文件 = 数据丢失，
+# 多文件 = 旧站残留（merge 而不是 replace —— 上一轮真实存在过的缺口）。
+# ⚠️ 两侧都必须是**原始字节**名单（归档侧用 drill_archive_members_raw，容器侧用 find），
+#    拿 tar -tf 的默认渲染比会冤枉那 10 个双重编码 CJK 文件名（GNU 会把它们转义）。
+drill_assert_static_set() { # <归档 static 成员（每行 static/…）> <容器内文件列表（每行 static/…）>
+  local arch="$1" live="$2"
+  local f0=${ASSERT_FAIL}
+  local A L a_n l_n missing extra m_n e_n outside
+  A="$(printf '%s\n' "${arch}" | sed -E 's#^\./##' | grep -E '^static/(img|file|customPage|themes)/' | grep -v '/$' | LC_ALL=C sort -u)"
+  L="$(printf '%s\n' "${live}" | sed -E 's#^\./##' | grep -E '^static/(img|file|customPage|themes)/' | grep -v '/$' | LC_ALL=C sort -u)"
+  a_n="$(printf '%s\n' "${A}" | grep -c . || true)"
+  l_n="$(printf '%s\n' "${L}" | grep -c . || true)"
+  missing="$(comm -23 <(printf '%s\n' "${A}") <(printf '%s\n' "${L}") | grep . || true)"
+  extra="$(comm -13 <(printf '%s\n' "${A}") <(printf '%s\n' "${L}") | grep . || true)"
+  m_n="$(printf '%s\n' "${missing}" | grep -c . || true)"
+  e_n="$(printf '%s\n' "${extra}" | grep -c . || true)"
+  # 自检：归档声明了静态文件、匹配却是 0 —— 校验器空转的形状，必须炸出来
+  if ((a_n > 0 && l_n == 0)); then
+    rec_warn "静态树逐文件一致" "容器侧一个文件都没列出来（find 不可用/静态目录没恢复/枚举命令坏了？）：归档有 ${a_n} 个 —— 无法下「一致」的结论"
+    _no_new_fail "${f0}"
+    return 0
+  fi
+  # 归档里若有四个用户数据目录之外的 static 成员，如实说明（不参与对账：那些是可再生目录）
+  outside="$(printf '%s\n' "${arch}" | sed -E 's#^\./##' | grep -E '^static/' | grep -vE '^static/(img|file|customPage|themes)/' | grep -v '/$' || true)"
+  if [[ -n "${outside}" ]]; then
+    rec_note "归档里有四个用户数据目录之外的 static 成员" "$(printf '%s\n' "${outside}" | head -3 | tr '\n' ' ')（可再生目录，不参与逐文件对账）"
+  fi
+  if [[ "${a_n}" == "0" && "${l_n}" == "0" ]]; then
+    rec_note "静态树逐文件一致" "归档没有 static 成员、容器里四个目录也没有文件（空站点，无从对账）"
+  elif [[ "${m_n}" == "0" && "${e_n}" == "0" ]]; then
+    rec_pass "静态树逐文件一致" "归档 ${a_n} 个文件全部在、一个不多：恢复是先清后写（prune-on-restore 生效），没有旧文件残留"
+  else
+    rec_fail "静态树逐文件一致" "归档 ${a_n} 个 vs 容器 ${l_n} 个：缺 ${m_n}（恢复丢了）+ 多 ${e_n}（没清干净的旧文件）"
+    if [[ "${m_n}" != "0" ]]; then
+      printf '%s\n' "${missing}" | head -3 | sed 's/^/      缺：/'
+    fi
+    if [[ "${e_n}" != "0" ]]; then
+      printf '%s\n' "${extra}" | head -3 | sed 's/^/      多：/'
+      say "      （多出来的文件 = 恢复把新旧静态树 merge 了而不是 replace —— 换机器恢复时旧站文件会混进来）"
+    fi
+  fi
+  _no_new_fail "${f0}"
+}
+
+# 恢复日志（restore-journal.json）：server 恢复中每换完一张表落一次，成功后清掉。
+# 成功恢复之后它还在 ⇒ 恢复没有干净收尾（库可能是混合状态），这本身就是发现。
+drill_read_journal() { # <engine> <容器> → 打印 journal 内容（空 = 不存在）
+  local eng="$1" c="$2"
+  [[ -n "${eng}" && -n "${c}" ]] || return 0
+  command -v "${eng}" >/dev/null 2>&1 || return 0
+  # 一次 exec 查两个候选路径（每次 podman exec 约 0.5–1.5s，能合并就合并）
+  "${eng}" exec "${c}" sh -c 'for p in /var/log/vanblog-backups/restore-journal.json /app/log/vanblog-backups/restore-journal.json; do if [ -f "$p" ]; then cat "$p" 2>/dev/null; exit 0; fi; done' 2>/dev/null
+}
+
+drill_assert_journal() { # <journal 内容|空> [附注]
+  local content="$1" caveat="${2:-}"
+  local f0=${ASSERT_FAIL}
+  if [[ -z "${content}" ]]; then
+    rec_pass "恢复日志已清理（restore-journal.json 不在）" "成功恢复后 server 清掉了断点日志${caveat:+ —— ${caveat}}"
+  else
+    rec_fail "恢复日志已清理（restore-journal.json 不在）" "成功恢复后 journal 还在 ⇒ server 没有干净收尾，库可能是「一半归档一半旧数据」的混合状态。内容（前 300 字节）：${content:0:300}"
+  fi
+  _no_new_fail "${f0}"
+}
+
+# 定期复验护栏：每份保留的归档都必须在 N 天内有过一次「验证通过」的台账记录。
+# 位腐烂（bit rot）要在日程上被发现，而不是在需要恢复的那天。
+drill_reverify_guard() { # <天数>
+  local days="$1"
+  local f0=${ASSERT_FAIL}
+  case "${days}" in
+  '' | *[!0-9]*) days=0 ;;
+  esac
+  if [[ "${days}" == "0" ]]; then
+    rec_note "定期复验护栏关闭" "--reverify-days 0（默认）：不查每份归档上次复验是什么时候；开：--reverify-days N 或 VANBLOG_BACKUP_REVERIFY_DAYS=N"
+    _no_new_fail "${f0}"
+    return 0
+  fi
+  local dir
+  dir="$(full_backup_dir 2>/dev/null)"
+  if [[ ! -d "${dir}" ]]; then
+    rec_warn "每份归档都在 ${days} 天内复验过" "备份目录不存在：${dir}"
+    _no_new_fail "${f0}"
+    return 0
+  fi
+  local now cutoff f bn line at res at_epoch age n_total=0 n_stale=0 stale_list=""
+  now="$(date +%s)"
+  cutoff=$((now - days * 86400))
+  while IFS= read -r f; do
+    [[ -n "${f}" ]] || continue
+    bn="$(basename "${f}")"
+    n_total=$((n_total + 1))
+    line="$(drill_verify_log_last "${f}" 2>/dev/null || true)"
+    at=""; res=""
+    if [[ -n "${line}" ]]; then
+      at="$(json_get "${line}" at)"
+      res="$(json_get "${line}" result)"
+    fi
+    if [[ -z "${line}" || "${res}" != "pass" ]]; then
+      n_stale=$((n_stale + 1))
+      stale_list="${stale_list}${stale_list:+、}${bn}（没有「验证通过」记录）"
+      continue
+    fi
+    at_epoch="$(date -u -d "${at}" +%s 2>/dev/null || echo "")"
+    if [[ -z "${at_epoch}" ]]; then
+      n_stale=$((n_stale + 1))
+      stale_list="${stale_list}${stale_list:+、}${bn}（台账时间 ${at} 解析不了）"
+    elif ((at_epoch < cutoff)); then
+      age=$(((now - at_epoch) / 86400))
+      n_stale=$((n_stale + 1))
+      stale_list="${stale_list}${stale_list:+、}${bn}（上次验证 ${age} 天前）"
+    fi
+  done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$')
+  if ((n_total == 0)); then
+    rec_note "每份归档都在 ${days} 天内复验过" "备份目录里还没有归档，无从查起"
+  elif ((n_stale == 0)); then
+    rec_pass "全部 ${n_total} 份归档都在 ${days} 天内复验过" "台账里每份都有不过期于 ${days} 天的「通过」记录"
+  else
+    rec_fail "全部 ${n_total} 份归档都在 ${days} 天内复验过" "${n_stale} 份过期：${stale_list:0:280} ⇒ 跑 ${DRILL_SELF_NAME} backup-verify --all"
+  fi
+  _no_new_fail "${f0}"
 }
 
 # ── HTTP 探测 ──────────────────────────────────────────────────────────────
@@ -729,6 +1742,8 @@ vanblog-drill.sh —— 恢复演练 / 语义化校验 / 备份即验（vanblog.
         --dry-run            只打印会做什么（引擎/镜像/名字/端口/卷/每一步），什么都不动
         --as <名字>          上传时用这个文件名（归档被改过名时用；会明说这不是用户真实路径）
         --no-pull            镜像不在本地就失败，不尝试 pull
+        --skip-hash          预检跳过**成员内容哈希**比对（merkleRoot、双清单之外的检查照做）。
+                             跳过时 WARN 并在结论行里明说：这次 PASS 不含逐成员比对。
         --skip-preflight     跳过归档侧的静态预检（清单/成员表读不出也照样上传）。
                              用途是**演练 server 的护栏**：坏归档必须 400，而且不能把那条
                              匿名接口的单飞锁卡死（否则一个人传一个坏归档就能让整站再也恢复不了）。
@@ -744,18 +1759,40 @@ vanblog-drill.sh —— 恢复演练 / 语义化校验 / 备份即验（vanblog.
                              成员路径是不是绝对路径/带 ..（恢复会 400）、声明条数是否自洽、
                              static/themes 在不在（不在 = 这份归档早于主题备份）、
                              需要哪个解压工具、本机有没有。
+                             清单里有 integrity 块（新版 server 导出的归档）时**再往下钻一层**：
+                             逐成员 sha256 比对（报第一个坏成员的路径与期望 vs 实际）、
+                             merkleRoot 重算、./manifest.json 与 ./MANIFEST.copy.json 逐字节对照、
+                             memberCount 与实际条目数对账、整归档 sha256 对外部参照
+                             （.sha256 sidecar / server 的 backup-status.json，明说用了哪个）。
+                             旧归档没有 integrity 块：打**明确的 NOTE**「成员级校验不可用」——
+                             那个 PASS 只代表结构与语义，不代表逐成员比对过。
                              会让恢复失败的 → FAIL（非 0 退出）；只是降级的 → WARN。
                              不带参数 = 备份目录里全部 vanblog-full-* 归档。
+        --all                显式要求扫全部保留归档（可与单个目标并用，自动去重），
+                             并打印一张每归档的结果表（大小/mtime/成员哈希/结论）+ 机器可读的
+                             VERIFY-RESULT 行；每归档在台账里留一行。cron 里适合定期跑。
 
   backup-verify [backup 的参数]  备份**并立刻验证**：调 vanblog.sh 的 backup，成功后对新归档
                              跑一遍上面的语义校验，再查一次陈旧度；任一步失败 → 非 0 退出。
         --stale-days N       最新归档超过 N 天就算失败（默认 VANBLOG_BACKUP_STALE_DAYS 或 7；0=不查）
         --no-stale-check     等价于 --stale-days 0
+        --all                备份之后，把备份目录里**每一份保留的**归档都深度校验（不只最新那份），
+                             打印每归档结果表，每份在台账 vanblog-verify-log.jsonl 里留一行；
+                             任一份失败 → 非 0 退出。位腐烂不挑时间：上周还好的归档这周可能就坏了。
+        --reverify-days N    任何保留归档距上次「验证通过」超过 N 天 → 失败并点名
+                             （默认 VANBLOG_BACKUP_REVERIFY_DAYS，默认 0=关）。
+                             配 cron：让"太久没复验"自己报警，而不是等到要恢复那天才发现。
+        --no-reverify-check  等价于 --reverify-days 0
         --drill              备份+校验通过后，顺手对这份新归档跑一次 drill（需要引擎与镜像）
                              适合 cron：备份没成功、或者成功了但恢复不回来，都会非 0 退出。
 
   backup-status              不用翻日志就能回答："最近一次备份什么时候？验过没有？演练过没有？"
+                             还会读 server 的 backup-status.json 里的新字段：整归档 sha256
+                             （与盘上重算、sidecar 三方对账）、定期复验（sweep）的时间与结果、
+                             悬着的恢复日志（restore-journal.json）；文件系统 / 台账 / server
+                             三方说法不一致，本身就是 WARN。
         --stale-days N       陈旧判据（同上；默认 7 天，超了非 0 退出）
+        --reverify-days N    定期复验护栏（同 backup-verify；默认 0=关，开了会在结论里点名过期归档）
         --strict             最新归档没有"已验证"记录时也非 0 退出
 
   help | --help | -h         本页
@@ -775,8 +1812,11 @@ cron 建议：把 install-cron 写的那一行里的 `backup` 换成 `backup-ver
 环境变量（都有默认值，命令行优先）：
   VANBLOG_DRILL_ENGINE / _IMAGE / _MONGO_IMAGE / _PREFIX / _PORT_BASE / _PORT_SPAN /
   _TIMEOUT / _KEEP / _DRY_RUN / _NO_PULL / _HOME / _TMPDIR / _LOG_TAIL
+  VANBLOG_DRILL_SKIP_HASH=1  等价于 drill --skip-hash
   VANBLOG_BACKUP_STALE_DAYS  陈旧天数（默认 7）
+  VANBLOG_BACKUP_REVERIFY_DAYS  定期复验护栏天数（默认 0=关；backup-verify/backup-status 用）
   VANBLOG_VERIFY_ALLOW_EMPTY=1  "归档里一条文档都没有"从 FAIL 降级成 WARN
+  VANBLOG_FORCE_COLOR=1      管道里也保留颜色（默认：stdout 不是 tty 就自动去色，cron-safe）
   VANBLOG_BACKUP_DIR / VANBLOG_DATA_PATH / VANBLOG_BASE_PATH  沿用 vanblog.sh 的定义
 
 安全边界：
@@ -1137,13 +2177,16 @@ drill_print_plan() {
   say "  端口      ：HTTP ${DRILL_HTTP_PORT} → 容器 80；mongo ${DRILL_MONGO_PORT} → 容器 27017（都是宿主机上的空闲端口）"
   say "  卷        ：${DRILL_VOLUMES[*]:-（未分配）}（引擎管理的临时卷，不用宿主机目录：mongo 的数据文件是 root 所有，没有 sudo 删不掉）"
   say "  临时目录  ：${DRILL_TMP:-（未分配）}（放响应体与探测结果）"
-  say "  步骤      ：起 mongo → 起 vanblog（指向 mongo 容器 IP，不依赖容器名 DNS）→ 等 /api/public/health 200"
+  say "  步骤      ：成员级哈希预检（清单有 integrity 块时逐成员比对 + merkleRoot + 双清单；坏了直接拒绝演练）"
+  say "              → 起 mongo → 起 vanblog（指向 mongo 容器 IP，不依赖容器名 DNS）→ 等 /api/public/health 200"
   say "              → 确认站点**未**初始化（/api/public/meta 回 233 信封）→ POST /api/admin/init/restore 上传归档"
   say "              → 断言恢复信封（statusCode/initialized/adminUserFromArchive/counts）"
   say "              → 与归档清单对账（条数、静态文件数）→ HTTP 探测恢复出来的站点"
   say "                 （meta 不是未初始化信封 / 文章列表 total 对上 / 抽一个静态文件 200 且非空 /"
   say "                  归档里有 static/themes 时主题 CSS 必须 200，没有则明说这份归档早于主题备份）"
-  say "              → 扫容器日志里的致命错误 → 再调一次恢复接口，期望 403（已初始化）"
+  say "              → 在**一次性 mongo 里直接数**：revisions/migrations/drafts/软删除文章（含 deletedAt）的条数往返"
+  say "              → 静态树逐文件对账（归档 ./static/** vs 容器四个用户数据目录：不缺文件、没有旧残留）"
+  say "              → 扫容器日志里的致命错误 → 再调一次恢复接口，期望 403（已初始化）→ 恢复日志必须已清理"
   say "              → 拆掉全部一次性资源（trap，失败也拆）"
 }
 
@@ -1166,6 +2209,7 @@ cmd_drill() {
     --dry-run) DRILL_DRY_RUN=1 ;;
     --no-pull) DRILL_NO_PULL=1 ;;
     --skip-preflight) DRILL_SKIP_PREFLIGHT=1 ;;
+    --skip-hash) DRILL_SKIP_HASH=1 ;;
     -h | --help | help) drill_usage; return 0 ;;
     0) : ;; # vanblog.sh 的菜单/分发习惯会塞一个 0 进来
     --*) say "${red}drill：未知参数 ${arg}${plain}"; return 2 ;;
@@ -1283,6 +2327,78 @@ cmd_drill() {
     rec_fail "成员路径安全（无绝对路径 / ..）" "$(printf '%s' "${unsafe}" | tr '\n' ' ')"
   fi
 
+  # ── 2b) 流式完整性（zstd -t / xz -t / gzip -t）+ 成员级完整性预检 ──
+  # 流式完整性对**旧归档**（没有 integrity 块）是唯一的损坏预检：中段字节翻转
+  # zstd 的帧校验和当场抓住 ⇒ 拒绝演练，而不是起容器、传 69MB、等 server 400。
+  # --skip-preflight 时跳过（那条路的用途就是演练 server 自己的护栏，必须真的走到上传）。
+  if [[ "${DRILL_SKIP_PREFLIGHT}" != "1" ]] && declare -f archive_integrity_test >/dev/null 2>&1; then
+    archive_integrity_test "${fmt}" "${archive}"
+    case $? in
+    0) rec_pass "流式完整性（帧级）" "${fmt} -t 通过：压缩流没有截断/翻转" ;;
+    127) rec_warn "流式完整性（帧级）" "本机没有 ${fmt} 解压工具，没法做流式测试（成员级比对同样做不了）" ;;
+    *)
+      rec_fail "流式完整性（帧级）" "${fmt} 流解不通：归档损坏或被截断 —— 拒绝演练（上传过去要么 400、要么半恢复）"
+      assert_summary "演练结果" "流式完整性：FAIL"
+      drill_verify_log_append drill "${archive}" fail '"stage":"stream-integrity"'
+      return 1
+      ;;
+    esac
+  fi
+
+  # 成员级完整性预检（integrity 块）：发现损坏同样**拒绝演练** ——
+  # 坏归档上传过去：要么 server 400（白起一次容器），要么更糟 —— 半恢复。
+  # dry-run 不解包比对（当作 skip-hash），但 merkleRoot 照查（那是清单自身的一致性，不用解包）。
+  local integ_skip="" dry_hash=0 integ_rc=0
+  [[ "${DRILL_SKIP_HASH}" == "1" ]] && integ_skip="--skip-hash"
+  if [[ "${DRILL_DRY_RUN}" == "1" && -z "${integ_skip}" ]]; then
+    integ_skip="--skip-hash"
+    dry_hash=1
+  fi
+  drill_archive_integrity "${archive}" "${manifest}" ${integ_skip} || integ_rc=1
+  if [[ ${dry_hash} -eq 1 && "${INTEG_MODE}" == "skipped" ]]; then
+    INTEG_DETAIL="dry-run：不解包比对成员内容（merkleRoot 照查了；真跑会逐成员比对）"
+  fi
+  local hash_note=""
+  case "${INTEG_MODE}" in
+  full)
+    if [[ ${integ_rc} -eq 0 ]]; then
+      rec_pass "预检：成员级哈希校验" "${INTEG_DETAIL}"
+      hash_note="成员哈希：已校验（${INTEG_HASHED} 个成员一致）"
+    else
+      rec_fail "预检：成员级哈希校验" "${INTEG_DETAIL}"
+      hash_note="成员哈希：FAIL（不符 ${INTEG_MISMATCH}/缺失 ${INTEG_MISSING}/多余 ${INTEG_UNEXPECTED}）"
+    fi
+    ;;
+  skipped)
+    rec_warn "预检：成员级哈希校验" "${INTEG_DETAIL}"
+    hash_note="成员哈希：跳过（--skip-hash）"
+    [[ ${dry_hash} -eq 1 ]] && hash_note="成员哈希：dry-run 未解包（merkle 已查）"
+    ;;
+  partial)
+    rec_warn "预检：成员级哈希校验" "${INTEG_DETAIL}（跳过，不是通过）"
+    hash_note="成员哈希：部分校验（${INTEG_DETAIL}）"
+    ;;
+  failed)
+    rec_fail "预检：成员级哈希校验" "${INTEG_DETAIL}"
+    hash_note="成员哈希：归档解不开"
+    ;;
+  *)
+    rec_note "预检：成员级哈希校验" "${INTEG_DETAIL}"
+    hash_note="成员哈希：未校验（归档没有 integrity 块 —— 这个 PASS 不含成员级比对）"
+    ;;
+  esac
+  if [[ ${integ_rc} -ne 0 ]]; then
+    say "\n${red}> 成员级校验有 FAIL 发现：拒绝演练 —— 不起容器、不上传（坏归档要么 400、要么半恢复，两条路都不该走）。${plain}"
+    assert_summary "演练结果" "${hash_note}"
+    drill_verify_log_append drill "${archive}" fail "\"stage\":\"integrity\",\"mode\":\"${INTEG_MODE}\",\"badMember\":\"$(drill_jsonl_safe "${INTEG_BAD_PATH}")\""
+    return 1
+  fi
+
+  # 原始字节成员名列表（--quoting-style=literal）：静态树对账要用它，
+  # tar -tf 的默认**渲染**会把控制字符转义成 \302\233 文本（真站有 10 个这样的图名）
+  local arch_members_raw=""
+  arch_members_raw="$(drill_archive_members_raw "${archive}" 2>/dev/null || true)"
+
   local theme_members probe_static
   theme_members="$(drill_archive_theme_members "${members}")"
   probe_static="$(drill_archive_probe_static "${members}")"
@@ -1391,12 +2507,15 @@ cmd_drill() {
     step "dry-run：只打印计划，不动任何东西"
     drill_print_plan "${eng}" "${img}" "${DRILL_MONGO_IMAGE}" "${archive}（${pretty}）" "${suffix}" "${net_name}"
     say "\n  将要断言的项：归档文件名白名单 / 压缩格式 / 清单 kind 与 version / 成员路径安全 /"
+    say "                成员级哈希预检（integrity 块：merkleRoot 照查，内容比对真跑才做）/"
     say "                引擎可用 / 名字不撞 / 端口空闲 / 容器起来并就绪（/api/public/health 200）/"
     say "                恢复前站点未初始化（233）/ 恢复接口 HTTP 201 且 statusCode=200 /"
     say "                data.initialized 与 adminUserFromArchive / counts.articles>0 /"
     say "                信封 counts 与归档清单一致 / meta 是真实站点 / 文章列表 total 对上 /"
     say "                抽一个静态文件 200 且非空 / 主题（有 static/themes 就必须 200，没有就说明）/"
-    say "                容器日志无致命错误 / 第二次恢复被 403 挡住"
+    say "                revisions・migrations・drafts・软删除文章在一次性 mongo 里的条数往返（含 deletedAt）/"
+    say "                静态树逐文件一致（不缺文件、没有旧残留 = prune-on-restore）/"
+    say "                容器日志无致命错误 / 第二次恢复被 403 挡住 / 恢复日志已清理"
     say "\n> dry-run 完成：没有创建容器、没有发起请求（上面的静态预检是只读的）"
     echo "RESULT: DRY-RUN pass=${ASSERT_PASS} warn=${ASSERT_WARN} fail=${ASSERT_FAIL} note=${ASSERT_NOTE}"
     rm -rf "${DRILL_TMP}" 2>/dev/null || true
@@ -1596,10 +2715,18 @@ cmd_drill() {
   local c_total="${DRILL_ENV_TOTAL}" r_docs="${DRILL_ENV_DOCS}" r_colls="${DRILL_ENV_COLLS}"
   if [[ ${env_rc} -ne 0 ]]; then
     drill_dump_app_logs "${eng}"
+    # 恢复日志（restore journal）还在就打出来：它记着恢复走到了哪一步、换了哪几张表
+    local jcontent_fail
+    jcontent_fail="$(drill_read_journal "${eng}" "${DRILL_APP_NAME}")"
+    if [[ -n "${jcontent_fail}" ]]; then
+      say "\n${red}── 恢复日志（恢复走到了哪一步、哪些集合已经换掉）──${plain}"
+      printf '%s\n' "${jcontent_fail}" | head -c 2000 | sed 's/^/    /'
+      say ""
+    fi
     step "演练结论"
     assert_table
-    assert_summary "演练结果"
-    drill_verify_log_append drill "${archive}" fail "\"engine\":\"${eng}\",\"image\":\"${img}\",\"stage\":\"envelope\",\"httpCode\":\"${HTTP_CODE}\""
+    assert_summary "演练结果" "${hash_note}"
+    drill_verify_log_append drill "${archive}" fail "\"engine\":\"${eng}\",\"image\":\"${img}\",\"stage\":\"envelope\",\"httpCode\":\"${HTTP_CODE}\",\"hashMode\":\"${INTEG_MODE}\""
     return 1
   fi
 
@@ -1653,6 +2780,63 @@ cmd_drill() {
   drill_assert_themes "${theme_members}" "$(cat "${active_body}" 2>/dev/null)" \
     "${css_code}" "${css_bytes}" "${theme_url}" "${file_code}" "${file_bytes}"
 
+  # ── 12b) 数据往返："恢复接口回了 200" ≠ "每一类数据都回来了" ──
+  # 直接在演练自己的 mongo 容器里数：管理端点要凭据而演练没有；这个库是演练
+  # 刚恢复出来的、归演练所有，数数就是事实来源。数不了的要明说（WARN），不装作数过。
+  # ⚠️ 5 个计数合并成**一次** mongosh 调用（冷启动 1–2 秒/次，分开调会白白拖长演练）
+  step "数据往返（在一次性 mongo 里直接数 —— 版本历史/迁移账本/草稿/回收站）"
+  local arch_revisions="absent" arch_migrations="absent" arch_drafts="absent" coll
+  for coll in revisions migrations drafts; do
+    if printf '%s\n' "${members}" | grep -qE "(^|/)db/vanBlog/${coll}\.ndjson$"; then
+      local nd
+      nd="$(drill_archive_member "${archive}" "./db/vanBlog/${coll}.ndjson")"
+      case "${coll}" in
+      revisions) arch_revisions="$(drill_ndjson_count "${nd}")" ;;
+      migrations) arch_migrations="$(drill_ndjson_count "${nd}")" ;;
+      drafts) arch_drafts="$(drill_ndjson_count "${nd}")" ;;
+      esac
+    fi
+  done
+  local counts_out
+  counts_out="$(drill_mongo_counts "${eng}" "${DRILL_MONGO_NAME}" vanBlog \
+    revisions revisions '{}' \
+    migrations migrations '{}' \
+    drafts drafts '{}' \
+    deleted articles '{deleted:true}' \
+    deleted_noat articles '{deleted:true,deletedAt:null}' || true)"
+  drill_assert_count_roundtrip revisions "${arch_revisions}" "$(drill_counts_get "${counts_out}" revisions)" "文章版本历史：每篇改过几次都在这里面"
+  drill_assert_count_roundtrip migrations "${arch_migrations}" "$(drill_counts_get "${counts_out}" migrations)" "迁移账本"
+  drill_assert_count_roundtrip drafts "${arch_drafts}" "$(drill_counts_get "${counts_out}" drafts)" "草稿"
+  # 软删除文章（回收站）：deleted:true 的行必须带着 deletedAt 回来，且不进公开列表
+  local del_stats arch_del arch_del_at
+  del_stats="$(drill_deleted_stats "${arts_ndjson}")"
+  arch_del="${del_stats#deleted=}"
+  arch_del="${arch_del%% *}"
+  arch_del_at="${del_stats##*withAt=}"
+  drill_assert_deleted_roundtrip "${arch_del}" "${arch_del_at}" \
+    "$(drill_counts_get "${counts_out}" deleted)" "$(drill_counts_get "${counts_out}" deleted_noat)"
+
+  # ── 12c) 静态树逐文件对账：证明"恢复先清后写"（prune-on-restore）──
+  # 少文件 = 恢复丢数据；多文件 = 旧站残留（merge 而不是 replace，上一轮真实存在过的缺口）。
+  # ⚠️ 归档侧名单优先用**原始字节**列表（--quoting-style=literal）：tar -tf 的默认渲染
+  #    会把控制字符转义成 \302\233 文本，拿渲染名比会冤枉真站那 10 个双重编码 CJK 图名。
+  step "静态树逐文件对账（归档 ./static/** vs 容器里的 img/file/customPage/themes）"
+  local arch_static="" live_static="" static_caveat=0
+  arch_static="$(printf '%s\n' "${arch_members_raw}" | grep -E '^\./static/' | grep -v '/$' || true)"
+  if [[ -z "${arch_static}" ]] && printf '%s\n' "${members}" | grep -qE '(^|/)static/'; then
+    arch_static="${members}"
+    static_caveat=1
+    rec_warn "静态对账用的是 tar -tf 渲染名" "拿不到原始字节成员列表：含控制字符的成员名可能被渲染转义而造成**假不符**（比对结果仅供参考）"
+  fi
+  # ⚠️ 归档侧为空也照样比：归档没有静态成员而容器里有文件 = prune 没清干净，正是这条要抓的
+  # find 可用性检查与枚举合并成**一次** exec（rootless podman 每次 exec 约 0.5–1.5s）
+  live_static="$("${eng}" exec "${DRILL_APP_NAME}" sh -c 'command -v find >/dev/null 2>&1 || { echo "__NOFIND__"; exit 0; }; for d in img file customPage themes; do if [ -d "/app/static/$d" ]; then find "/app/static/$d" -type f; fi; done' 2>/dev/null | sed -E 's#^/app/##')"
+  if [[ "${live_static}" == *"__NOFIND__"* ]]; then
+    rec_warn "静态树逐文件一致" "容器里没有 find 命令，列不出恢复后的静态树 —— 这一项**没有验证**（不是通过）"
+  else
+    drill_assert_static_set "${arch_static}" "${live_static}"
+  fi
+
   # ── 13) 容器日志里的致命错误（BSON 主版本那个 400 就是从这儿看出来的）────
   local logs="${DRILL_TMP}/app.log"
   "${eng}" logs --tail 2000 "${DRILL_APP_NAME}" >"${logs}" 2>&1 || true
@@ -1664,6 +2848,11 @@ cmd_drill() {
     -F "file=@${archive};filename=${upload_name};type=application/octet-stream" || true
   drill_assert_second_restore "${HTTP_CODE}" "$(cat "${again_body}" 2>/dev/null)"
 
+  # ── 14b) 恢复日志：成功恢复之后必须已被清掉（还留着 = server 没有干净收尾）──
+  local journal_content
+  journal_content="$(drill_read_journal "${eng}" "${DRILL_APP_NAME}")"
+  drill_assert_journal "${journal_content}" "注意：若这个镜像的 server 还没有「恢复日志」功能，「不在」是默认状态，此条证明不了清理逻辑本身；镜像重建后重跑演练才算数"
+
   # ── 15) 结论 + 留痕 ───────────────────────────────────────────────────
   step "演练结论"
   say "  归档      ：$(basename "${archive}")（${pretty}，清单 ${MANIFEST_SOURCE}，备份时间 $(json_get "${manifest}" createdAt)）"
@@ -1671,11 +2860,12 @@ cmd_drill() {
   say "  恢复      ：server ${d_secs:-?}s，端到端 ${elapsed}s，写入 ${r_docs:-?} 条 vanBlog 文档 / ${r_colls:-?} 个集合"
   say "  counts    ：articles=${c_articles:-?} statics=${c_statics:-?} users=${c_users:-?} visits=${c_visits:-?} viewers=${c_viewers:-?} settings=${c_settings:-?} total=${c_total:-?}"
   say "  站点      ：${base}（initialized=${d_init:-?}，adminUserFromArchive=${d_admin:-?}）"
+  say "  完整性    ：${hash_note}"
   assert_table
   local rc=0
-  assert_summary "演练结果" || rc=1
+  assert_summary "演练结果" "${hash_note}" || rc=1
   drill_verify_log_append drill "${archive}" "$([[ ${rc} -eq 0 ]] && echo pass || echo fail)" \
-    "\"engine\":\"${eng}\",\"image\":\"${img}\",\"seconds\":\"${d_secs:-}\",\"articles\":\"${c_articles:-0}\",\"initialized\":\"${d_init:-}\""
+    "\"engine\":\"${eng}\",\"image\":\"${img}\",\"seconds\":\"${d_secs:-}\",\"articles\":\"${c_articles:-0}\",\"initialized\":\"${d_init:-}\",\"hashMode\":\"${INTEG_MODE}\",\"membersHashed\":${INTEG_HASHED:-0}"
   return ${rc}
 }
 
@@ -1697,6 +2887,7 @@ verify_semantic_one() { # <archive> → 0 可恢复，1 会让恢复失败/降�
   local base
   base="$(basename "${file}")"
   local rc=0
+  INTEG_MODE="" # 早退路径（清单都读不出）时表格里要显示"没跑"，不能沿用上一份归档的值
 
   if declare -f verify_one_archive >/dev/null 2>&1; then
     verify_one_archive "${file}" || rc=1
@@ -1894,6 +3085,13 @@ verify_semantic_one() { # <archive> → 0 可恢复，1 会让恢复失败/降�
   idx_n="$(printf '%s\n' "${members}" | grep -cE '(^|/)db/[^/]+/[^/]+\.indexes\.json$' || true)"
   echo -e "    语义 NOTE 索引文件 ${idx_n:-0} 个（缺了恢复会重建索引，只是慢一点/顺序不同）"
 
+  # 成员级完整性（integrity 块：逐成员哈希 / merkleRoot / 双清单 / memberCount）。
+  # 旧归档没有 integrity 块 ⇒ 上面会打一条**明确的 NOTE**（成员级校验不可用），
+  # 谁都不能把这个 PASS 读成"逐成员比对过"。
+  drill_archive_integrity "${file}" "${manifest}" || rc=1
+  # 整归档 sha256 的外部参照（.sha256 sidecar / server 的 backup-status.json），明说用了哪个
+  drill_archive_sha_refs "${file}" || rc=1
+
   if [[ ${rc} -eq 0 ]]; then
     echo -e "    ${green}语义结论：这份归档可以被当前版本恢复${plain}（要**证明**它，跑一次 ${DRILL_SELF_NAME} drill ${base}）"
   else
@@ -1902,40 +3100,84 @@ verify_semantic_one() { # <archive> → 0 可恢复，1 会让恢复失败/降�
   return ${rc}
 }
 
+# integrity 模式 → 表格里的一格（短、ASCII，机器可解析）
+drill_integ_mode_label() {
+  case "${1}" in
+  full) printf 'checked' ;;
+  unavailable) printf 'no-integrity' ;;
+  skipped) printf 'skipped' ;;
+  partial) printf 'partial' ;;
+  failed) printf 'unreadable' ;;
+  *) printf 'not-run' ;;
+  esac
+}
+
+# 每归档一行的结果表（--all / 多目标时打印；列宽固定，cron 日志里也对得齐）
+drill_print_verify_table() { # <行文件：name\tsize\tmtime\thash\tresult>
+  local rows="$1" n s m h r
+  [[ -s "${rows}" ]] || return 0
+  echo
+  echo "> 每归档结果："
+  printf '  %-46s %8s  %-16s  %-12s  %s\n' "归档" "大小" "mtime" "成员哈希" "结果"
+  while IFS=$'\t' read -r n s m h r; do
+    [[ -n "${n}" ]] || continue
+    printf '  %-46s %8s  %-16s  %-12s  %s\n' "${n:0:46}" "${s}" "${m}" "${h}" "${r}"
+  done <"${rows}"
+}
+
 cmd_verify() {
   local -a targets=()
-  local arg
+  local all_mode=0 arg
   for arg in "$@"; do
     case "${arg}" in
     0 | --help | -h | help) continue ;;
+    --all) all_mode=1 ;;
     --*) say "${yellow}verify：忽略未知开关 ${arg}${plain}" ;;
     *) [[ -n "${arg}" ]] && targets+=("${arg}") ;;
     esac
   done
   local dir
   dir="$(full_backup_dir 2>/dev/null)"
-  if [[ ${#targets[@]} -eq 0 ]]; then
+  if [[ ${#targets[@]} -eq 0 || ${all_mode} -eq 1 ]]; then
     if [[ ! -d "${dir}" ]]; then
       say "${red}备份目录不存在：${dir}${plain}（还没备份过，或数据目录不在本机）"
       return 1
     fi
-    local f
-    while IFS= read -r f; do
-      [[ -n "${f}" ]] || continue
-      case "${f}" in
-      *.manifest.json | *.sha256) continue ;;
-      esac
-      targets+=("${f}")
-    done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
     if [[ ${#targets[@]} -eq 0 ]]; then
-      say "${yellow}${dir} 里没有可校验的 vanblog-full-* 归档${plain}（先跑 backup）"
-      return 0
+      local f
+      while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        case "${f}" in
+        *.manifest.json | *.sha256) continue ;;
+        esac
+        targets+=("${f}")
+      done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
+      if [[ ${#targets[@]} -eq 0 ]]; then
+        say "${yellow}${dir} 里没有可校验的 vanblog-full-* 归档${plain}（先跑 backup）"
+        return 0
+      fi
+      echo -e "> 深度校验备份目录里的全部归档（${#targets[@]} 个）：${dir}"
+    else
+      echo -e "> --all：显式目标之外再扫备份目录里的全部归档（去重后 ${#targets[@]}+ 个）"
+      local f2 dup b t0
+      while IFS= read -r f2; do
+        [[ -n "${f2}" ]] || continue
+        case "${f2}" in
+        *.manifest.json | *.sha256) continue ;;
+        esac
+        dup=0
+        for t0 in ${targets[@]+"${targets[@]}"}; do
+          [[ "${t0}" == "${f2}" || "$(basename "${t0}")" == "$(basename "${f2}")" ]] && { dup=1; break; }
+        done
+        ((dup == 0)) && targets+=("${f2}")
+      done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
     fi
-    echo -e "> 深度校验备份目录里的全部归档（${#targets[@]} 个）：${dir}"
   else
     echo -e "> 深度校验 ${#targets[@]} 个归档（结构校验沿用 vanblog.sh verify，再加一层语义）"
   fi
   local ok=0 bad=0 t resolved
+  local rows=""
+  rows="$(mktemp "${TMPDIR:-/tmp}/vanblog-verify-rows.XXXXXX" 2>/dev/null)" || rows=""
   for t in ${targets[@]+"${targets[@]}"}; do
     if [[ -f "${t}" ]]; then
       resolved="${t}"
@@ -1944,22 +3186,34 @@ cmd_verify() {
     else
       echo -e "  ${red}FAIL${plain} ${t}：本地找不到（既不是路径，也不在 ${dir}/ 里）"
       bad=$((bad + 1))
+      [[ -n "${rows}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "${t}" "?" "?" "?" "FAIL(not-found)" >>"${rows}"
       continue
     fi
     if verify_semantic_one "${resolved}"; then
       ok=$((ok + 1))
-      drill_verify_log_append verify "${resolved}" pass ""
+      drill_verify_log_append verify "${resolved}" pass "\"hashMode\":\"$(drill_integ_mode_label "${INTEG_MODE}")\",\"membersHashed\":${INTEG_HASHED:-0},\"seconds\":\"${INTEG_SECONDS:-}\""
+      [[ -n "${rows}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "${resolved}")" "$(human_size "${resolved}" 2>/dev/null)" "$(date -r "${resolved}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$(drill_integ_mode_label "${INTEG_MODE}")" "PASS" >>"${rows}"
     else
       bad=$((bad + 1))
-      drill_verify_log_append verify "${resolved}" fail ""
+      drill_verify_log_append verify "${resolved}" fail "\"hashMode\":\"$(drill_integ_mode_label "${INTEG_MODE}")\",\"membersHashed\":${INTEG_HASHED:-0},\"badMember\":\"$(drill_jsonl_safe "${INTEG_BAD_PATH}")\""
+      [[ -n "${rows}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "${resolved}")" "$(human_size "${resolved}" 2>/dev/null)" "$(date -r "${resolved}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$(drill_integ_mode_label "${INTEG_MODE}")" "FAIL" >>"${rows}"
     fi
   done
+  # 多于一份归档（或显式 --all）时给一张每归档的表：cron 日志里一眼看到哪份坏了
+  if [[ -n "${rows}" ]] && ((all_mode == 1 || ok + bad > 1)); then
+    drill_print_verify_table "${rows}"
+    rm -f "${rows}" 2>/dev/null || true
+  elif [[ -n "${rows}" ]]; then
+    rm -f "${rows}" 2>/dev/null || true
+  fi
   echo
   if [[ ${bad} -gt 0 ]]; then
     echo -e "> 深度校验完成：${green}OK ${ok}${plain}，${red}FAIL ${bad}${plain} —— FAIL 的归档别当恢复点"
+    echo "VERIFY-RESULT total=$((ok + bad)) ok=${ok} fail=${bad}"
     return 1
   fi
   echo -e "> 深度校验完成：${green}OK ${ok}${plain}，FAIL 0"
+  echo "VERIFY-RESULT total=$((ok + bad)) ok=${ok} fail=0"
   return 0
 }
 
@@ -1997,6 +3251,15 @@ drill_verify_log_append() { # <kind> <archive> <pass|fail> <额外 JSON 片段>
   return 0
 }
 
+# 台账是**按行**的 JSONL：塞进去的字符串必须先去掉控制字符（成员名可以合法包含
+# 换行/制表符 —— newline-name fixture 实测过）并转义引号与反斜杠，否则一行变两行，
+# 台账读回来就是坏的。
+drill_jsonl_safe() { # <字符串> → 可安全嵌进 JSONL 的字符串内容（不含外层引号）
+  local s="${1//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "${s}" | tr -d '\000-\037'
+}
+
 # 台账里某个归档最后一条记录（没有就空）
 drill_verify_log_last() { # <archive 名或路径> [kind]
   local name logf kind="${2:-}"
@@ -2028,12 +3291,14 @@ drill_age_days() { # <file> → 整数天（算不出打印 -1）
 }
 
 cmd_backup_status() {
-  local stale_days="${DRILL_STALE_DAYS}" strict=0 arg
+  local stale_days="${DRILL_STALE_DAYS}" strict=0 reverify_days="${DRILL_REVERIFY_DAYS}" arg
   while [[ $# -gt 0 ]]; do
     arg="$1"; shift
     case "${arg}" in
     --stale-days) stale_days="${1:-${stale_days}}"; shift ;;
     --no-stale-check) stale_days=0 ;;
+    --reverify-days) reverify_days="${1:-${reverify_days}}"; shift ;;
+    --no-reverify-check) reverify_days=0 ;;
     --strict) strict=1 ;;
     0 | --*) : ;;
     esac
@@ -2155,8 +3420,80 @@ cmd_backup_status() {
     else
       rec_pass "server 侧没有连续失败的备份" "consecutiveFailures=${fcons:-0}，lastFailureStage=${fstage:-null}"
     fi
+    # ── 新增字段：整归档 sha256 / 定期复验（sweep）/ 恢复日志快照 ──
+    local fsha fsweep
+    fsha="$(json_get "${fj}" lastSuccessSha256)"
+    if [[ -n "${fsha}" && "${fsha}" != "null" ]]; then
+      if [[ "${fname}" == "${name}" ]]; then
+        local side="" actual=""
+        [[ -f "${newest}.sha256" ]] && side="$(awk 'NR==1{print $1}' "${newest}.sha256" 2>/dev/null)"
+        if [[ -n "${side}" && "${side}" != "${fsha}" ]]; then
+          rec_warn "server 记录与 .sha256 sidecar 是同一个整归档 sha256" "status 文件 ${fsha:0:12}… vs sidecar ${side:0:12}… ⇒ 两个参照不一致（有一个配错了对象？）"
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "${newest}" 2>/dev/null | cut -d' ' -f1)"
+          if [[ "${actual}" == "${fsha}" ]]; then
+            rec_pass "整归档 sha256：盘上重算与 server 记录一致" "${actual:0:12}…${side:+（与 .sha256 sidecar 也一致）}"
+          else
+            rec_warn "整归档 sha256：盘上重算与 server 记录一致" "盘上 ${actual:0:12}… vs server ${fsha:0:12}… ⇒ 盘上这份不是 server 当时写的那份（截断/替换/拷贝损坏）"
+          fi
+        else
+          rec_note "server 记着整归档 sha256" "${fsha:0:12}…（本机没有 sha256sum，不重算）"
+        fi
+      else
+        rec_note "server 记着整归档 sha256" "${fsha:0:12}…（对应 ${fname}；盘上最新是 ${name}，不重算）"
+      fi
+    fi
+    fsweep="$(json_get "${fj}" lastSweepAt)"
+    if [[ -n "${fsweep}" && "${fsweep}" != "null" ]]; then
+      local sn sf sm si smax
+      sn="$(json_get "${fj}" lastSweepArchives)"
+      sf="$(json_get "${fj}" lastSweepFailures)"
+      sm="$(json_get "${fj}" lastSweepMs)"
+      si="$(json_get "${fj}" sweepIntervalHours)"
+      smax="$(json_get "${fj}" sweepMaxArchives)"
+      if [[ "${sf}" =~ ^[0-9]+$ ]] && ((sf > 0)); then
+        rec_fail "server 定期复验（sweep）没有发现坏归档" "${fsweep}：复验 ${sn:-?} 份、失败 ${sf} 份（${sm:-?}ms；节奏 ${si:-?}h/次、每次 ≤${smax:-?} 份）⇒ 已经出现位腐烂；明细：$(json_raw "${fj}" lastSweepResults | tr -d '\n' | head -c 280)"
+      else
+        rec_pass "server 定期复验（sweep）没有发现坏归档" "${fsweep}：${sn:-?} 份、0 失败（${sm:-?}ms；节奏 ${si:-?}h/次、每次 ≤${smax:-?} 份）"
+      fi
+    else
+      rec_note "server 状态文件里没有 lastSweepAt" "这个 server 版本还没做定期复验；脚本侧的等价物是 backup-verify --all + --reverify-days"
+    fi
+    local fj_journal
+    fj_journal="$(json_get "${fj}" restoreJournal)"
+    if [[ -n "${fj_journal}" && "${fj_journal}" != "null" && ! -f "${dir}/restore-journal.json" ]]; then
+      rec_warn "状态文件与盘上的恢复日志一致" "backup-status.json 的 restoreJournal 非 null，但 ${dir}/restore-journal.json 不存在 ⇒ 状态文件里的快照过期了（现场以文件本身为准）"
+    fi
   else
     rec_note "备份目录里没有 server 写的 backup-status.json" "server 版本较旧，或它把状态写在别处；此时只有文件系统 + 本脚本台账这两个说法（都可用，且都不需要 token）"
+  fi
+
+  # 悬着的恢复日志：server 恢复中每换完一张表落一次盘，成功后清掉。
+  # 还在 ⇒ 上一次恢复没有干净收尾（或此刻正在恢复），库可能是混合状态 —— 这本身就是发现。
+  local jf="${dir}/restore-journal.json"
+  if [[ -f "${jf}" ]]; then
+    local jj jphase jarch jerr jdone
+    jj="$(cat "${jf}" 2>/dev/null)"
+    jphase="$(json_get "${jj}" phase)"
+    jarch="$(json_get "${jj}" archiveName)"
+    jerr="$(json_get "${jj}" error)"
+    jdone="$(json_len "${jj}" done)"
+    rec_warn "没有悬着的恢复日志（restore journal）" "${jf} 存在：phase=${jphase:-?}、归档 ${jarch:-?}、已换 ${jdone:-?} 个集合${jerr:+、错误：${jerr:0:100}} ⇒ 上次恢复没有正常结束（成功时 server 会清掉这个文件），库可能是「一半归档一半旧数据」"
+  else
+    rec_note "没有悬着的恢复日志（restore journal）" "restore-journal.json 不存在（server 版本支持恢复日志时这条才有含义；老版本本来就没有这个文件）"
+  fi
+
+  # 台账 vs 文件系统：台账里最后一条「验证通过」对应的必须是盘上最新的归档，
+  # 不然就是"新归档出现了但从没被验证过"（三方说法不一致，本身就是 WARN）
+  local logf_ledger last_pass_line last_pass_name
+  logf_ledger="$(drill_verify_log_file)"
+  if [[ -f "${logf_ledger}" ]]; then
+    last_pass_line="$(grep '"result":"pass"' "${logf_ledger}" 2>/dev/null | tail -1)"
+    last_pass_name="$(json_get "${last_pass_line}" archive)"
+    if [[ -n "${last_pass_name}" && "${last_pass_name}" != "${name}" ]]; then
+      rec_warn "台账最新的「验证通过」就是盘上最新归档" "台账最后一条 pass 记的是 ${last_pass_name}，而盘上最新是 ${name} ⇒ 最新这份还没被验证过（跑一次 verify ${name} 或 backup-verify）"
+    fi
   fi
 
   # 可选：与 server 自己的备份状态对账（GET /api/admin/backup/full/status，AdminGuard）。
@@ -2226,6 +3563,8 @@ cmd_backup_status() {
   else
     say "  验证台账：还没有（${logf}）—— backup-verify / verify / drill 会往里追加"
   fi
+  # 定期复验护栏（默认关：--reverify-days N / VANBLOG_BACKUP_REVERIFY_DAYS=N 打开）
+  drill_reverify_guard "${reverify_days}"
   local rc=0
   assert_summary "备份状态" || rc=1
   return ${rc}
@@ -2233,12 +3572,15 @@ cmd_backup_status() {
 
 cmd_backup_verify() {
   local -a bargs=()
-  local stale_days="${DRILL_STALE_DAYS}" run_drill=0 arg
+  local stale_days="${DRILL_STALE_DAYS}" run_drill=0 verify_all=0 reverify_days="${DRILL_REVERIFY_DAYS}" arg
   while [[ $# -gt 0 ]]; do
     arg="$1"; shift
     case "${arg}" in
     --stale-days) stale_days="${1:-${stale_days}}"; shift ;;
     --no-stale-check) stale_days=0 ;;
+    --reverify-days) reverify_days="${1:-${reverify_days}}"; shift ;;
+    --no-reverify-check) reverify_days=0 ;;
+    --all) verify_all=1 ;;
     --drill) run_drill=1 ;;
     --format | --keep) bargs+=("${arg}" "${1:-}"); shift ;;
     --offline | --consistent | --api | --full | --verbose) bargs+=("${arg}") ;;
@@ -2248,7 +3590,9 @@ cmd_backup_verify() {
     esac
   done
   assert_reset
-  step "备份并立刻验证（backup + 语义校验 + 陈旧度）"
+  local step_extra=""
+  [[ ${verify_all} -eq 1 ]] && step_extra=" + 全量复验"
+  step "备份并立刻验证（backup + 语义校验 + 陈旧度${step_extra}）"
   if ! declare -f backup >/dev/null 2>&1; then
     say "${red}找不到 vanblog.sh 的 backup 函数（${VANBLOG_MAIN_SCRIPT} 没加载上）${plain}"
     return 2
@@ -2312,15 +3656,48 @@ cmd_backup_verify() {
   fi
   rec_pass "备份产出了新归档" "$(basename "${new}")（$(human_size "${new}" 2>/dev/null)）"
 
-  step "立刻验证这份新归档（结构 + 语义）"
+  step "立刻验证这份新归档（结构 + 语义 + 成员级哈希）"
   local vrc=0
   verify_semantic_one "${new}" || vrc=1
   if [[ ${vrc} -eq 0 ]]; then
-    rec_pass "新归档通过深度校验" "$(basename "${new}")"
-    drill_verify_log_append backup-verify "${new}" pass '"stage":"verify"'
+    rec_pass "新归档通过深度校验" "$(basename "${new}")（成员哈希：$(drill_integ_mode_label "${INTEG_MODE}")）"
+    drill_verify_log_append backup-verify "${new}" pass "\"stage\":\"verify\",\"hashMode\":\"$(drill_integ_mode_label "${INTEG_MODE}")\",\"membersHashed\":${INTEG_HASHED:-0}"
   else
-    rec_fail "新归档通过深度校验" "$(basename "${new}") 结构或语义校验不过 ⇒ 这份备份**恢复不回来**，别把它当恢复点（旧的归档还在，先别清理）"
-    drill_verify_log_append backup-verify "${new}" fail '"stage":"verify"'
+    rec_fail "新归档通过深度校验" "$(basename "${new}") 结构或语义校验不过 ⇒ 这份备份**恢复不回来**，别把它当恢复点（旧的归档还在，先别清理）${INTEG_BAD_PATH:+；第一个坏成员 ${INTEG_BAD_PATH}}"
+    drill_verify_log_append backup-verify "${new}" fail "\"stage\":\"verify\",\"hashMode\":\"$(drill_integ_mode_label "${INTEG_MODE}")\",\"badMember\":\"$(drill_jsonl_safe "${INTEG_BAD_PATH}")\""
+  fi
+  local new_hash_label
+  new_hash_label="$(drill_integ_mode_label "${INTEG_MODE}")"
+
+  # ── 全量复验（--all）：每一份**保留的**归档都验，不只最新那份 ──
+  # 位腐烂不会挑时间：上周还好的归档这周可能就坏了。server 侧有自己的定期巡检，
+  # 这里是运维侧的等价物（cron 里跑，台账每份留一行，任一失败 → 非 0 退出）。
+  if [[ ${verify_all} -eq 1 ]]; then
+    step "全量复验：备份目录里全部保留的归档（--all）"
+    local rows_all="" f3 n_all=0
+    rows_all="$(mktemp "${TMPDIR:-/tmp}/vanblog-verifyall.XXXXXX" 2>/dev/null)" || rows_all=""
+    [[ -n "${rows_all}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "${new}")" "$(human_size "${new}" 2>/dev/null)" "$(date -r "${new}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "${new_hash_label}" "$([[ ${vrc} -eq 0 ]] && echo PASS || echo FAIL)" >>"${rows_all}"
+    while IFS= read -r f3; do
+      [[ -n "${f3}" ]] || continue
+      case "${f3}" in
+      *.manifest.json | *.sha256) continue ;;
+      esac
+      [[ "${f3}" == "${new}" ]] && continue # 新归档上面刚验过
+      n_all=$((n_all + 1))
+      if verify_semantic_one "${f3}"; then
+        rec_pass "全量复验 $(basename "${f3}")" "成员哈希：$(drill_integ_mode_label "${INTEG_MODE}")"
+        drill_verify_log_append verify "${f3}" pass "\"all\":1,\"hashMode\":\"$(drill_integ_mode_label "${INTEG_MODE}")\",\"membersHashed\":${INTEG_HASHED:-0}"
+        [[ -n "${rows_all}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "${f3}")" "$(human_size "${f3}" 2>/dev/null)" "$(date -r "${f3}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$(drill_integ_mode_label "${INTEG_MODE}")" "PASS" >>"${rows_all}"
+      else
+        rec_fail "全量复验 $(basename "${f3}")" "这份归档别当恢复点${INTEG_BAD_PATH:+（第一个坏成员 ${INTEG_BAD_PATH}）}"
+        drill_verify_log_append verify "${f3}" fail "\"all\":1,\"hashMode\":\"$(drill_integ_mode_label "${INTEG_MODE}")\",\"badMember\":\"$(drill_jsonl_safe "${INTEG_BAD_PATH}")\""
+        [[ -n "${rows_all}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "${f3}")" "$(human_size "${f3}" 2>/dev/null)" "$(date -r "${f3}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "$(drill_integ_mode_label "${INTEG_MODE}")" "FAIL" >>"${rows_all}"
+      fi
+    done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
+    if ((n_all == 0)); then
+      rec_note "全量复验" "备份目录里除了这次的新归档没有别的保留归档"
+    fi
+    [[ -n "${rows_all}" ]] && { drill_print_verify_table "${rows_all}"; rm -f "${rows_all}" 2>/dev/null || true; }
   fi
 
   # 陈旧度：新备份刚做完，这一条几乎总是过的；它防的是"这次也没做成、最新还是很旧"
@@ -2335,6 +3712,16 @@ cmd_backup_verify() {
     else
       rec_pass "最新归档不老于 ${stale_days} 天" "${age} 天"
     fi
+  fi
+
+  # 定期复验护栏：任何一份保留归档太久没被「验证通过」过就算失败。
+  # 默认关（0）：不改变既有 cron 的退出码语义；开 = --reverify-days N / VANBLOG_BACKUP_REVERIFY_DAYS。
+  case "${reverify_days}" in
+  '' | *[!0-9]*) reverify_days=0 ;;
+  esac
+  if [[ "${reverify_days}" != "0" ]]; then
+    step "定期复验护栏（--reverify-days ${reverify_days}）"
+    drill_reverify_guard "${reverify_days}"
   fi
 
   if [[ ${run_drill} -eq 1 ]]; then

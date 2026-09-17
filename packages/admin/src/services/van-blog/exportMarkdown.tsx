@@ -6,6 +6,7 @@ const {
   fallbackFileName,
   loadingText,
   describeExportOutcome,
+  classifyExportFailure,
 } = require('./exportFormats');
 
 /**
@@ -68,13 +69,17 @@ function fileNameFrom(headerValue: string | null | undefined, fallback: string):
   return ascii?.[1] || fallback;
 }
 
-async function readErrorBody(blob: Blob): Promise<string> {
+/** 读出错误体的**完整 JSON**（需要 code / imageRefs，不只是 message） */
+async function readErrorJson(blob: Blob): Promise<any> {
   try {
     const text = await blob.text();
     const parsed = JSON.parse(text);
-    return parsed?.message || text.slice(0, 200);
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+    return { message: text.slice(0, 200) };
   } catch (err) {
-    return '';
+    return {};
   }
 }
 
@@ -97,8 +102,29 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
     }
     // 出错时服务端返回的是 JSON，但 responseType 是 blob，得先嗅探一下
     if (blob.type && blob.type.includes('application/json')) {
-      const detail = await readErrorBody(blob);
-      message.error(detail || '导出失败！');
+      // ⚠️ 这里不能一律弹红色报错：「这篇文章没有图片所以没有 .mdz」不是失败，
+      // 是一条提示，而且用户真正想要的东西一键就能拿到（改导 .md）。
+      const parsed = await readErrorJson(blob);
+      const failure = classifyExportFailure(parsed, format);
+      if (failure.kind === 'no-images') {
+        Modal.confirm({
+          title: '这篇内容没有图片，所以没有 .mdz',
+          width: 520,
+          okText: '改为导出 Markdown (.md)',
+          cancelText: '取消',
+          content: (
+            <div>
+              <p>{failure.detail}</p>
+              <p style={{ color: '#888' }}>
+                .mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。
+              </p>
+            </div>
+          ),
+          onOk: () => downloadMarkdownExport({ ...opts, format: 'md' }),
+        });
+        return false;
+      }
+      message.error(failure.message || '导出失败！');
       return false;
     }
 

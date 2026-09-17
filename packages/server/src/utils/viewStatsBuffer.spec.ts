@@ -206,7 +206,11 @@ describe('ViewStatsAggregator：内存上限（写库一直失败时也不能无
   };
 
   it('默认不限（与改动前一致）：不设 maxRetainedKeys 时 30000 条路径全都留着', () => {
-    const a = new ViewStatsAggregator();
+    // ⚠️ 第四轮审计 B3 之后，构造器还会读 VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY
+    // （默认 5000，封"每天新建多少个路径键"，那是**磁盘**侧的上限）。
+    // 本用例只钉 maxRetainedKeys（内存侧）的语义，所以显式关掉每日上限；
+    // 每日上限自己的行为在 audit-hardening-round4-fixes-viewstats.spec.ts 里钉。
+    const a = new ViewStatsAggregator({ maxNewPathsPerDay: 0 });
     manyPaths(a, 30000);
     expect(a.retainedKeys()).toBe(30000);
     expect(a.countRetainedKeys()).toBe(30000);

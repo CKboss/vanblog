@@ -3,6 +3,7 @@ import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { PipelineProvider } from '../pipeline/pipeline.provider';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import cluster from 'node:cluster';
 import { config } from 'src/config';
@@ -10,22 +11,41 @@ import {
   BackupListEntry,
   FullBackupResult,
   RestoreResult,
+  backupIncludeCaddyEnabled,
+  cleanupStaleExportTemps,
   createFullBackup,
   inspectFullBackup,
   listFullBackups,
   restoreFullBackup,
 } from 'src/utils/fullBackup';
-import { FullBackupManifest } from 'src/utils/backupCodec';
+import { BackupSourceInfo, FullBackupManifest } from 'src/utils/backupCodec';
 import { BackupVerifyResult, verifyFullBackup } from 'src/utils/backupVerify';
 import {
   BackupStatusFile,
+  SweepArchiveResult,
   readBackupStatus,
   recordBackupFailure,
   recordBackupSuccess,
+  recordSweep,
   resolveStaleWarnHours,
+  resolveSweepIntervalHours,
+  resolveSweepMax,
   staleBackupWarning,
+  touchBackupStatus,
 } from 'src/utils/backupStatus';
+import {
+  RESTORE_JOURNAL_FILE,
+  describeRestoreJournal,
+  readRestoreJournal,
+} from 'src/utils/restoreJournal';
+import { envBool } from 'src/utils/envBool';
+import { version as codeVersion } from 'src/utils/loadConfig';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
+
+/** 导出后是否做**成员级**哈希校验（P1）。默认开：这就是 owner 要的"备份文件本身防损坏"。 */
+export const BACKUP_VERIFY_DEEP_ENV = 'VANBLOG_BACKUP_VERIFY_DEEP';
+/** 定期巡检是否也做成员级校验（P4）。默认关：巡检要的是"便宜到能天天跑"。 */
+export const BACKUP_SWEEP_DEEP_ENV = 'VANBLOG_BACKUP_SWEEP_DEEP';
 
 /** `export()` 的返回：在 `FullBackupResult` 之外带写后校验的结果（P2）。 */
 export interface ExportOutcome extends FullBackupResult {
@@ -33,11 +53,16 @@ export interface ExportOutcome extends FullBackupResult {
   verification: BackupVerifyResult;
 }
 
-/** `status()` 的返回：状态文件 + 陈旧判定。 */
+/** `status()` 的返回：状态文件 + 陈旧判定 + 巡检配置 + 恢复断点。 */
 export interface BackupStatusView extends BackupStatusFile {
   staleWarnHours: number;
   stale: boolean;
   staleMessage: string | null;
+  /** 生效的巡检节奏（0 = 关闭） */
+  sweepIntervalHours: number;
+  sweepMaxArchives: number;
+  /** 上一次恢复没跑完时的人话说明；正常为 null */
+  restoreJournalMessage: string | null;
 }
 
 /** `restore()` 的返回：在 `RestoreResult` 之外多一个给前台用的布尔值（见 doRestore）。 */
@@ -147,6 +172,10 @@ export class FullBackupProvider implements OnApplicationBootstrap {
         walineDbName: config.walineDB,
         format: format || 'auto',
         outDir: this.backupDir(),
+        // P1/P3：把"这份归档是谁导出的"写进清单，恢复时才能发现 waline 库名之类的静默错配
+        source: this.buildSourceInfo(),
+        // P6（默认关）：只有显式打开 VANBLOG_BACKUP_INCLUDE_CADDY 才把 TLS 材料打进归档
+        caddyDataPath: backupIncludeCaddyEnabled() ? config.caddyDataPath : undefined,
         logger: {
           log: (message) => this.logger.log(message),
           warn: (message) => this.logger.warn(message),
@@ -160,10 +189,13 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       throw err;
     }
     // 写后校验：解压器全量读通 + 归档内 manifest 过闸门 + 计数一致且非零
+    // + P1 的防损坏那一组（merkleRoot / memberCount / 清单副本 / 整归档 sha256 / 压缩器校验位）
+    // + 成员级哈希（deep，默认开：实测 69MB 归档只多 0.4s，见报告）
     // （检查项与理由见 utils/backupVerify.ts 文件头）
+    const deep = envBool(BACKUP_VERIFY_DEEP_ENV, true);
     let verification: BackupVerifyResult;
     try {
-      verification = await verifyFullBackup(result.path);
+      verification = await verifyFullBackup(result.path, { deep });
     } catch (err) {
       verification = null as any;
       const message = `校验器异常：${(err as Error)?.message || err}`;
@@ -189,18 +221,37 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       name: result.name,
       bytes: result.bytes,
       verifyMs: verification.ms,
+      sha256: result.archiveSha256,
+      members: result.memberCount,
     });
     this.logger.log(
       `整站备份完成并通过校验：${result.name}（${result.sizeText}，${result.format}，` +
-        `打包+导出 ${(result.ms / 1000).toFixed(1)}s，校验 ${(verification.ms / 1000).toFixed(1)}s，` +
-        `${verification.members} 个归档成员）`,
+        `打包+导出 ${(result.ms / 1000).toFixed(1)}s（其中成员哈希 ${(result.hashMs / 1000).toFixed(2)}s），` +
+        `校验 ${(verification.ms / 1000).toFixed(1)}s${deep ? '（含成员级哈希）' : ''}，` +
+        `${verification.members} 个归档成员，sha256 ${String(result.archiveSha256).slice(0, 12)}…）`,
     );
     return { ...result, verification };
   }
 
+  /**
+   * 清单里的 `source` 块（P1/P3）。
+   * `walineDB` 是最值钱的一项：它来自机器本地的 `config.yaml`，**不在**数据库里，
+   * 所以恢复时如果两边不一致，waline 的表会被写进一个本实例不读的库 —— 零报错的数据"消失"。
+   */
+  private buildSourceInfo(): BackupSourceInfo {
+    return {
+      codeVersion: String(codeVersion || 'dev'),
+      walineDB: String(config.walineDB || ''),
+      demo: config.demo === true || String(config.demo) === 'true',
+      hostname: safeHostname(),
+      staticPath: path.resolve(config.staticPath || ''),
+      codeRunnerPath: path.resolve(config.codeRunnerPath || ''),
+    };
+  }
+
   /** 状态文件写失败绝不能把备份流程带崩（backupStatus 内部已经吞了一层，这里再兜一层）。 */
   private recordFailureSafely(
-    stage: 'export' | 'verify',
+    stage: 'export' | 'verify' | 'sweep',
     message: string,
     name: string | null,
   ): void {
@@ -224,29 +275,207 @@ export class FullBackupProvider implements OnApplicationBootstrap {
   }
 
   /**
-   * 启动时检查一次备份新鲜度（只由主实例做，免得 N 个 worker 各 WARN 一遍）。
-   * 阈值 `VANBLOG_BACKUP_STALE_WARN_HOURS`（默认 **48**，0 = 关闭 = 旧行为）。
-   * ⚠️ 这是一个**默认开启的新 WARN**（只写日志，不改任何行为）：没有按时备份的实例
-   * 每次启动都会看到一行「备份陈旧告警」，这正是本功能的目的（备份坏了要吵出来）。
+   * 启动时（只由主实例做，免得 N 个 worker 各干一遍）：
+   *  1. 检查备份新鲜度（`VANBLOG_BACKUP_STALE_WARN_HOURS`，默认 48，0=关）；
+   *  2. **P5**：看有没有上次没跑完的恢复（`restore-journal.json`），有就点名归档与进度打 WARN，
+   *     并把状态文件重写一遍，让后台/`vanblog.sh backup-status` 不翻日志也能看见；
+   *  3. **P2**：清掉上次崩溃留下的导出临时文件（`.vanblog-export-*`，且必须够旧）；
+   *  4. **P4**：排上定期复验（`VANBLOG_BACKUP_SWEEP_HOURS`，默认 24，0=关）。
+   * ⚠️ 1/2/3 都只写日志与状态文件，不改任何数据；全部 setTimeout 出去，不阻塞 listen。
    */
   onApplicationBootstrap(): void {
     if (!isPrimaryInstance(cluster)) {
       return;
     }
     // 不阻塞启动：状态文件在慢盘上也要能读失败不惊动 listen
-    setTimeout(() => this.warnIfStale(), 5000);
+    setTimeout(() => {
+      this.warnIfStale();
+      this.warnIfInterruptedRestore();
+      this.cleanupExportTemps();
+    }, 5000).unref?.();
+    this.scheduleSweep();
   }
 
-  /** 后台专用：备份健康状态（成功/失败时间、连续失败数、陈旧判定）。 */
+  /** P5：上一次恢复没正常结束就吵出来（点名归档 + 换了几张表），并把快照落进状态文件。 */
+  private warnIfInterruptedRestore(): void {
+    try {
+      const journal = readRestoreJournal(this.backupDir());
+      if (!journal) {
+        return;
+      }
+      this.logger.warn(`恢复断点告警：${describeRestoreJournal(journal)}`);
+      // readBackupStatus 会现取 journal，但**文件里**那份快照要重写一次才更新
+      touchBackupStatus(this.backupDir());
+    } catch (err) {
+      this.logger.warn(`恢复断点检查失败：${(err as Error)?.message || err}`);
+    }
+  }
+
+  /** P2：清掉上次崩溃留下的导出临时文件（只碰 `.vanblog-export-*`，且只删够旧的）。 */
+  private cleanupExportTemps(): void {
+    try {
+      const removed = cleanupStaleExportTemps(this.backupDir());
+      if (removed.length) {
+        this.logger.warn(
+          `清理了 ${removed.length} 个上次崩溃留下的导出临时文件：${removed.slice(0, 5).join(', ')}` +
+            `（目录 ${this.backupDir()}）`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`清理导出临时文件失败：${(err as Error)?.message || err}`);
+    }
+  }
+
+  /**
+   * P4：定期复验（bit-rot 必须在"需要备份的那天"之前被发现）。
+   *
+   * 节奏 `VANBLOG_BACKUP_SWEEP_HOURS`（默认 **24**，0=关）；每次最多查
+   * `VANBLOG_BACKUP_SWEEP_MAX` 份（默认 **3**，最新的优先）⇒ 成本可预测：
+   * 实测 69MB 真归档 cheap 路径 ≈ 0.9s，3 份 ≈ 3s，一天一次完全无感。
+   * `VANBLOG_BACKUP_SWEEP_DEEP=on` 才做成员级哈希（≈ 1.4s/份）。
+   *
+   * ⚠️ **只检测、不修复、不删任何东西**：判定"哪份归档该扔"是人的决定，
+   * 程序自动删掉一份"看起来坏了"的归档，等于把最后的恢复点也弄没了。
+   * ⚠️ 定时器一律 `unref()`：巡检绝不能把进程吊着不让退出。
+   */
+  private scheduleSweep(): void {
+    const hours = resolveSweepIntervalHours();
+    const max = resolveSweepMax();
+    if (hours <= 0 || max <= 0) {
+      return;
+    }
+    const intervalMs = hours * 3600 * 1000;
+    // 从没巡检过（或上次已经超期）就在启动 30s 后先跑一次：
+    // 容器可能几天才重启一次，"等满一个间隔"等于永远不跑
+    let dueIn = intervalMs;
+    try {
+      const last = readBackupStatus(this.backupDir()).lastSweepAt;
+      const lastMs = last ? new Date(last).getTime() : 0;
+      dueIn = Number.isFinite(lastMs) && lastMs > 0 ? lastMs + intervalMs - Date.now() : 30_000;
+    } catch {
+      dueIn = 30_000;
+    }
+    dueIn = Math.min(Math.max(dueIn, 30_000), intervalMs);
+    const first = setTimeout(() => {
+      void this.runSweep('startup');
+    }, dueIn);
+    first.unref?.();
+    const timer = setInterval(() => {
+      void this.runSweep('interval');
+    }, intervalMs);
+    timer.unref?.();
+    this.logger.log(
+      `备份定期复验已排上：每 ${hours}h 一次，每次最多 ${max} 份（最新优先），首次约 ${Math.round(
+        dueIn / 1000,
+      )}s 后（VANBLOG_BACKUP_SWEEP_HOURS=0 可关闭）`,
+    );
+  }
+
+  /**
+   * 跑一次巡检。**串在 serialize() 队列里**：与导出/恢复互斥，
+   * 免得恢复正把归档解包到一半时巡检去读同一个目录。
+   */
+  async runSweep(reason: string): Promise<SweepArchiveResult[]> {
+    return this.serialize(() => this.doSweep(reason));
+  }
+
+  private async doSweep(reason: string): Promise<SweepArchiveResult[]> {
+    const hours = resolveSweepIntervalHours();
+    const max = resolveSweepMax();
+    if (hours <= 0 || max <= 0) {
+      return [];
+    }
+    const deep = envBool(BACKUP_SWEEP_DEEP_ENV, false);
+    const started = Date.now();
+    let list: BackupListEntry[] = [];
+    try {
+      list = listFullBackups(this.backupDir()).slice(0, max); // list() 已按 createdAt 倒序
+    } catch (err) {
+      this.logger.warn(`巡检读不出备份列表：${(err as Error)?.message || err}`);
+      return [];
+    }
+    const results: SweepArchiveResult[] = [];
+    for (const item of list) {
+      const one = await this.verifyOne(item, deep);
+      results.push(one);
+      if (!one.ok) {
+        // WARN 必须点名归档：不点名的话"有一份坏了"这句话没法行动
+        this.logger.warn(
+          `备份定期复验发现问题（${reason}）：${item.name}（${item.sizeText}）—— ${one.issues.join('；')}` +
+            `。不会自动删除或修复任何归档；请核对后决定是重做一次备份还是换恢复点`,
+        );
+      }
+    }
+    const ms = Date.now() - started;
+    const failures = results.filter((item) => !item.ok).length;
+    const message = results.length
+      ? `${results.length} 份归档复验完成，${failures} 份有问题`
+      : '备份目录里没有可复验的归档';
+    recordSweep(this.backupDir(), { ms, results, message });
+    if (failures) {
+      this.recordFailureSafely(
+        'sweep',
+        results
+          .filter((item) => !item.ok)
+          .map((item) => `${item.name}: ${item.issues.join('；')}`)
+          .join(' | '),
+        results.find((item) => !item.ok)?.name || null,
+      );
+    }
+    this.logger.log(
+      `备份定期复验完成（${reason}）：${results.length} 份，${failures} 份有问题，耗时 ${(ms / 1000).toFixed(1)}s` +
+        `${deep ? '（含成员级哈希）' : ''}`,
+    );
+    return results;
+  }
+
+  private async verifyOne(item: BackupListEntry, deep: boolean): Promise<SweepArchiveResult> {
+    try {
+      const result = await verifyFullBackup(item.path, { deep });
+      return {
+        name: item.name,
+        ok: result.ok,
+        ms: result.ms,
+        bytes: item.bytes,
+        membersChecked: result.integrity?.membersChecked ?? null,
+        issues: result.issues.slice(0, 3).map((issue) => `[${issue.check}] ${issue.message}`.slice(0, 300)),
+      };
+    } catch (err) {
+      return {
+        name: item.name,
+        ok: false,
+        ms: 0,
+        bytes: item.bytes,
+        membersChecked: null,
+        issues: [`校验器异常：${(err as Error)?.message || err}`.slice(0, 300)],
+      };
+    }
+  }
+
+  /**
+   * 后台按需复验一份归档（`POST /api/admin/backup/full/verify`）。
+   * 与巡检同一个校验器，只是这里默认做**成员级**深度校验（用户主动点的一次，值得查到底）。
+   */
+  async verifyArchive(name: string, deep = true): Promise<BackupVerifyResult> {
+    const archivePath = this.resolveArchive(name);
+    return verifyFullBackup(archivePath, { deep });
+  }
+
+  /** 后台专用：备份健康状态（成功/失败时间、连续失败数、陈旧判定、巡检与恢复断点）。 */
   status(): BackupStatusView {
     const file = readBackupStatus(this.backupDir());
     const staleWarnHours = resolveStaleWarnHours();
     const staleMessage = staleBackupWarning(file, new Date(), staleWarnHours);
+    const journal = file.restoreJournal;
     return {
       ...file,
       staleWarnHours,
       stale: Boolean(staleMessage),
       staleMessage,
+      sweepIntervalHours: resolveSweepIntervalHours(),
+      sweepMaxArchives: resolveSweepMax(),
+      // 恢复断点：给后台/脚本一句现成的人话，不必自己拼 journal 字段
+      restoreJournalMessage: journal ? describeRestoreJournal(journal) : null,
     };
   }
 
@@ -325,6 +554,16 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       staticPath: config.staticPath,
       archivePath,
       withStatic,
+      // P3：把"本实例是谁"交给恢复流程，它才能发现 waline 库名 / demo 的静默错配
+      target: {
+        walineDB: String(config.walineDB || ''),
+        demo: config.demo === true || String(config.demo) === 'true',
+        codeVersion: String(codeVersion || 'dev'),
+      },
+      // P5：恢复断点日志（崩溃后启动时会点名归档与进度打 WARN）
+      journalPath: path.join(this.backupDir(), RESTORE_JOURNAL_FILE),
+      // P6：只有归档里真的带 ./caddy 段时才会用到；开关关闭时导出端根本不会写那一段
+      caddyDataPath: backupIncludeCaddyEnabled() ? config.caddyDataPath : undefined,
       logger: {
         log: (message) => this.logger.log(message),
         warn: (message) => this.logger.warn(message),
@@ -335,7 +574,41 @@ export class FullBackupProvider implements OnApplicationBootstrap {
         .map(([db, item]) => `${db} ${item.collections} 表/${item.documents} 条`)
         .join('，')}，耗时 ${(result.ms / 1000).toFixed(1)}s`,
     );
+    // P3：修剪与"归档里没有的表"都必须**在日志里也留一行** —— notes 是给发起恢复那个人的，
+    // 而 cron/脚本发起的恢复没人看响应体。
+    // ⚠️ 全部按"可能没有"处理：单测里 restoreFullBackup 常被桩成只返回老字段的对象
+    const pruned = result.pruned || [];
+    const absent = result.absentCollections || [];
+    const notes = result.notes || [];
+    const prunedFiles = pruned.reduce((sum, item) => sum + (item.removedFiles || 0), 0);
+    if (prunedFiles) {
+      this.logger.log(
+        `静态目录已按归档修剪：删掉 ${prunedFiles} 个归档里没有的文件（${pruned
+          .map((item) => `${item.folder}/ ${item.removedFiles} 个`)
+          .join('，')}）`,
+      );
+    }
+    if (absent.length) {
+      this.logger.warn(
+        `恢复后仍有 ${absent.length} 张归档里没有的表：${absent
+          .map((item) => `${item.db}.${item.collection}(${item.documents < 0 ? '?' : item.documents}${item.dropped ? ',已删' : ''})`)
+          .join(', ')}`,
+      );
+    }
+    for (const note of notes) {
+      if (String(note).startsWith('WARN')) {
+        this.logger.warn(String(note));
+      }
+    }
     await this.refreshPipelineScripts();
     return { ...result, needsRestartForPipelineDeps: await this.hasAnyPipeline() };
+  }
+}
+
+function safeHostname(): string {
+  try {
+    return os.hostname();
+  } catch {
+    return 'unknown';
   }
 }

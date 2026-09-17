@@ -285,7 +285,14 @@ export class PublicController {
         this.settingProvider.getLayoutSetting(),
       ]);
     const metaDoc = (meta as any)?._doc || meta;
-    const { data: menus } = menuRes;
+    // ⚠️ `getMenuSetting()` 在库里没有 {type:'menu'} 这条设置文档时返回 **null**
+    // （setting.provider.ts:134-140），直接解构会抛 ⇒ 全站最热的公开读变成 500、
+    // 前台整个死掉、日志里还看不出原因。触发场景真实存在：恢复一份"有 users 但没有
+    // settings 集合"的归档（手工做的或部分归档）之后，站点是"已初始化"的，
+    // 于是每一个 /api/public/meta 都 500。脚本那路的真机 drill 撞到了这一条。
+    // 同一批 Promise.all 里 LayoutSetting 走的是函数调用（encodeLayoutSetting），
+    // 它自己对 null 有处理；只有这一处是裸解构。
+    const { data: menus } = menuRes ?? {};
     const LayoutRes = this.settingProvider.encodeLayoutSetting(LayoutSetting);
     const siteInfo = {
       ...(metaDoc?.siteInfo || {}),

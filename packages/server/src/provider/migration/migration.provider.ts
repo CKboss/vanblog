@@ -18,7 +18,19 @@ import { version } from 'src/utils/loadConfig';
  * ⚠️ outcome === 'error' 时必须 WARN（任务要求：绝不静默吞掉迁移失败）。
  */
 
-export type MigrationKind = 'wash' | 'index' | 'backfill' | 'recompute' | 'sync' | 'prune';
+// 'install'：安装事件记录（`install:initialised`，见 provider/init/init.provider.ts 的
+// recordInstallation）。它不是数据修复，但台账是**唯一**"每 key 一行、有界、后台可读
+// （GET /api/admin/migration/list）、error 必 WARN"的持久记录面 —— 匿名初始化窗口被抢占时，
+// 这一行是站长事后唯一能拿到的归因证据（谁、什么时候、从哪个 IP 初始化的本站）。
+// schema 里 kind 本来就是普通 string（无 enum 约束），加值是向后兼容的。
+export type MigrationKind =
+  | 'wash'
+  | 'index'
+  | 'backfill'
+  | 'recompute'
+  | 'sync'
+  | 'prune'
+  | 'install';
 export type MigrationOutcome = 'ok' | 'skipped' | 'error';
 
 /** detail 落库前的截断长度：台账是给人看的，不该存下整个清洗结果集 */

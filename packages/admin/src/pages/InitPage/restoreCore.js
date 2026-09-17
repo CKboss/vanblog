@@ -30,7 +30,9 @@ const INIT_RESTORE_ACCEPT = '.zst,.xz,.gz,.tgz,.tar';
  *
  * @param {number} httpStatus
  * @param {string} responseText
- * @returns {{ok: true, data: object} | {ok: false, message: string}}
+ * @returns {{ok: true, data: object} | {ok: false, message: string, setupKeyRequired?: boolean}}
+ *   失败结果**只在**服务端 body 带 `setupKeyRequired:true` 时才附加同名键
+ *   （初始化保护开启时的 400，见 ./setupKeyCore.js 的契约说明）。
  */
 function parseRestoreResponse(httpStatus, responseText) {
   let body = null;
@@ -69,7 +71,15 @@ function parseRestoreResponse(httpStatus, responseText) {
         ? `恢复被拒绝（statusCode=${body.statusCode}）`
         : `恢复请求失败（HTTP ${httpStatus}）`;
   }
-  return { ok: false, message };
+  const failure = { ok: false, message };
+  // 服务端开了初始化保护（VANBLOG_INIT_REQUIRE_SETUP_KEY=true）时，400 的 body 里带
+  // setupKeyRequired:true —— 组件据此显示「初始化密钥」输入框并原样展示 message。
+  // ⚠️ **条件性**附加这个键：没有该标志的响应必须得到与旧版逐字节相同的结果对象
+  // （既有用例钉住了失败结果的形状，多一个 undefined 值的键都算漂移）。
+  if (body && body.setupKeyRequired === true) {
+    failure.setupKeyRequired = true;
+  }
+  return failure;
 }
 
 /** 给确认弹窗展示文件大小（不引新依赖，手写足够） */

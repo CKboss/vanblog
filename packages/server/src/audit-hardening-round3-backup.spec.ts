@@ -37,6 +37,7 @@ const USER_DATA_DIRS: Record<string, string> = {
 const DERIVED_DIRS: Record<string, string> = {
   rss: 'rss.provider 在启动与每次改动后重新生成 feed.xml/json',
   sitemap: 'sitemap.provider 同样会重新生成 sitemap.xml',
+  search: '可由服务端随时重新生成，与 rss/sitemap 同类',
   tmp: '整站备份/恢复的暂存目录（里面可能正躺着另一个整站归档）',
   'upload-tmp': 'multer 上传的临时目录（main.ts 对匿名请求 403）',
   export: '旧的导出归档目录，main.ts 已对匿名请求 403，内容按需重新导出',
@@ -44,12 +45,23 @@ const DERIVED_DIRS: Record<string, string> = {
 
 const root = __dirname; // src/
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
+/**
+ * 剥掉注释再匹配（否则注释里提到的目录名会被当成"代码会建的目录"）。
+ *
+ * ⚠️ **必须先剥整行注释、再剥块注释**，顺序反了会静默失效：main.ts 里有一行注释写着
+ * "`/static/` 下除 `/static/img/` 里的图片由 caddy 直服外，附件/主题/自定义页面都反代到 Node"，
+ * 原文里那个通配写法含有一个斜杠紧跟星号的序列（`img/` + 星号 + `.{webp,…}`），
+ * 会被"先剥块注释"的正则当成块注释的开头，一路吃到 130 行之后真正的结束标记为止 ——
+ * 于是 main.ts 里**所有** `checkOrCreate(path.join(globalConfig.staticPath, 'x'))`
+ * 都被剥掉了，本用例只抽到 1 个目录（阈值是 >=6），守卫当场变红。
+ * 这不是假设：2026-09-17 就真发生了（main.ts 改写之后），所以顺序写死在这里。
+ */
 const code = (src: string) =>
   src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
     .split('\n')
     .filter((l) => !/^\s*\/\//.test(l))
-    .join('\n');
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** `String.prototype.matchAll` 是 ES2020 的，而本项目 target 是 es2017 ⇒ 用 exec 循环 */
 function allMatches(re: RegExp, text: string, group = 1): string[] {

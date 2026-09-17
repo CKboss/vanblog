@@ -44,9 +44,10 @@ describe('GET /api/public/health', () => {
     expect(out.data.status).toBe('ok');
     expect(out.data.mongo).toBe('up');
     expect(out.data.mongoStateText).toBe('connected');
-    // ⚠️ 匿名调用者**不该**看到版本与容量：version 形如 v2026.9.1@0ec01a5，
-    // 等于告诉扫描器该去对哪个 commit 的已知漏洞；uptime/内存能推断重启时机与负载。
-    expect(out.data.version).toBeUndefined();
+    // ⚠️ 匿名调用者**可以**看到 version（站长决定：版本号不算秘密 —— 它已经渲染在每个
+    // 前台页面的页脚上，也从 /api/public/meta 下发，只在健康端点藏它属于安全表演）。
+    // 但 uptime 与内存**不该**公开：那两项不在页脚上，能用来推断重启时机与负载。
+    expect(typeof out.data.version).toBe('string');
     expect(out.data.uptimeSeconds).toBeUndefined();
     expect(out.data.memoryRssMb).toBeUndefined();
     expect(out.data.heapUsedMb).toBeUndefined();
@@ -136,7 +137,7 @@ describe('健康端点的详细字段门控', () => {
     expect(detailsAllowed(reqFor(), {} as any)).toBe(false);
   });
 
-  it('端点整体行为：令牌请求拿到 version 与 details:true，匿名拿不到', async () => {
+  it('端点整体行为：version 公开，uptime/内存只对带令牌或开了 VANBLOG_HEALTH_DETAILS 的请求可见', async () => {
     const conn: any = {
       readyState: 1,
       db: { admin: () => ({ ping: async () => ({ ok: 1 }) }) },
@@ -145,7 +146,8 @@ describe('健康端点的详细字段门控', () => {
     const res: any = { statusCode: 200, status() { return this; } };
 
     const anon: any = await c.health(reqFor(), res);
-    expect(anon.data.version).toBeUndefined();
+    expect(typeof anon.data.version).toBe('string'); // 版本公开
+    expect(anon.data.uptimeSeconds).toBeUndefined(); // 容量信息仍受门控
     expect(anon.data.details).toBeUndefined();
 
     const c2 = new HealthController(conn);
@@ -155,8 +157,8 @@ describe('健康端点的详细字段门控', () => {
     );
     if (process.env.VAN_BLOG_INTERNAL_TOKEN) {
       expect(withToken.data.details).toBe(true);
-      expect(typeof withToken.data.version).toBe('string');
       expect(typeof withToken.data.uptimeSeconds).toBe('number');
+      expect(typeof withToken.data.memoryRssMb).toBe('number');
     } else {
       // 没配令牌时，即使带头也拿不到详细字段（不能因为"带了个头"就放行）
       expect(withToken.data.details).toBeUndefined();

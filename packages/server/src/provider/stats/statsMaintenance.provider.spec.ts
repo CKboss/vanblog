@@ -8,7 +8,8 @@ import { StatsMaintenanceProvider } from './statsMaintenance.provider';
  *  - **幂等**：已经建好唯一索引时整轮只花一次 listIndexes，一行数据都不动；
  *  - **顺序**：先去重再建索引（反过来 createIndex 必然 E11000 失败）；
  *  - **不在请求路径上**：启动钩子 fire-and-forget，且只跑一次；
- *  - **保留期默认关**：`VANBLOG_VISIT_RETENTION_DAYS` 不给值时一行都不删。
+ *  - **保留期默认 365 天**（第四轮审计 B3 的默认行为变更：以前默认 0 = 永不删除；
+ *    显式 `VANBLOG_VISIT_RETENTION_DAYS=0` 仍是逃生口，且只删按天的行、不碰站点级累计）。
  */
 
 type Doc = Record<string, any>;
@@ -219,7 +220,8 @@ describe('StatsMaintenanceProvider：去重 + 唯一索引', () => {
       const res = await fake.provider.runStartupMaintenance('测试');
       expect(res.dedup.skipped).toBe(true);
       expect(res.dedup.groups).toBe(0);
-      expect(fake.visits.state.docs).toHaveLength(5);
+      // 一行都不删 ⇒ 6 行全在（fixture 里最老的是 2024-07-07，距 NOW 约 800 天，在 10 年窗口内）
+      expect(fake.visits.state.docs).toHaveLength(rows().length);
       expect(fake.opLog).not.toContain('visits.aggregate');
       expect(fake.opLog).not.toContain('visits.deleteMany');
       expect(res.indexes.every((i) => i.created === false)).toBe(true);
@@ -343,8 +345,40 @@ describe('StatsMaintenanceProvider：保留期清理', () => {
     { _id: 'f', pathname: '/', viewer: 6, visited: 6 },
   ];
 
-  it('默认不设环境变量：一行都不删', async () => {
+  it('默认（不设环境变量）：保留期 3650 天（站长定的 10 年），窗口内的行一行都不删', async () => {
     const fake = createFake({ visitDocs: rows(), viewerDocs: rows(), env: { VANBLOG_VISIT_RETENTION_DAYS: undefined } });
+    try {
+      expect(fake.provider.retentionDays).toBe(3650);
+      const res = await fake.provider.pruneStats('测试', NOW);
+      expect(res.enabled).toBe(true);
+      expect(res.effectiveDays).toBe(3650);
+      // fixture 里最老的一行是 2024-07-07，距 NOW 约 800 天 ⇒ 在 10 年窗口内，不该被删
+      expect(res.visits).toBe(0);
+      expect(res.viewers).toBe(0);
+      expect(fake.visits.state.docs).toHaveLength(rows().length);
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('显式设 365 天时，一年前的按天行会被删（剪枝逻辑本身，与默认值解耦）', async () => {
+    const fake = createFake({ visitDocs: rows(), viewerDocs: rows(), env: { VANBLOG_VISIT_RETENTION_DAYS: '365' } });
+    try {
+      expect(fake.provider.retentionDays).toBe(365);
+      const res = await fake.provider.pruneStats('测试', NOW);
+      expect(res.effectiveDays).toBe(365);
+      expect(res.cutoff).toBe('2025-09-17');
+      expect(res.visits).toBe(1); // 只有 2024-07-07 那行在窗口外
+      expect(res.viewers).toBe(1);
+      const left = fake.visits.state.docs.map((d) => d._id).sort();
+      expect(left).toEqual(['b', 'c', 'd', 'e', 'f']); // date 为 null/缺失的行不受影响
+    } finally {
+      fake.restoreEnv();
+    }
+  });
+
+  it('显式 VANBLOG_VISIT_RETENTION_DAYS=0 仍是「永不删除」的逃生口（旧默认行为）', async () => {
+    const fake = createFake({ visitDocs: rows(), viewerDocs: rows(), env: { VANBLOG_VISIT_RETENTION_DAYS: '0' } });
     try {
       expect(fake.provider.retentionDays).toBe(0);
       const res = await fake.provider.pruneStats('测试', NOW);
@@ -394,16 +428,18 @@ describe('StatsMaintenanceProvider：保留期清理', () => {
     }
   });
 
-  it('非法值回落到默认（0 = 不删）', async () => {
+  it('非法值回落到默认（B3 之后默认是 3650 天，不再是 0 = 不删）', async () => {
     const fake = createFake({
       visitDocs: rows(),
       env: { VANBLOG_VISIT_RETENTION_DAYS: 'abc' },
     });
     try {
-      expect(fake.provider.retentionDays).toBe(0);
+      expect(fake.provider.retentionDays).toBe(3650);
       const res = await fake.provider.pruneStats('测试', NOW);
-      expect(res.enabled).toBe(false);
-      expect(fake.visits.state.docs).toHaveLength(6);
+      expect(res.enabled).toBe(true);
+      // ⚠️ 默认抬到 3650 天后，fixture 里最老的 2024-07-07（距 NOW 约 800 天）落在窗口内 ⇒ 一行都不删
+      expect(res.visits).toBe(0);
+      expect(fake.visits.state.docs).toHaveLength(5);
     } finally {
       fake.restoreEnv();
     }

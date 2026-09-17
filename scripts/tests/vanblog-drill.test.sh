@@ -863,7 +863,7 @@ echo
 echo "-- 参数解析、dry-run、PASS/FAIL 输出格式 --"
 OUT="$(run_cli help 2>&1)"
 assert_rc "$?" "0" "help 返回 0"
-for kw in drill verify backup-verify backup-status --image --engine --keep --dry-run --mongo-image --timeout --as --no-pull --stale-days --strict; do
+for kw in drill verify backup-verify backup-status --image --engine --keep --dry-run --mongo-image --timeout --as --no-pull --stale-days --strict --skip-hash --all --reverify-days VANBLOG_BACKUP_REVERIFY_DAYS VANBLOG_DRILL_SKIP_HASH VANBLOG_FORCE_COLOR; do
   assert_contains "${OUT}" "${kw}" "help 里写了 ${kw}"
 done
 assert_contains "${OUT}" "不复用、不删除" "help 里写清了安全边界（不碰在跑的栈）"
@@ -1146,9 +1146,54 @@ assert_contains "${SRC}" 'DRILL_MONGO_PORT}" == "27017"' "有硬护栏：挑到 
 assert_contains "${SRC}" "vb-drill" "一次性资源用 vb-drill 前缀（不会与 vb-app/vb-mongo 这类在跑的栈撞名）"
 assert_contains "${SRC}" "mktemp -d" "临时空间来自 mktemp -d，不是写死的 /var/vanblog"
 assert_not_contains "${SRC}" "/home/" "脚本里没有绝对家目录路径（本机专属信息不进库）"
-assert_not_contains "${SRC}" "codebonobo" "脚本里没有生产域名"
-assert_not_contains "${SRC}" "JiangOil" "脚本里没有真实账号名"
-assert_not_contains "${SRC}" "10.1.1." "脚本里没有内网地址"
+# ⚠️ 隐私守卫自己**绝不能内嵌它要防的字面量**。这一段旧版写的是
+#    assert_not_contains "${SRC}" "<生产域名片段>" / "<真实账号名>" / "<内网 IP 前缀>"，
+#    等于把私密值本身提交进了公开仓库（历史 d3d95363 里已经留下，删 HEAD 不删历史）。
+#    所以现在全部按**形状**判定：URL 白名单、@ 形主机名、私有 IP 段、--add-host 的字面主机。
+#    谁想把这几条"改进"回字面量比对 —— 停，那条断言本身就是泄露。
+#    真要比对本机的私密值，用文件末尾那个可选的本地 denylist（不入库、缺失时 SKIP）。
+URLS_FOUND="$(printf '%s\n' "${SRC}" | grep -oE 'https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+' | sort -u)"
+BAD_URL_N=0
+while IFS= read -r u; do
+  [[ -n "${u}" ]] || continue
+  case "${u}" in
+  https://github.com/CKboss/* | https://github.com/Mereithhh/* | https://ghcr.io/ckboss/* | https://raw.githubusercontent.com/* | http://127.0.0.1* | http://localhost*) : ;;
+  *) BAD_URL_N=$((BAD_URL_N + 1)) ;;
+  esac
+done <<<"${URLS_FOUND}"
+# ⚠️ 失败时也只报**条数**、不回显 URL：那条 URL 很可能正是要防的生产地址
+assert_eq "${BAD_URL_N}" "0" "脚本里的绝对 URL 全部在公开白名单内（github/ghcr/raw.githubusercontent/127.0.0.1），白名单外命中 ${BAD_URL_N} 条"
+if printf '%s\n' "${SRC}" | grep -qE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'; then
+  fail "脚本里出现了 @ 形主机名/邮箱（真实账号与 user:pass@host 形凭据都不该内嵌）"
+else
+  pass "脚本里没有 @ 形主机名/邮箱"
+fi
+if printf '%s\n' "${SRC}" | grep -vE '^[[:space:]]*#' |
+  grep -qE '(^|[^0-9.])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9.]|$)'; then
+  fail "脚本非注释行里出现了私有网段 IP（内网拓扑不进库；命中不打印值）"
+else
+  pass "脚本非注释行里没有私有网段 IP（10.x / 192.168.x / 172.16-31.x）"
+fi
+ADDHOST_HITS="$(printf '%s\n' "${SRC}" | grep -E -- '--add-host' | grep -vE '^[[:space:]]*#' |
+  grep -cE -- '--add-host[= ]"?[^" $]*[A-Za-z0-9-]+\.[A-Za-z]{2,}' || true)"
+assert_eq "${ADDHOST_HITS}" "0" "--add-host 只用引擎注入的容器 IP（shell 变量），字面主机名命中 ${ADDHOST_HITS} 条"
+# 可选：本机专属 denylist（vanblog_dev/ 整个在 .git/info/exclude 里，永不入库）。
+# 存在时逐行当作"禁止出现的字面量"，对照 vanblog-drill.sh 与**本测试文件自己**；
+# 命中只报计数、绝不回显值。文件缺失时 SKIP，CI 不受影响。
+# ⚠️ 永远不要把该文件里的值写进任何 tracked 文件，也不要由代理创建它（值是主人的）。
+PRIVATE_DENYLIST="${ROOT}/vanblog_dev/private-denylist.txt"
+if [[ -f "${PRIVATE_DENYLIST}" ]]; then
+  DENY_HITS=0
+  SELF_SRC="$(cat "$0" 2>/dev/null)"
+  while IFS= read -r secret; do
+    [[ -n "${secret}" ]] || continue
+    printf '%s' "${SRC}" | grep -qF -- "${secret}" && DENY_HITS=$((DENY_HITS + 1))
+    printf '%s' "${SELF_SRC}" | grep -qF -- "${secret}" && DENY_HITS=$((DENY_HITS + 1))
+  done <"${PRIVATE_DENYLIST}"
+  assert_eq "${DENY_HITS}" "0" "本地 denylist 命中 0 次（私密字面量既不在脚本里、也不在本测试里）"
+else
+  skip "vanblog_dev/private-denylist.txt 不存在（可选的本地 denylist）：跳过字面量级隐私比对；上面的形状守卫（URL/@/私有 IP/--add-host）仍然生效"
+fi
 assert_contains "${SRC}" "XDG_RUNTIME_DIR" "处理了 rootless podman 需要的 XDG_RUNTIME_DIR"
 assert_contains "${SRC}" "aardvark-dns" "记录了为什么用容器 IP 而不是容器名 DNS"
 assert_contains "${SRC}" "--add-host" "用了 --add-host（podman 4.9 不支持 --link）"
@@ -1337,6 +1382,720 @@ RC=$?
 assert_eq "${RC}" "0" "--skip-preflight 时不拦，交给 server 判（演练护栏要用这条）"
 assert_contains "${OUT}" "--skip-preflight" "但会明说预检被跳过了（不静默放宽）"
 
+# ══════════════════════════ A15) JSON 扫描器的转义解码（成员名是任意字节）══════════════════════
+echo
+echo "-- JSON 字符串解码（\\u / 控制字符：integrity.members 的键是 tar 头里的原始文件名）--"
+assert_eq "$(json_get '{"k":"aAb"}' k)" "aAb" "普通字符串照旧"
+U41='{"k":"aAb"}'
+assert_eq "$(json_get "${U41}" k)" "aAb" "基线：无转义"
+UESC='{"k":"a\u0041b"}'
+assert_eq "$(json_get "${UESC}" k)" "aAb" '\u0041 解码成 A（旧版扫描器会给出 u0041 —— 成员名就对不上了）'
+C1ESC="$(printf '{"k":"x\\u009by"}')"
+assert_eq "$(json_get "${C1ESC}" k)" "$(printf 'x\302\233y')" '\u009b 解码成 UTF-8 字节 C2 9B（双重编码 CJK 图名在 JSON 里的形状）'
+NESC='{"k":"a\nb"}'
+assert_eq "$(json_get "${NESC}" k)" "$(printf 'a\nb')" '\n 转义解码成真换行（旧版给出字面量 n）'
+TESC='{"k":"a\tb"}'
+assert_eq "$(json_get "${TESC}" k)" "$(printf 'a\tb')" '\t 转义解码成真制表符'
+SESC='{"k":"\ud83d\ude00"}'
+assert_eq "$(json_get "${SESC}" k | tr -d '\n' | od -An -tx1 | tr -d ' \n')" "f09f9880" '代理对解码成 4 字节 UTF-8（U+1F600）'
+
+# ══════════════════════════ A16) 成员级完整性（integrity 块）══════════════════════
+echo
+echo "-- 成员级完整性：哈希/merkle/双清单/memberCount（真 tar+zstd 现场打包，不 mock）--"
+# 造**带 integrity 块**的归档：照 server 的导出顺序（暂存树逐文件哈希 → 写 manifest
+# （members+2 个 null、merkleRoot=排序后 "<名>\n<sha|null>\n" 拼接的 sha256、
+# memberCount=暂存树 tar 条目数+2）→ 复制出 MANIFEST.copy.json → 整树打包）。
+# 默认成员名里就带 C2 9B 字节（双重编码 CJK 的控制字符形状，真站静态目录里有 10 个）。
+# 变体：corrupt-content（写完清单再改文件内容：zstd -t 过得了，只有成员哈希抓得到）
+#       bad-merkle | copy-mismatch | bad-count | tamper-sha（改表内哈希：merkle 必须抓）
+#       missing-copy | newline-name（成员名里带真换行）
+make_integrity_archive() {
+  local dest="$1"
+  shift
+  local variant=" ${*:-} "
+  local st="${TEST_DIR}/ist-$$-${RANDOM}"
+  mkdir -p "${st}/db/vanBlog" "${st}/static/img" "${st}/static/themes"
+  printf '%s\n' \
+    '{"_id":{"$oid":"507f1f77bcf86cd799439011"},"title":"a","deleted":false,"hidden":false,"private":false,"category":"博客"}' \
+    '{"_id":{"$oid":"507f1f77bcf86cd799439012"},"title":"gone","deleted":true,"deletedAt":"2026-09-01T00:00:00Z","category":"博客"}' \
+    '{"_id":{"$oid":"507f1f77bcf86cd799439013"},"title":"c","category":"博客"}' >"${st}/db/vanBlog/articles.ndjson"
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439021"},"username":"admin"}' >"${st}/db/vanBlog/users.ndjson"
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439051"},"articleId":"x","v":1}' \
+    '{"_id":{"$oid":"507f1f77bcf86cd799439052"},"articleId":"x","v":2}' >"${st}/db/vanBlog/revisions.ndjson"
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439061"},"name":"m1"}' >"${st}/db/vanBlog/migrations.ndjson"
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439071"},"title":"d"}' >"${st}/db/vanBlog/drafts.ndjson"
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439031"},"name":"博客","private":false}' >"${st}/db/vanBlog/categories.ndjson"
+  # metas 必须有：/api/public/meta 在没有 metas 文档时会 500（活体演练实测）。
+  # ⚠️ 全部是合成值（站名"演练站"）—— 真站点 metas 里有域名/作者/统计 ID，绝不进测试文件
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439081"},"links":[],"socials":[],"menus":[],"rewards":[],"about":{"content":""},"siteInfo":{"siteName":"演练站","author":"drill","siteDesc":"","baseUrl":"","since":"2026-01-01"},"viewer":0}' >"${st}/db/vanBlog/metas.ndjson"
+  # settings 也必须有：/api/public/meta 对 menuRes 做 `const { data: menus } = menuRes`，
+  # 归档没有 settings 集合时 getMenuSetting() 返回 null → 解构 null → **500**
+  # （这是 server 侧一个潜在 bug，已上报；真实站点备份总有 settings，这里给最小文档绕过）
+  printf '%s\n' '{"_id":{"$oid":"507f1f77bcf86cd799439091"},"type":"menu","value":{"data":[]}}' >"${st}/db/vanBlog/settings.ndjson"
+  echo 'fakeimg' >"${st}/static/img/a.webp"
+  echo '.skin{}' >"${st}/static/themes/1-abcd1234.css"
+  local cn
+  cn="$(printf 'weird-\302\233-x.webp')"
+  printf 'ctrl' >"${st}/static/img/${cn}"
+  if [[ "${variant}" == *" newline-name "* ]]; then
+    local nl=$'\n'
+    printf 'nl' >"${st}/static/img/nl-a${nl}b.webp"
+  fi
+  local se
+  se="$( (cd "${st}" && tar -cf - .) | tar -tf - | wc -l | tr -d ' ')"
+  local recs="${st}.recs" memjson="" img_n=0
+  : >"${recs}"
+  while IFS= read -r -d '' f; do
+    local rel="./${f#"${st}"/}" sha sz esc
+    # ⚠️ sha256sum 必须走 stdin 重定向：文件名带换行/反斜杠时 GNU sha256sum 会在
+    #    输出行首加 "\" 并转义文件名，hex 里混进反斜杠（fixture 实测踩过）
+    sha="$(sha256sum <"${f}" | cut -d' ' -f1)"
+    sz="$(wc -c <"${f}" | tr -d ' ')"
+    printf '%s\t%s\0' "${rel}" "${sha}" >>"${recs}"
+    esc="$(printf '%s' "${rel}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | LC_ALL=C awk '{if (NR>1) printf "\\n"; printf "%s", $0}')"
+    memjson="${memjson}${memjson:+,}\"${esc}\":{\"sha256\":\"${sha}\",\"bytes\":${sz}}"
+    [[ "${rel}" == ./static/img/* ]] && img_n=$((img_n + 1))
+  done < <(find "${st}" -type f -print0)
+  printf './MANIFEST.copy.json\t-\0./manifest.json\t-\0' >>"${recs}"
+  local payf="${st}.pay"
+  : >"${payf}"
+  while IFS= read -r -d '' r; do
+    local p="${r%%$'\t'*}" s="${r#*$'\t'}"
+    [[ "${s}" == "-" ]] && s=null
+    printf '%s\n%s\n' "${p}" "${s}" >>"${payf}"
+  done < <(LC_ALL=C sort -z -t $'\t' -k1,1 <"${recs}")
+  local merkle mc
+  merkle="$(sha256sum <"${payf}" | cut -d' ' -f1)"
+  mc=$((se + 2))
+  [[ "${variant}" == *" bad-merkle "* ]] && merkle="deadbeef${merkle:8}"
+  [[ "${variant}" == *" bad-count "* ]] && mc=$((mc + 7))
+  cat >"${st}/manifest.json" <<EOF
+{"kind":"vanblog-full-backup","version":1,"createdAt":"2026-09-17T05:00:00.000Z","format":"zstd",
+"databases":{"vanBlog":{"collections":{"articles":{"count":3,"bytes":300,"indexes":0},"users":{"count":1,"bytes":60,"indexes":0},"revisions":{"count":2,"bytes":110,"indexes":0},"migrations":{"count":1,"bytes":50,"indexes":0},"drafts":{"count":1,"bytes":50,"indexes":0},"categories":{"count":1,"bytes":60,"indexes":0},"metas":{"count":1,"bytes":200,"indexes":0},"settings":{"count":1,"bytes":40,"indexes":0}}}},
+"static":{"img":{"files":${img_n},"bytes":20},"themes":{"files":1,"bytes":8}},
+"totals":{"databases":1,"collections":8,"documents":11,"files":$((img_n + 1)),"staticBytes":28,"archiveBytes":1},
+"integrity":{"algorithm":"sha256","zstdFrameChecksum":true,"merkleRoot":"${merkle}","memberCount":${mc},"members":{${memjson},"./MANIFEST.copy.json":null,"./manifest.json":null}},
+"source":{"codeVersion":"test-fixture","walineDB":"waline","demo":false}}
+EOF
+  cp "${st}/manifest.json" "${st}/MANIFEST.copy.json"
+  [[ "${variant}" == *" copy-mismatch "* ]] && echo 'tamper' >>"${st}/MANIFEST.copy.json"
+  [[ "${variant}" == *" missing-copy "* ]] && rm -f "${st}/MANIFEST.copy.json"
+  [[ "${variant}" == *" corrupt-content "* ]] && echo 'tampered' >>"${st}/static/img/a.webp"
+  [[ "${variant}" == *" tamper-sha "* ]] && sed -i '0,/"sha256":"/s/"sha256":"[0-9a-f]/"sha256":"f/' "${st}/manifest.json"
+  (cd "${st}" && tar -cf - .) | zstd -19 --long=27 -q -o "${dest}"
+  local rc=$?
+  rm -rf "${st}" "${recs}" "${payf}"
+  return ${rc}
+}
+
+IG="${BK}/vanblog-full-20260917-110000.tar.zst"
+make_integrity_archive "${IG}"
+if [[ ! -s "${IG}" ]]; then
+  echo "造不出 integrity 归档，A16 之后的用例没意义"
+  echo "passed=${PASS} failed=1"
+  exit 1
+fi
+# ⚠️ verify_semantic_one 必须在**当前 shell** 里调：INTEG_* 是全局变量，
+#    命令替换是子 shell，结论会丢（MANIFEST_SOURCE 踩过的那个坑）
+verify_semantic_one "${IG}" >"${TEST_DIR}/ig1.out" 2>&1
+RC=$?
+IGOUT="$(cat "${TEST_DIR}/ig1.out")"
+assert_rc "${RC}" "0" "带 integrity 块的好归档 → 语义校验通过"
+assert_contains "${IGOUT}" "语义 PASS 成员级哈希" "跑了逐成员哈希比对"
+assert_contains "${IGOUT}" "merkleRoot 与 members 表重算一致" "merkleRoot 重算比对过"
+assert_contains "${IGOUT}" "双清单一致" "两份清单逐字节对照过"
+assert_contains "${IGOUT}" "memberCount=" "memberCount 与实际条目数对过账"
+assert_contains "${IGOUT}" "zstdFrameChecksum=true" "报告了帧校验和状态（说明 zstd -t 那层护住了什么）"
+assert_eq "${INTEG_MODE}" "full" "INTEG_MODE=full"
+if [[ "${INTEG_HASHED}" -ge 9 ]]; then
+  pass "实际比对了 ${INTEG_HASHED} 个成员哈希（含 C2 9B 控制字符名的那个）"
+else
+  fail "只比对了 ${INTEG_HASHED} 个成员（期望 ≥9）"
+fi
+assert_eq "${INTEG_MISMATCH}" "0" "零哈希不符"
+assert_eq "${INTEG_MISSING}" "0" "零缺失成员（控制字符名没有造成假缺失）"
+assert_eq "${INTEG_UNEXPECTED}" "0" "零多余成员"
+assert_eq "${INTEG_MERKLE}" "ok" "merkle=ok"
+assert_eq "${INTEG_COPY}" "ok" "copy=ok"
+assert_eq "${INTEG_COUNT}" "ok" "memberCount=ok"
+assert_contains "${IGOUT}" "没有任何参照可比" "没有 sidecar/status 时明说整归档 sha256「跳过，不是通过」"
+
+# corrupt-content：zstd -t 过得了（帧校验和护不住"解得开但内容不对"），只有成员哈希抓得到
+IGC="${BK}/vanblog-full-20260917-110001.tar.zst"
+make_integrity_archive "${IGC}" corrupt-content
+verify_semantic_one "${IGC}" >"${TEST_DIR}/ig2.out" 2>&1
+RC=$?
+IGCOUT="$(cat "${TEST_DIR}/ig2.out")"
+assert_rc "${RC}" "1" "内容被改（哈希不符）→ 非 0 退出"
+assert_contains "${IGCOUT}" "zstd 完整性 ✓" "帧级完整性测试**通过**（这正是需要成员哈希的理由）"
+assert_contains "${IGCOUT}" "第一个坏成员" "报的是第一个坏成员的路径，不是笼统一句 corrupt"
+assert_contains "${IGCOUT}" "./static/img/a.webp" "点名了坏成员"
+assert_contains "${IGCOUT}" "期望" "给了期望 vs 实际两个哈希"
+assert_contains "${IGCOUT}" "静态文件" "说明了坏的是什么类型的数据（图 vs 数据库 dump，处置方式不同）"
+assert_eq "${INTEG_BAD_KIND}" "hash" "BAD_KIND=hash"
+
+# tamper-sha：清单表里的一个哈希被改 → merkleRoot 必须抓住（表自身的指纹）
+IGT="${BK}/vanblog-full-20260917-110002.tar.zst"
+make_integrity_archive "${IGT}" tamper-sha
+verify_semantic_one "${IGT}" >"${TEST_DIR}/ig3.out" 2>&1
+RC=$?
+assert_rc "${RC}" "1" "清单哈希表被篡改 → 非 0"
+assert_contains "$(cat "${TEST_DIR}/ig3.out")" "merkleRoot 对不上" "merkleRoot 抓住了表篡改"
+
+# bad-merkle
+IGM="${BK}/vanblog-full-20260917-110003.tar.zst"
+make_integrity_archive "${IGM}" bad-merkle
+verify_semantic_one "${IGM}" >"${TEST_DIR}/ig4.out" 2>&1
+assert_rc "$?" "1" "merkleRoot 本身被改 → 非 0"
+assert_contains "$(cat "${TEST_DIR}/ig4.out")" "merkleRoot 对不上" "点名 merkleRoot"
+
+# copy-mismatch：双清单互为对照
+IGX="${BK}/vanblog-full-20260917-110004.tar.zst"
+make_integrity_archive "${IGX}" copy-mismatch
+verify_semantic_one "${IGX}" >"${TEST_DIR}/ig5.out" 2>&1
+assert_rc "$?" "1" "MANIFEST.copy.json 与 manifest.json 不一致 → 非 0（本身就是发现）"
+assert_contains "$(cat "${TEST_DIR}/ig5.out")" "双清单不一致" "点名双清单不一致"
+assert_contains "$(cat "${TEST_DIR}/ig5.out")" "至少一份坏了" "说清了含义"
+
+# missing-copy：新格式却没有副本
+IGP="${BK}/vanblog-full-20260917-110005.tar.zst"
+make_integrity_archive "${IGP}" missing-copy
+verify_semantic_one "${IGP}" >"${TEST_DIR}/ig6.out" 2>&1
+assert_rc "$?" "1" "缺 ./MANIFEST.copy.json → 非 0"
+assert_contains "$(cat "${TEST_DIR}/ig6.out")" "MANIFEST.copy.json" "点名缺的是清单副本"
+
+# bad-count
+IGB="${BK}/vanblog-full-20260917-110006.tar.zst"
+make_integrity_archive "${IGB}" bad-count
+verify_semantic_one "${IGB}" >"${TEST_DIR}/ig7.out" 2>&1
+assert_rc "$?" "1" "memberCount 对不上 → 非 0"
+assert_contains "$(cat "${TEST_DIR}/ig7.out")" "归档实际列出" "两个数字都打出来"
+
+# newline-name：成员名里带真换行 —— 既不许假不符，也不许假通过
+IGN="${BK}/vanblog-full-20260917-110007.tar.zst"
+make_integrity_archive "${IGN}" newline-name
+verify_semantic_one "${IGN}" >"${TEST_DIR}/ig8.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "带换行成员名的归档 → 校验通过（NUL 记录路径不吃行式解析的亏）"
+assert_eq "${INTEG_MISSING}" "0" "换行名没有造成假「缺失」"
+assert_eq "${INTEG_UNEXPECTED}" "0" "换行名没有造成假「多余」"
+assert_contains "$(cat "${TEST_DIR}/ig8.out")" "成员名里带换行" "但如实报告了换行名的存在（不静默）"
+
+# 旧归档（没有 integrity 块）：一切照旧 + **明确的 NOTE**
+verify_semantic_one "${GOOD}" >"${TEST_DIR}/ig9.out" 2>&1
+RC=$?
+IG9="$(cat "${TEST_DIR}/ig9.out")"
+assert_rc "${RC}" "0" "旧归档照常通过（additive：老归档仍然有效）"
+assert_contains "${IG9}" "成员级哈希校验**不可用**" "明说成员级校验不可用"
+assert_contains "${IG9}" "别把 PASS 读成比它更强" "明说这个 PASS 不代表逐成员比对过"
+assert_eq "${INTEG_MODE}" "unavailable" "INTEG_MODE=unavailable"
+
+# 中段字节翻转：帧校验和/解压必须抓住
+IGF="${BK}/vanblog-full-20260917-110008.tar.zst"
+cp "${IG}" "${IGF}"
+IGFSZ="$(wc -c <"${IGF}")"
+printf '\xff' | dd of="${IGF}" bs=1 seek=$((IGFSZ / 2)) count=1 conv=notrunc status=none
+verify_semantic_one "${IGF}" >"${TEST_DIR}/ig10.out" 2>&1
+RC=$?
+assert_rc "${RC}" "1" "中段字节翻转 → 非 0"
+if grep -qE "完整性校验失败|解不完整|FAIL" "${TEST_DIR}/ig10.out"; then
+  pass "字节翻转被点名（帧校验和失败或解不完整）"
+else
+  fail "字节翻转没被点名"
+fi
+rm -f "${IGF}"
+
+# merkle 单元：drill_compute_merkle 必须与「独立实现」（fixture 里那份 python 风格重算）一致
+MJ_IG="$(drill_archive_member "${IG}" "./manifest.json")"
+DECL_BIN="${TEST_DIR}/decl.bin"
+drill_integrity_members "${MJ_IG}" >"${DECL_BIN}"
+DECL_N=$(( $(tr -dc '\0' <"${DECL_BIN}" | wc -c) ))
+if [[ "${DECL_N}" -ge 11 ]]; then
+  pass "drill_integrity_members 解析出 ${DECL_N} 条成员记录（NUL 分隔）"
+else
+  fail "drill_integrity_members 只解析出 ${DECL_N} 条（期望 ≥11）"
+fi
+CALC_MERKLE="$(drill_compute_merkle "${DECL_BIN}")"
+DECL_MERKLE="$(json_get "${MJ_IG}" integrity.merkleRoot)"
+assert_eq "${CALC_MERKLE}" "${DECL_MERKLE}" "drill_compute_merkle 复现 fixture 独立算出的 merkleRoot（与 server computeMerkleRoot 同构）"
+
+# 非 GNU tar 宿主机（busybox tar 没有 --to-command）：退化成「解包到临时目录逐文件哈希」，
+# 结论必须与流式路径**一致**（子 shell 里覆盖 is_gnu_tar，不污染后面的用例）
+EXTRACT_RES="$(
+  is_gnu_tar() { return 1; }
+  drill_archive_integrity "${IG}" "${MJ_IG}" >"${TEST_DIR}/ig-extract.out" 2>&1
+  echo "rc=$? mode=${INTEG_MODE} engine=${HASH_ENGINE} hashed=${INTEG_HASHED} mismatch=${INTEG_MISMATCH} copy=${INTEG_COPY} count=${INTEG_COUNT}"
+)"
+assert_contains "${EXTRACT_RES}" "rc=0" "非 GNU tar 退化路径：好归档照样通过"
+assert_contains "${EXTRACT_RES}" "engine=extract" "退化路径确实走了解包比对（不是悄悄跳回流式）"
+assert_contains "${EXTRACT_RES}" "mode=full" "退化路径也是完整的成员级校验"
+assert_contains "${EXTRACT_RES}" "hashed=11" "退化路径比对了全部 11 个带哈希成员"
+assert_contains "${EXTRACT_RES}" "mismatch=0" "退化路径零误报"
+MJ_IGC="$(drill_archive_member "${IGC}" "./manifest.json")"
+EXTRACT_BAD="$(
+  is_gnu_tar() { return 1; }
+  drill_archive_integrity "${IGC}" "${MJ_IGC}" >"${TEST_DIR}/ig-extract-bad.out" 2>&1
+  echo "rc=$? bad=${INTEG_BAD_PATH} kind=${INTEG_BAD_KIND}"
+)"
+assert_contains "${EXTRACT_BAD}" "rc=1" "非 GNU tar 退化路径同样抓住内容损坏"
+assert_contains "${EXTRACT_BAD}" "bad=./static/img/a.webp" "退化路径点名的坏成员与流式路径一致"
+IGN_NL="$(drill_archive_member "${IGN}" "./manifest.json")"
+EXTRACT_NL="$(
+  is_gnu_tar() { return 1; }
+  drill_archive_integrity "${IGN}" "${IGN_NL}" >"${TEST_DIR}/ig-extract-nl.out" 2>&1
+  echo "rc=$? missing=${INTEG_MISSING} unexpected=${INTEG_UNEXPECTED}"
+)"
+assert_contains "${EXTRACT_NL}" "rc=0" "退化路径对换行成员名也没有假不符（find -print0 全程 NUL 分隔）"
+# raw 成员名列表：⚠️ 桩环境是「宿主机 GNU tar + is_gnu_tar=false」的组合 ——
+# 靠的是对 --quoting-style=literal 的**能力探测**，不是按 tar 品牌猜（品牌猜不出这种组合）
+RAW_OUT="$(drill_archive_members_raw "${IG}")"
+assert_contains "${RAW_OUT}" "./db/vanBlog/metas.ndjson" "raw 列表列得出普通成员"
+if printf '%s' "${RAW_OUT}" | grep -q $'weird-\302\233-x.webp'; then
+  pass "raw 列表保住了成员名里的 C2 9B 控制字节（tar -tf 默认渲染会转义成文本，拿去比对就冤枉好归档）"
+else
+  fail "raw 列表里的控制字节丢了/被转义了"
+fi
+assert_eq "$(printf '%s' './a\302\233b.webp' | drill_unescape_tar_names)" "$(printf './a\302\233b.webp')" "反转义：\\302\\233 → 原始字节（老 GNU tar 渲染形状的兜底）"
+assert_eq "$(printf '%s' './a\nb' | drill_unescape_tar_names)" "$(printf './a\nb')" "反转义：字面量 \\n → 真换行"
+assert_eq "$(printf '%s' 'plain-name.webp' | drill_unescape_tar_names)" "plain-name.webp" "反转义：普通名字原样通过"
+
+# ══════════════════════════ A17) 整归档 sha256 的外部参照 ══════════════════════════
+echo
+echo "-- 整归档 sha256：sidecar / backup-status.json 参照，明说用了哪个 --"
+SR="${TEST_DIR}/sharefs"
+mkdir -p "${SR}"
+cp "${IG}" "${SR}/vanblog-full-20260917-111000.tar.zst"
+SRA="${SR}/vanblog-full-20260917-111000.tar.zst"
+SRSHA="$(sha256sum <"${SRA}" | cut -d' ' -f1)"
+drill_archive_sha_refs "${SRA}" >"${TEST_DIR}/sr0.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "没有任何参照 → 返回 0（但明说跳过）"
+assert_contains "$(cat "${TEST_DIR}/sr0.out")" "跳过**，不是通过" "无参照时不冒充通过"
+printf '%s  %s\n' "${SRSHA}" "vanblog-full-20260917-111000.tar.zst" >"${SRA}.sha256"
+drill_archive_sha_refs "${SRA}" >"${TEST_DIR}/sr1.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "sidecar 一致 → 0"
+assert_contains "$(cat "${TEST_DIR}/sr1.out")" "用的参照：sidecar" "明说这次用的参照是 sidecar"
+printf '%s  %s\n' "0000000000000000000000000000000000000000000000000000000000000000" "vanblog-full-20260917-111000.tar.zst" >"${SRA}.sha256"
+drill_archive_sha_refs "${SRA}" >"${TEST_DIR}/sr2.out" 2>&1
+assert_rc "$?" "1" "sidecar 不符 → 非 0（内容被改过/损坏）"
+assert_contains "$(cat "${TEST_DIR}/sr2.out")" "sidecar 不符" "点名 sidecar 不符"
+printf '%s  %s\n' "${SRSHA}" "vanblog-full-RENAMED.tar.zst" >"${SRA}.sha256"
+drill_archive_sha_refs "${SRA}" >"${TEST_DIR}/sr3.out" 2>&1
+assert_contains "$(cat "${TEST_DIR}/sr3.out")" "sidecar 里记的文件名" "sidecar 名字对不上时提醒（可能配错对象）"
+cat >"${SR}/backup-status.json" <<EOF
+{"version":1,"lastSuccessName":"vanblog-full-20260917-111000.tar.zst","lastSuccessBytes":$(wc -c <"${SRA}"),"lastSuccessSha256":"${SRSHA}","consecutiveFailures":0}
+EOF
+rm -f "${SRA}.sha256"
+drill_archive_sha_refs "${SRA}" >"${TEST_DIR}/sr4.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "backup-status.json 参照一致 → 0"
+assert_contains "$(cat "${TEST_DIR}/sr4.out")" "lastSuccessSha256 一致" "认出了 server 记的整归档 sha256"
+assert_contains "$(cat "${TEST_DIR}/sr4.out")" "用的参照：backup-status.json" "明说用的参照"
+cat >"${SR}/backup-status.json" <<EOF
+{"version":1,"lastSuccessName":"vanblog-full-20260917-111000.tar.zst","lastSuccessSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+EOF
+drill_archive_sha_refs "${SRA}" >"${TEST_DIR}/sr5.out" 2>&1
+assert_rc "$?" "1" "server 参照不符 → 非 0（盘上这份不是 server 写的那份）"
+
+# ══════════════════════════ A18) verify --all：每归档表 + 机器可读行 + 台账 ══════════════════════════
+echo
+echo "-- verify --all：全量复验、每归档表、VERIFY-RESULT、台账每归档一行 --"
+AD="${TEST_DIR}/alldir"
+mkdir -p "${AD}"
+cp "${IG}" "${AD}/vanblog-full-20260917-110000.tar.zst"
+cp "${GOOD}" "${AD}/vanblog-full-20260916-010101.tar.zst"
+cp "${IGC}" "${AD}/vanblog-full-20260917-110001.tar.zst"
+VANBLOG_BACKUP_DIR="${AD}" run_cli verify --all >"${TEST_DIR}/va1.out" 2>&1
+RC=$?
+VA1="$(cat "${TEST_DIR}/va1.out")"
+assert_rc "${RC}" "1" "--all：其中一份坏（corrupt-content）→ 非 0"
+assert_contains "${VA1}" "每归档结果" "打了每归档的表"
+assert_contains "${VA1}" "成员哈希" "表里有成员哈希列"
+assert_contains "${VA1}" "checked" "好归档标 checked（真的逐成员比过）"
+assert_contains "${VA1}" "no-integrity" "旧归档标 no-integrity（没比过就是没比过）"
+assert_contains "${VA1}" "VERIFY-RESULT total=3 ok=2 fail=1" "机器可读的最后一行（cron 可解析）"
+LEDGER_LINES="$(grep -c '"kind":"verify"' "${AD}/vanblog-verify-log.jsonl" 2>/dev/null || true)"
+assert_eq "${LEDGER_LINES}" "3" "台账每归档一行（3 行）"
+if grep -q '"hashMode":"checked"' "${AD}/vanblog-verify-log.jsonl" 2>/dev/null; then
+  pass "台账行里带 hashMode（复验记录能回答「比没比过成员哈希」）"
+else
+  fail "台账行里没有 hashMode"
+fi
+if grep -q '"badMember":"./static/img/a.webp"' "${AD}/vanblog-verify-log.jsonl" 2>/dev/null; then
+  pass "失败行里带 badMember（第一个坏成员进了台账）"
+else
+  fail "失败行里没有 badMember"
+fi
+GLOB_N="$(cd "${AD}" && ls -1 vanblog-full-* 2>/dev/null | grep -vE '\.(sha256|manifest\.json)$' | grep -c .)"
+assert_eq "${GLOB_N}" "3" "台账/sidecar 依然不会被 vanblog-full-* 枚举当成归档（保留策略不会多删）"
+# --all 与显式目标并用：去重
+VANBLOG_BACKUP_DIR="${AD}" run_cli verify --all "${AD}/vanblog-full-20260917-110000.tar.zst" >"${TEST_DIR}/va2.out" 2>&1
+assert_contains "$(cat "${TEST_DIR}/va2.out")" "VERIFY-RESULT total=3" "--all + 显式目标：去重后还是 3 份"
+
+# ══════════════════════════ A19) drill 预检：坏了拒绝、--skip-hash 明说 ══════════════════════════
+echo
+echo "-- drill 预检：成员级损坏 → 拒绝演练（不起容器）；--skip-hash → WARN --"
+# ⚠️ A11 结尾把 fakeengine 换成了「一律撞名」的桩：这里必须换回宽松版，
+#    否则所有 dry-run 都死在名字冲突上，测不到完整性预检（本轮真踩过）
+cat >"${FAKE_BIN}/fakeengine" <<'STUB'
+#!/usr/bin/env bash
+echo "fakeengine $*" >> "${FAKE_ENGINE_LOG}"
+case "$1" in
+  --version) echo "fakeengine version 9.9.9 (stub)" ;;
+  info) exit 0 ;;
+  image) [[ "$2" == "inspect" ]] && { [[ "${FAKE_NO_IMAGE:-0}" == "1" ]] && exit 1; exit 0; } ;;
+  inspect)
+    case "$*" in
+      *"--type container"*) [[ "${FAKE_COLLIDE:-}" != "" && "$*" == *"${FAKE_COLLIDE}"* ]] && exit 0; exit 1 ;;
+      *) echo "10.99.0.7"; exit 0 ;;
+    esac ;;
+  volume|network) [[ "$2" == "inspect" ]] && exit 1; exit 0 ;;
+  run) echo "fakecontainerid"; exit 0 ;;
+  exec) echo "1"; exit 0 ;;
+  logs) echo "server started ok" ;;
+  rm|pull) exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "${FAKE_BIN}/fakeengine"
+CD="${TEST_DIR}/corrdir"
+mkdir -p "${CD}"
+cp "${IGC}" "${CD}/vanblog-full-20260917-112000.tar.zst"
+: >"${FAKE_LOG}"
+# ⚠️ 不是 --dry-run：dry-run 故意不解包（内容哈希无从比起），拒绝内容损坏要靠真跑的预检
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${CD}" \
+  run_cli drill --image vanblog:test "${CD}/vanblog-full-20260917-112000.tar.zst" >"${TEST_DIR}/cd1.out" 2>&1
+RC=$?
+CD1="$(cat "${TEST_DIR}/cd1.out")"
+assert_rc "${RC}" "1" "成员哈希不符的归档：预检就拒绝（非 0，不起容器不上传）"
+assert_contains "${CD1}" "预检：成员级哈希校验" "点名了成员级校验这条断言"
+assert_contains "${CD1}" "拒绝演练" "明说拒绝演练而不是硬上传"
+assert_contains "${CD1}" "./static/img/a.webp" "拒绝时点名第一个坏成员"
+assert_eq "$(grep -cE 'fakeengine (run |network create)' "${FAKE_LOG}" 2>/dev/null)" "0" "拒绝时一条容器命令都没发"
+# bad-merkle：dry-run 也拦（merkle 不需要解包）
+MD="${TEST_DIR}/merkledir"
+mkdir -p "${MD}"
+cp "${IGM}" "${MD}/vanblog-full-20260917-112001.tar.zst"
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${MD}" \
+  run_cli drill --dry-run --image vanblog:test "${MD}/vanblog-full-20260917-112001.tar.zst" >"${TEST_DIR}/cd2.out" 2>&1
+assert_rc "$?" "1" "merkleRoot 不符：dry-run 也拦（清单自身矛盾，不用解包就知道）"
+# 好归档 + dry-run：merkle 查、解包比对不做（明说）
+GD="${TEST_DIR}/goodir"
+mkdir -p "${GD}"
+cp "${IG}" "${GD}/vanblog-full-20260917-112002.tar.zst"
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${GD}" \
+  run_cli drill --dry-run --image vanblog:test "${GD}/vanblog-full-20260917-112002.tar.zst" >"${TEST_DIR}/cd3.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "好归档 dry-run → 0"
+assert_contains "$(cat "${TEST_DIR}/cd3.out")" "merkleRoot 与 members 表重算一致" "dry-run 也查了 merkleRoot"
+assert_contains "$(cat "${TEST_DIR}/cd3.out")" "dry-run：不解包比对" "并明说 dry-run 不解包（不冒充比过）"
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${GD}" \
+  run_cli drill --dry-run --skip-hash --image vanblog:test "${GD}/vanblog-full-20260917-112002.tar.zst" >"${TEST_DIR}/cd4.out" 2>&1
+assert_rc "$?" "0" "--skip-hash → 0（但下面这条 WARN 必须在）"
+assert_contains "$(cat "${TEST_DIR}/cd4.out")" "--skip-hash" "明说哈希比对被 --skip-hash 跳过了"
+# 旧归档（无 integrity）：预检不拦，但 PASS 行必须自报「未校验」
+OD="${TEST_DIR}/olddir"
+mkdir -p "${OD}"
+cp "${GOOD}" "${OD}/vanblog-full-20260916-010101.tar.zst"
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${OD}" \
+  run_cli drill --dry-run --image vanblog:test "${OD}/vanblog-full-20260916-010101.tar.zst" >"${TEST_DIR}/cd5.out" 2>&1
+assert_rc "$?" "0" "旧归档 dry-run → 0（照常演练）"
+assert_contains "$(cat "${TEST_DIR}/cd5.out")" "没有 integrity 块" "但 PASS 里如实说成员哈希没校验过"
+# 中段翻转的旧归档：流式完整性预检拦下（不起容器）
+FD="${TEST_DIR}/flipdir"
+mkdir -p "${FD}"
+cp "${GOOD}" "${FD}/vanblog-full-20260916-010102.tar.zst"
+FSZ="$(wc -c <"${FD}/vanblog-full-20260916-010102.tar.zst")"
+printf '\xff' | dd of="${FD}/vanblog-full-20260916-010102.tar.zst" bs=1 seek=$((FSZ / 2)) count=1 conv=notrunc status=none
+: >"${FAKE_LOG}"
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${FD}" \
+  run_cli drill --image vanblog:test "${FD}/vanblog-full-20260916-010102.tar.zst" >"${TEST_DIR}/cd6.out" 2>&1
+RC=$?
+CD6="$(cat "${TEST_DIR}/cd6.out")"
+assert_rc "${RC}" "1" "中段字节翻转的旧归档 → drill 非 0"
+if printf '%s' "${CD6}" | grep -qE "流式完整性|清单读得出来"; then
+  pass "预检就点名了损坏（帧级完整性失败，或清单都读不出来）"
+else
+  fail "预检没有点名损坏（输出里既没有流式完整性也没有清单）"
+fi
+assert_eq "$(grep -cE 'fakeengine (run |network create)' "${FAKE_LOG}" 2>/dev/null)" "0" "预检拒绝：一条容器命令都没发（不是半恢复，是根本不开始）"
+# --skip-preflight 时流式检查必须让路（那条路的用途是演练 server 护栏）
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${FD}" VANBLOG_DRILL_TIMEOUT=3 \
+  run_cli drill --skip-preflight --image vanblog:test "${FD}/vanblog-full-20260916-010102.tar.zst" >"${TEST_DIR}/cd7.out" 2>&1
+assert_contains "$(cat "${TEST_DIR}/cd7.out")" "skip-preflight" "--skip-preflight 时明说预检被跳过（既有语义不变）"
+
+# ══════════════════════════ A20) 定期复验护栏（--reverify-days）══════════════════════
+echo
+echo "-- 定期复验护栏：任何归档太久没「验证通过」就要在日程上炸出来 --"
+RV="${TEST_DIR}/reverify"
+mkdir -p "${RV}"
+cp "${IG}" "${RV}/vanblog-full-20260917-113000.tar.zst"
+cp "${GOOD}" "${RV}/vanblog-full-20260916-113001.tar.zst"
+VANBLOG_BACKUP_DIR="${RV}" run_cli backup-status --reverify-days 30 >"${TEST_DIR}/rv1.out" 2>&1
+RC=$?
+assert_rc "${RC}" "1" "台账里没有任何「验证通过」记录 → 护栏失败（非 0）"
+assert_contains "$(cat "${TEST_DIR}/rv1.out")" "没有「验证通过」记录" "点名了缺什么"
+assert_contains "$(cat "${TEST_DIR}/rv1.out")" "backup-verify --all" "给了补救命令"
+VANBLOG_BACKUP_DIR="${RV}" drill_verify_log_append verify "${RV}/vanblog-full-20260917-113000.tar.zst" pass ""
+VANBLOG_BACKUP_DIR="${RV}" drill_verify_log_append verify "${RV}/vanblog-full-20260916-113001.tar.zst" pass ""
+VANBLOG_BACKUP_DIR="${RV}" run_cli backup-status --reverify-days 30 >"${TEST_DIR}/rv2.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "两份都有新鲜的 pass 记录 → 护栏通过"
+assert_contains "$(cat "${TEST_DIR}/rv2.out")" "全部 2 份归档都在 30 天内复验过" "报出了份数与判据"
+# 把其中一份的台账时间改老（40 天前）
+OLD_AT="$(date -u -d '40 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
+sed -i "s|\"archive\":\"vanblog-full-20260916-113001.tar.zst\",\"at\":\"[^\"]*\"|\"archive\":\"vanblog-full-20260916-113001.tar.zst\",\"at\":\"${OLD_AT}\"|" "${RV}/vanblog-verify-log.jsonl"
+VANBLOG_BACKUP_DIR="${RV}" run_cli backup-status --reverify-days 30 >"${TEST_DIR}/rv3.out" 2>&1
+RC=$?
+assert_rc "${RC}" "1" "一份归档 40 天没复验 → 护栏失败（位腐烂要在日程上被发现）"
+assert_contains "$(cat "${TEST_DIR}/rv3.out")" "vanblog-full-20260916-113001.tar.zst（上次验证 4" "点名了过期的是哪份、多久没验"
+VANBLOG_BACKUP_DIR="${RV}" run_cli backup-status --reverify-days 0 >"${TEST_DIR}/rv4.out" 2>&1
+assert_rc "$?" "0" "--reverify-days 0 → 关闭护栏（默认行为不变）"
+assert_contains "$(cat "${TEST_DIR}/rv4.out")" "定期复验护栏关闭" "关闭时明说，不假装查过"
+
+# ══════════════════════════ A21) backup-verify --all ══════════════════════════
+echo
+echo "-- backup-verify --all：备份 + 全量复验（每归档一行台账 + 表）--"
+BV5="${TEST_DIR}/bv5"
+mkdir -p "${BV5}"
+cp "${IG}" "${BV5}/vanblog-full-20260917-114000.tar.zst"
+cp "${IGC}" "${BV5}/vanblog-full-20260917-114001.tar.zst"
+cat >"${TEST_DIR}/bv5.sh" <<EOF
+set -u
+export VANBLOG_DRILL_SKIP_MAIN=1 VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" VANBLOG_BACKUP_DIR="${BV5}"
+source "${SCRIPT}" >/dev/null 2>&1
+backup() { cp "${GOOD}" "${BV5}/vanblog-full-20260917-114002.tar.zst"; echo "整站备份成功"; return 0; }
+cmd_backup_verify "\$@"
+EOF
+bash "${TEST_DIR}/bv5.sh" --all >"${TEST_DIR}/bv5.out" 2>&1
+RC=$?
+BV5OUT="$(cat "${TEST_DIR}/bv5.out")"
+assert_rc "${RC}" "1" "--all：保留归档里有一份坏 → 非 0（哪怕这次的新备份是好的）"
+assert_contains "${BV5OUT}" "全量复验" "跑了全量复验"
+assert_contains "${BV5OUT}" "每归档结果" "打了每归档的表"
+assert_contains "${BV5OUT}" "RESULT: FAIL" "机器可读结论行是 FAIL"
+BV5_LEDGER_N="$(grep -c '"result"' "${BV5}/vanblog-verify-log.jsonl" 2>/dev/null || true)"
+if [[ "${BV5_LEDGER_N}" -ge 3 ]]; then
+  pass "台账里每归档一行（${BV5_LEDGER_N} 行 ≥3：新归档 + 两份保留归档）"
+else
+  fail "台账只有 ${BV5_LEDGER_N} 行（期望 ≥3）"
+fi
+BV6="${TEST_DIR}/bv6"
+mkdir -p "${BV6}"
+cp "${IG}" "${BV6}/vanblog-full-20260917-114000.tar.zst"
+cat >"${TEST_DIR}/bv6.sh" <<EOF
+set -u
+export VANBLOG_DRILL_SKIP_MAIN=1 VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" VANBLOG_BACKUP_DIR="${BV6}"
+source "${SCRIPT}" >/dev/null 2>&1
+backup() { cp "${GOOD}" "${BV6}/vanblog-full-20260917-114003.tar.zst"; echo "整站备份成功"; return 0; }
+cmd_backup_verify "\$@"
+EOF
+bash "${TEST_DIR}/bv6.sh" --all --reverify-days 30 >"${TEST_DIR}/bv6.out" 2>&1
+RC=$?
+assert_rc "${RC}" "0" "--all 之后每份都有新鲜 pass 记录 → --reverify-days 30 也通过"
+assert_contains "$(cat "${TEST_DIR}/bv6.out")" "全部 2 份归档都在 30 天内复验过" "护栏在 --all 之后自然变绿"
+
+# ══════════════════════════ A22) backup-status 的新字段 ══════════════════════════
+echo
+echo "-- backup-status：整归档 sha256 / sweep / 恢复日志 / 三方不一致 --"
+NS="${TEST_DIR}/newstatus"
+mkdir -p "${NS}"
+cp "${IG}" "${NS}/vanblog-full-20260917-115000.tar.zst"
+NSA="${NS}/vanblog-full-20260917-115000.tar.zst"
+NSSHA="$(sha256sum <"${NSA}" | cut -d' ' -f1)"
+NSBYTES="$(wc -c <"${NSA}")"
+printf '%s  %s\n' "${NSSHA}" "vanblog-full-20260917-115000.tar.zst" >"${NSA}.sha256"
+cat >"${NS}/backup-status.json" <<EOF
+{"version":1,"updatedAt":"2026-09-17T03:00:00.000Z","lastSuccessAt":"2026-09-17T03:00:00.000Z",
+ "lastSuccessName":"vanblog-full-20260917-115000.tar.zst","lastSuccessBytes":${NSBYTES},
+ "lastVerifyMs":900,"lastSuccessSha256":"${NSSHA}","lastSuccessMembers":20,
+ "lastFailureStage":null,"consecutiveFailures":0,
+ "lastSweepAt":"2026-09-17T02:00:00.000Z","lastSweepMs":1400,"lastSweepArchives":2,"lastSweepFailures":0,
+ "lastSweepResults":[{"name":"vanblog-full-20260917-115000.tar.zst","ok":true,"ms":900,"bytes":${NSBYTES},"membersChecked":18,"issues":[]}],
+ "lastSweepMessage":null,"sweepIntervalHours":24,"sweepMaxArchives":3,"restoreJournal":null}
+EOF
+VANBLOG_BACKUP_DIR="${NS}" run_cli backup-status >"${TEST_DIR}/ns1.out" 2>&1
+RC=$?
+NS1="$(cat "${TEST_DIR}/ns1.out")"
+assert_rc "${RC}" "0" "全部一致 → 0"
+assert_contains "${NS1}" "盘上重算与 server 记录一致" "整归档 sha256 三方对账（盘上重算 vs server vs sidecar）"
+assert_contains "${NS1}" "sidecar 也一致" "sidecar 也参与了对账"
+assert_contains "${NS1}" "server 定期复验（sweep）没有发现坏归档" "报出了 sweep"
+assert_contains "${NS1}" "节奏 24h" "报出了 sweep 的节奏与上限（运维不用翻 env）"
+assert_contains "${NS1}" "没有悬着的恢复日志" "查了 restore-journal"
+# sha 不符 → WARN
+cat >"${NS}/backup-status.json" <<EOF
+{"version":1,"lastSuccessAt":"2026-09-17T03:00:00.000Z","lastSuccessName":"vanblog-full-20260917-115000.tar.zst",
+ "lastSuccessBytes":${NSBYTES},"lastSuccessSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","consecutiveFailures":0}
+EOF
+VANBLOG_BACKUP_DIR="${NS}" run_cli backup-status >"${TEST_DIR}/ns2.out" 2>&1
+assert_contains "$(cat "${TEST_DIR}/ns2.out")" "盘上这份不是 server 当时写的那份" "server 记的 sha256 与盘上不符 → 点名（截断/替换/拷贝损坏）"
+# sweep 有失败 → FAIL + 明细
+cat >"${NS}/backup-status.json" <<EOF
+{"version":1,"lastSuccessAt":"2026-09-17T03:00:00.000Z","lastSuccessName":"vanblog-full-20260917-115000.tar.zst",
+ "lastSuccessBytes":${NSBYTES},"lastSuccessSha256":"${NSSHA}","consecutiveFailures":0,
+ "lastSweepAt":"2026-09-17T02:00:00.000Z","lastSweepArchives":2,"lastSweepFailures":1,
+ "lastSweepResults":[{"name":"vanblog-full-20260916-010101.tar.zst","ok":false,"ms":12,"bytes":1,"membersChecked":null,"issues":["zstd 完整性校验失败"]}],
+ "sweepIntervalHours":24,"sweepMaxArchives":3}
+EOF
+VANBLOG_BACKUP_DIR="${NS}" run_cli backup-status >"${TEST_DIR}/ns3.out" 2>&1
+RC=$?
+assert_rc "${RC}" "1" "sweep 发现坏归档 → 非 0（位腐烂已经被 server 抓到了）"
+assert_contains "$(cat "${TEST_DIR}/ns3.out")" "已经出现位腐烂" "说清了含义"
+assert_contains "$(cat "${TEST_DIR}/ns3.out")" "zstd 完整性校验失败" "把 server 的失败明细带出来"
+# 悬着的恢复日志 → WARN + 进度
+cat >"${NS}/restore-journal.json" <<'EOF'
+{"version":1,"startedAt":"2026-09-17T02:30:00.000Z","updatedAt":"2026-09-17T02:31:00.000Z",
+ "archivePath":"/tmp/x.tar.zst","archiveName":"vanblog-full-20260917-115000.tar.zst","archiveCreatedAt":null,
+ "hostname":"h","pid":1,"phase":"static","planned":{"vanBlog":["articles"]},"done":[{"db":"vanBlog","collection":"articles","documents":3,"at":"2026-09-17T02:30:30.000Z"}],"error":null}
+EOF
+VANBLOG_BACKUP_DIR="${NS}" run_cli backup-status >"${TEST_DIR}/ns4.out" 2>&1
+NS4="$(cat "${TEST_DIR}/ns4.out")"
+assert_contains "${NS4}" "上次恢复没有正常结束" "restore-journal.json 还在 → 点名（成功恢复会清掉它）"
+assert_contains "${NS4}" "phase=static" "带出了 journal 的 phase（恢复走到了哪一步）"
+assert_contains "${NS4}" "已换 1 个集合" "带出了已完成集合数"
+rm -f "${NS}/restore-journal.json"
+# 台账 vs 文件系统：最新 pass 记录不是盘上最新归档 → WARN
+VANBLOG_BACKUP_DIR="${NS}" drill_verify_log_append verify "${NSA}" pass ""
+cp "${GOOD}" "${NS}/vanblog-full-20260917-120000.tar.zst" # 更新的归档出现了（没人验过）
+VANBLOG_BACKUP_DIR="${NS}" run_cli backup-status >"${TEST_DIR}/ns5.out" 2>&1
+assert_contains "$(cat "${TEST_DIR}/ns5.out")" "最新这份还没被验证过" "台账最新 pass ≠ 盘上最新归档 → 三方不一致本身就是 WARN"
+rm -f "${NS}/vanblog-full-20260917-120000.tar.zst"
+
+# ══════════════════════════ A23) 纯断言帮手：数据往返 / 静态集合 / journal ══════════════════════════
+echo
+echo "-- 纯断言帮手（不起容器就能测）：往返 / 静态集合 / journal / 计数 --"
+assert_reset
+OUT="$(drill_assert_count_roundtrip revisions 2 2 "文章版本历史" 2>&1)"
+assert_rc "$?" "0" "往返相等 → PASS"
+assert_contains "${OUT}" "归档 2 条 == 恢复库 2 条" "两个数字都打出来"
+assert_reset
+OUT="$(drill_assert_count_roundtrip revisions 2 1 "" 2>&1)"
+assert_rc "$?" "1" "往返不等 → FAIL"
+assert_reset
+OUT="$(drill_assert_count_roundtrip revisions absent 0 "" 2>&1)"
+RC=$?
+assert_rc "${RC}" "0" "归档没有该集合 + 恢复库 0 条 → NOTE（如实说明，不冒充通过）"
+assert_eq "$(n_kind "${OUT}" "·")" "1" "记的是 NOTE"
+assert_contains "${OUT}" "如实说明" "明说这不是静默跳过"
+assert_reset
+OUT="$(drill_assert_count_roundtrip revisions 2 "" "" 2>&1)"
+RC=$?
+assert_rc "${RC}" "0" "恢复库读不出条数 → WARN 而不是 FAIL（环境问题不冤枉归档）"
+assert_eq "$(n_kind "${OUT}" WARN)" "1" "记的是 WARN"
+assert_contains "${OUT}" "没有验证" "明说这项没有验证（不是通过）"
+assert_reset
+OUT="$(drill_assert_deleted_roundtrip 6 6 6 0 2>&1)"
+assert_rc "$?" "0" "软删除往返相等 + deletedAt 齐全 → PASS"
+assert_reset
+OUT="$(drill_assert_deleted_roundtrip 6 6 5 0 2>&1)"
+assert_rc "$?" "1" "回收站少了一条 → FAIL"
+assert_reset
+OUT="$(drill_assert_deleted_roundtrip 6 6 6 2 2>&1)"
+assert_rc "$?" "1" "deletedAt 丢了 2 条 → FAIL"
+assert_reset
+OUT="$(drill_assert_deleted_roundtrip 0 0 0 0 2>&1)"
+assert_contains "${OUT}" "空集对账" "0==0 时明说证明不了 deletedAt 行为（不冒充强结论）"
+assert_reset
+OUT="$(drill_assert_static_set 'static/img/a.webp
+static/img/b.webp' 'static/img/a.webp
+static/img/b.webp' 2>&1)"
+assert_rc "$?" "0" "静态集合一致 → PASS"
+assert_contains "${OUT}" "prune-on-restore 生效" "说明了这条证明的是先清后写"
+assert_reset
+OUT="$(drill_assert_static_set 'static/img/a.webp
+static/img/b.webp' 'static/img/a.webp' 2>&1)"
+assert_rc "$?" "1" "缺文件 → FAIL"
+assert_contains "${OUT}" "static/img/b.webp" "点名缺的是哪个"
+assert_reset
+OUT="$(drill_assert_static_set 'static/img/a.webp' 'static/img/a.webp
+static/img/old.webp' 2>&1)"
+assert_rc "$?" "1" "多文件（merge 而不是 replace）→ FAIL"
+assert_contains "${OUT}" "old.webp" "点名多出来的是哪个"
+assert_reset
+OUT="$(drill_assert_static_set 'static/img/a.webp
+static/img/b.webp' '' 2>&1)"
+assert_eq "$(n_kind "${OUT}" WARN)" "1" "容器侧一个都列不出来 → WARN（枚举坏了不冤枉归档，也不冒充一致）"
+assert_reset
+OUT="$(drill_assert_journal "" "" 2>&1)"
+assert_rc "$?" "0" "journal 不在 → PASS"
+assert_reset
+OUT="$(drill_assert_journal '{"phase":"static"}' "caveat" 2>&1)"
+assert_rc "$?" "1" "journal 残留 → FAIL（恢复没干净收尾）"
+assert_contains "${OUT}" "混合状态" "说清了后果"
+assert_eq "$(drill_ndjson_count '{"a":1}
+{"b":2}
+
+')" "2" "NDJSON 计数：空行不算文档"
+assert_eq "$(drill_ndjson_count "")" "0" "NDJSON 计数：空内容 = 0"
+assert_eq "$(drill_deleted_stats '{"deleted":true,"deletedAt":"2026-01-01"}
+{"deleted":true}
+{"content":"{\"deleted\":true}","deleted":false}')" "deleted=2 withAt=1" "软删除统计：正文字面量骗不到它，deletedAt 分开数"
+assert_eq "$(drill_counts_get 'revisions=2
+deleted=6' deleted)" "6" "counts 输出解析"
+assert_eq "$(drill_counts_get 'revisions=2' nope)" "" "读不出的标签给空（调用方走 WARN 分支）"
+assert_eq "$(drill_integ_mode_label full)" "checked" "模式标签：full→checked"
+assert_eq "$(drill_integ_mode_label unavailable)" "no-integrity" "模式标签：unavailable→no-integrity"
+assert_eq "$(drill_integ_mode_label "")" "not-run" "模式标签：空→not-run"
+assert_eq "$(drill_jsonl_safe 'a"b\c')" 'a\"b\\c' "台账字符串转义：引号与反斜杠"
+assert_eq "$(drill_jsonl_safe "$(printf 'a\nb\tc')")" "abc" "台账字符串转义：控制字符被去掉（JSONL 是按行的，一行变两行台账就坏了）"
+
+# ══════════════════════════ A24) cron-safe：颜色与 tty ══════════════════════════
+echo
+echo "-- cron-safe：管道里自动去色，VANBLOG_FORCE_COLOR 才保留 --"
+COLOR_OUT="$(env -u VANBLOG_NO_COLOR VANBLOG_BACKUP_DIR="${RV}" VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" \
+  bash -c 'env -u VANBLOG_DRILL_SKIP_MAIN bash "${0}" backup-status --no-stale-check 2>&1 | cat' "${SCRIPT}")"
+if printf '%s' "${COLOR_OUT}" | grep -q $'\033'; then
+  fail "管道输出里还有 ANSI 转义码（cron 邮件里没法读）"
+else
+  pass "stdout 不是 tty 时自动去色（不用手动设 VANBLOG_NO_COLOR）"
+fi
+FORCE_OUT="$(env -u VANBLOG_NO_COLOR VANBLOG_FORCE_COLOR=1 VANBLOG_BACKUP_DIR="${RV}" VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" \
+  bash -c 'env -u VANBLOG_DRILL_SKIP_MAIN bash "${0}" backup-status --no-stale-check 2>&1 | cat' "${SCRIPT}")"
+if printf '%s' "${FORCE_OUT}" | grep -q $'\033'; then
+  pass "VANBLOG_FORCE_COLOR=1 时管道里也保留颜色（less -R 场景）"
+else
+  fail "VANBLOG_FORCE_COLOR=1 没有生效"
+fi
+
+# ══════════════════════════ A25) 退出码纪律（新增失败路径）══════════════════════
+echo
+echo "-- 退出码纪律：新的失败路径必须真的非 0（防「失败开始退出 0」的回归）--"
+run_cli verify "${IGC}" >"${TEST_DIR}/rc3.out" 2>&1
+RC=$?
+assert_eq "${RC}" "1" "成员哈希不符的归档：verify 退出码**恰好是 1**（哪天变成 0，这条就红）"
+RC4D="${TEST_DIR}/rc4dir"
+mkdir -p "${RC4D}"
+cp "${IG}" "${RC4D}/vanblog-full-20260917-116100.tar.zst"
+VANBLOG_BACKUP_DIR="${RC4D}" drill_verify_log_append verify "${RC4D}/vanblog-full-20260917-116100.tar.zst" pass ""
+VANBLOG_BACKUP_DIR="${RC4D}" run_cli backup-status --reverify-days 1 --no-stale-check >"${TEST_DIR}/rc4.out" 2>&1
+RC=$?
+assert_eq "${RC}" "0" "复验护栏在记录新鲜时放行（失败路径在上面 A20 已钉）"
+IGD="${TEST_DIR}/discdir"
+mkdir -p "${IGD}"
+cp "${IGC}" "${IGD}/vanblog-full-20260917-116000.tar.zst"
+VANBLOG_BACKUP_DIR="${IGD}" run_cli backup-status --strict >"${TEST_DIR}/rc5.out" 2>&1
+assert_ne "$?" "0" "backup-status --strict 对没验过的归档仍然非 0（既有语义没被新功能冲掉）"
+
+# ══════════════════════════ A26) 源码级不变式（新增）══════════════════════
+echo
+echo "-- 源码级不变式（成员级校验这一层）--"
+assert_contains "${SRC}" "quoting-style=literal" "成员名列表用原始字节（GNU tar 默认渲染会把控制字符转义，真站有 10 个这样的图名）"
+assert_contains "${SRC}" 'read -r -d '"''" "成员记录用 NUL 分隔解析（名字里可以有换行）"
+assert_contains "${SRC}" 'sha256sum <' "哈希走 stdin 重定向（文件名带换行时 GNU sha256sum 会往 hex 前面塞反斜杠）"
+assert_contains "${SRC}" "校验器自检不过" "有「匹配到 0 条就 FAIL」的自检（0 匹配的校验器 = 空转通过，本仓库踩过）"
+assert_contains "${SRC}" "drill_jsonl_safe" "台账字符串过了 JSONL 安全化"
+assert_not_contains "${SRC}" '${!A_TYPE[@]+' "不再用 ${!arr[@]+…} 这个会被 bash 解析成间接引用的坏写法（实测炸过 invalid variable name）"
+assert_contains "${SRC}" "VANBLOG_BACKUP_REVERIFY_DAYS" "定期复验护栏有环境变量入口"
+assert_contains "${SRC}" "VANBLOG_DRILL_SKIP_HASH" "--skip-hash 有环境变量入口"
+assert_contains "${SRC}" "restore-journal.json" "认识 server 的恢复日志文件"
+assert_contains "${SRC}" "lastSuccessSha256" "认识 server 状态文件里的整归档 sha256 字段"
+assert_contains "${SRC}" "lastSweepAt" "认识 server 状态文件里的 sweep 字段"
+# 台账文件名不变式（新增字段不改文件名；两条既有测试之外再钉一次）
+assert_contains "${SRC}" "vanblog-verify-log.jsonl" "台账文件名没变（它故意不匹配 vanblog-full-*）"
+
+
 # ══════════════════════════ B) 活体演练（默认跳过）══════════════════════
 echo
 echo "-- 活体演练（需要引擎 + 镜像 + 真归档；默认跳过）--"
@@ -1380,6 +2139,15 @@ else
   assert_contains "${LIVE_TEXT}" "恢复接口返回 HTTP 201" "活体：恢复接口 201"
   assert_contains "${LIVE_TEXT}" "RESULT: PASS" "活体：结论行是 PASS"
   assert_contains "${LIVE_TEXT}" "公开文章列表 total 与归档对得上" "活体：站点服务的文章数与归档对上了"
+  assert_contains "${LIVE_TEXT}" "数据往返" "活体：在一次性 mongo 里做了条数往返"
+  assert_contains "${LIVE_TEXT}" "revisions 的往返" "活体：文章版本历史做了往返（没有凭据就直连演练库数，不跳过）"
+  assert_contains "${LIVE_TEXT}" "migrations 的往返" "活体：迁移账本做了往返"
+  assert_contains "${LIVE_TEXT}" "drafts 的往返" "活体：草稿做了往返"
+  assert_contains "${LIVE_TEXT}" "软删除文章的往返" "活体：回收站做了往返"
+  assert_contains "${LIVE_TEXT}" "静态树逐文件一致" "活体：静态树与归档逐文件一致（prune-on-restore 的证明；含 10 个控制字符图名的原始字节比对）"
+  assert_contains "${LIVE_TEXT}" "恢复日志已清理" "活体：恢复日志断言跑了"
+  assert_contains "${LIVE_TEXT}" "预检：成员级哈希校验" "活体：成员级哈希预检跑了（旧归档如实报「不可用」）"
+  assert_contains "${LIVE_TEXT}" "完整性    ：成员哈希：" "活体：结论区自报了成员哈希是否校验过"
   if printf '%s' "${LIVE_TEXT}" | grep -q "vb-drill-app-"; then
     pass "活体：用的是一次性容器名（vb-drill-app-…）"
   else
@@ -1452,6 +2220,74 @@ else
     rm -rf "${GOOD_TMP}"
   fi
   rm -rf "${BAD_TMP}"
+
+  # ── 负例 2：中段字节翻转（与截断不同的损坏形状）──
+  # 要求：verify 点名损坏（帧校验和/成员），drill **拒绝**而不是半恢复，拒绝时不起容器。
+  FLIP_TMP="$(mktemp -d)"
+  FLIP_NAME="$(basename "${LIVE_ARCHIVE}")"
+  cp "${LIVE_ARCHIVE}" "${FLIP_TMP}/${FLIP_NAME}"
+  FLIP_SZ="$(wc -c <"${FLIP_TMP}/${FLIP_NAME}")"
+  printf '\xff' | dd of="${FLIP_TMP}/${FLIP_NAME}" bs=1 seek=$((FLIP_SZ / 2)) count=1 conv=notrunc status=none
+  VANBLOG_BACKUP_DIR="${FLIP_TMP}" run_cli verify "${FLIP_TMP}/${FLIP_NAME}" >"${TEST_DIR}/live-flip-v.out" 2>&1
+  FLIPV_RC=$?
+  assert_ne "${FLIPV_RC}" "0" "负例2：字节翻转的归档 verify 非 0"
+  if grep -qE "完整性校验失败|解不完整|sha256 不匹配|成员级" "${TEST_DIR}/live-flip-v.out"; then
+    pass "负例2：verify 点名了损坏（帧校验和失败 / 解不完整 / 成员哈希之一）"
+  else
+    fail "负例2：verify 没有点名损坏原因"
+  fi
+  VANBLOG_BACKUP_DIR="${FLIP_TMP}" run_cli drill \
+    ${LIVE_IMAGE:+--image "${LIVE_IMAGE}"} ${LIVE_ENG:+--engine "${LIVE_ENG}"} \
+    "${FLIP_TMP}/${FLIP_NAME}" >"${TEST_DIR}/live-flip-d.out" 2>&1
+  FLIPD_RC=$?
+  assert_ne "${FLIPD_RC}" "0" "负例2：字节翻转的归档 drill 非 0"
+  if grep -q "起一次性栈" "${TEST_DIR}/live-flip-d.out"; then
+    fail "负例2：drill 竟然起了容器（应该在预检就拒绝，而不是把坏归档传上去赌 server 的护栏）"
+  else
+    pass "负例2：drill 在预检就拒绝了（没有起容器 —— 不是半恢复，是根本不开始）"
+  fi
+  if grep -qE "RESULT: FAIL" "${TEST_DIR}/live-flip-d.out"; then
+    pass "负例2：结论行是 RESULT: FAIL"
+  else
+    fail "负例2：没有 RESULT: FAIL 结论行"
+  fi
+  if [[ -n "${LIVE_ENG}" ]] && command -v "${LIVE_ENG}" >/dev/null 2>&1; then
+    FLIP_LEFT="$("${LIVE_ENG}" ps -a --format '{{.Names}}' 2>/dev/null | grep -c 'vb-drill' || true)"
+    assert_eq "${FLIP_LEFT}" "0" "负例2：拒绝路径也没有留下任何 vb-drill* 容器"
+  fi
+  rm -rf "${FLIP_TMP}"
+
+  # ── 活体：带 integrity 块的归档（本测试现场造的小站点）走完整演练 ──
+  # 这是 P1+P3 全链路的真机证明：成员哈希预检（真比对）→ 容器恢复 → 版本历史/迁移/
+  # 草稿/回收站在一次性 mongo 里的条数往返 → 静态树逐文件一致 → 恢复日志清理。
+  IG_TMP="$(mktemp -d)"
+  make_integrity_archive "${IG_TMP}/vanblog-full-20260917-120000.tar.zst"
+  VANBLOG_BACKUP_DIR="${IG_TMP}" run_cli drill \
+    ${LIVE_IMAGE:+--image "${LIVE_IMAGE}"} ${LIVE_ENG:+--engine "${LIVE_ENG}"} \
+    "${IG_TMP}/vanblog-full-20260917-120000.tar.zst" >"${TEST_DIR}/live-ig.out" 2>&1
+  IGL_RC=$?
+  IGL_TEXT="$(cat "${TEST_DIR}/live-ig.out")"
+  if [[ "${IGL_RC}" != "0" ]]; then
+    echo "   ---- 活体 integrity 演练输出（最后 45 行）----"
+    tail -45 "${TEST_DIR}/live-ig.out" | sed 's/^/   /'
+    echo "   --------------------------------------------"
+  fi
+  assert_rc "${IGL_RC}" "0" "活体：带 integrity 块的归档完整演练通过"
+  assert_contains "${IGL_TEXT}" "RESULT: PASS" "活体：结论行 PASS"
+  assert_contains "${IGL_TEXT}" "预检：成员级哈希校验" "活体：成员哈希预检真的跑了"
+  assert_contains "${IGL_TEXT}" "成员哈希：已校验" "活体：PASS 行自报了「哈希已校验」（这个 PASS 是逐成员比对过的）"
+  assert_contains "${IGL_TEXT}" "revisions 的往返" "活体：文章版本历史做了往返对账"
+  assert_contains "${IGL_TEXT}" "归档 2 条 == 恢复库 2 条" "活体：版本历史 2 条真回来了（在一次性 mongo 里数出来的）"
+  assert_contains "${IGL_TEXT}" "migrations 的往返" "活体：迁移账本做了往返对账"
+  assert_contains "${IGL_TEXT}" "drafts 的往返" "活体：草稿做了往返对账"
+  assert_contains "${IGL_TEXT}" "软删除文章的 deletedAt 也回来了" "活体：deletedAt 字段做了对账（归档 1/1）"
+  assert_contains "${IGL_TEXT}" "静态树逐文件一致" "活体：静态树逐文件对账过了（含 C2 9B 控制字符文件名）"
+  assert_contains "${IGL_TEXT}" "恢复日志已清理" "活体：恢复日志断言跑了"
+  if [[ -n "${LIVE_ENG}" ]] && command -v "${LIVE_ENG}" >/dev/null 2>&1; then
+    IGL_LEFT="$("${LIVE_ENG}" ps -a --format '{{.Names}}' 2>/dev/null | grep -c 'vb-drill' || true)"
+    assert_eq "${IGL_LEFT}" "0" "活体：integrity 演练之后容器也全拆了"
+  fi
+  rm -rf "${IG_TMP}"
 fi
 
 echo

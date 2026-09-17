@@ -13,6 +13,13 @@ import {
 } from 'src/utils/publicArticleOrder';
 import { verifyAccessPassword } from 'src/utils/crypto';
 import {
+  hashAccessPasswordIdempotent,
+  isScryptHash,
+  needsPasswordUpgrade,
+  redactAccessSecretList,
+  resolveAccessPasswordWrite,
+} from 'src/utils/accessPassword';
+import {
   Logger,
   BadRequestException,
   Inject,
@@ -181,6 +188,23 @@ export class ArticleProvider {
     _id: 0,
   };
 
+  /**
+   * **管理端**列表投影：与 listView 逐字段一致，只多 select 一个 `password`。
+   *
+   * 为什么需要它：`password` 从此不再下发（schema 的 toJSON transform 会把它换成布尔
+   * `hasPassword`），但后台「文章列表 → 修改信息」弹窗是直接拿**列表行**当初始值的，
+   * 它需要知道"这篇到底设没设密码"才能把输入框提示写成「已设置（留空表示不修改）」
+   * 而不是「留空表示不加密」。取出来只为了算那个布尔，出口一定被脱敏（见 getByOption
+   * 末尾的 redactAccessSecretList）。
+   *
+   * ⚠️ 公开面（isPublic）**永远用 listView**：这条投影只在管理端分支里出现，
+   * 前台列表/__NEXT_DATA__ 的形状与体积一个字节都不变。
+   */
+  adminListView = {
+    ...this.listView,
+    password: 1,
+  };
+
   toPublic(oldArticles: Article[]) {
     return oldArticles.map((item) => {
       return {
@@ -205,8 +229,14 @@ export class ArticleProvider {
     if (createArticleDto.publishAt !== undefined) {
       (createArticleDto as any).publishAt = normalizePublishAt(createArticleDto.publishAt);
     }
-    const createdData = new this.articleModel(createArticleDto);
-    const newId = id || (await this.getNewId());
+    // 访问密码入库前换成 scrypt 哈希：明文存储等于"拿到库就拿到全站加密文章的密码"。
+    // 新建语义下**留空 = 不加密**（没有旧值需要保留）；`clearPassword` 不是 schema
+    // 字段，必须从入库对象里摘掉。规则的唯一真源是 utils/accessPassword.ts。
+    const passwordWrite = resolveAccessPasswordWrite(createArticleDto, 'create');
+    const payload: any = { ...createArticleDto };
+    delete payload.clearPassword;
+    payload.password = passwordWrite.password ?? '';
+    const createdData = new this.articleModel(payload);    const newId = id || (await this.getNewId());
     createdData.id = newId;
     createdData.pathname = await this.resolvePathnameForCreate(createArticleDto, newId);
     // P6：正文字数副本入库（readingMinutes 在"投影不带正文"的查询里靠它算）。
@@ -726,12 +756,33 @@ export class ArticleProvider {
     return thisView;
   }
 
+  /**
+   * **全站唯一**允许把"存储态访问密码"交出去的读接口：给后台「导出 JSON 备份」用
+   * （`controller/admin/backup/backup.controller.ts` 的 `GET /api/admin/backup/export`）。
+   *
+   * 为什么必须单独开一个口子：`ArticleSchema` 挂了 toJSON transform（密文绝不下发），
+   * 而导出接口最后一步是 `JSON.stringify(data)` —— 直接丢 mongoose 文档进去，
+   * `password` 会被 transform 抹掉，导出的 JSON 再导入到**另一套站点**时
+   * `create()` 走"留空 = 不加密"分支，加密文章会**静默变成公开文章**。
+   * 这里用 `toObject()`（transform 刻意没挂在 toObject 上）拿到原样文档，
+   * 与整站备份归档"存的值原样进、原样出"的原则一致。
+   *
+   * ⚠️ 不要把它的返回值直接塞进任何 HTTP 响应：它带密文。
+   * 导入侧是安全的 —— `hashAccessPasswordIdempotent` 认得已经是 scrypt 的值，
+   * 不会把哈希再哈希一次（见 utils/accessPassword.ts）。
+   */
+  async getAllForExport(includeHidden = true, includeDelete?: boolean): Promise<any[]> {
+    const docs = await this.getAll('admin', includeHidden, includeDelete);
+    return (docs || []).map((doc: any) =>
+      typeof doc?.toObject === 'function' ? doc.toObject() : { ...(doc?._doc || doc) },
+    );
+  }
+
   async getAll(
     view: ArticleView,
     includeHidden: boolean,
     includeDelete?: boolean,
-  ): Promise<Article[]> {
-    const thisView: any = this.getView(view);
+  ): Promise<Article[]> {    const thisView: any = this.getView(view);
     const $and: any = [];
     if (!includeDelete) {
       $and.push({
@@ -930,7 +981,10 @@ export class ArticleProvider {
     // console.log(JSON.stringify(sort, null, 2));
     let view: any = isPublic ? this.publicView : this.adminView;
     if (option.toListView) {
-      view = this.listView;
+      // 管理端列表用 adminListView（= listView + password）：不是为了下发密码，
+      // 而是为了在出口把它换成布尔 hasPassword（后台「修改信息」弹窗直接拿列表行当初始值，
+      // 得知道"设没设过"）。公开面照旧用 listView，形状与体积一个字节都不变。
+      view = isPublic ? this.listView : this.adminListView;
     }
     if (option.withWordCount || option.withExcerpt) {
       // 两个开关都需要正文才能算（字数 / 摘要），先按完整视图取，算完再在下面剥掉。
@@ -1042,14 +1096,28 @@ export class ArticleProvider {
       });
     }
     if ((option.withWordCount || option.withExcerpt) && option.toListView) {
-      // 重置视图
+      // 重置视图。
+      // ⚠️ `password: undefined` 只在**公开面**加：管理端要把真实值留到出口的
+      //    redactAccessSecretList 那里换成 hasPassword（提前抹成 undefined 会让
+      //    "有没有设过密码"这个信息一起丢掉，弹窗就只能瞎猜文案了）。
       resData.articles = articles.map((a: any) => ({
         ...(a?._doc || a),
         content: undefined,
-        password: undefined,
+        ...(isPublic ? { password: undefined } : {}),
       }));
     } else {
       resData.articles = articles;
+    }
+
+    // 管理端出口统一脱敏（P3）：上面几条分支返回的形状**不一致** —— 有的是 mongoose
+    // 文档（schema 的 toJSON transform 会脱敏），有的是 `{...doc._doc}` 展开出来的普通
+    // 对象（transform 管不到，比如 withExcerpt 分支、以及 isPublic 的私密文章分支）。
+    // 在出口过一遍 redactAccessSecret：文档走 toJSON、普通对象就地删键，两种形状出来
+    // 都是"没有 password"；只有投影真的取了密码时才多出布尔 hasPassword。
+    // ⚠️ 公开面（isPublic）不进这里：publicView/listView 压根没 select password，
+    //    公开响应的形状必须与今天逐字节一致（前台 __NEXT_DATA__ 里多一个键都是白送体积）。
+    if (!isPublic) {
+      resData.articles = redactAccessSecretList(resData.articles);
     }
 
     resData.total = total;
@@ -1555,9 +1623,14 @@ export class ArticleProvider {
     return resData;
   }
 
-  async findAll(): Promise<Article[]> {
-    return this.articleModel.find({}).exec();
-  }
+  // ⚠️ 这里以前有一个 `findAll()`（`return this.articleModel.find({}).exec()`），已删除。
+  // 原因：① **全仓库零调用方**（grep 见交付报告）；② 它是"无投影、整集合、连
+  // password 一起捞回来"的形状 —— 访问密码哈希化之后，一个死方法还在往外递存储态密文，
+  // 正是上一轮删掉 washViewerInfoByVisitProvider / washViewerInfoToVisitProvider 时
+  // 要消灭的那类陷阱："以后有人不明就里接上去"。
+  // 要全量读文档请用带 view 投影的 getAll(view, …)；要给整站备份导出用 getAllForExport()
+  // （那是全站唯一被允许交出存储态密码的读接口，返回值绝不进 HTTP 响应）。
+
   async deleteById(id: number | string) {
     const numericId = parseNumericId(id);
     // deletedAt：回收站列表按"最近删除"排序（P3）。老数据没有这个字段，不回填；
@@ -1670,6 +1743,15 @@ export class ArticleProvider {
   ) {
     const numericId = parseNumericId(id);
     const patch: UpdateArticleDto = { ...updateArticleDto };
+    // 访问密码（P1）：留空/缺键 = **不修改**（表单已经不再回填密文，见 utils/accessPassword.ts），
+    // 要解除加密必须显式 `clearPassword: true`；填了新值就存 scrypt 哈希。
+    const passwordWrite = resolveAccessPasswordWrite(updateArticleDto, 'update');
+    delete (patch as any).clearPassword;
+    if (passwordWrite.password === undefined) {
+      delete patch.password;
+    } else {
+      patch.password = passwordWrite.password;
+    }
     if (patch.pathname !== undefined) {
       // 别名只在显式传入时才校验/改写：标题变化不会重新生成 slug，
       // 否则已经分享出去的 /post/<pathname> 会全部失效。
@@ -1700,6 +1782,30 @@ export class ArticleProvider {
         .exec();
       if (before) {
         await this.revisionProvider.appendSafe(numericId, before as any, patch);
+      }
+    }
+    // 顺手升级（P2）：这次保存**没碰密码**，但库里存的还是历史明文，就趁这次写一起换成
+    // scrypt 哈希 —— 一台从不重启的站点也能收敛，不必等启动 wash。
+    // 已经是哈希的（needsPasswordUpgrade=false）一个字节都不动，所以**幂等**：不会二次哈希。
+    // ⚠️ 整段包 try/catch：这只是"顺便做的好事"，读失败（DB 抖动 / 投影不支持）绝不能
+    //    把保存本身带崩；漏掉的文档由启动 wash 兜底。
+    if (passwordWrite.password === undefined) {
+      try {
+        const stored: any = await this.articleModel
+          .findOne({ id: numericId }, { password: 1 })
+          .exec();
+        if (stored && needsPasswordUpgrade(stored.password)) {
+          patch.password = hashAccessPasswordIdempotent(stored.password);
+          this.logger.log(
+            `文章 ${numericId} 的历史明文访问密码已在本次保存时升级为 scrypt 哈希`,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `读取文章 ${numericId} 的存量访问密码失败，跳过本次顺手升级：${
+            (err as Error)?.message || err
+          }`,
+        );
       }
     }
     const res = await this.articleModel.updateOne(
@@ -1891,6 +1997,88 @@ export class ArticleProvider {
       this.logger.log(`回填文章字数副本：扫描 ${docs.length} 篇，写入 ${updated} 篇`);
     }
     return { scanned: docs.length, updated };
+  }
+
+  /**
+   * 启动清洗（P2）：把**历史明文**的文章 / 分类访问密码洗成 scrypt 哈希。
+   *
+   * 为什么需要它：写入路径（create / updateById / importX / 分类更新）从今往后只会存
+   * 哈希，但库里已有的文档、以及从**旧整站备份**恢复进来的文档（`utils/fullBackup.ts`
+   * 用原生 driver 原样写回，绕过所有 provider）都还是明文。校验端
+   * `verifyAccessPassword` 两种格式都认，所以迁移**不是**"不洗就打不开"的硬门槛，
+   * 而是一次把窗口关掉的收尾。
+   *
+   * 性质：
+   * - **幂等**：只动"非空且不是 scrypt 格式"的值；第二次跑 washed=0（有测试钉子）。
+   * - **有界**：一次查完（投影只取 `_id`+`password`），返回 scanned/washed 计数，
+   *   由 main.ts 的 `wash('wash:accessPasswords', …)` 记进 `migrations` 台账。
+   * - **可中断**：逐条 `updateOne`，洗到一半挂了也只是"一部分还是明文"，
+   *   那部分照样能解锁，下次启动接着洗。
+   * - **不阻塞事件循环**：scrypt 是同步的（N=16384,r=8 ⇒ 16MB，单次几十毫秒），
+   *   每条之间 `await sleep(0)` 让出一次；启动这会儿正好是 ISR 全量渲染的时候，
+   *   连续几百次同步 scrypt 会把整个进程钉死。
+   *
+   * ⚠️ 这个方法**自己往台账记账**：main.ts 那边已经用 `wash()` 包了一层
+   * （与 `wash:userSalt` 同一个形状），再包一次就记重了。
+   */
+  async washAccessPasswords(): Promise<{
+    scanned: number;
+    washed: number;
+    alreadyHashed: number;
+    articles: number;
+    categories: number;
+    durationMs: number;
+  }> {
+    const started = Date.now();
+    const articles = await this.washAccessPasswordsIn(this.articleModel as any, '文章');
+    const categories = await this.washAccessPasswordsIn(this.categoryModal as any, '分类');
+    const result = {
+      scanned: articles.scanned + categories.scanned,
+      washed: articles.washed + categories.washed,
+      alreadyHashed: articles.alreadyHashed + categories.alreadyHashed,
+      articles: articles.washed,
+      categories: categories.washed,
+      durationMs: Date.now() - started,
+    };
+    if (result.washed > 0) {
+      this.logger.log(
+        `访问密码明文清洗完成：文章 ${articles.washed} 篇、分类 ${categories.washed} 条` +
+          `（扫描 ${result.scanned} 条，已是哈希 ${result.alreadyHashed} 条，耗时 ${result.durationMs}ms）`,
+      );
+    }
+    return result;
+  }
+
+  private async washAccessPasswordsIn(
+    model: Model<any>,
+    label: string,
+  ): Promise<{ scanned: number; washed: number; alreadyHashed: number }> {
+    // 过滤条件刻意宽松（只排掉"没有 / 空 / null"），非字符串这种畸形值也捞出来在 JS 里
+    // 判一遍：漏掉一条就等于库里永远留着一份明文。
+    const docs: any[] = await model
+      .find({ password: { $exists: true, $nin: ['', null] } }, { password: 1 })
+      .exec();
+    let washed = 0;
+    let alreadyHashed = 0;
+    for (const doc of docs) {
+      const stored = doc?.password;
+      if (stored === undefined || stored === null || stored === '') {
+        continue;
+      }
+      const text = String(stored);
+      if (isScryptHash(text)) {
+        alreadyHashed += 1;
+        continue;
+      }
+      // 用 _id 定位：文章/分类的业务主键（id / name）都可能是导入时改过的，_id 一定唯一
+      await model.updateOne({ _id: doc._id }, { password: hashAccessPasswordIdempotent(text) }).exec();
+      washed += 1;
+      if (washed % 25 === 0) {
+        this.logger.log(`清洗${label}访问密码：已处理 ${washed} 条`);
+      }
+      await sleep(0);
+    }
+    return { scanned: docs.length, washed, alreadyHashed };
   }
 
   /**

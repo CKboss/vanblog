@@ -1,7 +1,9 @@
-::: warning 下面的镜像是上游官方版
+::: warning 先选镜像：本分支还是上游官方版
 
-下面的 `image: mereith/van-blog:latest` 是**上游官方镜像**，不包含本 fork（`CKboss/vanblog` 的
-`dev/dsh` 分支）的任何改动。想用本分支有三种方式：
+本 fork（`CKboss/vanblog` 的 `dev/dsh` 分支）的镜像发布在 **`ghcr.io/ckboss/vanblog`**，
+上游官方镜像是 `mereith/van-blog:latest`（另有阿里云镜像源
+`registry.cn-beijing.aliyuncs.com/mereith/van-blog:latest`）。**两边不通用**：本分支的整站备份/恢复、
+恢复演练、安全加固与下面提到的新安装方式都不在上游镜像里。想用本分支有三种方式：
 
 1. **一键脚本（推荐）**：默认 `docker pull ghcr.io/ckboss/vanblog:dev-dsh`（GitHub Actions 构建发布，
    小机器也装得动），拉不到时自动退回「克隆源码 + 本地构建」。
@@ -15,7 +17,7 @@
 
    ```bash
    docker pull ghcr.io/ckboss/vanblog:dev-dsh
-   # 也有 dev-dsh-<短sha> 与 latest 两个标签；只发布了 linux/amd64
+   # 标签：v2026.9.1 等发布号 / latest / dev-dsh / dev-dsh-<短sha>（钉版本、回滚用）；只发布了 linux/amd64
    ```
 
    镜像**不是每次 push 都重建**（一次构建 20–40 分钟 runner 时间，而多数提交只是文档改动）：
@@ -52,7 +54,7 @@
    # ⚠️ MongoDB 的版本不能随手换：数据目录与 featureCompatibilityVersion 绑定，
    #    4.4 的数据目录换成 mongo:7.0 会让 mongod 直接拒绝启动（看起来像数据全丢）。
    #    要升级走「整站备份 → 新 tag 起空库 → 恢复」，或 5.0→6.0→7.0 阶梯升级并逐级 setFCV。
-   #    另外 mongoose 7.6 / driver 5.9 官方只支持到 server 7.0，不要用 mongo:latest（8.x）。
+   #    本项目按 mongo:7.0 实测，不要用 mongo:latest（8.x）。
    #    老机器 CPU 不支持 avx 的话，5.0+ 起不来，只能用 mongo:4.4.16。
 
    # 内存小于 6GB 的机器建议**串行**构建（一次只跑一个重活），否则三个 stage 并发会 OOM：
@@ -87,27 +89,46 @@ systemctl enable --now docker
 
 ### 2.新建编排文件
 
-在安装好了 `docker` 和 `docker-compose` 后，新建一个 `vanblog` 的目录，在这个目录下新建 `docker-compose.yaml`文件，内容如下：
+在安装好了 `docker` 和 `docker-compose` 后，新建一个 `vanblog` 的目录，在这个目录下新建 `docker-compose.yaml`文件。
+
+::: tip 直接用仓库里的模板
+
+本分支维护着一份**逐行带注释**的编排模板：仓库里的
+[`docker-compose/docker-compose-template.yml`](https://github.com/CKboss/vanblog/blob/dev/dsh/docker-compose/docker-compose-template.yml)
+（每个 Release 的附件里也有同名文件，一键脚本装的就是它）。它比下面的最小示例多了
+mongo 健康检查、日志大小上限、`stop_grace_period`、ulimits 等生产细节，推荐以它为准，
+把 `vanblog_image` / `vanblog_mongo_image` / 端口 / 数据目录几个占位符替换掉即可。
+
+:::
+
+最小示例（本分支镜像 + mongo 7）：
 
 ```yml
-version: '3'
+version: '3.4'
 
 services:
   vanblog:
-    # 阿里云镜像源
-    # image: registry.cn-beijing.aliyuncs.com/mereith/van-blog:latest
-    image: mereith/van-blog:latest
+    # 本分支镜像；上游官方镜像是 mereith/van-blog:latest
+    image: ghcr.io/ckboss/vanblog:dev-dsh
     restart: always
     environment:
       TZ: 'Asia/Shanghai'
       # 邮箱地址，用于自动申请 https 证书
-      EMAIL: 'someone@mereith.com'
+      EMAIL: 'someone@example.com'
       # 本机反代时仅监听回环。默认留空（所有网卡）
       # VAN_BLOG_SERVER_HOST: '127.0.0.1'
+      # ── 零接触初始化（可选）：全新站点在容器开始监听前就建好管理员，
+      #    站点不会暴露在「未初始化」状态；已初始化的站点会忽略这几项。──
+      # VANBLOG_ADMIN_USER: 'your-admin-name'
+      # VANBLOG_ADMIN_PASSWORD: 'a-strong-unique-password'
+      # 推荐用文件（Docker secret）而不是内联；_FILE 优先于内联变量
+      # VANBLOG_ADMIN_PASSWORD_FILE: '/run/secrets/vanblog_admin_password'
+      # ── 初始化密钥（可选）：匿名初始化接口必须携带日志目录里 setup.key 的密钥 ──
+      # VANBLOG_INIT_REQUIRE_SETUP_KEY: 'true'
     volumes:
       # 图床文件的存放地址，按需修改。
       - ${PWD}/data/static:/app/static
-      # 日志文件
+      # 日志文件（初始化密钥 setup.key、忘记密码的 restore.key、整站备份归档都在这里）
       - ${PWD}/log:/var/log
       # Caddy 配置存储
       - ${PWD}/caddy/config:/root/.config/caddy
@@ -117,14 +138,25 @@ services:
       # 前面的是映射到宿主机的端口号，改端口的话改前面的。
       - 80:80
       - 443:443
+      # HTTP/3(QUIC) 走 UDP；不开也不影响 HTTP/2
+      - 443:443/udp
+    depends_on:
+      - mongo
   mongo:
-    # 某些机器不支持 avx 会报错，所以默认用 v4 版本。有的话用最新的。
-    image: mongo:4.4.16
+    # ⚠️ 某些老机器 CPU 不支持 avx，跑不了 5.0+，那种情况用 mongo:4.4.16。
+    # 数据目录与 MongoDB 大版本绑定，装好之后不要随手换 tag（见上面的警告）。
+    image: mongo:7.0
     restart: always
     environment:
       TZ: 'Asia/Shanghai'
     volumes:
       - ${PWD}/data/mongo:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ping:1}).ok' || mongo --quiet --eval 'db.runCommand({ping:1}).ok'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 ```
 
 > 所有可用的环境变量详见 [参考 → 环境变量](../reference/env.md)。
@@ -137,4 +169,20 @@ services:
 docker-compose up -d
 ```
 
-启动完毕后，请 [完成初始化](./init.md)。
+启动完毕后，请 [完成初始化](./init.md)（走向导、在初始化页上传整站备份恢复、或用上面注释里的
+零接触环境变量，三选一）。
+
+::: tip 健康检查
+
+镜像自带 `HEALTHCHECK`（每 60 秒打一次匿名的 `GET /api/public/health`，数据库 ping 不通返回 503）。
+`docker ps` 的 STATUS 列会显示 `(healthy)` / `(unhealthy)`。也可以手动验证：
+
+```bash
+curl -s http://127.0.0.1/api/public/health
+```
+
+⚠️ 两个已知边界：用 **podman/buildah** 构建的镜像会**丢掉** Dockerfile 里的 `HEALTHCHECK`
+指令（docker buildx 保留），跑在 podman 系编排上要自己配健康检查；另外 Docker 自身不会因为
+unhealthy 就重启容器（restart 策略只看退出码），这个信号是给人和编排系统看的。
+
+:::

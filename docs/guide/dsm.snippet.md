@@ -1,5 +1,16 @@
 首先安装 `Docker` 套件。
 
+::: warning 镜像选择
+
+下面按 `映像/从 URL 添加` 演示的是**上游官方镜像** `mereith/van-blog`。本 fork
+（`CKboss/vanblog`）的镜像在 `ghcr.io/ckboss/vanblog`（标签 `dev-dsh` / `v2026.9.1` 等，
+不含在上游镜像里的功能见 [快速上手](../guide/get-started.md)），从 URL 添加时填
+`ghcr.io/ckboss/vanblog` 即可；拉不动多半是因为 ghcr 包还是 private 或群晖直连 ghcr 太慢，
+可以先在能访问的机器上 `docker pull` + `docker save`，再用 `映像/新增/从文件添加` 导入。
+最省事的仍然是在 SSH 里跑[一键脚本](../guide/get-started.md#部署方式)。
+
+:::
+
 ### 下载镜像
 
 在 `Docker` 套件中点击 `映像/新增/从 URL 添加`:
@@ -14,7 +25,7 @@
 
 ![选择标签](https://pic.mereith.com/img/409c41cbe5ebf9d3be1630965b5a6e46.clipboard-2022-08-29.png)
 
-仿照上面的增加 `mongo` 镜像，版本选择 `4.4.9` 的，如图所示（有些机器不支持 AVX，用最新的会报错）：
+仿照上面的增加 `mongo` 镜像：推荐 `7.0`（本项目按它实测）；**有些老机器 CPU 不支持 AVX，跑不了 5.0+**，那种情况选 `4.4.16`，如图所示：
 
 ![添加 mongo 镜像](https://pic.mereith.com/img/acd15a0e47c3a28d78a78c9102a7593e.clipboard-2022-09-15.png)
 

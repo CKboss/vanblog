@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { spawn, spawnSync } from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
@@ -7,13 +8,27 @@ import type { Db, MongoClient } from 'mongodb';
 import {
   BACKUP_KIND,
   BACKUP_VERSION,
+  BackupIntegrity,
+  BackupSourceInfo,
   CollectionSummary,
   FullBackupManifest,
   backupFileName,
   encodeDoc,
   decodeDoc,
+  formatBytes,
   isFullBackupManifest,
 } from './backupCodec';
+import {
+  MANIFEST_COPY_FILENAME,
+  TarEntryInfo,
+  TarHashResult,
+  hashFile,
+  hashTarStream,
+} from './backupTarStream';
+import { buildIntegrity, probeCompressorChecksum, writeSha256Sidecar } from './backupIntegrity';
+import { RestoreJournalWriter } from './restoreJournal';
+import { StaticPruneReport, formatPruneReport, pruneFolderToMatch } from './staticPrune';
+import { envBool } from './envBool';
 
 /**
  * 整站备份 / 恢复：把 **数据库（含 waline 评论库）+ 本地静态文件（图床 / 附件 / 自定义页面）**
@@ -63,7 +78,7 @@ const INSERT_BATCH = 500;
 
 export type BackupFormat = 'zstd' | 'xz' | 'gzip';
 
-interface CompressorSpec {
+export interface CompressorSpec {
   format: BackupFormat;
   ext: string;
   compress: string[];
@@ -82,9 +97,14 @@ function compressorSpecs(): CompressorSpec[] {
     {
       format: 'zstd',
       ext: '.tar.zst',
-      compress: ['zstd', zstdLevel(), '--long=27', '-T0', '-q', '-c'],
+      // ⚠️ `--check` 是**显式**写的，虽然 zstd CLI 本来就默认开内容校验和。
+      // 实测（本次审计）：归档帧头描述符字节是 `0x04`，bit2(Content_Checksum_flag)=1，
+      // 但那是 CLI 默认值给的，不是我们要求的 —— 换个实现、或者哪天有人加了 `--no-check`，
+      // 归档就静默失去唯一的自校验能力。显式写死 + `integrity.zstdFrameChecksum` 记录实测值
+      // + `backupVerify` 每次都重新读帧头比对（`probeCompressorChecksum`），三处一起钉住。
+      compress: ['zstd', zstdLevel(), '--long=27', '-T0', '--check', '-q', '-c'],
       decompress: ['zstd', '-dc', '--long=27', '-q'],
-      label: `zstd ${zstdLevel()} --long=27 -T0`,
+      label: `zstd ${zstdLevel()} --long=27 -T0 --check`,
     },
     {
       format: 'xz',
@@ -199,12 +219,38 @@ function rmrf(target: string) {
   }
 }
 
-/** tar | 压缩器 > 输出文件（全异步，不阻塞事件循环）。 */
-function tarCompress(stagingDir: string, outFile: string, spec: CompressorSpec): Promise<void> {
+/** 目标目录的剩余空间（人话）；读不到就返回 '?'，绝不让它把主流程带崩。 */
+export function freeSpaceText(dir: string): string {
+  try {
+    // Node 18.15+ 的 statfsSync；容器与本机都是 Node 24
+    const stats = (fs as any).statfsSync?.(dir);
+    if (!stats || typeof stats.bavail !== 'number' || typeof stats.bsize !== 'number') {
+      return '?';
+    }
+    return formatBytes(stats.bavail * stats.bsize);
+  } catch {
+    return '?';
+  }
+}
+
+/**
+ * tar | 压缩器 > 输出文件（全异步，不阻塞事件循环）。
+ *
+ * 顺带**边写边算整份归档的 sha256**（一个 `data` 监听器挂在压缩器 stdout 上，
+ * 与 `pipe()` 并存，不额外缓冲、不改变数据流），所以 `.sha256` sidecar 与
+ * `backup-status.json` 里那个整归档哈希是**零额外读盘**得到的。
+ */
+function tarCompress(
+  stagingDir: string,
+  outFile: string,
+  spec: CompressorSpec,
+): Promise<{ bytes: number; sha256: string }> {
   return new Promise((resolve, reject) => {
     const tar = spawn('tar', ['-cf', '-', '-C', stagingDir, '.']);
     const compressor = spawn(spec.compress[0], spec.compress.slice(1));
     const out = fs.createWriteStream(outFile);
+    const digest = crypto.createHash('sha256');
+    let streamed = 0;
     let tarErr = '';
     let compErr = '';
     let settled = false;
@@ -247,7 +293,18 @@ function tarCompress(stagingDir: string, outFile: string, spec: CompressorSpec):
     });
     tar.on('error', (err) => fail(`tar 启动失败：${err.message}`));
     compressor.on('error', (err) => fail(`${spec.format} 压缩器启动失败：${err.message}`));
-    out.on('error', (err) => fail(`写入备份文件失败：${err.message}`));
+    out.on('error', (err: Error) => {
+      // 写不下去最常见的原因就是磁盘满：把剩余空间一起说出来，
+      // 否则只有一句 ENOSPC，运维得自己上机器 df
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const free = freeSpaceText(path.dirname(outFile));
+      fail(
+        `写入备份文件失败：${err.message}（${outFile}；剩余空间 ${free}` +
+          (code ? `；errno=${code}` : '') +
+          (code === 'ENOSPC' ? ' —— 磁盘已满，归档不会留下半成品' : '') +
+          '）',
+      );
+    });
     tar.on('exit', (code) => {
       // exit 1 = "file changed as we read it"：备份期间正好有图片被原地替换时会发生，
       // 归档本身仍可用，不该当成致命错误（cp -al 硬链接窗口里尤其容易碰到）
@@ -255,11 +312,22 @@ function tarCompress(stagingDir: string, outFile: string, spec: CompressorSpec):
         fail(`tar 退出码 ${code}：${tarErr.slice(0, 500)}`);
       }
     });
+    // ⚠️ 这个 'data' 监听器与下面的 pipe 并存（同一个 flowing 流可以多个消费者），
+    // 只为算哈希；不引入 Transform 是为了避免"多一层缓冲 → compressor 的 close
+    // 比 flush 先到 → out.end() 把在途数据截断"这个隐患
+    compressor.stdout.on('data', (chunk: Buffer) => {
+      streamed += chunk.length;
+      digest.update(chunk);
+    });
     compressor.stdout.pipe(out);
     tar.stdout.pipe(compressor.stdin);
     compressor.on('close', (code) => {
       if (code !== 0) {
-        fail(`${spec.format} 压缩失败（退出码 ${code}）：${compErr.slice(0, 500)}`);
+        const free = freeSpaceText(path.dirname(outFile));
+        fail(
+          `${spec.format} 压缩失败（退出码 ${code}）：${compErr.slice(0, 500)}` +
+            `（剩余空间 ${free}）`,
+        );
         return;
       }
       out.end();
@@ -267,10 +335,116 @@ function tarCompress(stagingDir: string, outFile: string, spec: CompressorSpec):
     out.on('close', () => {
       if (!settled) {
         settled = true;
-        resolve();
+        resolve({ bytes: streamed, sha256: digest.digest('hex') });
       }
     });
   });
+}
+
+/**
+ * 打包**前**把暂存树整棵过一遍 tar 流，算出每个成员的名字与 sha256（P1）。
+ *
+ * 为什么用 tar 流而不是"遍历目录逐个哈希"：成员名必须是 `tar -tf` 会打印的那个字符串
+ * （`./` 前缀、目录项带结尾 `/`、超过 100 字符时走 ustar prefix 或 GNU 长名），
+ * 而这些规则由 tar 实现决定。直接问 tar 本身，就不用假设 GNU 与 busybox 一致
+ * （实测两者一致，但不必依赖）。
+ *
+ * 代价：多一遍 70MB 的顺序读（实测见报告），换来的是"清单里记的就是归档里真的有的"。
+ */
+export function hashStagingTree(stagingDir: string): Promise<TarHashResult> {
+  return new Promise((resolve, reject) => {
+    const tar = spawn('tar', ['-cf', '-', '-C', stagingDir, '.']);
+    let stderr = '';
+    let exitCode: number | null = null;
+    tar.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    tar.on('error', (err) =>
+      reject(new BadRequestException(`tar 启动失败（计算成员哈希）：${err.message}`)),
+    );
+    const exited = new Promise<number | null>((res) => {
+      tar.on('exit', (code) => {
+        exitCode = code;
+        res(code);
+      });
+      tar.on('close', () => res(exitCode));
+    });
+    const hashed = hashTarStream(tar.stdout);
+    Promise.all([hashed, exited])
+      .then(([result, code]) => {
+        // 与打包那一遍同样容忍退出码 1（"file changed as we read it"）：
+        // 暂存树是硬链接快照，导出期间有人原地覆盖图片时会走到这里
+        if (code !== 0 && code !== null && code !== 1) {
+          reject(
+            new BadRequestException(
+              `计算成员哈希失败（tar 退出码 ${code}）：${stderr.slice(0, 300)}`,
+            ),
+          );
+          return;
+        }
+        resolve(result);
+      })
+      .catch(reject);
+  });
+}
+
+/**
+ * 把已落盘的归档**整份解压一遍**并流式算出每个成员的 sha256（校验用，不落盘、不占额外空间）。
+ *
+ * 解压器非零退出（截断 / 位翻转）不会立刻抛：把已经算出来的成员表一起返回，
+ * 调用方才能说出"解压在哪一步炸了，而且炸之前这些成员已经对不上了"。
+ */
+export async function hashArchiveMembers(
+  archivePath: string,
+  spec: CompressorSpec,
+  options: { computeHashes?: boolean } = {},
+): Promise<{ result: TarHashResult; decompressError: string | null }> {
+  const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
+  let decErr = '';
+  let exitCode: number | null = null;
+  decompressor.stderr.on('data', (chunk) => {
+    decErr += chunk.toString();
+  });
+  const exited = new Promise<number | null>((resolve, reject) => {
+    decompressor.on('error', (err) =>
+      reject(new BadRequestException(`解压器起不来（${spec.decompress[0]}）：${err.message}`)),
+    );
+    decompressor.on('exit', (code) => {
+      exitCode = code;
+      resolve(code);
+    });
+    decompressor.on('close', () => resolve(exitCode));
+  });
+  const hashed = hashTarStream(decompressor.stdout, options);
+  const [result, code] = await Promise.all([hashed, exited.catch(() => null)]);
+  const decompressError =
+    code === 0 ? null : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`;
+  return { result, decompressError };
+}
+
+/**
+ * 只列成员（名字 + **类型** + 链接目标），不算哈希 —— 恢复前的安全守卫用这个。
+ *
+ * 为什么不用 `listArchiveMembers()`（`tar -tf`）：那份输出**只有名字，没有类型**，
+ * 而"能不能安全解包"恰恰取决于类型（符号链接会被 web 层跟随 ⇒ 匿名任意文件读）。
+ * 顺带还有一个好处：成员名取自 tar 头部本身，不受 GNU/busybox 打印转义差异的影响
+ * （GNU 会把名字里的控制字符转义成 `\302\233`，busybox 原样输出）。
+ */
+export async function listArchiveEntries(
+  archivePath: string,
+): Promise<{ entries: TarEntryInfo[]; decompressError: string | null }> {
+  const format = detectFormat(archivePath);
+  if (!format) {
+    throw new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）');
+  }
+  const spec = specFor(format);
+  if (!spec) {
+    throw new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`);
+  }
+  const { result, decompressError } = await hashArchiveMembers(archivePath, spec, {
+    computeHashes: false,
+  });
+  return { entries: result.entries, decompressError };
 }
 
 /** 解压缩 | tar -x -C dest（全异步）。 */
@@ -356,13 +530,33 @@ function linkTree(src: string, dst: string, logger: BackupLogger): void {
   if (!fs.existsSync(src)) {
     return;
   }
+  // ⚠️ src 本身可能是**指向目录的符号链接**（把图床挪到另一块盘/另一个卷的常见做法）。
+  // `cp -al` 的 `-a` 含 `-d`（--no-dereference），于是它会把**链接本身**拷进暂存目录：
+  // 归档里只剩一个符号链接、零字节图片，而 `treeStats()` 跟着链接数出了真实文件数
+  // ⇒ 写后校验的 staticConsistent 必然失败（导出 400），也就是"图床是软链的站点根本备份不了"；
+  // 而恢复侧现在还**一律拒绝符号链接成员**（见 findUnsafeArchiveEntry）。
+  // 所以这里先把源解析成真实路径。实测：`cp -al static/img stage/static/img`
+  // 在 img 是软链时产出的就是一个软链成员，不是目录内容。
+  let realSrc = src;
+  try {
+    if (fs.lstatSync(src).isSymbolicLink()) {
+      realSrc = fs.realpathSync(src);
+      // 这条 WARN 要说清"什么都没丢"：否则运维看到"是符号链接"会以为图床没进归档
+      logger.warn(
+        `静态目录 ${src} 是一个符号链接，指向 ${realSrc}：已按真实路径打包，` +
+          `目录里的内容照常进归档（没有丢东西）`,
+      );
+    }
+  } catch {
+    // lstat/realpath 失败就用原路径，交给 cp 报错
+  }
   ensureDir(path.dirname(dst));
-  const res = spawnSync('cp', ['-al', src, dst], { stdio: 'ignore' });
+  const res = spawnSync('cp', ['-al', realSrc, dst], { stdio: 'ignore' });
   if (res.status === 0) {
     return;
   }
-  logger.warn(`硬链接失败（${src}），改用真实拷贝`);
-  fs.cpSync(src, dst, { recursive: true, force: true, dereference: false });
+  logger.warn(`硬链接失败（${realSrc}），改用真实拷贝`);
+  fs.cpSync(realSrc, dst, { recursive: true, force: true, dereference: false });
 }
 
 function treeStats(dir: string): { files: number; bytes: number } {
@@ -461,6 +655,16 @@ export interface CreateFullBackupOptions {
   outDir: string;
   workDir?: string;
   serverVersion?: string;
+  /**
+   * 导出实例的身份信息（P1/P3）。留空则清单里没有 `source` 块（老调用方不受影响）。
+   * 恢复时用它发现 waline 库名 / demo 模式的静默错配。
+   */
+  source?: BackupSourceInfo;
+  /**
+   * P6（可选）：caddy 的数据目录（TLS 证书与私钥）。留空 = 不打包（今天的默认行为）。
+   * 调用方按 `VANBLOG_BACKUP_INCLUDE_CADDY` 决定要不要传；目录读不到只 WARN 不失败。
+   */
+  caddyDataPath?: string;
   logger?: BackupLogger;
 }
 
@@ -473,6 +677,12 @@ export interface FullBackupResult {
   compressor: string;
   ms: number;
   manifest: FullBackupManifest;
+  /** 整份归档的 sha256（写出时流式算的，且已回读复核）；同时进了 `.sha256` sidecar */
+  archiveSha256: string;
+  /** 归档成员总数（含目录项）；关闭 integrity 时为 null */
+  memberCount: number | null;
+  /** 算成员哈希额外花的时间（ms）；关闭 integrity 时为 0 */
+  hashMs: number;
 }
 
 /** 导出整站备份：数据库（含 waline）+ 本地静态文件 -> 一个高压缩归档。 */
@@ -541,20 +751,180 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       manifest.totals.staticBytes += stats.bytes;
     }
 
-    // 3) manifest（含 sidecar，方便不解压就能列信息）
-    fs.writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    // 2b) caddy 的 TLS 材料（P6，**默认关**：调用方按 VANBLOG_BACKUP_INCLUDE_CADDY 决定要不要传路径）
+    //
+    // 为什么默认关：证书与私钥住在**另一个卷**里（Dockerfile 的
+    // `VOLUME /root/.local/share/caddy`），是整站唯一"离线重新造不出来"的东西 ——
+    // 换新机器时它必须重新向 Let's Encrypt 申请（要 DNS、要外网、还受速率限制）。
+    // 但把它打进归档，等于把 TLS 私钥放进一个**本来就是明文**、已经装着密码哈希与
+    // jwt 密钥的文件里：不新增秘密的种类，但显著抬高了"归档能放在哪"的要求。
+    // 所以做成显式开关，默认不动今天的归档内容。
+    //
+    // ⚠️ 目录不存在 / 读不动时**只记一条 WARN 就跳过**，绝不让整次备份失败：
+    // "备份做不出来"比"备份里少了证书"严重得多（证书还能重签，数据没了就没了）。
+    if (options.caddyDataPath) {
+      const caddySrc = options.caddyDataPath;
+      try {
+        if (!fs.existsSync(caddySrc)) {
+          logger.warn(`caddy 数据目录不存在，本次备份不含 TLS 材料：${caddySrc}`);
+        } else {
+          linkTree(caddySrc, path.join(staging, 'caddy'), logger);
+          const stats = treeStats(path.join(staging, 'caddy'));
+          manifest.caddy = stats;
+          logger.log(`已把 caddy 的 TLS 材料打进归档：${stats.files} 个文件，${formatBytes(stats.bytes)}`);
+        }
+      } catch (err) {
+        logger.warn(
+          `打包 caddy 数据目录失败，本次备份不含 TLS 材料（备份本身继续）：${
+            (err as Error)?.message || err
+          }`,
+        );
+        rmrf(path.join(staging, 'caddy'));
+        delete manifest.caddy;
+      }
+    }
 
-    // 4) 打包压缩
+    // 3) 防损坏信息（P1）：先把暂存树整棵过一遍 tar 流，算出每个成员的名字 + sha256。
+    //    ⚠️ 必须**在写 manifest 之前**做完：manifest 里要记这些哈希，
+    //    而两份清单自己的哈希只能是 null（清单不能包含自己的哈希，副本与它逐字节相同）。
+    let integrity: BackupIntegrity | undefined;
+    let hashMs = 0;
+    let tarMembers: TarHashResult | null = null;
+    if (integrityEnabled()) {
+      const hashStarted = Date.now();
+      tarMembers = await hashStagingTree(staging);
+      if (!tarMembers.complete) {
+        // tar 流没走到全零结束块 = 打包前的这一遍就没读完；宁可导出失败也不要一份
+        // "看起来有哈希、其实哈希表本身残缺"的清单
+        throw new BadRequestException(
+          '计算归档成员哈希时 tar 流未正常结束（暂存目录读不完整），本次备份已中止',
+        );
+      }
+      if (tarMembers.badHeaders.length) {
+        throw new BadRequestException(
+          `计算归档成员哈希时发现 tar 头部校验和不对的成员：${tarMembers.badHeaders.slice(0, 5).join(', ')}`,
+        );
+      }
+      if (tarMembers.duplicateNames.length) {
+        throw new BadRequestException(
+          `暂存树里出现同名成员：${tarMembers.duplicateNames.slice(0, 5).join(', ')}`,
+        );
+      }
+      // 压缩器的内容校验位：这里按 spec 声明（zstd 显式带 --check），
+      // 打包完成后**再实测一次帧头**并比对（见下面第 5 步），对不上就是响亮失败
+      const declared = declaredFrameChecksum(spec);
+      integrity = buildIntegrity({
+        members: tarMembers.members,
+        memberCount: tarMembers.memberCount,
+        frameChecksum: declared,
+      });
+      // 静态目录里如果有**嵌套的**符号链接（不是目录本身是软链，那种上面已经 realpath 过了），
+      // 它会变成一个符号链接成员进归档 —— 而恢复侧的安全守卫现在**一律拒绝符号链接成员**
+      // （见 findUnsafeArchiveEntry：软链会被拷进静态目录并被 web 层跟随 ⇒ 匿名任意文件读）。
+      // 所以这里必须提前说清楚，否则用户会得到一份"导得出、恢复不了"的归档，
+      // 而且要等到真需要恢复那天才发现。
+      const links = tarMembers.entries.filter((entry) => entry.kind === 'symlink');
+      if (links.length) {
+        logger.warn(
+          `静态目录里有 ${links.length} 个符号链接（${links
+            .slice(0, 5)
+            .map((entry) => `${entry.name} -> ${entry.linkTarget || '?'}`)
+            .join(', ')}）：它们会作为链接成员进归档，而恢复时会被安全守卫拒绝` +
+            `（符号链接能被 web 层跟随，等于匿名任意文件读）。请把它们换成真实文件或删掉，` +
+            `否则这份归档导得出、恢复不了`,
+        );
+      }
+      hashMs = Date.now() - hashStarted;
+      manifest.integrity = integrity;
+      logger.log(
+        `成员哈希完成：${integrity.memberCount} 个成员（${
+          Object.keys(integrity.members).length
+        } 个带哈希），耗时 ${(hashMs / 1000).toFixed(2)}s，merkleRoot ${integrity.merkleRoot.slice(0, 12)}…`,
+      );
+    }
+    if (options.source) {
+      manifest.source = options.source;
+    }
+
+    // 4) manifest + **第二份副本**（含 sidecar，方便不解压就能列信息）
+    const manifestText = JSON.stringify(manifest, null, 2);
+    fs.writeFileSync(path.join(staging, 'manifest.json'), manifestText);
+    // 为什么要有副本：manifest.json 是归档里唯一"丢了就整份既不可校验也不可恢复"的成员
+    // （恢复靠它找库名与集合名，校验靠它拿期望哈希）。多存一份逐字节相同的副本，
+    // 代价是几 KB，换来的是"其中一份被位翻转/被截断时另一份还能救"。
+    fs.writeFileSync(path.join(staging, MANIFEST_COPY_FILENAME), manifestText);
+
+    // 5) 打包压缩：先写到**不可能被列表/保留策略认成归档**的临时名，成功了才 rename 就位
     const name = backupFileName(new Date(), spec.ext);
     const archivePath = path.join(outDir, name);
+    const tempPath = path.join(outDir, exportTempName(spec.ext));
     logger.log(`打包中（${spec.label}）...`);
-    await tarCompress(staging, archivePath, spec);
+    let streamed: { bytes: number; sha256: string };
+    try {
+      streamed = await tarCompress(staging, tempPath, spec);
+    } catch (err) {
+      rmTemp(tempPath);
+      throw err;
+    }
+    // 回读复核：磁盘上的字节必须与刚刚流出去的字节完全一致。
+    // 抓的是"写入被静默截断"（磁盘满但 FS 没报错、网络盘/容器卷的怪行为），
+    // 也就是 P2 要求的"磁盘满要变成响亮的失败，而不是列表里一份看起来正常的截断归档"。
+    let readBack: { sha256: string; bytes: number };
+    try {
+      readBack = await hashFile(tempPath);
+    } catch (err) {
+      rmTemp(tempPath);
+      throw new BadRequestException(
+        `回读刚写出的备份失败（剩余空间 ${freeSpaceText(outDir)}）：${(err as Error)?.message || err}`,
+      );
+    }
+    if (readBack.bytes !== streamed.bytes || readBack.sha256 !== streamed.sha256) {
+      rmTemp(tempPath);
+      throw new BadRequestException(
+        `备份文件落盘后与写出的内容不一致（写出 ${streamed.bytes} 字节 / sha256 ${streamed.sha256.slice(
+          0,
+          12,
+        )}…，回读 ${readBack.bytes} 字节 / sha256 ${readBack.sha256.slice(0, 12)}…；` +
+          `剩余空间 ${freeSpaceText(outDir)}）—— 已删除半成品，这次备份按失败计`,
+      );
+    }
+    // 压缩器自带的内容校验位：清单里记的值必须与归档头部的实测值一致
+    if (integrity) {
+      const probe = probeCompressorChecksum(tempPath, spec.format);
+      if (probe.enabled === null) {
+        logger.warn(`读不出压缩器的内容校验位（${probe.detail}），清单里记的 ${integrity.zstdFrameChecksum} 未经实测复核`);
+      } else if (probe.enabled !== integrity.zstdFrameChecksum) {
+        rmTemp(tempPath);
+        throw new BadRequestException(
+          `压缩器内容校验位与清单记录不一致（清单 ${integrity.zstdFrameChecksum}，实测 ${probe.enabled}：${probe.detail}）` +
+            ' —— 归档失去自校验能力，已删除半成品',
+        );
+      }
+    }
+    // 原子就位：临时名 -> 正式名（同目录 rename，读者要么看不到、要么看到完整的一份）
+    try {
+      fs.renameSync(tempPath, archivePath);
+    } catch (err) {
+      rmTemp(tempPath);
+      throw new BadRequestException(
+        `备份文件改名就位失败（${tempPath} -> ${archivePath}）：${(err as Error)?.message || err}`,
+      );
+    }
     const bytes = fs.statSync(archivePath).size;
     manifest.totals.archiveBytes = bytes;
+    manifest.totals.archiveSha256 = readBack.sha256;
+    // sidecar 清单：后台列表页读的 cheap path（内部那份没有 archiveBytes / archiveSha256，
+    // 因为它们在打包时还不存在 —— 校验时会把这两个字段剥掉再比对）
     fs.writeFileSync(`${archivePath}.manifest.json`, JSON.stringify(manifest, null, 2));
+    // 整归档 sha256 sidecar（`sha256sum -c` 与 `vanblog.sh verify` 都吃这个格式）：
+    // 归档被拷去别处时把它一起带走，就能在没有 server 的机器上验完整性
+    if (writeSha256Sidecar(archivePath, readBack.sha256) === null) {
+      logger.warn(`写 ${name}${'.sha256'} 失败（备份本身已成功，但拷走归档时少一个外部凭据）`);
+    }
 
     logger.log(
-      `备份完成：${name}（${bytes} 字节，${manifest.totals.documents} 条文档，${manifest.totals.files} 个文件）`,
+      `备份完成：${name}（${bytes} 字节，${manifest.totals.documents} 条文档，${manifest.totals.files} 个文件，` +
+        `sha256 ${readBack.sha256.slice(0, 12)}…）`,
     );
     return {
       path: archivePath,
@@ -565,10 +935,111 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       compressor: spec.label,
       ms: Date.now() - started,
       manifest,
+      archiveSha256: readBack.sha256,
+      memberCount: integrity?.memberCount ?? tarMembers?.memberCount ?? null,
+      hashMs,
     };
   } finally {
     rmrf(staging);
   }
+}
+
+/**
+ * 导出过程中用的临时文件名（P2）。
+ *
+ * ⚠️ 名字**必须**同时躲开三个东西，否则半成品会被当成一份真归档：
+ *  - 后台列表 `FULL_BACKUP_ARCHIVE_RE`（`^vanblog-full-.+\.tar\.(zst|xz|gz)$`）；
+ *  - `scripts/vanblog.sh prune_old_backups` 的 glob `vanblog-full-*.tar.*`
+ *    （`vanblog-full-X.tar.zst.partial` **仍然匹配** ⇒ 半成品会挤掉一份好归档的保留名额）；
+ *  - `vanblog.sh` 找"最新归档"的 `ls -1t vanblog-full-*.tar.*`。
+ * 前缀 `.vanblog-export-` 三条都躲开了（既不以 `vanblog-full-` 开头，又是隐藏文件），
+ * 而结尾仍是 `.tar.zst`，所以 `detectFormat()` 认得它（排障时能手工解开看）。
+ */
+export const EXPORT_TEMP_PREFIX = '.vanblog-export-';
+export const EXPORT_TEMP_RE = /^\.vanblog-export-[A-Za-z0-9._-]+\.tar\.(zst|xz|gz)$/;
+
+export function exportTempName(ext: string): string {
+  const suffix = ext.startsWith('.') ? ext : `.${ext}`;
+  return `${EXPORT_TEMP_PREFIX}${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}${suffix}`;
+}
+
+export function isExportTempName(name: string): boolean {
+  return EXPORT_TEMP_RE.test(path.basename(String(name || '')));
+}
+
+/** 默认认为超过这个年龄的临时文件是上次崩溃留下的（一次导出实测 28s，1 小时已经极其宽松） */
+export const STALE_EXPORT_TEMP_MS = 60 * 60 * 1000;
+
+/**
+ * 清掉备份目录里残留的导出临时文件（启动时由主实例调用）。
+ * 只碰 `.vanblog-export-*`，并且**只删超过 maxAgeMs 的**：
+ * 共享卷上可能正有另一个实例在导出，删掉别人正在写的文件是最坏的行为。
+ * 返回删掉的文件名（供日志）。
+ */
+export function cleanupStaleExportTemps(
+  backupDir: string,
+  maxAgeMs: number = STALE_EXPORT_TEMP_MS,
+  now: number = Date.now(),
+): string[] {
+  const removed: string[] = [];
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(backupDir);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!isExportTempName(name)) {
+      continue;
+    }
+    const full = path.join(backupDir, name);
+    try {
+      const stat = fs.statSync(full);
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (now - stat.mtimeMs < maxAgeMs) {
+        continue; // 可能正在被写，别动
+      }
+      fs.rmSync(full, { force: true });
+      removed.push(name);
+    } catch {
+      // 删不掉就留着，下次启动再试；绝不影响启动
+    }
+  }
+  return removed;
+}
+
+function rmTemp(tempPath: string) {
+  try {
+    fs.rmSync(tempPath, { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+/** `VANBLOG_BACKUP_INTEGRITY=off` 是逃生舱（默认开：这正是本轮要加的防损坏能力）。 */
+export const BACKUP_INTEGRITY_ENV = 'VANBLOG_BACKUP_INTEGRITY';
+
+export function integrityEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = String(env[BACKUP_INTEGRITY_ENV] ?? '').trim().toLowerCase();
+  if (!raw) {
+    return true;
+  }
+  return !(raw === 'off' || raw === 'false' || raw === '0' || raw === 'no');
+}
+
+/**
+ * 清单里 `integrity.zstdFrameChecksum` 的**声明值**（打包前就要写进清单）。
+ * zstd 的 spec 里显式带了 `--check`；xz 默认 CRC64、gzip 的 CRC32 是格式强制的。
+ * ⚠️ 声明完还要实测：打包后 `probeCompressorChecksum()` 会读归档头部比对，
+ * 不一致就删掉半成品并判失败（"pinned, not assumed"）。
+ */
+export function declaredFrameChecksum(spec: CompressorSpec): boolean {
+  if (spec.format === 'zstd') {
+    return spec.compress.includes('--check');
+  }
+  return true;
 }
 
 export interface BackupListEntry {
@@ -762,14 +1233,87 @@ export function findUnsafeArchiveMember(members: string[]): string | null {
  * 返回成员条数（调用方可以拿去打日志）。
  */
 export async function assertRestorableArchive(archivePath: string): Promise<number> {
-  const members = await listArchiveMembers(archivePath);
-  const unsafe = findUnsafeArchiveMember(members);
+  const { entries, decompressError } = await listArchiveEntries(archivePath);
+  if (decompressError) {
+    // 归档解压都过不去（截断/位翻转）：这时"成员表"是不完整的，绝不能当成"检查通过"
+    throw new BadRequestException(`读不出归档成员表：${decompressError}`);
+  }
+  const unsafe = findUnsafeArchiveEntry(entries);
   if (unsafe) {
     throw new BadRequestException(
-      `备份归档里有会写到解包目录之外的成员（${unsafe}），已拒绝恢复`,
+      `备份归档里有会写到解包目录之外的成员（${unsafe.name}：${unsafe.reason}），已拒绝恢复`,
     );
   }
-  return members.length;
+  return entries.length;
+}
+
+/**
+ * 找出**不能安全解包**的成员（安全守卫，两条恢复路由都在写盘之前调它）。
+ *
+ * 检查两类东西：
+ *  1. **成员名**：绝对路径（含 Windows 盘号）或任何一段是 `..` —— 会写到解包目录之外；
+ *  2. **成员类型**（这一条是后补的，见下）：符号链接一律拒绝，硬链接只在"目标名不安全"时拒绝。
+ *
+ * 为什么类型也要查：`tar -xf` 会**原样还原符号链接**，而恢复的第二步是
+ * `fs.cpSync(staging/static/<folder>, staticPath/<folder>, {dereference:false})` ——
+ * 于是归档里的软链会被搬进 `img/file/customPage/themes`，而 `serve-static`/`send`
+ * 是**跟随**软链的、`customPage.controller` 的 `res.sendFile` 也没有 `root` 限制、
+ * caddy 更是直发 `/static/img/*.webp`。一份来路不明的归档因此能种下
+ * "指向 /etc/passwd 的 `x.webp`"，变成**匿名可达的任意文件读**（`POST /api/admin/init/restore`
+ * 匿名可达；已初始化站点恢复别人给的归档同理）。
+ * 任何上传接口都造不出软链（都是 `fs.writeFileSync`），所以恢复是唯一的种植路径。
+ *
+ * ⚠️ **硬链接为什么不是一律拒绝**（与最初"两个都拒"的建议有意分歧，理由实测过）：
+ * GNU tar 与 busybox tar **都会**把"同 inode 的第二个名字"写成硬链接成员
+ * （`hrw-rw-r-- … link to ./x`）—— 也就是只要静态目录里有两份内容相同的图片被去重工具
+ * （jdupes/rdfind）硬链到一起，我们自己导出的归档里就有硬链接成员。一律拒绝等于
+ * "这种站点自己的备份永远恢复不了"。而硬链接的目标名只能是**归档内部**的另一个成员
+ * （解包后落在解包目录里），只要目标名本身安全，它就没有逃逸能力 ——
+ * 何况符号链接已经一律拒绝，解包目录里不可能先有一个软链让它去指。
+ */
+export function findUnsafeArchiveEntry(
+  entries: Array<{ name: string; kind: string; linkTarget: string | null }>,
+): { name: string; reason: string } | null {
+  for (const entry of entries || []) {
+    const name = String(entry?.name || '');
+    if (!name) {
+      continue;
+    }
+    const nameProblem = unsafeNameReason(name);
+    if (nameProblem) {
+      return { name, reason: nameProblem };
+    }
+    if (entry.kind === 'symlink') {
+      return {
+        name,
+        reason: `符号链接成员（目标 ${entry.linkTarget || '?'}）：解包后会被拷进静态目录并被 web 层跟随，等于匿名任意文件读`,
+      };
+    }
+    if (entry.kind === 'hardlink') {
+      const target = String(entry.linkTarget || '');
+      const targetProblem = target
+        ? unsafeNameReason(target)
+        : '硬链接成员没有目标名';
+      if (targetProblem) {
+        return { name, reason: `硬链接成员的目标不安全（${target || '(空)'}：${targetProblem}）` };
+      }
+    }
+  }
+  return null;
+}
+
+/** 名字层面的不安全原因：绝对路径（含盘号）或任何一段是 `..`；安全时返回 null */
+function unsafeNameReason(name: string): string | null {
+  if (name.startsWith('/')) {
+    return '绝对路径';
+  }
+  if (/^[A-Za-z]:[\\/]/.test(name)) {
+    return 'Windows 绝对路径';
+  }
+  if (name.split(/[\\/]/).some((seg) => seg === '..')) {
+    return '含 .. 段';
+  }
+  return null;
 }
 
 export interface RestoreFullBackupOptions {
@@ -779,6 +1323,31 @@ export interface RestoreFullBackupOptions {
   workDir?: string;
   /** 是否同时恢复静态文件（关掉就只恢复数据库） */
   withStatic?: boolean;
+  /**
+   * 目标实例的身份（P3）：用来发现"归档来自另一套配置"的静默错配。
+   * 最有价值的是 `walineDB` —— 它来自机器本地的 `config.yaml`，**不在**归档里，
+   * 两边不同时 waline 那两张表会被写进一个本实例根本不读的库（评论"消失"且零报错）。
+   */
+  target?: {
+    walineDB?: string;
+    demo?: boolean;
+    codeVersion?: string;
+  };
+  /**
+   * 恢复成功后是否把静态目录**修剪**成与归档一致（P3）。
+   * 留空 = 读 `VANBLOG_RESTORE_PRUNE_STATIC`（**默认开**：owner 要的是 100% 保真）。
+   */
+  pruneStatic?: boolean;
+  /**
+   * 归档里没有、目标库里却有的集合是否**删掉**（P3）。
+   * 留空 = 读 `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS`（**默认关**：
+   * 删一张归档从来没装过的表比留着它更可怕；默认只报告不删）。
+   */
+  dropAbsentCollections?: boolean;
+  /** 恢复日志（P5）路径；留空则不写 */
+  journalPath?: string;
+  /** caddy 数据目录（P6，`VANBLOG_BACKUP_INCLUDE_CADDY`）；留空 = 不恢复归档里的 `./caddy` 段 */
+  caddyDataPath?: string;
   logger?: BackupLogger;
 }
 
@@ -788,6 +1357,50 @@ export interface RestoreResult {
   static: Record<string, { files: number }>;
   ms: number;
   notes: string[];
+  /** P3：静态目录按归档修剪的结果（每个被修剪的目录一条） */
+  pruned: StaticPruneReport[];
+  /** P3：目标库里有、归档里没有的集合（混合状态的可见化） */
+  absentCollections: AbsentCollection[];
+  /** P6：归档里 `./caddy` 段的恢复结果；没有这一段时为 null */
+  caddy: { files: number; bytes: number; target: string } | null;
+}
+
+/** 目标库里存在、归档里不存在的一张表（P3） */
+export interface AbsentCollection {
+  db: string;
+  collection: string;
+  /** 这张表里的文档数（决定"要不要真的删"时最重要的一个数字） */
+  documents: number;
+  /** 是否已被删掉（只有 `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS` 打开时才会是 true） */
+  dropped: boolean;
+}
+
+/** P3：静态目录修剪开关（默认**开** —— owner 要的是 100% 保真，不是并集） */
+export const RESTORE_PRUNE_STATIC_ENV = 'VANBLOG_RESTORE_PRUNE_STATIC';
+/** P3：删掉"归档里没有的集合"开关（默认**关** —— 这是更吓人的那一侧操作） */
+export const RESTORE_DROP_ABSENT_ENV = 'VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS';
+/** P6：把 caddy 的 TLS 材料一起打包（默认**关** —— 见 createFullBackup 里的说明） */
+export const BACKUP_INCLUDE_CADDY_ENV = 'VANBLOG_BACKUP_INCLUDE_CADDY';
+
+export function restorePruneStaticEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return envBool(RESTORE_PRUNE_STATIC_ENV, true, env);
+}
+
+export function restoreDropAbsentEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return envBool(RESTORE_DROP_ABSENT_ENV, false, env);
+}
+
+export function backupIncludeCaddyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return envBool(BACKUP_INCLUDE_CADDY_ENV, false, env);
+}
+
+/** 系统集合与恢复用的临时集合：任何"删表"逻辑都绝不允许碰它们 */
+export function isProtectedCollectionName(name: string): boolean {
+  const n = String(name || '');
+  if (!n) return true;
+  if (n.startsWith('system.')) return true;
+  if (n.endsWith(RESTORE_SUFFIX)) return true;
+  return false;
 }
 
 async function* readLines(file: string) {
@@ -875,7 +1488,20 @@ async function restoreCollection(
   return inserted;
 }
 
-/** 从整站备份恢复：数据库逐集合原子替换 + 静态文件覆盖回原目录。 */
+/**
+ * 从整站备份恢复：数据库逐集合原子替换 + 静态文件按归档**替换**（不是合并）回原目录。
+ *
+ * P3（100% 保真）在这里补了三件事，每件都带明确的可见化：
+ *  - **静态目录修剪**：拷贝成功之后，把归档里没有的文件删掉（`VANBLOG_RESTORE_PRUNE_STATIC`，
+ *    默认**开**）。顺序是铁律：先拷完所有目录、全部成功，才开始删；一次失败的恢复不删任何东西。
+ *  - **归档里没有的集合**：目标库里有、归档里没有的表 = 混合状态，报告出来
+ *    （名字 + 文档数）；`VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS` 打开才真的删（默认**关**）。
+ *  - **source 错配**：`walineDB` / `demo` 与目标实例不一致时在 notes 里 WARN 点名两个值
+ *    （waline 库名不同 = 评论被写进一个本实例不读的库，界面上一切正常）。
+ *
+ * P5：整个过程写 `restore-journal.json`（每换完一张表落一次），成功删掉、失败留下，
+ * 于是"恢复被打断"这件事在启动日志与 `backup-status.json` 里都看得见。
+ */
 export async function restoreFullBackup(
   options: RestoreFullBackupOptions,
 ): Promise<RestoreResult> {
@@ -895,13 +1521,35 @@ export async function restoreFullBackup(
       `本机没有 ${format} 解压工具，装一个再试（或在有该工具的机器上导出成 gzip 格式）`,
     );
   }
+  const pruneEnabled = options.pruneStatic ?? restorePruneStaticEnabled();
+  const dropAbsent = options.dropAbsentCollections ?? restoreDropAbsentEnabled();
   const workRoot = ensureDir(options.workDir || path.join(options.staticPath, 'tmp'));
   const staging = fs.mkdtempSync(path.join(workRoot, 'full-restore-'));
   const notes: string[] = [];
+  const pruned: StaticPruneReport[] = [];
+  const absentCollections: AbsentCollection[] = [];
+  let caddyResult: RestoreResult['caddy'] = null;
+  const journal = RestoreJournalWriter.open(
+    options.journalPath || '',
+    { archivePath },
+    (message) => logger.warn(message),
+  );
 
   try {
-    logger.log(`解包中（${spec.label}）...`);
+    journal?.setPhase('unpack');
+    // ⚠️ **解包之前**先过一遍成员安全检查（名字 + 类型）。
+    // 以前只有匿名的 `POST /api/admin/init/restore` 在控制器里调了 `assertRestorableArchive`，
+    // 而后台那条 `POST /api/admin/backup/full/restore`（已初始化站点用的就是它，
+    // 也正是"恢复一份来路不明的归档"这个场景）**直接进了解包**：
+    // 归档里的符号链接会被 `tar -xf` 原样解出，再被 `cpSync(dereference:false)`
+    // 搬进静态目录，然后被 web 层跟随 ⇒ 匿名任意文件读。
+    // 放在这里两条路由自动一致；init 路由那一次是重复检查（多约 0.2s，值得）。
+    // 另外这一遍也是"staging 里不可能出现符号链接"的保证：后面读 manifest.json /
+    // 拷静态文件时，路径就不会被一个种进来的软链牵着走到解包目录外面去。
+    const memberCount = await assertRestorableArchive(archivePath);
+    logger.log(`归档成员检查通过（${memberCount} 个成员，无绝对路径 / .. / 符号链接）`);
     try {
+      logger.log(`解包中（${spec.label}）...`);
       await decompressUntar(archivePath, staging, spec);
     } catch (err) {
       // 下载不完整 / 文件被截断 / 用别的工具改过名，都会走到这里
@@ -909,14 +1557,46 @@ export async function restoreFullBackup(
     }
 
     const manifestPath = path.join(staging, 'manifest.json');
-    if (!fs.existsSync(manifestPath)) {
-      throw new BadRequestException('归档里没有 manifest.json，不是本功能导出的整站备份');
+    const copyPath = path.join(staging, MANIFEST_COPY_FILENAME);
+    let manifest: FullBackupManifest | null = null;
+    // 主清单读不出来时**回落到副本**（这正是归档里存两份的理由）：
+    // 少了这一步，副本就只是一份没人读的字节。
+    for (const candidate of [manifestPath, copyPath]) {
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        if (isFullBackupManifest(parsed)) {
+          manifest = parsed;
+          if (candidate === copyPath) {
+            notes.push(
+              `主清单 ${'./manifest.json'} 读不出来，已改用归档里的副本 ${'./MANIFEST.copy.json'}（两份本应逐字节相同，说明主清单那份已损坏）`,
+            );
+            logger.warn('manifest.json 解析失败，已回落到 MANIFEST.copy.json');
+          }
+          break;
+        }
+      } catch {
+        // 试下一份
+      }
     }
-    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (!isFullBackupManifest(parsed)) {
-      throw new BadRequestException('manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新');
+    if (!manifest) {
+      if (!fs.existsSync(manifestPath) && !fs.existsSync(copyPath)) {
+        throw new BadRequestException('归档里没有 manifest.json，不是本功能导出的整站备份');
+      }
+      throw new BadRequestException(
+        'manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新（副本 MANIFEST.copy.json 同样读不出）',
+      );
     }
-    const manifest = parsed;
+
+    // P3：归档里到底有哪些库/表 —— 先写进 journal，崩溃时才知道"计划换哪些、换完了哪些"
+    const planned: Record<string, string[]> = {};
+    for (const dbName of Object.keys(manifest.databases || {})) {
+      planned[dbName] = Object.keys(manifest.databases[dbName]?.collections || {});
+    }
+    journal?.setPlanned(planned);
+    journal?.setPhase('collections');
 
     const databases: Record<string, { collections: number; documents: number }> = {};
     for (const dbName of Object.keys(manifest.databases || {})) {
@@ -935,45 +1615,256 @@ export async function restoreFullBackup(
           continue;
         }
         logger.log(`恢复 ${dbName}.${name} ...`);
-        documents += await restoreCollection(
+        const inserted = await restoreCollection(
           db,
           name,
           ndjson,
           path.join(dbDir, `${name}.indexes.json`),
         );
+        documents += inserted;
         collections += 1;
+        journal?.recordCollection(dbName, name, inserted);
       }
       databases[dbName] = { collections, documents };
+      await reportAbsentCollections(db, dbName, new Set(planned[dbName] || []), dropAbsent);
     }
 
     const restoredStatic: Record<string, { files: number }> = {};
+    const copiedFolders: Array<{ folder: string; src: string; dst: string }> = [];
     if (options.withStatic !== false) {
+      journal?.setPhase('static');
       for (const folder of BACKUP_STATIC_FOLDERS) {
         const src = path.join(staging, 'static', folder);
         if (!fs.existsSync(src)) {
+          // ⚠️ 归档里没有这一段（例如没有 themes 的老归档）：**绝不能**修剪对应目录，
+          // 否则等于"归档里没记 => 全部删掉"，那正是本功能要防的数据丢失
+          notes.push(`归档里没有 static/${folder}/ 这一段，该目录原样保留（既没覆盖也没修剪）`);
           continue;
         }
         const dst = path.join(options.staticPath, folder);
-        ensureDir(dst);
-        fs.cpSync(src, dst, { recursive: true, force: true, dereference: false });
+        try {
+          ensureDir(dst);
+          fs.cpSync(src, dst, { recursive: true, force: true, dereference: false });
+        } catch (err) {
+          // ⚠️ 必须包成 BadRequestException：这里抛的是裸 fs 错误（ENOSPC / EEXIST / ENOTDIR），
+          // Nest 会把它变成 500 + "Internal server error"，用户看不到原因；
+          // 而且这句话还要说清"修剪没做"—— 拷贝失败时一个文件都不该被删（见下面的顺序铁律）
+          throw new BadRequestException(
+            `恢复静态目录 ${folder}/ 失败（${(err as Error)?.message || err}；` +
+              `目标盘剩余空间 ${freeSpaceText(options.staticPath)}）：` +
+              `数据库已恢复的部分不会回滚，静态目录**尚未修剪**（一个文件都没删）`,
+          );
+        }
         restoredStatic[folder] = { files: treeStats(src).files };
+        copiedFolders.push({ folder, src, dst });
+      }
+      // 修剪必须排在**所有拷贝都成功之后**：中途抛错就一张都不删
+      if (pruneEnabled) {
+        journal?.setPhase('prune');
+        for (const item of copiedFolders) {
+          const report = pruneFolderToMatch({
+            srcDir: item.src,
+            dstDir: item.dst,
+            folder: item.folder,
+          });
+          if (!report) {
+            continue;
+          }
+          pruned.push(report);
+          if (report.removedFiles || report.removedDirs || report.skipped.length || report.errors.length) {
+            notes.push(formatPruneReport(report));
+            logger.log(formatPruneReport(report));
+          }
+        }
+        if (pruned.some((r) => r.removedFiles || r.removedDirs)) {
+          notes.push(
+            '静态目录已按归档修剪成"与备份那一刻完全一致"（VANBLOG_RESTORE_PRUNE_STATIC=off 可关掉修剪，' +
+              '关掉后恢复就是并集：归档里没有、磁盘上有的文件会留下）',
+          );
+        }
+      } else {
+        notes.push(
+          '未修剪静态目录（VANBLOG_RESTORE_PRUNE_STATIC=off）：归档里没有、磁盘上却有的文件仍然留着，' +
+            '站点是"归档内容 + 现有文件"的并集，不等于备份那一刻',
+        );
       }
     } else {
       notes.push('按参数要求只恢复了数据库，未覆盖静态文件');
     }
 
+    // P6（可选）：归档里带 caddy 的 TLS 材料时才走到这里
+    caddyResult = restoreCaddySection(staging, options, notes, journal);
+
+    // P3：source 错配（waline 库名 / demo）——静默错配里最难发现的一类
+    reportSourceMismatch(manifest, options, databases, notes);
+
     notes.push('数据库与设置已按备份覆盖，建议重启 server 进程以清掉内存缓存');
     // tokens 表也被备份覆盖了，当前这套登录态必然失效（实测恢复后接口立刻 401）
     notes.push('登录态（tokens）与 jwt 密钥都来自备份，恢复后需要重新登录后台');
 
+    journal?.finish();
     return {
       manifest,
       databases,
       static: restoredStatic,
       ms: Date.now() - started,
       notes,
+      pruned,
+      absentCollections,
+      caddy: caddyResult,
     };
+
+    /** 目标库里有、归档里没有的表（就地填充 absentCollections） */
+    async function reportAbsentCollections(
+      db: Db,
+      dbName: string,
+      archived: Set<string>,
+      drop: boolean,
+    ): Promise<void> {
+      let names: string[] = [];
+      try {
+        names = (await db.collections()).map((item: any) => item.collectionName);
+      } catch (err) {
+        notes.push(
+          `读不出 ${dbName} 的集合列表，无法判断"归档里没有的表"：${(err as Error)?.message || err}`,
+        );
+        return;
+      }
+      const mine: AbsentCollection[] = [];
+      for (const name of names) {
+        if (isProtectedCollectionName(name)) {
+          continue; // system.* 与 *__vanblog_restore 一律不碰
+        }
+        if (archived.has(name)) {
+          continue;
+        }
+        let documents = -1;
+        try {
+          documents = await db.collection(name).countDocuments({});
+        } catch {
+          documents = -1;
+        }
+        const entry: AbsentCollection = { db: dbName, collection: name, documents, dropped: false };
+        if (drop) {
+          try {
+            await db.collection(name).drop();
+            entry.dropped = true;
+          } catch (err) {
+            notes.push(
+              `删除 ${dbName}.${name} 失败（它是归档里没有的表）：${(err as Error)?.message || err}`,
+            );
+          }
+        }
+        mine.push(entry);
+      }
+      if (!mine.length) {
+        return;
+      }
+      absentCollections.push(...mine);
+      notes.push(
+        `归档里没有的表（${dbName}）：` +
+          mine
+            .map(
+              (item) =>
+                `${item.collection}（${item.documents < 0 ? '?' : item.documents} 条${item.dropped ? '，已删' : ''}）`,
+            )
+            .join(', ') +
+          (drop
+            ? ' —— 已按 VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS 删除'
+            : ' —— 未删（VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS=on 才删）：这些表仍是恢复前的内容，站点处于混合状态'),
+      );
+    }
+  } catch (err) {
+    journal?.fail((err as Error)?.message || String(err));
+    throw err;
   } finally {
     rmrf(staging);
+  }
+}
+
+/** P3：把 manifest.source 与目标实例的配置对一遍，不一致就在 notes 里点名 WARN。 */
+function reportSourceMismatch(
+  manifest: FullBackupManifest,
+  options: RestoreFullBackupOptions,
+  databases: Record<string, { collections: number; documents: number }>,
+  notes: string[],
+): void {
+  const source = manifest.source;
+  const target = options.target;
+  if (!source || !target) {
+    if (!source) {
+      notes.push('这份归档没有 source 块（早于防损坏改动导出），无法比对导出实例的配置');
+    }
+    return;
+  }
+  const srcWaline = String(source.walineDB || '').trim();
+  const dstWaline = String(target.walineDB || '').trim();
+  // 只有归档里**真的有** waline 库时才说这件事，否则是纯噪音
+  const walineRestored = srcWaline && databases[srcWaline] ? databases[srcWaline] : null;
+  if (walineRestored && dstWaline && srcWaline !== dstWaline) {
+    notes.push(
+      `WARN waline 评论库名不一致：归档来自 "${srcWaline}"，本实例的 config.waline.db 是 "${dstWaline}"。` +
+        `waline 的 ${walineRestored.collections} 张表（${walineRestored.documents} 条）已按归档写进 "${srcWaline}" 库，` +
+        `而本实例读的是 "${dstWaline}" ⇒ 评论看起来"消失"了却不会有任何报错。` +
+        `要恢复评论，请把本机 config.yaml 的 waline.db 改成 "${srcWaline}"（或把数据搬过去）后重启`,
+    );
+  }
+  if (Boolean(source.demo) !== Boolean(target.demo)) {
+    notes.push(
+      `WARN 演示模式不一致：归档来自 demo=${Boolean(source.demo)} 的实例，本实例是 demo=${Boolean(
+        target.demo,
+      )}。demo=true 会禁掉备份/恢复/导入这类写操作，行为差异是配置带来的，不是数据丢了`,
+    );
+  }
+  if (source.codeVersion && target.codeVersion && source.codeVersion !== target.codeVersion) {
+    notes.push(
+      `归档由 ${source.codeVersion} 导出，本实例是 ${target.codeVersion}` +
+        (source.hostname ? `（源主机 ${source.hostname}）` : ''),
+    );
+  }
+}
+
+/**
+ * P6（可选，默认关）：恢复归档里的 `./caddy` 段（TLS 证书与私钥）。
+ *
+ * 归档里没有这一段就返回 null；有这一段但调用方没给目标目录，就**只报告不动手**
+ * （把私钥写到一个没人要求的位置是不能接受的行为）。
+ */
+function restoreCaddySection(
+  staging: string,
+  options: RestoreFullBackupOptions,
+  notes: string[],
+  journal: RestoreJournalWriter | null,
+): RestoreResult['caddy'] {
+  const src = path.join(staging, 'caddy');
+  if (!fs.existsSync(src)) {
+    return null;
+  }
+  const stats = treeStats(src);
+  const target = String(options.caddyDataPath || '').trim();
+  if (!target) {
+    notes.push(
+      `归档里有 ./caddy 段（${stats.files} 个文件，${formatBytes(stats.bytes)}，含 TLS 证书与私钥），` +
+        '但本次没有指定 caddy 数据目录，已跳过：需要时把 VANBLOG_CADDY_DATA_PATH 配上再恢复一次',
+    );
+    return null;
+  }
+  if (!path.isAbsolute(target) || target.split(/[\\/]/).includes('..')) {
+    notes.push(`caddy 数据目录 "${target}" 不是安全的绝对路径，已跳过恢复 ./caddy 段`);
+    return null;
+  }
+  journal?.setPhase('caddy');
+  try {
+    ensureDir(target);
+    // ⚠️ 只覆盖、**绝不修剪** caddy 目录：删掉证书/私钥的代价远高于留下几份旧的
+    fs.cpSync(src, target, { recursive: true, force: true, dereference: false });
+    notes.push(
+      `已把归档里的 caddy TLS 材料（${stats.files} 个文件）还原到 ${target}；` +
+        'caddy 需要重启才会重新加载证书（容器里就是重启容器）',
+    );
+    return { files: stats.files, bytes: stats.bytes, target };
+  } catch (err) {
+    notes.push(`还原 caddy TLS 材料失败（数据库与静态文件不受影响）：${(err as Error)?.message || err}`);
+    return null;
   }
 }

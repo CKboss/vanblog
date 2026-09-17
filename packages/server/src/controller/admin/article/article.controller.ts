@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -11,20 +12,29 @@ import {
   Put,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiHeader, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
 import { CreateArticleDto, UpdateArticleDto } from 'src/types/article.dto';
 import { SortOrder } from 'src/types/sort';
+import { UploadContext } from 'src/types/upload';
 import { ArticleProvider } from 'src/provider/article/article.provider';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { ISRProvider } from 'src/provider/isr/isr.provider';
+import { MetaProvider } from 'src/provider/meta/meta.provider';
 import { PipelineProvider } from 'src/provider/pipeline/pipeline.provider';
 import { RevisionProvider } from 'src/provider/revision/revision.provider';
+import { StaticProvider } from 'src/provider/static/static.provider';
 import { ApiToken } from 'src/provider/swagger/token';
 import { sanitizePagination } from 'src/utils/pagination';
 import { parseNumericId } from 'src/utils/numericId';
+import { carryAccessSecretFields } from 'src/utils/accessPassword';
+import { checkTrue } from 'src/utils/checkTrue';
+import { MDZ_IMPORT_UPLOAD_OPTIONS, importMdzBuffer } from 'src/utils/mdzImport';
 @ApiTags('article')
 @ApiToken
 @UseGuards(...AdminGuard)
@@ -35,6 +45,9 @@ export class ArticleController {
     private readonly articleProvider: ArticleProvider,
     private readonly isrProvider: ISRProvider,
     private readonly pipelineProvider: PipelineProvider,
+    /** .mdz 导入（图片入库走与手动上传完全相同的管线）。两个 provider 都已在 app.module 注册。 */
+    private readonly staticProvider: StaticProvider,
+    private readonly metaProvider: MetaProvider,
     /** 历史版本（P4）。@Optional：模块未注册的过渡期里接口回 404 语义，其余路由不受影响。 */
     @Optional() private readonly revisionProvider?: RevisionProvider,
   ) {}
@@ -118,12 +131,18 @@ export class ArticleController {
     // 客户端塞值会污染回收站排序与 readingMinutes
     delete (updateDto as any)?.deletedAt;
     delete (updateDto as any)?.wordCount;
+    const callerDto = updateDto;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateArticle', updateDto);
     if (result.length > 0) {
       const lastResult = result[result.length - 1];
       const lastOuput = lastResult.output;
       if (lastOuput) {
-        updateDto = lastOuput;
+        // 流水线**看不到**密码（事件 payload 已在 PipelineProvider.runCodeByPipelineId 里
+        // 脱敏：日志 / IPC / logs 集合三个出口都不带 password），所以它返回的 output 里
+        // 不会有 password/clearPassword；而这里是**整体替换**。不把调用方的密码意图透传
+        // 回来，"用户改了密码 + 站点上正好挂着 beforeUpdateArticle 流水线"就会静默丢掉
+        // 新密码（留空 = 不修改）。只透传顶层这两个键，且不覆盖脚本自己给的值。
+        updateDto = carryAccessSecretFields(callerDto, lastOuput);
       }
     }
     const before = await this.articleProvider.getById(id, 'list');
@@ -159,12 +178,14 @@ export class ArticleController {
     if (!createDto.author) {
       createDto.author = author;
     }
+    const callerCreateDto = createDto;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateArticle', createDto);
     if (result.length > 0) {
       const lastResult = result[result.length - 1];
       const lastOuput = lastResult.output;
       if (lastOuput) {
-        createDto = lastOuput;
+        // 同 update()：脱敏后的脚本回不出 password，整体替换会把新建时填的密码丢掉
+        createDto = carryAccessSecretFields(callerCreateDto, lastOuput);
       }
     }
     const data = await this.articleProvider.create(createDto);
@@ -190,6 +211,61 @@ export class ArticleController {
       statusCode: 200,
       data,
     };
+  }
+
+  /**
+   * 导入 `.mdz`（Typora 风格图片包：zip 里一个 `<标题>.md` + `<标题>.assets/` 图片目录，
+   * 即 `POST /api/admin/export/markdown` 的产物）。**只解析、不建文章**：
+   * 返回编辑器填表所需的一切（title/content/frontMatter/图片报告），是否入库由管理员
+   * 在编辑器里审阅后自己保存 —— 自动建文章会让一次误传变成破坏性操作。
+   *
+   * 图片通过 StaticProvider.upload 入图床（魔数校验、按 (sign,'img') 内容去重、
+   * 缩略图、AVIF 兄弟、webp、隐写水印，与手动上传同一管线），正文里的相对链接
+   * 改写成返回的服务 URL；zip-slip / zip 炸弹 / 成员选择在**写入任何东西之前**校验。
+   * front matter 白名单外的字段（尤其 password —— 导出的是 scrypt 哈希）一律丢弃，
+   * 契约与理由见 `utils/mdzImport.ts`。
+   */
+  @Post('import-mdz')
+  @UseInterceptors(FileInterceptor('file', MDZ_IMPORT_UPLOAD_OPTIONS))
+  async importMdz(
+    @UploadedFile() file: any,
+    @Req() req: any,
+    @Body() body?: { withWaterMark?: string | boolean },
+  ) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('没有收到文件：请用 multipart 上传一个 .mdz（字段名 file）');
+    }
+    // 可见水印默认**不加**：.mdz 里的图片多半就是本站导出时的成品（当年该加的水印已经加上），
+    // 再盖一层会毁掉「导出→导入」的往返保真；要加可以显式传 withWaterMark=true。
+    // 隐写水印不吃这个参数：它由设置页开关驱动，在 upload 管线内部照常执行。
+    const withWaterMark = checkTrue(body?.withWaterMark ?? false);
+    let context: UploadContext = { uploader: req?.user?.nickname || req?.user?.name || '' };
+    try {
+      const siteInfo = await this.metaProvider.getSiteInfo();
+      context = { ...context, baseUrl: siteInfo?.baseUrl, author: siteInfo?.author };
+    } catch {
+      // 站点信息拿不到只影响隐写水印的载荷文本，不值得让整个导入失败
+    }
+    const data = await importMdzBuffer(file.buffer, async (memberName, memberBuffer) => {
+      const res: any = await this.staticProvider.upload(
+        { buffer: memberBuffer, originalname: memberName.split('/').pop() || 'image' },
+        'img',
+        false,
+        undefined,
+        { withWaterMark },
+        context,
+      );
+      return { src: res?.src, isNew: res?.isNew };
+    });
+    // ⚠️ 日志只落计数与标题：front matter 里可能有敏感值（password 已在 util 层丢弃，
+    // 这里也不把 notes/skipped 原文写进日志，避免把用户内容抄进日志文件）。
+    this.logger.log(
+      `导入 .mdz《${data.title}》：图片入库 ${data.importedImages} 张（其中按内容去重命中 ${data.dedupedImages} 张），跳过 ${data.skippedImages.length} 个引用`,
+    );
+    return { statusCode: 200, data };
   }
 
   /**

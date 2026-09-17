@@ -6,8 +6,22 @@ import {
   updateCategory,
 } from '@/services/van-blog/api';
 import { encodeQuerystring } from '@/services/van-blog/encode';
+import {
+  buildAccessPasswordPatch,
+  buildSubmitValues,
+  CLEAR_PASSWORD_LABEL,
+  CLEAR_PASSWORD_TOOLTIP,
+  clearConfirmContent,
+  clearConfirmTitle,
+  hasPasswordFromRecord,
+  PASSWORD_UNRECOVERABLE_WARNING,
+  passwordHelp,
+  passwordPlaceholder,
+  PRIVATE_TOGGLE_HINT,
+  shouldShowClearOption,
+} from '@/services/van-blog/accessPassword';
 import { PlusOutlined } from '@ant-design/icons';
-import { ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-form';
+import { ModalForm, ProFormSelect, ProFormSwitch, ProFormText } from '@ant-design/pro-form';
 import { ProTable } from '@ant-design/pro-table';
 import { Button, message, Modal, Switch } from 'antd';
 import { useRef, useState } from 'react';
@@ -111,7 +125,8 @@ function createColumns({ onMove, rows }) {
   {
     title: '加密',
     tooltip:
-      '分类加密后，此分类下的所有文章都会被加密。密码以分类的密码为准。加密后，访客仍可正常访问分类并获取文章列表。',
+      '分类加密后，此分类下的所有文章都会被加密。密码以分类的密码为准。加密后，访客仍可正常访问分类并获取文章列表。' +
+      PASSWORD_UNRECOVERABLE_WARNING,
     dataIndex: 'private',
     search: false,
     valueType: 'select',
@@ -125,6 +140,14 @@ function createColumns({ onMove, rows }) {
         status: 'Success',
       },
     },
+  },
+  {
+    title: '访问密码',
+    tooltip: `服务端只存 scrypt 哈希，后台也读不出原密码，所以这一列只能告诉你"设没设"。${PASSWORD_UNRECOVERABLE_WARNING}要改密码或解除加密，用「重命名」弹窗里的密码框与「清除密码」开关。`,
+    dataIndex: 'hasPassword',
+    search: false,
+    width: 110,
+    render: (_, record) => (hasPasswordFromRecord(record) ? '已设置' : '未设置'),
   },
   {
     title: '操作',
@@ -144,33 +167,61 @@ function createColumns({ onMove, rows }) {
         title={`重命名分类 "${record.name}"`}
         trigger={<a key={'editC' + record.name} data-category-rename={String(record.name)}>重命名</a>}
         autoFocusFirstInput
+        // ⚠️ 不再回填密码：服务端已经**不下发**分类密码（只给布尔 hasPassword）。
+        // 密码框永远是空的，留空 = 不修改；解除加密走下面的「清除密码」开关。
         initialValues={{
-          password: record.password,
           private: record.private,
           hidden: Boolean(record.hidden),
         }}
         submitTimeout={3000}
-        onFinish={async (values) => {
+        onFinish={async (formValues) => {
+          const hasPassword = hasPasswordFromRecord(record);
+          const access = buildAccessPasswordPatch({
+            password: formValues?.password,
+            clearRequested: formValues?.clearPassword,
+            hasPassword,
+            isCreate: false,
+            isPrivate: formValues?.private,
+          });
+          if (access.error) {
+            message.error(access.error);
+            return false;
+          }
+          // 摘掉 password/hasPassword/clearPassword 三个表单键，只留算出来的那几个
+          const values = buildSubmitValues(formValues, access.patch);
           if (Object.keys(values).length == 0) {
             message.error('无有效信息！请至少填写一个选项！');
             return false;
           }
-          if (values.private && !values.password) {
-            message.error('如若加密，请填写密码！');
+          const clearing = Boolean(access.patch?.clearPassword);
+          const proceed = await new Promise((resolve) => {
+            Modal.confirm({
+              title: clearing
+                ? clearConfirmTitle(`分类 "${record.name}"`)
+                : `确定重命名分类 "${record.name}" 吗？`,
+              content: clearing
+                ? clearConfirmContent('该分类下的所有文章')
+                : '改动将立即生效!',
+              okText: clearing ? '确定清除' : '确定',
+              // antd 4 的 Modal.confirm 没有 description，危险态靠 okButtonProps + content 表达
+              okButtonProps: clearing ? { danger: true } : undefined,
+              cancelText: clearing ? '再想想' : '取消',
+              onOk: () => resolve(true),
+              onCancel: () => resolve(false),
+            });
+          });
+          if (!proceed) {
             return false;
           }
-
-          Modal.confirm({
-            content: `确定重命名分类 "${record.name}" 吗？改动将立即生效!`,
-            onOk: async () => {
-              await updateCategory(record.name, values);
-              message.success('提交成功');
-              action?.reload();
-              return true;
-            },
-          });
-
-          return true;
+          try {
+            await updateCategory(record.name, values);
+            message.success(clearing ? '已清除该分类的访问密码' : '提交成功');
+            action?.reload();
+            return true;
+          } catch (err) {
+            // 全局 errorHandler 已经弹过服务端原因；留在弹窗里让用户改完再提交
+            return false;
+          }
         }}
       >
         <ProFormText width="md" name="name" label="分类名" placeholder="请输入新的分类名称" />
@@ -191,6 +242,7 @@ function createColumns({ onMove, rows }) {
           name="private"
           label="是否加密"
           placeholder="是否加密"
+          tooltip={PRIVATE_TOGGLE_HINT}
           request={async () => {
             return [
               { label: '未加密', value: false },
@@ -202,8 +254,30 @@ function createColumns({ onMove, rows }) {
           width="md"
           name="password"
           label="密码"
-          placeholder="请输入加密密码"
+          placeholder={passwordPlaceholder({ hasPassword: hasPasswordFromRecord(record) })}
+          tooltip={
+            hasPasswordFromRecord(record)
+              ? '该分类已设置密码。留空表示不修改；填新值表示改密码。'
+              : '留空表示不加密；填了就用这个密码加密该分类下的所有文章。'
+          }
+          formItemProps={{
+            extra: passwordHelp({ hasPassword: hasPasswordFromRecord(record) }),
+          }}
+          // 挡浏览器自动填充：「留空 = 不修改」之后，一次自动填充 = 悄悄改了密码
+          fieldProps={{ autoComplete: 'new-password' }}
         />
+        {shouldShowClearOption({ hasPassword: hasPasswordFromRecord(record) }) && (
+          <ProFormSwitch
+            width="md"
+            name="clearPassword"
+            id="clearPassword"
+            label={CLEAR_PASSWORD_LABEL}
+            tooltip={CLEAR_PASSWORD_TOOLTIP}
+            formItemProps={{
+              extra: `勾选并提交 = 解除该分类（及其下所有文章）的加密。${PASSWORD_UNRECOVERABLE_WARNING}`,
+            }}
+          />
+        )}
       </ModalForm>,
 
       <a

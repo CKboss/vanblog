@@ -1,8 +1,13 @@
 import { createArticle, getAllCategories } from '@/services/van-blog/api';
 import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormText } from '@ant-design/pro-form';
-import { Button, Modal } from 'antd';
+import { Button, message, Modal } from 'antd';
 import moment from 'moment';
 import { stopMenuKeydown } from '@/services/van-blog/editableKeyboard';
+import {
+  buildAccessPasswordPatch,
+  passwordHelp,
+  passwordPlaceholder,
+} from '@/services/van-blog/accessPassword';
 import AuthorField from '../AuthorField';
 import CoverImageField from '../CoverImageField';
 import PathnameField from '../PathnameField';
@@ -35,6 +40,18 @@ export default function (props) {
         const washedValues = {};
         for (const [k, v] of Object.entries(values)) {
           washedValues[k.replace('C', '')] = v;
+        }
+        // 选了「加密」却没填密码 = 造出一篇**谁也打不开**的文章（服务端会存一个空密码，
+        // 而解锁口对"标记加密但没密码"一律拒绝）。密码又不可找回，所以在表单里就拦下来。
+        const access = buildAccessPasswordPatch({
+          password: washedValues.password,
+          hasPassword: false,
+          isCreate: true,
+          isPrivate: washedValues.private,
+        });
+        if (access.error) {
+          message.error(access.error);
+          return false;
         }
 
         const { data } = await createArticle(washedValues);
@@ -123,7 +140,9 @@ export default function (props) {
         id="passwordC"
         name="passwordC"
         autocomplete="new-password"
-        placeholder="请输入密码"
+        placeholder={passwordPlaceholder({ isCreate: true })}
+        formItemProps={{ extra: passwordHelp({ isCreate: true }) }}
+        fieldProps={{ autoComplete: 'new-password' }}
         dependencies={['private']}
       />
       <ProFormSelect

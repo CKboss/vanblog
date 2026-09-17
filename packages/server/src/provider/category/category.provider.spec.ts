@@ -2,6 +2,7 @@ import { NotAcceptableException } from '@nestjs/common';
 import { ArticleProvider } from '../article/article.provider';
 import { DraftProvider } from '../draft/draft.provider';
 import { CategoryProvider } from './category.provider';
+import { isScryptHash, verifyAccessPassword } from 'src/utils/crypto';
 
 function createMemoryCategoryModel(initial: any[] = []) {
   const docs = initial.map((item) => ({ ...item }));
@@ -142,8 +143,10 @@ describe('CategoryProvider.importCategories', () => {
       id: 1,
       name: '随笔',
       private: true,
-      password: 'pw',
     });
+    // 导入的密码**不再明文落库**：存的是 scrypt 哈希，且仍然能用原密码解锁
+    expect(isScryptHash(model.docs[0].password)).toBe(true);
+    expect(verifyAccessPassword(model.docs[0].password, 'pw')).toBe(true);
   });
 
   it('allocates a new id when the exported id is already used by another name', async () => {
@@ -252,12 +255,17 @@ describe('CategoryProvider hidden flag (#359)', () => {
     });
 
     await stack.categoryProvider.updateCategoryByName('私密', { hidden: true });
-    expect(stack.categoryModel.docs.find((item) => item.name === '私密')).toMatchObject({
+    const secret = stack.categoryModel.docs.find((item) => item.name === '私密');
+    expect(secret).toMatchObject({
       name: '私密',
       hidden: true,
       private: true,
-      password: 'pw',
     });
+    // 改隐藏开关**不动加密语义**：private 保持 true，密码仍然是 'pw' 能解开。
+    // 但存量明文会被顺手升级成 scrypt 哈希（P2 的"写时升级"）—— 这是有意的：
+    // 一台从不重启的站点也要能收敛掉库里的明文。
+    expect(isScryptHash(secret.password)).toBe(true);
+    expect(verifyAccessPassword(secret.password, 'pw')).toBe(true);
     expect(stack.categoryModel.docs.find((item) => item.name === '随笔').hidden).toBe(false);
 
     await stack.categoryProvider.updateCategoryByName('私密', { hidden: false });

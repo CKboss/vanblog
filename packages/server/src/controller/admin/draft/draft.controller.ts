@@ -21,6 +21,7 @@ import { config } from 'src/config';
 import { PipelineProvider } from 'src/provider/pipeline/pipeline.provider';
 import { ApiToken } from 'src/provider/swagger/token';
 import { sanitizePagination } from 'src/utils/pagination';
+import { carryAccessSecretFields } from 'src/utils/accessPassword';
 
 @ApiTags('draft')
 @UseGuards(...AdminGuard)
@@ -147,12 +148,17 @@ export class DraftController {
         message: '演示站禁止发布草稿！',
       };
     }
+    const callerPublishDto = publishDto;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateArticle', publishDto);
     if (result.length > 0) {
       const lastResult = result[result.length - 1];
       const lastOuput = lastResult.output;
       if (lastOuput) {
-        publishDto = lastOuput;
+        // 与 ArticleController 同一条规矩：事件 payload 已脱敏（脚本看不到 password），
+        // 整体替换会丢掉用户在「发布草稿」弹窗里填的密码，所以把顶层的密码意图透传回来。
+        // ⚠️ 只有这一处需要：`beforeUpdateDraft` 传的是 Create/UpdateDraftDto，
+        //    草稿 schema 根本没有 password 字段，没什么可透传的。
+        publishDto = carryAccessSecretFields(callerPublishDto, lastOuput);
       }
     }
     const data = await this.draftProvider.publish(id, publishDto);

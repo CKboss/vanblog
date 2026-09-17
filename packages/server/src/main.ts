@@ -195,8 +195,12 @@ async function bootstrap() {
     .setVersion('1.0')
     .build();
   // Swagger 默认仍然开着（保持既有行为），但它等于把整个后台 API 面摊给未登录用户，
-  // 生产环境建议关掉：VANBLOG_SWAGGER=false
-  if (process.env.VANBLOG_SWAGGER !== 'false') {
+  // ⚠️ **默认关**（站长决定）。以前默认开，理由是后台「关于」与「Token」两个页面深链到 /swagger；
+  // 那两处已改成指向仓库里的 API 文档并说明如何打开实时 swagger，所以那个理由不成立了。
+  // 关掉的收益：少一个匿名可达、且此前**完全不受限流**的 59KB 响应（第四轮审计 B1），
+  // 也少一份把 111 条后台路由与登录接口请求形状直接摊给扫描器的地图。
+  // 需要时显式打开：VANBLOG_SWAGGER=true（只认字面 true，打错的值不会静默打开）。
+  if (process.env.VANBLOG_SWAGGER === 'true') {
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('swagger', app, document);
   }

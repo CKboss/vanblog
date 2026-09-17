@@ -362,18 +362,27 @@ describe('StatsMaintenanceProvider × 迁移台账', () => {
     expect(recorder.record).toHaveBeenCalled();
   });
 
-  it('pruneStats 默认（保留期未启用）记 skipped，绝不删行', async () => {
-    // ⚠️ env 必须在构造 provider **之前**清掉：retentionDays 是构造期读的 readonly 字段
-    delete process.env.VANBLOG_VISIT_RETENTION_DAYS;
-    const { visitModel, viewerModel } = createStatsModels({ visitsUnique: true });
-    const { recorder, entries } = createFakeRecorder();
-    const provider = new StatsMaintenanceProvider(visitModel, viewerModel, recorder);
-    const result = await provider.pruneStats('测试');
-    expect(result.enabled).toBe(false);
-    const prune = entries.find((e) => e.key === LEDGER_KEYS.pruneStats);
-    expect(prune).toBeDefined();
-    expect(prune.outcome).toBe('skipped');
-    expect(prune.kind).toBe('prune');
+  it('pruneStats 保留期未启用时记 skipped，绝不删行', async () => {
+    // ⚠️ env 必须在构造 provider **之前**设置：retentionDays 是构造期读的 readonly 字段。
+    // 第四轮审计 B3 之后默认值是 365（默认行为变更），「未启用」现在要靠显式
+    // `VANBLOG_VISIT_RETENTION_DAYS=0` 这个逃生口表达 —— 本用例钉的就是那条
+    // 「未启用 ⇒ 台账 skipped + 一行不删」的路径。
+    const saved = process.env.VANBLOG_VISIT_RETENTION_DAYS;
+    process.env.VANBLOG_VISIT_RETENTION_DAYS = '0';
+    try {
+      const { visitModel, viewerModel } = createStatsModels({ visitsUnique: true });
+      const { recorder, entries } = createFakeRecorder();
+      const provider = new StatsMaintenanceProvider(visitModel, viewerModel, recorder);
+      const result = await provider.pruneStats('测试');
+      expect(result.enabled).toBe(false);
+      const prune = entries.find((e) => e.key === LEDGER_KEYS.pruneStats);
+      expect(prune).toBeDefined();
+      expect(prune.outcome).toBe('skipped');
+      expect(prune.kind).toBe('prune');
+    } finally {
+      if (saved === undefined) delete process.env.VANBLOG_VISIT_RETENTION_DAYS;
+      else process.env.VANBLOG_VISIT_RETENTION_DAYS = saved;
+    }
   });
 
   it('没有注入台账时行为与从前一致（可选注入，不抛）', async () => {

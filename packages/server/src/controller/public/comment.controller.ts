@@ -49,7 +49,11 @@ export class PublicCommentController {
 
   @Get('/')
   async list(@Query('path') path: string, @Query() query: any) {
-    const page = Number(query?.page) > 0 ? Math.min(Number(query.page), 10000) : 1;
+    // page 上限 500（第四轮审计 B8）：pageSize ≤ 50 ⇒ 最深 skip ≈ 24,950 条根评论。
+    // 前台按 20/页翻（500 页 = 1 万条根评论，远超任何真实文章的规模），
+    // 而以前的 10,000 允许匿名构造 skip≈499,950 —— skip 的代价是 O(该路径的匹配文档数)
+    // 而不是 O(page)，纯属白烧。500 之后一律当 500 处理（返回空页，与旧行为同形）。
+    const page = Number(query?.page) > 0 ? Math.min(Number(query.page), 500) : 1;
     const pageSize = Number(query?.pageSize) > 0 ? Math.min(Number(query.pageSize), 50) : 20;
     const sort = String(query?.sort ?? '') === 'desc' ? 'desc' : 'asc';
     const data = await this.commentProvider.listByPath({

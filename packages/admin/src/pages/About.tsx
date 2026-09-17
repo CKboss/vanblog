@@ -123,7 +123,14 @@ export default function (props) {
               <a target="_blank" rel="noreferrer" href={FORK_RUNBOOK} style={linkStyle}>
                 开发手册
               </a>
-              <a target="_blank" rel="noreferrer" href="/swagger" style={linkStyle}>
+              {/* ⚠️ 不再深链 /swagger：它现在默认关闭（VANBLOG_SWAGGER=true 才开），
+                  死链比没有链更糟。改成指向仓库里的 API 文档。 */}
+              <a
+                target="_blank"
+                rel="noreferrer"
+                href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/reference/api.md"
+                style={linkStyle}
+              >
                 API文档
               </a>
             </Space>

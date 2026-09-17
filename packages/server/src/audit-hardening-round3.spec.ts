@@ -25,10 +25,16 @@ const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 /** 断言前剥掉注释：新写的注释里常常引用"以前是怎样的"，不剥会自己匹配自己 */
 const code = (src: string) =>
   src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+    // ⚠️ 顺序必须是"先行注释、后块注释"。反过来的话，任何注释里出现的 `/*` 字节对
+    // （例如尾随注释 `// 只有 /static/img/<file>.{webp,…} 由 caddy 直服`）都会开启一个
+    // **假块注释**，把后面几十上百行真实代码一起吃掉 —— 本仓库已因此误判三次：
+    // 静态目录守卫只找到 1 个目录（实际 ≥6）、main.ts 的 primary 守卫钉子找不到那行、
+    // 以及这里的 keepAliveTimeout / caddy clearLog 两条钉子。
     .split('\n')
     .filter((l) => !/^\s*\/\//.test(l))
-    .join('\n');
+    .map((l) => l.replace(/(\s|^)\/\/.*$/, '$1'))
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
 
 describe('attemptLimit：内存必须有界，而且不能"一满就把所有人清零"', () => {
   beforeEach(() => {

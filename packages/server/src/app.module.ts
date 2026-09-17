@@ -89,6 +89,7 @@ import { CustomPageController } from './controller/admin/customPage/customPage.c
 import { RssProvider } from './provider/rss/rss.provider';
 import { MarkdownProvider } from './provider/markdown/markdown.provider';
 import { SiteMapProvider } from './provider/sitemap/sitemap.provider';
+import { SearchIndexProvider } from './provider/search/searchIndex.provider';
 import { TokenProvider } from './provider/token/token.provider';
 import { Token, TokenSchema } from './scheme/token.schema';
 import { TokenGuard } from './provider/auth/token.guard';
@@ -254,6 +255,7 @@ function num(value: string | undefined, fallback: number): number {
     RssProvider,
     MarkdownProvider,
     SiteMapProvider,
+    SearchIndexProvider,
     TokenProvider,
     TokenGuard,
     WebsiteProvider,

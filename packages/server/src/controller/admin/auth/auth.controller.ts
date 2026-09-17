@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Controller,
+  Logger,
   Request,
   Post,
   UseGuards,
@@ -13,6 +14,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config/index';
 import { UpdateUserDto } from 'src/types/user.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
+import { TokenGuard } from 'src/provider/auth/token.guard';
 import { AuthProvider } from 'src/provider/auth/auth.provider';
 import { LogProvider } from 'src/provider/log/log.provider';
 import { UserProvider } from 'src/provider/user/user.provider';
@@ -26,6 +28,8 @@ import { ApiToken } from 'src/provider/swagger/token';
 @ApiTags('tag')
 @Controller('/api/admin/auth/')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authProvider: AuthProvider,
     private readonly userProvider: UserProvider,
@@ -60,6 +64,18 @@ export class AuthController {
     };
   }
 
+  /**
+   * 登出。⚠️ 必须挂 TokenGuard（第四轮审计 B7/R4-9）：这条路由在 `/api/admin`
+   * 前缀下，却曾经没有任何守卫 —— 它按值吊销，所以不是提权口子，但匿名请求
+   * 就能触发 `dispatchEvent('logout')`，也就是**匿名调用方能启动管理员编写的
+   * 流水线脚本**；而且它不受「公开写 30/分钟」那把桶管（只受全局 600/分钟）。
+   * TokenGuard 只验证 token 在库里且未被吊销（不要求完整 AdminGuard 的
+   * jwt+access 两道），正好是这条路由需要的最小守卫。
+   * blast radius：拿已失效/伪造 token 调 logout 从 200 变成 401 ——
+   * 后台前端的 LogoutButton 早就容忍这一点（try/catch + 无条件清 localStorage
+   * + 跳登录页，失败时提示「已退出登录（服务端会话已失效）」）。
+   */
+  @UseGuards(TokenGuard)
   @Post('/logout')
   async logout(@Request() request: any) {
     const token = request.headers['token'];
@@ -69,10 +85,18 @@ export class AuthController {
         message: '无登录凭证！',
       });
     }
-    this.pipelineProvider.dispatchEvent('logout', {
-      token,
-    });
     await this.tokenProvider.disableToken(token);
+    // ⚠️ 事件必须在**吊销成功之后**才触发（以前在之前：吊销还没发生，
+    // 流水线脚本就已经跑起来了，而且匿名请求也能触发）。
+    // 不 await（登出响应不该等流水线），但要 catch：dispatchEvent 的第一句 DB 读
+    // 在它自己的 try 之外，不接住就是一条无来源的 unhandledRejection（§7.55 J-4 同款）。
+    void this.pipelineProvider
+      .dispatchEvent('logout', {
+        token,
+      })
+      .catch((err) => {
+        this.logger.error(`logout 流水线事件失败：${(err as Error)?.message || err}`);
+      });
     return {
       statusCode: 200,
       data: '登出成功！',

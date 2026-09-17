@@ -9,11 +9,25 @@ import {
   normalizePublishAtForSave,
   pastScheduleWarningText,
 } from '@/services/van-blog/schedule';
-import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormText } from '@ant-design/pro-form';
+import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormSwitch, ProFormText } from '@ant-design/pro-form';
 import { Form, message, Modal } from 'antd';
 import moment from 'moment';
 import { useEffect } from 'react';
 import { stopMenuKeydown } from '@/services/van-blog/editableKeyboard';
+import {
+  buildAccessPasswordPatch,
+  buildSubmitValues,
+  CLEAR_PASSWORD_LABEL,
+  CLEAR_PASSWORD_TOOLTIP,
+  clearConfirmContent,
+  clearConfirmTitle,
+  hasPasswordFromRecord,
+  passwordHelp,
+  passwordPlaceholder,
+  PRIVATE_TOGGLE_HINT,
+  sanitizeRecordForForm,
+  shouldShowClearOption,
+} from '@/services/van-blog/accessPassword';
 import AuthorField from '../AuthorField';
 import CoverImageField from '../CoverImageField';
 import PathnameField from '../PathnameField';
@@ -39,12 +53,21 @@ export default function (props: {
   const { currObj, setLoading, type, onFinish, visible, onVisibleChange } = props;
   const controlled = typeof visible === 'boolean';
   const [form] = Form.useForm();
+  // 服务端已经**不再下发**文章访问密码（明文和哈希都不给），只给一个布尔 `hasPassword`。
+  // 所以：① 初始值里必须把 password 摘干净（对着还没升级的旧服务端也绝不回填）；
+  //      ② 密码框留空 = 「不修改」，解除加密走下面那个独立开关 + 二次确认。
+  const passwordSet = type == 'article' && hasPasswordFromRecord(currObj);
   useEffect(() => {
     // publishAt 从服务端来是 ISO 串（或 null）；DatePicker 需要 moment。
     // 不合法或缺失都回落成 null，清空后才真的是「不定时」。
     const values = {
-      ...(currObj || {}),
+      ...sanitizeRecordForForm(currObj),
       publishAt: type == 'article' ? toMomentOrNull(currObj?.publishAt) : undefined,
+      // 显式清空这两个键：ModalForm 默认不 destroyOnClose，上一篇的输入/勾选会残留在
+      // form store 里。残留一个 `clearPassword: true` 就等于"换一篇文章打开、点保存、
+      // 把它的密码悄悄清掉" —— 而密码清除后是找不回来的。
+      password: undefined,
+      clearPassword: false,
     };
     if (form && form.setFieldsValue) form.setFieldsValue(values);
   }, [currObj]);
@@ -67,7 +90,7 @@ export default function (props: {
       width={450}
       autoFocusFirstInput
       submitTimeout={3000}
-      initialValues={currObj || {}}
+      initialValues={sanitizeRecordForForm(currObj)}
       onFinish={async (values) => {
         if (location.hostname == 'blog-demo.mereith.com' && type != 'draft') {
           Modal.info({
@@ -79,11 +102,47 @@ export default function (props: {
         if (!currObj || !currObj.id) {
           return false;
         }
-        // 定时发布（publishAt）保存前归一化：
-        // - 清空必须真的发 **null**（undefined 会在 JSON 序列化时丢键 → 服务端永远清不掉定时）；
-        // - moment/字符串 → ISO 串（UTC）。
-        const submitValues: any = { ...values };
+        // 访问密码（P4）三态：留空 = **不修改**；填了新值 = 改密码；勾「清除密码」= 解除加密。
+        // 清除是**不可撤销**的（服务端只存 scrypt 哈希，谁也读不出原密码），所以二次确认。
+        let accessPatch: any = {};
         if (type == 'article') {
+          const access = buildAccessPasswordPatch({
+            password: (values as any)?.password,
+            clearRequested: (values as any)?.clearPassword,
+            hasPassword: passwordSet,
+            isCreate: false,
+            isPrivate: (values as any)?.private,
+          });
+          if (access.error) {
+            message.error(access.error);
+            return false;
+          }
+          if ((access.patch as any)?.clearPassword) {
+            const proceed = await new Promise<boolean>((resolve) => {
+              Modal.confirm({
+                title: clearConfirmTitle('这篇文章'),
+                content: clearConfirmContent('这篇文章'),
+                okText: '确定清除',
+                okButtonProps: { danger: true },
+                cancelText: '再想想',
+                onOk: () => resolve(true),
+                onCancel: () => resolve(false),
+              });
+            });
+            if (!proceed) {
+              return false;
+            }
+          }
+          accessPatch = access.patch;
+        }
+        // buildSubmitValues 会把 password / hasPassword / clearPassword 三个键全部摘掉，
+        // 再 merge 上面算出来的那几个 —— 保证绝不会把服务端给的值（或残留的初始值）回传。
+        const submitValues: any =
+          type == 'article' ? buildSubmitValues(values, accessPatch) : { ...values };
+        if (type == 'article') {
+          // 定时发布（publishAt）保存前归一化：
+          // - 清空必须真的发 **null**（undefined 会在 JSON 序列化时丢键 → 服务端永远清不掉定时）；
+          // - moment/字符串 → ISO 串（UTC）。
           submitValues.publishAt = normalizePublishAtForSave(values?.publishAt);
           // 选了过去的时间：警告而不是静默照存（服务端会视为已到期、直接发布）
           if (values?.publishAt && isPastSchedule(values?.publishAt)) {
@@ -191,6 +250,7 @@ export default function (props: {
             id="private"
             label="是否加密"
             placeholder="是否加密"
+            tooltip={PRIVATE_TOGGLE_HINT}
             request={async () => {
               return [
                 {
@@ -209,9 +269,32 @@ export default function (props: {
             width="md"
             id="password"
             name="password"
-            placeholder="请输入密码"
+            placeholder={passwordPlaceholder({ hasPassword: passwordSet })}
+            tooltip={
+              passwordSet
+                ? '已设置密码。留空表示不修改；填新值表示改密码。'
+                : '留空表示不加密；填了就用这个密码加密。'
+            }
+            formItemProps={{
+              extra: passwordHelp({ hasPassword: passwordSet }),
+            }}
+            // autoComplete="new-password"：挡住浏览器的密码自动填充。
+            // 「留空 = 不修改」之后，一次自动填充就等于"用户没想改，却被改了密码"。
+            fieldProps={{ autoComplete: 'new-password', onKeyDown: stopMenuKeydown }}
             dependencies={['private']}
           />
+          {shouldShowClearOption({ hasPassword: passwordSet }) && (
+            <ProFormSwitch
+              width="md"
+              name="clearPassword"
+              id="clearPassword"
+              label={CLEAR_PASSWORD_LABEL}
+              tooltip={CLEAR_PASSWORD_TOOLTIP}
+              formItemProps={{
+                extra: '勾选并提交 = 解除这篇文章的加密。清除后原密码无法找回；只想换密码请不要勾选，直接在上面填新密码。',
+              }}
+            />
+          )}
           <ProFormSelect
             width="md"
             name="hidden"

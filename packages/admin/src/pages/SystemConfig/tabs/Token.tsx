@@ -65,7 +65,24 @@ export default function () {
             </ModalForm>
             <Button
               onClick={() => {
-                window.open('/swagger', '_blank');
+                // ⚠️ /swagger 现在默认关闭；先探一下再开，避免弹出一个 404 标签页
+                fetch('/swagger-json', { method: 'GET' })
+                  .then((r) => {
+                    if (r.ok) {
+                      window.open('/swagger', '_blank');
+                      return;
+                    }
+                    message.warning(
+                      '实时 API 文档（swagger）默认关闭：设 VANBLOG_SWAGGER=true 并重启后可用。已为你打开仓库里的 API 文档。',
+                    );
+                    window.open(
+                      'https://github.com/CKboss/vanblog/blob/dev/dsh/docs/reference/api.md',
+                      '_blank',
+                    );
+                  })
+                  .catch(() => {
+                    message.warning('实时 API 文档（swagger）默认关闭：设 VANBLOG_SWAGGER=true 并重启后可用。');
+                  });
               }}
             >
               API 文档

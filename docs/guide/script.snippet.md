@@ -4,6 +4,20 @@
 curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
+想用**发布版**而不是开发分支（更稳，且不受 raw 的分支缓存影响）：
+
+```bash
+curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.1/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
+```
+
+::: warning raw 地址有几分钟的 CDN 缓存
+
+`raw.githubusercontent.com` 对**分支**地址（`dev/dsh`）有 CDN 缓存：刚推完就装，拿到的可能是
+上一版脚本。要确定拿到哪个版本，就用上面的 Release 附件地址（每个发布版的附件里都有
+`vanblog.sh` 与 `docker-compose-template.yml`），或把 URL 里的 `dev/dsh` 换成具体 commit sha。
+
+:::
+
 ::: info 也可以用文档站的地址
 
 `curl -L https://vanblog.mereith.com/vanblog.sh -o vanblog.sh` 下载到的是**上游作者的脚本**：
@@ -31,7 +45,16 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 | 数据目录 | `/var/vanblog` | 安装时交互输入，或 `VANBLOG_DATA_PATH` / `VANBLOG_BASE_PATH` |
 | 端口 | 安装时交互输入（HTTP/HTTPS） | 之后用 `./vanblog.sh config` 改 |
 
-镜像由 GitHub Actions（`publish-ghcr`）构建发布。**ghcr 的包默认是私有的**，如果 `docker pull` 报
+镜像由 GitHub Actions（`publish-ghcr`）构建发布，仓库是 `ghcr.io/ckboss/vanblog`，可用标签：
+
+| 标签 | 指向 |
+| --- | --- |
+| `dev-dsh`（脚本默认） | 最后一次从 `dev/dsh` 分支**手动发版**时的代码 |
+| `dev-dsh-<短sha>` | 每次发版额外打的按提交号标签，**回滚/钉版本用这个** |
+| `latest` | `dev/dsh` 的手动构建，以及任何 `v*` 发版标签 |
+| `v2026.9.1` 等发布号 | 对应 tag 的发版构建 |
+
+**ghcr 的包默认是私有的**，如果 `docker pull` 报
 `denied`/`not found`，去 <https://github.com/CKboss/vanblog/pkgs/container/vanblog> →
 Package settings → Change visibility 改成 Public；国内拉 ghcr 慢的话，可以配镜像加速后用
 `VANBLOG_IMAGE_REF=<加速地址>/ckboss/vanblog:dev-dsh ./vanblog.sh`。
@@ -69,12 +92,20 @@ VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ./vanblog.sh log          # 日志
 ./vanblog.sh backup       # 整站备份（一致性快照，见下；导出前有磁盘空间预检）
 ./vanblog.sh verify       # 校验备份归档（完整性 + sha256 + 内容清单，不解压落盘）
+./vanblog.sh backup-verify # 备份 + 立刻深度校验 + 陈旧检查 + 台账（适合放 cron）
+./vanblog.sh drill        # 恢复演练：在一次性栈上真恢复一遍并断言语义
 ./vanblog.sh restore      # 从整站备份恢复
 ./vanblog.sh reset        # 换新机器：自动初始化 + 恢复整站备份 + 重启 + 核对（一条命令）
 ./vanblog.sh install-cron # 定时备份：每天一次写进 root 的 crontab（幂等；--remove 移除）
 ./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）
 ./vanblog.sh --help       # 全部命令
 ```
+
+`drill` / `verify-deep` / `backup-verify` / `backup-status` 这四条**不受脚本的 root 检查拦截**
+（它们在检查之前就转交给 `scripts/vanblog-drill.sh` 执行）：「校验/演练一份自己拥有的归档」
+是只读操作，不该要求 root —— 而且 root 跑 podman 看到的是另一套镜像存储，演练反而跑不了。
+其中 `backup-verify` 因为要真的做一次备份，备份动作本身仍需要相应权限。
+这四条的详情见 [导入导出 → 相关的三个子命令](../advanced/backup.md#相关的三个子命令)。
 
 ::: tip 从旧机器的整站备份直接装起
 
@@ -101,7 +132,8 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 
 ::: tip
 
-1. 只推荐在纯 Linux 环境下使用此脚本，宝塔面板也可以用。脚本需要 root（会检查 `id -u`）。
+1. 只推荐在纯 Linux 环境下使用此脚本，宝塔面板也可以用。脚本需要 root（会检查 `id -u`；
+   上面说的 `drill` / `verify-deep` / `backup-verify` / `backup-status` 四条除外）。
 1. ⚠️ 机器上没有 docker 时，脚本会把**上游作者主机**的 `docker.sh` 用 root 管道进 bash 执行
    （`bash <(curl …)`，上游遗留行为）；不放心就先自己装好 docker 再跑脚本，见
    [部署常见问题](../faq/deploy.md#如何安装-docker)。

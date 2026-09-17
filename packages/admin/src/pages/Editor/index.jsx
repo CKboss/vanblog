@@ -18,6 +18,14 @@ import {
 import { getPathname } from '@/services/van-blog/getPathname';
 import { parseMarkdownFile } from '@/services/van-blog/parseMarkdownFile';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
+import { importMdzFile, importMdzErrorMessage } from '@/services/van-blog/importMdz';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {
+  IMPORT_PHASE_TEXT,
+  isMdzFileName,
+  frontMatterPatchForEditor,
+  describeImportOutcome,
+} = require('@/services/van-blog/importMdzCore');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { EXPORT_FORMATS } = require('@/services/van-blog/exportFormats');
 import { describeScheduledTag, isScheduled } from '@/services/van-blog/schedule';
@@ -44,6 +52,10 @@ export default function () {
   const [currObj, setCurrObj] = useState({});
   const [loading, setLoading] = useState(true);
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
+  // .mdz 导入的进行中阶段：'upload'（浏览器上传）→ 'ingest'（服务端解包+图床入库）→ null。
+  // ref 是给 onProgress 闭包用的（state 在闭包里是旧值）。
+  const [mdzImportPhase, setMdzImportPhase] = useState(null);
+  const mdzImportPhaseRef = useRef(null);
   const [editorConfig, setEditorConfig] = useCacheState(
     { afterSave: 'stay', useLocalCache: 'close', softLineBreaks: 'close' },
     'editorConfig',
@@ -302,6 +314,12 @@ export default function () {
     });
   };
   const handleImport = async (file) => {
+    // .mdz（后台导出的 Typora 图片包）走服务端：解包、图片入图床、相对链接改写成服务 URL。
+    // .md 保持原来的纯浏览器解析路径，一个字节都不动。
+    if (isMdzFileName(file?.name)) {
+      await handleImportMdz(file);
+      return false; // 阻止 rc-upload 再发一次请求
+    }
     setLoading(true);
     try {
       const { content } = await parseMarkdownFile(file);
@@ -317,6 +335,70 @@ export default function () {
       message.error('导入失败！请检查文件格式！');
     }
     setLoading(false);
+  };
+  /**
+   * .mdz 导入（不建文章）：服务端只解析并把图片写进图床，返回编辑器填表所需的一切；
+   * 内容填入编辑器、front matter 合进 currObj（「修改信息」表单打开即是这些值），
+   * 是否保存由用户审阅后自己决定。失败文案按拒绝原因分类（importMdzCore.mdzFailureMessage）。
+   */
+  const handleImportMdz = async (file) => {
+    let hide = null;
+    try {
+      setMdzImportPhase('upload');
+      hide = message.loading(IMPORT_PHASE_TEXT.upload, 0);
+      const data = await importMdzFile(file, {
+        onProgress: (p) => {
+          if (p.phase === 'ingest' && mdzImportPhaseRef.current !== 'ingest') {
+            mdzImportPhaseRef.current = 'ingest';
+            setMdzImportPhase('ingest');
+            if (hide) {
+              hide();
+            }
+            hide = message.loading(IMPORT_PHASE_TEXT.ingest, 0);
+          }
+        },
+      });
+      if (hide) {
+        hide();
+        hide = null;
+      }
+      setValue(data?.content || '');
+      if (type != 'about') {
+        const patch = frontMatterPatchForEditor(data?.frontMatter);
+        setCurrObj((prev) => ({ ...(prev || {}), ...patch }));
+        document.title = `${data?.title || patch.title || ''} - VanBlog 编辑器`;
+      }
+      const outcome = describeImportOutcome(data);
+      const open = outcome.tone === 'warn' ? Modal.warning : Modal.success;
+      open({
+        title: outcome.title,
+        width: 560,
+        content: (
+          <div>
+            {outcome.lines.map((line, idx) => (
+              <p key={idx} style={{ marginBottom: 4 }}>
+                {line}
+              </p>
+            ))}
+            <p style={{ marginBottom: 0, color: '#888' }}>
+              内容已填入编辑器但尚未保存：请在「修改信息」里核对标题/分类/标签等字段后点保存。
+            </p>
+          </div>
+        ),
+      });
+    } catch (err) {
+      if (hide) {
+        hide();
+        hide = null;
+      }
+      Modal.error({
+        title: '导入 .mdz 失败',
+        content: importMdzErrorMessage(err),
+      });
+    } finally {
+      mdzImportPhaseRef.current = null;
+      setMdzImportPhase(null);
+    }
   };
   const actionMenu = (
     <Menu
@@ -601,7 +683,8 @@ export default function () {
           <Upload
             showUploadList={false}
             multiple={false}
-            accept={'.md'}
+            accept={'.md,.mdz'}
+            disabled={!!mdzImportPhase}
             beforeUpload={handleImport}
             style={{ display: 'none', height: 0 }}
           >

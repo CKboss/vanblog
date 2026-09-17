@@ -24,10 +24,9 @@ import { version } from 'src/utils/loadConfig';
  *    healthcheck 通常 30 秒一次，但这个端点是匿名的，别人也能拿它打你。
  *  - **不用 `AdminGuard`**：healthcheck 必须能在没有凭据的情况下跑。
  *  - **mongo ping 不通时返回 503**，这样镜像 HEALTHCHECK 那句 `statusCode < 500` 才有意义。
- *  - ⚠️ **版本与容量字段默认不给匿名调用者**（见 `detailsAllowed`）：`version` 形如
- *    `v2026.9.1@0ec01a5`，等于把"这台机器跑的是哪个 commit"告诉扫描器，让它能直接去对已知漏洞；
- *    uptime 与内存则能用来推断重启时机与负载。健康检查与 `vanblog.sh drill` 都只需要
- *    `status` / `mongo`，所以那几个字段保持公开，其余收进令牌/开关后面。
+ *  - ⚠️ **uptime 与内存默认不给匿名调用者**（见 `detailsAllowed`）：它们能推断重启时机与负载。
+ *    **版本号则是公开的、不算秘密** —— 它已经渲染在每个前台页面的页脚上，也从 `/api/public/meta`
+ *    下发；只在健康端点藏它属于安全表演（第四轮审计的原话），攻击者从页脚就能读到 commit。
  */
 const MONGO_PROBE_CACHE_MS = 5000;
 const MONGO_PROBE_TIMEOUT_MS = 800;
@@ -132,10 +131,13 @@ export class HealthController {
                 : 'disconnected',
         mongoPingMs: mongo.ms,
         now: new Date().toISOString(),
+        // ⚠️ **版本号是公开的，不算秘密**（站长决定）：它已经渲染在每个前台页面的页脚上，
+        // 也从 /api/public/meta 下发 —— 只在健康端点藏它属于安全表演，攻击者从页脚就能读到 commit。
+        // 真正不该公开的是 uptime 与内存（那两项不在页脚上，能推断重启时机与负载），仍只在 detailed 时出现。
+        version,
         // 下面这些只在带内部令牌或显式开了 VANBLOG_HEALTH_DETAILS 时出现
         ...(detailed
           ? {
-              version,
               uptimeSeconds: Math.round(process.uptime()),
               memoryRssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
               heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),

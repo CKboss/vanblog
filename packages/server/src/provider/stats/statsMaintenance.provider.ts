@@ -43,7 +43,8 @@ import { MigrationProvider } from '../migration/migration.provider';
  *  - `VANBLOG_VISITS_DEDUP=false` 关掉启动去重（默认开）
  *  - `VANBLOG_VISITS_DEDUP_DRY_RUN=true` 只打印会合并什么，不真的写
  *  - `VANBLOG_VISITS_DROP_REDUNDANT_INDEXES=false` 关掉冗余前缀索引的删除（默认开）
- *  - `VANBLOG_VISIT_RETENTION_DAYS`（默认 **0 = 永不删除**，行为与改动前完全一致）
+ *  - `VANBLOG_VISIT_RETENTION_DAYS`（默认 **365**，⚠️ 第四轮审计 B3 起是默认行为变更：
+ *    以前默认 0 = 永不删除；显式设 `0` 仍可回到旧行为）
  *  - `VANBLOG_VISIT_RETENTION_MIN_KEEP_DAYS`（默认 30）：无论上面设成多少，最近这些天一定保留
  */
 
@@ -66,7 +67,24 @@ const REDUNDANT_VISIT_INDEXES: Array<{
   { keys: { pathname: 1 }, replacement: VISIT_COMPOUND_INDEX_KEYS },
 ];
 
-export const RETENTION_DEFAULTS = { retentionDays: 0, minKeepDays: 30 };
+/**
+ * ⚠️ **默认行为变更（第四轮审计 B3）**：retentionDays 默认从 0（永不删除）改成 **3650**（10 年，站长定的）。
+ * 动机：`POST /api/public/viewer` 是匿名的，pathname 只限长 500 字、不校验是不是
+ * 本站真实路径 ⇒ 每个编造路径每天一行 visits（实测 ≈157 B/请求；30 次/分钟/IP
+ * ≈ 6.8 MB/天/IP 的**永久**增长，换源 IP 线性放大）。pruneStats 早已实现、
+ * 有 minKeepDays=30 兜底、且记迁移台账，只是默认关着。
+ * 语义边界：只删**按天的行**（visits/viewers 里早于保留窗口的），站点级累计
+ * （metas.viewer/visited）与文章自己的累计阅读量**不受影响**；仪表盘最长回看
+ * 变成 365 天。显式设 `VANBLOG_VISIT_RETENTION_DAYS=0` 可以回到旧行为（永不删除）。
+ */
+// ⚠️ 默认 **3650 天（10 年）**：站长明确要求的。
+// 取舍要讲清楚 —— 0（永不删）意味着匿名 POST /api/public/viewer 用编造的路径名就能让 visits
+// 无限增长（实测约 148 B/行，30 次/分钟/IP ⇒ 每天数 MB，还要乘以轮换 IP 数）；
+// 而 365 天对想留十年趋势的站长又太短。3650 天配合
+// VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY（默认 5000，封住每天新增路径行数）之后最坏情况是**有界**的：
+// 5000 行/天 × 3650 天 × 约 150 B ≈ 2.7 GB 上限，而真实站点远低于此
+// （正常站点的每日路径数 = 真实页面数，不是 5000）。要回到旧行为设 VANBLOG_VISIT_RETENTION_DAYS=0。
+export const RETENTION_DEFAULTS = { retentionDays: 3650, minKeepDays: 30 };
 
 /** 迁移台账的 key（一个 key 一行，见 scheme/migration.schema.ts） */
 export const LEDGER_KEYS = {
@@ -630,8 +648,11 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
   }
 
   /**
-   * 按保留期删掉老的统计行。默认 `VANBLOG_VISIT_RETENTION_DAYS=0` = **永不删除**，
-   * 所以不改环境变量的用户行为一点都不会变（不会偷偷删数据）。
+   * 按保留期删掉老的统计行。默认 `VANBLOG_VISIT_RETENTION_DAYS=365`（⚠️ 第四轮审计 B3
+   * 起的默认行为变更：以前默认 0 = 永不删除，匿名编造路径能把 visits 无界撑大；
+   * 显式设 `0` 仍是「永不删除」的逃生口）。删除范围只有**按天的行**：
+   * metas.viewer/visited 与文章累计阅读量都不动；`minKeepDays`（默认 30）兜底，
+   * 保留期设得再短也不会动最近 30 天。
    * 挂在已有的每日 cron 上（`schedule/viewer.task.ts`），不额外开定时器。
    */
   async pruneStats(reason: string, now: Date = new Date()): Promise<PruneResult> {
@@ -641,8 +662,8 @@ export class StatsMaintenanceProvider implements OnApplicationBootstrap {
       RETENTION_DEFAULTS,
     );
     if (!plan.enabled || !plan.filter) {
-      // 默认（retentionDays=0）走这里：不删任何行，台账记 skipped（这是**破坏性**维护，
-      // 哪怕没开也要留下"确认过没开"的痕迹）
+      // 显式设 `VANBLOG_VISIT_RETENTION_DAYS=0`（旧的默认，现在的逃生口）走这里：
+      // 不删任何行，台账记 skipped（这是**破坏性**维护，哪怕没开也要留下"确认过没开"的痕迹）
       await this.migration?.recordSkipped(
         { key: LEDGER_KEYS.pruneStats, kind: 'prune' },
         `保留期未启用（VANBLOG_VISIT_RETENTION_DAYS=${this.retentionDays}），未删除任何行`,

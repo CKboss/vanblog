@@ -115,10 +115,14 @@ export class ExportController {
     // 走 umi 代理/跨域时前端才读得到自定义头
     res.setHeader('Access-Control-Expose-Headers', 'X-Export-Report, Content-Disposition');
 
-    // mdz 但正文里没有可打包的图片：说清楚，而不是静默改发 md
+    // mdz 但正文里没有可打包的图片：说清楚，而不是静默改发 md。
+    // ⚠️ 带一个**机器可读的 code**：前端要靠它把这种情况显示成"提示 + 一键改导 md"，
+    // 而不是一个红色报错。让前端去匹配中文文案是脆的（改一个字就静默失效）。
     if (format === 'mdz' && !built.mdzPath) {
       res.status(400).json({
         statusCode: 400,
+        code: 'NO_IMAGES_FOR_MDZ',
+        imageRefs: report.imageRefs,
         message:
           '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
       });

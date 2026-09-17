@@ -2,9 +2,7 @@ import { Controller, Get, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { promises as fs } from 'fs';
-import * as path from 'path';
-import { config } from 'src/config';
-import { ThemeProvider } from 'src/provider/theme/theme.provider';
+import { ThemeProvider, resolveThemeCssPath } from 'src/provider/theme/theme.provider';
 
 /**
  * 前台取"当前该用哪个主题"的公开接口。
@@ -42,13 +40,21 @@ export class PublicThemeController {
       res.status(204).end();
       return;
     }
+    // ⚠️ 读侧的路径收敛（第四轮审计 B4）：theme.url 来自数据库，而恢复接口
+    // （POST /api/admin/init/restore，走原生驱动、不经过 schema）能把任意值种进来。
+    // 收敛不通过（`..` 逃逸 / 绝对路径 / themes/ 之外）一律按「没有这个主题文件」处理，
+    // 回 204 —— 与「内置主题」完全同形（连 ETag 都不设），不新增可区分的响应。
+    const abs = resolveThemeCssPath(theme.url);
+    if (!abs) {
+      res.status(204).end();
+      return;
+    }
     const etag = `W/"${theme.hash || 'unknown'}"`;
     res.setHeader('ETag', etag);
     if (res.req?.headers?.['if-none-match'] === etag) {
       res.status(304).end();
       return;
     }
-    const abs = path.join(config.staticPath, theme.url.replace(/^\/static\//, ''));
     try {
       const css = await fs.readFile(abs, 'utf8');
       res.type('text/css; charset=utf-8').send(css);

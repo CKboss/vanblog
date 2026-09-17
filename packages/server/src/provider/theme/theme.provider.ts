@@ -24,6 +24,33 @@ const THEME_SUBDIR = 'themes';
 const hash8 = (buf: Buffer) => createHash('sha1').update(buf).digest('hex').slice(0, 8);
 
 /**
+ * 把库里存的 `theme.url` 收敛成 `<static>/themes/` 里的一个绝对路径；越界一律返回 null。
+ *
+ * ⚠️ 为什么读侧也要收敛（第四轮审计 B4）：`theme.url` 来自数据库，而**写侧的校验
+ * 管不住所有入口** —— `POST /api/admin/init/restore` 走原生驱动（insertMany + rename），
+ * mongoose schema 根本不跑；未初始化站点上它是匿名的，已初始化站点上
+ * 「恢复一份来路不明的归档」（换机迁移、别人给的备份）同样能把任意值塞进
+ * settings{type:'theme'} 与 metas.siteInfo.uiStyle。而 `getActive()` 读的又是
+ * `metaProvider.getAll()` 的原始 siteInfo（不经过会收敛 uiStyle 的 getSiteInfo()）。
+ * 于是 `path.join(staticPath, url)` 上的 `..` 段就成了**匿名可达的任意文本文件读**
+ * （`GET /api/public/theme.css`），`remove()`/上传清理里的同款拼接则是任意文件**删除**。
+ *
+ * 收敛规则（与写侧服务端拼出来的形状对齐）：合法 url 永远是
+ * `/static/themes/<id>-<hash8>.css`，所以只接受 resolve 之后仍落在
+ * `<static>/themes/` **内部**的路径；空值、绝对路径、`..` 逃逸、恰好等于根目录，
+ * 一律 null。调用方拿到 null 必须回 204 —— 与「内置主题」「文件丢了」完全同形，
+ * 不新增可区分的响应。合法站点的行为零变化（blast radius 为零，有往返测试钉住）。
+ */
+export function resolveThemeCssPath(url: unknown): string | null {
+  const raw = String(url ?? '');
+  if (!raw) return null;
+  const root = path.resolve(config.staticPath, THEME_SUBDIR);
+  const abs = path.resolve(config.staticPath, raw.replace(/^\/static\//, ''));
+  const rel = path.relative(root, abs);
+  return !rel || rel.startsWith('..') || path.isAbsolute(rel) ? null : abs;
+}
+
+/**
  * 主题管理（插件式前台皮肤）。
  *
  * 为什么不用「打包进前台」的方式做自定义主题：前台是 Next 的 standalone 产物，
@@ -173,10 +200,14 @@ export class ThemeProvider {
     const next = uploaded.filter((t) => t.id !== id).concat([record]);
     await this.writeUploaded(next);
 
-    // 清掉旧文件（同名不同 hash 的那些）
+    // 清掉旧文件（同名不同 hash 的那些）。
+    // ⚠️ unlink 的目标必须过 resolveThemeCssPath：prev.url 来自数据库，
+    // 恢复进来的恶意值（../ 或绝对路径）不能变成任意文件删除（第四轮审计 B4）。
     if (prev?.url && prev.url !== relUrl) {
-      const oldAbs = path.join(config.staticPath, prev.url.replace(/^\/static\//, ''));
-      await fs.unlink(oldAbs).catch(() => undefined);
+      const oldAbs = resolveThemeCssPath(prev.url);
+      if (oldAbs) {
+        await fs.unlink(oldAbs).catch(() => undefined);
+      }
     }
 
     // 如果改的正是当前生效的主题，前台要重新渲染才会拿到新的 URL（hash 变了）
@@ -218,9 +249,12 @@ export class ThemeProvider {
     if (active.uiStyle === id) {
       throw new BadRequestException('这个主题正在使用中，先切换到别的主题再删');
     }
+    // ⚠️ 同 upload 的清理：target.url 是库里的值，收敛不通过就只删元数据、绝不 unlink
     if (target.url) {
-      const abs = path.join(config.staticPath, target.url.replace(/^\/static\//, ''));
-      await fs.unlink(abs).catch(() => undefined);
+      const abs = resolveThemeCssPath(target.url);
+      if (abs) {
+        await fs.unlink(abs).catch(() => undefined);
+      }
     }
     await this.writeUploaded(uploaded.filter((t) => t.id !== id));
     return { deleted: id };

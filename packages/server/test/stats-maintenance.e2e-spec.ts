@@ -168,13 +168,35 @@ d('stats maintenance against a real mongod', () => {
     delete process.env.VANBLOG_VISIT_RETENTION_DAYS;
   });
 
-  it('默认（不设环境变量）一行都不删', async () => {
+  it('默认（不设环境变量）：保留期 3650 天（10 年），只删窗口外的按天行', async () => {
+    // 各插一条 4000 天前（约 11 年，落在 3650 天窗口之外）与今天的行：
+    // 默认 prune 应该只删前者（以前的默认是 0 = 一行都不删）。
+    // ⚠️ 这里必须比 3650 天更老 —— 默认值从 365 抬到 3650 之后，400 天前的行已经在窗口内了。
+    const ancient = dayjs().subtract(4000, 'day').format('YYYY-MM-DD');
     const before = await count();
+    await conn.db.collection('visits').insertMany([
+      { date: ancient, pathname: '/b3-default-probe', viewer: 1, visited: 1 },
+      { date: today, pathname: '/b3-default-probe', viewer: 1, visited: 1 },
+    ] as any);
     const scoped = new StatsMaintenanceProvider(visitModel, viewerModel);
-    expect(scoped.retentionDays).toBe(0);
+    expect(scoped.retentionDays).toBe(3650);
     const res = await scoped.pruneStats('量具');
-    expect(res).toMatchObject({ enabled: false, visits: 0, viewers: 0 });
-    expect(await count()).toBe(before);
+    expect(res).toMatchObject({ enabled: true, effectiveDays: 3650 });
+    expect(res.visits).toBe(1); // 只有 4000 天前那行
+    expect(await count()).toBe(before + 1); // 插 2 删 1
+    const left = await conn.db
+      .collection('visits')
+      .find({ pathname: '/b3-default-probe' })
+      .toArray();
+    expect(left).toHaveLength(1);
+    expect((left[0] as any).date).toBe(today);
+    // 显式设 0 的逃生口（旧默认行为）仍然成立：一行都不删
+    process.env.VANBLOG_VISIT_RETENTION_DAYS = '0';
+    const off = new StatsMaintenanceProvider(visitModel, viewerModel);
+    expect(off.retentionDays).toBe(0);
+    const offRes = await off.pruneStats('量具');
+    expect(offRes).toMatchObject({ enabled: false, visits: 0, viewers: 0 });
+    delete process.env.VANBLOG_VISIT_RETENTION_DAYS;
   });
 
   it('viewers.date 也能换成唯一索引（同名替换，不新增索引）', async () => {

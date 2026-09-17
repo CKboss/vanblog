@@ -8,7 +8,19 @@ export class CreateArticleDto {
   category: string;
   hidden?: boolean;
   private?: boolean;
+  /**
+   * 访问密码（**明文入参**）。服务端存的是 scrypt 哈希，且任何响应都不会把它
+   * （或哈希）回传，只回布尔 `hasPassword`。
+   * 新建：留空/缺键 = 不加密。
+   */
   password?: string;
+  /**
+   * 显式解除加密。因为 `password` 留空已经被定义成"不修改"（表单不再回填密文），
+   * 清除必须走这个独立开关，不能复用空值 —— 否则任何一次没碰密码框的保存都会把
+   * 加密悄悄抹掉。只认 `true` / `'true'`；与"填了新密码"同时出现 ⇒ 400。
+   * 规则的唯一真源：utils/accessPassword.ts。
+   */
+  clearPassword?: boolean;
   updatedAt?: Date;
   createdAt?: Date;
   author?: string;
@@ -30,7 +42,13 @@ export class UpdateArticleDto {
   hidden?: boolean;
   top?: number;
   private?: boolean;
+  /**
+   * 访问密码（**明文入参**），存 scrypt 哈希。
+   * 更新：**留空/缺键 = 不修改**（不是清空！表单不再回填密文，见 clearPassword）。
+   */
   password?: string;
+  /** 显式解除加密；语义与 CreateArticleDto.clearPassword 完全一致 */
+  clearPassword?: boolean;
   deleted?: boolean;
   viewer?: number;
   visited?: number;

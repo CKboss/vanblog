@@ -1,4 +1,5 @@
 import NumSelect from '@/components/NumSelect';
+import InstallRecordBanner from '@/components/InstallRecordBanner';
 import TipTitle from '@/components/TipTitle';
 import { getWelcomeData } from '@/services/van-blog/api';
 import { reportRequestError } from '@/services/van-blog/requestError';
@@ -74,6 +75,9 @@ const OverView = () => {
       }}
     >
       <Spin spinning={loading}>
+        {/* 安装归因横幅：本站何时/被谁/从哪条路径初始化（台账 install:initialised）。
+            老站点没有这一行 ⇒ 组件渲染 null，不显示噪音。 */}
+        <InstallRecordBanner />
         <ProCard
           split={responsive ? 'horizontal' : 'vertical'}
           bordered

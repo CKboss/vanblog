@@ -100,14 +100,64 @@ export interface ViewStatsAggregatorOptions {
    * 而且**移除路径永远不可达**（只有写成功才会清空）。
    */
   maxRetainedKeys?: number;
+  /**
+   * **每天最多新建多少个"路径键"**（= 每天最多在 visits 里新建多少行）。
+   * `0` = 不限（改动前的行为）。缺省时读环境变量
+   * `VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY`（默认 5000，非法值回落默认）。
+   *
+   * ⚠️ 为什么必须有（第四轮审计 B3）：`maxRetainedKeys` 只封住了**内存**
+   * （而且主要针对写库失败那条路）；`POST /api/public/viewer` 的 pathname
+   * 是匿名的、只限长 500 字、不校验是不是本站真实路径 ⇒ 每个编造路径
+   * 每天在 visits 里永久多一行（实测 ≈157 B/请求；30 次/分钟/IP ≈ 6.8 MB/天/IP，
+   * 换源 IP 线性放大）。这个上限封的是**磁盘**：同一天里超过上限之后，
+   * **站点级与每日累计照旧一条不丢**（metas 的 $inc、viewers 的每日快照、
+   * day.site 都不受影响），只是不再为新的 pathname 建行 —— 与 §7.55 G-2
+   * 建立的取舍完全一致：丢的是攻击者编造路径的按天明细，绝不静默
+   * （计入 `dropped.pathEntries`/`dropped.newPathEntries`，由 provider 每轮
+   * flush 最多打一条 WARN，带增量与累计）。
+   *
+   * 与 `maxRetainedKeys` 的区别：那个封的是"**此刻**攒着多少键"（take() 清零），
+   * 这个封的是"**这一天**总共新建过多少个路径键"（跨 take() 持续记账，
+   * 靠一张按日期分组的 seen 表；只保留最近 2 个日期 ⇒ 内存上界 = 2 × cap × 路径长）。
+   */
+  maxNewPathsPerDay?: number;
+}
+
+/** `maxNewPathsPerDay` 的默认值（`VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY` 未设置时） */
+export const DEFAULT_VIEW_MAX_NEW_PATHS_PER_DAY = 5000;
+/** 环境变量名（导出给测试与排障；语义见 ViewStatsAggregatorOptions.maxNewPathsPerDay） */
+export const VIEW_MAX_NEW_PATHS_PER_DAY_ENV = 'VANBLOG_VIEW_MAX_NEW_PATHS_PER_DAY';
+
+/**
+ * 把"选项值 / 环境变量值"收敛成生效上限：
+ * 非法（NaN、负数、Infinity、解析不出、**空串**）一律回落默认 5000；显式 `0` = 不限。
+ * ⚠️ 与 §7.55 J-3 同一条纪律：env 里的数字必须有 NaN 兜底，绝不静默退化。
+ * 空串按"未设置"处理（`VANBLOG_X=` 是 compose 文件里的常见形状）——
+ * 对一个安全护栏来说，空串静默变成 `0=不限` 是 fail-open，方向反了。
+ */
+export function resolveMaxNewPathsPerDay(raw: unknown): number {
+  if (typeof raw === 'string' && raw.trim() === '') {
+    return DEFAULT_VIEW_MAX_NEW_PATHS_PER_DAY;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    return DEFAULT_VIEW_MAX_NEW_PATHS_PER_DAY;
+  }
+  return Math.floor(n);
 }
 
 /** 被上限丢掉的东西（累计值，供调用方打日志/上报；只增不减） */
 export interface ViewStatsDropped {
-  /** 丢掉了多少条"某天某路径"的增量 */
+  /** 丢掉了多少条"某天某路径"的增量（两种上限共用：内存上限 + 每日新路径上限） */
   pathEntries: number;
   /** 丢掉了多少条"某篇文章"的增量 */
   articleEntries: number;
+  /**
+   * `pathEntries` 里有多少条是**每日新路径上限**丢的（诊断用的细分计数；
+   * 同时计入 pathEntries，所以 provider 既有的"每轮 flush 最多一条 WARN"
+   * 机制不需要改就会响 —— 绝不静默）。
+   */
+  newPathEntries: number;
 }
 
 /**
@@ -129,11 +179,27 @@ export class ViewStatsAggregator {
    */
   private keyCount = 0;
   private readonly maxRetainedKeys: number;
-  readonly dropped: ViewStatsDropped = { pathEntries: 0, articleEntries: 0 };
+  private readonly maxNewPathsPerDay: number;
+  /**
+   * 按日期记"这一天已经放行过哪些路径键"。必须**跨 take() 存活**：
+   * take() 会清空 days，而同一天的后续 flush 轮次里，已经建过行的 pathname
+   * 再来时不该再消耗每日预算（它在库里已经有行了，只是 $inc）。
+   * 只保留最近 2 个日期（跨零点的批次会短暂带着昨天），所以内存上界
+   * = 2 × maxNewPathsPerDay × 路径字符串长度（默认 2×5000，路径已在入口限长 500 字）。
+   */
+  private readonly seenPaths = new Map<string, Set<string>>();
+  readonly dropped: ViewStatsDropped = { pathEntries: 0, articleEntries: 0, newPathEntries: 0 };
 
   constructor(options: ViewStatsAggregatorOptions = {}) {
     const raw = Number(options.maxRetainedKeys);
     this.maxRetainedKeys = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+    // 选项没给就读环境变量（生产路径：provider 构造时不传这个选项）；
+    // 非法值回落默认 5000，显式 0 = 不限 = 旧行为。
+    this.maxNewPathsPerDay = resolveMaxNewPathsPerDay(
+      options.maxNewPathsPerDay !== undefined
+        ? options.maxNewPathsPerDay
+        : process.env[VIEW_MAX_NEW_PATHS_PER_DAY_ENV],
+    );
   }
 
   add(event: ViewEvent): void {
@@ -165,9 +231,14 @@ export class ViewStatsAggregator {
     const path = day.paths.get(event.pathname);
     if (path) {
       bump(path, viewerInc, pathVisitedInc);
-    } else {
+    } else if (this.admitNewPath(event.date, event.pathname)) {
       day.paths.set(event.pathname, { viewer: viewerInc, visited: pathVisitedInc });
       this.keyCount += 1;
+    } else {
+      // 当天的"新路径键"预算用完了：站点级与当天累计（上面两行 bump）照旧记，
+      // 只是不再为这个 pathname 建行。计数进 dropped ⇒ provider 的 WARN 会响。
+      this.dropped.pathEntries += 1;
+      this.dropped.newPathEntries += 1;
     }
     // 正常的热路径上也要有界：除了"写库失败退回"，
     // "flush 追不上请求"（Mongo 卡住但没报错）同样会让这张表长大。
@@ -220,6 +291,8 @@ export class ViewStatsAggregator {
   /**
    * 把一个批次（或它的一部分）退回累加器——写库失败时用，计数不能就这么丢掉。
    * 只退回失败的那一部分，否则成功的部分会被重复写一遍。
+   * ⚠️ 退回的路径条目**不消耗**"每日新路径"预算（它们此前都已放行/登记过，
+   * 见 admitNewPath 上的说明）；内存上限（enforceCap）照旧生效。
    */
   merge(batch: ViewStatsBatch): void {
     this.count += batch.events;
@@ -267,6 +340,55 @@ export class ViewStatsAggregator {
       n += day.paths.size;
     }
     return n;
+  }
+
+  /**
+   * 这一天还能不能为 `pathname` **新建**一个路径键（= 在 visits 里新建一行）。
+   *
+   * 判定与记账（都是 O(1) 摊还，add() 是热路径）：
+   *  - 上限 ≤ 0（不限）⇒ 永远放行，不碰 seen 表（旧行为零开销）；
+   *  - 这一天的 seen 表里已经有它 ⇒ 放行且**不消耗预算**：库里的行早在
+   *    之前的 flush 轮次建好了（或本轮已放行过），现在只是继续 $inc；
+   *  - 预算没用完 ⇒ 登记进 seen 并放行；
+   *  - 预算用完 ⇒ 拒绝（调用方把增量记进 dropped，站点级/每日累计不受影响）。
+   *
+   * ⚠️ seen 表跨 take() 存活（否则每 5 秒一轮 flush 会把预算重新装满，
+   * 上限就名存实亡了）；只保留最近 2 个日期，见 seenPaths 字段上的说明。
+   * ⚠️ `merge()` 退回的条目**不经过**这里：它们都是此前已放行/已登记的路径，
+   * 再拦一道会把"已经收下的计数"静默丢掉（那正是本仓库最忌讳的失败形状）。
+   */
+  private admitNewPath(date: string, pathname: string): boolean {
+    if (this.maxNewPathsPerDay <= 0) {
+      return true;
+    }
+    const seen = this.seenPathsFor(date);
+    if (seen.has(pathname)) {
+      return true;
+    }
+    if (seen.size >= this.maxNewPathsPerDay) {
+      return false;
+    }
+    seen.add(pathname);
+    return true;
+  }
+
+  /** 取（或建）某一天的 seen 表；顺手把只保留最近 2 个日期的约定维护住 */
+  private seenPathsFor(date: string): Set<string> {
+    let seen = this.seenPaths.get(date);
+    if (!seen) {
+      seen = new Set<string>();
+      this.seenPaths.set(date, seen);
+      if (this.seenPaths.size > 2) {
+        // ISO 日期字符串按字典序就是按时间序；留下最近的 2 个。
+        // （时钟回拨送来更老的日期时，老日期自己会被立刻淘汰，
+        //  那次事件按"不限"处理 —— 退化是安全的，内存仍然有界。）
+        const dates = Array.from(this.seenPaths.keys()).sort();
+        for (let i = 0; i < dates.length - 2; i += 1) {
+          this.seenPaths.delete(dates[i]);
+        }
+      }
+    }
+    return seen;
   }
 
   /**

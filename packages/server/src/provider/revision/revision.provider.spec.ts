@@ -321,8 +321,14 @@ describe('ArticleProvider.updateById × RevisionProvider 接线', () => {
     const { provider } = createArticleProvider(articleModel, revisionModel);
     await provider.updateById(1, { tags: ['x'] });
     expect(revisionModel.docs).toHaveLength(0);
-    // 负控钉子：patch 不含 title/content 时连"多读一次旧文档"都不该发生
-    expect(articleModel.findOne).not.toHaveBeenCalled();
+    // 负控钉子：patch 不含 title/content 时**绝不去读旧正文**（那是整篇 content 的白读）。
+    // ⚠️ 不能写成"一次 findOne 都不许有"：访问密码的"写时升级"（把历史明文换成 scrypt
+    //    哈希）会读一次 `{ password: 1 }` 的小投影，与正文快照无关。见
+    //    article.provider.ts updateById 里 `passwordWrite.password === undefined` 那段。
+    expect(articleModel.findOne).not.toHaveBeenCalledWith({ id: 1 }, { title: 1, content: 1 });
+    for (const call of (articleModel.findOne as jest.Mock).mock.calls) {
+      expect(call[1]).toEqual({ password: 1 });
+    }
   });
 
   it('内容没变（提交了相同 content）：不写快照', async () => {
@@ -352,7 +358,12 @@ describe('ArticleProvider.updateById × RevisionProvider 接线', () => {
     await provider.updateById(1, { content: 'new' });
     expect(articleModel.docs[0].content).toBe('new');
     expect(revisionModel.docs).toHaveLength(0);
-    expect(articleModel.findOne).not.toHaveBeenCalled();
+    // KEEP=0 时快照逻辑完全不动：不读旧正文。访问密码"写时升级"那次 `{password:1}`
+    // 小投影是另一件事（见上一条用例的注释），不属于快照开销。
+    expect(articleModel.findOne).not.toHaveBeenCalledWith({ id: 1 }, { title: 1, content: 1 });
+    for (const call of (articleModel.findOne as jest.Mock).mock.calls) {
+      expect(call[1]).toEqual({ password: 1 });
+    }
   });
 
   it('没注入 RevisionProvider（旧构造形状）：更新行为与从前逐字段一致', async () => {

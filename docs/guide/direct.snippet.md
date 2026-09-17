@@ -20,13 +20,16 @@ VanBlog 内部由很多微服务组成，直接部署到裸机环境可能会由
 
 | 项目         | 要求  | 备注                                                              |
 | ------------ | ----- | ----------------------------------------------------------------- |
-| Nodejs       | >=16  | 长期支持版即可，可用 nvm 管理 node 版本                           |
-| pnpm         | v7    | pnpm 包管理器，其他管理器不能识别 pnpm-lock.yaml 可能导致问题     |
+| Nodejs       | >=24  | 与镜像基线一致（Dockerfile 全部 stage 基于 `node:24-alpine`），可用 nvm 管理 |
+| pnpm         | v8    | pnpm 包管理器，其他管理器不能识别 pnpm-lock.yaml 可能导致问题     |
 | 操作系统     | Linux | 主流 linux 发行版即可                                             |
-| MongoDB      | -     | 主流 mongodb 版本                                                 |
+| MongoDB      | 4.4–7.0 | 本项目按 `mongo:7.0` 实测；老机器 CPU 不支持 avx 时只能用 4.4。数据目录与大版本绑定，不要随手升级 |
 | Caddy        | v2    | Caddy v2 反代各个微服务，其他的反代理论上可以，但是需要自己写配置 |
 | 后台运行程序 | -     | 可以让服务后台运行,比如 systemd、tmux 等                          |
 
 ### 部署
 
-因为最近更新比较快，单独部署的老板文档已经不在合适，对于有能力的同学，直接参考 `Dockerfile` 即可。用官方 Dockerfile 自建镜像时，前台 Alpine 阶段已包含 sharp / libvips 所需依赖，并固定 `sharp@0.32.6`；请保持 `--frozen-lockfile`。
+因为最近更新比较快，单独部署的老版文档已经不再合适，对于有能力的同学，直接参考 `Dockerfile` 即可
+（五阶段构建，全部基于 `node:24-alpine`，产物约 860MB）。用官方 Dockerfile 自建镜像时，
+前台 Alpine 阶段已包含 sharp / libvips 所需依赖，sharp 版本以 `packages/server/package.json`
+（当前 `^0.35`）与 lockfile 为准；请保持 `--frozen-lockfile`。

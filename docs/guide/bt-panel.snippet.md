@@ -12,6 +12,16 @@ VanBlog 现在支持一键脚本部署了。经过测试，宝塔也可以通过
 
 :::
 
+::: warning 下面的模板用的是上游官方镜像
+
+模板里的 `image: mereith/van-blog:latest` 是**上游官方镜像**，不含本 fork（`CKboss/vanblog`）
+的任何改动。想用本分支，最省事的是上面的[一键脚本](../guide/get-started.md#部署方式)（宝塔里开个终端就能跑）；
+坚持图形化的话，把模板里的 `image:` 换成 `ghcr.io/ckboss/vanblog:dev-dsh`
+（ghcr 的包需要是 public，先在终端 `docker pull` 成功一次更稳），mongo 建议同时换成 `mongo:7.0`
+（老机器 CPU 不支持 avx 时才退回 `mongo:4.4.16`；数据目录与大版本绑定，装好后不要随手换）。
+
+:::
+
 你也可以通过宝塔面板图形化操作部署 VanBlog，具体步骤如下：
 
 ### 安装依赖

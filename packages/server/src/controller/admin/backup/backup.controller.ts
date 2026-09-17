@@ -72,7 +72,12 @@ export class BackupController {
     if (config.demo && config.demo == 'true') {
       return { statusCode: 401, message: '演示站禁止修改此项！' };
     }
-    const articles = await this.articleProvider.getAll('admin', true);
+    // ⚠️ 必须用 getAllForExport()（`toObject()` 原样文档）而不是 getAll('admin')：
+    // ArticleSchema 挂了 toJSON transform 把 password 换成布尔 hasPassword，
+    // 而下面最后一句是 `JSON.stringify(data)` —— 用文档的话导出的 JSON 里就没有密码了，
+    // 再导入到另一套站点时 create() 走"留空=不加密"，加密文章会**静默变成公开文章**。
+    // 分类那边不需要改：toExportCategory() 是属性访问，不走 toJSON。
+    const articles = await this.articleProvider.getAllForExport(true);
     const categoryDocs = await this.categoryProvider.getAllCategories(true);
     const categories = (categoryDocs || []).map((item) => toExportCategory(item));
     const tags = await this.tagProvider.getAllTags(true);
@@ -150,6 +155,23 @@ export class BackupController {
         // P2 写后校验结果（手动与 cron 走的都是这条路）
         verified: result.verification?.ok === true,
         verifySeconds: Number(((result.verification?.ms || 0) / 1000).toFixed(1)),
+        // P1 防损坏：整归档 sha256（同名 `.sha256` sidecar 与 backup-status.json 里都有）、
+        // 成员数、merkle root，以及这次是否做了成员级哈希
+        sha256: result.archiveSha256 || null,
+        memberCount: result.memberCount ?? null,
+        merkleRoot: result.manifest?.integrity?.merkleRoot || null,
+        membersHashed: result.verification?.integrity?.membersChecked ?? null,
+        integrity: result.verification?.integrity
+          ? {
+              available: result.verification.integrity.available,
+              merkleRootOk: result.verification.integrity.merkleRootOk,
+              memberCountOk: result.verification.integrity.memberCountOk,
+              manifestCopyOk: result.verification.integrity.manifestCopyOk,
+              archiveSha256Ok: result.verification.integrity.archiveSha256Ok,
+              frameChecksumOk: result.verification.integrity.frameChecksumOk,
+              notes: result.verification.integrity.notes,
+            }
+          : null,
         totals: result.manifest.totals,
         databases: Object.fromEntries(
           Object.entries(result.manifest.databases).map(([name, item]) => [
@@ -158,6 +180,8 @@ export class BackupController {
           ]),
         ),
         static: result.manifest.static,
+        // P6：这次有没有把 caddy 的 TLS 材料打进去
+        caddy: result.manifest.caddy || null,
       },
     };
   }
@@ -186,7 +210,40 @@ export class BackupController {
         createdAt: item.createdAt,
         downloadUrl: `/api/admin/backup/full/download?name=${encodeURIComponent(item.name)}`,
         totals: item.manifest?.totals || null,
+        // P1：清单里记的整归档 sha256（老归档没有 => null；`.sha256` sidecar 是另一个来源）
+        sha256: item.manifest?.totals?.archiveSha256 || null,
+        memberCount: item.manifest?.integrity?.memberCount ?? null,
+        hasIntegrity: Boolean(item.manifest?.integrity),
       })),
+    };
+  }
+
+  /**
+   * 按需复验一份归档（P1/P4）。
+   *
+   * 与后台"备份健康状态"里的定期巡检用的是**同一个校验器**，区别只是这里默认做到
+   * 成员级（`deep`）：把归档整份解压一遍（**不落盘**）、逐个成员与清单里的 sha256 对比，
+   * 报告**具体是哪个成员坏了**（路径 + 期望 vs 实际），而不是笼统一句"归档损坏"。
+   * ⚠️ 只读：既不修也不删任何东西 —— "哪份归档该扔"是人的决定。
+   */
+  @Post('full/verify')
+  async verifyFull(@Body() body: { name?: string; deep?: string }) {
+    const deep = body?.deep === undefined ? true : checkTrue(body.deep);
+    const result = await this.fullBackupProvider.verifyArchive(body?.name || '', deep);
+    return {
+      statusCode: 200,
+      data: {
+        name: body?.name || '',
+        ok: result.ok,
+        deep,
+        seconds: Number((result.ms / 1000).toFixed(2)),
+        bytes: result.archiveBytes,
+        members: result.members,
+        format: result.format,
+        checks: result.checks,
+        integrity: result.integrity,
+        issues: result.issues,
+      },
     };
   }
 
@@ -246,6 +303,19 @@ export class BackupController {
           backupCreatedAt: result.manifest.createdAt,
           notes: result.notes,
           uploaded,
+          // P3（100% 保真）：修剪掉多少"归档里没有的文件"、以及哪些表是归档里没有的
+          // （后者留着不删 = 站点处于混合状态，必须让前台能显示出来）
+          prunedStatic: (result.pruned || []).map((item) => ({
+            folder: item.folder,
+            removedFiles: item.removedFiles,
+            removedDirs: item.removedDirs,
+            removedBytes: item.removedBytes,
+            names: item.names,
+            skipped: item.skipped,
+            errors: item.errors,
+          })),
+          absentCollections: result.absentCollections || [],
+          caddy: result.caddy || null,
           // 流水线依赖只在启动时装（不在请求路径上跑 pnpm add），前台据此提示"重启一次"
           needsRestartForPipelineDeps: Boolean(result.needsRestartForPipelineDeps),
         },
@@ -258,7 +328,7 @@ export class BackupController {
     }
   }
 
-  /** 删掉一个备份归档（含 sidecar 清单）。 */
+  /** 删掉一个备份归档（含两个 sidecar：清单与整归档校验和）。 */
   @Post('full/delete')
   async deleteFull(@Body() body: { name?: string }) {
     if (config.demo && config.demo == 'true') {
@@ -267,6 +337,8 @@ export class BackupController {
     const archivePath = this.fullBackupProvider.resolveArchive(body?.name || '');
     fs.rmSync(archivePath, { force: true });
     fs.rmSync(`${archivePath}.manifest.json`, { force: true });
+    // P1 新增的 `.sha256` sidecar：不删就变成孤儿（`vanblog.sh verify` 会拿它去比一个不存在的归档）
+    fs.rmSync(`${archivePath}.sha256`, { force: true });
     return { statusCode: 200, data: '已删除' };
   }
 

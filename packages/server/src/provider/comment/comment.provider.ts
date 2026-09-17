@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import cluster from 'node:cluster';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CommentDocument, CommentStatus, NativeComment } from 'src/scheme/comment.schema';
@@ -11,11 +12,12 @@ import {
 } from 'src/types/comment.dto';
 import { CommentSetting } from 'src/types/setting.dto';
 import { SettingProvider } from '../setting/setting.provider';
+import { MigrationProvider } from '../migration/migration.provider';
 import { Article, ArticleDocument } from 'src/scheme/article.schema';
 import { Meta, MetaDocument } from 'src/scheme/meta.schema';
 import { config } from 'src/config';
 import { consumeAttempt } from 'src/utils/attemptLimit';
-import { scaleLimit } from 'src/utils/clusterRole';
+import { isPrimaryInstance, scaleLimit } from 'src/utils/clusterRole';
 import { pickSocketIp } from '../log/utils';
 import { bruteForceClientIp } from '../../utils/trustedProxy';
 import { sleep } from 'src/utils/sleep';
@@ -34,10 +36,48 @@ const RATE_WINDOW_MS = 10 * 60 * 1000;
 /** 每篇顶层评论最多带多少条回复（超出的走「查看更多回复」） */
 const MAX_CHILDREN_PER_ROOT = 100;
 
+/**
+ * 公开评论列表的复合索引（第四轮审计 B8）：listByPath 的三条查询全部按
+ * `(path, rootId, status)` 等值前缀过滤、按 `(createdAt, id)` 排序 ——
+ * 以前 comments 上只有四个单列索引（path / rootId / status / createdAt 各一个），
+ * planner 只能选一个单列索引再把排序做在内存里，匿名 GET 每次都要付一遍。
+ * 键序就是查询形状：等值列在前（path, rootId, status），排序列在后（createdAt, id）。
+ * ⚠️ `id` 必须进索引（审计原文只点到 createdAt 为止）：两条列表查询的排序都是
+ * `{createdAt, id}` 双键 —— 少了 id，planner 仍然要做内存 SORT，而且为了取到排序键
+ * 得把**全部**匹配文档 FETCH 一遍（真库实测：20,000 条回复的 children 查询
+ * examined 停在 20,000；带上 id 之后 SORT 在索引键上完成 top-k，FETCH 只剩 limit 那 100 条）。
+ * 根评论那条查询（rootId=0 全等值）则直接按索引序出结果，SORT 阶段整个消失，
+ * skip/limit 变成纯索引行走 —— page 上限 500 的最深 skip 也因此有界。
+ * 建索引走启动期的幂等 createIndex（沿用 statsMaintenance 的约定），并记进迁移台账。
+ */
+export const COMMENT_LIST_INDEX_KEYS: Record<string, number> = {
+  path: 1,
+  rootId: 1,
+  status: 1,
+  createdAt: 1,
+  id: 1,
+};
+export const COMMENT_LIST_INDEX_NAME = 'path_1_rootId_1_status_1_createdAt_1_id_1';
+/** 迁移台账的 key（一个 key 一行，见 provider/migration/migration.provider.ts） */
+export const COMMENT_LIST_INDEX_LEDGER_KEY = 'index:comments.path_rootId_status_createdAt_id';
+
+function sameIndexKeySpec(a: Record<string, unknown> | undefined): boolean {
+  if (!a) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(COMMENT_LIST_INDEX_KEYS);
+  if (ka.length !== kb.length) return false;
+  for (let i = 0; i < ka.length; i += 1) {
+    if (ka[i] !== kb[i]) return false;
+    if (Number(a[ka[i]]) !== Number(COMMENT_LIST_INDEX_KEYS[kb[i]])) return false;
+  }
+  return true;
+}
+
 @Injectable()
-export class CommentProvider {
+export class CommentProvider implements OnApplicationBootstrap {
   logger = new Logger(CommentProvider.name);
   private idLock = false;
+  private indexDone = false;
 
   constructor(
     @InjectModel(NativeComment.name) private readonly commentModel: Model<CommentDocument>,
@@ -47,7 +87,80 @@ export class CommentProvider {
     @InjectModel(Article.name) private readonly articleModel: Model<ArticleDocument>,
     @InjectModel(Meta.name) private readonly metaModel: Model<MetaDocument>,
     private readonly settingProvider: SettingProvider,
+    /** 迁移台账（可选注入：单测直接 `new` 时不传；record 永不抛错）。 */
+    @Optional() private readonly migration?: MigrationProvider,
   ) {}
+
+  /**
+   * 启动时建一次公开列表要用的复合索引（见 COMMENT_LIST_INDEX_KEYS 上的说明）。
+   * 故意**不 await**（Nest 会等 onApplicationBootstrap 返回才继续 listen），
+   * 也不在请求路径上；多进程时只让主实例做（沿用 statsMaintenance 的约定）。
+   */
+  onApplicationBootstrap() {
+    if (!isPrimaryInstance(cluster)) {
+      return;
+    }
+    void this.ensureListIndex('启动').catch((err) => {
+      this.logger.error(`评论复合索引维护失败（不影响服务）：${(err as Error)?.message || err}`);
+    });
+  }
+
+  /**
+   * 幂等地保证 `(path, rootId, status, createdAt)` 复合索引存在，并把结果记进迁移台账。
+   * ⚠️ 台账只做可观测性，绝不用来跳过维护（与 statsMaintenance 同一条约定）：
+   * 已经存在时只花一次 listIndexes；不存在时 createIndex（同键同名重跑是 no-op）。
+   */
+  async ensureListIndex(reason: string): Promise<{ created: boolean; exists: boolean; error?: string }> {
+    if (this.indexDone) {
+      return { created: false, exists: true };
+    }
+    this.indexDone = true;
+    const started = Date.now();
+    try {
+      let exists = false;
+      try {
+        const indexes = await this.commentModel.collection.indexes();
+        exists = indexes.some(
+          (i: any) => sameIndexKeySpec(i?.key) || i?.name === COMMENT_LIST_INDEX_NAME,
+        );
+      } catch {
+        // 全新站点集合还不存在（NamespaceNotFound）：按"没有索引"处理，直接建
+        exists = false;
+      }
+      if (exists) {
+        await this.migration?.recordSkipped(
+          { key: COMMENT_LIST_INDEX_LEDGER_KEY, kind: 'index' },
+          `复合索引已存在（${COMMENT_LIST_INDEX_NAME}），无需重建`,
+        );
+        return { created: false, exists: true };
+      }
+      await this.commentModel.collection.createIndex(COMMENT_LIST_INDEX_KEYS, {
+        name: COMMENT_LIST_INDEX_NAME,
+        background: true,
+      });
+      await this.migration?.record({
+        key: COMMENT_LIST_INDEX_LEDGER_KEY,
+        kind: 'index',
+        outcome: 'ok',
+        durationMs: Date.now() - started,
+        detail: { reason, name: COMMENT_LIST_INDEX_NAME, keys: COMMENT_LIST_INDEX_KEYS },
+      });
+      this.logger.log(`[${reason}] comments 复合索引 ${COMMENT_LIST_INDEX_NAME} 已创建`);
+      return { created: true, exists: false };
+    } catch (err) {
+      const message = String((err as Error)?.message || err).slice(0, 300);
+      this.indexDone = false; // 失败了允许下一次启动/调用重试
+      await this.migration?.record({
+        key: COMMENT_LIST_INDEX_LEDGER_KEY,
+        kind: 'index',
+        outcome: 'error',
+        durationMs: Date.now() - started,
+        detail: `${reason}：${message}`,
+      });
+      this.logger.error(`comments 建复合索引 ${COMMENT_LIST_INDEX_NAME} 失败：${message}`);
+      return { created: false, exists: false, error: message };
+    }
+  }
 
   async getNewId(): Promise<number> {
     while (this.idLock) {
@@ -112,27 +225,13 @@ export class CommentProvider {
     const site = this.assertSite(dto?.site);
     const content = this.assertContent(dto?.content, setting.maxContentLength);
 
-    // 蜜罐：真人看不见这个输入框，填了就说明是脚本
-    if (typeof dto?.hp === 'string' && dto.hp.trim() !== '') {
-      const spam = await this.insert({
-        path,
-        nick,
-        email,
-        site,
-        content,
-        status: 'spam',
-        reason: '蜜罐字段被填写',
-        req,
-        parentId: 0,
-        rootId: 0,
-        replyToNick: '',
-        isAuthor: false,
-        articleId: article.id,
-      });
-      // 对机器人也返回「待审」，不要暴露判定逻辑
-      return { comment: this.toPublic(spam), pending: true, reason: undefined };
-    }
-
+    // ⚠️ 三道限流必须跑在**任何写库之前**，蜜罐分支也不例外（第四轮审计 B2/R4-6）：
+    // 以前蜜罐命中会在限流之前就 insert({status:'spam'}) 并 return，于是机器人
+    // 只要带上 hp 字段就绕开了全部三把桶 —— 唯一的剩余上限是中间件那个
+    // 30 次/分钟的公开写桶（≈43,200 条 spam 文档/天/IP，每条最大 20,000 字符时
+    // 一天能灌进 ~2.6 GB，还顺带撑大后台评论列表每次都要跑的全表 countByStatus）。
+    // 现在机器人也消耗它自己那把桶；蜜罐命中只改判定（status:'spam'），不改配额。
+    // 真人用户行为一个字节都不变（他们从来不填 hp）。
     const ip = bruteForceClientIp(req);
     const limit = consumeAttempt(`comment-${ip}`, {
       // 计数器是每进程一份：多进程时按 worker 数摊薄，全局阈值才等于设置值
@@ -157,6 +256,28 @@ export class CommentProvider {
     const dup = consumeAttempt(dedupeKey, { max: 1, windowMs: 5 * 60 * 1000 });
     if (!dup.allowed) {
       throw new BadRequestException('刚才已经发过一样的评论了');
+    }
+
+    // 蜜罐：真人看不见这个输入框，填了就说明是脚本。
+    // （走到这里说明配额已经扣过了 —— 蜜罐只决定这条评论的 status。）
+    if (typeof dto?.hp === 'string' && dto.hp.trim() !== '') {
+      const spam = await this.insert({
+        path,
+        nick,
+        email,
+        site,
+        content,
+        status: 'spam',
+        reason: '蜜罐字段被填写',
+        req,
+        parentId: 0,
+        rootId: 0,
+        replyToNick: '',
+        isAuthor: false,
+        articleId: article.id,
+      });
+      // 对机器人也返回「待审」，不要暴露判定逻辑
+      return { comment: this.toPublic(spam), pending: true, reason: undefined };
     }
 
     const isAuthor = await this.isAuthorEmail(email);
@@ -421,7 +542,13 @@ export class CommentProvider {
         or.push({ pathname: { $in: slugs } });
       }
       // 不过滤 deleted：文章删了评论也不该凭空消失（后台还能看到）
-      articles = await this.articleModel.find({ $or: or }).exec();
+      // 投影只取真正会被读的两个字段（第四轮审计 R4-13）：这个查询在匿名热路径上
+      // （GET /api/public/comments/counts 一次最多 50 篇 + 每次 GET /api/public/comments/），
+      // 以前把 ≤50 篇文章的**全文**捞回来只为读 id 与 pathname。
+      // 实测（一次性 mongod、312 篇 × ~20KB 语料、50 个 key、中位数 7 轮）：19.7ms → 1.4ms（14×）。
+      articles = await this.articleModel
+        .find({ $or: or }, { id: 1, pathname: 1, _id: 0 })
+        .exec();
     }
     for (const path of paths) {
       const set = new Set<string>([path]);
@@ -477,9 +604,18 @@ export class CommentProvider {
       return { total, page, pageSize, data: [] };
     }
     const rootIds = roots.map((r) => r.id);
+    // ⚠️ 必须带 .limit()（第四轮审计 B8）：以前这个 find 没有上限，只有**响应**被切到
+    // 每条根评论 100 条。一个有几万条已通过回复的根评论（moderation=post 会自动放行
+    // 无外链文本，B2 修复前蜜罐还能放大它）会让每次第一页 GET 都变成大抓取 + 内存分组。
+    // 上限取 MAX_CHILDREN_PER_ROOT × 本页根评论数 = 响应里最多可能出现的条数：
+    // 排序是全局 (createdAt, id)，所以当某条根评论的回复多到吃满整个窗口时，
+    // 同页靠后的根评论可能显示不满 100 条 —— 这是有意的取舍：`replyCount` 仍然精确
+    // （来自 countReplies 聚合），前台按「查看更多回复」处理，而公开 GET 的抓取量
+    // 从此有硬上限（50 × 100 = 5000 条文档）。
     const children = await this.commentModel
       .find({ path: pathFilter, rootId: { $in: rootIds }, status: 'approved' })
       .sort({ createdAt: 1, id: 1 })
+      .limit(MAX_CHILDREN_PER_ROOT * roots.length)
       .exec();
     const byRoot = new Map<number, CommentDocument[]>();
     for (const child of children) {
@@ -925,16 +1061,238 @@ export class CommentProvider {
 
 /**
  * 把 `![alt](data:image/png;base64,…)` 折叠成 alt 文本。
- * base64 字符集里没有 `)`，所以 `[^)]*` 足够；同时兼容 `<data:...>` 写法。
+ *
+ * ⚠️ 这里以前是一条正则（第四轮审计 B9）：
+ *   `/!\[([^\]]*)\]\(\s*<?data:[^)>]*>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/gi`
+ * 它在「`![a](data:` + 大量空白 + **没有右括号**」这种输入上是 O(n²)：
+ * `[^)>]*`、title 的 `\s+` 与结尾的 `\s*` 三个变长消费者在同一段空白上互相回退。
+ * 实测 5k→125ms、10k→495ms、20k→2.0s、40k→8.0s、80k→32s（每翻倍 ×4）。
+ * 唯一调用方 `importFromWaline` 在 AdminGuard 后面、body 上限 1MB ⇒
+ * 一条 ~1MB 的评论外推是**数小时**的事件循环阻塞（后台导入接口即可触发）。
+ *
+ * 现在改成「字面量预检 + 线性扫描器」，它按正则引擎的回退顺序**确定性地**
+ * 复刻同一个语言（对拍钉子见 audit-hardening-round4-fixes-comment.spec.ts：
+ * 既有钉子 + 手写边界 + 4000 个种子随机向量，输出逐字节相同）。
+ * 匹配结构（`data:` 之后）：
+ *   P=[^)>]*（停在第一个 `)` / `>` / 串尾）→ `>?` → 可选 title(`\s+`+引号串) → `\s*` → `\)`。
+ * 关键事实：
+ *  - P 停在 `)` ⇒ 贪婪首试即成功（title 与 `\s*` 都可为空），且这是最左的合法终点；
+ *  - P 停在串尾 ⇒ 必然失败（成功的匹配必须以 `)` 结束）⇒ 而且**后面所有锚点也必然失败**
+ *    （剩下的串里连一个 `)` 都没有），直接结束整个扫描 —— 这正是旧正则最贵的那种输入；
+ *  - P 停在 `>` ⇒ `>?` 要么吃掉它（phase 1：title/`\s*`/`)` 都是确定性的——
+ *    `\s+`/`\s*` 取极大段，短了下一个字符还是空白、等不到引号或 `)`），
+ *    要么不吃（此时 title/`\s*`/`\)` 都匹配不了 `>`，必然失败）；
+ *    要么 P **回退**到 run 内部的某个空白处，让 title 从那里开跑（phase 2）——
+ *    ⚠️ 这一支不能省：引号串的内容 `[^"]*` 允许包含 `>` 与 `)`，
+ *    所以 `![a](data:x "a > b")` 的合法解析恰恰是「P 让位、title 跨过 `>`」。
+ *    phase 2 按引擎的回退顺序从右往左逐个空白段尝试，每个空白段只需试一次
+ *    （段内所有回退位置的 `\s+` 极大段都终止于同一个引号位置）。
+ *  - 扫描总量另有工作预算（≈20×输入长度）：构造「N 个 `![a](data:` 锚点 + 结尾一个 `>`」
+ *    这种连旧正则都要 O(N²) 的输入时，新实现会在几十毫秒内**大声抛错**
+ *    （该行导入失败、记进 errors[]），而不是把事件循环阻塞几个小时——绝不静默。
  */
+const DATA_URI_WS = /\s/;
+
+/** 字面量 `data:`（大小写不敏感）的线性探测：没有它就绝不可能有匹配 */
+const DATA_URI_PROBE = /data:/i;
+
+/** 工作预算：每字符允许的均摊扫描次数（超出 ⇒ 抛错，见上面的说明） */
+const STRIP_WORK_FACTOR = 20;
+const STRIP_WORK_FLOOR = 100_000;
+
+/** 扫描器的共享状态：工作量计数 + 预算 + 「剩余部分已无 `)`/`>`」的短路标志 */
+interface StripScanState {
+  work: number;
+  budget: number;
+  noCloseParen?: boolean;
+}
+
 export function stripDataUriImages(text: string): string {
-  return String(text ?? '').replace(
-    /!\[([^\]]*)\]\(\s*<?data:[^)>]*>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/gi,
-    (_match, alt) => {
-      const label = String(alt ?? '').trim();
-      return label || '图片';
-    },
-  );
+  const input = String(text ?? '');
+  // 快速路径：普通长文（绝大多数评论/导入行）一次线性探测就原样返回
+  if (!DATA_URI_PROBE.test(input)) {
+    return input;
+  }
+  const budget = input.length * STRIP_WORK_FACTOR + STRIP_WORK_FLOOR;
+  const scan: StripScanState = { work: 0, budget };
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const anchor = input.indexOf('![', pos);
+    if (anchor < 0) {
+      break;
+    }
+    const hit = matchDataUriImage(input, anchor, scan);
+    if (hit === 'BUDGET') {
+      throw new BadRequestException(
+        '评论里包含无法在合理时间内解析的 data: 图片引用（疑似构造输入），该行已跳过',
+      );
+    }
+    if (hit) {
+      out += input.slice(pos, anchor);
+      const label = hit.alt.trim();
+      out += label || '图片';
+      pos = hit.end;
+    } else if (scan.noCloseParen) {
+      // 剩余部分连一个 `)`/`>` 都没有 ⇒ 之后任何锚点都不可能成功（见函数头注释）
+      out += input.slice(pos, anchor);
+      pos = anchor;
+      break;
+    } else {
+      // 这个锚点不成：与正则的全局扫描一致，从下一个字符继续找 `![`
+      out += input.slice(pos, anchor + 1);
+      pos = anchor + 1;
+    }
+  }
+  out += input.slice(pos);
+  return out;
+}
+
+/**
+ * 从 `s[start] === '!'`（且 `s[start+1] === '['`）开始尝试匹配一个 data: URI 图片。
+ * 成功返回 alt 与匹配终点（开区间），失败返回 null，超出工作预算返回 'BUDGET'。
+ */
+function matchDataUriImage(
+  s: string,
+  start: number,
+  scan: StripScanState,
+): { alt: string; end: number } | 'BUDGET' | null {
+  const over = () => {
+    scan.work += 1;
+    return scan.work > scan.budget;
+  };
+  const close = s.indexOf(']', start + 2);
+  if (close < 0) {
+    return null;
+  }
+  const alt = s.slice(start + 2, close);
+  scan.work += close - start;
+  let i = close + 1;
+  if (s.charAt(i) !== '(') {
+    return null;
+  }
+  i += 1;
+  while (i < s.length && DATA_URI_WS.test(s.charAt(i))) {
+    if (over()) return 'BUDGET';
+    i += 1;
+  }
+  if (s.charAt(i) === '<') {
+    i += 1;
+  }
+  if (s.slice(i, i + 5).toLowerCase() !== 'data:') {
+    return null;
+  }
+  i += 5;
+  // P = `[^)>]*`：极大跑到第一个 `)` 或 `>`（或串尾）
+  const q = i;
+  while (i < s.length && s.charAt(i) !== ')' && s.charAt(i) !== '>') {
+    if (over()) return 'BUDGET';
+    i += 1;
+  }
+  const g = i;
+  if (g >= s.length) {
+    // 串尾都没有 `)`/`>`：本锚点与**所有后续锚点**都必然失败
+    scan.noCloseParen = true;
+    return null;
+  }
+  if (s.charAt(g) === ')') {
+    return { alt, end: g + 1 }; // 贪婪首试即成功，且是最左终点
+  }
+  // ---- s[g] === '>' ----
+  // phase 1：`>?` 吃掉 `>`，之后是确定性的一条路
+  const h = g + 1;
+  if (over()) return 'BUDGET';
+  const afterGt = tryAfterAngle(s, h, alt, scan);
+  if (afterGt !== null) {
+    return afterGt === 'BUDGET' ? 'BUDGET' : afterGt;
+  }
+  // phase 2：P 回退到 run 内部的空白段，title 从那里开跑（引号内容可以跨过 `>`）。
+  // 按引擎回退顺序从右往左逐段尝试；同一段内的所有回退位置等价，只试一次。
+  let e = g - 1;
+  while (e >= q) {
+    if (over()) return 'BUDGET';
+    if (!DATA_URI_WS.test(s.charAt(e))) {
+      e -= 1;
+      continue;
+    }
+    // 找到这个空白段的左右端（段内所有起点等价）
+    let ws = e;
+    while (ws > q && DATA_URI_WS.test(s.charAt(ws - 1))) {
+      if (over()) return 'BUDGET';
+      ws -= 1;
+    }
+    let we = e;
+    while (we < g && DATA_URI_WS.test(s.charAt(we))) {
+      if (over()) return 'BUDGET';
+      we += 1;
+    }
+    // ⚠️ 段尾 we 可能等于 g（`>` 之前全是空白）：那时引号检查自然失败
+    const viaTitle = tryTitleAt(s, we, alt, scan);
+    if (viaTitle !== null) {
+      return viaTitle === 'BUDGET' ? 'BUDGET' : viaTitle;
+    }
+    e = ws - 1;
+  }
+  return null;
+}
+
+/**
+ * `>?` 之后的确定性解析：可选 title → `\s*` → `)`。
+ * （title 的 `\s+` 只有极大段可能成功：短了下一个字符还是空白，等不到引号；
+ *   `\s*` 同理，只有极大段后面才可能紧跟 `)`。）
+ */
+function tryAfterAngle(
+  s: string,
+  h: number,
+  alt: string,
+  scan: StripScanState,
+): { alt: string; end: number } | 'BUDGET' | null {
+  let j = h;
+  while (j < s.length && DATA_URI_WS.test(s.charAt(j))) {
+    j += 1;
+    scan.work += 1;
+    if (scan.work > scan.budget) return 'BUDGET';
+  }
+  if (j > h) {
+    const viaTitle = tryTitleAt(s, j, alt, scan);
+    if (viaTitle !== null) {
+      return viaTitle;
+    }
+  }
+  // 无 title：`\s*` → `)`（j 已经是极大空白段的末端）
+  if (s.charAt(j) === ')') {
+    return { alt, end: j + 1 };
+  }
+  return null;
+}
+
+/** we 处必须是引号；引号内容允许包含 `)` 与 `>`（`[^"]*` 的语义），闭引号只能是第一个同款 */
+function tryTitleAt(
+  s: string,
+  we: number,
+  alt: string,
+  scan: StripScanState,
+): { alt: string; end: number } | 'BUDGET' | null {
+  const quote = s.charAt(we);
+  if (quote !== '"' && quote !== "'") {
+    return null;
+  }
+  const closing = s.indexOf(quote, we + 1);
+  scan.work += closing < 0 ? s.length - we : closing - we;
+  if (scan.work > scan.budget) return 'BUDGET';
+  if (closing < 0) {
+    return null;
+  }
+  let k = closing + 1;
+  while (k < s.length && DATA_URI_WS.test(s.charAt(k))) {
+    k += 1;
+    scan.work += 1;
+    if (scan.work > scan.budget) return 'BUDGET';
+  }
+  if (s.charAt(k) === ')') {
+    return { alt, end: k + 1 };
+  }
+  return null;
 }
 
 /** Waline 的 `insertedAt` 可能是 ISO 串、毫秒数或 `{$date: ...}`；解析不出来就返回 null */

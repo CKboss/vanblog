@@ -16,6 +16,16 @@ export interface Config {
    * **故意不放在 staticPath 里**：静态目录会被 web 层直接服务出去，而备份含密码哈希、jwt 密钥。
    */
   backupPath: string;
+  /**
+   * caddy 的数据目录（TLS 证书与私钥）。默认 `/root/.local/share/caddy`，
+   * 与 Dockerfile 里 `VOLUME /root/.local/share/caddy` 声明的是同一个目录。
+   *
+   * 只有整站备份的**可选项** `VANBLOG_BACKUP_INCLUDE_CADDY`（默认关）会用到它：
+   * 打开后归档里多一段 `./caddy`，恢复时写回这里。
+   * ⚠️ 另一个卷 `/root/.config/caddy` 是 caddy 的**配置**（由 `scripts/start.js`
+   * 按模板生成，可离线重造），故意不备份 —— 证书才是唯一"离线造不出来"的那部分。
+   */
+  caddyDataPath: string;
 }
 
 export const loadMongoUrl = () => {
@@ -46,6 +56,8 @@ export const config: Config = {
   pluginRunnerPath: loadConfig('pluginRunner.path', '/app/pluginRunner'),
   serverHost: loadConfig('server.host', ''),
   backupPath: loadConfig('backup.path', ''),
+  // env 名：VAN_BLOG_CADDY_DATA_PATH（loadConfig 把 'caddy.data.path' 拼成它）
+  caddyDataPath: loadConfig('caddy.data.path', '/root/.local/share/caddy'),
 };
 
 if (!config.backupPath) {

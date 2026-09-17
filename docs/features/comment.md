@@ -344,3 +344,23 @@ VanBlog 内嵌的评论系统支持在有新评论时发送 `webhook`，配置�
 配置信息也会由后端的服务生成，传递给 `waline.js` 中，具体采用了 `node` 的 `child_process` 模块。
 
 具体可以看 `packages/server/src/provider/waline/waline.provider.ts` 的代码。
+
+### 忘记 waline 管理员密码：`scripts/reset-waline.sh`
+
+```bash
+scripts/reset-waline.sh --generate          # 生成强随机密码（24 位，约 143 bit），**只显示一次**
+scripts/reset-waline.sh --password '你的新密码'   # 或自己提供（也可用 WALINE_NEW_PASSWORD 环境变量）
+scripts/reset-waline.sh --generate --yes     # 跳过确认（cron / 脚本里用）
+```
+
+它会把 waline 库里**所有** `type: 'administrator'` 的账号密码改掉，所以改之前会打印引擎、容器、
+数据库名与将被修改的管理员行数，并要求你输入 `yes` 确认（`--yes` 或 `WALINE_RESET_YES=1` 可跳过；
+标准输入是 EOF 时**直接拒绝**而不是挂住）。**邮箱默认不动**，需要一起改才加 `--email <地址>`。
+密码哈希在本地算好（依次尝试 python3-bcrypt → htpasswd → 仓库自带的 bcryptjs；都没有就**拒绝运行**，
+绝不退回明文或某个已知哈希），明文只在更新成功后打印一次，不进数据库、不进日志。
+一个管理员都没有时报错退出（不会假装成功）。
+
+> ⚠️ **如果你跑过 2026-09 之前的旧版脚本，请把那个密码当成已经泄露**：旧版把密码哈希**硬编码在仓库里**
+> （`$2a$08$…`，成本因子 8，可离线爆破），还会把邮箱一并改成 `admin@admin.com`。
+> 那个哈希在公开的 git 历史里，删不掉 —— 所以任何用旧版设置过的 waline 管理员密码都应视为已知，
+> 请用上面的命令重新设一次。

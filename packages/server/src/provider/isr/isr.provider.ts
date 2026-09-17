@@ -1,19 +1,33 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import axios from 'axios';
+import cluster from 'node:cluster';
+import * as fs from 'fs';
 import { Article } from 'src/scheme/article.schema';
 import { getAllArticlePublicPaths, getArticlePublicPaths } from 'src/utils/articlePublicPaths';
 import { sleep } from 'src/utils/sleep';
+import { envPositiveInt } from 'src/utils/envNumber';
+import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { ArticleProvider } from '../article/article.provider';
 import { RssProvider } from '../rss/rss.provider';
 import { SettingProvider } from '../setting/setting.provider';
 import { SiteMapProvider } from '../sitemap/sitemap.provider';
+import { SearchIndexProvider } from '../search/searchIndex.provider';
+import { reconcileArtifacts, reaperPagesDir } from './artifactReaper';
 export interface ActiveConfig {
   postId?: number;
   forceActice?: boolean;
   previousPathname?: string;
 }
+
+/** 周期对账间隔的 env（毫秒）。下限 60s：再短就是拿 DB 查询换安心，风暴收尾那次已经够了 */
+export const REAP_INTERVAL_ENV = 'VANBLOG_ISR_REAP_INTERVAL_MS';
+export const DEFAULT_REAP_INTERVAL_MS = 15 * 60 * 1000;
+export const MIN_REAP_INTERVAL_MS = 60 * 1000;
+/** 删除日志最多列几个文件名（再多就是刷屏；完整清单没有价值，计数才有） */
+export const REAP_LOG_NAMES_MAX = 10;
+
 @Injectable()
-export class ISRProvider {
+export class ISRProvider implements OnModuleDestroy {
   urlList = ['/', '/category', '/tag', '/timeline', '/about', '/link'];
   base = 'http://127.0.0.1:3001/api/revalidate?path=';
   logger = new Logger(ISRProvider.name);
@@ -30,12 +44,19 @@ export class ISRProvider {
   /** 单次请求最多允许连续追加几轮，避免"一直在改"时无限串下去 */
   private stormChain = 0;
   private static readonly STORM_CHAIN_MAX = 3;
+  /** 产物清道夫的周期定时器（只在主进程存在；见 startArtifactReaper） */
+  private reapTimer: ReturnType<typeof setInterval> | null = null;
   constructor(
     private readonly articleProvider: ArticleProvider,
     private readonly rssProvider: RssProvider,
     private readonly sitemapProvider: SiteMapProvider,
     private readonly settingProvider: SettingProvider,
-  ) {}
+    // ⚠️ @Optional()：SearchIndexProvider 没注册时注入 undefined，配合调用处的 ?. 安全跳过。
+    // 加在最后，不动前四个参数的位置（有源码钉子按位置断言过）。
+    @Optional() private readonly searchIndexProvider?: SearchIndexProvider,
+  ) {
+    this.startArtifactReaper();
+  }
   async activeAllFn(info?: string, activeConfig?: ActiveConfig) {
     const isrConfig = await this.settingProvider.getISRSetting();
     if (isrConfig?.mode == 'delay' && !activeConfig?.forceActice) {
@@ -122,6 +143,10 @@ export class ISRProvider {
     await this.activePath('category');
     await this.activePath('tag');
     this.logger.log('触发全量渲染完成！');
+    // 风暴收尾 = 事件驱动的清道夫触发点：25+ 个调用方（删文/加密/隐藏/定时/改分类…）
+    // 全部汇到 runStorm，所以「实体不再可公开」必然在这一轮之后被清掉盘上产物。
+    // reapStaleArtifacts 自己吞错（清道夫失败不能把风暴标记成失败），周期对账会兜底。
+    await this.reapStaleArtifacts(`全量渲染收尾（${info || '未注明来源'}）`);
   }
   async activeAll(info?: string, delay?: number, activeConfig?: ActiveConfig) {
     if (this.timer) {
@@ -134,6 +159,11 @@ export class ISRProvider {
       // sitemap 里还留着早已删除的文章）。所以把这两个生成挪到守卫之前。
       this.rssProvider.generateRssFeed(info || '', delay);
       this.sitemapProvider.generateSiteMap(info || '', delay);
+      // 搜索索引与 RSS/sitemap 走同一条轨：必须留在 VANBLOG_DISABLE_WEBSITE 守卫与
+      // delay 模式拦截**之前**（§7.57-E 的教训：delay 模式下守卫之后的一切永远不会执行，
+      // 索引会静默停更，而"自信地给出过期结果"比没有索引更糟）。
+      // `delay` 原样转发 —— 恢复与后台编辑要立刻出新索引，不能等默认防抖。
+      this.searchIndexProvider?.generateSearchIndex(info || '', delay);
       if (process.env['VANBLOG_DISABLE_WEBSITE'] === 'true') {
         return;
       }
@@ -349,5 +379,139 @@ export class ISRProvider {
   async getArticleUrls() {
     const articles = await this.articleProvider.getAll('list', true, true);
     return getAllArticlePublicPaths(articles);
+  }
+
+  /* ======================= ISR 产物清道夫（stale-artifact reaper） =======================
+   * 背景与安全边界全部写在 ./artifactReaper.ts 的文件头（一句话版本：Next 的
+   * file-system-cache 只写不删，caddy 按文件直服动态路由的前提是有人把"不再可公开"
+   * 的路径的 .html/.json/.meta 从盘上删掉）。
+   *
+   * 两个触发时机，缺一不可：
+   *  1. 事件驱动：每轮全量风暴收尾（runStorm 末尾）—— 25+ 个改动入口都汇到那里；
+   *  2. 周期对账：主进程每 VANBLOG_ISR_REAP_INTERVAL_MS（默认 15 分钟）一次，兜住
+   *     "风暴和 DB 写入之间进程崩了"、"整站恢复把库整个换掉"、"批量操作漏了触发"
+   *     这类事件路径永远看不到的场景。
+   * 与 caddy 开关（VANBLOG_CADDY_SERVE_HTML）**解耦**：即使直服关着也照跑 ——
+   * 它同时修掉一个今天就能观察到的老毛病（website 重启后内存 404 丢失，Next 自己
+   * 会短暂把已删文章从盘上 serve 回来），并且让直服开关随时可以安全打开。
+   * ---------------------------------------------------------------------------------- */
+
+  /** 启动周期对账（幂等；多进程时只有主进程启动，约定同 isr.task.ts 的 cron 守卫） */
+  startArtifactReaper() {
+    if (this.reapTimer || !isPrimaryInstance(cluster)) {
+      return;
+    }
+    const interval = envPositiveInt(
+      REAP_INTERVAL_ENV,
+      DEFAULT_REAP_INTERVAL_MS,
+      MIN_REAP_INTERVAL_MS,
+    );
+    this.reapTimer = setInterval(() => {
+      // reapStaleArtifacts 内部吞错并带来源打日志，这里的 catch 只是最后一道保险
+      this.reapStaleArtifacts('周期对账').catch((err) => {
+        this.logger.error(`[artifact-reaper] 周期对账异常：${(err as Error)?.message || err}`);
+      });
+    }, interval);
+    // 别让对账定时器吊住进程退出（优雅停机 / jest）
+    this.reapTimer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.reapTimer) {
+      clearInterval(this.reapTimer);
+      this.reapTimer = null;
+    }
+  }
+
+  /**
+   * 一次对账：算出「当前可公开发布」的 URL 路径集合，把四个动态目录里不在集合中的
+   * 产物三件套删掉。**永不 throw**（清道夫失败不能拖垮风暴/定时器，下一轮会兜底）。
+   *
+   * 可公开集合直接复用 SitemapProvider —— 它已经编码了全部资格规则：
+   * `getAll('list', false, false)` 排除 deleted/hidden/publishAt 未到（visiblePublishFilter），
+   * getSiteEntries 再跳过 private 与加密分类下的文章。**不复制谓词**：复制的第二份
+   * 实现一定会漂（§7.42 的教训），而 sitemap 的语义就是"可公开索引的路径全集"。
+   *
+   * ⚠️ DB 读失败或集合空得可疑时**跳过删除**：拿一份不完整的 qualified 集合去对账
+   * 等于把正常文章的产物全删了（下一次风暴会重建，但期间动态直服全部退化成回源，
+   * 而"空集合"恰恰是 Mongo 刚恢复/刚抖动时最可能出现的形状）。
+   */
+  async reapStaleArtifacts(source: string): Promise<void> {
+    try {
+      const dir = reaperPagesDir();
+      if (!fs.existsSync(dir)) {
+        // dev 机 / website 分离部署：没有产物目录就没有可删的东西（不是错误）
+        this.logger.debug?.(`[artifact-reaper] pages 目录不存在，跳过（来源：${source}）`);
+        return;
+      }
+      const qualified = new Set<string>();
+      // 健康检查用：getSiteEntries **无条件**包含 6 个固定页条目（读代码确认过，
+      // 与文章数无关），所以"6 个都在"= 这次读取是健康的；缺任何一个都说明
+      // 数据源形状不对（半初始化/DB 抖动），此时拿着不完整的集合去对账
+      // 等于把正常文章的产物全删了 —— 宁可跳过，下一轮再兜。
+      const FIXED_ENTRY_URLS = ['/', '/timeline', '/category', '/tag', '/about', '/link'];
+      let fixedSeen = 0;
+      try {
+        const entries = await this.sitemapProvider.getSiteEntries();
+        for (const entry of entries || []) {
+          const url = (entry as { url?: unknown })?.url;
+          if (typeof url !== 'string') {
+            continue;
+          }
+          if (FIXED_ENTRY_URLS.includes(url)) {
+            fixedSeen += 1;
+          }
+          if (url.startsWith('/post/')) {
+            qualified.add(url); // getSiteEntries 的文章路径是解码后的原始 pathname
+          }
+        }
+        const [cats, tags, pages] = await Promise.all([
+          this.sitemapProvider.getCategoryUrls(),
+          this.sitemapProvider.getTagUrls(),
+          this.sitemapProvider.getPageUrls(),
+        ]);
+        for (const url of [...(cats || []), ...(tags || []), ...(pages || [])]) {
+          if (typeof url !== 'string') {
+            continue;
+          }
+          // category/tag 的 URL 是 encodeQuerystring 过的，盘上文件名是解码后的
+          try {
+            qualified.add(decodeURIComponent(url));
+          } catch {
+            qualified.add(url); // 解码不了（孤立 %）就按原样，宁可少删不误删
+          }
+        }
+      } catch (err) {
+        this.logger.error(
+          `[artifact-reaper] 读取可公开集合失败，本轮跳过（来源：${source}）：${
+            (err as Error)?.message || err
+          }`,
+        );
+        return;
+      }
+      if (fixedSeen < FIXED_ENTRY_URLS.length) {
+        this.logger.warn(
+          `[artifact-reaper] 可公开集合形状异常（固定页条目 ${fixedSeen}/${FIXED_ENTRY_URLS.length}），本轮跳过不删（来源：${source}）`,
+        );
+        return;
+      }
+      // ⚠️ 这里**不**要求存在 /post/* 路径：全站文章被删光恰恰是最需要清产物的场景
+      //（"没有可公开文章"是合法状态，"读取失败"才是跳过理由，两者靠 fixedSeen 区分）。
+      const result = reconcileArtifacts(dir, qualified);
+      if (result.deleted.length > 0) {
+        const shown = result.deleted.slice(0, REAP_LOG_NAMES_MAX).join('、');
+        const more = result.deleted.length > REAP_LOG_NAMES_MAX ? ' …' : '';
+        this.logger.log(
+          `[artifact-reaper] 删除 ${result.deleted.length} 个过期 ISR 产物（来源：${source}）：${shown}${more}`,
+        );
+      }
+      for (const e of result.errors) {
+        this.logger.warn(`[artifact-reaper] ${e}（来源：${source}）`);
+      }
+    } catch (err) {
+      this.logger.error(
+        `[artifact-reaper] 对账异常（来源：${source}）：${(err as Error)?.message || err}`,
+      );
+    }
   }
 }
