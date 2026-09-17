@@ -289,6 +289,23 @@ async function bootstrap() {
       void wash('wash:userSalt', 'wash', () => userProvider.washUserWithSalt(), (r) => r).catch(
         (err) => console.error(`清洗未加盐用户失败：${(err as Error)?.message || err}`),
       );
+    // 文章 / 分类的访问密码：把历史**明文**洗成 scrypt 哈希（幂等，第二次跑 washed=0）。
+    // fire-and-forget：scrypt 是同步的，几十条就是一两秒，不该阻塞启动；
+    // 洗到一半挂了也只是"一部分还是明文"，而那部分照样能解锁
+    // （verifyAccessPassword 两种格式都认，一律常量时间比较）。
+    // ⚠️ 它同时洗 articles 与 categories 两个集合（ArticleProvider 已经注入了 Category 模型），
+    // 且**故意不自己记台账** —— 由这里的 wash() 包装器统一记，与 washUserWithSalt 一致。
+    if (primary)
+      void wash(
+        'wash:accessPasswords',
+        'wash',
+        // ⚠️ 就地 app.get：上面那个 `const articleProvider` 在更窄的块作用域里，
+        // 这里引用不到（TS2552）。放进 lambda 里也更合适 —— wash 本来就是稍后才跑的。
+        () => app.get(ArticleProvider).washAccessPasswords(),
+        (r) => r,
+      ).catch((err) =>
+        console.error(`清洗明文访问密码失败：${(err as Error)?.message || err}`),
+      );
     const settingProvider = app.get(SettingProvider);
     // 老版本菜单数据洗一下。（同上：保持 fire-and-forget）
     if (primary)
