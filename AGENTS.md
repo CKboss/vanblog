@@ -5115,6 +5115,20 @@ buildah 会静默丢掉这条指令，而 GitHub Actions 用的 **docker buildx 
 验证 HEALTHCHECK 只能在**容器里实跑那条命令**：`podman exec vb-app sh -c '<那条 node -e>'`，
 正常 → 退出码 0，把端口指错（连接被拒）→ 退出码 **1**，404 路径 → 退出码 0（判据是 `<500`，
 所以 404 仍算健康 —— 这正是端点必须在 mongo 挂时返回 **503** 的理由）。
+**两侧都实测过了，不再是推理**：本地 podman 4.9.3 构建的镜像 `Config.Healthcheck` 是 `null`；
+而 GitHub Actions（docker buildx）产出的 `ghcr.io/ckboss/vanblog:v2026.9.1` 的 config blob 里
+`Healthcheck` 完整存在 —— `test: CMD-SHELL node -e "...path:'/api/public/health'..."`、
+`interval 60s / timeout 10s / start_period 180s / retries 3`。
+（取这个结论的正确姿势：`ghcr.io/token?service=ghcr.io&scope=repository:<owner>/<repo>:pull` 拿匿名 token →
+取 manifest → 取 `config.digest` 那个 blob。⚠️ 两个坑：① Accept 头必须包含镜像**实际的** media type，
+本仓库推的是单架构 `application/vnd.oci.image.manifest.v1+json`，只给 index / docker-list 类型会得到
+**404 + `MANIFEST_UNKNOWN: OCI manifest found, but Accept header does not support OCI manifests`** ——
+这个 404 长得像"包是私有的"，我第一次就误判成发布级事故，**其实响应体里早写明了原因，先读 body 再下结论**；
+② `podman manifest inspect docker://…` 不支持 `docker://` 传输前缀，别用它验远端镜像。）
+同一个 config blob 还能顺手核对发布是否正确：`VAN_BLOG_VERSION=v2026.9.1@0ec01a5`（tag 正确推导成版本号）、
+`NODE_VERSION=24.21.0`、`UV_THREADPOOL_SIZE=16`、38 层、amd64/linux（**单架构**，arm64 需要在工作流里显式打开，
+走 QEMU 会慢好几倍）。
+
 ⚠️ 量这个退出码时别写 `podman exec … | head; echo $?` —— 那拿到的是 **`head` 的退出码**，
 两边都会显示 0（本轮就这么"假绿"过一次，改成先重定向再读 `$?` 才对）。
 
