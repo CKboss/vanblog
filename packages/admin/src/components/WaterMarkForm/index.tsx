@@ -1,5 +1,4 @@
 import { getStaticSetting, updateStaticSetting } from '@/services/van-blog/api';
-import { checkNoChinese } from '@/services/van-blog/checkString';
 import { ProForm, ProFormDigit, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 import { message, Modal } from 'antd';
 import { useState } from 'react';
@@ -56,13 +55,12 @@ export default function (props: {}) {
             Modal.info({ title: '开启水印必须指定水印文字！' });
             return;
           }
-          if (!checkNoChinese(data.waterMarkText)) {
-            Modal.info({
-              title:
-                '目前水印文字不支持中文！因为用了纯 js 库节约资源，后面会加上自定义图片作为水印。',
-            });
-            return;
-          }
+          // ⚠️ 这里以前有一道 `checkNoChinese(data.waterMarkText)` 硬拦中文的闸门，
+          // 理由是「用了纯 js 库节约资源」（jimp + .fnt 位图字体，确实渲染不了汉字）。
+          // 2026-09 渲染整个重写成 sharp/libvips + SVG <text> 之后那个前提不存在了：
+          // 服务端按字体栈栅格化，**中文照常能盖**（官方镜像装了 ttf-dejavu + wqy-zenhei），
+          // 缺字体时服务端自己会 WARN + 返回原图（宁可不盖也不盖满图豆腐块）。
+          // 所以闸门删掉，文案跟着改；服务端行为由 packages/server 的 watermark.spec.ts 钉住。
           const toUpload = data;
           await updateStaticSetting(toUpload);
           message.success('更新成功！');
@@ -131,7 +129,7 @@ export default function (props: {}) {
             ];
           }}
           tooltip={
-            '右下角的可见文字水印（默认关闭，很多人嫌它挡图）。开启后上传图片会自动加上，无论哪种图床。宽高小于 128px 的图片可能加不上。想要看不出来又能验真的水印，请用下面的「隐写水印」。'
+            '可见的文字水印（默认关闭，很多人嫌它挡图）。开启后上传图片会自动加上，无论哪种图床。默认样式是「满图斜排平铺」（旋转小字，裁不掉），样式与位置由服务端环境变量 VANBLOG_WATERMARK_STYLE / VANBLOG_WATERMARK_POSITION 调，不在本表单里。短边小于 52px 的图会跳过水印（服务端记一条 WARN，图片照常上传）。想要看不出来又能验真的水印，请用下面的「隐写水印」。'
           }
           rules={[{ required: true, message: '这是必填项' }]}
         ></ProFormSelect>
@@ -139,7 +137,9 @@ export default function (props: {}) {
           name="waterMarkText"
           label={'可见水印文字'}
           required
-          tooltip={'此文字会作为水印加到图片右下角，可包含 .（如域名），目前不支持中文'}
+          tooltip={
+            '水印文字，可包含 .（如域名），也**支持中文**（渲染在服务端做，官方镜像已装 Latin + 中文字体）。文字越长需要的图越大：字号会按图片尺寸自动算，放不下时自动缩小，缩到 8px 还放不下就跳过这一张（记一条 WARN，不影响上传）。'
+          }
           placeholder="请输入水印文字"
         />
         <ProFormSelect
