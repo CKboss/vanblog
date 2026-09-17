@@ -4,6 +4,7 @@ import UpdateModal from '@/components/UpdateModal';
 import { genActiveObj } from '@/services/van-blog/activeColTools';
 import { deleteDraft, getAllCategories, getDraftById, getTags } from '@/services/van-blog/api';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
+import ExportFormatDropdown from '@/components/ExportFormatDropdown';
 import { message, Modal, Tag } from 'antd';
 import { history } from 'umi';
 export const columns = [
@@ -133,14 +134,10 @@ export const columns = [
                 action?.reload();
               }}
             />,
-              <a
+              <ExportFormatDropdown
                 key={'exportDraft' + record.id}
-                onClick={() =>
-                  downloadMarkdownExport({ id: record.id, type: 'draft', title: record.title })
-                }
-              >
-                导出
-              </a>,
+                payload={{ id: record.id, type: 'draft', title: record.title }}
+              />,
             <a
               key={'deleteDraft' + record.id}
               onClick={() => {

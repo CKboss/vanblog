@@ -10,6 +10,7 @@ import {
 } from '@/services/van-blog/api';
 import { getPathname } from '@/services/van-blog/getPathname';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
+import ExportFormatDropdown from '@/components/ExportFormatDropdown';
 import { formatDateTime } from '@/services/van-blog/formatTime';
 import { describeScheduledTag, isScheduled } from '@/services/van-blog/schedule';
 import { message, Modal, Space, Switch, Tag } from 'antd';
@@ -281,15 +282,11 @@ export const columns = [
                   action?.reload();
                 }}
               />,
-              <a
+              // 三种格式并列，各说清代价；默认不再是"永远一个 zip"
+              <ExportFormatDropdown
                 key={'exportArticle' + record.id}
-                onClick={() =>
-                  // 服务端打包：.md（原样）+ .mdz（md 与图片），一个 zip 下载
-                  downloadMarkdownExport({ id: record.id, type: 'article', title: record.title })
-                }
-              >
-                导出
-              </a>,
+                payload={{ id: record.id, type: 'article', title: record.title }}
+              />,
               <RevisionHistory
                 key={'revisions' + record.id}
                 articleId={record?.id}

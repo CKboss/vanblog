@@ -11,8 +11,10 @@ const readRepo = (rel) => readFileSync(path.join(repoRoot, rel), 'utf8');
 describe('导出 Markdown（含图片）：后台入口', () => {
   it('文章列表每行的「导出」走服务端打包', () => {
     const cols = read('src/pages/Article/columns.jsx');
-    assert.match(cols, /downloadMarkdownExport\(\{ id: record\.id, type: 'article', title: record\.title \}\)/);
-    assert.match(cols, /import \{ downloadMarkdownExport \} from '@\/services\/van-blog\/exportMarkdown'/);
+    // 现在是**下拉三选一**（md / mdz / zip），不再写死"永远一个 zip"
+    assert.match(cols, /<ExportFormatDropdown/);
+    assert.match(cols, /payload=\{\{ id: record\.id, type: 'article', title: record\.title \}\}/);
+    assert.match(cols, /import ExportFormatDropdown from '@\/components\/ExportFormatDropdown'/);
     // 老的纯前端导出（拿不到图片）不该留着
     assert.doesNotMatch(cols, /parseObjToMarkdown/);
     assert.doesNotMatch(cols, /URL\.createObjectURL/);
@@ -20,15 +22,19 @@ describe('导出 Markdown（含图片）：后台入口', () => {
 
   it('草稿列表每行的「导出」也走服务端，并带上 type: draft', () => {
     const cols = read('src/pages/Draft/columes.jsx');
-    assert.match(cols, /downloadMarkdownExport\(\{ id: record\.id, type: 'draft', title: record\.title \}\)/);
+    assert.match(cols, /<ExportFormatDropdown/);
+    assert.match(cols, /payload=\{\{ id: record\.id, type: 'draft', title: record\.title \}\}/);
     assert.doesNotMatch(cols, /parseObjToMarkdown/);
   });
 
   it('编辑器导出带当前内容（未保存也能导），关于页走 raw', () => {
     const editor = read('src/pages/Editor/index.jsx');
     assert.match(editor, /downloadMarkdownExport/);
-    // 关于页没有文章 id
-    assert.match(editor, /type: 'raw', title: currObj\?\.title \|\| '关于', content: value/);
+    // 关于页没有文章 id（调用改成多行后，这条钉子也顺带钉住 raw 路径把 format 带下去了）
+    assert.match(
+      editor,
+      /type: 'raw',\s*\n\s*title: currObj\?\.title \|\| '关于',\s*\n\s*content: value,\s*\n\s*format,/,
+    );
     // 文章/草稿把当前编辑器内容一起发过去，所见即所得
     assert.match(editor, /content: value,/);
     // 没保存过就先提示保存
@@ -59,12 +65,17 @@ describe('导出 Markdown（含图片）：前端封装', () => {
     assert.match(helper, /x-export-report/);
     assert.match(helper, /filename\\\*=UTF-8''/);
     assert.match(helper, /application\/json/);
-    assert.match(helper, /导出完成，但有图片没打进包/);
-    assert.match(helper, /导出说明\.md/);
     assert.match(helper, /URL\.createObjectURL/);
     assert.match(helper, /revokeObjectURL/);
-    // 没有图片时要说清楚为什么没有 .mdz
-    assert.match(helper, /这篇文章没有图片，所以没有 \.mdz/);
+    // 结果文案已移进纯函数 exportFormats.js（可 node:test 直接跑，不需要 DOM）
+    assert.match(helper, /describeExportOutcome\(report, format\)/);
+    const formats = read('src/services/van-blog/exportFormats.js');
+    assert.match(formats, /导出完成，但有图片没打进包/);
+    assert.match(formats, /导出说明\.md/);
+    // 没有图片时要说清楚为什么没有 .mdz（这条从 tsx 迁过来时差点被丢掉）
+    assert.match(formats, /这篇文章没有图片，所以没有 \.mdz/);
+    // .md 格式**不该**弹"有图片没打进包"：那个格式本来就不含图片
+    assert.match(formats, /已导出 Markdown（不含图片）/);
   });
 });
 
@@ -120,7 +131,12 @@ describe('导出 Markdown（含图片）：服务端', () => {
     assert.match(controller, /@Controller\('\/api\/admin\/export'\)/);
     assert.match(controller, /X-Export-Report/);
     assert.match(controller, /Access-Control-Expose-Headers/);
-    assert.match(controller, /fs\.rmSync\(path\.dirname\(built\.zipPath\)/);
+    // 三种格式都在发完之后删临时目录（不再只对 zip 那一个路径负责）
+    assert.match(controller, /fs\.rmSync\(built\.tmpDir/);
+    // 格式白名单：未知格式明确 400，不静默回落到 zip
+    assert.match(controller, /不支持的导出格式/);
+    // 选了 .mdz 但这篇没有图片：400 说清原因，而不是静默改发 .md
+    assert.match(controller, /没有可打包的图片/);
 
     const access = readRepo('packages/server/src/types/access/access.ts');
     assert.match(access, /'post-\/api\/admin\/export\/markdown'/);

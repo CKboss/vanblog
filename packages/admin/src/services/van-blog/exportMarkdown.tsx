@@ -1,5 +1,12 @@
 import { Modal, message } from 'antd';
 import { exportMarkdownZip } from './api';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {
+  normalizeExportFormat,
+  fallbackFileName,
+  loadingText,
+  describeExportOutcome,
+} = require('./exportFormats');
 
 /**
  * 文章 / 草稿导出：服务端把 `<标题>.md`（原样）和 `<标题>.mdz`（md + `<标题>.assets/` 图片，
@@ -14,6 +21,11 @@ export interface MarkdownExportOptions {
   type?: 'article' | 'draft' | 'raw';
   title?: string;
   content?: string;
+  /**
+   * 产物格式：`md`（只要正文，服务端不抓图）/ `mdz`（Typora 图片包）/ `zip`（默认，老行为）。
+   * 不传 = `zip`，所以老调用点一个都不用改也不会变行为。
+   */
+  format?: 'md' | 'mdz' | 'zip';
 }
 
 interface ExportReport {
@@ -67,13 +79,15 @@ async function readErrorBody(blob: Blob): Promise<string> {
 }
 
 export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promise<boolean> {
-  const hide = message.loading('正在打包 Markdown 与图片…', 0);
+  const format = normalizeExportFormat(opts.format);
+  const hide = message.loading(loadingText(format), 0);
   try {
     const res: any = await exportMarkdownZip({
       id: opts.id,
       type: opts.type || 'article',
       title: opts.title,
       content: opts.content,
+      format,
     });
     const blob: Blob | undefined = res?.data;
     const response = res?.response;
@@ -88,7 +102,7 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
       return false;
     }
 
-    const fallback = `${safeName(opts.title || '')}-markdown.zip`;
+    const fallback = fallbackFileName(safeName(opts.title || ''), format);
     const name = fileNameFrom(response?.headers?.get?.('content-disposition'), fallback);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -111,37 +125,44 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
       message.success('导出成功！');
       return true;
     }
-    const problems = (report.failed || 0) + (report.skipped || 0);
-    if (problems > 0) {
+    // ⚠️ 按格式解释结果：.md 本来就不含图片，不能弹「有图片没打进包」
+    const outcome = describeExportOutcome(report, format);
+    if (!outcome) {
+      message.success('导出成功！');
+      return true;
+    }
+    if (outcome.tone === 'info') {
       Modal.info({
-        title: '导出完成，但有图片没打进包',
-        width: 560,
+        title: outcome.title,
+        width: 520,
         content: (
           <div>
-            <p>
-              正文里识别到 {report.imageRefs || 0} 个图片引用，成功打包 {report.packedImages || 0} 张
-              （本站 {report.localImages || 0} / 外链 {report.remoteImages || 0}）。
-            </p>
-            {report.failed ? <p>抓取失败 {report.failed} 张，md 里保留了原链接。</p> : null}
-            {report.skipped ? <p>跳过 {report.skipped} 个（data URI、无法定位的相对路径等）。</p> : null}
-            {report.failedUrls?.length ? (
-              <ul style={{ paddingLeft: 20, wordBreak: 'break-all' }}>
-                {report.failedUrls.map((u) => (
-                  <li key={u}>{u}</li>
-                ))}
-              </ul>
-            ) : null}
-            <p style={{ color: '#888' }}>压缩包里的「导出说明.md」有完整清单。</p>
+            {outcome.lines.map((line: string) => (
+              <p key={line}>{line}</p>
+            ))}
           </div>
         ),
       });
-    } else {
-      message.success(
-        report.hasMdz
-          ? `已导出：${(report.entries || []).join('、')}（图片 ${report.packedImages || 0} 张）`
-          : `已导出 ${(report.entries || [])[0] || 'Markdown'}（这篇文章没有图片，所以没有 .mdz）`,
-      );
+      return true;
     }
+    Modal.info({
+      title: outcome.title,
+      width: 560,
+      content: (
+        <div>
+          {outcome.lines.map((line: string) => (
+            <p key={line}>{line}</p>
+          ))}
+          {outcome.failedUrls?.length ? (
+            <ul style={{ paddingLeft: 20, wordBreak: 'break-all' }}>
+              {outcome.failedUrls.map((u: string) => (
+                <li key={u}>{u}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ),
+    });
     return true;
   } catch (err: any) {
     message.error(err?.message || '导出失败！');

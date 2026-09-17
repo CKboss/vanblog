@@ -18,6 +18,8 @@ import {
 import { getPathname } from '@/services/van-blog/getPathname';
 import { parseMarkdownFile } from '@/services/van-blog/parseMarkdownFile';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { EXPORT_FORMATS } = require('@/services/van-blog/exportFormats');
 import { describeScheduledTag, isScheduled } from '@/services/van-blog/schedule';
 import { formatDateTime } from '@/services/van-blog/formatTime';
 import { useCacheState } from '@/services/van-blog/useCacheState';
@@ -274,10 +276,16 @@ export default function () {
   };
   // 每次渲染都把最新的 handleSave 放进 ref（热键监听器只注册一次，见文件顶部）
   handleSaveRef.current = handleSave;
-  const handleExport = async () => {
+  // format: 'md' | 'mdz' | 'zip'（不传 = zip = 老行为）
+  const handleExport = async (format) => {
     // 关于页没有文章 id，走 raw：直接把当前编辑器内容交给服务端打包
     if (type == 'about') {
-      await downloadMarkdownExport({ type: 'raw', title: currObj?.title || '关于', content: value });
+      await downloadMarkdownExport({
+        type: 'raw',
+        title: currObj?.title || '关于',
+        content: value,
+        format,
+      });
       return;
     }
     if (!currObj?.id) {
@@ -290,6 +298,7 @@ export default function () {
       type: type == 'draft' ? 'draft' : 'article',
       title: currObj?.title,
       content: value,
+      format,
     });
   };
   const handleImport = async (file) => {
@@ -375,7 +384,14 @@ export default function () {
         {
           key: 'exportBtn',
           label: `导出${typeMap[type]}`,
-          onClick: handleExport,
+          // ⚠️ 子菜单而不是单个 onClick：以前点这里**永远**得到一个外层 zip，
+          // 想要一个能直接拖进 Typora 的 .md 还得先解包。
+          children: EXPORT_FORMATS.map((f) => ({
+            key: `export-${f.key}`,
+            label: f.label,
+            title: f.hint,
+            onClick: () => handleExport(f.key),
+          })),
         },
         type != 'draft'
           ? {

@@ -22,10 +22,15 @@ import { MarkdownExportProvider } from 'src/provider/export/markdownExport.provi
 /**
  * 文章 / 草稿导出。
  *
- * 产物是一个 zip，里面：
- * - `<标题>.md`   原样导出（图片链接仍指向站点）
- * - `<标题>.mdz`  有图片时才有：zip 包 = 链接改成相对路径的 md + `<标题>.assets/` 图片目录
- * - `导出说明.md` 有跳过 / 抓取失败的图片时才有
+ * `format`（可选，默认 `zip` = 一直以来的行为）决定回来的是哪一个文件：
+ * - `zip`：外层 zip，里面是 `<标题>.md`（原样）+ `<标题>.mdz`（有图片时才有）+ `导出说明.md`（有跳过/失败时才有）
+ * - `md`：**只要那一份原样 md**（图片链接仍指向站点）。⚠️ 服务端此时**完全不抓图**，
+ *   所以既快也不碰外链（少一分 SSRF 面）
+ * - `mdz`：只要 Typora 风格的图片包（相对路径 md + `<标题>.assets/`）。
+ *   正文里没有可打包的图片时回 **400** 并说清原因 —— 静默改发 md 会让人以为拿到了图片包
+ *
+ * 三种格式都带 `X-Export-Report` 头（前端据此告诉用户识别到几个图片引用、打了几张、
+ * 跳过/失败几个），也都在发完之后删掉临时目录。
  */
 @ApiTags('export')
 @UseGuards(...AdminGuard)
@@ -38,11 +43,34 @@ export class ExportController {
 
   @Post('markdown')
   async exportMarkdown(
-    @Body() body: { id?: number | string; type?: string; title?: string; content?: string },
+    @Body()
+    body: {
+      id?: number | string;
+      type?: string;
+      title?: string;
+      content?: string;
+      format?: string;
+    },
     @Res() res: Response,
   ) {
     const type = body?.type === 'draft' ? 'draft' : body?.type === 'raw' ? 'raw' : 'article';
     const id = body?.id;
+    // ⚠️ 未知格式**明确报错**，不要"顺手回落到 zip"：调用方写错字段名时，
+    // 静默给一个压缩包比给一句 400 难查得多（前端还会按错的格式命名文件）。
+    const rawFormat = body?.format;
+    const format: 'zip' | 'md' | 'mdz' =
+      rawFormat === undefined || rawFormat === null || rawFormat === ''
+        ? 'zip'
+        : rawFormat === 'md' || rawFormat === 'mdz' || rawFormat === 'zip'
+          ? rawFormat
+          : null as any;
+    if (rawFormat !== undefined && rawFormat !== null && rawFormat !== '' && !format) {
+      res.status(400).json({
+        statusCode: 400,
+        message: `不支持的导出格式：${String(rawFormat).slice(0, 40)}（只支持 md / mdz / zip）`,
+      });
+      return;
+    }
     // raw 模式（编辑器未保存内容 / 关于页）不需要 id，但必须有正文
     if (type === 'raw') {
       if (typeof body?.content !== 'string') {
@@ -58,6 +86,7 @@ export class ExportController {
       type,
       title: body?.title,
       content: body?.content,
+      format,
     });
 
     const { report } = built;
@@ -76,6 +105,9 @@ export class ExportController {
           failed: report.failed.length,
           failedUrls: report.failed.slice(0, 5).map((item) => item.url),
           hasMdz: report.hasMdz,
+          // 前端靠它区分"这个格式本来就不含图片"与"想打包但失败了"
+          assetsPacked: report.assetsPacked,
+          format,
           entries: report.entries,
         }),
       ),
@@ -83,12 +115,36 @@ export class ExportController {
     // 走 umi 代理/跨域时前端才读得到自定义头
     res.setHeader('Access-Control-Expose-Headers', 'X-Export-Report, Content-Disposition');
 
-    res.download(built.zipPath, built.fileName, (err) => {
+    // mdz 但正文里没有可打包的图片：说清楚，而不是静默改发 md
+    if (format === 'mdz' && !built.mdzPath) {
+      res.status(400).json({
+        statusCode: 400,
+        message:
+          '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
+      });
+      fs.rmSync(built.tmpDir, { recursive: true, force: true });
+      return;
+    }
+
+    const target =
+      format === 'md' ? built.mdPath : format === 'mdz' ? built.mdzPath : built.zipPath;
+    if (!target) {
+      // 理论上到不了这里；真到了也不要留垃圾
+      res.status(500).json({ statusCode: 500, message: '导出产物生成失败' });
+      fs.rmSync(built.tmpDir, { recursive: true, force: true });
+      return;
+    }
+    if (format === 'md') {
+      // .md 用文本类型：浏览器能预览，命令行 curl 下来也不会被当成二进制
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    }
+
+    res.download(target, built.fileName, (err) => {
       if (err) {
-        this.logger.error(`导出下载失败：${err?.message}`);
+        this.logger.error(`导出下载失败（format=${format}）：${err?.message}`);
       }
-      // 临时目录（含 .mdz 与外层 zip）发完就删，别留在 /tmp 里
-      fs.rmSync(path.dirname(built.zipPath), { recursive: true, force: true });
+      // 临时目录发完就删，别留在 /tmp 里（三种格式都要删）
+      fs.rmSync(built.tmpDir, { recursive: true, force: true });
     });
   }
 

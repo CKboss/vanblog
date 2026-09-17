@@ -45,11 +45,25 @@ export interface ExportReport {
   failed: { url: string; reason: string }[];
   hasMdz: boolean;
   entries: string[];
+  /**
+   * 本次导出**有没有真的去打包图片**。
+   * `format='md'` 时是 false —— 那种格式的图片链接本来就指向站点，抓图纯属浪费，
+   * 还会白白扩大 SSRF 面（外链抓取要走 `assertSafeRemoteUrl`）。
+   * ⚠️ 前端要按这个字段决定文案：false 时 `packedImages=0` 不代表"打包失败"，
+   * 而是"这个格式根本不含图片"，不能弹「有图片没打进包」。
+   */
+  assetsPacked: boolean;
 }
 
 export interface BuiltExport {
-  /** 待下载的 zip 绝对路径（控制器发完要删） */
-  zipPath: string;
+  /** 外层 zip（只有 format='zip' 时才生成 —— 其它格式不该为用不到的产物付打包成本） */
+  zipPath?: string;
+  /** 原样 md（format='md' 时是待下载的产物；图片链接仍指向站点） */
+  mdPath?: string;
+  /** Typora 风格图片包（format='mdz' 时是待下载的产物；正文没有可打包图片时不存在） */
+  mdzPath?: string;
+  /** 临时目录：控制器把文件发完之后整个删掉（发哪个格式都要删，别留在 /tmp） */
+  tmpDir: string;
   fileName: string;
   report: ExportReport;
 }
@@ -113,9 +127,17 @@ export class MarkdownExportProvider {
     /** 编辑器里可以带未保存的内容来导出，所见即所得 */
     title?: string;
     content?: string;
+    /**
+     * 产物格式，默认 `zip`（= 一直以来的行为：外层 zip 里装原样 md + 有图才有的 mdz + 导出说明）。
+     * - `md`：只要那一份原样 md，**完全不抓图**（快，且不碰外链）
+     * - `mdz`：只要 Typora 风格的图片包；正文没有可打包图片时 `mdzPath` 为空，由控制器回 400 说清楚
+     */
+    format?: 'zip' | 'md' | 'mdz';
   }): Promise<BuiltExport> {
     const type: 'article' | 'draft' | 'raw' =
       input.type === 'draft' ? 'draft' : input.type === 'raw' ? 'raw' : 'article';
+    const format: 'zip' | 'md' | 'mdz' =
+      input.format === 'md' ? 'md' : input.format === 'mdz' ? 'mdz' : 'zip';
     const id = input.id ?? 0;
     // raw：不查库，调用方（编辑器 / 关于页）直接把内容给过来
     const plain: any =
@@ -141,6 +163,7 @@ export class MarkdownExportProvider {
       exportedAt: new Date().toISOString(),
       baseName,
       imageRefs: 0,
+      assetsPacked: format !== 'md',
       localImages: 0,
       remoteImages: 0,
       packedImages: 0,
@@ -153,6 +176,9 @@ export class MarkdownExportProvider {
     // 收集图片：同一 url 只处理一次，但改写时所有出现位置都会替换
     const refs: ImageRef[] = extractImageRefs(content);
     const byUrl = new Map<string, ImageRef>();
+    // ⚠️ 去重表**照常建**：`report.imageRefs` 由它算出来，前端要靠这个数字解释
+    // "识别到 N 个图片引用，但你选的 .md 格式不含图片"。第一版把跳过放在这里，
+    // 结果 imageRefs 变成 0，用户看到的就成了"这篇文章没有图片"—— 那是错的。
     for (const ref of refs) {
       if (!byUrl.has(ref.url)) {
         byUrl.set(ref.url, ref);
@@ -165,7 +191,9 @@ export class MarkdownExportProvider {
     const mapping = new Map<string, string>();
     const assetEntries: ZipEntry[] = [];
 
-    for (const [url] of byUrl) {
+    // 真正抓图/拷图的循环才是要跳过的那一个：format='md' 时图片链接本来就指向站点，
+    // 抓图纯属白做功，而外链抓取还要过 SSRF 校验 —— 少一次网络请求就少一分风险面。
+    for (const [url] of format === 'md' ? new Map<string, ImageRef>() : byUrl) {
       const classified: ClassifiedImage = classifyImageUrl(url, baseUrl);
       if (classified.kind === 'skip') {
         report.skipped.push({ url, reason: classified.reason || '跳过' });
@@ -237,12 +265,42 @@ export class MarkdownExportProvider {
         report.entries.push('导出说明.md');
       }
 
+      // md / mdz：把单个文件也落到临时目录里，控制器直接发它，不必先打外层 zip 再让前端解包
+      let mdPath: string | undefined;
+      let mdzPath: string | undefined;
+      if (format !== 'zip') {
+        if (format === 'md') {
+          mdPath = path.join(tmpDir, `${baseName}.md`);
+          fs.writeFileSync(mdPath, mdOriginal, 'utf8');
+          report.entries.push(`${baseName}.md`);
+        } else {
+          // mdz 只在上真的有图片时才存在（assetEntries 为空 ⇒ 没有 mdz，交给控制器回 400）
+          const candidate = path.join(tmpDir, `${baseName}.mdz`);
+          if (fs.existsSync(candidate)) {
+            mdzPath = candidate;
+          }
+        }
+      }
+
+      if (format !== 'zip') {
+        this.logger.log(
+          `导出${type === 'draft' ? '草稿' : type === 'raw' ? '编辑器内容' : '文章'} #${id}《${title}》为 .${format}：图片 ${report.packedImages} 张`,
+        );
+        return {
+          mdPath,
+          mdzPath,
+          tmpDir,
+          fileName: format === 'md' ? `${baseName}.md` : `${baseName}.mdz`,
+          report,
+        };
+      }
+
       const zipPath = path.join(tmpDir, `${baseName}-markdown.zip`);
       await writeZip(outerEntries, zipPath);
       this.logger.log(
         `导出${type === 'draft' ? '草稿' : type === 'raw' ? '编辑器内容' : '文章'} #${id}《${title}》：图片 ${report.packedImages} 张（本地 ${report.localImages} / 外链 ${report.remoteImages}），失败 ${report.failed.length}`,
       );
-      return { zipPath, fileName: `${baseName}-markdown.zip`, report };
+      return { zipPath, tmpDir, fileName: `${baseName}-markdown.zip`, report };
     } catch (err) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       throw err;

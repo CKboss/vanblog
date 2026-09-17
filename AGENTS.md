@@ -5608,13 +5608,103 @@ title-anchor 数: 11 | 页面里 .katex 总数: 0
 - ⚠️ 一条要记住的教训：**带 `continue-on-error` 的步骤在 API 里显示 `success`** ⇒
   "步骤绿了"不等于"测试过了"，真相只在 artifact 里。我上一轮就是靠步骤颜色误判过一次。
 
+### 7.59 文章导出可选格式（md / mdz / zip），不再是"永远一个压缩包"
+
+用户原话：「文章导出时提供一个下拉选项，是导出 md 还是 mdz，而不是每次都导出一个压缩包」。
+
+#### 改之前的形状（以及一个既有的不一致）
+
+`POST /api/admin/export/markdown` **永远**回一个外层 zip：里面是原样 `<标题>.md` +
+有图才有的 `<标题>.mdz`（Typora 风格：相对路径 md + `<标题>.assets/`）+ 有跳过/失败图片才有的 `导出说明.md`。
+想要一个能直接拖进 Typora/Obsidian 的 `.md`，必须先解包。
+⚠️ 顺带查出一个既有的不一致：**批量导出走的是完全另一条路** —— `services/van-blog/batch.ts` 在**浏览器端**
+用 `parseObjToMarkdown` 把每篇转成 md 直接下载，不经过服务端、不含图片。也就是说"单篇导出永远是 zip、
+批量导出永远是裸 md"，两边既不一致也没得选。本轮**不动批量那条**（它本来就满足"不要压缩包"），
+只在文档里写清两条路的区别，免得下一个人以为是同一个实现。
+
+#### 服务端
+
+`build()` 多了 `format?: 'zip'|'md'|'mdz'`（**默认 `zip` = 一直以来的行为**，所以老调用点与老前端零改动）。
+`BuiltExport` 从只有 `zipPath` 变成 `{zipPath?, mdPath?, mdzPath?, tmpDir, fileName, report}` ——
+⚠️ 加 `tmpDir` 是因为清理逻辑原来写的是 `path.dirname(built.zipPath)`，只对 zip 那条路径负责；
+现在三种格式发完都要删临时目录。
+
+两个刻意的设计决定：
+
+1. **选 `md` 时完全不抓图**。这种格式的图片链接本来就指向站点，抓图/拷图是白做的功，
+   而外链抓取还要过 `assertSafeRemoteUrl`（SSRF 校验）—— **少一次网络请求就少一分风险面**。
+   ⚠️ 但**跳过的位置很关键，第一版放错了**：我最初把跳过加在"按 URL 去重"那个循环上，
+   结果 `report.imageRefs` 变成 0（它是由去重表 `byUrl.size` 算出来的），
+   用户看到的就成了"这篇文章没有图片" —— 那是**错的**，而且前端要靠这个数字解释
+   "识别到 N 个图片引用，但你选的 .md 格式不含图片"。正确的位置是后面那个真正抓图的循环
+   `for (const [url] of byUrl)`。**教训：跳过一段工作时，先确认这段工作有没有"顺手"产出别人依赖的统计量。**
+2. **选 `mdz` 但这篇没有可打包图片时回 400**（「这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 ——
+   请改选 Markdown (.md)」），**不静默改发 .md**：用户明确选了带图包，拿到一个不含图的文件却没有任何提示，
+   比一句报错难查得多。同理，**未知格式也明确 400**（`不支持的导出格式：pdf（只支持 md / mdz / zip）`），
+   不回落到 zip —— 调用方写错字段名时，静默给个压缩包是最难查的那种失败。
+
+`X-Export-Report` 三种格式都带，并新增两个字段：`assetsPacked`（本次到底有没有去打包图片）与 `format`。
+⚠️ `assetsPacked` 是给前端用来**区分"这个格式本来就不含图片"与"想打包但失败了"**的 ——
+少了它，选 .md 导出带图文章会弹出「导出完成，但有图片没打进包」，看着像出了错。
+
+#### 前端（antd 4.24）
+
+- 新增纯模块 `services/van-blog/exportFormats.js`：格式清单（每项带一句**代价说明**）、
+  `normalizeExportFormat`（只认三个值，其它一律回落 zip = 老行为）、`fallbackFileName`、
+  `loadingText`（⚠️ `.md` 不能说"正在打包"，它根本不打包）、`describeExportOutcome`
+  （按格式决定弹什么：`.md` 且有图片引用 → info「已导出 Markdown（不含图片）」并告诉用户想要图片该选 .mdz；
+  zip/mdz 有失败或跳过 → 原来的 warn；**zip/mdz 且这篇没有图片 → 解释"所以没有 .mdz"**）。
+  全是纯函数，`node:test` 直接跑，不需要 DOM。
+- 新增共用组件 `components/ExportFormatDropdown`（antd 4 的 `overlay` + `<Menu>` 写法，
+  ⚠️ **不是** antd 5 的 `menu={{items}}` —— 在 4.24 上会静默不渲染），文章列表与草稿列表的行内「导出」都用它，
+  每一项下面直接显示那句代价说明（选错格式的代价要在**选的那一刻**就看得见，而不是下载完才发现）。
+- 编辑器里那个菜单项改成**三项子菜单**（`children: EXPORT_FORMATS.map(...)`），`handleExport(format)` 收下格式；
+  raw 模式（关于页 / 未保存内容）同样带 format。
+  ⚠️ 这里有个容易写错的点：原来菜单项是 `onClick: handleExport`，加了参数之后**必须**写成
+  `onClick: () => handleExport(f.key)`，否则会把**事件对象**当 format 传进去
+  （`normalizeExportFormat` 会把它回落成 zip，于是不报错、但格式永远是错的）—— 有钉子守着。
+- ⚠️ **迁移时差点弄丢一条既有行为**：原 `exportMarkdown.tsx` 里有"这篇文章没有图片，所以没有 `.mdz`"的解释分支，
+  我按范围替换那段结果报告逻辑时把它一起换掉了；是既有测试 `markdownExport.test.js` 的钉子
+  （`assert.match(helper, /这篇文章没有图片，所以没有 \.mdz/)`）把它捞回来的。
+  **教训：重构一段逻辑时，先看清这段里有没有"顺带承担的用户可见文案"，而钉子要跟着文案搬到新家而不是删掉。**
+
+#### 验证
+
+- 服务端：新 spec `markdownExportFormat.spec.ts`（9 条）覆盖 md（含"**完全没调用 axios**"这条反证 ——
+  如果哪天有人把跳过条件去掉，这条会红）、mdz（解包后确有 `<标题>.md` + 2 个 `.assets/` 成员）、
+  mdz 无图（`mdzPath` 为空）、zip 与不传 format 的产物**逐条目相同**（向后兼容），
+  以及控制器四个分支（未知格式 400 且**不会去 build**、md 用 `text/markdown` 发且发完删临时目录、
+  mdz 无图 400 且**绝不静默改发别的文件**、不传 format 仍发 zip）。
+  ⚠️ 量具坑：外链图片的假响应必须是**真的 PNG 字节** —— `fetchRemote` 会校验"内容真的是图片"，
+  随便一段 `Buffer.from('remote-bytes')` 会被判失败，于是 `packedImages` 少 1，看着像实现错了。
+- 既有 37 条 markdownExport 用例全绿（向后兼容）；server tsc 0 错。
+- 前端：新 `exportFormats.test.js`（10 条，含反证：`onClick: handleExport` 不许残留、antd5 的 `menu={{` 不许出现、
+  旧的内联 problems 判断必须已移入纯函数）；`markdownExport.test.js` 的 4 处钉子按新行为更新
+  （行内导出 → 下拉组件、文案搬到纯函数、清理改成 `built.tmpDir`、编辑器 raw 调用改成多行且带 format）。
+  admin `node --test` **498/498**（原 488 ⇒ +10）。
+- **admin e2e 111 passed（2.5 分钟）** —— 它会用 mock API **真渲染**文章列表、草稿列表与编辑器，
+  所以"操作列换成下拉之后列表还能正常渲染"是被真浏览器验过的，不是只看源码。
+- **活体端到端**（dev 栈 :3000，临时 token 用完已撤销并复验 401）：
+  同一篇带 1 张图的文章 —— `format=md` → 201 / **9,908 B** / `text/markdown; charset=utf-8` /
+  文件名 `…分析.md` / 报告 `refs=1 packed=0 assetsPacked=false`；`format=mdz` → 201 / **46,587 B** / `.mdz` /
+  `packed=1 assetsPacked=true`；不传 format → 201 / **51,257 B** / `application/zip` / `…-markdown.zip`；
+  `format=mdz` 打一篇**无图**文章 → **400** 且消息说清"请改选 Markdown (.md)"；`format=pdf` → **400**「不支持的导出格式」。
+  ⇒ 只要文字时选 .md **少下载 5 倍**。
+- ⚠️ **未验证**：下拉在真浏览器里的**视觉呈现**（本机没有登录态的浏览器会话可驱动；
+  接线是由 MFSU 的解析日志 `[MFSU] require('@/services/van-blog/exportFormats') found in …/ExportFormatDropdown`、
+  `p__Article.js` 里 4 处组件引用、`p__Editor.js` 里 2 处 `EXPORT_FORMATS`、webpack 编译成功、
+  以及上面那 111 条 e2e 一起证明的）。
+  ⚠️ 另一个量法坑：umi 的 dev server 对**不存在的**资产路径会返回 index.html（200 + HTML 壳），
+  所以"curl 到 200 且有几 KB"不等于拿到了那个 chunk —— 我按猜的名字取 chunk，grep 了半天 HTML。
+  要确认真实 chunk 名，别去 umi.js 里正则匹配（那里面的字符串是**匹配用的正则**，不是文件名）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果）
 
 | 套件 | 结果 |
 |---|---|
 | server `jest` | 1275 用例：**1274 绿 + 1 个既有失败**（`utils/watermark.spec.ts` 字体用例；并发压满机器时另有 2 条负载敏感用例会假红，单独跑 43/43 全绿）；套件 132 个 |
 | website `vitest run` | 77 文件 / 748 用例全绿 |
-| admin `node --test tests/unit` | **123 套件 / 465 用例全绿**（⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
+| admin `node --test tests/unit` | **498 用例全绿**（⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
 | admin e2e（playwright） | **111 用例全绿**（37 个 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 | `scripts/tests/*.test.sh`（一键脚本/部署） | 22 文件 / 1109 条断言全绿（§7.41 之后；此前为 19 文件 / 859 条） |
 | admin playwright e2e | 未跑（没装浏览器） |
