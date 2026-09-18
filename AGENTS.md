@@ -513,7 +513,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
    要杀就先 `pgrep` 出 pid，排除 `$$` 与 `$PPID` 再 `kill`。
 5. **mongod 的 `--dbpath/--logpath/--pidfilepath` 必须绝对路径**（`--fork` 之后 cwd 会变）。
 6. **不要把 pnpm store 放到别的文件系统**（跨设备无法硬链接，装包会退化成全量复制）。
-7. **不要执行 `pnpm release` / `pnpm release-doc`**（作者的发版工具，会改版本号并提交），
+7. **不要执行 `pnpm release`**（作者的 standard-version 发版工具，会改版本号并提交），
    也**不要把 `.github/workflows/release.yml`（上游那份）加回来**：它由 `v*` tag 触发，
    会登录 DockerHub 推 `mereith/van-blog:<版本>`、`curl -X POST $VERSIONURL` 往作者的版本服务器上报、
    还有两步 `kubectl set image deployment/van-blog …` **部署到作者的集群** —— 在 fork 里这些
@@ -524,6 +524,14 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
    `doc*` / `test*` tag 仍然是作者专用的（分别触发 deploy-docs 与 test 工作流），不要推。
    `v*` tag 现在可以推：它会同时触发 `release-fork`（建 Release）与 `publish-ghcr`
    （构建并推 `latest` + `<tag>` 两个镜像 tag）。
+   ⚠️ **更正（2026-09-18，§7.68）**：这一条以前把 `pnpm release-doc` 一起禁了，理由是"会改版本号并提交"。
+   那个理由当时成立 —— `scripts/releaseDoc.js` 结尾是
+   `git add . && git commit && git tag doc-<v> && git push --follow-tags origin master && git push --tags`
+   （`git add .` 吞掉整个工作树，而 `origin` 是**上游**）。**这个雷已经拆了**：现在它只生成
+   `docs/changelog.md` + bump `doc-version`，然后把该由人敲的命令打印出来（含"推 `ckboss` 不要推 `origin`"）。
+   ⇒ **`pnpm release-doc` 现在是安全且必须的**：改完根 `CHANGELOG.md` 就要重跑它，否则文档站的
+   「更新日志」页会继续给读者看旧内容（它就这样悄悄过期了三年，停在 2023 年的 `0.54.0`）。
+   重跑后要跑 `docs-links`（生成器会改写相对链接，正是为了这条守卫）。
 8. **不要往 `origin`（上游 `Mereithhh/vanblog`）push**，只推自己的 fork。
 9. **不要把 FCV 升到 7.0**，除非明确需要且接受不可回退。
 10. **不要把 `vanblog_dev/`、`.tools/` 里的东西提交进 git**：前者可能含真实博客数据
@@ -1713,6 +1721,15 @@ JSON-LD 的 `inLanguage` 一致。⚠️ 改 `_document.tsx` 时踩了个坑：*
   与本分支不完全一致」。
 - 上游地址集中在文件顶部的常量里，换分支/换仓库只改一处。
 
+⚠️ **更正（2026-09-18，§7.68 / `a212e7b8`）**：上面"保留官方文档站、上游更新日志、官方交流群"已经**不成立** —— 
+这三个入口本轮**删掉**了。理由是装了**这个**镜像的人被送去一份不描述他软件的文档、
+以及一个回答不了本版本默认值的"官方交流群"。**保留**的是：致谢 @Mereithhh、作者链接、GPL-3.0 声明、
+打赏入口（改成指向中文 README 的对应小节 —— 上游 README 现在以英文为主，原来的 `#打赏` 是**死锚点**，
+读者会被丢到页首），外加一句诚实的话说明"那些上游资源描述的是官方镜像，本版本的问题请提到本仓库"。
+守卫 `aboutPage.test.js` 8 → **11** 条，新增三条 absence 断言（三个上游入口的 URL 与常量不许回来、
+旧仓库名 `Mereithhh/van-blog` 不许回来、分支名不作为文本渲染），全部打在**剥注释后**的源码上，
+并且每条都对着 `git show HEAD:About.tsx` 验过"旧代码会红"（其中一条因为"三轮 bug"少个空格而空转，已修）。
+
 **前台页脚同样处理**（`components/Footer/index.tsx`）：`Powered By VanBlog <version>`
 以前链到上游文档站，访客点进去看到的说明与本站实际行为对不上（评论系统、皮肤、SEO 全不一样）。
 现在链到 `https://github.com/CKboss/vanblog`，后面跟一个 ` · 增强修改版` 链到 README 的
@@ -2039,6 +2056,9 @@ admin 用 `${VAN_BLOG_ADMIN_BUILD_SCRIPT}`、两档脚本都存在且都带堆�
 **`.github/workflows/publish-ghcr.yml`**：**手动 dispatch** 或**推 `v*` tag** 时构建并推到
 `ghcr.io/ckboss/vanblog`，标签有 `latest` / `dev-dsh` / `dev-dsh-<短sha>`（tag 事件则用 tag 名，
 并且 tag 也会更新 `latest`）。
+⚠️ 2026-09-18 起 **`./vanblog.sh` 的默认镜像 ref 是 `:latest`**（此前是 `:dev-dsh`，见下面的"副作用"），
+所以"哪个标签是默认"这件事以脚本里 `VANBLOG_IMAGE_REF=` 那一行为准（`scripts/vanblog.sh:65`），
+文档与安装页也一律以**发布号**为推荐（§7.68）。
 
 ⚠️ **不在 push 分支时自动构建**：一次构建要 20-40 分钟 runner，而这个分支一天能推几十次
 （大多是文档与测试），每次 push 都发一版既浪费额度也没意义。要自动化的话，
@@ -2046,6 +2066,11 @@ workflow 里已经留好了注释掉的 `branches:` + `paths:` 过滤段（只�
 `Dockerfile`、`pnpm-lock.yaml`、`package.json` 变化时构建），放开即可。
 **副作用要说清楚**：`dev-dsh` 标签对应的是**最后一次手动发版时的代码**，不等于分支最新提交；
 想装最新提交得用 `VANBLOG_INSTALL_MODE=source ./vanblog.sh` 自己构建。
+⚠️ **这个副作用在 2026-09-18 被实测咬了一口（§7.68）**：当时 `dev-dsh` 是 `dev-dsh@b31a1ec`（2026-09-13），
+而发布版 `v2026.9.2` = `latest` 是 2026-09-17 构建的 —— **`dev-dsh` 比发布版旧 4 天**，
+而 `./vanblog.sh update` 的默认 ref 恰恰是 `dev-dsh`，于是"升级"会把站点**静默回滚**两个版本
+（连带撤掉那一轮的三个未认证洞修复）。现在默认 ref 改成 `ghcr.io/ckboss/vanblog:latest`，
+`update <发布号>` 可以钉死版本，并且停容器前会打印版本对比、对 `downgrade`/`unprovable` 拦一道。
 - **只用 `secrets.GITHUB_TOKEN`**（`permissions: packages: write`），不需要配任何 secret ——
   上游的 `release.yml` 用的是作者的 `DOCKERHUB_USERNAME/TOKEN`，fork 里没有，跑不起来。
 - 默认**只出 `linux/amd64`**：arm64 要 QEMU 模拟，next/umi 的生产构建慢好几倍还容易超时。
@@ -2123,6 +2148,12 @@ image 模式拉不到就直接失败不偷偷构建、source 模式一次 pull �
    同理，`vanblog-update.test.sh` 里"down 失败时没 pull"这条旧不变式也失效了：
    现在 pull 在 down 之前，先拉镜像对运行中的容器无影响，真正要保证的是
    **down 失败就不再 up**（不把栈停在半死不活的状态）。
+   ⚠️ **2026-09-18 又加了一步（§7.68）**：`prepare/pull` 成功之后、`down` **之前**，
+   现在还要读新镜像里的 `VAN_BLOG_VERSION` 并打印 `> 当前运行: X → 新镜像: Y`，
+   由 `version_change_kind` 判 `same`/`newer`/`downgrade`/`unprovable`/`unknown`；
+   `downgrade` 与 `unprovable` 会红字 WARN + 要人确认（取消就 `return 0`，旧容器原样跑着）。
+   顺序钉子也跟着加了一条：**版本对比必须在 `down` 之前**（否则"拦降级"这件事在站点已经停了之后才发生，
+   等于没拦）。`vanblog-update.test.sh` 因此从 41 条涨到 **98** 条。
 2. **拉取失败要按原因给具体下一步**：`pull_fork_image` 把 `docker pull` 的输出接住再打印，
    然后按关键字分流 —— `denied/unauthorized/authentication` → 提示 ghcr 包默认 private，
    给出 package 设置页地址与"Change visibility → Public"；`no matching manifest`/`not found`
@@ -2889,16 +2920,24 @@ articles 59、nativecomments 3、waline.Comment 3、statics 93、16 篇有封面
 **菜单**现在长这样（编号全部保持不变 —— 文档和用户都按编号操作，`6` 是更新、`20` 是更新脚本）：
 
 ```
-    VanBlog 管理脚本 v0.5.0
-    本分支  ：CKboss/vanblog 分支 dev/dsh（上游项目 Mereithhh/van-blog）
+    VanBlog 管理脚本 v0.6.0
+    仓库    ：CKboss/vanblog 分支 dev/dsh（原始项目 Mereithhh/vanblog）
     安装目录：/var/vanblog    数据目录：/var/vanblog/data
-    镜像来源：ghcr.io/ckboss/vanblog:dev-dsh
+    镜像来源：ghcr.io/ckboss/vanblog:latest
               模式 auto：先拉镜像，拉不到再从源码构建
     状态    ：● 运行中  http://<域名或服务器IP>:80（后台在后面加 /admin）
     ── 安装与日常 ──   1 安装/重装  2 修改配置  3/4/5 启停重启  6 更新  7 日志  13 状态总览
+                       （6 下面还有一行提示：菜单这项用默认标签，要升到指定发布版请敲
+                        ./vanblog.sh update v2026.9.2）
     ── 备份与恢复 ──   10 备份（整站备份）  11 恢复（不停服）  12 重置整站（新机器推荐）
     ── 其它 ──         8 卸载（不删备份）  9 重置 https  20 更新脚本  30 使用说明  0 退出
 ```
+
+⚠️ **更正（2026-09-18，§7.68）**：上面这段样例以前写的是 `v0.5.0`、
+`本分支  ：… （上游项目 Mereithhh/van-blog）`、`镜像来源：ghcr.io/ckboss/vanblog:dev-dsh`，三处都过期了 —— 
+脚本版本早就是 `v0.6.0`；门头那行现在写"仓库 … （原始项目 **Mereithhh/vanblog**）"
+（上游改过名，带连字符的旧名只靠 301 活着）；默认镜像 ref 也从 `:dev-dsh` 改成了 `:latest`
+（`dev-dsh` 实测比发布版旧 4 天，照旧默认会静默降级）。菜单编号仍然一个没动。
 
 新加的**状态行**（`menu_state_line`）会探一次 `<宿主机端口>/api/public/meta`（超时 3 秒），
 三种结果：`未安装`（没有编排文件）/ `● 运行中` + 访问地址 / `○ 接口不通` + 端口与状态码 +
@@ -6512,17 +6551,299 @@ cleanup 里 `volume rm`，`SMOKE_KEEP=1` 时把拆卷的命令一起打印出来
 
 见 §7.39（2026-09-17 本机实测：server 0 失败、website/admin/脚本全绿、docs 守卫与两套 tsc 全过）。
 
-### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-17 本机实测）
+### 7.68 发布号成为一等公民：`update <版本>`、默认镜像改 `latest`、降级拦截，以及一个被 mock 取值形状掩盖掉的真 bug
+
+本轮 8 个提交（`git log v2026.9.2..HEAD`，截至 `5d438e50`：58 文件 +2456/−455）：`bbc12712`（脚本）、
+`a395e00e`（速查表 + 文档站配置）、`6721751a`（安装页）、`7f3a72bd`（升级页）、`d798b30f`（去对照叙事）、
+`a212e7b8`（后台/镜像内文案）、`8b6c8dd3`（文档站更新日志）、`5d438e50`（把本轮记进根 CHANGELOG 的
+Unreleased 并**立刻重跑 `release-doc` 重新生成镜像页** —— 也就是下面"教训 4"那条规矩当轮就照做了）。
+
+#### 缘起：默认升级路径会把站点**静默回滚**两个版本
+
+站长的原话是"我不知道一行命令就会更新镜像，因为 `./vanblog.sh update` 不带环境变量到不了 v2026.9.2"。
+对着 registry 实测：`v2026.9.2` 与 `latest` 是同一个 digest、构建于 2026-09-17
+（镜像里 `VAN_BLOG_VERSION=v2026.9.2@23f2e9c`），而**`dev-dsh` 是 `dev-dsh@b31a1ec`、2026-09-13** —— 
+比发布版**旧 4 天**。而 `update` 的默认 ref 恰恰是 `dev-dsh`（`publish-ghcr` 的 `branches:` 触发是注释掉的，
+所以 `dev-dsh` 只在有人手动 dispatch 时才动，§7.26 已经写过这个副作用）。
+后果不是"装到旧一点"，而是**把本轮三个未认证洞的修复一起撤掉**，且全程一句提示都没有。
+
+#### 三处改动（`bbc12712`）
+
+1. **默认 ref → `ghcr.io/ckboss/vanblog:latest`**（`scripts/vanblog.sh:65`，实测数字与两个逃生口就写在赋值旁边），
+   `VANBLOG_FORK_IMAGE` 改成从它派生（`${VANBLOG_IMAGE_REF%%:*}`，`:70`）—— 仓库路径不再写两遍，
+   而且**指镜像加速地址的人 `update <tag>` 也会拼到自己的镜像上**。连带对齐：`install`/`config` 选的镜像、
+   `ensure_compose_image`（现在会**明说**它改了 `image:` 以及怎么钉版，不再静默改）、
+   拉取失败提示里两处硬编码的 `:dev-dsh`。菜单编号一个没动（12/13/20/30 有守卫钉着）。
+2. **`./vanblog.sh update <版本号 | 完整镜像 ref>`**：`v2026.9.2`、`dev-dsh-abc1234` 拼到镜像名后面；
+   含 `/` 或 `://` 的参数**原样透传**（私有 registry / 镜像加速）；`update 0`（老的"跳过菜单"写法）与
+   不带参数的菜单调用照旧。参数打错**直接拒绝**：前导 `-`、或给了两个版本参数 ⇒ **退出码 2 + 用法**，
+   绝不静默按默认升级；`VANBLOG_USE_UPSTREAM_IMAGE=true` 时带版本号也** outright 拒绝**并说原因
+   （上游没有这个 tag，构建出来也拉不到）。解析复用既有链路
+   `VANBLOG_IMAGE_REF → prepare_vanblog_image → Docker_IMG → ensure_compose_image`。
+   动手之前还会用 `describe_image_ref` 把"这次会得到什么"说清楚，**按标签形状给不同的话**：
+   `v2026.9.2` → "发布号：内容固定不变，随时说得清装的是哪一版"；`latest` → "最近一次发布构建；
+   ⚠️ 会随下次发版移动，不是钉死的版本"；`dev-dsh` → "分支最近一次**手动**构建；⚠️ push 不触发构建，
+   可能比发布版旧"；`dev-dsh-<sha>` → "某一次具体的分支构建，内容固定"。
+   （风险写在**选择的那一刻**，而不是等用户被降级之后再解释。）
+   ⚠️ **已知局限（本轮未加守卫，也未在真机验证）**：`VANBLOG_INSTALL_MODE=source`
+   （或 `auto` 拉不到镜像而退回源码构建）时，版本参数**不影响产物** ——
+   `prepare_vanblog_image` 只在 `image` 与 `auto`-拉取成功这两条分支上把 `Docker_IMG` 设成
+   `VANBLOG_IMAGE_REF`，源码构建走的是 `build_from_source` 打的本地 tag（`VANBLOG_IMAGE_TAG`）。
+   此时前面那行"目标镜像"会与真正的产物不一致，要靠后面的 `> 将使用镜像 <Docker_IMG>` 纠正。
+   **要钉死版本就用镜像模式**（默认 `auto` 即可）。
+3. **停容器之前先比版本**：`get_image_version` 从**拉下来的镜像**里读 `VAN_BLOG_VERSION`，
+   旧容器还在跑时就打印 `> 当前运行: X → 新镜像: Y`；`version_change_kind` 给五种判定
+   （`same` / `newer` / `downgrade` / `unprovable` / `unknown`，语义写在 `:387-394` 的注释里）。
+   关键的一条：**"当前是发布号、目标是会移动的标签或读不出版本"= `unprovable`，按可能降级处理** —— 
+   这正是 `dev-dsh` 的形状（两个字符串无论怎么比都得不出"更旧"，只能靠"目标不是发布号"识别）。
+   `downgrade` 与 `unprovable` 都打红 WARN 并给出**确切**的 `update <发布号>` 命令，tty 上要人确认；
+   非交互与 `VANBLOG_ASSUME_YES=1` 继续执行但 **WARN 照打**；取消则旧容器原样跑着（`return 0`，不 down）。
+
+#### ⚠️ 一个真 bug：`BASH_REMATCH[3]` 与 `[4]` 的差别，把"真降级"变成"版本没有变化"
+
+`version_release_numbers` 原来打印的是 `BASH_REMATCH[3]` —— 那是 `(\.([0-9]+))` **整个组，带着那个点** —— 
+而不是内层的 `[4]`。于是 `v2026.9.1` vs `v2026.9.2` 走到第三段比较时触发
+`((: .2: syntax error: operand expected`，bash 只往 stderr 打一行、把该子表达式当 **0**，
+判定就成了 `same` ⇒ **真降级被当成"版本没有变化"，绕过 WARN 与确认直接重启**。
+
+而当时 `vanblog-update.test.sh` 的 **86 条断言全绿**：mock 用的是 `0.53.0` vs `0.54.0`，
+在**第二段**就分出胜负，永远走不到写错的第三段。本项目真实的版本号形状是 `v2026.9.x` —— 
+**恰恰只有第三段能区分**。
+
+两条教训（比这个 bug 本身值钱）：
+
+1. **比较 / 排序 / 解析类逻辑的测试，必须用产品真实会出现的取值形状**，不能只用"好算"的那一种。
+   取值形状决定了测试**能不能走到**出错的那条分支；86 条全绿证明的是"第二段比较是对的"。
+   最好再加一条**真环境实测**：本轮是用 podman 当真镜像源 + 真版本号跑
+   `version_change_kind` 与 `get_image_version`，实测 9.1→9.2 `newer`、9.2→9.1 `downgrade`、
+   9.2→10.1 `newer`、2026.12.3→2027.1.1 `newer`、同发布号不同 sha `same`、发布号→`dev-dsh` `unprovable`、
+   `get_image_version vanblog:local-test` → `local@8ffa391a`。
+2. **"证明不了"必须与"相等"分成两个判定**。修法除了改成 `[4]`，还加了一条兜底防线
+   （`version_change_kind:417-428`）：**六个数字必须都是纯整数**，否则一律 `unprovable`，永远不是 `same`。
+   理由写在源码注释里：`(( ))` 遇到 `.2` 这种值只往 stderr 打一行然后把子表达式当 0，
+   于是"解析失败"会伪装成"版本相同"，而 `same` 恰好是**不拦**的分支。
+   ⇒ 任何"解析 + 比较"的判定，都要让**解析失败**落到"需要人确认"那一侧，宁可多问一次，不可静默放行。
+
+守卫 41 → **98** 条（`vanblog-update.test.sh`）：上面 12 个真版本号形状、三条负向对照
+（默认值不许悄悄回到 `dev-dsh`；真升级不许被判成降级；拒绝路径不许打印"目标镜像" —— 证明它连镜像都没准备）、
+顺序钉子（版本对比必须发生在 `down` 之前）、以及剥注释后的 absence 断言。
+`vanblog-source-install.test.sh` 里 4 条钉旧默认值的断言改钉 `latest`，并把实测数字写在旁边。
+`docs/.vuepress/public/vanblog.sh` 逐字节重新同步（有 6 条守卫比对这两份副本）。
+全量 `scripts/tests/*.test.sh`：**24 文件 / 1825 条断言 / 0 失败**。
+顺带把脚本里最后三处 `Mereithhh/van-blog`（上游**旧**仓库名，只靠 301 活着）改成现名，署名保留。
+
+#### ⚠️ 教训 3：文档站的配置也是文档（`a395e00e`）
+
+`docs/.vuepress/theme.ts` 还是按"这是上游的文档站"配着的，而这些错**构建一个都不会报**：
+
+- `repo` 是上游**旧名** `Mereithhh/van-blog` ⇒ 每一页的「编辑此页」都指向**别人仓库的错误分支**
+  （想改文档的人会改到上游去）。现在 `repo: 'CKboss/vanblog'` + `docsBranch: 'dev/dsh'`，
+  并且**在构建产物里核过**链接解析成 `github.com/CKboss/vanblog/edit/dev/dsh/docs/…`。
+- navbar 的 API 项指向**上游演示站**的 `/swagger` —— 那是另一个版本，而本项目默认把 swagger 关着（§7.65）。
+  现在指本站 `/reference/api.html`。
+- Demo 与交流群（上游作者的演示站与 QQ 群）从 navbar 移除：读者不该被送去一个**回答不了本版本问题**的渠道；
+  署名留在 README 与后台「关于」（那才是它该在的地方）。
+- **Giscus 评论插件配的是 `mereithhh/vanblog-comment`，即上游作者的讨论仓库** —— 文档站一旦部署，
+  读者的评论会全部落进别人仓库。本 fork 既没开 Discussions 也没有 Pages（两条都用 API 核过），
+  所以整块删掉，并写清"将来要恢复需要填哪四项"。
+- ⚠️ `hostname` 仍是上游域名，**故意留着并加了注释**：它只影响一个我们并不发布的站点的
+  sitemap / `og:url`，而凭空编一个 hostname 是另一种错。
+
+**教训**：这类问题只有**去构建产物里 grep** 才发现（本轮就是这么发现的），构建日志永远绿。
+凡是"配置里写着别人家的仓库/域名/渠道"，都要当成文档缺陷处理。
+
+#### 新页面：`docs/guide/cheatsheet.md`（208 行）
+
+给"不想读架构、只想把事办成"的站长：十张 **你想做什么｜敲这条命令｜看到什么算成功** 的表 —— 
+前置条件、全新安装、**升到指定发布版**、备份、证明备份能恢复、恢复/换机器、回滚、
+出问题时先敲的三条命令、镜像标签怎么选、数据都在哪。每条命令与每段引用的脚本输出都对着
+`scripts/vanblog.sh` **grep 核过**（子命令、菜单编号 1/6/13、`install-cron` 的参数、
+`整站备份成功` / `VanBlog 更新并重启成功` / `版本：旧 -> 新` / `状态 ：● 运行中 …` / `RESULT: PASS …` 这些字符串、
+health 端点 503 的含义、token 在 Local Storage 的位置、compose 模板挂的数据目录）。
+升级那张表以 `./vanblog.sh update v2026.9.2` 打头，并明写 `dev-dsh` 是**最后一次手动分支构建**、
+可能比发布版旧（实测 2026-09-13 对发布版的 2026-09-17）—— 因为这个错配正是静默降级的来源。
+接进站点：navbar 放在「快速上手」与「功能」之间，`order: 1.5` 让侧边栏读作
+get-started → cheatsheet → init → backup → update，README 与 `get-started.md` 各一条指路。
+
+#### 安装页与升级页围绕**发布号**重写（`6721751a`、`7f3a72bd`）
+
+此前五个部署页都推荐 `ghcr.io/ckboss/vanblog:dev-dsh`，新人照文档装会装到比发布版更旧的构建且**无从察觉**。
+现在例子一律钉发布号，并给一张大白话的标签阶梯：
+
+| 标签 | 是什么 | 什么时候用 |
+| --- | --- | --- |
+| `v2026.9.2` | 固定发布版，永不移动 | **推荐** |
+| `latest` | 最近一次发布构建（脚本默认） | 可以，但每次发版会移动 |
+| `dev-dsh` | 最后一次**手动**分支构建 | 只有明确要跟开发时 |
+| `dev-dsh-<sha>` | 某一次具体构建 | 回滚 |
+
+逐页补的是"非专家会卡住的地方"：docker 页先讲"选标签"、加三条会咬人的事实（不是每次 push 都重建镜像、
+钉发布号才可复现、只有 amd64）并说清在哪敲命令、成功长什么样（`docker-compose ps` + 
+`curl /api/public/health` → `"status":"ok"`）、起不来先查什么（80 被占、mongo 需要 AVX）；
+宝塔页把模板镜像换成我们的、`EMAIL` 例子不再是上游作者的地址、mongo 4.4.16 → 7.0（含 AVX 例外与
+"已有数据目录不要跨大版本"）、补 `depends_on` + mongo healthcheck + `version: '3.4'` 及两者为什么长这样；
+群晖页新增 **ARM 警告**（镜像只有 amd64，附 `uname -m` 怎么查）、可复制文本替代三张显示上游镜像名与旧标签的截图、
+`docker save` / 从文件添加的命令、初始化密钥在哪、成功判据；K8s 页解释**会移动的标签在集群里是有害的**
+（spec 不变 ⇒ 不滚动、各节点分别拉 ⇒ 版本劈叉、回滚点不明）、给 `imagePullPolicy` 对照表
+（钉版 → `IfNotPresent`，移动 → `Always`）、两条初始化路径含 `kubectl logs | grep 初始化密钥`；
+直接部署页把镜像体积 860 MB 改成 ~890 MB 并说明原因（那 ~32 MB 字体，§7.66）、点名五个构建阶段、
+需求表新增**系统字体**一行（裸机没有它时可见水印会 WARN 后跳过，附 Debian 与 Alpine 的安装命令）；
+本地构建页那个手搓 `curl -X POST /api/admin/init` 的方子**已经不管用了**（匿名初始化现在要 setup key ⇒ 400），
+换成 `./vanblog.sh drill <归档> --image … --http-port 18080 --keep`，并写清密钥在哪、怎么显式关掉这个要求；
+坑表新增三行（`--link` 是 docker 专有、bind mount 会留下删不掉的 root 映射目录、init 接口的 400，
+都是 §7.67 本轮实测出来的）；发布那节改成"推 `v*` tag"与"手动 dispatch"各自产出哪些标签的表，
+外加两个坑（**CHANGELOG 小节名必须与 tag 一致**，否则发布说明会回落到 Unreleased；只有 amd64）；
+ghcr 那句提示改成"包是 public"（实测匿名取 manifest 返回 200）。
+升级页（`guide/update.md` 与 `faq/update.md`）开头就是那一行命令与"哪三行输出能证明它成功了"，
+并记下新的降级/`unprovable` WARN 语义与 `VANBLOG_ASSUME_YES=1` 仍会打 WARN；回滚顺序改成
+`update <旧发布号>` 优先、手改 `image:` 其次、恢复数据最后。
+
+`docker-compose-template.yml` 补上了缺失的**初始化那一段**：零接触（`VANBLOG_ADMIN_USER` / `_PASSWORD` /
+`_PASSWORD_FILE`）与 setup key（`VANBLOG_INIT_REQUIRE_SETUP_KEY`、密钥文件在哪、每 10 分钟重印、初始化后删除）。
+这两个是当前发布版的门面功能，而模板从来没提过 —— 这也正是 `local-build.md` 一开始引用那个变量、
+`docs-consistency` 就红的原因（该守卫要求部署文档里出现的每个 `VANBLOG_*` 在脚本或模板里存在）。
+
+#### 去掉"上游 vs 本分支"的对照叙事（`d798b30f`，18 个文件；该提交共动 19 个）
+
+站长裁定：两边已经差得够远，逐页写"上游怎样、我们怎样"不再描述任何真实的东西，
+只是给读者加一层要自己翻译的负担。留下的是 GPL-3.0 要求的**署名**，以及少数几处读者确实需要知道
+"上游文档站描述的是另一个产品"的地方。顺手修掉的过期事实（都对着树核过）：
+`contribution.md` 说 Node 18 / pnpm 7（实际 **Node 24 + pnpm 8.11.0**，`./dev-env.sh bootstrap`）、
+`node:18-alpine` + `vips-dev`/`fftw-dev` + `sharp@0.32.6`（实际全阶段 `node:24-alpine`、sharp `^0.35`
+走 musl 预编译 optionalDependencies，"必须 ≥0.33"的理由保留）、`-t mereith/van-blog:test`
+（本地构建脚本打的是 `vanblog:local-test`）、FAQ 首页那个"提 issue"链接是**死的**
+（`Mereithhh/van-blog/issues/new/choose` —— 带连字符的是旧名，404）。
+`reference/api.md` 不再拿上游演示站做对照，例子改成打读者自己的站
+（`curl -sS http://127.0.0.1/api/public/article/28`）并说清什么算好答案；
+`reference/env.md` 不再把 `VANBLOG_IMAGE_REF` 的默认值写死在散文里（**默认值归脚本所有，而且本轮刚改过**，
+页面改成让读者看 `./vanblog.sh status`）；`features/image-storage.md` 的水印/字体段从"历史叙述"改成
+**可操作的诊断**（"看到满屏小方块 = 你在用没装字体的镜像，升级"）。
+还修了 4 个渲染 bug：`:::` 容器**不能嵌套**（内层会提前关掉外层，把后半页甩出框外并在产物里留一个字面 `:::`）—— 
+`draft.md` 的 `:::` 粘在图片行尾、`overview.md` 把 `:::info … ::: 正文` 写在一行导致整页进框、
+`visitor.md` 的 info 框没闭合、5 个容器标题里的反引号/粗体被字面渲染；`custom-nav.md` 是唯一一页把
+`:::` 漏进 `og:description` 的，现在没有了；`article.md` 有一个畸形的 `!修改文章信息[]()`。
+⚠️ 顺带清掉 `features/comment.md` 的 webhook 示例载荷里**原作者的私人信息**（真实 QQ 邮箱、昵称、
+开发站域名、内网地址），换成 `example.com` 与 RFC 5737 文档地址段，载荷其余部分一个字节没动。
+**故意保留**：`docs/changelog.md`（生成的历史记录）、解释"某个行为为什么存在"的上游 issue 链接
+（逐个核过可达：`Mereithhh/vanblog/issues/*` → 200）、以及署名与许可文本。
+
+#### 后台与镜像内的文案：两类问题（`a212e7b8`）
+
+**一类是文案与代码互相矛盾**（每处都先对着实现核过再改）：
+
+- ISR 模式的 tooltip 说默认是"延时自动"并建议 4 核以上用它 —— 默认是 **onDemand**（`setting.provider.ts`），
+  而**同一个表单**往下 5 行就写着 onDemand；也没有任何代码或文档把模式与核数绑在一起。
+- 登录限次说"默认关、3 次/60 秒" —— 实际是**未显式关闭即开启**（`login.guard.ts`：只有字面 false 才关）、
+  阈值 **5 次/300 秒**、按可信客户端 IP 分桶（3/60 是 settings provider 里的遗留兜底）。
+  ⚠️ 这个字段在 UI 上是**禁用**的，所以文案是用户唯一能拿到的信息。
+- 「关于」页一边写"本后台跑的是 dev/dsh 分支"、一边版本徽标是 `v2026.9.2@23f2e9c`（发布镜像）—— 
+  两句自相矛盾。改成"以上面的版本号徽标为准"，**纯文案，不加运行时逻辑**。
+  同页的"三轮加固"（早过了）与"安装器从源码构建"（实际是拉镜像、拉不到才构建）也改了，
+  并且轮数不再写成会过期的数字。
+- `entrypoint.sh` 的横幅声称镜像"按 dev/dsh 分支构建"（发布镜像是按 **tag** 构建的）；
+  `Version(Env): ${VAN_BLOG_VERSION}` 空值会打印成空 ⇒ 加 `(未设置)` 兜底
+  （在 sh、dash 与镜像里真实的 busybox sh 三种 shell 下都验过）。
+- 打赏链接指向上游 README 的 `#打赏` 锚点，而那个 README 现在以英文为主 ⇒ **死锚点**，读者被丢到页首。
+  改指中文 README 的对应小节（两个 URL 都核过 200）。
+
+**另一类是把本产品的用户送去上游**：「关于」页那三个入口（上游文档站、上游更新日志、上游 QQ 群）删掉；
+署名、作者链接、GPL-3.0 声明、打赏**全部保留**，并留一句诚实的话说明"那些上游资源描述的是官方镜像，
+本版本的问题请提到本仓库"。理由很具体：装了**这个**镜像的人被送去一份不描述他软件的文档，
+以及一个回答不了我们默认值的"官方交流群"。三处示例域名 `blog-demo.mereith.com` 换成
+`https://blog.example.com`；⚠️ 17 处 `location.hostname == 'blog-demo.mereith.com'` 的演示站判断
+**是行为不是文案，一个没动**。
+
+**antd 纯文本里的字面 Markdown**：5 处 `**` 被原样显示（`Backup.jsx`、水印 tooltip、`restoreCore.js`、
+`setupKeyCore.js` ×2、`accessPassword.js`），每处都先确认渲染路径确实是纯文本
+（`<li>{hint}</li>` 与 Modal 的 `content`），并保证被锚点钉住的短语**逐字节不变**（所以一条锚点都不用改）；
+`setupKeyCore.js` 里留了一句注释说明原因，防止它回来。
+
+**`packages/cli`**：README 原来是 3 行占位（"这个包放一些 CLI 工具"）。现在写清里面**只有** `resetHttps.js`、
+在镜像里落 `/app/cli/`、它做什么（删掉 `type:'https'` 设置并 DELETE caddy 2019 的 `listener_wrappers`，
+404 当作已关）、默认的 `mongodb://mongo:27017` 只在容器内解析、以及它是 `./vanblog.sh reset_https` 的
+**第 4 级**兜底（⚠️ 是**下划线**，`reset-https` 这个子命令不存在；前三级是 `mongo` / `mongosh` / 内联 node）。
+`package.json` 删掉指向不存在文件的 `"main": "index.js"`（也没有任何东西 require 这个包），
+`license` 从 `ISC` 改成 `GPL-3.0`，与根 LICENSE 与镜像的 `org.opencontainers.image.licenses` 标签一致。
+
+`aboutPage.test.js` 8 → **11** 条：继续钉署名/许可/作者链接/打赏/本仓库的 issue 与文档入口，
+新增"三个上游入口的 URL 与常量不许回来"、"旧仓库名不许回来"、"分支名不作为文本渲染"。
+⚠️ absence 断言一律打在**剥注释后**的源码上（本仓库已被"断言匹配到解释为什么删掉的那段注释"咬过五次，
+§7.67），而且每条新的 absence 断言都对着 `git show HEAD:About.tsx` 验过"旧代码会红" —— 
+其中一条因为"三轮 bug"少一个空格而**空转**（永远匹配不上，所以永远绿），已修正则。
+admin `node --test`：148 套件 / **582** 用例全绿（本机复跑确认，原 579）。
+
+#### ⚠️ 教训 4：生成的镜像文件会悄悄过期（`8b6c8dd3`）
+
+`docs/changelog.md` 是根 `CHANGELOG.md` 的**生成镜像**，而它从 2023 年起就没再生成过：
+文档站「更新日志」页停在 `0.54.0 (2023-06-27)`，**241,359 B** 对根文件的 429 KB，
+`v2026.09` / `v2026.9.1` / `v2026.9.2` **一个都没有** —— 读者被拿三年前的更新日志当现状看。
+已重新生成（**428,878 B**，`Unreleased` → `v2026.9.2` → … → `0.4.0`），`doc-version` 0.12.175 → 0.12.178。
+
+而 `scripts/releaseDoc.js` **不能直接跑，也不该再能那样跑**。它结尾是：
+
+```
+git add . && git commit -m 'docs: 更新文档' && git tag doc-<v> \
+  && git push --follow-tags origin master && git push --tags
+```
+
+一行三个雷：`git add .` 把**整个工作树**提交进去（包括你还没想提交的东西）；`origin` 是**上游**仓库
+（本项目的规矩是推 fork、绝不推 origin、绝不在上游打 tag，§8）；以及"生成一个页面"顺手打 tag 并推远端。
+现在它只生成文件 + bump `doc-version`，然后**打印**该由人来敲的命令（含"推 `ckboss` 不要推 `origin`"的警告）。
+
+生成器还必须先改写链接：根 CHANGELOG 的相对链接是按**仓库根**写的，直接拷进 `docs/` 会得到
+`docs/docs/guide/update.md`、`docs/README.md`、`docs/AGENTS.md` 这类死路径。规则是
+`docs/x` → `./x`，其它仓库根 `.md` → GitHub 绝对地址；改完与手工生成**逐字节对拍一致**，`docs-links` 5/5。
+
+两条守卫豁免，理由都是"**历史记录不是用户指南**"：
+
+- `docs/changelog.md` 免掉"文档里出现的 `VANBLOG_*` 必须在代码里存在"这条检查 —— 镜像里合法地记着
+  `VANBLOG_WATERMARK_FONT_MIN_PX` / `_MAX_PX` 曾被删除（它们登记在 `WATERMARK_ENV` 里却没人读，§7.66）。
+  **为了讨好守卫去改历史是本末倒置**，何况根 CHANGELOG 从来也不在扫描范围内。
+- `删卷` 加入"允许与 `down -v` 同行的警告措辞" —— 镜像里那条是"原来还在教 `docker-compose down -v`，
+  那会删卷"，是**记录一次修复**，不是一条指令。
+
+同一个提交还修了我自己写错的一个环境变量名：`VANBLOG_SEARCH_REALDB_URL` **不存在**，
+真开关是 `VANBLOG_SEARCH_REALDB=1` + `VANBLOG_SEARCH_REALDB_PORT` / `_DBPATH`（三处：workflow 注释、
+CHANGELOG 条目、本手册 §7.67）。抓到它的正是 `docs-consistency` —— 也就是当初让"死的水印变量"
+没法发布的那条检查（§7.66）。**守卫的价值不在于它拦下多少，而在于它拦下的是"你以为不会错"的那类。**
+
+**规矩记在这里**：改完根 `CHANGELOG.md` 就要重跑 `pnpm release-doc`（它现在不会替你 commit/push 了），
+重跑后要跑 `docs-links`（链接改写就是为它做的），并检查 `doc-version` 有没有跟着 bump。
+⚠️ 目前**没有任何守卫**检查 `docs/changelog.md` 与根 CHANGELOG 是否同步 —— 这正是它能悄悄过期三年的原因。
+
+#### 测试与未量
+
+本轮实测（写本节时**亲自复跑**的）：admin `node --test tests/unit` **148 套件 / 582 用例 / 0 失败**；
+`docs-links` **5/5**（站内链接 `a395e00e` 时 366 条、写本节时 415 条 —— 条数随文档增删而变，看 `failed=0`）。
+引自本轮提交信息（写本节时未复跑）：`scripts/tests/*.test.sh` **24 文件 / 1825 条 / 0 失败**
+（`vanblog-update` 41 → 98）、`docs-consistency` **52/0**、`docs:build` **65 页**；
+server `jest` 与 website `vitest` 沿用 §7.39 的数字（本轮未改这两个包的代码）。
+
+**未量 / 未跑（如实记）**：
+
+- `update` 的**真机拉镜像路径**没跑过：本机没有 root、docker daemon 连不上、rootless podman 在沙箱里
+  起不来（§7.67）。覆盖靠 98 条 mock 断言 + "真镜像 + 真版本号"的 `get_image_version` /
+  `version_change_kind` 单测（后者是真跑了 podman 里的 `vanblog:local-test`）。
+- 文档站**没有部署**（本 fork 无 Pages），所有产物层面的核对都是在本地构建产物里 grep 做的。
+- 后台文案改动的**浏览器观感**未验证（本机无 playwright 浏览器）：只验到"4 个 `.tsx` 零诊断转译通过 +
+  运行中的 umi dev 重编译成功 + 11 条源码级钉子"。
+- ⚠️ 负载敏感用例的既有提醒在本轮又应验一次：`utils/logRotate.spec.ts`（8 条用例）在"三个后台任务 +
+  文档构建"并发时假红过一次，单独跑 8/8 全绿、串行重跑全量 0 失败。可疑的是第 92 行那条
+  "单份文件有上界（`maxBytes + 64KB + 5KB` 余量）"—— 并发下有写入在飞时余量可能不够。
+  **判读基线时先串行重跑，别急着改产品代码。**
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-18 本机实测）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等 |
-| website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748） |
-| admin `node --test tests/unit` | **148 套件 / 579 用例全绿**（原 498 用例；⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1768 条断言全绿**（原 22 文件 / 1109 条；本轮 drill 587、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
-| 文档守卫 | `docs-links` **5/5**、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条本轮才第一次真的跑起来，实扫 **73 份**文档，见 §7.67）、`cd docs && pnpm run docs:build` **65 页成功** |
+| server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s，2026-09-17 实测；**2026-09-18 那轮没动 server 代码**，数字沿用）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
+| website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748；2026-09-17 实测，2026-09-18 那轮没动 website 代码） |
+| admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-18 复跑确认；原 498 → 579 → 582，本轮 `aboutPage.test.js` 8 → 11，§7.68。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1825 条断言全绿**（原 22 文件 / 1109 条；2026-09-18：vanblog-update **41 → 98**、drill 587、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
+| 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功** |
 | 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
 | 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
+| ⚠️ 2026-09-18 那轮**没跑/跑不了**的 | ① `./vanblog.sh update` 的**真机拉镜像路径**（本机无 root、docker daemon 连不上、rootless podman 在沙箱里起不来）⇒ 靠 `vanblog-update.test.sh` 98 条 mock + "真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测覆盖；② 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；③ 后台文案的**浏览器观感**（无 playwright 浏览器），只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子" |
 | admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
