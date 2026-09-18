@@ -2,7 +2,7 @@
 
 VanBlog 现在支持一键脚本部署了。经过测试，宝塔也可以通过一键脚本进行部署。
 
-建议您通过[一键脚本部署](../guide/get-started.md#部署方式)，这样后期可以通过脚本一键升级会方便一些。
+建议您通过[一键脚本部署](./get-started.md#部署方式)，这样后期可以通过脚本一键升级会方便一些。
 
 如果您想通过图形化部署，请看下文。
 
@@ -26,7 +26,7 @@ docker pull ghcr.io/ckboss/vanblog:v2026.9.2
 
 拉不动（超时、`denied`）通常是服务器连不上 ghcr。两条出路：换一台能访问的机器
 `docker pull` + `docker save -o vanblog.tar ghcr.io/ckboss/vanblog:v2026.9.2`，把 tar 传到服务器再
-`docker load -i vanblog.tar`；或者干脆用上面的[一键脚本](../guide/get-started.md#部署方式)
+`docker load -i vanblog.tar`；或者干脆用上面的[一键脚本](./get-started.md#部署方式)
 （它拉不到镜像时会自动退回源码构建）。
 
 :::

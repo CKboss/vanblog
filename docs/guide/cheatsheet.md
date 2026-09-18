@@ -24,7 +24,7 @@ order: 1.5
 | --- | --- |
 | 一台 Linux 服务器 | 能上网就行，1 核 1G 也够（默认是**下载现成镜像**，不在你机器上编译） |
 | root 或 sudo 权限 | 脚本要写 `/var/vanblog`、要管容器 |
-| Docker | **没装也没关系**：脚本会问你「是否安装 Docker」，回答 `y` 它自己装 |
+| Docker | **没装也能装**：脚本发现没有 docker 时会**直接装**（不打断问你），装完继续。⚠️ 它是用 root 把 `get.docker.com`（国内线路是 `vanblog.mereith.com/docker.sh`）的脚本管道进 bash 执行的；不放心就先自己装好 docker 再跑脚本 |
 | 域名（可选） | 只有想用 `https://你的域名` 才需要；先用 `http://服务器IP` 完全可以 |
 
 ::: warning 数据都在你自己的服务器上
@@ -40,9 +40,10 @@ order: 1.5
 | --- | --- | --- |
 | 下载一键脚本 | `curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh` | 当前目录出现 `vanblog.sh`，且 `ls -l vanblog.sh` 里带 `x`（可执行） |
 | 打开菜单 | `./vanblog.sh` | 出现一个数字菜单（`1. 安装 / 重装 VanBlog` …） |
-| 开始安装 | 在菜单里输入 `1` 再回车 | 最后回到菜单，中间没有红色报错；没有 Docker 时会先问你装不装 |
-| 看它跑起来没有 | 菜单里输入 `13`（或退出后敲 `./vanblog.sh status`） | 有一行 `状态 ：● 运行中  http://<域名或服务器IP>:<端口>` |
-| 初始化站点 | 浏览器打开 `http://<服务器IP>/admin/init`，按向导填站点名和管理员账号密码 | 页面提示初始化成功，并跳到后台登录页 |
+| 开始安装 | 在菜单里输入 `1` 再回车 | 最后回到菜单，中间没有红色报错；机器上没有 docker 时它会**自己装**（不问你，见上一行） |
+| 看它跑起来没有 | 打开菜单 `./vanblog.sh`（**顶部**就有一行状态），或菜单里输入 `13`、或敲 `./vanblog.sh status` | 菜单顶部：`状态    ：● 运行中  http://<域名或服务器IP>:<端口>`；`13` / `status` 打的是状态总览，看 `站点接口  ：http://127.0.0.1:<端口> → 200` 这一行 |
+| 初始化站点 | 浏览器打开 `http://<服务器IP>/admin/init`，按向导填站点名和管理员账号密码 | 页面提示初始化成功，并跳到后台登录页。⚠️ **第一次提交可能被拒绝**并提示要「初始化密钥」—— 这是新版的默认保护，见下面那条 |
+| 填「初始化密钥」（第一次装会遇到） | 被拒绝后页面会出现「初始化密钥」输入框；用 `cat /var/vanblog/data/log/setup.key` 取密钥，**完整一行**粘进去再提交 | 提示初始化成功。密钥每次重启都会换，也在容器日志里（`grep 初始化密钥`），每 10 分钟重印一次 |
 | 登录后台 | 浏览器打开 `http://<服务器IP>/admin`，用刚设的账号密码登录 | 进得去后台首页 |
 
 - 向导里每一项填什么、初始化密钥是什么：见 [初始化](./init.md)。
@@ -149,7 +150,7 @@ scp root@<服务器IP>:/var/vanblog/data/log/vanblog-backups/vanblog-full-*.tar.
 | 用某份归档恢复当前站点（不停服） | `./vanblog.sh restore vanblog-full-20260918-031500.tar.zst` | 提示恢复完成；刷新前台能看到归档里的内容 |
 | 不知道归档叫什么名字 | `./vanblog.sh restore` | 列出可选的归档让你挑 |
 | **换新机器一步到位** | 在新机器上：`VANBLOG_RESTORE_FROM=/path/to/vanblog-full-20260918-031500.tar.zst ./vanblog.sh install` | 装完自动初始化 + 恢复 + 重启，最后逐项核对通过 |
-| 不开命令行，用浏览器恢复 | 全新站点打开 `http://<服务器IP>/admin/init`，用页面**最上方**「已有整站备份？直接恢复」那张卡片上传归档 | 上传完提示恢复成功，不用再填一遍向导 |
+| 不开命令行，用浏览器恢复 | 全新站点打开 `http://<服务器IP>/admin/init`，用页面**最上方**「已有整站备份？直接恢复」那张卡片上传归档 | 上传完提示恢复成功，不用再填一遍向导。⚠️ 这条接口同样默认要「初始化密钥」：第一次上传被拒绝后卡片里会出现密钥输入框，填 `setup.key` 的内容再传一次 |
 
 - 恢复会不会覆盖图片、恢复后要不要重启、跨版本恢复注意什么：见 [备份与迁移](./backup.md)。
 - 换机器 / 迁移的完整流程：见 [备份与迁移](./backup.md) 与 [部署常见问题](../faq/deploy.md)。
@@ -158,7 +159,7 @@ scp root@<服务器IP>:/var/vanblog/data/log/vanblog-backups/vanblog-full-*.tar.
 
 | 你想做什么 | 敲这条命令 | 看到什么算成功 |
 | --- | --- | --- |
-| 退回旧版本代码 | `./vanblog.sh update <旧版本号>`（例如 `./vanblog.sh update v2026.9.1`） | 打印 `版本：新 -> 旧`，页面恢复正常 |
+| 退回旧版本代码 | `./vanblog.sh update <旧版本号>`（例如 `./vanblog.sh update v2026.9.1`） | 先打红字 `⚠️⚠️ 这是**降级**` 并问 `确认继续? [y/N]` —— 输 `y` 才继续；成功后打印 `VanBlog 更新并重启成功` 与 `版本：<新> -> <旧>`。自动化场景加 `VANBLOG_ASSUME_YES=1`（WARN 照打，只是不阻塞） |
 | 同上的等价写法 | `VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:<旧版本号> ./vanblog.sh update` | 同上 |
 | 或者手改编排再重启 | 把 `/var/vanblog/docker-compose.yaml` 的 `image:` 改回旧标签，然后 `docker-compose pull && docker-compose down && docker-compose up -d` | 同上。⚠️ **不要加 `-v`**，那会删数据卷 |
 | 数据也要退回去 | `./vanblog.sh restore <升级前那份归档>` | 恢复完成，内容是备份时的样子 |
@@ -170,9 +171,9 @@ scp root@<服务器IP>:/var/vanblog/data/log/vanblog-backups/vanblog-full-*.tar.
 
 | 你想做什么 | 敲这条命令 | 怎么读结果 |
 | --- | --- | --- |
-| 看整体状态 | `./vanblog.sh status` | 有一行 `状态 ：● 运行中`；不是运行中就往下看日志 |
+| 看整体状态 | `./vanblog.sh status` | 看 `站点接口  ：… → 200`（不是 200 就往下看日志）、`编排镜像`（当前钉的版本）、`整站备份`（几份、最近三个）、`磁盘剩余` |
 | 看日志 | `./vanblog.sh log` | 找 `ERROR` / `WARN` 行，报障时把相关片段一起贴上 |
-| 看服务本身活着没 | `curl -s http://127.0.0.1/api/public/health` | 返回 JSON 且 `status` 正常 = 服务活着；**HTTP 503 = 数据库连不上** |
+| 看服务本身活着没 | `curl -s http://127.0.0.1/api/public/health` | 返回 JSON 且 `"status":"ok"` = 服务活着；**HTTP 503 + `"status":"degraded"` = 数据库连不上** |
 
 - 还是不行：见 [部署常见问题](../faq/deploy.md) 与 [升级常见问题](../faq/update.md)。
 - 提 issue 时请附上 `./vanblog.sh status` 的输出、日志片段，以及后台「关于」里的版本号。

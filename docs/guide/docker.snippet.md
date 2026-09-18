@@ -84,11 +84,11 @@ ghcr.io/ckboss/vanblog:v2026.9.2
    #    本项目按 mongo:7.0 实测，不要用 mongo:latest（8.x）。
    #    老机器 CPU 不支持 avx 的话，5.0+ 起不来，只能用 mongo:4.4.16。
 
-   # 内存小于 6GB 的机器建议**串行**构建（一次只跑一个重活），否则三个 stage 并发会 OOM：
-   for stage in admin_builder server_builder website_builder; do
+   # 内存小于 6GB 的机器建议**串行**构建（一次只跑一个重活），否则四个 builder 并发会 OOM：
+   for stage in admin_builder server_builder website_builder waline_builder; do
      docker build --target "$stage" . || break
    done
-   docker build -t vanblog:dev-dsh .   # 前三步命中缓存，只组装最终镜像
+   docker build -t vanblog:dev-dsh .   # 前面几步都命中缓存，这一步只组装最终镜像
    ```
 
    构建要 20–40 分钟，产物约 **890MB**（v2026.9.2 起镜像里装了系统字体
@@ -99,12 +99,16 @@ ghcr.io/ckboss/vanblog:v2026.9.2
 
 ### 1.安装依赖
 
-如果你没有安装 `docker` 和 `docker-compose`，可以通过以下命令一键安装：
+如果你没有安装 `docker` 和 `docker-compose`，用 Docker 官方的安装脚本最省事：
 
 ```bash
-curl -sSL https://get.daocloud.io/docker | sh
+curl -fsSL https://get.docker.com | sh
 systemctl enable --now docker
 ```
+
+国内网络拉不动就加镜像参数：`curl -fsSL https://get.docker.com | sh -s docker --mirror Aliyun`。
+（一键脚本检测到没有 docker 时走的正是这两条路之一：海外 `get.docker.com`、国内
+`vanblog.mereith.com/docker.sh` 配 `--mirror Aliyun`；⚠️ 它**不会问你**，直接用 root 装。）
 
 ::: tip
 

@@ -57,10 +57,12 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh
 
 升级时怎么选标签、怎么把版本钉住、怎么回滚，见 [升级](./update.md#升到指定发布版-一行命令)。
 
-**ghcr 的包默认是私有的**，如果 `docker pull` 报
-`denied`/`not found`，去 <https://github.com/CKboss/vanblog/pkgs/container/vanblog> →
-Package settings → Change visibility 改成 Public；国内拉 ghcr 慢的话，可以配镜像加速后用
-`VANBLOG_IMAGE_REF=<加速地址>/ckboss/vanblog:latest ./vanblog.sh`。
+本项目的 ghcr 包**是 public 的**，可以匿名 `docker pull`（实测匿名取 manifest 返回 200）。
+真的报 `denied` / `not found` 通常是三种情况：标签名打错（发布号长这样 `v2026.9.2`，区分大小写）、
+服务器连不上 ghcr（换网络，或配好镜像加速后用
+`VANBLOG_IMAGE_REF=<加速地址>/ckboss/vanblog:latest ./vanblog.sh`），或者包被改回了 private
+（维护者去 <https://github.com/CKboss/vanblog/pkgs/container/vanblog> → Package settings →
+Change visibility 改回 Public）。
 
 ## 源码构建（拉不到镜像时）
 
@@ -133,8 +135,9 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 :::
 
 数据都在安装目录里（默认 `/var/vanblog`）：`data/static` 图床与附件、`data/mongo` 数据库、
-`log` 日志（**整站备份归档也在 `log/vanblog-backups/`**，旁边是 `.manifest.json` 清单与
-`.sha256` 校验和；`install-cron` 的备份日志是 `log/vanblog-backup-cron.log`）、`caddy/` 证书与配置、
+`log` 日志（**整站备份归档也在 `log/vanblog-backups/`**，旁边可能有两个附属文件：
+`.manifest.json` 清单是 **server 导出时**写的、`.sha256` 校验和是**用脚本备份时**写的，
+拷归档去别处时把 `.sha256` 一起带上；`install-cron` 的备份日志是 `log/vanblog-backup-cron.log`）、`caddy/` 证书与配置、
 `docker-compose.yaml` 编排文件、`vanblog-cron.env`（`install-cron` 写的定时备份 token，0600）。
 备份/恢复/定时备份见 [备份与迁移](./backup.md)。
 

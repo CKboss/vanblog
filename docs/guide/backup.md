@@ -49,10 +49,15 @@ VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 ./vanblog.sh backup
 ./vanblog.sh backup
 ```
 
-::: warning 整站备份不含 caddy 证书
+::: warning 整站备份默认不含 caddy 证书
 
-归档里是**数据库全部集合 + waline 评论库 + 图床/附件/自定义页面**，不含 caddy 的证书与配置
-（那些在数据目录里，证书到期会自动重签，一般不用备）。要连证书一起备，用下面的 `--offline`。
+归档里是**数据库全部集合 + waline 评论库 + 图床/附件/自定义页面 + 主题**，默认**不含** caddy 的
+证书与数据目录（证书到期会自动重签，一般不用备）。确实想连证书一起备，两条路：
+
+- 给 server 打开「把 caddy 的证书/数据目录也打进归档」那个开关（默认关）。开了之后归档里会多一个
+  `./caddy` 段，恢复时一并还原；开关名与取值见
+  [环境变量 → 备份与恢复](../reference/env.md#备份与恢复)；
+- 或者用下面的 `--offline` 目录级快照，它连整个数据目录（含 `caddy/`）一起打包。
 
 :::
 
@@ -72,8 +77,14 @@ VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 ./vanblog.sh backup
 
 ### 这份归档还能用吗：verify 与 sha256
 
-server 导出的 manifest 里**没有校验和**（损坏要等到恢复解包时才由 zstd/xz/gzip 的 CRC 发现），
-所以脚本侧补了一层：
+归档自带校验：server 导出的清单（`manifest.json`）里有一个 `integrity` 块 —— **每个成员的 sha256 与字节数**、
+覆盖整张成员表的 **merkle root**、压缩流是否带帧校验和（zstd 显式加了 `--check`）、成员总数，
+还有一份与 `manifest.json` 逐字节相同的**双清单** `./MANIFEST.copy.json` 互为对照。
+默认就是开的，也可以显式关掉（开关名见 [环境变量 → 备份与恢复](../reference/env.md#备份与恢复)）。
+⚠️ **旧归档没有这个块**，此时成员级检查会**大声降级**（`drill` / `verify-deep` 会打一条 NOTE
+说明"这个结论不含逐成员比对"），绝不会把"没查"说成"查过且通过"。
+
+在这之上，脚本侧还补了一层宿主机能离线用的校验：
 
 - 凡是**经脚本**做的备份（`backup` 与 `backup --offline`），成功后都会在归档旁边写一个
   `<归档>.sha256`（格式同 `sha256sum` 输出）。把归档拷去别处（scp/U 盘/对象存储）时
@@ -117,6 +128,24 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 它依次做：探活 → **站点没初始化就用随机口令的临时账号自动初始化** → 登录拿 token →
 打印备份清单让你确认 → 恢复（含图床/附件）→ **重启容器**（让 server 重新读取恢复后的 JWT 密钥）→
 逐项核对（接口、站点名、首页、后台、robots、文章数）→ 打印站点地址与"用你原来的账号登录"。
+
+::: tip 全新站点也不用先走向导：初始化密钥脚本自己带
+
+未初始化站点的匿名初始化接口默认要求**初始化密钥**（`VANBLOG_INIT_REQUIRE_SETUP_KEY`，新版默认开，
+见 [初始化 → 初始化密钥](./init.md#初始化密钥setup-key)）。`reset` 与
+`VANBLOG_RESTORE_FROM=… ./vanblog.sh install` 都会自己去取，不需要你复制粘贴：
+
+1. 先读 `<数据目录>/log/setup.key` —— 编排把该目录挂到容器 `/var/log`，站点未初始化期间 server
+   一直写着这个 0600 文件，初始化成功后自己删掉；
+2. 读不到再从容器日志的「初始化密钥： 」那一行兜底（启动印一次，之后每
+   `VANBLOG_SETUP_KEY_REMIND_MINUTES`（默认 10）分钟重印）；
+3. 容器刚起、密钥还没写出来时会重试 `VANBLOG_SETUP_KEY_WAIT` 秒（默认 15，`0` = 只试一次）。
+
+密钥**不会回显**（提示只说长度），也不会出现在命令行里。真的两处都读不到（例如自定义过
+`VAN_BLOG_LOG`，日志目录不在 `<数据目录>/log`）时，脚本会明确报错并给出两条照做的取法；
+确实想关掉这道保护就给容器设 `VANBLOG_INIT_REQUIRE_SETUP_KEY=false` 再重试（公网不建议）。
+
+:::
 
 ```text
 > 站点是全新的，已用临时账号 reset-init 完成初始化（恢复成功后会被备份里的账号覆盖）
@@ -190,8 +219,11 @@ VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保�
 ```bash
 # /root/vanblog-cron.env（chmod 600）：
 #   export VANBLOG_ADMIN_TOKEN='<token>'
-0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup.cron.log 2>&1
+0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
 ```
+
+（日志文件名与 `install-cron` 写的 cron 行**用的是同一个**：`<数据目录>/log/vanblog-backup-cron.log`。
+手写成别的名字也能跑，只是排查时要多记一个路径。）
 
 建议再配一个每周校验（退出码非 0 就是有归档坏了，可接监控）：
 
@@ -215,7 +247,7 @@ VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保�
 ./vanblog.sh backup --keep 7
 
 # cron 里用环境变量（等价；token 的放法见上面 install-cron 一节，别写进 crontab 行）
-0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup.cron.log 2>&1
+0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
 ```
 
 几条边界，都是为了"宁可少删，不可多删"：
@@ -248,7 +280,7 @@ MongoDB 数据文件 `data/mongo`、日志 `log`（整站备份的归档也在�
 | --- | --- | --- |
 | 一致性 | server 运行中导出，一致 | 热备份不一致；`--consistent` 要停库 |
 | 跨版本恢复 | ✅ NDJSON，不绑 MongoDB 版本 | ❌ 换大版本 mongod 拒绝启动 |
-| 含 caddy 证书 | ❌ | ✅ |
+| 含 caddy 证书 | 默认 ❌（有开关可以把证书一起打进去，见上文） | ✅（整个数据目录都在里面） |
 | 需要站点在跑 | ✅（要调接口） | ❌ |
 | 恢复是否停服 | 不停 | 停 |
 

@@ -65,14 +65,15 @@ spec:
               containerPort: 443
               protocol: TCP
           env:
+            # 数据库连接串：换成你自己的 mongo 地址。
+            #   不带账号密码： mongodb://van.example.com:27017/vanBlog?authSource=admin
+            #   带账号密码：   mongodb://<用户名>:<密码>@van.example.com:27017/vanBlog?authSource=admin
+            # ⚠️ 密码里有 @ : / ? 这些字符时要 URL 转义，否则会被当成地址的一部分。
+            #    密码建议放 Secret，别明文写在 manifest 里。
             - name: VAN_BLOG_DATABASE_URL
-              value: >-
-                mongodb://some@some@van.example.com:27017/vanBlog?authSource=admin
-
-
+              value: 'mongodb://van.example.com:27017/vanBlog?authSource=admin'
             - name: EMAIL
-              value: >-
-                vanblog@example.com
+              value: 'vanblog@example.com'
 
             # ── 可选：零接触初始化（全新站点在监听前建好管理员，不走网页向导）──
             # 密码请放 Secret（VANBLOG_ADMIN_PASSWORD_FILE 指向挂载的文件路径，
@@ -144,8 +145,9 @@ kubectl logs -l app=van-blog --tail=50   # 看启动日志里有没有报错
 - **零接触初始化**（集群里最省事）：把上文注释掉的 `VANBLOG_ADMIN_USER` 与
   `VANBLOG_ADMIN_PASSWORD_FILE`（密码放 Secret）打开，站点在开始监听之前就建好管理员，
   根本不存在"未初始化"窗口，也就不需要初始化密钥。
-- **网页向导**：新版默认开启初始化保护，向导会要你填一个「初始化密钥」
-  （防止别人抢先初始化你的新站）。在集群里这样取：
+- **网页向导**：新版默认开启初始化保护。⚠️ 密钥输入框**不是一开始就有**：照常填完向导点提交，
+  第一次会被拒绝并提示需要「初始化密钥」（防止别人抢先初始化你的新站），**这时**页面才出现输入框。
+  在集群里这样取密钥：
 
   ```bash
   kubectl logs -l app=van-blog | grep '初始化密钥'
