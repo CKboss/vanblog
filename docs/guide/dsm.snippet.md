@@ -1,37 +1,66 @@
-首先安装 `Docker` 套件。
+首先安装 `Docker` 套件（有的 DSM 版本里它叫 `Container Manager`，界面差不多，下面按菜单名照着找就行）。
 
-::: warning 镜像选择
+::: danger 先看这一条：你的群晖是不是 ARM 机型
 
-下面按 `映像/从 URL 添加` 演示的是**上游官方镜像** `mereith/van-blog`。本 fork
-（`CKboss/vanblog`）的镜像在 `ghcr.io/ckboss/vanblog`（标签 `dev-dsh` / `v2026.9.2` 等，
-不含在上游镜像里的功能见 [快速上手](../guide/get-started.md)），从 URL 添加时填
-`ghcr.io/ckboss/vanblog` 即可；拉不动多半是因为 ghcr 包还是 private 或群晖直连 ghcr 太慢，
-可以先在能访问的机器上 `docker pull` + `docker save`，再用 `映像/新增/从文件添加` 导入。
-最省事的仍然是在 SSH 里跑[一键脚本](../guide/get-started.md#部署方式)。
+本项目的镜像**只发布了 linux/amd64**（x86，也就是 Intel / AMD 的 CPU）。
+不少入门级群晖是 ARM  CPU，那种机器**装不上这个镜像**（拉下来也起不来，或提示架构不匹配）。
+
+怎么确认：DSM 控制面板 → 信息中心，看"CPU 型号"。是 Intel / AMD（例如 Celeron、Atom）就能用；
+是 ARM（例如 Realtek、Annapurna）就不行 —— 那种情况只能自己构建 arm64 镜像，
+见 [本地构建与验证镜像](../advanced/local-build.md)。
+
+:::
+
+::: warning 镜像与标签怎么填
+
+- 映像地址填 **`ghcr.io/ckboss/vanblog`**（不带标签）；
+- 标签填 **`v2026.9.2`** —— 这是固定发布号，内容永不变，出问题好回滚。
+  （也有 `latest` / `dev-dsh` 这类会动的标签，区别见[「docker」那一种部署方式](./get-started.md#部署方式)。）
+
+群晖直连 ghcr 常常很慢或超时。拉不动就在**另一台能访问的电脑**上执行下面两条，
+把镜像导成一个文件拷到群晖，再用 `映像/新增/从文件添加` 导入：
+
+```bash
+docker pull ghcr.io/ckboss/vanblog:v2026.9.2
+docker save -o vanblog-v2026.9.2.tar ghcr.io/ckboss/vanblog:v2026.9.2
+```
+
+最省事的仍然是在 SSH 里跑[一键脚本](../guide/get-started.md#部署方式)（它拉不到镜像会自动退回源码构建）。
 
 :::
 
 ### 下载镜像
 
-在 `Docker` 套件中点击 `映像/新增/从 URL 添加`:
+在 `Docker`（或 `Container Manager`）里点击 `映像/新增/从 URL 添加`:
 
 ![添加](https://pic.mereith.com/img/37e817403c5f6b3877780b41f99ea2e0.clipboard-2022-08-29.png)
 
-填入地址为 `mereith/van-blog`：
+**地址**填（不要带标签，下一步单独填）：
 
-![填写地址](https://pic.mereith.com/img/428cef523d23e2a5d2b19fcb59fb2bf0.clipboard-2022-08-29.png)
+```
+ghcr.io/ckboss/vanblog
+```
 
-标签选择默认的 `latest` 即可：
+**标签**填固定发布号：
 
-![选择标签](https://pic.mereith.com/img/409c41cbe5ebf9d3be1630965b5a6e46.clipboard-2022-08-29.png)
+```
+v2026.9.2
+```
 
-仿照上面的增加 `mongo` 镜像：推荐 `7.0`（本项目按它实测）；**有些老机器 CPU 不支持 AVX，跑不了 5.0+**，那种情况选 `4.4.16`，如图所示：
+点下一步开始下载。镜像约 890MB，群晖直连 ghcr 可能要等挺久；一直转圈或报错就按上面的
+`docker save` / 从文件添加 那条路走。下载完在 `映像` 列表里能看到
+`ghcr.io/ckboss/vanblog`，标签 `v2026.9.2`。
 
-![添加 mongo 镜像](https://pic.mereith.com/img/acd15a0e47c3a28d78a78c9102a7593e.clipboard-2022-09-15.png)
+仿照上面的增加 `mongo` 镜像：地址填 `mongo`、标签推荐 `7.0`（本项目按它实测）；
+**有些老机器 CPU 不支持 AVX，跑不了 5.0+**，那种情况才选 `4.4.16`
+（⚠️ 装好之后不要随手换 mongo 大版本，数据目录会不认）。
 
-完成后如图：
+两个镜像都下完之后，`映像` 列表里应该有这两行：
 
-![添加结果](https://pic.mereith.com/img/94080b16a8305acbd1552ca3b31596bb.clipboard-2022-09-15.png)
+```
+ghcr.io/ckboss/vanblog   v2026.9.2
+mongo                    7.0
+```
 
 ### 创建容器
 
@@ -51,9 +80,8 @@
 
 ### 创建 VanBlog 容器
 
-和上面一样，点击 `容器/新建` ，选中刚刚下载的 `mereith/van-blog:latest` 镜像，容器名称为 VanBlog。
-
-![image.png](https://pic.mereith.com/img/6b237de9e368fbcda040c5eaa5aec363.image.png)
+和上面一样，点击 `容器/新建` ，选中刚刚下载的 `ghcr.io/ckboss/vanblog:v2026.9.2` 镜像，
+容器名称填 `VanBlog`。
 
 ### 环境变量
 
@@ -66,6 +94,20 @@
 ::: info 参考
 
 - 在 [参考 → 环境变量](../reference/env.md) 中所示设置好环境变量。
+
+:::
+
+::: warning 初始化时要填「初始化密钥」，先知道它在哪
+
+新版**默认开启初始化保护**：站点还没初始化时，网页向导会要你填一个「初始化密钥」，
+防止别人抢先把你新装的博客初始化成他的。密钥每次启动重新生成，两个地方能拿到：
+
+- 你映射出来的**日志目录**里的 `setup.key` 文件（群晖上用 File Station 打开，
+  按上面的映射就是 `/你的目录/log/setup.key`）；
+- 或者**容器日志**里那个「VanBlog 初始化密钥（setup key）」的框（DSM 里点容器 → 日志；
+  没初始化之前每 10 分钟会重印一次，不怕被刷走）。
+
+初始化完成后这个文件会被自动删掉，密钥也就不再有效了。细节见 [完成初始化](./init.md)。
 
 :::
 
@@ -100,13 +142,22 @@
 
 ![创建确认](https://pic.mereith.com/img/1e75d553be53f7cea173177035f23cd9.image.png)
 
+**怎么算成功了**：`容器` 列表里 `VanBlog` 与 `mongo` 都是"运行中"（第一次启动要等半分钟到一分钟，
+它要建库、生成密钥、拉起前台）。然后浏览器打开 `http://你的群晖IP:8880`
+（8880 是上一步映射的端口，你改了就用你改的那个），应该能看到初始化页面。
+
 ### 错误排查
 
-如果发生错误，可以在容器日志中查看报错原因。
+如果发生错误，可以在容器日志中查看报错原因。最常见的两条：
+
+- 日志里反复出现连不上数据库（`ECONNREFUSED` / `getaddrinfo`）—— 「链接」那一步没做，
+  或者 mongo 容器没起来。先确认 mongo 是"运行中"，再回去检查 `高级设置/链接`。
+- 容器一起就退出、日志提到 `Illegal instruction` 或 avx —— CPU 不支持 avx，
+  把 mongo 换成 `4.4.16`（见上面下载镜像那一步）。
 
 ### 后续
 
-启动完毕后，请 [完成初始化](./init.md)。
+启动完毕后，请 [完成初始化](./init.md)（别忘了上面说的「初始化密钥」）。
 
 ::: warning
 

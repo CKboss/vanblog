@@ -53,6 +53,18 @@ services:
       EMAIL: vanblog_email
       # 本机反代时仅监听回环。默认留空（所有网卡），现有部署不用改
       # VAN_BLOG_SERVER_HOST: '127.0.0.1'
+      # ── 初始化（只有全新站点第一次启动时用得到；已初始化的站点会忽略这几项）──
+      # 零接触初始化：设了下面两项，站点在开始监听第一个请求**之前**就把管理员建好，
+      # "谁先请求谁就能把新站初始化成自己的"那个窗口整个消失（自动化装机推荐）。
+      # VANBLOG_ADMIN_USER: 'yourname'
+      # VANBLOG_ADMIN_PASSWORD: 'change-me'
+      # 密码也可以放文件里（Docker secret / 挂载进来的文件），优先级高于上面那行内联的：
+      # VANBLOG_ADMIN_PASSWORD_FILE: '/run/secrets/vanblog_admin_password'
+      # 没做零接触初始化时，未初始化期间的两条匿名初始化接口**默认要求「初始化密钥」**：
+      # 密钥每次启动重新生成，写在 <日志目录>/setup.key（0600）并在启动日志里 WARN 打印，
+      # 每 10 分钟重印一次（VANBLOG_SETUP_KEY_REMIND_MINUTES 可调），初始化成功后自动删除。
+      # 初始化页面会有对应的输入框。公网部署建议保持开启；显式关闭（不推荐）：
+      # VANBLOG_INIT_REQUIRE_SETUP_KEY: 'false'
       # ── 下面这些是可选调优项，取消注释即可（./vanblog.sh config 会重新生成本文件，
       #    所以自定义项请一并写在这里，或留意脚本生成的 .bak 备份）──
       # 整站备份 / 导出归档的存放目录。默认 <日志目录>/vanblog-backups，

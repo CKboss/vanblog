@@ -31,6 +31,7 @@ Node 版本不匹配这些问题，在本地测试里全是绿的，只有真把
 | `IMAGE_TAG` | `vanblog:local-test` | 构建出来的镜像 tag |
 | `SMOKE_HTTP_PORT` | `18080` | 冒烟测试映射的宿主机端口（避开正在跑的站点） |
 | `SMOKE_KEEP` | `0` | 设 `1` 则测完不拆容器，方便进去排查 |
+| `MONGO_IMAGE` | `mongo:7.0`（实际走一键脚本的 `pick_mongo_image()`） | 冒烟测试用哪个 mongo 镜像 |
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | 传给 `VAN_BLOG_NPM_REGISTRY` |
 | `ALPINE_MIRROR` | `https://mirrors.aliyun.com/alpine` | 传给 `VAN_BLOG_ALPINE_MIRROR`，`none` 用官方源 |
 | `NODE_DIST_URL` | `https://cdn.npmmirror.com/binaries/node` | node-gyp 的 Node 头文件源，`none` 用默认 |
@@ -38,6 +39,17 @@ Node 版本不匹配这些问题，在本地测试里全是绿的，只有真把
 
 构建参数和 CI（`.github/workflows/publish-ghcr.yml`）保持一致 —— 本地构建如果和 CI 参数不同，
 "本地测过了"就毫无意义。
+
+**怎么算成功**：一次完整的构建 + 冒烟，最后应该看到这两行（缺任何一行都别当成功）：
+
+```
+镜像构建成功：vanblog:local-test          ← 脚本还会再 `image exists` 复核一次
+冒烟测试全部通过：vanblog:local-test
+```
+
+⚠️ 被 `Ctrl-C` 打断的 `podman build` **退出码是 0**、日志停在半截却看着像成功，所以脚本在构建后
+一定会再查一次镜像是否真的存在；你自己手动构建时也要这样复核。产物约 890MB
+（v2026.9.2 起镜像里装了 `fontconfig ttf-dejavu wqy-zenhei` 三个字体包，占约 32MB —— 可见水印靠它）。
 
 ## 没有 docker 权限？用 podman（免 sudo）
 
@@ -86,7 +98,8 @@ rootless podman 需要 `/etc/subuid` 里有你的用户（发行版一般已经�
 
 ## 冒烟测试查什么
 
-起一套临时 mongo + vanblog（测完自动拆，`SMOKE_KEEP=1` 可保留），然后：
+起一套临时 mongo + vanblog（专用网络 + 容器 IP + `--add-host`，mongo 数据放**命名卷**；
+测完自动拆，`SMOKE_KEEP=1` 可保留），然后：
 
 - 逐个打关键路径：`/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、
   `/rss/feed.xml`、`/post/1`、`/timeline`。200/301/302/308/404 都算"链路通"
@@ -97,38 +110,41 @@ rootless podman 需要 `/etc/subuid` 里有你的用户（发行版一般已经�
   `Failed to collect page data`、`unhandledRejection`、`降级使用`
   （entrypoint 走了 caddy 降级模板 = 主配置没加载成功）。
 - 容器状态：`RestartCount` 必须是 0、健康检查状态、`State.Running`。
-- **优雅停机耗时**：`docker stop -t 20` 之后计时，明显小于宽限期才说明 SIGTERM 被正确转发；
-  接近 20 秒说明信号没转发、进程是被硬杀的（正在写的备份/导出会被截断）。
+- **优雅停机耗时**：`docker stop -t 20`（podman 同）之后计时，明显小于宽限期才说明 SIGTERM
+  被正确转发；接近 20 秒说明信号没转发、进程是被硬杀的（正在写的备份/导出会被截断）。
 - mongo 版本调一键脚本的 `pick_mongo_image()` 拿，和真实安装走同一条逻辑。
 
 ## 更进一步：真起一个站，导入整站备份
 
-冒烟测试用的是空库。要验证"恢复出来的站点是不是真的能用"，可以起一套带数据的栈：
+冒烟测试用的是空库。要验证"恢复出来的站点是不是真的能用"，**别手搓 curl**，直接用仓库里的
+恢复演练（它就是干这个的，而且会逐项断言语义、结束自动拆）：
 
 ```bash
-# 1) 起 mongo + vanblog（挂载数据目录、映射一个空闲端口）
-podman network create vb-net
-podman run -d --name vb-mongo --network vb-net -p 27117:27017 \
-  -v /tmp/vb/mongo:/data/db mongo:7.0
-
-# 2) 把整站备份放进容器能看到的备份目录（<数据目录>/log/vanblog-backups）
-mkdir -p /tmp/vb/log/vanblog-backups && cp vanblog-full-*.tar.zst /tmp/vb/log/vanblog-backups/
-
-podman run -d --name vb-app --network vb-net -p 18080:80 \
-  -e TZ=Asia/Shanghai -e EMAIL= \
-  -e VAN_BLOG_DATABASE_URL="mongodb://<mongo容器IP>:27017/vanBlog?authSource=admin" \
-  -v /tmp/vb/static:/app/static -v /tmp/vb/log:/var/log \
-  -v /tmp/vb/caddy/config:/root/.config/caddy -v /tmp/vb/caddy/data:/root/.local/share/caddy \
-  vanblog:local-test
-
-# 3) 首次初始化（建个临时管理员）→ 登录拿 token → 调恢复接口
-curl -X POST http://127.0.0.1:18080/api/admin/init -H 'Content-Type: application/json' -d '{...}'
-curl -X POST http://127.0.0.1:18080/api/admin/backup/full/restore -H "token: $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"vanblog-full-<时间戳>.tar.zst","confirm":"true","withStatic":"true"}'
+# --keep：演练完把这套一次性栈留着，方便自己点进去看；--http-port 指定宿主机端口
+./vanblog.sh drill vanblog-full-<时间戳>.tar.zst --image vanblog:local-test --http-port 18080 --keep
 ```
 
-踩过的坑（都会让你以为镜像坏了，其实是环境问题）：
+它会起一套**一次性**的 mongo + vanblog（命名卷、专用网络、`--add-host` 直连容器 IP），
+等 `/api/public/health`，然后把归档上传到 `POST /api/admin/init/restore`（用户真正会走的那条路），
+再断言恢复出来的站点与归档清单对得上。结束时打印 `RESULT: PASS pass=… warn=… fail=…`，
+`--keep` 时还会把"怎么访问、怎么拆"一并打印出来。
+
+⚠️ **手搓 curl 会踩的一个坑**：`POST /api/admin/init` 与 `/api/admin/init/restore` 现在
+**默认要求「初始化密钥」**（防止别人抢先初始化你的新站）。不带 `setupKey` 字段会得到 400，
+而错误信息很容易被误读成"归档坏了"。密钥在容器里的 `/var/log/setup.key`（0600），
+也会打印在容器日志里（标签是「初始化密钥：」，未初始化期间每 10 分钟重印）：
+
+```bash
+podman exec <容器名> cat /var/log/setup.key      # 或：podman logs <容器名> | grep 初始化密钥
+```
+
+`vanblog.sh drill` 已经自动做了这一步（先读文件、读不到再从日志兜底，并且密钥不进命令行、不写台账）。
+细节见 [初始化](../guide/init.md)。
+
+如果只是想让站点**跳过**这道保护（例如临时调试），在容器的 `environment:` 里把它显式关掉即可
+（开关名与取值见 [环境变量 → 安装与初始化](../reference/env.md#安装与初始化)）—— 公网环境不要这么干。
+
+手搓栈时踩过的坑（都会让你以为镜像坏了，其实是环境问题）：
 
 | 现象 | 原因 | 解法 |
 | --- | --- | --- |
@@ -138,6 +154,9 @@ curl -X POST http://127.0.0.1:18080/api/admin/backup/full/restore -H "token: $TO
 | `/robots.txt` 404 但 `/sitemap.xml` 200 | caddy 模板有 `srv0(:443)` 和 `srv1(:80)` **两套路由**，只补了一套 | 两个 server 的路由必须一致（有测试守着） |
 | `/sitemap.xml` 刚恢复完 404，一两分钟后 200 | 恢复后才开始生成 | 验证脚本要给足重试，别当故障 |
 | `podman build` 被打断后仍报"构建成功" | 被 SIGTERM 打断的 `podman build` **退出码是 0** | 构建后必须再 `image exists` 复核（脚本已做） |
+| `podman run` 报 `unknown flag: --link` | `--link` 是 docker 专有的旧式互联，podman 4.9 不认（构建成功、冒烟第一步就 die） | 专用网络 + 容器 IP + `--add-host`（冒烟脚本与 `drill` 都是这么做的） |
+| 跑完 `/tmp` 里留下删不掉的目录（要 sudo 才清得掉） | mongo 在容器里是 root，rootless 引擎把它映射成宿主机上一个谁也不是的 uid | mongo 数据用**命名卷**（引擎自己回收），别 bind mount 到宿主机临时目录 |
+| 手搓 curl 打初始化/恢复接口得到 400 | 这两条匿名接口**默认要求「初始化密钥」**（这道保护默认开启） | 带上 `setupKey` 字段（值取容器内 `/var/log/setup.key`，或日志里「初始化密钥：」那行）；`drill` 已自动处理 |
 
 ## 完全不能构建镜像时的替代办法
 
@@ -156,16 +175,36 @@ mermaid 要的 `./dist/cytoscape.umd.js` 没被导出）—— 那种问题只�
 
 ## 发布
 
-本地验证通过后，正式发布走 CI：Actions → `publish-ghcr` → **Run workflow**（选分支），
-它会构建并推 `latest` / `dev-dsh` / `dev-dsh-<短sha>` 三个 tag。
-服务器上用 `./vanblog.sh update` 拉新镜像（**先把镜像准备好，再停容器**，停机只有重启那几秒）。
+本地验证通过后，正式发布走 CI（`.github/workflows/publish-ghcr.yml` + `release-fork.yml`）。
+**推分支不会构建镜像** —— workflow 里的 `branches:` 段是注释掉的，只有下面两条路会真的构建：
 
-::: tip ghcr 包默认是私有的
+| 怎么做 | 会推出哪些镜像标签 | 还会发生什么 |
+| --- | --- | --- |
+| 推一个 `v*` 标签（例如 `v2026.9.2`） | `latest` + 该标签本身 | `release-fork.yml` 建 GitHub Release（发布说明取 `CHANGELOG.md` 里 `## [同名标签]` 那一节，附件带 `vanblog.sh` 与 compose 模板） |
+| Actions → `publish-ghcr` → **Run workflow**（选分支） | `latest` / `dev-dsh` / `dev-dsh-<短sha>` | 没有 Release |
 
-第一次发布后要去仓库的 package 页面（`https://github.com/<owner>/<repo>/pkgs/container/vanblog`）→
-Package settings → Change visibility 改成 **Public**，否则别人 `docker pull` 会 `denied`。
-⚠️ 这个 URL 在 Markdown 里**不要用尖括号自动链接**包起来：里面还有 `<owner>/<repo>` 占位，
-vue 编译器会把 `<owner>` 当成没闭合的标签，整个文档站构建直接失败
-（`[vite:vue] Element is missing end tag`）。
+⚠️ 两个容易踩的点：
+
+- 打 `v*` 标签前，先在 `CHANGELOG.md` 里把 `[Unreleased]` 切成 `## [v2026.9.2] - <日期>` 这样的一节。
+  找不到同名小节时 workflow 会**退回用 `[Unreleased]` 的正文**，再找不到就只给自动生成的提交列表 ——
+  发布说明因此可能不是你想要的那份，而且它不会报错。
+- 只构建 **linux/amd64**（默认值）。要 arm64 得在手动触发时把 `platforms` 填成
+  `linux/amd64,linux/arm64`，走 QEMU 模拟，慢好几倍且容易超时。
+
+服务器上怎么拉新镜像见 [升级](../guide/update.md)（要点是**先把新镜像准备好、再停旧容器**，
+停机只有重启那几秒）。
+
+::: tip ghcr 包的可见性
+
+本项目的 package 现在是 **Public**（实测：匿名取 token 后拉 `v2026.9.2` 的 manifest 返回 200，
+`tags/list` 也能读到），所以谁都能 `docker pull`。如果哪天被改回 private，别人拉镜像会报 `denied`；
+改回来的地方是 `https://github.com/CKboss/vanblog/pkgs/container/vanblog` →
+Package settings → Danger Zone → Change visibility。
+
+⚠️ 顺带记一条写文档的坑（真的炸过）：这类 URL 如果带 `<owner>/<repo>` 占位符，
+**不要用尖括号自动链接**（`<https://…/<owner>/…>`）包起来 —— vue 编译器会把 `<owner>`
+当成没闭合的标签，整个文档站构建直接失败（`[vite:vue] Element is missing end tag`）。
+占位符要么放进反引号，要么就写具体地址。`scripts/tests/docs-consistency.test.sh`
+里有一条守卫专门扫这个（它会跳过代码块与行内代码，只查正文里的裸尖括号）。
 
 :::

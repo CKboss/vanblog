@@ -12,13 +12,22 @@ VanBlog 现在支持一键脚本部署了。经过测试，宝塔也可以通过
 
 :::
 
-::: warning 下面的模板用的是上游官方镜像
+::: warning 下面的模板已经填好本项目的镜像
 
-模板里的 `image: mereith/van-blog:latest` 是**上游官方镜像**，不含本 fork（`CKboss/vanblog`）
-的任何改动。想用本分支，最省事的是上面的[一键脚本](../guide/get-started.md#部署方式)（宝塔里开个终端就能跑）；
-坚持图形化的话，把模板里的 `image:` 换成 `ghcr.io/ckboss/vanblog:dev-dsh`
-（ghcr 的包需要是 public，先在终端 `docker pull` 成功一次更稳），mongo 建议同时换成 `mongo:7.0`
-（老机器 CPU 不支持 avx 时才退回 `mongo:4.4.16`；数据目录与大版本绑定，装好后不要随手换）。
+模板里的 `image: ghcr.io/ckboss/vanblog:v2026.9.2` 就是本项目的镜像（`v2026.9.2` 是固定发布号，
+内容永不变，最好复现也最好回滚；标签怎么选见[「docker」那一种部署方式](./get-started.md#部署方式)）。
+
+图形化部署最容易卡在**拉镜像**这一步：宝塔的界面只会告诉你"失败"。所以建议先在宝塔的终端里
+手动拉一次，看到 `Status: Downloaded newer image for …` 再回界面创建项目：
+
+```bash
+docker pull ghcr.io/ckboss/vanblog:v2026.9.2
+```
+
+拉不动（超时、`denied`）通常是服务器连不上 ghcr。两条出路：换一台能访问的机器
+`docker pull` + `docker save -o vanblog.tar ghcr.io/ckboss/vanblog:v2026.9.2`，把 tar 传到服务器再
+`docker load -i vanblog.tar`；或者干脆用上面的[一键脚本](../guide/get-started.md#部署方式)
+（它拉不到镜像时会自动退回源码构建）。
 
 :::
 
@@ -42,45 +51,67 @@ VanBlog 现在支持一键脚本部署了。经过测试，宝塔也可以通过
 
 ![等待安装完成](https://www.mereith.com/static/img/9a207817805fb0f0a4b65a85edb699b4.clipboard-2022-09-02.png)
 
-模板内容请复制下面的代码，注意需要按注释修改 `EMAIL` 为你的邮箱：
+模板内容请复制下面的代码。**只需要改一处**：把 `EMAIL` 换成你自己的邮箱（用于自动申请 https 证书）。
+数据目录默认在 `/var/vanblog`，想放别处就整段一起改：
 
 ```yaml
-version: '3'
+version: '3.4'
 
 services:
   vanblog:
-    # 阿里云镜像源
-    # image: registry.cn-beijing.aliyuncs.com/mereith/van-blog:latest
-    image: mereith/van-blog:latest
+    # 本项目的镜像，钉住发布号（内容永不变，好复现也好回滚）
+    image: ghcr.io/ckboss/vanblog:v2026.9.2
     restart: always
     environment:
       TZ: 'Asia/Shanghai'
       # 邮箱地址，用于自动申请 https 证书
-      EMAIL: 'someone@mereith.com'
+      EMAIL: 'someone@example.com'
     volumes:
       # 图床文件的存放地址，按需修改。
       - /var/vanblog/data/static:/app/static
-      # 日志文件
+      # 日志目录：初始化密钥 setup.key、忘记密码用的 restore.key、整站备份归档都在这里
       - /var/vanblog/log:/var/log
       # Caddy 配置存储
       - /var/vanblog/caddy/config:/root/.config/caddy
       # Caddy 证书存储
       - /var/vanblog/caddy/data:/root/.local/share/caddy
     ports:
-      # 前面的是映射到宿主机的端口号，该端口的话改前面的。
+      # 前面的是映射到宿主机的端口号，改端口就改前面那个数字。
+      # 这里用 8880/4443 是因为宝塔自带的 nginx 占着 80（见本页开头）。
       - 8880:80
       - 4443:443
+    depends_on:
+      - mongo
   mongo:
-    # 某些机器不支持 avx 会报错，所以默认用 v4 版本。有的话用最新的。
-    image: mongo:4.4.16
+    # 本项目按 mongo:7.0 实测。⚠️ 有些老机器 CPU 不支持 avx，跑不了 5.0+，
+    #    那种情况才换成 mongo:4.4.16；已经装好的站不要随手换大版本（数据目录会不认）。
+    image: mongo:7.0
     restart: always
     environment:
       TZ: 'Asia/Shanghai'
     volumes:
       - /var/vanblog/data/mongo:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ping:1}).ok' || mongo --quiet --eval 'db.runCommand({ping:1}).ok'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 ```
 
 所有可用的环境变量详见 [参考 → 环境变量](../reference/env.md)
+
+::: tip 上面两处"多出来的"东西是干什么的
+
+- `depends_on` + mongo 的 `healthcheck`：让 vanblog **等数据库真的能应答了再启动**。
+  少了它，第一次启动时 vanblog 常常比 mongo 先起来，日志里一堆连接失败、容器反复重启
+  （看着像装坏了，其实等一会儿自己就好了 —— 但新手很难分辨）。
+- `version: '3.4'`：`healthcheck` 里的 `start_period` 需要 3.4 及以上的编排格式，
+  写 `'3'` 有些旧版 docker-compose 会直接拒绝整个文件。
+- ⚠️ 这里 `depends_on` 故意用**最简单的列表写法**（`- mongo`）：带 `condition:` 的长格式
+  要 docker-compose ≥ 1.27，宝塔上装的版本不一定够，写长了会整个文件解析失败。
+
+:::
 
 ### 启动
 
@@ -88,11 +119,22 @@ services:
 
 ![创建项目](https://www.mereith.com/static/img/920dd318b4073cc793c11caa4700d7b9.clipboard-2022-09-02.png)
 
-然后会弹出窗口拉取镜像启动容器：
+然后会弹出窗口拉取镜像启动容器（第一次要拉约 890MB 的镜像 + mongo，视网速等几分钟）。
 
 ![创建日志](https://www.mereith.com/static/img/193a1acb5f783923ffc83dc67de6fced.clipboard-2022-09-02.png)
 
-启动完毕后，请 [完成初始化](./init.md)。
+**怎么算成功了**：宝塔的 Docker → 容器列表里，`vanblog` 与 `mongo` 两个都是"运行中"。
+再到终端里敲这一条确认服务真的活着：
+
+```bash
+curl -s http://127.0.0.1:8880/api/public/health
+```
+
+回一段带 `"status":"ok"` 和版本号的 JSON 就对了（版本号形如 `v2026.9.2@23f2e9c`）。
+如果连接被拒绝，先看容器日志：宝塔界面点容器的"日志"，或 `docker logs --tail 100 vanblog`。
+
+启动完毕后，请 [完成初始化](./init.md)（浏览器打开 `http://你的服务器IP:8880`；
+按本页开头说的，用 nginx 反代 8880 之后就可以直接用域名访问了）。
 
 ### 调整 nginx 缓存
 
@@ -106,7 +148,7 @@ proxy_no_cache 1;
 proxy_cache_bypass 1;
 ```
 
-并检查 `/www/server/nginx/conf/proxy.conf`：把 `proxy_cache cache_one;` 注释掉（`# proxy_cache cache_one;`），再重载 Nginx。完整说明见 [后台发布后前台不刷新仍显示旧文章](../faq/deploy.md#后台发布后前台不刷新仍显示旧文章)（[#469](https://github.com/Mereithhh/vanblog/issues/469)）。
+并检查 `/www/server/nginx/conf/proxy.conf`：把 `proxy_cache cache_one;` 注释掉（`# proxy_cache cache_one;`），再重载 Nginx。完整说明见 [后台发布后前台不刷新仍显示旧文章](../faq/deploy.md#后台发布后前台不刷新仍显示旧文章)（这个问题最早的报告在上游仓库的 [#469](https://github.com/Mereithhh/vanblog/issues/469)；本项目的问题请到[本仓库的 issue](https://github.com/CKboss/vanblog/issues) 提）。
 
 如果宝塔已有项目较少，还是推荐使用 [nginx-proxy-manager](https://nginxproxymanager.com/) 进行反代管理会更方便。
 

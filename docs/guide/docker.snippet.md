@@ -1,11 +1,38 @@
-::: warning 先选镜像：本分支还是上游官方版
+::: warning 先选镜像标签（新手照抄第一行就行）
 
-本 fork（`CKboss/vanblog` 的 `dev/dsh` 分支）的镜像发布在 **`ghcr.io/ckboss/vanblog`**，
-上游官方镜像是 `mereith/van-blog:latest`（另有阿里云镜像源
-`registry.cn-beijing.aliyuncs.com/mereith/van-blog:latest`）。**两边不通用**：本分支的整站备份/恢复、
-恢复演练、安全加固与下面提到的新安装方式都不在上游镜像里。想用本分支有三种方式：
+本项目的镜像发布在 **`ghcr.io/ckboss/vanblog`**。
 
-1. **一键脚本（推荐）**：默认 `docker pull ghcr.io/ckboss/vanblog:dev-dsh`（GitHub Actions 构建发布，
+**新手直接照抄这一行**（固定发布号，内容永不变，出问题好回滚）：
+
+```
+ghcr.io/ckboss/vanblog:v2026.9.2
+```
+
+标签怎么选（从上往下越来越"新"，也越来越不好复现）：
+
+| 标签 | 它是什么 | 什么时候用 |
+| --- | --- | --- |
+| `v2026.9.2` | **固定发布号**，内容永不变（当前最新发布版） | ✅ 推荐给新手：稳定、可复现，回滚就是换回旧标签 |
+| `latest` | 最近一次**发布构建**（一键脚本的默认值） | 想自动跟上新发版又不想记版本号。⚠️ 有人在 Actions 里手动触发构建时它也会跟着走 |
+| `dev-dsh` | 分支的上一次**手动**构建 | 明确想跟开发进度。⚠️ **可能落后于发布版**（写这段时它停在 4 天前的构建） |
+| `dev-dsh-<短sha>` | 某一次构建对应的那个提交 | 回滚 / 钉死某一次构建 |
+
+**三件容易踩的事**（新手最常卡在这里）：
+
+1. 镜像**不是每次 push 都重建**（一次构建要 20–40 分钟 runner 时间，而多数提交只是文档改动）：
+   只有推 `v*` 标签，或去仓库 **Actions → publish-ghcr → Run workflow** 手动触发时才会构建。
+   所以 `dev-dsh` 对应的是"最后一次手动构建时的代码"，**不一定等于分支最新提交，还可能比发布版旧**。
+2. 想要"装的就是我看到的这一版"，就**钉发布号**（`v2026.9.2`）而不是用 `latest`：
+   `latest` 会被下一次发版或手动构建推走，出问题时你说不清自己跑的到底是哪一版。
+   用一键脚本时加 `VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2` 即可钉住
+   （命令见[「脚本」那一种部署方式](./get-started.md#部署方式)与 [升级](./update.md)）。
+3. 只发布了 **linux/amd64**。arm64 机器（部分 NAS、树莓派、Apple 芯片上的集群）要么自己构建
+   （下面第 3 种方式），要么请维护者手动触发 workflow 时把架构填成 `linux/amd64,linux/arm64`
+   （走 QEMU 模拟，慢好几倍）。
+
+拿到镜像有三种方式：
+
+1. **一键脚本（最省事，新手推荐）**：默认拉 `ghcr.io/ckboss/vanblog:latest`（最近一次发布构建，
    小机器也装得动），拉不到时自动退回「克隆源码 + 本地构建」。
 
    ```bash
@@ -13,33 +40,33 @@
      && chmod +x vanblog.sh && ./vanblog.sh
    ```
 
-2. **直接拉本分支镜像**，把编排文件里的 `image:` 换掉即可（不需要构建，1C1G 也能跑）：
+   这几行**在你的服务器上敲**（不是你自己的电脑），要 root；跑完会出一个中文菜单，按提示选数字就行。
+   想钉住某个发布版而不是跟着 `latest` 走，就先
+   `export VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2` 再跑它。
+   装完之后怎么升级见 [升级](./update.md)。
+
+2. **直接拉镜像**，把编排文件里的 `image:` 换掉即可（不需要构建，1C1G 也能跑）：
 
    ```bash
-   docker pull ghcr.io/ckboss/vanblog:dev-dsh
-   # 标签：v2026.9.2 等发布号 / latest / dev-dsh / dev-dsh-<短sha>（钉版本、回滚用）；只发布了 linux/amd64
+   docker pull ghcr.io/ckboss/vanblog:v2026.9.2
    ```
 
-   镜像**不是每次 push 都重建**（一次构建 20–40 分钟 runner 时间，而多数提交只是文档改动）：
-   要发新版就去仓库的 **Actions → publish-ghcr → Run workflow** 手动触发，或者推一个 `v*` 标签。
-   所以 `dev-dsh` 标签对应的是**最后一次手动发版时的代码**，不一定等于分支最新提交；
-   想要最新提交就自己构建（见下面第 3 种方式），或用 `VANBLOG_INSTALL_MODE=source ./vanblog.sh`。
+   成功的样子：最后打印 `Status: Downloaded newer image for …`（已经拉过则是 `Image is up to date`），
+   再用 `docker images | grep vanblog` 能看到它，大小约 890MB。
 
-   ::: tip 拉不动？
-
-   ghcr 的 package 默认是 **private**。如果 `docker pull` 报 `denied` 或 `not found`，
-   说明仓库主还没把它改成公开：`https://github.com/CKboss/vanblog/pkgs/container/vanblog`
-   → Package settings → Danger Zone → Change visibility → Public。
-   在那之前脚本会自动退回源码构建。
-
-   :::
+   **报 `denied` 或 `not found`？** 本项目的 ghcr package **是 public**（可以匿名 `docker pull`，
+   实测取 manifest 返回 200），正常情况下不会碰到。真的报错通常是这三种：标签名打错（区分大小写，
+   发布号长这样 `v2026.9.2`）、服务器连不上 ghcr（换网络，或把地址换成你信得过的镜像加速地址），
+   或者 package 被改回了 private —— 那就去
+   `https://github.com/CKboss/vanblog/pkgs/container/vanblog` → Package settings → Danger Zone →
+   Change visibility → Public。拉不到镜像时，一键脚本会自动退回源码构建。
 
 3. **自己构建镜像**，然后把编排文件里的 `image:` 换成本地 tag：
 
    ```bash
    git clone --depth 1 -b dev/dsh https://github.com/CKboss/vanblog.git
    cd vanblog
-   # 可选的构建参数：
+   # 可选的构建参数（全表见「参考 → 环境变量」的"镜像构建期"一节）：
    #   VAN_BLOG_VERSIONS             版本号标签（后台「关于」与页脚显示），如 dev/dsh@1a2b3c4
    #   VAN_BLOG_BUILD_SERVER         构建期的 server 地址，**必须是个合法 URL**（默认 http://127.0.0.1:3000）
    #   VAN_BLOG_NPM_REGISTRY         pnpm 源（默认 https://registry.npmmirror.com；海外机器可换 npmjs）
@@ -63,6 +90,10 @@
    done
    docker build -t vanblog:dev-dsh .   # 前三步命中缓存，只组装最终镜像
    ```
+
+   构建要 20–40 分钟，产物约 **890MB**（v2026.9.2 起镜像里装了系统字体
+   `fontconfig ttf-dejavu wqy-zenhei`，可见水印——含中文——才真的能用；这三个包占约 32MB）。
+   想边构建边跑冒烟测试、把坑一次踩完，见 [本地构建与验证镜像](../advanced/local-build.md)。
 
 :::
 
@@ -101,15 +132,17 @@ mongo 健康检查、日志大小上限、`stop_grace_period`、ulimits 等生�
 
 :::
 
-最小示例（本分支镜像 + mongo 7）：
+最小示例（本分支镜像 + mongo 7）。下面这一整段是**一个文件的内容**：在你服务器上新建的
+`vanblog` 目录里存成 `docker-compose.yaml`，改两处（`EMAIL` 和数据目录）就能用：
 
 ```yml
 version: '3.4'
 
 services:
   vanblog:
-    # 本分支镜像；上游官方镜像是 mereith/van-blog:latest
-    image: ghcr.io/ckboss/vanblog:dev-dsh
+    # 钉住发布号：内容永不变，好复现也好回滚。
+    # 想自动跟上新发版可以写 :latest，但出问题时你就说不清跑的是哪一版了。
+    image: ghcr.io/ckboss/vanblog:v2026.9.2
     restart: always
     environment:
       TZ: 'Asia/Shanghai'
@@ -164,11 +197,35 @@ services:
 
 ### 3.启动项目
 
-按注释说明修改 `docker-compose.yaml` 的配置后运行：
+按注释说明修改 `docker-compose.yaml` 的配置后运行（**在放这个文件的那个目录里**敲）：
 
 ```bash
 docker-compose up -d
 ```
+
+第一次会先拉镜像（约 890MB + mongo 约 500MB），视网速要几分钟，屏幕上一行行百分比是正常的。
+跑完用这两条确认起来了：
+
+```bash
+docker-compose ps                    # 两个服务都应该是 Up（vanblog 还会带 (healthy)）
+curl -s http://127.0.0.1/api/public/health   # 回一段 JSON，里面有 "status":"ok" 和版本号
+```
+
+看到 `status` 是 `ok` 就算成功，然后浏览器打开 `http://你的服务器IP` 去初始化。
+
+::: info 起不来时先看这两条
+
+- `Bind for 0.0.0.0:80 failed: port is already allocated` —— 80 端口被别的程序占了
+  （宝塔的 nginx 最常见）。要么停掉它，要么把编排里 `- 80:80` 改成 `- 8880:80` 这种，
+  之后用 `http://你的IP:8880` 访问。
+- mongo 容器反复重启、日志里有 `Illegal instruction` 或提到 avx —— 老 CPU 不支持 avx，跑不了 5.0+，
+  把 `image: mongo:7.0` 换成 `mongo:4.4.16`（⚠️ 只有**全新安装**能这么换；已经装好的站不要随手换
+  mongo 大版本，数据目录会不认）。
+
+其余报错先 `docker-compose logs --tail 100 vanblog` 看日志，常见问题的对照表在
+[部署常见问题](../faq/deploy.md)。
+
+:::
 
 启动完毕后，请 [完成初始化](./init.md)（走向导、在初始化页上传整站备份恢复、或用上面注释里的
 零接触环境变量，三选一）。

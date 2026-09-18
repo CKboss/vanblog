@@ -1,11 +1,29 @@
 以下是一个 kubernetes 的部署参考：
 
-::: tip 镜像选择
+::: tip 镜像标签：在集群里请钉死发布号
 
-下面的 `image:` 用的是本分支镜像 `ghcr.io/ckboss/vanblog:dev-dsh`（也可钉
-`v2026.9.2` 这类发布号或 `dev-dsh-<短sha>`）。要装上游官方版就换成 `mereith/van-blog:latest`，
-但本分支的功能（整站备份/演练、健康检查语义、零接触初始化等）不在上游镜像里。
-ghcr 的包如果是 private，记得给集群配 imagePullSecret。
+下面的 `image:` 用的是 **`ghcr.io/ckboss/vanblog:v2026.9.2`**（固定发布号，内容永不变）。
+
+⚠️ **集群里不要用 `latest` / `dev-dsh` 这类会动的标签**。原因很实在：
+
+- `kubectl rollout restart` 之外，Deployment 的 spec 没变 ⇒ 滚动更新根本不会触发，
+  你会以为"升级了"，其实每个节点还跑着自己缓存里的旧镜像；
+- 各节点在**不同时间**各自拉取，同一个 Deployment 下可能同时跑着两个不同版本；
+- 出问题要回滚时，说不清"上一版"到底是哪个 digest。
+
+配套地，`imagePullPolicy` 这样选：
+
+| 你的标签 | 建议 | 为什么 |
+| --- | --- | --- |
+| `v2026.9.2` 这种发布号 | `IfNotPresent`（下面就是这么写的） | 标签永不变，本地有就不用再拉，省时间也保证跑的就是你钉的那版 |
+| `latest` / `dev-dsh` | `Always` | 否则节点会一直用缓存，永远看不到新构建；⚠️ 但即便 `Always` 也解决不了上面的节点间漂移 |
+
+升级 = 把 `image:` 的标签改成新发布号再 `kubectl apply`，回滚就是改回旧标签
+（或者用 `kubectl rollout undo`）。
+
+另外两点：镜像**只发布了 linux/amd64**，集群里有 arm64 节点的话要加 `nodeSelector`
+（例如 `kubernetes.io/arch: amd64`）避开它们，或者自己构建 arm64 镜像；
+ghcr 的包是 public（可匿名拉），如果哪天改成 private，要给集群配 `imagePullSecret`。
 
 :::
 
@@ -37,7 +55,8 @@ spec:
             type: ''
       containers:
         - name: van-blog
-          image: 'ghcr.io/ckboss/vanblog:dev-dsh'
+          # 钉死发布号：内容永不变，可复现、好回滚（别用 latest / dev-dsh，理由见上面）
+          image: 'ghcr.io/ckboss/vanblog:v2026.9.2'
           ports:
             - name: http-80
               containerPort: 80
@@ -95,7 +114,9 @@ spec:
               mountPath: /app/static
             - name: log
               mountPath: /var/log
-          imagePullPolicy: Always
+          # 标签是固定发布号 ⇒ IfNotPresent 就够（本地有就不重复拉，且保证跑的是你钉的那版）。
+          # 只有用 latest / dev-dsh 这种会动的标签才需要 Always，见上面的表。
+          imagePullPolicy: IfNotPresent
 ```
 
 ::: warning 资源限额与整站备份
@@ -106,4 +127,29 @@ spec:
 
 :::
 
-启动完毕后，请 [完成初始化](./init.md)（也可以用上文的零接触环境变量跳过向导）。
+### 部署后确认
+
+```bash
+kubectl get pods -l app=van-blog         # READY 应该是 1/1（readinessProbe 打的就是 /api/public/health）
+kubectl logs -l app=van-blog --tail=50   # 看启动日志里有没有报错
+```
+
+`READY` 一直是 `0/1`，多半是连不上数据库：检查 `VAN_BLOG_DATABASE_URL` 的地址与账号密码，
+以及 pod 到那台 mongo 的网络是否放通（上面的示例用的是**集群外**的 mongo）。
+
+### 初始化
+
+启动完毕后，请 [完成初始化](./init.md)。两条路选一条：
+
+- **零接触初始化**（集群里最省事）：把上文注释掉的 `VANBLOG_ADMIN_USER` 与
+  `VANBLOG_ADMIN_PASSWORD_FILE`（密码放 Secret）打开，站点在开始监听之前就建好管理员，
+  根本不存在"未初始化"窗口，也就不需要初始化密钥。
+- **网页向导**：新版默认开启初始化保护，向导会要你填一个「初始化密钥」
+  （防止别人抢先初始化你的新站）。在集群里这样取：
+
+  ```bash
+  kubectl logs -l app=van-blog | grep '初始化密钥'
+  # 或者读挂出来的日志目录里的 setup.key（上面 manifest 把 /var/log 挂在宿主机 /var/k8s/van-blog/log）
+  ```
+
+  密钥每次启动重新生成、未初始化期间每 10 分钟在日志里重印一次，初始化完成后自动失效并删掉文件。

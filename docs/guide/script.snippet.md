@@ -40,24 +40,27 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh
 | 项 | 默认值 | 怎么改 |
 | --- | --- | --- |
 | 安装模式 | `auto`：先拉镜像，拉不到再 clone 源码本地构建 | `VANBLOG_INSTALL_MODE=image\|source\|auto` |
-| 镜像 | `ghcr.io/ckboss/vanblog:dev-dsh` | `VANBLOG_IMAGE_REF=...`（也可指向本地 tag 或镜像加速地址） |
+| 镜像 | `ghcr.io/ckboss/vanblog:latest`（最近一次发布构建） | `./vanblog.sh update <发布号>` 钉版本，或 `VANBLOG_IMAGE_REF=...`（也可指向本地 tag / 镜像加速地址） |
 | MongoDB | 全新安装用 `mongo:7.0`；**已有数据目录时保持你现在的版本不变** | `VANBLOG_MONGO_IMAGE=mongo:4.4.16`（老机器 CPU 不支持 avx 时用这个） |
 | 数据目录 | `/var/vanblog` | 安装时交互输入，或 `VANBLOG_DATA_PATH` / `VANBLOG_BASE_PATH` |
 | 端口 | 安装时交互输入（HTTP/HTTPS） | 之后用 `./vanblog.sh config` 改 |
 
-镜像由 GitHub Actions（`publish-ghcr`）构建发布，仓库是 `ghcr.io/ckboss/vanblog`，可用标签：
+镜像由 GitHub Actions（`publish-ghcr`）构建发布，仓库是 `ghcr.io/ckboss/vanblog`，可用标签
+（⚠️ 往分支 push **不会**自动构建镜像：只有"手动触发的分支构建"和"打 `v*` 标签发版"会推）：
 
-| 标签 | 指向 |
-| --- | --- |
-| `dev-dsh`（脚本默认） | 最后一次从 `dev/dsh` 分支**手动发版**时的代码 |
-| `dev-dsh-<短sha>` | 每次发版额外打的按提交号标签，**回滚/钉版本用这个** |
-| `latest` | `dev/dsh` 的手动构建，以及任何 `v*` 发版标签 |
-| `v2026.9.2` 等发布号 | 对应 tag 的发版构建 |
+| 标签 | 指向 | 什么时候用 |
+| --- | --- | --- |
+| `v2026.9.2` 等**发布号** | 对应 tag 的发版构建，**永远不变** | ✅ **推荐**：`./vanblog.sh update v2026.9.2` |
+| `latest`（脚本默认） | 最近一次发布构建（会被下次发版/手动分支构建挪走） | 不想每次写版本号时可用 |
+| `dev-dsh` | 最近一次**手动触发**的分支构建（push 不触发，所以可能比发布版旧） | 明确想试还没发版的改动 |
+| `dev-dsh-<短sha>` | 每次分支构建额外打的按提交号标签 | **回滚 / 钉死某一次构建**用这个 |
+
+升级时怎么选标签、怎么把版本钉住、怎么回滚，见 [升级](./update.md#升到指定发布版-一行命令)。
 
 **ghcr 的包默认是私有的**，如果 `docker pull` 报
 `denied`/`not found`，去 <https://github.com/CKboss/vanblog/pkgs/container/vanblog> →
 Package settings → Change visibility 改成 Public；国内拉 ghcr 慢的话，可以配镜像加速后用
-`VANBLOG_IMAGE_REF=<加速地址>/ckboss/vanblog:dev-dsh ./vanblog.sh`。
+`VANBLOG_IMAGE_REF=<加速地址>/ckboss/vanblog:latest ./vanblog.sh`。
 
 ## 源码构建（拉不到镜像时）
 
@@ -98,9 +101,15 @@ VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ./vanblog.sh restore      # 从整站备份恢复
 ./vanblog.sh reset        # 换新机器：自动初始化 + 恢复整站备份 + 重启 + 核对（一条命令）
 ./vanblog.sh install-cron # 定时备份：每天一次写进 root 的 crontab（幂等；--remove 移除）
-./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）
+./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）；不带参数 = 默认的 latest 标签
+./vanblog.sh update v2026.9.2   # ✅ 升到**指定发布版**（推荐：发布号永远不变）
 ./vanblog.sh --help       # 全部命令
 ```
+
+⚠️ 上面两行的区别很重要：**不带版本号的 `update` 用的是默认标签 `latest`**（最近一次发布构建，
+会随下次发版移动）；带发布号才是钉死不动的版本。参数打错会直接拒绝（退出码 2），不会静默按默认升级。
+标签阶梯、"钉住的版本会写进编排文件"、降级时的 WARN 与回滚写法，见
+[升级](./update.md#升到指定发布版-一行命令)。
 
 `drill` / `verify-deep` / `backup-verify` / `backup-status` 这四条**不受脚本的 root 检查拦截**
 （它们在检查之前就转交给 `scripts/vanblog-drill.sh` 执行）：「校验/演练一份自己拥有的归档」
