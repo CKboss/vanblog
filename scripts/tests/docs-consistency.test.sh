@@ -96,25 +96,31 @@ else
   fail "安装文档里没有本分支的脚本地址"
 fi
 
-# ---------- 4) 安装/备份文档提到的 VANBLOG_* 变量，脚本或编排模板里必须真的有 ----------
-# ⚠️ 只查这几份"部署侧"的文档：VANBLOG_DISABLE_WEBSITE / VANBLOG_SWAGGER / 各种限流变量
-#    是 **server** 的环境变量，写在 features/config.md 里，本来就不该出现在 vanblog.sh 中。
+# ---------- 4) 安装/备份文档提到的 VANBLOG_* 变量，必须真的存在 ----------
+# ⚠️ "存在"的判据是三处之一：一键脚本、编排模板、**或 server 源码**。
+# 只认前两处不够：`docs/advanced/backup.md` 会写恢复侧的 server 变量
+# （`VANBLOG_RESTORE_PRUNE_STATIC` / `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS`，定义在
+# packages/server/src/utils/fullBackup.ts）—— 它们是真的、也确实该写进编排的 `environment:`，
+# 但脚本自己从来不读 ⇒ 只查脚本会把真变量判成"编造的"。
+# 这条守卫要抓的是"文档写了一个任何地方都不存在的变量名"，所以语料要覆盖三处。
 DOC_VARS="$(grep -rhoE 'VANBLOG_[A-Z_]+' \
   "${ROOT}/docs/guide/script.snippet.md" "${ROOT}/docs/guide/backup.md" \
   "${ROOT}/docs/guide/update.md" "${ROOT}/docs/advanced/backup.md" \
   "${ROOT}/docs/advanced/local-build.md" 2>/dev/null | sort -u)"
 COMPOSE_TPL="${ROOT}/docker-compose/docker-compose-template.yml"
+SERVER_SRC="${ROOT}/packages/server/src"
 unknown=""
 for v in ${DOC_VARS}; do
-  if grep -qF "${v}" "${SCRIPT}" || grep -qF "${v}" "${COMPOSE_TPL}"; then
+  if grep -qF "${v}" "${SCRIPT}" || grep -qF "${v}" "${COMPOSE_TPL}" ||
+    grep -rqF --include='*.ts' "${v}" "${SERVER_SRC}" 2>/dev/null; then
     continue
   fi
   unknown="${unknown} ${v}"
 done
 if [[ -z "${unknown}" ]]; then
-  pass "文档里的 VANBLOG_* 变量脚本都认（$(printf '%s' "${DOC_VARS}" | wc -w) 个）"
+  pass "文档里的 VANBLOG_* 变量都真实存在（$(printf '%s' "${DOC_VARS}" | wc -w) 个；脚本 / 编排模板 / server 源码任一即算）"
 else
-  fail "文档提到脚本里不存在的变量:${unknown}"
+  fail "文档提到不存在的变量（脚本、编排模板、server 源码里都找不到）:${unknown}"
 fi
 
 # ---------- 5) 文档写的默认值要和脚本一致 ----------
