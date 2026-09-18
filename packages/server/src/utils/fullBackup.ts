@@ -1845,7 +1845,17 @@ function restoreCaddySection(
   if (!target) {
     notes.push(
       `归档里有 ./caddy 段（${stats.files} 个文件，${formatBytes(stats.bytes)}，含 TLS 证书与私钥），` +
-        '但本次没有指定 caddy 数据目录，已跳过：需要时把 VANBLOG_CADDY_DATA_PATH 配上再恢复一次',
+        // ⚠️ 这里以前写的是「把 VANBLOG_CADDY_DATA_PATH 配上再恢复一次」—— 那个名字**没有任何代码读**
+        //    （真实的是 loadConfig('caddy.data.path') 推导出的 VAN_BLOG_CADDY_DATA_PATH，差一个下划线），
+        //    而且光有路径也没用：fullBackup.provider.ts 的备份与恢复两处都是
+        //    `backupIncludeCaddyEnabled() ? config.caddyDataPath : undefined`，
+        //    开关不开就永远是 undefined ⇒ 用户照着提示做也恢复不了证书。
+        //    现在按真实的两个旋钮写，并由 utils/envVarMentions.spec.ts 钉住
+        //    （用户可见文案里出现的每个环境变量名都必须真有人读）。
+        '但本次没有指定 caddy 数据目录，已跳过。要把它恢复回去：给 server 设 ' +
+        'VANBLOG_BACKUP_INCLUDE_CADDY=true（备份与恢复共用这个开关，默认关）再恢复一次；' +
+        '目录默认 /root/.local/share/caddy，非标准位置用 VAN_BLOG_CADDY_DATA_PATH' +
+        '（或 config.yaml 里的 caddy.data.path）指定',
     );
     return null;
   }
