@@ -26,6 +26,17 @@ VanBlog 首次运行默认关闭 HTTPS，请通过 HTTP 协议访问。无需多
 
 :::
 
+::: tip 想让访客用上 HTTP/3，还要放行 UDP 443
+
+证书与 HTTPS 只需要 TCP 443；**HTTP/3(QUIC) 走的是 UDP 443**。容器里的 caddy 在 `:443` 上
+本来就同时开了 `h1 / h2 / h3` 并发 `alt-svc` 头，所以缺的往往只是端口：新装的编排模板已经带
+`<https端口>:443/udp`，**老安装**跑一次 `./vanblog.sh config` 再 `./vanblog.sh restart` 就会补上
+（`./vanblog.sh status` 会直接告诉你 QUIC 端口映射了没有）。UDP 没放行也**不会坏** ——
+浏览器试连失败会自动退回 HTTP/2。外层还有 nginx 之类反代时注意：nginx 不能反代 UDP，
+详见 [反代 → 协议](../reference/reverse-proxy.md#协议http2-与-http3-在哪一层生效)。
+
+:::
+
 你可以点击 `使用当前访问域名触发按需申请` 按钮手动触发一下证书申请。
 
 触发请后稍等一会（申请时间取决于网络环境）。若成功，页面将通过 HTTPS 正常加载。
@@ -74,7 +85,8 @@ VanBlog 通过 Caddy 的 API 在运行时动态修改配置来开关 HTTPS 自�
 
 如果你熟悉 Caddy ，或者想自己排查，可以点击 `查看日志` 或者 `查看配置` 按钮自行排查。
 
-- VanBlog 访问日志在容器中的 `/var/log/vanblog-access.log`
+- VanBlog 的访问日志在容器中的 `/var/log/vanblog-access.log`（这份是 **caddy** 写的 JSON 访问日志，
+  一直在写，不需要开关；后台「Caddy」页也给了同样的路径）
 
 - Caddy 的运行日志储存在 `/var/log/caddy.log`中，除了可以在后台查看外，也可以自行进入容器中或挂载目录查看。
 

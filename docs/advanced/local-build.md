@@ -31,7 +31,7 @@ Node 版本不匹配这些问题，在本地测试里全是绿的，只有真把
 | `IMAGE_TAG` | `vanblog:local-test` | 构建出来的镜像 tag |
 | `SMOKE_HTTP_PORT` | `18080` | 冒烟测试映射的宿主机端口（避开正在跑的站点） |
 | `SMOKE_KEEP` | `0` | 设 `1` 则测完不拆容器，方便进去排查 |
-| `MONGO_IMAGE` | `mongo:7.0`（实际走一键脚本的 `pick_mongo_image()`） | 冒烟测试用哪个 mongo 镜像 |
+| `VANBLOG_MONGO_IMAGE` | `mongo:7.0` | 冒烟测试用哪个 mongo 镜像。⚠️ 不是 `MONGO_IMAGE` —— 那个名字是脚本**内部算出来的**（调一键脚本的 `pick_mongo_image()`：优先沿用编排文件里的 tag，否则用 `VANBLOG_MONGO_IMAGE`），你在环境里设 `MONGO_IMAGE` 会被无条件覆盖掉 |
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | 传给 `VAN_BLOG_NPM_REGISTRY` |
 | `ALPINE_MIRROR` | `https://mirrors.aliyun.com/alpine` | 传给 `VAN_BLOG_ALPINE_MIRROR`，`none` 用官方源 |
 | `NODE_DIST_URL` | `https://cdn.npmmirror.com/binaries/node` | node-gyp 的 Node 头文件源，`none` 用默认 |
@@ -83,8 +83,10 @@ rootless podman 需要 `/etc/subuid` 里有你的用户（发行版一般已经�
    ```
 
    docker 则配 `/etc/docker/daemon.json` 的 `registry-mirrors`。
-   ⚠️ 公共加速站拉**大 blob**（`node:24` 约 400MB、`mongo:7.0` 500MB）时可能传到一半就静默卡死
-   —— 进度行不动、不报错、也不超时。遇到就多换几个站重试，或先单独 `pull` 再构建。
+   ⚠️ 公共加速站拉**大 blob**时可能传到一半就静默卡死（进度行不动、不报错、也不超时）。
+   本仓库五个 stage 的基础镜像全是 `node:24-alpine`（本地解包后约 **170 MB**），冒烟测试还要拉
+   `mongo:7.0`（本地解包后约 **870 MB**）；下载的压缩 blob 比这两个数小，但都是几百 MB 量级。
+   遇到就多换几个站重试，或先单独 `pull` 再构建。
 
 1. **Alpine 软件源**：官方 `dl-cdn.alpinelinux.org` 实测经常 8-10 秒才回一个索引，
    构建看起来"卡死"在 `apk add`。`VAN_BLOG_ALPINE_MIRROR` 换成 aliyun/tuna 即可

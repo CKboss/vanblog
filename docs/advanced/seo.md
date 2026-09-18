@@ -15,6 +15,7 @@ VanBlog 内置一些搜索引擎优化策略，开箱即用，无需任何配置
 而静态文件不知道你的域名。当前内容：
 
 ```
+# 由 VanBlog 生成；后台「站点信息」里的站点 URL 决定下面的 Sitemap 地址
 User-agent: *
 Disallow: /api/
 Disallow: /admin/
@@ -29,9 +30,11 @@ Allow: /static/
 Sitemap: https://你的域名/sitemap.xml
 ```
 
-- 屏蔽了接口、后台、`/swagger`（整个后台 API 面的文档）以及导出归档 / 临时目录，
+- 屏蔽了接口、后台、`/swagger`（整个后台 API 面的文档；⚠️ 它现在**默认就是关的**，
+  见 [安全与加固](./security.md#环境变量)）以及导出归档 / 临时目录，
   但**放开 `/static/`**（图床与附件需要被收录）。
-- 站点 URL 没配（或配得不成样子）时不会写出一条错误的 `Sitemap:`，而是留一行注释提示。
+- 站点 URL 没配（或配得不成样子）时不会写出一条错误的 `Sitemap:`，而是留一行注释提示
+  （`# Sitemap: 未配置站点 URL（后台「站点信息 → 网站 URL」），填好后这里会自动出现`）。
 - 带 `Cache-Control: public, max-age=3600`：爬虫请求很频繁，改完站点 URL 最多一小时后生效。
 - 生产环境由内置 caddy 把 `/robots.txt` 转给 server；开发环境下 Next 也做了同样的 rewrite。
 
@@ -125,8 +128,13 @@ VanBlog 没有 Hugo 那种站点级 `permalinks` 模板。按篇文章设置「�
 
 ## 订阅源（RSS / Atom / JSON Feed）
 
-三种格式同时生成在 `/rss/feed.xml`、`/rss/atom.xml`、`/rss/feed.json`，内容是渲染后的**全文 HTML**。
-这一轮修了几处：
+三种格式同时生成在 `/rss/feed.xml`、`/rss/atom.xml`、`/rss/feed.json`。每条 item 的**全文**在
+`content:encoded`（渲染后的 HTML）；`description` 走的是与前台列表**完全相同的摘要口径**
+（`<!-- more -->` 之前的部分，没有这个标记就取前 200 字）—— 以前没有 `<!-- more -->` 的文章会把
+**全文**塞进 `description`，阅读器的列表页因此变成一整篇文章。默认只保留最新 **50** 条
+（`VANBLOG_RSS_ITEM_LIMIT`，`0` = 不限）。细节见 [RSS](./rss.md)。
+
+2026-09 那一轮修了几处：
 
 - 分类/标签的 `domain` 以前会拼出 `https://域名//category/xxx`（双斜杠），且中文没编码 → 现在收敛尾斜杠并 `encodeURIComponent`；
 - **标签也作为 `<category>` 输出**（以前只有分类），feed 阅读器与聚合站可以按标签分组；
@@ -138,4 +146,12 @@ VanBlog 没有 Hugo 那种站点级 `permalinks` 模板。按篇文章设置「�
 
 ## 平台对接支持
 
-vanblog 内置了对接 GA 和 百度统计的配置，如需对接其他的平台，可以很简单利用自定义 JS 的功能来实现。
+vanblog 内置了对接 **Google Analytics** 和**百度统计**的配置：后台 `站点管理/系统设置/站点配置` 里的
+**「Google Analytics 测量 ID」**（形如 `G-XXXXXXXXX`，留空表示不启用）与 **「百度统计 ID」** 两个字段。
+如需对接其他的平台（Umami、51la 等），可以利用[定制化](./customizing.md)的自定义 HTML (head) 很简单地实现。
+
+⚠️ GA 那个字段现在会**校验测量 ID 的格式**（`G-…` / `UA-…`），认不出来就**不注入**脚本。
+以前的规则是"非空就注入"：把别家统计的 ID 填进 GA 字段，前台也会照样去请求 `gtag/js?id=…`
+（实测返回 200 且约 **242 KB**，为一个根本不存在于 GA 的媒体资源白下载一次），而真正的统计并没有接上。
+⚠️ 判据只有一处：`shouldInjectGa` 与组件实际调用的 `describeGaInjection` 必须用同一个函数，
+只收紧前者的话填错的 ID 照样会注入。

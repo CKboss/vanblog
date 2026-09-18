@@ -38,8 +38,17 @@ ENGINE=podman IMAGE=localhost/vanblog:local-test RUN_DIR=$PWD/vanblog_dev/bench 
   EXTRA_ENV="VANBLOG_RATE_LIMIT_PER_MIN=100000000,VANBLOG_STATIC_LIMIT_PER_MIN=1000000000" \
   vanblog_dev/run-image-stack.sh --stack-only        # 本机脚本；生产用 docker compose
 
-# 2) 灌入真实数据
-VANBLOG_API_BASE=http://127.0.0.1:18080 ./vanblog.sh reset 0 <你的 vanblog-full-*.tar.zst>
+# 2) 灌入真实数据（reset 的参数就是归档本身，没有别的位置参数）
+VANBLOG_API_BASE=http://127.0.0.1:18080 ./vanblog.sh reset <你的 vanblog-full-*.tar.zst>
+# ✅ 全新未初始化的站点也能直接跑这条：reset 需要登录，而它拿 token 的办法是
+#    "没初始化就调 POST /api/admin/init 建个临时账号"。那条匿名接口默认要求**初始化密钥**
+#    （VANBLOG_INIT_REQUIRE_SETUP_KEY，默认开），脚本会自己去读并带上 —— 先读
+#    `<数据目录>/log/setup.key`（编排把该目录挂到容器 `/var/log`，站点未初始化期间 server 一直
+#    写着它，初始化成功后自己删掉），读不到再从容器日志的「初始化密钥： 」行兜底（启动印一次，
+#    之后每 VANBLOG_SETUP_KEY_REMIND_MINUTES（默认 10）分钟重印）。容器刚起、密钥还没写出来时
+#    会重试 VANBLOG_SETUP_KEY_WAIT 秒（默认 15，0 = 只试一次）。密钥全程不回显，提示只说长度。
+#    真读不到（例如自定义过 VAN_BLOG_LOG，日志目录不在 `<数据目录>/log`）会明确报错并给出两条
+#    照做的取法；确实想关掉这道保护，就给容器设 VANBLOG_INIT_REQUIRE_SETUP_KEY=false 再重试。
 
 # 3) 采集（本报告用的就是这一条）
 scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
@@ -95,7 +104,7 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
   这是全站最划算的一次改造（AGENTS §7.44）。
 - **`/api/public/theme.css` 是 204** —— 内置皮肤不下发 CSS（只有上传的自定义主题才有内容），6 ms 是纯往返。
 - **`/admin` 只有 6,445 B** —— 后台是 umi 的 SPA 外壳，体积在按需加载的 chunk 里。
-- **gzip 对文本大约省 65–75%**（首页 93,359 → 22,961 B；feed.xml 291,675 → 85,909 B），
+- **gzip 对文本大约省 65–75%**（首页 93,359 → 22,961 B；feed.xml 291,675 → 85,913 B，与上表同一份采集），
   对图片**一个字节都不省**（webp 本身已压缩，所以两轮数字相同）—— 这正是"图片该由 caddy 直发、
   文本该压缩"的依据。
 
@@ -136,13 +145,18 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 
 ## 4. 静态资源吞吐（caddy 直服，不经 Node）
 
-| 50 | 800 | 0.5 | 1487.0 | 29 | 64 | 98 | 141 | 3432.1 | 200:800 | - |
+| 并发 | 完成 | 秒 | rps | p50 | p95 | p99 | max | Mbps | 状态码 | socket 错误 |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 50 | 800 | 0.5 | 1487.0 | 29 | 64 | 98 | 141 | 3432.1 | 200:800 | - |
 
 **1,487 rps / 3,432 Mbps（≈429 MB/s）**，p50 29 ms、p95 64 ms。
 对照：同一批图片走 Node（改造前）是 **718.8 rps / p50 37 ms / p95 183 ms**（AGENTS §7.44）——
 **吞吐 2.07×、p95 降 65%**，而且这些字节不再占用 Node 的事件循环。
 图片站的主要带宽开销就在这条路上。
+
+> ⚠️ 别把两个数搞混：本节这次跑出来的是 **1,487 rps（2.07×）**，而第 9 节那张表引用的是
+> §7.44 **当时那一轮**的 1,556 rps（2.17×）。两次都是实测，只是不同轮次；同一份报告里
+> 以本节为准。
 
 ## 5. C10K（一万条连接同时挂住，再一起发请求）
 
@@ -166,21 +180,27 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 
 ## 6. 容器资源占用
 
+`podman stats` 读数（CPU 是相对宿主机 6 核的百分比，MEM 后面是"用量 / 上限"）：
 
-**空闲：**
+| 时机 | 容器 | CPU | MEM |
+|---|---|---|---|
+| **空闲**（刚做完"恢复 66 MB 归档 + 首轮全量渲染"） | `vb-mongo` | 5.17% | 142.2 MB / 33.4 GB |
+| 同上 | `vb-app` | 26.99% | 1.357 GB / 33.4 GB |
+| **加压中**（并发 200） | `vb-mongo` | 8.94% | 162.2 MB / 33.4 GB |
+| 同上 | `vb-app` | 38.79% | 627.4 MB / 33.4 GB |
 
-| vb-mongo CPU=5.17% MEM=142.2MB / 33.4GB |
-| vb-app CPU=26.99% MEM=1.357GB / 33.4GB |
+那一轮加压的完整结果（与第 3 节同一张表的列顺序：并发 | 完成 | 秒 | rps | p50 | p95 | p99 | max | Mbps | 状态码 | socket 错误）：
 
-**加压中（并发 200）：**
+| 并发 | 完成 | 秒 | rps | p50 | p95 | p99 | max | Mbps | 状态码 | socket 错误 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 200 | 20000 | 35.7 | 560.9 | 138 | 1027 | 1289 | 16668 | 820.5 | 200:18602 204:1398 | - |
 
-| vb-mongo CPU=8.94% MEM=162.2MB / 33.4GB |
-| vb-app CPU=38.79% MEM=627.4MB / 33.4GB |
+采集命令：
 
-**这一轮加压的结果：  200 | 20000 |  35.7 |   560.9 |  138 | 1027 | 1289 | 16668 |  820.5 | 200:18602 204:1398 | -**
-
-
-**> 采集命令：`scripts/benchmark/measure.sh --base http://127.0.0.1:18080 --engine podman --container vb-app --sweep-c 50,200,500,1000 --sweep-n 3000 --static-n 800 --latency-n 20 --c10k 10000`**
+```bash
+scripts/benchmark/measure.sh --base http://127.0.0.1:18080 --engine podman --container vb-app \
+  --sweep-c 50,200,500,1000 --sweep-n 3000 --static-n 800 --latency-n 20 --c10k 10000
+```
 
 
 ⚠️ 读数要点：`podman stats` 的 MEM **含页缓存**；"空闲"那一格是刚做完"恢复 66 MB 归档 + 首轮全量渲染
@@ -232,7 +252,7 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 | 图床图片由 caddy 直服 | 静态吞吐 **718.8 → 1,556 rps（2.17×）**、p95 **183 → 56 ms** | §7.44 |
 | 静态资源独立限流桶 | 纯静态 3,000 请求从"600 个之后开始 429"变成**全部 200** | §7.44 |
 | 上游 keep-alive 超时对齐（Node 默认 5 s vs caddy 60 s） | 偶发 ECONNRESET/502 消失（并发 1000 那一档 **101 个 502 → 0**） | §7.44 |
-| highlight.js 不再上首屏（第三档渲染器） | 首页资源 gzip **458,979 → 398,256 B（−13.2%）** | §7.45 |
+| highlight.js 不再上首屏（第三档渲染器） | 首页资源 gzip **458,979 → 398,286 B（−13.2%）** | §7.45 |
 | 阅读量从 pageProps 播种 + 合并刷新 | 首页客户端请求 **42 → 37**，卡片首屏就是真实数字（不再 `...` 跳变） | §7.45 |
 | 浏览统计合并写入 | 每次浏览 **8 条命令 → ~1 条** | §7.46 |
 | markdown 不再每次重渲染整篇重解析 | 同一篇文章页原本每次重渲染解析 3 遍（7.9 KB 文章 ≈66 ms/遍）→ **0 遍** | §7.54 |
@@ -244,6 +264,9 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 第 10 节把"caddy 直接发 ISR 生成的 HTML"列为**剩下的最大吞吐杠杆**。它现在**部分实现了**，
 而且实现范围比想象的小得多 —— 因为调研发现动态路由有硬阻塞（见下）。数字来自同一台机器、
 同一份 53 篇真数据、同一个压测台，所以 A/B 有效（绝对值仍然偏保守）：
+
+> ⚠️ **本节讲的是第一轮（只有 6 个固定页）。动态路由后来也做了，见下面的 §9.2** ——
+> 那五条"硬阻塞"各自是怎么被解掉的、以及一处我自己写错又更正的限流结论，都在 §9.2。
 
 | 场景 | 走 Node 反代 | caddy 直发 | |
 |---|---|---|---|
@@ -324,17 +347,33 @@ node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile late
 
 ## 10. 已知边界与下一步（按性价比）
 
-1. **caddy 直接发 ISR 生成的 HTML**：✅ **6 个固定页已实现**（`VANBLOG_CADDY_SERVE_HTML`，默认关，见第 9.1 节的实测与两条代价）。
-   **动态路由仍未做**，因为调研证明了硬阻塞（删除的文章的 HTML 永不删、308/404 不留产物、notFound 只在内存里）；
-   要扩大范围，得先在服务端做出"notFound/重定向时删掉文件"的语义，然后再评估。
+1. **caddy 直接发 ISR 生成的 HTML**：✅ **已实现（固定页 + 动态路由都做完了）** ——
+   `VANBLOG_CADDY_SERVE_HTML=true` 直发 6 个固定页（第 9.1 节：3.7–4.5× rps、p95 −78…−84%），
+   `=all` 再加 `/post/*`、`/page/*`、`/category/*`、`/tag/*`（第 9.2 节：文章页突发 **8.8×**、p50 7 → 1–2 ms）。
+   **默认仍是关的**，且要求 ISR 是 `onDemand` 模式（`delay` 模式会自动降级）。当初判定的五条硬阻塞
+   现在分别由**失效产物清理器**（`VANBLOG_ISR_REAP_INTERVAL_MS`，默认 15 分钟对账）、`try_files` 回落、
+   onDemand 门槛与"风暴重写 + 清理器"双保险兜住，逐条对照见 §9.2。
+   **还没做的**只剩两行活体验证（`publishAt` 未到期不可直发、"删除 → 风暴 → 自动 unlink"的完整事件链），
+   以及"要不要默认打开"这个决定 —— 打开前请先在自己的数据上压一遍。
 2. **打开 cluster**（`VANBLOG_CLUSTER_WORKERS`，默认 1）：代码与守卫都铺好了（cron / 子进程 spawn / 启动清洗 /
    首轮渲染都限定主实例，限流与连接池按 worker 数摊薄），但 **N>1 从未真跑过**，而且内存随 worker 数近似线性增长
    （与"占用更低"是相反的取舍）。打开前必须自己压一遍。
-3. **AVIF 缩略图**（现在是 webp）：sharp 0.35 支持，同质量通常再省 20–30% 字节，需要 `<picture>` 回退。
+3. **AVIF 缩略图**：✅ **已实现，但默认关**（`VANBLOG_THUMB_AVIF=true` 打开）。缩略图会额外产一份
+   `.avif` 兄弟文件（字段 `meta.thumbAvif`），前台用 `<picture>` 回退，**字段缺失时 HTML 逐字节不变**
+   （有金样对拍测试）。实测 avif q50 vs webp q70 = **−26.2…−41.3% 字节**（编码 0.6–1.3 s/张）。
+   ⚠️ 两个刻意的边界：**原图不做**（实测最高 **241 秒/张 CPU**，上传路径与回填都不可接受；
+   唯一合理的形状是夜间任务），**极小图反而更大**（60×40 的图 +242%，AVIF 有约 294 B 容器底噪
+   ⇒ 小图标继续用 webp）。默认关是因为它要占额外磁盘、且收益只在支持 AVIF 的浏览器上兑现。
 4. **前台资产还能再减**：全局 CSS 里 apple 皮肤 46 KB + markdown 专用表约 27 KB，对 `/link`、`/tag`、`/timeline`
    是死重 —— 被 Next 的 pages router 挡着（只允许在 `_app` 引第一方全局 CSS，三种绕法都被编译器拒），
-   要等 Next 大版本或打 patch。字体自托管同理（现在每页请求 3 次字体 CSS、woff2 下载 2 次，
-   其中一次来自站点数据里那份重复的 `@font-face`）。
+   要等 Next 大版本或打 patch。
+   字体那条**已经做了一半**：apple 皮肤的拉丁子集（Maple Mono）已自托管到 `public/fonts/`
+   （74,088 B + OFL-1.1 许可证，版本钉死 `@fontsource/maple-mono@5.3.0`，`font-display: swap`，
+   只在 apple 皮肤下加**一条** `preload` 且带 `crossOrigin="anonymous"` —— 少了这个属性同源字体会**下载两次**），
+   jsDelivr 那个 `@latest` 运行时依赖已经去掉，代码侧 **0 个第三方字体请求**。
+   还剩：中文 / Nerd Font 子集仍走 `static.zeoseven.com` 的 CSS（异步加载、解析不了就退回系统字体栈），
+   彻底自托管要按 `unicode-range` 分包；另外**站点数据里**的自定义 CSS/HTML 仍可能引用第三方
+   （那是用户数据，只能在后台「定制化」里清）。
 5. **站点数据里的第三方脚本**（不是代码问题，但对首屏影响最大）：一个 798 KB 的 MathJax（公式已由 KaTeX
    服务端渲染，纯重复）、gtag 与百度统计各加载两次、两个 51la 属性且开着 `screenRecord`、一个超时的计数器图片。
    在后台「定制化」里删掉即可，见 AGENTS §7.38.2。
@@ -342,5 +381,9 @@ node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile late
 ---
 
 *采集：`scripts/benchmark/measure.sh`（原始输出为 markdown，可直接对照）。*
-*本报告对应的仓库状态：镜像 860 MB、Node v24.21.0、NestJS 10.4.22、mongoose 8.24.4、Next 14.2.35、TypeScript 5.9.3。*
+*本报告对应的仓库状态：镜像 **860 MB**（采集当时；`v2026.9.2` 起镜像里多了三个字体包，现在是 **892 MB**，
+差的 32 MB 全在 `/usr/share/fonts`，不在任何请求路径上，所以下面的数字不受影响）。
+运行时版本是**在 `v2026.9.2` 的镜像里逐个读出来的**：Node v24.21.0、Alpine 3.24.1、express 4.22.3、
+@nestjs/core 10.4.22、mongoose 8.24.4、sharp 0.35.4；Next 14.2.35 与 TypeScript 5.9.3 取自锁文件
+（TS 是构建期依赖，不进运行镜像）。*
 *数字会随机器、数据规模与内核参数变化 —— 要比较请先在同一台机器上重跑一遍基线。*

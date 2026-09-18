@@ -50,6 +50,15 @@ order: 9
 - 全局净化中间件会递归删掉请求里以 `$` 开头的键（Mongo 操作符）以及 `__proto__` / `constructor` / `prototype`。以前 `?category[$ne]=x`、`?path[$regex]=^/bl` 这类查询对象会被直接塞进 Mongo 过滤器。
 - 所有进入 `$regex` 的用户输入都会转义并限长 200 字符，搜索还带 5 秒 `maxTimeMS`。以前搜 `(`、`[`、`*`、`a{2,1}` 会让公开搜索接口直接 500，`(a+)+b` 这类模式还能造成灾难性回溯。
 - 加密文章不会通过搜索、RSS、`POST /api/public/article/:id`（输密码解锁）泄露：这三处以前各有一条缝。
+- **JSON 请求体限额**：全局默认 **1mb**，只有后台四个内容前缀保留 **50mb** ——
+  `/api/admin/article`、`/api/admin/draft`（正文可以内嵌 base64 图片）、`/api/admin/customPage`
+  （整页 HTML/JS 当字符串提交）、`/api/admin/pipeline`（脚本正文），而这四个都在登录与权限之后。
+  以前 `express.json({limit:'50mb'})` 挂在**每一个**路由上：登录、公开评论、访客计数这些
+  **匿名可达**的接口都敞着 50MB 的解析上限（内存风险 + 现成的 DoS 面）。
+  超限返回 **413**（实测 1.17MB 打登录与公开评论就是 413）。可用 `VANBLOG_JSON_BODY_LIMIT` /
+  `VANBLOG_JSON_BODY_LIMIT_LARGE` 调，非法值回落默认。
+  ⚠️ 图片上传、整站备份恢复、JSON 导入走的是 multipart，**不经过这个解析器**，
+  它们的上限见上面「上传」一节（50MB / 8GB / 200MB），改这两个变量不会影响它们。
 
 ## 出站请求（SSRF）
 
@@ -77,6 +86,8 @@ order: 9
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（兜底限流，挡扫描器与失控客户端） |
 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作（POST/PUT/DELETE）的上限 |
 | `VANBLOG_INIT_LIMIT_PER_10MIN` | `5` | 每 IP 每 10 分钟对 `/api/admin/init*` 的调用上限 |
+| `VANBLOG_JSON_BODY_LIMIT` | `1mb` | 全局 JSON 请求体上限（匿名接口也走它）。超限 413 |
+| `VANBLOG_JSON_BODY_LIMIT_LARGE` | `50mb` | 后台四个内容前缀（文章/草稿/自定义页面/管线）的 JSON 上限，正文可内嵌 base64 图片 |
 | `VAN_BLOG_INTERNAL_TOKEN` | 空 | 前后端分离部署时的内部令牌：带上 `x-vanblog-internal: <token>` 的请求才允许 `pageSize=-1`（一体式镜像里回环直连自动放行，不需要设） |
 | `VANBLOG_API_TOKEN_TTL_DAYS` | `365` | 新签发 API Token 的有效期（天）。原来是 100 年，等于永不过期；已签发的 token 不受影响 |
 
@@ -166,7 +177,7 @@ scrypt$16384$8$1$<salt base64>$<hash base64>
   `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`，并隐藏 caddy 的 `Server` 头。
 - **`pageSize=-1` 收敛**：公开文章列表以前允许任何人一次性把**全部文章连正文**拉走
   （一个现成的拖库 + 打爆内存按钮）。现在只有内部调用（回环直连，或带
-  `x-vanblog-internal: <VAN_BLOG_INTERNAL_TOKEN>`）可以，其它一律夹到 `MAX_PAGE_SIZE`。
+  `x-vanblog-internal: <VAN_BLOG_INTERNAL_TOKEN>`）可以，其它一律夹到 `MAX_PAGE_SIZE`（**100**）。
   前台静态生成走的是容器内回环，一体式部署不需要任何配置；前后端分离部署时给两边配同一个
   `VAN_BLOG_INTERNAL_TOKEN` 即可。
 - **API Token 有效期**：原来是 **100 年**（等于永不过期，泄露一次长期有效）。新签发的默认 1 年，
@@ -181,8 +192,14 @@ scrypt$16384$8$1$<salt base64>$<hash base64>
 「升级之后行为变了」时能对号入座：
 
 - **静态目录 403 守卫改为编码/归一化感知**（`utils/staticGuard.ts`）：先百分号解码、
-  再 `path.posix.normalize`，`/static/export/%2e%2e` 之类写法不再能绕开匿名 403 名单
-  （`export/`、`tmp/`、`upload-tmp/`）。
+  合并重复斜杠、再 `path.posix.normalize`，然后比较 `/static/` 之后的**第一个路径段**
+  （不是做字符串前缀匹配 —— 前缀匹配会顺手把 `/static/exportx/` 这种无辜目录也挡掉），
+  `/static/%65xport/…`、`/static/export%2f…`、`/static/./export/…`、`/static/%2e%2e/…`
+  之类写法不再能绕开匿名 403 名单（`export/`、`tmp/`、`upload-tmp/`）；
+  归一化后**逃出** `/static/` 的一律按受控处理（直接 403），不把判断权交给静态层。
+  ⚠️ 旧写法（`req.path.startsWith('/static/export/')`）只挡住了最老实的那一种拼写，
+  而 `req.path` 是**未解码未归一化**的原始路径、静态层打开文件前却会解码归一化 ——
+  两边口径不一致时，"已经修好"的守卫其实只是装饰。
 - **`/static/**`、`/rss/**`、`/sitemap/**`、`/swagger*` 进入限流与安全头覆盖**（`main.ts`）：
   见上面「限流」一节；顺带激活了一直是死代码的静态独立桶。
 - **加密文章解锁限次的 key 归一化文章 id**（`controller/public/public.controller.ts`）：
@@ -224,9 +241,10 @@ scrypt$16384$8$1$<salt base64>$<hash base64>
 - ~~`/post/<数字id>` 与 `/post/<别名>` 都返回 200，没有 canonical / 301~~ —— **已经修好了**：
   数字 id 现在 308 跳到拼音别名，页面也带 `link rel="canonical"`，阅读量按规范化后的 pathname 统计。
   见 [SEO](./seo.md)。
-- ~~website 的 `__tests__` 里还有约 27 个类型错误~~ —— **已经清干净了**：`tsc --noEmit` 在
-  `packages/website` 上报的 115 个错误全部来自本机 `~/node_modules/bun-types`（TS 4.9 解析不了它的
-  新语法，见 AGENTS §3.6），仓库代码本身 0 个类型错误。
+- ~~website 的 `__tests__` 里还有约 27 个类型错误~~ —— **已经清干净了**：本分支已把 TypeScript
+  升到 **5.9**，`packages/website` 与 `packages/server` 的 `tsc --noEmit` 现在都是 **0 错误**
+  （2026-09 这一轮实测）。当年那"115 个错误"是 TS 4.9 解析不了开发机上 `bun-types` 的新语法造成的，
+  与仓库代码无关，编译器升级后这个现象也随之消失。
 
 ::: warning 部署建议
 
