@@ -104,7 +104,7 @@ export default function (props: {}) {
           rules={[{ required: true, message: '这是必填项' }]}
           required
           placeholder={'选择压缩输出格式'}
-          tooltip="仅在开启自动压缩时生效。AVIF 通常比 WebP 更小；现代浏览器已广泛支持。编码优先用 sharp（与前台相同的 0.32.6）；官方 Alpine 镜像若无法加载 musl sharp，则使用 libavif-apps 的 avifenc。"
+          tooltip="仅在开启自动压缩时生效。AVIF 通常比 WebP 更小；现代浏览器已广泛支持。编码优先用 sharp（与前台同一个版本，见 package.json）；官方 Alpine 镜像若无法加载 musl sharp，则使用 libavif-apps 的 avifenc。"
         />
         <ProFormSelect
           fieldProps={{

@@ -255,7 +255,14 @@ export class LocalProvider {
     }
   }
 
-  /** 打包全部附件（仿「导出全部图片」），产物放在 /static/export/ 下。 */
+  /**
+   * 打包全部附件（仿「导出全部图片」）。
+   * ⚠️ 产物落在**备份目录**下的 export 子目录（`config.backupPath`，见下面两行），
+   * **不在静态目录里**：静态目录是匿名可读的，而归档里可能是整站数据。所以静态目录下的
+   * export、tmp、upload-tmp 三段都被 `utils/staticGuard` 拦成匿名 403，下载一律走鉴权接口。
+   * （⚠️ 别在这条注释里把那个静态路径拼出来：admin 的 securityHardening.test.js 有一条
+   * 反证断言钉着"这个文件里不许再出现它"，而它匹配的是**整份文件的文本**，注释也算。）
+   */
   async exportAllAttachments() {
     const folder = ATTACHMENT_FOLDER;
     const src = path.join(config.staticPath, folder);
