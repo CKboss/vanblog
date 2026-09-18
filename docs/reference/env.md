@@ -63,7 +63,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VAN_BLOG_VERSION` | `dev` | 页脚与后台「关于」显示的版本号（镜像构建时写入。⚠️ Dockerfile 的构建参数是复数 `VAN_BLOG_VERSIONS`，两个名字**故意不一样**） |
 | `EMAIL` | 空 | 自动申请 HTTPS 证书的 ACME 联系邮箱（不带前缀）。不像邮箱的值会被忽略；留空也能签发，只是收不到到期提醒 |
 | `UV_THREADPOOL_SIZE` | `16`（镜像里） | libuv 线程池：sharp 编解码、fs 异步、scrypt 都在这个池子里（Node 默认只有 4）。CPU 核多、图片流量大时才值得调（经验值：核数的 2–4 倍） |
-| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数，上限 32。⚠️ N>1 尚未实跑验证：每个 worker 一份完整应用，内存近似线性增长；限流与连接池会按 worker 数摊薄。打开前请自己压一遍 |
+| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数：正整数（上限 **32**），也可写 `auto` / `cpus` / `max` = 按 CPU 核数开（同样不超过 32）。空值、`0`、负数、垃圾值一律回落到 `1`（= 单进程）。⚠️ N>1 尚未实跑验证：每个 worker 一份完整应用，内存近似线性增长；限流与连接池会按 worker 数摊薄。打开前请自己压一遍 |
 | `VANBLOG_DISABLE_WEBSITE` | 空 | `true` = server 不拉起前台（Next）子进程。前后端分离部署 website 镜像时用 |
 | `VANBLOG_WEBSITE_HOST` | `0.0.0.0` | 前台子进程的监听地址（一体式镜像保持默认即可） |
 | `VANBLOG_MONGO_MAX_POOL_SIZE` | `100` | mongoose 连接池上限（多进程时按 worker 数摊薄） |
@@ -114,7 +114,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_BACKUP_SWEEP_DEEP` | 关 | 巡检时是否也做成员级哈希（≈1.4s/份）。默认关：巡检要的是「便宜到能天天跑」 |
 | `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48`（`0` = 关） | 太久没有「已校验的成功备份」就在启动与每次备份失败后 WARN |
 | `VANBLOG_BACKUP_INCLUDE_CADDY` | 关 | `true` 时整站归档额外打包 caddy 的 TLS 材料（`VAN_BLOG_CADDY_DATA_PATH`，恢复时写回）。默认关：证书到期会自动重签，一般不用备 |
-| `VANBLOG_BACKUP_ZSTD_LEVEL` | `19` | 整站归档的 zstd 压缩等级（越大越慢越小）。容器设了内存上限时建议调到 `12`（`-19 --long` 峰值能到 1GB 上下，可能被 OOM 杀） |
+| `VANBLOG_BACKUP_ZSTD_LEVEL` | `19` | 整站归档的 zstd 压缩等级（夹在 **1–22**，越大越慢越小；非法值回落 19）。容器设了内存上限时建议调到 `12`（`-19 --long` 峰值能到 1GB 上下，可能被 OOM 杀） |
 | `VANBLOG_RESTORE_PRUNE_STATIC` | **开** | 恢复时把四个静态目录（`img`、`file`、`customPage`、`themes`）**修剪成与归档完全一致**：归档里没有的文件会被删掉（在所有拷贝成功之后才执行）。这是「100% 保真恢复」的代价：恢复后不保留「备份之后新上传的图片」。`off` = 旧行为（只覆盖、不删多余） |
 | `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS` | 关 | 归档里**缺失**的集合默认只**报告**不删除。设 `true` 才真的 drop（恢复成「与备份那一刻完全一致」的库） |
 
@@ -224,7 +224,7 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 | 名称 | 默认值 | 说明 |
 | --- | --- | --- |
 | `VANBLOG_INSTALL_MODE` | `auto` | `auto` 先拉镜像、拉不到退回源码构建；`image` 只拉；`source` 只本地构建 |
-| `VANBLOG_IMAGE_REF` | 由脚本决定 | 用哪个镜像（可指具体发布号、本地 tag 或镜像加速地址）。当前默认值以 `./vanblog.sh status` 打印的「镜像来源」为准 |
+| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:latest` | 用哪个镜像（可指具体发布号、本地 tag 或镜像加速地址）。`./vanblog.sh status` 会打印当前生效的「镜像来源」。⚠️ `latest` 与 `dev-dsh` 都是**会移动**的标签；要钉住内容就用发布号，最省事的写法是 `./vanblog.sh update v2026.9.2`（等价于 `VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2 ./vanblog.sh update`），它会把编排文件里的 `image:` 一起改成这个 ref |
 | `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | `true` 时改用原作者发布的镜像 `mereith/van-blog:latest`（功能与本项目不同，一般只用于对照排查），优先级最高 |
 | `VANBLOG_MONGO_IMAGE` | `mongo:7.0` | **只在全新安装时生效**；已有数据目录保持原 tag。老机器 CPU 不支持 avx 用 `mongo:4.4.16` |
 | `VANBLOG_RESTORE_FROM` | 空 | `install` 之后自动 `reset`：把这份整站备份恢复上去（换机器一步到位） |
@@ -232,8 +232,8 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 | `VANBLOG_BASE_PATH` | `/var/vanblog` | 安装目录（编排文件、离线备份 tar 包） |
 | `VANBLOG_DATA_PATH` | `<安装目录>/data` | 数据目录（static/mongo/log） |
 | `VANBLOG_BACKUP_DIR` | `<数据目录>/log/vanblog-backups` | 整站备份归档目录 |
-| `VANBLOG_SRC_DIR` | 脚本决定 | 源码构建时的克隆目录 |
-| `VANBLOG_REPO` / `VANBLOG_BRANCH` | `CKboss/vanblog` / `dev/dsh` | 源码构建 clone 哪个仓库哪个分支 |
+| `VANBLOG_SRC_DIR` | `<安装目录>/src` | 源码构建时的克隆目录（默认 `/var/vanblog/src`） |
+| `VANBLOG_REPO` / `VANBLOG_BRANCH` | `https://github.com/CKboss/vanblog.git` / `dev/dsh` | 源码构建 clone 哪个仓库、哪个分支（`VANBLOG_REPO` 要写**完整克隆地址**） |
 | `VANBLOG_IMAGE_TAG` | `vanblog:dev-dsh` | 本地构建打什么 tag |
 | `VANBLOG_NPM_REGISTRY` / `VANBLOG_ALPINE_MIRROR` / `VANBLOG_NODE_DIST_URL` / `VANBLOG_SHARP_DIST_HOST` | 空 = 实测延迟后选最快的源 | 源码构建时的四个源（`none` = 强制官方），海外机器什么都不用设 |
 | `VANBLOG_FORCE_BUILD` | `false` | 可用内存 <1.8GB 时脚本会劝退源码构建；`true` 强行继续（后果自负） |
@@ -268,6 +268,7 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 | `VANBLOG_DRILL_DRY_RUN` | `0` | `1` = 只打印计划，什么都不碰 |
 | `VANBLOG_DRILL_NO_PULL` | `0` | `1` = 不拉镜像（用本地已有的） |
 | `VANBLOG_DRILL_SKIP_PREFLIGHT` | `0` | `1` = 跳过归档预检（**坏归档也要演练**时用：截断归档应该得到 HTTP 400 + 完整清理） |
+| `VANBLOG_DRILL_SKIP_HASH` | `0` | `1` = 预检时跳过**成员级**哈希比对（merkleRoot 与双清单等其它检查照做）。跳过时会 WARN，并在结论行里明说「这次 PASS 不含逐成员比对」；等价于 `drill --skip-hash` |
 | `VANBLOG_DRILL_LOG_TAIL` | `80` | 失败时打印多少行容器日志 |
 | `VANBLOG_DRILL_HOME` / `VANBLOG_DRILL_TMPDIR` | 真实 HOME / `$TMPDIR` | 给 podman 换 HOME / 临时目录（镜像存储放在仓库里之类的场景） |
 | `VANBLOG_BACKUP_STALE_DAYS` | `7`（`0` = 不查） | `backup-verify`/`backup-status`：最新归档超过这么多天算「陈旧」 |
@@ -286,6 +287,6 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 `VAN_BLOG_ADMIN_BUILD_SCRIPT`）、`VANBLOG_BUILD_VIABLE`、`VANBLOG_BUILD_REASON`、
 `VANBLOG_SRC_COMMIT`、`VANBLOG_COMPOSE_COND_SUPPORT`、`VANBLOG_CLUSTER_ROLE`、
 `VAN_BLOG_SERVER_CWD`、`VAN_BLOG_EMAIL`（caddy 配置生成时的占位符）、
-`VANBLOG_DRILL_SKIP_MAIN`、`VANBLOG_DRILL_SKIP_HASH`，以及测试专用：
+`VANBLOG_DRILL_SKIP_MAIN`，以及测试专用：
 `VANBLOG_TEST_ENV_NUM`、`VANBLOG_SEARCH_MONGOD`、`VANBLOG_SEARCH_REALDB`、
 `VANBLOG_SEARCH_REALDB_DBPATH`、`VANBLOG_SEARCH_REALDB_PORT`。

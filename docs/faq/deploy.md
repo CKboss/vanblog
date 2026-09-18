@@ -38,7 +38,7 @@ environment:
   VAN_BLOG_SERVER_HOST: "127.0.0.1"
 ```
 
-未设置时与升级前一样监听所有网卡，现有 Docker 用户不用改。
+不设置就监听所有网卡（容器内的默认行为），所以现有部署不用改。
 
 **宿主机映射的 80 / 443**：把编排的端口改成只绑本机，例如 `- "127.0.0.1:80:80"`，再让本机反代 `proxy_pass` / `reverse_proxy` 到 `127.0.0.1:<端口>`。只改 `VAN_BLOG_SERVER_HOST` 不会收紧宿主机上的 `80:80`。
 
@@ -88,9 +88,9 @@ proxy_set_header Host $host;
 
 ## Cloudflare 缓存了后台或后台 API
 
-Cloudflare（或同类 CDN）如果用「缓存全部」覆盖 `/*`，即使另有 `/admin*` 绕过规则，**`/api/admin/*` 也不会被那条规则匹配**，登录和后台 JSON 仍可能被边缘缓存（[#140](https://github.com/Mereithhh/vanblog/issues/140)）。只改页面规则不够：旧版本源站没有 `Cache-Control`。
+Cloudflare（或同类 CDN）如果用「缓存全部」覆盖 `/*`，即使另有 `/admin*` 绕过规则，**`/api/admin/*` 也不会被那条规则匹配**，登录和后台 JSON 仍可能被边缘缓存（来历：[#140](https://github.com/Mereithhh/vanblog/issues/140)）。所以只加页面规则不够。
 
-升级后 VanBlog 会对 `/admin` 和 `/api/admin/*` 返回：
+源站自己也会帮忙：`/admin` 与 `/api/admin/*` 的响应带
 
 - `Cache-Control: private, no-store, no-cache, must-revalidate`
 - `CDN-Cache-Control: no-store`
@@ -217,25 +217,67 @@ vanblog 服务对 mongo 的 `depends_on` 有两种形状，脚本会按你机器
 
 ## 如何在外部访问数据库
 
-默认的数据库是不会暴漏在外面的，只在容器内可访问，是相对安全的。
+::: warning 先想清楚要不要真的暴露端口
 
-如果你看不懂下面的描述，我建议你先学一下相关的知识。如果不想学的话，建议还是放弃在外部访问数据库的打算，不然安全问题堪忧。
+默认编排里 mongo **没有映射任何端口**，只有同一个 compose 网络里的 vanblog 能连它 —— 这本身就是最安全的状态。
+把 27017 开到公网，等于把整站数据（含密码哈希）挂在互联网上等扫描器；MongoDB 被扫到后勒索、删库都是常见结局。
+**九成场景用下面的「SSH 隧道」就够了**，不需要暴露端口。
 
-为了安全考虑默认的 docker-compose.yaml 编排中的 mongoDB 是仅容器内访问的（换句话说不会对外保留端口）。
+:::
 
-如果你想连接的话，首先需要修改编排中 mongoDB 的账密（对外暴漏端口有安全风险，一定要设置强密码！）
+### 推荐：SSH 隧道（不改安全边界）
 
-![修改账号密码](https://www.mereith.com/static/img/06f19fe68043cd4e8780e1e2484b70d9.clipboard-2022-09-02.png)
+在编排里把 mongo 的端口只绑到本机回环：
 
-注意画红圈的地方要同步改，然后加上下图画红线的语句：
+```yaml
+  mongo:
+    ports:
+      - "127.0.0.1:27017:27017"
+```
 
-![添加端口](https://www.mereith.com/static/img/e2bc119c1408d50f73a2da526dec96c8.clipboard-2022-09-02.png)
-
-然后重启容器，就可以通过 27017 端口访问 mongoDB 了：
+`docker-compose down && docker-compose up -d` 之后，在你自己的电脑上开隧道，再用本地客户端连 `127.0.0.1:27017`：
 
 ```bash
-docker-compose down && docker-compose up -d
+ssh -L 27017:127.0.0.1:27017 <用户>@<服务器IP>
 ```
+
+这样 27017 只有服务器上本机可达，外网扫不到。图形客户端（如 [MongoDB Compass](https://www.mongodb.com/try/download/compass)）
+连 `mongodb://127.0.0.1:27017` 即可。
+
+### 必须直接暴露端口时
+
+默认模板里的 mongo **没有开认证**（`environment:` 只有 `TZ`），靠的就是"外面连不到"。
+要对外开端口，必须先给它加上账号密码，三处要一起改：
+
+```yaml
+  mongo:
+    environment:
+      TZ: 'Asia/Shanghai'
+      MONGO_INITDB_ROOT_USERNAME: 'admin'
+      MONGO_INITDB_ROOT_PASSWORD: '换成你自己的强密码'
+    ports:
+      - "27017:27017"        # ⚠️ 能不写就不写；要写也尽量绑到内网/VPN 网卡的地址
+
+  vanblog:
+    environment:
+      # 账号密码要与上面一致，并且保留 /vanBlog?authSource=admin
+      VAN_BLOG_DATABASE_URL: 'mongodb://admin:换成你自己的强密码@mongo:27017/vanBlog?authSource=admin'
+```
+
+```bash
+docker-compose down && docker-compose up -d     # ⚠️ 不要加 -v
+```
+
+⚠️ **`MONGO_INITDB_ROOT_*` 只在数据目录为空时生效**（也就是全新安装）。已经有数据的站点要先在库里建用户，
+否则 vanblog 会连不上：
+
+```bash
+# mongo 6.0 / 7.0 用 mongosh；mongo 4.4 把 mongosh 换成 mongo
+docker-compose exec mongo mongosh --eval 'db.getSiblingDB("admin").createUser({user:"admin",pwd:"换成你自己的强密码",roles:[{role:"root",db:"admin"}]})'
+```
+
+再按上面改 `VAN_BLOG_DATABASE_URL` 并重启。连不上时先看容器日志（`./vanblog.sh log`）里有没有
+认证失败（`Authentication failed`）或 `command find requires authentication`。
 
 ::: danger 千万不要顺手加 -v
 
@@ -244,8 +286,6 @@ docker-compose down && docker-compose up -d
 只有 `./vanblog.sh uninstall`（卸载）才应该用 `-v`，而且它会先让你确认。
 
 :::
-
-具体访问方式可以自行查阅资料，我一般都是用 [mongoDBCompass](https://www.mongodb.com/try/download/compass) 这个工具。
 
 ## 用的是 HTTP/1.1 还是 HTTP/2 / HTTP/3
 
@@ -332,7 +372,24 @@ caddy 的证书不在整站备份里，但**不需要搬**：新机器上首次�
 
 ## docker 镜像拉取慢
 
-您可以 [设置 docker 镜像加速器](https://www.runoob.com/docker/docker-mirror-acceleration.html)。
+本项目的镜像在 `ghcr.io/ckboss/vanblog`，而 ghcr.io 在中国大陆经常很慢或超时。三条路，按省事程度排：
+
+1. **给 docker 配镜像加速器 / 代理**（一次配好，所有镜像都受益），例如
+   [设置 docker 镜像加速器](https://www.runoob.com/docker/docker-mirror-acceleration.html)；
+2. **把 `VANBLOG_IMAGE_REF` 指向你自己的镜像加速地址**，例如
+   `VANBLOG_IMAGE_REF=<你的加速地址>/ckboss/vanblog:latest ./vanblog.sh install`；
+3. **在能拉到的机器上导出、再导入**：
+
+   ```bash
+   # 能拉到镜像的机器
+   docker pull ghcr.io/ckboss/vanblog:latest && docker save ghcr.io/ckboss/vanblog:latest -o vanblog.tar
+   # 目标机器
+   docker load -i vanblog.tar
+   VANBLOG_INSTALL_MODE=image VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:latest ./vanblog.sh install
+   ```
+
+拉不到镜像时脚本会退回**源码构建**（15–40 分钟、要 1.8GB 以上可用内存），不想等就用
+`VANBLOG_INSTALL_MODE=image` 明确只拉镜像，失败了立刻看到错误。
 
 ## 端口被占用
 
@@ -342,21 +399,34 @@ caddy 的证书不在整站备份里，但**不需要搬**：新机器上首次�
 
 ## 部署后 http error
 
-![错误案例](https://pic.mereith.com/img/ae28e582a7dce7be4816c1bf82dd77de.clipboard-2022-08-28.png)
+先按这个顺序排（绝大多数是**数据库连不上**）：
 
-请检查一下 docker-compose 编排文件，如果修改了下面的数据库账号密码，上面的也要同步修改。
+```bash
+./vanblog.sh status      # 容器/接口/端口/目录一眼看全
+./vanblog.sh log         # 容器日志：看 server 有没有报连不上 mongo
+```
 
-![检查位置](https://pic.mereith.com/img/eb46eabfff8856c84ccd54a97d7f333c.clipboard-2022-08-28.png)
+1. 日志里出现 `MongoNetworkError` / `connect ECONNREFUSED mongo:27017`：mongo 还没起来或不在同一个网络里。
+   等 30 秒再看（首次初始化数据目录会慢一点）；仍不行就 `docker-compose down && docker-compose up -d`（**不要加 `-v`**）。
+2. 日志里出现 `Authentication failed` / `requires authentication`：连接串与 mongo 的账号密码不一致。
+   默认模板里 mongo **没有开认证**，vanblog 用的连接串是
+   `mongodb://mongo:27017/vanBlog?authSource=admin`；如果你给 mongo 加了
+   `MONGO_INITDB_ROOT_USERNAME` / `MONGO_INITDB_ROOT_PASSWORD`，就必须同步把
+   `VAN_BLOG_DATABASE_URL` 改成 `mongodb://<用户>:<密码>@mongo:27017/vanBlog?authSource=admin`
+   （**`/vanBlog?authSource=admin` 这段不能丢**），两处改完再重启。
+3. 日志里出现 `Unclean shutdown detected` 或 mongo 反复重启：多半是上次被硬杀或磁盘满了。
+   先 `df -h` 看磁盘，再 `./vanblog.sh restart`。
+4. 以上都正常但浏览器还是报错：回到 [部署后无法访问后台](#部署后无法访问后台) 按端口 / 防火墙逐条排。
 
-这两个地方的账号密码是对应的，实际上数据库是不会暴露到外面的（因为没有映射端口），所以无需更改默认账号与密码。
+改完编排文件记得重启容器才生效；`./vanblog.sh config` 会**重新生成**编排文件（覆盖前存一份
+`.bak-<时间戳>`），手改的 `environment:` 要记得加回去。
 
-如需求该，需要同步修改两处，比如数据库账号密码改成了 `admin` 与 `xxxx`，那对应的数据库链接地址也要改成: `mongodb://admin:xxxx@mongo:27017`。
-
-如果还是没能解决可以去 [QQ 交流群](https://jq.qq.com/?_wv=1027&k=5NRyK2Sw) 寻求帮助。
+仍然没头绪的话，带上 `./vanblog.sh status` 的输出与日志片段去
+[CKboss/vanblog 开 issue](https://github.com/CKboss/vanblog/issues/new)，见 [问题反馈](./README.md#问题反馈)。
 
 ## 无法通过 Https + IP 访问网址
 
-很遗憾，目前不支持通过 `https + ip` 访问，请通过 `https + 域名` 或者 `http + ip` 访问。用 `http + ip` 访问前请在后台设置中关闭 `https 自动重定向`。
+不支持用 `https + IP` 访问：HTTPS 需要证书，而证书是 caddy 按域名向 Let's Encrypt 申请的（IP 拿不到证书）。请用 `https + 域名`，或者 `http + IP`；用 `http + IP` 之前，先到后台 **系统设置 / HTTPS** 关掉「HTTPS 自动重定向」，否则会被强制跳到 https。关不掉时用 `./vanblog.sh reset_https` 在服务器上重置，见 [使用常见问题](./usage.md#开启了-https-重定向后关不掉)。
 
 ## 宝塔 nginx 反代后前台显示错误
 
