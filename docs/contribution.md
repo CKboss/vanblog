@@ -6,8 +6,10 @@ order: 7
 
 ::: info 提示
 
-欢迎提交 issue 和 PR：issue 请开在 [CKboss/vanblog](https://github.com/CKboss/vanblog/issues/new)，
-PR 提到 `dev/dsh` 分支。合并与打发版 tag 由维护者完成。
+欢迎提交 issue 和 PR：issue 请看 [CKboss/vanblog 的 issue 页](https://github.com/CKboss/vanblog/issues)
+（⚠️ 仓库的 issue 功能目前是关闭的，`/issues/new` 会 404 —— 在那之前提问走
+[VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)），PR 提到 `dev/dsh` 分支。
+合并与打发版 tag 由维护者完成。
 
 :::
 
@@ -46,17 +48,22 @@ Vanblog 分为以下几个部分，构建后将整合到一个 `docker` 容器�
 精简版目录结构：
 
 ```bash
-├── docker-compose  # docker-compose 编排
-├── Dockerfile  # Dockerfile
-├── docs # 项目文档的代码
+├── docker-compose  # docker-compose 编排模板
+├── Dockerfile  # 五阶段构建，全部基于 node:24-alpine
+├── docs # 项目文档的代码（vuepress）
 ├── entrypoint.sh # 容器入口文件
 ├── LICENSE # 开源协议
 ├── package.json
 ├── packages # 代码主体
-|  ├── admin # 后台前端代码
-|  ├── server # 后端代码
+|  ├── admin # 后台前端代码（umi 3 + antd 4 + React 17）
+|  ├── cli # 命令行工具
+|  ├── server # 后端代码（NestJS 10 + mongoose 8）
 |  ├── waline # 内嵌 waline 评论系统
-|  └── website # 前台前端代码
+|  └── website # 前台前端代码（Next 14 + React 18）
+├── patches # pnpm 补丁（构建时必须进上下文）
+├── scripts # 部署与运维脚本（vanblog.sh、vanblog-drill.sh、build-image-local.sh、benchmark/、tests/）
+├── dev-env.sh # 本机开发环境一键脚本（不需要 docker，也不需要 sudo）
+├── AGENTS.md # 工程运行手册：环境、测试、排错速查、每一项改动的根因与踩过的坑
 ├── README.md
 └── pnpm-workspace.yaml # pnpm workspace 文件
 ```
@@ -65,35 +72,48 @@ Vanblog 分为以下几个部分，构建后将整合到一个 `docker` 容器�
 
 只列出大体上框架级别的，一些细节就直接看代码吧。
 
-- 前台： [next.js](https://nextjs.org/)、[react.js](https://reactjs.org/)、[tailwind-css](https://tailwindcss.com/)
-- 后台： [ant design pro](https://pro.ant.design/zh-CN/)、[ant design](https://ant.design/)
-- 后端： [nest.js](https://nestjs.com/)、[mongoDB](https://www.mongodb.com/)
-- CI： [docker](https://www.docker.com/)、[nginx](https://www.nginx.com/)、[github-actions](https://docs.github.com/cn/actions)
+- 前台： [next.js](https://nextjs.org/)（14，pages router）、[react.js](https://reactjs.org/)（18）、[tailwind-css](https://tailwindcss.com/)
+- 后台： [ant design pro](https://pro.ant.design/zh-CN/)、[ant design](https://ant.design/)（umi 3 + antd 4 + React 17）
+- 后端： [nest.js](https://nestjs.com/)（10）、[mongoDB](https://www.mongodb.com/)（mongoose 8）
+- CI / 发布： [github-actions](https://docs.github.com/cn/actions)（`server-test` 跑单元与 e2e、`admin-e2e` 跑 playwright、
+  `publish-ghcr` 用 docker buildx 构建并推镜像、`release-fork` 建 Release）；本机验证镜像用
+  [podman](https://podman.io/) 或 docker 跑 `scripts/build-image-local.sh`
 - 文档： [vuepress](https://vuejs.press/zh/)、[vuepress-theme-hope](https://theme-hope.vuejs.press/zh/)
 
 ## 本地开发
 
 ### 环境准备
 
-#### 准备数据库
+#### 推荐：一条命令把工具链准备好（不需要 docker，也不需要 sudo）
 
-开发之前，要有一个 `mongodb` 数据库。推荐用 `docker` 起一个：
+```bash
+./dev-env.sh bootstrap   # 下载 Node 24 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地目录骨架
+./dev-env.sh install     # 装依赖
+./dev-env.sh start       # mongod:27017 + server:3000 + website:3001 + admin:3002 一起起
+./dev-env.sh status      # 状态；另有 logs [server|website|admin|mongod] / stop / restart / db
+```
+
+工具链、数据库、数据目录、日志全部落在仓库内（`.tools/`、`vanblog_dev/`，已在 `.git/info/exclude` 里），
+整套环境可以随目录搬走，不污染系统。`bootstrap` 还会顺手写好 `packages/server/config.yaml`
+（内容见下面「添加 server 配置文件」）与前台出图要用的软链。
+
+#### 或者自己准备数据库
+
+要有一个 `mongodb` 数据库，版本用 **7.0**（与生产镜像一致）：
 
 ```bash
 docker run --name mongodb-vanblog -d --restart unless-stopped \
-  -p 27017:27017 mongo
+  -p 27017:27017 mongo:7.0
 ```
+
+⚠️ 不要写不带 tag 的 `mongo`（等于 `latest`）：本项目对 mongo 的大版本敏感 ——
+`featureCompatibilityVersion` 只能沿升级链走，用高版本 mongod 打开过低版本的数据目录之后，
+再想换回低版本就得手动降 FCV。生产侧同样钉 `mongo:7.0`（老 CPU 不支持 avx 时用 `mongo:4.4.16`）。
 
 #### node 要求
 
 - Node **24**（CI 用的就是 24；低版本会在 `@nestjs/cli` 与 Next 14 上出问题）
 - pnpm **8.11.0**（`package.json` 的 `packageManager` 钉的就是这个版本，corepack 会自动用对）
-
-不想自己装工具链的话，仓库自带一条命令，会把 Node 24 + pnpm 8 + MongoDB 7 下载到 `.tools/`：
-
-```bash
-./dev-env.sh bootstrap
-```
 
 #### 克隆项目并安装依赖
 
@@ -105,7 +125,9 @@ pnpm i
 
 ### 添加 server 配置文件
 
-在 `packages/server` 下，创建 `config.yaml` 文件，内容如下：
+跑过 `./dev-env.sh bootstrap` 的话这一步已经自动做好了。手动开发的话，在 `packages/server` 下创建
+`config.yaml`（⚠️ 这个文件在 `.gitignore` 里，不会进版本库；路径按你自己的机器改，
+下面用的是仓库内目录，好处是不需要 root）：
 
 ```yaml
 database:
@@ -113,29 +135,38 @@ database:
   url: mongodb://localhost:27017/vanBlog?authSource=admin
 static:
   # 图床等静态文件保存的位置
-  path: /var/vanblog-dev/static
+  path: /path/to/vanblog/vanblog_dev/static
 # 是否开启演示站模式，会限制很多权限
 demo: 'false'
 # waline 用的表名，会自动创建
 waline:
   db: waline
 # 日志位置
-log: /var/vanblog-dev/logs
+log: /path/to/vanblog/vanblog_dev/logs
+# 流水线脚本与 picgo 插件的工作目录（缺了这两项，流水线与插件安装会没有落脚的地方）
+codeRunner:
+  path: /path/to/vanblog/vanblog_dev/codeRunner
+pluginRunner:
+  path: /path/to/vanblog/vanblog_dev/pluginRunner
 ```
+
+环境变量优先于这个文件；映射规则（`database.url` → `VAN_BLOG_DATABASE_URL`）与全量清单见
+[环境变量](./reference/env.md)。
 
 ### 开发相关命令
 
 #### 开发全部
 
-在根目录下：
+四个进程一起起（mongod + server + 前台 + 后台），用仓库自带的脚本：
 
 ```bash
-# 开发全部（前台、后台、server）
-pnpm dev
-# 前台为 3001 端口
-# server 为 3000 端口
-# 后台为 3002 端口
+./dev-env.sh start
 ```
+
+端口：server `3000`、前台 `3001`、后台 `3002`、mongod `27017`（只监听 127.0.0.1）。
+
+⚠️ 根目录的 `pnpm dev` **只起 server 与后台**（`--filter @vanblog/server --filter @vanblog/admin`），
+既不起前台也不起数据库 —— 想四个都要就用上面的 `./dev-env.sh start`，或者按下面分别起。
 
 ::: info 开发后台要用剪贴板功能时
 
@@ -175,19 +206,45 @@ pnpm docs:dev
 
 端口号为: `8080`
 
+## 测试
+
+改完代码**必须**跑对应的那一套；跨包改动（例如同时动了 server 与文档）全都跑一遍。
+命令与最新基线数字在 [README 的测试表](../README.md#测试)，这里只说怎么跑与两个坑：
+
+```bash
+cd packages/server  && ./node_modules/.bin/jest                 # server 单元测试（约 1 分钟）
+cd packages/server  && ./node_modules/.bin/jest src/utils/watermark.spec.ts   # 只跑一个文件
+cd packages/website && ./node_modules/.bin/vitest run           # 前台（⚠️ pnpm test 是 watch 模式，脚本里要用 run）
+cd packages/admin   && node --test --test-reporter=tap tests/unit/*.test.js   # 后台
+for t in scripts/tests/*.test.sh; do bash "$t"; done            # 部署脚本与文档守卫（约 3 分钟）
+(cd packages/server  && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit)   # 类型检查，两条都要 0 错
+(cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json)
+```
+
+⚠️ 两个反复踩的坑：
+
+- **Node 24 换了 `node --test` 的默认 reporter**：不加 `--test-reporter=tap` 就没有 `# pass / # fail` 汇总行，
+  看上去像"什么都没跑"。
+- **admin 那套里有读 server 源码的跨包锚点**（`tests/unit/fullBackup.test.js`、`securityHardening.test.js` 等）：
+  只改了 server 也会让它变红。所以"我只动了后端"不是跳过 admin 测试的理由。
+
+要真库的 e2e 在 `packages/server/test/` 下，各有独立的 `pnpm test:*-e2e` 命令，并且都带硬护栏
+（拒绝指向 27017 那个开发库、拒绝真实库名），要跑得先按文件头注释起一个一次性的 mongod。
+`admin` 的 playwright e2e 需要先装浏览器，且默认的 3002 端口与开发栈冲突（本地跑要把 7 个 `*_E2E_PORT` 都改开）。
+
 ## 镜像构建
 
 直接在根目录用 `Dockerfile` 打包就行，具体看下面第二点。
 
 ### act（本地跑 GitHub Actions）
 
-我一般会用 [act](https://github.com/nektos/act) 来做验证镜像，act 可以在本地运行 `Github Actions`。
+维护者会用 [act](https://github.com/nektos/act) 在本地跑 GitHub Actions 来验证镜像构建。
+它需要一个 `.env` 文件存放密钥（`GITHUB_TOKEN` 之类），**属于自用工具，仓库里没有对应的 npm script，
+也没有把 `.env` 的格式写进文档** —— 具体调用方式看 act 自己的 README。
 
-这个方法需要 `.env` 文件存放密钥，目前仅自用。
-
-```bash
-pnpm build:test
-```
+⚠️ 旧文档这里写的是 `pnpm build:test`，但根 `package.json` 里**没有这个 script**（照着敲只会得到
+`Command "build:test" not found`）。想在本地验证镜像，用下面「手动打包」那条就够了：它构建完还会自动
+跑一遍冒烟测试，不需要 act，也不需要任何密钥。
 
 ### 手动打包
 
@@ -209,7 +266,7 @@ pnpm build:test
 想直接用 docker/podman 也行（`VAN_BLOG_BUILD_SERVER` 是构建期前台预渲染要回调的 server 地址，不写就得等容器起来后增量渲染）：
 
 ```bash
-VAN_BLOG_BUILD_SERVER="https://some.vanblog-server.com"
+VAN_BLOG_BUILD_SERVER="https://your-server.example.com"
 docker build --build-arg VAN_BLOG_BUILD_SERVER=$VAN_BLOG_BUILD_SERVER -t vanblog:local-test .
 ```
 

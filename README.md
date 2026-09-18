@@ -22,17 +22,18 @@
   <a href="#访问性能实测可复现">性能实测</a> ·
   <a href="docs/README.md">文档</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
-  <a href="#与上游的关系">与上游的关系</a>
+  <a href="#出处与许可">出处与许可</a>
 </p>
 
 ---
 
 > **这个项目从哪里来**：VanBlog 由 [Mereithhh/vanblog](https://github.com/Mereithhh/vanblog)（GPL-3.0）继续开发而来，
 > 原文出处、许可与"去哪儿提问"见文末[「出处与许可」](#出处与许可)。
-> 到今天两边已经差别很大：**133 个提交、552 个文件、+77,338 / −5,381 行**，依赖整体现代化
-> （Node 24 · NestJS 10 · mongoose 8 · Next 14 · TypeScript 5.9 · sharp 0.35 · multer 2），
-> 并补上了整站备份的**恢复演练**、迁移账本、文章版本历史、回收站、定时发布、健康检查、
-> 事件日志轮转等一批能力，同时修掉了一批"看着成功其实没成"的真 bug。
+> 到今天两边已经差别很大（截至 `v2026.9.2`：**172 个提交、724 个文件、+130,351 / −6,237 行**）：
+> 依赖整体现代化（Node 24 · NestJS 10 · mongoose 8 · Next 14 · TypeScript 5.9 · sharp 0.35 · multer 2），
+> 补上了整站备份的**恢复演练**、站内搜索、零接触初始化与初始化密钥、文章版本历史、回收站、定时发布、
+> 迁移账本、健康检查、事件日志轮转、可见水印重写等一批能力，并修掉了一批"看着成功其实没成"的真 bug
+> （含三个未认证漏洞）。
 >
 > 逐版改动看 [CHANGELOG.md](CHANGELOG.md)，每项改动的**根因与踩过的坑**看 [AGENTS.md](AGENTS.md)（也是给 AI 编码代理的运行手册）。
 
@@ -67,7 +68,8 @@
 **图床与附件**
 
 - 内置图床，也支持 OSS / 七牛 / 又拍云 / sm.ms / GitHub（外部图床基于 picgo）
-- 上传自动压缩、自动水印（任何图床都生效）、自动生成缩略图，可选 AVIF 兄弟文件
+- 上传自动压缩、自动水印（任何图床都生效；默认满图斜排平铺，**支持中文**，镜像自带 Latin 与中文字体）、
+  自动生成缩略图，可选 AVIF 兄弟文件
 - 附件管理与批量导出
 
 **运维与安全**
@@ -85,8 +87,11 @@
 **部署**
 
 - 一条命令部署（脚本自动决定拉镜像还是本地构建，构建前会实测 CPU 与可用内存，不够就直接劝退而不是让你白等）
-- 单容器一体化（caddy + server + 前台 + waline + mongo），也支持 docker compose / 宝塔 / 群晖 / Kubernetes / 前后端分离
-- 支持 ARM64
+- 应用侧单容器一体化（caddy + server + 前台 + waline 跑在一个容器里），**mongo 是独立的第二个容器**；
+  也支持 docker compose / 宝塔 / 群晖 / Kubernetes / 前后端分离
+- 架构：发布的镜像只有 **linux/amd64**。ARM64 机器装得了，但走的是**源码构建**那条路
+  （脚本拉不到 amd64 镜像时自动回退，或显式 `VANBLOG_INSTALL_MODE=source`），要 20–40 分钟和足够内存；
+  想要现成的 arm64 镜像，需要维护者手动触发 `publish-ghcr` 并加上 `linux/arm64`（走 QEMU，慢好几倍）
 
 完整功能说明在 [`docs/features/`](docs/features/overview.md)。
 
@@ -109,16 +114,21 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh
 > ⚠️ `raw.githubusercontent.com` 对**分支**地址有几分钟 CDN 缓存：刚推完就装可能拿到上一版脚本。
 > 要确定版本就用上面的发布版地址，或把 `dev/dsh` 换成具体 commit sha。
 
-脚本会：检测环境 → 默认**先拉镜像** `ghcr.io/ckboss/vanblog:dev-dsh`（1C1G 的小机器也装得动）→
+脚本会：检测环境 → 默认**先拉镜像** `ghcr.io/ckboss/vanblog:latest`（= 最近一次发布构建；
+`v2026.9.2` 这类发布号内容固定，`latest` 会随下次发版移动）→
 拉不到就**自动退回源码构建**（构建前实测 CPU 与可用内存，决定并发还是串行、admin 用 4096MB 还是 1536MB 堆；
 可用内存不足 1.8GB 时直接劝退并给出两条出路，不让你白等 20 分钟）→ 生成 compose → 起容器 → 打印访问地址。
+
+⚠️ 小机器能装但内存吃紧：实测稳定加压时应用约 **627 MB** + mongo **142–162 MB**（见下面的性能表），
+1GB 内存的机器建议只跑镜像安装、别在上面源码构建。
 
 之后常用命令：
 
 | 命令 | 作用 |
 | --- | --- |
 | `./vanblog.sh` | 打开菜单 |
-| `./vanblog.sh update` | 拉新镜像（或重新构建）；**失败不会动正在跑的容器** |
+| `./vanblog.sh update` | 升到**最近一次发布**（默认镜像 `:latest`）；先把新镜像准备好再停容器，**失败不会动正在跑的容器** |
+| `./vanblog.sh update v2026.9.2` | 升到（或钉到）**指定发布号**；内容固定不变，回滚也是这条 |
 | `./vanblog.sh config` | 重新生成 compose（改了环境变量之后跑这个） |
 | `./vanblog.sh backup` / `restore` | 整站备份 / 恢复 |
 | `./vanblog.sh backup-verify` | 备份 + **立刻深度校验** + 陈旧检查 + 台账（适合放 cron） |
@@ -189,7 +199,11 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 `drill` 断言的不是"接口返回了 200"，而是**对账**：信封里的 counts 与归档 manifest 一致、
 公开列表的 total 等于**从归档自己的 `articles.ndjson` 逐文档数出来的公开篇数**、
 真实静态文件可取、**主题 CSS 可取**、日志里没有 BSON 指纹、第二次恢复必须 403。
-最近一次真机演练：`RESULT: PASS pass=31 warn=0 fail=0 note=3`，HTTP 201、服务端 3.2 秒、端到端 4 秒。
+最近一次真机演练（podman rootless、69MB 生产整站备份、镜像 `v2026.9.2` 同源构建）：
+`RESULT: PASS pass=37 warn=1 fail=0 note=5`，站点恢复后在 `:18080` 上正常出页面，第二次恢复正确 403。
+⚠️ 那 1 条 WARN 与 5 条 NOTE 都是**如实降级**而不是问题：这份归档早于成员级哈希（`integrity` 块）与
+`migrations` 集合，所以"逐成员内容比对"没做、恢复库里多出的 8 条 migrations 是新 server 自己建的 ——
+用当前版本导出的归档再演练，这两条就会变成真正的成员级校验。
 
 细节与输出示例见 [`docs/advanced/backup.md`](docs/advanced/backup.md)。
 
@@ -215,7 +229,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 | 协作者与权限、API Token | [`docs/advanced/collaborator.md`](docs/advanced/collaborator.md) · [`docs/advanced/token.md`](docs/advanced/token.md) |
 | 反代 / 目录结构 / 日志 | [`docs/reference/reverse-proxy.md`](docs/reference/reverse-proxy.md) · [`docs/reference/dir.md`](docs/reference/dir.md) · [`docs/reference/log.md`](docs/reference/log.md) |
 | API | [`docs/reference/api.md`](docs/reference/api.md)（运行时 `/swagger` **默认关闭**，需要时 `VANBLOG_SWAGGER=true` 打开） |
-| 配置项与环境变量 | [`docs/reference/env.md`](docs/reference/env.md) · [`docs/reference/config.md`](docs/features/config.md) |
+| 配置项与环境变量 | 环境变量全表 [`docs/reference/env.md`](docs/reference/env.md) · 后台站点配置 [`docs/reference/config.md`](docs/reference/config.md) |
 | 从别的系统迁移 | [`docs/advanced/migrate.md`](docs/advanced/migrate.md) |
 | 常见问题 | [`docs/faq/deploy.md`](docs/faq/deploy.md) · [`docs/faq/usage.md`](docs/faq/usage.md) · [`docs/faq/update.md`](docs/faq/update.md) · [`docs/faq/password.md`](docs/faq/password.md) · [`docs/faq/customize.md`](docs/faq/customize.md) |
 
@@ -229,7 +243,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:dev-dsh` | 用哪个镜像（可换成自己的 registry 或某个 sha / tag） |
+| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:latest` | 用哪个镜像。`latest` = 最近一次发布构建（会移动）；**要钉版本/回滚就写发布号**，如 `ghcr.io/ckboss/vanblog:v2026.9.2`；也可换成自己的 registry |
 | `VANBLOG_INSTALL_MODE` | `auto` | `auto` 先拉镜像、失败退回源码构建；`image` 只拉；`source` 只本地构建 |
 | `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 回到上游官方镜像（**不含本仓库的任何改动**，优先级最高） |
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（静态资源另有 10 倍独立桶） |
@@ -246,9 +260,13 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 ## 升级与回滚
 
 ```bash
-./vanblog.sh update     # 拉新镜像或重新构建；失败不会动正在跑的容器
-./vanblog.sh config     # 改了环境变量之后重新生成 compose
+./vanblog.sh update              # 升到最近一次发布（默认镜像 :latest）；失败不会动正在跑的容器
+./vanblog.sh update v2026.9.2    # 升到 / 钉到指定发布号（回滚也是这条，换成旧发布号即可）
+./vanblog.sh config              # 改了环境变量之后重新生成 compose
 ```
+
+⚠️ `config` 会按模板**重新生成**编排文件（覆盖前自动存一份 `.bak-<时间戳>`），手加的 `environment:` 要自己加回去。
+`VANBLOG_USE_UPSTREAM_IMAGE=true`（用上游官方镜像）时**不接受**版本参数，脚本会明确报错退出，不会拼一个不存在的 tag。
 
 ⚠️ 升级前先看 [CHANGELOG.md](CHANGELOG.md) 里的**「行为变化」**与
 [`docs/guide/update.md`](docs/guide/update.md) 的对照表：本项目有几处是**故意改了默认值**的
@@ -265,7 +283,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 ./dev-env.sh bootstrap   # 下载 Node 24 + pnpm 8 + MongoDB 7 到 .tools/，并建好本地骨架
 ./dev-env.sh install     # 装依赖
 ./dev-env.sh start       # MongoDB:27017 + server:3000 + website:3001 + admin:3002 一起起
-./dev-env.sh status      # 状态；另有 logs / stop / restart / db / backup
+./dev-env.sh status      # 状态；另有 logs [server|website|admin|mongod] / stop / restart / db
 ```
 
 **不需要 docker，也不需要 sudo**：工具链、数据库、数据目录、日志全部在仓库内（`.tools/`、`vanblog_dev/`，已本地忽略），
@@ -285,14 +303,14 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 
 ### 测试
 
-| 套件 | 命令 | 现状 |
+| 套件 | 命令 | 现状（截至 `v2026.9.2`，本机实测） |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **169 套件 / 1951 用例**（1944 绿 + 7 跳过 + **0 失败**，59s；⚠️ 机器被压满时另有 2 条负载敏感用例会假红，单独跑就绿） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **84 文件 / 885 用例** |
-| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **148 套件 / 579 用例**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
-| admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件；⚠️ 需要装浏览器，且默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开） |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **24 文件 / 1768 条断言** |
-| 文档守卫 + 文档站 | `bash scripts/tests/docs-{links,consistency}.test.sh`；`cd docs && pnpm run docs:build` | 死链 5/5、一致性 52/0（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）、构建 65 页 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **169 套件 / 1951 用例**（1944 绿 + 7 跳过 + **0 失败**，约 60s；⚠️ 机器被压满时另有 2 条负载敏感用例会假红，单独跑就绿） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **84 文件 / 885 用例全绿** |
+| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **148 套件 / 582 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
+| admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件）。CI 里跑并且是绿的；本机没装浏览器所以没跑。⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **24 文件 / 1825 条断言全绿** |
+| 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **52/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
 | 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | 两包各 **0 错** |
 | 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md) |
 
@@ -355,8 +373,8 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 
 ## 出处与许可
 
-- 本项目建立在 [Mereithhh/vanblog](https://github.com/Mereithhh/vanblog) 之上，按 **GPL-3.0** 继续开发，
-  版权归原作者所有；本仓库是 `CKboss/vanblog`（分支 `dev/dsh`）。
+- 本项目建立在 [Mereithhh/vanblog](https://github.com/Mereithhh/vanblog) 之上，按 **[GPL-3.0](LICENSE)**（与上游一致）
+  继续开发，版权归原作者所有；本仓库是 `CKboss/vanblog`（分支 `dev/dsh`）。
 - **文档以本仓库的 [`docs/`](docs/README.md) 为准**。原作者的[文档站](https://vanblog.mereith.com)、
   [演示站](https://blog-demo.mereith.com)与[交流群](https://jq.qq.com/?_wv=1027&k=5NRyK2Sw)
   描述的是另一个版本（功能、默认值、镜像来源都不同），在那儿问本项目的问题大概率得不到答案。
@@ -374,13 +392,11 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 
 ## 问题反馈
 
-请提到**本仓库**的 [issue](https://github.com/CKboss/vanblog/issues/new)。
+请提到**本仓库**：[CKboss/vanblog 的 issue 页](https://github.com/CKboss/vanblog/issues)。
+⚠️ 截至 `v2026.9.2`，本仓库的 issue 功能是**关闭**的（`/issues/new` 会 404）；在维护者打开它之前，
+提问与需求请走 [VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)，代码改动照样走 PR（目标分支 `dev/dsh`）。
 报问题时请带上：`./vanblog.sh status` 的输出、容器日志里的相关片段（`./vanblog.sh log`）、
 以及后台「关于」里显示的版本号（形如 `v2026.9.2@<短 sha>`：tag + 构建时的 commit，能直接对上）。
 
 如果是上游版本的问题（比如你装的是 `VANBLOG_USE_UPSTREAM_IMAGE=true`），请到
 [上游仓库](https://github.com/Mereithhh/vanblog/issues/new/choose)反馈。
-
-## 许可
-
-[GPL-3.0](LICENSE)，与上游一致。
