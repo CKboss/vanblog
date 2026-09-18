@@ -284,6 +284,71 @@ for n in "1." "2." "3." "6." "10." "11." "12." "13." "20." "30."; do
   assert_contains "${MENU}" "${n}" "菜单编号 ${n} 保持不变"
 done
 
+# ---------- 打错的开关必须被拒绝，绝不静默写进 root 的 crontab ----------
+# install-cron 是**往 root 的 crontab 里写东西**的命令，写错了不会当场发现：
+#   `--horu 3`（hour 拼错）→ 旧代码安静地按默认 3 点装进去，用户以为自己设的是别的时间；
+#   `--remov`（remove 拼错）→ 旧代码安静地**装**一条定时任务，而用户以为自己在删。
+# crontab 里的东西不会每天提醒你它错了，所以必须当场拒绝。
+echo "-- install-cron 的未知/缺值参数必须被拒绝 --"
+fresh_case
+OUT="$(VANBLOG_ASSUME_YES=1 VANBLOG_ADMIN_TOKEN='tok.abc123' install_cron --horu 3 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "--horu（hour 拼错）退出码 2；旧代码会静默按默认 3 点写进 crontab"
+assert_contains "${OUT}" "install-cron 不认这个参数：--horu" "点名了打错的那个参数"
+assert_contains "${OUT}" "--hour N" "报错里列出正确写法，用户能照着改"
+assert_contains "${OUT}" "不会静默按默认值写进 root 的 crontab" "并说清后果"
+assert_eq "$(wc -c < "${CRON_CALLS}" | tr -d ' ')" "0" "拒绝路径一次都没调用 crontab（什么都没写）"
+if [[ -e "${ENVF}" ]]; then
+  fail "拒绝路径却写了 token 文件（${ENVF}）—— 明文 token 不该在失败时留下"
+else
+  pass "拒绝路径没有写 token 文件"
+fi
+
+fresh_case
+OUT="$(VANBLOG_ASSUME_YES=1 install_cron --remov 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "--remov（remove 拼错）退出码 2 —— 旧代码会安静地**装**一条，而用户以为在删"
+assert_contains "${OUT}" "--remove" "报错里列出正确的 --remove"
+assert_eq "$(wc -c < "${CRON_CALLS}" | tr -d ' ')" "0" "拼错的 --remov 也没有动 crontab（既没装也没删）"
+
+# 缺值：例子必须**按开关**给（backup 那边踩过：对 --keep 举 zstd 这种格式值等于把人往沟里带）
+fresh_case
+OUT="$(VANBLOG_ASSUME_YES=1 install_cron --hour 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "--hour 缺值 ⇒ 拒绝，不当成默认 3 点"
+assert_contains "${OUT}" "后面要跟一个值" "并说清是缺值"
+assert_contains "${OUT}" "3，表示每天凌晨 3 点" "--hour 缺值时举的是小时的例子"
+assert_not_contains "${OUT}" "只留最新 7 份" "--hour 的报错里不会混进 --keep 的例子"
+fresh_case
+OUT="$(VANBLOG_ASSUME_YES=1 install_cron --keep 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "--keep 缺值 ⇒ 拒绝，不当成默认 7 份"
+assert_contains "${OUT}" "7，表示只留最新 7 份" "--keep 缺值时举的是份数的例子"
+assert_not_contains "${OUT}" "每天凌晨 3 点" "--keep 的报错里不会混进 --hour 的例子"
+
+# ⚠️ 既有语义一个字都不许变：**值**非法仍然是退出码 1（那是取值校验，不是用法错误），
+#    而且 `--keep 0` 里的 0 必须被当成值交上去，不能被"缺值"或"菜单占位 0"两条分支吞掉
+fresh_case
+OUT="$(VANBLOG_ASSUME_YES=1 install_cron --keep 0 2>&1)"; RC=$?
+assert_eq "${RC}" "1" "--keep 0 仍走既有的正整数校验（退出码 1，不是 2）"
+assert_contains "${OUT}" "--keep 必须是正整数" "报错文案也没变"
+fresh_case
+OUT="$(VANBLOG_ASSUME_YES=1 install_cron --hour 99 2>&1)"; RC=$?
+assert_eq "${RC}" "1" "--hour 99 仍走既有的 0-23 校验（退出码 1）"
+assert_contains "${OUT}" "--hour 必须是 0-23 的数字" "报错文案也没变"
+
+# 源码级反证 + 空转反证（⚠️ 剥注释：解释这个改动的注释里写着旧形状）
+SRC_CRON="$(awk '/^install_cron\(\) \{/,/^\}/' "${SCRIPT}")"
+assert_contains "${SRC_CRON}" "print_install_cron_usage" "install-cron 打错参数时会打印自己的用法"
+SRC_CRON_CODE="$(printf '%s\n' "${SRC_CRON}" | grep -v '^[[:space:]]*#')"
+SWALLOW_RE='^[[:space:]]*(0 \| )?--\*\)[[:space:]]*(continue|:)[[:space:]]*;;'
+if printf '%s\n' "${SRC_CRON_CODE}" | grep -qE "${SWALLOW_RE}"; then
+  fail "install_cron 的解析器里还有静默吞掉未知开关的分支"
+else
+  pass "install_cron 的解析器里没有静默吞开关的分支（剥掉注释后核对）"
+fi
+if printf '%s\n' '        0 | --*) : ;;' | grep -qE "${SWALLOW_RE}"; then
+  pass "那条正则确实抓得住旧形状（断言不是空转）"
+else
+  fail "正则抓不住旧形状 —— 上面那条断言空转了，请重写"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

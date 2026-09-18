@@ -1356,6 +1356,77 @@ VANBLOG_BASE_PATH="${BASE}" VANBLOG_DATA_PATH="${DATA}" VANBLOG_BACKUP_DIR="${ST
   run_main verify-deep "${V2}" >"${TEST_DIR}/main3.out" 2>&1
 RC=$?
 assert_rc "${RC}" "1" "./vanblog.sh verify-deep 对坏归档返回非 0（退出码穿过 exec 传回来了）"
+
+# ── A14b) 自述缺口：能跑的子命令必须在 --help 里出现 ──────────────────────────────
+# 本轮实测：drill / verify-deep / backup-verify / backup-status 四条**一直可用**（上面刚跑通三条），
+# 但 `show_usage` 里出现 **0 次**，而交互菜单第 30 项自称「使用说明（全部子命令、参数、环境变量
+# 与场景配方）」—— 也就是说菜单在说一句假话，而这四条恰恰是"证明备份能恢复"的那批命令，
+# 最需要被发现。修法是把它们写进 --help；这里钉住，并顺手做成**通用漂移守卫**：
+# dispatcher 认的子命令 + 提前转发的四条，一个都不许在 --help 里缺席。
+USAGE_SRC="$(awk '/^show_usage\(\) \{/,/^USAGE$/' "${MAIN}")"
+for sub in drill verify-deep backup-verify backup-status; do
+  assert_contains "${USAGE_SRC}" "${sub}" "--help 里有 ${sub}（以前能跑、自述里 0 次）"
+done
+assert_contains "${USAGE_SRC}" "不需要 root" "--help 说明了这四条免 root（否则用户会去加 sudo）"
+assert_contains "${USAGE_SRC}" "RESULT: PASS" "--help 写了 drill 的结论行长什么样（照着 grep 才用得起来）"
+DISPATCH_SUBS="$(awk '/^  case \$1 in$/,/^  esac$/' "${MAIN}" | grep -oE '^[[:space:]]*"[a-z_-]+"\)' | tr -d ' ")' | sort -u)"
+if [[ -z "${DISPATCH_SUBS}" ]]; then
+  fail "没解析出 dispatcher 的子命令清单 —— 这条漂移守卫空转了（awk 范围要跟着 dispatcher 的写法改）"
+else
+  missing=""
+  for sub in ${DISPATCH_SUBS} drill verify-deep backup-verify backup-status; do
+    printf '%s' "${USAGE_SRC}" | grep -qF -- "${sub}" || missing="${missing} ${sub}"
+  done
+  if [[ -z "${missing}" ]]; then
+    pass "--help 覆盖了全部 $(printf '%s' "${DISPATCH_SUBS}" | wc -w)+4 个子命令（菜单第 30 项那句「全部子命令」名副其实）"
+  else
+    fail "--help 里缺这些子命令：${missing}（菜单第 30 项自称「全部子命令」，缺一个就是假话）"
+  fi
+fi
+# 反证：这条守卫不是空转的 —— 把 show_usage 换成一段不含这四条的假文本，它必须报缺
+FAKE_USAGE="backup 整站备份
+verify 校验归档"
+fake_missing=""
+for sub in drill verify-deep backup-verify backup-status; do
+  printf '%s' "${FAKE_USAGE}" | grep -qF -- "${sub}" || fake_missing="${fake_missing} ${sub}"
+done
+assert_eq "$(printf '%s' "${fake_missing}" | wc -w | tr -d ' ')" "4" "同一段检查跑在缺这四条的假 --help 上会报满 4 个（守卫不空转）"
+
+# ── A14c) `--help` 自己也不该要求 root ───────────────────────────────────────────
+# 上面那四条免 root 的子命令，用户是从**帮助**里才知道它们免 root 的；可帮助本身以前要过了
+# pre_check 才打印，而 pre_check 对非 root 直接 exit 1 ⇒ 没有 root 的人连"哪些命令不需要 root"
+# 都查不到，只会得到一句"必须使用root用户运行此脚本"。修法是把这个 case 挪到 pre_check 之前
+# （与 drill 转发同一个位置、同一个理由）。这里同时钉住**位置**与**行为**。
+LINE_NO_HELP="$(grep -n 'show_usage; exit 0 ;; esac' "${MAIN}" | head -1 | cut -d: -f1)"
+if [[ -n "${LINE_NO_HELP}" && -n "${LINE_NO_PRECHECK}" && "${LINE_NO_HELP}" -lt "${LINE_NO_PRECHECK}" ]]; then
+  pass "--help 的处理（第 ${LINE_NO_HELP} 行）在 pre_check（第 ${LINE_NO_PRECHECK} 行）之前 ⇒ 非 root 也能看帮助"
+else
+  fail "--help 的处理不在 pre_check 之前（help=${LINE_NO_HELP:-无}，pre_check=${LINE_NO_PRECHECK:-无}）⇒ 非 root 看不到帮助"
+fi
+# 行为级：真跑一次（当前 uid 是不是 root 都该出帮助、都该 rc=0）
+HELP_OUT="$(bash "${MAIN}" --help 2>&1 </dev/null)"; HELP_RC=$?
+assert_rc "${HELP_RC}" "0" "./vanblog.sh --help 退出码 0（当前 uid=$(id -u)）"
+assert_contains "${HELP_OUT}" "VanBlog 管理脚本" "--help 真的打印了帮助正文"
+assert_contains "${HELP_OUT}" "verify-deep" "帮助里能看到那四条免 root 的子命令"
+assert_not_contains "${HELP_OUT}" "必须使用root" "帮助路径上没有冒出 root 门槛的报错"
+# 另外两个等价入口也要一样（-h / help），否则只修了一个形状
+for a in -h help; do
+  A_OUT="$(bash "${MAIN}" "${a}" 2>&1 </dev/null)"; A_RC=$?
+  assert_rc "${A_RC}" "0" "./vanblog.sh ${a} 同样退出码 0"
+  assert_contains "${A_OUT}" "VanBlog 管理脚本" "./vanblog.sh ${a} 同样打印帮助"
+done
+# 反证（位置那条断言不是空转）：pre_check 里确实有 root 门槛，否则"挪到它前面"毫无意义
+if grep -qF 'EUID -ne 0' "${MAIN}"; then
+  pass "pre_check 里确实有 root 门槛（所以「挪到它之前」这条断言有意义）"
+else
+  fail "pre_check 里没有 root 门槛了 —— 上面那条位置断言可能已失去意义，请重新核对"
+fi
+# 反证（行为那条不是空转）：不带参数时仍然照常要 root（别把门槛整个拆了）
+if grep -qE '^pre_check$' "${MAIN}"; then
+  pass "pre_check 仍然会被调用（不带参数时照旧要 root、照旧进菜单）"
+else
+  fail "找不到 pre_check 的调用点了 ——  root 门槛可能被整个拆掉"
+fi
 # ⚠️ 从这里开始的 dry-run 一律带**本节专用的假引擎**，与 A10 那组同一个思路。
 # 原因（本机实测）：dry-run 虽然一个容器都不建，但**仍然会探测引擎**，探不到就
 # FAIL + rc=1（`没有可用的容器引擎（docker daemon 连不上，也没有可用的 podman）`）。

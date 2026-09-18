@@ -223,10 +223,80 @@ assert_contains "${SRC_PRUNE}" 'rm -f "${dir:?}/${name}"' "删除路径带 :? �
 # 只在备份成功之后清理：失败时删旧备份等于把最后的恢复点也弄没了
 SRC_BACKUP="$(awk '/^backup\(\) \{/,/^\}/' "${SCRIPT}")"
 assert_contains "${SRC_BACKUP}" 'if [[ ${rc} -eq 0 && -n "${keep}" ]]' "只有备份成功才清理"
-assert_contains "${SRC_BACKUP}" '--keep) keep="${arg}"' "支持 --keep N"
+assert_contains "${SRC_BACKUP}" '--format | --keep)' "--format / --keep 走同一条带值分支"
+assert_contains "${SRC_BACKUP}" 'keep="${val}"' "支持 --keep N（值取自下一个参数）"
 assert_contains "${SRC_BACKUP}" 'VANBLOG_BACKUP_KEEP' "支持 VANBLOG_BACKUP_KEEP 环境变量（cron 用）"
 assert_contains "$(cat "${SCRIPT}")" "VANBLOG_BACKUP_KEEP=7" "--help 里写了这个环境变量"
 
+# ── 打错的开关必须被拒绝，不能静默按默认值备份 ─────────────────────────────────
+# 为什么这条值钱：backup 上的静默降级**看不出来**。用户敲 `backup --offine`（少一个 l），
+# 旧代码一声不响按 API 模式备份，他以为拿到了含 caddy 证书的离线包 —— 等到真要换机器那天
+# 才发现归档里没有证书。同一类里还有更隐蔽的一条：`--verbose` 写在 --help 里、备份输出还会
+# 提示"完整清单加 --verbose"，但解析器从来没处理过它（被那条吞一切的分支吃掉了）。
+echo "-- backup 的未知/缺值参数必须被拒绝 --"
+SRC_BACKUP_USAGE="$(awk '/^print_backup_usage\(\) \{/,/^\}/' "${SCRIPT}")"
+assert_contains "${SRC_BACKUP_USAGE}" "--offline" "用法里列了 --offline"
+assert_contains "${SRC_BACKUP_USAGE}" "--verbose" "用法里列了 --verbose"
+assert_contains "${SRC_BACKUP_USAGE}" "--keep N" "用法里列了 --keep N"
+
+LOG_BAD="${TEST_DIR}/bad.log"
+OUT="$(run_snippet "${LOG_BAD}" "" 'backup 0 --oops; echo "rc=$?"')"
+assert_contains "${OUT}" "rc=2" "backup --oops 退出码 2（用法错误，与 update 一致）"
+assert_contains "${OUT}" "backup 不认这个参数：--oops" "点名了打错的那个参数"
+assert_contains "${OUT}" "--offline" "报错里带出正确的开关名，用户能照着改"
+assert_contains "${OUT}" "不会静默按默认值备份" "并说清后果（不是只丢一句「参数错了」）"
+
+OUT="$(run_snippet "${LOG_BAD}" "" 'backup 0 --offine; echo "rc=$?"')"
+assert_contains "${OUT}" "rc=2" "少一个字母的 --offine 也被拒（这正是最贵的那种静默降级）"
+OUT="$(run_snippet "${LOG_BAD}" "" 'backup 0 --keep; echo "rc=$?"')"
+assert_contains "${OUT}" "rc=2" "--keep 后面忘了写数字 ⇒ 拒绝，不当成「不清理」"
+assert_contains "${OUT}" "后面要跟一个值" "并说清是缺值"
+OUT="$(run_snippet "${LOG_BAD}" "" 'backup 0 --format; echo "rc=$?"')"
+assert_contains "${OUT}" "rc=2" "--format 缺值同样拒绝"
+# 缺值的例子要**按开关**给：第一版对所有开关都举「zstd、7」，于是 --keep 的报错里出现
+# 「例如 --keep zstd」—— 在一条本来就在讲"你参数写错了"的消息里再给个错例子，等于把人往沟里带。
+OUT_K="$(run_snippet "${LOG_BAD}" "" 'backup 0 --keep')"
+assert_contains "${OUT_K}" "只留最新 7 份" "--keep 缺值时举的是份数的例子（不是格式值）"
+assert_not_contains "${OUT_K}" "--keep zstd" "--keep 缺值时不会举 zstd 这种格式值当例子"
+OUT_F="$(run_snippet "${LOG_BAD}" "" 'backup 0 --format')"
+assert_contains "${OUT_F}" "zstd|xz|gzip" "--format 缺值时举的是格式的例子"
+
+# 合法开关必须**仍然被接受**（别把"收紧"做成"什么都拒"）
+assert_contains "${SRC_BACKUP}" "--offline)" "合法开关 --offline 仍在解析器里"
+assert_contains "${SRC_BACKUP}" "--api | --full)" "合法开关 --api / --full 仍在解析器里"
+assert_contains "${SRC_BACKUP}" "--consistent)" "合法开关 --consistent 仍在解析器里"
+assert_contains "${SRC_BACKUP}" '--verbose) export VANBLOG_VERBOSE=1' "--verbose 现在真的生效（以前被静默吞掉）"
+# 行为级验证（不只是源码里有这一行）：--verbose 真的把开关置上了，而且置上之后仍然会拒绝坏参数
+OUT_V="$(run_snippet "${LOG_BAD}" "" 'backup 0 --verbose --oops >/dev/null 2>&1; echo "verbose=${VANBLOG_VERBOSE:-unset}"')"
+assert_contains "${OUT_V}" "verbose=1" "--verbose 把 VANBLOG_VERBOSE 置成 1（print_backup_json 读的就是它）"
+
+# 反证一：拒绝路径**不许**真的动手备份
+# ⚠️ 这里不能拿 "vanblog-full-" 当判据：print_backup_usage 的正文里就写着
+#    `vanblog-full-<时间戳>.tar.zst`，断言会匹配到**用法说明**而不是真备份（第一版就这么假红过）。
+#    只用"真跑起来才会出现的字样"：离线备份的开场白、成功语、带数字的真实归档名前缀。
+for forbidden in "备份 vanblog" "备份成功" "vanblog-backup-2"; do
+  assert_not_contains "${OUT}" "${forbidden}" "拒绝路径上没有「${forbidden}」（没有一边报错一边动手）"
+done
+# 反证二：拒绝路径一次都不许调用引擎（假 docker/docker-compose 会把调用记进日志）
+LOG_CLEAN="${TEST_DIR}/clean.log"; : > "${LOG_CLEAN}"
+run_snippet "${LOG_CLEAN}" "" 'backup 0 --oops' >/dev/null 2>&1
+assert_eq "$(wc -c < "${LOG_CLEAN}" | tr -d ' ')" "0" "拒绝路径没有调用 docker / docker-compose（日志空）"
+
+# 反证三：解析器里不许再有"吞掉一切未知开关"的那条分支
+# ⚠️ 必须剥掉注释再断言：解释这个改动的注释里就写着旧形状（本仓库已踩 6 次这个坑）
+SRC_BACKUP_CODE="$(printf '%s\n' "${SRC_BACKUP}" | grep -v '^[[:space:]]*#')"
+SWALLOW_RE='^[[:space:]]*(0 \| )?--\*\)[[:space:]]*:[[:space:]]*;;'
+if printf '%s\n' "${SRC_BACKUP_CODE}" | grep -qE "${SWALLOW_RE}"; then
+  fail "backup 的解析器里还有静默吞掉未知开关的分支"
+else
+  pass "backup 的解析器里没有静默吞开关的分支（剥掉注释后核对）"
+fi
+# 反证的反证：同一条正则必须能抓住旧形状，否则上面那条是空转
+if printf '%s\n' '    0 | --*) : ;;' | grep -qE "${SWALLOW_RE}"; then
+  pass "那条正则确实抓得住旧形状（断言不是空转）"
+else
+  fail "正则抓不住旧形状 —— 上面那条断言空转了，请重写"
+fi
 
 echo "passed=${PASS} failed=${FAIL}"
 [[ ${FAIL} -eq 0 ]]

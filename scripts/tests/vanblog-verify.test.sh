@@ -324,6 +324,56 @@ assert_contains "${OUT}" "df 读不出" "df 失败时明说原因"
 unset -f df
 
 # ---------- 12) 源码级不变式 ----------
+# ── 打错的开关必须被拒绝（以前是 `0 | --*) continue ;;`，静默吞掉）───────────────
+# 为什么这条值钱：`verify --all` 在旧代码下**看起来是对的** —— 开关被吞掉，
+# 剩下"不带参数 = 校验全部"，于是用户拿到了他想要的结果，却以为自己用了一个本命令没有的开关；
+# `verify --al`（打错）同样一声不响按"校验全部"跑。真正有 --all 的是 drill 那边的 verify-deep。
+echo "-- verify 的未知参数必须被拒绝 --"
+OUT="$(verify --oops 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "verify --oops 退出码 2（用法错误；verify 原本只用 0/1，2 不与既有语义冲突）"
+assert_contains "${OUT}" "verify 不认这个参数：--oops" "点名了打错的那个参数"
+assert_contains "${OUT}" "verify-deep" "并把用户指向真正有开关的那条命令（verify-deep）"
+assert_contains "${OUT}" "不会静默忽略后按默认行为跑" "说清后果，不只是丢一句「参数错了」"
+
+OUT="$(verify --all 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "verify --all 也被拒（这个开关属于 verify-deep，不属于 verify）"
+assert_contains "${OUT}" "verify-deep [--all]" "报错里给出了正确的等价命令"
+
+# 反证：拒绝路径不许真的去校验（否则"报错 + 照跑"比静默更坏）
+assert_not_contains "${OUT}" "OK  " "拒绝路径没有输出任何归档的校验结果"
+assert_not_contains "${OUT}" "FAIL " "同上（也没有 FAIL 行）"
+
+# 合法用法必须**完全不受影响**：菜单占位 0、真实归档路径、不带参数扫全部。
+# ⚠️ 不能复用上面的 ${GOOD}：第 8) 节的 `prune_old_backups full 2` 会把它当最旧的一份**删掉**
+#    （第一版就是这么假红的 —— rc=1，报"本地找不到"，看着像我把 verify 改坏了）。自己造一份新的。
+FRESH="${BK}/vanblog-full-20260918-235959.tar.zst"
+make_full_archive "${FRESH}"
+OUT="$(verify 0 "${FRESH}" 2>&1)"; RC=$?
+assert_eq "${RC}" "0" "verify 0 <归档> 仍然成功（菜单占位 0 照旧被吃掉）"
+assert_not_contains "${OUT}" "不认这个参数" "占位 0 不会被当成未知参数"
+OUT="$(verify "${FRESH}" 2>&1)"; RC=$?
+assert_eq "${RC}" "0" "verify <归档> 的既有行为与退出码语义没变（老 cron 不受影响）"
+OUT="$(verify 2>&1)"
+assert_not_contains "${OUT}" "不认这个参数" "不带参数（= 校验全部）照旧可用"
+
+# 源码级：verify() 里不许再有"吞掉一切未知开关"的分支
+SRC_VERIFY="$(awk '/^verify\(\) \{/,/^\}/' "${SCRIPT}")"
+SRC_VERIFY_CODE="$(printf '%s\n' "${SRC_VERIFY}" | grep -v '^[[:space:]]*#')"
+SWALLOW_RE='^[[:space:]]*(0 \| )?--\*\)[[:space:]]*(continue|:)[[:space:]]*;;'
+if printf '%s\n' "${SRC_VERIFY_CODE}" | grep -qE "${SWALLOW_RE}"; then
+  fail "verify 的解析器里还有静默吞掉未知开关的分支"
+else
+  pass "verify 的解析器里没有静默吞开关的分支（剥掉注释后核对）"
+fi
+# ⚠️ 必须剥注释：解释这个改动的注释里就写着旧形状（本仓库已踩 6 次）。
+# 反证的反证：同一条正则要能抓住旧形状，否则上面那条是空转。
+if printf '%s\n' '    0 | --*) continue ;;' | grep -qE "${SWALLOW_RE}"; then
+  pass "那条正则确实抓得住旧形状（断言不是空转）"
+else
+  fail "正则抓不住旧形状 —— 上面那条断言空转了，请重写"
+fi
+assert_contains "${SRC_VERIFY}" "print_verify_usage" "verify 打错参数时会打印自己的用法"
+
 SRC="$(cat "${SCRIPT}")"
 assert_contains "${SRC}" "archive_integrity_test" "verify 有独立的完整性测试函数"
 assert_contains "${SRC}" "zstd -t -q --long=27" "zstd 完整性用 -t（流式，不解压落盘）且对齐 server 的 --long=27"

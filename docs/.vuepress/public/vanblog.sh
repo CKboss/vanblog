@@ -2575,30 +2575,63 @@ read_current_crontab() {
   return 1
 }
 
+# install-cron 的用法（参数打错时打印）
+print_install_cron_usage() {
+  echo -e "用法：${yellow}$0 install-cron [开关]${plain}"
+  echo -e "  不带开关 = 每天 03:00 整站备份，成功后保留最新 7 份（VANBLOG_BACKUP_KEEP 可改这个默认）"
+  echo -e "  --hour N                  每天几点跑（0-23，默认 3）"
+  echo -e "  --keep N                  备份成功后保留最新 N 份（正整数，默认 7）"
+  echo -e "  --remove                  从 root 的 crontab 移除（token 文件保留，路径会打印出来）"
+  echo -e "  --force                   用新参数替换已有条目（参数不同时会要求显式给）"
+  echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默按默认值写进 root 的 crontab"
+}
+
 install_cron() {
   local action="install" hour="" keep="${VANBLOG_BACKUP_KEEP:-7}" force=0
-  local arg prev=""
-  for arg in "$@"; do
+  # ⚠️ 以前未知 `--*` 被静默吞掉，而 install-cron 是**往 root 的 crontab 里写东西**的命令：
+  #    `install-cron --horu 3`（hour 拼错）会安静地按默认 3 点装进去，用户以为自己设的是别的时间；
+  #    `install-cron --remov` 会安静地**装**一条定时任务，而用户以为自己在删。
+  #    写进 crontab 的东西不会每天提醒你它错了，所以这里必须当场拒绝（与 backup/verify/restore/update 一致）。
+  #    ⚠️ 只加"未知开关拒绝"这一条：默认值（hour 3 / keep 7）、--hour/--keep 的取值校验
+  #    （非数字或超范围 → 退出码 1）、幂等与"绝不覆盖已有 crontab"的行为**一个字都没改**，
+  #    因为别人的 cron 里可能正在用这些形状。
+  local -a argv=("$@")
+  local i=0 arg val
+  while ((i < ${#argv[@]})); do
+    arg="${argv[i]}"
     case "${arg}" in
     --remove) action="remove" ;;
     --force) force=1 ;;
-    --hour | --keep) : ;; # 值在下一个参数
-    *)
-      case "${prev}" in
-      --hour) hour="${arg}" ;;
-      --keep) keep="${arg}" ;;
-      *)
-        # ⚠️ 菜单占位 `0` 的豁免必须放在"上一个参数不是 --hour/--keep"之后：
-        # 否则 `--keep 0` 里的 0 会被当成占位符吞掉，keep 静默保持默认值 7
-        # （而 --keep 0 本该被下面的正整数校验拦下来）
-        case "${arg}" in
-        0 | --*) : ;;
-        esac
-        ;;
-      esac
+    --hour | --keep)
+      val="${argv[i + 1]:-}"
+      # 缺值也不许静默按默认跑。⚠️ 例子按开关给（--hour 举 3、--keep 举 7）：在一条
+      #    讲"你参数写错了"的消息里给错例子等于把人往沟里带（backup 那边踩过一次）。
+      # ⚠️ 值为 `0` 是**合法输入**，必须原样交给下面的正整数/范围校验去拒（退出码 1），
+      #    不能在这里当"缺值"吞掉 —— 旧代码专门为此把占位 `0` 的豁免放在 --hour/--keep
+      #    之后，这个语义要保持。
+      if [[ -z "${val}" || "${val}" == --* ]]; then
+        local example="3，表示每天凌晨 3 点"
+        [[ "${arg}" == "--keep" ]] && example="7，表示只留最新 7 份"
+        echo -e "${red}${arg} 后面要跟一个值${plain}（例如 ${arg} ${example}）"
+        print_install_cron_usage
+        return 2
+      fi
+      if [[ "${arg}" == "--hour" ]]; then
+        hour="${val}"
+      else
+        keep="${val}"
+      fi
+      i=$((i + 1)) # 值已经被吃掉了，别再当位置参数过一遍（否则 `--keep 0` 的 0 会被占位分支吞掉）
       ;;
+    0) : ;; # 菜单/分发入口传进来的占位
+    --*)
+      echo -e "${red}install-cron 不认这个参数：${arg}${plain}"
+      print_install_cron_usage
+      return 2
+      ;;
+    *) : ;; # 多余的字面量照旧忽略（不改变既有行为）
     esac
-    prev="${arg}"
+    i=$((i + 1))
   done
   hour="${hour:-3}"
   case "${hour}" in
@@ -3532,19 +3565,41 @@ restore_full_backup() {
 #   VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh restore …       跳过账号密码登录
 #   VANBLOG_API_BASE=http://127.0.0.1:8080 ./vanblog.sh restore …  手动指定接口地址
 #   VANBLOG_RESTORE_FILE=/path/to/vanblog-backup-xxx.tar.gz ./vanblog.sh restore   老格式
-restore() {
-  echo -e "> 恢复 vanblog"
+# restore 的用法（参数打错时打印）
+print_restore_usage() {
+  echo -e "用法：${yellow}$0 restore [归档名|本地路径] [开关]${plain}"
+  echo -e "  不带参数 = 列出服务器备份目录里的归档，让你选编号"
+  echo -e "  --no-static               只恢复数据库，保留当前图床/附件"
+  echo -e "  --with-static             显式恢复静态文件（默认就是恢复）"
+  echo -e "  --verbose                 打印完整清单 JSON"
+  echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默按默认值恢复"
+}
 
+restore() {
+  # ⚠️ "恢复 vanblog" 这句挪到参数解析**之后**：以前它排在最前面，于是
+  #    `restore --no-statc x` 会先打印"> 恢复 vanblog"再报错 —— 先宣布干活再拒绝，
+  #    读日志的人（尤其是 cron 里）会以为真的动过手。合法调用的输出一字不变
+  #    （解析成功时什么都不打印），只有拒绝路径少了这句误导。
   local path="${VANBLOG_RESTORE_FILE:-}"
   local with_static="true"
   # 分发入口会传一个 0 表示「不进菜单」，别把它当成文件路径
+  # ⚠️ 这里以前是 `0 | --*) : ;;` —— 打错的开关被**静默吞掉**。restore 上这件事比 backup 更贵：
+  #    `restore --no-statc <归档>`（少一个 i）会安静地按默认值恢复，也就是**连静态文件一起覆盖**，
+  #    而用户以为自己保住了当前图床。恢复属于不可逆的那一类操作，猜错方向的代价最高。
+  #    所以与 backup / verify / update 一致：未知 `--*` 点名报错 + 打印用法 + 退出码 2。
+  #    ⚠️ 只加这一条拒绝：合法开关、位置参数当归档路径、不带参数时列归档让选，行为一个字没改。
   local arg
   for arg in "$@"; do
     case "${arg}" in
     --no-static) with_static="false" ;;
     --with-static) with_static="true" ;;
     --verbose) export VANBLOG_VERBOSE=1 ;;
-    0 | --*) : ;;
+    0) : ;; # 菜单/分发入口传进来的占位
+    --*)
+      echo -e "${red}restore 不认这个参数：${arg}${plain}"
+      print_restore_usage
+      return 2
+      ;;
     *)
       if [[ -n "${arg}" ]]; then
         path="${arg}"
@@ -3552,6 +3607,7 @@ restore() {
       ;;
     esac
   done
+  echo -e "> 恢复 vanblog"
 
   # 没给参数：先把服务器上现成的整站备份列出来让选（这是最常见的一步恢复场景）
   if [[ -z "${path}" ]]; then
@@ -4401,6 +4457,15 @@ fi
 # （rootless podman 就够），临时空间走 mktemp -d、演练存储走引擎管理的命名卷，
 # 所以没有理由被 root 门槛挡住。放在 dispatcher 里是没用的 —— dispatcher 在 pre_check 之后。
 case "${1:-}" in drill | verify-deep | backup-verify | backup-status) _vb_drill_sub="$1"; shift; exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vanblog-drill.sh" "${_vb_drill_sub}" "$@" ;; esac
+
+# 帮助也必须在 pre_check **之前**处理，理由与上面那条转发完全一样：
+# pre_check 会 `mkdir -p /var/vanblog` 且对非 root 直接 exit 1 ⇒ 非 root 用户连 `--help` 都看不到，
+# 只会得到一句"必须使用root用户运行此脚本"。而帮助里正好写着"哪四条子命令免 root"—— 讽刺的是
+# 想知道这件事的人恰恰是那个没有 root 的人。show_usage 只读脚本顶部就定好的
+# VANBLOG_IMAGE_REF / VANBLOG_FORK_IMAGE，不依赖 pre_check 里算的 os_arch，所以提前是安全的。
+# ⚠️ dispatcher 里那个 `-h | --help | help` 分支保留（现在走不到，但它是防御性的：
+#    有人把这段挪回去或从别处调 dispatcher 时仍然有帮助可看）。
+case "${1:-}" in -h | --help | help) show_usage; exit 0 ;; esac
 pre_check
 
 if [[ $# > 0 ]]; then

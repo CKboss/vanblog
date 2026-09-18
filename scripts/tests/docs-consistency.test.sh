@@ -109,9 +109,14 @@ DOC_VARS="$(grep -rhoE 'VANBLOG_[A-Z_]+' \
   "${ROOT}/docs/advanced/local-build.md" 2>/dev/null | sort -u)"
 COMPOSE_TPL="${ROOT}/docker-compose/docker-compose-template.yml"
 SERVER_SRC="${ROOT}/packages/server/src"
+# ⚠️ 还要收 `scripts/vanblog-drill.sh`：`VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` /
+#    那 19 个 `VANBLOG_DRILL_*` 旋钮都定义在它里面，而 backup.md / env.md 会提到它们。
+#    漏掉的结果是**真变量被判成编造的**（本轮两个代理各踩了一次）。
+DRILL_SCRIPT="${ROOT}/scripts/vanblog-drill.sh"
 unknown=""
 for v in ${DOC_VARS}; do
   if grep -qF "${v}" "${SCRIPT}" || grep -qF "${v}" "${COMPOSE_TPL}" ||
+    grep -qF "${v}" "${DRILL_SCRIPT}" ||
     grep -rqF --include='*.ts' "${v}" "${SERVER_SRC}" 2>/dev/null; then
     continue
   fi

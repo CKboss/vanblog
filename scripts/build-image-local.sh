@@ -10,14 +10,29 @@
 #   ./scripts/build-image-local.sh --build-only         # 只构建
 #   ./scripts/build-image-local.sh --smoke-only         # 只测已有的镜像
 #   ./scripts/build-image-local.sh --stage admin_builder # 只构建某一层（迭代时快得多）
+#   ./scripts/build-image-local.sh --stage=admin_builder # 同上，等号写法也认
 #   ./scripts/build-image-local.sh --lowmem             # admin 用 1536MB 堆（小内存机器）
+#   ./scripts/build-image-local.sh --help               # 本页
 #
 # 环境变量：
 #   ENGINE=docker|podman   默认自动探测（docker daemon 连不上就用 podman，rootless 免 sudo）
 #   IMAGE_TAG              默认 vanblog:local-test
 #   SMOKE_HTTP_PORT        冒烟测试用的宿主机端口，默认 18080（避免和正在跑的站点撞）
 #   SMOKE_KEEP             设 1 则测完不拆容器（自己进去看）
-#   NPM_REGISTRY           默认 https://registry.npmmirror.com（国内快；海外换 npmjs）
+#
+# 下载源（国内默认全部走镜像；海外或想验证"官方源也能构建"就设成 none）：
+#   NPM_REGISTRY           默认 https://registry.npmmirror.com（海外换 https://registry.npmjs.org）
+#   ALPINE_MIRROR          默认 https://mirrors.aliyun.com/alpine；官方 dl-cdn 在国内常常 10 秒以上，
+#                          构建会看起来卡死在 apk add。设 none = 用官方源。
+#   NODE_DIST_URL          默认 https://cdn.npmmirror.com/binaries/node；node-gyp 的头文件源，
+#                          musl 下上游是 unofficial-builds.nodejs.org，国内连不上会让 pnpm install
+#                          整个失败（tree-sitter / sharp 编不出来）。设 none = 用上游。
+#   SHARP_DIST_HOST        默认 https://registry.npmmirror.com/-/binary；sharp 预编译二进制源
+#                          （含 musl 版）。设 none = 用官方 GitHub Releases。
+#
+# ⚠️ 冒烟测试用的 mongo 镜像**不是**这里的旋钮：它由 vanblog.sh 的 pick_mongo_image 决定
+#    （要改用 VANBLOG_MONGO_IMAGE），本脚本内部算出的 MONGO_IMAGE 会被那一步无条件覆盖。
+#    admin 的堆档位也不是环境变量：用 --lowmem（ADMIN_BUILD_SCRIPT 在脚本里被写死）。
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,7 +79,12 @@ while [[ $# -gt 0 ]]; do
   --stage=*) STAGE="${1#--stage=}" ;;
   --lowmem) ADMIN_BUILD_SCRIPT="build:lowmem" ;;
   -h | --help)
-    sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # ⚠️ 不要写死行号范围。以前这里是 `sed -n '2,26p'`，而头部注释块到第 20 行就结束了 ⇒
+    #    `--help` 会把 `set -u`、`ROOT="$(cd …)"`、`cd "${ROOT}" || exit 1`、
+    #    `IMAGE_TAG="${IMAGE_TAG:-vanblog:local-test}"` 这几行**可执行代码**当帮助文本打出来
+    #    （实测过，就在输出末尾）。改成"从第 2 行起，遇到第一行不以 # 开头就停"，
+    #    以后往头部加说明也不会再把代码带出来。
+    awk 'NR >= 2 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
     exit 0
     ;;
   *) die "未知参数：$1（--help 看用法）" ;;
@@ -202,6 +222,12 @@ done
 [[ -n "${MONGO_IP}" ]] || die "30 秒都拿不到 mongo 的容器 IP（网络插件没给地址），--add-host 没法写"
 say "  mongo 容器 IP：${yellow}${MONGO_IP}${plain}（用 --add-host 写进 vanblog 容器的 /etc/hosts）"
 
+# ⚠️ `--add-host` 写进去的是**这一刻**的 mongo IP，而 /etc/hosts 里那条是死的：
+#    mongo 容器一旦重启就会换 IP（本机实测过一次：重启后地址就换了），于是 app 侧表现为
+#    EHOSTUNREACH、health 永远停在 degraded —— 而日志里**完全看不出**真因是"hosts 里那个
+#    地址过期了"。所以：**重启了 mongo 就要重跑整个脚本**，别只重启 app 容器。
+#    （没有改成 docker network alias / 内嵌 DNS：那会动到已验证过的冒烟与演练流程，
+#      而 rootless podman 常常没有 aardvark-dns，见上面第 208 行。）
 "${ENGINE}" run -d --name "${SMOKE_NAME}" \
   -e TZ=Asia/Shanghai \
   -e EMAIL="" \
@@ -226,6 +252,18 @@ done
 if [[ "${ready}" != "1" ]]; then
   say "${red}  服务没有就绪（/api/public/meta 最后一次是 ${code}），下面是容器日志尾部：${plain}"
   "${ENGINE}" logs --tail 60 "${SMOKE_NAME}" 2>&1 | sed 's/^/    /'
+  # 针对性诊断：上面那条 --add-host 的脆弱点是**这个失败形状最常见的成因**，而它自己不会说话。
+  # 对一次账很便宜（一次 inspect + 一次 grep），但能把"看不出真因"变成一句能照做的提示。
+  now_ip="$("${ENGINE}" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${MONGO_NAME}" 2>/dev/null | head -1)"
+  if [[ -n "${now_ip}" && "${now_ip}" != "${MONGO_IP}" ]]; then
+    say "${yellow}  ↳ mongo 现在的 IP 是 ${now_ip}，而 --add-host 写进去的是 ${MONGO_IP}（对不上）${plain}"
+    say "${yellow}    容器重启会换 IP，/etc/hosts 里那条改不了 ⇒ 请**重跑整个脚本**，别只重启 app 容器${plain}"
+  elif "${ENGINE}" logs --tail 200 "${SMOKE_NAME}" 2>&1 |
+    grep -qE 'EHOSTUNREACH|ENETUNREACH|ECONNREFUSED|MongoNetworkError'; then
+    say "${yellow}  ↳ 日志里有连不上数据库的痕迹（EHOSTUNREACH / ENETUNREACH / ECONNREFUSED / MongoNetworkError）${plain}"
+    say "${yellow}    先确认 ${MONGO_NAME} 还活着、IP 仍是 ${MONGO_IP}：${ENGINE} inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${MONGO_NAME}${plain}"
+    say "${yellow}    IP 变了就重跑整个脚本（--add-host 是起容器那一刻写死的）${plain}"
+  fi
   exit 1
 fi
 say "  ${green}服务已就绪${plain}"

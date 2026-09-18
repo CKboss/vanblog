@@ -2637,6 +2637,13 @@ cmd_drill() {
   fi
 
   # ── 6) vanblog ────────────────────────────────────────────────────────
+  # ⚠️ `--add-host` 写进去的是**这一刻**的 mongo IP，而容器里 /etc/hosts 那条是死的：
+  #    mongo 容器一旦重启就会换 IP（本机实测过一次：重启后地址就换了），于是 app 侧只有
+  #    EHOSTUNREACH、health 永远停在 degraded，而日志里**看不出真因**是"hosts 里的地址过期了"。
+  #    ⇒ 用 `--keep` 留住栈之后如果重启过 mongo，请**重跑整个 drill**，别只重启 app 容器。
+  #    下面第 7) 步的失败分支会主动对一次账（现 IP vs 写进去的 IP）并直说。
+  #    （没有改成 network alias / 内嵌 DNS：rootless podman 常常没有 aardvark-dns，
+  #      而这条 IP + --add-host 的路是本机验证过的。）
   if ! "${eng}" run -d --name "${DRILL_APP_NAME}" \
     --network "${net_name}" \
     --add-host "${DRILL_MONGO_NAME}:${mongo_ip}" \
@@ -2682,6 +2689,14 @@ cmd_drill() {
     say "${red}── mongo 容器日志（最后 20 行）──${plain}"
     "${eng}" logs --tail 20 "${DRILL_MONGO_NAME}" 2>&1 | sed 's/^/    /'
     say "\n  容器状态：$("${eng}" ps -a --filter "name=${DRILL_PREFIX}" --format '{{.Names}} {{.Status}}' 2>/dev/null | tr '\n' ' ')"
+    # 针对性诊断：上面 `--add-host` 那个脆弱点正是"服务不就绪"最常见的成因之一，而它自己不会说话。
+    # 对一次账很便宜（一次 inspect），但能把看不懂的 EHOSTUNREACH 变成一句能照做的提示。
+    local now_mongo_ip
+    now_mongo_ip="$("${eng}" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${DRILL_MONGO_NAME}" 2>/dev/null | head -1)"
+    if [[ -n "${now_mongo_ip}" && "${now_mongo_ip}" != "${mongo_ip}" ]]; then
+      say "${yellow}  ↳ mongo 现在的 IP 是 ${now_mongo_ip}，而 --add-host 写进去的是 ${mongo_ip}（对不上）${plain}"
+      say "${yellow}    容器重启会换 IP，/etc/hosts 里那条改不了 ⇒ 重跑整个 drill（别只重启 app 容器）${plain}"
+    fi
     assert_summary "演练结果"
     return 1
   fi

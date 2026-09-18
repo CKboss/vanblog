@@ -278,6 +278,46 @@ assert_not_contains "$(cat "${APILOG}")" "full/export" "离线模式不调整站
 assert_contains "${OUT}" "vanblog-backup-" "离线模式仍然产出 vanblog-backup-*.tar.gz"
 
 
+# ---------- 打错的开关必须被拒绝，不能静默按默认值恢复 ----------
+# 为什么这条比 backup 那条更值钱：restore 是**不可逆**的那一类操作。
+# `restore --no-statc <归档>`（少一个 i）在旧代码下会安静地按默认值恢复 —— 也就是连静态文件
+# 一起覆盖，而用户以为自己保住了当前图床；等发现的时候已经没有回头路了。
+echo "-- restore 的未知参数必须被拒绝 --"
+setup_case
+source_script
+install_fake_curl
+OUT="$(restore 0 --no-statc vanblog-full-20260913-172338.tar.zst 2>&1)"; RC=$?
+assert_eq "${RC}" "2" "restore --no-statc 退出码 2（少一个字母；旧代码会静默按默认值恢复）"
+assert_contains "${OUT}" "restore 不认这个参数：--no-statc" "点名了打错的那个参数"
+assert_contains "${OUT}" "--no-static" "报错里列出正确写法，用户能照着改"
+assert_contains "${OUT}" "不会静默按默认值恢复" "并说清后果（不是只丢一句「参数错了」）"
+# 反证：拒绝路径不许真的动手恢复（不碰接口、不停服）
+assert_eq "$(wc -c < "${APILOG}" | tr -d ' ')" "0" "拒绝路径一次都没调用接口（APILOG 是空的）"
+assert_not_contains "$(cat "${CMDLOG}")" "stop_vanblog" "拒绝路径没有停服"
+assert_not_contains "${OUT}" "恢复成功" "也没有谎称恢复成功"
+# 合法开关必须仍然被接受（别把"收紧"做成"什么都拒"）
+SRC_RESTORE="$(awk '/^restore\(\) \{/,/^\}/' "${SCRIPT}")"
+for ok in "--no-static)" "--with-static)" "--verbose)"; do
+  assert_contains "${SRC_RESTORE}" "${ok}" "合法开关 ${ok%?} 仍在解析器里"
+done
+assert_contains "${SRC_RESTORE}" "print_restore_usage" "restore 打错参数时会打印自己的用法"
+# 源码级反证：不许再有"吞掉一切未知开关"的分支
+# ⚠️ 必须剥掉注释再断言：解释这个改动的注释里就写着旧形状（本仓库已踩 6 次这个坑）
+SRC_RESTORE_CODE="$(printf '%s\n' "${SRC_RESTORE}" | grep -v '^[[:space:]]*#')"
+SWALLOW_RE='^[[:space:]]*(0 \| )?--\*\)[[:space:]]*(continue|:)[[:space:]]*;;'
+if printf '%s\n' "${SRC_RESTORE_CODE}" | grep -qE "${SWALLOW_RE}"; then
+  fail "restore 的解析器里还有静默吞掉未知开关的分支"
+else
+  pass "restore 的解析器里没有静默吞开关的分支（剥掉注释后核对）"
+fi
+# 反证的反证：同一条正则必须能抓住旧形状，否则上面那条是空转
+if printf '%s\n' '    0 | --*) : ;;' | grep -qE "${SWALLOW_RE}"; then
+  pass "那条正则确实抓得住旧形状（断言不是空转）"
+else
+  fail "正则抓不住旧形状 —— 上面那条断言空转了，请重写"
+fi
+
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
