@@ -27,8 +27,8 @@
 
 ---
 
-> **这个项目从哪里来**：VanBlog 由 [Mereithhh/van-blog](https://github.com/Mereithhh/vanblog)（GPL-3.0）继续开发而来，
-> 上游项目的主页与演示见文末[「与上游的关系」](#与上游的关系)。
+> **这个项目从哪里来**：VanBlog 由 [Mereithhh/vanblog](https://github.com/Mereithhh/vanblog)（GPL-3.0）继续开发而来，
+> 原文出处、许可与"去哪儿提问"见文末[「出处与许可」](#出处与许可)。
 > 到今天两边已经差别很大：**133 个提交、552 个文件、+77,338 / −5,381 行**，依赖整体现代化
 > （Node 24 · NestJS 10 · mongoose 8 · Next 14 · TypeScript 5.9 · sharp 0.35 · multer 2），
 > 并补上了整站备份的**恢复演练**、迁移账本、文章版本历史、回收站、定时发布、健康检查、
@@ -138,6 +138,7 @@ curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh
 
 docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：见 [`docs/guide/get-started.md`](docs/guide/get-started.md)。
 反代（Nginx / Caddy / Cloudflare）注意事项：见 [`docs/reference/reverse-proxy.md`](docs/reference/reverse-proxy.md)。
+**只想抄命令？** 安装 / 更新 / 备份 / 恢复 / 回滚 / 排错的一页速查表：[`docs/guide/cheatsheet.md`](docs/guide/cheatsheet.md)。
 
 ## 访问性能（实测，可复现）
 
@@ -352,25 +353,21 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 9. ~~**可见水印在镜像里补上系统字体**~~ —— **已完成**（2026-09）：镜像装了 `fontconfig ttf-dejavu wqy-zenhei`（860 → 892 MB），中文水印可用；缺字体的自建镜像是"跳过 + WARN"而不是盖满 `.notdef` 方块（旧镜像实测会盖）
 10. **自定义图片水印**（上传一张 logo 当水印）：文字水印已经够用，但品牌场景要图形；底座（sharp 合成 + 按图尺寸自适应 + 跳过过小图）都在
 
-## 与上游的关系
+## 出处与许可
 
-- **上游项目**：[Mereithhh/van-blog](https://github.com/Mereithhh/vanblog) —— 本仓库是它的 fork（`CKboss/vanblog`，分支 `dev/dsh`），
-  按 **GPL-3.0** 继续开发，版权归原作者所有。
-- **上游的文档站与演示**：[vanblog.mereith.com](https://vanblog.mereith.com) ·
-  [演示站](https://blog-demo.mereith.com)（后台账号密码均为 `demo`）。
-  ⚠️ 那两个站点描述的是**上游版本**，与本仓库已经有明显差别（功能、默认值、镜像来源都不同）；
-  本仓库的文档在 [`docs/`](docs/README.md)，以它为准。
-- **上游社区**：[VanBlog 交流群](https://jq.qq.com/?_wv=1027&k=5NRyK2Sw)。
-  ⚠️ 群里讨论的是上游版本，本 fork 的改动（尤其是默认值变化与新开关）在那里可能得不到答案。
-- **差异概览**：133 个提交 / 552 个文件 / +77,338 −5,381 行。逐项改动与理由在 [CHANGELOG.md](CHANGELOG.md)
-  （按版本分组）与 [AGENTS.md](AGENTS.md)（按轮次记录根因、实测数字与踩过的坑）。
-  想只装上游原版：`VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh install`。
-- **与上游同步**：
+- 本项目建立在 [Mereithhh/vanblog](https://github.com/Mereithhh/vanblog) 之上，按 **GPL-3.0** 继续开发，
+  版权归原作者所有；本仓库是 `CKboss/vanblog`（分支 `dev/dsh`）。
+- **文档以本仓库的 [`docs/`](docs/README.md) 为准**。原作者的[文档站](https://vanblog.mereith.com)、
+  [演示站](https://blog-demo.mereith.com)与[交流群](https://jq.qq.com/?_wv=1027&k=5NRyK2Sw)
+  描述的是另一个版本（功能、默认值、镜像来源都不同），在那儿问本项目的问题大概率得不到答案。
+- 逐项改动与理由见 [CHANGELOG.md](CHANGELOG.md)（按版本分组）与 [AGENTS.md](AGENTS.md)（按轮次记录根因、实测数字与踩过的坑）。
+  想只装原版：`VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh install`。
+- **与原项目同步**（维护者用）：
 
   ```bash
-  git fetch origin            # origin = 上游 Mereithhh/vanblog（只 fetch，不 push、不打 tag）
+  git fetch origin            # origin = Mereithhh/vanblog（只 fetch，不 push、不打 tag）
   git rebase origin/master    # 或 merge，按需
-  git push ckboss dev/dsh     # ckboss = 本 fork
+  git push ckboss dev/dsh     # ckboss = 本仓库
   ```
 
   上游的发版 tag（`v*` 产品、`doc*` 官网）是作者专用的，本分支不会向上游推送任何 tag。
@@ -382,7 +379,7 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 以及后台「关于」里显示的版本号（形如 `v2026.9.2@<短 sha>`：tag + 构建时的 commit，能直接对上）。
 
 如果是上游版本的问题（比如你装的是 `VANBLOG_USE_UPSTREAM_IMAGE=true`），请到
-[上游仓库](https://github.com/Mereithhh/van-blog/issues/new/choose)反馈。
+[上游仓库](https://github.com/Mereithhh/vanblog/issues/new/choose)反馈。
 
 ## 许可
 
