@@ -49,7 +49,7 @@ VanBlog 现在支持**两套**评论系统，在后台 `站点管理 / 系统设
 
 「先发后审」下会自动转待审的情况：
 
-- 命中后台配置的**关键词**（大小写不敏感，最多 200 个）
+- 命中后台配置的**关键词**（大小写不敏感，最多 **200 个**、每个不超过 **30 字符**）
 - 内容里含**外链**（可在设置里关掉这条规则）
 - 蜜罐字段被填写 → 直接判**垃圾**（对用户仍显示「待审」，不暴露判定逻辑）
 
@@ -133,15 +133,22 @@ DELETE /api/admin/comment/:id                # 删顶层会连带删它的回复
 | **dryRun** | 传 `{ payload, dryRun: true }` 只统计不写库，先看看会导入多少条 |
 
 ```bash
-# 先空跑看看
+# payload 是整个 waline JSON，所以先把文件读进变量，再用转义过的双引号拼进请求体
+PAYLOAD=$(cat waline.json)
+
+# 先空跑看看（只统计不写库）
 curl -X POST "$BASE/api/admin/comment/import/waline" -H "token: $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{"payload": $(cat waline.json), "dryRun": true}"
+  -d "{\"payload\": $PAYLOAD, \"dryRun\": true}"
+
 # 正式导入
 curl -X POST "$BASE/api/admin/comment/import/waline" -H "token: $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{"payload": $(cat waline.json)}"
+  -d "{\"payload\": $PAYLOAD}"
 ```
+
+⚠️ JSON 里的双引号必须转义（或者整个 `-d` 用单引号、把 `$PAYLOAD` 拼在单引号外面）：
+写成 `-d "{"payload": ...}"` 会被 shell 拆成好几段，服务端只会收到一个坏掉的请求体。
 
 返回：`{ total, imported, skippedNotApproved, skippedDuplicate, skippedInvalid, dryRun, errors[] }`。
 
@@ -197,11 +204,20 @@ curl -X POST "$BASE/api/admin/comment/import/waline" -H "token: $TOKEN" \
 
 ### 消息通知
 
-内嵌的评论系统可以通过邮件或者 `webhook` 进行消息通知，具体来说：
+内嵌的 **Waline** 可以通过邮件或者 `webhook` 进行消息通知，具体来说：
 
 - 当有新评论时会根据表单中的 `博主邮箱`，对博主进行通知。
 - 当某人的评论被回复时，会通过这个人在评论时所写的邮箱进行通知。
 - 通知时的站点名称和站点地址取自 `站点管理/系统设置/站点配置` 。
+
+::: warning 内置评论（builtin）没有消息通知
+
+邮件 / webhook 通知、点赞 UI、验证码这三样都是 **Waline 独有**的。
+选「内置评论」时：新评论不会给你发邮件，也没有验证码（反垃圾靠蜜罐 + 关键词 + 三道限流 + 审核策略）；
+点赞数在从 Waline 导入时会保留成 `likeCount`，但前台暂时没有点赞按钮。
+要这些功能就把评论系统切成 Waline。
+
+:::
 
 VanBlog **没有单独的邮件系统**。通知走的是内嵌 [Waline](https://waline.js.org/) 的 SMTP，全部在后台 `站点管理 / 系统设置 / 评论设置` 里改。
 
@@ -264,11 +280,11 @@ VanBlog **没有单独的邮件系统**。通知走的是内嵌 [Waline](https:/
 >
 > 附上QQ邮箱官方说明：[QQ邮箱 SMTP/IMAP服务](https://wx.mail.qq.com/list/readtemplate?name=app_intro.html#/agreement/authorizationCode)、[腾讯企业邮 常用邮件客户端软件设置](https://service.exmail.qq.com/cgi-bin/help?subtype=1&id=28&no=1000564)
 
-当我（博主）收到评论时邮箱中会显示：
+配置好之后，有新评论时博主邮箱里会收到这样的邮件：
 
 ![](https://www.mereith.com/static/img/d57d80bd5c8a3459142066c039fc386c.clipboard-2022-09-01.png)
 
-当某人的评论得到了回复，他的邮箱也会显示：
+某人的评论被回复时，他留下的邮箱也会收到通知：
 
 ![](https://www.mereith.com/static/img/ac9a19cc271e76b0b09159884cb54e63.clipboard-2022-09-01.png)
 
@@ -282,7 +298,7 @@ VanBlog **没有单独的邮件系统**。通知走的是内嵌 [Waline](https:/
 
 ### 配置 webhook 消息通知
 
-VanBlog 内嵌的评论系统支持在有新评论时发送 `webhook`，配置好 `webhook` 接收地址后，会发送一条 `POST` 请求，具体包含以下请求体（JSON 格式）：
+内嵌的 **Waline** 支持在有新评论时发送 `webhook`（内置评论没有这个功能），配置好 `webhook` 接收地址后，会发送一条 `POST` 请求，具体包含以下请求体（JSON 格式）：
 
 ```json
 {
@@ -337,7 +353,9 @@ VanBlog 内嵌的评论系统支持在有新评论时发送 `webhook`，配置�
 
 ## 原理
 
-在后端的 server 中内嵌了控制 `waline.js` 启动停止的服务，后台页面中暂时使用 `iframe` 内嵌 Waline 管理页面，后续会考虑陆续替换成自己的评论实现。
+后端的 server 里内嵌了控制 `waline.js` 启停的服务，后台的 Waline 评论管理页用的是 `iframe` 内嵌它的管理界面。
+（早年这里写着"后续会替换成自己的评论实现"——**已经做了**：就是本页上半部分的「内置评论」，
+Waline 现在是需要邮件通知 / 点赞 / 验证码时的可选项。）
 
 ![评论管理](https://pic.mereith.com/img/dd7792a91f5a3b945ee2b261b06f666a.clipboard-2022-08-25.png)
 

@@ -90,6 +90,6 @@ GitHub 官方渲染会在 `> [!NOTE]` 的标题前放一个内联 SVG 图标。�
 
 ::: tip 发现预览和前台不一致？
 
-那属于 bug（两边共用插件与白名单，理论上不该有差异）。可以到 [GitHub Issues](https://github.com/Mereithhh/vanblog/issues) 反馈，附上出问题的 markdown 片段即可。
+那属于 bug（两边共用插件与白名单，理论上不该有差异）。可以到[本仓库的 Issues](https://github.com/CKboss/vanblog/issues/new) 反馈，附上出问题的 markdown 片段即可。
 
 :::

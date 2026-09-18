@@ -68,8 +68,6 @@ order: 7
 
 ![标签管理](https://www.mereith.com/static/img/40e8150b4c40fcdbcb9353bebabf5e1f.clipboard-2022-09-01.png)
 
-<!-- more -->
-
 你可以:
 
 - 查看标签: 可直接跳转到博客的对应页面查看相关标签的文章。

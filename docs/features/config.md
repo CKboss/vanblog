@@ -25,7 +25,7 @@ VanBlog 可以配置一系列的站点配置项，可在 `站点管理/系统设
 
 ## 界面风格（Apple 风格）
 
-`站点管理 / 站点信息 / 布局设置 → 界面风格` 可以切换前台的视觉语言：
+`站点管理 / 系统设置 / 站点配置 / 布局设置 → 界面风格` 可以切换前台的视觉语言：
 
 | 选项 | 说明 |
 | --- | --- |
@@ -106,15 +106,20 @@ Apple 风格具体做了这些事：
 - **时间线**：年份 32px/600，竖轨改成发丝线，条目 hover 变蓝；月份行的展开按钮是 22px 正圆浅灰底、`>` 用 flex 居中（组件原本是 `inline-block` + 内联宽度 + `text-lg`，直接加圆角和内边距会让箭头偏心）。
 - **元信息行**（标题下的 时间 / 分类 / 阅读量 / 评论量）：去掉 Tailwind `divide-x` 画的竖线，只留 18px 间距 —— Apple 的元信息行不画分隔线。
 - **关于页**：和文章页一样套 `.vanblog-article-page` 作用域（780px 阅读栏、40px 标题、正文不被列表页的「摘要 4 行」规则裁掉）。摘要截断现在只作用于**带「阅读全文」按钮的列表卡**。
-- **字体**：Apple 风格下全站用 **Maple Mono**（中文/Nerd Font 子集是 `Maple Mono NF CN`），
-  拉丁子集的 `@font-face` 写在 `styles/apple.css` 里（jsDelivr 的 fontsource），
-  中文子集那份样式表由 `components/Layout` 用 `<link rel="stylesheet">` 加载（zeoseven 字体 CDN），
-  **只在皮肤开启时才加载**，并配了 `preconnect` / `dns-prefetch` 提前建连。
+- **字体**：Apple 风格下全站用 **Maple Mono**（中文 / Nerd Font 子集是 `Maple Mono NF CN`），两条来源分开看：
 
-  **加载方式是非阻塞的**：远程字体样式表用 `<link rel="stylesheet" media="print">` 引入，
-  浏览器会以低优先级下载且**不阻塞首屏渲染**；水合后由一个 `useEffect` 把 `media` 改成 `all`，
-  配合 `font-display: swap`，效果是「先按兜底字体渲染，字体到了再无缝换上」。
-  另外配了 `preconnect` / `dns-prefetch` 提前建连，以及 `<noscript>` 兜底（关掉 JS 时没有水合）。
+  - **拉丁子集已经自托管**（不再走第三方 CDN）：文件是
+    `packages/website/public/fonts/maple-mono-latin-400-normal.woff2`（74 KB，取自
+    `@fontsource/maple-mono@5.3.0`，与 jsDelivr 上那一份逐字节一致，SHA-256 与许可证都由测试钉住），
+    `@font-face` 声明在 `styles/apple.css` 里，`font-display: swap`。首屏由 `components/Layout`
+    输出**一条** `<link rel="preload">`（只在皮肤开启时），让字体下载与阻塞式 CSS 解析并行。
+    换掉 CDN 的三个理由：自托管博客不该靠别人家 CDN 出首屏字体、`@latest` 会漂移、少一条跨域连接。
+    ⇒ 前台代码现在**不向任何第三方字体域名请求一个字节**。
+  - **中文 / Nerd Font 子集仍走远程**：zeoseven 的字体 CSS（地址在 `utils/appleFont.ts` 的
+    `APPLE_FONT_CSS_URL`）。它里面是**按 unicode-range 切好的几十上百个分包**，所以没法自己写一个
+    `@font-face` 顶掉。这一份是**非阻塞**加载的（`media="print"` 取完再翻成 `all`），
+    并配了 `preconnect` / `dns-prefetch` 提前建连和 `<noscript>` 兜底（关掉 JS 时没有水合）；
+    解析不了或加载不上时，退回自托管的拉丁子集与系统字体栈 —— 最坏情况只是中文用系统字体，页面照常渲染。
 
   ::: warning 为什么必须异步
 
@@ -141,6 +146,9 @@ Apple 风格具体做了这些事：
   开启 Apple 风格时，**后台编辑器的预览面板**也会用同一套字体（只影响预览，不动左侧编辑区和后台其它页面），
   详见 [编辑器](editor.md)。换字体源要同时改两处：前台 `packages/website/utils/appleFont.ts`
   与后台 `packages/admin/src/components/Editor/useApplePreviewFont.ts`（有测试盯着一致性）。
+  ⚠️ 两边有一处**故意的不同**：后台预览的拉丁子集仍从 jsDelivr 取（版本钉死 `@5.3.0`，与前台自托管那份同版本）。
+  理由是后台属于登录后的界面、不在读者的关键路径上，把同一个 74 KB 字体再复制进第二个包换不来可测量的收益，
+  反而多一份会和前台漂移的副本；CDN 不可达时后台只是预览面板退回系统字体。
 
   ::: tip 想换字体 / 自己托管
 
