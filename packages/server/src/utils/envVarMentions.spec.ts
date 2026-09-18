@@ -257,16 +257,30 @@ function collectRealNames(): Set<string> {
 
 function collectMentions(): { name: string; file: string; line: number }[] {
   const out: { name: string; file: string; line: number }[] = [];
-  for (const f of walk(SERVER_SRC)) {
-    if (!f.endsWith('.ts') || isSpec(f)) continue;
-    const text = read(f);
-    const names = mentionedInStrings(text);
-    if (names.size === 0) continue;
-    const lines = text.split('\n');
-    for (const name of names) {
-      // 报第一处出现的行号，方便定位
-      const idx = lines.findIndex((l) => l.includes(name));
-      out.push({ name, file: path.relative(REPO_ROOT, f), line: idx + 1 });
+  // ⚠️ 不止 server：后台表单的 tooltip 与前台文案里也会写环境变量名
+  //    （`WaterMarkForm` 写着 VANBLOG_WATERMARK_STYLE / _POSITION，`InstallRecordBanner` 写着
+  //    VANBLOG_ADMIN_USER）。这些地方打错一个字母，用户照着设了不会有任何效果，
+  //    而**编译、单测、文档守卫都发现不了** —— 与本文件顶部记的两个事故同一类。
+  //    "真有人读"的语料本来就是全仓库的，所以跨包扫描不会带来误报。
+  const scanRoots = [
+    SERVER_SRC,
+    path.join(REPO_ROOT, 'packages', 'admin', 'src'),
+    path.join(REPO_ROOT, 'packages', 'website'),
+  ];
+  const seen = new Set<string>();
+  for (const root of scanRoots) {
+    for (const f of walk(root)) {
+      if (!CODE_EXT.has(path.extname(f)) || isSpec(f) || seen.has(f)) continue;
+      seen.add(f);
+      const text = stripped(f);
+      const names = mentionedInStrings(text);
+      if (names.size === 0) continue;
+      const lines = text.split('\n');
+      for (const name of names) {
+        // 报第一处出现的行号，方便定位（可能命中同名的注释行，按名字搜即可）
+        const idx = lines.findIndex((l) => l.includes(name));
+        out.push({ name, file: path.relative(REPO_ROOT, f), line: idx + 1 });
+      }
     }
   }
   return out;
@@ -276,11 +290,18 @@ describe('用户可见文案里提到的环境变量名都必须真有人读', (
   const real = collectRealNames();
   const mentions = collectMentions();
 
-  it('扫描本身没空转（真的扫到了文件与名字）', () => {
+  it('扫描本身没空转（真的扫到了文件与名字，且三个包都覆盖到）', () => {
     // ⚠️ 空转的守卫比没有守卫更糟：本仓库有过 heredoc 参数写错位置导致 python 直接 IndexError、
     //    stdout 为空、于是"检查通过"的先例（docs-consistency 的裸尖括号那条）。
     expect(real.size).toBeGreaterThan(80);
     expect(mentions.length).toBeGreaterThan(20);
+    // 跨包覆盖也要钉住：实测 server 字符串里提到 74 个不同变量名、admin 7 个、website 8 个。
+    // 如果哪天 walk 的跳过规则（点目录、体积上限）把 admin 的 `.umi` 之外的东西也一起跳了，
+    // 这条会红 —— 否则守卫会悄悄退回"只扫 server"，而没人会发现。
+    for (const pkg of ['packages/server/src', 'packages/admin/src', 'packages/website']) {
+      const hit = mentions.filter((m) => m.file.startsWith(pkg));
+      expect(hit.length).toBeGreaterThan(0);
+    }
   });
 
   it('每一个被提到的名字都能在代码里找到读取点', () => {
