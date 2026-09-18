@@ -4,6 +4,126 @@ icon: cloud-arrow-up
 order: -3
 ---
 
+## 升到指定发布版（一行命令）
+
+用一键脚本装的站点，升到某个**发布版**只要一行（版本号换成你要的那个，列表见
+[Releases](https://github.com/CKboss/vanblog/releases)）：
+
+```bash
+./vanblog.sh update v2026.9.2
+```
+
+其它几种写法（效果都一样，挑顺手的）：
+
+```bash
+./vanblog.sh update ghcr.io/ckboss/vanblog:v2026.9.2                     # 写完整镜像地址
+VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2 ./vanblog.sh update   # 等价的老写法
+./vanblog.sh update dev-dsh-abc1234                                      # 回到某一次具体的构建（回滚用）
+./vanblog.sh update                                                      # 不带参数 = 默认的 latest 标签
+```
+
+⚠️ 参数打错（例如 `--v2026.9.2`，或者一次给两个版本号）会**直接拒绝**并打印用法、退出码 2 ——
+不会静默按默认值升级。
+
+**看到什么算成功**（三行，按出现顺序）：
+
+1. `> 目标镜像：ghcr.io/ckboss/vanblog:v2026.9.2（发布号：内容固定不变…）` —— 拉镜像**之前**
+   就告诉你这次会得到什么；
+2. `> 当前运行: <旧版本号> → 新镜像: v2026.9.2@23f2e9c` —— 停旧容器**之前**的版本对比；
+3. `VanBlog 更新并重启成功` 与 `版本：<旧版本号> -> v2026.9.2@23f2e9c`。
+
+之后前台页脚与后台「关于」页显示的就是这个版本号。停机只有重启那几秒（脚本**先把新镜像准备好、
+再停旧容器**；拉取失败时旧容器全程不动，站点不会因为升级失败而停摆）。
+
+::: warning 新镜像比当前旧时，脚本会拦你一下
+
+停容器之前脚本会比对两个版本号，两种情况会打**醒目 WARN 并要求确认**：
+
+- **能证明更旧**：例如 `v2026.9.2@23f2e9c → v2026.9.1@…`；
+- **证明不了不更旧**：当前跑的是发布号，而目标是个会移动的标签（`latest` / `dev-dsh`），
+  或者镜像里读不出版本号。
+
+交互终端下要敲 `y` 才继续；非交互（cron / 管道）没人能回答，就打完 WARN 继续，
+`VANBLOG_ASSUME_YES=1` 同理（**WARN 照打**，只是不阻塞）。取消的话旧容器原样在跑，什么都没动。
+这一整套就是为了让"以为是升级、其实是降级"再也不会静默发生。
+
+:::
+
+::: danger 不带版本号 = 升到 latest，它会随下次发版移动
+
+`./vanblog.sh update`（不带参数）用默认镜像 `ghcr.io/ckboss/vanblog:latest`，也就是
+**最近一次发布构建**（此刻就是 `v2026.9.2`）。它不是钉死的版本：下次发版后会跟着走。
+想永远说得清"我在哪一版"，就带上发布号。
+
+⚠️ 还有个标签叫 `dev-dsh`，它**只在有人手动触发构建时才更新**（往分支 push 不会自动构建镜像），
+所以可能比发布版旧。实测过一次：
+
+| 标签 | 镜像里的版本号 | 构建于 |
+| --- | --- | --- |
+| `v2026.9.2` | `v2026.9.2@23f2e9c` | 2026-09-17 |
+| `latest`（**脚本默认**） | `v2026.9.2@23f2e9c`（与发布版同一个 digest） | 2026-09-17 |
+| `dev-dsh` | `dev-dsh@b31a1ec` | ⚠️ **2026-09-13，比发布版旧 4 天** |
+
+所以显式用 `dev-dsh`（`./vanblog.sh update dev-dsh` 或 `VANBLOG_IMAGE_REF=…:dev-dsh`）时，
+拿到的可能比现在跑的还旧 —— 上面那条 WARN 会拦你。脚本的默认值曾经就是 `dev-dsh`，
+那等于让 `./vanblog.sh update` 变成一次静默降级、把整轮安全修复回滚掉，现在改成了 `latest`。
+
+:::
+
+### 四个标签怎么选（大白话）
+
+| 标签 | 它指向什么 | 什么时候用 |
+| --- | --- | --- |
+| `v2026.9.2` 这类**发布号** | 那一次发版时的代码，**永远不变** | ✅ **推荐新手**：`./vanblog.sh update v2026.9.2` |
+| `latest`（**脚本默认**） | 最近一次发布构建（会被下次发版挪走） | 不想每次写版本号时可用 |
+| `dev-dsh` | 最近一次**手动触发**的分支构建（push 不触发，可能比发布版旧） | 明确想试还没发版的改动时 |
+| `dev-dsh-<短sha>` | 某一次具体的分支构建 | **回滚**，或钉死"就是这一次构建" |
+
+想知道某个标签此刻到底是哪一版：看升级输出里的 `当前运行: … → 新镜像: …` 那行，或前台页脚 /
+后台「关于」页（版本号形如 `v2026.9.2@23f2e9c`，前半是标签、后半是构建时的 commit，能直接对上代码）。
+
+### 钉住的版本会写进编排文件（这点最容易困惑）
+
+`update` 不只是拉镜像，它还会把 `/var/vanblog/docker-compose.yaml` 里的 `image:` 改成你这次指定的
+ref。所以之后 `./vanblog.sh restart`、`docker-compose up -d` 起的仍然是这个版本 —— 这是好事，
+可以用 `./vanblog.sh status` 看「编排镜像」那一行确认。
+
+⚠️ 但**下次再跑不带版本号的 `./vanblog.sh update`，又会回到默认的 `latest`**（它会跟着下次发版走）。
+想彻底钉死不动，可以直接改一次编排文件，之后用 docker 命令升级：
+
+```bash
+# 先把 /var/vanblog/docker-compose.yaml 里的 image: 行改成
+#   image: ghcr.io/ckboss/vanblog:v2026.9.2
+cd /var/vanblog
+docker-compose pull
+docker-compose down          # ⚠️ 不要加 -v，那会删掉编排里的卷
+docker-compose up -d
+```
+
+::: danger 别随手跑 ./vanblog.sh config
+
+`config` 会按模板**重新生成**编排文件：`image:` 会被重置回默认的 `latest`，你手写的
+`environment:` 也会被覆盖（覆盖前会自动存一份 `docker-compose.yaml.bak-<时间戳>`）。
+改版本号不需要跑 `config`。
+
+:::
+
+::: tip 拉不到镜像时，别让它悄悄退化成"源码构建"
+
+`update` 默认是 `auto` 模式：先 `docker pull`，拉不到就**退回克隆源码本地构建**（15–40 分钟），
+而源码构建出来的是**分支最新代码**，不是你要的那个发布号（网络到不了 ghcr.io 时最容易发生）。
+钉版本时建议加上 `VANBLOG_INSTALL_MODE=image`：拉不到就直接失败、旧容器一动不动，
+不会升出一个"看着成功、其实不是那一版"的结果。
+
+```bash
+VANBLOG_INSTALL_MODE=image ./vanblog.sh update v2026.9.2
+```
+
+:::
+
+升级前请先备份，并读一遍下面的**行为变化**（这一轮有 9 处故意改了默认值，其中"访问密码改存
+scrypt 哈希"是不可逆的）。
+
 ## 升级前要知道的行为变化
 
 这一轮（2026-09）有几处**故意改了默认值/行为**的地方，升级后你会注意到它们。
@@ -34,31 +154,25 @@ order: -3
 
 ## 升级提示
 
-::: info 本分支的截图与上游不同
+::: info 版本号、「有新版本」提醒、以及升级前该做的备份
 
-下面几张截图来自上游版本，本分支有这些区别：
-
-- **不会再弹"有新版本！"的假警报**：源码构建的版本号是 `dev/dsh@<短sha>`，上游用字符串比较
-  （`'dev/dsh@…' >= 'v0.54.0'`，首字符 `d` < `v`）会永远判定"有新版本"，本分支只在两边都是
-  正式发布号时才按数字段比较。
-- **版本信息指向本分支**：前台页脚与后台「关于」页显示的是本 fork 的仓库与「增强修改版」说明，
-  不是上游文档站。
-- **备份页多了「整站备份」**：`站点管理/系统设置/备份恢复` 除了原来的 JSON 导出，还有
-  整站备份（导出/查看清单/上传恢复/下载/删除），见 [整站备份](../advanced/backup.md#整站备份推荐)。
+- **版本号形如 `v2026.9.2@23f2e9c`**（标签 + 构建时的 commit），前台页脚与后台「关于」页都显示；
+  报问题时带上它，就能直接对上代码。
+- 后台的「有新版本」提醒**只在两边都是正式发布号时**才按数字段比较，所以源码构建出来的
+  `dev/dsh@<短sha>` 这类版本号不会一直弹提醒。
+- **升级前用整站备份**：后台 `站点管理 → 系统设置 → 备份恢复` 里可以导出/查看清单/上传恢复/下载/删除。
+  一个归档就含数据库、图床与附件、自定义页面、主题，跨版本可恢复、恢复不用停服，
+  详见 [整站备份](../advanced/backup.md#整站备份推荐)。
 
 :::
 
 目前 VanBlog 处于快速迭代期，如果后台出现新版本提醒，推荐进行升级。
-
-![升级提醒](https://pic.mereith.com/img/e314ee92dd1ad9b5b6c0b814b014c247.clipboard-2022-08-22.png)
 
 升级前建议先备份。**推荐用整站备份**（跨版本可恢复、恢复不用停服）：
 
 ```bash
 ./vanblog.sh backup        # 或后台「系统设置 → 备份恢复 → 导出整站备份」
 ```
-
-![备份数据](https://pic.mereith.com/img/4eba8540c5a7a5ae41885289abf98514.clipboard-2022-08-15.png)
 
 :::: tabs#deploy
 
@@ -70,7 +184,9 @@ order: -3
 ./vanblog.sh
 ```
 
-![脚本一键升级](https://pic.mereith.com/img/fbbf5dde011f9dec13cdb25ad741765f.clipboard-2022-09-20.png)
+⚠️ 菜单里的「6. 更新」等价于不带参数的 `./vanblog.sh update`，用的是**默认标签 `latest`**
+（最近一次发布构建，会随下次发版移动）。要钉死某一版，用
+[本页开头那一行命令](#升到指定发布版-一行命令)：`./vanblog.sh update v2026.9.2`。
 
 ::: warning 限制
 
@@ -86,8 +202,12 @@ order: -3
 
 请切换到部署 VanBlog 的目录下（docker-compose.yaml 存放的路径下），然后运行下面的命令。
 
+⚠️ 先确认编排文件里的 `image:` 是你要的版本：写 `dev-dsh` 或 `latest` 会跟着分支跑，
+要钉住发布版就写成 `ghcr.io/ckboss/vanblog:v2026.9.2` 这样的**发布号**
+（各标签的区别见 [本页开头的标签表](#四个标签怎么选-大白话)）。
+
 ```bash
-# 拉取新镜像（本分支的镜像；上游官方镜像是 mereith/van-blog:latest）
+# 拉取新镜像（编排文件里 image: 写的那个 ref）
 docker-compose pull
 # 关闭原有服务 —— ⚠️ 不要加 -v，那会删掉编排里的卷
 docker-compose down
@@ -97,7 +217,7 @@ docker-compose up -d
 docker image prune -f
 ```
 
-::: danger 不要写 `docker-compose down -v`
+::: danger 不要写 docker-compose down -v
 
 `-v` 会**删除编排里的卷**。现在默认是 bind mount（数据在宿主机目录）所以侥幸没事，
 但只要编排被改成命名卷，`-v` 就等于删库。升级请用不带 `-v` 的 `down`。
@@ -156,20 +276,30 @@ Watchtower 使用可参考 [Watchtower - 自动更新 Docker 镜像与容器](ht
 
 VanBlog 会在前台和后台的最下方展示版本信息。
 
-![前台版本信息](https://pic.mereith.com/img/720d4503f7ca23cfb035061d0927b088.clipboard-2022-08-16.png)
-
-![后台版本信息](https://pic.mereith.com/img/0f97b214de4965f69db68b935d993f07.clipboard-2022-08-16.png)
-
 :::
 
 ::: tip 如何回滚
 
-本分支每次构建都会打三个 tag：`latest`、`dev-dsh`、以及带提交号的 `dev-dsh-<短sha>`。
-回滚就是把编排里的 `image:` 换成某个具体提交号，然后
+**代码回滚**（换回旧版本的镜像）—— 把版本号换成旧的，再跑一次升级命令就行：
+
+```bash
+./vanblog.sh update v2026.9.1        # 换成你要回去的那个发布号
+./vanblog.sh update dev-dsh-abc1234  # 或回到某一次具体的分支构建
+```
+
+（每次分支构建都会额外打一个 `dev-dsh-<短sha>` 标签，所以能精确回到某一次构建。）
+可用的标签见 [Releases](https://github.com/CKboss/vanblog/releases) 与
+[本页开头的标签表](#四个标签怎么选-大白话)。
+
+不知道现在钉的是哪一版？`./vanblog.sh status` 的「编排镜像」那一行就是当前 ref；
+实际跑着的版本号在前台页脚或后台「关于」页。
+
+手动改编排文件的话步骤一样，只是命令换成
 `docker-compose pull && docker-compose down && docker-compose up -d`（**不要加 `-v`**）。
 
-如果数据也需要回滚，用整站备份：`./vanblog.sh restore vanblog-full-<时间戳>.tar.zst`，
-详见 [备份与迁移](./backup.md)。
+**数据回滚**（升级后发现数据不对）：`./vanblog.sh restore vanblog-full-<时间戳>.tar.zst`，
+详见 [备份与迁移](./backup.md)。⚠️ 整站恢复默认会把静态目录修剪成与归档一致 ——
+备份之后新上传的图片会被删掉，所以先确认归档时间点是你要的那个。
 
 :::
 
