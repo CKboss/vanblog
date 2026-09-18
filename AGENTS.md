@@ -2806,6 +2806,12 @@ cd packages/admin && pnpm run build                  # EXIT=0 才算过
 - 安装/备份这几份文档提到的 `VANBLOG_*` 变量必须在脚本或编排模板里存在
   （⚠️ 只查这几份：`VANBLOG_DISABLE_WEBSITE`/`VANBLOG_SWAGGER`/各种限流变量是 **server** 的，
   写在 `features/config.md`，本来就不该出现在 vanblog.sh 里 —— 第一版检查范围太大，误报一片）；
+  ⚠️ **2026-09-18 更正（`f4fec80d`，§7.69）**：判据的**语料**不止脚本与模板了 ——
+  `docs/advanced/backup.md` 记的 `VANBLOG_RESTORE_PRUNE_STATIC` / `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS`
+  是**真实存在**的 server 变量（`utils/fullBackup.ts`），也正是用户会写进 compose `environment:` 的那类，
+  而脚本从来不读它们 ⇒ 守卫把正确文档判成"编造的"。现在多认第三个来源 `packages/server/src/**/*.ts`；
+  检查的含义没变（"部署页不许教你设一个哪儿都不存在的变量"），只是不再把"存在"等同于"shell 脚本恰好读它"。
+  上面"只查这几份**文档**"那半仍然成立；
 - 文档写的默认镜像 / 默认 mongo 必须和脚本里的默认值一致
   （⚠️ 提取 `${VAR:-default}` 时 `cut -d: -f2-` 会多带一个 `-`，要 `sed 's/^-//'`）；
 - 备份文档必须同时出现 `backup --offline` 与 `vanblog-full-`（证明写清了两种备份）、
@@ -2871,6 +2877,15 @@ Markdown 里的裸尖括号会让 vue 编译器报 `Element is missing end tag` 
   → 核对：meta / 站点名 / 首页 / 后台 / robots / sitemap / 文章数
   → 打印站点地址 + "用备份里原来的账号登录"
 ```
+
+> ⚠️ **更正（2026-09-18，`be65b84a`，详见 §7.69）**：上面第二步 `POST /api/admin/init` 现在**必须带
+> `setupKey`** —— 匿名初始化默认要求密钥（§7.62 / §7.65），而 `vanblog.sh` 一度全文没有 `setupKey`
+> 这个词，于是 `reset` 与下面那条 `VANBLOG_RESTORE_FROM=… install` 在**全新站点上必然 400 失败**
+> （body 里有顶层 `setupKeyRequired:true` 与 `reason:setupKeyMissing`）。现在脚本自己取密钥：
+> 先读宿主机 `<数据目录>/log/setup.key`（日志目录是 bind mount，不用 exec），读不到再按容器日志里
+> `初始化密钥： ` 的字面标签兜底；等待预算 `VANBLOG_SETUP_KEY_WAIT`（默认 15 秒），
+> 而且**只有服务端真回 `setupKeyRequired` 才会等** —— 已初始化站点上密钥文件本来就不存在，
+> 先等会让最常见的 `reset` 白等满预算。活体实测：不带密钥 400 → 带上密钥 **201 `初始化成功!`**。
 
 还能在安装时一步到位：`VANBLOG_RESTORE_FROM=<归档> ./vanblog.sh install`
 （`install_and_maybe_reset` 包装了 `install_vanblog`，**菜单入口和命令行入口都要走它**，
@@ -6629,7 +6644,9 @@ Unreleased 并**立刻重跑 `release-doc` 重新生成镜像页** —— 也就
 顺序钉子（版本对比必须发生在 `down` 之前）、以及剥注释后的 absence 断言。
 `vanblog-source-install.test.sh` 里 4 条钉旧默认值的断言改钉 `latest`，并把实测数字写在旁边。
 `docs/.vuepress/public/vanblog.sh` 逐字节重新同步（有 6 条守卫比对这两份副本）。
-全量 `scripts/tests/*.test.sh`：**24 文件 / 1825 条断言 / 0 失败**。
+全量 `scripts/tests/*.test.sh`：**24 文件 / 1825 条断言 / 0 失败**
+（⚠️ 这是**那一轮**的数字；同日之后的 setupKey 修复把 vanblog-reset 从 51 抬到 98，
+全量变成 **1872** 条 —— 最新基线看 §7.39，过程见 §7.69）。
 顺带把脚本里最后三处 `Mereithhh/van-blog`（上游**旧**仓库名，只靠 301 活着）改成现名，署名保留。
 
 #### ⚠️ 教训 3：文档站的配置也是文档（`a395e00e`）
@@ -6701,7 +6718,8 @@ ghcr 那句提示改成"包是 public"（实测匿名取 manifest 返回 200）�
 `docker-compose-template.yml` 补上了缺失的**初始化那一段**：零接触（`VANBLOG_ADMIN_USER` / `_PASSWORD` /
 `_PASSWORD_FILE`）与 setup key（`VANBLOG_INIT_REQUIRE_SETUP_KEY`、密钥文件在哪、每 10 分钟重印、初始化后删除）。
 这两个是当前发布版的门面功能，而模板从来没提过 —— 这也正是 `local-build.md` 一开始引用那个变量、
-`docs-consistency` 就红的原因（该守卫要求部署文档里出现的每个 `VANBLOG_*` 在脚本或模板里存在）。
+`docs-consistency` 就红的原因（该守卫要求部署文档里出现的每个 `VANBLOG_*` 在脚本或模板里存在；
+⚠️ 2026-09-18 起语料还包含 `packages/server/src/**/*.ts`，`f4fec80d` / §7.69）。
 
 #### 去掉"上游 vs 本分支"的对照叙事（`d798b30f`，18 个文件；该提交共动 19 个）
 
@@ -6832,18 +6850,196 @@ server `jest` 与 website `vitest` 沿用 §7.39 的数字（本轮未改这两�
   "单份文件有上界（`maxBytes + 64KB + 5KB` 余量）"—— 并发下有写入在飞时余量可能不够。
   **判读基线时先串行重跑，别急着改产品代码。**
 
-### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-18 本机实测）
+### 7.69 文档全量排查：73 份文档逐条回源码核事实，以及它暴露出的三类系统性问题
+
+站长要求"对现有的文档进行一次完全的排查，把不对的、矛盾的、过时的地方全部修好"。
+范围是 `docs/` 下 **73 份** `.md`（不含 `.vuepress` 产物）加根 `README.md`，
+结果**改了 61 个文件（60 份文档 + README，+1,246/−512）**，分五个提交按目录落地：
+`8e02ea51` guide（11 文件 / ~30 处）、`051b4046` features（17 页改 15）、`a56b633a` advanced（22 页改 18）、
+`12301cbe` reference + faq（12 文件，其中 3 页整页重写）、`cc233ec9` 入口页（README / docs README / intro / contribution / info.snippet）。
+每一条**代表案例**与逐页清单都写在提交信息里，这里只留"为什么会这样"与"下次怎么办"。
+
+#### 方法：5 个代理按目录严格分区，每条断言回源码核
+
+分区是硬约束（互不越界），跨页矛盾由一个**只读**代理统一排查后再分派 —— 否则两个代理会同时改同一页、
+或者各改一半把矛盾留在两页之间。⚠️ 最重要的一条纪律：**不能拿另一页文档当依据**。
+本轮几乎所有硬错误都是"文档 vs 源码"才发现的，而"文档 vs 文档"永远发现不了 ——
+它们可能一起错（本轮就抓到同一节里先说某变量"已舍弃"、后又叫用户去设它）。
+
+#### 三类系统性问题（每类挑最能说明问题的）
+
+**A. 不对 —— 照做必然失败，或叫你去做不可能/不安全的事**
+
+- `friend-link.md` 叫用户去开一个**代码里根本不存在的开关**：`showFriendLink` 全仓库 0 命中，
+  设置表单那 42 个字段里没有它（友链页一直在 `/link`、在默认菜单里）。用户会去后台找一个永远找不到的勾。
+- `image-storage.md` 教人"填插件名安装 picgo 插件"，而插件安装**默认是拒绝的**
+  （`VANBLOG_ALLOW_PICGO_PLUGINS=true` 才开，理由是 `git-clone@0.1.0` 命令注入 + `decompress` 路径穿越，
+  两者都没有修复版）⇒ 文档在教用户打开一个我们特意关掉的安全口子。
+- `reference/secure.md` 说登录防爆破"还不稳定、之后会开放"，实际**默认开启**（只认字面 false 才关，
+  5 次 / 300 秒、只数失败、成功即清零、401 回剩余等待）。
+- `reference/log.md` 把 caddy 的常驻访问日志说成"Nest 的、默认关、由 `VANBLOG_ACCESS_LOG` 打开"
+  （那个变量管的是 Nest 每请求 INFO 行），并列了一个**根本不存在的** `vanblog-website.log`
+  （真实是 `vanblog-stdio.log` / `-stdout.log` / `-stderr.log`，后台日志页读 stdio 那份）。
+- `faq/password.md` 的命令写死 `vanblog_vanblog_1`（模板根本没有 `container_name`）⇒ 照抄必然
+  `No such container`；而且没提"表单里的用户名会被写回账号"（`user.provider.ts` 更新的是 `{name, password}`），
+  填错等于**顺手把管理员改名**。
+- `kubernetes.snippet.md` 的 `mongodb://some@some@host` 是**非法连接串**（两个 `@`）；
+  `contribution.md` 让人跑 `pnpm build:test`（根 `package.json` 里没这个 script）。
+
+**B. 自相矛盾 —— 同一页或同一节里两种说法**
+
+- `benchmark.md` §9.2 记了动态路由直发 **8.8×**，§10 又把它列成"没做"；同页把已实现的 AVIF 缩略图列为未实现，
+  复现命令 `./vanblog.sh reset 0 <归档>` 用的是**旧签名**（那个多余的 `0` 现在会被当成归档名）。
+- `performance.md` 说渲染器"一个壳加两个变体"（实际三个：Rich / Base / **Plain**）、说 revalidate 默认 10 秒
+  （实际默认按需，延时模式有 60 秒下限），"还没做"表里**有三项已经发布**。
+- 上一批刚写的 `cheatsheet.md` 说"没 Docker 时脚本会问你 y"—— **不会**，它直接 root 管道执行远端脚本，
+  而同站的 `script.snippet.md` 说的正好相反。
+- `get-started.md` 说"除数据库外四个进程"却把 mongo 列在其中（mongo 是第二个容器）。
+
+**C. 过时 —— 曾经对，现在不对**
+
+- `reference/dir.md` 漏了最关键的 mongo 数据目录，把已废弃的 `export/` 当现役导出目录，
+  漏了 `themes/`、`tmp/`、`upload-tmp/`，而且 frontmatter 键名拼错（`oder:` 而不是 `order:`）
+  ⇒ **侧边栏排序从来没生效过**（一个字符的typo，静默失效，没人会发现）。
+- `faq/usage.md` 里 **36 处**"请升级到含此修复的版本"、6 段"本轮只处理了任务单第 NNN 项"、
+  **24 处**"以前/旧实现/已在 #N 修复"的叙事 —— 全部换成"现在软件是怎么做的"（最多留一个出处链接）。
+  ⚠️ 删这类句子会留下断句，本轮补了 4 处；另有 4 条空洞的"当前行为正确（见 #N）"改成写出行为本身。
+- `faq/deploy.md` 的"从外部访问数据库"教用户改 mongo 凭据，而现在的模板给 mongo **既没有 auth 也没有发布端口**
+  ⇒ 改成 SSH 隧道 + 三处 YAML 改动 + "`MONGO_INITDB_ROOT_*` 只对空数据目录生效"的警告。
+- `head.md` 说要 >2 GB 内存（快速上手说 1 核 1 GB）、承诺未来支持 ARM（发布镜像只有 amd64）、
+  推荐 Ubuntu 20.04、引用 2022 年的价格；`local-build.md` 把 `MONGO_IMAGE` 当可调项
+  （构建脚本会自己算并无条件覆盖，真正的开关是 `VANBLOG_MONGO_IMAGE`）。
+
+**入口页最脏，而且错得最贵**（`cc233ec9`）：`https://github.com/CKboss/vanblog/issues/new` **实测 404**
+（API `has_issues: false`，本 fork 关了 Issues），而 README、`intro.md`（两处）、`contribution.md`
+都叫新人去那儿反馈 —— 这是"照着做必然失败"里最贵的一种，因为它是新人第一个动作。
+⚠️ 这属于**仓库设置**，文档改不动它：如果"提 issue"就该是入口，得去 Settings 打开 Issues。
+同批还有：README 顶部指向 `#与上游的关系` 的**死锚点**（上一批改节名时留下的）、
+"一体式单容器"其实两个服务、"支持 ARM64"、默认镜像仍写 `dev-dsh`、`./dev-env.sh … backup` 这个子命令不存在、
+与上游差异数字重测（133/552/+77,338 → **172/724/+130,351 −6,237**，标注"截至 v2026.9.2"）、
+drill 结论行从旧的 `pass=31` 换成当前 `pass=37 warn=1 fail=0 note=5`；
+`intro.md` 三个 TODO 勾选框里 **`[x] 内嵌评论的邮件与 webhook 通知` 是错的**（没有这段代码）改回 `[ ]`，
+而"文章历史版本管理"与"e2e 进 CI"是真做了的改成 `[x]`；`contribution.md` **新增了一节 `## 测试`** ——
+贡献者指南以前从来没写过怎么跑测试。
+
+还有一批是**渲染坏掉**、守卫查不出、只有人读构建产物才会发现的：`dsm.snippet.md` 一整张表被压成一行正文；
+`benchmark.md` 两张表缺表头行/是原始粘贴（补表头，**数字逐字节保留**并 diff 过）；
+`draft.md`/`overview.md`/`visitor.md` 的 `:::` 嵌套或未闭合导致整页掉进提示框；
+`custom-nav.md` 是唯一一个 og:description 里泄漏 `:::` 的页；`editor.md` 一整个 H2 被插在**列表中间**。
+
+#### 同批修掉的三处代码/守卫问题
+
+**1）`vanblog.sh` 全文 `setupKey` 出现 0 次 ⇒ `reset` 与"换机器一步到位"必然失败（`be65b84a`，本轮最重要的发现）**
+
+`VANBLOG_INIT_REQUIRE_SETUP_KEY` 默认开启后两条匿名初始化接口都要 `setupKey`，而 `ensure_admin_token()`
+只发 `user` 与 `siteInfo` ⇒ `reset` 制造出来的"全新站点"状态（也正是 `VANBLOG_RESTORE_FROM=… install`
+依赖的状态）被服务端 400 拒绝（body 里有顶层 `setupKeyRequired:true` 与 `reason:setupKeyMissing`）。
+**活体实测**（当前镜像 + 空库）：不带密钥 → 400；带上从宿主机读到的密钥 → **201 `初始化成功!`**；
+之后 `/api/public/meta` 不再是 233 信封，且 server 自己删掉了 `setup.key`。
+与 drill 那条（§7.62 末尾，`287c671b`）**同一类回归、同一个原因**：测试驱动的是假 HTTP 层。
+
+新增 `read_setup_key [秒]`，两条来源按运维的真实顺序：① 宿主机 `${VANBLOG_DATA_PATH}/log/setup.key`
+（日志目录是 **bind mount**，0600 文件在宿主机可读，不需要 exec —— 与 drill 用**命名卷**所以必须 exec 不同）；
+② 兜底从容器日志按 `初始化密钥： ` **字面标签**取。⚠️ 绝不裸抓 base64：同一份日志里有 `restore.key` 与 jwt 材料，
+形状一样，而**送错密钥比不送更难查**（400 长得完全相同）；守卫特意把诱饵秘密放在真密钥**之后**来证明锚点有效。
+两路都拿不到 ⇒ 返回空 + 状态 0，由调用方决定。
+
+**顺序是量过之后才改的**：已初始化站点上 `setup.key` 本来就不存在（server 会删），
+"先取密钥再发请求"会让**最常见**的 `reset` 白等满 15 秒预算（变异对照里是 30 秒墙上时间）。
+现在是"零预算先看一眼 → 发请求 → 只有服务端真回 `setupKeyRequired` 才等满预算 → 重试**一次**"
+（init 接口限次 5 次/10 分钟，无界重试是自我拆台）。等待预算是 `VANBLOG_SETUP_KEY_WAIT`（默认 15，非数字回落）。
+
+密钥卫生（三条都是踩过的形状）：只经既有的 `json_string` 转义进 body —— 实测密钥 44 字符且含 `+` `/` `=`，
+裸 sed/正则会弄坏它；所有提示走 **stderr** 且只说长度，因为 `ensure_admin_token` 的 **stdout 是被当 token 用的**，
+多一个字就污染它（这条陷阱写进函数注释，并用「消息必须以 `" >&2` 结尾」的断言钉住）；
+找不到密钥时报错点名绝对路径、`docker logs … | grep 初始化密钥` 的方子、两个常见原因、
+`VANBLOG_INIT_REQUIRE_SETUP_KEY=false` 逃生口与服务端原话，然后**非零退出，绝不假装恢复成功**。
+顺手修掉同文件一条过时注释（它断言服务端 manifest 没有校验和，而 `integrity` 块落地后就不成立了；
+现在解释 sidecar 还剩什么用：integrity 在归档**内部**，截断/调包会跟着一起坏，外部 `.sha256` 是唯一带外凭据）。
+守卫 51 → **98**，含 **5 次变异对照**（摘掉 setupKey → 4 红；裸抓 base64 → 3 红含"诱饵被送出去了"；
+回显密钥 → 5 红；去掉重试 → 6 红；发请求前就等 → 4 红且 30 秒那条自己点名）。
+⚠️ 脚手架要钉 `VANBLOG_SETUP_KEY_WAIT=0` 与 `vanblog_compose` 桩，否则这个文件从 2 秒变 **108 秒**，
+而且在装了 docker-compose 的 CI 机器上行为不一样。`docs/.vuepress/public/vanblog.sh` 已逐字节同步（6 条守卫比对）。
+
+**2）`docs-consistency` 第 4 条的语料太窄，把真变量判成编造的（`f4fec80d`）**
+
+那条检查要求五份部署侧文档里的每个 `VANBLOG_*` 能在 `scripts/vanblog.sh` 或 compose 模板里找到，
+而 `docs/advanced/backup.md` 记的 `VANBLOG_RESTORE_PRUNE_STATIC` / `_DROP_ABSENT_COLLECTIONS` 是**真变量**
+（`packages/server/src/utils/fullBackup.ts`），也正是用户会写进 compose `environment:` 的那类 ⇒ 正确文档被判红。
+语料加了第三个来源 `packages/server/src/**/*.ts`；检查的含义没变（"部署页不许教你设一个哪儿都不存在的变量"），
+只是不再把"存在"等同于"shell 脚本恰好读它"。⚠️ 这是该守卫**两天内第二次**抓到真漂移
+（上一次是 `VANBLOG_WATERMARK_FONT_MIN_PX`/`_MAX_PX` 那对登记了没人读的死变量，方向正好相反）——
+两个方向都错过的守卫才值得信。
+
+**3）两处"文字与它描述的代码矛盾"的字符串（`2e3ca44b`）**
+
+`WaterMarkForm` 的压缩 tooltip 说 sharp 是 `0.32.6`（两个包都声明 `^0.35.4`，镜像里的 `package.json` 也一致；
+0.32.6 恰是本项目**特意离开**的版本）⇒ 改成"与前台同一个版本，见 package.json"，不再钉会烂的数字。
+`local.provider.ts` 里 `exportAllAttachments` 的注释说归档落在 `/static/export/` 下，而**下面两行**就是从
+`config.backupPath` 拼的 —— 不是无害笔误：静态目录全世界可读，导出归档搬出去的全部理由就是
+`<static>/export`、`<static>/tmp`、`<static>/upload-tmp` 由 `staticGuard` 匿名 403 守着。
+⚠️ 写这条注释时**第 6 次**踩到"断言匹配到解释性注释"：`securityHardening.test.js` 钉着该文件不许出现那个
+静态路径字面量（带前导反引号、匹配整个文件文本**含注释**），注释里写出来就红。现在注释里明说这件事，
+让下一个人**改措辞而不是删钉子**。（这类陷阱本仓库已记 6 处：server 侧 4 次见 §7.67，
+dockerfile 守卫的 vips-dev 假绿见 §7.38.4，admin 的 `checkNoChinese` 见 §7.66，这次是第 6 处。）
+
+#### 五条教训（这才是本节要留下的东西）
+
+1. **"文档对文档"改不出正确性。** 本轮的硬错误没有一条是靠对照另一页文档发现的：不存在的开关、
+   默认关的功能被写成开着、不存在的日志文件、不存在的 npm script、非法连接串、旧命令签名 ——
+   全部是"文档 vs 源码"抓到的。⇒ 规矩：**每条可验证断言都回源码核**（给出文件与行号），
+   拿另一页当依据等于把两份文档的错误乘起来。
+2. **新写的文档也要复核，"我刚写的"不是豁免。** 上一批刚写的 `cheatsheet.md` 里就有 3 处新手会撞墙的错误
+   （脚本不问就 root 管道装 Docker、把菜单的状态行当成 `status` 的输出、初始化密钥输入框的出现时机说反了 ——
+   实际是先提交被 400 拒了才出现）。写它的时候确实核过"命令存在"，但
+   **命令存在 ≠ 行为如描述**：核命令名是 grep 一次的事，核"它会不会问你"要读那段代码。
+3. **守卫只能查形状，查不出语义。** `docs-links` 5/5、`docs-consistency` 52/0 的**同时**，
+   文档里还写着"去开一个不存在的开关"—— 守卫模型里没有"这个开关存在吗"这条。
+   ⇒ 别把守卫绿当成文档正确；但也**别因此不写守卫**：它们本轮确实在另一个方向干活
+   （第 4 条把两个真变量判红，逼出了语料修正；上一轮抓到死的水印变量名、裸尖括号、`down -v`）。
+   分工要写清：**守卫管形状与漂移，人（或代理）管语义**。
+4. **入口页最脏、错得最贵。** README / intro / contribution 是新人第一眼，而它们的错误率最高
+   （本轮 5 个文件里全是硬错：404 的 issue 入口、死锚点、不存在的 script、不存在的子命令、ARM64）。
+   原因是它们**不在任何功能改动的路径上** —— 改功能的人不会回头看 README。
+   ⇒ 规矩：改完功能，回头看 README 的命令表、测试基线表与"已知限制"清单（本手册 §7.39 同理）。
+5. **多代理并行改文档要有协作规矩**（本轮 5+ 个代理，写下来以便复用）：
+   ① 按目录**严格分区**，互不越界（越界就是合并冲突与重复劳动）；
+   ② 跨页矛盾由**一个只读代理**统一排查后分派，不让写代理互相猜；
+   ③ ⚠️ **禁止并行跑 `pnpm run docs:build`** —— 会抢 `docs/.vuepress/dist`，产物互相踩，
+      构建由一个人最后统一跑；
+   ④ 改标题前必须 **grep 入链**（锚点会断，本轮就抓到自己上一批留下的死锚点）；
+   ⑤ `:::` 容器**不许嵌套**、标题行必须是纯文本（否则整页掉进提示框或 og:description 泄漏 `:::`）；
+   ⑥ 跑守卫时要能区分"**我弄红的**"与"别人未提交改动弄红的"—— 分区制让这件事可判定，
+      没有分区就只能靠猜。
+
+#### 测试与未量
+
+本轮全量（**串行**跑）：server jest **169 套件 / 1951 用例（1944 绿 + 7 跳过 + 0 失败）**、
+website vitest **84 文件 / 885**、admin `node --test` **148 套件 / 582**、
+`scripts/tests/*.test.sh` **24 文件 / 1872 条断言**（vanblog-reset **51 → 98**、vanblog-update 41 → 98）、
+`docs-links` **5/5**、`docs-consistency` **52/0**、`docs:build` 成功、两包 `tsc` **0 错**；
+GitHub CI 在 `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**。
+⚠️ 并发跑测试时 `utils/logRotate.spec.ts` 假红过一次，单独跑 8/8、串行全量 0 失败（§7.39 记的负载敏感现象）。
+
+**未量 / 跑不了**：① admin 的 playwright e2e（本机没装浏览器）；
+② `update` 与 `reset` 的**真机拉镜像 + 真 root 端到端**（本机无 root、docker daemon 连不上、
+rootless podman 在沙箱里起不来）⇒ 靠 98 条 mock 守卫 + 上面那条活体 HTTP 契约验证覆盖；
+③ 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；
+④ 73 份文档里"核过是对的、故意不动"的部分只在各提交信息里列了代表项，没有逐页留痕。
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-18 文档排查轮之后复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s，2026-09-17 实测；**2026-09-18 那轮没动 server 代码**，数字沿用）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
-| website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748；2026-09-17 实测，2026-09-18 那轮没动 website 代码） |
+| server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s；2026-09-17 首测，**2026-09-18 文档排查轮复跑确认同样数字** —— 那轮对 server 只改了 `local.provider.ts` 的一行注释，`2e3ca44b`）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
+| website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748；2026-09-17 首测，2026-09-18 复跑确认 —— 那轮没动 website 代码） |
 | admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-18 复跑确认；原 498 → 579 → 582，本轮 `aboutPage.test.js` 8 → 11，§7.68。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1825 条断言全绿**（原 22 文件 / 1109 条；2026-09-18：vanblog-update **41 → 98**、drill 587、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
-| 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功** |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1872 条断言全绿**（原 22 文件 / 1109 条；2026-09-18 同日两轮：vanblog-update **41 → 98**（§7.68）、vanblog-reset **51 → 98**（setupKey 修复，§7.69）、drill 587、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
+| 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 文档排查后复跑仍 52/0；第 4 条的语料本轮加了 `packages/server/src/**/*.ts`，`f4fec80d`／§7.69） |
+| CI（GitHub Actions） | `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**（server-test 已是"默认全跑 169 个 spec"那条配置，§7.67）；上一个提交 `9601faa4` 上两者都是 **failure** —— 本轮修的三个红套件在 CI 上也红过 |
 | 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
 | 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
-| ⚠️ 2026-09-18 那轮**没跑/跑不了**的 | ① `./vanblog.sh update` 的**真机拉镜像路径**（本机无 root、docker daemon 连不上、rootless podman 在沙箱里起不来）⇒ 靠 `vanblog-update.test.sh` 98 条 mock + "真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测覆盖；② 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；③ 后台文案的**浏览器观感**（无 playwright 浏览器），只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子" |
+| ⚠️ 2026-09-18 两轮**没跑/跑不了**的 | ① `./vanblog.sh update` 与 `reset` 的**真机拉镜像 + 真 root 端到端**（本机无 root、docker daemon 连不上、rootless podman 在沙箱里起不来）⇒ 靠 `vanblog-update.test.sh` 98 条 + `vanblog-reset.test.sh` 98 条 mock（含 5 次变异对照）、"真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测，以及**活体 HTTP 契约**验证（不带密钥 400 / 带密钥 201，§7.69）覆盖；② 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；③ 后台文案与文档的**浏览器观感**（无 playwright 浏览器），只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子"；④ 73 份文档里"核过是对的、故意不动"的部分只在提交信息里列了代表项，没有逐页留痕 |
 | admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
