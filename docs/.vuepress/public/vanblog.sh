@@ -2231,13 +2231,21 @@ human_size() {
 }
 
 # ── 备份完整性：sha256 sidecar 与 verify 子命令 ─────────────────────────────
-# server 导出的 manifest 里**没有**校验和（packages/server/src/utils/fullBackup.ts
-# 只写 totals.archiveBytes，已核实没有 sha256/checksum 字段），归档坏了要等到恢复时
-# 才由 zstd/xz/gzip 的 CRC 发现。所以校验这件事在脚本侧补：
+# ⚠️ 这里以前写着"server 导出的 manifest 里没有校验和（只写 totals.archiveBytes）"——
+# **已经过时了**：server 现在会在归档里写一个 `integrity` 块（每个成员的 sha256 与字节数、
+# 按成员名排序拼接算出的 merkleRoot、zstd 流是否带帧校验和、含目录项的 memberCount，
+# 以及与 manifest.json 逐字节相同的双清单 ./MANIFEST.copy.json），见
+# packages/server/src/utils/fullBackup.ts 的 integrityEnabled()/BACKUP_INTEGRITY_ENV
+# （`VANBLOG_BACKUP_INTEGRITY=off` 是逃生舱，默认开）。`verify-deep` 与 `drill` 用的就是它。
+# 那 sidecar 还有用吗？有，但职责窄了，别把两件事混为一谈：
+#   - **内部** integrity 块证明"归档里每个成员的字节没坏"，但它和归档在一起 ——
+#     归档整体被截断/替换时，内部块也跟着没了，所以还需要一个**外部**的凭据；
 #   - 脚本自己做的备份（backup / backup --offline）成功后写 <归档>.sha256 sidecar
 #     （格式同 sha256sum 输出："hex  文件名"），拷归档去别处时把 sidecar 一起带上；
-#   - `verify` 优先用它比对；**没有 sidecar 的归档（server 导出/旧归档）照常校验**
-#     完整性与内容，只是明说"没有 sha256 记录，跳过比对" —— 恢复流程完全不受影响。
+#   - `verify`（旧、宽松、要 root）优先用它比对；**没有 sidecar 的归档（server 导出/旧归档）
+#     照常校验**完整性与内容，只是明说"没有 sha256 记录，跳过比对" —— 恢复流程完全不受影响；
+#   - ⚠️ 旧归档**没有** integrity 块，此时成员级检查会**大声降级**（WARN + 结论行注明
+#     "不含逐成员比对"），绝不让人把"没查"读成"查过且通过"。
 
 # 给归档记 sha256 sidecar。失败不影响备份本身（备份已经成功了，别反过来报错）。
 write_sha256_sidecar() {
@@ -3656,6 +3664,73 @@ random_password() {
   printf '%s' "${raw}" | tr -dc 'A-Za-z0-9' | head -c "${n}"
 }
 
+# ── 初始化密钥（setup key）──────────────────────────────────────────────────
+# 2026-09 起 `VANBLOG_INIT_REQUIRE_SETUP_KEY` **默认开启**（无法识别的值也按开启处理），
+# 未初始化站点的两条匿名初始化接口 `POST /api/admin/init` 与 `POST /api/admin/init/restore`
+# 都要求携带 `setupKey` 字段，不带就是 400 + body 里的 `setupKeyRequired`。
+# 这道保护是有道理的：初始化接口唯一的闸门是"users 集合有没有行"，攻击者一个请求就能把
+# 全新实例变成自己的 —— 但它也把**本脚本自己的自动化**挡在外面了：`reset` 与
+# `VANBLOG_RESTORE_FROM=… install`（文档宣传的"换机器一步到位"）都要先调 /api/admin/init，
+# 不带密钥就必然失败。所以脚本必须自己去把密钥读出来带上。
+#
+# 密钥是 server 每次启动重新生成的 `randomBytes(32).toString('base64')`（**44 字符**，
+# 可能含 `+` `/` `=`），写在 `<日志目录>/setup.key`（0600），站点未初始化期间一直在，
+# 初始化成功后 server 自己删掉。编排模板把 `vanblog_data_path/log` 挂到容器 `/var/log`，
+# 所以宿主机上就是 `${VANBLOG_DATA_PATH}/log/setup.key` —— **不需要 exec 进容器**
+# （drill 那边日志目录是命名卷，才必须 exec；见 vanblog-drill.sh 的 drill_fetch_setup_key）。
+# reset / install 都要 root（pre_check），读 0600 没有权限问题。
+
+# 从容器启动日志里兜底取密钥：密钥块启动印一次，之后每 VANBLOG_SETUP_KEY_REMIND_MINUTES
+# （默认 10 分钟）重印，所以日志里几乎一定在。
+# ⚠️ 必须锚在「初始化密钥： 」（全角冒号 + 空格）这个标签上，**不能裸抓 base64**：
+# 同一份日志里还有 restore.key 与 jwt 密钥材料，形状一样是 base64 ——
+# 送错密钥比不送更难查（两边都是 400，长得一模一样）。
+setup_key_from_logs() {
+  # stderr 全部丢掉：没有 docker-compose / 没有编排文件 / 容器没起来都只是"这条路走不通"，
+  # 不是错误（调用方会明说看了哪两处）。
+  vanblog_compose logs --tail=400 vanblog 2>/dev/null |
+    grep -oE '初始化密钥： *[A-Za-z0-9+/=]{20,}' | tail -1 |
+    sed -E 's/^初始化密钥： *//' | tr -d '\r\n'
+}
+
+# 读初始化密钥：先读宿主机上的 setup.key，读不到再从容器日志兜底；都拿不到就输出空。
+# ⚠️ 拿不到时**不报错、不猜**（返回 0 + 空 stdout）：密钥要求可能被显式关掉
+# （VANBLOG_INIT_REQUIRE_SETUP_KEY=false），那时不带密钥才是对的，怎么办由调用方决定。
+# ⚠️ 这是秘密：只经 stdout 交给调用方，任何提示都别把它打出来（调用方只说长度）。
+# 用法：key="$(read_setup_key [等待秒数])"
+#   不传秒数 ⇒ 用 VANBLOG_SETUP_KEY_WAIT（默认 15）；传 0 ⇒ 只看一眼、绝不 sleep。
+#   ⚠️ 为什么调用方要先传 0：**已初始化的站点上 setup.key 根本不存在**（初始化成功后 server
+#   会删掉它），先等满 15 秒等于给最常见的 `reset` 场景平白加 15 秒。所以正确形状是
+#   "先看一眼 → 服务端真的回 setupKeyRequired 才值得等 → 等到了再重试一次"。
+read_setup_key() {
+  local key_file="${VANBLOG_DATA_PATH}/log/setup.key"
+  local budget="${1:-${VANBLOG_SETUP_KEY_WAIT:-15}}" waited=0 key=""
+  # 数字以外的预算一律当默认值（打错的环境变量不该让这里死循环或立刻放弃）
+  [[ "${budget}" =~ ^[0-9]+$ ]] || budget=15
+  while :; do
+    # 容器刚起来时密钥可能还没写出来（server 要先连库、确认"未初始化"才生成），所以要重试
+    if [[ -f "${key_file}" ]]; then
+      # base64 里没有空白字符，所以把空白全删掉是最稳的"去首尾换行"
+      key="$(tr -d ' \t\r\n' <"${key_file}" 2>/dev/null)"
+      if [[ -n "${key}" ]]; then
+        printf '%s' "${key}"
+        return 0
+      fi
+    fi
+    key="$(setup_key_from_logs)"
+    if [[ -n "${key}" ]]; then
+      printf '%s' "${key}"
+      return 0
+    fi
+    if (( waited >= budget )); then
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 0
+}
+
 # 站点还没初始化时自动初始化，并把可用的 admin token 打到 stdout（提示走 stderr）。
 # 已经初始化过就退回正常的登录流程（VANBLOG_ADMIN_TOKEN 或交互输入账号密码）。
 # 用法：ensure_admin_token <临时用户名> <临时口令>
@@ -3675,19 +3750,66 @@ ensure_admin_token() {
   fi
   derived="$(derive_login_password "${init_user}" "${init_pass}")"
 
-  resp="$(curl -sS -m 60 -X POST "${base}/api/admin/init" \
-    -H 'Content-Type: application/json' \
-    -d "{\"user\":{\"username\":$(json_string "${init_user}"),\"password\":\"${derived}\",\"nickname\":$(json_string "重置初始化")},\"siteInfo\":{\"author\":\"vanblog\",\"siteName\":\"VanBlog\",\"siteDesc\":\"reset\",\"baseUrl\":\"${base}/\"}}" 2>&1)"
+  # 初始化密钥：镜像默认要求携带（见上面 read_setup_key 的说明）。
+  # ⚠️⚠️ 本函数的 stdout 会被调用方当 **token** 用（`token="$(ensure_admin_token …)"`），
+  # 所以：① 任何提示都必须走 stderr；② **密钥本身一个字符都不能出现在任何输出里**
+  # （要提示只说长度）—— 多打一个字符就会污染 token，表现是"恢复接口 401"，极难查。
+  #
+  # 顺序是"先看一眼 → 服务端真要密钥才等 → 等到了重试一次"，**不是**"先等满 15 秒再发请求"：
+  # 已初始化的站点上 setup.key 根本不存在（初始化成功后 server 会删掉它），先等的话
+  # 最常见的「reset 一个已有站点」会平白多花 15 秒；密钥要求被显式关掉时同理。
+  local setup_key setup_key_field="" attempt waited_key
+  setup_key="$(read_setup_key 0)"
+  for attempt in 1 2; do
+    setup_key_field=""
+    if [[ -n "${setup_key}" ]]; then
+      # 走 json_string 而不是手拼：base64 里没有需要转义的字符，但这个 body 是字符串拼出来的，
+      # 统一过转义 helper 才不会在将来换个密钥来源时留下注入口子。
+      setup_key_field=",\"setupKey\":$(json_string "${setup_key}")"
+      echo -e "> 已带上初始化密钥（${#setup_key} 字符，不回显）" >&2
+    elif [[ ${attempt} -eq 1 ]]; then
+      echo -e "> 没读到初始化密钥（看了 ${VANBLOG_DATA_PATH}/log/setup.key 与容器日志的「初始化密钥：」行）：先试一次 —— 站点已初始化、或镜像显式关掉了 VANBLOG_INIT_REQUIRE_SETUP_KEY 时，不带密钥才是对的" >&2
+    fi
 
-  if printf '%s' "${resp}" | grep -q '已初始化'; then
-    echo -e "> 站点已经初始化过了，用现有账号登录" >&2
-    vanblog_admin_token
-    return $?
-  fi
-  if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
-    echo -e "${red}初始化失败：$(printf '%s' "${resp}" | head -c 300)${plain}" >&2
-    return 1
-  fi
+    resp="$(curl -sS -m 60 -X POST "${base}/api/admin/init" \
+      -H 'Content-Type: application/json' \
+      -d "{\"user\":{\"username\":$(json_string "${init_user}"),\"password\":\"${derived}\",\"nickname\":$(json_string "重置初始化")},\"siteInfo\":{\"author\":\"vanblog\",\"siteName\":\"VanBlog\",\"siteDesc\":\"reset\",\"baseUrl\":\"${base}/\"}${setup_key_field}}" 2>&1)"
+
+    if printf '%s' "${resp}" | grep -q '已初始化'; then
+      echo -e "> 站点已经初始化过了，用现有账号登录" >&2
+      vanblog_admin_token
+      return $?
+    fi
+
+    # 服务端点名要密钥，而这一趟没带（或带的不是它现在认的那把）⇒ 这时才**值得等**：
+    # 容器刚起来时 server 要先连库、确认"未初始化"才生成密钥文件，所以等一会儿再试一次。
+    if printf '%s' "${resp}" | grep -q 'setupKeyRequired' && [[ ${attempt} -eq 1 ]]; then
+      echo -e "${yellow}> 服务端要求初始化密钥，等它出现（最多 ${VANBLOG_SETUP_KEY_WAIT:-15} 秒）…${plain}" >&2
+      waited_key="$(read_setup_key)"
+      if [[ -n "${waited_key}" && "${waited_key}" != "${setup_key}" ]]; then
+        setup_key="${waited_key}"
+        continue # 带着密钥重试一次（只重试一次：初始化接口挂着 5 次/10 分钟的限流）
+      fi
+      echo -e "${yellow}> 等过了也没拿到可用的密钥，按失败处理${plain}" >&2
+    fi
+
+    # 缺密钥/密钥不对要单独点名：否则用户只看到"初始化失败 400"，会去怀疑自己的备份或网络。
+    if printf '%s' "${resp}" | grep -q 'setupKey'; then
+      echo -e "${red}初始化被拒：服务端要求「初始化密钥」（setupKeyRequired）。${plain}" >&2
+      echo -e "${yellow}密钥在 ${VANBLOG_DATA_PATH}/log/setup.key（0600；站点未初始化期间一直在，初始化成功后 server 会删掉），${plain}" >&2
+      echo -e "${yellow}也可以从日志取：docker logs <vanblog 容器> 2>&1 | grep 初始化密钥${plain}" >&2
+      echo -e "${yellow}脚本会自动读这两处，读不到通常是：容器还没起来（等几秒重试）、或日志目录不是 ${VANBLOG_DATA_PATH}/log${plain}" >&2
+      echo -e "${yellow}（自定义过 VAN_BLOG_LOG 或编排里的挂载就会这样）。确实想关掉这道保护：${plain}" >&2
+      echo -e "${yellow}给容器设 VANBLOG_INIT_REQUIRE_SETUP_KEY=false 再重试（公网不建议）。${plain}" >&2
+      echo -e "${red}服务端原话：$(printf '%s' "${resp}" | head -c 300)${plain}" >&2
+      return 1
+    fi
+    if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+      echo -e "${red}初始化失败：$(printf '%s' "${resp}" | head -c 300)${plain}" >&2
+      return 1
+    fi
+    break # 初始化成功，跳出重试循环
+  done
   echo -e "> 站点是全新的，已用临时账号 ${yellow}${init_user}${plain} 完成初始化（恢复成功后会被备份里的账号覆盖）" >&2
 
   # 登录拿 token（只试一次：登录接口有失败限流）
@@ -3987,6 +4109,12 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
     VANBLOG_BACKUP_SKIP_SPACE_CHECK=1        完全跳过空间预检（估算不出来时本来就会明说并放行）
     VANBLOG_RESTORE_FILE=<路径>              等价于 restore <路径>（老写法，仍支持）
     VANBLOG_RESET_INIT_USER / _PASS          reset 自动初始化用的临时账号（默认随机口令）
+    VANBLOG_SETUP_KEY_WAIT=15                服务端**真的要**初始化密钥时，等它出现的秒数
+                                             （读 <数据目录>/log/setup.key，读不到再从容器日志的
+                                             「初始化密钥： 」行兜底；0 = 不等）。已初始化的站点
+                                             不会白等 —— 那时密钥文件本来就不存在，脚本先看一眼、
+                                             被拒了才等。密钥会自动带上且绝不回显（提示只说长度）；
+                                             想关掉这道保护是 VANBLOG_INIT_REQUIRE_SETUP_KEY=false
   其它：
     VANBLOG_SKIP_MAIN=1                      只加载函数不执行主流程（写测试用）
 

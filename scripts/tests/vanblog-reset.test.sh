@@ -44,6 +44,15 @@ case "${args}" in
     case "${INIT_MODE:-fresh}" in
       inited) printf '{"statusCode":500,"message":"已初始化"}' ;;
       fail) printf '{"statusCode":500,"message":"数据库连不上"}' ;;
+      # 镜像默认 VANBLOG_INIT_REQUIRE_SETUP_KEY=true：不带 setupKey 就是这个 400
+      setupkey) printf '{"statusCode":400,"message":"缺少初始化密钥","data":{"setupKeyRequired":true,"reason":"missing"}}' ;;
+      # 真服务端的形状：body 里带了 setupKey 就放行，没带才 400（用来测"被拒后等到密钥再重试"）
+      setupkey_strict)
+        if printf '%s' "${args}" | grep -qF '"setupKey":"'; then
+          printf '{"statusCode":200,"message":"初始化成功!"}'
+        else
+          printf '{"statusCode":400,"message":"缺少初始化密钥","data":{"setupKeyRequired":true,"reason":"missing"}}'
+        fi ;;
       *) printf '{"statusCode":200,"message":"初始化成功!"}' ;;
     esac ;;
   */api/admin/auth/login*)
@@ -78,12 +87,18 @@ source_script() {
   export VANBLOG_DATA_PATH="${TEST_DIR}/vanblog/data"
   export VANBLOG_BACKUP_DIR="${TEST_DIR}/vanblog/data/log/vanblog-backups"
   export VANBLOG_API_BASE="http://127.0.0.1:18080"
+  # 测试环境里没有真容器：把「等初始化密钥出现」的重试预算关成 0（默认 15 秒，
+  # 每个走全新初始化分支的用例都会白睡一遍 —— 加了这个功能之后本文件从 15 秒变成 108 秒），
+  # 并把取容器日志的封装桩成"没有输出、非 0 退出"（等价于本机没有 docker-compose）。
+  # 需要日志兜底的用例会在 source_script 之后自己覆盖这个桩。
+  export VANBLOG_SETUP_KEY_WAIT=0
   unset VANBLOG_ADMIN_TOKEN VANBLOG_ASSUME_YES VANBLOG_RESTORE_FROM RESET_TEMP_USER RESET_TEMP_PASS
   unset -f docker curl git 2>/dev/null || true
   # shellcheck disable=SC1090
   source "${SCRIPT}"
   restart() { echo "restart $*" >>"${CMDLOG}"; return "${RESTART_RC:-0}"; }
   before_show_menu() { :; }
+  vanblog_compose() { return 1; }
 }
 
 # ---------- 1) 全新站点：自动初始化 → 登录 → 恢复 → 重启 → 核对 ----------
@@ -262,6 +277,172 @@ assert_contains "${OUT2}" "--verbose" "默认摘要模式会提示怎么看全�
 # ---------- 13) reset/restore 都支持 --verbose ----------
 assert_file_contains "${SCRIPT}" '--verbose) export VANBLOG_VERBOSE=1 ;;' "reset 与 restore 都接 --verbose"
 assert_file_contains "${SCRIPT}" "print_backup_json" "恢复流程用摘要而不是直接倒 JSON"
+
+
+# ---------- 14) 初始化密钥（setup key）：镜像默认要求，脚本必须自己带上 ----------
+# 2026-09 起 VANBLOG_INIT_REQUIRE_SETUP_KEY **默认开启**（无法识别的值也按开启处理），
+# 未初始化站点的 POST /api/admin/init 不带 setupKey 就是 400 + body 里的 setupKeyRequired。
+# `reset` 与 `VANBLOG_RESTORE_FROM=… install`（文档宣传的"换机器一步到位"）都要先过这条接口
+# ⇒ 脚本不带密钥的话这两个功能在全新站点上**必然失败**。
+# 密钥在宿主机上读得到：编排模板把 <数据目录>/log 挂到容器 /var/log，server 写 setup.key（0600）。
+# ⚠️ 假密钥故意用真形状：randomBytes(32) 的 base64 = **44 字符**，且含 `+` `/` `=`
+#    （含 `/` 会踩到 sed 分隔符、含 `+` 会踩到正则元字符 —— 用"看起来像单词"的假密钥测不出这些）。
+FAKE_KEY='TVpndIGOm6i1ws/c6fYDEB0qN0RRXmt4hZKfrLnG0+A='
+DECOY_RESTORE='cmVzdG9yZUtleU5vdFRoZVNldHVwS2V5MQ=='
+DECOY_JWT='and0U2VjcmV0Tm90VGhlU2V0dXBLZXkxMg=='
+ARCHIVE='vanblog-full-20260913-140955.tar.zst'
+
+# ① 密钥文件在 ⇒ body 里出现 "setupKey":"<key>"，⑥ 且原有字段一个都没少
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1
+mkdir -p "${VANBLOG_DATA_PATH}/log"
+printf '%s\n' "${FAKE_KEY}" >"${VANBLOG_DATA_PATH}/log/setup.key" # 故意带尾换行：读取时必须去掉
+chmod 600 "${VANBLOG_DATA_PATH}/log/setup.key"
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+assert_eq "$?" "0" "① 读到密钥时 reset 照常成功"
+assert_file_contains "${APILOG}" "\"setupKey\":\"${FAKE_KEY}\"" "① POST /api/admin/init 的 body 带上了 setupKey（尾换行已去掉，含 + / = 原样）"
+assert_contains "${OUT}" "已带上初始化密钥（${#FAKE_KEY} 字符，不回显）" "① 提示只说长度、不说内容"
+assert_not_contains "${OUT}" "${FAKE_KEY}" "② 密钥没有出现在 reset 的任何输出里（stdout+stderr 一起捕的）"
+assert_file_contains "${APILOG}" '"user":{"username":' "⑥ body 里原有的 user.username 没丢"
+assert_file_contains "${APILOG}" '"nickname":"重置初始化"' "⑥ body 里原有的 nickname 没丢"
+assert_file_contains "${APILOG}" '"siteInfo":{"author":"vanblog"' "⑥ body 里原有的 siteInfo 没丢"
+assert_file_contains "${APILOG}" '"baseUrl":"http://127.0.0.1:18080/"' "⑥ body 里原有的 baseUrl 没丢"
+assert_file_contains "${APILOG}" "/api/admin/auth/login" "⑥ 后续「登录拿 token → 恢复」照常走"
+
+# ③ 密钥文件不在，但容器日志里有「初始化密钥： 」⇒ 从日志兜底取到
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1
+vanblog_compose() {
+  printf '%s\n' \
+    "vanblog_1  | WARN [InitProvider] ========== VanBlog 初始化密钥（setup key） ==========" \
+    "vanblog_1  | 初始化密钥： ${FAKE_KEY}" \
+    "vanblog_1  | 密钥文件： /var/log/setup.key（0600）"
+}
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+assert_eq "$?" "0" "③ 日志兜底取到密钥时 reset 照常成功"
+assert_file_contains "${APILOG}" "\"setupKey\":\"${FAKE_KEY}\"" "③ 密钥文件不在时，从容器日志的「初始化密钥：」行兜底取到"
+assert_not_contains "${OUT}" "${FAKE_KEY}" "③ 兜底路径同样不回显密钥"
+
+# ⑤ 日志里同时有**诱饵** base64（restore.key / jwt 材料），而且排在真密钥**后面**
+#    ⇒ 取的必须是「初始化密钥：」那一行。裸抓 base64、或"取最后一个匹配"都会抓错，
+#    而送错密钥比不送更难查（两边都是 400，长得一模一样）。
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1
+vanblog_compose() {
+  printf '%s\n' \
+    "vanblog_1  | 初始化密钥： ${FAKE_KEY}" \
+    "vanblog_1  | 恢复密钥（restore.key）： ${DECOY_RESTORE}" \
+    "vanblog_1  | jwt secret: ${DECOY_JWT}"
+}
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+assert_file_contains "${APILOG}" "\"setupKey\":\"${FAKE_KEY}\"" "⑤ 有诱饵时取的是「初始化密钥：」那一行的值"
+if grep -qF -- "${DECOY_RESTORE}" "${APILOG}" || grep -qF -- "${DECOY_JWT}" "${APILOG}"; then
+  fail "⑤ 诱饵被当成 setupKey 送出去了（restore.key / jwt 材料都不是初始化密钥）"
+else
+  pass "⑤ restore.key / jwt 材料都没有被误当成初始化密钥"
+fi
+assert_not_contains "${OUT}" "${DECOY_RESTORE}" "⑤ 诱饵也没有被打进输出"
+
+# ④ 两处都没有密钥 + 服务端回 setupKeyRequired ⇒ 非 0 退出，且错误信息可照做
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1 INIT_MODE=setupkey
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+rc=$?
+if [[ "${rc}" != "0" ]]; then
+  pass "④ 服务端要密钥而脚本没读到时，reset 非 0 退出（rc=${rc}）"
+else
+  fail "④ 服务端要密钥而脚本没读到时，reset 非 0 退出"
+fi
+assert_contains "${OUT}" "setupKeyRequired" "④ 错误里点名 wire 字段 setupKeyRequired"
+assert_contains "${OUT}" "${VANBLOG_DATA_PATH}/log/setup.key" "④ 错误里给了密钥文件的确切路径"
+assert_contains "${OUT}" "VANBLOG_INIT_REQUIRE_SETUP_KEY" "④ 错误里点名那个开关（真想关保护的人知道去哪关）"
+assert_contains "${OUT}" "grep 初始化密钥" "④ 错误里给了从日志取密钥的照做命令"
+assert_not_contains "${OUT}" "恢复成功" "④ 没有谎称恢复成功"
+
+# ④b 密钥读到了但服务端仍然拒（密钥不对/已过期）⇒ 失败路径也绝不泄漏密钥
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1 INIT_MODE=setupkey
+mkdir -p "${VANBLOG_DATA_PATH}/log"
+printf '%s' "${FAKE_KEY}" >"${VANBLOG_DATA_PATH}/log/setup.key"
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+if [[ "$?" != "0" ]]; then pass "④b 密钥被服务端拒绝时非 0 退出"; else fail "④b 密钥被服务端拒绝时非 0 退出"; fi
+assert_file_contains "${APILOG}" "\"setupKey\":\"${FAKE_KEY}\"" "④b 请求里确实带了密钥（是服务端拒的，不是脚本没读）"
+assert_not_contains "${OUT}" "${FAKE_KEY}" "④b 失败路径也没有把密钥打进输出"
+
+# read_setup_key 自身的契约
+setup_case
+source_script
+GOT="$(read_setup_key)"
+assert_eq "${GOT}" "" "两处都没有密钥时 read_setup_key 输出空（不猜一个值）"
+read_setup_key >/dev/null 2>&1
+assert_eq "$?" "0" "拿不到密钥也是 0 退出（要不要报错由调用方决定：密钥要求可能被显式关掉）"
+mkdir -p "${VANBLOG_DATA_PATH}/log"
+printf '  %s \n\n' "${FAKE_KEY}" >"${VANBLOG_DATA_PATH}/log/setup.key"
+GOT="$(read_setup_key)"
+assert_eq "${GOT}" "${FAKE_KEY}" "密钥文件带首尾空白/多个换行也读得干净（base64 里没有空白字符）"
+
+# ⑦ 密钥"晚到"（容器刚起、server 还没写出 setup.key）⇒ 被拒后等一次、拿到就重试成功。
+#    日志桩第一次什么都不给、第二次才给密钥，模拟"密钥还在路上"。
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1 INIT_MODE=setupkey_strict VANBLOG_SETUP_KEY_WAIT=3
+LOGCALLS="${TEST_DIR}/logcalls"
+vanblog_compose() {
+  local n
+  n="$(cat "${LOGCALLS}" 2>/dev/null || echo 0)"
+  n=$((n + 1))
+  printf '%s' "${n}" >"${LOGCALLS}"
+  if (( n >= 2 )); then printf '%s\n' "vanblog_1  | 初始化密钥： ${FAKE_KEY}"; fi
+}
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+assert_eq "$?" "0" "⑦ 第一趟没带密钥被拒、等到密钥后重试成功"
+assert_contains "${OUT}" "服务端要求初始化密钥，等它出现" "⑦ 明说了在等密钥（不是静默重试）"
+assert_file_contains "${APILOG}" "\"setupKey\":\"${FAKE_KEY}\"" "⑦ 重试那一趟带上了密钥"
+n_init_calls="$(grep -cF '/api/admin/init' "${APILOG}")"
+assert_eq "${n_init_calls}" "2" "⑦ 初始化接口只打了两次（重试一次就停 —— 那接口挂着 5 次/10 分钟限流）"
+assert_contains "${OUT}" "恢复成功" "⑦ 重试成功后整条链照常走完"
+assert_not_contains "${OUT}" "${FAKE_KEY}" "⑦ 重试路径也没有回显密钥"
+
+# ⑧ 已初始化的站点：setup.key 本来就不存在（初始化成功后 server 会删），**不许白等**。
+#    这是 reset 最常见的场景，"先等满预算再发请求"的实现会给它平白加上 VANBLOG_SETUP_KEY_WAIT 秒。
+setup_case
+source_script
+export VANBLOG_ASSUME_YES=1 INIT_MODE=inited VANBLOG_ADMIN_TOKEN="existing-token" VANBLOG_SETUP_KEY_WAIT=30
+t_start="$(date +%s)"
+OUT="$(reset 0 "${ARCHIVE}" 2>&1)"
+rc=$?
+t_end="$(date +%s)"
+assert_eq "${rc}" "0" "⑧ 已初始化站点上 reset 照常成功"
+n_init_calls="$(grep -cF '/api/admin/init' "${APILOG}")"
+assert_eq "${n_init_calls}" "1" "⑧ 已初始化时只打一次初始化接口（不触发重试）"
+assert_contains "${OUT}" "已经初始化过了" "⑧ 识别出站点已初始化"
+# 预算是 30 秒；真等了就会远超 5 秒（整套用例平时 2 秒跑完）
+if (( t_end - t_start < 5 )); then
+  pass "⑧ 没有为不存在的密钥白等（预算 30 秒，本用例实际 <5 秒）"
+else
+  fail "⑧ 为不存在的密钥白等了（预算 30 秒，本用例耗时 $((t_end - t_start)) 秒）"
+fi
+
+# 源码级钉子。⚠️ 断言"某文本不存在/存在"之前**先剥注释**：本仓库为此踩过 5 次 ——
+# 解释"为什么这么做"的注释里就写着被断言的那个字符串（这里注释里满是 setupKey / 密钥）。
+SRC_CODE="$(grep -vE '^[[:space:]]*#' "${SCRIPT}")"
+assert_contains "${SRC_CODE}" 'json_string "${setup_key}"' "setupKey 走 json_string 转义，不手拼 JSON"
+assert_contains "${SRC_CODE}" '已带上初始化密钥（${#setup_key} 字符，不回显）" >&2' "「已带上密钥」的提示走 stderr（stdout 是 token 通道，多一个字符就污染 token）"
+assert_contains "${SRC_CODE}" '[[ "${budget}" =~ ^[0-9]+$ ]] || budget=15' "非法的等待预算回落 15 秒（不死循环、不立刻放弃）"
+assert_contains "${SRC_CODE}" "grep -oE '初始化密钥： " "日志兜底锚在「初始化密钥： 」标签上，不是裸抓 base64"
+assert_contains "${SRC_CODE}" 'setup_key="$(read_setup_key 0)"' "发请求前只看一眼密钥（不为「本来就不存在」的密钥白等）"
+assert_contains "${SRC_CODE}" "grep -q 'setupKeyRequired' && [[ \${attempt} -eq 1 ]]" "只有服务端点名要密钥、且是第一趟时才等并重试（重试有上限）"
+assert_contains "${SRC_CODE}" 'for attempt in 1 2; do' "重试上限写死成一次（初始化接口有 5 次/10 分钟限流，不能循环猛打）"
+assert_contains "${SRC_CODE}" 'tr -d '"'"' \t\r\n'"'"' <"${key_file}"' "读文件时把空白全删掉（server 写的文件带尾换行）"
+# 只有一个调用点 ⇒ 密钥只需要在这一处带上（VANBLOG_RESTORE_FROM 的 install 也是转交 reset 走到这里）
+n_init="$(printf '%s\n' "${SRC_CODE}" | grep -oF '/api/admin/init' | wc -l | tr -d ' ')"
+assert_eq "${n_init}" "1" "剥掉注释后全脚本只有一处打 /api/admin/init（所以不存在漏带密钥的第二条路）"
+assert_contains "${SRC_CODE}" 'reset 0 "${VANBLOG_RESTORE_FROM}"' "install 的 VANBLOG_RESTORE_FROM 确实转交 reset（因此共用同一个调用点）"
 
 
 echo
