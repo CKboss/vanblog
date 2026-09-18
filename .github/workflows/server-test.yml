@@ -90,7 +90,7 @@ jobs:
         # 而且"CI 绿了"会让人以为全都跑过了（本项目已经因此让一条永久红的 e2e 混了 20 次）。
         # 所以改成**默认全跑**，确实不能在 CI 跑的才排除。目前排除清单为空，因为：
         #   - 要真库的 `searchIndex.realdb.spec.ts` 自己默认 `describe.skip`
-        #     （要 VANBLOG_SEARCH_REALDB_URL 指到一次性库才跑）；
+        #     （要 VANBLOG_SEARCH_REALDB=1 外加 _PORT/_DBPATH 指到一次性库才跑）；
         #   - `test/` 下那些要 mongod 的 e2e 被 jest 的 rootDir=src + testRegex 天然排除，
         #     各有独立的 `test:*-e2e` 命令、独立端口与"拒绝 27017/真实库名"的硬护栏；
         #   - walineMongo / fullBackup / initJwt / audit-hardening-round2 里的 MongoClient 都是假的，

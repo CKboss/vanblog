@@ -72,7 +72,10 @@ done
 # ---------- 2) 绝不能教用户敲 `down -v` ----------
 # 允许出现在"不要这样做"的警告里，不允许出现在可复制的代码块里
 BAD_V="$(grep -rn 'down -v' "${ROOT}/docs" --include='*.md' 2>/dev/null |
-  grep -vE '不要|千万|danger|删除编排里的卷|删库|只有.*uninstall')"
+  # ⚠️ `删卷` 也要算警告措辞：docs/changelog.md 是根 CHANGELOG 的**生成镜像**，
+  #    里面的历史条目写的是「原来还在教 docker-compose down -v，那会删卷」——
+  #    那是在**记录一次修复**，不是在教人用。为了历史条目去改根 CHANGELOG 的措辞是本末倒置。
+  grep -vE '不要|千万|danger|删除编排里的卷|删库|删卷|只有.*uninstall')"
 if [[ -z "${BAD_V}" ]]; then
   pass "文档里没有教人用 docker-compose down -v（只在警告里出现）"
 else
@@ -240,7 +243,13 @@ fi
 ENV_CHECK="$("${PY:-python3}" - <<'PYENV' "${ROOT}"
 import os, re, subprocess, sys
 root = sys.argv[1]
-out = subprocess.run(["grep", "-rhoE", "VAN_BLOG_[A-Z_]+|VANBLOG_[A-Z_]+", "docs/", "--include=*.md"],
+# ⚠️ 排除 docs/changelog.md：它是根 CHANGELOG.md 的**生成镜像**（`pnpm release-doc`），
+#    内容是历史记录 —— 里面会提到"某变量已删除"这类事实（例如 VANBLOG_WATERMARK_FONT_MIN_PX，
+#    那两个名字当年只登记在 env 表里、代码从来没读过，本轮删掉了）。
+#    这条守卫要抓的是"文档教用户去设一个代码里不存在的变量"，历史条目不是教学，
+#    而为了过守卫去改历史记录的措辞是本末倒置（根 CHANGELOG.md 本来也不在扫描范围内）。
+out = subprocess.run(["grep", "-rhoE", "VAN_BLOG_[A-Z_]+|VANBLOG_[A-Z_]+", "docs/",
+                      "--include=*.md", "--exclude=changelog.md"],
                      capture_output=True, text=True, cwd=root).stdout.split()
 names = sorted({v for v in out if not v.endswith("_")})
 roots = ["packages/server/src", "packages/website", "packages/admin/src", "packages/cli",

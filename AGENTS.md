@@ -5876,7 +5876,7 @@ Next 14.2.35 的 file-system-cache **只写不删**（源码里没有任何 unli
 - **CJK 摘要压不动**：53 篇时 gzip/raw = 0.469（对照 sitemap.xml 的 0.164，那是重复的 ASCII URL）。
   语料涨上去后这个文件会变成"每个搜索者都要下载的最大静态产物"，第一个该调的旋钮是
   `VANBLOG_SEARCH_INDEX_SNIPPET_CHARS`（200 → 120 约省 40% 字节），其次才是 MAX_DOCS。
-- `searchIndex.realdb.spec.ts` 默认 `describe.skip`（要 `VANBLOG_SEARCH_REALDB_URL` 指到一次性库才跑），
+- `searchIndex.realdb.spec.ts` 默认 `describe.skip`（要 `VANBLOG_SEARCH_REALDB=1` 外加 `VANBLOG_SEARCH_REALDB_PORT` / `_DBPATH` 指到一次性库才跑），
   §7.67 把 CI 改成全跑后它也**不会**在 CI 里碰真库。
 - 测试：server `searchIndex.provider.spec.ts`（846 行）+ realdb（300 行，默认跳）；website vitest
   `searchIndex.spec`（482）/ `searchRank.spec`（311）/ `searchHighlight.spec`（394）/ `searchPageWiring.spec`（239）。
