@@ -129,25 +129,24 @@ Cloudflare 等 CDN 不要对 HTML 开「缓存全部」；改完后清边缘缓�
 
 ## 一键脚本下载编排文件失败
 
-一键安装 / `config` 需要下载 `docker-compose-template.yml`。旧脚本只请求 `https://vanblog.mereith.com/docker-compose-template.yml`，部分网络（例如北美）即使能上网也连不上该主机，于是报「下载脚本失败」（[#115](https://github.com/Mereithhh/vanblog/issues/115)）。
+一键安装 / `config` 需要下载 `docker-compose-template.yml`。脚本会按下面的顺序逐个试，
+任一处成功就继续，并**打印实际用的 URL**（排查时把这行贴出来最有用）：
 
-请先更新到最新脚本（菜单 **20. 更新此脚本**，或重新下载）。新脚本按「**fork 优先**」的顺序尝试，
-任一处成功即继续，并打印实际使用的 URL：
-
-1. 本分支 GitHub raw：`https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml`
-1. 本分支 jsDelivr 镜像：`https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml`
+1. GitHub raw：`https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/docker-compose/docker-compose-template.yml`
+1. jsDelivr 镜像：`https://cdn.jsdelivr.net/gh/CKboss/vanblog@dev/dsh/docker-compose/docker-compose-template.yml`
    （raw.githubusercontent.com 在部分网络下经常不通，jsDelivr 通常可达）
-1. 本分支 GitHub Release 附件：`https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml`
-   （`release-fork` 工作流每次发版都会把模板与 `vanblog.sh` 挂在 Release 上；
-   可用 `VANBLOG_RELEASE_TAG=v2026.09` 钉住某个 tag）
-1. 上游文档站 `vanblog.mereith.com`（**兜底**）
-1. 上游 GitHub raw（**兜底**）
-1. 上游 jsDelivr（**兜底**）
+1. GitHub Release 附件：`https://github.com/CKboss/vanblog/releases/latest/download/docker-compose-template.yml`
+   （每次发版都会把模板与 `vanblog.sh` 挂在 Release 上；`VANBLOG_RELEASE_TAG` 可以钉住某个 tag）
+1. 最后三条是第三方兜底（`vanblog.mereith.com` 文档站，以及它的 raw / jsDelivr）。
+   ⚠️ 走到兜底拿到的是**旧模板**：mongo 钉在 4.4.16，也没有日志上限、`depends_on`、
+   mongo healthcheck 这些当前默认。脚本会提示「模板里没有 mongo 占位符」，功能仍可用，
+   但建议排查网络后重跑 `config`。
 
-⚠️ 后三条拿到的是**上游模板**：镜像是官方版、mongo 是 4.4.16，没有本分支的日志上限、
-`depends_on`、mongo healthcheck、mongo 版本占位符这些改动。脚本会提示「模板里没有 mongo
-占位符」，功能仍可用，但建议排查网络后重跑 `config` —— 这也是为什么前三个 fork 源
-排在上游**之前**：以前 raw 不通时会静默退到上游，用户就此装上了不含本分支任何加固的产物。
+报「下载脚本失败」时先做两件事：
+
+1. 用菜单 **20. 更新此脚本** 把脚本更新到最新，再重跑一次 —— 旧脚本只请求一个地址，
+   部分网络（例如北美）连不上就直接失败（来历见 [#115](https://github.com/Mereithhh/vanblog/issues/115)）。
+2. 把脚本打印的那个 URL 拿出来 `curl -I` 试一下，看是哪一段网络不通。
 
 若连文档站上的 `vanblog.sh` 都下不下来，可以用 GitHub raw 或 jsDelivr：
 
@@ -179,9 +178,9 @@ curl -sSL https://get.daocloud.io/docker | sh
 
 ::: warning 一键脚本装 docker 的方式
 
-`./vanblog.sh install` 发现机器上没有 docker 时，会把**上游作者主机**上的
-`vanblog.mereith.com/docker.sh`（CN 分支；海外分支是 `get.docker.com`）**用 root 通过
-`bash <(curl …)` 管道执行** —— 这是上游遗留行为，等于把 root 交给那个远端脚本当时的内容。
+`./vanblog.sh install` 发现机器上没有 docker 时，会**用 root 通过 `bash <(curl …)` 管道执行一个远端安装脚本**
+（国内走 `vanblog.mereith.com/docker.sh`，海外走 `get.docker.com`）。这等于把 root 交给那个远端脚本当时的内容 ——
+脚本内容变了、或域名换了主人，你都会照着执行。
 不放心的话，先自己装好 docker（发行版仓库、`get.docker.com` 或上面的 daocloud 脚本，
 装之前都可以先下载下来读一遍），再跑 `./vanblog.sh`：脚本检测到 docker 已存在就不会再碰这一步。
 
@@ -238,7 +237,7 @@ vanblog 服务对 mongo 的 `depends_on` 有两种形状，脚本会按你机器
 docker-compose down && docker-compose up -d
 ```
 
-::: danger 千万不要顺手加 `-v`
+::: danger 千万不要顺手加 -v
 
 `docker-compose down -v` 会**删除编排里的卷**。现在默认是 bind mount（数据在宿主机目录里）所以侥幸没事，
 但只要有人把编排改成了命名卷，`-v` 就等于删库。重启请用不带 `-v` 的 `down`；

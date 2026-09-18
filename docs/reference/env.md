@@ -72,7 +72,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_MONGO_SOCKET_TIMEOUT_MS` | `120000` | Mongo socket 超时（大备份导入导出的长操作靠它兜底） |
 | `VAN_BLOG_SHUTDOWN_TIMEOUT_MS` | `8000` | 容器 `start.js` 收到 SIGTERM 后等子进程优雅退出的时间，超时硬退 |
 | `VAN_BLOG_STDIO_LOG_MAX_BYTES` | `20971520`（20MB） | 容器内 server/前台 stdio 日志文件的大小上限，超了轮转成 `.old`（只留一份旧的）。容器 stdout 那一份由编排的 `logging.max-size` 管，两套是分开的 |
-| `VAN_BLOG_VERSION_API` | `https://api.mereith.com/vanblog/version` | 后台「新版本提醒」查询的地址（上游接口）。本分支的版本号比较已经修过（源码构建不再永远弹「有新版本」），不想要这个提醒可以把它指到一个不可达地址 |
+| `VAN_BLOG_VERSION_API` | `https://api.mereith.com/vanblog/version` | 后台「新版本提醒」查询的地址（作者提供的版本服务）。版本号只在**两边都是正式发布号**时才比较，所以开发/源码构建不会一直弹「有新版本」；不想要这个提醒，把它指到一个不可达地址即可 |
 
 ## 安全、限流与可观测性
 
@@ -151,10 +151,10 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_CADDY_SERVE_HTML` | 关 | caddy 直接发 ISR 生成的 HTML（不过 Node）：`true` = 6 个固定页（实测 3.7–4.5× rps）；`all` = 再加 `/post/* /page/* /category/* /tag/*`（文章页突发 8.8×）。**要求 ISR 是 onDemand 模式**（delay 模式自动降级），并依赖上面的清理器保证不发已删除文章的旧页面 |
 | `VANBLOG_CADDY_HTML_PAGES_DIR` | 镜像内前台 pages 目录 | caddy 直发时去哪找 ISR 产物（测试/特殊布局才需要动） |
 
-### 可见水印（2026-09 重写）
+### 可见水印
 
-上传自动加**可见文字水印**的渲染已从 jimp 换成 sharp/libvips + SVG（任何图床都生效；开关在
-后台「图床设置」）。默认样式是 **tile（无缝斜排平铺）**：满图重复的小字水印（旋转 −26°、低不透明度、
+上传自动加**可见文字水印**（任何图床都生效；开关在后台「图床设置」）。渲染走 sharp/libvips + SVG，
+文字大小按图片尺寸自动算。默认样式是 **tile（无缝斜排平铺）**：满图重复的小字水印（旋转 −26°、低不透明度、
 白字 + 半透明深色阴影），「一眼能看出有水印但不破坏观感」，且裁不掉。下列变量微调样式
 （非法值一律回默认）：
 
@@ -176,20 +176,19 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 短边小于 **52px** 的图会跳过水印（服务端记一条 WARN，图片照常上传）；文字太长时字号先自动缩小，
 缩到 8px 仍放不下也跳过。
 
-::: warning 字体：官方镜像已自带，自建镜像要自己装
+::: warning 字体：VanBlog 镜像已自带，自建镜像要自己装
 
 SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的，所以要的是**系统字体**
 （不是 npm 包，也不是前台自托管那份只给浏览器用的 woff2）。
 
-- **官方镜像已经装了** `fontconfig ttf-dejavu wqy-zenhei`（Latin + 中文；镜像 860 → 892 MB，
+- **VanBlog 镜像已经装了** `fontconfig ttf-dejavu wqy-zenhei`（Latin + 中文；
   容器内 `fc-list` 25 条、`fc-match "WenQuanYi Zen Hei"` → `wqy-zenhei.ttc`），中文水印可以直接用。
 - **自己构建镜像 / 源码部署**时需要自己装这三个包（Debian/Ubuntu 是
   `apt-get install fontconfig fonts-dejavu fonts-wqy-zenhei`）。缺字体时**不会盖出乱码方块**：
   服务端会逐字符集探测（`Ag` / `水` 与私用区码点逐字节对比），探不到就打一条点名缺失字体与
   安装命令的 WARN 并**返回原图** —— 上传不失败，但也加不上水印。
-  ⚠️ 2026-09 之前的镜像一个字体包都没装，而当时的实现会照盖不误：实测把 `example.com`
-  渲染成 20,684 个像素的 `.notdef` 方块（两段不同的中文产出逐字节相同，可见画的根本不是字）。
-  现在的行为是"宁可不盖，也不盖满图方块"。
+  ⚠️ 如果你看到水印是**满图小方块**，说明跑的是没装字体的旧镜像：升级即可。
+  当前版本的原则是「宁可不盖，也不盖满图方块」。
 
 :::
 
@@ -225,11 +224,11 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 | 名称 | 默认值 | 说明 |
 | --- | --- | --- |
 | `VANBLOG_INSTALL_MODE` | `auto` | `auto` 先拉镜像、拉不到退回源码构建；`image` 只拉；`source` 只本地构建 |
-| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:dev-dsh` | 用哪个镜像（可指本地 tag 或镜像加速地址） |
-| `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | `true` 改用上游官方镜像（**不含本仓库任何改动**，优先级最高） |
+| `VANBLOG_IMAGE_REF` | 由脚本决定 | 用哪个镜像（可指具体发布号、本地 tag 或镜像加速地址）。当前默认值以 `./vanblog.sh status` 打印的「镜像来源」为准 |
+| `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | `true` 时改用原作者发布的镜像 `mereith/van-blog:latest`（功能与本项目不同，一般只用于对照排查），优先级最高 |
 | `VANBLOG_MONGO_IMAGE` | `mongo:7.0` | **只在全新安装时生效**；已有数据目录保持原 tag。老机器 CPU 不支持 avx 用 `mongo:4.4.16` |
 | `VANBLOG_RESTORE_FROM` | 空 | `install` 之后自动 `reset`：把这份整站备份恢复上去（换机器一步到位） |
-| `VANBLOG_RELEASE_TAG` | `latest` | 下载回退里本分支 Release 附件用哪个 tag |
+| `VANBLOG_RELEASE_TAG` | `latest` | 下载回退里 Release 附件用哪个 tag |
 | `VANBLOG_BASE_PATH` | `/var/vanblog` | 安装目录（编排文件、离线备份 tar 包） |
 | `VANBLOG_DATA_PATH` | `<安装目录>/data` | 数据目录（static/mongo/log） |
 | `VANBLOG_BACKUP_DIR` | `<数据目录>/log/vanblog-backups` | 整站备份归档目录 |

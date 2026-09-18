@@ -159,7 +159,7 @@ Apple 风格具体做了这些事：
 
   :::
 
-  ::: warning 不要用 `@import url(...)` 引远程字体样式表
+  ::: warning 不要用 @import 引远程字体样式表
 
   CSS 规范要求 `@import` 必须位于样式表**所有其它规则之前**。而 `apple.css` 是被 `globals.css`
   用 `@import` 内联进来的（它前面还有 `siteNameLayout.css` 和 Tailwind 产物），

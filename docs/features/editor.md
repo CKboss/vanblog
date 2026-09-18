@@ -113,7 +113,9 @@ VanBlog 后台内置了 [bytemd](https://github.com/bytedance/bytemd)（掘金�
 
   ![文章摘要](https://pic.mereith.com/img/b613474a616f7e2b714735cb79aeff6a.clipboard-2022-08-15.png)
 
-  ::: note 文章摘要是博客前台预览卡片中`阅读全文`之前的内容。
+  ::: note 文章摘要是什么
+
+  文章摘要就是博客前台预览卡片里「阅读全文」之前的那部分内容。
 
   没有 `more` 标记时，前台会自动截取正文**前 200 个字符**作为摘要（不会把 emoji 从中间切开）。如果截断点落在 `[文字](网址)` 中间，会把这一条链接补全后再渲染，避免出现残缺 markdown 和不完整的 href；链接文字里有反引号、URL 带查询参数或括号时同样适用。
 

@@ -21,7 +21,7 @@ VanBlog 内置了 caddy，可以全自动申请 https 证书，如没有其他�
 
 设置环境变量 `VAN_BLOG_SERVER_HOST=127.0.0.1`（或配置文件里的 `server.host`），重启后 Nest 只在回环上听 3000。默认留空，行为与现在一样（所有网卡）。
 
-官方 all-in-one 镜像里，内置 Caddy 已经反代 `127.0.0.1:3000`，把 Nest 绑到 `127.0.0.1` 不会打断容器内部转发。前台 Next 进程仍按原方式启动，本项只改 API 的 listen host。
+VanBlog 的一体式镜像里，内置 Caddy 已经反代 `127.0.0.1:3000`，把 Nest 绑到 `127.0.0.1` 不会打断容器内部转发。前台 Next 进程仍按原方式启动，本项只改 API 的 listen host。
 
 ### Docker 映射的 80 / 443
 
@@ -197,7 +197,7 @@ server {
 
 ### Nginx
 
-在反代 `location` 里加上（官方 Http / Https 示例已包含）：
+在反代 `location` 里加上下面这些（`<PORT>` 换成你的实际端口）：
 
 ```nginx
 location / {

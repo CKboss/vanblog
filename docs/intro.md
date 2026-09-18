@@ -65,7 +65,9 @@ order: 1
 
 ## 维护
 
-现在这个项目由 AI 全自动维护：可复现的代码问题会复现、补测试并开 PR，changelog 与官网文档会同步更新。合并到 master 以及打 `v*` / `doc*` 发版 tag 仍由作者完成。欢迎继续提 issue 和 PR；「样例提交」仍由作者处理。
+问题与需求请在 [CKboss/vanblog](https://github.com/CKboss/vanblog/issues/new) 开 issue，代码改动走 PR（目标分支 `dev/dsh`）。
+合并与打发版 tag 由维护者完成：推一个 `v*` tag 会自动建 GitHub Release（发布说明取 `CHANGELOG.md` 里同名那一节）
+并构建镜像推到 `ghcr.io/ckboss/vanblog`。每轮改动都会补测试与文档，细节见 [开发指南](./contribution.md)。
 
 ## TODO
 
@@ -161,7 +163,7 @@ PS: 不好意思中间有段时间没管，有些记录找不到了，后续有�
 
 现在可能用的人有一些了吧。
 
-如果您想把自己加进来，请提一个 [issue](https://github.com/Mereithhh/vanblog/issues/new?assignees=&labels=%E6%A0%B7%E4%BE%8B%E6%8F%90%E4%BA%A4&template=add-website.yml&title=%5B%E6%A0%B7%E4%BE%8B%E6%8F%90%E4%BA%A4%5D%3A+)，我会尽快添加的。
+如果您想把自己的站点加进来，请到 [CKboss/vanblog 开一个 issue](https://github.com/CKboss/vanblog/issues/new) 告诉我们，会尽快添加。
 
 - [Mereith's Blog](https://www.mereith.com)
 - [GT 的官方博客](https://gt-it.net)

@@ -14,8 +14,8 @@ actions:
     link: /intro.html
     type: secondary
 
-  - text: ✈️ Demo
-    link: https://blog-demo.mereith.com
+  - text: 🔧 部署方式
+    link: /guide/get-started.html#部署方式
     type: secondary
 
 features:

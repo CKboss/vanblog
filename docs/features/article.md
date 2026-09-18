@@ -186,7 +186,7 @@ order: 1
 
 可点击文章表格操作栏下拉菜单中的修改信息进行修改：
 
-!修改文章信息[](https://pic.mereith.com/img/fc6d04c1ab31ab97a53c96d11be87515.clipboard-2022-08-30.png)
+![修改文章信息](https://pic.mereith.com/img/fc6d04c1ab31ab97a53c96d11be87515.clipboard-2022-08-30.png)
 
 或者也可以在文章页面的表格点击编辑按钮，即可跳转到编辑器编辑文章，然后点击右上角的 `修改信息` 按钮进行修改。
 

@@ -9,7 +9,7 @@ VanBlog 现在支持**两套**评论系统，在后台 `站点管理 / 系统设
 | 模式 | 说明 |
 | --- | --- |
 | **内置评论**（builtin） | 评论存在本站的 Mongo 里，走本站接口，不需要额外进程 / 端口 / 数据库。**全新安装默认用它** |
-| **Waline** | 上游那套外挂评论：server 会拉起一个 waline 子进程（端口 8360，独立的 `waline` 库），前台用 `@waline/client`，后台评论页是它的 `/ui` iframe |
+| **Waline** | 外挂的第三方评论系统：server 会拉起一个 waline 子进程（端口 8360，独立的 `waline` 库），前台用 `@waline/client`，后台评论页是它的 `/ui` iframe。功能最全（邮件通知、点赞、验证码），代价是多一个常驻进程 |
 | **关闭**（off） | 前台不渲染任何评论区 |
 
 评论总开关仍在 `站点管理/系统设置/站点配置/高级设置`。
@@ -289,13 +289,13 @@ VanBlog 内嵌的评论系统支持在有新评论时发送 `webhook`，配置�
   "type": "new_comment",
   "data": {
     "comment": {
-      "link": "https://blog-dev.mereith.com",
-      "mail": "504021770@qq.com",
-      "nick": "mereithzxcaasd",
+      "link": "https://blog.example.com",
+      "mail": "someone@example.com",
+      "nick": "读者昵称",
       "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36",
       "url": "/",
       "comment": "评论测试",
-      "ip": "::ffff:192.168.5.38",
+      "ip": "::ffff:203.0.113.7",
       "insertedAt": "2022-09-01T05:52:26.233Z",
       "status": "approved",
       "objectId": "6310489b4e92ac0784a13669",
