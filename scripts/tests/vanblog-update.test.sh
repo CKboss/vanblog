@@ -170,6 +170,17 @@ inspect)
     ;;
   esac
   ;;
+image)
+  # `docker image inspect -f '{{range .Config.Env}}…'`：脚本用它读**镜像**里的 VAN_BLOG_VERSION，
+  # 好在停旧容器**之前**就知道要换成哪一版。IMAGE_VERSION 没设 ⇒ 输出空值，
+  # 那正是"镜像里读不出版本号"的形状（update 会走"证明不了不更旧"的 WARN 分支）。
+  sub="${1-}"
+  shift || true
+  if [[ "${sub}" == "inspect" ]]; then
+    echo "VAN_BLOG_VERSION=$(get_var IMAGE_VERSION)"
+    echo "TZ=Asia/Shanghai"
+  fi
+  ;;
 ps)
   ancestor=""
   while [[ $# -gt 0 ]]; do
@@ -454,6 +465,195 @@ assert_eq "${UPDATE_RC}" "0" "in-use old image still allows successful update"
 assert_contains "${UPDATE_OUT}" "VanBlog 更新并重启成功" "in-use old image still prints success after move"
 assert_contains "${UPDATE_OUT}" "旧镜像仍被容器使用，跳过删除" "skips rmi when old image still used"
 assert_file_not_contains "${VANBLOG_TEST_LOG}" "rmi sha-old" "does not rmi image still in use"
+
+# ══════════════════════════════════════════════════════════════════════════
+# 默认镜像标签、`update <版本|完整 ref>` 语法、以及"降级必须醒目"三组钉子
+#
+# 背景（实测，别改口径）：publish-ghcr 只在推 v* 标签或手动 workflow_dispatch 时构建
+# （branches: 触发是注释掉的），所以 dev-dsh 只在有人手动构建时才动。2026-09-18 实测 ghcr：
+# `latest` 与 `v2026.9.2` 同 digest（镜像内 VAN_BLOG_VERSION=v2026.9.2@23f2e9c，09-17 构建），
+# 而 `dev-dsh` 还是 dev-dsh@b31a1ec（09-13，**旧 4 天**）⇒ 默认值用 dev-dsh 时，
+# `./vanblog.sh update` 会把站点**降级**，把整轮安全修复悄悄回滚掉。
+# ══════════════════════════════════════════════════════════════════════════
+echo
+echo "-- 默认镜像标签 / update <版本> 语法 / 降级警告 --"
+
+# vanblog.sh 的颜色码是无条件输出的（没有 NO_COLOR 开关），而本节的断言要比对
+# 「当前运行: X → 新镜像: Y」这种**跨越颜色码**的整句 ⇒ 先剥掉 ANSI 再比。
+strip_ansi() { printf '%s' "$1" | sed -e 's/\x1b\[[0-9;]*m//g'; }
+
+# ⚠️ 断言"某段代码不存在"之前先剥注释：脚本里解释这个坑的注释写了十几处 dev-dsh，
+#    直接 grep 整个文件会匹配到注释 ⇒ 假红/假绿（本仓库已踩过五次）。
+SCRIPT_CODE="$(grep -vE '^[[:space:]]*#' "${SCRIPT}")"
+
+assert_contains "${SCRIPT_CODE}" 'VANBLOG_IMAGE_REF="${VANBLOG_IMAGE_REF:-ghcr.io/ckboss/vanblog:latest}"' \
+  "默认镜像 ref 是 :latest（跟着发布走）"
+assert_not_contains "${SCRIPT_CODE}" 'VANBLOG_IMAGE_REF:-ghcr.io/ckboss/vanblog:dev-dsh' \
+  "默认值不许改回 :dev-dsh（那会让 ./vanblog.sh update 变成降级）"
+assert_contains "${SCRIPT_CODE}" 'VANBLOG_FORK_IMAGE="${VANBLOG_IMAGE_REF%%:*}"' \
+  "镜像名从 VANBLOG_IMAGE_REF 推导（不把仓库地址硬编码第二遍）"
+
+DEFAULTS_OUT="$(
+  unset VANBLOG_IMAGE_REF VANBLOG_USE_UPSTREAM_IMAGE
+  export VANBLOG_SKIP_MAIN=1
+  source "${SCRIPT}" >/dev/null 2>&1
+  printf '%s\n%s\n' "${VANBLOG_IMAGE_REF}" "${VANBLOG_FORK_IMAGE}"
+)"
+assert_eq "$(printf '%s' "${DEFAULTS_OUT}" | sed -n 1p)" "ghcr.io/ckboss/vanblog:latest" "运行时默认 ref = :latest"
+assert_eq "$(printf '%s' "${DEFAULTS_OUT}" | sed -n 2p)" "ghcr.io/ckboss/vanblog" "推导出的镜像名不含 tag"
+
+# --- update <参数> 的解析：在一个没有编排文件的目录里跑，只看"目标镜像"那行 ---
+ARG_DIR="$(mktemp -d)"
+run_update_arg() { # <args…>；子 shell 里跑，免得 VANBLOG_IMAGE_REF 的赋值漏到后面的用例
+  UPDATE_OUT="$(
+    unset VANBLOG_IMAGE_REF VANBLOG_USE_UPSTREAM_IMAGE
+    export VANBLOG_SKIP_MAIN=1
+    VANBLOG_BASE_PATH="${ARG_DIR}"
+    source "${SCRIPT}" >/dev/null 2>&1
+    update 0 "$@" </dev/null
+  ) 2>&1"
+  UPDATE_RC=$?
+}
+target_line() { printf '%s\n' "${UPDATE_OUT}" | grep -m1 "目标镜像"; }
+
+run_update_arg v2026.9.2
+assert_contains "$(target_line)" "ghcr.io/ckboss/vanblog:v2026.9.2" "update v2026.9.2 拼成本仓库镜像 + 该 tag"
+assert_contains "$(target_line)" "发布号" "并说清发布号是固定不变的"
+assert_eq "${UPDATE_RC}" "1" "没有编排文件时仍然明确失败（不静默成功）"
+
+run_update_arg dev-dsh-abc1234
+assert_contains "$(target_line)" "ghcr.io/ckboss/vanblog:dev-dsh-abc1234" "update dev-dsh-<短sha> 同样拼 tag（回滚用）"
+
+run_update_arg ghcr.io/foo/bar:tag
+assert_contains "$(target_line)" "ghcr.io/foo/bar:tag" "带 / 的参数当完整 ref 原样透传"
+
+run_update_arg mirror.example.com:5000/ckboss/vanblog:v2026.9.2
+assert_contains "$(target_line)" "mirror.example.com:5000/ckboss/vanblog:v2026.9.2" "带端口的私有 registry 也原样透传"
+
+run_update_arg https://mirror.example.com/ckboss/vanblog
+assert_contains "$(target_line)" "https://mirror.example.com/ckboss/vanblog" "带 :// 的参数原样透传"
+
+run_update_arg
+assert_contains "$(target_line)" "ghcr.io/ckboss/vanblog:latest" "反证：不带参数时仍是默认 :latest（默认值没被参数化改坏）"
+
+run_update_arg --oops
+assert_eq "${UPDATE_RC}" "2" "未知参数 --oops 退出码 2"
+assert_contains "${UPDATE_OUT}" "不认这个参数" "并明说不认这个参数"
+assert_contains "${UPDATE_OUT}" "用法" "打印用法"
+assert_not_contains "${UPDATE_OUT}" "目标镜像" "拒绝时根本不去准备镜像（不静默按默认值升级）"
+
+run_update_arg -x
+assert_eq "${UPDATE_RC}" "2" "单个 -x 也被拒（不会被当成 tag 拼进镜像名）"
+
+run_update_arg v2026.9.2 v2026.9.1
+assert_eq "${UPDATE_RC}" "2" "给了两个版本 ⇒ 拒绝（不静默取最后一个）"
+assert_contains "${UPDATE_OUT}" "只能指定一个" "并说清只能给一个"
+
+UP_OUT="$(
+  export VANBLOG_SKIP_MAIN=1 VANBLOG_USE_UPSTREAM_IMAGE=true
+  VANBLOG_BASE_PATH="${ARG_DIR}"
+  source "${SCRIPT}" >/dev/null 2>&1
+  update 0 v2026.9.2 </dev/null
+) 2>&1"
+UP_RC=$?
+assert_eq "${UP_RC}" "2" "VANBLOG_USE_UPSTREAM_IMAGE=true 时给版本参数 ⇒ 拒绝"
+assert_contains "${UP_OUT}" "不能指定版本参数" "并说清为什么不能（不悄悄拼一个不存在的 tag）"
+assert_not_contains "${UP_OUT}" "目标镜像" "拒绝时不去准备镜像"
+
+# --- 顺序钉子：说清目标镜像要在拉镜像之前，版本对比要在停容器之前 ---
+UPDATE_BODY="$(awk '/^update\(\) \{/,/^\}/' "${SCRIPT}")"
+line_in_update() { printf '%s\n' "${UPDATE_BODY}" | grep -n "$1" | head -1 | cut -d: -f1; }
+L_DESC="$(line_in_update 'describe_image_ref')"
+L_PREP="$(line_in_update 'prepare_vanblog_image')"
+L_VER="$(line_in_update '当前运行:')"
+L_DOWN="$(line_in_update '停止并移除旧容器')"
+if [[ -n "${L_DESC}" && -n "${L_PREP}" && "${L_DESC}" -lt "${L_PREP}" ]]; then
+  pass "先说清目标镜像是什么含义，再去准备它（拉之前就能反悔）"
+else
+  fail "describe_image_ref 必须在 prepare_vanblog_image 之前（desc=${L_DESC:-无} prep=${L_PREP:-无}）"
+fi
+if [[ -n "${L_VER}" && -n "${L_DOWN}" && "${L_VER}" -lt "${L_DOWN}" ]]; then
+  pass "版本对比在停容器**之前**打印（停了旧容器就查不到原来跑的是哪一版）"
+else
+  fail "版本对比必须在 down 之前（ver=${L_VER:-无} down=${L_DOWN:-无}）"
+fi
+
+# --- 降级 / 证明不了不更旧：WARN 必须醒目，非交互不阻塞 ---
+setup_case
+source_script
+VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
+echo "IMAGE_VERSION=0.52.0" >>"${VANBLOG_TEST_STATE}"
+UPDATE_OUT="$(strip_ansi "$(update 0 </dev/null 2>&1)")"
+UPDATE_RC=$?
+assert_contains "${UPDATE_OUT}" "当前运行: 0.53.0 → 新镜像: 0.52.0" "停容器前打印了两个版本号"
+assert_contains "${UPDATE_OUT}" "降级" "新镜像更旧时明说这是降级"
+assert_contains "${UPDATE_OUT}" "update v2026.9.2" "并给出升到发布版的具体命令"
+assert_eq "${UPDATE_RC}" "0" "非交互（stdin 不是 tty）不阻塞：WARN 照打、继续"
+assert_contains "${UPDATE_OUT}" "不是交互终端" "并说清为什么没停下来问"
+assert_file_contains "${VANBLOG_TEST_LOG}" "docker-compose down" "确实继续走完了升级"
+
+setup_case
+source_script
+VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
+UPDATE_OUT="$(strip_ansi "$(update 0 </dev/null 2>&1)")"
+UPDATE_RC=$?
+assert_contains "${UPDATE_OUT}" "证明不了新镜像不比当前旧" "镜像里读不出版本号时按'可能是降级'处理（dev-dsh 那个坑就是这个形状）"
+assert_eq "${UPDATE_RC}" "0" "非交互不阻塞"
+
+setup_case
+source_script
+VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
+echo "IMAGE_VERSION=0.54.0" >>"${VANBLOG_TEST_STATE}"
+UPDATE_OUT="$(strip_ansi "$(update 0 </dev/null 2>&1)")"
+UPDATE_RC=$?
+assert_contains "${UPDATE_OUT}" "当前运行: 0.53.0 → 新镜像: 0.54.0" "版本前进时也打印对比"
+assert_not_contains "${UPDATE_OUT}" "降级" "反证：真的更新时不误报降级（否则 WARN 就成了狼来了）"
+assert_eq "${UPDATE_RC}" "0" "正常升级仍然成功"
+
+setup_case
+source_script
+VANBLOG_BASE_PATH="${TEST_DIR}/vanblog"
+echo "IMAGE_VERSION=0.52.0" >>"${VANBLOG_TEST_STATE}"
+UPDATE_OUT="$(strip_ansi "$(VANBLOG_ASSUME_YES=1 update 0 </dev/null 2>&1)")"
+UPDATE_RC=$?
+assert_contains "${UPDATE_OUT}" "降级" "VANBLOG_ASSUME_YES=1 时 WARN 照打"
+assert_contains "${UPDATE_OUT}" "VANBLOG_ASSUME_YES=1" "并说明是因为它才没阻塞"
+assert_eq "${UPDATE_RC}" "0" "VANBLOG_ASSUME_YES=1 时继续完成升级"
+
+# --- 版本比较：必须用**本项目真实的版本号形状**（v2026.9.x）---
+# ⚠️ 上面那些用例用的是 0.53.0 / 0.54.0，它们在"次版本号"那一段就分出胜负，
+#    永远走不到"修号"那一段 —— 而 BASH_REMATCH 下标写错（[3] 带着点，应该用 [4]）
+#    恰好只在第三段爆炸：`v2026.9.1` vs `v2026.9.2` 触发 `((: .2: syntax error`、
+#    算术退化成 0 ⇒ 判成 `same` ⇒ **真降级被当成"版本没有变化"，绕过 WARN 与确认**。
+#    86 条 mock 断言全绿也没发现，因为没有一条用真实版本号形状。实测踩到的，钉在这里。
+assert_eq "$(version_change_kind 'v2026.9.1@0ec01a5' 'v2026.9.2@23f2e9c')" "newer" "v2026.9.1 → v2026.9.2 判升级（修号那一段真的被比较了）"
+assert_eq "$(version_change_kind 'v2026.9.2@23f2e9c' 'v2026.9.1@0ec01a5')" "downgrade" "v2026.9.2 → v2026.9.1 必须判降级（这条错了，降级保护等于不存在）"
+assert_eq "$(version_change_kind 'v2026.9.2@23f2e9c' 'v2026.10.1@aaaaaaa')" "newer" "月份进位按数字比（不是字符串比，否则 9 > 10）"
+assert_eq "$(version_change_kind 'v2026.12.3@aaaaaaa' 'v2027.1.1@bbbbbbb')" "newer" "年份进位"
+assert_eq "$(version_change_kind 'v2026.9.2@23f2e9c' 'v2026.9.2@9999999')" "same" "同一发布号、不同构建 sha ⇒ same"
+assert_eq "$(version_change_kind 'v2026.9.2@23f2e9c' 'dev-dsh@b31a1ec')" "unprovable" "发布号 → 会移动的标签 ⇒ 证明不了不更旧（实测 dev-dsh 比发布版旧 4 天）"
+assert_eq "$(version_change_kind 'dev-dsh@b31a1ec' 'v2026.9.2@23f2e9c')" "unknown" "当前不是发布号 ⇒ 无从比较，不拦"
+assert_eq "$(version_change_kind '' 'v2026.9.2@23f2e9c')" "unknown" "没有正在跑的容器 ⇒ unknown"
+assert_eq "$(version_change_kind 'v2026.9.2@23f2e9c' '')" "unprovable" "读不出新镜像的版本 ⇒ unprovable（不猜）"
+# 解析函数必须给出三个**纯整数**：曾经给出过 "2026 9 .2"，那个点让 (( )) 报错并退化成 0
+NUMS="$(version_release_numbers 'v2026.9.2@23f2e9c')"
+assert_eq "${NUMS}" "2026 9 2" "version_release_numbers 给出三个纯整数（第三段不许带点）"
+if printf '%s' "${NUMS}" | grep -q '\.'; then
+  fail "解析结果里还有小数点（会让算术静默退化成 0，把降级判成 same）"
+else
+  pass "解析结果里没有小数点"
+fi
+assert_eq "$(version_change_kind 'v2026.9.x@aaa' 'v2026.9.2@bbb')" "unknown" "认不出的版本形状不会被当成可比较（宁可 unknown 也不猜）"
+
+# --- --help 与菜单同步（菜单编号一个都不许变）---
+USAGE_TEXT="$(awk '/^show_usage\(\) \{/,/^\}$/' "${SCRIPT}")"
+assert_contains "${USAGE_TEXT}" "update <版本号>" "--help 里写了 update <版本号>"
+assert_contains "${USAGE_TEXT}" "update v2026.9.2" "--help 里有可直接复制的例子"
+assert_contains "${USAGE_TEXT}" "退出码 2" "--help 说明打错参数会被拒绝"
+assert_contains "${USAGE_TEXT}" "ghcr.io/ckboss/vanblog:latest" "--help 里的默认镜像与代码一致（latest）"
+MENU_TEXT="$(awk '/^show_menu\(\) \{/,/^\}$/' "${SCRIPT}")"
+assert_contains "${MENU_TEXT}" '6.${plain}  更新' "菜单第 6 项还是「更新」（编号没变）"
+assert_contains "${MENU_TEXT}" "update v2026.9.2" "菜单里指了「升到指定发布版」的命令行写法"
 
 echo
 echo "passed=${PASS} failed=${FAIL}"

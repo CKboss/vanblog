@@ -405,14 +405,18 @@ assert_contains "${OUT}" "OOM" "强行构建时要提醒可能 OOM"
 setup_case
 source_script
 assert_eq "${VANBLOG_INSTALL_MODE}" "auto" "默认安装模式是 auto（先拉镜像）"
-assert_eq "${VANBLOG_IMAGE_REF}" "ghcr.io/ckboss/vanblog:dev-dsh" "默认镜像是本分支的 ghcr 地址"
+# ⚠️ 默认标签钉死在 **latest**，别改回 dev-dsh：publish-ghcr 只在推 v* 标签或手动 dispatch 时构建
+#    （branches: 触发是关掉的），所以 dev-dsh 只在有人手动构建时才动。2026-09-18 实测 ghcr：
+#    latest 与 v2026.9.2 同 digest（v2026.9.2@23f2e9c，09-17），而 dev-dsh 还是 dev-dsh@b31a1ec（09-13，
+#    旧 4 天）—— 默认用 dev-dsh 等于让 `./vanblog.sh update` 把站点**降级**、悄悄回滚整轮安全修复。
+assert_eq "${VANBLOG_IMAGE_REF}" "ghcr.io/ckboss/vanblog:latest" "默认镜像是本仓库的 ghcr 地址，且标签是 latest（跟着发布走，不是会滞后的 dev-dsh）"
 Docker_IMG="mereith/van-blog:latest"
 # ⚠️ 不能用 OUT="$(prepare_vanblog_image)"：命令替换是子 shell，Docker_IMG 的赋值会丢
 prepare_vanblog_image >"${TEST_DIR}/prep.log" 2>&1
 OUT="$(cat "${TEST_DIR}/prep.log")"
 assert_eq "$?" "0" "auto 模式准备镜像成功"
-assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:dev-dsh" "auto 模式用 ghcr 镜像，不再是上游镜像"
-assert_file_contains "${CMDLOG}" "pull ghcr.io/ckboss/vanblog:dev-dsh" "auto 模式会 docker pull"
+assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:latest" "auto 模式用 ghcr 镜像，不再是别处的官方镜像"
+assert_file_contains "${CMDLOG}" "pull ghcr.io/ckboss/vanblog:latest" "auto 模式会 docker pull"
 assert_not_contains "$(cat "${CMDLOG}")" "docker build" "拉到镜像就不该本地构建（小机器装得动的前提）"
 assert_not_contains "$(cat "${CMDLOG}")" "git clone" "拉到镜像就不该克隆源码"
 
@@ -445,7 +449,7 @@ setup_case
 source_script
 export VANBLOG_INSTALL_MODE=image
 prepare_vanblog_image >/dev/null 2>&1
-assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:dev-dsh" "image 模式用指定的镜像地址"
+assert_eq "${Docker_IMG}" "ghcr.io/ckboss/vanblog:latest" "image 模式用指定的镜像地址"
 setup_case
 source_script
 export VANBLOG_INSTALL_MODE=source
@@ -478,7 +482,7 @@ source_script
 prepare_vanblog_image >/dev/null 2>&1
 cp "${TEMPLATE_FIXTURE}" "${VANBLOG_BASE_PATH}/docker-compose.yaml"
 ensure_compose_image
-assert_file_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "image: ghcr.io/ckboss/vanblog:dev-dsh" "编排文件写入 ghcr 镜像"
+assert_file_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "image: ghcr.io/ckboss/vanblog:latest" "编排文件写入 ghcr 镜像（默认标签 latest）"
 assert_file_not_contains "${VANBLOG_BASE_PATH}/docker-compose.yaml" "mereith/van-blog" "编排文件不再指向官方镜像"
 
 # --- 发布 workflow：用 GITHUB_TOKEN，不需要额外 secret ---

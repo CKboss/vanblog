@@ -4,7 +4,7 @@
 #   System Required: CentOS 7+ / Debian 8+ / Ubuntu 16+ /
 #     Arch 未测试
 #   Description: vanblog 安装脚本
-#   Github: https://github.com/mereithhh/van-blog
+#   Github: https://github.com/CKboss/vanblog（原始项目：https://github.com/Mereithhh/vanblog）
 #========================================================
 
 # 可以用环境变量覆盖（测试、以及想把安装目录放到别处的场景）；默认值不变。
@@ -20,10 +20,9 @@ VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-${_vb_data_sed//|/\\|}}"
 VANBLOG_SCRIPT_VERSION="v0.6.0"
 
 # ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
-# 装的是本分支（CKboss/vanblog 的 dev/dsh），**不是**官方的 mereith/van-blog:latest
-# （那是上游 master，不含本分支的任何改动）。
+# 装的是本仓库 CKboss/vanblog 构建出来的镜像。
 #
-# 默认走「拉镜像」：ghcr.io/ckboss/vanblog:dev-dsh 由 .github/workflows/publish-ghcr.yml
+# 默认走「拉镜像」：ghcr.io/ckboss/vanblog:latest 由 .github/workflows/publish-ghcr.yml
 # 在 GitHub 的 runner 上构建并发布，本机只需要 docker pull —— 这样 1C1G 的小机器也能装
 # （源码构建要跑 umi + next 的生产构建，峰值 1.5-4GB，小机器必挂）。
 #
@@ -32,7 +31,7 @@ VANBLOG_SCRIPT_VERSION="v0.6.0"
 #   VANBLOG_INSTALL_MODE=image   ./vanblog.sh   # 只拉镜像，拉不到就报错
 #   VANBLOG_INSTALL_MODE=source  ./vanblog.sh   # 只源码构建（改了代码想自己出一个镜像时）
 #   VANBLOG_IMAGE_REF=<ref>      ./vanblog.sh   # 换镜像地址（自己的 registry / 特定 sha）
-#   VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh  # 用上游官方镜像（不含本分支改动）
+#   VANBLOG_USE_UPSTREAM_IMAGE=true ./vanblog.sh  # 逃生口：改用别处的官方镜像（不含本仓库改动）
 # 想换分支/换仓库（只对源码构建有意义）：VANBLOG_BRANCH=xxx VANBLOG_REPO=xxx ./vanblog.sh
 VANBLOG_REPO="${VANBLOG_REPO:-https://github.com/CKboss/vanblog.git}"
 VANBLOG_BRANCH="${VANBLOG_BRANCH:-dev/dsh}"
@@ -53,8 +52,22 @@ VANBLOG_SRC_COMMIT=""
 #     lowmem   串行构建，admin 堆上限 1536MB（<3.5GB 内存）
 #   VANBLOG_FORCE_BUILD=true   内存太小本来会劝退，加这个就照跑（后果自负）
 #   VANBLOG_NPM_REGISTRY=<url> 留空则自动探测（见 detect_npm_registry）
-# 本分支镜像的地址（由 publish-ghcr workflow 推送）
-VANBLOG_IMAGE_REF="${VANBLOG_IMAGE_REF:-ghcr.io/ckboss/vanblog:dev-dsh}"
+# 本仓库镜像的地址（由 publish-ghcr workflow 推送）。
+# ⚠️ 默认是 `latest`，**不是** `dev-dsh` —— 这是实测出来的结论，别改回去：
+#    publish-ghcr 只在「推 v* 标签」和「手动 workflow_dispatch」时构建（branches: 触发是关掉的），
+#    所以 `dev-dsh` 只在有人手动构建时才动，而 `latest` 跟着最近一次发布构建走。
+#    2026-09-18 实测 ghcr：`latest` 与 `v2026.9.2` 同 digest（镜像内 VAN_BLOG_VERSION=v2026.9.2@23f2e9c，
+#    构建于 09-17），而 `dev-dsh` 还是 `dev-dsh@b31a1ec`（09-13，**旧 4 天**）——
+#    默认值用 dev-dsh 意味着 `./vanblog.sh update` 会把站点**降级**到发布版之前，
+#    整轮安全修复（含三个未认证漏洞）都会被悄悄回滚掉。
+#    想要分支构建：VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:dev-dsh
+#    想钉死某一版：VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2，或直接 `./vanblog.sh update v2026.9.2`
+VANBLOG_IMAGE_REF="${VANBLOG_IMAGE_REF:-ghcr.io/ckboss/vanblog:latest}"
+# 镜像名（不含 tag）：`update <tag>` 拼完整 ref 时用。
+# ⚠️ 从上面那行**推导**，不要再写一遍仓库地址 —— 两处各写一次迟早会漂，而且漂了守卫也发现不了
+#    （docs-consistency 只把上面那行的默认值与文档对账）。副作用是有意的：用户把
+#    VANBLOG_IMAGE_REF 指到镜像加速地址时，`update <tag>` 也跟着走他的加速地址。
+VANBLOG_FORK_IMAGE="${VANBLOG_IMAGE_REF%%:*}"
 # 全新安装时用的 MongoDB 镜像。mongo 4.4 在 2024-02 就 EOL 了（没有安全更新），
 # 而 mongoose 7.6 / driver 5.9 官方支持到 7.0，本机开发环境跑的也是 7.0.14。
 # ⚠️ 这个值**只在全新安装时生效**：已有数据目录的安装会保持原 tag（见 pick_mongo_image），
@@ -336,6 +349,98 @@ get_container_version() {
   fi
   docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${cid}" 2>/dev/null \
     | awk -F= '$1 == "VAN_BLOG_VERSION" { print $2; exit }'
+}
+
+# 镜像里烙的版本号（构建时由 VAN_BLOG_VERSIONS 写进 ENV，形如 v2026.9.2@23f2e9c）。
+# 与 get_container_version 的区别：这个读**镜像**，所以能在停旧容器**之前**就知道要换成哪一版。
+get_image_version() {
+  local img="$1"
+  if [[ -z "${img}" ]]; then
+    return 0
+  fi
+  docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${img}" 2>/dev/null \
+    | awk -F= '$1 == "VAN_BLOG_VERSION" { print $2; exit }'
+}
+
+# 版本号形如 `<tag>@<短sha>`（tag 可能是 v2026.9.2 / latest / dev-dsh / dev-dsh-abc1234），
+# 也可能是裸 semver（0.54.0）。下面三个函数只在**能证明**的时候才下结论，
+# 证明不了就明说"证明不了"，绝不猜 —— 猜错的方向恰好是最贵的那个（把降级说成升级）。
+version_sha() { # <version> → @ 后面的构建 sha（没有就空）
+  local v="${1:-}"
+  [[ "${v}" == *@* ]] && printf '%s' "${v##*@}"
+  return 0
+}
+
+version_release_numbers() { # <version> → "主 次 修"；不是发布号就返回 1
+  local v="${1%%@*}"
+  [[ "${v}" =~ ^v?([0-9]+)\.([0-9]+)(\.([0-9]+))?$ ]] || return 1
+  # ⚠️ 修必须取 BASH_REMATCH[4]（内层组），不是 [3] —— [3] 是 `(\.([0-9]+))` 整个组，
+  #    **带着那个点**。用错的下场是实测出来的：`v2026.9.1` 与 `v2026.9.2` 走到第三段比较时
+  #    触发 `((: .2: syntax error: operand expected`，算术退化成 0 ⇒ 判成 `same` ⇒
+  #    **真降级被当成"版本没有变化"**，绕过 WARN 与确认照常重启。
+  #    而 mock 测试用的 `0.53.0` vs `0.54.0` 在第二段就分出胜负、永远走不到出错的第三段，
+  #    所以 86 条断言全绿也没发现 —— 本项目真实版本号是 `v2026.9.x`，恰恰只有第三段能区分。
+  #    **教训：比较逻辑的测试必须用产品真实会出现的取值形状，不能只用"好算"的那一种。**
+  printf '%s %s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]:-0}"
+}
+
+# 比较"正在跑的版本"与"要换上去的镜像版本"：
+#   same        同一个构建（sha 相同），或发布号数字相同
+#   newer       能证明更新
+#   downgrade   能证明更旧 ⇒ 必须醒目 WARN + 要人确认
+#   unprovable  当前是发布号、目标不是（latest/dev-dsh/读不出版本）⇒ **无法证明不更旧**，
+#               同样按"可能是降级"处理。实测就是这个形状：v2026.9.2@23f2e9c → dev-dsh@b31a1ec
+#               旧了 4 天，而两个字符串无论怎么比都得不出"更旧"，只能靠"目标不是发布号"识别。
+#   unknown     没有正在跑的容器（或两边都读不出版本），无从比较，不拦
+version_change_kind() { # <old> <new> → 打印上面五个之一
+  local old="${1:-}" new="${2:-}"
+  if [[ -z "${old}" ]]; then
+    printf 'unknown'
+    return 0
+  fi
+  if [[ -z "${new}" ]]; then
+    printf 'unprovable'
+    return 0
+  fi
+  local osha nsha
+  osha="$(version_sha "${old}")"
+  nsha="$(version_sha "${new}")"
+  if [[ -n "${osha}" && "${osha}" == "${nsha}" ]]; then
+    printf 'same'
+    return 0
+  fi
+  local onum nnum
+  if onum="$(version_release_numbers "${old}")" && nnum="$(version_release_numbers "${new}")"; then
+    local o1 o2 o3 n1 n2 n3
+    read -r o1 o2 o3 <<<"${onum}"
+    read -r n1 n2 n3 <<<"${nnum}"
+    # ⚠️ 六个数必须**都是纯整数**才敢做算术。bash 的 (( )) 遇到 `.2` 这种值会打印
+    #    syntax error 到 stderr、然后把该子表达式当 0 —— 于是"证明不了"会伪装成"相等(same)"，
+    #    而 same 是**不拦**的分支（真降级就这么溜过去了）。所以这里宁可退回 unprovable：
+    #    证明不了就按"可能更旧"处理，让人来确认。这条防线是为了让上面那个 BASH_REMATCH
+    #    下标 bug 这类错误**永远不可能再静默变成 same**。
+    local n
+    for n in "${o1}" "${o2}" "${o3}" "${n1}" "${n2}" "${n3}"; do
+      if [[ ! "${n}" =~ ^[0-9]+$ ]]; then
+        printf 'unprovable'
+        return 0
+      fi
+    done
+    if ((n1 < o1)) || ((n1 == o1 && n2 < o2)) || ((n1 == o1 && n2 == o2 && n3 < o3)); then
+      printf 'downgrade'
+    elif ((n1 > o1)) || ((n1 == o1 && n2 > o2)) || ((n1 == o1 && n2 == o2 && n3 > o3)); then
+      printf 'newer'
+    else
+      printf 'same'
+    fi
+    return 0
+  fi
+  # 只有一边是发布号：当前是发布号而目标不是 ⇒ 证明不了不更旧
+  if version_release_numbers "${old}" >/dev/null 2>&1; then
+    printf 'unprovable'
+    return 0
+  fi
+  printf 'unknown'
 }
 
 is_container_running() {
@@ -816,10 +921,10 @@ pull_fork_image() {
     *)
       echo -e "${yellow}  拉取失败（镜像可能还没发布，或网络到不了 ghcr.io）${plain}"
       echo -e "${yellow}  国内机器拉 ghcr.io 经常超时，三条路：${plain}"
-      echo -e "    1) 走镜像加速：${green}VANBLOG_IMAGE_REF=<你的 ghcr 镜像地址>/ckboss/vanblog:dev-dsh $0${plain}"
+      echo -e "    1) 走镜像加速：${green}VANBLOG_IMAGE_REF=<你的 ghcr 镜像地址>/ckboss/vanblog:${VANBLOG_IMAGE_REF##*:} $0${plain}"
       echo -e "       （例如 ghcr.nju.edu.cn 这类公共加速域名，能不能用取决于当下网络，别写死在脚本里）"
       echo -e "    2) 在大机器上 ${green}docker pull${plain} + ${green}docker save${plain}，拷到本机 ${green}docker load${plain}，"
-      echo -e "       然后 ${green}VANBLOG_INSTALL_MODE=image VANBLOG_IMAGE_REF=vanblog:dev-dsh $0${plain}"
+      echo -e "       然后 ${green}VANBLOG_INSTALL_MODE=image VANBLOG_IMAGE_REF=vanblog:${VANBLOG_IMAGE_REF##*:} $0${plain}"
       echo -e "    3) 直接源码构建：${green}VANBLOG_INSTALL_MODE=source $0${plain}（15-40 分钟，吃内存）"
       ;;
   esac
@@ -886,7 +991,8 @@ ensure_compose_image() {
   local current
   current="$(get_compose_vanblog_image)"
   if [[ -n "${current}" && "${current}" != "${Docker_IMG}" ]]; then
-    echo -e "> 编排文件里的镜像 ${yellow}${current}${plain} 与当前模式不一致，改成 ${yellow}${Docker_IMG}${plain}"
+    echo -e "> 编排文件里的镜像与本次要用的不一致：${yellow}${current}${plain} → ${yellow}${Docker_IMG}${plain}（已改写 image: 行）"
+    echo -e "  ⚠️ 之后 restart / up -d 起的都是新 ref；想钉死某一版用 ${green}$0 update <发布号>${plain}"
     sed -i "s|image:[[:space:]]*${current//|/\\|}|image: ${Docker_IMG}|" "${compose_file}"
   fi
   return 0
@@ -1379,13 +1485,132 @@ restart() {
     before_show_menu
   fi
 }
+print_update_usage() {
+  echo -e "用法：${yellow}$0 update [版本号 | 完整镜像 ref]${plain}"
+  echo -e "  $0 update                             升到默认镜像（现在是 ${VANBLOG_IMAGE_REF}）"
+  echo -e "  $0 update v2026.9.2                   升到指定发布版（= ${VANBLOG_FORK_IMAGE}:v2026.9.2，内容固定不变）"
+  echo -e "  $0 update dev-dsh-abc1234             回到某一次具体的构建（回滚用）"
+  echo -e "  $0 update ghcr.io/foo/bar:tag         带 / 或 :// 的参数当完整镜像 ref 原样用（私有 registry / 加速地址）"
+  echo -e "等价写法：VANBLOG_IMAGE_REF=${VANBLOG_FORK_IMAGE}:v2026.9.2 $0 update"
+  echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2）并打印本用法，不会静默按默认值升级"
+}
+
+# 动手拉镜像之前先说清"这个 ref 是什么含义"：发布号是钉死的，latest/dev-dsh 是会移动的。
+# 之所以要说，是因为"我 update 了怎么版本反而旧了"这个困惑，根源就在标签会不会移动。
+describe_image_ref() { # <ref>
+  local ref="${1:-}" tag="${1##*:}"
+  case "${tag}" in
+  v[0-9]*)
+    echo -e "> 目标镜像：${yellow}${ref}${plain}（发布号：内容固定不变，随时说得清装的是哪一版）"
+    ;;
+  latest)
+    echo -e "> 目标镜像：${yellow}${ref}${plain}（最近一次发布构建；⚠️ 会随下次发版移动，不是钉死的版本）"
+    ;;
+  dev-dsh)
+    echo -e "> 目标镜像：${yellow}${ref}${plain}（分支最近一次**手动**构建；⚠️ push 不触发构建，可能比发布版旧）"
+    ;;
+  dev-dsh-*)
+    echo -e "> 目标镜像：${yellow}${ref}${plain}（某一次具体的分支构建，内容固定）"
+    ;;
+  *)
+    echo -e "> 目标镜像：${yellow}${ref}${plain}"
+    ;;
+  esac
+}
+
+# 降级（或"证明不了不更旧"）时的确认。设计原则：**WARN 永远照打**，只有"阻塞"这一步看环境 ——
+# 交互终端要人点头；非交互（cron / 管道）没人能回答，那就打印清楚后继续，绝不停在那儿吊着。
+confirm_or_warn_downgrade() { # 返回 0 = 继续，1 = 用户明确取消
+  if [[ "${VANBLOG_ASSUME_YES:-0}" == "1" ]]; then
+    echo -e "${yellow}   VANBLOG_ASSUME_YES=1：不阻塞，继续（但上面那条 WARN 请认真看）${plain}"
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo -e "${yellow}   当前不是交互终端（cron / 管道），没人能回答 ⇒ 继续；不想冒险就别在非交互环境里升级${plain}"
+    return 0
+  fi
+  local input
+  read -e -r -p "确认继续? [y/N] " input
+  case $input in
+  [yY][eE][sS] | [yY]) return 0 ;;
+  *)
+    echo "已取消升级（旧容器仍在运行，什么都没动）"
+    return 1
+    ;;
+  esac
+}
+
 update() {
   local skip_menu=0
   if [[ $# -gt 0 ]]; then
     skip_menu=1
+    # ⚠️ 第一个位置参数一直是"从菜单外调进来"的标志（dispatcher 传 `0`），**不是版本号**。
+    #    先摘掉它，剩下的才是 `update <版本|完整 ref>` 的参数 —— 这样 `update 0`（老写法）
+    #    与 `update 0 v2026.9.2`（dispatcher 透传）都对，菜单里不带参数的调用也不受影响。
+    shift
+  fi
+
+  # ── 版本参数：`./vanblog.sh update v2026.9.2` = 一行命令升到指定版本 ──────────
+  # 为什么要有这个写法：不带参数时用的是 VANBLOG_IMAGE_REF 的默认值（一个会移动的标签），
+  # 而"升到某个发布版"必须显式指定 —— 站长实测的困惑正是"我以为 update 就是升到最新版"。
+  local want_ref="" arg
+  for arg in "$@"; do
+    case "${arg}" in
+    -h | --help)
+      show_usage
+      return 0
+      ;;
+    -*)
+      # 打错的参数一律**明确拒绝**，绝不静默按默认值升级（本脚本的一贯要求）
+      echo -e "${red}update 不认这个参数：${arg}${plain}"
+      print_update_usage
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 2
+      ;;
+    */* | *://*)
+      # 含 `/` 或 `://` ⇒ 当成完整镜像 ref 原样用（私有 registry / 镜像加速地址）
+      want_ref="${arg}"
+      ;;
+    *)
+      # 其余 ⇒ 当成 tag，拼到本仓库镜像名后面（镜像名从 VANBLOG_IMAGE_REF 推导，不硬编码第二遍）
+      want_ref="${VANBLOG_FORK_IMAGE}:${arg}"
+      ;;
+    esac
+  done
+  if [[ $# -gt 1 ]]; then
+    echo -e "${red}只能指定一个版本/镜像参数（收到 $# 个）${plain}"
+    print_update_usage
+    if [[ ${skip_menu} == 0 ]]; then
+      before_show_menu
+    fi
+    return 2
+  fi
+
+  if [[ -n "${want_ref}" ]]; then
+    if use_upstream_image; then
+      # VANBLOG_USE_UPSTREAM_IMAGE=true 时镜像不是本仓库的，拼出来的 tag 大概率不存在。
+      # 与其悄悄拼一个假 ref 让人在 pull 阶段失败，不如在这里说清楚。
+      echo -e "${red}VANBLOG_USE_UPSTREAM_IMAGE=true 时不能指定版本参数（收到：${want_ref}）${plain}"
+      echo -e "  那个开关用的是别处的官方镜像，标签体系与本仓库的发布号无关，拼出来的 tag 不存在。"
+      echo -e "  要指定版本：去掉 VANBLOG_USE_UPSTREAM_IMAGE 再跑，或直接改编排文件里的 image: 行。"
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 2
+    fi
+    VANBLOG_IMAGE_REF="${want_ref}"
   fi
 
   echo -e "> 更新服务"
+  # 动手之前先说清"这次会得到什么"。⚠️ 上游镜像模式下走的不是 VANBLOG_IMAGE_REF
+  # （镜像由编排文件决定），所以那一条要单独印，否则会报一个根本不是目标的地址。
+  if use_upstream_image; then
+    echo -e "> 目标镜像：${yellow}${Docker_IMG:-（按编排文件里的 image）}${plain}（VANBLOG_USE_UPSTREAM_IMAGE=true：跟着编排走，不接受版本参数）"
+  else
+    describe_image_ref "${VANBLOG_IMAGE_REF}"
+  fi
 
   if [[ ! -f "${VANBLOG_BASE_PATH}/docker-compose.yaml" ]]; then
     echo -e "${red}未找到 ${VANBLOG_BASE_PATH}/docker-compose.yaml，无法更新${plain}"
@@ -1433,6 +1658,44 @@ update() {
     fi
     ensure_compose_image
   fi
+
+  # ── 停容器之前，把"版本会怎么变"说清楚 ─────────────────────────────────
+  # 为什么必须在 down 之前：一旦停了旧容器，"原来跑的是哪一版"就只能靠记忆了；
+  # 而"以为是升级、其实是降级"这件事，要在还能零代价反悔的时候说出来（此刻旧容器还在跑）。
+  local new_image_version vkind
+  if use_upstream_image; then
+    new_image_version="$(get_image_version "$(get_compose_vanblog_image 2>/dev/null)")"
+  else
+    new_image_version="$(get_image_version "${Docker_IMG}")"
+  fi
+  echo -e "> 当前运行: ${yellow}${old_version:-未知}${plain} → 新镜像: ${yellow}${new_image_version:-未知}${plain}"
+  vkind="$(version_change_kind "${old_version}" "${new_image_version}")"
+  case "${vkind}" in
+  downgrade)
+    echo -e "${red}⚠️⚠️ 这是**降级**：新镜像 ${new_image_version} 比正在跑的 ${old_version} 旧${plain}"
+    echo -e "${red}   要升到发布版请用发布号，例如：$0 update v2026.9.2${plain}"
+    if ! confirm_or_warn_downgrade; then
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 0
+    fi
+    ;;
+  unprovable)
+    echo -e "${red}⚠️ 证明不了新镜像不比当前旧：当前 ${old_version} 是发布号，目标 ${new_image_version:-（镜像里读不出 VAN_BLOG_VERSION）} 不是${plain}"
+    echo -e "${yellow}   会移动的标签（latest / dev-dsh）可能比发布版旧 —— 实测过 dev-dsh 比当时的发布版旧 4 天，${plain}"
+    echo -e "${yellow}   直接 update 会把整轮安全修复悄悄回滚掉。要钉死版本：$0 update <发布号>${plain}"
+    if ! confirm_or_warn_downgrade; then
+      if [[ ${skip_menu} == 0 ]]; then
+        before_show_menu
+      fi
+      return 0
+    fi
+    ;;
+  same)
+    echo -e "> 版本没有变化（同一个构建）"
+    ;;
+  esac
 
   echo -e "> 停止并移除旧容器"
   # 同样不能带 -v：更新是常规操作，删卷等于删数据
@@ -3599,7 +3862,7 @@ show_usage() {
   # ⚠️ 这里用**引号 heredoc**（<<'USAGE'）：正文里有大量 `$VAR`、`$(...)` 形式的示例，
   #    用不加引号的 heredoc 会被当场展开甚至执行。需要显示实际默认值的几行单独 echo。
   cat <<'USAGE'
-VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https://github.com/Mereithhh/van-blog）
+VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.com/Mereithhh/vanblog）
 
 用法： ./vanblog.sh [子命令] [参数]        不带参数 = 交互菜单
       ./vanblog.sh --help | -h | help    显示本页
@@ -3617,6 +3880,14 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
                           三者都如实返回 docker-compose 的退出码，失败时打印排查方向。
   update                  更新：**先把新镜像准备好，再停容器**（拉取/构建失败时旧站点还在跑），
                           只删已经没人用的旧镜像，只有版本确实前进才报成功。
+      update <版本号>       升到指定发布版：update v2026.9.2 ⇒ 用镜像 ${VANBLOG_FORK_IMAGE}:v2026.9.2
+                          （等价于 VANBLOG_IMAGE_REF=<那个 ref> $0 update）
+      update <完整镜像ref>   带 / 或 :// 的参数原样当镜像地址用（私有 registry / 镜像加速地址）
+      update dev-dsh-<短sha> 回到某一次具体的构建（回滚用）
+                          ⚠️ 不带参数 = 升到默认标签 ${VANBLOG_IMAGE_REF}，它会随发布移动；
+                            要钉死某一版就带发布号。参数打错**直接拒绝**（退出码 2），不静默按默认升级。
+                          ⚠️ 停容器前会打印「当前运行 → 新镜像」两个版本号；新镜像更旧（或证明不了
+                            不更旧）时醒目 WARN 并要人确认（VANBLOG_ASSUME_YES=1 不阻塞，WARN 照打）。
   status                  状态总览（只读）：脚本版本、安装/数据目录、编排里的 vanblog 与 mongo 镜像、
                           mongo 数据是否存在、HTTP 端口、接口探活、容器状态、各目录占用、
                           整站备份数量与最近三个归档、磁盘剩余。
@@ -3683,7 +3954,8 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
 ──────────────────────── 环境变量 ────────────────────────
   装什么：
     VANBLOG_INSTALL_MODE=auto|image|source   默认 auto：先拉镜像，拉不到再源码构建
-    VANBLOG_IMAGE_REF=<ref>                  默认 ghcr.io/ckboss/vanblog:dev-dsh（可指镜像加速地址）
+    VANBLOG_IMAGE_REF=<ref>                  默认 ghcr.io/ckboss/vanblog:latest（最近一次发布构建）；
+                                             可指镜像加速地址，或用 `update <发布号>` 钉死某一版
     VANBLOG_USE_UPSTREAM_IMAGE=true          改用上游官方镜像（不含本分支任何改动）
     VANBLOG_MONGO_IMAGE=mongo:7.0            **只在全新安装时生效**；已有数据目录会保持原 tag
                                              （数据目录与 FCV 绑定，直接换大版本 mongod 会拒绝启动）
@@ -3727,8 +3999,10 @@ VanBlog 管理脚本（本分支 CKboss/vanblog @ dev/dsh；上游项目 https:/
                           （一条命令写进 root 的 crontab；token 存 0600 的 vanblog-cron.env，
                             移除用 install-cron --remove。手写 crontab 的等价行见 docs/guide/backup.md）
   校验备份还能不能用：      ./vanblog.sh verify            # 全部归档；或 verify <归档名|路径>
-  升级：                  ./vanblog.sh update
-  回滚镜像：              把编排里的 image 改成 ghcr.io/ckboss/vanblog:dev-dsh-<短sha>，再 restart
+  升级（钉死发布版）：     ./vanblog.sh update v2026.9.2
+  升级（跟最近一次发布）： ./vanblog.sh update          # 用默认的 :latest
+  回滚镜像：              ./vanblog.sh update <旧发布号>（或 dev-dsh-<短sha> 回到某次构建）
+                          也可以把编排里的 image 改成那个 ref 再 restart
   站点打不开怎么查：       ./vanblog.sh status → ./vanblog.sh log
                           （status 会告诉你接口通不通、容器在不在、磁盘满没满）
   证书 / HTTPS 出问题：    ./vanblog.sh reset_https
@@ -3787,7 +4061,7 @@ menu_state_line() {
 show_menu() {
   echo -e "
     ${green}VanBlog 管理脚本${plain} ${red}${VANBLOG_SCRIPT_VERSION}${plain}
-    本分支  ：${yellow}CKboss/vanblog${plain} 分支 ${yellow}${VANBLOG_BRANCH}${plain}（上游项目 Mereithhh/van-blog）
+    仓库    ：${yellow}CKboss/vanblog${plain} 分支 ${yellow}${VANBLOG_BRANCH}${plain}（原始项目 Mereithhh/vanblog）
     安装目录：${VANBLOG_BASE_PATH}    数据目录：${VANBLOG_DATA_PATH}
     镜像来源：${yellow}${VANBLOG_IMAGE_REF}${plain}$([[ "${VANBLOG_USE_UPSTREAM_IMAGE:-}" == "true" ]] && echo "（已切到上游官方镜像，不含本分支改动）")
               模式 ${VANBLOG_INSTALL_MODE:-auto}：先拉镜像，拉不到再从源码构建$( [[ -n "${VANBLOG_RESTORE_FROM:-}" ]] && echo "；装完自动恢复 ${VANBLOG_RESTORE_FROM}")
@@ -3797,6 +4071,7 @@ $(menu_state_line)
     ${green}2.${plain}  修改配置（邮箱 / HTTP·HTTPS 端口 / 镜像 / mongo 版本）
     ${green}3.${plain}  启动服务        ${green}4.${plain}  停止服务        ${green}5.${plain}  重启服务
     ${green}6.${plain}  更新（先把新镜像准备好，再停容器；失败时旧站点还在跑）
+        菜单里这项用的是默认镜像标签；要升到**指定发布版**请用命令：${green}./vanblog.sh update v2026.9.2${plain}
     ${green}7.${plain}  查看日志        ${green}13.${plain} 状态总览（镜像/容器/接口/目录占用/备份/磁盘）
     ${green}── 备份与恢复 ──────────────────────────────${plain}
     ${green}10.${plain} 备份（整站备份：一致性快照、跨 MongoDB 版本可恢复、可预览清单）
@@ -3903,7 +4178,8 @@ if [[ $# > 0 ]]; then
     restart 0
     ;;
   "update")
-    update 0
+    shift
+    update 0 "$@" # 透传 `update <版本|完整 ref>`（与 restore/reset 同一写法）
     exit $?
     ;;
   "log")
