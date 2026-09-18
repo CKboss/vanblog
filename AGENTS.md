@@ -3638,6 +3638,12 @@ swagger 默认公开确实等于把后台 API 面摊给未登录用户，但后�
   上游文档站 → 上游 raw → 上游 jsDelivr」。资产名与 tag 约定是读 `release-fork.yml`
   （`files: scripts/vanblog.sh + docker-compose/docker-compose-template.yml`，`v*` tag）+
   GitHub API 实测确认的（v2026.09 的 Release 上就挂着这两个名字）。
+- ⚠️ **第三档（Release 附件）现在拿到的是过期脚本**：附件是**打标签那一刻**的 `vanblog.sh`，
+  2026-09-18 实测 **173,377 字节、`setupKey` 出现 0 次、没有 `update <版本号>`**，而分支脚本是
+  **213,632 字节**（差 40,255）⇒ 走到第三档的用户会拿到一个**装不了新站**的安装器（`reset` 与
+  `VANBLOG_RESTORE_FROM=… install` 被 400 拒，§7.69 修的那个回归附件里没有）。
+  下一次发版会刷新附件（`release-fork.yml` 的 `files:` 就是这两个）；在那之前**文档一律用 raw 分支地址**，
+  要不要把这一档挪到末尾/去掉等站长裁定（§7.70 教训 3）。
 - **两个 fork 镜像都实测可达**（本机直连）：jsDelivr 的 `@dev/dsh` 分支 URL → **200**
   （带斜杠的分支名 jsDelivr 解析没问题）；`releases/latest/download/vanblog.sh` → **302** 到
   `releases/download/v2026.09/vanblog.sh`。
@@ -6257,7 +6263,9 @@ e2e 的"ancient"种子行从 400 天前挪到 **4000 天前** —— 400 天现�
 后台两个页面深链 `/swagger`，关掉会留死链 —— 这次把链一起修了：`About.tsx` 改指仓库里的 API 文档；
 `Token.tsx` **先探测 `/swagger-json`**，开着就打开 `/swagger`，关着就提示确切的环境变量名并打开文档。
 关掉买到什么：少一个匿名、此前不受限流（§7.64-C 之后已受限流）的 59 KB 响应；
-不再把 **111 条后台路由 + 登录请求的形状**白送给扫描器。
+不再把 **后台路由地图 + 登录请求的形状**白送给扫描器。
+（⚠️ 更正：这句原写"111 条后台路由"，按装饰器实数是 **149 条挂 `AdminGuard`**（35 controller / 180 路由方法）；
+`main.ts` 里那个数字本轮已删掉而不是更新 —— 每加一个接口就会错的数字，下一轮一定是错的，§7.70。）
 ⚠️ 全文所有"默认仍开启 / `=false` 可关 / 默认公开"的旧说法都已在原处标注作废（§0 表、§7.15、§7.38.4、
 §7.40-23、§7.55-G）；compose 模板注释若仍写"默认公开"，以本节为准。
 
@@ -7016,7 +7024,7 @@ dockerfile 守卫的 vips-dev 假绿见 §7.38.4，admin 的 `checkNoChinese` �
 
 本轮全量（**串行**跑）：server jest **169 套件 / 1951 用例（1944 绿 + 7 跳过 + 0 失败）**、
 website vitest **84 文件 / 885**、admin `node --test` **148 套件 / 582**、
-`scripts/tests/*.test.sh` **24 文件 / 1872 条断言**（vanblog-reset **51 → 98**、vanblog-update 41 → 98）、
+`scripts/tests/*.test.sh` **24 文件 / 1872 条断言**（vanblog-reset **51 → 98**、vanblog-update 41 → 98；⚠️ 这是**那一轮**的数字，§7.70 之后是 **1968**，最新基线看 §7.39）、
 `docs-links` **5/5**、`docs-consistency` **52/0**、`docs:build` 成功、两包 `tsc` **0 错**；
 GitHub CI 在 `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**。
 ⚠️ 并发跑测试时 `utils/logRotate.spec.ts` 假红过一次，单独跑 8/8、串行全量 0 失败（§7.39 记的负载敏感现象）。
@@ -7027,24 +7035,172 @@ rootless podman 在沙箱里起不来）⇒ 靠 98 条 mock 守卫 + 上面那�
 ③ 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；
 ④ 73 份文档里"核过是对的、故意不动"的部分只在各提交信息里列了代表项，没有逐页留痕。
 
-### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-18 文档排查轮之后复跑，本机实测、**串行**）
+### 7.70 第二轮排查：换四个方向查，以及"死旋钮"为什么需要一条守卫
+
+§7.69 那一轮是"每页文档 vs 它描述的代码"。这一轮（2026-09-18 晚间，5 个提交：
+`24e6d0ad` 死旋钮修复 + 新守卫、`f04bfbae` 守卫扩到三包、`5067efdd` 四处代码自述矛盾、
+`7fd55545` 第二轮文档排查、`afe7f2c4` 脚本停止吞参数）换了四个**上一轮结构上覆盖不到**的面，
+每个面都挖到了东西 —— 这本身就是本节第一条教训。
+
+#### 教训 1：同一个方向查两遍收益递减，换方向才有收获
+
+第一轮的判据是"这页说的与代码一致吗"。查完之后再查一遍同样的东西，只会重复找到同类问题。
+换成下面四个面，各自都产出了第一轮**不可能**发现的结论：
+
+| 方向 | 判据 | 代表性收获（细节见 `7fd55545` 提交信息） |
+|---|---|---|
+| 后台**界面文案** vs 引用它的文档 | 每个「…」控件名、每条 `X → Y → Z` 路径对 `routes.js` / tab / 表单 | 11 处修正；**两个都叫「高级设置」**的东西（系统设置的一个 tab、站点配置的一个子 tab）文档没说清是哪个；产出核过的菜单地图（6 顶级 / 11 tab / 3 子 tab / 43 字段）；309 个控件里 88 个文档从没提过 |
+| **接口面枚举** vs 文档 | 数装饰器，不凭记忆：35 controller / 180 路由方法 / 149 挂 `AdminGuard` / 31 匿名 | "public 标签下都不需要鉴权"是错的；"**两条**匿名 init 接口"实为三条且 `/init/upload` 不要密钥；401 与 403 被混为一谈；三件从没写过的事实：**API Token 等价超管**、改/删协作者会连带吊销 API Token 而新建不会、**未初始化期间所有路由都回 200 + `statusCode:233`**（"200" ≠ "成功"） |
+| **真容器实测** vs 文档 | podman 起独立栈（自己的网络 + 临时目录 + 端口 18098），逐条打 | 12 项断言 **11 项逐字一致、0 项矛盾**；两处文档没写的时序坑被实测暴露并补进文档（搜索索引头 ~60 秒 404、**RSS 有 3 分钟防抖**而 sitemap/索引约 60 秒）；swagger 设 `=1` 仍 404（只认字面 `true`）；第 601 次匿名请求 429 而 1200 次静态请求零 429；防爆破第 6 次锁 300 秒 |
+| **dispatcher / workflow** vs `--help` 与文档 | 从代码读命令面，不从帮助读 | `vanblog.sh` 21 个子命令（17 dispatcher + 4 在 `pre_check` 前转发 ⇒ 免 root）；**八个真实参数文档里一个字都没有**；⚠️ **`docs/**` 不在 CI 的 paths 过滤里 ⇒ 只改文档不跑任何 CI**；⚠️ **手动 `workflow_dispatch` 也会推 `latest`**（而一键脚本默认镜像正是 `latest`）；`release-fork` 会追加镜像段并开 generated notes ⇒ Release 正文 ≠ CHANGELOG 那一节 |
+
+⇒ 规矩：**下一轮排查先问"上一轮的判据是什么"，然后换一个判据**，别把同一个判据跑第二遍。
+
+#### 教训 2："死旋钮"是一类需要守卫的 bug，不是"细心一点就够了"的 bug
+
+两次都是同一个形状：**文案或登记表里有个环境变量名，而没有任何代码读它**。
+① `VANBLOG_WATERMARK_FONT_MIN_PX` / `_MAX_PX`：登记在 `WATERMARK_ENV`、文档写了一轮，渲染器用的是
+`watermarkSvg.ts` 的常量（§7.66）；② 本轮 `VANBLOG_CADDY_DATA_PATH`：恢复提示叫用户"配上再恢复一次"，
+而真名是 `VAN_BLOG_CADDY_DATA_PATH`（`loadConfig('caddy.data.path')` 推导 ⇒ 差一个下划线），
+**而且路径根本不是闸门** —— 备份与恢复两处都是
+`caddyDataPath: backupIncludeCaddyEnabled() ? config.caddyDataPath : undefined`
+（`fullBackup.provider.ts:178` / `:566`），不开 `VANBLOG_BACKUP_INCLUDE_CADDY` 就恒为 `undefined`。
+用户照着提示做，永远恢复不了证书，而且下次恢复还会再弹同一条提示。
+
+为什么必须有守卫：**这类错对现有检查全部隐形** —— 编译器不管字符串内容，单测断言行为不断言文案，
+`docs-consistency` 只查"文档 → 代码"这一个方向（而这次的错话在**代码自己的用户可见文本**里）。
+
+⇒ `packages/server/src/utils/envVarMentions.spec.ts`：**非 spec 源码的字符串字面量里提到的每个
+`VAN_BLOG_*` / `VANBLOG_*`，都必须在仓库非 spec 代码里真有读取点**。
+
+- "真有读取点"必须认本项目在用的**五种间接形态**（朴素版本在这里误报了 20 个真变量，改了三轮才对）：
+  `process.env.X` / `process.env['X']` 与 helper 第一参数；`loadConfig('a.b.c')` 推导出的 `VAN_BLOG_A_B_C`；
+  两步式 `const X_ENV='NAME'` → `positiveIntFromEnv(env, X_ENV, …)`；`env[ENV_ADMIN_PASSWORD_FILE]`；
+  对象映射 `WATERMARK_ENV = {style:'NAME'}` → `env[WATERMARK_ENV.style]`。
+  shell / Dockerfile / compose / workflow 只认**读取位**（`${NAME`、`$NAME`、`NAME=`、`- NAME`、`ENV NAME`、
+  `ARG NAME`、`NAME:`）—— 只出现在 shell 注释里的名字不算。
+- ⚠️ **"真实"语料必须排除 spec**：只有测试读的变量不算数，否则守卫会被自己的测试喂饱。
+- 提取前先剥注释（复用 `src/test-utils/anchorCode`），所以"谈论某变量的散文"不会被当成用户可见提及。
+- 三条负向对照 + 一次手工变异对照（把提示改回错名字 ⇒ **恰好 2 条红**，还原 ⇒ 6/6 绿且文件逐字节一致）。
+- `f04bfbae` 把提及面从 server 扩到 **admin 与 website**：`WaterMarkForm` 的 tooltip 就写着
+  `VANBLOG_WATERMARK_STYLE` / `_POSITION`，`InstallRecordBanner` 写着 `VANBLOG_ADMIN_USER` ——
+  **这些地方打错一个字母，用户照着设没效果，而编译器、单测、文档守卫全都不会响**。
+  实测覆盖：server 230 文件 / 74 个名字，admin 179 文件 / 7 个，website 176 文件 / 8 个，全部有真实读取点。
+  非空转断言还钉住"**三个包都必须有贡献**"，这样将来改遍历规则不可能把守卫悄悄缩回只扫 server
+  （变异对照：把 `scanRoots` 缩回 `SERVER_SRC` ⇒ 那条红）。
+- ⚠️ **两个实现坑**（都写进文件了，别再踩）：成员表达式里用嵌套量词 `(?:\.ident)*` 会让 **jest 挂死
+  超过 5 分钟**（现在最多一层点访问）；从仓库根遍历会把 `packages/admin/src/.umi*` 的巨型生成物扫进来
+  （现在跳过所有点目录与 >1.5 MB 文件）。运行 ~14 秒。
+
+#### 教训 3：发布附件会与分支漂移，而文档可能正指着旧附件
+
+三处文档（README、`script.snippet.md`、速查表）都叫用户从 **v2026.9.2 的 Release 附件**下载 `vanblog.sh`，
+还写着它"更稳、不受 raw 的 CDN 缓存影响"。附件是**打标签那一刻**的脚本。本轮实测（直接下载对比）：
+
+| | 字节 | `setupKey` | `update <版本号>` |
+|---|---|---|---|
+| Release 附件 | **173,377** | **0 次** | 无 |
+| 分支脚本（raw 实测 200） | **213,632** | 6 次 | 有 |
+
+⇒ **新用户照文档做会拿到一个装不了新站的安装器**（`reset` 与 `VANBLOG_RESTORE_FROM=… install` 都被 400 拒）。
+三处已改成 raw 分支地址，并写清取舍（raw 有几分钟 CDN 延迟，真在意就钉 commit sha；
+**要可复现该钉的是镜像版本，不是安装器**）。
+⚠️ **待办**：下一次发版会把附件刷新（`release-fork.yml` 的 `files:` 就是这两个文件）；在那之前
+文档一律用 raw 分支地址。⚠️ 另外**一键脚本自己的下载回退链第三档仍是** `releases/latest/download/vanblog.sh`
+（§7.41 E，`VANBLOG_RELEASE_TAG` 可钉 tag），所以走到第三档拿到的同样是这个旧脚本 ——
+前两档（fork raw、fork jsDelivr）都是分支头，不受影响。要不要把第三档挪到末尾或去掉，等站长裁定。
+⚠️ 顺带记一条"数字会自己变"的实例：`7fd55545` 提交信息里写的"当前 198,281 字节"是 `afe7f2c4`
+落地**之前**量的；写本节时重量已经是 213,632。**引用字节数/条数这类数字要注明"截至哪个提交"**。
+
+#### 教训 4：转述会失真，落地的人必须自己核（包括核父代理给的话）
+
+本轮三条实例：
+- 我（父代理）转述"`POST /api/admin/backup/full/verify` 是脚本 `backup-verify`/`verify-deep` 走的接口"
+  ⇒ 写作代理核完**推翻**：它**零调用方**，脚本是在本机直接验归档（这正是站点没起来也能验的原因），
+  恢复路径上唯一的 HTTP 调用是 `full/inspect`。
+- 我转述"外链图片转存没有文档" ⇒ 核完**推翻**：`features/image-storage.md` 早有该节，缺的只是接口名。
+- 我自己的草稿写过"服务器自己发的请求完全不限流，所以在 127.0.0.1 上 curl 测不出 429" ⇒ **错**：
+  豁免判据是 `isLoopbackRequest` = socket 回环 **且** 没有 `X-Forwarded-For`/`X-Real-IP`；
+  宿主机 `curl http://127.0.0.1/…` 经发布端口进 caddy、caddy 会加转发头 ⇒ **照样限流**
+  （第 601 次那个实测就是这么打出来的）。
+  还有一条起草后自行撤回：说尾斜杠会让 `/article/deleted/` 成为另一条路由（本项目没开 strict routing）。
+
+⇒ 规矩：**任何"事实"在落进文档或提交信息之前，落地的那个人自己核一遍**，
+来源是父代理、是上一轮的结论、还是"我记得"，都一样。§7.69 的教训 1（不能拿另一页文档当依据）
+是这条的特例。
+
+#### 教训 5：静默容错在维护脚本里是负资产
+
+`backup` / `verify` / `restore` / `install-cron` 的解析里有一条 `0 | --*) : ;;`，任何未知 `--*` 一律吞掉。
+四种形状**都是对着旧代码真跑出来的**，不是假想：
+
+| 打错的命令 | 旧行为 | 后果 |
+|---|---|---|
+| `install-cron --horu 3` | 按**默认**小时写进 root 的 crontab，报告成功 | 定时备份不在你以为的时间 |
+| `install-cron --remov` | **装上一条** | 用户以为在删 |
+| `restore --no-statc` | 连静态文件一起覆盖 | **不可逆** |
+| `verify --all` | 吞掉开关后恰好退化成"校验全部" | 看着完全正确 ⇒ 最可能被人抄进笔记 |
+
+现在四条都点名出错参数 + 打印该子命令用法 + **退出码 2**（与 `update` 一致）。
+⚠️ 两个不要合并的语义：**值**非法 `rc=1`（`--keep 0`、`--hour 99` 的退出码与文案一字未变），
+**用法**错误才 `rc=2`。⚠️ 行为变化：cron 里带错字的任务会开始大声失败 —— 这正是目的。
+连带修掉的三件自描述缺口：`--verbose` 写在 `--help` 里、备份输出还提示用它，但**解析器从来没处理过**；
+`drill` / `verify-deep` / `backup-verify` / `backup-status` 在 `show_usage` 与 `show_menu` 里出现 **0 次**，
+而菜单第 30 项自称"全部子命令"（现在补齐四条 + 加**通用漂移守卫**：dispatcher 认的子命令在帮助里缺任一即红）；
+**`./vanblog.sh --help` 原本要求 root** —— 这正是上一条长期没被发现的原因：解释"这四条免 root"的帮助
+只有 root 看得到（现在 `-h`/`--help`/`help` 在 `pre_check` 之前处理；不带参数仍要 root，
+并有断言钉住 `EUID -ne 0` 闸门与调用点都还在，所以"把帮助提前"不可能悄悄变成"去掉 root 检查"）。
+新增的 96 条守卫按本仓库标准写：退出码 + 参数被点名 + 给出正确拼法 + **证明被拒的那条路没干活**
+（假 curl 日志为空、没有 `stop_vanblog`、没有"恢复成功"、没有残留 token 文件）+ 示例不在 flag 之间互相污染
++ "不存在"断言跑在剥注释后的源码上 + 一条对照证明每个"不存在"正则**仍能匹配旧形状**
+（一条不可能失败的 absence 断言比没有更糟）。
+另：`build-image-local.sh --help` 用写死的 `sed -n '2,26p'` 取头部注释，而注释块只到第 20 行 ⇒
+**把四行可执行代码当帮助打印出来**（实测），现在遇到第一行非 `#` 就停。
+
+#### 同批修掉的四处"代码自己说的话与代码不符"（`5067efdd`）
+
+`main.ts` 说关 swagger 是不给扫描器"**111** 条后台路由的地图"，按装饰器实数是 **149** 条挂 `AdminGuard`
+（35 controller / 180 路由方法）⇒ **不是改数字而是把数字删掉**，改成写清怎么自己数
+（每加一个接口就会错的数字，下一轮一定是错的）；`auth.controller.ts` 挂着 `@ApiTags('tag')`，
+于是登录/登出/找回密码在 swagger 里落到「标签管理」组（从 tag controller 复制粘贴来的）⇒ 改 `'auth'`；
+`/init/upload` 补上"为什么它是三条 init 接口里唯一不要密钥的"完整理由、有界暴露面与"将来要加闸门
+必须在同一提交里改后台时序与两个文档页"；后台 `CommentManage` 叫用户去「站点设置」（**没有这个菜单**，
+是「站点管理」）—— ⚠️ 而**文档里那句错话正是照后台抄的**，只改文档它会再回来。
+
+#### 测试与未量
+
+本轮全量（**串行**跑，本机实测）：server jest **170 套件 / 1957 用例（1950 绿 + 7 跳过 + 0 失败）**
+（上一轮 169/1951，+1 套件 +6 用例来自 §7.70 的死旋钮守卫）、website vitest **84 文件 / 885**
+（本轮未改该包代码）、admin `node --test` **148 套件 / 582**、
+`scripts/tests/*.test.sh` **24 文件 / 1968 条断言**（上一轮 1872，+96 来自 flag 收紧）、
+`docs-links` **5/5**、`docs-consistency` **52/0**（第 4 条语料本轮加了 `scripts/vanblog-drill.sh`）、
+`docs:build` **65 页成功**、两包 `tsc` **0 错**、两份 `vanblog.sh` 逐字节一致。
+
+**未量 / 跑不了**：① admin playwright e2e（本机无浏览器）；② `reset`/`update`/`restore` 的
+**真 root 端到端**（无 root、docker daemon 连不上）⇒ 靠 `vanblog-reset` 98 条（含 5 次变异对照）
++ 活体 HTTP 契约覆盖；③ ⚠️ **真容器实测用的是 `vanblog:local-test`（`VAN_BLOG_VERSION=local@8ffa391a`），
+不是当前 HEAD 构建的镜像** —— 但 `8ffa391a` 之后只动过文档、测试与脚本，server 运行时行为未变，
+所以那 12 项结论仍适用；要拿发布镜像复测就重跑 §7.66 那套三格对照；
+④ 那 88 个"文档从没提过的控件"只登记了数量，没有逐个判断该不该补。
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-18 **第二轮排查（§7.70）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **169 套件 / 1951 用例：1944 绿 + 7 跳过 + 0 失败**（59 s；2026-09-17 首测，**2026-09-18 文档排查轮复跑确认同样数字** —— 那轮对 server 只改了 `local.provider.ts` 的一行注释，`2e3ca44b`）。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
+| server `jest` | **170 套件 / 1957 用例：1950 绿 + 7 跳过 + 0 失败**（2026-09-18 第二轮排查后实测）。⚠️ 旧数字"169 套件 / 1951 用例（1944 绿）"**作废**：多出的 1 套件 / 6 用例是新的死旋钮守卫 `utils/envVarMentions.spec.ts`（§7.70，`24e6d0ad` + `f04bfbae`）；再往前是 2026-09-17 首测的同一组数字。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
 | website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748；2026-09-17 首测，2026-09-18 复跑确认 —— 那轮没动 website 代码） |
-| admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-18 复跑确认；原 498 → 579 → 582，本轮 `aboutPage.test.js` 8 → 11，§7.68。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1872 条断言全绿**（原 22 文件 / 1109 条；2026-09-18 同日两轮：vanblog-update **41 → 98**（§7.68）、vanblog-reset **51 → 98**（setupKey 修复，§7.69）、drill 587、install-cron 96、build-image-local 44、dockerfile-alpine-sharp 32） |
-| 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 文档排查后复跑仍 52/0；第 4 条的语料本轮加了 `packages/server/src/**/*.ts`，`f4fec80d`／§7.69） |
-| CI（GitHub Actions） | `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**（server-test 已是"默认全跑 169 个 spec"那条配置，§7.67）；上一个提交 `9601faa4` 上两者都是 **failure** —— 本轮修的三个红套件在 CI 上也红过 |
+| admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-18 两轮都复跑确认，第二轮改的是 server 侧文案与脚本，admin 数字未变；原 498 → 579 → 582，本轮 `aboutPage.test.js` 8 → 11，§7.68。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1968 条断言全绿**（2026-09-18 第二轮排查后实测；⚠️ 同日早先的 **1872** 已被 +96 取代，那 96 条来自"停止静默吞参数"那批，含 5 次变异对照，§7.70／`afe7f2c4`）。沿革：原 22 文件 / 1109 条 → vanblog-update **41 → 98**（§7.68）→ vanblog-reset **51 → 98**（setupKey 修复，§7.69）→ **1968**（§7.70）。其它大头：drill 587、install-cron 100、vanblog-source-install 153、download-fallback 78、build-image-local 44、dockerfile-alpine-sharp 32 |
+| 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 两轮排查后都复跑仍 52/0；第 4 条的语料先加了 `packages/server/src/**/*.ts`（`f4fec80d`／§7.69），第二轮又加了 `scripts/vanblog-drill.sh`（`afe7f2c4`／§7.70 —— `VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` 定义在那个脚本里，一下午两个代理各自被同一条误报绊了一次） |
+| CI（GitHub Actions） | `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**（server-test 已是"默认全跑**全部** spec、不再维护白名单"那条配置，§7.67；拆白名单当时是 169 个，现 170 —— 所以别把 spec 个数写进句子）；上一个提交 `9601faa4` 上两者都是 **failure** —— 本轮修的三个红套件在 CI 上也红过。⚠️ **`docs/**` 不在两条 workflow 的 paths 过滤里 ⇒ 只改文档的提交不会跑任何 CI**（§7.70），所以文档轮的验证只能靠本机那三条守卫 |
 | 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
 | 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
-| ⚠️ 2026-09-18 两轮**没跑/跑不了**的 | ① `./vanblog.sh update` 与 `reset` 的**真机拉镜像 + 真 root 端到端**（本机无 root、docker daemon 连不上、rootless podman 在沙箱里起不来）⇒ 靠 `vanblog-update.test.sh` 98 条 + `vanblog-reset.test.sh` 98 条 mock（含 5 次变异对照）、"真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测，以及**活体 HTTP 契约**验证（不带密钥 400 / 带密钥 201，§7.69）覆盖；② 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；③ 后台文案与文档的**浏览器观感**（无 playwright 浏览器），只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子"；④ 73 份文档里"核过是对的、故意不动"的部分只在提交信息里列了代表项，没有逐页留痕 |
+| ⚠️ 2026-09-18 两轮**没跑/跑不了**的 | ① `./vanblog.sh update` 与 `reset` 的**真机拉镜像 + 真 root 端到端**（本机无 root、docker daemon 连不上、rootless podman 在沙箱里起不来）⇒ 靠 `vanblog-update.test.sh` 98 条 + `vanblog-reset.test.sh` 98 条 mock（含 5 次变异对照）、"真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测，以及**活体 HTTP 契约**验证（不带密钥 400 / 带密钥 201，§7.69）覆盖；② 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；③ 后台文案与文档的**浏览器观感**（无 playwright 浏览器），只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子"；④ 73 份文档里"核过是对的、故意不动"的部分只在提交信息里列了代表项，没有逐页留痕；⑤ ⚠️ 第二轮那 12 项**真容器实测**用的是 `vanblog:local-test`（`VAN_BLOG_VERSION=local@8ffa391a`），**不是当前 HEAD 构建的镜像** —— `8ffa391a` 之后只动过文档、测试与脚本，server 运行时行为未变，结论仍适用（§7.70）；⑥ 那 88 个"文档从没提过的后台控件"只登记了数量，没逐个判断该不该补 |
 | admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
 ⚠️ **"只改了 server"也必须跑 admin 那套 `node --test`**：里面有读 server 源码的跨包锚点，
-server 重构会让它变红（§7.67，本轮就红了 3 条）。server 侧 CI 已改成**默认全跑 169 个 spec**
+server 重构会让它变红（§7.67，本轮就红了 3 条）。server 侧 CI 已改成**默认全跑全部 spec**（拆白名单当时 169 个、现 170；⚠️ 别在文档里写死这个数，§7.70）
 （80 项白名单已拆除，此前 47 个 spec 从来没进过 CI，§7.67）。
 
 **类型检查也要跑**（两条都必须 0 错误，见 §7.51）：
