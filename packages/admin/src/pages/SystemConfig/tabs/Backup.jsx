@@ -417,7 +417,7 @@ export default function (props) {
       <Card title="数据备份（仅数据库记录，JSON）">
         <Alert
           type="warning"
-          message="注意：导入不会覆盖当前后台登录账号。这种 JSON 导入导出**不包含图片、附件和评论本身**，只含图片记录以便检索。要连文件一起备份，请用上面的「整站备份」。"
+          message="注意：导入不会覆盖当前后台登录账号。这种 JSON 导入导出「不包含图片、附件和评论本身」，只含图片记录以便检索。要连文件一起备份，请用上面的「整站备份」。"
           style={{ marginBottom: 20 }}
         />
         <Spin spinning={loading}>

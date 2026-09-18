@@ -49,7 +49,7 @@ export default function () {
               content: (
                 <div>
                   <p>请输入包含完整协议的 URL</p>
-                  <p>例: https://blog-demo.mereith.com</p>
+                  <p>例: https://blog.example.com</p>
                 </div>
               ),
             });

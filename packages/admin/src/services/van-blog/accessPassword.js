@@ -172,7 +172,7 @@ function clearConfirmTitle(targetLabel) {
 function clearConfirmContent(targetLabel) {
   return (
     `这会解除${targetLabel || '它'}的加密，任何人都能看到内容。` +
-    '密码是哈希存储的，清除之后**无法恢复**原来的密码；' +
+    '密码是哈希存储的，清除之后「无法恢复」原来的密码；' +
     '如果只是想换一个密码，请不要勾选清除，直接在密码框里填新密码。'
   );
 }

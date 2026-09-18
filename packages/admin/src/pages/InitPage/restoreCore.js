@@ -193,7 +193,7 @@ function describeRestoreFailure(httpStatus, message) {
   }
   if (httpStatus === 400 && /版本过新|不是 VanBlog 整站备份/.test(text)) {
     return [
-      '这个文件不是本站导出的整站备份，或它由**更新版本**的 VanBlog 生成、当前 server 读不了：先确认文件来源；确实是新版本备份的话，升级 server 镜像后再恢复。',
+      '这个文件不是本站导出的整站备份，或它由「更新版本」的 VanBlog 生成、当前 server 读不了：先确认文件来源；确实是新版本备份的话，升级 server 镜像后再恢复。',
     ];
   }
   return [

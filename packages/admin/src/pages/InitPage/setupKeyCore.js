@@ -33,8 +33,11 @@ const SETUP_KEY_FIELD = 'setupKey';
  * （反复打印的日志块 / docker logs / 挂载目录 / 重启语义）。
  */
 const SETUP_KEY_HINTS = [
-  '新版安装**默认要求初始化密钥**（VANBLOG_INIT_REQUIRE_SETUP_KEY 默认开启）：站点未初始化期间，server 会在启动时打印密钥块，之后每 10 分钟重印一次（VANBLOG_SETUP_KEY_REMIND_MINUTES 可调，0=只印一次），直到完成初始化',
-  '拿密钥：docker logs <容器名> 2>&1 | grep 初始化密钥；或直接读挂载日志目录里的 setup.key 文件（容器内默认 /var/log/setup.key；裸机部署在 config.yaml 的 log 目录下），复制**完整一行**，不要带多余字符',
+  // ⚠️ 这些提示是当**纯文本**渲染的（`<li>{hint}</li>`，见 InitPage/index.tsx 与
+  //    RestoreFromBackup.tsx），不走 markdown 渲染器 —— 写 `**强调**` 用户会看到字面星号。
+  //    要强调就用中文引号「」或直接改句式。
+  '新版安装默认要求初始化密钥（VANBLOG_INIT_REQUIRE_SETUP_KEY 默认开启）：站点未初始化期间，server 会在启动时打印密钥块，之后每 10 分钟重印一次（VANBLOG_SETUP_KEY_REMIND_MINUTES 可调，0=只印一次），直到完成初始化',
+  '拿密钥：docker logs <容器名> 2>&1 | grep 初始化密钥；或直接读挂载日志目录里的 setup.key 文件（容器内默认 /var/log/setup.key；裸机部署在 config.yaml 的 log 目录下），复制「完整一行」，不要带多余字符',
   '密钥每次重启 vanblog 都会重新生成；初始化完成后服务端自动删除该文件、停止提醒，两条初始化接口也不再接受密钥',
   '只有运维显式设置了 VANBLOG_INIT_REQUIRE_SETUP_KEY=false（逃生口，不推荐）时才不要求密钥 —— 那种情况下这一栏留空提交即可',
 ];

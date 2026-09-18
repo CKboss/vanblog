@@ -5,9 +5,13 @@
 # 而不是让整个容器退出（restart: always 会变成崩溃循环，用户只看到容器反复重启）。
 echo "============================================="
 echo "欢迎使用 VanBlog 博客系统"
-echo "Github: https://github.com/CKboss/vanblog （本镜像由该仓库的 dev/dsh 分支构建）"
-echo "上游项目: https://github.com/mereithhh/van-blog"
-echo "Version(Env): ${VAN_BLOG_VERSION}"
+# ⚠️ 这里**不要**写"由某某分支构建"：发布镜像是按 **tag**（如 v2026.9.2）构建的，
+#    源码构建才是 dev/dsh@<短sha>，写死分支名对发布版就是错的。版本一律看下面那行 Version(Env)。
+echo "Github: https://github.com/CKboss/vanblog （文档与问题反馈都在这个仓库）"
+# 署名保留：本版本基于原作者的项目修改，遵循 GPL-3.0。仓库名是 vanblog（旧名 van-blog 只 301 过来）。
+echo "原始项目: https://github.com/Mereithhh/vanblog"
+# 变量没设时别打印一个空的 "Version(Env):"（看着像 bug）；兜底文案在 busybox sh 里实测有效。
+echo "Version(Env): ${VAN_BLOG_VERSION:-(未设置)}"
 echo "============================================="
 
 # ── 1) 邮箱：占位符没被替换 / 为空 / 不像邮箱时，不要把它塞进 ACME 配置 ──

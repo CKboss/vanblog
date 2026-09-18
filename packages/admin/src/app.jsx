@@ -64,7 +64,7 @@ export async function getInitialState() {
             订阅源错误等）
           </p>
           <p>网站 URL 需包含完整的协议。</p>
-          <p>例如： https://blog-demo.mereith.com</p>
+          <p>例如： https://blog.example.com</p>
           <a
             onClick={() => {
               history.push('/site/setting?siteInfoTab=basic');

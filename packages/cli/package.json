@@ -1,14 +1,13 @@
 {
   "name": "vanblog-cli",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "VanBlog 镜像内的运维小工具（resetHttps.js 等）；不是被 require 的库，所以没有 main 入口",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0",
   "dependencies": {
     "mongodb": "^5.9.1"
   }

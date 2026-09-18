@@ -57,7 +57,7 @@ export default function (props) {
               ],
             }}
             placeholder="关闭"
-            tooltip={'默认关闭，开启后同一 ip 登录失败次数过多后需等一分钟后才能再次登录'}
+            tooltip={'设置里没有显式关掉时是开启的：同一访客 IP 连续登录失败 5 次后要等 5 分钟才能再试（服务端默认值；此项在界面里是锁定的）'}
           ></ProFormSelect>
           <ProFormDigit
             name={'expiresIn'}
@@ -123,7 +123,7 @@ export default function (props) {
                 },
               ],
             }}
-            tooltip={'默认为延时自动，使用按需自动可提高实时性，但需要更多性能（4核心以上推荐）'}
+            tooltip={'默认「按需自动」：后台有改动时由后端立刻触发重渲染，实时性高、可能需要更多性能。改成「延时自动」则按下面的秒数周期性重建。'}
           ></ProFormSelect>
           <ProFormDigit
             name={'delay'}
