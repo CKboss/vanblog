@@ -4,17 +4,17 @@
 curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
-想用**发布版**而不是开发分支（更稳，且不受 raw 的分支缓存影响）：
+⚠️ **不要用 Release 附件里的 `vanblog.sh`**：附件是**打标签那一刻**的脚本，之后修的 bug 不会进去。
+实测 `v2026.9.2` 的附件比当前脚本少 25 KB（173,377 vs 198,281 字节），既没有 `update <版本号>`，
+也**不会带初始化密钥** —— 拿它在全新站点上跑 `reset` 或 `VANBLOG_RESTORE_FROM=… install`
+会被服务端 400 拒绝（`setupKeyRequired`）。要可复现请钉**镜像**版本（`./vanblog.sh update v2026.9.2`），
+脚本本身用上面这条 raw 地址；确实担心 raw 的 CDN 缓存，就把 URL 里的 `dev/dsh` 换成具体 commit sha。
 
-```bash
-curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh && ./vanblog.sh
-```
-
-::: warning raw 地址有几分钟的 CDN 缓存
+::: info raw 地址有几分钟的 CDN 缓存
 
 `raw.githubusercontent.com` 对**分支**地址（`dev/dsh`）有 CDN 缓存：刚推完就装，拿到的可能是
-上一版脚本。要确定拿到哪个版本，就用上面的 Release 附件地址（每个发布版的附件里都有
-`vanblog.sh` 与 `docker-compose-template.yml`），或把 URL 里的 `dev/dsh` 换成具体 commit sha。
+上一版脚本（几分钟内会刷新）。这比"附件停在几个月前"要轻得多，所以两害相权取 raw；
+要钉死就把 URL 里的 `dev/dsh` 换成具体 commit sha。
 
 :::
 

@@ -38,7 +38,7 @@ order: 1.5
 
 | 你想做什么 | 敲这条命令 | 看到什么算成功 |
 | --- | --- | --- |
-| 下载一键脚本 | `curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh` | 当前目录出现 `vanblog.sh`，且 `ls -l vanblog.sh` 里带 `x`（可执行） |
+| 下载一键脚本 | `curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh && chmod +x vanblog.sh` | 当前目录出现 `vanblog.sh`，且 `ls -l vanblog.sh` 里带 `x`（可执行） |
 | 打开菜单 | `./vanblog.sh` | 出现一个数字菜单（`1. 安装 / 重装 VanBlog` …） |
 | 开始安装 | 在菜单里输入 `1` 再回车 | 最后回到菜单，中间没有红色报错；机器上没有 docker 时它会**自己装**（不问你，见上一行） |
 | 看它跑起来没有 | 打开菜单 `./vanblog.sh`（**顶部**就有一行状态），或菜单里输入 `13`、或敲 `./vanblog.sh status` | 菜单顶部：`状态    ：● 运行中  http://<域名或服务器IP>:<端口>`；`13` / `status` 打的是状态总览，看 `站点接口  ：http://127.0.0.1:<端口> → 200` 这一行 |
@@ -104,6 +104,8 @@ VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:dev-dsh ./vanblog.sh update
 | 改自动备份的时间 / 保留份数 | `VANBLOG_ADMIN_TOKEN=<你的token> ./vanblog.sh install-cron --hour 4 --keep 14` | 同上。⚠️ 参数与已有条目不同时会**拒绝**并提示加 `--force`（免得悄悄改掉你的定时任务） |
 | 取消自动备份 | `./vanblog.sh install-cron --remove` | 打印 `已从 root 的 crontab 移除定时备份条目`（token 文件保留，路径会打印出来） |
 | 上次备份成功了吗、校验过没有 | `./vanblog.sh backup-status` | 打印最近一次成功备份的时间与校验状态 |
+| 让监控能发现"备份从来没校验过" | `./vanblog.sh backup-status --strict` | 最新归档没有"已验证"记录时**退出码非 0**（不加 `--strict` 时这种情况算正常，监控就看不出来） |
+| 把备份目录里的归档全查一遍 | `./vanblog.sh verify-deep --all` | 结论行 `VERIFY-RESULT total=<份数> ok=<份数> fail=0` |
 | 看归档放在哪 | `ls -lh /var/vanblog/data/log/vanblog-backups/` | 能看到 `vanblog-full-*.tar.zst` 文件 |
 
 **`<你的token>` 从哪来**：浏览器登录后台 → 按 `F12` 打开开发者工具 → `Application`（应用）标签 →

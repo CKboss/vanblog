@@ -2448,12 +2448,37 @@ verify_one_archive() {
 # ./vanblog.sh verify [归档名|路径]…
 # 不带参数 = 校验备份目录里的全部 vanblog-full-* 归档（排除 .manifest.json / .sha256 sidecar）。
 # 任一归档 FAIL → 退出码非 0（可以放进监控/cron）。
+# verify 的用法（参数打错时打印）。⚠️ 它**不接受任何开关**，只接受归档名/路径。
+print_verify_usage() {
+  echo -e "用法：${yellow}$0 verify [归档名|路径]…${plain}"
+  echo -e "  不带参数 = 校验备份目录里的全部 vanblog-full-* 归档"
+  echo -e "  verify 不接受任何开关。要语义级校验（清单版本 / 成员哈希 / 能不能恢复）："
+  echo -e "    ${yellow}$0 verify-deep [--all]${plain}     # 不需要 root；--all 另出结果表与 VERIFY-RESULT 行"
+  echo -e "  要证明「真能恢复回来」只能演练：${yellow}$0 drill [归档名|路径]${plain}"
+  echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默忽略后按默认行为跑"
+}
+
 verify() {
   local -a targets=()
   local arg
   for arg in "$@"; do
     case "${arg}" in
-    0 | --*) continue ;; # 菜单/分发入口传进来的占位与未知开关
+    0) continue ;; # 菜单/分发入口传进来的占位
+    --*)
+      # ⚠️ 这里以前是 `0 | --*) continue ;;` —— 打错的开关被**静默吞掉**。
+      #    后果不是"报错难看"，而是**结果与用户以为跑的命令不是一回事**：
+      #      verify --all   → 安静地按"校验全部"跑（碰巧像是对的，其实本命令没有这个开关；
+      #                       有 --all 的是 drill 那边的 verify-deep）
+      #      verify --al    → 同样不报错，同样按"校验全部"跑
+      #    本脚本的一贯要求是"打错的值不许静默生效"（update 就是未知参数退出码 2 + 打印用法）。
+      #    ⚠️ 只加这一条拒绝，**不改** verify 已有的行为与退出码语义：老 cron 里的
+      #    `verify <归档>` 照旧跑，任一归档 FAIL 仍然非 0，成功仍然 0。
+      #    退出码用 2（= 用法错误），与 update 一致；verify 原本只用 0/1（1 = 有归档 FAIL），
+      #    所以 2 不会与既有语义混淆。
+      echo -e "${red}verify 不认这个参数：${arg}${plain}"
+      print_verify_usage
+      return 2
+      ;;
     esac
     [[ -n "${arg}" ]] && targets+=("${arg}")
   done
@@ -2998,28 +3023,80 @@ prune_old_backups() {
   return 0
 }
 
+# backup 的用法（参数打错时打印）。
+print_backup_usage() {
+  echo -e "用法：${yellow}$0 backup [开关]${plain}"
+  echo -e "  不带开关 = 整站备份（调 server 接口导出 vanblog-full-<时间戳>.tar.zst）"
+  echo -e "  --offline                 改成打包整个数据目录（站点起不来时的兜底，也是唯一含 caddy 证书的方式）"
+  echo -e "  --consistent              配合 --offline：先停 mongo 再打包（一致性好，期间几十秒不可写）"
+  echo -e "  --api | --full            显式要求整站备份（就是默认行为）"
+  echo -e "  --format zstd|xz|gzip     换压缩格式（默认 zstd；⚠️ 只对整站备份生效，--offline 忽略它）"
+  echo -e "  --keep N                  备份**成功后**只保留最新 N 份（0 或留空 = 不清理）"
+  echo -e "  --verbose                 打印完整 JSON（默认只给摘要；等价于 VANBLOG_VERBOSE=1）"
+  echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默按默认值备份"
+}
+
 backup() {
   local mode="${VANBLOG_BACKUP_MODE:-api}"
   local format="${VANBLOG_BACKUP_FORMAT:-zstd}"
   # 保留份数：--keep N 或 VANBLOG_BACKUP_KEEP=N；留空/0 = 不清理（默认行为不变）
   local keep="${VANBLOG_BACKUP_KEEP:-}"
-  local arg prev=""
-  for arg in "$@"; do
+  # ⚠️ 参数解析：打错的开关**必须**被拒绝，不能静默按默认值跑。backup 上这件事尤其贵：
+  #    用户敲 `backup --offine`（少一个 l），旧代码一声不响按 API 模式备份，他以为自己拿到了
+  #    含 caddy 证书的离线包 —— 等到真要换机器那天才发现归档里没有证书。
+  #    同一类里还有一个更隐蔽的：`--verbose` 写在 --help 里、备份输出还会提示"完整清单加 --verbose"，
+  #    但解析器**从来没处理过它**（被下面那条 `--*) :` 吞掉），所以照着提示加开关的人永远看不到
+  #    完整清单，只有 VANBLOG_VERBOSE=1 才行。现在它真的生效了。
+  local -a argv=("$@")
+  local i=0 arg val
+  local saw_consistent=0 saw_format=0
+  while ((i < ${#argv[@]})); do
+    arg="${argv[i]}"
     case "${arg}" in
     --offline) mode="offline" ;;
     --api | --full) mode="api" ;;
-    --consistent) : ;; # 由 backup_offline 自己解析
-    --format | --keep) : ;; # 值在下一个参数
-    0 | --*) : ;;
-    *)
-      case "${prev}" in
-      --format) format="${arg}" ;;
-      --keep) keep="${arg}" ;;
-      esac
+    --consistent) saw_consistent=1 ;; # 真正解析它的是 backup_offline（下面原样透传 "$@"）
+    --verbose) export VANBLOG_VERBOSE=1 ;;
+    --format | --keep)
+      val="${argv[i + 1]:-}"
+      # 少了值也**不许**静默按默认跑：`backup --keep` 后面忘了写数字，旧代码会当成"不清理"
+      if [[ -z "${val}" || "${val}" == --* ]]; then
+        # ⚠️ 例子要**按开关**给：第一版写成"（例如 ${arg} zstd、${arg} 7）"，
+        #    于是 `backup --keep` 的报错里出现「例如 --keep zstd」—— zstd 是 --format 的值，
+        #    在一条本来就在讲"你参数写错了"的消息里再给一个错例子，等于把人往沟里带。
+        local example="zstd|xz|gzip 里的一个"
+        [[ "${arg}" == "--keep" ]] && example="7，表示只留最新 7 份"
+        echo -e "${red}${arg} 后面要跟一个值${plain}（例如 ${arg} ${example}）"
+        print_backup_usage
+        return 2
+      fi
+      if [[ "${arg}" == "--format" ]]; then
+        format="${val}"
+        saw_format=1
+      else
+        keep="${val}"
+      fi
+      i=$((i + 1)) # 值已经被吃掉了，别再当位置参数过一遍
       ;;
+    0) : ;; # 菜单/分发入口传进来的占位
+    --*)
+      echo -e "${red}backup 不认这个参数：${arg}${plain}"
+      print_backup_usage
+      return 2
+      ;;
+    *) : ;; # 位置参数：backup 不接受归档名，多余的字面量照旧忽略（不改变既有行为）
     esac
-    prev="${arg}"
+    i=$((i + 1))
   done
+  # 两个"开关合法、但对当前模式无效"的组合：只 WARN 不拦（拦住会把本来能用的命令变成不能用，
+  # 而静默忽略正是上面那个坑的同一种病 —— 说了就等于没骗人）
+  if ((saw_consistent)) && [[ "${mode}" != "offline" ]]; then
+    echo -e "${yellow}⚠️ --consistent 只在 --offline 时有意义（要先停 mongo 才能打包数据目录），这次忽略它${plain}"
+    echo -e "${yellow}   想要一致性快照：$0 backup --offline --consistent${plain}"
+  fi
+  if ((saw_format)) && [[ "${mode}" == "offline" ]]; then
+    echo -e "${yellow}⚠️ --offline 打的是 .tar.gz，--format ${format} 对它无效，这次忽略它${plain}"
+  fi
 
   local rc=0
   if [[ "${mode}" == "offline" ]]; then
@@ -4057,11 +4134,49 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
   verify                          校验备份归档（**不解压落盘**），三步：
                                     a) 流式过一遍解压器（zstd/xz/gzip -t）——截断/损坏当场发现
                                     b) sha256 比对——只有**本脚本**做的备份才有 <归档>.sha256 记录；
-                                       server 导出的 manifest 里没有校验和，没有记录就明说跳过
+                                       没有记录就明说跳过（⚠️ server 导出的归档另有**内部** integrity 块：
+                                       逐成员 sha256 + merkleRoot + 双清单，那一层由下面的 verify-deep 用）
                                     c) 列成员清单：manifest.json、各集合 NDJSON、静态树在不在
         verify <归档名|路径>…      校验指定的归档（名字会在备份目录里找）；
                                   不带参数 = 校验备份目录里的**全部** vanblog-full-* 归档
                                   任一归档 FAIL → 退出码非 0（可以放进监控/cron）。
+                                  ⚠️ verify 不接受任何开关：打错会退出码 2 并打印用法，不会静默忽略。
+                                  要语义级校验用 verify-deep；要「扫全部 + 结果表」用 verify-deep --all。
+  verify-deep                     verify 的全部输出（原样，一条不少）+ 一层「能不能恢复」的语义校验：
+                                  清单 kind/version 认不认、声明的集合有没有对应 .ndjson、成员路径是不是
+                                  绝对路径/带 ..（恢复会 400）、条数是否自洽、static·themes 在不在、需要哪个
+                                  解压工具本机有没有。归档带 integrity 块时再往下钻一层：逐成员 sha256、
+                                  merkleRoot 重算、双清单逐字节对照、整归档 sha256 对外部参照。
+                                  会挡住恢复的 → FAIL（非 0 退出）；只是降级的 → WARN。
+        --all                     扫全部保留归档，另出一张结果表 + 机器可读的 VERIFY-RESULT 行
+                                  ⚠️ 与上面的 verify 并存是故意的：verify 老、宽松、**要 root**，退出码语义不变
+                                  （老 cron 继续用它）；verify-deep 新、严格、**不要 root**，新写的 cron/监控
+                                  用这条。但校验再深也只是**静态**判断 —— 能证明「恢复得回来」的只有 drill。
+  drill                           恢复演练：起一套**一次性**容器（临时 mongo + vanblog），把这份归档真恢复
+                                  一遍再逐项断言。走的是用户真会走的那条路（匿名恢复接口，只在未初始化时开放），
+                                  断言的是语义，不只是「接口返回了 200」；失败时打容器日志里的错误行 + 尾部，
+                                  并且总是拆干净（trap，--keep 才留）。
+        drill [归档名|路径]       不带参数 = 用备份目录里最新的一份 vanblog-full-* 归档
+        --image <ref>             演练用的 vanblog 镜像（默认跟真栈同一个）
+        --http-port N             宿主机 HTTP 端口（默认自动挑；mongo 端口绝不指向 27017 那个真库）
+        --keep                    演练完**不拆**，打印怎么访问、怎么删
+        --dry-run                 只打印会做什么（引擎/镜像/名字/端口/卷/每一步），什么都不动
+                                  结论行：RESULT: PASS pass=… warn=… fail=… note=…（fail 不为 0 就先别升级）
+  backup-verify                   备份**并立刻验证**：调 backup，成功后对新归档跑上面那套语义校验，再查一次
+                                  陈旧度；任一步失败 → 非 0 退出。配 cron 用它替换 backup 即可（install-cron 写的
+                                  那一行改一个词；参数变了要加 --force 才会替换旧条目）。
+        --all                     把备份目录里**每一份**保留归档都深度校验（位腐烂不挑时间）
+        --drill                   顺手对这份新归档跑一次 drill（需要容器引擎与镜像）
+        --stale-days N            最新归档超过 N 天就算失败（默认 7；0=不查）
+        --reverify-days N         任何归档距上次「验证通过」超过 N 天 → 失败并点名（默认 0=关）
+  backup-status                   不翻日志就能回答：「最近一次备份什么时候？验过没有？演练过没有？」
+                                  文件系统 / 台账 / server 的 backup-status.json 三方对账，说法不一致本身就是 WARN；
+                                  陈旧了 → 非 0 退出（适合放监控）。
+        --strict                  最新归档没有「已验证」记录时也非 0 退出
+        --stale-days N            陈旧判据（默认 7 天）
+                                  ⚠️ 这四条（verify-deep / drill / backup-verify / backup-status）都由 vanblog-drill.sh
+                                  实现，vanblog.sh 在 pre_check **之前**就转交过去，所以都**不需要 root**，
+                                  也不会去 mkdir /var/vanblog。完整参数与更多开关：./vanblog.sh drill --help
   install-cron                    把「每天一次整站备份」装进 root 的 crontab（幂等：
                                   已有同样的条目就不重复加；参数不同会拒绝并让你显式 --force）。
         --hour N                  每天几点跑（0-23，默认 3）

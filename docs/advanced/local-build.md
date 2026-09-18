@@ -183,13 +183,21 @@ mermaid 要的 `./dist/cytoscape.umd.js` 没被导出）—— 那种问题只�
 | 怎么做 | 会推出哪些镜像标签 | 还会发生什么 |
 | --- | --- | --- |
 | 推一个 `v*` 标签（例如 `v2026.9.2`） | `latest` + 该标签本身 | `release-fork.yml` 建 GitHub Release（发布说明取 `CHANGELOG.md` 里 `## [同名标签]` 那一节，附件带 `vanblog.sh` 与 compose 模板） |
-| Actions → `publish-ghcr` → **Run workflow**（选分支） | `latest` / `dev-dsh` / `dev-dsh-<短sha>` | 没有 Release |
+| Actions → `publish-ghcr` → **Run workflow**（选分支） | `latest` / `dev-dsh` / `dev-dsh-<短sha>`（填了 `extra_tag` 就再多一个） | 没有 Release |
 
-⚠️ 两个容易踩的点：
+⚠️ 三个容易踩的点：
 
+- **手动触发也会推 `latest`**（`docker/metadata-action` 那条 `type=raw,value=latest` 的 enable 条件是
+  `github.ref == 'refs/heads/dev/dsh' || startsWith(github.ref, 'refs/tags/')`，两个都算）。
+  所以在分支上手动构建过一次之后，`latest` 指向的就是**分支代码**而不是最新发布号了 ——
+  而一键脚本的默认镜像正是 `latest`，等于所有 `./vanblog.sh update` 的用户都会拿到这个分支构建。
+  要发正式版就走打标签那条路；手动构建只是自测时，记得之后补一个标签把 `latest` 拉回发布版。
 - 打 `v*` 标签前，先在 `CHANGELOG.md` 里把 `[Unreleased]` 切成 `## [v2026.9.2] - <日期>` 这样的一节。
   找不到同名小节时 workflow 会**退回用 `[Unreleased]` 的正文**，再找不到就只给自动生成的提交列表 ——
   发布说明因此可能不是你想要的那份，而且它不会报错。
+  另外 Release 正文里那一段 `## 镜像`（列出 `ghcr.io/<repo>:latest` 与 `:<tag>`）和结尾自动生成的
+  提交列表都是 workflow 加的（`generate_release_notes: true`），不是 CHANGELOG 里的内容 ——
+  所以在 CHANGELOG 里找不到它们不用奇怪。
 - 只构建 **linux/amd64**（默认值）。要 arm64 得在手动触发时把 `platforms` 填成
   `linux/amd64,linux/arm64`，走 QEMU 模拟，慢好几倍且容易超时。
 

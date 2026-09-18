@@ -106,6 +106,12 @@ VANBLOG_ADMIN_TOKEN=<token> VANBLOG_ASSUME_YES=1 ./vanblog.sh backup
 可以直接放进监控或 cron（例如每周验一次最老的归档）。FAIL 的归档别拿来恢复 ——
 重新备一份，或换更早的一份并先 verify。
 
+⚠️ 要监控"备份到底有没有被校验过"，用 `./vanblog.sh backup-status --strict`：
+最新归档在台账里**没有"已验证"记录**时它也非 0 退出。不加 `--strict` 时这种情况只算 WARN，
+监控看不出来 —— 而"备份一直在做、却从来没验证过能不能恢复"正是最容易漏掉的那种故障。
+（`verify` / `verify-deep` / `backup-verify` / `backup-status` / `drill` 的全部参数见
+[备份与恢复 → 这几个命令的参数](../advanced/backup.md#这几个命令的参数)。）
+
 ### 换新机器：一条命令把整站搬过去
 
 在**新机器**上最烦的是：装完之后还要打开后台走向导初始化、登录、再上传备份 —— 而初始化时建的

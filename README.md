@@ -104,12 +104,11 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
   && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
-想用**发布版**而不是开发分支（更稳，且不受 raw 的分支缓存影响）：
-
-```bash
-curl -L https://github.com/CKboss/vanblog/releases/download/v2026.9.2/vanblog.sh -o vanblog.sh \
-  && chmod +x vanblog.sh && ./vanblog.sh
-```
+⚠️ **不要用 Release 附件里的 `vanblog.sh`**：附件是**打标签那一刻**的脚本，之后修的 bug 不会进去。
+实测 `v2026.9.2` 的附件比当前脚本少 25 KB（173,377 vs 198,281 字节），既没有 `update <版本号>`，
+也**不会带初始化密钥** —— 拿它在全新站点上跑 `reset` 或 `VANBLOG_RESTORE_FROM=… install`
+会被服务端 400 拒绝（`setupKeyRequired`）。要可复现请钉**镜像**版本（`./vanblog.sh update v2026.9.2`），
+脚本本身用上面这条 raw 地址；确实担心 raw 的 CDN 缓存，就把 URL 里的 `dev/dsh` 换成具体 commit sha。
 
 > ⚠️ `raw.githubusercontent.com` 对**分支**地址有几分钟 CDN 缓存：刚推完就装可能拿到上一版脚本。
 > 要确定版本就用上面的发布版地址，或把 `dev/dsh` 换成具体 commit sha。

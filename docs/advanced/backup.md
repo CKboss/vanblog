@@ -133,6 +133,18 @@ icon: right-to-bracket
 - 恢复前脚本会先调 `full/inspect` 把**备份清单**打出来（备份时间、各集合条数、静态文件数），
   确认没选错版本再动手。
 
+#### 想自己调接口：整站备份这一组
+
+都在 `/api/admin/backup/` 下，要后台登录态（`token` 头）：`full/formats`（GET，支持哪些压缩格式）、
+`full/export`（POST，做一份整站备份）、`full/status`（GET，上一次备份的状态）、
+`full/list`（GET，列归档）、`full/inspect`（POST，读某份归档的清单）、`full/restore`（POST，恢复）、
+`full/download`（GET，下载归档）、`full/delete`（POST，删一份）。
+
+⚠️ 还有一条 `full/verify`（POST，让 server 复验一份归档），**目前没有任何调用方**：后台界面不用它，
+一键脚本的 `backup-verify` / `verify-deep` 也**不走它** —— 那两条是在本机直接验归档
+（`zstd -t` + 成员清单 + sha256 + 归档内的 integrity 块），这样站点没起来也照样能验。
+`full/verify` 是留给接口调用方的，别把脚本的验证结果当成它给的。
+
 ### 证明备份真的能恢复：`./vanblog.sh drill`
 
 > **为什么需要它**：`verify` 只能证明"这个文件是完整的"（`zstd -t` + 成员清单 + sha256），
@@ -202,6 +214,36 @@ RESULT: PASS pass=37 warn=1 fail=0 note=5
 | `./vanblog.sh verify-deep [归档…]` | 不要 | 先跑一遍 `verify`（输出行逐字保留），再加**语义层**：manifest 必须能**从归档内部**读出（只有边车不算，因为恢复读的是内部那份）、`kind` 对不对、`version > 1` 大声失败（比本程序新的格式恢复时会被拒）、每个声明的集合都有对应 `.ndjson`（缺 = WARN）、有没有不安全的成员路径（绝对路径或任何 `..` 段 = FAIL）、计数非零且自洽、`static/themes/` 在不在（不在就 WARN 并说清后果）、需要哪个解压器以及本机有没有、上传文件名白名单 |
 | `./vanblog.sh backup-verify` | 照 `backup` | 备份 → 用**目录差分**找到新归档 → 深度校验 → 陈旧检查 → 写台账 →（可选 `--drill`）。任何一步失败都非零退出，并明说"旧归档没有被清理"。**适合放进 cron**（`install-cron` 默认写的仍是 `backup`，要更严就自己改成这个） |
 | `./vanblog.sh backup-status` | 不要 | 回答"上次备份什么时候成功的、校验过没有"：文件系统 + 追加式台账 `<备份目录>/vanblog-verify-log.jsonl` + 服务端的 `backup-status.json`，**都不需要 token**；设了 `VANBLOG_ADMIN_TOKEN` 时才把 `GET /api/admin/backup/full/status` 当第三方意见，**两边不一致本身就是 WARN** |
+
+#### 这几个命令的参数
+
+下面这些开关**只在 `--help` 里有**，别处没写，所以集中列一次（命令行开关优先于同名环境变量；
+变量清单见 [环境变量 → 备份与恢复](../reference/env.md#备份与恢复)）：
+
+| 命令 | 参数 | 作用与默认 |
+| --- | --- | --- |
+| `verify-deep` / `backup-verify` | `--all` | 除了显式给的归档，再把备份目录里的**全部**归档都查一遍（去重）。定期复验就用它 |
+| `backup-verify` | `--drill` | 校验通过后**顺手做一次真恢复演练**（等于再跑一遍 `drill`）。最严的一档，也最慢 |
+| `backup-status` | `--strict` | 最新归档在台账里**没有"已验证"记录**时也算失败（非 0 退出）。⚠️ 放 cron / 监控里就该加这个，否则"从来没校验过的备份"会被判成正常 |
+| `backup-verify` / `backup-status` | `--stale-days N` | 最新归档超过 N 天算陈旧失败。不传就用环境变量的值，再默认 **7**；`0` = 不查 |
+| `backup-verify` / `backup-status` | `--reverify-days N` | 任何保留归档距上次"验证通过"超过 N 天算过期。不传就用环境变量的值，再默认 **0 = 关**；配合 `--all` 当定期复验护栏 |
+| `backup-verify` / `backup-status` | `--no-stale-check` / `--no-reverify-check` | 分别关掉上面两项检查（比设成 `0` 更直白） |
+| `drill` | `--image <ref>` | 演练用哪个 vanblog 镜像。默认：编排文件里那个 → `VANBLOG_IMAGE_REF` |
+| `drill` | `--http-port N` / `--mongo-port N` | 指定端口。默认从 **18500** 起往上找空闲的（试 400 个，避开 3000/3001/3002/18080/27017） |
+| `drill` | `--mongo-image <ref>` | 演练用哪个 mongo 镜像，默认 `mongo:7.0` |
+| `drill` | `--engine docker\|podman` | 指定容器引擎。默认自动探测（docker daemon 连得上用 docker，否则 podman） |
+| `drill` | `--prefix <名字>` | 一次性容器/卷/网络的名字前缀，默认 `vb-drill` |
+| `drill` | `--timeout <秒>` | 等服务就绪的秒数，默认 **240** |
+| `drill` | `--keep` | 演练完**不拆**一次性栈，并打印怎么访问、怎么拆（排查用） |
+| `drill` | `--dry-run` | 只打印计划、不建任何容器。⚠️ 仍会探测容器引擎，机器上没有可用的 docker/podman 会直接失败 |
+| `drill` | `--no-pull` | 镜像不在本地就**直接失败**，不尝试 pull（离线机器 / CI 用） |
+| `drill` | `--skip-hash` | 跳过成员级哈希比对（会打 WARN，结论行也会注明"不含逐成员比对"） |
+| `drill` | `--skip-preflight` | 跳过**归档侧的静态预检**（清单/成员表读不出来也照样上传、文件名不合白名单也照样传），用来验证 **server 侧的护栏**会不会挡住 —— 期望的就是恢复接口回 400 |
+| `drill` | `--as <文件名>` | 用别的文件名上传这份归档，用来试上传名白名单。会记一条 WARN 提醒"真实用户拿到的是原名" |
+
+⚠️ 一个容易误会的点：`./vanblog.sh verify <归档>`（老的宽松版）**不认识任何 flag**，
+多写的开关会被静默忽略；`vanblog-drill.sh verify` 则会打一行黄字「忽略未知开关」。
+所以 `verify --strict` 这种写法**不会生效**，要严格请用 `backup-status --strict` 或 `verify-deep`。
 
 服务端那边也做了对应的事：**每次导出（手动与 cron 都算）写完就自校验**（成员级哈希，
 默认开启），失败会返回 HTTP 400、把状态记进 `<备份目录>/backup-status.json`

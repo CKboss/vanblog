@@ -22,7 +22,7 @@ order: 1
 
 ![](https://pic.mereith.com/img/a6438e873dcbd601d23bdbf1a7fad74f.clipboard-2023-05-06.webp)
 
-如想关闭此功能，可在后台的 `系统设置/站点配置/布局设置` 中关闭。
+如想关闭此功能，可在后台的 `站点管理 / 系统设置 / 站点配置 / 布局设置` 中关闭。
 
 ## 创建新文章
 
@@ -233,6 +233,16 @@ order: 1
   默认开启的代价很小（实测单条均值 ≈3.1KB，59 篇 × 10 ≈ 1.76MB），换来的是
   「改坏了/被协作者覆盖了」能自己救回来；
 - 彻底删除文章时历史版本一起清掉；草稿不记版本。
+
+::: note 想写脚本批量处理时对应的接口
+
+都在 `/api/admin/article` 下，要后台登录态（`token` 头）：回收站是 `GET deleted`（列已删）、
+`PUT :id/restore`（恢复）、`DELETE :id/purge`（彻底删除）；历史版本是 `GET :id/revisions`、
+`GET :id/revisions/:revisionId`（看某一条）、`PUT :id/revisions/:revisionId/restore`（回滚）；
+另有 `POST import-mdz`（导入 Typora 图片包）与 `POST backfill-pathname`（就是后台那个
+「生成拼音路径」按钮，给路径名为空的老文章批量补别名）。
+
+:::
 
 ## 定时发布（publishAt）
 

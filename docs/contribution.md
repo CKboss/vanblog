@@ -75,7 +75,7 @@ Vanblog 分为以下几个部分，构建后将整合到一个 `docker` 容器�
 - 前台： [next.js](https://nextjs.org/)（14，pages router）、[react.js](https://reactjs.org/)（18）、[tailwind-css](https://tailwindcss.com/)
 - 后台： [ant design pro](https://pro.ant.design/zh-CN/)、[ant design](https://ant.design/)（umi 3 + antd 4 + React 17）
 - 后端： [nest.js](https://nestjs.com/)（10）、[mongoDB](https://www.mongodb.com/)（mongoose 8）
-- CI / 发布： [github-actions](https://docs.github.com/cn/actions)（`server-test` 跑单元与 e2e、`admin-e2e` 跑 playwright、
+- CI / 发布： [github-actions](https://docs.github.com/cn/actions)（`server-test` 跑 shell 守卫 + 三个包的单元测试 + 10 套要真 mongod 的 e2e、`admin-e2e` 跑后台单元测试 + playwright、
   `publish-ghcr` 用 docker buildx 构建并推镜像、`release-fork` 建 Release）；本机验证镜像用
   [podman](https://podman.io/) 或 docker 跑 `scripts/build-image-local.sh`
 - 文档： [vuepress](https://vuejs.press/zh/)、[vuepress-theme-hope](https://theme-hope.vuejs.press/zh/)
@@ -232,6 +232,26 @@ for t in scripts/tests/*.test.sh; do bash "$t"; done            # 部署脚本�
 （拒绝指向 27017 那个开发库、拒绝真实库名），要跑得先按文件头注释起一个一次性的 mongod。
 `admin` 的 playwright e2e 需要先装浏览器，且默认的 3002 端口与开发栈冲突（本地跑要把 7 个 `*_E2E_PORT` 都改开）。
 
+### CI 会跑什么、什么时候跑
+
+两个测试 workflow（`.github/workflows/server-test.yml`、`admin-e2e.yml`）的触发条件**完全一样**：
+push 或 pull_request 到 `master` / `dev/dsh`，**且**改动落在这些路径里 ——
+`packages/**`、`scripts/**`、`Dockerfile`、`entrypoint.sh`、`caddyTemplate.json`、
+`caddyFallbackTemplate.json`、`docker-compose/**`、`pnpm-lock.yaml`、`package.json`、`patches/**`。
+
+⚠️ **`docs/**` 不在这个清单里**：只改文档的提交**不会触发任何 CI**。所以两条文档守卫必须本地跑
+（`bash scripts/tests/docs-links.test.sh` 与 `bash scripts/tests/docs-consistency.test.sh`），
+CI 不会替你兜底。
+
+| workflow | 跑什么 |
+| --- | --- |
+| `server-test` | 6 套 shell 守卫（`dockerfile-alpine-sharp`、`vanblog-update`、`vanblog-reset-https`、`vanblog-uninstall`、`vanblog-download-fallback`、`reverse-proxy-host-header`）→ 三个包的单元测试（server jest、website vitest、admin `node --test`）→ **10 套要真 mongod 的 e2e**（backup-restore、post-ISR、admin-meta、force-login-comment、waline-extra-options、CDN-URL、word-count、friend-link、page-copy、admin-cache-control） |
+| `admin-e2e` | 后台单元测试 → 装 playwright chromium → `playwright test --list` 先做一次便宜的配置自检 → mermaid e2e → 失败时把 playwright 报告与 trace 当 artifact 上传 |
+
+两边都用 **Node 24** 与 `pnpm install --frozen-lockfile`，所以"本机过了 CI 没过"通常是 Node 版本或
+lockfile 没提交导致的。剩下的 shell 守卫（`scripts/tests/` 下共 24 个文件）CI **只跑上面那 6 个**，
+其余要本地 `for t in scripts/tests/*.test.sh; do bash "$t"; done` 全跑一遍。
+
 ## 镜像构建
 
 直接在根目录用 `Dockerfile` 打包就行，具体看下面第二点。
@@ -310,6 +330,6 @@ pnpm release
 | 标签 | 含义 |
 | --- | --- |
 | `v2026.9.2` 这类发布号 | 对应 tag 的发版构建，**钉版本 / 回滚用这个** |
-| `latest` | 最近一次发版构建（与最新发布号同一个 digest） |
+| `latest` | 最近一次**发布构建**；⚠️ 但手动触发 `publish-ghcr` 也会推 `latest`（它的 enable 条件同时包含 `refs/heads/dev/dsh`），所以手动构建过一次之后，`latest` 就不再等于最新发布号了 —— 要可复现请用发布号 |
 | `dev-dsh` | `dev/dsh` 分支的**手动**构建（分支推送不会自动构建，所以它可能落后于发布版） |
 | `dev-dsh-<短sha>` | 某一次手动构建，按提交号回滚用 |
