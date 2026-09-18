@@ -25,7 +25,7 @@ import { InitProvider } from 'src/provider/init/init.provider';
 import { PipelineProvider } from 'src/provider/pipeline/pipeline.provider';
 import { ApiToken } from 'src/provider/swagger/token';
 
-@ApiTags('tag')
+@ApiTags('auth')
 @Controller('/api/admin/auth/')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);

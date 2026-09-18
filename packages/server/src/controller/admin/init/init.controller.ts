@@ -172,6 +172,23 @@ export class InitController {
     }
   }
 
+  /**
+   * 初始化向导上传 logo / favicon。
+   *
+   * ⚠️ **这是三条 init 接口里唯一不要求初始化密钥的一条**，而且是**故意的**，理由与代价都写清楚：
+   *  - 为什么不能加闸门：向导的上传组件（admin 的 `UrlFormItem`，`isInit` 时打这条接口）
+   *    **手里没有密钥** —— 密钥输入框要等提交 `/init` 被 400 拒绝之后才出现（页面加载时故意不探测，
+   *    免得烧掉 `/api/admin/init*` 的 5 次/10 分钟预算）。给这条加 `runSetupKeyGate` 会让
+   *    "先传个 logo 再填表"的正常流程直接失败，除非同时改后台交互时序。
+   *  - 因此暴露面是：站点未初始化期间，匿名可以往图床传图片。爆炸半径被三层限制住 ——
+   *    只在 `checkHasInited()` 为假时开放（下面第一行就查，且 `InitMiddleware` 之外还自查一次）、
+   *    init 桶限流 5 次/10 分钟/IP（`utils/rateLimit.ts` 按前缀覆盖 `/api/admin/init`）、
+   *    以及 `staticProvider.upload` 自身的类型/大小校验。**不能**用它接管站点。
+   *  - 想彻底关掉这个窗口只有一个办法：零接触初始化（`VANBLOG_ADMIN_USER` + `VANBLOG_ADMIN_PASSWORD`/`_FILE`），
+   *    那样站点在开始监听之前就已初始化，这条接口永远返回「已初始化」。
+   *  如果哪天决定给它加闸门，记得同步改 admin 的上传时序，并更新 `docs/reference/api.md` 与
+   *  `docs/advanced/security.md` 里"三条 init 接口都要密钥"的说法（现在写的是两条要、这条不要）。
+   */
   @Post('/init/upload')
   @UseInterceptors(FileInterceptor('file'))
   async uploadImg(@UploadedFile() file: any, @Query('favicon') favicon: string) {

@@ -198,7 +198,11 @@ async function bootstrap() {
   // ⚠️ **默认关**（站长决定）。以前默认开，理由是后台「关于」与「Token」两个页面深链到 /swagger；
   // 那两处已改成指向仓库里的 API 文档并说明如何打开实时 swagger，所以那个理由不成立了。
   // 关掉的收益：少一个匿名可达、且此前**完全不受限流**的 59KB 响应（第四轮审计 B1），
-  // 也少一份把 111 条后台路由与登录接口请求形状直接摊给扫描器的地图。
+  // 也少一份把全部后台路由与登录接口请求形状直接摊给扫描器的地图。
+  // ⚠️ 这里以前写着具体条数（111），而实际是 149 条挂 AdminGuard 的路由方法
+  //    （35 个 controller 文件 / 180 个路由方法，2026-09-18 逐个装饰器数出来的）。
+  //    条数每加一个接口就变，写在这里只会腐 ⇒ 不写数字。要现数：
+  //    grep -rc "@\\(Get\\|Post\\|Put\\|Patch\\|Delete\\)" packages/server/src/controller/
   // 需要时显式打开：VANBLOG_SWAGGER=true（只认字面 true，打错的值不会静默打开）。
   if (process.env.VANBLOG_SWAGGER === 'true') {
     const document = SwaggerModule.createDocument(app, config);
