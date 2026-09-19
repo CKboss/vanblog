@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import type { Request } from 'express';
 import { imageSize } from 'image-size';
 import { isAvifBuffer } from './avif';
+import { MAX_IMAGE_PIXELS } from './imageLimits';
 
 /**
  * 上传体积上限与「真的是图片吗」校验。
@@ -16,8 +17,14 @@ import { isAvifBuffer } from './avif';
 export const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const MAX_GENERIC_UPLOAD_BYTES = 200 * 1024 * 1024;
 export const MAX_JSON_IMPORT_BYTES = 200 * 1024 * 1024;
-/** 像素上限：隐写水印要把整图解码成 raw RGBA，超大图会瞬间吃掉上 GB 堆内存。 */
-export const MAX_IMAGE_PIXELS = 100_000_000;
+/**
+ * 像素上限：隐写水印要把整图解码成 raw RGBA，超大图会瞬间吃掉上 GB 堆内存。
+ *
+ * ⚠️ **常量本体与全部理由都在 `./imageLimits`**，这里只是 re-export，让既有
+ * `from './uploadLimits'` 的导入继续可用。同一个数还被 sharp 的 `limitInputPixels` 用 ——
+ * 两处必须同源，否则"更宽的那个"就是实际上限（见 imageLimits.ts 的说明）。
+ */
+export { MAX_IMAGE_PIXELS };
 
 /** 允许作为「图片」落盘的类型；svg 故意不在里面（可执行脚本）。 */
 export const ALLOWED_IMAGE_TYPES = [

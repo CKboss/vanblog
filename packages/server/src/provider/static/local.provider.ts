@@ -16,6 +16,11 @@ import { rmDir } from 'src/utils/deleteFolder';
 import { readDirs } from 'src/utils/readFileList';
 import { checkOrCreateFile } from 'src/utils/checkFile';
 import { normalizeCustomPageRel, resolveCustomPageAbs } from 'src/utils/customPagePath';
+import {
+  describeUnsafeNameForLog,
+  resolveStoredFileAbs,
+  resolveWithinStorageAbs,
+} from 'src/utils/storedFileName';
 @Injectable()
 export class LocalProvider {
   private readonly logger = new Logger(LocalProvider.name);
@@ -79,7 +84,14 @@ export class LocalProvider {
     extraMeta?: Record<string, any>,
   ) {
     const storagePath = StoragePath[type] || StoragePath['img'];
-    const srcPath = path.join(config.staticPath, storagePath, fileName);
+    // ⚠️ 落盘前**证明**路径没跑出 `<static>/<storagePath>`：`resolveStoredFileAbs` 会先拒掉
+    //    含分隔符 / `..` / NUL 的名字，再用 path.resolve + path.relative 做容器化校验。
+    //    以前这里是裸的 `path.join(...)` + `writeFileSync`，而图片名只经过
+    //    `decodeUploadFileName()`（只修 latin1→utf8，不剥分隔符）⇒ 唯一挡住路径穿越的是
+    //    busboy 默认对 filename 做 basename()。那是**依赖项的默认值**，不是我们的防线：
+    //    一个 `preservePath: true` 或换上传库就变成任意路径写。
+    //    附件（saveAttachment）与缩略图（saveThumb）早就有这道检查，图片这条路一直没有。
+    const srcPath = resolveStoredFileAbs(config.staticPath, storagePath, fileName);
     let realPath = `/static/${type}/${fileName}`;
 
     if (isProd()) {
@@ -205,9 +217,24 @@ export class LocalProvider {
   }
 
   async deleteFile(fileName: string, type: StaticType) {
+    const storagePath = StoragePath[type] || StoragePath['img'];
+    // ⚠️ 删除前先**证明**目标在 `<static>/<storagePath>` 里面。
+    //    名字来自数据库记录，而记录可以由「导入 JSON」写入 ⇒ `../../..` 这种名字
+    //    是可能真的出现在库里的；`fs.rmSync` 又是不可逆操作，所以这里既不能照删
+    //    （会删到静态目录外），也不能悄悄当没事发生（要留下可查的 WARN）。
+    //    用 resolveWithinStorageAbs 而不是 resolveStoredFileAbs：自定义页面的名字
+    //    legitimately 是多段的（`sub/page.html`），不能一律拒分隔符。
+    let srcPath: string;
     try {
-      const storagePath = StoragePath[type] || StoragePath['img'];
-      const srcPath = path.join(config.staticPath, storagePath, fileName);
+      srcPath = resolveWithinStorageAbs(config.staticPath, storagePath, fileName);
+    } catch (err) {
+      this.logger.warn(
+        `拒绝删除目录外的路径（${storagePath}）：${describeUnsafeNameForLog(fileName)} —— ` +
+          `记录里的文件名非法（可能来自导入的 JSON），已跳过删除：${(err as Error)?.message || err}`,
+      );
+      return;
+    }
+    try {
       fs.rmSync(srcPath);
     } catch (err) {
       this.logger.warn(

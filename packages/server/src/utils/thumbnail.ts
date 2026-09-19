@@ -2,6 +2,7 @@ import Jimp from 'jimp';
 import path from 'path';
 import { AVIF_QUALITY, tryLoadSharp } from './avif';
 import { THUMB_WEBP_QUALITY } from './imageOptions';
+import { sharpInputOptions } from './imageLimits';
 
 /**
  * 图片管理列表用的缩略图：默认 300px 宽的 webp，一般 10~20KB。
@@ -50,12 +51,12 @@ export async function generateThumbnail(
   const sharp: any = tryLoadSharp();
   if (sharp) {
     try {
-      const buffer: Buffer = await sharp(srcImage)
+      const buffer: Buffer = await sharp(srcImage, sharpInputOptions())
         .rotate()
         .resize({ width, withoutEnlargement: true })
         .webp({ quality: THUMB_WEBP_QUALITY })
         .toBuffer();
-      const meta = await sharp(buffer).metadata();
+      const meta = await sharp(buffer, sharpInputOptions()).metadata();
       return {
         ok: true,
         buffer,
@@ -138,12 +139,12 @@ export async function generateThumbnailAvif(
     return { ok: false, reason: 'no-engine' };
   }
   try {
-    const buffer: Buffer = await sharp(srcImage)
+    const buffer: Buffer = await sharp(srcImage, sharpInputOptions())
       .rotate()
       .resize({ width, withoutEnlargement: true })
       .avif({ quality: AVIF_QUALITY })
       .toBuffer();
-    const meta = await sharp(buffer).metadata();
+    const meta = await sharp(buffer, sharpInputOptions()).metadata();
     return {
       ok: true,
       buffer,

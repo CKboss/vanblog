@@ -2,6 +2,7 @@ import { DANGEROUS_INLINE_EXTENSIONS } from './uploadLimits';
 import { BadRequestException } from '@nestjs/common';
 import { compressImgToWebp, CWEBP_QUALITY } from './webp';
 import { compressImgToAvif, tryLoadSharp } from './avif';
+import { sharpInputOptions } from './imageLimits';
 import { attachmentHeadersFor, isAttachmentPath } from './attachment';
 
 export const COMPRESS_FORMATS = ['webp', 'avif'] as const;
@@ -123,6 +124,6 @@ export async function compressImg(
     if (!sharp) {
       throw err;
     }
-    return sharp(srcImage).webp({ quality: Number(CWEBP_QUALITY) }).toBuffer();
+    return sharp(srcImage, sharpInputOptions()).webp({ quality: Number(CWEBP_QUALITY) }).toBuffer();
   }
 }

@@ -1,5 +1,6 @@
 import Jimp from 'jimp';
 import { tryLoadSharp } from './avif';
+import { sharpInputOptions } from './imageLimits';
 
 /**
  * 上传时把过大的图等比缩小到「长边 <= maxEdge」（默认 1920，即 1080p 级）。
@@ -55,7 +56,7 @@ export async function capImageResolution(
 }
 
 async function resizeWithSharp(sharp: any, srcImage: Buffer, limit: number): Promise<ResizeResult> {
-  const meta = await sharp(srcImage).metadata();
+  const meta = await sharp(srcImage, sharpInputOptions()).metadata();
   const width = Number(meta?.width) || 0;
   const height = Number(meta?.height) || 0;
   if (!width || !height) {
@@ -65,11 +66,11 @@ async function resizeWithSharp(sharp: any, srcImage: Buffer, limit: number): Pro
     return { buffer: srcImage, width, height, resized: false, skipped: 'already-small' };
   }
   const format = String(meta?.format || 'png').toLowerCase();
-  const pipeline = sharp(srcImage)
+  const pipeline = sharp(srcImage, sharpInputOptions())
     .rotate() // 按 EXIF 摆正，否则缩完方向就错了
     .resize({ width: limit, height: limit, fit: 'inside', withoutEnlargement: true });
   const buffer: Buffer = await pipeline.toFormat(format, ENCODE_OPTIONS[format]).toBuffer();
-  const out = await sharp(buffer).metadata();
+  const out = await sharp(buffer, sharpInputOptions()).metadata();
   return {
     buffer,
     width: Number(out?.width) || undefined,

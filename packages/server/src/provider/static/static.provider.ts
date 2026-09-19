@@ -50,6 +50,7 @@ import {
   decodeUploadFileName,
   displayFileName,
 } from 'src/utils/attachment';
+import { sanitizeStoredImageName } from 'src/utils/storedFileName';
 import { escapeRegExp } from 'src/utils/regex';
 import {
   applyImageUrlMap,
@@ -239,8 +240,18 @@ export class StaticProvider {
       }
     }
 
-    const pureFileName = arr.slice(0, arr.length - 1).join('.');
-    let fileName = currentSign + '.' + originalName;
+    // ⚠️ 图片落盘名过一遍与**附件同一套**净化（剥路径分隔符/控制字符/引号/前导点，
+    //    超长保留后缀截断）。以前这里直接用 `originalName`，而 `decodeUploadFileName()`
+    //    只把 latin1 还原成 utf8（修中文名乱码），**不剥分隔符**。
+    //    今天没出事的原因不在我们代码里：`preservePath` 全仓库未设置 ⇒ busboy 默认对
+    //    multipart 的 filename 做 `basename()`，`/` 与 `..` 进不到 originalname。
+    //    那是**依赖项的默认值**，一次配置改动或换上传库就变成任意路径写；
+    //    而且 `transferRemoteImages()` 走的是 `filenameFromRemote()`（从远程 URL 造名字），
+    //    压根不经过 busboy。落盘处（`local.provider.saveImg`）另有容器化校验兜底。
+    const safeImageName = sanitizeStoredImageName(originalName);
+    const safeNameArr = safeImageName.split('.');
+    const pureFileName = safeNameArr.slice(0, safeNameArr.length - 1).join('.');
+    let fileName = currentSign + '.' + safeImageName;
     if (type == 'customPage') {
       fileName = normalizeCustomPageRel(customPathname, originalName);
     }

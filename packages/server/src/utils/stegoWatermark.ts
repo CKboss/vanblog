@@ -1,6 +1,7 @@
 import Jimp from 'jimp';
 import { tryLoadSharp } from './avif';
 import { embedStegoIntoRgba, extractStegoFromRgba } from './stego';
+import { sharpInputOptions } from './imageLimits';
 
 /**
  * 隐写水印的图片适配层：把「像素级的 embed/extract」（utils/stego.ts）接到真实图片上。
@@ -55,9 +56,9 @@ export function isStegoSupportedFormat(format?: string): boolean {
 }
 
 async function readRawWithSharp(sharp: any, src: Buffer): Promise<RawImage | null> {
-  const meta = await sharp(src).metadata();
+  const meta = await sharp(src, sharpInputOptions()).metadata();
   const format = String(meta?.format || '').toLowerCase();
-  const { data, info } = await sharp(src)
+  const { data, info } = await sharp(src, sharpInputOptions())
     .rotate() // 按 EXIF 摆正，避免写回后方向变化
     .ensureAlpha()
     .raw()
@@ -148,9 +149,12 @@ export async function embedStegoWatermark(
 
   try {
     const buffer = sharp
-      ? await sharp(raw.data, {
-          raw: { width: raw.width, height: raw.height, channels: 4 },
-        })
+      ? await sharp(
+          raw.data,
+          sharpInputOptions({
+            raw: { width: raw.width, height: raw.height, channels: 4 },
+          }),
+        )
           .toFormat(raw.format, REENCODE_OPTIONS[raw.format])
           .toBuffer()
       : await writeWithJimp(raw, srcImage);

@@ -1,10 +1,11 @@
 import { spawnSync } from 'child_process';
 import { writeFileSync, readFileSync, rmSync } from 'fs';
 import path from 'path';
+import { sharpInputOptions, SharpInputLimits } from './imageLimits';
 
 export const AVIF_QUALITY = 50;
 
-export type SharpEncoder = (input: Buffer) => {
+export type SharpEncoder = (input: Buffer, options?: SharpInputLimits) => {
   avif: (opts: { quality: number }) => { toBuffer: () => Promise<Buffer> };
   webp: (opts: { quality: number }) => { toBuffer: () => Promise<Buffer> };
 };
@@ -79,7 +80,7 @@ export function isAvifBuffer(buf: Buffer): boolean {
 export async function compressImgToAvif(srcImage: Buffer): Promise<Buffer> {
   const sharp = tryLoadSharp();
   if (sharp) {
-    return sharp(srcImage).avif({ quality: AVIF_QUALITY }).toBuffer();
+    return sharp(srcImage, sharpInputOptions()).avif({ quality: AVIF_QUALITY }).toBuffer();
   }
   return compressImgToAvifCli(srcImage);
 }

@@ -1,5 +1,6 @@
 import Jimp from 'jimp';
 import { tryLoadSharp } from './avif';
+import { sharpInputOptions } from './imageLimits';
 
 /**
  * 按指定格式重新编码图片。
@@ -41,7 +42,7 @@ export async function encodeImageToFormat(
   const sharp: any = tryLoadSharp();
   if (sharp) {
     try {
-      return await sharp(srcImage).rotate().toFormat(target, options).toBuffer();
+      return await sharp(srcImage, sharpInputOptions()).rotate().toFormat(target, options).toBuffer();
     } catch {
       // 落到 Jimp 兜底
     }
