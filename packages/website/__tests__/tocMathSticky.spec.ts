@@ -23,7 +23,12 @@ describe('tocMath 的加载通知', () => {
 
     // 1) 先触发加载（等价于组件首次渲染时 renderTocLabelHtml 的行为）
     const first = mod.renderTocLabelHtml('比较 $A$<$B$');
-    expect(first).toContain('$A$'); // 还没加载完，按原文返回
+    // ⚠️ 这条以前断言 `toContain('$A$')`，等于把"插件没加载就按原文返回"钉成了契约。
+    // 而那个原文会被消费点当 HTML 注入（`core.tsx:190-191` 的 dangerouslySetInnerHTML），
+    // 是公开站源的存储型 XSS（mXSS），详见 __tests__/tocMathXss.spec.ts。
+    // 本用例真正要钉的是**通知的粘性**（下面第 2、3 步），不是回退值长什么样：
+    // 现在回退值是 null，消费点改渲染纯文本，加载完仍会重渲染成 KaTeX。
+    expect(first).toBeNull();
     await mod.ensureTocMathLoaded();
     expect(mod.isTocMathLoaded()).toBe(true);
 

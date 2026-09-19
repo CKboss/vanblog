@@ -89,7 +89,14 @@ describe("public TOC math labels (#264)", () => {
     const items = parseNavStructure(PLAIN_MD);
     expect(items[0].text).toBe("Clean Title");
     expect(tocLabelNeedsMath(items[0].text)).toBe(false);
-    expect(renderTocLabelHtml(items[0].text)).toBe("Clean Title");
+    // ⚠️ 这条以前断言 `toBe("Clean Title")`，也就是把"原样返回未转义标题文本"钉成了契约。
+    // 那个契约本身就是漏洞：消费点 `core.tsx:190-191` 会把非 null 的返回值塞进
+    // `dangerouslySetInnerHTML`，而标题文本是**已解码**的（`utils/headingText.ts`），
+    // 里面可以有被 markdown 转义过的 `<img onerror=…>` ⇒ sanitize 之后又被当 HTML 二次注入（mXSS）。
+    // 现在返回 null，消费点走"把 each.text 当 React 子节点渲染"的安全分支（`:193`），
+    // 用户看到的仍然是 `Clean Title`（React 会转义），可见行为一字未变。
+    // 详见 __tests__/tocMathXss.spec.ts。
+    expect(renderTocLabelHtml(items[0].text)).toBeNull();
   });
 
   it("keeps nested TOC completeness for plain headings", () => {

@@ -89,16 +89,35 @@ function unwrapSingleParagraph(html: string): string {
  * Render a public TOC label with the same KaTeX path as the article body.
  * Scroll matching stays on the unparsed heading text; only the visible label
  * goes through `@bytemd/plugin-math-ssr`.
+ *
+ * ⚠️ 返回 `null` 表示"没有可以安全当 HTML 用的东西"，调用方（`core.tsx`）必须走
+ * "把标题文本当 React 子节点渲染"那条分支。**任何情况下都不要返回未转义的原文** ——
+ * 详见下面两个回退分支里的说明。
  */
-export function renderTocLabelHtml(text: string): string {
+export function renderTocLabelHtml(text: string): string | null {
   const source = String(text || "");
   if (!tocLabelNeedsMath(source)) {
-    return source;
+    // 不含 `$` ⇒ 根本没有非走 HTML 不可的理由，返回 null 让调用方渲染纯文本。
+    //
+    // ⚠️ 这里以前是 `return source`，那是一个**公开站源的存储型 XSS**：
+    // 调用方把非 null 的返回值直接塞进 `dangerouslySetInnerHTML`（`core.tsx:190-191`），
+    // 而 `source` 是标题的 `data-id` —— 来自 `utils/headingText.ts` 的 `collectHeadingText`，
+    // 它返回的是**已解码**的 text 节点值。用反斜杠转义（`\<img src=1 onerror=…\>`）、
+    // HTML 实体或行内代码都能让 `<img onerror=…>` 落进 text 节点：markdown 阶段它是纯文本、
+    // sanitize 也放行（因为不是 html 节点），到了这里却被当 HTML 二次注入 ⇒ 典型 mXSS。
+    // 触发者不限于管理员：有 `article:create` / `article:update` 的协作者就行
+    // （`server/src/types/access/access.ts`），而后台 token 在同源 localStorage 里，
+    // 管理员用同一浏览器打开那篇文章即被接管。
+    return null;
   }
   if (!mathPluginFactory) {
-    // 首次遇到带公式的标题：触发加载，先返回原文；加载完订阅者会重渲染
+    // 首次遇到带公式的标题：触发加载，加载完订阅者会重渲染。
     void ensureTocMathLoaded();
-    return source;
+    // ⚠️ 同样**不能**返回原文（理由同上，而且这条分支更危险）：首次渲染**必然**走它 ——
+    // SSR 阶段动态 import 还没 resolve，所以 payload 会直接进服务端渲染出的 HTML，
+    // 不需要等客户端水合。返回 null 时用户看到的是纯文本标题（`$E=mc^2$` 也可读），
+    // 功能不丢：`onTocMathReady` 通知一到就会重渲染成 KaTeX。
+    return null;
   }
   const html = getProcessor({
     plugins: [mathPluginFactory()],
