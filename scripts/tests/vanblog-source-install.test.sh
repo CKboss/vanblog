@@ -65,6 +65,10 @@ exit 0
 GIT
 
   # 假 docker：build 成功；inspect 之类一律 0
+  # ⚠️ DOCKER_PULL_FAIL=1 时 `image inspect` **也要失败**：真实场景里"拉不到"通常意味着本地
+  #    也没有那一份，而 pull_fork_image 现在会在 pull 失败后回落到本地镜像 —— 桩如果让
+  #    inspect 永远成功，「拉不到镜像时 update 返回非 0」这条断言就会**假绿**（回落会让它返回 0）。
+  #    要模拟"拉不到但本地有一份"，另外设 DOCKER_LOCAL_IMAGE=1。
   cat >"${TEST_DIR}/bin/docker" <<'DOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >>"${CMDLOG}"
@@ -74,6 +78,11 @@ fi
 if [[ "${DOCKER_PULL_FAIL:-0}" == "1" && "$1" == "pull" ]]; then
   echo "Error response from daemon: manifest unknown" >&2
   exit 1
+fi
+if [[ "${DOCKER_PULL_FAIL:-0}" == "1" && "${DOCKER_LOCAL_IMAGE:-0}" != "1" ]]; then
+  case "$1 $2" in
+    "image inspect") exit 1 ;;
+  esac
 fi
 exit 0
 DOCKER
@@ -97,6 +106,8 @@ source_script() {
   # 构建相关的新变量也要清：用例之间不能互相污染
   unset VANBLOG_BUILD_SERVER VANBLOG_BUILD_MODE VANBLOG_FORCE_BUILD VANBLOG_NPM_REGISTRY
   unset VANBLOG_INSTALL_MODE VANBLOG_IMAGE_REF DOCKER_PULL_FAIL
+  # 离线回落相关的两个开关也要清：用例之间不能互相污染
+  unset DOCKER_LOCAL_IMAGE VANBLOG_SKIP_PULL
   # shellcheck disable=SC1090
   source "${SCRIPT}"
 }
@@ -556,13 +567,19 @@ assert_not_contains "$(cat "${CMDLOG}")" "down --remove-orphans" "拉不到镜�
 assert_not_contains "$(cat "${CMDLOG}")" "docker build" "image 模式下不会偷偷构建"
 unset DOCKER_PULL_FAIL
 
-# 3) 拉取失败要按原因给出具体下一步（ghcr 包默认 private / 架构不匹配）
+# 3) 拉取失败要按原因给出具体下一步（标签不存在 / 架构不匹配 / 网络不通）
 setup_case
 source_script
 docker() { echo "Error response from daemon: denied: requested access to the resource is denied"; return 1; }
 OUT="$(pull_fork_image 2>&1)"
-assert_contains "${OUT}" "Change visibility" "denied 时提示把 package 改成 Public"
-assert_contains "${OUT}" "pkgs/container/vanblog" "denied 时给出 package 设置页地址"
+# ⚠️ 这里以前断言的是 "Change visibility"（提示去把 ghcr package 改成 Public）。那个包**早就是
+#    public** 了（匿名取 manifest 与 tags/list 都是 200），文案过时到会把用户支去做无用功，
+#    还会让人以为项目根本没发布。断言随文案一起升级，并加一条"旧文案不许回来"。
+assert_contains "${OUT}" "public" "denied 时说清这个包在 ghcr 上是 public"
+assert_contains "${OUT}" "标签写错了" "denied 时给出第一个真实原因：标签不存在"
+assert_contains "${OUT}" "限流" "denied 时给出第三个真实原因：匿名拉取限流"
+assert_not_contains "${OUT}" "Change visibility" "不再建议去改 package 可见性（早已 public，那条建议是过时的）"
+assert_contains "${OUT}" "pkgs/container/vanblog" "denied 时给出 package 页面地址（用来核对标签是否存在）"
 docker() { echo "Error: no matching manifest for linux/arm64/v8"; return 1; }
 OUT="$(pull_fork_image 2>&1)"
 assert_contains "${OUT}" "架构" "架构不匹配时说清楚是架构问题"
@@ -573,6 +590,50 @@ assert_contains "${OUT}" "网络到不了 ghcr.io" "其它失败给出通用解�
 assert_contains "${OUT}" "VANBLOG_IMAGE_REF" "网络类失败给出「换镜像加速地址」这条路"
 assert_contains "${OUT}" "docker save" "网络类失败给出「大机器 save / 本机 load」这条路"
 assert_contains "${OUT}" "VANBLOG_INSTALL_MODE=source" "网络类失败给出「源码构建」这条路"
+
+# 3b) 🔴 离线 / air-gapped：VANBLOG_SKIP_PULL=1 一次都不联网；pull 失败但本地有一份则回落
+#     以前这个函数**无条件 pull**，失败即 return 1 —— 而它失败时打印的建议第 2 条（先 docker load
+#     再用 VANBLOG_IMAGE_REF=vanblog:<tag> 重跑）**仍然会走同一个 pull**，照着自己的建议做也必然失败。
+setup_case
+source_script
+export VANBLOG_SKIP_PULL=1
+# 桩：只有 `image inspect` 允许，任何别的 docker 调用都算"偷偷联网了"
+docker() {
+  case "$1 $2" in
+    "image inspect") return 0 ;;
+    *) echo "不该联网: docker $*" >&2; return 1 ;;
+  esac
+}
+OUT="$(pull_fork_image 2>&1)"
+if [[ $? -eq 0 ]]; then pass "SKIP_PULL=1 且本地有镜像时成功（离线可装机）"; else fail "SKIP_PULL=1 且本地有镜像时应成功"; fi
+assert_contains "${OUT}" "未联网" "明确告诉用户这次没有联网"
+assert_not_contains "${OUT}" "不该联网" "SKIP_PULL=1 时一次网络都不碰（连 docker pull 都不发）"
+# 本地也没有镜像时必须明确失败，并给出把镜像弄到本机的办法
+docker() { echo "不该联网: docker $*" >&2; return 1; }
+OUT="$(pull_fork_image 2>&1)"
+if [[ $? -ne 0 ]]; then pass "SKIP_PULL=1 但本地没有镜像时明确失败"; else fail "SKIP_PULL=1 但本地没镜像时不该假装成功"; fi
+assert_contains "${OUT}" "docker load" "失败时告诉用户怎么把镜像弄到本机"
+assert_contains "${OUT}" "docker save" "并说清镜像要从哪来"
+unset VANBLOG_SKIP_PULL
+
+# pull 失败但本地已有一份 ⇒ 回落继续（这是"断网也能装/能升级失败不瘫"的关键），
+# 但必须把"这份可能不是最新的"说清楚，不能静默用旧镜像。
+docker() {
+  case "$1" in pull) echo "Error: dial tcp: i/o timeout" >&2; return 1 ;; esac
+  case "$1 $2" in "image inspect") return 0 ;; esac
+  return 1
+}
+OUT="$(pull_fork_image 2>&1)"
+if [[ $? -eq 0 ]]; then pass "拉不到但本地有一份时回落成功"; else fail "拉不到但本地有一份时应回落成功"; fi
+assert_contains "${OUT}" "改用本地这份继续" "说清用的是本地镜像"
+assert_contains "${OUT}" "可能不是最新" "并警告它可能不是最新版（不能静默降级）"
+assert_contains "${OUT}" "VANBLOG_SKIP_PULL=1" "顺带告诉用户还有「强制完全离线」这个开关"
+assert_contains "${OUT}" "VAN_BLOG_VERSION" "并给出怎么查这份本地镜像到底是哪一版"
+# 反证：本地也没有时**不许**回落（否则会假装成功，把没镜像的机器带进后面更难懂的失败里）
+docker() { echo "Error: dial tcp: i/o timeout" >&2; return 1; }
+OUT="$(pull_fork_image 2>&1)"
+if [[ $? -ne 0 ]]; then pass "拉不到且本地没有镜像时仍然失败"; else fail "拉不到且本地没镜像时不该回落成功"; fi
+assert_not_contains "${OUT}" "改用本地这份继续" "本地没有镜像时不许声称在用它"
 
 # 4) 从本地构建切到拉镜像后，提示清掉旧镜像（只提示，不自动删）
 setup_case

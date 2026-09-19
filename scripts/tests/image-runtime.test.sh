@@ -317,7 +317,10 @@ fi
 if grep -qE '^HEALTHCHECK ' "${DOCKERFILE}"; then
   pass "有 HEALTHCHECK（前面两次事故都会表现为 unhealthy，而不是"容器在跑但打不开"）"
   # 探的必须是 caddy 的 80（覆盖整条请求路径），不是 server 的 3000
-  if grep -A6 '^HEALTHCHECK ' "${DOCKERFILE}" | grep -q "port:80"; then
+  # ⚠️ 这里断言的是**调用形状**而不是"文件里出现 port:80"这个子串：探测程序改成用函数传端口之后
+  #    （`probe(80,'/api/public/health',…)`），`port:80` 这个字面量就不存在了，而"必须探 caddy 的 80"
+  #    这条要求一个字都没变。钉字面量的断言会在实现改写时**假红**，逼人把它删掉 —— 那才是真危险。
+  if grep -A6 '^HEALTHCHECK ' "${DOCKERFILE}" | grep -q "probe(80,'/api/public/health'"; then
     pass "HEALTHCHECK 探 caddy 的 80 端口（覆盖 caddy → server/前台/后台 整条链路）"
   else
     fail "HEALTHCHECK 没有探 80 端口：caddy 挂了也检查不出来"
@@ -332,6 +335,49 @@ if grep -qE '^HEALTHCHECK ' "${DOCKERFILE}"; then
     fail "HEALTHCHECK 用了 curl，但镜像里没装 curl（会永远 unhealthy）"
   else
     pass "HEALTHCHECK 没有依赖镜像里不存在的 curl"
+  fi
+  # 🔴 必须**也**探前台（Next，3001）：`/api/public/health` 只 ping mongo，前台永久挂掉时容器仍然
+  #    healthy —— 而 `website.provider.ts` 明写着"website 已连续退出 5 次，停止自动重启"，到那一步
+  #    站点已经发不出页面，`restart: always` 却不介入（正是 start.js 头注释里"容器 Up 但站点坏了"那一类）。
+  HC_BLOCK="$(grep -A6 '^HEALTHCHECK ' "${DOCKERFILE}")"
+  if printf '%s' "${HC_BLOCK}" | grep -q "3001"; then
+    pass "HEALTHCHECK 也探前台 3001（前台永久挂掉时会变 unhealthy，而不是"容器在跑但发不出页面"）"
+  else
+    fail "HEALTHCHECK 没有探前台 3001：Next 死了也检查不出来"
+  fi
+  # ⚠️ 探前台必须是**故意不存在的路径**，不能是 `/`：探 `/` 会触发一次真实渲染（ISR 未命中还要回源查库），
+  #    攻击高峰或冷缓存下很容易超时 ⇒ 把"慢但活着"误判成"死了"，进而触发重启，把情况弄得更糟。
+  if printf '%s' "${HC_BLOCK}" | grep -q "__vanblog_health_probe__"; then
+    pass "前台探测打的是故意不存在的路径（Next 路由层直接给 404，不渲染、不查库）"
+  else
+    fail "前台探测路径变了：必须是一个不触发渲染的路径，否则高峰期会误判成坏死"
+  fi
+  # ⚠️ 这条正则必须要求路径**正好**是 `/`（后面紧跟 `,` 或 `)`）：写成 `probe(3001,'/'` 会同时匹配
+  #    合法的 `probe(3001,'/__vanblog_health_probe__'`，而写成旧形状 `port:3001,path:'/'` 则**永远
+  #    不可能命中** —— 那就是空断言（本仓库已经踩过 8 次"断言匹配到解释性注释"，这是同一族的坑：
+  #    断言看着像在保护什么，其实无论代码怎么写它都绿）。
+  if printf '%s' "${HC_BLOCK}" | grep -qE "probe\(3001,'/'[,)]"; then
+    fail "前台探测打的是 `/`（会触发真实渲染，高峰期慢响应会被误判成坏死）"
+  else
+    pass "前台探测没有打 `/`"
+  fi
+  # 每个探测都要有自己的超时，否则一个挂住的连接能把整次检查拖到外层 --timeout 才被砍
+  if printf '%s' "${HC_BLOCK}" | grep -q "timeout:4000"; then
+    pass "每个探测自带 4s 超时（两个并行，最坏约 4s < 外层 --timeout=10s）"
+  else
+    fail "探测没有自带超时（挂住的连接会拖到外层 timeout）"
+  fi
+  # 响应体必须被消费掉，否则 socket 不会归还，健康检查自己会把连接堆起来
+  if printf '%s' "${HC_BLOCK}" | grep -q "res.resume()"; then
+    pass "响应体被 resume 掉（不消费的话 socket 不归还，健康检查自己会堆连接）"
+  else
+    fail "响应体没有被消费（socket 泄漏）"
+  fi
+  # 两个探测必须**都**通过才算健康（只等其中一个的结果就退出 = 另一个形同虚设）
+  if printf '%s' "${HC_BLOCK}" | grep -q "++n===2"; then
+    pass "两个探测都完成才给出结论（不是一个先回来就退出）"
+  else
+    fail "探测结果合并逻辑变了：必须等两个都完成，否则有一个形同虚设"
   fi
 else
   fail "Dockerfile 没有 HEALTHCHECK"

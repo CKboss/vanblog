@@ -706,7 +706,27 @@ EXPOSE 443
 # ⚠️ 镜像里没有 curl，用自带的 node 发请求；start-period 给足，小机器冷启动 + 首次连 mongo 很慢。
 # 注意 Docker 自身不会因为 unhealthy 就重启容器（restart 策略只看退出码），
 # 所以这个检查纯粹是给人和编排系统看的信号，不会引入重启风暴。
+#
+# ⚠️ 2026-09-20：**加了对前台（Next，3001）的独立探测**。以前只打 `/api/public/health`，而那个接口
+#    只 ping mongo（见 `health.controller.ts`），**完全不看前台子进程**。于是前台永久挂掉时容器仍然
+#    healthy：`website.provider.ts:204` 明写着"website 已连续退出 5 次，停止自动重启"—— 到那一步
+#    站点已经发不出页面了，而 `restart: always` 不介入、编排系统也看不出异常（正是 `start.js` 头注释
+#    里说的"容器 Up 但站点坏了"那一类，只是这次坏的是前台而不是 server）。
+#    两个探测各自的判据是**故意不同**的，别顺手统一：
+#      - 80 `/api/public/health`：要求 `statusCode < 500`（mongo 不通时它返回 503 ⇒ unhealthy，这是对的）；
+#      - 3001 `/__vanblog_health_probe__`：**任何** HTTP 响应都算活着（连不上/超时才算死）。
+#        ⚠️ 探的是一个**故意不存在**的路径，不是 `/`：探 `/` 会触发一次真实的页面渲染（ISR 未命中时
+#        还要回源查库），在攻击高峰或冷缓存下很容易超过 timeout ⇒ 把"慢但活着"误判成"死了"，
+#        进而触发重启，把情况弄得更糟。404 是 Next 的路由层直接给的，不渲染、不查库、约 1ms。
+#        而"只要有任何响应就算活着"是因为：前台在跑但库挂了，第 1 个探测已经报出来了；
+#        重启容器修不好 mongo 故障，只会增加churn。
+#    ⚠️ 两个探测**并行**发出，各自 4s 超时（合计最坏约 4s < 外层 --timeout=10s）。
+#    ⚠️ 这段 node 程序与 `docker-compose/docker-compose-template.yml` 里 vanblog 服务的 healthcheck
+#       **必须逐字节相同**（有守卫 `scripts/tests/image-runtime.test.sh` 比对两处），改一处就要改两处。
+#       为什么要两处都写：**podman/buildah 构建会丢掉 Dockerfile 的 HEALTHCHECK 指令**，而 compose
+#       模板原本"故意不写 healthcheck、依赖镜像那条"—— 那个理由在 podman 下不成立，等于 podman 部署
+#       完全没有健康探测，且 podman 的 `restart: always` 也不会因为 unhealthy 而重启。
 HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
-  CMD node -e "require('http').get({host:'127.0.0.1',port:80,path:'/api/public/health',timeout:8000},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1)).on('timeout',function(){this.destroy();process.exit(1)})" || exit 1
+  CMD node -e "const h=require('http');let n=0,bad=0;const done=()=>{if(++n===2)process.exit(bad?1:0)};const probe=(port,path,ok)=>{const r=h.get({host:'127.0.0.1',port:port,path:path,timeout:4000},res=>{res.resume();if(!ok(res.statusCode))bad=1;done()});r.on('timeout',()=>{r.destroy();bad=1;done()});r.on('error',()=>{bad=1;done()})};probe(80,'/api/public/health',s=>s<500);probe(3001,'/__vanblog_health_probe__',()=>true)"
 ENTRYPOINT [ "sh","entrypoint.sh" ]
 # CMD [ "entrypoint.sh" ]

@@ -88,15 +88,54 @@ describe('GET /api/public/health', () => {
     expect(src).toContain('HealthController,');
   });
 
-  it('响应不缓存 + 镜像的 HEALTHCHECK 打的是这个端点', () => {
+  it('响应不缓存 + 镜像与编排的健康探测都钉在这个端点上，并且都探前台', () => {
     const src = read('packages/server/src/controller/public/health.controller.ts');
     expect(src).toContain("@Header('Cache-Control', 'no-store')");
-    const dockerfile = read('Dockerfile');
-    expect(dockerfile).toMatch(/HEALTHCHECK[\s\S]{0,200}path:'\/api\/public\/health'/);
-    // 编排里故意不重复写 healthcheck（镜像里已经有了），这条钉住这个约定不被"顺手加上"
+
+    // ⚠️ Dockerfile 与 YAML **不能**用 code()：那是 TS 剥注释器，会把 `https://` 当行注释、
+    //    被引号与 `$( )` 带偏（实测把整份 shell 脚本啃残）。这里用"整行以 # 开头即注释"的最小剥离。
+    const stripHashComments = (text: string): string =>
+      text
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n');
+
+    const dockerfileRaw = read('Dockerfile');
+    const dockerfile = stripHashComments(dockerfileRaw);
+    // 空转反证：剥离必须真的删掉了内容，否则下面的 not.toMatch 可能只是"匹配不到"而不是"检查过了"
+    expect(dockerfileRaw.length).toBeGreaterThan(dockerfile.length);
+    expect(dockerfileRaw).toContain('__vanblog_health_probe__');
+
+    // 1) 仍然探**全路径**健康端点（上一轮特意从 `/` 换过来的：前台 404 时 `/` 也算"健康"）
+    expect(dockerfile).toMatch(/HEALTHCHECK[\s\S]*probe\(80,'\/api\/public\/health'/);
+    // 2) 判据仍然是 statusCode<500 —— mongo 不通时本端点返回 503，这样才映射成 unhealthy
+    expect(dockerfile).toMatch(/probe\(80,'\/api\/public\/health',s=>s<500\)/);
+    // 3) 🔴 也必须探前台（Next，3001）：`/api/public/health` 只 ping mongo，前台永久挂掉时容器
+    //    仍然 healthy，而 website.provider 明写着"连续退出 5 次后停止自动重启"⇒ 站点发不出页面
+    //    却没人知道，restart: always 也不介入。
+    expect(dockerfile).toMatch(/probe\(3001,'\/__vanblog_health_probe__'/);
+    // 4) 前台探测**不许**打 `/`：那会触发真实渲染（ISR 未命中还要回源查库），高峰期慢响应会被
+    //    误判成坏死并触发重启，把情况弄得更糟。404 由 Next 路由层直接给，不渲染、不查库。
+    expect(dockerfile).not.toMatch(/probe\(3001,'\/'[,)]/);
+    // 5) 两个探测的结果必须合并（只等一个就退出 = 另一个形同虚设）
+    expect(dockerfile).toContain('++n===2');
+
+    // 编排里现在**必须**有一份等价的 healthcheck。⚠️ 这条以前是 `not.toMatch`，钉的是"镜像里已经
+    // 有了，编排不重复写"—— 那个理由在 **podman 下不成立**：podman/buildah 构建会丢掉 Dockerfile
+    // 的 HEALTHCHECK 指令，于是 podman 部署零健康探测，而 podman 的 restart: always 也不会因
+    // unhealthy 重启。两处真相由下面"程序逐字节相同"这条同步，而不是靠人记得。
     const compose = read('docker-compose/docker-compose-template.yml');
     const vanblogSvc = compose.slice(compose.indexOf('  vanblog:'), compose.indexOf('  mongo:'));
-    expect(vanblogSvc).not.toMatch(/^\s{4}healthcheck:/m);
+    expect(stripHashComments(vanblogSvc)).toMatch(/^\s{4}healthcheck:/m);
+    const grab = (text: string, re: RegExp): string => {
+      const m = text.match(re);
+      return m ? m[1] : '';
+    };
+    const dfProg = grab(dockerfile, /CMD node -e "([\s\S]*?)"\s*$/m);
+    const tplProg = grab(vanblogSvc, /test: \["CMD", "node", "-e", "([\s\S]*?)"\]/);
+    expect(dfProg.length).toBeGreaterThan(100); // 空转反证：真的抽到了程序，而不是两个空串相等
+    expect(tplProg.length).toBeGreaterThan(100);
+    expect(tplProg).toBe(dfProg); // 逐字节相同
   });
 });
 

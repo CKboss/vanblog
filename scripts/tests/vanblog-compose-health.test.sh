@@ -52,11 +52,47 @@ assert_contains "${TPL}" "1.25" "模板注释点名 Ubuntu 20.04 的 1.25 会解
 assert_contains "${TPL_CODE}" "- mongo" "模板提交的 depends_on 是列表形式（对老 compose 安全）"
 assert_not_contains "${TPL_CODE}" "condition: service_healthy" "模板没有把长格式写死（写死会把 1.25 的现有安装搞坏）"
 
-# healthcheck 必须挂在 mongo 服务块里（而不是 vanblog）
+# healthcheck 必须挂在 mongo 服务块里（vanblog 服务现在**也**有一份，理由见下面那条升级说明）
 MONGO_BLOCK="$(awk '/^  mongo:[[:space:]]*$/{f=1} f&&/^  [A-Za-z0-9_-]+:[[:space:]]*$/&&$1!="mongo:"{f=0} f' "${TEMPLATE}")"
 assert_contains "${MONGO_BLOCK}" "healthcheck:" "healthcheck 在 mongo 服务块里"
 VANBLOG_BLOCK="$(awk '/^  vanblog:[[:space:]]*$/{f=1} f&&/^  [A-Za-z0-9_-]+:[[:space:]]*$/&&$1!="vanblog:"{f=0} f' "${TEMPLATE}")"
-assert_not_contains "${VANBLOG_BLOCK}" "healthcheck:" "vanblog 服务没有 healthcheck（镜像自己有 HEALTHCHECK 指令，编排里不重复）"
+# ⚠️ 这条断言以前是 `assert_not_contains "${VANBLOG_BLOCK}" "healthcheck:"`，理由写的是
+#    "镜像自己有 HEALTHCHECK 指令，编排里不重复"。那个理由在 **podman 下不成立**：
+#    podman/buildah 构建会**丢掉** Dockerfile 的 HEALTHCHECK 指令 ⇒ podman 部署**零健康探测**，
+#    而 podman 的 `restart: always` 也不会因为 unhealthy 而重启（要 `--health-on-failure=restart`）。
+#    于是断言被**升级**（不是删除）：vanblog 服务现在**必须有** healthcheck，而且它的探测程序必须
+#    与 Dockerfile 里那段**逐字节相同** —— 两处真相由这条测试同步，而不是靠人记得。
+assert_contains "${VANBLOG_BLOCK}" "healthcheck:" "vanblog 服务有 healthcheck（podman 构建会丢掉镜像的 HEALTHCHECK，编排里必须自己写一份）"
+# ⚠️ 下面这几条必须打在**剥掉注释**的文本上：模板的注释里本来就写着 `start_period`（解释它为什么
+#    需要 3.4 格式）与 `curl`（解释为什么不能用），所以直接对整个服务块断言会**匹配到注释** ——
+#    变异对照实测过：把真的 `start_period: 180s` 那行删掉，断言仍然绿。
+#    这是本仓库第 9 次踩"断言匹配到解释性注释"，所以这里连"剥离确实生效"都要反证一次。
+#    ⚠️ 只能用 `sed '/^[[:space:]]*#/d'`：**绝不要**用 server 那个 `stripCommentsForAnchor`
+#    （那是 TS 剥注释器，会把 `https://` 当行注释、被引号与 `$( )` 带偏，实测把整份 shell 脚本啃残）。
+VANBLOG_BLOCK_CODE="$(printf '%s\n' "${VANBLOG_BLOCK}" | sed '/^[[:space:]]*#/d')"
+if [[ "${VANBLOG_BLOCK}" != "${VANBLOG_BLOCK_CODE}" ]]; then
+  pass "剥注释这一步确实生效（否则下面的断言可能是在匹配注释）"
+else
+  fail "剥注释前后一样：要么模板没有注释（不可能），要么 sed 形状写错了，下面的断言不可信"
+fi
+assert_contains "${VANBLOG_BLOCK_CODE}" "start_period" "vanblog 的 healthcheck **配置里**给了 start_period（冷启动 + 首次连 mongo 很慢，不给足会一起来就 unhealthy）"
+assert_contains "${VANBLOG_BLOCK_CODE}" "healthcheck:" "剥注释后 healthcheck 配置仍然存在（不是在匹配注释里的字）"
+assert_not_contains "${VANBLOG_BLOCK_CODE}" "curl" "vanblog 的 healthcheck 不用 curl（镜像里没装 curl，用了会永远 unhealthy）"
+# 探测程序两处必须逐字节相同（漂移守卫）：Dockerfile 的 HEALTHCHECK 与编排的 healthcheck.test
+DF_HEALTHCHECK_PROG="$(sed -n 's/^  CMD node -e "\(.*\)"$/\1/p' "${ROOT}/Dockerfile")"
+TPL_HEALTHCHECK_PROG="$(printf '%s\n' "${VANBLOG_BLOCK}" | sed -n 's/^ *test: \["CMD", "node", "-e", "\(.*\)"\]$/\1/p')"
+if [[ -n "${DF_HEALTHCHECK_PROG}" && "${DF_HEALTHCHECK_PROG}" == "${TPL_HEALTHCHECK_PROG}" ]]; then
+  pass "编排与 Dockerfile 的健康探测程序逐字节相同（${#DF_HEALTHCHECK_PROG} 字符）"
+else
+  fail "编排与 Dockerfile 的健康探测程序不一致（Dockerfile ${#DF_HEALTHCHECK_PROG} 字符 / 编排 ${#TPL_HEALTHCHECK_PROG} 字符）—— 改一处必须改两处"
+fi
+# 空转反证：抽程序的两条 sed 必须真的抽到东西，否则会拿两个空串比出"相同"
+if [[ ${#DF_HEALTHCHECK_PROG} -gt 100 && ${#TPL_HEALTHCHECK_PROG} -gt 100 ]]; then
+  pass "两处都真的抽到了探测程序（不是两个空串假绿）"
+else
+  fail "探测程序没抽到（sed 形状与文件内容对不上），漂移守卫等于没生效"
+fi
+assert_contains "${TPL_HEALTHCHECK_PROG}" "3001" "编排那份也探前台（3001），不只是 caddy:80"
 
 # YAML 必须能解析，且结构与预期一致（有 python3 才做，没有就跳过并说明）
 if command -v python3 >/dev/null 2>&1; then

@@ -893,14 +893,36 @@ build_vanblog_image() {
 
 # 安装与更新都走这里：源码模式下把 Docker_IMG 换成本地构建出来的 tag
 # 拉本分支的镜像。返回非 0 表示拉不到（还没发布 / 不通 ghcr / 架构不匹配）。
+#
+# ⚠️ 离线 / air-gapped 场景（2026-09-20 修）：这个函数以前**无条件** `docker pull`，
+#    拉不到就 `return 1` —— 而它失败时打印的第 2 条建议（"在大机器上 save、拷过来 load，
+#    再用 VANBLOG_IMAGE_REF=vanblog:<tag> 重跑"）**仍然会走同一个 pull**，于是照着自己的
+#    建议做也必然失败。断网的机器上根本装不起来，而"部署要非常方便"是这个项目的硬要求。
+#    现在有两条出路：
+#      - `VANBLOG_SKIP_PULL=1`：**绝不联网**，只用本地已有的镜像（没有就明确报错）；
+#      - 默认路径：先照常 pull（⚠️ 不能跳过，否则 `latest` 这类会移动的标签永远升不上去），
+#        **pull 失败但本地已有一份**时回落到本地镜像，并把"这不是最新的"说清楚。
 pull_fork_image() {
   if ! command -v docker >/dev/null 2>&1; then
     echo -e "${red}未找到 docker，无法拉取镜像${plain}"
     return 1
   fi
+
+  # ① 显式离线：一次网络都不碰。适合 air-gapped 机器与"我知道本地这份就是我要的"。
+  if [[ "${VANBLOG_SKIP_PULL:-}" == "1" ]]; then
+    if docker image inspect "${VANBLOG_IMAGE_REF}" >/dev/null 2>&1; then
+      echo -e "> ${yellow}VANBLOG_SKIP_PULL=1${plain}：使用本地镜像 ${yellow}${VANBLOG_IMAGE_REF}${plain}（未联网）"
+      return 0
+    fi
+    echo -e "${red}VANBLOG_SKIP_PULL=1 但本机没有这个镜像：${VANBLOG_IMAGE_REF}${plain}"
+    echo -e "${yellow}  先把镜像弄到本机再重跑：在有网的机器上 docker pull + docker save，拷过来 docker load -i <文件>${plain}"
+    echo -e "${yellow}  （或者去掉 VANBLOG_SKIP_PULL=1，让它联网拉取）${plain}"
+    return 1
+  fi
+
   echo -e "> 拉取本分支镜像 ${yellow}${VANBLOG_IMAGE_REF}${plain}"
   # 把输出接住再打出来，这样才能按失败原因给出**具体**的下一步，
-  # 而不是笼统一句"拉取失败"（ghcr 的包默认 private、架构不匹配，都是常见原因）
+  # 而不是笼统一句"拉取失败"（标签不存在、架构不匹配、网络不通，都是常见原因）
   local out rc
   out="$(docker pull "${VANBLOG_IMAGE_REF}" 2>&1)"
   rc=$?
@@ -908,11 +930,26 @@ pull_fork_image() {
   if [[ ${rc} -eq 0 ]]; then
     return 0
   fi
+
+  # ② 拉不到，但本地已经有一份 ⇒ 用它，别让整个安装/更新中止。
+  #    ⚠️ 必须说得很难听：这份可能不是最新的，用户要知道自己跑的是旧版。
+  if docker image inspect "${VANBLOG_IMAGE_REF}" >/dev/null 2>&1; then
+    echo -e "${yellow}⚠️ 拉取失败，但本机已有 ${VANBLOG_IMAGE_REF}，改用本地这份继续。${plain}"
+    echo -e "${yellow}   它可能不是最新版本（联网时才拉得到新的）。想强制只用本地镜像、完全不联网：VANBLOG_SKIP_PULL=1${plain}"
+    echo -e "${yellow}   想看这份本地镜像是哪一版：docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${VANBLOG_IMAGE_REF} | grep VAN_BLOG_VERSION${plain}"
+    return 0
+  fi
+
   case "${out}" in
     *denied*|*unauthorized*|*authentication*)
-      echo -e "${yellow}  看起来是权限问题：ghcr 的 package 默认是 private。${plain}"
-      echo -e "${yellow}  去 https://github.com/CKboss/vanblog/pkgs/container/vanblog${plain}"
-      echo -e "${yellow}  → Package settings → Danger Zone → Change visibility → Public${plain}"
+      # ⚠️ 这里以前写的是"ghcr 的 package 默认是 private，去改成 Public" —— 那个包**早就是 public**
+      #    了（实测匿名取 manifest 与 tags/list 都是 200），照旧文案去改可见性只会白费功夫，
+      #    还会让人以为项目没发布。denied 的真实原因通常是下面三个。
+      echo -e "${yellow}  这个包在 ghcr 上是 public（匿名就能拉），所以 denied 一般不是可见性问题，而是：${plain}"
+      echo -e "${yellow}    - 标签写错了：确认 ${VANBLOG_IMAGE_REF##*:} 真的存在${plain}"
+      echo -e "${yellow}      → https://github.com/CKboss/vanblog/pkgs/container/vanblog${plain}"
+      echo -e "${yellow}    - 中间有个要求登录的镜像加速/代理（换一个，或 docker login ghcr.io 后再试）${plain}"
+      echo -e "${yellow}    - 触发了 ghcr 的匿名拉取限流（等几分钟再试）${plain}"
       ;;
     *"no matching manifest"*|*"not found"*)
       echo -e "${yellow}  没有匹配本机架构（$(uname -m 2>/dev/null || echo 未知)）的镜像：目前只发布 linux/amd64。${plain}"
@@ -2248,6 +2285,95 @@ human_size() {
 #     "不含逐成员比对"），绝不让人把"没查"读成"查过且通过"。
 
 # 给归档记 sha256 sidecar。失败不影响备份本身（备份已经成功了，别反过来报错）。
+# 备份成功后把归档（连同 .sha256 sidecar）复制到**第二个目的地** —— 异地/异盘的最小实现。
+#
+# ⚠️ 为什么内建而不是"叫用户自己 rsync"：归档固定在 <数据目录>/log/vanblog-backups，而 <数据目录>
+#    就是编排挂出来的那个卷 ⇒ **备份和数据在同一个目录树、通常也在同一块盘上**。盘毁、被误删、
+#    被勒索加密时，数据和备份一起没；而"我配了定时备份"这件事本身会让人不去检查。
+#    （`rsync|s3|webdav|rclone` 在脚本与 server 里 0 命中，说明以前完全没有这个能力。）
+# 设计取舍：
+#   - 只做"复制 + 校验 + 按份数清理"，**不引入任何新依赖**（不要求 rsync/rclone/aws-cli）；
+#     目的地可以是另一块盘、NFS 挂载点、或对象存储的 FUSE 挂载 —— 对脚本来说都只是一个目录。
+#   - ⚠️ **目的地出问题绝不能让本地备份算失败**：本地成功 + 镜像失败 = WARN + 返回 0。
+#     理由是备份的价值排序很清楚：手边有一份 >> 远处有一份 >> 因为远处写不进去而两份都没有。
+#   - 复制后必须**校验**（能比对 sha256 就比对，否则退到 zstd -t，再否则比字节数并明说"没真校验"）。
+#   - 清理只碰 `vanblog-full-*.tar.zst` 与 `*.tar.gz` 这两种自己认识的名字，**绝不**用通配删别的。
+mirror_backup_artifacts() { # <归档路径>
+  local src="$1"
+  local dest="${VANBLOG_BACKUP_MIRROR_DIR:-}"
+  [[ -n "${dest}" ]] || return 0            # 没配就什么都不做（默认行为一字不变）
+  [[ -f "${src}" ]] || return 0
+
+  if ! mkdir -p "${dest}" 2>/dev/null; then
+    echo -e "  ${yellow}!${plain} 镜像目的地建不出来：${dest}（本地备份已成功，不影响结果）"
+    return 0
+  fi
+  if [[ ! -w "${dest}" ]]; then
+    echo -e "  ${yellow}!${plain} 镜像目的地不可写：${dest}（本地备份已成功，不影响结果）"
+    return 0
+  fi
+
+  local base name f rc=0
+  base="$(basename "${src}")"
+  # 用临时名写完再 mv：目的地上如果有别的进程/脚本在读，不会读到半截归档
+  if cp -p "${src}" "${dest}/.${base}.part" 2>/dev/null && mv -f "${dest}/.${base}.part" "${dest}/${base}" 2>/dev/null; then
+    echo -e "  镜像    ：已复制到 ${yellow}${dest}/${base}${plain}"
+  else
+    rm -f "${dest}/.${base}.part" 2>/dev/null
+    echo -e "  ${yellow}!${plain} 复制到镜像目的地失败：${dest}（本地备份已成功，不影响结果；查磁盘空间与权限）"
+    return 0
+  fi
+  # sidecar 一起带过去，否则在目的地那侧没法用 verify 比对校验和
+  if [[ -f "${src}.sha256" ]]; then
+    cp -p "${src}.sha256" "${dest}/${base}.sha256" 2>/dev/null ||
+      echo -e "  ${yellow}!${plain} 校验和 sidecar 没复制过去（归档本身已经复制了）"
+  fi
+
+  # 校验：优先按 sidecar 比对，其次 zstd -t，最后只能比字节数（并且必须明说"没真校验"）
+  if command -v sha256sum >/dev/null 2>&1 && [[ -f "${dest}/${base}.sha256" ]]; then
+    if (cd "${dest}" && sha256sum -c "${base}.sha256" >/dev/null 2>&1); then
+      echo -e "  镜像校验：${green}sha256 一致${plain}"
+    else
+      echo -e "  ${red}✗${plain} 镜像校验**不通过**（sha256 不一致）：${dest}/${base} —— 已删除这个坏副本"
+      rm -f "${dest}/${base}" "${dest}/${base}.sha256" 2>/dev/null
+      return 0
+    fi
+  elif command -v zstd >/dev/null 2>&1 && [[ "${base}" == *.zst ]]; then
+    if zstd -t "${dest}/${base}" >/dev/null 2>&1; then
+      echo -e "  镜像校验：${green}zstd -t 通过${plain}（没有 sidecar 可比，只验了压缩流完整性）"
+    else
+      echo -e "  ${red}✗${plain} 镜像校验不通过（zstd -t 失败）：已删除这个坏副本"
+      rm -f "${dest}/${base}" 2>/dev/null
+      return 0
+    fi
+  else
+    local a b
+    a="$(wc -c <"${src}" 2>/dev/null)"; b="$(wc -c <"${dest}/${base}" 2>/dev/null)"
+    if [[ -n "${a}" && "${a}" == "${b}" ]]; then
+      echo -e "  镜像校验：${yellow}只比了字节数（${a}）${plain} —— 本机没有 sha256sum/zstd，这**不算真校验**"
+    else
+      echo -e "  ${red}✗${plain} 镜像副本字节数对不上（源 ${a:-?} / 副本 ${b:-?}）：已删除这个坏副本"
+      rm -f "${dest}/${base}" 2>/dev/null
+      return 0
+    fi
+  fi
+
+  # 按份数清理（只碰自己认识的两种名字）
+  local keep="${VANBLOG_BACKUP_MIRROR_KEEP:-${VANBLOG_BACKUP_KEEP:-7}}"
+  case "${keep}" in '' | *[!0-9]*) keep=7 ;; esac
+  (( keep > 0 )) || return 0
+  local old
+  old="$(find "${dest}" -maxdepth 1 -type f \( -name 'vanblog-full-*.tar.zst' -o -name 'vanblog-*-data.tar.gz' \) \
+         -printf '%T@ %p\n' 2>/dev/null | sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2-)"
+  if [[ -n "${old}" ]]; then
+    while IFS= read -r f; do
+      [[ -n "${f}" ]] || continue
+      rm -f "${f}" "${f}.sha256" 2>/dev/null && echo -e "  镜像清理：删掉 $(basename "${f}")（保留最新 ${keep} 份）"
+    done <<<"${old}"
+  fi
+  return 0
+}
+
 write_sha256_sidecar() {
   local file="$1"
   [[ -f "${file}" ]] || return 0
@@ -2549,13 +2675,124 @@ verify() {
 # 这个权衡与作废方法；不提供 token 也能装（备份会在登录一步失败并写进日志，
 # env 文件里留了怎么补的注释），不假装"装好了就能用"。
 VANBLOG_CRON_MARKER="# vanblog-backup-cron"
+# ⚠️ 下面两个 marker **绝不能包含上面那个作为子串**（也不能被它包含）：
+#    install-cron 的幂等检测与 --force 替换都是 `grep -F "${VANBLOG_CRON_MARKER}"`，
+#    如果 verify 行的 marker 是 "# vanblog-backup-cron-verify" 这种形状，备份行的检测就会
+#    **匹配到 verify 行**，从而误判"定时备份已经装过了"（或 --force 时把 verify 行一起删掉）。
+#    所以用 "# vanblog-verify-cron" / "# vanblog-drill-cron"：三个互不为子串。
+#    --remove 则按"三个 marker 都删"来做，保持"一条命令删干净"这个既有性质。
+VANBLOG_CRON_MARKER_VERIFY="# vanblog-verify-cron"
+VANBLOG_CRON_MARKER_DRILL="# vanblog-drill-cron"
 
 vanblog_cron_env_file() { printf '%s/vanblog-cron.env' "${VANBLOG_BASE_PATH}"; }
 vanblog_cron_log_file() { printf '%s/log/vanblog-backup-cron.log' "${VANBLOG_DATA_PATH}"; }
 
 # 要写进 crontab 的那一行（env 文件里带 ASSUME_YES/KEEP/TOKEN 的 export）
+# cron 专用入口：把"备份失败"变成**看得见**的事件，并在站点已经死掉时仍然产出兜底归档。
+#
+# ⚠️ 为什么需要它（本轮 DR 排查里最刺眼的一条）：cron 以前跑的是裸 `backup`，而 backup 第一步就要
+#    管理员 token + POST /api/admin/backup/full/export ⇒ **站点不可用时 100% 失败**。也就是说
+#    "站点被打瘫的那几天，正好一份备份都不会有"；而失败只进 vanblog-backup-cron.log，没有任何告警
+#    通道（webhook/mail/notify 在 provider 与脚本里 0 命中），也没有任何东西定期跑 backup-status
+#    --strict（cron 里只有 backup）⇒ 站长往往要等到"想恢复时才发现没有备份"。
+#    这里做四件事：
+#      ① 失败就回落 `backup --offline`（直接打包数据目录，不需要 server 活着，而且是唯一连 caddy
+#         证书一起备的方式）；
+#      ② 结果写进**旁路**状态文件 `<备份目录>/cron-status.json`，让 `doctor`/`status` 能看见；
+#      ③ 可选 webhook 告警（VANBLOG_BACKUP_ALERT_WEBHOOK）——打不通绝不影响备份结果；
+#      ④ 顺手跑一次 `backup-status --strict`，把"陈旧/未验证"也记进同一个状态文件。
+backup_cron_run() {
+  local rc=0 mode="full" msg="" strict_rc=""
+  local bdir="${VANBLOG_DATA_PATH}/log/vanblog-backups"
+  echo -e "> 定时备份开始（$(date '+%F %T')）"
+  if backup; then
+    mode="full"
+  else
+    rc=$?
+    msg="整站备份失败(exit=${rc})，站点可能不可用；回落离线打包数据目录"
+    echo -e "${yellow}${msg}${plain}"
+    if backup --offline; then
+      mode="offline"; rc=0
+      msg="${msg}；离线包成功"
+    else
+      local rc2=$?
+      mode="failed"; rc=${rc2}
+      msg="${msg}；离线包也失败(exit=${rc2})"
+      echo -e "${red}${msg}${plain}"
+    fi
+  fi
+
+  # 顺手核对备份状态（--strict：陈旧或未验证都算不通过）。⚠️ 这一步只**记录**，不改 rc ——
+  #    它失败通常是"备份太旧"，那本身不是这次 cron 的失败。
+  if [[ -x "${VANBLOG_SELF_PATH}" ]]; then
+    if "${VANBLOG_SELF_PATH}" backup-status --strict >/dev/null 2>&1; then
+      strict_rc=0
+    else
+      strict_rc=$?
+      echo -e "${yellow}  backup-status --strict 未通过（exit=${strict_rc}）：备份可能陈旧或未验证${plain}"
+    fi
+  fi
+
+  # ② 旁路状态文件。⚠️ **不写** server 维护的 backup-status.json：那个文件有自己的 schema，
+  #    server 与脚本的 backup-status/doctor 都在读它，往里塞字段有把它写坏的风险，而它坏了会让
+  #    "最近一次备份"这类判断全部失真。所以另开一个只属于 cron 的文件，并用 0600（里面有失败原因，
+  #    可能含路径信息）+ 临时文件 mv（不让读者看到半截 JSON）。
+  mkdir -p "${bdir}" 2>/dev/null
+  local tmp="${bdir}/.cron-status.json.$$"
+  local safe_msg
+  safe_msg="$(printf '%s' "${msg}" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g' | head -c 300)"
+  if {
+    printf '{"at":"%s",' "$(date '+%FT%T%z')"
+    printf '"mode":"%s",' "${mode}"
+    printf '"exitCode":%s,' "${rc}"
+    printf '"message":"%s",' "${safe_msg}"
+    printf '"strictExitCode":%s}\n' "${strict_rc:-null}"
+  } >"${tmp}" 2>/dev/null; then
+    chmod 0600 "${tmp}" 2>/dev/null
+    mv -f "${tmp}" "${bdir}/cron-status.json" 2>/dev/null || rm -f "${tmp}" 2>/dev/null
+  else
+    rm -f "${tmp}" 2>/dev/null
+    echo -e "${yellow}  写 cron 状态文件失败（不影响备份结果）${plain}"
+  fi
+
+  # ③ 告警：只在失败时发，且**任何错误都吞掉** —— webhook 打不通绝不能让备份本身算失败。
+  if [[ "${rc}" != "0" && -n "${VANBLOG_BACKUP_ALERT_WEBHOOK:-}" ]]; then
+    if curl -sS -m 10 -o /dev/null -X POST -H 'Content-Type: application/json' \
+      -d "{\"text\":\"VanBlog 定时备份失败：${safe_msg}\"}" \
+      "${VANBLOG_BACKUP_ALERT_WEBHOOK}" >/dev/null 2>&1; then
+      echo -e "  已发告警到 webhook"
+    else
+      echo -e "${yellow}  webhook 告警没发出去（不影响备份结果，检查 VANBLOG_BACKUP_ALERT_WEBHOOK）${plain}"
+    fi
+  fi
+
+  if [[ "${rc}" == "0" ]]; then
+    echo -e "${green}✓ 定时备份完成（方式：${mode}）${plain}"
+  else
+    echo -e "${red}✗ 定时备份失败（方式：${mode}，exit=${rc}）${plain}"
+    echo -e "${yellow}  先做一次体检：${VANBLOG_SELF_NAME} doctor${plain}"
+  fi
+  return "${rc}"
+}
+
+# 每周一次「备份 + 立刻验证」。用 backup-verify 而不是 verify：它的注释就写着"cron 用：失败就非 0
+# 退出"，而且它会先做一次新备份再验，所以验的永远是**当前**能产出的东西，不是几周前那份。
+# ⚠️ 排在每日备份的**后一小时**（(hour+1)%24），这样它验的是刚备出来的归档。
+vanblog_cron_verify_line() { # <hour>
+  printf '%s' "0 $1 * * 0 . '$(vanblog_cron_env_file)' && '${VANBLOG_SELF_PATH}' backup-verify >> '$(vanblog_cron_log_file)' 2>&1 ${VANBLOG_CRON_MARKER_VERIFY}"
+}
+
+# 每月一次「真恢复演练」：起一套一次性容器，走用户真正会走的那条 HTTP 恢复接口，再把恢复出来的
+# 站点跟归档清单对账。⚠️ **默认关**，要显式 --with-drill：它需要容器引擎与磁盘（归档大小的两倍
+# 以上），在小机器上跑不动；而且 drill 自己会拒绝任何名字/端口冲突、绝不碰在跑的栈、用 trap 拆干净。
+vanblog_cron_drill_line() { # <hour>
+  printf '%s' "0 $1 1 * * . '$(vanblog_cron_env_file)' && '${VANBLOG_SELF_PATH}' drill >> '$(vanblog_cron_log_file)' 2>&1 ${VANBLOG_CRON_MARKER_DRILL}"
+}
+
 vanblog_cron_line() { # <hour>
-  printf '%s' "0 $1 * * * . '$(vanblog_cron_env_file)' && '${VANBLOG_SELF_PATH}' backup >> '$(vanblog_cron_log_file)' 2>&1 ${VANBLOG_CRON_MARKER}"
+  # ⚠️ 跑的是 backup-cron-run 而不是裸 backup：后者在站点不可用时必然失败且没人知道，
+  #    前者会回落离线包、写状态文件、（可选）发告警。
+  printf '%s' "0 $1 * * * . '$(vanblog_cron_env_file)' && '${VANBLOG_SELF_PATH}' backup-cron-run >> '$(vanblog_cron_log_file)' 2>&1 ${VANBLOG_CRON_MARKER}"
 }
 
 # 读现有 crontab 到 CURRENT_CRONTAB。
@@ -2584,14 +2821,25 @@ print_install_cron_usage() {
   echo -e "用法：${yellow}$0 install-cron [开关]${plain}"
   echo -e "  不带开关 = 每天 03:00 整站备份，成功后保留最新 7 份（VANBLOG_BACKUP_KEEP 可改这个默认）"
   echo -e "  --hour N                  每天几点跑（0-23，默认 3）"
+  echo -e "  --every N                 每 N 小时跑一次（1-23）——**RPO 就是 N 小时**，与 --hour 互斥"
+  echo -e "                            ⚠️ 备得越勤，同样 --keep 份数覆盖的时间越短（每 6 小时 + 留 7 份 = 42 小时）"
   echo -e "  --keep N                  备份成功后保留最新 N 份（正整数，默认 7）"
   echo -e "  --remove                  从 root 的 crontab 移除（token 文件保留，路径会打印出来）"
   echo -e "  --force                   用新参数替换已有条目（参数不同时会要求显式给）"
+  echo -e "  --with-verify               再装一条「每周校验」：周日 <hour+1>:00 跑 backup-verify"
+  echo -e "                              （先做一次新备份再立刻验证，失败非 0 退出 ⇒ cron 会记下来）。便宜，建议开。"
+  echo -e "  --with-drill                再装一条「每月演练」：每月 1 号 <hour+2>:00 跑 drill"
+  echo -e "                              （起一次性容器**真恢复一遍**并逐项对账）。${yellow}默认关${plain}：需要容器引擎"
+  echo -e "                              与磁盘（归档大小的两倍以上），小机器上别开。"
+  echo -e "  ⚠️ 三个任务写同一个日志；--remove 会删掉**全部**三种（备份/校验/演练），「一条命令删干净」不变。"
+  echo -e "  ⚠️ --remove 与 --with-verify/--with-drill 不能同时给（退出码 2）；--force 只重写你这次请求的那几条，"
+  echo -e "     没请求的保持原样（不会顺手删掉你以前装的）。重复装同一个任务**不会**出现两行。"
   echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默按默认值写进 root 的 crontab"
 }
 
 install_cron() {
-  local action="install" hour="" keep="${VANBLOG_BACKUP_KEEP:-7}" force=0
+  local action="install" hour="" every="" keep="${VANBLOG_BACKUP_KEEP:-7}" force=0
+  local with_verify=0 with_drill=0
   # ⚠️ 以前未知 `--*` 被静默吞掉，而 install-cron 是**往 root 的 crontab 里写东西**的命令：
   #    `install-cron --horu 3`（hour 拼错）会安静地按默认 3 点装进去，用户以为自己设的是别的时间；
   #    `install-cron --remov` 会安静地**装**一条定时任务，而用户以为自己在删。
@@ -2605,8 +2853,13 @@ install_cron() {
     arg="${argv[i]}"
     case "${arg}" in
     --remove) action="remove" ;;
+    # 两个新任务是**布尔开关**（不带值）：装不装，而不是装成什么参数。
+    # 它们的时间由 --hour 推出来（verify 在后一小时、drill 在每月 1 号的再后一小时），
+    # 所以不需要各自的 --verify-hour 之类 —— 少两个能配错的东西。
+    --with-verify) with_verify=1 ;;
+    --with-drill) with_drill=1 ;;
     --force) force=1 ;;
-    --hour | --keep)
+    --hour | --keep | --every)
       val="${argv[i + 1]:-}"
       # 缺值也不许静默按默认跑。⚠️ 例子按开关给（--hour 举 3、--keep 举 7）：在一条
       #    讲"你参数写错了"的消息里给错例子等于把人往沟里带（backup 那边踩过一次）。
@@ -2616,12 +2869,15 @@ install_cron() {
       if [[ -z "${val}" || "${val}" == --* ]]; then
         local example="3，表示每天凌晨 3 点"
         [[ "${arg}" == "--keep" ]] && example="7，表示只留最新 7 份"
+        [[ "${arg}" == "--every" ]] && example="6，表示每 6 小时一次（RPO 就是 6 小时）"
         echo -e "${red}${arg} 后面要跟一个值${plain}（例如 ${arg} ${example}）"
         print_install_cron_usage
         return 2
       fi
       if [[ "${arg}" == "--hour" ]]; then
         hour="${val}"
+      elif [[ "${arg}" == "--every" ]]; then
+        every="${val}"
       else
         keep="${val}"
       fi
@@ -2637,6 +2893,32 @@ install_cron() {
     esac
     i=$((i + 1))
   done
+  # --every N（每 N 小时一次）与 --hour N（每天几点）**互斥**：两个都给等于"我不知道你要哪个"，
+  # 而 install-cron 写的是 root 的 crontab —— 猜错方向的代价是"以为每小时备一次，其实每天一次"，
+  # 也就是 RPO 从 1 小时悄悄变成 24 小时。所以按仓库既有规矩：点名报错 + 打用法 + 退出码 2。
+  local sched=""
+  if [[ -n "${every}" && -n "${hour}" ]]; then
+    echo -e "${red}--every 与 --hour 不能同时给（一个是「每 N 小时」，一个是「每天几点」）${plain}"
+    print_install_cron_usage
+    return 2
+  fi
+  if [[ -n "${every}" ]]; then
+    case "${every}" in
+    '' | *[!0-9]*)
+      echo -e "${red}--every 必须是 1-23 的数字：${every}${plain}"
+      print_install_cron_usage
+      return 2
+      ;;
+    esac
+    if ((every < 1 || every > 23)); then
+      echo -e "${red}--every 必须是 1-23 的数字：${every}${plain}"
+      print_install_cron_usage
+      return 2
+    fi
+    sched="*/${every}"
+    echo -e "> 定时备份：每 ${yellow}${every}${plain} 小时一次（RPO = ${every} 小时）"
+    echo -e "  ⚠️ 份数上限仍是 --keep：备得越勤，同样份数覆盖的时间越短（每 6 小时 + 留 7 份 = 只覆盖 42 小时）"
+  fi
   hour="${hour:-3}"
   case "${hour}" in
   '' | *[!0-9]*)
@@ -2659,10 +2941,17 @@ install_cron() {
     return 1
   fi
 
+  if [[ "${action}" == "remove" ]] && { ((with_verify)) || ((with_drill)); }; then
+    echo -e "${red}--remove 与 --with-verify/--with-drill 不能同时给（一个是"全部删掉"，一个是"再装一个"）${plain}"
+    print_install_cron_usage
+    return 2
+  fi
+
   local envf logf line
   envf="$(vanblog_cron_env_file)"
   logf="$(vanblog_cron_log_file)"
-  line="$(vanblog_cron_line "${hour}")"
+  [[ -n "${sched}" ]] || sched="${hour}"
+  line="$(vanblog_cron_line "${sched}")"
 
   if ! command -v crontab >/dev/null 2>&1; then
     echo -e "${red}本机没有 crontab 命令${plain}（Debian/Ubuntu：apt install cron；CentOS/RHEL：yum install cronie）"
@@ -2676,19 +2965,25 @@ install_cron() {
   if ! read_current_crontab; then
     return 1
   fi
-  local existing
+  local backup_already=0
+  local existing existing_verify existing_drill
   existing="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -F "${VANBLOG_CRON_MARKER}" | head -1)"
+  existing_verify="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -F "${VANBLOG_CRON_MARKER_VERIFY}" | head -1)"
+  existing_drill="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -F "${VANBLOG_CRON_MARKER_DRILL}" | head -1)"
 
   if [[ "${action}" == "remove" ]]; then
-    if [[ -z "${existing}" ]]; then
-      echo -e "> root 的 crontab 里没有 VanBlog 定时备份条目（标记 ${VANBLOG_CRON_MARKER}），不用移除"
+    if [[ -z "${existing}${existing_verify}${existing_drill}" ]]; then
+      echo -e "> root 的 crontab 里没有 VanBlog 定时任务条目（标记 ${VANBLOG_CRON_MARKER} / ${VANBLOG_CRON_MARKER_VERIFY} / ${VANBLOG_CRON_MARKER_DRILL}），不用移除"
       return 0
     fi
-    if ! printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER}" | crontab -; then
+    # ⚠️ 三个 marker 一起删：--remove 的既有性质是"一条命令删干净"，加了新任务也不能变。
+    if ! printf '%s\n' "${CURRENT_CRONTAB}" |
+      grep -vF -e "${VANBLOG_CRON_MARKER}" -e "${VANBLOG_CRON_MARKER_VERIFY}" -e "${VANBLOG_CRON_MARKER_DRILL}" |
+      crontab -; then
       echo -e "${red}写回 crontab 失败，原样未动${plain}"
       return 1
     fi
-    echo -e "${green}已从 root 的 crontab 移除定时备份条目${plain}"
+    echo -e "${green}已从 root 的 crontab 移除 VanBlog 的全部定时任务条目（备份 / 校验 / 演练）${plain}"
     echo -e "  ${yellow}token 文件还在 ${envf}（里面有管理员 token），确认不再需要就手动 rm 掉${plain}"
     return 0
   fi
@@ -2698,17 +2993,104 @@ install_cron() {
       if [[ "${existing}" == "${line}" ]]; then
         echo -e "${green}已经装过了：crontab 里已有同样的条目，不会重复添加${plain}"
         echo -e "  ${existing}"
-        echo -e "  要改参数：${VANBLOG_SELF_NAME} install-cron --force --hour ${hour}（--keep 改保留份数）；要删：--remove"
-        return 0
-      fi
+        echo -e "  要改参数：${VANBLOG_SELF_NAME} install-cron --force --hour ${hour}（--every N 改成每 N 小时、--keep 改保留份数）；要删：--remove"
+        # ⚠️ 这里以前是 `return 0`（提前返回）。那是一个**静默什么都不做**的坑：
+        #    在"备份条目已经装过"的机器上跑 `install-cron --with-verify`，会在这一行直接返回，
+        #    永远走不到下面处理可选任务的那段 ⇒ verify 行根本没装，而用户看到的是"已经装过了"。
+        #    现在改成记一个标志继续往下走；真正的早退在可选任务处理完之后（那时才知道有没有事要做）。
+        backup_already=1
+      else
       echo -e "${yellow}crontab 里已经有一条 VanBlog 定时备份（参数不同），不会添加第二条：${plain}"
       echo -e "  现有：${existing}"
       echo -e "  想要：${line}"
       echo -e "确认要换成新的就加 ${green}--force${plain}（或先 ${VANBLOG_SELF_NAME} install-cron --remove）"
       return 1
-    fi
+      fi
+    else
     CURRENT_CRONTAB="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER}")"
+    # ⚠️ --force 只移除**它即将重写**的那几行：没被请求的任务（例如以前装过的 verify）保持原样，
+    #    否则"改个备份时间"会顺手把用户的每周校验删掉，而他不会知道。
+    if ((with_verify)); then
+      CURRENT_CRONTAB="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER_VERIFY}")"
+    fi
+    if ((with_drill)); then
+      CURRENT_CRONTAB="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER_DRILL}")"
+    fi
     echo -e "> --force：先移除旧条目再写入新的"
+    fi
+  fi
+
+  # ── 两个可选任务：每周校验（便宜）/ 每月演练（贵，默认关）──
+  # ⚠️ 幂等是硬要求：重复 `install-cron --with-verify` **绝不允许**出现两行 verify。
+  #    判据是"该 marker 的行是否已经存在且逐字相同"；不同则按既有规矩要求 --force（不静默替换）。
+  local extra_lines="" vline dline vhour dhour
+  vhour=$(( (hour + 1) % 24 ))
+  dhour=$(( (hour + 2) % 24 ))
+  if ((with_verify)); then
+    vline="$(vanblog_cron_verify_line "${vhour}")"
+    if [[ -n "${existing_verify}" && "${force}" != 1 && "${existing_verify}" == "${vline}" ]]; then
+      echo -e "${green}每周校验已经装过了：crontab 里已有同样的条目，不会重复添加${plain}"
+    elif [[ -n "${existing_verify}" && "${force}" != 1 ]]; then
+      echo -e "${yellow}crontab 里已经有一条每周校验（参数不同），不会添加第二条：${plain}"
+      echo -e "  现有：${existing_verify}"
+      echo -e "  想要：${vline}"
+      echo -e "确认要换成新的就加 ${green}--force${plain}（或先 ${VANBLOG_SELF_NAME} install-cron --remove）"
+      return 1
+    else
+      # ⚠️ 这行清理在**当前所有可达路径上都是冗余的**（变异对照实测：删掉它测试一条都不红）：
+      #    走到 else 只有两种情况 —— ① 没有同 marker 的旧行（本来就没什么可清）；
+      #    ② 给了 --force，而上面 force 分支已经把 verify 行剥掉了。
+      #    "重复安装不会出现两行"这个性质是由**"逐字相同就跳过"那个分支** + **force 的剥离**共同保证的，
+      #    不是由这行保证的。留着它是纵深防御（将来有人改动上面的分支顺序时不会立刻退化成重复写），
+      #    但**不要**把它当成那条性质的守卫。
+      CURRENT_CRONTAB="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER_VERIFY}")"
+      extra_lines="${extra_lines}${vline}"$'\n'
+      echo -e "> 每周校验：周日 $(printf '%02d:00' "${vhour}") 跑 backup-verify（先备份再立刻验证，失败非 0 退出）"
+    fi
+  elif [[ -n "${existing_verify}" ]]; then
+    echo -e "> 已有的每周校验条目**保持原样**（这次没给 --with-verify，不会去动它；要删用 --remove）"
+  fi
+  if ((with_drill)); then
+    dline="$(vanblog_cron_drill_line "${dhour}")"
+    if [[ -n "${existing_drill}" && "${force}" != 1 && "${existing_drill}" == "${dline}" ]]; then
+      echo -e "${green}每月演练已经装过了：crontab 里已有同样的条目，不会重复添加${plain}"
+    elif [[ -n "${existing_drill}" && "${force}" != 1 ]]; then
+      echo -e "${yellow}crontab 里已经有一条每月演练（参数不同），不会添加第二条：${plain}"
+      echo -e "  现有：${existing_drill}"
+      echo -e "  想要：${dline}"
+      echo -e "确认要换成新的就加 ${green}--force${plain}"
+      return 1
+    else
+      CURRENT_CRONTAB="$(printf '%s\n' "${CURRENT_CRONTAB}" | grep -vF "${VANBLOG_CRON_MARKER_DRILL}")"
+      extra_lines="${extra_lines}${dline}"$'\n'
+      echo -e "> 每月演练：每月 1 号 $(printf '%02d:00' "${dhour}") 跑 drill（起一次性容器真恢复一遍并对账）"
+      echo -e "  ${yellow}⚠️ 它需要容器引擎与磁盘（归档大小的两倍以上）；小机器上建议不要开${plain}"
+    fi
+  elif [[ -n "${existing_drill}" ]]; then
+    echo -e "> 已有的每月演练条目**保持原样**（这次没给 --with-drill，不会去动它；要删用 --remove）"
+  fi
+
+  # ⚠️ 备份条目已经一模一样 ⇒ 不重写它，也**绝不去碰 token 与环境文件**：
+  #    环境文件是整份重写的，跑一遍就会把用户手工补进去的 VANBLOG_ADMIN_TOKEN 冲掉。
+  if ((backup_already)); then
+    if [[ -z "${extra_lines}" ]]; then
+      echo -e "${green}没有需要改动的定时任务条目${plain}"
+      return 0
+    fi
+    if ! {
+      [[ -n "${CURRENT_CRONTAB}" ]] && printf '%s\n' "${CURRENT_CRONTAB}"
+      printf '%s' "${extra_lines}"
+    } | crontab -; then
+      echo -e "${red}写入 crontab 失败${plain}"
+      return 1
+    fi
+    if crontab -l 2>/dev/null | grep -qF "${VANBLOG_CRON_MARKER}"; then
+      echo -e "${green}已添加 $(printf '%s' "${extra_lines}" | grep -c .) 条新的定时任务${plain}（备份条目与 token/环境文件保持原样）"
+      echo -e "  所有任务写同一个日志：${yellow}${logf}${plain}"
+      return 0
+    fi
+    echo -e "${red}写入后在 crontab 里没找到条目（这台机器的 crontab 可能被别的管理器接管）${plain}"
+    return 1
   fi
 
   # ── token：环境变量优先，其次交互输入；都没有也照装，但明说后果 ──
@@ -2774,13 +3156,19 @@ install_cron() {
   if ! {
     [[ -n "${CURRENT_CRONTAB}" ]] && printf '%s\n' "${CURRENT_CRONTAB}"
     printf '%s\n' "${line}"
+    # 额外任务（每周校验 / 每月演练）。⚠️ extra_lines 每行自带换行，所以用 %s 不是 %s\n
+    [[ -n "${extra_lines}" ]] && printf '%s' "${extra_lines}"
   } | crontab -; then
     echo -e "${red}写入 crontab 失败${plain}"
     return 1
   fi
   # 写回之后读一遍确认（crontab 可能被别的东西管着，或 - 输入不被支持）
   if crontab -l 2>/dev/null | grep -qF "${VANBLOG_CRON_MARKER}"; then
-    echo -e "${green}定时备份已安装${plain}：每天 $(printf '%02d:00' "${hour}")，保留 ${keep} 份"
+    echo -e "${green}定时备份已安装${plain}：$(if [[ -n "${sched}" && "${sched}" == \*/* ]]; then echo -n "每 ${sched#*/} 小时一次"; else printf '每天 %02d:00' "${hour}"; fi)，保留 ${keep} 份"
+    if [[ -n "${extra_lines}" ]]; then
+      echo -e "  同时装了：$(printf '%s' "${extra_lines}" | grep -cF "${VANBLOG_CRON_MARKER_VERIFY}") 条每周校验、$(printf '%s' "${extra_lines}" | grep -cF "${VANBLOG_CRON_MARKER_DRILL}") 条每月演练"
+      echo -e "  三个任务写同一个日志：${yellow}${logf}${plain}"
+    fi
     echo -e "  想现在试跑一次：${green}${VANBLOG_SELF_NAME} backup${plain}（看输出），或等今晚看 ${logf}"
     echo -e "  移除：${green}${VANBLOG_SELF_NAME} install-cron --remove${plain}"
     return 0
@@ -2988,6 +3376,7 @@ backup_full() {
     echo -e "  宿主机路径：${yellow}${host_path}${plain}"
     # 脚本侧补的校验和：server 的 manifest 里没有 sha256（见 write_sha256_sidecar 注释）
     write_sha256_sidecar "${host_path}"
+    mirror_backup_artifacts "${host_path}"
   else
     echo -e "  服务器目录：${yellow}$(full_backup_dir)${plain}（容器内 <日志目录>/vanblog-backups）"
   fi
@@ -3215,6 +3604,7 @@ backup_offline() {
 
   echo -e "${green}备份成功${plain}，文件名：${yellow}${name}${plain} 大小：$(human_size "${dest}") 路径：${VANBLOG_BASE_PATH}"
   write_sha256_sidecar "${dest}"
+  mirror_backup_artifacts "${dest}"
   if ((rc == 1)); then
     echo -e "${yellow}注意：打包过程中有文件发生变化（热备份的正常现象），归档仍然可用${plain}"
   fi
@@ -3473,6 +3863,133 @@ print_backup_json() {
   fi
 }
 
+# 🔴 站点已经起不来时（最常见是 mongo 数据损坏），**两条正常的恢复入口都用不了**：
+#    `restore`（走 server 接口）与 `reset` 都要先访问 `/api/public/meta`，而 server 要连得上 mongo
+#    ⇒ 库坏了就是死锁。这不是"再试一次"能解决的，唯一出路是把坏掉的数据库目录**移到一边**
+#    （不是删除，留着才能回滚与取证）、让站点以「未初始化」状态起来，再用归档重置。
+#    这套动作以前只存在于人脑子里（文档与脚本里 0 处提及），所以：
+#      ① 这里把它印出来（本函数**只读**，不动任何文件），在两处"站点接口不通"的报错后自动打印；
+#      ② `restore --offline-full <归档>` 把它自动化（见 offline_full_restore）。
+print_dead_site_playbook() {
+  local archive="${1:-<你的归档.tar.zst>}"
+  local mongo_dir="${VANBLOG_DATA_PATH}/data/mongo"
+  echo -e "${yellow}── 站点起不来时的恢复剧本（mongo 数据损坏 / server 连不上库）──────────${plain}"
+  echo -e "  为什么普通恢复用不了：${yellow}restore${plain} 与 ${yellow}reset${plain} 都要先访问 /api/public/meta，"
+  echo -e "  而 server 要连得上 mongo ⇒ 库坏了就是死锁。出路只有一条：把坏库移到一边，"
+  echo -e "  让站点以「未初始化」状态起来，再用归档重置。"
+  echo
+  echo -e "  ${green}推荐：一条命令自动做完${plain}（坏库改名保留，不删除，可回滚）"
+  echo -e "    ${yellow}${VANBLOG_SELF_NAME} restore --offline-full ${archive}${plain}"
+  echo
+  echo -e "  ${green}或者手工做（每步都能单独停下来看）${plain}"
+  echo -e "    1) 先确认归档是好的：${yellow}${VANBLOG_SELF_NAME} verify ${archive}${plain}"
+  echo -e "       ⚠️ 归档本身坏了就别往下走 —— 那会把唯一的退路也毁掉"
+  echo -e "    2) 停栈：${yellow}${VANBLOG_SELF_NAME} stop${plain}"
+  echo -e "    3) 把坏库移到一边（${red}不要 rm -rf${plain}，留着才能回滚/取证）："
+  echo -e "       ${yellow}mv ${mongo_dir} ${mongo_dir}.broken-\$(date +%Y%m%d-%H%M%S)${plain}"
+  echo -e "    4) 起栈：${yellow}${VANBLOG_SELF_NAME} start${plain} —— 站点会变成「未初始化」，这是预期的"
+  echo -e "    5) 用归档重置：${yellow}${VANBLOG_SELF_NAME} reset ${archive}${plain}"
+  echo -e "    6) 核对：${yellow}${VANBLOG_SELF_NAME} status${plain}，再看前台首页与后台能不能登录"
+  echo
+  echo -e "  回滚（发现恢复出来的不对）：${yellow}${VANBLOG_SELF_NAME} stop${plain} → 删掉新建的 mongo 目录 →"
+  echo -e "  把 .broken-* 那个改回 ${yellow}${mongo_dir}${plain} → ${yellow}${VANBLOG_SELF_NAME} start${plain}"
+  echo -e "  ⚠️ 这套动作会让当前数据库目录里的内容失效（改名保留，不是删除）；磁盘上还要留出归档解压的空间。"
+  echo -e "${yellow}────────────────────────────────────────────────────────────────${plain}"
+}
+
+# `restore --offline-full <归档>`：站点已经起不来（通常是 mongo 数据损坏）时的恢复。
+#
+# ⚠️ 为什么是"把坏库移到一边 + 走既有 reset"，而不是自己写一套 NDJSON 装载器：
+#    自己灌数据等于把"临时集合 + 原子替换 + 重建索引 + 静态文件回位 + integrity 校验"再实现一遍，
+#    而这些在 server 侧（`utils/fullBackup.ts`）已经写好并被大量测试覆盖。重复实现只会得到第二套
+#    需要维护、而且**只在灾难现场才被第一次使用**的代码 —— 那是最坏的组合。
+#    所以这里把人工手术自动化：移开坏库（**改名，不删除**）→ 起栈（变未初始化）→ 既有 `reset`。
+#    每一步都可回滚，任何一步失败都打印回滚命令，绝不留下"半新半旧"的数据目录。
+offline_full_restore() {
+  local archive="$1"
+  local mongo_dir="${VANBLOG_DATA_PATH}/data/mongo"
+
+  if [[ -z "${archive}" ]]; then
+    echo -e "${red}--offline-full 需要指定归档路径${plain}"
+    print_restore_usage
+    return 2
+  fi
+  if [[ ! -f "${archive}" ]]; then
+    echo -e "${red}归档不存在：${archive}${plain}"
+    return 2
+  fi
+
+  # 0) 归档必须先自证是好的：这一步不通过就**一个字节都不动**。
+  #    理由很直接 —— 接下来要移开当前唯一的数据库，如果归档是坏的，就等于亲手毁掉退路。
+  echo -e "> 先校验归档（不通过就不动任何数据）"
+  if ! verify "${archive}"; then
+    echo -e "${red}归档校验没通过 ⇒ 中止，没有改动任何文件。${plain}"
+    echo -e "${yellow}  换一份归档，或用 ${VANBLOG_SELF_NAME} verify-deep ${archive} 看细节。${plain}"
+    return 1
+  fi
+
+  local stamp aside
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  aside="${mongo_dir}.broken-${stamp}"
+  echo -e "> 将要执行的动作："
+  echo -e "    1. 停栈"
+  echo -e "    2. ${yellow}${mongo_dir}${plain} → ${yellow}${aside}${plain}（改名保留，${red}不删除${plain}）"
+  echo -e "    3. 起栈（站点会变成「未初始化」，这是预期的）"
+  echo -e "    4. 用 ${yellow}${archive}${plain} 重置整个站点（初始化 + 恢复 + 重启 + 逐项核对）"
+  if [[ "${VANBLOG_ASSUME_YES:-0}" != "1" ]]; then
+    local input
+    read -e -r -p "确认执行? 输入 yes 继续: " input
+    if [[ "${input}" != "yes" ]]; then
+      echo "已取消（没有改动任何文件）"
+      return 0
+    fi
+  fi
+
+  echo -e "> 1/4 停栈"
+  stop_vanblog 0 || echo -e "${yellow}  stop 返回非 0（可能本来就没在跑），继续${plain}"
+
+  echo -e "> 2/4 移开数据库目录"
+  if [[ -d "${mongo_dir}" ]]; then
+    if ! mv "${mongo_dir}" "${aside}"; then
+      echo -e "${red}移动数据库目录失败：${mongo_dir} → ${aside}${plain}"
+      echo -e "${yellow}  常见原因：磁盘满、跨文件系统、权限不足。已中止，站点数据未被改动。${plain}"
+      return 1
+    fi
+    echo -e "  ${green}✓${plain} 坏库已移到 ${aside}（回滚就是把它改回去）"
+  else
+    echo -e "  ${yellow}!${plain} ${mongo_dir} 不存在 —— 数据目录本来就是空的（全新机器？）"
+    aside=""
+  fi
+
+  echo -e "> 3/4 起栈"
+  if ! start_vanblog 0; then
+    echo -e "${red}起栈失败。${plain}"
+    if [[ -n "${aside}" ]]; then
+      echo -e "${yellow}  回滚：${VANBLOG_SELF_NAME} stop && mv ${aside} ${mongo_dir} && ${VANBLOG_SELF_NAME} start${plain}"
+    fi
+    return 1
+  fi
+
+  echo -e "> 4/4 用归档重置站点"
+  if ! reset 0 "${archive}"; then
+    echo -e "${red}重置失败。${plain}"
+    if [[ -n "${aside}" ]]; then
+      echo -e "${yellow}  旧库还在：${aside}${plain}"
+      echo -e "${yellow}  回滚：${VANBLOG_SELF_NAME} stop && rm -rf ${mongo_dir} && mv ${aside} ${mongo_dir} && ${VANBLOG_SELF_NAME} start${plain}"
+    fi
+    echo -e "${yellow}  或者换一份归档重试：${VANBLOG_SELF_NAME} reset <另一份归档>${plain}"
+    return 1
+  fi
+
+  echo -e "${green}✓ 离线恢复完成${plain}"
+  if [[ -n "${aside}" ]]; then
+    echo -e "  确认站点正常后，旧的坏库可以删掉腾空间：${yellow}rm -rf ${aside}${plain}"
+    echo -e "  ⚠️ 在确认之前**别删** —— 它是唯一的回滚点。"
+  fi
+  echo -e "  建议顺手做一次体检：${yellow}${VANBLOG_SELF_NAME} doctor${plain}"
+  return 0
+}
+
 restore_full_backup() {
   local target="$1"
   local with_static="${2:-true}"
@@ -3486,6 +4003,10 @@ restore_full_backup() {
   if [[ "${code}" != "200" ]]; then
     echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}）。${plain}"
     echo -e "${red}整站恢复必须经过 server 的接口（它要按集合原子替换并重建索引），请先 ${yellow}./vanblog.sh start${red} 再试。${plain}"
+    # ⚠️ 如果 server 起不来的原因是 mongo 数据坏了，"先 start 再试"是**做不到**的（server 要连库）。
+    #    这种死锁以前只在报错里留一句话，用户接下来只能自己猜 —— 所以把完整剧本印出来。
+    echo -e "${yellow}  如果 start 也起不来（多半是 mongo 数据损坏），下面这条路能救：${plain}"
+    print_dead_site_playbook "${target}"
     return 1
   fi
 
@@ -3576,6 +4097,11 @@ print_restore_usage() {
   echo -e "  --no-static               只恢复数据库，保留当前图床/附件"
   echo -e "  --with-static             显式恢复静态文件（默认就是恢复）"
   echo -e "  --verbose                 打印完整清单 JSON"
+  echo -e "  --offline-full            ${yellow}站点已经起不来时${plain}用（通常是 mongo 数据损坏）："
+  echo -e "                            先校验归档 → 停栈 → 把数据库目录${yellow}改名保留${plain}（不删除）→ 起栈 →"
+  echo -e "                            用归档重置整站 → 逐项核对。任何一步失败都会打印回滚命令。"
+  echo -e "                            ⚠️ 为什么需要它：restore 与 reset 都要先访问站点接口，而 server 要连"
+  echo -e "                              mongo ⇒ 库坏了就是死锁，这是唯一不需要故障站点配合的恢复路径。"
   echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默按默认值恢复"
 }
 
@@ -3586,6 +4112,8 @@ restore() {
   #    （解析成功时什么都不打印），只有拒绝路径少了这句误导。
   local path="${VANBLOG_RESTORE_FILE:-}"
   local with_static="true"
+  # --offline-full：站点已经起不来（通常是 mongo 数据损坏）时的恢复，见 offline_full_restore
+  local offline_full="0"
   # 分发入口会传一个 0 表示「不进菜单」，别把它当成文件路径
   # ⚠️ 这里以前是 `0 | --*) : ;;` —— 打错的开关被**静默吞掉**。restore 上这件事比 backup 更贵：
   #    `restore --no-statc <归档>`（少一个 i）会安静地按默认值恢复，也就是**连静态文件一起覆盖**，
@@ -3596,6 +4124,7 @@ restore() {
   for arg in "$@"; do
     case "${arg}" in
     --no-static) with_static="false" ;;
+    --offline-full) offline_full="1" ;;
     --with-static) with_static="true" ;;
     --verbose) export VANBLOG_VERBOSE=1 ;;
     0) : ;; # 菜单/分发入口传进来的占位
@@ -3624,6 +4153,13 @@ restore() {
   if [[ -z "${path}" ]]; then
     echo -e "${red}输入为空${plain}"
     return 1
+  fi
+
+  # 🔴 --offline-full：连 server 都起不来时用（把坏库移到一边 → 起栈 → 走既有 reset）
+  #    放在 picker 之后，所以 `restore --offline-full` 不带归档时照样能列出归档让选。
+  if [[ "${offline_full}" == "1" ]]; then
+    offline_full_restore "${path}"
+    return $?
   fi
 
   # 整站备份（vanblog-full-*）走 server 接口；脚本自己打的数据目录 tar.gz 走下面的离线流程
@@ -3690,6 +4226,267 @@ restore() {
 
 # 一眼看清"装了什么、跑着没有、数据多大、备份在哪、磁盘还剩多少"。
 # 全部只读，不改任何东西，也不需要站点在跑。
+# ── 体检（doctor）与证书剩余天数 ─────────────────────────────────────────────
+# ⚠️ 证书为什么不用 openssl 解析：**镜像里没有 openssl 二进制**（apk 清单只有 tzdata/caddy/
+#    libwebp-tools/libavif-apps/libc6-compat/zstd/xz/fontconfig/字体），宿主机上也不一定装了
+#    openssl 或 node。但容器里一定有 node（server 就是它跑的），而 Node 15+ 自带
+#    `crypto.X509Certificate`，能直接读 PEM 拿到 validTo。
+#    证书文件在**宿主机侧就能读**（编排把 <数据目录>/caddy/data 挂到 /root/.local/share/caddy），
+#    所以做法是：宿主机 find 出 PEM → 内容从 stdin 喂给容器里的 node 解析。
+#    容器没在跑就退回本机 node，再退回 openssl；都不行就老实说"解析不了"。
+#    ⚠️ 读不到证书（还没签过、纯 IP/HTTP 部署、目录不存在）是**合法状态**，只打一行说明，
+#       绝不算 doctor 的失败项 —— 否则 HTTP 部署的站长每次体检都看到红的。
+VANBLOG_CERT_NODE_PROG='const c=require("crypto");let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const x=new c.X509Certificate(s);const ms=new Date(x.validTo).getTime()-Date.now();process.stdout.write(String(Math.floor(ms/86400000)))}catch(e){}});'
+
+# 找一个能解析 PEM 的办法，输出剩余天数（整数，可为负）；解析不出来就不输出
+cert_days_for_file() {
+  local f="$1" cid days=""
+  cid="$(vanblog_compose ps -q vanblog 2>/dev/null | head -1)"
+  if [[ -n "${cid}" ]]; then
+    days="$(docker exec -i "${cid}" node -e "${VANBLOG_CERT_NODE_PROG}" <"${f}" 2>/dev/null)"
+  fi
+  if [[ -z "${days}" ]] && command -v node >/dev/null 2>&1; then
+    days="$(node -e "${VANBLOG_CERT_NODE_PROG}" <"${f}" 2>/dev/null)"
+  fi
+  if [[ -z "${days}" ]] && command -v openssl >/dev/null 2>&1; then
+    local end
+    end="$(openssl x509 -in "${f}" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+    if [[ -n "${end}" ]]; then
+      local end_s now_s
+      end_s="$(date -d "${end}" +%s 2>/dev/null)"
+      now_s="$(date +%s)"
+      [[ -n "${end_s}" ]] && days=$(( (end_s - now_s) / 86400 ))
+    fi
+  fi
+  case "${days}" in
+    ''|*[!0-9-]*) return 1 ;;
+  esac
+  printf '%s' "${days}"
+}
+
+# 打印每个证书的剩余天数，并按阈值上色。返回 0=都健康，1=有 WARN，2=有红的（<7 天）
+cert_report() {
+  local root="${VANBLOG_DATA_PATH}/caddy/data/certificates"
+  if [[ ! -d "${root}" ]]; then
+    echo -e "  证书      ：未发现证书目录（HTTP 部署或尚未签发，这是合法状态）"
+    return 0
+  fi
+  local files found=0 rc=0 f days dom
+  files="$(find "${root}" -type f \( -name '*.crt' -o -name '*.pem' \) 2>/dev/null | head -20)"
+  if [[ -z "${files}" ]]; then
+    echo -e "  证书      ：目录在但没有证书文件（还没签发过，或用的是自签降级配置）"
+    return 0
+  fi
+  while IFS= read -r f; do
+    [[ -n "${f}" ]] || continue
+    found=1
+    dom="$(basename "${f}")"; dom="${dom%.*}"
+    if ! days="$(cert_days_for_file "${f}")"; then
+      echo -e "  证书      ：${yellow}${dom}${plain} 剩余天数解析不了（容器没在跑，本机也没有 node/openssl）"
+      echo -e "              ⚠️ 这正是这个检查的固有局限：**站点挂着的时候正好查不到证书状态**。"
+      echo -e "              所以请趁站点还活着时定期跑 ${yellow}${VANBLOG_SELF_NAME} doctor${plain}（挂 cron 最好），别等出事才第一次跑。"
+      continue
+    fi
+    # 阈值依据：Let's Encrypt 证书 90 天有效，caddy 大约在剩 1/3（30 天）时开始续，
+    # 所以 21 天是"续过一轮都还失败"的告警线；7 天以内基本是"下一轮就要出事"。
+    if (( days < 7 )); then
+      echo -e "  证书      ：${red}${dom} 剩余 ${days} 天${plain} —— 马上要过期，续签一直失败"
+      echo -e "              ${red}⚠️ 已开 HSTS 的话，证书一过期浏览器会硬失败且不给「仍然前往」，站点会彻底进不去${plain}"
+      echo -e "              查：${yellow}${VANBLOG_SELF_NAME} log${plain}（找 caddy 的 acme 报错）；救：${yellow}${VANBLOG_SELF_NAME} reset_https${plain}"
+      rc=2
+    elif (( days < 21 )); then
+      echo -e "  证书      ：${yellow}${dom} 剩余 ${days} 天${plain} —— caddy 应该已经在续了，还没续上要查"
+      [[ ${rc} -lt 1 ]] && rc=1
+    else
+      echo -e "  证书      ：${green}${dom} 剩余 ${days} 天${plain}"
+    fi
+  done <<<"${files}"
+  [[ ${found} -eq 0 ]] && echo -e "  证书      ：未发现证书文件"
+  return ${rc}
+}
+
+# 一次性只读体检：不改任何东西，退出码 0=没发现问题，1=有问题（方便 cron 与监控直接用）
+doctor() {
+  local problems=0 warns=0
+  echo -e "> VanBlog 体检（只读，不改任何东西）"
+
+  # 1) 目录与编排文件
+  local compose_file="${VANBLOG_BASE_PATH}/docker-compose.yaml"
+  if [[ ! -d "${VANBLOG_DATA_PATH}" ]]; then
+    echo -e "  ${red}✗${plain} 数据目录不存在：${VANBLOG_DATA_PATH}"; problems=$((problems+1))
+  else
+    echo -e "  ${green}✓${plain} 数据目录：${VANBLOG_DATA_PATH}"
+  fi
+  if [[ ! -f "${compose_file}" ]]; then
+    echo -e "  ${red}✗${plain} 没找到编排文件：${compose_file}（还没安装？）"; problems=$((problems+1))
+  fi
+
+  # 2) 容器状态、重启次数、编排侧健康状态
+  local cid=""
+  [[ -f "${compose_file}" ]] && cid="$(vanblog_compose ps -q vanblog 2>/dev/null | head -1)"
+  if [[ -z "${cid}" ]]; then
+    echo -e "  ${red}✗${plain} vanblog 容器没在跑（先 ${yellow}${VANBLOG_SELF_NAME} start${plain}）"; problems=$((problems+1))
+  else
+    local st rc_n hc
+    st="$(docker inspect -f '{{.State.Status}}' "${cid}" 2>/dev/null)"
+    rc_n="$(docker inspect -f '{{.RestartCount}}' "${cid}" 2>/dev/null)"
+    hc="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}" 2>/dev/null)"
+    if [[ "${st}" == "running" ]]; then
+      echo -e "  ${green}✓${plain} 容器：running（重启次数 ${rc_n:-?}，健康状态 ${hc}）"
+    else
+      echo -e "  ${red}✗${plain} 容器状态：${st}（重启次数 ${rc_n:-?}）"; problems=$((problems+1))
+    fi
+    # ⚠️ RestartCount 高说明它在崩溃循环里（uncaughtException 现在会非 0 退出，正是靠这个看出来）
+    if [[ "${rc_n:-0}" =~ ^[0-9]+$ ]] && (( rc_n >= 5 )); then
+      echo -e "  ${red}✗${plain} 重启次数 ${rc_n} ≥ 5：容器在崩溃循环里，查 ${yellow}${VANBLOG_SELF_NAME} log${plain}"; problems=$((problems+1))
+    fi
+    # podman/buildah 构建会丢掉 Dockerfile 的 HEALTHCHECK ⇒ 这里会是 none，得说清楚
+    if [[ "${hc}" == "none" ]]; then
+      echo -e "  ${yellow}!${plain} 容器没有健康探测（镜像的 HEALTHCHECK 被构建工具丢掉了，podman/buildah 会这样）"
+      echo -e "      编排里那份 healthcheck 需要重新生成：${yellow}${VANBLOG_SELF_NAME} config${plain}；"
+      echo -e "      podman 用户还要自己加 ${yellow}--health-on-failure=restart${plain} 才会因 unhealthy 自愈"
+      warns=$((warns+1))
+    elif [[ "${hc}" == "unhealthy" ]]; then
+      echo -e "  ${red}✗${plain} 容器被判定 unhealthy（前台或 server 或 mongo 至少有一个不通）"; problems=$((problems+1))
+    fi
+  fi
+
+  # 3) 站点接口与 mongo 连通性（health 里带 mongo 字段）
+  local base body code
+  base="$(vanblog_api_base 2>/dev/null)"
+  code="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' "${base}/api/public/health" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" == "200" ]]; then
+    echo -e "  ${green}✓${plain} 健康接口：${base}/api/public/health → 200"
+  elif [[ "${code}" == "503" ]]; then
+    echo -e "  ${red}✗${plain} 健康接口 → 503：server 活着但 **mongo 连不上**（库损坏/被删/mongo 容器没起）"; problems=$((problems+1))
+    echo -e "      库修不回来时用：${yellow}${VANBLOG_SELF_NAME} restore --offline-full <归档>${plain}"
+  else
+    echo -e "  ${red}✗${plain} 健康接口 → ${code}（站点没在服务）"; problems=$((problems+1))
+  fi
+
+  # 4) 磁盘剩余（磁盘满是"小机器 + 被攻击"最现实的死法）
+  local dpath avail_kb
+  dpath="$(df -Pk "${VANBLOG_DATA_PATH}" 2>/dev/null | awk 'NR==2{print $4}')"
+  if [[ -n "${dpath}" ]]; then
+    avail_kb="${dpath}"
+    if (( avail_kb < 2097152 )); then   # < 2 GiB
+      echo -e "  ${red}✗${plain} 数据目录所在盘剩余 $((avail_kb/1024)) MiB —— 备份与静态渲染随时会写失败"; problems=$((problems+1))
+    elif (( avail_kb < 10485760 )); then # < 10 GiB
+      echo -e "  ${yellow}!${plain} 数据目录所在盘剩余 $((avail_kb/1024/1024)) GiB（一次整站备份 + 恢复要留出归档大小的两倍）"; warns=$((warns+1))
+    else
+      echo -e "  ${green}✓${plain} 磁盘剩余：$((avail_kb/1024/1024)) GiB"
+    fi
+  fi
+
+  # 5) 最近一次备份有多旧（RPO）+ cron 旁路状态
+  local bdir newest age_h
+  bdir="${VANBLOG_DATA_PATH}/log/vanblog-backups"
+  if [[ -d "${bdir}" ]]; then
+    # ⚠️ `-printf` 是 GNU find 的扩展。取不到时间时**绝不能**顺着"没有归档"那条分支走 ——
+    #    那是把一个工具能力问题谎报成"你一份备份都没有"，比不报更糟。
+    local ts_ok=1 cnt
+    if ! find "${bdir}" -maxdepth 1 -type f -name 'vanblog-full-*.tar.zst' -printf '%T@ %p\n' >/dev/null 2>&1; then
+      ts_ok=0
+    fi
+    if ((ts_ok)); then
+      newest="$(find "${bdir}" -maxdepth 1 -type f -name 'vanblog-full-*.tar.zst' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
+    else
+      newest=""
+      cnt="$(ls -1 "${bdir}"/vanblog-full-*.tar.zst 2>/dev/null | wc -l)"
+      echo -e "  ${yellow}!${plain} 本机的 find 不支持 -printf（非 GNU/BusyBox），**判断不了备份有多旧**；目录里有 ${cnt} 份归档"
+      echo -e "      手工看最新一份：${yellow}ls -lt ${bdir} | head${plain}"
+      warns=$((warns + 1))
+    fi
+    if ((ts_ok)) && [[ -z "${newest}" ]]; then
+      echo -e "  ${red}✗${plain} 备份目录里一份整站归档都没有：${bdir}"; problems=$((problems+1))
+    else
+      local nf nt
+      nf="${newest#* }"; nt="${newest%% *}"
+      case "${nt%.*}" in
+      '' | *[!0-9]*)
+        echo -e "  ${yellow}!${plain} 归档的时间戳读出来不是数字（'${nt%.*}'），**不算年龄** —— 不猜"
+        warns=$((warns + 1))
+        nt=""
+        ;;
+      esac
+      [[ -n "${nt}" ]] && age_h=$(( ( $(date +%s) - ${nt%.*} ) / 3600 ))
+      if [[ -z "${nt}" ]]; then
+        : # 上面已经报过"读不出时间"，这里不再重复判定
+      elif (( age_h > 72 )); then
+        echo -e "  ${red}✗${plain} 最近一次备份是 ${age_h} 小时前（$(basename "${nf}")）—— 定时备份可能一直在失败"; problems=$((problems+1))
+      elif (( age_h > 26 )); then
+        echo -e "  ${yellow}!${plain} 最近一次备份是 ${age_h} 小时前（每天一次的话已经错过一轮）"; warns=$((warns+1))
+      else
+        echo -e "  ${green}✓${plain} 最近一次备份：${age_h} 小时前（$(basename "${nf}")）"
+      fi
+    fi
+  else
+    echo -e "  ${yellow}!${plain} 备份目录不存在：${bdir}（从没备份过？）"; warns=$((warns+1))
+  fi
+  # cron 备份失败会写在旁路状态文件里（server 不知道 cron 的事，所以单独一个文件）
+  local cron_status="${bdir}/cron-status.json"
+  if [[ -f "${cron_status}" ]]; then
+    local last_rc last_msg
+    last_rc="$(grep -oE '"exitCode":[0-9-]+' "${cron_status}" | tail -1 | cut -d: -f2)"
+    last_msg="$(grep -oE '"message":"[^"]*"' "${cron_status}" | tail -1 | sed 's/^"message":"//; s/"$//' | head -c 120)"
+    if [[ "${last_rc}" != "0" && -n "${last_rc}" ]]; then
+      echo -e "  ${red}✗${plain} 最近一次 cron 备份**失败**（exit=${last_rc}）：${last_msg}"; problems=$((problems+1))
+    else
+      echo -e "  ${green}✓${plain} 最近一次 cron 备份成功${last_msg:+：${last_msg}}"
+    fi
+  fi
+
+  # 6) caddy 的证书目录有没有真的挂出来（没挂 = 容器一重建就丢证书，会撞 LE 的 5 张/7 天）
+  if [[ -f "${compose_file}" ]]; then
+    if grep -q "/root/.local/share/caddy" "${compose_file}"; then
+      echo -e "  ${green}✓${plain} caddy 证书目录已持久化"
+    else
+      echo -e "  ${yellow}!${plain} 编排里没有挂 caddy 证书目录（/root/.local/share/caddy）：容器一重建就要重签，"
+      echo -e "      而 Let's Encrypt 是 **5 张/7 天**、补充 1 张/34 小时 —— 反复重建会被暂停签发"; warns=$((warns+1))
+      echo -e "      重新生成编排：${yellow}${VANBLOG_SELF_NAME} config${plain}"
+    fi
+  fi
+
+  # 7) 证书剩余天数
+  cert_report
+  case $? in
+    2) problems=$((problems+1)) ;;
+    1) warns=$((warns+1)) ;;
+  esac
+
+  # 8) 日志里的关键错误（只读扫最近 400 行）
+  local logfile="${VANBLOG_DATA_PATH}/log/vanblog-stdio.log"
+  [[ -f "${logfile}" ]] || logfile="${VANBLOG_DATA_PATH}/log/vanblog-stdout.log"
+  if [[ -f "${logfile}" ]]; then
+    local hits
+    hits="$(tail -n 400 "${logfile}" 2>/dev/null | grep -cE 'FATAL|uncaughtException|ENOSPC|ECONNREFUSED|out of memory|Reached heap limit')"
+    if [[ "${hits:-0}" -gt 0 ]]; then
+      echo -e "  ${yellow}!${plain} 最近的日志里有 ${hits} 处严重错误关键字（FATAL/uncaughtException/ENOSPC/…）"
+      echo -e "      看：${yellow}tail -n 200 ${logfile}${plain}"; warns=$((warns+1))
+    else
+      echo -e "  ${green}✓${plain} 最近日志里没有严重错误关键字"
+    fi
+  fi
+
+  echo
+  if (( problems > 0 )); then
+    if (( warns > 0 )); then
+      echo -e "${red}体检结果：发现 ${problems} 个问题、${warns} 条提醒${plain}"
+    else
+      echo -e "${red}体检结果：发现 ${problems} 个问题${plain}"
+    fi
+    echo -e "  站点起不来时的恢复剧本：${yellow}${VANBLOG_SELF_NAME} restore --offline-full <归档>${plain}"
+    return 1
+  fi
+  if (( warns > 0 )); then
+    echo -e "${yellow}体检结果：没有致命问题，但有 ${warns} 条提醒${plain}"
+    return 0
+  fi
+  echo -e "${green}体检结果：一切正常${plain}"
+  return 0
+}
+
 show_status() {
   echo -e "> VanBlog 状态"
   echo -e "  脚本版本  ：${VANBLOG_SCRIPT_VERSION}"
@@ -3720,6 +4517,10 @@ show_status() {
         echo -e "  HTTPS 端口：${https_port}（${yellow}只映射了 TCP${plain}，浏览器只能用 HTTP/2；跑一次 ${VANBLOG_SELF_NAME} config 重新生成编排文件即可加上 UDP）"
       fi
     fi
+    # 证书剩余天数（只读；HTTP/IP 部署没有证书时它自己会说"未发现证书"，不算问题）
+    # ⚠️ status 是"看一眼"的命令，不该因为证书快过期就返回非 0 —— 那是 doctor 的职责，
+    #    所以这里吞掉返回码，只把信息打出来。
+    cert_report || true
     if [[ -n "${http_port}" ]]; then
       local base code
       base="$(vanblog_api_base 2>/dev/null)"
@@ -4006,6 +4807,9 @@ reset_from_backup() {
   [[ -n "${code}" ]] || code="000"
   if [[ "${code}" != "200" ]]; then
     echo -e "${red}站点接口不通（${base} → ${code}）。重置需要 server 在跑：先 ${yellow}${VANBLOG_SELF_NAME} start${red}（或先 install）。${plain}"
+    # 同上：server 起不来常常是因为 mongo 坏了，那时"先 start"这句话是空头支票 ⇒ 给出真正能走的路。
+    echo -e "${yellow}  如果 start 也起不来（多半是 mongo 数据损坏），下面这条路能救：${plain}"
+    print_dead_site_playbook "${target}"
     return 1
   fi
 
@@ -4149,7 +4953,13 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
                             不更旧）时醒目 WARN 并要人确认（VANBLOG_ASSUME_YES=1 不阻塞，WARN 照打）。
   status                  状态总览（只读）：脚本版本、安装/数据目录、编排里的 vanblog 与 mongo 镜像、
                           mongo 数据是否存在、HTTP 端口、接口探活、容器状态、各目录占用、
-                          整站备份数量与最近三个归档、磁盘剩余。
+                          整站备份数量与最近三个归档、磁盘剩余、**证书剩余天数**。
+  doctor                  体检（只读，不改任何东西）：容器状态与重启次数、健康探测有没有生效、
+                          健康接口（503 = server 活着但 mongo 连不上）、磁盘剩余、最近一次备份多旧、
+                          cron 备份上次是否失败、caddy 证书目录有没有持久化、**证书剩余天数**
+                          （<21 天提醒、<7 天报红）、日志里的严重错误关键字。
+                          退出码 0 = 没有致命问题（可能仍有提醒），**1 = 有问题** ⇒ 可以直接挂 cron 或监控。
+                          ⚠️ 读不到证书（纯 HTTP/IP 部署、还没签发）是合法状态，只打一行说明，不算问题。
   log                     查看日志（docker-compose logs）。
   uninstall               卸载。会问确认；**不删备份**；顺带清掉本分支镜像、本地构建 tag 与自建 shim。
   reset_https             重置 https 设置（证书签不出来、域名换过、caddy 配置被改坏时用）。
@@ -4176,6 +4986,11 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
         restore <归档名>           归档在服务器备份目录里 → 不上传，秒级开始（几百 MB 也一样）
         restore <本地路径>         本地文件 → multipart 上传
         --no-static               只恢复数据库，保留当前图床/附件
+        --offline-full            🔴 **站点已经起不来时**用（通常是 mongo 数据损坏）：先校验归档 →
+                                  停栈 → 把数据库目录**改名保留**（不删除）→ 起栈 → 用归档重置整站 →
+                                  逐项核对；任何一步失败都打印可直接照抄的回滚命令。
+                                  为什么需要它：restore 与 reset 都要先访问站点接口，而 server 要连
+                                  mongo ⇒ 库坏了就是死锁，这是唯一不需要故障站点配合的恢复路径。
         --with-static             显式恢复静态文件（默认就是恢复）
         --verbose                 打印完整清单 JSON
                                   ⚠️ 恢复**不停服**：server 按集合原子替换 + 重建索引 + 触发全量渲染。
@@ -4237,10 +5052,29 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
                                   ⚠️ 这四条（verify-deep / drill / backup-verify / backup-status）都由 vanblog-drill.sh
                                   实现，vanblog.sh 在 pre_check **之前**就转交过去，所以都**不需要 root**，
                                   也不会去 mkdir /var/vanblog。完整参数与更多开关：./vanblog.sh drill --help
+  backup-cron-run                 定时备份的**专用入口**（install-cron 装进 crontab 的就是它，
+                                  一般不用手敲）。与裸 backup 的区别是它把"失败"变成看得见的事件：
+                                    1. 整站备份失败 ⇒ 自动回落 `backup --offline`（直接打包数据目录，
+                                       不需要 server 活着 —— 也就是站点被打瘫时唯一还能产出备份的方式，
+                                       而且它是唯一连 caddy 证书一起备的）；
+                                    2. 结果写进 <备份目录>/cron-status.json（0600，临时名 + mv），
+                                       `doctor` 与 `status` 会读它 ⇒ 备份一直在失败这件事不再只有翻日志才知道；
+                                    3. 设了 VANBLOG_BACKUP_ALERT_WEBHOOK 就在失败时 POST 一次告警
+                                       （⚠️ 打不通绝不影响备份结果与退出码）；
+                                    4. 顺手跑一次 backup-status --strict，把"陈旧/未验证"也记进状态文件。
+                                  退出码 = 备份本身的结果（两种都失败才非 0）。
   install-cron                    把「每天一次整站备份」装进 root 的 crontab（幂等：
                                   已有同样的条目就不重复加；参数不同会拒绝并让你显式 --force）。
         --hour N                  每天几点跑（0-23，默认 3）
+        --every N                 每 N 小时跑一次（1-23，与 --hour 互斥）⇒ RPO = N 小时
         --keep N                  备份成功后保留最新 N 份（默认 VANBLOG_BACKUP_KEEP 或 7）
+        --with-verify             再装一条「每周校验」：周日 <hour+1>:00 跑 backup-verify
+                                  （先做一次新备份再立刻验证，失败非 0 退出）。便宜，建议开。
+        --with-drill              再装一条「每月演练」：每月 1 号 <hour+2>:00 跑 drill（起一次性
+                                  容器真恢复一遍并逐项对账）。**默认关**：要容器引擎 + 磁盘
+                                  （归档大小的两倍以上），小机器上别开。
+                                  ⚠️ --remove 删**全部**三种任务；--force 只重写这次请求的那几条；
+                                  重复装同一个任务不会出现两行；--remove 与 --with-* 互斥（退出码 2）。
         --remove                  从 crontab 移除（token 文件保留，路径会打印出来）
         --force                   用新参数替换已有条目
                                   token 取 VANBLOG_ADMIN_TOKEN（或安装时交互输入），写进
@@ -4280,6 +5114,21 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
     VANBLOG_BACKUP_FORMAT=zstd|xz|gzip       backup 的压缩格式
     VANBLOG_BACKUP_CONSISTENT=1              等价于 backup --offline --consistent
     VANBLOG_BACKUP_KEEP=7                    等价于 backup --keep 7（只留最新 7 份）
+    VANBLOG_BACKUP_MIRROR_DIR=               备份成功后把归档（含 .sha256）再复制到**第二个目的地**
+                                           （另一块盘 / NFS / 对象存储的 FUSE 挂载点都行）。
+                                           ⚠️ 默认空 = 不镜像，行为与以前完全一样。
+                                           为什么需要：归档默认就在 <数据目录>/log/vanblog-backups，
+                                           和数据**同一棵树、通常同一块盘** ⇒ 盘毁/误删/被勒索时一起没。
+                                           复制后会校验（sha256 → zstd -t → 只比字节数并明说没真校验），
+                                           校验不过就删掉坏副本。⚠️ 目的地出问题**绝不会**让本地备份算失败。
+    VANBLOG_BACKUP_MIRROR_KEEP=              镜像目的地保留几份（默认与 VANBLOG_BACKUP_KEEP 相同）。
+                                           清理只碰 vanblog-full-*.tar.zst / *-data.tar.gz，别的文件一个不动。
+    VANBLOG_BACKUP_ALERT_WEBHOOK=            定时备份**失败**时 POST 一次 JSON（{"text": "..."}）到这个地址。
+                                           只在失败时发；10 秒超时；⚠️ 打不通绝不影响备份结果与退出码。
+    VANBLOG_SKIP_PULL=1                      完全不联网，只用本机已有的镜像（air-gapped 装机/升级）。
+                                           本机没有那个镜像就明确报错并说清怎么 docker load。
+                                           ⚠️ 不设它时照常 pull（否则 latest 这类会移动的标签永远升不上去）；
+                                           pull 失败但本地有一份 ⇒ 自动回落本地那份并警告"可能不是最新"。
     VANBLOG_BACKUP_SPACE_MARGIN_MB=256       备份前空间预检的余量（MB）：剩余 < 估算+余量 → 拒绝备份
     VANBLOG_BACKUP_SKIP_SPACE_CHECK=1        完全跳过空间预检（估算不出来时本来就会明说并放行）
     VANBLOG_RESTORE_FILE=<路径>              等价于 restore <路径>（老写法，仍支持）
@@ -4382,6 +5231,7 @@ $(menu_state_line)
     ${green}12.${plain} 重置整站（${yellow}新机器推荐${plain}：自动初始化 + 恢复 + 重启 + 逐项核对）
     ${green}14.${plain} 定时备份（写进 root 的 crontab：每天一次整站备份，默认保留 7 份，幂等）
     ${green}15.${plain} 校验备份（不解压验证归档：压缩完整性 + sha256 + 内容清单）
+    ${green}16.${plain} 体检（${yellow}只读${plain}：容器/接口/磁盘/备份新旧/证书剩余天数/日志错误，有问题退出码非 0）
     ${green}── 其它 ──────────────────────────────────${plain}
     ${green}8.${plain}  卸载（会问确认；${yellow}不删备份${plain}）
     ${green}9.${plain}  重置 https 设置（证书签不出来 / 换过域名 / caddy 配置被改坏时）
@@ -4439,6 +5289,9 @@ echo && read -ep "请输入选择 [0-30]: " num
   15)
     verify
     ;;
+  16)
+    doctor
+    ;;
   20)
     update_script
     ;;
@@ -4446,7 +5299,7 @@ echo && read -ep "请输入选择 [0-30]: " num
     show_usage
     ;;
   *)
-    echo -e "${red}请输入正确的数字 [0-8]${plain}"
+    echo -e "${red}请输入正确的数字 [0-30]${plain}"
     ;;
   esac
 }
@@ -4500,6 +5353,11 @@ if [[ $# > 0 ]]; then
   "status")
     show_status 0
     ;;
+  "doctor")
+    shift
+    doctor "$@"
+    exit $?
+    ;;
   "-h" | "--help" | "help")
     show_usage
     exit 0
@@ -4517,6 +5375,11 @@ if [[ $# > 0 ]]; then
   "backup")
     shift
     backup 0 "$@"
+    ;;
+  "backup-cron-run")
+    shift
+    backup_cron_run "$@"
+    exit $?
     ;;
   "verify")
     shift

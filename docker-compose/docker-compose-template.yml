@@ -20,9 +20,27 @@ services:
     # server 自己还要停 waline、停 website、关 mongo 连接。docker 默认只等 10 秒就 SIGKILL，
     # 余量太薄 —— 稍微慢一点的机器就会在关连接的半途被砍。给到 30 秒。
     stop_grace_period: 30s
-    # ⚠️ 这里**故意不写 healthcheck**：镜像里已经有 HEALTHCHECK 指令（打 `/api/public/health`），
-    # 编排里再写一份就是两处需要同步维护的真相。容器日志的大小上限也已经在下面那个
-    # logging 块里管着了（10m × 3），事件日志另有一套按大小轮转（VANBLOG_EVENT_LOG_MAX_MB）。
+    # ⚠️ 这里以前**故意不写 healthcheck**，理由是"镜像里已经有 HEALTHCHECK 指令，编排里再写一份
+    #    就是两处需要同步维护的真相"。那个理由在 **podman 下不成立**：podman/buildah 构建会
+    #    **丢掉 Dockerfile 的 HEALTHCHECK 指令**，于是 podman 部署**完全没有健康探测**，而 podman 的
+    #    `restart: always` 也不会因为 unhealthy 而重启 ⇒ "容器 Up 但站点坏了"没人知道。
+    #    所以两处都写，并且用守卫（`scripts/tests/image-runtime.test.sh`）钉住**逐字节相同**：
+    #    同步维护的成本由测试承担，而不是靠人记得。
+    #    判据与镜像里那条完全一致（含"探 3001 上故意不存在的路径而不是 `/`"这个取舍，理由写在
+    #    Dockerfile 的 HEALTHCHECK 注释里：探 `/` 会触发真实渲染，高峰期慢响应会被误判成坏死）。
+    # ⚠️ podman 用户还需要自己加一件事：podman 不会因 unhealthy 重启容器，要
+    #    `podman run --health-on-failure=restart`（或 quadlet 里 `HealthOnFailure=restart`）才会自愈。
+    #    compose 的 healthcheck 只是让 `docker compose ps` / `podman ps` 能看出状态。
+    # ⚠️ `start_period` 需要 compose 文件格式 ≥3.4（本文件就是 3.4，mongo 那个 healthcheck 已在用），
+    #    冷启动 + 首次连 mongo 很慢，不给足会一起来就 unhealthy。
+    healthcheck:
+      test: ["CMD", "node", "-e", "const h=require('http');let n=0,bad=0;const done=()=>{if(++n===2)process.exit(bad?1:0)};const probe=(port,path,ok)=>{const r=h.get({host:'127.0.0.1',port:port,path:path,timeout:4000},res=>{res.resume();if(!ok(res.statusCode))bad=1;done()});r.on('timeout',()=>{r.destroy();bad=1;done()});r.on('error',()=>{bad=1;done()})};probe(80,'/api/public/health',s=>s<500);probe(3001,'/__vanblog_health_probe__',()=>true)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    # 容器日志的大小上限已经在下面那个 logging 块里管着了（10m × 3），
+    # 事件日志另有一套按大小轮转（VANBLOG_EVENT_LOG_MAX_MB）。
     # 先起 mongo：server 连不上库会退出，容器重启几次才稳定，首次安装时看着像失败。
     # 这里**故意提交列表形式**（只保证启动顺序，不等待就绪），而不是
     # `depends_on: {mongo: {condition: service_healthy}}` 长格式，方向是这样选的：
