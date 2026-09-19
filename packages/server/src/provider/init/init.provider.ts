@@ -508,6 +508,54 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
   invalidateInitCache() {
     this.hasInitedCache = null;
   }
+  /**
+   * 取"当前有效的忘记密码恢复密钥"，供**匿名**的 `/api/admin/auth/restore` 校验用。
+   *
+   * ## 为什么需要这个方法（而不是让调用方直接读 cache）
+   *
+   * 这里曾经是一个**未认证的管理员接管漏洞**，两个 innocuous 的细节凑在一起：
+   *
+   * 1. `CacheProvider.get(key)` 在键缺失时返回 **`{}`**（不是 undefined）；
+   * 2. 校验写的是松散比较 `if (!token || token != keyInCache) throw 401`。
+   *
+   * JS 里 `"[object Object]" != {}` 的结果是 **false** —— 对象被转成原始值再比 ——
+   * 所以只要 `restoreKey` 不在**本进程**的缓存里，攻击者 POST
+   * `{"key":"[object Object]","name":"attacker","password":"…"}` 就能通过校验，
+   * 直接改写 `id:0` 管理员的用户名与口令（随后旧 token 被 `disableAll()` 吊销，
+   * 攻击者用新口令登录，再签超管 API Token / 下载整站备份 / 跑流水线执行代码）。
+   *
+   * 而"键不在本进程缓存里"并不是假设：`initRestoreKey()` 只在主实例跑
+   * （`main.ts` 的 `isPrimaryInstance(cluster)` 约定），`CacheProvider.data` 是每进程一份的普通对象
+   * ⇒ **`VANBLOG_CLUSTER_WORKERS>1` 时，worker 进程上这条接口永远处于可绕过状态**。
+   * 那是文档化的旋钮（支持 `auto`/`cpus`/`max`/N），不是 exotic 配置。
+   *
+   * ## 现在的契约
+   *
+   * - 只接受**字符串**且长度 ≥ 32 的密钥（`makeSalt()` 是 32 字节 base64 ⇒ 44 字符）；
+   *   任何非字符串（包括那个 `{}`）一律视为"没有密钥"。
+   * - 缓存里没有时**回落到文件** `<config.log>/restore.key`（主实例启动时写的，0600），
+   *   这样 cluster 的 worker 也能正常校验 —— 与 `setupKey.ts` 里"worker 回落读文件"同一个手法。
+   * - 两处都拿不到 ⇒ 返回 `null`，调用方必须**失败关闭**（拒绝请求），绝不"当作空密钥继续比"。
+   */
+  async getRestoreKeyForVerification(): Promise<string | null> {
+    const cached = this.cacheProvider.getString('restoreKey');
+    if (cached) return cached;
+
+    // 回落到共享文件：worker 进程的内存里没有，但主实例启动时落过盘。
+    const logDir = config.log || '/var/log';
+    try {
+      const fromFile = fs.readFileSync(path.join(logDir, 'restore.key'), 'utf-8').trim();
+      if (fromFile.length >= 32) {
+        // 回填本进程缓存，免得每次恢复都读盘
+        await this.cacheProvider.set('restoreKey', fromFile);
+        return fromFile;
+      }
+    } catch {
+      // 文件不存在/读不到 ⇒ 落到下面的 null（失败关闭）
+    }
+    return null;
+  }
+
   async initRestoreKey() {
     const key = makeSalt();
     await this.cacheProvider.set('restoreKey', key);

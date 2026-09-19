@@ -85,6 +85,14 @@ export class TokenProvider {
     return await this.tokenModel.updateMany({ disabled: false, userId: id }, { disabled: true });
   }
   async checkToken(token: string) {
+    // ⚠️ 必须先挡掉"没有 token"：下面那句 findOne({ token, disabled: false }) 在 token 是
+    //    undefined 时会被 Mongoose 丢弃该条件 ⇒ 退化成 { disabled: false }，
+    //    于是"库里存在任意一个未吊销 token"就等于校验通过。
+    //    今天不可利用（AdminGuard 的第一环 JwtStrategy 从同一个 header 取值，缺 token 早就 401 了），
+    //    但任何新增的取值路径（cookie / Authorization / query）都会让它变成真绕过 ⇒ 在源头关掉。
+    if (typeof token !== 'string' || !token.trim()) {
+      return false;
+    }
     const result = await this.tokenModel.findOne({ token, disabled: false });
     if (!result) {
       return false;

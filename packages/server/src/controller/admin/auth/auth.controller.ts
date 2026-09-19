@@ -24,6 +24,7 @@ import { CacheProvider } from 'src/provider/cache/cache.provider';
 import { InitProvider } from 'src/provider/init/init.provider';
 import { PipelineProvider } from 'src/provider/pipeline/pipeline.provider';
 import { ApiToken } from 'src/provider/swagger/token';
+import { safeEqual } from 'src/utils/crypto';
 
 @ApiTags('auth')
 @Controller('/api/admin/auth/')
@@ -109,8 +110,28 @@ export class AuthController {
     @Body() body: { key: string; name: string; password: string },
   ) {
     const token = body.key;
-    const keyInCache = await this.cacheProvider.get('restoreKey');
-    if (!token || token != keyInCache) {
+    // ⚠️ 这里以前是：
+    //     const keyInCache = await this.cacheProvider.get('restoreKey');
+    //     if (!token || token != keyInCache) throw 401
+    // 两个细节凑成一个**未认证的管理员接管**：`get()` 在键缺失时返回 `{}`，而
+    // `"[object Object]" != {}` 在 JS 里是 **false**（对象被转成原始值再比）⇒ 校验通过。
+    // 键缺失不是假设：`initRestoreKey()` 只在主实例跑，而 `CacheProvider.data` 是每进程一份，
+    // 所以 `VANBLOG_CLUSTER_WORKERS>1` 时**每个 worker 上这条匿名接口都可被绕过**，
+    // 攻击者能直接改写 id:0 管理员的用户名与口令。
+    // 现在：只接受字符串密钥、常量时间比较、拿不到密钥就**失败关闭**（详见
+    // `init.provider.ts` 的 `getRestoreKeyForVerification`）。
+    const expectedKey = await this.initProvider.getRestoreKeyForVerification();
+    if (!expectedKey) {
+      this.logger.error(
+        '「忘记密码」恢复密钥不可用（内存缓存与 <日志目录>/restore.key 都读不到），已拒绝本次请求。' +
+          '这通常意味着本进程不是主实例且日志目录不可读；请检查 VAN_BLOG_LOG 与卷挂载。',
+      );
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: '恢复密钥错误！',
+      });
+    }
+    if (typeof token !== 'string' || !safeEqual(token, expectedKey)) {
       throw new UnauthorizedException({
         statusCode: 401,
         message: '恢复密钥错误！',
