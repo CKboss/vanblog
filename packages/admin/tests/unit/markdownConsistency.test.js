@@ -171,6 +171,32 @@ describe('编辑器预览 与 前台渲染：sanitize 白名单必须一致', ()
     assert.deepEqual(lists['编辑器'], lists['前台'], '两份 style 白名单不一致');
   });
 
+  it('两边的全局属性清单与 iframe 属性清单**逐项相同**（不只是"名字都出现过"）', () => {
+    // ⚠️ 上面那条"逐项对齐"只检查每个名字在两份文件里**出现过**，
+    //    那不足以挡住漂移：一边把 `border` 从全局挪走、另一边留着，两条断言都还是绿的。
+    //    所以这里直接比清单本身。两份文件的写法不同（website 内联在 mergeAttrs 里，
+    //    admin 抽成了导出的 MARKDOWN_GLOBAL_ATTRIBUTES），所以各用一个提取式。
+    const globalAttrs = (src) => {
+      const m =
+        src.match(/MARKDOWN_GLOBAL_ATTRIBUTES = \[([\s\S]*?)\] as const/) ||
+        src.match(/schema\.attributes\["\*"\] = mergeAttrs\(schema\.attributes\["\*"\], \[([\s\S]*?)\]\);/);
+      assert.ok(m, '找不到全局属性清单');
+      return (m[1].match(/['"][A-Za-z]+['"]/g) || []).map((x) => x.slice(1, -1)).sort();
+    };
+    const iframeAttrs = (src) => {
+      const m = src.match(
+        /SRC_BEARING_EXTRA_TAGS\) \{[\s\S]*?mergeAttrs\(schema\.attributes\[tag\], \[([\s\S]*?)\]\);/,
+      );
+      assert.ok(m, '找不到 iframe 的属性清单');
+      return (m[1].match(/['"][A-Za-z]+['"]/g) || []).map((x) => x.slice(1, -1)).sort();
+    };
+    assert.deepEqual(globalAttrs(admin), globalAttrs(site), '全局属性清单不一致');
+    assert.deepEqual(iframeAttrs(admin), iframeAttrs(site), 'iframe 属性清单不一致');
+    // 反证：清单必须真的提取到了东西，否则 deepEqual 会在两个空数组上假绿
+    assert.ok(globalAttrs(site).length >= 4, '全局属性清单提取失败（空数组会让上面的断言假绿）');
+    assert.ok(iframeAttrs(site).includes('allowFullScreen'), 'iframe 清单里没有 allowFullScreen');
+  });
+
   it('两边都有「URL 属性必须有协议白名单」的漂移守卫', () => {
     for (const [label, src] of [['前台', site], ['编辑器', admin]]) {
       const code = noComments(src);
