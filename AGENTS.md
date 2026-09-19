@@ -442,6 +442,7 @@ curl -s "http://127.0.0.1:3001/api/comment?path=%2Fpost%2F1&page=1&pageSize=3" |
 | pnpm 启动即 `Permission denied ... pnpm/global/v11` | 全局 pnpm 版本太新、要写 `~/.local/share/pnpm` | 用 `.tools/node_modules/pnpm/bin/pnpm.cjs` + 隔离 HOME |
 | `sharp: Installation error: Request timed out` | 直连 GitHub 下载 libvips | 设 `npm_config_sharp_libvips_binary_host` / `npm_config_sharp_binary_host`（§3.3） |
 | node-gyp `common.gypi not found` | 头文件下载失败 | 设 `npm_config_disturl`，并清掉 `.tools/home/.cache/node-gyp` |
+| `npm config set disturl` 报 `not a valid npm option`，但构建"成功" | npm 11（node 24）已移除该配置项，而 `RUN … && echo` 的退出码来自 **echo** | 别用 `npm config set`；改写 `/app/.npmrc` 的 `disturl=`（pnpm 转成 `npm_config_disturl`）**并 `grep -q` 校验**，见 §7.72.5 |
 | mongod `Wrong mongod version` / `UPGRADE PROBLEM ... featureCompatibilityVersion` | 数据 FCV 低于当前 mongod 要求 | 走 §4.2 升级链 |
 | mongod `Cannot write pid file to xxx: No such file or directory` | `--fork` 后 cwd 改变，用了相对路径 | `--dbpath/--logpath/--pidfilepath` 全用绝对路径 |
 | waline 日志 `bind EADDRINUSE null:8360` | 上次 stop 没杀掉 waline（它以相对路径启动，命令行不含工作区路径） | `dev-env.sh stop` 已处理；手工：`pkill -f '[v]anilla.js'` 后重启 server |
@@ -1606,13 +1607,31 @@ website 新增 `__tests__/robustness.spec.ts`(12)；admin 新增 `adminRobustnes
   `Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`、caddy `-Server`。
 - ⚠️ `X-Frame-Options` 必须是 **SAMEORIGIN 而不是 DENY**：后台的评论管理页会把同源的 waline `/ui`
   放进 iframe，DENY 会直接白屏。
-- **刻意不加 CSP**：内联样式 + bytemd 注入的脚本 + 可选第三方统计，严 CSP 会把站点搞坏，
-  松 CSP 等于没有。要做必须先给内联样式发 nonce。测试里钉了「不许半成品地上 CSP」。
+- **抓取类 CSP 指令仍然刻意不加**：内联样式 + bytemd 注入的脚本 + 可选第三方统计，严 CSP 会把站点搞坏，
+  松 CSP 等于没有。要做必须先给内联样式发 nonce。
+  ⚠️ **更正（2026-09-19，`61953ae3`）**：原来这里写的是"刻意不加 CSP"，现在已经**加了三条非抓取指令**
+  —— `frame-ancestors 'self'; object-src 'none'; base-uri 'none'`（不覆盖已存在的头）。三条都逐个核过安全性：
+  `frame-ancestors 'self'` 与既有 `X-Frame-Options: SAMEORIGIN` 同义（后台嵌同源 waline `/ui` 是**我们框它**，
+  属 `frame-src`，不受影响）；`object-src 'none'` 安全因为正文白名单有 `iframe` 但没有 `object`/`embed`/`applet`；
+  `base-uri 'none'` 安全因为 `<base` 在 website 与 admin 里零命中。
+  ⚠️ **覆盖面很小，别当成全站 CSP**：`main.ts` 只对四个 pre-Nest 前缀调这个中间件
+  （`/static/`、`/rss/`、`/sitemap/`、`/swagger`）；前台是独立 Next 进程、后台是独立静态包，**都不经过它**。
+  全站 CSP 属 caddy 那一层。原来钉「不许半成品地上 CSP」的两条断言被**升级而不是删除** ——
+  它们真正保护的是"没有抓取类指令"，所以现在断言**下发的那个头的值里不含 `script-src`/`style-src`**
+  （对整个文件断言 `doesNotMatch(/script-src/)` 会匹配到解释它为什么不存在的那句注释，见 §7.72.8 ④）。
 
 **4. `pageSize=-1` 收敛 + API Token 有效期**
 - 公开文章列表原来允许任何人 `pageSize=-1` 把**全部文章连正文**一次拉走（前台静态生成需要它）。
   现在只有 `isInternalRequest()`（回环直连，或带 `x-vanblog-internal: <VAN_BLOG_INTERNAL_TOKEN>`）
   可以，其它夹到 `MAX_PAGE_SIZE`。一体式部署零配置；前后端分离时两边配同一个 token。
+  ⚠️ **更正（2026-09-19，`cc1c51eb`）**："两边配同一个 token"这句话**以前是无效的** —— 前台从来不发这个头
+  （`website/api/getArticles.ts` 是裸 `fetch`，`VAN_BLOG_INTERNAL_TOKEN` 在整个 website 包零命中），
+  所以分离部署下 `pageSize=-1` 被**静默**夹到 100，标签页/时间线/总字数悄悄少数据且不报错。
+  现在 `api/internalFetch.ts` 的 `serverFetch()` 会在**服务端且令牌已设**时附上它，只接到 **8 个 SSR 调用点**；
+  4 个浏览器端调用方（文章解锁、阅读计数、搜索、pageview）**刻意排除**（在那里附令牌等于把它交给访客），
+  并有 spec 断言它们没 import 这个封装。令牌不进客户端包有三层保证（`typeof window` 判断、无 `NEXT_PUBLIC_`
+  前缀、只在服务端 import），另有一条**跨包钉子**断言头名与服务端 `rateLimit.ts` 认的字符串相等 ——
+  没有它，任何一边改名都会静默恢复"配了令牌但还是少数据"而两套测试都绿。
 - API Token 原来是 **100 年**过期（等于永不过期）。新签发默认 1 年（`VANBLOG_API_TOKEN_TTL_DAYS`），
   已签发的不受影响（`expiresIn` 已写在库里）。
 - 文章解锁的密码比较改成**常量时间**（`verifyAccessPassword()`），同时兼容历史明文与将来的哈希。
@@ -6373,7 +6392,7 @@ stage 里就有一段注释写着这三个包名，直接 grep 文本会匹配�
 
 | 量到的 | 数值 |
 | --- | --- |
-| 镜像体积 | **860 MB → 892 MB（+32 MB，+3.7%）** |
+| 镜像体积 | **860 MB → 892 MB（+32 MB，+3.7%）** ⚠️ 这是**那一轮**的实测记录；2026-09-20 按最终 lockfile 重建后是 **871 MB**（中途那版 `supplychain-test` 是 869 MB） —— 我们自己的 `.map`/`.d.ts` 不再进镜像（232 + 232 → 0 + 0）、`nss-tools` 移除（`0b22908f`，见 §7.72.1 的范围表）。字体那 +32 MB 仍在。 |
 | `/usr/share/fonts` | 27,989,228 B（≈28 MB） |
 | apk installed size | font-dejavu 9,990 KiB + font-wqy-zenhei 16 MiB + fontconfig 518 KiB |
 | `fc-list` 条数 | **0 → 25** |
@@ -7326,6 +7345,12 @@ IPv6 手工展开成八组再比对（`::`、`::1`、`fc00::/7`、`fe80::/10`、
 ⇒ promise 永不 settle：状态停在"进行中"、归档写了一半、等待中的请求挂着、优雅关机跑满超时，
 而唯一的证据是几行 uncaughtException —— 因为 **`main.ts` 的 uncaughtException 只打印不退出**，
 所以**用户看不到失败**。
+⚠️ **更正（2026-09-19，`ee67797f`）**：这一条已经修了 —— `uncaughtException` 现在打 FATAL、跑关机钩子
+（3 秒硬上限）、**退出码 1**，交给容器重启策略；`gracefulShutdown` 加了 `exitCode = 0` 参数，
+所以 SIGTERM/SIGINT/SIGHUP 仍退 0，`docker stop` 不会被变成失败。`unhandledRejection` **故意**仍只记日志
+（本仓库有大量 fire-and-forget 写库）。钩子是模块级可变变量，因为处理器注册在 `gracefulShutdown`
+（const 箭头函数）定义之前，否则撞 TDZ。上面那段"用户看不到失败"的推理保留，因为它是**当时**的事实、
+也解释了为什么这个改动值得做。
 
 ⇒ 两条规矩：① 写流的地方必须把 `error` 与 `drain`/`end` **race** 起来；
 ② 失败时**半成品要删** —— 否则 tar 会把它打进一个"看着完整其实少一半文档"的归档，
@@ -7406,19 +7431,225 @@ IPv6 手工展开成八组再比对（`::`、`::1`、`fc00::/7`、`fe80::/10`、
 
 
 
-### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-19 **系统性代码审查（§7.71）之后**复跑，本机实测、**串行**）
+### 7.72 站长批准后的批量修复：一个"不可达的高危"是怎么变成可达的，以及并行工程的三类事故
+
+> 2026-09-19 晚那一轮：把 §7.71 报出来、当时**没动**的东西全部落地（`9720de9c..0b22908f`，11 个提交）。
+> 这一轮的价值不在"修了多少条"，而在它暴露的四类**结构性**问题：修复之间的可达性耦合、贯通多层的
+> 静默失效、构建脚本吞掉失败、以及并行工程本身的三种事故。下面每条都写了"下次怎么不再踩"。
+
+#### 7.72.1 范围
+
+| 提交 | 主题 |
+| --- | --- |
+| `ee67797f` | 协作者权限四层断链（**从来没生效**）+ 超管排除表 + token 竞态 + 恢复接口专用限流桶 + multipart 全局净化管道 + `uncaughtException` 非 0 退出 |
+| `28279ab9` | 初始化/恢复的互斥从"每进程一个布尔"改成 Mongo TTL 锁（`vanblog_locks`） |
+| `cc1c51eb` | 五条可靠性：定时发布 `.limit(500)` 截断、RSS 原子写、revalidate 失败关闭、前台发内部令牌、cluster 强杀 `exit(1)` |
+| `61953ae3` | 流水线依赖名收口、CSP 三条（含诚实的覆盖面说明）、自定义页 302 同源、跨包常量对账 |
+| `2faf3599` | 正文 HTML 白名单收紧 + 两个"白名单从来没按它说的工作"的 bug |
+| `ae38f376` | 两份消毒器副本的一致性测试改成**比清单内容**而不是比名字出现 |
+| `0bf06b33` | 前台构建在 server 不可达时因 `wordTotal` 为 `undefined` 整个失败 |
+| `c200c71a` | 44 条作用域 override：生产漏洞 231 → 109，零降级 |
+| `0b22908f` | cli/waline 两棵树改走 lockfile、被 echo 吞掉的构建失败、HSTS、10 个 action 钉 SHA、`.map`/`.d.ts` 不进镜像（892 → 869 MB） |
+| `83c116a6` | 补上漏提交的 CSP 守卫 |
+| `1cf67fee` | 文档同步（含三份"按自己标准就是错的"部署页） |
+
+#### 7.72.2 教训一：修一个 bug 可能让**另一个** bug 从不可达变成可达
+
+§7.71 报的"协作者勾「所有权限」= 超管 = 容器内 RCE"，在实践中**并不可达** —— 不是分析错了
+（`access.guard.ts` 的 `permissions.includes('all')` 短路确实在那儿），而是**协作者权限整体失效**
+恰好把它挡住了：`permissions` 恒为空 ⇒ `access.guard.ts:55` 的 `if (!permissions || permissions.length == 0) return false`
+把包括 `all` 在内的一切都拒了。
+
+⇒ **只修字段名，就会让这个高危洞第一次变成可达。** 所以本轮把"字段名修复"与"超管排除表"放进
+**同一个提交**，而且排除表排在权限判定之前。
+
+**规矩**：任何"权限/校验/闸门"类修复，动手前先问一句 —— **修好之后，谁原来被挡住的能力会突然打开？**
+如果答案是"某个已知的越权路径"，两件事必须同批落地，并且在 CHANGELOG 的行为变化里写成**一条**
+（本轮写成第 16、17 两条并互相点名，就是因为分开读任何一条都会误导）。
+
+⚠️ 还有一条同源的：**升级会让协作者突然获得一直被忽略的权限**。这不是 bug，是修好的必然结果，
+但站长必须知道要去复核勾选 ⇒ 它进了 `docs/advanced/collaborator.md` 的最显眼处。
+
+#### 7.72.3 教训二："字段名对不上"是贯通多层的**静默**失效
+
+协作者权限断在四层，每一层单独看都"没错"：
+
+| 层 | 名字 | 后果 |
+| --- | --- | --- |
+| admin 表单 | `permissions`（复数，`CollaboratorModal/index.tsx:125`） | 提交的 body 是复数 |
+| DTO | `permission`（单数，`types/collaborator.ts:7`） | provider 读 `dto?.permission` ⇒ 恒 `undefined` ⇒ `pickPermissions(undefined)` ⇒ `[]` |
+| 写库 | 用单数键，而 `scheme/user.schema.ts:32` 声明复数，且 `@Schema()` **没关 strict** | **mongoose 在落库前静默丢弃该字段** |
+| 读取 | `jwt.strategy.ts:31` 读 `user.permissions` | 恒 `undefined` ⇒ 守卫全拒 |
+
+没有报错、没有日志、没有异常，功能就是不生效。而且因为第三层把字段丢了，**库里从来没有过这个键**
+⇒ 修好之后**不需要数据迁移**（这一点要主动说明，否则下一个人会去找"要不要洗数据"）。
+
+**规矩**：跨层字段名要有**对账断言**，而且断言的必须是**落库后的文档**，不是"调用过 updateOne"。
+本轮 `collaboratorPermissions.spec.ts` 用**内存版 model** 真按 `$set` 写文档、再断言文档里的字段名与值 ——
+断言"调用发生过"抓不到这类 bug，因为调用确实发生了，只是写进去的键被丢了。
+
+#### 7.72.4 教训三：Mongoose 丢弃 `undefined` 查询条件（本轮又抓到两处）
+
+`findOne({ token, disabled: false })` 在 `token` 为 `undefined` 时会**丢掉那个条件**，退化成
+`{ disabled: false }` ⇒ "库里存在任意一个未吊销 token"就等于校验通过。本轮抓到的两例：
+
+1. `TokenProvider.checkToken`（§7.71 已报为地雷，本轮加了 `typeof`/非空守卫）；
+2. `updateCollaborator` 把 `name` 直接解构进 `getCollaboratorByName(name)` ⇒ **不带用户名的请求会改掉
+   某个协作者的口令与权限**（现在 `assertCollaboratorName()` → 400，并有断言证明零次 `updateOne`）。
+
+**规矩**：凡是把用户输入直接当查询条件的地方，先做 `typeof` / 非空校验再进查询。
+这条与 7.72.2 是同一类错误的两个方向 —— **"没有值"被当成"值相等"**（§7.71 的 `!= {}`）
+与 **"没有条件"被当成"条件成立"**（这里）。两者都不报错。
+
+顺带：登录解析改成确定性的（`find({name}).sort({id:1}).limit(2)` 取第一条，管理员 `id:0` 永远排最前），
+重名时打 ERROR 列出所有 id；用管理员名字建协作者、或改名撞上已有协作者，现在都拒绝。
+⚠️ **没有**加 `{name,type}` 唯一索引 —— 那会让已有重名的站点**启动即失败**，而真实部署无法从这里扫描。
+应用层检查 + 确定性排序是这次能做的全部，索引留给能扫库的人。
+
+#### 7.72.5 教训四：构建脚本里"最后一个命令是 echo"会吞掉整条 `RUN` 的退出码
+
+```dockerfile
+RUN npm config set disturl "$NODE_DIST_URL" -g && echo "node-gyp 头文件源: $NODE_DIST_URL"
+```
+
+`npm config set disturl` 在 node 24 的 **npm 11 上是报错的**（`disturl` is not a valid npm option —— 该设置已被移除），
+但整条 `RUN` 的退出码来自**最后那个 echo** ⇒ 构建成功，日志还高高兴兴打印"头文件源已配置"。
+于是那个国内镜像源**从来没被用上**，node-gyp 一直去 `unofficial-builds.nodejs.org`。
+
+之所以拖了很久没人发现：**没有任何 stage 真的跑 node-gyp**（tree-sitter 在 `never-built-dependencies` 里，
+sharp 走 `npm_config_sharp_binary_host` 这个**确实有效**的 `ENV` 拿预编译）。直到 waline 的
+`better-sqlite3` 从超时的 `prebuild-install` 回落、需要真编译才暴露。
+
+修法不是"把 echo 挪走"，而是**校验结果**：六个 stage 现在都写 `/app/.npmrc` 的 `disturl=`
+（pnpm 会转成 `npm_config_disturl`，也就是 node-gyp 读的那个键），然后 `grep -q '^disturl='` 校验写入，
+失败就让构建失败。新构建证明了它生效：`gyp http GET https://cdn.npmmirror.com/binaries/node/v24.21.0/SHASUMS256.txt` → `gyp info ok`。
+
+**规矩**：Dockerfile / shell 里的每个"配置类"命令都要**验证其效果**（读回来 grep、或跑一次真实用它的路径），
+不要依赖退出码 —— 尤其在 `&&` 链末尾还有 echo/日志语句的时候。
+
+#### 7.72.6 教训五：孤立安装看不到根 manifest ⇒ `pnpm.overrides` 对它无效
+
+`Dockerfile` 原来对 cli 与 waline 两棵树是"COPY 单个包目录 + `pnpm i`"：**没有 lockfile**、
+每次构建重新解析，而且 —— 比重现性更糟 —— **根 `pnpm.overrides` 对它们从来无效**，
+因为孤立安装看不到根 manifest。所以 `c200c71a` 那 44 条 override 里针对 waline 子树的部分
+（mysql2 RCE、protobufjs、tar-fs、koa）**根本进不了镜像**。
+
+⚠️ 最有力的证据是 Dockerfile **自己**在 `:100` 与 `:201` 记录过这个错误已为 admin 与 server 修过 ——
+同一个坑第三次出现，因为"修过的那两处"没有被抽象成一条规则。
+
+现在两个 stage 都拷工作区骨架（根 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、
+`tsconfig.base.json`、`patches/`）并用 `--frozen-lockfile --filter` 安装，再 `pnpm deploy --prod` 进 runner。
+新增 `cli_builder` 加 `--ignore-scripts`（唯一依赖 `mongodb` 是纯 JS）；waline **故意保留**构建脚本
+（要编 `better-sqlite3`）。用 `pnpm deploy` 而不是拷 `node_modules`（后者破坏 pnpm 的软链/硬链布局）。
+⚠️ `packages/cli/package.json` **不能**顺手把说明符钉成 `5.9.1`：那会与 lockfile 的 `^5.9.1` 矛盾，
+让 `--frozen-lockfile` 失败。
+
+**两条规矩**：① 依赖修复必须覆盖**所有**进镜像的依赖树，否则会出现"仓库里修好了、镜像里还是旧的"；
+② **依赖修复后必须重建镜像才生效** —— 这句话要写进 CHANGELOG，因为读 CHANGELOG 的人可能只想 `pull`。
+
+验证要在**构建出的镜像里**做，不是看构建日志：`require('/app/cli/node_modules/mongodb')`、
+waline 的 `require.resolve` 链（`@waline/vercel → think-model-sqlite → better-sqlite3@11.10.0`）、
+以及 `better-sqlite3` 真的建表+写中文+读回。⚠️ `ldd better_sqlite3.node` 打印
+`Error relocating … _ZN2v8…` 是**正常**的（node 插件的 V8 符号来自 node 二进制而非共享库），
+记在这里免得下一个人当成坏了。
+
+#### 7.72.7 教训六：blanket override 会**静默降级**，而版本比较不能用字符串
+
+改 `pnpm.overrides` 时踩到两个坑，都不会报错、也没有测试变红：
+
+1. **不带作用域的 override 会把树里已有的更高版本拉下来**：第一版的 `"xml2js": "^0.5.0"` 把已有的
+   **0.6.2 降到 0.5.0**，`"fflate": "^0.7.5"` 把 **0.8.3 降到 0.7.5**。
+   ⇒ 凡是树里存在多个主版本的包，必须写成 `名字@主版本`（本轮 44 条全部带作用域）。
+2. **为抓第 1 条写的检测器自己比错了**：它比的是版本**字符串**，于是 `'3.3.19' < '3.3.7'` 按字典序成立，
+   把三次**升级**报成降级。改成比较解析后的**元组**：60 个变动的包 **0 次降级**。
+
+**规矩**：这个"逐包比对最高解析版本是否下降"的检查值得留在仓库里 —— 它是唯一能自动看见静默降级的办法。
+凡是比版本，比元组，不比字符串。
+
+分类方法也值得复用：215 条 advisory 按"**修它需要什么**"分成 A（同主版本内有修复 ⇒ override，144 条）/
+B（需跨主版本，60 条）/ C（上游无修复，11 条，每条写接受理由），再按**可达性**排序 ——
+"231"不等于"231 个可利用的洞"：144 条在运行时树里、42 条只在 waline 评论模式下才有意义（子进程）、
+**29 条只在 admin 构建期**（runner 拷的是 `packages/admin/dist/` 而不是它的 `node_modules`
+⇒ 部署好的容器里不可达，属构建机供应链风险）。
+
+#### 7.72.8 教训七：并行工程的三类事故（本轮全部真实发生）
+
+**① 依赖重装是一个"维护窗口"，不是一个编辑动作。**
+- 改 `pnpm.overrides` **就是**一次全量重装：**没有**"只改 lockfile、别动 node_modules"的形式 ——
+  `--lockfile-only` 仍会触发清库确认，而 `--config.confirmModulesPurge=false` 的意思是**别问、直接清**。
+- `CI=true` 隐含 `--frozen-lockfile` ⇒ 改完 overrides 必须显式 `--no-frozen-lockfile`，否则必然失败。
+- 后台长任务要用 **`setsid`**：`nohup` **不脱离进程组**，一次前台轮询超时的 SIGTERM 会把安装一起带走。
+  本轮因此中断 **39 分钟**。
+⇒ 需要改依赖时，先宣布窗口、让其它代理停下手上的构建/测试，别与它们交错。
+
+**② 主工作树可能处于"内部不一致"状态，此时 `--frozen-lockfile` 必然失败且与你的改动无关。**
+本轮 `0b22908f` 要验证镜像构建时，主树是 `package.json` 53 条 override 对 lockfile 15 条、
+且 server 的说明符也对不上 —— 那种状态下构建失败**不能**用来判断改动对不对。
+⇒ 需要构建验证的代理用 `git worktree add --detach <sha>` 在一个**一致的快照**上做
+（本轮就是在 `9720de9c` 的 worktree 上构建验证的），并在汇报里写明用的是哪个快照。
+
+**③ 空断言的变体不止"import 也算命中"一种。**
+本轮两条变异对照**第一次跑是 0 红**，原因是：源码锚点用子串匹配时，把调用改成
+`if (false && …)` **子串仍然匹配**；`process.exit(1)` 被短路后**字面仍然存在**。
+⇒ 要断言**行为**（"第 N+1 次调用必须 429 且带 `Retry-After`"、"被拒的尝试必须没读密钥文件"）
+或**结构**（"该钩子必须是处理器体内的顶层语句"、"文件里不许出现 `if (false)`"），
+并且每条都要有一个"在短路形状上必须失败"的对照。
+同源的还有一条：一致性测试断言"每个预期名字**出现**在两份文件里"，抓不到"一份把条目移出清单、
+另一份留着" ⇒ 改成**逐项比较抽取出的清单**，并加非空对照（两个空数组会 `deepEqual` 出假通过）。
+
+**④ 剥注释这件事，本轮又踩了第 7、8 次，而且踩出一个新形状。**
+Dockerfile 的 absence 断言被作者自己解释 `--ignore-scripts` 与 `nss-tools` 的注释弄红。
+⚠️ 新增的坑：**`stripCommentsForAnchor` 是 TypeScript 剥注释器，不能用于 shell/Dockerfile** ——
+它会把 bash 的 `https://` 当行注释起点、并被引号与 `$( )` 带偏，实测把整份脚本啃残
+⇒ 断言永远不可能命中（**空转**，比红更糟）。shell 侧要用"删整行 `#` 注释"的办法
+（`sed '/^[[:space:]]*#/d'`），并配一条"剥之前有、剥之后没有"的双向对照 + 非空语料对照。
+
+#### 7.72.9 死旋钮守卫**当场拦住了一个正要被造出来的死旋钮**
+
+`cc1c51eb` 那条 FATAL 文案的第一版叫运维去调 `VANBLOG_SHUTDOWN_TIMEOUT_MS` —— **没有任何代码读它**
+（它只出现在 `main.ts` 的一句注释里）。真实的宽限期是 `clusterBootstrap.ts:75` 的
+`hooks.shutdownTimeoutMs ?? 10000`。是 §7.71 加的 `envVarMentions.spec.ts` 把它拦下来的。
+
+⇒ 那条守卫的价值已经被证明两次（`VANBLOG_CADDY_DATA_PATH` 差一个下划线、这个纯属虚构）。
+**规矩**：写任何面向运维的文案时，里面的环境变量名要能被那条守卫验过；文案里提到"某个可调项"之前，
+先去代码里确认它真的被读到。⚠️ 顺带发现 `main.ts:100` 的注释**错了两处**（引用不存在的变量，
+且把默认值写成 8000 而不是 10000）。
+
+#### 7.72.10 测试与未量
+
+本轮各提交的实测（**不同时间点**，因为多个代理并行加 spec，所以用例数会漂）：
+server `jest` **191 套件**（用例数 2418–2424 之间；最后一次带数字的是 `c200c71a` 的 2418，
+其后 `83c116a6` 又加了 8 条 CSP 用例）；website `vitest run` **88 → 89 文件 / 949 用例**、
+`pnpm run build` 成功且 **81/81 静态页**；admin `node --test` **587/587**、`pnpm run build` 成功；
+`scripts/tests` 本轮变动的四个：`dockerfile-alpine-sharp` **61**、`dockerfile-patches` **58**、
+`image-runtime` **56**、`caddy-config` **23**（全 0 失败）；`docs-links` 5/5、`docs-consistency` 52/0；
+lockfile override 与 `package.json` **53 对 53**；镜像 **869 MB**（`vanblog:supplychain-test`）。
+
+⚠️ 已知负载敏感假红：`utils/logRotate.spec.ts`（单独 8/8）与 `utils/rateLimit.spec.ts`（单独 13/13）。
+本轮有镜像构建在并行跑，**更容易**假红 ⇒ 见红先单独重跑再定性（§7.39 的铁律）。
+
+**未验证**（都需要这里没有的条件）：① cluster > 1 对真 Mongo 的两个 worker 端到端
+（跨进程用例用的是两个 provider 共享一个内存锁集合，跑的是生产锁逻辑；真实复现要
+`VANBLOG_CLUSTER_WORKERS=2` + 两个并发 `/api/admin/init`，期望一个 200 一个 409 且 `users` 里只有一个 `id:0`）；
+② HSTS 走真实 TLS 握手（只验证了生成的配置含它且 `caddy validate` 通过）；
+③ `metadata-action` 的标签合并语义（只能在下次真实发版时确认；Dockerfile 的 LABEL 是同值兜底，不会冲突）；
+④ dispatch 的字符集校验（本地无法触发 workflow）；⑤ `packages/waline/node_modules` 在本机装不全
+（`better-sqlite3` 没有 Node 24 预编译、node-gyp 也没接好）⇒ waline 子树只能在镜像构建里验证；
+⑥ TOC mXSS 与本轮各修复的浏览器/真容器端到端复现。
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **批量修复轮（§7.72）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **178 套件 / 2146 用例：2138 绿 + 8 跳过 + 0 失败**（2026-09-19 代码审查后实测）。⚠️ 旧数字"170 套件 / 1957 用例（1950 绿 + 7 跳过）"**作废**：本轮新增 `restoreKeyVerification`、`storedFileName`、`imageLimits`、`restoreSizeGate`、`safeFetch`、`backupSecrets`、`markdownExport`、`attachment`、`deadSettingShowFriends`、`washAuthorDesc` 等 spec，并给 `watermark.spec.ts` 补了 9 个边界用例。再往前的"169/1951"与"1275 用例 + 1 个既有失败（watermark 字体用例）"也都**作废**（后者是可见水印重写成 sharp/SVG 后不再联网拉字体，§7.66）。跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）与 HTTPS+SNI 活体用例（要 `VANBLOG_SAFEFETCH_LIVE=1`）。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
-| website `vitest run` | **85 文件 / 890 用例全绿**（2026-09-19 实测；⚠️ 旧数字 84/885 **作废** —— 多出的是 TOC mXSS 那套 `tocMathXss.spec.ts`，§7.71／`63e073c5`。沿革：原 77/748 → 84/885 → 85/890） |
-| admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-19 复跑确认，本轮改的是 server/website 侧，admin 数字未变；但 ⚠️ 本轮**动过** `admin/tests/unit/securityHardening.test.js` 与 `watermarkText.test.js` 两条跨包锚点：前者随 SSRF 重命名更新并加强成钉住新性质，后者从"钉字面量 52"升级成"钉常量导出为 52 **且** 判定与文案同源"，§7.71.7）。沿革：原 498 → 579 → 582（`aboutPage.test.js` 8 → 11，§7.68）。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1982 条断言全绿**（2026-09-19 实测）。⚠️ 同日早先的 **1968** 已被取代（那 +14 来自 `vanblog-drill.test.sh` 606 → 620，钉 drill 备份目录回落值改成推导式，§7.71.8）。沿革：原 22 文件 / 1109 条 → vanblog-update **41 → 98**（§7.68）→ vanblog-reset **51 → 98**（setupKey 修复，§7.69）→ **1968**（停止静默吞参数，§7.70）→ **1982**。其它大头：drill 620、install-cron 123、vanblog-source-install 153、backup-restore 81、verify 94、download-fallback 78、build-image-local 44、dockerfile-alpine-sharp 32 |
+| server `jest` | **191 套件 / 2424 用例：2416 绿 + 8 跳过 + 0 失败**（2026-09-20 00:07 本机复跑，`-w 3`）。⚠️ 旧数字"178 套件 / 2146 用例"**作废** —— 多出的 13 个套件来自 §7.72 那一轮（协作者权限与超管排除、DB TTL 锁、五条可靠性、正文白名单、CSP、`wordTotal` 兜底等）。更早的"170/1957"与"169/1951"同样作废。 |
+| website `vitest run` | **89 文件 / 953 用例全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 85/890 **作废**（多出的是 `wordTotal ?? 0` 那条与正文白名单的渲染级用例）。 |
+| admin `node --test tests/unit` | **148 套件 / 587 用例全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 582 **作废** —— 多出的 5 条是"两份消毒器副本**逐项比清单**"（`ae38f376`）与水印阈值那条跨包锚点的升级。⚠️ 本轮又动过两条跨包锚点（`safeFetch` 的 pinning 形状、消毒器清单），所以"只改了 server"仍必须跑这一套。 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 2026 条断言全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 1982 **作废**；本轮变动的是 `dockerfile-alpine-sharp` 32→**61**、`dockerfile-patches` 55→**58**、`image-runtime` 51→**56**、`caddy-config` 16→**23**（四个都单独复跑确认）。 |
 | 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 两轮排查后都复跑仍 52/0；第 4 条的语料先加了 `packages/server/src/**/*.ts`（`f4fec80d`／§7.69），第二轮又加了 `scripts/vanblog-drill.sh`（`afe7f2c4`／§7.70 —— `VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` 定义在那个脚本里，一下午两个代理各自被同一条误报绊了一次） |
 | CI（GitHub Actions） | `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**（server-test 已是"默认全跑**全部** spec、不再维护白名单"那条配置，§7.67；拆白名单当时是 169 个，现 170 —— 所以别把 spec 个数写进句子）；上一个提交 `9601faa4` 上两者都是 **failure** —— 本轮修的三个红套件在 CI 上也红过。⚠️ **`docs/**` 不在两条 workflow 的 paths 过滤里 ⇒ 只改文档的提交不会跑任何 CI**（§7.70），所以文档轮的验证只能靠本机那三条守卫 |
-| 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
+| 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**：**871 MB**（tag `vanblog:final-verify`，2026-09-20 按**最终 lockfile** 重建 —— `0b22908f` 那次验证构建是在 `9720de9c` 的 worktree 上做的，依赖工作落地后必须重建）。冒烟：8 条路径（`/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、`/rss/feed.xml`、`/timeline` 全 200，`/post/1` 按预期 404）、9 条故障特征全空、容器未重启、SIGTERM **1 s** 内停下。⚠️ 旧数字 892 MB 作废（`.map`/`.d.ts` 不再进镜像 + 移除 `nss-tools`；中途那版 `supplychain-test` 是 869 MB）。容器内字体与水印行为见 §7.66。 |
 | 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
-| ⚠️ **没跑/跑不了**的（截至 2026-09-19 代码审查轮） | ① admin 的 playwright e2e（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；**CI 上是绿的**，最后一次本机全量是 §7.58/§7.59 时期的 111 用例）；② `./vanblog.sh update` / `reset` / `restore` 的**真 root 端到端**（无 root、docker daemon 连不上）⇒ 靠 `vanblog-update` 98 条 + `vanblog-reset` 98 条 mock（含变异对照）、"真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测、以及**活体 HTTP 契约**验证（不带密钥 400 / 带密钥 201，§7.69）覆盖；③ **SSRF pinning 的容器端到端**（同因）—— ⚠️ 这正是 `autoSelectFamily` 那个 bug 只有端到端钉子才抓得到的原因，所以那条钉子别删（§7.71.4）；④ `washAuthorDesc` 的**真库**验证（没有可写实例）⇒ 用真的会执行 `$set`/`$unset` 的内存模型覆盖；⑤ HTTPS+SNI 在 pinning 下的活体用例默认 `skip`，要 `VANBLOG_SAFEFETCH_LIVE=1`；⑥ TOC 的 mXSS **没在浏览器里动态复现**（复现步骤在 `63e073c5` 的提交信息里）；⑦ 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；⑧ 后台文案与文档的**浏览器观感**（只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子"）；⑨ ⚠️ §7.70 那 12 项**真容器实测**用的是 `vanblog:local-test`（`VAN_BLOG_VERSION=local@8ffa391a`），不是当前 HEAD 构建的镜像 —— 但此后只动过文档、测试、脚本与 server/website 代码，凡引用那批数字（892 MB、`fc-list` 25、字体 27,989,228 B、限流 601/1200）都要记得它们是**那个镜像**上的实测 |
+| ⚠️ **没跑/跑不了**的（截至 2026-09-20 批量修复轮，详见 §7.72.10） | ① admin 的 playwright e2e（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；**CI 上是绿的**）；② **cluster > 1 对真 Mongo 的两个 worker 端到端**（跨进程用例用的是两个 provider 共享一个内存锁集合，跑的是生产锁逻辑；真实复现要 `VANBLOG_CLUSTER_WORKERS=2` + 两个并发 `/api/admin/init`，期望一个 200 一个 409 且 `users` 里只有一个 `id:0`）；③ HSTS 走真实 TLS 握手（只验证了生成的配置含它且 `caddy validate` 通过）；④ `metadata-action` 的标签合并语义（只能在下次真实发版时确认）；⑤ `workflow_dispatch` 的字符集校验（本地无法触发 workflow）；⑥ `packages/waline/node_modules` 本机装不全（`better-sqlite3` 无 Node 24 预编译、node-gyp 未接）⇒ waline 子树只能在镜像构建里验证（已在 `final-verify` 镜像内验过 `require.resolve` 链与建表读写）；⑦ TOC mXSS 与本轮各修复的**浏览器**端到端复现；⑧ `washAuthorDesc` 对真库的迁移（用内存版 model 验的幂等与不覆盖）。 |
 | admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
