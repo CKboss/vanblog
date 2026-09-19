@@ -91,6 +91,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_PIPELINE_TIMEOUT_MS` | `30000` | 单个流水线的执行上限，超时直接杀进程 |
 | `VANBLOG_DEPS_INSTALL_TIMEOUT_MS` | `300000` | 流水线安装依赖（`pnpm add`）的上限 |
 | `VANBLOG_ALLOW_PICGO_PLUGINS` | 关 | `true` 才允许安装 picgo 第三方插件。**默认关闭是有意的**：picgo 1.5.6 依赖的 git-clone（命令注入）与 decompress（路径穿越）都没有修复版本，而插件名来自后台输入框。内置图床都不需要插件 |
+| `VANBLOG_REMOTE_FETCH_ALLOWED_PORTS` | `80,443` | 服务端**主动抓取外链**时允许连接的端口（逗号分隔）：外链图片转存、导出 md/mdz 时抓远程图片。⚠️ **这是行为变化**：图片挂在非标准端口的站点，这两个功能会开始失败——报错信息里写了怎么配（把那个端口加进来即可）。写错值**不会**变成"全部放行"：没设 / 空串 / 一个合法项都没有都回落 `80,443`；单个非法项（`80x`、`0`、`99999`、空项）被忽略，其余合法项照常生效。⚠️ 内网地址是**另一道**闸门（解析后判定，含 IPv4-mapped IPv6 / NAT64 / 6to4 / CGNAT），不在这个变量里 |
 | `VANBLOG_DISABLE_IP_GEO` | 空 | `true` 完全关闭登录日志的 IP 归属地查询（不再把访客 IP 发给第三方 cip.cc） |
 | `VAN_BLOG_IP_GEO_TIMEOUT` | `3000` | 归属地查询超时（毫秒，100–600000） |
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | `true` 恢复「任何域名都批准按需证书」的旧行为（多域名/CDN 场景才需要；默认只批准本站已登记的域名） |
@@ -113,10 +114,13 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_BACKUP_SWEEP_MAX` | `3` | 每轮巡检最多查几份归档 |
 | `VANBLOG_BACKUP_SWEEP_DEEP` | 关 | 巡检时是否也做成员级哈希（≈1.4s/份）。默认关：巡检要的是「便宜到能天天跑」 |
 | `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48`（`0` = 关） | 太久没有「已校验的成功备份」就在启动与每次备份失败后 WARN |
+| `VANBLOG_BACKUP_TIMEOUT_MINUTES` | `60`（`0` = 不限时） | 一整轮备份（导出 + 打包）的超时：到点即中止，状态记 `stage='timeout'`、**删掉半成品**、返回 HTTP 400。实测一次整站导出 28 秒（69MB 归档），几 GB 的站点也在分钟级，所以 60 分钟还没完基本就是卡住了；库特别大或盘特别慢可以调大（上限 `525600` = 一年），非法值与负数回落 60 |
+| `VANBLOG_BACKUP_STALE_WORK_HOURS` | `6`（`0` = 关闭清理） | 启动时清理**上次崩溃遗留**的备份/恢复工作目录与上传暂存的年龄阈值：`<静态目录>/tmp/full-restore-*`（里面是**解包后的整站明文**）与 `<备份目录>/upload-tmp/restore-upload-*`（单个可达 8GB）。只删够旧的，正在跑的那次不受影响；跳过同名的**文件**与无关目录；删了什么、释放多少空间都记日志。上限 `8760`（一年）。⚠️ 这些目录匿名 HTTP 读不到（静态守卫对 `tmp`/`upload-tmp` 一律 403），所以它治的是"落盘的明文与每次崩溃漏一份磁盘"，不是远程泄露 |
 | `VANBLOG_BACKUP_INCLUDE_CADDY` | 关 | `true` 时整站归档额外打包 caddy 的 TLS 材料（`VAN_BLOG_CADDY_DATA_PATH`，恢复时写回）。默认关：证书到期会自动重签，一般不用备 |
 | `VANBLOG_BACKUP_ZSTD_LEVEL` | `19` | 整站归档的 zstd 压缩等级（夹在 **1–22**，越大越慢越小；非法值回落 19）。容器设了内存上限时建议调到 `12`（`-19 --long` 峰值能到 1GB 上下，可能被 OOM 杀） |
 | `VANBLOG_RESTORE_PRUNE_STATIC` | **开** | 恢复时把四个静态目录（`img`、`file`、`customPage`、`themes`）**修剪成与归档完全一致**：归档里没有的文件会被删掉（在所有拷贝成功之后才执行）。这是「100% 保真恢复」的代价：恢复后不保留「备份之后新上传的图片」。`off` = 旧行为（只覆盖、不删多余） |
 | `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS` | 关 | 归档里**缺失**的集合默认只**报告**不删除。设 `true` 才真的 drop（恢复成「与备份那一刻完全一致」的库） |
+| `VANBLOG_RESTORE_MAX_TOTAL_BYTES` | `107374182400`（100 GiB） | 整站恢复**解包后**允许的成员总字节上限（夹在 1 MiB–1 TiB，非法值回落默认），在解包**之前**按 tar 头里的成员大小算好再放行。为什么要它：匿名的恢复接口接受 8GB 上传（5 次/10 分钟/IP），一个高压缩比的 zstd 炸弹能解出远超磁盘的量，把数据库与日志一起写满。另有一条**不可配**的规则：目标卷剩余空间必须 ≥ 成员总字节 + 256 MiB。⚠️ 读不到剩余空间时这道闸门**跳过**而不是拒绝——把"读不到"当成 0 会让没有 `statfsSync` 的平台恢复全部失败 |
 
 ## 访问统计与日志
 
