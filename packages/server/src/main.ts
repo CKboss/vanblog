@@ -278,11 +278,28 @@ async function bootstrap() {
     SwaggerModule.setup('swagger', app, document);
   }
   const { port, host } = getListenTarget(DEFAULT_SERVER_PORT, globalConfig.serverHost);
-  if (host) {
-    await app.listen(port, host);
-  } else {
-    await app.listen(port);
-  }
+  // ⚠️ **必须显式传 backlog**：Node 的默认值只有 **511**，而 caddy 反代到 Node 时是
+  //    "一个并发请求一条上游连接"（模板里 `max_idle_conns_per_host` 只有 32，空闲池留不住
+  //    那么多连接），于是瞬时高并发下 SYN 队列直接溢出、SYN 被内核丢弃，caddy 侧表现为
+  //    `dial tcp 127.0.0.1:3000: i/o timeout` → **502**。
+  //    实测（2026-09-20，C10K：先建 10000 条连接保持，再同时发 `/api/public/meta`）：
+  //      改前 200=6437 / **502=3563**，且容器 netns 的 `TcpExtListenOverflows` = **3745**
+  //      （与 502 数量吻合）；同一次压测里 caddy **直服**的静态图片是 10000/10000 全 200
+  //      ⇒ 瓶颈不在 TCP accept 能力或 fd（容器内 `Max open files` 是 1048576），
+  //         而在 Node 这一层的 accept 队列深度。
+  //    内核会把实际 backlog 夹到 `min(backlog, net.core.somaxconn)`（本机 4096），所以
+  //    想要更深还要同时抬 somaxconn —— 这点写进文档，不要在代码里假装能超过内核上限。
+  const listenBacklog = envInt('VANBLOG_LISTEN_BACKLOG', 4096, 1, 65535);
+  // Nest 的 `.d.ts` 只声明了 `listen(port)` 与 `listen(port, hostname)`，但实现是
+  // `listen(port, ...args)` 透传到 `httpAdapter.listen(port, ...args, cb)` ⇒ 运行时支持
+  // backlog（Express → `http.Server.listen(port, host, backlog, cb)`）。这里用局部类型断言，
+  // 而不是绕过 Nest 直接 `getHttpServer().listen()`：后者会丢掉 Nest 的 init/flushLogs/错误处理。
+  const listenWithBacklog = app.listen as unknown as (
+    port: number | string,
+    host: string | undefined,
+    backlog: number,
+  ) => Promise<unknown>;
+  await listenWithBacklog(port, host, listenBacklog);
 
   // ⚠️ 上游 keep-alive 的超时**必须长于反代的空闲超时**，否则会出现经典的竞态：
   // caddy 把一条空闲连接留在池里（本仓库的模板配的是 60s），而 Node 默认
