@@ -73,7 +73,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_MONGO_SOCKET_TIMEOUT_MS` | `120000` | Mongo socket 超时（大备份导入导出的长操作靠它兜底） |
 | `VAN_BLOG_SHUTDOWN_TIMEOUT_MS` | `8000` | 容器 `start.js` 收到 SIGTERM 后等子进程优雅退出的时间，超时硬退 |
 | `VAN_BLOG_STDIO_LOG_MAX_BYTES` | `20971520`（20MB） | 容器内 server/前台 stdio 日志文件的大小上限，超了轮转成 `.old`（只留一份旧的）。容器 stdout 那一份由编排的 `logging.max-size` 管，两套是分开的 |
-| `VAN_BLOG_VERSION_API` | `https://api.mereith.com/vanblog/version` | 后台「新版本提醒」查询的地址（作者提供的版本服务）。版本号只在**两边都是正式发布号**时才比较，所以开发/源码构建不会一直弹「有新版本」；不想要这个提醒，把它指到一个不可达地址即可 |
+| `VAN_BLOG_VERSION_API` | **空（= 关闭）** | 后台「新版本提醒」要查询的地址。⚠️ **默认不再回连任何第三方**：旧默认值是上游作者的版本服务，于是每次启动（以及每次打开后台）都会向一个与本部署无关的域名发请求，带出去的是本站出口 IP 和「这里在运营一个 VanBlog」这个事实。现在**默认一个字节都不发**（DNS 都不查）。想启用就填自己的或任何信任的端点；`off` / `false` / `none` / `disabled` / `0` 与留空等价，都当关闭处理。判断有没有新版本请看仓库的 Releases 页面（后台「关于」页有链接）—— 上游返回的 `0.54.0` 与本项目的 `v2026.x@sha` 形状本来就不可比，只会产生假警报 |
 
 ## 安全、限流与可观测性
 
