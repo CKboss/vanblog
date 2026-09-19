@@ -4,6 +4,7 @@ import { join } from 'path';
 import { RETENTION_DEFAULTS } from './provider/stats/statsMaintenance.provider';
 import { VIEW_MAX_RETAINED_KEYS, DEFAULT_VIEW_MAX_RETAINED_KEYS } from './provider/stats/viewStats.provider';
 import { DEFAULT_JSON_BODY_LIMIT, DEFAULT_JSON_BODY_LIMIT_LARGE, LARGE_JSON_BODY_PREFIXES } from './utils/bodyLimit';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 
 /**
  * 第四轮安全审计 —— 「匿名可写的口子」这一组。
@@ -183,7 +184,21 @@ describe('REGRESSION R4-9（已修）：POST /api/admin/auth/logout 曾经在 /a
     // restore（忘记密码）仍然是匿名的，但那个**应该**匿名：它由 256 位随机恢复密钥把守
     const iRestore = auth.indexOf("@Post('/restore')");
     expect(auth.slice(iRestore - 200, iRestore)).not.toMatch(/@UseGuards/);
-    expect(auth).toMatch(/const keyInCache = await this\.cacheProvider\.get\('restoreKey'\);/);
+    // ⚠️ 2026-09-19 更正：这里原来钉的是
+    //     expect(auth).toMatch(/const keyInCache = await this\.cacheProvider\.get\('restoreKey'\);/)
+    // 也就是**钉住了漏洞本身**（`get()` 在键缺失时返回 `{}`，而 `"[object Object]" != {}`
+    // 在 JS 里是 false ⇒ 匿名接管管理员）。修掉漏洞之后这条断言之所以还"绿"，
+    // 是因为修复代码把旧写法原样抄进了**解释性注释**里 —— 典型的空转断言：
+    // 无论漏洞在不在它都通过，而且还反过来阻止别人删掉那段注释。
+    // 现在改成钉**修复后的形状**，并且先剥注释（src/test-utils/anchorCode），
+    // 免得注释里的旧写法再次把断言喂绿。
+    const authCode = stripCommentsForAnchor(auth);
+    expect(authCode).toMatch(/getRestoreKeyForVerification\(\)/);
+    expect(authCode).toMatch(/safeEqual\(token, expectedKey\)/);
+    // 松散比较的那条判定不许回来
+    expect(authCode).not.toMatch(/token != keyInCache/);
+    // 失败关闭：拿不到密钥就拒绝，而不是"当作空密钥继续比"
+    expect(authCode).toMatch(/if \(!expectedKey\) \{/);
     expect(read('./utils/crypto.ts')).toMatch(/export function makeSalt\(\): string \{\s*\n\s*return randomBytes\(32\)\.toString\('base64'\);/);
   });
 

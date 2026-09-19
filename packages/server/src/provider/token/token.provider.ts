@@ -52,7 +52,10 @@ export class TokenProvider {
       },
     );
     // 默认666666是 api token
-    this.tokenModel.create({ userId: 666666, name, token, expiresIn });
+    // ⚠️ 必须 await：旧实现是 fire-and-forget，于是"签发 token"与"吊销所有 token"之间
+    //    存在竞态 —— 见 disableAll() 上的说明。签发失败时也必须让调用方知道（返回一个
+    //    没落库的 token 等于发给用户一张下次重启就失效的凭证，因为 TokenGuard 要查库）。
+    await this.tokenModel.create({ userId: 666666, name, token, expiresIn });
     return token;
   }
 
@@ -63,17 +66,33 @@ export class TokenProvider {
     const token = this.jwtService.sign(payload, {
       expiresIn,
     });
-    this.tokenModel.create({ userId: payload.sub, token, expiresIn });
+    // ⚠️ 同样必须 await：登录响应本来就要等 token，await 不增加用户可感知延迟，
+    //    而不 await 会让"登录后立刻改密码"这种顺序操作出现吊销漏网（见 disableAll）。
+    await this.tokenModel.create({ userId: payload.sub, token, expiresIn });
     return token;
   }
   async disableToken(token: string) {
     return await this.tokenModel.updateOne({ token }, { disabled: true });
   }
+  /**
+   * 吊销**所有**未吊销的 token。
+   *
+   * ⚠️ 范围要说清楚，因为这个方法名看起来只涉及"登录会话"：
+   * 它按 `{ disabled: false }` 全表更新，所以**API Token 也一起被吊销** ——
+   * API Token 的 `userId` 是 666666（见 createAPIToken），既不是 0 也不属于任何协作者。
+   * 调用点（改管理员口令、走「忘记密码」恢复）之所以要这个行为，正是因为改完凭据后
+   * 旧的 API Token 也必须失效，否则"改密码"根本挡不住已经泄露的长期凭证。
+   *
+   * ⚠️ 调用方必须 **await** 它。旧实现是 `setTimeout(() => disableAll(), 1000)`
+   * （注释写"在前端清理 localStore 之后"），这带来两个真实后果：
+   *   1) 与 create 竞态：登录时那条 `create` 没有 await，若它晚于 disableAll 落库，
+   *      这个新 token 就**不会**被吊销 —— 旧的全失效了，它却还活着；
+   *   2) 进程在这一秒内退出（重启、OOM、部署）⇒ 吊销**完全不发生**，而且没有任何日志。
+   * 前端并不需要这 1 秒：它拿到 200 之后自己清 localStorage，服务端何时吊销与它无关；
+   * 吊销在响应之前完成只会更安全（响应返回时旧凭证已经确定失效）。
+   */
   async disableAll() {
     return await this.tokenModel.updateMany({ disabled: false }, { disabled: true });
-  }
-  async disableAllAdmin() {
-    return await this.tokenModel.updateMany({ disabled: false, userId: 0 }, { disabled: true });
   }
   async disableAllCollaborator() {
     return await this.tokenModel.updateMany(

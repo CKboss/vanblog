@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   Controller,
+  HttpException,
+  HttpStatus,
   Logger,
   Request,
   Post,
@@ -25,6 +27,18 @@ import { InitProvider } from 'src/provider/init/init.provider';
 import { PipelineProvider } from 'src/provider/pipeline/pipeline.provider';
 import { ApiToken } from 'src/provider/swagger/token';
 import { safeEqual } from 'src/utils/crypto';
+import { consumeAttempt, resetAttempts } from 'src/utils/attemptLimit';
+import { bruteForceClientIp } from 'src/utils/trustedProxy';
+import { scaleLimit } from 'src/utils/clusterRole';
+import { INIT_LIMIT_PER_10MIN } from 'src/utils/rateLimit';
+
+/**
+ * 「忘记密码」恢复接口的限流窗口：与 `/api/admin/init*` 同档（10 分钟）。
+ * 阈值直接复用 `INIT_LIMIT_PER_10MIN`（默认 5，`VANBLOG_INIT_LIMIT_PER_10MIN` 可调，
+ * 并经 `scaleLimit()` 按 worker 数摊薄）—— 两者是同一类"匿名、低频、能改写凭据"的接口，
+ * 没必要再引入一个需要单独文档与单独默认值的旋钮。
+ */
+const RESTORE_WINDOW_MS = 10 * 60 * 1000;
 
 @ApiTags('auth')
 @Controller('/api/admin/auth/')
@@ -109,6 +123,31 @@ export class AuthController {
     @Request() request: Request,
     @Body() body: { key: string; name: string; password: string },
   ) {
+    // ⚠️ 专用限流桶（与 `/api/admin/init*` 同档：5 次 / 10 分钟 / IP）。
+    // 这条路由是**匿名**的，而且成功一次就等于改写管理员的用户名与口令 ——
+    // 但它不在 `/api/admin/init` 前缀下，所以 `utils/rateLimit.ts` 的 init 桶管不到它，
+    // 以前只剩全局的 600 次/分钟。恢复密钥是 32 字节随机（爆破不可行），
+    // 真正要防的是：①拿着泄露的密钥反复试；②把它当免费的"改管理员口令"接口刷；
+    // ③在 cluster 多进程下用大流量放大任何判定缺陷。
+    // ⚠️ 计数用 `bruteForceClientIp`（套接字地址优先）而不是 `pickTrustedClientIp`：
+    //    防爆破类计数的收益正是"换一个 key 就重新开始"，理由见 utils/trustedProxy.ts。
+    //    `rateLimit.ts` 由别的改动负责，这里只用它导出的阈值常量，不去改它。
+    const restoreIp = bruteForceClientIp(request);
+    const restoreHit = consumeAttempt(`auth-restore-${restoreIp}`, {
+      max: scaleLimit(INIT_LIMIT_PER_10MIN),
+      windowMs: RESTORE_WINDOW_MS,
+    });
+    if (!restoreHit.allowed) {
+      // 与 rateLimit.ts 的 429 形状保持一致：带上 Retry-After，脚本不必解析中文消息
+      const res = (request as any)?.res;
+      if (typeof res?.setHeader === 'function') {
+        res.setHeader('Retry-After', String(Math.max(1, restoreHit.retryAfterSeconds)));
+      }
+      throw new HttpException(
+        { statusCode: 429, message: '恢复接口调用过于频繁，请稍后再试' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     const token = body.key;
     // ⚠️ 这里以前是：
     //     const keyInCache = await this.cacheProvider.get('restoreKey');
@@ -152,10 +191,15 @@ export class AuthController {
       password,
     });
     await this.initProvider.initRestoreKey();
-    setTimeout(() => {
-      // 在前端清理 localStore 之后
-      this.tokenProvider.disableAll();
-    }, 1000);
+    // ⚠️ 必须在返回响应**之前** await。旧实现是 `setTimeout(() => disableAll(), 1000)`
+    //    （注释写"在前端清理 localStore 之后"），两个真实后果：
+    //    ① 与未 await 的 `tokenModel.create` 竞态 ⇒ 新签发的 token 可能躲过这次吊销；
+    //    ② 进程在这一秒内退出（重启/部署/OOM）⇒ 吊销**完全不发生**，且没有任何日志。
+    //    前端并不需要这一秒：它拿到 200 后自己清 localStorage，服务端何时吊销与它无关；
+    //    改成"响应返回时旧凭证已确定失效"只会更安全。详见 token.provider.ts 的 disableAll()。
+    await this.tokenProvider.disableAll();
+    // 成功了就清掉这个 IP 的计数：站长试错几次再成功，不该被自己的成功锁在门外。
+    resetAttempts(`auth-restore-${restoreIp}`);
 
     return {
       statusCode: 200,
@@ -171,10 +215,10 @@ export class AuthController {
       return { statusCode: 401, message: '演示站禁止修改账号密码！' };
     }
     const data = await this.userProvider.updateUser(updateUserDto);
-    setTimeout(() => {
-      // 在前端清理 localStore 之后
-      this.tokenProvider.disableAll();
-    }, 1000);
+    // ⚠️ 同样改成 await（旧实现是 setTimeout(..., 1000)）：改完管理员口令之后，
+    //    所有旧会话与**所有 API Token** 必须确定失效，否则"改密码"挡不住已泄露的长期凭证。
+    //    理由与竞态细节见 restore() 里那段与 token.provider.ts 的 disableAll() 注释。
+    await this.tokenProvider.disableAll();
     return {
       statusCode: 200,
       data,

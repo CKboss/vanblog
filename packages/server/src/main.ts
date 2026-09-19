@@ -28,7 +28,7 @@ import os from 'node:os';
 import { isPrimaryInstance, resolveClusterWorkers, CLUSTER_ENV } from './utils/clusterRole';
 import { startClusterPrimary } from './utils/clusterBootstrap';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
-import { sanitizeRequestPayloads } from './utils/sanitizeRequest';
+import { sanitizeRequestPayloads, SanitizeBodyPipe } from './utils/sanitizeRequest';
 import {
   DEFAULT_JSON_BODY_LIMIT,
   DEFAULT_JSON_BODY_LIMIT_LARGE,
@@ -38,6 +38,22 @@ import {
 import { applyStaticAssetHeaders } from './utils/imgCompress';
 import { ATTACHMENT_FOLDER } from './utils/attachment';
 import { THUMB_FOLDER } from './types/setting.dto';
+
+/**
+ * `uncaughtException` 的退出硬上限（毫秒）。见 bootstrap() 里那条处理器的注释。
+ */
+const FATAL_EXIT_HARD_LIMIT_MS = 3000;
+
+/**
+ * 致命退出前的清理钩子。
+ *
+ * ⚠️ 为什么要用一个可变的模块级钩子，而不是直接在处理器里调 `gracefulShutdown`：
+ * `uncaughtException` 的注册发生在 bootstrap() 的**最前面**（越早注册越好，否则启动阶段的
+ * 异常没人接），而 `gracefulShutdown` 是后面才定义的 `const` 箭头函数 —— 在那之前引用它会踩 TDZ。
+ * 钩子在 `gracefulShutdown` 定义好之后赋值；如果异常发生在赋值之前（启动阶段），
+ * 处理器就走"没有钩子"的分支，直接 exit(1) —— 那时候也还没有浏览统计需要 flush。
+ */
+let fatalShutdownHook: ((reason: string) => Promise<void>) | null = null;
 
 async function bootstrap() {
   const jwtSecret = await initJwt();
@@ -54,9 +70,50 @@ async function bootstrap() {
       `[unhandledRejection] ${reason?.stack || reason?.message || JSON.stringify(reason)}`,
     );
   });
+  // ⚠️ uncaughtException 必须**退出**（非 0），不能只记日志。
+  //
+  // 以前这里只 `console.error`，理由是"别让单个漏掉的 catch 变成宕机"。那个理由对
+  // `unhandledRejection` 成立（这个仓库确实有大量 fire-and-forget 写库，一次 Mongo 抖动
+  // 不该带走整个 server），但对 `uncaughtException` **不成立**：Node 官方文档明确说
+  // 此时进程处于未定义状态，继续跑是不安全的。
+  //
+  // 更实际的是它把 `scripts/start.js` 刚修掉的那个事故又放回来了：start.js 的重写目的
+  // 正是"子进程退出 ⇒ 容器退出 ⇒ restart 策略介入"（见它的头注释与 :88-99），
+  // 而只记不退意味着容器一直 Up、健康检查一直 200、`restart: always` 永不触发，
+  // 站点却可能已经半死 —— 日志里只有一行没有上下文的 uncaughtException。
+  // 本轮就有一个真实来源：备份的 NDJSON 写流缺 error 监听，ENOSPC 时错误正是以
+  // "EventEmitter 'error' 无监听者"的形式落到这里（那条已单独修好）。
+  //
+  // cluster 模式下退出同样是**正确**行为，不会与主进程的重启逻辑打架：
+  // worker 退出 → 主进程按 `utils/clusterBootstrap.ts` 的崩溃窗口计数重拉；
+  // 短时间内崩太多次（maxFastCrashes）→ 主进程自己 exit(1) → 容器重启。
+  // 也就是说"坏掉的 worker 被换掉"正是那套逻辑设计出来要做的事；
+  // 继续带着未定义状态服务请求才是与它冲突的那个选择。
   process.on('uncaughtException', (error: Error) => {
     // eslint-disable-next-line no-console
-    console.error(`[uncaughtException] ${error?.stack || error?.message || error}`);
+    console.error(
+      `[FATAL][uncaughtException] ${error?.stack || error?.message || error}\n` +
+        `进程将退出（非 0）以便容器重启策略接管：出现未捕获异常后进程状态已不可信，继续服务请求不安全。`,
+    );
+    // 硬上限：优雅退出自己也可能挂住（例如 flush 卡在已经坏掉的 Mongo 连接上），
+    // 到点直接 exit(1)。3 秒是"够 flush 一次浏览统计、又不会让容器等太久"的折中；
+    // 与 VANBLOG_SHUTDOWN_TIMEOUT_MS(默认 8000) 同类的取舍，但这里要更短 ——
+    // 已经是异常状态了，不值得等满正常停机的宽限。
+    const hardExit = setTimeout(() => {
+      // eslint-disable-next-line no-console
+      console.error('[FATAL] 优雅退出超时，强制 exit(1)');
+      process.exit(1);
+    }, FATAL_EXIT_HARD_LIMIT_MS);
+    Promise.resolve()
+      .then(() => (fatalShutdownHook ? fatalShutdownHook('uncaughtException') : undefined))
+      .catch((err: any) => {
+        // eslint-disable-next-line no-console
+        console.error(`[FATAL] 退出前的清理失败：${err?.message || err}`);
+      })
+      .then(() => {
+        clearTimeout(hardExit);
+        process.exit(1);
+      });
   });
 
   // JSON body 限额：全局默认只有 1mb（登录/评论/访客计数这些匿名接口不再敞着 50MB），
@@ -78,6 +135,13 @@ async function bootstrap() {
   // 所有路由之前先净化 query/params/body：删掉 `$` 开头的 Mongo 操作符键与原型污染键，
   // 否则公开接口上 `?category[$ne]=x` 这类查询对象会被直接塞进 Mongo 过滤器。
   app.use(sanitizeRequestPayloads);
+  // ⚠️ 上面那趟中间件**够不着 multipart 的文本字段**：multer 是方法级拦截器
+  // （`@UseInterceptors(FileInterceptor('file'))`），它在中间件之后才把表单字段写进 req.body。
+  // 全局管道跑在拦截器之后、处理器之前（Nest 顺序：中间件 → 守卫 → 拦截器前置 → 管道 → 处理器），
+  // 是唯一能统一兜住这一半的位置。对已净化的 JSON body 再跑一遍是幂等的。
+  // 覆盖面与残留缺口（`@Request()` 直接读 req.body 的写法）见 utils/sanitizeRequest.ts 的
+  // SanitizeBodyPipe 注释，并有 sanitizeRequest.multipart.spec.ts 的源码级守卫钉着。
+  app.useGlobalPipes(new SanitizeBodyPipe());
 
   // 整站备份里含数据库内容（密码哈希、jwt 密钥等），不能像图片那样匿名可下载。
   // 备份默认放在 staticPath 之外（config.backupPath），这里是兜底：万一被配到静态目录里，
@@ -365,7 +429,10 @@ async function bootstrap() {
   // start.js 现在会把收到的信号转发成 SIGTERM，所以这里必须真的处理它。
   let shuttingDown = false;
   // 三个信号都接：SIGINT（Ctrl-C）、SIGTERM（docker stop / watch 重启）、SIGHUP（终端断开）
-  const gracefulShutdown = async (signal: string) => {
+  // ⚠️ exitCode 参数是给 uncaughtException 用的：信号停机是**正常**退出（0），
+  //    致命异常退出必须是**非 0**，否则编排系统（docker/k8s）会把它当成干净退出，
+  //    既不告警也不按失败重启 —— 而实际上进程是带着未定义状态被我们主动杀掉的。
+  const gracefulShutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) {
       return;
     }
@@ -402,11 +469,14 @@ async function bootstrap() {
     } catch (err) {
       console.error(`关闭 HTTP 服务失败：${(err as Error)?.message}`);
     }
-    process.exit(0);
+    process.exit(exitCode);
   };
   process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
   process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
   process.on('SIGHUP', () => void gracefulShutdown('SIGHUP'));
+  // 致命异常复用同一条清理链（flush 浏览统计 → 停 waline/前台 → 关 HTTP），但退出码是 1。
+  // 赋值必须在 gracefulShutdown 定义之后 —— 见文件顶部 fatalShutdownHook 的注释。
+  fatalShutdownHook = (reason: string) => gracefulShutdown(reason, 1);
 
   setTimeout(() => {
     console.log(host ? `应用已启动，端口: ${port}，监听: ${host}` : `应用已启动，端口: ${port}`);
