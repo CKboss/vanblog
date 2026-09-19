@@ -39,21 +39,32 @@ concurrency:
   group: admin-e2e-${{ github.ref }}
   cancel-in-progress: true
 
+# ⚠️ 最小权限：这两个 job 只跑测试、不发布，所以只要 contents: read。不写 permissions: 时
+#    push 触发会拿到仓库默认令牌（可能含 write）。触发是 push + pull_request（不是
+#    pull_request_target），fork PR 本来就只有只读令牌，所以这条是**收口**而不是补洞 ——
+#    写出来是为了将来有人给这两个 workflow 加发布步骤时不会顺手拿到写权限。
+permissions:
+  contents: read
+
 jobs:
   admin-e2e:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # ⚠️ 第三方 action 一律钉到 commit sha，不用可变标签：标签能被上游移动、账号能被接管，
+        #    而这些 job 持有写权限（packages/contents）⇒ 那等于把"往 ghcr 推镜像 / 往 Release 挂
+        #    vanblog.sh"的能力交出去，而文档正叫用户 `curl … | sh` 以 root 执行那个附件。
+        #    sha ↔ 标签的对应写在行尾注释里，升级时重新解析一次即可。
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b  # 分支 v2（该仓库没有 v2 这个 tag，@v2 解析到的是可移动分支）
         with:
           version: 8.11.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 24
           cache: pnpm
@@ -96,7 +107,7 @@ jobs:
 
       - name: 失败时上传诊断物证
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: admin-e2e-diagnostics
           path: |

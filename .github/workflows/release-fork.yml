@@ -27,7 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # ⚠️ 第三方 action 一律钉到 commit sha，不用可变标签：标签能被上游移动、账号能被接管，
+        #    而这些 job 持有写权限（packages/contents）⇒ 那等于把"往 ghcr 推镜像 / 往 Release 挂
+        #    vanblog.sh"的能力交出去，而文档正叫用户 `curl … | sh` 以 root 执行那个附件。
+        #    sha ↔ 标签的对应写在行尾注释里，升级时重新解析一次即可。
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
 
@@ -111,7 +115,7 @@ jobs:
           } >> RELEASE_BODY.md
 
       - name: 创建 / 更新 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}

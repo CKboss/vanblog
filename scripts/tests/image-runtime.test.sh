@@ -217,9 +217,50 @@ grep -qE '^exec node start.js' "${ENTRY}" \
 grep -q 'vanblog_email' "${ENTRY}" \
   && pass "会识别没被替换的 EMAIL 占位符（否则 caddy 拿非法邮箱去注册 ACME）" \
   || fail "没有处理 EMAIL 占位符 vanblog_email"
-grep -q 's|VAN_BLOG_EMAIL|' "${ENTRY}" \
-  && pass "替换 EMAIL 用 | 当 sed 分隔符（地址里有 / 或 & 也不会写坏配置）" \
-  || fail "替换 EMAIL 的 sed 分隔符不是 |"
+# ⚠️ 下面这一组替换了原来那条 `grep -q 's|VAN_BLOG_EMAIL|'`（"替换 EMAIL 用 | 当 sed 分隔符，
+#    地址里有 / 或 & 也不会写坏配置"）。那条断言的**理由本身是错的**：`|` 正是分隔符，
+#    所以地址里含 `|` 时表达式畸形、sed 退出非零、输出文件为空 ⇒ caddy 起不来，
+#    容器"在跑但 80/443 都没监听"（正是降级路径要防的那个事故）。而 `*@*.*)` 这个判据
+#    是放行 `a|b@c.com` 的。修法是**去掉文本替换这个类别**，不是把输入洗得更干净：
+#    降级模板里根本没有 VAN_BLOG_EMAIL 占位符，逐字复制就是正确结果。
+# ⚠️ 断言"不存在"一律用 ${ENTRY_CODE}（上面已按整行 # 剥掉注释）：entrypoint 的注释里
+#    现在就写着那条旧 sed 命令（解释为什么不能这么做），拿原文断言必然假红。
+OLD_SED='sed "s|VAN_BLOG_EMAIL|${EMAIL_SAFE}|g"'
+if printf '%s' "${ENTRY_CODE}" | grep -qF "${OLD_SED}"; then
+  fail "entrypoint 又用 sed 把 EMAIL 文本替换进 caddy 配置了（\`|\` 是分隔符，地址里一个 | 就能让配置变空）"
+else
+  pass "entrypoint 不再对 caddy 模板做 EMAIL 文本替换（sed 注入面已消除）"
+fi
+# ⚠️ 反证（两条，缺一条这条 absence 断言都可能是空转的）：
+#   ① 匹配串本身能命中旧写法 —— 否则"没找到"只是因为搜错了东西；
+#   ② 被搜的语料 ${ENTRY_CODE} **确实有内容** —— 剥注释剥过头（或变量为空）时，
+#     任何 absence 断言都会"通过"，这是本仓库踩过的空转守卫形状。
+if printf '%s' "${OLD_SED}" | grep -qF "${OLD_SED}"; then
+  pass "（反证①）absence 断言的匹配串确实能命中旧写法"
+else
+  fail "absence 断言空转：连旧写法自己都匹配不上"
+fi
+if printf '%s' "${ENTRY_CODE}" | grep -qF 'caddyConfig.js' \
+  && printf '%s' "${ENTRY_CODE}" | grep -qE '^exec node start.js'; then
+  pass "（反证②）被搜的语料非空且含关键代码，absence 断言不是在对空串说话"
+else
+  fail "被搜的语料 ${ENTRY_CODE} 可能是空的（剥注释剥过头？）—— absence 断言此时必然假通过"
+fi
+if printf '%s' "${ENTRY_CODE}" | grep -qF 'cp /app/caddyFallbackTemplate.json /app/caddy-fallback.json'; then
+  pass "降级路径改成逐字复制模板（模板里没有占位符，所以这就是正确结果）"
+else
+  fail "降级路径没有用 cp 兜底：caddyConfig.js 一失败就没有可用的降级配置"
+fi
+if printf '%s' "${ENTRY_CODE}" | grep -qF '*[!A-Za-z0-9._%+@-]*)'; then
+  pass "EMAIL 走字符集白名单（含 | & 引号 反斜杠 空格 的一律忽略，不进 ACME 也不进日志）"
+else
+  fail "EMAIL 没有字符集白名单：只剩 *@*.*) 这种形状判断，a|b@c.com 会通过"
+fi
+if grep -qF 'VAN_BLOG_EMAIL' "${FALLBACK}" 2>/dev/null; then
+  fail "caddyFallbackTemplate.json 里出现了 VAN_BLOG_EMAIL 占位符：cp 兜底会把它原样留下，请改成再调一次 caddyConfig.js（别把 sed 加回来）"
+else
+  pass "降级模板不含 VAN_BLOG_EMAIL 占位符（这正是 cp 兜底成立的前提）"
+fi
 
 if [[ -f "${FALLBACK}" ]]; then
   pass "仓库里有 caddyFallbackTemplate.json"

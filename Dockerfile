@@ -117,9 +117,22 @@ COPY ./packages/admin ./packages/admin
 ARG VAN_BLOG_NODE_DIST_URL
 # 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
 # unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
+# ⚠️ 这里以前是 `npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g`，而它在 node 24 自带的
+#    npm 11 上是**失败**的：`npm error \`disturl\` is not a valid npm option`（这个配置项已被 npm 移除）。
+#    更糟的是这条 RUN 的最后一个命令是 echo，退出码取的是 echo 的 ⇒ **失败被吞掉**，
+#    日志里照样打印"node-gyp 头文件源: …"，看起来像设置成功了。于是 node-gyp 一直用默认的
+#    unofficial-builds.nodejs.org（国内连不上），只是此前没有任何 stage 真的走到 node-gyp：
+#    tree-sitter 被 never-built-dependencies 跳过、sharp 用预编译包（它走的是
+#    npm_config_sharp_binary_host 这个 **ENV**，所以那条一直是好的）。
+#    等 waline 的 better-sqlite3 拿不到预编译包、需要现场编译时，这个洞就炸了
+#    （实测：`gyp http GET https://unofficial-builds.nodejs.org/...headers.tar.gz` → FetchError）。
+#    现在改成写进 /app/.npmrc：pnpm 会把 npmrc 里的配置以 npm_config_* 环境变量传给生命周期脚本，
+#    而 node-gyp 读的正是 npm_config_disturl。并且**校验写入结果**、失败就非 0 退出，
+#    不再让末尾的 echo 把错误吞掉（"看起来设置了"比"没设置"更难查）。
 RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
-      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
-      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+      printf 'disturl=%s\n' "${VAN_BLOG_NODE_DIST_URL}" >> /app/.npmrc && \
+      grep -q '^disturl=' /app/.npmrc && \
+      echo "node-gyp 头文件源（写入 /app/.npmrc，pnpm 以 npm_config_disturl 传给脚本）: ${VAN_BLOG_NODE_DIST_URL}"; \
     fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
@@ -215,9 +228,22 @@ RUN printf 'never-built-dependencies[]=tree-sitter\nnever-built-dependencies[]=t
 ARG VAN_BLOG_NODE_DIST_URL
 # 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
 # unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
+# ⚠️ 这里以前是 `npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g`，而它在 node 24 自带的
+#    npm 11 上是**失败**的：`npm error \`disturl\` is not a valid npm option`（这个配置项已被 npm 移除）。
+#    更糟的是这条 RUN 的最后一个命令是 echo，退出码取的是 echo 的 ⇒ **失败被吞掉**，
+#    日志里照样打印"node-gyp 头文件源: …"，看起来像设置成功了。于是 node-gyp 一直用默认的
+#    unofficial-builds.nodejs.org（国内连不上），只是此前没有任何 stage 真的走到 node-gyp：
+#    tree-sitter 被 never-built-dependencies 跳过、sharp 用预编译包（它走的是
+#    npm_config_sharp_binary_host 这个 **ENV**，所以那条一直是好的）。
+#    等 waline 的 better-sqlite3 拿不到预编译包、需要现场编译时，这个洞就炸了
+#    （实测：`gyp http GET https://unofficial-builds.nodejs.org/...headers.tar.gz` → FetchError）。
+#    现在改成写进 /app/.npmrc：pnpm 会把 npmrc 里的配置以 npm_config_* 环境变量传给生命周期脚本，
+#    而 node-gyp 读的正是 npm_config_disturl。并且**校验写入结果**、失败就非 0 退出，
+#    不再让末尾的 echo 把错误吞掉（"看起来设置了"比"没设置"更难查）。
 RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
-      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
-      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+      printf 'disturl=%s\n' "${VAN_BLOG_NODE_DIST_URL}" >> /app/.npmrc && \
+      grep -q '^disturl=' /app/.npmrc && \
+      echo "node-gyp 头文件源（写入 /app/.npmrc，pnpm 以 npm_config_disturl 传给脚本）: ${VAN_BLOG_NODE_DIST_URL}"; \
     fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
@@ -228,6 +254,25 @@ RUN pnpm config set fetch-timeout 600000 -g
 RUN pnpm install --frozen-lockfile --filter "@vanblog/server..."
 WORKDIR /app/packages/server
 RUN pnpm build
+# ── 构建产物瘦身：删掉 .d.ts（.map 已由 tsconfig.build.json 关掉 sourceMap，压根不生成）──
+# ⚠️ 必须在**这个阶段**删。runner 是 `COPY --from=server_builder /app/packages/server/dist/src/ ./`，
+#    如果放到 runner 里"COPY 完再 RUN rm"，**一点体积都省不下来** —— 文件已经在 COPY 那一层里了，
+#    后续层只是给它加一个 whiteout 标记，镜像总大小不变。这是 Dockerfile 的经典陷阱。
+# ⚠️ 为什么是"生成后删"而不是在 tsconfig 里关掉 declaration：`packages/server/tsconfig.json`
+#    有 `"composite": true`，而 TS 规定复合项目不允许关闭 declaration emit（TS6304）。
+#    这个错误**只在镜像构建里暴露** —— 本地 `tsc --noEmit` 不产出文件，所以不报。
+#    不动 composite（它牵涉整个仓库的项目引用与 jest 编译方式，收益不抵风险）。
+# 能删的依据（三条都核过，详见 tsconfig.build.json 的注释）：全仓库没有 --enable-source-maps；
+#    CI 的 server-test.yml 不构建 server；没有任何包依赖 @vanblog/server（它也没有 main/types 字段）。
+# 下面顺手自检：删完 .js 必须还在、入口 main.js 必须还能找到，否则当场失败，
+#    别等到容器起不来才发现（那时已经浪费了整个构建）。
+RUN before_dts="$(find dist -name '*.d.ts' | wc -l)" && \
+    before_map="$(find dist -name '*.map' | wc -l)" && \
+    find dist \( -name '*.d.ts' -o -name '*.map' \) -delete && \
+    echo "dist 瘦身：删掉 .d.ts ${before_dts} 个、.map ${before_map} 个（.map 期望是 0，因为 sourceMap 已关）" && \
+    test "$(find dist -name '*.js' | wc -l)" -gt 100 && \
+    test -n "$(find dist -name 'main.js' | head -1)" && \
+    echo "✓ 自检通过：$(find dist -name '*.js' | wc -l) 个 .js 仍在，入口 $(find dist -name 'main.js' | head -1)"
 # ⚠️ 别想着用 node-linker=hoisted 把 node_modules 摊平后直接拷给 runner（试过了，两个坑）：
 #   1) 扁平布局会让 `types-ramda` 这种**间接**依赖出现在顶层，TypeScript 就能解析到它了 ——
 #      而 `types-ramda@0.29.6` 的 .d.ts 用了 **TS 5.0 的 `const` 类型参数**，本仓库是 TS 4.9.5，
@@ -322,9 +367,22 @@ ENV VAN_BLOG_VERSION=${VAN_BLOG_VERSIONS}
 ARG VAN_BLOG_NODE_DIST_URL
 # 原生模块（tree-sitter / sharp）编译时 node-gyp 要下 Node 头文件；musl 默认走
 # unofficial-builds.nodejs.org，国内连不上会让整个 install 失败。设了就用镜像地址。
+# ⚠️ 这里以前是 `npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g`，而它在 node 24 自带的
+#    npm 11 上是**失败**的：`npm error \`disturl\` is not a valid npm option`（这个配置项已被 npm 移除）。
+#    更糟的是这条 RUN 的最后一个命令是 echo，退出码取的是 echo 的 ⇒ **失败被吞掉**，
+#    日志里照样打印"node-gyp 头文件源: …"，看起来像设置成功了。于是 node-gyp 一直用默认的
+#    unofficial-builds.nodejs.org（国内连不上），只是此前没有任何 stage 真的走到 node-gyp：
+#    tree-sitter 被 never-built-dependencies 跳过、sharp 用预编译包（它走的是
+#    npm_config_sharp_binary_host 这个 **ENV**，所以那条一直是好的）。
+#    等 waline 的 better-sqlite3 拿不到预编译包、需要现场编译时，这个洞就炸了
+#    （实测：`gyp http GET https://unofficial-builds.nodejs.org/...headers.tar.gz` → FetchError）。
+#    现在改成写进 /app/.npmrc：pnpm 会把 npmrc 里的配置以 npm_config_* 环境变量传给生命周期脚本，
+#    而 node-gyp 读的正是 npm_config_disturl。并且**校验写入结果**、失败就非 0 退出，
+#    不再让末尾的 echo 把错误吞掉（"看起来设置了"比"没设置"更难查）。
 RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
-      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
-      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+      printf 'disturl=%s\n' "${VAN_BLOG_NODE_DIST_URL}" >> /app/.npmrc && \
+      grep -q '^disturl=' /app/.npmrc && \
+      echo "node-gyp 头文件源（写入 /app/.npmrc，pnpm 以 npm_config_disturl 传给脚本）: ${VAN_BLOG_NODE_DIST_URL}"; \
     fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
@@ -373,13 +431,44 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
 #    `from distutils.version import StrictVersion` ⇒ 编译必挂（ModuleNotFoundError: distutils），
 #    整个 stage 的 `pnpm i` 直接 exit 1。setuptools 会把 distutils 补回来。
 RUN apk add --no-cache python3 py3-setuptools make g++
-WORKDIR /app/waline
-COPY ./packages/waline/ ./
+# ⚠️ 这一层以前是 `WORKDIR /app/waline` + `COPY ./packages/waline/ ./` + `pnpm i`：
+#    一个**孤立目录**里现场解析依赖，构建上下文里既没有 pnpm-lock.yaml 也没有根 package.json。
+#    两个后果（第二个更要紧）：
+#      1) 不可复现 —— 同一个 commit 两次构建可能装到不同版本；
+#      2) **根 package.json 的 `pnpm.overrides` 完全不生效**。overrides 是通过根 manifest +
+#         lockfile 起作用的，孤立安装两个都看不到 ⇒ 就算仓库里把 mysql2 / tar-fs / axios 这些
+#         （waline 子树里有 critical/high 通告的包）用 override 抬到安全版本，
+#         **镜像里 /app/waline/node_modules 装的仍然是旧的**。而这份 node_modules 会被原样
+#         拷进 runner 并作为子进程运行。
+#    现在和 admin/server/website 三层一样走 workspace + `--frozen-lockfile`，再用 `pnpm deploy`
+#    导出自包含产物（见 server_builder 里那段关于为什么不用 node-linker=hoisted 的说明）。
+# ⚠️ 这一层**不能**加 `--ignore-scripts`：@waline/vercel 硬依赖 sqlite3/better-sqlite3，
+#    musl 上没有预编译包，必须现场 node-gyp 编译（这就是上面装 python3/py3-setuptools/make/g++ 的原因）。
+WORKDIR /app
+COPY ./package.json ./
+COPY ./pnpm-lock.yaml ./
+COPY ./pnpm-workspace.yaml ./
+COPY ./tsconfig.base.json ./
+COPY ./patches ./patches
+COPY ./packages/waline ./packages/waline
 ARG VAN_BLOG_NODE_DIST_URL
 # sqlite3 现场编译同样要下 Node 头文件（musl 默认走 unofficial-builds，国内连不上）
+# ⚠️ 这里以前是 `npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g`，而它在 node 24 自带的
+#    npm 11 上是**失败**的：`npm error \`disturl\` is not a valid npm option`（这个配置项已被 npm 移除）。
+#    更糟的是这条 RUN 的最后一个命令是 echo，退出码取的是 echo 的 ⇒ **失败被吞掉**，
+#    日志里照样打印"node-gyp 头文件源: …"，看起来像设置成功了。于是 node-gyp 一直用默认的
+#    unofficial-builds.nodejs.org（国内连不上），只是此前没有任何 stage 真的走到 node-gyp：
+#    tree-sitter 被 never-built-dependencies 跳过、sharp 用预编译包（它走的是
+#    npm_config_sharp_binary_host 这个 **ENV**，所以那条一直是好的）。
+#    等 waline 的 better-sqlite3 拿不到预编译包、需要现场编译时，这个洞就炸了
+#    （实测：`gyp http GET https://unofficial-builds.nodejs.org/...headers.tar.gz` → FetchError）。
+#    现在改成写进 /app/.npmrc：pnpm 会把 npmrc 里的配置以 npm_config_* 环境变量传给生命周期脚本，
+#    而 node-gyp 读的正是 npm_config_disturl。并且**校验写入结果**、失败就非 0 退出，
+#    不再让末尾的 echo 把错误吞掉（"看起来设置了"比"没设置"更难查）。
 RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
-      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
-      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+      printf 'disturl=%s\n' "${VAN_BLOG_NODE_DIST_URL}" >> /app/.npmrc && \
+      grep -q '^disturl=' /app/.npmrc && \
+      echo "node-gyp 头文件源（写入 /app/.npmrc，pnpm 以 npm_config_disturl 传给脚本）: ${VAN_BLOG_NODE_DIST_URL}"; \
     fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
@@ -387,7 +476,78 @@ RUN pnpm config set network-timeout 600000 -g
 RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
-RUN pnpm i
+RUN pnpm install --frozen-lockfile --filter "@vanblog/waline..."
+# deploy 产物的 node_modules 是自包含的（符号链接都指向同一棵 .pnpm/），runner 只拷这一份就能跑。
+# 顺手验证两件事：@waline/vercel 在，且 sqlite3 的原生 .node 真的编出来了
+# （编不出来的话 waline 子进程会在启动时才炸，那时已经浪费了整个构建）。
+RUN pnpm --filter @vanblog/waline deploy --prod /deploy && \
+    echo "waline deploy 产物：$(du -sh /deploy/node_modules | cut -f1)" && \
+    test -e /deploy/node_modules/@waline/vercel/vanilla.js && \
+    echo "✓ @waline/vercel/vanilla.js 在（server 按 ../waline/node_modules/@waline/vercel/vanilla.js 找它）" && \
+    NATIVE="$(find /deploy/node_modules -name '*.node' | head -5)" && \
+    if [ -z "${NATIVE}" ]; then echo "✗ 没有任何原生 .node 产物：sqlite3 没编出来"; exit 1; fi && \
+    printf '%s\n' "${NATIVE}" | sed 's/^/  native: /'
+
+# cli：镜像内的运维小工具（resetHttps.js）。以前是 runner 里 `WORKDIR /app/cli` + `pnpm i`，
+# 同样是孤立安装、同样看不到 lockfile 与 overrides（它只有一个依赖 mongodb ^5.9.1，
+# `^` 意味着构建当天解析到什么就是什么）。挪到独立 stage 走 workspace + frozen lockfile，
+# 并且**可以**加 `--ignore-scripts`：mongodb 驱动是纯 JS，没有 install 脚本要跑，
+# 关掉脚本等于把"依赖被投毒时在构建期以 root 执行 postinstall"这条路一起关掉。
+FROM node:24-alpine AS cli_builder
+ARG VAN_BLOG_NPM_REGISTRY
+ARG VAN_BLOG_ALPINE_MIRROR
+# 换 Alpine 源必须在第一条 apk add **之前**（同其它 stage 的说明）
+RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
+      . /etc/os-release; \
+      apk_ver="$(printf '%s' "${VERSION_ID}" | cut -d. -f1,2)"; \
+      printf '%s\n%s\n' \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/main" \
+        "${VAN_BLOG_ALPINE_MIRROR}/v${apk_ver}/community" \
+        > /etc/apk/repositories; \
+      echo "使用 Alpine 镜像源: ${VAN_BLOG_ALPINE_MIRROR} (v${apk_ver})"; \
+    fi
+WORKDIR /app
+COPY ./package.json ./
+COPY ./pnpm-lock.yaml ./
+COPY ./pnpm-workspace.yaml ./
+COPY ./tsconfig.base.json ./
+COPY ./patches ./patches
+COPY ./packages/cli ./packages/cli
+ARG VAN_BLOG_NODE_DIST_URL
+# ⚠️ cli 目前只有一个纯 JS 依赖（mongodb 驱动），而且下面用了 --ignore-scripts，
+#    所以**今天**根本不会触发 node-gyp、这个 disturl 用不上。仍然照着其它 stage 写上，理由有二：
+#      1) dockerfile-patches.test.sh 有一条通用不变量："每个 node stage 都必须先设 disturl 再
+#         pnpm install"。为 cli 开一个例外就要给守卫加白名单，而白名单正是这类检查开始腐烂的方式；
+#      2) 哪天 cli 多了一个原生依赖、或有人把 --ignore-scripts 去掉，musl 下 node-gyp 默认去连
+#         unofficial-builds.nodejs.org（国内连不上 ⇒ 整个 stage 挂住），那时这里的配置已经就位。
+# ⚠️ 这里以前是 `npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g`，而它在 node 24 自带的
+#    npm 11 上是**失败**的：`npm error \`disturl\` is not a valid npm option`（这个配置项已被 npm 移除）。
+#    更糟的是这条 RUN 的最后一个命令是 echo，退出码取的是 echo 的 ⇒ **失败被吞掉**，
+#    日志里照样打印"node-gyp 头文件源: …"，看起来像设置成功了。于是 node-gyp 一直用默认的
+#    unofficial-builds.nodejs.org（国内连不上），只是此前没有任何 stage 真的走到 node-gyp：
+#    tree-sitter 被 never-built-dependencies 跳过、sharp 用预编译包（它走的是
+#    npm_config_sharp_binary_host 这个 **ENV**，所以那条一直是好的）。
+#    等 waline 的 better-sqlite3 拿不到预编译包、需要现场编译时，这个洞就炸了
+#    （实测：`gyp http GET https://unofficial-builds.nodejs.org/...headers.tar.gz` → FetchError）。
+#    现在改成写进 /app/.npmrc：pnpm 会把 npmrc 里的配置以 npm_config_* 环境变量传给生命周期脚本，
+#    而 node-gyp 读的正是 npm_config_disturl。并且**校验写入结果**、失败就非 0 退出，
+#    不再让末尾的 echo 把错误吞掉（"看起来设置了"比"没设置"更难查）。
+RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
+      printf 'disturl=%s\n' "${VAN_BLOG_NODE_DIST_URL}" >> /app/.npmrc && \
+      grep -q '^disturl=' /app/.npmrc && \
+      echo "node-gyp 头文件源（写入 /app/.npmrc，pnpm 以 npm_config_disturl 传给脚本）: ${VAN_BLOG_NODE_DIST_URL}"; \
+    fi
+RUN corepack enable
+RUN corepack prepare pnpm@8.11.0 --activate
+RUN pnpm config set network-timeout 600000 -g
+RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
+RUN pnpm config set fetch-retries 20 -g
+RUN pnpm config set fetch-timeout 600000 -g
+RUN pnpm install --frozen-lockfile --filter "vanblog-cli..." --ignore-scripts
+RUN pnpm --filter vanblog-cli deploy --prod /deploy && \
+    echo "cli deploy 产物：$(du -sh /deploy/node_modules | cut -f1)" && \
+    test -e /deploy/node_modules/mongodb && \
+    echo "✓ mongodb 驱动在（resetHttps.js 要 require 它）"
 
 FROM node:24-alpine AS runner
 ARG VAN_BLOG_NPM_REGISTRY
@@ -422,16 +582,36 @@ RUN if [ -n "${VAN_BLOG_ALPINE_MIRROR}" ]; then \
 #   后果很直接：**镜像里没有这三个包 ⇒ 可见水印这个功能在生产环境等于不存在**（上传不失败，但一张都盖不上）。
 #   ttf-dejavu 管 Latin，wqy-zenhei 管中文（字体栈里 `Noto Sans CJK SC` 优先，但 font-noto-cjk
 #   体积是它的十几倍，为一个水印字段不值；装了 wqy-zenhei 后 fontconfig 会自动回落到它）。
-RUN  apk add --no-cache --update tzdata caddy nss-tools libwebp-tools libavif-apps libc6-compat zstd xz \
+# ⚠️ 这里以前还装着 `nss-tools`（提供 certutil），全仓库没有任何地方调用 certutil/pk12util，
+#    而且实测 `apk info -R caddy` 显示 caddy 只依赖 `ca-certificates` / `/bin/sh` / `so:libc.musl`，
+#    `apk info -r nss-tools` 也是"没有任何包依赖它"⇒ 纯属白装的 688 KiB + 攻击面，已删。
+#    要临时排查证书问题，用 `docker run --entrypoint sh … apk add nss-tools` 现装即可。
+RUN  apk add --no-cache --update tzdata caddy libwebp-tools libavif-apps libc6-compat zstd xz \
   fontconfig ttf-dejavu wqy-zenhei \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone \
   && apk del tzdata
 ARG VAN_BLOG_NODE_DIST_URL
-# runner 也会 `pnpm i`（cli 与 waline），原生模块编译同样需要头文件源
+# ⚠️ runner 里仍然要留着 corepack/pnpm 与头文件源，但**不再用于构建期安装**：
+#    cli 与 waline 的依赖现在都来自各自的 builder stage（走 lockfile，见上面两段说明）。
+#    留在这里是因为**运行期**「流水线」功能会执行 `pnpm add` 往 codeRunner/pluginRunner 装依赖
+#    （provider/pipeline），那时可能需要 node-gyp 编译原生模块 ⇒ 头文件源仍然有用。
+# ⚠️ 这里以前是 `npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g`，而它在 node 24 自带的
+#    npm 11 上是**失败**的：`npm error \`disturl\` is not a valid npm option`（这个配置项已被 npm 移除）。
+#    更糟的是这条 RUN 的最后一个命令是 echo，退出码取的是 echo 的 ⇒ **失败被吞掉**，
+#    日志里照样打印"node-gyp 头文件源: …"，看起来像设置成功了。于是 node-gyp 一直用默认的
+#    unofficial-builds.nodejs.org（国内连不上），只是此前没有任何 stage 真的走到 node-gyp：
+#    tree-sitter 被 never-built-dependencies 跳过、sharp 用预编译包（它走的是
+#    npm_config_sharp_binary_host 这个 **ENV**，所以那条一直是好的）。
+#    等 waline 的 better-sqlite3 拿不到预编译包、需要现场编译时，这个洞就炸了
+#    （实测：`gyp http GET https://unofficial-builds.nodejs.org/...headers.tar.gz` → FetchError）。
+#    现在改成写进 /app/.npmrc：pnpm 会把 npmrc 里的配置以 npm_config_* 环境变量传给生命周期脚本，
+#    而 node-gyp 读的正是 npm_config_disturl。并且**校验写入结果**、失败就非 0 退出，
+#    不再让末尾的 echo 把错误吞掉（"看起来设置了"比"没设置"更难查）。
 RUN if [ -n "${VAN_BLOG_NODE_DIST_URL}" ]; then \
-      npm config set disturl "${VAN_BLOG_NODE_DIST_URL}" -g; \
-      echo "node-gyp 头文件源: ${VAN_BLOG_NODE_DIST_URL}"; \
+      printf 'disturl=%s\n' "${VAN_BLOG_NODE_DIST_URL}" >> /app/.npmrc && \
+      grep -q '^disturl=' /app/.npmrc && \
+      echo "node-gyp 头文件源（写入 /app/.npmrc，pnpm 以 npm_config_disturl 传给脚本）: ${VAN_BLOG_NODE_DIST_URL}"; \
     fi
 RUN corepack enable
 RUN corepack prepare pnpm@8.11.0 --activate
@@ -439,15 +619,17 @@ RUN pnpm config set network-timeout 600000 -g
 RUN pnpm config set registry ${VAN_BLOG_NPM_REGISTRY} -g
 RUN pnpm config set fetch-retries 20 -g
 RUN pnpm config set fetch-timeout 600000 -g
-# 复制 cli 工具
+# 复制 cli 工具（依赖来自 cli_builder 的 frozen-lockfile + deploy 产物，不再在镜像里现场 pnpm i）
+# ⚠️ 落点必须仍然是 /app/cli/resetHttps.js：scripts/vanblog.sh 的 reset_https 第 4 级兜底
+#    和 packages/cli/README.md、docs/faq/usage.md 都是按这个绝对路径调它的。
 WORKDIR /app/cli
 COPY ./packages/cli/ ./
-RUN pnpm i
-# waline：依赖在 waline_builder 阶段编好了（sqlite3 需要编译器，别塞进最终镜像），
-# 这里只拷 package.json 与 node_modules
+COPY --from=cli_builder /deploy/node_modules ./node_modules
+# waline：依赖在 waline_builder 阶段按 lockfile 装好并编好了（sqlite3 需要编译器，别塞进最终镜像），
+# 这里只拷 package.json 与 deploy 出来的自包含 node_modules
 WORKDIR /app/waline
 COPY ./packages/waline/package.json ./
-COPY --from=waline_builder /app/waline/node_modules ./node_modules
+COPY --from=waline_builder /deploy/node_modules ./node_modules
 # 复制 server
 WORKDIR /app/server
 # node_modules 来自 `pnpm deploy --prod` 的自包含产物（只有生产依赖，175MB 而不是 2.0GB）
@@ -501,6 +683,15 @@ ENV PORT=3001
 # 增加版本
 ARG VAN_BLOG_VERSIONS
 ENV VAN_BLOG_VERSION=${VAN_BLOG_VERSIONS}
+# ⚠️ 显式写 OCI 版本标签，别让它由 CI 的 metadata-action 用"第一个标签"去猜。
+#    实测已发布的 v2026.9.2：config blob 里 `revision` 是对的，而
+#    `org.opencontainers.image.version` 字面就是 **latest**（因为 publish-ghcr 的 type=raw 列表里
+#    latest 排第一，metadata-action 默认拿第一个标签当 version）。后果：任何按 image.version
+#    判断"我装的是哪个版本"的工具都读到 latest —— 包括我们自己文档里教的比版本方法。
+#    这里用与镜像内 ENV VAN_BLOG_VERSION **完全相同**的值（同一个 build-arg），
+#    所以本地构建（build-image-local.sh 也传这个 arg）与 CI 构建口径一致。
+#    CI 侧还会用 metadata-action 的 labels 覆写一次（同值），两边不会打架。
+LABEL org.opencontainers.image.version="${VAN_BLOG_VERSIONS}"
 VOLUME /app/static
 VOLUME /var/log
 VOLUME /root/.config/caddy

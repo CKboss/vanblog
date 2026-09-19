@@ -2,5 +2,38 @@
   "extends": "./tsconfig.json",
   // `src/test-utils` 是只给 spec 用的测试工具（源码级锚点的剥注释实现），不进 dist。
   // ⚠️ jest 走的是 tsconfig.json（没有 exclude），所以测试照样能编译并导入它。
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts", "src/test-utils"]
+  "exclude": ["node_modules", "test", "dist", "**/*spec.ts", "src/test-utils"],
+  // ⚠️ 生产构建不出 sourceMap（tsconfig.json / tsconfig.base.json 里都是开的，只在这个 build
+  //    配置里关掉，所以本地开发与 jest 不受影响）。
+  //
+  // ## 为什么只关 sourceMap、不关 declaration（第一版两个都关，构建直接失败）
+  // `packages/server/tsconfig.json` 里有 `"composite": true`，而 TS 规定**复合项目不允许关闭
+  // declaration**：两个都关时 `nest build` 报
+  //   `tsconfig.build.json:28:5 - error TS6304: Composite projects may not disable declaration emit.`
+  // 这个失败只在**镜像构建**里暴露 —— 本地 `tsc --noEmit` 不产出文件，所以不报 TS6304。
+  // 不去动 composite（它牵涉整个仓库的 TS 项目引用与 jest 的编译方式，收益不抵风险），
+  // 改成：`.map` 由这里关掉（不生成），`.d.ts` 在 **server_builder 阶段构建完之后就地删掉**。
+  //
+  // ⚠️ 为什么必须在 builder 阶段删、而不是在 runner 里 `COPY` 完再 `RUN rm`：
+  //    那样**一点体积都省不下来** —— 文件已经存在于 COPY 那一层里了，后续层只是把它标记为删除
+  //    （whiteout），镜像总大小不变。这是 Dockerfile 的经典陷阱。
+  //
+  // ## 为什么要删（实测数字）
+  // runner 阶段是 `COPY --from=server_builder /app/packages/server/dist/src/ ./` 整目录拷贝，
+  // 于是我们自己那份 **232 个 .map + 232 个 .d.ts（合计 1.2 MB）** 一起进了发布镜像。
+  //   - 不是源码泄露：已核过 .map 里**没有** sourcesContent，仓库本来就是公开的；
+  //   - 但是纯负担：体积，以及把完整的内部类型面摊给任何拉镜像的人。
+  //   - ⚠️ 这只管得住**我们自己**的产物：`/app/server/node_modules` 里另有依赖自带的
+  //     3239 个 .map（30.7 MB）+ 3540 个 .d.ts（11.4 MB），那是另一件事（要 prune 依赖产物，
+  //     涉及 6,779 个第三方文件，本轮没做，见汇报）。
+  // 关掉 sourceMap 前核过三条：① 全仓库没有 `--enable-source-maps`（NODE_OPTIONS 里也没有）
+  //   ⇒ Node 不会去加载这些 map，删掉不会有"找不到 sourceMappingURL"的告警；
+  //   ② CI 的 server-test.yml **不构建** server ⇒ 没有依赖 dist 产物的检查；
+  //   ③ 没有任何包依赖 `@vanblog/server`，且它的 package.json 没有 main/types/files 字段
+  //   ⇒ .d.ts 没有消费者。
+  // ⚠️ 代价：容器里的崩溃栈指向编译后的 dist JS 而不是 TS 行号。生产镜像本来也不带调试器；
+  //   需要行号时在本地用 tsconfig.json 构建（那份仍然出 map）。
+  "compilerOptions": {
+    "sourceMap": false
+  }
 }

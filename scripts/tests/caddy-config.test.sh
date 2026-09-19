@@ -115,6 +115,64 @@ else
   fail "Dockerfile 没有 COPY caddyConfig.js，entrypoint 会找不到它"
 fi
 
+# ---------- HSTS：只加在 443 那个 server 上，降级模板故意不加 ----------
+# 模板里有两个 server：srv0 = :443、srv1 = :80。
+#   ① 明文 HTTP 上发 HSTS 浏览器会**忽略**（RFC 6797 §8.1），只是噪音 ⇒ srv1 不许有；
+#   ② 降级模板是"主配置 validate 不过"时用的那份，它**没有 apps.tls**，HTTPS 会变自签证书。
+#      在证书本来就不可信的路径上告诉浏览器"一年内必须只用 HTTPS"，等于把站长锁在自己站外面
+#      （浏览器不给"仍然前往"的选项）⇒ 降级模板故意不加。
+# ⚠️ 代价（要写进文档）：带 HSTS 的域名在 max-age 窗口内无法回退纯 HTTP，证书续签失败时浏览器
+#    会硬失败。所以 caddy 的数据目录必须持久化 —— compose 模板挂了两个 caddy 卷；
+#    k8s 清单没挂（那是另一条待修的问题，会让每次重建 pod 都重签证书）。
+HSTS_REPORT="$("${NODE_BIN}" -e '
+const fs = require("fs");
+function hdr(file, srv) {
+  const d = JSON.parse(fs.readFileSync(file, "utf8"));
+  const s = d.apps && d.apps.http && d.apps.http.servers && d.apps.http.servers[srv];
+  if (!s) return { listen: "?", set: null };
+  const r = (s.routes || [])[0] || {};
+  const h = (r.handle || [])[0] || {};
+  return { listen: (s.listen || ["?"])[0], set: (h.response && h.response.set) || null };
+}
+const main = process.argv[1], fb = process.argv[2];
+const a = hdr(main, "srv0"), b = hdr(main, "srv1");
+const f = fb && fs.existsSync(fb) ? hdr(fb, "srv0") : { listen: "?", set: null };
+const hsts = (x) => (x.set && x.set["Strict-Transport-Security"] || []).join(",") || "none";
+console.log("SRV0_LISTEN=" + a.listen);
+console.log("SRV1_LISTEN=" + b.listen);
+console.log("SRV0_HSTS=" + hsts(a));
+console.log("SRV1_HSTS=" + hsts(b));
+console.log("FB_HSTS=" + hsts(f));
+const need = ["X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options", "Permissions-Policy"];
+console.log("SRV0_OTHERS=" + (a.set ? need.filter((k) => a.set[k]).length : 0));
+' "${TEMPLATE}" "${FALLBACK}")"
+hsts_get() { printf '%s\n' "${HSTS_REPORT}" | sed -n "s/^$1=//p"; }
+
+assert_eq "$(hsts_get SRV0_LISTEN)" ":443" "模板里 srv0 确实是 443（HSTS 该加在它上面）"
+assert_eq "$(hsts_get SRV1_LISTEN)" ":80" "模板里 srv1 确实是 80"
+assert_eq "$(hsts_get SRV0_HSTS)" "max-age=31536000" "443 的响应带 HSTS（max-age 一年，不含 includeSubDomains/preload）"
+assert_eq "$(hsts_get SRV1_HSTS)" "none" "80 的响应**不带** HSTS（明文上发浏览器会忽略，只是噪音）"
+assert_eq "$(hsts_get FB_HSTS)" "none" "降级模板**不带** HSTS（那份没有 apps.tls、证书自签，硬要求 HTTPS 会把站长锁在外面）"
+assert_eq "$(hsts_get SRV0_OTHERS)" "4" "原有四个安全响应头一个没少（加 HSTS 时没把它们顶掉）"
+
+# 反证：把 HSTS 从模板副本里摘掉，检测器必须读出 none —— 否则上面那条断言只是恒真
+HSTS_MUTANT="$(mktemp)"
+"${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const set = d.apps.http.servers.srv0.routes[0].handle[0].response.set;
+delete set["Strict-Transport-Security"];
+fs.writeFileSync(process.argv[2], JSON.stringify(d));
+' "${TEMPLATE}" "${HSTS_MUTANT}"
+MUT_REPORT="$("${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const set = d.apps.http.servers.srv0.routes[0].handle[0].response.set;
+console.log((set["Strict-Transport-Security"] || []).join(",") || "none");
+' "${HSTS_MUTANT}")"
+assert_eq "${MUT_REPORT}" "none" "（反证）摘掉 HSTS 后检测器确实读到 none —— 上面那条不是恒真断言"
+rm -f "${HSTS_MUTANT}"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

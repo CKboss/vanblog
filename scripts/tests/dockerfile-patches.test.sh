@@ -332,13 +332,36 @@ if grep -qE '^ARG VAN_BLOG_NODE_DIST_URL=' "${DOCKERFILE}"; then
 else
   fail "缺少全局 ARG VAN_BLOG_NODE_DIST_URL"
 fi
-DIST_STAGES=$(grep -c 'npm config set disturl' "${DOCKERFILE}")
+# ⚠️ 判据跟着实现改：以前钉的是 `npm config set disturl`，而那条命令在 node 24 的 npm 11 上
+#    会报 `disturl is not a valid npm option`，且因为 RUN 末尾是 echo 而**静默失败**（镜像里
+#    node-gyp 从来没拿到过镜像源）。现在改成写 /app/.npmrc（pnpm 会以 npm_config_disturl 传给脚本），
+#    所以钉新形状，并且**同时钉住旧形状不许回来**。
+DIST_STAGES=$(grep -c "printf 'disturl=%s" "${DOCKERFILE}")
 if [[ "${DIST_STAGES}" -ge 3 ]]; then
   pass "三个构建 stage 都会设置 node-gyp 的 disturl（${DIST_STAGES} 处）"
 else
   fail "只有 ${DIST_STAGES} 个 stage 设了 disturl，应该 3 个（admin/website/server 都会装原生模块）"
 fi
+# ⚠️ 旧形状不许回来。断言前**必须剥注释**：Dockerfile 里解释这件事的注释正好写着
+#    `npm config set disturl` —— 这是本仓库第 8 次踩"absence 断言匹配到解释性注释"这个坑。
+DF_CODE="$(sed '/^[[:space:]]*#/d' "${DOCKERFILE}")"
+if printf '%s' "${DF_CODE}" | grep -qF 'npm config set disturl'; then
+  fail "又用回了 'npm config set disturl'：npm 11（node 24 自带）不认这个配置项，会报 'not a valid npm option'，而且 RUN 末尾的 echo 会把退出码吞掉 ⇒ 静默失败"
+else
+  pass "没有再用 'npm config set disturl'（npm 11 不认它，且失败会被末尾的 echo 吞掉）"
+fi
+# 反证：旧形状在**原文**里存在（在注释里）、在**剥注释后**不存在 ⇒ 证明剥离这一步真的在起作用，
+# 上面那条 absence 断言不是在对一份被剥空的文本说话。
+if grep -qF 'npm config set disturl' "${DOCKERFILE}" \
+  && ! printf '%s' "${DF_CODE}" | grep -qF 'npm config set disturl'; then
+  pass "（反证）旧形状只剩在注释里，剥注释确实有效，上面的 absence 断言不是空转"
+else
+  fail "反证失败：要么注释里已经没有旧形状（上面那条 absence 可能空转），要么剥注释没剥干净"
+fi
 # 必须在 pnpm install 之前设置，否则装 tree-sitter/sharp 时还是走默认地址
+# ⚠️ 下面 awk 程序是用单引号包起来的，所以**程序正文里一个单引号都不能出现** ——
+#    连注释里都不行（写在 awk 里的 `#` 注释仍处在 shell 的单引号内，一个 `'` 就会提前闭合，
+#    报 "syntax error near unexpected token `('"）。disturl 那行的模式因此用 `.` 去匹配单引号。
 ORDER_OK=1
 while IFS= read -r ln; do
   sl="${ln%%:*}"
@@ -348,7 +371,7 @@ while IFS= read -r ln; do
     NR<=start { next }
     /^[[:space:]]*#/ { next }
     /^FROM / { exit }
-    /npm config set disturl/ { found=NR }
+    /printf .disturl=/ { found=NR }
     /pnpm install|pnpm i / { if (!found || NR<found) bad=1 }
     END { exit bad?1:0 }' "${DOCKERFILE}" || ORDER_OK=0
 done < <(grep -nE '^FROM node:[0-9]+' "${DOCKERFILE}")

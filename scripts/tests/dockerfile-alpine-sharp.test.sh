@@ -167,6 +167,120 @@ assert_contains_in "${runner_STAGE}" "libavif-apps" "runner installs libavif-app
 assert_contains_in "${runner_STAGE}" "libwebp-tools" "runner still installs libwebp-tools (cwebp)"
 assert_contains_in "${runner_STAGE}" "COPY --from=website_builder" "runner still copies website from website_builder"
 
+# ── 供应链：cli 与 waline 两棵树必须走 lockfile（2026-09-19）────────────────────
+# 以前这两处是**孤立目录里的 `pnpm i`**：构建上下文里没有 pnpm-lock.yaml，也没有根 package.json。
+# 后果不只是"不可复现"，更要紧的是**根 package.json 的 pnpm.overrides 对它们完全不生效** ——
+# 而 waline 子树里正好有带 critical/high 通告的包（mysql2 / protobufjs / koa / tar-fs）。
+# 也就是说：仓库里用 override 把它们抬到安全版本，镜像里 /app/waline/node_modules 装的仍是旧的，
+# 而那份 node_modules 会被拷进 runner 当子进程跑。admin/server/website 三层早就修过同一个错误
+# （Dockerfile 自己的注释里记着），这两处漏了。
+WALINE_STAGE="$(awk '
+  BEGIN { keep=0 }
+  $0 ~ /^FROM / { keep=0 }
+  $0 ~ /^FROM .* AS waline_builder/ { keep=1 }
+  keep { print }
+' "${DOCKERFILE}")"
+CLI_STAGE="$(awk '
+  BEGIN { keep=0 }
+  $0 ~ /^FROM / { keep=0 }
+  $0 ~ /^FROM .* AS cli_builder/ { keep=1 }
+  keep { print }
+' "${DOCKERFILE}")"
+# ⚠️ 反证：上面两个 stage 文本必须非空，否则所有 absence 断言都会假通过（空串什么都不含）
+assert_contains_in "${WALINE_STAGE}" "waline_builder" "（反证）waline_builder stage 被正确切出来了，不是空串"
+assert_contains_in "${CLI_STAGE}" "cli_builder" "（反证）cli_builder stage 被正确切出来了，不是空串"
+
+# ⚠️⚠️ 断言前**必须剥注释** —— 这是本仓库第 7 次踩同一个坑（前 6 次记在 AGENTS.md）：
+#    解释"为什么不能这么写"的注释里，必然写着那个被禁的字符串。这次我自己就中了两发：
+#    waline 的注释写着「这一层**不能**加 --ignore-scripts」、runner 的注释写着
+#    「以前还装着 nss-tools …已删」，两条 absence 断言当场假红。
+#    ⇒ 所有针对 Dockerfile 的 contains / not-contains 断言都打在剥过注释的文本上。
+#    （Dockerfile 的注释都是整行 #，没有行尾注释语义，所以按整行删是安全的。）
+strip_df_comments() { printf '%s\n' "$1" | sed '/^[[:space:]]*#/d'; }
+WALINE_CODE="$(strip_df_comments "${WALINE_STAGE}")"
+CLI_CODE="$(strip_df_comments "${CLI_STAGE}")"
+RUNNER_CODE="$(strip_df_comments "${runner_STAGE}")"
+
+# ⚠️ 不用 `for pair in "name|${STAGE}"` 这种打包写法：stage 文本里本身就有 `|`
+#    （例如 `du -sh /deploy/node_modules | cut -f1`），按 `|` 切会把 stage 截断，
+#    于是断言打在残缺文本上 —— 可能假通过，也可能假失败。直接写两遍。
+for stage_name in waline cli; do
+  if [[ "${stage_name}" == "waline" ]]; then stage="${WALINE_CODE}"; else stage="${CLI_CODE}"; fi
+  assert_contains_in "${stage}" "COPY ./pnpm-lock.yaml ./" "${stage_name}_builder 把 pnpm-lock.yaml 拷进了构建上下文"
+  assert_contains_in "${stage}" "COPY ./pnpm-workspace.yaml ./" "${stage_name}_builder 拷了 pnpm-workspace.yaml（否则 --filter 找不到 workspace）"
+  assert_contains_in "${stage}" "COPY ./package.json ./" "${stage_name}_builder 拷了**根** package.json（pnpm.overrides 在这里，缺了 override 就不生效）"
+  assert_contains_in "${stage}" "pnpm install --frozen-lockfile" "${stage_name}_builder 用 --frozen-lockfile（版本必须与仓库锁的一致）"
+  assert_contains_in "${stage}" "deploy --prod" "${stage_name}_builder 用 pnpm deploy 导出自包含产物（runner 只拷这一份就能跑）"
+done
+# ⚠️ waline **不能**加 --ignore-scripts：@waline/vercel 硬依赖 sqlite3，musl 上没有预编译包，
+#    必须现场 node-gyp 编译；关掉脚本 = waline 子进程启动即崩。cli 反过来：mongodb 是纯 JS，
+#    加 --ignore-scripts 正好把"依赖被投毒时在构建期以 root 跑 postinstall"这条路关掉。
+if printf '%s' "${WALINE_CODE}" | grep -q -- '--ignore-scripts'; then
+  fail "waline_builder 加了 --ignore-scripts：sqlite3 编不出来，waline 子进程会启动即崩"
+else
+  pass "waline_builder 没有 --ignore-scripts（sqlite3 必须现场编译）"
+fi
+assert_contains_in "${CLI_CODE}" "--ignore-scripts" "cli_builder 用 --ignore-scripts（mongodb 是纯 JS，顺手关掉构建期 postinstall 这条路）"
+assert_contains_in "${WALINE_CODE}" "vanilla.js" "waline_builder 构建期就验证 vanilla.js 在（server 按 ../waline/node_modules/@waline/vercel/vanilla.js 找它）"
+
+# runner 侧：不许再现场装依赖，两棵树的 node_modules 都来自 builder 的 deploy 产物
+if printf '%s' "${RUNNER_CODE}" | grep -qE '^RUN pnpm i'; then
+  fail "runner 里还有 'RUN pnpm i'：那是不走 lockfile 的现场解析，正是这次要消除的东西"
+else
+  pass "runner 不再现场 pnpm i（cli 与 waline 的依赖都来自各自 builder 的 frozen-lockfile 产物）"
+fi
+assert_contains_in "${RUNNER_CODE}" "COPY --from=cli_builder /deploy/node_modules" "runner 从 cli_builder 的 deploy 产物拷 cli 依赖"
+assert_contains_in "${RUNNER_CODE}" "COPY --from=waline_builder /deploy/node_modules" "runner 从 waline_builder 的 deploy 产物拷 waline 依赖"
+assert_contains_in "${RUNNER_CODE}" "WORKDIR /app/cli" "cli 仍然落在 /app/cli（vanblog.sh 的 reset_https 兜底与 README 都按这个绝对路径调它）"
+# ⚠️ runner 里的 corepack/pnpm 不能顺手删掉：运行期「流水线」功能会 pnpm add 装依赖
+assert_contains_in "${RUNNER_CODE}" "corepack prepare pnpm@8.11.0" "runner 仍装着 pnpm（运行期流水线要 pnpm add，不是为了构建期安装）"
+
+# ── nss-tools：白装的包（certutil 全仓库没人用，caddy 也不依赖它）──────────────
+# 实测证据：`apk info -R caddy` → 只依赖 ca-certificates / /bin/sh / so:libc.musl；
+#          `apk info -r nss-tools` → 没有任何包依赖它；仓库里 certutil/pk12util/libnss 零命中。
+if printf '%s' "${RUNNER_CODE}" | grep -qF 'nss-tools'; then
+  fail "runner 又装回了 nss-tools（688 KiB + 攻击面；certutil 全仓库没人用，caddy 只依赖 ca-certificates）"
+else
+  pass "runner 没有装 nss-tools（caddy 只依赖 ca-certificates，certutil 全仓库零调用）"
+fi
+assert_contains_in "${RUNNER_CODE}" "caddy" "（反证）runner 的 apk 行确实被切出来了，nss-tools 那条 absence 断言不是在对空串说话"
+
+# ── OCI 版本标签：别让 CI 用"第一个标签"去猜（实测已发布镜像的 version 字面是 latest）──
+assert_contains_in "${RUNNER_CODE}" 'LABEL org.opencontainers.image.version="${VAN_BLOG_VERSIONS}"' \
+  "镜像自带 org.opencontainers.image.version，且与 ENV VAN_BLOG_VERSION 同源（本地构建也有正确版本标签）"
+
+# ── 构建产物瘦身：.map / .d.ts 不进发布镜像 ──────────────────────────────────
+# 两条约束，缺一不可：
+#   ① `.map` 由 tsconfig.build.json 关 sourceMap（不生成）；`.d.ts` 只能**生成后删** ——
+#      因为 packages/server/tsconfig.json 有 composite:true，TS 不允许复合项目关 declaration
+#      （TS6304），而这个错误只在镜像构建里暴露（本地 tsc --noEmit 不产出文件，所以不报）。
+#   ② 删必须发生在 **server_builder**，不能在 runner 里"COPY 完再 rm"：那样文件已经在 COPY
+#      那一层里，后续层只是加个 whiteout 标记，**镜像体积一点都不会变小**。
+SERVER_STAGE="$(awk '
+  BEGIN { keep=0 }
+  $0 ~ /^FROM / { keep=0 }
+  $0 ~ /^FROM .* AS server_builder/ { keep=1 }
+  keep { print }
+' "${DOCKERFILE}")"
+SERVER_CODE="$(strip_df_comments "${SERVER_STAGE}")"
+assert_contains_in "${SERVER_STAGE}" "server_builder" "（反证）server_builder stage 被正确切出来了，不是空串"
+assert_contains_in "${SERVER_CODE}" "find dist \( -name '*.d.ts' -o -name '*.map' \) -delete" \
+  "server_builder 在构建后删掉 dist 里的 .d.ts 与 .map（发生在 runner COPY 之前，所以体积真的会变小）"
+assert_contains_in "${SERVER_CODE}" "find dist -name 'main.js'" \
+  "删完还自检入口 main.js 仍在（别等容器起不来才发现删多了）"
+if printf '%s' "${RUNNER_CODE}" | grep -qE "rm .*\.d\.ts|rm .*\*\.map|-name '\*\.map' -delete"; then
+  fail "runner 里出现了 COPY 之后再删 .map/.d.ts 的写法：那样省不下体积（文件已在 COPY 层里，只会多一个 whiteout）"
+else
+  pass "runner 没有用『COPY 完再 rm』这种省不下体积的写法"
+fi
+TSCONFIG_BUILD="${ROOT}/packages/server/tsconfig.build.json"
+assert_file_contains "${TSCONFIG_BUILD}" '"sourceMap": false' "tsconfig.build.json 关掉了 sourceMap（生产构建不出 .map）"
+if grep -q '"declaration": false' "${TSCONFIG_BUILD}"; then
+  fail "tsconfig.build.json 关了 declaration：tsconfig.json 有 composite:true，nest build 会报 TS6304（复合项目不允许关 declaration emit）"
+else
+  pass "tsconfig.build.json 没有关 declaration（composite:true 下关了会 TS6304，所以改成构建后删 .d.ts）"
+fi
+
 # ── 可见水印要的系统字体（2026-09 起）───────────────────────────────────────
 # 水印文字是 SVG <text>，由 sharp 内置的 libvips → librsvg → pango → fontconfig 栅格化，
 # 要的是**系统字体**（不是 npm 包，也不是前台自托管那份只给浏览器用的 woff2）。

@@ -24,6 +24,17 @@ case "${EMAIL_SAFE}" in
   "" | vanblog_email)
     EMAIL_SAFE=""
     ;;
+  # ⚠️ 字符集白名单，而不是只判"像不像邮箱"。原来的判据是 `*@*.*)`，于是 `a|b@c.com` 也算通过，
+  #    而这个值随后会进 sed 表达式（见下面第 3 步的降级分支）——`|` 正是那里的分隔符，
+  #    一个 `|` 就能把 `s|VAN_BLOG_EMAIL|a|b@c.com|g` 变成畸形表达式，sed 报错、
+  #    输出文件是空的，caddy 起不来 ⇒ 容器"在跑但 80/443 都没监听"（正是第 3 步要防的那个事故）。
+  #    ACME 的联系邮箱只需要 ASCII 里那几个字符，白名单不会误伤真实地址；
+  #    带 `"` `'` `\` `$` 反引号 空格 `;` `&` `<` `>` `(` `)` 的一律忽略（证书照样能签，只是没有到期提醒）。
+  #    ⚠️ `-` 必须放在方括号最后才是字面量，别挪位置。
+  *[!A-Za-z0-9._%+@-]*)
+    echo "!! EMAIL='${EMAIL_SAFE}' 含非法字符，已忽略（ACME 不带联系邮箱仍然可以签发证书）"
+    EMAIL_SAFE=""
+    ;;
   *@*.*) ;;
   *)
     echo "!! EMAIL='${EMAIL_SAFE}' 不像邮箱地址，已忽略（ACME 不带联系邮箱仍然可以签发证书）"
@@ -70,8 +81,19 @@ if [ "${CADDY_OK}" != "1" ]; then
   echo "!! 请把上面的错误连同 Caddy 版本一起反馈：https://github.com/CKboss/vanblog/issues"
   caddy version 2>/dev/null
   if [ -f /app/caddyFallbackTemplate.json ]; then
+    # ⚠️ 这里以前是：
+    #     node /app/caddyConfig.js … || sed "s|VAN_BLOG_EMAIL|${EMAIL_SAFE}|g" …
+    # 那个 sed 兜底有两个问题：① 它是**文本替换**，而主路径特意用 caddyConfig.js 在解析后的
+    #    对象上改邮箱（上面第 2 步的注释就是这么写的），兜底却把文本替换又请回来了；
+    #    ② `caddyFallbackTemplate.json` 里**根本没有 VAN_BLOG_EMAIL 这个占位符**（已核），
+    #    所以这个 sed 唯一可能的效果就是"原样输出模板"—— 而一旦 EMAIL 里含 `|`，
+    #    它连这件事都做不到：表达式畸形 ⇒ sed 非零退出 ⇒ 输出文件空 ⇒ caddy 起不来。
+    # 现在改成 `cp`：既然模板里没有占位符，逐字复制就是正确结果，而且不再有注入面。
+    # ⚠️ 如果哪天给降级模板加了 VAN_BLOG_EMAIL 占位符，**不要**把 sed 加回来 ——
+    #    改成再调一次 caddyConfig.js（它接受模板路径参数），image-runtime.test.sh 里有一条
+    #    断言钉着"降级模板不含占位符"，加了就会红，那时按断言的提示改。
     node /app/caddyConfig.js /app/caddyFallbackTemplate.json permission "${EMAIL_SAFE}" >/app/caddy-fallback.json 2>/dev/null ||
-      sed "s|VAN_BLOG_EMAIL|${EMAIL_SAFE}|g" /app/caddyFallbackTemplate.json >/app/caddy-fallback.json
+      cp /app/caddyFallbackTemplate.json /app/caddy-fallback.json
     if caddy start --config /app/caddy-fallback.json; then
       echo "> 已用降级配置启动 caddy：站点可通过 HTTP 访问，后台在 /admin"
       echo "> HTTPS 需要修好主配置后 ./vanblog.sh restart（或重置 https 设置）"

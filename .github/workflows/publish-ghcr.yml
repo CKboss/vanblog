@@ -68,7 +68,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: 镜像名（ghcr 要求全小写）
         id: image
@@ -94,11 +94,44 @@ jobs:
           echo "version=${safe_ref}@${sha}" >> "$GITHUB_OUTPUT"
           echo "构建版本：${safe_ref}@${sha}"
 
+      # ⚠️ 以前这里写的是 `if [ -n "${{ inputs.platforms }}" ]; then echo "platforms=${{ inputs.platforms }}"`
+      #    —— 把 workflow_dispatch 的输入**直接插进 shell 脚本正文**。含 `"` 或 `$(…)` 的输入
+      #    就能在这个 job 上执行任意命令，而它持有 `packages: write`（能往 ghcr 推镜像）。
+      #    触发前提是对仓库有写权限，所以不是远程可利用的洞；但"能改仓库内容"与"能改这个 job
+      #    执行的内容"不该是同一件事，而且手滑粘贴也会把构建搞坏（20-40 分钟后才失败）。
+      #    现在：输入一律经 `env:` 传入（GitHub 不会把 env 的值当代码解析），并做字符集校验。
+      - name: 净化 dispatch 输入
+        id: inputs
+        env:
+          RAW_PLATFORMS: ${{ inputs.platforms }}
+          RAW_EXTRA_TAG: ${{ inputs.extra_tag }}
+        run: |
+          set -eu
+          platforms="${RAW_PLATFORMS}"
+          extra_tag="${RAW_EXTRA_TAG}"
+          if [ -n "${platforms}" ]; then
+            case "${platforms}" in
+              *[!A-Za-z0-9,/_-]*) echo "::error::platforms 含非法字符（只允许字母数字与 , / _ -）：${platforms}"; exit 1 ;;
+            esac
+          fi
+          if [ -n "${extra_tag}" ]; then
+            # OCI 标签允许 [A-Za-z0-9._-]，且首尾不能是 . 或 -
+            case "${extra_tag}" in
+              *[!A-Za-z0-9._-]*) echo "::error::extra_tag 含非法字符（只允许字母数字与 . _ -）：${extra_tag}"; exit 1 ;;
+              .*|*.|-*|*-)       echo "::error::extra_tag 不能以 . 或 - 开头/结尾：${extra_tag}"; exit 1 ;;
+            esac
+            if [ "${#extra_tag}" -gt 128 ]; then echo "::error::extra_tag 过长（>128）"; exit 1; fi
+          fi
+          echo "platforms=${platforms}" >> "$GITHUB_OUTPUT"
+          echo "extra_tag=${extra_tag}" >> "$GITHUB_OUTPUT"
+
       - name: 决定构建架构
         id: plat
+        env:
+          PLATFORMS: ${{ steps.inputs.outputs.platforms }}
         run: |
-          if [ -n "${{ inputs.platforms }}" ]; then
-            echo "platforms=${{ inputs.platforms }}" >> "$GITHUB_OUTPUT"
+          if [ -n "${PLATFORMS}" ]; then
+            echo "platforms=${PLATFORMS}" >> "$GITHUB_OUTPUT"
           else
             # 默认只出 amd64：arm64 要 QEMU 模拟，next/umi 的构建慢好几倍还容易超时
             echo "platforms=linux/amd64" >> "$GITHUB_OUTPUT"
@@ -106,13 +139,13 @@ jobs:
 
       - name: Set up QEMU
         if: contains(steps.plat.outputs.platforms, 'arm64')
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -120,9 +153,17 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          # ⚠️ 不加这段的话，metadata-action 会用**第一个标签**当 org.opencontainers.image.version。
+          #    实测已发布的 v2026.9.2：`revision` 是对的，而 `version=latest`（因为 type=raw 里
+          #    latest 排第一）。后果：任何按 image.version 判断"我装的是哪个版本"的工具都读到
+          #    "latest"，包括我们自己文档里教的比版本方法。这里显式覆写成与镜像内
+          #    VAN_BLOG_VERSION 完全一致的 `<tag>@<短sha>` 形状（同一个 steps.ver.outputs.version）。
+          #    metadata-action 的 labels 输入是**追加/覆写**语义，不会顶掉它生成的其它 OCI 标签。
+          labels: |
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
           tags: |
             # latest：dev/dsh 的手动构建，以及任何 v* 发版标签，都指向它
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev/dsh' || startsWith(github.ref, 'refs/tags/') }}
@@ -130,7 +171,7 @@ jobs:
             type=raw,value=dev-dsh-${{ steps.ver.outputs.sha }},enable=${{ github.ref == 'refs/heads/dev/dsh' }}
             # 发版标签本身（如 v0.55.0-fork.1）
             type=raw,value=${{ steps.ver.outputs.safe_ref }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ inputs.extra_tag }},enable=${{ inputs.extra_tag != '' }}
+            type=raw,value=${{ steps.inputs.outputs.extra_tag }},enable=${{ steps.inputs.outputs.extra_tag != '' }}
 
       # 把最终生效的值全打出来：构建失败时（尤其是 20-40 分钟之后才失败的那种）
       # 光看 "Build and push" 的红色叉没用，得先确认参数本身是不是对的。
@@ -147,7 +188,7 @@ jobs:
           echo "磁盘可用  ：$(df -h /var/lib/docker 2>/dev/null | tail -1 || df -h / | tail -1)"
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
           platforms: ${{ steps.plat.outputs.platforms }}
