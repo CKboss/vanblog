@@ -2,7 +2,20 @@ export class SiteInfo {
   author: string;
   authorLogo: string;
   authorLogoDark: string;
-  authDesc: string;
+  /**
+   * 作者描述。
+   *
+   * ⚠️ 这个字段以前叫 `authDesc`（上游遗留的拼写错误），而**读它的一侧从来都是 `authorDesc`**：
+   * 后台表单 `SiteInfoForm/index.tsx`、前台 `website/api/getAllData.ts` 与
+   * `website/utils/getLayoutProps.ts` 用的都是 `authorDesc`。因为 `Meta.siteInfo` 是
+   * `@Prop()` 的 Mixed 型（不做嵌套裁剪），后台存进来的 `authorDesc` 一直能落库、前台也一直读得到，
+   * 所以这个错拼**没有暴露成故障**，只是让 DTO 与现实脱节：唯一真写 `authDesc` 的地方是零接触初始化
+   * （`envBootstrap.minimalSiteInfo`），于是用 `VANBLOG_ADMIN_USER` + `_PASSWORD` 初始化的站点，
+   * 库里躺着一个人也不读的 `authDesc: ''`，而前台要的 `authorDesc` 是 undefined
+   * （`getLayoutProps` 的默认值只在整份 meta 缺失时才生效）⇒ 要等站长去后台填一次才有。
+   * 现在统一成 `authorDesc`；遗留数据由 `InitProvider.washAuthorDesc()` 在启动时迁移（幂等）。
+   */
+  authorDesc: string;
   siteLogo: string;
   siteLogoDark: string;
   favicon: string;
@@ -28,7 +41,6 @@ export class SiteInfo {
   subMenuOffset: number;
   showAdminButton: 'true' | 'false';
   showDonateInfo: 'true' | 'false';
-  showFriends: 'true' | 'false';
   showCopyRight: 'true' | 'false';
   showDonateButton: 'true' | 'false';
   showDonateInAbout: 'true' | 'false';

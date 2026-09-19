@@ -83,6 +83,36 @@ const ENCODE_FORMATS: Record<string, any> = {
 const TILE_EXTENT_FACTOR = 0.95;
 const MIN_RENDER_FONT_PX = 8;
 
+/**
+ * 短边小于这个像素数的图**不加水印**（原图返回 + WARN）。
+ *
+ * ⚠️ 这个常量同时是"砖的下限"与"跳过阈值"，两者必须是同一个数，否则代码与日志/文档会各说一套 ——
+ * 以前判定写的是 `Math.max(48, minSide - 4)`（⇒ 实际只有 minSide < 48 才跳过），
+ * 而 WARN 文案与三份文档都写 52px，中间 48…51px 那段属于"日志说跳过了、其实照盖"。
+ * 现在判定与文案都取这一个常量，边界由 `watermark.spec.ts` 钉住（51 跳过 / 52 照盖）。
+ *
+ * 为什么要跳过而不是硬缩：这么小的图上一块砖只有几十像素，字号会被压到不可读，
+ * 盖上去只是"糊一团墨点"，既没有署名效果又毁图；缩略图（默认 300px 宽）不受影响。
+ */
+export const WATERMARK_MIN_SHORT_SIDE_PX = 52;
+
+/**
+ * 小图的砖边长：图比一块砖还小时，把砖缩到图内（单标记居中）。
+ * 缩不下（短边 < `WATERMARK_MIN_SHORT_SIDE_PX`）就返回 `null`，调用方据此**跳过水印、原图返回**。
+ *
+ * 抽成导出函数有两个理由：①阈值判定与 WARN 文案必须同源（见上面的常量注释）；
+ * ②退化输入要可测 —— `NaN`/负数/`0`/`Infinity` 都不可能从真实图片的宽高进来，
+ * 但一旦有人改了上游的取值逻辑，这里必须**明确拒绝**而不是把 NaN 带进 SVG 尺寸计算
+ * （那会让 sharp 抛错，把一次上传变成 500）。宁可不打水印，也不能炸。
+ */
+export function smallImageTileStep(minSide: number): number | null {
+  if (typeof minSide !== 'number' || !Number.isFinite(minSide) || minSide <= 0) {
+    return null;
+  }
+  const step = Math.max(WATERMARK_MIN_SHORT_SIDE_PX, minSide - 4);
+  return step > minSide ? null : step;
+}
+
 export interface WatermarkOptions {
   /** 显式样式覆盖（优先于 env；非法字段同样回默认，见 resolveWatermarkStyle） */
   style?: Partial<WatermarkStyle>;
@@ -409,17 +439,18 @@ async function compositeTile(
 ): Promise<Buffer | null> {
   const metrics = tileMetrics(width, height, style);
   let step = metrics.step;
-  // 小图适配：图比一块砖还小时，砖缩到图内（单标记居中）；小于 52px 的图直接跳过
-  // （后台 tooltip 本来就写着"宽高小于 128px 的图片可能加不上"；48px 砖下限避免糊成墨点）。
+  // 小图适配：图比一块砖还小时，砖缩到图内（单标记居中）；短边小于
+  // WATERMARK_MIN_SHORT_SIDE_PX 的图直接跳过（判定在 smallImageTileStep 里，与常量同源）。
   const minSide = Math.min(width, height);
   if (step > minSide) {
-    step = Math.max(48, minSide - 4);
-    if (step > minSide) {
+    const shrunk = smallImageTileStep(minSide);
+    if (shrunk === null) {
       logger.warn(
-        `[watermark] 图片过小（短边 ${minSide}px < 52px），无法排版水印，按原图返回`,
+        `[watermark] 图片过小（短边 ${minSide}px < ${WATERMARK_MIN_SHORT_SIDE_PX}px），无法排版水印，按原图返回`,
       );
       return null;
     }
+    step = shrunk;
   }
   let fontSize = metrics.fontSize;
   const maxExtent = step * TILE_EXTENT_FACTOR;

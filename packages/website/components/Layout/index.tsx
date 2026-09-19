@@ -208,13 +208,11 @@ export default function (props: {
             isOpen={isOpen}
             setOpen={setIsOpen}
             logoDark={props.option.logoDark}
-            showFriends={props.option.showFriends}
           ></NavBar>
           <NavBarMobile
             isOpen={isOpen}
             setIsOpen={setIsOpen}
             showAdminButton={props.option.showAdminButton}
-            showFriends={props.option.showFriends}
             menus={props.option.menus}
           />
 

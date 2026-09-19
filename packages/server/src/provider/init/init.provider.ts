@@ -581,6 +581,54 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /**
+   * 把上游遗留的 `siteInfo.authDesc` 迁到真正有人读的 `siteInfo.authorDesc`。
+   *
+   * 为什么要洗：写的一侧（零接触初始化）以前用 `authDesc`，而读的一侧（后台表单、前台
+   * `getLayoutProps` / `getAllData`）一直用 `authorDesc` ⇒ 这类站点库里躺着一个没人读的死键，
+   * 前台"作者描述"是空的，站长要再去后台填一次。
+   *
+   * 三条不变量（都有 spec 钉住）：
+   *  1. **幂等**：搬完就把 `authDesc` `$unset` 掉，所以第二次跑匹配不到任何文档；
+   *  2. **绝不覆盖站长填过的值**：只有 `authorDesc` 缺失/为空/非字符串时才搬；
+   *  3. **空值不搬**：`authDesc` 本身是空串时没有内容可搬，只删死键（记进 `dropped`）。
+   *
+   * @returns moved = 真搬了内容的文档数；dropped = 只删掉死键的文档数（供迁移台账记 detail）
+   */
+  async washAuthorDesc(): Promise<{ moved: number; dropped: number }> {
+    let moved = 0;
+    let dropped = 0;
+    // 只捞带死键的文档（正常站点一次都匹配不到，所以这条 wash 平时是零成本）
+    const stale = await this.metaModel.find({ 'siteInfo.authDesc': { $exists: true } });
+    for (const each of (stale || []) as any[]) {
+      const site = each?.siteInfo || {};
+      const legacy = typeof site.authDesc === 'string' ? site.authDesc : '';
+      const current = site.authorDesc;
+      const currentEmpty = current === undefined || current === null || String(current).trim() === '';
+      if (legacy.trim() !== '' && currentEmpty) {
+        await this.metaModel.updateOne(
+          { _id: each._id },
+          {
+            $set: { 'siteInfo.authorDesc': legacy },
+            $unset: { 'siteInfo.authDesc': 1 },
+          },
+        );
+        moved += 1;
+        this.logger.log(
+          `迁移遗留字段：siteInfo.authDesc → siteInfo.authorDesc（${legacy.length} 字符；原来的键名没有任何代码读它）`,
+        );
+      } else {
+        // 没有内容可搬（死键是空的），或站长已经在后台填过 authorDesc ⇒ 只把死键删掉，不动值
+        await this.metaModel.updateOne({ _id: each._id }, { $unset: { 'siteInfo.authDesc': 1 } });
+        dropped += 1;
+        if (!currentEmpty) {
+          this.logger.log('遗留字段 siteInfo.authDesc 已删除；authorDesc 保持站长填的值不变');
+        }
+      }
+    }
+    return { moved, dropped };
+  }
+
   /** @returns 是否真的改了设置（供迁移台账记 detail） */
   async washStaticSetting(): Promise<{ changed: boolean }> {
     // 新版加入了图床自动压缩功能，默认开启，需要洗一下。

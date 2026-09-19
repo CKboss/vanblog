@@ -44,7 +44,6 @@ const metaOf = (categories: string[]): PublicMetaProp =>
         baseUrl: "",
         copyrightAggreement: "",
         showDonateInfo: "true",
-        showFriends: "true",
         enableComment: "true",
         defaultTheme: "auto",
         enableCustomizing: "true",

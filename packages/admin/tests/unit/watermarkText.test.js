@@ -78,9 +78,18 @@ describe('可见水印文字：中文闸门已随渲染重写拆掉', () => {
 
   it('跨包钉子：文案里的 52px 与"跳过而不是失败"必须与服务端实现一致', () => {
     const wm = readRepo('packages/server/src/utils/watermark.ts');
-    // 门槛：短边 < 52px 时按原图返回（改了实现就要改文案，反之亦然）
-    assert.match(wm, /短边 \$\{minSide\}px < 52px/);
+    // 门槛：短边小于阈值时按原图返回（改了实现就要改文案，反之亦然）。
+    // ⚠️ 这里**不要**钉字面的 "52"：服务端现在把阈值抽成了导出常量
+    //    `WATERMARK_MIN_SHORT_SIDE_PX`，判定（smallImageTileStep）与 WARN 文案都取它 ——
+    //    以前正是"判定写死 48、文案与文档写 52"才出现 48…51px 那段"日志说跳过、其实照盖"。
+    //    钉字面数字会把两者重新解耦，所以钉"同源"这件事本身：
+    assert.match(wm, /export const WATERMARK_MIN_SHORT_SIDE_PX = 52/);
+    assert.match(wm, /短边 \$\{minSide\}px < \$\{WATERMARK_MIN_SHORT_SIDE_PX\}px/);
+    assert.match(wm, /Math\.max\(WATERMARK_MIN_SHORT_SIDE_PX, minSide - 4\)/);
     assert.match(wm, /按原图返回/);
+    // 表单文案里那个数字必须与常量一致（表单是纯文本，只能写死，所以在这里对账）
+    const formHere = read('src/components/WaterMarkForm/index.tsx');
+    assert.match(formHere, /短边小于 52px/);
     // 文字过长时先自动缩字号，缩到下限还放不下才跳过 —— 文案说的就是这条
     assert.match(wm, /MIN_RENDER_FONT_PX = 8/);
     // 缺字体是"WARN + 原图"，不是上传失败（所以表单不需要拦，只需要说清代价）

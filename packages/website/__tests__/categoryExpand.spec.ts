@@ -74,7 +74,6 @@ const metaOf = (defaultExpandAllCategories?: unknown): PublicMetaProp =>
         baseUrl: "",
         copyrightAggreement: "",
         showDonateInfo: "true",
-        showFriends: "true",
         enableComment: "true",
         defaultTheme: "auto",
         enableCustomizing: "true",

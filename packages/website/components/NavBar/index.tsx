@@ -43,7 +43,6 @@ export default function (props: {
   menus: MenuItem[];
   showSubMenu: "true" | "false";
   showAdminButton: "true" | "false";
-  showFriends: "true" | "false";
   showRSS: "true" | "false";
   headerLeftContent: "siteName" | "siteLogo";
   defaultTheme: "dark" | "auto" | "light";

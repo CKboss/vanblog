@@ -35,7 +35,6 @@ export interface LayoutProps {
   menus: MenuItem[];
   showSubMenu: "true" | "false";
   showAdminButton: "true" | "false";
-  showFriends: "true" | "false";
   headerLeftContent: "siteLogo" | "siteName";
   enableComment: "true" | "false";
   defaultTheme: "auto" | "dark" | "light";
@@ -81,10 +80,6 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
   let showAdminButton: "true" | "false" = "true";
   if (siteInfo.showAdminButton && siteInfo.showAdminButton == "false") {
     showAdminButton = "false";
-  }
-  let showFriends: "true" | "false" = "true";
-  if (siteInfo.showFriends == "false") {
-    showFriends = "false";
   }
   const customSetting: any = { enableCustomizing: "true" };
   if (siteInfo.enableCustomizing && siteInfo.enableCustomizing == "false") {
@@ -142,7 +137,6 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
     : "false";
 
   return {
-    showFriends,
     version: data?.version || "dev",
     subMenuOffset: siteInfo.subMenuOffset || 0,
     showAdminButton,

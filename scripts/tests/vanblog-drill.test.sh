@@ -2481,6 +2481,69 @@ assert_contains "${SK_SRC}" 'setupKeyRequired' "诊断文案点名 setupKeyRequi
 assert_contains "${SK_SRC}" "grep -oE '初始化密钥： " "日志兜底锚在「初始化密钥：」标签上，不是裸抓 base64"
 
 echo
+
+# ── A19 兜底分支的备份目录推导（source 不到 vanblog.sh 时）──────────────────
+# 以前兜底把 `/var/vanblog/data/log/vanblog-backups` **写死**，而 :1846 的帮助声称
+# `VANBLOG_BACKUP_DIR / VANBLOG_DATA_PATH / VANBLOG_BASE_PATH` "沿用 vanblog.sh 的定义"，
+# :3714 也真的在用 `${VANBLOG_BASE_PATH:-/var/vanblog}` ⇒ 同一文件内自相矛盾。
+# 换了安装目录的站点走到兜底分支就会去错目录、报"没有归档"。
+# ⚠️ 兜底只在 source 不到 vanblog.sh 时生效，所以这里把 VANBLOG_MAIN_SCRIPT 指向不存在的路径；
+#    仓库里两个脚本是同目录的，不这么做测到的会是 vanblog.sh 那份实现（那一份本来就是对的）。
+fallback_dir() { # $1 = 额外 export 语句（可空）
+  bash -c "
+    export VANBLOG_DRILL_SKIP_MAIN=1 VANBLOG_NO_COLOR=1
+    export VANBLOG_MAIN_SCRIPT=/nonexistent/vanblog.sh
+    unset VANBLOG_BACKUP_DIR VANBLOG_DATA_PATH VANBLOG_BASE_PATH
+    $1
+    source '${SCRIPT}' >/dev/null 2>&1
+    if declare -F full_backup_dir >/dev/null 2>&1; then full_backup_dir; else printf '__NOFUNC__'; fi
+  " 2>/dev/null
+}
+main_dir() { # 同样入参，但走 vanblog.sh 的真实实现（生产路径）
+  bash -c "
+    export VANBLOG_SKIP_MAIN=1 VANBLOG_NO_COLOR=1
+    unset VANBLOG_BACKUP_DIR VANBLOG_DATA_PATH VANBLOG_BASE_PATH
+    $1
+    source '${ROOT}/scripts/vanblog.sh' >/dev/null 2>&1
+    if declare -F full_backup_dir >/dev/null 2>&1; then full_backup_dir; else printf '__NOFUNC__'; fi
+  " 2>/dev/null
+}
+
+assert_eq "$(fallback_dir '')" "/var/vanblog/data/log/vanblog-backups" "兜底：全默认时仍是标准路径（默认值没被改坏）"
+assert_eq "$(fallback_dir 'export VANBLOG_BASE_PATH=/srv/vb')" "/srv/vb/data/log/vanblog-backups" "兜底：VANBLOG_BASE_PATH 生效（以前写死，这个会被忽略）"
+assert_eq "$(fallback_dir 'export VANBLOG_DATA_PATH=/data/x')" "/data/x/log/vanblog-backups" "兜底：VANBLOG_DATA_PATH 生效"
+assert_eq "$(fallback_dir 'export VANBLOG_BASE_PATH=/srv/vb VANBLOG_DATA_PATH=/data/x')" "/data/x/log/vanblog-backups" "兜底：DATA_PATH 优先于 BASE_PATH 推导（与 vanblog.sh 同序）"
+assert_eq "$(fallback_dir 'export VANBLOG_BACKUP_DIR=/bk')" "/bk" "兜底：VANBLOG_BACKUP_DIR 最优先"
+
+# 兜底与生产实现必须**同源**：同一组环境变量给出同一个目录
+for envs in '' 'export VANBLOG_BASE_PATH=/srv/vb' 'export VANBLOG_DATA_PATH=/data/x' 'export VANBLOG_BACKUP_DIR=/bk'; do
+  assert_eq "$(fallback_dir "${envs}")" "$(main_dir "${envs}")" "兜底与 vanblog.sh 的实现一致（env: ${envs:-全默认}）"
+done
+
+# 源码级：兜底块里不许再有写死的那个绝对路径（⚠️ 先剥整行注释：解释这件事的注释里就写着它，
+# 本仓库已经六次踩到"断言匹配到解释性注释"）
+FALLBACK_BLOCK="$(awk '/^if \[\[ "\$\{VANBLOG_MAIN_LOADED\}" != "1" \]\]; then$/{f=1} f{print} f&&/^fi$/{exit}' "${SCRIPT}")"
+if [[ -z "${FALLBACK_BLOCK}" ]]; then
+  fail "没能从脚本里切出兜底块（awk 锚点失效？那这条检查就是空的）"
+else
+  pass "切出了兜底块（$(printf '%s' "${FALLBACK_BLOCK}" | wc -l) 行）"
+  STRIPPED_FALLBACK="$(printf '%s\n' "${FALLBACK_BLOCK}" | grep -v '^[[:space:]]*#')"
+  if printf '%s' "${STRIPPED_FALLBACK}" | grep -qF '/var/vanblog/data/log/vanblog-backups'; then
+    fail "兜底块里还有写死的绝对路径（应由 VANBLOG_BASE_PATH/DATA_PATH 推导）"
+  else
+    pass "兜底块里没有写死的绝对路径（剥注释后）"
+  fi
+  # 空转反证：同一个 grep 跑在**旧写法**那一行上必须命中，否则上面那条 PASS 是空的
+  if printf '%s' '  full_backup_dir() { printf '"'"'%s'"'"' "${VANBLOG_BACKUP_DIR:-/var/vanblog/data/log/vanblog-backups}"; }' |
+    grep -qF '/var/vanblog/data/log/vanblog-backups'; then
+    pass "反证成立：旧的写死形状会被这条 grep 抓到（不是空转）"
+  else
+    fail "反证失败：grep 抓不到旧形状 ⇒ 上面那条 PASS 没有意义"
+  fi
+  assert_contains "${STRIPPED_FALLBACK}" 'VANBLOG_BASE_PATH' "兜底块真的读 VANBLOG_BASE_PATH"
+  assert_contains "${STRIPPED_FALLBACK}" 'VANBLOG_DATA_PATH' "兜底块真的读 VANBLOG_DATA_PATH"
+fi
+
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
   exit 1

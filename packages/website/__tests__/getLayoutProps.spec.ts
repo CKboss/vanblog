@@ -43,7 +43,6 @@ const completeSiteInfo: SiteInfo = {
   headerLeftContent: "siteLogo",
   subMenuOffset: 12,
   showDonateInfo: "true",
-  showFriends: "false",
   enableComment: "false",
   defaultTheme: "dark",
   showDonateInAbout: "false",
@@ -129,7 +128,6 @@ describe("getLayoutProps / getAuthorCardProps with complete siteInfo (#207)", ()
     expect(layout.description).toBe("a demo");
     expect(layout.headerLeftContent).toBe("siteLogo");
     expect(layout.showAdminButton).toBe("false");
-    expect(layout.showFriends).toBe("false");
     expect(layout.enableCustomizing).toBe("false");
     expect(layout.showCopyRight).toBe("false");
     expect(layout.showDonateButton).toBe("false");
@@ -183,8 +181,6 @@ describe("sparse siteInfo fields do not crash (#207)", () => {
 
     const layout = getLayoutProps(data);
     const author = getAuthorCardProps(data);
-
-    expect(layout.showFriends).toBe("true");
     expect(layout.showAdminButton).toBe("true");
     expect(layout.showCopyRight).toBe("true");
     expect(layout.showDonateButton).toBe("true");

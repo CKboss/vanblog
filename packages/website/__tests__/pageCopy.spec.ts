@@ -48,7 +48,6 @@ const metaOf = (siteInfoExtra: Record<string, unknown> = {}): PublicMetaProp =>
         baseUrl: "",
         copyrightAggreement: "",
         showDonateInfo: "true",
-        showFriends: "true",
         enableComment: "true",
         defaultTheme: "auto",
         enableCustomizing: "true",

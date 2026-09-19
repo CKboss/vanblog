@@ -280,6 +280,10 @@ async function bootstrap() {
     // 老版本的分类数据洗一下
     if (primary)
       await wash('wash:categoryFromMeta', 'wash', () => initProvider.washCategory(), (r) => r);
+    // 上游遗留的 siteInfo.authDesc → authorDesc（写的一侧用错过键名，读的一侧一直是 authorDesc）。
+    // 幂等：搬完就把死键 $unset，所以第二次启动匹配不到任何文档；也绝不覆盖站长填过的 authorDesc。
+    if (primary)
+      await wash('wash:authorDesc', 'wash', () => initProvider.washAuthorDesc(), (r) => r);
     // P6 文章字数副本回填（readingMinutes/回收站/相关文章都靠它）。
     // provider 自己往台账记 `backfill:articleWordCount`，所以这里不再包 wash()（会记重）。
     // fire-and-forget：大站上要扫一遍正文，不该阻塞启动；失败由台账 WARN + 这里的 catch 留痕。

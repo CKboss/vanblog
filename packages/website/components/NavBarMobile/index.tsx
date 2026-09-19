@@ -7,7 +7,6 @@ import { describeNavItem, describeNavMenu, withNavCurrentClass } from "../NavBar
 export default function (props: {
   isOpen: boolean;
   setIsOpen: (i: boolean) => void;
-  showFriends: "true" | "false";
   showAdminButton: "true" | "false";
   menus: MenuItem[];
 }) {

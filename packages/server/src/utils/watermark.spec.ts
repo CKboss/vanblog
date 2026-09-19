@@ -10,6 +10,8 @@ import {
   notdefComparatorFor,
   probeFontCoverage,
   scanInk,
+  smallImageTileStep,
+  WATERMARK_MIN_SHORT_SIDE_PX,
 } from './watermark';
 import { tileMetrics, cornerMetrics, resolveWatermarkStyle, withCopyrightPrefix, buildTileSvg } from './watermarkSvg';
 
@@ -640,6 +642,89 @@ describe('format preservation and EXIF orientation', () => {
       const out = await addWaterMarkToIMG(src, 'v.blog');
       expect(out).toBe(src);
       expect(String(warnSpy.mock.calls[0][0])).toContain('[watermark]');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // 小图阈值的**边界**：代码、WARN 文案与三份文档必须说同一个数。
+  //
+  // 这条钉子是有来历的：判定原来写死 `Math.max(48, minSide - 4)`，于是真正跳过的只有
+  // 短边 < 48 的图，而 WARN 文案与文档（features/image-storage.md、faq/usage.md、
+  // reference/env.md）都写 52px ⇒ 48…51px 这段是"日志说跳过了、其实照盖"，
+  // 而且没有任何 spec 钉这个边界（搜 47/48/51/52 全 0 命中），所以它一直没人发现。
+  // 现在阈值是导出的常量，判定与文案同源，边界两侧各钉一条。
+  // -----------------------------------------------------------------------
+  it(`阈值常量就是文档写的那个值（${WATERMARK_MIN_SHORT_SIDE_PX}px），改它必须同时改文档`, () => {
+    expect(WATERMARK_MIN_SHORT_SIDE_PX).toBe(52);
+  });
+
+  it('边界：短边 51px ⇒ 跳过（返回 null，不打水印）', () => {
+    expect(smallImageTileStep(WATERMARK_MIN_SHORT_SIDE_PX - 1)).toBeNull();
+  });
+
+  it('边界：短边 52px ⇒ 照盖（砖缩到 52，正好放得下）', () => {
+    expect(smallImageTileStep(WATERMARK_MIN_SHORT_SIDE_PX)).toBe(WATERMARK_MIN_SHORT_SIDE_PX);
+  });
+
+  it('边界：53…60px 也照盖，且砖不会小于阈值（避免糊成墨点）', () => {
+    for (const s of [53, 56, 60]) {
+      const step = smallImageTileStep(s);
+      expect(step).not.toBeNull();
+      expect(step as number).toBeGreaterThanOrEqual(WATERMARK_MIN_SHORT_SIDE_PX);
+      expect(step as number).toBeLessThanOrEqual(s);
+    }
+  });
+
+  it('以前会漏掉的 48…51px 整段：现在一律跳过（这就是修掉的那个洞）', () => {
+    for (const s of [48, 49, 50, 51]) {
+      expect(smallImageTileStep(s)).toBeNull();
+    }
+  });
+
+  it('退化输入不炸：0 / 负数 / NaN / ±Infinity / 非数字一律跳过', () => {
+    for (const bad of [0, -1, -52, NaN, Infinity, -Infinity, '52' as any, null as any, undefined as any]) {
+      expect(smallImageTileStep(bad as number)).toBeNull();
+    }
+  });
+
+  it('空转反证：同一个判据跑在**旧写法**上必须给出不同答案（否则上面几条都是空的）', () => {
+    // 旧实现：step = Math.max(48, minSide - 4)，skip 当且仅当 step > minSide
+    const legacySkips = (minSide: number) => Math.max(48, minSide - 4) > minSide;
+    // 48…51px：旧写法不跳过（照盖），新写法跳过 ⇒ 两者结论相反，证明这组断言真的在测东西
+    for (const s of [48, 49, 50, 51]) {
+      expect(legacySkips(s)).toBe(false);
+      expect(smallImageTileStep(s)).toBeNull();
+    }
+    // 47px 两边都跳过（这一档行为没变）
+    expect(legacySkips(47)).toBe(true);
+    expect(smallImageTileStep(47)).toBeNull();
+  });
+
+  it('端到端：51×51 的原图原样返回（同一引用）且 WARN 里的数字与常量一致', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const src = await solidPng(51, 51, 100);
+      const out = await addWaterMarkToIMG(src, 'a.b');
+      expect(out).toBe(src);
+      const msg = String(warnSpy.mock.calls[0][0]);
+      expect(msg).toContain('短边 51px');
+      expect(msg).toContain(`< ${WATERMARK_MIN_SHORT_SIDE_PX}px`);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('端到端：52×52 不再被当成"过小"（不会打出那条 WARN）', async () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const src = await solidPng(52, 52, 100);
+      await addWaterMarkToIMG(src, 'a.b');
+      const tooSmall = warnSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => m.includes('图片过小'));
+      expect(tooSmall).toEqual([]);
     } finally {
       warnSpy.mockRestore();
     }

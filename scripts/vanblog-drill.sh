@@ -75,7 +75,19 @@ if [[ "${VANBLOG_MAIN_LOADED}" != "1" ]]; then
     *) printf '' ;;
     esac
   }
-  full_backup_dir() { printf '%s' "${VANBLOG_BACKUP_DIR:-/var/vanblog/data/log/vanblog-backups}"; }
+  # ⚠️ 兜底也必须走**同一套推导**：`VANBLOG_BACKUP_DIR` → `${VANBLOG_DATA_PATH}/log/vanblog-backups`，
+  #    `VANBLOG_DATA_PATH` → `${VANBLOG_BASE_PATH}/data`，`VANBLOG_BASE_PATH` 默认 `/var/vanblog`。
+  #    以前这里把 `/var/vanblog/data/log/vanblog-backups` **写死**，而本文件 :1846 的帮助却声称
+  #    "VANBLOG_BACKUP_DIR / VANBLOG_DATA_PATH / VANBLOG_BASE_PATH 沿用 vanblog.sh 的定义"，
+  #    :3714 也确实在用 `${VANBLOG_BASE_PATH:-/var/vanblog}` ⇒ 同一文件内自相矛盾：
+  #    换了安装目录的站点，一旦走到这个兜底分支（source 不到 vanblog.sh）就会去错目录、
+  #    报"没有归档"，而用户明明有备份。正常安装会 source 到 vanblog.sh、用的是它那份正确实现，
+  #    所以这个洞只在"脚本被单独拷走/改名"时才暴露 —— 但那种用法恰恰是 --help 承诺支持的。
+  full_backup_dir() {
+    local _base="${VANBLOG_BASE_PATH:-/var/vanblog}"
+    local _data="${VANBLOG_DATA_PATH:-${_base}/data}"
+    printf '%s' "${VANBLOG_BACKUP_DIR:-${_data}/log/vanblog-backups}"
+  }
   archive_list_members() { return 2; }
   archive_integrity_test() { return 2; }
   verify_one_archive() { return 2; }

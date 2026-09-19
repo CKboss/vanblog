@@ -112,7 +112,6 @@ export interface SiteInfo {
   headerLeftContent?: "siteLogo" | "siteName";
   subMenuOffset?: number;
   showDonateInfo: "true" | "false";
-  showFriends: "true" | "false";
   enableComment: "true" | "false";
   defaultTheme: "auto" | "light" | "dark";
   showDonateInAbout?: "true" | "false";
@@ -190,7 +189,6 @@ const defaultMeta: MetaProps = {
     enableComment: "true",
     baseUrl: "",
     showDonateInfo: "true",
-    showFriends: "true",
     showAdminButton: "true",
     defaultTheme: "auto",
     showDonateInAbout: "false",

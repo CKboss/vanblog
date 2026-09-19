@@ -150,7 +150,10 @@ export function minimalSiteInfo(username: string): Partial<SiteInfo> {
   return {
     siteName: 'VanBlog',
     author: String(username ?? ''),
-    authDesc: '',
+    // ⚠️ 必须是 `authorDesc`：这里以前写的是上游遗留拼写 `authDesc`，而后台表单与前台读的
+    //    都是 `authorDesc` ⇒ 零接触初始化出来的站点，库里存了个没人读的空键，
+    //    前台的"作者描述"要等站长去后台填一次才有。见 site.dto.ts 里那个字段的注释。
+    authorDesc: '',
     siteDesc: '',
     favicon: '',
     baseUrl: '',
