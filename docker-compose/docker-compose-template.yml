@@ -180,6 +180,15 @@ services:
       - vanblog_data_path/caddy/config:/root/.config/caddy
       # caddy 证书存储
       - vanblog_data_path/caddy/data:/root/.local/share/caddy
+      # ── 流水线（自定义代码）的两个工作目录：默认**不持久化** ──
+      # 服务端把流水线脚本写在 /app/codeRunner、依赖用 `pnpm add` 装到 /app/pluginRunner
+      # （见 config/index.ts 的 codeRunnerPath / pluginRunnerPath）。这两个目录既不是镜像的
+      # VOLUME，模板里也没挂 ⇒ **容器一重建，脚本与已装依赖全没了**，下次触发流水线时
+      # 由启动时的依赖自检重新 `pnpm add` 装回来：需要能出网，且每个包最多等 300 秒。
+      # ⚠️ 离线/内网部署会因此直接坏掉。要让它们跨重建存活，取消下面两行注释：
+      # - vanblog_data_path/codeRunner:/app/codeRunner
+      # - vanblog_data_path/pluginRunner:/app/pluginRunner
+      # （首次挂载会是空目录，属正常；已有的流水线脚本需要重新在后台保存一次）
     ports:
       # 前面的是映射到宿主机的端口号，改端口的话该前面的
       - vanblog_http_port:80
