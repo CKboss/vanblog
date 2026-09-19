@@ -1,8 +1,11 @@
 import axios from 'axios';
 import {
+  CADDY_ADMIN_TIMEOUT_MS,
   CADDY_LISTENER_WRAPPERS_URL,
   CaddyProvider,
   HTTP_REDIRECT_WRAPPERS,
+  SERVE_HTML_DB_FAILURE_WARN_EVERY,
+  describeCaddyAdminFailure,
 } from './caddy.provider';
 
 jest.mock('axios');
@@ -47,13 +50,18 @@ describe('CaddyProvider.setRedirect', () => {
     expect(mockedAxios.patch).toHaveBeenCalledWith(
       CADDY_LISTENER_WRAPPERS_URL,
       HTTP_REDIRECT_WRAPPERS,
+      // ⚠️ 这个 timeout 不是可有可无的第三个参数：caddy admin 卡住时没有它就会**无限等待**
+      { timeout: CADDY_ADMIN_TIMEOUT_MS },
     );
     expect(mockedAxios.put).toHaveBeenCalledWith(
       CADDY_LISTENER_WRAPPERS_URL,
       HTTP_REDIRECT_WRAPPERS,
+      { timeout: CADDY_ADMIN_TIMEOUT_MS },
     );
     expect(mockedAxios.post).not.toHaveBeenCalled();
-    expect(mockedAxios.get).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL);
+    expect(mockedAxios.get).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL, {
+      timeout: CADDY_ADMIN_TIMEOUT_MS,
+    });
     expect(provider.logger.log).toHaveBeenCalledWith('https 自动重定向已开启');
     expect(provider.logger.error).not.toHaveBeenCalled();
   });
@@ -68,6 +76,8 @@ describe('CaddyProvider.setRedirect', () => {
     expect(mockedAxios.patch).toHaveBeenCalledWith(
       CADDY_LISTENER_WRAPPERS_URL,
       HTTP_REDIRECT_WRAPPERS,
+      // ⚠️ 这个 timeout 不是可有可无的第三个参数：caddy admin 卡住时没有它就会**无限等待**
+      { timeout: CADDY_ADMIN_TIMEOUT_MS },
     );
     expect(mockedAxios.put).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
@@ -81,7 +91,10 @@ describe('CaddyProvider.setRedirect', () => {
     await expect(provider.setRedirect(true)).resolves.toBe(false);
     expect(mockedAxios.put).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
-    expect(provider.logger.error).toHaveBeenCalledWith('开启 https 自动重定向失败');
+    // 失败原因现在会一起打出来（以前只有这句话，超时/拒连/caddy 500 在日志里长得一样）
+    expect(provider.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('开启 https 自动重定向失败'),
+    );
     expect(provider.logger.log).not.toHaveBeenCalled();
   });
 
@@ -92,7 +105,10 @@ describe('CaddyProvider.setRedirect', () => {
     mockedAxios.get.mockResolvedValue({ data: [] });
 
     await expect(provider.setRedirect(true)).resolves.toBe(false);
-    expect(provider.logger.error).toHaveBeenCalledWith('开启 https 自动重定向失败');
+    // 失败原因现在会一起打出来（以前只有这句话，超时/拒连/caddy 500 在日志里长得一样）
+    expect(provider.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('开启 https 自动重定向失败'),
+    );
     expect(provider.logger.log).not.toHaveBeenCalled();
   });
 
@@ -102,8 +118,12 @@ describe('CaddyProvider.setRedirect', () => {
     mockedAxios.get.mockRejectedValue(notFoundError());
 
     await expect(provider.setRedirect(false)).resolves.toBe('关闭成功！');
-    expect(mockedAxios.delete).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL);
-    expect(mockedAxios.get).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL);
+    expect(mockedAxios.delete).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL, {
+      timeout: CADDY_ADMIN_TIMEOUT_MS,
+    });
+    expect(mockedAxios.get).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL, {
+      timeout: CADDY_ADMIN_TIMEOUT_MS,
+    });
     expect(provider.logger.log).toHaveBeenCalledWith('https 自动重定向已关闭');
     expect(provider.logger.error).not.toHaveBeenCalled();
   });
@@ -114,7 +134,9 @@ describe('CaddyProvider.setRedirect', () => {
     mockedAxios.get.mockRejectedValue(notFoundError());
 
     await expect(provider.setRedirect(false)).resolves.toBe('关闭成功！');
-    expect(mockedAxios.delete).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL);
+    expect(mockedAxios.delete).toHaveBeenCalledWith(CADDY_LISTENER_WRAPPERS_URL, {
+      timeout: CADDY_ADMIN_TIMEOUT_MS,
+    });
     expect(provider.logger.log).toHaveBeenCalledWith('https 自动重定向已关闭');
   });
 
@@ -123,7 +145,9 @@ describe('CaddyProvider.setRedirect', () => {
     mockedAxios.delete.mockRejectedValue(new Error('connection refused'));
 
     await expect(provider.setRedirect(false)).resolves.toBe(false);
-    expect(provider.logger.error).toHaveBeenCalledWith('关闭 https 自动重定向失败');
+    expect(provider.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('关闭 https 自动重定向失败'),
+    );
     expect(provider.logger.log).not.toHaveBeenCalled();
   });
 
@@ -133,7 +157,9 @@ describe('CaddyProvider.setRedirect', () => {
     mockedAxios.get.mockResolvedValue({ data: [{ wrapper: 'http_redirect' }] });
 
     await expect(provider.setRedirect(false)).resolves.toBe(false);
-    expect(provider.logger.error).toHaveBeenCalledWith('关闭 https 自动重定向失败');
+    expect(provider.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('关闭 https 自动重定向失败'),
+    );
     expect(provider.logger.log).not.toHaveBeenCalled();
   });
 });
@@ -275,9 +301,74 @@ describe('caddy 直服 ISR HTML：哨兵的写/删决策', () => {
     provider.onModuleDestroy();
   });
 
-  it('getISRSetting 抛错（Mongo 抖动）按关处理且不 crash', async () => {
+  it('getISRSetting 抛错且**从没成功对过账**：保持 off（不臆造档位）且不 crash', async () => {
+    /* ⚠️ 这条用例的旧版本名叫「按关处理」，断言的是"抛错 ⇒ 返回 off ⇒ 哨兵被删"。
+     * 那个契约**只对"从来没有已知档位"这一种情况成立**，而旧实现把它用在了所有情况上，
+     * 于是变成："数据库挂掉 ⇒ 主动删掉哨兵 ⇒ caddy 直服 HTML 整条路由失效 ⇒
+     * 请求落到反代 → Next → server → 查已死的 mongo ⇒ 全站 5xx"，
+     * 而磁盘上明明躺着渲染好的 HTML。也就是**在最需要静态兜底的时候亲手关掉它**。
+     * 现在：从没成功对过账（serveHtmlState === null）时确实仍按 off（不知道 ISR 模式就直服，
+     * 可能把 delay 模式的站点冻结，那正是这个门槛存在的理由）；
+     * 一旦有过已知档位，读库失败必须**保持**它 —— 那条语义由下面新增的用例钉住。 */
     process.env[SERVE_HTML_ENV_FLAG] = 'true';
     const { provider } = createServeHtmlProvider(() => Promise.reject(new Error('mongo down')));
+    await expect(provider.reconcileServeHtml()).resolves.toBe('off');
+    expect(fs.existsSync(sentinelPath())).toBe(false);
+    provider.onModuleDestroy();
+  });
+
+  it('🔴 mongo 挂了也**不许删哨兵**：保持上一次已知档位（降级发布，而不是全站 5xx）', async () => {
+    process.env[SERVE_HTML_ENV_FLAG] = 'all';
+    let fail = false;
+    const { provider } = createServeHtmlProvider(() =>
+      fail ? Promise.reject(new Error('mongo down')) : Promise.resolve({ mode: 'onDemand' }),
+    );
+    // 先建立"已知档位 = all"（两个哨兵都在）
+    await expect(provider.reconcileServeHtml()).resolves.toBe('all');
+    expect(fs.existsSync(sentinelPath())).toBe(true);
+    expect(fs.existsSync(dynamicSentinelPath())).toBe(true);
+
+    fail = true;
+    // 旧实现在这里返回 'off' 并 unlinkSync 掉两个哨兵
+    await expect(provider.reconcileServeHtml()).resolves.toBe('all');
+    expect(fs.existsSync(sentinelPath())).toBe(true);
+    expect(fs.existsSync(dynamicSentinelPath())).toBe(true);
+
+    // 连续多轮失败也必须一直保持着（对账是 60s 一轮，mongo 挂一小时就是 60 轮）
+    for (let i = 0; i < 3; i += 1) {
+      await expect(provider.reconcileServeHtml()).resolves.toBe('all');
+    }
+    expect(fs.existsSync(sentinelPath())).toBe(true);
+    expect(fs.existsSync(dynamicSentinelPath())).toBe(true);
+    provider.onModuleDestroy();
+  });
+
+  it('🔴 但**运维回滚**不受数据库影响：撤掉 env 开关就能立刻摘除哨兵', async () => {
+    /* 回滚手段绝不能跟着数据库一起失效 —— 它是本地环境变量，不依赖 mongo。
+     * 所以"保持上一次档位"只适用于**读设置失败**，不适用于 flag 本身变成 off。 */
+    process.env[SERVE_HTML_ENV_FLAG] = 'all';
+    let fail = false;
+    const { provider } = createServeHtmlProvider(() =>
+      fail ? Promise.reject(new Error('mongo down')) : Promise.resolve({ mode: 'onDemand' }),
+    );
+    await provider.reconcileServeHtml();
+    expect(fs.existsSync(sentinelPath())).toBe(true);
+
+    fail = true; // 数据库仍然挂着
+    delete process.env[SERVE_HTML_ENV_FLAG]; // 运维撤掉开关（等价于回滚）
+    await expect(provider.reconcileServeHtml()).resolves.toBe('off');
+    expect(fs.existsSync(sentinelPath())).toBe(false);
+    expect(fs.existsSync(dynamicSentinelPath())).toBe(false);
+    provider.onModuleDestroy();
+  });
+
+  it('成功读到"确实是 off/delay"时**才**允许摘除哨兵（区分"读不到"与"读到关"）', async () => {
+    process.env[SERVE_HTML_ENV_FLAG] = 'all';
+    const isr = { mode: 'onDemand' as string };
+    const { provider } = createServeHtmlProvider(isr);
+    await provider.reconcileServeHtml();
+    expect(fs.existsSync(sentinelPath())).toBe(true);
+    isr.mode = 'delay'; // 成功读到，且读到的就是"不该直服"
     await expect(provider.reconcileServeHtml()).resolves.toBe('off');
     expect(fs.existsSync(sentinelPath())).toBe(false);
     provider.onModuleDestroy();
@@ -383,4 +474,273 @@ describe('caddy 模板里的 vanblog-serve-html 路由形状（两份模板 × �
       }
     });
   }
+});
+
+/* =============== 读库失败时的降级发布语义（哨兵保持） =============== */
+
+describe('caddy 直服 HTML：读不到设置时的日志节流与恢复', () => {
+  let tmpDir: string;
+  let savedFlag: string | undefined;
+  let savedDir: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vanblog-serve-html-degrade-'));
+    savedFlag = process.env[SERVE_HTML_ENV_FLAG];
+    savedDir = process.env[SERVE_HTML_PAGES_DIR_ENV];
+    process.env[SERVE_HTML_PAGES_DIR_ENV] = tmpDir;
+    process.env[SERVE_HTML_ENV_FLAG] = 'all';
+  });
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env[SERVE_HTML_ENV_FLAG];
+    else process.env[SERVE_HTML_ENV_FLAG] = savedFlag;
+    if (savedDir === undefined) delete process.env[SERVE_HTML_PAGES_DIR_ENV];
+    else process.env[SERVE_HTML_PAGES_DIR_ENV] = savedDir;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeProvider() {
+    let fail = false;
+    const settingProvider = {
+      getHttpsSetting: jest.fn().mockReturnValue(new Promise(() => undefined)),
+      getISRSetting: jest.fn(() =>
+        fail ? Promise.reject(new Error('mongo down')) : Promise.resolve({ mode: 'onDemand' }),
+      ),
+    };
+    const provider = new CaddyProvider(settingProvider as any);
+    const log = jest.spyOn(provider.logger, 'log').mockImplementation(() => undefined);
+    const warn = jest.spyOn(provider.logger, 'warn').mockImplementation(() => undefined);
+    const debug = jest.spyOn(provider.logger, 'debug').mockImplementation(() => undefined);
+    jest.spyOn(provider.logger, 'error').mockImplementation(() => undefined);
+    return { provider, log, warn, debug, setFail: (v: boolean) => (fail = v) };
+  }
+
+  it('第一次读库失败就 WARN（这是"进入降级发布模式"的时刻，必须看得见）', async () => {
+    const { provider, warn, setFail } = makeProvider();
+    await provider.reconcileServeHtml(); // 建立已知档位 all
+    setFail(true);
+    await provider.reconcileServeHtml();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0][0]);
+    // 消息必须说清"哨兵没被删、直服仍在"，否则运维会以为已经切回反代
+    expect(msg).toContain('保持');
+    expect(msg).toContain('降级发布模式');
+    expect(msg).toContain('mongo down');
+    provider.onModuleDestroy();
+  });
+
+  it('之后不每分钟刷屏：第 2..N-1 次降为 debug，到阈值再 WARN 一次', async () => {
+    const { provider, warn, debug, setFail } = makeProvider();
+    await provider.reconcileServeHtml();
+    setFail(true);
+    for (let i = 0; i < SERVE_HTML_DB_FAILURE_WARN_EVERY; i += 1) {
+      await provider.reconcileServeHtml();
+    }
+    // 第 1 次 + 第 SERVE_HTML_DB_FAILURE_WARN_EVERY 次 = 2 条 WARN，其余走 debug
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(debug.mock.calls.length).toBe(SERVE_HTML_DB_FAILURE_WARN_EVERY - 2);
+    provider.onModuleDestroy();
+  });
+
+  it('数据库恢复后打一条"已恢复"并把计数清零（否则下一次失败要等阈值才告警）', async () => {
+    const { provider, log, warn, setFail } = makeProvider();
+    await provider.reconcileServeHtml();
+    setFail(true);
+    await provider.reconcileServeHtml();
+    await provider.reconcileServeHtml();
+    setFail(false);
+    await provider.reconcileServeHtml();
+    const recovered = log.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('已恢复'));
+    expect(recovered.length).toBe(1);
+    expect(recovered[0]).toContain('连续 2 次');
+    // 清零的证据：恢复后再失败一次，立刻又是 WARN（而不是要等阈值）
+    warn.mockClear();
+    setFail(true);
+    await provider.reconcileServeHtml();
+    expect(warn).toHaveBeenCalledTimes(1);
+    provider.onModuleDestroy();
+  });
+
+  it('哨兵内容在降级期间保持有效（caddy 每个请求现查这个文件）', async () => {
+    const { provider, setFail } = makeProvider();
+    await provider.reconcileServeHtml();
+    const before = fs.readFileSync(path.join(tmpDir, CADDY_SERVE_HTML_SENTINEL), 'utf-8');
+    setFail(true);
+    await provider.reconcileServeHtml();
+    const after = fs.readFileSync(path.join(tmpDir, CADDY_SERVE_HTML_SENTINEL), 'utf-8');
+    expect(after).toContain('level=all');
+    // 时间戳会被重写（每轮都 writeFileSync），但档位这一行必须在
+    expect(after.split(';')[0]).toBe(before.split(';')[0]);
+    provider.onModuleDestroy();
+  });
+});
+
+/* =============== caddy admin API：超时与诊断 =============== */
+
+describe('caddy admin API 调用：全部带超时，且失败原因可读', () => {
+  function makeProvider() {
+    const settingProvider = {
+      getHttpsSetting: jest.fn().mockReturnValue(new Promise(() => undefined)),
+    };
+    const provider = new CaddyProvider(settingProvider as any);
+    jest.spyOn(provider.logger, 'log').mockImplementation(() => undefined);
+    jest.spyOn(provider.logger, 'error').mockImplementation(() => undefined);
+    jest.spyOn(provider.logger, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(provider.logger, 'debug').mockImplementation(() => undefined);
+    return provider;
+  }
+
+  beforeEach(() => {
+    mockedAxios.get.mockReset();
+    mockedAxios.put.mockReset();
+    mockedAxios.patch.mockReset();
+    mockedAxios.post.mockReset();
+    mockedAxios.delete.mockReset();
+    mockedAxios.get.mockResolvedValue({ status: 200, data: [] } as any);
+    mockedAxios.put.mockResolvedValue({ status: 200 } as any);
+    mockedAxios.patch.mockResolvedValue({ status: 200 } as any);
+    mockedAxios.delete.mockResolvedValue({ status: 200 } as any);
+  });
+
+  it('🔴 每一个 axios 调用都带 timeout（漏一个就意味着那条路径能无限挂住）', async () => {
+    const provider = makeProvider();
+    await provider.setRedirect(true);
+    await provider.setRedirect(false);
+    await provider.getSubjects();
+    await provider.getAutomaticDomains();
+    await provider.updateSubjects(['a.com']);
+    await provider.updateHttpsDomains(['a.com']);
+    await provider.getConfig();
+
+    const calls: unknown[][] = [
+      ...mockedAxios.get.mock.calls,
+      ...mockedAxios.put.mock.calls,
+      ...mockedAxios.patch.mock.calls,
+      ...mockedAxios.delete.mock.calls,
+      ...mockedAxios.post.mock.calls,
+    ];
+    // ⚠️ 防空转：真的打到了所有调用点（少于 7 说明上面的方法没跑起来，断言就没意义了）
+    expect(calls.length).toBeGreaterThanOrEqual(7);
+    const missing = calls.filter((args) => {
+      const last = args[args.length - 1] as { timeout?: number } | undefined;
+      return !last || last.timeout !== CADDY_ADMIN_TIMEOUT_MS;
+    });
+    expect({ 缺超时的调用数: missing.length, 总调用数: calls.length }).toEqual({
+      缺超时的调用数: 0,
+      总调用数: calls.length,
+    });
+  });
+
+  it('超时值本身是合理的（不是 0/无限，也不是长到失去意义）', () => {
+    expect(CADDY_ADMIN_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(CADDY_ADMIN_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+  });
+
+  it('describeCaddyAdminFailure：四类失败各有可区分的说法，且都带自查命令', () => {
+    const timeout = describeCaddyAdminFailure({
+      code: 'ECONNABORTED',
+      message: `timeout of ${CADDY_ADMIN_TIMEOUT_MS}ms exceeded`,
+    });
+    expect(timeout).toContain('超时');
+    const refused = describeCaddyAdminFailure({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED' });
+    expect(refused).toContain('连接被拒');
+    const http = describeCaddyAdminFailure({
+      message: 'Request failed with status code 500',
+      response: { status: 500 },
+    });
+    expect(http).toContain('返回 500');
+    const unknown = describeCaddyAdminFailure(new Error('weird'));
+    expect(unknown).toContain('调用失败');
+    for (const msg of [timeout, refused, http, unknown]) {
+      // 每条都要给出"照着敲一条命令就能自查"的下一步
+      expect(msg).toContain('curl -s http://127.0.0.1:2019/config/');
+    }
+  });
+
+  it('describeCaddyAdminFailure 不会自己抛（诊断函数抛错比没诊断更糟）', () => {
+    const weird: unknown[] = [null, undefined, 0, '', 'str', {}, [], { code: 1 }, new Error()];
+    expect(weird.map((w) => typeof describeCaddyAdminFailure(w))).toEqual(weird.map(() => 'string'));
+  });
+});
+
+/* =============== 启动时重放 HTTPS 重定向设置 =============== */
+
+describe('CaddyProvider.init：读不到设置时大声失败，读得到时两个方向都重放', () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function makeProvider(https: Promise<unknown>) {
+    const settingProvider = { getHttpsSetting: jest.fn().mockReturnValue(https) };
+    const provider = new CaddyProvider(settingProvider as any);
+    jest.spyOn(provider.logger, 'log').mockImplementation(() => undefined);
+    const error = jest.spyOn(provider.logger, 'error').mockImplementation(() => undefined);
+    // 用可控的替身挡住真实的 caddy admin 调用
+    const setRedirect = jest
+      .spyOn(provider, 'setRedirect')
+      .mockResolvedValue('ok' as unknown as Promise<any> as any);
+    return { provider, error, setRedirect };
+  }
+
+  it('读设置失败：打 ERROR 说清"本次启动没有重放"，并且**不动 caddy**', async () => {
+    const d = deferred<unknown>();
+    const { provider, error, setRedirect } = makeProvider(d.promise);
+    d.reject(new Error('mongo down'));
+    await provider.init().catch(() => undefined);
+    expect(setRedirect).not.toHaveBeenCalled();
+    const msg = error.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(msg).toContain('读取 HTTPS 重定向设置失败');
+    expect(msg).toContain('没有');
+    expect(msg).toContain('mongo down');
+    provider.onModuleDestroy();
+  });
+
+  it('⚠️ 性质钉子：设置读得到时，**两个方向都会显式重放**（历史 bug 是"开了关不掉"）', async () => {
+    const on = deferred<unknown>();
+    const p1 = makeProvider(on.promise);
+    on.resolve({ redirect: true });
+    await p1.provider.init();
+    expect(p1.setRedirect).toHaveBeenCalledWith(true);
+    p1.provider.onModuleDestroy();
+
+    const off = deferred<unknown>();
+    const p2 = makeProvider(off.promise);
+    off.resolve({ redirect: false });
+    await p2.provider.init();
+    expect(p2.setRedirect).toHaveBeenCalledWith(false);
+    p2.provider.onModuleDestroy();
+  });
+
+  it('构造函数里那个 fire-and-forget 的 init() 不会变成 unhandledRejection', async () => {
+    /* 以前是裸的 `this.init()`：一旦 reject 就是 unhandledRejection，而本仓库的
+     * unhandledRejection **只记日志不退进程**，所以后果不是崩溃，而是
+     * "启动时重放 HTTPS 重定向这件事静默没做"，日志里连一条错误都没有。
+     *
+     * ⚠️ 这里要让 **setRedirect 抛错**、而不是让 getHttpsSetting 抛错：
+     * 读设置失败已经被 init() 内部那个 try/catch 接住了（并且有专门的用例），
+     * 所以只有"读到了设置、但写 caddy 时炸了"这条路才能真正验证构造函数那层 .catch。
+     * 两层 catch 各有职责，不能只测其中一层就宣称"不会漏 rejection"。 */
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const provider = new CaddyProvider({
+        getHttpsSetting: jest.fn().mockResolvedValue({ redirect: true }),
+      } as any);
+      const error = jest.spyOn(provider.logger, 'error').mockImplementation(() => undefined);
+      jest.spyOn(provider, 'setRedirect').mockRejectedValue(new Error('caddy admin 炸了') as any);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(unhandled).toEqual([]);
+      // 并且要留下能排查的日志，而不是安静地什么都不说
+      expect(error.mock.calls.map((c) => String(c[0])).join('\n')).toContain('重放');
+      provider.onModuleDestroy();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+  });
 });
