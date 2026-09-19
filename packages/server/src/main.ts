@@ -97,7 +97,12 @@ async function bootstrap() {
     );
     // 硬上限：优雅退出自己也可能挂住（例如 flush 卡在已经坏掉的 Mongo 连接上），
     // 到点直接 exit(1)。3 秒是"够 flush 一次浏览统计、又不会让容器等太久"的折中；
-    // 与 VANBLOG_SHUTDOWN_TIMEOUT_MS(默认 8000) 同类的取舍，但这里要更短 ——
+    // 与 `VAN_BLOG_SHUTDOWN_TIMEOUT_MS`（默认 8000，由 scripts/start.js:38 读取）同类的取舍，但这里要更短 ——
+  // ⚠️ 别把它与 cluster 主进程等 worker 的宽限期搞混：那是 utils/clusterBootstrap.ts 的
+  //    `hooks.shutdownTimeoutMs ?? 10000`，**没有**对应环境变量。两者是不同层的超时：
+  //    start.js 等的是容器里的子进程，cluster 主进程等的是 worker 进程。
+  //    （这里以前把变量名写成 VANBLOG_SHUTDOWN_TIMEOUT_MS，漏了 VAN_ 前缀 —— 有个代理照着这个
+  //    错拼写去 grep，得出「该变量不存在」的结论并写进了文档。**错拼写的注释会繁殖。**）
     // 已经是异常状态了，不值得等满正常停机的宽限。
     const hardExit = setTimeout(() => {
       // eslint-disable-next-line no-console
