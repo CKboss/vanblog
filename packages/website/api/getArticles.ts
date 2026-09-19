@@ -2,6 +2,9 @@ import { Article } from "../types/article";
 import { encodeQuerystring } from "../utils/encode";
 import { config } from "../utils/loadConfig";
 import { normalizeRelatedArticles } from "../utils/relatedArticles";
+// ⚠️ 只有打 server（config.baseUrl）的 SSR 请求走这个封装；下面文章解锁那条是
+// 浏览器侧的相对路径调用，**绝不能**带内部令牌（那等于把令牌交给访客）。
+import { serverFetch } from "./internalFetch";
 export type SortOrder = "asc" | "desc";
 export interface GetArticleOption {
   page: number;
@@ -30,7 +33,7 @@ export const getArticlesByOption = async (
   const queryString = params.toString();
   try {
     const url = `${config.baseUrl}api/public/article?${queryString}`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { statusCode, data } = await res.json();
     if (statusCode == 233) {
       return { articles: [], total: 0, totalWordCount: 0 };
@@ -51,7 +54,7 @@ export const getArticlesByOption = async (
 export const getArticlesByTimeLine = async () => {
   try {
     const url = `${config.baseUrl}api/public/timeline`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { data } = await res.json();
     return data;
   } catch (err) {
@@ -66,7 +69,7 @@ export const getArticlesByTimeLine = async () => {
 export const getArticlesByCategory = async () => {
   try {
     const url = `${config.baseUrl}api/public/category`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { data } = await res.json();
     return data;
   } catch (err) {
@@ -81,7 +84,7 @@ export const getArticlesByCategory = async () => {
 export const getArticlesByTag = async (tagName: string) => {
   try {
     const url = `${config.baseUrl}api/public/tag`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { data } = await res.json();
     return data;
   } catch (err) {
@@ -116,7 +119,7 @@ export const getArticleByIdOrPathname = async (id: string) => {
   }
   try {
     const url = `${config.baseUrl}api/public/article/${encodeURIComponent(String(id))}`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     if (!res.ok) {
       if (res.status === 404) {
         // 确实没有这篇文章

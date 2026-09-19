@@ -1,5 +1,6 @@
 import { HeadTag } from "../utils/getLayoutProps";
 import { config } from "../utils/loadConfig";
+import { serverFetch } from "./internalFetch";
 export type SocialType =
   | "bilibili"
   | "email"
@@ -269,7 +270,7 @@ export async function getPublicMeta(): Promise<PublicMetaProp> {
 async function fetchPublicMeta(): Promise<MetaFetchResult> {
   try {
     const url = `${config.baseUrl}api/public/meta`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { statusCode, data } = await res.json();
     if (statusCode == 233) {
       return {
@@ -317,7 +318,7 @@ async function fetchPublicMeta(): Promise<MetaFetchResult> {
 export async function getAllCustomPages(): Promise<CustomPageList[]> {
   try {
     const url = `${config.baseUrl}api/public/customPage/all`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { statusCode, data } = await res.json();
     if (statusCode == 200) {
       return data;
@@ -340,7 +341,7 @@ export async function getCustomPageByPath(
   try {
     // path 必须编码：自定义页面路径里出现空格 / & / # 时原来会拼出错误的查询串
     const url = `${config.baseUrl}api/public/customPage?path=${encodeURIComponent(path)}`;
-    const res = await fetch(url);
+    const res = await serverFetch(url);
     const { statusCode, data } = await res.json();
     if (statusCode == 200) {
       return data;

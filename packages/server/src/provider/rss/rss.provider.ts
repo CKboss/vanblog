@@ -175,11 +175,46 @@ export class RssProvider {
       await fs.promises.mkdir(rssPath, { recursive: true });
       // 三份序列化结果各约 350KB（大站更大），writeFileSync 会把事件循环按住一会儿；
       // 这里本来就在异步函数里，没有理由用同步 IO。
-      await Promise.all([
-        fs.promises.writeFile(path.join(rssPath, 'feed.json'), feed.json1()),
-        fs.promises.writeFile(path.join(rssPath, 'feed.xml'), feed.rss2()),
-        fs.promises.writeFile(path.join(rssPath, 'atom.xml'), feed.atom1()),
-      ]);
+      //
+      // ⚠️ **先写 pid 后缀的临时文件再 rename**，与 sitemap.provider 同款
+      //    （`sitemap.xml.tmp-${process.pid}` → rename）。`fs.promises.writeFile` 是
+      //    "先截断再写"，而 `/rss/feed.xml`、`/rss/atom.xml`、`/rss/feed.json` 都是
+      //    **匿名可直接下载**的静态文件（caddy 直发，不经 Node）：原地覆盖会让正在拉的
+      //    订阅器读到半截 XML/JSON —— 对阅读器来说"解析失败"比"读到旧内容"糟得多，
+      //    多数阅读器会把解析失败的源标成错误并退避重试。同一文件系统内的 rename 是原子的，
+      //    所以读者要么看到完整的旧文件、要么看到完整的新文件。
+      //    tmp 名带 pid 是因为多进程（cluster）下两个 worker 可能同时在生成
+      //    （主实例的整点 cron + 某个 worker 处理了文章保存），共用一个 tmp 名会互相截断。
+      //
+      // ⚠️ 这里**故意不加** `isPrimaryInstance(cluster)` 守卫（与 sitemap 保持一致）：
+      //    会"乘以核数"的两个批量触发点已经在**上游**被主实例守卫挡住了 ——
+      //    启动首轮全量渲染在 `main.ts` 的 `if (primary)` 里，整点 ISR cron 在
+      //    `schedule/isr.task.ts` 的 `isPrimaryInstance(cluster)` 里，而 RSS/sitemap
+      //    只由 ISR storm 触发（`provider/isr/isr.provider.ts` 调 generateRssFeed/generateSiteMap）。
+      //    剩下的触发是**事件驱动**的：某个 worker 处理了文章保存 ⇒ 只有那个 worker 生成一次。
+      //    如果在生成函数里再加一道主实例守卫，非主实例 worker 上的文章保存就**不会**刷新 RSS，
+      //    订阅源要等到主实例下一个整点 cron 才更新（最长 1 小时）—— 那是把"省一次重复写"
+      //    换成"订阅源变陈旧"，方向是错的。并发写的安全性由上面的原子 rename 保证。
+      await Promise.all(
+        (
+          [
+            ['feed.json', feed.json1()],
+            ['feed.xml', feed.rss2()],
+            ['atom.xml', feed.atom1()],
+          ] as Array<[string, string]>
+        ).map(async ([name, body]) => {
+          const tmpPath = path.join(rssPath, `${name}.tmp-${process.pid}`);
+          try {
+            await fs.promises.writeFile(tmpPath, body);
+            await fs.promises.rename(tmpPath, path.join(rssPath, name));
+          } catch (err) {
+            // 半成品 tmp 不能留在静态目录里（`<static>/rss/` 是匿名可读的，
+            // 一个 `.tmp-<pid>` 文件对访客就是一条莫名的 404/下载项）
+            await fs.promises.rm(tmpPath, { force: true }).catch(() => undefined);
+            throw err;
+          }
+        }),
+      );
     } catch (err) {
       this.logger.error('生成订阅源失败！');
       this.logger.error(JSON.stringify(err, null, 2));

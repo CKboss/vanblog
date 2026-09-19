@@ -199,7 +199,7 @@ describe('startClusterPrimary：优雅停机', () => {
     expect(forked).toHaveLength(before);
   });
 
-  it('worker 不退就在超时后 SIGKILL，然后主进程退出', async () => {
+  it('worker 不退就在超时后 SIGKILL，然后主进程**以非 0 退出**（强杀不是干净停机）', async () => {
     const { cluster, forked } = createFakeCluster();
     const { hooks, exits, errors, signals } = createHooks();
     startClusterPrimary(1, cluster, hooks);
@@ -212,9 +212,46 @@ describe('startClusterPrimary：优雅停机', () => {
     expect(errors.join('\n')).toContain('强制 SIGKILL');
     jest.advanceTimersByTime(400);
     await flush();
-    // 超时路径不再干等：直接退出，交给容器的 restart 策略
-    expect(exits).toEqual([0]);
+    // ⚠️ 以前这里断言的是 `[0]`：worker 被强杀了，主进程却报"干净退出"，
+    //    编排系统（docker inspect 的 ExitCode / k8s 的 Completed）看不出任何异常。
+    //    现在必须是**非 0**，并且日志里要有 FATAL 与卡住的 worker 数。
+    expect(exits).toHaveLength(1);
+    expect(exits[0]).not.toBe(0);
+    expect(exits[0]).toBe(1);
+    // 不用 137：docker 会把 137 显示成 OOMKilled，那是另一种故障，会带偏排查
+    expect(exits[0]).not.toBe(137);
+    const joined = errors.join('\n');
+    expect(joined).toContain('FATAL');
+    expect(joined).toContain('SIGKILL');
+    // ⚠️ 消息里必须说清"卡住的 worker 数"与"宽限期是多少"，否则运维只看到一句 FATAL；
+    //    但**不许**指向一个不存在的环境变量 —— 第一版写了 VANBLOG_SHUTDOWN_TIMEOUT_MS，
+    //    而那个变量全仓库没有任何读取点（实际是 hooks.shutdownTimeoutMs ?? 10000），
+    //    被 utils/envVarMentions.spec.ts 抓住。照着设一个没人读的变量 = 运维白忙一场。
+    expect(joined).toContain('1 个 worker');
+    expect(joined).toContain('3000ms');
+    expect(joined).toContain('shutdownTimeoutMs');
+    expect(joined).not.toContain('VANBLOG_SHUTDOWN_TIMEOUT_MS');
+    // 空转反证：上面那条"不存在"的断言确实能命中旧写法（否则它是恒真的）
+    expect('或用 VANBLOG_SHUTDOWN_TIMEOUT_MS 放宽宽限期').toContain(
+      'VANBLOG_SHUTDOWN_TIMEOUT_MS',
+    );
     void cluster;
+  });
+
+  it('反证：正常停机（所有 worker 在宽限期内退出）仍然 exit(0)，不能被上面那条带歪', async () => {
+    // ⚠️ 这条是"非 0 退出"改动的**负向对照**：如果哪天有人把所有退出路径都改成非 0，
+    //    `docker stop` / `compose down` 就会被记成失败退出 —— 那比原来的问题更吵。
+    const { cluster, forked } = createFakeCluster();
+    const { hooks, exits, errors, signals } = createHooks();
+    startClusterPrimary(2, cluster, hooks);
+    signals.SIGTERM[0]();
+    cluster.emitExit(forked[0], 0, 'SIGTERM');
+    cluster.emitExit(forked[1], 0, 'SIGTERM');
+    jest.advanceTimersByTime(200);
+    await flush();
+    expect(exits).toEqual([0]);
+    expect(errors.join('\n')).not.toContain('FATAL');
+    expect(errors.join('\n')).not.toContain('强制 SIGKILL');
   });
 
   it('shutdown 是幂等的（信号重复到达只走一遍）', async () => {

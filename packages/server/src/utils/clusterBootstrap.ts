@@ -175,7 +175,32 @@ export function startClusterPrimary(
           killAll('SIGKILL');
           const forceHandle = setTimeoutFn(() => {
             restartTimers.delete(forceHandle);
-            exitFn(0);
+            // ⚠️ 以前这里是 `exitFn(0)`：worker 是被**强杀**的（可能正卡在备份写盘、
+            // 统计 flush 或一轮 ISR 渲染中间），主进程却告诉编排系统"干净退出"。
+            // 后果是可观测性归零 —— `docker inspect` 看到 ExitCode 0、k8s 看到 Completed，
+            // 没人告警、没人去查那个卡住的 worker，而"优雅停机"这条契约其实已经破了。
+            // 现在用 **1**：不用 137（128+SIGKILL）是因为 docker 会把 137 显示成 OOMKilled，
+            // 那是完全不同的故障，混在一起会把排查带偏；也不用 143（128+SIGTERM），
+            // 因为主进程并不是被信号打死的，是它自己决定放弃等待。
+            // ⚠️ 这不会让正常的 `docker stop` / `compose down` 变成"失败退出后被反复拉起"：
+            //    ① 所有 worker 在宽限期内退出时走的仍是上面那条 `exitFn(0)`；
+            //    ② restart 策略对**显式停止**的容器不生效（docker 的 restart policy 只作用于
+            //       非人为停止的退出），所以强杀路径的非 0 只会被记录，不会触发重启风暴。
+            const stuck = aliveWorkers().length;
+            error(
+              `FATAL：${stuck} 个 worker 在 ${shutdownTimeoutMs}ms 内没有退出、已被 SIGKILL，` +
+                '主进程以非 0 退出。这不是正常停机：请查这些 worker 卡在什么地方' +
+                '（常见：整站备份写盘、浏览统计 flush、一轮 ISR 全量渲染）。' +
+                // ⚠️ 这里**不能**写"用 VANBLOG_SHUTDOWN_TIMEOUT_MS 放宽宽限期"——那个环境变量
+                //    根本不存在（全仓库只有 main.ts 的一句注释提到它，没有任何代码读它；
+                //    实际宽限期是 `startClusterPrimary` 的 hooks.shutdownTimeoutMs ?? 10000，
+                //    是代码里的默认值）。第一版就是这么写的，被 utils/envVarMentions.spec.ts
+                //    当场抓住：用户可见文案里提到的环境变量名必须真有读取点，
+                //    否则运维照着设一个变量、什么也不会发生，还以为是自己的问题。
+                `宽限期目前是代码里的默认值（startClusterPrimary 的 shutdownTimeoutMs，${shutdownTimeoutMs}ms），` +
+                '要改得改代码或让调用方传入，没有对应的环境变量',
+            );
+            exitFn(1);
             resolve();
           }, 300);
           restartTimers.add(forceHandle);
