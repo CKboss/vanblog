@@ -1654,11 +1654,17 @@ export async function assertRestorableArchive(
  * 为什么类型也要查：`tar -xf` 会**原样还原符号链接**，而恢复的第二步是
  * `fs.cpSync(staging/static/<folder>, staticPath/<folder>, {dereference:false})` ——
  * 于是归档里的软链会被搬进 `img/file/customPage/themes`，而 `serve-static`/`send`
- * 是**跟随**软链的、`customPage.controller` 的 `res.sendFile` 也没有 `root` 限制、
- * caddy 更是直发 `/static/img/*.webp`。一份来路不明的归档因此能种下
+ * 是**跟随**软链的、caddy 更是直发 `/static/img/*.webp`。一份来路不明的归档因此能种下
  * "指向 /etc/passwd 的 `x.webp`"，变成**匿名可达的任意文件读**（`POST /api/admin/init/restore`
  * 匿名可达；已初始化站点恢复别人给的归档同理）。
  * 任何上传接口都造不出软链（都是 `fs.writeFileSync`），所以恢复是唯一的种植路径。
+ *
+ * ⚠️ 这段以前还把「`customPage.controller` 的 `res.sendFile` 没有 `root` 限制」当成论据之一 ——
+ * **那条论据是过时的**，已删：它传进去的 `absPath` 早已被 `resolveCustomPageAbs`
+ * （`utils/customPagePath.ts` 的 `path.resolve` + `path.relative` 前缀判据）容器化校验过。
+ * 结论没变、但理由必须说对：**软链能绕过字面路径校验** —— 校验通过的是"链接本身的路径"，
+ * 而 `sendFile` 跟着链接读到的是目录外的目标。所以防线只能落在"解包阶段就不创建软链"这一层，
+ * 不能指望下游任何路径检查。（留着这条更正，免得下一个人又拿旧论据推新结论。）
  *
  * ⚠️ **硬链接为什么不是一律拒绝**（与最初"两个都拒"的建议有意分歧，理由实测过）：
  * GNU tar 与 busybox tar **都会**把"同 inode 的第二个名字"写成硬链接成员

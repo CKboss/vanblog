@@ -177,9 +177,25 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
 /**
  * 安全响应头。
  *
- * 不加 CSP：前台/后台都有大量内联样式、bytemd 注入的脚本与可选的第三方统计，
- * 一份严 CSP 会直接把站点搞坏，而松 CSP 又等于没有 —— 这件事应该单独做，
- * 需要先给内联样式发 nonce。这里只加**零风险**的几项。
+ * ## CSP：只加**零风险**的三条，完整的 script-src 仍然没上
+ *
+ * 前台/后台都有大量内联样式、bytemd 注入的脚本与可选的第三方统计，所以一份严 CSP
+ * （`script-src 'self'`）会直接把站点搞坏，而松 CSP 又等于没有 —— 那件事要先给内联样式/脚本
+ * 发 nonce，是另一个量级的工作，**本轮没做**。这里只加三条不依赖 nonce、且经核实不会弄坏任何
+ * 现有功能的指令：
+ *  - `frame-ancestors 'self'`：与下面既有的 `X-Frame-Options: SAMEORIGIN` **语义一致**
+ *    （现代浏览器 CSP 优先，老浏览器读 XFO），所以不会新弄坏什么；后台把**同源**的 waline `/ui`
+ *    放进 iframe 是"我们嵌别人"，由 `frame-src` 管、不受 `frame-ancestors` 影响。
+ *  - `object-src 'none'`：正文白名单（`packages/website/utils/markdownSanitize.ts` 的 tagNames）
+ *    里**没有** `object`/`embed`/`applet`（只有 `iframe`，而 iframe 归 `frame-src` 管），
+ *    主题 CSS 也造不出插件内容 ⇒ 没有合法用途会被这条挡掉。
+ *  - `base-uri 'none'`：全仓库（website + admin）`<base` **零命中** ⇒ 没人用它改相对 URL 基址。
+ *
+ * ⚠️ **覆盖面别夸大**：这个中间件在 `main.ts` 里只挂在 `matchesPreNestPrefix(req.path)` 上，
+ * 也就是 `/static/`、`/rss/`、`/sitemap/`、`/swagger` 这几条 **pre-Nest** 前缀。前台是独立的
+ * Next 进程（caddy 反代过去）、后台是另一套静态产物，**都不经过这里** ⇒ 这三条 CSP 保护的是
+ * 静态资源/feed/sitemap/swagger 的响应，不是站点页面。要给全站页面上 CSP，正确的落点是
+ * caddy 那一层（`caddyTemplate.json` 的 headers handler，那里能看到所有响应），不在本文件。
  */
 export function securityHeadersMiddleware(_req: Request, res: Response, next: () => void) {
   try {
@@ -198,6 +214,11 @@ export function securityHeadersMiddleware(_req: Request, res: Response, next: ()
         'Permissions-Policy',
         'geolocation=(), microphone=(), camera=(), payment=(), interest-cohort=()',
       );
+    }
+    if (!res.getHeader('Content-Security-Policy')) {
+      // ⚠️ 只有这三条是"加了不可能弄坏功能"的（逐条核实理由见本函数上方的注释）。
+      //    要加 script-src / style-src 必须先解决 nonce，别在这里顺手加。
+      res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; object-src 'none'; base-uri 'none'");
     }
   } catch {
     // 头部设置失败不该影响请求

@@ -238,7 +238,7 @@ describe('安全加固：口令哈希 / 限流 / 响应头 / 全量拉取', () =
     assert.match(read('packages/server/src/app.module.ts'), /securityHeadersMiddleware, rateLimitMiddleware/);
   });
 
-  it('安全响应头下发，但没有半成品 CSP；X-Frame-Options 是 SAMEORIGIN 不是 DENY', () => {
+  it('安全响应头下发；CSP 只有三条零风险指令、没有半成品取数指令；XFO 是 SAMEORIGIN 不是 DENY', () => {
     const rl = read('packages/server/src/utils/rateLimit.ts');
     assert.match(rl, /X-Content-Type-Options', 'nosniff'/);
     assert.match(rl, /X-Frame-Options', 'SAMEORIGIN'/);
@@ -246,9 +246,23 @@ describe('安全加固：口令哈希 / 限流 / 响应头 / 全量拉取', () =
     assert.match(rl, /Permissions-Policy/);
     // 后台要 iframe 同源的 waline /ui，DENY 会直接白屏
     assert.doesNotMatch(rl, /X-Frame-Options', 'DENY'/);
-    assert.doesNotMatch(rl, /Content-Security-Policy/);
+    // ⚠️ 这里以前断言 `doesNotMatch(rl, /Content-Security-Policy/)`（"刻意不设 CSP"）。
+    // 那条钉子真正要保护的是**取数指令**（script-src/style-src/default-src…）：内联样式、
+    // bytemd 注入的脚本、第三方统计会被它们打坏，要做得先上 nonce —— 这个结论仍然成立。
+    // 现在 server 下发的是三条**非取数**指令（frame-ancestors 'self' / object-src 'none' /
+    // base-uri 'none'），逐条核实过不影响任何现有功能，所以钉子升级成"钉下发值"：
+    // ⚠️ 不能对**整个文件**断言 doesNotMatch(/script-src/) —— 解释为什么不上取数指令的注释里
+    //    必然出现这些词，那样就是本仓库第 7 次踩"断言匹配到解释性注释"。
+    const cspMatch = rl.match(/setHeader\(\s*'Content-Security-Policy'\s*,\s*"([^"]*)"/);
+    assert.ok(cspMatch, 'CSP 必须真的通过 setHeader 下发（不是只写在注释里）');
+    assert.equal(cspMatch[1], "frame-ancestors 'self'; object-src 'none'; base-uri 'none'");
+    assert.doesNotMatch(cspMatch[1], /script-src|style-src|default-src|img-src|connect-src|font-src|media-src/);
+    // XFO 必须是 SAMEORIGIN（后台要 iframe 同源的 waline /ui），且 frame-ancestors 与它同义
+    assert.match(cspMatch[1], /frame-ancestors 'self'/);
     const caddy = read('CaddyfileTemplate');
     assert.match(caddy, /X-Content-Type-Options "nosniff"/);
+    // caddy 那层仍然没有 CSP：前台（独立 Next 进程）与后台都不经过 server 的中间件，
+    // 所以"全站页面级 CSP"的正确落点是这里（caddyTemplate.json 的 headers handler），尚未做。
     assert.doesNotMatch(caddy, /Content-Security-Policy/);
   });
 

@@ -16,7 +16,8 @@ const DEPS_INSTALL_TIMEOUT_MS = envPositiveInt(
   7200000,
 );
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import * as path from 'path';
 import { Logger, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -38,6 +39,66 @@ export interface CodeResult {
   logs: string[];
   output: any;
   status: 'success' | 'error';
+}
+
+/**
+ * 依赖名的**额外**校验（在"非 `-` 开头 + 字符集"之上）。
+ * 返回 `null` = 可以装；返回字符串 = 拒绝原因（进日志，不回显给客户端）。
+ *
+ * ⚠️ 必须放行的合法形状（最常见的几种，别误伤）：
+ *   `pkg`、`pkg@1.2.3`、`pkg@^1.2.3`、`pkg@~1.2`、`@scope/pkg`、`@scope/pkg@^1.2.3`
+ * ⚠️ 要拒掉的：
+ *   - 以 `/` 开头（容器内绝对路径）
+ *   - 含 `..` 路径段（逃出 runnerPath 去装别处的代码）
+ *   - `file:` / `link:` / `workspace:` 协议（同样指向本地路径或工作区，而不是 registry）
+ */
+export function inspectDepSpec(dep: string): string | null {
+  // ⚠️ 自己兜类型，不依赖调用方：`String(Symbol())` 会**抛** TypeError，
+  //    而 `String({})` 是 `'[object Object]'` —— 一个"看着像包名"的字符串，
+  //    后面的规则一条都不命中，于是非字符串输入会被**放行**。这正是本仓库
+  //    反复踩的那类坑（"没有值"伪装成"值合法"），所以在第一行就挡掉。
+  if (typeof dep !== 'string') return '不是字符串';
+  const value = dep;
+  if (!value.trim()) return '空值';
+  if (value.startsWith('/')) return '以 / 开头，是容器内绝对路径';
+  if (value.split('/').some((seg) => seg === '..')) return '含 .. 路径段，会逃出流水线目录';
+  // `@scope/pkg` 里 `@` 后面跟的是 scope 名，不会误伤；只有 `@file:` / `pkg@link:` 这种才命中
+  if (/(?:^|@)(?:file|link|workspace):/i.test(value)) {
+    return 'file:/link:/workspace: 协议指向本地路径或工作区';
+  }
+  return null;
+}
+
+/**
+ * 由流水线 id 推出代码文件路径。
+ *
+ * ⚠️ **运行时**校验，不依赖 TS 类型：`id: number` 只是编译期声明，而这个值可能来自路由参数、
+ *    数据库文档或内部调用方（:290 fork、:405 写盘、:414 删除）。controller 侧已有
+ *    `parsePipelineId`（`^-?\d+$` + `Number.isSafeInteger`）兜着 HTTP 入口，所以今天不存在
+ *    可达的"任意写"；这里是**纵深防御** —— 万一将来新增一个不走那个 helper 的调用方，
+ *    或者 DB 里出现畸形 id，也不该把文件写到 runnerPath 之外。
+ *
+ * 两层：① 只接受安全整数（字符串形式的整数也认，因为 DB/路由都可能是字符串）；
+ *      ② 解析后再做一次容器化校验（与 `utils/customPagePath.ts` 的 `resolveCustomPageAbs` 同款判据）。
+ *      第 ② 层在 ① 成立时**永远不可能失败**（整数拼不出路径分隔符），留着是为了让
+ *      "路径必须落在 runnerPath 内"这件事成为函数自己的契约，而不是调用方的运气。
+ */
+export function resolvePipelineFilePath(runnerPath: string, id: unknown): string {
+  const raw = typeof id === 'string' ? id.trim() : id;
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (typeof raw !== 'number' && !/^-?\d+$/.test(String(raw ?? ''))) {
+    throw new BadRequestException(`流水线 id 不合法：${String(id).slice(0, 40) || '(空)'}`);
+  }
+  if (!Number.isSafeInteger(n)) {
+    throw new BadRequestException(`流水线 id 不合法：${String(id).slice(0, 40) || '(空)'}`);
+  }
+  const root = path.resolve(String(runnerPath ?? ''));
+  const abs = path.resolve(root, `${n}.js`);
+  const rel = path.relative(root, abs);
+  if (!rel || rel === '..' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new ForbiddenException('非法路径');
+  }
+  return abs;
 }
 
 @Injectable()
@@ -247,7 +308,7 @@ export class PipelineProvider {
   }
 
   getPathById(id: number) {
-    return `${this.runnerPath}/${id}.js`;
+    return resolvePipelineFilePath(this.runnerPath, id);
   }
 
   async runCodeByPipelineId(id: number, data: any): Promise<CodeResult> {
@@ -364,6 +425,15 @@ export class PipelineProvider {
       // 依赖名会作为 argv 传给 pnpm，`-` 开头会被当成参数（参数注入），先挡掉
       if (typeof dep !== 'string' || dep.startsWith('-') || !/^[a-zA-Z0-9@/._^~>-]*$/.test(dep)) {
         this.logger.warn(`跳过不合法的依赖名：${String(dep).slice(0, 80)}`);
+        continue;
+      }
+      // ⚠️ 上面那个字符集**故意**允许 `/ . ~ ^`（scoped 包 `@scope/pkg` 与版本范围 `pkg@^1.2.3`
+      //    都要靠它们），代价是 `../../../x` 这种**本地路径**也能通过，于是 pnpm 会从
+      //    容器内任意路径安装（而不是从 registry）。管理员才能触发，所以不是权限跨越，
+      //    但"能从镜像里任意目录装代码"这件事本身就该收掉 —— 见 inspectDepSpec。
+      const unsafeReason = inspectDepSpec(dep);
+      if (unsafeReason) {
+        this.logger.warn(`跳过不安全的依赖名（${unsafeReason}）：${String(dep).slice(0, 80)}`);
         continue;
       }
       try {

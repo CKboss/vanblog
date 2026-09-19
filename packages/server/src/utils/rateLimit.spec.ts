@@ -231,10 +231,30 @@ describe('安全响应头', () => {
     expect(preset.out.headers['X-Frame-Options']).toBe('DENY');
   });
 
-  it('刻意不设 CSP（内联样式与第三方统计会被打坏，要做得先上 nonce）', () => {
+  // ⚠️ 这条以前是「刻意不设 CSP」并断言该头部为 undefined。它保护的其实是**取数指令**
+  //    （script-src / style-src / default-src…）：内联样式、bytemd 注入的脚本、可选的第三方统计
+  //    都会被它们打坏，要做得先给内联内容发 nonce —— 那个结论**依然成立**，所以钉子保留、
+  //    但改成钉"下发的值里没有取数指令"，而不是"整个文件不许出现 CSP"。
+  //    现在下发的是三条**非取数**指令，逐条核实过不会弄坏任何现有功能：
+  //      frame-ancestors 'self' 与既有 X-Frame-Options: SAMEORIGIN 同义（后台嵌同源 waline /ui
+  //        是"我们嵌别人"，由 frame-src 管，不受影响）；
+  //      object-src 'none'：正文白名单（website/utils/markdownSanitize.ts）里没有 object/embed/applet；
+  //      base-uri 'none'：全仓库 <base 零命中。
+  it('CSP 只下发三条零风险指令，且不含任何取数指令', () => {
     const r = res();
     securityHeadersMiddleware(req(), r, () => undefined);
-    expect(r.out.headers['Content-Security-Policy']).toBeUndefined();
+    const csp = String(r.out.headers['Content-Security-Policy'] ?? '');
+    expect(csp).toBe("frame-ancestors 'self'; object-src 'none'; base-uri 'none'");
+    expect(csp).not.toMatch(/script-src|style-src|default-src|img-src|connect-src|font-src|media-src/);
+  });
+
+  it('⚠️ 覆盖面别夸大：这个中间件只挂在 pre-Nest 前缀上，前台与后台不经过它', () => {
+    // main.ts 只在 matchesPreNestPrefix(req.path) 为真时调用它（/static/、/rss/、/sitemap/、/swagger）。
+    // 要给全站页面上 CSP，正确落点是 caddy 那一层（caddyTemplate.json 的 headers handler）。
+    // ⚠️ 路径是 `../main.ts`：本文件在 src/utils/ 下，而 main.ts 在 src/ 下
+    const main = require('fs').readFileSync(require('path').join(__dirname, '../main.ts'), 'utf-8');
+    expect(main).toMatch(/matchesPreNestPrefix\(req\.path\)/);
+    expect(main).toMatch(/securityHeadersMiddleware\(req, res,/);
   });
 });
 
