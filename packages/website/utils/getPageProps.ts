@@ -57,7 +57,11 @@ export async function getTimeLinePageProps(): Promise<TimeLinePageProps> {
   const sortedArticles: Record<string, Article[]> =
     (await getArticlesByTimeLine()) || {};
   const yearGroups = groupTimelineByYearAndMonth(sortedArticles);
-  const wordTotal = data.totalWordCount;
+  // ⚠️ 必须兜底：Next 的 getStaticProps 返回值要能被序列化，`undefined` 会直接让
+  //    **生产构建失败**（`Error serializing .wordTotal … undefined cannot be serialized`）。
+  //    触发条件很现实：构建前台时 server 不可达（先构建后起服务、或 CI/Docker 里指不到活的服务），
+  //    getAllData 的降级对象可能缺这个字段。同文件 :158 早有 `|| 0`，这三处漏了。
+  const wordTotal = data.totalWordCount ?? 0;
   return {
     layoutProps,
     authorCardProps,
@@ -82,7 +86,11 @@ export async function getCategoryPageProps(): Promise<CategoryPageProps> {
   const data = await getPublicMeta();
   const layoutProps = getLayoutProps(data);
   const authorCardProps = getAuthorCardProps(data);
-  const wordTotal = data.totalWordCount;
+  // ⚠️ 必须兜底：Next 的 getStaticProps 返回值要能被序列化，`undefined` 会直接让
+  //    **生产构建失败**（`Error serializing .wordTotal … undefined cannot be serialized`）。
+  //    触发条件很现实：构建前台时 server 不可达（先构建后起服务、或 CI/Docker 里指不到活的服务），
+  //    getAllData 的降级对象可能缺这个字段。同文件 :158 早有 `|| 0`，这三处漏了。
+  const wordTotal = data.totalWordCount ?? 0;
   const sortedArticles = await getArticlesByCategory();
   return {
     layoutProps,
@@ -242,7 +250,9 @@ export async function getCategoryPagesProps(
     toListView: true,
   });
 
-  const wordTotal = totalWordCount as number;
+  // ⚠️ 以前是 `as number`：那是**对编译器撒谎**，运行时照样可能是 undefined，
+  //    然后由 Next 的序列化在生产构建里炸掉。改成真兜底。
+  const wordTotal = totalWordCount ?? 0;
   const curNum = total;
   const sortedArticles = washArticlesByKey(
     articlesInThisCategory,
