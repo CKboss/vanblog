@@ -59,18 +59,138 @@ import { clearSetupKey } from 'src/provider/init/setupKey';
  * 否则一次失败（坏归档、磁盘满）会让接口永久 409，而站点又还没初始化 ⇒
  * 用户既进不了后台也恢复不了，只能重启容器。
  *
- * ⚠️ 变量名保留 `initRestoreRunning`（有源码级测试按字面量钉住它），
- * 但语义已扩展为"init 或 restore 在跑"。
+ * ⚠️ 2026-09-19 起这里不再是裸布尔量（`let initRestoreRunning`）：布尔量表达不了
+ * "**是谁**在跑"，于是"只有持锁者才能释放"只能靠调用点自觉；更要命的是它每进程一份，
+ * cluster>1 时根本不互斥。现在下面是一个**持有者令牌**（进程内、同步）叠加一把
+ * **DB 级 TTL 锁**（跨进程、权威），见 `utils/dbLock.ts`。
  */
-let initRestoreRunning = false;
+
+/**
+ * 进程内的**第一道**闸门：持有者令牌（不再是裸布尔量）。
+ *
+ * ⚠️ 为什么不能只有布尔量、又为什么**仍然**需要它：
+ *  - 跨进程的权威互斥是 DB 级 TTL 锁（`utils/dbLock.ts`，经 `InitProvider.acquireInitRestoreLock`）。
+ *    模块级布尔量是**每进程一份**的：`VANBLOG_CLUSTER_WORKERS>1`（文档化旋钮，多核机上 >1）时
+ *    两个并发请求落到不同 worker，两边的布尔量都是 false ⇒ 两个 `/init` 双双通过
+ *    `checkHasInited()`，造出两个 `id:0` 管理员（`getUser()` 是 `findOne({id:0})` 且**无排序**，
+ *    "谁是管理员"随返回顺序漂移）；两个 `/init/restore` 则互相踩成**半新半旧的库**。
+ *    init 桶限流（5 次/10 分钟/IP）只降概率，两个不同来源就够了。这是本轮修的真缺陷。
+ *  - 但进程内这道闸门**不能删**：它是**同步**的，能在第一个 await 之前就把同进程的并发挡掉
+ *    （§7.55 B：await 之后再落锁，两个请求会双双通过前置检查、双双落锁、双双恢复）。
+ *    DB 锁必须 await，单靠它就等于把"同步落锁"这个性质让掉了。两道叠加：
+ *    同进程零延迟挡住，跨进程由 Mongo 的单文档原子性裁决。
+ *  - 用**令牌**而不是布尔量，是为了让"只有真正拿到锁的那一次调用才能释放"变成可验证的性质
+ *    （被 409 挡掉的调用手里是 null，`finally` 里放不掉别人的锁）。
+ */
+let localInitRestoreOwner: string | null = null;
+let localInitRestoreSeq = 0;
+
+/** 同步抢进程内闸门：空闲则返回本次调用的持有者令牌，否则返回 null（不抛，由调用方决定响应） */
+function claimLocalInitRestoreLock(): string | null {
+  if (localInitRestoreOwner !== null) return null;
+  localInitRestoreSeq += 1;
+  localInitRestoreOwner = `local-${process.pid}-${localInitRestoreSeq}`;
+  return localInitRestoreOwner;
+}
+
+/** 只有令牌对得上才释放（归属检查）；被 409 挡掉的调用传 null，什么也不会动 */
+function releaseLocalInitRestoreLock(owner: string | null): void {
+  if (owner !== null && localInitRestoreOwner === owner) {
+    localInitRestoreOwner = null;
+  }
+}
 
 /** 只给测试用：万一有用例把锁留在"进行中"，用它复位（生产代码不要调） */
 export function __resetInitRestoreLockForTest(): void {
-  initRestoreRunning = false;
+  localInitRestoreOwner = null;
 }
 
+/** 只给测试/诊断用：**本进程**是否正持有闸门（跨进程那把在 DB 里，要问 InitProvider） */
 export function isInitRestoreInFlight(): boolean {
-  return initRestoreRunning;
+  return localInitRestoreOwner !== null;
+}
+
+/** 只给测试用：复位"DB 锁不可用已警告过"标志 */
+export function __resetDbLockWarnForTest(): void {
+  dbLockUnavailableWarned = false;
+}
+
+let dbLockUnavailableWarned = false;
+
+/** finally 里释放 DB 锁的上限：超时只记日志，靠锁自身的 TTL 兜底（见 releaseCrossProcessInitLock） */
+const RELEASE_LOCK_TIMEOUT_MS = 5_000;
+
+/**
+ * 抢跨进程（DB 级 TTL）锁。三态处理：
+ *  - `acquired` → 返回 owner 凭据，调用方必须在 finally 里拿它去释放；
+ *  - `busy` → 另一个进程正在初始化/恢复，调用方应当 409；
+ *  - `unavailable` → 没有可用的锁后端（桩 InitProvider、连接尚未就绪）。此时**降级**为只用
+ *    进程内闸门：单进程部署依然安全；但 cluster>1 就失去跨进程互斥 ⇒ 每进程 WARN 一次点名。
+ *    ⚠️ 绝不静默降级 —— 静默失效正是这类锁最危险的坏法（用户以为有互斥）。
+ */
+async function acquireCrossProcessInitLock(
+  initProvider: InitProvider,
+  logger: Logger,
+): Promise<{ owner: string | null; busy: boolean }> {
+  const acquire = (initProvider as any)?.acquireInitRestoreLock;
+  if (typeof acquire !== 'function') {
+    if (!dbLockUnavailableWarned) {
+      dbLockUnavailableWarned = true;
+      logger.warn(
+        'InitProvider 缺少 acquireInitRestoreLock（非标准构造路径，仅测试桩会走到）：本次只用进程内闸门，' +
+          'cluster 多 worker 下不具备跨进程互斥',
+      );
+    }
+    return { owner: null, busy: false };
+  }
+  const outcome = await acquire.call(initProvider);
+  if (outcome?.kind === 'acquired') {
+    return { owner: String(outcome.handle?.owner ?? ''), busy: false };
+  }
+  if (outcome?.kind === 'busy') return { owner: null, busy: true };
+  if (!dbLockUnavailableWarned) {
+    dbLockUnavailableWarned = true;
+    logger.warn(
+      `初始化/恢复的跨进程锁不可用（${String(outcome?.reason ?? '未知原因')}）：降级为只用进程内闸门。` +
+        '单进程部署不受影响；VANBLOG_CLUSTER_WORKERS>1 时两个 worker 可能同时初始化/恢复。',
+    );
+  }
+  return { owner: null, busy: false };
+}
+
+/**
+ * 释放跨进程锁。**只删自己那把**（owner 由 acquire 返回，释放时在 DB 侧校验）。
+ * ⚠️ 释放失败既不能掩盖原始异常、也不能让接口 500：DB 锁带 TTL，最坏情况是别人要等到过期
+ * （默认 30 分钟，`VANBLOG_INIT_LOCK_TTL_MINUTES` 可调），所以这里只记日志。
+ */
+async function releaseCrossProcessInitLock(
+  initProvider: InitProvider,
+  owner: string | null,
+  logger: Logger,
+): Promise<void> {
+  if (!owner) return;
+  const release = (initProvider as any)?.releaseInitRestoreLock;
+  if (typeof release !== 'function') return;
+  try {
+    // ⚠️ 必须带超时：这个调用在 **finally** 里，mongo 无响应时若一直等，
+    //    响应会被拖住、而且进程内闸门也放不掉（后续请求全部 409）。
+    //    DB 锁本身带 TTL，超时放不掉只是"别人要等到过期"，不会永久卡死。
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.resolve(release.call(initProvider, owner)),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('release timeout')), RELEASE_LOCK_TIMEOUT_MS);
+        // ⚠️ unref：否则这个定时器会让事件循环多挂 5 秒（进程退不掉、jest 报 open handle）
+        if (typeof (timer as any)?.unref === 'function') (timer as any).unref();
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  } catch (err: any) {
+    logger.error(
+      `释放初始化/恢复锁失败（锁会在 TTL 到期后自动可被接管）：${String(err?.message ?? err)}`,
+    );
+  }
 }
 
 /**
@@ -132,16 +252,26 @@ export class InitController {
     @Req() req?: any,
   ) {
     // ⚠️ 锁必须先于**任何 await** 同步拿到；只有拿到锁的这次调用才能在 finally 里放
-    let claimedLock = false;
+    // ⚠️ 进程内闸门必须**先于任何 await**同步拿到（见文件头）；跨进程的 DB 锁紧随其后，
+    //    并且落在 `checkHasInited()` **之前** —— 这样"两个进程都读到未初始化"的窗口被彻底关掉。
+    const localOwner = claimLocalInitRestoreLock();
+    const claimedLock = localOwner !== null;
+    let dbLockOwner: string | null = null;
     try {
-      if (initRestoreRunning) {
+      if (localOwner === null) {
         throw new HttpException(
           '已经有一个初始化/恢复正在进行，请等它结束（若那一次成功了，刷新页面即可）',
           409,
         );
       }
-      initRestoreRunning = true;
-      claimedLock = true;
+      const cross = await acquireCrossProcessInitLock(this.initProvider, this.logger);
+      if (cross.busy) {
+        throw new HttpException(
+          '已经有一个初始化/恢复正在进行（由另一个进程持有锁），请等它结束（若那一次成功了，刷新页面即可）',
+          409,
+        );
+      }
+      dbLockOwner = cross.owner;
 
       const hasInit = await this.initProvider.checkHasInited();
       if (hasInit) {
@@ -166,8 +296,12 @@ export class InitController {
         message: '初始化成功!',
       };
     } finally {
+      // 先放跨进程的 DB 锁（只删自己那把），再放进程内闸门；两次都带归属检查 ——
+      // 被 409 挡掉的调用手里是 null，什么也放不掉（否则正在跑那一次的锁会被顺手放掉，
+      // 第三个请求又能进来；这条正是 round3 的并发用例抓出来过的坑）。
+      await releaseCrossProcessInitLock(this.initProvider, dbLockOwner, this.logger);
       if (claimedLock) {
-        initRestoreRunning = false;
+        releaseLocalInitRestoreLock(localOwner);
       }
     }
   }
@@ -243,20 +377,30 @@ export class InitController {
     // 无条件 `initRestoreRunning = false` 的话，第二个被 409 挡掉的请求会把
     // 正在跑的那一次的锁顺手放掉，于是第三个请求又能进来 —— 两次恢复就真的叠在一起了
     // （这条正是被 src/audit-hardening-round3-initrestore.spec.ts 的并发用例抓出来的）。
-    let claimedLock = false;
+    // 进程内闸门同步拿；跨进程 DB 锁在下面紧接着拿（见文件头）
+    const localOwner = claimLocalInitRestoreLock();
+    const claimedLock = localOwner !== null;
+    let dbLockOwner: string | null = null;
     try {
       if (config.demo && config.demo == 'true') {
+        // 演示站：什么也没做就返回。⚠️ 这里**不需要**显式释放闸门 —— return 在 try 里，
+        // finally 会带归属检查地放掉（此时 dbLockOwner 还是 null，跨进程那把也没拿）。
         return { statusCode: 401, message: '演示站禁止修改此项！' };
       }
-      // 单飞锁必须**先于任何 await**拿到（见文件头说明）
-      if (initRestoreRunning) {
+      if (localOwner === null) {
         throw new HttpException(
           '已经有一个恢复正在进行，请等它结束（完成后刷新页面即可进入后台）',
           409,
         );
       }
-      initRestoreRunning = true;
-      claimedLock = true;
+      const cross = await acquireCrossProcessInitLock(this.initProvider, this.logger);
+      if (cross.busy) {
+        throw new HttpException(
+          '已经有一个恢复正在进行（由另一个进程持有锁），请等它结束（完成后刷新页面即可进入后台）',
+          409,
+        );
+      }
+      dbLockOwner = cross.owner;
       // "已初始化"的拒绝要在其它校验之前：这条接口匿名可达，
       // 对一个已经跑着的站点不该透露任何处理细节（与 /init/upload 的顺序一致）
       if (await this.initProvider.checkHasInited()) {
@@ -376,8 +520,12 @@ export class InitController {
       })();
       return await task;
     } finally {
+      // 先放跨进程的 DB 锁（只删自己那把），再放进程内闸门；两次都带归属检查 ——
+      // 被 409 挡掉的调用手里是 null，什么也放不掉（否则正在跑那一次的锁会被顺手放掉，
+      // 第三个请求又能进来；这条正是 round3 的并发用例抓出来过的坑）。
+      await releaseCrossProcessInitLock(this.initProvider, dbLockOwner, this.logger);
       if (claimedLock) {
-        initRestoreRunning = false;
+        releaseLocalInitRestoreLock(localOwner);
       }
       // multer 已经把归档（可能几百 MB）落到 <backupPath>/upload-tmp/ 了：
       // 校验失败、恢复失败、成功，都要删掉，否则每试一次就泄漏一份

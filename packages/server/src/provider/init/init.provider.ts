@@ -16,6 +16,15 @@ import { WalineProvider } from '../waline/waline.provider';
 import { SettingProvider } from '../setting/setting.provider';
 import { version } from '../../utils/loadConfig';
 import { encryptPassword, hashSecret, makeSalt } from 'src/utils/crypto';
+import {
+  acquireDbLock,
+  releaseDbLock,
+  initLockTtlMs,
+  DB_LOCK_COLLECTION,
+  INIT_RESTORE_LOCK_NAME,
+  DbLockOutcome,
+  LockCollection,
+} from 'src/utils/dbLock';
 import { defaultMenu } from 'src/types/menu.dto';
 import { CacheProvider } from '../cache/cache.provider';
 import fs from 'fs';
@@ -554,6 +563,59 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
       // 文件不存在/读不到 ⇒ 落到下面的 null（失败关闭）
     }
     return null;
+  }
+
+  /**
+   * 拿锁用的原生集合。
+   *
+   * ⚠️ 走 `Model.db`（Mongoose 8 里是 `Connection`）再 `.collection(name)`，
+   * 而不是注册一个新 schema：锁文档只有 `_id/owner/takenAt/expiresAt/pid` 四个字段，
+   * 不需要 schema 校验，而且注册 schema 要改 `app.module.ts`（本轮不在改动范围内）。
+   *
+   * ⚠️ **任何一步拿不到就返回 null**，绝不抛：调用方（控制器）据此降级成"只用进程内锁"。
+   * 这不是偷懒 —— 仓库里有一批用**桩 InitProvider** 直接 `new InitController(...)` 的既有测试，
+   * 它们没有真连接；生产 Nest DI 注入的一定是真 Model。
+   */
+  private lockCollection(): LockCollection | null {
+    try {
+      const conn: any = (this.metaModel as any)?.db;
+      if (!conn || typeof conn.collection !== 'function') return null;
+      const coll = conn.collection(DB_LOCK_COLLECTION);
+      if (!coll || typeof coll.findOneAndUpdate !== 'function') return null;
+      return coll as LockCollection;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 抢「初始化 / 初始化页恢复」的**跨进程**互斥锁（DB 级 TTL 锁）。
+   *
+   * 为什么要它：控制器原来那个模块级布尔量是**每进程一份**的，
+   * `VANBLOG_CLUSTER_WORKERS>1`（文档化旋钮，多核机上 >1）时两个并发请求落到不同 worker
+   * 就能双双通过 `checkHasInited()` ⇒ 造出两个 `id:0` 管理员，或两个恢复互相踩成半新半旧的库。
+   * 细节（唯一性靠 `_id`、过期锁原子接管、释放校验 owner、TTL 取舍）见 `utils/dbLock.ts`。
+   *
+   * @returns 三态：`acquired`（拿到，带 owner 凭据）/ `busy`（别人在跑）/ `unavailable`
+   *          （没有可用的锁后端 —— 桩 provider 或连接还没就绪；调用方据此降级并 WARN）。
+   */
+  async acquireInitRestoreLock(): Promise<DbLockOutcome> {
+    const coll = this.lockCollection();
+    if (!coll) return { kind: 'unavailable', reason: 'no-lock-collection' };
+    return acquireDbLock(coll, INIT_RESTORE_LOCK_NAME, {
+      ttlMs: initLockTtlMs(),
+      ownerPrefix: 'init',
+    });
+  }
+
+  /**
+   * 释放锁。**只删自己那把**（owner 不匹配就什么都不做）—— 否则一次超时后被接管的锁
+   * 会被前一个持有者的 `finally` 删掉，第三个请求又能进来。
+   */
+  async releaseInitRestoreLock(owner: string): Promise<boolean> {
+    const coll = this.lockCollection();
+    if (!coll) return false;
+    return releaseDbLock(coll, INIT_RESTORE_LOCK_NAME, owner);
   }
 
   async initRestoreKey() {

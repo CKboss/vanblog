@@ -447,12 +447,28 @@ describe('源码级钉子（剥掉注释再断言）', () => {
     const src = code(read('controller/admin/init/init.controller.ts'));
     const handler = src.slice(src.indexOf("'/init/restore'"));
     expect(handler).toContain('await this.initProvider.checkHasInited()');
-    expect(handler).toContain('initRestoreRunning');
-    // 锁必须**先于任何 await**拿到，而且只有拿到锁的那次调用才能在 finally 里释放
-    expect(handler.indexOf('initRestoreRunning = true')).toBeLessThan(
+    // ⚠️ 2026-09-19 起这把锁是**两道**：进程内持有者令牌（同步）+ DB 级 TTL 锁（跨进程、权威）。
+    // 原来这里钉的是模块级布尔量 `initRestoreRunning = true`，而布尔量每进程一份 ⇒
+    // cluster>1 时两个 worker 各自的布尔量都是 false，两个 /init 能双双通过 checkHasInited()。
+    // 断言的是**调用形状**而不是"某符号出现过"（后者是空断言，import 行就能让它过）。
+    expect(handler).toContain('claimLocalInitRestoreLock()');
+    expect(handler).toContain('acquireCrossProcessInitLock(this.initProvider, this.logger)');
+    // 两道锁都必须**先于 checkHasInited**：进程内那道是同步的（§7.55 B：await 之后落锁就等于没锁），
+    // DB 那道虽然是 await，但落在 checkHasInited 之前才能关掉"两个进程都读到未初始化"的窗口
+    expect(handler.indexOf('claimLocalInitRestoreLock()')).toBeLessThan(
       handler.indexOf('await this.initProvider.checkHasInited()'),
     );
+    expect(handler.indexOf('acquireCrossProcessInitLock(')).toBeLessThan(
+      handler.indexOf('await this.initProvider.checkHasInited()'),
+    );
+    // 只有真正拿到锁的那次调用才能在 finally 里释放（归属检查）
     expect(handler).toContain('if (claimedLock)');
+    expect(handler).toContain('releaseLocalInitRestoreLock(localOwner)');
+    expect(handler).toContain(
+      'await releaseCrossProcessInitLock(this.initProvider, dbLockOwner, this.logger)',
+    );
+    // 旧的模块级布尔锁不许回来（src 已剥注释，所以注释里讲历史不会误触发）
+    expect(src).not.toContain('let initRestoreRunning');
     // 临时文件清理在 finally 里
     expect(handler).toContain('fs.rmSync(uploadedPath, { force: true })');
   });

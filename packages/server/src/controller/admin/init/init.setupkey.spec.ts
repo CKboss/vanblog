@@ -412,11 +412,18 @@ describe('POST /init 的单飞锁（与 /init/restore 共用一把）', () => {
       .filter((l) => !/^\s*\/\//.test(l))
       .join('\n');
     const initHandler = src.slice(src.indexOf("@Post('/init')"), src.indexOf("@Post('/init/upload')"));
-    expect(initHandler).toContain('initRestoreRunning = true');
-    expect(initHandler.indexOf('initRestoreRunning = true')).toBeLessThan(
+    // ⚠️ 2026-09-19 起锁是两道的（进程内令牌 + DB 级 TTL 锁），原来钉的
+    // `initRestoreRunning = true` 是每进程一份的布尔量，cluster>1 时不互斥。
+    expect(initHandler).toContain('claimLocalInitRestoreLock()');
+    expect(initHandler.indexOf('claimLocalInitRestoreLock()')).toBeLessThan(
+      initHandler.indexOf('await this.initProvider.checkHasInited()'),
+    );
+    // 跨进程那把也必须落在 checkHasInited 之前
+    expect(initHandler.indexOf('acquireCrossProcessInitLock(')).toBeLessThan(
       initHandler.indexOf('await this.initProvider.checkHasInited()'),
     );
     expect(initHandler).toContain('if (claimedLock)');
+    expect(src).not.toContain('let initRestoreRunning');
     // 两条路由都必须过 setup key 闸门（经由 provider，桩容忍见下），且成功路径都记安装台账
     expect(src.split('runSetupKeyGate(this.initProvider, setupKey, this.logger)').length - 1).toBe(2);
     // 生产的 InitProvider 必须有闸门方法（否则 ?.() 会静默跳过 —— 两侧都钉住才闭环）
