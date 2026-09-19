@@ -42,8 +42,9 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_ADMIN_PASSWORD_FILE` | 空 | 密码文件路径（如 Docker secret 挂载）。**优先于**内联变量；内容只去掉**尾部**换行/空白；文件读不到时大声失败（ERROR + 站点保持未初始化），绝不静默回落 |
 | `VANBLOG_INIT_REQUIRE_SETUP_KEY` | **`true`（开）** | 未初始化期间，两条匿名初始化接口（`POST /api/admin/init`、`/api/admin/init/restore`）必须携带**初始化密钥**（字段 `setupKey`）。密钥每次启动重新生成，写在 `<日志目录>/setup.key`（0600）并在启动日志 WARN，初始化成功后自动删除。设 `false/0/no/off` 显式关闭（公网不建议）；**无法识别的值回落到开启**并 WARN |
 | `VANBLOG_SETUP_KEY_REMIND_MINUTES` | `10` | 站点未初始化期间，启动日志里重印初始化密钥的间隔（分钟）。显式 `0` = 只在启动时印一次；负数/垃圾值回落 10，绝不静默变 0 |
-| `VANBLOG_INIT_LIMIT_PER_10MIN` | `5` | 每 IP 每 10 分钟对 `/api/admin/init*` 的调用上限（1–1000） |
+| `VANBLOG_INIT_LIMIT_PER_10MIN` | `5` | 每 IP 每 10 分钟对 `/api/admin/init*` 的调用上限（1–1000）。⚠️ 它**同时**管着「忘记密码」的恢复接口 `POST /api/admin/auth/restore`（同为匿名、同样能改写管理员凭据，所以共用一个桶）—— 调大它会把两处一起放宽 |
 | `VANBLOG_INIT_CACHE_MS` | `300000`（5 分钟） | 「站点是否已初始化」查询结果的进程内缓存时长；`0` = 每次都查库 |
+| `VANBLOG_INIT_LOCK_TTL_MINUTES` | `30` | 初始化 / 整站恢复的**跨进程互斥锁**存活时间（分钟），夹在 1–1440。多进程（`VANBLOG_CLUSTER_WORKERS` > 1）时靠它保证两个 worker 不会同时初始化或同时恢复同一个库；抢不到锁的一方得到 **409**。`0`、负数、非数字一律**回落 30**，绝不会变成"永不过期"。调大的唯一理由：整站恢复真的要超过 30 分钟（慢盘 + 大归档）；调小的代价：进程被硬杀（OOM / `kill -9`）后，站点要空等到锁过期才能重试 |
 
 ## 运行时核心
 
@@ -63,7 +64,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VAN_BLOG_VERSION` | `dev` | 页脚与后台「关于」显示的版本号（镜像构建时写入。⚠️ Dockerfile 的构建参数是复数 `VAN_BLOG_VERSIONS`，两个名字**故意不一样**） |
 | `EMAIL` | 空 | 自动申请 HTTPS 证书的 ACME 联系邮箱（不带前缀）。不像邮箱的值会被忽略；留空也能签发，只是收不到到期提醒 |
 | `UV_THREADPOOL_SIZE` | `16`（镜像里） | libuv 线程池：sharp 编解码、fs 异步、scrypt 都在这个池子里（Node 默认只有 4）。CPU 核多、图片流量大时才值得调（经验值：核数的 2–4 倍） |
-| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数：正整数（上限 **32**），也可写 `auto` / `cpus` / `max` = 按 CPU 核数开（同样不超过 32）。空值、`0`、负数、垃圾值一律回落到 `1`（= 单进程）。⚠️ N>1 尚未实跑验证：每个 worker 一份完整应用，内存近似线性增长；限流与连接池会按 worker 数摊薄。打开前请自己压一遍 |
+| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数：正整数（上限 **32**），也可写 `auto` / `cpus` / `max` = 按 CPU 核数开（同样不超过 32）。空值、`0`、负数、垃圾值一律回落到 `1`（= 单进程）。⚠️ N>1 时：内存近似线性增长（每个 worker 一份完整应用）；限流与连接池会按 worker 数摊薄；初始化 / 整站恢复由数据库里的 [TTL 锁](../advanced/security.md#认证)互斥（抢不到锁的一方得到 **409**）。打开前请自己压一遍。<br>⚠️ **停机语义**：关停时若有 worker 在宽限期内没退出会被 SIGKILL，此时主进程以 **ExitCode 1** 退出并打一条 FATAL（本轮之前是退出 **0**，编排系统看不出异常）。这个宽限期是**代码里的 10000ms，没有对应的环境变量** —— 不要去找 `VANBLOG_SHUTDOWN_TIMEOUT_MS`，那个名字不存在。正常的 `docker stop` / `compose down` 仍退出 0，`restart: always` 也不会因此循环重启（重启策略不作用于显式 stop） |
 | `VANBLOG_DISABLE_WEBSITE` | 空 | `true` = server 不拉起前台（Next）子进程。前后端分离部署 website 镜像时用 |
 | `VANBLOG_WEBSITE_HOST` | `0.0.0.0` | 前台子进程的监听地址（一体式镜像保持默认即可） |
 | `VANBLOG_MONGO_MAX_POOL_SIZE` | `100` | mongoose 连接池上限（多进程时按 worker 数摊薄） |
@@ -80,8 +81,8 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | --- | --- | --- |
 | `VANBLOG_SWAGGER` | 关 | **只认字面 `true`**：打开 `/swagger` 与 `/swagger-json`（实时 API 文档）。默认关闭是有意的——它等于把整个后台 API 面摊给未登录用户；后台「关于」「Token 管理」的入口会自动探测，关着时改开仓库内的 API 文档 |
 | `VANBLOG_HEALTH_DETAILS` | 关 | `true` 时匿名的 `GET /api/public/health` 额外返回 uptime 与内存（版本号**始终公开**，它本来就渲染在每个前台页面的页脚上）。带 `x-vanblog-internal` 令牌也能读到详情 |
-| `VAN_BLOG_INTERNAL_TOKEN` | 空 | 内部令牌：请求头 `x-vanblog-internal` 带上它 = 内部调用（允许 `pageSize=-1`、读健康详情）。⚠️ 回环地址**不**算内部——一体式部署里 caddy 就是从 127.0.0.1 拨过来的。前后端分离部署时给两边配同一个值 |
-| `VAN_BLOG_REVALIDATE_SECRET` | 空 | 设了之后前台 `/api/revalidate` 必须带同名 `secret` 才生效（server 会自动带上）。一体式镜像里该路由不可达；**单独部署 website 镜像时建议设置** |
+| `VAN_BLOG_INTERNAL_TOKEN` | 空 | 内部令牌：请求头 `x-vanblog-internal` 带上它 = 内部调用（允许 `pageSize=-1` 拉全量、读健康检查的 uptime/内存字段）。**判定是"回环直连且不带转发头" 或 "令牌匹配"**：一体式镜像里前台进程就是从 127.0.0.1 直接调 server、不带转发头，所以**不需要配**；而访客经 caddy 反代过来的请求带 `X-Forwarded-For`，不会被误判成内部。⚠️ **前后端分离部署必须给 server 与 website 两边配同一个值** —— 前台的 SSR 请求会带上它（本轮之前前台一个头都不发，配了也没用：`pageSize=-1` 会被夹到 100，标签页 / 时间线 / 总字数**静默少数据**且不报错）。⚠️ 只有 SSR（服务端渲染）请求带；浏览器侧的请求（文章解锁、阅读数、搜索、pageview）**不带**，令牌不会进前端产物 |
+| `VAN_BLOG_REVALIDATE_SECRET` | 空 | 前台 `/api/revalidate`（触发页面重渲染）的口令。⚠️ **本轮起改成"失败关闭"**：没设它时，只接受"套接字是回环 **且** 不带 `x-forwarded-for` / `x-real-ip`"的请求（一体式镜像正是这个形状，所以行为不变），其余一律 **403**；设了就必须带同名 `secret` 查询参数（server 触发时会自动带上）。**分离部署**要让别的机器也能触发重渲染，就给 server 与 website 两边配同一个值。以前是"没设 = 不校验"，等于分离部署下任何人都能反复触发重渲染 |
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（`/api/**` 与 `/static/**` 等，兜底限流） |
 | `VANBLOG_STATIC_LIMIT_PER_MIN` | 全局值 ×10（=6000） | 静态资源（`/static/**`）的独立限流桶。图片密集的站点不要让它们挤全局预算 |
 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作（POST/PUT/DELETE）的上限 |
@@ -200,7 +201,7 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 
 | 名称 | 默认值 | 设置后会发生什么 |
 | --- | --- | --- |
-| `VAN_BLOG_SERVER_URL` | `http://localhost:3000/` | 前台构建/渲染时回调 server 的地址（必须是合法 http/https URL；空串/非法值回落默认）。一体式镜像里已配好，分离部署 website 时要设 |
+| `VAN_BLOG_SERVER_URL` | `http://localhost:3000/` | 前台构建/渲染时回调 server 的地址（必须是合法 http/https URL；空串/非法值回落默认）。一体式镜像里已配好，分离部署 website 时要设。⚠️ **构建前台时这个地址必须连得通**：连不上时构建日志会先刷一串「无法连接，采用默认值」，然后以 `Error serializing .wordTotal … undefined cannot be serialized` **整个失败**（Next 不允许 `getStaticProps` 的返回值里有 `undefined`）。本轮已修掉这个崩溃点（四处推导全部补了兜底，总字数取不到就是 `0`），但"构建期要能连到 server"这个前提没变 —— 先起 server 再构建前台，CI 与 Docker 构建同理 |
 | `VAN_BLOG_REVALIDATE` | 由 server 按 ISR 模式注入 | `"true"` = 延时 ISR（配 `VAN_BLOG_REVALIDATE_TIME`）；否则按需 ISR（24 小时长保险）。**不要手设**，由 server 依据后台「静态页面更新策略」管理 |
 | `VAN_BLOG_REVALIDATE_TIME` | `60`（下限 60 秒） | 延时 ISR 的秒数。⚠️ 后台设置框里的旧提示「默认 10 秒」已作废：低于 60 的值会被抬到 60 |
 | `VANBLOG_SKIP_TYPECHECK` | 关 | `true` 跳过前台构建期的类型检查（本地量产物体积用，生产构建不要开） |

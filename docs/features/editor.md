@@ -79,7 +79,7 @@ VanBlog 后台内置了 [bytemd](https://github.com/bytedance/bytemd)（掘金�
 
   文章正文可以直接嵌入常见 HTML，前台和后台预览都会渲染，例如 `<u>下划线</u>`、`<font color="red">颜色</font>`、`<center>`、带 `style` 的 `span`/`div`，以及 Bilibili 一类的 `<iframe>`。Markdown 没有下划线语法时用 `<u>` 即可。
 
-  `<script>`、`onclick` / `onerror` 等事件属性、以及 `javascript:` 链接会被消毒去掉，避免文章正文变成脚本入口。整站自定义脚本请用 [定制化](../advanced/customizing.md)，不要写在文章里。自定义页面的完整 HTML 仍走 [自定义页面](../advanced/custom-page.md)，与正文 sanitizer 无关。
+  `<script>`、`onclick` / `onerror` 等事件属性、以及 `javascript:` 链接会被消毒去掉，避免文章正文变成脚本入口。**本轮起白名单收紧了几处**（`data:` 只给图片、`<iframe>` 只收 http(s) 与 `//`、`<a>`/`<input>`/`<button>` 上的 `style` 会被摘掉、正文里的 `<style>` 块整段删除），同时修好了两个"一直没生效"的老问题（嵌入视频没有全屏按钮、`<style>` 里的 CSS 被当成文字显示）—— 详见下面[正文里可以写哪些 HTML](#正文里可以写哪些-html)。整站自定义脚本请用 [定制化](../advanced/customizing.md)，不要写在文章里。自定义页面的完整 HTML 仍走 [自定义页面](../advanced/custom-page.md)，与正文 sanitizer 无关。
 
 - 一键插入 `more` 标记
 
@@ -120,6 +120,39 @@ VanBlog 后台内置了 [bytemd](https://github.com/bytedance/bytemd)（掘金�
   点击编辑器帮助按钮会显示 Markdown 语法与快捷键信息：
 
   ![快捷键提示](https://pic.mereith.com/img/cabe5cdfddeedbd6e592f7aaea2f4afc.clipboard-2022-08-29.png)
+
+## 正文里可以写哪些 HTML
+
+正文的 HTML 会过一遍白名单消毒（前台与后台预览用的是同一份规则，所以预览里能看到的，发布后就在）。
+下面这几条是**本轮收紧**的地方，如果你的老文章里有这些写法，发布后会与以前不同：
+
+| 写法 | 现在的行为 | 想达到同样效果该怎么做 |
+| --- | --- | --- |
+| `<img src="data:image/png;base64,…">` | ✅ **仍然可以**（内联 base64 图片是合法用法） | — |
+| 其它标签上的 `src="data:…"` | ❌ 去掉。`data:` 只对 `<img src>` 放行 | 图片请上传到图床，用站内地址 |
+| `<iframe src="https://…">`、`<iframe src="//…">` | ✅ 可以（B 站 / YouTube / 腾讯视频的嵌入代码都是这两种） | — |
+| `<iframe src="data:text/html;base64,…">` | ❌ 去掉。`<iframe>` 的 `src` 只接受 `http(s)://` 与协议相对的 `//` | 把内容放到[自定义页面](../advanced/custom-page.md)，或用链接指过去 |
+| `<div style="…">`、`<span style="…">`、`<p>`/`<table>`/`<font>` 等排版标签上的 `style` | ✅ 可以 | — |
+| `<a style="…">`、`<input style="…">`、`<button style="…">` | ❌ `style` 会被摘掉（标签本身保留） | 想改链接或按钮外观，请用站点 CSS：「站点管理 → 系统设置 → 定制化」，或[主题](./theme.md) |
+| 正文里写 `<style>…</style>` | ❌ **整段删除**（连里面的 CSS 一起） | 站点级 CSS 放「定制化」；只影响一篇文章的样式请用标签上的 `style` |
+
+⚠️ 一个**如实说明的局限**：`div` / `span` / `p` 仍然可以带 `style`，所以
+`<div style="position:fixed;inset:0;z-index:9999">` 这种**盖满全屏的遮罩**依然做得出来。
+要堵住它得做 CSS 的**值级**过滤（真正的声明解析器，正则会把 `content:"a;b"` 这种误判），
+代价是会误伤正常的粘性侧栏与高层级弹层 —— 目前没有做。这也是"协作者能写文章"这件事需要信任的原因，
+权限说明见[协作者](../advanced/collaborator.md)。
+
+::: tip 顺带修好了两个"一直没生效"的老问题
+
+这两个不是收紧，而是**修复**，升级后你会看到变化：
+
+1. **文章里嵌入的 B 站 / YouTube 视频以前没有全屏按钮** —— 消毒白名单把 `allowfullscreen`
+   写成了小写，而实际比较的是驼峰的 `allowFullScreen`，所以这个属性一直被静默摘掉。
+   现在能全屏了（`frameborder="0"` 同理，以前也一直没生效）。
+2. **以前在正文里粘一段 `<style>…</style>`，标签会被丢掉、但里面的 CSS 代码会当成文字显示在文章里**
+   （读者会看到一段 `body{display:none}` 之类的源码）。现在整段被正确忽略。
+
+:::
 
 ## 预览字体跟随前台皮肤
 

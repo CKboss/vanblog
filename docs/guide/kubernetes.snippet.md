@@ -35,6 +35,13 @@ metadata:
   labels:
     app: van-blog
 spec:
+  # ⚠️ 必须是 1 个副本 + Recreate 策略。默认的 RollingUpdate 会**先起新 pod 再停旧 pod**，
+  #    而下面的卷是 hostPath：那一小段时间里两个 server 进程会同时写同一份 static、同一个 mongo、
+  #    同一份日志与 caddy 目录 —— 静态页面重建互相覆盖、备份归档交错、证书状态打架。
+  #    代价是换镜像时会有几秒到十几秒的**中断**（单副本本来也没有高可用可言）。
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: van-blog
@@ -53,6 +60,18 @@ spec:
           hostPath:
             path: /var/k8s/van-blog/log
             type: ''
+        # ⚠️ caddy 的两个目录都要挂出来（与 docker compose 模板一致）。
+        #    data 里是 **TLS 证书与私钥**：不挂的话每次重建 pod 都要重新向 Let's Encrypt 申请，
+        #    而它有速率限制（同一域名每周重复证书数量有限），反复重建几次就可能被暂时拒签。
+        #    config 里是 caddy 自己的配置状态，不挂也能跑（会重造），但挂上更省事。
+        - name: caddy-config
+          hostPath:
+            path: /var/k8s/van-blog/caddy/config
+            type: ''
+        - name: caddy-data
+          hostPath:
+            path: /var/k8s/van-blog/caddy/data
+            type: ''
       containers:
         - name: van-blog
           # 钉死发布号：内容永不变，可复现、好回滚（别用 latest / dev-dsh，理由见上面）
@@ -64,6 +83,12 @@ spec:
             - name: https-443
               containerPort: 443
               protocol: TCP
+            # ⚠️ HTTP/3（QUIC）走的是 **UDP** 443，只列 TCP 的话这条路用不了。
+            #    Service 与 Ingress/负载均衡那一侧也要放行 UDP 443，
+            #    见 [HTTPS](../advanced/https.md)。不需要 HTTP/3 可以删掉这一段。
+            - name: https-443-udp
+              containerPort: 443
+              protocol: UDP
           env:
             # 数据库连接串：换成你自己的 mongo 地址。
             #   不带账号密码： mongodb://van.example.com:27017/vanBlog?authSource=admin
@@ -115,6 +140,10 @@ spec:
               mountPath: /app/static
             - name: log
               mountPath: /var/log
+            - name: caddy-config
+              mountPath: /root/.config/caddy
+            - name: caddy-data
+              mountPath: /root/.local/share/caddy
           # 标签是固定发布号 ⇒ IfNotPresent 就够（本地有就不重复拉，且保证跑的是你钉的那版）。
           # 只有用 latest / dev-dsh 这种会动的标签才需要 Always，见上面的表。
           imagePullPolicy: IfNotPresent
