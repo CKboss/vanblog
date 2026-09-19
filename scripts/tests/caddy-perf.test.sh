@@ -315,9 +315,316 @@ json.dump(d,open(sys.argv[2],'w'),ensure_ascii=False)
       else
         fail "caddy validate 不通过：$(basename "${tpl}")"
       fi
+
+      # ⚠️ 上面那份把 logging 整段 pop 掉了（本机没有 /var/log 写权限），所以**日志相关
+      #    改动从来没被 caddy 校验过**。这里把 filename 重写到临时目录后连 logging 一起验：
+      #    Caddy 对模块配置是**严格解码**的，writer 上多一个它不认识的字段就会
+      #    `json: unknown field` ⇒ 整份配置被拒 ⇒ entrypoint 退回**降级模板**
+      #    （自签证书、无 on-demand TLS）。也就是说"加个日志滚动参数"这种小改动，
+      #    写错字段名的后果是 HTTPS 静默降级，必须真的 validate 一遍。
+      python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+for lg in (d.get('logging',{}).get('logs') or {}).values():
+    w=lg.get('writer') or {}
+    if w.get('filename'):
+        w['filename']=sys.argv[2]+'/'+w['filename'].replace('/','_')
+json.dump(d,open(sys.argv[3],'w',encoding='utf-8'),ensure_ascii=False)
+" "${VTMP}/gen.json" "${VTMP}" "${VTMP}/withlog.json"
+      if "${CADDY_BIN}" validate --config "${VTMP}/withlog.json" >/dev/null 2>&1; then
+        pass "caddy validate 通过（含 logging 段）：$(basename "${tpl}")"
+      else
+        fail "caddy validate 不通过（含 logging 段）：$(basename "${tpl}")：$("${CADDY_BIN}" validate --config "${VTMP}/withlog.json" 2>&1 | grep -i 'error' | head -1)"
+      fi
+
+      # 关闭访问日志后的形状（writer 换成 discard）也必须能 validate：
+      # 只留 {"output":"discard"}，残留 filename/roll_* 会被严格解码拒掉。
+      VANBLOG_CADDY_ACCESS_LOG=false "${NODE_BIN}" "${ROOT}/scripts/caddyConfig.js" "${tpl}" permission admin@example.com >"${VTMP}/gen-off.json" 2>/dev/null
+      python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+for lg in (d.get('logging',{}).get('logs') or {}).values():
+    w=lg.get('writer') or {}
+    if w.get('filename'):
+        w['filename']=sys.argv[2]+'/'+w['filename'].replace('/','_')
+json.dump(d,open(sys.argv[3],'w',encoding='utf-8'),ensure_ascii=False)
+" "${VTMP}/gen-off.json" "${VTMP}" "${VTMP}/withlog-off.json"
+      if "${CADDY_BIN}" validate --config "${VTMP}/withlog-off.json" >/dev/null 2>&1; then
+        pass "caddy validate 通过（访问日志关闭 = discard writer）：$(basename "${tpl}")"
+      else
+        fail "caddy validate 不通过（访问日志关闭）：$(basename "${tpl}")：$("${CADDY_BIN}" validate --config "${VTMP}/withlog-off.json" 2>&1 | grep -i 'error' | head -1)"
+      fi
+
+      # 反证：discard writer 上残留 file 专有字段时，validate 必须失败。
+      # 没有这条，上面"关闭访问日志"的 PASS 可能只是因为 caddy 根本没在看 logging。
+      python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+d['logging']['logs']['log0']['writer']={'output':'discard','filename':'/tmp/x.log','roll_size_mb':100}
+json.dump(d,open(sys.argv[2],'w',encoding='utf-8'),ensure_ascii=False)
+" "${VTMP}/withlog-off.json" "${VTMP}/bad.json"
+      if "${CADDY_BIN}" validate --config "${VTMP}/bad.json" >/dev/null 2>&1; then
+        fail "（反证失败）discard writer 上残留 filename/roll_size_mb 时 caddy 居然通过了 —— 那说明本机 caddy 不是严格解码，caddyConfig.js 里那条注释与'整体替换 writer'的做法需要重新评估"
+      else
+        pass "（反证）discard writer 上残留 file 字段会被 caddy 拒掉 ⇒ 关闭访问日志时必须整体替换 writer 对象"
+      fi
       rm -rf "${VTMP}"
     done
   fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 超时 / 头大小上限 / 上游连接池 / 日志滚动（敌意环境下的连接层防线）
+#
+# ⚠️ 这一节全部**解析 JSON 读值**，不 grep 子串：grep 只能证明"这几个字出现过"，
+#    证明不了"值是多少"，也证明不了"没有出现"。
+# ─────────────────────────────────────────────────────────────────────────────
+echo "== 超时与连接层 =="
+
+# Node 侧的 keepAliveTimeout 默认值（跨文件不变量：caddy 的空闲超时必须比它短，
+# 否则就是 main.ts 注释里记过的那个偶发 ECONNRESET/502 竞态）
+NODE_MAIN="${ROOT}/packages/server/src/main.ts"
+NODE_KA="$(python3 -c "
+import re,sys
+t=open(sys.argv[1],encoding='utf-8').read()
+m=re.search(r\"VANBLOG_KEEP_ALIVE_TIMEOUT_MS'\s*,\s*(\d+)\", t)
+print(m.group(1) if m else '')
+" "${NODE_MAIN}" 2>/dev/null)"
+if [[ -z "${NODE_KA}" ]]; then
+  fail "读不到 Node 的 keepAliveTimeout 默认值（${NODE_MAIN} 里的 VANBLOG_KEEP_ALIVE_TIMEOUT_MS）—— 跨文件不变量无法校验，请更新这条守卫的正则而不是删掉它"
+else
+  pass "读到 Node keepAliveTimeout 默认值 = ${NODE_KA}ms（下面用它校验 caddy 侧必须更短）"
+fi
+
+for tpl in "${TEMPLATE}" "${FALLBACK}"; do
+  base="$(basename "${tpl}")"
+  RES="$(NODE_KA="${NODE_KA:-0}" python3 - "${tpl}" <<'PY'
+import json, os, sys
+
+NS = 1_000_000_000
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+node_ka_ms = int(os.environ.get('NODE_KA') or 0)
+bad = []
+ok = []
+
+servers = d['apps']['http']['servers']
+for sname, s in servers.items():
+    listen = ','.join(s.get('listen') or [])
+
+    # 1) read_header_timeout：slowloris 的主要防线（Caddy 默认 1 分钟）
+    rh = s.get('read_header_timeout')
+    if rh != 10 * NS:
+        bad.append('%s/%s read_header_timeout=%r（要 10s=10000000000）' % (sname, listen, rh))
+    else:
+        ok.append('read_header_timeout=10s')
+
+    # 2) idle_timeout：必须显式设，且必须 < Node 的 keepAliveTimeout
+    it = s.get('idle_timeout')
+    if it is None:
+        bad.append('%s/%s 缺 idle_timeout（Caddy 默认 5 分钟，攻击者可长期停空闲连接）' % (sname, listen))
+    elif it >= node_ka_ms * 1_000_000:
+        # ⚠️ 单位：node_ka_ms 是**毫秒**，it 是**纳秒** ⇒ 乘 1e6，不是乘 NS(1e9)。
+        #    这里曾经写成 `node_ka_ms * NS`，阈值被放大 1000 倍（65000 秒），
+        #    于是"把 idle_timeout 抬到 120s"这个变异对照**居然是绿的** —— 一条看似
+        #    在跨文件校验不变量、实际恒真的断言。变异对照就是用来抓这种东西的。
+        bad.append('%s/%s idle_timeout=%dns 不小于 Node keepAliveTimeout=%dms（会复现 ECONNRESET/502 竞态）'
+                   % (sname, listen, it, node_ka_ms))
+    else:
+        ok.append('idle_timeout=%ds<node%dms' % (it // NS, node_ka_ms))
+
+    # 3) max_header_bytes：必须显式设且远小于 Go 默认的 1MB
+    mhb = s.get('max_header_bytes')
+    if mhb is None:
+        bad.append('%s/%s 缺 max_header_bytes（Go 默认 1MB ⇒ 一万条连接就是 10GB 级内存放大）' % (sname, listen))
+    elif mhb >= 1024 * 1024:
+        bad.append('%s/%s max_header_bytes=%d 没有比 Go 默认(1MB)更严' % (sname, listen, mhb))
+    else:
+        ok.append('max_header_bytes=%d' % mhb)
+
+    # 4) ⚠️ read_timeout / write_timeout 必须**不存在**。
+    #    同一个 server 上挂着匿名的整站恢复上传（8GiB）、图片(50MB)与附件(200MB)，
+    #    以及整站备份下载。设了有限值就会把大恢复/大下载切断 —— 这是"看起来更安全、
+    #    实际上把灾难恢复弄坏"的典型，所以钉成"不许出现"。
+    for k in ('read_timeout', 'write_timeout'):
+        if k in s:
+            bad.append('%s/%s 出现了 %s=%r —— 会切断 8GiB 整站恢复上传与大文件下载，必须删掉'
+                       % (sname, listen, k, s[k]))
+    ok.append('无 read_timeout/write_timeout')
+
+    # 5) ⚠️ 不许写成 Caddyfile 那种 {"timeouts": {...}} 包装对象：Caddy 的 JSON 里
+    #    超时是 server 上的**扁平字段**，写成包装对象会因未知字段被严格解码拒绝 ⇒
+    #    entrypoint validate 失败 ⇒ 退回降级模板（自签证书、无 on-demand TLS）。
+    if 'timeouts' in s:
+        bad.append('%s/%s 出现了 timeouts 包装对象（Caddy JSON 里超时是扁平字段，这份配置会被 validate 拒掉）'
+                   % (sname, listen))
+
+    # 6) 热点上游（:3000/:3001）的连接池必须够大；waline(:8360) 保持无 transport（见上一节）
+    hot = []
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get('handler') == 'reverse_proxy':
+                ups = [u.get('dial', '') for u in (o.get('upstreams') or [])]
+                if any(u.endswith(':3000') or u.endswith(':3001') for u in ups):
+                    ka = ((o.get('transport') or {}).get('keep_alive') or {})
+                    hot.append((ka.get('max_idle_conns'), ka.get('max_idle_conns_per_host')))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(s.get('routes'))
+    if len(hot) < 10:
+        bad.append('%s 只找到 %d 个热点反代块（应该 14 个）' % (sname, len(hot)))
+    for mic, miph in hot:
+        if not mic or mic < 1024:
+            bad.append('%s 热点上游 max_idle_conns=%r 太小（要 >=1024，原值 64 会让高并发后连接全关）' % (sname, mic))
+        if not miph or miph < 512:
+            bad.append('%s 热点上游 max_idle_conns_per_host=%r 太小（要 >=512，原值 32 是 TIME_WAIT 暴涨的根因）' % (sname, miph))
+    if hot and not bad:
+        ok.append('热点池=%d/%d' % hot[0])
+
+# 7) 日志滚动：显式写出 Caddy 的默认值（100MB/10 份/90 天），并限制 writer 只用
+#    "历史悠久"的字段 —— 镜像里的 caddy 是 apk 装的、版本会漂，而 Caddy 对模块配置是
+#    **严格解码**：多一个旧版不认识的字段，整份配置就会被拒 ⇒ 退回降级模板。
+ALLOWED_WRITER_KEYS = {
+    'output', 'filename', 'roll_size_mb', 'roll_keep', 'roll_keep_days',
+    'roll_local_time', 'roll_gzip', 'roll_interval',
+}
+for name, lg in (d.get('logging', {}).get('logs') or {}).items():
+    w = lg.get('writer') or {}
+    if w.get('output') != 'file':
+        continue
+    unknown = set(w) - ALLOWED_WRITER_KEYS
+    if unknown:
+        bad.append('logger %s 的 writer 含有较新/未知字段 %s —— 旧版 caddy 严格解码会整份拒绝，'
+                   '请先确认镜像里的 caddy 版本支持再放行' % (name, sorted(unknown)))
+    for k, want in (('roll_size_mb', 100), ('roll_keep', 10), ('roll_keep_days', 90)):
+        if w.get(k) != want:
+            bad.append('logger %s 的 %s=%r（要显式写 %d，否则随 caddy 版本默认值漂移）'
+                       % (name, k, w.get(k), want))
+ok.append('日志滚动 100MB/10/90d 已显式钉住')
+
+print('OK:' + '; '.join(sorted(set(ok))) if not bad else 'BAD:' + '; '.join(bad[:6]))
+PY
+)"
+  case "${RES}" in
+    OK:*)  pass "${base}：${RES#OK:}" ;;
+    BAD:*) fail "${base}：${RES#BAD:}" ;;
+    *)     fail "${base}：超时/连接池检查没有产出结果（脚本本身坏了？）：${RES}" ;;
+  esac
+done
+
+# 反证：把 read_header_timeout 改回 Caddy 默认（=删掉）时，上面的检查必须报 BAD。
+# ⚠️ 没有这条，上面那些断言可能恒真（例如 python 脚本静默失败但输出被当成 OK）。
+MUT="$(mktemp -d)"
+python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+for s in d['apps']['http']['servers'].values():
+    s.pop('read_header_timeout',None)
+    s['read_timeout']=10000000000   # 同时犯两个错：删掉 read_header、加上 read_timeout
+json.dump(d,open(sys.argv[2],'w',encoding='utf-8'),ensure_ascii=False)
+" "${TEMPLATE}" "${MUT}/mutated.json"
+MUTRES="$(NODE_KA="${NODE_KA:-0}" python3 - "${MUT}/mutated.json" <<'PY'
+import json, os, sys
+NS=1_000_000_000
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+bad=[]
+for sname,s in d['apps']['http']['servers'].items():
+    if s.get('read_header_timeout') != 10*NS: bad.append('read_header_timeout')
+    if 'read_timeout' in s: bad.append('read_timeout 出现了')
+print('DETECTED' if bad else 'MISSED')
+PY
+)"
+if [[ "${MUTRES}" == "DETECTED" ]]; then
+  pass "（反证）删掉 read_header_timeout 并加上 read_timeout 后，检查器确实报错 —— 上面那些断言不是恒真"
+else
+  fail "（反证失败）把配置改坏后检查器仍然放行（得到 '${MUTRES}'）⇒ 上面那节断言是恒真的，等于没有守卫"
+fi
+rm -rf "${MUT}"
+
+# ---------- HSTS max-age 可配置：真 caddy validate + 产出值核对 ----------
+# ⚠️ 为什么必须真 validate：Caddy 对模块配置是**严格解码**的，headers handler 里写错一个
+#    字段名，整份配置就会被拒 ⇒ entrypoint 退回**降级模板**（自签证书、无 on-demand TLS）。
+#    也就是说"把 max-age 做成可配置"这种小改动，写错的后果是 **HTTPS 静默降级**。
+CADDY_BIN_HSTS=""
+for cand in caddy /tmp/caddybin/caddy; do
+  command -v "${cand}" >/dev/null 2>&1 && CADDY_BIN_HSTS="${cand}" && break
+done
+NODE_BIN_HSTS=""
+for cand in "${ROOT}/.tools/node20/bin/node" node; do
+  command -v "${cand}" >/dev/null 2>&1 && NODE_BIN_HSTS="${cand}" && break
+done
+if [[ -z "${CADDY_BIN_HSTS}" || -z "${NODE_BIN_HSTS}" ]]; then
+  echo "NOTE: 没有 caddy 二进制或 node，跳过 HSTS 的 validate 环节"
+else
+  HTMP="$(mktemp -d)"
+  # 值 -> 期望的 srv0 HSTS 头（'none' = 不下发）
+  for spec in "__unset__:max-age=31536000" "0:none" "86400:max-age=86400" "63072000:max-age=63072000" "315360000:max-age=63072000"; do
+    HV="${spec%%:*}"
+    WANT="${spec#*:}"
+    if [[ "${HV}" == "__unset__" ]]; then
+      env -u VANBLOG_HSTS_MAX_AGE "${NODE_BIN_HSTS}" "${ROOT}/scripts/caddyConfig.js" "${TEMPLATE}" permission admin@example.com >"${HTMP}/g.json" 2>/dev/null
+    else
+      VANBLOG_HSTS_MAX_AGE="${HV}" "${NODE_BIN_HSTS}" "${ROOT}/scripts/caddyConfig.js" "${TEMPLATE}" permission admin@example.com >"${HTMP}/g.json" 2>/dev/null
+    fi
+    # 把日志文件重写到临时目录（本机没有 /var/log 写权限），保留 logging 段一起校验
+    python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+for lg in (d.get('logging',{}).get('logs') or {}).values():
+    w=lg.get('writer') or {}
+    if w.get('filename'): w['filename']=sys.argv[2]+'/'+w['filename'].replace('/','_')
+json.dump(d,open(sys.argv[3],'w',encoding='utf-8'),ensure_ascii=False)" "${HTMP}/g.json" "${HTMP}" "${HTMP}/v.json"
+    # ① 真 caddy validate
+    if "${CADDY_BIN_HSTS}" validate --config "${HTMP}/v.json" >/dev/null 2>&1; then
+      pass "caddy validate 通过：VANBLOG_HSTS_MAX_AGE='${HV}' 生成的配置合法（不会触发降级模板）"
+    else
+      fail "caddy validate 不通过：VANBLOG_HSTS_MAX_AGE='${HV}'：$("${CADDY_BIN_HSTS}" validate --config "${HTMP}/v.json" 2>&1 | grep -i error | head -1)"
+    fi
+    # ② 产出值核对（解析 JSON，不 grep 子串）
+    GOT="$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+srv=d['apps']['http']['servers']
+def hsts(name):
+    for r in (srv.get(name) or {}).get('routes') or []:
+        for h in r.get('handle') or []:
+            if h.get('handler')=='headers':
+                for op in ('set','add'):
+                    bag=(h.get('response') or {}).get(op) or {}
+                    if 'Strict-Transport-Security' in bag:
+                        v=bag['Strict-Transport-Security']
+                        return '; '.join(v) if isinstance(v,list) else str(v)
+    return 'none'
+print('srv0=%s srv1=%s' % (hsts('srv0'), hsts('srv1')))" "${HTMP}/g.json")"
+    if [[ "${GOT}" == "srv0=${WANT} srv1=none" ]]; then
+      pass "VANBLOG_HSTS_MAX_AGE='${HV}' ⇒ srv0(${WANT})、srv1 不下发"
+    else
+      fail "VANBLOG_HSTS_MAX_AGE='${HV}' 的产出不对：得到 '${GOT}'，应为 'srv0=${WANT} srv1=none'"
+    fi
+  done
+  # ③ 降级模板设了变量也不该长出 HSTS，且仍然 validate 通过
+  VANBLOG_HSTS_MAX_AGE=86400 "${NODE_BIN_HSTS}" "${ROOT}/scripts/caddyConfig.js" "${FALLBACK}" permission admin@example.com >"${HTMP}/f.json" 2>/dev/null
+  FB_GOT="$(grep -c 'Strict-Transport-Security' "${HTMP}/f.json")"
+  if [[ "${FB_GOT}" == "0" ]]; then
+    pass "降级模板即使设了 VANBLOG_HSTS_MAX_AGE 也不会长出 HSTS（生成器只改已存在的键、绝不新建）"
+  else
+    fail "降级模板出现了 HSTS（${FB_GOT} 处）—— 自签证书路径上钉 HSTS 会把站长锁在站外"
+  fi
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8'))
+for lg in (d.get('logging',{}).get('logs') or {}).values():
+    w=lg.get('writer') or {}
+    if w.get('filename'): w['filename']=sys.argv[2]+'/'+w['filename'].replace('/','_')
+json.dump(d,open(sys.argv[3],'w',encoding='utf-8'),ensure_ascii=False)" "${HTMP}/f.json" "${HTMP}" "${HTMP}/fv.json"
+  if "${CADDY_BIN_HSTS}" validate --config "${HTMP}/fv.json" >/dev/null 2>&1; then
+    pass "caddy validate 通过：降级模板（设了 HSTS 变量）仍然合法"
+  else
+    fail "caddy validate 不通过：降级模板（设了 HSTS 变量）"
+  fi
+  rm -rf "${HTMP}"
 fi
 
 echo

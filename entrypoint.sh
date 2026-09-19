@@ -56,7 +56,12 @@ fi
 #    于是主配置永远"校验失败"、每次都降级成无 TLS（HTTPS 变自签证书）。.json 后缀它自己会认。
 CADDY_OK=0
 for MODE in permission ask; do
-  if ! node /app/caddyConfig.js /app/caddyTemplate.json "${MODE}" "${EMAIL_SAFE}" >/app/caddy.json 2>/dev/null; then
+  # ⚠️ 这里**不要**再把 stderr 丢进 /dev/null：caddyConfig.js 会把"站长把值设错了"这类
+  #    WARN 打到 stderr（例如 VANBLOG_HSTS_MAX_AGE 写了垃圾值回落默认、VANBLOG_CADDY_ACCESS_LOG
+  #    拼错所以日志保持开启、上界被夹取、preload/includeSubDomains 被丢弃）。丢了就等于
+  #    "配置静默不生效"—— 而那正是最难排的一类故障。stdout 才是生成的 JSON，两条流分开，
+  #    所以去掉这个重定向不会污染 caddy.json，只会让 WARN 出现在 `podman logs` 里。
+  if ! node /app/caddyConfig.js /app/caddyTemplate.json "${MODE}" "${EMAIL_SAFE}" >/app/caddy.json; then
     echo "!! 生成 caddy 配置失败（形式：${MODE}）"
     continue
   fi
@@ -92,7 +97,7 @@ if [ "${CADDY_OK}" != "1" ]; then
     # ⚠️ 如果哪天给降级模板加了 VAN_BLOG_EMAIL 占位符，**不要**把 sed 加回来 ——
     #    改成再调一次 caddyConfig.js（它接受模板路径参数），image-runtime.test.sh 里有一条
     #    断言钉着"降级模板不含占位符"，加了就会红，那时按断言的提示改。
-    node /app/caddyConfig.js /app/caddyFallbackTemplate.json permission "${EMAIL_SAFE}" >/app/caddy-fallback.json 2>/dev/null ||
+    node /app/caddyConfig.js /app/caddyFallbackTemplate.json permission "${EMAIL_SAFE}" >/app/caddy-fallback.json ||
       cp /app/caddyFallbackTemplate.json /app/caddy-fallback.json
     if caddy start --config /app/caddy-fallback.json; then
       echo "> 已用降级配置启动 caddy：站点可通过 HTTP 访问，后台在 /admin"
