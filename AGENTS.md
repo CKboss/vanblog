@@ -1090,7 +1090,12 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
   项目里有大量 fire-and-forget 写库（每次页面浏览的计数、菜单清洗、sitemap…），一次 Mongo 抖动就能带走整个进程。
 
 **上传 / 文件 / 静态服务**
-- 新增 `utils/uploadLimits.ts`：`assertUploadedImage()`（按**内容**判定：魔数/image-size + 拒绝 SVG + 1 亿像素上限）、
+- 新增 `utils/uploadLimits.ts`：`assertUploadedImage()`（按**内容**判定：魔数/image-size + 拒绝 SVG + 像素上限）
+  ⚠️ **上限已改**：当时是 1 亿像素（100MP），2026-09-19 起是 **4000 万（40MP，≈8K）**，
+  常量 `MAX_IMAGE_PIXELS` 住在**叶子**模块 `utils/imageLimits.ts`（因为 `uploadLimits → avif` 而 avif 需要它），
+  `uploadLimits` 再导出所以既有 import 不受影响；sharp 的 `limitInputPixels` 也钉到同一个数
+  （库默认 268MP 比业务上限宽 6.7 倍，而 `image-size` 读不出尺寸时会**放行**，那条路上只剩 sharp 这一层）。
+  理由与取舍见 §7.71／`73d7a0fc`、
   `safeImageExtension()`、`IMAGE_UPLOAD_OPTIONS`（50MB + 后缀过滤）、`CUSTOM_PAGE_UPLOAD_OPTIONS`（200MB）、
   `JSON_IMPORT_UPLOAD_OPTIONS`（200MB）。图床上传/替换/隐写检测三处 `FileInterceptor` 全部接上。
   起因（审计里最严重的一条）：图片接口以前**不校验内容**，上传 `evil.html` 时管线每一步失败都被 catch，
@@ -2426,6 +2431,11 @@ entrypoint / start.js / compose / caddy 模板 / 运行时 provider）。下面�
 8. **`restore.key` 是 0644**：它写在挂载到宿主机的 `/var/log` 下，还会被 `vanblog.sh backup`
    一起打包 —— 而它是「忘记密码」的恢复密钥。现在以 **0600** 写入（并额外 `chmodSync`，
    因为文件已存在时 `writeFileSync` 的 mode 不生效）。
+   ⚠️ **2026-09-19 更新：这一招已推广成一整套**（`utils/secretFileMode.ts` 统一定义 0600/0700），
+   覆盖整站归档、NDJSON 与索引成员、旁证清单、`backup-status.json`、`.sha256`、事件日志**含轮转历史份**、
+   目录 0700，连 `vanblog.sh` 那个原本显式 `chmod 0644` 的旁证也改了 —— 因为**就在同一个目录下**、
+   价值高得多的整站归档当时还是 0644（含 jwt 密钥，拿到就能签管理员令牌）。
+   ⇒ 教训是"同一威胁模型要扫全，别只修被想起来的那个文件"，详见 §7.71.5。
 
 **C. 装错东西 / 装不上**
 
@@ -6336,7 +6346,13 @@ WARN 点名 `wqy-zenhei` + 原图返回。**宁可不盖，也不能盖满图豆
   1920×1440：959 → 558 ms（+0.3%）；800×600：191 → 117 ms（−1.2%）。imgResize 不需要这个是因为
   它先缩到 ≤1920 再编码，永远碰不到大图的 effort 成本。
 - **小图自动缩砖**：图比一块标准砖还小时，砖缩到图内（单标记居中）—— **100×80 也能盖上**；
-  只有**短边 < 52px** 才跳过（WARN + 原图；48px 砖下限避免糊成墨点）。旧文案"宽高小于 128px 可能加不上"作废。
+  只有**短边 < 52px** 才跳过（WARN + 原图）。旧文案"宽高小于 128px 可能加不上"作废。
+  ⚠️ **砖下限当时是 48、文案与文档写的是 52，两者漂移过**（`step = Math.max(48, minSide - 4)`，
+  数值上等于"小于 48 才跳过"，于是 48–51px 的图会被盖上水印而日志声称不会）。
+  2026-09-19 起统一为具名导出 `WATERMARK_MIN_SHORT_SIDE_PX = 52`，**同时喂给判定与文案**
+  （并抽出纯函数 `smallImageTileStep(minSide)`，因为 `compositeTile` 不是导出的、退化输入原本测不了）；
+  跨包钉子也从"钉字面量 52"升级成"钉常量导出为 52 **且** 两处同源"——
+  **钉死字面数字恰恰是让这次漂移不可见的原因**。见 §7.71.7／`d617c849`
 
 #### 本轮收尾三：Dockerfile 给镜像装字体（在此之前，可见水印在生产等于没有这个功能）
 
@@ -7183,19 +7199,226 @@ rootless podman 在沙箱里起不来）⇒ 靠 98 条 mock 守卫 + 上面那�
 所以那 12 项结论仍适用；要拿发布镜像复测就重跑 §7.66 那套三格对照；
 ④ 那 88 个"文档从没提过的控件"只登记了数量，没有逐个判断该不该补。
 
-### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-18 **第二轮排查（§7.70）之后**复跑，本机实测、**串行**）
+### 7.71 系统性代码审查：七个方向、两个未认证级缺陷，以及"审查方向"本身怎么选的
+
+2026-09-19 那一轮不是"改文档"也不是"补测试"，而是**按方向系统性地读代码**：认证与凭据比较、
+注入与代码执行、文件与归档、XSS 与数据外泄、可靠性（挂起/半成品/资源泄漏）、镜像与供应链、
+以及**跨层一致性**（DTO ↔ provider ↔ 后台表单 ↔ 前台类型 ↔ 文档）。七个方向各有所得，
+产出 5 个提交：`4d7ca0ed`（恢复密钥）、`63e073c5`（TOC mXSS）、`73d7a0fc`（上传路径与像素上限）、
+`d617c849`（四处跨层不一致）、`89e8699e`（SSRF / 恢复闸门 / 备份权限与挂起）。
+其中**两条是未认证或低权限可达的真实缺陷**，不是理论加固。
+
+#### 7.71.1 教训一：审查方向要换轴，而最严重的两条来自同一个问句
+
+前两轮排查（§7.69、§7.70）的轴都是"文档 vs 代码"。这一轮换成"代码 vs 代码"与"代码 vs 运行时语义"，
+立刻挖到文档排查**结构上不可能发现**的东西 —— 因为文档根本没描述这些行为。
+
+而两个最严重的缺陷，都是在读代码时问同一句话问出来的：
+
+> **"这个比较的另一边，可能是什么类型？"**
+
+- `token != keyInCache`：另一边可能不是字符串，而是 `CacheProvider.get()` 在键缺失时返回的 **`{}`**。
+  于是 `"[object Object]" != {}` 是 **false** ⇒ 匿名「忘记密码」可以用这个字面量当恢复密钥通过校验，
+  改掉 `id:0` 管理员的用户名与口令，并连带吊销真管理员的令牌 ⇒ **未认证管理员接管**。
+  可达前提也不假想：`initRestoreKey()` 只在主实例跑，而缓存是每进程一个普通对象，
+  所以 `VANBLOG_CLUSTER_WORKERS>1`（一个文档化旋钮）时**每个 worker 都处于可绕过状态**；
+  单进程只是**恰好**安全（写密钥发生在第一个 `await` 之前）。
+- `BASH_REMATCH[3]`（§7.68）：那个下标取到的是**带点的整组**，于是 `(( .2 ))` 语法报错、算术退化成 0、
+  版本比较判成 `same` ⇒ **真降级被当成"版本没有变化"**。
+
+这两条是**同一类错误**：松散比较 / 错误下标，让"没有值"伪装成"值相等"。
+⇒ **规矩：任何凭据比较，都要先确认类型与长度，再做常量时间比较。**
+
+⚠️ 而且"换成常量时间比较"**不足以**修好它：`safeEqual` 自己会把两边 `String()` 化，
+`safeEqual('[object Object]', {})` 是 **true** —— 同一个陷阱换了顶帽子。
+真正堵住洞的是比较**之前的类型检查**。`restoreKeyVerification.spec.ts` 把这两条语言语义都钉住了，
+免得后人以为"已经用了 safeEqual 就安全了"而把类型检查"优化"掉。
+
+修法是三件套，少一件都还留着洞：`CacheProvider.getString(key, minLength=32)`（缺失/非字符串/短于下限
+⇒ `null`）、`InitProvider.getRestoreKeyForVerification()`（缓存优先，回落 `<日志目录>/restore.key`，
+沿用 `setupKey.ts` 的既有先例，所以 cluster 模式**照常可用**而不是直接失效）、控制器**失败关闭**
+（拿不到可用密钥就打一条点名文件与成因的 ERROR 并拒绝）。
+
+#### 7.71.2 教训二：`CacheProvider.get()` 缺失时返回 `{}` 是一个仓库级陷阱
+
+这个返回形状**不能改** —— `login.guard.ts` 的防爆破窗口依赖它。所以：
+
+- 已在 `CacheProvider` 上补了 `getString()`，并在 `get()` 上留注释说明它为什么是陷阱、指向这次事故；
+- ⇒ **新代码取凭据/密钥/令牌一律用 `getString()`**，不要用 `get()` 再自己判空。
+
+同一次审查还拆了一颗**地雷**（不是活 bug）：`TokenProvider.checkToken` 拼的是
+`findOne({ token, disabled: false })`，而 **Mongoose 会丢掉值为 `undefined` 的条件**，
+所以缺少 token 头时查询退化成 `{ disabled: false }` —— 只要库里存在任何未吊销令牌就为真。
+今天不可达（`AdminGuard` 先跑 `AuthGuard('jwt')`，`JwtStrategy` 读同一个头），
+但**任何新的令牌来源**（cookie、`Authorization`、query）都会把它变成绕过。现在非字符串/空输入直接拒。
+⇒ 记一条通用规矩：**把用户输入直接塞进查询条件之前，先想"这个值是 undefined 会怎样"**。
+
+#### 7.71.3 教训三：字符串黑名单做地址过滤，必然漏 IPv6 过渡形式
+
+SSRF 过滤器原来是一组正则（点分十进制 + `::1`/`fc00::/7`/`fe80:`），于是这些全能过：
+`http://[::ffff:127.0.0.1]:2019/`、`http://[::ffff:169.254.169.254]/latest/meta-data/`、
+NAT64 的 `http://[64:ff9b::7f00:1]/` —— 它们既不像点分十进制、也不匹配那几条前缀，
+而 WHATWG 会把 IPv6 序列化成压缩形式、`dns.lookup` 对 IP 字面量原样返回，所以"解析后再匹配字符串"也拦不住。
+⚠️ **连通性是实测的，不是推的**：一个只绑 127.0.0.1 的监听器被 `net.connect(port, '::ffff:127.0.0.1')` 打通了。
+
+⇒ 规矩：**内网判定要在"解析成地址之后"按数值区间做**，不是对输入字符串做模式匹配。
+现在 IPv4 走 32 位区间（补上 CGNAT `100.64/10`、组播、保留段、三个 TEST-NET、`198.18/15`），
+IPv6 手工展开成八组再比对（`::`、`::1`、`fc00::/7`、`fe80::/10`、`ff00::/8`、`2001:db8::/32`、Teredo、
+两个 NAT64 前缀），而三种内嵌 IPv4 的形式（mapped `::ffff:0:0/96`、compatible `::/96`、6to4 `2002::/16`）
+会**拆出里面的 IPv4 再判一次**；没有引入新依赖（只用 `net`）。
+
+⚠️ 还有一条更普适的：**"没看懂的输入"要判不安全**。测的时候发现 `gggg::1` 这种非法 IPv6 字面量
+会掉进"域名"分支被判成公网 ⇒ 现在含冒号但解析不出来的一律拒绝。
+一个看不懂自己输入的校验器，没有资格说它安全。
+
+可达性要说清：`post-/api/admin/export/markdown` 在协作者白名单里，`fetchRemoteSafely` 的两个调用方
+也都在协作者可达的路由上 ⇒ **最低权限协作者**就能触发。影响是**盲打**（靠状态码/超时差异探端口、
+对内部服务发 GET 造成副作用），不是数据外泄 —— 只发 GET，且回来的内容要先过图片魔数校验才会被使用。
+
+#### 7.71.4 教训四：校验与使用之间不能有第二次解析
+
+校验时解析出公网地址、连接时再解析一次 ⇒ 短 TTL 域名可以第一次答公网、第二次答 `127.0.0.1`
+（DNS rebinding）。现在连接走自定义 agent，它的 `lookup` 钩子**钉住校验时解析出的那个地址**
+（Host 头与 SNI 仍是域名，证书校验不受影响）；从校验过的结果里挑不出可用地址时**直接失败**，
+而不是回落到 Node 自己的解析 —— 回落等于悄悄把钉住这件事取消掉。
+
+⚠️ 钉住这件事**第一版就带着一个生产级 bug 上线**，而且是它自己的**端到端**测试抓到的、单测发现不了：
+`pinnedLookup` 按 `(err, address, family)` 写，注释还断言"这条路上 Node 不会传 `all: true`"。
+那是假的 —— **Node 20+ 默认开 `autoSelectFamily`**，回调收到的是**数组**，
+于是在 Node 24 上**每一次外链抓取都会以 `Invalid IP address: undefined` 失败**。
+两种形状现在都支持，各带一条断言。
+⇒ 记两条：① 关于运行时"不会传什么"的断言，要么实测要么别写进注释；
+② 涉及网络栈的改动，**必须有一条端到端钉子**，单元级的 mock 恰好会把这类形状差异抹平。
+
+⚠️ 顺序也错过一次：地址判定必须在端口判定**之前**，否则 `http://127.0.0.1:3000/` 会报"端口不允许"
+而不是"内网地址"（真正的原因）。是一条**既有的** provider 测试抓到这个倒置的 ——
+这就是"错误信息要说真原因"值得被测试钉住的理由。
+
+#### 7.71.5 教训五：权限语义要靠"文件权限 + 目录权限"落地，而同一威胁模型要扫全
+
+整站备份归档含整库（scrypt 哈希、`settings{type:'jwt'}` 里的 jwt 密钥、全部文章），
+而 `createWriteStream(outFile)` 没给 mode，`/var/log` 又是 **bind mount** ⇒
+容器内的权限就是宿主机上的权限，任何本机用户都能读它，并且**不需要爆破任何口令**
+就能用 jwt 密钥签管理员令牌。活体实测：备份目录 `0755`、`backup-status.json` `0644`。
+
+⚠️ 最值得记的不是这个洞本身，而是：**项目早就理解这个威胁模型** ——
+`setup.key` 显式 0600 外加 chmod，注释还写清了为什么；而就在**同一个目录**下、
+价值高得多的归档是 0644。⇒ **同一威胁模型要扫全，别只修被想起来的那个文件。**
+
+现在有一个 `utils/secretFileMode.ts` 统一定义 0600/0700，用于归档、NDJSON 与索引成员、旁证清单、
+`backup-status.json`、`.sha256`、`vanblog-event.log`（**含轮转出来的历史份** —— rename 保留旧 mode，
+否则既有的 0644 会永远松着）、目录 0700，连 `vanblog.sh` 那个原本显式 `chmod 0644` 的旁证也改了。
+
+两个实现细节，都是踩出来的：
+
+1. **归档要给三次**：`mode` 参数 + 立刻 chmod + close 之后**再** chmod 一次 ——
+   因为 `mode` 只对**新建**文件生效，而 `createWriteStream` 的 open 是异步的。
+2. **收紧目录要用 `当前 & 目标`（只去掉位）**：无条件 `chmod 0700` 会给一个故意设成 `0500` 的目录
+   **加上**写权限，而那正是一条既有加固测试制造 EACCES 的手段 —— 第一版就这么把测试悄悄弄坏了。
+   ⇒ 记一条：**收紧权限的代码，不许有"放宽"的能力。**
+
+⚠️ 恢复的**读**路径故意没动，所以既有的 0644 归档照样能恢复（收紧写、不收紧读，否则升级即破坏）。
+
+#### 7.71.6 教训六：没有 `error` 监听的流 = 永久挂起，而半成品必须删
+
+`dumpCollection` 的 NDJSON 写流是那个文件里**唯一**没有 `error` 监听的流
+（同文件其它流、`backupTarStream.ts`、`logRotate.ts` 都有）。ENOSPC 时 `drain`/`end` 回调永不触发
+⇒ promise 永不 settle：状态停在"进行中"、归档写了一半、等待中的请求挂着、优雅关机跑满超时，
+而唯一的证据是几行 uncaughtException —— 因为 **`main.ts` 的 uncaughtException 只打印不退出**，
+所以**用户看不到失败**。
+
+⇒ 两条规矩：① 写流的地方必须把 `error` 与 `drain`/`end` **race** 起来；
+② 失败时**半成品要删** —— 否则 tar 会把它打进一个"看着完整其实少一半文档"的归档，
+那比没有归档更糟（`verify-deep` 的成员级哈希也救不了，因为清单是按实际写进去的东西生成的）。
+
+同时补了真超时（`VANBLOG_BACKUP_TIMEOUT_MINUTES`，默认 60，`0` = 不限时）：
+用 `AbortController`，信号**穿进** `createFullBackup`，所以导出循环会检查它、
+`tarCompress` 会销毁输出、删半成品并 **SIGKILL 子进程**（而不只是放行调用方 —— 只放行会留下孤儿 zstd）；
+超时记 `stage='timeout'`，计时器 `unref`，race 之后**迟到的 rejection 要被接住**
+（Node 20+ 上未处理的 rejection 会直接退出进程）。
+
+崩溃遗留也是同一类：恢复失败会把 `<static>/tmp/full-restore-*`（**解包后的整站明文**）与
+`<backupPath>/upload-tmp/restore-upload-*`（单个可达 8GB）永远留在那里 —— 导出侧有回收器而恢复侧没有。
+`cleanupStaleWorkDirs()` 现在在 bootstrap 时跑（主实例、延后、不阻塞），
+只删超过 `VANBLOG_BACKUP_STALE_WORK_HOURS`（默认 6，`0` = 关）的条目，
+跳过同名**文件**与无关目录，逐条不抛异常，并记录删了什么、释放了多少空间。
+⚠️ 定性要准确：匿名 HTTP 读不到这些（静态守卫对 `export`/`tmp`/`upload-tmp` 一律 403），
+所以这是"明文落盘 + 每次崩溃漏一份磁盘"，**不是远程泄露** —— 别把它写成后者。
+
+#### 7.71.7 教训七：守卫自己又添两个坑
+
+1. **断言"文件里出现了某个符号"是空断言** —— import 行就能让它过。
+   本轮有一次变异对照**显示 0 红**，原因正是这个；改成断言**调用形状**（例如
+   `sharpInputOptions` 真的出现在那个 `sharp(` 调用里、`getString` 真的被调用）之后才有意义。
+   ⇒ 写"必须使用了 X"这类钉子时，钉**调用**，不要钉**出现**。
+2. **`stripCommentsForAnchor` 是 TypeScript 剥注释器，不能用于 shell 脚本。**
+   它会把 `https://` 当行注释、被引号与 `$( )` 带偏，实测把整份脚本啃残
+   ⇒ 基于它的 absence 断言**永远不可能命中**（看起来是绿的，其实什么都没检查）。
+   shell 要按**整行 `#`** 剥，并且带一条对照证明"正是这个剥离让断言得以通过"。
+
+沿用既有规矩：absence 断言一律跑在剥注释后的源码上（本仓库已踩 6 次"断言匹配到解释性注释"），
+并且每条都要有**变异对照**（改回旧形状必须红）。本轮的变异对照计数：SSRF/闸门 5 次、
+备份密钥 8 次、上传路径与像素上限 4 次、TOC 1 次（还原后逐字节一致）。
+
+⚠️ 还有一条关于**既有测试钉住错误契约**的：TOC 那两个单测断言的正是有漏洞的返回值
+（`toBe("Clean Title")`、`toContain('$A$')`），这让漏洞看起来像有意设计。
+⇒ 修 bug 时如果撞上一条"钉住了错误行为"的测试，**要改的是测试**，
+并在测试里写清它原来钉的是什么、为什么那是错的（本轮两处都这么做了：TOC 的粘性测试注明真正主题未受影响；
+水印那条跨包钉子从"钉字面量 52"升级成"钉常量导出为 52 **且** 判定与文案同源"——
+**钉死字面数字恰恰是让 48 与 52 漂移不可见的原因**）。
+
+#### 7.71.8 跨层一致性：这个方向为什么值得单列
+
+`d617c849` 那四处都不是"某一层写错了"，而是**层与层之间对不上**，所以任何单层的审查都发现不了：
+
+| 不一致 | 形状 | 后果 |
+|---|---|---|
+| 水印小图阈值 | 代码 48 / WARN 文案 52 / 注释 52 / 三份文档 52 | 48–51px 的图被盖了水印，而日志声称不会 |
+| `authDesc` vs `authorDesc` | 写的一侧（DTO + 零接触自举）用旧拼写 / 读的一侧全用新拼写 | 零接触初始化的站点作者描述一直是空，且**从不报错**（`siteInfo` 是 Mixed `@Prop()`，不裁剪嵌套键） |
+| `showFriends` | DTO 声明 → 布局计算 → 两个导航栏 props → **JSX 从没读** | 四层贯通的死设置，设成 `false` 毫无变化，且没有任何后台控件能设它 |
+| drill 的备份目录回落值 | 硬编码 `/var/vanblog/data/log/vanblog-backups` / `vanblog.sh` 是推导的 / drill 自己的 `--help` 声称继承 | 脚本被单独拷贝或改名时（正是 `--help` 支持的用法）指向错误目录 |
+
+⇒ 规矩：**改一个设置项时，把它的四层都走一遍**（DTO/类型 → 写入方 → 读取方 → UI 控件），
+任何一层缺失都要么补齐、要么整条删掉（`showFriends` 选的是删，因为它假装提供的能力
+本来就存在于用户找得到的地方：导航项由 `props.menus` 渲染、友链是 `defaultMenu` 里的一项、
+`数据管理 → 导航配置` 可以增删；而 `showRSS` **保留**，因为 RSS 入口在导航栏里是写死的、不在 `menus` 里）。
+删除时要把**决定的前提**也钉进测试，这样将来谁想加回来，会看到需要推翻的究竟是哪些证据。
+
+⚠️ 修阈值这类"代码 vs 文案"的不一致时，**先判断哪一边是意图**：本轮意图明显是 52
+（日志、注释、三份文档都是 52，只有算式是 48），所以改代码；反过来若意图是 48，就该改文案与文档。
+不要"两边各让一步"。
+
+#### 7.71.9 本轮测试与未量
+
+- server `jest` **178 套件 / 2146 用例：2138 绿 + 8 跳过 + 0 失败**（上一轮 170/1957）；
+  website `vitest run` **85 文件 / 890**（上一轮 84/885，多出的是 `tocMathXss.spec.ts`）；
+  admin `node --test` **148 套件 / 582**；`scripts/tests/*.test.sh` **24 文件 / 1982 条断言**（上一轮 1968）；
+  server 两个 `tsconfig` 与 website 的 `tsc` 各 **0 错**；`docs-links` 5/5、`docs-consistency` 52/0、
+  `docs:build` 65 页。
+- ⚠️ **未跑/跑不了的**：① admin 的 playwright e2e（本机没装浏览器；**CI 上是绿的**）；
+  ② SSRF **pinning 的容器端到端**（本机 docker daemon 连不上）；
+  ③ `washAuthorDesc` 的**真库**验证（没有可写实例、没有 root 起容器）——
+  它对嵌套路径的 `$unset` 遵循标准语义，并由一个**真的会执行 `$set`/`$unset`** 的内存模型覆盖，
+  所以"跑三次只有第一次碰库""不覆盖站长填过的值"是真断言而不是"updateOne 被调用过"；
+  ④ HTTPS + SNI 在 pinning 下的活体用例默认 `skip`，要 `VANBLOG_SAFEFETCH_LIVE=1` 才跑；
+  ⑤ TOC 的 mXSS **没有在浏览器里动态复现**（无浏览器），只做到"SSR HTML 里出不来裸 `<`/`onerror`"
+  这一层的单测 + 源码级钉子，复现步骤写在提交信息里（`curl` 一篇标题带载荷的文章的 SSR HTML）。
+
+
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-19 **系统性代码审查（§7.71）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **170 套件 / 1957 用例：1950 绿 + 7 跳过 + 0 失败**（2026-09-18 第二轮排查后实测）。⚠️ 旧数字"169 套件 / 1951 用例（1944 绿）"**作废**：多出的 1 套件 / 6 用例是新的死旋钮守卫 `utils/envVarMentions.spec.ts`（§7.70，`24e6d0ad` + `f04bfbae`）；再往前是 2026-09-17 首测的同一组数字。⚠️ 旧基线"1275 用例 / 1274 绿 + 1 个既有失败（watermark 字体用例）"**作废**：可见水印重写成 sharp/SVG 后不再联网拉字体，那个"既有失败"不复存在（§7.66）；7 个跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）等。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
-| website `vitest run` | **84 文件 / 885 用例全绿**（原 77/748；2026-09-17 首测，2026-09-18 复跑确认 —— 那轮没动 website 代码） |
-| admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-18 两轮都复跑确认，第二轮改的是 server 侧文案与脚本，admin 数字未变；原 498 → 579 → 582，本轮 `aboutPage.test.js` 8 → 11，§7.68。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行） |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1968 条断言全绿**（2026-09-18 第二轮排查后实测；⚠️ 同日早先的 **1872** 已被 +96 取代，那 96 条来自"停止静默吞参数"那批，含 5 次变异对照，§7.70／`afe7f2c4`）。沿革：原 22 文件 / 1109 条 → vanblog-update **41 → 98**（§7.68）→ vanblog-reset **51 → 98**（setupKey 修复，§7.69）→ **1968**（§7.70）。其它大头：drill 587、install-cron 100、vanblog-source-install 153、download-fallback 78、build-image-local 44、dockerfile-alpine-sharp 32 |
+| server `jest` | **178 套件 / 2146 用例：2138 绿 + 8 跳过 + 0 失败**（2026-09-19 代码审查后实测）。⚠️ 旧数字"170 套件 / 1957 用例（1950 绿 + 7 跳过）"**作废**：本轮新增 `restoreKeyVerification`、`storedFileName`、`imageLimits`、`restoreSizeGate`、`safeFetch`、`backupSecrets`、`markdownExport`、`attachment`、`deadSettingShowFriends`、`washAuthorDesc` 等 spec，并给 `watermark.spec.ts` 补了 9 个边界用例。再往前的"169/1951"与"1275 用例 + 1 个既有失败（watermark 字体用例）"也都**作废**（后者是可见水印重写成 sharp/SVG 后不再联网拉字体，§7.66）。跳过里含 `searchIndex.realdb`（默认 `describe.skip`，要一次性真库）与 HTTPS+SNI 活体用例（要 `VANBLOG_SAFEFETCH_LIVE=1`）。⚠️ 开关默认值这条别记错：`VANBLOG_SEARCH_REALDB=1` + `_PORT` / `_DBPATH`，**没有** `VANBLOG_SEARCH_REALDB_URL` 这个变量（§7.68） |
+| website `vitest run` | **85 文件 / 890 用例全绿**（2026-09-19 实测；⚠️ 旧数字 84/885 **作废** —— 多出的是 TOC mXSS 那套 `tocMathXss.spec.ts`，§7.71／`63e073c5`。沿革：原 77/748 → 84/885 → 85/890） |
+| admin `node --test tests/unit` | **148 套件 / 582 用例全绿**（2026-09-19 复跑确认，本轮改的是 server/website 侧，admin 数字未变；但 ⚠️ 本轮**动过** `admin/tests/unit/securityHardening.test.js` 与 `watermarkText.test.js` 两条跨包锚点：前者随 SSRF 重命名更新并加强成钉住新性质，后者从"钉字面量 52"升级成"钉常量导出为 52 **且** 判定与文案同源"，§7.71.7）。沿革：原 498 → 579 → 582（`aboutPage.test.js` 8 → 11，§7.68）。⚠️ Node 24 要加 `--test-reporter=tap` 才有汇总行 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 1982 条断言全绿**（2026-09-19 实测）。⚠️ 同日早先的 **1968** 已被取代（那 +14 来自 `vanblog-drill.test.sh` 606 → 620，钉 drill 备份目录回落值改成推导式，§7.71.8）。沿革：原 22 文件 / 1109 条 → vanblog-update **41 → 98**（§7.68）→ vanblog-reset **51 → 98**（setupKey 修复，§7.69）→ **1968**（停止静默吞参数，§7.70）→ **1982**。其它大头：drill 620、install-cron 123、vanblog-source-install 153、backup-restore 81、verify 94、download-fallback 78、build-image-local 44、dockerfile-alpine-sharp 32 |
 | 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 两轮排查后都复跑仍 52/0；第 4 条的语料先加了 `packages/server/src/**/*.ts`（`f4fec80d`／§7.69），第二轮又加了 `scripts/vanblog-drill.sh`（`afe7f2c4`／§7.70 —— `VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` 定义在那个脚本里，一下午两个代理各自被同一条误报绊了一次） |
 | CI（GitHub Actions） | `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**（server-test 已是"默认全跑**全部** spec、不再维护白名单"那条配置，§7.67；拆白名单当时是 169 个，现 170 —— 所以别把 spec 个数写进句子）；上一个提交 `9601faa4` 上两者都是 **failure** —— 本轮修的三个红套件在 CI 上也红过。⚠️ **`docs/**` 不在两条 workflow 的 paths 过滤里 ⇒ 只改文档的提交不会跑任何 CI**（§7.70），所以文档轮的验证只能靠本机那三条守卫 |
 | 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**（892 MB；8 条关键路径、8 条故障特征全空、0 重启、SIGTERM 1 s 停机）；容器内字体与水印行为见 §7.66 的三格对照 |
 | 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
-| ⚠️ 2026-09-18 两轮**没跑/跑不了**的 | ① `./vanblog.sh update` 与 `reset` 的**真机拉镜像 + 真 root 端到端**（本机无 root、docker daemon 连不上、rootless podman 在沙箱里起不来）⇒ 靠 `vanblog-update.test.sh` 98 条 + `vanblog-reset.test.sh` 98 条 mock（含 5 次变异对照）、"真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测，以及**活体 HTTP 契约**验证（不带密钥 400 / 带密钥 201，§7.69）覆盖；② 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；③ 后台文案与文档的**浏览器观感**（无 playwright 浏览器），只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子"；④ 73 份文档里"核过是对的、故意不动"的部分只在提交信息里列了代表项，没有逐页留痕；⑤ ⚠️ 第二轮那 12 项**真容器实测**用的是 `vanblog:local-test`（`VAN_BLOG_VERSION=local@8ffa391a`），**不是当前 HEAD 构建的镜像** —— `8ffa391a` 之后只动过文档、测试与脚本，server 运行时行为未变，结论仍适用（§7.70）；⑥ 那 88 个"文档从没提过的后台控件"只登记了数量，没逐个判断该不该补 |
+| ⚠️ **没跑/跑不了**的（截至 2026-09-19 代码审查轮） | ① admin 的 playwright e2e（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；**CI 上是绿的**，最后一次本机全量是 §7.58/§7.59 时期的 111 用例）；② `./vanblog.sh update` / `reset` / `restore` 的**真 root 端到端**（无 root、docker daemon 连不上）⇒ 靠 `vanblog-update` 98 条 + `vanblog-reset` 98 条 mock（含变异对照）、"真镜像真版本号"的 `get_image_version`/`version_change_kind` 单测、以及**活体 HTTP 契约**验证（不带密钥 400 / 带密钥 201，§7.69）覆盖；③ **SSRF pinning 的容器端到端**（同因）—— ⚠️ 这正是 `autoSelectFamily` 那个 bug 只有端到端钉子才抓得到的原因，所以那条钉子别删（§7.71.4）；④ `washAuthorDesc` 的**真库**验证（没有可写实例）⇒ 用真的会执行 `$set`/`$unset` 的内存模型覆盖；⑤ HTTPS+SNI 在 pinning 下的活体用例默认 `skip`，要 `VANBLOG_SAFEFETCH_LIVE=1`；⑥ TOC 的 mXSS **没在浏览器里动态复现**（复现步骤在 `63e073c5` 的提交信息里）；⑦ 文档站**没有部署**（本 fork 无 Pages），产物层面的核对都是在本地构建产物里 grep；⑧ 后台文案与文档的**浏览器观感**（只验到"零诊断转译 + umi dev 重编译成功 + 源码级钉子"）；⑨ ⚠️ §7.70 那 12 项**真容器实测**用的是 `vanblog:local-test`（`VAN_BLOG_VERSION=local@8ffa391a`），不是当前 HEAD 构建的镜像 —— 但此后只动过文档、测试、脚本与 server/website 代码，凡引用那批数字（892 MB、`fc-list` 25、字体 27,989,228 B、限流 601/1200）都要记得它们是**那个镜像**上的实测 |
 | admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
