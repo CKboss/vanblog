@@ -117,6 +117,25 @@ export function displayFileName(storedName: string): string {
 }
 
 /**
+ * 把**用户可控**的字符串压成能安全放进 `Content-Disposition` 的带引号 `filename` 值。
+ *
+ * 两条规则，缺一不可：
+ *  1. 非可打印 ASCII（含 CR/LF 与控制字符）换成 `_` —— 否则能拆行注入别的响应头；
+ *  2. 删掉 `"` —— 否则能**提前闭合** `filename="…"`，再往后塞 `; filename=` 之类的参数。
+ *
+ * ⚠️ 这个 helper 存在的原因是"正确的写法只在一个地方"：`attachmentDisposition()` 一直是对的，
+ * 而 `comment.controller.ts` 的评论导出把原始 `status` 查询参数直接拼进了带引号的 filename
+ * （`?status=x"; filename="evil` 这种就能改写响应头）。凡是把请求参数拼进 Content-Disposition
+ * 的地方都要走这里，别再各写一遍。
+ */
+export function sanitizeDispositionFilename(name: unknown, fallback = 'download'): string {
+  const raw = String(name ?? '');
+  // eslint-disable-next-line no-control-regex
+  const ascii = raw.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '').trim();
+  return ascii || fallback;
+}
+
+/**
  * `Content-Disposition` for forced-download types only; everything else (pdf,
  * zip, images, office docs…) stays inline so browsers can preview it.
  * Both `filename` (ASCII fallback) and RFC 5987 `filename*` are emitted.
@@ -126,8 +145,7 @@ export function attachmentDisposition(storedName: string): string | undefined {
     return undefined;
   }
   const name = displayFileName(storedName) || 'attachment';
-  // eslint-disable-next-line no-control-regex
-  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+  const ascii = sanitizeDispositionFilename(name, 'attachment');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 

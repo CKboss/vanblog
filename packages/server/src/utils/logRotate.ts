@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { envPositiveInt } from './envNumber';
+import { SECRET_FILE_MODE, chmodBestEffort } from './secretFileMode';
 
 /**
  * 事件日志的大小轮转。
@@ -58,6 +59,18 @@ export function rotateLogFiles(logPath: string, keep: number): number | null {
       fs.renameSync(logPath, rotatedPath(logPath, 1));
       moved += 1;
     }
+    // rename 保留原权限，所以升级前就是 0644 的那几份轮转文件会一直是 0644。
+    // 顺手收紧（best-effort：改不动就算了，绝不让轮转失败 —— 日志不能因为权限炸掉进程）。
+    for (let i = 1; i <= k; i += 1) {
+      const rotated = rotatedPath(logPath, i);
+      if (fs.existsSync(rotated)) {
+        try {
+          fs.chmodSync(rotated, SECRET_FILE_MODE);
+        } catch {
+          // 挂载盘不支持改权限时忽略
+        }
+      }
+    }
     return moved;
   } catch {
     return null;
@@ -103,7 +116,12 @@ export class RotatingFileStream {
 
   private openStream(): void {
     this.opened = false;
-    this.stream = fs.createWriteStream(this.logPath, { flags: 'a+' });
+    // ⚠️ 0600：事件日志里是后台登录/登出与内容变更事件（谁在什么时候改了哪篇文章），
+    // 而它和 `restore.key`、`setup.key`、`caddy.log`、`vanblog-access.log` 一样躺在
+    // **挂载到宿主机**的日志目录里 —— 那几份都是 0600，只有它是 0644（宿主机人人可读）。
+    // `mode` 只在创建时生效，而这里用的是 `a+`（文件通常已存在），所以必须补一发 chmod。
+    this.stream = fs.createWriteStream(this.logPath, { flags: 'a+', mode: SECRET_FILE_MODE });
+    chmodBestEffort(this.logPath, SECRET_FILE_MODE);
     this.stream.once('open', () => {
       this.opened = true;
       this.maybeRotate();

@@ -13,7 +13,9 @@ import {
   RestoreResult,
   backupIncludeCaddyEnabled,
   cleanupStaleExportTemps,
+  cleanupStaleWorkDirs,
   createFullBackup,
+  resolveStaleWorkHours,
   inspectFullBackup,
   listFullBackups,
   restoreFullBackup,
@@ -46,6 +48,36 @@ import { isPrimaryInstance } from 'src/utils/clusterRole';
 export const BACKUP_VERIFY_DEEP_ENV = 'VANBLOG_BACKUP_VERIFY_DEEP';
 /** 定期巡检是否也做成员级校验（P4）。默认关：巡检要的是"便宜到能天天跑"。 */
 export const BACKUP_SWEEP_DEEP_ENV = 'VANBLOG_BACKUP_SWEEP_DEEP';
+
+/**
+ * 整轮备份（导出 + 打包）的超时分钟数；**0 = 不限时**。
+ *
+ * 为什么需要它：备份链路上任何一处"等一个永远不会来的回调"都会让整个请求永久挂住
+ * （NDJSON 写流曾经没有 error 监听，磁盘满时就是这个形状），而 `backup-status.json`
+ * 会停在"进行中"、cron 看起来"还在跑"、优雅退出被拖到超时 —— 没有一处说"失败了"。
+ * 超时是这类挂死的最后一道网：**宁可大声失败，不可静默挂着**。
+ *
+ * 默认 60 分钟：实测一次整站导出 28s（69MB 归档），几 GB 的站点也在分钟级；
+ * 60 分钟还没完基本就是卡住了。库特别大或盘特别慢的部署可以调大，或设 0 关掉。
+ */
+export const BACKUP_TIMEOUT_MINUTES_ENV = 'VANBLOG_BACKUP_TIMEOUT_MINUTES';
+export const DEFAULT_BACKUP_TIMEOUT_MINUTES = 60;
+
+/** 与其它 `resolve*` 同一套语义：缺失/空串/非数字/负数 ⇒ 回落默认；0 = 不限时。 */
+export function resolveBackupTimeoutMinutes(
+  raw: string | undefined = process.env[BACKUP_TIMEOUT_MINUTES_ENV],
+  fallback: number = DEFAULT_BACKUP_TIMEOUT_MINUTES,
+): number {
+  if (raw === undefined || String(raw).trim() === '') {
+    return fallback;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    return fallback;
+  }
+  // 上限一年：写错成"分钟当秒"也不至于变成永不开口的定时器
+  return Math.min(Math.floor(n), 60 * 24 * 365);
+}
 
 /** `export()` 的返回：在 `FullBackupResult` 之外带写后校验的结果（P2）。 */
 export interface ExportOutcome extends FullBackupResult {
@@ -164,8 +196,12 @@ export class FullBackupProvider implements OnApplicationBootstrap {
    */
   private async doExport(format?: string): Promise<ExportOutcome> {
     let result: FullBackupResult;
+    const timeoutMinutes = resolveBackupTimeoutMinutes();
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | null = null;
+    const startedAt = Date.now();
     try {
-      result = await createFullBackup({
+      const backupPromise = createFullBackup({
         client: this.client,
         staticPath: config.staticPath,
         dbName: this.dbName,
@@ -176,17 +212,52 @@ export class FullBackupProvider implements OnApplicationBootstrap {
         source: this.buildSourceInfo(),
         // P6（默认关）：只有显式打开 VANBLOG_BACKUP_INCLUDE_CADDY 才把 TLS 材料打进归档
         caddyDataPath: backupIncludeCaddyEnabled() ? config.caddyDataPath : undefined,
+        // 超时时真的把活停下来（游标逐条检查 + tar 管道 fail() 会删半成品并 SIGKILL 子进程），
+        // 而不是只让调用方解脱、底下继续写盘
+        abortSignal: controller.signal,
         logger: {
           log: (message) => this.logger.log(message),
           warn: (message) => this.logger.warn(message),
         },
       });
+      // ⚠️ 必须先挂一个 catch：超时后我们会 abort，底下那个 promise 随后才 reject，
+      //    而那时已经没人在 await 它了 ⇒ 不挂就是 unhandledRejection（Node 20+ 默认退出进程）。
+      backupPromise.catch(() => undefined);
+      if (timeoutMinutes > 0) {
+        result = await Promise.race([
+          backupPromise,
+          new Promise<FullBackupResult>((_resolve, reject) => {
+            timer = setTimeout(() => {
+              controller.abort();
+              reject(
+                new BadRequestException(
+                  `整站备份超时：超过 ${timeoutMinutes} 分钟仍未完成，已中止（用时 ` +
+                    `${Math.round((Date.now() - startedAt) / 1000)}s）。` +
+                    `半成品归档已删除，本次按失败计。` +
+                    `常见原因是磁盘写满或数据卷不可用 —— 先看剩余空间与磁盘健康；` +
+                    `库确实很大/盘确实很慢就调大 ${BACKUP_TIMEOUT_MINUTES_ENV}（0 = 不限时）`,
+                ),
+              );
+            }, timeoutMinutes * 60 * 1000);
+            // 定时器绝不能把进程吊着不让退出
+            timer.unref?.();
+          }),
+        ]);
+      } else {
+        result = await backupPromise;
+      }
     } catch (err) {
       const message = (err as Error)?.message || String(err);
-      this.recordFailureSafely('export', message, null);
-      this.logger.error(`整站备份失败：${message}`);
+      // 超时单独记一个 stage：它说的是"卡住了"，与"这一步报错了"排障方向完全不同
+      const timedOut = controller.signal.aborted;
+      this.recordFailureSafely(timedOut ? 'timeout' : 'export', message, null);
+      this.logger.error(`整站备份${timedOut ? '超时中止' : '失败'}：${message}`);
       this.warnIfStale();
       throw err;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
     // 写后校验：解压器全量读通 + 归档内 manifest 过闸门 + 计数一致且非零
     // + P1 的防损坏那一组（merkleRoot / memberCount / 清单副本 / 整归档 sha256 / 压缩器校验位）
@@ -251,7 +322,7 @@ export class FullBackupProvider implements OnApplicationBootstrap {
 
   /** 状态文件写失败绝不能把备份流程带崩（backupStatus 内部已经吞了一层，这里再兜一层）。 */
   private recordFailureSafely(
-    stage: 'export' | 'verify' | 'sweep',
+    stage: 'export' | 'verify' | 'sweep' | 'timeout',
     message: string,
     name: string | null,
   ): void {
@@ -292,6 +363,7 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       this.warnIfStale();
       this.warnIfInterruptedRestore();
       this.cleanupExportTemps();
+      this.cleanupStaleWorkDirs();
     }, 5000).unref?.();
     this.scheduleSweep();
   }
@@ -323,6 +395,46 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       }
     } catch (err) {
       this.logger.warn(`清理导出临时文件失败：${(err as Error)?.message || err}`);
+    }
+  }
+
+  /**
+   * 清掉**上次崩溃留下的工作目录**：`<static>/tmp/full-backup-*`、`<static>/tmp/full-restore-*`
+   * 与 `<backupPath>/upload-tmp/restore-upload-*`。
+   *
+   * 为什么要有：正常路径在 `finally` 里就删了，但进程被杀（OOM / 容器重启 / 恢复途中崩溃）时
+   * `finally` 不执行 ⇒ 解包后的**整站明文**（口令哈希、jwt 密钥、全部正文与图床）留在静态目录树里，
+   * 而且每崩一次吃掉一份"整站大小"的磁盘。导出侧一直有清道夫，恢复侧没有 —— 那是遗漏。
+   *
+   * ⚠️ 只删**够旧**的（`VANBLOG_BACKUP_STALE_WORK_HOURS`，默认 6，0=关）：共享卷上可能正有
+   * 另一个实例在跑，删掉别人正在写的目录会让那一次的归档或恢复莫名其妙坏掉。
+   */
+  private cleanupStaleWorkDirs(): void {
+    try {
+      const hours = resolveStaleWorkHours();
+      const result = cleanupStaleWorkDirs({
+        staticPath: config.staticPath,
+        backupDir: this.backupDir(),
+        maxAgeMs: hours * 60 * 60 * 1000,
+      });
+      if (result.disabled) {
+        return;
+      }
+      if (result.removed.length) {
+        const freed = result.bytes / 1024 / 1024;
+        this.logger.warn(
+          `清理了 ${result.removed.length} 个上次崩溃留下的备份/恢复工作目录` +
+            `（释放 ${freed.toFixed(1)} MB）：${result.removed
+              .slice(0, 5)
+              .map((item) => item.name)
+              .join(', ')}` +
+            `${result.removed.length > 5 ? ' …' : ''}` +
+            `—— 里面是解包后的整站明文，所以必须清；只删超过 ${hours} 小时的，` +
+            `正在跑的那一次不受影响`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`清理崩溃遗留工作目录失败：${(err as Error)?.message || err}`);
     }
   }
 

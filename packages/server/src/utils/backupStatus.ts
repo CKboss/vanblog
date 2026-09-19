@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { RestoreJournal, readRestoreJournal } from './restoreJournal';
+import { SECRET_DIR_MODE, ensureSecretDir, writeSecretFileSync } from './secretFileMode';
 
 /**
  * 备份健康状态的**持久化**（P2）。
@@ -63,7 +64,12 @@ export interface BackupStatusFile {
   lastSuccessMembers: number | null;
   /** 最近一次失败（导出或校验）的时间；成功后不清零，保留现场 */
   lastFailureAt: string | null;
-  lastFailureStage: 'export' | 'verify' | 'sweep' | null;
+  /**
+   * `'timeout'` = 整轮备份超过 `VANBLOG_BACKUP_TIMEOUT_MINUTES` 被中止。
+   * 单独一个 stage 而不是并入 `'export'`：超时说的是"卡住了"（磁盘/卷/网络挂了），
+   * 而 export 失败说的是"这一步报错了"，排障方向完全不同。
+   */
+  lastFailureStage: 'export' | 'verify' | 'sweep' | 'timeout' | null;
   lastFailureName: string | null;
   lastFailureMessage: string | null;
   /** 连续失败次数：任何一次成功归零。cron 备份坏了多久，看这个数字 */
@@ -155,10 +161,15 @@ export function touchBackupStatus(backupDir: string): BackupStatusFile {
 
 /** 原子写（tmp + rename）；写失败抛给调用方决定（备份主流程会 catch 成 WARN）。 */
 export function writeBackupStatus(backupDir: string, status: BackupStatusFile): void {
-  fs.mkdirSync(backupDir, { recursive: true });
+  // 0700 / 0600：这个文件躺在**挂载到宿主机**的备份目录里，内容是"这台机器的备份还产不产得出
+  // 可用归档"+ 失败原因 + 整归档 sha256。它不像归档那样含凭据，但它与归档同目录，
+  // 目录收紧到 0700 之后就没理由让它自己还是 0644（理由与 POSIX 细节见 utils/secretFileMode.ts）。
+  ensureSecretDir(backupDir, SECRET_DIR_MODE);
   const file = path.join(backupDir, BACKUP_STATUS_FILE);
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify({ ...status, updatedAt: new Date().toISOString() }, null, 2));
+  writeSecretFileSync(tmp, JSON.stringify({ ...status, updatedAt: new Date().toISOString() }, null, 2));
+  // ⚠️ rename 会保留 tmp 的权限，所以最终文件也是 0600；但对**升级前就存在**的
+  // backup-status.json（0644），rename 覆盖后权限来自 tmp ⇒ 同样收紧了。
   fs.renameSync(tmp, file);
 }
 
@@ -195,7 +206,11 @@ export function recordBackupSuccess(
 
 export function recordBackupFailure(
   backupDir: string,
-  info: { stage: 'export' | 'verify' | 'sweep'; message: string; name?: string | null },
+  info: {
+    stage: 'export' | 'verify' | 'sweep' | 'timeout';
+    message: string;
+    name?: string | null;
+  },
 ): BackupStatusFile {
   const prev = readBackupStatus(backupDir);
   const next: BackupStatusFile = {

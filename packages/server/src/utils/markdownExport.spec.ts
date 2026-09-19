@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   assertSafeRemoteUrl,
+  allowedRemoteFetchPorts,
   assetsDirName,
   buildFrontMatter,
   classifyImageUrl,
@@ -279,5 +280,181 @@ describe('文件名与 front matter', () => {
     expect(yamlScalar(12)).toBe('12');
     expect(yamlScalar("it's")).toBe("'it''s'");
     expect(yamlScalar('')).toBe("''");
+  });
+});
+
+/**
+ * SSRF 过滤器的回归钉子。
+ *
+ * 旧实现是**字符串正则**（`^127\.`、`^::1$`、`^f[cd][0-9a-f]{2}:`…），而 WHATWG URL 会把
+ * 主机名**规范化**，于是下面这四个形状当年全部过检、并且实测真的能打到内网：
+ *   `http://[::ffff:127.0.0.1]:2019/`   → hostname 规范化成 `::ffff:7f00:1`（内嵌 IPv4 变十六进制，
+ *                                          任何 `^::ffff:\d+\.` 形状的规则永远匹配不上）
+ *   `http://[::ffff:169.254.169.254]/`  → `::ffff:a9fe:a9fe`（云 IMDS）
+ *   `http://[64:ff9b::7f00:1]:2019/`    → NAT64 前缀，翻译到内网 IPv4
+ *   `http://[::]:2019/`                 → 未指定地址
+ * 连通性是实测过的（本机 bind 127.0.0.1 的 TCP 靶子，`net.connect(port,'::ffff:127.0.0.1')` 连上并拿到响应）。
+ * 触发面是**最低权限协作者**：`fetchRemoteSafely` 的两个调用方（外链图片转存、导出抓远程图）都在
+ * 协作者可达面，而 `post-/api/admin/export/markdown` 在 `types/access/access.ts` 的 publicRoutes 里。
+ */
+describe('SSRF：IPv6 的内嵌/过渡形式必须被识别为内网', () => {
+  const BYPASS_HOSTS = [
+    '::ffff:127.0.0.1', // IPv4-mapped（点分写法）
+    '::ffff:7f00:1', // IPv4-mapped（URL 规范化后的十六进制写法）
+    '::ffff:a9fe:a9fe', // IPv4-mapped → 169.254.169.254（云 IMDS）
+    '::ffff:10.0.0.5', // IPv4-mapped → 私网
+    '::7f00:1', // IPv4-compatible → 127.0.0.1
+    '2002:7f00:1::', // 6to4 → 127.0.0.1
+    '2002:ac10:101::', // 6to4 → 172.16.1.1
+    '64:ff9b::7f00:1', // NAT64
+    '64:ff9b:1::7f00:1', // 本地 NAT64（RFC 8215）
+    '::', // 未指定地址
+    '::1', // 回环
+    'fc00::1', // ULA
+    'fd12:3456::1', // ULA
+    'fe80::1', // 链路本地
+    'ff02::1', // 组播
+    '2001:db8::1', // 文档地址（不可路由）
+    '2001::1', // Teredo（能封装任意 IPv4）
+  ];
+
+  it('这些形状一律判为内网', () => {
+    for (const host of BYPASS_HOSTS) {
+      expect({ host, private: isPrivateAddress(host) }).toEqual({ host, private: true });
+    }
+  });
+
+  it('带方括号、带 zone id、大写、以及解析不了的 IPv6 字面量也判为内网（宁可拒绝）', () => {
+    expect(isPrivateAddress('[::ffff:127.0.0.1]')).toBe(true);
+    expect(isPrivateAddress('::FFFF:7F00:1')).toBe(true);
+    expect(isPrivateAddress('fe80::1%eth0')).toBe(true);
+    expect(isPrivateAddress('gggg::1')).toBe(true); // 解析不了 ⇒ 不安全
+    expect(isPrivateAddress('')).toBe(true); // 空主机名 ⇒ 不安全
+  });
+
+  it('整条 URL 走 assertSafeRemoteUrl 也被拒（不只是 isPrivateAddress 层面）', async () => {
+    for (const url of [
+      'http://[::ffff:127.0.0.1]:2019/',
+      'http://[::ffff:169.254.169.254]/latest/meta-data/',
+      'http://[64:ff9b::7f00:1]:2019/',
+      'http://[::]:2019/',
+    ]) {
+      await expect(assertSafeRemoteUrl(url)).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+});
+
+describe('SSRF：IPv4 按数值判范围（不是按字符串前缀）', () => {
+  it('内部/不可路由范围全部拒绝', () => {
+    for (const host of [
+      '127.0.0.1',
+      '127.255.255.254',
+      '10.1.2.3',
+      '192.168.0.1',
+      '172.16.0.1',
+      '172.31.255.255',
+      '169.254.169.254', // 云 IMDS
+      '0.0.0.0',
+      '0.1.2.3',
+      '100.64.0.1', // CGNAT（旧实现漏了；云上内网极常见）
+      '100.127.255.255',
+      '224.0.0.1', // 组播
+      '240.0.0.1', // 保留
+      '255.255.255.255', // 广播
+      '192.0.2.1', // TEST-NET-1
+      '198.51.100.1', // TEST-NET-2
+      '203.0.113.1', // TEST-NET-3
+      '198.18.0.1', // 基准测试
+      'localhost',
+      'foo.local',
+      'bar.internal',
+    ]) {
+      expect({ host, private: isPrivateAddress(host) }).toEqual({ host, private: true });
+    }
+  });
+
+  it('反证：公网地址与紧邻边界外的地址必须放行（别把功能修坏）', () => {
+    for (const host of [
+      'example.com',
+      '8.8.8.8',
+      '1.1.1.1',
+      '172.32.0.1', // 172.16/12 之外
+      '172.15.255.255',
+      '11.0.0.1', // 10/8 之外
+      '100.63.255.255', // CGNAT 下界之外
+      '100.128.0.0', // CGNAT 上界之外
+      '192.169.0.1', // 192.168/16 之外
+      '169.255.0.1', // 169.254/16 之外
+      '2001:4860:4860::8888', // Google 公网 DNS
+      'cdn.jsdelivr.net',
+    ]) {
+      expect({ host, private: isPrivateAddress(host) }).toEqual({ host, private: false });
+    }
+  });
+
+  it('URL 规范化后的十进制/八进制 IP 仍然被拒（这两种本来就被 WHATWG 挡住，钉住别退化）', async () => {
+    expect(new URL('http://2130706433/').hostname).toBe('127.0.0.1');
+    expect(new URL('http://0177.0.0.1/').hostname).toBe('127.0.0.1');
+    for (const url of ['http://2130706433/', 'http://0177.0.0.1/', 'http://[0:0:0:0:0:0:0:1]/']) {
+      await expect(assertSafeRemoteUrl(url)).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+});
+
+describe('SSRF：端口白名单', () => {
+  const OLD = process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS;
+  afterEach(() => {
+    if (OLD === undefined) delete process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS;
+    else process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS = OLD;
+  });
+
+  it('默认只放行 80/443，内网管理端口一律拒（这正是能打到 :2019/:27017 的原因）', async () => {
+    delete process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS;
+    expect(allowedRemoteFetchPorts()).toEqual([80, 443]);
+    for (const url of [
+      'http://example.com:2019/', // caddy admin
+      'http://example.com:27017/', // mongo
+      'http://example.com:8080/x.png',
+      'https://example.com:8443/x.png',
+    ]) {
+      await expect(assertSafeRemoteUrl(url)).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+
+  it('80/443 与"不写端口"照常放行', async () => {
+    delete process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS;
+    for (const url of ['http://example.com/a.png', 'https://example.com/a.png', 'http://example.com:80/a.png', 'https://example.com:443/a.png']) {
+      const parsed = await assertSafeRemoteUrl(url);
+      expect(parsed.hostname).toBe('example.com');
+    }
+  });
+
+  it('显式配置能放行额外端口，且报错信息里写清怎么配', async () => {
+    process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS = '80,443,8080';
+    expect(allowedRemoteFetchPorts()).toEqual([80, 443, 8080]);
+    const parsed = await assertSafeRemoteUrl('http://example.com:8080/a.png');
+    expect(parsed.port).toBe('8080');
+    await expect(assertSafeRemoteUrl('http://example.com:9999/a.png')).rejects.toThrow(
+      /VANBLOG_REMOTE_FETCH_ALLOWED_PORTS/,
+    );
+  });
+
+  it('非法值回落默认（绝不因为写错而变成"全部放行"）', () => {
+    for (const raw of ['', '   ', 'abc', '0', '99999', '-1', '80x', ',,,']) {
+      process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS = raw;
+      expect({ raw, ports: allowedRemoteFetchPorts() }).toEqual({ raw, ports: [80, 443] });
+    }
+    // 部分合法 ⇒ 只用合法的那些（去重 + 升序）
+    process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS = '443, 8080 ,,443,abc,0';
+    expect(allowedRemoteFetchPorts()).toEqual([443, 8080]);
+  });
+
+  it('顺序钉子：内网地址**先于**端口被判（报错要说更贴近真实原因的那个）', async () => {
+    // `http://127.0.0.1:3000/` 两个闸门都会拦，但问题是"回环"，不是"3000"。
+    // 这条钉子防止有人把顺序调回去（provider 的既有用例也按"内网"这个措辞断言）。
+    delete process.env.VANBLOG_REMOTE_FETCH_ALLOWED_PORTS;
+    await expect(assertSafeRemoteUrl('http://127.0.0.1:3000/x.png')).rejects.toThrow(/内网/);
+    await expect(assertSafeRemoteUrl('http://[::ffff:127.0.0.1]:2019/')).rejects.toThrow(/内网/);
+    await expect(assertSafeRemoteUrl('http://example.com:3000/x.png')).rejects.toThrow(/端口 3000/);
   });
 });

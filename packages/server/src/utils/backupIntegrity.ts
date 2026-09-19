@@ -11,6 +11,7 @@ import {
   SHA256_SIDECAR_EXT,
   computeMerkleRoot,
 } from './backupTarStream';
+import { writeSecretFileSync } from './secretFileMode';
 
 /**
  * 归档防损坏（P1）的**纯逻辑**部分：校验和 sidecar 的读写、压缩器自带校验位的实测、
@@ -99,7 +100,9 @@ export function writeSha256Sidecar(archivePath: string, hex: string): string | n
   const sidecar = `${archivePath}${SHA256_SIDECAR_EXT}`;
   try {
     const tmp = `${sidecar}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, `${hex}  ${path.basename(archivePath)}\n`);
+    // 0600：sidecar 本身只有一个哈希，但它与归档同目录同命运 —— 归档目录已经是 0700，
+    // 没有理由让旁边这个文件还是 0644（它会泄露归档名与备份节奏）。
+    writeSecretFileSync(tmp, `${hex}  ${path.basename(archivePath)}\n`);
     fs.renameSync(tmp, sidecar);
     return sidecar;
   } catch {

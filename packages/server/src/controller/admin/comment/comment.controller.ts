@@ -4,6 +4,7 @@ import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { CommentProvider } from 'src/provider/comment/comment.provider';
 import { ApiToken } from 'src/provider/swagger/token';
 import { UpdateCommentDto } from 'src/types/comment.dto';
+import { sanitizeDispositionFilename } from 'src/utils/attachment';
 import { config } from 'src/config/index';
 
 /** 内置评论的后台管理（只有管理员能进：不在 publicRoutes 里，走 AdminGuard） */
@@ -79,10 +80,14 @@ export class CommentController {
     };
     if (String(download || '') === '1') {
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      // ⚠️ `status` 是**原始查询参数**，直接拼进带引号的 filename 就能提前闭合引号再注入
+      //    别的参数（`?download=1&status=x"; filename="evil`）。走 attachment.ts 里那个
+      //    一直都在的 sanitizer（非可打印 ASCII → `_`，`"` 删掉），别在这儿再手写一遍。
+      const safeStatus = sanitizeDispositionFilename(status || 'approved', 'approved');
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="vanblog-comments-${String(status || 'approved')}-${stamp}.json"`,
+        `attachment; filename="vanblog-comments-${safeStatus}-${stamp}.json"`,
       );
       return res.send(JSON.stringify(payload, null, 2));
     }

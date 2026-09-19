@@ -1,4 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 import {
   ATTACHMENT_FOLDER,
   ATTACHMENT_MAX_BYTES,
@@ -12,6 +15,7 @@ import {
   isAttachmentPath,
   isForcedDownloadExt,
   sanitizeAttachmentName,
+  sanitizeDispositionFilename,
 } from './attachment';
 
 const SIGN = 'a'.repeat(32);
@@ -148,5 +152,74 @@ describe('assertAttachmentSize', () => {
 
   it('rejects oversized uploads with the limit in the message', () => {
     expect(() => assertAttachmentSize(ATTACHMENT_MAX_BYTES + 1)).toThrow(/200 MB/);
+  });
+});
+
+/**
+ * `Content-Disposition` 的文件名消毒。
+ *
+ * 为什么单独立一组钉子：正确写法以前**只存在于** `attachmentDisposition()` 里面，
+ * 于是 `comment.controller.ts` 的评论导出把原始 `status` 查询参数直接拼进了带引号的
+ * filename —— `?download=1&status=x"; filename="evil` 就能提前闭合引号再注入别的参数。
+ * 现在消毒逻辑抽成了 `sanitizeDispositionFilename`，两处共用，这里钉住它的行为与"两处都在用"。
+ */
+describe('sanitizeDispositionFilename', () => {
+  it('删掉双引号（否则能提前闭合 filename="…" 再注入参数）', () => {
+    const evil = 'x"; filename="evil';
+    const out = sanitizeDispositionFilename(evil);
+    expect(out).not.toContain('"');
+    // 整条头拼出来之后必须**只有一对引号**，且引号里的内容就是消毒结果 ——
+    // 也就是攻击者给的字节一个都没能逃到引号外面。
+    // ⚠️ 不要去断言"头里不再出现 filename= 这个词"：消毒只删引号，`filename=` 这几个字
+    //    留在**引号内**是合法的 quoted-string 内容，注入不了任何东西（第一版就是这么写错的）。
+    const header = `attachment; filename="vanblog-comments-${out}-2026.json"`;
+    expect(header.match(/"/g)).toHaveLength(2);
+    expect(header.match(/filename="([^"]*)"/)![1]).toBe(`vanblog-comments-${out}-2026.json`);
+    expect(out).not.toMatch(/[\r\n\u0000]/);
+  });
+
+  it('控制字符与 CR/LF 换成下划线（否则能拆行注入别的响应头）', () => {
+    const out = sanitizeDispositionFilename('a\r\nSet-Cookie: x=1\u0000b');
+    expect(out).not.toMatch(/[\r\n\u0000]/);
+    expect(out).toContain('Set-Cookie'); // 内容留着没关系，拆不了行就注入不了
+  });
+
+  it('非 ASCII 也换成下划线（ASCII 兜底那一份，RFC 5987 的 filename* 另算）', () => {
+    expect(sanitizeDispositionFilename('年度报告.html')).toBe('____.html');
+  });
+
+  it('空/全是非法字符 ⇒ 用 fallback，绝不产出空 filename', () => {
+    expect(sanitizeDispositionFilename('', 'approved')).toBe('approved');
+    expect(sanitizeDispositionFilename('   ', 'approved')).toBe('approved');
+    expect(sanitizeDispositionFilename('"""', 'approved')).toBe('approved');
+    expect(sanitizeDispositionFilename(undefined, 'approved')).toBe('approved');
+    expect(sanitizeDispositionFilename(null)).toBe('download'); // 默认 fallback
+  });
+
+  it('正常值原样保留（别把功能修坏）', () => {
+    expect(sanitizeDispositionFilename('approved')).toBe('approved');
+    expect(sanitizeDispositionFilename('pending-review_1')).toBe('pending-review_1');
+  });
+
+  it('attachmentDisposition 走的就是这个消毒（回归钉子，防止又各写一遍）', () => {
+    const disposition = attachmentDisposition(`${SIGN}x"; filename="evil.html`) || '';
+    expect(disposition).toMatch(/^attachment; filename="/);
+    // 带引号的 filename 段里不许再出现引号
+    const quoted = disposition.match(/filename="([^"]*)"/);
+    expect(quoted).toBeTruthy();
+    expect(quoted![1]).not.toContain('"');
+  });
+
+  it('源码级钉子：评论导出用的是共享 helper，不是自己拼', () => {
+    // ⚠️ 断言"不存在"之前先剥注释（本仓库踩过 6 次：解释性注释里就写着被禁的字符串）
+    const src = stripCommentsForAnchor(
+      fs.readFileSync(path.join(__dirname, '../controller/admin/comment/comment.controller.ts'), 'utf8'),
+    );
+    // 必须**用原始 status 参数**去调消毒函数（只断言"文件里出现过这个名字"是空的：
+    // import 语句本身就能让它通过 —— 第一版就是这么写了个不会红的钉子）。
+    expect(src).toMatch(/sanitizeDispositionFilename\(\s*status/);
+    // 头里必须拼消毒后的变量，而不是把查询参数直接插进带引号的 filename
+    expect(src).toMatch(/filename="vanblog-comments-\$\{safeStatus\}/);
+    expect(src).not.toMatch(/filename="vanblog-comments-\$\{String\(status/);
   });
 });

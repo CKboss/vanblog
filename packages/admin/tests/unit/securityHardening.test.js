@@ -36,10 +36,20 @@ describe('安全加固：注入与输入校验', () => {
 });
 
 describe('安全加固：SSRF', () => {
-  it('远程抓取逐跳重新校验，不用 axios 的自动重定向', () => {
+  it('远程抓取逐跳重新校验，不用 axios 的自动重定向，且连接钉住已校验的 IP', () => {
     const safe = read('packages/server/src/utils/safeFetch.ts');
     assert.match(safe, /maxRedirects: 0/);
-    assert.match(safe, /current = await assertSafeRemoteUrl\(next\.toString\(\)\)/);
+    // ⚠️ 2026-09-19 起改名：`assertSafeRemoteUrl` 拆成了返回 {url, addresses} 的
+    //    `assertSafeRemoteUrlDetailed`（原签名保留为薄封装），因为要把"校验时解析出的那个 IP"
+    //    传给连接侧钉住（关 DNS rebinding 的 TOCTOU 窗口）。锚点跟着改，并且**顺手钉住新性质**：
+    //    重定向的每一跳都要重新校验，且 http/https 两个 agent 都得是钉过 IP 的那个。
+    assert.match(safe, /current = await assertSafeRemoteUrlDetailed\(next\.toString\(\)\)/);
+    assert.match(safe, /const pinned = pickPinnedAddress\(current\.addresses\)/);
+    assert.match(safe, /const agent = createPinnedAgent\(pinned, secure\)/);
+    assert.match(safe, /httpAgent: agent/);
+    assert.match(safe, /httpsAgent: agent/);
+    // 挑不出可用地址时必须失败，绝不退回"让 Node 自己解析"（那等于没有 pinning）
+    assert.match(safe, /if \(!pinned\) \{/);
     assert.match(safe, /export function assertImageBuffer/);
   });
 

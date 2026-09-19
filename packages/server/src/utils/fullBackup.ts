@@ -29,6 +29,13 @@ import { buildIntegrity, probeCompressorChecksum, writeSha256Sidecar } from './b
 import { RestoreJournalWriter } from './restoreJournal';
 import { StaticPruneReport, formatPruneReport, pruneFolderToMatch } from './staticPrune';
 import { envBool } from './envBool';
+import {
+  SECRET_DIR_MODE,
+  SECRET_FILE_MODE,
+  chmodBestEffort,
+  ensureSecretDir,
+  writeSecretFileSync,
+} from './secretFileMode';
 
 /**
  * 整站备份 / 恢复：把 **数据库（含 waline 评论库）+ 本地静态文件（图床 / 附件 / 自定义页面）**
@@ -244,11 +251,20 @@ function tarCompress(
   stagingDir: string,
   outFile: string,
   spec: CompressorSpec,
+  signal?: AbortSignal,
+  abortMessage = '备份被中止（超过整轮超时）',
 ): Promise<{ bytes: number; sha256: string }> {
   return new Promise((resolve, reject) => {
     const tar = spawn('tar', ['-cf', '-', '-C', stagingDir, '.']);
     const compressor = spawn(spec.compress[0], spec.compress.slice(1));
-    const out = fs.createWriteStream(outFile);
+    // ⚠️ mode 0600：归档落在 `<日志目录>/vanblog-backups/`，而 `<日志目录>` 是 bind mount
+    // 到宿主机的 ⇒ 默认的 0644 等于宿主机上任何本地用户都能读走整库（scrypt 口令哈希、
+    // `settings{type:'jwt'}` 的签名密钥、全部正文）。拿到 jwt 密钥就能伪造管理员 token，
+    // 不需要破解任何口令。理由与两个 POSIX 细节见 utils/secretFileMode.ts。
+    const out = fs.createWriteStream(outFile, { mode: SECRET_FILE_MODE });
+    // 文件已存在时 createWriteStream 的 mode **不生效**（open 不改已有文件的权限），
+    // 所以补一发 chmod；改不动（某些挂载不支持）也不该让备份失败。
+    chmodBestEffort(outFile, SECRET_FILE_MODE);
     const digest = crypto.createHash('sha256');
     let streamed = 0;
     let tarErr = '';
@@ -335,9 +351,22 @@ function tarCompress(
     out.on('close', () => {
       if (!settled) {
         settled = true;
+        // 再收紧一次：上面那发 chmod 可能跑在文件被创建之前（createWriteStream 的 open 是异步的），
+        // 而"归档已经写完"这一刻是唯一能确定文件存在的时机。幂等，成本一次 syscall。
+        chmodBestEffort(outFile, SECRET_FILE_MODE);
         resolve({ bytes: streamed, sha256: digest.digest('hex') });
       }
     });
+    // 超时/取消：整轮备份有可配超时（见 provider 的 doExport），到点了必须能**真的停下来**，
+    // 否则调用方 settle 了、这里还在往盘上写，磁盘满的时候连孤儿进程一起留下。
+    // abort 走 fail()：它会 destroy 输出流、删掉半成品归档、SIGKILL 两个子进程。
+    if (signal) {
+      if (signal.aborted) {
+        fail(abortMessage);
+        return;
+      }
+      signal.addEventListener('abort', () => fail(abortMessage), { once: true });
+    }
   });
 }
 
@@ -583,43 +612,137 @@ function treeStats(dir: string): { files: number; bytes: number } {
   return { files, bytes };
 }
 
+/**
+ * 写盘失败的人话版本：把剩余空间与 errno 一起说出来。
+ * 磁盘满是备份最常见的失败原因，只给一句 ENOSPC 的话运维得自己上机器 df。
+ */
+function describeWriteError(err: unknown, target: string): string {
+  const message = (err as Error)?.message || String(err);
+  const code = (err as NodeJS.ErrnoException)?.code;
+  const free = freeSpaceText(path.dirname(target));
+  return (
+    `写入备份文件失败：${message}（${target}；剩余空间 ${free}` +
+    (code ? `；errno=${code}` : '') +
+    (code === 'ENOSPC' ? ' —— 磁盘已满' : '') +
+    '）'
+  );
+}
+
 async function dumpCollection(
   collection: any,
   ndjsonPath: string,
   indexPath: string,
+  signal?: AbortSignal,
 ): Promise<CollectionSummary> {
   let count = 0;
   let bytes = 0;
-  const stream = fs.createWriteStream(ndjsonPath);
-  const cursor = collection.find({});
-  for await (const doc of cursor) {
-    const line = `${JSON.stringify(encodeDoc(doc))}\n`;
-    if (!stream.write(line)) {
-      // @types/node 24 给 fs.WriteStream 的事件表加了强类型（'drain' 的监听器是 () => void），
-      // 而 Promise 的 resolve 是 (value: unknown) => void，直接塞进去会报 TS2345
-      // （目标签名参数太少）。包一层无参回调即可，运行时行为与原来完全一致。
-      await new Promise<void>((resolve) => stream.once('drain', () => resolve()));
+  // 0600：暂存目录本身是 0700，但导出物是整库明文（口令哈希、jwt 密钥），
+  // 而暂存根目录在 `<static>/tmp` 下 —— 多一层权限，少一个"哪天守卫或挂载配置变了"的意外。
+  const stream = fs.createWriteStream(ndjsonPath, { mode: SECRET_FILE_MODE });
+  chmodBestEffort(ndjsonPath, SECRET_FILE_MODE);
+
+  /**
+   * ⚠️ 这条 error 监听是**必需的**，不是防御性冗余。
+   *
+   * 没有它，磁盘写满（ENOSPC）或数据卷消失时错误会以「EventEmitter 'error' 无监听者」的形式
+   * 抛到进程层 —— 落到 `main.ts` 的 uncaughtException，而那里**只打印不退出**；与此同时下面
+   * `drain` / `end` 的回调**永远不会来**，于是这个 Promise 永不 settle：
+   *  - `backup-status.json` 永远停在"进行中"；
+   *  - 归档是半截的，但没有任何一处说它坏了；
+   *  - await 它的 HTTP 请求一直挂着（cron 备份看起来"还在跑"）；
+   *  - SIGTERM 的优雅退出被拖到超时。
+   * 用户看不到"备份失败"，只看到几行 uncaughtException。
+   *
+   * 同文件其它每一处流都挂了 error 监听（tar 管道、tar 成员哈希、恢复侧的解包），
+   * 只有这一处漏了 —— 而它恰好是备份里**写盘量最大**的一段。
+   */
+  let streamError: Error | null = null;
+  const errored = new Promise<never>((_resolve, reject) => {
+    stream.once('error', (err: Error) => {
+      streamError = err;
+      reject(err);
+    });
+  });
+  // 先挂一个空 catch：否则"错误发生但这一轮 race 已经结束"时 Node 会报 unhandledRejection
+  // （Node 20+ 默认直接退出进程）。真正的错误仍然通过下面的 race 传出去。
+  errored.catch(() => undefined);
+  const race = <T>(p: Promise<T>): Promise<T> => Promise.race([p, errored]);
+
+  const abortError = () =>
+    new BadRequestException('备份被中止（超过整轮超时）：数据库导出已停止，本次备份按失败计');
+
+  try {
+    const cursor = collection.find({});
+    try {
+      for await (const doc of cursor) {
+        // 逐条检查取消：一次超时之后继续往盘上写没有意义，而且会占着磁盘与连接
+        if (signal?.aborted) {
+          throw abortError();
+        }
+        const line = `${JSON.stringify(encodeDoc(doc))}\n`;
+        if (!stream.write(line)) {
+          // @types/node 24 给 fs.WriteStream 的事件表加了强类型（'drain' 的监听器是 () => void），
+          // 而 Promise 的 resolve 是 (value: unknown) => void，直接塞进去会报 TS2345
+          // （目标签名参数太少）。包一层无参回调即可，运行时行为与原来完全一致。
+          // ⚠️ 必须 race 上 errored：流坏了 'drain' 永远不会来。
+          await race(new Promise<void>((resolve) => stream.once('drain', () => resolve())));
+        }
+        count += 1;
+        bytes += Buffer.byteLength(line);
+      }
+    } finally {
+      try {
+        await cursor.close?.();
+      } catch {
+        // 关不掉游标不影响结论：错误已经从别处传出去了
+      }
     }
-    count += 1;
-    bytes += Buffer.byteLength(line);
+    // 同上：原来写 `stream.end(resolve)`，运行时 Node 把函数实参当回调（行为正确），
+    // 但类型上是撞进了 `end(chunk: any, cb?)` 重载 —— resolve 被当成待写数据。
+    // 显式写成回调，类型与运行时语义一致，行为不变。
+    await race(new Promise<void>((resolve) => stream.end(() => resolve())));
+  } catch (err) {
+    try {
+      stream.destroy();
+    } catch {
+      // ignore
+    }
+    // 半成品 NDJSON 必须删掉：留在暂存目录里会被 tar 打进归档，
+    // 变成一份"看起来完整、其实少一半文档"的备份
+    try {
+      fs.rmSync(ndjsonPath, { force: true });
+    } catch {
+      // ignore
+    }
+    if (streamError) {
+      // 用户可见的错误一律 BadRequestException：普通 Error 会被 Nest 变成
+      // 500 + "Internal server error"，前端与 cron 都看不到原因
+      throw new BadRequestException(describeWriteError(streamError, ndjsonPath));
+    }
+    throw err;
   }
-  // 同上：原来写 `stream.end(resolve)`，运行时 Node 把函数实参当回调（行为正确），
-  // 但类型上是撞进了 `end(chunk: any, cb?)` 重载 —— resolve 被当成待写数据。
-  // 显式写成回调，类型与运行时语义一致，行为不变。
-  await new Promise<void>((resolve) => stream.end(() => resolve()));
+  // end 的回调来了不代表没出错（错误可能在 flush 阶段才到），所以再确认一次
+  if (streamError) {
+    throw new BadRequestException(describeWriteError(streamError, ndjsonPath));
+  }
 
   let indexes: any[] = [];
   try {
     const raw = await collection.indexes();
     indexes = (raw || []).filter((item: any) => item?.name !== '_id_');
-    fs.writeFileSync(indexPath, JSON.stringify(indexes.map((item) => encodeDoc(item)), null, 0));
+    writeSecretFileSync(indexPath, JSON.stringify(indexes.map((item) => encodeDoc(item)), null, 0));
   } catch {
-    fs.writeFileSync(indexPath, '[]');
+    writeSecretFileSync(indexPath, '[]');
   }
   return { count, bytes, indexes: indexes.length };
 }
 
-async function dumpDatabase(client: MongoClient, dbName: string, outDir: string): Promise<{
+async function dumpDatabase(
+  client: MongoClient,
+  dbName: string,
+  outDir: string,
+  signal?: AbortSignal,
+): Promise<{
   collections: Record<string, CollectionSummary>;
   documents: number;
 }> {
@@ -636,6 +759,7 @@ async function dumpDatabase(client: MongoClient, dbName: string, outDir: string)
       db.collection(name),
       path.join(outDir, `${name}.ndjson`),
       path.join(outDir, `${name}.indexes.json`),
+      signal,
     );
     collections[name] = summary;
     documents += summary.count;
@@ -665,6 +789,15 @@ export interface CreateFullBackupOptions {
    * 调用方按 `VANBLOG_BACKUP_INCLUDE_CADDY` 决定要不要传；目录读不到只 WARN 不失败。
    */
   caddyDataPath?: string;
+  /**
+   * 整轮备份的超时/取消信号（provider 按 `VANBLOG_BACKUP_TIMEOUT_MINUTES` 建）。
+   *
+   * ⚠️ 为什么要把信号**传进来**、而不是只在调用方 `Promise.race`：race 只让调用方解脱，
+   * 底下的 mongo 游标、tar 与压缩器子进程还在跑 —— 磁盘满的时候会连孤儿进程一起留下。
+   * 传进来之后：导出循环逐条检查取消，tar 管道收到 abort 走 `fail()`
+   * （destroy 输出流 + 删半成品归档 + SIGKILL 两个子进程），是真的停下来。
+   */
+  abortSignal?: AbortSignal;
   logger?: BackupLogger;
 }
 
@@ -698,8 +831,11 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
     );
   }
   const staticPath = options.staticPath;
-  const outDir = ensureDir(options.outDir);
-  const workRoot = ensureDir(options.workDir || path.join(staticPath, 'tmp'));
+  // 0700：归档目录里是整站凭据，而它挂在宿主机上（理由见 utils/secretFileMode.ts）。
+  // ⚠️ 对**已存在**的目录也会 chmod，所以老部署（现在是 0755）升级后第一次备份就收紧了。
+  const outDir = ensureSecretDir(options.outDir, SECRET_DIR_MODE);
+  // 暂存根目录同样收紧：它下面每个 `full-backup-*` 里都是**未压缩的整库明文**。
+  const workRoot = ensureSecretDir(options.workDir || path.join(staticPath, 'tmp'), SECRET_DIR_MODE);
   const staging = fs.mkdtempSync(path.join(workRoot, 'full-backup-'));
 
   try {
@@ -727,7 +863,7 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
     );
     for (const dbName of dbNames) {
       logger.log(`导出数据库 ${dbName} ...`);
-      const dumped = await dumpDatabase(options.client, dbName, path.join(staging, 'db', dbName));
+      const dumped = await dumpDatabase(options.client, dbName, path.join(staging, 'db', dbName), options.abortSignal);
       if (!Object.keys(dumped.collections).length) {
         rmrf(path.join(staging, 'db', dbName));
         continue;
@@ -861,7 +997,7 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
     logger.log(`打包中（${spec.label}）...`);
     let streamed: { bytes: number; sha256: string };
     try {
-      streamed = await tarCompress(staging, tempPath, spec);
+      streamed = await tarCompress(staging, tempPath, spec, options.abortSignal);
     } catch (err) {
       rmTemp(tempPath);
       throw err;
@@ -915,7 +1051,8 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
     manifest.totals.archiveSha256 = readBack.sha256;
     // sidecar 清单：后台列表页读的 cheap path（内部那份没有 archiveBytes / archiveSha256，
     // 因为它们在打包时还不存在 —— 校验时会把这两个字段剥掉再比对）
-    fs.writeFileSync(`${archivePath}.manifest.json`, JSON.stringify(manifest, null, 2));
+    // 0600：清单里有全部成员路径与逐成员 sha256，和归档放在一起、一起收紧
+    writeSecretFileSync(`${archivePath}.manifest.json`, JSON.stringify(manifest, null, 2));
     // 整归档 sha256 sidecar（`sha256sum -c` 与 `vanblog.sh verify` 都吃这个格式）：
     // 归档被拷去别处时把它一起带走，就能在没有 server 的机器上验完整性
     if (writeSha256Sidecar(archivePath, readBack.sha256) === null) {
@@ -1008,6 +1145,131 @@ export function cleanupStaleExportTemps(
     }
   }
   return removed;
+}
+
+/**
+ * 崩溃遗留的**工作目录**（不是导出临时文件）：
+ *  - `<static>/tmp/full-backup-*`  —— 备份时的暂存树（未压缩的整库明文 + 图床硬链接）
+ *  - `<static>/tmp/full-restore-*` —— 恢复时的解包树（**整个站点**：NDJSON 明文、图床、主题、自定义页面）
+ *  - `<backupPath>/upload-tmp/restore-upload-*` —— 从后台上传的归档暂存（单个最大 8GB）
+ *
+ * 正常路径在 `finally` 里 `rmrf` 掉了；但进程被杀（OOM / 容器重启 / 恢复途中崩溃）时
+ * `finally` 不执行，于是**整站明文机密**留在静态目录树里，而且每崩一次泄漏一份"整站大小"的磁盘。
+ * 导出侧有清道夫（`cleanupStaleExportTemps`），恢复侧没有 —— 这个不对称是遗漏，不是设计。
+ *
+ * ⚠️ 匿名 HTTP 读不到它们（`utils/staticGuard` 把 `export`/`tmp`/`upload-tmp` 三段拦成 403），
+ * 所以这不是直接泄露；但机密长期躺在静态树里、加上磁盘被吃掉，仍然必须清。
+ */
+export const STALE_WORK_DIR_PREFIXES = ['full-backup-', 'full-restore-'] as const;
+export const STALE_UPLOAD_PREFIXES = ['restore-upload-'] as const;
+
+/** 超过这个小时数的工作目录/上传暂存认定为崩溃遗留；0 = 关闭清理。 */
+export const BACKUP_STALE_WORK_HOURS_ENV = 'VANBLOG_BACKUP_STALE_WORK_HOURS';
+export const DEFAULT_BACKUP_STALE_WORK_HOURS = 6;
+
+/**
+ * 与 `resolveStaleWarnHours` 同一套语义：缺失/空串/非数字/负数 ⇒ 回落默认；**0 = 关**；
+ * 上限夹到一年，免得写错一个数字变成"永不清理"或"每次都清"。
+ */
+export function resolveStaleWorkHours(
+  raw: string | undefined = process.env[BACKUP_STALE_WORK_HOURS_ENV],
+  fallback: number = DEFAULT_BACKUP_STALE_WORK_HOURS,
+): number {
+  if (raw === undefined || String(raw).trim() === '') {
+    return fallback;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(n), 24 * 365);
+}
+
+export interface StaleWorkEntry {
+  path: string;
+  name: string;
+  bytes: number;
+  /** 目录还是文件（上传暂存是文件） */
+  kind: 'dir' | 'file';
+}
+
+export interface StaleWorkCleanupResult {
+  removed: StaleWorkEntry[];
+  bytes: number;
+  /** 扫了多少个候选（含"太新所以没删"的），用来判断清理器有没有在跑 */
+  scanned: number;
+  /** 关掉了（maxAgeMs <= 0）时为 true，调用方据此不打无意义的日志 */
+  disabled: boolean;
+}
+
+/**
+ * 清掉崩溃遗留的工作目录与上传暂存（启动时由主实例调用）。
+ *
+ * ⚠️ 铁律与 `cleanupStaleExportTemps` 一致：**只删够旧的**。共享卷上可能正有另一个实例
+ * 在备份/恢复，删掉别人正在写的目录是最坏的行为（那一次的归档或恢复会莫名其妙坏掉）。
+ * 默认 6 小时：实测一次整站导出 28s、恢复分钟级，6 小时已经极其宽松。
+ *
+ * 任何一步失败都只跳过那一个条目，绝不抛给启动流程。
+ */
+export function cleanupStaleWorkDirs(options: {
+  staticPath: string;
+  backupDir: string;
+  maxAgeMs?: number;
+  now?: number;
+}): StaleWorkCleanupResult {
+  const maxAgeMs = options.maxAgeMs ?? resolveStaleWorkHours() * 60 * 60 * 1000;
+  const now = options.now ?? Date.now();
+  const result: StaleWorkCleanupResult = { removed: [], bytes: 0, scanned: 0, disabled: false };
+  if (!(maxAgeMs > 0)) {
+    result.disabled = true;
+    return result;
+  }
+
+  const targets: { dir: string; prefixes: readonly string[]; kind: 'dir' | 'file' | 'any' }[] = [
+    { dir: path.join(options.staticPath || '', 'tmp'), prefixes: STALE_WORK_DIR_PREFIXES, kind: 'dir' },
+    {
+      dir: path.join(options.backupDir || '', 'upload-tmp'),
+      prefixes: STALE_UPLOAD_PREFIXES,
+      kind: 'file',
+    },
+  ];
+
+  for (const target of targets) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(target.dir);
+    } catch {
+      continue; // 目录不存在（全新部署）就读不到，正常
+    }
+    for (const name of names) {
+      if (!target.prefixes.some((prefix) => name.startsWith(prefix))) {
+        continue;
+      }
+      const full = path.join(target.dir, name);
+      try {
+        const stat = fs.statSync(full);
+        const isDir = stat.isDirectory();
+        if (target.kind === 'dir' && !isDir) {
+          continue; // 同名文件不是我们造的，别碰
+        }
+        if (target.kind === 'file' && isDir) {
+          continue;
+        }
+        result.scanned += 1;
+        // ⚠️ 用 mtime 判年龄：正在被写的那一份 mtime 一定是新的
+        if (now - stat.mtimeMs < maxAgeMs) {
+          continue;
+        }
+        const bytes = isDir ? treeStats(full).bytes : stat.size;
+        fs.rmSync(full, { recursive: true, force: true });
+        result.removed.push({ path: full, name, bytes, kind: isDir ? 'dir' : 'file' });
+        result.bytes += bytes;
+      } catch {
+        // 删不掉就留着，下次启动再试；绝不影响启动
+      }
+    }
+  }
+  return result;
 }
 
 function rmTemp(tempPath: string) {
@@ -1228,11 +1490,121 @@ export function findUnsafeArchiveMember(members: string[]): string | null {
   return null;
 }
 
+/** 恢复解包前的"成员总字节"上限（环境变量名；见 restoreMaxTotalBytes） */
+export const RESTORE_MAX_TOTAL_BYTES_ENV = 'VANBLOG_RESTORE_MAX_TOTAL_BYTES';
 /**
- * 恢复前的归档成员检查：不安全就抛 400，**此时还没有写任何东西**。
- * 返回成员条数（调用方可以拿去打日志）。
+ * 默认上限 100 GiB。
+ *
+ * 为什么需要一个上限：匿名的 `POST /api/admin/init/restore` 允许上传 **8GB** 归档
+ * （`utils/restoreUpload.ts` 的 multer limits），而 `decompressUntar` 是
+ * `解压器 | tar -xf - -C staging`，**没有任何体积上限**。于是一个几 MB 的 zstd 炸弹
+ * （成员头里声明巨大的 size，或高压缩比的重复内容）就能把磁盘写满 —— mongo 与日志一起死，
+ * 而且是匿名、限流只有 5 次/10 分钟/IP 就能做到的。
+ * 100 GiB 对真实站点足够宽（图床几十万张也就这个量级），又能在**解包之前**拦掉炸弹。
  */
-export async function assertRestorableArchive(archivePath: string): Promise<number> {
+const RESTORE_MAX_TOTAL_BYTES_DEFAULT = 100 * 1024 * 1024 * 1024;
+const RESTORE_MAX_TOTAL_BYTES_MIN = 1024 * 1024; // 1 MiB：再小就没法恢复任何真实归档了
+const RESTORE_MAX_TOTAL_BYTES_LIMIT = 1024 * 1024 * 1024 * 1024; // 1 TiB 天花板
+
+/**
+ * 读 `VANBLOG_RESTORE_MAX_TOTAL_BYTES`（字节数）。
+ * 语义与 `utils/envNumber.ts` 一致：缺失 / 空串 / 非数字 / ≤0 ⇒ 回落默认，
+ * 合法值夹到 `[1 MiB, 1 TiB]` 再向下取整 —— **绝不因为写错而变成"不限制"**。
+ */
+export function restoreMaxTotalBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = String(env[RESTORE_MAX_TOTAL_BYTES_ENV] ?? '').trim();
+  if (!raw) {
+    return RESTORE_MAX_TOTAL_BYTES_DEFAULT;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return RESTORE_MAX_TOTAL_BYTES_DEFAULT;
+  }
+  return Math.min(Math.max(Math.floor(n), RESTORE_MAX_TOTAL_BYTES_MIN), RESTORE_MAX_TOTAL_BYTES_LIMIT);
+}
+
+/**
+ * 目录所在卷的**剩余字节**；读不到就返回 null（**不猜、不当成 0**）。
+ *
+ * ⚠️ null 与 0 必须分开：返回 0 会让所有恢复都失败（平台没有 `statfsSync`、
+ * 或目录权限读不到时），而那与"磁盘真的满了"是两件事。读不到就跳过这道闸门，
+ * 由成员总字节上限兜底。
+ */
+export function freeSpaceBytes(dir: string): number | null {
+  try {
+    // Node 18.15+ 的 statfsSync；容器与本机都是 Node 24
+    const stats = (fs as any).statfsSync?.(dir);
+    if (!stats || typeof stats.bavail !== 'number' || typeof stats.bsize !== 'number') {
+      return null;
+    }
+    const bytes = stats.bavail * stats.bsize;
+    return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 解包要预留的余量：256 MiB。
+ * 理由是"刚好装满"本身就是故障：日志、恢复 journal、mongo 的 journal、以及文件系统
+ * 自己的元数据都要地方；把盘写到 100% 的恢复即使"成功"也会让站点起不来。
+ */
+const RESTORE_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+
+/**
+ * 剩余空间够不够的**纯判定**（不碰 fs，所以边界能直接单测）。
+ *
+ * @param totalBytes 归档成员 size 之和（= 解包后要写的字节数）
+ * @param freeBytes  目标卷剩余字节；**null = 读不到**
+ * @returns 不够时返回可直接抛给用户的错误消息；够、或读不到剩余空间时返回 null
+ *
+ * ⚠️ `freeBytes === null` 必须返回 null（跳过这道闸门）而不是拒绝：读不到剩余空间是
+ * 平台/权限差异，不是"磁盘满了"。把它当 0 会让**所有**恢复都失败。
+ * 体积上限那道闸门与此无关，始终生效。
+ */
+export function restoreSpaceShortfallMessage(
+  totalBytes: number,
+  freeBytes: number | null,
+  targetDir: string,
+): string | null {
+  if (freeBytes === null || !Number.isFinite(freeBytes)) {
+    return null;
+  }
+  const total = Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : 0;
+  const need = total + RESTORE_FREE_SPACE_RESERVE_BYTES;
+  if (freeBytes >= need) {
+    return null;
+  }
+  return (
+    `磁盘空间不够，已拒绝恢复（没有解包、没有写盘）：解包需要约 ${formatBytes(total)}` +
+    `（另留 ${formatBytes(RESTORE_FREE_SPACE_RESERVE_BYTES)} 余量，合计 ${formatBytes(need)}），` +
+    `而 ${targetDir} 所在卷只剩 ${formatBytes(freeBytes)}。` +
+    `清出空间后再试；或给恢复指定一个更大的工作目录（编排里的静态目录 / ` +
+    `VAN_BLOG_STATIC_PATH，恢复的临时解包就在它下面的 tmp/）`
+  );
+}
+
+export interface RestorableArchiveOptions {
+  /**
+   * 解包目标目录（staging）。给了就多做一道"剩余空间够不够"的闸门；
+   * 不给（例如初始化页那次**重复**的前置检查，那时还没有 staging）就只做成员总字节上限。
+   */
+  targetDir?: string;
+}
+
+/**
+ * 恢复前的归档检查：不安全就抛 400，**此时还没有写任何东西**。
+ * 返回成员条数（调用方可以拿去打日志）。
+ *
+ * 三道闸门，全部在解包之前：
+ *  1. 成员名/类型（绝对路径、`..`、符号链接）—— 见 `findUnsafeArchiveEntry`；
+ *  2. 成员 `size` 之和不超过 `restoreMaxTotalBytes()`（防压缩炸弹写满磁盘）；
+ *  3. 目标卷剩余空间够（`total + 256 MiB` 余量）—— 读不到剩余空间就跳过这一道。
+ */
+export async function assertRestorableArchive(
+  archivePath: string,
+  options: RestorableArchiveOptions = {},
+): Promise<number> {
   const { entries, decompressError } = await listArchiveEntries(archivePath);
   if (decompressError) {
     // 归档解压都过不去（截断/位翻转）：这时"成员表"是不完整的，绝不能当成"检查通过"
@@ -1243,6 +1615,31 @@ export async function assertRestorableArchive(archivePath: string): Promise<numb
     throw new BadRequestException(
       `备份归档里有会写到解包目录之外的成员（${unsafe.name}：${unsafe.reason}），已拒绝恢复`,
     );
+  }
+  // 成员 size 取自 tar 头部（`utils/backupTarStream.ts` 的 TarEntryInfo.size），
+  // 所以这一步**不需要解包**就能知道要写多少字节。目录/软链/硬链的 size 是 0，天然不计。
+  const totalBytes = entries.reduce(
+    (sum, e) => sum + (Number.isFinite(e.size) && e.size > 0 ? e.size : 0),
+    0,
+  );
+  const cap = restoreMaxTotalBytes();
+  if (totalBytes > cap) {
+    throw new BadRequestException(
+      `备份归档解包后有 ${formatBytes(totalBytes)}（${entries.length} 个成员），` +
+        `超过允许的 ${formatBytes(cap)}，已拒绝恢复（没有解包、没有写盘）。` +
+        `这通常说明它不是本功能导出的整站备份，或是一个压缩炸弹。` +
+        `确有大站要恢复：给 server 设 ${RESTORE_MAX_TOTAL_BYTES_ENV}=<字节数> 放宽上限，` +
+        `并先确认磁盘够（当前需要约 ${formatBytes(totalBytes)}）`,
+    );
+  }
+  const targetDir = String(options.targetDir ?? '').trim();
+  if (targetDir) {
+    // 判定抽成了纯函数 `restoreSpaceShortfallMessage`，所以"刚好够 / 差一个字节 / 读不到"
+    // 这三种边界能直接单测（`fs.statfsSync` 在 jest 里不可重定义，没法 mock 出剩余空间）
+    const shortfall = restoreSpaceShortfallMessage(totalBytes, freeSpaceBytes(targetDir), targetDir);
+    if (shortfall) {
+      throw new BadRequestException(shortfall);
+    }
   }
   return entries.length;
 }
@@ -1523,7 +1920,8 @@ export async function restoreFullBackup(
   }
   const pruneEnabled = options.pruneStatic ?? restorePruneStaticEnabled();
   const dropAbsent = options.dropAbsentCollections ?? restoreDropAbsentEnabled();
-  const workRoot = ensureDir(options.workDir || path.join(options.staticPath, 'tmp'));
+  // 0700：这个目录下面就是**解包后的整站**（明文 NDJSON、含口令哈希与 jwt 密钥）。
+  const workRoot = ensureSecretDir(options.workDir || path.join(options.staticPath, 'tmp'), SECRET_DIR_MODE);
   const staging = fs.mkdtempSync(path.join(workRoot, 'full-restore-'));
   const notes: string[] = [];
   const pruned: StaticPruneReport[] = [];
@@ -1546,7 +1944,10 @@ export async function restoreFullBackup(
     // 放在这里两条路由自动一致；init 路由那一次是重复检查（多约 0.2s，值得）。
     // 另外这一遍也是"staging 里不可能出现符号链接"的保证：后面读 manifest.json /
     // 拷静态文件时，路径就不会被一个种进来的软链牵着走到解包目录外面去。
-    const memberCount = await assertRestorableArchive(archivePath);
+    // ⚠️ 传 staging 是为了顺带做**体积/剩余空间**闸门：解包（`解压器 | tar -xf -`）本身
+    //    没有任何上限，而匿名的 init/restore 允许上传 8GB，所以一个压缩炸弹就能把盘写满。
+    //    闸门必须在 `decompressUntar` 之前，也就是这里。
+    const memberCount = await assertRestorableArchive(archivePath, { targetDir: staging });
     logger.log(`归档成员检查通过（${memberCount} 个成员，无绝对路径 / .. / 符号链接）`);
     try {
       logger.log(`解包中（${spec.label}）...`);

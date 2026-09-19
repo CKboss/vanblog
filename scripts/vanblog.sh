@@ -2258,7 +2258,11 @@ write_sha256_sidecar() {
   local hex
   hex="$(sha256sum "${file}" 2>/dev/null | cut -d' ' -f1)"
   if [[ -n "${hex}" ]] && printf '%s  %s\n' "${hex}" "$(basename "${file}")" >"${file}.sha256"; then
-    chmod 0644 "${file}.sha256" 2>/dev/null || true
+    # ⚠️ 0600，不是 0644：sidecar 与归档同目录同命运，而归档目录（<数据目录>/log/vanblog-backups）
+    # 是 **bind mount 到宿主机**的 —— 0644 等于宿主机上任何本地用户都能读。sidecar 本身只有
+    # 一个哈希，但它会泄露归档名与备份节奏；server 侧写的同名 sidecar 也是 0600
+    # （utils/backupIntegrity.ts 的 writeSha256Sidecar），两边口径必须一致。
+    chmod 0600 "${file}.sha256" 2>/dev/null || true
     echo -e "  校验和  ：已写入 ${yellow}$(basename "${file}").sha256${plain}（${VANBLOG_SELF_NAME} verify 时比对；拷走归档时记得带上它）"
   else
     rm -f "${file}.sha256" 2>/dev/null || true
