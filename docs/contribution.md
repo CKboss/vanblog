@@ -218,6 +218,9 @@ cd packages/website && ./node_modules/.bin/vitest run           # 前台（⚠�
 cd packages/admin   && node --test --test-reporter=tap tests/unit/*.test.js   # 后台
 for t in scripts/tests/*.test.sh; do bash "$t"; done            # 部署脚本与文档守卫（约 3 分钟）
 (cd packages/server  && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit)   # 类型检查，两条都要 0 错
+# ⚠️ tsconfig.dev.json 是**本机专用、没有入库**；CI 检查的是入库的那两份：
+(cd packages/server  && ./node_modules/.bin/tsc -p tsconfig.json      --noEmit)   # 含 227 个 spec 与 test/
+(cd packages/server  && ./node_modules/.bin/tsc -p tsconfig.build.json --noEmit)   # 镜像里 nest build 的真实形状
 (cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json)
 ```
 
@@ -234,23 +237,56 @@ for t in scripts/tests/*.test.sh; do bash "$t"; done            # 部署脚本�
 
 ### CI 会跑什么、什么时候跑
 
-两个测试 workflow（`.github/workflows/server-test.yml`、`admin-e2e.yml`）的触发条件**完全一样**：
-push 或 pull_request 到 `master` / `dev/dsh`，**且**改动落在这些路径里 ——
-`packages/**`、`scripts/**`、`Dockerfile`、`entrypoint.sh`、`caddyTemplate.json`、
-`caddyFallbackTemplate.json`、`docker-compose/**`、`pnpm-lock.yaml`、`package.json`、`patches/**`。
+⚠️ 这一节在 2026-09-20 重写过了。旧版写的是「CI 只跑 6 套 shell 守卫、不跑任何类型检查，`docs/**` 不触发 CI」——
+那时是真的，现在是假的：**27 个守卫全部进了 CI**，类型检查与真实构建也进了，文档改动有了自己的 workflow。
 
-⚠️ **`docs/**` 不在这个清单里**：只改文档的提交**不会触发任何 CI**。所以两条文档守卫必须本地跑
-（`bash scripts/tests/docs-links.test.sh` 与 `bash scripts/tests/docs-consistency.test.sh`），
-CI 不会替你兜底。
+现在有六个 workflow：
 
-| workflow | 跑什么 |
+| workflow | 什么时候跑 | 跑什么 |
+| --- | --- | --- |
+| `server-test` | push / pull_request 到 `master`、`dev/dsh`，且改动落在代码路径里（`packages/**`、`scripts/**`、`Dockerfile`、`entrypoint.sh`、两份 caddy 模板、`docker-compose/**`、`pnpm-lock.yaml`、`package.json`、`patches/**`） | 三个**并行** job，见下 |
+| `admin-e2e` | 触发条件与 `server-test` 完全一样 | 后台单元测试 → 装 playwright chromium → `playwright test --list` 先做一次便宜的配置自检 → mermaid e2e → 失败时把报告与 trace 当 artifact 上传 |
+| `docs-test` | push / pull_request 到 `dev/dsh`，且改动落在 `docs/**`、`README.md`、`scripts/vanblog.sh` | 三个文档守卫（`docs-links`、`docs-consistency`、`reverse-proxy-host-header`，合计约 2 秒、无依赖）+ `docs:build` |
+| `nightly` | 每天定时（`30 19 * * *`）+ 手动 `workflow_dispatch` | 真 `caddy validate`、真镜像构建 + 冒烟、`docs:build`、以及一个 `if: always()` 的汇总 job |
+| `publish-ghcr` / `release-fork` | 打 `v*` 标签或手动触发 | 发镜像 / 发 Release |
+
+`server-test` 的三个 job 是**并行**的，所以 PR 的墙钟时间没变（仍由那个 20–30 分钟的主 job 决定）：
+
+| job | 内容 |
 | --- | --- |
-| `server-test` | 6 套 shell 守卫（`dockerfile-alpine-sharp`、`vanblog-update`、`vanblog-reset-https`、`vanblog-uninstall`、`vanblog-download-fallback`、`reverse-proxy-host-header`）→ 三个包的单元测试（server jest、website vitest、admin `node --test`）→ **10 套要真 mongod 的 e2e**（backup-restore、post-ISR、admin-meta、force-login-comment、waline-extra-options、CDN-URL、word-count、friend-link、page-copy、admin-cache-control） |
-| `admin-e2e` | 后台单元测试 → 装 playwright chromium → `playwright test --list` 先做一次便宜的配置自检 → mermaid e2e → 失败时把 playwright 报告与 trace 当 artifact 上传 |
+| `server-test` | **两份 tsconfig 的类型检查**（`tsconfig.json` 覆盖 473 个文件、含 227 个 spec 与 `test/`；`tsconfig.build.json` 覆盖 245 个、零 spec，是镜像里 `nest build` 的真实形状）→ website 类型检查 → **真实的 `nest build`** → 两套需要依赖或 `dist` 的守卫（备份加密/口令/密钥轮换、`vanblog.sh restore`）→ 三个包的单元测试 → **10 套要真 mongod 的 e2e** |
+| `guards-core` | **23 个**不需要依赖、容器引擎或 caddy 二进制的守卫（约 114 秒守卫时间、整个 job 约 2.6 分钟）：文档两条、caddy 两条、Dockerfile 两条、镜像运行时、`start.js`、`build-image-local` 静态契约、基准工具、脚本加固、生成的 compose、`install-cron`、`reset`、`verify`、`backup-restore`、灾难恢复/离线安装、waline reset、`update`、`https reset`、`uninstall`、`download fallback`、反代 Host 头 |
+| `guards-slow` | 2 个较慢的：恢复演练逻辑（620 条断言；**真起容器那部分默认不跑**，要显式打开活体开关并提供一份真归档与镜像，见 `scripts/tests/vanblog-drill.test.sh` 里 `LIVE` 那一段）、源码安装路径（用假的 git/docker/compose，不联网不碰守护进程） |
 
-两边都用 **Node 24** 与 `pnpm install --frozen-lockfile`，所以"本机过了 CI 没过"通常是 Node 版本或
-lockfile 没提交导致的。剩下的 shell 守卫（`scripts/tests/` 下共 24 个文件）CI **只跑上面那 6 个**，
-其余要本地 `for t in scripts/tests/*.test.sh; do bash "$t"; done` 全跑一遍。
+⇒ 27 个守卫 = `guards-core` 的 23 + `guards-slow` 的 2 + 主 job 里那 2 个需要依赖的。
+两个 job 都会先确保 `zstd` 存在：`vanblog-verify` 没有它会**硬失败**（实测 `passed=0 failed=1`），
+而 `vanblog-restore` 与备份加密那套在缺依赖或缺 `dist` 时会**静默少跑断言** —— 后者因此被放在已经装依赖并构建过的
+job 里，并且断言 `note=0`，让"退化"算失败而不是算通过。
+
+⚠️ 三条如实写明的残余风险：
+
+1. **nightly 红了要靠有人订阅通知**。汇总 job 会把结果写进 step summary 与 artifact、并把整个 run 标红，
+   GitHub 也会给 watcher 发邮件，但**仓库没有 CI 侧的主动告警**（`VANBLOG_BACKUP_ALERT_WEBHOOK` 是产品功能，
+   与 CI 无关）。`cancel-in-progress: false` 是有意的：下一次定时开始时取消一个 40 分钟的构建，
+   等于它永远跑不完、也永远不报告。
+2. **nightly 也覆盖不到两件事**：恢复演练的**真容器**部分、以及「加密归档到底能不能被恢复」——
+   两者都需要一份真实的整站归档，那是站点数据，不能放进仓库。别因为"有 nightly"就以为这两条被守住了。
+3. **admin 的类型检查故意没进 CI**：它现在有 115 个错，一个常年红着的检查会训练所有人忽略红色，
+   那比没有检查更糟。要加得先清完。
+
+⚠️ 两个会绊人的坑（都是本轮真踩到的）：
+
+- **`packages/server/tsconfig.dev.json` 没有入库**（本机专用，用来绕开家目录里的 `@types/bun`，
+  已在 `.git/info/exclude` 里），所以 CI 不能用它 —— 上面那两份才是提交进仓库的配置。
+- **不要用伞形 `--strict` 评估「离严格模式还有多远」**：tsconfig 里显式写的 `false` 会**压过**命令行的
+  `--strict`，实测 `tsc --strict` 只报 **6** 个错，而逐项显式打开开关是约 **380** 个 —— 差 60 多倍。
+  照着 6 这个数字做计划会严重低估工作量。
+
+📌 加类型检查当天就抓到一个**一直在的错误**：`test/backup-restore.e2e-spec.ts` 用 12 个参数构造
+`BackupController`，而本轮给它加了第 13 个（密钥轮换要的 `JwtService`）—— 两个单元 spec 当时改了，这个 e2e 漏了。
+它一直没被发现，是因为本地类型检查用的是 `tsconfig.dev.json`（继承 build 配置，因此**不含 `test/`**），
+而 CI 当时什么都不查；运行时也不崩（缺的那个参数是 `undefined`，只有轮换路径会读它），ts-jest 也不报诊断。
+
 
 ## 镜像构建
 
