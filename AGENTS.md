@@ -8712,6 +8712,76 @@ if (clusterWorkers > 1 && cluster.isPrimary) { …runBootstrapWithDbRetry(startP
 （更正文字把单元格分隔符吃掉了），已在划掉的条目名后补回 `|`。⚠️ 这类缺陷**不会被任何守卫发现**（`docs-consistency` 查的是变量名与链接，
 不查 AGENTS 的表格列数）⇒ 规矩：**往表格里追加"更正块"时，要数列数**。
 
+### 7.86 🔴 C10K 那批 `CLOSED_NO_RESPONSE` 归因完成：是 **rootlessport** 关的，不是 VanBlog；而"静态 vs API"那个框架是**跑序造成的假象**
+
+留档 `vanblog_dev/tmp/attr-evidence/`（33MB，含 `CONCLUSION.md` 与 11 份原始数据）。镜像 `r28-gate` = `local@16bf3e1e`。
+
+**决定性证据（主判别器）**：失败的请求**根本没到达 caddy**，而且**逐次精确相等** ——
+| 跑 | 客户端报告 | caddy 访问日志实际处理 | 差值 |
+|---|---|---|---|
+| 完整协议 | `200=9601 失败=399` | **9601**（全 `status:200`、全 `size:8272`、9601 个不同 `remote_port`） | **399** |
+| 孤立跑 | `200=8232 失败=1768` | **8232** | **1768** |
+
+⚠️ 而且失败期间 caddy/Node **一点都不慢**（该窗口 `duration` p50=**0.127s**、p95=0.866s、max=1.609s）⇒ 不是上游慢、不是超时。
+🔴 **尺子有效性正对照先做了**：孤立跑（`200=10000 失败=0`）时 caddy 访问日志 Δ`/api/public/meta` = **恰好 10000** ⇒
+"数访问日志条数"这把尺子在成功路径上逐条对得上（caddy 记 `handled request`，**连 502 都会记**）。
+
+**最强的一条**：把同一个 loadtest **拷进容器、直连 `127.0.0.1:80`（绕过 rootlessport）⇒ 7/7 次全 `10000/0`，
+合计 70,000 请求 0 失败**，其中 **4 次是紧接在外部路径连续失败之后跑的**（同一时刻、同一服务端、同一 node v24.21.0）。
+而经 rootlessport 的 **15 次里 8 次失败**（399/481/504/806/1287/1287/1319/1768/5732）。
+⇒ 结论：**`rootlessport`（rootless podman 的用户态端口转发器，`/usr/libexec/podman/rootlessport`，podman 4.9.3）
+在"宿主内核完成握手之后、任何请求字节到达 caddy 之前"干净关闭了连接。**
+
+**桶语义已核实（这是归因的前提）**：`loadtest.cjs` 请求阶段每条 socket 有**四个互斥**结算路径，`finishOnce` 保证先到者胜：
+`data`(收到 `\r\n\r\n`)→状态码桶/`err_BAD_STATUS_LINE`；`error`→`request_err_<CODE>`；
+**`timeout`→`request_err_CLIENT_TIMEOUT`（独立桶）**；`close`→`request_err_CLOSED_NO_RESPONSE`。
+⇒ 🔴 **客户端自己的超时不会被记进 `CLOSED_NO_RESPONSE`**（它有独立桶，历次明细里恒为 0）⇒
+这个桶确定是"对端在给出完整响应头之前干净 FIN"。**归因不建立在错误的桶语义上。**
+
+**排除清单（每条都有依据，别重复排查）**：
+❌ 客户端临时端口/TIME_WAIT（有一次 `10000/0` 是在宿主 TIME_WAIT=**13318** 时取得的，而失败那次只有 12670 ⇒ 无关；
+且建连阶段恒 10000/10000 成功、未归类 0）｜❌ 宿主 accept 队列溢出（`TcpExtListenOverflows`/`ListenDrops` 多次跑前后
+**恒 3745、Δ=0**，`TCPReqQFullDrop` 恒 0）｜❌ 容器 accept 队列/backlog（**1 秒粒度采样 40 点跨 86s，含一次 1768 失败**，
+容器 netns `ListenOverflows`/`ListenDrops`/`TCPReqQFullDrop`/`TCPSynRetrans`/`TcpTimeouts` **全 Δ=0**）｜
+❌ 限流（已抬到 1e8，且失败分类不是 `http_429`）｜❌ caddy/Node/Nest（应用日志 **3519 行里
+`ERROR|5xx|dial tcp|i/o timeout|connection reset|no available peer|caddy process exited` = 0 命中**、`RestartCount=0`）｜
+❌ **`/api/public/meta` 端点特有**（🔴 **静态目标重复跑同样失败**：静#1=0、静#2=**481**、静#3=**1287**）｜
+❌ **"完整协议"特有**（孤立重复跑同样失败：外#3=1768、meta#1=**5732**）。
+
+🔴 **必须更正 §5.3 的框架**：它写成"静态路径 10000/0、API 路径 9731/269"，暗示两条路径有本质差别 —— **实测不是**。
+`measure.sh` 第 5 节**总是先跑静态、后跑 meta**，所以静态总在"rootlessport 还干净"时跑；让静态**不在首跑**，它同样失败。
+⇒ 正确表述：**两条路径在 rootlessport 干净时都是 10000/0；重复 burst 后两条都会间歇失败，失败源在 rootlessport。**
+⚠️ 失败数形态：0/269/399/481/504/806/1287/1287/1319/1768/5732 —— **高度可变、非确定性**，
+且"首个 burst 常完好、后续逐渐变差、之后又能自愈"⇒ 不像固定配置上限，像**资源/时序相关的退化**。
+
+🔴 **这条对部署有影响，不只是压测口径**：
+- 实验栈是 `NetworkMode=bridge` + 发布端口 ⇒ 走 rootlessport；
+- **站长在用的那个站（18080）也是 `NetworkMode=bridge`** ⇒ 同样走 rootlessport（只 `inspect` 读取，**没动它**）；
+- 仓库交付的 `docker-compose/docker-compose-template.yml` 用 `ports:`（发布端口）⇒
+  **在 rootless podman 上按文档部署，rootlessport 就在数据路径上**。
+⇒ **结论：在"rootless podman + 发布端口"这个形态下，1 万并发的瓶颈是 rootlessport，不是 VanBlog。**
+⚠️ 所以轴② 要求的"文档化前提"里，除了内核参数（somaxconn/backlog/fd/端口范围）**还必须写"端口发布方式"这个更强的前提**。
+缓解方向（⚠️ **均未实测，只是方向，别当成已验证**）：`network_mode: host`、或用 root 的 podman/docker
+（走 iptables DNAT，没有用户态代理）、或宿主上放真正的反代 + 容器 host 网络。
+
+⚠️ **rootlessport 内部为什么关连接没能定死**（闭源二进制、无日志、无法插桩）⇒ 只给到"在哪一跳丢的"，没给到"它为什么丢"。
+只拿到三条**相关量（不是因果）**：fd 峰值 **70,012**（pipe 4 万量级，跑后回落到 ~36,783 ⇒ **是延迟回收，不是永久泄漏** ——
+代理更正了自己一开始"泄漏"的说法）、瞬时 CPU 峰值 **195%**（≈6 核里的 2 核）、宿主 ESTAB 峰值 **20,060**（≈2×10000，
+每条代理连接它两头各持一个 socket）。要再进一步需要：换 `--network host` 或 root podman 复测（**这能直接验证缓解是否有效**），
+或用 `strace -p`/eBPF 跟 rootlessport 的 `close()` 调用栈（⚠️ 需要 root，本机没有）。
+
+⚠️ **两个测量错误（都已改正，值得进手册）**：
+1. 🔴 计数器快照用 `grep 'ListenOverflows [0-9]+' /proc/net/netstat` —— 该文件是**键一行、值下一行**的两行格式
+   ⇒ **恒读为空**（`LO= LD=`），差点误判成"采不到数据"。改用 `nstat -az`（键值同行）才拿到。
+   👉 **读 `/proc/net/netstat` 必须处理两行格式，或直接用 `nstat`。**
+2. 🔴 留了一个**每秒 `podman exec`** 的后台采样器没杀，它**干扰了后续压测**（三次 loadtest 输出全空、
+   宿主 ESTAB 峰值只有 53 ⇒ 压测根本没跑起来）；杀掉后同一命令立刻 `10000/0`。
+   👉 **采样器本身会污染被测系统**：容器内侧采样必须与压测互斥，或改用宿主侧-only 采样。
+   ⚠️ 另外 `ps -o pcpu` 是**生命周期均值**，看 burst 必须用 `/proc/<pid>/stat` 的 utime+stime **逐秒差分**。
+
+⚠️ 还有一条会影响所有容器内压测的混杂因素，以及它为什么**反而强化**结论：容器内跑 loadtest 会与 caddy/Node
+**抢同 6 核**，方向是"让容器内更容易失败"，而它 **7/7 全 0 失败**、外部路径一半失败。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
