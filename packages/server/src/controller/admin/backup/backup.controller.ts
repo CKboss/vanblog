@@ -11,8 +11,20 @@ import {
   UseGuards,
   UseInterceptors,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import {
+  BACKUP_SIG_EXT,
+  SIGNING_KEY_ENV,
+  SIGNING_KEY_FILE_ENV,
+  VERIFY_KEY_ENV,
+  VERIFY_KEY_FILE_ENV,
+  describeSigningKey,
+  generateSigningKeyPair,
+  resolveSigningKey,
+  resolveVerifyKey,
+} from 'src/utils/backupSigning';
 import { Response } from 'express';
 import { ArticleProvider } from 'src/provider/article/article.provider';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -42,11 +54,21 @@ import { collectCategoriesFromBackup, toExportCategory } from 'src/utils/backupC
 // 两边各写一份迟早会漂（一边 8GB 一边 200MB，大站就会在初始化页莫名其妙地 413）。
 import { RESTORE_UPLOAD_OPTIONS } from 'src/utils/restoreUpload';
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
-import { availableFormats, pickSpec } from 'src/utils/fullBackup';
+import { availableFormats, pickSpec, takeRestoreSignatureWarning } from 'src/utils/fullBackup';
 import { checkTrue } from 'src/utils/checkTrue';
 import { isTrue } from 'src/utils/isTrue';
 import { JwtService } from '@nestjs/jwt';
 import { rotateJwtSecret, switchJwtSigningKey } from 'src/utils/initJwt';
+
+/**
+ * 签名功能的信任边界，原样返回给调用方（后台会显示它）。
+ * ⚠️ 之所以放在响应里而不只放文档：这个功能最危险的失败模式是**被高估** ——
+ * 站长以为"备份签了名就万无一失"，于是把归档和公钥一起扔进同一个网盘。
+ */
+const SIGNING_TRUST_BOUNDARY =
+  '签名能证明的是「这份归档离开主机之后没有被改过」。验签材料（公钥）必须存在主机之外：' +
+  '只存在本机时，拿到主机 root 的人可以连公钥一起换掉。它**不防**已经有主机 root 的攻击者' +
+  '（私钥必须在主机上才能签名），防的是对象存储/网盘/U 盘/异地副本这些路径上的篡改。';
 
 @ApiTags('backup')
 @UseGuards(...AdminGuard)
@@ -126,6 +148,115 @@ export class BackupController {
         : `JWT 密钥已轮换（新 kid ${result.kid}）：旧 kid ${result.previousKid} 进入 ${result.graceDays} 天宽限期，` +
           `期满后所有用旧密钥签发的登录会话与 API Token 一律失效。`,
       data: { ...result, restartRequired },
+    };
+  }
+
+  /**
+   * 备份**签名**密钥的状态与公钥导出。
+   *
+   * ⚠️ 只返回公钥与指纹，**私钥一个字节都不出去**（有守卫钉住这一点）：
+   * 私钥一旦经 HTTP 走出去，就会留在浏览器历史、反代日志与任何中间件里，
+   * 而"备份可以被证明"的全部价值就没了。要换密钥请走 POST（它把私钥直接落盘 0600）。
+   *
+   * 🔴 信任边界（响应里也照实说）：验签材料（公钥）**必须存在主机之外**，
+   * 否则拿到主机 root 的人可以连公钥一起换掉。这个功能防的是"归档**离开主机之后**被篡改"
+   * （对象存储、网盘、U 盘、异地副本），**不防**已经有主机 root 的攻击者。
+   */
+  @Get('signing/key')
+  async getSigningKey() {
+    const backupDir = this.fullBackupProvider.backupDir();
+    let signing = null as ReturnType<typeof resolveSigningKey>;
+    let verify = null as ReturnType<typeof resolveVerifyKey>;
+    try {
+      signing = resolveSigningKey(backupDir);
+    } catch (err) {
+      return {
+        statusCode: 200,
+        data: {
+          signingConfigured: false,
+          signingError: `${(err as Error)?.message || err}`,
+          verifyConfigured: false,
+          trustBoundary: SIGNING_TRUST_BOUNDARY,
+        },
+      };
+    }
+    try {
+      verify = resolveVerifyKey(backupDir);
+    } catch (err) {
+      return {
+        statusCode: 200,
+        data: {
+          signingConfigured: Boolean(signing),
+          signingFingerprint: signing?.fingerprint ?? null,
+          signingSource: signing?.source ?? null,
+          verifyConfigured: false,
+          verifyError: `${(err as Error)?.message || err}`,
+          trustBoundary: SIGNING_TRUST_BOUNDARY,
+        },
+      };
+    }
+    return {
+      statusCode: 200,
+      data: {
+        signingConfigured: Boolean(signing),
+        signingSource: signing?.source ?? null,
+        signingFingerprint: signing?.fingerprint ?? null,
+        signingDescribe: describeSigningKey(signing),
+        verifyConfigured: Boolean(verify),
+        verifySource: verify?.source ?? null,
+        verifyFingerprint: verify?.fingerprint ?? null,
+        // 公钥可以公开（它就是用来分发给验签方的）；⚠️ 私钥绝不返回
+        publicKey: verify?.publicKeyPem ?? signing?.publicKeyPem ?? null,
+        envNames: {
+          signingKey: SIGNING_KEY_ENV,
+          signingKeyFile: SIGNING_KEY_FILE_ENV,
+          verifyKey: VERIFY_KEY_ENV,
+          verifyKeyFile: VERIFY_KEY_FILE_ENV,
+        },
+        trustBoundary: SIGNING_TRUST_BOUNDARY,
+      },
+    };
+  }
+
+  /**
+   * 生成一对新的 ed25519 备份签名密钥。
+   *
+   * ⚠️ 私钥**直接落盘**（`<备份目录>/signing/`，目录 0700、文件 0600），**不经 HTTP 返回**；
+   * 响应里只有公钥、指纹与私钥的**路径**。想让私钥离开备份目录（例如用 Docker secret），
+   * 改用 `VANBLOG_BACKUP_SIGNING_KEY_FILE`。
+   *
+   * ⚠️ 覆盖已有密钥会让**所有已签名归档的 `.sig` 永久无法验证**（旧私钥被删掉），
+   * 所以覆盖需要与破坏性恢复同一口径的显式确认（`confirm=true`，只认字面 true）。
+   */
+  @Post('signing/key')
+  async createSigningKey(@Body() body: { confirm?: string; overwrite?: string }) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
+    const backupDir = this.fullBackupProvider.backupDir();
+    // overwrite 与 confirm 是同一个意思的两种写法，都只认字面 true
+    const overwrite = isTrue(body?.overwrite) || isTrue(body?.confirm);
+    const result = generateSigningKeyPair(backupDir, { overwrite });
+    this.logger.warn(
+      `已${result.replaced ? '覆盖' : '生成'}备份签名密钥（指纹 ${result.fingerprint}）：` +
+        `私钥 ${result.privatePath}（0600，不经接口返回）。` +
+        `⚠️ 请把公钥离线保存一份 —— 验签材料只存在本机时，拿到主机 root 的人可以连公钥一起换掉。`,
+    );
+    return {
+      statusCode: 200,
+      message: result.replaced
+        ? `已覆盖备份签名密钥（新指纹 ${result.fingerprint}）。⚠️ 用旧密钥签过的归档现在**无法再验签**，` +
+          `除非你还留着旧公钥（而旧私钥已被覆盖，旧 .sig 也就无法再产生新的了）。`
+        : `已生成备份签名密钥（指纹 ${result.fingerprint}）。从现在起的整站备份会自动写出 .sig；` +
+          `已有归档不会追溯签名（可以重新备份一次）。`,
+      data: {
+        fingerprint: result.fingerprint,
+        publicKey: result.publicKeyPem,
+        privatePath: result.privatePath,
+        publicPath: result.publicPath,
+        replaced: result.replaced,
+        trustBoundary: SIGNING_TRUST_BOUNDARY,
+      },
     };
   }
 
@@ -329,7 +460,16 @@ export class BackupController {
     @UploadedFile() file: any,
     // ⚠️ `passphrase` 只从 body 取（multer 的文本字段或 JSON 都行），**不接受 query**：
     //    query 会进 caddy 访问日志。⚠️ 也绝不要把它写进任何 logger 调用。
-    @Body() body: { name?: string; confirm?: string; withStatic?: string; passphrase?: string },
+    // ⚠️ `skipSignatureCheck` 与 `confirm` 同一个口径：**只认字面 true**（见下面 `isTrue`）。
+    //    它是"我知道这份归档验不过签/没有公钥，仍然要恢复"的显式逃生口，不是默认路径。
+    @Body()
+    body: {
+      name?: string;
+      confirm?: string;
+      withStatic?: string;
+      passphrase?: string;
+      skipSignatureCheck?: string;
+    },
   ) {
     // 整个方法体都要在 try 里：演示站/confirm 校验提前 return/throw 时，
     // multer 已经把上传的归档（几百 MB）落到磁盘了，不清理就永久泄漏
@@ -362,6 +502,9 @@ export class BackupController {
         archivePath,
         body?.withStatic === undefined ? true : checkTrue(body.withStatic),
         typeof body?.passphrase === 'string' && body.passphrase.length > 0 ? body.passphrase : null,
+        // ⚠️ 用 isTrue（只认字面 true），不用 checkTrue：跳过一道**安全校验**的开关
+        //    必须与破坏性操作的确认闸门同样严格，否则 `skipSignatureCheck:"1"` 就能绕过验签。
+        isTrue(body?.skipSignatureCheck),
       );
       // ⚠️ delay 必须给：`activeAll` 会把它转交给 RSS 与 sitemap 两个生成器，
       // 不传就是"RSS 3 分钟 / sitemap 1 分钟"之后才写文件（且会被后续任何一次 activeAll 重置），
@@ -392,6 +535,10 @@ export class BackupController {
           caddy: result.caddy || null,
           // 流水线依赖只在启动时装（不在请求路径上跑 pnpm add），前台据此提示"重启一次"
           needsRestartForPipelineDeps: Boolean(result.needsRestartForPipelineDeps),
+          // 签名校验的降级提示（没验签/跳过验签时非 null）。
+          // ⚠️ 必须回到**响应体**里，不能只进容器日志：灾难现场站长未必看得见日志，
+          //    而"这次恢复没有验证归档真实性"是他必须知道的一件事。
+          signatureWarning: takeRestoreSignatureWarning(),
         },
       };
     }
@@ -402,7 +549,7 @@ export class BackupController {
     }
   }
 
-  /** 删掉一个备份归档（含两个 sidecar：清单与整归档校验和）。 */
+  /** 删掉一个备份归档（含三个 sidecar：清单、整归档校验和、签名）。 */
   @Post('full/delete')
   async deleteFull(@Body() body: { name?: string }) {
     if (config.demo && config.demo == 'true') {
@@ -413,6 +560,9 @@ export class BackupController {
     fs.rmSync(`${archivePath}.manifest.json`, { force: true });
     // P1 新增的 `.sha256` sidecar：不删就变成孤儿（`vanblog.sh verify` 会拿它去比一个不存在的归档）
     fs.rmSync(`${archivePath}.sha256`, { force: true });
+    // ⚠️ `.sig` 同样要删：一份没有归档的签名是纯噪音，而且它会让人误以为"这里还有一份备份"。
+    //    （`vanblog.sh` 侧的 prune glob 也已带上 `.enc`/`.sig`，两边口径要一致。）
+    fs.rmSync(`${archivePath}${BACKUP_SIG_EXT}`, { force: true });
     return { statusCode: 200, data: '已删除' };
   }
 
@@ -421,6 +571,33 @@ export class BackupController {
   async downloadFull(@Query('name') name: string, @Res() res: Response) {
     const archivePath = this.fullBackupProvider.resolveArchive(name);
     res.download(archivePath, path.basename(archivePath), (err) => {
+      if (err) {
+        this.logger.error(err.stack);
+      }
+    });
+  }
+
+  /**
+   * 下载一份归档的 `.sig`（离线签名）。
+   *
+   * 为什么需要这个接口：归档本身只能走 `full/download`（不在静态目录下），
+   * 如果签名拿不到，那么"只有后台权限的人"就永远无法把归档与签名一起带走 ⇒
+   * 异地验签这条路径等于不存在。⚠️ `.sig` 里**没有机密**（只有公钥指纹、sha256 与签名本身），
+   * 但它仍然走鉴权接口而不是静态目录：备份目录整体在静态目录之外，不该为它开一个匿名口子。
+   */
+  @Get('full/download-sig')
+  async downloadSignature(@Query('name') name: string, @Res() res: Response) {
+    const archivePath = this.fullBackupProvider.resolveArchive(name || '');
+    const sigPath = `${archivePath}${BACKUP_SIG_EXT}`;
+    if (!fs.existsSync(sigPath)) {
+      // ⚠️ 明确 404 而不是返回空文件：空文件会被 `readSignatureSidecar` 判成 malformed，
+      //    于是站长看到的是"签名坏了"，而真相是"这份归档从没被签过"。
+      throw new NotFoundException(
+        `这份归档没有 ${BACKUP_SIG_EXT}（${path.basename(archivePath)}）：它可能早于签名功能，` +
+          `或备份时没有配签名密钥。用 GET /api/admin/backup/signing/key 看当前签名配置。`,
+      );
+    }
+    res.download(sigPath, path.basename(sigPath), (err) => {
       if (err) {
         this.logger.error(err.stack);
       }

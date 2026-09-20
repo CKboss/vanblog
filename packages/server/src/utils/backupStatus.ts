@@ -81,6 +81,25 @@ export interface BackupStatusFile {
    * 所以将来把默认参数调强了，老归档仍然解得开。口令与派生密钥**绝不**出现在这里。
    */
   lastSuccessEncryption: BackupEncryptionSummary | null;
+  /**
+   * 最近一次成功备份**有没有签名**（写出了 `.sig`）。
+   *
+   * ⚠️ 与 `lastSuccessEncrypted` 同一个理由、同一个形状：`null` ≠ `false`。
+   * `null` 表示"这次备份早于签名功能，不知道"，`false` 表示"确定没签"。
+   * 把"不知道"写成 false 会让人以为已经确认过这份归档是不可证明的；
+   * 而把"没签"藏起来更糟 —— 站长会照着"我有签名保护"去规划异地副本。
+   * `vanblog.sh backup-status --strict` 读这个文件，所以它是"备份健不健康"的外部凭据。
+   */
+  lastSuccessSigned: boolean | null;
+  /**
+   * 签名参数摘要：算法、摘要、**公钥指纹**。
+   *
+   * ⚠️ 全是非机密（指纹是公钥的哈希，公钥本来就可公开），所以可以放心写进这个明文文件。
+   * 它的用途是让站长在**没有 `.sig` 在手**时也能回答"这份归档该用哪把公钥验"，
+   * 以及发现"指纹变了"（说明密钥被换过，旧归档要用旧公钥验）。
+   * 私钥与口令**绝不**出现在这里。
+   */
+  lastSuccessSigning: BackupSigningSummary | null;
   /** 最近一次失败（导出或校验）的时间；成功后不清零，保留现场 */
   lastFailureAt: string | null;
   /**
@@ -111,6 +130,16 @@ export interface BackupStatusFile {
   restoreJournal: RestoreJournal | null;
 }
 
+/** 签名摘要（写进 `backup-status.json` 的那一份；全部非机密）。 */
+export interface BackupSigningSummary {
+  alg: string;
+  digest: string;
+  /** 公钥 sha256 前 16 位；用来在多把密钥之间认人 */
+  keyFingerprint: string;
+  /** `.sig` 的文件名（只是提示，校验以内容 sha256 为准） */
+  sigName: string | null;
+}
+
 export function emptyBackupStatus(): BackupStatusFile {
   return {
     version: BACKUP_STATUS_VERSION,
@@ -123,6 +152,8 @@ export function emptyBackupStatus(): BackupStatusFile {
     lastSuccessMembers: null,
     lastSuccessEncrypted: null,
     lastSuccessEncryption: null,
+    lastSuccessSigned: null,
+    lastSuccessSigning: null,
     lastFailureAt: null,
     lastFailureStage: null,
     lastFailureName: null,
@@ -208,6 +239,10 @@ export function recordBackupSuccess(
     encrypted?: boolean | null;
     /** 加密参数摘要（非机密）；未加密时传 null */
     encryption?: BackupEncryptionSummary | null;
+    /** 这份归档有没有签名（调用方从 `createFullBackup` 的结果里拿） */
+    signed?: boolean | null;
+    /** 签名摘要（非机密）；未签名时传 null */
+    signing?: BackupSigningSummary | null;
   },
 ): BackupStatusFile {
   const prev = readBackupStatus(backupDir);
@@ -224,6 +259,10 @@ export function recordBackupSuccess(
     //    以为已经确认过这份是明文的。
     lastSuccessEncrypted: info.encrypted ?? null,
     lastSuccessEncryption: info.encryption ?? null,
+    // ⚠️ 同样用 `?? null`：调用方没传（老代码路径）时留 null = "不知道"，
+    //    与"确定没签名"（false）区分开。理由见 BackupStatusFile.lastSuccessSigned。
+    lastSuccessSigned: info.signed ?? null,
+    lastSuccessSigning: info.signing ?? null,
     consecutiveFailures: 0,
   };
   try {

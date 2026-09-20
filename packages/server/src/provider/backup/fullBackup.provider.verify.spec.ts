@@ -94,8 +94,13 @@ describe('FullBackupProvider 写后校验接线', () => {
       .mockResolvedValue(fakeVerifyResult());
 
     const outcome = await provider.export();
-    // 导出后默认做**成员级**深度校验（VANBLOG_BACKUP_VERIFY_DEEP，默认开）
-    expect(verify).toHaveBeenCalledWith(result.path, { deep: true });
+    // 导出后默认做**成员级**深度校验（VANBLOG_BACKUP_VERIFY_DEEP，默认开）。
+    // ⚠️ 这条断言**升级过**（不是放宽）：调用现在多带一个 `backupDir`，因为验签公钥可能来自
+    //    `<备份目录>/signing/`（由 `POST /api/admin/backup/signing/key` 生成的那一对）。
+    //    不给这个参数，"生成过密钥但没配 env"的部署会一直看到"没有配验签公钥" ⇒ 签名形同没配。
+    //    本条原本保护的性质（deep 默认为 true）原样保留，而且 `toHaveBeenCalledWith` 是精确匹配，
+    //    少一个键、多一个键、或 deep 变成 false 都会红 ⇒ 不是空断言。
+    expect(verify).toHaveBeenCalledWith(result.path, { deep: true, backupDir: dir });
     expect(outcome.verification.ok).toBe(true);
     const status = backupStatusModule.readBackupStatus(dir);
     expect(status.lastSuccessName).toBe(result.name);

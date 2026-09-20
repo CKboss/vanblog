@@ -38,6 +38,14 @@ import {
   writeSecretFileSync,
 } from './secretFileMode';
 import {
+  SignatureVerifyResult,
+  assertArchiveSignatureForRestore,
+  resolveSigningKey,
+  resolveVerifyKey,
+  signArchiveDigest,
+  signatureSidecarPath,
+} from './backupSigning';
+import {
   BACKUP_ENC_EXT,
   BackupEncryptionHeader,
   createEncryptor,
@@ -1037,6 +1045,21 @@ export interface FullBackupResult {
    * 让调用方自己拼就会漂。
    */
   plaintextWarning: string | null;
+  /**
+   * 这份归档**有没有被签名**（写出了 `.sig`）。
+   *
+   * ⚠️ 与 `encrypted` 一样，这是"我以为开了、其实没开"最危险的那类状态：
+   * 签名没生效时归档照常产出、校验照常通过，站长却以为异地副本是可证明的。
+   * 所以它必须出现在结果、日志与 `backup-status.json` 里。
+   */
+  signed: boolean;
+  /** 签名密钥的指纹（公钥 sha256 前 16 位）；未签名为 null。⚠️ 非机密，可以进日志与状态文件。 */
+  signingFingerprint: string | null;
+  /**
+   * 未签名时的 WARN 文案（已签名则为 null）。与 `plaintextWarning` 同一个套路：
+   * 文案在这里生成（引用签名层的常量与变量名才不会漂），要不要进事件日志由调用方决定。
+   */
+  signatureWarning: string | null;
 }
 
 /** 导出整站备份：数据库（含 waline）+ 本地静态文件 -> 一个高压缩归档。 */
@@ -1319,6 +1342,32 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
     if (writeSha256Sidecar(archivePath, readBack.sha256) === null) {
       logger.warn(`写 ${name}${'.sha256'} 失败（备份本身已成功，但拷走归档时少一个外部凭据）`);
     }
+    // 离线签名（detached `.sig`）：签的是**已经流式算出来、且刚回读复核过**的那个 sha256，
+    // 所以这里**不再读一遍归档**（归档可能几个 GB）。加密归档签的是**密文** ⇒
+    // 不解密也能验真实性，与"sidecar 保持明文"的既有决定一致。
+    // ⚠️ 默认关：没配签名密钥时 `signArchiveDigest` 返回 null，一个字节都不写，
+    //    产物与加这个功能之前逐字节一致（有守卫钉住）。
+    const signingKey = resolveSigningKey(outDir);
+    let sigPath: string | null = null;
+    try {
+      sigPath = signArchiveDigest({
+        archivePath,
+        archiveSha256: readBack.sha256,
+        archiveBytes: bytes,
+        signingKey,
+      });
+    } catch (err) {
+      // ⚠️ 签名失败**不把一次成功的备份判成失败**（归档与两个 sidecar 都已经写好了），
+      //    但必须大声说：否则站长以为这份归档可证明，实际不可。
+      logger.warn(
+        `写 ${name}.sig 失败（备份本身已成功，但这份归档**没有签名**，无法证明它离开主机后没被改过）：${
+          (err as Error)?.message || err
+        }`,
+      );
+    }
+    if (sigPath) {
+      logger.log(`已签名：${path.basename(sigPath)}（ed25519，密钥指纹 ${signingKey?.fingerprint}）`);
+    }
 
     logger.log(
       `备份完成：${name}（${bytes} 字节，${manifest.totals.documents} 条文档，${manifest.totals.files} 个文件，` +
@@ -1338,6 +1387,16 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       hashMs,
       encrypted: Boolean(encryptor),
       plaintextWarning: encryptor ? null : plaintextArchiveWarning(name),
+      signed: Boolean(sigPath),
+      signingFingerprint: sigPath ? signingKey?.fingerprint ?? null : null,
+      signatureWarning: sigPath
+        ? null
+        : `这份归档**没有签名**（没有配 ${'VANBLOG_BACKUP_SIGNING_KEY'} / ${'VANBLOG_BACKUP_SIGNING_KEY_FILE'}，` +
+          `本机也没有生成过签名密钥）。它能证明自己是**自洽**的（integrity 块 + .sha256），` +
+          `但证明不了"离开主机之后没被换过"—— sidecar 与归档同目录，能换归档的人也能换 sidecar。` +
+          `要让它可证明：POST /api/admin/backup/signing/key 生成一对（私钥落盘 0600、只回公钥），` +
+          `或把已有的 ed25519 私钥配到 VANBLOG_BACKUP_SIGNING_KEY_FILE；` +
+          `⚠️ 并把**公钥离线保存**（验签材料只存在本机时，拿到主机 root 的人可以连公钥一起换掉）。`,
     };
   } finally {
     rmrf(staging);
@@ -1885,6 +1944,15 @@ export interface RestorableArchiveOptions {
    * ⚠️ 从 HTTP 请求来时**只能**走 body，不能走 query：query 会原样进 caddy 的访问日志。
    */
   passphrase?: string | null;
+  /**
+   * 显式跳过签名校验。⚠️ 调用方必须**只认字面 true**（用 `utils/isTrue.ts`，与破坏性恢复的
+   * `confirm` 闸门同一口径 —— `"1"`/`"yes"`/`"TRUE"` 都不算），并且跳过时打一条 WARN 记明跳过了什么。
+   */
+  skipSignatureCheck?: boolean;
+  /**
+   * 备份目录（用来找 `signing/` 下生成的密钥对）。不给就只按 env 解析验签公钥。
+   */
+  backupDir?: string | null;
 }
 
 /**
@@ -1896,10 +1964,63 @@ export interface RestorableArchiveOptions {
  *  2. 成员 `size` 之和不超过 `restoreMaxTotalBytes()`（防压缩炸弹写满磁盘）；
  *  3. 目标卷剩余空间够（`total + 256 MiB` 余量）—— 读不到剩余空间就跳过这一道。
  */
+/**
+ * `assertRestorableArchive` 最近一次的签名降级提示（没验签/跳过验签时非 null）。
+ *
+ * ⚠️ 为什么用这种看起来不优雅的方式：`assertRestorableArchive` 的返回值是"成员条数"，
+ * 两条恢复路由与 8 个既有 spec 都依赖这个数字，改返回形状会把一次纯增量功能变成破坏性变更。
+ * 所以把"顺带的诊断信息"挂在一个显式槽里，并且**每次进入函数就先清空**（否则上一次恢复的
+ * 提示会被下一次读到 —— 那种串味比没有更糟）。单进程内 `assertRestorableArchive` 由
+ * init/restore 的 DB 级 TTL 锁互斥（同一时刻只有一次恢复），所以这个槽不会被并发覆盖。
+ */
+let restoreSignatureWarning: string | null = null;
+
+/** 取走并清空最近一次恢复的签名降级提示（调用方在响应里带上它）。 */
+export function takeRestoreSignatureWarning(): string | null {
+  const value = restoreSignatureWarning;
+  restoreSignatureWarning = null;
+  return value;
+}
+
 export async function assertRestorableArchive(
   archivePath: string,
   options: RestorableArchiveOptions = {},
 ): Promise<number> {
+  // 签名校验的降级提示（没验/跳过时非 null）。⚠️ 用模块级以外的方式带出去：
+  //    返回值是"成员条数"这个既有契约（两个调用方都依赖它），不能改形状，
+  //    所以挂在一个可被 `takeRestoreSignatureWarning()` 取走的槽里。
+  restoreSignatureWarning = null;
+  // 0) **签名闸门**，排在所有解包动作之前：一份验不过签名的归档，连它的成员表都不该去读。
+  //    ⚠️ 只在"配了验签公钥 **且** 归档有 .sig"时才真去算整档 sha256（那是一次完整顺序读）；
+  //    没配公钥或没签名时**一个字节都不多读**，所以既有部署的恢复速度完全不受影响。
+  //    ⚠️ 也绝不能变成"没配公钥就拒绝恢复"：那会让所有升级上来的站点在灾难现场发现恢复不了。
+  const sigPath = signatureSidecarPath(archivePath);
+  const verifyKey = resolveVerifyKey(options.backupDir);
+  if (fs.existsSync(sigPath) || verifyKey) {
+    let actualSha256 = '';
+    if (fs.existsSync(sigPath) && verifyKey && options.skipSignatureCheck !== true) {
+      try {
+        actualSha256 = (await hashFile(archivePath)).sha256;
+      } catch (err) {
+        throw new BadRequestException(
+          `为验签回读归档算 sha256 失败（${archivePath}）：${(err as Error)?.message || err}` +
+            ` —— 已拒绝恢复（验不了签名就不解包）`,
+        );
+      }
+    }
+    // ⚠️ 这里不再自己打日志：`assertArchiveSignatureForRestore` 内部已经用 BackupSigning
+    //    这个 logger 打过 WARN 了（跳过验签、没配公钥、有 .sig 但没公钥三种情况各一条），
+    //    在这里再打一遍会产生两条措辞可能漂移的重复日志。
+    //    `gate.warning` 仍然返回给调用方，供恢复接口的响应体带上（站长要在**响应里**看到，
+    //    而不只是去翻容器日志 —— 灾难现场他未必看得见日志）。
+    const gate = assertArchiveSignatureForRestore({
+      archivePath,
+      actualSha256,
+      verifyKey,
+      skip: options.skipSignatureCheck === true,
+    });
+    restoreSignatureWarning = gate.warning;
+  }
   const { entries, decompressError } = await listArchiveEntries(archivePath, {
     passphrase: options.passphrase,
   });
@@ -2056,6 +2177,17 @@ export interface RestoreFullBackupOptions {
    * （与 `CreateFullBackupOptions.passphrase` 不同，那边 `null` 表示"强制明文导出"）。
    */
   passphrase?: string | null;
+  /**
+   * 显式跳过签名校验（透传给 `assertRestorableArchive` 的第 0 道闸门）。
+   * ⚠️ 调用方必须**只认字面 true**（`utils/isTrue.ts`，与破坏性恢复的 `confirm` 闸门同一口径），
+   * 跳过时 `assertArchiveSignatureForRestore` 会打一条 WARN 说明跳过了什么。默认 false。
+   */
+  skipSignatureCheck?: boolean;
+  /**
+   * 备份目录：用来找 `signing/` 下由 `POST /api/admin/backup/signing/key` 生成的密钥对。
+   * 不给就只按 env 解析验签公钥（那样"生成过密钥但没配 env"的部署会一直显示"没有配验签公钥"）。
+   */
+  backupDir?: string | null;
   logger?: BackupLogger;
 }
 

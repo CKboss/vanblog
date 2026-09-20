@@ -9,6 +9,13 @@ import {
 } from './fullBackup';
 import { FullBackupManifest, isFullBackupManifest } from './backupCodec';
 import {
+  SignatureVerifyState,
+  resolveVerifyKey,
+  signatureSidecarPath,
+  signatureVerifyMessage,
+  verifySignatureAgainstDigest,
+} from './backupSigning';
+import {
   MANIFEST_COPY_MEMBER,
   MANIFEST_MEMBER,
   TarHashResult,
@@ -103,6 +110,34 @@ export interface BackupIntegrityVerify {
   notes: string[];
 }
 
+/**
+ * 签名（真实性）校验的结果。
+ *
+ * ⚠️ 与 `integrity` 那组的分工要说清，否则会被误读成重复：
+ *  - `integrity` 证明这份归档**自洽**（成员哈希、merkleRoot、整档 sha256 与 sidecar/清单对得上）；
+ *  - `signature` 证明这份归档**是真的**（是持有私钥的那一方签出来的，离开主机后没被换过）。
+ * 自洽是可以被"连归档带 sidecar 一起换掉"伪造的，签名不行 —— 这就是为什么两者都要报。
+ *
+ * ⚠️ `state` 的 `missing-sig` / `no-key` **不是失败**（只进 notes），因为绝大多数既有归档
+ * 都早于签名功能；把它们判成 issue 会让 `backup-verify --all` 与 `--strict` 对所有老归档全线报红，
+ * 而那正是"没人会看的红灯"。但必须**大声**：note + `backup-status.json` 的 `lastSuccessSigned`。
+ */
+export interface BackupSignatureVerify {
+  /** 是否真的做了密码学验签（配了公钥 **且** 归档有 .sig 才是 true） */
+  checked: boolean;
+  state: SignatureVerifyState;
+  /** 验签结论；null = 没验（missing-sig / no-key） */
+  ok: boolean | null;
+  sigPresent: boolean;
+  keyConfigured: boolean;
+  /** `.sig` 里记的密钥指纹 */
+  sigFingerprint: string | null;
+  /** 本机配置的验签公钥指纹 */
+  expectedFingerprint: string | null;
+  /** 给人看的结论（每种 state 一套文案） */
+  message: string;
+}
+
 export interface BackupVerifyResult {
   ok: boolean;
   ms: number;
@@ -113,6 +148,8 @@ export interface BackupVerifyResult {
   checks: BackupVerifyChecks;
   /** P1 防损坏校验的结果（老归档里大多是 null，见 BackupIntegrityVerify） */
   integrity: BackupIntegrityVerify;
+  /** 签名（真实性）校验的结果；从没配过密钥时是 `state:'no-key'` / `checked:false` */
+  signature: BackupSignatureVerify;
   issues: BackupVerifyIssue[];
 }
 
@@ -123,6 +160,11 @@ export interface VerifyFullBackupOptions {
    * 清单副本 / 整归档 sha256 / 压缩器校验位这五项，全都几乎免费。
    */
   deep?: boolean;
+  /**
+   * 备份目录（用来找 `signing/` 下由 `POST /api/admin/backup/signing/key` 生成的密钥对）。
+   * 不给就只按 env（`VANBLOG_BACKUP_VERIFY_KEY(_FILE)`，回落到签名密钥）解析验签公钥。
+   */
+  backupDir?: string | null;
 }
 
 const ALL_CHECKS: BackupVerifyChecks = {
@@ -133,6 +175,21 @@ const ALL_CHECKS: BackupVerifyChecks = {
   staticConsistent: false,
   countsNonZero: false,
 };
+
+function emptySignature(): BackupSignatureVerify {
+  return {
+    checked: false,
+    // ⚠️ 默认 'no-key' 而不是 'ok'：早退路径（归档都读不到）上不会跑验签，
+    //    那时的正确结论是"没验"，绝不能看起来像"验过了"。
+    state: 'no-key',
+    ok: null,
+    sigPresent: false,
+    keyConfigured: false,
+    sigFingerprint: null,
+    expectedFingerprint: null,
+    message: signatureVerifyMessage({ state: 'no-key', sigFingerprint: null, expectedFingerprint: null }),
+  };
+}
 
 function emptyIntegrity(): BackupIntegrityVerify {
   return {
@@ -172,6 +229,7 @@ export async function verifyFullBackup(
   const issues: BackupVerifyIssue[] = [];
   const checks: BackupVerifyChecks = { ...ALL_CHECKS };
   const integrity = emptyIntegrity();
+  const signature = emptySignature();
   let archiveBytes = 0;
   let memberList: string[] = [];
   let manifest: FullBackupManifest | null = null;
@@ -400,6 +458,9 @@ export async function verifyFullBackup(
       );
       // 整归档 sha256：老归档也可能有 `.sha256` sidecar（vanblog.sh 会写）
       await checkArchiveSha256(null);
+      // ⚠️ 老归档（没有 integrity 块）同样要验签名：签名与 integrity 块是两件独立的事，
+      //    一份很老的归档也可能被人后来签过名。
+      await checkSignature();
       return;
     }
 
@@ -505,6 +566,9 @@ export async function verifyFullBackup(
     //    写成 `?.` 让类型与意图一致：即使将来有人挪动上面那个 early return，这里也只会退化成
     //    "拿不到清单里的哈希，改用 sidecar"，而不是抛 TypeError。
     await checkArchiveSha256(manifest?.totals?.archiveSha256 ?? sidecar?.totals?.archiveSha256 ?? null);
+    // 11) 签名（真实性）。⚠️ 放在 checkArchiveSha256 **之后**：那一步可能已经算出整档 sha256，
+    //     验签直接复用，不用再读一遍几个 GB 的归档。
+    await checkSignature();
   }
 
   async function checkArchiveSha256(fromManifest: string | null): Promise<void> {
@@ -612,6 +676,89 @@ export async function verifyFullBackup(
     }
   }
 
+  /**
+   * 11) 签名校验（真实性）。
+   *
+   * ⚠️ 复用 `checkArchiveSha256` 已经算出来的整档 sha256（它只在有 sidecar/清单期望值时才算），
+   * 没有就自己算一次 —— **绝不为了签名把归档读两遍**（归档可能几个 GB）。
+   */
+  async function checkSignature(): Promise<void> {
+    const sigPath = signatureSidecarPath(archivePath);
+    const sigPresent = fs.existsSync(sigPath);
+    let verifyKey = null as ReturnType<typeof resolveVerifyKey>;
+    try {
+      verifyKey = resolveVerifyKey(options.backupDir);
+    } catch (err) {
+      // 配了密钥但读不到/解析不了：这是**配置错误**，要报成 issue 而不是静默当作"没配"。
+      issues.push({
+        check: 'signature',
+        message: `验签公钥不可用（所以没有验签）：${(err as Error)?.message || err}`,
+      });
+      signature.message = `验签公钥不可用：${(err as Error)?.message || err}`;
+      return;
+    }
+    signature.sigPresent = sigPresent;
+    signature.keyConfigured = Boolean(verifyKey);
+    signature.expectedFingerprint = verifyKey?.fingerprint ?? null;
+
+    if (!sigPresent) {
+      signature.state = 'missing-sig';
+      signature.message = signatureVerifyMessage({
+        state: 'missing-sig',
+        sigFingerprint: null,
+        expectedFingerprint: signature.expectedFingerprint,
+        archiveName: path.basename(archivePath),
+        sigPath,
+      });
+      integrity.notes.push(
+        verifyKey
+          ? `本机配了验签公钥（指纹 ${verifyKey.fingerprint}），但这份归档没有 .sig：它早于签名功能，真实性无法证明（只证明了自洽）`
+          : '没有 .sig 签名、本机也没配验签公钥：这份归档只证明了**自洽**，证明不了"离开主机后没被换过"（sidecar 与归档同目录，能换归档的人也能换 sidecar）',
+      );
+      return;
+    }
+    if (!verifyKey) {
+      signature.state = 'no-key';
+      signature.message = signatureVerifyMessage({
+        state: 'no-key',
+        sigFingerprint: null,
+        expectedFingerprint: null,
+        archiveName: path.basename(archivePath),
+        sigPath,
+      });
+      integrity.notes.push(
+        '⚠️ 这份归档**有 .sig 签名**，但本机没有配验签公钥（VANBLOG_BACKUP_VERIFY_KEY / _FILE 都为空），' +
+          '所以签名**没有被验证** —— 这不等于验签通过。把签名时的公钥配进来即可验真。',
+      );
+      return;
+    }
+
+    let actual = integrity.archiveSha256;
+    if (!actual) {
+      try {
+        actual = (await hashFile(archivePath)).sha256;
+      } catch (err) {
+        issues.push({
+          check: 'signature',
+          message: `为验签回读归档算 sha256 失败（所以没有验签）：${(err as Error)?.message || err}`,
+        });
+        return;
+      }
+    }
+    const r = verifySignatureAgainstDigest({ archivePath, actualSha256: actual, verifyKey });
+    signature.checked = true;
+    signature.state = r.state;
+    signature.ok = r.ok;
+    signature.sigFingerprint = r.sigFingerprint;
+    signature.message = r.message;
+    if (r.state === 'ok') {
+      integrity.notes.push(`签名校验通过（ed25519，密钥指纹 ${r.sigFingerprint}）`);
+    } else {
+      // mismatch / key-mismatch / malformed-sig 都是**失败**：这份归档不可信，或无法确认可信。
+      issues.push({ check: 'signature', message: r.message });
+    }
+  }
+
   function finish(): BackupVerifyResult {
     const ok = issues.length === 0;
     return {
@@ -622,6 +769,7 @@ export async function verifyFullBackup(
       format,
       checks,
       integrity,
+      signature,
       issues,
     };
   }

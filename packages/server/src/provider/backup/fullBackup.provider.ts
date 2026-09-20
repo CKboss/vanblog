@@ -22,6 +22,7 @@ import {
 } from 'src/utils/fullBackup';
 import { BackupSourceInfo, FullBackupManifest } from 'src/utils/backupCodec';
 import { BackupVerifyResult, verifyFullBackup } from 'src/utils/backupVerify';
+import { BACKUP_SIG_ALG, BACKUP_SIG_DIGEST, BACKUP_SIG_EXT } from 'src/utils/backupSigning';
 import {
   BackupStatusFile,
   SweepArchiveResult,
@@ -266,7 +267,7 @@ export class FullBackupProvider implements OnApplicationBootstrap {
     const deep = envBool(BACKUP_VERIFY_DEEP_ENV, true);
     let verification: BackupVerifyResult;
     try {
-      verification = await verifyFullBackup(result.path, { deep });
+      verification = await verifyFullBackup(result.path, { deep, backupDir: this.backupDir() });
     } catch (err) {
       verification = null as any;
       const message = `校验器异常：${(err as Error)?.message || err}`;
@@ -296,10 +297,20 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       members: result.memberCount,
       encrypted: result.encrypted,
       encryption: result.manifest.encryption ?? null,
+      signed: result.signed,
+      signing: result.signed
+        ? {
+            alg: BACKUP_SIG_ALG,
+            digest: BACKUP_SIG_DIGEST,
+            keyFingerprint: result.signingFingerprint ?? '',
+            sigName: `${result.name}${BACKUP_SIG_EXT}`,
+          }
+        : null,
     });
     this.logger.log(
       `整站备份完成并通过校验：${result.name}（${result.sizeText}，${result.format}，` +
         `${result.encrypted ? '已加密（scrypt + aes-256-gcm）' : '**未加密**'}，` +
+        `${result.signed ? `已签名（ed25519，指纹 ${result.signingFingerprint}）` : '**未签名**'}，` +
         `打包+导出 ${(result.ms / 1000).toFixed(1)}s（其中成员哈希 ${(result.hashMs / 1000).toFixed(2)}s），` +
         `校验 ${(verification.ms / 1000).toFixed(1)}s${deep ? '（含成员级哈希）' : ''}，` +
         `${verification.members} 个归档成员，sha256 ${String(result.archiveSha256).slice(0, 12)}…）`,
@@ -312,6 +323,12 @@ export class FullBackupProvider implements OnApplicationBootstrap {
     // 文案刻意写成"事实 + 怎么开"，不吓人：站长可能就是要在内网存明文归档，那是他的选择。
     if (result.plaintextWarning) {
       this.logger.warn(result.plaintextWarning);
+    }
+    // ⚠️ 未签名也**每次都提醒**，理由与上面那条明文提醒完全一样：这个失败模式是静默的
+    //（归档照常生成、校验照常通过、被同步到异地），而站长会照着"我有签名保护"去规划
+    // 异地副本 —— 那时"能换归档的人也能换 sidecar"这个缺口就仍然存在。
+    if (result.signatureWarning) {
+      this.logger.warn(result.signatureWarning);
     }
     return { ...result, verification };
   }
@@ -555,7 +572,7 @@ export class FullBackupProvider implements OnApplicationBootstrap {
 
   private async verifyOne(item: BackupListEntry, deep: boolean): Promise<SweepArchiveResult> {
     try {
-      const result = await verifyFullBackup(item.path, { deep });
+      const result = await verifyFullBackup(item.path, { deep, backupDir: this.backupDir() });
       return {
         name: item.name,
         ok: result.ok,
@@ -582,7 +599,10 @@ export class FullBackupProvider implements OnApplicationBootstrap {
    */
   async verifyArchive(name: string, deep = true): Promise<BackupVerifyResult> {
     const archivePath = this.resolveArchive(name);
-    return verifyFullBackup(archivePath, { deep });
+    // ⚠️ 必须带 backupDir：`POST /api/admin/backup/signing/key` 生成的密钥对落在
+    // `<备份目录>/signing/`，不给这个参数就只按 env 解析验签公钥，于是「生成过密钥但没配 env」
+    // 的部署会一直看到 "没有配验签公钥"。
+    return verifyFullBackup(archivePath, { deep, backupDir: this.backupDir() });
   }
 
   /** 后台专用：备份健康状态（成功/失败时间、连续失败数、陈旧判定、巡检与恢复断点）。 */
@@ -623,8 +643,15 @@ export class FullBackupProvider implements OnApplicationBootstrap {
     archivePath: string,
     withStatic = true,
     passphrase?: string | null,
+    /**
+     * 显式跳过签名校验。⚠️ 只认字面 true（controller 用 `isTrue()` 判），跳过时会打 WARN。
+     * 默认 false ⇒ 配了验签公钥且归档有 `.sig` 时，验不过就拒绝恢复。
+     */
+    skipSignatureCheck = false,
   ): Promise<RestoreOutcome> {
-    return this.serialize(() => this.doRestore(archivePath, withStatic, passphrase));
+    return this.serialize(() =>
+      this.doRestore(archivePath, withStatic, passphrase, skipSignatureCheck === true),
+    );
   }
 
   /** 恢复出来的库里有没有流水线（见 RestoreOutcome.needsRestartForPipelineDeps） */
@@ -687,12 +714,18 @@ export class FullBackupProvider implements OnApplicationBootstrap {
     archivePath: string,
     withStatic = true,
     passphrase?: string | null,
+    skipSignatureCheck = false,
   ): Promise<RestoreOutcome> {
     const result = await restoreFullBackup({
       client: this.client,
       staticPath: config.staticPath,
       archivePath,
       withStatic,
+      // ⚠️ backupDir 必须给：`POST /api/admin/backup/signing/key` 生成的密钥对落在
+      //    `<备份目录>/signing/`，不给就只按 env 解析验签公钥，于是"生成过密钥但没配 env"
+      //    的部署会一直看到"没有配验签公钥"（签名形同没配）。
+      backupDir: this.backupDir(),
+      skipSignatureCheck,
       // P3：把"本实例是谁"交给恢复流程，它才能发现 waline 库名 / demo 的静默错配
       target: {
         walineDB: String(config.walineDB || ''),
