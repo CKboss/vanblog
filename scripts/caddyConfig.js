@@ -507,6 +507,146 @@ if (cspMode === 'report' && cspPolicy) {
   );
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * VANBLOG_CADDY_HTML_PAGES_DIR：caddy 直服 ISR HTML 时去哪个目录找产物
+ *
+ * 🔴 这一节修的是一个**静默失效**的缺陷（2026-09 实测确认）：服务端
+ * `provider/caddy/caddy.provider.ts` 读这个变量决定**哨兵文件写到哪个目录**
+ * （`process.env[SERVE_HTML_PAGES_DIR_ENV] || DEFAULT_WEBSITE_PAGES_DIR`），
+ * 而本生成器以前对它**命中 0 次**、两份模板各自把 root 硬编码成同一个路径 ⇒
+ * 设了这个变量，哨兵写到别处、caddy 仍在老地方找，`VANBLOG_CADDY_SERVE_HTML`
+ * 一声不响地失效（没有报错、没有日志、没有 500）。今天两侧一致纯属巧合。
+ * 站长已把"数据库不可达进入降级驻留时自动开直服"押在这个机制上
+ * （`utils/degradedServeHtml.ts`），所以这条路径上不能有静默失效的旋钮。
+ *
+ * ⚠️ 本文件**不复制那个路径字面量**：改写目标按**结构**定位（group 为
+ * `vanblog-serve-html` 的那条路由子树里的 `vars.root`），未设置该变量时
+ * 一个字都不改、直接沿用模板里的值，日志里报的"当前生效目录"也是**从配置里读出来的**。
+ * 这样生成器就不可能与模板/TS 常量漂移（少一份需要人肉保持一致的副本）。
+ * 三处字面量（TS 常量 + 两份模板各 2 处）的一致性由守卫钉住，见
+ * `scripts/tests/caddy-config.test.sh` 的"跨文件"那一节。
+ *
+ * ⚠️ 为什么校验必须在这里做、而不能指望 caddy：用真 caddy v2.11.4 实测，
+ * `caddy validate` 对 root='/'、root='{env.HOME}/x'、root='/tmp/a/../b' **全部通过**
+ * （它只校验 JSON 结构与模块字段，不校验路径语义）。而 root 会变成 `file_server`
+ * 的根，所以垃圾值是有安全后果的：
+ *   - `{env.X}` **会在运行时被展开**：实测把 root 写成 `{env.PROBE_SECRET_DIR}`、
+ *     该环境变量指向另一个目录，请求 `/probe.html` 返回 **200 且内容来自那个目录**
+ *     （正对照：字面量正确目录 200；负对照：字面量错误目录 404）⇒ 占位符一律拒绝；
+ *   - `/` 会让 file_server 以**整个文件系统**为根（放行路径仍受路由白名单与
+ *     `.html` 后缀约束，但这不是我们想要的失败形状）；
+ *   - `..` 能把可发布范围移出产物目录。
+ * 拒绝时的失败方向是"**沿用模板默认目录 + 大声 WARN**"，绝不是"关掉直服功能"，
+ * 也绝不是让整份配置 validate 失败（那会让 entrypoint 退回降级模板、HTTPS 静默变自签）。
+ * ────────────────────────────────────────────────────────────────────────── */
+const PAGES_DIR_ENV = 'VANBLOG_CADDY_HTML_PAGES_DIR';
+const SERVE_HTML_ROUTE_GROUP = 'vanblog-serve-html';
+/** 期望在一份生成结果里找到的：serve-html 路由条数 / 其中的 vars.root 个数（srv0 + srv1） */
+const PAGES_DIR_EXPECTED_GROUPS = 2;
+const PAGES_DIR_EXPECTED_ROOTS = 2;
+
+/**
+ * 纯校验函数（有单测钉住每个分支）：返回 `dir=null` 表示"不改写模板，沿用默认"。
+ * ⚠️ 拒绝一个值时**必须**同时说清后果：服务端仍会按这个值写哨兵，于是两侧不一致、
+ * 直服不生效 —— 把静默失效变成一条能照做的日志，这正是本次修复的核心。
+ * @returns {{dir: string|null, warns: string[]}}
+ */
+function resolvePagesDir(raw) {
+  const warns = [];
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text === '') return { dir: null, warns }; // 未设置/空 ⇒ 不改写，也不 WARN
+  const reject = (why) => {
+    warns.push(
+      `${PAGES_DIR_ENV}='${text}' 已被忽略：${why}。已沿用模板里的默认产物目录。` +
+        ' ⚠️ 但服务端仍会把哨兵文件写到你给的这个路径，所以两侧现在不一致、' +
+        'caddy 直服 HTML 不会生效 —— 请修正这个值，或直接取消该环境变量。',
+    );
+    return { dir: null, warns };
+  };
+  if (hasControlChars(text)) return reject('含控制字符（CR/LF/NUL 等），这个值会原样进 caddy 的 JSON 配置');
+  if (text.includes('{') || text.includes('}')) {
+    return reject(
+      '含花括号：caddy 会在**运行时**把它当占位符展开（实测 root 写成 {env.X} 时，' +
+        'file_server 真的从那个环境变量指向的目录发文件），所以这里不接受任何占位符形状',
+    );
+  }
+  if (!text.startsWith('/')) {
+    return reject('不是绝对路径（必须以 / 开头）：相对路径会相对 caddy 的工作目录解析，等于把产物目录交给一个你没指定的位置');
+  }
+  if (text.split('/').includes('..')) {
+    return reject('含 .. 段：这个值会成为 file_server 的根，.. 能把可发布范围移到产物目录之外');
+  }
+  const norm = text.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+  if (norm === '') {
+    return reject('规范化后就是文件系统根 /：那会让 file_server 以整个文件系统为根');
+  }
+  if (norm !== text) {
+    warns.push(`${PAGES_DIR_ENV} 已规范化：'${text}' → '${norm}'（合并重复斜杠、去掉结尾斜杠）`);
+  }
+  return { dir: norm, warns };
+}
+
+const { dir: pagesDir, warns: pagesDirWarns } = resolvePagesDir(process.env[PAGES_DIR_ENV]);
+
+/**
+ * 按**结构**定位改写点：group 为 `vanblog-serve-html` 的路由子树里的 `vars` handler 的 `root`。
+ * ⚠️ 判据用 group 名而不是"root 等于某个字面量"，这样模板里的路径将来变了也不会静默失配；
+ * 也**不会**误伤静态图那条路由的 `{"handler":"vars","root":"/app"}`（它在别的 group 里）。
+ * 每个 server 各一条 ⇒ 一份配置里应当恰好 2 处；数量不对就大声 WARN（形状变了）。
+ * @returns {{groups:number, found:number, applied:number, effective:string}}
+ */
+function applyPagesDir(node, stats) {
+  if (Array.isArray(node)) {
+    node.forEach((child) => applyPagesDir(child, stats));
+    return stats;
+  }
+  if (!node || typeof node !== 'object') return stats;
+
+  if (node.group === SERVE_HTML_ROUTE_GROUP) {
+    stats.groups += 1;
+    const found = [];
+    const collect = (n) => {
+      if (Array.isArray(n)) return n.forEach(collect);
+      if (!n || typeof n !== 'object') return undefined;
+      if (n.handler === 'vars' && typeof n.root === 'string') found.push(n);
+      for (const k of Object.keys(n)) collect(n[k]);
+      return undefined;
+    };
+    collect(node);
+    stats.found += found.length;
+    for (const vars of found) {
+      if (!stats.effective) stats.effective = vars.root; // 模板里的默认值（未设置该变量时它就是生效值）
+      if (pagesDir) {
+        vars.root = pagesDir;
+        stats.applied += 1;
+      }
+    }
+    return stats; // 这条子树已处理完，不再往里递归（避免重复计数）
+  }
+
+  for (const key of Object.keys(node)) applyPagesDir(node[key], stats);
+  return stats;
+}
+
+const pagesDirStats = applyPagesDir(config, { groups: 0, found: 0, applied: 0, effective: '' });
+for (const w of pagesDirWarns) process.stderr.write(`[caddyConfig] ⚠️ ${w}\n`);
+if (pagesDirStats.groups !== PAGES_DIR_EXPECTED_GROUPS || pagesDirStats.found !== PAGES_DIR_EXPECTED_ROOTS) {
+  process.stderr.write(
+    `[caddyConfig] ⚠️ 在配置里找到 ${pagesDirStats.groups} 条 ${SERVE_HTML_ROUTE_GROUP} 路由、` +
+      `${pagesDirStats.found} 个 vars.root（期望 ${PAGES_DIR_EXPECTED_GROUPS}/${PAGES_DIR_EXPECTED_ROOTS}）：` +
+      '模板形状变了，' +
+      (pagesDir
+        ? `${PAGES_DIR_ENV} 可能没有被完整应用到所有 server 上`
+        : '不影响本次输出，但请检查模板与守卫'),
+  );
+  process.stderr.write('\n');
+}
+process.stderr.write(
+  pagesDir
+    ? `[caddyConfig] caddy 直服 HTML 的产物目录 = ${pagesDir}（来自 ${PAGES_DIR_ENV}，改写 ${pagesDirStats.applied} 处）\n`
+    : `[caddyConfig] caddy 直服 HTML 的产物目录 = ${pagesDirStats.effective || '(未找到)'}（模板默认；${PAGES_DIR_ENV} 未设置或未生效）\n`,
+);
+
 const tls = config.apps && config.apps.tls;
 const automation = tls && tls.automation;
 const onDemand = automation && automation.on_demand;

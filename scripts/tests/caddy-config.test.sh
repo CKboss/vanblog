@@ -694,6 +694,268 @@ case "${CSP_MUT2}" in
 esac
 rm -f "${CSP_MUT}" "${CSP_MUT}.json" "${CSP_EXTRACTOR}"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# VANBLOG_CADDY_HTML_PAGES_DIR：caddy 直服 ISR HTML 的产物目录
+#
+# 🔴 这一节钉的是一个**曾经静默失效**的旋钮：服务端 `provider/caddy/caddy.provider.ts`
+#    用它决定哨兵文件写到哪个目录，而生成器以前对它命中 0 次、模板各自硬编码路径 ⇒
+#    设了它，哨兵写到别处、caddy 仍在老地方找，`VANBLOG_CADDY_SERVE_HTML` 一声不响地失效。
+#    站长已把"数据库不可达进入降级驻留时自动开直服"押在这个机制上，所以它必须真的生效。
+#
+# ⚠️ 断言一律跑**生成器的产物**（解析 JSON 后读 `vars.root` 的实际值），
+#    不是 grep 模板里有没有这个变量名 —— 后者是空断言（import/注释就能让它通过）。
+# ─────────────────────────────────────────────────────────────────────────────
+echo "== VANBLOG_CADDY_HTML_PAGES_DIR（caddy 直服 HTML 的产物目录）=="
+
+PD_EXTRACTOR="$(mktemp)"
+cat > "${PD_EXTRACTOR}" <<'PDJS'
+// 从 stdin 读一份生成好的 caddy 配置，报出：
+//   groups      = group 为 vanblog-serve-html 的路由条数（期望 2：srv0+srv1）
+//   pd_n        = 这些路由里 vars.root 的个数（期望 2）
+//   pd_roots    = 这些 root 的去重值（逗号连接）
+//   outside     = **该 group 之外**所有 vars.root 的去重排序值（竖线连接）
+//                 ⚠️ 这一项是"没有误伤别处"的判据：静态图那条路由也有一个 vars handler
+//                 （root=/app），它在**别的** group 里，所以不在 pd_roots 里、而在 outside 里。
+//                 用"与基线逐字相同"来断言，而不是写死个数 —— 模板将来多一个 vars 也不必改断言，
+//                 而任何被误改的 root 都会让它变。
+//   sentinels   = 两个哨兵文件名是否都还在配置里（直服闸门靠 try_files 查它们的存在）
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(0, 'utf8'));
+const roots = [];
+const outside = [];
+let groups = 0;
+const collectVars = (n, sink) => {
+  if (Array.isArray(n)) return n.forEach((x) => collectVars(x, sink));
+  if (!n || typeof n !== 'object') return;
+  if (n.handler === 'vars' && typeof n.root === 'string') sink.push(n.root);
+  for (const k of Object.keys(n)) collectVars(n[k], sink);
+};
+const walk = (n, inside) => {
+  if (Array.isArray(n)) return n.forEach((x) => walk(x, inside));
+  if (!n || typeof n !== 'object') return;
+  if (n.group === 'vanblog-serve-html') groups += 1;
+  const nowInside = inside || n.group === 'vanblog-serve-html';
+  if (n.handler === 'vars' && typeof n.root === 'string') (nowInside ? roots : outside).push(n.root);
+  for (const k of Object.keys(n)) walk(n[k], nowInside);
+};
+walk(cfg, false);
+const flat = JSON.stringify(cfg);
+const sentinels =
+  (flat.includes('.vanblog-caddy-serve-html-dynamic') ? 1 : 0) +
+  (flat.includes('.vanblog-caddy-serve-html') ? 1 : 0);
+console.log(
+  `groups=${groups} pd_n=${roots.length} pd_roots=${[...new Set(roots)].sort().join(',') || '-'} ` +
+    `outside=${[...new Set(outside)].sort().join('|') || '-'} sentinels=${sentinels}`,
+);
+PDJS
+
+# 用某个取值（或 __unset__）跑生成器；$2 可换模板；stderr 走 $3（给了就存下来）
+run_pd() {
+  local tpl="${2:-$TEMPLATE}" errf="${3:-/dev/null}"
+  if [[ "$1" == "__unset__" ]]; then
+    env -u VANBLOG_CADDY_HTML_PAGES_DIR "${NODE_BIN}" "${HELPER}" "${tpl}" permission 'me@example.com' 2>"${errf}"
+  else
+    VANBLOG_CADDY_HTML_PAGES_DIR="$1" "${NODE_BIN}" "${HELPER}" "${tpl}" permission 'me@example.com' 2>"${errf}"
+  fi
+}
+
+# 模板里的默认产物目录（从模板本身读，不写死在这里 ⇒ 模板改了这条断言自动跟着走）
+PD_DEFAULT="$(run_pd __unset__ | "${NODE_BIN}" -e '
+const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const out = [];
+const wv = (n) => { if (Array.isArray(n)) return n.forEach(wv); if (!n || typeof n !== "object") return;
+  if (n.handler === "vars" && typeof n.root === "string" && n.root !== "/app") out.push(n.root);
+  for (const k of Object.keys(n)) wv(n[k]); };
+const w = (n) => { if (Array.isArray(n)) return n.forEach(w); if (!n || typeof n !== "object") return;
+  if (n.group === "vanblog-serve-html") { wv(n); return; } for (const k of Object.keys(n)) w(n[k]); };
+w(c); console.log([...new Set(out)].join(","));')"
+PD_ERR="$(mktemp)"
+
+# 基线：未设置该变量时，serve-html **之外**的所有 vars.root（后面每个用例都必须与它逐字相同）
+PD_OUTSIDE_BASE="$(run_pd __unset__ | "${NODE_BIN}" "${PD_EXTRACTOR}" | sed -n 's/.* outside=\([^ ]*\) .*/\1/p')"
+if [[ -z "${PD_OUTSIDE_BASE}" ]]; then
+  fail "取不到 outside 基线（提取器失效）⇒ 后面"没有误伤别处"那些断言都不可信"
+else
+  pass "取到 outside 基线='${PD_OUTSIDE_BASE}'（serve-html 之外的 vars.root，含静态图那条 root=/app）"
+fi
+
+# --- 未设置 = 完全沿用模板默认（本轮之前的行为，零变化）---
+assert_eq "$(run_pd __unset__ | "${NODE_BIN}" "${PD_EXTRACTOR}")" \
+  "groups=2 pd_n=2 pd_roots=${PD_DEFAULT} outside=${PD_OUTSIDE_BASE} sentinels=2" \
+  "未设置 VANBLOG_CADDY_HTML_PAGES_DIR 时两个 server 都沿用模板默认目录，静态图的 root=/app 不受影响，两个哨兵闸门都还在"
+assert_eq "$(run_pd __unset__ '' "${PD_ERR}" >/dev/null; grep -c '已被忽略' "${PD_ERR}")" "0" \
+  "未设置时不打任何"已忽略"的 WARN（未设置是正常状态，不是错误）"
+
+# --- 空串等同未设置（compose 里写 VAR= 很常见）---
+assert_eq "$(run_pd '' | "${NODE_BIN}" "${PD_EXTRACTOR}")" \
+  "groups=2 pd_n=2 pd_roots=${PD_DEFAULT} outside=${PD_OUTSIDE_BASE} sentinels=2" \
+  "空串等同未设置：沿用模板默认，不做任何改写"
+
+# --- 合法绝对路径：两个 server 都要改到（漏一个 = 一半流量直服失效）---
+for tpl in "${TEMPLATE}" "${FALLBACK}"; do
+  assert_eq "$(run_pd '/custom/pages/dir' "${tpl}" | "${NODE_BIN}" "${PD_EXTRACTOR}")" \
+    "groups=2 pd_n=2 pd_roots=/custom/pages/dir outside=${PD_OUTSIDE_BASE} sentinels=2" \
+    "$(basename "${tpl}")：合法绝对路径被应用到**两个** server，且没有误伤静态图那条 root=/app"
+done
+
+# --- 前后空白要被吃掉（compose 里手写 env 很容易带空格）---
+assert_eq "$(run_pd '  /trimmed/dir  ' | "${NODE_BIN}" -e '
+const c = JSON.parse(require("fs").readFileSync(0, "utf8")); const o = [];
+const wv = (n) => { if (Array.isArray(n)) return n.forEach(wv); if (!n || typeof n !== "object") return;
+  if (n.handler === "vars" && typeof n.root === "string" && n.root !== "/app") o.push(n.root);
+  for (const k of Object.keys(n)) wv(n[k]); };
+const w = (n) => { if (Array.isArray(n)) return n.forEach(w); if (!n || typeof n !== "object") return;
+  if (n.group === "vanblog-serve-html") { wv(n); return; } for (const k of Object.keys(n)) w(n[k]); };
+w(c); console.log([...new Set(o)].join(","));')" \
+  "/trimmed/dir" "值两端的空白被吃掉（'/trimmed/dir' 而不是 '  /trimmed/dir  '）"
+
+# --- 规范化：重复斜杠与结尾斜杠 ---
+assert_eq "$(run_pd '/a//b///' | "${NODE_BIN}" "${PD_EXTRACTOR}" | grep -o 'pd_roots=[^ ]*')" \
+  "pd_roots=/a/b" "'/a//b///' 被规范化成 '/a/b'（结尾斜杠会让 caddy 的 try_files 拼出 '//x.html' 这种形状）"
+assert_eq "$(run_pd '/a//b///' '' "${PD_ERR}" >/dev/null; grep -c '已规范化' "${PD_ERR}")" "1" \
+  "规范化会打一条 WARN 说明改了什么（不静默改写站长给的值）"
+
+# --- 含空格的合法路径要接受（不是所有部署路径都没有空格）---
+assert_eq "$(run_pd '/tmp/has space/pages' | "${NODE_BIN}" "${PD_EXTRACTOR}" | grep -o 'pd_n=[0-9]*')" "pd_n=2" \
+  "含空格的绝对路径被接受（JSON 里不需要转义，caddy 实测也 validate 通过）"
+
+# --- 🔴 拒绝的形状：全部回落到模板默认 + 大声 WARN（绝不是"关掉直服功能"）---
+#    每一条的拒绝理由都有实测依据，写在生成器的注释里：
+#    caddy validate 对 '/'、'{env.HOME}/x'、'/tmp/a/../b' **全部通过**（它只查 JSON 结构），
+#    而 {env.X} 会在运行时被真展开（实测正对照 200 / 负对照 404）⇒ 只能在这里拦。
+# ⚠️ 每条规则都必须有一个**只会被这条规则拦住**的取值，否则规则之间会互相掩盖：
+#    变异对照实测过这个坑 —— 去掉"拒绝花括号"那条规则时守卫**一条都没红**，因为
+#    '{env.HOME}/x' 根本不以 / 开头，早被"必须绝对路径"拦下了 ⇒ 那条用例证明不了花括号规则存在。
+#    所以下面既有 'relative/path'（只测绝对路径规则），也有 '/pages/{env.SECRET}'
+#    与 $'/evil\r\npath'（都是合法绝对路径，只可能被花括号/控制字符规则拦住）。
+for bad in 'relative/path' './rel' '/tmp/a/../b' '{env.HOME}/x' '/pages/{env.SECRET}' '/' '///' \
+           $'evil\r\nX' $'/evil\r\npath' $'evil\tname' $'/tab\there'; do
+  label="$(printf '%s' "${bad}" | tr -d '\r\n\t' | cut -c1-24)"
+  assert_eq "$(run_pd "${bad}" | "${NODE_BIN}" "${PD_EXTRACTOR}" | grep -o 'pd_roots=[^ ]*')" \
+    "pd_roots=${PD_DEFAULT}" \
+    "拒绝 '${label}'：root 回落模板默认（这个值会成为 file_server 的根，垃圾值有安全后果）"
+  assert_eq "$(run_pd "${bad}" '' "${PD_ERR}" >/dev/null; grep -c '已被忽略' "${PD_ERR}")" "1" \
+    "拒绝 '${label}' 时打一条 WARN，并说清"服务端仍会按这个值写哨兵 ⇒ 两侧不一致、直服不生效""
+done
+
+# --- 数量不对时要大声说（模板形状变了 ⇒ 旋钮可能只应用到一半）---
+PD_MUT="$(mktemp)"
+"${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const rs = d.apps.http.servers.srv0.routes;
+d.apps.http.servers.srv0.routes = rs.filter((r) => r.group !== "vanblog-serve-html");
+fs.writeFileSync(process.argv[2], JSON.stringify(d));
+' "${TEMPLATE}" "${PD_MUT}.json"
+assert_eq "$(VANBLOG_CADDY_HTML_PAGES_DIR=/x "${NODE_BIN}" "${HELPER}" "${PD_MUT}.json" permission a@b.c 2>&1 >/dev/null | grep -c '模板形状变了')" "1" \
+  "serve-html 路由少了一条时生成器会 WARN"模板形状变了"（旋钮只生效一半比完全不生效更难查）"
+rm -f "${PD_MUT}.json"
+
+# --- 🔴 跨文件不变量：TS 常量 == 两份模板里的 4 处 root ---
+#    这是本缺陷的**真正根因**：同一个路径在 3 个地方（TS 1 处 + 模板 4 处）各写一遍，
+#    而生成器一份都不写（它按结构定位，所以不可能与模板漂移 —— 下面单独钉住这一点）。
+#    ⚠️ 跨语言（TS 源码 vs JSON 模板）所以只能在这里用文本提取，提取失败必须 fail 而不是跳过。
+PD_TS_CONST="$(sed -n "s/^export const DEFAULT_WEBSITE_PAGES_DIR = '\([^']*\)';.*$/\1/p" \
+  "${ROOT}/packages/server/src/provider/caddy/caddy.provider.ts" | head -1)"
+if [[ -z "${PD_TS_CONST}" ]]; then
+  fail "取不到 caddy.provider.ts 里的 DEFAULT_WEBSITE_PAGES_DIR（提取正则失效了，不是常量被删就是形状变了）"
+else
+  pass "取到 TS 常量 DEFAULT_WEBSITE_PAGES_DIR='${PD_TS_CONST}'（提取器有效，下面的一致性断言不是恒真）"
+  assert_eq "${PD_DEFAULT}" "${PD_TS_CONST}" \
+    "跨文件一致：两份模板里 serve-html 的 root（去重后）== TS 的 DEFAULT_WEBSITE_PAGES_DIR"
+  PD_TPL_N="$("${NODE_BIN}" -e '
+const fs = require("fs");
+let n = 0; const vals = new Set();
+for (const f of process.argv.slice(1)) {
+  const wv = (x) => { if (Array.isArray(x)) return x.forEach(wv); if (!x || typeof x !== "object") return;
+    if (x.handler === "vars" && typeof x.root === "string" && x.root !== "/app") { n += 1; vals.add(x.root); }
+    for (const k of Object.keys(x)) wv(x[k]); };
+  const w = (x) => { if (Array.isArray(x)) return x.forEach(w); if (!x || typeof x !== "object") return;
+    if (x.group === "vanblog-serve-html") { wv(x); return; } for (const k of Object.keys(x)) w(k === "x" ? x[k] : x[k]); };
+  w(JSON.parse(fs.readFileSync(f, "utf8")));
+}
+console.log(`${n} ${vals.size}`);' "${TEMPLATE}" "${FALLBACK}")"
+  assert_eq "${PD_TPL_N}" "4 1" \
+    "两份模板里恰好 4 处 root（每份 2 个 server）且**只有 1 个不同值**（4 处逐字相同）"
+  # ⚠️ 负向对照：故意让一份模板漂移，上面的检测器必须报出来（否则"4 1"这条是恒真的）
+  "${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const wv = (x) => { if (Array.isArray(x)) return x.forEach(wv); if (!x || typeof x !== "object") return;
+  if (x.handler === "vars" && x.root === process.argv[3]) { x.root = "/DRIFTED/pages"; return; }
+  for (const k of Object.keys(x)) wv(x[k]); };
+const w = (x) => { if (Array.isArray(x)) return x.forEach(w); if (!x || typeof x !== "object") return;
+  if (x.group === "vanblog-serve-html") { wv(x); return; } for (const k of Object.keys(x)) w(x[k]); };
+w(d); fs.writeFileSync(process.argv[2], JSON.stringify(d));' "${TEMPLATE}" "${PD_MUT}.json" "${PD_TS_CONST}"
+  PD_DRIFT="$("${NODE_BIN}" -e '
+const fs = require("fs"); const vals = new Set();
+const wv = (x) => { if (Array.isArray(x)) return x.forEach(wv); if (!x || typeof x !== "object") return;
+  if (x.handler === "vars" && typeof x.root === "string" && x.root !== "/app") vals.add(x.root);
+  for (const k of Object.keys(x)) wv(x[k]); };
+const w = (x) => { if (Array.isArray(x)) return x.forEach(w); if (!x || typeof x !== "object") return;
+  if (x.group === "vanblog-serve-html") { wv(x); return; } for (const k of Object.keys(x)) w(x[k]); };
+w(JSON.parse(fs.readFileSync(process.argv[1], "utf8")));
+console.log([...vals].sort().join(","));' "${PD_MUT}.json")"
+  case "${PD_DRIFT}" in
+    *DRIFTED*) pass "（反证）把模板里的 root 改掉后检测器确实读到了漂移值 —— 上面的一致性断言不是恒真" ;;
+    *) fail "（反证失败）模板漂移了但检测器没读到（得到 '${PD_DRIFT}'）⇒ 一致性断言是空转的" ;;
+  esac
+  rm -f "${PD_MUT}.json"
+fi
+
+# --- 🔴 哨兵与 root 必须在**同一条**路由子树里（这正是本缺陷的机制核心）---
+#    caddy 的闸门是 `file: {try_files: ["/.vanblog-caddy-serve-html"]}`，而 try_files 是
+#    **相对当前 root 解析**的 ⇒ 哨兵必须在 root 指向的那个目录里。所以"服务端把哨兵写到 A、
+#    caddy 的 root 指着 B"就等于功能没了，而且没有任何报错。
+#    ⚠️ 顺带钉住一个实测结论：caddy 只判断哨兵**存不存在**，从不解析它的内容
+#    （内容 `level=all; ...` 是给人看的），所以哨兵的**文件名**才是跨文件契约，内容格式不是。
+assert_eq "$(run_pd '/sentinel/check/dir' | "${NODE_BIN}" -e '
+const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+let ok = 0, bad = 0;
+const w = (n) => {
+  if (Array.isArray(n)) return n.forEach(w);
+  if (!n || typeof n !== "object") return;
+  if (n.group === "vanblog-serve-html") {
+    const flat = JSON.stringify(n);
+    const rootHere = flat.includes("\"root\":\"/sentinel/check/dir\"");
+    const gates = flat.includes("/.vanblog-caddy-serve-html-dynamic") && flat.includes("/.vanblog-caddy-serve-html");
+    if (rootHere && gates) ok += 1; else bad += 1;
+    return;
+  }
+  for (const k of Object.keys(n)) w(n[k]);
+};
+w(c); console.log(`same_subtree=${ok} mismatched=${bad}`);')" \
+  "same_subtree=2 mismatched=0" \
+  "两个 server 的 serve-html 路由里，被改写的 root 与两个哨兵闸门在**同一条子树**（哨兵是相对 root 解析的 ⇒ 分开就等于直服失效）"
+
+# --- 服务端三处解析点今天必须口径一致（漂移绊线，不是语义证明）---
+#    `process.env[SERVE_HTML_PAGES_DIR_ENV] || DEFAULT_WEBSITE_PAGES_DIR` 这个表达式在三个文件里
+#    各写了一遍：caddy.provider（写/删哨兵）、degradedServeHtml（降级驻留时写哨兵）、
+#    artifactReaper（按目录删产物）。常量是**共享 import** 的（好），但表达式是三份。
+#    ⚠️ 三份里只要有一份被单独改过（例如加了校验），三处就会对同一个环境变量得出不同目录 ⇒
+#    哨兵写到 A、产物删在 B。这条守卫拦不住"三份一起改错"，但能拦住"只改一份"这种最常见的漂移。
+PD_SITES=0
+for f in packages/server/src/provider/caddy/caddy.provider.ts \
+         packages/server/src/utils/degradedServeHtml.ts \
+         packages/server/src/provider/isr/artifactReaper.ts; do
+  if grep -q 'SERVE_HTML_PAGES_DIR_ENV\] *|| *DEFAULT_WEBSITE_PAGES_DIR' "${ROOT}/${f}"; then
+    PD_SITES=$((PD_SITES + 1))
+  else
+    fail "${f} 里的产物目录解析口径变了（不再是 env || DEFAULT）：如果是有意收敛成共用函数，请同步改这条守卫；如果只改了这一处，另两处会与你得出不同目录"
+  fi
+done
+assert_eq "${PD_SITES}" "3" \
+  "服务端三处产物目录解析点口径一致（caddy.provider / degradedServeHtml / artifactReaper）"
+
+# --- 生成器**不复制**那个路径字面量（所以它不可能与模板漂移）---
+#    ⚠️ 断言的是**完整绝对路径**，不是 ".next/server/pages" 这个片段：
+#    生成器的注释里确实提到过相对形状的 .next/server/pages（讲 CSP 内联脚本时），
+#    用片段会把注释误判成"复制了字面量"。
+assert_eq "$(grep -c '/app/website/packages/website/\.next/server/pages' "${HELPER}")" "0" \
+  "生成器里 0 处硬编码那个绝对路径：改写点按 group 结构定位、默认值从模板里读 ⇒ 少一份需要人肉同步的副本"
+
+rm -f "${PD_EXTRACTOR}" "${PD_ERR}"
+
 
 echo
 echo "passed=${PASS} failed=${FAIL}"
