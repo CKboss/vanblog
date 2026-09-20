@@ -2297,7 +2297,8 @@ human_size() {
 #   - ⚠️ **目的地出问题绝不能让本地备份算失败**：本地成功 + 镜像失败 = WARN + 返回 0。
 #     理由是备份的价值排序很清楚：手边有一份 >> 远处有一份 >> 因为远处写不进去而两份都没有。
 #   - 复制后必须**校验**（能比对 sha256 就比对，否则退到 zstd -t，再否则比字节数并明说"没真校验"）。
-#   - 清理只碰 `vanblog-full-*.tar.zst` 与 `*.tar.gz` 这两种自己认识的名字，**绝不**用通配删别的。
+#   - 清理只碰 `vanblog-full-*.tar.zst`（以及加密的 `.tar.zst.enc`）与 `*.tar.gz` 这几种自己认识的名字，
+#     **绝不**用通配删别的（`.enc` 必须单独列：`-name` 是整体匹配，`*.tar.zst` 匹配不到 `*.tar.zst.enc`）。
 mirror_backup_artifacts() { # <归档路径>
   local src="$1"
   local dest="${VANBLOG_BACKUP_MIRROR_DIR:-}"
@@ -2363,7 +2364,12 @@ mirror_backup_artifacts() { # <归档路径>
   case "${keep}" in '' | *[!0-9]*) keep=7 ;; esac
   (( keep > 0 )) || return 0
   local old
-  old="$(find "${dest}" -maxdepth 1 -type f \( -name 'vanblog-full-*.tar.zst' -o -name 'vanblog-*-data.tar.gz' \) \
+  # ⚠️ `.enc` 必须单独列一条：`vanblog-full-*.tar.zst` **匹配不上** `…tar.zst.enc`
+  #    （glob 的 `*` 不跨越末尾，`-name` 是整体匹配），漏掉的后果不是"少删一个"，而是
+  #    **加密归档永远不会被清理** ⇒ 一直堆到磁盘满，而磁盘满会让之后每次备份都失败。
+  #    ⚠️ 不要图省事放宽成 `vanblog-full-*.tar.*`：上面那段注释与既有守卫钉着
+  #    "清理只碰自己认识的名字，绝不用通配删别的文件"，放宽等于削弱那条原则。
+  old="$(find "${dest}" -maxdepth 1 -type f \( -name 'vanblog-full-*.tar.zst' -o -name 'vanblog-full-*.tar.zst.enc' -o -name 'vanblog-*-data.tar.gz' \) \
          -printf '%T@ %p\n' 2>/dev/null | sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2-)"
   if [[ -n "${old}" ]]; then
     while IFS= read -r f; do
@@ -2397,10 +2403,45 @@ write_sha256_sidecar() {
   return 0
 }
 
+# ── 加密归档（server 侧 packages/server/src/utils/backupCrypto.ts）──────────────
+# 形状：魔数 `VANBLOGENC1` + 版本 + 头部 JSON（KDF 参数/salt/iv/cipher/内层格式），
+#       之后是分块 AES-256-GCM 记录流。归档名多一个 `.enc` 后缀：
+#       `vanblog-full-<时间戳>.tar.zst.enc`。
+# ⚠️ **格式判别一律以魔数为准，后缀只用于展示与 glob**：站长完全可能把归档改名
+#    （改名后 `.enc` 没了但内容还是密文，或反过来），按后缀判会把加密归档当明文处理，
+#    然后 `zstd -t` 失败 ⇒ 报"归档损坏"，而其实只是没口令。server 侧同一个原则
+#    （`isEncryptedHead()` 读魔数、`hasEncryptedSuffix()` 只看名字）。
+BACKUP_ENC_MAGIC="VANBLOGENC1"
+
+archive_is_encrypted() { # <文件> → 0=加密归档 1=不是（或读不到）
+  local f="$1" head
+  [[ -f "${f}" ]] || return 1
+  # 魔数是纯 ASCII 且在文件最前面，所以 head -c 读出来不含 NUL，可以安全地放进 bash 字符串
+  head="$(head -c "${#BACKUP_ENC_MAGIC}" "${f}" 2>/dev/null)" || return 1
+  [[ "${head}" == "${BACKUP_ENC_MAGIC}" ]]
+}
+
+archive_has_enc_suffix() { # <名字或路径> → 0=以 .enc 结尾
+  [[ "$(basename "$1" | tr '[:upper:]' '[:lower:]')" == *.enc ]]
+}
+
+# 加密归档在脚本侧能验什么、不能验什么（三处调用点都要引用同一套说法，别各写一遍）：
+#   能验：`.sha256` sidecar 与 `.manifest.json` —— **它们是明文**，不解密也能比完整性；
+#   不能验：压缩流（`zstd -t` 对密文必然失败）与成员清单（`tar -t` 读不了密文）。
+# ⚠️ "跳过了一项校验"必须**说出来**。在站长眼里"静默跳过"与"校验通过"长得一模一样，
+#    而这两种情况的区别正是"这份归档到底能不能恢复"。
+archive_encrypted_verify_note() {
+  printf '加密归档：脚本侧只比对了明文的 sidecar；压缩流与成员级校验需要口令（用 drill 或后台恢复来验）'
+}
+
 # 归档的压缩格式（按扩展名，和 server 的 detectFormat 同一套优先级）
 archive_format_of() {
   local name
   name="$(basename "$1" | tr '[:upper:]' '[:lower:]')"
+  # ⚠️ 加密归档的名字是 <内层名>.enc，而 `*.tar.zst.enc` **匹配不上** `*.tar.zst`
+  #    ⇒ 不先剥后缀就会掉进"认不出压缩格式"分支，把一份好的加密归档判成 FAIL。
+  #    内层格式仍然有意义：解密之后就是那个流，drill/后台要知道该用什么解。
+  name="${name%.enc}"
   case "${name}" in
   *.tar.zst | *.zst) printf 'zstd' ;;
   *.tar.xz | *.xz) printf 'xz' ;;
@@ -2413,6 +2454,12 @@ archive_format_of() {
 # 返回 127 = 本机没有对应解压工具（调用方要区分"没法验"与"验不过"）。
 archive_integrity_test() {
   local fmt="$1" file="$2" rc
+  # ⚠️ 加密归档的外层是**密文**，不是 zstd/xz/gzip 流 ⇒ `zstd -t` 必然失败。
+  #    返回 128 = "这项校验不适用"，与 127（本机没工具）、0（通过）、其它（真的坏了）区分开。
+  #    调用方必须把 128 显示成"跳过 + 为什么"，**不能**当成通过、也不能当成损坏。
+  if archive_is_encrypted "${file}"; then
+    return 128
+  fi
   case "${fmt}" in
   zstd)
     command -v zstd >/dev/null 2>&1 || return 127
@@ -2481,7 +2528,7 @@ verify_one_archive() {
   local fmt
   fmt="$(archive_format_of "${file}")"
   if [[ -z "${fmt}" ]]; then
-    echo -e "  ${red}FAIL${plain} ${base}：认不出压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）"
+    echo -e "  ${red}FAIL${plain} ${base}：认不出压缩格式（支持 .tar.zst / .tar.xz / .tar.gz，加密归档再多个 .enc 后缀）"
     return 1
   fi
   local size
@@ -2489,12 +2536,23 @@ verify_one_archive() {
   local -a problems=() notes=()
 
   # 1) 流式完整性（不解压落盘就能抓住截断/损坏）
+  local enc=0
+  archive_is_encrypted "${file}" && enc=1
   archive_integrity_test "${fmt}" "${file}"
   case $? in
   0) notes+=("${fmt} 完整性 ✓") ;;
   127) problems+=("本机没有 ${fmt} 解压工具，无法校验") ;;
+  128) notes+=("加密归档：跳过 ${fmt} 压缩流校验（外层是密文，不是 ${fmt} 流）") ;;
   *) problems+=("${fmt} 完整性校验失败（归档可能被截断或损坏）") ;;
   esac
+  if [[ ${enc} -eq 1 ]]; then
+    # 名字里没有 .enc 但内容是密文（或反过来）都要说出来：改名会让站长误判自己拿的是哪种归档
+    if archive_has_enc_suffix "${base}"; then
+      notes+=("已识别为加密归档（魔数 ${BACKUP_ENC_MAGIC}）")
+    else
+      notes+=("⚠️ 内容是加密归档（魔数 ${BACKUP_ENC_MAGIC}）但文件名没有 .enc 后缀 —— 判定以魔数为准")
+    fi
+  fi
 
   # 2) sha256 sidecar（有就比对；没有就明说跳过，不假装比过）
   local sidecar="${file}.sha256"
@@ -2516,8 +2574,15 @@ verify_one_archive() {
   fi
 
   # 3) 成员清单
+  #    ⚠️ 加密归档**列不出成员**（tar 读不了密文），这不是损坏 —— 成员级校验需要口令，
+  #    脚本侧没有口令就不做，但必须明说"没做"，否则站长会把"跳过"读成"通过"。
   local members kind
-  members="$(archive_list_members "${fmt}" "${file}")"
+  if [[ ${enc} -eq 1 ]]; then
+    members=""
+    notes+=("$(archive_encrypted_verify_note)")
+  else
+    members="$(archive_list_members "${fmt}" "${file}")"
+  fi
   case "${base}" in
   vanblog-full-*) kind="full" ;;
   vanblog-backup-*) kind="offline" ;;
@@ -2528,7 +2593,12 @@ verify_one_archive() {
     esac
     ;;
   esac
-  if [[ -z "${members}" ]]; then
+  if [[ ${enc} -eq 1 ]]; then
+    # ⚠️ 加密归档在这里**一条成员断言都不做**：members 必然是空的，而下面的 full 分支
+    #    会把"空清单"判成"缺 manifest.json / 一个 ndjson 都没有"⇒ 把一份好的加密归档报成 FAIL。
+    #    已经在上面记了 note 说明"成员级校验需要口令"，这就够了（宁可不验，不可假验）。
+    :
+  elif [[ -z "${members}" ]]; then
     problems+=("列不出成员（tar 结构损坏或不是 tar 归档）")
   elif [[ "${kind}" == "full" ]]; then
     if printf '%s\n' "${members}" | grep -qE '(^|/)manifest\.json$'; then
@@ -3380,6 +3450,21 @@ backup_full() {
   else
     echo -e "  服务器目录：${yellow}$(full_backup_dir)${plain}（容器内 <日志目录>/vanblog-backups）"
   fi
+  # ⚠️ 加密归档必须**在这里**就说清楚：站长往往把归档传到另一台机器/对象存储，
+  #    等到真要恢复时才发现打不开就太晚了 —— 而那时口令常常已经不在手边。
+  #    判据优先用魔数（读得到文件时），读不到（非 root）才退回看 .enc 后缀，并说明用了哪种判据。
+  local export_encrypted=0 enc_judged_by=""
+  if [[ -n "${name}" && -f "${host_path}" ]]; then
+    if archive_is_encrypted "${host_path}"; then export_encrypted=1; enc_judged_by="魔数 ${BACKUP_ENC_MAGIC}"; fi
+  elif archive_has_enc_suffix "${name:-}"; then
+    export_encrypted=1; enc_judged_by="文件名 .enc 后缀（宿主机上读不到这个文件，没法验魔数）"
+  fi
+  if [[ ${export_encrypted} -eq 1 ]]; then
+    echo -e "  ${yellow}加密    ：这份归档是加密的（AES-256-GCM，判据：${enc_judged_by}）${plain}"
+    echo -e "  ${yellow}          恢复时必须提供当初的口令，口令丢了这份归档就恢复不了：${plain}"
+    echo -e "  ${yellow}          VANBLOG_BACKUP_PASSPHRASE='<口令>' ./vanblog.sh restore ${name:-<归档名>}${plain}"
+    echo -e "  ${yellow}          或 VANBLOG_BACKUP_PASSPHRASE_FILE=/path/to/pass.txt（chmod 600）${plain}"
+  fi
   echo -e "  恢复    ：${green}./vanblog.sh restore ${name}${plain}"
   echo -e "  ${yellow}注意：这份归档不含 caddy 的证书与配置（它们在数据目录里）。要连证书一起备，用 --offline。${plain}"
   return 0
@@ -3667,6 +3752,97 @@ vanblog_api_base() {
 }
 
 sha256_hex() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+
+# ── 备份口令（加密归档）────────────────────────────────────────────────────
+# 来源与优先级与 server 侧完全一致（`packages/server/src/utils/backupCrypto.ts` 的
+# `resolveBackupPassphrase`）：`VANBLOG_BACKUP_PASSPHRASE_FILE`（**优先**，Docker secret 用）
+# > `VANBLOG_BACKUP_PASSPHRASE`（内联）。
+# ⚠️ 三条铁律（每条都对应一个真实的泄漏/误判路径）：
+#   1. **绝不回显**：不进提示、不进日志、**不进 curl 的 argv**（argv 对同机任何用户 `ps` 可见，
+#      query 更糟 —— 它会进 caddy 的访问日志）。所以送给服务端一律走 body，且用
+#      `-F "字段=<文件"` / `-d @文件` 这种"值从文件读"的形式。
+#   2. 只 **trimEnd**（与 server 一致）：口令里的前导空格可能是有意的一部分，
+#      而尾部换行几乎总是"用文件存口令"这个写法带来的。
+#   3. `_FILE` 配了但**读不到就失败关闭**（返回 2），绝不静默回落成"当明文归档处理"——
+#      那会让站长看到一次"成功"的恢复，而其实恢复的是别的东西/或者根本没解密。
+# ⚠️ 口令临时目录用 **PID 作用域的固定路径**，而不是"把建过的文件记进数组"：
+#    调用方几乎都是 `f="$(passphrase_temp_file …)"` 这种**命令替换**，而命令替换跑在子 shell 里
+#    ⇒ 子 shell 里对数组的 append **传不回父 shell**，EXIT trap 看到的永远是空数组，
+#    兜底清理形同虚设（脚本中途死掉时口令就留在磁盘上了）。固定路径不需要跨 shell 传状态：
+#    trap 里直接按 `$$` 重算就能删。并发运行互不干扰（PID 不同），且 bash 的 `$$` 在命令替换里
+#    仍是**主 shell** 的 PID，所以子 shell 建的文件也落在同一个目录里、同样会被清掉。
+VANBLOG_PASS_DIR="${TMPDIR:-/tmp}/vanblog-pass-$$"
+
+_passphrase_cleanup() {
+  # 只删自己这个 PID 的目录，绝不碰别人的（通配删 vanblog-pass-* 会误伤并发运行的另一份）
+  if [[ -n "${VANBLOG_PASS_DIR}" && -d "${VANBLOG_PASS_DIR}" ]]; then
+    rm -rf "${VANBLOG_PASS_DIR}" 2>/dev/null
+  fi
+  return 0
+}
+# ⚠️ 用 EXIT 而不只是 INT/TERM：脚本无论以哪种方式结束（正常返回、报错退出、被信号打断后
+#    shell 退出）都要清掉口令文件。trap 里不改变退出码（不 exit / 不 return 非 0）。
+trap '_passphrase_cleanup' EXIT
+
+# 解析口令。stdout = 口令本身（可能为空串）；返回 0=拿到（含"没配"这种空）、2=`_FILE` 读不到。
+# ⚠️ 调用方要用 `pass="$(backup_passphrase_from_env)"` 捕获，**不要**让它直接打到终端。
+backup_passphrase_from_env() {
+  local fp inline
+  fp="${VANBLOG_BACKUP_PASSPHRASE_FILE:-}"
+  if [[ -n "${fp}" ]]; then
+    if [[ ! -r "${fp}" ]]; then
+      echo -e "${red}读不到备份口令文件 ${fp}（VANBLOG_BACKUP_PASSPHRASE_FILE）${plain}" >&2
+      echo -e "${yellow}已拒绝继续：不会静默当成明文归档处理。请检查路径与读权限，${plain}" >&2
+      echo -e "${yellow}或改用 VANBLOG_BACKUP_PASSPHRASE='<口令>' 内联传入。${plain}" >&2
+      return 2
+    fi
+    # 只去尾部空白（\n\r\t空格），保留前导空格：与 server 的 trimEnd 口径一致
+    local raw
+    raw="$(cat "${fp}" 2>/dev/null)" || {
+      echo -e "${red}读取 ${fp} 失败${plain}" >&2
+      return 2
+    }
+    printf '%s' "${raw%"${raw##*[![:space:]]}"}"
+    return 0
+  fi
+  inline="${VANBLOG_BACKUP_PASSPHRASE:-}"
+  printf '%s' "${inline%"${inline##*[![:space:]]}"}"
+  return 0
+}
+
+# 把口令写进一个 0600 的临时文件，路径打到 stdout（供 curl 的 `<file` / `@file` 用）。
+# ⚠️ 目录也要 0700：本机 umask 是 0002，`mkdir` 出来是 0775 ⇒ 同机其他用户能进目录看文件名。
+#    `mktemp` 建的文件本身是 0600，但仍显式 chmod 一次（不依赖实现细节）。
+passphrase_temp_file() { # <口令> → stdout=文件路径（0600，父目录 0700）
+  local dir f n
+  dir="${VANBLOG_PASS_DIR}"
+  if [[ ! -d "${dir}" ]]; then
+    mkdir -p "${dir}" 2>/dev/null || return 1
+    # ⚠️ 本机 umask 是 0002 ⇒ mkdir 出来是 0775，同机其他用户能进目录看文件名。必须显式收紧。
+    chmod 700 "${dir}" 2>/dev/null
+  fi
+  # 同一次运行里可能要几个（例如恢复 + 轮换），用序号避免互相覆盖
+  n=1
+  while [[ -e "${dir}/passphrase-${n}" ]]; do n=$((n + 1)); done
+  f="${dir}/passphrase-${n}"
+  : >"${f}" || return 1
+  chmod 600 "${f}" 2>/dev/null
+  printf '%s' "$1" >"${f}"
+  printf '%s' "${f}"
+}
+
+# 用完立刻删（EXIT trap 只是兜底：口令文件在磁盘上多留一秒都是风险）
+passphrase_temp_free() { # <文件路径>
+  local f="$1" d
+  [[ -n "${f}" ]] || return 0
+  d="$(dirname "${f}")"
+  rm -f "${f}" 2>/dev/null
+  # ⚠️ 只删**自己那个 PID 目录**：万一 f 来自别处（调用方传错），绝不递归删人家的目录
+  if [[ -n "${d}" && "${d}" == "${VANBLOG_PASS_DIR}" && -d "${d}" ]]; then
+    rmdir "${d}" 2>/dev/null || rm -rf "${d}" 2>/dev/null
+  fi
+  return 0
+}
 
 json_string() {
   local s="$1"
@@ -4024,6 +4200,36 @@ restore_full_backup() {
     fi
   fi
 
+  # ── 加密归档：先把口令准备好（放在"确认恢复"之前，免得用户确认完才被告知缺口令）──
+  # ⚠️ 字段名两条路不一样，别搞混（都是**只走 body**，服务端明确不接受 query，因为 query 会进
+  #    caddy 的访问日志）：
+  #      POST /api/admin/backup/full/restore → `passphrase`（本函数走的就是这条）
+  #      POST /api/admin/init/restore        → `backupPassphrase`（未初始化时的匿名恢复）
+  #    口令留空也是合法的：服务端会回落到自己的 env（`VANBLOG_BACKUP_PASSPHRASE(_FILE)`），
+  #    所以"编排里配好了口令"的部署不需要脚本再送一遍。
+  local restore_pass="" restore_pass_rc=0
+  restore_pass="$(backup_passphrase_from_env)" || restore_pass_rc=$?
+  if [[ ${restore_pass_rc} -eq 2 ]]; then
+    # `_FILE` 配了却读不到：失败关闭。绝不"当作没配"继续 —— 那会走到解包阶段才失败，
+    # 而那时的报错是"归档损坏"，把站长引到完全错误的方向。
+    return 1
+  fi
+  if [[ ${upload} -eq 1 ]] && archive_is_encrypted "${target}" ]]; then
+    if [[ -n "${restore_pass}" ]]; then
+      echo -e "> 这份归档是${yellow}加密的${plain}（魔数 ${BACKUP_ENC_MAGIC}）：已带上口令（${#restore_pass} 字节，不回显）"
+    else
+      echo -e "${red}这份归档是加密的（魔数 ${BACKUP_ENC_MAGIC}），但本机没有口令，恢复必定失败。${plain}"
+      echo -e "${yellow}两个办法任选：${plain}"
+      echo -e "${yellow}  ① VANBLOG_BACKUP_PASSPHRASE='<当初备份用的口令>' ${VANBLOG_SELF_NAME} restore ${target}${plain}"
+      echo -e "${yellow}  ② 把口令写进一个只有你能读的文件（chmod 600），然后${plain}"
+      echo -e "${yellow}     VANBLOG_BACKUP_PASSPHRASE_FILE=/path/to/pass.txt ${VANBLOG_SELF_NAME} restore ${target}${plain}"
+      echo -e "  （如果口令是配在**容器**的环境里，脚本不送也行 —— server 会自己按 env 解析。）"
+      return 1
+    fi
+  elif [[ -n "${restore_pass}" ]]; then
+    echo -e "> 已带上备份口令（${#restore_pass} 字节，不回显）；如果这份归档是明文的，服务端会忽略它"
+  fi
+
   # 恢复前先把清单打出来：备份是什么时候的、里面有哪些集合，避免恢复错版本
   local inspect_body inspect_resp
   if [[ ${upload} -eq 0 ]]; then
@@ -4052,18 +4258,51 @@ restore_full_backup() {
   fi
 
   echo -e "> 开始恢复（大备份可能要几分钟，请勿中断）..."
-  local resp
-  if [[ ${upload} -eq 1 ]]; then
-    resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
-      -H "token: ${token}" \
-      -F "file=@${target}" \
-      -F "confirm=true" \
-      -F "withStatic=${with_static}" 2>&1)"
-  else
-    resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
-      -H "token: ${token}" -H 'Content-Type: application/json' \
-      -d "{\"name\":$(json_string "${target}"),\"confirm\":\"true\",\"withStatic\":\"${with_static}\"}" 2>&1)"
+  local resp pass_file="" body_file=""
+  # ⚠️ 口令绝不进 argv：`-F 'passphrase=值'` 与 `-d '{…值…}'` 都会把值放在命令行上，
+  #    同机任何用户 `ps` 一眼就能看到。所以走"值从文件读"的形式：
+  #    multipart 用 `-F "字段=<文件"`（curl 的 `<` 前缀语义），JSON 用 `-d @文件`。
+  if [[ -n "${restore_pass}" ]]; then
+    pass_file="$(passphrase_temp_file "${restore_pass}")" || {
+      echo -e "${red}建不了口令临时文件（磁盘满？TMPDIR 不可写？）${plain}"
+      return 1
+    }
   fi
+  if [[ ${upload} -eq 1 ]]; then
+    if [[ -n "${pass_file}" ]]; then
+      resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
+        -H "token: ${token}" \
+        -F "file=@${target}" \
+        -F "confirm=true" \
+        -F "withStatic=${with_static}" \
+        -F "passphrase=<${pass_file}" 2>&1)"
+    else
+      resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
+        -H "token: ${token}" \
+        -F "file=@${target}" \
+        -F "confirm=true" \
+        -F "withStatic=${with_static}" 2>&1)"
+    fi
+  else
+    # by-name 这条路本来就用 `-d '{…}'`（值在 argv 里）。没口令时保持原样；
+    # 有口令时整个 body 改走 0600 文件 + `-d @文件`，避免口令进 argv。
+    if [[ -n "${pass_file}" ]]; then
+      body_file="${pass_file}.body.json"
+      : >"${body_file}" && chmod 600 "${body_file}" 2>/dev/null
+      printf '{"name":%s,"confirm":"true","withStatic":"%s","passphrase":%s}' \
+        "$(json_string "${target}")" "${with_static}" "$(json_string "${restore_pass}")" >"${body_file}"
+      resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
+        -H "token: ${token}" -H 'Content-Type: application/json' \
+        -d "@${body_file}" 2>&1)"
+    else
+      resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
+        -H "token: ${token}" -H 'Content-Type: application/json' \
+        -d "{\"name\":$(json_string "${target}"),\"confirm\":\"true\",\"withStatic\":\"${with_static}\"}" 2>&1)"
+    fi
+  fi
+  # 用完立刻删（EXIT trap 只是兜底）：口令文件在磁盘上多留一秒都是风险
+  passphrase_temp_free "${pass_file}"
+  pass_file="" body_file=""
 
   if printf '%s' "${resp}" | grep -q '"statusCode":200'; then
     echo -e "${green}恢复成功${plain}"
@@ -4075,6 +4314,142 @@ restore_full_backup() {
   printf '%s\n' "${resp}" | head -c 800
   echo
   return 1
+}
+
+# ── JWT 签名密钥轮换 ───────────────────────────────────────────────────────
+# 什么时候需要它：怀疑 jwt 签名密钥泄露。**这不是假想**——一份整站备份归档里就含
+# `settings{type:'jwt'}` 的密钥，拿到归档的人能**自签管理员 token**（不需要口令、不需要爆破）。
+# 所以"归档流出去了"就等于"密钥泄露了"，轮换是唯一的补救（改口令没用：token 不验口令）。
+#
+# ⚠️ 为什么走 HTTP 而不是 `exec` 进容器跑一次性 node 脚本：HTTP 那条路
+# （`POST /api/admin/backup/jwt/rotate`）除了换库里的密钥，还会**就地切换签发侧**
+# （`switchJwtSigningKey`），所以正常情况下**不需要重启**；只有切换失败时响应里的
+# `restartRequired` 才为 true，那时脚本会明确叫你去重启。一次性 node 进程里没有 JwtService，
+# 那条路**必然**要重启，而且拿不到 `apiTokensAffected` 这些数字。
+#
+# ⚠️ 这是**不可逆**操作，所以默认要交互确认（`--yes` / `VANBLOG_ASSUME_YES=1` 可跳过）。
+# 用法：
+#   ./vanblog.sh rotate-jwt                     默认宽限期（服务端决定，通常 7 天）
+#   ./vanblog.sh rotate-jwt --grace-days 0      旧密钥立即失效（所有旧会话/API Token 马上掉线）
+#   ./vanblog.sh rotate-jwt --grace-days 30 --yes
+rotate_jwt() {
+  local skip_menu=0
+  [[ "${1:-}" == "0" ]] && skip_menu=1 && shift
+  local grace_days="" assume_yes=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --grace-days)
+      grace_days="${2:-}"
+      if [[ ! "${grace_days}" =~ ^[0-9]+$ ]] || ((grace_days > 365)); then
+        echo -e "${red}--grace-days 要一个 0 到 365 之间的整数（0 = 旧密钥立即失效），收到：${grace_days}${plain}"
+        return 1
+      fi
+      shift 2
+      ;;
+    --grace-days=*)
+      grace_days="${1#*=}"
+      if [[ ! "${grace_days}" =~ ^[0-9]+$ ]] || ((grace_days > 365)); then
+        echo -e "${red}--grace-days 要一个 0 到 365 之间的整数，收到：${grace_days}${plain}"
+        return 1
+      fi
+      shift
+      ;;
+    -y | --yes) assume_yes=1; shift ;;
+    -h | --help)
+      echo -e "  ${green}${VANBLOG_SELF_NAME} rotate-jwt [--grace-days N] [--yes]${plain}"
+      echo -e "    轮换 JWT 签名密钥（怀疑密钥/整站备份泄露时的补救）。N=0..365，0 = 旧密钥立即失效。"
+      return 0
+      ;;
+    *)
+      echo -e "${red}rotate-jwt 不认识这个参数：$1${plain}"
+      echo -e "  可用：${yellow}--grace-days N${plain}（0..365）、${yellow}--yes${plain}（跳过确认）"
+      return 1
+      ;;
+    esac
+  done
+  [[ "${VANBLOG_ASSUME_YES:-0}" == "1" ]] && assume_yes=1
+
+  local base
+  base="$(vanblog_api_base)"
+  echo -e "> 轮换 JWT 签名密钥：${yellow}${base}${plain}"
+
+  local code
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}）。先 ${yellow}${VANBLOG_SELF_NAME} start${red} 再试。${plain}"
+    return 1
+  fi
+
+  # 后果必须在**确认之前**说清：这是不可逆操作，而且受影响的不只是站长自己
+  echo -e "${red}这件事不可逆，请先读完三条后果：${plain}"
+  echo -e "  1) ${yellow}宽限期内${plain}旧密钥还能验签 ⇒ 现在已登录的会话不会立刻掉线；"
+  echo -e "  2) ${yellow}宽限期一过${plain}，所有用旧密钥签发的登录会话与**全部 API Token** 一律失效"
+  echo -e "     （API Token 是同一份密钥签的），外部集成必须到后台「Token 管理」重新签发；"
+  echo -e "  3) ${yellow}恢复一份旧归档会把密钥一起回滚${plain}（归档里含 jwt 密钥）⇒ 那时需要再轮换一次。"
+  echo -e "  ⚠️ 还有一处耦合：waline 子进程的会话密钥是**从本站 jwt 密钥派生**的"
+  echo -e "     （packages/server/src/provider/waline/waline.provider.ts 的 JWT_TOKEN），"
+  echo -e "     所以轮换后**下次重启 waline 时**，评论者的登录会话会失效，需要重新登录才能评论。"
+  if [[ -n "${grace_days}" ]]; then
+    echo -e "> 本次宽限期：${yellow}${grace_days} 天${plain}"
+  else
+    echo -e "> 本次宽限期：用服务端默认值（不传 --grace-days）"
+  fi
+
+  if [[ ${assume_yes} -ne 1 ]]; then
+    local input
+    read -e -r -p "确认轮换? 输入 yes 继续: " input
+    if [[ "${input}" != "yes" ]]; then
+      echo "已取消（密钥未改动）"
+      return 0
+    fi
+  fi
+
+  local token
+  token="$(vanblog_admin_token)" || return 1
+
+  # body 里没有机密（只有 graceDays），所以直接用 -d；⚠️ 但**绝不**把它放 query
+  local body='{}'
+  [[ -n "${grace_days}" ]] && body="{\"graceDays\":${grace_days}}"
+  local resp
+  resp="$(curl -sS -m 120 -X POST "${base}/api/admin/backup/jwt/rotate" \
+    -H "token: ${token}" -H 'Content-Type: application/json' -d "${body}" 2>&1)"
+
+  if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+    echo -e "${red}轮换失败${plain}："
+    printf '%s\n' "${resp}" | head -c 600
+    echo
+    echo -e "${yellow}常见原因：token 过期/无权限（这条接口只有管理员能调，勾「所有权限」的协作者也不行）、"
+    echo -e "          演示站禁止修改、或 graceDays 超范围（0..365）。${plain}"
+    return 1
+  fi
+
+  local data pick
+  data="$(printf '%s' "${resp}" | sed 's/^{"statusCode":200,//; s/}$//')"
+  pick() { printf '%s' "${data}" | grep -oE "\"$1\":(\"[^\"]*\"|[0-9.]+|true|false|null)" | head -1 | sed -E "s/^\"$1\"://; s/^\"//; s/\"$//"; }
+  local kid prev_kid gd affected restart msg
+  kid="$(pick kid)"
+  prev_kid="$(pick previousKid)"
+  gd="$(pick graceDays)"
+  affected="$(pick apiTokensAffected)"
+  restart="$(pick restartRequired)"
+  msg="$(printf '%s' "${resp}" | grep -oE '"message":"[^"]*"' | head -1 | sed 's/^"message":"//; s/"$//')"
+
+  echo -e "${green}JWT 密钥已轮换${plain}"
+  [[ -n "${kid}" ]] && echo -e "  新 kid      ：${yellow}${kid}${plain}"
+  [[ -n "${prev_kid}" && "${prev_kid}" != "null" ]] && echo -e "  旧 kid      ：${prev_kid}（进入宽限期）"
+  [[ -n "${gd}" && "${gd}" != "null" ]] && echo -e "  宽限期      ：${yellow}${gd} 天${plain}"
+  if [[ "${affected}" =~ ^[0-9]+$ ]]; then
+    echo -e "  受影响 Token：${yellow}${affected}${plain} 个 API Token 会在宽限期结束后失效（要用的请到后台重新签发）"
+  fi
+  [[ -n "${msg}" ]] && echo -e "  服务端原话  ：${msg}"
+  if [[ "${restart}" == "true" ]]; then
+    echo -e "${red}⚠️ 签发侧没能就地切换（restartRequired=true）：请重启容器完成切换${plain}"
+    echo -e "${yellow}   ${VANBLOG_SELF_NAME} restart${plain}"
+    echo -e "   在重启之前，新签发的令牌仍用旧密钥，宽限期一结束它们会提前失效。"
+  fi
+  echo -e "> 你当前这个 shell 里的 ${yellow}VANBLOG_ADMIN_TOKEN${plain} 在宽限期结束后会失效，届时重新登录取一个新的。"
+  return 0
 }
 
 # 恢复。两种归档自动分流：
@@ -4386,14 +4761,16 @@ doctor() {
     # ⚠️ `-printf` 是 GNU find 的扩展。取不到时间时**绝不能**顺着"没有归档"那条分支走 ——
     #    那是把一个工具能力问题谎报成"你一份备份都没有"，比不报更糟。
     local ts_ok=1 cnt
-    if ! find "${bdir}" -maxdepth 1 -type f -name 'vanblog-full-*.tar.zst' -printf '%T@ %p\n' >/dev/null 2>&1; then
+    # ⚠️ 两处 `-name` 与下面那个 glob 都要带上 `.enc`：doctor 报"最近一次备份多旧/共几份"，
+    #    漏掉加密归档会让站长看到"你已经 N 天没备份了"，而其实每天都备了（只是加密的）。
+    if ! find "${bdir}" -maxdepth 1 -type f \( -name 'vanblog-full-*.tar.zst' -o -name 'vanblog-full-*.tar.zst.enc' \) -printf '%T@ %p\n' >/dev/null 2>&1; then
       ts_ok=0
     fi
     if ((ts_ok)); then
-      newest="$(find "${bdir}" -maxdepth 1 -type f -name 'vanblog-full-*.tar.zst' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
+      newest="$(find "${bdir}" -maxdepth 1 -type f \( -name 'vanblog-full-*.tar.zst' -o -name 'vanblog-full-*.tar.zst.enc' \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
     else
       newest=""
-      cnt="$(ls -1 "${bdir}"/vanblog-full-*.tar.zst 2>/dev/null | wc -l)"
+      cnt="$( { ls -1 "${bdir}"/vanblog-full-*.tar.zst "${bdir}"/vanblog-full-*.tar.zst.enc; } 2>/dev/null | wc -l)"
       echo -e "  ${yellow}!${plain} 本机的 find 不支持 -printf（非 GNU/BusyBox），**判断不了备份有多旧**；目录里有 ${cnt} 份归档"
       echo -e "      手工看最新一份：${yellow}ls -lt ${bdir} | head${plain}"
       warns=$((warns + 1))
@@ -5006,6 +5383,14 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
         --no-restart              恢复完不重启（那就得自己重启一次）
         --verbose                 打印完整清单 JSON
                                   ⚠️ 恢复失败时会把临时管理员账号打印出来，不会把你锁在门外。
+  rotate-jwt                    轮换 JWT 签名密钥。**怀疑密钥泄露时用**：一份整站备份归档里
+                                  就含 jwt 密钥，拿到它能自签管理员 token（改口令没用，token 不验口令）。
+        --grace-days N            宽限期天数（0..365，0 = 旧密钥立即失效）。不传 = 用服务端默认值。
+        --yes                     跳过交互确认（脚本/cron 里用；这是不可逆操作，请自己想清楚）
+                                  ⚠️ 宽限期一过，所有旧登录会话与**全部 API Token** 失效（外部集成
+                                  要在后台重新签发）；恢复旧归档会把密钥回滚，需要再轮换一次；
+                                  waline 的评论者会话在下次重启 waline 后失效（它的密钥派生自本站 jwt 密钥）。
+                                  这条接口只有管理员能调（勾「所有权限」的协作者也不行）。
   verify                          校验备份归档（**不解压落盘**），三步：
                                     a) 流式过一遍解压器（zstd/xz/gzip -t）——截断/损坏当场发现
                                     b) sha256 比对——只有**本脚本**做的备份才有 <归档>.sha256 记录；
@@ -5122,7 +5507,7 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
                                            复制后会校验（sha256 → zstd -t → 只比字节数并明说没真校验），
                                            校验不过就删掉坏副本。⚠️ 目的地出问题**绝不会**让本地备份算失败。
     VANBLOG_BACKUP_MIRROR_KEEP=              镜像目的地保留几份（默认与 VANBLOG_BACKUP_KEEP 相同）。
-                                           清理只碰 vanblog-full-*.tar.zst / *-data.tar.gz，别的文件一个不动。
+                                           清理只碰 vanblog-full-*.tar.zst（含 .enc）/ *-data.tar.gz，别的文件一个不动。
     VANBLOG_BACKUP_ALERT_WEBHOOK=            定时备份**失败**时 POST 一次 JSON（{"text": "..."}）到这个地址。
                                            只在失败时发；10 秒超时；⚠️ 打不通绝不影响备份结果与退出码。
     VANBLOG_SKIP_PULL=1                      完全不联网，只用本机已有的镜像（air-gapped 装机/升级）。
@@ -5398,6 +5783,11 @@ if [[ $# > 0 ]]; then
   "reset")
     shift
     reset 0 "$@"
+    exit $?
+    ;;
+  "rotate-jwt")
+    shift
+    rotate_jwt 0 "$@"
     exit $?
     ;;
   *) show_usage ;;

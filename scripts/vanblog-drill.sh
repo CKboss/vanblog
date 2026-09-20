@@ -2656,12 +2656,41 @@ cmd_drill() {
   #    下面第 7) 步的失败分支会主动对一次账（现 IP vs 写进去的 IP）并直说。
   #    （没有改成 network alias / 内嵌 DNS：rootless podman 常常没有 aardvark-dns，
   #      而这条 IP + --add-host 的路是本机验证过的。）
+  # ── 加密归档的口令透传 ────────────────────────────────────────────────
+  # ⚠️ 不用 `-e VANBLOG_BACKUP_PASSPHRASE="$值"`：那样口令会进 `run` 的 **argv**，
+  #    同机任何用户 `ps` 一眼可见，还会被本脚本的日志与断言台账带出去。
+  # ⚠️ 也不能把宿主的 `_FILE` 路径直接传进去：那是**宿主机路径**，容器里不存在。
+  # 所以两种来源统一成"一个 0600 文件 + 只读挂载 + 容器内路径"。
+  local -a drill_pass_args=()
+  local drill_pass_src="${VANBLOG_BACKUP_PASSPHRASE_FILE:-}"
+  local drill_pass_bytes=0
+  if [[ -n "${drill_pass_src}" && -r "${drill_pass_src}" ]]; then
+    drill_pass_bytes="$(wc -c <"${drill_pass_src}" 2>/dev/null | tr -d ' ')"
+    drill_pass_args+=(-v "${drill_pass_src}:/run/secrets/vanblog-backup-passphrase:ro"
+      -e VANBLOG_BACKUP_PASSPHRASE_FILE=/run/secrets/vanblog-backup-passphrase)
+    rec_note "备份口令已透传" "来自 VANBLOG_BACKUP_PASSPHRASE_FILE（${drill_pass_bytes} 字节，不回显），以只读文件挂进容器"
+  elif [[ -n "${VANBLOG_BACKUP_PASSPHRASE:-}" ]]; then
+    local drill_pass_tmp="${DRILL_TMP}/backup-passphrase"
+    if [[ -n "${DRILL_TMP}" ]] && printf '%s' "${VANBLOG_BACKUP_PASSPHRASE}" >"${drill_pass_tmp}" 2>/dev/null; then
+      chmod 600 "${drill_pass_tmp}" 2>/dev/null
+      drill_pass_bytes="${#VANBLOG_BACKUP_PASSPHRASE}"
+      drill_pass_args+=(-v "${drill_pass_tmp}:/run/secrets/vanblog-backup-passphrase:ro"
+        -e VANBLOG_BACKUP_PASSPHRASE_FILE=/run/secrets/vanblog-backup-passphrase)
+      rec_note "备份口令已透传" "来自 VANBLOG_BACKUP_PASSPHRASE（${drill_pass_bytes} 字节，不回显），经 0600 临时文件只读挂进容器"
+    else
+      rec_warn "备份口令没能透传" "VANBLOG_BACKUP_PASSPHRASE 有值但写不进 ${DRILL_TMP:-<没有临时目录>}；加密归档会恢复失败"
+    fi
+  fi
+  # ⚠️ 没配口令时**什么都不加**：server 侧会回落到容器自己的 env，而明文归档根本不需要口令 ——
+  #    不要为了"看起来做了事"而挂一个空文件进去。
+
   if ! "${eng}" run -d --name "${DRILL_APP_NAME}" \
     --network "${net_name}" \
     --add-host "${DRILL_MONGO_NAME}:${mongo_ip}" \
     -p "${DRILL_HTTP_PORT}:80" \
     -e TZ=Asia/Shanghai \
     -e EMAIL="" \
+    ${drill_pass_args[@]+"${drill_pass_args[@]}"} \
     -e "VAN_BLOG_DATABASE_URL=mongodb://${mongo_ip}:27017/vanBlog?authSource=admin" \
     -v "${DRILL_VOLUMES[0]}:/app/static" \
     -v "${DRILL_VOLUMES[1]}:/var/log" \

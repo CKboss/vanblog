@@ -234,7 +234,22 @@ kfacts() {
   emit "  容器内监听端口：${q:-未采集到}"
   emit "  accept 队列深度 / backlog 上限：$(grep -m1 '^ss=' "$f" 2>/dev/null | cut -d= -f2- || true)"
   emit "  ⚠️ 上面这一栏读不到就是读不到，**不要**拿 /proc/net/tcp 的 0/0 当 backlog（那是 LISTEN socket 的 write_seq/rcv_nxt 差值，恒为 0，不是队列信息）。"
-  emit "  ⚠️ 所以 backlog 只有两条间接证据：① 代码里 Node \`listen()\` 没传 backlog ⇒ 内核默认 **511**；② 下面 TcpExt.ListenOverflows 的增量 —— 涨了就说明确实溢出过。"
+  # ⚠️ 这一段以前**无条件**断言"代码里 Node listen() 没传 backlog ⇒ 内核默认 511"。
+  #    那是 f0732f79 之前的事实；现在 backlog 是显式可配的（VANBLOG_LISTEN_BACKLOG，默认 4096），
+  #    于是同一份证据文件里会出现"上面自证命中、下面断言没有"的自相矛盾 —— 任何人拿它当证据
+  #    都会得出错误结论。改成**现场探测后按事实说**：这与"宁可写未采集到，也不要输出看起来像
+  #    数据的假读数"是同一条规矩的另一半 —— **也不要输出看起来像结论的假断言**。
+  local bl_hits bl_somax
+  bl_hits="$("$ENGINE" exec "$CONTAINER" sh -c 'grep -c VANBLOG_LISTEN_BACKLOG /app/server/main.js 2>/dev/null || true' 2>/dev/null | tr -cd '0-9')"
+  bl_somax="$(kget "$f" sysctl.somaxconn)"
+  if [[ "${bl_hits:-0}" -gt 0 ]]; then
+    emit "  ✓ backlog 是**显式设置**的（编译产物里 VANBLOG_LISTEN_BACKLOG 命中 ${bl_hits} 次）；"
+    emit "    生效值 = min(VANBLOG_LISTEN_BACKLOG, net.core.somaxconn) = min(默认 4096, 容器内 ${bl_somax:-未采集到})。"
+    emit "    ⚠️ 发行版常见的 somaxconn 默认是 **128**，那样 4096 会被夹到 128、C10K 必然大量 502。"
+  else
+    emit "  ⚠️ 编译产物里没有 VANBLOG_LISTEN_BACKLOG ⇒ 这是**改前**的镜像，Node listen() 用内核默认 **511**；"
+    emit "    此时 backlog 只有间接证据：下面 TcpExt.ListenOverflows 的增量，以及失败分类里 connect 阶段的超时。"
+  fi
 }
 
 # 关键计数器的增量。只挑与"连接被丢/被拒"有关的，否则几百行噪音会淹没结论；
