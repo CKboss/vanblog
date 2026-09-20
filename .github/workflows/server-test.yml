@@ -121,6 +121,18 @@ jobs:
       #    挂一盏常红灯，而常红灯训练出来的习惯是"忽略红" —— 那比没有检查更糟。
       #    要加就得先清零，那是独立的一件事。
 
+      # ── strictNullChecks 棘轮（只许减不许增）───────────────────────
+      # 上面两个 typecheck 用的是仓库配置，而 `tsconfig.json` 里显式写了 `"strictNullChecks": false`，
+      # 所以「确定性空值解引用」平时**完全不报**。这一族已经造成过三个真实缺陷（鉴权路径 500 而不是 401、
+      # 协作者清单 500、灾难恢复路径上的 TypeError），因此先用棘轮防倒退，再按文件清，最后才谈打开开关。
+      # ⚠️ 放在本 job 而不是 guards-core：它需要 node_modules 与 tsc（三次 tsc，实测约 29 秒），
+      #    而 guards-core 的定位是「不需要依赖」。
+      # 🔴 它必须用**单项开关** `--strictNullChecks`：实测伞形 `--strict` 下四类命中是 **0**
+      #    （显式的 CLI 单项开关能压过 tsconfig 里的 false，伞形开关不能）⇒ 换成 --strict 会让守卫恒绿。
+      #    脚本内部有一条断言专门钉住这个事实，所以谁「简化」了命令就会红。
+      - name: Strict-null ratchet (definite null dereferences may only decrease)
+        run: bash scripts/tests/strict-null-ratchet.test.sh
+
       # ── 真实构建 ─────────────────────────────────────────────────────────────
       # `--noEmit` 看不到"只在真正产出文件时才发生"的失败（输出目录冲突、声明文件产出、
       # 打包期的路径解析）。镜像里跑的就是 `nest build`，所以这里也跑它 ——
