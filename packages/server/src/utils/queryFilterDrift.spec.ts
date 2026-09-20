@@ -274,6 +274,78 @@ const AUDITED_HIGH_RISK_SITES: Array<{
     fileMarkers: [],
     siteMarkers: ['if (!plan.enabled || !plan.filter)'],
   },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateReward')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前这里是 `updateOne({}, …)`：集合为空则匹配 0 条（管理员点保存后静默无事发生），'
+      + '不止一条则命中自然顺序里的任意一条（改错文档）。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateReward')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.deleteReward')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前这里是 `updateOne({}, …)`：集合为空则匹配 0 条（管理员点保存后静默无事发生），'
+      + '不止一条则命中自然顺序里的任意一条（改错文档）。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.deleteReward')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.deleteSocial')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前这里是 `updateOne({}, …)`：集合为空则匹配 0 条（管理员点保存后静默无事发生），'
+      + '不止一条则命中自然顺序里的任意一条（改错文档）。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.deleteSocial')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateSocial')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前这里是 `updateOne({}, …)`：集合为空则匹配 0 条（管理员点保存后静默无事发生），'
+      + '不止一条则命中自然顺序里的任意一条（改错文档）。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateSocial')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateLink')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前这里是 `updateOne({}, …)`：集合为空则匹配 0 条（管理员点保存后静默无事发生），'
+      + '不止一条则命中自然顺序里的任意一条（改错文档）。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateLink')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.deleteLink')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前这里是 `updateOne({}, …)`：集合为空则匹配 0 条（管理员点保存后静默无事发生），'
+      + '不止一条则命中自然顺序里的任意一条（改错文档）。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.deleteLink')"],
+  },
 ];
 
 /**
@@ -281,7 +353,13 @@ const AUDITED_HIGH_RISK_SITES: Array<{
  * 这不是精确审计（74 处内部来源的 filter 逐条写理由会把守卫变成没人读的清单），
  * 但它能保证"批量新增动态 filter 写操作"这件事**一定会被注意到**，而不是静默发生。
  */
-const DYNAMIC_WRITE_FILTER_BASELINE = 79;
+// 79 → 85（2026-09-21）：meta.provider 的 6 个后台写方法从 `updateOne({}, …)` 改成
+// `updateOne(this.metaWriteFilter(meta, …), …)`，即 `{ _id: meta._id }`。
+// ⚠️ 注意这次是**安全性变好而计数变多**：`{}` 是常量形状、A2 的棘轮**根本数不到它**，
+//    而它恰恰是 `assertSafeWriteFilter` 明令拒绝的最危险形状（空条件命中集合里的任意一条）。
+//    改成 `{ _id: … }` 之后 filter 里有了动态值，于是被计入 —— 所以这 6 处是
+//    "从看不见的危险"变成"看得见的已审计安全"。6 处都已加进下面的已审计清单。
+const DYNAMIC_WRITE_FILTER_BASELINE = 85;
 
 describe('Mongoose 写操作的查询条件不许退化成"任意一条"', () => {
   const allSites = scanRepository();

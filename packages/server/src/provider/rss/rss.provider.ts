@@ -87,38 +87,60 @@ export class RssProvider {
         }
       });
       const meta = await this.metaProvider.getAll();
+      // 🔴 `metaProvider.getAll()` 是**无 filter 的 `findOne()`**，`metas` 集合为空时返回 `null`。
+      // 以前这里直接 `siteInfo.author` ⇒ TypeError，被本函数末尾那个 catch 吞掉，
+      // 而 catch 用的是 `JSON.stringify(err)`，对 Error 对象得到的是 `{}` ⇒ 日志里只有
+      // "生成订阅源失败！" + `{}`，**看不出发生了什么**（这次一并修掉了那个 catch）。
+      //
+      // ⚠️ 降级口径是"**大声报错 + 一个字节都不写**"，不是"生成一份空 feed"：
+      // `/rss/*` 与 `/sitemap.xml` 现在**在降级驻留期由 caddy 直发磁盘产物**
+      // （见 AGENTS.md §7.78c / docs/advanced/degraded-publishing.md），也就是说
+      // **feed 是站点被打瘫时少数还能对外发布的通道之一**。如果这里写出一份空 feed，
+      // 就会把磁盘上**上一份好的** feed 覆盖掉 ⇒ 降级期读者拿到的是一个空订阅源，
+      // 而且等数据库恢复后也要等下一次 ISR 风暴才会重新生成。
+      // 保留旧文件的代价只是"内容陈旧"，这比"没有内容"好得多。
+      const siteInfo = meta?.siteInfo;
+      if (!meta || !siteInfo) {
+        this.logger.error(
+          '生成订阅源失败：站点的 meta/siteInfo 文档不存在（metas 集合为空）。' +
+            '这通常说明站点数据已损坏，或被恢复成了一份不完整/部分的归档。' +
+            '⚠️ 本次**没有写任何 feed 文件**，磁盘上上一份好的 feed 保持不变（降级期 caddy 会继续直发它）。' +
+            '下一步：先跑 ./vanblog.sh doctor 看体检；必要时用 ./vanblog.sh restore --offline-full <归档> 重建。',
+        );
+        return;
+      }
       const walineSetting = await this.settingProvider.getWalineSetting();
       let email = process.env.EMAIL;
       if (walineSetting && walineSetting?.authorEmail) {
         email = walineSetting?.authorEmail;
       }
       const author = {
-        name: meta.siteInfo.author,
+        name: siteInfo.author,
         email,
-        link: meta.siteInfo.baseUrl,
+        link: siteInfo.baseUrl,
       };
-      const siteUrl = washUrl(meta.siteInfo.baseUrl);
+      const siteUrl = washUrl(siteInfo.baseUrl);
       const favicon =
-        meta.siteInfo.favicon ||
-        meta.siteInfo.siteLogo ||
-        meta.siteInfo.authorLogo ||
+        siteInfo.favicon ||
+        siteInfo.siteLogo ||
+        siteInfo.authorLogo ||
         `${siteUrl}logo.svg`;
       const siteLogo =
-        meta.siteInfo.siteLogo ||
-        meta.siteInfo.authorLogo ||
-        meta.siteInfo.favicon ||
+        siteInfo.siteLogo ||
+        siteInfo.authorLogo ||
+        siteInfo.favicon ||
         `${siteUrl}logo.svg`;
       const date = new Date();
       const feed = new Feed({
-        title: meta.siteInfo.siteName,
-        description: meta.siteInfo.siteDesc,
+        title: siteInfo.siteName,
+        description: siteInfo.siteDesc,
         id: siteUrl,
         link: siteUrl,
         // 语言标签用规范写法（RFC 5646 是大小写不敏感，但 zh-CN 更常见也更保险）
         language: 'zh-CN',
         image: siteLogo,
         favicon: favicon,
-        copyright: `All rights reserved ${date.getFullYear()}, ${meta.siteInfo.author}`,
+        copyright: `All rights reserved ${date.getFullYear()}, ${siteInfo.author}`,
         updated: date,
         generator: 'Feed for VanBlog',
         feedLinks: {
@@ -217,7 +239,10 @@ export class RssProvider {
       );
     } catch (err) {
       this.logger.error('生成订阅源失败！');
-      this.logger.error(JSON.stringify(err, null, 2));
+      // ⚠️ 以前这里是 `JSON.stringify(err, null, 2)`，而 `JSON.stringify(new TypeError('x'))`
+      // 得到的是 **`{}`**（Error 的 message/stack 是不可枚举属性）⇒ 真正的失败原因被完全丢掉，
+      // 日志里只剩"生成订阅源失败！"。上面那条 meta 为空的 TypeError 就是这样变成哑谜的。
+      this.logger.error(err instanceof Error ? (err.stack || err.message) : String(err));
     }
   }
 }

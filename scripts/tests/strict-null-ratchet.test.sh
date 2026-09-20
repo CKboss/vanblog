@@ -37,7 +37,9 @@ TSCONFIG="tsconfig.build.json"
 # ── 基线：只许减不许增 ───────────────────────────────────────────────────────
 # 🔴 减少之后请把常量改成新的实测值，并在提交信息里写清"清掉了哪几处、各自的可达性与降级是什么"。
 #    （减少时本守卫会**打出提示但仍然 pass** —— 见第 3 节的取舍说明。）
-BASELINE=32
+BASELINE=10  # 2026-09-21 由 32 下调：清掉 rss.provider(12) + meta.provider(6) + static.provider(4)。
+           # ⚠️ 只许减不许增；下次清完请把这个常量改成新值，并在提交信息里写清清了哪几处。
+           # 剩余 10 处分布：waline.provider 3 / log.provider 3 / meta.controller 2 / website.provider 1 / setting.provider 1。
 
 # 四类「确定性空值解引用」：
 #   TS18047 'x' is possibly 'null'          TS18048 'x' is possibly 'undefined'

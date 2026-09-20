@@ -1,4 +1,4 @@
-import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Meta, MetaDocument } from 'src/scheme/meta.schema';
@@ -17,6 +17,7 @@ import { LinkItem } from 'src/types/link.dto';
 import { UserProvider } from '../user/user.provider';
 import { ArticleProvider } from '../article/article.provider';
 import { invalidatePublicMetaCache } from 'src/utils/publicMetaCache';
+import { assertSafeWriteFilter } from 'src/utils/queryFilter';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePageCopy } from 'src/utils/pageCopy';
 import { isTrue } from 'src/utils/isTrue';
@@ -290,6 +291,59 @@ export class MetaProvider {
     return this.metaModel.findOne().exec();
   }
 
+  /**
+   * 取"站点那一份 meta 文档"，取不到就**大声失败**（404 + 可照做的下一步）。
+   *
+   * 🔴 为什么不能写成 `(meta?.rewards || [])` 然后照旧 `updateOne({}, …)`：
+   * `getAll()` 是**无 filter 的 `findOne()`**，`metas` 集合为空时返回 `null`。那种写法下
+   * `updateOne({})` 在空集合上匹配 **0 条**文档 ⇒ **管理员点"保存"之后静默无事发生**，
+   * 界面还提示成功。本仓库反复强调过：**静默的错答案比崩溃更糟**
+   * （同族先例：协作者清单缺管理员时必须报错，否则后台会显示"这个站没有管理员"）。
+   *
+   * 可达性（不是理论）：站点"已初始化"但 `metas` 为空 —— 恢复了一份**部分/手工**归档、
+   * 或直接删过这个集合。同一形状的**真机事故**已经发生过一次：
+   * `controller/public/public.controller.ts` 里 `getMenuSetting()` 返回 null 被裸解构，
+   * 把"全站最热的公开读"变成 500、前台整个死掉（那处已用 `?? {}` 修掉）。
+   *
+   * ⚠️ 状态码选 **404** 而不是 500，与本仓库既有口径一致（`collaborator.controller` 在
+   * "库里没有 id:0 管理员"时也是 404 + 指向 doctor / restore --offline-full）：
+   * 这是**数据状态**（那份文档不存在），不是服务端代码缺陷；500 会让站长以为"程序坏了"
+   * 而不是"数据不完整"，从而去查错方向。
+   */
+  private async requireMetaDocument(context: string) {
+    const meta = await this.getAll();
+    if (!meta || !meta._id) {
+      throw new NotFoundException(
+        `${context}：站点的 meta 文档不存在（metas 集合为空），无法完成这次修改。` +
+          `这通常说明站点数据已损坏，或被恢复成了一份不完整/部分的归档。` +
+          `下一步：先跑 ./vanblog.sh doctor 看体检；必要时用 ` +
+          `./vanblog.sh restore --offline-full <归档> 从一份好归档重建（数据库起不来时也能用）。`,
+      );
+    }
+    return meta;
+  }
+
+  /**
+   * meta 的写操作**必须**带上这份文档的 `_id`，不能再用 `{}`。
+   *
+   * 🔴 `{}` 在写操作上有两种坏形状，都不会报错：
+   *   - 集合为空 ⇒ 匹配 **0 条** ⇒ 静默无事发生；
+   *   - 集合里**不止一条**（历史上出现过"两条 id:0"那类竞态残留）⇒ `updateOne` 命中
+   *     **自然顺序里的第一条**，也就是**任意一条** ⇒ 改错文档。
+   * 这正是 `utils/queryFilter.ts` 的 `assertSafeWriteFilter` 要拦的形状（它的文案就写着
+   * "空的查询条件会命中集合里的**任意一条**"）。既然这里已经拿到了非空的 `meta`，
+   * 就用它的 `_id` 精确定位，并过一遍那道断言把不变量钉住。
+   * ⚠️ 本文件另外还有 3 处 `updateOne({}, …)`（`update` / `updateAbout` / 更新 siteInfo 那个）
+   * 没有 `meta` 在手边，本轮**没有改**（它们不属于 strictNullChecks 的四类错误，
+   * 而 `update` 是整站恢复的必经路径，改它需要活体恢复验证）—— 已上报给父代理。
+   */
+  private metaWriteFilter(meta: { _id: unknown }, context: string) {
+    const filter = { _id: meta._id };
+    assertSafeWriteFilter(filter, context);
+    return filter;
+  }
+
+
   async getSocialTypes() {
     return [
       {
@@ -456,7 +510,7 @@ export class MetaProvider {
   }
 
   async addOrUpdateReward(addReward: Partial<RewardItem>) {
-    const meta = await this.getAll();
+    const meta = await this.requireMetaDocument('MetaProvider.addOrUpdateReward');
     const toAdd: RewardItem = {
       updatedAt: new Date(),
       value: addReward.value,
@@ -477,28 +531,28 @@ export class MetaProvider {
       newRewards.push(toAdd);
     }
 
-    return this.metaModel.updateOne({}, { rewards: newRewards });
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateReward'), { rewards: newRewards });
   }
 
   async deleteReward(name: string) {
-    const meta = await this.getAll();
+    const meta = await this.requireMetaDocument('MetaProvider.deleteReward');
     const newRewards = [];
     meta.rewards.forEach((r) => {
       if (r.name !== name) {
         newRewards.push(r);
       }
     });
-    return this.metaModel.updateOne({}, { rewards: newRewards });
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.deleteReward'), { rewards: newRewards });
   }
 
   async deleteSocial(type: SocialType) {
-    const meta = await this.getAll();
+    const meta = await this.requireMetaDocument('MetaProvider.deleteSocial');
     const newSocials = (meta.socials || []).filter((r) => !shouldDeleteSocial(r, type));
-    return this.metaModel.updateOne({}, { socials: newSocials });
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.deleteSocial'), { socials: newSocials });
   }
 
   async addOrUpdateSocial(addSocial: Partial<SocialItem>) {
-    const meta = await this.getAll();
+    const meta = await this.requireMetaDocument('MetaProvider.addOrUpdateSocial');
     const toAdd = this.normalizeSocialItem(addSocial);
     const newSocials = [];
     let pushed = false;
@@ -514,7 +568,7 @@ export class MetaProvider {
       newSocials.push(toAdd);
     }
 
-    return this.metaModel.updateOne({}, { socials: newSocials });
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateSocial'), { socials: newSocials });
   }
 
   normalizeSocialItem(addSocial: Partial<SocialItem>): SocialItem {
@@ -547,7 +601,7 @@ export class MetaProvider {
     };
   }
   async addOrUpdateLink(addLinkDto: Partial<LinkItem> & { oldName?: string }) {
-    const meta = await this.getAll();
+    const meta = await this.requireMetaDocument('MetaProvider.addOrUpdateLink');
     const toAdd: LinkItem = {
       updatedAt: new Date(),
       url: addLinkDto.url,
@@ -571,17 +625,17 @@ export class MetaProvider {
       newLinks.push(toAdd);
     }
 
-    return this.metaModel.updateOne({}, { links: newLinks });
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.addOrUpdateLink'), { links: newLinks });
   }
 
   async deleteLink(name: string) {
-    const meta = await this.getAll();
+    const meta = await this.requireMetaDocument('MetaProvider.deleteLink');
     const newLinks = [];
     (meta.links || []).forEach((r) => {
       if (r.name !== name) {
         newLinks.push(r);
       }
     });
-    return this.metaModel.updateOne({}, { links: newLinks });
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.deleteLink'), { links: newLinks });
   }
 }

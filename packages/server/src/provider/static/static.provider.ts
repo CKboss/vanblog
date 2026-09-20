@@ -59,12 +59,7 @@ import { addWaterMarkToIMG } from 'src/utils/watermark';
 import { checkTrue } from 'src/utils/checkTrue';
 import { compressExt, compressImg, resolveCompressFormat } from 'src/utils/imgCompress';
 import { capImageResolution } from 'src/utils/imgResize';
-import {
-  generateAvifThumbIfEnabled,
-  generateThumbnail,
-  generateThumbnailAvif,
-  resolveThumbAvifEnabled,
-} from 'src/utils/thumbnail';
+import { generateAvifThumbIfEnabled, generateThumbnail, generateThumbnailAvif, resolveThumbAvifEnabled, requireThumbnailBuffer } from 'src/utils/thumbnail';
 import { buildStegoPayload, parseThumbWidth, resolveMaxImageEdge } from 'src/utils/imageOptions';
 // 显式标注删除方法的返回类型，避开 mongoose 自带 mongodb 副本的不可移植路径（TS2742）。
 import type { DeleteResult } from 'mongodb';
@@ -323,15 +318,18 @@ export class StaticProvider {
         fileType,
       );
       if (avifThumb?.ok) {
+        // ⚠️ 不直接解引用 avifThumb.buffer：走 requireThumbnailBuffer，
+        //    它在"声明成功却没有 buffer"时抛错，避免 saveThumb 写出一个空的/坏的缩略图。
+        const avifOut = requireThumbnailBuffer(avifThumb, 'StaticProvider 上传时生成 AVIF 缩略图');
         const avifPath = await this.localProvider.saveThumb(
           storedFileName,
-          avifThumb.buffer,
-          avifThumb.ext,
+          avifOut.buffer,
+          avifOut.ext,
         );
         extraMeta = {
           ...(extraMeta || {}),
           thumbAvif: avifPath,
-          thumbAvifBytes: avifThumb.buffer.length,
+          thumbAvifBytes: avifOut.buffer.length,
         };
       } else if (avifThumb && !['disabled', 'unsupported'].includes(avifThumb.reason || '')) {
         this.logger.warn(`AVIF 缩略图生成失败：${avifThumb.reason}`);
@@ -906,11 +904,12 @@ export class StaticProvider {
         );
         if (avifThumb?.ok) {
           const baseName = String(realPath).split('/').pop();
-          const avifPath = await this.localProvider.saveThumb(baseName, avifThumb.buffer, avifThumb.ext);
+          const avifOut = requireThumbnailBuffer(avifThumb, 'StaticProvider 替换文件后重生成 AVIF 缩略图');
+          const avifPath = await this.localProvider.saveThumb(baseName, avifOut.buffer, avifOut.ext);
           if (oldThumbAvif && oldThumbAvif !== avifPath) {
             await this.localProvider.deleteStaticFile(oldThumbAvif);
           }
-          meta = { ...meta, thumbAvif: avifPath, thumbAvifBytes: avifThumb.buffer.length };
+          meta = { ...meta, thumbAvif: avifPath, thumbAvifBytes: avifOut.buffer.length };
         } else if (oldThumbAvif) {
           await this.localProvider.deleteStaticFile(oldThumbAvif);
         }
@@ -1009,14 +1008,15 @@ export class StaticProvider {
             const avif = await generateThumbnailAvif(buffer, width, item.fileType);
             if (avif.ok) {
               const baseName = String(item.realPath || '').split('/').pop();
-              const avifPath = await this.localProvider.saveThumb(baseName, avif.buffer, avif.ext);
+              const avifOut = requireThumbnailBuffer(avif, 'StaticProvider 批量补 AVIF 缩略图');
+              const avifPath = await this.localProvider.saveThumb(baseName, avifOut.buffer, avifOut.ext);
               await this.staticModel
                 .updateOne(
                   { sign: item.sign, staticType: 'img' },
                   {
                     $set: {
                       'meta.thumbAvif': avifPath,
-                      'meta.thumbAvifBytes': avif.buffer.length,
+                      'meta.thumbAvifBytes': avifOut.buffer.length,
                     },
                   },
                 )
@@ -1051,9 +1051,10 @@ export class StaticProvider {
         if (avifEnabled) {
           const avif = await generateThumbnailAvif(buffer, width, item.fileType);
           if (avif.ok) {
-            const avifPath = await this.localProvider.saveThumb(baseName, avif.buffer, avif.ext);
+            const avifOut = requireThumbnailBuffer(avif, 'StaticProvider 批量补缩略图（AVIF 分支）');
+            const avifPath = await this.localProvider.saveThumb(baseName, avifOut.buffer, avifOut.ext);
             set['meta.thumbAvif'] = avifPath;
-            set['meta.thumbAvifBytes'] = avif.buffer.length;
+            set['meta.thumbAvifBytes'] = avifOut.buffer.length;
             result.avifGenerated += 1;
           }
         }

@@ -1,7 +1,11 @@
 import { MetaProvider } from './meta.provider';
 
 function createMemoryMetaModel(links: any[] = []) {
-  const state: any = { links: links.map((item) => ({ ...item })), socials: [] };
+  // ⚠️ 替身必须**忠实于真实形状**：Mongoose 里任何持久化文档都必然带 `_id`。
+  //    以前这个 state 没有 `_id`，于是 MetaProvider 的写路径一旦要求 `_id`（本轮起要求，
+  //    为了不再用 `updateOne({}, …)` 那种会命中任意一条的空 filter）就会被替身挡红 ——
+  //    那是**替身不忠实**，不是产品缺陷。本仓库已有四次同类事故。
+  const state: any = { _id: 'meta-doc-memory-1', links: links.map((item) => ({ ...item })), socials: [] };
   return {
     state,
     findOne: jest.fn(() => ({

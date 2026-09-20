@@ -103,7 +103,7 @@ describe('static.provider 的 AVIF 接线（源码级钉子）', () => {
   it('上传路径：webp 缩略图之后生成 AVIF 兄弟并写 meta.thumbAvif', () => {
     expect(src).toContain('generateAvifThumbIfEnabled(');
     expect(src).toContain('thumbAvif: avifPath');
-    expect(src).toContain('thumbAvifBytes: avifThumb.buffer.length');
+    expect(src).toContain('thumbAvifBytes: avifOut.buffer.length');
   });
 
   it('删除路径：thumbAvif 跟着原图一起删（不留孤儿）', () => {
