@@ -607,3 +607,64 @@ k8s 清单（[Kubernetes 部署](../guide/kubernetes.snippet.md)）：
 
 ⚠️ 这一节**不是**在劝你不要用流水线 —— 它是产品功能，很多站长的自动化就靠它。
 这里要给的只是"知道代价之后自己决定"所需的信息。
+
+
+## waline 子树的供应链风险：已裁定「接受现状，只记录」
+
+⚠️ 这一节记录的是一个**已经做出的决定**，不是一条待办。如果你是想找"什么时候修"，答案是：不修，除非下面
+「重新评估的触发条件」里的事件发生。
+
+**决定**：waline 评论子树里剩余的依赖漏洞（本轮审计口径：**4 个 critical + 14 个 high**）**接受现状**，
+不升级、不改架构，只在此记录边界与缓解。
+
+**为什么"升级"不是一个选项**（这条最容易被误解，所以把核实方法写出来）：`@waline/vercel` **没有 3.x**。
+在 registry 上核实：该包共 **345 个版本**，`dist-tags` 是 `latest: 1.41.6`、`deta: 1.27.0-deta`、
+`netlify: 1.28.0-alpha.3` —— **没有任何 2.x 或 3.x**，而仓库钉的 `1.41.6` 就是树顶（`packages/waline/package.json`
+里是精确版本，`pnpm-lock.yaml` 解析为 `1.41.6(@types/node@24.13.5)`）。⇒ "升主版本一次清掉 18 条通告"
+这条路**不存在**；本文件与变更日志里以前那句 `@waline/vercel 1→3` 的说法已作废并留了更正痕迹。
+
+**可达性边界**（决定"这个风险有多大"的关键）：这些漏洞**只在启用 waline 评论模式时可达**。
+本站的原生评论与 waline 是两条独立的路（waline 是独立子进程、独立的 `waline` 库）；
+⚠️ "两者不共享代码"这一点只做过粗核（按依赖与进程边界判断），**没有逐文件复核**，所以别把它当成已证实的结论。
+
+**已经收窄的部分**：根 `package.json` 的 53 条 `pnpm.overrides` 里（其中 35 条带版本作用域），
+有 **16 条实际作用在 waline 子树上** —— `axios@0`、`dompurify@2`/`@3`、`path-to-regexp@1`、`ws@5`/`@7`、
+`send@0.18.0`、`body-parser@1.20.4`、`braces@3`、`micromatch@4`、`cross-spawn@6`/`@7`、`jws`、`prismjs`、
+`form-data`、`browserslist`。⚠️ 这些能生效的前提是**镜像重新构建过**：waline 那棵树以前是孤立 `pnpm i`
+安装的（看不到根 manifest ⇒ override 对它无效），本轮已改成走 lockfile（`--frozen-lockfile --filter`）。
+
+**仍未收窄的部分**：🔴 其中 `protobufjs@5.0.3` **没有同主版本的修复**（最新是 8.8.0，跨 3 个主版本）。
+它来自 `leancloud-storage@4.15.2`，而本部署用的是 `think-mongo` ⇒ leancloud 实际上是**死重量**，
+但它是 `@waline/vercel` 的**直接依赖**，移除属于侵入性改动（要 patch 上游的依赖表），本轮不做。
+
+**将来重新评估时的两个选项**（都没被采纳，理由一并记下）：
+1. **继续推进 scoped override**：同主版本内可动的有 `mysql2 3.6.5 → 3.24.4`（纯 JS，性价比最高）、
+   `koa@2`、`thinkjs@3`、`jsdom@16`、`undici@5`、`ejs@2`、`semver`、`tough-cookie@2`。
+   ⚠️ `tar-fs` 属于**原生编译链**，动它必须用一次真实镜像构建验证 `waline_builder` 阶段还能编出
+   `sqlite3` / `better-sqlite3`（这一层在 musl 上没有预编译包，每次都要现场编）。
+2. **改用官方 Waline Docker 镜像做独立服务**：一次消灭整棵子树、原生编译层、42 条通告，
+   以及下面那条 JWT 密钥耦合；代价是**失去"一个容器搞定"的部署形态**，而且要迁移已有的评论库。
+
+**一条独立的既有耦合（本轮不修，但站长要知道）**：`provider/waline/waline.provider.ts:89` 把
+**本站的 jwt 密钥**当 waline 子进程的 `JWT_TOKEN` 传进去（`JWT_TOKEN: global.jwtSecret || makeSalt()`）。
+⇒ 用了本轮新增的 **JWT 密钥轮换**之后，waline **下次重启**时评论者的登录会话会失效，需要重新登录才能评论。
+（正在运行的 waline 不受影响，因为它已经拿到了旧密钥。）
+
+**一条已知陷阱（现在不用改，将来升 `@waline/client` 3 时会踩）**：
+`packages/website/components/WaLine/core.tsx:1` 现在是 `import "@waline/client/dist/waline.css";`，
+而 client **3 删掉了 `./dist/*` 这个 exports 通配** ⇒ 升级后会 `ERR_PACKAGE_PATH_NOT_EXPORTED`。
+改成 `@waline/client/waline.css` 在 **v2 与 v3 都有映射**，是一行零风险的前置改动。
+
+**站长现在能做什么**（按性价比）：
+1. **不需要 waline 评论就别启用它**（后台评论设置里选原生评论）。这是唯一能完全消除这块风险的做法。
+2. ⚠️ **不要指望"把 waline 端口对内网开放"**：默认的 compose 编排**只发布 80 与 443**（外加 443/udp），
+   waline 子进程的 8360 **根本没有映射到宿主机**，它只能经内置 caddy 的同源路由到达
+   （`caddyTemplate.json` 里每个 server 有 7 个反代到 `127.0.0.1:8360` 的块）。
+   ⇒ 想收窄它的暴露面，只能在 **caddy 的路由层**或**关掉评论模式**，防火墙层面没有独立的口子可关。
+3. 如果确实要用 waline：把评论接口纳入你已有的 WAF/CDN 规则（本站的限流是按 IP 的，
+   而 `VANBLOG_TRUST_FORWARDED_HEADERS` 必须与你的真实拓扑一致，否则限流会误伤或被绕过）。
+
+**重新评估的触发条件**（满足任一条就该重开这个话题）：`@waline/vercel` 发布了 2.x/3.x；
+或 waline 子树里出现了**可匿名触发**的 RCE（现在的 4 个 critical 里，`mysql2` 那两条要能连到它的库、
+`protobufjs` 那条要走到 leancloud 路径，都不是匿名评论接口能直接打到的）；
+或你决定改用官方镜像做独立服务。

@@ -7965,6 +7965,132 @@ nonce 与 ISR 缓存的冲突）。
 真实多源 IP 下的**内存上界**（§7.75 只验证了全局节流端到端，`MAX_BUCKETS=20000` 的上界仍只有单元级证据，
 因为造 2 万个真实源地址不现实）、以及 CSP 的**浏览器违规报告**（本机无浏览器，enforce 之前必须先跑 report 期）。
 
+### 7.77 两条站长裁定与依赖升级计划（W1–W4）——2026-09-20
+
+这一节记录**决定**与**计划**，不是已完成的改动。写下来的理由是：这两条都曾被反复讨论过，
+而其中一条的依据（"升到 3.x"）经核实**根本不存在**，不记档就会有人再去查一遍、甚至照它排期。
+
+#### 7.77.1 裁定一：waline 子树的供应链风险 = **接受现状，只记录**
+
+**决定**：waline 子树剩余的 **4 critical + 14 high** 不升级、不改架构，只在
+`docs/advanced/security.md` 的「waline 子树的供应链风险」一节记录边界与缓解。
+
+**为什么"升级"不是选项（核实方法要一起记，否则结论无法复查）**：`@waline/vercel` **没有 3.x**。
+在 registry 上核实（`npm view @waline/vercel version dist-tags versions --registry=https://registry.npmmirror.com`）：
+共 **345 个版本**，`dist-tags` = `latest: 1.41.6` / `deta: 1.27.0-deta` / `netlify: 1.28.0-alpha.3`
+⇒ **没有 2.x 也没有 3.x**，而 `packages/waline/package.json` 钉的 `1.41.6` 就是树顶
+（lockfile 解析为 `1.41.6(@types/node@24.13.5)`，发布于 2026-09-06，仍在维护）。
+⚠️ 本手册与 CHANGELOG 里以前那句"`@waline/vercel` 1→3 一次能清掉 4 critical + 14 high"**已作废**，
+CHANGELOG 那条已就地更正并保留原句（留更正痕迹是本仓库的规矩）。
+
+**可达性边界**：只在**启用 waline 评论模式**时可达。原生评论与 waline 是两条独立路径
+（独立子进程 + 独立 `waline` 库）；⚠️ "两者不共享代码"只做过**粗核**（按依赖与进程边界判断），
+**没有逐文件复核** —— 引用这条时不要写成已证实。
+
+**已收窄 / 仍未收窄**：53 条 `pnpm.overrides`（其中 35 条带版本作用域）里有 **16 条**作用在这棵树上；
+⚠️ 它们**本轮起才真的生效** —— waline 那棵树以前是孤立 `pnpm i`（看不到根 manifest ⇒ override 无效），
+`0b22908f` 之后改走 lockfile（`--frozen-lockfile --filter` + `pnpm deploy --prod`）。
+🔴 仍未收窄的最硬一条：`protobufjs@5.0.3` **没有同主版本修复**（最新 8.8.0，跨 3 个主版本），
+它来自 `leancloud-storage@4.15.2`，而本部署用 `think-mongo` ⇒ leancloud 是**死重量**，
+但它是 `@waline/vercel` 的**直接依赖**，移除属侵入性改动。
+
+**两个未被采纳的选项（将来重开时从这里开始，别从零想）**：
+(a) 继续推 scoped override —— 同主版本可动的有 `mysql2 3.6.5→3.24.4`（纯 JS，性价比最高）、`koa@2`、
+`thinkjs@3`、`jsdom@16`、`undici@5`、`ejs@2`、`semver`、`tough-cookie@2`；⚠️ `tar-fs` 属**原生编译链**，
+动它必须用一次真实镜像构建验证 `waline_builder` 还能编出 `sqlite3`/`better-sqlite3`（musl 上无预编译包）。
+(b) 改用**官方 Waline Docker 镜像做独立服务** —— 一次消灭子树、原生编译层、42 条通告与下面那条 JWT 耦合；
+代价是失去"一个容器搞定"的部署形态，且要迁移已有评论库。
+
+**一条既有耦合（本轮不修，但会影响轮换）**：`provider/waline/waline.provider.ts:89` 是
+`JWT_TOKEN: global.jwtSecret || makeSalt()` ⇒ waline 子进程的会话密钥**派生自本站 jwt 密钥**。
+本轮新增 JWT 轮换之后：轮换**不影响正在运行的 waline**（它已拿到旧密钥），但**下次重启 waline 时
+评论者会话全部失效**（要重新登录才能评论）。⚠️ 更根本的问题是"管理员会话密钥被交给一个处理匿名评论流量的
+子进程"（密钥扩散）—— 建议将来给 waline 一把**独立且稳定**的密钥，但那要动 `provider/waline/**`，本轮没做。
+
+**一条已知陷阱（现在不必改，升 `@waline/client` 3 时必踩）**：`packages/website/components/WaLine/core.tsx:1`
+是 `import "@waline/client/dist/waline.css";`，而 client **3 删掉了 `./dist/*` 这个 exports 通配**
+⇒ 升级后 `ERR_PACKAGE_PATH_NOT_EXPORTED`。改成 `@waline/client/waline.css` 在 **v2 与 v3 都有映射**
+⇒ 这是一行**零风险**的前置改动，谁哪天动这个文件就顺手改掉。
+
+⚠️ **暴露面的一条实测事实（别凭直觉写"把 waline 端口对内网开放"）**：默认 compose 编排**只发布 80 与 443**
+（外加 443/udp），waline 子进程的 **8360 没有映射到宿主机**，只能经内置 caddy 的同源路由到达
+（`caddyTemplate.json` 里每个 server 有 **7 个**反代到 `127.0.0.1:8360` 的块）。
+⇒ 想收窄它只能在 **caddy 路由层**或**关掉评论模式**，防火墙层面没有独立的口子可关。
+
+#### 7.77.2 裁定二：katex 插件**随 markdown-it 一起**迁到 `@mdit/plugin-katex`
+
+**依据（都已核实）**：`@traptitech/markdown-it-katex` 解析为 **3.6.0**，是渲染数学公式的**唯一**插件路径，
+跑在"渲染用户正文"这条热路径上，**2022-07-08 之后未再更新**；替代方案 `@mdit/plugin-katex`
+**已经在依赖树里**（lockfile 里有 `0.7.4(markdown-it@13.0.2)` 与 `1.0.1(markdown-it@14.3.2)` 两个版本，
+分别由 docs 的 `@mdit/*` 链引入），且 `1.0.1` 的 `peerDependencies` 明写 `markdown-it: ^14.2.0`
+⇒ **迁移不新增依赖**，只是把 server 的 `markdown-it ^13.0.2` 抬到 14 之后换一个已经在树里的插件。
+⚠️ 历史上这里已经换过一次：`markdown-it-katex`（2016 年弃坑、XSS 无修复版本）→ `@traptitech/markdown-it-katex`（见 §7.47）。
+这次是第二次换，理由是维护状态而不是漏洞。
+
+🔴 **迁移的验证要求（写死在这里，执行者不要省）**：迁移前后必须用**同一套语料做差分渲染比对**，
+覆盖①行内公式 ②块级公式 ③`$a \$ b$` 这类**转义** ④公式与普通 markdown **混排**（列表/表格/代码块里）
+⑤中文与公式混排。判据是**逐字节相同**；不同就要逐个判断是"插件行为差异"还是"我们的用法错了"，
+不要为了让测试过而放宽判据。
+⚠️ 这个方法本仓库已经用过一次并成功：markdown-it 13→14 的兼容性就是用 **27 条语料差分渲染**验的
+（27/27 逐字节相同，另外核过 provider 触碰的 16 个内部 API 在两版里 `typeof` 一致）。
+脚本当时放在本机的临时目录（不入库），所以**不要去找它** —— 需要时按上面的判据重写一个即可。
+
+#### 7.77.3 依赖升级计划 W1–W4
+
+- **W1（一次重装窗口即可）**：`markdown-it` → `^14.3.2`；根 `pnpm.overrides` 加 **`postcss@8: ^8.5.23`**；
+  katex 插件按 §7.77.2 迁移。
+  依据：markdown-it 13→14 已有**差分渲染实测**（27/27 逐字节相同）；而且 `@waline/vercel@1.41.6`
+  **自己就依赖 `markdown-it ^14.3.0`** ⇒ **14 今天已经在生产镜像的 waline 子进程里跑**；
+  md-it 14 带 `linkify-it ^5.0.2` ⇒ 顺带清掉 2 条 high。
+  🔴 **`postcss` 不是"仅构建期"**：`packages/website/.next/standalone/node_modules/.pnpm/postcss@8.4.31/` 存在，
+  且被 `Dockerfile:640` 整目录拷进镜像；而 **`next` 自己把 postcss 精确钉死在 `8.4.31`**（14 与 15 都是）
+  ⇒ 这条 override 会**顶掉 Next 的钉版**，所以**必须用一次真实 `next build` + 镜像构建验证，光 install 成功不算**。
+  ⚠️ 必须用**作用域**写法：树里 `postcss 7.0.39` 与 `8.4.31` 共存（7 来自 admin 的 `@umijs/fabric`→stylelint 链），
+  根 `package.json` 已有 `postcss@7: ^7.0.36`，并列加 `postcss@8` 即可 —— blanket 写法会把 8 降到 7 或反之。
+- **W2（独占一个窗口）**：`next` + `@next/bundle-analyzer` + `eslint-config-next` → **15.5.25**
+  （15.x 最后一个稳定版，也是 registry 的 `backport` tag；⚠️ `latest` 已是 16.3.5，**不要一步跳 16**）。
+  **已核实的**：peers `react ^18.2.0 || ^19` ⇒ **不需要 React 19**；engines node ≥18.18 ⇒ node 24 ✔；
+  🔴 **caddy 直服 HTML 在 15 下仍成立**（源码级证据：`file-system-cache.js:302` 的 PAGES 分支
+  `join(serverDistDir,'pages')`、`:258-281` 写 `${key}.html`/`.json`/`.meta`，常量在 `dist/lib/constants.js:250-253`；
+  `build/adapter/build-complete.js:168` 同为 `server/pages`）⇒ caddy 模板里硬编码的 root **不用改**，
+  "数据库挂了还能发布缓存内容"这条性质保得住；`output` 枚举仍含 `standalone`；
+  `fallback:'blocking'` 仍映射成 manifest 的 `null`；仓库用到的每个 config 键在 15.5.25 的 schema 里都还在
+  （`swcMinify` 已被移除，但仓库没设它）。
+  🔴 **Next 15 最大的破坏性变更（异步请求 API）对本仓库不适用** —— website 是**纯 Pages Router**（无 `app/` 目录），
+  `next/headers`、`cookies()`、`draftMode`、`revalidateTag`、`NextRequest`、middleware、`useSearchParams` **全 0 命中**。
+  ⚠️ **待实测的验收清单**（升级时必须逐条过）：①`notFound` 是否仍**零产物落盘**
+  （复跑 §7.76 那个"600 个不同假 slug"的探针，判据是 `.next` 里 `chaos-*` 产物为 0，且要有正对照）；
+  ②`beforeInteractive` 是否仍进初始 HTML（关系到站长 `customScript` 与 CSP `'unsafe-inline'` 的分析）；
+  ③bundle 体积与 ISR 时序；④🔴 **必须复测 C10K**（Next 在热路径上，判据见 §7.76/`benchmark.md` §5.2）。
+  **回滚完全可逆**：Next 不产生不可逆数据。⚠️ 这与 `wash*` 迁移不同 —— 那才是单向的（见 §7.77.4 与"不可回滚升级"清单）。
+- **W3：⚠️ 已被站长裁定取消**（waline 走"接受现状"，见 §7.77.1）。**不要再把它当待办**；
+  重开的条件写在 §7.77.1 末尾的"重新评估的触发条件"里。
+- **W4：`@waline/client` 2→3 随 W3 一并搁置**，但那条 CSS 导入路径的陷阱要留着（见 §7.77.1 末段），
+  因为它是一行零风险的前置改动，谁动那个文件就该顺手做掉。
+
+#### 7.77.4 通用前置条件（每一条都是本项目真实踩过的）
+
+1. **改 `pnpm.overrides` 或任何 specifier 都会触发全量重装**（`--lockfile-only` 也会弹清库确认；
+   `--config.confirmModulesPurge=false` 的意思是"**别问、直接清**"）。本项目实测过一次 **39 分钟**的中断，
+   期间所有代理跑不了测试 ⇒ 必须在**机器安静、没有在飞代理**时做，当维护窗口来协调。
+2. **`CI=true` 隐含 `--frozen-lockfile`** ⇒ 改完 specifier 必须**同时更新 lockfile**，否则安装直接失败。
+3. **blanket override 会静默降级**树里已有的更高版本（实测踩过 `xml2js` 0.6.2→0.5.0、`fflate` 0.8.3→0.7.5，
+   不报错、也没有测试变红）⇒ 多版本共存的包必须写成 `包名@主版本`。
+4. **升级前先把基线固定下来**：website `vitest` **91 文件 / 986**、`tsc --noEmit -p tsconfig.json` **0 错**、
+   `.next` 产物清单、"600 个假 slug"探针的数字、C10K 的数字（`benchmark.md` §5.2）。
+   否则升级后**无法判断"变了多少算正常"** —— 这是 W2 最容易翻车的地方。
+5. 🔴 **镜像必须重建**，这些修复才会生效（waline/cli 两棵树现在走 lockfile，构建时才装）。
+   ⚠️ 而且**不可回滚的升级只有 `wash*` 那类数据迁移与 mongo FCV 阶梯**；依赖升级本身是可逆的。
+
+#### 7.77.5 这一节的更正记录
+
+- CHANGELOG 里"`@waline/vercel` **1→3** 一次能清掉 4 critical + 14 high，应单独立项"—— **升级目标不存在**，
+  已就地更正并保留原句。教训：**"升到某个主版本"这类建议必须先在 registry 上核实该版本存在**，
+  否则它会在文档里活很久（这条从依赖审计那轮一直活到本轮）。
+- §7.47 的标题「katex 插件换掉维护者已弃坑的那个」记的是**第一次**迁移（`markdown-it-katex` →
+  `@traptitech/markdown-it-katex`）；本节 §7.77.2 是**第二次**（→ `@mdit/plugin-katex`），理由是维护状态。
+  两处不冲突，但引用时要说清是哪一次。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |

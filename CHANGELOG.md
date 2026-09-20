@@ -112,7 +112,7 @@
   几条选出来的 override（全部带版本作用域；advisory id 记在这里，因为 JSON 没有注释、而一个 `"//"` 键会被当成包选择器解析）：`axios@0 → ^0.33.0`（23 条 advisory，**加作用域是为了不把 server 自己的 axios 1.20.0 降下去**）；`compressing → ^1.10.5`（GHSA-cc8f 软链任意写、GHSA-4c3q 补丁绕过）—— 单条价值最高，因为 `compressing` 正是解 `.mdz` 导入的东西，而那是**协作者可达**路径；六条 **critical** 密码学/哈希条目 `elliptic ^6.6.1`（ECDSA 私钥提取）、`cipher-base ^1.0.5`（hash rewind）、`pbkdf2 ^3.1.3`（可预测的全零输出；静默忽略 Uint8Array）、`sha.js ^2.4.12`、`bn.js@4/@5`、`shell-quote ^1.9.0`；`lodash`/`lodash-es → ^4.18.0`（`_.template` 代码注入）、`js-yaml@3/@4`、`yaml@1/@2`、`nanoid@3`，以及 ReDoS 家族（`minimatch@3/@8`、`brace-expansion@1/@2`、`picomatch@2`、`braces@3`、`micromatch@4`，共 20 条），另有 `ws@5/@7`、`cross-spawn@6/@7`、`ajv@6/@8`、`glob@10`、`browserslist`、`flatted`、`diff@5`、`fast-loops`、`ip@1/@2`、`path-to-regexp@1`、`postcss@7`、`mermaid`、`follow-redirects`、`urllib`、`xml2js@0.4`、`fflate@0.7`、`min-document`。
   ⚠️ 两个坑，都在这轮真踩到并修掉：① **blanket override 会静默把树里已有的更高版本降下去**，不报错、也没有测试变红 —— 第一版的 `"xml2js": "^0.5.0"` 把已有的 **0.6.2 拉到 0.5.0**，`"fflate": "^0.7.5"` 把 **0.8.3 拉到 0.7.5**。凡是树里存在多个主版本的包，必须写成 `名字@主版本`。② 为抓这件事写的降级检测器**比的是版本字符串**，于是 `'3.3.19' < '3.3.7'` 按字典序成立，把三次**升级**报成了降级。改成比较解析后的元组：60 个变动的包里 **0 次降级**（`next`、`sharp`、`mongodb`、`express`、`multer`、`tmp`、`decode-uri-component` 全部未动）。这个检查值得留在仓库里 —— 它是唯一能自动看见"静默降级"的办法。
   C 类接受项与理由：`decompress@4.2.1`（critical，无修复）与 `git-clone@0.1.0` 在 `picgo → download-git-repo → download` 链上，**只有**管理员显式设 `VANBLOG_ALLOW_PICGO_PLUGINS=true` 才可达 —— 闸门默认拒绝，且恢复归档种不进插件（恢复只写 `img`/`file`/`customPage`/`themes`，永远碰不到 picgo 的工作目录）；`image-size`（2 high）只读头部，真正的天花板是 sharp 的 `limitInputPixels`，现已与业务上限同为 40 MP；`ip@2.0.1` 那个错误的 `isPublic` 无关紧要，因为 SSRF 过滤已经不用这个包了（上一轮改用 `net` 重写，零 import 已确认）；`rollup@0.25.8` 与 `postcss@7` 只在 admin 构建期。
-  延后项与各自代价：**next 14→15** 是剩余 high 的最大单一来源，但它是破坏性主版本、需要改 `packages/website` 源码（异步 `params`/`cookies()`、image 配置、standalone 输出）—— 而它那两个 critical 没有看上去那么可怕：GHSA-p293 是 **windows 托管**（我们发的是 Linux 容器），GHSA-2xp9 是图片优化缓存投毒（我们的 `VAN_BLOG_ALLOW_DOMAINS` 默认为空，所以只优化同源图片）。**markdown-it 13→14** 值得尽快做（服务端解析用户内容；要先确认 `markdown-it-task-lists` 与 `@traptitech/markdown-it-katex` 兼容，它还能顺带解决 `linkify-it` 4→5）。**`@waline/vercel` 1→3** 一次能清掉 4 个 critical 与 14 个 high，但它是破坏性的、可能需要迁移现有的 waline mongo 库 ⇒ 应该单独立项，在 drill 栈上拿生产备份演练过再动。`postcss@8 → ^8.5.23` 其实属 A 类（2 个 high：任意文件读、source-map 路径穿越），**故意没加**，因为加它就要再开一次全量重装窗口，而当时有镜像构建在飞。`@babel/*` 没动：它是 umi3 与 next 两套构建的共同地基，3 条 moderate/low 不值得那个风险。
+  延后项与各自代价：**next 14→15** 是剩余 high 的最大单一来源，但它是破坏性主版本、需要改 `packages/website` 源码（异步 `params`/`cookies()`、image 配置、standalone 输出）—— 而它那两个 critical 没有看上去那么可怕：GHSA-p293 是 **windows 托管**（我们发的是 Linux 容器），GHSA-2xp9 是图片优化缓存投毒（我们的 `VAN_BLOG_ALLOW_DOMAINS` 默认为空，所以只优化同源图片）。**markdown-it 13→14** 值得尽快做（服务端解析用户内容；要先确认 `markdown-it-task-lists` 与 `@traptitech/markdown-it-katex` 兼容，它还能顺带解决 `linkify-it` 4→5）。**`@waline/vercel` 1→3** 一次能清掉 4 个 critical 与 14 个 high，但它是破坏性的、可能需要迁移现有的 waline mongo 库 ⇒ 应该单独立项，在 drill 栈上拿生产备份演练过再动。〔⚠️ **2026-09-20 更正：这个升级目标不存在。** 在 registry 上核实：`@waline/vercel` 共 **345 个版本**，`dist-tags` 是 `latest: 1.41.6`、`deta: 1.27.0-deta`、`netlify: 1.28.0-alpha.3` —— **没有 2.x 也没有 3.x**，而仓库钉的 `1.41.6` 就是树顶。所以"升主版本清掉 18 条通告"这条路走不通；站长已裁定**接受现状并记录**，边界与缓解见 `docs/advanced/security.md` 的「waline 子树的供应链风险」一节，计划与依据见 `AGENTS.md` §7.77。原句保留在此不删，是为了让"曾经这么以为过"这件事可追溯。〕`postcss@8 → ^8.5.23` 其实属 A 类（2 个 high：任意文件读、source-map 路径穿越），**故意没加**，因为加它就要再开一次全量重装窗口，而当时有镜像构建在飞。`@babel/*` 没动：它是 umi3 与 next 两套构建的共同地基，3 条 moderate/low 不值得那个风险。
   ⚠️ 三条流程教训（已进手册）：改 `pnpm.overrides` **就是**一次全量重装窗口 —— 没有"只改 lockfile、别动 node_modules"的形式（`--lockfile-only` 仍会触发清库确认，而 `--config.confirmModulesPurge=false` 的意思是**别问、直接清**）；`CI=true` 隐含 `--frozen-lockfile`，所以改完 overrides 必须显式 `--no-frozen-lockfile`；后台长任务要用 `setsid`，因为 `nohup` 不脱离进程组，一次前台轮询超时的 SIGTERM 会把安装一起带走（本轮因此中断 **39 分钟**）。
 - **镜像与 CI：两棵一直没锁的依赖树，以及一个被吞掉很久的构建失败**（`0b22908f`）：
   - **cli 与 waline 两棵树是无 lockfile 安装的**：`Dockerfile` 只 COPY 单个包目录然后在里面跑 `pnpm i`，所以每次构建都从 registry 重新解析 —— 同一个 commit 两次构建可能不同；而比重现性更糟的是**根 `pnpm.overrides` 对它们从来无效**，因为孤立安装看不到根 manifest。任何针对 waline 子树的依赖修复（mysql2 RCE、protobufjs、tar-fs、koa）因此**根本进不了镜像**。⚠️ Dockerfile 自己在 `:100` 与 `:201` 记录过这个错误已为 admin 与 server 修过。两个 stage 现在都拷工作区骨架（根 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`tsconfig.base.json`、`patches/`）并用 `--frozen-lockfile --filter` 安装，再 `pnpm deploy --prod` 进 runner；新增的 `cli_builder` stage 加 `--ignore-scripts`（它唯一的依赖 `mongodb` 是纯 JS），而 waline **故意保留**构建脚本，因为它要编 `better-sqlite3`。用 `pnpm deploy` 而不是拷 `node_modules`，因为后者会破坏 pnpm 的软链/硬链布局。`/app/cli` 的落点没变（`vanblog.sh:1919` 的 `reset_https` 兜底按绝对路径调它）。`packages/cli/package.json` **没有动**：把它的说明符钉成 `5.9.1` 会与 lockfile 的 `^5.9.1` 矛盾并让 `--frozen-lockfile` 失败。
@@ -304,6 +304,35 @@
   `auth.provider.ts`、`init.middleware.ts` 此前**一个 spec 都没有**，而静态分析抽读的 3 个真实空值崩溃里
   就有一个在 `jwt.strategy.ts:55` —— **有潜在缺陷的文件恰好没有测试**。
 
+- **waline 子树的供应链风险：站长已裁定「接受现状，只记录」**（本次提交）：审计口径下 waline 子树仍剩
+  **4 个 critical + 14 个 high**，本轮**不升级、不改架构**。⚠️ 关键事实是**升级这条路不存在** ——
+  `@waline/vercel` 在 registry 上共 345 个版本、`latest` 就是仓库已钉的 **1.41.6**，dist-tags 只有
+  `deta`/`netlify` 两个 1.x 预发布标签，**没有 2.x 也没有 3.x**（所以上面那条 `1→3` 的旧说法已就地更正）。
+  **可达性边界**：只在启用 waline 评论模式时可达（原生评论是另一条独立子进程 + 独立 `waline` 库；
+  ⚠️ "不共享代码"只做过粗核，未逐文件复核）。**已收窄**：53 条 scoped override 里有 **16 条**作用在这棵树上
+  （`axios@0`、`dompurify@2`/`@3`、`path-to-regexp@1`、`ws@5`/`@7`、`send`、`body-parser`、`braces@3`、
+  `micromatch@4`、`cross-spawn@6`/`@7`、`jws`、`prismjs`、`form-data`、`browserslist`），且**本轮起才真的生效**
+  （waline 那棵树以前是孤立 `pnpm i`、看不到根 manifest ⇒ override 对它无效）。**仍未收窄**：
+  🔴 `protobufjs@5.0.3` **没有同主版本的修复**（最新 8.8.0，跨 3 个主版本；它来自 `leancloud-storage@4.15.2`，
+  而本部署用 `think-mongo` ⇒ leancloud 是死重量，但它是 `@waline/vercel` 的直接依赖，移除属侵入性改动）。
+  完整边界、两个未被采纳的选项（继续推 scoped override / 改用官方 Waline 镜像做独立服务）与
+  "重新评估的触发条件"写在 `docs/advanced/security.md`。⚠️ 顺带记一条既有耦合：
+  `waline.provider.ts:89` 把**本站 jwt 密钥**当 waline 的 `JWT_TOKEN` 传给子进程 ⇒ 用了本轮的密钥轮换之后，
+  waline **下次重启**会让评论者会话失效（要重新登录才能评论）。
+- **k8s 清单的资源上限此前被静默丢弃**（`a8a2b573`）：`limits:` 原来缩进成**容器的同级键**（与 `resources` 平级），
+  而它不是合法的 Kubernetes 字段 ⇒ `kubectl apply` 会被严格校验拒绝；若加了 `--validate=false` 就**被静默丢弃**，
+  内存与 CPU 上限等于完全没设。⚠️ PyYAML 能解析它（它是合法 YAML），所以只有**解析后按 k8s 语义检查**才发现得了 ——
+  这也是为什么该清单现在按语义校验而不只是"能解析"。同时把内存上限从 500Mi 提到 **1536Mi**：
+  整站备份用 `zstd -19 --long=27 -T0`（多线程 + 128MB 窗口），峰值能到 **1GB 上下**，实测这套站点在并发压测下
+  RSS 是 568MB～1.1GB ⇒ **500Mi 的上限会让备份被 OOM 杀**（compose 模板里对 `mem_limit` 有同样的警告）。
+- **compose 模板新增 `no-new-privileges:true`**（`a8a2b573`）：容器内本来就是 root（见 `docs/advanced/security.md`
+  的「容器以 root 运行」一节），这个键挡的是**在此之上再提权**的路径（setuid 二进制、文件 capability）。
+  ⚠️ 同时**明确不默认启用**另外三项，理由都写在模板注释里、不是遗漏：`cap_drop: [ALL]` 会打掉
+  **`CAP_DAC_OVERRIDE`**，而 server 要写 root 拥有的 mongo 数据目录与静态目录；`read_only: true` 本轮**不可行**
+  （四个阻塞点已逐个核实：日志、caddy 配置与证书、ISR 产物、流水线 runner 目录都需要可写）；
+  `pids_limit` 是**版本兼容**问题（compose v2 的 schema 有它，1.25 用的是按版本分的 3.4 schema）。
+  这三项都以注释形式给出，站长可以自行打开。
+
 **行为变化**
 
 1. **`./vanblog.sh update` 的默认落点变了**。以前：拉 `ghcr.io/ckboss/vanblog:dev-dsh`（分支的上一次**手动**构建，实测比发布版旧 4 天 ⇒ 升级可能其实是降级，且一声不响）。现在：拉 `ghcr.io/ckboss/vanblog:latest`（最近一次**发布**构建），并且停容器前打印 `当前运行: X → 新镜像: Y`，证明是降级或"证明不了不更旧"时红色 WARN + 要确认。想继续跟开发分支：`VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:dev-dsh ./vanblog.sh update`；想钉死版本：`./vanblog.sh update v2026.9.2`。⚠️ 非交互（cron）场景下 WARN 照打但不阻塞，要拦就自己比版本号。
@@ -389,6 +418,16 @@
     `VANBLOG_CSP_EXTRA_SCRIPT_SRC` / `_EXTRA_CONNECT_SRC` 加来源，或用 `VANBLOG_CSP_OVERRIDE` 整条自己写。
     ⚠️ 即使 `enforce`，`script-src` 里仍有 `'unsafe-inline'`，所以它**不是** XSS 的第二道防线。
     这一层由**内置 caddy** 下发 ⇒ 只在用镜像自带 caddy 时生效；自己套了别的反代（nginx/CDN）的部署要在那一层自己配。
+55. 🔴 **已存在的部署要重跑一次 `./vanblog.sh config`**，才能拿到 compose 模板新增的 `no-new-privileges:true`
+    （`a8a2b573`）。原因：这个键写在**模板**里，而编排文件是 `config` 生成的一次性产物 —— 已经生成过的
+    `docker-compose.yaml` 不会自己长出新键。⚠️ `config` 会覆盖你手改过的 `environment:`（会留 `.bak`），
+    所以重跑前请先看一眼有没有自定义。已有守卫证明 `config` **不会丢掉**这个键。
+    检查办法：`grep -n no-new-privileges docker-compose.yaml`，有输出就是已经生效。
+56. **k8s 部署的资源上限从"没有"变成"真的生效"**（`a8a2b573`）：以前 `limits:` 缩进错误 ⇒ 被 `kubectl apply`
+    的严格校验拒绝，或在 `--validate=false` 下**静默丢弃**（内存与 CPU 上限等于完全没设）。修好之后
+    **内存上限是 1536Mi**（不是直觉里的 500Mi）：整站备份的 zstd 参数（`-19 --long=27 -T0`）峰值能到 1GB 上下，
+    实测并发压测下 RSS 568MB～1.1GB ⇒ 500Mi 会让**备份被 OOM 杀**。⚠️ 如果你以前手工改过这个清单，
+    请对照新值重新评估，别把"以前没生效"当成"以前够用"。
 
 ## [v2026.9.2] - 2026-09-17
 
