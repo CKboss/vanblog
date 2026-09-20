@@ -508,3 +508,22 @@ VANBLOG_SKIP_PULL=1 VANBLOG_RESTORE_FROM=/path/vanblog-full-xxx.tar.zst ./vanblo
 ## https 反代前台点击按钮跳转后页面不更新
 
 同上，先按 [后台发布后前台不刷新仍显示旧文章](#后台发布后前台不刷新仍显示旧文章) 检查 Nginx / 宝塔 / CDN 是否在缓存前台 HTML。升级 Nginx 可以作为补充手段。
+
+## 容器是以 root 运行的吗？能不能降权
+
+**是，容器以 root 运行**，而且本轮的裁定是**暂不降权**（不做 su-exec / setcap）。原因与代价都写在
+[容器以 root 运行：这意味着什么，以及本轮做了什么](../advanced/security.md) 那一节里，这里只给三条最常被问到的：
+
+- **为什么不能直接 `cap_drop: [ALL]`**：容器以 root 写的是**宿主属主**的 bind mount（静态目录、日志、caddy、mongo 数据），
+  靠的是 `CAP_DAC_OVERRIDE`。只加回 `NET_BIND_SERVICE` 的话，宿主目录属主不是 root 时就会**写不进去**，
+  表现为图片上传失败、日志写不出、备份失败 —— 而且是"容器 Up、功能坏"的那种难查形状。
+  compose 模板里给了带 `DAC_OVERRIDE`/`CHOWN`/`FOWNER` 的注释版写法，打开前请自己把上传/备份/恢复/HTTPS 签发跑一遍。
+- **为什么不能 `read_only: true`**：`entrypoint.sh` 每次启动都要写 `/app/caddy.json`（镜像层，不是卷）、
+  流水线要写 `/app/codeRunner` 与 `/app/pluginRunner`、**ISR 页面缓存**写在 `.next/server/pages/**`（也不是卷）。
+  只读根会让页面缓存完全写不了。
+- **现在已经打开的那一项**：`security_opt: [no-new-privileges:true]`（只对 vanblog 服务）。
+  ⚠️ 它挡的是"在已经是 root 之上**再**提权"（setuid 二进制、文件 capability），
+  **不是**"防止拿到 root"—— 流水线功能本身就等价于"管理员能在容器内执行任意代码"，这一点配置改不了。
+
+⚠️ 如果你在意"容器内 root 能读到整站备份归档（里面有口令哈希与 jwt 密钥，拿到 jwt 密钥就能伪造管理员 token）"，
+**现在就能做**的是给备份加密或做离线签名，并把后台限制在可信网段 —— 可照抄的做法见上面那一节的最后一张表。

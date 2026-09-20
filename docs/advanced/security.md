@@ -500,3 +500,110 @@ POST /api/admin/backup/jwt/rotate        # 要管理员登录态（token 头）
 生产环境请务必：设置强管理员密码、通过 HTTPS 访问、不要把 3000/3001 端口直接暴露到公网（用仓库自带的 Caddy 配置）、定期用[整站备份](backup.md)留档，并且**不要把备份文件放在能被 Web 访问到的目录里**。
 
 :::
+
+## 容器以 root 运行：这意味着什么，以及本轮做了什么
+
+这一节是**如实的风险说明**，不是"已加固完毕"的宣告。站长的裁定是：本轮**不改镜像**、不做 su-exec/setcap 降权，
+只在编排层尽量收窄，并把代价写清楚。所以下面每一条都区分了"已做"与"没做、为什么"。
+
+### 事实：谁能拿到容器内的 root
+
+- 容器**以 root 运行**（caddy 要绑 80/443，数据目录是宿主 bind mount）。
+- **流水线功能在设计上就是代码执行**：它把管理员写的代码写进 `/app/codeRunner` 再 `fork()` 执行。
+  所以"一个管理员会话被拿下 = 容器内 root"不是漏洞，是产品功能的结果。
+- 流水线**只有超级管理员能碰**：`/api/admin/pipeline` 在超管专属路由表里
+  （`packages/server/src/types/access/access.ts`），所以勾了「所有权限」的协作者**碰不到**它。
+- ⇒ 能拿到容器内 root 的是三种主体：**管理员本人**、**被盗的管理员会话**、以及**管理员签发的 API Token**。
+  ⚠️ API Token 等价于超管（`{sub:0, role:'admin'}`），默认有效期已从 365 天降到 **90 天**。
+
+### 拿到容器内 root 意味着什么
+
+不夸大也不淡化，按"能读到什么、能改什么"来说：
+
+| 能力 | 具体内容 |
+| --- | --- |
+| 读**所有挂载卷** | 静态文件（图床原图）、日志、**整站备份归档**、caddy 的配置与**证书私钥**、mongo 数据目录 |
+| 读归档里的凭据 | 归档含**全部口令哈希**与 **jwt 签名密钥**（`utils/fullBackup.ts` 的注释原文：拿到 jwt 密钥就能**伪造管理员 token，不需要破解任何口令**）。归档现在还可能含 **caddy 的 TLS 材料**，所以归档能放在哪的要求被抬高了 |
+| 改数据库 | mongo 数据目录是可写的 bind mount ⇒ 可以直接改库（绕过应用层的一切校验） |
+| 改 caddy 配置 | 可以改反代规则、改证书来源 ⇒ 可以把流量导走 |
+| 在容器内驻留 | 可以留后门进程/文件；`restart: always` 会把它一起带回来（除非重建容器） |
+
+⚠️ **边界（这条必须说清，不要当成安慰）**：能不能从容器**逃到宿主机**，取决于容器运行时与内核的版本与配置。
+**本轮没有做任何逃逸测试**，所以这里既不声称"逃不出去"，也不声称"能逃出去"。
+上面这张表说的是"容器内 + 挂载卷"这个范围内的确定事实；bind mount 意味着**容器对这些宿主目录的权限就是宿主权限**
+（这一条在 [备份与恢复](backup.md) 里已经写过，此处只引用不重复）。
+
+### 本轮在部署层做了什么
+
+compose 模板（`docker-compose/docker-compose-template.yml`）：
+
+- ✅ **启用** `security_opt: [no-new-privileges:true]`（只对 vanblog 服务）。
+  它挡的是"**在已经是 root 之上**再提权"的路径（setuid 二进制、文件 capability），
+  ⚠️ **不是**"防止拿到 root"。已核实对本项目安全：`entrypoint.sh`、`scripts/start.js`、`Dockerfile` 里
+  `gosu`/`su`/`setpriv`/`setuid`/`newgrp` 零命中，`chown`/`chmod` 也是 0 处 ⇒ 没有依赖提权的启动步骤。
+  有守卫钉住这个前提：将来有人往 entrypoint 里加 `gosu` 之类，守卫会红（因为那时这一行会让启动失败，
+  而失败形状是"容器起不来"、很难联想到这里）。
+- ⚠️ **mongo 服务故意不加**：官方 mongo 镜像的 entrypoint 以 root 启动时会自己降权到 mongodb 用户，
+  那条路径依赖 setuid/setgid 语义；本轮没有容器可实测，所以不动它。
+- ❌ **`read_only: true` 不可行**，四个阻塞点都已核实（不是推测）：
+  ① `entrypoint.sh` 每次启动都要写 `/app/caddy.json` 与 `/app/caddy-fallback.json`（在**镜像层**里，不是卷）；
+  ② 流水线要写 `/app/codeRunner` 与 `/app/pluginRunner`（不是卷）；
+  ③ **ISR 产物**写在 `/app/website/packages/website/.next/server/pages/**`（不是卷；实测过：渲染一篇真文章后
+  它的 `.html`/`.json`/`.meta` 会出现在那里）⇒ 只读根会让**页面缓存完全写不了**；
+  ④ `/tmp` 用于上传与整站恢复解包的临时文件。
+  要做只读根，前提是先把 ②③ 变成卷、把 ① 的输出改到可写路径 —— 那要改 entrypoint，属"改镜像"，本轮裁定不动。
+- ❌ **`cap_drop: [ALL]` 默认不启用**，因为风险是真实的且本轮无容器可实测：容器以 root 写**宿主属主**的
+  bind mount，靠的是 `CAP_DAC_OVERRIDE`；只加回 `NET_BIND_SERVICE` 的话，宿主目录属主不是 root 时就会
+  **写不进去**（图片上传失败、日志写不出、备份失败），而且是"容器 Up、功能坏"的难查形状。
+  要打开就至少 `[NET_BIND_SERVICE, DAC_OVERRIDE, CHOWN, FOWNER]`，并自己把上传/备份/恢复/HTTPS 签发跑一遍。
+- ❌ **`pids_limit` 默认不写**（防 fork 炸弹这一条确实值得做，流水线能 `fork()`）。不写的原因是**版本兼容**：
+  已实证 docker-compose **1.29.2** 的 schema（`compose/config/compose_spec.json`，`additionalProperties:false`）
+  里有这个键；但 **1.25** 用的是按版本分的 3.4 schema，那份文件本轮没取到，而 v2-only 的键在 3.x 下会被直接拒绝
+  （本模板开头选 `version: '3.4'` 的注释记的就是同一类事故）。⇒ 只在确认自己是 compose v2、或
+  docker-compose ≥1.27（1.27 起忽略 `version` 字段、改用统一 spec）时才打开，值从 **512** 起步。
+  ⚠️ 同一类版本陷阱也适用于模板里另一处建议的 `mem_limit`（**这是既有的、不是本轮引入的**）：
+  打开前先 `docker-compose config` 验一遍，别直接 `up`。
+
+这三项"故意不启用"都被守卫钉住了（`scripts/tests/vanblog-compose-health.test.sh`）：**剥注释后必须不存在**，
+同时**注释里必须有**（带理由与打开方法）。所以想打开它们的人会先撞红、读到理由，而不是"顺手加上、站点起不来"。
+
+k8s 清单（[Kubernetes 部署](../guide/kubernetes.snippet.md)）：
+
+- ✅ 补了 `securityContext`：`allowPrivilegeEscalation: false`（= no-new-privileges，与 compose 同口径）、
+  `seccompProfile: RuntimeDefault`（k8s ≥1.25 本来就是默认值，显式写出来是为了"集群默认策略变了也不会静默放宽"）、
+  以及**如实**的 `runAsNonRoot: false` —— 写出来是为了不误导：PodSecurity 的 `restricted` 档要求
+  `runAsNonRoot: true`，所以这份清单**过不了 restricted**，只能用在 `baseline` 或无策略的命名空间。
+- ❌ `capabilities` 收窄**没有默认打开**，理由与 compose 的 `cap_drop` 完全相同（root 写宿主属主 hostPath
+  靠 `CAP_DAC_OVERRIDE`），清单里给了带这四个 cap 的注释版可选写法。
+- 🔴 **顺带修了一个真缺陷**：清单里的 `limits:` 原来缩进成**容器的同级键**（与 `resources:` 平级），
+  而它不是合法的 Kubernetes 字段 ⇒ `kubectl apply` 会被严格校验拒绝；若加了 `--validate=false` 就被静默丢弃，
+  **内存与 CPU 上限等于完全没设**。PyYAML 能解析它（它是合法 YAML），所以只有解析后按 k8s 语义检查才发现得了 ——
+  现在守卫就是这么验的。
+- ⚠️ 同时把内存上限从 **500Mi 抬到 1536Mi**：整站备份用 `zstd -19 --long=27 -T0`（多线程 + 128MB 窗口），
+  峰值能到 **1GB 上下**；实测这套站点在并发压测下 RSS 是 568MB～1.1GB。**500Mi 会把备份 OOM 杀掉**。
+  节点内存真的紧张时，正确做法是**降低压缩等级**（`VANBLOG_BACKUP_ZSTD_LEVEL: '12'`）而不是压低上限。
+
+### 为什么不做 su-exec / setcap 降权
+
+这是站长的裁定，代价也如实记下（属另一轮的工作量，不是"忘了做"）：
+
+1. **挂载卷属主**：现有部署的数据目录属主是宿主机上创建它的那个用户；降到非 root 后要么改属主（会影响宿主机上
+   的其它访问），要么靠 `userns`/`fsGroup`，两种都需要迁移步骤与回滚方案。
+2. **caddy 绑 80/443**：非 root 需要 `NET_BIND_SERVICE` 文件 capability（`setcap` 打在镜像里的二进制上）
+   或改成高位端口 + 宿主转发，两者都改变现有部署的网络口径。
+3. **流水线子进程的权限继承**：`fork()` 出来的 node 子进程会继承降权后的身份，而 `pnpm add` 要写
+   `/app/pluginRunner` ⇒ 降权后这些目录必须可写，等于把"哪些路径必须可写"这件事全部重新梳理一遍
+   （与上面 `read_only` 的四个阻塞点是同一份清单）。
+
+### 站长现在就能做的缓解（按性价比排序）
+
+| # | 做法 | 说明与注意 |
+| --- | --- | --- |
+| 1 | **把后台限制在可信网段** | `VANBLOG_ADMIN_LOGIN_ALLOW_CIDR`（默认关）。⚠️ 它**只限登录**：已经签发的 token 与 API Token **不受限**，所以配合第 2 条一起用 |
+| 2 | **API Token 用完即吊销、有效期别拉满** | Token 等价超管 ⇒ 泄露一个 Token 就等于泄露后台。默认 TTL 已是 90 天，能更短就更短 |
+| 3 | **备份归档必须加密，或至少离线签名** | `VANBLOG_BACKUP_PASSPHRASE`（加密）与 ed25519 签名（证明没被篡改）。⚠️ **信任边界**：验签公钥必须存在**主机之外**，否则拿到 root 的人可以连签名一起换掉 —— 签名防的是"归档离开主机之后被篡改"，不防已经有主机 root 的人 |
+| 4 | **检查挂载目录在宿主机上的权限** | bind mount ⇒ 容器对这些目录的权限就是宿主权限。归档目录已经是 0700/0600（见 [备份与恢复](backup.md)），但**静态目录与日志目录**通常不是 |
+| 5 | **不要把流水线开放给不信任的人** | 它只有超管能碰（协作者勾「所有权限」也碰不到），但请把它当成"给这个人一台容器内的 shell"来授权 |
+
+⚠️ 这一节**不是**在劝你不要用流水线 —— 它是产品功能，很多站长的自动化就靠它。
+这里要给的只是"知道代价之后自己决定"所需的信息。

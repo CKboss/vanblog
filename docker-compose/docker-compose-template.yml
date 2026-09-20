@@ -20,6 +20,62 @@ services:
     # server 自己还要停 waline、停 website、关 mongo 连接。docker 默认只等 10 秒就 SIGKILL，
     # 余量太薄 —— 稍微慢一点的机器就会在关连接的半途被砍。给到 30 秒。
     stop_grace_period: 30s
+    # ── 部署层加固 ────────────────────────────────────────────────────────────
+    # 站长裁定：容器**继续以 root 运行**（本轮不改镜像、不做 su-exec/setcap）。所以这里能做的
+    # 只有"收窄 root 顺手还能拿到的**额外**权限"，以及把风险如实写在文档里。
+    #
+    # ⚠️ 先说清它**不解决**什么：流水线功能本身就是"管理员能在容器内执行任意 JS"
+    #    （provider/pipeline 把代码写进 /app/codeRunner 再 fork() 执行），所以
+    #    "一个管理员会话被拿下 = 容器内 root"是产品设计的结果，不是配置能改掉的。
+    #    no-new-privileges 挡的是**在此之上**再提权的路径（setuid 二进制、文件 capability），
+    #    不是"防止拿到 root"。别把它当成后者的缓解。
+    #
+    # 为什么这一条对本项目是安全的（核实过，不是照抄最佳实践）：
+    #    entrypoint.sh / scripts/start.js / Dockerfile 里 gosu、su、setpriv、setuid、newgrp
+    #    **零命中**；entrypoint.sh 与 start.js 里 chown/chmod **各 0 处** ⇒ 这个容器没有任何
+    #    依赖"提升权限"的启动步骤，关掉不会弄坏启动。
+    # ⚠️ mongo 那个服务**故意不加**：官方 mongo 镜像的 entrypoint 在以 root 启动时会自己降权到
+    #    mongodb 用户，那条路径依赖 setuid/setgid 语义，而本轮没有容器可实测 ⇒ 不动它。
+    security_opt:
+      - no-new-privileges:true
+    # ── 下面三项是**注释形式的可选项**，本轮没有默认打开，理由逐条写在旁边 ──
+    # ⚠️ 有守卫钉住"剥掉注释后这三项仍然不存在"（scripts/tests/vanblog-compose-health.test.sh），
+    #    所以想打开它们的人会先撞红、读到理由，而不是"顺手加上、然后站点起不来"。
+    #
+    # (1) cap_drop / cap_add —— 默认**不启用**，因为本机没有容器可实测，而它的风险是真实的：
+    #     容器以 root 运行、写的是**宿主属主**的 bind mount（static / log / caddy config+data /
+    #     mongo 数据目录），靠的是 **CAP_DAC_OVERRIDE**。若 `cap_drop: [ALL]` 只加回
+    #     NET_BIND_SERVICE，宿主目录属主不是 root 时就会**写不进去**，表现为图片上传失败、
+    #     日志写不出、备份失败 —— 而且是"容器 Up、功能坏"的那种难查形状。
+    #     要打开就至少加回下面这几个，并在自己的机器上把上传/备份/恢复/HTTPS 签发全跑一遍：
+    # cap_drop: [ALL]
+    # cap_add: [NET_BIND_SERVICE, DAC_OVERRIDE, CHOWN, FOWNER]
+    #
+    # (2) read_only —— 本轮**不可行**，四个阻塞点都已核实（不是猜的）：
+    #     ① entrypoint.sh 每次启动都要写 /app/caddy.json 与 /app/caddy-fallback.json
+    #        （由 caddyConfig.js 生成，在**镜像层**里，不是卷）；
+    #     ② 流水线要写 /app/codeRunner 与 /app/pluginRunner（config/index.ts 的默认路径，不是卷）；
+    #     ③ ISR 产物写在 /app/website/packages/website/.next/server/pages/**（不是卷；
+    #        实测过：渲染一篇真文章后，它的 .html/.json/.meta 三件套会出现在那里）；
+    #     ④ /tmp 用于上传与整站恢复解包的临时文件。
+    #     ⇒ 要做只读根，前提是先把 ②③ 变成卷、把 ① 的输出改到可写路径（那要改 entrypoint，
+    #        属"改镜像"，本轮裁定不动）。
+    # read_only: true
+    # tmpfs: [/tmp]
+    #
+    # (3) pids_limit —— 防 fork 炸弹（流水线能 fork()，这是真实面）。默认不写是**版本兼容**问题：
+    #     已实证 docker-compose **1.29.2** 的 schema（compose/config/compose_spec.json，
+    #     additionalProperties:false）里有 pids_limit；但 **1.25** 用的是按版本分的 3.4 schema，
+    #     那份文件本轮没取到（GitHub 限流），而 v2-only 的键在 3.x 下会被直接拒绝
+    #     （本模板开头的 version: '3.4' 注释记的就是同一类事故）。
+    #     ⇒ 只在确认自己是 compose v2、或 docker-compose ≥1.27（1.27 起忽略 version 字段、
+    #        改用统一 spec）时才打开。值从 512 起步（Node + caddy + waline + 流水线子进程 +
+    #        图片处理并发，正常峰值远低于此）；⚠️ 太小会让正常的图片处理/ISR 并发失败。
+    # pids_limit: 512
+    #
+    # ⚠️ 同一类版本陷阱也适用于本模板另一处建议的 `mem_limit`（在 vanblog 服务靠后的注释里）：
+    #    它同样是 compose v2 时代的键，在 docker-compose 1.25 + version 3.4 下可能被拒。
+    #    打开前请先 `docker-compose config` 验一遍，别直接 `up`。
     # ⚠️ 这里以前**故意不写 healthcheck**，理由是"镜像里已经有 HEALTHCHECK 指令，编排里再写一份
     #    就是两处需要同步维护的真相"。那个理由在 **podman 下不成立**：podman/buildah 构建会
     #    **丢掉 Dockerfile 的 HEALTHCHECK 指令**，于是 podman 部署**完全没有健康探测**，而 podman 的

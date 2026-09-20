@@ -76,6 +76,29 @@ spec:
         - name: van-blog
           # 钉死发布号：内容永不变，可复现、好回滚（别用 latest / dev-dsh，理由见上面）
           image: 'ghcr.io/ckboss/vanblog:v2026.9.2'
+          # ── 部署层加固：容器仍以 root 运行（裁定如此，本轮不改镜像）──
+          # ⚠️ runAsNonRoot 如实写 false：这个镜像就是 root（caddy 要绑 80/443、流水线要 fork、
+          #    数据目录是 hostPath）。写出来是为了**不误导**：PodSecurity 的 restricted 档要求
+          #    runAsNonRoot:true，所以这份清单**过不了 restricted**，只能用在 baseline 或无策略的命名空间。
+          # allowPrivilegeEscalation:false = no-new-privileges，挡的是"在已是 root 之上再提权"
+          #    （setuid 二进制、文件 capability），**不是**"防止拿到 root"。已核实本项目安全：
+          #    entrypoint.sh / start.js / Dockerfile 里 gosu、su、setpriv、setuid、newgrp 零命中，
+          #    chown/chmod 也是 0 处 ⇒ 没有依赖提权的启动步骤。与 compose 模板的 security_opt 同口径。
+          # seccompProfile: RuntimeDefault 在 k8s ≥1.25 本来就是默认值，这里显式写出来是为了
+          #    "即使集群默认策略变了也不会静默放宽"。
+          securityContext:
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            # ⚠️ capabilities 收窄本轮**故意没打开**（与 compose 模板同一理由）：容器以 root 写
+            #    **宿主属主**的 hostPath（static / log / caddy / mongo 数据），靠的是 CAP_DAC_OVERRIDE。
+            #    `drop: [ALL]` 只加回 NET_BIND_SERVICE 的话，宿主目录属主不是 root 时就**写不进去**
+            #    （图片上传失败、日志写不出、备份失败，而且是"pod Running 但功能坏"的难查形状）。
+            #    本轮没有集群可实测 ⇒ 想打开就连 DAC_OVERRIDE 一起加，并自己完整验证一遍：
+            # capabilities:
+            #   drop: [ALL]
+            #   add: [NET_BIND_SERVICE, DAC_OVERRIDE, CHOWN, FOWNER]
           ports:
             - name: http-80
               containerPort: 80
@@ -125,13 +148,22 @@ spec:
             periodSeconds: 60
             timeoutSeconds: 8
             failureThreshold: 3
+          # ⚠️ 这里修过一个真缺陷：`limits:` 原来缩进成**容器的同级键**（与 resources 平级），
+          #    而它不是合法的 Kubernetes 字段 ⇒ `kubectl apply` 会被严格校验拒绝；若加了
+          #    `--validate=false` 就被静默丢弃，**内存与 CPU 上限等于完全没设**。
+          #    PyYAML 能解析（它是合法 YAML），所以只有解析后按 k8s 语义检查才发现得了。
+          # ⚠️ 数值也别照抄小机器的直觉：整站备份用 `zstd -19 --long=27 -T0`（多线程 + 128MB 窗口），
+          #    峰值能到 **1GB 上下**；实测这套站点在并发压测下 RSS 是 568MB～1.1GB。
+          #    500Mi 的上限会让**备份被 OOM 杀**（compose 模板里对 mem_limit 有同样的警告）。
+          #    节点内存真的紧张时，正确做法是**降低压缩等级**而不是压低上限：
+          #    给容器加环境变量 VANBLOG_BACKUP_ZSTD_LEVEL: '12'。
           resources:
             requests:
-              memory: '300Mi'
+              memory: '512Mi'
               cpu: '250m'
-          limits:
-            memory: '500Mi'
-            cpu: '500m'
+            limits:
+              memory: '1536Mi'
+              cpu: '1000m'
           volumeMounts:
             - name: host-time
               readOnly: true

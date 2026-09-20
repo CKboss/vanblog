@@ -281,6 +281,128 @@ assert_file_not_contains "$(sed 's|^[[:space:]]*#.*||' "${BASE}/docker-compose.y
 assert_file_contains "${BASE}/docker-compose.yaml" "healthcheck:" "1.25 环境里 healthcheck 仍然在（它本身 3.4 就支持，白拿状态可见性）"
 assert_contains "$(cat "${TEST_DIR}/config-125.out")" "列表形式" "1.25 环境下 config 输出解释了为什么是列表形式"
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 部署层加固（站长裁定：容器继续以 root 运行，只做编排层收窄 + 文档写明风险）
+#
+# ⚠️ 这一节的断言分两类，两类都必须有：
+#   (a) 「已启用」的那一项必须真的出现在**剥注释后**的文本里，并且用 PyYAML 解析后按值断言
+#       —— 只 grep 原文的话，一行注释就能让它假绿。
+#   (b) 「故意不启用」的三项必须**同时**满足：剥注释后不存在（真的没启用）+ 原文里存在
+#       （理由与打开方法写在注释里，下一个人能读到）。
+#       ⚠️ 只写 (b) 的前半就是空断言：模板里从来不写这三个词也能过。
+# ══════════════════════════════════════════════════════════════════════════════
+echo
+echo "== 部署层加固：no-new-privileges 与三项故意不启用的收窄 =="
+
+MONGO_BLOCK="$(awk '/^  mongo:[[:space:]]*$/{f=1} f&&/^  [A-Za-z0-9_-]+:[[:space:]]*$/&&$1!="mongo:"{f=0} f' "${TEMPLATE}")"
+
+assert_contains "${VANBLOG_BLOCK_CODE}" "security_opt:" "vanblog 服务真的启用了 security_opt（剥注释后仍在 ⇒ 不是注释里的字）"
+assert_contains "${VANBLOG_BLOCK_CODE}" "no-new-privileges:true" "vanblog 服务启用了 no-new-privileges:true（剥注释后仍在）"
+assert_not_contains "${MONGO_BLOCK}" "security_opt" "mongo 服务**故意不加** security_opt（官方镜像 entrypoint 以 root 启动时会自己降权，那条路径依赖 setuid/setgid 语义，本轮无容器可实测）"
+
+# ── no-new-privileges 的安全前提是一条**跨文件不变量**：容器里不能有需要提权的步骤 ──
+# ⚠️ 这条断言的意义是"将来有人往 entrypoint 里加 gosu/setpriv 时会撞红"，
+#    因为那时 no-new-privileges 就会让启动失败，而失败形状是"容器起不来"、很难联想到这一行。
+for f in entrypoint.sh scripts/start.js Dockerfile; do
+  NOPRIV_CODE="$(sed '/^[[:space:]]*#/d' "${ROOT}/${f}" 2>/dev/null)"
+  #    ⚠️ 只能用 sed 剥注释：绝不要用 server 那个 stripCommentsForAnchor（会把 https:// 当行注释吃掉）
+  for w in gosu setpriv setuid newgrp; do
+    assert_not_contains "${NOPRIV_CODE}" "${w}" "${f} 剥注释后不含 ${w}（no-new-privileges 的安全前提；若将来需要提权步骤，必须同时重新评估这一行）"
+  done
+done
+
+# ── 三项「故意不启用」的收窄：剥注释后必须不存在，原文里必须有（带理由）──
+for key in "read_only:" "pids_limit:" "cap_drop:"; do
+  assert_not_contains "${TPL_CODE}" "${key}" "模板里 ${key} **没有被启用**（剥注释后不存在；理由写在注释里）"
+  assert_contains "${TPL}" "${key}" "模板的注释里**有** ${key} 这个可选项（否则上一条断言是空转：从来没写过也算过）"
+done
+assert_contains "${TPL}" "CAP_DAC_OVERRIDE" "注释里写清了 cap_drop 的风险来源（root 写宿主属主的 bind mount 靠 CAP_DAC_OVERRIDE）"
+assert_contains "${TPL}" "/app/caddy.json" "注释里点名了 read_only 的第一个阻塞点（entrypoint 每次启动都要写 /app/caddy.json）"
+assert_contains "${TPL}" "codeRunner" "注释里点名了 read_only 的第二个阻塞点（流水线要写 /app/codeRunner）"
+assert_contains "${TPL}" ".next/server/pages" "注释里点名了 read_only 的第三个阻塞点（ISR 产物写在 .next/server/pages 下）"
+assert_contains "${TPL}" "1.29.2" "pids_limit 的注释写明了版本依据是**实证过的** 1.29.2 schema，而不是凭印象"
+
+# ── 语义级：用 PyYAML 解析后按键断言（文本断言证明不了"它是一个值"）──
+K8S_MD="${ROOT}/docs/guide/kubernetes.snippet.md"
+python3 - "${TEMPLATE}" "${K8S_MD}" >"${TEST_DIR}/hardening.py.out" 2>&1 <<'PYEOF'
+import re, sys, yaml
+tpl_path, k8s_path = sys.argv[1], sys.argv[2]
+s = open(tpl_path, encoding='utf-8').read()
+for k, v in [('vanblog_data_path', '/var/vanblog'), ('vanblog_image', 'x/y:z'),
+             ('vanblog_mongo_image', 'mongo:7.0'), ('vanblog_http_port', '80'),
+             ('vanblog_https_port', '443'), ('vanblog_email', 'a@b.example.com')]:
+    s = s.replace(k, v)
+d = yaml.safe_load(s)
+vb = d['services']['vanblog']
+mg = d['services']['mongo']
+rc = 0
+def ck(cond, msg):
+    global rc
+    print(('PASS: ' if cond else 'FAIL: ') + msg)
+    if not cond: rc = 1
+ck(vb.get('security_opt') == ['no-new-privileges:true'],
+   "解析后 vanblog.security_opt 的值恰好是 ['no-new-privileges:true']（不是文本里出现过就算）")
+ck('security_opt' not in mg, "解析后 mongo 服务没有 security_opt 键")
+for key in ('read_only', 'pids_limit', 'cap_drop', 'cap_add', 'privileged'):
+    ck(key not in vb, f"解析后 vanblog 服务没有 {key} 键（故意不启用的收窄）")
+    ck(key not in mg, f"解析后 mongo 服务没有 {key} 键")
+ck(vb.get('restart') == 'always' and vb.get('stop_grace_period') == '30s',
+   "既有的 restart/stop_grace_period 没有被这次加固弄丢")
+ck(vb.get('ulimits', {}).get('nofile', {}).get('soft') == 65536,
+   "既有的 ulimits.nofile 没有被这次加固弄丢（C10K 的前提之一）")
+
+# ── k8s 清单：PyYAML 解析后按 k8s 语义断言 ──
+block = re.findall(r'```yaml\n(.*?)```', open(k8s_path, encoding='utf-8').read(), re.S)[0]
+k = yaml.safe_load(block)
+spec = k['spec']['template']['spec']; c = spec['containers'][0]
+ck('limits' not in c, "🔴 k8s 容器层**没有**误挂的 limits 键（它不是合法的 k8s 字段；曾缩进错到这一层 ⇒ apply 被拒或被静默丢弃、上限等于没设）")
+res = c.get('resources', {})
+ck('limits' in res and 'requests' in res, "k8s resources 同时有 requests 与 limits（limits 是 resources 的**子键**）")
+def mib(v):
+    n = int(re.sub(r'[^0-9]', '', str(v)))
+    return n * 1024 if str(v).endswith('Gi') else n
+ck(mib(res.get('limits', {}).get('memory', '0Mi')) >= 1024,
+   "k8s 内存上限 ≥ 1Gi（整站备份用 zstd -19 --long=27 -T0 峰值约 1GB；500Mi 会把备份 OOM 杀掉）")
+sc = c.get('securityContext', {})
+ck(sc.get('allowPrivilegeEscalation') is False, "k8s allowPrivilegeEscalation:false（与 compose 的 no-new-privileges 同口径）")
+ck(sc.get('seccompProfile', {}).get('type') == 'RuntimeDefault', "k8s seccompProfile 显式写 RuntimeDefault（集群默认策略变了也不会静默放宽）")
+ck(sc.get('runAsNonRoot') is False, "k8s runAsNonRoot 如实写 false（这个镜像就是 root；写出来是为了不误导 —— 它过不了 PodSecurity restricted）")
+ck('capabilities' not in sc, "k8s securityContext **没有**默认打开 capabilities 收窄（与 compose 同一理由：root 写宿主属主 hostPath 靠 CAP_DAC_OVERRIDE，本轮无集群可实测）")
+ck(sorted(p['name'] for p in c['ports']) or True, "k8s 端口存在")
+ck([(p['containerPort'], p.get('protocol')) for p in c['ports']] == [(80,'TCP'),(443,'TCP'),(443,'UDP')],
+   "k8s 端口仍是 (80,TCP)/(443,TCP)/(443,UDP)（QUIC 的 UDP 443 没被这次改动弄丢）")
+vols = {v['name'] for v in spec['volumes']}; mounts = {m['name'] for m in c['volumeMounts']}
+ck(vols == mounts, f"k8s 卷与挂载点一一对应（{len(vols)} 个）")
+ck(k['spec'].get('replicas') == 1 and k['spec'].get('strategy', {}).get('type') == 'Recreate',
+   "k8s 仍是 replicas:1 + strategy:Recreate（多副本会争抢同一份 hostPath 数据）")
+sys.exit(rc)
+PYEOF
+while IFS= read -r pl; do
+  case "${pl}" in
+    PASS:*) pass "${pl#PASS: }" ;;
+    FAIL:*) fail "${pl#FAIL: }" ;;
+    *) [[ -n "${pl}" ]] && fail "k8s/compose 语义检查脚本异常输出：${pl}" ;;
+  esac
+done <"${TEST_DIR}/hardening.py.out"
+
+# ── 模板 → 生成产物的一致性：模板里有、但 `config` 生成时被丢掉 = 等于没加 ──
+# ⚠️ 这一条能用是因为上面的 1.25 场景刚跑过 `config`，${BASE}/docker-compose.yaml 就是产物。
+#    只断言模板的话，"生成逻辑改写了这一段"这种失效方式看不见。
+if [[ -f "${BASE}/docker-compose.yaml" ]]; then
+  assert_file_contains "${BASE}/docker-compose.yaml" "no-new-privileges:true" \
+    "**生成出来的** compose 文件里也有 no-new-privileges（模板有、生成时被丢掉就等于没加）"
+  assert_file_not_contains "$(sed 's|^[[:space:]]*#.*||' "${BASE}/docker-compose.yaml")" "read_only:" \
+    "生成出来的 compose 文件里 read_only 仍未被启用（剥注释后判定）"
+else
+  fail "找不到 ${BASE}/docker-compose.yaml：上面的 config 场景没跑成功，模板→产物的一致性无从验证"
+fi
+
+# ── k8s 清单里「故意不打开」的那项，理由必须在原文的注释里（同样是防空转）──
+assert_file_contains "${K8S_MD}" "# capabilities:" "k8s 清单的注释里给了 capabilities 收窄的可选写法（否则上面那条 not-in 断言是空转）"
+assert_file_contains "${K8S_MD}" "DAC_OVERRIDE" "k8s 清单里写清了不打 capabilities 的风险来源"
+assert_file_contains "${K8S_MD}" "kubectl apply" "k8s 清单里写清了 limits 缩进错误的后果（apply 被严格校验拒绝）"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
