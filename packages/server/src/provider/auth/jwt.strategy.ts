@@ -50,8 +50,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       moreDto.nickname = user.nickname;
     } else {
       const user = await this.userProvider.getUser();
+      if (!user) {
+        // 库里没有 id:0 的管理员：恢复出一份坏库/空库、users 集合被清空，或历史上"两条 id:0"
+        // 竞态的残留被清掉。这个 token 已经没有任何账号与之对应。
+        // ⚠️ 必须是 401 而不是 500：以前这里直接读 `user.nickname` 抛 TypeError ⇒
+        //    鉴权路径变成 500，调用方会以为"服务端坏了"而重试，而真相是"你的凭据不再有效"。
+        //    这条路径**每个带 token 的请求都会走**，所以坏库会让整个后台变成一片 500。
+        throw new UnauthorizedException(
+          '管理员账号不存在（库里没有 id=0 的用户）：站点数据可能已损坏，或被恢复成了一份空/坏的备份',
+        );
+      }
       const siteInfo = await this.metaProvider.getSiteInfo();
-      const authorName = siteInfo.author;
+      // ⚠️ getSiteInfo() 在 metas 里没有 siteInfo 时返回的是 undefined（它 `return raw`），
+      //    所以 `siteInfo.author` 是第二处空值解引用 —— 与 user 那条同一行，一起修。
+      const authorName = siteInfo?.author;
       moreDto.nickname = authorName || user.nickname;
     }
     return { name: payload.username, id: payload.sub, ...moreDto };

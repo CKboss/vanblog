@@ -3,7 +3,11 @@
  *
  * 为什么值得单独一个工具（与 `utils/envNumber.ts` 同理）：仓库里既有
  * `process.env.X === 'true'`（写 `1` 就是关）、也有 `Boolean(process.env.X)`
- * （写 `false` 反而是**开**，因为非空串是 truthy）、还有 `checkTrue()`（只认 `true`/`'true'`）。
+ * （写 `false` 反而是**开**，因为非空串是 truthy）、还有 `checkTrue()`/`isTrue()`
+ * （只认 boolean `true` 与字符串 `'true'`；⚠️ `checkTrue` **曾经**因为 `s == true` 松散比较
+ * 而把 `"1"`/`1`/`[1]` 也判成真，与 `isTrue` 结果相反，已统一 —— 见 `utils/checkTrue.ts`）。
+ * ⚠️ 注意 `envBool` 与那两个**口径不同且是有意不同**：env 是运维手写的，宽容
+ * （`1/true/yes/on` 都算真、非法值回落默认）；请求体与数据库里的值应当严格。
  * 三种口径混在一起时，运维按其中一种写 env 就会得到相反的行为 —— 而备份/恢复这些开关
  * 恰恰是"写错了会删东西"的那一类，不能靠猜。
  *

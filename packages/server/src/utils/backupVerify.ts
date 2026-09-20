@@ -379,10 +379,24 @@ export async function verifyFullBackup(
 
     const block = manifest?.integrity;
     if (!block || typeof block !== 'object') {
+      // ⚠️ 这里以前**只有一种文案**，于是在"清单根本读不出来"的情况下会告诉站长
+      //    "只校验了解压读通、**清单可解析**、计数一致" —— 而清单恰恰没解析成功。
+      //    在灾难恢复路径上，一句错误的"这项没问题"比一个 TypeError 危险得多：
+      //    站长会拿着一份其实无法核验的归档去覆盖现有数据。
+      //    所以按"清单在不在"分成两种结论，两种都指向已经记录在 issues 里的真原因。
+      const probeText =
+        probe.enabled === null ? `（${probe.detail}）` : `（实测${probe.enabled ? '已开启' : '未开启'}）`;
       integrity.notes.push(
-        '这份归档没有 integrity 块（早于防损坏改动写出），成员级检查不可用：' +
-          '只校验了解压读通、清单可解析、计数一致，以及压缩器自带的内容校验位' +
-          (probe.enabled === null ? `（${probe.detail}）` : `（实测${probe.enabled ? '已开启' : '未开启'}）`),
+        manifest
+          ? '这份归档没有 integrity 块（早于防损坏改动写出），成员级检查不可用：' +
+              '只校验了解压读通、清单可解析、计数一致，以及压缩器自带的内容校验位' +
+              probeText
+          : '这份归档的 manifest.json **读不出来**（原因见上面 manifestFromArchive 那条问题：' +
+              '解不出、解析失败，或不是本功能认的整站备份清单），所以成员级检查与计数核对**全部没有做**：' +
+              '只校验了解压读通，以及压缩器自带的内容校验位' +
+              probeText +
+              '。⚠️ 不要拿这份归档去覆盖现有数据 —— 先换一份能读出清单的备份，' +
+              '或用 ./vanblog.sh backup-verify --all 找出最近一份校验通过的归档',
       );
       // 整归档 sha256：老归档也可能有 `.sha256` sidecar（vanblog.sh 会写）
       await checkArchiveSha256(null);
@@ -484,7 +498,13 @@ export async function verifyFullBackup(
     }
 
     // 10b) 整归档 sha256 vs sidecar / 清单
-    await checkArchiveSha256(manifest.totals?.archiveSha256 ?? sidecar?.totals?.archiveSha256 ?? null);
+    // ⚠️ `manifest?.` 是**防御性**的，不是这里真能为 null：上面 `const block = manifest?.integrity`
+    //    为假时已经 return，所以走到这里 `block` 非空 ⇒ `manifest` 必非空。
+    //    但 `manifest` 是外层函数的 `let`、本函数是闭包，TS 无法跨闭包收窄 ⇒ 会报 TS18047，
+    //    而下一个人看到裸 `manifest.totals` 也无从判断这是"已证明非空"还是"漏了判空"。
+    //    写成 `?.` 让类型与意图一致：即使将来有人挪动上面那个 early return，这里也只会退化成
+    //    "拿不到清单里的哈希，改用 sidecar"，而不是抛 TypeError。
+    await checkArchiveSha256(manifest?.totals?.archiveSha256 ?? sidecar?.totals?.archiveSha256 ?? null);
   }
 
   async function checkArchiveSha256(fromManifest: string | null): Promise<void> {

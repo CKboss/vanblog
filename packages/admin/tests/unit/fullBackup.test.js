@@ -155,7 +155,18 @@ describe('整站备份：服务端', () => {
 
   it('接口有 confirm 保护、演示站拦截、路径穿越防护和大文件落盘', () => {
     const controller = readRepo('packages/server/src/controller/admin/backup/backup.controller.ts');
-    assert.match(controller, /checkTrue\(body\?\.confirm\)/);
+    // ⚠️ 这条锚点**升级过**（不是放宽）：以前钉的是 `checkTrue(body?.confirm)`，而 `checkTrue`
+    //    的旧实现含 `s == true` 松散比较 ⇒ `confirm:"1"`、`confirm:1`、`confirm:[1]` 都算
+    //    "站长已确认" —— 全仓库**最该严格**的一处判定，用的却是**最松**的一套布尔口径。
+    //    现在闸门点名 `isTrue`（只认 boolean true 与字符串 'true'），所以锚点改成钉"严格口径"本身：
+    //    既要证明用的是 isTrue，也要证明没有退回"只看 truthy"的宽松判定。
+    assert.match(controller, /if \(!isTrue\(body\?\.confirm\)\) \{/);
+    assert.doesNotMatch(controller, /if \(!body\?\.confirm\) \{/);
+    assert.doesNotMatch(controller, /checkTrue\(body\?\.confirm\)/);
+    // 负向对照：证明上面两把"不许有"的尺子不是恒真（尺子量得到坏形状，才有资格说"没有坏形状"）
+    assert.match('if (!body?.confirm) {', /if \(!body\?\.confirm\) \{/);
+    assert.match('if (!checkTrue(body?.confirm)) {', /checkTrue\(body\?\.confirm\)/);
+    assert.doesNotMatch('if (!isTrue(body?.confirm)) {', /checkTrue\(body\?\.confirm\)/);
     assert.match(controller, /演示站禁止修改此项/);
     assert.match(controller, /RESTORE_UPLOAD_OPTIONS/);
     // 上传选项（落盘 + 8GB + parts 收紧）从控制器私有搬进了共享模块

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
 
@@ -33,9 +33,20 @@ export class CollaboratorController {
     // 管理员优先用作者名称吧
     const siteInfo = await this.metaProvider.getSiteInfo();
     const admin = await this.userProvider.getUser(true);
+    if (!admin) {
+      // 库里没有 id:0 的管理员。以前这里直接读 `admin.name` ⇒ TypeError ⇒ 500。
+      // ⚠️ 不能"退而求其次只返回协作者"：这份清单的第一行**就是**管理员，
+      //    少了它后台会显示成"这个站没有管理员"，那是比报错更糟的静默错误答案。
+      throw new NotFoundException(
+        '管理员账号不存在（库里没有 id=0 的用户），无法生成协作者清单。' +
+          '这通常意味着数据被恢复成了一份损坏或空的备份：先跑 ./vanblog.sh doctor 看体检，' +
+          '必要时用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建（数据库起不来时也能用）',
+      );
+    }
     const adminUser = {
       name: admin.name,
-      nickname: siteInfo.author,
+      // ⚠️ getSiteInfo() 在 metas 没有 siteInfo 时返回 undefined（它 `return raw`）⇒ 判空
+      nickname: siteInfo?.author,
       id: 0,
     };
     const data = await this.userProvider.getAllCollaborators(true);

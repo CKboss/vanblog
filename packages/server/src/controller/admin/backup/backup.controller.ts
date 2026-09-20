@@ -44,6 +44,7 @@ import { RESTORE_UPLOAD_OPTIONS } from 'src/utils/restoreUpload';
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
 import { availableFormats, pickSpec } from 'src/utils/fullBackup';
 import { checkTrue } from 'src/utils/checkTrue';
+import { isTrue } from 'src/utils/isTrue';
 import { JwtService } from '@nestjs/jwt';
 import { rotateJwtSecret, switchJwtSigningKey } from 'src/utils/initJwt';
 
@@ -337,8 +338,16 @@ export class BackupController {
     if (config.demo && config.demo == 'true') {
       return { statusCode: 401, message: '演示站禁止修改此项！' };
     }
-    if (!checkTrue(body?.confirm)) {
-      throw new BadRequestException('恢复会覆盖当前全部数据，请带 confirm=true 再调用一次');
+    // ⚠️ 这道闸门**必须**用最严的布尔口径（`isTrue`：只认 boolean true 与字符串 'true'），
+    //    不能用曾经宽松的 `checkTrue`（旧实现 `s == true` 会让 `confirm:"1"`、`confirm:1`、
+    //    `confirm:[1]` 都算"站长已确认"）。破坏性操作的确认闸门是全仓库最不该宽松的一处判定。
+    //    两个助手现在语义一致，但这里刻意点名 `isTrue`：万一将来有人把 `checkTrue` 改回松散比较，
+    //    这道闸门也不会跟着松（有守卫钉住 `confirm:'1'`/`1`/`[1]` 一律不算确认）。
+    if (!isTrue(body?.confirm)) {
+      throw new BadRequestException(
+        '恢复会覆盖当前全部数据，请带 confirm=true 再调用一次（只接受字面量 true 或字符串 "true"；' +
+          '"1"/"yes"/"TRUE" 都不算确认）',
+      );
     }
     let archivePath = uploadedPath;
     const uploaded = Boolean(uploadedPath);
