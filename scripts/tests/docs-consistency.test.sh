@@ -266,6 +266,11 @@ names = sorted({v for v in out if not v.endswith("_")})
 roots = ["packages/server/src", "packages/website", "packages/admin/src", "packages/cli",
          "Dockerfile", "entrypoint.sh", "scripts/start.js", "scripts/vanblog.sh",
          "scripts/vanblog-drill.sh",
+         # ⚠️ `scripts/tests` 也必须在语料里：有些开关**只被守卫读取**（例如
+         #    `VANBLOG_DRILL_LIVE` 只在 `vanblog-drill.test.sh` 里读），而贡献文档恰恰最需要
+         #    写清这类"怎么把守卫的活体部分打开"的变量。不收它就会把真实变量误判成
+         #    "文档写了代码里不存在的名字"（2026-09-20 真实发生过，作者只能改成不写变量名）。
+         "scripts/tests",
          "scripts/build-image-local.sh", "scripts/caddyConfig.js", "docker-compose",
          "caddyTemplate.json", "caddyFallbackTemplate.json"]
 corpus = []
