@@ -42,6 +42,24 @@ describe('ISRProvider', () => {
     await expect(provider.getArticleUrls()).resolves.toEqual(['/post/30', '/post/gitea']);
   });
 
+/**
+ * 从 revalidate URL 里取出 `path` 参数。
+ *
+ * ⚠️ 以前这三处写的是 `decodeURIComponent(url.split('path=')[1] || '')`，
+ * 它把 `path=` **之后的所有内容**都当成路径。在默认配置下 URL 只有 `?path=…`
+ * 一个参数，所以一直是对的；而 server 现在**总是**带 `secret`（见 utils/revalidateSecret.ts：
+ * 一体式镜像默认没配密钥时会自动生成一把，否则前台会把每次重渲染都判成 403），
+ * 于是解析结果变成 `/post/30&secret=…`，三条用例全红。
+ *
+ * 🔴 修法是**升级解析器**，不是把断言放宽或把 secret 从期望值里抹掉 ——
+ * 那种"照着当前行为写断言"的做法正是本仓库踩过的"fixture 钉住了 bug"那一族。
+ * 用 URL/URLSearchParams 解析对参数顺序与个数都不敏感，也不会把密钥回显到测试输出里。
+ */
+function extractRevalidatePath(call: unknown[]): string {
+  const url = new URL(String(call[0]));
+  return url.searchParams.get('path') || '';
+}
+
   it('on-demand ISR revalidates both public URLs after an admin edit (#356)', async () => {
     const { provider } = createProvider([
       { id: 30, pathname: 'gitea' },
@@ -50,10 +68,7 @@ describe('ISRProvider', () => {
 
     await provider.activeAllFn('更新文章触发增量渲染！', { postId: 30 });
 
-    const revalidated = mockedAxios.get.mock.calls.map((call) => {
-      const url = String(call[0]);
-      return decodeURIComponent(url.split('path=')[1] || '');
-    });
+    const revalidated = mockedAxios.get.mock.calls.map(extractRevalidatePath);
 
     expect(revalidated).toContain('/post/30');
     expect(revalidated).toContain('/post/gitea');
@@ -69,10 +84,7 @@ describe('ISRProvider', () => {
       previousPathname: 'gitea',
     });
 
-    const revalidated = mockedAxios.get.mock.calls.map((call) => {
-      const url = String(call[0]);
-      return decodeURIComponent(url.split('path=')[1] || '');
-    });
+    const revalidated = mockedAxios.get.mock.calls.map(extractRevalidatePath);
     expect(revalidated).toEqual(expect.arrayContaining(['/post/30', '/post/new-path', '/post/gitea']));
   });
 
@@ -84,10 +96,7 @@ describe('ISRProvider', () => {
     expect(mockedAxios.get).not.toHaveBeenCalled();
 
     await provider.activeAllFn('手动触发 ISR', { postId: 30, forceActice: true });
-    const revalidated = mockedAxios.get.mock.calls.map((call) => {
-      const url = String(call[0]);
-      return decodeURIComponent(url.split('path=')[1] || '');
-    });
+    const revalidated = mockedAxios.get.mock.calls.map(extractRevalidatePath);
     expect(revalidated).toEqual(expect.arrayContaining(['/post/30', '/post/gitea']));
   });
 });

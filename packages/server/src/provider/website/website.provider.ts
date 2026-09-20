@@ -3,6 +3,7 @@ import { ChildProcess, spawn } from 'node:child_process';
 import cluster from 'node:cluster';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { applyRuntimeCdnPrefix, getWebsiteRoot } from 'src/utils/cdnUrl';
+import { ensureRevalidateSecret, REVALIDATE_SECRET_ENV } from 'src/utils/revalidateSecret';
 import { MetaProvider } from '../meta/meta.provider';
 import { SettingProvider } from '../setting/setting.provider';
 
@@ -255,10 +256,23 @@ export class WebsiteProvider {
     this.logger.log(JSON.stringify(loadEnvs, null, 2));
     // loadEnv() 是 await 的：回来之后必须再看一眼，可能已经有别的调用把进程起起来了
     if (this.ctx == null) {
+      // 🔴 server 与前台子进程必须用**同一把** revalidate 密钥，否则前台会把 server 触发的
+      //    每一次重渲染都判成 401/403（一体式镜像的默认配置下曾经就是这样，见
+      //    utils/revalidateSecret.ts 的头注释：Next 自己会给每个请求补 x-forwarded-for，
+      //    所以"没配密钥 ⇒ 只放行回环直连"那条判据在 Next 下**永远不成立**）。
+      //    ⚠️ 运维显式配了就用运维的；没配才生成一把进程内的，并通过 env 交给子进程。
+      //    ⚠️ 空串表示"拿不到密钥"（例如只读文件系统），此时**不注入**这个键，
+      //       让前台保持它自己的失败关闭语义，而不是塞一个空值把判定搅乱。
+      const revalidateSecret = ensureRevalidateSecret({
+        log: { warn: (message: string) => this.logger.warn(message) },
+      });
       const child = spawn(cmd, args, {
         env: {
           ...process.env,
           ...loadEnvs,
+          // 放在 ...loadEnvs 之后：loadEnv() 不产出这个键（已核实），但顺序上仍要保证
+          // 不被任何后展开的对象覆盖 —— 覆盖的症状是"两边密钥不一致"，很难查。
+          ...(revalidateSecret ? { [REVALIDATE_SECRET_ENV]: revalidateSecret } : {}),
           // ⚠️ Next 13 的 standalone server 用 HOSTNAME 决定监听地址，而容器里 HOSTNAME
           // 就是容器 ID（例如 97c3c6689770）→ 它只绑到那个网卡 IP，
           // caddy 反代 127.0.0.1:3001 直接 **502**，前台整站打不开（后台和 /api 却正常，

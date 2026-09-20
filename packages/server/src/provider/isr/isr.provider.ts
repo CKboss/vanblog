@@ -14,6 +14,7 @@ import { SettingProvider } from '../setting/setting.provider';
 import { SiteMapProvider } from '../sitemap/sitemap.provider';
 import { SearchIndexProvider } from '../search/searchIndex.provider';
 import { reconcileArtifacts, reaperPagesDir } from './artifactReaper';
+import { ensureRevalidateSecret } from 'src/utils/revalidateSecret';
 export interface ActiveConfig {
   postId?: number;
   forceActice?: boolean;
@@ -87,7 +88,20 @@ export const DEFAULT_ISR_RETRY_MAX_DELAY_MS = 30000;
 export function describeProbeFailure(probe: RevalidateProbeResult | null | undefined): string {
   if (!probe) return '未知';
   if (probe.kind === 'http-error') {
-    return `前台有响应但返回 ${probe.detail || '非 2xx'}（多半是它回源查库失败，数据库可能还没就绪）`;
+    const detail = probe.detail || '非 2xx';
+    // ⚠️ 401/403 **不是**"数据库没就绪"，是 server 与前台的 revalidate 密钥不一致
+    //    （或前台侧没拿到密钥）。把鉴权失败说成数据库问题会把人引到完全错误的方向上排查 ——
+    //    本仓库真发生过：一体式镜像默认配置下每次 revalidate 都 403，
+    //    而当时的日志只有一句"第 N 次重试"，于是被归因成了 mongo 重连时序。
+    if (probe.status === 401 || probe.status === 403) {
+      return (
+        `前台有响应但返回 ${detail}：这是**鉴权**失败，不是数据库问题。` +
+        '说明 server 与前台子进程用的 VAN_BLOG_REVALIDATE_SECRET 不一致' +
+        '（分离部署时请给两边配同一个值；一体式部署下应由 server 自动下发，' +
+        '若仍出现请检查前台子进程是否比 server 更早启动、或 /tmp 是否不可写）'
+      );
+    }
+    return `前台有响应但返回 ${detail}（多半是它回源查库失败，数据库可能还没就绪）`;
   }
   if (probe.kind === 'unreachable') {
     return `连不上前台子进程（${probe.detail || '原因未知'}）`;
@@ -100,6 +114,8 @@ export interface RevalidateProbeResult {
   ok: boolean;
   /** `ok` 成功；`unreachable` 连不上前台子进程；`http-error` 前台有响应但非 2xx。 */
   kind: 'ok' | 'unreachable' | 'http-error';
+  /** `http-error` 时的状态码，用来把**鉴权失败**（401/403）与"数据库没就绪"区分开。 */
+  status?: number;
   /** 失败细节（`ECONNREFUSED`、`HTTP 500` 等），只用于日志，不参与判定。 */
   detail?: string;
 }
@@ -281,7 +297,12 @@ export class ISRProvider implements OnModuleDestroy {
    */
   buildRevalidateUrl(url: string): string {
     const params = new URLSearchParams({ path: url });
-    const secret = process.env.VAN_BLOG_REVALIDATE_SECRET;
+    // ⚠️ 必须走 ensureRevalidateSecret() 而不是直接读 env：一体式镜像默认**没有**配这个变量，
+    //    而前台的 /api/revalidate 在"没配密钥"时只放行回环直连 —— 那条判据在 Next 下永远不成立
+    //    （Next 的 base-server 会给每个请求补 x-forwarded-for），于是每次重渲染都 403。
+    //    ensureRevalidateSecret() 会在没配时取/生成一把与前台子进程**同一把**密钥
+    //    （见 utils/revalidateSecret.ts），两边就对上了。
+    const secret = ensureRevalidateSecret();
     if (secret) {
       params.set('secret', secret);
     }
@@ -315,7 +336,7 @@ export class ISRProvider implements OnModuleDestroy {
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (typeof status === 'number') {
-        return { ok: false, kind: 'http-error', detail: `HTTP ${status}` };
+        return { ok: false, kind: 'http-error', detail: `HTTP ${status}`, status };
       }
       const code = (err as NodeJS.ErrnoException)?.code;
       const message = (err as Error)?.message;
