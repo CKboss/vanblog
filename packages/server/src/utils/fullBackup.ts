@@ -2730,6 +2730,28 @@ export async function restoreFullBackup(
     const memberCount = await assertRestorableArchive(archivePath, {
       targetDir: staging,
       passphrase: options.passphrase,
+      // 🔴 这两个以前**没有透传**，而调用链是一路传到这里才断的：
+      //    `backup.controller.restoreFull`（`isTrue(body?.skipSignatureCheck)`）
+      //    → `fullBackup.provider.restore(…, skipSignatureCheck)` → `doRestore(…)`
+      //    → `restoreFullBackup({ backupDir, skipSignatureCheck })` → **这里丢掉**。
+      //    后果有两条，方向相反，都很糟：
+      //    ① `backupDir` 丢了 ⇒ `resolveVerifyKey(undefined)` 只能解析 env 里的公钥，
+      //       于是"用 `POST /api/admin/backup/signing/key` 生成过密钥、但没配 env"的部署
+      //       在**管理员恢复路径**上永远只能得到 `no-key`（放行 + WARN）
+      //       ⇒ 签名校验在这条路上**静默失效**（与匿名 `init/restore` 曾经的那个缺陷同族，
+      //       那边已修，这边漏了）。
+      //    ② `skipSignatureCheck` 丢了 ⇒ 文档与 `vanblog.sh restore --skip-signature-check`
+      //       承诺的逃生口**根本不起作用**：配了 env 公钥、归档验不过时，管理员**无法**
+      //       "我知道风险，仍要恢复"—— 在灾难现场这是可用性缺陷（一份已知完好但验不过签的
+      //       归档会变成恢复不了）。⚠️ 而整条 `skipSignatureCheck` 管线（controller → provider
+      //       → options）在最后一跳之前都是活的，所以它看起来"已经实现了"，单元测试也测不到
+      //       （它们直接调 `assertRestorableArchive` 并自己传 skip）。
+      //    ⚠️ 匿名 `init/restore` 会在控制器里**先**调一次带 `backupDir` 的
+      //    `assertRestorableArchive`，所以它不受 ① 影响；但响应体里的 `signatureWarning`
+      //    取自 `takeRestoreSignatureWarning()`，而那个槽会被**这一次**（内层）调用覆盖 ⇒
+      //    不透传的话，站长在响应里看到的是内层那次"没有公钥"的结论，而不是控制器那次真验过的结论。
+      backupDir: options.backupDir,
+      skipSignatureCheck: options.skipSignatureCheck,
     });
     logger.log(`归档成员检查通过（${memberCount} 个成员，无绝对路径 / .. / 符号链接）`);
     try {

@@ -13,6 +13,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import * as fs from 'fs';
+import * as path from 'path';
 import { InitDto } from 'src/types/init.dto';
 import { InitProvider } from 'src/provider/init/init.provider';
 import { ISRProvider } from 'src/provider/isr/isr.provider';
@@ -30,7 +31,11 @@ import {
   inspectFullBackup,
   takeRestoreSignatureWarning,
 } from 'src/utils/fullBackup';
-import { BACKUP_SIG_MAGIC, signatureSidecarPath } from 'src/utils/backupSigning';
+import { BACKUP_SIG_MAGIC, resolveVerifyKey, signatureSidecarPath } from 'src/utils/backupSigning';
+// 🔴 恢复路径上**每一类**安全拒绝都要留痕：活体实测证明这些拒绝以前只存在于 HTTP 响应体里
+//    （`拒绝恢复`/`不匹配`/`超过允许的` 在 298 行日志里全 0 命中），于是 `./vanblog.sh doctor`
+//    的"近 24h ERROR 计数"看不见有人在反复试探。节流/升级/打码都在这个模块里，别另写一套。
+import { recordRestoreRejection } from 'src/utils/restoreSecurityLog';
 import { config } from 'src/config';
 import { clearSetupKey } from 'src/provider/init/setupKey';
 import { invalidateJwtSecretCache } from 'src/utils/initJwt';
@@ -487,17 +492,22 @@ export class InitController {
         this.logger.log(`初始化页恢复：收到随归档上传的 .sig，已放到 ${sigSidecarPath}`);
       }
 
-      const manifest = await inspectFullBackup(
-        uploadedPath,
-        this.fullBackupProvider.backupDir(),
-        archivePassphrase,
-      );
-      if (!manifest) {
-        throw new BadRequestException(
-          '读不出这个备份的清单：文件损坏/不完整，或不是本功能导出的整站备份',
-        );
-      }
-      // ⚠️ 体积/剩余空间闸门要在**解密之后**才能数成员，所以口令必须传进去；
+      // 🔴 **闸门顺序**（2026-09-21 修正，两条后果都被活体实测确认过）：
+      //    "便宜且不依赖内容正确性"的闸门必须排在**清单解析之前**。以前这里是先
+      //    `inspectFullBackup`（解出 ./manifest.json）再 `assertRestorableArchive`
+      //    （签名 → 成员上限 → 体积 → 剩余空间），于是：
+      //    ① **被篡改的归档被报成"文件损坏"**：翻中段一个字节就破坏 zstd 流 ⇒ 清单检查先失败，
+      //       站长看到"读不出这个备份的清单：文件损坏/不完整"，而真相可能是"这份被人换过"。
+      //       敌意环境下这两种结论的处置**完全不同**（排查入侵 vs 重传副本）。
+      //    ② **不含 manifest 的成员炸弹打不到成员上限、也不留痕**：实测 318,857 字节 /
+      //       10 万个空文件的归档被"读不出清单"在 0.42s 拦下，`member-cap` 与应用日志**0 命中**
+      //       ⇒ 这类**匿名**放大尝试在应用日志里毫无痕迹（只有 caddy 访问日志能看到一个 400）。
+      //    ⚠️ 提前是安全的，因为两者**没有依赖关系**（已核实）：`assertRestorableArchive` 只吃
+      //    `archivePath` + options（第 0 道签名、然后 `listArchiveEntries` 数成员、再体积/剩余空间），
+      //    而 `inspectFullBackup` 的返回值只用于下面那条日志的 `manifest.createdAt`。
+      //    ⚠️ 成本：签名闸门需要整档 sha256（一次完整顺序读），但它**只在"配了公钥或存在 .sig"时**
+      //    才做（`assertRestorableArchive` 内部的条件），所以没配签名的部署一个字节都不多读。
+      //    ⚠️ 体积/剩余空间闸门要在**解密之后**才能数成员，所以口令必须传进去；
       //    拿不到口令时这里就会给出「这份归档是加密的 + 两条可照做的办法」，
       //    而不是等到解包一半才失败（那时磁盘上已经有一份半截的明文了）。
       // 🔴 `backupDir` 必须传：验签公钥的解析顺序是
@@ -505,10 +515,51 @@ export class InitController {
       //    以前这条匿名路径**没传** backupDir，于是"用 POST /api/admin/backup/signing/key 生成过密钥、
       //    但没配 env"的部署在灾难恢复路径上永远只能得到 `no-key`（放行 + WARN）——
       //    也就是**签名功能在它最该起作用的那条路径上静默失效**。
+      const backupDir = this.fullBackupProvider.backupDir();
       const members = await assertRestorableArchive(uploadedPath, {
         passphrase: archivePassphrase,
-        backupDir: this.fullBackupProvider.backupDir(),
+        backupDir,
       });
+
+      const manifest = await inspectFullBackup(uploadedPath, backupDir, archivePassphrase);
+      if (!manifest) {
+        // 🔴 这条拒绝以前**只存在于响应体**、应用日志一条都没有（活体实测：`RestoreSecurity` 0 命中）
+        //    ⇒ 有人反复上传"不是本功能导出的归档"时，`./vanblog.sh doctor` 的 24h 计数看不见。
+        //    ⚠️ 复用**既有**类别 `not-our-archive`（它的定义就是"归档里没有 manifest.json /
+        //    manifest 校验失败"），不新造一类；级别 warn（诚实站长传错文件也会撞上），
+        //    而"有人反复试"会经由 restoreSecurityLog 的累计计数升级成 ERROR 汇总。
+        // 🔴 文案要能区分三种情况 —— 这正是本次调序的目的：走到这里说明**签名闸门已经放行**，
+        //    所以"有 .sig + 有公钥"这一支可以给出**确定的**"没被篡改"结论。
+        const sigPresent = fs.existsSync(sigSidecarPath ?? signatureSidecarPath(uploadedPath));
+        const haveVerifyKey = resolveVerifyKey(backupDir) !== null;
+        let message: string;
+        let detail: string;
+        if (sigPresent && haveVerifyKey) {
+          message =
+            '读不出这个备份的清单，但它**验签通过**了（签名与归档内容对得上 ⇒ 它没有被人改过）：' +
+            '所以问题不是篡改，而是它**不是本功能导出的整站备份**（或导出的版本太老、清单形状不符）。' +
+            '请换一份由「备份与恢复 → 整站备份」导出的归档';
+          detail = '清单读不出，但签名验过 ⇒ 不是篡改，而是"不是本功能导出的归档"';
+        } else if (sigPresent) {
+          message =
+            '读不出这个备份的清单：文件损坏/不完整，或不是本功能导出的整站备份。' +
+            '⚠️ 这份归档**带有 .sig**，但本机没有可比对的验签公钥 ⇒ **无法判断**它是被篡改了还是拷贝坏了。' +
+            '想拿到确定结论：把签名时那把密钥对应的**公钥**配到 VANBLOG_BACKUP_VERIFY_KEY(_FILE)' +
+            '（或放进备份目录的 signing/ 下）后重试';
+          detail = '清单读不出，且带有 .sig 但本机没有验签公钥 ⇒ 篡改与损坏无法区分';
+        } else {
+          message =
+            '读不出这个备份的清单：文件损坏/不完整，或不是本功能导出的整站备份。' +
+            '如果你怀疑这份归档被人换过：备份时配置签名密钥、恢复时连 .sig 一起提交' +
+            '（`./vanblog.sh signing-key` 生成密钥，curl 用 -F "signature=<路径>"），就能得到确定结论';
+          detail = '清单读不出（没有 .sig，无从判断是否被篡改）';
+        }
+        recordRestoreRejection(
+          'not-our-archive',
+          `${detail}（归档 ${originalName.slice(0, 120) || path.basename(uploadedPath)}，成员 ${members} 个）`,
+        );
+        throw new BadRequestException(message);
+      }
       this.logger.log(
         `初始化页恢复整站备份：${originalName}（清单 ${manifest.createdAt}，成员 ${members} 个）`,
       );
