@@ -442,6 +442,17 @@ describe('backupSigning：恢复闸门（assertArchiveSignatureForRestore）', (
     expect(() =>
       assertArchiveSignatureForRestore({ archivePath, actualSha256: actual, verifyKey: resolveVerifyKey(dir, {}) }),
     ).toThrow(/skipSignatureCheck=true/);
+    // 🔴 2026-09-21 新增：逃生口提示必须**说清它在哪条路上**，并明说匿名路没有它。
+    //    为什么要有这条：这个函数被匿名与管理员两条路由共用，而**匿名那条刻意没有跳过开关**。
+    //    活体实测到站长在初始化页做灾难恢复时，被旧文案指向一个不存在的开关、白试一轮。
+    //    ⚠️ 断言的是"文案里同时出现『后台』这个落点与『匿名…没有这个开关』这个否定"，
+    //    而不是钉死整句措辞 —— 措辞可以改，但"指对路 + 说清匿名路没有"这两件事不能丢。
+    expect(() =>
+      assertArchiveSignatureForRestore({ archivePath, actualSha256: actual, verifyKey: resolveVerifyKey(dir, {}) }),
+    ).toThrow(/登录后台/);
+    expect(() =>
+      assertArchiveSignatureForRestore({ archivePath, actualSha256: actual, verifyKey: resolveVerifyKey(dir, {}) }),
+    ).toThrow(/匿名[^）]*没有这个开关/);
   });
 
   it('⚠️ 没配公钥 ⇒ **放行**（既有部署不能因为升级而恢复不了），但给一条响亮的 WARN', () => {

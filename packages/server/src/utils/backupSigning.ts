@@ -720,10 +720,21 @@ export function assertArchiveSignatureForRestore(input: {
       `${result.message}` +
         `（归档 ${path.basename(input.archivePath)}；本机验签公钥指纹 ${input.verifyKey.fingerprint}）`,
     );
+    // 🔴 2026-09-21 修：这段"逃生口"提示以前是**无条件**追加的，而这个函数被**两条路由共用**
+    //    （匿名 `POST /api/admin/init/restore` 与管理员 `POST /api/admin/backup/full/restore`），
+    //    而**匿名那条刻意没有跳过验签的开关**（有守卫钉住：`initRestoreSignature.spec.ts`）。
+    //    活体实测到的后果：站长在**初始化页做灾难恢复**时被文案指向一个这条路上不存在的开关，
+    //    于是白试一轮 —— 在灾难现场这是最贵的误导。⚠️ 安全方向本来就是对的（匿名路没有逃生口），
+    //    坏的只是**指路**。所以修法是把话说准：逃生口在哪条路上、匿名路为什么没有、以及在那里
+    //    重试多少次都会得到同样的拒绝。⚠️ 不要改成"按路由传布尔进来再决定说不说"——
+    //    那会把"哪条路有逃生口"这个事实分散到调用方，将来加第三条路由时又会漏。
     throw new BadRequestException(
       `拒绝恢复：${result.message}` +
-        `（如果确认公钥就是不对、且你接受风险，可以在恢复请求的 body 里带 skipSignatureCheck=true 显式跳过 —— ` +
-        `它只认字面量 true，且会打一条 WARN 记录跳过了什么。）`,
+        `（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，` +
+        `可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），` +
+        `且会打一条 WARN 记录跳过了什么。` +
+        `⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），` +
+        `所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）`,
     );
   }
   logger.log(result.message);
