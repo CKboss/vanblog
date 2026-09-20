@@ -118,7 +118,7 @@ redirectFrom: /ref/changelog.html
   几条选出来的 override（全部带版本作用域；advisory id 记在这里，因为 JSON 没有注释、而一个 `"//"` 键会被当成包选择器解析）：`axios@0 → ^0.33.0`（23 条 advisory，**加作用域是为了不把 server 自己的 axios 1.20.0 降下去**）；`compressing → ^1.10.5`（GHSA-cc8f 软链任意写、GHSA-4c3q 补丁绕过）—— 单条价值最高，因为 `compressing` 正是解 `.mdz` 导入的东西，而那是**协作者可达**路径；六条 **critical** 密码学/哈希条目 `elliptic ^6.6.1`（ECDSA 私钥提取）、`cipher-base ^1.0.5`（hash rewind）、`pbkdf2 ^3.1.3`（可预测的全零输出；静默忽略 Uint8Array）、`sha.js ^2.4.12`、`bn.js@4/@5`、`shell-quote ^1.9.0`；`lodash`/`lodash-es → ^4.18.0`（`_.template` 代码注入）、`js-yaml@3/@4`、`yaml@1/@2`、`nanoid@3`，以及 ReDoS 家族（`minimatch@3/@8`、`brace-expansion@1/@2`、`picomatch@2`、`braces@3`、`micromatch@4`，共 20 条），另有 `ws@5/@7`、`cross-spawn@6/@7`、`ajv@6/@8`、`glob@10`、`browserslist`、`flatted`、`diff@5`、`fast-loops`、`ip@1/@2`、`path-to-regexp@1`、`postcss@7`、`mermaid`、`follow-redirects`、`urllib`、`xml2js@0.4`、`fflate@0.7`、`min-document`。
   ⚠️ 两个坑，都在这轮真踩到并修掉：① **blanket override 会静默把树里已有的更高版本降下去**，不报错、也没有测试变红 —— 第一版的 `"xml2js": "^0.5.0"` 把已有的 **0.6.2 拉到 0.5.0**，`"fflate": "^0.7.5"` 把 **0.8.3 拉到 0.7.5**。凡是树里存在多个主版本的包，必须写成 `名字@主版本`。② 为抓这件事写的降级检测器**比的是版本字符串**，于是 `'3.3.19' < '3.3.7'` 按字典序成立，把三次**升级**报成了降级。改成比较解析后的元组：60 个变动的包里 **0 次降级**（`next`、`sharp`、`mongodb`、`express`、`multer`、`tmp`、`decode-uri-component` 全部未动）。这个检查值得留在仓库里 —— 它是唯一能自动看见"静默降级"的办法。
   C 类接受项与理由：`decompress@4.2.1`（critical，无修复）与 `git-clone@0.1.0` 在 `picgo → download-git-repo → download` 链上，**只有**管理员显式设 `VANBLOG_ALLOW_PICGO_PLUGINS=true` 才可达 —— 闸门默认拒绝，且恢复归档种不进插件（恢复只写 `img`/`file`/`customPage`/`themes`，永远碰不到 picgo 的工作目录）；`image-size`（2 high）只读头部，真正的天花板是 sharp 的 `limitInputPixels`，现已与业务上限同为 40 MP；`ip@2.0.1` 那个错误的 `isPublic` 无关紧要，因为 SSRF 过滤已经不用这个包了（上一轮改用 `net` 重写，零 import 已确认）；`rollup@0.25.8` 与 `postcss@7` 只在 admin 构建期。
-  延后项与各自代价：**next 14→15** 是剩余 high 的最大单一来源，但它是破坏性主版本、需要改 `packages/website` 源码（异步 `params`/`cookies()`、image 配置、standalone 输出）—— 而它那两个 critical 没有看上去那么可怕：GHSA-p293 是 **windows 托管**（我们发的是 Linux 容器），GHSA-2xp9 是图片优化缓存投毒（我们的 `VAN_BLOG_ALLOW_DOMAINS` 默认为空，所以只优化同源图片）。**markdown-it 13→14** 值得尽快做（服务端解析用户内容；要先确认 `markdown-it-task-lists` 与 `@traptitech/markdown-it-katex` 兼容，它还能顺带解决 `linkify-it` 4→5）。**`@waline/vercel` 1→3** 一次能清掉 4 个 critical 与 14 个 high，但它是破坏性的、可能需要迁移现有的 waline mongo 库 ⇒ 应该单独立项，在 drill 栈上拿生产备份演练过再动。`postcss@8 → ^8.5.23` 其实属 A 类（2 个 high：任意文件读、source-map 路径穿越），**故意没加**，因为加它就要再开一次全量重装窗口，而当时有镜像构建在飞。`@babel/*` 没动：它是 umi3 与 next 两套构建的共同地基，3 条 moderate/low 不值得那个风险。
+  延后项与各自代价：**next 14→15** 是剩余 high 的最大单一来源，但它是破坏性主版本、需要改 `packages/website` 源码（异步 `params`/`cookies()`、image 配置、standalone 输出）—— 而它那两个 critical 没有看上去那么可怕：GHSA-p293 是 **windows 托管**（我们发的是 Linux 容器），GHSA-2xp9 是图片优化缓存投毒（我们的 `VAN_BLOG_ALLOW_DOMAINS` 默认为空，所以只优化同源图片）。**markdown-it 13→14** 值得尽快做（服务端解析用户内容；要先确认 `markdown-it-task-lists` 与 `@traptitech/markdown-it-katex` 兼容，它还能顺带解决 `linkify-it` 4→5）。**`@waline/vercel` 1→3** 一次能清掉 4 个 critical 与 14 个 high，但它是破坏性的、可能需要迁移现有的 waline mongo 库 ⇒ 应该单独立项，在 drill 栈上拿生产备份演练过再动。〔⚠️ **2026-09-20 更正：这个升级目标不存在。** 在 registry 上核实：`@waline/vercel` 共 **345 个版本**，`dist-tags` 是 `latest: 1.41.6`、`deta: 1.27.0-deta`、`netlify: 1.28.0-alpha.3` —— **没有 2.x 也没有 3.x**，而仓库钉的 `1.41.6` 就是树顶。所以"升主版本清掉 18 条通告"这条路走不通；站长已裁定**接受现状并记录**，边界与缓解见 `docs/advanced/security.md` 的「waline 子树的供应链风险」一节，计划与依据见 `AGENTS.md` §7.77。原句保留在此不删，是为了让"曾经这么以为过"这件事可追溯。〕`postcss@8 → ^8.5.23` 其实属 A 类（2 个 high：任意文件读、source-map 路径穿越），**故意没加**，因为加它就要再开一次全量重装窗口，而当时有镜像构建在飞。`@babel/*` 没动：它是 umi3 与 next 两套构建的共同地基，3 条 moderate/low 不值得那个风险。
   ⚠️ 三条流程教训（已进手册）：改 `pnpm.overrides` **就是**一次全量重装窗口 —— 没有"只改 lockfile、别动 node_modules"的形式（`--lockfile-only` 仍会触发清库确认，而 `--config.confirmModulesPurge=false` 的意思是**别问、直接清**）；`CI=true` 隐含 `--frozen-lockfile`，所以改完 overrides 必须显式 `--no-frozen-lockfile`；后台长任务要用 `setsid`，因为 `nohup` 不脱离进程组，一次前台轮询超时的 SIGTERM 会把安装一起带走（本轮因此中断 **39 分钟**）。
 - **镜像与 CI：两棵一直没锁的依赖树，以及一个被吞掉很久的构建失败**（`0b22908f`）：
   - **cli 与 waline 两棵树是无 lockfile 安装的**：`Dockerfile` 只 COPY 单个包目录然后在里面跑 `pnpm i`，所以每次构建都从 registry 重新解析 —— 同一个 commit 两次构建可能不同；而比重现性更糟的是**根 `pnpm.overrides` 对它们从来无效**，因为孤立安装看不到根 manifest。任何针对 waline 子树的依赖修复（mysql2 RCE、protobufjs、tar-fs、koa）因此**根本进不了镜像**。⚠️ Dockerfile 自己在 `:100` 与 `:201` 记录过这个错误已为 admin 与 server 修过。两个 stage 现在都拷工作区骨架（根 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`tsconfig.base.json`、`patches/`）并用 `--frozen-lockfile --filter` 安装，再 `pnpm deploy --prod` 进 runner；新增的 `cli_builder` stage 加 `--ignore-scripts`（它唯一的依赖 `mongodb` 是纯 JS），而 waline **故意保留**构建脚本，因为它要编 `better-sqlite3`。用 `pnpm deploy` 而不是拷 `node_modules`，因为后者会破坏 pnpm 的软链/硬链布局。`/app/cli` 的落点没变（`vanblog.sh:1919` 的 `reset_https` 兜底按绝对路径调它）。`packages/cli/package.json` **没有动**：把它的说明符钉成 `5.9.1` 会与 lockfile 的 `^5.9.1` 矛盾并让 `--frozen-lockfile` 失败。
@@ -310,6 +310,129 @@ redirectFrom: /ref/changelog.html
   `auth.provider.ts`、`init.middleware.ts` 此前**一个 spec 都没有**，而静态分析抽读的 3 个真实空值崩溃里
   就有一个在 `jwt.strategy.ts:55` —— **有潜在缺陷的文件恰好没有测试**。
 
+- **waline 子树的供应链风险：站长已裁定「接受现状，只记录」**（本次提交）：审计口径下 waline 子树仍剩
+  **4 个 critical + 14 个 high**，本轮**不升级、不改架构**。⚠️ 关键事实是**升级这条路不存在** ——
+  `@waline/vercel` 在 registry 上共 345 个版本、`latest` 就是仓库已钉的 **1.41.6**，dist-tags 只有
+  `deta`/`netlify` 两个 1.x 预发布标签，**没有 2.x 也没有 3.x**（所以上面那条 `1→3` 的旧说法已就地更正）。
+  **可达性边界**：只在启用 waline 评论模式时可达（原生评论是另一条独立子进程 + 独立 `waline` 库；
+  ⚠️ "不共享代码"只做过粗核，未逐文件复核）。**已收窄**：53 条 scoped override 里有 **16 条**作用在这棵树上
+  （`axios@0`、`dompurify@2`/`@3`、`path-to-regexp@1`、`ws@5`/`@7`、`send`、`body-parser`、`braces@3`、
+  `micromatch@4`、`cross-spawn@6`/`@7`、`jws`、`prismjs`、`form-data`、`browserslist`），且**本轮起才真的生效**
+  （waline 那棵树以前是孤立 `pnpm i`、看不到根 manifest ⇒ override 对它无效）。**仍未收窄**：
+  🔴 `protobufjs@5.0.3` **没有同主版本的修复**（最新 8.8.0，跨 3 个主版本；它来自 `leancloud-storage@4.15.2`，
+  而本部署用 `think-mongo` ⇒ leancloud 是死重量，但它是 `@waline/vercel` 的直接依赖，移除属侵入性改动）。
+  完整边界、两个未被采纳的选项（继续推 scoped override / 改用官方 Waline 镜像做独立服务）与
+  "重新评估的触发条件"写在 `docs/advanced/security.md`。⚠️ 顺带记一条既有耦合：
+  `waline.provider.ts:89` 把**本站 jwt 密钥**当 waline 的 `JWT_TOKEN` 传给子进程 ⇒ 用了本轮的密钥轮换之后，
+  waline **下次重启**会让评论者会话失效（要重新登录才能评论）。
+- **k8s 清单的资源上限此前被静默丢弃**（`a8a2b573`）：`limits:` 原来缩进成**容器的同级键**（与 `resources` 平级），
+  而它不是合法的 Kubernetes 字段 ⇒ `kubectl apply` 会被严格校验拒绝；若加了 `--validate=false` 就**被静默丢弃**，
+  内存与 CPU 上限等于完全没设。⚠️ PyYAML 能解析它（它是合法 YAML），所以只有**解析后按 k8s 语义检查**才发现得了 ——
+  这也是为什么该清单现在按语义校验而不只是"能解析"。同时把内存上限从 500Mi 提到 **1536Mi**：
+  整站备份用 `zstd -19 --long=27 -T0`（多线程 + 128MB 窗口），峰值能到 **1GB 上下**，实测这套站点在并发压测下
+  RSS 是 568MB～1.1GB ⇒ **500Mi 的上限会让备份被 OOM 杀**（compose 模板里对 `mem_limit` 有同样的警告）。
+- **compose 模板新增 `no-new-privileges:true`**（`a8a2b573`）：容器内本来就是 root（见 `docs/advanced/security.md`
+  的「容器以 root 运行」一节），这个键挡的是**在此之上再提权**的路径（setuid 二进制、文件 capability）。
+  ⚠️ 同时**明确不默认启用**另外三项，理由都写在模板注释里、不是遗漏：`cap_drop: [ALL]` 会打掉
+  **`CAP_DAC_OVERRIDE`**，而 server 要写 root 拥有的 mongo 数据目录与静态目录；`read_only: true` 本轮**不可行**
+  （四个阻塞点已逐个核实：日志、caddy 配置与证书、ISR 产物、流水线 runner 目录都需要可写）；
+  `pids_limit` 是**版本兼容**问题（compose v2 的 schema 有它，1.25 用的是按版本分的 3.4 schema）。
+  这三项都以注释形式给出，站长可以自行打开。
+
+
+- 🔴 **修复（回归，默认配置下必然触发）：`/api/revalidate` 一律 403，冷启动渲染不出任何文章页**（`ab66caa2`）。
+  重渲染接口有一条「套接字是回环**且**不带转发头就放行」的豁免，注释还写着「一体式镜像正是这个形状，行为不变」——
+  **那句话是错的**：Next 会给**每个**请求自动补 `x-forwarded-for`（`next/dist/server/base-server.js`，`??=` 赋值，没有开关），
+  所以「不带转发头」这个条件在 Next 下**恒不成立**。后果实测：冷启动全量渲染 8 次重试全败、打出
+  `达到最大增量渲染重试次数`、磁盘上 `post/*.html` **0 个** ⇒ 连带把「降级发布」掏空（数据库挂掉时 caddy 要直发磁盘 HTML，
+  可磁盘上根本没有文章页可发）。定位用了三级证据：真 `apiResolver` → 500（即**通过**了鉴权）、真 `NextServer` → 403、
+  在编译产物里插探针打出 handler 实收的头。修法**不是**放宽 IP 判定——**nginx 默认并不加 `X-Forwarded-For`**，
+  「XFF 全是回环就放行」会在同机反代部署下把匿名重渲染放大器重新打开；改成一体式部署**自动生成**一把进程内密钥。
+  ⚠️ 密钥走 **0600 文件**而不是只写 `process.env`：cluster 的 `envForWorker()` 快照早于前台子进程 spawn，
+  只写 env 会让已 fork 的 worker 拿不到、各自生成一把 ⇒ **非主 worker 的重渲染全部 401**，症状是「编辑文章后部分请求不刷新」。
+  ⚠️ 它当初没被测出来，是因为**替身钉住了假设而不是现实**：单测的请求替身总带 `socket.remoteAddress`，
+  而「运行时拿不到理想形状」那条用例恰恰被写成了「应当拒绝的攻击」。这一族盲区在本仓库已出现三次。
+- **数据库在启动期不可达，不再等于整站下线**（`1f4baaf6` + `cef37af5`）。以前：server 抛 `MongoServerSelectionError`、
+  退出码 1、容器跟着退出 ⇒ **连 caddy 一起死，图片都发不出去**；而这条路在生产里可达（主机重启、`docker restart`、崩溃循环，
+  且编排文件为兼容 docker-compose 1.25 用的是**列表形式** `depends_on`，没有健康门控）。现在进入**降级驻留**：
+  进程不退出、容器保持 Up、health 返回与正常端点**逐字段同形状**的 503、`/static/*` 与已渲染页面由 caddy 直发磁盘 HTML、
+  数据库一通就自动完成启动（实测 **10–20 秒**，容器 `StartedAt` 与重启计数**都没变** ⇒ 进程内自愈，不是重启策略的功劳）。
+  🔴 默认还从「烧完重试窗口才驻留」改成「**第一次探到不可达就驻留**」（`VANBLOG_DEGRADED_HOLD_MODE=immediate`）：
+  实测旧行为要 **396 秒**（三次尝试 127s / 259s / 396s），这期间页面全是 502。取舍如实写：一次**短暂**抖动也会让站点
+  短暂进入「直发磁盘上最后一次渲染的 HTML」模式；判断是**短暂的旧内容远优于六分钟的完全不可用**，不接受就设 `after-window`。
+- **降级发布与订阅源都做了活体验证**（`5dcd9525`、`35686297`、`7a63b7dc`）。判据不是「看起来 200」：
+  `/` 与 `/post/<真实别名>` 的响应体与磁盘文件 **sha256 逐字节相同**，响应带 `X-Vanblog-Static-Html`
+  （🔴 **固定页是 `1`、`/post/*` 是 `dynamic`**，所以「等于 1」的监控规则对文章页会误判），
+  并用 `kill -STOP` 暂停 next-server 做可逆实验（此时**未渲染过**的 slug 超时 20.02 秒 ⇒ 证明那个 200 不是 Next 给的）。
+  同时补上 `/rss/*`、`/sitemap.xml` 与 4 个别名（`/feed.xml`、`/feed.json`、`/atom.xml`）的直发——
+  ⚠️ 必须覆盖别名，因为**读者手里的地址是 `/feed.xml`**（后台作者卡与 RSS 按钮给的都是它），只门控 `/rss/*` 等于没修。
+  🔴 直发的 root 刻意只指到 `<静态根>/rss` 与 `<静态根>/sitemap` 而**不是静态根本身**，并做了**正对照**实测：
+  宽 root 下 `/tmp/<恢复中的整站归档>` 会被 **200 拿走**（静态根下还有 `img/ search/ export/ customPage/ tmp/`），
+  窄 root 下各种穿越（`../`、`..%2f`、双重编码）一律 502/404、零字节泄露。
+- **整站备份可以离线签名了**（ed25519，`7db7ff04` + `4bf4830f` + `a9320e54` + `43d69f9f`）。`.sha256` 与归档同目录 ⇒
+  能换归档的人也能换它，所以它只证明「没拷坏」、证明不了「没被换成另一份」；签名补的就是这一环。
+  签的是**最终落盘那个文件**（加密归档签**密文**，所以不解密也能验真，DR 机器只需要公钥不需要口令），
+  **文件名不参与签名**（改名不影响验签）。🔴 信任边界写进了代码注释、文档、以及**接口响应的 `trustBoundary` 字段**：
+  它防的是「归档离开主机之后被篡改」，**不防**已有主机 root 的人，所以**公钥的权威副本必须离线保存**——
+  这个功能最危险的失败模式是**被高估**。三种验签失败必须分得清（被改过 / 你手上公钥不对 / 从没签过），区分靠 `.sig` 里的公钥指纹；
+  `missing-sig` 与 `no-key` **只记 note 不算 issue**（否则所有老归档全线报红，而永远红的报告训练出来的是「忽略红」）。
+  ⚠️ 顺带挖到一条更深的缺口：匿名恢复路径**从来没给验签传 `backupDir`** ⇒ 「用后台接口生成过密钥、没配 env」的部署
+  在灾难恢复路径上**永远只能得到 `no-key`**，即使 `.sig` 上传通了，验签仍然静默失效。
+- 🔴 **两条既有 bug，都是「命令返回 0、日志一切正常」的形状**：①`drill` 里 **10 处**归档枚举都不排除 `.sig`，
+  而 `.sig` 比归档新 ⇒ `drill_newest_archive` 会**返回那个几百字节的 JSON**，于是演练拿它去恢复、`backup-status`
+  把它当最新备份（**只要有一份签过名的备份就会挑错文件**）；②保留策略删清单 sidecar 时名字拼错
+  （`${name%.tar.*}.manifest.json` vs 服务端写的 `<完整归档名>.manifest.json`）⇒ **那条 `rm` 从来没删到任何文件**，
+  而测试 fixture 是**照着这个 bug 写的**所以一直绿。两处都已修，并把散在 7 处的 sidecar 判定收成一个共用助手
+  （`.sig` 的名字会被 `vanblog-full-*` 匹配到，漏判的后果是 **sidecar 占掉 `--keep` 名额、真归档被提前删掉**）。
+- **一个「半生效」的旋钮被修好**（`5cc49a09` + `24dd4c40`）：`VANBLOG_CADDY_HTML_PAGES_DIR` 以前只影响服务端把哨兵写到哪，
+  caddy 配置里的 `root` 是**硬编码**的 ⇒ 设了它等于让 `VANBLOG_CADDY_SERVE_HTML` **静默失效**（无报错、无日志）。
+  现在生成器与服务端**两侧同规则、同结论**（非法值一律回落默认 + WARN），并由**跨语言守卫**逐条钉住：
+  守卫会把生成器源码里的解析函数**按花括号配平切出来真跑**（不是比对一份复制品——复制品不会随改动失效，那正是守卫空转的方式），
+  两侧共用同一张 32 条取值表。⚠️ 拦截只能在生成器做：真 caddy `validate` 对 `root='/'`、`'{env.HOME}/x'`、`'/tmp/a/../b'`
+  **全部通过**（它只校验 JSON 结构、不校验路径语义），而 caddy 运行时**真的会展开 `{env.*}`**
+  （实测：root 写成占位符后，请求返回了另一个目录的内容）。
+- **启动期「尽力而为」的步骤不再能打死进程**（`cef37af5`）。`snapshotServeHtmlSentinels()` 在 `main()` 里是裸调用，
+  它抛异常就整个启动失败——而这条路径的全部意义就是「活下去」。同一个模块的 docstring 还写着「绝不抛异常」，
+  但目录解析**在每个 `try` 之外**（三处同族）。判据是「这一步失败之后，站点是否仍然比不跑它更好」：
+  是 ⇒ 尽力而为（快照 / 写哨兵 / 还原哨兵），否 ⇒ 关键（注册致命处理器、`initJwt`、创建应用、监听端口）；
+  并有 **5 条负向对照**证明关键步骤**仍然**致命——否则「全都包 try」也能让守卫全绿，那比原缺陷更糟。
+  ⚠️ 顺带修了两处顺序：哨兵以前**写在占位监听之前**，所以哨兵失败会让 health 变成 connection refused
+  （编排层看到「容器死了」而不是「站点降级了」，严格更糟）；还原哨兵以前与 bootstrap **共用一个 `try`**，
+  于是「启动已成功、只是还原失败」会走到 `process.exit(1)`，**把一个已经恢复的站点杀掉**。
+  🔴 还发现自己的守卫抓到一个真缺陷：`commit()` 的 docstring 写着幂等，实际**不幂等**（连调两次会重复还原、重复打日志）。
+- **容器层重启熔断**（`1f4baaf6`）：`restart: always` 在故障持续时是**无限重拉**（CPU 打满、日志爆盘、真错误被淹没），
+  而编排层的 `deploy.restart_policy` 在 compose v1 / 非 swarm 下不生效 ⇒ 熔断做在 `start.js`：
+  10 分钟内快速崩溃（存活不足 60 秒）达 5 次就**退出前先退避**（5 秒起、封顶 5 分钟），并打 FATAL 说明「熔断只负责降速，请看上面第一条错误」。
+  计数存在**挂载的日志目录**（存容器内每次重建就归零、等于没有熔断）；一次存活超过阈值的运行会**清零**计数。
+  ⚠️ 退避定时器**故意不 `unref()`**：unref 后事件循环没别的工作会提前自然退出**且退出码变 0** ⇒ 编排层不再重拉。
+- **k8s 清单里一个真缺陷**（`a8a2b573`）：`limits:` 缩进成了 `resources:` 的**同级键**，而它不是合法字段 ⇒
+  `kubectl apply` 被严格校验拒绝，加 `--validate=false` 则被**静默丢弃**，内存与 CPU 上限等于完全没设。
+  ⚠️ PyYAML 能正常解析它（合法 YAML），所以只有**按 k8s 语义检查解析结果**才发现得了——
+  上一轮验的是可解析性、卷与挂载点对应、端口三元组，都看不见这条。
+- **变异测试制度化了，并且第一次跑就证明了一条守卫是空转的**（`db7afc01` + `a6f30796` + `72cade03`）。
+  `scripts/tests/mutation-smoke.sh`：数据表驱动，首批 10 个变异各对应一条**已修的安全性质**。首跑
+  `total=9 red=8 inconclusive=0 notred=1 skipped=1`；那条 `NOT_RED` 是「scrypt 必须显式给 `maxmem`」——
+  空转有**两个叠加原因**：所有 round-trip 都注入了小 KDF 参数（生产参数 `N·r·128 = 32MiB` 正好压在 Node 默认上限，
+  所以这条性质在测试里**不可观测**），而变异后 `maxmem` 在文件里**仍出现 2 次**（常量定义里那个还在）⇒ **文件级 grep 依然绿**。
+  已修（`NOT_RED` → `RED`，4 条红）。⚠️ 语义刻意区分：`NOT_RED` = **守卫空转**（该修测试）、
+  `INCONCLUSIVE` = 变异体没跑起来（编译错误不算红，`Tests: 0 total` 骗过人很多次）、
+  `SKIPPED` = 起点脏或未被 `--only` 选中（**不进分母**，否则并发期间永远非 0 退出）。
+- **CI 从 6 个守卫到 27 个全覆盖，并且第一次运行就抓到一个潜伏错误**（`edfe16db`）：`test/backup-restore.e2e-spec.ts`
+  构造 `BackupController` 少传第 13 个参数。它潜伏的原因是**类型检查覆盖面有洞**——本机用的 `tsconfig.dev.json`
+  继承 `tsconfig.build.json`（**不含 `test/`**），而 CI 当时完全不做类型检查；运行时也不炸（少传的参数是 `undefined`）。
+  现在 CI 跑**两份入库配置**（`tsconfig.json` 覆盖 473 文件含 227 个 spec 与 `test/`；`tsconfig.build.json` = 镜像里 `nest build` 的真实形状）
+  + **真实构建** + 全部守卫（分两个并行 job，**PR 墙钟时间不变**）。⚠️ 伞形 `--strict` **故意不用**：
+  tsconfig 里显式的 `false` 会压过它，实测 `--strict` 只报 6 个错而逐项列开关报约 380 个 ⇒ 用了会制造「已经很严格」的假象。
+- **文档新增一页**：[降级发布（数据库挂了还能继续发内容）](./advanced/degraded-publishing.md)——
+  含「什么能用 / 什么不能用」两张实测表、两条必须知道的代价（内容是最后一次渲染的可能陈旧；
+  降级期产物清理器不跑，所以「库挂掉前刚改成私密/加密、清理器还没删 `.html`」的文章在这个**窄窗口**内仍会被公开服务）、
+  监控判据（两个响应头 + health 形状）、以及「订阅源**不会**变陈旧」的澄清
+  （`/rss/` 与 `/sitemap/` 在 server 侧本来就是静态目录服务，降级直发的就是正常模式下会发的同一批字节）。
+- **验证（本机实测，安静机器）**：server `jest` **248 套件 / 3520 用例**（3511 绿 + 8 跳过 + 1 条负载敏感假红：
+  `utils/backupSigning.spec.ts`，单独重跑 **44/44** 绿）；website `vitest` **91 文件 / 992**；admin `node --test` **611/611**；
+  部署脚本 **2990 条断言 / 0 失败**；三个 tsc 口径（`tsconfig.dev.json`、`tsconfig.build.json`、CI 新加的仓库口径 `tsconfig.json`）**0 错**；
+  `docs-links` 5/5、`docs-consistency` 52/0。单个守卫的当前条数见 `AGENTS.md` §7.39。
+
 **行为变化**
 
 1. **`./vanblog.sh update` 的默认落点变了**。以前：拉 `ghcr.io/ckboss/vanblog:dev-dsh`（分支的上一次**手动**构建，实测比发布版旧 4 天 ⇒ 升级可能其实是降级，且一声不响）。现在：拉 `ghcr.io/ckboss/vanblog:latest`（最近一次**发布**构建），并且停容器前打印 `当前运行: X → 新镜像: Y`，证明是降级或"证明不了不更旧"时红色 WARN + 要确认。想继续跟开发分支：`VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:dev-dsh ./vanblog.sh update`；想钉死版本：`./vanblog.sh update v2026.9.2`。⚠️ 非交互（cron）场景下 WARN 照打但不阻塞，要拦就自己比版本号。
@@ -395,6 +518,83 @@ redirectFrom: /ref/changelog.html
     `VANBLOG_CSP_EXTRA_SCRIPT_SRC` / `_EXTRA_CONNECT_SRC` 加来源，或用 `VANBLOG_CSP_OVERRIDE` 整条自己写。
     ⚠️ 即使 `enforce`，`script-src` 里仍有 `'unsafe-inline'`，所以它**不是** XSS 的第二道防线。
     这一层由**内置 caddy** 下发 ⇒ 只在用镜像自带 caddy 时生效；自己套了别的反代（nginx/CDN）的部署要在那一层自己配。
+55. 🔴 **已存在的部署要重跑一次 `./vanblog.sh config`**，才能拿到 compose 模板新增的 `no-new-privileges:true`
+    （`a8a2b573`）。原因：这个键写在**模板**里，而编排文件是 `config` 生成的一次性产物 —— 已经生成过的
+    `docker-compose.yaml` 不会自己长出新键。⚠️ `config` 会覆盖你手改过的 `environment:`（会留 `.bak`），
+    所以重跑前请先看一眼有没有自定义。已有守卫证明 `config` **不会丢掉**这个键。
+    检查办法：`grep -n no-new-privileges docker-compose.yaml`，有输出就是已经生效。
+56. **k8s 部署的资源上限从"没有"变成"真的生效"**（`a8a2b573`）：以前 `limits:` 缩进错误 ⇒ 被 `kubectl apply`
+    的严格校验拒绝，或在 `--validate=false` 下**静默丢弃**（内存与 CPU 上限等于完全没设）。修好之后
+    **内存上限是 1536Mi**（不是直觉里的 500Mi）：整站备份的 zstd 参数（`-19 --long=27 -T0`）峰值能到 1GB 上下，
+    实测并发压测下 RSS 568MB～1.1GB ⇒ 500Mi 会让**备份被 OOM 杀**。⚠️ 如果你以前手工改过这个清单，
+    请对照新值重新评估，别把"以前没生效"当成"以前够用"。
+57. 🔴 **数据库在启动期不可达时，默认立刻进入降级驻留**（`cef37af5`）。以前要先把
+    `VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS`（默认 5 分钟）整个烧完才驻留——实测 **396 秒**、期间页面全是 **502**；
+    现在第一次探到不可达就驻留，窗口降到秒级。⚠️ 取舍：一次**短暂**的数据库抖动也会让站点短暂进入
+    「直发磁盘上最后一次渲染的 HTML」模式（站内搜索、访问密码文章、阅读数、按需渲染新文章、评论在这期间不可用）。
+    不接受就设 `VANBLOG_DEGRADED_HOLD_MODE=after-window` 回到旧行为；⚠️ 打错的值回落 `immediate` 而**不是**「关闭」。
+    ⚠️ `VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS` 的语义随之变化：它不再决定「多久后进入降级驻留」，
+    而是「**认为数据库可达时**，启动失败要重试多久才放弃并驻留」——两种模式下都仍然生效，**不是死旋钮**。
+58. **新增容器层重启熔断**（`1f4baaf6`）：10 分钟内快速崩溃（存活不足 60 秒）达 5 次，退出前会先退避
+    （5 秒起、指数增长、封顶 5 分钟）并打一条 FATAL。计数存在**挂载的日志目录**（`VAN_BLOG_CRASH_STATE_FILE`），
+    所以跨容器重建有效；一次存活超过阈值的运行会清零计数。⚠️ 正常的单次崩溃仍然快速重启，不受影响。
+59. 🔴 **一体式部署的重渲染密钥改成自动生成**（`ab66caa2`）。没配 `VAN_BLOG_REVALIDATE_SECRET` 时，server 会生成一把
+    进程内随机密钥（落 `os.tmpdir()/vanblog-revalidate-secret`，**0600**、原子创建）并下发给前台子进程 ⇒
+    `/api/revalidate` 从「默认一律 403（回归）」变成「用共享密钥鉴权、开箱即用」。
+    ⚠️ **分离部署不变**：仍然必须两边显式配同一个值（自动密钥只在本机文件系统内共享）。
+    ⚠️ 「套接字是回环且不带转发头就放行」这条豁免**在 Next 下恒不成立**（Next 自己会补 `x-forwarded-for`），
+    所以它不再是可用的鉴权依据；但**配了密钥就一律要求密钥**、路径形状校验、以及分离部署的失败关闭都保持不变。
+60. **`VANBLOG_CADDY_HTML_PAGES_DIR` 现在两侧都校验，而且真的生效**（`5cc49a09` + `24dd4c40`）。
+    以前它只影响服务端把哨兵写到哪、caddy 的 `root` 是硬编码的 ⇒ 设了它等于让直发**静默失效**。
+    现在：必须是绝对路径，不接受 `..` 段、`{}` 占位符、控制字符，规范化后不能是 `/`；
+    **非法值一律回落默认目录 + 大声 WARN**（生成器与服务端同规则、同结论，由跨语言守卫钉住）。
+    ⚠️ 一个附带的行为变化：**合法但需要规范化**的值（例如 `/a//b/`）现在用规范化后的 `/a/b`——
+    是同一个目录，但字符串与 caddy 侧完全一致了，这正是对齐的目的。
+    ⚠️ 产物清理器（reaper）也用同一个解析：配错值以前会让它拿 `/` 去扫**文件系统根**下的四个动态前缀目录（删除操作），现在回落默认。
+61. **降级期间 `/rss/*`、`/sitemap.xml` 与 4 个别名由 caddy 直发磁盘产物**（`7a63b7dc`），新增对外响应头
+    **`X-Vanblog-Static-Feed: rss|sitemap`**。⚠️ 这**不是**「发旧 feed」：`/rss/` 与 `/sitemap/` 在 server 侧本来就是
+    静态目录服务，降级直发的就是正常模式下会发的**同一批字节**，新鲜度相同，只是少了一层 express。
+    ⚠️ 别名必须一起覆盖，因为**读者手里的地址是 `/feed.xml`**（后台作者卡与 RSS 按钮给的都是它）。
+    🔴 直发的 root 只指到 `<静态根>/rss` 与 `<静态根>/sitemap`，**不是静态根本身**——宽 root 会把静态根下的
+    `tmp/`（恢复过程中的 in-flight 归档）与 `export/` 暴露给匿名请求，这一点做了**正对照**实测。
+    ⚠️ 由此 `VAN_BLOG_STATIC_PATH` 也成了 caddy 配置生成器的输入。🔴 **只在 `config.yaml` 里改 `static.path` 而不用这个环境变量，生成器看不到**
+    （它不解析 yaml）⇒ 降级期直发会去默认目录找、发 404。
+62. **备份验签的结论现在拿得到了**（`4bf4830f`）：`POST /api/admin/backup/full/verify` 的响应新增 `signature` 段
+    （权威五态 + 公钥指纹 + 人话结论；⚠️ 以前 provider 算好了但控制器**没吐出来**，客户端只能自己看盘上有没有 `.sig`）。
+    匿名恢复接口 `POST /api/admin/init/restore` 新增一个**可选**的 multipart **文本字段** `signature`
+    （curl 写 `-F "signature=<路径>"`，⚠️ 是文本字段不是文件字段，用 `@` 服务端读不到）；不带就跟以前一样。
+    🔴 **匿名路径没有「跳过验签」的开关**，这是有意的：一个匿名可达的接口不该带着绕过安全校验的入口。
+    后台「备份与恢复」列表新增「签名」动作下载 `.sig`；⚠️ 归档没签过时返回 **404**，含义是
+    「**这份归档从没被签过**」而**不是**下载失败（空文件会被判成 malformed，让人以为签名坏了）。
+63. **脚本新增两个子命令与三个开关**（`a9320e54` + `43d69f9f`）：`./vanblog.sh signing-key [--overwrite] [--yes]`
+    （生成密钥对；⚠️ 已有密钥而未给 `--overwrite` 时**拒绝改动并非 0 退出**，因为覆盖会让**所有旧 `.sig` 永久验不过**）、
+    `./vanblog.sh signing-export`（**公钥走 stdout、元信息走 stderr**，所以 `signing-export > pub.pem` 得到干净 PEM；
+    🔴 两者都**绝不打印私钥**）；`./vanblog.sh verify --server-signature`（读服务端权威结论；⚠️ **不是默认**，
+    因为权威验签要把整份归档流式哈希一遍）；`./vanblog.sh restore|reset --skip-signature-check`
+    （🔴 **只认位置参数、不认环境变量**——env 形式意味着 cron、编排文件、甚至 `VAR=1 ./vanblog.sh restore`
+    这种一次性前缀都能静默打开这个绕过，而绕过验签的后果是「恢复了一份被换过的归档，全程显示成功」）。
+    ⚠️ `drill` **不接受** `--skip-signature-check`（给了会 **rc=2** 退出并说明原因，而不是「忽略但提示」——
+    请求安全绕过却被告知「已忽略」，在灾难现场极易被读成「已生效」）。
+64. **`backup-status` 的签名状态是三态**（`a9320e54`）：`true` = 已签名（并与盘上的 `.sig` 对账）、
+    `false` = 未签名（⚠️ 只 **WARN 不 FAIL**，`--strict` 下也一样，否则所有存量部署立刻常红）、
+    `null`/缺字段 = **「签名状态未知」**。🔴 **`null ≠ false`**：`null` 表示这份备份早于本功能，
+    把它显示成「否」等于告诉站长一件没发生过的事。
+65. 🔴 **保留策略与演练的归档枚举现在认 sidecar**（`a9320e54` + `43d69f9f`）。两条都是「命令返回 0、日志一切正常」的形状：
+    ①`.sig` 的名字是 `<归档名>.sig`，会被 `vanblog-full-*` 这类通配匹配到，而它比归档**新** ⇒
+    `drill` 挑「最新归档」时会**挑到那个几百字节的 JSON**（拿它去恢复、`backup-status` 把它当最新备份）；
+    ②删清单 sidecar 时名字拼错（`${name%.tar.*}.manifest.json` vs 服务端写的 `<完整归档名>.manifest.json`）⇒
+    **那条 `rm` 从来没删到任何文件**，孤儿清单一直堆积。⚠️ 漏判 sidecar 的后果不是报错那么轻：
+    **sidecar 会占掉 `--keep` 名额 ⇒ 真归档被提前删掉（数据丢失）**。
+66. **启动期的「尽力而为」步骤失败不再让站点起不来**（`cef37af5`）：哨兵快照 / 写哨兵 / 还原哨兵失败只打一条
+    说明影响与处理办法的 WARN，启动继续。⚠️ 两处顺序也变了，失败形状因此不同：
+    占位监听**先于**写哨兵（所以哨兵写不进去时 health 仍是同形状 503，而不是 connection refused——
+    后者会让编排层以为「容器死了」而不是「站点降级了」）；还原哨兵**不再与启动共用一个 `try`**
+    （所以「启动已成功、只是还原失败」不会再把一个已经恢复的站点杀掉）。
+    🔴 关键步骤（注册致命处理器、`initJwt`、创建应用、监听端口）失败**仍然致命**，有负向对照钉住。
+67. **产物清理器在 pages 目录配错时会打 WARN 了**（`99761ae4`）：以前那一处解析不带 logger，所以配错
+    `VANBLOG_CADDY_HTML_PAGES_DIR` 时「删产物」这一侧一句都不说——而它恰恰是失败方向最严重的一侧。
+    ⚠️ WARN **按值去重**（清理器由定时器周期调用、且每次全量渲染收尾也调一次，不去重会每轮刷一条，
+    而日志有 20MB×3 的轮转上限，攻击期间真信息会被冲走）；换一个**不同的**非法值会再打一条。
 
 ## [v2026.9.2] - 2026-09-17
 

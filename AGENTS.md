@@ -7636,7 +7636,14 @@ server `jest` **191 套件**（用例数 2418–2424 之间；最后一次带数
 `image-runtime` **56**、`caddy-config` **23**（全 0 失败）；`docs-links` 5/5、`docs-consistency` 52/0；
 lockfile override 与 `package.json` **53 对 53**；镜像 **869 MB**（`vanblog:supplychain-test`）。
 
-⚠️ 已知负载敏感假红：`utils/logRotate.spec.ts`（单独 8/8）与 `utils/rateLimit.spec.ts`（单独 13/13）。
+⚠️ **已知负载敏感假红清单**（全量并行跑时可能红、**单独重跑就绿**；截至 2026-09-20 共 7 个）：
+`utils/logRotate.spec.ts`（单独 8/8）、`utils/rateLimit.spec.ts`（单独 13/13）、`utils/markdownExport.spec.ts`、
+`provider/rss/rss.provider.spec.ts`、`utils/cryptoAsync.spec.ts`、`provider/auth/loginThrottle.spec.ts`（单独 20/20）、
+`utils/backupSigning.spec.ts`（单独 **44/44**，本轮新增：它真跑 ed25519 与 scrypt，对 CPU 争抢敏感）。
+⚠️ 这份清单**不是免罪牌**：见红必须先单独重跑，绿了才能归到这里；单独跑仍红就是真红。
+🔴 还有一类**看起来像负载假红、其实不是**的：同一个 spec 的**多个实例并行**（例如卡死的孤儿 jest）会抢同一批临时文件
+⇒ 成片红。本轮实测过：清掉 4 个卡死 5 小时的孤儿 jest 后，`utils/fullBackup.spec.ts` 的 9 条红**在没有任何代码改动的情况下全部消失**。
+所以每轮开工先用 `ps -eo pid,etimes,cmd | awk '$2>3600 && /node|jest|tsc/'` 扫一遍长命孤儿（§7.79b）。
 本轮有镜像构建在并行跑，**更容易**假红 ⇒ 见红先单独重跑再定性（§7.39 的铁律）。
 
 **未验证**（都需要这里没有的条件）：① cluster > 1 对真 Mongo 的两个 worker 端到端
@@ -8177,6 +8184,8 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 
 🔴 **同轮量到一条新的可用性缺口（已派修）**：默认配置下，"mongo 在启动期完全不可达"到"进入降级驻留"要约 **6.6 分钟**：
 `+127s` 第 1 次失败（`initJwt` 内部 10×3s）→ `+259s` 第 2 次 → `+396s` 窗口耗尽才 FATAL 并驻留。
+⚠️ 〔已作废，见下面的活体闭环小节〕这 **396 秒是修复前的默认行为**：`cef37af5` 起默认是
+`VANBLOG_DEGRADED_HOLD_MODE=immediate`（第一次探到不可达就驻留），实测 502 窗口 **7 秒**（`after-window` 对照 402 秒）。
 **这 6.6 分钟里 health 与页面都是 502**（caddy 活着 ⇒ `/static/*` 可用，但页面发不出去）。
 ⚠️ 而"进入降级驻留"本身**没有需要先等的代价**（占位监听器的 503 与真实端点逐字段同形状，哨兵一写 caddy 立刻直发）
 ⇒ 正确形状应该是**第一次失败就驻留、然后在后台继续重试 bootstrap**，把 502 窗口从 ~6.6 分钟降到秒级。
@@ -8215,6 +8224,13 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 未渲染过的 `/post/<slug>` **502**；`/admin` 仍 **200**（caddy 自己的 `file_server`，与哨兵和 Next 都无关）。
 🔴 **RSS 那条值得单独立项**：`/rss/*` 走 server，所以"被打瘫时仍能发布内容"**不含订阅源** ——
 而 RSS 恰恰是敌意环境下**最省流量**的发布通道。建议让 caddy 直服 `/app/static/rss`（它已经是落盘产物）。
+> ✅ **已按这条建议实现（`7a63b7dc`）**：`/rss/*`、`/sitemap.xml` 与 4 个别名（`/feed.xml`、`/feed.json`、`/atom.xml`）
+> 在降级期由 caddy 直发磁盘产物，响应带 `X-Vanblog-Static-Feed: rss|sitemap`。
+> ⚠️ 所以上面那行"`/rss/feed.xml` 503"**是修复前的实测记录，现已作废**（保留作追溯）。
+> ⚠️ 两点实现细节值得记：①**必须覆盖别名**——读者手里的地址是 `/feed.xml`（后台作者卡与 RSS 按钮给的都是它），
+> 只门控 `/rss/*` 等于没修；②直发的 root 只指到 `<静态根>/rss` 与 `<静态根>/sitemap`，**不是静态根本身**——
+> 正对照实测过宽 root 下 `/tmp/<恢复中的整站归档>` 会被 **200 拿走**（静态根下还有 `img/ search/ export/ customPage/ tmp/`）。
+> ⚠️ 仍未解决：`/robots.txt` 降级期还是 **503**（动态生成、无落盘产物可直发）。
 
 🔴🔴 **同轮挖到一条 P0 回归（比上面两条更要紧）**：`packages/website/pages/api/revalidate.ts` 的回环判定
 在**真实 Next 14 运行时里恒为 false** ⇒ **默认配置下 server→website 的所有 revalidate 调用一律 403**。
@@ -8227,7 +8243,8 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 → **`post/*.html` = 0 个** ⇒ **降级发布在新容器上无产物可发**，且发布/改文章后的主动重渲染也走这条路。
 **回归来源**：`cc1c51eb`（2026-09-19，"five reliability defects"）引入的回环限制 —— 之前"没配密钥=不校验"所以能跑通
 ⇒ **这是一个由安全修复带进来的回归**。
-**缓解已实测有效**：设 `VAN_BLOG_REVALIDATE_SECRET` ⇒ 同端点 **200 `{"revalidated":true}`**、冷启动
+✅ **已修（`ab66caa2`）并活体闭环，见 §7.80**：一体式部署现在**自动生成**一把进程内密钥（0600 文件，不是只写 `process.env`——cluster 的 env 快照早于前台子进程 spawn），实测冷启动渲染出 **53 篇产物 + 9 个固定页、失败 0**。
+**缓解已实测有效**（下面是修复前的取证过程，保留作追溯）：设 `VAN_BLOG_REVALIDATE_SECRET` ⇒ 同端点 **200 `{"revalidated":true}`**、冷启动
 `触发全量渲染完成！`、**53 篇产物 + 9 个固定页、失败 0**。
 
 🔴 **单测盲区（这一族已经第三次出现，务必记住）**：`packages/website/__tests__/revalidateAuth.spec.ts:62` 的
@@ -8438,11 +8455,12 @@ helper 用 bind mount 挂 mongo 数据，这个躲不掉（要彻底躲开就得
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **217 套件 / 2887 用例：2879 绿 + 8 跳过 + 0 失败**（2026-09-20 11:00 本机复跑，`-w 2`）。⚠️ 第一次并行复跑时 `utils/markdownExport.spec.ts` 红过 1 条，**单独重跑 39/39 全绿** ⇒ 又一个负载敏感假红（与 `logRotate`、`rateLimit` 同类，见下）。⚠️ 旧数字"191 套件 / 2424 用例"与更早的"178 套件 / 2146 用例"**都作废** —— 多出的 13 个套件来自 §7.72 那一轮（协作者权限与超管排除、DB TTL 锁、五条可靠性、正文白名单、CSP、`wordTotal` 兜底等）。更早的"170/1957"与"169/1951"同样作废。 |
-| website `vitest run` | **91 文件 / 986 用例全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 89/953 与更早的 85/890 **都作废**（多出的是 `wordTotal ?? 0` 那条与正文白名单的渲染级用例）。 |
-| admin `node --test tests/unit` | **151 套件 / 605 用例全绿**（58 个测试文件，2026-09-20 本机复跑）。⚠️ 旧数字 148/587 与更早的 582 **都作废** —— 多出的 5 条是"两份消毒器副本**逐项比清单**"（`ae38f376`）与水印阈值那条跨包锚点的升级。⚠️ 本轮又动过两条跨包锚点（`safeFetch` 的 pinning 形状、消毒器清单），所以"只改了 server"仍必须跑这一套。 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **27 文件 / 2488 条断言全绿**（含两个会起容器/从源码安装的守卫）。⚠️ 记账代理独立复跑的是**排除那两个重活**的子集：**25 文件 / 2275 条 / 0 失败** —— 两个数都对，差别就是 `build-image-local` 与 `vanblog-source-install`。⚠️ 旧数字 24/2026 与 1982 **都作废**。本轮变动的：`benchmark-tool` **82**（新）、`vanblog-backup-encryption` **120**（新）、`vanblog-install-cron` **123**、`vanblog-drill` **620**、`caddy-config` 23→**74**、`caddy-perf` 24→**36**、`image-runtime` 56→**62**（全部本机逐个复跑确认）。 |
-| 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 两轮排查后都复跑仍 52/0；第 4 条的语料先加了 `packages/server/src/**/*.ts`（`f4fec80d`／§7.69），第二轮又加了 `scripts/vanblog-drill.sh`（`afe7f2c4`／§7.70 —— `VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` 定义在那个脚本里，一下午两个代理各自被同一条误报绊了一次） |
+| server `jest` | **248 套件 / 3520 用例：3511 绿 + 8 跳过 + 1 失败**（2026-09-20 19:48 本机全量复跑，`-w 2`，安静机器）。⚠️ 那 1 条红是 `utils/backupSigning.spec.ts`，**单独重跑 44/44 全绿** ⇒ 负载敏感假红（它真跑 ed25519 与 scrypt，对 CPU 争抢敏感）。⚠️ 旧数字 217/2887、229/3072、234/3139、237/3246 **都作废**。⚠️ 出处如实标注：这一行取自**父代理**在同一会话、**干净树**上的运行；本轮记账子代理只改了 `docs/**`，未复跑 server（父代理正在构建镜像，避免抢 CPU）。|
+| website `vitest run` | **91 文件 / 992 用例全绿**（2026-09-20 21:12 本机复跑，记账子代理自己跑的）。⚠️ 旧数字 986、953、890 **都作废** —— 992 比 986 多的 6 条是 revalidate 鉴权那包新增的（`ab66caa2`：Next 真实形状 + 密钥对错两条 + 替身忠实度）。|
+| admin `node --test tests/unit` | **152 套件 / 611 用例全绿**（2026-09-20 21:10 本机复跑，记账子代理自己跑的）。⚠️ 旧数字 151/605、148/587、582 **都作废** —— 611 比 605 多的 6 条是后台下载 `.sig` 那包新增的（`4bf4830f`）。⚠️ 里面有读 server 源码的**跨包锚点**，所以「只改了 server」也必须跑这一套。|
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **29 文件 / 2990 条断言全绿**（2026-09-20 21:10 本机复跑，记账子代理自己跑的，含两个重活守卫）。⚠️ 旧数字 27 文件/2488、27/2522、28/2630 **都作废**。文件数 27→29 是本轮新增两个守卫文件：`caddy-pages-dir-parity.test.sh`（91 条，跨语言一致性）与 `vanblog-backup-signing.test.sh`（210 条）。|
+| 文档守卫 | `docs-links` **5/5**、`docs-consistency` **52/0**（2026-09-20 21:12 本机复跑）。⚠️ 站内链接的**条数**随文档增删而变（`a395e00e` 时 366 条、2026-09-18 415 条）—— 别把某个具体条数当基线，看 `failed=0`。⚠️ `docs-consistency` 的语料在 `87a360c6` 起**包含 `scripts/tests/`**，所以「只被守卫读取的开关」（例如 `VANBLOG_DRILL_LIVE`）现在可以写进文档而不会被判成编造的变量名。|
+| 单个守卫的当前条数（2026-09-20 复跑） | `caddy-config` **200**、`vanblog-drill` **624**、`vanblog-backup-signing` **210**（`note=0`）、`vanblog-source-install` **169**、`vanblog-dr-offline` **158**、`vanblog-compose-health` **119**、`vanblog-backup-encryption` **120**（`note=0`）、`vanblog-install-cron` **123**、`vanblog-reset` **98**、`vanblog-update` **98**、`caddy-pages-dir-parity` **91**、`vanblog-verify` **94**、`benchmark-tool` **82**、`vanblog-backup-restore` **81**、`vanblog-download-fallback` **78**、`vanblog-hardening` **64**、`image-runtime` **62**、`reverse-proxy-host-header` **49**、`caddy-perf` **36**、`start-js` **30**。⚠️ 这些数字**只增不减**才正常：少了就说明有断言被删或被放宽，要查清楚是哪一次提交、为什么。|
 | CI（GitHub Actions） | ⚠️ **2026-09-20 第三轮（`edfe16db`）彻底改写，旧陈述作废**：以前是「只跑 27 个 shell 守卫里的 6 个、**完全不跑类型检查**、`docs/**` 不触发任何 CI」，现在是**六个 workflow**：`server-test`（三个**并行** job：主 job = 两份入库 tsconfig 的类型检查 + website 类型检查 + **真实 `nest build`** + 2 个需要依赖/`dist` 的守卫 + 三包单元 + 10 套真库 e2e；`guards-core` = 23 个守卫约 2.6 分钟；`guards-slow` = drill 逻辑 620 条 + source-install 169 条）、`admin-e2e`、**新增** `docs-test`（三个文档守卫 + `docs:build`，由 `docs/**`／`README.md`／`scripts/vanblog.sh` 触发 ⇒ 「只改文档不跑 CI」已不成立）、**新增** `nightly`（版本与 sha256 双钉的 caddy v2.11.4 真 validate、真镜像构建 + 冒烟、`docs:build`、`if: always()` 汇总 job；`cancel-in-progress: false`）、`publish-ghcr`、`release-fork`。**27 个守卫 = 23 + 2 + 2（主 job 里那两个需要依赖的）**，≈1810 条断言进 PR 档，PR 墙钟时间没变（并行）。⚠️ 三个反直觉的点：① `--noEmit` **确实**能报 TS6304，早先「报不了」的判断是错的，真因是当时只查了一份配置 —— `tsconfig.json` 覆盖 473 文件（含 227 spec 与 `test/`）、`tsconfig.build.json` 覆盖 245 文件零 spec（= 镜像里 `nest build` 的形状），**两份都要查**；② `packages/server/tsconfig.dev.json` **没有入库**（本机专用，绕开家目录的 `@types/bun`，且它继承 build 配置 ⇒ **不含 `test/`**），CI 不能引用它；③ 伞形 `--strict` **不要用**：tsconfig 里显式的 `false` 会压过它，实测 `--strict` 只报 **6** 个错、逐项列开关约 **380** 个（差 60 多倍），跑它会制造「我们已经很严格」的错觉。⚠️ admin 的类型检查**故意不进 CI**（当前 115 个错，常红灯会训练所有人忽略红色，比没有检查更糟）。⚠️ 两条残余风险写在 workflow 头部而不是掩盖：nightly 红了**依赖有人订阅通知**（仓库没有 CI 侧主动告警，`VANBLOG_BACKUP_ALERT_WEBHOOK` 是产品功能与 CI 无关）；nightly **覆盖不到** drill 的活体部分与「加密归档能否真恢复」，因为两者都需要一份真实整站归档，那是站点数据不能进仓库。🔴 加类型检查**当天就抓到一个一直在的错误**：`test/backup-restore.e2e-spec.ts` 用 12 个参数构造 `BackupController`，而本轮为密钥轮换加了第 13 个（`JwtService`）—— 两个单元 spec 当时改了、这个 e2e 漏了；本地查不出来（dev 配置不含 `test/`）、运行时也不崩（缺的参数是 `undefined`，只有轮换路径读它）、ts-jest 也不报诊断。验证方式也值得抄：6 个 workflow 全部 `yaml.safe_load`、未钉 sha 的 `uses:` 为 **0**、并把全部 **62 个 `run:` 块**抽出来逐个 `bash -n`（YAML 能解析不代表里面的 shell 没问题）—— 这一步抓到 `tee /dev/stderr` 在本机报 "No such device or address" 而恰好在 GitHub runner 上能用 |
 | 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**：**871 MB**（tag `vanblog:final-verify`，2026-09-20 按**最终 lockfile** 重建 —— `0b22908f` 那次验证构建是在 `9720de9c` 的 worktree 上做的，依赖工作落地后必须重建）。冒烟：8 条路径（`/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、`/rss/feed.xml`、`/timeline` 全 200，`/post/1` 按预期 404）、9 条故障特征全空、容器未重启、SIGTERM **1 s** 内停下。§7.73 那一轮另建了 tag `vanblog:hardened`（`VAN_BLOG_VERSION=local@791e3b75`、同为 **871 MB**），两轮万级 C10K 复测都是在它上面跑的（`docs/advanced/benchmark.md` §5.2）。⚠️ 旧数字 892 MB 作废（`.map`/`.d.ts` 不再进镜像 + 移除 `nss-tools`；中途那版 `supplychain-test` 是 869 MB）。容器内字体与水印行为见 §7.66。 |
 | 类型检查 | **要跑三份**：server 的 `tsconfig.json`（含 227 个 spec 与 `test/`）、server 的 `tsconfig.build.json`（镜像里 `nest build` 的真实形状）、website 的 `tsconfig.json`；本机的 `tsconfig.dev.json` 额外跑（它**没有入库**）。⚠️ 别用伞形 `--strict` 摸底：tsconfig 里显式的 `false` 会压过它（实测 6 个错 vs 逐项列开关约 380 个）。⚠️ 第三轮（`edfe16db`）起 CI 也查这三份，所以「本机过了 CI 没过」不再是类型检查这一类的常态 |
@@ -8463,6 +8481,11 @@ helper 用 bind mount 挂 mongo 数据，这个躲不掉（要彻底躲开就得
 > server 两份入库 tsconfig 与 website 的 `tsc` **均 0 错**（13:22 复测）、脚本 `scripts/tests/*.test.sh` **27 文件 / 2522 条断言 / 0 失败**
 > （⚠️ 这一项含在飞的 `caddy-config` 改动，比第三轮提交时的 2488 多 34 条）。
 > ⇒ 下一轮开头请**在干净树上串行重跑 server jest**，再把上面的 server 行更新成真数字。
+>
+> ✅ **这条待办已完成（2026-09-20 第 13-14 轮）**：上面主表已换成干净树上的数字
+> （server **248/3520**、website **91/992**、admin **152/611**、脚本 **29 文件/2990 条**、四个 tsc 口径 **0 错**、
+> `docs-links` 5/5、`docs-consistency` 52/0），第三轮那段被污染的轨迹**保留在上面作追溯**，不再作为基线。
+> ⚠️ 唯一那条红（`utils/backupSigning.spec.ts`）已单独重跑确认 **44/44 绿** ⇒ 归入负载敏感假红清单。
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
 ⚠️ **"只改了 server"也必须跑 admin 那套 `node --test`**：里面有读 server 源码的跨包锚点，
