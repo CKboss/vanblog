@@ -8131,6 +8131,45 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 就能把"数据库启动期不可达 ⇒ 不完全下线 ⇒ 自愈"从一次性证据变成守卫。⚠️ 它需要真容器与真 mongo 镜像 ⇒
 只能进 nightly/手动档，不能进 PR 档。
 
+### 7.79 🔴 不要用"挂载本机编译产物"验证容器内行为（本机 dist 与镜像产物**不等价**）
+
+一次活体验证连续三次失败在同一个地方，根因不是产品缺陷，而是**验证方法本身不成立**。实测事实：
+
+| 项 | 镜像里的 `/app/server` | 本机 `tsc -p tsconfig.build.json` 产出的 `dist` |
+|---|---|---|
+| `NODE_PATH` | **没有**（env 里只有 `PATH=/usr/local/sbin:...`） | 不适用 |
+| `main.js` 里的 require 形状 | **相对路径**（`grep -oE 'require\("src/[a-zA-Z/]+\)"'` **0 命中**） | **裸 specifier** `require("src/utils/…")`（`baseUrl` 风格） |
+| 目录布局 | `/app/server/{app.controller.js,app.module.js,main.js,config/,controller/,…}`，**没有 `src/`** | `dist/src/{main.js,utils/,…}` |
+
+⇒ 把本机 `dist/src/*` **摊平**覆盖到 `/app/server/` 之后，`require("src/utils/…")` 在**任何** `NODE_PATH` 下都解析不了 —— 文件系统里根本不存在名为 `src` 的目录。
+失败形状：`MODULE_NOT_FOUND` + 退出码 1 + 日志尾部只有 `Node.js v24.21.0`，而 `start.js` 接着打
+`[vanblog] server 进程已退出（code=1 signal=null），容器随之退出以便 restart 策略重新拉起`。
+⚠️ **这个形状与"产品启动崩溃"几乎一模一样**，三次都被误读成被测代码有问题。
+
+**规矩**：验证容器内行为只有两条正路 ——
+1. **真构建镜像**（`scripts/build-image-local.sh`，约 20-30 分钟）：唯一与生产等价的方式。⚠️ 用 `setsid` 起后台构建
+   （本轮有过"前台轮询被 SIGTERM 连带杀掉后台任务"）；构建完必须 `podman inspect` **自证镜像名与 `VAN_BLOG_VERSION`**
+   （§7.74 记过"栈其实跑的是旧镜像"的事故），⚠️ 别过滤掉那行标识被测对象的输出。
+2. **只用镜像里已有的产物做实验**（例如手工在 `.next/server/pages/` 下写哨兵、停掉 server 进程，观察 caddy 是否直发磁盘 HTML）：
+   能验证**机制**，但验证不了"新代码会在正确时机做正确的事"。⚠️ 结论必须按这个边界写，不能说成"已闭环"。
+
+⚠️ §7.78 那条"`NODE_PATH` 让容器里能跑仓库 dist"**只在 dist 目录结构完整保留时成立**
+（即挂载后仍存在 `<某目录>/src/main.js`，并把 `NODE_PATH` 指向那个 `<某目录>`）；摊平挂载时它救不了。
+
+### 7.79b 一个跑了 3.8 天的 `nest start --watch` 孤儿会**在后台重编译 dist**
+
+`ps -eo pid,etimes,cmd` 查到 `node ./node_modules/.bin/../@nestjs/cli/bin/nest.js start --watch -p tsconfig.dev.json`，
+`etimes=330556`（≈3.8 天）、cwd=`packages/server`、父进程 `systemd --user`（= 早期会话用 `setsid` 起的后台任务）。
+它**不监听任何端口**（`ss -ltnp` 无命中，3000 端口当时是空的），所以什么也不服务，
+但**每次源码改动都会触发一次后台重编译**，于是：①与"刻意构建 dist 去做活体验证"的代理**抢写** `packages/server/dist`；
+②产物可能反映的是**改到一半**的工作树；③白烧 CPU。
+
+⚠️ 处置：按 **PID** 杀（`kill -9 <pid>`），**绝不用 `pkill -f "nest"`** —— 模式串会匹配到自己调用的 `bash -c`，
+这个坑本仓库已踩**四次**（`pkill -f measure.sh`、`pkill -f "caddy run --config caddy.json"`、`pkill -f live-boot.sh`、以及这次的排查过程）。
+👉 起长任务时就把 PID 记下来（`echo $! > <run_dir>/pid`），收尾按 PID 清理；每轮开工前用
+`ps -eo pid,etimes,cmd | awk '$2>3600 && /node|jest|tsc/'` 扫一遍**长命孤儿**
+（本轮还扫出过 4 个卡死 5 小时的 jest，它们让 `fullBackup.spec.ts` 在全量并行跑时红 9 条，见 §7.76 附近的更正）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
