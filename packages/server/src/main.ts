@@ -38,6 +38,28 @@ import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { sanitizeRequestPayloads, SanitizeBodyPipe } from './utils/sanitizeRequest';
 import { DEFAULT_JSON_BODY_LIMIT, DEFAULT_JSON_BODY_LIMIT_LARGE, LARGE_JSON_BODY_PREFIXES, resolveBodyLimit, anonymousLargeBodyGuard } from './utils/bodyLimit';
 import { applyStaticAssetHeaders } from './utils/imgCompress';
+import { sleep } from './utils/sleep';
+import {
+  isBootstrapFailure,
+  isDbUnreachableError,
+  probeMongoOnce,
+  resolveBootstrapRetryConfig,
+  runBootstrapWithDbRetry,
+} from './utils/dbBootstrapRetry';
+import {
+  DEGRADED_HOLD_HINT,
+  DEGRADED_HOLD_REASON,
+  DegradedHoldHandle,
+  startDegradedHoldServer,
+} from './utils/degradedHold';
+import {
+  enableDegradedServeHtml,
+  restoreServeHtmlSentinels,
+  snapshotServeHtmlSentinels,
+  ServeHtmlSentinelSnapshot,
+} from './utils/degradedServeHtml';
+import { loadMongoUrl } from 'src/config';
+import { version as appVersion } from 'src/utils/loadConfig';
 import { ATTACHMENT_FOLDER } from './utils/attachment';
 import { THUMB_FOLDER } from './types/setting.dto';
 
@@ -57,11 +79,18 @@ const FATAL_EXIT_HARD_LIMIT_MS = 3000;
  */
 let fatalShutdownHook: ((reason: string) => Promise<void>) | null = null;
 
-async function bootstrap() {
-  const jwtSecret = await initJwt();
-  global.jwtSecret = jwtSecret;
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
-
+/**
+ * 注册两个进程级兜底处理器。
+ *
+ * ⚠️ **必须在 `await initJwt()` 之前调用** —— 这是本轮修的一个真缺陷：
+ * 这两个处理器以前注册在 `bootstrap()` 内部、`initJwt()` 与 `NestFactory.create()` **之后**，
+ * 而启动期最容易失败的恰恰是那两步（数据库不可达时 `initJwt` 约 130 秒后抛出、
+ * `NestFactory.create` 因为 `@nestjs/mongoose` await 了 `connection.asPromise()` 而 reject）。
+ * 于是启动失败的现场是：`bootstrap()` 裸调用没有 `.catch()` ⇒ 未处理的 rejection ⇒
+ * Node 20+ 默认行为是**打印一坨原始 stack 然后退出码 1**，日志里没有一句"这是数据库连不上、
+ * 该怎么办"。运维只能看到 MongoServerSelectionError 的内部结构。
+ */
+function registerFatalHandlers() {
   // Node 20 默认「有未处理的 rejection 就退出进程」。这个项目里有不少
   // fire-and-forget 的写库调用（每次页面浏览的计数、菜单清洗、sitemap 生成…），
   // 一次 Mongo 抖动就能把整个 server 带走，而且日志里什么线索都没有。
@@ -122,6 +151,15 @@ async function bootstrap() {
         process.exit(1);
       });
   });
+}
+
+async function bootstrap() {
+  const jwtSecret = await initJwt();
+  global.jwtSecret = jwtSecret;
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // ⚠️ 两个进程级兜底处理器已移到 `registerFatalHandlers()`，并且**在 initJwt 之前**注册
+  // （原因见那个函数的注释：以前注册得太晚，启动期的数据库失败没人接，只能吐一坨裸 stack）。
 
   // JSON body 限额：全局默认只有 1mb（登录/评论/访客计数这些匿名接口不再敞着 50MB），
   // 只有后台的"内容类"前缀（文章/草稿/自定义页面/管线，全部在 AdminGuard 后面）
@@ -599,12 +637,204 @@ async function startPrimary() {
   });
 }
 
-if (clusterWorkers > 1 && cluster.isPrimary) {
-  startPrimary().catch((err) => {
+/**
+ * 进程入口。
+ *
+ * ## 为什么不是裸 `bootstrap()`
+ * 裸调用 + 没有 `.catch()` 的后果在 `registerFatalHandlers()` 的注释里写了。这里除了接住错误，
+ * 还做了两件与"数据库在启动期不可达"直接相关的事：
+ *
+ * **① 只在"数据库不可达"时重试**（`runBootstrapWithDbRetry`），总窗口可配
+ * （`VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS`，默认 5 分钟；⚠️ 写 `0` 得到的是默认值而不是"不重试"）。
+ * 配置错误、依赖注入失败、代码 bug 一律**立刻**抛出 —— 对这类错误重试只是把
+ * "启动失败"变成"看起来在启动、其实在空转"，排查成本更高。
+ *
+ * **② 窗口耗尽后进入「降级驻留」，进程不退出。** 理由是一条实测的不对称：
+ * 数据库在**运行期**挂掉时，站点是"降级但仍在发布"（health 转 503、前台首页仍 200 靠 ISR 缓存、
+ * 数据库回来 5 秒内自愈、`RestartCount` 不变）；而在**启动期**不可达时，进程退出 ⇒
+ * `scripts/start.js` 让容器一起退出 ⇒ **caddy 也死了**，连 `/static/*` 都发不出去 —— 完全下线。
+ * 而这条路径在生产里可达：compose 模板为了兼容 docker-compose 1.25 用的是**列表形式** `depends_on`
+ * （不做健康门控），主机重启 / `docker restart` / 崩溃循环都会走到"app 与 mongo 同时冷启动"。
+ * 降级驻留把启动期拉回运行期那一档：占位服务接住端口、health 给出**与真实契约同形状**的 503、
+ * 后台每 `VANBLOG_DEGRADED_HOLD_PROBE_MS`（默认 30 秒）探一次数据库，一通就关掉占位服务、
+ * 完成真正的 bootstrap（⚠️ 必须先关占位再 listen，否则 EADDRINUSE）。
+ *
+ * ⚠️ **它的能力边界要如实**：能保住容器存活 ⇒ caddy 存活 ⇒ `/static/*`（图片/附件，caddy 直服）
+ * 继续可发，以及"可诊断的 503"而不是 connection refused；**保不住页面**（`/`、`/post/*`），
+ * 因为前台 Next 子进程是 `websiteProvider.init()` 在 bootstrap 里拉起的。要让页面在这种状态下也能发，
+ * 现成的机制是 `VANBLOG_CADDY_SERVE_HTML`（caddy 按哨兵文件直服 `.next/server/pages/**.html`，
+ * 默认 off，哨兵在挂载卷上且"读不到设置时绝不删"），是否改默认值属于产品决定，这里不擅自改。
+ */
+async function main() {
+  registerFatalHandlers();
+
+  const { port, host } = getListenTarget(DEFAULT_SERVER_PORT, globalConfig.serverHost);
+  const retryConfig = resolveBootstrapRetryConfig();
+  const log = {
     // eslint-disable-next-line no-console
-    console.error(`[cluster] 主进程启动失败：${(err as Error)?.message || err}`);
+    log: (m: string) => console.log(m),
+    // eslint-disable-next-line no-console
+    warn: (m: string) => console.warn(m),
+    // eslint-disable-next-line no-console
+    error: (m: string) => console.error(m),
+  };
+
+  const outcome = await runBootstrapWithDbRetry(bootstrap, {
+    onRetry: ({ attempt, elapsedMs, nextDelayMs, windowMs, error }) => {
+      log.warn(
+        `[startup] 数据库不可达，第 ${attempt} 次启动失败（已等 ${Math.round(elapsedMs / 1000)}s / 窗口 ${Math.round(windowMs / 1000)}s），` +
+          `${Math.round(nextDelayMs / 1000)}s 后重试：${(error as Error)?.message || error}`,
+      );
+    },
+    onNonRetryable: (error) => {
+      log.error(
+        `[FATAL][startup] 启动失败，且**不是**数据库不可达（所以不重试）：${(error as Error)?.message || error}`,
+      );
+    },
+  });
+  if (!isBootstrapFailure(outcome)) {
+    return;
+  }
+
+  // ---- 窗口耗尽：进入降级驻留 ----
+  const holdProbeMs = envInt('VANBLOG_DEGRADED_HOLD_PROBE_MS', 30000, 3000, 3600000);
+  const reason = (outcome.lastError as Error)?.message || String(outcome.lastError);
+  log.error(
+    `[FATAL][startup] **数据库不可达**：在 ${Math.round(outcome.elapsedMs / 1000)} 秒内尝试了 ` +
+      `${outcome.attempts} 次仍连不上（重试窗口由 VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS 控制），` +
+      `进入「降级驻留」。进程**不退出**、容器保持 Up。原因：${reason}\n` +
+      `[FATAL][startup] 现在的状态：/api/public/health 返回 503 degraded；/static/*（图片、附件）由 caddy 直服、照常可用；` +
+      `已渲染过的页面由 caddy 直发磁盘上的 HTML（见下面那条「降级发布」日志）。\n` +
+      `[FATAL][startup] 下一步怎么办（三选一，按顺序试）：\n` +
+      `[FATAL][startup]   ① **什么都不做**：进程每 ${Math.round(holdProbeMs / 1000)} 秒探一次数据库，` +
+      `数据库一通就自动完成启动、恢复正常模式，**不需要重启容器**；\n` +
+      `[FATAL][startup]   ② 跑 ./vanblog.sh doctor 体检（它会直接说"server 活着但 mongo 连不上"，并给出定位命令）；\n` +
+      `[FATAL][startup]   ③ 数据库彻底坏了就用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建` +
+      `（数据库起不来时也能用）。`,
+  );
+
+  // ---- 降级发布：写哨兵，让 caddy 直发磁盘上的 ISR HTML ----
+  // ⚠️ 只需要写文件：caddy 模板里的 vanblog-serve-html 路由是**每个请求现查哨兵**的
+  //    （见 provider/caddy/caddy.provider.ts 头注释），所以既不依赖 Nest、也不需要 reload caddy ——
+  //    这正是降级驻留唯一可行的接入点（那时 Nest 根本没起来）。
+  const serveHtmlSnapshot: ServeHtmlSentinelSnapshot = snapshotServeHtmlSentinels();
+  const serveHtmlOn = enableDegradedServeHtml({ log });
+  if (serveHtmlOn) {
+    log.warn(
+      `[degraded-hold] 已进入「降级发布」：写了 caddy 直服哨兵（${serveHtmlSnapshot.dir}，all 档 = 固定页 + /post/* 等动态前缀）。` +
+        `⚠️ 代价如实说明：发出去的是**磁盘上最后一次成功渲染的 HTML**，所以 ①内容可能陈旧；` +
+        `②依赖 SSR 的功能失效（访问密码文章、搜索、阅读数、按需渲染新文章、评论）；` +
+        `③降级期间 artifactReaper 不在跑，所以"刚刚被改成私密/加密、reaper 还没删掉 .html"的文章` +
+        `在这个窗口内仍会被公开服务（窗口很窄但不是零）。` +
+        `④但**已发布内容仍然对外可读** —— 在要持续发布的场景下这是正确的取舍。`,
+    );
+  }
+
+  let hold: DegradedHoldHandle | null = await startDegradedHoldServer({
+    port,
+    host,
+    reason,
+    versionText: appVersion,
+    log,
+  });
+
+  // 后台循环：探活 → 通了就关掉占位服务、完成真正的启动。
+  // ⚠️ 用"先探活再 bootstrap"而不是"直接反复 bootstrap"：`initJwt` 自己会重试 10 次共约 130 秒，
+  //    那样每轮探测都要占着端口空转两分钟（而降级驻留必须先让出端口，空转期间连 503 都给不出来）。
+  for (;;) {
+    await sleep(holdProbeMs);
+    let mongoUrl = '';
+    try {
+      mongoUrl = await loadMongoUrl();
+    } catch {
+      mongoUrl = '';
+    }
+    if (!mongoUrl || !(await probeMongoOnce(mongoUrl, 3000))) {
+      continue;
+    }
+    log.warn('[startup] 数据库已可达：关闭降级驻留的占位服务，开始真正的启动流程');
+    if (hold) {
+      await hold.close();
+      hold = null;
+    }
+    try {
+      await bootstrap();
+      // ⚠️ **精确还原**而不是无条件删：站长可能本来就手动开了 SERVE_HTML=true|all，
+      //    无条件删会把它关掉；无条件留会让站点一直停在"caddy 直发旧 HTML"。
+      //    还原之后 CaddyProvider 的 60 秒对账会按 env + ISR 模式接管为权威状态。
+      restoreServeHtmlSentinels(serveHtmlSnapshot, { log });
+      if (serveHtmlOn) {
+        log.log(
+          `[degraded-hold] 已退出降级发布：哨兵按降级前的状态还原（fixed=${serveHtmlSnapshot.fixed}、dynamic=${serveHtmlSnapshot.dynamic}），` +
+            `CaddyProvider 的对账会在 60 秒内按设置接管。`,
+        );
+      }
+      log.log('[startup] ✅ 数据库恢复后启动成功，站点已回到正常模式');
+      return;
+    } catch (err) {
+      // ⚠️ 分两种：数据库又不可达 ⇒ 重新挂上占位服务继续等；
+      //    其它错误 ⇒ 这是真故障（配置/代码），按既有语义退出交给 restart 策略，
+      //    绝不能在这里无限重试把真错误藏起来。
+      if (!isDbUnreachableError(err)) {
+        log.error(
+          `[FATAL][startup] 数据库已可达但启动仍失败，且不是数据库问题（不再重试）：${(err as Error)?.message || err}`,
+        );
+        process.exit(1);
+      }
+      log.warn(
+        `[startup] 数据库短暂可达但启动又失败了，重新进入降级驻留：${(err as Error)?.message || err}`,
+      );
+      hold = await startDegradedHoldServer({
+        port,
+        host,
+        reason: (err as Error)?.message || String(err),
+        versionText: appVersion,
+        log,
+      });
+    }
+  }
+}
+
+if (clusterWorkers > 1 && cluster.isPrimary) {
+  // ⚠️ cluster 主进程**不做降级驻留**：占位服务要占的正是 worker 将要监听的端口，
+  //    而主进程本身不服务请求，驻留在这里没有意义（worker 起不来就是起不来）。
+  //    但"数据库不可达时重试"同样适用 —— 否则多进程部署会比单进程更早退出。
+  registerFatalHandlers();
+  const clusterRetryConfig = resolveBootstrapRetryConfig();
+  runBootstrapWithDbRetry(startPrimary, {
+    onRetry: ({ attempt, elapsedMs, nextDelayMs, error }) => {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[cluster] 数据库不可达，第 ${attempt} 次主进程启动失败（已等 ${Math.round(elapsedMs / 1000)}s / 窗口 ${Math.round(clusterRetryConfig.windowMs / 1000)}s），` +
+          `${Math.round(nextDelayMs / 1000)}s 后重试：${(error as Error)?.message || error}`,
+      );
+    },
+  })
+    .then((outcome) => {
+      if (isBootstrapFailure(outcome)) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[FATAL][cluster] 在 ${Math.round(outcome.elapsedMs / 1000)} 秒内始终连不上数据库，主进程退出（非 0）以便容器重启策略接管。` +
+            `原因：${(outcome.lastError as Error)?.message || outcome.lastError}\n` +
+            `  ${DEGRADED_HOLD_REASON}${DEGRADED_HOLD_HINT}`,
+        );
+        process.exit(1);
+      }
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(`[cluster] 主进程启动失败：${(err as Error)?.message || err}`);
+      process.exit(1);
+    });
+} else {
+  // ⚠️ 一定要有 `.catch()`：`main()` 内部已经接住了数据库类错误，但"接住错误"这件事本身
+  //    也可能抛（例如占位服务模块加载失败）。裸调用会把那种情况变成一坨无人解释的 stack。
+  main().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[FATAL][startup] 启动流程本身出错（不是数据库不可达那条路径）：${(err as Error)?.stack || err}\n` +
+        `进程退出（非 0）以便容器重启策略接管。`,
+    );
     process.exit(1);
   });
-} else {
-  bootstrap();
 }

@@ -130,6 +130,120 @@ else
 fi
 assert_contains "$(cat "${START_JS}")" "vanblog-stdio.log" "仍然写 vanblog-stdio.log（log.provider.ts 要读）"
 
+# ---------- 6) 重启风暴熔断：连续快速崩溃后，退出前要退避 ----------
+# ⚠️ 参数调小以便测试在 1 秒内跑完；默认值是窗口 10 分钟 / 阈值 5 次 / 退避 5s 起封顶 5 分钟。
+STORM_LOG="${WORK}/case-storm/log"
+STORM_SRV="${WORK}/case-storm/server"
+mkdir -p "${STORM_LOG}" "${STORM_SRV}"
+cat >"${STORM_SRV}/main.js" <<'JS'
+process.exit(9);
+JS
+run_storm() {
+  local t0 t1
+  t0=$(date +%s%3N)
+  VAN_BLOG_SERVER_CWD="${STORM_SRV}" VAN_BLOG_LOG="${STORM_LOG}" \
+    VANBLOG_MAX_FAST_CRASHES=3 VANBLOG_CRASH_BACKOFF_BASE_MS=300 \
+    VANBLOG_CRASH_BACKOFF_MAX_MS=2000 VANBLOG_FAST_CRASH_MS=60000 \
+    "${NODE_BIN}" "${START_JS}" >>"${WORK}/case-storm.out" 2>&1
+  STORM_RC=$?
+  t1=$(date +%s%3N)
+  STORM_MS=$((t1 - t0))
+}
+
+run_storm; MS1=${STORM_MS}; RC1=${STORM_RC}
+run_storm; MS2=${STORM_MS}
+run_storm; MS3=${STORM_MS}; RC3=${STORM_RC}
+run_storm; MS4=${STORM_MS}
+
+if [[ ${MS3} -ge 250 ]]; then
+  pass "第 3 次快速崩溃后退出前退避了（${MS3}ms ≥ 250ms，阈值 3 次）"
+else
+  fail "第 3 次快速崩溃没有退避（只用了 ${MS3}ms）"
+fi
+if [[ ${MS4} -gt ${MS3} ]]; then
+  pass "第 4 次退避更长（指数：${MS4}ms > ${MS3}ms）"
+else
+  fail "第 4 次退避没有增长（${MS4}ms vs ${MS3}ms）—— 指数退避失效"
+fi
+if [[ ${MS1} -lt 250 ]]; then
+  pass "⚠️ 反证：阈值之前的崩溃**不**退避（第 1 次只用 ${MS1}ms）—— 否则偶发崩溃也会被拖慢"
+else
+  fail "阈值之前就退避了（第 1 次用了 ${MS1}ms）：正常的单次崩溃不该被拖慢"
+fi
+assert_eq "${RC3}" "9" "退避期间仍然透传子进程的退出码（编排层要靠它判断）"
+assert_contains "$(cat "${WORK}/case-storm.out")" "重启风暴熔断" "熔断时打了明确的 FATAL 说明"
+assert_contains "$(cat "${WORK}/case-storm.out")" "请查**上面第一条**错误" "说明了熔断只降速、要去看第一条错误"
+assert_contains "$(cat "${WORK}/case-storm.out")" "doctor" "给了可照做的下一步命令"
+if [[ -f "${STORM_LOG}/vanblog-crash-state.json" ]]; then
+  pass "崩溃计数存在日志目录（= 挂载卷）里，所以跨容器重建仍然有效"
+else
+  fail "没找到崩溃计数状态文件（应存在 ${STORM_LOG}/vanblog-crash-state.json）"
+fi
+
+# ---------- 7) 一次足够长的健康运行会清零计数 ----------
+HEALTHY_LOG="${WORK}/case-healthy/log"
+HEALTHY_SRV="${WORK}/case-healthy/server"
+mkdir -p "${HEALTHY_LOG}" "${HEALTHY_SRV}"
+# 先制造 3 次快速崩溃（与上面同一套参数，但用独立的日志目录）
+cat >"${HEALTHY_SRV}/main.js" <<'JS'
+process.exit(9);
+JS
+for _ in 1 2 3; do
+  VAN_BLOG_SERVER_CWD="${HEALTHY_SRV}" VAN_BLOG_LOG="${HEALTHY_LOG}" \
+    VANBLOG_MAX_FAST_CRASHES=3 VANBLOG_CRASH_BACKOFF_BASE_MS=200 VANBLOG_FAST_CRASH_MS=400 \
+    "${NODE_BIN}" "${START_JS}" >>"${WORK}/case-healthy.out" 2>&1
+done
+# 再来一次"活得够久"的运行：FAST_CRASH_MS=400，子进程活 700ms
+cat >"${HEALTHY_SRV}/main.js" <<'JS'
+setTimeout(() => process.exit(0), 700);
+JS
+VAN_BLOG_SERVER_CWD="${HEALTHY_SRV}" VAN_BLOG_LOG="${HEALTHY_LOG}" \
+  VANBLOG_MAX_FAST_CRASHES=3 VANBLOG_CRASH_BACKOFF_BASE_MS=200 VANBLOG_FAST_CRASH_MS=400 \
+  "${NODE_BIN}" "${START_JS}" >>"${WORK}/case-healthy.out" 2>&1
+assert_contains "$(cat "${WORK}/case-healthy.out")" "视为已恢复正常" "健康运行后说明了计数被清零"
+if grep -q '"fastCrashes":\[\]' "${HEALTHY_LOG}/vanblog-crash-state.json"; then
+  pass "状态文件里的计数确实被清空（不是只打了日志）"
+else
+  fail "健康运行后计数没有清零：$(cat "${HEALTHY_LOG}/vanblog-crash-state.json")"
+fi
+# 清零之后再崩一次，不应该退避
+cat >"${HEALTHY_SRV}/main.js" <<'JS'
+process.exit(9);
+JS
+H0=$(date +%s%3N)
+VAN_BLOG_SERVER_CWD="${HEALTHY_SRV}" VAN_BLOG_LOG="${HEALTHY_LOG}" \
+  VANBLOG_MAX_FAST_CRASHES=3 VANBLOG_CRASH_BACKOFF_BASE_MS=200 VANBLOG_FAST_CRASH_MS=400 \
+  "${NODE_BIN}" "${START_JS}" >>"${WORK}/case-healthy.out" 2>&1
+H1=$(date +%s%3N)
+if [[ $((H1 - H0)) -lt 180 ]]; then
+  pass "清零后的第一次崩溃不退避（$((H1 - H0))ms）—— 否则一次历史故障会永久拖慢之后的偶发崩溃"
+else
+  fail "清零后仍然退避（$((H1 - H0))ms）"
+fi
+
+# ---------- 8) 源码层面的不变式（熔断相关） ----------
+if printf '%s' "${START_CODE}" | grep -q "crashBackoffBaseMs \* 2 \*\*"; then
+  pass "退避用指数计算"
+else
+  fail "找不到指数退避的计算（crashBackoffBaseMs * 2 **）"
+fi
+if printf '%s' "${START_CODE}" | grep -q "Math.min(Math.max(0, Math.floor(raw)), crashBackoffMaxMs)"; then
+  pass "退避有封顶且防溢出（2^n 变 Infinity 传进 setTimeout 会**立刻**触发，退避就没了）"
+else
+  fail "退避没有封顶/防溢出"
+fi
+# ⚠️ 剥注释后再断言"不存在"：文件头注释里正好解释了为什么**不能** unref。
+if printf '%s' "${START_CODE}" | grep -qE "timer\.unref\(\)"; then
+  fail "退避定时器被 unref 了：事件循环没有别的工作时进程会提前自然退出（且退出码变 0，编排层不再重拉）"
+else
+  pass "退避定时器没有被 unref（否则进程会在退避结束前自然退出，熔断形同不存在）"
+fi
+if printf '%s' "${START_CODE}" | grep -q "writeCrashState"; then
+  pass "崩溃计数会落盘（跨容器重建有效）"
+else
+  fail "崩溃计数没有落盘"
+fi
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
