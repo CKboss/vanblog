@@ -20,6 +20,28 @@ import * as os from 'os';
 
 export const CLUSTER_ENV = 'VANBLOG_CLUSTER_WORKERS';
 
+/**
+ * 🔴 cluster 里"谁是那个唯一的主实例"靠这个环境变量传递，**不是**靠 `cluster.isPrimary`。
+ *
+ * 为什么不能用 `cluster.isPrimary`：`main.ts` 的进程入口是
+ * `if (clusterWorkers > 1 && cluster.isPrimary) startPrimary() else main()`，
+ * 而 `startPrimary()` 只做 `initJwt()` + `startClusterPrimary()` —— **它不创建 Nest 应用**。
+ * 于是集群模式下：主进程里没有 `InitProvider`（`onModuleInit` 永不执行），
+ * 而每个 worker 的 `cluster.isWorker === true` ⇒ `isPrimaryInstance()` 在**所有 Nest 进程里都是 false**。
+ * 后果（2026-09-20 活体实测，同镜像只差 `VANBLOG_CLUSTER_WORKERS` 一个变量的 A/B）：
+ * `/var/log/setup.key` 不生成 ⇒ `POST /api/admin/init` 与归档恢复都 **500**（灾难恢复完全失效）、
+ * `initRestoreKey()` 不跑 ⇒ 忘记密码救不回来、`WebsiteProvider.doRun()` 直接 return ⇒
+ * **前台 Next 子进程没人拉起，`/` 与 `/post/*` 全部 502**、waline 不启、7 处启动数据清洗不跑、
+ * 首轮全量 ISR 渲染不跑，以及自带同一守卫的 `isr.task`（每小时 ISR cron）、`viewer.task`、
+ * `publish.task`、`searchIndex`、`statsMaintenance`、`comment`、reaper、
+ * **`fullBackup.provider`（定时整站备份）** 全部跳过。
+ *
+ * 所以 `clusterBootstrap.ts` 会给**恰好一个** worker 打上 `leader`，由它承担这些"只能跑一次"的活。
+ */
+export const CLUSTER_ROLE_ENV = 'VANBLOG_CLUSTER_ROLE';
+export const CLUSTER_ROLE_LEADER = 'leader';
+export const CLUSTER_ROLE_WORKER = 'worker';
+
 /** 硬上限：再多也没意义（Node 的动态请求瓶颈在 CPU，而容器通常只给几个核） */
 export const MAX_CLUSTER_WORKERS = 32;
 
@@ -63,11 +85,22 @@ function safeCpuCount(): number {
  * 非 cluster 启动（今天的常态）时 `cluster.isPrimary === true`、`isWorker === false`，
  * 所以返回 true —— 守卫等于不存在，行为一点不变。
  * 传入 clusterLike 只是为了可测（不用去 mock node:cluster 这个单例）。
+ *
+ * 🔴 **cluster 模式（`VANBLOG_CLUSTER_WORKERS>1`）下判据是 `VANBLOG_CLUSTER_ROLE==='leader'`**，
+ * 而不是 `cluster.isPrimary`：主进程不跑 Nest，所以"主实例"只能是某个 worker。
+ * `env` 参数默认 `process.env`，显式传入只是为了可测。
  */
-export function isPrimaryInstance(clusterLike?: {
-  isPrimary?: boolean;
-  isWorker?: boolean;
-}): boolean {
+export function isPrimaryInstance(
+  clusterLike?: {
+    isPrimary?: boolean;
+    isWorker?: boolean;
+  },
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  // 🔴 先判 leader 角色：集群模式下"唯一的主实例"是**被标记为 leader 的那个 worker**，
+  //    因为 cluster 的主进程根本不跑 Nest（见 CLUSTER_ROLE_ENV 的注释）。
+  //    ⚠️ 顺序有讲究：这一条必须在 `isWorker === true` 之前，否则 leader worker 会被判成非主实例。
+  if (env && env[CLUSTER_ROLE_ENV] === CLUSTER_ROLE_LEADER) return true;
   if (!clusterLike) return true;
   if (clusterLike.isPrimary === true) return true;
   if (clusterLike.isWorker === true) return false;

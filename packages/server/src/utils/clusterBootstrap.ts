@@ -1,4 +1,9 @@
-import { CLUSTER_ENV } from './clusterRole';
+import {
+  CLUSTER_ENV,
+  CLUSTER_ROLE_ENV,
+  CLUSTER_ROLE_LEADER,
+  CLUSTER_ROLE_WORKER,
+} from './clusterRole';
 
 /**
  * cluster 主进程的编排：fork N 个 worker、worker 挂了重新拉起来、
@@ -57,6 +62,14 @@ export interface ClusterPrimaryHandle {
   workerCount(): number;
   shuttingDown(): boolean;
   shutdown(reason?: string): Promise<void>;
+  /**
+   * 当前承担"主实例"职责的 worker id（没有则 null）。
+   * 🔴 集群主进程**不跑 Nest**，所以那些"只能跑一次"的启动任务（生成 setup.key /
+   * restore.key、拉起前台与 waline 子进程、启动数据清洗、首轮全量渲染、各类 cron）
+   * 必须由**恰好一个 worker** 承担 —— 见 clusterRole.ts 里 CLUSTER_ROLE_ENV 的注释。
+   * 暴露它只是为了可测与可诊断。
+   */
+  leaderId(): number | null;
 }
 
 export function startClusterPrimary(
@@ -86,18 +99,33 @@ export function startClusterPrimary(
   let consecutiveFastCrashes = 0;
   const restartTimers = new Set<TimerHandle>();
 
-  const envForWorker = (): NodeJS.ProcessEnv => ({
+  /**
+   * 🔴 当前承担"主实例"职责的 worker id。
+   * `null` = 还没有 leader ⇒ 下一次 fork 出来的就是 leader。
+   * ⚠️ leader 退出时要清回 null，这样重新拉起的那个 worker 会**接替** leader 职责 ——
+   *    否则 leader 崩一次，那些一次性启动任务就再也没人跑了（例如前台子进程死了没人重拉）。
+   *    重跑是安全的：启动清洗本身是幂等的（main.ts 的注释明写"幂等清洗与索引维护照旧每次启动都跑"），
+   *    setup.key 每次重启本来就重新生成（`refreshSetupKey` 在未初始化时无条件 `generateSetupKey`）。
+   */
+  let leaderWorkerId: number | null = null;
+
+  const envForWorker = (role: string): NodeJS.ProcessEnv => ({
     ...baseEnv,
     // worker 要靠它把内存限流的预算摊薄（否则 N 个进程 = N 倍阈值）
     [CLUSTER_ENV]: String(workers),
-    VANBLOG_CLUSTER_ROLE: 'worker',
+    [CLUSTER_ROLE_ENV]: role,
   });
 
   const forkOne = (): ClusterWorkerLike => {
-    const worker = cluster.fork(envForWorker());
+    // 恰好一个 leader：第一个还没有 leader 时 fork 出来的那个
+    const role = leaderWorkerId === null ? CLUSTER_ROLE_LEADER : CLUSTER_ROLE_WORKER;
+    const worker = cluster.fork(envForWorker(role));
+    if (role === CLUSTER_ROLE_LEADER) leaderWorkerId = worker.id;
     startedAt.set(worker.id, Date.now());
     // 稳定跑过 crashWindowMs 的 worker 退出时会把计数清零（见 'exit' 处理）
-    log(`已启动 worker #${worker.id}（pid=${worker.process?.pid ?? '?'}），共 ${workers} 个`);
+    log(
+      `已启动 worker #${worker.id}（pid=${worker.process?.pid ?? '?'}，角色=${role}），共 ${workers} 个`,
+    );
     return worker;
   };
 
@@ -111,6 +139,12 @@ export function startClusterPrimary(
   cluster.on('exit', (worker, code, signal) => {
     const born = startedAt.get(worker.id);
     startedAt.delete(worker.id);
+    // 🔴 leader 退出 ⇒ 让位，下一次 fork（自动重启）会接替，一次性启动任务不会永久失守。
+    //    ⚠️ 必须放在 `stopping` 早退之前：停机路径上也要保持一致状态。
+    if (worker.id === leaderWorkerId) {
+      leaderWorkerId = null;
+      log(`worker #${worker.id} 是 leader，已让位（下次重新拉起的 worker 会接替主实例职责）`);
+    }
     if (stopping) {
       log(`worker #${worker.id} 已退出（code=${code} signal=${signal}）`);
       return;
@@ -227,5 +261,6 @@ export function startClusterPrimary(
     workerCount: () => aliveWorkers().length,
     shuttingDown: () => stopping,
     shutdown,
+    leaderId: () => leaderWorkerId,
   };
 }

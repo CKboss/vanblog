@@ -143,8 +143,17 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
    *     已初始化 ⇒ 清掉遗留文件、停掉定时器。
    *
    * 只在主实例跑（isPrimaryInstance(cluster) 约定，与 main.ts 里 initRestoreKey()/
-   * 启动清洗同一套语义）：cluster worker 不生成密钥，校验时回落读共享文件
+   * 启动清洗同一套语义）：非主实例的 worker 不生成密钥，校验时回落读共享文件
    * （见 setupKey.ts 的 readSetupKey）。
+   *
+   * 🔴 2026-09-20 更正一个曾经**致命**的前提误解：`VANBLOG_CLUSTER_WORKERS>1` 时，
+   * cluster 的**主进程不跑 Nest**（main.ts 的入口分支只调 startPrimary()，它不创建应用），
+   * 所以"主实例"不可能是它；而每个 worker 的 cluster.isWorker 都是 true。
+   * 在 clusterBootstrap 给恰好一个 worker 打上 VANBLOG_CLUSTER_ROLE=leader 之前，
+   * isPrimaryInstance() 在**所有** Nest 进程里都返回 false ⇒ 这个方法一次都没执行过：
+   * setup.key 从不生成（而 /var/log 是可写的）、POST /api/admin/init 与归档恢复一律 500、
+   * 前台 Next 子进程也没人拉起（/ 与 /post/* 全 502）。
+   * 现在 isPrimaryInstance() 认 leader 角色，集群模式下终于有且只有一个主实例。
    */
   async onModuleInit(): Promise<void> {
     if (!isPrimaryInstance(cluster)) {
@@ -536,8 +545,10 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
    *
    * 而"键不在本进程缓存里"并不是假设：`initRestoreKey()` 只在主实例跑
    * （`main.ts` 的 `isPrimaryInstance(cluster)` 约定），`CacheProvider.data` 是每进程一份的普通对象
-   * ⇒ **`VANBLOG_CLUSTER_WORKERS>1` 时，worker 进程上这条接口永远处于可绕过状态**。
+   * ⇒ **`VANBLOG_CLUSTER_WORKERS>1` 时，非 leader 的 worker 上这条接口永远处于可绕过状态**。
    * 那是文档化的旋钮（支持 `auto`/`cpus`/`max`/N），不是 exotic 配置。
+   * ⚠️ 这条加固**仍然必要**，不要因为"现在有 leader 了"就撤掉：leader 只有一个，
+   *    请求会落在任意 worker 上；校验靠的是下面那段"缓存没有就回落读 `<log>/restore.key`"。
    *
    * ## 现在的契约
    *

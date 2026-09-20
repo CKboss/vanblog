@@ -4,7 +4,7 @@ import {
   startClusterPrimary,
   TimerHandle,
 } from './clusterBootstrap';
-import { CLUSTER_ENV } from './clusterRole';
+import { CLUSTER_ENV, CLUSTER_ROLE_ENV, CLUSTER_ROLE_LEADER, CLUSTER_ROLE_WORKER} from './clusterRole';
 
 /**
  * cluster 主进程的编排：fork、崩溃重启、停机。
@@ -90,14 +90,30 @@ describe('startClusterPrimary：fork', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('按数量 fork，并把 worker 数与角色塞进子进程环境', () => {
+  it('按数量 fork，并把 worker 数与角色塞进子进程环境（🔴 恰好一个 leader）', () => {
     const { cluster, forked } = createFakeCluster();
     const { hooks } = createHooks();
     startClusterPrimary(3, cluster, hooks);
     expect(forked).toHaveLength(3);
+    // 🔴 这条断言在 2026-09-20 之前是「每个 worker 的角色都是 'worker'」，而那正是缺陷本身：
+    //    集群主进程不跑 Nest（main.ts 的入口分支只调 startPrimary()），所以如果**没有任何** worker
+    //    被标成 leader，`isPrimaryInstance()` 在所有 Nest 进程里都是 false ⇒ 那些"只能跑一次"的
+    //    启动任务没有任何进程会执行（活体实测：setup.key 不生成 ⇒ 初始化与归档恢复都 500；
+    //    WebsiteProvider.doRun() 直接 return ⇒ 前台 Next 子进程没人拉起，`/` 与 `/post/*` 全 502）。
+    //    ⇒ 断言升级为「**恰好一个** leader，其余是 worker」，这才是设计意图（避免 N 个 worker
+    //    各生成一把密钥互相覆盖），同时保证集群模式下真的有一个 Nest 侧的主实例。
+    const leaders = forked.filter((w) => w.env?.[CLUSTER_ROLE_ENV] === CLUSTER_ROLE_LEADER);
+    const workers = forked.filter((w) => w.env?.[CLUSTER_ROLE_ENV] === CLUSTER_ROLE_WORKER);
+    expect(leaders).toHaveLength(1);
+    expect(workers).toHaveLength(2);
+    // leader 必须是**第一个** fork 出来的（确定性，便于排查）
+    expect(leaders[0]).toBe(forked[0]);
     for (const worker of forked) {
       expect(worker.env?.[CLUSTER_ENV]).toBe('3');
-      expect(worker.env?.VANBLOG_CLUSTER_ROLE).toBe('worker');
+      // 角色只能是这两个值之一（防拼写漂移成 'Leader'/'primary' 这种没人认的形状）
+      expect([CLUSTER_ROLE_LEADER, CLUSTER_ROLE_WORKER]).toContain(
+        worker.env?.[CLUSTER_ROLE_ENV],
+      );
       // 原有环境不能丢（config.yaml 路径、NODE_ENV 等都靠它）
       expect(worker.env?.EXTRA).toBe('kept');
     }
