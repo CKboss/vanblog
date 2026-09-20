@@ -13,6 +13,13 @@ import { config as globalConfig } from './config/index';
 import { checkOrCreate } from './utils/checkFolder';
 import * as path from 'path';
 import { ISRProvider } from './provider/isr/isr.provider';
+import { getConnectionToken } from '@nestjs/mongoose';
+import { Connection } from 'mongoose';
+import {
+  waitForMongoReady,
+  describeReadyState,
+  MONGO_READY_TIMEOUT_ENV,
+} from './utils/mongoReady';
 import { WalineProvider } from './provider/waline/waline.provider';
 import { InitProvider } from './provider/init/init.provider';
 import { json } from 'express';
@@ -432,6 +439,49 @@ async function bootstrap() {
     // 每个 worker 都来一遍等于把这份活乘以核数
     if (primary) {
       const isrProvider = app.get(ISRProvider);
+      // ⚠️ 触发启动全量渲染**之前**先等数据库就绪。
+      //
+      // 实测事故（故障注入，2026-09-20）：容器重启后 mongo 还在重连、`/api/public/health`
+      // 仍返回 503 degraded，而这里立刻就触发了全量渲染。那一轮要经前台 SSR 回源查库，
+      // 库没就绪就失败，于是 `ISRProvider.activeWithRetry` 把固定 6 次 × 3 秒 ≈ **18 秒**
+      // 的重试窗口全部烧光，打出「达到最大增量渲染重试次数！」后**永久放弃**这一轮。
+      // 站点仍能对外服务（ISR 缓存 + 文章页 `fallback:'blocking'` 按需渲染），但**没有预热**：
+      // 在敌意环境下，任何能让容器重启的手段（崩溃循环、OOM、`docker restart`）都可能把站点
+      // 长期留在"每个页面都靠访客第一次访问现场渲染"的状态 —— 那正是最贵、最容易被放大的形状。
+      //
+      // 三点约束，改动时不要破坏：
+      // 1. **不延后 listen**：这段在 `await listenWithBacklog(...)` 之后，站点已经能对外提供
+      //    已缓存内容了，等库只是为了"预热这件事值得做"。顺序反了就是"为了预热而拒绝服务"。
+      // 2. **不阻塞健康检查**：健康检查是普通路由，listen 之后就在服务，与这里无关。
+      // 3. **等不到也要继续**：超时只打 WARN，绝不放弃启动 —— 退化成按需渲染，
+      //    也比站点起不来好。
+      //
+      // 连接对象从 DI 容器按 `getConnectionToken()` 取，与 `health.controller.ts` 的
+      // `@InjectConnection()` 是**同一个**对象（默认连接，token 为 `DatabaseConnection`），
+      // 所以"就绪"的判据与 `/api/public/health` 完全一致，不会出现"health 说 503 而这里说就绪"。
+      const connection = app.get<Connection>(getConnectionToken());
+      const mongoReady = await waitForMongoReady(connection, {
+        onProgress: (waitedMs, stateText) =>
+          // eslint-disable-next-line no-console
+          console.log(
+            `[startup] 在等数据库就绪后才触发启动全量渲染：已等 ${Math.round(
+              waitedMs / 1000,
+            )} 秒（当前 readyState=${stateText}）`,
+          ),
+      });
+      if (!mongoReady.ready) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[startup] 等待数据库就绪超时（已等 ${Math.round(
+            mongoReady.waitedMs / 1000,
+          )} 秒，最后 readyState=${describeReadyState(
+            mongoReady.lastReadyState,
+          )}）：仍然继续启动，但这一轮启动全量渲染很可能失败并退化成按需渲染。` +
+            `站点已能对外提供已缓存内容；兜底是每小时一次的定时 ISR 与访客触发的按需渲染。` +
+            `要放宽这个等待请调 ${MONGO_READY_TIMEOUT_ENV}（默认 60 秒），` +
+            `要放宽渲染重试窗口请调 VANBLOG_ISR_RETRY_MAX / VANBLOG_ISR_RETRY_BASE_DELAY_MS`,
+        );
+      }
       isrProvider.activeAll('首次启动触发全量渲染！', 1000, {
         forceActice: true,
       });

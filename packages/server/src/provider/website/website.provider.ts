@@ -288,7 +288,17 @@ export class WebsiteProvider {
           this.logger.log('website 是主动停掉的，不再自动重启');
           return;
         }
-        this.logger.warn(`website 进程退出（code=${code} signal=${signal}），准备自动重启`);
+        // ⚠️ 异常退出（非 0 退出码或被信号打死）记 **ERROR**，正常退出记 WARN。
+        //    这是"容器 Up 但前台坏死"的**唯一**线索：下面那段 stderr 转发本轮已从 ERROR
+        //    降为 WARN（stderr 是诊断流，不是错误流），所以崩溃这件事必须在这里以 ERROR 落地，
+        //    否则 `./vanblog.sh doctor` 的"近 24h ERROR/FATAL 计数"就再也看不到前台崩溃了。
+        const abnormal = code !== 0 || signal !== null;
+        const exitText = `website 进程退出（code=${code} signal=${signal}），准备自动重启`;
+        if (abnormal) {
+          this.logger.error(exitText);
+        } else {
+          this.logger.warn(exitText);
+        }
         if (Date.now() - startedAt > 60 * 1000) {
           // 稳定跑过一分钟才算"正常运行后退出"，重置退避计数
           this.restartAttempts = 0;
@@ -307,7 +317,21 @@ export class WebsiteProvider {
           if (t.includes(each)) showLog = false;
         }
         if (showLog) {
-          this.logger.error(t.substring(0, t.length - 1));
+          // ⚠️ 这里是 **WARN，不是 ERROR**（本轮改动）。
+          //
+          // 改动前前台子进程的 stderr 被一律转成 `logger.error`，而 stderr 是**诊断流**、
+          // 不是错误流。后果是实测到的：`packages/website/pages/api/revalidate.ts` 里那条
+          // 用 `console.warn` 打的提示（"未设置 VAN_BLOG_REVALIDATE_SECRET"，注释里明写
+          // 这是**默认状态而不是异常**）在 server 日志里变成了 `ERROR [WebsiteProvider] …`；
+          // Next 自己的任何 warning（bundle 体积建议、deprecation）同样会变成 ERROR。
+          // 于是本轮刚给 `./vanblog.sh doctor` 加的"统计近 24h 日志里的 ERROR/FATAL"这一项体检，
+          // 在**每一个一体式部署**上都会报异常 —— 而真正的错误反而被这些噪音淹没。
+          //
+          // ⚠️ 降级不会丢失"前台真的坏了"这个信号，因为崩溃判定**不看 stderr**：
+          //    它走的是上面的 `child.on('exit')`（异常退出记 ERROR），加上
+          //    `scheduleRestart()` 里"重拉失败"与"达到最大重启次数"两处 `logger.error`。
+          //    已核实这三处都保持 ERROR 级别，没有一起降级。
+          this.logger.warn(t.substring(0, t.length - 1));
         }
       });
     } else {

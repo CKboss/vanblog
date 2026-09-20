@@ -168,6 +168,40 @@ describe('RSS 订阅源写盘：原子 rename，读者永远看不到半截文�
     expect(src).not.toMatch(/from 'src\/utils\/clusterRole'/);
   });
 
+  /**
+   * 判断 `needle` 是否**位于**某个 `guard` 块的花括号内部（真正配对，不是"附近出现过"）。
+   *
+   * ⚠️ 为什么不用 `/if \(primary\) \{[\s\S]{0,200}activeAll\(/` 这种邻近正则：
+   *    它钉的其实是"两者相隔不超过 200 字符"，而这个距离与要保护的性质**无关**。
+   *    启动风暴前面插入了"先等数据库就绪"这一段（约 50 行）之后它就红了，
+   *    而性质本身（`activeAll` 在主实例守卫之内）一点没变。
+   *    把 200 调大是**放宽**到失去意义（足够大时任何远处的 `if (primary)` 都能配对上），
+   *    所以改成结构判定：找到每个 `guard` 的**配对右花括号**，看 needle 是否落在区间内。
+   */
+  function isInsideGuard(src: string, guard: string, needle: string): boolean {
+    const target = src.indexOf(needle);
+    if (target < 0) return false;
+    let from = 0;
+    for (;;) {
+      const g = src.indexOf(guard, from);
+      if (g < 0) return false;
+      const open = src.indexOf('{', g + guard.length - 1);
+      if (open < 0) return false;
+      let depth = 0;
+      for (let i = open; i < src.length; i += 1) {
+        if (src[i] === '{') depth += 1;
+        else if (src[i] === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            if (target > open && target < i) return true;
+            break;
+          }
+        }
+      }
+      from = g + guard.length;
+    }
+  }
+
   it('决定钉子的前提仍然成立：两个批量触发点确实在上游被主实例守卫挡着', () => {
     // 如果这两道守卫哪天被拆了，"不加守卫"的理由就不成立了 —— 那时应该重新评估，
     // 而不是让 RSS 在每个 worker 上重复生成整批 350KB 文件。
@@ -177,12 +211,29 @@ describe('RSS 订阅源写盘：原子 rename，读者永远看不到半截文�
     const isrTask = stripCommentsForAnchor(
       fs.readFileSync(path.join(__dirname, '../../schedule/isr.task.ts'), 'utf-8'),
     );
-    expect(main).toMatch(/if \(primary\) \{[\s\S]{0,200}activeAll\(/);
+    expect(isInsideGuard(main, 'if (primary) {', 'isrProvider.activeAll(')).toBe(true);
     expect(isrTask).toMatch(/if \(!isPrimaryInstance\(cluster\)\) \{[\s\S]{0,40}return;/);
   });
 
-  it('决定钉子的空转反证：上面两条正则换个形状就不会命中', () => {
-    expect('const x = 1;').not.toMatch(/if \(primary\) \{[\s\S]{0,200}activeAll\(/);
+  it('决定钉子的空转反证：换个形状就不会命中', () => {
+    // ①`activeAll` 在守卫**外面**（这就是"每个 worker 都跑一遍"的形状）必须判 false
+    const outside =
+      'if (primary) {\n  doSomething();\n}\nisrProvider.activeAll(\'x\');\n';
+    expect(isInsideGuard(outside, 'if (primary) {', 'isrProvider.activeAll(')).toBe(false);
+    // ②根本没有守卫
+    expect(isInsideGuard('const x = 1;', 'if (primary) {', 'isrProvider.activeAll(')).toBe(false);
+    // ③needle 不存在
+    expect(isInsideGuard('if (primary) { a(); }', 'if (primary) {', 'isrProvider.activeAll(')).toBe(
+      false,
+    );
+    // ④真的在里面 ⇒ true（否则上面三条 false 全是恒真）
+    expect(
+      isInsideGuard(
+        'if (primary) {\n  const x = 1;\n  isrProvider.activeAll(\'x\');\n}\n',
+        'if (primary) {',
+        'isrProvider.activeAll(',
+      ),
+    ).toBe(true);
     expect('isPrimaryInstance(cluster)').not.toMatch(
       /if \(!isPrimaryInstance\(cluster\)\) \{[\s\S]{0,40}return;/,
     );

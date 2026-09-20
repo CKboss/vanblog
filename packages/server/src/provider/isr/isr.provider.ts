@@ -6,6 +6,7 @@ import { Article } from 'src/scheme/article.schema';
 import { getAllArticlePublicPaths, getArticlePublicPaths } from 'src/utils/articlePublicPaths';
 import { sleep } from 'src/utils/sleep';
 import { envPositiveInt } from 'src/utils/envNumber';
+import { MONGO_READY_TIMEOUT_ENV } from 'src/utils/mongoReady';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { ArticleProvider } from '../article/article.provider';
 import { RssProvider } from '../rss/rss.provider';
@@ -50,11 +51,78 @@ export const ISR_STORM_ROUND_BUDGET_ENV = 'VANBLOG_ISR_ROUND_URL_BUDGET';
 export const DEFAULT_ISR_STORM_ROUND_BUDGET = 5000;
 export const MIN_ISR_STORM_ROUND_BUDGET = 1;
 
+/* ------------------------------------------------------------------
+ * `activeWithRetry` 的重试窗口。
+ *
+ * 以前是写死的 `max = 6; delay = 3000` ⇒ 总窗口只有约 **18 秒**。实测事故：容器重启后
+ * mongo 还在重连（`/api/public/health` 仍 503），启动全量渲染在这 18 秒里把重试烧光，
+ * 打出「达到最大增量渲染重试次数！」后**永久放弃**那一轮 —— 站点仍能靠 ISR 缓存与
+ * `fallback:'blocking'` 对外服务，但**没有预热**，只能等整点 cron 或访客逐页触发。
+ * 在敌意环境下，任何能让容器重启的手段（崩溃循环、OOM、`docker restart`）都可能把站点
+ * 长期留在这个状态，而"每个页面都靠访客第一次访问现场渲染"正是最贵、最易被放大的形状。
+ *
+ * 改成**有上限的指数退避**：3s → 6s → 12s → 24s → 30s（封顶）→ 30s → 30s，
+ * 默认 8 次尝试 ⇒ 纯等待约 **135 秒**（加上每次探活最多 10 秒超时，最坏约 3.5 分钟）。
+ * ⚠️ 这道闸门是**第二层**：第一层是 `main.ts` 在触发启动风暴之前先等数据库就绪
+ *    （`utils/mongoReady.ts`，默认最多 60 秒）。两层都在，是因为"库就绪"不等于
+ *    "前台子进程也起来了"—— Next standalone 冷启动本身要几秒，而且它可能正在重启退避中。
+ * ------------------------------------------------------------------ */
+/** 最多尝试多少次（含第一次）。env 可调。 */
+export const ISR_RETRY_MAX_ENV = 'VANBLOG_ISR_RETRY_MAX';
+export const DEFAULT_ISR_RETRY_MAX = 8;
+export const MIN_ISR_RETRY_MAX = 1;
+export const MAX_ISR_RETRY_MAX = 100;
+/** 首次退避间隔（毫秒），之后每次翻倍。env 可调。 */
+export const ISR_RETRY_BASE_DELAY_ENV = 'VANBLOG_ISR_RETRY_BASE_DELAY_MS';
+export const DEFAULT_ISR_RETRY_BASE_DELAY_MS = 3000;
+/** 退避间隔封顶（毫秒）。env 可调。 */
+export const ISR_RETRY_MAX_DELAY_ENV = 'VANBLOG_ISR_RETRY_MAX_DELAY_MS';
+export const DEFAULT_ISR_RETRY_MAX_DELAY_MS = 30000;
+
+/**
+ * 把探活失败翻译成**运维能照着查**的一句话。
+ * 抽成模块级函数是为了让"重试 WARN"与"最终 ERROR"用同一套措辞 —— 两处各写一遍
+ * 一定会漂（而且其中一处很容易写成描述错对象，见 activeWithRetry 里的注释）。
+ */
+export function describeProbeFailure(probe: RevalidateProbeResult | null | undefined): string {
+  if (!probe) return '未知';
+  if (probe.kind === 'http-error') {
+    return `前台有响应但返回 ${probe.detail || '非 2xx'}（多半是它回源查库失败，数据库可能还没就绪）`;
+  }
+  if (probe.kind === 'unreachable') {
+    return `连不上前台子进程（${probe.detail || '原因未知'}）`;
+  }
+  return '未知';
+}
+
+/** `probeRevalidate()` 的结果：区分"连不上前台"与"前台在但这次请求失败"。 */
+export interface RevalidateProbeResult {
+  ok: boolean;
+  /** `ok` 成功；`unreachable` 连不上前台子进程；`http-error` 前台有响应但非 2xx。 */
+  kind: 'ok' | 'unreachable' | 'http-error';
+  /** 失败细节（`ECONNREFUSED`、`HTTP 500` 等），只用于日志，不参与判定。 */
+  detail?: string;
+}
+
 @Injectable()
 export class ISRProvider implements OnModuleDestroy {
   urlList = ['/', '/category', '/tag', '/timeline', '/about', '/link'];
   base = 'http://127.0.0.1:3001/api/revalidate?path=';
   logger = new Logger(ISRProvider.name);
+
+  /**
+   * 重试之间的等待，**做成可替换的成员**而不是直接调 `sleep`。
+   *
+   * 唯一理由是可测性：退避最长 30 秒、默认 8 次尝试，单测若真睡就是几分钟一个用例
+   * （本仓库有过单个 spec 跑 400+ 秒拖垮 CI 的先例，还有一次"上限被改坏 ⇒ O(n²) ⇒ 407 秒"）。
+   * 测试里替换成立即 resolve 的假 sleep，就能断言**退避序列本身**（每次睡多久、总共睡几次），
+   * 而不是靠"跑得慢"来间接证明它真的等了。
+   *
+   * ⚠️ 用 `protected` 而非 `private`：既有 spec 是通过 `jest.spyOn(provider as any, …)`
+   *    与 `(provider as any).xxx` 触达内部成员的，但 protected 能让**子类/测试替身**
+   *    以类型安全的方式覆盖，同时不把它变成公开 API。
+   */
+  protected retrySleep: (ms: number) => Promise<unknown> = (ms) => sleep(ms);
   timer = null;
   /**
    * 全量渲染的互斥量。一轮 storm ≈ 130 次**串行**重渲染（每篇文章的 id 与别名两条路径
@@ -227,22 +295,95 @@ export class ISRProvider implements OnModuleDestroy {
     return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 10000;
   }
 
-  async testConn() {
+  /**
+   * 探活一次，并**区分两种失败**：
+   * - `unreachable`：连不上前台（`ECONNREFUSED` / 超时 / DNS）⇒ 前台子进程还没起来或正在重启退避；
+   * - `http-error`：前台在、但这次请求返回了非 2xx ⇒ 通常是它回源查库失败（数据库没就绪）。
+   *
+   * 为什么要区分：两者的**处置相同**（都该重试），但**日志必须说清是哪一种**，否则运维看到
+   * 一串「第 N 次重试」却不知道是在等前台进程还是在等数据库 —— 而这正是本次事故里最难判断的一点。
+   * ⚠️ 改动前的 `testConn()` 把两者都压成 `false`，信息就在这一步丢掉了。
+   */
+  async probeRevalidate(): Promise<RevalidateProbeResult> {
     try {
       await axios.get(this.buildRevalidateUrl('/'), { timeout: this.requestTimeoutMs });
-      return true;
-    } catch {
-      return false;
+      return { ok: true, kind: 'ok' };
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (typeof status === 'number') {
+        return { ok: false, kind: 'http-error', detail: `HTTP ${status}` };
+      }
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const message = (err as Error)?.message;
+      return {
+        ok: false,
+        kind: 'unreachable',
+        detail: code ? `${code}${message ? `（${message}）` : ''}` : String(message || err),
+      };
     }
   }
+
+  /**
+   * 布尔版探活。**保留这个方法与其布尔契约**：`isr.provider.spec.ts` 直接调它，
+   * 而"可达/不可达"这个二元判断也是调用方最常要的。新代码请用 `probeRevalidate()`
+   * 以便拿到失败种类。
+   */
+  async testConn() {
+    return (await this.probeRevalidate()).ok;
+  }
+  /**
+   * 第 `attempt` 次失败后要等多久（0 基）。指数退避 + 封顶。
+   * 抽成方法是为了**可测**：单测直接断言退避序列，不必真睡。
+   */
+  resolveRetryBackoffMs(attempt: number): number {
+    const base = envPositiveInt(
+      ISR_RETRY_BASE_DELAY_ENV,
+      DEFAULT_ISR_RETRY_BASE_DELAY_MS,
+      100,
+      600000,
+    );
+    const cap = envPositiveInt(
+      ISR_RETRY_MAX_DELAY_ENV,
+      DEFAULT_ISR_RETRY_MAX_DELAY_MS,
+      100,
+      3600000,
+    );
+    const safeAttempt = Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 0;
+    // ⚠️ `Math.pow(2, 很大)` 会得到 Infinity，`Math.min(cap, Infinity)` 仍是 cap ⇒ 不会溢出成 NaN。
+    const raw = base * Math.pow(2, safeAttempt);
+    const floor = Math.min(base, cap);
+    return Math.max(floor, Math.min(cap, Number.isFinite(raw) ? Math.floor(raw) : cap));
+  }
+
+  /** 最多尝试多少次（含第一次）。 */
+  resolveRetryMax(): number {
+    return envPositiveInt(ISR_RETRY_MAX_ENV, DEFAULT_ISR_RETRY_MAX, MIN_ISR_RETRY_MAX, MAX_ISR_RETRY_MAX);
+  }
+
   async activeWithRetry(fn: any, info?: string) {
-    const max = 6;
-    const delay = 3000;
+    const max = this.resolveRetryMax();
     let succ = false;
+    // ⚠️ 记的是**上一次**探活的失败结果。`第 N 次重试` 这条 WARN 要说清"上一次为什么失败"，
+    //    而**这一轮**的探活完全可能已经成功（那时根本没有失败原因可说）。
+    //    我第一版直接用了当前这轮的 probe，于是一次成功的重试会打出
+    //    「连不上前台子进程（undefined）」—— 被自己的守卫抓到。**假消息比没消息更糟**：
+    //    运维会照着去查一个根本不存在的前台进程问题。
+    let lastProbe: RevalidateProbeResult | null = null;
+    let waitedTotal = 0;
     for (let t = 0; t < max; t++) {
-      const r = await this.testConn();
+      const probe = await this.probeRevalidate();
+      const r = probe.ok;
       if (t > 0) {
-        this.logger.warn(`第${t}次重试触发增量渲染！来源：${info || '首次启动触发全量渲染！'}`);
+        // 日志里带上"等的是前台进程还是数据库"，以及已经等了多久 ——
+        // 改动前只有「第 N 次重试」，运维无法判断该去查哪一边。
+        this.logger.warn(
+          `第${t}次重试触发增量渲染！来源：${info || '首次启动触发全量渲染！'}；` +
+            `上一次探活失败原因：${describeProbeFailure(lastProbe)}；` +
+            `已等待 ${Math.round(waitedTotal / 1000)} 秒，共 ${max} 次尝试`,
+        );
+      }
+      if (!r) {
+        lastProbe = probe;
       }
       if (r) {
         // ⚠️ 以前是 `fn(info)` 就完事：不 await、不 catch。
@@ -257,13 +398,31 @@ export class ISRProvider implements OnModuleDestroy {
         }
         succ = true;
         break;
-      } else {
-        // 延迟
-        await sleep(delay);
+      } else if (t < max - 1) {
+        // ⚠️ 用 `this.retrySleep` 而不是直接调 `sleep`：退避最长可达数十秒，
+        //    单测里必须能把它换成立即 resolve，否则一个用例会真睡几分钟
+        //    （本仓库有过单个 spec 跑 400+ 秒拖垮 CI 的先例）。
+        // ⚠️ `t < max - 1`：**最后一次失败之后不要再睡**。改动前是无条件睡，
+        //    于是"放弃"之前还要白等一个完整的退避间隔（默认 30 秒）——
+        //    在容器重启这种分秒必争的场景里，那是纯浪费：既不会再多试一次，
+        //    也只是把那条 ERROR 推迟 30 秒打出来。
+        const delay = this.resolveRetryBackoffMs(t);
+        waitedTotal += delay;
+        await this.retrySleep(delay);
       }
     }
     if (!succ) {
-      this.logger.error(`达到最大增量渲染重试次数！来源：${info || '首次启动触发全量渲染！'}`);
+      this.logger.error(
+        `达到最大增量渲染重试次数（${max} 次，累计等待约 ${Math.round(
+          waitedTotal / 1000,
+        )} 秒）！来源：${info || '首次启动触发全量渲染！'}；` +
+          `最后一次失败原因：${describeProbeFailure(lastProbe)}。` +
+          `这一轮全量渲染已被放弃，站点仍可对外服务（ISR 缓存 + 文章页按需渲染），` +
+          `但**没有预热**：兜底是每小时一次的定时 ISR 与访客触发的按需渲染。` +
+          `若这是启动阶段，多半是数据库或前台子进程起得比重试窗口慢 —— ` +
+          `可调 ${ISR_RETRY_MAX_ENV} / ${ISR_RETRY_BASE_DELAY_ENV} / ${ISR_RETRY_MAX_DELAY_ENV} 放宽窗口，` +
+          `或用 ${MONGO_READY_TIMEOUT_ENV} 放宽"启动前等数据库就绪"的上限`,
+      );
     }
   }
   /**
