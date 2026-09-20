@@ -7857,6 +7857,47 @@ P1 的 caddy 部分已派给另一个代理；② 两个代理同时被要求改
 评论者会话失效（**报告了但没有改**）；⑦ 全站页面级 CSP 仍未做（落点在 caddy 层，且 `script-src` 需要先解决
 nonce 与 ISR 缓存的冲突）。
 
+### 7.74 故障注入矩阵：第一轮实测结果（2026-09-20，镜像 `vanblog:hardened` = `local@791e3b75`）
+
+上一轮把 16 个场景的**矩阵设计**出来了但一个都没跑。这一轮在真容器上跑了其中 9 个（栈是
+`vanblog-drill.sh drill <66MB 生产归档> --image localhost/vanblog:hardened --http-port 18098 --keep`，
+命名卷、已恢复 53 篇公开文章；drill 自身 `RESULT: PASS pass=37 warn=1 fail=0`）。
+⚠️ 18080 上站长在用的那套全程未动。留档：`vanblog_dev/tmp/chaos-matrix.log`、`chaos-followup.log`、
+`chaos-s5s7s8.log`、`chaos-corrupt.log`（⚠️ `vanblog_dev/` 不入库，所以关键数字抄在这里）。
+
+| # | 场景 | 注入 | 实测结果 | 判定 |
+|---|---|---|---|---|
+| S1 | mongo 中途被杀 | `podman kill <mongo>` | 8 秒后 `/api/public/health` → **503 `degraded down disconnected`**；**前台首页仍 200**（ISR 缓存继续服务）；`podman start <mongo>` 后 **5 秒内**回 `200 ok`，且 app 的 **`RestartCount` 仍是 0** | ✅ 且**关闭了一个长期"未复核"的问题**：mongoose 会自动重连，**不需要重启 app** |
+| S2 | 冷启动计时 | `podman restart <app>` | **5 秒**回到 health 200（含 caddy + server + 前台子进程，库里 53 篇） | ✅ RTO 证据：容器级重启是秒级 |
+| S3 | 静态目录被删 | `rm -rf /app/static/img` | 图片 **404**、health **200**；⚠️ 第一次跑时首页出现 **502**，**复测三次都是 200 不可复现** | ✅（那个 502 是 S2 重启后的**冷启动窗口**，不是静态缺失导致；见下面"两次误判"） |
+| S4 | ISR 产物被删 | `rm -rf /app/website/.next/cache` | 首次访问首页 **1.03s → 200**，第二次 **0.01s → 200**，文章页 308（数字 id → 别名重定向，符合预期） | ✅ 自动重建、无 5xx |
+| S5 | 崩溃遗留的备份/恢复工作目录 | 造 `<static>/tmp/full-backup-*`、`full-restore-*` 两个 **27 小时前**的目录 + 一个全新对照目录，重启 | 两个旧目录**被清理**、对照目录**保留**，日志 `WARN [FullBackupProvider] 清理了 2 个上次崩溃留下的备份/恢复工作目录（释放 0.0 MB）：…` | ✅ 本轮新加的启动清理**真的生效** |
+| S6 | 网络分区 | `podman network disconnect` | 断开后 health 完全不可达（`000`，caddy 也在容器里，属预期）；`connect` 回来后 **10 秒内** health 200 | ✅ 自愈 |
+| S7 | OOM | `podman run --memory 200m` + 持续分配 | ⚠️ **本机测不了**：`--memory` 创建时被接受，但容器实际分配到 **~1.6GB 仍 `OOMKilled=false`**；`podman update --memory` 也失败（`unable to get systemd version` / dbus 不可达） | ⚠️ rootless podman 在这台机器上**没有 cgroup 委派** ⇒ 是**工具限制不是产品缺陷**；要测 OOM 需要 docker + systemd 或 root |
+| S8 | restart 策略与健康探测 | `podman inspect` | drill 栈 `RestartPolicy=`（空）、`Health=`（空）—— 裸 `podman run` 不带这些，属预期；**生产 compose 模板有** `restart: always`（:11/:250）与 `healthcheck:`（:36-37 探两处、:259-260 探 mongo）；镜像内 HEALTHCHECK 被 podman/buildah 丢掉（`.Config.Healthcheck` 取不到，与既有结论一致） | ✅ 已知且已由 compose 侧兜住；⚠️ podman 用户仍需 `./vanblog.sh config` + `--health-on-failure=restart` |
+| S9 | 损坏归档 | `head -c 3000000` 截断真归档后 `drill` | **预检阶段**就失败：`RESULT: FAIL pass=2 warn=0 fail=1`、**退出码 1**、消息可照做（「读不出 manifest.json（恢复会 400：读不出这个备份的清单）」），**没有起任何栈、没有留下半截容器/卷** | ✅ 失败得早、失败得响、失败得可自动化（退出码非 0 ⇒ cron 能抓到） |
+
+**从日志里额外挖到的两条真缺陷**（都不是矩阵设计里的场景，是跑完之后看日志发现的 ⇒ 这条经验值得记：**跑完故障注入必须读日志，不能只看判定命令的输出**）：
+
+1. 🔴 **容器重启后 mongo 还在重连时，启动全量 ISR 会把重试窗口烧光**：`activeWithRetry()` 是固定
+   `max=6 / delay=3000`（≈18 秒），而重启后 mongoose 重连常常超过这个窗口，于是
+   `第1..5次重试触发增量渲染！` 之后直接 `达到最大增量渲染重试次数！来源：首次启动触发全量渲染！`
+   ⇒ **全量渲染被永久放弃**，只能等整点 ISR cron 或访客触发 `fallback:"blocking"` 按需渲染。
+   敌意环境下的含义：任何能让容器重启的手段（崩溃循环、OOM、`docker restart`）都可能让站点长期停在
+   "没有预热"的状态。已派修复（等 mongo 就绪再触发 + 有上限的指数退避 + 让 sleep 可注入以免拖慢测试）。
+2. 🟠 **前台子进程的 stderr 被一律转成 ERROR**：`packages/website/pages/api/revalidate.ts:59` 那条
+   "未设置 `VAN_BLOG_REVALIDATE_SECRET`"用的是 `console.warn`（注释里明写"没配是**默认状态**而不是异常"），
+   但它在 server 日志里是 **`ERROR [WebsiteProvider] …`** ⇒ 本轮新加的 `./vanblog.sh doctor`
+   会统计近 24h 的 ERROR，于是**每个一体式部署都会被误报异常**；Next 自己的任何 warning 同样会变成 ERROR，
+   真正的错误反被淹没。已派修复（把子进程 stderr 降为 WARN，真失败仍由 exit/崩溃路径按 ERROR 记）。
+
+⚠️ **两次误判都是探针自己的错，差点写成缺陷**（这条比结果更值得记）：
+- S3 第一次报"删静态目录 ⇒ 首页 502"，复测三次都是 200 ⇒ 真相是它紧跟在 S2 的容器重启之后，量到的是冷启动窗口。**教训：故障注入的每个场景之间要有"回到基线并确认"的一步，否则上一个场景的余波会被记到下一个场景头上。**
+- S5 第一次报"遗留目录没被清理"，真相是**容器是 UTC** 而 `touch -t 202609200000` 只让它"3.5 小时前"，低于 6 小时阈值 ⇒ 没清理是**正确行为**。（第一次探针还造错了位置：清理扫的是 `<staticPath>/tmp` 下前缀 `full-backup-`/`full-restore-` 的目录，不是备份目录下的 `upload-tmp`。）**教训：造"旧文件"之前先确认容器的时区与判定阈值，并去代码里核对扫描的确切路径与前缀。**
+
+**还没跑的场景**（矩阵里设计好了、需要额外条件）：磁盘打满（ENOSPC 下日志轮转/上传/ISR 产物/恢复解包四条写路径的逐个行为）、备份中途杀容器（需要管理员 token 触发备份）、恢复中途杀容器（同上）、超大归档触发体积闸门、时钟前跳/后跳、重启风暴（`maxFastCrashes` 之后 `restart: always` 会不会无限重拉打满 CPU）。
+⚠️ 其中"备份/恢复中途被杀"这两条最值钱也最难：都需要管理员凭据，本机没有口令（`AGENTS.local.md` 记的是"用恢复密钥走忘记密码流程"），要跑就得先造一个一次性管理员。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
