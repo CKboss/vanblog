@@ -959,6 +959,256 @@ assert_eq "$(grep -c '/app/website/packages/website/\.next/server/pages' "${HELP
 
 rm -f "${PD_EXTRACTOR}" "${PD_ERR}"
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 降级期直服 RSS / sitemap（生成期注入）
+#
+# 为什么要这件事：活体实测到「数据库启动期不可达 ⇒ 进入降级驻留」时，页面已经能由 caddy
+# 按哨兵直发磁盘 HTML，但 `/rss/feed.xml` 与 `/sitemap.xml` 是 **503** ⇒ 「被打瘫时仍能发布
+# 内容」这条能力**不含订阅源**，而 RSS 恰恰是敌意环境下最省流量、最难被阻断的发布通道。
+# `/rss/*` 与 `/sitemap/*` 在 server 侧本来就是 `useStaticAssets` 静态目录（不是每请求动态生成），
+# 所以直服的就是正常模式下 express 会发的同一批字节 ⇒ 没有引入新的陈旧度取舍。
+#
+# 🔴 必须覆盖别名路由：前台交给读者的地址是 `/feed.xml`（AuthorCard 的 href、RssButton 复制到
+#    剪贴板的都是它），只门控 `/rss/*` 的话读者手里那个 URL 仍然 503 ⇒ 等于没修。
+# ══════════════════════════════════════════════════════════════════════════════
+FEED_EXTRACTOR="$(mktemp)"
+cat > "${FEED_EXTRACTOR}" <<'NODE_EOF'
+// 从生成产物里提取「降级直服 feed」这一层的可观测事实，压成一行 key=value 便于 shell 断言。
+// ⚠️ 全部是**结构事实**（谁在谁前面、root 是什么、有没有 terminal），不是"文件里出现了某个词"。
+const c = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const FEED = new Set(['/rss/*', '/sitemap.xml', '/feed.xml', '/feed.json', '/atom.xml']);
+const gates = [];        // 每个门控子路由
+const feedRoutes = [];   // 每条 feed 路由的顺序事实
+const sentRoots = new Set();
+const fileRoots = new Set();
+const hdrs = new Set();
+const sentinels = new Set();
+let term = 0, proxyTail = 0, orderBad = 0, rewriteBeforeGateBad = 0, varsLeak = 0;
+
+const walkHandlers = (arr, fn) => (Array.isArray(arr) ? arr.forEach((x) => fn(x)) : undefined);
+
+const inspectGate = (el) => {
+  const m = (el.match || [])[0] || {};
+  const tf = (m.file || {}).try_files || [];
+  tf.forEach((t) => sentinels.add(t));
+  if (el.terminal === true) term += 1;
+  const deep = (n) => {
+    if (Array.isArray(n)) return n.forEach(deep);
+    if (!n || typeof n !== 'object') return;
+    if (n.handler === 'vars' && typeof n.root === 'string') fileRoots.add(n.root);
+    if (n.handler === 'headers' && n.response && n.response.set) Object.keys(n.response.set).forEach((k) => hdrs.add(k));
+    for (const k of Object.keys(n)) deep(n[k]);
+  };
+  deep(el.handle);
+  gates.push(el);
+};
+
+const walkRoutes = (routes) => {
+  if (!Array.isArray(routes)) return;
+  for (const r of routes) {
+    const paths = ((r.match || [])[0] || {}).path || [];
+    const isFeed = paths.some((p) => FEED.has(p));
+    if (isFeed) {
+      const sub = ((r.handle || [])[0] || {}).routes || [];
+      const seq = [];
+      sub.forEach((el, i) => {
+        const hs = (el.handle || []).map((h) => h && h.handler);
+        if (el.match && (el.match[0] || {}).file) { seq.push('GATE'); inspectGate(el); }
+        else if (hs.includes('rewrite') && hs.includes('reverse_proxy')) seq.push('REWRITE+PROXY');
+        else if (hs.includes('rewrite')) seq.push('REWRITE');
+        else if (hs.includes('reverse_proxy')) seq.push('PROXY');
+        else if (hs.includes('vars')) seq.push('VARS');
+        else seq.push(hs.join('|') || 'EMPTY');
+      });
+      feedRoutes.push(seq.join('>'));
+      if (seq[seq.length - 1] === 'PROXY' || seq[seq.length - 1] === 'REWRITE+PROXY') proxyTail += 1;
+      // 🔴 feed 路由内**不许**出现"root == serve-html 那个 pages 目录"的路由级 vars：
+      //    哨兵 root 只能写在 file matcher 上，否则 pages 目录会泄漏给同一路由后面的
+      //    reverse_proxy 分支，而且每次加功能都会改变 pages-dir 守卫统计的 root 集合。
+      //    （第一版把这条写成对整份配置 grep，结果把 serve-html 路由**自己合法的** vars 也算进去了 ⇒ 假红。）
+      for (const el of sub) {
+        for (const h of (el.handle || [])) {
+          if (h && h.handler === 'vars' && typeof h.root === 'string' && /\.next\/server\/pages$/.test(h.root)) varsLeak += 1;
+        }
+      }
+      const gi = seq.indexOf('GATE'), pi = seq.lastIndexOf('PROXY'), ri = seq.indexOf('REWRITE');
+      if (!(gi >= 0 && pi > gi)) orderBad += 1;                       // 门控必须在反代之前
+      if (ri >= 0 && !(ri < gi)) rewriteBeforeGateBad += 1;           // 有 rewrite 时必须在门控之前
+      // 哨兵目录来自 **file matcher 自己的 root 字段**（不是路由级 vars）：
+      // try_files 相对 root 解析，而 matcher 的 root 只作用于这次存在性判断，
+      // 不会把 pages 目录泄漏给同一路由后面的 reverse_proxy 分支。
+      for (const el of sub) {
+        const fm = ((el.match || [])[0] || {}).file;
+        if (fm && typeof fm.root === 'string') sentRoots.add(fm.root);
+      }
+    }
+    const inner = ((r.handle || [])[0] || {}).routes;
+    if (Array.isArray(inner)) walkRoutes(inner);
+    if (Array.isArray(r.handle)) r.handle.forEach((h) => h && h.handler === 'subroute' && walkRoutes(h.routes));
+  }
+};
+const servers = ((c.apps || {}).http || {}).servers || {};
+for (const sn of Object.keys(servers)) walkRoutes((servers[sn] || {}).routes);
+
+// serve-html 路由的 root（哨兵真正所在的目录）—— 用来证明门控查的是同一个目录
+let serveHtmlRoot = '';
+const findSH = (n) => {
+  if (serveHtmlRoot || Array.isArray(n)) { if (Array.isArray(n)) n.forEach(findSH); return; }
+  if (!n || typeof n !== 'object') return;
+  if (n.group === 'vanblog-serve-html') {
+    const g = (x) => { if (serveHtmlRoot || Array.isArray(x)) { if (Array.isArray(x)) x.forEach(g); return; }
+      if (!x || typeof x !== 'object') return;
+      if (x.handler === 'vars' && typeof x.root === 'string') serveHtmlRoot = x.root;
+      for (const k of Object.keys(x)) g(x[k]); };
+    g(n.handle); return;
+  }
+  for (const k of Object.keys(n)) findSH(n[k]);
+};
+findSH(c);
+
+const uniq = (x) => [...new Set(x)].sort().join(',');
+console.log(
+  `routes=${feedRoutes.length} shapes=${uniq(feedRoutes)} gates=${gates.length} term=${term}` +
+  ` proxyTail=${proxyTail} orderBad=${orderBad} rwBad=${rewriteBeforeGateBad} varsLeak=${varsLeak}` +
+  ` fileRoots=${uniq(fileRoots)} sentRoots=${uniq(sentRoots)} serveHtmlRoot=${serveHtmlRoot}` +
+  ` sentinels=${uniq(sentinels)} hdrs=${uniq(hdrs)}`,
+);
+NODE_EOF
+
+run_feed() { # <staticPath值|__unset__> <模板> [stderr文件]
+  local tpl="${2:-$TEMPLATE}" errf="${3:-/dev/null}"
+  if [[ "$1" == "__unset__" ]]; then
+    env -u VAN_BLOG_STATIC_PATH "${NODE_BIN}" "${HELPER}" "${tpl}" permission 'me@example.com' 2>"${errf}"
+  else
+    VAN_BLOG_STATIC_PATH="$1" "${NODE_BIN}" "${HELPER}" "${tpl}" permission 'me@example.com' 2>"${errf}"
+  fi
+}
+feed_rep() { run_feed "$1" "${2:-$TEMPLATE}" "${3:-/dev/null}" | "${NODE_BIN}" "${FEED_EXTRACTOR}"; }
+# ⚠️ 前面补一个空格：报告行的**第一个** key 前面没有空格，`s/.* key=` 会匹配不到它
+#    （第一版就是这样，`routes=` 恒为空 ⇒ 那条"10 条路由都识别了"的断言 got '' want 10）。
+feed_get() { printf ' %s\n' "$1" | sed -n "s/.* $2=\([^ ]*\).*/\1/p"; }
+
+FEED_ERR="$(mktemp)"
+FEED_BASE="$(feed_rep __unset__ '' "${FEED_ERR}")"
+if [[ -z "${FEED_BASE}" ]]; then
+  fail "取不到降级直服 feed 的基线报告（提取器失效）⇒ 后面所有断言都不可信"
+else
+  pass "取到基线报告：$(printf '%s' "${FEED_BASE}" | cut -c1-96)…"
+fi
+
+# --- 覆盖面：5 条路由 × 2 个 server = 10，两个模板都要 ---
+for tpl in caddyTemplate.json caddyFallbackTemplate.json; do
+  R="$(feed_rep __unset__ "${tpl}")"
+  assert_eq "$(feed_get "${R}" routes)" "10" \
+    "${tpl}：5 条 feed/sitemap 路由 × 2 个 server 都被识别（少一条就说明路由判据漏了，例如 /sitemap.xml 这种带点的）"
+  assert_eq "$(feed_get "${R}" gates)" "10" \
+    "${tpl}：10 处都注入了门控（注入数 == 候选数 ⇒ 没有静默跳过）"
+  assert_eq "$(feed_get "${R}" orderBad)" "0" "${tpl}：每条路由的门控都在 reverse_proxy **之前**（否则正常模式也会被直服）"
+  assert_eq "$(feed_get "${R}" rwBad)" "0" \
+    "${tpl}：别名路由的 rewrite 都在门控**之前**（URI 先改写成 /rss/… 再 strip 前缀，否则靠巧合命中文件）"
+  assert_eq "$(feed_get "${R}" proxyTail)" "10" \
+    "${tpl}：10 条路由**仍然以 reverse_proxy 收尾** ⇒ 哨兵不存在时行为与改动前一致（正常模式不受影响）"
+  assert_eq "$(feed_get "${R}" term)" "10" \
+    "${tpl}：每个门控都带 terminal:true（否则命中后会继续走反代，同一个请求既直服又反代）"
+  # 🔴 root 必须是**最窄**的产物子目录，绝不能是 staticPath 本身
+  assert_eq "$(feed_get "${R}" fileRoots)" "/app/static/rss,/app/static/sitemap" \
+    "${tpl}：file_server 的 root 只有 <static>/rss 与 <static>/sitemap 两个最窄目录"
+  # ⚠️ 这里**故意没有**再单独写一条"root 不许是 staticPath 本身"的 if/else：
+  #    上面那条 `fileRoots` **精确相等**断言已经覆盖了它（变异对照 M1 把 root 放宽成 staticDir
+  #    本身 ⇒ 红 12 条）。曾经写过那条冗余检查，变异对照 M5 把它短路成 `if false` 后**仍然全绿**
+  #    —— 因为它的 `else` 分支照样 pass。这不是"守卫空转"（性质确实被覆盖），而是**纯冗余**：
+  #    它只会虚增 pass 计数、让人误以为多了一层防护。⇒ 删掉，把证据留在这条注释里。
+  #    🔴 为什么这件事重要：宽 root 的后果是**真实的数据泄露**（真 caddy 实测：root=<static> 时
+  #    `/broad/tmp/full-restore-secret.tar.zst` → 200 拿到内容，而 `staticPath/tmp` 放的是
+  #    in-flight 的整站恢复归档；`export/`、`img/`、`customPage/` 同样在其下），
+  #    所以这一条必须由**能独立失败**的断言守着，而不是由一条永远 pass 的装饰守着。
+  # 哨兵目录必须与 serve-html 路由**同一个**（跨 root 的 try_files 只能靠先设 vars root）
+  assert_eq "$(feed_get "${R}" sentRoots)" "$(feed_get "${R}" serveHtmlRoot)" \
+    "${tpl}：门控查哨兵用的 root 与 serve-html 路由的 root **完全一致**（否则哨兵写 A、这里查 B ⇒ 静默失效）"
+  assert_eq "$(feed_get "${R}" sentinels)" "/.vanblog-caddy-serve-html" \
+    "${tpl}：门控用**主哨兵**（fixed 与 all 两档都会写它；dynamic 哨兵只在 all 档写）"
+  assert_eq "$(feed_get "${R}" hdrs)" "Cache-Control,X-Vanblog-Static-Feed" \
+    "${tpl}：门控只设 Cache-Control 与标记头 ⇒ 故意不覆盖 Content-Type（caddy 推断 text/xml，express 给 application/xml，两者阅读器都接受；降级期的对照是 503）"
+  # 🔴 feed 路由内不许有"root == pages 目录"的路由级 vars（哨兵 root 只能在 file matcher 上）
+  assert_eq "$(feed_get "${R}" varsLeak)" "0" \
+    "${tpl}：feed 路由内 0 个路由级 vars root=<pages 目录> ⇒ 哨兵 root 只在 file matcher 上，不泄漏给同一路由的 reverse_proxy 分支"
+  # 正对照：哨兵目录确实被写进了 file matcher（否则上面那条 0 是"根本没写"造成的假绿）
+  if printf '%s' "$(feed_get "${R}" sentRoots)" | grep -qE '\.next/server/pages|/alt/pages'; then
+    pass "${tpl}：file matcher 上确实带了哨兵目录 root=$(feed_get "${R}" sentRoots)（上面那条 0 不是空转）"
+  else
+    fail "${tpl}：file matcher 上取不到哨兵目录 root（got '$(feed_get "${R}" sentRoots)'）⇒ 上面那条 varsLeak=0 是假绿"
+  fi
+done
+
+# --- 哨兵文件名必须与服务端常量逐字相同（跨语言漂移绊线）---
+TS_SENTINEL="$(sed -n "s/^export const CADDY_SERVE_HTML_SENTINEL = '\([^']*\)';.*$/\1/p" \
+  "${ROOT}/packages/server/src/provider/caddy/caddy.provider.ts" | head -1)"
+if [[ -z "${TS_SENTINEL}" ]]; then
+  fail "从 caddy.provider.ts 提取不到 CADDY_SERVE_HTML_SENTINEL（提取器失效，不是"没有这条常量"）"
+else
+  assert_eq "$(feed_get "${FEED_BASE}" sentinels)" "/${TS_SENTINEL}" \
+    "生成器写的哨兵文件名与服务端常量 CADDY_SERVE_HTML_SENTINEL 逐字相同（跨语言契约）"
+fi
+
+# --- VAN_BLOG_STATIC_PATH 生效（与 server 侧 loadConfig('static.path') 同一个 env、同一个默认值）---
+R="$(feed_rep '/data/vanblog-static')"
+assert_eq "$(feed_get "${R}" fileRoots)" "/data/vanblog-static/rss,/data/vanblog-static/sitemap" \
+  "VAN_BLOG_STATIC_PATH 生效：两个 root 都跟着走（否则自定义 staticPath 的部署降级期直服会 404）"
+assert_eq "$(feed_get "${R}" gates)" "10" "设了 VAN_BLOG_STATIC_PATH 时注入数不变（仍是 10）"
+
+# --- 非法值一律回落默认 + WARN（失败方向必须是"保持能用"，绝不是让整份配置 validate 失败）---
+for bad in 'relative/static' '/data/../etc' '/data/{env.HOME}/static' '/'; do
+  R="$(feed_rep "${bad}" '' "${FEED_ERR}")"
+  assert_eq "$(feed_get "${R}" fileRoots)" "/app/static/rss,/app/static/sitemap" \
+    "VAN_BLOG_STATIC_PATH='${bad}' 被拒 ⇒ root 回落默认（绝不能是 ${bad}）"
+  if [[ "${bad}" == '/' ]]; then
+    if printf '%s' "$(feed_get "${R}" fileRoots)" | grep -qE '(^|,)/(rss|sitemap)(,|$)$'; then
+      fail "root 变成了 /rss 或 /sitemap（文件系统根下）⇒ 拒绝规则没生效"
+    else
+      pass "VAN_BLOG_STATIC_PATH='/' 没有产出「文件系统根下的 rss/sitemap」这种 root"
+    fi
+  fi
+  assert_eq "$(grep -c '已被忽略' "${FEED_ERR}")" "1" \
+    "VAN_BLOG_STATIC_PATH='${bad}' 打了一条"已被忽略"的 WARN（静默回落会让运维以为生效了）"
+done
+# ⚠️ 逐层隔离：'{env.HOME}' 那条同时违反"必须绝对路径"，所以另配一个**只可能**被花括号规则拦住的取值
+R="$(feed_rep '/data/{env.SECRET}/static' '' "${FEED_ERR}")"
+assert_eq "$(feed_get "${R}" fileRoots)" "/app/static/rss,/app/static/sitemap" \
+  "合法绝对路径里含 {} 占位符也被拒（caddy 运行时会展开 {env.X} ⇒ 等于把 file_server 的 root 交给环境变量）"
+assert_eq "$(grep -c '占位符' "${FEED_ERR}")" "1" "拒绝理由点名了"占位符"（不是被"必须绝对路径"那条先拦下 ⇒ 规则逐层可辨）"
+# 控制字符（CRLF 头注入形状）：值会进 JSON 配置
+R="$(feed_rep $'/data/evil\r\nstatic' '' "${FEED_ERR}")"
+assert_eq "$(feed_get "${R}" fileRoots)" "/app/static/rss,/app/static/sitemap" "含 CR/LF 的值被拒 ⇒ root 回落默认"
+assert_eq "$(grep -c '控制字符' "${FEED_ERR}")" "1" "拒绝理由点名了"控制字符""
+# 规范化：重复斜杠与结尾斜杠
+R="$(feed_rep '//data//static//' '' "${FEED_ERR}")"
+assert_eq "$(feed_get "${R}" fileRoots)" "/data/static/rss,/data/static/sitemap" \
+  "重复斜杠与结尾斜杠被规范化（与 pages-dir 同一套规则；不规范化会让 root 字符串与 caddy 侧对不上）"
+assert_eq "$(grep -c '规范化' "${FEED_ERR}")" "1" "规范化时打了 WARN 说明改了什么"
+# 合法值不打"已被忽略"
+run_feed '/data/ok-static' '' "${FEED_ERR}" >/dev/null
+assert_eq "$(grep -c '已被忽略' "${FEED_ERR}")" "0" "合法的 VAN_BLOG_STATIC_PATH 不打任何"已被忽略"WARN（噪音会淹没真告警）"
+
+# --- 与 pages-dir 联动：哨兵目录跟着 VANBLOG_CADDY_HTML_PAGES_DIR 走（两处必须始终同目录）---
+R="$(VANBLOG_CADDY_HTML_PAGES_DIR='/alt/pages' run_feed __unset__ | "${NODE_BIN}" "${FEED_EXTRACTOR}")"
+assert_eq "$(feed_get "${R}" sentRoots)" "/alt/pages" \
+  "改了 VANBLOG_CADDY_HTML_PAGES_DIR 时，feed 门控查哨兵的 root 跟着变成同一个目录（哨兵与 root 必须同目录，try_files 才找得到）"
+assert_eq "$(feed_get "${R}" sentRoots)" "$(feed_get "${R}" serveHtmlRoot)" \
+  "联动之后两者仍然一致（这条是"半生效旋钮"那个缺陷的回归钉子）"
+
+# --- 生成器里没有硬编码 /app/static（默认值来自常量，改写点按结构定位）---
+# ⚠️ 必须**先剥 `//` 注释行**再数：常量定义上方那行注释里也写着 '/app/static'
+#    （说明它与 server 侧 loadConfig 的默认值同源）。不剥注释就会数到 2 ⇒ 假红。
+#    这是本仓库第 10 次踩"断言匹配到解释性注释"，方向是假红（之前几次多是假绿）。
+# ⚠️ 剥注释要同时处理**两种**形状：`//` 行注释，以及 JSDoc 块注释（`/** … */` 单行形式、
+#    和多行块里以 ` * ` 开头的行）。第一版只剥了 `//`，于是常量上方那句
+#    `/** 与 server 侧 loadConfig('static.path','/app/static') … */` 被数成第二处 ⇒ 假红。
+assert_eq "$(awk '{ line=$0; sub(/^[ \t]+/, "", line); if (line ~ /^\/\// || line ~ /^\/\*/ || line ~ /^\*/) next; print }' "${HELPER}" | grep -c "'/app/static'")" "1" \
+  "生成器**代码**里 '/app/static' 只出现 1 次（= STATIC_DIR_DEFAULT 常量），没有散落的第二份字面量（已剥 // 与 JSDoc 块注释）"
+
+rm -f "${FEED_EXTRACTOR}" "${FEED_ERR}"
+
+
 
 echo
 echo "passed=${PASS} failed=${FAIL}"

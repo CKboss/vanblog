@@ -653,6 +653,345 @@ process.stderr.write(
     : `[caddyConfig] caddy 直服 HTML 的产物目录 = ${pagesDirStats.effective || '(未找到)'}（模板默认；${PAGES_DIR_ENV} 未设置或未生效）\n`,
 );
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 降级期直服 RSS / sitemap 落盘产物
+ *
+ * ## 要解决的问题（活体实测出来的，不是推理）
+ * 站点进入「降级驻留」（数据库在启动期不可达、Nest 没起来、占位监听器接管端口）时，
+ * 页面已经能由 caddy 按哨兵直发磁盘 HTML（`vanblog-serve-html` 路由），但实测：
+ *   `/`                → 200（磁盘 HTML）      `/post/<别名>` → 200（磁盘 HTML）
+ *   `/static/img/*`    → 200（caddy 直服）    `/api/public/health` → 503 degraded
+ *   🔴 `/rss/feed.xml` → **503**              `/sitemap.xml` → 503
+ * 也就是说「被打瘫时仍能发布内容」这条能力**不含订阅源** —— 而 RSS 恰恰是敌意环境下
+ * 最省流量、最难被阻断的发布通道（很多读者与镜像站只拉 feed）。
+ *
+ * ## 为什么这件事是安全的、且没有引入新的取舍
+ * `/rss/*` 与 `/sitemap/*` 在 server 侧**本来就是静态目录服务**，不是每请求动态生成：
+ *   `main.ts`: `app.useStaticAssets(path.join(staticPath,'rss'),     { prefix: '/rss/' })`
+ *              `app.useStaticAssets(path.join(staticPath,'sitemap'), { prefix: '/sitemap/' })`
+ * 产物由 ISR 风暴写入（`provider/rss/rss.provider.ts` → `<staticPath>/rss/{feed.xml,atom.xml,feed.json}`，
+ * `provider/sitemap/sitemap.provider.ts` → `<staticPath>/sitemap/sitemap.xml`），都是 tmp+rename 原子写。
+ * ⇒ 降级期直服的就是**正常模式下 express 会发的同一批字节**，新鲜度语义完全相同
+ *   （都取决于上一次 ISR 风暴），不存在「降级才变陈旧」的额外代价。
+ *
+ * ## 🔴 必须覆盖别名路由（这条是实测出来的，别只看 `/rss/*`）
+ * 后台/前台交给读者的地址是**别名形式**：`components/AuthorCard/index.tsx` 的 `href={'/feed.xml'}`、
+ * `components/RssButton/index.tsx` 复制到剪贴板的也是 `/feed.xml`（只有 feed 自身的 `feedLinks`
+ * 元数据写 `rss/feed.xml`）。所以只门控 `/rss/*` 的话，降级时读者手里那个 `/feed.xml` 仍然 503
+ * ⇒ 等于没修。模板里这 5 条路由（`/rss/*`、`/sitemap.xml`、`/feed.xml`、`/feed.json`、`/atom.xml`）
+ * 在 **2 个模板 × 2 个 server** 上共 20 处，全部注入。
+ *
+ * ## 实现方式：生成期注入（与 CSP、pages-dir 同一套路），模板一个字不改
+ * 好处：一处实现覆盖全部 20 处；`off` 时产物与模板逐字节相同；主模板与降级模板不会漂移。
+ *
+ * ## 🔴 root 必须是**最窄**的那个子目录，绝不能是 staticPath 本身
+ * 用真 caddy v2.11.4 实测过（正对照 + 负对照，见 scripts/tests/caddy-config.test.sh）：
+ *   - root=`<static>`（宽）时 `/broad/tmp/<归档名>` → **200 拿到内容** ⇒ 会暴露 `staticPath/tmp`
+ *     里 in-flight 的**整站恢复归档**（`main.ts` 会 checkOrCreate `tmp`、`export`、`customPage`、
+ *     `img`、`rss`、`sitemap`、`search`），以及图床与导出物；
+ *   - root=`<static>/rss`（窄）时同样的穿越路径一律 **502/404，一个字节都没泄露**；
+ *   - 两种 root 下都**逃不到 root 之上**（`../../` 与 `%2e%2e%2f` 各种编码都是 502/404）。
+ * 所以这里只允许 `rss` 与 `sitemap` 两个白名单子目录，其余一律跳过 + WARN（绝不猜）。
+ *
+ * ## 哨兵 root 与产物 root 不是同一个目录 ⇒ 用 `file` matcher 自带的 `root` 字段
+ * caddy 的 `file` matcher 用 `try_files`，而 **`try_files` 相对当前 `root` 解析**；哨兵在
+ * pages 目录（`.next/server/pages`），产物在 `<static>/rss`。所以哨兵的存在性判断用
+ * `match:[{file:{root:<pages>,try_files:[…]}}]`（root 只作用于这次判断），命中后再
+ * `vars root=<static>/<subdir>` 给 `file_server`。⚠️ 不要改成"先插一个路由级 vars root=pages"：
+ * 那会把 pages 目录泄漏给同一路由后面的 reverse_proxy 分支，而且每次加功能都会改变
+ * pages-dir 守卫统计的「serve-html 之外的 root」集合。
+ * ⚠️ pages root **从配置里回读**（serve-html 路由的 `vars.root`），不重新计算 ⇒
+ *   它与 `VANBLOG_CADDY_HTML_PAGES_DIR` 天然一致，不可能出现「哨兵写 A、这里查 B」。
+ * ⚠️ caddy 每个请求现查哨兵，所以**不需要 reload**（实测：写入后下一个请求立刻生效，
+ *   删掉后立刻回落反代）。
+ *
+ * ## 门控用**主哨兵**（`.vanblog-caddy-serve-html`），不是 dynamic 那个
+ * `resolveServeHtmlLevel`：`'all'` 写两个哨兵、`'true'`→`fixed` 只写主哨兵、其它→`off` 都不写；
+ * 降级驻留按 `all` 档写两个。feed 是单个固定文件（更像「固定页」而不是「动态前缀」），
+ * 所以用主哨兵 ⇒ `fixed` 与 `all` 两档都覆盖，且不需要 dynamic 档的语义。
+ *
+ * ## 故意不做的事
+ * - **不覆盖 Content-Type**：caddy 对 `.xml` 推断 `text/xml; charset=utf-8`，express/mime 给
+ *   `application/xml`；两者都是 RFC 7303 认可、阅读器普遍接受的形状，`.json` 则完全一致
+ *   （都是 `application/json`）。降级期的对照是 **503**，所以 `text/xml` 远好于发不出去；
+ *   手工覆盖反而多一处可能写错的地方。有守卫钉住「只设 Cache-Control 与标记头」。
+ * - **不加 `upgrade-insecure-requests` 之类的额外头**；`X-Content-Type-Options: nosniff`
+ *   由每个 server 顶部的全局 headers handler 下发，直服路径同样拿得到（实测确认）。
+ * - 不动 `/static/*`、`/robots.txt`：robots 是 `robots.controller` 动态生成（要用库里的 baseUrl），
+ *   没有落盘产物可直服 ⇒ 降级期它仍然 503，这是**已知缺口**，如实记录。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 与 server 侧 `loadConfig('static.path','/app/static')` 同一个 env、同一个默认值。 */
+const STATIC_DIR_ENV = 'VAN_BLOG_STATIC_PATH';
+const STATIC_DIR_DEFAULT = '/app/static';
+/** 只允许这两个子目录当 `file_server` 的 root（理由见上面「root 必须最窄」那段）。 */
+const FEED_ROOT_ALLOWLIST = new Set(['rss', 'sitemap']);
+/** 降级期直服 feed 时打的标记头：既给运维/监控看，也是守卫与活体验证的判据。 */
+const STATIC_FEED_HEADER = 'X-Vanblog-Static-Feed';
+/** 哨兵文件名。⚠️ 必须与 `provider/caddy/caddy.provider.ts` 的 CADDY_SERVE_HTML_SENTINEL 逐字相同
+ *  （生成器是独立进程、不能 import TS，所以这里复制字面量 —— 由守卫钉住两侧一致）。 */
+const SERVE_HTML_SENTINEL_NAME = '.vanblog-caddy-serve-html';
+
+/**
+ * 解析 staticPath（校验规则与 `resolvePagesDir` 逐条对齐，因为两者都是「会进 caddy JSON 的目录」，
+ * 写坏的后果同样是 validate 失败 ⇒ 退回降级模板 ⇒ HTTPS 静默变自签）。
+ * ⚠️ 故意不复用 `resolvePagesDir`：它的 WARN 文案点名的是 pages-dir 那个变量，混用会报错报到
+ *    另一个变量头上（本轮刚修过一次「过期文案误导运维」）。
+ */
+function resolveStaticDir(raw) {
+  const warns = [];
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text === '') return { dir: STATIC_DIR_DEFAULT, provided: false, warns };
+  const reject = (why) => {
+    warns.push(
+      `${STATIC_DIR_ENV}='${text}' 已被忽略：${why}。已回落到默认静态目录 ${STATIC_DIR_DEFAULT}。` +
+        ' ⚠️ 服务端也用同一个变量解析 static.path（env 优先于 config.yaml），所以两侧仍然一致；' +
+        '但如果你是想让降级期直服另一个目录里的 feed，请修正这个值。',
+    );
+    return { dir: STATIC_DIR_DEFAULT, provided: false, rejected: true, warns };
+  };
+  if (hasControlChars(text)) return reject('含控制字符（CR/LF/NUL 等），这个值会原样进 caddy 的 JSON 配置');
+  if (text.includes('{') || text.includes('}')) {
+    return reject('含 {} 占位符：caddy 会在**运行时**展开 {env.X}，等于把 file_server 的 root 交给环境变量');
+  }
+  if (!text.startsWith('/')) return reject('不是绝对路径（必须以 / 开头）');
+  if (text.split('/').includes('..')) return reject('含 .. 段（root 会被移出预期目录）');
+  let normalized = text.replace(/\/{2,}/g, '/');
+  if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  if (normalized !== text) {
+    warns.push(`${STATIC_DIR_ENV}='${text}' 已规范化为 '${normalized}'（合并重复斜杠 / 去掉结尾斜杠）`);
+  }
+  if (normalized === '/') return reject('规范化后是文件系统根 /');
+  return { dir: normalized, provided: true, warns };
+}
+
+/** 从**已生成的配置**里回读 serve-html 路由的 `vars.root`（= 哨兵所在目录）。
+ *  ⚠️ 回读而不是重算：重算就多一份可能与 pages-dir 漂移的副本，而漂移的后果是「哨兵写在 A、
+ *  这里查 B」⇒ 降级直服**静默失效**。找不到就返回 null，调用方跳过注入并 WARN（失败方向是
+ *  「保持现状 503」，绝不是「猜一个目录」。 */
+function findServeHtmlPagesRoot(node) {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findServeHtmlPagesRoot(child);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (!node || typeof node !== 'object') return null;
+  if (node.group === SERVE_HTML_ROUTE_GROUP) {
+    let found = null;
+    const collect = (n) => {
+      if (found || Array.isArray(n)) {
+        if (Array.isArray(n)) n.forEach(collect);
+        return;
+      }
+      if (!n || typeof n !== 'object') return;
+      if (n.handler === 'vars' && typeof n.root === 'string') found = n.root;
+      for (const key of Object.keys(n)) collect(n[key]);
+    };
+    collect(node.handle);
+    if (found) return found;
+  }
+  for (const key of Object.keys(node)) {
+    const hit = findServeHtmlPagesRoot(node[key]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** 从一条路由反推「产物子目录 + 要 strip 的前缀」。
+ *  ⚠️ 优先看模板自己的 rewrite（别名路由把 /feed.xml 改写成 /rss/feed.xml），
+ *  没有 rewrite 就看 match path（`/rss/*`）。这样目标目录**来自模板本身**，
+ *  不是我另写的一张表 ⇒ 模板改了这里跟着改，不会漂移。
+ *  只接受白名单里的子目录，其余返回 null（跳过 + WARN，绝不猜）。 */
+function deriveFeedTarget(route) {
+  const sub = route && route.handle && route.handle[0] && route.handle[0].routes;
+  if (!Array.isArray(sub)) return null;
+  let rewritten = null;
+  const scan = (n) => {
+    if (rewritten || Array.isArray(n)) {
+      if (Array.isArray(n)) n.forEach(scan);
+      return;
+    }
+    if (!n || typeof n !== 'object') return;
+    if (n.handler === 'rewrite' && Array.isArray(n.uri_substring) && n.uri_substring[0]) {
+      const rep = n.uri_substring[0].replace;
+      if (typeof rep === 'string' && rep.startsWith('/')) rewritten = rep;
+    }
+    for (const key of Object.keys(n)) scan(n[key]);
+  };
+  scan(sub);
+  const paths = (route.match && route.match[0] && route.match[0].path) || [];
+  const source = rewritten || (typeof paths[0] === 'string' ? paths[0] : '');
+  // `/rss/feed.xml` → `/rss`；`/rss/*` → `/rss`；`/sitemap/sitemap.xml` → `/sitemap`
+  const m = /^\/([A-Za-z0-9_-]+)(?:\/|$)/.exec(source);
+  if (!m) return null;
+  const subdir = m[1];
+  if (!FEED_ROOT_ALLOWLIST.has(subdir)) return null;
+  return { subdir, strip: `/${subdir}` };
+}
+
+/** 造一段「哨兵在 ⇒ 从磁盘直服」的子路由（形状已用真 caddy 实测验证）。 */
+function buildFeedGate(pagesRoot, staticDir, subdir, strip) {
+  return [
+    // 命中哨兵 ⇒ 换 root 到最窄的产物子目录，strip 掉对外前缀，然后直服。
+    // ⚠️ 哨兵目录写在 **`file` matcher 自己的 `root` 字段**里，而不是先插一个路由级
+    //    `{handler:'vars',root:pages}`：①`try_files` 相对**当前 root** 解析，matcher 的 root
+    //    只作用于这次存在性判断，不会把 pages 目录泄漏给后面的 reverse_proxy 分支；
+    //    ②路由级 `vars.root` 是 pages-dir 守卫统计的对象，多插一个会让「serve-html 之外还有谁
+    //    用了 pages 目录」这个集合每次加功能都变，守卫就得跟着改数字（那种守卫迟早被当噪音删掉）。
+    //    两种形状都用真 caddy v2.11.4 实测过（哨兵在→200 直服、撤掉→502 回落反代）。
+    {
+      match: [{ file: { root: pagesRoot, try_files: [`/${SERVE_HTML_SENTINEL_NAME}`] } }],
+      handle: [
+        {
+          handler: 'subroute',
+          routes: [
+            {
+              handle: [
+                { handler: 'vars', root: `${staticDir}/${subdir}` },
+                { handler: 'rewrite', strip_path_prefix: strip },
+                {
+                  handler: 'headers',
+                  response: {
+                    set: {
+                      // ⚠️ no-cache：降级期发的是磁盘上的旧产物，绝不能让中间缓存把它钉住
+                      'Cache-Control': ['no-cache'],
+                      [STATIC_FEED_HEADER]: [subdir],
+                    },
+                  },
+                },
+                { handler: 'file_server' },
+              ],
+            },
+          ],
+        },
+      ],
+      // ③ terminal：命中就别再往下走到 reverse_proxy（否则会对同一个请求既直服又反代）
+      terminal: true,
+    },
+  ];
+}
+
+/**
+ * 把降级直服注入到所有 feed/sitemap 路由。
+ * 返回 stats 供守卫与日志使用；**任何一处形状不符都只 WARN 不猜**。
+ */
+function applyDegradedFeedServing(node, ctx) {
+  if (Array.isArray(node)) {
+    node.forEach((child) => applyDegradedFeedServing(child, ctx));
+    return ctx.stats;
+  }
+  if (!node || typeof node !== 'object') return ctx.stats;
+
+  const routes = node.routes;
+  if (Array.isArray(routes)) {
+    for (const route of routes) {
+      const paths = (route && route.match && route.match[0] && route.match[0].path) || [];
+      // ⚠️ 判据写成显式形状，别用一条正则概括：第一版写 `^\/(rss|sitemap)(\/|\*|$)`，
+      //    结果 `/sitemap.xml` **不匹配**（`sitemap` 后面是 `.`），于是 sitemap 整条被漏掉、
+      //    注入数从应有的 10 变成 8 而日志看起来一切正常。这类"少注入几处"的失效是静默的，
+      //    所以守卫要断言**注入处数**而不是"至少注入了一处"。
+      const FEED_ROUTE_EXACT = new Set(['/sitemap.xml', '/feed.xml', '/feed.json', '/atom.xml']);
+      const isFeedRoute =
+        Array.isArray(paths) &&
+        paths.some(
+          (p) =>
+            typeof p === 'string' &&
+            (FEED_ROUTE_EXACT.has(p) || p === '/rss' || p === '/rss/*' || p.startsWith('/rss/') || p.startsWith('/sitemap/')),
+        );
+      if (!isFeedRoute) continue;
+      ctx.stats.candidates += 1;
+
+      const target = deriveFeedTarget(route);
+      if (!target) {
+        ctx.warns.push(
+          `[degraded-feed] 路由 ${JSON.stringify(paths)} 没法反推产物子目录（rewrite 与 path 都不指向 ` +
+            `${[...FEED_ROOT_ALLOWLIST].join('/')} 之一）⇒ **跳过注入**，降级期这条路由仍然 503。`,
+        );
+        continue;
+      }
+      const sub = route.handle && route.handle[0] && route.handle[0].routes;
+      if (!Array.isArray(sub)) {
+        ctx.warns.push(`[degraded-feed] 路由 ${JSON.stringify(paths)} 不是 subroute 形状 ⇒ 跳过注入`);
+        continue;
+      }
+      // 🔴 先把「rewrite 与 reverse_proxy 挤在同一个 handle 数组里」的子路由**拆成两个**。
+      //    模板里别名路由的形状是 `handle:[{rewrite uri_substring},{reverse_proxy}]`（一个元素、两个 handler），
+      //    于是 `findIndex(reverse_proxy)` 返回 0 ⇒ 门控会被插到 **rewrite 之前**，
+      //    此时 URI 还是 `/feed.xml`，`strip_path_prefix:'/rss'` 变成空操作。
+      //    ⚠️ 那样"碰巧"也能命中文件（root=`<static>/rss` + uri=`/feed.xml` = 同一个文件），
+      //    但这是靠巧合而不是靠设计：换一个别名（例如将来加 `/index.xml` → `/rss/feed.xml`）
+      //    就会静默发错文件。拆开之后语义明确，且与真 caddy 实测过的形状一致。
+      //    拆分是等价的：caddy 按顺序执行同一 handle 数组里的 handler，拆成两个相邻的无 matcher
+      //    子路由仍然按顺序执行；reverse_proxy 块的数量与参数都不变（caddy-perf 的热点池断言不受影响）。
+      for (let i = sub.length - 1; i >= 0; i -= 1) {
+        const el = sub[i];
+        const hs = Array.isArray(el && el.handle) ? el.handle : null;
+        if (!hs || el.match) continue; // 带 matcher 的元素不能拆（会改变匹配语义）
+        const rpIdx = hs.findIndex((h) => h && h.handler === 'reverse_proxy');
+        if (rpIdx <= 0) continue; // 没有 proxy，或 proxy 已经是第一个 ⇒ 无需拆
+        sub.splice(i, 1, { handle: hs.slice(0, rpIdx) }, { handle: hs.slice(rpIdx) });
+        ctx.stats.split += 1;
+      }
+      // 插在**第一个含 reverse_proxy 的子路由之前**：拆开之后别名路由是 [rewrite] [proxy]，
+      // 所以门控落在 rewrite 之后（URI 已经改写成 /rss/…，strip 前缀才对得上）。
+      const proxyIdx = sub.findIndex(
+        (x) => Array.isArray(x && x.handle) && x.handle.some((h) => h && h.handler === 'reverse_proxy'),
+      );
+      if (proxyIdx < 0) {
+        ctx.warns.push(
+          `[degraded-feed] 路由 ${JSON.stringify(paths)} 里找不到 reverse_proxy ⇒ 模板形状变了，跳过注入` +
+            '（不猜插入位置：插错会让正常模式也走直服，把动态 feed 冻成旧文件）',
+        );
+        continue;
+      }
+      if (sub.some((x) => Array.isArray(x && x.handle) && x.handle.some((h) => h && h.handler === 'file_server'))) {
+        ctx.stats.already += 1; // 幂等：重复跑生成器不会注入两次
+        continue;
+      }
+      sub.splice(proxyIdx, 0, ...buildFeedGate(ctx.pagesRoot, ctx.staticDir, target.subdir, target.strip));
+      ctx.stats.injected += 1;
+      ctx.stats.roots.add(`${ctx.staticDir}/${target.subdir}`);
+    }
+  }
+
+  for (const key of Object.keys(node)) {
+    if (key === 'routes') continue; // 这一层已经处理过
+    applyDegradedFeedServing(node[key], ctx);
+  }
+  return ctx.stats;
+}
+
+const staticDirWarns = [];
+const staticDirResolved = resolveStaticDir(process.env[STATIC_DIR_ENV]);
+staticDirWarns.push(...staticDirResolved.warns);
+const feedPagesRoot = findServeHtmlPagesRoot(config);
+const feedCtx = {
+  pagesRoot: feedPagesRoot,
+  staticDir: staticDirResolved.dir,
+  warns: [],
+  stats: { candidates: 0, injected: 0, already: 0, split: 0, roots: new Set() },
+};
+if (!feedPagesRoot) {
+  feedCtx.warns.push(
+    '[degraded-feed] 在配置里找不到 serve-html 路由的 vars.root（哨兵目录未知）⇒ **不注入**降级直服，' +
+      '降级期 /rss/* 与 /sitemap.xml 仍会 503。失败方向是保持现状，不是猜一个目录。',
+  );
+} else {
+  applyDegradedFeedServing(config, feedCtx);
+}
+for (const w of staticDirWarns) process.stderr.write(`[caddyConfig] ⚠️ ${w}\n`);
+for (const w of feedCtx.warns) process.stderr.write(`[caddyConfig] ⚠️ ${w}\n`);
+process.stderr.write(
+  `[caddyConfig] 降级期直服 feed/sitemap：候选路由 ${feedCtx.stats.candidates} 条、注入 ${feedCtx.stats.injected} 处` +
+    (feedCtx.stats.already ? `（另有 ${feedCtx.stats.already} 处已注入过，跳过）` : '') +
+    `；拆开 rewrite+proxy 合并元素 ${feedCtx.stats.split} 处` +
+    `；哨兵目录 = ${feedPagesRoot || '(未知)'}；产物 root = ` +
+    (feedCtx.stats.roots.size ? [...feedCtx.stats.roots].sort().join(', ') : '(无)') +
+    `（${STATIC_DIR_ENV}=${staticDirResolved.provided ? '来自环境变量' : '默认值'}）\n`,
+);
+
 const tls = config.apps && config.apps.tls;
 const automation = tls && tls.automation;
 const onDemand = automation && automation.on_demand;
