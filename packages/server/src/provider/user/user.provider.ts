@@ -324,9 +324,31 @@ export class UserProvider {
     }
   }
   async getCollaboratorByName(name: string) {
+    // ⚠️ 防呆（与下面 getCollaboratorById 同一族）：`name` 不是非空字符串时**直接返回 null，不发查询**。
+    //    `findOne({ name: undefined, type: 'collaborator' })` 会被 Mongoose 丢掉 name 条件 ⇒
+    //    退化成"任意一个协作者"。今天两个调用方（create/update）都已经先过 `assertCollaboratorName`，
+    //    所以这条是纵深防御：**不变量长在查询旁边**，将来新增调用方忘了校验也只会拿到 null，
+    //    而不是拿到别人的身份。这一族已经复发 6 次，根因就是"靠每个调用方记得"。
+    if (typeof name !== 'string' || !name.trim()) {
+      return null;
+    }
     return await this.userModel.findOne({ name: name, type: 'collaborator' });
   }
   async getCollaboratorById(id: number) {
+    // ⚠️ 防呆（同族第 6 例的第二道防线，第一道在 `provider/auth/jwt.strategy.ts` 的 validate 里）：
+    //    `id` 不是整数时**直接返回 null，不发查询**。`findOne({ id: undefined, type:'collaborator' })`
+    //    的 id 条件会被 Mongoose 丢弃 ⇒ 退化成 `{ type:'collaborator' }` ⇒ 返回自然顺序里任意一个
+    //    协作者 ⇒ 调用方（鉴权路径）会把**那个人的 permissions** 当成本次请求的权限。
+    //
+    //    ⚠️ 故意**不**用 `utils/queryFilter.ts` 的 `isUsableFilterValue()`：两者契约不同。
+    //    那个助手回答的是"这个值能不能作为查询条件**存活**"（不被 Mongoose 丢掉），所以它放行
+    //    `0`、布尔、非空字符串、ObjectId 形状；而这里要回答的是"这是不是一个**合法的协作者 id**"，
+    //    类型与取值域都要对。用它会放行 `true`、`1.5`、以及字符串 `'3'` —— 后者尤其糟：
+    //    mongoose 会把 `'3'` cast 成数字 3 并**真的匹配上**，于是"类型违规"变成了"静默查到别人"。
+    //    `assertSafeWriteFilter` 也不适用：这是**读**操作，而那个助手明确只管写。
+    if (typeof id !== 'number' || !Number.isInteger(id)) {
+      return null;
+    }
     return await this.userModel.findOne({ id, type: 'collaborator' });
   }
   async getAllCollaborators(isList?: boolean) {

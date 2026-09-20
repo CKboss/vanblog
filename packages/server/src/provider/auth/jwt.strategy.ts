@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { isSuperAdminUser } from 'src/types/access/access';
 import { selectJwtVerifyKey } from 'src/utils/initJwt';
 import { MetaProvider } from '../meta/meta.provider';
 import { UserProvider } from '../user/user.provider';
@@ -40,15 +41,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     //payload：jwt-passport认证jwt通过后解码的结果
     // 权限需要在库里查最新的，不然用老的 token 解码获得权限还是可以用。
     const moreDto = { ...payload };
-    if (payload.sub != 0) {
-      const user = await this.userProvider.getCollaboratorById(payload.sub);
-      if (!user) {
-        // 协作者已被删除但 token 还在有效期内：以前这里会读 user.permissions 直接 500
-        throw new UnauthorizedException('该协作者已不存在');
-      }
-      moreDto.permissions = user.permissions;
-      moreDto.nickname = user.nickname;
-    } else {
+    // ⚠️ 分支判定必须与 AccessGuard 用**同一把尺子**：`isSuperAdminUser({ id: payload.sub })`，
+    //    不是 `payload.sub != 0`，也不是自己再写一个 `payload.sub === 0`。三条理由：
+    //    1. `!= 0` 是**松散**比较，而 JS 里 `undefined != 0` 与 `null != 0` **都是 true**
+    //       ⇒ payload 缺 `sub` 时会掉进协作者分支（下面那条 401 就是为它加的）；
+    //    2. 自己写 `=== 0` 会与下游分歧：`isSuperAdminUser` 还认**字面字符串** `"0"`，
+    //       于是 `sub:"0"` 在这里走协作者分支、到 AccessGuard 却被判成超管 —— 两处身份判定
+    //       不一致本身就是缺陷（而且这种不一致只会以"某条路由莫名放行/莫名 403"的形式暴露）；
+    //    3. 身份判定只应有一份实现（`types/access/access.ts`），抄一份就会漂。
+    if (isSuperAdminUser({ id: payload?.sub })) {
       const user = await this.userProvider.getUser();
       if (!user) {
         // 库里没有 id:0 的管理员：恢复出一份坏库/空库、users 集合被清空，或历史上"两条 id:0"
@@ -65,6 +66,33 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       //    所以 `siteInfo.author` 是第二处空值解引用 —— 与 user 那条同一行，一起修。
       const authorName = siteInfo?.author;
       moreDto.nickname = authorName || user.nickname;
+    } else {
+      // 🔴 进协作者分支之前**必须**先确认 `sub` 是个整数。这是本仓库"Mongoose 丢掉值为
+      //    `undefined` 的查询条件"这一族的**第 6 例**（前 5 例：`checkToken` 未认证管理员接管、
+      //    `updateCollaborator` 改任意协作者口令、`updateCustomPage` 改任意公开页面、
+      //    `deleteByPath` 删任意一页并连带删磁盘目录、`category.deleteOne({ name })`）。
+      //    链条：`getCollaboratorById(id)` 是 `findOne({ id, type: 'collaborator' })`，
+      //    `id` 为 undefined 时该条件被丢弃 ⇒ 退化成 `{ type: 'collaborator' }` ⇒ 返回**自然顺序里
+      //    任意一个协作者** ⇒ 本次请求的身份变成 `id: undefined` + `name: payload.username` +
+      //    **那个人的 permissions**。若他恰好是 `['all']`，AccessGuard 会放行除超管专属前缀外的一切。
+      //    ⚠️ 可达性如实说：**不是远程可利用**。需要一张本站签发、payload 里没有 `sub`、且 `tokens`
+      //    集合里有记录的令牌；而签发侧是 `sub: user.id`，所以只有"用户文档缺 `id` 字段"才会签出
+      //    这种令牌（`jsonwebtoken` 会省略值为 undefined 的声明）：恢复出字段不全的归档、手工改库、
+      //    或历史上"两条 id:0"竞态的清理残留。真实性质是"**坏库 ⇒ 权限错乱**"，
+      //    与上面那条"坏库 ⇒ 明确 401"是同一条路径上的姊妹缺陷。
+      const sub = payload?.sub;
+      if (typeof sub !== 'number' || !Number.isInteger(sub)) {
+        throw new UnauthorizedException(
+          '令牌缺少有效的用户标识（sub 不是整数）：站点数据可能已损坏，或该令牌由旧版本签发。请重新登录以获取新令牌',
+        );
+      }
+      const user = await this.userProvider.getCollaboratorById(sub);
+      if (!user) {
+        // 协作者已被删除但 token 还在有效期内：以前这里会读 user.permissions 直接 500
+        throw new UnauthorizedException('该协作者已不存在');
+      }
+      moreDto.permissions = user.permissions;
+      moreDto.nickname = user.nickname;
     }
     return { name: payload.username, id: payload.sub, ...moreDto };
   }
