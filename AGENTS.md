@@ -8091,6 +8091,46 @@ CHANGELOG 那条已就地更正并保留原句（留更正痕迹是本仓库的�
   `@traptitech/markdown-it-katex`）；本节 §7.77.2 是**第二次**（→ `@mdit/plugin-katex`），理由是维护状态。
   两处不冲突，但引用时要说清是哪一次。
 
+### 7.78 降级驻留的活体闭环（场景 A/B 已验证），以及两条让验证失效的脚手架坑
+
+`1f4baaf6` 的提交信息里写着"场景 B 未闭环、只有单元证据" —— **这句话现已作废**，据实更正如下。
+留档：`vanblog_dev/tmp/scenario-AB-verified.log`（⚠️ 不入库，关键数字抄在这里）。容器内跑**真实编译产物**
+（`vanblog:r3-verify` + 挂载本机编译的 `dist`），18095 端口，测完已拆干净，18080 站长的站全程 200。
+
+| 场景 | 实测 | 判定 |
+|---|---|---|
+| **A** 数据库启动期不可达 | 约 **126s** 进入降级驻留；容器 `running / ExitCode=0 / **RestartCount=0**`（**不退出**）；`health=503` 且响应体与真实端点**逐字段同形状**；两个哨兵写出；FATAL 文案含"数据库不可达"+已重试时长+三条下一步 | ✅ |
+| **B** 数据库恢复 | **10 秒**内 `health=200`（`mongoState:1, mongoPingMs:2`）；日志链条完整：`数据库已可达：关闭降级驻留的占位服务` → `Nest application successfully started` → `已退出降级发布：哨兵按降级前的状态还原（fixed=false、dynamic=false）` → `✅ 站点已回到正常模式`；**哨兵精确还原**；`RestartCount=0` ⇒ **纯自愈、不靠 restart 策略**；恢复后前台首页 **200** | ✅ **闭环** |
+| **C** 重启风暴熔断 | 用**真 node 进程**的 shell 守卫验证（`start-js.test.sh` 15→**30/0**：阈值前不退避／第 3 次退避 ≥250ms／第 4 次更长／退避期间仍透传退出码 9／健康运行后计数真被清零／清零后第一次崩溃不退避） | ✅ 非容器级 |
+| **D** 真 caddy 端到端直发磁盘 HTML | ⚠️ **仍未闭环**。替代证据：哨兵的路径/文件名/常量是**从 `CaddyProvider` import 而非重抄**，且 `caddy.provider.spec.ts` 覆盖了该机制、provider 头注释明确"每个请求现查、不需要 reload"。**但端到端那一步没有实测，不要当成已验证** | ⚠️ 待验 |
+
+⚠️ 一条**设计上的不精确**（如实记录）：重试窗口是**下限而不是上限** —— `initJwt` 内部还有 10×3s 的重试，
+实测"窗口设 15s"时第一次尝试就花了 127 秒（日志原文"在 127 秒内尝试了 **1** 次"）。默认 5 分钟窗口实际约 2-3 次尝试。
+要精确就得把 `initJwt` 的内部重试也做成可配（未做，会影响所有启动路径）。
+
+🔴 **两条脚手架坑，都让"验证失败"与"真缺陷"无法区分**（本节最主要的价值）：
+1. **依赖容器 `stop`/`start` 之后 IP 会变**（实测 10.89.2.12 → 10.89.2.14），而被测进程拿着**注入的旧地址**探活
+   ⇒ 表现为"永远恢复不了"。当时还专门在 app 容器内直连**新** IP 验证过 `PING OK`，才确认是地址漂移而不是探测逻辑坏了。
+   **修法：`podman network create --subnet` + `--ip` 固定地址**（固定后 stop/start 不变）。
+   ⚠️ 这与上一轮 ISR 活体验证失败是**同一个坑第二次发生** ⇒ 立为通用规矩：
+   **凡是要"停掉再起"的依赖容器，必须固定 IP，否则测的是地址漂移而不是故障恢复。**
+   另注：**停止的容器 `NetworkSettings.Networks` 是空的** ⇒ 要 IP 必须在它运行时取（先停后取会拿到空串、整轮作废）。
+2. **在容器里跑仓库的 `dist` 需要 `NODE_PATH`**：`dist/src/main.js` 里是 baseUrl 风格的裸 specifier
+   （`require("src/utils/staticGuard")`），不加 `-e NODE_PATH=/work/packages/server/dist` 就在 **require 阶段**
+   `MODULE_NOT_FOUND` 崩掉（退出码 1、日志尾部只有 `Node.js v24.21.0`）。
+   ⚠️ **这个失败形状很像"启动期崩溃"**，极易被误读成产品缺陷。判据：错误是不是 `MODULE_NOT_FOUND`、
+   且发生在**任何业务日志之前**。
+
+其它环境事实（起本机栈时会用到）：`VAN_BLOG_CONFIG_FILE` 与挂载 `/etc/van-blog/config.yaml` **都不生效**，
+有效的是 **`VAN_BLOG_DATABASE_URL`**（`loadConfig` 里 env 优先于文件，键名规则 `VAN_BLOG_` + 大写、点换下划线）；
+本机 **3000 端口被一个无关进程长期占用**（会返回 "Hello World!"），所以别拿宿主机 3000 当判据；
+rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒ 只能用容器 netns。
+
+⚠️ 建议（未做）：把场景 A+B 这套（固定 IP 的 db + `NODE_PATH` + 挂载 dist + 等 126s 进降级 + 起 db 等 200）
+写成 `scripts/tests/` 里的一个**活体**用例（照 `vanblog-drill.test.sh` 的 `VANBLOG_DRILL_LIVE=1` 模式，默认跳过），
+就能把"数据库启动期不可达 ⇒ 不完全下线 ⇒ 自愈"从一次性证据变成守卫。⚠️ 它需要真容器与真 mongo 镜像 ⇒
+只能进 nightly/手动档，不能进 PR 档。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
