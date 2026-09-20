@@ -322,8 +322,30 @@ export class MetaProvider {
       },
     ];
   }
+  /**
+   * 全站总字数（纯展示用的计数）。
+   *
+   * 🔴 必须判空：`getAll()` 是 `metaModel.findOne().exec()` —— **无 filter 的 findOne 在集合为空时返回 null**。
+   * 不判的后果不是"后台某处报错"，而是**整个前台死掉**：本方法被
+   * `controller/public/public.controller.ts` 的 `buildPublicMeta()` 放在 `Promise.all` 里调用，
+   * 而 `/api/public/meta` 是**匿名可达、且全站最热的一次读**（前台每个页面渲染都要调它）
+   * ⇒ 一个 TypeError 会让它 500，前台整站打不开，而日志里只有一个 TypeError。
+   *
+   * ⚠️ 可达性是真实的、不是理论：`metas` 集合为空而站点"已初始化"—— 例如恢复一份手工做的/部分归档
+   * （有 users 但没有 metas）。同一形状的事故在 `public.controller.ts:386-390` 有记载：
+   * `getMenuSetting()` 返回 null 时裸解构让"全站最热的公开读变成 500、前台整个死掉"，
+   * 而且是**真机 drill 撞到的**（那处已用 `menuRes ?? {}` 修掉，本方法是同一个 Promise.all 里
+   * 仅剩的一处未防护调用）。
+   *
+   * 降级取 **0**，与本行原有的 `|| 0`（字段缺失时也取 0）口径一致。
+   * ⚠️ 这**不是**"一律 ?. 然后静默继续"：总字数是纯展示计数，0 就是"没有可统计的内容"的诚实值，
+   * 不会变成误导性的错答案；而真正的数据损坏会由同一响应里的其它字段、以及 `./vanblog.sh doctor`
+   * 暴露出来。对照本仓库的既有取舍：协作者清单在缺管理员时**必须**报错而不能退化成
+   * "只返回协作者"，因为那会让后台显示"这个站没有管理员"—— 那才是"静默的错答案"。
+   */
   async getTotalWords() {
-    return (await this.getAll()).totalWordCount || 0;
+    const meta = await this.getAll();
+    return meta?.totalWordCount || 0;
   }
 
   async update(updateMetaDto: Partial<Meta>) {

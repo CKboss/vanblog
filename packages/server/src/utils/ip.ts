@@ -4,14 +4,32 @@ import axios from 'axios';
 
 // import publicIp from 'public-ip';
 
+/**
+ * 本机所有网卡的 IPv4 地址。
+ *
+ * ⚠️ **可达性（如实说明，别把它当成匿名 DoS）**：本函数目前**没有活的调用方** ——
+ * 唯一引用它的是 `getDefaultSubjects()`，而 `getDefaultSubjects()` 的唯一调用点在
+ * `provider/caddy/caddy.provider.ts:327` 是**注释掉的**。所以这两处 strictNullChecks 命中
+ * 在今天的运行时**不可达**。⚠️ 但它是 `export` 的，将来被导入就会复活，所以按"真缺陷"的标准修，
+ * 而不是留着。
+ *
+ * 类型层面它是**真的可空**：`os.networkInterfaces()` 返回 `NodeJS.Dict<NetworkInterfaceInfo[]>`，
+ * 也就是 `{ [key: string]: T | undefined }` ⇒ `interfaces[devName]` 的类型带 `undefined`。
+ * 运行时 `for...in` 枚举到的键必然存在，Node 也不会把值设成 undefined ⇒ **实践上是假阳性**；
+ * 但跳过空值的成本是一次 `continue`，而收益是"万一某个平台/某个 Node 版本给了 undefined，
+ * 这里不会抛 TypeError"。⚠️ 特意**不用** `iface!.length`：非空断言会把"我核实过它非空"
+ * 这个判断从类型系统里抹掉，将来 Node 改了行为也不会有人发现。
+ */
 export const getLocalIps = () => {
-  const res = [];
+  const res: string[] = [];
   const interfaces = os.networkInterfaces();
   for (const devName in interfaces) {
     const iface = interfaces[devName];
+    // ⚠️ 见上面的注释：类型上可空、运行时实践上不会为空；这里失败关闭地跳过而不是断言非空。
+    if (!iface) continue;
     for (let i = 0; i < iface.length; i++) {
       const alias = iface[i];
-      if (alias.family === 'IPv4') {
+      if (alias && alias.family === 'IPv4') {
         res.push(alias.address);
       }
     }

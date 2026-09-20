@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { spawn, spawnSync } from 'child_process';
+import { spawn, spawnSync, ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -519,7 +519,24 @@ async function spawnArchiveDecompressor(
   spec: CompressorSpec,
   onUpstreamError: (message: string) => void,
   passphrase?: string | null,
-): Promise<{ child: ReturnType<typeof spawn>; encrypted: boolean; header: BackupEncryptionHeader | null }> {
+): Promise<{
+  // 🔴 这里以前写的是 `ReturnType<typeof spawn>`，那是**类型层面的信息丢失**，不是运行时缺陷：
+  //    `spawn` 有多个重载，`ReturnType<>` 取的是**最后一个**（最泛的）重载 ⇒ `ChildProcess`，
+  //    它的 `stdout`/`stderr`/`stdin` 都是 `Readable | null`（只有 stdio 不是 'pipe' 时才为 null）。
+  //    而本函数下面两处 `spawn(...)` **都不传 options** ⇒ 实际命中的是
+  //    `SpawnOptionsWithoutStdio` 重载，返回 `ChildProcessWithoutNullStreams`（三个流都非空）。
+  //    证据：函数**内部**对同一个 `child.stdin` 的三处裸解引用（`child.stdin.on('error')`、
+  //    `child.stdin.end()`、`source.pipe(child.stdin)`）在 strictNullChecks 下**都不报错**，
+  //    只有经过这个注解传出去之后才变成可空 —— 6 处 TS18047 全部由此而来。
+  //    所以正确的修法是**收紧返回类型**（把不变量写进类型系统），而不是在 6 个调用点撒 `?.`：
+  //    ⚠️ 撒 `?.` 在这里是**有害**的 —— `decErr`/`decErr += chunk` 是解密失败诊断的唯一来源，
+  //    静默跳过它会把"口令错了/归档被截断"变成"解压器莫名退出"，而那正是本文件多处注释
+  //    强调"解密失败优先报"的原因。
+  //    收紧之后，将来谁把 spawn 改成 `stdio: 'ignore'` 之类，**编译期就会在 return 处报错**。
+  child: ChildProcessWithoutNullStreams;
+  encrypted: boolean;
+  header: BackupEncryptionHeader | null;
+}> {
   const { source, header } = await openDecryptedSource(archivePath, passphrase);
   if (!source) {
     return {
