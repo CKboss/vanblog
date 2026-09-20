@@ -8173,6 +8173,67 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 —— 容器内 `127.0.0.1:80` 是 200、宿主机发布端口是 connection refused，而 `podman port` 看起来正常。
 必须再做一次 `podman stop && podman start` 才恢复。**失败形状很像"caddy 没起来"**，容易误判成产品缺陷。
 
+### 7.78c 场景 B/D 在**真构建镜像**上复验闭环；降级期坏掉的东西如实清单；以及一条 P0 回归
+
+镜像 `vanblog:d-verify`（= `local@fc1eb27b`，`podman inspect` 自证），发布端口 18093。
+留档：`vanblog_dev/tmp/scenarioE2E.log`（主证据）、`e2e-app-final.log`（686 行容器日志）、
+`defect-revalidate-403.log`（七条证据汇总）、`revalidate-secret-works.log`（缓解生效）。
+
+**场景 B（比 §7.78 那份"挂载 dist"的证据更硬）**：`18:27:09` restart（mongo 已停）→ 60/120/180/240/300/360s
+全是 `health=502 front=502`、`Status=running Exit=0 RC=0` → `+396s` FATAL 并进入降级驻留、写哨兵、占位监听 `:::3000`
+→ `18:34:00` 启 mongo → `+10s health=503` → **`+20s health=200`**。
+🔴 **`StartedAt` 前后完全相同**（`18:27:08.999226422`）、`RestartCount` 0→0 ⇒ **进程内自愈，不是重启策略的功劳**。
+哨兵从 **2 个精确还原到 0 个**（日志明写 `fixed=false、dynamic=false` = 降级前的状态）；
+`next-server` 重新出现（PID 153）、`/` 的静态头消失 ⇒ 真的回到 Next 渲染。
+⚠️ 用的是**默认窗口**（未设 `VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS` ⇒ 300000），所以这就是默认配置下的行为。
+
+**场景 D（端到端）**：降级驻留中容器内进程只有 `node start.js` / `caddy` / `node main.js`，**没有 next-server**，
+而通过发布端口：`/` ⇒ **200** + `X-Vanblog-Static-Html: 1`、body sha `dadb2e02500f58f0` **与磁盘 `index.html` 逐字节相同**；
+`/post/<真实别名>` ⇒ **200** + 头值 **`dynamic`**、sha `dd7b2916df0eb11d` **逐字节相同**；
+`/static/img/*` ⇒ 200（1705418 B）；`/api/public/health` ⇒ **503** 且 body 同形状。
+判据用了**三重**（静态头 + 字节比对 + 进程表无 next-server），并配**负对照**（正常模式同一 URL **无**此头，0 命中）
+与**正对照**（容器内直连 `127.0.0.1:3000` 也返回 503 ⇒ 那个 503 来自占位监听器，不是 caddy 编的）。
+✅ **"哨兵不需要 reload caddy" 实测成立**：运行期写入哨兵后**下一个请求立刻**变成直服（0.06s→0.00s + 出现静态头），
+删掉后**立刻**回到无头，全程没有 reload/重启 caddy。
+
+⚠️ **降级期如实坏掉的东西**（别只报好消息）：站内搜索 **503**、**`/rss/feed.xml` 503**、waline `/ui/` **502**、
+未渲染过的 `/post/<slug>` **502**；`/admin` 仍 **200**（caddy 自己的 `file_server`，与哨兵和 Next 都无关）。
+🔴 **RSS 那条值得单独立项**：`/rss/*` 走 server，所以"被打瘫时仍能发布内容"**不含订阅源** ——
+而 RSS 恰恰是敌意环境下**最省流量**的发布通道。建议让 caddy 直服 `/app/static/rss`（它已经是落盘产物）。
+
+🔴🔴 **同轮挖到一条 P0 回归（比上面两条更要紧）**：`packages/website/pages/api/revalidate.ts` 的回环判定
+在**真实 Next 14 运行时里恒为 false** ⇒ **默认配置下 server→website 的所有 revalidate 调用一律 403**。
+证据：容器内用 node 发**最小请求**（只有 `host`/`connection`）打 `127.0.0.1:3001/api/revalidate?path=/` ⇒ **403**
+（reason 原文含"…且请求不是本机回环直连"）；而**同一容器**里普通 node HTTP 服务看到的形状是
+`remoteAddress="127.0.0.1"`、无任何转发头 ⇒ 本该放行。3001 是 `0.0.0.0:3001` 纯 IPv4（`/proc/net/tcp6` 无 `0BB9`）、
+编译产物与源码一致、`/api/` 下唯一会发 403 的就是它且**没有 middleware**。
+⇒ 最可能是 pages-API 上下文里 `req.socket`/`req.connection` 都取不到（⚠️ 这一层是**推断**，未直接观测；403 是实测）。
+**后果实测**：冷启动全量渲染 **8 次重试全败** → `ERROR 达到最大增量渲染重试次数（8 次，累计等待约 135 秒）`
+→ **`post/*.html` = 0 个** ⇒ **降级发布在新容器上无产物可发**，且发布/改文章后的主动重渲染也走这条路。
+**回归来源**：`cc1c51eb`（2026-09-19，"five reliability defects"）引入的回环限制 —— 之前"没配密钥=不校验"所以能跑通
+⇒ **这是一个由安全修复带进来的回归**。
+**缓解已实测有效**：设 `VAN_BLOG_REVALIDATE_SECRET` ⇒ 同端点 **200 `{"revalidated":true}`**、冷启动
+`触发全量渲染完成！`、**53 篇产物 + 9 个固定页、失败 0**。
+
+🔴 **单测盲区（这一族已经第三次出现，务必记住）**：`packages/website/__tests__/revalidateAuth.spec.ts:62` 的
+`fakeReq` **恒**带 `socket:{remoteAddress:"127.0.0.1"}`，所以永远量不到"运行时取不到 socket"；
+而 `:123` 那条 `{ socket: {}, headers: {} }` 用例**恰恰就是现实的形状**，却被断言成"应当拒绝的攻击"。
+⇒ 与本仓库那个 Mongoose `{}` 替身（对 `{}` 返回 null，于是有缺陷的代码在测试里同样绿）**完全同族**：
+**测试替身钉住的是作者的假设，不是现实。** 规矩：**凡是有"取不到/为空/形状未知"这类分支的安全判定，
+替身必须包含一条"真的取不到"的用例**，并且要有一条**替身忠实度守卫**（例如断言"存在至少一条用例的 req
+不带 `socket.remoteAddress`"），否则盲区会静默复发。
+
+⚠️ 两个脚手架坑（都已修，值得记）：①探针**漏了 URL 百分号编码** ⇒ 含中文别名的 `/post/*` 全部返回 `None`，
+一度被当成产品问题；②正对照里写 `grep -c … || echo "?"`，在 grep 无匹配时**同时**输出 `0` 和 `?`
+⇒ 字符串比较失败、误报"注入未通过"。⚠️ 共同信号与之前那条一致：**一整组结果同时异常时，先怀疑探针。**
+
+⚠️ 环境事实：**容器 exit 后再 `podman start`，宿主机侧端口转发不会重建**（容器内 `127.0.0.1:80` 是 200、
+宿主机发布端口 connection refused、而 `podman port` 看着正常）⇒ 必须再 `stop && start` 一次。
+**失败形状很像"caddy 没起来"**，容易误判成产品缺陷。
+
+⚠️ 遗留需要 sudo 的目录（root 映射的 mongo 数据，`rm -rf` 删不掉）：`vanblog_dev/tmp/verify-174043/mongo`(4.4M)、
+`vanblog_dev/tmp/verify-r5/mongo`(44K)。
+
 ### 7.79 🔴 挂载本机 dist 进容器**可以**，但必须用 `nest build`（用裸 `tsc` 必然 `MODULE_NOT_FOUND`）
 
 ⚠️ **本节第一版写错了结论，现予更正**（原写法是"本机 dist 与镜像产物不等价 ⇒ 挂载这条路结构上走不通"）。
