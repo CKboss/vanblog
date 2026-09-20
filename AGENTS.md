@@ -3276,7 +3276,7 @@ keep 不是正整数就 `return 0`、`rm -f "${dir:?}/..."` 带 `:?` 保护（di
 | 项 | 实测 | 暂缓原因 |
 | --- | --- | --- |
 | 首页/分页把**全文**塞进 `__NEXT_DATA__` | HTML 114KB（gzip 33KB），`__NEXT_DATA__` 占 31.8%（gzip 后 **54.8%**）；5 篇 content 25KB，卡片只要 3.3KB 摘要 → **87% 白送**；模拟修完 gzip −31.8% | 要在 server 侧出 `excerpt`：把 `utils/articleExcerpt.ts`（围栏感知的 `findMoreMarker`、200 字回退、截断链接修复、代理对安全）移植过去，并让 `markdown.provider.getDescription` 改为委托它，否则两份实现会漂。跨 server+website，得配"两边摘要一致"的对照测试；还要处理 9 篇没有 `<!-- more -->` 的文章（#410 那个"卡片里露出 `[文字](url)` 括号"的回归就出在这条路径上） |
-| ~~ByteMD **编辑器**进了每个 markdown 页面的首屏 JS~~ **这条判断是错的，已被生产构建推翻**（见 §7.45）：那个"1148 个模块、含 9 个 codemirror-ssr"的证据来自 **dev/server chunk**，不是浏览器下载的产物。真跑 `next build` 后逐个 chunk 搜 `CodeMirror`/`tippy`/`popper`/编辑器工具栏字符串，**一个都没有** —— 编辑器本来就没进客户端包。原来的记录：| 两条路都要跑生产构建对比：① 摘要在服务端渲染成 HTML（和上一条一起做最划算，注意仍要过 `sanitizeMarkdownSchema`）②内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标 `sideEffects:false`。另外 `dynamic(..., {ssr:true})` 在首页的**初始** script 列表里 —— 它一点都不 defer |
+| ~~ByteMD **编辑器**进了每个 markdown 页面的首屏 JS~~ | **这条判断是错的，已被生产构建推翻**（见 §7.45）：那个"1148 个模块、含 9 个 codemirror-ssr"的证据来自 **dev/server chunk**，不是浏览器下载的产物。真跑 `next build` 后逐个 chunk 搜 `CodeMirror`/`tippy`/`popper`/编辑器工具栏字符串，**一个都没有** —— 编辑器本来就没进客户端包。原来的记录：| 两条路都要跑生产构建对比：① 摘要在服务端渲染成 HTML（和上一条一起做最划算，注意仍要过 `sanitizeMarkdownSchema`）②内联 `@bytemd/react` 那 30 行 `Viewer` 并给 bytemd 标 `sideEffects:false`。另外 `dynamic(..., {ssr:true})` 在首页的**初始** script 列表里 —— 它一点都不 defer |
 | `/timeline` 带 42.5KB 没人读的数据 | pageProps 73.5KB 里 `sortedArticles`(21.3KB) + `yearGroup.articles`(21.2KB) 都无读者（`TimelineArchives` 只在 `months.length===0` 时才读，实测 4 个年份组一个都不满足） | gzip 后只省 6.6%（两份 JSON 高度相似），收益主要在解析/内存；要同步改 `timelineMonths` 的测试与"没有日期的文章"回退路径 |
 | 每张卡片一个未合并的阅读量请求 | 5 次串行 XHR（89ms vs 并行 36ms），每次回 220B 的**整个 visit 文档**只为显示一个整数，而这数字 pageProps 里已经有 | 要加批量接口（或并进 `/comments/counts` 那种 50ms 合并器，`commentApi.ts:96-146` 是现成范例）；顺带把初始值从 pageProps 里 seed，省掉卡片上 `"..."` → 数字的抖动 |
 | apple 皮肤 46KB CSS 在全局表里 | 全局 CSS 72.7KB（gzip 16.3KB）：apple 46.2KB + markdown 相关 43KB；用 `default`/自定义主题时那 46KB 纯浪费，且 markdown 那部分在 `/link`、`/tag`、`/category`、`/timeline` 上也用不到 | 现在主题机制已经有 `/api/public/theme.css` 这条路，内置 apple 也可以走；但 apple.css 依赖"在 Tailwind 之后引入"的顺序，挪成 `<link>` 要对两种皮肤做视觉对比 |
@@ -8676,6 +8676,35 @@ if (clusterWorkers > 1 && cluster.isPrimary) { …runBootstrapWithDbRetry(startP
 
 ⚠️ 另一条会影响解读的事实：本轮持续加压那节（`--no-load` 未加时）出现 `ok=9336 http_429=10664` ⇒
 **默认限流在持续加压下会大面积 429**，这是**正确行为**不是失败；要用它当吞吐指标必须先抬限流，并写明抬到了多少。
+
+### 7.85 第 20–29 轮的活体闭环，以及两条会让人撞墙的运维事实
+
+**四项修复的活体验证全部通过**（镜像 `vanblog:r28-gate` = `local@16bf3e1e`，四套隔离栈；留档 `vanblog_dev/tmp/r28-prep-043613/`）：
+①**闸门顺序**：中段翻 1 字节 + 原 `.sig` ⇒ **400**，文案点名「签名**不匹配**…在签名之后**被改动过**」+ `ERROR [RestoreSecurity] [signature-mismatch]`，
+而修复前那句「读不出这个备份的清单」在全量日志里 **0 命中**（正向对照先过：未篡改 ⇒ **201**、`签名校验通过` ×2）。
+②**成员上限对"无 manifest 的炸弹"现在可达**：**146,952 字节 / 100,001 成员 / manifest 0 命中** ⇒ **400 / 0.928s**、
+文案「已数到 **50001** 个仍未结束，允许 50000 个，已**中止读取**」+ `[member-cap]` 级别 **ERROR**；正对照真 **226 成员**归档 ⇒ **201**（无误伤）。
+③🔴 **管理员路径的验签真的生效了**：密钥**只在** `<backupDir>/signing/`、**env 里 0 个密钥变量** ⇒ 篡改归档**从"放行"变成 400 拒绝**；
+`skipSignatureCheck=` **1/yes/TRUE 全 400**、字面量 **`true` ⇒ 201 真恢复** + `WARN 已按显式要求跳过签名校验`；
+正对照（验得过签、不带 skip）⇒ **201** + `签名校验通过` ×1 且"跳过" **0 命中** ⇒ 是**真验过**而不是跳过。
+④**限流**：6 次 `GET /api/admin/init` ⇒ **404×6、429 零次**；🔴 决定性判别是**算术**：同窗口 POST 共 4 次、GET 共 **26** 次而配额只有 **5**，
+最后那个 POST（真归档恢复）仍 **201**；对照组（新栈、默认配额）POST **#1–#5 全 400、#6 = 429 且 `Retry-After: 600`** ⇒ **配额没有被放宽**。
+⚠️ 额外拿到：节流与升级在**管理员路径**上也成立（10 次 `confirm=1` ⇒ `confirm-missing` **只 1 条** + 一条 **ERROR** 级累计汇总）⇒
+**warn 级洪水也能被 `doctor` 的 24h ERROR 计数看见**。
+⚠️ 一个有用的旁证：匿名路径 `签名校验通过` 是 **2** 次（控制器闸门 + 内层），管理员路径是 **1** 次（只有内层）⇒ 可当作"透传是否活着"的信号。
+
+🔴 **两条会让人撞墙的运维事实**（都不是缺陷，但都没写在文档里，两个代理各自撞了一次）：
+1. **一次成功的整站恢复会立刻让当前管理员会话失效**：恢复把 **`tokens` 与 `users` 集合**一起回滚成归档里的内容 ⇒
+   恢复后必须用**归档里那个管理员**重新登录，之前签发的 API token **全部作废**；任何"恢复后自动接着做管理员操作"的脚本都会在这里 **401**。
+   （与"恢复旧归档会把 JWT 密钥一起回滚"同族。⚠️ 做活体测试时这意味着：**正对照必须另起一套栈**，否则会被上一次恢复污染。）
+2. **管理员 API 的凭据头是非标准的 `token`，不是 `Authorization: Bearer`**（`provider/auth/token.guard.ts:19-28`：
+   **刻意**只允许一个来源，注释说明再加来源会让 `findOne({token: undefined})` 退化成"库里存在任意未吊销 token 就通过"，
+   并由 `tokenGuardHeaderSource.spec.ts` 钉住）⇒ 任何人写自动化都会先撞一次 **401**，而 **401 的响应体不提示该用哪个头**。
+   ⚠️ 这是"安全加固让可用性变差、且没有补偿性的错误提示"的典型：**要么在 401 文案里指路，要么在文档里写清**（当前两者都没有）。
+
+⚠️ 顺带修掉一条手册自身的渲染缺陷：本节前面那张"明确暂缓"表的 ByteMD 那一行**只有 2 个单元格而表头是 3 个**
+（更正文字把单元格分隔符吃掉了），已在划掉的条目名后补回 `|`。⚠️ 这类缺陷**不会被任何守卫发现**（`docs-consistency` 查的是变量名与链接，
+不查 AGENTS 的表格列数）⇒ 规矩：**往表格里追加"更正块"时，要数列数**。
 
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
