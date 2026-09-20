@@ -1619,7 +1619,7 @@ drill_reverify_guard() { # <天数>
       n_stale=$((n_stale + 1))
       stale_list="${stale_list}${stale_list:+、}${bn}（上次验证 ${age} 天前）"
     fi
-  done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$')
+  done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE "${DRILL_SIDECAR_RE}")
   if ((n_total == 0)); then
     rec_note "每份归档都在 ${days} 天内复验过" "备份目录里还没有归档，无从查起"
   elif ((n_stale == 0)); then
@@ -2229,6 +2229,80 @@ drill_print_plan() {
   say "              → 拆掉全部一次性资源（trap，失败也拆）"
 }
 
+# ── 离线签名（.sig）在演练里的处理 ────────────────────────────────────────────
+# ⚠️ 下面四个都是**纯函数**（不碰引擎、不发请求、只依赖入参与文件系统），这样它们能在
+#    非活体模式下被测到：`scripts/tests/vanblog-dr-offline.test.sh` 用假 docker/假 curl 覆盖它们。
+#    把判定逻辑塞进 `cmd_drill` 的直线流程里 = 只有起真容器才测得到，而演练的活体部分在 CI 里不跑。
+
+drill_signature_sidecar() { # <归档路径> → stdout: 旁边的 .sig 路径；没有就输出空（返回码恒 0）
+  local a="${1:-}"
+  if [[ -n "${a}" && -f "${a}.sig" ]]; then printf '%s\n' "${a}.sig"; fi
+  return 0
+}
+
+# 组装匿名恢复（POST /api/admin/init/restore）的 multipart 参数，结果写进全局 DRILL_RESTORE_ARGS。
+# 🔴 `.sig` **只在文件真的存在时才带**：不带 = 服务端按 `missing-sig` 处理（只记 note、不拦恢复），
+#    带了但形状不对/超过 8KB = 服务端 400。显式不带比"带一个空串"更清楚，日志也能说准。
+# ⚠️ 用 curl 的 `-F "字段=<文件"` 形式（值从文件读出来），与 setupKey / 备份口令同一条纪律：
+#    内容不进 argv，所以 `ps` 看不到、也不会被台账或日志带出去。
+# ⚠️ 服务端把 `signature` 声明成**文本字段**（`@Body('signature')`，fieldSize 64KiB + 落盘前 8KiB 检查），
+#    所以这里必须是 `<文件` 而不是 `@文件`：`@` 会把它当**文件字段**上传，服务端读不到这个 body 键。
+drill_build_restore_args() { # <归档> <upload_name> <setup_key_file|-> <sig_file|->
+  local archive="$1" upname="$2" keyfile="${3:--}" sigfile="${4:--}"
+  DRILL_RESTORE_ARGS=(-F "file=@${archive};filename=${upname};type=application/octet-stream")
+  if [[ -n "${keyfile}" && "${keyfile}" != "-" ]]; then
+    DRILL_RESTORE_ARGS+=(-F "setupKey=<${keyfile}")
+  fi
+  if [[ -n "${sigfile}" && "${sigfile}" != "-" ]]; then
+    DRILL_RESTORE_ARGS+=(-F "signature=<${sigfile}")
+  fi
+  return 0
+}
+
+# 把"这次恢复在验签维度上到底证明了什么"归成一个词，供台账使用。
+# ⚠️ 顺序有讲究：**先看拒绝原因**再看有没有公钥。因为篡改场景期望的就是 400，
+#    如果先判 `key!=1 → no-key`，那么"没透传公钥"会把一次真实的拒绝误报成"没验签"。
+drill_classify_signature_outcome() { # <http_code> <body> <sig_sent:0|1> <key_passed:0|1> → stdout 一个词
+  local code="${1:-000}" body="${2:-}" sig="${3:-0}" key="${4:-0}"
+  if [[ "${sig}" != "1" ]]; then printf 'not-applicable\n'; return 0; fi
+  if [[ "${code}" == "400" ]] && printf '%s' "${body}" | grep -qE '签名|signature|\.sig'; then
+    printf 'refused-signature\n'; return 0
+  fi
+  if [[ "${code}" == "400" ]]; then printf 'refused-other\n'; return 0; fi
+  if [[ "${key}" != "1" ]]; then printf 'no-key\n'; return 0; fi
+  if [[ "${code}" == "200" ]]; then printf 'covered\n'; return 0; fi
+  printf 'inconclusive\n'
+}
+
+# 造一份**被篡改的副本**：翻掉文件中段的一个字节。
+# ⚠️ 只在副本上做，**绝不动真归档**（它可能是站长唯一的恢复点）；调用方负责删副本。
+# ⚠️ 偏移取中段而不是开头：动开头会先破坏 zstd/tar 魔数，服务端会以"这不是本功能的归档"拒绝，
+#    那就证明不了"签名闸门抓住了篡改"这件事 —— 我们要的是签名那条分支被走到。
+# ⚠️ 必须**自证篡改真的发生了**（sha256 与原文件不同），否则"被拒"可能只是因为副本没改成。
+#    这与变异对照那条纪律同源：0 红/被拒之前，先排除"改动根本没生效"。
+drill_make_tampered_copy() { # <源归档> <副本路径> → 0=成功且确已不同
+  local src="${1:-}" dst="${2:-}"
+  [[ -n "${src}" && -f "${src}" && -n "${dst}" ]] || return 1
+  command -v sha256sum >/dev/null 2>&1 || return 127
+  cp -p "${src}" "${dst}" 2>/dev/null || return 1
+  local size off
+  size="$(wc -c <"${dst}" 2>/dev/null | tr -d '[:space:]')"
+  if ! [[ "${size:-0}" =~ ^[0-9]+$ ]] || (( size < 4096 )); then
+    rm -f "${dst}" 2>/dev/null; return 1   # 太小的文件翻中段没意义，宁可跳过也不给假结论
+  fi
+  off=$(( size / 2 ))
+  if ! dd if=/dev/zero bs=1 count=1 seek="${off}" conv=notrunc of="${dst}" 2>/dev/null; then
+    rm -f "${dst}" 2>/dev/null; return 1
+  fi
+  local h1 h2
+  h1="$(sha256sum <"${src}" 2>/dev/null | cut -d' ' -f1)"
+  h2="$(sha256sum <"${dst}" 2>/dev/null | cut -d' ' -f1)"
+  if [[ -z "${h1}" || -z "${h2}" || "${h1}" == "${h2}" ]]; then
+    rm -f "${dst}" 2>/dev/null; return 1   # 篡改没生效 ⇒ 不做这个场景，也不报"通过"
+  fi
+  return 0
+}
+
 cmd_drill() {
   local archive="" upload_name="" want_http="" want_mongo=""
   local arg
@@ -2249,6 +2323,19 @@ cmd_drill() {
     --no-pull) DRILL_NO_PULL=1 ;;
     --skip-preflight) DRILL_SKIP_PREFLIGHT=1 ;;
     --skip-hash) DRILL_SKIP_HASH=1 ;;
+    # 🔴 演练走的是**匿名**的 `POST /api/admin/init/restore`，而服务端**刻意不给**这条路
+    #    "跳过验签"的开关（有守卫钉住：`skipSignatureCheck` 只出现在**管理员**控制器里）。
+    #    所以这个 flag 在 drill 下**无法被兑现**。⚠️ 绝不能静默忽略 —— 用户会以为"我跳过了验签，
+    #    所以演练恢复成功"，而真相是"验签照跑了、只是这份归档验得过/没有 .sig"。
+    #    选择**非 0 退出**而不是"忽略但说明"：请求一个安全绕过却被告知"已忽略"，
+    #    在灾难现场很容易被读成"已生效"；退出码 2 与本脚本其它参数错误一致，脚本化调用能察觉。
+    --skip-signature-check)
+      say "${red}drill：--skip-signature-check 在演练里无法兑现${plain}"
+      say "  演练走的是匿名的 POST /api/admin/init/restore，而服务端刻意不给这条路「跳过验签」的开关："
+      say "  一个匿名可达的接口上放安全绕过开关，等于把绕过交给任何能访问初始化页的人。"
+      say "  要跳过验签请走管理员那条路：${yellow}${VANBLOG_SELF_NAME:-./vanblog.sh} restore --skip-signature-check <归档>${plain}"
+      say "  （它打的是 POST /api/admin/backup/full/restore，需要管理员令牌，且值必须是字面 true。）"
+      return 2 ;;
     -h | --help | help) drill_usage; return 0 ;;
     0) : ;; # vanblog.sh 的菜单/分发习惯会塞一个 0 进来
     --*) say "${red}drill：未知参数 ${arg}${plain}"; return 2 ;;
@@ -2265,7 +2352,7 @@ cmd_drill() {
   if [[ -z "${archive}" ]]; then
     local dir newest
     dir="$(full_backup_dir 2>/dev/null)"
-    newest="$(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | head -1)"
+    newest="$(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE "${DRILL_SIDECAR_RE}" | head -1)"
     if [[ -z "${newest}" ]]; then
       say "${red}没有指定归档，而备份目录里也找不到 vanblog-full-* 归档：${dir}${plain}"
       say "  用法：${green}${DRILL_SELF_NAME} drill /path/to/vanblog-full-xxx.tar.zst${plain}"
@@ -2707,18 +2794,23 @@ cmd_drill() {
       rec_warn "验签公钥没能透传" "VANBLOG_BACKUP_VERIFY_KEY 有值但写不进 ${DRILL_TMP:-<没有临时目录>}"
     fi
   fi
-  # 🔴 **必须在台账里写清楚：这次演练没有覆盖"验签"**，否则"公钥已透传"这条 note 会被读成
-  #    "演练验过签了"。事实是：演练走 `POST /api/admin/init/restore` 的 **multipart 上传**
-  #    （`-F "file=@${archive}"`），而 `.sig` 是归档**旁边的另一个文件**，不随上传进去 ⇒
-  #    服务端在 upload-tmp 里找不到 `<归档>.sig`，验签状态只能是 `missing-sig`，
-  #    而按设计 `missing-sig` **只记 note、不算 issue**（否则所有老归档全线报红）⇒ 恢复照样成功。
-  #    所以：透传公钥只让容器配置与生产一致、让那条 note 说得准，**并不构成验签覆盖**。
-  #    真要走验签这条路，必须让归档与 `.sig` **同时在服务端备份目录里**，然后按名字恢复
-  #    （`vanblog.sh restore <归档名>` / `reset <归档名>` → `POST full/restore`）；
-  #    而未初始化的站点只有匿名的 `init/restore` 可用，所以演练**结构上**做不到。
-  #    ⚠️ 这是服务端能力缺口（`init/restore` 不接受第二个 multipart 字段带 `.sig`），已上报。
-  rec_note "验签**未被本次演练覆盖**" "演练走 multipart 上传，.sig 不随归档上传 ⇒ 服务端只能得到 missing-sig（按设计只记 note、不算失败），恢复仍会成功。要演练验签请用 vanblog.sh restore <归档名>（归档与 .sig 都在服务端备份目录里）"
-
+  # 🔴 台账必须说清"这次演练在验签维度上到底证明了什么"，否则"公钥已透传"这条 note 会被读成
+  #    "演练验过签了"。这里只记**前置条件**（有没有 .sig、有没有透传公钥），
+  #    ⚠️ 权威结论要等恢复真的跑完、由 `drill_classify_signature_outcome` 归类后再记 ——
+  #    因为在发请求之前就断言"已覆盖"，等于把结论写在证据前面。
+  drill_sig_file="$(drill_signature_sidecar "${archive}")"
+  drill_vkey_passed=0
+  [[ ${#drill_vkey_args[@]} -gt 0 ]] && drill_vkey_passed=1
+  if [[ -z "${drill_sig_file}" ]]; then
+    rec_note "这份归档没有 .sig，验签不在本次演练范围内" \
+      "$(basename "${archive}") 旁边没有 .sig（备份时没配 VANBLOG_BACKUP_SIGNING_KEY，或早于本功能）⇒ 恢复时不会带 signature 字段，服务端按 missing-sig 处理（只记 note、不拦恢复）。这**不是**验签失败，也**不是**验签通过。"
+  elif [[ "${drill_vkey_passed}" != "1" ]]; then
+    rec_warn "有 .sig，但演练容器里没有验签公钥" \
+      "服务端会走到 no-key（有签名但没有可比对的公钥）⇒ 按设计**放行 + WARN**，所以恢复成功**不等于**验过签。要真覆盖验签，请透传 VANBLOG_BACKUP_VERIFY_KEY(_FILE)，或让容器的备份目录里有 signing/*.pub.pem。"
+  else
+    rec_note "验签的前置条件齐了" \
+      ".sig 在（$(basename "${drill_sig_file}")），验签公钥也已透传 ⇒ 恢复时会带上 signature 字段，服务端能做真验签；权威结论见后面那条。"
+  fi
   if ! "${eng}" run -d --name "${DRILL_APP_NAME}" \
     --network "${net_name}" \
     --add-host "${DRILL_MONGO_NAME}:${mongo_ip}" \
@@ -2821,15 +2913,60 @@ cmd_drill() {
     rec_warn "没取到初始化密钥" "容器内读不到 setup.key、日志里也没有「初始化密钥：」行。镜像默认要求携带（VANBLOG_INIT_REQUIRE_SETUP_KEY=true），此时恢复会 400 setupKeyRequired"
   fi
   setup_key="" # 用完立刻清掉变量，免得后面哪条调试输出把它带出去
+  # ⚠️ `.sig` 只在真的存在时带上（见 drill_build_restore_args 的注释：不带 = missing-sig，
+  #    带了但形状不对 = 400）。upload_name 仍是白名单要求的那个名字，签名不参与文件名。
+  drill_build_restore_args "${archive}" "${upload_name}" "${setup_key_file:--}" "${drill_sig_file:--}"
+
+  # ── 9-pre) 🔴 负向场景：被篡改的归档必须被**签名闸门**拒绝 ────────────────────
+  # 这是"签名在灾难恢复路径上真的起作用"的**唯一直接证据**：正向恢复成功只能说明"没被拦"，
+  # 说明不了"该拦的会拦"。⚠️ 必须**先**跑负向、再跑正向 —— 成功恢复之后站点就初始化了，
+  # 匿名恢复接口会 403，负向场景就再也跑不了。
+  # ⚠️ 正向对照就是紧接着的第 9 步（同一份未篡改归档 + 同一个 .sig ⇒ 恢复成功）：
+  #    没有它，"被拒"可能只是因为副本被弄坏了、根本没走到验签那一层。
+  if [[ -n "${drill_sig_file:-}" && "${drill_vkey_passed:-0}" == "1" ]]; then
+    local tampered="${DRILL_TMP}/tampered-$(basename "${archive}")" tampered_body="${DRILL_TMP}/tampered.json"
+    step "负向场景：上传被篡改 1 字节的归档副本 + 原始 .sig ⇒ 必须 400 且原因点名签名"
+    if drill_make_tampered_copy "${archive}" "${tampered}"; then
+      local -a tampered_args=()
+      drill_build_restore_args "${tampered}" "${upload_name}" "${setup_key_file:--}" "${drill_sig_file}"
+      tampered_args=("${DRILL_RESTORE_ARGS[@]}")
+      if http_probe POST "${base}/api/admin/init/restore" "${tampered_body}" 600 "${tampered_args[@]}"; then
+        : # http_probe 只关心"有没有拿到响应"，判定在下面按状态码做
+      fi
+      local t_code="${HTTP_CODE}" t_body
+      t_body="$(cat "${tampered_body}" 2>/dev/null)"
+      case "$(drill_classify_signature_outcome "${t_code}" "${t_body}" 1 1)" in
+        refused-signature)
+          rec_pass "被篡改的归档被签名闸门拒绝" \
+            "HTTP ${t_code}，响应点名签名 ⇒ 闸门按 <归档>.sig 找到了随上传带过去的签名并验不过。篡改只在副本上做（真归档未被修改），副本已删。" ;;
+        refused-other)
+          rec_fail "被篡改的归档被拒了，但**不是因为签名**" \
+            "HTTP ${t_code}，响应里没有签名相关字样：$(printf '%s' "${t_body}" | head -c 200)。⇒ 可能是副本坏在别处先被判掉（例如魔数/解压失败），这条**没有证明**验签起作用。" ;;
+        *)
+          rec_fail "被篡改的归档**没有被拒绝**" \
+            "HTTP ${t_code}：$(printf '%s' "${t_body}" | head -c 200) ⇒ 验签在恢复路径上没有拦住篡改，这是真缺陷（或公钥没生效，见前面那条 warn）。" ;;
+      esac
+      rm -f "${tampered}" "${tampered_body}" 2>/dev/null
+      # ⚠️ 自证副本确实被删干净（留在 DRILL_TMP 里会被后续"归档对账"步骤误当成一份真归档）
+      [[ -e "${tampered}" ]] && rec_fail "篡改副本已清理" "${tampered} 仍然存在" \
+        || rec_pass "篡改副本已清理" "真归档未被修改（只在副本上翻字节），副本与响应文件都已删除"
+      # 重新组装正向恢复用的参数（上面被负向场景覆盖过 DRILL_RESTORE_ARGS）
+      drill_build_restore_args "${archive}" "${upload_name}" "${setup_key_file:--}" "${drill_sig_file}"
+    else
+      rec_warn "负向场景（篡改归档）没跑成" \
+        "造不出可用的篡改副本（源归档 <4096 字节、sha256sum 不可用，或篡改后 sha 未变化）。⚠️ 这**不是**「验签通过」，只是这一项没有证据。"
+    fi
+  elif [[ -n "${drill_sig_file:-}" ]]; then
+    rec_note "负向场景（篡改归档）本轮跳过" \
+      "有 .sig 但容器里没有验签公钥 ⇒ 服务端只会得到 no-key 并按设计放行，跑负向场景必然「没被拒」，那是**测试条件不具备**而不是产品缺陷。透传 VANBLOG_BACKUP_VERIFY_KEY(_FILE) 后即可覆盖。"
+  fi
+
   t0="$(date +%s)"
   local restore_ok=1
-  if [[ -n "${setup_key_file}" ]]; then
-    http_probe POST "${base}/api/admin/init/restore" "${restore_body}" 3600 \
-      -F "file=@${archive};filename=${upload_name};type=application/octet-stream" \
-      -F "setupKey=<${setup_key_file}" || restore_ok=0
+  if http_probe POST "${base}/api/admin/init/restore" "${restore_body}" 3600 "${DRILL_RESTORE_ARGS[@]}"; then
+    :
   else
-    http_probe POST "${base}/api/admin/init/restore" "${restore_body}" 3600 \
-      -F "file=@${archive};filename=${upload_name};type=application/octet-stream" || restore_ok=0
+    restore_ok=0
   fi
   rm -f "${setup_key_file}" 2>/dev/null
   t1="$(date +%s)"
@@ -2850,6 +2987,31 @@ cmd_drill() {
     assert_summary "演练结果"
     return 1
   fi
+
+  # ── 9-post) 验签维度的**权威结论**（必须在恢复真的跑完之后记）─────────────────
+  # ⚠️ 归类交给纯函数 drill_classify_signature_outcome，这样这条判定在非活体模式下也能被测到。
+  local sig_outcome
+  sig_outcome="$(drill_classify_signature_outcome "${HTTP_CODE}" "${body}" \
+    "$([[ -n "${drill_sig_file:-}" ]] && echo 1 || echo 0)" "${drill_vkey_passed:-0}")"
+  case "${sig_outcome}" in
+    covered)
+      rec_pass "验签**已被本次演练覆盖**" \
+        ".sig 随归档一起上传到匿名恢复接口（-F signature=<文件），闸门按 <归档>.sig 找到它并**验过**（HTTP ${HTTP_CODE}，公钥已透传）⇒ 这条不是 missing-sig 也不是 no-key。⚠️ 它证明「验得过」；「验不过会被拒」由前面的负向场景证明。" ;;
+    no-key)
+      rec_warn "带了 .sig，但这次**没有真验签**" \
+        "容器里没有验签公钥 ⇒ 服务端只能得到 no-key，按设计放行 + WARN。恢复成功**不等于**验过签。" ;;
+    not-applicable)
+      rec_note "本次恢复不涉及验签" \
+        "没有带 signature 字段（归档旁边没有 .sig）⇒ 服务端按 missing-sig 处理，只记 note、不拦恢复。" ;;
+    refused-signature)
+      rec_fail "正向恢复被签名闸门拒了" \
+        "HTTP ${HTTP_CODE} 且原因点名签名 ⇒ 未篡改的归档 + 它自己的 .sig 竟然验不过：要么公钥与签名密钥不是一对（key-mismatch），要么 .sig 不是这份归档的。这与前面的负向场景合起来看才能定位。" ;;
+    refused-other)
+      rec_warn "正向恢复被拒，但原因不是签名" \
+        "HTTP ${HTTP_CODE}：$(printf '%s' "${body}" | head -c 200)" ;;
+    *)
+      rec_warn "验签结论无法归类" "HTTP ${HTTP_CODE}（sig_sent=$([[ -n "${drill_sig_file:-}" ]] && echo 1 || echo 0), key=${drill_vkey_passed:-0}）⇒ 这一项**没有证据**，不当成通过。" ;;
+  esac
 
   # 信封的语义断言全在 drill_assert_restore_envelope 里（纯函数，可以不起容器就测）
   local env_rc=0
@@ -3293,9 +3455,7 @@ cmd_verify() {
       local f
       while IFS= read -r f; do
         [[ -n "${f}" ]] || continue
-        case "${f}" in
-        *.manifest.json | *.sha256) continue ;;
-        esac
+        drill_is_backup_sidecar "${f}" && continue
         targets+=("${f}")
       done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
       if [[ ${#targets[@]} -eq 0 ]]; then
@@ -3308,9 +3468,7 @@ cmd_verify() {
       local f2 dup b t0
       while IFS= read -r f2; do
         [[ -n "${f2}" ]] || continue
-        case "${f2}" in
-        *.manifest.json | *.sha256) continue ;;
-        esac
+        drill_is_backup_sidecar "${f2}" && continue
         dup=0
         for t0 in ${targets[@]+"${targets[@]}"}; do
           [[ "${t0}" == "${f2}" || "$(basename "${t0}")" == "$(basename "${f2}")" ]] && { dup=1; break; }
@@ -3420,11 +3578,29 @@ drill_verify_log_last() { # <archive 名或路径> [kind]
 }
 
 # 最新归档 + 陈旧度（P3 的"cron 已经失败好几周"护栏）
+# ── 备份归档的 sidecar 判据（🔴 全脚本只此一处定义）─────────────────────────────
+# 整站备份的每份归档旁边最多有三个同名 sidecar：
+#   `.sha256`（校验和）、`.manifest.json`（成员清单副本）、`.sig`（ed25519 离线签名）。
+# 三者都**不是**归档，但文件名都以 `vanblog-full-` 开头 ⇒ 任何 `ls vanblog-full-*` 的枚举都会带上它们。
+# ⚠️ `.sig` 尤其危险：它是在归档**之后**写的，所以 mtime 比归档**更新**，
+#    `ls -1t | head -1`（"取最新一份归档"）会**优先返回 .sig** —— 一个几百字节的 JSON。
+#    后果不是报错那么轻：drill 会拿它去恢复、backup-status 会把它当最新备份、verify 会去"深度校验"它。
+# ⚠️ 这条判据以前在脚本里**散成 10 处**（6 个 `grep -vE`、4 个 `case`），而 `.enc` 那轮只补了
+#    vanblog.sh 里的 6 处、drill 这 10 处一个都没补 ⇒ "同一判断散在多处"这个形状已经第三次漂了。
+#    现在统一成下面这两个符号，⚠️ 新增 sidecar 类型时**只改这里**。
+DRILL_SIDECAR_RE='\.(manifest\.json|sha256|sig)$'
+
+drill_is_backup_sidecar() { # <路径> → 0=是 sidecar（不是归档），1=不是
+  local f="${1:-}"
+  [[ -n "${f}" ]] || return 1
+  [[ "${f}" =~ \.(manifest\.json|sha256|sig)$ ]]
+}
+
 drill_newest_archive() {
   local dir
   dir="$(full_backup_dir 2>/dev/null)"
   [[ -d "${dir}" ]] || return 1
-  ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | head -1
+  ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE "${DRILL_SIDECAR_RE}" | head -1
 }
 
 drill_age_days() { # <file> → 整数天（算不出打印 -1）
@@ -3461,7 +3637,7 @@ cmd_backup_status() {
   fi
   newest="$(drill_newest_archive)"
   local count
-  count="$(ls -1 "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | grep -c . || true)"
+  count="$(ls -1 "${dir}"/vanblog-full-* 2>/dev/null | grep -vE "${DRILL_SIDECAR_RE}" | grep -c . || true)"
   if [[ -z "${newest}" ]]; then
     rec_fail "有整站备份归档" "${dir} 里一份 vanblog-full-* 都没有（共 ${count:-0} 个匹配文件）"
     assert_summary "备份状态"
@@ -3788,7 +3964,7 @@ cmd_backup_verify() {
     local f
     while IFS= read -r f; do
       [[ -n "${f}" ]] && before+=("$(basename "${f}")")
-    done < <(ls -1 "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$')
+    done < <(ls -1 "${dir}"/vanblog-full-* 2>/dev/null | grep -vE "${DRILL_SIDECAR_RE}")
   fi
 
   # ⚠️ 不捕获 backup 的输出：它可能要交互读账号密码（提示走 stderr、读走 stdin），
@@ -3814,13 +3990,11 @@ cmd_backup_verify() {
         [[ "${b}" == "${bn}" ]] && { seen=1; break; }
       done
       if [[ ${seen} -eq 0 ]]; then
-        case "${bn}" in
-        *.manifest.json | *.sha256) continue ;;
-        esac
+        drill_is_backup_sidecar "${bn}" && continue
         new="${f2}"
         break
       fi
-    done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$')
+    done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null | grep -vE "${DRILL_SIDECAR_RE}")
   fi
   if [[ -z "${new}" ]]; then
     # --offline 打的是 vanblog-backup-*.tar.gz，落在安装目录
@@ -3862,9 +4036,7 @@ cmd_backup_verify() {
     [[ -n "${rows_all}" ]] && printf '%s\t%s\t%s\t%s\t%s\n' "$(basename "${new}")" "$(human_size "${new}" 2>/dev/null)" "$(date -r "${new}" '+%Y-%m-%d %H:%M' 2>/dev/null)" "${new_hash_label}" "$([[ ${vrc} -eq 0 ]] && echo PASS || echo FAIL)" >>"${rows_all}"
     while IFS= read -r f3; do
       [[ -n "${f3}" ]] || continue
-      case "${f3}" in
-      *.manifest.json | *.sha256) continue ;;
-      esac
+      drill_is_backup_sidecar "${f3}" && continue
       [[ "${f3}" == "${new}" ]] && continue # 新归档上面刚验过
       n_all=$((n_all + 1))
       if verify_semantic_one "${f3}"; then

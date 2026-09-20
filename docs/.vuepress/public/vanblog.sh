@@ -2501,6 +2501,8 @@ filter_backup_archives() {
 # signature(base64, 64B)、archiveName（⚠️ **不参与签名**，改名不影响验签）。
 # ⚠️ 加密归档签的是**密文** ⇒ 不解密也能验真，所以 `.enc` 与明文归档都可能有 `.sig`。
 BACKUP_SIG_MAGIC="VANBLOGSIG1"
+# `verify --server-signature` 会把它置 1（见 verify()）。默认 0 = 只做本地推断。
+VB_VERIFY_SERVER_SIG="${VB_VERIFY_SERVER_SIG:-0}"
 BACKUP_SIG_EXT=".sig"
 
 archive_has_signature() { # <归档路径> → 0=旁边有 .sig
@@ -2520,6 +2522,53 @@ signature_field_of() { # <归档路径> <字段名>
 #   unsigned         从没签过（早于本功能，或备份时没配签名密钥）
 # ⚠️ 判据：脚本侧**不做**密码学验签（那要 ed25519，bash 里没有；硬凑 openssl 容易写错），
 #    所以脚本永远只能给出后两态；"验过"这一态只来自服务端的 verify/restore 响应。
+# 从服务端拿**权威**的验签结论（五态：ok / mismatch / key-mismatch / missing-sig / malformed-sig / no-key）。
+# ⚠️ 只有 `verify --server-signature` 才会调它，理由写在 verify_one_archive 的注释里：
+#    验签需要把整份归档流式哈希一遍，默认对每份归档都打服务端会让 `verify --all` 的 I/O 翻倍。
+# ⚠️ 取不到就输出空（站点没起、没有令牌、接口 4xx/5xx、响应里没有 signature 段都算取不到），
+#    调用方必须把"取不到"如实显示成"没有权威结论"，**绝不能**回落成"验过"。
+# ⚠️ `deep:false`：只要签名结论，不要成员级校验（那部分本地这一轮已经在做了）。
+# ⚠️ 令牌走 `-H "token: …"`（token.guard.ts 读的就是这个头），且**绝不**打印到输出或台账。
+signature_verdict_from_server() { # <归档路径> → stdout: "state|ok|fingerprint|message"（取不到则空）
+  local file="${1:-}"
+  [[ -n "${file}" && -f "${file}" ]] || return 0
+  local base name tok body resp state ok fp msg
+  base="$(vanblog_api_base 2>/dev/null)" || return 0
+  [[ -n "${base}" ]] || return 0
+  tok="$(ensure_admin_token 2>/dev/null)" || return 0
+  [[ -n "${tok}" ]] || return 0
+  name="$(basename "${file}")"
+  body="${VB_SIG_VERDICT_TMP:-${TMPDIR:-/tmp}}/vanblog-sigverdict-$$.json"
+  # ⚠️ 归档名进 JSON body，不进 URL（URL 会进 caddy 访问日志）；名字由 json_string 转义。
+  resp="$(curl -sS -m 1800 -X POST "${base}/api/admin/backup/full/verify" \
+    -H "token: ${tok}" -H 'Content-Type: application/json' \
+    -d "{\"name\":$(json_string "${name}"),\"deep\":false}" 2>/dev/null)" || { rm -f "${body}" 2>/dev/null; return 0; }
+  rm -f "${body}" 2>/dev/null
+  printf '%s' "${resp}" | grep -q '"signature"' || return 0
+  state="$(printf '%s' "${resp}" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*{[^}]*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [[ -n "${state}" ]] || return 0
+  ok="$(printf '%s' "${resp}" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*{[^}]*"ok"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' | head -1)"
+  fp="$(printf '%s' "${resp}" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*{[^}]*"keyFingerprint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  msg="$(printf '%s' "${resp}" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*{[^}]*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  printf '%s|%s|%s|%s\n' "${state}" "${ok:-?}" "${fp:-?}" "${msg:-}"
+  return 0
+}
+
+# 把服务端五态翻成人话（⚠️ 与本地推断的措辞刻意不同：这里说的是**验过/验不过**，
+# 本地那三态说的是**有没有 .sig**，两者混用会让站长以为"有 .sig"就等于"没被改过"）。
+signature_verdict_label() { # <state> → stdout 一行结论
+  case "${1:-}" in
+    ok)             printf '✅ 服务端**验签通过**（这份归档与签名对得上，且是用你配的公钥验的）' ;;
+    mismatch)       printf '🔴 服务端**验签不通过：签名与归档对不上** —— 归档或 .sig 在签名之后被改动过，别用它恢复' ;;
+    key-mismatch)   printf '🔴 服务端**验签不通过：公钥不是一对** —— 归档不一定有问题，更可能是本机配的验签公钥不对' ;;
+    missing-sig)    printf '⚠️ 服务端：这份归档**从没被签过**（missing-sig）—— 谈不上真假，只能证明没拷坏' ;;
+    malformed-sig)  printf '🔴 服务端：.sig **读不出来/形状不对**（malformed-sig）—— 既不能当通过，也不该断言被篡改' ;;
+    no-key)         printf '⚠️ 服务端：有 .sig 但**没有可比对的公钥**（no-key）⇒ 这次**没有真验签**，不等于验过' ;;
+    *)              printf '⚠️ 服务端给了一个本脚本不认识的状态：%s（不当成通过）' "${1:-<空>}" ;;
+  esac
+  return 0
+}
+
 signature_state_of() { # <归档路径> → stdout: signed-nokey | unsigned
   if archive_has_signature "$1"; then printf 'signed-nokey'; else printf 'unsigned'; fi
 }
@@ -2680,8 +2729,11 @@ verify_one_archive() {
   #    是**假通过**（比不验更危险）。权威结论只来自服务端：
   #      - 恢复时：`POST full/restore` 会验签，配了公钥且验不过就 400 拒绝；
   #      - 状态：`GET full/status` 的 `lastSuccessSigned` / `lastSuccessSigning.keyFingerprint`；
-  #      - ⚠️ `POST full/verify` 目前**不返回** signature 段（`BackupVerifyResult` 里有这个字段，
-  #        但控制器没放进响应）⇒ 想在这里显示"已签且验过"，得先让服务端把它吐出来。
+  #      - `POST full/verify` **现在返回** `signature` 段（五态 + 指纹 + 人话结论）⇒ 用
+  #        `verify --server-signature` 就能拿到权威结论（见 signature_verdict_from_server）。
+  #        ⚠️ 它**不是默认行为**：验签要把整份归档流式哈希一遍，`verify --all` 对每份几 GB 的
+  #        归档都打一次服务端 = 把校验耗时翻倍还不止，所以做成显式开关，并且默认把本地推断
+  #        **标明是推断**（"有 .sig" 与 "验过签" 是两件不同的事，混为一谈就是这个功能最危险的误读）。
   local sigfile="${file}${BACKUP_SIG_EXT}" sigmagic sigfp sigat sigbytes
   if [[ -f "${sigfile}" ]]; then
     sigmagic="$(signature_field_of "${file}" magic)"
@@ -2691,7 +2743,7 @@ verify_one_archive() {
     if [[ "${sigmagic}" != "${BACKUP_SIG_MAGIC}" ]]; then
       problems+=(".sig 存在但形状不对（magic 读到 '${sigmagic:-<空>}'，应为 ${BACKUP_SIG_MAGIC}）—— 既不能当验过，也不该断言被篡改")
     else
-      notes+=("已签名：.sig 在（指纹 ${sigfp:-?}，签于 ${sigat:-?}，签的归档字节数 ${sigbytes:-?}）")
+      notes+=("本地推断：已签名 —— .sig 在（指纹 ${sigfp:-?}，签于 ${sigat:-?}，签的归档字节数 ${sigbytes:-?}）。⚠️ 「有 .sig」不等于「验过签」")
       # 侧信息：.sig 里记的 archiveSha256 与本机实测值能不能对上（这**不是**验签，
       # 只是"签名所覆盖的那份内容，与手上这份是不是同一份"的弱比对；真验签要公钥）。
       # ⚠️ 有意只在**已经算过** sha256 时比对（即存在 .sha256 sidecar 且本机有 sha256sum）：
@@ -2707,7 +2759,30 @@ verify_one_archive() {
       notes+=("⚠️ 脚本侧未做密码学验签（没有验签公钥也不做 ed25519）；要权威结论：给容器配 VANBLOG_BACKUP_VERIFY_KEY(_FILE) 后走恢复/服务端，或 ${VANBLOG_SELF_NAME} backup-status 看 lastSuccessSigned")
     fi
   else
-    notes+=("没有 .sig 签名：这份归档**从没被签过**（早于本功能，或备份时没配签名密钥）⇒ 只能证明没拷坏，不能证明没被换过")
+    notes+=("本地推断：没有 .sig ⇒ 这份归档**从没被签过**（早于本功能，或备份时没配签名密钥）⇒ 只能证明没拷坏，不能证明没被换过")
+  fi
+
+  # 2.6) 权威验签结论（可选：`verify --server-signature`）
+  #   ⚠️ 默认不打服务端，因为验签要把整份归档流式哈希一遍，`verify --all` 会对每份归档都做一次。
+  #   ⚠️ 取不到时**必须**如实说"没有权威结论"，绝不能让上面那几条本地推断被读成"验过了"。
+  if [[ "${VB_VERIFY_SERVER_SIG}" == "1" ]]; then
+    local _sv _state _ok _fp _msg
+    _sv="$(signature_verdict_from_server "${file}")"
+    if [[ -n "${_sv}" ]]; then
+      _state="${_sv%%|*}"; _sv="${_sv#*|}"
+      _ok="${_sv%%|*}";    _sv="${_sv#*|}"
+      _fp="${_sv%%|*}";    _msg="${_sv#*|}"
+      notes+=("服务端权威结论：$(signature_verdict_label "${_state}")（state=${_state}, ok=${_ok}, 指纹 ${_fp}）")
+      [[ -n "${_msg}" ]] && notes+=("服务端原话：${_msg}")
+      # 🔴 mismatch / key-mismatch / malformed-sig 是**问题**，不是 note：
+      #    它们意味着"这份归档不该被拿来恢复"，必须让它进 problems ⇒ verify 对这份归档判 FAIL。
+      case "${_state}" in
+        mismatch|key-mismatch|malformed-sig)
+          problems+=("服务端验签结论是 ${_state}：$(signature_verdict_label "${_state}")") ;;
+      esac
+    else
+      notes+=("⚠️ 拿不到服务端权威结论（站点没起、没有管理员令牌、接口报错，或响应里没有 signature 段）⇒ 上面那些只是**本地推断**，不是验签结果")
+    fi
   fi
 
   # 3) 成员清单
@@ -2789,7 +2864,13 @@ verify_one_archive() {
 print_verify_usage() {
   echo -e "用法：${yellow}$0 verify [归档名|路径]…${plain}"
   echo -e "  不带参数 = 校验备份目录里的全部 vanblog-full-* 归档"
-  echo -e "  verify 不接受任何开关。要语义级校验（清单版本 / 成员哈希 / 能不能恢复）："
+  echo -e "  开关只有一个："
+  echo -e "    ${yellow}--server-signature${plain}        去服务端拿**权威验签结论**（POST full/verify 的 signature 段，五态："
+  echo -e "                              ok / mismatch / key-mismatch / missing-sig / malformed-sig / no-key）。"
+  echo -e "                              ⚠️ 默认不打服务端：验签要把整份归档流式哈希一遍，--all 会对每份都做。"
+  echo -e "                              ⚠️ 不加这个开关时，输出里的签名结论都是**本地推断**（有没有 .sig），"
+  echo -e "                                 而「有 .sig」不等于「验过签」—— 验签要有公钥。"
+  echo -e "  要语义级校验（清单版本 / 成员哈希 / 能不能恢复）："
   echo -e "    ${yellow}$0 verify-deep [--all]${plain}     # 不需要 root；--all 另出结果表与 VERIFY-RESULT 行"
   echo -e "  要证明「真能恢复回来」只能演练：${yellow}$0 drill [归档名|路径]${plain}"
   echo -e "⚠️ 参数打错会**直接拒绝**（退出码 2），不会静默忽略后按默认行为跑"
@@ -2801,6 +2882,11 @@ verify() {
   for arg in "$@"; do
     case "${arg}" in
     0) continue ;; # 菜单/分发入口传进来的占位
+    --server-signature)
+      # 显式要求"去服务端拿权威验签结论"（POST full/verify 的 signature 段，五态）。
+      # ⚠️ 不是默认行为：验签要把整份归档流式哈希一遍，对每个目标都打一次服务端会让
+      #    I/O 翻倍（几 GB 的归档尤其明显），所以默认只做本地推断并**标明是推断**。
+      VB_VERIFY_SERVER_SIG=1 ;;
     --*)
       # ⚠️ 这里以前是 `0 | --*) continue ;;` —— 打错的开关被**静默吞掉**。
       #    后果不是"报错难看"，而是**结果与用户以为跑的命令不是一回事**：
@@ -4460,6 +4546,22 @@ restore_full_backup() {
       echo -e "${red}建不了口令临时文件（磁盘满？TMPDIR 不可写？）${plain}"
       return 1
     }
+  fi
+  # 🔴 上传恢复这条路**带不了 .sig**：管理员接口 `POST full/restore` 的 body 只有
+  #    name/confirm/withStatic/passphrase/skipSignatureCheck，**没有** signature 字段
+  #    （只有匿名的 `POST /api/admin/init/restore` 有，那是 4bf4830f 加的）。
+  #    上传的归档落在服务端的 upload-tmp 里，旁边没有 .sig ⇒ 验签状态只能是 missing-sig（按设计放行 + WARN）。
+  #    ⚠️ 必须说出来：否则站长会以为"我恢复了，签名也验了"，而真相是这一次根本没验。
+  #    要真验签：把归档（与它的 .sig）放进服务端备份目录，然后**按名字**恢复（upload=0 那条路）。
+  if [[ ${upload} -eq 1 && -f "${target}.sig" ]]; then
+    echo -e "  ${yellow}!${plain} 这份归档旁边有 .sig（指纹 $(signature_field_of "${target}" keyFingerprint | cut -c1-16)），但**上传恢复带不了它**："
+    echo -e "    管理员接口 POST full/restore 没有 signature 字段，上传的归档落在服务端临时目录、旁边没有 .sig"
+    echo -e "    ⇒ 本次验签状态会是 ${yellow}missing-sig${plain}（按设计放行 + WARN，${red}不等于验过签${plain}）。"
+    echo -e "    要真正验签，请把归档与 .sig 一起放进服务端备份目录，再按名字恢复："
+    echo -e "      ${yellow}${VANBLOG_SELF_NAME} restore $(basename "${target}")${plain}"
+    if [[ "${skip_sig}" == "true" ]]; then
+      echo -e "  ${yellow}!${plain} 你给的 --skip-signature-check 在上传恢复这条路上也**没有实际作用**（本来就不会验签）。"
+    fi
   fi
   if [[ ${upload} -eq 1 ]]; then
     if [[ -n "${pass_file}" ]]; then
