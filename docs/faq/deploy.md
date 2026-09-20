@@ -522,6 +522,10 @@ VANBLOG_SKIP_PULL=1 VANBLOG_RESTORE_FROM=/path/vanblog-full-xxx.tar.zst ./vanblo
   流水线要写 `/app/codeRunner` 与 `/app/pluginRunner`、**ISR 页面缓存**写在 `.next/server/pages/**`（也不是卷）。
   只读根会让页面缓存完全写不了。
 - **现在已经打开的那一项**：`security_opt: [no-new-privileges:true]`（只对 vanblog 服务）。
+  🔴 **已经装好的站点不会自动拿到这一项**：它写在编排模板里，而编排文件是 `config` 生成的一次性产物，
+  所以要**重跑一次 `./vanblog.sh config`**（会重新生成 `docker-compose.yaml`，覆盖前自动存一份 `.bak-<时间戳>`，
+  手写的 `environment:` 记得加回去）再 `./vanblog.sh restart`。
+  可以用 `grep -c no-new-privileges docker-compose.yaml` 确认（应当 ≥ 1）。
   ⚠️ 它挡的是"在已经是 root 之上**再**提权"（setuid 二进制、文件 capability），
   **不是**"防止拿到 root"—— 流水线功能本身就等价于"管理员能在容器内执行任意代码"，这一点配置改不了。
 

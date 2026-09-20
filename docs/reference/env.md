@@ -83,6 +83,37 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VAN_BLOG_STDIO_LOG_MAX_BYTES` | `20971520`（20MB） | 容器内 server/前台 stdio 日志文件的大小上限，超了轮转成 `.old`（只留一份旧的）。容器 stdout 那一份由编排的 `logging.max-size` 管，两套是分开的 |
 | `VAN_BLOG_VERSION_API` | **空（= 关闭）** | 后台「新版本提醒」要查询的地址。⚠️ **默认不再回连任何第三方**：旧默认值是上游作者的版本服务，于是每次启动（以及每次打开后台）都会向一个与本部署无关的域名发请求，带出去的是本站出口 IP 和「这里在运营一个 VanBlog」这个事实。现在**默认一个字节都不发**（DNS 都不查）。想启用就填自己的或任何信任的端点；`off` / `false` / `none` / `disabled` / `0` 与留空等价，都当关闭处理。判断有没有新版本请看仓库的 Releases 页面（后台「关于」页有链接）—— 上游返回的 `0.54.0` 与本项目的 `v2026.x@sha` 形状本来就不可比，只会产生假警报 |
 
+### 启动韧性与降级发布（数据库不可达时）
+
+这一组决定「数据库在**启动期间**就连不上」时站点的行为。默认配置下的形状是：
+**第一次探到数据库不可达就进入「降级驻留」**——进程不退出、容器保持 Up，
+`/api/public/health` 返回与正常端点**逐字段同形状**的 503，`/static/*` 与**已渲染过的页面**
+（以及 `/rss/*`、`/sitemap.xml` 与它们的别名）由 caddy 直接从磁盘发；数据库一通就自动完成启动、
+回到正常模式，**不需要重启容器**。详见[降级发布](../advanced/degraded-publishing.md)。
+
+| 名称 | 默认值 | 设置后会发生什么 |
+| --- | --- | --- |
+| `VANBLOG_DEGRADED_HOLD_MODE` | `immediate` | 什么时候进入降级驻留：`immediate`（默认）= 启动前先探一次库，不可达就**立刻**驻留并在后台继续重试；`after-window` = 旧行为，先把下面的重试窗口整个烧完才驻留（实测默认窗口下要 **396 秒**，这期间页面是 502）。⚠️ **打错的值回落 `immediate` 而不是「关闭」**——失败方向是「更快开始发布缓存内容」。⚠️ 取舍：`immediate` 下一次**短暂**的数据库抖动也会让站点短暂进入「直发磁盘上最后一次渲染的 HTML」模式（站内搜索、访问密码文章、阅读数、按需渲染新文章、评论在这期间不可用）。不接受就显式设 `after-window` |
+| `VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS` | `300000`（5 分钟） | 「**认为数据库可达时**」启动失败要重试多久才放弃并转入降级驻留，夹在 0–3600000。⚠️ `immediate` 模式下若第一次探测就不可达，会**直接驻留**、不烧这个窗口；但它在两种模式下都仍然生效（预探可达而启动失败、以及 `after-window` 模式），**不是死旋钮**。⚠️ 它是**下限而不是上限**：`initJwt` 自己内部还有 10×3 秒的重试，实测「窗口设 15 秒」时第一次尝试就花了 127 秒 |
+| `VANBLOG_BOOTSTRAP_DB_RETRY_BASE_MS` | `5000` | 启动重试的首次间隔（毫秒），之后每次翻倍，夹在 0–600000 |
+| `VANBLOG_BOOTSTRAP_DB_RETRY_MAX_MS` | `30000` | 启动重试间隔的封顶（毫秒），夹在 0–3600000；实际取值不会小于上面的 `BASE_MS` |
+| `VANBLOG_DEGRADED_HOLD_PROBE_MS` | `30000`（30 秒） | 降级驻留期间多久探一次数据库，夹在 **3000–3600000**。探到可达就关掉占位服务、跑真正的启动流程（实测数据库起来后 **10–20 秒**内 health 回到 200） |
+| `VANBLOG_CRASH_WINDOW_MS` | `600000`（10 分钟） | **重启风暴熔断**的统计窗口：只有落在这个窗口内的「快速崩溃」才累计 |
+| `VANBLOG_MAX_FAST_CRASHES` | `5` | 窗口内累计多少次快速崩溃就触发熔断（退出前先退避，避免无限重拉把 CPU 打满、日志爆盘） |
+| `VANBLOG_FAST_CRASH_MS` | `60000`（60 秒） | 存活不足这个时长才算「快速崩溃」。⚠️ 一次存活**超过**它的运行会把计数**清零**，否则一次历史故障会永久拖慢之后的偶发崩溃 |
+| `VANBLOG_CRASH_BACKOFF_BASE_MS` | `5000` | 熔断后退出前的首次退避时长，之后按指数增长 |
+| `VANBLOG_CRASH_BACKOFF_MAX_MS` | `300000`（5 分钟） | 退避的封顶。⚠️ 不设上限的话，故障修好之后还要白等很久 |
+| `VAN_BLOG_CRASH_STATE_FILE` | `<日志目录>/vanblog-crash-state.json` | 熔断计数存在哪里。⚠️ 默认放在**挂载卷**（日志目录）而不是容器内：熔断要防的是「跨容器重建仍然持续的故障」，存容器内每次重建就归零、等于没有熔断 |
+
+::: warning 这一组全部沿用「写 0 = 用默认值」
+
+上面所有数值变量都用同一套解析：**非数字、空值、`0`、负数一律回落默认值**，
+所以 ⚠️ **写 `0` 得到的是默认值，不是「关闭」也不是「不等」**。
+想要「几乎不等」请写 `1`（毫秒）；想要「关掉某个行为」请用该行为自己的开关
+（例如降级驻留用 `VANBLOG_DEGRADED_HOLD_MODE=after-window`，而不是把窗口设成 0）。
+
+:::
+
 ## 安全、限流与可观测性
 
 | 名称 | 默认值 | 设置后会发生什么 |
@@ -90,7 +121,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_SWAGGER` | 关 | **只认字面 `true`**：打开 `/swagger` 与 `/swagger-json`（实时 API 文档）。默认关闭是有意的——它等于把整个后台 API 面摊给未登录用户；后台「关于」「Token 管理」的入口会自动探测，关着时改开仓库内的 API 文档 |
 | `VANBLOG_HEALTH_DETAILS` | 关 | `true` 时匿名的 `GET /api/public/health` 额外返回 uptime 与内存（版本号**始终公开**，它本来就渲染在每个前台页面的页脚上）。带 `x-vanblog-internal` 令牌也能读到详情 |
 | `VAN_BLOG_INTERNAL_TOKEN` | 空 | 内部令牌：请求头 `x-vanblog-internal` 带上它 = 内部调用（允许 `pageSize=-1` 拉全量、读健康检查的 uptime/内存字段）。**判定是"回环直连且不带转发头" 或 "令牌匹配"**：一体式镜像里前台进程就是从 127.0.0.1 直接调 server、不带转发头，所以**不需要配**；而访客经 caddy 反代过来的请求带 `X-Forwarded-For`，不会被误判成内部。⚠️ **前后端分离部署必须给 server 与 website 两边配同一个值** —— 前台的 SSR 请求会带上它（本轮之前前台一个头都不发，配了也没用：`pageSize=-1` 会被夹到 100，标签页 / 时间线 / 总字数**静默少数据**且不报错）。⚠️ 只有 SSR（服务端渲染）请求带；浏览器侧的请求（文章解锁、阅读数、搜索、pageview）**不带**，令牌不会进前端产物 |
-| `VAN_BLOG_REVALIDATE_SECRET` | 空 | 前台 `/api/revalidate`（触发页面重渲染）的口令。⚠️ **本轮起改成"失败关闭"**：没设它时，只接受"套接字是回环 **且** 不带 `x-forwarded-for` / `x-real-ip`"的请求（一体式镜像正是这个形状，所以行为不变），其余一律 **403**；设了就必须带同名 `secret` 查询参数（server 触发时会自动带上）。**分离部署**要让别的机器也能触发重渲染，就给 server 与 website 两边配同一个值。以前是"没设 = 不校验"，等于分离部署下任何人都能反复触发重渲染 |
+| `VAN_BLOG_REVALIDATE_SECRET` | **一体式部署自动生成** | 前台 `/api/revalidate`（触发页面重渲染）的口令。**一体式镜像**：没配它时 server 会**自动生成**一把进程内随机密钥（32 字节 / 64 位十六进制，落在 `os.tmpdir()/vanblog-revalidate-secret`，权限 **0600**、原子创建），并通过环境变量下发给前台子进程，所以**开箱即用、不需要你配**。⚠️ **分离部署不会自动生成**（自动密钥只在本机文件系统内共享），要让别的机器也能触发重渲染，必须给 server 与 website **两边配同一个值**。配了值就一定要求它：请求必须带同名 `secret` 查询参数（server 触发时自动带上），否则 **401**。⚠️ 〔2026-09-20 更正〕本行以前写的是「没设它时只接受套接字为回环**且**不带 `x-forwarded-for` / `x-real-ip` 的请求，一体式镜像正是这个形状所以行为不变」——**这句是错的**：Next 会给**每个**请求自动补 `x-forwarded-for`（`next/dist/server/base-server.js`，`??=` 赋值，没有开关），所以「不带转发头」这个条件在 Next 下**恒不成立**，默认配置下**所有**重渲染调用都被 403 拒绝（冷启动全量渲染全败、文章页产物为 0）。现已改为自动生成密钥；详见[静态页面更新策略](../advanced/isr.md) |
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（`/api/**` 与 `/static/**` 等，兜底限流） |
 | `VANBLOG_STATIC_LIMIT_PER_MIN` | 全局值 ×10（=6000） | 静态资源（`/static/**`）的独立限流桶。图片密集的站点不要让它们挤全局预算 |
 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作（POST/PUT/DELETE）的上限 |
@@ -137,6 +168,10 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_BACKUP_INTEGRITY` | 开 | 整站归档的成员级完整性数据（校验和清单）。`off` 是逃生舱：关掉后归档不再防「单成员损坏」 |
 | `VANBLOG_BACKUP_PASSPHRASE` | **空（= 不加密）** | 整站归档的加密口令。设了之后归档名多一个 `.enc` 后缀（`vanblog-full-<时间戳>.tar.zst.enc`），内容是分块 AES-256-GCM。⚠️ **最短 12 字节**，短了**备份直接失败**（宁可不产出，也不写一份能离线爆破的弱归档）。⚠️ **忘了口令 = 归档永久不可恢复**，没有后门、没有找回；所以加密归档必须至少 `./vanblog.sh drill` 成功过一次才算"备份可用"。每次备份成功且**没有**加密时会打一条 WARN（说明现状 + 怎么开） |
 | `VANBLOG_BACKUP_PASSPHRASE_FILE` | 空 | 从一个文件读口令（Docker secret / k8s Secret 挂载的标准用法），**优先于**上面那个内联变量。⚠️ 设了它却**读不到**（路径错、权限不够）时是**失败关闭** —— 直接报错拒绝继续，**绝不静默降级成明文备份**（那比不做这个功能更糟：站长以为归档是加密的）。文件内容只去掉**尾部**空白（前导空白理论上可能是口令的一部分，尾部换行几乎一定是 `echo`/编辑器带进来的） |
+| `VANBLOG_BACKUP_SIGNING_KEY` | **空（= 不签名）** | 整站归档的 **ed25519 签名私钥**（PEM 内联）。设了之后每次整站备份旁边会多一个 `<归档名>.sig`（明文 JSON、权限 0600），用来证明这份归档**离开主机之后没有被篡改过**。⚠️ 加密归档签的是**密文**，所以不解密也能验真；⚠️ 归档**文件名不参与签名**，改名不影响验签。详见[整站备份与恢复](../advanced/backup.md) |
+| `VANBLOG_BACKUP_SIGNING_KEY_FILE` | 空 | 从文件读签名私钥（Docker secret / k8s Secret 的标准用法）。⚠️ **优先级高于上面的内联变量**；只去掉结尾换行；🔴 **读不到就失败关闭**（不会静默回落到「不签名」——那会让你以为签了其实没签）。两者都没配时，会尝试用后台接口生成、落在 `<备份目录>/signing/` 下的密钥；再没有就**完全不签名** |
+| `VANBLOG_BACKUP_VERIFY_KEY` | 空 | 验签用的 **ed25519 公钥**（PEM 内联）。不给的话依次回落到：`<备份目录>/signing/` 下的 `.pub.pem` → 从签名私钥导出的公钥（所以一体式只配一把也能自验）。🔴 **公钥的权威副本必须存在主机之外**（密码管理器 / 打印 / 另一台机器）：拿到主机 root 的人可以连公钥一起换掉，那样验签就形同虚设 |
+| `VANBLOG_BACKUP_VERIFY_KEY_FILE` | 空 | 从文件读验签公钥。⚠️ **优先级高于内联变量**；只去掉结尾换行；🔴 **读不到就失败关闭**。**离线恢复**（在另一台机器上验一份归档）通常用的就是它 |
 | `VANBLOG_BACKUP_VERIFY_DEEP` | 开 | 每次导出（手动与 cron 都算）写完立刻做**成员级深度自校验**，失败返回 HTTP 400 并把状态记进 `<备份目录>/backup-status.json`。关掉 = 回到「导出成功就等于文件没问题」的旧假设 |
 | `VANBLOG_BACKUP_SWEEP_HOURS` | `24`（`0` = 关） | 定期巡检保留归档的节奏：每轮最多查 `VANBLOG_BACKUP_SWEEP_MAX` 份（最新的优先），成本可预测 |
 | `VANBLOG_BACKUP_SWEEP_MAX` | `3` | 每轮巡检最多查几份归档 |
@@ -181,7 +216,8 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_ISR_TIMEOUT_MS` | `10000` | server 触发前台 revalidate 的单次请求超时 |
 | `VANBLOG_ISR_REAP_INTERVAL_MS` | `900000`（15 分钟） | 失效 ISR 产物清理器的对账周期：删掉「库里已不可见但磁盘上还留着」的静态 HTML（删除/隐藏/加密/未到点的文章）。与 caddy 直发开关解耦，始终运行 |
 | `VANBLOG_CADDY_SERVE_HTML` | 关 | caddy 直接发 ISR 生成的 HTML（不过 Node）：`true` = 6 个固定页（实测 3.7–4.5× rps）；`all` = 再加 `/post/* /page/* /category/* /tag/*`（文章页突发 8.8×）。**要求 ISR 是 onDemand 模式**（delay 模式自动降级），并依赖上面的清理器保证不发已删除文章的旧页面 |
-| `VANBLOG_CADDY_HTML_PAGES_DIR` | 镜像内前台 pages 目录 | caddy 直发时去哪找 ISR 产物（测试/特殊布局才需要动） |
+| `VANBLOG_CADDY_HTML_PAGES_DIR` | `/app/website/packages/website/.next/server/pages` | caddy 直发 ISR 产物时去哪找 HTML，**同时也是哨兵文件所在目录、以及失效产物清理器（reaper）的扫描根**——这三者必须是同一个目录，否则直发会**静默失效**（哨兵写在 A、caddy 在 B 找）。⚠️ 必须是**绝对路径**；不接受 `..` 段、`{}` 占位符（caddy 运行时会展开 `{env.X}`，实测过）、控制字符，规范化之后也不能是 `/`；重复斜杠与结尾斜杠会被规范化并打一条 WARN。🔴 **非法值一律回落到默认目录并大声 WARN**——caddy 配置生成器与服务端**两侧同规则、同结论**（由跨语言守卫逐条钉住），所以配错不会让两侧指向不同目录。⚠️ 留空或只写空白等于**未设置**，不是「关闭直发」（关闭直发用 `VANBLOG_CADDY_SERVE_HTML`）。一般只有测试或特殊布局才需要动它 |
+| `VAN_BLOG_STATIC_PATH` | `/app/static` | 静态根目录（图床图片、附件、自定义页面、主题、以及 `rss/`、`sitemap/`、`tmp/`、`export/` 等子目录）的**环境变量写法**，等价于 config.yaml 的 `static.path`。🔴 **caddy 的配置生成器也读它**：降级期间直发 feed / sitemap 时，产物 root 取 `<静态根>/rss` 与 `<静态根>/sitemap`。⚠️ 生成器**不解析 config.yaml**，所以**只在 config.yaml 里改 `static.path` 而不用这个环境变量，生成器看不到** ⇒ 降级期直发会去默认目录找、发 404。（这与模板里 `/static/img/*` 硬编码 `root: "/app"` 是同一类既有限制。）⚠️ root 刻意只指到 `rss` / `sitemap` **子目录**而不是静态根本身：静态根下还有 `tmp/`（恢复过程中的临时解包与 in-flight 归档）与 `export/`，指宽了会把它们暴露给匿名请求 |
 
 ### 可见水印
 
