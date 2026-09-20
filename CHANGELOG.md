@@ -275,6 +275,35 @@
   19 条全卡在同一个前置校验、零信息量却差点被读成"19 种畸形全被正确拒绝"），提炼成一条规矩：
   **"全部通过"和"全部失败"的结果都要先怀疑尺子，共同信号是结果同质。**
 
+- **全站 CSP 落地了，但默认是「只报告不拦截」，而且 `script-src` 里仍有 `'unsafe-inline'`**（`7cda9a37`）。
+  在此之前**任何页面都没有 CSP**：`securityHeadersMiddleware` 只挂在 `/static/`、`/rss/`、`/sitemap/`、`/swagger`
+  四个 pre-Nest 前缀上，前台（独立 Next 进程）与后台静态包都不经过它。现在这一层落在**唯一能看到每一个响应的
+  地方 —— caddy**，并且**在生成配置时注入**到既有的全局 `headers` handler（靠"含 `X-Content-Type-Options`"
+  识别它），所以**两个模板文件都没被改**：`off` 模式下生成的配置与模板**逐字节相同**（用深度 JSON 比对证明），
+  主模板与降级模板也不可能各自漂。守卫断言这个头**恰好写进两处**（srv0 与 srv1）—— 零处意味着静默失败，
+  三处意味着写错了地方；覆盖面是**实测**的而不是推定的：用真 caddy 起服务，确认 `file_server` 发出的 `/admin/`
+  **带上了这个头**（那正是以前什么都没有的部分）。
+  内置策略：`default-src 'self'`；`script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://hm.baidu.com`；
+  `style-src 'self' 'unsafe-inline' https://static.zeoseven.com https://cdn.jsdelivr.net`；`img-src * data: blob:`
+  （正文可以嵌任意外链图片）；`font-src`；`connect-src 'self'` + GA 各域 + 百度统计；`frame-src 'self' https:`
+  （正文白名单允许 `iframe` 嵌 B 站/YouTube）；`frame-ancestors 'self'`；`object-src 'none'`；`base-uri 'none'`；
+  `form-action 'self'`（正文白名单里没有 `form`，所以这条安全）。`upgrade-insecure-requests` **故意不加** ——
+  它会打坏纯 HTTP 站点，而 HTTPS 跳转已由 caddy 负责 —— 并有守卫钉住它不出现。路径**不分档**（不分前台/后台/静态）。
+  ⚠️ 三条如实写明的限制：① **默认 `report`**（发 `Content-Security-Policy-Report-Only`，只报告不拦截），
+  因为盲目 `enforce` 会打坏数量未知的站点；② **`'unsafe-inline'` 还在**，所以它现在**挡不住内联脚本注入**，
+  去掉它要先解决三处内联（主题初始化脚本、**每页内容都不同**的 JSON-LD、站长自己写的 `customScript`）；
+  ③ **ISR 缓存的页面里 nonce 会被复用**，而同源攻击者本来就读得到那份 HTML ⇒ **前台不该用 nonce**，
+  只能用 hash 或来源白名单，后台（非缓存）才适合 nonce。⇒ 这一层现在的价值是"把违规暴露出来"以及挡住
+  `object`/`base`/表单外发/被框，**不是 XSS 的第二道防线**，别高估它。
+  旋钮：`VANBLOG_CSP_MODE`（`off`/`report`/`enforce`，默认 `report`，写错值回落默认并 WARN、**不会静默变成 `off`**）、
+  `VANBLOG_CSP_REPORT_URI`（⚠️ 建议指向站长自己的日志服务：这个端点匿名可写，接在本站上就是现成的日志炸弹/DoS 面）、
+  `VANBLOG_CSP_EXTRA_SCRIPT_SRC` / `_EXTRA_CONNECT_SRC`（追加来源，含控制字符整条忽略并 WARN）、
+  `VANBLOG_CSP_OVERRIDE`（整条自己写；⚠️ **故意不提供"往任意指令追加"的入口**，那等于允许把 `script-src`
+  悄悄放宽成 `*`）。`unsafe-inline` 这个取舍是**从构建产物里证明出来的**，不是猜的。
+- **auth 家族补上了单元测试**（`a90d9b79`）：`jwt.strategy.ts`、`auth.guard.ts`、`local.strategy.ts`、
+  `auth.provider.ts`、`init.middleware.ts` 此前**一个 spec 都没有**，而静态分析抽读的 3 个真实空值崩溃里
+  就有一个在 `jwt.strategy.ts:55` —— **有潜在缺陷的文件恰好没有测试**。
+
 **行为变化**
 
 1. **`./vanblog.sh update` 的默认落点变了**。以前：拉 `ghcr.io/ckboss/vanblog:dev-dsh`（分支的上一次**手动**构建，实测比发布版旧 4 天 ⇒ 升级可能其实是降级，且一声不响）。现在：拉 `ghcr.io/ckboss/vanblog:latest`（最近一次**发布**构建），并且停容器前打印 `当前运行: X → 新镜像: Y`，证明是降级或"证明不了不更旧"时红色 WARN + 要确认。想继续跟开发分支：`VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:dev-dsh ./vanblog.sh update`；想钉死版本：`./vanblog.sh update v2026.9.2`。⚠️ 非交互（cron）场景下 WARN 照打但不阻塞，要拦就自己比版本号。
@@ -354,6 +383,12 @@
     （当前 115 个错，常红灯会训练出"忽略红"）。
 53. **净化预算的口径澄清**（不是行为变化，但容易读错）：`VANBLOG_SANITIZE_MAX_NODES` 默认 50000 数的是**节点**
     （键与值分别计数），实测拐点是 24000 个键仍通过、30000 个键被 413 ⇒ 约等于 **25000 个键**，不是"5 万个键"。
+54. 🔴 **全站开始下发 CSP 响应头，默认是 Report-Only**（`7cda9a37`）：`VANBLOG_CSP_MODE` 默认 `report`，
+    发的是 `Content-Security-Policy-Report-Only`（**只报告、不拦截**）⇒ 默认情况下**没有任何功能会被打坏**。
+    改成 `enforce` 才会真拦截，而那会打坏不在内置白名单里的第三方脚本/字体/统计 —— 需要时用
+    `VANBLOG_CSP_EXTRA_SCRIPT_SRC` / `_EXTRA_CONNECT_SRC` 加来源，或用 `VANBLOG_CSP_OVERRIDE` 整条自己写。
+    ⚠️ 即使 `enforce`，`script-src` 里仍有 `'unsafe-inline'`，所以它**不是** XSS 的第二道防线。
+    这一层由**内置 caddy** 下发 ⇒ 只在用镜像自带 caddy 时生效；自己套了别的反代（nginx/CDN）的部署要在那一层自己配。
 
 ## [v2026.9.2] - 2026-09-17
 
