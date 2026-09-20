@@ -158,6 +158,24 @@ jobs:
           printf '%s\n' "${line}" | grep -q 'failed=0' || { echo "::error::加密备份守卫有失败项：${line}"; exit 1; }
           printf '%s\n' "${line}" | grep -q 'note=0' || { echo "::error::加密备份守卫 note>0 ⇒ 真加密用例被跳过（dist 里没有 backupCrypto.js？），这不是有效绿灯：${line}"; exit 1; }
 
+      - name: Backup signature guard (needs dist; asserts note=0)
+        # 🔴 这一步在 2026-09-21 之前**根本不存在**：`vanblog-backup-signing.test.sh`（210 条断言，
+        #    覆盖 ed25519 签名、`.sig` 旁证、五种验签结论、以及"匿名恢复路径没有跳过验签的开关"）
+        #    没有被任何 workflow 引用 ⇒ **谁改坏了签名或验签，CI 全绿**。
+        #    发现方式是"枚举 scripts/tests/*.test.sh 与三个 workflow 的引用做差集"，
+        #    下面 guards-core 里新增的那一步把这个差集检查变成了常驻守卫。
+        # ⚠️ 它与 `vanblog-backup-encryption` 是**完全相同的形状**：需要 `packages/server/dist`
+        #    （`.sig` fixture 用服务端自己的实现 `dist/src/utils/backupSigning.js` 生成，
+        #    避免"只证明测试自己的假设自洽"），缺 dist 时**不失败、只 NOTE 跳过** ⇒ 必须断言 `note=0`，
+        #    否则它会在 CI 里安静地少跑一大半。
+        run: |
+          out="$(bash scripts/tests/vanblog-backup-signing.test.sh 2>&1)"
+          printf '%s\n' "${out}" | tail -60
+          line="$(printf '%s\n' "${out}" | grep -E '^passed=' | tail -1)"
+          [ -n "${line}" ] || { echo "::error::守卫没有输出 passed= 行（脚本本身崩了？）"; exit 1; }
+          printf '%s\n' "${line}" | grep -q 'failed=0' || { echo "::error::备份签名守卫有失败项：${line}"; exit 1; }
+          printf '%s\n' "${line}" | grep -q 'note=0' || { echo "::error::备份签名守卫 note>0 ⇒ 真签名用例被跳过（dist 里没有 backupSigning.js？）；这一步必须跟在 Build 之后"; exit 1; }
+
       - name: Run vanblog.sh restore tests (needs node_modules for the js-sha256 cross-check)
         # ⚠️ 这个守卫会去找 `node_modules/.pnpm/js-sha256@*`，用它交叉验证
         #    `vanblog.sh` 的登录口令派生与后台 `encryptPwd.js` 逐字节一致。
@@ -360,6 +378,35 @@ jobs:
 
   # 慢守卫：同样**无外部依赖**，只是单个耗时 30 秒以上，分开跑以免拖慢 guards-core。
   # 两个加起来约 3 分钟（本机实测：drill 148s、source-install 32s）。
+      - name: Every guard script must be wired into some workflow
+        # 🔴 这一步是 2026-09-21 加的，因为刚刚发现 `vanblog-backup-signing.test.sh`
+        #    （210 条断言，覆盖 ed25519 签名 / `.sig` 旁证 / 五种验签结论 / "匿名恢复没有跳过验签的开关"）
+        #    **没有被任何 workflow 引用** ⇒ 谁改坏了签名或验签，CI 全绿。
+        #    而这是**第二次**漏接守卫（第一次是 `caddy-pages-dir-parity`，当时是"新增了守卫但没接 CI"）。
+        #    ⇒ 只补那一个不解决"还会再漏"，所以把差集检查本身做成常驻守卫：
+        #    **新增 `scripts/tests/*.test.sh` 而忘了接 CI，这一步就会红。**
+        # ⚠️ 判据是"被某个 workflow 文件按文件名引用"，通配循环（`for t in scripts/tests/*`）不算 ——
+        #    本仓库的三个 workflow 都是**逐个点名**跑的（为了给每个守卫写清"为什么在这个 job"），
+        #    所以这里也只认点名。⚠️ 如果将来改成通配循环，这一步要同步改成"确认循环真的覆盖到"。
+        run: |
+          missing=""
+          for f in scripts/tests/*.test.sh; do
+            b="$(basename "$f")"
+            if ! grep -rqF "$b" .github/workflows/ ; then
+              missing="${missing} ${b}"
+            fi
+          done
+          total="$(ls scripts/tests/*.test.sh | wc -l)"
+          echo "守卫脚本共 ${total} 个"
+          if [ -n "${missing}" ]; then
+            echo "::error::以下守卫脚本没有被任何 workflow 引用（CI 不会跑它）：${missing}"
+            echo "接法：需要 dist 或 node_modules 的放 server-test job（并断言 note=0，否则它会静默少跑）；"
+            echo "      不需要依赖且 <30s 的放 guards-core；>30s 的放 guards-slow；"
+            echo "      需要容器引擎/真 caddy/真镜像/真归档的放 nightly.yml。"
+            exit 1
+          fi
+          echo "✔ ${total} 个守卫全部已接入 CI"
+
   guards-slow:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
