@@ -54,7 +54,15 @@ describe('REGRESSION R4-6（已修）：蜜罐评论曾经在**三道限流之�
   it('spam 的上限不再只剩中间件那把 30 次/分钟的公开写桶：三把评论桶对 hp 同样生效', () => {
     const rl = read('./utils/rateLimit.ts');
     expect(rl).toMatch(/PUBLIC_WRITE_LIMIT_PER_MIN = envInt\('VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN', 30, 1, 100000\)/);
-    expect(rl).toMatch(/path\.startsWith\('\/api\/public\/'\) && method !== 'GET'/);
+    expect(rl).toMatch(/path\.startsWith\('\/api\/public\/'\) && !SAFE_METHODS\.has\(method\)/);
+    // 🔴 2026-09-21 升级（不是放宽）：公开写桶的判据从"method !== 'GET'"改成"非安全方法"，
+    //    与 init 桶共用同一个 SAFE_METHODS（RFC 9110：GET/HEAD/OPTIONS）。原因见 rateLimit.ts:16 与
+    //    提交 68727ae5：只读探测不该烧掉写操作的配额，否则监控轮询能把灾难恢复锁死 10 分钟。
+    //    ⚠️ 必须**同时钉住集合的定义**，否则将来有人把 HEAD/OPTIONS 从集合里去掉，
+    //    上面那条锚点仍然绿、而行为已经变了（HEAD/OPTIONS 会重新变成"计入配额"）。
+    //    ⚠️ 也不许把这条放宽成只匹配 startsWith('/api/public/') —— 那是空断言
+    //    （本仓库规矩：断言"某符号出现"而不钉调用形状，等于没断言）。
+    expect(rl).toMatch(/const SAFE_METHODS = new Set\(\['GET', 'HEAD', 'OPTIONS'\]\)/);
     // 修复前：30/分钟 = 43200/天/IP ⇒ 单 IP 约 280 MB/天（默认 maxContentLength=2000），
     // 管理端把 maxContentLength 调到 20000 上限时约 2.6 GB/天，换源 IP 线性放大。
     // 修复后：hp POST 消耗与正常评论相同的三把桶 ⇒ 每 IP 每天最多 scaleLimit(50) 条 spam。
@@ -216,7 +224,10 @@ describe('REGRESSION R4-9（已修）：POST /api/admin/auth/logout 曾经在 /a
     expect(iDispatch).toBeGreaterThan(iDisable); // ← 修复前 dispatch 在 disable 之前
     expect(auth).toMatch(/this\.pipelineProvider\s*\n\s*\.dispatchEvent\('logout', \{\s*\n\s*token,\s*\n\s*\}\)/);
     expect(auth).toMatch(/\.catch\(\(err\) => \{\s*\n\s*this\.logger\.error\(`logout 流水线事件失败/);
-    expect(read('./utils/rateLimit.ts')).toMatch(/path\.startsWith\('\/api\/public\/'\) && method !== 'GET'/);
+    expect(read('./utils/rateLimit.ts')).toMatch(/path\.startsWith\('\/api\/public\/'\) && !SAFE_METHODS\.has\(method\)/);
+    // ⚠️ 同上（2026-09-21 随 68727ae5 升级）：这一处与上面那条钉的是同一个判据的两个位置，
+    //    两处都必须跟着实现走，否则一处红一处绿会让人误以为是负载假红。
+    expect(read('./utils/rateLimit.ts')).toMatch(/const SAFE_METHODS = new Set\(\['GET', 'HEAD', 'OPTIONS'\]\)/);
   });
 
   it('AFTER THE FIX（已实现）：TokenGuard + 事件后置；blast radius（SPA 容忍 401）已读代码核实', () => {
