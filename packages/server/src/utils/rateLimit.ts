@@ -12,7 +12,10 @@ import { scaleLimit } from './clusterRole';
  * 这里补一层**兜底**限流（不是替代专用限流，专用限流更严）。
  *
  * 分档（都是每 IP）：
- * - `/api/admin/init*`        10 分钟 5 次   —— 初始化一辈子只该成功一次
+ * - `/api/admin/init*` 的**写操作**  10 分钟 5 次   —— 初始化一辈子只该成功一次
+ *   ⚠️ 只计**非安全方法**（见 SAFE_METHODS）：这个前缀下没有任何 GET 路由，
+ *   而"用 GET 探测站点是否已初始化"的监控曾经把配额吃光、把真正的灾难恢复
+ *   锁在门外最长 10 分钟（实测事故，详见下面 init 桶那段注释）。
  * - `/api/public/**` 的写操作  1 分钟 30 次   —— 评论、访客计数这类匿名可写的口子
  * - 其它                       1 分钟 600 次  —— 只用来挡扫描器 / 失控客户端
  *
@@ -25,6 +28,19 @@ import { scaleLimit } from './clusterRole';
  */
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
+
+/**
+ * 「安全方法」（RFC 9110：语义上只读、不产生副作用）⇒ 用来区分
+ * **"读取/探测"** 与 **"写入/消耗资源"** 这两类请求。
+ *
+ * 为什么需要这个区分：限流桶的额度应当只被"真的会消耗资源或改变状态"的请求吃掉。
+ * 一个只读的探测请求既不写库也不解包归档，把它计入配额等于让监控和脚本
+ * **替攻击者把站长自己的预算烧光**（init 桶上真实发生过，见下面那条注释）。
+ *
+ * ⚠️ 判据是"方法是不是安全的"，**不是**"路径在不在白名单里"：白名单式的写法在
+ * 将来新增写路由时会**静默漏掉它**（失败方向是"少限流"，比"多限流"危险得多）。
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** 读一个正整数环境变量：非法/缺失/越界都夹回合理范围（导出去给 main.ts 复用，别再写一份） */
 export function envInt(name: string, fallback: number, min: number, max: number): number {
@@ -128,17 +144,43 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
     const path = String((req as any).path || (req as any).url || '');
     const method = String(req.method || 'GET').toUpperCase();
 
-    if (path.startsWith('/api/admin/init')) {
+    // `/api/admin/init*`：初始化一辈子只该成功一次，而 `init/upload` 与 `init/restore`
+    // 都接受**匿名**的整站归档上传 ⇒ 这个桶要防的是"反复初始化爆破"与"反复上传大归档做放大"。
+    //
+    // 🔴 判据是**方法**（只计非安全方法），不是"路径落在前缀里就算"。原因（活体实测过）：
+    //    这个前缀下**只有三个路由，全是 POST**（`POST /api/admin/init`、`/init/upload`、`/init/restore`，
+    //    见 controller/admin/init/init.controller.ts），**没有任何 GET 路由**。而以前是一律计数，
+    //    于是任何"用 GET /api/admin/init 判断站点是否已初始化"的监控/脚本/探针都会白吃配额 ——
+    //    实测 3 次探测就把 5 次/10 分钟吃光，之后**真正的初始化与灾难恢复被 429 锁死最长 10 分钟**。
+    //    也就是"恢复窗口被自己的监控吃掉"，而这正是最不该发生的事（后台 InitPage 甚至为此
+    //    专门写了"页面加载时不发探测请求"的注释来绕开它）。
+    //    按方法判定之后：读取/探测不计数，写入/消耗资源照旧计数，配额**一点没放宽**。
+    // ⚠️ 仍然在**请求进入时**计数，不是等响应出来再计：这个桶要防的正是"反复上传大归档"，
+    //    等响应出来再记账，那次上传的开销已经花掉了。所以"只给非 404/405 的响应计数"那种
+    //    修法在这里是**错的方向**（它会把防护变成事后统计）。
+    // ⚠️ 未初始化时灾难恢复入口必须可用，这条性质不受影响：`init.middleware` 精确放行
+    //    `/api/admin/init`，其余 init 子路径靠 app.module 的 exclude 放行，两者都与本桶无关；
+    //    本桶只决定"同一个 IP 每 10 分钟能提交几次写请求"。
+    if (path.startsWith('/api/admin/init') && !SAFE_METHODS.has(method)) {
       const hit = consumeAttempt(`rl-init-${ip}`, {
         max: scaleLimit(INIT_LIMIT_PER_10MIN),
         windowMs: 10 * 60 * 1000,
       });
       if (!hit.allowed) {
-        return tooManyRequests(res, hit.retryAfterSeconds, '初始化接口调用过于频繁，请稍后再试');
+        return tooManyRequests(
+          res,
+          hit.retryAfterSeconds,
+          `初始化/恢复接口调用过于频繁：每 10 分钟最多 ${scaleLimit(INIT_LIMIT_PER_10MIN)} 次写请求，` +
+            `约 ${Math.max(1, Math.round(hit.retryAfterSeconds))} 秒后可以重试。` +
+            '只有**写操作**（POST 等非安全方法）计入这个额度，GET/HEAD/OPTIONS 不计。' +
+            '如果你是在做健康检查或"站点是否已初始化"的状态探测，请改用 GET /api/public/health —— ' +
+            '它不占这个额度，也不会把真正的初始化/灾难恢复锁在门外。' +
+            '确需更多次恢复尝试（例如反复试口令）可临时调高 VANBLOG_INIT_LIMIT_PER_10MIN。',
+        );
       }
     }
 
-    if (path.startsWith('/api/public/') && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    if (path.startsWith('/api/public/') && !SAFE_METHODS.has(method)) {
       const hit = consumeAttempt(`rl-public-write-${ip}`, {
         max: scaleLimit(PUBLIC_WRITE_LIMIT_PER_MIN),
         windowMs: 60 * 1000,
