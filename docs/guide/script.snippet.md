@@ -95,14 +95,16 @@ VANBLOG_INSTALL_MODE=source ./vanblog.sh
 ./vanblog.sh              # 交互菜单
 ./vanblog.sh install      # 安装/重装（也可以直接用交互菜单选 1）
 ./vanblog.sh status       # 状态
+./vanblog.sh doctor       # 只读体检：容器/健康探测/磁盘/备份多旧/证书还剩几天（退出码 0=没问题、1=有问题）
 ./vanblog.sh log          # 日志
 ./vanblog.sh backup       # 整站备份（一致性快照，见下；导出前有磁盘空间预检）
 ./vanblog.sh verify       # 校验备份归档（完整性 + sha256 + 内容清单，不解压落盘）
 ./vanblog.sh backup-verify # 备份 + 立刻深度校验 + 陈旧检查 + 台账（适合放 cron）
 ./vanblog.sh drill        # 恢复演练：在一次性栈上真恢复一遍并断言语义
 ./vanblog.sh restore      # 从整站备份恢复
+./vanblog.sh restore --offline-full <归档>   # 🔴 站点已经起不来（数据库坏了）时唯一的恢复路径
 ./vanblog.sh reset        # 换新机器：自动初始化 + 恢复整站备份 + 重启 + 核对（一条命令）
-./vanblog.sh install-cron # 定时备份：每天一次写进 root 的 crontab（幂等；--remove 移除）
+./vanblog.sh install-cron # 定时备份：写进 root 的 crontab（幂等；--every N 每 N 小时；--remove 移除）
 ./vanblog.sh update       # 升级（先把新镜像准备好，再停容器）；不带参数 = 默认的 latest 标签
 ./vanblog.sh update v2026.9.2   # ✅ 升到**指定发布版**（推荐：发布号永远不变）
 ./vanblog.sh --help       # 全部命令

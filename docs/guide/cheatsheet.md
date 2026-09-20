@@ -149,6 +149,7 @@ scp root@<服务器IP>:/var/vanblog/data/log/vanblog-backups/vanblog-full-*.tar.
 
 | 你想做什么 | 敲这条命令 | 看到什么算成功 |
 | --- | --- | --- |
+| 🔴 **站点已经起不来了**（数据库损坏，`restore` / `reset` 都用不了） | `./vanblog.sh restore --offline-full /path/to/vanblog-full-20260918-031500.tar.zst` | 先校验归档（**不过就一个字节都不动**）→ 要你输 `yes` → 停栈 → 把坏库**改名保留**成 `data/mongo.broken-<时间戳>` → 起栈（会显示「未初始化」，正常）→ 用归档重置 → 打印 `✓ 离线恢复完成`。⚠️ 确认站点正常前**别删**那个 `.broken-*` 目录，它是唯一的回滚点；每步失败都会打印可照抄的回滚命令。详见 [整站备份](../advanced/backup.md#站点已经起不来了怎么恢复) |
 | 用某份归档恢复当前站点（不停服） | `./vanblog.sh restore vanblog-full-20260918-031500.tar.zst` | 提示恢复完成；刷新前台能看到归档里的内容 |
 | 不知道归档叫什么名字 | `./vanblog.sh restore` | 列出可选的归档让你挑 |
 | **换新机器一步到位** | 在新机器上：`VANBLOG_RESTORE_FROM=/path/to/vanblog-full-20260918-031500.tar.zst ./vanblog.sh install` | 装完自动初始化 + 恢复 + 重启，最后逐项核对通过 |
@@ -169,16 +170,17 @@ scp root@<服务器IP>:/var/vanblog/data/log/vanblog-backups/vanblog-full-*.tar.
 「旧版本号」怎么知道：升级前记一下 `curl -s http://127.0.0.1/api/public/health` 里的 `version`
 （形如 `v2026.9.1@0ec01a5`，取 `@` 前面那半就是版本号），或者看前台页脚。
 
-## 7. 出问题了，先看这三条
+## 7. 出问题了，先看这几条
 
 | 你想做什么 | 敲这条命令 | 怎么读结果 |
 | --- | --- | --- |
+| **一次体检**（推荐先跑这条） | `./vanblog.sh doctor` | **只读，不改任何东西**。退出码 `0` = 没有致命问题、`1` = 有问题，所以可以直接挂 cron 或监控。它一次查完：容器状态与**重启次数**（≥5 会直说「在崩溃循环里」）、有没有健康探测在生效、健康接口（**503 会直接说「server 活着但数据库连不上」并指路 `restore --offline-full`**）、磁盘剩余（<2 GiB 报红）、最近一次备份多旧（>72 小时报红、>26 小时提醒）、上次定时备份是否失败、**证书目录有没有真的持久化**、**证书还剩几天**（<21 天提醒、<7 天报红）、日志里的严重错误。⚠️ 读不到某样东西时它会**明说读不到**而不是猜一个数字 |
 | 看整体状态 | `./vanblog.sh status` | 看 `站点接口  ：… → 200`（不是 200 就往下看日志）、`编排镜像`（当前钉的版本）、`整站备份`（几份、最近三个）、`磁盘剩余` |
 | 看日志 | `./vanblog.sh log` | 找 `ERROR` / `WARN` 行，报障时把相关片段一起贴上 |
 | 看服务本身活着没 | `curl -s http://127.0.0.1/api/public/health` | 返回 JSON 且 `"status":"ok"` = 服务活着；**HTTP 503 + `"status":"degraded"` = 数据库连不上** |
 
 - 还是不行：见 [部署常见问题](../faq/deploy.md) 与 [升级常见问题](../faq/update.md)。
-- 提 issue 时请附上 `./vanblog.sh status` 的输出、日志片段，以及后台「关于」里的版本号。
+- 提 issue 时请附上 `./vanblog.sh doctor` 与 `./vanblog.sh status` 的输出、日志片段，以及后台「关于」里的版本号。
 
 ## 8. 镜像标签怎么选（大白话）
 

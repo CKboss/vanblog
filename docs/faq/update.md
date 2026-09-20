@@ -42,6 +42,28 @@ curl -s http://127.0.0.1/api/public/health     # 看 "version" 字段
 
 :::
 
+::: danger 升级之后要补做的两件事（不做不会坏，但新功能一条都不生效）
+
+**① 装过定时备份的，重跑一次 install-cron：**
+
+```bash
+./vanblog.sh install-cron --force        # 保留你原来的 --hour / --keep 一起给
+```
+
+定时备份跑的**不再是裸 `backup`**，而是 `backup-cron-run`：整站备份失败会**自动回落**成离线目录快照（不需要站点活着，而且是唯一连 HTTPS 证书一起备的方式）、把结果写进状态文件让 `doctor` 能看见、配了 webhook 还会推一次告警。⚠️ 而 crontab 里那一行是**装的时候写死的**，不重跑就还是旧的 —— 也就是说「站点被打瘫的那几天一份备份都没有、而且没人知道」这个老问题会原样留着。
+
+**看到什么算成功**：`crontab -l | grep vanblog` 里那行的命令是 `backup-cron-run`（新）而不是 `backup`（旧）。
+
+**② 用 podman 的，重新生成一次编排文件：**
+
+```bash
+./vanblog.sh config
+```
+
+镜像里的健康检查现在**连前台一起探**（以前只探数据库连通性，前台进程永久挂掉时容器仍然显示健康）。但 **podman/buildah 构建会丢掉镜像里的 HEALTHCHECK 指令**，所以要靠编排文件里那一份等价配置；`config` 会用新模板重写 `docker-compose.yaml`。⚠️ 它会**覆盖你手改过的 environment**（会先留一份 `.bak`）。podman 用户还要自己加 `--health-on-failure=restart` 才会真的因 unhealthy 自愈，细节见 [Docker 部署](../guide/docker.snippet.md)。
+
+:::
+
 ## 不带版本号时，`./vanblog.sh update` 会升到哪
 
 升到 `ghcr.io/ckboss/vanblog:latest`，也就是**最近一次发布构建**。镜像标签的含义：

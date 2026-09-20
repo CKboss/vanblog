@@ -360,9 +360,49 @@ caddy 的证书不在整站备份里，但**不需要搬**：新机器上首次�
 
 详见 [备份与迁移](../guide/backup.md#换新机器一条命令把整站搬过去)。
 
+## 站点出问题了，先跑一次 doctor
+
+```bash
+./vanblog.sh doctor
+```
+
+**只读体检，不改任何东西**，一次把该看的都看完，而且退出码可以直接给监控用：`0` = 没有致命问题、`1` = 有问题。交互菜单里是第 **16** 项。
+
+它查这些：
+
+| 查什么 | 什么情况会报出来 |
+| --- | --- |
+| 容器状态与**重启次数** | 重启 ≥5 次会直说「在崩溃循环里」，并把两个容器最近的日志各打 12 行 |
+| 健康探测有没有真的在生效 | 显示 `none` 说明构建工具（podman/buildah）把镜像里的 HEALTHCHECK 丢了，见 [Docker 部署](../guide/docker.snippet.md) |
+| 健康接口 | **503 会直接说「server 活着但数据库连不上」并指路 `restore --offline-full`** |
+| 磁盘剩余 | 小于 2 GiB 报红 |
+| 最近一次备份多旧 | 超过 72 小时报红、超过 26 小时提醒；上次定时备份失败也会说 |
+| **证书目录有没有真的持久化** | 没挂上卷会报出来，并附 Let's Encrypt 的真实限额（同一组域名 7 天 5 张、34 小时 1 张） |
+| **证书还剩几天** | 小于 21 天提醒、小于 7 天报红 |
+| 日志里的严重错误 | 扫 `Cannot find module` / `ECONNREFUSED` / `ENOSPC` / OOM 等关键字 |
+
+⚠️ 两件事它**故意不做**：读不到某样东西时会**明说读不到**并返回 0，而不是猜一个数字（比如某些系统上 `find -printf` 不可用，那时它会说「查不了」而不是报「你没有备份」）；证书读不到也不算问题（用 IP 或纯 HTTP 部署、证书还没签发，都是合法状态）。
+
+`./vanblog.sh status` 也会多打印一行证书剩余天数。
+
+## 站点已经起不来了（数据库坏了）
+
+平时的 `restore` 与 `reset` 都要先访问站点接口，而站点要连得上数据库 —— 所以**数据库损坏时这两条路都走不通**，这是个死锁。用这条：
+
+```bash
+./vanblog.sh restore --offline-full /路径/vanblog-full-20260920-030000.tar.zst
+```
+
+它先校验归档（**不过就一个字节都不动**）→ 要你输 `yes` → 停栈 → 把数据库目录**改名保留**成 `data/mongo.broken-<时间戳>`（**不删除**）→ 起栈（站点显示「未初始化」是正常的）→ 用归档重置整站 → 逐项核对。
+
+**看到什么算成功**：打印 `✓ 离线恢复完成`，前台能打开、后台能登录。
+**中途失败**：每一步都会打印可照抄的回滚命令（把那个 `.broken-*` 目录改回去）。⚠️ 确认站点正常之前**不要删**它，那是唯一的回滚点。
+
+完整说明见 [整站备份](../advanced/backup.md#站点已经起不来了怎么恢复)。
+
 ## 部署后无法访问后台
 
-可以按照下面的步骤进行排查：
+可以按照下面的步骤进行排查（**先跑一次 `./vanblog.sh doctor`**，上面那一节）：
 
 1. 检查编排端口映射、配置是否正确。
 1. 浏览容器日志，确认是否成功启动。
@@ -390,6 +430,37 @@ caddy 的证书不在整站备份里，但**不需要搬**：新机器上首次�
 
 拉不到镜像时脚本会退回**源码构建**（15–40 分钟、要 1.8GB 以上可用内存），不想等就用
 `VANBLOG_INSTALL_MODE=image` 明确只拉镜像，失败了立刻看到错误。
+
+⚠️ 上面第 3 条（`save` → 拷 → `load`）**现在是真能跑通的**。以前脚本无条件先 `docker pull`，
+拉不到就直接失败 —— 而它失败时给出的建议恰恰是「先 load 再重跑」，照做仍然会走同一个 pull，
+于是断网的机器上根本装不起来。
+
+## 完全离线的机器（不能出网）怎么装
+
+```bash
+# ① 在一台能上网的机器上把镜像导出
+docker pull ghcr.io/ckboss/vanblog:latest
+docker save ghcr.io/ckboss/vanblog:latest -o vanblog.tar
+#    顺便把一键脚本也存下来（离线机器上没法 curl）
+curl -fsSL https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog.sh -o vanblog.sh
+
+# ② 把 vanblog.tar、vanblog.sh（以及你的整站备份归档，如果有）拷到目标机器
+#    scp / U 盘都行；Docker 本身要提前装好
+
+# ③ 在目标机器上导入并安装（VANBLOG_SKIP_PULL=1 = 一次网络都不碰）
+docker load -i vanblog.tar
+chmod +x vanblog.sh
+VANBLOG_SKIP_PULL=1 ./vanblog.sh install
+
+# ④ 有备份归档的话，安装时一步恢复
+VANBLOG_SKIP_PULL=1 VANBLOG_RESTORE_FROM=/path/vanblog-full-xxx.tar.zst ./vanblog.sh install
+```
+
+**看到什么算成功**：安装过程打印 `VANBLOG_SKIP_PULL=1：使用本地镜像 …（未联网）`，最后逐项核对通过。
+
+- `VANBLOG_SKIP_PULL=1` 的含义是**绝不联网**：本机有这个镜像就用，没有就明确报错（不会偷偷去拉）。本机没有时它会告诉你怎么办。
+- **不设** `VANBLOG_SKIP_PULL` 时的默认行为：照常先 pull（⚠️ 这一步不能省，否则 `latest` 这种会移动的标签永远升不上去），**pull 失败但本机已有一份**时回落到本地镜像继续，并把「这份可能不是最新的」说清楚，同时告诉你怎么看这份本地镜像是哪一版。
+- ⚠️ 离线环境下这几件事会受影响，提前知道比现场排查省事：**HTTPS 证书签不出来**（要向 Let's Encrypt 出网；解决办法是在别处签好、连 `caddy/` 目录一起搬，或用目录级快照 `backup --offline` 搬 —— 它含证书），**流水线的「安装依赖」跑不了**（要出网 `pnpm add`；可以在有网机器上装好后把 `pluginRunner` 目录一起搬过去），**图床的第三方存储与外链转存**要能出网到对应服务。
 
 ## 端口被占用
 

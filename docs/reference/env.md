@@ -52,6 +52,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | --- | --- | --- |
 | `VAN_BLOG_DATABASE_URL` | `mongodb://mongo:27017/vanBlog?authSource=admin` | MongoDB 连接串。内嵌 Waline 会复用该连接串的主机与 `authSource`；也可以不写整串，改用 config.yaml 的 `database.host` / `database.port` / `database.user` / `database.passwd` / `database.name` 分项（按上面的映射规则同样有对应环境变量） |
 | `VAN_BLOG_SERVER_HOST` | 空（所有网卡） | Nest API（3000 端口）的监听地址。本机反代时可设 `127.0.0.1` 只接受回环连接，见 [反代](./reverse-proxy.md#仅接受来自本机反代的流量) |
+| `VANBLOG_LISTEN_BACKLOG` | `4096` | Node 监听队列（listen backlog）长度，夹在 1–65535，写错值回落默认。⚠️ **实际生效值 = `min(这个值, 内核的 net.core.somaxconn)`**：很多发行版的 `somaxconn` 默认只有 **128**，那样即使这里写 4096 也只会有 128。要扛住上万并发连接，宿主机上先 `sysctl -w net.core.somaxconn=4096` 并写进 `/etc/sysctl.d/` 持久化，详见 [性能](../advanced/performance.md#c10k-与连接层)。改这个值之前它是 Node 默认的 **511**，那就是「静态图片能扛一万并发、而经反代到 Node 的接口大量 502」的原因 |
 | `VAN_BLOG_WALINE_DB` | `waline` | 内嵌评论系统（Waline）的数据库名 |
 | `static.path`（config.yaml） | `/app/static` | 图床/附件/自定义页面/主题的静态根目录（按映射规则也可以写成对应环境变量） |
 | `VAN_BLOG_LOG` | `/var/log` | 日志目录（`restore.key`、`setup.key`、事件日志、整站备份归档都在它下面） |
@@ -67,6 +68,8 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数：正整数（上限 **32**），也可写 `auto` / `cpus` / `max` = 按 CPU 核数开（同样不超过 32）。空值、`0`、负数、垃圾值一律回落到 `1`（= 单进程）。⚠️ N>1 时：内存近似线性增长（每个 worker 一份完整应用）；限流与连接池会按 worker 数摊薄；初始化 / 整站恢复由数据库里的 [TTL 锁](../advanced/security.md#认证)互斥（抢不到锁的一方得到 **409**）。打开前请自己压一遍。<br>⚠️ **停机语义**：关停时若有 worker 在宽限期内没退出会被 SIGKILL，此时主进程以 **ExitCode 1** 退出并打一条 FATAL（本轮之前是退出 **0**，编排系统看不出异常）。⚠️ 这个宽限期是 **cluster 主进程等 worker** 的时间，写死在代码里（10000ms）、**没有**对应的环境变量；它与下面那行 `VAN_BLOG_SHUTDOWN_TIMEOUT_MS`（默认 8000，管的是**容器 start.js 等子进程**）是**两个不同层的超时**，别混。正常的 `docker stop` / `compose down` 仍退出 0，`restart: always` 也不会因此循环重启（重启策略不作用于显式 stop） |
 | `VANBLOG_DISABLE_WEBSITE` | 空 | `true` = server 不拉起前台（Next）子进程。前后端分离部署 website 镜像时用 |
 | `VANBLOG_WEBSITE_HOST` | `0.0.0.0` | 前台子进程的监听地址（一体式镜像保持默认即可） |
+| `VANBLOG_ISR_STORM_CONCURRENCY` | `4` | 全量重渲染（ISR 风暴）时同时在途的请求数，夹在 1–32。以前是**严格串行**：1 万篇文章按每次 200ms 算要 33 分钟，期间新内容出不来静态页。4 是「比串行快数倍、又不至于把前台进程和磁盘压垮」的取值，小机器别调大 |
+| `VANBLOG_ISR_ROUND_URL_BUDGET` | `5000` | 单轮重渲染的「规模预算」，最小 1。⚠️ **它不会让任何页面少渲染** —— 超过预算只是把这一轮**分批**处理，并打一条 WARN 加进度日志，目的是让「这一轮规模异常大」这件事可见，而不是静默丢内容 |
 | `VANBLOG_MONGO_MAX_POOL_SIZE` | `100` | mongoose 连接池上限（多进程时按 worker 数摊薄） |
 | `VANBLOG_MONGO_CONNECT_TIMEOUT_MS` | `10000` | Mongo 建连超时 |
 | `VANBLOG_MONGO_SERVER_SELECTION_TIMEOUT_MS` | `10000` | Mongo 选主超时（连不上库时多久报错） |
@@ -88,7 +91,11 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` | `30` | 每 IP 每分钟对 `/api/public/**` 写操作（POST/PUT/DELETE）的上限 |
 | `VANBLOG_TRUST_FORWARDED_HEADERS` | `auto` | 限流按哪个 IP 分桶：`auto` = 只有对端是回环/私网时才采信 `X-Forwarded-For` 的**最右一跳**；`always` = 始终采信转发头（CDN/隧道**直连源站**、对端是公网代理 IP 时必须用）；`never` = 只认套接字地址（反代后面等于全站共用一个桶，会 429 风暴）。详见 [反代](./reverse-proxy.md) |
 | `VANBLOG_BRUTE_FORCE_IP_SOURCE` | `trusted` | 登录防爆破 / 评论频率 / 加密文章解锁计数用哪个 IP：`trusted` = 与上面同一套可信判定（一体式部署里 caddy 追加的 XFF 最右一跳就是真实客户端）；`socket` = 只用套接字地址——你的反代是**覆盖**而不是追加 XFF 时的逃生口 |
-| `VANBLOG_API_TOKEN_TTL_DAYS` | `365` | 新签发 API Token 的有效期（天，最小 1）。已签发的不受影响 |
+| `VANBLOG_API_TOKEN_TTL_DAYS` | **`90`** | 新签发 API Token 的有效期（天，夹在 1–36500）。⚠️ **默认值从 365 天改成了 90 天**：Token 等价于超级管理员（它签的就是 `id: 0`），有效期就是「泄露之后攻击者能用的时长」上限，365 天意味着一次疏忽要背一整年。90 天短到「泄露会自然过期」、长到「正常的自动化集成不用每月去后台重签」。**已经签发出去的 Token 不受影响**（按签发时写下的到期时间走），要立刻收紧请到后台「Token 管理」吊销重签 |
+| `VANBLOG_JWT_ROTATE_GRACE_DAYS` | `7` | 轮换 jwt 签名密钥后，**旧密钥还能用几天**（夹在 0–365）。宽限期内旧会话不掉线；**期满之后所有旧登录会话与全部 API Token 一起失效**，外部集成要在后台重新签发。`0` = 不留宽限、轮换后立刻踢掉所有会话（会当场断开集成，慎用）。⚠️ 留空、纯空白、负数、垃圾值一律**回落 7 天而不是 0** —— 因为 `Number('') === 0`，把「compose 里写了个空值」解释成「宽限期 0 天」等于把一次手误放大成全站下线 |
+| `VANBLOG_LOGIN_GLOBAL_FAIL_PER_MIN` | `120` | **全局**每分钟登录失败次数超过它之后，给**所有**登录请求加一点延迟（每超一倍加 500ms），抬高撞库成本。⚠️ 这是**加延迟不是封号**：密码正确的人照样能登录，只是慢。按 worker 数摊薄（多进程时每进程只看到 1/N）。显式写 `0` 才关闭，垃圾值（`abc`、`12O`）回落默认而**不会**变成关闭，上限 1000000 |
+| `VANBLOG_LOGIN_THROTTLE_MAX_MS` | `3000` | 上面那个延迟的封顶毫秒数，夹在 100–30000。⚠️ **代价要如实知道**：站点正被大规模撞库时，**站长自己登录也会慢最多这么多**（默认 3 秒）。这是有意的取舍 —— 慢 3 秒 vs 登不进来。之所以不做「按用户名锁定」，是因为那会让攻击者把真管理员永久锁在门外（而且可以无限续期），在「要持续对外发布」的场景下比撞库本身更致命 |
+| `VANBLOG_ADMIN_LOGIN_ALLOW_CIDR` | 空（= 不限制） | 只允许这些网段**登录后台**（CIDR 列表，逗号或空格分隔，IPv4/IPv6 都认）。被拒时返回 **403**，而响应文案**故意含糊**（不告诉探测者「这里配了网络限制」），真实原因写在服务端日志里（含被拒 IP 与已配网段，每 10 秒最多一条，带被抑制的累计条数）。⚠️ **配错 = 全部拒绝**（fail-closed，不会「配错就放行」），所以第一次配完请**另开一个浏览器/隐身窗口先确认自己还能登录**再关掉当前会话。⚠️ 三条边界：①**只管登录**这一个接口，已经签发的会话与 API Token 不受限制（这也是把 Token 默认有效期压到 90 天的理由之一）；②「忘记密码」恢复接口**故意不纳入** —— 那是站长在 VPN 之外唯一的自救入口；③白名单的强度取决于转发头是否可信，如果 `VANBLOG_TRUST_FORWARDED_HEADERS=always` 而站点又是直接暴露的，攻击者能伪造一个白名单内的 IP，这种情况请把 `VANBLOG_BRUTE_FORCE_IP_SOURCE` 设成 `socket` |
 | `VANBLOG_PIPELINE_TIMEOUT_MS` | `30000` | 单个流水线的执行上限，超时直接杀进程 |
 | `VANBLOG_DEPS_INSTALL_TIMEOUT_MS` | `300000` | 流水线安装依赖（`pnpm add`）的上限 |
 | `VANBLOG_ALLOW_PICGO_PLUGINS` | 关 | `true` 才允许安装 picgo 第三方插件。**默认关闭是有意的**：picgo 1.5.6 依赖的 git-clone（命令注入）与 decompress（路径穿越）都没有修复版本，而插件名来自后台输入框。内置图床都不需要插件 |
@@ -96,20 +103,30 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_DISABLE_IP_GEO` | 空 | `true` 完全关闭登录日志的 IP 归属地查询（不再把访客 IP 发给第三方 cip.cc） |
 | `VAN_BLOG_IP_GEO_TIMEOUT` | `3000` | 归属地查询超时（毫秒，100–600000） |
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | `true` 恢复「任何域名都批准按需证书」的旧行为（多域名/CDN 场景才需要；默认只批准本站已登记的域名） |
+| `VANBLOG_HSTS_MAX_AGE` | `31536000`（一年） | 内置 caddy 在 **443** 上下发的 `Strict-Transport-Security` 的 max-age 秒数。写 `0` = **不发这个头**（这是唯一关闭它的方式），非法值回落默认。**只加在 443**：80 上不发（浏览器按 RFC 会忽略明文连接上的 HSTS），降级配置（证书校验不过时用的那份自签配置）**故意不发** —— 在证书本来就不可信的路径上要求「一年内只用 HTTPS」等于把站长锁在站外。⚠️ **设了之后这个域名在 max-age 窗口内无法退回纯 HTTP**，而且证书续签失败时浏览器是硬失败、不给「仍然前往」。所以务必确认证书目录真的持久化了（`./vanblog.sh doctor` 会查这一项） |
+| `VANBLOG_CADDY_ACCESS_LOG` | 开 | 内置 caddy 的**访问日志**（每条请求一行 JSON，落在 `<日志目录>/caddy.log`，100MB 轮转、留 10 份）。写 `false` / `off` / `0` / `no` 关闭；留空、写错、写别的值一律**保持开启** —— 失败方向是「留住审计日志」。为什么给这个开关：①访问日志里有访客 IP，本身是个隐私面；②被打的时候它是每秒几千行的真实磁盘 IO。⚠️ 这是 **caddy** 的访问日志，与上面 `VANBLOG_ACCESS_LOG`（server 自己那份，默认关）是两回事 |
 | `VANBLOG_ACCESS_LOG` | 关 | `true`/`1` 时每个非静态请求打一行 INFO 访问日志（容易刷屏，排障时再开） |
 | `VANBLOG_SLOW_REQUEST_MS` | `5000` | 超过这个毫秒数的请求打 WARN 慢日志（`0` = 关；5xx 永远会打一条带 request-id 的 ERROR） |
 | `VANBLOG_REQUEST_TIMEOUT_MS` | `300000` | Node HTTP server 的 `requestTimeout`（5000–3600000） |
 | `VANBLOG_KEEP_ALIVE_TIMEOUT_MS` | `65000` | 上游 keep-alive 超时。**必须大于反代的空闲超时**（内置 caddy 是 60s），否则偶发 ECONNRESET/502 |
 | `VANBLOG_JSON_BODY_LIMIT` | `1mb` | 全局 JSON 请求体上限（匿名接口不再敞着大解析上限） |
-| `VANBLOG_JSON_BODY_LIMIT_LARGE` | `50mb` | 后台内容类前缀（文章/草稿/自定义页面/管线）的 JSON 上限——正文可以内嵌 base64 图片、整页 HTML。multipart（图片上传、备份恢复）不走这里 |
+| `VANBLOG_JSON_BODY_LIMIT_LARGE` | `50mb` | 后台内容类前缀（文章/草稿/自定义页面/管线）的 JSON 上限——正文可以内嵌 base64 图片、整页 HTML。multipart（图片上传、备份恢复）不走这里。⚠️ **匿名请求拿不到这个大限额**：请求没带 `token` 头时，这四个前缀先按 `VANBLOG_JSON_BODY_LIMIT`（1mb）解析，超了直接 **413**。以前匿名攻击者可以朝 `/api/admin/article` 投一个 50MB 的 JSON，服务端会先花约 2.9 秒解析 + 约 4.6 秒净化**然后才** 401，而被限流挡下的 429 请求同样已经把 CPU 烧完了（解析与净化都跑在限流之前） |
+| `VANBLOG_SANITIZE_MAX_NODES` | `50000` | 单次请求净化时最多允许访问多少个 JSON 节点（对象/数组/键值各算一个），夹在 1000–5000000，写错值回落默认。⚠️ **`0` 不是关闭** —— 它是安全边界，没有关闭档位，写 `0` 会被夹到 1000。超限时**拒绝请求（413）而不是跳过净化**：跳过就等于把 `$` 操作符与 `__proto__` 原样放过去。为什么 50000 够用：本站的大 body 大在**字符串值**上（正文内嵌 base64、整页 HTML），而净化只递归对象与数组、字符串原样返回，所以 50MB 的合法正文只花几十个节点。效果是把最坏情况的净化成本从「50MB ≈ 7.5 秒同步阻塞事件循环」压到约 **33 毫秒** |
+| `VANBLOG_UPLOAD_MIN_FREE_BYTES` | `500mb` | 上传（图片/附件/JSON 导入）前要求目标卷至少剩这么多空间，不够就拒绝并说明差多少。接受纯字节数或 `500mb` / `2gb` 这类写法，认不出就回落默认，上限 1TB。⚠️ **`0` 是唯一的关闭方式**（要显式写 0）。⚠️ 读不到剩余空间时这道闸门**跳过**而不是拒绝（没有 `statfsSync` 的平台不该因此让所有上传失败） |
 | `VANBLOG_LOG_SCAN_MAX_LINES` | `20000` | 后台「日志管理」单次读取日志文件的行数上限 |
 | `VANBLOG_LOG_SCAN_MAX_BYTES` | `8388608`（8MB） | 后台「日志管理」单次读取日志文件的字节上限 |
+| `VANBLOG_UNLOCK_GLOBAL_BUDGET_PER_10MIN` | `500` | **每篇**加密文章每 10 分钟允许的解锁尝试总次数，**与来源 IP 数无关**（小于 20 或写错值一律回落 500，上限 100000）。为什么需要它：按 IP 的那道限制（20 次/10 分钟/(IP×文章)）在僵尸网络下等于没有 —— N 个 IP 就是 N×20 次，而每次尝试都要算一次 scrypt（实测 63–65ms / 16MB 内存）。⚠️ 它统计**所有**尝试，包括密码正确的那次，所以默认 500 ≈「一篇文章 10 分钟内最多被 500 人试密码」；一篇爆文的加密贴可能真的会撞到，那就调大它。⚠️ 故意**没有**「全站预算」：那会让一篇爆文的合法读者把全站所有加密文章一起锁死，而本站的使用场景恰恰是「要在攻击下把内容发出去」 |
+| `VANBLOG_IMG_SCAN_MAX_ARTICLES` | `5000` | 后台「扫描文章图片」一轮最多处理多少篇文章，夹在 1–1000000。⚠️ 撞上限时**会如实说明没扫完**（响应里带 `truncatedArticles`、日志有 WARN），别把结果当成全站结论 |
+| `VANBLOG_IMG_SCAN_MAX_LINKS` | `2000` | 一轮最多处理多少个图片链接，夹在 1–10000000。上限存在的理由是**运行时间**：每个链接都要真去下载一次（单张上限 50MB、超时 15 秒），链接多时整轮可能跑几十分钟 |
+| `VANBLOG_IMG_SCAN_CONCURRENCY` | `4` | 扫描时同时处理几个链接，夹在 1–32（以前是串行） |
 
 ## 备份与恢复
 
 | 名称 | 默认值 | 设置后会发生什么 |
 | --- | --- | --- |
 | `VANBLOG_BACKUP_INTEGRITY` | 开 | 整站归档的成员级完整性数据（校验和清单）。`off` 是逃生舱：关掉后归档不再防「单成员损坏」 |
+| `VANBLOG_BACKUP_PASSPHRASE` | **空（= 不加密）** | 整站归档的加密口令。设了之后归档名多一个 `.enc` 后缀（`vanblog-full-<时间戳>.tar.zst.enc`），内容是分块 AES-256-GCM。⚠️ **最短 12 字节**，短了**备份直接失败**（宁可不产出，也不写一份能离线爆破的弱归档）。⚠️ **忘了口令 = 归档永久不可恢复**，没有后门、没有找回；所以加密归档必须至少 `./vanblog.sh drill` 成功过一次才算"备份可用"。每次备份成功且**没有**加密时会打一条 WARN（说明现状 + 怎么开） |
+| `VANBLOG_BACKUP_PASSPHRASE_FILE` | 空 | 从一个文件读口令（Docker secret / k8s Secret 挂载的标准用法），**优先于**上面那个内联变量。⚠️ 设了它却**读不到**（路径错、权限不够）时是**失败关闭** —— 直接报错拒绝继续，**绝不静默降级成明文备份**（那比不做这个功能更糟：站长以为归档是加密的）。文件内容只去掉**尾部**空白（前导空白理论上可能是口令的一部分，尾部换行几乎一定是 `echo`/编辑器带进来的） |
 | `VANBLOG_BACKUP_VERIFY_DEEP` | 开 | 每次导出（手动与 cron 都算）写完立刻做**成员级深度自校验**，失败返回 HTTP 400 并把状态记进 `<备份目录>/backup-status.json`。关掉 = 回到「导出成功就等于文件没问题」的旧假设 |
 | `VANBLOG_BACKUP_SWEEP_HOURS` | `24`（`0` = 关） | 定期巡检保留归档的节奏：每轮最多查 `VANBLOG_BACKUP_SWEEP_MAX` 份（最新的优先），成本可预测 |
 | `VANBLOG_BACKUP_SWEEP_MAX` | `3` | 每轮巡检最多查几份归档 |
@@ -245,6 +262,10 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 | `VANBLOG_ADMIN_TOKEN` | 空 | 备份/恢复接口免交互登录的 token（浏览器 F12 → Application → Local Storage → `token`） |
 | `VANBLOG_API_BASE` | 从编排文件读端口 | 站点接口地址（站点在别的机器上时指定） |
 | `VANBLOG_ASSUME_YES` | 空 | `1` 跳过所有 yes 确认（定时任务用） |
+| `VANBLOG_SKIP_PULL` | 空 | `1` = 安装/更新时**绝不联网**，只用本机已有的镜像；本机没有就明确报错（不会偷偷去拉）。**完全离线的机房用这个** |
+| `VANBLOG_BACKUP_MIRROR_DIR` | 空 | 备份成功后把归档（含 `.sha256`）再复制到**第二个目的地**（另一块盘 / NFS / 对象存储挂载点）。写法是先写 `.part` → 移动 → **逐个校验** sha256 与 zstd → 校验不过就删掉那份坏副本 → 按份数清理。⚠️ 目的地出问题**永远不影响本地备份的结果**（返回 0）：手里一份胜过远端一份，远端一份胜过没有 |
+| `VANBLOG_BACKUP_MIRROR_KEEP` | 同 `VANBLOG_BACKUP_KEEP`（默认 7） | 第二目的地保留几份 |
+| `VANBLOG_BACKUP_ALERT_WEBHOOK` | 空 | 定时备份**失败**时向这个 URL POST 一次告警。⚠️ 打不通绝不影响备份结果（只在屏幕上提示一句）。这是本项目**唯一**的告警通道 —— 以前备份失败只写进日志，没有任何人会知道 |
 | `VANBLOG_VERBOSE` | 空 | `1` 打印完整 JSON |
 | `VANBLOG_BACKUP_FORMAT` | `zstd` | `backup` 的压缩格式：`zstd`/`xz`/`gzip` |
 | `VANBLOG_BACKUP_MODE` | `api` | `backup` 走整站备份接口还是 `--offline` 目录快照 |

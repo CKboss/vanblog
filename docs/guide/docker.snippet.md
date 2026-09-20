@@ -234,17 +234,38 @@ curl -s http://127.0.0.1/api/public/health   # 回一段 JSON，里面有 "statu
 启动完毕后，请 [完成初始化](./init.md)（走向导、在初始化页上传整站备份恢复、或用上面注释里的
 零接触环境变量，三选一）。
 
-::: tip 健康检查
+:::: tip 健康检查
 
-镜像自带 `HEALTHCHECK`（每 60 秒打一次匿名的 `GET /api/public/health`，数据库 ping 不通返回 503）。
+镜像自带 `HEALTHCHECK`（每 60 秒一次，超时 10 秒，启动宽限 180 秒，连续 3 次失败才算 unhealthy）。
 `docker ps` 的 STATUS 列会显示 `(healthy)` / `(unhealthy)`。也可以手动验证：
 
 ```bash
 curl -s http://127.0.0.1/api/public/health
 ```
 
-⚠️ 两个已知边界：用 **podman/buildah** 构建的镜像会**丢掉** Dockerfile 里的 `HEALTHCHECK`
-指令（docker buildx 保留），跑在 podman 系编排上要自己配健康检查；另外 Docker 自身不会因为
-unhealthy 就重启容器（restart 策略只看退出码），这个信号是给人和编排系统看的。
+它**同时探两个地方**，两个都通过才算健康（以前只探第一个，于是前台进程永久挂掉时容器仍然显示健康，
+而 `restart: always` 不会介入）：
+
+| 探哪里 | 判定 |
+| --- | --- |
+| caddy 的 **80** 端口上的 `/api/public/health` | 状态码 **<500** 就算过 —— 数据库连不上时它返回 503，那是「server 活着但库不通」，不该被当成进程死了 |
+| 前台进程所在的 **3001** 端口上的 `/__vanblog_health_probe__` | **只要有任何 HTTP 响应**就算活着（这个路径是**故意不存在**的，404 正好） |
+
+⚠️ 第二个探测**不打首页**，这是有意的：打首页会触发一次真实渲染（ISR 未命中要读库），访问高峰或
+缓存冷的时候容易超时，会把「慢但活着」误判成「死了」从而触发重启 —— 那比不探更糟。一个不存在的
+路径走一次路由 404，大约 1 毫秒。
+
+::: warning podman 用户要自己补两步，否则健康检查等于没有
+
+用 **podman/buildah** 构建的镜像会**丢掉** Dockerfile 里的 `HEALTHCHECK` 指令（docker buildx 保留）。所以：
+
+1. 跑一次 `./vanblog.sh config` 重新生成 `docker-compose.yaml` —— 新模板里带一份**等价**的健康检查；
+2. **podman 还要自己加**才会真的自愈：`podman run --health-on-failure=restart …`（quadlet 里写 `HealthOnFailure=restart`）。不加的话，健康检查只是让 `podman ps` 能看出状态，**不会自动重启**。
+
+⚠️ Docker 用户也别误会：**Docker 自身同样不会**因为 unhealthy 就重启容器（restart 策略只看退出码）。
+健康检查是给人和编排系统（k8s 的 liveness probe、监控告警）看的信号。想让「前台挂了自动恢复」真的发生，
+要么用 podman 的 `--health-on-failure`，要么在 k8s 里把 liveness probe 配成上面那两个探测。
 
 :::
+
+::::

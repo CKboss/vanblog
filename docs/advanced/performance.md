@@ -153,6 +153,114 @@ Markdown 渲染管线里有三个「重」依赖，以前是**静态 import**，
 | apple 皮肤 46KB CSS 在全局样式表里 | 全局 CSS 72.7KB（gzip 16.3KB），其中 apple 46.2KB + markdown 相关 43KB；用 `default` 或自定义主题时那 46KB 是纯浪费 | ⬜ 还没动：挪成按主题加载要处理"apple.css 依赖在 Tailwind 之后引入"的顺序问题，得对两种皮肤做视觉对比。⚠️ 被 Next 的 pages router 挡着（只允许在 `_app` 引第一方全局 CSS） |
 | 字体走第三方 CDN | 本机 DNS 解析不出来，每页都有一次 preconnect + 一个 stylesheet 请求卡在 DNS 上；而且 CSS 是水合后才提升的，字体下载**最早也要等 JS 跑完** | 🟡 **做了一半**：拉丁子集（`Maple Mono`）已**自托管**到 `public/fonts/maple-mono-latin-400-normal.woff2`（74,088 B + OFL-1.1 许可证文本，版本钉死 `@fontsource/maple-mono@5.3.0`，`font-display: swap`，只在 apple 皮肤下加**一条** `preload` 且带 `crossOrigin="anonymous"`），**jsDelivr 那个 `@latest` 运行时依赖已经去掉**。中文 / Nerd Font 子集仍走 `static.zeoseven.com` 的 CSS，但是**异步**加载（`media="print"` → 水合后翻 `all`）、解析不了就退回系统字体栈；彻底自托管要按 unicode-range 分包，代码注释里写了做法（做完把 `APPLE_FONT_CSS_URL` 设成 null） |
 
+## C10K 与连接层
+
+「一万条并发连接」这件事要**分两层**看，混在一起就会得出错误的乐观或错误的悲观：
+
+| 路径 | 谁在服务 | 一万条连接挂住、再一起发请求的实测 |
+| --- | --- | --- |
+| `/static/**`（图床图片、附件） | 内置 caddy **直接发**，不经 Node | **10000 / 10000 全部 200**，1.3 秒建连 + 1.4 秒发完 ✅ |
+| `/api/**` 与页面 | caddy 反代到 Node | 修复前 **200 = 6437、502 = 3563**（17.2 秒） |
+
+也就是说：**连接层（caddy）从来不是瓶颈** —— 一万条连接 1 秒多全部建立、0 拒绝；会塌的是"必须反代到 Node"的那部分。
+
+### 那 3563 个 502 是怎么来的（已修）
+
+失败全是 **502**，caddy 自己的日志写着 `dial tcp 127.0.0.1:3000: i/o timeout`。⚠️ 注意它**不是** `cannot assign requested address`，所以不是回环临时端口耗尽。真正的证据在容器内：`TcpExtListenOverflows` 与 `TcpExtListenDrops` 都涨了 **3745**，与 3563 个失败对得上 —— 内核因为**接受队列满了**在丢 SYN。
+
+队列会满，是因为 `app.listen(port, host)` 没传 backlog，Node 用默认值 **511**，而内核取的是 `min(backlog, somaxconn)`。加上 `tcp_abort_on_overflow = 0` 时溢出是**静默**的（丢 SYN 而不是拒绝），客户端只会按 1s / 2s / 4s 重传，所以症状表现为"超时"而不是"被拒"。caddy 反代到 Node 走 HTTP/1.1、每个上游主机只保留 32 条空闲连接，于是一波 N 个并发请求几乎需要 N 条**新建**的上游连接 —— 一台机器、不需要任何技巧就能超过 511。
+
+修复是三件事一起做，缺一件都只能改善一部分：
+
+1. **Node 的 listen backlog 显式设成 4096**（`VANBLOG_LISTEN_BACKLOG`，夹在 1–65535）；
+2. **caddy 的上游连接池放大**：`max_idle_conns_per_host` 32 → **512**、`max_idle_conns` 64 → **1024**（这两个值以前落在 Caddy 的默认值上，实测一次万级突发能堆出 **13,221 个 TIME_WAIT** 套接字）；
+3. **公开 meta 接口的并发合并（single-flight）**：以前缓存 TTL（5 秒）到期的那一瞬间，一万个并发未命中会各自跑一遍 7 个查询的 `Promise.all`，一起压向 100 条连接的 Mongo 池；现在同一时刻只有一次底层取数，其余请求等同一个 Promise。
+
+::: warning 这一条的验证状态，如实说明
+
+上面第 1 条**单独**的效果有实测：把 backlog 从 511 提到 4096 之后，同样的万级突发里 502 明显减少，但**没有归零**。三条一起落地之后的万级复测**目前没有留在仓库里的可引用记录** —— 所以请不要把"反代路径的 C10K 已达标"当成已验证的结论。
+
+已经确凿的是：**静态直服的 C10K 达标**（10000/10000 全 200），以及**建连层面一万条从来不是问题**。要自己复测，用仓库自带的采集脚本（约 15 分钟，需要一台空闲机器）：
+
+```bash
+scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
+  --engine docker --container vb-app --c10k 10000
+```
+
+**看到什么算达标**：`## 5. C10K` 那一节里，两个目标都是 `成功建立: 10000`、`200=10000 失败=0`，并且末尾的 `TcpExt.ListenOverflows` 增量是 **Δ=0**。反过来，只要 `ListenOverflows` 在涨，就说明接受队列还在溢出（先查下面的 `somaxconn`）。
+
+:::
+
+### 生产环境要满足的前提（不做这几条，上面都白搭）
+
+::: tip 1. 内核的 somaxconn
+
+**实际生效的 backlog = `min(VANBLOG_LISTEN_BACKLOG, net.core.somaxconn)`。** 本机是 4096，但**很多发行版默认只有 128** —— 那样即使配了 4096 也会被夹到 128，万级并发必然大量 502。
+
+```bash
+sysctl net.core.somaxconn                      # 先看现在是多少
+sudo sysctl -w net.core.somaxconn=4096         # 立刻生效
+echo 'net.core.somaxconn = 4096' | sudo tee /etc/sysctl.d/99-vanblog.conf   # 重启后仍然生效
+```
+
+**看到什么算成功**：第一条命令输出 `net.core.somaxconn = 4096`。
+
+:::
+
+::: tip 2. 文件句柄数
+
+一条连接一个句柄，一万条下游 + 一万条上游就要两万个。compose 模板已经给两个服务都设了 `nofile: 65536`，一般够用；要往上抬就改模板里那个值再 `./vanblog.sh config`。
+
+⚠️ **k8s 部署没法在清单里设 nofile**，要靠节点配置（kubelet / containerd 的默认值，或 systemd 单元）。
+
+查容器里**实际**的上限（不要看宿主机的）：
+
+```bash
+docker exec vb-app sh -c 'grep "open files" /proc/1/limits'
+```
+
+:::
+
+::: tip 3. 采集时记得把限流抬掉
+
+默认配置下同一 IP 每分钟 600 次请求就会被拦，压测测到的会是"限流器多快返回 429"而不是栈的容量。起压测栈时给容器加：
+
+```
+VANBLOG_RATE_LIMIT_PER_MIN=100000000
+VANBLOG_STATIC_LIMIT_PER_MIN=1000000000
+```
+
+:::
+
+### 连接层的超时与上限（caddy 侧，已显式钉住）
+
+标准 Caddy **没有限流模块**，所以 L7 限流全在 Node 里 —— 这意味着攻击流量必须先被 caddy 完整解析一遍。因此连接层的限制要在 caddy 这一侧就收紧：
+
+| 字段 | 现在的值 | Caddy / Go 的默认值 | 为什么这么设 |
+| --- | --- | --- | --- |
+| `read_header_timeout` | **10 秒** | 1 分钟 | 防 slowloris 的主力。请求头约 1KB，移动网络下 10 秒已经很宽 |
+| `idle_timeout` | **60 秒** | 5 分钟 | 限制一堆空闲连接能占多久，同时不影响 keep-alive 复用 |
+| `max_header_bytes` | **32768** | 1 MB（Go 默认） | 一万条连接 × 1MB 的请求头缓冲 = **10GB 内存放大器**。本站的令牌放在 `token` 请求头而不是 cookie，32KB 绰绰有余（nginx 默认才 8KB） |
+| `read_timeout` / `write_timeout` | **故意不设** | 0（不限） | 见下 |
+
+**为什么不设读写超时**：同一个 443 server 上挂着匿名的整站恢复上传（**8 GiB**）、图片上传（50 MiB）、附件与 JSON 导入（200 MiB），以及备份下载。任何有限的 `read_timeout` 都会把一次合法的大恢复掐断，`write_timeout` 会掐断备份下载。慢 body 的防线留在 Node 侧：`requestTimeout`（默认 300 秒，`VANBLOG_REQUEST_TIMEOUT_MS`）+ 请求体上限 + 恢复归档的体积与剩余空间闸门。
+
+⚠️ **由此带来一个已知的恢复缺陷（别踩）**：`requestTimeout` 是 300 秒，所以走**匿名 HTTP 上传**恢复一个 8 GiB 归档，需要持续 **≥27 MB/s** 的上行；家用宽带必然超时，而且报出来的错是"超时"而不是"归档太大"，很容易排查错方向。**照做的办法**：把归档放进备份目录（`<数据目录>/log/vanblog-backups/`），然后用
+
+```bash
+./vanblog.sh reset <归档路径>
+```
+
+这条路是服务端**本地读文件**，不走 HTTP 上传，没有这个限制。详见 [备份与恢复](./backup.md)。
+
+⚠️ 另外一条容易踩的坑：Caddy 的 JSON 配置里，超时是 server 对象上的**平铺字段**（`read_header_timeout` 等），而 `timeouts: { … }` 那种**嵌套写法是 Caddyfile 的语法**。Caddy 解码模块配置是**严格**的 —— 字段名写错会直接校验失败，于是 `entrypoint.sh` 回落到降级模板（自签证书、没有按需 TLS）。也就是说"加一个超时"加错了名字，代价是**静默失去 HTTPS**。超时也**只能设在 server 级**，没有按路由的超时。
+
+### 日志的磁盘占用
+
+三个文件型日志写入器都显式钉成 **100 MB / 保留 10 份 / 90 天**（caddy 访问日志、caddy 日志、server 的 stdio 日志）。这本来就是 Caddy 的默认值，写出来是因为镜像里的 caddy 是用**不锁版本**的 `apk add` 装的：万一哪天默认值变了，"这会不会写满小磁盘"的答案也会跟着变，所以把它固定住。
+
+被打的时候访问日志是每秒几千行的真实磁盘 IO，而且里面有访客 IP。要关掉用 `VANBLOG_CADDY_ACCESS_LOG=false`（只关**访问**日志，错误日志仍然留着）。
+
 ## 想继续压的话
 
 - `highlight.js` 用的是 lowlight 的 common 语言集（约 35 种），如果站点只用少数几种语言，可以换成 `highlight.js/lib/core` + 手动注册，能再省几十 KB。

@@ -196,9 +196,35 @@ VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
 ```bash
 VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保留 7 份
 ./vanblog.sh install-cron --hour 5 --keep 14              # 换时间/份数
-./vanblog.sh install-cron --remove                        # 移除
+./vanblog.sh install-cron --every 6 --keep 7              # 改成每 6 小时一次（与 --hour 互斥）
+./vanblog.sh install-cron --with-verify                   # 再装一条「每周校验」
+./vanblog.sh install-cron --with-drill                    # 再装一条「每月真恢复演练」（默认不装）
+./vanblog.sh install-cron --remove                        # 移除（三种条目一起删）
 ./vanblog.sh install-cron --force --hour 5                # 参数变了，替换旧条目
 ```
+
+::: danger 定时备份的行为变了：升级后必须重跑一次 install-cron
+
+cron 里跑的**不再是裸 `backup`**，而是一个专用入口 `backup-cron-run`。区别很实在：
+
+- **以前**：整站备份要先调站点接口 ⇒ **站点被打瘫的那几天，正好一份备份都不会有**，而且失败只写进日志、没有任何提示，往往等到「想恢复时才发现没有备份」。
+- **现在**：整站备份失败会**自动回落**成 `backup --offline`（直接打包数据目录，不需要站点活着，而且是唯一连 HTTPS 证书一起备的方式）；结果写进 `<数据目录>/log/vanblog-backups/cron-status.json`，`doctor` 与 `status` 都会读它；配了 `VANBLOG_BACKUP_ALERT_WEBHOOK` 还会在失败时推一次告警。
+
+所以**升级之后请重跑一次**（保留你原来的 `--hour` / `--keep`），否则 crontab 里还是旧的那行，上面这些一条都不生效：
+
+```bash
+./vanblog.sh install-cron --force
+```
+
+**看到什么算成功**：`crontab -l | grep vanblog` 里那行的命令是 `backup-cron-run`（新）而不是 `backup`（旧）。
+
+⚠️ 不重跑也不会坏，只是继续用旧行为。另外 `doctor` 读的是 `cron-status.json`，而**旧的 cron 行不写这个文件** ⇒ 体检里根本不会出现「cron 备份失败」这一项（不是漏报，是没有这个信号），这也是必须重跑的一个理由。
+
+:::
+
+关于 `--every N`：以前只能「每天几点」，所以 **RPO 卡在 24 小时**。`--every N`（1–23）改成每 N 小时一次，**RPO 就是 N 小时**。⚠️ 但份数要跟着算：`--every 6 --keep 7` 只覆盖 **42 小时**，不是 7 天 —— 想留 7 天就得 `--keep 28`。
+
+`--with-verify` 装的是「每周日凌晨跑 `backup-verify`」；`--with-drill` 装的是「每月 1 号跑 `drill`」。两者都排在备份时间之后一到两小时，避开互相抢磁盘。⚠️ 演练**默认不装**，因为它需要容器引擎，而且会吃掉**归档大小两倍**的磁盘（解压出来的整站明文）。
 
 它的行为，条条都是为了"不闯祸"：
 
@@ -225,11 +251,12 @@ VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保�
 ```bash
 # /root/vanblog-cron.env（chmod 600）：
 #   export VANBLOG_ADMIN_TOKEN='<token>'
-0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
+0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup-cron-run >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
 ```
 
 （日志文件名与 `install-cron` 写的 cron 行**用的是同一个**：`<数据目录>/log/vanblog-backup-cron.log`。
-手写成别的名字也能跑，只是排查时要多记一个路径。）
+手写成别的名字也能跑，只是排查时要多记一个路径。⚠️ 命令要写 `backup-cron-run` 而不是 `backup`：
+前者失败会回落离线包并写状态文件，后者在站点不可用时必然失败、而且没人会知道。）
 
 建议再配一个每周校验（退出码非 0 就是有归档坏了，可接监控）：
 
@@ -253,7 +280,7 @@ VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保�
 ./vanblog.sh backup --keep 7
 
 # cron 里用环境变量（等价；token 的放法见上面 install-cron 一节，别写进 crontab 行）
-0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
+0 3 * * * . /root/vanblog-cron.env && VANBLOG_ASSUME_YES=1 VANBLOG_BACKUP_KEEP=7 /var/vanblog/vanblog.sh backup-cron-run >> /var/vanblog/data/log/vanblog-backup-cron.log 2>&1
 ```
 
 几条边界，都是为了"宁可少删，不可多删"：
@@ -266,6 +293,32 @@ VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron     # 每天 03:00，保�
 - 离线模式（`--offline --keep N`）清理的是安装目录里的 `vanblog-backup-*`，两者互不干扰。
 
 `./vanblog.sh status` 会显示当前有多少份整站备份、最近三个归档是哪些，以及磁盘还剩多少。
+
+### 归档要放到别处？先考虑加密
+
+一份整站归档里有**整个数据库**：所有账号的口令哈希、jwt 签名密钥、文章与评论、图床凭据 —— 拿到归档 ≈ 拿到站点凭据（用 jwt 密钥可以直接自签管理员令牌，不用破解任何口令）。放在自己服务器上时目录与文件权限已经收紧（0700 / 0600）；但要放到**你不完全控制的地方**（对象存储、异地盘、网盘），请先打开加密：给容器设 `VANBLOG_BACKUP_PASSPHRASE_FILE`（推荐，Docker secret）或 `VANBLOG_BACKUP_PASSPHRASE`。
+
+⚠️ **忘了口令 = 归档永久不可恢复**，没有后门。所以开了加密之后，请务必用 `./vanblog.sh drill` 真演练一次。细节见 [整站备份 → 归档加密](../advanced/backup.md#归档加密可选默认关)。
+
+### 备到第二个地方，以及失败时让人知道
+
+备份只放在同一台机器上，等于「机器没了备份也没了」。两个环境变量解决这件事（都是宿主机侧的，给脚本用的）：
+
+```bash
+# 备份成功后，把归档（含 .sha256）再复制到第二块盘 / NFS / 对象存储挂载点
+export VANBLOG_BACKUP_MIRROR_DIR=/mnt/backup-disk/vanblog
+export VANBLOG_BACKUP_MIRROR_KEEP=7          # 第二目的地保留几份（默认与 VANBLOG_BACKUP_KEEP 相同）
+
+# 定时备份失败时推一次告警（任意能收 POST 的地址：企业微信/钉钉/Slack/n8n/Healthchecks 都行）
+export VANBLOG_BACKUP_ALERT_WEBHOOK=https://example.com/hook/xxxx
+```
+
+它们的行为，条条都是为了「不因为多一个环节反而更不可靠」：
+
+- 复制的写法是**先写 `.part` → 移动 → 逐个校验** sha256 与 zstd → **校验不过就删掉那份坏副本** → 按份数清理。所以第二目的地不会出现「看着有、其实坏了」的归档。
+- ⚠️ **目的地出问题永远不影响本地备份的结果**（返回 0，只在屏幕上提示一句）。理由很简单：手里一份胜过远端一份，远端一份胜过没有。
+- ⚠️ **webhook 打不通也永远不影响备份结果**。这是本项目**唯一**的告警通道 —— 以前备份失败只写进日志，没有任何人会知道，往往等到想恢复时才发现「那几天一份都没备上」。
+- 这两个变量要放在 cron 能读到的地方：写进 `<安装目录>/vanblog-cron.env`（`install-cron` 生成的那个 0600 文件），或者用 `install-cron` 重新装一次让它带上。
 
 ### 目录级快照（兜底：站点起不来时）
 
@@ -292,6 +345,18 @@ MongoDB 数据文件 `data/mongo`、日志 `log`（整站备份的归档也在�
 
 **日常备份用默认的整站备份**；站点起不来、或者要连证书一起搬机器时才用 `--offline`。
 两种都留一份最稳妥（它们互不通用）。
+
+:::
+
+::: danger 数据库坏了、站点根本起不来时，用 restore --offline-full
+
+上面那个 `restore <目录级快照>` 恢复的是**目录级快照**。如果你手上只有**整站备份归档**（`vanblog-full-*.tar.zst`，也就是日常 cron 备出来的那种），而站点已经因为数据库损坏起不来了，那么平时的 `restore` 与 `reset` **都用不了** —— 它们都要先访问站点接口，而站点要连得上数据库。这是个死锁，不是「再试一次」能解决的。
+
+```bash
+./vanblog.sh restore --offline-full /路径/vanblog-full-20260920-030000.tar.zst
+```
+
+完整步骤、看到什么算成功、以及中途失败怎么回滚，见 [整站备份 → 站点已经起不来了，怎么恢复](../advanced/backup.md#站点已经起不来了怎么恢复)。
 
 :::
 

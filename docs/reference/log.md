@@ -22,7 +22,7 @@ order: 5
 
 | 文件 | 谁写的 | 内容 |
 | --- | --- | --- |
-| `vanblog-access.log` | **caddy** | 访问日志，JSON 一行一个请求。一直开着，不需要设环境变量 |
+| `vanblog-access.log` | **caddy** | 访问日志，JSON 一行一个请求。**默认开着**；给容器设 `VANBLOG_CADDY_ACCESS_LOG=false`（或 `off`/`0`/`no`）关掉 —— 被打的时候它是每秒几千行的真实磁盘 IO，而且里面有访客 IP。⚠️ 写错值、留空都**保持开启**（失败方向是留住审计日志）；关掉的只是访问日志，`caddy.log` 里的错误日志照常 |
 | `caddy.log` | **caddy** | caddy 自己的运行 / 错误日志（证书签发、配置加载失败都在这里；访问日志被排除在外） |
 | `vanblog-stdio.log` | 容器里的 `start.js` | server 与前台子进程的输出合流。**后台「日志管理 → 系统日志」读的就是这一份** |
 | `vanblog-stdout.log`<br>`vanblog-stderr.log` | 容器里的 `start.js` | 同样的内容，但按标准输出 / 标准错误分开，排查时更好定位 |
@@ -36,7 +36,7 @@ order: 5
 
 ::: tip 两个「访问日志」别搞混
 
-- `vanblog-access.log` 是 **caddy** 的访问日志，一直在写，格式是 JSON；
+- `vanblog-access.log` 是 **caddy** 的访问日志，格式是 JSON，**默认在写**（`VANBLOG_CADDY_ACCESS_LOG=false` 可关）；
 - `VANBLOG_ACCESS_LOG=true` 打开的是 **API 服务（Nest）侧**的访问日志：每个非静态请求打一行 INFO。
   它走普通日志输出，所以落在 `vanblog-stdio.log` / `vanblog-stdout.log` 和容器 stdout 里，
   **不会**单独生成一个文件。默认关闭（容易刷屏），排障时再开。
