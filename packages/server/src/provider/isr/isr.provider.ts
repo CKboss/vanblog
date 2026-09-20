@@ -138,6 +138,10 @@ export class ISRProvider implements OnModuleDestroy {
   private static readonly STORM_CHAIN_MAX = 3;
   /** 产物清道夫的周期定时器（只在主进程存在；见 startArtifactReaper） */
   private reapTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** pages-dir 配错时 WARN 的**按值去重**集合（见 reapStaleArtifacts 里的说明）。
+   *  ⚠️ 用 Set 而不是单个字符串：解析器可能一次返回多条 warns，各自独立去重。 */
+  private readonly reaperPagesDirWarned = new Set<string>();
   constructor(
     private readonly articleProvider: ArticleProvider,
     private readonly rssProvider: RssProvider,
@@ -719,7 +723,20 @@ export class ISRProvider implements OnModuleDestroy {
    */
   async reapStaleArtifacts(source: string): Promise<void> {
     try {
-      const dir = reaperPagesDir();
+      // ⚠️ 传 logger，否则 pages-dir 配错时这里的 WARN 是**静默**的（`reaperPagesDir(log?)` 的 log 可选）。
+      //    整体不算全静默 —— CaddyProvider 的 60s 对账会为同一个变量打 WARN —— 但"删产物"这一侧
+      //    恰恰是失败方向最严重的一处（配错目录 ⇒ 该删的没删、或不该扫的被扫），所以它自己也要说。
+      // 🔴 必须**按值去重**：本方法由 setInterval 周期调用、且每次全量渲染收尾也调一次，
+      //    不去重就会每轮刷一条；日志有 20MB×3 的轮转上限，攻击期间真信息会被冲走。
+      //    去重口径与 caddy.provider 的 pagesDirWarnedFor 一致：**换一个非法值要再打一条**
+      //    （那正是需要看见的时刻），同值只打一次。
+      const dir = reaperPagesDir({
+        warn: (message: string) => {
+          if (this.reaperPagesDirWarned.has(message)) return;
+          this.reaperPagesDirWarned.add(message);
+          this.logger.warn(message);
+        },
+      });
       if (!fs.existsSync(dir)) {
         // dev 机 / website 分离部署：没有产物目录就没有可删的东西（不是错误）
         this.logger.debug?.(`[artifact-reaper] pages 目录不存在，跳过（来源：${source}）`);
