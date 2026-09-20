@@ -3,8 +3,8 @@ import * as path from 'path';
 import {
   CADDY_SERVE_HTML_DYNAMIC_SENTINEL,
   CADDY_SERVE_HTML_SENTINEL,
-  DEFAULT_WEBSITE_PAGES_DIR,
   SERVE_HTML_PAGES_DIR_ENV,
+  resolveWebsitePagesDir,
 } from 'src/provider/caddy/caddy.provider';
 
 /**
@@ -42,9 +42,24 @@ import {
  * 否则站点会一直停在"caddy 直发旧 HTML"的状态而没人知道。
  */
 
-/** 哨兵所在目录（与 CaddyProvider 同一个解析口径）。 */
-export function resolveServeHtmlSentinelDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env[SERVE_HTML_PAGES_DIR_ENV] || DEFAULT_WEBSITE_PAGES_DIR;
+/**
+ * 哨兵所在目录（与 CaddyProvider、artifactReaper **同一个**解析口径）。
+ *
+ * ⚠️ 这里必须走共用的 `resolveWebsitePagesDir()`，不能是裸 `env || DEFAULT`：
+ * 生成器侧会拒绝非法值并回落模板默认目录，服务端若照用非法值，哨兵就会写到一个
+ * caddy 根本不看的地方 ⇒ 降级发布**静默失效**（而降级发布正是"数据库起不来时仍能
+ * 对外发布内容"的唯一机制，它的失效必须是大声的）。
+ *
+ * @param log 可选。给了就把"值被拒绝/被规范化"的 WARN 打出来 —— 降级驻留期间
+ *            Nest 还没起来，这条日志是运维唯一能看到的线索，所以调用方应当传。
+ */
+export function resolveServeHtmlSentinelDir(
+  env: NodeJS.ProcessEnv = process.env,
+  log?: DegradedServeHtmlLog,
+): string {
+  const resolved = resolveWebsitePagesDir(env[SERVE_HTML_PAGES_DIR_ENV]);
+  for (const w of resolved.warns) log?.warn(`[degraded-hold] ${w}`);
+  return resolved.dir;
 }
 
 /** 降级前哨兵的状态快照，用于恢复时**精确还原**。 */
@@ -96,7 +111,7 @@ export interface DegradedServeHtmlLog {
 export function enableDegradedServeHtml(
   options: { dir?: string; log?: DegradedServeHtmlLog } = {},
 ): boolean {
-  const dir = options.dir ?? resolveServeHtmlSentinelDir();
+  const dir = options.dir ?? resolveServeHtmlSentinelDir(process.env, options.log);
   const log = options.log;
   const p = sentinelPaths(dir);
   const stamp =

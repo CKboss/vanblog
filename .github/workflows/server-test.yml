@@ -274,6 +274,18 @@ jobs:
       - name: Caddy config generation
         run: bash scripts/tests/caddy-config.test.sh
 
+      - name: Caddy pages-dir cross-language parity (TS resolver vs generator)
+
+        # ⚠️ 同一个环境变量被 TS（服务端三处）与 JS（生成器）两种语言消费时，规则必须逐条对齐。
+
+        # 这条守卫真跑两侧并比对结论（共用一张 32 条取值表 scripts/tests/fixtures/pages-dir-cases.json），
+
+        # 而不是"两边都提到某个关键词"那种空断言。只需 node，不依赖 node_modules/dist/caddy 二进制，
+
+        # 本机 91 条约 25 秒 ⇒ 放 PR 档。
+
+        run: bash scripts/tests/caddy-pages-dir-parity.test.sh
+
       - name: Caddy performance-related config (validate steps skip without a caddy binary)
         run: bash scripts/tests/caddy-perf.test.sh
 

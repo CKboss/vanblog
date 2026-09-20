@@ -928,24 +928,27 @@ w(c); console.log(`same_subtree=${ok} mismatched=${bad}`);')" \
   "same_subtree=2 mismatched=0" \
   "两个 server 的 serve-html 路由里，被改写的 root 与两个哨兵闸门在**同一条子树**（哨兵是相对 root 解析的 ⇒ 分开就等于直服失效）"
 
-# --- 服务端三处解析点今天必须口径一致（漂移绊线，不是语义证明）---
-#    `process.env[SERVE_HTML_PAGES_DIR_ENV] || DEFAULT_WEBSITE_PAGES_DIR` 这个表达式在三个文件里
-#    各写了一遍：caddy.provider（写/删哨兵）、degradedServeHtml（降级驻留时写哨兵）、
-#    artifactReaper（按目录删产物）。常量是**共享 import** 的（好），但表达式是三份。
-#    ⚠️ 三份里只要有一份被单独改过（例如加了校验），三处就会对同一个环境变量得出不同目录 ⇒
-#    哨兵写到 A、产物删在 B。这条守卫拦不住"三份一起改错"，但能拦住"只改一份"这种最常见的漂移。
+# --- 服务端三处解析点必须都在调**共用解析函数**（升级自"三处都是 env || DEFAULT"）---
+#    这条守卫原本钉的是"三处都写成 `process.env[X] || DEFAULT`"，并在注释里写明
+#    "如果是有意收敛成共用函数，请同步改这条守卫"。现在已经收敛了，所以按那句话升级：
+#    判据从"三份表达式长得一样"变成"三份都在调同一个函数"——后者更强，因为它连
+#    "校验规则只加在一处"这种漂移也一起挡住了（那正是本次修复前的缺陷形状）。
+#    ⚠️ 规则本身的跨语言一致性由另外两处负责，别在这里重复实现：
+#       - packages/server/src/provider/caddy/pagesDirParity.spec.ts（真跑 TS 与生成器两侧比对）
+#       - scripts/tests/caddy-pages-dir-parity.test.sh（真跑生成器，验证可观测后果）
 PD_SITES=0
 for f in packages/server/src/provider/caddy/caddy.provider.ts \
          packages/server/src/utils/degradedServeHtml.ts \
          packages/server/src/provider/isr/artifactReaper.ts; do
-  if grep -q 'SERVE_HTML_PAGES_DIR_ENV\] *|| *DEFAULT_WEBSITE_PAGES_DIR' "${ROOT}/${f}"; then
+  if grep -q 'resolveWebsitePagesDir(' "${ROOT}/${f}" \
+     && ! grep -q 'SERVE_HTML_PAGES_DIR_ENV\] *|| *DEFAULT_WEBSITE_PAGES_DIR' "${ROOT}/${f}"; then
     PD_SITES=$((PD_SITES + 1))
   else
-    fail "${f} 里的产物目录解析口径变了（不再是 env || DEFAULT）：如果是有意收敛成共用函数，请同步改这条守卫；如果只改了这一处，另两处会与你得出不同目录"
+    fail "${f} 不再通过共用函数 resolveWebsitePagesDir 解析产物目录（或又出现了裸回落 env || DEFAULT）：三处会对同一个环境变量得出不同目录 ⇒ 哨兵写 A、file_server 读 B、产物删 C，直服静默失效"
   fi
 done
 assert_eq "${PD_SITES}" "3" \
-  "服务端三处产物目录解析点口径一致（caddy.provider / degradedServeHtml / artifactReaper）"
+  "服务端三处产物目录解析点都在调共用函数 resolveWebsitePagesDir（caddy.provider / degradedServeHtml / artifactReaper）"
 
 # --- 生成器**不复制**那个路径字面量（所以它不可能与模板漂移）---
 #    ⚠️ 断言的是**完整绝对路径**，不是 ".next/server/pages" 这个片段：

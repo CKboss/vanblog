@@ -8131,7 +8131,44 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 就能把"数据库启动期不可达 ⇒ 不完全下线 ⇒ 自愈"从一次性证据变成守卫。⚠️ 它需要真容器与真 mongo 镜像 ⇒
 只能进 nightly/手动档，不能进 PR 档。
 
-### 7.79 🔴 不要用"挂载本机编译产物"验证容器内行为（本机 dist 与镜像产物**不等价**）
+### 7.79 🔴 挂载本机 dist 进容器**可以**，但必须用 `nest build`（用裸 `tsc` 必然 `MODULE_NOT_FOUND`）
+
+⚠️ **本节第一版写错了结论，现予更正**（原写法是"本机 dist 与镜像产物不等价 ⇒ 挂载这条路结构上走不通"）。
+三条实测事实都为真（镜像无 `NODE_PATH`、镜像 `main.js` 无裸 specifier、镜像无 `/app/server/src`），
+但**推论错了**：差异不来自"摊平挂载"，而来自**构建命令不同**。
+
+- 用 `./node_modules/.bin/tsc -p tsconfig.build.json` ⇒ 产物**保留** `main.ts` 里 baseUrl 风格的 import 原样输出，
+  于是出现 `require("src/utils/staticGuard")`（`main.ts:5/61/62` 就是 `from 'src/utils/staticGuard'`、`'src/config'`、
+  `'src/utils/loadConfig'`；tsconfig 的 `baseUrl: "./"` 让它**编译期**能解析，**运行期 Node 不认**）。
+- 用仓库真正的构建命令 **`./node_modules/.bin/nest build`**（`packages/server/package.json` 的 `"build": "nest build"`，
+  也就是镜像 Dockerfile 用的那条）⇒ 实测 `grep -c 'require("src/' dist/src/main.js` = **0**，
+  `degradedServeHtml.js` 的 require 是 `../provider/caddy/caddy.provider`（相对路径），**与镜像形状一致**。
+
+👉 **判据（一行就能自查）**：`grep -c 'require("src/' packages/server/dist/src/main.js` 必须是 **0**；
+不是 0 就说明用错了构建命令。⚠️ CI 里新加的 `tsc -p tsconfig.build.json --noEmit` 只是**类型检查**，
+与"产物能不能跑"是两件事；真正跑产物的是 `pnpm run build`（= `nest build`），它已经在 CI 里 ⇒
+所以产品从没暴露这个问题，暴露的只是"本机手工编 dist 去挂容器"这条**验证路径**。
+
+⚠️ 失败形状仍然极像产品启动崩溃：`MODULE_NOT_FOUND` + 退出码 1 + 日志尾部只有 `Node.js v24.21.0`，
+紧接着 `start.js` 打 `[vanblog] server 进程已退出（code=1 signal=null），容器随之退出以便 restart 策略重新拉起`。
+一次活体验证因此连续三次被误读成"被测代码有问题"。
+
+🔴 **另一条同轮查明的环境陷阱（失败点离根因很远）**：helper 用 bind mount 时，`rm -rf "$RUNDIR"`
+**删不掉** root 映射的 mongo 数据目录（本机 UID `100998`），于是 mongod 在**脏数据 + 残留 `mongod.lock`** 上启动
+直接 `Fatal assertion`（容器 **ExitCode=14**）⇒ app 连不上库 exit 1 ⇒ helper 只报"服务没就绪（最后一次 000）"。
+👉 规矩：①每次跑用**唯一的新 RUN_DIR**（或用命名卷）；②加一道 **mongo 就绪正对照**（必须看到
+`Waiting for connections`，否则早退 `exit 4`），**不要把环境故障带进后面所有结论**。
+⚠️ rootless podman 的 bind mount + root 映射 UID 是复发性陷阱（本机 `/tmp` 已积了几个要 sudo 才删得掉的目录）。
+
+⚠️ 还有一条**正对照救场**的实例：注入阶段加了 sha256 正对照（宿主 vs 容器），第一次跑它**全部报不一致**
+—— 因为那时容器已经 stopped（`podman exec` 失败）。**如果没有这道对照，就会拿着一个已经崩掉的栈继续跑场景 D，
+然后把 502 当成"caddy 没有直发 HTML"的产品结论。**
+
+👉 场景 D 有一个**内建正对照**可用：caddy 模板的 `vanblog-serve-html` 路由在直发磁盘 HTML 时会下发响应头
+**`X-Vanblog-Static-Html: 1`**（`caddyTemplate.json` 的 srv0/srv1 `routes[2]`）⇒ 不必靠"比对响应体与磁盘文件"
+这种间接办法，**头本身就是判据**。
+
+### 7.79-archived 🔴（已作废的旧结论，保留以便追溯）不要用"挂载本机编译产物"验证容器内行为
 
 一次活体验证连续三次失败在同一个地方，根因不是产品缺陷，而是**验证方法本身不成立**。实测事实：
 

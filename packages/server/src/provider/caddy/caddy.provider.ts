@@ -41,6 +41,168 @@ export const CADDY_SERVE_HTML_SENTINEL = '.vanblog-caddy-serve-html';
 export const CADDY_SERVE_HTML_DYNAMIC_SENTINEL = '.vanblog-caddy-serve-html-dynamic';
 /** 一体式镜像里 website(standalone) 的 ISR 产物目录（Dockerfile runner 阶段固定布局） */
 export const DEFAULT_WEBSITE_PAGES_DIR = '/app/website/packages/website/.next/server/pages';
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * `VANBLOG_CADDY_HTML_PAGES_DIR` 的**服务端**解析（校验规则与生成器侧逐条对齐）
+ *
+ * ## 为什么这个变量必须在两侧都校验
+ * 它同时决定两件事，而这两件事必须指向**同一个目录**才有效：
+ *   - caddy 侧：`scripts/caddyConfig.js` 把它写进 `vanblog-serve-html` 路由的 `vars.root`
+ *     （= `file_server` 的根）；
+ *   - 服务端：哨兵文件写到这个目录下（caddy 用 `try_files` 判断哨兵**存在性**，而
+ *     `try_files` 相对当前 root 解析 ⇒ 哨兵必须和 root 同目录），且
+ *     `provider/isr/artifactReaper` 拿这个目录去**删产物**。
+ * 修复前生成器校验、服务端不校验（三处都是裸 `env || DEFAULT`）⇒ 给一个非法值时
+ * 生成器回落默认而服务端照用非法值，两侧仍然不一致、直服仍然不生效，只是从"静默"
+ * 变成"大声"。更糟的是三处**可能各自得出不同目录**：哨兵写 A、产物删 B。
+ *
+ * 🔴 而 `artifactReaper` 那一处是**删除**操作，所以非法值以前是有破坏性的：
+ *    `/` 会让它去扫文件系统根下的 post/ page/ category/ tag/；`/a/../b` 能把范围
+ *    移到产物目录之外；相对路径会相对进程 cwd 解析。回落到默认目录是**安全方向**。
+ *
+ * ## ⚠️ 规则必须与 `scripts/caddyConfig.js` 的 `resolvePagesDir` 逐条同步
+ * TS 与 JS 无法共用实现，所以这里的正确做法是：①规则**逐条对齐**（顺序也要一致，
+ * 因为拒绝理由取决于哪条先命中）；②两侧互相在注释里指向对方；③由**跨语言一致性守卫**
+ * 用同一批取值真跑两侧并比对结论 —— 见
+ * `packages/server/src/provider/caddy/pagesDirParity.spec.ts` 与
+ * `scripts/tests/caddy-pages-dir-parity.test.sh`（共用取值表
+ * `scripts/tests/fixtures/pages-dir-cases.json`）。
+ * **改这里就必须同时改 `scripts/caddyConfig.js` 的 `resolvePagesDir`，并更新那张取值表。**
+ *
+ * ## 为什么用真 caddy 实测过、而不是"看起来危险就拒"
+ * `caddy validate` 对 root='/'、'{env.HOME}/x'、'/tmp/a/../b' **全部通过**（它只校验
+ * JSON 结构与模块字段，不校验路径语义），而 `{env.X}` 会在**运行时**被展开 —— 实测把
+ * root 写成 `{env.PROBE_SECRET_DIR}` 后，请求返回 200 且内容来自那个环境变量指向的目录。
+ * 所以占位符形状一律拒绝，不能指望 caddy 兜住。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** 与 `scripts/caddyConfig.js` 的 `hasControlChars` 同一个字符集（C0 控制符 + DEL）。 */
+const PAGES_DIR_CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+/**
+ * 一次解析的结论。
+ * ⚠️ `dir` 永远是**可直接使用**的具体目录：未设置或被拒绝时是 `DEFAULT_WEBSITE_PAGES_DIR`。
+ * 这与生成器侧的形状有一处**有意差异**：JS 的 `resolvePagesDir` 用 `dir=null` 表示
+ * "不改写模板、沿用模板里的默认值"（因为生成器的默认值来自模板、不是常量），
+ * 而服务端总需要一个真实路径。对应关系是 `JS.dir===null ⇔ TS.dir===DEFAULT_WEBSITE_PAGES_DIR`，
+ * 一致性守卫按这个映射比对。
+ */
+export interface WebsitePagesDirResolution {
+  /** 生效目录（合法值可能已规范化；未设置/被拒绝时是默认目录） */
+  dir: string;
+  /** 是否给了非空值（未设置/空/纯空白 ⇒ false，且**不产生任何 WARN**） */
+  provided: boolean;
+  /** 给了值但被拒 ⇒ `dir` 已回落默认 */
+  rejected: boolean;
+  /** 被哪条规则拒的（`rejected` 为 true 时才有；取值见 PAGES_DIR_REJECT_RULES） */
+  rule?: PagesDirRejectRule;
+  /** 人类可读的拒绝理由（进 WARN） */
+  reason?: string;
+  /** 是否发生了规范化（合并重复斜杠 / 去掉结尾斜杠） */
+  normalized: boolean;
+  /** 规范化后的值（`normalized` 为 true 时才有） */
+  normalizedFrom?: string;
+  /** 可直接逐条打日志的 WARN 文本（0..n 条） */
+  warns: string[];
+}
+
+/** 拒绝规则的名字 —— 与生成器侧一一对应，取值表按它做"逐层隔离"。 */
+export const PAGES_DIR_REJECT_RULES = [
+  'control-chars',
+  'braces',
+  'not-absolute',
+  'dot-dot',
+  'filesystem-root',
+] as const;
+export type PagesDirRejectRule = (typeof PAGES_DIR_REJECT_RULES)[number];
+
+/**
+ * 纯函数：解析 `VANBLOG_CADDY_HTML_PAGES_DIR`。
+ *
+ * ⚠️ 规则与**顺序**都必须与 `scripts/caddyConfig.js` 的 `resolvePagesDir` 一致：
+ * 控制字符 → 花括号 → 必须绝对路径 → 不许 `..` 段 → 规范化 → 规范化后不得是 `/`。
+ * 顺序决定了"被哪条拒"，而取值表里每条规则都要有一个**只可能被它拦住**的值
+ * （否则删掉一条规则也测不出来 —— 例如 `{env.HOME}/x` 会被"不是绝对路径"先拦下）。
+ *
+ * @param raw 原始环境变量值（`unknown`：调用方拿到的是 `string | undefined`，
+ *            而 `process.env` 在类型上允许任意值形状）
+ */
+export function resolveWebsitePagesDir(raw?: unknown): WebsitePagesDirResolution {
+  const base = {
+    dir: DEFAULT_WEBSITE_PAGES_DIR,
+    provided: false,
+    rejected: false,
+    normalized: false,
+    warns: [] as string[],
+  };
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text === '') return base; // 未设置/空/纯空白 ⇒ 用默认，且不 WARN
+
+  const reject = (rule: PagesDirRejectRule, why: string): WebsitePagesDirResolution => ({
+    ...base,
+    provided: true,
+    rejected: true,
+    rule,
+    reason: why,
+    warns: [
+      `${SERVE_HTML_PAGES_DIR_ENV}='${text}' 已被忽略：${why}。` +
+        `已回落到默认产物目录 ${DEFAULT_WEBSITE_PAGES_DIR}，` +
+        '与 caddy 侧（scripts/caddyConfig.js 生成配置时）的结论一致 ⇒ 直服 HTML 与哨兵仍指向同一个目录。' +
+        ' ⚠️ 请修正这个值，或直接取消该环境变量（取消 = 用镜像里的默认布局）。',
+    ],
+  });
+
+  if (PAGES_DIR_CONTROL_CHARS.test(text)) {
+    return reject(
+      'control-chars',
+      '含控制字符（CR/LF/NUL 等）：这个值会原样进 caddy 的 JSON 配置，也会被拼进文件路径',
+    );
+  }
+  if (text.includes('{') || text.includes('}')) {
+    return reject(
+      'braces',
+      '含花括号：caddy 会在**运行时**把它当占位符展开（实测 root 写成 {env.X} 时，' +
+        'file_server 真的从那个环境变量指向的目录发文件），所以这里不接受任何占位符形状',
+    );
+  }
+  if (!text.startsWith('/')) {
+    return reject(
+      'not-absolute',
+      '不是绝对路径（必须以 / 开头）：相对路径会相对 caddy 的工作目录（服务端则相对进程 cwd）解析，' +
+        '等于把产物目录交给一个你没指定的位置',
+    );
+  }
+  if (text.split('/').includes('..')) {
+    return reject(
+      'dot-dot',
+      '含 .. 段：这个值会成为 file_server 的根、也是产物清理的扫描根，' +
+        '.. 能把可发布/可删除范围移到产物目录之外',
+    );
+  }
+  const norm = text.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+  if (norm === '') {
+    return reject(
+      'filesystem-root',
+      '规范化后就是文件系统根 /：那会让 file_server 以整个文件系统为根，' +
+        '也会让产物清理去扫根目录下的 post/ page/ category/ tag/',
+    );
+  }
+  const warns: string[] = [];
+  if (norm !== text) {
+    warns.push(
+      `${SERVE_HTML_PAGES_DIR_ENV} 已规范化：'${text}' → '${norm}'（合并重复斜杠、去掉结尾斜杠）` +
+        '，与 caddy 侧写入 vars.root 的值一致。',
+    );
+  }
+  return {
+    dir: norm,
+    provided: true,
+    rejected: false,
+    normalized: norm !== text,
+    normalizedFrom: norm !== text ? text : undefined,
+    warns,
+  };
+}
 /** 哨兵对账周期：后台随时可能把 ISR 模式切到 delay，必须在没有重启的情况下自动摘除 */
 export const SERVE_HTML_RECONCILE_MS = 60_000;
 /**
@@ -138,6 +300,13 @@ export class CaddyProvider implements OnModuleDestroy {
    * 真正有用的信息会被冲掉（而日志本来就有 20MB×3 的轮转上限，攻击期间更容易被冲走）。
    */
   private serveHtmlDbFailures = 0;
+  /**
+   * 上一次已经就 `VANBLOG_CADDY_HTML_PAGES_DIR` 打过 WARN 的**原始值**。
+   * 理由与 `serveHtmlDbFailures` 相同：对账是 60s 一轮，一个配错的变量不该每分钟刷一条。
+   * ⚠️ 按"值"而不是按"打过没有"去重，所以运维**改成另一个非法值**时会再打一条
+   * （那正是需要看见的时刻），而改回合法值后再次配错也仍会打。
+   */
+  private pagesDirWarnedFor: string | null = null;
   constructor(private readonly settingProvider: SettingProvider) {
     /* 构造函数不能是 async，所以 init() 只能 fire-and-forget —— 但**必须自己 catch**。
      * 以前是裸的 `this.init()`：一旦 getHttpsSetting() 抛错（启动时 mongo 还没就绪是常态），
@@ -259,7 +428,17 @@ export class CaddyProvider implements OnModuleDestroy {
         this.warnServeHtmlSettingsUnavailable(err, want, previous);
       }
     }
-    const dir = process.env[SERVE_HTML_PAGES_DIR_ENV] || DEFAULT_WEBSITE_PAGES_DIR;
+    /* ⚠️ 必须走共用解析函数（`resolveWebsitePagesDir`），不能退回裸 `env || DEFAULT`：
+     * 生成器侧（scripts/caddyConfig.js）会校验并拒绝非法值、回落模板默认目录，
+     * 服务端若照用非法值就会与 caddy 指向**不同目录** ⇒ 哨兵写 A、file_server 读 B、
+     * 产物删 C，直服静默失效。三处调用点由守卫钉住都在调这个函数。 */
+    const pagesDirRaw = process.env[SERVE_HTML_PAGES_DIR_ENV];
+    const pagesDir = resolveWebsitePagesDir(pagesDirRaw);
+    if (pagesDir.warns.length > 0 && this.pagesDirWarnedFor !== pagesDirRaw) {
+      this.pagesDirWarnedFor = typeof pagesDirRaw === 'string' ? pagesDirRaw : String(pagesDirRaw);
+      for (const w of pagesDir.warns) this.logger.warn(w);
+    }
+    const dir = pagesDir.dir;
     const sentinel = path.join(dir, CADDY_SERVE_HTML_SENTINEL);
     const dynamicSentinel = path.join(dir, CADDY_SERVE_HTML_DYNAMIC_SENTINEL);
     let achieved: ServeHtmlLevel = want;

@@ -558,8 +558,14 @@ function resolvePagesDir(raw) {
   const reject = (why) => {
     warns.push(
       `${PAGES_DIR_ENV}='${text}' 已被忽略：${why}。已沿用模板里的默认产物目录。` +
-        ' ⚠️ 但服务端仍会把哨兵文件写到你给的这个路径，所以两侧现在不一致、' +
-        'caddy 直服 HTML 不会生效 —— 请修正这个值，或直接取消该环境变量。',
+        // ⚠️ 这句文案在 2026-09-20 之前说的是"服务端仍会把哨兵写到你给的路径 ⇒ 两侧不一致、直服不生效"。
+        //    那时是真的；现在服务端三处调用点也都走 resolveWebsitePagesDir()、同样回落默认目录
+        //    （见 provider/caddy/caddy.provider.ts），两侧规则由**跨语言守卫**逐条钉住：
+        //    scripts/tests/caddy-pages-dir-parity.test.sh + provider/caddy/pagesDirParity.spec.ts
+        //    共用同一张取值表 scripts/tests/fixtures/pages-dir-cases.json。
+        //    🔴 留着旧文案会让运维去查一个**已经不存在**的不一致 —— 过期的解释比没有解释更糟。
+        ' ⚠️ 服务端也会用同样的规则回落到默认目录（两侧规则由跨语言守卫逐条钉住），' +
+        '所以哨兵与 caddy 的 root 仍然一致、直服不会因此失效 —— 但请修正这个值，或直接取消该环境变量。',
     );
     return { dir: null, warns };
   };

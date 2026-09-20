@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  DEFAULT_WEBSITE_PAGES_DIR,
   SERVE_HTML_PAGES_DIR_ENV,
+  resolveWebsitePagesDir,
 } from '../caddy/caddy.provider';
 
 /**
@@ -41,9 +41,29 @@ export const DYNAMIC_ARTIFACT_DIRS = ['post', 'page', 'category', 'tag'] as cons
 /** 一个 ISR 页面在盘上的三件套后缀 */
 export const ARTIFACT_SUFFIXES = ['.html', '.json', '.meta'] as const;
 
-/** 与 caddy 哨兵同一个目录来源（env 覆盖用于测试与分离部署） */
-export function reaperPagesDir(): string {
-  return process.env[SERVE_HTML_PAGES_DIR_ENV] || DEFAULT_WEBSITE_PAGES_DIR;
+/**
+ * 与 caddy 哨兵同一个目录来源（env 覆盖用于测试与分离部署）。
+ *
+ * ⚠️ 必须走共用的 `resolveWebsitePagesDir()`，不能是裸 `env || DEFAULT`。
+ * 🔴 这一处的失败方向比另两处更严重，因为 reaper 是**删除**操作：
+ * 修复前一个非法值会被原样拿来当扫描根 ——
+ *   - `/` ⇒ 去扫**文件系统根**下的 post/ page/ category/ tag/；
+ *   - `/a/../b` ⇒ 把可删除范围移出产物目录；
+ *   - 相对路径 ⇒ 相对进程 cwd 解析，落在哪取决于启动方式。
+ * 现在非法值一律回落默认目录（= 真正的产物目录），这是**安全方向**：
+ * 宁可"在正确的目录里清理"，也不要"在一个没人指定的地方删文件"。
+ *
+ * ⚠️ **合法值必须原样生效**（不规范化以外的任何改动）：分离部署与测试都靠它，
+ * 而且 caddy 的 `vars.root` 用的就是同一个合法值 —— 两侧必须指同一个目录，
+ * 否则"caddy 直服的产物"与"reaper 清理的产物"不是同一批文件，
+ * 已删/已转私密的文章会继续被公开服务。有断言钉住这一点。
+ *
+ * @param log 可选；给了就把"值被拒绝/被规范化"的 WARN 打出来。
+ */
+export function reaperPagesDir(log?: { warn(message: string): void }): string {
+  const resolved = resolveWebsitePagesDir(process.env[SERVE_HTML_PAGES_DIR_ENV]);
+  for (const w of resolved.warns) log?.warn(`[artifact-reaper] ${w}`);
+  return resolved.dir;
 }
 
 /**

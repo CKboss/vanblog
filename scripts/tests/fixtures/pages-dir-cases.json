@@ -1,0 +1,306 @@
+{
+  "_comment": [
+    "VANBLOG_CADDY_HTML_PAGES_DIR 的**跨语言**取值表：TS 侧（packages/server 的 resolveWebsitePagesDir）",
+    "与 JS 侧（scripts/caddyConfig.js 的 resolvePagesDir）必须对同一批取值得出同一个结论。",
+    "两侧守卫都只读这一个文件，所以'加一个取值'只需改这里，不会两边漂。",
+    "  - packages/server/src/provider/caddy/pagesDirParity.spec.ts（真跑两侧比对）",
+    "  - scripts/tests/caddy-pages-dir-parity.test.sh（真跑生成器，验证可观测后果）",
+    "",
+    "字段含义：",
+    "  raw        传给两侧解析器的原始值（JSON 里可以是字符串/数字/null，用来覆盖'非字符串'那一支）",
+    "  unset      true 表示'未设置该变量'（此时 raw 被忽略）——与'设成空串'是两条不同的路径",
+    "  provided   是否算'给了值'（未设置/空串/纯空白 ⇒ false，且两侧都**不该**产生 WARN）",
+    "  rejected   是否被拒（⇒ 回落默认目录）",
+    "  rule       被哪条规则拒；⚠️ 每条规则都要有一个**只可能被它拦住**的取值，",
+    "             否则删掉那条规则也测不出来（例如 {env.HOME}/x 会被'不是绝对路径'先拦下）",
+    "  dir        生效目录；**null 表示回落到各自的默认**（TS = DEFAULT_WEBSITE_PAGES_DIR，",
+    "             JS = 不改写模板、沿用模板里的 root）——这个映射由守卫断言，不是靠猜",
+    "  normalized 是否发生了规范化（合并重复斜杠 / 去掉结尾斜杠）",
+    "",
+    "⚠️ 改这里就要同步改两侧的解析规则；两侧规则本身在各自文件里逐条对齐并互相指向对方。",
+    "",
+    "  envLossy   true 表示这个取值**无法通过环境变量表达**（NUL 会被 execve 截断、非字符串无法表示），",
+    "             所以 shell 守卫会跳过它并打印原因；jest 侧因为直接传 JS 值，仍然覆盖它。",
+    "             ⚠️ 跳过必须是**显式**的：静默跳过会让'全部通过'变成假象。"
+  ],
+  "cases": [
+    {
+      "id": "unset",
+      "unset": true,
+      "provided": false,
+      "rejected": false,
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "empty-string",
+      "raw": "",
+      "provided": false,
+      "rejected": false,
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "whitespace-only",
+      "raw": "   ",
+      "provided": false,
+      "rejected": false,
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "non-string-number",
+      "raw": 123,
+      "provided": false,
+      "rejected": false,
+      "dir": null,
+      "normalized": false,
+      "envLossy": true,
+      "envLossyWhy": "环境变量的值永远是字符串 ⇒ '非字符串'这一支无法用 env 表达，只由 jest 侧覆盖。"
+    },
+    {
+      "id": "non-string-null",
+      "raw": null,
+      "provided": false,
+      "rejected": false,
+      "dir": null,
+      "normalized": false,
+      "envLossy": true,
+      "envLossyWhy": "环境变量的值永远是字符串 ⇒ '非字符串'这一支无法用 env 表达，只由 jest 侧覆盖。"
+    },
+    {
+      "id": "valid-plain",
+      "raw": "/valid/path",
+      "provided": true,
+      "rejected": false,
+      "dir": "/valid/path",
+      "normalized": false
+    },
+    {
+      "id": "valid-with-space",
+      "raw": "/path with space",
+      "provided": true,
+      "rejected": false,
+      "dir": "/path with space",
+      "normalized": false
+    },
+    {
+      "id": "valid-surrounding-whitespace",
+      "raw": "  /ok/path  ",
+      "provided": true,
+      "rejected": false,
+      "dir": "/ok/path",
+      "normalized": false
+    },
+    {
+      "id": "valid-unicode-segment",
+      "raw": "/产物/pages",
+      "provided": true,
+      "rejected": false,
+      "dir": "/产物/pages",
+      "normalized": false
+    },
+    {
+      "id": "valid-default-itself",
+      "raw": "/app/website/packages/website/.next/server/pages",
+      "provided": true,
+      "rejected": false,
+      "dir": "/app/website/packages/website/.next/server/pages",
+      "normalized": false
+    },
+    {
+      "id": "norm-double-slash",
+      "raw": "/a//b/",
+      "provided": true,
+      "rejected": false,
+      "dir": "/a/b",
+      "normalized": true
+    },
+    {
+      "id": "norm-trailing-slashes",
+      "raw": "/a/b///",
+      "provided": true,
+      "rejected": false,
+      "dir": "/a/b",
+      "normalized": true
+    },
+    {
+      "id": "norm-many-slashes",
+      "raw": "///a///b",
+      "provided": true,
+      "rejected": false,
+      "dir": "/a/b",
+      "normalized": true
+    },
+    {
+      "id": "reject-control-crlf",
+      "raw": "/ok\r\npath",
+      "provided": true,
+      "rejected": true,
+      "rule": "control-chars",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-control-nul",
+      "raw": "/ok\u0000x",
+      "provided": true,
+      "rejected": true,
+      "rule": "control-chars",
+      "dir": null,
+      "normalized": false,
+      "envLossy": true,
+      "envLossyWhy": "NUL 字节无法通过环境变量传递（execve 的字符串以 NUL 结尾，会被截断成 '/okx'，而那是一个**合法**路径）⇒ shell 侧无法表达这个取值，只由 jest 侧直接传 JS 字符串覆盖。控制字符规则本身仍然必要：CR/LF/Tab 是**可以**通过环境变量传进来的。"
+    },
+    {
+      "id": "reject-control-tab",
+      "raw": "/ok\tx",
+      "provided": true,
+      "rejected": true,
+      "rule": "control-chars",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-control-del",
+      "raw": "/okx",
+      "provided": true,
+      "rejected": true,
+      "rule": "control-chars",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-braces-absolute",
+      "raw": "/{env.HOME}/x",
+      "provided": true,
+      "rejected": true,
+      "rule": "braces",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-braces-close-only",
+      "raw": "/a}b",
+      "provided": true,
+      "rejected": true,
+      "rule": "braces",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-braces-open-only",
+      "raw": "/a{b",
+      "provided": true,
+      "rejected": true,
+      "rule": "braces",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-relative",
+      "raw": "relative/path",
+      "provided": true,
+      "rejected": true,
+      "rule": "not-absolute",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-relative-dot",
+      "raw": "./pages",
+      "provided": true,
+      "rejected": true,
+      "rule": "not-absolute",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-bare-word",
+      "raw": "pages",
+      "provided": true,
+      "rejected": true,
+      "rule": "not-absolute",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-dotdot-middle",
+      "raw": "/a/../b",
+      "provided": true,
+      "rejected": true,
+      "rule": "dot-dot",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-dotdot-whole",
+      "raw": "/..",
+      "provided": true,
+      "rejected": true,
+      "rule": "dot-dot",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-dotdot-trailing",
+      "raw": "/a/b/..",
+      "provided": true,
+      "rejected": true,
+      "rule": "dot-dot",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-root",
+      "raw": "/",
+      "provided": true,
+      "rejected": true,
+      "rule": "filesystem-root",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-root-double",
+      "raw": "//",
+      "provided": true,
+      "rejected": true,
+      "rule": "filesystem-root",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "reject-root-triple",
+      "raw": "///",
+      "provided": true,
+      "rejected": true,
+      "rule": "filesystem-root",
+      "dir": null,
+      "normalized": false
+    },
+    {
+      "id": "accept-dotdot-prefixed-segment",
+      "raw": "/a/..b",
+      "provided": true,
+      "rejected": false,
+      "dir": "/a/..b",
+      "normalized": false
+    },
+    {
+      "id": "accept-dotdot-suffixed-segment",
+      "raw": "/a/b..",
+      "provided": true,
+      "rejected": false,
+      "dir": "/a/b..",
+      "normalized": false
+    },
+    {
+      "id": "accept-single-dot-segment",
+      "raw": "/a/./b",
+      "provided": true,
+      "rejected": false,
+      "dir": "/a/./b",
+      "normalized": false
+    }
+  ]
+}
