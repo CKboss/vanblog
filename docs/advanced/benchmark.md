@@ -249,6 +249,81 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 
 :::
 
+### 5.2 修复后的两轮万级复测（留档，含"达标需要什么条件"）
+
+§5.1 定位出根因之后，三项修复分别落地：Node 的 listen backlog 显式设为 **4096**（`VANBLOG_LISTEN_BACKLOG`，
+`f0732f79`）、caddy 上游空闲池 `max_idle_conns_per_host` 32→**512** 与 `max_idle_conns` 64→**1024**
+（`6fff2ed4`）、`/api/public/meta` 的缓存加**并发合并**（single-flight，`791e3b75`）。
+下面是用**含全部三项修复**的镜像重跑的两轮，协议与 §0 一致（同一台机器、同一份 66MB 生产归档恢复出的数据、
+限流抬掉、失败按四类分开计数、容器 netns 的内核计数器采集增量）。
+
+**被测对象自证**（每轮都打印，避免"测的不是你以为的那个镜像"）：镜像 `vanblog:hardened`、
+`VAN_BLOG_VERSION=local@791e3b75`、编译产物里 `VANBLOG_LISTEN_BACKLOG` 命中 1 次、
+caddy 模板里 `max_idle_conns_per_host":512`。压测机 `somaxconn=4096`、fd 软限制 1048576、
+`tcp_abort_on_overflow=0`；容器内 `ulimit.nofile=1048576`、`somaxconn=4096`、`tcp_max_syn_backlog=2048`。
+
+#### 第一轮：`VANBLOG_CLUSTER_WORKERS` 默认（= 1 个 worker）
+
+| 目标 | 建连 | 请求 | 失败明细 |
+|---|---|---|---|
+| `/static/img/*.webp`（caddy 直服） | 10000/10000（1.1s） | **200=10000 失败=0**（1.7s） | `ok=10000` |
+| `/api/public/meta`（caddy→Node） | 10000/10000（1.9s） | **200=9156 失败=844**（13.0s） | `ok=9156 http_502=844` |
+
+内核计数器（两个目标合计）：`TcpExt.ListenOverflows Δ=19658`、`ListenDrops Δ=19658`、
+`TCPSynRetrans Δ=11898`、`TCPTimeouts Δ=13724`；`TCPBacklogDrop`、`TCPReqQFullDrop`、`EstabResets` 均 Δ=0。
+
+⚠️ **这两组数字要一起读，否则会得出相反的错误结论**：与改前（`200=6437 / 502=3563`、`ListenOverflows Δ=3745`）相比，
+**端到端失败降了 76%，而内核溢出计数反而涨了 5 倍**。原因是队列变深之后更多 SYN 被排进来、
+队列满时丢得也更多，但客户端重传（`TCPSynRetrans Δ=11898`）大多最终成功 ⇒
+**"内核计数器变好看"不等于"修好了"，判据只能是端到端的失败分类**。
+
+结论：**单 worker 下反代路径仍未达标**（8.4% 失败）。瓶颈已经从"队列太浅"移到"一个进程抽干接受队列的速度"。
+
+#### 第二轮：`VANBLOG_CLUSTER_WORKERS=auto`（本机 6 核，实测起 **8** 个 worker 进程）
+
+| 目标 | 建连 | 请求 | 失败明细 |
+|---|---|---|---|
+| `/api/public/meta`（caddy→Node） | 10000/10000（1.1s） | **200=10000 失败=0**（8.5s） | `ok=10000` |
+
+内核计数器：**`TcpExt.ListenOverflows Δ=0`、`TCPSynRetrans Δ=0`**（两个目标合计，即静态那一轮也干净）。
+
+⇒ **反代路径的 C10K 达标，而且内核零丢包、零重传。**
+
+#### 🔴 达标条件（这三条缺一不可，请照着配）
+
+1. **`VANBLOG_CLUSTER_WORKERS` 要大于 1**（`auto`/`cpus`/`max`/具体数字，上限 32）。这是本轮最重要的一条：
+   backlog 提到 4096 只解决了"队列太浅"，**万级并发新建连接需要多个进程一起 accept**。
+   ⚠️ 代价要如实说：每个 worker 一份完整应用（内存近似线性增长）、限流与 mongo 连接池按 worker 数摊薄、
+   进程内缓存各一份（命中率下降）。打开前请自己压一遍。
+2. **`net.core.somaxconn` 必须 ≥ `VANBLOG_LISTEN_BACKLOG`**：生效值是两者的最小值。本机是 4096，
+   但**发行版常见默认是 128** —— 那样配 4096 会被夹到 128，C10K 必然大量 502。
+   `sysctl -w net.core.somaxconn=4096`，并写进 `/etc/sysctl.d/` 持久化。
+3. **fd 上限要够**：一万条下游 + 一万条上游 = 两万 fd。compose 模板已设 `nofile 65536`；
+   ⚠️ k8s 清单**无法直接设** nofile，要靠节点配置；用 `podman run`/`docker run` 手工起容器时若不传
+   `--ulimit`，用的是守护进程默认值（可能是 1024，那会先 `EMFILE`）。
+
+#### 复现
+
+```bash
+# 起栈（cluster=auto 是达标的关键变量）
+ENGINE=podman IMAGE_TAG=localhost/vanblog:hardened HTTP_PORT=18097 \
+  ARCHIVE=<你的 vanblog-full-*.tar.zst> \
+  EXTRA_ENV="VANBLOG_RATE_LIMIT_PER_MIN=100000000,VANBLOG_STATIC_LIMIT_PER_MIN=1000000000,VANBLOG_CLUSTER_WORKERS=auto" \
+  <你的起栈方式>            # 生产用 docker compose；本机用 vanblog_dev/run-image-stack.sh
+# 采集（失败四分类 + 内核计数器增量是工具自带的）
+scripts/benchmark/measure.sh --base http://127.0.0.1:18097 --engine podman --container <容器名> \
+  --latency-n 5 --sweep-c 200 --sweep-n 5000 --static-n 800 --c10k 10000 --out <留档路径>.md
+```
+
+达标判据：**两个目标都是 `失败=0`，且 `TcpExt.ListenOverflows Δ=0`**。只看"失败=0"不够 ——
+建连阶段超时曾经既不记成功也不记失败，那些连接会从统计里彻底消失（工具已修，但判据要写全）。
+
+⚠️ 同轮的一个**未解释观察**，如实记下：cluster=auto 那一轮的混合流量扫描（并发 200 × 2000 请求）出现
+`200:1123 404:628 502:249`，而单 worker 那一轮同一档是 `200:4684 204:316`、失败 0。
+404 集中在扫描的早期，怀疑是**恢复后 ISR 全量渲染尚未跑完**（这一轮只等了 200 秒，单 worker 那轮等了 180 秒但
+起栈更早），502 则可能是 8 个 worker 同时启动期间的短暂不可用。**这两条都没有取证**，不要当结论用；
+要复现请先确认 ISR 渲染已完成（日志里"全量渲染"结束）再采。
+
 ## 6. 容器资源占用
 
 `podman stats` 读数（CPU 是相对宿主机 6 核的百分比，MEM 后面是"用量 / 上限"）：
