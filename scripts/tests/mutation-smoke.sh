@@ -464,7 +464,14 @@ done
 echo ""
 echo "════ 还原复核 ════"
 leftover="$(git status --porcelain -- "${FILES[@]}" 2>/dev/null)"
-MINE=0; THEIRS=0
+MINE=0; THEIRS=0; CONCURRENT=0
+# ⚠️ 先算出"本次运行**真的变异过**哪些文件"。判据是物证而不是记忆：
+#    `$WORKDIR/backup.<id>` 只在变异真正施加时才创建（见上面的 `cp -p "$f" "$WORKDIR/backup.$id"`），
+#    所以有备份文件 = 这个文件被本脚本改过。`--only` 没选中的、以及被 SKIPPED 的，都不在里面。
+declare -A MUTATED_PATHS=()
+for _i in "${!IDS[@]}"; do
+  [[ -f "$WORKDIR/backup.${IDS[$_i]}" ]] && MUTATED_PATHS["${FILES[$_i]}"]=1
+done
 if [[ -n "$leftover" ]]; then
   # ⚠️ 逐个文件判定：sha 与预检一致 ⇒ 是**别人的并发编辑**（不是我的残留）；
   #    sha 与预检不一致 ⇒ 说明我的还原没把它带回去，**这才是还原失败**。
@@ -475,17 +482,28 @@ if [[ -n "$leftover" ]]; then
     [[ -z "$lpath" ]] && continue
     now="$(sha_of "$lpath")"
     if [[ "$now" == "${PRE_SHA[$lpath]:-__none__}" ]]; then
+      # 内容与预检时逐字节相同 ⇒ 它在预检前就已是脏的（别人的未提交工作），本脚本没动过它。
       THEIRS=$((THEIRS+1)); echo "  ⚠️ 并发编辑（不是本脚本残留）：$lpath"
-    else
-      MINE=$((MINE+1)); echo "  🔴 本脚本残留：$lpath（sha 与预检不一致）" >&2
+    elif [[ -n "${MUTATED_PATHS[$lpath]:-}" ]]; then
+      # 本次真的变异过它，而内容与预检不一致 ⇒ **这才是还原失败**。
+      MINE=$((MINE+1)); echo "  🔴 本脚本残留：$lpath（本次变异过且 sha 与预检不一致）" >&2
       git diff -- "$lpath" | head -12 | cut -c1-120 >&2
+    else
+      # 🔴 以前这一支被算成"本脚本残留"，那是**误分类**：本脚本从没变异过它
+      #    （`--only` 没选中、或它被 SKIPPED），sha 却变了 ⇒ 按定义只能是别人在窗口内改了它。
+      #    实测踩过：`--only M09` 时 `main.ts`（M06 的目标）正被另一个代理编辑，
+      #    于是收尾报"还原校验失败 1"，而仓库里其实**一个变异形状都没有**。
+      #    危害不只是噪音：它会让"🔴 残留"变成狼来了，真残留反而被忽略。
+      CONCURRENT=$((CONCURRENT+1))
+      echo "  ⚠️ 变异窗口内被并发修改（本脚本**没有**变异过它，不是残留）：$lpath"
     fi
   done <<< "$leftover"
   if [[ "$MINE" -gt 0 ]]; then
     echo "  🔴 有 $MINE 个文件未还原干净 ⇒ 任何后续对照都不可信，请手工检查" >&2
     RESTORE_BAD=$((RESTORE_BAD+MINE))
   fi
-  [[ "$THEIRS" -gt 0 ]] && echo "  ! 另有 $THEIRS 个文件是被别的进程并发修改的（本脚本没有覆盖它们）"
+  [[ "$THEIRS" -gt 0 ]] && echo "  ! 另有 $THEIRS 个文件在预检前就已是脏的（别人的未提交工作，本脚本没有覆盖它们）"
+  [[ "$CONCURRENT" -gt 0 ]] && echo "  ! 另有 $CONCURRENT 个文件在变异窗口内被并发修改（本脚本没有变异过它们 ⇒ 不是残留，但它们的 sha 对照已失效）"
 else
   echo "  ✓ ${N} 个目标文件还原后 git status 为空（逐字节一致）"
 fi
