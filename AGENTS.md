@@ -8549,6 +8549,68 @@ InitMiddleware 的 233 未初始化信封）。token 全程只写 **0600 文件*
 拿到"日志 0 命中"的**空尺子**（**每个 shell 调用都是新会话，env 不延续**）；③手搓 tar 头部（自己算 checksum）
 造出的是**无效归档**，要用 `tarfile.TarInfo.tobuf(GNU_FORMAT)` 才能被 GNU tar 与 busybox tar 同时认可。
 
+### 7.83 🔴🔴 P0：集群模式下**没有任何 Nest 进程是"主实例"**，所有"只在主实例跑"的启动工作全都不执行
+
+**根因（已定位到行）**：`packages/server/src/main.ts` 末尾的入口分支是
+```ts
+if (clusterWorkers > 1 && cluster.isPrimary) { …runBootstrapWithDbRetry(startPrimary, …) } else { main().catch(…) }
+```
+而 `startPrimary()` **只做两件事**：`global.jwtSecret = await initJwt()` 与 `startClusterPrimary(...)` ——
+**它根本不创建 Nest 应用**。⇒ 集群模式下：主进程里没有 `InitProvider`（`onModuleInit` 永不执行），
+而所有 **worker** 里 `cluster.isWorker === true` ⇒ `isPrimaryInstance(cluster)` 返回 **false**
+⇒ `main.ts:385` 的 `const primary` 在**每一个** Nest 进程里都是 `false`。
+🔴 **所以"只在主实例跑"的东西，没有任何进程会跑。**
+
+**活体证据**（同镜像 `r15-full` = `local@1ee46600`、同 helper、**只差 `VANBLOG_CLUSTER_WORKERS` 一个变量**，两套栈并行）：
+
+| 判据 | 集群 workers=2 | 单 worker 对照 |
+|---|---|---|
+| `/var/log/setup.key` | **不存在**（而 `/var/log` 可写） | **存在**，`-rw-------` 44 字节 |
+| `POST /api/admin/init` | **500** `setupKeyUnavailable:true` | **400**「请求里没有初始化密钥（字段名 setupKey）」⇒ 机制正常 |
+| `GET /` | 🔴 **502** | **200**（1.01s） |
+| 进程表 | `start.js`/`caddy`/`node main.js`(主)/2×worker，**无 `next-server`** | 有 **`next-server (v14.2.35)`** |
+| 日志 `初始化密钥` / `setup.key` | **0 / 0** | **4 / 2** |
+| 日志 `cluster worker：跳过启动 website` | **2**（每 worker 一次） | **0** |
+
+留档：`vanblog_dev/tmp/skey-cluster-app.log`（522 行）、`skey-single-app.log`（对照）、`c10k-cluster-defect-scene.log`（1514 行）。
+
+**受影响的面（逐个核实过，全部因为同一个 `primary=false`）**：
+- 🔴 `WebsiteProvider.doRun()` 第一行就是 `if (!isPrimaryInstance(cluster)) return`（注释写"由主实例负责"）
+  ⇒ **集群模式下没有任何进程拉起前台 Next 子进程，`/` 与 `/post/*` 全部 502**（降级发布也救不了：磁盘上根本没有产物）。
+- 🔴 **`fullBackup.provider`（定时整站备份）不跑** ⇒ 集群部署**没有自动备份**。
+- 🔴 **`initRestoreKey()`（忘记密码的恢复密钥）不跑** ⇒ 集群部署**连"忘记密码"都救不回来**。
+- 🔴 **setup key 不生成** ⇒ **既不能初始化、也不能用归档恢复**（灾难恢复完全失效）。
+- 其余同样跳过：`walineProvider.init()`、首轮全量 ISR 渲染、**7 处启动数据清洗**
+  （`washStaticSetting`/`washCustomPage`/`washCategory`/`washAuthorDesc`/`washUserWithSalt`/`washAccessPasswords`/`washDefaultMenu`）、
+  `backfillWordCounts`、`updateTotalWords`、`initVersion()`；以及 provider/schedule 层自带同类守卫的：
+  `isr.task`（每小时 ISR cron）、`viewer.task`、`publish.task`、`searchIndex.provider`、`statsMaintenance.provider`、
+  `comment.provider`、`isr.provider` 的 reaper。
+
+⚠️ 结论：**`VANBLOG_CLUSTER_WORKERS>1`（文档里写明是 C10K 在反代路径上达标的"必需"配置）当前会得到一个严重残缺的部署** ——
+没有前台页面、没有评论、**没有定时备份**、没有 ISR cron、没有数据迁移、不能初始化也不能恢复。
+
+🔴🔴 **必须更正一条已写进文档的性能结论**：上一轮"C10K 达标（`cluster=auto`，8 worker，`200=10000 / 失败=0`）"
+**是在一个前台已经死掉的部署上测出来的** —— 因为压的是 `/api/public/meta`（**server** 端点），
+前台 502 不会体现在那个数字里。⇒ 那条数字**只能证明 server 侧的 HTTP 栈能扛 1 万并发**，
+**不能**证明"站点在集群模式下能正常服务 1 万并发"。⚠️ `docs/advanced/benchmark.md` §5.2 与本手册 §7.74/§7.75
+里凡是把 cluster=auto 当成"达标配置"推荐的地方，都要加这条限定；**修复后必须重测**。
+
+⚠️ **还有一条佐证"这个前提从没被质疑过"**：`init.provider.ts:537-540` 已经有人写下过
+"`initRestoreKey()` 只在主实例跑 ⇒ `VANBLOG_CLUSTER_WORKERS>1` 时 worker 进程上这条接口永远处于可绕过状态"，
+并据此**加固**了那个接口 —— 但那个心智模型是"主实例 = 某个 Nest 进程"，
+而事实是**集群模式下没有任何 Nest 进程是主实例**，所以密钥根本没被生成过。
+👉 教训：**"只在主实例跑"这类判定，必须有一条守卫证明"在每种部署形态下，确实恰好有一个进程会跑它"** ——
+否则它会静默地变成"没有任何进程跑"，而所有单元/守卫都还是绿的（因为单元测试里 `cluster.isPrimary` 通常是 true）。
+
+**修法方向**（正在实现）：`VANBLOG_CLUSTER_ROLE` 已被 `clusterBootstrap.ts:93` 写成 `'worker'`，
+但**全仓库无人读取**（只有一条 spec 断言它）⇒ 让 `startClusterPrimary` 把**恰好一个** worker 标成 `'leader'`
+（首个 fork；leader 退出后下次 fork 补位），并让 `isPrimaryInstance(clusterLike, env)` 在
+`env[VANBLOG_CLUSTER_ROLE] === 'leader'` 时返回 true。这样"只有一个进程跑一次性启动任务"的**设计意图保住**
+（不是 8 个 worker 各生成一把密钥互相覆盖），而集群模式终于有一个 Nest 侧的"主实例"。
+
+⚠️ **一条工具事实（更正我上一轮的说法）**：`run-image-stack.sh` **支持 `MONGO_HOST_PORT`**（默认 27117），
+所以"同一时刻只能有一套 helper 栈"**可以绕开**（`HTTP_PORT=18087 MONGO_HOST_PORT=27118 …`）⇒ A/B 对照可以并行。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
