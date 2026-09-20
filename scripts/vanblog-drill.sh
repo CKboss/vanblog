@@ -2684,6 +2684,41 @@ cmd_drill() {
   # ⚠️ 没配口令时**什么都不加**：server 侧会回落到容器自己的 env，而明文归档根本不需要口令 ——
   #    不要为了"看起来做了事"而挂一个空文件进去。
 
+  # ── 验签公钥透传 ──────────────────────────────────────────────────────
+  # 手法与口令完全一致（0600 文件 + **只读**挂载 + 容器内路径），理由也一致：
+  #   ⚠️ 不用 `-e VANBLOG_BACKUP_VERIFY_KEY="$值"`：PEM 是多行文本，进 argv 会被 `ps` 看到，
+  #      还会被本脚本的日志/台账带出去。公钥本身**不是秘密**，但"多行内容塞进 -e"这件事
+  #      在 podman/docker 上本来就不可靠（换行会被吃掉），所以统一走文件。
+  # ⚠️ 宿主的 `_FILE` 路径在容器里不存在，所以两种来源都归一成"一个文件 + 只读挂载"。
+  local -a drill_vkey_args=()
+  local drill_vkey_src="${VANBLOG_BACKUP_VERIFY_KEY_FILE:-}"
+  if [[ -n "${drill_vkey_src}" && -r "${drill_vkey_src}" ]]; then
+    drill_vkey_args+=(-v "${drill_vkey_src}:/run/secrets/vanblog-backup-verify-key:ro"
+      -e VANBLOG_BACKUP_VERIFY_KEY_FILE=/run/secrets/vanblog-backup-verify-key)
+    rec_note "验签公钥已透传" "来自 VANBLOG_BACKUP_VERIFY_KEY_FILE，以只读文件挂进容器（公钥不是秘密，但仍走文件：PEM 是多行，塞 -e 会被吃掉换行）"
+  elif [[ -n "${VANBLOG_BACKUP_VERIFY_KEY:-}" ]]; then
+    local drill_vkey_tmp="${DRILL_TMP}/backup-verify-key.pem"
+    if [[ -n "${DRILL_TMP}" ]] && printf '%s\n' "${VANBLOG_BACKUP_VERIFY_KEY}" >"${drill_vkey_tmp}" 2>/dev/null; then
+      chmod 600 "${drill_vkey_tmp}" 2>/dev/null
+      drill_vkey_args+=(-v "${drill_vkey_tmp}:/run/secrets/vanblog-backup-verify-key:ro"
+        -e VANBLOG_BACKUP_VERIFY_KEY_FILE=/run/secrets/vanblog-backup-verify-key)
+      rec_note "验签公钥已透传" "来自 VANBLOG_BACKUP_VERIFY_KEY（经 0600 临时文件只读挂进容器）"
+    else
+      rec_warn "验签公钥没能透传" "VANBLOG_BACKUP_VERIFY_KEY 有值但写不进 ${DRILL_TMP:-<没有临时目录>}"
+    fi
+  fi
+  # 🔴 **必须在台账里写清楚：这次演练没有覆盖"验签"**，否则"公钥已透传"这条 note 会被读成
+  #    "演练验过签了"。事实是：演练走 `POST /api/admin/init/restore` 的 **multipart 上传**
+  #    （`-F "file=@${archive}"`），而 `.sig` 是归档**旁边的另一个文件**，不随上传进去 ⇒
+  #    服务端在 upload-tmp 里找不到 `<归档>.sig`，验签状态只能是 `missing-sig`，
+  #    而按设计 `missing-sig` **只记 note、不算 issue**（否则所有老归档全线报红）⇒ 恢复照样成功。
+  #    所以：透传公钥只让容器配置与生产一致、让那条 note 说得准，**并不构成验签覆盖**。
+  #    真要走验签这条路，必须让归档与 `.sig` **同时在服务端备份目录里**，然后按名字恢复
+  #    （`vanblog.sh restore <归档名>` / `reset <归档名>` → `POST full/restore`）；
+  #    而未初始化的站点只有匿名的 `init/restore` 可用，所以演练**结构上**做不到。
+  #    ⚠️ 这是服务端能力缺口（`init/restore` 不接受第二个 multipart 字段带 `.sig`），已上报。
+  rec_note "验签**未被本次演练覆盖**" "演练走 multipart 上传，.sig 不随归档上传 ⇒ 服务端只能得到 missing-sig（按设计只记 note、不算失败），恢复仍会成功。要演练验签请用 vanblog.sh restore <归档名>（归档与 .sig 都在服务端备份目录里）"
+
   if ! "${eng}" run -d --name "${DRILL_APP_NAME}" \
     --network "${net_name}" \
     --add-host "${DRILL_MONGO_NAME}:${mongo_ip}" \
@@ -2691,6 +2726,7 @@ cmd_drill() {
     -e TZ=Asia/Shanghai \
     -e EMAIL="" \
     ${drill_pass_args[@]+"${drill_pass_args[@]}"} \
+    ${drill_vkey_args[@]+"${drill_vkey_args[@]}"} \
     -e "VAN_BLOG_DATABASE_URL=mongodb://${mongo_ip}:27017/vanBlog?authSource=admin" \
     -v "${DRILL_VOLUMES[0]}:/app/static" \
     -v "${DRILL_VOLUMES[1]}:/var/log" \
@@ -3492,7 +3528,9 @@ cmd_backup_status() {
   # 所以它才是 cron 场景下"上次备份什么时候成功、server 自己验过没有"的首选来源。
   # 字段（version 1）：updatedAt / lastSuccessAt / lastSuccessName / lastSuccessBytes /
   #   lastVerifyMs / lastFailureAt / lastFailureStage('export'|'verify') / lastFailureName /
-  #   lastFailureMessage / consecutiveFailures
+  #   lastFailureMessage / consecutiveFailures /
+  #   lastSuccessSigned(**null ≠ false**：null = 早于本功能，不知道；false = 确定没签) /
+  #   lastSuccessSigning.keyFingerprint
   local sfile="${dir}/backup-status.json"
   if [[ -f "${sfile}" ]]; then
     local fj fsuccess fname fbytes fcons fat fstage fmsg fverify
@@ -3524,6 +3562,41 @@ cmd_backup_status() {
       rec_pass "server 导出后自己验过这份归档" "lastVerifyMs=${fverify}（server 侧的导出后自检；脚本这边还会再独立验一遍）"
     else
       rec_note "server 的状态文件里没有 lastVerifyMs" "这个 server 版本还没有「导出后自检」；脚本这边的深度校验就是唯一那一层"
+    fi
+    # ── 离线签名（ed25519）：最近一次成功的备份签了没有 ──
+    # 🔴 **三态必须分开**，而最关键的一条是 `null` ≠ `false`：
+    #    server 侧 `lastSuccessSigned` 的类型是 `boolean | null`，null 表示"这份状态早于签名功能，
+    #    根本不知道"。把 null 显示成"否"会告诉站长一件**没发生过的事**（"你的备份没签名"），
+    #    而真相是"无从判断"—— 两者的处置完全不同（前者要去配密钥，后者只要再备份一次就有答案）。
+    # ⚠️ 未签名一律 **WARN 而不是 FAIL**，`--strict` 下也一样：现有部署在这个功能之前
+    #    就已经在跑定时备份了，把"没签名"变成红灯等于给所有存量站点挂一个常红的检查，
+    #    而常红灯训练出来的是"忽略红"（本仓库已经用这条理由拒绝过把 admin 的类型检查加进 CI）。
+    local fsigned fsigfp
+    fsigned="$(json_get "${fj}" lastSuccessSigned)"
+    fsigfp="$(json_get "${fj}" lastSuccessSigning.keyFingerprint)"
+    case "${fsigned}" in
+    true)
+      rec_pass "最近一次成功的备份**已签名**" "lastSuccessSigned=true${fsigfp:+，密钥指纹 ${fsigfp}}（⚠️ 这只说明签了，不说明验过；验签要公钥）"
+      # 与盘上的 .sig 对一次账：状态文件说签了，那这份归档旁边就该真有 .sig
+      if [[ -n "${newest}" && ! -f "${newest}.sig" ]]; then
+        rec_warn "状态文件与盘上的 .sig 一致" "backup-status.json 说最近一次备份已签名，但 ${name} 旁边没有 .sig（签的是另一份？.sig 被删了？状态文件是旧的？）"
+      fi
+      ;;
+    false)
+      rec_warn "最近一次成功的备份**未签名**" "lastSuccessSigned=false ⇒ 这份归档能证明「没拷坏」（sha256），但**不能证明「没被换过」**。要签：./vanblog.sh signing-key 生成密钥对，再给容器配 VANBLOG_BACKUP_SIGNING_KEY(_FILE)"
+      ;;
+    *)
+      rec_note "签名状态**未知**（不是「未签名」）" "lastSuccessSigned=${fsigned:-<字段不存在>} ⇒ 这份 backup-status.json 早于签名功能，或 server 版本较旧。再成功备份一次就能得到确定答案；⚠️ 不要把它读成「没签名」"
+      ;;
+    esac
+    # 盘上这份归档自己有没有 .sig（与状态文件是两个独立来源，都要看）
+    if [[ -n "${newest:-}" && -f "${newest}.sig" ]]; then
+      local diskfp
+      diskfp="$(sed -n 's/.*"keyFingerprint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${newest}.sig" 2>/dev/null | head -1)"
+      rec_pass "最新归档旁边有 .sig" "${name}.sig（指纹 ${diskfp:-?}）—— 离线副本要带着它一起走，验签材料离线保存时才有意义"
+      if [[ -n "${fsigfp}" && "${fsigfp}" != "null" && -n "${diskfp}" && "${diskfp}" != "${fsigfp}" ]]; then
+        rec_warn "状态文件记的指纹与 .sig 里的指纹一致" "status ${fsigfp} vs .sig ${diskfp} ⇒ 密钥被覆盖过，或这份 .sig 是别的密钥签的（用当前公钥验签会 key-mismatch）"
+      fi
     fi
     if [[ "${fcons}" =~ ^[0-9]+$ ]] && ((fcons > 0)); then
       rec_fail "server 侧没有连续失败的备份" "consecutiveFailures=${fcons}，最后一次失败 ${fat:-?}（阶段 ${fstage:-?}）：${fmsg:-（无消息）}"

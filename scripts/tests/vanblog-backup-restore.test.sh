@@ -157,10 +157,16 @@ mkdir -p "${PRUNE_DIR}/data/log/vanblog-backups"
 BK="${PRUNE_DIR}/data/log/vanblog-backups"
 for i in 1 2 3 4 5; do
   head -c 1200 /dev/urandom >"${BK}/vanblog-full-2026090${i}-010101.tar.zst"
-  echo '{}' >"${BK}/vanblog-full-2026090${i}-010101.manifest.json"
+  # ⚠️ 清单 sidecar 的名字必须是 **<完整归档名>.manifest.json**（即 `….tar.zst.manifest.json`）：
+  #    这是服务端真实写出的形状（utils/fullBackup.ts 的 `${archivePath}.manifest.json`，
+  #    本机真备份目录里就是 `vanblog-full-20260913-172338.tar.zst.manifest.json`）。
+  #    这里以前写的是 `vanblog-full-2026090${i}-010101.manifest.json`（**没有 .tar.zst**），
+  #    那是照着 prune 里一处拼错的删除路径写的 —— 于是测试钉住了 bug：prune 删的是一个
+  #    现实中从不存在的文件名，孤儿清单从来没被清理过，而测试一直绿。
+  echo '{}' >"${BK}/vanblog-full-2026090${i}-010101.tar.zst.manifest.json"
   # 用 mtime 决定新旧（prune 按 ls -1t 排序）
   touch -d "2026-09-0${i}" "${BK}/vanblog-full-2026090${i}-010101.tar.zst" \
-    "${BK}/vanblog-full-2026090${i}-010101.manifest.json"
+    "${BK}/vanblog-full-2026090${i}-010101.tar.zst.manifest.json"
 done
 echo "不要删我" >"${BK}/restore-me.txt"
 echo "不要删我" >"${BK}/vanblog-backup-20260901-010101.tar.gz" # 离线备份不属于 full 那一类
@@ -182,15 +188,15 @@ else
 fi
 # 被删归档的 sidecar 要一起删（否则 restore 列表里会出现孤儿清单），
 # 但**留下的**那两份的清单必须还在 —— 别把断言写成"一个 manifest 都不许有"。
-if [[ "${left}" == *"vanblog-full-20260903-010101.manifest.json"* ||
-  "${left}" == *"vanblog-full-20260902-010101.manifest.json"* ||
-  "${left}" == *"vanblog-full-20260901-010101.manifest.json"* ]]; then
+if [[ "${left}" == *"vanblog-full-20260903-010101.tar.zst.manifest.json"* ||
+  "${left}" == *"vanblog-full-20260902-010101.tar.zst.manifest.json"* ||
+  "${left}" == *"vanblog-full-20260901-010101.tar.zst.manifest.json"* ]]; then
   fail "保留策略：被删归档的 .manifest.json 应该一起删（实际剩下：${left}）"
 else
   pass "保留策略：连带删掉了被删归档的 .manifest.json"
 fi
-assert_contains "${left}" "vanblog-full-20260905-010101.manifest.json" "保留策略：留下的归档，清单也留着"
-assert_contains "${left}" "vanblog-full-20260904-010101.manifest.json" "保留策略：第二新的清单也留着"
+assert_contains "${left}" "vanblog-full-20260905-010101.tar.zst.manifest.json" "保留策略：留下的归档，清单也留着"
+assert_contains "${left}" "vanblog-full-20260904-010101.tar.zst.manifest.json" "保留策略：第二新的清单也留着"
 assert_contains "${left}" "restore-me.txt" "保留策略：不认识的文件一概不动"
 assert_contains "${left}" "vanblog-backup-20260901-010101.tar.gz" "保留策略：full 模式不碰离线备份归档"
 assert_contains "$(cat "${TEST_DIR}/prune.out")" "删掉 3 份" "保留策略：报告了删掉几份"

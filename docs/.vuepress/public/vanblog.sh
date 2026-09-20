@@ -2324,10 +2324,28 @@ mirror_backup_artifacts() { # <归档路径>
     echo -e "  ${yellow}!${plain} 复制到镜像目的地失败：${dest}（本地备份已成功，不影响结果；查磁盘空间与权限）"
     return 0
   fi
-  # sidecar 一起带过去，否则在目的地那侧没法用 verify 比对校验和
-  if [[ -f "${src}.sha256" ]]; then
-    cp -p "${src}.sha256" "${dest}/${base}.sha256" 2>/dev/null ||
-      echo -e "  ${yellow}!${plain} 校验和 sidecar 没复制过去（归档本身已经复制了）"
+  # sidecar 一起带过去（`.sha256` / `.manifest.json` / `.sig`），一律走共用助手枚举，
+  # 别在这写第二份文件名清单 —— 上一轮就是因为只拷了 `.sha256` 而漏了别的。
+  # 🔴 其中 `.sig` 是**这个功能存在的全部理由**：异地副本只有带着签名才"可证明没被改过"。
+  #    没有 `.sig` 的异地副本，在"源站已被攻陷/主机 root 已丢"的场景下无法与一份被换掉的归档区分，
+  #    于是恢复时只能选择相信它 —— 而那正是签名要避免的事。所以 `.sig` 缺失要**说清楚**，
+  #    而不是和"本来就没签过"混成一句沉默。
+  local sc scbase
+  while IFS= read -r sc; do
+    [[ -n "${sc}" ]] || continue
+    scbase="$(basename "${sc}")"
+    if cp -p "${sc}" "${dest}/${scbase}" 2>/dev/null; then
+      case "${scbase}" in
+      *.sig) echo -e "  镜像    ：已复制签名 ${yellow}${scbase}${plain}（指纹 $(signature_field_of "${src}" keyFingerprint || echo '?')）" ;;
+      esac
+    else
+      echo -e "  ${yellow}!${plain} ${scbase} 没复制过去（归档本身已经复制了）"
+    fi
+  done < <(backup_sidecar_paths "${src}")
+  if ! archive_has_signature "${src}"; then
+    echo -e "  ${yellow}!${plain} 这份归档**没有 .sig 签名**（备份时没配 VANBLOG_BACKUP_SIGNING_KEY，或早于本功能）"
+    echo -e "            ⇒ 异地副本只能证明「没拷坏」（sha256），**不能证明「没被换过」**。"
+    echo -e "            要签：${VANBLOG_SELF_NAME} signing-key 生成密钥对，之后给容器配 VANBLOG_BACKUP_SIGNING_KEY(_FILE)。"
   fi
 
   # 校验：优先按 sidecar 比对，其次 zstd -t，最后只能比字节数（并且必须明说"没真校验"）
@@ -2336,7 +2354,9 @@ mirror_backup_artifacts() { # <归档路径>
       echo -e "  镜像校验：${green}sha256 一致${plain}"
     else
       echo -e "  ${red}✗${plain} 镜像校验**不通过**（sha256 不一致）：${dest}/${base} —— 已删除这个坏副本"
-      rm -f "${dest}/${base}" "${dest}/${base}.sha256" 2>/dev/null
+      # ⚠️ 连 sidecar 一起删：留下一个"签名/校验和在、归档不在"的目的地，
+      #    比什么都不留更危险（下一次比对会拿旧 sidecar 去配新归档）。
+      rm -f "${dest}/${base}" "${dest}/${base}.sha256" "${dest}/${base}.manifest.json" "${dest}/${base}.sig" 2>/dev/null
       return 0
     fi
   elif command -v zstd >/dev/null 2>&1 && [[ "${base}" == *.zst ]]; then
@@ -2344,7 +2364,7 @@ mirror_backup_artifacts() { # <归档路径>
       echo -e "  镜像校验：${green}zstd -t 通过${plain}（没有 sidecar 可比，只验了压缩流完整性）"
     else
       echo -e "  ${red}✗${plain} 镜像校验不通过（zstd -t 失败）：已删除这个坏副本"
-      rm -f "${dest}/${base}" 2>/dev/null
+      rm -f "${dest}/${base}" "${dest}/${base}.sha256" "${dest}/${base}.manifest.json" "${dest}/${base}.sig" 2>/dev/null
       return 0
     fi
   else
@@ -2354,7 +2374,7 @@ mirror_backup_artifacts() { # <归档路径>
       echo -e "  镜像校验：${yellow}只比了字节数（${a}）${plain} —— 本机没有 sha256sum/zstd，这**不算真校验**"
     else
       echo -e "  ${red}✗${plain} 镜像副本字节数对不上（源 ${a:-?} / 副本 ${b:-?}）：已删除这个坏副本"
-      rm -f "${dest}/${base}" 2>/dev/null
+      rm -f "${dest}/${base}" "${dest}/${base}.sha256" "${dest}/${base}.manifest.json" "${dest}/${base}.sig" 2>/dev/null
       return 0
     fi
   fi
@@ -2374,7 +2394,14 @@ mirror_backup_artifacts() { # <归档路径>
   if [[ -n "${old}" ]]; then
     while IFS= read -r f; do
       [[ -n "${f}" ]] || continue
-      rm -f "${f}" "${f}.sha256" 2>/dev/null && echo -e "  镜像清理：删掉 $(basename "${f}")（保留最新 ${keep} 份）"
+      if rm -f "${f}" 2>/dev/null; then
+        # 三种 sidecar 一起删，否则目的地会堆满孤儿 `.sha256`/`.manifest.json`/`.sig`
+        local msc
+        while IFS= read -r msc; do
+          [[ -n "${msc}" ]] && rm -f "${msc}"
+        done < <(backup_sidecar_paths "${f}")
+        echo -e "  镜像清理：删掉 $(basename "${f}")（保留最新 ${keep} 份）"
+      fi
     done <<<"${old}"
   fi
   return 0
@@ -2423,6 +2450,78 @@ archive_is_encrypted() { # <文件> → 0=加密归档 1=不是（或读不到�
 
 archive_has_enc_suffix() { # <名字或路径> → 0=以 .enc 结尾
   [[ "$(basename "$1" | tr '[:upper:]' '[:lower:]')" == *.enc ]]
+}
+
+# ── 归档的 sidecar（与归档同目录、同名 + 后缀，同生共死）──────────────────────────
+# 三种：`.sha256`（校验和）、`.manifest.json`（成员清单副本）、`.sig`（ed25519 离线签名）。
+# 命名口径以 server 为准：`writeSecretFileSync(`${archivePath}.manifest.json`)`
+# （utils/fullBackup.ts:1339）与 `signatureSidecarPath()` = `${archivePath}.sig`
+# （utils/backupSigning.ts:355）⇒ 都是**在完整归档名之后**追加，不是替换 `.tar.*`。
+# ⚠️ 为什么必须有**一个**函数来判：这三种名字都**匹配**脚本里那些"找归档"的 glob
+#    （`vanblog-full-*`、`vanblog-full-*.tar.*`），所以任何一处漏判都会把 sidecar 当成归档：
+#      - 保留策略里 sidecar 会**占掉 keep 名额** ⇒ 真归档被提前删掉（**数据丢失**）；
+#      - "取最新一份归档"会取到 `.sig` ⇒ 恢复/校验打错文件；
+#      - `verify --all` 与 `restore` 的候选列表会去校验/列出 `.sig` ⇒ 报"归档损坏"。
+#    这类"同一判断散在多处"的形状已经漂过两次（`.enc` 那轮补了 glob，`.sig` 这轮又发现 6 处），
+#    所以判断只写在这里，各处一律调它。
+BACKUP_SIDECAR_EXTS=('.sha256' '.manifest.json' '.sig')
+
+is_backup_sidecar_name() { # <名字或路径> → 0=是 sidecar（不是归档本体）
+  local n ext
+  n="$(basename "$1")"
+  for ext in "${BACKUP_SIDECAR_EXTS[@]}"; do
+    [[ "${n}" == *"${ext}" ]] && return 0
+  done
+  return 1
+}
+
+backup_sidecar_paths() { # <归档路径> → stdout：实际存在的 sidecar 路径（每行一个）
+  local a="$1" ext
+  for ext in "${BACKUP_SIDECAR_EXTS[@]}"; do
+    [[ -e "${a}${ext}" ]] && printf '%s\n' "${a}${ext}"
+  done
+  return 0
+}
+
+# 从 stdin 的候选名单里剔掉 sidecar（每行一个名字或路径）。
+# ⚠️ 所有"列归档"的地方都必须过这一道，别各写一份 `grep -vE`（那正是漂移的来源）。
+filter_backup_archives() {
+  local line
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    is_backup_sidecar_name "${line}" && continue
+    printf '%s\n' "${line}"
+  done
+  return 0
+}
+
+# ── 离线签名（server 侧 packages/server/src/utils/backupSigning.ts）────────────────
+# `.sig` 是**明文 JSON**、0600、与归档同目录同名 + `.sig`；含 magic `VANBLOGSIG1`、
+# archiveSha256、archiveBytes、keyFingerprint（公钥 DER 的 sha256 前 16 位）、signedAt、
+# signature(base64, 64B)、archiveName（⚠️ **不参与签名**，改名不影响验签）。
+# ⚠️ 加密归档签的是**密文** ⇒ 不解密也能验真，所以 `.enc` 与明文归档都可能有 `.sig`。
+BACKUP_SIG_MAGIC="VANBLOGSIG1"
+BACKUP_SIG_EXT=".sig"
+
+archive_has_signature() { # <归档路径> → 0=旁边有 .sig
+  [[ -n "${1:-}" && -f "${1}${BACKUP_SIG_EXT}" ]]
+}
+
+# 从 `.sig` 里取一个字段（明文 JSON，用 sed 取，⚠️ 不引入 jq 依赖）。取不到就输出空。
+signature_field_of() { # <归档路径> <字段名>
+  local sig="${1:-}${BACKUP_SIG_EXT}" key="${2:-}"
+  [[ -f "${sig}" && -n "${key}" ]] || return 0
+  sed -n 's/.*"'"${key}"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${sig}" 2>/dev/null | head -1
+}
+
+# 签名状态的**三态**文案（⚠️ 三态必须可区分，合并成"没有签名信息"就丢掉了最关键的区别）：
+#   signed+verified  已签且验过（只有服务端/配了公钥才能给出"验过"）
+#   signed-nokey     已签，但本机没有验签公钥 ⇒ **不等于验过**
+#   unsigned         从没签过（早于本功能，或备份时没配签名密钥）
+# ⚠️ 判据：脚本侧**不做**密码学验签（那要 ed25519，bash 里没有；硬凑 openssl 容易写错），
+#    所以脚本永远只能给出后两态；"验过"这一态只来自服务端的 verify/restore 响应。
+signature_state_of() { # <归档路径> → stdout: signed-nokey | unsigned
+  if archive_has_signature "$1"; then printf 'signed-nokey'; else printf 'unsigned'; fi
 }
 
 # 加密归档在脚本侧能验什么、不能验什么（三处调用点都要引用同一套说法，别各写一遍）：
@@ -2573,6 +2672,44 @@ verify_one_archive() {
     notes+=("无 sha256 记录（server 导出/旧归档），跳过比对")
   fi
 
+  # 2.5) 离线签名（.sig）—— **三态必须可区分**，合并成"没有签名信息"就丢掉了最关键的区别：
+  #   signed-nokey  有 .sig，但本机没做密码学验签 ⇒ **不等于验过**
+  #   unsigned      没有 .sig ⇒ 这份归档从没被签过（不是"被改过"，也不是"验过"）
+  #   malformed     .sig 在但形状不对 ⇒ 既不能当通过，也**不该**断言"被篡改"
+  # ⚠️ 脚本侧**不做** ed25519 验签：bash 里没有原语，硬凑 openssl 容易写错，而"验签写错"的失败方向
+  #    是**假通过**（比不验更危险）。权威结论只来自服务端：
+  #      - 恢复时：`POST full/restore` 会验签，配了公钥且验不过就 400 拒绝；
+  #      - 状态：`GET full/status` 的 `lastSuccessSigned` / `lastSuccessSigning.keyFingerprint`；
+  #      - ⚠️ `POST full/verify` 目前**不返回** signature 段（`BackupVerifyResult` 里有这个字段，
+  #        但控制器没放进响应）⇒ 想在这里显示"已签且验过"，得先让服务端把它吐出来。
+  local sigfile="${file}${BACKUP_SIG_EXT}" sigmagic sigfp sigat sigbytes
+  if [[ -f "${sigfile}" ]]; then
+    sigmagic="$(signature_field_of "${file}" magic)"
+    sigfp="$(signature_field_of "${file}" keyFingerprint)"
+    sigat="$(signature_field_of "${file}" signedAt)"
+    sigbytes="$(signature_field_of "${file}" archiveBytes)"
+    if [[ "${sigmagic}" != "${BACKUP_SIG_MAGIC}" ]]; then
+      problems+=(".sig 存在但形状不对（magic 读到 '${sigmagic:-<空>}'，应为 ${BACKUP_SIG_MAGIC}）—— 既不能当验过，也不该断言被篡改")
+    else
+      notes+=("已签名：.sig 在（指纹 ${sigfp:-?}，签于 ${sigat:-?}，签的归档字节数 ${sigbytes:-?}）")
+      # 侧信息：.sig 里记的 archiveSha256 与本机实测值能不能对上（这**不是**验签，
+      # 只是"签名所覆盖的那份内容，与手上这份是不是同一份"的弱比对；真验签要公钥）。
+      # ⚠️ 有意只在**已经算过** sha256 时比对（即存在 .sha256 sidecar 且本机有 sha256sum）：
+      #    为了这一条再把一份几 GB 的归档完整哈希一遍，代价与收益不成比例，而 sidecar
+      #    缺失时上面那条 note 已经明说了"跳过比对"。
+      local sigsha
+      sigsha="$(signature_field_of "${file}" archiveSha256)"
+      if [[ -n "${sigsha}" && -n "${got:-}" && "${sigsha}" == "${got}" ]]; then
+        notes+=("签名覆盖的 sha256 与本机实测一致（⚠️ 这只是内容对得上，**不等于验签通过**：验签要公钥）")
+      elif [[ -n "${sigsha}" && -n "${got:-}" ]]; then
+        problems+=("签名覆盖的 sha256（${sigsha:0:12}…）与本机实测（${got:0:12}…）**不一致** —— 归档或 .sig 在签名之后被改动过")
+      fi
+      notes+=("⚠️ 脚本侧未做密码学验签（没有验签公钥也不做 ed25519）；要权威结论：给容器配 VANBLOG_BACKUP_VERIFY_KEY(_FILE) 后走恢复/服务端，或 ${VANBLOG_SELF_NAME} backup-status 看 lastSuccessSigned")
+    fi
+  else
+    notes+=("没有 .sig 签名：这份归档**从没被签过**（早于本功能，或备份时没配签名密钥）⇒ 只能证明没拷坏，不能证明没被换过")
+  fi
+
   # 3) 成员清单
   #    ⚠️ 加密归档**列不出成员**（tar 读不了密文），这不是损坏 —— 成员级校验需要口令，
   #    脚本侧没有口令就不做，但必须明说"没做"，否则站长会把"跳过"读成"通过"。
@@ -2691,9 +2828,9 @@ verify() {
     fi
     while IFS= read -r f; do
       [[ -n "${f}" ]] || continue
-      case "${f}" in
-      *.manifest.json | *.sha256) continue ;; # sidecar 不是归档
-      esac
+      # ⚠️ 用共用助手判 sidecar（`.sha256`/`.manifest.json`/`.sig`）：`.sig` 也匹配
+      #    `vanblog-full-*` 这个 glob，漏判就会去"校验"一个签名文件并报"归档损坏"。
+      is_backup_sidecar_name "${f}" && continue
       targets+=("${f}")
     done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
     if [[ ${#targets[@]} -eq 0 ]]; then
@@ -3012,7 +3149,7 @@ install_cron() {
   fi
 
   if [[ "${action}" == "remove" ]] && { ((with_verify)) || ((with_drill)); }; then
-    echo -e "${red}--remove 与 --with-verify/--with-drill 不能同时给（一个是"全部删掉"，一个是"再装一个"）${plain}"
+    echo -e "${red}--remove 与 --with-verify/--with-drill 不能同时给（一个是「全部删掉」，一个是「再装一个」）${plain}"
     print_install_cron_usage
     return 2
   fi
@@ -3273,7 +3410,7 @@ backup_space_estimate() { # <full|offline> → 设上面两个全局；算不出
     dir="$(full_backup_dir 2>/dev/null)"
     latest=""
     if [[ -n "${dir}" && -d "${dir}" ]]; then
-      latest="$(ls -1t "${dir}"/vanblog-full-*.tar.* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | head -1)"
+      latest="$(ls -1t "${dir}"/vanblog-full-*.tar.* 2>/dev/null | filter_backup_archives | head -1)"
     fi
     if [[ -n "${latest}" && -f "${latest}" ]]; then
       est="$(wc -c <"${latest}" 2>/dev/null)"
@@ -3465,6 +3602,21 @@ backup_full() {
     echo -e "  ${yellow}          VANBLOG_BACKUP_PASSPHRASE='<口令>' ./vanblog.sh restore ${name:-<归档名>}${plain}"
     echo -e "  ${yellow}          或 VANBLOG_BACKUP_PASSPHRASE_FILE=/path/to/pass.txt（chmod 600）${plain}"
   fi
+  # ⚠️ 签名状态也要**每次**说清楚（与服务端那条每次备份都打的 WARN 同口径）。
+  #    理由与加密那条一样：这个失败模式是**静默**的 —— 归档正常生成、sha256 正常写、
+  #    异地镜像正常拷，没有任何地方报错，直到某天需要证明"这份归档没被换过"才发现从没签过。
+  #    提醒一次很容易被日志冲走，所以每次都说。
+  if [[ -n "${name}" && -f "${host_path}" ]]; then
+    if archive_has_signature "${host_path}"; then
+      echo -e "  签名    ：${green}已签名${plain}（.sig 在，指纹 ${yellow}$(signature_field_of "${host_path}" keyFingerprint || echo '?')${plain}，签于 $(signature_field_of "${host_path}" signedAt || echo '?')）"
+      echo -e "  ${yellow}          ⚠️ 公钥的权威副本必须**离线**保存一份（密码管理器/U 盘）：验签材料只存在这台主机上时，${plain}"
+      echo -e "  ${yellow}          拿到主机 root 的人可以连公钥一起换掉，签名就失去意义。取公钥：./vanblog.sh signing-export${plain}"
+    else
+      echo -e "  签名    ：${yellow}**未签名**${plain}（没有 .sig）⇒ 这份归档能证明「没拷坏」（sha256），但**不能证明「没被换过」**"
+      echo -e "  ${yellow}          要签：./vanblog.sh signing-key 生成密钥对，然后给容器配 VANBLOG_BACKUP_SIGNING_KEY_FILE${plain}"
+      echo -e "  ${yellow}          （归档里有 jwt 密钥与全部口令哈希，拷到别处就等于把站点凭据明文外送）${plain}"
+    fi
+  fi
   echo -e "  恢复    ：${green}./vanblog.sh restore ${name}${plain}"
   echo -e "  ${yellow}注意：这份归档不含 caddy 的证书与配置（它们在数据目录里）。要连证书一起备，用 --offline。${plain}"
   return 0
@@ -3503,10 +3655,11 @@ prune_old_backups() {
   [[ "${keep}" -gt 0 ]] || return 0
 
   # ls -1t 按修改时间从新到旧；备份名里没有空格，这样比 find -printf 更可移植。
-  # ⚠️ `<归档>.sha256` sidecar（vanblog-full-x.tar.zst.sha256）**匹配** `*.tar.*` 这个 glob，
-  # 不过滤就会把校验和文件当成一份归档参与计数/删除（保留策略会算错、还删不到正主）
+  # ⚠️ 三种 sidecar（`<归档>.sha256` / `.manifest.json` / `.sig`）**都匹配** `*.tar.*` 这个 glob。
+  # 不过滤的后果不是"多算一个"，而是 sidecar **占掉 keep 名额** ⇒ 真归档被提前删掉（数据丢失），
+  # 而 sidecar 自己反倒留了下来。过滤一律走共用助手（`filter_backup_archives`），别在这写第二份正则。
   local -a all
-  mapfile -t all < <(cd "${dir}" 2>/dev/null && ls -1t ${pattern} 2>/dev/null | grep -vE '\.(sha256|manifest\.json)$')
+  mapfile -t all < <(cd "${dir}" 2>/dev/null && ls -1t ${pattern} 2>/dev/null | filter_backup_archives)
   local total=${#all[@]}
   if [[ ${total} -le ${keep} ]]; then
     echo -e "  保留策略：现有 ${total} 份 ≤ ${keep}，不用清理"
@@ -3522,11 +3675,17 @@ prune_old_backups() {
     if rm -f "${dir:?}/${name}"; then
       removed=$((removed + 1))
       freed=$((freed + size))
-      # 整站备份的清单是同名 sidecar，留着会变成孤儿（还会被 restore 的列表当成归档）
-      sidecar="${dir}/${name%.tar.*}.manifest.json"
-      [[ -f "${sidecar}" ]] && rm -f "${sidecar}"
-      # sha256 sidecar（脚本备份时写的 <归档>.sha256）也一起删，别留孤儿
-      [[ -f "${dir}/${name}.sha256" ]] && rm -f "${dir}/${name}.sha256"
+      # 三种 sidecar 与归档同生共死，一律走共用助手删（别在这拼文件名）。
+      # ⚠️ 这里原来拼的是 `${name%.tar.*}.manifest.json`（= `vanblog-full-X.manifest.json`），
+      #    而 server 写的是 `${archivePath}.manifest.json`（= `vanblog-full-X.tar.zst.manifest.json`，
+      #    utils/fullBackup.ts:1339）⇒ **那条 rm 一直没删到任何文件，孤儿清单从来没被清理过**。
+      #    而同文件的 verify 分支用的是正确形状（`${file}.manifest.json`），两处口径本来就不一致。
+      #    真备份目录里的实际文件名可以作证：`vanblog-full-20260913-172338.tar.zst.manifest.json`
+      #    （= `<完整归档名>.manifest.json`）。⚠️ 别写行号进来，行号会漂。
+      local sc
+      while IFS= read -r sc; do
+        [[ -n "${sc}" ]] && rm -f "${sc}"
+      done < <(backup_sidecar_paths "${dir}/${name}")
       echo -e "  ${yellow}已删除${plain} ${name}（${pretty}）"
     fi
   done
@@ -3935,9 +4094,8 @@ pick_full_backup() {
     # 排除 sidecar：清单（vanblog-full-xxx.tar.zst.manifest.json）与校验和
     # （vanblog-full-xxx.tar.zst.sha256）都不是可恢复的归档
     [[ -n "${f}" ]] || continue
-    case "${f}" in
-    *.manifest.json | *.sha256) continue ;;
-    esac
+    # 同上：`.sig` 会被 `vanblog-full-*` 匹配到，不过滤就会把签名文件列成"可恢复的归档"
+    is_backup_sidecar_name "${f}" && continue
     files+=("${f}")
   done < <(ls -1t "${dir}"/vanblog-full-* 2>/dev/null)
   if [[ ${#files[@]} -eq 0 ]]; then
@@ -4083,6 +4241,12 @@ print_dead_site_playbook() {
 #    每一步都可回滚，任何一步失败都打印回滚命令，绝不留下"半新半旧"的数据目录。
 offline_full_restore() {
   local archive="$1"
+  # 跳过验签的开关要能透传到最后的 reset（它才是真正走服务端恢复的那一步）。
+  # ⚠️ 脚本侧**不自己实现 ed25519 验签**：bash 里没有原语，硬凑 openssl 容易写错，
+  #    而"验签写错"的失败方向是**假通过**（比不验更危险）。离线流程里 `verify` 那一步
+  #    只给本地可判定的三态（有 .sig 且指纹 X / 没有 .sig / .sig 形状不对），
+  #    真正的密码学验签发生在下面 `reset` 走 HTTP 恢复时，由服务端做。
+  local skip_sig="${2:-false}"
   local mongo_dir="${VANBLOG_DATA_PATH}/data/mongo"
 
   if [[ -z "${archive}" ]]; then
@@ -4147,7 +4311,9 @@ offline_full_restore() {
   fi
 
   echo -e "> 4/4 用归档重置站点"
-  if ! reset 0 "${archive}"; then
+  local -a reset_args=(0 "${archive}")
+  [[ "${skip_sig}" == "true" ]] && reset_args+=(--skip-signature-check)
+  if ! reset "${reset_args[@]}"; then
     echo -e "${red}重置失败。${plain}"
     if [[ -n "${aside}" ]]; then
       echo -e "${yellow}  旧库还在：${aside}${plain}"
@@ -4169,6 +4335,16 @@ offline_full_restore() {
 restore_full_backup() {
   local target="$1"
   local with_static="${2:-true}"
+  # ⚠️ 跳过验签是**安全绕过**，所以刻意做成第 3 个位置参数而不是环境变量：
+  #    env 形式（像 --verbose 那样 export 一个变量）意味着 cron、编排文件、甚至
+  #    `VANBLOG_RESTORE_SKIP_SIGNATURE=1 ./vanblog.sh restore` 这种一次性前缀都能静默打开它，
+  #    而验签被绕过的后果是"恢复了一份被换过的归档"——那是本功能唯一要防的事。
+  #    位置参数只能由**命令行上的显式 flag** 传进来，且只认字面 true。
+  local skip_sig="${3:-false}"
+  if [[ "${skip_sig}" != "true" && "${skip_sig}" != "false" ]]; then
+    echo -e "${red}skip_sig 只能是字面 true/false（收到：${skip_sig}）—— 这是调用方的 bug，不是用户输入${plain}" >&2
+    return 1
+  fi
   local base
   base="$(vanblog_api_base)"
   echo -e "> 整站恢复（走 server 接口）：${yellow}${base}${plain}"
@@ -4244,6 +4420,15 @@ restore_full_backup() {
     fi
   fi
 
+  # ⚠️ 绕过验签的警告必须在**确认之前**打印：确认之后再说的话，站长已经按回车了。
+  if [[ "${skip_sig}" == "true" ]]; then
+    echo -e "${red}⚠️ 你要求跳过签名校验（--skip-signature-check）。请先读完这一段：${plain}"
+    echo -e "  · 验签是唯一能证明「这份归档离开主机后没被换过」的手段（.sha256 与归档同目录，能换归档的人也能换它）；"
+    echo -e "  · 跳过后，如果这份归档是被换过的，你会把**攻击者准备的数据**恢复成整站内容，而恢复过程会显示成功；"
+    echo -e "  · 归档里含 jwt 密钥与全部口令哈希 ⇒ 换过的归档等于把站点凭据也一起换掉；"
+    echo -e "  · 正常做法是先解决验签失败的原因：公钥不对就找回签名时那把公钥（离线副本/密码管理器），"
+    echo -e "    配 VANBLOG_BACKUP_VERIFY_KEY(_FILE) 后重试；确实没有公钥、且你接受风险，才用这个 flag。"
+  fi
   echo -e "${red}恢复会用这份备份覆盖当前【全部】数据：数据库所有集合、waline 评论库、图床/附件/自定义页面。不可撤销。${plain}"
   if [[ "${with_static}" != "true" ]]; then
     echo -e "${yellow}（--no-static：这次只恢复数据库，保留当前图床与附件）${plain}"
@@ -4259,6 +4444,14 @@ restore_full_backup() {
 
   echo -e "> 开始恢复（大备份可能要几分钟，请勿中断）..."
   local resp pass_file="" body_file=""
+  # ⚠️ 值必须是字面 true：服务端 `isTrue(body?.skipSignatureCheck)` 与破坏性恢复的确认闸门同口径，
+  #    送 "1"/"yes"/"TRUE" 都不算，会静默地**不跳过**（那时报错是"验签失败"，容易被误读成归档坏了）。
+  local -a sig_form=()
+  local sig_json=""
+  if [[ "${skip_sig}" == "true" ]]; then
+    sig_form=(-F "skipSignatureCheck=true")
+    sig_json=',"skipSignatureCheck":"true"'
+  fi
   # ⚠️ 口令绝不进 argv：`-F 'passphrase=值'` 与 `-d '{…值…}'` 都会把值放在命令行上，
   #    同机任何用户 `ps` 一眼就能看到。所以走"值从文件读"的形式：
   #    multipart 用 `-F "字段=<文件"`（curl 的 `<` 前缀语义），JSON 用 `-d @文件`。
@@ -4275,13 +4468,15 @@ restore_full_backup() {
         -F "file=@${target}" \
         -F "confirm=true" \
         -F "withStatic=${with_static}" \
+        ${sig_form[@]+"${sig_form[@]}"} \
         -F "passphrase=<${pass_file}" 2>&1)"
     else
       resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
         -H "token: ${token}" \
         -F "file=@${target}" \
         -F "confirm=true" \
-        -F "withStatic=${with_static}" 2>&1)"
+        -F "withStatic=${with_static}" \
+        ${sig_form[@]+"${sig_form[@]}"} 2>&1)"
     fi
   else
     # by-name 这条路本来就用 `-d '{…}'`（值在 argv 里）。没口令时保持原样；
@@ -4289,19 +4484,27 @@ restore_full_backup() {
     if [[ -n "${pass_file}" ]]; then
       body_file="${pass_file}.body.json"
       : >"${body_file}" && chmod 600 "${body_file}" 2>/dev/null
-      printf '{"name":%s,"confirm":"true","withStatic":"%s","passphrase":%s}' \
-        "$(json_string "${target}")" "${with_static}" "$(json_string "${restore_pass}")" >"${body_file}"
+      printf '{"name":%s,"confirm":"true","withStatic":"%s"%s,"passphrase":%s}' \
+        "$(json_string "${target}")" "${with_static}" "${sig_json}" "$(json_string "${restore_pass}")" >"${body_file}"
       resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
         -H "token: ${token}" -H 'Content-Type: application/json' \
         -d "@${body_file}" 2>&1)"
     else
       resp="$(curl -sS -m 7200 -X POST "${base}/api/admin/backup/full/restore" \
         -H "token: ${token}" -H 'Content-Type: application/json' \
-        -d "{\"name\":$(json_string "${target}"),\"confirm\":\"true\",\"withStatic\":\"${with_static}\"}" 2>&1)"
+        -d "{\"name\":$(json_string "${target}"),\"confirm\":\"true\",\"withStatic\":\"${with_static}\"${sig_json}}" 2>&1)"
     fi
   fi
   # 用完立刻删（EXIT trap 只是兜底）：口令文件在磁盘上多留一秒都是风险
   passphrase_temp_free "${pass_file}"
+  # 服务端会在响应里带 signatureWarning（例如"没配验签公钥，所以这次没有验签"）。
+  # ⚠️ 必须显示出来：这是"这次恢复到底验没验签"的唯一权威说法，而静默不验签
+  #    与"验过了"在站长眼里长得一模一样。
+  local sigwarn
+  sigwarn="$(printf '%s' "${resp}" | grep -oE '"signatureWarning":"[^"]*"' | head -1 | sed 's/^"signatureWarning":"//; s/"$//')"
+  if [[ -n "${sigwarn}" ]]; then
+    echo -e "  ${yellow}签名：${sigwarn}${plain}"
+  fi
   pass_file="" body_file=""
 
   if printf '%s' "${resp}" | grep -q '"statusCode":200'; then
@@ -4452,6 +4655,189 @@ rotate_jwt() {
   return 0
 }
 
+# ── 备份离线签名密钥（ed25519）────────────────────────────────────────────────
+# 为什么要有签名：整站归档里含 `settings{type:'jwt'}` 的 **jwt 密钥**、全部口令的 scrypt 哈希与
+#   `tokens` 集合，而 `.sha256` sidecar 与归档**同目录** ⇒ 能换归档的人也能换 sidecar。
+#   所以 sidecar 只能证明「没拷坏」，**不能**证明「没被换过」。签名把后者交到一把
+#   **可以离线保存的公钥**上：验签材料不在主机上时，拿到主机 root 也没法伪造出一份"验得过"的归档。
+# 为什么走服务端接口，而不是本地 ssh-keygen/openssl：
+#   ① 私钥要落在**容器内**的备份目录（目录 0700 / 文件 0600），服务端已经处理好权限与覆盖确认；
+#   ② 本地生成还得再把私钥搬进容器（多一次秘密搬运、多一次落盘）；
+#   ③ 密钥形状必须与服务端 sign/verify 完全一致，用同一份实现最不容易错。
+# ⚠️ 私钥**绝不经 HTTP 返回、绝不打印**（服务端也只返回公钥、指纹与私钥**路径**）；
+#    这两个函数同样只打印公钥。守卫里有一条断言"脚本输出里不出现 PRIVATE KEY"。
+signing_key() {
+  local skip_menu=0
+  [[ "${1:-}" == "0" ]] && skip_menu=1 && shift
+  local assume_yes=0 overwrite=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -y | --yes) assume_yes=1; shift ;;
+    --overwrite) overwrite=1; shift ;;
+    -h | --help)
+      echo -e "  ${green}${VANBLOG_SELF_NAME} signing-key [--overwrite] [--yes]${plain}"
+      echo -e "    生成一对 ed25519 备份签名密钥。私钥落在**容器内**的 <备份目录>/signing/（0600），不经接口返回。"
+      echo -e "    生成后：整站备份会自动写出 <归档>.sig；公钥请离线保存（${yellow}${VANBLOG_SELF_NAME} signing-export${plain}）。"
+      echo -e "    ⚠️ 已有密钥时必须显式加 --overwrite，且覆盖会让**所有旧 .sig 永久验不过**。"
+      return 0
+      ;;
+    *)
+      echo -e "${red}signing-key 不认识这个参数：$1${plain}"
+      echo -e "  可用：${yellow}--overwrite${plain}（覆盖已有密钥）、${yellow}--yes${plain}（跳过交互确认）"
+      return 1
+      ;;
+    esac
+  done
+  [[ "${VANBLOG_ASSUME_YES:-0}" == "1" ]] && assume_yes=1
+
+  local base
+  base="$(vanblog_api_base)"
+  echo -e "> 备份签名密钥：${yellow}${base}${plain}"
+
+  local code
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}）。先 ${yellow}${VANBLOG_SELF_NAME} start${red} 再试。${plain}"
+    return 1
+  fi
+
+  local token
+  token="$(vanblog_admin_token)" || return 1
+
+  # 先读现状：决定是"首次生成"还是"覆盖"，两者的后果差一个数量级
+  local cur cf sf vf
+  cur="$(curl -sS -m 30 "${base}/api/admin/backup/signing/key" -H "token: ${token}" 2>&1)"
+  cf="$(signing_pick "${cur}" signingConfigured)"
+  sf="$(signing_pick "${cur}" signingFingerprint)"
+  vf="$(signing_pick "${cur}" verifyFingerprint)"
+  echo -e "  当前签名密钥：$([[ "${cf}" == "true" ]] && echo "已配置（指纹 ${sf:-?}）" || echo "未配置")"
+  echo -e "  当前验签公钥：$([[ -n "${vf}" && "${vf}" != "null" ]] && echo "已配置（指纹 ${vf}）" || echo "未配置（回落用签名密钥导出的公钥）")"
+
+  local body='{}'
+  if [[ "${cf}" == "true" ]]; then
+    if [[ ${overwrite} -ne 1 ]]; then
+      echo -e "${red}已经有一把签名密钥了（指纹 ${sf:-?}），本次不做任何改动。${plain}"
+      echo -e "  ⚠️ 覆盖的后果：旧私钥被删掉 ⇒ **所有已签名归档的 .sig 永久无法验证**（除非你还留着旧公钥，"
+      echo -e "     而旧私钥没了也就再也签不出新的了）。异地那些副本会全部变成「无法证明真伪」。"
+      echo -e "  确实要换，请显式加 ${yellow}--overwrite${plain}（并准备好先把旧公钥归档）："
+      echo -e "    ${yellow}${VANBLOG_SELF_NAME} signing-export > ~/vanblog-backup-signing-old.pub.pem${plain}"
+      echo -e "    ${yellow}${VANBLOG_SELF_NAME} signing-key --overwrite${plain}"
+      return 1
+    fi
+    echo -e "${red}你要求覆盖已有密钥（指纹 ${sf:-?}）。请先读完后果：${plain}"
+    echo -e "  1) 旧私钥会被删掉 ⇒ **所有已签名归档的 .sig 从此永久验不过**；"
+    echo -e "  2) 异地/离机的那些副本会失去「可证明没被换过」这个性质（sha256 仍在，但那只防拷坏）；"
+    echo -e "  3) 从现在起的新备份会用新密钥签，旧公钥仍然要留着（否则旧归档无法验）。"
+    if [[ ${assume_yes} -ne 1 ]]; then
+      local input
+      read -e -r -p "确认覆盖? 输入 yes 继续: " input
+      if [[ "${input}" != "yes" ]]; then
+        echo "已取消（密钥未改动）"
+        return 0
+      fi
+    fi
+    # ⚠️ 必须是字面 true：服务端用 isTrue()，"1"/"yes"/"TRUE" 都不算（与破坏性恢复的确认闸门同口径）
+    body='{"overwrite":"true"}'
+  fi
+
+  local resp
+  resp="$(curl -sS -m 60 -X POST "${base}/api/admin/backup/signing/key" \
+    -H "token: ${token}" -H 'Content-Type: application/json' -d "${body}" 2>&1)"
+  if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+    echo -e "${red}生成签名密钥失败${plain}："
+    printf '%s\n' "${resp}" | head -c 600
+    echo
+    echo -e "${yellow}常见原因：token 过期/无权限（这条接口只有管理员能调）、演示站禁止修改、或已有密钥但没带 --overwrite。${plain}"
+    return 1
+  fi
+
+  local fp pp pub msg
+  fp="$(signing_pick "${resp}" fingerprint)"
+  pp="$(signing_pick "${resp}" privatePath)"
+  msg="$(printf '%s' "${resp}" | grep -oE '"message":"[^"]*"' | head -1 | sed 's/^"message":"//; s/"$//')"
+  echo -e "${green}备份签名密钥已$([[ "${cf}" == "true" ]] && echo 覆盖 || echo 生成)${plain}"
+  [[ -n "${fp}" && "${fp}" != "null" ]] && echo -e "  指纹      ：${yellow}${fp}${plain}"
+  [[ -n "${pp}" && "${pp}" != "null" ]] && echo -e "  私钥路径  ：${pp}（容器内，0600；⚠️ 不经接口返回，也不会被打印）"
+  [[ -n "${msg}" ]] && echo -e "  服务端原话：${msg}"
+  echo
+  echo -e "${yellow}⚠️ 现在就把公钥离线保存一份（这是本功能的全部意义所在）：${plain}"
+  echo -e "    ${yellow}${VANBLOG_SELF_NAME} signing-export > ~/vanblog-backup-signing.pub.pem${plain}"
+  echo -e "  然后把它放进密码管理器/离机介质。验签材料只存在这台主机上时，拿到主机 root 的人可以连公钥一起换掉。"
+  echo -e "  从现在起的整站备份会自动写出 <归档>.sig；${yellow}已有归档不会追溯签名${plain}（要签就重新备份一次）。"
+  return 0
+}
+
+# 只打印**公钥**与指纹，供离线保存（不做任何修改，所以不需要确认）
+signing_export() {
+  local skip_menu=0
+  [[ "${1:-}" == "0" ]] && skip_menu=1 && shift
+  case "${1:-}" in
+  -h | --help)
+    echo -e "  ${green}${VANBLOG_SELF_NAME} signing-export${plain}"
+    echo -e "    打印备份签名的**公钥**（PEM）与指纹，供离线保存。⚠️ 不打印私钥（接口也不返回私钥）。"
+    return 0
+    ;;
+  "") ;;
+  *)
+    echo -e "${red}signing-export 不接受参数（收到：$1）${plain}"
+    return 1
+    ;;
+  esac
+
+  local base
+  base="$(vanblog_api_base)"
+  local code
+  code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${base}/api/public/meta" 2>/dev/null)"
+  [[ -n "${code}" ]] || code="000"
+  if [[ "${code}" != "200" ]]; then
+    echo -e "${red}站点接口不通（${base}/api/public/meta → ${code}）。先 ${yellow}${VANBLOG_SELF_NAME} start${red} 再试。${plain}" >&2
+    return 1
+  fi
+  local token
+  token="$(vanblog_admin_token)" || return 1
+
+  local resp
+  resp="$(curl -sS -m 30 "${base}/api/admin/backup/signing/key" -H "token: ${token}" 2>&1)"
+  if ! printf '%s' "${resp}" | grep -q '"statusCode":200'; then
+    echo -e "${red}读取签名配置失败${plain}：" >&2
+    printf '%s\n' "${resp}" | head -c 400 >&2
+    echo >&2
+    return 1
+  fi
+  local sf vf ss vs pub tb
+  sf="$(signing_pick "${resp}" signingFingerprint)"
+  vf="$(signing_pick "${resp}" verifyFingerprint)"
+  ss="$(signing_pick "${resp}" signingSource)"
+  vs="$(signing_pick "${resp}" verifySource)"
+  tb="$(signing_pick "${resp}" trustBoundary)"
+  # publicKey 是一段带 \n 转义的 PEM：用 %b 还原成真的换行，否则存下来的文件是一行转义文本
+  pub="$(printf '%s' "${resp}" | grep -oE '"publicKey":"[^"]*"' | head -1 | sed 's/^"publicKey":"//; s/"$//')"
+  if [[ -z "${pub}" || "${pub}" == "null" ]]; then
+    echo -e "${yellow}还没有签名密钥，所以没有公钥可导出。先生成：${VANBLOG_SELF_NAME} signing-key${plain}" >&2
+    return 1
+  fi
+  # 元信息走 stderr，公钥走 stdout ⇒ `signing-export > pub.pem` 得到的是一份干净的 PEM
+  {
+    echo -e "# VanBlog 备份签名公钥（ed25519）—— 这是**公开**材料，可以分发；私钥不会被导出"
+    echo -e "# 签名密钥指纹：${sf:-?}（来源 ${ss:-?}）"
+    echo -e "# 验签公钥指纹：${vf:-?}（来源 ${vs:-?}）"
+    [[ -n "${tb}" && "${tb}" != "null" ]] && echo -e "# 信任边界：${tb}"
+    echo -e "# 用法：给需要验签的一方配 VANBLOG_BACKUP_VERIFY_KEY_FILE=<这个文件>（或 VANBLOG_BACKUP_VERIFY_KEY=<内容>）"
+    echo -e "# 导出时间：$(date '+%F %T %z')"
+  } >&2
+  printf '%b\n' "${pub}"
+  return 0
+}
+
+# 从一段 JSON 里取一个顶层/嵌套的标量字段（明文 JSON，用 grep+sed，⚠️ 不引入 jq 依赖）。
+# 与 rotate_jwt 里的局部 pick() 同一口径，单独提出来是因为签名这两个命令要复用。
+signing_pick() { # <json> <字段名>
+  printf '%s' "${1:-}" |
+    grep -oE "\"${2:-}\":(\"[^\"]*\"|[0-9.]+|true|false|null)" | head -1 |
+    sed -E "s/^\"${2:-}\"://; s/^\"//; s/\"$//"
+}
+
 # 恢复。两种归档自动分流：
 #   vanblog-full-*（server 导出的整站备份）→ 走 HTTP 接口，**不停服**
 #   vanblog-backup-*.tar.gz（本脚本 backup 打的数据目录 tar 包）→ 停服后离线解压
@@ -4472,6 +4858,12 @@ print_restore_usage() {
   echo -e "  --no-static               只恢复数据库，保留当前图床/附件"
   echo -e "  --with-static             显式恢复静态文件（默认就是恢复）"
   echo -e "  --verbose                 打印完整清单 JSON"
+  echo -e "  --skip-signature-check    ${red}跳过归档的 ed25519 验签（安全绕过，请想清楚）${plain}"
+  echo -e "                            验签是唯一能证明「归档离开主机后没被换过」的手段：.sha256 与归档"
+  echo -e "                            同目录，能换归档的人也能换它，所以 sidecar 只防拷坏、不防被换。"
+  echo -e "                            跳过后如果被换过，你会把攻击者准备的数据恢复成整站内容，而过程显示成功。"
+  echo -e "                            正常做法：找回签名时那把公钥（离线副本），配 VANBLOG_BACKUP_VERIFY_KEY(_FILE)"
+  echo -e "                            后重试。⚠️ 只能由这个 flag 打开（不认环境变量，免得被 cron/编排静默开启）。"
   echo -e "  --offline-full            ${yellow}站点已经起不来时${plain}用（通常是 mongo 数据损坏）："
   echo -e "                            先校验归档 → 停栈 → 把数据库目录${yellow}改名保留${plain}（不删除）→ 起栈 →"
   echo -e "                            用归档重置整站 → 逐项核对。任何一步失败都会打印回滚命令。"
@@ -4489,6 +4881,8 @@ restore() {
   local with_static="true"
   # --offline-full：站点已经起不来（通常是 mongo 数据损坏）时的恢复，见 offline_full_restore
   local offline_full="0"
+  # --skip-signature-check：跳过归档的 ed25519 验签（安全绕过，只由显式 flag 打开，见 restore_full_backup）
+  local skip_sig="false"
   # 分发入口会传一个 0 表示「不进菜单」，别把它当成文件路径
   # ⚠️ 这里以前是 `0 | --*) : ;;` —— 打错的开关被**静默吞掉**。restore 上这件事比 backup 更贵：
   #    `restore --no-statc <归档>`（少一个 i）会安静地按默认值恢复，也就是**连静态文件一起覆盖**，
@@ -4500,6 +4894,7 @@ restore() {
     case "${arg}" in
     --no-static) with_static="false" ;;
     --offline-full) offline_full="1" ;;
+    --skip-signature-check) skip_sig="true" ;;
     --with-static) with_static="true" ;;
     --verbose) export VANBLOG_VERBOSE=1 ;;
     0) : ;; # 菜单/分发入口传进来的占位
@@ -4533,13 +4928,13 @@ restore() {
   # 🔴 --offline-full：连 server 都起不来时用（把坏库移到一边 → 起栈 → 走既有 reset）
   #    放在 picker 之后，所以 `restore --offline-full` 不带归档时照样能列出归档让选。
   if [[ "${offline_full}" == "1" ]]; then
-    offline_full_restore "${path}"
+    offline_full_restore "${path}" "${skip_sig}"
     return $?
   fi
 
   # 整站备份（vanblog-full-*）走 server 接口；脚本自己打的数据目录 tar.gz 走下面的离线流程
   if is_full_backup_target "${path}"; then
-    restore_full_backup "${path}" "${with_static}"
+    restore_full_backup "${path}" "${with_static}" "${skip_sig}"
     return $?
   fi
 
@@ -4936,10 +5331,10 @@ show_status() {
   bdir="$(full_backup_dir 2>/dev/null)"
   if [[ -d "${bdir}" ]]; then
     local count total
-    count="$(ls -1 "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | wc -l | tr -d ' ')"
+    count="$(ls -1 "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | filter_backup_archives | wc -l | tr -d ' ')"
     total="$(du -sh "${bdir}" 2>/dev/null | cut -f1)"
     echo -e "  整站备份  ：${count} 个归档，共 ${total}（${bdir}）"
-    ls -1t "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | grep -vE '\.(manifest\.json|sha256)$' | head -3 |
+    ls -1t "${bdir}"/vanblog-full-*.tar.* 2>/dev/null | filter_backup_archives | head -3 |
       while read -r f; do printf '    %s  %s\n' "$(basename "${f}")" "$(human_size "${f}")"; done
   else
     echo -e "  整站备份  ：还没有（${bdir} 不存在，跑一次 ${VANBLOG_SELF_NAME} backup）"
@@ -5209,7 +5604,7 @@ reset_from_backup() {
     token="${token#INIT }"
   fi
   # restore_full_backup 优先用这个环境变量，不会再问一遍账号密码
-  VANBLOG_ADMIN_TOKEN="${token}" restore_full_backup "${target}" "${with_static}"
+  VANBLOG_ADMIN_TOKEN="${token}" restore_full_backup "${target}" "${with_static}" "${skip_sig}"
   local rc=$?
   if [[ ${rc} -ne 0 ]]; then
     echo -e "${red}恢复失败。${plain}"
@@ -5252,6 +5647,8 @@ reset_from_backup() {
 reset() {
   local with_static="true"
   local do_restart=1
+  # 与 restore 同一个开关：reset 走的也是 restore_full_backup，验签闸门在那一头
+  local skip_sig="false"
   local target=""
   local args=()
   local arg
@@ -5260,6 +5657,7 @@ reset() {
     --no-static) with_static="false" ;;
     --with-static) with_static="true" ;;
     --no-restart) do_restart=0 ;;
+    --skip-signature-check) skip_sig="true" ;;
     --verbose) export VANBLOG_VERBOSE=1 ;;
     0) : ;; # 菜单传进来的占位
     --*) echo -e "${red}未知参数：${arg}${plain}"; return 1 ;;
@@ -5363,6 +5761,11 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
         restore <归档名>           归档在服务器备份目录里 → 不上传，秒级开始（几百 MB 也一样）
         restore <本地路径>         本地文件 → multipart 上传
         --no-static               只恢复数据库，保留当前图床/附件
+        --skip-signature-check    跳过归档的 ed25519 验签（**安全绕过**）。验签是唯一能证明「归档离开
+                                  主机后没被换过」的手段（.sha256 与归档同目录 ⇒ 只防拷坏、不防被换）；
+                                  跳过后若归档被换过，你会把攻击者准备的数据恢复成整站且过程显示成功。
+                                  正常做法是找回公钥配 VANBLOG_BACKUP_VERIFY_KEY(_FILE) 后重试。
+                                  ⚠️ 只认这个 flag（不认环境变量，免得被 cron/编排静默打开）。
         --offline-full            🔴 **站点已经起不来时**用（通常是 mongo 数据损坏）：先校验归档 →
                                   停栈 → 把数据库目录**改名保留**（不删除）→ 起栈 → 用归档重置整站 →
                                   逐项核对；任何一步失败都打印可直接照抄的回滚命令。
@@ -5382,6 +5785,8 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
         --no-static               只恢复数据库
         --no-restart              恢复完不重启（那就得自己重启一次）
         --verbose                 打印完整清单 JSON
+        --skip-signature-check    跳过归档的 ed25519 验签（**安全绕过**，含义与 restore 那条完全相同；
+                                  reset 走的是同一个恢复接口，所以开关也在同一处生效）
                                   ⚠️ 恢复失败时会把临时管理员账号打印出来，不会把你锁在门外。
   rotate-jwt                    轮换 JWT 签名密钥。**怀疑密钥泄露时用**：一份整站备份归档里
                                   就含 jwt 密钥，拿到它能自签管理员 token（改口令没用，token 不验口令）。
@@ -5391,6 +5796,18 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
                                   要在后台重新签发）；恢复旧归档会把密钥回滚，需要再轮换一次；
                                   waline 的评论者会话在下次重启 waline 后失效（它的密钥派生自本站 jwt 密钥）。
                                   这条接口只有管理员能调（勾「所有权限」的协作者也不行）。
+  signing-key                     生成一对 ed25519 **备份签名密钥**。私钥落在容器内 <备份目录>/signing/
+                                  （0600），**不经接口返回、也不打印**；生成后整站备份会自动写出 <归档>.sig。
+        --overwrite               覆盖已有密钥。⚠️ 覆盖会让**所有旧 .sig 永久验不过**（旧私钥被删），
+                                  所以不加这个参数时脚本拒绝改动，并先把 signing-export 的命令给你。
+        --yes                     跳过交互确认（脚本/cron 用）
+                                  为什么要签名：.sha256 sidecar 与归档同目录 ⇒ 能换归档的人也能换 sidecar，
+                                  所以它只防「拷坏」、不防「被换过」；而归档里含 jwt 密钥与全部口令哈希。
+                                  ⚠️ 公钥必须**离线**保存一份（signing-export），否则拿到主机 root 的人
+                                  可以连公钥一起换掉，签名就失去意义。
+  signing-export                  打印备份签名的**公钥**（PEM）与指纹，供离线保存。公钥走 stdout、
+                                  元信息走 stderr ⇒ `signing-export > pub.pem` 得到一份干净的 PEM。
+                                  ⚠️ 只读，不做任何修改；私钥不会被导出（接口也不返回私钥）。
   verify                          校验备份归档（**不解压落盘**），三步：
                                     a) 流式过一遍解压器（zstd/xz/gzip -t）——截断/损坏当场发现
                                     b) sha256 比对——只有**本脚本**做的备份才有 <归档>.sha256 记录；
@@ -5788,6 +6205,16 @@ if [[ $# > 0 ]]; then
   "rotate-jwt")
     shift
     rotate_jwt 0 "$@"
+    exit $?
+    ;;
+  "signing-key")
+    shift
+    signing_key 0 "$@"
+    exit $?
+    ;;
+  "signing-export")
+    shift
+    signing_export 0 "$@"
     exit $?
     ;;
   *) show_usage ;;
