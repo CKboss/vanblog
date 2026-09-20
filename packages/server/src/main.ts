@@ -48,15 +48,15 @@ import {
 } from './utils/dbBootstrapRetry';
 import {
   DEGRADED_HOLD_HINT,
+  DEGRADED_HOLD_MODE_ENV,
   DEGRADED_HOLD_REASON,
-  DegradedHoldHandle,
-  startDegradedHoldServer,
+  createDegradedHoldController,
+  resolveDegradedHoldMode,
 } from './utils/degradedHold';
 import {
-  enableDegradedServeHtml,
-  restoreServeHtmlSentinels,
-  snapshotServeHtmlSentinels,
-  ServeHtmlSentinelSnapshot,
+  DegradedPublishingOutcome,
+  enterDegradedPublishing,
+  exitDegradedPublishing,
 } from './utils/degradedServeHtml';
 import { loadMongoUrl } from 'src/config';
 import { version as appVersion } from 'src/utils/loadConfig';
@@ -244,7 +244,10 @@ async function bootstrap() {
   // 静态与 swagger 的响应在限流器**之前**就结束了 ⇒
   //   1) `rateLimit.ts` 里那个 `rl-static-<ip>` 桶（`VANBLOG_STATIC_LIMIT_PER_MIN`，默认 6000/分钟）
   //      **永远执行不到，是死代码**；
-  //   2) `/static/**`（除 `/static/img/*.{webp,png,…}` 由 caddy 直服外，附件/主题/自定义页面都反代到 Node）
+  //   2) `/static/` 下的路径（除 `/static/img/` 里的 webp/png 等图片由 caddy 直服外，
+  //      附件/主题/自定义页面都反代到 Node）
+  //      ⚠️ 这里刻意不写 glob 原文：行注释里出现「斜杠+星号」这个序列，会被"先剥块注释
+  //      再剥行注释"的守卫当成块注释开头，从而**吃掉后面的真实代码**（本仓库已实测踩过一次）。
   //      **完全没有限流**，而镜像里的 caddy 2.11.4 又没有任何限流模块 ⇒ 这是本机最便宜的带宽耗尽向量；
   //   3) `/swagger` 与 `/swagger-json`（59.3 KB）也没有限流；
   //   4) 静态与 swagger 的响应都拿不到 X-Frame-Options / Referrer-Policy / Permissions-Policy / nosniff。
@@ -665,6 +668,24 @@ async function startPrimary() {
  * 现成的机制是 `VANBLOG_CADDY_SERVE_HTML`（caddy 按哨兵文件直服 `.next/server/pages/**.html`，
  * 默认 off，哨兵在挂载卷上且"读不到设置时绝不删"），是否改默认值属于产品决定，这里不擅自改。
  */
+/**
+ * 探一次数据库，返回**可放进 HTTP 响应体**的原因串（空串 = 可达）。
+ *
+ * 🔴 绝不把 mongo URL 放进返回值：它可能含口令，而这个串会经 `DegradedHoldOptions.reason`
+ * 进入占位服务的响应体（`degradedHold.ts` 的注释也写明了同一条约束）。
+ * 所以这里只返回"探测失败/异常"这类不含凭据的描述。
+ */
+async function probeDbOnceForHold(): Promise<string> {
+  try {
+    const url = await loadMongoUrl();
+    if (!url) return '未能从配置解析出数据库地址';
+    if (await probeMongoOnce(url, 3000)) return '';
+    return '数据库探测失败（3 秒内没有响应）';
+  } catch (err) {
+    return `数据库探测异常：${(err as Error)?.message || err}`;
+  }
+}
+
 async function main() {
   registerFatalHandlers();
 
@@ -679,70 +700,134 @@ async function main() {
     error: (m: string) => console.error(m),
   };
 
-  const outcome = await runBootstrapWithDbRetry(bootstrap, {
-    onRetry: ({ attempt, elapsedMs, nextDelayMs, windowMs, error }) => {
-      log.warn(
-        `[startup] 数据库不可达，第 ${attempt} 次启动失败（已等 ${Math.round(elapsedMs / 1000)}s / 窗口 ${Math.round(windowMs / 1000)}s），` +
-          `${Math.round(nextDelayMs / 1000)}s 后重试：${(error as Error)?.message || error}`,
-      );
-    },
-    onNonRetryable: (error) => {
-      log.error(
-        `[FATAL][startup] 启动失败，且**不是**数据库不可达（所以不重试）：${(error as Error)?.message || error}`,
-      );
-    },
-  });
-  if (!isBootstrapFailure(outcome)) {
-    return;
-  }
-
-  // ---- 窗口耗尽：进入降级驻留 ----
   const holdProbeMs = envInt('VANBLOG_DEGRADED_HOLD_PROBE_MS', 30000, 3000, 3600000);
-  const reason = (outcome.lastError as Error)?.message || String(outcome.lastError);
-  log.error(
-    `[FATAL][startup] **数据库不可达**：在 ${Math.round(outcome.elapsedMs / 1000)} 秒内尝试了 ` +
-      `${outcome.attempts} 次仍连不上（重试窗口由 VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS 控制），` +
-      `进入「降级驻留」。进程**不退出**、容器保持 Up。原因：${reason}\n` +
-      `[FATAL][startup] 现在的状态：/api/public/health 返回 503 degraded；/static/*（图片、附件）由 caddy 直服、照常可用；` +
-      `已渲染过的页面由 caddy 直发磁盘上的 HTML（见下面那条「降级发布」日志）。\n` +
-      `[FATAL][startup] 下一步怎么办（三选一，按顺序试）：\n` +
-      `[FATAL][startup]   ① **什么都不做**：进程每 ${Math.round(holdProbeMs / 1000)} 秒探一次数据库，` +
-      `数据库一通就自动完成启动、恢复正常模式，**不需要重启容器**；\n` +
-      `[FATAL][startup]   ② 跑 ./vanblog.sh doctor 体检（它会直接说"server 活着但 mongo 连不上"，并给出定位命令）；\n` +
-      `[FATAL][startup]   ③ 数据库彻底坏了就用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建` +
-      `（数据库起不来时也能用）。`,
-  );
+  const holdMode = resolveDegradedHoldMode(process.env[DEGRADED_HOLD_MODE_ENV], log);
 
-  // ---- 降级发布：写哨兵，让 caddy 直发磁盘上的 ISR HTML ----
-  // ⚠️ 只需要写文件：caddy 模板里的 vanblog-serve-html 路由是**每个请求现查哨兵**的
-  //    （见 provider/caddy/caddy.provider.ts 头注释），所以既不依赖 Nest、也不需要 reload caddy ——
-  //    这正是降级驻留唯一可行的接入点（那时 Nest 根本没起来）。
-  const serveHtmlSnapshot: ServeHtmlSentinelSnapshot = snapshotServeHtmlSentinels();
-  const serveHtmlOn = enableDegradedServeHtml({ log });
-  if (serveHtmlOn) {
-    log.warn(
-      `[degraded-hold] 已进入「降级发布」：写了 caddy 直服哨兵（${serveHtmlSnapshot.dir}，all 档 = 固定页 + /post/* 等动态前缀）。` +
-        `⚠️ 代价如实说明：发出去的是**磁盘上最后一次成功渲染的 HTML**，所以 ①内容可能陈旧；` +
-        `②依赖 SSR 的功能失效（访问密码文章、搜索、阅读数、按需渲染新文章、评论）；` +
-        `③降级期间 artifactReaper 不在跑，所以"刚刚被改成私密/加密、reaper 还没删掉 .html"的文章` +
-        `在这个窗口内仍会被公开服务（窗口很窄但不是零）。` +
-        `④但**已发布内容仍然对外可读** —— 在要持续发布的场景下这是正确的取舍。`,
-    );
-  }
+  // ---- 降级发布的进出（尽力而为，**绝不可致命**）----
+  // 🔴 两层防护：`enterDegradedPublishing`/`exitDegradedPublishing` 内部已兜住一切异常
+  //    （含日志器自己抛），这里再包一层，防"模块本身坏了"那种连函数都调不到的形状 ——
+  //    实测发生过：混代产物里 `resolveWebsitePagesDir` 是 undefined，快照那一步直接 TypeError，
+  //    于是**已经打出三条下一步之后**进程退出码 1，从"降级但仍在发布"掉回"完全下线"。
+  let degradedPublishing: DegradedPublishingOutcome | null = null;
+  const enterPublishing = () => {
+    try {
+      degradedPublishing = enterDegradedPublishing(log);
+    } catch (err) {
+      degradedPublishing = null;
+      log.warn(
+        `[degraded-hold] 进入降级发布的调用本身抛出了（${(err as Error)?.message || err}）⇒ 跳过降级发布。` +
+          `影响：页面（/、/post/*）在数据库恢复前会 502；/api/public/health 仍是 503 degraded、` +
+          `/static/* 仍由 caddy 直服。**降级驻留继续**，数据库一通就自动完成启动。`,
+      );
+      return;
+    }
+    if (degradedPublishing?.enabled) {
+      log.warn(
+        `[degraded-hold] 已进入「降级发布」：写了 caddy 直服哨兵（${degradedPublishing.snapshot.dir}，all 档 = 固定页 + /post/* 等动态前缀）。` +
+          `⚠️ 代价如实说明：发出去的是**磁盘上最后一次成功渲染的 HTML**，所以 ①内容可能陈旧；` +
+          `②依赖 SSR 的功能失效（访问密码文章、搜索、阅读数、按需渲染新文章、评论）；` +
+          `③降级期间 artifactReaper 不在跑，所以"刚刚被改成私密/加密、reaper 还没删掉 .html"的文章` +
+          `在这个窗口内仍会被公开服务（窗口很窄但不是零）。` +
+          `④但**已发布内容仍然对外可读** —— 在要持续发布的场景下这是正确的取舍。`,
+      );
+    }
+  };
+  const commitPublishing = () => {
+    const was = degradedPublishing;
+    try {
+      exitDegradedPublishing(was, log);
+    } catch (err) {
+      log.warn(
+        `[degraded-hold] 退出降级发布的调用本身抛出了（${(err as Error)?.message || err}）⇒ 哨兵可能残留。` +
+          `CaddyProvider 的 60 秒对账会接管；若站点一直在发旧 HTML，手工删除哨兵文件即可。` +
+          `站点已回到正常模式，这一条不需要立刻处理。`,
+      );
+    }
+    if (was?.enabled) {
+      log.log(
+        `[degraded-hold] 已退出降级发布：哨兵按降级前的状态还原` +
+          `（fixed=${was.snapshot.fixed}、dynamic=${was.snapshot.dynamic}` +
+          `${was.snapshot.readFailed ? '，⚠️ 快照当初读取失败 ⇒ 本次跳过还原，交给对账接管' : ''}），` +
+          `CaddyProvider 的对账会在 60 秒内按设置接管。`,
+      );
+    }
+  };
 
-  let hold: DegradedHoldHandle | null = await startDegradedHoldServer({
+  const hold = createDegradedHoldController({
     port,
     host,
-    reason,
     versionText: appVersion,
+    probeMs: holdProbeMs,
     log,
+    onEnter: enterPublishing,
+    onCommit: commitPublishing,
   });
 
-  // 后台循环：探活 → 通了就关掉占位服务、完成真正的启动。
+  /** 数据库不可达时那条 FATAL：原因可变，但"三条下一步"必须始终在。 */
+  const fatalDbUnreachable = (detail: string, reason: string) => {
+    log.error(
+      `[FATAL][startup] **数据库不可达**：${detail}（模式 ${holdMode}；` +
+        `重试窗口由 VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS 控制），进入「降级驻留」。` +
+        `进程**不退出**、容器保持 Up。原因：${reason}\n` +
+        `[FATAL][startup] 现在的状态：/api/public/health 返回 503 degraded；/static/*（图片、附件）由 caddy 直服、照常可用；` +
+        `已渲染过的页面由 caddy 直发磁盘上的 HTML（见下面那条「降级发布」日志）。\n` +
+        `[FATAL][startup] 下一步怎么办（三选一，按顺序试）：\n` +
+        `[FATAL][startup]   ① **什么都不做**：进程每 ${Math.round(hold.nextProbeMs() / 1000)} 秒探一次数据库，` +
+        `数据库一通就自动完成启动、恢复正常模式，**不需要重启容器**；\n` +
+        `[FATAL][startup]   ② 跑 ./vanblog.sh doctor 体检（它会直接说"server 活着但 mongo 连不上"，并给出定位命令）；\n` +
+        `[FATAL][startup]   ③ 数据库彻底坏了就用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建` +
+        `（数据库起不来时也能用）。`,
+    );
+  };
+
+  // ---- immediate 模式（默认）：先探一次库，不可达就**立刻**驻留 ----
+  // 🔴 这是把 502 窗口从"整个重试窗口"降到秒级的关键。实测（2026-09-20，mongo 全程不可达、
+  //    默认配置）after-window 形状是：+127s 第 1 次失败 → +259s 第 2 次 → +396s 才驻留，
+  //    也就是**前 6.6 分钟 health 与页面全是 502**。而"进入驻留"本身没有任何代价需要先等：
+  //    占位服务返回的 503 与真实 health 端点**逐字段同形状**，哨兵一写 caddy 立刻直发磁盘 HTML。
+  // ⚠️ 取舍（产品行为变化，可用 VANBLOG_DEGRADED_HOLD_MODE=after-window 回到旧行为）：
+  //    一次**短暂**的数据库抖动也会让站点短暂进入"直发旧 HTML"模式。判断是：
+  //    在"极端环境下持续发布信息"的目标下，短暂的旧内容远优于 6 分钟的完全不可用。
+  let preHoldReason = '';
+  if (holdMode === 'immediate') {
+    preHoldReason = await probeDbOnceForHold();
+    if (preHoldReason) {
+      fatalDbUnreachable('**第一次探测就连不上**，所以没有先去烧重试窗口', preHoldReason);
+      await hold.enter(preHoldReason);
+    }
+  }
+
+  if (!preHoldReason) {
+    const outcome = await runBootstrapWithDbRetry(bootstrap, {
+      onRetry: ({ attempt, elapsedMs, nextDelayMs, windowMs, error }) => {
+        log.warn(
+          `[startup] 数据库不可达，第 ${attempt} 次启动失败（已等 ${Math.round(elapsedMs / 1000)}s / 窗口 ${Math.round(windowMs / 1000)}s），` +
+            `${Math.round(nextDelayMs / 1000)}s 后重试：${(error as Error)?.message || error}`,
+        );
+      },
+      onNonRetryable: (error) => {
+        log.error(
+          `[FATAL][startup] 启动失败，且**不是**数据库不可达（所以不重试）：${(error as Error)?.message || error}`,
+        );
+      },
+    });
+    if (!isBootstrapFailure(outcome)) {
+      return; // 启动成功
+    }
+    // 窗口耗尽（after-window 模式），或 immediate 模式下"探活说可达、bootstrap 仍然失败"
+    const reason = (outcome.lastError as Error)?.message || String(outcome.lastError);
+    fatalDbUnreachable(
+      `在 ${Math.round(outcome.elapsedMs / 1000)} 秒内尝试了 ${outcome.attempts} 次仍连不上`,
+      reason,
+    );
+    await hold.enter(reason);
+  }
+
+  // 后台循环：探活 → 通了就让出端口、跑真正的 bootstrap。
   // ⚠️ 用"先探活再 bootstrap"而不是"直接反复 bootstrap"：`initJwt` 自己会重试 10 次共约 130 秒，
   //    那样每轮探测都要占着端口空转两分钟（而降级驻留必须先让出端口，空转期间连 503 都给不出来）。
   for (;;) {
-    await sleep(holdProbeMs);
+    await sleep(hold.nextProbeMs());
     let mongoUrl = '';
     try {
       mongoUrl = await loadMongoUrl();
@@ -752,27 +837,24 @@ async function main() {
     if (!mongoUrl || !(await probeMongoOnce(mongoUrl, 3000))) {
       continue;
     }
-    log.warn('[startup] 数据库已可达：关闭降级驻留的占位服务，开始真正的启动流程');
-    if (hold) {
-      await hold.close();
-      hold = null;
-    }
+    log.warn('[startup] 数据库已可达：让出端口（哨兵先留着，避免页面出现新的 502 空窗），开始真正的启动流程');
+    // 🔴 顺序：先关占位服务（否则 bootstrap 的 listen 会 EADDRINUSE，而那会被判成
+    //    "非数据库错误"⇒ 直接退出码 1），但**哨兵保留**到 commit()，
+    //    这样 bootstrap 进行期间 caddy 仍在直发磁盘 HTML。
+    await hold.releasePort();
+
+    // 🔴 `bootstrap()` 单独一个 try：**降级发布的收尾绝不能与它共用 catch**。
+    //    之前还原哨兵就写在这个 try 里，于是"启动已成功、只是还原失败"会掉进 catch ⇒
+    //    `isDbUnreachableError` 为 false ⇒ `process.exit(1)`：把一个**已经恢复正常**的站点杀掉，
+    //    还留下"数据库可达但启动失败"这条误导性 FATAL。
+    let bootstrapped = false;
+    let lastErr: unknown = null;
     try {
       await bootstrap();
-      // ⚠️ **精确还原**而不是无条件删：站长可能本来就手动开了 SERVE_HTML=true|all，
-      //    无条件删会把它关掉；无条件留会让站点一直停在"caddy 直发旧 HTML"。
-      //    还原之后 CaddyProvider 的 60 秒对账会按 env + ISR 模式接管为权威状态。
-      restoreServeHtmlSentinels(serveHtmlSnapshot, { log });
-      if (serveHtmlOn) {
-        log.log(
-          `[degraded-hold] 已退出降级发布：哨兵按降级前的状态还原（fixed=${serveHtmlSnapshot.fixed}、dynamic=${serveHtmlSnapshot.dynamic}），` +
-            `CaddyProvider 的对账会在 60 秒内按设置接管。`,
-        );
-      }
-      log.log('[startup] ✅ 数据库恢复后启动成功，站点已回到正常模式');
-      return;
+      bootstrapped = true;
     } catch (err) {
-      // ⚠️ 分两种：数据库又不可达 ⇒ 重新挂上占位服务继续等；
+      lastErr = err;
+      // ⚠️ 分两种：数据库又不可达 ⇒ 重新驻留继续等；
       //    其它错误 ⇒ 这是真故障（配置/代码），按既有语义退出交给 restart 策略，
       //    绝不能在这里无限重试把真错误藏起来。
       if (!isDbUnreachableError(err)) {
@@ -781,17 +863,21 @@ async function main() {
         );
         process.exit(1);
       }
-      log.warn(
-        `[startup] 数据库短暂可达但启动又失败了，重新进入降级驻留：${(err as Error)?.message || err}`,
-      );
-      hold = await startDegradedHoldServer({
-        port,
-        host,
-        reason: (err as Error)?.message || String(err),
-        versionText: appVersion,
-        log,
-      });
     }
+    if (!bootstrapped) {
+      log.warn(
+        `[startup] 数据库短暂可达但启动又失败了，重新进入降级驻留：${(lastErr as Error)?.message || lastErr}`,
+      );
+      // ⚠️ reenter 会记一次抖动：超过阈值后探活间隔按倍率拉长（有上限），
+      //    避免"驻留→恢复→再驻留"来回打转把日志与磁盘写满。
+      await hold.reenter((lastErr as Error)?.message || String(lastErr));
+      continue;
+    }
+
+    // ---- 启动已成功：降级发布的收尾（尽力而为，绝不可致命）----
+    await hold.commit();
+    log.log('[startup] ✅ 数据库恢复后启动成功，站点已回到正常模式');
+    return;
   }
 }
 

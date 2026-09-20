@@ -189,3 +189,249 @@ export function startDegradedHoldServer(
     }
   });
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 驻留控制器：把「进入 / 让出端口 / 收尾 / 抖动重入」这四件事的**顺序与幂等**收在一处
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** 何时进入降级驻留。 */
+export const DEGRADED_HOLD_MODE_ENV = 'VANBLOG_DEGRADED_HOLD_MODE';
+export type DegradedHoldMode = 'immediate' | 'after-window';
+export const DEGRADED_HOLD_MODE_DEFAULT: DegradedHoldMode = 'immediate';
+
+/**
+ * 解析 `VANBLOG_DEGRADED_HOLD_MODE`。
+ *
+ * 🔴 **垃圾值回落默认（immediate），绝不当成"关闭"** —— 与本仓库既有口径一致
+ * （`VANBLOG_CSP_MODE`、`VANBLOG_HSTS_MAX_AGE` 都是这个方向）：解析失败时应当落到
+ * **更安全/更可用**的那一侧，而不是把功能悄悄关掉。
+ *
+ * ⚠️ 两种模式的差别（实测数字，2026-09-20，mongo 全程不可达、默认配置）：
+ *  - `after-window`（旧行为）：先把 `VANBLOG_BOOTSTRAP_DB_RETRY_WINDOW_MS` 整个窗口烧完才驻留。
+ *    实测 `+127s` 第 1 次失败 → `+259s` 第 2 次 → `+396s` 才进入驻留 ⇒
+ *    **前 6.6 分钟 health 与页面都是 502**（caddy 活着所以 `/static/*` 可用，但页面发不出去）。
+ *  - `immediate`（默认）：**先探一次库**，不可达就立刻驻留 ⇒ 502 窗口降到秒级。
+ *
+ * 🔴 取舍必须如实（这是产品行为变化）：`immediate` 下，一次**短暂**的数据库抖动也会让站点
+ * 短暂进入"caddy 直发磁盘上旧 HTML"的模式，期间依赖 SSR 的功能失效（访问密码文章、站内搜索、
+ * 阅读数、按需渲染新文章、评论），且 `artifactReaper` 不在跑（那条残余风险已记录在
+ * `degradedServeHtml.ts` 的头注释里）。判断：在"极端环境下要持续发布信息"的目标下，
+ * **短暂的旧内容远优于 6 分钟的完全不可用**，所以默认 immediate；不接受这个取舍的部署
+ * 可以显式设 `after-window` 回到旧行为。
+ */
+export function resolveDegradedHoldMode(
+  raw: unknown = process.env[DEGRADED_HOLD_MODE_ENV],
+  log?: { warn(message: string): void },
+): DegradedHoldMode {
+  const text = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (text === '') return DEGRADED_HOLD_MODE_DEFAULT;
+  if (text === 'immediate' || text === 'after-window') return text;
+  try {
+    log?.warn(
+      `[degraded-hold] ${DEGRADED_HOLD_MODE_ENV}='${String(raw)}' 不是 immediate / after-window 之一，` +
+        `已回落到默认 '${DEGRADED_HOLD_MODE_DEFAULT}'（第一次探到数据库不可达就进入降级驻留）。` +
+        `⚠️ 回落方向是"更快开始发布缓存内容"，不是"关闭降级驻留"。`,
+    );
+  } catch {
+    /* 日志器坏了也不影响解析结果 */
+  }
+  return DEGRADED_HOLD_MODE_DEFAULT;
+}
+
+export interface DegradedHoldControllerOptions {
+  port: number;
+  host?: string;
+  versionText: string;
+  /** 基础探活间隔（`VANBLOG_DEGRADED_HOLD_PROBE_MS`）。 */
+  probeMs: number;
+  /** 抖动护栏：进出驻留超过这个次数后开始拉长探活间隔。默认 5。 */
+  maxFlaps?: number;
+  /** 拉长倍率。默认 2。 */
+  flapFactor?: number;
+  /** 探活间隔上限。默认 600000（10 分钟）。 */
+  flapProbeMaxMs?: number;
+  log?: {
+    log(message: string): void;
+    warn(message: string): void;
+    error(message: string): void;
+  };
+  /**
+   * 进入驻留时的**尽力而为**动作（写 caddy 直服哨兵）。
+   * ⚠️ 抛异常不会中断驻留：它失败只意味着"页面发不出去"，而占位服务的 health 契约更重要。
+   */
+  onEnter?: (reason: string) => void | Promise<void>;
+  /**
+   * 真正启动成功后的**尽力而为**动作（按快照还原哨兵）。
+   * ⚠️ 抛异常不会让"已经成功的启动"被回滚成退出码 1。
+   */
+  onCommit?: () => void | Promise<void>;
+}
+
+export interface DegradedHoldController {
+  /** 进入驻留：起占位服务 + `onEnter`。**幂等**（已在驻留中则只更新原因）。 */
+  enter(reason: string): Promise<void>;
+  /**
+   * 只**让出端口**（关掉占位服务），哨兵**保留**。
+   *
+   * 🔴 顺序是有意的：真正的 bootstrap 要 listen 同一个端口，所以必须先关占位；
+   * 但哨兵要**留着**，这样 bootstrap 进行期间 caddy 仍在直发磁盘 HTML ⇒
+   * **不产生新的 502 空窗**。哨兵的还原推迟到 `commit()`。
+   */
+  releasePort(): Promise<void>;
+  /** 启动成功后收尾：执行 `onCommit`（还原哨兵），标记退出驻留。**幂等**。 */
+  commit(): Promise<void>;
+  /** 启动又失败（数据库类）：重新起占位服务并记一次抖动。哨兵还在 ⇒ 页面持续可发。 */
+  reenter(reason: string): Promise<void>;
+  isActive(): boolean;
+  flapCount(): number;
+  /** 下一次探活该等多久（含抖动退避）。 */
+  nextProbeMs(): number;
+  address(): string | null;
+}
+
+/**
+ * 造一个驻留控制器。
+ *
+ * ## 为什么要有这个东西（而不是把逻辑摊在 main.ts 里）
+ * 「立即驻留 + 后台重试」把三件本来串行的事变成了并发：占位服务在监听、哨兵在盘上、
+ * 而重试随时可能成功。于是出现两个必须显式处理的形状：
+ *  1. **端口冲突**：占位服务还占着端口时 bootstrap 去 listen ⇒ EADDRINUSE ⇒
+ *     而这会被 `runBootstrapWithDbRetry` 判成"非数据库错误"⇒ 直接退出码 1。
+ *     所以 `releasePort()` 必须在 bootstrap **之前**、且只能由它来关。
+ *  2. **重复进出**：数据库通一下又断 ⇒ 驻留→恢复→再驻留来回打转，每轮都写/删哨兵、
+ *     每轮都打一堆日志。`reenter()` 记抖动次数，超过阈值后**拉长探活间隔**（指数、有上限）
+ *     并 WARN 一次，于是抖动会被"降频"而不是被放大。
+ * 把这些收在一个可单测的对象里，`main.ts` 只负责编排 —— 也因为这个对象**能真起 HTTP 被测**，
+ * 而 `main.ts` 不能被 import（它在模块加载时就调用 `main()`）。
+ */
+export function createDegradedHoldController(
+  options: DegradedHoldControllerOptions,
+): DegradedHoldController {
+  const maxFlaps = options.maxFlaps ?? 5;
+  const flapFactor = options.flapFactor ?? 2;
+  const flapProbeMaxMs = options.flapProbeMaxMs ?? 600000;
+  const log = options.log ?? {
+    // eslint-disable-next-line no-console
+    log: (m: string) => console.log(m),
+    // eslint-disable-next-line no-console
+    warn: (m: string) => console.warn(m),
+    // eslint-disable-next-line no-console
+    error: (m: string) => console.error(m),
+  };
+
+  let handle: DegradedHoldHandle | null = null;
+  let active = false;
+  let flaps = 0;
+  let flapWarned = false;
+  let reason = '';
+  /**
+   * 本轮"进入驻留"是否还欠一次收尾（还原哨兵）。
+   *
+   * 🔴 不能用 `active` 代替：`releasePort()` 会把 `active` 置 false（端口必须先让给真正的
+   * bootstrap），但那时哨兵**还没**还原 —— 收尾是欠着的。而 `commit()` 必须**每轮只跑一次**：
+   * 重复还原会重复打"已退出降级发布"、重复触发 readFailed 的 WARN，也和它自己的文档
+   * 承诺（幂等）矛盾。实测就是被这条守卫抓到的：连调两次 commit，onCommit 跑了两次。
+   */
+  let commitPending = false;
+
+  /** 尽力而为地跑一个回调：它抛异常绝不能让驻留/启动流程死掉。 */
+  const bestEffort = async (label: string, fn?: () => void | Promise<void>) => {
+    if (!fn) return;
+    try {
+      await fn();
+    } catch (err) {
+      log.warn(
+        `[degraded-hold] ${label} 失败（${(err as Error)?.message || err}）：` +
+          `这是尽力而为的一步，降级驻留与启动流程**继续进行**。`,
+      );
+    }
+  };
+
+  const startPlaceholder = async (why: string) => {
+    handle = await startDegradedHoldServer({
+      port: options.port,
+      host: options.host,
+      reason: why,
+      versionText: options.versionText,
+      log,
+    });
+    // ⚠️ 绑定失败时 handle 为 null（端口被占）：进程仍然不退出、仍然继续重试，
+    //    这与 `startDegradedHoldServer` 自己的契约一致（见其头注释）。
+    active = true;
+    commitPending = true; // 起了一轮驻留 ⇒ 欠一次收尾
+  };
+
+  return {
+    async enter(why: string) {
+      reason = why;
+      if (active) {
+        return; // 幂等：已经在驻留中，不重复起监听、不重复写哨兵
+      }
+      await startPlaceholder(why);
+      await bestEffort('进入降级发布（写 caddy 直服哨兵）', () => options.onEnter?.(reason));
+    },
+
+    async releasePort() {
+      if (!active) return;
+      active = false;
+      if (handle) {
+        const h = handle;
+        handle = null;
+        try {
+          await h.close();
+        } catch (err) {
+          // ⚠️ 关不掉占位服务就意味着真正的 bootstrap 拿不到端口 ⇒ 必须说出来，
+          //    但也不该在这里抛（抛出去会变成"启动流程本身出错"⇒ 退出码 1）。
+          log.error(
+            `[degraded-hold] 关闭占位服务失败（${(err as Error)?.message || err}）：` +
+              `端口 ${options.port} 可能仍被占用，接下来的 listen 可能 EADDRINUSE。`,
+          );
+        }
+      }
+    },
+
+    async commit() {
+      if (!commitPending) {
+        return; // 🔴 幂等：本轮已经收过尾（或从来没进入过驻留）⇒ 不重复还原、不重复打日志
+      }
+      commitPending = false;
+      if (active) {
+        // 正常路径下 releasePort() 已经先跑过；这里是兜底（例如调用方漏了）
+        await this.releasePort();
+      }
+      await bestEffort('退出降级发布（还原 caddy 直服哨兵）', () => options.onCommit?.());
+    },
+
+    async reenter(why: string) {
+      reason = why;
+      flaps += 1;
+      if (flaps > maxFlaps && !flapWarned) {
+        flapWarned = true;
+        log.warn(
+          `[degraded-hold] ⚠️ 数据库反复通断：已经进出降级驻留 ${flaps} 次（阈值 ${maxFlaps}）。` +
+            `为避免"驻留→恢复→再驻留"来回打转（每轮都写/删哨兵、刷日志），` +
+            `探活间隔将按 ${flapFactor} 倍逐步拉长，上限 ${Math.round(flapProbeMaxMs / 1000)} 秒。` +
+            `这通常意味着数据库本身在抖（副本集选举、OOM 重启、网络分区），` +
+            `请查数据库侧而不是本站。`,
+        );
+      }
+      if (active) return; // 幂等
+      await startPlaceholder(why);
+      // ⚠️ 哨兵在 releasePort() 时被有意保留，所以这里不需要再写一次；
+      //    但如果从没进入过（例如占位服务绑定失败过），onEnter 还是要跑。
+      await bestEffort('进入降级发布（写 caddy 直服哨兵）', () => options.onEnter?.(reason));
+    },
+
+    isActive: () => active,
+    flapCount: () => flaps,
+    nextProbeMs() {
+      if (flaps <= maxFlaps) return options.probeMs;
+      const over = flaps - maxFlaps;
+      const grown = options.probeMs * Math.pow(flapFactor, over);
+      // ⚠️ 指数可能溢出到 Infinity：必须夹到上限，否则"永远不再探活"= 永不自愈
+      if (!Number.isFinite(grown)) return flapProbeMaxMs;
+      return Math.min(Math.round(grown), flapProbeMaxMs);
+    },
+    address: () => (handle ? handle.address() : null),
+  };
+}
