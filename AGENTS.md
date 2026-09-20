@@ -8611,6 +8611,48 @@ if (clusterWorkers > 1 && cluster.isPrimary) { …runBootstrapWithDbRetry(startP
 ⚠️ **一条工具事实（更正我上一轮的说法）**：`run-image-stack.sh` **支持 `MONGO_HOST_PORT`**（默认 27117），
 所以"同一时刻只能有一套 helper 栈"**可以绕开**（`HTTP_PORT=18087 MONGO_HOST_PORT=27118 …`）⇒ A/B 对照可以并行。
 
+### 7.84 C10K 在**完整部署**上复测：静态路径 10000/0 达标；API 路径那一段是**工具静默失败**，不是结论
+
+镜像 `vanblog:r20-cluster`（`local@337c7c22`，含 P0 集群修复），`VANBLOG_CLUSTER_WORKERS=auto`、
+`VANBLOG_LISTEN_BACKLOG=4096`，恢复了 53 篇真实文章。⚠️ **与上一轮的关键差别：这次前台是活的** ——
+自证 `ISR产物=53`、有 `next-server`、`GET /` → **200 / 16ms**（上一轮 cluster=auto 时前台全 502，见 §7.83）。
+留档：`vanblog_dev/tmp/bench-r20.md`（30 连接，参数用错）、`bench-r20b.md`（10000 连接，默认限流）、
+`bench-r20c.md`（10000 连接，限流已抬）。
+
+**✅ C10K 达标（静态路径，caddy 直服）**：
+```
+目标 /static/img/cc1db5c34b04e07c71a7549fac46c37e.image.webp
+  目标连接数 10000 → 成功建立 10000（用时 1.1s）
+  连接上发请求 → 200=10000 失败=0（用时 1.6s）
+  内核计数器（容器内 netns）全部 Δ=0：
+    ListenOverflows 0、ListenDrops 0、TCPBacklogDrop 0、TCPReqQFullDoCookies 0、
+    TCPReqQFullDrop 0、TCPTimeouts 0、TCPSynRetrans 0、EmbryonicRsts 0、Tcp.AttemptFails Δ=0、Tcp.EstabResets Δ=0
+```
+两次独立运行（`bench-r20b` 与 `bench-r20c`）结果一致（1.1s/1.7s 与 1.1s/1.6s）⇒ 可复现。
+⚠️ 这条路径**不经限流**（`/static/*` 由 caddy `file_server` 直服），所以是"默认配置下"的真实成绩。
+
+🔴 **`/api/public/meta` 那一段两次都**没有产出任何结果行** —— 这是**基准工具的静默失败，不是产品结论**：
+日志里打完 `目标 /api/public/meta：` 与 `请求路径: /api/public/meta` 之后**直接跳到内核计数器**，
+中间的"目标连接数/成功建立/连接上发请求/分类/明细"一行都没有。
+⚠️ **不要把它读成"通过"或"失败"** —— 它什么都没测。已排除的两个可能：
+①**不是限流**：第一次（`bench-r20b`）默认限流下该端点确实全 429（30 连接那次实测 `200=0 失败=30 / http_429=30`），
+但抬到 `VANBLOG_RATE_LIMIT_PER_MIN=100000000` 后（`bench-r20c`，自证 `meta=200`）**仍然没有输出**；
+②**不是端点坏了**：同一轮的单请求延迟表里 `/api/public/meta` 是 **200 / 8272 字节 / p50 3ms / p95 3ms**（identity 与 gzip 两轮都正常）。
+⇒ 结论：**`measure.sh` 的 C10K 环节在第二个目标上静默不产出**，需要单独查（怀疑 loadtest 子进程的 stdout 没被捕获、
+或该目标建连阶段抛错被吞）。⚠️ 这也意味着**上一轮"C10K 达标 200=10000/失败=0"那条数字的来源需要重新确认** ——
+它当时压的正是 `/api/public/meta`；在那之后前台死掉的部署上它竟然有输出，而现在完整部署上反而没有，
+两种情况都说明**这个环节的输出可靠性本身需要一条守卫**（例如"C10K 每个目标都必须产出结果行，否则整节判失败"）。
+
+⚠️ 本轮我自己犯的两个测量错误（都值得记）：
+1. **`--c10k N` 的 N 是"目标连接数"，不是"保持秒数"** —— 我第一次传 `--c10k 30`，于是只压了 30 条连接
+   （输出明写"目标连接数: 30"），差点被当成 C10K 结果。⚠️ 变量名叫 `C10K_HOLD` 但语义是连接数，名字有误导性。
+2. **在上一个 `measure.sh` 还没结束时又起了一个** —— 我用 `ps | grep -c '[m]easure.sh'` 判断"是否已结束"，
+   而**那条命令自己的 `bash -c` 命令行里就含 `measure.sh`**，于是计数恒 ≥1、判据失效（与 `pkill -f` 自匹配是**同一个坑**）。
+   ⇒ 规矩：**判断"某个脚本还在不在跑"也要排除自己的命令行**（用 `pgrep -f` 时排除 `$$`/`$PPID`，或直接按记录的 PID 查 `kill -0`）。
+
+⚠️ 另一条会影响解读的事实：本轮持续加压那节（`--no-load` 未加时）出现 `ok=9336 http_429=10664` ⇒
+**默认限流在持续加压下会大面积 429**，这是**正确行为**不是失败；要用它当吞吐指标必须先抬限流，并写明抬到了多少。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
