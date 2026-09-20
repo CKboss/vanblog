@@ -65,7 +65,7 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VAN_BLOG_VERSION` | `dev` | 页脚与后台「关于」显示的版本号（镜像构建时写入。⚠️ Dockerfile 的构建参数是复数 `VAN_BLOG_VERSIONS`，两个名字**故意不一样**） |
 | `EMAIL` | 空 | 自动申请 HTTPS 证书的 ACME 联系邮箱（不带前缀）。不像邮箱的值会被忽略；留空也能签发，只是收不到到期提醒 |
 | `UV_THREADPOOL_SIZE` | `16`（镜像里） | libuv 线程池：sharp 编解码、fs 异步、scrypt 都在这个池子里（Node 默认只有 4）。CPU 核多、图片流量大时才值得调（经验值：核数的 2–4 倍） |
-| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数：正整数（上限 **32**），也可写 `auto` / `cpus` / `max` = 按 CPU 核数开（同样不超过 32）。空值、`0`、负数、垃圾值一律回落到 `1`（= 单进程）。⚠️ N>1 时：内存近似线性增长（每个 worker 一份完整应用）；限流与连接池会按 worker 数摊薄；初始化 / 整站恢复由数据库里的 [TTL 锁](../advanced/security.md#认证)互斥（抢不到锁的一方得到 **409**）。打开前请自己压一遍。<br>⚠️ **停机语义**：关停时若有 worker 在宽限期内没退出会被 SIGKILL，此时主进程以 **ExitCode 1** 退出并打一条 FATAL（本轮之前是退出 **0**，编排系统看不出异常）。⚠️ 这个宽限期是 **cluster 主进程等 worker** 的时间，写死在代码里（10000ms）、**没有**对应的环境变量；它与下面那行 `VAN_BLOG_SHUTDOWN_TIMEOUT_MS`（默认 8000，管的是**容器 start.js 等子进程**）是**两个不同层的超时**，别混。正常的 `docker stop` / `compose down` 仍退出 0，`restart: always` 也不会因此循环重启（重启策略不作用于显式 stop） |
+| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（cluster）worker 数：正整数（上限 **32**），也可写 `auto` / `cpus` / `max` = 按 CPU 核数开（同样不超过 32）。空值、`0`、负数、垃圾值一律回落到 `1`（= 单进程）。⚠️ N>1 时：内存近似线性增长（每个 worker 一份完整应用）；限流与连接池会按 worker 数摊薄；初始化 / 整站恢复由数据库里的 [TTL 锁](../advanced/security.md#认证)互斥（抢不到锁的一方得到 **409**）。打开前请自己压一遍。<br>⚠️ **停机语义**：关停时若有 worker 在宽限期内没退出会被 SIGKILL，此时主进程以 **ExitCode 1** 退出并打一条 FATAL（本轮之前是退出 **0**，编排系统看不出异常）。⚠️ 这个宽限期是 **cluster 主进程等 worker** 的时间，写死在代码里（10000ms）、**没有**对应的环境变量；它与下面那行 `VAN_BLOG_SHUTDOWN_TIMEOUT_MS`（默认 8000，管的是**容器 start.js 等子进程**）是**两个不同层的超时**，别混。正常的 `docker stop` / `compose down` 仍退出 0，`restart: always` 也不会因此循环重启（重启策略不作用于显式 stop）。<br>🔴 **N>1 时必须有一个 worker 是「主实例」**，否则前台子进程、初始化密钥、定时备份、启动数据清洗等"只能跑一次"的活会全部静默跳过（详见下面[内部变量](#内部变量-不是对外契约别设)里 `VANBLOG_CLUSTER_ROLE` 那一段）。`ea9547f3` 之前正是这个形状：集群模式下前台全 502、既不能初始化也不能用归档恢复 |
 | `VANBLOG_DISABLE_WEBSITE` | 空 | `true` = server 不拉起前台（Next）子进程。前后端分离部署 website 镜像时用 |
 | `VANBLOG_WEBSITE_HOST` | `0.0.0.0` | 前台子进程的监听地址（一体式镜像保持默认即可） |
 | `VANBLOG_ISR_STORM_CONCURRENCY` | `4` | 全量重渲染（ISR 风暴）时同时在途的请求数，夹在 1–32。以前是**严格串行**：1 万篇文章按每次 200ms 算要 33 分钟，期间新内容出不来静态页。4 是「比串行快数倍、又不至于把前台进程和磁盘压垮」的取值，小机器别调大 |
@@ -184,6 +184,9 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_RESTORE_PRUNE_STATIC` | **开** | 恢复时把四个静态目录（`img`、`file`、`customPage`、`themes`）**修剪成与归档完全一致**：归档里没有的文件会被删掉（在所有拷贝成功之后才执行）。这是「100% 保真恢复」的代价：恢复后不保留「备份之后新上传的图片」。`off` = 旧行为（只覆盖、不删多余） |
 | `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS` | 关 | 归档里**缺失**的集合默认只**报告**不删除。设 `true` 才真的 drop（恢复成「与备份那一刻完全一致」的库） |
 | `VANBLOG_RESTORE_MAX_TOTAL_BYTES` | `107374182400`（100 GiB） | 整站恢复**解包后**允许的成员总字节上限（夹在 1 MiB–1 TiB，非法值回落默认），在解包**之前**按 tar 头里的成员大小算好再放行。为什么要它：匿名的恢复接口接受 8GB 上传（5 次/10 分钟/IP），一个高压缩比的 zstd 炸弹能解出远超磁盘的量，把数据库与日志一起写满。另有一条**不可配**的规则：目标卷剩余空间必须 ≥ 成员总字节 + 256 MiB。⚠️ 读不到剩余空间时这道闸门**跳过**而不是拒绝——把"读不到"当成 0 会让没有 `statfsSync` 的平台恢复全部失败 |
+| `VANBLOG_RESTORE_MAX_MEMBERS` | `50000` | 整站恢复"读成员表"这一步允许的**成员条数**上限，夹在 **100–5,000,000**。🔴 **体积上限拦不住这一类**：空文件的 `size` 是 0，所以一个塞满空成员的归档声明体积是 0 字节、体积闸门永远放行。实测一份 **548,127 字节 / 10 万个空文件**的归档让"读成员表"跑了 **19.5 秒**、常驻内存 +63MB，最后才因为别的原因被拒——而那 19.5 秒 CPU 全白烧了，且恢复接口在站点未初始化期间**匿名可达**、可反复触发。现在是**边读边计数**，数到第 50001 个就**中止读取并杀掉解压子进程**（没有解包、没有写盘），实测同一份归档 **0.93 秒**被拒。⚠️ 默认值依据：成员数 ≈ 静态文件数 + 十几个 NDJSON/manifest，实测 53 篇文章的真实归档是 **226 个成员**，5 万是它的 220 倍（≈ 一个有 5 万张图床图片的大站）。⚠️ 沿用 `envPositiveInt` 语义：**缺失 / 空串 / 非数字 / ≤0 一律回落默认**，所以**写 `0` 得到的是 50000，不是「不限制」**——想放宽请写一个大数。报错文案里也写着怎么放宽 |
+| `VANBLOG_RESTORE_REJECT_LOG_WINDOW_MS` | `60000`（60 秒） | 恢复路径上**同一类**安全拒绝的日志时间窗，夹在 **1000–3,600,000**。窗口内同类只打一条，但**被压掉的次数照常累计**，窗口过后的下一条会说出"这期间还被拒了 N 次 / 本类累计 M 次 / 全部累计 T 次"。⚠️ 刻意**不是**"按值永久去重"：那适用于静态配置（值不变，说一次就够），而攻击探测的第 2 次与第 1 万次恰恰是需要被看见的。⚠️ `0` / 垃圾值**回落默认**，不是"关掉节流" |
+| `VANBLOG_RESTORE_REJECT_ESCALATE_AFTER` | `10` | 恢复相关的拒绝每累计这么多次，额外打一条 **ERROR** 级汇总（列出各类计数）。目的是让 `warn` 级的反复试探也能被 `./vanblog.sh doctor` 的"近 24h ERROR/FATAL 计数"看见；汇总自身也按上面的时间窗节流，否则"每 10 次一条 ERROR"在高频攻击下就成了新的日志炸弹。夹在 **2–1,000,000**，`0` / 垃圾值**回落默认**（不是"永不汇总"） |
 
 ## 访问统计与日志
 
@@ -362,3 +365,20 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 `VANBLOG_DRILL_SKIP_MAIN`，以及测试专用：
 `VANBLOG_TEST_ENV_NUM`、`VANBLOG_SEARCH_MONGOD`、`VANBLOG_SEARCH_REALDB`、
 `VANBLOG_SEARCH_REALDB_DBPATH`、`VANBLOG_SEARCH_REALDB_PORT`。
+
+::: warning VANBLOG_CLUSTER_ROLE 是内部变量，但它现在承载着集群模式能不能用
+
+它由 cluster 主进程在 fork 时打给**恰好一个** worker（值 `leader`，其余是 `worker`），
+那个 worker 才承担"只能跑一次"的启动任务：拉起前台 Next 子进程、生成初始化密钥 `setup.key`、
+生成忘记密码用的 `restore.key`、首轮全量 ISR 渲染、7 处启动数据清洗、waline、定时整站备份、ISR 定时任务等。
+
+🔴 **手工设置它没有用**：fork 时的赋值会**覆盖**你从 compose / 环境传进去的值
+（`envForWorker` 先展开继承的环境、再写这个角色），所以把每个进程都设成 `leader` **不会**让它们都变成主实例
+——这是有意的，否则 N 个 worker 会各生成一把 `setup.key` 互相覆盖、各拉一个前台抢同一个端口。有守卫钉住这一点。
+
+⚠️ 为什么它值得单独写一段：`VANBLOG_CLUSTER_WORKERS>1` 时，cluster 的**主进程不跑 Nest 应用**
+（它只 `initJwt()` + fork），而每个 worker 的 `cluster.isWorker` 都是 true ⇒ 按 `cluster.isPrimary` 判定
+"主实例"的话，**没有任何进程是主实例**，上面那一整串启动任务会**全部静默跳过**（前台 502、没有定时备份、
+既不能初始化也不能用归档恢复）。`ea9547f3` 之后判据改成"`VANBLOG_CLUSTER_ROLE==='leader'` **优先**于
+cluster 标志"，并且 leader 退出时会让位、由重新拉起的那个 worker **接替**，所以一次性任务不会永久失守。
+:::

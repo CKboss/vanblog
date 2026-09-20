@@ -238,7 +238,10 @@ for t in scripts/tests/*.test.sh; do bash "$t"; done            # 部署脚本�
 ### CI 会跑什么、什么时候跑
 
 ⚠️ 这一节在 2026-09-20 重写过了。旧版写的是「CI 只跑 6 套 shell 守卫、不跑任何类型检查，`docs/**` 不触发 CI」——
-那时是真的，现在是假的：**27 个守卫全部进了 CI**，类型检查与真实构建也进了，文档改动有了自己的 workflow。
+那时是真的，现在是假的：类型检查与真实构建都进了 CI，文档改动有了自己的 workflow。
+⚠️ **2026-09-21 再更正一次数字**：当时写「27 个守卫全部进了 CI」，现在是 **`scripts/tests/` 下 30 个文件、
+CI 里 29 个**，**差的那一个是 `vanblog-backup-signing`**（下面表格里写清了为什么、以及该怎么接进去）。
+"全部进了 CI"这句从那时起就不准确了。
 
 现在有六个 workflow：
 
@@ -254,14 +257,71 @@ for t in scripts/tests/*.test.sh; do bash "$t"; done            # 部署脚本�
 
 | job | 内容 |
 | --- | --- |
-| `server-test` | **两份 tsconfig 的类型检查**（`tsconfig.json` 覆盖 473 个文件、含 227 个 spec 与 `test/`；`tsconfig.build.json` 覆盖 245 个、零 spec，是镜像里 `nest build` 的真实形状）→ website 类型检查 → **真实的 `nest build`** → 两套需要依赖或 `dist` 的守卫（备份加密/口令/密钥轮换、`vanblog.sh restore`）→ 三个包的单元测试 → **10 套要真 mongod 的 e2e** |
-| `guards-core` | **23 个**不需要依赖、容器引擎或 caddy 二进制的守卫（约 114 秒守卫时间、整个 job 约 2.6 分钟）：文档两条、caddy 两条、Dockerfile 两条、镜像运行时、`start.js`、`build-image-local` 静态契约、基准工具、脚本加固、生成的 compose、`install-cron`、`reset`、`verify`、`backup-restore`、灾难恢复/离线安装、waline reset、`update`、`https reset`、`uninstall`、`download fallback`、反代 Host 头 |
-| `guards-slow` | 2 个较慢的：恢复演练逻辑（620 条断言；**真起容器那部分默认不跑**，要显式打开活体开关并提供一份真归档与镜像，见 `scripts/tests/vanblog-drill.test.sh` 里 `LIVE` 那一段）、源码安装路径（用假的 git/docker/compose，不联网不碰守护进程） |
+| `server-test` | **两份 tsconfig 的类型检查**（`tsconfig.json` 覆盖 473 个文件、含 227 个 spec 与 `test/`；`tsconfig.build.json` 覆盖 245 个、零 spec，是镜像里 `nest build` 的真实形状）→ website 类型检查 → **空值解引用棘轮守卫**（见下）→ **真实的 `nest build`** → **4 个**需要依赖或 `dist` 的守卫（空值棘轮、备份加密/口令/密钥轮换、**备份签名**、`vanblog.sh restore`；⚠️ 其中**备份加密与备份签名两个断言 `note=0`**——它们缺 `dist` 时是 NOTE 跳过而不是失败，不断言就等于没跑）→ 三个包的单元测试 → **10 套要真 mongod 的 e2e** → 一步「**每个守卫脚本都必须被某个 workflow 点名**」的差集检查 |
+| `guards-core` | **24 个**不需要依赖、容器引擎或 caddy 二进制的守卫：文档两条、caddy 三条（含 `caddy-pages-dir-parity`）、Dockerfile 两条、镜像运行时、`start.js`、`build-image-local` 静态契约、基准工具、脚本加固、生成的 compose、`install-cron`、`reset`、`verify`、`backup-restore`、灾难恢复/离线安装、waline reset、`update`、`https reset`、`uninstall`、`download fallback`、反代 Host 头 |
+| `guards-slow` | 2 个较慢的：恢复演练逻辑（**624** 条断言；**真起容器那部分默认不跑**，要显式打开活体开关并提供一份真归档与镜像，见 `scripts/tests/vanblog-drill.test.sh` 里 `LIVE` 那一段）、源码安装路径（用假的 git/docker/compose，不联网不碰守护进程） |
 
-⇒ 27 个守卫 = `guards-core` 的 23 + `guards-slow` 的 2 + 主 job 里那 2 个需要依赖的。
+⇒ CI 里一共 **30 个守卫 = `scripts/tests/` 下的全部文件**：`guards-core` 24 + `guards-slow` 2 + 主 job 4
+（`vanblog-backup-encryption`、`vanblog-restore`、`strict-null-ratchet`、`vanblog-backup-signing`）。
+
+::: warning 这条"全部接上了"是 2026-09-21 才成立的，而且是第二次漏接
+
+`vanblog-backup-signing.test.sh`（**210 条断言**：ed25519 签名、`.sig` 旁证与它的 0600 权限、五种验签结论、
+以及"匿名恢复路径没有跳过验签的开关"）**此前没有被任何 workflow 引用** ⇒ 谁改坏了签名或验签，**CI 全绿**。
+它漏接的原因是形状特殊：它需要 `packages/server/dist`（`.sig` fixture 刻意用**服务端自己的实现**生成，
+避免"只证明测试自己的假设自洽"），所以放不进"不需要依赖"的 `guards-core`；而它在缺 `dist` 时
+**不失败、只 NOTE 跳过**，于是"放进主 job 但忘了断言 `note=0`"同样等于没跑。现在它接在**已经构建过的主 job**里，
+并且**断言 `note=0`**（与 `vanblog-backup-encryption` 完全同形，后者的理由早就写在 workflow 里）。
+
+🔴 **而这是第二次漏接守卫**（第一次是 `caddy-pages-dir-parity`：新增了守卫但没接 CI）。
+只补那一个不解决"还会再漏"，所以 `16bf3e1e` 把**差集检查本身做成了常驻步骤**：
+遍历 `scripts/tests/*.test.sh`，逐个确认它的文件名被 `.github/workflows/` 里某个文件引用，
+有遗漏就 `::error::` 并把"该放进哪个 job"的判据一起打出来（需要 `dist`/`node_modules` 的放主 job 并断言 `note=0`；
+不需要依赖且 <30s 的放 `guards-core`；>30s 的放 `guards-slow`）。
+⚠️ 判据是"**被点名引用**"，通配循环（`for t in scripts/tests/*`）**不算** —— 本仓库三个 workflow 都是逐个点名跑的
+（为了能给每个守卫写清"为什么在这个 job"）。⚠️ 如果将来改成通配循环，这一步要同步改成"确认循环真的覆盖到"，
+否则它会退化成恒真。
+
+:::
+
 两个 job 都会先确保 `zstd` 存在：`vanblog-verify` 没有它会**硬失败**（实测 `passed=0 failed=1`），
 而 `vanblog-restore` 与备份加密那套在缺依赖或缺 `dist` 时会**静默少跑断言** —— 后者因此被放在已经装依赖并构建过的
 job 里，并且断言 `note=0`，让"退化"算失败而不是算通过。
+
+#### 空值解引用棘轮守卫（`strict-null-ratchet`）
+
+`strictNullChecks` 在 tsconfig 里是**关的**，所以编译器不报这一类错；而它已经产出过三个真崩溃
+（鉴权路径该 401 却 500、协作者清单 500、以及 `metas` 集合为空时 `/api/public/meta` 抛 TypeError
+⇒ **前台整站打不开**）。一次性清完不现实：真开这个开关还要再清 **111** 条别的 strict 错误
+（`TS2322` 53 / `TS2345` 47 / `TS2339` 10 / `TS2769` 1，多数是 Mongoose 文档与 DTO 的赋值形状、不是崩溃），
+而 **TypeScript 不支持在同一个 project 里按目录开这个开关**。所以第一步是**别让它涨**：
+
+```bash
+# 四类"确定性空值解引用"的命中数，当前基线 32，只许减不许增
+cd packages/server && ./node_modules/.bin/tsc -p tsconfig.build.json --noEmit --strictNullChecks \
+  --tsBuildInfoFile "$(mktemp -d)/snc.tsbuildinfo" 2>&1 | grep -cE "error (TS18047|TS18048|TS2531|TS2532)"
+```
+
+🔴 **必须用单项开关 `--strictNullChecks`，不能用伞形 `--strict`**：tsconfig 里显式写的 `false`
+能压过伞形开关、压不过显式的单项开关。实测 `--strict` 下这四类命中是 **0**（总错 6 个），
+单项开关下是 **32**（总错 143 个）⇒ 谁把命令"简化"成 `--strict`，守卫就变成**恒绿**。
+守卫里有一条断言**每次都跑 `--strict` 当对照**并断言它严格更低，所以简化会当场红。
+
+⚠️ 这条守卫大部分断言存在的意义是**防止它自己恒真**：`0 ≤ 32` 在"tsc 根本没跑起来"时也成立。
+所以它还断言 tsc 存在、退出码正常（0/1/2）、输出里**没有 TS5xxx/TS6xxx 配置类错误**、输出非空、
+命中数**大于 0**、三个热点文件仍在 `--listFiles` 的编译清单里（钉的是**编译范围**而不是错误数，
+所以把它们修干净不会红、把它们排除出编译才会红）、以及换一个全新的 `--tsBuildInfoFile` 重跑结果不变。
+🔴 这套防恒真断言**在第一次运行时就抓住了作者自己的 bug**：在仓库根目录跑
+`tsc -p tsconfig.build.json`（相对路径解析不到）会得到 `TS5058` 与命中数 **0** ——正是那个假绿形状——
+而守卫报了 7 条红、第一条就是 TS5xxx 检查。
+
+⚠️ 减少时打一条 NOTE 提示"基线可以下调到 N"但**仍然通过**：如果减少也算失败，每修一处都得先改常量，
+那会训练出"顺手放宽常量"的习惯，而**顺手放宽正是棘轮要防的事**。但命中数**恰好为 0 时判失败**——
+0 有歧义（全修好了 vs 测量坏了），静默通过会让守卫悄悄失效。这两个方向相反的选择都是有意的。
+
+⚠️ 这条守卫在 `server-test` 主 job 而**不在** `guards-core`：它需要 `node_modules` 与 tsc（三次 tsc，实测约 29 秒），
+而 `guards-core` 的定位是"不需要依赖"。伞形对照**没有**藏在 `--deep` 之类的开关后面——
+单次 tsc 实测只要 9.6 秒，而**藏在开关后面的断言等于没有断言**（没人会记得打开它）。
 
 ⚠️ 三条如实写明的残余风险：
 
@@ -273,6 +333,15 @@ job 里，并且断言 `note=0`，让"退化"算失败而不是算通过。
    两者都需要一份真实的整站归档，那是站点数据，不能放进仓库。别因为"有 nightly"就以为这两条被守住了。
 3. **admin 的类型检查故意没进 CI**：它现在有 115 个错，一个常年红着的检查会训练所有人忽略红色，
    那比没有检查更糟。要加得先清完。
+4. ✅ ~~**`vanblog-backup-signing` 没有进 CI**~~ —— **2026-09-21 已闭合**（`16bf3e1e`）：它现在接在已经构建过的
+   主 job 里并断言 `note=0`，**30 个守卫文件全部进了 CI**。而且因为这是**第二次**漏接（第一次是
+   `caddy-pages-dir-parity`），差集检查本身被做成了常驻步骤 ⇒ 新增守卫而忘了接 CI 会当场红。
+   完整经过与判据见上面那个 warning 块。⚠️ 它曾经的风险量级值得记住：那 210 条断言覆盖 ed25519 签名、
+   `.sig` 旁证、五种验签结论、"匿名恢复路径没有跳过验签的开关"，而同期刚修的两条缺陷
+   （管理员恢复路径丢掉 `backupDir`/`skipSignatureCheck`、恢复闸门顺序）**都正好在它的射程内**
+   ⇒ 漏接的那段时间里，改坏签名或验签 CI 会全绿。
+   ⚠️ 剩下的真实残余风险是**它自己会静默降级**：缺 `dist` 时它 NOTE 跳过而不是失败，所以 `note=0` 那条断言
+   是它有效的**唯一**保证——谁把它去掉，守卫就退化成"看起来在跑"。
 
 ⚠️ 两个会绊人的坑（都是本轮真踩到的）：
 
@@ -281,6 +350,10 @@ job 里，并且断言 `note=0`，让"退化"算失败而不是算通过。
 - **不要用伞形 `--strict` 评估「离严格模式还有多远」**：tsconfig 里显式写的 `false` 会**压过**命令行的
   `--strict`，实测 `tsc --strict` 只报 **6** 个错，而逐项显式打开开关是约 **380** 个 —— 差 60 多倍。
   照着 6 这个数字做计划会严重低估工作量。
+  🔴 这条对**守卫**同样致命，不只是对计划：`--strict` 下"四类确定性空值解引用"的命中数是 **0**，
+  而单项开关 `--strictNullChecks` 下是 **32** ⇒ 用伞形开关写的棘轮守卫会**恒绿**。
+  所以上面那条棘轮守卫**每次运行都会额外跑一遍 `--strict` 当对照**并断言它严格更低，见
+  [空值解引用棘轮守卫](#空值解引用棘轮守卫-strict-null-ratchet)。
 
 📌 加类型检查当天就抓到一个**一直在的错误**：`test/backup-restore.e2e-spec.ts` 用 12 个参数构造
 `BackupController`，而本轮给它加了第 13 个（密钥轮换要的 `JwtService`）—— 两个单元 spec 当时改了，这个 e2e 漏了。

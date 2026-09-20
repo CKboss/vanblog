@@ -34,9 +34,13 @@
 ```bash
 # 1) 构建镜像并起一套干净栈（数据目录用新的，避免污染现有环境）
 scripts/build-image-local.sh --build-only
-ENGINE=podman IMAGE=localhost/vanblog:local-test RUN_DIR=$PWD/vanblog_dev/bench \
+ENGINE=podman IMAGE_TAG=localhost/vanblog:local-test RUN_DIR=$PWD/vanblog_dev/bench \
   EXTRA_ENV="VANBLOG_RATE_LIMIT_PER_MIN=100000000,VANBLOG_STATIC_LIMIT_PER_MIN=1000000000" \
   vanblog_dev/run-image-stack.sh --stack-only        # 本机脚本；生产用 docker compose
+# 🔴 变量名是 IMAGE_TAG，不是 IMAGE（2026-09-21 更正：这里原来写的是 IMAGE=）。
+#    写错**不会报错** —— 脚本会静默回落到自己的默认值（IMAGE_TAG="${IMAGE_TAG:-vanblog:local-test}"），
+#    于是你压测的是**另一个镜像**，而报告从头到尾看起来都正常。这与"测的不是你以为的那个镜像"
+#    那次事故是同一个形状，所以起栈后必须自证一次（见 §5.3 的「被测对象自证」）。
 
 # 2) 灌入真实数据（reset 的参数就是归档本身，没有别的位置参数）
 VANBLOG_API_BASE=http://127.0.0.1:18080 ./vanblog.sh reset <你的 vanblog-full-*.tar.zst>
@@ -54,7 +58,27 @@ VANBLOG_API_BASE=http://127.0.0.1:18080 ./vanblog.sh reset <你的 vanblog-full-
 scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
   --engine podman --container vb-app \
   --latency-n 20 --sweep-c 50,200,500,1000 --sweep-n 3000 --static-n 800 --c10k 10000
+echo "退出码=$?"     # 🔴 必须是 0；2 = 第 5 节有目标未产出结果，那份报告不能用（见 §5.3）
 ```
+
+⚠️ **关于第 1 步的起栈方式**：`vanblog_dev/run-image-stack.sh` 是**采集这些数字的那台机器上的私有脚手架，
+不在仓库里**（`vanblog_dev/` 整个目录被 `.git/info/exclude` 排除），所以你 clone 之后**找不到它是正常的**。
+仓库交付的等价做法是用 `docker-compose/docker-compose-template.yml`（`./vanblog.sh config` 会按你的环境生成），
+或自己 `docker run`／`podman run` 那个镜像。上面之所以写脚手架，是因为本报告的数字就是用它采的，
+照着它才能复现出**同一套前提**。
+
+它读的变量（写错不会报错、只会静默用默认值，所以列全）：`ENGINE`（默认 `podman`）、
+🔴 **`IMAGE_TAG`**（默认 `vanblog:local-test`；**不是 `IMAGE`**）、`MONGO_IMAGE`（默认 `mongo:7.0`）、
+`HTTP_PORT`（默认 18080）、`APP_NAME`（默认 `vb-app`）、`MONGO_NAME`（默认 `vb-mongo`）、`RUN_DIR`、`ARCHIVE`、
+`EXTRA_ENV`（`K1=V1,K2=V2` 形式透传给 vanblog 容器）、`MONGO_HOST_PORT`（默认是一个**非 27017** 的宿主端口，用来避开开发环境在用的 mongo；具体默认值看脚本里那一行）、
+`NET_NAME`（默认 `vb-net`）、`TMP_USER` / `TMP_PASS`。旗标：`--stack-only`（只起容器，不初始化不恢复）、
+`--verify-only`、`--down`（拆掉）。
+
+⚠️ **`MONGO_HOST_PORT` 是固定宿主端口，所以同一时刻只能有一套这样的栈**；要做 A/B 对照必须给其中一套换端口
+（`HTTP_PORT=<别的端口> MONGO_HOST_PORT=<别的 mongo 端口> …`），否则第二套会 `bind: address already in use`。
+⚠️ 另两条同源的坑：mongo 容器 `stop`/`start` 之后**IP 会变**（要 A/B 就用 `NET_NAME` + 固定 `--ip`，
+否则测到的是地址漂移而不是故障恢复）；容器 exit 之后再 `podman start`，**宿主机侧端口转发不会重建**
+（容器内 200、宿主机 connection refused、`podman port` 看着正常），要再 `stop && start` 一次。
 
 ### 0.1 输出字段与失败分类（读表之前先看这一节）
 
@@ -71,9 +95,15 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18080 \
 | `connect_err_CLIENT_TIMEOUT` | 建连阶段压测器自己等不下去了 | 同上，但内核还没放弃；与上一条要分开读 |
 | `connect_err_ECONNRESET` | 建连阶段被对端重置 | backlog 溢出且 `tcp_abort_on_overflow=1`，或对端进程崩了 |
 | `connect_err_ECONNREFUSED` | 没人监听 | 服务没起来 / 端口不对 |
+| `connect_err_CLOSED_BEFORE_CONNECT` | **建连阶段**对端直接关闭（FIN），连握手都没完成 | 对端 accept 后立刻 destroy；与"超时"和"被重置"是三种不同根因，所以要单独成桶 |
 | `request_err_*` | **连接已建立**、请求阶段才失败 | 不是内核不收连接，是应用或上游的问题 |
+| `request_err_CLOSED_NO_RESPONSE` | 请求已发出，对端在**给出任何响应之前**就关闭了连接 | 上游/反代主动断开。⚠️ 它**不是**超时、也**不是** RST，所以旧版工具三条结算路径一条都不触发（见 §5.3 的"工具为什么会静默失败"） |
 | `err_EADDRNOTAVAIL` | 压测机分配不出本地端口 | **客户端**临时端口耗尽，不是服务端的约束 |
 | `err_BAD_STATUS_LINE` | 收到的首行不是合法状态行 | 对端半路断开，或只回了半个响应 |
+
+⚠️ 后两个 `CLOSED_*` 桶是 2026-09-21 新增的（`69759bbc`）。加它们之前，"对端干净地 FIN 关闭"这类连接
+**既不算成功也不算失败**：它们会从统计里彻底消失，让 `总数 ≠ 成功 + 失败`，而报告看起来仍然正常。
+现在两个阶段都额外监听 `close` 事件并落进对应的桶，`未归类` 因此回到它本来的含义（真的没收到任何东西）。
 
 `[分类]` 行还会给出 `未归类`：既没有状态码也没有错误码的请求（连接挂着不响应、被总超时截断）。
 这一类**旧版工具会静默吞掉**，总数对不上都看不出来，所以它单独成列。
@@ -289,6 +319,24 @@ caddy 模板里 `max_idle_conns_per_host":512`。压测机 `somaxconn=4096`、fd
 
 ⇒ **反代路径的 C10K 达标，而且内核零丢包、零重传。**
 
+::: warning 2026-09-21 更正：上面这条「达标」有两个必须一起读的限定
+
+这条数字**没有被证伪**，但它的**适用条件**当时没写清，后来被当成"站点在集群模式下能服务一万并发"引用了。
+两个限定：
+
+1. 🔴 **它测于一套「前台已经死掉」的部署。** 那一轮用的是 `VANBLOG_CLUSTER_WORKERS=auto`，而当时集群模式下
+   **没有任何 Nest 进程是主实例**（`ea9547f3` 修的 P0），所以 `next-server` 根本没被拉起、`/` 与 `/post/*`
+   全是 502。也就是说被测进程数比生产**少了一个 next-server**，内存与 CPU 都更宽裕。
+   ⇒ 这条数字**只能**读成"server 侧 HTTP 栈扛住了一万并发"，**不能**读成"站点能服务一万并发访客"。
+2. ⚠️ **它是「孤立形状」下的成绩**：只跑第 5 节、或紧跟在静态目标之后。§5.3 实测同一个端点在
+   **完整协议**（第 1–4 节先跑完）下是 `200=9731 失败=269`。
+
+⚠️ 但**不要因此认为旧数字是假的**：在旧工具下，"能打印出结果行"本身就意味着一万条连接全部结算完了
+（否则它会**静默无输出**，见 §5.3），所以 `失败=0` 是自洽的。变的不是那次测量，而是**它的部署前提**与
+**它对"完整协议"的适用性**。修复后的完整部署复测见 §5.3。
+
+:::
+
 #### 🔴 达标条件（这三条缺一不可，请照着配）
 
 1. **`VANBLOG_CLUSTER_WORKERS` 要大于 1**（`auto`/`cpus`/`max`/具体数字，上限 32）。这是本轮最重要的一条：
@@ -310,10 +358,14 @@ ENGINE=podman IMAGE_TAG=localhost/vanblog:hardened HTTP_PORT=18097 \
   ARCHIVE=<你的 vanblog-full-*.tar.zst> \
   EXTRA_ENV="VANBLOG_RATE_LIMIT_PER_MIN=100000000,VANBLOG_STATIC_LIMIT_PER_MIN=1000000000,VANBLOG_CLUSTER_WORKERS=auto" \
   <你的起栈方式>            # 生产用 docker compose；本机用 vanblog_dev/run-image-stack.sh
-# 采集（失败四分类 + 内核计数器增量是工具自带的）
+# 采集（失败分类 + 内核计数器增量是工具自带的）
 scripts/benchmark/measure.sh --base http://127.0.0.1:18097 --engine podman --container <容器名> \
   --latency-n 5 --sweep-c 200 --sweep-n 5000 --static-n 800 --c10k 10000 --out <留档路径>.md
+echo "退出码=$?"     # 🔴 必须是 0；2 = 第 5 节有目标未产出结果（见 §5.3）
 ```
+
+⚠️ `--c10k 10000` 里的 **10000 是「目标连接数」，不是秒数**（同义旗标 `--c10k-conns`；
+压测器内部那个 `--hold` 收的也是连接数，名字没改）。这个坑与第 5 节的自我校验见 §5.3。
 
 达标判据：**两个目标都是 `失败=0`，且 `TcpExt.ListenOverflows Δ=0`**。只看"失败=0"不够 ——
 建连阶段超时曾经既不记成功也不记失败，那些连接会从统计里彻底消失（工具已修，但判据要写全）。
@@ -323,6 +375,139 @@ scripts/benchmark/measure.sh --base http://127.0.0.1:18097 --engine podman --con
 404 集中在扫描的早期，怀疑是**恢复后 ISR 全量渲染尚未跑完**（这一轮只等了 200 秒，单 worker 那轮等了 180 秒但
 起栈更早），502 则可能是 8 个 worker 同时启动期间的短暂不可用。**这两条都没有取证**，不要当结论用；
 要复现请先确认 ISR 渲染已完成（日志里"全量渲染"结束）再采。
+
+::: tip 2026-09-21 更正：上面那条观察已经闭环，而且当时的猜测方向是错的
+
+真因不是"渲染还没跑完"，而是**渲染根本没开始**：那一轮跑在一个 P0 缺陷上——集群模式下
+**没有任何进程是"主实例"**，所以前台 Next 子进程没人拉起、磁盘上**零个** ISR 产物
+（页面 404/502 正是这个原因，与"等了 200 秒还是 180 秒"无关）。
+
+修掉之后用**同一套协议**重测（§5.3 那次，留档 `bench-fixed.md` 第 3 节）：并发 50/200/500/1000 四档 × 3000 请求，
+状态码**只有 `200` 与 `204`**，`404` 与 `502` **各 0**，四档失败都是 **0**、`未归类=0`：
+
+| 并发 | 完成 | 秒 | rps | p50 | p95 | p99 | 状态码 |
+|---|---|---|---|---|---|---|---|
+| 50 | 3000 | 4.0 | 747.4 | 36 | 242 | 355 | `200:2814 204:186` |
+| 200 | 3000 | 3.9 | 764.3 | 140 | 698 | 2373 | `200:2793 204:207` |
+| 500 | 3000 | 3.9 | 771.0 | 370 | 2272 | 3290 | `200:2800 204:200` |
+| 1000 | 3000 | 4.5 | 660.8 | 859 | 3362 | 3618 | `200:2801 204:199` |
+
+（`204` 是 `/api/public/theme.css` 那条路径的正常响应，不是失败。四档 rps 稳定在 660–771 之间、
+p95 随并发上升，这是**同机压测**的预期形状，见 §0 的保守性说明。）
+
+⚠️ **可复用的教训**：那两条"怀疑"**当时就该取证**——只要查一眼"进程表里有没有 `next-server`"，
+就能立刻否掉"渲染未跑完"这个方向。把未取证的猜测写进留档，会让下一轮的人沿着错方向找。
+
+:::
+
+### 5.3 修复集群缺陷之后的完整部署复测（2026-09-21，含一次工具自身的静默失败）
+
+§5.2 那两轮的部署前提是坏的（集群模式下前台没起来）。`ea9547f3` 修掉那个 P0 之后，
+**第一次在一套"完整"的部署上重测**：镜像 `vanblog:r20-cluster`、`VAN_BLOG_VERSION=local@337c7c22`、
+`VANBLOG_CLUSTER_WORKERS=auto`（本机 6 核 ⇒ 8 个 worker）、`VANBLOG_LISTEN_BACKLOG=4096`。
+
+**被测对象自证**（⚠️ 每次采集都必须做，否则可能在压另一个镜像）：容器内 `VAN_BLOG_VERSION`、
+ISR 产物 `.next/server/pages/post/*.html` = **53 个**（= 归档里的文章数）、进程表里**有 `next-server`**、
+`GET /` = **200 / 16ms**（⇒ 前台活着，这是"完整部署"的判据）。数据规模同 §0（53 篇公开文章）。
+
+#### 结果：静态路径满分，API 路径 97.3%
+
+| 目标 | 建连 | 请求 | 失败明细 |
+|---|---|---|---|
+| `/static/img/*.webp`（caddy 直服，**不经限流**） | 10000/10000（**1.0s**） | **200=10000 失败=0**（1.6s） | `ok=10000`，两阶段 `未归类=0` |
+| `/api/public/meta`（caddy→Node），**完整协议下** | 10000/10000（**2.6s**） | **200=9731 失败=269**（9.1s） | `ok=9731 request_err_CLOSED_NO_RESPONSE=269` |
+| `/api/public/meta`，**孤立跑**（三次独立测量） | 10000/10000（1.1s / 2.0s / 1.7s） | **200=10000 失败=0**（6.8s / 7.9s / 8.3s） | `ok=10000`，`未归类=0` |
+
+⇒ **C10K 在静态路径上达标（默认配置、`失败=0`）**；API 路径**孤立形状下达标**，
+**完整协议下是 9731/269（97.3%）**。两个条件都必须跟着数字一起说，只报一个会误导。
+
+⚠️ "孤立跑"那一行是**三次独立测量**，不是一次：单独跑压测器打 `/api/public/meta`（建连 1.1s、请求 6.8s）、
+另一次单独跑（2.0s / 7.9s）、以及**紧跟在静态目标之后**跑（1.7s / 8.3s，静态那一档同时是 1.2s / 1.6s、
+也是 `200=10000 失败=0`）。三次都是 `失败=0`、`未归类=0` ⇒ "孤立形状达标"这个结论不依赖某一次运气好的采样。
+留档：`vanblog_dev/tmp/diag-meta-raw.log`、`diag-seq-meta.log`、`repro-sec5.log`（完整协议那两次是
+`bench-fixed.md` 与 `bench-full-fixed.md`）。
+
+内核计数器（容器内 netns，C10K 两个目标合计）：`ListenOverflows`、`ListenDrops`、`TCPBacklogDrop`、
+`TCPReqQFullDoCookies`、`TCPReqQFullDrop`、`TCPTimeouts`、`TCPSynRetrans`、`EmbryonicRsts`、
+`Tcp.AttemptFails`、`Tcp.EstabResets`、`Tcp.RetransSegs`、`Tcp.InErrs` **全部 Δ=0**。
+服务端侧同样干净：整个压测期间容器日志 **3,371 行**，`dial tcp|i/o timeout|connection reset|EOF|no available peer|caddy process exited`
+命中 **0**，`ERROR|5xx` 命中 **0**。
+
+🔴 **所以那 269 条不是 backlog 溢出、也不是服务端拒绝**：内核一个包都没丢、没重传，服务端一条错都没记。
+它们的分类是 `request_err_CLOSED_NO_RESPONSE` —— 连接建好了、请求发出去了、对端在给出任何响应之前关闭了连接。
+
+⚠️ **根因未定死，不要拿下面这条当解释。** 同一份留档里有一个显眼的数字：压测机
+`sockstat.TCP.tw` 从 2,322 涨到 **26,126**（Δ=23,804），而压测机的临时端口范围是
+`ip_local_port_range=32768-60999`（**28,232 个**）⇒ C10K 结束时 TIME_WAIT 占掉了**92.5%**、只剩 2,106 个空闲端口。
+它**看起来**像客户端端口压力，但**建连阶段是 10000/10000 成功、失败 0、未归类 0** ⇒
+"连接期端口耗尽"这个机制**已被数据排除**（且 `tcp_tw_reuse=2` 对回环连接本来就允许复用）。
+269 条全部落在**请求阶段**。**结论：未归因，需要专门实验**（建议方向：只跑第 5 节并人为预置 TIME_WAIT 做对比；
+以及抓服务端侧那 269 条对应的 caddy 访问日志 —— 有记录说明是 caddy 关的，没记录说明是更下层）。
+
+#### 🔴 附带修掉的工具缺陷：第 5 节曾经能「什么都没测」却退出 0
+
+这一轮最有价值的产出不是数字，而是**发现采集工具会静默失败**。现象是：报告里打出
+`目标 /api/public/meta：` 与 `请求路径: /api/public/meta` 两行之后**直接跳到内核计数器**，
+中间的"目标连接数 / 成功建立 / 连接上发请求 / 分类 / 明细"一行都没有，而**脚本退出码是 0**。
+
+三层原因叠在一起，而**端点从来不是其中之一**（直接跑压测器打同一个端点是 10000/0）：
+
+1. 🔴 **压测器的结算漏洞（真正的根因）**：请求阶段只在三条路径上结算 —— `data`（收到 `\r\n\r\n`）、`error`、`timeout`。
+   而**对端干净地 FIN 关闭**这三条**一条都不触发**：没有完整响应所以 `data` 不结算，FIN 不是错误所以 `error` 不触发，
+   socket 已经关了所以 `timeout` 永远不会来。于是这些连接永不结算、`settledReqs` 永远到不了 `sockets.length`、
+   promise 永不 resolve。
+2. 🔴 **两个兜底定时器都 `.unref()` 了**，而旧注释声称"真挂住时 socket I/O 会让事件循环活着、定时器仍会触发"——
+   **这个前提是假的**：一旦所有 socket 都被对端关掉，事件循环上只剩一个 unref 的定时器 ⇒
+   **node 立刻静默退出、退出码 0、零输出**。当初"跑完之后还要等 90 秒"那个抱怨，真正解决它的是 `clearTimeout`；
+   `unref` 是多余且有害的那一半 —— 它把"慢"换成了"看起来像成功的沉默"。
+3. **`measure.sh` 的管道形状**：`child 2>&1 | grep -E "$C10K_GREP" | while read` 会丢掉白名单之外的任何行
+   （崩溃信息、`Error:` 栈），并且丢掉子进程退出码（管道接 `while` 之后 `$?` 是 `while` 的）。
+
+修复：压测器两个阶段都额外监听 `close` 并落进上面那两个新桶；两个兜底定时器**去掉 `.unref()`**、保留
+`clearTimeout`（注释里写明了为什么）；`measure.sh` 第 5 节改成**先把子进程完整输出落文件**、拿到真实 `rc=$?`、
+再过滤成可读视图。若 `rc≠0` **或**两条必需行（`目标连接数`、`连接上发请求`）缺失，报告会打出
+🔴「本目标未产出可用结果 ⇒ **判为失败，不是跳过**」+ 子进程退出码 + 缺哪一行 + **未过滤的最后 20 行** + 原始文件路径
+（成功的目标删原始文件，失败的保留），本节末尾给出"未产出结果的目标数"，并让整个脚本 **`exit 2`**
+—— 这样 CI、父进程或人都能从退出码看见。
+
+⚠️ 一个诚实的副作用：`--c10k abc`（非数字）现在会**等满 60 秒**并打出 `目标连接数: NaN`，而不是静默退出。
+更慢，但**说真话**。
+
+#### `--c10k N` 的 N 是「连接数」，不是「秒数」
+
+🔴 这个坑本轮真的踩过：旗标背后的变量原先叫 `C10K_HOLD`，于是被当成"保持多少秒"传了 `30`，
+结果只压了 **30 条连接**，而输出格式与压一万条时**一模一样**（"目标连接数: 30"），差点被当成 C10K 结果。
+现已改名 **`C10K_CONNS`** 并新增同义旗标 **`--c10k-conns`**；⚠️ **旧的 `--c10k` 仍然可用**（留档里的采集命令就是
+`--c10k 10000`）。压测器自己的 `--hold` **没有改名**（那是它的既有契约、有守卫依赖），只是调用点注明它收的是连接数。
+
+#### 客户端与服务端前提（少一条数字就没有意义）
+
+- **限流必须抬掉**：本轮用 `VANBLOG_RATE_LIMIT_PER_MIN=100000000`、`VANBLOG_STATIC_LIMIT_PER_MIN=1000000000`。
+  ⚠️ 不抬的话 API 路径测到的是"限流器多快返回 429"：默认 600 次/分/IP 下，持续加压那一节实测是
+  `ok=9336 http_429=10664` —— **429 是正确行为，不是失败**。静态路径不经限流，所以它的 10000/0 是默认配置成绩。
+- 压测机：fd 软限制 **1048576**、`ip_local_port_range=32768-60999`、`somaxconn=4096`、
+  `tcp_abort_on_overflow=0`、`tcp_tw_reuse=2`、node **v24.21.0**。两个目标是**串行**跑的，所以峰值 fd 约一万。
+- 容器内：`ulimit.nofile_soft/hard=1048576`、`somaxconn=4096`、`tcp_max_syn_backlog=2048`
+  （⚠️ 压测脚手架走 `podman run`，**不套** compose 模板的 `nofile: 65536`，所以这里比生产宽）。
+- backlog 生效值 = `min(VANBLOG_LISTEN_BACKLOG, somaxconn)` = `min(4096, 4096)`；编译产物里该变量命中 1 次（显式设置）。
+- ⚠️ 第 6 节（持续加压）本轮用 `--no-load` 跳过；第 7 节记的是默认配置下的行为，两者不要混读。
+
+#### 复现（§5.3 这一轮）
+
+```bash
+ENGINE=podman IMAGE_TAG=localhost/vanblog:r20-cluster HTTP_PORT=<端口> \
+  ARCHIVE=<你的 vanblog-full-*.tar.zst> \
+  EXTRA_ENV="VANBLOG_RATE_LIMIT_PER_MIN=100000000,VANBLOG_STATIC_LIMIT_PER_MIN=1000000000,VANBLOG_CLUSTER_WORKERS=auto,VANBLOG_LISTEN_BACKLOG=4096" \
+  <你的起栈方式>
+# 采集（--c10k 与 --c10k-conns 等价，N 是连接数）
+scripts/benchmark/measure.sh --base http://127.0.0.1:<端口> --engine podman --container <容器名> \
+  --latency-n 20 --sweep-c 50,200,500,1000 --sweep-n 3000 --static-n 800 --c10k 10000 --out <留档>.md
+echo "退出码=$?"     # 🔴 必须是 0；2 = 有目标未产出结果，那份报告不能用
+```
+
+达标判据（在 §5.2 那两条之上再加两条）：**两个目标都产出结果行**、**`未归类=0`**、
+`TcpExt.ListenOverflows Δ=0`，且**脚本退出码为 0**。⚠️ 只看"失败=0"不够 —— 本轮之前，
+"什么都没测"同样表现为没有失败。
 
 ## 6. 容器资源占用
 
