@@ -47,6 +47,12 @@ export const RESTORE_UPLOAD_OPTIONS = {
   // 全局/初始化限流（每 IP 10 分钟 5 次）、`checkHasInited()`、以及单飞互斥量。
   limits: {
     fileSize: 8 * 1024 * 1024 * 1024,
+    // ⚠️ **文本字段**的大小上限。以前没写，用的是 multer 默认的 1MB ——
+    //    而 `/api/admin/init/restore` 是**匿名可达**的（站点未初始化期间），
+    //    1MB × 8 个字段 = 8MB 的匿名内存面，且这个默认值是"继承来的"而不是"决定的"。
+    //    64KB 远高于任何合法值：setupKey 44 字符、backupPassphrase 几十字节、
+    //    `.sig`（`signature` 字段，见 init.controller.ts）是一份几百字节的 JSON。
+    fieldSize: 64 * 1024,
     files: 1,
     fields: 8,
     parts: 32,

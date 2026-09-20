@@ -53,6 +53,7 @@ import { collectCategoriesFromBackup, toExportCategory } from 'src/utils/backupC
 // 初始化页的 `POST /api/admin/init/restore`（匿名可达，仅未初始化时开放）要用**同一份**限额，
 // 两边各写一份迟早会漂（一边 8GB 一边 200MB，大站就会在初始化页莫名其妙地 413）。
 import { RESTORE_UPLOAD_OPTIONS } from 'src/utils/restoreUpload';
+import { emptySignature } from 'src/utils/backupVerify';
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
 import { availableFormats, pickSpec, takeRestoreSignatureWarning } from 'src/utils/fullBackup';
 import { checkTrue } from 'src/utils/checkTrue';
@@ -437,6 +438,15 @@ export class BackupController {
         checks: result.checks,
         integrity: result.integrity,
         issues: result.issues,
+        // 🔴 签名（真实性）校验的**权威五态**必须跟着响应回去：
+        //    ok（已签且验过）/ no-key（已签但本机没公钥）/ missing-sig（从没签过）/
+        //    malformed-sig（.sig 读不出或形状不对）/ key-mismatch 与 mismatch（验不过）。
+        //    以前这个字段被算出来了却**没进响应体**，于是脚本与后台只能自己去盘上看
+        //    有没有 .sig —— 而"盘上有 .sig"与"这份归档被证明没被换过"是两件事。
+        //    ⚠️ 纯追加：既有字段一个没动。
+        //    ⚠️ 兜底用 emptySignature() 而不是 null：`null` 会被消费方渲染成"没签名"，
+        //       而这里的真实含义是"这一轮没有验签结论"（早退路径也一样）。
+        signature: result.signature ?? emptySignature(),
       },
     };
   }

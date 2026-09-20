@@ -570,6 +570,25 @@ export async function downloadFullBackup(name) {
   });
 }
 
+/**
+ * 下载归档旁边的 `.sig`（ed25519 离线签名）。
+ *
+ * ⚠️ 用**文本**而不是 blob：`.sig` 是一份几百字节的 JSON，拿文本才能在出错时读出服务端的解释。
+ * 🔴 **404 在这里不是"下载失败"**：服务端对缺失的 `.sig` 刻意返回 404 而**不是空文件**
+ *    （空文件会被验签器判成 malformed，站长看到的会是"签名坏了"，而真相是"这份归档从没被签过"）。
+ *    所以调用方必须把 404 翻译成"从没签过"，见 Backup.jsx 的 handleDownloadSignature。
+ * ⚠️ 归档本身只能走带 token 的接口下载（不在静态目录下），`.sig` 同理 ——
+ *    拿不到 `.sig` 的异地副本**无法被证明没被换过**，签名功能就等于没上线。
+ */
+export async function downloadFullBackupSignature(name) {
+  return request(`/api/admin/backup/full/download-sig?name=${encodeURIComponent(name)}`, {
+    method: 'GET',
+    skipErrorHandler: true,
+    responseType: 'text',
+    timeout: 60 * 1000,
+  });
+}
+
 export async function importAll() {
   return request(`/api/admin/backup/import`, {
     method: 'POST',

@@ -577,7 +577,15 @@ describe('加密归档的口令贯穿（body → 前置闸门 → 恢复）', ()
     expect(res.statusCode).toBe(200);
     // 前置闸门必须拿到口令：否则"数成员总字节"要在解密后才能做，没口令就会失败在
     // 一个说不清原因的地方（而不是那句"这份归档是加密的 + 两条可照做的办法"）
-    expect(mockedAssert).toHaveBeenCalledWith(file.path, { passphrase });
+    // ⚠️ 2026-09-20 起第二个参数多了一个 `backupDir`：匿名恢复路径以前**没传**它，
+    //    于是"用 POST /api/admin/backup/signing/key 生成过密钥、但没配 env"的部署
+    //    在灾难恢复路径上永远只能得到 no-key（放行 + WARN）⇒ 验签静默失效。
+    //    这里按"升级而非放宽"处理：仍然精确匹配（多一个键/少一个键/passphrase 变了都会红），
+    //    并额外钉住 backupDir 来自 provider（不是硬编码的假路径）。
+    expect(mockedAssert).toHaveBeenCalledWith(file.path, {
+      passphrase,
+      backupDir: fullBackupProvider.backupDir(),
+    });
     expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true, passphrase);
     // ⚠️ 口令绝不许出现在响应体里（它会进后台的日志与浏览器历史）
     expect(JSON.stringify(res)).not.toContain(passphrase);
@@ -589,7 +597,10 @@ describe('加密归档的口令贯穿（body → 前置闸门 → 恢复）', ()
     const file = makeRestoreFile('vanblog-full-20260920-010101.tar.gz.enc');
     const res: any = await controller.restoreFromInitPage(file, undefined, fakeReq());
     expect(res.statusCode).toBe(200);
-    expect(mockedAssert).toHaveBeenCalledWith(file.path, { passphrase: null });
+    expect(mockedAssert).toHaveBeenCalledWith(file.path, {
+      passphrase: null,
+      backupDir: fullBackupProvider.backupDir(),
+    });
     expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true, null);
   });
 

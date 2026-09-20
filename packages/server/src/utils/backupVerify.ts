@@ -176,7 +176,15 @@ const ALL_CHECKS: BackupVerifyChecks = {
   countsNonZero: false,
 };
 
-function emptySignature(): BackupSignatureVerify {
+/**
+ * "根本没验签"的显式形状。
+ *
+ * ⚠️ 导出它是因为恢复/校验接口的响应体需要它：本仓库为 `lastSuccessSigned` 确立过
+ * **null ≠ false** 的规矩（null = 早于本功能、不知道；false = 明确没签），
+ * 所以"没验"必须是一个**有形状**的对象（`checked:false` / `state:'no-key'` / `ok:null`），
+ * 而不是 null、更不是 `sigPresent:false` —— 后者会被读成"这份归档没签过名"。
+ */
+export function emptySignature(): BackupSignatureVerify {
   return {
     checked: false,
     // ⚠️ 默认 'no-key' 而不是 'ok'：早退路径（归档都读不到）上不会跑验签，

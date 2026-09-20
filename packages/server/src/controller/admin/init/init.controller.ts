@@ -28,7 +28,9 @@ import {
   FULL_BACKUP_ARCHIVE_RE,
   assertRestorableArchive,
   inspectFullBackup,
+  takeRestoreSignatureWarning,
 } from 'src/utils/fullBackup';
+import { BACKUP_SIG_MAGIC, signatureSidecarPath } from 'src/utils/backupSigning';
 import { config } from 'src/config';
 import { clearSetupKey } from 'src/provider/init/setupKey';
 import { invalidateJwtSecretCache } from 'src/utils/initJwt';
@@ -380,6 +382,19 @@ export class InitController {
     //    （`restoreFromInitPage(file, setupKey, req)`），插在中间会让既有调用把 `req`
     //    喂进口令位、把 `undefined` 喂进 req 位 —— 不报错，只是行为悄悄变了。
     @Body('backupPassphrase') backupPassphrase?: string,
+    // 归档旁边的 `.sig`（ed25519 离线签名）的**内容**，作为 multipart 的**文本字段**收。
+    // ⚠️ 为什么是文本字段而不是第二个文件字段：RESTORE_UPLOAD_OPTIONS 的 `limits.files` 是 **1**，
+    //    加第二个文件字段会直接被 multer 拒；而且 `fileSize` 是 8GB 且对**每个**文件生效 ——
+    //    在一条**匿名可达**的接口上多开一个 8GB 能力的上传口，正是本轮要防的放大面。
+    //    `.sig` 本来就是一份几百字节的 JSON，当文本收 + 显式 fieldSize（64KB，见 restoreUpload.ts）
+    //    + 下面的 8KB 上限，比开文件槽安全得多。curl 侧用 `-F "signature=<文件"` 就能把值从文件读出来
+    //    （不进 argv，与口令同一条纪律）。
+    // ⚠️ **可选**：不带就跟以前完全一样（闸门报 missing-sig，只记 note、不拦恢复）。
+    // ⚠️ 同样**刻意放在参数表最后**（见上面 backupPassphrase 的理由）。
+    // 🔴 这条匿名路径**没有**、也**不该有**任何"跳过验签"的开关：`skipSignatureCheck` 只存在于
+    //    管理员接口上。一个未初始化站点就能调用的接口如果自带"绕过安全校验"的入口，
+    //    那它保护的就只是"忘了带参数的人"。
+    @Body('signature') signature?: string,
   ) {
     const uploadedPath = file?.path;
     const archivePassphrase =
@@ -388,6 +403,11 @@ export class InitController {
     // 无条件 `initRestoreRunning = false` 的话，第二个被 409 挡掉的请求会把
     // 正在跑的那一次的锁顺手放掉，于是第三个请求又能进来 —— 两次恢复就真的叠在一起了
     // （这条正是被 src/audit-hardening-round3-initrestore.spec.ts 的并发用例抓出来的）。
+    // 上传的 `.sig` 落地位置（写在 try 外面，finally 才删得到）。
+    // ⚠️ 必须是 `signatureSidecarPath(uploadedPath)` = `<归档路径>.sig`：
+    //    闸门（`assertArchiveSignatureForRestore`）就是按这个约定找 sidecar 的，
+    //    放对位置 ⇒ 既有的验签闸门**一行都不用改**就能生效。
+    let sigSidecarPath: string | null = null;
     // 进程内闸门同步拿；跨进程 DB 锁在下面紧接着拿（见文件头）
     const localOwner = claimLocalInitRestoreLock();
     const claimedLock = localOwner !== null;
@@ -436,6 +456,37 @@ export class InitController {
           }`,
         );
       }
+      // 收到 `.sig` 就把它落到归档旁边，让**既有的**验签闸门能找到它。
+      // ⚠️ 顺序：在所有"该不该处理这个请求"的闸门（demo / 409 / 已初始化 403 / setupKey /
+      //    文件名形状）之后才写盘 —— 被拒的请求不该在磁盘上留任何东西。
+      if (typeof signature === 'string' && signature.trim() !== '') {
+        if (signature.length > RESTORE_SIG_MAX_BYTES) {
+          throw new BadRequestException(
+            `signature 字段太大了（${signature.length} 字节，上限 ${RESTORE_SIG_MAX_BYTES}）：` +
+              `.sig` +
+              ` 是一份几百字节的 JSON，请确认你上传的是归档旁边那个 ` +
+              `\`.sig\` 文件本身，而不是归档或别的文件`,
+          );
+        }
+        let parsedSig: any = null;
+        try {
+          parsedSig = JSON.parse(signature);
+        } catch {
+          parsedSig = null;
+        }
+        if (!parsedSig || typeof parsedSig !== 'object' || parsedSig.magic !== BACKUP_SIG_MAGIC) {
+          throw new BadRequestException(
+            `signature 字段不是本功能生成的 \`.sig\`（应是一份含 magic=${BACKUP_SIG_MAGIC} 的 JSON）：` +
+              `请上传归档**旁边**那个同名 \`.sig\` 文件的内容（curl 用 -F "signature=<路径"）。` +
+              `⚠️ 如果你手上没有 \`.sig\`，就**不要**带这个字段 —— 不带它恢复照常进行，只是无法证明归档没被换过`,
+          );
+        }
+        // ⚠️ 原样落盘（不重新序列化）：验的就是站长交上来的那份字节。
+        sigSidecarPath = signatureSidecarPath(uploadedPath);
+        fs.writeFileSync(sigSidecarPath, signature, { mode: 0o600 });
+        this.logger.log(`初始化页恢复：收到随归档上传的 .sig，已放到 ${sigSidecarPath}`);
+      }
+
       const manifest = await inspectFullBackup(
         uploadedPath,
         this.fullBackupProvider.backupDir(),
@@ -449,7 +500,15 @@ export class InitController {
       // ⚠️ 体积/剩余空间闸门要在**解密之后**才能数成员，所以口令必须传进去；
       //    拿不到口令时这里就会给出「这份归档是加密的 + 两条可照做的办法」，
       //    而不是等到解包一半才失败（那时磁盘上已经有一份半截的明文了）。
-      const members = await assertRestorableArchive(uploadedPath, { passphrase: archivePassphrase });
+      // 🔴 `backupDir` 必须传：验签公钥的解析顺序是
+      //    `VANBLOG_BACKUP_VERIFY_KEY(_FILE)` → `<backupDir>` 下 signing 目录里的 .pub.pem → 签名私钥导出的公钥。
+      //    以前这条匿名路径**没传** backupDir，于是"用 POST /api/admin/backup/signing/key 生成过密钥、
+      //    但没配 env"的部署在灾难恢复路径上永远只能得到 `no-key`（放行 + WARN）——
+      //    也就是**签名功能在它最该起作用的那条路径上静默失效**。
+      const members = await assertRestorableArchive(uploadedPath, {
+        passphrase: archivePassphrase,
+        backupDir: this.fullBackupProvider.backupDir(),
+      });
       this.logger.log(
         `初始化页恢复整站备份：${originalName}（清单 ${manifest.createdAt}，成员 ${members} 个）`,
       );
@@ -516,6 +575,9 @@ export class InitController {
         return {
           statusCode: 200,
           data: {
+            // 验签的降级结论要**回到响应体**而不只进日志：灾难现场站长未必看得见容器日志。
+            // 为 null 表示"这次没有需要提醒的降级"（例如已签且验过、或根本没带 .sig 也没配公钥）。
+            signatureWarning: takeRestoreSignatureWarning(),
             restoredAt: new Date().toISOString(),
             seconds: Number((result.ms / 1000).toFixed(1)),
             databases: result.databases,
@@ -559,9 +621,32 @@ export class InitController {
           );
         }
       }
+      // ⚠️ `.sig` 也要删：它和归档同生共死，留着就是 upload-tmp 里的孤儿
+      //    （更糟的是下一次恢复如果**不带** .sig，闸门会读到上一次的旧签名并给出错误结论）。
+      if (sigSidecarPath) {
+        try {
+          fs.rmSync(sigSidecarPath, { force: true });
+        } catch (err) {
+          this.logger.warn(
+            `删除上传的 .sig 临时文件失败（${sigSidecarPath}）：${(err as Error)?.message || err}`,
+          );
+        }
+      }
     }
   }
 }
+
+/**
+ * 随归档上传的 `.sig` 的大小上限（8KB）。
+ *
+ * 依据是**实测**而不是拍的：`.sig` 是一份固定字段的 JSON
+ * （magic / v / alg / digest / archiveSha256(64 hex) / archiveBytes / keyFingerprint(16 hex) /
+ *   signedAt / signature(base64, 64 字节 ⇒ 88 字符) / archiveName），
+ * 生成出来在 **600 字节量级**；8KB 给了十倍以上余量，同时把"有人把整个归档当 .sig 传上来"
+ * 挡在写盘之前。⚠️ 这是**第二道**闸：第一道是 multer 的 `fieldSize: 64KB`
+ * （见 `utils/restoreUpload.ts`），它管的是"字节进不进得来"，这里管的是"值合不合理"。
+ */
+const RESTORE_SIG_MAX_BYTES = 8 * 1024;
 
 /** 从归档清单里取出各集合的条数（清单里的集合名就是库里的小写集合名） */
 function countCollections(manifest: {

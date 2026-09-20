@@ -1,6 +1,7 @@
 import {
   deleteFullBackup,
   downloadFullBackup,
+  downloadFullBackupSignature,
   exportAll,
   exportFullBackup,
   getFullBackupFormats,
@@ -149,6 +150,42 @@ export default function (props) {
       message.error('下载失败！');
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * 下载归档旁边的 `.sig`。
+   *
+   * 🔴 404 必须解释成"**这份归档从没被签过**"，而不是通用的"下载失败"：两者的处置完全相反
+   *    —— 前者是"这份副本证明不了真实性，以后备份时配签名密钥"，
+   *    后者是"网络/权限出问题了，重试"。把 404 说成失败会让站长在灾难现场重试到天亮。
+   */
+  const handleDownloadSignature = async (name) => {
+    try {
+      const text = await downloadFullBackupSignature(name);
+      const body = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+      const blob = new Blob([body], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      // ⚠️ 名字必须是 `<归档名>.sig`：验签器按"归档路径 + .sig"找 sidecar，
+      //    下载下来改了名就验不了（服务端签名的载荷里**不含**文件名，所以内容本身不受影响）。
+      link.download = `${name}.sig`;
+      link.click();
+      URL.revokeObjectURL(url);
+      message.success(
+        '已下载 .sig：请把它和归档放进**同一个**异地副本；公钥的权威副本要**离线**保存（密码管理器/打印/另一台机器）',
+      );
+    } catch (err) {
+      const status = err?.response?.status ?? err?.data?.statusCode ?? err?.statusCode;
+      if (status === 404) {
+        message.warning(
+          `这份归档从没被签过（旁边没有 .sig）：不是下载失败。要证明副本没被换过，请在「签名密钥」里生成密钥后再备份`,
+          6,
+        );
+        return;
+      }
+      message.error(err?.message || '下载 .sig 失败！');
     }
   };
 
@@ -309,10 +346,13 @@ export default function (props) {
     },
     {
       title: '操作',
-      width: 250,
+      width: 300,
       render: (_, record) => (
         <Space size="small">
           <a onClick={() => handleDownload(record.name)}>下载</a>
+          <a onClick={() => handleDownloadSignature(record.name)} title="下载 .sig（离线签名）">
+            签名
+          </a>
           <a onClick={() => handleInspect(record.name)}>清单</a>
           <a onClick={() => handleRestore(record.name)} style={{ color: '#fa8c16' }}>
             恢复
