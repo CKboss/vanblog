@@ -7,6 +7,7 @@ import { Article, ArticleDocument } from 'src/scheme/article.schema';
 import { Viewer, ViewerDocument } from 'src/scheme/viewer.schema';
 import { Visit, VisitDocument } from 'src/scheme/visit.schema';
 import { safeDecodeURIComponent } from 'src/utils/safeDecode';
+import { assertSafeWriteFilter } from 'src/utils/queryFilter';
 import { tryParseNumericId } from 'src/utils/numericId';
 import {
   DayBatch,
@@ -117,6 +118,19 @@ export class ViewStatsProvider implements OnModuleInit, OnModuleDestroy, OnAppli
   });
   /** 上一轮 flush 之后库里的 metas 累计值；null 表示库里根本没有 metas 文档（站点没初始化） */
   private base: PathDelta | null = null;
+  /**
+   * metas 里那份文档的 `_id`，写侧（`doFlush` 的 `$inc`）用它精确定位。
+   * 🔴 为什么需要它：`doFlush` 以前写的是 `findOneAndUpdate({}, { $inc: … })`，
+   *    空 filter 在写操作上有两种坏形状且都不报错 —— 集合为空 ⇒ 匹配 0 条（这一轮攒的站点计数**静默丢掉**）；
+   *    集合不止一条 ⇒ 命中自然顺序里的**任意一条** ⇒ 把访问量累加到**错误的文档**上
+   *    （而读侧 `refreshBase()` 读的是 `findOne()` 的那一条，于是读写可能落在两份不同的文档上）。
+   * ⚠️ `metaIdResolved` 用来区分"**查过了、确实没有**"与"**还没查**"：
+   *    只判 `metaId == null` 会把后者误当成前者，于是在健康站点上跳过 `$inc`、白丢计数。
+   */
+  private metaId: unknown = null;
+  private metaIdResolved = false;
+  /** metas 为空时的 WARN 去重（每进程一次）。⚠️ 用 `??=`/布尔兜住 `Object.create(prototype)` 那种不跑初始化器的替身。 */
+  private missingMetaWarned = false;
   /** base 到底读过没有（与"读过了但是 null"区分开，否则每次投影都要再查一次库） */
   private baseLoaded = false;
   private timer: NodeJS.Timeout | null = null;
@@ -213,16 +227,51 @@ export class ViewStatsProvider implements OnModuleInit, OnModuleDestroy, OnAppli
   invalidateBase() {
     this.base = null;
     this.baseLoaded = false;
+    // 🔴 `_id` 缓存也必须一起作废：整站恢复会把 metas **整份替换**
+    //    （`fullBackup.ts` 用"临时集合 + `rename(dropTarget:true)`"），恢复后那份文档的 `_id`
+    //    **可能变了**。只作废 base 而不作废 metaId，`$inc` 就会继续写一份已经不存在的文档
+    //    （matchedCount 0 ⇒ 又是静默丢计数）。
+    this.metaId = null;
+    this.metaIdResolved = false;
+  }
+
+  /**
+   * 解析 metas 里那份文档的 `_id`（**每进程只查一次**，之后走缓存；`invalidateBase()` 会重置）。
+   * ⚠️ 这是统计的热路径（每轮 flush 一次，不是每次浏览一次），所以缓存是必要的；
+   *    而缓存 miss 时只查 `_id` 一个字段，是一次很轻的读。
+   * ⚠️ 查失败时**不缓存**结果（`metaIdResolved` 保持 false），下一轮 flush 会重试 ——
+   *    否则一次 Mongo 抖动就会让这个进程**永久**停止写站点计数。
+   */
+  private async resolveMetaId(): Promise<unknown | null> {
+    if (this.metaIdResolved) return this.metaId;
+    try {
+      const doc = await this.metaModel
+        .findOne({}, { _id: 1 })
+        .lean<{ _id?: unknown } | null>()
+        .exec();
+      this.metaId = doc?._id ?? null;
+      this.metaIdResolved = true;
+    } catch (err) {
+      this.logger.warn(`解析 metas 文档 _id 失败，这一轮不写站点累计计数：${(err as Error)?.message || err}`);
+      return null;
+    }
+    return this.metaId;
   }
 
   private async refreshBase(): Promise<void> {
     try {
       // 只取两个数字：改动前 `getViewer()` 走的是 `findOne()` 全文档
       const doc = await this.metaModel
-        .findOne({}, { viewer: 1, visited: 1 })
-        .lean<{ viewer?: number; visited?: number } | null>()
+        .findOne({}, { viewer: 1, visited: 1, _id: 1 })
+        .lean<{ viewer?: number; visited?: number; _id?: unknown } | null>()
         .exec();
       this.base = doc ? { viewer: doc.viewer || 0, visited: doc.visited || 0 } : null;
+      // 顺手把 `_id` 也缓存下来：这次读已经把它取回来了，写侧就不必再查一次。
+      // ⚠️ 只在**真的读到文档**时才标记 resolved；读失败走下面的 catch，不污染缓存。
+      if (doc) {
+        this.metaId = doc._id ?? null;
+        this.metaIdResolved = true;
+      }
     } catch (err) {
       // 读不到就先按 0 算，别让统计接口 500；下一轮 flush 会重新对齐
       this.base = { viewer: 0, visited: 0 };
@@ -255,23 +304,52 @@ export class ViewStatsProvider implements OnModuleInit, OnModuleDestroy, OnAppli
     let totals: PathDelta | null = this.base ? { ...this.base } : null;
     const metaInc = buildInc(batch.site);
     if (Object.keys(metaInc).length) {
-      try {
-        const updated = await this.metaModel
-          .findOneAndUpdate({}, { $inc: metaInc }, { new: true, projection: { viewer: 1, visited: 1 } })
-          .exec();
-        ops += 1;
-        if (updated) {
-          totals = { viewer: updated.viewer || 0, visited: updated.visited || 0 };
-          // $inc 的返回值就是权威值：顺手把 base 对齐，投影就不必再读一次库
-          this.base = totals;
-          this.baseLoaded = true;
-        } else {
-          totals = null;
+      // 🔴 不再用 `findOneAndUpdate({}, …)`：空 filter 会命中集合里的**任意一条**
+      //    （集合为空则匹配 0 条），把站点累计访问量写错文档、或静默丢掉。
+      const metaId = await this.resolveMetaId();
+      if (metaId === null || metaId === undefined) {
+        // metas 里没有文档可写。**不 upsert**：那会造出一份只有 `viewer`/`visited` 两个计数字段、
+        // 没有 `siteInfo` 的残缺 meta 文档，于是所有 `meta.siteInfo.xxx` 的读侧
+        // 会从"文档不存在"变成"文档存在但字段缺失"—— 把可诊断的空换成不可诊断的半真半假
+        // （`meta.provider.ts` 的 `update()` 里对同一个取舍有更完整的说明）。
+        // ⚠️ 也**不抛错**：`getViewer()` 的注释已经写明"库里没有 metas 文档（站点还没初始化）时按 0 回"，
+        //    未初始化是**合法状态**，统计路径更不该因为它而 500 或刷 ERROR。
+        // ⇒ 与改动前 `updated` 为 null 时的对外表现一致（`totals = null`），只是不再白跑一次写、
+        //    也不再有可能写错文档；并记一条去重 WARN 把"没写"这件事说出来。
+        if (!this.missingMetaWarned) {
+          this.missingMetaWarned = true;
+          this.logger.warn(
+            'metas 集合里没有 meta 文档，这一轮站点累计访问量**没有写入**。' +
+              '如果站点还没初始化，这是正常的；如果已经初始化，请跑 ./vanblog.sh doctor 看体检。',
+          );
         }
-      } catch (err) {
-        ops += 1;
-        this.stageFailed('metas', err);
-        this.aggregator.merge({ ...batch, events: 0, articles: new Map(), days: [] });
+        totals = null;
+      } else {
+        try {
+          const filter = { _id: metaId };
+          // 过一遍共用断言，把"filter 非空且值可用"这个不变量钉住（与本仓库其它写侧同口径）
+          assertSafeWriteFilter(filter, 'ViewStatsProvider.doFlush');
+          const updated = await this.metaModel
+            .findOneAndUpdate(filter, { $inc: metaInc }, { new: true, projection: { viewer: 1, visited: 1 } })
+            .exec();
+          ops += 1;
+          if (updated) {
+            totals = { viewer: updated.viewer || 0, visited: updated.visited || 0 };
+            // $inc 的返回值就是权威值：顺手把 base 对齐，投影就不必再读一次库
+            this.base = totals;
+            this.baseLoaded = true;
+          } else {
+            // 文档在 resolve 与写之间被删掉了（例如正好在做整站恢复）：作废 `_id` 缓存，
+            // 下一轮 flush 重新解析，否则会一直对着一个已经不存在的 `_id` 写。
+            this.metaId = null;
+            this.metaIdResolved = false;
+            totals = null;
+          }
+        } catch (err) {
+          ops += 1;
+          this.stageFailed('metas', err);
+          this.aggregator.merge({ ...batch, events: 0, articles: new Map(), days: [] });
+        }
       }
     }
 

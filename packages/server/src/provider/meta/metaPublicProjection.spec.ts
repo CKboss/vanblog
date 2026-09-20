@@ -71,7 +71,9 @@ function makeProvider(siteInfo: Record<string, unknown>) {
   const debug = jest.fn();
   provider.logger = { log: jest.fn(), warn, error: jest.fn(), debug, verbose: jest.fn() };
   // `getPublicSiteInfo()` 取**原始** siteInfo（与控制器同源），`updateSiteInfo()` 取 `getSiteInfo()`
-  provider.getAll = jest.fn(async () => ({ siteInfo }));
+  // ⚠️ 替身必须带 `_id`：真实 Mongoose 文档一定有，而 `updateSiteInfo` 现在经
+  //    `requireMetaDocument()` 取文档、再按 `_id` 精确写（不再用空 filter `{}`）。
+  provider.getAll = jest.fn(async () => ({ _id: 'meta-doc-0', siteInfo }));
   provider.getSiteInfo = jest.fn(async () => siteInfo);
   provider.metaModel = { updateOne: jest.fn(async () => ({ acknowledged: true })) };
   return { provider, warn, debug };

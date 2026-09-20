@@ -80,7 +80,16 @@ describe('B3 · 流水线 id 不再是裸 parseInt（NaN 与"没有这条"必须
 
 describe('B10 · updateTotalWords 的定时回调必须自己兜错', () => {
   function makeMetaProvider(countTotalWords: jest.Mock) {
-    const metaModel = { updateOne: jest.fn(async () => ({ modifiedCount: 1 })) };
+    // ⚠️ 替身必须带 `findOne`：真实的 Mongoose model 一定有，而 `MetaProvider.update()` 现在
+    //    会先 `getAll()`（= `findOne().exec()`）取出那份文档、再按它的 `_id` 精确写
+    //    （不再用空 filter `{}`，那会命中任意一条或在空集合上静默匹配 0 条）。
+    //    只给 `updateOne` 的替身会让 `update()` 抛 TypeError、被 `updateTotalWords` 的 catch 吃掉，
+    //    于是"成功路径打 logger.log"变成"打 logger.error" —— 这是本仓库第 6 次踩到
+    //    "替身只实现了旧实现碰过的那几个方法"这一族。**修替身，不要放宽产品。**
+    const metaModel = {
+      updateOne: jest.fn(async () => ({ modifiedCount: 1 })),
+      findOne: jest.fn(() => ({ exec: async () => ({ _id: 'meta-doc-0' }) })),
+    };
     const provider = new MetaProvider(
       metaModel as any,
       undefined as any,

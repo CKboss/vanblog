@@ -98,15 +98,58 @@ describe('meta 写路径：源码级接线（每条都带负向对照，防止�
     fs.readFileSync(path.join(__dirname, 'meta.provider.ts'), 'utf-8'),
   );
 
-  it('六个写方法都走 requireMetaDocument（不是裸 getAll）', () => {
-    expect(src.match(/requireMetaDocument\('MetaProvider\./g) || []).toHaveLength(6);
-    for (const fn of ['addOrUpdateReward', 'deleteReward', 'deleteSocial', 'addOrUpdateSocial', 'addOrUpdateLink', 'deleteLink']) {
+  // 6 → 8（2026-09-21 第二批）：`updateAbout` 与 `updateSiteInfo` 也接上了 requireMetaDocument。
+  const REQUIRE_META_SITES = [
+    'addOrUpdateReward',
+    'deleteReward',
+    'deleteSocial',
+    'addOrUpdateSocial',
+    'addOrUpdateLink',
+    'deleteLink',
+    'updateAbout',
+    'updateSiteInfo',
+  ];
+
+  it('八个后台写方法都走 requireMetaDocument（不是裸 getAll）', () => {
+    expect(src.match(/requireMetaDocument\('MetaProvider\./g) || []).toHaveLength(
+      REQUIRE_META_SITES.length,
+    );
+    for (const fn of REQUIRE_META_SITES) {
       expect(src).toContain(`requireMetaDocument('MetaProvider.${fn}')`);
     }
   });
 
-  it('六个写操作都走 metaWriteFilter（带 _id），且 metaWriteFilter 内部调用 assertSafeWriteFilter', () => {
-    expect(src.match(/this\.metaWriteFilter\(meta, 'MetaProvider\./g) || []).toHaveLength(6);
+  it('🔴 `update()` **刻意不在**上面那 8 个里：它的降级是 WARN + 不写，而不是 404', () => {
+    // 这条钉住的是一个**有意的不对称**，不是漏改。`update()` 被启动期的
+    // `updateTotalWords('首次启动')` 与"每次增删改文章"调用，而**未初始化站点的 metas 本来就是空的**
+    // （`init.provider` 的 `metaModel.create(…)` 才建这份文档）⇒ 抛 404/500 会让每个未初始化站点
+    // 每次启动都产生一条 ERROR，而 `./vanblog.sh doctor` 统计的正是近 24h 的 ERROR/FATAL，
+    // 那会把体检信号淹掉（级别判据：诚实站长自己会撞上的 ⇒ WARN）。
+    expect(src).not.toContain("requireMetaDocument('MetaProvider.update')");
+    // 它走的是"取不到就记一条去重 WARN 并返回 null（不写、不 upsert）"这条路
+    expect(src).toContain("this.warnMissingMetaOnce('MetaProvider.update')");
+    expect(src).toContain('private warnMissingMetaOnce(');
+    // ⚠️ 但它**照样**按 _id 精确写（不许退回空 filter），所以它出现在下面 metaWriteFilter 的清单里
+    expect(src).toContain("this.metaWriteFilter(existing, 'MetaProvider.update')");
+    // 尺子没空转：`src` 本身就是 `stripCommentsForAnchor(…)` 的结果，所以上面这几条
+    // `expect(src).toContain(…)` 命中的**一定是真实代码**，不是注释里的字样。
+    // ⚠️ 这一族在本仓库踩过 10 次以上（断言匹配到解释性注释，于是"修复被撤掉"也照样绿）。
+    expect(src).toContain("this.warnMissingMetaOnce('MetaProvider.update')");
+    expect(src).toContain('private warnMissingMetaOnce(');
+  });
+
+  it('九个写操作都走 metaWriteFilter（带 _id），且 metaWriteFilter 内部调用 assertSafeWriteFilter', () => {
+    // ⚠️ 正则改成数**全部** `this.metaWriteFilter(`：第一批那 6 处传的都是 `meta`，
+    //    而这一批 `update()` 传 `existing`、`updateSiteInfo()` 传 `metaDoc`（后者不能复用
+    //    读侧的 `oldSiteInfo`，那是加工过的普通对象、没有 `_id`）⇒ 只匹配 `(meta, ` 会少数两处。
+    expect(src.match(/this\.metaWriteFilter\(/g) || []).toHaveLength(REQUIRE_META_SITES.length + 1);
+    for (const fn of [...REQUIRE_META_SITES, 'update']) {
+      expect(src).toContain(`'MetaProvider.${fn}'`);
+    }
+    // 每个站点都必须**真的**把 metaWriteFilter 的结果当 filter 用（而不是只提了这个方法名）
+    expect(src.match(/this\.metaWriteFilter\((?:meta|metaDoc|existing), 'MetaProvider\./g) || []).toHaveLength(
+      REQUIRE_META_SITES.length + 1,
+    );
     const i = src.indexOf('private metaWriteFilter(');
     expect(i).toBeGreaterThan(-1);
     const body = src.slice(i, i + 400);
@@ -114,14 +157,18 @@ describe('meta 写路径：源码级接线（每条都带负向对照，防止�
     expect(body).toContain('_id: meta._id');
   });
 
-  it('⚠️ 负向对照：剥注释后这 6 个函数体里已经没有 updateOne({})', () => {
-    // 本文件另有 3 处 updateOne({}, …)（update / updateAbout / updateSiteInfo），本轮**刻意没改**，
-    // 所以断言的是"总数是 3"而不是"0"—— 钉住"我没有顺手改到恢复路径"这个决定。
-    // ⚠️ 正则必须允许空白：`updateAbout` 用的是**多行**写法 `updateOne(\n  {},\n …)`，
-    //    写成 /updateOne\(\{\}/ 只会数到 2 处，把第三处漏掉 —— 我第一版就是这么错的，
+  it('⚠️ 负向对照：剥注释后本文件里**一处 updateOne({}) 都没有了**', () => {
+    // 3 → 0（2026-09-21 第二批）：上一轮这条断言刻意写成 `toBe(3)`，钉的是
+    // "我没有顺手改到 `update` / `updateAbout` / `updateSiteInfo` 这三处"这个决定；
+    // 这三处现在已经全部改掉（`update` 走 getAll + `_id`，另两个走 requireMetaDocument + `_id`），
+    // 所以断言收紧到 **0**。⚠️ 这是**升级**而不是放宽：数字变小是因为缺陷变少，
+    // 而且同一件事现在由 `queryFilterDrift.spec.ts` 的 C1/C2 层在**全仓**范围钉住。
+    // ⚠️ 正则必须允许空白：`updateAbout` 改之前用的是**多行**写法 `updateOne(\n  {},\n …)`，
+    //    写成 /updateOne\(\{\}/ 只会数到 2 处，把第三处漏掉 —— 第一版就是这么错的，
     //    而且错的方向是"少算"，如果不配这条计数断言就永远发现不了。
     const bare = (src.match(/updateOne\(\s*\{\}/g) || []).length;
-    expect(bare).toBe(3);
+    expect(bare).toBe(0);
+    // 三个方法都还在（改的是 filter，不是把方法删了）
     for (const fn of ['async update(', 'async updateAbout(', 'async updateSiteInfo(']) {
       expect(src).toContain(fn);
     }

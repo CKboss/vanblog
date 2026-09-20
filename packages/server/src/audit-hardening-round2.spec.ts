@@ -26,9 +26,16 @@ describe('每次浏览的数据库开销：合并写入', () => {
     expect(src).not.toContain('updateViewerByPathname');
   });
 
-  it('getViewer 只取两个数字（不再 findOne 整份 meta 文档）', () => {
+  it('getViewer 只取需要的字段（不再 findOne 整份 meta 文档）', () => {
     const src = code(read('provider/stats/viewStats.provider.ts'));
-    expect(src).toMatch(/findOne\(\{\},\s*\{\s*viewer:\s*1,\s*visited:\s*1\s*\}\)/);
+    // ⚠️ 2026-09-21 升级（不是放宽）：投影里多了 `_id: 1`。写侧不再用空 filter
+    //    `findOneAndUpdate({}, …)`（那会命中集合里的任意一条、或在空集合上匹配 0 条而静默丢掉
+    //    这一轮攒的站点计数），改成按 `_id` 精确写；而 `refreshBase()` 这次读**已经**把文档取回来了，
+    //    所以顺手把 `_id` 一起投影出来缓存，写侧就不必再查一次库。
+    //    这条断言钉的性质没变：**只投影需要的字段，而不是 findOne 整份文档**。
+    expect(src).toMatch(/findOne\(\{\},\s*\{\s*viewer:\s*1,\s*visited:\s*1,\s*_id:\s*1\s*\}\)/);
+    // 负向对照：不许退回"不投影、取整份文档"
+    expect(src).not.toMatch(/findOne\(\{\}\)\s*\.lean/);
   });
 
   it('ViewStatsProvider 在 app.module 注册了', () => {

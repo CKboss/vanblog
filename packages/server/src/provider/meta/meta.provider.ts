@@ -310,6 +310,9 @@ export class MetaProvider {
    * 这是**数据状态**（那份文档不存在），不是服务端代码缺陷；500 会让站长以为"程序坏了"
    * 而不是"数据不完整"，从而去查错方向。
    */
+  /** `metas` 为空时的 WARN 去重（每 context 每进程一次）。⚠️ 用 `??=` 兜住替身不跑初始化器的情况。 */
+  private missingMetaWarnedFor?: Set<string>;
+
   private async requireMetaDocument(context: string) {
     const meta = await this.getAll();
     if (!meta || !meta._id) {
@@ -333,9 +336,16 @@ export class MetaProvider {
    * 这正是 `utils/queryFilter.ts` 的 `assertSafeWriteFilter` 要拦的形状（它的文案就写着
    * "空的查询条件会命中集合里的**任意一条**"）。既然这里已经拿到了非空的 `meta`，
    * 就用它的 `_id` 精确定位，并过一遍那道断言把不变量钉住。
-   * ⚠️ 本文件另外还有 3 处 `updateOne({}, …)`（`update` / `updateAbout` / 更新 siteInfo 那个）
-   * 没有 `meta` 在手边，本轮**没有改**（它们不属于 strictNullChecks 的四类错误，
-   * 而 `update` 是整站恢复的必经路径，改它需要活体恢复验证）—— 已上报给父代理。
+   * ✅ 本文件原先另外 3 处 `updateOne({}, …)`（`update` / `updateAbout` / `updateSiteInfo`）
+   * 已在 2026-09-21 一并改掉，所以这个文件里**不再有空字面量 filter**（由 `queryFilterDrift.spec.ts`
+   * 的 C1/C2 层钉住）。⚠️ 其中 `update()` 的降级口径与这 6 个方法**不同**（不抛 404，而是 WARN + 不写），
+   * 理由写在它自己的注释里：它被启动期的 `updateTotalWords('首次启动')` 调用，而未初始化站点的
+   * `metas` 本来就是空的，抛错会让每次启动都产生一条 ERROR、把 `doctor` 的 24h ERROR 计数淹掉。
+   * ⚠️ 另一处需要更正的旧记载：`update()` **不在**整站归档恢复的路径上 ——
+   * `utils/fullBackup.ts` 的 `restoreFullBackup` 全程不碰 `metaProvider`（它在 driver 层用
+   * "临时集合 + `rename(dropTarget:true)`" 原子替换整个集合）。`update()` 的两个调用方是
+   * `updateTotalWords()` 与 `backup.controller.ts` 的 `importAll()`（`@Post('/import')`，
+   * 也就是**旧的 JSON 备份导入**，不是整站归档恢复）。
    */
   private metaWriteFilter(meta: { _id: unknown }, context: string) {
     const filter = { _id: meta._id };
@@ -408,7 +418,56 @@ export class MetaProvider {
     // 整站恢复走的就是这条路：metas 的累计访问量被整份替换掉了，
     // 浏览统计投影用的基数必须作废，否则恢复后的访问量会带着恢复前的旧基数
     this.viewStats.invalidateBase();
-    return this.metaModel.updateOne({}, updateMetaDto);
+    // 🔴 不再用 `updateOne({}, …)`。`{}` 有两种坏形状且都不报错：集合为空 ⇒ 匹配 0 条 ⇒
+    //    **静默无事发生**；集合不止一条 ⇒ 命中自然顺序里的**任意一条** ⇒ **改错文档**。
+    //    这里改成"用读侧同一个 `getAll()` 拿到的那份文档的 `_id` 精确定位"。
+    //    ⚠️ 关键不变量是**读写一致**：所有读侧（`getSiteInfo`/`getAbout`/`getTotalWords`/公开 meta）
+    //    都走 `getAll()`，所以写侧也按 `getAll()` 的 `_id` 写 ⇒ 写进去的那份就是读出来的那份。
+    //    （集合里出现第二份 meta 文档本身是数据完整性问题，该由 `doctor` 暴露，不该由这里猜。）
+    const existing = await this.getAll();
+    if (!existing || !existing._id) {
+      // metas 为空。两个"看起来更简单"的做法都是错的：
+      // ⚠️ **不 upsert**：`update()` 收的是 `Partial<Meta>`，upsert 会造出一份**只有部分字段**的
+      //    meta 文档（例如只有 `totalWordCount`、没有 `siteInfo`）。那会让 `getAll()` 从"返回 null"
+      //    变成"返回一份残缺文档"，于是 `meta.siteInfo.xxx` 那一族空值解引用**重新变成活路径**
+      //    —— 正是前两轮刚清掉的那类缺陷（`rss.provider` 12 处、`getTotalWords`、6 个后台写方法）。
+      //    用"造一份残缺文档"去换"不报错"，是把可诊断的空换成不可诊断的半真半假。
+      // ⚠️ **不抛错**：这条路由 `updateTotalWords()` 调用，而它在**每次启动**（`main.ts` 的
+      //    `updateTotalWords('首次启动')`）与**每次增删改文章**时被 fire-and-forget 调用。
+      //    未初始化的站点 `metas` 本来就该是空的（`init.provider.ts` 的 `metaModel.create(…)`
+      //    才建这份文档），所以抛错会让**每个未初始化站点每次启动**都产生一条 ERROR，
+      //    而 `./vanblog.sh doctor` 统计的正是近 24h 的 ERROR/FATAL ⇒ 那会把体检信号淹掉
+      //    （本仓库的级别判据：诚实站长自己会撞上的 ⇒ WARN；不会撞上的 ⇒ ERROR）。
+      // ⇒ 记一条**去重**的 WARN（不是 ERROR），并把"没写"如实返回 null，不假装写成功。
+      this.warnMissingMetaOnce('MetaProvider.update');
+      return null;
+    }
+    return this.metaModel.updateOne(
+      this.metaWriteFilter(existing, 'MetaProvider.update'),
+      updateMetaDto,
+    );
+  }
+
+  /**
+   * `metas` 为空时记一条 WARN，**每个 context 每进程只记一次**。
+   *
+   * ⚠️ 为什么去重：`update()` 会被"每次增删改文章"经 `updateTotalWords()` 间接调用，
+   *    不去重就是日志洪水。⚠️ 但去重只用于**这个已知的合法状态**（未初始化站点）；
+   *    真正的"被拒绝"类日志走 `utils/restoreSecurityLog.ts` 的"按类 + 时间窗 + 累计计数 + 阈值升级"，
+   *    因为那类事件**第二次、第一万次恰恰是需要被看见的**（攻击探测），永久去重会让攻击者隐形。
+   * ⚠️ `??=` 是必需的：本仓库的测试常用 `Object.create(MetaProvider.prototype)` 造实例，
+   *    那种替身**不会跑类属性初始化器**，字段是 undefined（这是替身的性质，不是产品的）。
+   */
+  private warnMissingMetaOnce(context: string) {
+    const seen = (this.missingMetaWarnedFor ??= new Set<string>());
+    if (seen.has(context)) return;
+    seen.add(context);
+    this.logger.warn(
+      `${context}：metas 集合里没有 meta 文档，这次修改**没有写入任何数据**。` +
+        `如果站点还没初始化，这是正常的（初始化时会创建这份文档）；` +
+        `如果站点已经初始化，说明数据不完整（恢复过部分/手工归档，或集合被删过），` +
+        `请跑 ./vanblog.sh doctor 看体检。`,
+    );
   }
   async getAbout() {
     return (await this.getAll())?.about;
@@ -474,15 +533,17 @@ export class MetaProvider {
   }
 
   async updateAbout(newContent: string) {
-    return this.metaModel.updateOne(
-      {},
-      {
-        about: {
-          updatedAt: new Date(),
-          content: newContent,
-        },
+    // 🔴 不再用 `{}`：这是后台"关于页"的保存入口，集合为空时 `updateOne({})` 匹配 0 条 ⇒
+    //    **管理员点保存、界面提示成功、而什么都没写进去**（静默的错答案，比崩溃更糟）；
+    //    集合里不止一条时则会改掉**任意一条**。改成 404 + 可照做的下一步，
+    //    与本文件另外 6 个后台写方法（`requireMetaDocument` + `metaWriteFilter`）同口径。
+    const meta = await this.requireMetaDocument('MetaProvider.updateAbout');
+    return this.metaModel.updateOne(this.metaWriteFilter(meta, 'MetaProvider.updateAbout'), {
+      about: {
+        updatedAt: new Date(),
+        content: newContent,
       },
-    );
+    });
   }
 
   async updateSiteInfo(updateSiteInfoDto: UpdateSiteInfoDto) {
@@ -506,7 +567,16 @@ export class MetaProvider {
       oldSiteInfo?.friendLinkApplyContent,
     );
     nextSiteInfo.aboutTitle = sanitizePageCopy((updateDto as any).aboutTitle, oldSiteInfo?.aboutTitle);
-    return this.metaModel.updateOne({}, { siteInfo: nextSiteInfo });
+    // 🔴 不再用 `{}`：这是后台"站点设置"的保存入口，形状与 `updateAbout` 完全相同
+    //    （集合为空 ⇒ 静默无事发生；多条 ⇒ 改错文档）。⚠️ 注意这里**必须**用
+    //    `requireMetaDocument()` 重新取一次，不能复用上面的 `oldSiteInfo`：
+    //    `getSiteInfo()` 会给 uiStyle 补 'apple'、给三段文案补净化值，那是**读侧口径**，
+    //    拿不到 `_id`（它返回的是加工后的普通对象，不是文档）。
+    const metaDoc = await this.requireMetaDocument('MetaProvider.updateSiteInfo');
+    return this.metaModel.updateOne(
+      this.metaWriteFilter(metaDoc, 'MetaProvider.updateSiteInfo'),
+      { siteInfo: nextSiteInfo },
+    );
   }
 
   async addOrUpdateReward(addReward: Partial<RewardItem>) {

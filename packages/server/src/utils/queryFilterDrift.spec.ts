@@ -346,6 +346,59 @@ const AUDITED_HIGH_RISK_SITES: Array<{
     fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
     siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.deleteLink')"],
   },
+  // ---- 2026-09-21 第二批：清掉仓库里最后 4 处空字面量 filter `{}` ----
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(existing, 'MetaProvider.update')",
+    protection:
+      'existing 来自 getAll()；为 null 或缺 _id 时**不写也不 upsert**，记一条去重 WARN 并返回 null，'
+      + '所以走到 updateOne 时 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 这一处的降级口径与同文件另外 8 个写方法**不同**（不抛 404）：它被启动期的 '
+      + "updateTotalWords('首次启动') 与每次增删改文章调用，而未初始化站点的 metas 本来就是空的"
+      + '（init.provider 的 metaModel.create 才建这份文档），抛错会让每次启动都产生一条 ERROR、'
+      + '淹掉 ./vanblog.sh doctor 的 24h ERROR 计数。',
+    fileMarkers: ['private missingMetaWarnedFor?', 'this.warnMissingMetaOnce('],
+    siteMarkers: ["this.metaWriteFilter(existing, 'MetaProvider.update')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(meta, 'MetaProvider.updateAbout')",
+    protection:
+      'meta 来自 requireMetaDocument()：为 null 或缺 _id 时抛 404（文案指向 doctor / restore --offline-full），'
+      + '所以走到这里 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前是 `updateOne({}, …)`：后台"关于页"点保存时，集合为空 ⇒ 界面提示成功而什么都没写进去。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(meta, 'MetaProvider.updateAbout')"],
+  },
+  {
+    file: 'provider/meta/meta.provider.ts',
+    method: 'updateOne',
+    filter: "this.metaWriteFilter(metaDoc, 'MetaProvider.updateSiteInfo')",
+    protection:
+      'metaDoc 来自 requireMetaDocument()（**不是**上面那个 oldSiteInfo：getSiteInfo() 是读侧口径，'
+      + '会补 uiStyle/净化文案，且返回加工后的普通对象、拿不到 _id）；为 null 或缺 _id 时抛 404，'
+      + '所以 filter 必然是 { _id: <非空> }；metaWriteFilter 内部再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前是 `updateOne({}, …)`：后台"站点设置"点保存时同样会静默无事发生或改错文档。',
+    fileMarkers: ['private async requireMetaDocument(', 'assertSafeWriteFilter(filter, context)'],
+    siteMarkers: ["this.metaWriteFilter(metaDoc, 'MetaProvider.updateSiteInfo')"],
+  },
+  {
+    file: 'provider/stats/viewStats.provider.ts',
+    method: 'findOneAndUpdate',
+    filter: 'filter',
+    protection:
+      'filter = { _id: metaId }，metaId 来自 resolveMetaId()（每进程一次 _id-only 读，refreshBase 顺手缓存，'
+      + 'invalidateBase 会作废 —— 整站恢复会整份替换 metas，_id 可能变）；'
+      + '解析不到文档时**跳过这次 $inc**（不 upsert：那会造出只有计数字段、没有 siteInfo 的残缺文档），'
+      + '落库前再过 assertSafeWriteFilter。'
+      + '⚠️ 改之前是 `findOneAndUpdate({}, { $inc: … })`：集合为空 ⇒ 这一轮攒的站点计数静默丢掉；'
+      + '不止一条 ⇒ 把访问量累加到**任意一条**上，而读侧 refreshBase 读的是 findOne() 那一条，'
+      + '于是读写可能落在两份不同文档上（计数看起来"少了"或"不涨"，且无任何报错）。',
+    fileMarkers: ['private async resolveMetaId(', 'private metaIdResolved = false;'],
+    siteMarkers: ["assertSafeWriteFilter(filter, 'ViewStatsProvider.doFlush')"],
+  },
 ];
 
 /**
@@ -354,12 +407,82 @@ const AUDITED_HIGH_RISK_SITES: Array<{
  * 但它能保证"批量新增动态 filter 写操作"这件事**一定会被注意到**，而不是静默发生。
  */
 // 79 → 85（2026-09-21）：meta.provider 的 6 个后台写方法从 `updateOne({}, …)` 改成
-// `updateOne(this.metaWriteFilter(meta, …), …)`，即 `{ _id: meta._id }`。
-// ⚠️ 注意这次是**安全性变好而计数变多**：`{}` 是常量形状、A2 的棘轮**根本数不到它**，
-//    而它恰恰是 `assertSafeWriteFilter` 明令拒绝的最危险形状（空条件命中集合里的任意一条）。
-//    改成 `{ _id: … }` 之后 filter 里有了动态值，于是被计入 —— 所以这 6 处是
-//    "从看不见的危险"变成"看得见的已审计安全"。6 处都已加进下面的已审计清单。
-const DYNAMIC_WRITE_FILTER_BASELINE = 85;
+// `updateOne(this.metaWriteFilter(meta, …), …)`，即 `{ _id: meta._id }`。6 处都已加进下面的已审计清单。
+//
+// 🔴 更正（2026-09-21，实测）：上面那次改动原本记的理由是"`{}` 是常量形状、A2 的棘轮**根本数不到它**"，
+//    **这句话是错的**。`isConstantObjectLiteral('{}')` 里 `inner === ''` 那一支**明确 return false**
+//    （注释还写着"`{}` 是'匹配任意一条'……不算安全常量"），所以 `{}` 一直都被 `scanWriteFilters`
+//    收进 `allSites`、一直被 A2 计数 —— 本文件下面那条既有合成用例
+//    「不误报也不会漏报 `{}`：空条件对写操作**算危险**，必须被扫出来」正是这件事的证明。
+//    ⇒ 那 6 处改前改后**都在计数里**，A2 的总数并没有因为它们而变多。
+//    ⚠️ 真正的盲区不是"A2 数不到 `{}`"，而是**A2 只约束总数、不约束形状**：
+//    总数低于基线时，新增若干处 `{}` 也不会红。所以补了下面的 **C 层**（专门断言空字面量 filter 的
+//    集合与显式白名单**精确相等**），并且把基线**收紧到实测值**（松的基线等于给未来的漂移留额度）。
+// 85 → 71（2026-09-21，实测收紧）：`scanRepository().length` 实测就是 71，基线却写着 85 ⇒
+//    白送了 14 处的额度。⚠️ 规矩：这个常量应当**等于实测值**，新增一处就 +1 并说明，而不是留余量。
+const DYNAMIC_WRITE_FILTER_BASELINE = 71;
+
+/**
+ * 🔴 C 层：空字面量 filter（`{}`）的**接收者无关**扫描器。
+ *
+ * 为什么需要它、它补的是哪个盲区：上面的 `scanWriteFilters` 只认接收者以 `Model`/`Modal` 结尾的调用
+ * （`RECEIVER_RE`），所以 `utils/fullBackup.ts` 里 `tmp.deleteMany({})` 这种**临时集合变量**上的调用
+ * **它根本扫不到**（实测：全仓 4 处在扫描器视野内，第 5 处 `tmp.deleteMany({})` 在视野外）。
+ * 这一层不限接收者，把所有 `.deleteMany({})` 形状都数出来，再与显式白名单**精确相等**比对。
+ * ⚠️ 两把尺子是**互补**的，不是重复：C1 用既有扫描器盯 model 调用（顺带覆盖多行写法），
+ *    C2 用这把盯"接收者不是 model"的漏网形状（原始 driver / 临时集合变量）。
+ */
+const EMPTY_WRITE_CALL_RE = new RegExp(
+  // ⚠️ 方法名那一组**必须捕获**（不是 `(?:…)`）：`m[1]` 是接收者、`m[2]` 是方法名，
+  //    白名单键两者都要。第一版写成非捕获组，于是 method 全是 undefined、白名单永远对不上。
+  `\\b([A-Za-z_$][\\w$]*)\\s*\\.\\s*(${WRITE_METHODS.join('|')})\\s*\\(\\s*\\{\\s*\\}\\s*[,)]`,
+  'g',
+);
+
+export interface EmptyFilterSite {
+  file: string;
+  /** 点号前的那个标识符（`tmp` / `metaModel`），用于白名单键 */
+  receiver: string;
+  method: string;
+}
+
+/** 扫一份源码里所有"空字面量 filter 的写操作"，不限接收者。 */
+export function scanEmptyLiteralWriteFilters(source: string, file: string): EmptyFilterSite[] {
+  const code = stripCommentsForAnchor(source);
+  const out: EmptyFilterSite[] = [];
+  EMPTY_WRITE_CALL_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = EMPTY_WRITE_CALL_RE.exec(code)) !== null) {
+    out.push({ file, receiver: m[1], method: m[2] });
+  }
+  return out;
+}
+
+function scanRepositoryEmptyFilters(): EmptyFilterSite[] {
+  const out: EmptyFilterSite[] = [];
+  for (const full of collectSourceFiles(SRC_ROOT)) {
+    const rel = relative(SRC_ROOT, full).split('\\').join('/');
+    out.push(...scanEmptyLiteralWriteFilters(readFileSync(full, 'utf-8'), rel));
+  }
+  return out.sort((a, b) => `${a.file}|${a.receiver}|${a.method}`.localeCompare(`${b.file}|${b.receiver}|${b.method}`));
+}
+
+/**
+ * 空字面量 filter 的**显式白名单**。**这是审计记录，不是豁免**：每条都必须写明为什么这里 `{}` 是本意。
+ * ⚠️ 往里加条目等于承认"这里故意匹配整个集合"，所以理由必须能回答："如果这个集合里将来有了
+ *    不该被动的文档，这条语句会不会把它一起动掉？"
+ */
+const ALLOWED_EMPTY_FILTER_SITES: Array<{ file: string; receiver: string; method: string; why: string }> = [
+  {
+    file: 'utils/fullBackup.ts',
+    receiver: 'tmp',
+    method: 'deleteMany',
+    // 恢复流程里的 `<coll>__vanblog_restore` 临时集合：`{}` 正是本意（清空这一份临时集合，
+    // 好让接下来的 insertMany 从干净状态开始）。它**不可能**碰到用户数据 —— 集合名带
+    // RESTORE_SUFFIX，而且 `reportAbsentCollections` 那一侧明确"system.* 与 *__vanblog_restore 一律不碰"。
+    why: '清空恢复用的临时集合（名字带 __vanblog_restore），`{}` 就是"全清"的本意，碰不到用户数据',
+  },
+];
 
 describe('Mongoose 写操作的查询条件不许退化成"任意一条"', () => {
   const allSites = scanRepository();
@@ -397,6 +520,44 @@ describe('Mongoose 写操作的查询条件不许退化成"任意一条"', () =>
     //    如果它是"裸变量"或"值来自请求"形状，还必须加进上面的已审计清单。
     expect(allSites.length).toBeLessThanOrEqual(DYNAMIC_WRITE_FILTER_BASELINE);
     expect(allSites.length).toBeGreaterThan(0);
+  });
+
+  it('A2 层：基线必须**等于**实测值，不许留余量（松的基线等于给未来的漂移发额度）', () => {
+    // 🔴 这条是 2026-09-21 加的：当时基线写着 85，而 `scanRepository().length` 实测只有 71
+    //    ⇒ 白送 14 处额度，也就是说"新增 14 处未审计的动态 filter 写操作"都不会红。
+    //    棘轮的意义在于**紧贴**实测值：合法新增时 +1 并在提交信息里说明，而不是留缓冲。
+    expect(allSites.length).toBe(DYNAMIC_WRITE_FILTER_BASELINE);
+  });
+
+  it('C1 层：model 上的写操作**不许**用空字面量 filter `{}`（那会命中集合里的任意一条）', () => {
+    // `{}` 在写操作上有两种坏形状，都不报错：集合为空 ⇒ 匹配 0 条 ⇒ 静默无事发生；
+    // 集合不止一条 ⇒ 命中自然顺序里的第一条 ⇒ **改错文档**（比崩溃更糟：数据悄悄错了）。
+    // ⚠️ 白名单里 receiver 以 Model/Modal 结尾的条目才算这一层的豁免（当前为空）。
+    const allowed = ALLOWED_EMPTY_FILTER_SITES.filter((e) => /(?:Model|Modal)$/.test(e.receiver));
+    const actual = allSites
+      .filter((site) => site.filter.replace(/\s+/g, '') === '{}')
+      .map((site) => `${site.file} | ${site.method}`);
+    const expected = allowed.map((e) => `${e.file} | ${e.method}`);
+    expect(actual).toEqual(expected);
+  });
+
+  it('C2 层：**接收者无关**地扫，空字面量 filter 的集合必须与显式白名单精确相等', () => {
+    // 补 C1 的盲区：既有扫描器只认 `*Model`/`*Modal` 接收者，所以 `tmp.deleteMany({})`
+    // 这类临时集合变量上的调用它看不见（实测全仓有 1 处这种）。
+    const actual = scanRepositoryEmptyFilters().map((s) => `${s.file} | ${s.receiver} | ${s.method}`);
+    const expected = ALLOWED_EMPTY_FILTER_SITES.map((e) => `${e.file} | ${e.receiver} | ${e.method}`);
+    // 多了 ⇒ 有人新加了一处 `{}` 写操作却没审计；少了 ⇒ 白名单腐了（或某处被删而没人更新记录）。
+    expect({ extra: actual.filter((k) => !expected.includes(k)), stale: expected.filter((k) => !actual.includes(k)) }).toEqual({ extra: [], stale: [] });
+  });
+
+  it('C2 层的白名单不是空的、而且每条都写了理由（空白名单会让这层退化成"只要没有 `{}` 就绿"）', () => {
+    expect(ALLOWED_EMPTY_FILTER_SITES.length).toBeGreaterThan(0);
+    for (const entry of ALLOWED_EMPTY_FILTER_SITES) {
+      expect(entry.why.length).toBeGreaterThan(20);
+      expect(entry.file).toMatch(/\.ts$/);
+    }
+    // 尺子没空转：这把接收者无关的尺子在真实仓库里**确实**扫到了东西（白名单那 1 处 + 修好前的 4 处）。
+    expect(scanRepositoryEmptyFilters().length).toBeGreaterThan(0);
   });
 
   it('B 层前置：每个 marker 在**整个仓库**里只出现在它所属的那个文件（否则 marker 不具站点唯一性）', () => {
@@ -529,6 +690,50 @@ describe('扫描器的通用性（用合成源码证明，不碰文件系统）'
     );
     expect(found).toHaveLength(1);
     expect(found[0].filter).toBe('{}');
+  });
+
+  it('C 层尺子有效性：`{}` 的空白/多行变体都能数到，非空 filter 不误报', () => {
+    const F = 'provider/sample/sample.provider.ts';
+    // ⚠️ 这四种形状必须**都**被数到：上一轮就栽在多行写法上 ——
+    //    `updateAbout()` 的 `updateOne(\n {},\n {…})` 让裸正则 `updateOne\(\{\}` 少数了一处。
+    const variants = `
+      await ${MODEL}.deleteMany({});
+      await ${MODEL}.deleteMany({ });
+      await ${MODEL}.updateOne(
+        {
+        },
+        { $set: { a: 1 } },
+      );
+      await ${MODEL}
+        .findOneAndUpdate({}, { $inc: { n: 1 } });
+    `;
+    const found = scanEmptyLiteralWriteFilters(variants, F);
+    expect(found).toHaveLength(4);
+    expect(found.map((x) => x.method).sort()).toEqual([
+      'deleteMany',
+      'deleteMany',
+      'findOneAndUpdate',
+      'updateOne',
+    ]);
+    // 不误报：非空 filter、读操作、以及非 model 上的同名方法都不该被算进来
+    const safe = `
+      await ${MODEL}.deleteOne({ deleted: true });
+      await ${MODEL}.updateMany({ type: 'file' }, { $set: { ok: false } });
+      await ${MODEL}.findOne({});
+      await ${MODEL}.countDocuments({});
+      await someService.updateOne(filter, patch);
+    `;
+    expect(scanEmptyLiteralWriteFilters(safe, F)).toEqual([]);
+    // 读操作的 `{}` 是**合法**的（`findOne({})` = 取第一条，没有写入风险）⇒ 必须不被计入。
+    // 空转反证：把 WRITE_METHODS 里的方法名当普通词出现在注释里，不该被数到。
+    const commented = `
+      // 这里以前是 ${MODEL}.deleteMany({})，已经改成按 _id 删了
+      await ${MODEL}.deleteOne({ _id: id });
+    `;
+    expect(scanEmptyLiteralWriteFilters(commented, F)).toEqual([]);
+    // 反证的反证：同一把尺子在**未剥注释**时确实会命中注释里那句（证明"剥注释"这一步真的在起作用，
+    // 而不是因为正则本身匹配不到才显得干净）
+    expect(commented).toContain('deleteMany({})');
   });
 
   it('剥注释是真的剥了（否则"常量 filter"可能只是注释里的假象）', () => {

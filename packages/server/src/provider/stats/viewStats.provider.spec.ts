@@ -131,7 +131,12 @@ interface FakeOptions {
 }
 
 function createFake(options: FakeOptions = {}) {
-  const metas = new FakeCollection('metas', options.metas ?? [{ viewer: 100, visited: 50 }]);
+  // ⚠️ 种子文档**必须带 `_id`**：真实的 Mongoose 持久化文档一定有 `_id`，而写侧现在按 `_id` 精确定位
+  //    （`doFlush` 不再用空 filter）。缺 `_id` 的替身会让"按 _id 写"这条正确的产品改动被挡红 ——
+  //    本仓库已经第五次踩到"替身不忠实"这一族（Mongoose 替身对 `{}` 返回 null、`fakeReq` 恒带
+  //    remoteAddress、meta 内存 model 恒返回对象、public.controller 把 getTotalWords 打桩、
+  //    以及 meta.provider.spec 的 state 缺 _id）。**修替身，不要放宽产品。**
+  const metas = new FakeCollection('metas', options.metas ?? [{ _id: 'meta-doc-0', viewer: 100, visited: 50 }]);
   const articles = new FakeCollection('articles', options.articles ?? []);
   const viewers = new FakeCollection('viewers', options.viewers ?? []);
   const visits = new FakeCollection('visits', options.visits ?? []);
@@ -626,9 +631,17 @@ describe('ViewStatsProvider：VANBLOG_VIEW_FLUSH_MS=0（不缓冲）', () => {
     });
     expect(fake.provider.flushMs).toBe(0);
     await record(fake.provider);
-    // 第一轮仍要确认当天那行在不在（aggregate）。注意没有 metas.findOne：
-    // 不缓冲模式下 flush 先跑，base 直接取自 $inc 的返回值，投影不需要再读一次库
+    // 第一轮仍要确认当天那行在不在（aggregate）。
+    // ⚠️ 2026-09-21 起这里**多了一次 `metas.findOne`**，这是有意的、且是**一次性**的：
+    //    写侧不再用空 filter `findOneAndUpdate({}, …)`（那会命中集合里的任意一条，或匹配 0 条而静默丢掉
+    //    这一轮攒的站点计数），改成先解析出那份文档的 `_id` 再按 `_id` 写。解析结果**每进程缓存一次**
+    //    （`metaIdResolved`），所以只有**第一轮** flush 付这次读 —— 下面第二次 record 的断言就是钉这件事。
+    //    代价：一次只投影 `_id` 的读，换"永远不会把访问量累加到错误的文档上"。
+    //    ⚠️ 缓存会被 `invalidateBase()` 作废（整站恢复会整份替换 metas、`_id` 可能变），
+    //    而 `MetaProvider.update()` 也会调它 ⇒ 每次 meta 写入后的第一轮 flush 会重新解析一次。
+    //    这是**故意**选的取舍：无法区分"恢复"与"改字数"两种调用方时，作废才是安全的一侧。
     expect(fake.log).toEqual([
+      'metas.findOne',
       'metas.findOneAndUpdate',
       'articles.bulkWrite(1)',
       `visits.aggregate(["/post/hello"])`,
@@ -638,6 +651,8 @@ describe('ViewStatsProvider：VANBLOG_VIEW_FLUSH_MS=0（不缓冲）', () => {
     expect(fake.metas.docs[0].viewer).toBe(101);
     fake.resetLog();
     await record(fake.provider);
+    // 🔴 这一条钉住"`_id` 只解析一次"：第二轮**不再有** `metas.findOne`，
+    //    否则说明缓存失效了、每次 flush 都在多读一次库（那才是真的性能回归）。
     expect(fake.log).toEqual([
       'metas.findOneAndUpdate',
       'articles.bulkWrite(1)',
@@ -653,5 +668,110 @@ describe('ViewStatsProvider：VANBLOG_VIEW_FLUSH_MS=0（不缓冲）', () => {
     process.env.VANBLOG_VIEW_FLUSH_MS = 'abc';
     const fake = createFake();
     expect(fake.provider.flushMs).toBe(5000);
+  });
+});
+
+describe('ViewStatsProvider：写侧不再用空字面量 filter `{}`（2026-09-21）', () => {
+  /**
+   * 🔴 改之前是 `findOneAndUpdate({}, { $inc: metaInc }, …)`。空 filter 在写操作上有两种坏形状，
+   * 两种都**不报错**：集合为空 ⇒ 匹配 0 条（这一轮攒的站点计数**静默丢掉**，白跑一次写）；
+   * 集合不止一条 ⇒ 命中自然顺序里的**任意一条**，而读侧 `refreshBase()` 读的是 `findOne()` 那一条，
+   * 于是**读和写可能落在两份不同的文档上**（站长看到"访问量不涨"，而没有任何报错）。
+   * 现在改成先解析出那份文档的 `_id`（每进程缓存一次）再按 `_id` 写，并过 `assertSafeWriteFilter`。
+   */
+  const seed = {
+    articles: [{ id: 1, pathname: 'hello', deleted: false, viewer: 0, visited: 0 }],
+    visits: [{ date: TODAY, pathname: '/post/hello', viewer: 0, visited: 0 }],
+    viewers: [{ date: TODAY, viewer: 0, visited: 0 }],
+  };
+
+  function captureWarns(provider: ViewStatsProvider) {
+    const warns: string[] = [];
+    const errors: string[] = [];
+    (provider as any).logger = {
+      log: () => undefined,
+      debug: () => undefined,
+      verbose: () => undefined,
+      warn: (m: unknown) => warns.push(String(m)),
+      error: (m: unknown) => errors.push(String(m)),
+    };
+    return { warns, errors };
+  }
+
+  it('🔴 metas 为空 ⇒ **不写、不 upsert**，记一条 WARN，投影按 0 回（与改动前对外一致）', async () => {
+    const fake = createFake({ ...seed, metas: [] });
+    const { warns, errors } = captureWarns(fake.provider);
+
+    await record(fake.provider);
+    await fake.provider.flush('empty-metas-1');
+
+    // 没有对 metas 做任何写操作（改动前这里会有一次 `metas.findOneAndUpdate`，匹配 0 条、白跑）
+    expect(fake.log).not.toContain('metas.findOneAndUpdate');
+    // 🔴 **没有 upsert**：upsert 会造出一份只有 viewer/visited、没有 siteInfo 的残缺 meta 文档，
+    //    那会让读侧 `meta.siteInfo.xxx` 从"文档不存在"变成"文档存在但字段缺失"—— 更难诊断。
+    expect(fake.metas.docs).toHaveLength(0);
+    // 不抛错、不 ERROR：未初始化是**合法状态**（`projection()` 上方那句注释早就写明"没有 metas 文档时按 0 回"），
+    // 而 ERROR 会污染 `./vanblog.sh doctor` 的近 24h ERROR/FATAL 计数。
+    expect(errors).toHaveLength(0);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain('没有写入');
+    // 对外投影仍然是 0（与改动前 `updated` 为 null 时一致）—— 方法名是 `projection()`
+    expect(await fake.provider.projection()).toEqual({ viewer: 0, visited: 0 });
+
+    // WARN 每进程只记一次：flush 是被定时器与优雅退出反复触发的，不去重就是日志洪水
+    await record(fake.provider);
+    await fake.provider.flush('empty-metas-2');
+    expect(warns).toHaveLength(1);
+    expect(fake.metas.docs).toHaveLength(0);
+  });
+
+  it('🔴 有文档时按 `_id` 精确写：增量落在那份文档上，且 `invalidateBase()` 之后会**重新解析** `_id`', async () => {
+    const fake = createFake({ ...seed, metas: [{ _id: 'A', viewer: 0, visited: 0 }] });
+    await record(fake.provider);
+    await fake.provider.flush('first');
+    expect(fake.metas.docs).toHaveLength(1);
+    expect(fake.metas.docs[0]).toMatchObject({ _id: 'A', viewer: 1 });
+
+    // 模拟一次**整站恢复**：`fullBackup.ts` 用"临时集合 + rename(dropTarget:true)"把 metas 整份替换，
+    // 恢复后那份文档的 `_id` **可能变了**。`MetaProvider.update()` 与恢复流程都会调 `invalidateBase()`。
+    //
+    // 🔴 这一段的**顺序是这条用例的全部要点**，别顺手"整理"：必须是
+    //    「先 record 攒下增量（此时 `_id: A` 已被缓存）→ 换文档 + invalidateBase() → **直接 flush**」。
+    //    ⚠️ 如果在 invalidateBase() 与 flush 之间再插一次 `record()`，`record()` 会触发
+    //    `refreshBase()`（因为 baseLoaded 被置回 false），而 refreshBase **也会**重新缓存 `_id`
+    //    ⇒ 于是"invalidateBase 有没有作废 `_id` 缓存"这件事就**测不出来了**。
+    //    我第一版就是这么写的，变异对照 M8（删掉 invalidateBase 里的 `metaIdResolved = false`）
+    //    因此是 NOT_RED。真实场景里这条路径确实存在：**定时器驱动的 flush** 与
+    //    `onApplicationShutdown` 都可以在没有任何读操作的情况下直接触发。
+    await record(fake.provider);
+    fake.metas.docs = [{ _id: 'B', viewer: 500, visited: 500 }];
+    fake.provider.invalidateBase();
+    await fake.provider.flush('after-restore');
+
+    // 🔴 这一条才是真正的判别器：如果 `invalidateBase()` 没有把 `_id` 缓存一起作废，
+    //    这次 `$inc` 会打到已经不存在的 `_id: 'A'` 上 ⇒ matchedCount 0 ⇒ B 停在 500（静默丢计数）。
+    expect(fake.metas.docs).toHaveLength(1);
+    expect(fake.metas.docs[0]).toMatchObject({ _id: 'B', viewer: 501 });
+    // 而且没有 upsert 出一份新的 A
+    expect(fake.metas.docs.some((d: any) => d._id === 'A')).toBe(false);
+  });
+
+  it('⚠️ 文档在解析与写之间被删掉 ⇒ 作废 `_id` 缓存，下一轮重新解析（不会一直对着不存在的 _id 写）', async () => {
+    const fake = createFake({ ...seed, metas: [{ _id: 'A', viewer: 0, visited: 0 }] });
+    await record(fake.provider);
+    await fake.provider.flush('warm');
+    expect(fake.metas.docs[0]).toMatchObject({ viewer: 1 });
+
+    // 不经过 invalidateBase 就把文档换成另一份（例如别的进程刚好在做恢复）
+    fake.metas.docs = [{ _id: 'B', viewer: 0, visited: 0 }];
+    await record(fake.provider);
+    await fake.provider.flush('stale-id');
+    // 这一轮打的是缓存里的 A ⇒ 匹配 0 条 ⇒ B 没被写（这是**已知且可接受**的一轮延迟，
+    // 关键是它会把缓存作废，所以下一轮就能自愈）
+    expect(fake.metas.docs[0]).toMatchObject({ _id: 'B', viewer: 0 });
+
+    await record(fake.provider);
+    await fake.provider.flush('self-heal');
+    expect(fake.metas.docs[0]).toMatchObject({ _id: 'B', viewer: 1 });
   });
 });
