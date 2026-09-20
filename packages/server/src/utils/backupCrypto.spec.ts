@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Readable } from 'stream';
+import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 import {
   BACKUP_ENC_EXT,
   BACKUP_ENC_MAGIC,
@@ -15,6 +16,7 @@ import {
   createDecryptStream,
   createEncryptor,
   SCRYPT_PARAMS,
+  deriveBackupKey,
   deriveBackupKeyFromHeader,
   describePassphrase,
   encryptionSummary,
@@ -29,9 +31,18 @@ import {
 /**
  * 备份归档加密层的行为级测试。
  *
- * ⚠️ 这里**每一条都真跑加解密**，不做源码文本断言：加密这种东西最容易"看起来做了"
- *    （只加密了头部、或者 GCM 标签根本没校验），而源码锚点对这两种情况都是绿的。
- *    唯一的一条文本断言是"报错里不许出现口令"，那是**行为**的可观测面。
+ * ⚠️ 这里**几乎每一条都真跑加解密**：加密这种东西最容易"看起来做了"（只加密了头部、
+ *    或者 GCM 标签根本没校验），而源码锚点对这两种情况都是绿的。
+ *
+ * ⚠️ 例外（两类，都经过论证）：
+ *    ① "报错里不许出现口令" —— 那是**行为**的可观测面，不是源码锚点；
+ *    ② 文件末尾那一节的 `maxmem` 源码级尺子 —— 因为**行为级证据在这里有盲区**：
+ *       本文件为了跑得快一律注入 `FAST_KDF`（N=1024 ⇒ 只需 1 MiB 内存），而
+ *       "生产参数 N·r·128 = 32 MiB 正好压在 Node 默认 maxmem 上限"这条性质在小参数下
+ *       **根本不可观测**。M09 变异（去掉 scrypt 调用里的 `maxmem`）因此曾经 `NOT_RED`。
+ *       现在两样都有：一条用**生产参数**真派生的行为级用例（约 156ms/次），
+ *       加一把"每一个 `crypto.scrypt(` 调用点都必须显式带 `maxmem`"的源码尺子
+ *       （后者防的是**将来新增第二个派生点**漏掉 maxmem，行为级用例覆盖不到那种情况）。
  */
 
 const PASS = 'a-realistically-long-passphrase';
@@ -607,5 +618,210 @@ describe('对照：测试装置本身没有空转', () => {
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// scrypt 的 maxmem —— 这一节是 M09 变异 `NOT_RED` 的补丁。
+//
+// 🔴 **不要为了提速把这一节的 KDF 参数改小。** 本文件其余部分都注入 FAST_KDF（N=1024），
+//    而 maxmem 这条性质只在**生产参数**下才可观测：N·r·128 = 32768·8·128 = 32 MiB，
+//    正好压在 Node 的默认 maxmem（32 MiB）上，不显式给就直接失败。改小参数会让这一节
+//    重新变成空转，而且**从测试输出上完全看不出来**（全绿）—— 本仓库已实测过一次。
+//
+// 为什么这条性质重要：它是"匿名恢复上传不能通过加密头部的 KDF 参数做 CPU/内存放大"的兜底。
+// 头部形状校验对 `r`/`p`/`chunkPlainBytes` **没有上限**，全靠 scrypt 的 maxmem 挡住；
+// 实测连"绕过 N 上限的等价内存构造 N=2, r=1048576"都会在 0-1ms 被 OpenSSL 拒绝。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('scrypt 的 maxmem：生产参数下真的会被用到（M09 曾经空转）', () => {
+  const PROD_PARAMS = {
+    salt: FIXED_SALT,
+    N: SCRYPT_PARAMS.N,
+    r: SCRYPT_PARAMS.r,
+    p: SCRYPT_PARAMS.p,
+    keyLen: SCRYPT_PARAMS.keyLen,
+  };
+
+  const noop = () => {
+    /* 前提探测用，不关心回调 */
+  };
+
+  it('前提核实：生产参数确实超过 Node 的默认 maxmem，而 FAST_KDF 不超过', () => {
+    // 这条钉的是**性质成立的前提**，不是我们的代码。实测（node v24.11.0）：
+    //   crypto.scrypt(pw, salt, 32, {N:32768,r:8,p:1}, cb)
+    //     → **同步抛** RangeError / ERR_CRYPTO_INVALID_SCRYPT_PARAMS
+    //       "Invalid scrypt params: error:030000AC:digital envelope routines::memory limit exceeded"（约 1ms）
+    //   同样参数带上 maxmem:128MiB → 约 156ms 成功。
+    // ⚠️ 注意是**同步抛**（不是回调里给 err）：所以 deriveBackupKey 里那个 Promise executor
+    //    会把它变成 rejected promise，而**不是**走到回调里那句 BadRequestException。
+    // ⚠️ 如果哪天 Node 抬高了默认上限导致这条变红，说明"必须显式给 maxmem"的理由本身变了 ——
+    //    那时应当**重新评估**这一节，而不是把它删掉了事。
+    expect(() =>
+      crypto.scrypt(Buffer.from(PASS, 'utf8'), FIXED_SALT, SCRYPT_PARAMS.keyLen, 
+        { N: SCRYPT_PARAMS.N, r: SCRYPT_PARAMS.r, p: SCRYPT_PARAMS.p }, noop),
+    ).toThrow(/memory limit exceeded|Invalid scrypt params/);
+
+    // 对照：FAST_KDF 在**同样不给 maxmem** 时是成功的 ⇒ 这正是 M09 空转的原因，
+    // 也是"本文件其余用例为什么发现不了 maxmem 被删"的直接证据。
+    expect(() => crypto.scrypt(Buffer.from(PASS, 'utf8'), FIXED_SALT, 32, FAST_KDF, noop)).not.toThrow();
+  });
+
+  it('🔴 用**生产参数**真派生一次必须成功（这条是 maxmem 的行为级证据；约 156ms/次）', async () => {
+    // 缺 maxmem 时这里会以 RangeError(ERR_CRYPTO_INVALID_SCRYPT_PARAMS) reject ⇒ 用例变红。
+    const key = await deriveBackupKey(PASS, PROD_PARAMS);
+    expect(Buffer.isBuffer(key)).toBe(true);
+    expect(key.length).toBe(SCRYPT_PARAMS.keyLen);
+
+    // 确定性：同口令 + 同盐 + 同参数 ⇒ 同密钥。
+    // 这排除"返回了随机字节也算通过"这种假绿 —— 派生必须是口令的确定函数。
+    const again = await deriveBackupKey(PASS, PROD_PARAMS);
+    expect(again.equals(key)).toBe(true);
+
+    // 不同盐必须给出不同密钥（否则派生根本没在用盐）
+    const otherSalt = await deriveBackupKey(PASS, { ...PROD_PARAMS, salt: Buffer.alloc(16, 8) });
+    expect(otherSalt.equals(key)).toBe(false);
+  });
+
+  it('解密侧（从归档头部取参数）在生产参数下派生出**同一个**密钥 ⇒ 两侧都带着 maxmem', async () => {
+    // 核实结论：backupCrypto.ts 里 `crypto.scrypt(` **只有一个调用点**（deriveBackupKey），
+    // 而解密侧的 deriveBackupKeyFromHeader 是**委托**给它的 ⇒ 加密与解密共用同一处 maxmem。
+    // 这条用例把这个事实变成可观测的：解密侧在生产参数下也必须能派生（缺 maxmem 就会 reject）。
+    const header = {
+      v: 1,
+      kdf: {
+        name: 'scrypt',
+        N: SCRYPT_PARAMS.N,
+        r: SCRYPT_PARAMS.r,
+        p: SCRYPT_PARAMS.p,
+        saltLen: SCRYPT_PARAMS.saltLen,
+        keyLen: SCRYPT_PARAMS.keyLen,
+      },
+      salt: FIXED_SALT.toString('base64'),
+      iv: FIXED_IV.toString('base64'),
+      cipher: 'aes-256-gcm',
+      chunkPlainBytes: ENC_CHUNK_PLAIN_BYTES,
+      inner: { format: 'zstd', ext: '.tar.zst', label: 'x' },
+      createdAt: new Date().toISOString(),
+    };
+    const viaHeader = await deriveBackupKeyFromHeader(PASS, header as any);
+    const direct = await deriveBackupKey(PASS, PROD_PARAMS);
+    expect(viaHeader.equals(direct)).toBe(true);
+  });
+
+  it('🔴 **默认路径**（不注入 kdf）端到端加解密一轮：生产参数下归档必须能原样解回来', async () => {
+    // ⚠️ 本文件其余的 round-trip 用例都注入 FAST_KDF，所以"生产默认参数能不能真跑通一轮"
+    //    在此之前**没有任何覆盖** —— 而生产用的恰恰是默认路径。约 2 次派生 ≈ 312ms，值得。
+    // 缺 maxmem 时这一条会在加密侧就 reject（RangeError），是最贴近真实使用的一条证据。
+    const plain = Buffer.from('production-params-round-trip-payload-\u4e2d\u6587');
+    const { transform, header } = await createEncryptor({
+      passphrase: PASS,
+      inner: { format: 'zstd', ext: '.tar.zst', label: 'zstd -19' },
+      salt: FIXED_SALT,
+      baseIv: FIXED_IV,
+      // 刻意**不传 kdf**：走 SCRYPT_PARAMS 生产默认值
+    });
+    // 头部里记录的必须是生产参数（否则这条用例其实又跑成了小参数，等于空转）
+    expect(header.kdf.N).toBe(SCRYPT_PARAMS.N);
+    expect(header.kdf.r).toBe(SCRYPT_PARAMS.r);
+    expect(header.kdf.p).toBe(SCRYPT_PARAMS.p);
+    const container = await collectAsync(transform, plain);
+    expect(isEncryptedHead(container)).toBe(true);
+    // decryptAsync 自己管临时文件（并且解密侧从头部取参数 ⇒ 这一轮同时覆盖了两侧的派生）
+    const back = await decryptAsync(container);
+    expect(back.equals(plain)).toBe(true);
+  });
+
+  it('SCRYPT_PARAMS 里的 maxmem 必须真的大于生产参数所需的内存（不是随便写了个数）', () => {
+    // Node 的 scrypt 内存需求约 128·N·r 字节；默认上限是 32 MiB，而生产参数正好等于 32 MiB。
+    const required = 128 * SCRYPT_PARAMS.N * SCRYPT_PARAMS.r;
+    expect(SCRYPT_PARAMS.maxmem).toBeGreaterThan(required);
+    expect(required).toBe(32 * 1024 * 1024); // 钉住"正好压线"这个前提本身
+  });
+});
+
+describe('每一个 crypto.scrypt( 调用点都必须显式传 maxmem（源码级尺子，剥注释后）', () => {
+  const FILE = path.resolve(__dirname, 'backupCrypto.ts');
+  const RAW = fs.readFileSync(FILE, 'utf8');
+  const SRC = stripCommentsForAnchor(RAW);
+
+  /**
+   * 取出每个 `crypto.scrypt(` 调用的**完整实参列表**（按括号配平），而不是它周围的一行文本。
+   *
+   * ⚠️ 为什么必须是"调用点内"而不是"文件里出现过 maxmem"：`SCRYPT_PARAMS` 的定义里就写着
+   *    `maxmem:`，所以文件级 grep 在 maxmem 被从调用点删掉之后**仍然是绿的** —— 那正是 M09
+   *    空转的第二个原因。判据必须是"这个调用的实参里有 maxmem"。
+   * ⚠️ 局限（如实记录）：括号配平不解析字符串字面量，所以实参里的字符串若含未配对的括号会算错。
+   *    当前源码不存在这种形状；真出现时这条尺子会红（而不是静默放过），失败方向是安全的。
+   */
+  function scryptCallArgLists(src: string): string[] {
+    const needle = 'crypto.scrypt(';
+    const out: string[] = [];
+    let from = 0;
+    for (;;) {
+      const at = src.indexOf(needle, from);
+      if (at < 0) break;
+      let depth = 0;
+      let end = -1;
+      for (let j = at + needle.length - 1; j < src.length; j++) {
+        const ch = src[j];
+        if (ch === '(') depth++;
+        else if (ch === ')') {
+          depth--;
+          if (depth === 0) {
+            end = j;
+            break;
+          }
+        }
+      }
+      if (end > 0) out.push(src.slice(at + needle.length, end));
+      from = at + needle.length;
+    }
+    return out;
+  }
+
+  const missingMaxmem = (src: string) => scryptCallArgLists(src).filter((a) => !/maxmem\s*:/.test(a));
+
+  it('尺子没有空转：真实源码里确实找到了调用点', () => {
+    // 空转的守卫比没有守卫更糟（本仓库有过 heredoc 参数写错位置、检查从未执行的先例）。
+    expect(scryptCallArgLists(SRC).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('每一个调用点都带 maxmem（缺一个就报出它的实参，便于定位）', () => {
+    expect({ missing: missingMaxmem(SRC) }).toEqual({ missing: [] });
+  });
+
+  it('解密侧的派生必须委托给同一个函数（否则它会自己开一个没有 maxmem 的调用点）', () => {
+    expect(SRC).toMatch(
+      /export function deriveBackupKeyFromHeader\([\s\S]{0,600}?return deriveBackupKey\(/,
+    );
+  });
+
+  it('不许出现 scryptSync（阻塞事件循环；备份是分钟级长任务，没有理由省这个 await）', () => {
+    expect(SRC).not.toMatch(/scryptSync\s*\(/);
+    // 空转反证：原文里那句"不要用 crypto.scryptSync"的注释确实存在，
+    // 所以上面这条 not.toMatch 必须跑在**剥注释后**的文本上才有意义。
+    expect(RAW).toContain('scryptSync');
+    expect(SRC).not.toContain('scryptSync');
+  });
+
+  it('负向对照：尺子抓得到"没有 maxmem 的调用点"，也抓得到"maxmem 只写在注释里"', () => {
+    // (a) 没有 maxmem 的调用点必须被报出来（这就是 M09 变异后的形状）
+    const bad = 'crypto.scrypt(pw, salt, 32, { N: 32768, r: 8, p: 1 }, cb);';
+    expect(scryptCallArgLists(bad)).toHaveLength(1);
+    expect(missingMaxmem(bad)).toHaveLength(1);
+
+    // (b) 带 maxmem 的必须放过（否则尺子只会一律报红，等于没有判据）
+    const good = 'crypto.scrypt(pw, salt, 32, { N: 1, r: 8, p: 1, maxmem: 128 }, cb);';
+    expect(missingMaxmem(good)).toHaveLength(0);
+
+    // (c) 两个调用点里只缺一个 ⇒ 必须精确报出 1 个（不是"文件里有 maxmem 就算过"）
+    const mixed = `${good}\ncrypto.scrypt(pw, salt, 32, { N: 2, r: 8, p: 1 }, cb);`;
+    expect(scryptCallArgLists(mixed)).toHaveLength(2);
+    expect(missingMaxmem(mixed)).toHaveLength(1);
+
+    // (d) 注释里的 maxmem 不算：剥注释前"看得见"，剥注释后必须报缺失
+    const commented = '// options: { maxmem: 1 } 只是注释\ncrypto.scrypt(pw, salt, 32, { N: 1 }, cb);';
+    expect(commented).toContain('maxmem'); // 反证：原文里确实有这个词
+    expect(missingMaxmem(stripCommentsForAnchor(commented))).toHaveLength(1);
   });
 });
