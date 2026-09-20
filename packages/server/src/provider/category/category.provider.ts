@@ -8,6 +8,7 @@ import { sleep } from 'src/utils/sleep';
 import { UpdateCategoryDto } from 'src/types/category.dto';
 import { BackupCategory } from 'src/utils/backupCategories';
 import { applyCategoryNameOrder, nextCategoryOrder, sortCategoriesByOrder } from 'src/utils/categoryOrder';
+import { assertSafeWriteFilter, isUsableFilterValue } from 'src/utils/queryFilter';
 import {
   hashAccessPasswordIdempotentAsync,
   isScryptHash,
@@ -171,14 +172,24 @@ export class CategoryProvider {
   }
 
   async deleteOne(name: string) {
+    // ⚠️ 校验放在**最前面**，不要依赖下面那次文章检查来兜底。
+    // `deleteOne({ name: undefined })` 会被 Mongoose 丢掉那个条件 ⇒ 退化成 `deleteOne({})` ⇒
+    // 删掉集合里自然顺序的**第一个分类**。目前 HTTP 入口是 `@Delete('/:name')`（路径参数必填），
+    // 所以 undefined 到不了这里；但"安全依赖于路由形状"是脆的（换一个调用方、或改成 query 参数就破了），
+    // 而 `getArticlesByCategory(undefined)` 只在**库里还有文章**时才会因为"分类已有文章"抛错 ——
+    // 空库（或文章全删光）时它会一路走到删除。与本仓库已修的同族缺陷（checkToken、
+    // updateCollaborator、customPage 的 update/delete）是同一个形状，所以按同一条规矩显式校验。
+    if (!isUsableFilterValue(name)) {
+      throw new NotAcceptableException('删除分类必须带分类名（name 不能为空）。');
+    }
     // 先检查一下有没有这个分类的文章
     const d = await this.getArticlesByCategory(name, true);
     if (d && d.length) {
       throw new NotAcceptableException('分类已有文章，无法删除！');
     }
-    await this.categoryModal.deleteOne({
-      name,
-    });
+    const filter: Record<string, unknown> = { name };
+    assertSafeWriteFilter(filter, 'CategoryProvider.deleteOne');
+    await this.categoryModal.deleteOne(filter);
   }
 
   async reorderCategories(names: string[]) {
