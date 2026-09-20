@@ -8168,6 +8168,48 @@ rootless `unshare -rn` 在本机被拒（`write failed /proc/self/uid_map`）⇒
 **`X-Vanblog-Static-Html: 1`**（`caddyTemplate.json` 的 srv0/srv1 `routes[2]`）⇒ 不必靠"比对响应体与磁盘文件"
 这种间接办法，**头本身就是判据**。
 
+### 7.79c 🔴 挂载 dist 必须挂**整个** `dist/src/`，挑文件会得到"混代产物"的 TypeError
+
+一次场景 D 验证在容器里崩成：
+
+```
+[FATAL][startup] 启动流程本身出错（不是数据库不可达那条路径）：
+TypeError: (0 , caddy_provider_1.resolveWebsitePagesDir) is not a function
+    at resolveServeHtmlSentinelDir (/app/server/utils/degradedServeHtml.js:44:66)
+    at snapshotServeHtmlSentinels (/app/server/utils/degradedServeHtml.js:55:43)
+    at main (/app/server/main.js:357:82)
+```
+
+**根因不是产品缺陷，是验证脚手架的产物混代。** 实测三处对照：
+
+| 位置 | `resolveWebsitePagesDir` 命中 |
+|---|---|
+| 本机 `packages/server/dist/src/provider/caddy/caddy.provider.js`（当轮构建） | **3** |
+| 源码 `provider/caddy/caddy.provider.ts:130`（`export function`） | 有 |
+| **镜像** `vanblog:r3-verify` 里的 `/app/server/provider/caddy/caddy.provider.js`（`6ae22030` 那代，**早于**引入该函数的提交） | **0** |
+
+⇒ 挂载时只覆盖了 `main.js` 与 `utils/` 三件，`provider/caddy/` 仍是**镜像里那一代**，于是形成
+"**新调用方 + 旧被调方**"的混代 `/app/server`。TS 编译期查不出来（源码是自洽的），
+jest 也查不出来（跑的是源码），**只有真跑产物才暴露**。
+
+👉 **规矩**：
+1. 挂载 dist 就挂**整个** `dist/src/*` → `/app/server/*`（保持摊平布局），**不要挑文件**；
+2. 覆盖后必须做**跨文件一致性正对照**，两条都过才继续：
+   - `grep -c resolveWebsitePagesDir /app/server/provider/caddy/caddy.provider.js` ⇒ **≥1**（被调方与调用方同代）
+   - `grep -c 'require("src/' /app/server/main.js` ⇒ **=0**（构建命令用对了，见 §7.79）
+3. ⚠️ 更稳的做法仍然是**真构建镜像**：挂载 dist 天然会落后于"镜像里那些构建期就固化的东西"
+   （caddy 配置是**构建/启动时生成**的、前台 `.next` 产物是构建期的），所以
+   "自定义 `VANBLOG_CADDY_HTML_PAGES_DIR` ⇒ 页面仍被直服"这类**跨生成期与运行期**的性质
+   **只能**用真镜像测，挂载 dist 测不到。
+
+✅ **同一次事故顺带证明了一个修复真的有效**（活体证据，值得留档）：上面那段日志里
+`[FATAL][startup] 启动流程本身出错（**不是数据库不可达那条路径**）` 这句分类，
+是 `1f4baaf6` 新加的 `registerFatalHandlers()` + `bootstrap().catch()` 在起作用 ——
+它把"启动流程本身出错"与"数据库不可达"**区分开**了，并给出三条下一步
+（等自动恢复 / `./vanblog.sh doctor` / `restore --offline-full <归档>`）。
+⚠️ 在那个修复之前，这里只会是一坨裸 stack + 退出码 1、**没有任何分类**，
+而那正是当初"现场很难判断"的原因（也是本轮去查启动路径的起因）。
+
 ### 7.79-archived 🔴（已作废的旧结论，保留以便追溯）不要用"挂载本机编译产物"验证容器内行为
 
 一次活体验证连续三次失败在同一个地方，根因不是产品缺陷，而是**验证方法本身不成立**。实测事实：
