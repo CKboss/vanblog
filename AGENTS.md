@@ -8481,6 +8481,74 @@ A1–A5 **五条全部返回 400** —— 看起来防护完美。读响应体�
 4. 顺序本身也有安全含义：文件名形状闸门在最前面 ⇒ **匿名**攻击者连"让服务端去读一个任意名字的上传文件"都做不到，
    这是好事；但它也意味着**验签的证据只能靠合规文件名拿到**。
 
+### 7.82 攻击面活体验证的结论：防护有效的部分、四条新发现、以及一条**阻塞 C10K 的疑似集群缺陷**
+
+镜像 `vanblog:r15-full`（`local@1ee46600`），一次性管理员凭据走"未初始化栈 → `POST /api/admin/init` 自设管理员 →
+`/api/admin/auth/login` 拿 token"这条路（⚠️ 端点是 `/api/admin/init`，**不是** `/api/admin/init/init` —— 后者会吃到
+InitMiddleware 的 233 未初始化信封）。token 全程只写 **0600 文件**、经 `curl -K <cfgfile>` 传，不进 argv/日志/汇报。
+留档：`vanblog_dev/tmp/taskA-pos.log`（正向对照）、`taskA-neg.log`、`taskB.log`、`taskB2.log`、`taskB3.log`、
+以及 `c10k-cluster-defect-scene.log`（**1514 行**集群缺陷现场）。
+
+**✅ 实测有效的防护**
+| 攻击 | 实测 | 判定 |
+|---|---|---|
+| **图片炸弹**（`MAX_IMAGE_PIXELS = 40MP`） | 正对照 84B/0.004MP → **201**；62KB 声明 **64MP**（1027:1）→ **400/33ms**；389KB 声明 **400MP**（1028:1，也超 sharp 默认 268MP）→ **400/33ms**；RSS 各 **+1MB**、`RC=0 OOM=false`、health 200 | ✅ **33ms 内按文件头尺寸拒绝，根本没进解码** |
+| **归档炸弹**（体积闸门） | 把上限调到最小值 `VANBLOG_RESTORE_MAX_TOTAL_BYTES=1048576`、上传**真实有效**的 69MB 归档 → **400/550ms**，文案点名"解包后有 68.0 MB（226 个成员），超过允许的 1.00 MB，已拒绝恢复（**没有解包、没有写盘**）…或是一个压缩炸弹"；**df 前后差 4096/8192 字节**、RSS **276.6→272.9MB（不升反降）** | ✅ 判据取自 **tar 头部**（`fullBackup.ts:2055-2066`，注释明写"这一步不需要解包"）⇒ 拒绝发生在解包之前。⚠️ 差分对照：113 字节小归档**过了**体积闸门、在 `manifest.json 校验失败` 处失败 ⇒ 闸门不是"任何垃圾都拒"。⚠️ **默认 100GiB 上限本身未被直接触发**（要真往盘上写 100GiB，本机还有站长的站与 dev 环境）；验的是**同一道闸门的判据与"拒绝先于解包"这个性质** |
+| **确认闸门口径** | `confirm=1` / `yes` / `TRUE` **全部 400**，文案「只接受字面量 true 或字符串 "true"」 | ✅ 第 3 轮那条修复在**真栈**上成立 |
+| **匿名路径没有验签逃生口** | 用能走到签名闸门的形状带上 `skipSignatureCheck=true` ⇒ 仍 **400 且文案是签名不匹配**、站点仍未初始化 | ✅ **决定性**（不是"被忽略后恰好因别的原因失败"） |
+| **签名闸门本身** | A4 伪造 sidecar（`archiveSha256`→`ab×32`）→ **400**「签名**不匹配**（密钥指纹对得上…）」；A5 换公钥 → **400**「签名是**另一把密钥**签的」⇒ **key-mismatch 是拒绝不是放行**；无 `.sig` → **201** + `signatureWarning`（放行 + WARN，与设计一致）；正向对照 → **201**、`signatureWarning: null`、日志「签名校验通过（ed25519，密钥指纹 …）」 | ✅ 而 A4/A5 正是"归档被整体替换"的现实攻击形状 |
+
+**🔴 四条新发现（都待修/待裁定）**
+1. **签名闸门排在清单检查之后** ⇒ "被篡改"会被报成"文件损坏"。代码证据：`init.controller.ts:490` 先
+   `inspectFullBackup(...)`（`:497` 抛"读不出这个备份的清单"），`:508` 才 `assertRestorableArchive(...)`（签名闸门在里面）。
+   翻字节破坏了 zstd 流 ⇒ **清单检查先失败，永远走不到验签**。⚠️ **安全上没有洞**（仍 400、仍未恢复），
+   但**诊断被误导**：站长看到"文件损坏/不完整"会去重下载副本，而真相可能是"这份被人换过"—— 敌意环境下
+   这两种结论的处置完全不同（排查入侵 vs 重传）。建议：把签名闸门提到清单检查之前，或在清单失败时**附加**一句
+   "且该归档带有 .sig，可先验签判断是篡改还是损坏"。
+2. 🔴 **安全相关的 400 一条都不写日志**。日志尺子有效性已验证（298 行、`Nest` 269 命中、`InitController` 6 命中），
+   而 `拒绝恢复` / `不匹配` / `另一把密钥` / `超过允许的` / `恢复会覆盖当前全部数据` **全部 0 命中** ⇒
+   这些拒绝**只存在于 HTTP 响应体**，应用日志无痕（只有 caddy 访问日志能看到一个 400）。
+   后果：`./vanblog.sh doctor` 的"近 24h ERROR/FATAL 计数"看不到；有人拿篡改归档/炸弹**反复试探**，
+   应用日志里没有任何可追溯记录。⚠️ 对照：**成功**路径是写日志的（`签名校验通过` 2 命中、`missing-sig` 的 WARN 2 命中）
+   ⇒ **成功/失败日志不对称**。代码印证：`assertArchiveSignatureForRestore` 的 `!ok` 分支直接
+   `throw new BadRequestException(...)`、**没有 `logger.warn`**（`backupSigning.ts:699-705`）。
+3. 🔴 **`/api/admin/init` 的限流是 5 次/10 分钟，且 404 探测也计数**（`rateLimit.ts:130-138`：
+   `path.startsWith('/api/admin/init')` ⇒ `consumeAttempt('rl-init-<ip>', {max: scaleLimit(INIT_LIMIT_PER_10MIN), windowMs: 10min})`，
+   默认 **5**）。⇒ **任何轮询该前缀做健康/状态检查的监控或脚本，会把真正的初始化/灾难恢复锁死最长 10 分钟** ——
+   而这正是最不该发生的事。建议：状态探测路径不计入初始化配额，或让 `doctor` 用别的端点。
+4. ⚠️ **镜像里的 tar 是 busybox 1.37.0**（`/bin/tar → /bin/busybox`），**不支持 GNU 稀疏成员**
+   （typeflag `S`/0x53 → `tar: unknown typeflag`）。vanblog 自产的归档不受影响（同一条工具链），
+   但**从别处迁来的、含稀疏文件的 tar 无法恢复**；也意味着"用 GNU tar 特性构造的测试/攻击样本"在这个镜像里行为不同。
+
+**⚠️ 一条温和的放大面**：10 万个空文件组成的归档（**548,127 字节**）⇒ **400 但用了 19,488ms**、
+**RSS 200→263MB（+63MB）**、`RC=0`，文案是「归档里没有 manifest.json…」。⇒ **没有看到成员数量上限**：
+一个 0.5MB 的匿名上传换来 19.5s CPU + 63MB 常驻，**可被反复触发**。建议给成员数也设上限。
+
+**🔴🔴 一条阻塞 C10K 的疑似集群缺陷（正在诊断）**：带 `VANBLOG_CLUSTER_WORKERS=auto` 起栈时，
+`POST /api/admin/init` → **500**「服务端当前没有可用的初始化密钥（预期文件 … 不存在，**本进程内存里也没有**）」
+（`provider/init/setupKey.ts:313`）；容器内 **`/var/log/setup.key` 不存在**（而 `/var/log/` 可写）、
+日志里 `setup`/`初始化`/`InitProvider` **命中 0 次** ⇒ **没有任何进程生成过密钥**。
+`init.provider.ts:145-150` 明写"只在主实例跑（`isPrimaryInstance(cluster)`）：**cluster worker 不生成密钥**，
+校验时回落读共享文件"，而 worker 日志确实都有「cluster worker：跳过…（由主实例负责）」⇒ worker 侧判定为 false 是确定的。
+🔴 **待证实的关键一环**：cluster 的 **primary 进程（`scripts/start.js` / `utils/clusterBootstrap.ts`）里有没有 Nest 应用** ——
+如果 primary 只 fork 不跑 Nest，那 `InitProvider.onModuleInit` 在 primary 里**永远不执行** ⇒
+**开了 `VANBLOG_CLUSTER_WORKERS>1` 的站点无法初始化、也无法从归档恢复**（而 `restore.key`／忘记密码可能是同一套判定 ⇒
+连"忘记密码"都救不回来）。⚠️ 而 `VANBLOG_CLUSTER_WORKERS>1` 正是 **C10K 在反代路径上达标的必需配置**
+（上一轮实测：单 worker `200=9156/失败=844`，`auto`（8 worker）`200=10000/失败=0`）⇒ **这条缺陷同时阻塞了性能轴**。
+对照证据：同一 helper、同一归档，在**单 worker** 栈上恢复成功过多次（53 篇）。
+
+⚠️ **一条本机工具限制（会影响所有活体验证的排程）**：`vanblog_dev/run-image-stack.sh` 把 mongo 发布在
+**固定宿主端口 27117** ⇒ **同一时刻只能有一套 helper 栈**，第二套会
+`rootlessport listen tcp 0.0.0.0:27117: bind: address already in use`。要做"A/B 对照"必须**串行**
+（起 A → 取证 → `--down` → 起 B），或手工 `podman run` 并改 mongo 的宿主端口（⚠️ 但要保证两套栈只差一个变量）。
+
+⚠️ 活体验证里踩到的三个探针坑（都已修，值得记）：①`local a="$1" s="$2" args=(… "${a}" …)` ——
+**同一条 `local` 语句里**的数组赋值引用了尚未赋值的 `a`，`set -u` 下 bash 5.2 直接 `unbound variable`、函数当场中止
+⇒ **curl 从未执行、所有 HTTP 码都是空的**（这批空结果差一点被当成"全部被拒"）；②忘了 export rootless 的
+`HOME`/`XDG_RUNTIME_DIR` ⇒ `podman inspect`/`logs` 全报 "no container found" 而 `curl` 照常成功 ⇒
+拿到"日志 0 命中"的**空尺子**（**每个 shell 调用都是新会话，env 不延续**）；③手搓 tar 头部（自己算 checksum）
+造出的是**无效归档**，要用 `tarfile.TarInfo.tobuf(GNU_FORMAT)` 才能被 GNU tar 与 busybox tar 同时认可。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
