@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SECRET_DIR_MODE, ensureSecretDir, writeSecretFileSync } from './secretFileMode';
+import { recordRestoreRejection } from './restoreSecurityLog';
 
 /**
  * 整站备份归档的**离线签名**（detached signature），用来回答一个问题：
@@ -300,6 +301,12 @@ export function generateSigningKeyPair(
   const { dir, privatePath, publicPath } = generatedKeyPaths(backupDir);
   const existed = fs.existsSync(privatePath) || fs.existsSync(publicPath);
   if (existed && !options.overwrite) {
+    // 拒绝一次"会让所有旧 .sig 永久验不过"的破坏性操作，值得留一条痕迹（warn 级别：
+    // 这是站长自己没带 confirm，不是攻击形状）。⚠️ 只记路径，绝不记密钥内容。
+    recordRestoreRejection(
+      'signing-overwrite-refused',
+      `签名密钥已存在且请求没有带显式确认，已拒绝覆盖（私钥路径 ${privatePath}）`,
+    );
     throw new BadRequestException(
       `签名密钥已经存在（${privatePath}）：拒绝覆盖。` +
         `覆盖会让**所有已签名归档的 .sig 永久无法验证**（旧签名是旧私钥签的，而旧私钥会被删掉）。` +
@@ -697,6 +704,22 @@ export function assertArchiveSignatureForRestore(input: {
     return { checked: false, result, warning: warn };
   }
   if (result.ok !== true) {
+    // 🔴 抛之前**必须先记一条日志**：这个分支以前只 throw，于是"验签不通过"这件事
+    //    只存在于 HTTP 响应体里、应用日志一条都没有（实测：`不匹配`/`另一把密钥` 关键词
+    //    在 298 行日志里命中 0，而**成功**路径的 `签名校验通过` 有 2 命中 ⇒ 成功/失败不对称）。
+    //    后果是有人拿被换过的归档反复试探时，事后在应用日志里查不到任何痕迹，
+    //    `./vanblog.sh doctor` 的近 24h ERROR 计数也看不见。见 `utils/restoreSecurityLog.ts`。
+    //    ⚠️ 级别按状态分：`mismatch`/`malformed-sig` 是 error（诚实站长不会自己撞上），
+    //       `key-mismatch` 是 warn（**多半是站长自己配错了公钥**，报 error 会给体检制造常态噪音）。
+    recordRestoreRejection(
+      result.state === 'key-mismatch'
+        ? 'signature-key-mismatch'
+        : result.state === 'malformed-sig'
+          ? 'signature-malformed'
+          : 'signature-mismatch',
+      `${result.message}` +
+        `（归档 ${path.basename(input.archivePath)}；本机验签公钥指纹 ${input.verifyKey.fingerprint}）`,
+    );
     throw new BadRequestException(
       `拒绝恢复：${result.message}` +
         `（如果确认公钥就是不对、且你接受风险，可以在恢复请求的 body 里带 skipSignatureCheck=true 显式跳过 —— ` +

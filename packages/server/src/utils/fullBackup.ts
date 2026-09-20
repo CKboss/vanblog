@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
-import { Transform } from 'stream';
+import { Readable, Transform } from 'stream';
 import type { Db, MongoClient } from 'mongodb';
 import {
   BACKUP_KIND,
@@ -21,13 +21,17 @@ import {
 } from './backupCodec';
 import {
   MANIFEST_COPY_FILENAME,
+  MemberHash,
   TarEntryInfo,
   TarHashResult,
+  TarSinkOptions,
+  createTarHashSink,
   hashFile,
   hashTarStream,
 } from './backupTarStream';
 import { buildIntegrity, probeCompressorChecksum, writeSha256Sidecar } from './backupIntegrity';
 import { RestoreJournalWriter } from './restoreJournal';
+import { recordRestoreRejection } from './restoreSecurityLog';
 import { StaticPruneReport, formatPruneReport, pruneFolderToMatch } from './staticPrune';
 import { envBool } from './envBool';
 import {
@@ -580,11 +584,209 @@ async function spawnArchiveDecompressor(
   return { child, encrypted: true, header };
 }
 
+export interface CappedTarHashOutcome {
+  result: TarHashResult;
+  /**
+   * 是否因为成员条数超过上限而**提前中止**。
+   * ⚠️ 为 true 时 `result.entries` 只包含到上限为止的成员、`result.complete` 一定是 false，
+   * 所以这份结果**只能用来拒绝**，绝不能拿去当"检查通过"。
+   */
+  exceeded: boolean;
+  /** 中止那一刻已经数到的成员条数（用来写可照做的报错文案） */
+  countedAtAbort: number;
+}
+
+/**
+ * `hashTarStream()` 的**带上限**版本：数到第 `maxEntries+1` 个成员就立刻中止。
+ *
+ * ## 为什么不直接用 `hashTarStream` 再事后判断条数
+ * 因为它会把整条 tar 流读完才返回。活体实测（`AGENTS.md` §7.82）：一个 **548,127 字节**、
+ * 含 **10 万个空文件**的归档，让"读成员表"这一步花了 **19,488ms**、RSS 从 200MB 涨到 263MB，
+ * 最后**还是被拒了**（拒的原因是"没有 manifest.json"，不是成员数）。
+ * 也就是说：一个 0.5MB 的**匿名**上传能换来 19.5 秒 CPU + 63MB 常驻，而且可以反复触发 ——
+ * 事后判断条数只能把"拒绝的理由"说对，**一点也省不下那 19.5 秒**。
+ * 所以必须在**解析过程中**就能中止。
+ *
+ * ## 为什么是自己写一遍而不是给 `hashTarStream` 加参数
+ * `hashTarStream` 在 `utils/backupTarStream.ts`（导出侧也在用它），给它加"可以中途 reject"的语义
+ * 会改动一个被多处依赖的公共函数的契约。这里改用**它已经导出的** `createTarHashSink`
+ * 自己接管收集与结算 —— 解析逻辑（tar 头部、长名、pax、校验和）一行都没有复制，
+ * 复制的只是 `hashTarStream` 那几十行的记账部分。
+ * ⚠️ 代价是"记账口径可能与 `hashTarStream` 漂移"，所以有一条**平价守卫**：
+ * 同一个真归档分别喂给两者，未触上限时各字段必须逐项相等
+ * （见 `fullBackup.memberCap.spec.ts`）。
+ */
+export function hashTarStreamCapped(
+  source: Readable,
+  options: TarSinkOptions & {
+    /** null / undefined / ≤0 ⇒ 不设上限（等价于 `hashTarStream`） */
+    maxEntries?: number | null;
+    /** 触发上限时**同步**回调（调用方用它去 SIGKILL 解压器子进程） */
+    onExceeded?: (countedSoFar: number) => void;
+  } = {},
+): Promise<CappedTarHashOutcome> {
+  const cap =
+    typeof options.maxEntries === 'number' && Number.isFinite(options.maxEntries) && options.maxEntries > 0
+      ? Math.floor(options.maxEntries)
+      : null;
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const entries: TarEntryInfo[] = [];
+    const members: Record<string, MemberHash | null> = {};
+    const duplicateNames: string[] = [];
+    let bytes = 0;
+    let exceeded = false;
+    let settled = false;
+
+    const buildResult = (complete: boolean, badHeaders: string[]): TarHashResult => ({
+      entries,
+      members,
+      memberCount: entries.length,
+      duplicateNames,
+      badHeaders,
+      complete,
+      bytes,
+      ms: Date.now() - started,
+    });
+
+    const settle = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      // 🔴 中止之后**一定还会有**流事件（destroy 触发的 error / close / unpipe）。
+      //    那时必须仍然按"超限"结算，绝不能被后来的 error 改判成 reject ——
+      //    否则调用方拿到的是一个含糊的流错误，而不是可照做的"成员数超上限"。
+      if (exceeded) {
+        try {
+          source.destroy();
+        } catch {
+          // 已经关了
+        }
+        try {
+          sink.destroy();
+        } catch {
+          // 已经关了
+        }
+        resolve({
+          result: buildResult(false, sink.badHeaders),
+          exceeded: true,
+          countedAtAbort: entries.length,
+        });
+        return;
+      }
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve({
+        result: buildResult(sink.sawEndBlock, sink.badHeaders),
+        exceeded: false,
+        countedAtAbort: entries.length,
+      });
+    };
+
+    const sink = createTarHashSink(
+      (entry) => {
+        // 🔴 已经中止了就**一个都不要再收**：sink 的 `consume()` 会把当前 chunk 里剩下的
+        //    512 字节块一次性解析完（一个 chunk 通常 64KB ⇒ 上百个成员），
+        //    而 `settle()` 是在回调里**同步** resolve 的 —— 不拦住的话，
+        //    resolve 之后 `result.entries` 这个**同一个数组引用**还会继续变长
+        //    （实测：cap=5 时 `countedAtAbort` 是 6，而 `entries.length` 最终是 128，
+        //    与 `memberCount` 自相矛盾）。调用方拿到一个会自己长大的数组是 bug，不是取舍。
+        if (exceeded) return;
+        entries.push(entry);
+        if (Object.prototype.hasOwnProperty.call(members, entry.name)) {
+          if (!duplicateNames.includes(entry.name)) duplicateNames.push(entry.name);
+        }
+        if (entry.kind !== 'dir') {
+          members[entry.name] = { sha256: entry.sha256, bytes: entry.size };
+        }
+        if (cap !== null && entries.length > cap && !exceeded) {
+          exceeded = true;
+          // ⚠️ 先回调（让调用方杀子进程），再拆流：反过来的话解压器还会往一个
+          //    已经 destroy 的管道里写，白白多一轮 EPIPE。
+          try {
+            options.onExceeded?.(entries.length);
+          } catch {
+            // 回调炸了不该让这次中止变成未处理异常
+          }
+          settle();
+        }
+      },
+      { computeHashes: options.computeHashes },
+    );
+
+    source.on('error', (err: Error) => settle(err));
+    sink.on('error', (err: Error) => settle(err));
+    source.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+    });
+    sink.on('finish', () => settle());
+    source.pipe(sink);
+  });
+}
+
+/**
+ * 把 tar / 解压器的原始 stderr 翻译成**可照做**的一句话提示（识别不了就原样返回）。
+ *
+ * ## 为什么需要它
+ * 活体实测（`AGENTS.md` §7.82 第 4 条）：镜像里的 `/bin/tar` 是 **busybox 1.37.0**
+ * （`/bin/tar → /bin/busybox`），它**不支持 GNU 稀疏成员**（typeflag `S`/0x53），
+ * 遇到就报 `tar: unknown typeflag: 0x53` 直接失败。
+ * vanblog **自己产出**的归档不可能有这个形状（导出用 `tar -cf - -C staging .`，
+ * 既没有 `--sparse` 也没有 `--xattrs`，而且写与读是**同一个** busybox 二进制），
+ * 所以受影响的只有"从别处迁来的归档"—— 但那恰恰是灾难恢复时最可能出现的输入，
+ * 而 `unknown typeflag: 0x53` 对站长来说完全是天书。
+ *
+ * ⚠️ **只做附加提示，不改写原文**：原始 stderr 必须留在消息里（那是唯一能拿去搜索的东西），
+ * 而且既有的 spec 用 `toMatch(/读不出归档成员表|成员/)` 这类前缀断言，替换原文会把它们打红。
+ */
+export function explainTarFailure(rawStderr: string): string {
+  const text = String(rawStderr ?? '');
+  if (!text.trim()) {
+    return '';
+  }
+  // 顺序有讲究：先特指（稀疏/typeflag）再泛指（不像 tar / 截断），
+  // 否则 "unknown typeflag" 会先被 "not a tar archive" 那条泛化提示吃掉。
+  if (/unknown typeflag|unrecognized typeflag/i.test(text)) {
+    return (
+      ' ｜ 提示：本机镜像里的 tar 是 **busybox**，它不支持这份归档用到的 GNU 扩展成员类型'
+      + '（最常见是稀疏文件，typeflag S / 0x53）。VanBlog 自己导出的归档不会用到它，'
+      + '所以这份多半是用 GNU tar 从别处打包/重新打包过的。'
+      + '办法：在有 GNU tar 的机器上重新打包（不要加 --sparse），'
+      + '或改用 VanBlog 的导出功能重新生成一份归档。'
+    );
+  }
+  if (/does not look like a tar archive|invalid tar magic|not a tar archive/i.test(text)) {
+    return (
+      ' ｜ 提示：解压器出来的字节不是 tar 流。常见原因是压缩格式与后缀不符'
+      + '（例如把 .tar.gz 改名成 .tar.zst），或这个文件根本不是本功能导出的归档。'
+    );
+  }
+  if (/short read|unexpected end of (file|stream)|unexpected eof/i.test(text)) {
+    return ' ｜ 提示：归档被截断了（下载/拷贝不完整）。请核对 .sha256 sidecar 或重新拷一份完整的。';
+  }
+  return '';
+}
+
 export async function hashArchiveMembers(
   archivePath: string,
   spec: CompressorSpec,
-  options: { computeHashes?: boolean; passphrase?: string | null } = {},
-): Promise<{ result: TarHashResult; decompressError: string | null }> {
+  options: {
+    computeHashes?: boolean;
+    passphrase?: string | null;
+    /**
+     * 成员**条数**上限；超过就立刻中止（不等整条流读完）并在返回值里标 `membersExceeded`。
+     * null / 不传 ⇒ 不设上限（`backupVerify` 的 deep 校验走这条：那是管理员接口、
+     * 而且它必须读完整条流才能算逐成员哈希，中途截断会让校验结论失去意义）。
+     */
+    maxEntries?: number | null;
+  } = {},
+): Promise<{
+  result: TarHashResult;
+  decompressError: string | null;
+  membersExceeded: boolean;
+  countedAtAbort: number;
+}> {
   let decErr = '';
   let exitCode: number | null = null;
   let upstreamError: string | null = null;
@@ -609,17 +811,46 @@ export async function hashArchiveMembers(
     });
     decompressor.on('close', () => resolve(exitCode));
   });
-  const hashed = hashTarStream(decompressor.stdout, options);
+  let membersExceeded = false;
+  let countedAtAbort = 0;
+  const hashed =
+    options.maxEntries && options.maxEntries > 0
+      ? hashTarStreamCapped(decompressor.stdout, {
+          computeHashes: options.computeHashes,
+          maxEntries: options.maxEntries,
+          onExceeded: (counted) => {
+            membersExceeded = true;
+            countedAtAbort = counted;
+            // 🔴 必须**主动杀掉解压器**：只是 `source.destroy()` 的话，解压器还在
+            //    读那个几 GB 的压缩流、往一个已经关掉的管道里写，直到 EPIPE 才停 ——
+            //    在那之前它继续吃 CPU 与内存，而"提前中止"的全部意义就是省下这些。
+            //    ⚠️ SIGKILL 而不是 SIGTERM：zstd/xz 对 SIGTERM 的收尾可能还要flush 一阵。
+            try {
+              decompressor.kill('SIGKILL');
+            } catch {
+              // 进程可能已经自己退了
+            }
+          },
+        }).then((outcome) => {
+          membersExceeded = outcome.exceeded;
+          countedAtAbort = outcome.countedAtAbort;
+          return outcome.result;
+        })
+      : hashTarStream(decompressor.stdout, options);
   const [result, code] = await Promise.all([hashed, exited.catch(() => null)]);
   // ⚠️ 解密失败优先报：这时解压器只是"收到了 EOF"，退出码可能是 0 或 1，
   //    而真正的原因（口令不对 / 归档被截断 / 块被重排）在上游那条错误里。
   //    不这么做的话，站长看到的是"解压失败（退出码 1）"，会以为是压缩器坏了。
-  const decompressError = upstreamError
-    ? `解密失败：${upstreamError}`
-    : code === 0
-      ? null
-      : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`;
-  return { result, decompressError };
+  // 🔴 但**超限时不能报解压错误**：那个非 0 退出码是我们自己 SIGKILL 出来的，
+  //    把它当成"归档解不开"会把一条清清楚楚的"成员数超上限"变成误导性的"文件损坏"。
+  const decompressError = membersExceeded
+    ? null
+    : upstreamError
+      ? `解密失败：${upstreamError}`
+      : code === 0
+        ? null
+        : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 300)}${explainTarFailure(decErr)}`;
+  return { result, decompressError, membersExceeded, countedAtAbort };
 }
 
 /**
@@ -632,7 +863,7 @@ export async function hashArchiveMembers(
  */
 export async function listArchiveEntries(
   archivePath: string,
-  options: { passphrase?: string | null } = {},
+  options: { passphrase?: string | null; maxEntries?: number | null } = {},
 ): Promise<{ entries: TarEntryInfo[]; decompressError: string | null }> {
   const format = detectFormat(archivePath);
   if (!format) {
@@ -642,10 +873,31 @@ export async function listArchiveEntries(
   if (!spec) {
     throw new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`);
   }
-  const { result, decompressError } = await hashArchiveMembers(archivePath, spec, {
-    computeHashes: false,
-    passphrase: options.passphrase,
-  });
+  // 成员条数上限：默认取 env（`restoreMaxMembers()`），调用方可以显式覆盖或传 null 关掉。
+  // ⚠️ 上限是在**解析过程中**生效的（`hashTarStreamCapped` 数到第 cap+1 个成员就中止并
+  //    SIGKILL 解压器），所以超限的代价是"读到上限为止"，不是"读完整条流再拒绝"。
+  const cap = options.maxEntries === undefined ? restoreMaxMembers() : options.maxEntries;
+  const { result, decompressError, membersExceeded, countedAtAbort } = await hashArchiveMembers(
+    archivePath,
+    spec,
+    {
+      computeHashes: false,
+      passphrase: options.passphrase,
+      maxEntries: cap,
+    },
+  );
+  if (membersExceeded) {
+    const limit = cap && cap > 0 ? cap : restoreMaxMembers();
+    const message =
+      `备份归档的成员条数超过上限（已数到 ${countedAtAbort} 个仍未结束，允许 ${limit} 个），` +
+      `已**中止读取**并拒绝恢复（没有解包、没有写盘）。` +
+      `这通常说明它不是本功能导出的整站备份，或是一个用海量小成员做放大的归档。` +
+      `确有大站要恢复（成员数就是静态文件数，5 万张图床图片大约就是 5 万条）：` +
+      `给 server 设 ${RESTORE_MAX_MEMBERS_ENV}=<条数> 放宽上限`;
+    // 🔴 抛之前先记日志：匿名可达的放大尝试必须留下痕迹（见 utils/restoreSecurityLog.ts）
+    recordRestoreRejection('member-cap', `${message}（归档 ${path.basename(archivePath)}）`);
+    throw new BadRequestException(message);
+  }
   return { entries: result.entries, decompressError };
 }
 
@@ -707,7 +959,7 @@ async function decompressUntar(
         fail(
           upstreamError
             ? `解密失败：${upstreamError}`
-            : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 500)}`,
+            : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 500)}${explainTarFailure(decErr)}`,
         );
       }
     });
@@ -716,7 +968,7 @@ async function decompressUntar(
         fail(
           upstreamError
             ? `解密失败：${upstreamError}`
-            : `tar 解包失败（退出码 ${code}）：${tarErr.slice(0, 500)}`,
+            : `tar 解包失败（退出码 ${code}）：${tarErr.slice(0, 500)}${explainTarFailure(tarErr)}`,
         );
         return;
       }
@@ -1889,6 +2141,55 @@ export function restoreMaxTotalBytes(env: NodeJS.ProcessEnv = process.env): numb
   return Math.min(Math.max(Math.floor(n), RESTORE_MAX_TOTAL_BYTES_MIN), RESTORE_MAX_TOTAL_BYTES_LIMIT);
 }
 
+/** 恢复前"读成员表"这一步的**成员条数**上限（环境变量名；见 restoreMaxMembers） */
+export const RESTORE_MAX_MEMBERS_ENV = 'VANBLOG_RESTORE_MAX_MEMBERS';
+
+/**
+ * 默认上限 **50,000 个成员**。
+ *
+ * ## 为什么需要它（体积上限拦不住这一类）
+ * 体积闸门看的是成员 `size` 之和，而**空文件的 size 是 0** ⇒ 一个塞满空成员的归档
+ * 声明体积是 0 字节，体积闸门**永远放行**。活体实测（`AGENTS.md` §7.82）：
+ * **548,127 字节**的归档装 **10 万个空文件**，让"读成员表"跑了 **19,488ms**、
+ * RSS 从 200MB 涨到 263MB（+63MB），最后才因为"没有 manifest.json"被拒 ——
+ * 也就是说这 19.5 秒 CPU 与 63MB 常驻**全都白烧了**，而且 `POST /api/admin/init/restore`
+ * 是**匿名可达**的（站点未初始化期间），可以反复触发。
+ *
+ * ## 默认值怎么定的（两个方向都不能错）
+ * 成员条数 ≈ 静态文件数 + 十几个 NDJSON/manifest 成员。实测那份 53 篇文章的真实归档是
+ * **226 个成员**，所以 50,000 是它的 **220 倍** —— 一个有 5 万张图床图片的大站也还在上限内。
+ * 再往上放就没意义了：上限的作用是**给单次匿名请求的工作量封顶**，
+ * 50,000 条大约把最坏情况压在 ~10s / ~32MB（按实测 10 万条 = 19.5s / 63MB 线性外推）。
+ * ⚠️ 与体积上限（默认 100 GiB，注释里写"图床几十万张也就这个量级"）相比这个默认值更紧，
+ * 这是**有意**的：体积超限的代价是磁盘（不可逆、会连带弄死 mongo 与日志），
+ * 而成员超限的代价是 CPU 与内存（请求结束就还回来）—— 但**恢复被误拒的代价是可逆的**
+ * （报错文案里就写着怎么放宽，改个环境变量重跑一次），
+ * 而"匿名请求能无上限地买 CPU"是不可逆的。两害相权取"宁可让极端大站多设一个变量"。
+ */
+const RESTORE_MAX_MEMBERS_DEFAULT = 50_000;
+/** 再小就没法恢复任何真实归档了（连 manifest + 十几个 NDJSON 都要占掉一部分） */
+const RESTORE_MAX_MEMBERS_MIN = 100;
+/** 天花板：再高就等于没有上限（500 万条 × 512 字节头部 = 2.5GB 的 tar 头） */
+const RESTORE_MAX_MEMBERS_LIMIT = 5_000_000;
+
+/**
+ * 读 `VANBLOG_RESTORE_MAX_MEMBERS`。
+ * 语义与 `restoreMaxTotalBytes` / `utils/envNumber.ts` 完全一致：
+ * 缺失 / 空串 / 非数字 / ≤0 ⇒ **回落默认**，合法值夹到 `[100, 5,000,000]` 再向下取整。
+ * ⚠️ 所以**写 0 得到的是默认值，不是"不限制"**（想放宽请写一个大数）。
+ */
+export function restoreMaxMembers(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = String(env[RESTORE_MAX_MEMBERS_ENV] ?? '').trim();
+  if (!raw) {
+    return RESTORE_MAX_MEMBERS_DEFAULT;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return RESTORE_MAX_MEMBERS_DEFAULT;
+  }
+  return Math.min(Math.max(Math.floor(n), RESTORE_MAX_MEMBERS_MIN), RESTORE_MAX_MEMBERS_LIMIT);
+}
+
 /**
  * 目录所在卷的**剩余字节**；读不到就返回 null（**不猜、不当成 0**）。
  *
@@ -2019,6 +2320,10 @@ export async function assertRestorableArchive(
       try {
         actualSha256 = (await hashFile(archivePath)).sha256;
       } catch (err) {
+        const detail = `为验签回读归档算 sha256 失败：${(err as Error)?.message || err}`;
+        // 记日志再抛：这条意味着"配了公钥、有 .sig，但连算哈希都做不到"，
+        // 恢复被拒而响应体之外**无痕**（见 utils/restoreSecurityLog.ts 的动机）。
+        recordRestoreRejection('signature-hash-failed', `${detail}（归档 ${path.basename(archivePath)}）`);
         throw new BadRequestException(
           `为验签回读归档算 sha256 失败（${archivePath}）：${(err as Error)?.message || err}` +
             ` —— 已拒绝恢复（验不了签名就不解包）`,
@@ -2043,13 +2348,20 @@ export async function assertRestorableArchive(
   });
   if (decompressError) {
     // 归档解压都过不去（截断/位翻转）：这时"成员表"是不完整的，绝不能当成"检查通过"
+    // ⚠️ 这也是"篡改过的归档"最常落到的那一格（翻一个字节就破坏 zstd 流），所以必须留痕。
+    recordRestoreRejection(
+      'member-table-unreadable',
+      `读不出归档成员表：${decompressError}（归档 ${path.basename(archivePath)}）`,
+    );
     throw new BadRequestException(`读不出归档成员表：${decompressError}`);
   }
   const unsafe = findUnsafeArchiveEntry(entries);
   if (unsafe) {
-    throw new BadRequestException(
-      `备份归档里有会写到解包目录之外的成员（${unsafe.name}：${unsafe.reason}），已拒绝恢复`,
-    );
+    const detail = `备份归档里有会写到解包目录之外的成员（${unsafe.name}：${unsafe.reason}）`;
+    // 🔴 error 级：路径穿越/软链成员是"来路不正的归档"才有的形状，诚实站长不会自己撞上。
+    //    这一条尤其要留痕：它对应的攻击是"种一个指向 /etc/passwd 的 x.webp"⇒ 匿名任意文件读。
+    recordRestoreRejection('unsafe-entry', `${detail}（归档 ${path.basename(archivePath)}）`);
+    throw new BadRequestException(`${detail}，已拒绝恢复`);
   }
   // 成员 size 取自 tar 头部（`utils/backupTarStream.ts` 的 TarEntryInfo.size），
   // 所以这一步**不需要解包**就能知道要写多少字节。目录/软链/硬链的 size 是 0，天然不计。
@@ -2059,6 +2371,12 @@ export async function assertRestorableArchive(
   );
   const cap = restoreMaxTotalBytes();
   if (totalBytes > cap) {
+    // 🔴 error 级：压缩炸弹。留痕才有"有人在反复试"的证据。
+    recordRestoreRejection(
+      'size-cap',
+      `解包后 ${formatBytes(totalBytes)}（${entries.length} 个成员）超过上限 ${formatBytes(cap)}` +
+        `（归档 ${path.basename(archivePath)}）`,
+    );
     throw new BadRequestException(
       `备份归档解包后有 ${formatBytes(totalBytes)}（${entries.length} 个成员），` +
         `超过允许的 ${formatBytes(cap)}，已拒绝恢复（没有解包、没有写盘）。` +
@@ -2073,6 +2391,8 @@ export async function assertRestorableArchive(
     // 这三种边界能直接单测（`fs.statfsSync` 在 jest 里不可重定义，没法 mock 出剩余空间）
     const shortfall = restoreSpaceShortfallMessage(totalBytes, freeSpaceBytes(targetDir), targetDir);
     if (shortfall) {
+      // warn 级：这是运维状况（盘不够），不是攻击形状；但同样不能只存在于响应体里。
+      recordRestoreRejection('space-shortfall', `${shortfall}（归档 ${path.basename(archivePath)}）`);
       throw new BadRequestException(shortfall);
     }
   }
@@ -2417,6 +2737,10 @@ export async function restoreFullBackup(
       await decompressUntar(archivePath, staging, spec, options.passphrase);
     } catch (err) {
       // 下载不完整 / 文件被截断 / 用别的工具改过名，都会走到这里
+      recordRestoreRejection(
+        'unpack-failed',
+        `备份文件解不开（可能已损坏或不完整）：${(err as Error)?.message}（归档 ${path.basename(archivePath)}）`,
+      );
       throw new BadRequestException(`备份文件解不开（可能已损坏或不完整）：${(err as Error)?.message}`);
     }
 
@@ -2447,8 +2771,18 @@ export async function restoreFullBackup(
     }
     if (!manifest) {
       if (!fs.existsSync(manifestPath) && !fs.existsSync(copyPath)) {
+        // warn 级：传错文件是诚实站长会犯的错；但"匿名上传一个随便的 tar"也落在这里，
+        // 所以仍然要留痕（节流 + 累计计数会让"反复试"显形，见 restoreSecurityLog）。
+        recordRestoreRejection(
+          'not-our-archive',
+          `归档里没有 manifest.json（归档 ${path.basename(archivePath)}）`,
+        );
         throw new BadRequestException('归档里没有 manifest.json，不是本功能导出的整站备份');
       }
+      recordRestoreRejection(
+        'not-our-archive',
+        `manifest.json 校验失败（副本 MANIFEST.copy.json 同样读不出）（归档 ${path.basename(archivePath)}）`,
+      );
       throw new BadRequestException(
         'manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新（副本 MANIFEST.copy.json 同样读不出）',
       );

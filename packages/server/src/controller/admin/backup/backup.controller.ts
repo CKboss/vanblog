@@ -53,6 +53,7 @@ import { collectCategoriesFromBackup, toExportCategory } from 'src/utils/backupC
 // 初始化页的 `POST /api/admin/init/restore`（匿名可达，仅未初始化时开放）要用**同一份**限额，
 // 两边各写一份迟早会漂（一边 8GB 一边 200MB，大站就会在初始化页莫名其妙地 413）。
 import { RESTORE_UPLOAD_OPTIONS } from 'src/utils/restoreUpload';
+import { recordRestoreRejection } from 'src/utils/restoreSecurityLog';
 import { emptySignature } from 'src/utils/backupVerify';
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
 import { availableFormats, pickSpec, takeRestoreSignatureWarning } from 'src/utils/fullBackup';
@@ -494,6 +495,18 @@ export class BackupController {
     //    两个助手现在语义一致，但这里刻意点名 `isTrue`：万一将来有人把 `checkTrue` 改回松散比较，
     //    这道闸门也不会跟着松（有守卫钉住 `confirm:'1'`/`1`/`[1]` 一律不算确认）。
     if (!isTrue(body?.confirm)) {
+      // 🔴 抛之前先记一条：活体实测证明这道闸门的拒绝**只存在于响应体**、应用日志一条都没有
+      //    （`恢复会覆盖当前全部数据` 在 298 行日志里命中 0）。级别是 warn —— 忘带 confirm 是
+      //    诚实站长会犯的错；但"有人反复打这个端点"会经由累计计数的 ERROR 汇总显形。
+      //    ⚠️ 只记"上传了文件还是没有"与指定的备份名，绝不记 body 里的 passphrase。
+      recordRestoreRejection(
+        'confirm-missing',
+        // ⚠️ 用 `uploadedPath` 而不是 `uploaded`：后者在这道闸门**之后**才声明
+        //    （block-scoped，提前引用是 TS2448）。
+        `破坏性恢复请求缺少有效的 confirm=true（来源：${
+          uploadedPath ? '上传的文件' : `已有备份 ${String(body?.name ?? '(未指定)')}`
+        }）`,
+      );
       throw new BadRequestException(
         '恢复会覆盖当前全部数据，请带 confirm=true 再调用一次（只接受字面量 true 或字符串 "true"；' +
           '"1"/"yes"/"TRUE" 都不算确认）',
