@@ -3910,6 +3910,16 @@ HTML 再塞进 `<code>`。而这个库的 `escapeXML` **默认值是 `false`**�
 | 一万条连接上同时请求 `/robots.txt`（极轻，但要反代到 Node） | 30 秒完成 4397 个 |
 | 混合流量并发扫描（改造前 → 改造后） | c=50：225→**259 rps**、336→**396 Mbps**；c=200：259→**284 rps**、p50 364→**262ms**、p95 2357→**1572ms**；c=500：246→**270 rps**；c=1000：200→**272 rps**、250→**420 Mbps**、**101 个 502 → 0** |
 
+> ⚠️ **2026-09-20 更正（§7.73.2）**：下面这句"真正的天花板是 Node 应用层"**当时就没被证明**，而本轮的取证
+> 推翻了它。反代路径一万并发失败的**第一道墙是内核 accept 队列** —— `main.ts` 调 `app.listen(port, host)`
+> 没传 backlog，Node 默认 **511**，而 caddy 每主机只保 32 条空闲上游连接 ⇒ 一台机器不需要任何技巧就能超过它。
+> 决定性证据：caddy 日志是 `dial tcp 127.0.0.1:3000: i/o timeout` 而**不是** `cannot assign requested address`
+> （排除临时端口耗尽），容器 netns 内 `ListenOverflows`/`ListenDrops` 均 **3745**，与 3563 个 502 吻合。
+> 把 backlog 显式设为 4096（`VANBLOG_LISTEN_BACKLOG`）、caddy 上游池 32→512、meta 缓存加 single-flight 之后：
+> 单 worker 仍有 844 个 502，`VANBLOG_CLUSTER_WORKERS=auto`（8 worker）时 **200=10000 / 失败=0**、
+> `ListenOverflows Δ=0`。⇒ **应用层的天花板其实从未被测到**。原表与原结论保留（它是当时的实测记录），
+> 完整的两轮复测与"达标三条缺一不可"见 `docs/advanced/benchmark.md` §5.1/§5.2。
+
 也就是说：**连接层（caddy）本来就能扛 C10K**，静态内容直服之后"一万并发拿图片"是 0.8 秒的事；
 真正的天花板是 **Node 应用层（单进程单核）** —— 凡是反代到 Node 的请求，
 一万并发就要排队几十秒。要继续往上抬只有三条路，按性价比排序：
@@ -4608,7 +4618,8 @@ statics 那条走**纯索引**的 `COUNT_SCAN[staticType_1]`。**没有引入任
 - `src/provider/token/token.provider.jwt.spec.ts`（5 条）：用与 `app.module.ts` **同形状**的
   `JwtModule.registerAsync({useFactory})` + 真 `JwtService`，只桩掉 Mongo 模型与 `SettingProvider`。
   断言登录 token 是 HS256 三段、`exp - iat` 等于登录设置的 `expiresIn`（7 天默认与 60 秒覆盖都测）、
-  token 行按 `{userId, token, expiresIn}` 落库；API token 是 `role:'admin'` + 365 天 + `userId 666666`；
+  token 行按 `{userId, token, expiresIn}` 落库；API token 是 `role:'admin'` + `userId 666666`；
+   ⚠️ 2026-09-20 起默认有效期是 **90 天**（`VANBLOG_API_TOKEN_TTL_DAYS`），不再是 365 天 —— 已签发的不受影响（§7.73.1）。
   反向两例：换密钥验不过、篡改 payload 验不过。为什么必须单测：**签 token 这条路本机无法用 HTTP 验**
   （登录要密码、API Token 要先登录才能建），`@nestjs/jwt` 10 → 11 若悄悄坏了，只会表现为"下次登不进后台"。
 
@@ -7637,19 +7648,228 @@ lockfile override 与 `package.json` **53 对 53**；镜像 **869 MB**（`vanblo
 （`better-sqlite3` 没有 Node 24 预编译、node-gyp 也没接好）⇒ waline 子树只能在镜像构建里验证；
 ⑥ TOC mXSS 与本轮各修复的浏览器/真容器端到端复现。
 
-### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **批量修复轮（§7.72）之后**复跑，本机实测、**串行**）
+### 7.73 敌意环境加固：可用性优先的取舍，以及"测量本身也是被测量对象"
+
+> 2026-09-20。站长把需求换了个说法：这个博客要**在极端网络攻击环境下发布信息**，所以判据从
+> "有没有漏洞"变成"被打的时候还能不能把信息发出去"。这一轮 8 个提交（`f0732f79`…`226ac207`）
+> 按 **可用性 > 完整性 > 机密性** 排序做事，也把"测量工具自己会说谎"这件事彻底暴露了出来。
+
+#### 7.73.1 范围
+
+| 提交 | 做的事 |
+|---|---|
+| `f0732f79` | Node listen backlog 显式化（默认 511 → 4096，`VANBLOG_LISTEN_BACKLOG`）——C10K 在反代路径上失败的**根因** |
+| `914b134e` | 版本检查默认关闭，不再每次启动回连第三方（`VAN_BLOG_VERSION_API` 默认空） |
+| `0050f2fe` | 站点已经死了也能恢复（`restore --offline-full`）、`doctor`、cron 失败回落离线备份、健康探测覆盖前台且 podman 也有 |
+| `050496f5` | 压测工具的失败**四分类** + 建连/请求分阶段 + 容器内 netns 内核计数器增量；顺带修掉工具自己两处**吞掉失败**的缺陷 |
+| `ab4693ec` | caddy provider 的 fire-and-forget init 与 9 处无超时 axios（HTTPS 设置静默失败） |
+| `6fff2ed4` | caddy 连接层限制显式化、HSTS 可配、访问日志开关、entrypoint 不再吞 WARN |
+| `791e3b75` | 本轮最大一包：匿名资源耗尽路径全部收口、口令策略、登录 CIDR 白名单、备份可选加密、JWT 密钥可轮换 |
+| `c05d3a29` | 运维脚本认得加密归档、新增 `rotate-jwt`、`install-cron --every/--with-verify/--with-drill`、`VANBLOG_BACKUP_MIRROR_DIR`；并修掉压测工具里一条**已经过时的假断言** |
+| `e564075f` / `226ac207` | 文档同步；两轮万级复测留档进 `docs/advanced/benchmark.md` §5.2 |
+
+#### 7.73.2 教训一：修一个瓶颈会暴露下一个，而内核计数器会朝**反方向**走
+
+C10K 在反代路径上失败，根因是 Node 默认 backlog **511**（`min(backlog, somaxconn)`，且
+`tcp_abort_on_overflow=0` 让溢出**静默**：丢 SYN 而不是回 RST，客户端按 1/2/4 s 重传，于是表现为超时
+而不是拒绝）。证据链是决定性的：caddy 日志说 `dial tcp 127.0.0.1:3000: i/o timeout` 而**不是**
+`cannot assign requested address`（⇒ 排除临时端口耗尽），容器 netns 里 `ListenOverflows`/`ListenDrops`
+都是 3745，与 3563 个 502 吻合。
+
+把 backlog 提到 4096、caddy 上游池 32→512、meta 缓存加 single-flight 之后，两轮复测（§5.2）：
+
+| 配置 | 反代路径 | `ListenOverflows` |
+|---|---|---|
+| 改前 | `200=6437 / 502=3563` | Δ=3745 |
+| 改后·单 worker | `200=9156 / 502=844` | **Δ=19658**（涨 5 倍） |
+| 改后·`CLUSTER_WORKERS=auto`（8 worker） | **`200=10000 / 失败=0`** | **Δ=0** |
+
+⚠️ **端到端失败降了 76%，而内核溢出计数涨了 5 倍** —— 队列更深 ⇒ 排进来更多、满时丢得也更多，但重传
+（`TCPSynRetrans Δ=11898`）大多最终成功。所以：
+
+> **"内核计数器变好看"不等于"修好了"；反过来也成立。唯一判据是端到端的失败分类。**
+
+还有一条同样重要：**backlog 只解决"队列太浅"，万级并发新建连接需要多个进程一起 accept**。单 worker
+那一轮瓶颈已经移到"一个进程抽干接受队列的速度"。⇒ 达标三条缺一不可：worker > 1、
+`somaxconn ≥ VANBLOG_LISTEN_BACKLOG`（**发行版常见默认 128** 会把 4096 夹成 128）、fd 够两万
+（compose 已设 65536；**k8s 清单设不了**，要靠节点；手工 `podman run` 不传 `--ulimit` 可能只有 1024
+⇒ 先 `EMFILE`）。⚠️ 别在任何文档里写"默认配置就达标"——默认是单 worker。
+
+#### 7.73.3 教训二：取证要**分类**，不要只数失败
+
+工具原来判定成败的办法是"看 `curl` 输出**第一行**是不是以 `200` 开头"，于是 `-w '%{http_code}'` 写在
+格式串中间时，后面的 `502`、`(7) Failed to connect`、`(28) Operation timed out` 全被那个 "200" 吞掉 ——
+实测报"成功 5033 / 失败 4967"，而**没有任何**关于失败是什么的线索。四种失败指向四个完全不同的瓶颈：
+`http_502`（上游完不成）、`tcp_refused`（端口在但队列溢出后被拒）、`tcp_timeout`（丢 SYN + 重传到死）、
+`http_其它非200`。
+
+⇒ 规矩：**失败必须按原因分桶，并且留一个 `未归类` 计数器**。`未归类` 不是装饰品：它非零就说明工具又漏了
+一种失败模式 —— 那正是"4967 个失败却一个都说不清"能存在一个月的机制。
+
+同轮还修掉工具自己两处**吞掉失败**的缺陷，两处都是"看起来无害的省略"：预热对每条路径
+`curl -sS -o /dev/null "$base$path"` **既没有 `-m` 也不检查退出码** ⇒ 一个挂住的路径让整轮无限期卡死
+（外层超时会被读成"压测失败"，其实是"压测永远不结束"）；建连阶段 10 s 超时后**既不算成功也不算失败**
+⇒ 那些连接从统计里**彻底消失**，而"建连超时"恰恰是 backlog 溢出最典型的信号。⚠️ 所以达标判据要写成
+"两个目标都 `失败=0` **且** `ListenOverflows Δ=0`"，只写"失败=0"不够。
+
+#### 7.73.4 教训三：假读数比缺数据更糟，假断言比假读数更糟
+
+两件事，同一族：
+
+1. **假读数**：`/proc/net/tcp` 的 LISTEN 行里 `tx_queue:rx_queue` **不是**队列深度 —— 内核
+   `get_tcp4_sock()` 在那里打的是 `write_seq - snd_una` 与 `rcv_nxt - copied_seq`，对 LISTEN socket
+   恒为 `00000000:00000000`。照抄会得到 "backlog = 0"，而它**看起来像一次测量**。⇒ 工具现在只列监听
+   端口、并明说队列深度读不到以及为什么（镜像里没有 `ss`）。
+   > 规矩：**宁可输出"未采集到"，也不要输出看起来像数据的假读数。**
+2. **假断言**：`scripts/benchmark/measure.sh` 曾**无条件**打印一句"代码里 Node `listen()` 没传 backlog
+   ⇒ 内核默认 511"。`f0732f79` 之后这句就是假的，而它被打印进**每一份证据文件** —— 同一份 log 里，上面
+   的"被测对象自证"刚打印出 backlog 在编译产物中命中 1 次，下面就断言它没设，**自相矛盾**。任何人拿这份
+   log 当证据都会得出错误结论。修法不是删掉，而是**现场探测**：命中就说"backlog 是显式设置的、生效值 =
+   min(旋钮, somaxconn)、发行版常见 128 会夹住"，没命中才说"这是改前镜像、只有间接证据"。
+   > 规矩：**证据文件里的每一句结论都要么现场测出来，要么标明它是假设。**（与 §7.72 的"死旋钮守卫"同源：
+   > 那里防的是"文档承诺一个不存在的旋钮"，这里防的是"工具断言一个已经不成立的事实"。）
+
+#### 7.73.5 教训四：没有留档的测量等于没测
+
+改后的 C10K 数字一度只存在于**终端里**。写文档的代理搜遍 `vanblog_dev/tmp/*.log`、7 份 `/tmp/bench-*.md`
+与 `git log -S` 都查无实据，于是**拒绝把它写进文档** —— 这是**正确**的行为，不是 obstinate。后来重跑并
+用 `--out` 留档、再把关键表格抄进**入库**的 `docs/advanced/benchmark.md` §5.2，数字才可用。
+
+⇒ 规矩：**任何要进文档或 CHANGELOG 的数字，必须落在一个别人能核查的产物里**（`--out` 文件、入库的
+benchmark 页、或提交信息里的完整输出）。⚠️ 注意 `vanblog_dev/` 在 `.git/info/exclude` 里**不入库** ⇒
+放在那里的 log 对别人不可核查，只能算临时证据。
+
+同一轮还立了一条配套规矩：**每次压测都打印"被测对象自证"**（镜像名、`VAN_BLOG_VERSION`、关键旋钮在
+编译产物里的命中次数、模板里的关键值）。否则"测的不是你以为的那个镜像"这种事故无法排除 —— 本轮
+worktree 与主树不一致就真实发生过。
+
+#### 7.73.6 教训五：并行工程的所有权必须**显式且互斥**
+
+本轮真实发生三次撞车风险：① 一个代理宣布"我现在开始做 P1/P2/P3/P4"，而 P1 的 backlog 已由父代理实现、
+P1 的 caddy 部分已派给另一个代理；② 两个代理同时被要求改 `login.guard.ts`；③ 一个代理跑
+`pnpm install --config.confirmModulesPurge=false` 清空了全仓库 `node_modules`，中断 **39 分钟**（§7.72.8
+已记，本轮又复现了一次同类事故）。
+
+⇒ 规矩（派活时就要写清，不要事后协调）：
+- **逐文件**列出每个代理的**独占清单**与**禁改清单**；有争议的公共文件（`main.ts`、`rateLimit.ts`、
+  lockfile）指定**唯一**所有者。
+- **改 `pnpm.overrides` 就等于一次全量重装维护窗口**：`--lockfile-only` 也会触发 modules 重建确认，
+  `--config.confirmModulesPurge=false` 的语义是"**不要问、直接清**"；`CI=true` 隐含 `--frozen-lockfile`
+  （所以改完 overrides 必须显式 `--no-frozen-lockfile`）；后台长任务要 `setsid`（`nohup` 挡不住进程组
+  信号，前台轮询超时的 SIGTERM 会把它一起带走）。
+- 主树处于不一致状态（`package.json` 与 lockfile 的 override 数量对不上）时，需要构建验证的代理应用
+  `git worktree add --detach` 在一个**一致的快照**上做，而不是等、也不是就地改别人的文件。
+- **性能测量要独占机器**：任何并行的 jest/vitest/构建都会让数字失真；父代理在压测时，其它代理不跑重活。
+
+#### 7.73.7 教训六：变异对照的三种新失效形状
+
+前几轮已经确立"每条修复都要有变异对照"。这一轮发现**变异对照本身**会以三种方式失效：
+
+1. **`if (false && …)` 在 TypeScript 里不能用作变异形状**：短路会让控制流收窄失效 ⇒ 编译不过 ⇒
+   `Tests: 0 total`。⚠️ **"0 个测试"不是"红"**，它是一个必须被识别出来的第三种结果。改用别的形状
+   （删掉调用、把常量改成非法值、把守卫函数换成恒真）。
+2. **"还原校验"写在同一轮里重新读文件再比较 ⇒ 恒真**：一个变异脚本就这样把变异**留在工作树里**并产生了
+   一个幻影结果，污染后续所有对照。修法：变异前记 `sha256`，还原后逐一比对，**起点不干净就中止**。
+3. **"与基线同样的红"等于没验**：必须比**红条数的变化**。本轮一个代理改了变量名，导致断言仍钉着旧拼写，
+   它的 M3 与基线同为 17/1 —— 那个"同样是 1 红"就是信号。
+
+#### 7.73.8 教训七：断言通过的原因必须是你以为的那个原因
+
+三条真实的**空断言**，都是"绿了，但绿得毫无意义"：
+
+1. 「归档里搜不到明文 JWT 密钥」——归档是 **gzip 过的**，所以**明文**归档里同样搜不到；一条对照组证明了
+   这点。换成三条有意义的断言：加密归档必须 gunzip 不了；解密后能 gunzip 且**确实**含密钥；明文归档含密钥。
+2. 「整个文件里搜不到 `1f 8b` 字节对」——统计学上站不住：一个给定的 2 字节序列在 100 KB 随机数据里平均
+   出现约 **1.5 次**，所以它第一次绿纯属运气。直接删掉。
+3. 「读不到 crontab 时拒绝写入」——只看**退出码**，而写入后的复核用的是**同一个坏桩** ⇒ 退出码因无关原因
+   变成非 0、断言歪打正着通过，**而用户的 crontab 其实已经被覆盖了**。改成断言**文件内容**（用户自己那行
+   必须还在）。
+
+⇒ 规矩：**每条安全断言都要有一条"在坏形状上必须不命中"的对照**（本仓库叫空转反证/负向对照）。
+没有对照的绿不算证据。⚠️ 断言"某文本不存在"必须先剥注释（本仓库已踩 **8** 次）；断言"某符号存在"
+是空断言（import 行就能让它过），要断言**调用形状**或**行为**；而"调用被 `if (false && …)` 短路"
+同样能骗过子串匹配（§7.73.7 第 1 条的另一面）。
+
+#### 7.73.9 教训八：陷阱复现要用固定 fixture，不要用活文件
+
+`anchorCode.spec.ts` 拿 `caddy.provider.ts` 当"事故现场"（用来证明剥注释器的必要性）。别的代理给那个文件
+加了一段文档注释，计数就变了、测试就红了 —— 而剥注释器其实变得**更好**了。现在它用固定 fixture，只保留
+与布局无关的性质（每文件 `after >= before`）。
+
+> 规矩：**陷阱复现必须自包含**。把它耦合到活文件的注释布局，意味着任何人写任何文档都能弄坏它，
+> 而失败信息还指向一个完全无关的改动。
+
+#### 7.73.10 教训九："绿来自环境而不是代码"比红更危险
+
+`meta.controller.spec.ts` 调 `refreshVersionCache()` 却没设 `VAN_BLOG_VERSION_API`，而那个开关在
+**模块加载时**求值 ⇒ 它只在恰好导出了该变量的 shell 里通过。红是会被查的，**假绿不会**。
+
+⇒ 规矩：凡是 spec 依赖某个环境变量，就在 spec 里**显式设置并在 `afterEach` 还原**；凡是模块加载时求值的
+开关，都要问一句"这个 spec 在干净的 shell 里还绿吗"。⚠️ 同类：`beforeEach(() => delete x)` 这种表达式体
+会返回 boolean，而 vitest 的钩子签名是 `Awaitable<HookCleanupCallback>` ⇒ **运行时 30/30 绿、只有 tsc 红**。
+所以 tsc 与测试**都要跑**，它们抓的是不同的东西。
+
+#### 7.73.11 教训十：跨文件、跨单位的不变量最容易恒真
+
+一条守卫比较 caddy 的 `idle_timeout`（**纳秒**）与从 `main.ts` 读出的 Node `keepAliveTimeout`（**毫秒**），
+却把毫秒乘了 **1e9** 而不是 1e6 ⇒ 阈值被放大一千倍、断言**无条件为真**。它的变异对照**第一次跑是 0 红**
+才发现。
+
+⇒ 规矩：跨文件跨单位的不变量，**必须在边界值上也失败**（正好 65 s 那种）。只测"明显违规"的用例，
+抓不到"阈值被放大一千倍"。
+
+#### 7.73.12 教训十一：把"提前 return"改成"设标志位继续走"之前，先看它后面隔开了什么
+
+`install-cron` 里"cron 条目已经一模一样"分支的一个提前 `return 0` 被换成标志位之后，控制流落进了相邻的
+`--force` 删除分支 —— 那个 return 原本正是把两者隔开的 —— 于是待写入的文件里**备份那行被丢掉，而命令
+返回 0**。净效果：**定时备份静默停止**。既有的 **123 条**基线断言先抓到（"重装返回 0"变红），没出厂。
+
+> **"返回成功但功能没了"是最危险的一类 bug。** 重构控制流时，`return` 不只是"提前结束"，它常常是
+> 唯一把两段代码隔开的东西。
+
+#### 7.73.13 教训十二：可用性优先的取舍要写进代码注释，否则下一个人会当"性能问题"改掉
+
+这一轮有三处**故意**的"低效"，每一处都有人（包括审查代理）建议改掉，而改掉都是**可用性回归**：
+
+| 取舍 | 为什么不能改 |
+|---|---|
+| `/post/[id]` 的 `fallback: "blocking"` | `getStaticPaths` 只列**规范**路径（有别名用别名，否则数字 id），而 server 对**两种形式**都发 revalidate ⇒ 有别名的文章，其数字 id 地址只能靠 blocking 现场生成（并 301 到别名）；而且 blocking 是冷缓存的**自愈**路径 |
+| RSS **不加**主实例守卫 | 两个批量触发点已在上游被守卫（`main.ts` 的 `if (primary)`、`isr.task.ts`）；在生成函数里再加 ⇒ 非主实例 worker 上的保存**不刷新 feed**，最长陈旧 1 小时。用"省一次重复写"换"订阅源陈旧"是错的方向 |
+| 解锁预算**按文章**而不是全站 | 否则一篇爆文的合法读者会把全站加密文章一起锁死 |
+
+⇒ 规矩：**取舍写在代码注释里，并且用 spec 钉住那个决定本身**（RSS 那条同时断言"这里不许出现
+`isPrimaryInstance`"与"上游两道守卫必须还在"）。拆守卫的人会撞红，然后被迫重想这个取舍。
+
+#### 7.73.14 测试与未量
+
+本轮新增/变动的守卫（都 0 失败）：`listenBacklog.spec.ts` 5、`benchmark-tool.test.sh` **82**（7 条变异对照）、
+`caddy-config` 23 → **74**、`caddy-perf` 24 → **36**、`image-runtime` **62**、`vanblog-install-cron` **123**、
+`vanblog-backup-encryption.test.sh` **120**（新）、`unlockGlobalBudget.spec.ts`、`backup.controller.rotate.spec.ts`、
+`meta.controller.spec.ts`（修好环境依赖）等。`791e3b75` 那一包约 **60 条**变异对照，每条都逐字节还原。
+
+⚠️ **未验证/未做**（如实记）：① 加密归档能否被 `drill` **真恢复**没有端到端证据（只有服务端用例 + 6 条
+形状断言）；② `--offline` 那种由脚本自己打的 `.tar.gz` **仍是明文**（不经服务端，要加密得引入 age/gpg）；
+③ HSTS 未走真实 TLS 握手（只验证生成的配置含它且 `caddy validate` 通过）；④ cluster=auto 那一轮的混合
+流量扫描出现 `404:628 502:249`，怀疑是 ISR 全量渲染未跑完与 8 worker 同时启动的短暂不可用，**两条都没取证**
+（§5.2 已如实标注，别当结论用）；⑤ 8 GiB 匿名恢复在 `requestTimeout` 300 s 下需要持续 ≥27 MB/s，普通上行
+**会**超时并报"超时"而不是"归档太大"（绕行：`reset <归档>`，服务端读文件不上传）—— 已记录未修；
+⑥ `waline.provider.ts:89` 把本站 JWT 密钥当作 waline 子进程的 `JWT_TOKEN` ⇒ 轮换后下次重启 waline 会让
+评论者会话失效（**报告了但没有改**）；⑦ 全站页面级 CSP 仍未做（落点在 caddy 层，且 `script-src` 需要先解决
+nonce 与 ISR 缓存的冲突）。
+
+### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-20 **敌意环境加固轮（§7.73）之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
 |---|---|
-| server `jest` | **191 套件 / 2424 用例：2416 绿 + 8 跳过 + 0 失败**（2026-09-20 00:07 本机复跑，`-w 3`）。⚠️ 旧数字"178 套件 / 2146 用例"**作废** —— 多出的 13 个套件来自 §7.72 那一轮（协作者权限与超管排除、DB TTL 锁、五条可靠性、正文白名单、CSP、`wordTotal` 兜底等）。更早的"170/1957"与"169/1951"同样作废。 |
-| website `vitest run` | **89 文件 / 953 用例全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 85/890 **作废**（多出的是 `wordTotal ?? 0` 那条与正文白名单的渲染级用例）。 |
-| admin `node --test tests/unit` | **148 套件 / 587 用例全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 582 **作废** —— 多出的 5 条是"两份消毒器副本**逐项比清单**"（`ae38f376`）与水印阈值那条跨包锚点的升级。⚠️ 本轮又动过两条跨包锚点（`safeFetch` 的 pinning 形状、消毒器清单），所以"只改了 server"仍必须跑这一套。 |
-| `scripts/tests/*.test.sh`（一键脚本/部署） | **24 文件 / 2026 条断言全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 1982 **作废**；本轮变动的是 `dockerfile-alpine-sharp` 32→**61**、`dockerfile-patches` 55→**58**、`image-runtime` 51→**56**、`caddy-config` 16→**23**（四个都单独复跑确认）。 |
+| server `jest` | **217 套件 / 2887 用例：2879 绿 + 8 跳过 + 0 失败**（2026-09-20 11:00 本机复跑，`-w 2`）。⚠️ 第一次并行复跑时 `utils/markdownExport.spec.ts` 红过 1 条，**单独重跑 39/39 全绿** ⇒ 又一个负载敏感假红（与 `logRotate`、`rateLimit` 同类，见下）。⚠️ 旧数字"191 套件 / 2424 用例"与更早的"178 套件 / 2146 用例"**都作废** —— 多出的 13 个套件来自 §7.72 那一轮（协作者权限与超管排除、DB TTL 锁、五条可靠性、正文白名单、CSP、`wordTotal` 兜底等）。更早的"170/1957"与"169/1951"同样作废。 |
+| website `vitest run` | **91 文件 / 986 用例全绿**（2026-09-20 本机复跑）。⚠️ 旧数字 89/953 与更早的 85/890 **都作废**（多出的是 `wordTotal ?? 0` 那条与正文白名单的渲染级用例）。 |
+| admin `node --test tests/unit` | **151 套件 / 605 用例全绿**（58 个测试文件，2026-09-20 本机复跑）。⚠️ 旧数字 148/587 与更早的 582 **都作废** —— 多出的 5 条是"两份消毒器副本**逐项比清单**"（`ae38f376`）与水印阈值那条跨包锚点的升级。⚠️ 本轮又动过两条跨包锚点（`safeFetch` 的 pinning 形状、消毒器清单），所以"只改了 server"仍必须跑这一套。 |
+| `scripts/tests/*.test.sh`（一键脚本/部署） | **27 文件 / 2488 条断言全绿**（含两个会起容器/从源码安装的守卫）。⚠️ 记账代理独立复跑的是**排除那两个重活**的子集：**25 文件 / 2275 条 / 0 失败** —— 两个数都对，差别就是 `build-image-local` 与 `vanblog-source-install`。⚠️ 旧数字 24/2026 与 1982 **都作废**。本轮变动的：`benchmark-tool` **82**（新）、`vanblog-backup-encryption` **120**（新）、`vanblog-install-cron` **123**、`vanblog-drill` **620**、`caddy-config` 23→**74**、`caddy-perf` 24→**36**、`image-runtime` 56→**62**（全部本机逐个复跑确认）。 |
 | 文档守卫 | `docs-links` **5/5**（站内链接条数随文档增删而变：`a395e00e` 时 366 条，2026-09-18 15:50 复跑 **415** 条 —— 别把某个具体条数当基线，看 `failed=0`）、`docs-consistency` **52/0**（⚠️ 其中"裸尖括号"那条 2026-09-17 才第一次真的跑起来，实扫 **73 份**文档，见 §7.67；2026-09-18 加了两条豁免，理由都是"历史记录不是用户指南"，见 §7.68）、`cd docs && pnpm run docs:build` **65 页成功**（2026-09-18 两轮排查后都复跑仍 52/0；第 4 条的语料先加了 `packages/server/src/**/*.ts`（`f4fec80d`／§7.69），第二轮又加了 `scripts/vanblog-drill.sh`（`afe7f2c4`／§7.70 —— `VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` 定义在那个脚本里，一下午两个代理各自被同一条误报绊了一次） |
 | CI（GitHub Actions） | `5d438e50` 上 `server-test` 与 `admin-e2e` 都 **success**（server-test 已是"默认全跑**全部** spec、不再维护白名单"那条配置，§7.67；拆白名单当时是 169 个，现 170 —— 所以别把 spec 个数写进句子）；上一个提交 `9601faa4` 上两者都是 **failure** —— 本轮修的三个红套件在 CI 上也红过。⚠️ **`docs/**` 不在两条 workflow 的 paths 过滤里 ⇒ 只改文档的提交不会跑任何 CI**（§7.70），所以文档轮的验证只能靠本机那三条守卫 |
-| 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**：**871 MB**（tag `vanblog:final-verify`，2026-09-20 按**最终 lockfile** 重建 —— `0b22908f` 那次验证构建是在 `9720de9c` 的 worktree 上做的，依赖工作落地后必须重建）。冒烟：8 条路径（`/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、`/rss/feed.xml`、`/timeline` 全 200，`/post/1` 按预期 404）、9 条故障特征全空、容器未重启、SIGTERM **1 s** 内停下。⚠️ 旧数字 892 MB 作废（`.map`/`.d.ts` 不再进镜像 + 移除 `nss-tools`；中途那版 `supplychain-test` 是 869 MB）。容器内字体与水印行为见 §7.66。 |
-| 类型检查 | server（`tsconfig.dev.json`）与 website 各 **0 错**（命令见下） |
-| ⚠️ **没跑/跑不了**的（截至 2026-09-20 批量修复轮，详见 §7.72.10） | ① admin 的 playwright e2e（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；**CI 上是绿的**）；② **cluster > 1 对真 Mongo 的两个 worker 端到端**（跨进程用例用的是两个 provider 共享一个内存锁集合，跑的是生产锁逻辑；真实复现要 `VANBLOG_CLUSTER_WORKERS=2` + 两个并发 `/api/admin/init`，期望一个 200 一个 409 且 `users` 里只有一个 `id:0`）；③ HSTS 走真实 TLS 握手（只验证了生成的配置含它且 `caddy validate` 通过）；④ `metadata-action` 的标签合并语义（只能在下次真实发版时确认）；⑤ `workflow_dispatch` 的字符集校验（本地无法触发 workflow）；⑥ `packages/waline/node_modules` 本机装不全（`better-sqlite3` 无 Node 24 预编译、node-gyp 未接）⇒ waline 子树只能在镜像构建里验证（已在 `final-verify` 镜像内验过 `require.resolve` 链与建表读写）；⑦ TOC mXSS 与本轮各修复的**浏览器**端到端复现；⑧ `washAuthorDesc` 对真库的迁移（用内存版 model 验的幂等与不覆盖）。 |
+| 镜像 | `scripts/build-image-local.sh` 真构建 + 冒烟**全绿**：**871 MB**（tag `vanblog:final-verify`，2026-09-20 按**最终 lockfile** 重建 —— `0b22908f` 那次验证构建是在 `9720de9c` 的 worktree 上做的，依赖工作落地后必须重建）。冒烟：8 条路径（`/`、`/api/public/meta`、`/admin`、`/robots.txt`、`/sitemap.xml`、`/rss/feed.xml`、`/timeline` 全 200，`/post/1` 按预期 404）、9 条故障特征全空、容器未重启、SIGTERM **1 s** 内停下。§7.73 那一轮另建了 tag `vanblog:hardened`（`VAN_BLOG_VERSION=local@791e3b75`、同为 **871 MB**），两轮万级 C10K 复测都是在它上面跑的（`docs/advanced/benchmark.md` §5.2）。⚠️ 旧数字 892 MB 作废（`.map`/`.d.ts` 不再进镜像 + 移除 `nss-tools`；中途那版 `supplychain-test` 是 869 MB）。容器内字体与水印行为见 §7.66。 |
+| 类型检查 | server `tsconfig.dev.json` **0 错**、server `tsconfig.build.json` **0 错**、website **0 错**（2026-09-20 本机复跑，命令见下）。⚠️ 上一轮只列了两个，`tsconfig.build.json` 也要跑 —— `declaration`/`composite` 那类问题只在 build 配置下暴露（§7.72 的 TS6304 就是） |
+| ⚠️ **没跑/跑不了**的（截至 2026-09-20 批量修复轮，详见 §7.72.10） | ① admin 的 playwright e2e（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`；**CI 上是绿的**）；② **cluster > 1 对真 Mongo 的两个 worker 端到端**（跨进程用例用的是两个 provider 共享一个内存锁集合，跑的是生产锁逻辑；真实复现要 `VANBLOG_CLUSTER_WORKERS=2` + 两个并发 `/api/admin/init`，期望一个 200 一个 409 且 `users` 里只有一个 `id:0`）；③ HSTS 走真实 TLS 握手（只验证了生成的配置含它且 `caddy validate` 通过）；④ `metadata-action` 的标签合并语义（只能在下次真实发版时确认）；⑤ `workflow_dispatch` 的字符集校验（本地无法触发 workflow）；⑥ `packages/waline/node_modules` 本机装不全（`better-sqlite3` 无 Node 24 预编译、node-gyp 未接）⇒ waline 子树只能在镜像构建里验证（已在 `final-verify` 镜像内验过 `require.resolve` 链与建表读写）；⑦ TOC mXSS 与本轮各修复的**浏览器**端到端复现；⑧ `washAuthorDesc` 对真库的迁移（用内存版 model 验的幂等与不覆盖）。<br>⚠️ **§7.73 那一轮新增的未验证项**：⑨ **加密归档能否被 `drill` 真恢复没有端到端证据**（只有服务端用例 + 6 条形状断言）；⑩ `--offline` 那种由脚本自己打的 `.tar.gz` **仍是明文**（不经服务端，要加密得引入 age/gpg）；⑪ HSTS 未走真实 TLS 握手（只验证生成的配置含它且 `caddy validate` 通过）；⑫ `VANBLOG_CLUSTER_WORKERS=auto` 那一轮的混合流量扫描出现 `404:628 502:249`，怀疑是 ISR 全量渲染未跑完 + 8 worker 同时启动的短暂不可用，**两条都没取证**（§5.2 已标注，别当结论用）；⑬ 8 GiB 匿名恢复在 `requestTimeout` 300 s 下需要持续 ≥27 MB/s，普通上行**会**超时并报"超时"而不是"归档太大"（绕行 `reset <归档>`）—— 已记录未修；⑭ `waline.provider.ts:89` 把本站 JWT 密钥当作 waline 子进程的 `JWT_TOKEN` ⇒ 轮换后下次重启 waline 会让评论者会话失效（**报告了但没改**）；⑮ 全站页面级 CSP 仍未做（落点在 caddy 层，且 `script-src` 要先解决 nonce 与 ISR 缓存的冲突 —— 缓存的 HTML 里 nonce 会被复用，同源攻击者读得到）。 |
 | admin playwright e2e | **未跑**（本机没装浏览器；`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。最后一次全量是 §7.58/§7.59 时期的 **111 用例全绿**（37 spec，本地 2.4 分钟）。⚠️ 7 个 webServer 的默认端口里 3002 与开发栈冲突，本地跑要用 `*_E2E_PORT` 全部改开；`CI=1` 才与 GitHub 同条件 |
 
 改动之后请至少跑对应包的那一套；跨包改动（例如同时动了 server 与 docs）三套都跑。
