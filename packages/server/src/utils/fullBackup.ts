@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import { Transform } from 'stream';
 import type { Db, MongoClient } from 'mongodb';
 import {
   BACKUP_KIND,
@@ -36,6 +37,17 @@ import {
   ensureSecretDir,
   writeSecretFileSync,
 } from './secretFileMode';
+import {
+  BACKUP_ENC_EXT,
+  BackupEncryptionHeader,
+  createEncryptor,
+  describePassphrase,
+  encryptionSummary,
+  openDecryptedSource,
+  plaintextArchiveWarning,
+  readEncryptionHeader,
+  resolveBackupPassphrase,
+} from './backupCrypto';
 
 /**
  * 整站备份 / 恢复：把 **数据库（含 waline 评论库）+ 本地静态文件（图床 / 附件 / 自定义页面）**
@@ -174,9 +186,25 @@ export function pickSpec(preferred?: string): CompressorSpec | null {
   return null;
 }
 
-/** 从文件名/魔数猜格式（恢复时用）。 */
+/**
+ * 从文件名/魔数猜格式（恢复时用）。
+ *
+ * ⚠️ 加密归档要**看穿容器**：文件以 `VANBLOGENC1` 开头，压缩格式的魔数在密文里根本看不见，
+ * 所以内层格式取自加密头部（`header.inner.format`，而头部本身被每一块的 GCM AAD 认证，
+ * 改不了）。这一步**不需要口令**。
+ */
 export function detectFormat(file: string): BackupFormat | null {
-  const name = path.basename(file).toLowerCase();
+  const encHeader = readEncryptionHeader(file);
+  if (encHeader) {
+    const inner = encHeader.inner?.format;
+    if (inner === 'zstd' || inner === 'xz' || inner === 'gzip') {
+      return inner;
+    }
+    return null;
+  }
+  // `.enc` 后缀对判定没有影响（一律以魔数为准），但为了让下面的名字判断仍然有效，
+  // 先把它去掉：`x.tar.zst.enc` 的内层就是 zstd。
+  const name = path.basename(file).toLowerCase().replace(/\.enc$/, '');
   if (name.endsWith('.tar.zst') || name.endsWith('.zst')) {
     return 'zstd';
   }
@@ -247,12 +275,19 @@ export function freeSpaceText(dir: string): string {
  * 与 `pipe()` 并存，不额外缓冲、不改变数据流），所以 `.sha256` sidecar 与
  * `backup-status.json` 里那个整归档哈希是**零额外读盘**得到的。
  */
+/**
+ * @param encrypt 可选的加密 Transform（见 utils/backupCrypto.ts）。传入时管道变成
+ *   `tar → 压缩器 → 加密 → 落盘`，即**先压缩再加密**（加密后的数据不可压缩，顺序反了
+ *   归档会大好几倍）。返回的 bytes/sha256 是**最终落盘字节**的（加密后的），
+ *   所以调用方的"回读复核"与 `.sha256` sidecar 都仍然对得上。
+ */
 function tarCompress(
   stagingDir: string,
   outFile: string,
   spec: CompressorSpec,
   signal?: AbortSignal,
   abortMessage = '备份被中止（超过整轮超时）',
+  encrypt?: Transform | null,
 ): Promise<{ bytes: number; sha256: string }> {
   return new Promise((resolve, reject) => {
     const tar = spawn('tar', ['-cf', '-', '-C', stagingDir, '.']);
@@ -294,6 +329,13 @@ function tarCompress(
           // ignore
         }
       }
+      if (encrypt) {
+        try {
+          encrypt.destroy();
+        } catch {
+          // ignore
+        }
+      }
       // 用户可见的错误一律 BadRequestException：普通 Error 会被 Nest 变成
       // 500 + "Internal server error"，前端看不到原因
       reject(new BadRequestException(message));
@@ -331,23 +373,49 @@ function tarCompress(
     // ⚠️ 这个 'data' 监听器与下面的 pipe 并存（同一个 flowing 流可以多个消费者），
     // 只为算哈希；不引入 Transform 是为了避免"多一层缓冲 → compressor 的 close
     // 比 flush 先到 → out.end() 把在途数据截断"这个隐患
-    compressor.stdout.on('data', (chunk: Buffer) => {
+    // ⚠️⚠️ 收尾逻辑在"加密"与"不加密"两条路上**必须不同**，原因写在这里，
+    // 因为上面那条注释（"不引入 Transform 是为了避免 close 比 flush 先到"）正是这个坑：
+    //  - 不加密：`compressor.on('close')` 时，压缩器的输出已经全部流出去了，
+    //    所以手动 `out.end()` 是安全的（既有行为，一个字节都不改）。
+    //  - 加密：中间多了一层 Transform，它可能还缓存着未满一块的明文。
+    //    此时若在 compressor 的 close 里 `out.end()`，**在途数据会被截断** ⇒
+    //    写出一份"看起来正常、末尾少一块"的归档。所以加密路走 `encrypt.pipe(out)`：
+    //    pipe 会在上游 'end'（= flush 完成）之后才 end 下游，这是标准且正确的收尾。
+    const countChunk = (chunk: Buffer) => {
       streamed += chunk.length;
       digest.update(chunk);
-    });
-    compressor.stdout.pipe(out);
+    };
     tar.stdout.pipe(compressor.stdin);
-    compressor.on('close', (code) => {
-      if (code !== 0) {
-        const free = freeSpaceText(path.dirname(outFile));
-        fail(
-          `${spec.format} 压缩失败（退出码 ${code}）：${compErr.slice(0, 500)}` +
-            `（剩余空间 ${free}）`,
-        );
-        return;
-      }
-      out.end();
-    });
+    if (encrypt) {
+      compressor.stdout.pipe(encrypt);
+      encrypt.on('data', countChunk);
+      encrypt.pipe(out);
+      encrypt.on('error', (err: Error) => fail(`加密备份流失败：${err.message}`));
+      compressor.on('close', (code) => {
+        if (code !== 0) {
+          const free = freeSpaceText(path.dirname(outFile));
+          fail(
+            `${spec.format} 压缩失败（退出码 ${code}）：${compErr.slice(0, 500)}` +
+              `（剩余空间 ${free}）`,
+          );
+        }
+        // ⚠️ 这里**故意不**调 out.end()：交给 encrypt.pipe(out) 在 flush 后收尾。
+      });
+    } else {
+      compressor.stdout.on('data', countChunk);
+      compressor.stdout.pipe(out);
+      compressor.on('close', (code) => {
+        if (code !== 0) {
+          const free = freeSpaceText(path.dirname(outFile));
+          fail(
+            `${spec.format} 压缩失败（退出码 ${code}）：${compErr.slice(0, 500)}` +
+              `（剩余空间 ${free}）`,
+          );
+          return;
+        }
+        out.end();
+      });
+    }
     out.on('close', () => {
       if (!settled) {
         settled = true;
@@ -423,14 +491,86 @@ export function hashStagingTree(stagingDir: string): Promise<TarHashResult> {
  * 解压器非零退出（截断 / 位翻转）不会立刻抛：把已经算出来的成员表一起返回，
  * 调用方才能说出"解压在哪一步炸了，而且炸之前这些成员已经对不上了"。
  */
+/**
+ * 起解压器，并按需接上解密流。
+ *
+ *  - **未加密** ⇒ 与改动前**逐字节相同**：归档路径作为命令行参数传给解压器。
+ *    这条路是本仓库测得最充分的（恢复、校验、演练都走它），所以刻意一个字节都不动。
+ *  - **加密** ⇒ 解压器改从 stdin 读，上游是 `文件流 → GCM 解密`。
+ *
+ * ⚠️ 为什么是流式而不是"先解密到临时文件"：解密到临时文件会让**明文的压缩归档**落盘
+ * （虽然恢复过程本来就会把明文解包到暂存目录，但 `verify` / `listArchiveMembers` /
+ * `inspectFullBackup` 这些路径原本**全程流式、明文不落盘**，不该为了省事把这个性质弄丢），
+ * 而且要额外一份归档大小的磁盘空间 —— 大归档在小盘机器上会直接恢复不了。
+ *
+ * @param onUpstreamError 解密/读文件失败时的回调，交给各调用点**既有**的失败分支
+ *   （它们的错误语义各不相同：有的 reject，有的 resolve(null)，有的记成 decompressError）。
+ */
+async function spawnArchiveDecompressor(
+  archivePath: string,
+  spec: CompressorSpec,
+  onUpstreamError: (message: string) => void,
+  passphrase?: string | null,
+): Promise<{ child: ReturnType<typeof spawn>; encrypted: boolean; header: BackupEncryptionHeader | null }> {
+  const { source, header } = await openDecryptedSource(archivePath, passphrase);
+  if (!source) {
+    return {
+      child: spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]),
+      encrypted: false,
+      header: null,
+    };
+  }
+  const child = spawn(spec.decompress[0], spec.decompress.slice(1));
+  // ⚠️ 两个 error 监听一个都不能少（本仓库已经为"流没有 error 监听"栽过跟头：
+  //    EPIPE 没人接 ⇒ unhandledRejection ⇒ Node 20 直接退出整个进程）：
+  //  1) child.stdin：解压器提前退出（归档损坏、格式不对）时往它写会 EPIPE；
+  //  2) source：GCM 认证失败、归档被截断、读文件失败。
+  child.stdin.on('error', () => {
+    // 故意静默：真正的原因由 source 的 error 或解压器的 close 分支报出来，
+    // 这里再报一次只会把一条清晰的错误变成两条互相干扰的。
+  });
+  source.on('error', (err: Error) => {
+    onUpstreamError(err.message);
+    // ⚠️⚠️ 必须**主动收掉解压器**，否则整个恢复会挂死：
+    // Node 的 `readable.pipe(writable)` 在上游 'error' 时只会 unpipe，**不会** end 下游
+    // （只有正常 'end' 才会）。于是解压器的 stdin 一直开着、它就一直等输入 ⇒
+    // 既不出数据也不退出 ⇒ 调用方的 Promise 永远不 settle。
+    // 实测症状：口令错了 / 归档被截断时，恢复请求**永久挂起**（而不是报错），
+    // 而"挂起"比"失败"糟得多 —— 站长看到的是转圈，日志里什么都没有，
+    // 而且这次恢复还占着 init/restore 那把 DB 锁直到 TTL 到期。
+    // 这里 SIGKILL 解压器：它会以非 0 退出，各调用点**既有**的 close 分支随即触发，
+    // 并优先报 upstreamError（口径见 hashArchiveMembers / decompressUntar 里的注释）。
+    try {
+      child.stdin.end();
+    } catch {
+      // 已经关了就算了
+    }
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // 进程可能已经没了
+    }
+  });
+  source.pipe(child.stdin);
+  return { child, encrypted: true, header };
+}
+
 export async function hashArchiveMembers(
   archivePath: string,
   spec: CompressorSpec,
-  options: { computeHashes?: boolean } = {},
+  options: { computeHashes?: boolean; passphrase?: string | null } = {},
 ): Promise<{ result: TarHashResult; decompressError: string | null }> {
-  const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
   let decErr = '';
   let exitCode: number | null = null;
+  let upstreamError: string | null = null;
+  const { child: decompressor } = await spawnArchiveDecompressor(
+    archivePath,
+    spec,
+    (message) => {
+      upstreamError = message;
+    },
+    options.passphrase,
+  );
   decompressor.stderr.on('data', (chunk) => {
     decErr += chunk.toString();
   });
@@ -446,8 +586,14 @@ export async function hashArchiveMembers(
   });
   const hashed = hashTarStream(decompressor.stdout, options);
   const [result, code] = await Promise.all([hashed, exited.catch(() => null)]);
-  const decompressError =
-    code === 0 ? null : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`;
+  // ⚠️ 解密失败优先报：这时解压器只是"收到了 EOF"，退出码可能是 0 或 1，
+  //    而真正的原因（口令不对 / 归档被截断 / 块被重排）在上游那条错误里。
+  //    不这么做的话，站长看到的是"解压失败（退出码 1）"，会以为是压缩器坏了。
+  const decompressError = upstreamError
+    ? `解密失败：${upstreamError}`
+    : code === 0
+      ? null
+      : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`;
   return { result, decompressError };
 }
 
@@ -461,6 +607,7 @@ export async function hashArchiveMembers(
  */
 export async function listArchiveEntries(
   archivePath: string,
+  options: { passphrase?: string | null } = {},
 ): Promise<{ entries: TarEntryInfo[]; decompressError: string | null }> {
   const format = detectFormat(archivePath);
   if (!format) {
@@ -472,14 +619,34 @@ export async function listArchiveEntries(
   }
   const { result, decompressError } = await hashArchiveMembers(archivePath, spec, {
     computeHashes: false,
+    passphrase: options.passphrase,
   });
   return { entries: result.entries, decompressError };
 }
 
-/** 解压缩 | tar -x -C dest（全异步）。 */
-function decompressUntar(archivePath: string, destDir: string, spec: CompressorSpec): Promise<void> {
+/**
+ * 解压缩 | tar -x -C dest（全异步）。
+ *
+ * ⚠️ `await spawnArchiveDecompressor(...)` 必须在 `new Promise` **之外**：
+ * Promise 的 executor 里 await 一个抛错的东西，那个 rejection 会被吞掉
+ * （executor 不是 async 函数），调用方就永远等不到结果。
+ */
+async function decompressUntar(
+  archivePath: string,
+  destDir: string,
+  spec: CompressorSpec,
+  passphrase?: string | null,
+): Promise<void> {
+  let upstreamError: string | null = null;
+  const { child: decompressor } = await spawnArchiveDecompressor(
+    archivePath,
+    spec,
+    (message) => {
+      upstreamError = message;
+    },
+    passphrase,
+  );
   return new Promise((resolve, reject) => {
-    const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
     const tar = spawn('tar', ['-xf', '-', '-C', destDir]);
     let decErr = '';
     let tarErr = '';
@@ -510,12 +677,29 @@ function decompressUntar(archivePath: string, destDir: string, spec: CompressorS
     decompressor.stdout.pipe(tar.stdin);
     decompressor.on('close', (code) => {
       if (code !== 0) {
-        fail(`${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 500)}`);
+        // ⚠️ 解密失败优先报（见 hashArchiveMembers 里的同款说明）：
+        // 上游断了的时候解压器只是"收到 EOF"，它自己的退出码与 stderr 说明不了原因。
+        fail(
+          upstreamError
+            ? `解密失败：${upstreamError}`
+            : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 500)}`,
+        );
       }
     });
     tar.on('close', (code) => {
       if (code !== 0) {
-        fail(`tar 解包失败（退出码 ${code}）：${tarErr.slice(0, 500)}`);
+        fail(
+          upstreamError
+            ? `解密失败：${upstreamError}`
+            : `tar 解包失败（退出码 ${code}）：${tarErr.slice(0, 500)}`,
+        );
+        return;
+      }
+      // ⚠️ 即便 tar 退出码是 0，上游报过错也必须失败：被截断的加密归档解出来的
+      // 可能是"前半份完整、后半份没有"，而 tar 对"输入突然结束"在某些实现下并不报错。
+      // 半份数据被解包进暂存目录，比直接失败危险得多。
+      if (upstreamError) {
+        fail(`解密失败：${upstreamError}`);
         return;
       }
       if (!settled) {
@@ -526,10 +710,28 @@ function decompressUntar(archivePath: string, destDir: string, spec: CompressorS
   });
 }
 
-/** 只把归档里的某个文件解出来（读 manifest 用，不用整包解压）。导出给 utils/backupVerify.ts 复用。 */
-export function extractSingleFile(archivePath: string, entry: string, spec: CompressorSpec): Promise<string | null> {
+/**
+ * 只把归档里的某个文件解出来（读 manifest 用，不用整包解压）。导出给 utils/backupVerify.ts 复用。
+ *
+ * ⚠️ 契约（**有一处刻意的变化**，backupVerify.ts 的调用方要知道）：
+ *  - 归档损坏/解压器失败/成员不存在 ⇒ 仍然 `resolve(null)`（与改动前一致）；
+ *  - **加密归档但拿不到口令** ⇒ **reject**（BadRequestException）。
+ *    为什么区别对待：前者是"这份归档有问题"，后者是"你还没给出读取它的前提条件"。
+ *    把后者也返回 null 会让站长看到"清单读不出来"，然后去怀疑一份完好无损的备份。
+ *  - 解密中途失败（口令错、被截断、块被重排）⇒ `resolve(null)`，因为这个函数的
+ *    调用点把它当"能不能读出这个成员"用，而失败原因会由同一次校验里的
+ *    `hashArchiveMembers` 那条 `decompressError` 报出来（两处都走 openDecryptedSource）。
+ */
+export async function extractSingleFile(
+  archivePath: string,
+  entry: string,
+  spec: CompressorSpec,
+  passphrase?: string | null,
+): Promise<string | null> {
+  const { child: decompressor } = await spawnArchiveDecompressor(archivePath, spec, () => {
+    // 解密中途失败：交给下面的 close 分支返回 null（见函数注释里的契约说明）
+  }, passphrase);
   return new Promise((resolve) => {
-    const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
     const tar = spawn('tar', ['-xOf', '-', entry]);
     let stdout = '';
     let settled = false;
@@ -798,6 +1000,13 @@ export interface CreateFullBackupOptions {
    * （destroy 输出流 + 删半成品归档 + SIGKILL 两个子进程），是真的停下来。
    */
   abortSignal?: AbortSignal;
+  /**
+   * 备份口令（可选）。
+   *  - `undefined` ⇒ 按 env 解析（`VANBLOG_BACKUP_PASSPHRASE` / `..._FILE`），这是常规路径；
+   *  - 字符串 ⇒ 用它（调用方从别处拿到口令，例如一次性导出）；
+   *  - `null` ⇒ **明确不要加密**（用于"导出给站长下载"这种不希望产出 .enc 的场景）。
+   */
+  passphrase?: string | null;
   logger?: BackupLogger;
 }
 
@@ -816,6 +1025,18 @@ export interface FullBackupResult {
   memberCount: number | null;
   /** 算成员哈希额外花的时间（ms）；关闭 integrity 时为 0 */
   hashMs: number;
+  /** 这份归档是否加密（`name` 会带 `.enc` 后缀） */
+  encrypted: boolean;
+  /**
+   * 未加密时的 WARN 文案（已加密则为 null）。
+   *
+   * ⚠️ 为什么由**这里**返回、而不是在本函数里直接 logger.warn：
+   * 决定"这条提醒要不要进事件日志、要不要在后台弹一次"的是调用方
+   * （provider 有事件日志与状态文件，utils 这层只有一个可选的 logger）。
+   * 但文案必须在这里生成 —— 它引用了加密层的常量与最短口令长度，
+   * 让调用方自己拼就会漂。
+   */
+  plaintextWarning: string | null;
 }
 
 /** 导出整站备份：数据库（含 waline）+ 本地静态文件 -> 一个高压缩归档。 */
@@ -830,6 +1051,26 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       }；至少需要 gzip）`,
     );
   }
+  // ── 可选加密：默认关，配了口令就开 ──────────────────────────────────────
+  // ⚠️ 口令解析要**早**（在任何磁盘工作之前）：`_FILE` 读不到时必须失败关闭，
+  //    否则会在导出了几百 MB 之后才发现"其实没加密"，白跑一轮还留下明文归档。
+  const resolvedPass =
+    options.passphrase === null
+      ? { passphrase: null, source: null, describe: () => describePassphrase(null) }
+      : resolveBackupPassphrase(process.env, options.passphrase);
+  // 加密器在打包**之前**就造好：头部（salt/iv/KDF 参数）要进 manifest，
+  // 而 manifest 是先写进暂存树、再被 tar 打进去的。
+  const encryptor = resolvedPass.passphrase
+    ? await createEncryptor({
+        passphrase: resolvedPass.passphrase,
+        inner: { format: spec.format, ext: spec.ext, label: spec.label },
+      })
+    : null;
+  if (encryptor) {
+    // ⚠️ 只说"加密已开启"与来源，绝不打印口令本身
+    logger.log(`备份加密：已开启（scrypt + aes-256-gcm，口令来源 ${resolvedPass.source}，${resolvedPass.describe()}）`);
+  }
+
   const staticPath = options.staticPath;
   // 0700：归档目录里是整站凭据，而它挂在宿主机上（理由见 utils/secretFileMode.ts）。
   // ⚠️ 对**已存在**的目录也会 chmod，所以老部署（现在是 0755）升级后第一次备份就收紧了。
@@ -846,6 +1087,9 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       format: spec.format,
       compressor: spec.label,
       serverVersion: options.serverVersion,
+      // ⚠️ 必须在写盘（下面第 4 步的两份清单）之前设好：主清单与副本要**逐字节相同**，
+      //    而校验时会把两份拿出来对照，任何"只改了一份"的字段都会让校验失败。
+      encryption: encryptor ? encryptionSummary(encryptor.header) : undefined,
       databases: {},
       static: {},
       totals: {
@@ -991,13 +1235,23 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
     fs.writeFileSync(path.join(staging, MANIFEST_COPY_FILENAME), manifestText);
 
     // 5) 打包压缩：先写到**不可能被列表/保留策略认成归档**的临时名，成功了才 rename 就位
-    const name = backupFileName(new Date(), spec.ext);
+    // ⚠️ 后缀必须带 `.enc`：一个叫 `.tar.zst` 却是密文的文件，会让 `zstd -t`、
+    //    `file`、以及任何按名字判断的工具给出完全无法理解的报错。
+    const encExt = encryptor ? BACKUP_ENC_EXT : '';
+    const name = backupFileName(new Date(), `${spec.ext}${encExt}`);
     const archivePath = path.join(outDir, name);
-    const tempPath = path.join(outDir, exportTempName(spec.ext));
-    logger.log(`打包中（${spec.label}）...`);
+    const tempPath = path.join(outDir, exportTempName(`${spec.ext}${encExt}`));
+    logger.log(`打包中（${spec.label}${encryptor ? ' + 加密' : ''}）...`);
     let streamed: { bytes: number; sha256: string };
     try {
-      streamed = await tarCompress(staging, tempPath, spec, options.abortSignal);
+      streamed = await tarCompress(
+        staging,
+        tempPath,
+        spec,
+        options.abortSignal,
+        undefined,
+        encryptor?.transform,
+      );
     } catch (err) {
       rmTemp(tempPath);
       throw err;
@@ -1025,7 +1279,14 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       );
     }
     // 压缩器自带的内容校验位：清单里记的值必须与归档头部的实测值一致
-    if (integrity) {
+    if (integrity && encryptor) {
+      // 加密归档的帧头是我们的魔数，压缩格式的帧头在密文里 ⇒ 探测不到，也不该探测。
+      // ⚠️ 这不是"少了一层校验"：GCM 对**整个密文**做密码学认证，强度远高于 zstd 的
+      //    CRC32 帧校验位（后者只防随机位翻转，防不了有意篡改）。
+      // 清单里那个 `zstdFrameChecksum` 仍然是"我们要求压缩器开启校验位"的**声明**，
+      // 恢复时解密之后由解压链路自己校验。
+      logger.log('加密归档：跳过压缩器帧校验位探测（GCM 认证已覆盖整个密文，且强度更高）');
+    } else if (integrity) {
       const probe = probeCompressorChecksum(tempPath, spec.format);
       if (probe.enabled === null) {
         logger.warn(`读不出压缩器的内容校验位（${probe.detail}），清单里记的 ${integrity.zstdFrameChecksum} 未经实测复核`);
@@ -1075,6 +1336,8 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       archiveSha256: readBack.sha256,
       memberCount: integrity?.memberCount ?? tarMembers?.memberCount ?? null,
       hashMs,
+      encrypted: Boolean(encryptor),
+      plaintextWarning: encryptor ? null : plaintextArchiveWarning(name),
     };
   } finally {
     rmrf(staging);
@@ -1093,7 +1356,9 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
  * 而结尾仍是 `.tar.zst`，所以 `detectFormat()` 认得它（排障时能手工解开看）。
  */
 export const EXPORT_TEMP_PREFIX = '.vanblog-export-';
-export const EXPORT_TEMP_RE = /^\.vanblog-export-[A-Za-z0-9._-]+\.tar\.(zst|xz|gz)$/;
+// ⚠️ `(\.enc)?`：加密归档的名字多一个后缀，临时名同样要能被认出来并清理掉，
+//    否则加密备份失败留下的半成品永远不会被 `cleanupStaleExportTemps` 扫走。
+export const EXPORT_TEMP_RE = /^\.vanblog-export-[A-Za-z0-9._-]+\.tar\.(zst|xz|gz)(\.enc)?$/;
 
 export function exportTempName(ext: string): string {
   const suffix = ext.startsWith('.') ? ext : `.${ext}`;
@@ -1315,7 +1580,13 @@ export interface BackupListEntry {
 }
 
 /** 整站备份归档本体的文件名（不含 .manifest.json / .sha256 之类的 sidecar） */
-export const FULL_BACKUP_ARCHIVE_RE = /^vanblog-full-.+\.tar\.(zst|xz|gz)$/;
+// ⚠️ `(\.enc)?`：加密归档必须仍然出现在后台的备份列表里。
+// 顺带说明为什么用"加后缀"而不是"同名不同内容"：`vanblog.sh verify` 会对归档跑
+// `zstd -t`，一个叫 `.tar.zst` 却是密文的文件会得到一条完全无法理解的报错；
+// 而 `.enc` 后缀让 `ls`、脚本、以及运维一眼就知道"这份要口令"。
+// （`vanblog.sh` 的 glob 是 `vanblog-full-*.tar.*`，`.enc` 仍然匹配 ⇒ 保留策略与
+//   "找最新归档"都不受影响；只有 `verify` 那条需要脚本侧配合，已在汇报里列出。）
+export const FULL_BACKUP_ARCHIVE_RE = /^vanblog-full-.+\.tar\.(zst|xz|gz)(\.enc)?$/;
 
 /** 列出已有的整站备份（读 sidecar，不解压）。 */
 export function listFullBackups(backupDir: string): BackupListEntry[] {
@@ -1360,6 +1631,8 @@ export function listFullBackups(backupDir: string): BackupListEntry[] {
 export async function inspectFullBackup(
   archivePath: string,
   staticPath?: string,
+  /** 加密归档在"sidecar 清单也丢了"时需要口令才能解出内层清单；明文归档用不到 */
+  passphrase?: string | null,
 ): Promise<FullBackupManifest | null> {
   const sidecar = `${archivePath}.manifest.json`;
   if (fs.existsSync(sidecar)) {
@@ -1380,7 +1653,9 @@ export async function inspectFullBackup(
   if (!spec) {
     return null;
   }
-  const raw = await extractSingleFile(archivePath, './manifest.json', spec);
+  // ⚠️ 加密归档走到这里也能读：sidecar 清单是**明文**的（上面已经先试过），
+  // 只有 sidecar 丢了才需要从密文里解出内层清单，那时需要口令（env 或显式传入）。
+  const raw = await extractSingleFile(archivePath, './manifest.json', spec, passphrase);
   if (!raw) {
     return null;
   }
@@ -1401,19 +1676,30 @@ export async function inspectFullBackup(
  * 但容器里跑的是 **busybox tar**，行为不能靠猜 —— 所以在解包之前自己把成员名过一遍，
  * 不依赖 tar 的具体实现。
  */
-export function listArchiveMembers(archivePath: string): Promise<string[]> {
+export async function listArchiveMembers(
+  archivePath: string,
+  passphrase?: string | null,
+): Promise<string[]> {
+  const format = detectFormat(archivePath);
+  if (!format) {
+    throw new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）');
+  }
+  const spec = specFor(format);
+  if (!spec) {
+    throw new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`);
+  }
+  let upstreamError: string | null = null;
+  // ⚠️ 同 decompressUntar：await 必须在 new Promise 之外，否则 executor 里的
+  // rejection 会被吞掉（调用方永远等不到结果）。
+  const { child: decompressor } = await spawnArchiveDecompressor(
+    archivePath,
+    spec,
+    (message) => {
+      upstreamError = message;
+    },
+    passphrase,
+  );
   return new Promise((resolve, reject) => {
-    const format = detectFormat(archivePath);
-    if (!format) {
-      reject(new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）'));
-      return;
-    }
-    const spec = specFor(format);
-    if (!spec) {
-      reject(new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`));
-      return;
-    }
-    const decompressor = spawn(spec.decompress[0], [...spec.decompress.slice(1), archivePath]);
     const tar = spawn('tar', ['-tf', '-']);
     let out = '';
     let decErr = '';
@@ -1446,6 +1732,10 @@ export function listArchiveMembers(archivePath: string): Promise<string[]> {
     tar.on('error', (err: Error) => fail(`tar 起不来：${err.message}`));
     tar.on('close', (code) => {
       if (settled) return;
+      if (upstreamError) {
+        fail(`解密失败：${upstreamError}`);
+        return;
+      }
       if (code !== 0) {
         // ⚠️ 以前的写法是先 `settled = true` 再调 fail() —— 而 fail() 的第一行就是
         // `if (settled) return`，于是**截断/损坏的归档会让这个 promise 永远不 settle**
@@ -1590,6 +1880,11 @@ export interface RestorableArchiveOptions {
    * 不给（例如初始化页那次**重复**的前置检查，那时还没有 staging）就只做成员总字节上限。
    */
   targetDir?: string;
+  /**
+   * 加密归档的口令。留空 ⇒ 按 env 解析（`VANBLOG_BACKUP_PASSPHRASE` / `..._FILE`）。
+   * ⚠️ 从 HTTP 请求来时**只能**走 body，不能走 query：query 会原样进 caddy 的访问日志。
+   */
+  passphrase?: string | null;
 }
 
 /**
@@ -1605,7 +1900,9 @@ export async function assertRestorableArchive(
   archivePath: string,
   options: RestorableArchiveOptions = {},
 ): Promise<number> {
-  const { entries, decompressError } = await listArchiveEntries(archivePath);
+  const { entries, decompressError } = await listArchiveEntries(archivePath, {
+    passphrase: options.passphrase,
+  });
   if (decompressError) {
     // 归档解压都过不去（截断/位翻转）：这时"成员表"是不完整的，绝不能当成"检查通过"
     throw new BadRequestException(`读不出归档成员表：${decompressError}`);
@@ -1751,6 +2048,14 @@ export interface RestoreFullBackupOptions {
   journalPath?: string;
   /** caddy 数据目录（P6，`VANBLOG_BACKUP_INCLUDE_CADDY`）；留空 = 不恢复归档里的 `./caddy` 段 */
   caddyDataPath?: string;
+  /**
+   * 加密归档的口令。留空 ⇒ 按 env 解析；明文归档完全不看这个字段。
+   *
+   * ⚠️ 语义要说清：`null` 与 `undefined` 在这里**等价**（都回落到 env），
+   * 因为恢复一份加密归档而没有口令是**没法工作**的，不存在"明确要求不加密"这种场景
+   * （与 `CreateFullBackupOptions.passphrase` 不同，那边 `null` 表示"强制明文导出"）。
+   */
+  passphrase?: string | null;
   logger?: BackupLogger;
 }
 
@@ -1953,11 +2258,14 @@ export async function restoreFullBackup(
     // ⚠️ 传 staging 是为了顺带做**体积/剩余空间**闸门：解包（`解压器 | tar -xf -`）本身
     //    没有任何上限，而匿名的 init/restore 允许上传 8GB，所以一个压缩炸弹就能把盘写满。
     //    闸门必须在 `decompressUntar` 之前，也就是这里。
-    const memberCount = await assertRestorableArchive(archivePath, { targetDir: staging });
+    const memberCount = await assertRestorableArchive(archivePath, {
+      targetDir: staging,
+      passphrase: options.passphrase,
+    });
     logger.log(`归档成员检查通过（${memberCount} 个成员，无绝对路径 / .. / 符号链接）`);
     try {
       logger.log(`解包中（${spec.label}）...`);
-      await decompressUntar(archivePath, staging, spec);
+      await decompressUntar(archivePath, staging, spec, options.passphrase);
     } catch (err) {
       // 下载不完整 / 文件被截断 / 用别的工具改过名，都会走到这里
       throw new BadRequestException(`备份文件解不开（可能已损坏或不完整）：${(err as Error)?.message}`);

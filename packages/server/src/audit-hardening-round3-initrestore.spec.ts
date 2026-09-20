@@ -289,7 +289,11 @@ describe('POST /api/admin/init/restore：成功路径', () => {
     expect(Array.isArray(res.data.notes)).toBe(true);
 
     // withStatic 必须是 true（主题/图床/自定义页面都在静态目录里）
-    expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true);
+    // ⚠️ 第三个参数是加密归档的口令：没传 `backupPassphrase` 时必须是 **null**
+    //    （不是 undefined —— null 表示"明确要求走 env 回落"，语义见
+    //    fullBackup.provider.ts 的 restore()）。这条断言原来钉的是两参形状，
+    //    本轮加了口令参数后升级成三参，**保护的性质不变**：走完全程 + 临时文件被清理。
+    expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true, null);
     // 进程内缓存全部作废
     expect(initProvider.invalidateInitCache).toHaveBeenCalled();
     expect(viewStatsProvider.invalidateBase).toHaveBeenCalled();

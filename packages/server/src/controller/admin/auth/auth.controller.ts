@@ -19,7 +19,7 @@ import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { TokenGuard } from 'src/provider/auth/token.guard';
 import { AuthProvider } from 'src/provider/auth/auth.provider';
 import { LogProvider } from 'src/provider/log/log.provider';
-import { UserProvider } from 'src/provider/user/user.provider';
+import { assertAccountPasswordStrength, UserProvider } from 'src/provider/user/user.provider';
 import { LoginGuard } from 'src/provider/auth/login.guard';
 import { TokenProvider } from 'src/provider/token/token.provider';
 import { CacheProvider } from 'src/provider/cache/cache.provider';
@@ -183,9 +183,11 @@ export class AuthController {
     if (!name || name.length > 50) {
       throw new BadRequestException('用户名不合法（1-50 个字符）');
     }
-    if (!password || password.length > 200) {
-      throw new BadRequestException('密码不合法（1-200 个字符）');
-    }
+    // ⚠️ 口令校验走 user.provider 的**统一入口**（空值 / 超长 / 过短都在那里判），
+    //    不在这里再抄一份 `!password || password.length > 200`：两份校验一定会漂移
+    //    （本轮之前这里就是一份独立副本，所以下限只加在了一边）。
+    //    下面那次 updateUser() 也会再校验一次，幂等，不会有两套结论。
+    assertAccountPasswordStrength(password, '管理员');
     await this.userProvider.updateUser({
       name,
       password,

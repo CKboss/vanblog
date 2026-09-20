@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  HttpException,
+  HttpStatus,
   Delete,
   Get,
   Param,
@@ -12,7 +14,14 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { IMAGE_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
+import {
+  assertUploadedImage,
+  IMAGE_UPLOAD_OPTIONS,
+  MAX_STEGO_DETECT_PIXELS,
+} from 'src/utils/uploadLimits';
+import { consumeAttempt } from 'src/utils/attemptLimit';
+import { bruteForceClientIp } from 'src/utils/trustedProxy';
+import { scaleLimit } from 'src/utils/clusterRole';
 import { ApiTags } from '@nestjs/swagger';
 import { SearchStaticOption } from 'src/types/setting.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -25,6 +34,10 @@ import { config } from 'src/config';
 import { checkTrue } from 'src/utils/checkTrue';
 import { ApiToken } from 'src/provider/swagger/token';
 import { sanitizePagination } from 'src/utils/pagination';
+
+/** 隐写检测的专用限流：10 次/分钟/IP（理由见 detectStego 里的注释）。 */
+const STEGO_DETECT_LIMIT_PER_MIN = 10;
+const STEGO_DETECT_WINDOW_MS = 60 * 1000;
 
 @ApiTags('img')
 @UseGuards(...AdminGuard)
@@ -157,7 +170,44 @@ export class ImgController {
   async detectStego(
     @UploadedFile() file: any,
     @Body() body: { sign?: string },
+    @Request() request?: any,
   ) {
+    // ⚠️ 专用限流：这条路由在 publicRoutes 里（零权限协作者可调，是有意为之 —— 图片管理页
+    //    要给协作者用），所以它只受全局桶 600/分钟/IP 保护；而检测要把整图解码成 raw RGBA
+    //    再逐像素比对（实测 36MP → 401ms、RSS 477MB），600 次/分钟 = 每分钟 240 秒 CPU，
+    //    3 个并发就足以让 1–2GB 的容器 OOMKilled。这里压到 10 次/分钟/IP。
+    //    计数用**套接字口径**的 IP（`bruteForceClientIp`，与登录/恢复那两个防爆破桶同源），
+    //    因为"换个 X-Forwarded-For 就重新开始计数"正是这类桶要防的；`scaleLimit` 按 worker
+    //    数摊薄（桶是进程内的，多 worker 时总量会翻倍）。
+    const ip = bruteForceClientIp(request);
+    const hit = consumeAttempt(`stego-detect-${ip}`, {
+      max: scaleLimit(STEGO_DETECT_LIMIT_PER_MIN),
+      windowMs: STEGO_DETECT_WINDOW_MS,
+    });
+    if (!hit.allowed) {
+      // 与 rateLimit.ts 的 429 形状保持一致：带上 Retry-After，脚本不必解析中文消息
+      const res = (request as any)?.res;
+      if (typeof res?.setHeader === 'function') {
+        res.setHeader('Retry-After', String(Math.max(1, hit.retryAfterSeconds)));
+      }
+      throw new HttpException(
+        { statusCode: 429, message: '图片检测过于频繁，请稍后再试' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    // ⚠️ 上传来的字节要先过内容校验（按内容判类型、拒 SVG），并且用**检测专用的 8MP 上限**：
+    //    以前这里只有 IMAGE_UPLOAD_OPTIONS（50MB + 后缀过滤），一个 50MB 的合法图片就能让
+    //    进程吃掉上 GB 内存。按 sign 检测走的是图床里已存在的文件（上传时已付过代价），
+    //    所以那条路**不套 8MP**，否则"验一张自己库里的 20MP 图"会莫名失败。
+    if (file?.buffer) {
+      assertUploadedImage(file.buffer, file?.originalname, {
+        maxPixels: MAX_STEGO_DETECT_PIXELS,
+        tooLargeHint:
+          `这张图太大了，没法在线检测（上限约 ${Math.round(
+            MAX_STEGO_DETECT_PIXELS / 1_000_000,
+          )}MP）。要验更大的图，请先把它上传到图床，然后在图片列表里用「检测水印」按 sign 验。`,
+      });
+    }
     const res = await this.staticProvider.detectStegoWatermark({
       sign: body?.sign,
       buffer: file?.buffer,

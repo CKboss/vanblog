@@ -1,3 +1,5 @@
+import { json } from 'express';
+
 /**
  * JSON body 体积限制：**全局小默认 + 少数后台内容路由单独放宽**。
  *
@@ -28,7 +30,29 @@ export const DEFAULT_JSON_BODY_LIMIT = '1mb';
 export const DEFAULT_JSON_BODY_LIMIT_LARGE = '50mb';
 
 /**
- * 需要大 JSON body 的路由前缀（全部在 AdminGuard 后面，匿名请求到不了解析器之后的处理器）：
+ * 需要大 JSON body 的路由前缀。
+ *
+ * ⚠️ **这里以前写着"全部在 AdminGuard 后面，匿名请求到不了解析器之后的处理器"，那句话只对
+ * 一半，而错的一半正是安全论证的关键**，所以按实测改写：
+ *  - 对**处理器**成立：匿名请求确实拿不到 `article.controller` 里的任何逻辑，最终会 401；
+ *  - 对**解析与净化不成立**：`main.ts` 的中间件顺序是
+ *    `[json][sanitize][static403]…[rateLimit][init][router]`，也就是说 `express.json` 的解析
+ *    与 `sanitizeRequestPayloads` 的递归净化都跑在**限流器与鉴权之前**，而这里的四个大限额
+ *    解析器是**按路径**挂的（`app.use(prefix, largeJsonParser)`），完全不看身份。
+ *    ⇒ 匿名攻击者可以向 `/api/admin/article` 投一个 50MB 的 JSON，我们会先花
+ *    **解析 ≈ 2.9 秒 + 净化（无上界时 ≈ 4.6 秒）**，然后才 401；被限流 429 挡下的请求
+ *    **同样已经把 CPU 烧完了**，限流器对这条路径零保护。
+ *
+ * 两道防线（本轮）：
+ *  1. 净化侧的**成本上界**在 `utils/sanitizeRequest.ts`（超限直接 413，不是跳过净化）；
+ *  2. 解析侧的**匿名限额**就是本文件下面的 `anonymousLargeBodyGuard`：只认"有没有声称身份"
+ *     （`token` 头，与 `jwt.strategy.ts` 的 `ExtractJwt.fromHeader('token')` 同源），
+ *     没有就用小限额解析器先把 body 解掉并置 `req._body`，后面的大限额解析器会自动跳过。
+ *     ⚠️ 这只是粗判：伪造 token 的请求仍会拿到大限额、烧掉解析成本，然后在鉴权层被拒 ——
+ *     所以它**必须与第 1 道一起做**，两者互补，任何一道单独都不够。
+ *     ⚠️ 这个 guard 需要在 `main.ts` 里挂到大限额解析器**之前**（接线方式见它的文档注释）。
+ *
+ * 前缀清单：
  *  - `/api/admin/article`    文章创建/更新：正文可内嵌 base64 图片（POST /、PUT /:id、covers/from-content）
  *  - `/api/admin/draft`      草稿创建/更新：同一个编辑器，同样可能带 base64
  *  - `/api/admin/customPage` 自定义页面：整页 HTML/JS 作为 JSON 字符串提交（POST /、PUT /、PUT /file）
@@ -40,6 +64,53 @@ export const LARGE_JSON_BODY_PREFIXES: readonly string[] = [
   '/api/admin/customPage',
   '/api/admin/pipeline',
 ];
+
+/**
+ * 声称身份用的请求头名。
+ * ⚠️ 必须与鉴权层同源：`jwt.strategy.ts` 是 `ExtractJwt.fromHeader('token')`，
+ * `provider/auth/token.guard.ts` 读的也是 `request.headers['token']`。任一侧改名，
+ * 这个粗判就会**对所有请求都判成匿名**，把合法的大正文一起拒掉（有守卫钉住）。
+ */
+export const AUTH_TOKEN_HEADER = 'token';
+
+/**
+ * 匿名请求的大 body 挡板：给"需要大 JSON body 的前缀"在**大限额解析器之前**再挂一层。
+ *
+ * 做法：请求没带 `token` 头时，先用**小限额**（默认 1mb，与全局一致）的 `json()` 解析器把
+ * body 解掉 —— body-parser 解析过就会置 `req._body = true`，后面那个大限额解析器会直接跳过，
+ * 所以每个请求仍然最多被解析一次。超过小限额时 body-parser 自己抛 413，正是我们要的结果。
+ * 带了 `token` 头就原样 `next()`，交给大限额解析器（伪造的 token 会在鉴权层被拒）。
+ *
+ * ⚠️ **接线（需要 `main.ts` 改两行，本轮那个文件不归我改）**：
+ * ```ts
+ * const anonymousGuard = anonymousLargeBodyGuard(jsonLimit);   // jsonLimit = 全局小限额
+ * for (const prefix of LARGE_JSON_BODY_PREFIXES) {
+ *   app.use(prefix, anonymousGuard);   // ← 必须在大限额解析器**之前**
+ *   app.use(prefix, largeJsonParser);
+ * }
+ * ```
+ * 顺序反了就没有效果（大限额解析器会先把 body 解掉并置 `req._body`，guard 再进来只会跳过）。
+ *
+ * @param smallLimit 匿名请求的上限，直接传全局那个 `jsonLimit` 即可（`resolveBodyLimit` 的产物）。
+ */
+export function anonymousLargeBodyGuard(smallLimit: string): any {
+  // 解析器只创建一次：body-parser 的实例是无状态的，复用既省内存也避免每次请求重新编译 limit。
+  const smallJsonParser = json({ limit: resolveBodyLimit(smallLimit, DEFAULT_JSON_BODY_LIMIT) });
+  return function anonymousLargeBodyGuardMiddleware(req: any, res: any, next: any) {
+    // 已经解析过（例如别的解析器抢先跑过）就不再插手，保持"每个请求最多解析一次"的性质。
+    if (req?._body) {
+      next();
+      return;
+    }
+    const claimed = req?.headers?.[AUTH_TOKEN_HEADER];
+    const claimsIdentity = typeof claimed === 'string' ? claimed.trim().length > 0 : Array.isArray(claimed) && claimed.length > 0;
+    if (claimsIdentity) {
+      next();
+      return;
+    }
+    smallJsonParser(req, res, next);
+  };
+}
 
 /** bytes 认的写法：`100`、`1mb`、`512kb`、`1.5gb`（大小写不敏感） */
 const LIMIT_RE = /^\d+(?:\.\d+)?(?:b|kb|mb|gb)?$/i;

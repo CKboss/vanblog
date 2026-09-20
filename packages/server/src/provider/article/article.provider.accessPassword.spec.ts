@@ -247,7 +247,9 @@ describe('文章访问密码：更新的三态契约（P1）', () => {
     const model = seed();
     const provider = createProvider(model);
     await expect(
-      provider.updateById(1, { password: 'abc', clearPassword: true } as any),
+      // ⚠️ 'abcd' 而不是 'abc'：访问密码现在有 ≥4 的硬下限，用 3 个字符的话这条用例
+      //    会因为**长度**抛 400 —— 那么把"冲突规则"整条删掉它也还是绿的（空转）。
+      provider.updateById(1, { password: 'abcd', clearPassword: true } as any),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(model.captured.some((c: any) => c.method === 'updateOne')).toBe(false);
   });

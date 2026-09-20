@@ -13,6 +13,7 @@ import {
 } from './envBootstrap';
 import { encryptPassword, hashSecret, verifyUserPassword, washPassword } from 'src/utils/crypto';
 import { makeSalt } from 'src/utils/crypto';
+import { MIN_ACCOUNT_PASSWORD_LENGTH } from 'src/provider/user/user.provider';
 
 /**
  * 环境变量自动初始化（VANBLOG_ADMIN_USER + VANBLOG_ADMIN_PASSWORD/_FILE）：
@@ -21,7 +22,8 @@ import { makeSalt } from 'src/utils/crypto';
  *    读不到文件时大声失败且**绝不静默回落**到内联变量）；
  *  - 浏览器派生口令公式与前端 encryptPwd / 服务端 washPassword **逐字节一致**
  *    （不一致的后果是"账号建好了但永远登不进来，且没有任何报错指向原因"）；
- *  - 校验策略 = 向导已经允许的下限（缺失/空白拒绝），**不发明第二套密码策略**。
+ *  - 校验策略：**复用**服务端的账号口令下限（`MIN_ACCOUNT_PASSWORD_LENGTH`），不发明第二套；
+ *    这里拿到的是**原始口令**（不像后台表单那样已被浏览器 sha256 派生），所以判得了、也必须判。
  *
  * ⚠️ 密码值一律用测试夹具（'fixture-secret-…'），不是任何真实凭据。
  */
@@ -190,5 +192,120 @@ describe('minimalSiteInfo：env 引导的最小站点记录', () => {
     expect(info.author).toBe('owner');
     expect(info.baseUrl).toBe('');
     expect(info.since).toBeUndefined();
+  });
+});
+
+/**
+ * 账号口令最小长度：零接触初始化是**自动化路径**（compose / k8s / CI 里写死一个 env），
+ * 恰恰最容易留下 `admin123` 这种弱口令，而建出来的是**管理员**账号。
+ *
+ * ⚠️ 为什么这里判得了、后台表单那边判不了：这里拿到的是 `VANBLOG_ADMIN_PASSWORD(_FILE)` 的
+ * **原始口令**；后台表单发来的永远是 `encryptPwd` 派生后的 64 位十六进制摘要（长度与原始口令无关，
+ * sha256 不可逆）。所以服务端只能在"直接收原始口令"的入口强制长度 —— 这就是其中一处。
+ *
+ * ⚠️ 拒绝走的是既有的 `ok:false` 通道，`init.provider.bootstrapFromEnv()` 对它已经大声 ERROR +
+ * `done:false` + **不建号** + 不抛（见 init.install.spec.ts「凭据被拒」那条用例）。
+ * 所以弱口令**不会**把容器打进崩溃循环：站点保持未初始化，站长仍可用向导手动完成安装。
+ * 这条性质由那个用例负责，这里不重复（也不去改 init.provider —— 它不归本轮）。
+ */
+describe('resolveEnvCredentials：账号口令最小长度（原始口令判得了强度，就必须判）', () => {
+  const MIN = MIN_ACCOUNT_PASSWORD_LENGTH;
+  const repeated = (n: number) => 'a'.repeat(n);
+
+  it('下限常量真的是 10（防止有人把它改成 1 之后，这一组用例全部"通过"却什么都没验）', () => {
+    expect(MIN).toBe(10);
+  });
+
+  it('内联口令少 1 个字符 → 拒绝，文案点名变量、给出当前长度与下限、说明为什么', () => {
+    const weak = repeated(MIN - 1);
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD]: weak });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain(ENV_ADMIN_PASSWORD);
+    expect(r.error).toContain(`当前 ${MIN - 1} 个字符`);
+    expect(r.error).toContain(`${MIN} 个`);
+    expect(r.error).toContain('弱口令');
+    expect(r.error).not.toContain(weak); // ⚠️ 绝不回显口令本身（这段文案会进容器日志）
+  });
+
+  it('刚好等于下限 → 通过（边界不偏移）', () => {
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD]: repeated(MIN) });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(true);
+    expect(r.creds?.password).toBe(repeated(MIN));
+  });
+
+  it('远长于下限 → 通过（这里不设上限：入库前会 sha256 派生成 64 位，长度不构成成本）', () => {
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD]: repeated(MIN + 90) });
+    expect(resolveEnvCredentials().ok).toBe(true);
+  });
+
+  it('_FILE 同样受约束（不能靠"改用 secret 文件"绕过下限）', () => {
+    const weak = repeated(MIN - 3);
+    const file = writeSecret(weak);
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD_FILE]: file });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain(ENV_ADMIN_PASSWORD_FILE);
+    expect(r.error).toContain(file); // 点名文件路径，运维才知道去哪儿改
+    expect(r.error).not.toContain(weak);
+  });
+
+  it('先按 secret-file 契约 trimEnd、**再**数长度（尾部换行不能拿来凑字数）', () => {
+    // 9 个字符 + 一堆尾部空白：如果先数长度再 trim，就会误判成"够长"
+    const file = writeSecret(`${repeated(MIN - 1)} \t\r\n`);
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD_FILE]: file });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain(`当前 ${MIN - 1} 个字符`);
+  });
+
+  it('trimEnd 之后刚好够长 → 通过，且存进去的是 trim 过的值', () => {
+    const file = writeSecret(`${repeated(MIN)}\n`);
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD_FILE]: file });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(true);
+    expect(r.creds?.password).toBe(repeated(MIN));
+    expect(r.creds?.passwordSource).toBe('file');
+  });
+
+  /**
+   * 计数口径必须与后台表单**一致**：async-validator 对字符串按码点计数
+   * （先把代理对 `[\uD800-\uDBFF][\uDC00-\uDFFF]` 折叠成一个字符再取 length），
+   * 所以这里用 `Array.from(...).length`。两边不一致的后果是"表单放行了、容器却起不来"
+   * 或反过来，而且报错完全指不向原因。
+   */
+  it('按**码点**计数：5 个 emoji（UTF-16 长度正好 10）仍然被拒，报的是 5', () => {
+    const emoji = '😀'.repeat(MIN / 2); // 5 个 emoji
+    expect(emoji.length).toBe(MIN); // UTF-16 长度确实是 10 —— 用 .length 就会误放行
+    expect(Array.from(emoji).length).toBe(MIN / 2);
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD]: emoji });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain(`当前 ${MIN / 2} 个字符`);
+    expect(r.error).not.toContain(emoji);
+  });
+
+  it('按码点计数：10 个 emoji（UTF-16 长度 20）通过', () => {
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD]: '😀'.repeat(MIN) });
+    expect(resolveEnvCredentials().ok).toBe(true);
+  });
+
+  it('口令太短时，仍然先报"没有密码来源"这类更根本的问题（判定顺序不被打乱）', () => {
+    // 只有 USER、没有任何密码来源：应当报"没有密码来源"，而不是"口令太短"
+    setEnv({ [ENV_ADMIN_USER]: 'owner' });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('密码来源');
+    expect(r.error).not.toContain('太短');
+  });
+
+  it('空口令仍然走原来的"空的"文案（新的长度判定没有把既有分支吃掉）', () => {
+    const file = writeSecret('\n');
+    setEnv({ [ENV_ADMIN_USER]: 'owner', [ENV_ADMIN_PASSWORD_FILE]: file });
+    const r = resolveEnvCredentials();
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('空的');
+    expect(r.error).not.toContain('太短');
   });
 });

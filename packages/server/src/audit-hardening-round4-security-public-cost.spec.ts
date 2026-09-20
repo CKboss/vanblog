@@ -274,7 +274,13 @@ describe('REGRESSION R4-C：公开面的护栏（前几轮修的）全部还在'
     expect(crypto).toMatch(/export function verifyAccessPassword\(stored: unknown, supplied: unknown\): boolean \{/);
     expect(crypto).toMatch(/return safeEqual\(target, input\);/);
     expect(crypto).toMatch(/export function safeEqual\(a: unknown, b: unknown\): boolean \{[\s\S]{0,240}?timingSafeEqual\(left, right\)/);
-    expect(read('./provider/article/article.provider.ts')).toMatch(/if \(!verifyAccessPassword\(targetPassword, supplied\)\)/);
+    // ⚠️ 形状已随 scrypt 异步化改变：`verifyAccessPassword` → `await verifyAccessPasswordAsync`。
+    //    这里**必须把 `await` 一起钉住**：漏掉 await 时 `!Promise` 恒为 false ⇒
+    //    **任何密码都能解开任何加密文章**（静默的未鉴权正文泄露，比原来的 DoS 严重得多）。
+    //    `utils/cryptoUsageDrift.spec.ts` 从"所有调用点都必须 await"这个方向再钉一遍。
+    expect(read('./provider/article/article.provider.ts')).toMatch(
+      /if \(!\(await verifyAccessPasswordAsync\(targetPassword, supplied\)\)\)/,
+    );
     // 解锁成功后才清桶；失败一律返回 null（不区分"密码错"与"文章不存在"）
     const c = read('./controller/public/public.controller.ts');
     expect(c).toMatch(/if \(data\) \{\s*\n\s*resetAttempts\(key\);/);
@@ -285,7 +291,7 @@ describe('REGRESSION R4-C：公开面的护栏（前几轮修的）全部还在'
     const fn = src.slice(src.indexOf('async getByIdWithPassword('), src.indexOf('async getByIdOrPathnameWithPreNext('));
     expect(fn).toMatch(/const isPrivate = !!article\.private \|\| categoryPrivate;/);
     expect(fn).toMatch(/if \(!isPrivate\) \{[\s\S]{0,120}?return plain;/);
-    expect(fn).toMatch(/if \(!verifyAccessPassword\(targetPassword, supplied\)\) \{\s*\n\s*return null;/);
+    expect(fn).toMatch(/if \(!\(await verifyAccessPasswordAsync\(targetPassword, supplied\)\)\) \{\s*\n\s*return null;/);
     // password 字段被显式抹掉
     expect(fn).toMatch(/const plain = \{ \.\.\.\(article\?\._doc \|\| article\), password: undefined \};/);
   });

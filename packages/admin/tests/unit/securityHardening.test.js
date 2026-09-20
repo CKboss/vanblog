@@ -120,12 +120,23 @@ describe('安全加固：上传与静态文件', () => {
 });
 
 describe('安全加固：认证与权限', () => {
-  it('登录限流只统计失败、用套接字地址、阈值来自设置、默认开启', () => {
+  it('登录限流只统计失败、用不可伪造的 IP 口径、阈值来自设置、默认开启', () => {
     const guard = read('packages/server/src/provider/auth/login.guard.ts');
-    assert.match(guard, /pickSocketIp/);
-    // 只允许从 log/utils 引入 pickSocketIp（注释里提到 pickClientIp 不算）
-    assert.match(guard, /import \{ pickSocketIp \} from '\.\.\/log\/utils'/);
+    // ⚠️ 这条锚点**升级过**（不是放宽）：以前钉的是 `pickSocketIp`（从 ../log/utils 引入），
+    //    后来防爆破的 IP 口径统一迁到 `utils/trustedProxy.ts` 的 `bruteForceClientIp()` ——
+    //    它默认走"可信代理解析"（auto 模式取 XFF 最右一跳，也就是**本站反代自己看到的那个客户端**，
+    //    不是攻击者能随便伪造的最左一跳），并提供 `VANBLOG_BRUTE_FORCE_IP_SOURCE=socket`
+    //    退回纯套接字地址给"反代覆盖 XFF 而不是追加"的部署。
+    //    本条要保护的**性质**没变：登录计数用的 IP **不能是攻击者随手伪造的那个**，
+    //    所以断言的是"用 bruteForceClientIp、且绝不用裸的 pickClientIp"，而不是某个旧函数名。
+    assert.match(guard, /bruteForceClientIp\(req\)/);
+    assert.match(guard, /import \{[^}]*bruteForceClientIp[^}]*\} from '\.\.\/\.\.\/utils\/trustedProxy'/);
+    // 本体：不许引入"直接相信 XFF 最左一跳"的那个函数（注释里提到它不算）
     assert.doesNotMatch(guard, /import \{[^}]*pickClientIp[^}]*\} from/);
+    // 负向对照：证明上面两把尺子真的能抓到旧形状与坏形状，否则这两条断言是装饰
+    assert.match("const ip = bruteForceClientIp(req);", /bruteForceClientIp\(req\)/);
+    assert.doesNotMatch("const ip = pickSocketIp(req);", /bruteForceClientIp\(req\)/);
+    assert.match("import { pickClientIp } from '../../utils/ip';", /import \{[^}]*pickClientIp[^}]*\} from/);
     assert.match(guard, /export async function|async recordFailure/);
     assert.match(guard, /setting\.enableMaxLoginRetry !== false/);
     assert.match(guard, /DEFAULT_MAX_LOGIN_RETRY/);
@@ -145,9 +156,18 @@ describe('安全加固：认证与权限', () => {
     assert.match(user, /密码不合法/);
     assert.doesNotMatch(user, /\.\.\.updateUserDto,\n\s*password:/);
     assert.doesNotMatch(user, /type: 'collaborator',\n\s*\.\.\.collaboratorDto/);
-    // 口令校验走统一入口：scrypt（新）与 sha256（旧）都认，登录成功后自动升级
-    assert.match(user, /verifyUserPassword\(user\.password, name, password, user\.salt\)/);
-    assert.match(user, /hashSecret\(passwordInput\)/);
+    // 口令校验走统一入口：scrypt（新）与 sha256（旧）都认，登录成功后自动升级。
+    // ⚠️ 必须是**异步**变体且**带 await**：同步 scrypt 单次约 63ms 会独占事件循环，而登录是
+    //    匿名可达的；漏写 await 则更糟 —— `!Promise` 恒为 false，校验会被静默跳过。
+    assert.match(user, /await verifyUserPasswordAsync\(user\.password, name, password, user\.salt\)/);
+    assert.match(user, /await hashSecretAsync\(passwordInput\)/);
+    // 同步旧形状不许回来（这三个模式在该文件里连注释都不出现，所以 doesNotMatch 不会误伤）
+    assert.doesNotMatch(user, /verifyUserPassword\(/);
+    assert.doesNotMatch(user, /hashSecret\(/);
+    // 透明升级必须被 await（旧实现是 fire-and-forget：升级可能永不落库，且失败无人知晓）
+    assert.match(user, /await this\.updateSalt\(user, password\)/);
+    // 用户不存在时要跑等价成本的 dummy scrypt，否则"存在≈63ms / 不存在≈1ms"可时序枚举用户名
+    assert.match(user, /await runDummyPasswordWork\(password\)/);
     // 不再「算出哈希再去 Mongo 里查」——那样只能支持一种存储格式
     assert.doesNotMatch(user, /findOne\(\{ name, password: encrypted \}\)/);
     // 空口令一律拒绝（空哈希曾经等于空密码可登录）
@@ -220,8 +240,10 @@ describe('安全加固：口令哈希 / 限流 / 响应头 / 全量拉取', () =
     assert.match(crypto, /N > 1048576/);
     // 空口令不能被哈希成空串（空哈希曾经等于空密码可登录）
     assert.match(crypto, /if \(!value\) \{\n    return '';/);
-    // 初始化管理员也走 scrypt
-    assert.match(read('packages/server/src/provider/init/init.provider.ts'), /hashSecret\(user\.password\)/);
+    // 初始化管理员也走 scrypt（异步变体 + await：初始化在请求路径上，同步版会阻塞事件循环）
+    const init = read('packages/server/src/provider/init/init.provider.ts');
+    assert.match(init, /await hashSecretAsync\(user\.password\)/);
+    assert.doesNotMatch(init, /hashSecret\(/);
   });
 
   it('全局限流：分档、回环放行必须要求「无转发头」、出错放行', () => {
@@ -289,8 +311,13 @@ describe('安全加固：加密内容与恢复', () => {
     assert.match(article, /getPrivateCategoryNames/);
     assert.match(article, /category: \{ \$nin: privateCategories \}/);
     assert.match(article, /const isPrivate = !!article\.private \|\| categoryPrivate;/);
-    // 访问密码改成常量时间比较（原来的 !== 会因短路泄露长度/前缀），且兼容历史明文与 scrypt
-    assert.match(article, /verifyAccessPassword\(targetPassword, supplied\)/);
+    // 访问密码改成常量时间比较（原来的 !== 会因短路泄露长度/前缀），且兼容历史明文与 scrypt。
+    // ⚠️ 这里必须**连 await 一起钉住**：解锁是匿名可达路径，同步 scrypt 每次阻塞事件循环约 63ms
+    //    （预算 20 次/10 分钟/(IP×文章) ⇒ 单个组合一轮就能独占 1.26 秒，足以拖垮 worker 并让
+    //    健康检查超时 ⇒ 重启风暴）。而漏掉 await 的后果更严重：`!Promise` 恒为 false ⇒
+    //    **任何密码都能解开任何加密文章**（静默的未鉴权正文泄露）。
+    assert.match(article, /if \(!\(await verifyAccessPasswordAsync\(targetPassword, supplied\)\)\) \{/);
+    assert.doesNotMatch(article, /verifyAccessPassword\(/);
     assert.doesNotMatch(article, /String\(targetPassword\) !== supplied/);
     assert.match(read('packages/server/src/provider/rss/rss.provider.ts'), /privateCategories\.has/);
   });

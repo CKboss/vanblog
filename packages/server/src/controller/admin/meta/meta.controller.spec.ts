@@ -1,3 +1,11 @@
+// ⚠️ 这一段必须留在**所有 import 之前**：`utils/getVersion.ts` 的 `VERSION_API_ENABLED` 是
+//    **模块加载时**从 env 求值的常量（默认空 = 关闭，且关闭时"一个字节都不发"）。
+//    如果不在 import 前设好，`refreshVersionCache()` 会直接短路 ⇒ 缓存永远是空的 ⇒
+//    `latestVersion` 回落成当前版本（'dev'），下面那条"后台刷新后给出更新提示"的用例就会红。
+//    ⚠️ 这条 spec 过去之所以是绿的，纯粹因为跑它的那个 shell 恰好设了 `VAN_BLOG_VERSION_API`
+//    —— 那是**环境依赖的假绿**（换一台机器、换一个 CI 环境就红）。现在把前提写进文件本身。
+process.env.VAN_BLOG_VERSION_API = 'https://example.invalid/api';
+
 import axios from 'axios';
 import { MetaController } from './meta.controller';
 import { refreshVersionCache, resetVersionCache } from 'src/utils/getVersion';

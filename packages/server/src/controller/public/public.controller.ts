@@ -1,7 +1,7 @@
 import {
   HttpException,
   HttpStatus,
-  NotFoundException, Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+  NotFoundException, Body, Controller, Get, Header, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { SortOrder } from 'src/types/sort';
@@ -21,10 +21,66 @@ import { pickSocketIp } from 'src/provider/log/utils';
 import { bruteForceClientIp } from 'src/utils/trustedProxy';
 import { tryParseNumericId } from 'src/utils/numericId';
 import { getWalinePublicCommentSetting } from 'src/utils/walineExtra';
-import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
+import { projectPublicSiteInfo } from 'src/provider/meta/meta.provider';
 import { sanitizePagination } from 'src/utils/pagination';
 import { isInternalRequest } from 'src/utils/rateLimit';
-import { readPublicMetaCache, writePublicMetaCache } from 'src/utils/publicMetaCache';
+import { readPublicMetaWithSingleFlight } from 'src/utils/publicMetaCache';
+
+/**
+ * 匿名请求"含全文的公开文章列表"的单页上限。
+ *
+ * 为什么单独给全文列表设一个比 `MAX_PAGE_SIZE`(100) 小得多的上限：列表默认
+ * （`toListView` 缺省 = false）会在每一项里带**完整正文**，于是一个约 60 字节的匿名请求
+ * 能换回约等于整库正文的响应体（本站 59 篇 / 41,508 字，`pageSize=100` 一次就是整库）。
+ * 在极端网络环境下**出口带宽是最先耗尽、且最难恢复的资源**，而按 IP 的限流对僵尸网络无效、
+ * 默认部署里也没有任何缓存层能吸收 ⇒ 必须在应用层把单次放大倍数压下来。
+ *
+ * 取 20 的依据：①前台**不受影响**（列表页一律显式传 `toListView=true`，走 `MAX_PAGE_SIZE`）；
+ * ②本站内部调用（SSR 带 `VAN_BLOG_INTERNAL_TOKEN` 或回环直连）**不受影响**（`isInternalRequest`）；
+ * ③第三方消费者仍然可用，只是拉全文要分 5 倍多的页 —— 这是"可用性与放大倍数"的折中，
+ *   比"改默认值不返回全文"温和（那会破坏既有 API 契约）。
+ * ⚠️ 想放宽就调这个常量；不要指望用 `pageSize` 绕（`sanitizePagination` 会夹住）。
+ */
+export const FULL_CONTENT_MAX_PAGE_SIZE = 20;
+
+/**
+ * 每篇加密文章、每 10 分钟的**全局**（跨 IP）密码尝试预算。
+ *
+ * 为什么单有"20 次/10 分钟/(IP×文章)"不够：那是**按 IP** 的，在僵尸网络下等于没有 ——
+ * N 个 IP 就是 N×20 次，而每次尝试都要算一次 scrypt（N=16384，实测 63–65 ms / 16MB）。
+ * 于是攻击成本是**乘法**：`IP 数 × 加密文章数 × 20`。100 篇加密文章时 5 个 IP 就能产生
+ * 3.24 秒/秒的 scrypt 工作量。scrypt 本轮已改成异步（落到 libuv 线程池，事件循环不再被冻结），
+ * 但**CPU 总量没变** —— 线程池被打满之后，图片管线等其它异步工作一起排队。
+ * 这道闸把总量变成**有界**：每篇文章每 10 分钟最多这么多次尝试，与来源 IP 数无关。
+ *
+ * ⚠️ 它统计**所有**尝试（包括密码正确的那次），所以阈值要给足正常读者：
+ *    默认 500 次/10 分钟/篇 ≈ 一篇文章在 10 分钟内最多被 500 人试密码。
+ *    一篇爆文的加密贴可能真的会撞到，所以做成可配（`VANBLOG_UNLOCK_GLOBAL_BUDGET_PER_10MIN`）。
+ * ⚠️ 故意**不做"全站"预算**：那会让"一篇爆文的合法读者"把全站所有加密文章的解锁一起锁死，
+ *    而本站的使用场景恰恰是"要在攻击下把内容发出去"—— 可用性优先，所以按文章分桶。
+ * ⚠️ 与按 IP 那道一样用 `scaleLimit()` 摊薄：计数器是每进程一份，多 worker 时不摊薄就等于 N 倍预算。
+ */
+const RAW_UNLOCK_GLOBAL_BUDGET = Number(process.env.VANBLOG_UNLOCK_GLOBAL_BUDGET_PER_10MIN);
+export const UNLOCK_GLOBAL_BUDGET_PER_10MIN =
+  Number.isFinite(RAW_UNLOCK_GLOBAL_BUDGET) && RAW_UNLOCK_GLOBAL_BUDGET >= 20
+    ? Math.min(Math.floor(RAW_UNLOCK_GLOBAL_BUDGET), 100000)
+    : 500;
+
+/**
+ * 公开只读 GET 的缓存头。
+ *
+ * 为什么值得加：这些接口**匿名可达**且"请求小、响应大"，而默认部署里 caddy 不缓存动态响应
+ * ⇒ 每个攻击请求都要穿到 Node 与 Mongo。加上 `s-maxage` 与 `stale-while-revalidate` 之后，
+ * **站长只要在前面挂任意 CDN/反代缓存，就能把这类流量吸收在边缘** —— 这是极端环境下唯一能
+ * 横向扩展的防线，因为按 IP 限流对僵尸网络无效。
+ *
+ * ⚠️ 只加在**纯公开、与访客身份无关**的接口上（站点配置、文章列表）：
+ *   - 不加在文章详情/解锁接口（含访问密码保护的内容，绝不能被共享缓存存住）；
+ *   - 不加在任何 `/api/admin/*`（那边已有 `no-store` 与 CDN 专用头）；
+ *   - `max-age=30` 让浏览器最多看到 30 秒旧的站点配置/列表 —— 对博客无感，且后台改动本来
+ *     就有 `invalidatePublicMetaCache()` 让**服务端**立刻生效。
+ */
+const PUBLIC_READ_CACHE_CONTROL = 'public, max-age=30, s-maxage=300, stale-while-revalidate=86400';
 
 @ApiTags('public')
 @Controller('/api/public/')
@@ -113,6 +169,23 @@ export class PublicController {
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
+    // ⚠️ 第二道闸：**按文章的全局预算**（跨 IP），理由见 UNLOCK_GLOBAL_BUDGET_PER_10MIN。
+    //    key 用的是**归一化后**的 id，与上面那道闸同源 —— 否则 `7` 打满之后换 `0000007`
+    //    又能拿到一整份全局预算，等于这道闸不存在（那个前导零洞本轮之前真实存在过）。
+    const globalKey = `unlock-global-${
+      numericId !== null ? `#${numericId}` : `p:${rawId.slice(0, 80)}`
+    }`;
+    const globalAttempt = consumeAttempt(globalKey, {
+      max: scaleLimit(UNLOCK_GLOBAL_BUDGET_PER_10MIN),
+      windowMs: 10 * 60 * 1000,
+    });
+    if (!globalAttempt.allowed) {
+      // ⚠️ 文案不能泄露"这篇文章被爆破过"以外的信息，也不要回显 id。
+      throw new HttpException(
+        `这篇文章的密码尝试次数过多，请 ${globalAttempt.retryAfterSeconds} 秒后再试`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     const data = await this.articleProvider.getByIdWithPassword(id, body?.password);
     if (data) {
       resetAttempts(key);
@@ -196,6 +269,7 @@ export class PublicController {
     };
   }
   @Get('article')
+  @Header('Cache-Control', PUBLIC_READ_CACHE_CONTROL)
   async getByOption(
     @Req() req: any,
     @Query('page') page: number,
@@ -215,9 +289,22 @@ export class PublicController {
     // 现在只允许本站内部调用（回环直连，或带 VAN_BLOG_INTERNAL_TOKEN），
     // 其它一律夹到 MAX_PAGE_SIZE；正常翻页与分类/标签页都不受影响。
     const unlimited = isInternalRequest(req);
+    // ⚠️ **全文列表的放大闸门**：`toListView` 缺省是 false ⇒ 响应里含**每篇完整正文**，
+    //    而 `MAX_PAGE_SIZE` 是 100 ⇒ 一个约 60 字节的匿名请求能换回**约等于整库正文**
+    //    （本站 59 篇 / 41,508 字，一次 `pageSize=100` 的全文响应就是整库）。
+    //    在极端网络环境下**带宽是最先耗尽且最难恢复的资源**，而按 IP 的限流对僵尸网络无效、
+    //    默认部署里也没有任何缓存层能吸收它 ⇒ 这里按"响应是否含全文"分档收紧。
+    //    内部调用（SSR 带令牌或回环直连）不受影响；前台列表本来就显式传 `toListView=true`。
+    // ⚠️ 判据必须与 provider 同口径：`article.provider.ts:983` 是 `if (option.toListView)` 的
+    //    **真值判断**，所以查询串 `?toListView=false`（字符串"false"是真值）其实会走列表视图。
+    //    这里若用"严格等于 true"来判定，就会去夹那些实际只返回列表的请求（无害但错），
+    //    更糟的是可能放过真正返回全文的形状 ⇒ 一律用同一个真值判断。
+    const wantsFullContent = !toListView;
     const paging = sanitizePagination(page, pageSize, {
       allowUnlimited: unlimited,
       defaultPageSize,
+      maxPageSize:
+        wantsFullContent && !unlimited ? FULL_CONTENT_MAX_PAGE_SIZE : undefined,
     });
     const option = {
       page: paging.page,
@@ -265,13 +352,24 @@ export class PublicController {
   }
 
   @Get('/meta')
+  @Header('Cache-Control', PUBLIC_READ_CACHE_CONTROL)
   async getBuildMeta() {
     // 这个接口是全站最热的一次读（前台每个页面渲染都要调），内容却只在后台改配置时才变，
-    // 所以先查进程内短缓存（默认 5 秒，见 utils/publicMetaCache.ts）。
-    const cached = readPublicMetaCache();
-    if (cached) {
-      return cached;
-    }
+    // 所以走"进程内短缓存 + 单飞"（默认 5 秒，见 utils/publicMetaCache.ts）。
+    //
+    // ⚠️ **单飞不是优化，是必需**：裸 TTL 缓存有一个周期性必然发生的故障形状 —— TTL 到期的
+    //    那一瞬间，所有在飞请求**同时未命中**，于是每个都各自去跑下面那 7 个查询。1 万并发
+    //    ⇒ 瞬时 **7 万个 Mongo 操作**挤在 `maxPoolSize` 默认 **100** 的池上（且未配
+    //    `waitQueueTimeoutMS` ⇒ 排队等池是**无限等**）。结果不是快速失败，而是**延迟雪崩**：
+    //    请求在内存里堆积、p99 飙升、上游 caddy 等不到响应而 502。
+    //    C10K 实测正是这个形状：caddy 直服的静态路径 10000/10000 全成功，而本接口第二轮
+    //    只有 5033/10000（第一轮打热缓存，第二轮撞上过期瞬间）。
+    //    ⚠️ 多开 worker 解决不了：池大小被 `scaleLimit()` 按 worker 数摊薄，总和仍约 100。
+    return readPublicMetaWithSingleFlight<any>(() => this.buildPublicMeta());
+  }
+
+  /** 真正取数与组装。⚠️ 只由上面的 single-flight 包装调用，不要直接调（否则击穿防护失效）。 */
+  private async buildPublicMeta() {
     // ⚠️ 这 7 个读互相独立，以前是**串行 await**（7 次 Mongo 往返排队等），
     // 高并发下延迟直接翻好几倍。改成并行后总耗时≈最慢的那一个。
     const [tags, meta, categories, menuRes, totalArticles, totalWordCount, LayoutSetting] =
@@ -294,10 +392,20 @@ export class PublicController {
     // 它自己对 null 有处理；只有这一处是裸解构。
     const { data: menus } = menuRes ?? {};
     const LayoutRes = this.settingProvider.encodeLayoutSetting(LayoutSetting);
-    const siteInfo = {
-      ...(metaDoc?.siteInfo || {}),
-      articlesPerPage: sanitizeArticlesPerPage(metaDoc?.siteInfo?.articlesPerPage),
-    };
+    // ⚠️ **白名单投影，不是全量展开**。`siteInfo` 以前是 `...metaDoc.siteInfo` 直接铺开，
+    //    等于"新增字段默认公开"。这不是理论风险：`UpdateSiteInfoDto = Partial<SiteInfo> |
+    //    Partial<updateUserDto>`，而 `updateUserDto` 含 `username` —— 旧的 `updateSiteInfo`
+    //    只剥 `name`/`password`、**没剥 `username`** ⇒ 一次带 `username` 的后台 PUT 会把
+    //    **管理员用户名写进 `metas.siteInfo`**，再被这个匿名可达的接口全量展开出去，
+    //    攻击者不用枚举就能精准打真账号。读写两侧现在都堵了（写侧在 meta.provider，读侧是这一行）。
+    //    另一个副作用是侦察面：实测公开响应里的 siteInfo 有 19 个键，其中
+    //    `allowOpenHiddenPostByUrl` 前台根本不用，而它若是 'true' 就等于告诉攻击者
+    //    "枚举文章 id/路径可以拿到隐藏正文"。
+    // ⚠️ 投影是**纯函数**（不读库、不改入参），所以不会给这个全站最热的读增加 DB 往返 ——
+    //    这点很关键：本 handler 刚加了 single-flight，任何多余的往返都会抵消它的收益。
+    // ⚠️ `articlesPerPage` 的夹取与三段文案的净化**已包含在投影里**（与 `getSiteInfo()` 逐项一致，
+    //    白名单只有一份真相），所以这里不要再单独调 `sanitizeArticlesPerPage`。
+    const siteInfo = { ...projectPublicSiteInfo(metaDoc?.siteInfo) };
     const data = {
       version: version,
       tags,
@@ -315,7 +423,8 @@ export class PublicController {
       statusCode: 200,
       data,
     };
-    writePublicMetaCache(res);
+    // ⚠️ 不在这里写缓存：写入由 `readPublicMetaWithSingleFlight` 统一负责（它还要比对代号，
+    //    以免"在飞期间后台改了设置"时把旧数据写回缓存并再活一个 TTL）。
     return res;
   }
 }

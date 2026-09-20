@@ -117,15 +117,19 @@ describe('@nestjs/jwt 11：登录 token 与 API token 的签发/校验', () => {
     }
   });
 
-  it('API token：默认 TTL 365 天，userId 固定 666666', async () => {
+  it('API token：默认 TTL 90 天，userId 固定 666666', async () => {
     const ctx = await buildModule(undefined);
     try {
+      // ⚠️ 显式清掉旋钮：默认值本身就是被测对象，别让 shell 里残留的环境变量决定结果
+      delete process.env.VANBLOG_API_TOKEN_TTL_DAYS;
       const token = await ctx.provider.createAPIToken('spec-api-token');
       const payload = b64urlDecode(token.split('.')[1]);
       expect(payload.sub).toBe(0);
       expect(payload.username).toBe('spec-api-token');
       expect(payload.role).toBe('admin');
-      expect(Number(payload.exp) - Number(payload.iat)).toBe(3600 * 24 * 365);
+      // 90 天（不是 365）：这个 token 签的是 { sub: 0, role: 'admin' }，等价超管，
+      // 而且不受协作者权限那套超管专属路由限制 ⇒ 有效期就是"泄露后攻击者能用多久"的上限。
+      expect(Number(payload.exp) - Number(payload.iat)).toBe(3600 * 24 * 90);
       expect(ctx.created[0]).toMatchObject({ userId: 666666, name: 'spec-api-token' });
       expect(ctx.jwt.verify(token).role).toBe('admin');
     } finally {

@@ -209,7 +209,19 @@ describe('REGRESSION R4-3（已修）：/static/** 与 /swagger 曾经完全绕�
     const main = read('./main.ts');
     const iStatic = main.indexOf('app.useStaticAssets(globalConfig.staticPath');
     const iSwagger = main.indexOf("SwaggerModule.setup('swagger', app, document)");
-    const iListen = main.indexOf('await app.listen(');
+    // ⚠️ 同时认两种形状：`await app.listen(` 与本轮加了 backlog 之后的
+    //    `await listenWithBacklog(`（提交 f0732f79 把 Nest 的 listen 包了一层，
+    //    因为 `app.listen()` 没有 backlog 形参 ⇒ 内核默认 511，1 万并发时静默丢 SYN）。
+    //    钉死其中一种字符串，就等于下次改监听方式时这条守卫会假红并被人"顺手放宽"。
+    const listenShapes = ['await app.listen(', 'await listenWithBacklog('];
+    const iListen = Math.min(
+      ...listenShapes.map((shape) => {
+        const i = main.indexOf(shape);
+        return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+      }),
+    );
+    // 反证：至少一种形状必须真的存在，否则 MAX_SAFE_INTEGER 会让下面的比较假绿。
+    expect(listenShapes.some((shape) => main.includes(shape))).toBe(true);
     expect(iStatic).toBeGreaterThan(-1);
     expect(iSwagger).toBeGreaterThan(-1);
     expect(iListen).toBeGreaterThan(-1);

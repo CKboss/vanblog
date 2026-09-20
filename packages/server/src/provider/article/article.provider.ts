@@ -11,13 +11,13 @@ import {
   orderPublicArticles,
   topSortSpec,
 } from 'src/utils/publicArticleOrder';
-import { verifyAccessPassword } from 'src/utils/crypto';
+import { verifyAccessPasswordAsync } from 'src/utils/crypto';
 import {
-  hashAccessPasswordIdempotent,
+  hashAccessPasswordIdempotentAsync,
   isScryptHash,
   needsPasswordUpgrade,
   redactAccessSecretList,
-  resolveAccessPasswordWrite,
+  resolveAccessPasswordWriteAsync,
 } from 'src/utils/accessPassword';
 import {
   Logger,
@@ -58,8 +58,62 @@ import { sleep } from 'src/utils/sleep';
 import { CategoryDocument } from 'src/scheme/category.schema';
 import { escapeRegExp, safeSearchPattern } from 'src/utils/regex';
 import { asQueryString } from 'src/utils/sanitizeRequest';
+import { envPositiveInt } from 'src/utils/envNumber';
 
 export type ArticleView = 'admin' | 'public' | 'list';
+
+/**
+ * 「扫描文章图片」的**分批**参数。
+ *
+ * 为什么必须分批：这个扫描要读**每篇文章的正文**（图片链接就在正文里），而正文是整个库里
+ * 最大的字段。以前是一次 `find()` 把全部未删除文章连正文一起拉进堆：
+ * 5000 篇 × 300 KB ≈ **1.5 GB** ⇒ worker 直接 OOMKilled。
+ * ⚠️ 而这条路径**不是只有管理员能碰**：`post-/api/admin/img/scan` 既不在 `publicRoutes`
+ * 也不在 `pathPermissionMap` 里，但 `/api/admin/img` 不在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
+ * 里 ⇒ **勾了「所有权限」的协作者可以调**。在"低权限账号应当按已被攻陷来设计"的威胁模型下，
+ * 这就是"一个廉价请求打死整个 worker"的放大链（而且可反复触发：重启后再来一次）。
+ *
+ * 分批之后**峰值**内存只与批大小有关（50 篇 × 300 KB ≈ 15 MB），与全站规模无关。
+ */
+const IMG_LINK_SCAN_BATCH_SIZE = 50;
+
+/**
+ * 一轮扫描最多处理多少篇文章。
+ *
+ * 上限存在的理由是**运行时间**而不是内存（内存已经由分批解决）：下游对每个图片链接都要
+ * 真去下载一次（`static.provider.getImgInfoByLink` → `fetchImg`，单张上限 50 MB、超时 15 s，
+ * 失败还会用 encodeURI 再试一次），链接多时整轮可能跑几十分钟，一直占着一个请求。
+ * ⚠️ 撞上限时**必须如实报告**（`truncated: true` + WARN），绝不能静默返回不完整结果
+ * 让调用方以为"全站都扫过了"—— 那会让"补缩略图/找失效图"这类维护动作给出错误的结论。
+ */
+const IMG_LINK_SCAN_MAX_ARTICLES = envPositiveInt(
+  'VANBLOG_IMG_SCAN_MAX_ARTICLES',
+  5000,
+  1,
+  1000000,
+);
+
+/** 单篇文章的图片链接汇总（`getAllImageLinks` 的元素形状，**对外契约不变**）。 */
+export interface ArticleImageLinks {
+  articleId: number;
+  title: string;
+  links: string[];
+}
+
+/** 带扫描元信息的结果：给需要"如实说明扫了多少、有没有被截断"的调用方用。 */
+export interface ArticleImageLinksScan {
+  items: ArticleImageLinks[];
+  /** 实际处理的文章篇数 */
+  scannedArticles: number;
+  /** 实际解析出的图片链接总数 */
+  scannedLinks: number;
+  /** 累计读入的正文字节数（只用于日志，不是内存峰值——分批后峰值只与批大小有关） */
+  contentBytes: number;
+  /** 是否因为撞上 `IMG_LINK_SCAN_MAX_ARTICLES` 而**没有扫完全站** */
+  truncated: boolean;
+  /** 本轮生效的上限（便于日志与调用方如实转述） */
+  articleCap: number;
+}
 
 /** 相关文章（P6）：一次查询最多取多少候选（JS 里再排序取前 RELATED_MAX） */
 export const RELATED_CANDIDATE_LIMIT = 50;
@@ -232,7 +286,12 @@ export class ArticleProvider {
     // 访问密码入库前换成 scrypt 哈希：明文存储等于"拿到库就拿到全站加密文章的密码"。
     // 新建语义下**留空 = 不加密**（没有旧值需要保留）；`clearPassword` 不是 schema
     // 字段，必须从入库对象里摘掉。规则的唯一真源是 utils/accessPassword.ts。
-    const passwordWrite = resolveAccessPasswordWrite(createArticleDto, 'create');
+    // ⚠️ 必须用异步变体并 await：同步 scrypt 单次阻塞事件循环约 63 ms（本机实测）。
+    //    这条是**鉴权后可达**的写入路径，一个有写权限的协作者反复保存加密文章就能持续
+    //    拖慢整个 worker（而 UV_THREADPOOL_SIZE=16 决定的异步口令吞吐 ≈254 次/秒，
+    //    只有在异步化之后才成立）。⚠️ 漏写 await 会让 `passwordWrite` 变成一个 Promise，
+    //    于是 `passwordWrite.password` 是 undefined ⇒ 走"不修改密码"分支，静默丢密码。
+    const passwordWrite = await resolveAccessPasswordWriteAsync(createArticleDto, 'create');
     const payload: any = { ...createArticleDto };
     delete payload.clearPassword;
     payload.password = passwordWrite.password ?? '';
@@ -443,27 +502,111 @@ export class ArticleProvider {
     return result;
   }
 
-  async getAllImageLinks() {
-    const res = [];
-    const articles = await this.articleModel.find({
-      $or: [
-        {
-          deleted: false,
-        },
-        {
-          deleted: { $exists: false },
-        },
-      ],
-    });
-    for (const article of articles) {
-      const eachLinks = parseImgLinksOfMarkdown(article.content || '');
-      res.push({
-        articleId: article.id,
-        title: article.title,
-        links: eachLinks,
-      });
+  /**
+   * 全站文章里的图片链接（对外形状**不变**：仍是 `ArticleImageLinks[]`）。
+   *
+   * ⚠️ 需要知道"扫了多少 / 有没有被截断"的调用方请用 `scanAllImageLinks()`，
+   * 别用这个方法的长度去推断完整性 —— 撞上限时它就是**不完整**的。
+   */
+  async getAllImageLinks(): Promise<ArticleImageLinks[]> {
+    return (await this.scanAllImageLinks()).items;
+  }
+
+  /**
+   * `getAllImageLinks` 的诚实版：按 `_id` **keyset 分页**分批读取，每批只投影必要字段，
+   * 处理完即释放；撞上限时返回 `truncated: true` 并打 WARN。
+   *
+   * 为什么用 keyset（`_id > last`）而不是 `skip/limit`：`skip` 在深分页时是 O(skip) 的
+   * （服务端要数着跳过），扫全站会变成 O(n²)；keyset 每批都走 `_id` 索引，总成本 O(n)。
+   * ⚠️ 排序**必须**与游标条件同一个键（`_id` 升序），否则会漏文档或重复处理。
+   */
+  async scanAllImageLinks(): Promise<ArticleImageLinksScan> {
+    const baseQuery = {
+      $or: [{ deleted: false }, { deleted: { $exists: false } }],
+    };
+    // 只取用得上的字段：`content` 是必须的（链接在正文里），但绝不取 revisions/其它大字段
+    const projection = { _id: 1, id: 1, title: 1, content: 1 };
+
+    const items: ArticleImageLinks[] = [];
+    let lastObjectId: any = null;
+    let scannedArticles = 0;
+    let scannedLinks = 0;
+    let contentBytes = 0;
+    let truncated = false;
+
+    for (;;) {
+      const filter =
+        lastObjectId === null
+          ? baseQuery
+          : { $and: [baseQuery, { _id: { $gt: lastObjectId } }] };
+      // ⚠️ 批大小要按**剩余配额**收窄：否则上限是在整批处理完之后才检查的，
+      //    一轮会超出上限最多 (批大小 - 1) 篇 —— 上限就不再是上限了。
+      const remaining = IMG_LINK_SCAN_MAX_ARTICLES - scannedArticles;
+      if (remaining <= 0) {
+        break;
+      }
+      const take = Math.min(IMG_LINK_SCAN_BATCH_SIZE, remaining);
+      const batch = await this.articleModel
+        .find(filter, projection)
+        .sort({ _id: 1 })
+        .limit(take)
+        .exec();
+      if (!batch || batch.length === 0) {
+        break;
+      }
+      for (const article of batch) {
+        const content = (article as any)?.content || '';
+        const eachLinks = parseImgLinksOfMarkdown(content);
+        contentBytes += typeof content === 'string' ? content.length : 0;
+        scannedLinks += eachLinks.length;
+        items.push({
+          articleId: (article as any).id,
+          title: (article as any).title,
+          links: eachLinks,
+        });
+        scannedArticles += 1;
+      }
+      lastObjectId = (batch[batch.length - 1] as any)._id;
+
+      if (scannedArticles >= IMG_LINK_SCAN_MAX_ARTICLES) {
+        // 诚实判定"还有没有剩"：只取一条、只投影 _id，成本可忽略
+        const more = await this.articleModel
+          .find({ $and: [baseQuery, { _id: { $gt: lastObjectId } }] }, { _id: 1 })
+          .sort({ _id: 1 })
+          .limit(1)
+          .exec();
+        truncated = Boolean(more && more.length > 0);
+        break;
+      }
+      if (batch.length < take) {
+        break; // 最后一批不满 ⇒ 已经到底
+      }
     }
-    return res;
+
+    if (truncated) {
+      this.logger.warn(
+        `扫描文章图片链接**未覆盖全站**：已达单轮上限 ${IMG_LINK_SCAN_MAX_ARTICLES} 篇，` +
+          `本次只处理了前 ${scannedArticles} 篇（解析出 ${scannedLinks} 个图片链接、` +
+          `累计正文 ${(contentBytes / 1024 / 1024).toFixed(1)} MB），后面还有文章没扫。` +
+          `结果**不完整**，请勿据此认为"全站图片都已入库/没有失效图"。` +
+          `要一次扫完全站，调大 VANBLOG_IMG_SCAN_MAX_ARTICLES（内存峰值只与批大小 ` +
+          `${IMG_LINK_SCAN_BATCH_SIZE} 篇有关，与全站规模无关，所以调大是安全的，只是更慢）。`,
+      );
+    } else {
+      this.logger.log(
+        `扫描文章图片链接完成：${scannedArticles} 篇、${scannedLinks} 个链接、` +
+          `正文合计 ${(contentBytes / 1024 / 1024).toFixed(1)} MB（分 ${IMG_LINK_SCAN_BATCH_SIZE} 篇/批）`,
+      );
+    }
+
+    return {
+      items,
+      scannedArticles,
+      scannedLinks,
+      contentBytes,
+      truncated,
+      articleCap: IMG_LINK_SCAN_MAX_ARTICLES,
+    };
   }
 
   async rewriteBaseUrl(oldBase?: string, newBase?: string): Promise<RewriteBaseUrlCount> {
@@ -1331,7 +1474,14 @@ export class ArticleProvider {
     const supplied = asQueryString(password);
     // 常量时间比较（原来的 !== 会因短路而泄露长度/前缀信息），
     // 并且同时支持历史的明文密码与将来的 scrypt 哈希
-    if (!verifyAccessPassword(targetPassword, supplied)) {
+    // ⚠️ 必须用**异步**变体并 await：本方法是**匿名可达**的解锁路径，同步 scrypt 每次
+    //    阻塞事件循环约 63 ms（本机实测），而解锁预算是 20 次/10 分钟/(IP×文章) ⇒
+    //    单个组合的一轮预算就能独占事件循环 1.26 秒；攻击者不需要猜中密码，只要用很多
+    //    (IP×文章) 组合就能把 worker 打满，连带把 `/api/public/health` 拖超时 ⇒
+    //    容器判 unhealthy ⇒ `restart: always` 重启风暴，而**重启不能缓解**（攻击继续）。
+    //    ⚠️ 千万别"顺手"去掉这个 await：`!Promise` 恒为 false，那等于**任何密码都能解开
+    //    任何加密文章**（静默的未鉴权正文泄露）。有专门的漂移守卫盯着这一行的形状。
+    if (!(await verifyAccessPasswordAsync(targetPassword, supplied))) {
       return null;
     }
     return plain;
@@ -1745,7 +1895,9 @@ export class ArticleProvider {
     const patch: UpdateArticleDto = { ...updateArticleDto };
     // 访问密码（P1）：留空/缺键 = **不修改**（表单已经不再回填密文，见 utils/accessPassword.ts），
     // 要解除加密必须显式 `clearPassword: true`；填了新值就存 scrypt 哈希。
-    const passwordWrite = resolveAccessPasswordWrite(updateArticleDto, 'update');
+    // ⚠️ 异步变体 + await（同步 scrypt 每次阻塞事件循环约 63 ms；漏 await 会静默丢密码，
+    //    因为 `passwordWrite.password` 会变成 undefined ⇒ 落到"不修改"分支）。
+    const passwordWrite = await resolveAccessPasswordWriteAsync(updateArticleDto, 'update');
     delete (patch as any).clearPassword;
     if (passwordWrite.password === undefined) {
       delete patch.password;
@@ -1795,7 +1947,7 @@ export class ArticleProvider {
           .findOne({ id: numericId }, { password: 1 })
           .exec();
         if (stored && needsPasswordUpgrade(stored.password)) {
-          patch.password = hashAccessPasswordIdempotent(stored.password);
+          patch.password = await hashAccessPasswordIdempotentAsync(stored.password);
           this.logger.log(
             `文章 ${numericId} 的历史明文访问密码已在本次保存时升级为 scrypt 哈希`,
           );
@@ -2071,7 +2223,10 @@ export class ArticleProvider {
         continue;
       }
       // 用 _id 定位：文章/分类的业务主键（id / name）都可能是导入时改过的，_id 一定唯一
-      await model.updateOne({ _id: doc._id }, { password: hashAccessPasswordIdempotent(text) }).exec();
+      // ⚠️ 异步哈希：wash 是批量循环，同步版会让启动阶段连续阻塞（每篇约 63 ms）
+      await model
+        .updateOne({ _id: doc._id }, { password: await hashAccessPasswordIdempotentAsync(text) })
+        .exec();
       washed += 1;
       if (washed % 25 === 0) {
         this.logger.log(`清洗${label}访问密码：已处理 ${washed} 条`);

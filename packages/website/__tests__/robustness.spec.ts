@@ -62,7 +62,14 @@ describe("后端请求的参数处理", () => {
     expect(read("pages/post/[id].tsx")).toContain("notFound: true");
     const page = read("pages/page/[p].tsx");
     expect(page).toContain("notFound: true");
-    expect(page).toMatch(/\^\\d\+\$/);
+    /* ⚠️ 这里以前钉的是页面里那个内联的 `/^\d+$/`。判定逻辑已经抽到
+     * utils/pageParamShape.ts（分页参数还额外挡住超长、控制字符、路径分隔符与
+     * 超过 MAX_SAFE_INTEGER 的页码），所以钉子跟着升级成"必须走共用工具"，
+     * 而不是钉一个字面正则 —— 钉字面量正是"改的人把新值填回去、不去想为什么"的形状。
+     * 顺序（校验必须在取数之前）由 __tests__/pageParamShape.spec.ts 钉住。 */
+    expect(page).toContain('parsePageNumberParam(raw)');
+    expect(page).toContain('from "../../utils/pageParamShape"');
+    expect(page).not.toMatch(/\^\\d\+\$/);
   });
 
   it("后端故障时不再被当成「文章不存在」（否则会污染 ISR 缓存）", () => {

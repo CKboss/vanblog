@@ -3,9 +3,16 @@
  *
  * 目前用在 `POST /api/public/article/:id`（输密码解锁加密文章）：
  * 密码是明文比较、又没有任何限制，等于可以无限速爆破。
- * 登录接口有 LoginGuard，这里不重复造轮子，用同一套思路。
- * 另外 `utils/rateLimit.ts`（全局/静态/公开写/初始化四档）与
- * `provider/comment/comment.provider.ts`（评论频率、每日上限、同内容去重）也用它。
+ * 另外 `utils/rateLimit.ts`（全局/静态/公开写/初始化四档）、
+ * `provider/comment/comment.provider.ts`（评论频率、每日上限、同内容去重）、
+ * 以及 `provider/auth/login.guard.ts`（登录失败窗口，经 `peekAttempts` /
+ * `recordFailureAttempt` 这对只读+只写的入口）也用它。
+ *
+ * ⚠️ 登录窗口以前存在 `CacheProvider` 里 —— 那是一张**没有任何上界**的普通对象，
+ *    而它的 key 是 `login-<客户端 IP>`，攻击者换着源 IP 打登录就能让堆单调增长到 OOM
+ *    （匿名可达、无需任何凭据）。搬进这张表之后就受 `MAX_BUCKETS` 与"按 count 淘汰最冷"
+ *    的保护：洪水用的一次性桶（count=1）先被淘汰，正在被限流的热桶一条都不动。
+ *    ⇒ **规矩：任何"按外部输入分桶"的计数都必须放在这张表里**，不要新开一张 Map/对象。
  *
  * ⚠️ 这是**长驻进程里唯一一张会被外部输入撑大的表**，所以三件事必须成立：
  *  1. **有过期清扫**：桶只在"同一个 key 再次进来"时才会被替换，于是一个只来过一次的
@@ -122,49 +129,129 @@ function evictColdest(): number {
   return removed;
 }
 
-export function consumeAttempt(
-  key: string,
-  { max, windowMs }: AttemptLimitOptions,
-): { allowed: boolean; retryAfterSeconds: number } {
-  const now = Date.now();
-  const bucketKey = normalizeAttemptKey(key);
-
-  // 惰性清扫：最多每分钟一次，且只在表非空时做
+/** 惰性过期清扫：最多每 SWEEP_INTERVAL_MS 一次，且只在表非空时做。 */
+function sweepIfDue(now: number): void {
   if (buckets.size && now - lastSweepAt >= SWEEP_INTERVAL_MS) {
     lastSweepAt = now;
     counters.sweeps += 1;
     sweepExpired(now);
   }
+}
+
+/**
+ * 建新桶之前给表腾地方：先扫过期（一次性 key 的洪水下这里能回收掉绝大部分），
+ * 还超就淘汰最冷的（count 最小的）。**绝不清空整张表**（见文件头的说明）。
+ *
+ * ⚠️ 这次清扫另有 1 秒节流：满表时每个新 key 都会走到这里，不节流就等于
+ *    每次插入都扫两万个桶（实测一次 ~5ms 的事件循环阻塞）。
+ *    节流期内直接走淘汰 —— 洪水场景下最冷的桶（count=1）本来就是一次性 key，
+ *    少扫一遍两万个桶，把事件循环的阻塞从 ~5ms 降到 ~2ms。
+ */
+function ensureBucketCapacity(now: number): void {
+  if (buckets.size < MAX_BUCKETS) return;
+  if (now - lastCapSweepAt >= CAP_SWEEP_INTERVAL_MS) {
+    lastCapSweepAt = now;
+    counters.sweeps += 1;
+    sweepExpired(now);
+  }
+  if (buckets.size >= MAX_BUCKETS) {
+    evictColdest();
+  }
+}
+
+export function consumeAttempt(
+  key: string,
+  { max, windowMs }: AttemptLimitOptions,
+): { allowed: boolean; retryAfterSeconds: number; count: number } {
+  const now = Date.now();
+  const bucketKey = normalizeAttemptKey(key);
+
+  sweepIfDue(now);
 
   const hit = buckets.get(bucketKey);
   if (!hit || now - hit.firstAt > windowMs) {
-    if (buckets.size >= MAX_BUCKETS) {
-      // 顶到上限：先扫一遍过期（一次性 key 的攻击下这里能回收掉绝大部分），
-      // 还超就淘汰最冷的（count 最小的）。**绝不清空整张表**（见文件头的说明）。
-      // ⚠️ 这次清扫另有 1 秒节流：满表时每个新 key 都会走到这里，不节流就等于
-      //    每次插入都扫两万个桶（实测一次 ~5ms 的事件循环阻塞）。
-      //    节流期内直接走淘汰 —— 洪水场景下最冷的桶（count=1）本来就是一次性 key，
-      //    少扫一遍两万个桶，把事件循环的阻塞从 ~5ms 降到 ~2ms。
-      if (now - lastCapSweepAt >= CAP_SWEEP_INTERVAL_MS) {
-        lastCapSweepAt = now;
-        counters.sweeps += 1;
-        sweepExpired(now);
-      }
-      if (buckets.size >= MAX_BUCKETS) {
-        evictColdest();
-      }
-    }
+    ensureBucketCapacity(now);
     buckets.set(bucketKey, { count: 1, firstAt: now, windowMs });
-    return { allowed: true, retryAfterSeconds: 0 };
+    return { allowed: true, retryAfterSeconds: 0, count: 1 };
   }
   hit.count += 1;
   if (hit.count > max) {
     return {
       allowed: false,
       retryAfterSeconds: Math.max(1, Math.ceil((hit.firstAt + windowMs - now) / 1000)),
+      count: hit.count,
     };
   }
-  return { allowed: true, retryAfterSeconds: 0 };
+  return { allowed: true, retryAfterSeconds: 0, count: hit.count };
+}
+
+/** 只读快照（`peekAttempts` 的返回形状）。 */
+export interface AttemptSnapshot {
+  /** 窗口内的计数；没有桶或已过窗口 ⇒ 0 */
+  count: number;
+  /** 按调用方给的 max 判定：`count >= max` 即视为已超限 */
+  blocked: boolean;
+  retryAfterSeconds: number;
+}
+
+/**
+ * **只读**地看一眼某个 key 的计数，不建桶、不计数、不改变任何状态。
+ *
+ * 为什么需要它：`consumeAttempt` 是"调用即计数"，而登录防爆破必须是两阶段的 ——
+ * 守卫在**认证之前**只判断"还能不能试"（`LoginGuard.inspect`），计数由 controller 在
+ * **认证失败之后**才记（`recordFailure`）。早期实现正是把两件事合成一件，结果
+ * "成功登录也算一次失败"，正常用户一分钟内登录 4 次就被锁在门外（见 login.guard.ts 的头注释）。
+ * 所以这里必须有一个不产生副作用的读法。
+ *
+ * ⚠️ 判据是 `count >= max`（与 LoginGuard 历史上的 `count < max ⇒ 放行` 完全一致）：
+ *    max=5 时前 5 次失败都放行、**第 6 次**尝试被拒。别改成 `>`，那会白送一次尝试。
+ * ⚠️ 只读 ⇒ 不触发淘汰/清扫（读路径必须是无副作用且 O(1) 的，它跑在每个登录请求上）。
+ */
+export function peekAttempts(
+  key: string,
+  { max, windowMs }: AttemptLimitOptions,
+): AttemptSnapshot {
+  const now = Date.now();
+  const hit = buckets.get(normalizeAttemptKey(key));
+  if (!hit || now - hit.firstAt > windowMs) {
+    return { count: 0, blocked: false, retryAfterSeconds: 0 };
+  }
+  const blocked = hit.count >= max;
+  return {
+    count: hit.count,
+    blocked,
+    retryAfterSeconds: blocked
+      ? Math.max(1, Math.ceil((hit.firstAt + windowMs - now) / 1000))
+      : 0,
+  };
+}
+
+/**
+ * 记一次**失败**，返回新的计数（1 表示这是本窗口的第一次）。
+ *
+ * 与 `consumeAttempt` 的区别：它不做"是否超限"的判定（判定归 `peekAttempts`，
+ * 因为登录的判定发生在认证之前、计数发生在认证之后），也不受 `max` 影响 ——
+ * 超限之后继续失败仍然要累加，否则窗口会被无限续期成"永久锁定"。
+ *
+ * 走的是与 `consumeAttempt` 完全相同的**有界**表：过期清扫、满表按 count 淘汰最冷、
+ * key 截断，一样都不少。这正是把登录失败窗口从 `CacheProvider`（一张没有任何上界的
+ * 普通对象）搬过来的全部理由：攻击者换着源 IP 打登录，以前能让堆单调增长到 OOM。
+ */
+export function recordFailureAttempt(key: string, opts: { windowMs: number }): number {
+  const { windowMs } = opts;
+  const now = Date.now();
+  const bucketKey = normalizeAttemptKey(key);
+
+  sweepIfDue(now);
+
+  const hit = buckets.get(bucketKey);
+  if (!hit || now - hit.firstAt > windowMs) {
+    ensureBucketCapacity(now);
+    buckets.set(bucketKey, { count: 1, firstAt: now, windowMs });
+    return 1;
+  }
+  hit.count += 1;
+  return hit.count;
 }
 
 export function resetAttempts(key: string): void {

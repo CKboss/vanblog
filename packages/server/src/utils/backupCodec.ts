@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import * as directMongoDb from 'mongodb';
+import type { BackupEncryptionSummary } from './backupCrypto';
 
 /**
  * 整站备份用的 BSON <-> JSON 编解码（canonical EJSON 的子集，够 VanBlog 用）。
@@ -192,6 +193,16 @@ export interface FullBackupManifest {
   integrity?: BackupIntegrity;
   /** 导出实例的身份；老归档没有（可选、追加） */
   source?: BackupSourceInfo;
+  /**
+   * 加密信息（可选、追加，不改 version）。明文归档没有这个字段。
+   *
+   * ⚠️ 记的是**非机密**参数（KDF 的 N/r/p、salt、块大小、内层压缩格式），
+   * 目的是"将来换了默认参数也还能解开老归档"—— 解密端按头部里的参数派生密钥，
+   * 而不是按代码里的当前默认值。口令本身**绝不**出现在这里（见 backupCrypto.ts）。
+   * ⚠️ 这个字段在**明文**的 sidecar 清单里也有一份（清单不解密就能读），
+   * 那是有意的：`backup-status` 与后台列表要在不要求口令的情况下说出"这份是加密的"。
+   */
+  encryption?: BackupEncryptionSummary;
   databases: Record<string, DatabaseSummary>;
   static: Record<string, StaticSummary>;
   /**

@@ -1,6 +1,10 @@
 import fs from 'fs';
 import { sha256 } from 'js-sha256';
 import { SiteInfo } from 'src/types/site.dto';
+// ⚠️ 只取那个**常量**（账号口令最小长度），不取 UserProvider 类：这里是一条纯函数路径，
+//    不需要注入。依赖方向已核过无环：user.provider 只 import nest/mongoose/types/schema/
+//    types/access/utils/crypto，这些都不 import 本文件或 init.provider。
+import { MIN_ACCOUNT_PASSWORD_LENGTH } from 'src/provider/user/user.provider';
 
 /**
  * 环境变量自动初始化（部署期把"未初始化窗口"整个关掉的机制）。
@@ -22,11 +26,16 @@ import { SiteInfo } from 'src/types/site.dto';
  *    绝不静默跳过 —— "运营者给了凭据、站点却没初始化"必须当场可见；
  *  - 密码本身**永不**进日志、永不进迁移台账的 detail。
  *
- * ⚠️ 校验策略：**不发明第二套密码策略**。`InitDto`/`initSystem` 在服务端
- * 对用户名/密码没有任何强度校验（向导前端只有 `required: true`），所以这里
- * 拒绝的恰好是"向导也会拒绝的"：缺失/空白的用户名、空的密码。要加长度下限
- * 应当先加给向导本身，两边一起变。
+ * ⚠️ 校验策略：**不发明第二套密码策略**，但**必须**有长度下限。
+ * 这里拿到的是 `VANBLOG_ADMIN_PASSWORD(_FILE)` 的**原始口令**（不像后台表单那样已经被
+ * 浏览器 sha256 派生成恒 64 位摘要），所以服务端在这里**判得了**强度，也就该判：
+ * 零接触初始化是**自动化路径**（compose / k8s / CI 里写死一个 env），恰恰是最容易
+ * 留下 `admin123` 这种弱口令的地方，而且一旦建号成功，弱口令就直接是**管理员**口令。
+ * 长度下限**复用** `provider/user/user.provider.ts` 的 `MIN_ACCOUNT_PASSWORD_LENGTH`
+ * （= 后台表单那条 `min` 规则的同一个值），不写第二个字面量，免得两边漂移。
+ * 用户名侧仍然只拒缺失/空白（与向导一致，不额外发明规则）。
  */
+
 
 export const ENV_ADMIN_USER = 'VANBLOG_ADMIN_USER';
 export const ENV_ADMIN_PASSWORD = 'VANBLOG_ADMIN_PASSWORD';
@@ -114,6 +123,29 @@ export function resolveEnvCredentials(
         passwordSource === 'file'
           ? `${ENV_ADMIN_PASSWORD_FILE}（${passwordFile}）去掉尾部空白后是空的：拒绝用空密码初始化`
           : `${ENV_ADMIN_PASSWORD} 是空的：拒绝用空密码初始化`,
+    };
+  }
+  // ⚠️ 判定与文案必须用**同一个**长度口径。这里曾经判定用 `password.length`（UTF-16 码元）、
+  //    文案用码点，于是 5 个 emoji 的口令 UTF-16 长度正好 10 ⇒ 被放行，而报错文案说的是另一套口径
+  //    （是新增的码点用例把这条抓出来的）。统一成码点：与后台表单一致 —— async-validator 对字符串
+  //    先把代理对折叠成一个字符再取 length，所以一个 emoji 算 1 个字符。两边口径一致才不会出
+  //    "表单过了、容器起不来"这种指不向原因的故障。
+  const passwordLength = Array.from(password).length;
+  if (passwordLength < MIN_ACCOUNT_PASSWORD_LENGTH) {
+    // ⚠️ 错误信息里**只有长度，绝不含口令本身**（沿用本文件既有做法）：这段文案会进容器日志，
+    //    而日志常常被采集到别处。同理也不打印口令的任何片段或哈希。
+    // ⚠️ 长度按**码点**数（与后台表单那条 `min` 规则同口径：async-validator 对字符串先把
+    //    代理对折叠成一个字符再取 length），所以一个 emoji 算 1 个字符，两边不会出现
+    //    "表单过了、启动被拒"的分歧。
+    return {
+      ok: false,
+      error:
+        `${passwordSource === 'file' ? `${ENV_ADMIN_PASSWORD_FILE}（${passwordFile}）` : ENV_ADMIN_PASSWORD}` +
+        ` 提供的管理员口令太短：当前 ${passwordLength} 个字符，至少需要 ` +
+        `${MIN_ACCOUNT_PASSWORD_LENGTH} 个。这是为了防止自动化部署（compose / k8s / CI 里写死的 env）` +
+        `留下弱口令 —— 零接触初始化建出来的是**管理员**账号，弱口令在"5 次/300 秒/IP"的防爆破预算下，` +
+        `用一批代理 IP 仍可能在数小时内被撞开，而撞开就能改站点内容。` +
+        `请换一个至少 ${MIN_ACCOUNT_PASSWORD_LENGTH} 个字符的口令后重启容器`,
     };
   }
   return { ok: true, creds: { username, password, passwordSource, passwordFile: passwordFile || undefined } };

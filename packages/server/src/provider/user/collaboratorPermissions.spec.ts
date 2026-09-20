@@ -107,7 +107,7 @@ describe('协作者权限写进库的字段名必须是 schema 里的 permission
     await p.createCollaborator({
       name: 'writer',
       nickname: 'W',
-      password: 'pw123456',
+      password: 'pw12345678',
       permissions: ['article:create', 'draft:update'],
     } as any);
     const created = sink.created[0];
@@ -122,7 +122,7 @@ describe('协作者权限写进库的字段名必须是 schema 里的 permission
     await p.createCollaborator({
       name: 'writer2',
       nickname: 'W',
-      password: 'pw123456',
+      password: 'pw12345678',
       permission: ['img:delete'],
     } as any);
     expect(sink.created[0].permissions).toEqual(['img:delete']);
@@ -136,7 +136,7 @@ describe('协作者权限写进库的字段名必须是 schema 里的 permission
     await p.updateCollaborator({
       name: 'writer',
       nickname: 'W2',
-      password: 'pw123456',
+      password: 'pw12345678',
       permissions: ['all'],
     } as any);
     expect(store[1].permissions).toEqual(['all']);
@@ -156,7 +156,7 @@ describe('pickPermissions 按枚举收口（未知值丢弃 + WARN，不 400）'
     await p.createCollaborator({
       name: 'mixed',
       nickname: 'M',
-      password: 'pw123456',
+      password: 'pw12345678',
       permissions: ['article:create', 'backup:download', 'pipeline:run', 42, 'all'],
     } as any);
     expect(sink.created[0].permissions).toEqual(['article:create', 'all']);
@@ -172,7 +172,7 @@ describe('pickPermissions 按枚举收口（未知值丢弃 + WARN，不 400）'
     await p.createCollaborator({
       name: 'dup',
       nickname: 'D',
-      password: 'pw123456',
+      password: 'pw12345678',
       permissions: ['all', 'all', 'nope'],
     } as any);
     expect(sink.created[0].permissions).toEqual(['all']);
@@ -180,7 +180,7 @@ describe('pickPermissions 按枚举收口（未知值丢弃 + WARN，不 400）'
 
   it('permission 不是数组时得到空数组（既有行为不回退）', async () => {
     const { p, sink } = buildProvider([{ ...ADMIN }]);
-    await p.createCollaborator({ name: 'none', nickname: 'N', password: 'pw123456' } as any);
+    await p.createCollaborator({ name: 'none', nickname: 'N', password: 'pw12345678' } as any);
     expect(sink.created[0].permissions).toEqual([]);
   });
 
@@ -196,7 +196,7 @@ describe('与管理员重名：创建与改名两侧都堵住', () => {
   it('create：与管理员同名 ⇒ 拒绝，且没有写库', async () => {
     const { p, sink } = buildProvider([{ ...ADMIN }]);
     await expect(
-      p.createCollaborator({ name: 'boss', nickname: 'B', password: 'pw123456', permissions: ['all'] } as any),
+      p.createCollaborator({ name: 'boss', nickname: 'B', password: 'pw12345678', permissions: ['all'] } as any),
     ).rejects.toThrow(/与管理员账号相同/);
     expect(sink.created).toHaveLength(0);
   });
@@ -207,7 +207,7 @@ describe('与管理员重名：创建与改名两侧都堵住', () => {
       { id: 1, name: 'writer', type: 'collaborator', password: 'x', salt: 's' },
     ]);
     await expect(
-      p.createCollaborator({ name: 'writer', nickname: 'W', password: 'pw123456' } as any),
+      p.createCollaborator({ name: 'writer', nickname: 'W', password: 'pw12345678' } as any),
     ).rejects.toThrow(/不可重复创建/);
     expect(sink.created).toHaveLength(0);
   });
@@ -217,7 +217,7 @@ describe('与管理员重名：创建与改名两侧都堵住', () => {
       { ...ADMIN },
       { id: 1, name: 'writer', type: 'collaborator', password: 'x', salt: 's' },
     ]);
-    await expect(p.updateUser({ name: 'writer', password: 'newpw123' } as any)).rejects.toThrow(
+    await expect(p.updateUser({ name: 'writer', password: 'newpw12345' } as any)).rejects.toThrow(
       /已被一个协作者占用/,
     );
     expect(store[0].name).toBe('boss');
@@ -225,7 +225,7 @@ describe('与管理员重名：创建与改名两侧都堵住', () => {
 
   it('updateUser：不重名时照常改名改密码', async () => {
     const { p, store } = buildProvider([{ ...ADMIN }]);
-    await p.updateUser({ name: 'newboss', password: 'newpw123' } as any);
+    await p.updateUser({ name: 'newboss', password: 'newpw12345' } as any);
     expect(store[0].name).toBe('newboss');
     expect(store[0].password).not.toBe('x');
   });
@@ -270,7 +270,7 @@ describe('updateCollaborator：不带用户名不许"随便挑一个协作者改
       { ...ADMIN },
       { id: 1, name: 'writer', type: 'collaborator', password: 'x', salt: 's' },
     ]);
-    await expect(p.updateCollaborator({ password: 'pw123456' } as any)).rejects.toThrow(/用户名不合法/);
+    await expect(p.updateCollaborator({ password: 'pw12345678' } as any)).rejects.toThrow(/用户名不合法/);
     expect(store[1].password).toBe('x');
     expect(sink.calls.filter((c) => c.op === 'updateOne')).toHaveLength(0);
   });

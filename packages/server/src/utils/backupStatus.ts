@@ -17,6 +17,8 @@ import { SECRET_DIR_MODE, ensureSecretDir, writeSecretFileSync } from './secretF
  * 它暴露运维状态（备份节奏、失败原因），绝不能出现在任何公开接口上。
  */
 
+import type { BackupEncryptionSummary } from './backupCrypto';
+
 export const BACKUP_STATUS_FILE = 'backup-status.json';
 export const BACKUP_STATUS_VERSION = 1;
 
@@ -62,6 +64,23 @@ export interface BackupStatusFile {
   lastSuccessSha256: string | null;
   /** 最近一次成功备份的成员数（含目录项） */
   lastSuccessMembers: number | null;
+  /**
+   * 最近一次成功备份**是否加密**。
+   *
+   * ⚠️ 为什么要单独存一个布尔，而不是让运维去看文件名有没有 `.enc`：
+   * 状态文件是"备份还健不健康"的唯一外部凭据（`vanblog.sh backup-status --strict` 读它），
+   * 而"我以为开了加密、其实没开"是这个功能最危险的失败模式 —— 归档安安稳稳躺在
+   * 对象存储里，站长以为它安全，实际里面是明文的 JWT 密钥。所以这个字段必须**显眼**，
+   * 而且 `false` 与 `null`（老状态文件，那次备份早于本功能）要区分开。
+   */
+  lastSuccessEncrypted: boolean | null;
+  /**
+   * 加密参数摘要（KDF 的 N/r/p、salt、块大小、内层压缩格式）。
+   *
+   * ⚠️ 全是**非机密**参数，可以放心写进这个明文文件：解密端按头部/这里的参数派生密钥，
+   * 所以将来把默认参数调强了，老归档仍然解得开。口令与派生密钥**绝不**出现在这里。
+   */
+  lastSuccessEncryption: BackupEncryptionSummary | null;
   /** 最近一次失败（导出或校验）的时间；成功后不清零，保留现场 */
   lastFailureAt: string | null;
   /**
@@ -102,6 +121,8 @@ export function emptyBackupStatus(): BackupStatusFile {
     lastVerifyMs: null,
     lastSuccessSha256: null,
     lastSuccessMembers: null,
+    lastSuccessEncrypted: null,
+    lastSuccessEncryption: null,
     lastFailureAt: null,
     lastFailureStage: null,
     lastFailureName: null,
@@ -183,6 +204,10 @@ export function recordBackupSuccess(
     sha256?: string | null;
     /** P1：归档成员数（含目录项） */
     members?: number | null;
+    /** 这份归档是否加密（调用方从 `createFullBackup` 的结果里拿） */
+    encrypted?: boolean | null;
+    /** 加密参数摘要（非机密）；未加密时传 null */
+    encryption?: BackupEncryptionSummary | null;
   },
 ): BackupStatusFile {
   const prev = readBackupStatus(backupDir);
@@ -194,6 +219,11 @@ export function recordBackupSuccess(
     lastVerifyMs: info.verifyMs,
     lastSuccessSha256: info.sha256 ?? null,
     lastSuccessMembers: info.members ?? null,
+    // ⚠️ 用 `?? null` 而不是 `?? false`：调用方没传（老代码路径）时留 null =
+    //    "不知道"，与"确定没加密"（false）区分开。把"不知道"写成 false 会让人
+    //    以为已经确认过这份是明文的。
+    lastSuccessEncrypted: info.encrypted ?? null,
+    lastSuccessEncryption: info.encryption ?? null,
     consecutiveFailures: 0,
   };
   try {

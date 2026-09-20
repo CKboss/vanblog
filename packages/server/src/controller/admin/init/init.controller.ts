@@ -31,6 +31,7 @@ import {
 } from 'src/utils/fullBackup';
 import { config } from 'src/config';
 import { clearSetupKey } from 'src/provider/init/setupKey';
+import { invalidateJwtSecretCache } from 'src/utils/initJwt';
 
 /**
  * 「初始化/初始化页恢复」的单飞互斥量（同步获取的布尔锁，**两条路由共用一把**）。
@@ -371,8 +372,18 @@ export class InitController {
     // RESTORE_UPLOAD_OPTIONS 的 fields 限额是 8，file + setupKey 远没到）
     @Body('setupKey') setupKey?: string,
     @Req() req?: any,
+    // 加密归档的口令。**只能**走 multipart 的文本字段（body），不接受 query：
+    // query 会原样进 caddy 的访问日志，而口令进日志等于没加密。
+    // ⚠️ RESTORE_UPLOAD_OPTIONS 的 fields 限额是 8，file + setupKey + backupPassphrase 才 3 个。
+    // ⚠️ 这个值不许进任何 logger 调用（下面的日志只提"是否加密"，不提口令）。
+    // ⚠️ **刻意放在参数表最后**：这个方法在测试里是被**按位置**调用的
+    //    （`restoreFromInitPage(file, setupKey, req)`），插在中间会让既有调用把 `req`
+    //    喂进口令位、把 `undefined` 喂进 req 位 —— 不报错，只是行为悄悄变了。
+    @Body('backupPassphrase') backupPassphrase?: string,
   ) {
     const uploadedPath = file?.path;
+    const archivePassphrase =
+      typeof backupPassphrase === 'string' && backupPassphrase.length > 0 ? backupPassphrase : null;
     // ⚠️ 只有**真正拿到锁的那一次调用**才能在 finally 里释放它。
     // 无条件 `initRestoreRunning = false` 的话，第二个被 409 挡掉的请求会把
     // 正在跑的那一次的锁顺手放掉，于是第三个请求又能进来 —— 两次恢复就真的叠在一起了
@@ -428,22 +439,32 @@ export class InitController {
       const manifest = await inspectFullBackup(
         uploadedPath,
         this.fullBackupProvider.backupDir(),
+        archivePassphrase,
       );
       if (!manifest) {
         throw new BadRequestException(
           '读不出这个备份的清单：文件损坏/不完整，或不是本功能导出的整站备份',
         );
       }
-      const members = await assertRestorableArchive(uploadedPath);
+      // ⚠️ 体积/剩余空间闸门要在**解密之后**才能数成员，所以口令必须传进去；
+      //    拿不到口令时这里就会给出「这份归档是加密的 + 两条可照做的办法」，
+      //    而不是等到解包一半才失败（那时磁盘上已经有一份半截的明文了）。
+      const members = await assertRestorableArchive(uploadedPath, { passphrase: archivePassphrase });
       this.logger.log(
         `初始化页恢复整站备份：${originalName}（清单 ${manifest.createdAt}，成员 ${members} 个）`,
       );
 
       const task = (async () => {
-        const result = await this.fullBackupProvider.restore(uploadedPath, true);
+        const result = await this.fullBackupProvider.restore(uploadedPath, true, archivePassphrase);
 
         // 进程内缓存全部作废：这些值在"未初始化"期间可能已经被读过并缓存了
         this.initProvider.invalidateInitCache();
+        // ⚠️ **JWT 密钥缓存也必须作废**：恢复把 `settings{type:'jwt'}` 整体换成了归档里那份
+        //    （密钥可能被"回滚"成归档导出时的值，轮换记录 `previous` 也一并被覆盖）。
+        //    而 initJwt 是记忆化的，不作废的话本进程会继续用恢复前的密钥签发 ——
+        //    当下看不出问题，**下次重启**从库里读到归档那份，这批令牌就全部失效了
+        //    （一次"重启后才爆发"的事故）。作废之后下一次签发/验签会重新读库。
+        invalidateJwtSecretCache();
         this.viewStatsProvider.invalidateBase();
         invalidatePublicMetaCache();
 

@@ -9,9 +9,9 @@ import { UpdateCategoryDto } from 'src/types/category.dto';
 import { BackupCategory } from 'src/utils/backupCategories';
 import { applyCategoryNameOrder, nextCategoryOrder, sortCategoriesByOrder } from 'src/utils/categoryOrder';
 import {
-  hashAccessPasswordIdempotent,
+  hashAccessPasswordIdempotentAsync,
   isScryptHash,
-  resolveAccessPasswordWrite,
+  resolveAccessPasswordWriteAsync,
 } from 'src/utils/accessPassword';
 
 @Injectable()
@@ -92,8 +92,9 @@ export class CategoryProvider {
         }
         if (item.password !== undefined) {
           // 导入的备份里可能是明文（旧归档），也可能已经是哈希（新归档 / 导出后原样导回）：
-          // hashAccessPasswordIdempotent 两种都收敛成"一个哈希"，绝不二次哈希。
-          patch.password = hashAccessPasswordIdempotent(item.password);
+          // hashAccessPasswordIdempotentAsync 两种都收敛成"一个哈希"，绝不二次哈希。
+          // ⚠️ 异步版：导入是批量循环，同步 scrypt 每次阻塞事件循环约 63 ms。
+          patch.password = await hashAccessPasswordIdempotentAsync(item.password);
         }
         if (item.hidden !== undefined) {
           patch.hidden = item.hidden;
@@ -124,7 +125,7 @@ export class CategoryProvider {
         name: item.name,
         type: item.type || 'category',
         private: item.private || false,
-        password: hashAccessPasswordIdempotent(item.password || ''),
+        password: await hashAccessPasswordIdempotentAsync(item.password || ''),
         hidden: item.hidden || false,
         order: typeof item.order === 'number' ? item.order : nextCategoryOrder(existing),
       });
@@ -208,7 +209,9 @@ export class CategoryProvider {
     // 访问密码（P1/P5）：与文章完全同一套规则（utils/accessPassword.ts）——
     // 留空/缺键 = **不修改**，`clearPassword: true` = 解除加密，填了新值 = 存 scrypt 哈希。
     // 分类密码是"该分类下所有文章"的解锁钥匙，明文存库的代价比单篇文章更大。
-    const passwordWrite = resolveAccessPasswordWrite(dto, 'update');
+    // ⚠️ 异步变体 + await（同步 scrypt 每次阻塞事件循环约 63 ms；漏 await 会让
+    //    `passwordWrite.password` 变成 undefined ⇒ 静默走"不修改密码"分支）。
+    const passwordWrite = await resolveAccessPasswordWriteAsync(dto, 'update');
     const patch: any = { ...dto };
     delete patch.clearPassword;
     if (passwordWrite.password === undefined) {
@@ -223,7 +226,7 @@ export class CategoryProvider {
         const stored: any = await this.categoryModal.findOne({ name }, { password: 1 });
         const legacy = stored?.password;
         if (legacy !== undefined && legacy !== null && legacy !== '' && !isScryptHash(String(legacy))) {
-          patch.password = hashAccessPasswordIdempotent(legacy);
+          patch.password = await hashAccessPasswordIdempotentAsync(legacy);
         }
       } catch {
         // 忽略：启动 wash 会兜底

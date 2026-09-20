@@ -1,5 +1,6 @@
 import { createCollaborator, updateCollaborator } from '@/services/van-blog/api';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';
+import { accountPasswordMinRule } from '@/services/van-blog/passwordPolicy';
 import { ModalForm, ProFormSelect, ProFormText } from '@ant-design/pro-form';
 
 // TODO: Extract this
@@ -116,7 +117,10 @@ export default ({ onFinish, id, trigger, initialValues }) => (
       label="密码"
       placeholder="请输协作者密码"
       tooltip="协作者登录的密码"
-      rules={[{ required: true, message: '这是必填项' }]}
+      // ⚠️ 这条 `min` 是协作者口令 ≥10 的**唯一**强制点（提交时 encryptPwd 会把它派生成
+      //    恒 64 位摘要，服务端看到的长度与原始口令无关，判不了强度）。
+      //    新建与修改两条提交路径共用这一个字段，所以两处都受约束。
+      rules={[{ required: true, message: '这是必填项' }, accountPasswordMinRule()]}
     />
     <ProFormSelect
       width="md"

@@ -26,10 +26,14 @@
  *
  *    `clearPassword` 只认布尔 `true` 与字符串 `'true'`（表单/查询串两种形状都能用），
  *    其它真值（`1`、`'yes'`）一律当没传 —— 宁可"没清掉"也不要"意外清掉"。
+ *
+ * 3) **新密码至少 4 个字符**（`MIN_ACCESS_PASSWORD_LENGTH`），4~7 个字符允许但打 WARN。
+ *    只约束"新设或修改"，既有数据与导入/恢复路径不受影响（详见
+ *    `assertAccessPasswordLength`）。
  */
 
-import { BadRequestException } from '@nestjs/common';
-import { hashAccessPassword, isScryptHash, needsPasswordUpgrade } from './crypto';
+import { BadRequestException, Logger } from '@nestjs/common';
+import { hashAccessPassword, hashAccessPasswordAsync, isScryptHash, needsPasswordUpgrade } from './crypto';
 
 /** 显式清除密码的请求字段名（文章 / 分类共用） */
 export const CLEAR_PASSWORD_FIELD = 'clearPassword';
@@ -70,19 +74,107 @@ export function hashAccessPasswordIdempotent(value: unknown): string {
   return isScryptHash(text) ? text : hashAccessPassword(text);
 }
 
+/**
+ * `hashAccessPasswordIdempotent` 的异步版：写入路径（建/改文章与分类的访问密码、
+ * 以及启动时的 `wash*` 迁移）请用这个 —— 同步版每次阻塞事件循环约 63 ms，而 wash
+ * 迁移是**批量循环**，几十篇加密文章就能让启动阶段连续阻塞数秒。
+ *
+ * ⚠️ 幂等语义与同步版完全一致：已经是 scrypt 格式就**原样返回**（导入 JSON 备份 /
+ * 整站恢复出来的文档里可能已经是哈希，再哈希一次会把文章永久锁死且无法还原）。
+ */
+export async function hashAccessPasswordIdempotentAsync(value: unknown): Promise<string> {
+  const text = String(value ?? '');
+  if (!text) {
+    return '';
+  }
+  return isScryptHash(text) ? text : hashAccessPasswordAsync(text);
+}
+
 /** "这个值算不算设了密码"：只看非空字符串（历史数据里 password 一定是字符串） */
 export function hasAccessPasswordValue(value: unknown): boolean {
   return typeof value === 'string' ? value.length > 0 : Boolean(value);
 }
 
+// ---------------------------------------------------------------------------
+// 访问密码的**长度下限**
+// ---------------------------------------------------------------------------
+
 /**
- * 把请求里的 password/clearPassword 解释成"要不要写、写什么"。
- * 抛 BadRequestException 的两种情况：类型不对、以及"设新密码 + 清除"同时给。
+ * 文章 / 分类访问密码的**硬下限**（新设或修改时生效）。
+ *
+ * ⚠️ **只对新写入生效**：启动时不校验既有数据，也不做任何迁移。既有文章里那个
+ * 2 位密码继续能用 —— 把站长的内容锁在一个他自己解不开的规则后面，比密码短更糟。
+ *
+ * 为什么是 4 而不是 1：解锁接口是**匿名可达**的，预算 20 次/10 分钟/(IP×文章)。
+ * 4 位数字 PIN 只有 1 万种组合 ⇒ 500 个代理 IP 大约 3.5 小时就能穷尽一篇加密文章；
+ * 而 1~3 位（本轮之前的实际下限就是 1 位）在**单个 IP**、几个小时内就能试完，
+ * 连代理都不需要。4 是"挡住单机顺手爆破"的最低门槛，不是"安全"的保证 ——
+ * 真正想保护的内容应该用长密码，所以 <8 会额外打一条 WARN。
  */
-export function resolveAccessPasswordWrite(
+export const MIN_ACCESS_PASSWORD_LENGTH = 4;
+
+/**
+ * 低于这个长度**允许但打 WARN**。
+ *
+ * 为什么是警告而不是拒绝：访问密码的用途和账号口令不同 —— 站长可能就是要一个
+ * 好念的短码发给读者（"输入 8888 查看"）。那是产品选择，不是配置错误，
+ * 所以硬下限只挡住"根本挡不住爆破"的那一档（<4），4~7 交给站长自己权衡。
+ */
+export const ACCESS_PASSWORD_WARN_BELOW_LENGTH = 8;
+
+const accessPasswordLogger = new Logger('AccessPassword');
+
+/**
+ * 校验一次**新写入**的访问密码长度。
+ *
+ * ⚠️ 三件容易搞错的事：
+ *  1. **已经是 scrypt 哈希的值不校验**：导入 JSON 备份 / 整站恢复走的是幂等哈希，
+ *     传进来的可能本来就是哈希串。拿长度规则去卡哈希没有意义，而且会让"恢复一份
+ *     老备份"因为某个短密码而整体失败 —— 那是把恢复路径弄坏，方向完全错了。
+ *  2. **按 trim 之后的长度判**：首尾空格几乎一定是手滑，把它们算进长度等于放行
+ *     `"  ab  "` 这种实际只有 2 位的密码。（哈希用的仍是未 trim 的原值，
+ *     这是本轮之前就有的行为，不在这里改。）
+ *  3. **WARN 不节流**：写访问密码是后台鉴权后的低频操作，不是匿名可达路径，
+ *     所以不需要日志节流；真被刷到说明有别的洞。
+ */
+export function assertAccessPasswordLength(value: unknown): void {
+  const text = String(value ?? '');
+  if (isScryptHash(text)) {
+    return;
+  }
+  const effective = text.trim();
+  if (effective.length < MIN_ACCESS_PASSWORD_LENGTH) {
+    throw new BadRequestException(
+      `访问密码太短：至少 ${MIN_ACCESS_PASSWORD_LENGTH} 个字符（当前 ${effective.length} 个）。` +
+        `解锁接口是匿名可达的（20 次/10 分钟/(IP×文章)），短密码用几个代理 IP 就能穷尽。`,
+    );
+  }
+  if (effective.length < ACCESS_PASSWORD_WARN_BELOW_LENGTH) {
+    accessPasswordLogger.warn(
+      `访问密码只有 ${effective.length} 个字符（<${ACCESS_PASSWORD_WARN_BELOW_LENGTH}）：允许保存，` +
+        `但在这个长度下"20 次/10 分钟/(IP×文章)"的解锁预算挡不住有针对性的爆破。` +
+        `如果这篇内容真的需要保护，请换一个更长的密码。`,
+    );
+  }
+}
+
+/**
+ * 把请求解释成"要做什么"，**不做哈希**。
+ *
+ * 抽出来的理由：同步与异步两个入口必须共享同一份校验与决策逻辑，否则哪天只改了一边
+ * （例如放宽了 `clearPassword` 的取值、或改了"全空白算没填"的判定），两条路径就会
+ * 给出不同的写入结果 —— 而这种漂移在测试里很难被发现（两边各自都"自洽"）。
+ */
+type AccessPasswordIntent =
+  | { kind: 'clear' }
+  /** 不写这个字段：create 时写 `''`（= 不加密），update 时 `undefined`（= 保持原值） */
+  | { kind: 'skip'; password: string | undefined }
+  | { kind: 'hash'; text: string };
+
+function resolveAccessPasswordIntent(
   input: AccessPasswordInput | null | undefined,
   mode: AccessPasswordMode,
-): AccessPasswordWrite {
+): AccessPasswordIntent {
   const raw = input?.password;
   const clear = isClearPasswordFlag(input?.clearPassword);
 
@@ -99,13 +191,60 @@ export function resolveAccessPasswordWrite(
     );
   }
   if (clear) {
-    return { password: '', hashed: false, cleared: true };
+    return { kind: 'clear' };
   }
   if (blank) {
     // create：不写就是 schema 默认 ''（= 不加密）；update：不写 = 保持原值
-    return { password: mode === 'create' ? '' : undefined, hashed: false, cleared: false };
+    return { kind: 'skip', password: mode === 'create' ? '' : undefined };
   }
-  return { password: hashAccessPasswordIdempotent(text), hashed: true, cleared: false };
+  assertAccessPasswordLength(text);
+  return { kind: 'hash', text };
+}
+
+function intentToWriteSync(intent: AccessPasswordIntent): AccessPasswordWrite {
+  if (intent.kind === 'clear') {
+    return { password: '', hashed: false, cleared: true };
+  }
+  if (intent.kind === 'skip') {
+    return { password: intent.password, hashed: false, cleared: false };
+  }
+  return { password: hashAccessPasswordIdempotent(intent.text), hashed: true, cleared: false };
+}
+
+/**
+ * 把请求里的 password/clearPassword 解释成"要不要写、写什么"。
+ * 抛 BadRequestException 的两种情况：类型不对、以及"设新密码 + 清除"同时给。
+ *
+ * ⚠️ 同步版会阻塞事件循环约 63 ms（哈希走 scrypt）。新代码用
+ * `resolveAccessPasswordWriteAsync`；保留同步版只是为了不打断尚未迁移的调用点。
+ */
+export function resolveAccessPasswordWrite(
+  input: AccessPasswordInput | null | undefined,
+  mode: AccessPasswordMode,
+): AccessPasswordWrite {
+  return intentToWriteSync(resolveAccessPasswordIntent(input, mode));
+}
+
+/**
+ * `resolveAccessPasswordWrite` 的异步版（哈希落到 libuv 线程池）。
+ * 校验与决策与同步版**共用** `resolveAccessPasswordIntent`，语义逐条一致。
+ */
+export async function resolveAccessPasswordWriteAsync(
+  input: AccessPasswordInput | null | undefined,
+  mode: AccessPasswordMode,
+): Promise<AccessPasswordWrite> {
+  const intent = resolveAccessPasswordIntent(input, mode);
+  if (intent.kind === 'clear') {
+    return { password: '', hashed: false, cleared: true };
+  }
+  if (intent.kind === 'skip') {
+    return { password: intent.password, hashed: false, cleared: false };
+  }
+  return {
+    password: await hashAccessPasswordIdempotentAsync(intent.text),
+    hashed: true,
+    cleared: false,
+  };
 }
 
 /**

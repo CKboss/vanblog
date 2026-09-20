@@ -26,6 +26,30 @@ export const MIN_REAP_INTERVAL_MS = 60 * 1000;
 /** 删除日志最多列几个文件名（再多就是刷屏；完整清单没有价值，计数才有） */
 export const REAP_LOG_NAMES_MAX = 10;
 
+/* ------------------- 全量风暴的有界并发与单轮预算 -------------------
+ * 背景：`activeUrls` 以前是 `for (const u of urls) { await this.activeUrl(u) }` —— **严格串行**，
+ * 一次一个 revalidate 往返。59 篇文章没问题；但 1 万篇的全量风暴按 200ms/次算就是 **33 分钟**，
+ * 期间新内容出不来静态页，而触发点有 34 处分布在 12 个文件（发文/改分类/改标签/换主题/整站恢复/
+ * 定时发布…），有文章权限的协作者可以反复触发 ⇒ 这既是规模问题也是攻击面。
+ * ⚠️ 但 :120 那条历史注释（"配置差的机器可能并发多了会卡，所以改成串行的"）是对的，
+ * 所以**不是**改成无界并发，而是：有界并发（默认 4，可调 1–32）+ 单轮预算 + 进度日志。
+ * 每个 activeUrl 是一次到 website(3001) 的 HTTP 往返，那边是真渲染（读库 + 生成 HTML + 写盘），
+ * 并发太高会把 Next 进程与磁盘打满，反而更慢 —— 4 是"比串行快数倍、又不至于压垮小机器"的取值。
+ * ------------------------------------------------------------------ */
+/** 全量风暴里同时在途的 revalidate 数量上限（env 可调） */
+export const ISR_STORM_CONCURRENCY_ENV = 'VANBLOG_ISR_STORM_CONCURRENCY';
+export const DEFAULT_ISR_STORM_CONCURRENCY = 4;
+export const MIN_ISR_STORM_CONCURRENCY = 1;
+export const MAX_ISR_STORM_CONCURRENCY = 32;
+/**
+ * 单次 activeUrls 的"单轮预算"：超过就分批并打 WARN + 进度日志。
+ * ⚠️ 预算**不是**"超出的就不渲染了"——那等于静默丢内容。所有 URL 都会被处理，
+ * 预算只用来把"这一轮规模异常大"这件事说清楚，并给出可读的进度。
+ */
+export const ISR_STORM_ROUND_BUDGET_ENV = 'VANBLOG_ISR_ROUND_URL_BUDGET';
+export const DEFAULT_ISR_STORM_ROUND_BUDGET = 5000;
+export const MIN_ISR_STORM_ROUND_BUDGET = 1;
+
 @Injectable()
 export class ISRProvider implements OnModuleDestroy {
   urlList = ['/', '/category', '/tag', '/timeline', '/about', '/link'];
@@ -242,10 +266,91 @@ export class ISRProvider implements OnModuleDestroy {
       this.logger.error(`达到最大增量渲染重试次数！来源：${info || '首次启动触发全量渲染！'}`);
     }
   }
+  /**
+   * 读并发上限：非法值回落默认，并夹在 1–32（0/负数/垃圾都不会变成"无界并发"）。
+   * ⚠️ 整数性由 `envPositiveInt` 保证（它内部是 `Math.floor(clamped)`，见 utils/envNumber.ts:36），
+   * 所以这里不再多包一层取整 —— 冗余代码会让下一个人以为"这个工具不取整"。
+   * 但**调用点仍然有断言钉住整数性**（`VANBLOG_ISR_STORM_CONCURRENCY=1.5` 必须得到 1），
+   * 这样将来有人换掉这个工具函数时，分数并发不会静默溜进来：`Array.from({ length: 1.5 })`
+   * 会被悄悄截断成 1，等于"配了个没人能预测的值"。
+   */
+  resolveStormConcurrency(): number {
+    return envPositiveInt(
+      ISR_STORM_CONCURRENCY_ENV,
+      DEFAULT_ISR_STORM_CONCURRENCY,
+      MIN_ISR_STORM_CONCURRENCY,
+      MAX_ISR_STORM_CONCURRENCY,
+    );
+  }
+
+  /**
+   * 读单轮预算：同样回落 + 夹取（最小 1，否则 `done % budget` 会除零）。
+   * 整数性同上由 `envPositiveInt` 保证；预算参与 `done % budget` 与 `Math.ceil(total / budget)`，
+   * 小数值会让"分批数"和"进度日志的触发点"都变成不可预期的东西，所以调用点也有断言钉住。
+   */
+  resolveStormRoundBudget(): number {
+    return envPositiveInt(
+      ISR_STORM_ROUND_BUDGET_ENV,
+      DEFAULT_ISR_STORM_ROUND_BUDGET,
+      MIN_ISR_STORM_ROUND_BUDGET,
+    );
+  }
+
+  /**
+   * 把一批 URL 送去重渲染：**有界并发** + 单轮预算 + 可观测日志。
+   *
+   * 为什么不是无界并发：见文件头那段常量注释（:120 的历史结论"并发多了会卡"仍然成立，
+   * 只是"串行"矫枉过正）。为什么不是"超出预算就丢弃"：那会静默少渲染内容，
+   * 表现是"文章能打开但静态页没更新"，极难排查。
+   *
+   * ⚠️ 语义保持不变的部分：每个 URL 都恰好处理一次；`activeUrl` 自己吞错（单个失败不影响其余）；
+   * 调用方 await 到"整批处理完"才返回（runStorm 的顺序依赖这一点）。
+   */
   async activeUrls(urls: string[], log: boolean) {
-    for (const each of urls) {
-      await this.activeUrl(each, log);
+    const total = urls.length;
+    if (total === 0) {
+      return;
     }
+    const concurrency = Math.min(this.resolveStormConcurrency(), total);
+    const budget = this.resolveStormRoundBudget();
+    const startedAt = Date.now();
+    if (total > budget) {
+      this.logger.warn(
+        `增量渲染规模异常大：本轮 ${total} 个 URL（单轮预算 ${budget}），将分 ${Math.ceil(
+          total / budget,
+        )} 批处理，并发 ${concurrency}。常见原因是批量导入、批量改分类/标签或整站恢复；` +
+          `期间新内容可能暂时看不到静态页。可调 ${ISR_STORM_CONCURRENCY_ENV} 提高并发。`,
+      );
+    }
+    let next = 0;
+    let done = 0;
+    let failed = 0;
+    // 每个 worker 从共享游标取下一个 URL：在途数量恒 <= concurrency，
+    // 且不需要把数组切片（切片会让"每批固定大小"与慢 URL 互相拖累）。
+    const worker = async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= total) {
+          return;
+        }
+        const ok = await this.activeUrl(urls[index], log);
+        done += 1;
+        if (!ok) {
+          failed += 1;
+        }
+        if (done % budget === 0 && done < total) {
+          this.logger.log(
+            `增量渲染进度：${done}/${total}（失败 ${failed}，已用 ${Date.now() - startedAt}ms）`,
+          );
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    this.logger.log(
+      `增量渲染完成：${total} 个 URL，失败 ${failed}，用时 ${
+        Date.now() - startedAt
+      }ms，并发 ${concurrency}`,
+    );
   }
   async activePath(type: 'category' | 'tag' | 'page' | 'post', priorityUrls?: string[]) {
     switch (type) {
@@ -364,15 +469,32 @@ export class ISRProvider implements OnModuleDestroy {
     }, info);
   }
 
-  async activeUrl(url: string, log: boolean) {
+  /**
+   * 触发单个 URL 的增量渲染。**返回是否成功**（以前返回 void）：
+   * 调用方（activeUrls）要统计失败条数，否则"这一轮渲染了多少、坏了多少"在日志里根本看不到 ——
+   * 而全量风暴一次可能是上万个 URL，没有汇总就等于没有可观测性。
+   * ⚠️ 仍然自己吞错：单个 URL 失败不能中断整批（既有语义，34 处触发点都依赖它）。
+   */
+  async activeUrl(url: string, log: boolean): Promise<boolean> {
     try {
       await axios.get(this.buildRevalidateUrl(url), { timeout: this.requestTimeoutMs });
       if (log) {
         this.logger.log(`触发增量渲染成功！ ${url}`);
       }
+      return true;
     } catch (err) {
-      // console.log(err);
-      this.logger.error(`触发增量渲染失败！ ${url}`);
+      // 以前只打 URL 不打原因：超时、连接被拒、website 返回 500 在日志里长得一样，
+      // 而这三者的处置完全不同（等它、查 website 进程、查那条 URL 的渲染错误）。
+      const e = err as { code?: string; message?: string; response?: { status?: number } };
+      const reason = e?.response?.status
+        ? `website 返回 ${e.response.status}`
+        : e?.code === 'ECONNABORTED' || e?.code === 'ETIMEDOUT'
+        ? `超时（>${this.requestTimeoutMs}ms）`
+        : e?.code === 'ECONNREFUSED'
+        ? '连不上 website(3001)：前台进程可能没起来'
+        : e?.message || String(err);
+      this.logger.error(`触发增量渲染失败！ ${url} —— ${reason}`);
+      return false;
     }
   }
 

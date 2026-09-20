@@ -168,7 +168,11 @@ describe('VANBLOG_INIT_REQUIRE_SETUP_KEY=false（显式逃生口）：行为与�
     const file = makeRestoreFile();
     const res: any = await controller.restoreFromInitPage(file, undefined, fakeReq());
     expect(res.statusCode).toBe(200);
-    expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true);
+    // ⚠️ 第三个参数是加密归档的口令：没传 `backupPassphrase` 时必须是 **null**
+    //    （不是 undefined —— null 表示"明确要求走 env 回落"，语义见
+    //    fullBackup.provider.ts 的 restore()）。这条断言原来钉的是两参形状，
+    //    本轮加了口令参数后升级成三参，**保护的性质不变**：走完全程 + 临时文件被清理。
+    expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true, null);
     expect(fs.existsSync(file.path)).toBe(false); // 临时文件照旧清理
   });
 
@@ -548,5 +552,58 @@ describe('安装记录：两条路由成功后都进迁移台账（key=install:i
     const c2 = makeController(bare);
     const res: any = await c2.controller.restoreFromInitPage(makeRestoreFile(), undefined, fakeReq());
     expect(res.statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 加密归档的口令贯穿（body → 体积闸门 → 恢复）
+//
+// ⚠️ 这组用例钉的是**参数位置**与"口令只从 body 来、绝不进响应/日志"这两件事。
+// 前者不是洁癖：`restoreFromInitPage` 在测试里是按位置调用的，本轮新增口令参数时
+// 一度插在 `req` 之前，结果既有调用把 `req` 喂进了口令位、把 `undefined` 喂进了 req 位 ——
+// **不报错**，只是 `recordInstallation` 静默少记了来源 IP。插回末尾并加了下面第三条守卫。
+// ---------------------------------------------------------------------------
+describe('加密归档的口令贯穿（body → 前置闸门 → 恢复）', () => {
+  beforeEach(() => {
+    process.env[SETUP_KEY_REQUIRE_ENV] = 'false';
+  });
+
+  it('body 带了 backupPassphrase ⇒ 体积闸门与恢复都拿到它，且响应里不含口令', async () => {
+    const initProvider = makeStubInitProvider({ hasInited: false });
+    const { controller, fullBackupProvider } = makeController(initProvider);
+    const file = makeRestoreFile('vanblog-full-20260920-010101.tar.gz.enc');
+    const passphrase = 'a-passphrase-that-came-from-the-body';
+    const res: any = await controller.restoreFromInitPage(file, undefined, fakeReq(), passphrase);
+    expect(res.statusCode).toBe(200);
+    // 前置闸门必须拿到口令：否则"数成员总字节"要在解密后才能做，没口令就会失败在
+    // 一个说不清原因的地方（而不是那句"这份归档是加密的 + 两条可照做的办法"）
+    expect(mockedAssert).toHaveBeenCalledWith(file.path, { passphrase });
+    expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true, passphrase);
+    // ⚠️ 口令绝不许出现在响应体里（它会进后台的日志与浏览器历史）
+    expect(JSON.stringify(res)).not.toContain(passphrase);
+  });
+
+  it('没带口令 ⇒ 两处都是 null（回落到 env），不是 undefined', async () => {
+    const initProvider = makeStubInitProvider({ hasInited: false });
+    const { controller, fullBackupProvider } = makeController(initProvider);
+    const file = makeRestoreFile('vanblog-full-20260920-010101.tar.gz.enc');
+    const res: any = await controller.restoreFromInitPage(file, undefined, fakeReq());
+    expect(res.statusCode).toBe(200);
+    expect(mockedAssert).toHaveBeenCalledWith(file.path, { passphrase: null });
+    expect(fullBackupProvider.restore).toHaveBeenCalledWith(file.path, true, null);
+  });
+
+  it('⚠️ 参数顺序守卫：第三个位置参数仍然是 req（新增参数只许加在末尾）', async () => {
+    const initProvider = makeStubInitProvider({ hasInited: false });
+    const { controller } = makeController(initProvider);
+    const file = makeRestoreFile('vanblog-full-20260920-010101.tar.gz.enc');
+    const req = fakeReq();
+    await controller.restoreFromInitPage(file, undefined, req);
+    // 安装台账要拿到**那个 req**（它从里面取来源 IP）。
+    // 如果有人把口令参数插回 req 之前，这里会收到 undefined ⇒ 台账静默丢掉来源 IP，
+    // 而所有其它断言仍然是绿的。这条就是为了在那一刻变红。
+    expect(initProvider.recordInstallation).toHaveBeenCalledWith(
+      expect.objectContaining({ route: 'init/restore', req }),
+    );
   });
 });

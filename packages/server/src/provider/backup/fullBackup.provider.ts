@@ -294,13 +294,25 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       verifyMs: verification.ms,
       sha256: result.archiveSha256,
       members: result.memberCount,
+      encrypted: result.encrypted,
+      encryption: result.manifest.encryption ?? null,
     });
     this.logger.log(
       `整站备份完成并通过校验：${result.name}（${result.sizeText}，${result.format}，` +
+        `${result.encrypted ? '已加密（scrypt + aes-256-gcm）' : '**未加密**'}，` +
         `打包+导出 ${(result.ms / 1000).toFixed(1)}s（其中成员哈希 ${(result.hashMs / 1000).toFixed(2)}s），` +
         `校验 ${(verification.ms / 1000).toFixed(1)}s${deep ? '（含成员级哈希）' : ''}，` +
         `${verification.members} 个归档成员，sha256 ${String(result.archiveSha256).slice(0, 12)}…）`,
     );
+    // ⚠️ 每次**明文**备份成功都提醒一次（站长裁定的行为）。
+    // 为什么是"每次都提醒"而不是"只提醒一次"：这个失败模式是**静默**的 ——
+    // 归档好好地生成、校验通过、被同步到对象存储，没有任何地方会报错，
+    // 而它里面是明文的 JWT 密钥与全部口令哈希。提醒一次很容易被日志冲走，
+    // 而"以为开了加密其实没开"的代价是整站凭据泄露。
+    // 文案刻意写成"事实 + 怎么开"，不吓人：站长可能就是要在内网存明文归档，那是他的选择。
+    if (result.plaintextWarning) {
+      this.logger.warn(result.plaintextWarning);
+    }
     return { ...result, verification };
   }
 
@@ -600,8 +612,19 @@ export class FullBackupProvider implements OnApplicationBootstrap {
     return inspectFullBackup(archivePath, this.backupDir());
   }
 
-  async restore(archivePath: string, withStatic = true): Promise<RestoreOutcome> {
-    return this.serialize(() => this.doRestore(archivePath, withStatic));
+  /**
+   * @param passphrase 加密归档的口令。留空 ⇒ 恢复流程自己按 env 解析
+   *   （`VANBLOG_BACKUP_PASSPHRASE` / `..._FILE`）；明文归档完全不看这个参数。
+   *   ⚠️ 从 HTTP 来时必须走 **body**，绝不能走 query：query 会原样进 caddy 的访问日志，
+   *   而访问日志是明文、会被轮转保留、还常常被同步到日志平台。
+   *   ⚠️ 这个值**不许进日志**：任何 `logger.*` 都不要在参数里带它。
+   */
+  async restore(
+    archivePath: string,
+    withStatic = true,
+    passphrase?: string | null,
+  ): Promise<RestoreOutcome> {
+    return this.serialize(() => this.doRestore(archivePath, withStatic, passphrase));
   }
 
   /** 恢复出来的库里有没有流水线（见 RestoreOutcome.needsRestartForPipelineDeps） */
@@ -660,7 +683,11 @@ export class FullBackupProvider implements OnApplicationBootstrap {
     }
   }
 
-  private async doRestore(archivePath: string, withStatic = true): Promise<RestoreOutcome> {
+  private async doRestore(
+    archivePath: string,
+    withStatic = true,
+    passphrase?: string | null,
+  ): Promise<RestoreOutcome> {
     const result = await restoreFullBackup({
       client: this.client,
       staticPath: config.staticPath,
@@ -676,6 +703,8 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       journalPath: path.join(this.backupDir(), RESTORE_JOURNAL_FILE),
       // P6：只有归档里真的带 ./caddy 段时才会用到；开关关闭时导出端根本不会写那一段
       caddyDataPath: backupIncludeCaddyEnabled() ? config.caddyDataPath : undefined,
+      // 加密归档的口令（undefined ⇒ restoreFullBackup 内部按 env 解析）
+      passphrase,
       logger: {
         log: (message) => this.logger.log(message),
         warn: (message) => this.logger.warn(message),

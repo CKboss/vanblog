@@ -29,12 +29,7 @@ import { isPrimaryInstance, resolveClusterWorkers, CLUSTER_ENV } from './utils/c
 import { startClusterPrimary } from './utils/clusterBootstrap';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { sanitizeRequestPayloads, SanitizeBodyPipe } from './utils/sanitizeRequest';
-import {
-  DEFAULT_JSON_BODY_LIMIT,
-  DEFAULT_JSON_BODY_LIMIT_LARGE,
-  LARGE_JSON_BODY_PREFIXES,
-  resolveBodyLimit,
-} from './utils/bodyLimit';
+import { DEFAULT_JSON_BODY_LIMIT, DEFAULT_JSON_BODY_LIMIT_LARGE, LARGE_JSON_BODY_PREFIXES, resolveBodyLimit, anonymousLargeBodyGuard } from './utils/bodyLimit';
 import { applyStaticAssetHeaders } from './utils/imgCompress';
 import { ATTACHMENT_FOLDER } from './utils/attachment';
 import { THUMB_FOLDER } from './types/setting.dto';
@@ -131,7 +126,21 @@ async function bootstrap() {
     DEFAULT_JSON_BODY_LIMIT_LARGE,
   );
   const largeJsonParser = json({ limit: jsonLimitLarge });
+  // ⚠️ **顺序是这条修复的全部**：匿名挡板必须挂在大限额解析器**之前**。
+  //    express 的 body 解析器一旦跑过就会置 `req._body = true`，后面的解析器会直接跳过 ⇒
+  //    把大限额解析器放在前面，挡板就形同不存在（已用真 express + 真 HTTP 验证过：
+  //    顺序反了以后匿名 2MB 请求从 413 变成 200）。
+  //    为什么需要它：`app.use(prefix, largeJsonParser)` 只按**路径**匹配、不看鉴权，所以
+  //    匿名请求也能让服务端解析并净化最多 50MB 的 JSON —— 实测 50MB ≈ **7.5 秒同步阻塞**
+  //    （parse 2.9s + sanitize 4.6s，严格线性），而净化跑在限流器**之前** ⇒ 被 429 挡掉的
+  //    请求同样烧满 CPU。默认单 worker 下约 **8 个这种请求/分钟**就能让事件循环 100% 忙，
+  //    前台 SSR 与健康检查全部假死，而容器仍然 Up、`restart` 策略不介入。
+  //    挡板语义：请求没带 `token` 头（与 `jwt.strategy.ts` 的 `ExtractJwt.fromHeader('token')`
+  //    同源）就先用**小限额**（1mb）解析掉 body，后面的大限额解析器自动跳过；带 token 的
+  //    请求行为完全不变。⚠️ 净化器另有节点预算上界（`VANBLOG_SANITIZE_MAX_NODES`）作为第二道防线。
+  const anonymousLargeBodyMiddleware = anonymousLargeBodyGuard(jsonLimit);
   for (const prefix of LARGE_JSON_BODY_PREFIXES) {
+    app.use(prefix, anonymousLargeBodyMiddleware);
     app.use(prefix, largeJsonParser);
   }
   // 已经解析过的 body（req._body=true）会被 body-parser 直接跳过：每个请求最多解析一次

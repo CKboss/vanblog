@@ -248,6 +248,30 @@ export async function getStaticPaths() {
   }));
   return {
     paths,
+    // ⚠️ **必须是 "blocking"，不要"优化"成 false。** 会有人拿"随机不存在的 slug 会触发按需
+    //    SSR，是最便宜的放大攻击"当理由想改成 `false`（未列出的路径直接 404）。那个理由的两个
+    //    前提都经不起核实，而改动的代价是**可用性回归**（本站的第一优先级）：
+    //
+    //    1. `getStaticPaths` 只列**规范地址**（`getArticlePath` = 有别名用别名、否则用数字 id），
+    //       而 server 侧 `utils/articlePublicPaths.ts` 明确把 `/post/<数字id>` 与 `/post/<别名>`
+    //       **两条**都当公开地址去 revalidate。⇒ 有自定义别名的文章，它的数字 id 地址**不在**
+    //       构建清单里，只有 blocking 才能按需生成那条 301。改成 false，老链接 / 收藏夹 /
+    //       搜索引擎里的数字 id 地址全部变成硬 404。
+    //    2. blocking 是**自愈**路径：容器重建后 `.next` 里只有构建期那些页面、ISR 缓存是冷的；
+    //       或者某一次 revalidate 触发丢了（website 正在重启、那轮风暴被合并掉）。这两种情况下
+    //       访客的一次请求就能把页面重新生成出来；false 只能等下一次 revalidate 或整点兜底 cron。
+    //
+    //    而它"防住"的开销其实很小：不存在的 slug 走 `getPostPagesProps` 时，`getPublicMeta()`
+    //    有 5 秒进程内缓存 + 并发合并（洪水下约等于免费）；文章查询是**索引精确匹配**
+    //    （`article.pathname` 有索引，非数字 id 被 `tryParseNumericId` 提前短路，`getById` 不会跑）；
+    //    server 的 `getByIdOrPathnameWithPreNext` 查不到时**立刻抛 404**，相关文章 / 前后篇 /
+    //    加密分类名单那些重活根本不执行。⇒ 每个不同的假 slug ≈ 一次索引查询 + 一次 404 渲染，
+    //    不是"全价文章页渲染"。另外 `isSafeArticleParam` 已经把空值、>200 字符、含 `/ \ .. # ?`
+    //    的参数挡在上游请求之前。
+    //
+    //    ⇒ 真要拦这个放大，落点是**边缘层**（caddy 对未命中的 `/post/*` 做短 TTL 负缓存或限流），
+    //    不是把 fallback 改成 false —— 那是拿真实文章的可达性去换一个很便宜的攻击面。
+    //    "同一个 slug 被反复打"则由下面 `notFound: true` 一起返回的 `revalidate` 走 ISR 负缓存。
     fallback: "blocking",
   };
 }

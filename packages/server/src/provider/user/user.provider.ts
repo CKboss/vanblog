@@ -11,7 +11,13 @@ import { UpdateUserDto } from 'src/types/user.dto';
 import { User, UserDocument } from 'src/scheme/user.schema';
 import { Collaborator } from 'src/types/collaborator';
 import { ALL_PERMISSION_VALUES } from 'src/types/access/access';
-import { encryptPassword, hashSecret, makeSalt, verifyUserPassword, washPassword } from 'src/utils/crypto';
+import {
+  hashSecretAsync,
+  makeSalt,
+  runDummyPasswordWork,
+  verifyUserPasswordAsync,
+  washPassword,
+} from 'src/utils/crypto';
 
 function assertCollaboratorName(name: unknown): string {
   const value = typeof name === 'string' ? name.trim() : '';
@@ -21,13 +27,95 @@ function assertCollaboratorName(name: unknown): string {
   return value;
 }
 
-function assertCollaboratorPassword(password: unknown): string {
-  const value = typeof password === 'string' ? password : '';
-  // 空密码会被 encryptPassword 变成空哈希，而空哈希曾经能用空密码登进来
-  if (!value || value.length > 200) {
-    throw new BadRequestException('协作者密码不合法（1-200 个字符）');
+/**
+ * 管理员 / 协作者口令的**最小长度**（硬拒绝）。
+ *
+ * ⚠️ **只对"新设置或修改"生效**：绝不在启动时校验既有口令，也不在登录时强制改密码。
+ * 理由很直接 —— 这两种做法都会把站长锁在自己站点外面，而"发不出内容"正是这个部署
+ * 最怕的失败模式。既有账号继续能用，下次改密码时才必须达标。
+ *
+ * 为什么是 10：本轮把协作者权限**从"从来没生效过"修成了真的生效**
+ * （四层字段名断链，见 createCollaborator 上的说明）。在那之前一个 1 字符口令的协作者
+ * 账号其实什么也做不了；修好之后，同样的弱口令几分钟就能被撞开，而撞开之后能改内容。
+ * 10 个字符是"字典 + 少量变形"在现有防爆破预算内不可行的下限，同时不至于逼站长
+ * 用密码管理器才能操作自己的站点。
+ */
+export const MIN_ACCOUNT_PASSWORD_LENGTH = 10;
+
+/** 口令长度上限（沿用既有值，不动：scrypt 对超长输入的成本是线性的，200 是既有契约）。 */
+export const MAX_ACCOUNT_PASSWORD_LENGTH = 200;
+
+/**
+ * 浏览器派生口令的形状：恒为 **64 个小写十六进制字符**。
+ *
+ * 前端 `packages/admin/src/services/van-blog/encryptPwd.js` 送来的是
+ * `sha256(lower(username) + sha256(sha256(sha256(sha256(password))) + sha256(lower(username))))`，
+ * 服务端 `envBootstrap.ts` 的 `deriveBrowserPassword()` 是同一份公式的镜像。
+ */
+const BROWSER_DERIVED_PASSWORD_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * 这个值是不是"浏览器派生后的口令"。
+ *
+ * ⚠️ 导出是为了让测试与调用方能明确表达意图，不是为了在别处放宽校验。
+ */
+export function isBrowserDerivedPassword(value: string): boolean {
+  return BROWSER_DERIVED_PASSWORD_RE.test(value);
+}
+
+/**
+ * 账号口令（管理员 / 协作者）的强度校验，**唯一入口**。
+ *
+ * ## 一条必须写下来的架构事实：服务端在 UI 路径上**看不到原始口令**
+ *
+ * 后台所有涉及账号口令的入口都在浏览器里先做 sha256 派生再发出来（实测调用点：
+ * `pages/user/Login/index.jsx:66`、`pages/user/Restore/index.jsx:40`、
+ * `pages/SystemConfig/tabs/User.jsx:80`、`pages/InitPage/index.tsx:114`、
+ * `components/CollaboratorModal/index.tsx:72,77`）。派生结果恒为 64 个十六进制字符，
+ * **与原始口令的长度无关** —— 口令是 `1` 还是 40 个字符，服务端看到的都是同样形状的
+ * 64 字符摘要。sha256 不可逆，所以"服务端强制最小长度"对这些路径在数学上就不可能实现。
+ *
+ * 因此这个函数的语义是**诚实的两分支**，而不是假装能校验：
+ *  - 派生形状 ⇒ 放行（无法判断原始强度），真正的 ≥10 由前端与 env bootstrap 负责；
+ *  - 其它（= 有人直接拿原始口令调 API：脚本、curl、第三方集成、未来的 CLI）⇒ **强制 ≥10**。
+ *
+ * 这不是安全剧场：第二分支覆盖的是"绕过后台直接调接口"的全部客户端，而那正是
+ * 弱口令最容易混进来的地方（自动化脚本里写个 `password: 'test'`）。
+ * ⚠️ 需要父代理分派的两处（都不在本文件的改动范围内）：
+ *  - `packages/admin/src/**` 上述 5 个表单：加 `rules: [{ min: 10 }]`；
+ *  - `provider/init/envBootstrap.ts`：`VANBLOG_ADMIN_PASSWORD(_FILE)` 是**原始口令**，
+ *    那里能也应该做 ≥10 的硬校验（零接触初始化是自动化路径，最容易设弱口令）。
+ */
+export function assertAccountPasswordStrength(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value) {
+    // ⚠️ 空口令必须硬拒：空值会被哈希成"空口令的哈希"，而历史上空哈希曾经能用空密码登进来。
+    throw new BadRequestException(
+      `${label}密码不合法（不能为空，且必须是 ${MIN_ACCOUNT_PASSWORD_LENGTH}-${MAX_ACCOUNT_PASSWORD_LENGTH} 个字符）`,
+    );
+  }
+  if (value.length > MAX_ACCOUNT_PASSWORD_LENGTH) {
+    throw new BadRequestException(
+      `${label}密码不合法（1-${MAX_ACCOUNT_PASSWORD_LENGTH} 个字符）`,
+    );
+  }
+  if (isBrowserDerivedPassword(value)) {
+    // 服务端看不到原始口令，判不了强度；见函数头注释（这是架构事实，不是偷懒）
+    return value;
+  }
+  if (value.length < MIN_ACCOUNT_PASSWORD_LENGTH) {
+    throw new BadRequestException(
+      `${label}密码太短：至少 ${MIN_ACCOUNT_PASSWORD_LENGTH} 个字符（当前 ${value.length} 个）。` +
+        `弱口令在"5 次/300 秒/IP"的防爆破预算下，用一批代理 IP 仍然可在数小时内撞开，` +
+        `而协作者账号一旦被撞开就能改站点内容。`,
+    );
   }
   return value;
+}
+
+function assertCollaboratorPassword(password: unknown): string {
+  // ⚠️ 走统一入口：协作者与管理员是同一类凭据（都能登录后台），
+  //    分成两套校验就一定会漂移（例如哪天只放宽了一边）。
+  return assertAccountPasswordStrength(password, '协作者');
 }
 
 function pickNickname(nickname: unknown, fallback: string): string {
@@ -128,6 +216,12 @@ export class UserProvider {
     const candidates = await this.userModel.find({ name }).sort({ id: 1 }).limit(2).exec();
     const user = candidates[0];
     if (!user) {
+      // 🔴 时序均衡：用户不存在时也要跑一次**等价成本**的 scrypt 并丢弃结果。
+      //    否则"用户存在 ≈ 63 ms、不存在 ≈ 1 ms"，攻击者可以按时序枚举用户名。
+      //    ⚠️ 这条只在 scrypt 异步化之后才成立：同步的 dummy 哈希会让枚举防护本身
+      //    变成 DoS 放大器（用不存在的用户名就能白拿 63 ms 阻塞，比真用户名还便宜）。
+      //    ⚠️ 结果必须无条件丢弃：runDummyPasswordWork 永远不影响返回值。
+      await runDummyPasswordWork(password);
       return null;
     }
     if (candidates.length > 1) {
@@ -140,18 +234,32 @@ export class UserProvider {
     }
     // 不再拿算出来的哈希去 Mongo 里查（那样只能支持一种格式），
     // 改成取出用户后在 JS 里校验：新格式 scrypt、旧格式 sha256 都认。
-    if (!verifyUserPassword(user.password, name, password, user.salt)) {
+    // ⚠️ 必须用**异步**版：登录是匿名可达的，同步 scrypt 每次阻塞事件循环约 63 ms，
+    //    几个并发登录就能让 worker 停止响应（含健康检查 ⇒ 触发重启风暴）。
+    if (!(await verifyUserPasswordAsync(user.password, name, password, user.salt))) {
       return null;
     }
-    // 登录成功顺手轮换盐；旧格式的哈希会在这一刻被升级成 scrypt
-    this.updateSalt(user, password);
+    // 登录成功顺手轮换盐；旧格式的哈希会在这一刻被升级成 scrypt。
+    // ⚠️ 必须 await：旧实现是 fire-and-forget（`this.updateSalt(...)` 不 await），
+    //    于是①升级失败无人知晓（未处理的 rejection），②进程在升级落库前退出就等于
+    //    这次透明升级从没发生，③响应返回时库里的哈希可能还是旧格式。
+    //    升级本身是**尽力而为**：它失败不该让一次合法的登录失败，所以只记 WARN。
+    try {
+      await this.updateSalt(user, password);
+    } catch (err) {
+      this.logger.warn(
+        `登录成功但口令哈希的透明升级失败（账号 id=${user.id}）：${
+          err instanceof Error ? err.message : String(err)
+        }。下次登录会再试一次；不影响本次登录。`,
+      );
+    }
     return user;
   }
 
 
   async updateSalt(user: User, passwordInput: string) {
     const newSalt = makeSalt();
-    const hashed = hashSecret(passwordInput);
+    const hashed = await hashSecretAsync(passwordInput);
     if (!hashed) {
       // 绝不把空哈希写进库（空哈希曾经等于「空密码可登录」）
       return;
@@ -181,10 +289,11 @@ export class UserProvider {
     if (!name || name.length > 50) {
       throw new BadRequestException('用户名不合法（1-50 个字符）');
     }
-    if (!password || password.length > 200) {
-      throw new BadRequestException('密码不合法（1-200 个字符）');
-    }
-    const nextPassword = hashSecret(password);
+    // 口令校验走统一入口（空值 / 超长 / 过短），见 assertAccountPasswordStrength。
+    // ⚠️ 这条路覆盖两个调用点：后台「系统设置 → 用户」改密码，以及匿名的「忘记密码」
+    //    恢复接口（auth.controller.ts 的 restore()）—— 两者最终都调 updateUser()。
+    assertAccountPasswordStrength(password, '管理员');
+    const nextPassword = await hashSecretAsync(password);
     if (!nextPassword) {
       // 理论上到不了这里（上面已经挡掉空值），留一道兜底：绝不把空哈希写进库
       throw new BadRequestException('密码不合法，未做任何修改');
@@ -246,7 +355,7 @@ export class UserProvider {
       );
     }
     const salt = makeSalt();
-    const encrypted = hashSecret(password);
+    const encrypted = await hashSecretAsync(password);
     if (!encrypted) {
       throw new BadRequestException('密码不合法，未创建协作者');
     }
@@ -296,7 +405,7 @@ export class UserProvider {
     }
     const password = assertCollaboratorPassword(collaboratorDto?.password);
     const salt = makeSalt();
-    const encrypted = hashSecret(password);
+    const encrypted = await hashSecretAsync(password);
     if (!encrypted) {
       throw new BadRequestException('密码不合法，未修改协作者');
     }

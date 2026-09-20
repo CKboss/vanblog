@@ -15,7 +15,7 @@ import { UserDocument } from 'src/scheme/user.schema';
 import { WalineProvider } from '../waline/waline.provider';
 import { SettingProvider } from '../setting/setting.provider';
 import { version } from '../../utils/loadConfig';
-import { encryptPassword, hashSecret, makeSalt } from 'src/utils/crypto';
+import { encryptPassword, hashSecretAsync, makeSalt } from 'src/utils/crypto';
 import {
   acquireDbLock,
   releaseDbLock,
@@ -429,7 +429,8 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
         id: 0,
         name: user.username,
         // scrypt：与登录校验一致（verifyUserPassword 认新格式）
-        password: hashSecret(user.password),
+        // ⚠️ 异步版：初始化在启动/请求路径上，同步 scrypt 会阻塞事件循环约 63 ms
+        password: await hashSecretAsync(user.password),
         mickname: user?.nickname || user.username,
         type: 'admin',
         salt,

@@ -21,23 +21,40 @@ export class TokenProvider {
     return await this.tokenModel.find({ userId: 666666, disabled: false }).exec();
   }
 
-  async disableAPIToken(token: string) {
-    return await this.tokenModel.updateOne({ token }, { disabled: true });
-  }
-  async disableAPITokenByName(name: string) {
-    return await this.tokenModel.updateOne({ name }, { disabled: true });
-  }
+  /**
+   * ⚠️ 这里曾经有两个"按值吊销"的方法：`disableAPIToken(token)` 与
+   * `disableAPITokenByName(name)`。它们**零调用方**（全仓库含 admin/website/scripts 都查过，
+   * 唯一在用的是下面的 `disableAPITokenById`），而且形状是
+   * `updateOne({ token }, …)` / `updateOne({ name }, …)` —— **没有 undefined 校验**。
+   *
+   * 为什么必须删掉而不是"留着以后用"：Mongoose 会**丢弃值为 `undefined` 的查询条件**，
+   * 于是 `disableAPIToken(undefined)` 退化成 `updateOne({}, { disabled: true })` =
+   * **吊销任意一条 token**。这与本仓库已经出过事的两个缺陷完全同族：
+   *   - `checkToken` 在 header 缺失时退化成"匹配任意未吊销记录"（已修）；
+   *   - `updateCollaborator` 在 name 缺失时退化成"改掉任意一个协作者"（已修）。
+   * 死代码不会被测试覆盖、也不会在评审里被想起，但它等着某个人接上去。
+   * 需要按 token 值或名字吊销时，请照 `checkToken` 的写法先做
+   * `typeof !== 'string' || !trim()` 校验，并**带上 userId 条件**收窄范围。
+   */
   async disableAPITokenById(id: string) {
     return await this.tokenModel.updateOne({ _id: id }, { disabled: true });
   }
 
   async createAPIToken(name: string) {
     this.logger.log(`创建 API Token`);
-    // 原来是 100 年 —— 等于永不过期，泄露一次就长期有效，还没法靠时间自愈。
-    // 默认改成 1 年，可用 VANBLOG_API_TOKEN_TTL_DAYS 调（1 天 ~ 100 年）。
-    // 已经签发出去的 token 不受影响（各自的 expiresIn 已经写在库里）。
+    // 演进史：100 年（= 永不过期）→ 365 天 → **90 天**。
+    //
+    // 为什么继续往下压：这个 token 签的是 `{ sub: 0, role: 'admin' }`，也就是**等价超管**，
+    // 而且不受协作者权限那套 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES` 约束（那套只认 `user.id == 0`，
+    // 而 API Token 走的正是 id 0 的身份）。所以一条泄露的 API Token = 站点控制权，
+    // 有效期就是"泄露之后攻击者能用的时长"上限。365 天意味着一次疏忽要背一整年。
+    //
+    // 90 天的取舍：短到"泄露会自然过期"，长到"正常的自动化集成不需要每个月去后台重签"。
+    // 仍然可用 VANBLOG_API_TOKEN_TTL_DAYS 调（1 天 ~ 100 年）。
+    // ⚠️ 已经签发出去的 token **不受影响**（各自的 expiresIn 已经写在库里了），
+    //    所以这次改动不会把谁正在用的集成弄坏。
     const ttlDays = Math.min(
-      Math.max(Number(process.env.VANBLOG_API_TOKEN_TTL_DAYS) || 365, 1),
+      Math.max(Number(process.env.VANBLOG_API_TOKEN_TTL_DAYS) || 90, 1),
       36500,
     );
     const expiresIn = 3600 * 24 * ttlDays;

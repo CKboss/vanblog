@@ -44,6 +44,8 @@ import { RESTORE_UPLOAD_OPTIONS } from 'src/utils/restoreUpload';
 import { FullBackupProvider } from 'src/provider/backup/fullBackup.provider';
 import { availableFormats, pickSpec } from 'src/utils/fullBackup';
 import { checkTrue } from 'src/utils/checkTrue';
+import { JwtService } from '@nestjs/jwt';
+import { rotateJwtSecret, switchJwtSigningKey } from 'src/utils/initJwt';
 
 @ApiTags('backup')
 @UseGuards(...AdminGuard)
@@ -64,7 +66,67 @@ export class BackupController {
     private readonly staticProvider: StaticProvider,
     private readonly isrProvider: ISRProvider,
     private readonly fullBackupProvider: FullBackupProvider,
+    // ⚠️ 追加在参数表**最后**：这个构造器在测试里是按位置 new 出来的（两处），
+    //    插在中间会让既有用例把参数喂错位而不报错。
+    private readonly jwtService: JwtService,
   ) {}
+
+  /**
+   * 轮换 JWT 签名密钥 —— "怀疑整站备份归档已经泄露"时的补救入口。
+   *
+   * 为什么落在这个控制器下：归档里就有 `settings{type:'jwt'}` 的这份密钥，
+   * 而 `/api/admin/backup/**` 本轮已经被划进**只有超管能过**的路由前缀
+   * （`SUPER_ADMIN_ONLY_ROUTE_PREFIXES`），所以这个入口自动继承了正确的权限口径 ——
+   * 勾了「所有权限」的协作者**不能**轮换密钥（那等于能把管理员全部登出）。
+   * 语义上它也确实属于"备份泄露之后的处置"，与 export/restore/verify 是一组。
+   *
+   * 后果（响应里会原样告诉调用方）：
+   *  - 所有用旧密钥签发的登录会话在**宽限期内**仍可验签，期满即失效；
+   *  - ⚠️ **API Token 也是同一份密钥签的**（`tokens` 集合、`userId=666666`），
+   *    所以宽限期一过它们**全部**失效，外部集成必须在后台重新签发；
+   *  - 当前登录的管理员自己不会立刻掉线（宽限期），但下次登录用的是新密钥。
+   */
+  @Post('jwt/rotate')
+  async rotateJwtSecretEndpoint(@Body() body: { graceDays?: number | string }) {
+    if (config.demo && config.demo == 'true') {
+      return { statusCode: 401, message: '演示站禁止修改此项！' };
+    }
+    // 宽限期：不传就用 env/默认值；传了就要是个 0..365 的数（0 = 立刻作废旧密钥）
+    let graceDays: number | undefined;
+    if (body?.graceDays !== undefined && body?.graceDays !== null && `${body.graceDays}` !== '') {
+      const parsed = Number(body.graceDays);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 365) {
+        throw new BadRequestException(
+          `graceDays 必须是 0 到 365 之间的数字（0 = 旧密钥立即失效），收到：${String(body.graceDays).slice(0, 40)}`,
+        );
+      }
+      graceDays = parsed;
+    }
+    let signingSwitched = false;
+    const result = await rotateJwtSecret({
+      graceDays,
+      onSigningKeySwitched: (secret) => {
+        signingSwitched = switchJwtSigningKey(this.jwtService, secret);
+      },
+      logger: {
+        log: (message) => this.logger.log(message),
+        warn: (message) => this.logger.warn(message),
+      },
+    });
+    // ⚠️ 签发侧没切成功时必须说出来：此时验签已用新密钥、签发还在用旧密钥，
+    //    宽限期一过这段时间里登录的用户会提前掉线。补救办法是重启容器（重启后
+    //    JwtModule 的工厂会重新读库拿到新密钥）。静默忽略正是本功能要防的失败模式。
+    const restartRequired = !signingSwitched;
+    return {
+      statusCode: 200,
+      message: restartRequired
+        ? `JWT 密钥已轮换（新 kid ${result.kid}），但**签发侧没能就地切换**：请重启容器完成切换，` +
+          `否则在重启之前新签发的令牌仍用旧密钥，宽限期结束后会提前失效。`
+        : `JWT 密钥已轮换（新 kid ${result.kid}）：旧 kid ${result.previousKid} 进入 ${result.graceDays} 天宽限期，` +
+          `期满后所有用旧密钥签发的登录会话与 API Token 一律失效。`,
+      data: { ...result, restartRequired },
+    };
+  }
 
   @Get('export')
   async getAll(@Res() res: Response) {
@@ -264,7 +326,9 @@ export class BackupController {
   @UseInterceptors(FileInterceptor('file', RESTORE_UPLOAD_OPTIONS))
   async restoreFull(
     @UploadedFile() file: any,
-    @Body() body: { name?: string; confirm?: string; withStatic?: string },
+    // ⚠️ `passphrase` 只从 body 取（multer 的文本字段或 JSON 都行），**不接受 query**：
+    //    query 会进 caddy 访问日志。⚠️ 也绝不要把它写进任何 logger 调用。
+    @Body() body: { name?: string; confirm?: string; withStatic?: string; passphrase?: string },
   ) {
     // 整个方法体都要在 try 里：演示站/confirm 校验提前 return/throw 时，
     // multer 已经把上传的归档（几百 MB）落到磁盘了，不清理就永久泄漏
@@ -288,6 +352,7 @@ export class BackupController {
       const result = await this.fullBackupProvider.restore(
         archivePath,
         body?.withStatic === undefined ? true : checkTrue(body.withStatic),
+        typeof body?.passphrase === 'string' && body.passphrase.length > 0 ? body.passphrase : null,
       );
       // ⚠️ delay 必须给：`activeAll` 会把它转交给 RSS 与 sitemap 两个生成器，
       // 不传就是"RSS 3 分钟 / sitemap 1 分钟"之后才写文件（且会被后续任何一次 activeAll 重置），

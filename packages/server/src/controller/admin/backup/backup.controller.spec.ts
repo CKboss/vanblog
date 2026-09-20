@@ -48,6 +48,8 @@ describe('BackupController.importAll', () => {
       staticProvider as any,
       isrProvider as any,
       fullBackupProvider as any,
+      // JwtService 桩：只有"轮换密钥"那条路会用到它（switchJwtSigningKey 读 options.secret）
+      { options: { secret: 'stub-signing-secret' }, sign: jest.fn() } as any,
     );
 
     const backup = {
@@ -109,6 +111,8 @@ describe('BackupController.importAll', () => {
       staticProvider as any,
       isrProvider as any,
       fullBackupProvider as any,
+      // JwtService 桩：只有"轮换密钥"那条路会用到它（switchJwtSigningKey 读 options.secret）
+      { options: { secret: 'stub-signing-secret' }, sign: jest.fn() } as any,
     );
 
     const backup = {
@@ -134,3 +138,4 @@ describe('BackupController.importAll', () => {
     expect(result).toEqual({ statusCode: 200, data: '导入成功！' });
   });
 });
+

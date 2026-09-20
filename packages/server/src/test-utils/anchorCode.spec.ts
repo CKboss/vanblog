@@ -205,9 +205,39 @@ describe('stripCommentsForAnchor：与旧实现在全仓库源码上对拍（不
     };
     const before = countReal(naiveStrip(src));
     const after = countReal(stripCommentsForAnchor(src));
-    expect(after).toBeGreaterThan(before + 50); // 实测 194 → 328 行
-    expect(naiveStrip(src)).not.toContain('清空 caddy.log 失败');
+    // ⚠️ 这里**不再**用"活文件上差多少行"当判据：那个差值与 `caddy.provider.ts` 的注释布局
+    //    耦合 —— 任何人在那条日志行之后新增一段文档注释，就会给朴素实现提供一个更早的 `*/`，
+    //    差值随之塌陷（实测：HEAD 上 118→170 差 52，只比阈值 50 多 2；加了一段注释后变成
+    //    218→233 差 15，于是这条"防空转对照"红了，而剥注释器其实**更好了**：多救回 63 行真代码）。
+    //    ⚠️ 修法是换成固定 fixture，**不是把阈值调小** —— 调小等于承认这条对照可以不敏感。
+    expect(after).toBeGreaterThanOrEqual(before);
+    // 真块注释必须被剥掉（否则就是"什么都不剥"的假实现）；跨行也要能吃掉。
+    const blockFixture = "const a = 1;\n/* 真的块注释\n   跨两行 */\nconst tail = 'AFTER_BLOCK';";
+    expect(stripCommentsForAnchor(blockFixture)).not.toContain('真的块注释');
+    expect(stripCommentsForAnchor(blockFixture)).toContain('AFTER_BLOCK');
+    // ⚠️ 这两条以前钉在 `caddy.provider.ts` 的一行日志文案上（那正是当初的"事故现场"：
+    //    文案里的 `/post/*` 会让朴素实现开一个假块注释、把后面的真代码全吃掉）。
+    //    但**活文件的注释布局一变，事故现场就不再复现** —— 本轮 `caddy.provider.ts` 新增了
+    //    文档注释，给朴素实现提供了一个更早的 `*/`，于是这两条同时失效（一条红、另一条失去意义），
+    //    而剥注释器其实变得**更好**了。⇒ 陷阱的复现必须用固定 fixture（见下），
+    //    活文件只保留"不会因布局变化而失效"的性质断言（`after >= before`，逐文件成立）。
     expect(stripCommentsForAnchor(src)).toContain('清空 caddy.log 失败');
+    // 固定 fixture：字符串里含 `/*` 与 `//`，朴素实现会从这里开一个假块注释、吃掉后面的真代码。
+    // ⚠️ fixture 必须**同时**具备两个要素才复现得了当初的事故：
+    //    ① 字符串里有一个 `/*`（朴素实现在这里开一个假块注释）；
+    //    ② 后面某处有一个真的 `*/`（假块注释到这里才闭合）。
+    //    少了 ② 就什么都不会被吃掉（我第一版就漏了，于是断言恒红）。
+    const trap = [
+      "const url = 'https://example.com/a'; // 协议里的 // 不是注释",
+      "const pat = '/*'; // 字符串里的 /* 不是块注释开始",
+      "const sentinel = 'TRAP_SENTINEL_LINE';",
+      '/* 真的块注释 */',
+      "const tail = 'AFTER_BLOCK';",
+    ].join('\n');
+    expect(naiveStrip(trap)).not.toContain('TRAP_SENTINEL_LINE'); // 朴素实现把它吃了
+    expect(stripCommentsForAnchor(trap)).toContain('TRAP_SENTINEL_LINE'); // 新实现救回来了
+    expect(stripCommentsForAnchor(trap)).toContain('AFTER_BLOCK');
+    expect(stripCommentsForAnchor(trap)).not.toContain('真的块注释'); // 真注释仍然要剥掉
   });
 
   it('幂等：剥两次与剥一次结果相同（不会把代码越剥越少）', () => {

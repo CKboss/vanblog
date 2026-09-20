@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { selectJwtVerifyKey } from 'src/utils/initJwt';
 import { MetaProvider } from '../meta/meta.provider';
 import { UserProvider } from '../user/user.provider';
 
@@ -13,8 +14,25 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       // 获取请求header token值
       jwtFromRequest: ExtractJwt.fromHeader('token'),
-      // 从 initJwtSecret 获取 jwt 密钥
-      secretOrKey: global.jwtSecret,
+      // ⚠️ 以前是 `secretOrKey: global.jwtSecret` —— 那是**构造时**取的一个字符串，
+      //    于是密钥轮换之后本进程会一直用旧密钥验签（而旧密钥在宽限期结束后就作废了，
+      //    这里根本不知道）。改成 provider 形式，每个请求现挑：
+      //    按 token 头里的 `kid` 在"当前密钥"与"宽限期内的上一个密钥"之间选，
+      //    没有 `kid` 的旧 token 走兼容分支（见 selectJwtVerifyKey 的注释）。
+      secretOrKeyProvider: (_request: any, rawJwtToken: any, done: (err: Error | null, secret?: string) => void) => {
+        try {
+          const secret = selectJwtVerifyKey(rawJwtToken);
+          if (!secret) {
+            // 站点还没初始化 / 密钥还没装载：给 401，不给 500（jsonwebtoken 拿到空密钥会抛）
+            done(new UnauthorizedException('服务端还没有可用的 JWT 密钥（站点可能尚未初始化）'));
+            return;
+          }
+          done(null, secret);
+        } catch (err) {
+          // selectJwtVerifyKey 设计上不抛；真抛了也必须是 401 而不是把进程带崩
+          done(new UnauthorizedException(`无法选择验签密钥：${(err as Error)?.message || err}`));
+        }
+      },
     });
   }
 

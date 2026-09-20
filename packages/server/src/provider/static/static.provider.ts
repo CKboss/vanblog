@@ -1,8 +1,37 @@
 import { assertImageBuffer, fetchRemoteSafely } from 'src/utils/safeFetch';
+import { envPositiveInt } from 'src/utils/envNumber';
+
+/**
+ * 「扫描文章图片」时**同时在飞**的链接数上限。
+ *
+ * 为什么默认只有 4：每个在飞的链接最坏会持有一张远端图片的完整 buffer（单张上限
+ * `MAX_REMOTE_IMAGE_BYTES` = 50 MB）⇒ 4 × 50 MB = 200 MB 峰值。再高就要拿内存换速度。
+ * ⚠️ 并发只对**网络等待**有效：`encryptFileMD5`（utils/crypto.ts:361）与 `imageSize` 都是
+ * 同步的，仍然串行占用事件循环 —— 这是已知的残余成本，不在本次修复范围内。
+ */
+const IMG_LINK_SCAN_CONCURRENCY = envPositiveInt('VANBLOG_IMG_SCAN_CONCURRENCY', 4, 1, 32);
+
+/**
+ * 一轮扫描最多处理多少个图片链接。
+ *
+ * 为什么要有：每个链接都要**真去下载一次**（`getImgInfoByLink` → `fetchImg` → `fetchRemoteSafely`，
+ * 单张上限 50 MB、超时 15 s，而且失败时还会用 `encodeURI(link)` **再试一次** ⇒ 一个死链最多
+ * 耗 30 s）。以前是**串行**且**无上限**：一篇被塞了几千个外链的文章就能让这一个请求跑上几小时，
+ * 期间一直占着连接与内存，而调用方（后台「扫描文章图片」）只能干等。
+ * ⚠️ 撞上限时必须如实报告（`truncatedLinks: true` + WARN），不能让调用方以为全站都扫过了。
+ */
+const IMG_LINK_SCAN_MAX_LINKS = envPositiveInt('VANBLOG_IMG_SCAN_MAX_LINKS', 2000, 1, 10000000);
 
 /** 单张远端图片的体积上限：以前没有上限，一个大文件就能把内存吃光。 */
 const MAX_REMOTE_IMAGE_BYTES = 50 * 1024 * 1024;
-import { assertUploadedImage, safeImageExtension } from 'src/utils/uploadLimits';
+import {
+  assertUploadedImage,
+  resolveUploadMinFreeBytes,
+  safeImageExtension,
+  uploadSpaceShortfallMessage,
+} from 'src/utils/uploadLimits';
+import { freeSpaceBytes } from 'src/utils/fullBackup';
+import { config } from 'src/config';
 import {
   BadRequestException,
   HttpException,
@@ -497,31 +526,114 @@ export class StaticProvider {
       sign: currentSign,
     };
   }
+  /**
+   * 扫描全站文章正文里的图片链接，把没入库的补进图床、把抓不到的报成失效链接。
+   *
+   * ## 这一版改了三件事（都是资源边界问题）
+   *  1. **不再把全库正文一次性拉进堆**：改调 `articleProvider.scanAllImageLinks()`，
+   *     它按 `_id` keyset 分批（50 篇/批）+ 只投影 `content` 等必要字段。
+   *  2. **链接处理从串行改成有界并发**（默认 4，`VANBLOG_IMG_SCAN_CONCURRENCY`）。
+   *     以前是一个一个 `await`：每个链接最坏要下载 50 MB、超时 15 s、失败还会重试一次，
+   *     于是"几千个外链"就能让这一个请求跑上几小时。
+   *  3. **链接总数有上限**（默认 2000，`VANBLOG_IMG_SCAN_MAX_LINKS`），撞上限时
+   *     `truncatedLinks: true` + WARN —— 绝不静默返回不完整结果让调用方以为扫全了。
+   *
+   * ⚠️ 可达性：这条路由（`POST /api/admin/img/scan`）**勾了「所有权限」的协作者也能调**
+   * （`/api/admin/img` 不在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES` 里），所以它必须被当作
+   * "低权限账号也能触发的重活"来设防，而不是"管理员自己不会乱点"。
+   *
+   * ⚠️ 返回形状是**追加**的：`total`（发现的链接总数，语义不变）与 `errorLinks`
+   * （元素形状不变，含既有的 `artcileId` 拼写——已被外部消费，不能改）都保留。
+   */
   async scanLinksOfArticles() {
-    const linkObjs = await this.articleProvder.getAllImageLinks();
-    const errorLinks = [];
-    let total = 0;
-    for (const linkObj of linkObjs) {
-      const links = linkObj.links;
-      for (const link of links) {
-        total = total + 1;
-        const dto = await this.getImgInfoByLink(link);
-        if (!dto) {
-          errorLinks.push({
-            artcileId: linkObj.articleId,
-            title: linkObj.title,
-            link,
-          });
-        } else {
-          const hasPicture = await this.getOneBySign(dto?.sign || '');
-          console.log(link, dto);
-          if (!hasPicture) {
-            await this.createInDB(dto);
-          }
-        }
+    const scan = await this.articleProvder.scanAllImageLinks();
+
+    // 先把 (文章, 链接) 摊平，这样并发与截断都好算；`total` 仍是"发现的链接总数"
+    const tasks: Array<{ articleId: number; title: string; link: string }> = [];
+    for (const linkObj of scan.items) {
+      for (const link of linkObj.links) {
+        tasks.push({ articleId: linkObj.articleId, title: linkObj.title, link });
       }
     }
-    return { total: total, errorLinks };
+    const total = tasks.length;
+    const truncatedLinks = total > IMG_LINK_SCAN_MAX_LINKS;
+    const work = truncatedLinks ? tasks.slice(0, IMG_LINK_SCAN_MAX_LINKS) : tasks;
+
+    if (truncatedLinks) {
+      this.logger.warn(
+        `扫描文章图片**未处理完全部链接**：共发现 ${total} 个，单轮上限 ${IMG_LINK_SCAN_MAX_LINKS} 个，` +
+          `本次只处理了前 ${work.length} 个（另有 ${total - work.length} 个没碰）。` +
+          `结果不完整，请勿据此认为"全站图片都已入库/没有失效图"。` +
+          `要一次扫完，调大 VANBLOG_IMG_SCAN_MAX_LINKS（注意每个链接都要真下载一次，单张上限 50 MB）。`,
+      );
+    }
+
+    const errorLinks: Array<{ artcileId: number; title: string; link: string }> = [];
+    let processed = 0;
+    let created = 0;
+    let cursor = 0;
+
+    const runOne = async (task: { articleId: number; title: string; link: string }) => {
+      try {
+        const dto = await this.getImgInfoByLink(task.link);
+        if (!dto) {
+          errorLinks.push({
+            // ⚠️ 拼写沿用既有契约（`artcileId`）：已被外部消费，改名会静默打断消费方
+            artcileId: task.articleId,
+            title: task.title,
+            link: task.link,
+          });
+          return;
+        }
+        const hasPicture = await this.getOneBySign(dto?.sign || '');
+        if (!hasPicture) {
+          await this.createInDB(dto);
+          created += 1;
+        }
+      } catch (err) {
+        // 单个链接失败不能整轮失败：记成失效链接，继续处理其余的
+        errorLinks.push({ artcileId: task.articleId, title: task.title, link: task.link });
+        this.logger.warn(
+          `扫描文章图片：处理链接失败 ${task.link} reason=${(err as Error)?.message || err}`,
+        );
+      } finally {
+        processed += 1;
+      }
+    };
+
+    // 有界并发的 worker 池：每个 worker 从共享游标取任务，取不到就退出。
+    // ⚠️ `cursor++` 在单线程事件循环里是原子的（没有 await 夹在中间），不会重复取。
+    const workerCount = Math.max(1, Math.min(IMG_LINK_SCAN_CONCURRENCY, work.length));
+    const worker = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= work.length) return;
+        await runOne(work[i]);
+      }
+    };
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    this.logger.log(
+      `扫描文章图片完成：文章 ${scan.scannedArticles} 篇、发现链接 ${total} 个、` +
+        `实际处理 ${processed} 个、新入库 ${created} 张、失效 ${errorLinks.length} 个` +
+        `${truncatedLinks ? `（链接被截断，上限 ${IMG_LINK_SCAN_MAX_LINKS}）` : ''}` +
+        `${scan.truncated ? `（文章被截断，上限 ${scan.articleCap} 篇）` : ''}`,
+    );
+
+    return {
+      total,
+      errorLinks,
+      // 以下为**追加**字段：让调用方能如实区分"扫全了"与"被截断了"
+      processed,
+      created,
+      scannedArticles: scan.scannedArticles,
+      scannedLinks: scan.scannedLinks,
+      truncatedLinks,
+      truncatedArticles: scan.truncated,
+      linkCap: IMG_LINK_SCAN_MAX_LINKS,
+      articleCap: scan.articleCap,
+      concurrency: workerCount,
+    };
   }
 
   async exportAllImg() {
@@ -562,6 +674,30 @@ export class StaticProvider {
     if (type == 'customPage' || type == 'file') {
       // 自定义页面和附件都只落本地：PicGo/OSS 图床基本只接受图片。
       storageType = 'local';
+    }
+    if (storageType === 'local') {
+      // ⚠️ 上传**总量配额**：以前只有"单文件不超过 50MB/200MB"，没有任何"磁盘还剩多少"的概念
+      //    （全仓库 quota|totalBytes|diskUsage|statfs 在 static/uploadLimits 里零命中），而
+      //    `post-/api/admin/img/upload`(50MB) 与 `post-/api/admin/file/upload`(200MB) 都在
+      //    publicRoutes 里 ⇒ 零权限协作者可以无限次上传，一台 20GB 盘的小机器几分钟就写满。
+      //    磁盘满的连锁反应比"上传失败"严重得多：mongo 的 WiredTiger 写失败、备份写流 ENOSPC、
+      //    日志写不进 ⇒ 站点进入"容器 Up 但什么都写不了"的半死状态，而 restart 策略不会介入。
+      //    所以在落盘之前查一次剩余空间，低于下限就拒绝并给出可照做的消息。
+      //    判定抽在 `uploadLimits.ts` 的**纯函数**里（`fs.statfsSync` 在 jest 不可重定义），
+      //    剩余空间读不到时**跳过而不是拒绝**（与 fullBackup 的恢复闸门同口径）。
+      //    ⚠️ 图片还会派生缩略图与 webp/avif，实际占用可达 buffer 的 2–3 倍；默认下限 500MB
+      //    已经把这个余量算进去了。
+      const minFree = resolveUploadMinFreeBytes();
+      if (minFree > 0) {
+        const shortfall = uploadSpaceShortfallMessage(
+          freeSpaceBytes(config.staticPath),
+          buffer?.length || 0,
+          minFree,
+        );
+        if (shortfall) {
+          throw new BadRequestException(shortfall);
+        }
+      }
     }
     switch (storageType) {
       case 'local':

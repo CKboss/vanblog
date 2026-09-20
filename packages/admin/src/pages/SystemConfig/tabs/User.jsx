@@ -2,6 +2,7 @@ import CollaboratorModal, { getPermissionLabel } from '@/components/Collaborator
 import Tags from '@/components/Tags';
 import { deleteCollaborator, getAllCollaborators, updateUser } from '@/services/van-blog/api';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';
+import { accountPasswordMinRule } from '@/services/van-blog/passwordPolicy';
 import { ProForm, ProFormText } from '@ant-design/pro-form';
 import { ProTable } from '@ant-design/pro-table';
 import { Button, Card, message, Modal, Space } from 'antd';
@@ -105,7 +106,12 @@ export default function () {
             width="lg"
             name="password"
             required={true}
-            rules={[{ required: true, message: '这是必填项' }]}
+            // ⚠️ 这条 `min` 是「改管理员口令」路径上 ≥10 的**唯一**强制点：提交时 encryptPwd
+            //    会把口令派生成恒 64 位十六进制摘要，服务端看到的长度与原始口令无关（sha256 不可逆）。
+            //    上面 request 里的 `password: initialState?.user?.password || ''` 恒为空串 ——
+            //    服务端 /api/admin/meta 回传的 user 就是 JWT payload（username/sub/type/nickname/permissions），
+            //    **不含 password**，所以这个框总是空的、每次保存都必须重新输入（既有行为，未改动）。
+            rules={[{ required: true, message: '这是必填项' }, accountPasswordMinRule()]}
             autocomplete="new-password"
             label="登录密码"
             placeholder={'请输入登录密码'}

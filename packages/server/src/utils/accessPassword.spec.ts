@@ -72,12 +72,19 @@ describe('resolveAccessPasswordWrite：update 模式（编辑既有文章/分类
   });
 
   it('"设新密码" 与 "清除" 同时给 ⇒ 400（两种意图冲突，不能猜）', () => {
+    // ⚠️ 这里以前用 'abc'（3 个字符）。本轮加了 ≥4 的长度下限之后，'abc' 会**因为长度**
+    //    抛 BadRequestException，于是"冲突必须 400"这条断言在冲突规则被删掉时**仍然是绿的**
+    //    —— 典型的"新校验让旧断言空转"。所以密码值必须 ≥4，这条用例才真的在测冲突。
     expect(() =>
-      resolveAccessPasswordWrite({ password: 'abc', clearPassword: true }, 'update'),
+      resolveAccessPasswordWrite({ password: 'abcd', clearPassword: true }, 'update'),
     ).toThrow(BadRequestException);
     expect(() =>
-      resolveAccessPasswordWrite({ password: 'abc', clearPassword: 'true' }, 'update'),
+      resolveAccessPasswordWrite({ password: 'abcd', clearPassword: 'true' }, 'update'),
     ).toThrow(BadRequestException);
+    // 消息本身也要点名冲突，否则"因为别的原因 400"也能让上面两条通过
+    expect(() =>
+      resolveAccessPasswordWrite({ password: 'abcd', clearPassword: true }, 'update'),
+    ).toThrow(/不能同时/);
   });
 
   it('clearPassword: true + 空密码 ⇒ 正常清除（空不算"设新密码"）', () => {
@@ -111,9 +118,12 @@ describe('resolveAccessPasswordWrite：create 模式（新建 / 发布草稿）'
   });
 
   it('填了密码 ⇒ 哈希', () => {
-    const res = resolveAccessPasswordWrite({ password: 'pw' }, 'create');
+    // ⚠️ 以前这里用的是 'pw'（2 个字符）—— 那钉住的是"访问密码可以只有 2 位"这个旧契约。
+    //    本轮加了 ≥4 的硬下限（MIN_ACCESS_PASSWORD_LENGTH），所以这个用例的值必须跟着改；
+    //    下限本身由下面那个 describe 单独覆盖（含变异对照）。
+    const res = resolveAccessPasswordWrite({ password: 'pw12' }, 'create');
     expect(isScryptHash(res.password)).toBe(true);
-    expect(verifyAccessPassword(res.password, 'pw')).toBe(true);
+    expect(verifyAccessPassword(res.password, 'pw12')).toBe(true);
   });
 
   it('clearPassword: true ⇒ 空串（新建时等价于"不加密"）', () => {

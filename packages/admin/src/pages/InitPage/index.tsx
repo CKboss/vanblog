@@ -11,6 +11,7 @@ import { ProFormText, StepsForm } from '@ant-design/pro-form';
 
 import SiteInfoForm from '@/components/SiteInfoForm';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';
+import { accountPasswordMinRule } from '@/services/van-blog/passwordPolicy';
 import { useRef, useState } from 'react';
 import RestoreFromBackup from './RestoreFromBackup';
 import { SETUP_KEY_FIELD, SETUP_KEY_HINTS, extractSetupKeyRejection } from './setupKeyCore';
@@ -182,10 +183,15 @@ const InitPage = () => {
                 label="昵称"
                 placeholder={'请输入昵称（显示的名字）'}
               ></ProFormText> */}
+              {/* ⚠️ 这条 `min` 规则是「账号口令 ≥10」在初始化向导上**唯一**的强制点。
+                  onFinish 里的 encryptPwd 会把口令派生成恒 64 位十六进制摘要再发出去，
+                  服务端看到的长度与原始口令无关（sha256 不可逆）⇒ 服务端在数学上判不了强度。
+                  rules 作用于**派生之前**的原始输入（onFinish 拿到的 values 才是原始值）。
+                  策略与理由见 services/van-blog/passwordPolicy.js。 */}
               <ProFormText.Password
                 name="password"
                 required={true}
-                rules={[{ required: true, message: '这是必填项' }]}
+                rules={[{ required: true, message: '这是必填项' }, accountPasswordMinRule()]}
                 label="登录密码"
                 placeholder={'请输入登录密码'}
               ></ProFormText.Password>

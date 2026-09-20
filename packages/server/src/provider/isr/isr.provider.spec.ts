@@ -329,3 +329,217 @@ describe('ISRProvider 产物清道夫集成', () => {
     expect(src).toContain('await this.reapStaleArtifacts(`全量渲染收尾'); // runStorm 末尾
   });
 });
+
+/* =============== 全量风暴：有界并发 + 单轮预算 + 可观测性 =============== */
+
+describe('ISRProvider.activeUrls：有界并发（以前是严格串行）', () => {
+  const CONCURRENCY_ENV = 'VANBLOG_ISR_STORM_CONCURRENCY';
+  const BUDGET_ENV = 'VANBLOG_ISR_ROUND_URL_BUDGET';
+  let savedConcurrency: string | undefined;
+  let savedBudget: string | undefined;
+
+  beforeEach(() => {
+    savedConcurrency = process.env[CONCURRENCY_ENV];
+    savedBudget = process.env[BUDGET_ENV];
+    delete process.env[CONCURRENCY_ENV];
+    delete process.env[BUDGET_ENV];
+  });
+  afterEach(() => {
+    if (savedConcurrency === undefined) delete process.env[CONCURRENCY_ENV];
+    else process.env[CONCURRENCY_ENV] = savedConcurrency;
+    if (savedBudget === undefined) delete process.env[BUDGET_ENV];
+    else process.env[BUDGET_ENV] = savedBudget;
+  });
+
+  /** 用假的 activeUrl 记录"同时在途的最大值"与实际处理到的 URL */
+  function instrument(provider: ISRProvider, opts: { failEvery?: number; delayMs?: number } = {}) {
+    const seen: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let calls = 0;
+    jest
+      .spyOn(provider, 'activeUrl')
+      .mockImplementation(async (url: string): Promise<boolean> => {
+        calls += 1;
+        /* ⚠️ 必须在这里就把序号固定下来：`await` 之后 `calls` 已经被其它 worker 加过了，
+         * 用它算奇偶会让"失败几条"变成并发调度的函数（第一版就是这么写出 7 而不是 5 的）。
+         * 这正好是本轮实现要防的那类错误的镜像版本 —— 测试自己也会有竞态。 */
+        const myCall = calls;
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        seen.push(url);
+        await new Promise((r) => setTimeout(r, opts.delayMs ?? 1));
+        inFlight -= 1;
+        return opts.failEvery ? myCall % opts.failEvery !== 0 : true;
+      });
+    return { seen, maxInFlight: () => maxInFlight, calls: () => calls };
+  }
+
+  function makeUrls(n: number) {
+    return Array.from({ length: n }, (_, i) => `/post/p-${i}`);
+  }
+
+  it('🔴 在途数量不超过上限，且**确实是并发**（串行实现同样满足"≤上限"，所以两条都要断言）', async () => {
+    const { provider } = createProvider([]);
+    const probe = instrument(provider);
+    await provider.activeUrls(makeUrls(40), false);
+    // 默认上限 4
+    expect(probe.maxInFlight()).toBeLessThanOrEqual(4);
+    // ⚠️ 空转对照：如果是旧的严格串行实现，这里会是 1 —— 只有这条能证明"并发生效了"
+    expect(probe.maxInFlight()).toBeGreaterThan(1);
+    provider.onModuleDestroy?.();
+  });
+
+  it('每个 URL 恰好处理一次（共享游标不能漏也不能重）', async () => {
+    const { provider } = createProvider([]);
+    const urls = makeUrls(37); // 故意不是并发上限的整数倍
+    const probe = instrument(provider);
+    await provider.activeUrls(urls, false);
+    expect(probe.seen.slice().sort()).toEqual(urls.slice().sort());
+    expect(new Set(probe.seen).size).toBe(urls.length);
+    provider.onModuleDestroy?.();
+  });
+
+  it('并发数量少于 URL 数时不会开出多余的 worker', async () => {
+    const { provider } = createProvider([]);
+    const probe = instrument(provider);
+    await provider.activeUrls(makeUrls(2), false);
+    expect(probe.maxInFlight()).toBeLessThanOrEqual(2);
+    provider.onModuleDestroy?.();
+  });
+
+  it('URL 数为 0 时直接返回，不打日志（避免每轮风暴都刷一条空记录）', async () => {
+    const { provider } = createProvider([]);
+    const log = jest.spyOn((provider as any).logger, 'log').mockImplementation(() => undefined);
+    const probe = instrument(provider);
+    await provider.activeUrls([], false);
+    expect(probe.calls()).toBe(0);
+    expect(log).not.toHaveBeenCalled();
+    provider.onModuleDestroy?.();
+  });
+
+  it('并发上限可用 env 调，且非法值回落默认、过大值被夹住（不会变成无界并发）', () => {
+    const { provider } = createProvider([]);
+    expect(provider.resolveStormConcurrency()).toBe(4);
+    process.env[CONCURRENCY_ENV] = '8';
+    expect(provider.resolveStormConcurrency()).toBe(8);
+    process.env[CONCURRENCY_ENV] = '999';
+    expect(provider.resolveStormConcurrency()).toBe(32);
+    // ⚠️ 分数值也必须变成整数：整数性由 envPositiveInt 内部的 Math.floor 保证，
+    //    这条断言钉在**调用点**，将来有人换掉那个工具函数时分数并发不会静默溜进来
+    //    （Array.from({ length: 1.5 }) 会被截断成 1，等于配了个没人能预测的值）
+    process.env[CONCURRENCY_ENV] = '1.5';
+    expect(provider.resolveStormConcurrency()).toBe(1);
+    process.env[CONCURRENCY_ENV] = '4.9';
+    expect(provider.resolveStormConcurrency()).toBe(4);
+    for (const bad of ['0', '-3', 'abc', '', '  ', 'NaN']) {
+      process.env[CONCURRENCY_ENV] = bad;
+      // ⚠️ 关键：垃圾值必须回到**默认 4**，绝不能变成 0（死循环）或 Infinity（无界并发）
+      expect({ bad, got: provider.resolveStormConcurrency() }).toEqual({ bad, got: 4 });
+    }
+    delete process.env[CONCURRENCY_ENV];
+    provider.onModuleDestroy?.();
+  });
+
+  it('并发上限真的被 env 改变（不是只读了个数字）', async () => {
+    process.env[CONCURRENCY_ENV] = '8';
+    const { provider } = createProvider([]);
+    const probe = instrument(provider, { delayMs: 2 });
+    await provider.activeUrls(makeUrls(40), false);
+    expect(probe.maxInFlight()).toBeLessThanOrEqual(8);
+    expect(probe.maxInFlight()).toBeGreaterThan(4); // 确实比默认的 4 更宽
+    provider.onModuleDestroy?.();
+  });
+
+  it('超过单轮预算时打 WARN 并分批，但**一个都不丢**', async () => {
+    process.env[BUDGET_ENV] = '3';
+    const { provider } = createProvider([]);
+    const warn = jest.spyOn((provider as any).logger, 'warn').mockImplementation(() => undefined);
+    const log = jest.spyOn((provider as any).logger, 'log').mockImplementation(() => undefined);
+    const probe = instrument(provider);
+    const urls = makeUrls(10);
+    await provider.activeUrls(urls, false);
+
+    expect(probe.seen.slice().sort()).toEqual(urls.slice().sort()); // 没有静默丢弃
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0][0]);
+    expect(msg).toContain('10'); // 实际规模
+    expect(msg).toContain('3'); // 预算
+    expect(msg).toContain('4'); // 分几批（ceil(10/3)）
+    expect(msg).toContain(CONCURRENCY_ENV); // 告诉运维可以调什么
+    // 进度日志：done 每满一个 budget 打一条（3/6/9），最后一条完成日志另算
+    const progress = log.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('增量渲染进度'));
+    expect(progress.length).toBe(3);
+    const done = log.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('增量渲染完成'));
+    expect(done.length).toBe(1);
+    expect(done[0]).toContain('10 个 URL');
+    provider.onModuleDestroy?.();
+  });
+
+  it('没超预算时不打 WARN（别把正常规模说成异常）', async () => {
+    const { provider } = createProvider([]);
+    const warn = jest.spyOn((provider as any).logger, 'warn').mockImplementation(() => undefined);
+    instrument(provider);
+    await provider.activeUrls(makeUrls(5), false);
+    expect(warn).not.toHaveBeenCalled();
+    provider.onModuleDestroy?.();
+  });
+
+  it('完成日志里有失败条数（以前单个失败只有一行 URL，看不出这一轮坏了多少）', async () => {
+    const { provider } = createProvider([]);
+    const log = jest.spyOn((provider as any).logger, 'log').mockImplementation(() => undefined);
+    instrument(provider, { failEvery: 2 }); // 一半失败
+    await provider.activeUrls(makeUrls(10), false);
+    const done = log.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('增量渲染完成'));
+    expect(done.length).toBe(1);
+    expect(done[0]).toContain('失败 5');
+    expect(done[0]).toMatch(/用时 \d+ms/);
+    expect(done[0]).toContain('并发 4');
+    provider.onModuleDestroy?.();
+  });
+
+  it('预算的非法值同样回落默认（最小 1，否则 done % budget 会除零）', () => {
+    const { provider } = createProvider([]);
+    expect(provider.resolveStormRoundBudget()).toBe(5000);
+    for (const bad of ['0', '-1', 'abc', '']) {
+      process.env[BUDGET_ENV] = bad;
+      expect({ bad, got: provider.resolveStormRoundBudget() }).toEqual({ bad, got: 5000 });
+    }
+    process.env[BUDGET_ENV] = '7';
+    expect(provider.resolveStormRoundBudget()).toBe(7);
+    process.env[BUDGET_ENV] = '7.9'; // 小数预算会让分批数与进度日志都不可预期（同上，钉在调用点）
+    expect(provider.resolveStormRoundBudget()).toBe(7);
+    delete process.env[BUDGET_ENV];
+    provider.onModuleDestroy?.();
+  });
+});
+
+describe('ISRProvider.activeUrl：返回成功与否，并说清失败原因', () => {
+  it('成功返回 true', async () => {
+    const { provider } = createProvider([]);
+    mockedAxios.get.mockResolvedValueOnce({ data: { revalidated: true } } as any);
+    await expect(provider.activeUrl('/post/1', false)).resolves.toBe(true);
+  });
+
+  it('失败返回 false，且日志区分"连不上前台""超时""前台返回 5xx"', async () => {
+    const { provider } = createProvider([]);
+    const error = jest.spyOn((provider as any).logger, 'error').mockImplementation(() => undefined);
+
+    mockedAxios.get.mockRejectedValueOnce(Object.assign(new Error('boom'), { code: 'ECONNREFUSED' }));
+    await expect(provider.activeUrl('/post/1', false)).resolves.toBe(false);
+    expect(String(error.mock.calls[0][0])).toContain('连不上 website(3001)');
+
+    mockedAxios.get.mockRejectedValueOnce(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+    await expect(provider.activeUrl('/post/2', false)).resolves.toBe(false);
+    expect(String(error.mock.calls[1][0])).toContain('超时');
+
+    mockedAxios.get.mockRejectedValueOnce({ response: { status: 503 } });
+    await expect(provider.activeUrl('/post/3', false)).resolves.toBe(false);
+    expect(String(error.mock.calls[2][0])).toContain('website 返回 503');
+
+    // 每条都要带上是哪个 URL（不然一万条里根本对不上）
+    for (const call of error.mock.calls) {
+      expect(String(call[0])).toMatch(/\/post\/\d/);
+    }
+  });
+});
