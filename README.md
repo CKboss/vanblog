@@ -302,16 +302,17 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 
 ### 测试
 
-| 套件 | 命令 | 现状（2026-09-20 本机实测；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39） |
+| 套件 | 命令 | 现状（2026-09-21 本机实测；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39） |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **248 套件 / 3520 用例**（3511 绿 + 8 跳过 + 1 条负载敏感假红：`utils/backupSigning.spec.ts` 单独重跑 **44/44** 绿 ⇒ **0 真失败**，约 60s；⚠️ 机器被压满时另有 2 条负载敏感用例会假红，单独跑就绿） |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **258 套件 / 3657 用例**（3649 绿 + 8 跳过 + **0 失败**，约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（本轮就因此漏过一次真红，`68d7ac6f` 修的） |
 | website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **91 文件 / 992 用例全绿** |
 | admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **152 套件 / 611 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
 | admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件）。CI 里跑并且是绿的；本机没装浏览器所以没跑。⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **29 文件 / 2990 条断言全绿** |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **30 文件 / 3033 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
 | 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **52/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
-| 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | 两包各 **0 错** |
-| 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md) |
+| 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | 两包各 **0 错**（⚠️ CI 查的是**入库**的那两份：server 的 `tsconfig.json` 与 `tsconfig.build.json`；`tsconfig.dev.json` 没有入库） |
+| 空值解引用棘轮 | `bash scripts/tests/strict-null-ratchet.test.sh` | **11 条断言 / 0 失败**（约 29 秒）。`strictNullChecks` 在 tsconfig 里是关的，这条守卫让"四类确定性空值解引用"的命中数**只减不增**（当前基线 **32**）。🔴 它必须用**单项开关**而不是伞形 `--strict`：tsconfig 里显式的 `false` 能压过伞形开关、压不过单项开关，实测 `--strict` 下这四类是 **0**、单项开关下是 **32** ⇒ 用伞形开关写的守卫会**恒绿**（守卫里有一条断言专门钉住这件事）。详见 `docs/contribution.md` |
+| 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md)。⚠️ `--c10k N` 的 **N 是「目标连接数」不是秒数**；采集完**必须检查退出码**，`2` 表示 C10K 有目标未产出结果、那份报告不能用 |
 
 用 `./dev-env.sh bootstrap` 装的工具链跑（Node 24 + pnpm 8 + MongoDB 7）；系统 Node 也可以，但版本要 ≥ 24
 （本项目的 `@nestjs/cli` 已经升到 11，不再有上游那个 `util.isObject` 在新 Node 上崩溃的问题）。
