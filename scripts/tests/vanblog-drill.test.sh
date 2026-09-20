@@ -2470,7 +2470,58 @@ assert_eq "${GOT}" "" "引擎/容器名为空时安全返回空（不炸）"
 
 # 源码级：密钥怎么送、怎么不外泄
 SK_SRC="$(cat "${SCRIPT}")"
-assert_contains "${SK_SRC}" '-F "setupKey=<${setup_key_file}"' '密钥走 curl 的 -F "字段<文件" 形式（值不进命令行）'
+# ⚠️ 2026-09-20 升级（不是放宽）：这条原本钉的是字面量 `-F "setupKey=<${setup_key_file}"`，
+#    而恢复调用被重构成纯函数 `drill_build_restore_args` 之后局部变量改名为 `keyfile`
+#    ⇒ 断言红了，但**性质完好**（仍是 `-F "setupKey=<${keyfile}"`，值从文件读、不进 argv）。
+#    钉"变量名"就是钉实现细节；这里改成钉**性质**：字段名 + curl 的 `<文件` 取值形状，与变量名无关。
+if printf '%s' "${SK_SRC}" | grep -qE -- '-F "setupKey=<\$\{[A-Za-z_][A-Za-z0-9_]*\}"'; then
+  pass '密钥走 curl 的 -F "字段<文件" 形式（值从文件读出，不进命令行）'
+else
+  fail '密钥没有走 -F "setupKey=<文件" 形式 ⇒ 值可能进了 argv（ps 可见）'
+fi
+# 🔴 负向：绝不能出现"把密钥值内联进 -F"的形状（那正是这条纪律要防的）
+# ⚠️ 本条第一版是**空转的**，写成了 `grep -qE … | grep -qv '<'`：`grep -q` 不输出任何内容，
+#    于是后面那个 grep 收到空输入、恒返回 1 ⇒ `if` 永远为假、`fail` 分支永远不触发。
+#    这正是本仓库反复强调的"负向对照必须先证明它量得到坏形状"—— 我自己犯了一次。
+#    正确写法是先取出候选行、再过滤、最后判**非空**。
+# ⚠️ 必须带 `-a`：drill 脚本里含 grep 判为二进制的字节，默认模式下 grep 会输出
+#    "Binary file (standard input) matches" 而**不是**匹配行 ⇒ 那串文字本身非空，
+#    会让"内联密钥"这条负向对照**假阳性**（实测踩过：622 passed / 1 failed，
+#    报的就是这一条，而真相是 grep 的输出形状变了、不是脚本有问题）。
+# ⚠️ 必须先剥注释行：drill 脚本里有一句**解释性注释**正好写着『不要这样：`-F "setupKey=值"`』，
+#    不剥注释就会命中它 ⇒ 负向对照假阳性（本仓库第 10 次踩"断言匹配到解释性注释"这个坑）。
+#    ⚠️ shell 里用 sed 剥整行注释，**绝不能**用 TS 的 stripCommentsForAnchor（它会把 https:// 当注释吃掉）。
+SK_CODE_ONLY="$(printf '%s\n' "${SK_SRC}" | sed '/^[[:space:]]*#/d')"
+INLINE_KEY_LINES="$(printf '%s\n' "${SK_CODE_ONLY}" | grep -aE -- '-F "setupKey=' | grep -av -- '<' || true)"
+# ⚠️ 反向保险：如果 grep 因为二进制判定而输出 "Binary file ... matches"，那不是证据，必须报出来
+if printf '%s' "${INLINE_KEY_LINES}" | grep -q 'Binary file'; then
+  fail '负向对照被 grep 的二进制判定污染了（输出是 "Binary file matches" 而不是匹配行）⇒ 请检查 -a 是否漏了'
+fi
+if [[ -n "${INLINE_KEY_LINES}" ]]; then
+  fail "出现了把密钥值内联进 -F 的形状（值会进 argv、ps 可见）：$(printf '%s' "${INLINE_KEY_LINES}" | head -1 | cut -c1-80)"
+else
+  pass '没有把密钥值内联进 -F 的形状（所有 setupKey 都走 <文件 读取）'
+fi
+# ⚠️ 上面那条负向对照的**尺子有效性反证**：喂一个内联形状，必须被判为不合规（非空）
+PROBE_INLINE="$(printf '%s\n' '-F "setupKey=${setup_key}"' | grep -aE -- '-F "setupKey=' | grep -av -- '<' || true)"
+# ⚠️ 反向反证：同样的坏形状**写在注释里**时，剥注释后必须检不出来（否则说明剥注释没生效）
+PROBE_COMMENT="$(printf '%s\n' '# 别这样写：-F "setupKey=${setup_key}"' | sed '/^[[:space:]]*#/d' | grep -aE -- '-F "setupKey=' | grep -av -- '<' || true)"
+if [[ -n "${PROBE_INLINE}" && -z "${PROBE_COMMENT}" ]]; then
+  pass '反证成立：代码里的内联形状会被检出、注释里的同样形状不会（剥注释这一步既有效又必要）'
+else
+  fail "反证失败：inline='${PROBE_INLINE:0:20}' comment='${PROBE_COMMENT:0:20}' ⇒ 尺子方向不对或剥注释失效"
+fi
+if [[ -n "${PROBE_INLINE}" ]]; then
+  pass '反证成立：内联形状会被上面那条负向对照检出（它不是恒 pass）'
+else
+  fail '反证失败：内联形状检不出来 ⇒ 上面那条负向对照是空转的'
+fi
+# ⚠️ 尺子有效性反证：证明上面那把正则真的量得到东西（喂一个内联形状必须被判为不合规）
+if printf '%s' '-F "setupKey=${setup_key}"' | grep -qE -- '-F "setupKey=<\$\{[A-Za-z_][A-Za-z0-9_]*\}"'; then
+  fail '反证失败：内联形状也被判合规 ⇒ 上面那条断言恒真'
+else
+  pass '反证成立：内联形状不会被误判成合规（尺子有方向性）'
+fi
 assert_not_contains "${SK_SRC}" '-F "setupKey=${setup_key}"' "不许把密钥值直接写进命令行（ps 里谁都能看）"
 assert_contains "${SK_SRC}" '(umask 077; printf' "临时密钥文件用 umask 077 建（0600）"
 assert_contains "${SK_SRC}" 'rm -f "${setup_key_file}"' "请求发完就删临时密钥文件"
