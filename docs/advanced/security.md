@@ -289,9 +289,26 @@ scrypt$16384$8$1$<salt base64>$<hash base64>
   - `base-uri 'none'` 安全，因为 `<base` 在前台与后台都是零命中。
   ⚠️ **它只作用于 `/static/`、`/rss/`、`/sitemap/`、`/swagger` 这几个 pre-Nest 前缀** ——
   前台是独立的 Next 进程、后台是独立的静态包，**都不经过这个中间件**。
-  全站页面级 CSP 的正确落点是 caddy 层；而 `script-src` / `style-src` 这类**取数指令**目前哪儿都不能加，
-  因为要先上 nonce（内联样式、bytemd 的脚本、第三方统计都会被直接打坏）。
-  ⇒ **结论：全站目前没有 CSP，这是已知取舍**，不要以为加了这三条就有了 XSS 的第二道防线。
+   ⚠️ **（2026-09-20 更正）上面这条"只覆盖四个前缀"仍然成立，但"全站没有 CSP"已经不成立了**：
+   全站页面级 CSP 现在落在 **caddy 层**（唯一能看到每一个响应的地方），由 `VANBLOG_CSP_MODE` 控制，
+   **默认 `report`** —— 发的是 `Content-Security-Policy-Report-Only`，**只报告不拦截**。
+   默认不直接 `enforce` 是有意的：全站策略一旦强制生效，打坏的是"站长自己加的第三方脚本 / 字体 / 统计"
+   这类我们看不见的东西，所以先让它报告一段时间。策略是**生成配置时注入**到既有的全局 `headers` handler 里的，
+   两个模板文件都没被改（`off` 模式下生成结果与模板逐字节相同），主模板与降级模板因此不会漂。
+   内置策略：`default-src 'self'`；`script-src 'self' 'unsafe-inline'` + googletagmanager + 百度统计；
+   `style-src 'self' 'unsafe-inline'` + zeoseven 字体 + jsDelivr；`img-src * data: blob:`（正文可以嵌任意外链图）；
+   `font-src`；`connect-src 'self'` + GA 各域 + 百度；`frame-src 'self' https:`（正文白名单允许 iframe 嵌
+   B 站/YouTube）；`frame-ancestors 'self'`、`object-src 'none'`、`base-uri 'none'`、`form-action 'self'`
+   （正文白名单里没有 `form`，所以这条安全）。`upgrade-insecure-requests` **故意不加**（它会打坏纯 HTTP 站点，
+   而 HTTPS 跳转已由 caddy 负责），并有守卫钉住它不出现。
+   ⚠️ **`script-src` 里仍有 `'unsafe-inline'`，所以它现在还挡不住内联脚本注入** —— 去掉它需要先解决
+   三处内联：主题初始化脚本、每页内容不同的 JSON-LD（⇒ hash 方案要在渲染时算 hash 再塞进响应头，
+   caddy 做不到）、以及站长自己写的 `customScript`。**在 `report` 模式 + `unsafe-inline` 下，
+   这一层的价值是"把违规暴露出来"和挡住 `object`/`base`/表单外发/被框，不是 XSS 的第二道防线**，
+   别高估它。想自己写整条策略用 `VANBLOG_CSP_OVERRIDE`（⚠️ 故意不提供"往任意指令追加"的入口，
+   那等于允许把 `script-src` 悄悄放宽成 `*`）；只想加来源用 `VANBLOG_CSP_EXTRA_SCRIPT_SRC` /
+   `_EXTRA_CONNECT_SRC`；违规报告地址用 `VANBLOG_CSP_REPORT_URI`（⚠️ **建议指向你自己的日志服务**：
+   这个端点匿名可写，接在本站上就是现成的日志炸弹/DoS 面）。
 - **未捕获异常现在会让进程以非 0 退出**（FATAL 日志 + 跑关停钩子，3 秒硬上限，然后 `exit(1)`），
   交给容器的 `restart` 策略处理。以前只记日志继续跑，于是会出现"容器 `Up`、健康检查 200、
   `restart: always` 永不介入，而进程已经处于未定义状态"—— 这正是 `scripts/start.js` 当初重写要修的
@@ -448,8 +465,12 @@ POST /api/admin/backup/jwt/rotate        # 要管理员登录态（token 头）
 
 ## 已知限制（尚未处理）
 
-- **没有 CSP**。前台/后台都有大量内联样式、bytemd 注入的脚本与可选的第三方统计，
-  严 CSP 会直接把站点搞坏，松 CSP 又等于没有；要做必须先给内联样式发 nonce（`next/script` 也要一并改）。
+- **全站 CSP 已有，但默认是 `report`（只报告不拦截），而且 `script-src` 里还有 `'unsafe-inline'`**
+  （2026-09-20 起，见上面「CSP」那条与 `VANBLOG_CSP_MODE`）。⚠️ 旧版这里写的是「没有 CSP」，已作废。
+  真正剩下的限制是：去掉 `'unsafe-inline'` 需要先给三处内联脚本发 nonce 或改外链 —— 主题初始化脚本、
+  **每页内容都不同**的 JSON-LD（hash 方案要在渲染时算 hash 再写进响应头，caddy 层做不到）、
+  以及站长自己在「定制化」里写的 `customScript`。⚠️ 另有一条已知无解的取舍：**ISR 缓存的页面里 nonce 会被复用**，
+  而同源攻击者本来就读得到那份 HTML ⇒ **前台不该用 nonce**，只能用 hash 或来源白名单；后台（非缓存）才适合 nonce。
 - **没有全局 `ValidationPipe`**（`class-validator` 不是依赖），参数校验靠各处手写；
   请求净化中间件是「黑名单」而不是「白名单」。
 - `/api/admin/init` 判定「是否已初始化」仍是查库（存在理论上的 TOCTOU），但现在有三层缓解：

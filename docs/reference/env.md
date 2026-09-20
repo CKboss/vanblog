@@ -110,6 +110,11 @@ server 的配置来自 `config.yaml`（容器内 `/etc/van-blog/config.yaml` 或
 | `VANBLOG_CADDY_ASK_ALLOW_ALL` | 空 | `true` 恢复「任何域名都批准按需证书」的旧行为（多域名/CDN 场景才需要；默认只批准本站已登记的域名） |
 | `VANBLOG_HSTS_MAX_AGE` | `31536000`（一年） | 内置 caddy 在 **443** 上下发的 `Strict-Transport-Security` 的 max-age 秒数。写 `0` = **不发这个头**（这是唯一关闭它的方式），非法值回落默认。**只加在 443**：80 上不发（浏览器按 RFC 会忽略明文连接上的 HSTS），降级配置（证书校验不过时用的那份自签配置）**故意不发** —— 在证书本来就不可信的路径上要求「一年内只用 HTTPS」等于把站长锁在站外。⚠️ **设了之后这个域名在 max-age 窗口内无法退回纯 HTTP**，而且证书续签失败时浏览器是硬失败、不给「仍然前往」。所以务必确认证书目录真的持久化了（`./vanblog.sh doctor` 会查这一项） |
 | `VANBLOG_CADDY_ACCESS_LOG` | 开 | 内置 caddy 的**访问日志**（每条请求一行 JSON，落在 `<日志目录>/caddy.log`，100MB 轮转、留 10 份）。写 `false` / `off` / `0` / `no` 关闭；留空、写错、写别的值一律**保持开启** —— 失败方向是「留住审计日志」。为什么给这个开关：①访问日志里有访客 IP，本身是个隐私面；②被打的时候它是每秒几千行的真实磁盘 IO。⚠️ 这是 **caddy** 的访问日志，与上面 `VANBLOG_ACCESS_LOG`（server 自己那份，默认关）是两回事 |
+| `VANBLOG_CSP_MODE` | `report` | 站点级 `Content-Security-Policy` 的模式，三档：`off`（不发）／`report`（发 **`Content-Security-Policy-Report-Only`**，**只报告不拦截**）／`enforce`（发正式的 CSP，真的拦截）。⚠️ **默认是 `report` 而不是 `enforce`**：全站策略一旦强制生效，打坏的是"站长自己加的第三方脚本/字体/统计"这类我们看不见的东西，所以先让它只报告。写错值（不是这三个之一）**回落默认 `report` 并打 WARN**，不会静默变成 `off`。<br>⚠️ 这一层是**内置 caddy 在生成配置时注入**的，覆盖**所有**响应（前台页面、后台、静态资源），与 server 侧那个只覆盖 `/static/`、`/rss/`、`/sitemap/`、`/swagger` 四个前缀的中间件是两回事 |
+| `VANBLOG_CSP_REPORT_URI` | 空 | 浏览器把违规报告 POST 到这个地址（`report-uri`）。留空 = 不发这个指令，违规只在**浏览器控制台**里可见。⚠️ 值里含控制字符（CR/LF）会被整条忽略并 WARN。<br>⚠️ **建议指向你自己的日志服务，不要指向本站**：这个端点是匿名可写的，接在本站上就是一个现成的日志炸弹/DoS 面；如果一定要本站接，必须限流、限体积、并且不要记录带查询串的完整 URL |
+| `VANBLOG_CSP_EXTRA_SCRIPT_SRC` | 空 | 往 `script-src` 追加来源（空格分隔）。⚠️ 值会被逐个校验，含控制字符的整条忽略并 WARN |
+| `VANBLOG_CSP_EXTRA_CONNECT_SRC` | 空 | 往 `connect-src` 追加来源（同上） |
+| `VANBLOG_CSP_OVERRIDE` | 空 | **整条策略自己写**（写了就完全取代内置策略）。⚠️ 故意**没有**提供"往任意指令追加"的入口 —— 那等于允许把 `script-src` 悄悄放宽成 `*`；要改就整条自己负责。含控制字符时整条忽略、回落内置策略并 WARN |
 | `VANBLOG_ACCESS_LOG` | 关 | `true`/`1` 时每个非静态请求打一行 INFO 访问日志（容易刷屏，排障时再开） |
 | `VANBLOG_SLOW_REQUEST_MS` | `5000` | 超过这个毫秒数的请求打 WARN 慢日志（`0` = 关；5xx 永远会打一条带 request-id 的 ERROR） |
 | `VANBLOG_REQUEST_TIMEOUT_MS` | `300000` | Node HTTP server 的 `requestTimeout`（5000–3600000） |
