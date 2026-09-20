@@ -19,7 +19,10 @@ import {
 } from "../api/getArticles";
 import { LinkPageProps } from "../pages/link";
 import { isListedPublicCategory } from "./publicCategories";
-import { groupTimelineByYearAndMonth } from "./timelineMonths";
+import {
+  groupTimelineByYearAndMonth,
+  trimTimelineYearGroups,
+} from "./timelineMonths";
 import { Article } from "../types/article";
 
 export async function getIndexPageProps(): Promise<IndexPageProps> {
@@ -56,7 +59,16 @@ export async function getTimeLinePageProps(): Promise<TimeLinePageProps> {
   // 以及下游组件（TimelineArchives/TimeLineItem/ArticleList）的既有契约一致。
   const sortedArticles: Record<string, Article[]> =
     (await getArticlesByTimeLine()) || {};
-  const yearGroups = groupTimelineByYearAndMonth(sortedArticles);
+  // 🔴 裁成"渲染真正需要的最小字段集"再进 pageProps。
+  //    实测：不裁的话 53 篇完整 Article ≈ 23.7KB（占 /timeline 的 __NEXT_DATA__ 74%），
+  //    而 ArticleList 每篇只读 id/title/createdAt/pathname 四样。
+  //    ⚠️ 裁剪只动每个元素的字段，**不动结构与顺序**，也**不动 yearGroup.count**
+  //    （count 不能用 articles.length 代替：有月份分组时 year 级 articles 是空数组）。
+  //    ⚠️ 必须同时裁 year 级与 month 级：`months.length === 0` 那个兜底分支是真实可达的
+  //    （整年都解析不出日期时 year 级 articles 才有内容），只裁一边会让它把肥对象带出去。
+  const yearGroups = trimTimelineYearGroups(
+    groupTimelineByYearAndMonth(sortedArticles)
+  );
   // ⚠️ 必须兜底：Next 的 getStaticProps 返回值要能被序列化，`undefined` 会直接让
   //    **生产构建失败**（`Error serializing .wordTotal … undefined cannot be serialized`）。
   //    触发条件很现实：构建前台时 server 不可达（先构建后起服务、或 CI/Docker 里指不到活的服务），

@@ -1,4 +1,6 @@
-import { Article } from "../../types/article";
+// ⚠️ 同 ArticleList：本组件只把 articles 透传下去并读 `.length`，
+//    所以按"渲染真正需要的最小字段集"声明，避免完整 Article 顺着 props 类型回流到 pageProps。
+import { type TimelineArticleRef } from "../../utils/timelineMonths";
 import { useState } from "react";
 import ArticleList from "../ArticleList";
 import {
@@ -8,7 +10,7 @@ import {
 
 export default function (props: {
   date: string;
-  articles: Article[];
+  articles: TimelineArticleRef[];
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;

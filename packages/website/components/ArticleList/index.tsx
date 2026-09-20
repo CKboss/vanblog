@@ -2,11 +2,14 @@ import dayjs from "dayjs";
 import Link from "next/link";
 
 import { getTarget } from "../Link/tools";
-import { type Article } from "../../types/article";
+// ⚠️ 这里刻意**不要** `Article`：本组件每篇只读 4 样东西（见 TimelineArticleRef 的说明），
+//    声明成完整 Article 会让调用方以为"必须传整篇"，从而把没人读的字段一路带进 pageProps。
+//    收窄之后传完整 `Article` 仍然合法（结构类型），但传裁剪过的 ref 也合法 —— 这才是我们要的。
+import { type TimelineArticleRef } from "../../utils/timelineMonths";
 import { getArticlePath } from "../../utils/getArticlePath";
 
 export default (props: {
-  articles: Article[];
+  articles: TimelineArticleRef[];
   showYear?: boolean;
   openArticleLinksInNewWindow: boolean;
   onClick?: () => void;

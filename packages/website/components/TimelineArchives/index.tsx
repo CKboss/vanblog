@@ -1,9 +1,11 @@
 import TimeLineItem from "../TimeLineItem";
-import { TimelineYearGroup } from "../../utils/timelineMonths";
-import { Article } from "../../types/article";
+import {
+  TimelineYearGroup,
+  type TimelineArticleRef,
+} from "../../utils/timelineMonths";
 
 export default function TimelineArchives(props: {
-  yearGroups: TimelineYearGroup<Article>[];
+  yearGroups: TimelineYearGroup<TimelineArticleRef>[];
   openArticleLinksInNewWindow: boolean;
 }) {
   if (!props.yearGroups.length) {

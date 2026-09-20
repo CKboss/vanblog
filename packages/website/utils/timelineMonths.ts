@@ -202,3 +202,81 @@ export function describeTimelineArchives(
     })),
   };
 }
+
+/**
+ * `/timeline` 上**每篇文章真正被读到的字段**，一个不多。
+ *
+ * ## 为什么要有这个类型（实测的白传量）
+ *
+ * 改动前 `getTimeLinePageProps()` 把 `/api/public/timeline` 返回的**完整 `Article`**
+ * 直接塞进 `yearGroups`，于是每个访客都要下载 53 篇 × ~448B ≈ **23.7KB** 的 pageProps
+ * （占 `/timeline` 那份 `__NEXT_DATA__` 32.1KB 的 74%），而渲染链路
+ * `TimelineArchives → TimeLineItem → ArticleList` 每篇**只读 4 样东西**：
+ *
+ * 1. `getArticlePath(article)` ⇒ 只需要 `pathname`（缺失时回落 `id`）
+ * 2. `article.id` ⇒ React 的 `key`
+ * 3. `article.createdAt` ⇒ `dayjs(...).format("MM-DD")`
+ * 4. `article.title` ⇒ 链接文字
+ *
+ * `content`/`excerpt`/`cover`/`firstImage`/`tags`/`category`/`viewer`/`visited`/
+ * `readingMinutes`/`thumbAvif`/`meta`… **一个都没被读**。这不是"以后可能会用"的预留：
+ * 列表页的卡片早就走 `toListView` 让服务端不下发 `content` 了（见 `types/article.ts`
+ * 对 `excerpt` 的说明），只有 `/timeline` 这条链还在传完整对象。
+ *
+ * ## ⚠️ 两条不许破坏的既有性质
+ *
+ * - **`count` 不能用 `articles.length` 代替**：`groupTimelineByYearAndMonth` 在
+ *   "有月份分组"时故意把 year 级的 `articles` 留空（组件在 `months` 非空时根本不读它），
+ *   所以 `count` 是唯一可靠的篇数来源。裁剪**只动 articles 里每个元素的字段**，不动结构。
+ * - **`months.length === 0` 的兜底分支是真实可达的**（整年的文章都解析不出日期时，
+ *   year 级 `articles` 才会有内容，`TimelineArchives` 也正是靠这个分支渲染）。
+ *   所以裁剪必须**同时**覆盖 `yearGroup.articles` 与 `monthGroup.articles`，
+ *   否则那个分支会把完整对象原样带出去。
+ */
+export type TimelineArticleRef = Pick<
+  Article,
+  "id" | "title" | "createdAt" | "pathname"
+>;
+
+/**
+ * 把一篇（可能很肥的）文章裁成 `TimelineArticleRef`。
+ *
+ * ⚠️ `pathname` 只在**真的是非空字符串**时才带上：它本来就是可选字段，
+ * 塞一个 `pathname: undefined` 进去虽然 `JSON.stringify` 会丢掉、
+ * 但会让 `Object.keys()` 的结果变得不稳定（守卫要按"键集合恰好是这四个"来断言）。
+ */
+export function toTimelineArticleRef<T extends TimelineArticleLike>(
+  article: T
+): TimelineArticleRef {
+  const ref: TimelineArticleRef = {
+    id: article.id,
+    title: article.title,
+    createdAt: article.createdAt as Article["createdAt"],
+  };
+  const pathname = (article as { pathname?: unknown }).pathname;
+  if (typeof pathname === "string" && pathname.length > 0) {
+    ref.pathname = pathname;
+  }
+  return ref;
+}
+
+/**
+ * 裁剪整棵 `yearGroups`（year 级与 month 级都裁），结构与顺序**逐字保留**。
+ *
+ * ⚠️ 这是纯函数、不改动入参（`getStaticProps` 的返回值会被 Next 序列化，
+ * 但就地改动会让"同一份数据被两个页面共用"时出现难查的耦合）。
+ */
+export function trimTimelineYearGroups<T extends TimelineArticleLike>(
+  yearGroups: TimelineYearGroup<T>[]
+): TimelineYearGroup<TimelineArticleRef>[] {
+  return yearGroups.map((yearGroup) => ({
+    ...yearGroup,
+    // ⚠️ count 原样保留（见上面那条"不能用 articles.length 代替"）
+    count: yearGroup.count,
+    articles: yearGroup.articles.map(toTimelineArticleRef),
+    months: yearGroup.months.map((monthGroup) => ({
+      ...monthGroup,
+      articles: monthGroup.articles.map(toTimelineArticleRef),
+    })),
+  }));
+}
