@@ -165,9 +165,9 @@ if (accessLogDisabled) {
  *   这个方向的错误代价远大于"没照办站长的意图"。
  *
  * ⚠️ WARN 走 **stderr**（stdout 是要被重定向成 caddy.json 的，绝不能污染）。
- *    但 entrypoint 现在两处调用都带 `2>/dev/null`，所以这些 WARN 在容器日志里**看不到**，
- *    只有手动跑本脚本或跑守卫时可见。要让站长看得见，需要 entrypoint 不再丢弃 stderr
- *    （`entrypoint.sh` 不在本文件的改动范围内，已作为待办报给父代理）。
+ *    entrypoint 曾经在这两处调用上带 `2>/dev/null`，于是所有 WARN 在容器日志里都看不到
+ *    （"站长把值设错了"因此永远静默）；那条已在 `6fff2ed4` 修掉，现在 stderr 会正常进
+ *    `podman logs` / `docker logs`。
  */
 const HSTS_HEADER = 'Strict-Transport-Security';
 const HSTS_DEFAULT_MAX_AGE = 31536000; // 一年
@@ -275,6 +275,237 @@ if (hstsStats.dropped.length > 0) {
 // ⚠️ 这里**故意不**为"模板里本来就没有 HSTS 头"发提示：降级模板本来就没有（那是设计决定），
 //    每次生成都打一行等于噪音；而"主模板的 HSTS 被人删了"这种情况由守卫负责发现
 //    （scripts/tests/caddy-config.test.sh 里有一条直接读模板断言 srv0 必须有这个头）。
+
+/**
+ * 站点级 CSP：`VANBLOG_CSP_MODE=off|report|enforce`（默认 **report**）。
+ *
+ * ## 为什么落点在 caddy，而不是应用层
+ *
+ * 应用层的 `securityHeadersMiddleware`（`packages/server/src/utils/rateLimit.ts`）只在
+ * `matchesPreNestPrefix` 那 4 个前缀上生效（`/static/`、`/rss/`、`/sitemap`、`/swagger`），
+ * 而**前台是独立的 Next 进程、后台是 caddy 直接 file_server 的静态产物**，两者都不经过它
+ * ⇒ 在 caddy 这一层之前，**全站页面没有任何 CSP**。这里补的正是那一段。
+ * 应用层那三条（`frame-ancestors`/`object-src`/`base-uri`）保留，作为"不经 caddy 部署"的兜底。
+ *
+ * ⚠️ 两层会**同时出现在同一个响应上**（实测，不是推断：真 caddy v2.11.4 + 一个也设 CSP 的上游，
+ *    `reverse_proxy` **不覆盖**上游的头，响应里出现**两条** `Content-Security-Policy`）。
+ *    按 CSP 规范浏览器会**同时执行两条策略**（等效于取交集），而这里下发的策略在那三条指令上
+ *    与应用层**取值完全相同**（`frame-ancestors 'self'`、`object-src 'none'`、`base-uri 'none'`），
+ *    所以并存不会互相削弱，也不会产生"哪条生效"的不确定性。
+ * ⚠️ 同一层内部：**后一条 `set` 会覆盖前一条**（实测），所以将来要给 `/admin*` 单独下发更严的
+ *    策略是可行的；而 `add` 是追加（实测会出现三条头），不要用 `add`。
+ * ⚠️ `headers` handler **没有 `defer` 字段**（v2.11.4 严格解码会以 `unknown field "defer"` 拒绝整份配置
+ *    ⇒ entrypoint 退回降级模板 ⇒ HTTPS 静默变自签）。别照着 Caddyfile 的 `header defer` 写法搬。
+ *
+ * ## 为什么默认是 report 而不是 enforce，以及 `'unsafe-inline'` 为什么去不掉
+ *
+ * `script-src` 必须带 `'unsafe-inline'`，这**不是偷懒而是结构性的**，证据来自真实构建产物：
+ * - `packages/admin/dist/index.html`：**2 个裸内联 `<script>`**（umi 3 运行时，不支持 nonce）；
+ * - `packages/website/.next/server/pages/index.html`：**7 个内联脚本** = JSON-LD、
+ *   `vanblog-theme-init`（THEME_INIT_SCRIPT）、**5 个 Next.js 自己发出的裸内联脚本**，
+ *   外加站长在「定制化」里配的第三方统计（也是内联的）。
+ * - 而这些 HTML 是**被 caddy 直接 `file_server` 的缓存文件**（ISR 产物）⇒ **nonce 不可能**：
+ *   nonce 会被烤进缓存文档，同源 XSS 本来就能读到那份 HTML，等于零防护；
+ *   **hash 也不现实**：Next 的内联脚本每次构建都变，要把它塞进 caddy 配置等于每次构建改配置。
+ *
+ * ⚠️ 所以请**如实**理解这一层的价值，别把它说成"已防住 XSS"：
+ * 带 `'unsafe-inline'` 的 CSP **挡不住内联脚本注入**，但仍然挡得住
+ * ①加载攻击者的**外链**脚本（`<script src="https://evil/x.js">`，这是挂马/挖矿最常见的投递方式）、
+ * ②`<object>`/`<embed>` 与 `<base>` 劫持、③被 iframe 嵌进钓鱼页（`frame-ancestors`）、
+ * ④表单提交到站外（`form-action`）、⑤**把数据外传到攻击者域名**（`connect-src`/`img-src` 白名单）。
+ * 第 ⑤ 条在"敌意环境下持续发布信息"的场景里价值最高：它把"注入成功"与"数据能送出去"解耦。
+ *
+ * 默认 `report` 的理由：`Content-Security-Policy-Report-Only` **不阻断任何东西**，只让浏览器上报违规。
+ * 默认 `enforce` 会打坏未知数量的站点（站长的自定义统计、字体、图床外链各不相同，见下面的
+ * "白名单不可能预先写全"）；默认 `off` 又等于什么都没做 ⇒ report 是唯一能"先看清会打坏什么"的默认值。
+ *
+ * ## 白名单不可能预先写全 ⇒ 必须给站长扩展入口
+ *
+ * 「定制化」里的 `customScript`/`customHtml` 是**站长自己填的**，可以引用任意第三方域名。
+ * 实测这台机器上的构建产物里就有百度统计、GA、51la、以及一个 time.is 时钟挂件 —— 后两个不在
+ * 我们的默认白名单里。所以除了 `VANBLOG_CSP_EXTRA_SCRIPT_SRC` / `_EXTRA_CONNECT_SRC`，
+ * 还提供 `VANBLOG_CSP_OVERRIDE`（整条策略自己写）。⚠️ **没有提供"追加任意指令"的入口**：
+ * 同一条策略里**重复的指令只有第一条生效**（CSP 规范），把 `; script-src ...` 追加到末尾会被静默忽略，
+ * 那种"看起来配上了其实没生效"的旋钮比没有更糟。
+ */
+const CSP_HEADER = 'Content-Security-Policy';
+const CSP_REPORT_HEADER = 'Content-Security-Policy-Report-Only';
+const CSP_MODES = new Set(['off', 'report', 'enforce']);
+const CSP_DEFAULT_MODE = 'report';
+
+/** 我们自己的代码引用到的第三方来源（逐个从源码核过；站长自己加的统计不在这里，见 EXTRA_*）。 */
+const CSP_SCRIPT_SRC = ["'self'", "'unsafe-inline'", 'https://www.googletagmanager.com', 'https://hm.baidu.com'];
+const CSP_STYLE_SRC = ["'self'", "'unsafe-inline'", 'https://static.zeoseven.com', 'https://cdn.jsdelivr.net'];
+/** 正文可以嵌任意外链图片（图床/外链转存），所以这里只能是 `*`；`data:` 要显式写（`*` 不含它）。 */
+const CSP_IMG_SRC = ['*', 'data:', 'blob:'];
+const CSP_FONT_SRC = ["'self'", 'data:', 'https://static.zeoseven.com', 'https://cdn.jsdelivr.net'];
+const CSP_CONNECT_SRC = [
+  "'self'",
+  'https://www.google-analytics.com',
+  'https://analytics.google.com',
+  'https://region1.google-analytics.com',
+  'https://hm.baidu.com',
+];
+/** 正文允许 `<iframe>`（B 站/YouTube 嵌入，见 markdownSanitize 的白名单），所以 frame-src 要放行 https。 */
+const CSP_FRAME_SRC = ["'self'", 'https:'];
+/** 这三条与应用层 `securityHeadersMiddleware` 取值一致（见文件头"两层并存"那段），`form-action` 是这里新增的。 */
+const CSP_FIXED_TAIL = ["frame-ancestors 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'"];
+
+/** 拒 CR/LF 与其它控制字符：这些值会被写进**响应头**，不能让它们变成头注入。 */
+function hasControlChars(text) {
+  // eslint-disable-next-line no-control-regex
+  return /[\u0000-\u001f\u007f]/.test(text);
+}
+
+/** 解析模式：未设置/空 ⇒ 默认 report；垃圾值 ⇒ **回落默认 + WARN，绝不当成 off**。 */
+function resolveCspMode(raw) {
+  const warns = [];
+  const text = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (text === '') return { mode: CSP_DEFAULT_MODE, warns };
+  if (CSP_MODES.has(text)) return { mode: text, warns };
+  warns.push(
+    `VANBLOG_CSP_MODE='${text}' 不是 off/report/enforce 之一，已回落到默认 ${CSP_DEFAULT_MODE}` +
+      '（Report-Only，只上报不阻断）；注意拼错的值不会被当成 off',
+  );
+  return { mode: CSP_DEFAULT_MODE, warns };
+}
+
+/** 解析"追加到某个指令里的来源列表"：按空白切分，拒控制字符与分号（分号会另起一条指令）。 */
+function resolveCspExtra(raw, name, warns) {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text === '') return [];
+  if (hasControlChars(text)) {
+    warns.push(`${name} 含控制字符（CR/LF 等），已整条忽略：这些值会进响应头，不允许出现头注入形状`);
+    return [];
+  }
+  if (text.includes(';')) {
+    warns.push(`${name} 含分号，已整条忽略：同一策略里重复的指令只有第一条生效，追加指令会被静默忽略；` +
+      '要改写整条策略请用 VANBLOG_CSP_OVERRIDE');
+    return [];
+  }
+  return text.split(/\s+/).filter(Boolean);
+}
+
+const cspWarns = [];
+// ⚠️ 只解析一次：第一版为了拿 warns 又调了一遍 resolveCspMode（同一个输入解析两次），
+//    行为上无害但读起来像"两次可能不同"，而且将来若给它加了副作用就会变成真 bug。
+const { mode: cspMode, warns: cspModeWarns } = resolveCspMode(process.env.VANBLOG_CSP_MODE);
+for (const w of cspModeWarns) cspWarns.push(w);
+
+const cspRawOverride = (process.env.VANBLOG_CSP_OVERRIDE || '').trim();
+let cspOverride = '';
+if (cspRawOverride !== '') {
+  if (hasControlChars(cspRawOverride)) {
+    cspWarns.push('VANBLOG_CSP_OVERRIDE 含控制字符（CR/LF 等），已整条忽略并改用内置策略');
+  } else {
+    cspOverride = cspRawOverride;
+  }
+}
+
+const cspExtraScript = resolveCspExtra(process.env.VANBLOG_CSP_EXTRA_SCRIPT_SRC, 'VANBLOG_CSP_EXTRA_SCRIPT_SRC', cspWarns);
+const cspExtraConnect = resolveCspExtra(process.env.VANBLOG_CSP_EXTRA_CONNECT_SRC, 'VANBLOG_CSP_EXTRA_CONNECT_SRC', cspWarns);
+
+/** 拼出最终策略字符串。@returns {string} 空串表示"不下发任何 CSP 头"。 */
+function buildCspPolicy() {
+  if (cspMode === 'off') return '';
+  if (cspOverride) {
+    // OVERRIDE 只补 report-uri（站长没写才补），其余原样使用 —— 这是逃生口，不要"帮"站长改策略
+    const withReport = cspReportUri && !/(^|[;\s])report-uri\s/.test(cspOverride)
+      ? `${cspOverride.replace(/;\s*$/, '')}; report-uri ${cspReportUri}`
+      : cspOverride;
+    return withReport;
+  }
+  const scriptSrc = [...CSP_SCRIPT_SRC, ...cspExtraScript];
+  const connectSrc = [...CSP_CONNECT_SRC, ...cspExtraConnect];
+  const parts = [
+    `default-src 'self'`,
+    `script-src ${scriptSrc.join(' ')}`,
+    `style-src ${CSP_STYLE_SRC.join(' ')}`,
+    `img-src ${CSP_IMG_SRC.join(' ')}`,
+    `font-src ${CSP_FONT_SRC.join(' ')}`,
+    `connect-src ${connectSrc.join(' ')}`,
+    `frame-src ${CSP_FRAME_SRC.join(' ')}`,
+    ...CSP_FIXED_TAIL,
+  ];
+  if (cspReportUri) parts.push(`report-uri ${cspReportUri}`);
+  return parts.join('; ');
+}
+
+/**
+ * 报告端点：默认**不设**（不发 `report-uri`/`report-to`）。
+ *
+ * ⚠️ 刻意**不在本项目内提供收集端点**：一个匿名可写的收集接口就是现成的 DoS 与日志炸弹
+ *    （攻击者可以每秒打几千条违规报告，写满磁盘、淹掉真日志），而 CSP 报告里还带着页面 URL 与
+ *    被拦资源地址。要收报告就指向站长自己的日志服务。
+ */
+const cspReportRaw = (process.env.VANBLOG_CSP_REPORT_URI || '').trim();
+let cspReportUri = '';
+if (cspReportRaw !== '') {
+  if (hasControlChars(cspReportRaw)) {
+    cspWarns.push('VANBLOG_CSP_REPORT_URI 含控制字符，已忽略（不发 report-uri）');
+  } else if (!/^https?:\/\/[^\s;]+$/i.test(cspReportRaw)) {
+    cspWarns.push(
+      `VANBLOG_CSP_REPORT_URI='${cspReportRaw}' 不是 http(s) URL，已忽略（不发 report-uri）；` +
+        '⚠️ 拼错的值不会被当成"关闭"以外的别的意思，报告功能只是不生效',
+    );
+  } else if (cspReportRaw.includes(';')) {
+    cspWarns.push('VANBLOG_CSP_REPORT_URI 含分号，已忽略（避免注入别的指令）');
+  } else {
+    cspReportUri = cspReportRaw;
+  }
+}
+
+const cspPolicy = buildCspPolicy();
+const cspHeaderName = cspMode === 'enforce' ? CSP_HEADER : CSP_REPORT_HEADER;
+
+/**
+ * 把 CSP 挂到**全局那个** headers handler 上（判据：`set` 里含 `X-Content-Type-Options`，
+ * 两个 server 各一处，共 2 处）。⚠️ 用这个判据而不是"routes[0]"，是因为将来 route 顺序变了
+ * 也不该让 CSP 静默消失；守卫会断言"恰好改写了 2 处"，0 处或 3 处都算失败。
+ * @returns {{applied:number, removed:number}}
+ */
+function applyCsp(node, stats) {
+  if (Array.isArray(node)) {
+    node.forEach((child) => applyCsp(child, stats));
+    return stats;
+  }
+  if (!node || typeof node !== 'object') return stats;
+
+  if (node.handler === 'headers' && node.response && typeof node.response === 'object') {
+    const bag = node.response.set;
+    if (bag && typeof bag === 'object' && Object.prototype.hasOwnProperty.call(bag, 'X-Content-Type-Options')) {
+      // 两种模式的头名不同：切换模式时必须把另一个删掉，否则同一个响应上会同时挂
+      // "强制"和"只上报"两条策略（浏览器会同时执行，等于站长以为在观察、其实已经在阻断）。
+      delete bag[CSP_HEADER];
+      delete bag[CSP_REPORT_HEADER];
+      if (cspPolicy) {
+        bag[cspHeaderName] = [cspPolicy];
+        stats.applied += 1;
+      } else {
+        stats.removed += 1;
+      }
+    }
+  }
+
+  for (const key of Object.keys(node)) applyCsp(node[key], stats);
+  return stats;
+}
+
+const cspStats = applyCsp(config, { applied: 0, removed: 0 });
+for (const w of cspWarns) process.stderr.write(`[caddyConfig] ⚠️ ${w}\n`);
+process.stderr.write(
+  cspPolicy
+    ? `[caddyConfig] CSP mode=${cspMode}（头名 ${cspHeaderName}，改写 ${cspStats.applied} 处）` +
+      `${cspReportUri ? '，report-uri 已设' : '，未设 report-uri'}` +
+      `${cspOverride ? '，使用 VANBLOG_CSP_OVERRIDE 的自定义策略' : ''}\n`
+    : `[caddyConfig] CSP mode=off（不下发任何 CSP 头，移除 ${cspStats.removed} 处）\n`,
+);
+if (cspMode === 'report' && cspPolicy) {
+  process.stderr.write(
+    '[caddyConfig] ⚠️ Report-Only **不阻断任何东西**，它只是让浏览器上报违规；' +
+      '观察一段时间后确认没有误伤，再设 VANBLOG_CSP_MODE=enforce 才会真正生效\n',
+  );
+}
 
 const tls = config.apps && config.apps.tls;
 const automation = tls && tls.automation;

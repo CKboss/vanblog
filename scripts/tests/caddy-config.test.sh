@@ -178,7 +178,8 @@ echo "== HSTS max-age 可配置（VANBLOG_HSTS_MAX_AGE，默认一年）=="
 #    生成器会照办（上面那节钉的是模板侧，这节钉的是"运行时真的按变量走"）。
 #
 # 判定形状：hsts0=srv0(:443) 的头值（没有就 '-'）｜hsts1=srv1(:80) 的头值｜
-#           others0=srv0 除 HSTS 外的安全响应头个数（改 HSTS 不该伤到别的头）｜
+#           others0=srv0 上「那四个既有安全响应头」的个数（改 HSTS 不该伤到别的头；⚠️ 按名字数，
+#                    不按「除 HSTS 外的全部键」数，否则以后每加一个安全头都会误伤这条断言）｜
 #           subdom/preload=产出里是否出现这两个指令（出现即违规）
 HSTS_EXTRACTOR="$(mktemp)"
 cat > "${HSTS_EXTRACTOR}" <<'HSTSJS'
@@ -194,6 +195,16 @@ process.stdin.on('end', () => {
   }
   const servers = (d.apps && d.apps.http && d.apps.http.servers) || {};
   const HEADER = 'Strict-Transport-Security';
+  // ⚠️ others0 必须**按名字**数这四个头，不能数「除 HSTS 外的全部 set 键」。
+  //    这条断言的原意是「改 HSTS 没有把别的头顶掉」，而「数全部键」会让**任何新增安全头**都把它打红
+  //    （本轮加站点级 CSP 时就是这么红的：4 → 5）。按名字数才能既保住原意、又不与新增头耦合。
+  //    ⚠️ 新增安全头时**不要**顺手往这个清单里加：它的语义是「HSTS 改动之前就已存在的那四个」。
+  const OTHER_SECURITY_HEADERS = [
+    'X-Content-Type-Options',
+    'Referrer-Policy',
+    'X-Frame-Options',
+    'Permissions-Policy',
+  ];
   const readServer = (name) => {
     const sv = servers[name];
     if (!sv) return { value: 'NO_SERVER', others: 0 };
@@ -209,7 +220,7 @@ process.stdin.on('end', () => {
             if (k === HEADER) {
               const v = bag[k];
               value = Array.isArray(v) ? v.join('; ') : String(v);
-            } else if (op === 'set') {
+            } else if (op === 'set' && OTHER_SECURITY_HEADERS.includes(k)) {
               others += 1;
             }
           }
@@ -429,6 +440,260 @@ case "${MUT_REP}" in
     fail "（反证失败）故意在 discard writer 上留下 filename/roll_size_mb，提取器却没报出来（得到 '${MUT_REP}'）" ;;
 esac
 rm -f "${ALOG_MUT}" "${ALOG_EXTRACTOR}"
+
+# ---------- 站点级 CSP：默认 Report-Only，可按路径分档，且不允许头注入 ----------
+# 为什么落在这里而不是应用层：`securityHeadersMiddleware` 只覆盖 4 个 pre-Nest 前缀，而
+# **前台是独立 Next 进程、后台是 caddy 直接 file_server 的静态产物**，两者都不经过它
+# ⇒ 在这一层之前全站页面没有任何 CSP。
+# ⚠️ 实测（真 caddy v2.11.4 + 一个也设 CSP 的上游）：`reverse_proxy` **不覆盖**上游的头，
+#    响应里会同时出现两条 CSP，浏览器按规范**同时执行**（等效交集）⇒ 所以这里那三条与应用层
+#    取值相同的指令必须**逐字一致**，下面有一条跨文件断言专门钉它。
+# ⚠️ 默认 report 而不是 enforce：Report-Only **不阻断任何东西**，`script-src` 又必须带
+#    `'unsafe-inline'`（admin 有 2 个 umi 裸内联脚本、前台有 5 个 Next 自己的裸内联脚本，
+#    而 HTML 是被 caddy 直发的 ISR 缓存文件 ⇒ nonce 会被烤进缓存、hash 每次构建都变）。
+#    所以断言里**不许**出现"已启用 CSP 防护"这类措辞，也不许悄悄加 `upgrade-insecure-requests`
+#    （那会打坏纯 HTTP 站点）。
+echo "== 站点级 CSP =="
+
+CSP_EXTRACTOR="$(mktemp)"
+cat > "${CSP_EXTRACTOR}" <<'CSPJS'
+let s = '';
+process.stdin.on('data', (d) => (s += d));
+process.stdin.on('end', () => {
+  let d;
+  try {
+    d = JSON.parse(s);
+  } catch (e) {
+    console.log('INVALID_JSON');
+    return;
+  }
+  const servers = (d.apps && d.apps.http && d.apps.http.servers) || {};
+  const ENF = 'Content-Security-Policy';
+  const RO = 'Content-Security-Policy-Report-Only';
+  // 判据是"全局那个 headers handler"：set 里含 X-Content-Type-Options（与实现同源）
+  const pick = (srv) => {
+    for (const r of (srv && srv.routes) || []) {
+      for (const h of r.handle || []) {
+        const st = (h.handler === 'headers' && h.response && h.response.set) || null;
+        if (st && Object.prototype.hasOwnProperty.call(st, 'X-Content-Type-Options')) {
+          return { enf: (st[ENF] || []).join('|') || '-', ro: (st[RO] || []).join('|') || '-',
+                   others: Object.keys(st).filter((k) => k !== ENF && k !== RO).length };
+        }
+      }
+    }
+    return { enf: '-', ro: '-', others: -1 };
+  };
+  const a = pick(servers.srv0);
+  const b = pick(servers.srv1);
+  console.log('SRV0_ENF=' + a.enf);
+  console.log('SRV0_RO=' + a.ro);
+  console.log('SRV0_OTHERS=' + a.others);
+  console.log('SRV1_ENF=' + b.enf);
+  console.log('SRV1_RO=' + b.ro);
+});
+CSPJS
+
+csp_run() { # tpl env... -> 提取器输出
+  local tpl="$1"; shift
+  env "$@" "${NODE_BIN}" "${HELPER}" "${tpl}" permission 'me@example.com' 2>/dev/null \
+    | "${NODE_BIN}" "${CSP_EXTRACTOR}"
+}
+csp_get() { printf '%s\n' "${CSP_REPORT}" | sed -n "s/^$1=//p"; }
+
+# --- 默认（未设任何变量）⇒ Report-Only，且**不发**强制头 ---
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=)"
+assert_eq "$(csp_get SRV0_ENF)" "-" "默认**不发**强制 CSP 头（Report-Only 阶段绝不阻断任何资源）"
+[[ "$(csp_get SRV0_RO)" == "default-src 'self'; script-src "* ]] \
+  && pass "默认下发 Content-Security-Policy-Report-Only，且以 default-src 'self'; script-src 开头" \
+  || fail "默认应下发 Report-Only 策略（得到 '$(csp_get SRV0_RO)'）"
+assert_eq "$(csp_get SRV0_OTHERS)" "5" "原有 5 个安全响应头一个没少（加 CSP 没把它们顶掉）"
+for frag in "object-src 'none'" "base-uri 'none'" "frame-ancestors 'self'" "form-action 'self'" \
+            "img-src * data: blob:" "script-src 'self' 'unsafe-inline'" "frame-src 'self' https:"; do
+  case "$(csp_get SRV0_RO)" in
+    *"${frag}"*) pass "默认策略含 ${frag}" ;;
+    *) fail "默认策略缺少 ${frag}（得到 '$(csp_get SRV0_RO)'）" ;;
+  esac
+done
+case "$(csp_get SRV0_RO)" in
+  *upgrade-insecure-requests*) fail "默认策略**不该**含 upgrade-insecure-requests（会打坏纯 HTTP 站点）" ;;
+  *) pass "默认策略不含 upgrade-insecure-requests（纯 HTTP 站点不被打坏）" ;;
+esac
+case "$(csp_get SRV0_RO)" in
+  *report-uri*) fail "未设 VANBLOG_CSP_REPORT_URI 时不该出现 report-uri" ;;
+  *) pass "未设报告端点时不发 report-uri（默认不在本项目内收报告）" ;;
+esac
+# 80 端口也要有：与 HSTS 不同，CSP 在明文页面上是有意义的（保护被渲染的内容本身）
+[[ "$(csp_get SRV1_RO)" == "default-src 'self'; script-src "* ]] \
+  && pass "srv1(:80) 同样下发 CSP（与 HSTS 的决定相反：CSP 在明文页面上仍有意义）" \
+  || fail "srv1(:80) 也应下发 CSP（得到 '$(csp_get SRV1_RO)'）"
+
+# --- off ⇒ 两个头都不发 ---
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=off)"
+assert_eq "$(csp_get SRV0_ENF)" "-" "mode=off 时不发强制头"
+assert_eq "$(csp_get SRV0_RO)" "-" "mode=off 时也不发 Report-Only 头（off 就是完全不发）"
+assert_eq "$(csp_get SRV0_OTHERS)" "5" "mode=off 时原有 5 个安全头仍在（关 CSP 不该连带关掉别的）"
+
+# --- enforce ⇒ 换成强制头名，且 Report-Only 必须消失 ---
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=enforce)"
+[[ "$(csp_get SRV0_ENF)" == "default-src 'self'; script-src "* ]] \
+  && pass "mode=enforce 下发 Content-Security-Policy（强制头）" \
+  || fail "mode=enforce 应下发强制头（得到 '$(csp_get SRV0_ENF)'）"
+assert_eq "$(csp_get SRV0_RO)" "-" "mode=enforce 时 Report-Only 头必须被删掉（否则两条策略同时执行）"
+
+# --- 垃圾值 ⇒ 回落默认 report，**绝不是 off** ---
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=abc)"
+[[ "$(csp_get SRV0_RO)" == "default-src 'self'; script-src "* ]] \
+  && pass "垃圾值 VANBLOG_CSP_MODE=abc 回落到默认 report（拼错不等于关掉安全头）" \
+  || fail "垃圾值应回落默认 report（得到 ro='$(csp_get SRV0_RO)' enf='$(csp_get SRV0_ENF)'）"
+assert_eq "$(csp_get SRV0_ENF)" "-" "垃圾值不会意外变成 enforce"
+# ⚠️ 这里必须真的把垃圾值传进去（第一版忘了设变量，于是"没有 WARN"是被自己造出来的假失败）
+CSP_WARN="$(env VANBLOG_CSP_MODE=abc "${NODE_BIN}" "${HELPER}" "${TEMPLATE}" permission 'me@example.com' 2>&1 >/dev/null | grep -c "VANBLOG_CSP_MODE='abc'")"
+[[ "${CSP_WARN}" -ge 1 ]] && pass "垃圾值会打 WARN 点名该变量（站长能发现自己拼错了）" \
+  || fail "垃圾值应打 WARN"
+
+# --- 报告端点：合法值追加，非法值忽略 ---
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=report VANBLOG_CSP_REPORT_URI=https://log.example.invalid/csp)"
+case "$(csp_get SRV0_RO)" in
+  *"; report-uri https://log.example.invalid/csp"*) pass "设了合法 report-uri 时追加到策略末尾" ;;
+  *) fail "合法 report-uri 应被追加（得到 '$(csp_get SRV0_RO)'）" ;;
+esac
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=report "VANBLOG_CSP_REPORT_URI=javascript:alert(1)")"
+case "$(csp_get SRV0_RO)" in
+  *report-uri*) fail "非 http(s) 的 report-uri 必须被忽略，不能进策略" ;;
+  *) pass "report-uri=javascript:… 被忽略（报告端点不能变成注入点）" ;;
+esac
+
+# --- 站长扩展入口：追加来源 / 整条改写 / 头注入 ---
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=enforce VANBLOG_CSP_EXTRA_SCRIPT_SRC=https://sdk.example.invalid)"
+case "$(csp_get SRV0_ENF)" in
+  *"script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://hm.baidu.com https://sdk.example.invalid"*)
+    pass "EXTRA_SCRIPT_SRC 被追加进 script-src（站长自己的统计域名有出路）" ;;
+  *) fail "EXTRA_SCRIPT_SRC 应追加进 script-src（得到 '$(csp_get SRV0_ENF)'）" ;;
+esac
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=enforce "VANBLOG_CSP_EXTRA_SCRIPT_SRC=https://a.example; script-src *")"
+case "$(csp_get SRV0_ENF)" in
+  *"script-src *"*) fail "含分号的 EXTRA 必须整条忽略（同策略内重复指令只有第一条生效，追加会被静默忽略）" ;;
+  *) pass "含分号的 EXTRA_SCRIPT_SRC 被整条忽略（不给'看起来配上了其实没生效'的旋钮）" ;;
+esac
+CSP_REPORT="$(csp_run "${TEMPLATE}" VANBLOG_CSP_MODE=enforce "VANBLOG_CSP_OVERRIDE=default-src 'none'; img-src 'self'")"
+assert_eq "$(csp_get SRV0_ENF)" "default-src 'none'; img-src 'self'" "OVERRIDE 原样使用站长的策略（逃生口不'帮'站长改）"
+CSP_INJECT="$(env VANBLOG_CSP_MODE=enforce "VANBLOG_CSP_EXTRA_SCRIPT_SRC=https://a.example
+Set-Cookie: pwned=1" "${NODE_BIN}" "${HELPER}" "${TEMPLATE}" permission 'me@example.com' 2>/dev/null)"
+case "${CSP_INJECT}" in
+  *"Set-Cookie"*) fail "CRLF 头注入必须被拒（产出里出现了 Set-Cookie）" ;;
+  *) pass "含 CR/LF 的 EXTRA 被整条忽略（这些值会进响应头，不允许头注入形状）" ;;
+esac
+
+# --- 降级模板也下发 CSP（与 HSTS 的决定相反，理由要写清）---
+CSP_REPORT="$(csp_run "${FALLBACK}" VANBLOG_CSP_MODE=)"
+[[ "$(csp_get SRV0_RO)" == "default-src 'self'; script-src "* ]] \
+  && pass "降级模板同样下发 CSP（它服务的是同一份站点内容；HSTS 不加是因为自签证书+HSTS 会把站长锁在站外，CSP 没有这个失败模式）" \
+  || fail "降级模板也应下发 CSP（得到 '$(csp_get SRV0_RO)'）"
+
+# --- 恰好改写 2 处：0 处 = CSP 静默失效，3 处 = 挂错了地方 ---
+CSP_COUNT="$(env VANBLOG_CSP_MODE=enforce "${NODE_BIN}" "${HELPER}" "${TEMPLATE}" permission 'me@example.com' 2>&1 >/dev/null \
+  | sed -n 's/.*改写 \([0-9]*\) 处.*/\1/p' | head -1)"
+assert_eq "${CSP_COUNT}" "2" "CSP 恰好挂到 2 处（srv0+srv1）；0 处意味着静默失效、3 处意味着挂错地方"
+
+# --- 模板里**已经有**一条强制 CSP 时：off 必须摘掉它、report 必须换成 Report-Only ---
+# 为什么单列一组：当前模板里没有任何 CSP 头，所以"切换模式时删掉另一个头"这段代码在
+# 正常路径上是 no-op —— 变异对照删掉它时**一条都不红**（本轮实测过，M6 = 0 红）。
+# 但它不是死代码：防的是"将来有人往模板里塞了一条强制 CSP"，那时 off/report 必须把它摘掉，
+# 否则同一个响应上会**同时**挂着强制策略与 Report-Only 策略，浏览器两条都执行 ⇒
+# 站长以为自己在"观察期"，其实已经在阻断资源了。⚠️ 这正是"0 红必须先解释"的用途：
+# 这次 0 红不是变异没生效，而是**守卫没覆盖这个场景**，所以要补场景，不是丢掉变异。
+CSP_PRESET="$(mktemp)"
+"${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+let n = 0;
+for (const s of Object.values(d.apps.http.servers)) {
+  for (const r of s.routes || []) for (const h of r.handle || []) {
+    const st = h.handler === "headers" && h.response && h.response.set;
+    if (st && Object.prototype.hasOwnProperty.call(st, "X-Content-Type-Options")) {
+      st["Content-Security-Policy"] = ["BOGUS-PRESET-ENFORCED"];
+      n += 1;
+    }
+  }
+}
+if (n !== 2) { console.error("预置失败：改写了 " + n + " 处，应为 2 处"); process.exit(1); }
+fs.writeFileSync(process.argv[2], JSON.stringify(d));
+' "${TEMPLATE}" "${CSP_PRESET}"
+csp_run_tpl() { # tpl env... -> 提取器输出
+  local tpl="$1"; shift
+  env "$@" "${NODE_BIN}" "${HELPER}" "${tpl}" permission 'me@example.com' 2>/dev/null \
+    | "${NODE_BIN}" "${CSP_EXTRACTOR}"
+}
+CSP_REPORT="$(csp_run_tpl "${CSP_PRESET}" VANBLOG_CSP_MODE=off)"
+assert_eq "$(csp_get SRV0_ENF)" "-" "模板里预置了强制 CSP 时，mode=off 会把它摘掉（off 就是完全不发）"
+assert_eq "$(csp_get SRV0_RO)" "-" "mode=off 也不会凭空多出一条 Report-Only"
+CSP_REPORT="$(csp_run_tpl "${CSP_PRESET}" VANBLOG_CSP_MODE=report)"
+assert_eq "$(csp_get SRV0_ENF)" "-" "模板里预置了强制 CSP 时，mode=report 会把它换成 Report-Only（不会两条并存）"
+[[ "$(csp_get SRV0_RO)" == "default-src 'self'; script-src "* ]] \
+  && pass "mode=report 时下发的是本脚本生成的策略（预置值被整值替换掉）" \
+  || fail "mode=report 应下发内置策略（得到 '$(csp_get SRV0_RO)'）"
+case "$(csp_run_tpl "${CSP_PRESET}" VANBLOG_CSP_MODE=report)" in
+  *BOGUS-PRESET-ENFORCED*) fail "预置的强制策略没被替换掉（会与 Report-Only 并存，两条都被执行）" ;;
+  *) pass "预置的 BOGUS 值确实被整值替换（不是追加）" ;;
+esac
+rm -f "${CSP_PRESET}"
+
+# --- 跨文件不变量：与应用层那三条指令**逐字一致**（两条头会被浏览器同时执行）---
+RL="${ROOT}/packages/server/src/utils/rateLimit.ts"
+if [[ -f "${RL}" ]]; then
+  RL_CSP="$(sed '/^[[:space:]]*#/d; s://.*$::' "${RL}" | grep -oE "frame-ancestors 'self'; object-src 'none'; base-uri 'none'" | head -1)"
+  if [[ -z "${RL_CSP}" ]]; then
+    fail "应用层 rateLimit.ts 里找不到那三条 CSP 指令的字面量（口径可能已变，请同步这里的断言）"
+  else
+    for frag in "frame-ancestors 'self'" "object-src 'none'" "base-uri 'none'"; do
+      case "$(csp_get SRV0_RO)" in
+        *"${frag}"*) pass "caddy 侧与应用层逐字一致的指令：${frag}" ;;
+        *) fail "caddy 侧缺少 ${frag}（应用层有，两条头并存时会出现意外收紧）" ;;
+      esac
+    done
+  fi
+else
+  echo "NOTE: 找不到 ${RL}，跳过跨文件一致性断言"
+fi
+
+# --- 反证：把 CSP 从产出里摘掉，提取器必须读出 '-'（否则上面那些 '-' 断言全是恒真）---
+CSP_MUT="$(mktemp)"
+env VANBLOG_CSP_MODE=enforce "${NODE_BIN}" "${HELPER}" "${TEMPLATE}" permission 'me@example.com' 2>/dev/null > "${CSP_MUT}.json"
+"${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+for (const s of Object.values(d.apps.http.servers)) {
+  for (const r of s.routes || []) for (const h of r.handle || []) {
+    const st = h.handler === "headers" && h.response && h.response.set;
+    if (st && Object.prototype.hasOwnProperty.call(st, "X-Content-Type-Options")) {
+      delete st["Content-Security-Policy"];
+      delete st["Content-Security-Policy-Report-Only"];
+    }
+  }
+}
+fs.writeFileSync(process.argv[2], JSON.stringify(d));
+' "${CSP_MUT}.json" "${CSP_MUT}"
+CSP_MUT_REPORT="$("${NODE_BIN}" "${CSP_MUT}" < /dev/null 2>/dev/null; "${NODE_BIN}" "${CSP_EXTRACTOR}" < "${CSP_MUT}")"
+case "${CSP_MUT_REPORT}" in
+  *"SRV0_ENF=-"*"SRV0_RO=-"*) pass "（反证）摘掉 CSP 后提取器确实读到 '-' —— 上面那些 '-' 断言不是恒真" ;;
+  *) fail "（反证失败）摘掉 CSP 后提取器仍报有值（得到 '${CSP_MUT_REPORT}'）" ;;
+esac
+# 反证 2：把一条策略塞进"没有 X-Content-Type-Options 的 handler"，提取器**不该**认它
+#         （证明判据真的是"全局那个 handler"，而不是"随便哪个 headers handler"）
+"${NODE_BIN}" -e '
+const fs = require("fs");
+const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const r1 = d.apps.http.servers.srv0.routes[1];
+r1.handle.unshift({ handler: "headers", response: { set: { "Content-Security-Policy": ["BOGUS-SENTINEL"] } } });
+fs.writeFileSync(process.argv[2], JSON.stringify(d));
+' "${TEMPLATE}" "${CSP_MUT}"
+CSP_MUT2="$("${NODE_BIN}" "${CSP_EXTRACTOR}" < "${CSP_MUT}")"
+case "${CSP_MUT2}" in
+  *BOGUS-SENTINEL*) fail "（反证失败）提取器把非全局 handler 上的 CSP 也当成了结果" ;;
+  *) pass "（反证）提取器只认全局那个 headers handler（挂在别处的 CSP 不会被误当成已生效）" ;;
+esac
+rm -f "${CSP_MUT}" "${CSP_MUT}.json" "${CSP_EXTRACTOR}"
+
 
 echo
 echo "passed=${PASS} failed=${FAIL}"
