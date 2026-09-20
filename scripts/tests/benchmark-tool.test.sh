@@ -119,6 +119,13 @@ const net = require('net');
 const s502 = http.createServer((q, r) => { r.writeHead(502, { 'content-type': 'text/plain' }); r.end('bad gateway'); });
 // 挂起：接受连接但永不响应（服务端 hang / 连接被挂住）
 const sHang = http.createServer(() => { /* 故意不响应 */ });
+// 🔴 「收了请求但不响应就干净关闭」：这正是本轮 C10K 静默无输出的成因形状 ——
+//    对端 FIN 时客户端**不会**收到 'error'，socket 已关所以也不会再触发 'timeout'，
+//    于是这条请求永远不结算；旧代码的兜底计时器又是 unref 的 ⇒ node 静默退出、退出码 0、
+//    一行结果都不打印（报告里只剩一行"请求路径: …"，看着像"这个目标没问题"）。
+//    ⚠️ 必须**等到请求字节再关**：若在 accept 后立刻 destroy，'close' 可能在建连阶段就触发，
+//    那时请求阶段的监听器还没挂上 ⇒ 测不到目标路径（会退化成"未归类"而不是这个桶）。
+const sClose = net.createServer((c) => { c.once('data', () => { c.destroy(); }); });
 
 // 死端口：先绑一个拿到端口再关掉，比硬编码一个"应该没人用"的端口可靠；
 // 关掉之后还要**真的连一次**确认是 ECONNREFUSED（万一被别的进程抢了就得换一个）。
@@ -143,7 +150,10 @@ findDeadPort(10, (deadPort) => {
     const p1 = s502.address().port;
     sHang.listen(0, '127.0.0.1', () => {
       const p2 = sHang.address().port;
-      process.stdout.write(`PORTS ${p1} ${p2} ${deadPort}\n`);
+      sClose.listen(0, '127.0.0.1', () => {
+        const p3 = sClose.address().port;
+        process.stdout.write(`PORTS ${p1} ${p2} ${p3} ${deadPort}\n`);
+      });
     });
   });
 });
@@ -162,21 +172,21 @@ if ! grep -q '^PORTS ' "${WORK}/ports" 2>/dev/null; then
   echo "passed=${PASS} failed=${FAIL}"
   exit 1
 fi
-read -r _tag P502 PHANG PDEAD < "${WORK}/ports"
+read -r _tag P502 PHANG PCLOSE PDEAD < "${WORK}/ports"
 
-if [[ -z "${P502:-}" || -z "${PHANG:-}" || -z "${PDEAD:-}" || "$PDEAD" == "0" ]]; then
-  fail "拿不到三个端口（PORTS ${P502:-?} ${PHANG:-?} ${PDEAD:-?}）"
+if [[ -z "${P502:-}" || -z "${PHANG:-}" || -z "${PCLOSE:-}" || -z "${PDEAD:-}" || "$PDEAD" == "0" ]]; then
+  fail "拿不到四个端口（PORTS ${P502:-?} ${PHANG:-?} ${PCLOSE:-?} ${PDEAD:-?}）"
   echo
   echo "passed=${PASS} failed=${FAIL}"
   exit 1
 fi
 # ⚠️ 硬约束：绝不打到别人在用的端口上（站长可能在跑站点，别的代理可能在压测）
-for p in "$P502" "$PHANG" "$PDEAD"; do
+for p in "$P502" "$PHANG" "$PCLOSE" "$PDEAD"; do
   case "$p" in
     18080|18097|18107|80|443) fail "假服务器端口撞上了不该碰的端口：$p" ;;
   esac
 done
-pass "三个假服务器端口都是随机高位端口（${P502} / ${PHANG} / ${PDEAD}），不碰 18080/18097/18107"
+pass "四个假服务器端口都是随机高位端口（${P502} / ${PHANG} / ${PCLOSE} / ${PDEAD}），不碰 18080/18097/18107"
 
 # 端口活性自查：502 与挂起必须活着，死端口必须被拒。
 # ⚠️ 这同时是"结束不留监听"那条断言的**反证** —— 尺子得先能量出"活着"，
@@ -564,7 +574,146 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
-echo "-- 7. 收尾：不留任何监听 --"
+echo "-- 7. C10K：静默无输出必须被判失败；「对端不响应就关闭」必须结算成独立桶 --"
+# ---------------------------------------------------------------------------
+# 为什么必须有这一节：本轮 `/api/public/meta` 的 C10K 在完整协议下**两次**只打印了一行
+# 「请求路径: …」就没了下文，而 measure.sh 的退出码是 0、报告里也没有任何提示 ⇒
+# 读报告的人（包括父代理）会把它当成"这个目标没问题"或"服务端扛不住"，两种都错。
+# 真因是两层的：①loadtest 里对端**干净关闭**（FIN）的 socket 永不结算（'data' 等不到
+# \r\n\r\n、'error' 不触发、socket 已关所以 'timeout' 也不触发），Promise 永不 resolve；
+# ②两个兜底计时器是 unref 的 ⇒ 事件循环一空，node **静默退出且退出码 0**；
+# ③measure.sh 又把子进程输出经 `grep -E "$C10K_GREP"` 过滤，崩溃/异常行不在白名单里 ⇒ 被整段丢掉，
+#   而且管道后的 `$?` 是 while 的，**拿不到子进程真实退出码**。
+# 三层各自都要有断言，否则修了一层另外两层还能把同一个事故再藏一次。
+
+# --- 8.1 loadtest：对端收了请求就关闭 ⇒ 必须结算成 request_err_CLOSED_NO_RESPONSE 并照常出结果 ---
+run_lt "$LOADTEST" 90 --base "http://127.0.0.1:${PCLOSE}" --profile c10k --hold 20 --path / --timeout 3000
+assert_rc "C10K 打「收请求后不响应即关闭」的服务端能正常结束（不是静默退出）" 0 "$RC"
+assert_has "结果行照常打印（旧代码这里会一行都不打印）" "$OUT" "目标连接数     : 20"
+assert_has "「连接上发请求」这一行也在" "$OUT" "连接上发请求"
+assert_has "对端不响应就关闭 ⇒ 落进独立桶 request_err_CLOSED_NO_RESPONSE" "$OUT" "request_err_CLOSED_NO_RESPONSE=20"
+assert_has "20 条连接全部有归属（未归类=0）⇒ 没有连接从统计里消失" "$OUT" "未归类=0"
+assert_lacks "这一形状不该被误记成客户端超时" "$OUT" "request_err_CLIENT_TIMEOUT"
+# ⚠️ 正对照：桶不是"什么都往里装"。打 502 服务端必须落进 http_502 而**不是** CLOSED_NO_RESPONSE。
+run_lt "$LOADTEST" 90 --base "http://127.0.0.1:${P502}" --profile c10k --hold 20 --path / --timeout 3000
+assert_has "（正对照）502 服务端 ⇒ 落进 http_502 桶" "$OUT" "http_502=20"
+assert_lacks "（正对照）502 服务端**不会**落进 CLOSED_NO_RESPONSE ⇒ 那个桶是特定形状，不是兜底" "$OUT" "request_err_CLOSED_NO_RESPONSE"
+
+# --- 8.2 结构性：两个兜底计时器不许 unref（但仍必须 clearTimeout）---
+C10K_FN="$(awk '/^async function runC10K/,/^const LATENCY_PATHS/' "$LOADTEST")"
+if [[ -z "$C10K_FN" ]]; then
+  fail "从 loadtest.cjs 抽不出 runC10K 函数区（函数名/边界变了 ⇒ 这里的抽取范围要跟着改）"
+else
+  C10K_CODE="$(printf '%s\n' "$C10K_FN" | strip_comments_js 2>/dev/null || printf '%s\n' "$C10K_FN" | grep -av '^[[:space:]]*//')"
+  if printf '%s\n' "$C10K_CODE" | grep -aq '\.unref('; then
+    fail "runC10K 里仍有 .unref() ⇒ 所有 socket 被对端关掉后事件循环一空，node 会静默退出、一行结果都不打印"
+  else
+    pass "runC10K 的两个兜底计时器都没有 unref（剥注释后判定，避免匹配到解释性注释）"
+  fi
+  assert_has 'clearTimeout 仍在（不 unref 之后靠它避免「跑完还吊着」）' "$C10K_CODE" "clearTimeout(guardConnect)"
+  assert_has "请求阶段的 clearTimeout 也在" "$C10K_CODE" "clearTimeout(guardRequest)"
+  # 反证：用**合成样本**证明这把尺子真能量到 .unref(。
+  # ⚠️ 不能拿源文件的注释当反证 —— 修完之后注释里已经不含 `.unref(` 这个字面量
+  #    （只写「不要 unref」），那样反证会恒失败，而恒失败的反证和恒真的断言一样没用。
+  if printf '%s\n' 'if (typeof guardConnect.unref === "function") guardConnect.unref();' | grep -aq '\.unref('; then
+    pass "（反证）合成样本里的 .unref( 会被这把尺子检出 ⇒ 上面那条「没有 unref」不是恒真"
+  else
+    fail "（反证失败）连合成样本都检不出 .unref( ⇒ 上面那条断言是恒真的空断言"
+  fi
+fi
+
+# --- 8.3 结构性：measure.sh 的 C10K 环节不许再用「管道进 grep」的形状 ---
+MEAS_CODE="$(grep -av '^[[:space:]]*#' "$MEASURE")"
+if printf '%s\n' "$MEAS_CODE" | grep -aqF '| grep -E "$C10K_GREP" | while'; then
+  fail "measure.sh 的 C10K 环节仍是「子进程 2>&1 | grep | while」⇒ 崩溃行会被白名单吞掉、且拿不到真实退出码"
+else
+  pass "measure.sh 的 C10K 环节已不再把子进程输出直接管道进 grep"
+fi
+assert_has "改成先落盘再过滤（原始输出可查）" "$MEAS_CODE" '> "$raw" 2>&1'
+assert_has "取子进程的**真实**退出码" "$MEAS_CODE" 'rc=$?'
+assert_has "必需行之一：目标连接数" "$MEAS_CODE" "目标连接数"
+assert_has "必需行之二：连接上发请求" "$MEAS_CODE" "连接上发请求"
+assert_has "未产出结果时非 0 退出（exit 2）" "$MEAS_CODE" 'exit 2'
+# 反证：旧形状必须能被上面那把尺子抓到（否则「已不再管道进 grep」是恒真）
+if printf '%s\n' 'x | grep -E "$C10K_GREP" | while read' | grep -aqF '| grep -E "$C10K_GREP" | while'; then
+  pass "（反证）旧的管道形状确实会被检出 ⇒ 上面那条不是恒真"
+else
+  fail "（反证失败）旧管道形状检不出来 ⇒ 尺子无效"
+fi
+
+# --- 8.4 行为级：measure.sh 遇到「子进程只打印表头就退出 0」必须判失败并退出 2 ---
+# 手法：把 measure.sh 复制到一棵假的仓库树里（ROOT 由 $0 推导），配一个**桩 loadtest**，
+#      这样不需要真站点、也不会碰生产脚本。桩有两种：只打表头（=事故形状）与打全结果（=正对照）。
+FAKEROOT="${WORK}/fakeroot"
+mkdir -p "${FAKEROOT}/scripts/benchmark"
+cp "$MEASURE" "${FAKEROOT}/scripts/benchmark/measure.sh"
+ln -sfn "${ROOT}/.tools" "${FAKEROOT}/.tools" 2>/dev/null || true
+FAKE_MEASURE="${FAKEROOT}/scripts/benchmark/measure.sh"
+STUB="${FAKEROOT}/scripts/benchmark/loadtest.cjs"
+
+# (a) 事故形状：只打印表头三行就 exit 0（正是本轮 /api/public/meta 的表现）
+cat > "$STUB" <<'STUBA'
+console.log('压测目标 stub-silent-exit  profile=c10k');
+console.log('  请求路径: /api/public/meta');
+process.exit(0);
+STUBA
+bash "$FAKE_MEASURE" --base "http://127.0.0.1:${PDEAD}" --no-kcounters --no-load \
+  --latency-n 1 --sweep-c 5 --sweep-n 5 --static-n 5 --c10k 100 \
+  --out "${WORK}/fail.md" > "${WORK}/fail.out" 2>&1
+FAIL_RC=$?
+if [[ "$FAIL_RC" -eq 2 ]]; then
+  pass "子进程只打表头就退出 0 ⇒ measure.sh 以退出码 2 报失败（不再静默通过）"
+else
+  fail "子进程只打表头就退出 0，但 measure.sh 退出码是 ${FAIL_RC}（期望 2）⇒ 静默失败仍会被吞掉"
+fi
+assert_has "报告里明确写出「未产出可用结果 ⇒ 判为失败，不是跳过」" "$(cat "${WORK}/fail.md" 2>/dev/null)" "未产出可用结果"
+assert_has "报告里给出子进程真实退出码" "$(cat "${WORK}/fail.md" 2>/dev/null)" "子进程退出码=0"
+assert_has "报告里指出缺了哪两行必需行" "$(cat "${WORK}/fail.md" 2>/dev/null)" "目标连接数=缺"
+assert_has "把**未过滤**的原始输出尾部吐出来（旧写法就是把它吞了）" "$(cat "${WORK}/fail.md" 2>/dev/null)" "未经白名单过滤"
+# ⚠️ 上面那条只钉了"标签"：把真正吐原始输出的那行 `tail` 删掉也不会红
+#    （变异对照 M2 第一次实测就是 NOT_RED，正是这么发现的）。
+#    所以再钉一条：**桩子进程打印过的独有内容真的出现在报告里** ——
+#    只有 `tail -n 20 "$raw"` 真的执行了，`stub-silent-exit` 才可能出现。
+# ⚠️ 断言必须带 `    | ` 前缀：桩子进程的那两行**也会**从第 1 节（单请求延迟）漏进报告，
+#    所以只断言"内容出现过"是**不够**的 —— 变异掉 tail 那行之后它照样能命中（M2 第二次仍 NOT_RED
+#    就是这么发现的）。带上前缀才只可能来自 C10K 失败分支的原始输出回吐。
+assert_has "原始输出的**内容**真的进了报告（带 | 前缀，只可能来自失败分支的回吐）" "$(cat "${WORK}/fail.md" 2>/dev/null)" "| 压测目标 stub-silent-exit"
+assert_has "保留原始输出文件路径供排查" "$(cat "${WORK}/fail.md" 2>/dev/null)" "完整原始输出保留在"
+
+# (b) 正对照：桩打印完整结果 ⇒ 必须退出 0 且**不**出现失败横幅
+cat > "$STUB" <<'STUBB'
+console.log('压测目标 stub  profile=c10k');
+console.log('  请求路径: /api/public/meta');
+console.log('== C10K ==');
+console.log('  目标连接数     : 100');
+console.log('  成功建立       : 100（用时 0.1s）');
+console.log('  连接上发请求   : 200=100 失败=0（用时 0.1s）');
+console.log('  [分类] 建连阶段 总=100 成功=100 失败=0 未归类=0');
+console.log('  [明细] ok=100');
+process.exit(0);
+STUBB
+bash "$FAKE_MEASURE" --base "http://127.0.0.1:${PDEAD}" --no-kcounters --no-load \
+  --latency-n 1 --sweep-c 5 --sweep-n 5 --static-n 5 --c10k 100 \
+  --out "${WORK}/ok.md" > "${WORK}/ok.out" 2>&1
+OK_RC=$?
+if [[ "$OK_RC" -eq 0 ]]; then
+  pass '（正对照）子进程产出完整结果 ⇒ 退出码 0（不是「永远报 2」）'
+else
+  fail "（正对照失败）子进程产出完整结果却退出 ${OK_RC} ⇒ 上面那条 exit 2 可能是恒真"
+fi
+assert_has "（正对照）正常结果行被原样透传进报告" "$(cat "${WORK}/ok.md" 2>/dev/null)" "连接上发请求   : 200=100 失败=0"
+assert_lacks "（正对照）正常情况下不出现失败横幅" "$(cat "${WORK}/ok.md" 2>/dev/null)" "未产出可用结果"
+
+# --- 8.5 --c10k 的语义必须在 --help 里写清（本轮有人把它当成"保持秒数"，只压了 30 条连接）---
+HELP="$(bash "$MEASURE" --help 2>&1)"
+assert_has "--help 写明 --c10k 的 N 是**目标连接数**" "$HELP" "N 是**目标连接数**"
+assert_has '--help 写明它不是「保持多少秒」' "$HELP" '**不是**"保持多少秒"'
+assert_has '--help 写明同义写法 --c10k-conns' "$HELP" '--c10k-conns'
+
+
+# ---------------------------------------------------------------------------
+echo
+echo "-- 8. 收尾：不留任何监听 --"
 # ---------------------------------------------------------------------------
 if kill -0 "$FAKE_PID" 2>/dev/null; then
   BEFORE_KILL="$(probe_port "$P502")"
@@ -578,10 +727,11 @@ if kill -0 "$FAKE_PID" 2>/dev/null; then
   fi
   AFTER1="$(probe_port "$P502")"
   AFTER2="$(probe_port "$PHANG")"
-  if [[ "$AFTER1" == "REFUSED" && "$AFTER2" == "REFUSED" ]]; then
-    pass "测试结束不留监听（两个假服务器端口都已 REFUSED）"
+  AFTER3="$(probe_port "$PCLOSE")"
+  if [[ "$AFTER1" == "REFUSED" && "$AFTER2" == "REFUSED" && "$AFTER3" == "REFUSED" ]]; then
+    pass "测试结束不留监听（三个假服务器端口都已 REFUSED）"
   else
-    fail "测试结束仍有监听（502=${AFTER1} 挂起=${AFTER2}）⇒ 会干扰后面在同一台机器上的实测"
+    fail "测试结束仍有监听（502=${AFTER1} 挂起=${AFTER2} 关闭=${AFTER3}）⇒ 会干扰后面在同一台机器上的实测"
   fi
 else
   fail "假服务器进程在测试结束前就没了（前面的断言可能是在没有服务的情况下跑的）"

@@ -12,6 +12,10 @@
 #   scripts/benchmark/measure.sh --out /tmp/bench.md   # 同时写一份到文件
 #   scripts/benchmark/measure.sh --no-kcounters        # 不采容器内内核计数器（没给 --container 时自动跳过）
 #   scripts/benchmark/measure.sh --no-load             # 跳过节 6 的持续加压（只验证工具、或机器上还有别的实测在跑）
+#   scripts/benchmark/measure.sh --c10k 10000          # ⚠️ N 是**目标连接数**（C10K 就是 10000），
+#                                                      #    **不是**"保持多少秒"。旧变量名 C10K_HOLD 误导过人：
+#                                                      #    传 30 会只压 30 条连接，而输出照样"看着像跑完了"。
+#                                                      #    同义写法 --c10k-conns 10000。
 #
 # 前置条件：
 #   1) 目标站点已经**恢复过真实数据**（空库测出来的数字没有意义：没有文章就没有 ISR 页面、
@@ -58,7 +62,12 @@ SWEEP_C="50,200,500,1000"
 SWEEP_N="3000"
 STATIC_N="800"
 LAT_N="20"
-C10K_HOLD="10000"
+# ⚠️ 语义是「C10K 的**目标连接数**」，**不是**"保持秒数"。旧变量名叫 C10K_HOLD（跟着 loadtest
+#    那边的 `--hold` 旗标起的），本轮真的有人把 `--c10k 30` 读成"保持 30 秒"，于是只压了 30 条连接，
+#    而输出里"目标连接数: 30"差一点被当成 C10K 结果报出去。⇒ 改名 + 在 --help 里写明。
+#    ⚠️ loadtest 侧的旗标仍叫 `--hold`（守卫 benchmark-tool.test.sh 用它，且那是子工具的既有契约），
+#    所以这里只改 measure.sh 的变量名与文档，并在调用处注明"--hold 传的是连接数"。
+C10K_CONNS="10000"
 LOAD_SECTION=1  # 节 6 的持续加压（--no-load 跳过）
 
 while [[ $# -gt 0 ]]; do
@@ -71,7 +80,9 @@ while [[ $# -gt 0 ]]; do
     --sweep-n) SWEEP_N="$2"; shift 2 ;;
     --static-n) STATIC_N="$2"; shift 2 ;;
     --latency-n) LAT_N="$2"; shift 2 ;;
-    --c10k) C10K_HOLD="$2"; shift 2 ;;
+    # ⚠️ N 是**目标连接数**（C10K 就是 10000），不是秒数。--c10k-conns 是同义写法，
+    #    只为让命令行自解释；两个旗标等价。
+    --c10k|--c10k-conns) C10K_CONNS="$2"; shift 2 ;;
     --no-kcounters) KCOUNTERS=0; shift ;;
     # 跳过节 6 那段"持续加压 30 秒"（硬编码 20000 个请求）。用途：只想验证工具本身能不能跑通、
     # 新字段有没有值，或者机器上还有别的实测在跑、不想互相污染时。默认仍然跑（口径不变）。
@@ -388,20 +399,59 @@ say "4. 静态资源吞吐（caddy 直服，不经过 Node）"
   | grep -E "$PASS_GREP" | while IFS= read -r line; do emit "$line"; done
 
 # ---------------------------------------------------------------------------
-say "5. C10K（先建 $C10K_HOLD 条连接并保持，再一起发请求）"
+say "5. C10K（先建 $C10K_CONNS 条连接并保持，再一起发请求）"
 # ---------------------------------------------------------------------------
 # ⚠️ 这一节的前后快照是**整份报告里最重要的一组数字**：C10K 失败时，客户端只能看到
 # "失败=N"，而容器内的 ListenOverflows / ListenDrops 增量能直接说明是不是内核在丢连接。
 ksnap "$KBEFORE"
+# 🔴 这一节的形状是**本轮修过的缺陷**，别改回管道版：
+#    旧写法是 `loadtest … 2>&1 | grep -E "$C10K_GREP" | while read; do emit; done`，它有两个致命后果：
+#      ① 子进程**崩溃/退出**时打印的是 stack、`FATAL ERROR: Reached heap limit`、`Killed` 这类
+#         **不匹配白名单**的行 ⇒ 被 grep **整段丢掉**，报告里就只剩一行"请求路径: …"，
+#         外部看起来像"这个目标静默无输出"，而真相是压测器死了（本轮 `/api/public/meta` 就这么丢过两次）；
+#      ② 管道之后的 `$?` 是 **while 的**退出码，**拿不到子进程的真实退出码** ⇒ 连"它失败了"都无从判断。
+#    现在改成：**先完整落盘 → 取真实退出码 → 再过滤出可读视图 → 过滤后缺必需行或非 0 退出就
+#    原样吐出尾部并把该目标判为失败**。⚠️ "没有输出"永远不许被读成"通过"。
+C10K_BAD=0
+C10K_OK=0
+C10K_RAWDIR="${TMPDIR:-/tmp}/vanblog-c10k-$$"
+mkdir -p "$C10K_RAWDIR"
 for target in "$IMG" "/api/public/meta"; do
   [[ -z "$target" || "$target" == "?" ]] && continue
   emit "目标 \`$target\`："
-  "$NODE" "$LOADTEST" --base "$BASE" --profile c10k --hold "$C10K_HOLD" --path "$target" 2>&1 \
-    | grep -E "$C10K_GREP" | while IFS= read -r line; do emit "  $line"; done
+  raw="$C10K_RAWDIR/$(printf '%s' "$target" | tr -c 'A-Za-z0-9._-' '_').raw"
+  # ⚠️ --hold 传的是**连接数**（见文件头 C10K_CONNS 的说明），不是秒数。
+  "$NODE" "$LOADTEST" --base "$BASE" --profile c10k --hold "$C10K_CONNS" --path "$target" > "$raw" 2>&1
+  rc=$?
+  filtered="$(grep -aE "$C10K_GREP" "$raw" 2>/dev/null || true)"
+  if [[ -n "$filtered" ]]; then
+    while IFS= read -r line; do emit "  $line"; done <<< "$filtered"
+  fi
+  # 必需行：缺任一行就说明这一节**什么都没测到**（不是"测了但结果是 0"）。
+  have_conns=0; have_req=0
+  printf '%s\n' "$filtered" | grep -aq '目标连接数' && have_conns=1
+  printf '%s\n' "$filtered" | grep -aq '连接上发请求' && have_req=1
+  if [[ "$rc" -ne 0 || "$have_conns" -ne 1 || "$have_req" -ne 1 ]]; then
+    C10K_BAD=$((C10K_BAD + 1))
+    emit "  🔴 **本目标未产出可用结果 ⇒ 判为失败，不是跳过。**"
+    emit "  子进程退出码=$rc；必需行：目标连接数=$([[ "$have_conns" -eq 1 ]] && echo 有 || echo 缺)、连接上发请求=$([[ "$have_req" -eq 1 ]] && echo 有 || echo 缺)"
+    emit "  下面是**未经白名单过滤**的原始输出尾部（被旧写法吞掉的就是这一段）："
+    tail -n 20 "$raw" 2>/dev/null | while IFS= read -r l; do emit "    | $l"; done
+    emit "  完整原始输出保留在：$raw"
+  else
+    C10K_OK=$((C10K_OK + 1))
+    rm -f "$raw"   # 成功的目标不留原始文件；失败的留着供排查（路径已在上面打印）
+  fi
 done
 ksnap "$KAFTER"
 emit ""
-kdelta "C10K（$C10K_HOLD 条连接 × 两个目标）" "$KBEFORE" "$KAFTER"
+kdelta "C10K（$C10K_CONNS 条连接 × 两个目标）" "$KBEFORE" "$KAFTER"
+if [[ "$C10K_BAD" -ne 0 ]]; then
+  emit ""
+  emit "🔴 **C10K 这一节有 $C10K_BAD 个目标未产出结果**（正常 $C10K_OK 个）。"
+  emit '   ⚠️ 请把「没有输出」读成「没测到」：它既不是「通过」，也不是「服务端扛不住」。原因见上面各目标的原始输出尾部。'
+  emit "   常见原因：压测机侧资源不足（临时端口/fd/内存）、node 崩溃、或目标路径本身返回异常。"
+fi
 
 # ---------------------------------------------------------------------------
 say "6. 容器资源占用（空闲 / 加压 30 秒）"
@@ -424,4 +474,11 @@ else
 fi
 
 emit ""
-emit "> 采集命令：\`scripts/benchmark/measure.sh --base $BASE${ENGINE:+ --engine $ENGINE}${CONTAINER:+ --container $CONTAINER} --sweep-c $SWEEP_C --sweep-n $SWEEP_N --static-n $STATIC_N --latency-n $LAT_N --c10k $C10K_HOLD\`"
+emit "> 采集命令：\`scripts/benchmark/measure.sh --base $BASE${ENGINE:+ --engine $ENGINE}${CONTAINER:+ --container $CONTAINER} --sweep-c $SWEEP_C --sweep-n $SWEEP_N --static-n $STATIC_N --latency-n $LAT_N --c10k $C10K_CONNS\`"
+
+# 🔴 C10K 有任何目标"未产出结果"时以非 0 退出：这一节是整份报告里最容易被误读的一节
+#    （"没有输出"曾被当成"通过"），所以要让调用方（CI、父代理、人）在退出码上就能看出来。
+if [[ "${C10K_BAD:-0}" -ne 0 ]]; then
+  printf '\n🔴 measure.sh：C10K 有 %s 个目标未产出结果，退出码 2（详见报告第 5 节）\n' "${C10K_BAD}" >&2
+  exit 2
+fi

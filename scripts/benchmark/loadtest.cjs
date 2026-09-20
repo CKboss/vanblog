@@ -324,10 +324,14 @@ async function runC10K(hold) {
   const t0 = Date.now();
   let guardConnect = null;
   await new Promise((resolve) => {
-    // ⚠️ 兜底计时器必须 clearTimeout + unref：旧代码两个 `setTimeout(resolve, …)` 既不清除
+    // ⚠️ 兜底计时器必须 **clearTimeout**：旧代码两个 `setTimeout(resolve, …)` 既不清除
     //    也不 unref，于是**活儿 1 秒就干完了、进程却要吊满 60/90 秒才退出** ——
     //    measure.sh 每个 C10K 目标白等 90 秒（两个目标 3 分钟），而任何外层超时比它短的人
     //    会拿到 rc=124，把"跑完了"误读成"失败了"。
+    // 🔴 但**不要顺手加 unref**（下面 guardConnect 处有完整理由）：unref 解决不了上面这个问题
+    //    （真正起作用的是 clearTimeout），却会引入一个更坏的失败形状 —— 当所有 socket 都被对端
+    //    关掉、Promise 又因为漏了结算路径而永不 resolve 时，事件循环一空，node 会**静默退出且
+    //    退出码为 0**，一行结果都不打印。"吊 90 秒"只是难等，"静默无输出"会被读成"没问题"。
     const done0 = () => { if (guardConnect) clearTimeout(guardConnect); resolve(); };
     const settle = () => { connectSettled += 1; if (connectSettled >= hold) done0(); };
     for (let i = 0; i < hold; i += 1) {
@@ -357,6 +361,15 @@ async function runC10K(hold) {
         bump(connectCounters, 'connect_err_CLIENT_TIMEOUT');
         try { s.destroy(); } catch { /* 已经在关了 */ }
       }));
+      // 🔴 必须结算 close：对端**干净地**关闭（FIN）时不会触发 'error'，socket 关掉后也不会再触发
+      //    'timeout'，于是这条连接**永远不结算** ⇒ `connectSettled` 到不了 hold ⇒ Promise 永不 resolve。
+      //    而兜底计时器是 unref 的（见下），事件循环一空，node 就**静默退出、一行结果都不打印**。
+      //    本轮 `/api/public/meta` 在完整协议下"C10K 那节没有输出"就是这么来的（退出码还是 0）。
+      //    ⚠️ 已成功的 socket 之后再 emit 'close' 不会重复计数（`once()` 里有 settledHere 去重）。
+      s.once('close', () => once(() => {
+        connectErrors.CLOSED_BEFORE_CONNECT = (connectErrors.CLOSED_BEFORE_CONNECT || 0) + 1;
+        bump(connectCounters, 'connect_err_CLOSED_BEFORE_CONNECT');
+      }));
       s.connect(PORT, HOST);
       // 分批建连，别把本机端口一次性打光（也顺带看看服务端接连接的速率）
       if (i % 500 === 499) {
@@ -367,9 +380,14 @@ async function runC10K(hold) {
       }
     }
     guardConnect = setTimeout(done0, 60000);
-    // unref：真卡住时它照样会触发（socket 的 I/O 让事件循环活着），
-    // 但正常跑完时它不会把进程吊住。
-    if (typeof guardConnect.unref === 'function') guardConnect.unref();
+    // 🔴 **不要 unref**。旧注释写的是"真卡住时它照样会触发（socket 的 I/O 让事件循环活着）"——
+    //    这个前提是**错的**：当所有 socket 都被对端关掉之后，事件循环里就只剩这个计时器，
+    //    unref 会让 node **立刻静默退出**（退出码 0），Promise 永远不 resolve，结果一行都不打印。
+    //    正常跑完时 `done0()` 已经 clearTimeout，所以**保持 ref 不会把进程吊住**（守卫里有
+    //    "跑完立刻退出"那条断言看着）。⇒ 兜底计时器必须能真的兜住底。
+    //    ⚠️ 这条与 `050496f5` 那次"加 clearTimeout + unref"的修复不冲突：那次要解决的是
+    //    "既不清除也不 unref ⇒ 活儿 1 秒干完却吊满 60/90 秒"，真正起作用的是 **clearTimeout**；
+    //    unref 是多余且有害的那一半。
   });
   const connectMs = Date.now() - t0;
 
@@ -419,10 +437,20 @@ async function runC10K(hold) {
         failed += 1;
         try { s.destroy(); } catch { /* 已经在关了 */ }
       }));
+      // 🔴 同上：对端在**给出完整响应之前**干净关闭（FIN）时，'data' 等不到 \r\n\r\n、
+      //    'error' 不触发、socket 已关所以 'timeout' 也不触发 ⇒ 这条请求**永远不结算**。
+      //    这类连接单独成一个桶（CLOSED_NO_RESPONSE），因为它与"超时"和"被重置"的根因不同：
+      //    它通常意味着反代/上游在高压下主动收了连接（连接数或 keep-alive 压力），
+      //    而不是内核丢 SYN、也不是应用返回了错误状态码。
+      s.once('close', () => finishOnce(() => {
+        bump(counters, 'request_err_CLOSED_NO_RESPONSE');
+        failed += 1;
+      }));
       try { s.write(req); } catch (e) { finishOnce(() => { bump(counters, `request_err_WRITE_${errCode(e)}`); failed += 1; }); }
     }
     guardRequest = setTimeout(done0b, 90000);
-    if (typeof guardRequest.unref === 'function') guardRequest.unref();
+    // 🔴 同建连阶段：**不要 unref**（理由见上面那段注释）。正常完成时 done0b() 已 clearTimeout。
+    //    ⚠️ 另外 `sockets.length === 0` 的早退分支在上面，所以这里一定有 socket 要等。
   });
   const requestMs = Date.now() - t1;
   for (const s of sockets) { try { s.destroy(); } catch {} }
