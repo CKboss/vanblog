@@ -1,0 +1,95 @@
+name: docs-test
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 为什么需要这个 workflow
+#
+# `server-test.yml` 的 `paths:` 过滤器**不含 `docs/**`**（那是有意的：只改文档不该触发一个
+# 要装依赖、跑 jest 与 8 套 e2e 的 30 分钟 job）。副作用是**只改文档的提交/PR 以前一个检查都不跑**，
+# 而文档恰恰有它自己的、机器可判的坏法：
+#   · 死链与锚点：本轮真实发生过 —— 改了一个 FAQ 小节的标题，另一个页面的入链锚点就断了；
+#     README 里也有过一个指向已被改名小节的锚点。
+#   · 文档与代码漂移：`docs-consistency`（52 条）就是为此存在的，本轮它抓到过两条真问题 ——
+#     一个**不存在的环境变量** `VANBLOG_SHUTDOWN_TIMEOUT_MS` 被写进了面向用户的报错文案
+#     （根因是代码注释里把变量名拼错了，有人照着错拼写 grep 得出"该变量不存在"），
+#     以及一个**新子命令没写进 `--help`**。
+#   · 两份 `vanblog.sh` 不同步：`scripts/vanblog.sh` 与 `docs/.vuepress/public/vanblog.sh`
+#     必须逐字节相同（用户从文档站下载的就是后者），有 6 条断言 `cmp` 它们。
+#   · vuepress 渲染：`:::` 容器嵌套会让内层提前关闭外层、容器标题里的 `**`/反引号会原样显示、
+#     表格列数不一致会静默错位 —— 这些只有 `docs:build` 与人工复核能抓。
+#
+# ⚠️ 这里**确实跑 `docs:build`**（约 25 秒 + 装 docs 依赖）。这是有意的取舍，理由：
+#    它只由 `docs/**` 等文档路径触发，不会给代码 PR 增加任何时间；而它是唯一能自动发现
+#    "文档站构建不出来"的检查。构建产物在**独立的 runner**上，不存在与别的 job 抢 `dist` 的问题。
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches:
+      - dev/dsh
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'scripts/vanblog.sh'
+      - '.github/workflows/docs-test.yml'
+  pull_request:
+    branches:
+      - master
+      - dev/dsh
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'scripts/vanblog.sh'
+      - '.github/workflows/docs-test.yml'
+
+concurrency:
+  group: docs-test-${{ github.ref }}
+  cancel-in-progress: true
+
+# ⚠️ 最小权限：只读检查，不发布。不写 permissions: 时 push 触发会拿到仓库默认令牌（可能含 write）。
+permissions:
+  contents: read
+
+jobs:
+  docs-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        # ⚠️ 第三方 action 一律钉 40 位 commit sha（标签可被上游移动、账号可被接管）。
+        #    sha ↔ 标签的对应写在行尾注释里，升级时重新解析一次即可。
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      # ── 不需要依赖的三个守卫先跑：它们只是 shell + grep + python3，几秒就出结果 ──
+      - name: Docs internal links and anchors
+        run: bash scripts/tests/docs-links.test.sh
+
+      - name: Docs ↔ code consistency
+        # 检查文档里出现的每个 VANBLOG_* / VAN_BLOG_* 都真有读取点（防死旋钮）、
+        # 两份 vanblog.sh 逐字节相同、`--help` 覆盖所有子命令、以及若干措辞约定。
+        run: bash scripts/tests/docs-consistency.test.sh
+
+      - name: Reverse-proxy Host header and cache-bypass docs
+        # 这个守卫读 docs/advanced/security.md 的正文，所以文档改动可能让它红。
+        run: bash scripts/tests/reverse-proxy-host-header.test.sh
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b  # 分支 v2（该仓库没有 v2 这个 tag，@v2 解析到的是可移动的分支引用，所以钉 sha）
+        with:
+          version: 8.11.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        # ⚠️ 装整个 workspace 而不是 `--filter docs...`：docs 的 vuepress 配置会引用仓库根的
+        #    约定，且 filtered 安装在本仓库没被验证过。多花约 1–2 分钟换一个"确定能装上"，
+        #    在这个只由文档触发的 workflow 里是划算的。要改成 filtered 请先实测。
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the documentation site
+        # 这是唯一能自动发现"文档站构建失败"的检查（容器语法、markdown 表格、主题配置、
+        # 以及 `docs/changelog.md` 这种由 scripts/releaseDoc.js 生成的 600KB 页面）。
+        run: pnpm run docs:build

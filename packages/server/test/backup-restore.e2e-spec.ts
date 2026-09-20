@@ -274,6 +274,14 @@ describe('backup restore keeps new-machine admin (#280)', () => {
       // 这个 spec 只测 JSON 导出/导入路径，不碰 full/* 接口，给个空壳即可。
       // 之前少传这个参数让整个套件编译失败（CI 的 backup-e2e 步骤一直是红的）。
       {} as any,
+      // JwtService 桩（JWT 密钥轮换那一包给构造器**末尾**追加的第 13 个参数）：
+      // 这个 e2e 只走 JSON 导出/导入路径，不碰 full/* 与 jwt/rotate，给个形状正确的空壳即可。
+      // ⚠️ 它当初被漏掉、而且**潜伏了一整轮都没被发现**，原因是本仓库的类型检查覆盖面有洞：
+      //    本机跑的是 `tsconfig.dev.json`（extends `tsconfig.build.json`，**不含 `test/`**），
+      //    而 CI 里当时**完全没有 tsc 步骤** ⇒ 这个文件从未被任何类型检查覆盖过。
+      //    运行时它也不炸（少传的参数是 undefined，只有轮换那条路会用到），所以 ts-jest 也没报。
+      //    现在 CI 会用**入库的** `tsconfig.json`（覆盖 473 个文件、含 227 个 spec 与 `test/`）做检查。
+      { options: { secret: 'stub-signing-secret' }, sign: jest.fn() } as any,
     );
 
     const backup = {

@@ -1,0 +1,230 @@
+name: nightly
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 为什么要有这个 workflow
+#
+# 有一类检查**不该进 PR 档**，但也不能"靠人记得跑"：它们要么需要容器引擎、要么需要真二进制、
+# 要么要跑十几分钟。放在这里定时跑，PR 档就仍然能保持在几分钟内。
+#
+# 四件事：
+#   1. `caddy-validate` —— 用**钉死版本与 sha256** 的真 caddy 二进制跑 `caddy-perf`。
+#      PR 档也跑这个守卫，但那里没有 caddy，它会**优雅跳过** `caddy validate` 环节
+#      （守卫自己打印 NOTE）。⚠️ 被跳过的正是最值钱的那部分：Caddy 对模块配置是**严格解码**，
+#      一个写错的字段名会让整份配置 validate 失败 ⇒ entrypoint 退回降级模板 ⇒
+#      **HTTPS 静默变成自签证书**。本轮就有人差点用 Caddyfile 的嵌套 `timeouts:{}` 形状
+#      写 JSON 配置（正确的是 server 对象上的扁平字段），那种错误只有真 validate 能抓到。
+#   2. `image-build` —— 真跑 `scripts/build-image-local.sh`（构建 + 冒烟）。
+#      发版 workflow 也会构建，但那是"发版时才发现构建坏了"；这里每天先发现一次。
+#   3. `docs-build` —— `docs-test.yml` 只由 `docs/**` 触发，所以改 `scripts/releaseDoc.js`
+#      或 `packages/**` 把文档站构建弄坏时，那边不会红。这里兜住。
+#   4. `summary` —— 把三个 job 的结论汇总成一步输出 + artifact，并且**任一失败就让整个
+#      workflow 失败**（否则每个 job 各自绿/红，一眼看不出整体状态）。
+#
+# 🔴 **残余风险，写清楚不要假装解决了**：定时任务红了**没有人会主动看**。
+#    GitHub 对默认分支上失败的 workflow run 会给仓库管理员发通知邮件（前提是当事人的
+#    Notifications 设置里开了 "Failed workflow runs"），Actions 页面也会显示红叉 ——
+#    但这两条都依赖"有人订阅、有人看"。本仓库**没有**任何 CI 侧的主动告警通道
+#    （`VANBLOG_BACKUP_ALERT_WEBHOOK` 是产品功能，只服务于站点备份，与 CI 无关）。
+#    要真正闭环，需要站长侧做一件事：给这个仓库配一个 webhook/邮件规则，或者定期
+#    （例如每周）手动点一次 `workflow_dispatch` 并看结果。在那之前，这个 workflow 的价值是
+#    "问题被记录下来、发版前能被查到"，而不是"问题会被及时知道"。
+#
+# ⚠️ **这里跑不了的两件事，别以为覆盖了**：
+#    · `vanblog-drill` 的**活体演练**（`VANBLOG_DRILL_LIVE=1`）需要一份**真整站归档**，
+#      那是站点数据、不能进仓库 ⇒ 只能在演练机上人工跑（`./vanblog.sh drill <归档>`）。
+#      PR 档跑的是它的 620 条纯逻辑断言，**不含**活体部分。
+#    · 加密归档能否被 `drill` 真恢复，同样只有活体演练能证明。
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 每天 19:30 UTC = 北京时间次日 03:30。选这个点是为了与站点自己的定时备份（默认 03:00）
+    # 错开，两者都失败时日志不会混在一起。
+    - cron: '30 19 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  # ⚠️ 定时任务**不要** cancel-in-progress：一次跑 40 分钟的镜像构建被下一次定时取消，
+  #    结果是"永远跑不完、也永远看不到红"。让它在队列里等。
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  caddy-validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+
+      - name: Install the pinned caddy binary (v2.11.4, sha256-verified)
+        # ⚠️ 版本与镜像里 `apk add caddy` 装的那个大版本一致（镜像不钉 apk 版本，所以会漂；
+        #    漂了以后这里的 validate 结论就只代表 2.11.4，要重新对齐）。
+        # ⚠️ sha256 是**实测**得到的：从下面这个官方 release URL 下载、解包后
+        #    `sha256sum caddy` 的值（2026-09-20 核对过），不是猜的也不是抄的。
+        #    不匹配就失败退出 —— 宁可红，也不要拿一个来历不明的二进制去"验证"配置。
+        run: |
+          set -euo pipefail
+          ver=2.11.4
+          want=b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9
+          url="https://github.com/caddyserver/caddy/releases/download/v${ver}/caddy_${ver}_linux_amd64.tar.gz"
+          curl -sSL --retry 3 -o /tmp/caddy.tgz "${url}"
+          mkdir -p /tmp/caddybin
+          tar -xzf /tmp/caddy.tgz -C /tmp/caddybin caddy
+          got="$(sha256sum /tmp/caddybin/caddy | cut -d' ' -f1)"
+          if [ "${got}" != "${want}" ]; then
+            echo "::error::caddy sha256 不匹配：期望 ${want}，实得 ${got}（上游发布物变了？重新钉一次并核实来历）"
+            exit 1
+          fi
+          chmod +x /tmp/caddybin/caddy
+          /tmp/caddybin/caddy version
+
+      - name: Run caddy performance/config guards with real validation
+        # 守卫会在 `caddy` 或 `/tmp/caddybin/caddy` 里找二进制（上面正是装到后者），
+        # 找到就跑真 `caddy validate`。⚠️ 这里**断言它没有跳过** —— 否则某天路径变了，
+        # 这个 job 会退化成 PR 档那份"部分覆盖"却仍然显示绿色，那就白跑了。
+        run: |
+          set -uo pipefail
+          out="$(bash scripts/tests/caddy-perf.test.sh 2>&1)"
+          printf '%s\n' "${out}" | tail -40
+          line="$(printf '%s\n' "${out}" | grep -E '^passed=' | tail -1)"
+          [ -n "${line}" ] || { echo "::error::守卫没有输出 passed= 行"; exit 1; }
+          printf '%s\n' "${line}" | grep -q 'failed=0' || { echo "::error::caddy-perf 有失败项：${line}"; exit 1; }
+          if printf '%s\n' "${out}" | grep -q '没有 caddy 二进制'; then
+            echo "::error::caddy-perf 跳过了 validate 环节 —— 这个 job 的全部意义就是跑真 validate，跳过等于没跑"
+            exit 1
+          fi
+
+      - name: Run caddy config generation guards
+        run: bash scripts/tests/caddy-config.test.sh
+
+  image-build:
+    runs-on: ubuntu-22.04
+    # 本机实测一次完整构建 + 冒烟约 20–40 分钟（含拉基础镜像与装依赖）；
+    # GitHub runner 的磁盘与网络不同，给到 90 分钟。
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Report the engine that will be used
+        # 脚本自己会探测（docker daemon 连不上就用 podman）。先把两者的可用性打出来，
+        # 免得失败时还要猜它到底用了哪个引擎。
+        run: |
+          docker version --format 'docker: {{.Server.Version}}' 2>&1 | head -2 || true
+          podman version 2>&1 | head -2 || true
+          df -h /var/lib/docker 2>/dev/null | tail -1 || true
+
+      - name: Build the image and run its smoke test
+        # ⚠️ 四个源全部改成**官方**：脚本默认值是给国内网络准备的镜像源
+        #    （npmmirror / 阿里云 alpine / npmmirror 的 node 头文件与 sharp 二进制），
+        #    在 GitHub 托管 runner 上那些镜像通常更慢甚至不可达。
+        #    `NODE_DIST_URL=none` 会让 Dockerfile 里那条 `if [ -n ... ]` 整段空转
+        #    （node-gyp 用它自己的默认源），已核实空值是安全的。
+        # ⚠️ `SMOKE_HTTP_PORT` 用默认 18080：runner 是一次性的，没有"正在跑的站点"要避让。
+        run: |
+          set -euo pipefail
+          NPM_REGISTRY=https://registry.npmjs.org \
+          ALPINE_MIRROR=none \
+          NODE_DIST_URL=none \
+          SHARP_DIST_HOST=none \
+          IMAGE_TAG=vanblog:ci-nightly \
+          SMOKE_HTTP_PORT=18080 \
+            bash scripts/build-image-local.sh
+
+      - name: Record what was built
+        if: always()
+        run: |
+          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}} {{.CreatedSince}}' 2>/dev/null | head -5 || true
+          # 镜像标签与体积写进 summary，便于横向比较"体积是不是悄悄涨了"
+          {
+            echo "### nightly 镜像构建"
+            echo '```'
+            docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' 2>/dev/null | head -5 || echo "（拿不到镜像列表）"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+  docs-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b  # 分支 v2（该仓库没有 v2 这个 tag，钉 sha 避免可移动引用）
+        with:
+          version: 8.11.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Docs consistency (env var names really exist, both vanblog.sh copies identical)
+        run: bash scripts/tests/docs-consistency.test.sh
+
+      - name: Build the documentation site
+        run: pnpm run docs:build
+
+  # ── 汇总：任一 job 失败就让整个 run 失败，并把结论写进 step summary + artifact ──
+  summary:
+    runs-on: ubuntu-22.04
+    if: always()
+    needs: [caddy-validate, image-build, docs-build]
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate
+        env:
+          CADDY: ${{ needs.caddy-validate.result }}
+          IMAGE: ${{ needs.image-build.result }}
+          DOCS: ${{ needs.docs-build.result }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## nightly 结果"
+            echo ""
+            echo "| job | 结论 |"
+            echo "|---|---|"
+            echo "| caddy-validate（真 caddy v2.11.4 跑 validate） | ${CADDY} |"
+            echo "| image-build（真构建 + 冒烟） | ${IMAGE} |"
+            echo "| docs-build（文档站构建 + 一致性守卫） | ${DOCS} |"
+            echo ""
+            echo "⚠️ 定时任务红了不会有人主动收到通知（见 workflow 顶部的残余风险说明）。"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          mkdir -p /tmp/nightly-summary
+          printf 'caddy-validate=%s\nimage-build=%s\ndocs-build=%s\n' "${CADDY}" "${IMAGE}" "${DOCS}" \
+            > /tmp/nightly-summary/results.txt
+          cat /tmp/nightly-summary/results.txt
+          bad=0
+          for r in "${CADDY}" "${IMAGE}" "${DOCS}"; do
+            case "${r}" in
+              success) ;;
+              *) bad=1 ;;
+            esac
+          done
+          if [ "${bad}" -ne 0 ]; then
+            echo "::error::nightly 有 job 未成功（caddy=${CADDY} image=${IMAGE} docs=${DOCS}）"
+            exit 1
+          fi
+
+      - name: Upload the result summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: nightly-results
+          path: /tmp/nightly-summary/results.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -59,23 +59,17 @@ jobs:
         #    sha ↔ 标签的对应写在行尾注释里，升级时重新解析一次即可。
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
-      - name: Run official Dockerfile Alpine/sharp assertions
-        run: bash scripts/tests/dockerfile-alpine-sharp.test.sh
-
-      - name: Run vanblog.sh update tests
-        run: bash scripts/tests/vanblog-update.test.sh
-
-      - name: Run vanblog.sh https reset tests
-        run: bash scripts/tests/vanblog-reset-https.test.sh
-
-      - name: Run vanblog.sh uninstall tests
-        run: bash scripts/tests/vanblog-uninstall.test.sh
-
-      - name: Run vanblog.sh download fallback tests
-        run: bash scripts/tests/vanblog-download-fallback.test.sh
-
-      - name: Run reverse-proxy nginx Host header and cache-bypass docs tests
-        run: bash scripts/tests/reverse-proxy-host-header.test.sh
+      # ⚠️ 这里以前直接跑 6 个 shell 守卫（dockerfile-alpine-sharp / vanblog-update /
+      #    vanblog-reset-https / vanblog-uninstall / vanblog-download-fallback /
+      #    reverse-proxy-host-header）。它们已经搬到下面的 `guards-core` job，理由：
+      #    ① 27 个守卫里只有 6 个进过 CI，剩下的靠人记得跑 —— 本轮 `docs-consistency`
+      #       抓到过两条真问题（一个不存在的 `VANBLOG_SHUTDOWN_TIMEOUT_MS` 死旋钮、一个新子命令
+      #       没写进 `--help`），而它根本不在 CI 里；
+      #    ② 分开的 job 与本 job **并行**，守卫的红灯 2 分钟内就能看到，不用等在这个
+      #       要装依赖 + 跑 8 套 e2e 的 30 分钟 job 后面；
+      #    ③ 守卫需要的前置（zstd）只需在一个地方准备一次。
+      #    `vanblog-backup-encryption` 是例外，它留在本 job —— 它要 `packages/server/dist`
+      #    里编译好的 `backupCrypto.js` 才能跑真加密用例（见下面 build 之后那一步）。
 
       - name: Setup pnpm
         uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b  # 分支 v2（该仓库没有 v2 这个 tag，@v2 解析到的是可移动分支）
@@ -90,6 +84,74 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      # ── 类型检查 ─────────────────────────────────────────────────────────────
+      # ⚠️ 为什么是这一步、为什么是这两份配置：本仓库**从来没有在 CI 里做过任何类型检查**
+      #    （4 个 workflow 里 grep `tsc`/`tsconfig` 是 0 命中）。后果本轮被证实：
+      #    `TS6304: Composite projects may not disable declaration emit` 一路走到镜像构建才爆。
+      #
+      # ⚠️ 更正一条会被误传的说法：`--noEmit` **能**看到 TS6304
+      #    （实测 `tsc -p tsconfig.build.json --noEmit --declaration false` 就报它）。
+      #    那次之所以漏掉，是因为**只检查了其中一份配置**：`tsconfig.json` 覆盖 473 个 src 文件、
+      #    含 **227 个 spec**；`tsconfig.build.json` 覆盖 245 个、**一个 spec 都不含**
+      #    （= 镜像里 `nest build` 的真实形状）。两份互补，所以都要跑。
+      #
+      # ⚠️ 本机的 `packages/server/tsconfig.dev.json` **没有入库**（它在本机 .git/info/exclude 里，
+      #    只是为了绕开家目录里的 @types/bun），所以 CI 里**不能**用它 —— 写了就是"文件不存在"。
+      #
+      # ⚠️ 不要在 CI 里加 `--strict`：`tsconfig.base.json` 显式写着
+      #    `strictNullChecks:false`、`noImplicitAny:false`、`strictBindCallApply:false`，
+      #    而**配置里的显式 false 会压过命令行的伞形开关** —— 实测 `--strict` 只报 **6** 个错，
+      #    而把各开关逐项列出来是 **380** 个。加 `--strict` 会制造"我们已经很严格了"的假象。
+      #    逐步收紧是另一件事（要先把那 380 个清掉），不要用它假装完成。
+      - name: Typecheck server (repo config — includes 227 spec files)
+        working-directory: packages/server
+        run: ./node_modules/.bin/tsc -p tsconfig.json --noEmit --tsBuildInfoFile "${{ runner.temp }}/server-root.tsbuildinfo"
+
+      - name: Typecheck server (build config — the shape the image actually compiles)
+        working-directory: packages/server
+        run: ./node_modules/.bin/tsc -p tsconfig.build.json --noEmit --tsBuildInfoFile "${{ runner.temp }}/server-build.tsbuildinfo"
+
+      - name: Typecheck website
+        working-directory: packages/website
+        run: ./node_modules/.bin/tsc --noEmit -p tsconfig.json
+
+      # ⚠️ admin 的类型检查**故意不加**：`tsc --noEmit -p packages/admin/tsconfig.json`
+      #    当前有 **115 个错**（umi 3 + antd 4 + React 17 的历史包袱）。加进来等于给每个 PR
+      #    挂一盏常红灯，而常红灯训练出来的习惯是"忽略红" —— 那比没有检查更糟。
+      #    要加就得先清零，那是独立的一件事。
+
+      # ── 真实构建 ─────────────────────────────────────────────────────────────
+      # `--noEmit` 看不到"只在真正产出文件时才发生"的失败（输出目录冲突、声明文件产出、
+      # 打包期的路径解析）。镜像里跑的就是 `nest build`，所以这里也跑它 ——
+      # 顺便产出 `dist/`，让下面那个需要编译产物的守卫能跑**完整**用例而不是跳过。
+      - name: Build server (the exact command the image runs)
+        working-directory: packages/server
+        run: pnpm run build
+
+      - name: Run backup encryption / passphrase / rotate-jwt tests (needs dist for the real-crypto cases)
+        # ⚠️ 这个守卫会探测 `tar zstd sha256sum curl node`，缺任何一个就 `passed=0 failed=1`
+        #    硬失败；而**真加密**用例还要求 `packages/server/dist/src/utils/backupCrypto.js`
+        #    存在，缺了它会 `note` 跳过并仍然"通过" —— 那就是一个只验证了假设的绿灯。
+        #    所以下面断言 `note=0`：静默降级成跳过必须算失败。
+        run: |
+          set -uo pipefail
+          # ⚠️ 不用 `tee /dev/stderr`：那个路径在有些环境里不是设备（实测本机报
+          #    "No such device or address"），而它在 GitHub runner 上恰好可用 —— 这种
+          #    "换个环境就失败"的写法不该进 CI。改成先整体捕获、再原样打印。
+          out="$(bash scripts/tests/vanblog-backup-encryption.test.sh 2>&1)"
+          printf '%s\n' "${out}" | tail -60
+          line="$(printf '%s\n' "${out}" | grep -E '^passed=' | tail -1)"
+          [ -n "${line}" ] || { echo "::error::守卫没有输出 passed= 行（脚本本身崩了？）"; exit 1; }
+          printf '%s\n' "${line}" | grep -q 'failed=0' || { echo "::error::加密备份守卫有失败项：${line}"; exit 1; }
+          printf '%s\n' "${line}" | grep -q 'note=0' || { echo "::error::加密备份守卫 note>0 ⇒ 真加密用例被跳过（dist 里没有 backupCrypto.js？），这不是有效绿灯：${line}"; exit 1; }
+
+      - name: Run vanblog.sh restore tests (needs node_modules for the js-sha256 cross-check)
+        # ⚠️ 这个守卫会去找 `node_modules/.pnpm/js-sha256@*`，用它交叉验证
+        #    `vanblog.sh` 的登录口令派生与后台 `encryptPwd.js` 逐字节一致。
+        #    找不到时它**不失败、只是少跑那几条断言** ⇒ 放在没装依赖的 job 里会得到一个
+        #    "覆盖面悄悄变小但仍然绿"的结果，所以它必须跟在 Install 之后跑。
+        run: bash scripts/tests/vanblog-restore.test.sh
 
       - name: Run server unit tests
         working-directory: packages/server
@@ -155,3 +217,151 @@ jobs:
         working-directory: packages/server
         run: pnpm test:admin-cache-e2e
 
+  # ══════════════════════════════════════════════════════════════════════════
+  # 守卫（shell 断言）—— 与 server-test **并行**，不装 workspace 依赖
+  # ══════════════════════════════════════════════════════════════════════════
+  # 为什么单独一个 job：本仓库有 **27 个** shell 守卫（合计约 2500 条断言），而 CI 里以前只跑
+  # **6 个**。剩下 21 个全靠人记得跑，于是本轮真实发生了两次"守卫抓到了问题、但没人跑守卫"：
+  #   · `docs-consistency` 抓到一个**不存在的环境变量** `VANBLOG_SHUTDOWN_TIMEOUT_MS`
+  #     被写进了面向用户的报错文案（死旋钮），还抓到一个新子命令没写进 `--help`；
+  #   · `TS6304: Composite projects may not disable declaration emit` 一路走到**镜像构建**才爆。
+  # 这些守卫绝大多数是"用桩替代 docker/compose/curl 的纯逻辑测试"，不需要依赖、不需要引擎，
+  # 单个 0.1–7 秒，所以进 PR 档的成本极低（整个 job 约 2 分钟）。
+  #
+  # ⚠️ 分档判据（写下来，免得下一个人凭感觉挪）：
+  #   · **这个 job**：不需要 `node_modules`、不需要 `dist`、不需要容器引擎、不需要 caddy 二进制
+  #     （`caddy-perf` 在没有 caddy 时会**优雅跳过** validate 环节 ⇒ 这里跑的是部分覆盖，
+  #       完整覆盖在 `nightly.yml` 里装了 caddy 之后跑）。
+  #   · **guards-slow**：同样无外部依赖，但单个超过 30 秒，放一起以免拖慢这个 job。
+  #   · **server-test job**：需要 `node_modules`（`vanblog-restore` 用 js-sha256 交叉验证口令派生）
+  #     或 `dist`（`vanblog-backup-encryption` 用编译好的 `backupCrypto.js` 跑真加密）。
+  #     这两个守卫在缺依赖时**不会失败、只会静默少跑断言**，所以必须跟在 Install/Build 之后。
+  #   · **nightly.yml**：真需要容器引擎、真 caddy 二进制、真镜像构建、或真归档的
+  #     （`vanblog-drill` 的活体部分 `VANBLOG_DRILL_LIVE=1`、`build-image-local.sh` 真构建、
+  #       `caddy-perf` 的 validate 环节、`docs:build`）。
+  guards-core:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Setup Node
+        # 守卫里有一部分直接调 `node`（生成 caddy 配置、跑假服务器、解析 JSON），
+        # 用的是仓库脚本而不是 workspace 代码 ⇒ **不需要 pnpm install**。
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+
+      - name: Ensure zstd is available
+        # ⚠️ `vanblog-verify` 在**没有 zstd 时是硬失败**（实测 `passed=0 failed=1`），
+        #    而它并不探测这个工具；`vanblog-backup-encryption` 则会探测并 `exit 1`。
+        #    runner 镜像里有没有 zstd 是**不应依赖的假设**，所以缺了就装（有则零成本跳过）。
+        run: |
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd 不在 runner 上，安装它（vanblog-verify 硬依赖）"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq zstd
+          fi
+          zstd --version
+
+      - name: Docs internal links
+        run: bash scripts/tests/docs-links.test.sh
+
+      - name: Docs ↔ code consistency (env var names, script copies, --help coverage)
+        run: bash scripts/tests/docs-consistency.test.sh
+
+      - name: Caddy config generation
+        run: bash scripts/tests/caddy-config.test.sh
+
+      - name: Caddy performance-related config (validate steps skip without a caddy binary)
+        run: bash scripts/tests/caddy-perf.test.sh
+
+      - name: Official Dockerfile Alpine/sharp assertions
+        run: bash scripts/tests/dockerfile-alpine-sharp.test.sh
+
+      - name: Dockerfile patch/npmrc assertions
+        run: bash scripts/tests/dockerfile-patches.test.sh
+
+      - name: Image runtime (entrypoint, HEALTHCHECK, start.js contract)
+        run: bash scripts/tests/image-runtime.test.sh
+
+      - name: start.js process supervision
+        run: bash scripts/tests/start-js.test.sh
+
+      - name: build-image-local.sh static contract
+        run: bash scripts/tests/build-image-local.test.sh
+
+      - name: Benchmark harness (failure classification, kernel counters, no silent hangs)
+        run: bash scripts/tests/benchmark-tool.test.sh
+
+      - name: vanblog.sh hardening assertions
+        run: bash scripts/tests/vanblog-hardening.test.sh
+
+      - name: Generated compose health
+        run: bash scripts/tests/vanblog-compose-health.test.sh
+
+      - name: vanblog.sh install-cron
+        run: bash scripts/tests/vanblog-install-cron.test.sh
+
+      - name: vanblog.sh reset
+        run: bash scripts/tests/vanblog-reset.test.sh
+
+      - name: vanblog.sh verify
+        run: bash scripts/tests/vanblog-verify.test.sh
+
+      - name: vanblog.sh backup-restore
+        run: bash scripts/tests/vanblog-backup-restore.test.sh
+
+      - name: vanblog.sh disaster recovery / offline install
+        run: bash scripts/tests/vanblog-dr-offline.test.sh
+
+      - name: waline reset
+        run: bash scripts/tests/reset-waline.test.sh
+
+      - name: vanblog.sh update
+        run: bash scripts/tests/vanblog-update.test.sh
+
+      - name: vanblog.sh https reset
+        run: bash scripts/tests/vanblog-reset-https.test.sh
+
+      - name: vanblog.sh uninstall
+        run: bash scripts/tests/vanblog-uninstall.test.sh
+
+      - name: vanblog.sh download fallback
+        run: bash scripts/tests/vanblog-download-fallback.test.sh
+
+      - name: Reverse-proxy nginx Host header and cache-bypass docs
+        run: bash scripts/tests/reverse-proxy-host-header.test.sh
+
+  # 慢守卫：同样**无外部依赖**，只是单个耗时 30 秒以上，分开跑以免拖慢 guards-core。
+  # 两个加起来约 3 分钟（本机实测：drill 148s、source-install 32s）。
+  guards-slow:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+
+      - name: Ensure zstd is available
+        run: |
+          if ! command -v zstd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq zstd
+          fi
+          zstd --version
+
+      - name: Restore drill logic (620 assertions; the live container part stays off)
+        # ⚠️ 这个守卫分两部分：A) 纯逻辑，**默认全部跑**（620 条，本机实测 148 秒）；
+        #    B) 活体演练，需要引擎 + 镜像 + **一份真归档**，默认跳过并说明原因，
+        #    只有 `VANBLOG_DRILL_LIVE=1` 才跑。CI 里跑不了 B —— 归档是站点数据，
+        #    不能进仓库，所以那部分永远是"人工在演练机上跑"，不要以为这里覆盖了它。
+        run: bash scripts/tests/vanblog-drill.test.sh
+
+      - name: Source-install path (fake git/docker/compose, no network, no daemon)
+        run: bash scripts/tests/vanblog-source-install.test.sh
