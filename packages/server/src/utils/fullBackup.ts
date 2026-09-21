@@ -768,6 +768,66 @@ export function explainTarFailure(rawStderr: string): string {
   return '';
 }
 
+/**
+ * 外部工具（解压器 / tar）非 0 退出、却**一个字都没留下**时的兜底提示。
+ *
+ * ## 为什么需要它（实测缺陷，不是假想）
+ * 活体实测：让一个真实的子进程以退出码 1 结束且不写 stderr，`composeToolFailure` 的**改前**形状
+ * 会产出 `gzip 解压失败（退出码 1）：`——**冒号后面什么都没有**（12/12 次如此）。
+ * 而 `explainTarFailure` 的整个存在理由就是"把 busybox/gzip 的天书翻译成可照做的提示"，
+ * 所以在"没有天书可翻译"的情况下反而**一句提示都没有**，是这条设计目标的漏洞：
+ * 站长在灾难恢复时拿到一条无法据以行动的报错，只能去猜。
+ *
+ * ⚠️ 什么情况下工具会静默失败：被信号中止（最典型是内存不足被内核杀掉）、
+ * 解压工具本身异常、或 stderr 被上游吞掉。这几种都不是"归档没问题"，所以提示必须引导去核对完整性。
+ *
+ * 🔴 **它是"没有信息"时的兜底，不是"有信息但没读到"的遮羞布** ——
+ * 后者是另一个缺陷（`exit` 与 stderr 排空的竞争），由 `hashArchiveMembers` 里等待 stderr 排空来修。
+ * 两者分开处理，才不会把"我们没读到"伪装成"工具没说话"。
+ */
+export function explainSilentToolFailure(code: number | null): string {
+  return (
+    ` ｜ 提示：这个工具以退出码 ${code} 结束，但没有留下任何诊断输出`
+    + '（最常见的原因是它被信号中止，例如内存不足被内核杀掉；也可能是本机解压工具异常）。'
+    + '办法：先核对同目录的 .sha256 sidecar 确认归档完整，'
+    + '再单独用 gzip -t / zstd -t / xz -t 检验这个文件本身；'
+    + '若这份归档是从别处拷来的，请用 VanBlog 的导出功能重新生成一份。'
+  );
+}
+
+/**
+ * 组装"某个外部工具非 0 退出"的**用户可见**报错，三个调用点共用（见下方 ⚠️）。
+ *
+ * - stderr 有内容 ⇒ **原文**（截断到 `sliceLen`）+ `explainTarFailure` 的针对性提示；
+ *   🔴 原文必须留着（那是唯一能拿去搜索的东西），本函数**只附加、绝不改写**，
+ *   与 `explainTarFailure` 的既有约定一致。
+ * - 🔴 stderr 为空 ⇒ `explainSilentToolFailure` 的兜底提示，**不留一个光秃秃的冒号**。
+ *
+ * ⚠️ 为什么要抽成一个函数而不是在三处各写一遍：本文件有**三处**同形状的组装
+ * （`hashArchiveMembers` 一处、`decompressUntar` 的解压器与 tar 各一处），
+ * 三处曾经各自拼接，于是"空 stderr"这个缺陷在三处**同时**存在。
+ * 复制一份用户可见文案到多处，漂移的后果是"某一处又变成空提示而没人发现"。
+ */
+export function composeToolFailure(
+  prefix: string,
+  code: number | null,
+  rawStderr: string,
+  sliceLen: number,
+  /**
+   * 退出码前面的那个词。默认 `退出码`；`listArchiveMembers` 那条历史上写的是
+   * `tar 退出码`，而它的前缀 `读不出归档成员表` 被 spec 以**正反两个方向**钉着
+   * （`backupSigning.spec.ts` 一处 `not.toMatch`、一处 `toMatch`），
+   * 所以这里逐字节保留原文案，只补上"空尾巴"与"不翻译天书"这两个缺陷。
+   */
+  codeLabel = '退出码',
+): string {
+  const text = String(rawStderr ?? '');
+  const head = `${prefix}（${codeLabel} ${code}）：`;
+  return text.trim()
+    ? `${head}${text.slice(0, sliceLen)}${explainTarFailure(text)}`
+    : `${head}${explainSilentToolFailure(code)}`;
+}
+
 export async function hashArchiveMembers(
   archivePath: string,
   spec: CompressorSpec,
@@ -811,6 +871,23 @@ export async function hashArchiveMembers(
     });
     decompressor.on('close', () => resolve(exitCode));
   });
+  // 🔴 **必须显式等 stderr 排空**，否则组装报错时 `decErr` 可能还是空的。
+  //    机制：stderr 是**异步 `data` 事件**收集的，而 `exit` 只表示"进程已终止"；
+  //    Node 保证 stdio 流已关闭的是 **`close`**。上面那个 promise 在 `exit` 与 `close`
+  //    之间"谁先到就 resolve"，而 `exit` 通常先到 ⇒ 存在一个真实竞争：
+  //    进程已退出、内核管道里还躺着它写的 stderr，而我们已经去拼报错了。
+  //    实测后果（`fullBackup.memberCap.spec.ts` 在全量并行下红过一次）：站长看到
+  //    `gzip 解压失败（退出码 1）：`——冒号后面什么都没有，而 gzip 其实写了
+  //    "unexpected end of file"，那正是 `explainTarFailure` 要翻译成"归档被截断了"的输入。
+  //    ⇒ 诊断信息不是没产生，是**被我们自己丢掉了**。
+  // ⚠️ 同文件的 `decompressUntar` 用的就是 `close`（那边没有这个竞争）⇒
+  //    这里是把两处口径统一，不是发明新约定。
+  // ⚠️ 不会挂死：`exited` 能 resolve 就说明进程已终止，其 stderr 管道必然拿到 EOF，
+  //    `end`/`close` 一定会触发（被 SIGKILL 也一样）。
+  const stderrDrained = new Promise<void>((resolve) => {
+    decompressor.stderr.on('end', () => resolve());
+    decompressor.stderr.on('close', () => resolve());
+  });
   let membersExceeded = false;
   let countedAtAbort = 0;
   const hashed =
@@ -837,7 +914,9 @@ export async function hashArchiveMembers(
           return outcome.result;
         })
       : hashTarStream(decompressor.stdout, options);
-  const [result, code] = await Promise.all([hashed, exited.catch(() => null)]);
+  // 🔴 第三个成员 `stderrDrained` 是**承重**的：没有它，`Promise.all` 会在 stderr 排空之前就放行，
+  //    下面拼出来的报错就可能带着一个空的诊断尾巴（见上方那段说明）。
+  const [result, code] = await Promise.all([hashed, exited.catch(() => null), stderrDrained]);
   // ⚠️ 解密失败优先报：这时解压器只是"收到了 EOF"，退出码可能是 0 或 1，
   //    而真正的原因（口令不对 / 归档被截断 / 块被重排）在上游那条错误里。
   //    不这么做的话，站长看到的是"解压失败（退出码 1）"，会以为是压缩器坏了。
@@ -849,7 +928,7 @@ export async function hashArchiveMembers(
       ? `解密失败：${upstreamError}`
       : code === 0
         ? null
-        : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 300)}${explainTarFailure(decErr)}`;
+        : composeToolFailure(`${spec.format} 解压失败`, code, decErr, 300);
   return { result, decompressError, membersExceeded, countedAtAbort };
 }
 
@@ -959,7 +1038,7 @@ async function decompressUntar(
         fail(
           upstreamError
             ? `解密失败：${upstreamError}`
-            : `${spec.format} 解压失败（退出码 ${code}）：${decErr.slice(0, 500)}${explainTarFailure(decErr)}`,
+            : composeToolFailure(`${spec.format} 解压失败`, code, decErr, 500),
         );
       }
     });
@@ -968,7 +1047,7 @@ async function decompressUntar(
         fail(
           upstreamError
             ? `解密失败：${upstreamError}`
-            : `tar 解包失败（退出码 ${code}）：${tarErr.slice(0, 500)}${explainTarFailure(tarErr)}`,
+            : composeToolFailure('tar 解包失败', code, tarErr, 500),
         );
         return;
       }
@@ -2071,7 +2150,9 @@ export async function listArchiveMembers(
         // 实测：69MB 真 zstd 归档砍掉 1MB 后必现。它同时挂住 verifyFullBackup（P2）与
         // assertRestorableArchive（两条恢复路由；匿名 init/restore 还会因此**永久占着单飞锁**）。
         // fail() 自己会落 settled 标志，这里绝不能提前置位。
-        fail(`读不出归档成员表（tar 退出码 ${code}）：${(tarErr || decErr).slice(0, 300)}`);
+        fail(
+          composeToolFailure('读不出归档成员表', code, tarErr || decErr, 300, 'tar 退出码'),
+        );
         return;
       }
       settled = true;
@@ -2084,7 +2165,10 @@ export async function listArchiveMembers(
     });
     decompressor.on('close', (code) => {
       if (code !== 0) {
-        fail(`解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`);
+        // ⚠️ 这一处以前既不给兜底提示、也**不调 explainTarFailure** ⇒
+        //    busybox 的 `unknown typeflag: 0x53` 这类天书在这条路上是原样丢给站长的，
+        //    而"列成员表"恰恰是恢复前**第一个**会撞到它的地方。现在与其余四处同口径。
+        fail(composeToolFailure('解压失败', code, decErr, 300));
       }
     });
   });

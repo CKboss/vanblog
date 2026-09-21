@@ -9,11 +9,15 @@ import {
   RESTORE_MAX_MEMBERS_ENV,
   RESTORE_MAX_TOTAL_BYTES_ENV,
   assertRestorableArchive,
+  composeToolFailure,
+  explainSilentToolFailure,
   explainTarFailure,
+  hashArchiveMembers,
   hashTarStreamCapped,
   listArchiveEntries,
   restoreMaxMembers,
 } from './fullBackup';
+import type { CompressorSpec } from './fullBackup';
 import { resetRestoreRejectLog } from './restoreSecurityLog';
 
 /**
@@ -412,10 +416,25 @@ describe('explainTarFailure：把 busybox tar 的天书翻译成可照做的提�
       // 截断的 gzip 在多数实现下会报非 0 退出码；如果这台机器的 gzip 宽容到返回 0，
       // 那 decompressError 就是 null —— 这种情况下**如实跳过**而不是假绿。
       if (decompressError) {
-        expect(decompressError).toMatch(/unexpected end of file|short read|not in gzip format|invalid/i);
-        if (/unexpected end of file|short read/i.test(decompressError)) {
-          expect(decompressError).toContain('提示：');
-          expect(decompressError).toContain('截断');
+        // 🔴 **不变量（本条是这个用例真正的判据）**：只要报了解压失败，消息里就**必须**
+        //    带一句可照做的提示，绝不许以冒号收尾把站长晾在那里。
+        //    改前这里只断言"含解压器原文"，于是当 stderr 因为竞争没被收到时，
+        //    消息变成一个光秃秃的前缀 + 冒号，断言就红了 —— 而**红的原因被误读成
+        //    "负载假红"**，实际是"用户拿到了无法据以行动的报错"这个真缺陷。
+        expect(decompressError).toContain('提示：');
+        expect(decompressError.trimEnd().endsWith('：')).toBe(false);
+        // 两种情况各有判据，**都不许静默通过**：
+        if (/unexpected end of file|short read|not in gzip format|invalid/i.test(decompressError)) {
+          // (a) 收到了解压器的原文 ⇒ 必须既留原文、又给出"截断"这条针对性翻译
+          expect(decompressError).toMatch(/unexpected end of file|short read|not in gzip format|invalid/i);
+          if (/unexpected end of file|short read/i.test(decompressError)) {
+            expect(decompressError).toContain('截断');
+          }
+        } else {
+          // (b) 一个字都没收到（竞争，或工具真的静默失败）⇒ 必须落到兜底提示，
+          //     并且**说清"没有诊断输出"**，而不是假装知道原因。
+          expect(decompressError).toContain('没有留下任何诊断输出');
+          expect(decompressError).toMatch(/gzip -t|zstd -t|xz -t/);
         }
       }
       // 无论上面哪种，"成员表读不出"这件事在 assertRestorableArchive 那一层必须变成 400，
@@ -452,11 +471,27 @@ describe('explainTarFailure：把 busybox tar 的天书翻译成可照做的提�
 describe('源码级：三条 tar 报错路径都接上了翻译（防止将来新增路径时漏掉）', () => {
   const src = fs.readFileSync(path.join(__dirname, 'fullBackup.ts'), 'utf-8');
 
-  it('explainTarFailure 在解压/解包的两处 stderr 拼接里都被调用（≥3 次：定义 + 三个调用点）', () => {
+  // ⚠️ 2026-09-21 升级（**不是放宽**）：改前这条钉的是"`explainTarFailure(` 出现 ≥4 次
+  //    （定义 + 三个手写拼接点）"。那三处拼接已经收敛进 `composeToolFailure`，
+  //    所以计数从 4 掉到 2 —— 但**这条守卫想守的性质是"翻译不可能被绕过"**，
+  //    收敛之后那个性质的正确形状是"唯一的调用点在 composeToolFailure 体内"。
+  //    🔴 只把阈值从 4 改成 2 就是放宽（2 也可能是"定义 + 某个不相干的地方"），
+  //    所以改成断言**位置**，并保留负向对照。
+  it('翻译不可能被绕过：`explainTarFailure` 唯一的调用点在 composeToolFailure 体内', () => {
     const hits = src.match(/explainTarFailure\(/g) ?? [];
-    expect(hits.length).toBeGreaterThanOrEqual(4);
+    // 收敛之后只剩 2 处：定义 + composeToolFailure 内部那一次
+    expect(hits.length).toBeGreaterThanOrEqual(2);
+    const fnStart = src.indexOf('export function composeToolFailure(');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnBody = src.slice(fnStart, src.indexOf('\n}', fnStart));
+    // 🔴 关键：那一次调用必须真的在 composeToolFailure 里（否则"收敛"是假的）
+    expect(fnBody).toContain('explainTarFailure(text)');
     // 负向对照：只有一处（定义）时这把尺子必须能看出来
     expect(hits.length).not.toBe(1);
+    // ⚠️ 尺子有效性反证：位置断言在"调用点不在函数体内"时必须失效
+    expect('export function composeToolFailure(x) { return y; }'.includes('explainTarFailure(text)')).toBe(
+      false,
+    );
   });
 
   it('超限中止时**必须** SIGKILL 解压器（只 destroy 流的话它还会继续吃 CPU）', () => {
@@ -491,5 +526,199 @@ describe('源码级：三条 tar 报错路径都接上了翻译（防止将来�
     expect(src).toContain("spawn('tar', ['-xf', '-', '-C', destDir])");
     expect(src).toContain("spawn('tar', ['-xOf', '-', entry])");
     expect(src).toContain("spawn('tar', ['-tf', '-'])");
+  });
+});
+
+/**
+ * 🔴 **"外部工具非 0 退出"的报错必须始终可照做** —— 这是**用户可见文案**的守卫。
+ *
+ * ## 为什么单独立一节
+ * 活体实测（本轮）：让一个**真实**子进程以退出码 1 结束且不写 stderr，改前的组装形状会产出
+ * 一条以冒号收尾、后面什么都没有的报错（**12/12 次**如此）。而 `explainTarFailure` 存在的
+ * 全部理由就是"把 busybox/gzip 的天书翻译成可照做的提示"，所以在"没有天书可翻译"时反而
+ * 一句提示都没有，是那条设计目标的漏洞：站长在**灾难恢复**时拿到一条无法据以行动的报错。
+ *
+ * ## 两个缺陷必须分开，别混成一个
+ * 1. **工具真的没说话**（被信号杀掉 / 工具异常）⇒ 确定性的，本节用真子进程复现；
+ * 2. **工具说了、我们没读到**（`exit` 早于 stderr 排空）⇒ 罕见竞争，
+ *    本机 100/100 次都没能自然复现（安静与全量 jest 负载下都试过），
+ *    所以它由**源码级**断言 + 重复回归网兜住，而不是假装能行为复现。
+ * ⚠️ 把两者混成一个"空 stderr"来修是错的：那会用兜底文案**掩盖**"我们丢了诊断信息"。
+ */
+describe('解压/解包失败报错的可照做性（用户可见文案）', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'fullBackup.ts'), 'utf-8');
+
+  it('stderr 有内容 ⇒ 原文逐字保留，只在后面**附加**提示（绝不改写原文）', () => {
+    const raw = 'gzip: /x/y.tar.gz: unexpected end of file\n';
+    const out = composeToolFailure('gzip 解压失败', 1, raw, 300);
+    expect(out).toContain(raw.trimEnd()); // 原文必须还在（唯一能拿去搜索的东西）
+    expect(out).toContain('提示：');
+    expect(out).toContain('截断');
+    expect(out.startsWith('gzip 解压失败（退出码 1）：')).toBe(true);
+  });
+
+  it('🔴 stderr 为空 ⇒ 给兜底提示，**绝不以冒号收尾**', () => {
+    const out = composeToolFailure('gzip 解压失败', 1, '', 300);
+    expect(out).toContain('提示：');
+    expect(out.trimEnd().endsWith('：')).toBe(false);
+    // 空白字符也算"没说话"
+    expect(composeToolFailure('gzip 解压失败', 1, '   \n  ', 300)).toContain('没有留下任何诊断输出');
+  });
+
+  it('兜底提示必须说清"没有诊断输出"并给出**可照做**的下一步', () => {
+    const hint = explainSilentToolFailure(1);
+    expect(hint).toContain('没有留下任何诊断输出');
+    // 不能假装知道原因：要点名最常见的那种（被信号中止）
+    expect(hint).toContain('信号中止');
+    // 必须给出至少一条站长真能执行的动作
+    expect(hint).toMatch(/gzip -t|zstd -t|xz -t/);
+    expect(hint).toContain('.sha256');
+    // 退出码要带上（拿去搜索用）
+    expect(hint).toContain('1');
+  });
+
+  it('尺子有效性反证：**旧形状确实以冒号收尾**，所以"不以冒号收尾"这把尺子量得到东西', () => {
+    // 逐字复刻改前那三处手写的组装形状
+    const legacy = `gzip 解压失败（退出码 ${1}）：${''.slice(0, 300)}${explainTarFailure('')}`;
+    expect(legacy.trimEnd().endsWith('：')).toBe(true); // 旧形状 = 坏形状，尺子能抓到
+    expect(legacy).not.toContain('提示：');
+    // 新形状 = 同一输入下不再坏
+    const fixed = composeToolFailure('gzip 解压失败', 1, '', 300);
+    expect(fixed.trimEnd().endsWith('：')).toBe(false);
+    expect(fixed).toContain('提示：');
+  });
+
+  it('🔴 真子进程端到端：**静默失败**的解压器 ⇒ 用户拿到的报错仍然可照做', async () => {
+    const dir = tmpDir('vanblog-silent-');
+    const fake = path.join(dir, 'archive.tar.gz');
+    fs.writeFileSync(fake, Buffer.alloc(64, 0));
+    try {
+      // ⚠️ 用**真实**子进程（sh -c 'exit 1'，一个字都不写 stderr），
+      //    不是替身 —— 替身只会证明"我的假进程按我的假设沉默"。
+      const spec: CompressorSpec = {
+        format: 'gzip',
+        ext: '.tar.gz',
+        compress: ['true'],
+        decompress: ['sh', '-c', 'exit 1'],
+        label: 'silent-probe',
+      };
+      const { decompressError, membersExceeded } = await hashArchiveMembers(fake, spec, {
+        computeHashes: false,
+        maxEntries: null,
+      });
+      expect(membersExceeded).toBe(false);
+      expect(decompressError).not.toBeNull();
+      const msg = String(decompressError);
+      expect(msg).toContain('提示：');
+      expect(msg).toContain('没有留下任何诊断输出');
+      expect(msg.trimEnd().endsWith('：')).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('🔴 真子进程端到端：**有 stderr** 的解压器 ⇒ 原文与翻译都在（兜底没有把真信息挤掉）', async () => {
+    const dir = tmpDir('vanblog-noisy-');
+    const fake = path.join(dir, 'archive.tar.gz');
+    fs.writeFileSync(fake, Buffer.alloc(64, 0));
+    try {
+      const spec: CompressorSpec = {
+        format: 'gzip',
+        ext: '.tar.gz',
+        compress: ['true'],
+        decompress: ['sh', '-c', 'printf "gzip: stdout: unexpected end of file\\n" >&2; exit 1'],
+        label: 'noisy-probe',
+      };
+      const { decompressError } = await hashArchiveMembers(fake, spec, {
+        computeHashes: false,
+        maxEntries: null,
+      });
+      const msg = String(decompressError);
+      expect(msg).toContain('unexpected end of file'); // 原文
+      expect(msg).toContain('截断'); // 针对性翻译
+      expect(msg).not.toContain('没有留下任何诊断输出'); // 🔴 有信息就绝不许说"没信息"
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('🔴 五处**读取侧**组装全部收敛到 composeToolFailure（源码级：不许再有手写的那一条）', () => {
+    // 手写形状的特征是"（退出码 ${code}）：" 紧跟着又一个 ${...} 插值。
+    // ⚠️ 只钉**读取侧**的三个前缀（解压 / 解包 / 读不出归档成员表）——
+    //    导出侧的"压缩失败"是**有意**不收敛的，理由见下一条用例。
+    const handRolled = /(解压失败|解包失败|读不出归档成员表)（(tar )?退出码 \$\{code\}）：\$\{/;
+    const code = src.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'));
+    expect(code.some((l) => handRolled.test(l))).toBe(false);
+    // 并且确实有 5 处在用它（1 处 hashArchiveMembers + 2 处 decompressUntar + 2 处 listArchiveMembers）
+    const uses = src.match(/composeToolFailure\(/g) || [];
+    expect(uses.length).toBeGreaterThanOrEqual(6); // 1 个定义 + 5 个调用点
+    // ⚠️ 尺子有效性反证：这把尺子必须量得到坏形状，否则恒真
+    expect(handRolled.test('fail(`解压失败（退出码 ${code}）：${decErr.slice(0, 300)}`);')).toBe(true);
+    expect(
+      handRolled.test('fail(`读不出归档成员表（tar 退出码 ${code}）：${tarErr.slice(0, 300)}`);'),
+    ).toBe(true);
+    expect(handRolled.test('fail(composeToolFailure("解压失败", code, decErr, 300));')).toBe(false);
+  });
+
+  it('导出侧那两处压缩失败**有意**不收敛，且永远不会留下一个光秃秃的冒号', () => {
+    // 🔴 为什么不把导出侧也塞进 composeToolFailure：
+    //    `explainTarFailure` 翻译的是**读归档**时的天书（busybox typeflag、"不像 tar 流"、"被截断"）。
+    //    把它用到**压缩**失败上会给出误导性提示 —— 压缩器报一句 short read，
+    //    翻译过来却是"你的归档被截断了，请核对 .sha256"，而那一刻根本没有归档可读。
+    //    所以导出侧只保留原文 + 剩余空间，那才是压缩失败最可能的原因（磁盘满）。
+    const compSites = src.match(/压缩失败（退出码 \$\{code\}）：\$\{compErr\.slice\(0, 500\)\}`/g) || [];
+    expect(compSites.length).toBe(2); // 加密与不加密两条分支各一处
+    // ⚠️ 而它们**都**紧跟剩余空间后缀 ⇒ 不存在"冒号后面什么都没有"这个缺陷
+    const withFree =
+      src.match(/压缩失败（退出码 \$\{code\}）：[^`]*`\s*\+\s*`（剩余空间 \$\{free\}）`/g) || [];
+    expect(withFree.length).toBe(2);
+  });
+
+  it('🔴 hashArchiveMembers 在组装报错前**等 stderr 排空**（源码级：竞争无法行为复现）', () => {
+    // 竞争的机制：`exit` 只表示进程终止，Node 保证 stdio 已关闭的是 `close`。
+    // 改前那个 promise 在 exit/close 之间"谁先到就 resolve"，而 exit 通常先到 ⇒
+    // 组装时 decErr 可能还是空的（诊断信息被我们自己丢掉）。
+    // ⚠️ 本机 100/100 次没能自然复现（安静 + 全量 jest 负载都试过），所以钉源码形状。
+    expect(src).toContain('const stderrDrained = new Promise<void>');
+    expect(src).toContain("decompressor.stderr.on('end'");
+    expect(src).toContain("decompressor.stderr.on('close'");
+    // 并且它**真的被 await 了**（只定义不 await 等于没修）
+    expect(src).toMatch(/Promise\.all\(\[hashed, exited\.catch\(\(\) => null\), stderrDrained\]\)/);
+    // ⚠️ 同文件的 decompressUntar 用的是 close（那边没有这个竞争）⇒ 钉住它别被"统一"成 exit
+    expect(src).toMatch(/decompressor\.on\('close', \(code\) =>/);
+    // ⚠️ 尺子有效性反证
+    expect(/Promise\.all\(\[hashed, exited\.catch\(\(\) => null\), stderrDrained\]\)/.test(src)).toBe(true);
+    expect(
+      /Promise\.all\(\[hashed, exited\.catch\(\(\) => null\), stderrDrained\]\)/.test(
+        'const [result, code] = await Promise.all([hashed, exited.catch(() => null)]);',
+      ),
+    ).toBe(false);
+  });
+
+  it('回归网：截断归档重复 8 次，报错的**提示从不缺失**', async () => {
+    const staging = stagingWithEmptyFiles(3);
+    const archive = tarOf(staging, 'trunc-repeat.tar.gz', true);
+    const buf = fs.readFileSync(archive);
+    fs.writeFileSync(archive, buf.subarray(0, Math.max(32, Math.floor(buf.length * 0.6))));
+    let sawError = 0;
+    try {
+      for (let i = 0; i < 8; i += 1) {
+        const { decompressError } = await listArchiveEntries(archive);
+        if (!decompressError) continue; // 这台机器的 gzip 宽容到返回 0 ⇒ 如实跳过
+        sawError += 1;
+        expect(decompressError).toContain('提示：');
+        expect(decompressError.trimEnd().endsWith('：')).toBe(false);
+      }
+    } finally {
+      for (const p of [staging, archive]) {
+        try {
+          fs.rmSync(p, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
+    }
+    // ⚠️ 反空转：8 次里至少要有 1 次真的走到了报错分支，否则上面全是空转的恒真断言
+    expect(sawError).toBeGreaterThan(0);
   });
 });
