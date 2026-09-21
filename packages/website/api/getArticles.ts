@@ -68,7 +68,13 @@ export const getArticlesByTimeLine = async () => {
 };
 export const getArticlesByCategory = async () => {
   try {
-    const url = `${config.baseUrl}api/public/category`;
+    // 🔴 `?toListView=true`：服务端只下发列表真正需要的字段（少 `hidden`/`lastVisitedTime`/
+    //    `wordCount`，实测该响应 −18.3%）。⚠️ 这是 SSR 阶段 server→website 那一跳的白传，
+    //    与 `utils/timelineMonths.ts` 的 `trimArticleRecord`（拿到响应之后再裁到 4 个字段）
+    //    是**两层不同的裁剪**，互不冲突：这一层省的是进程间传输，那一层省的是访客下载量。
+    //    ⚠️ website 侧对那三个字段**零读者**（已全仓核实；`SearchCard/a11y.ts` 里的
+    //    `setBodyOverflow?.("hidden")` 是 CSS overflow 值，不是 `article.hidden`）。
+    const url = `${config.baseUrl}api/public/category?toListView=true`;
     const res = await serverFetch(url);
     const { data } = await res.json();
     return data;
@@ -83,7 +89,8 @@ export const getArticlesByCategory = async () => {
 };
 export const getArticlesByTag = async (tagName: string) => {
   try {
-    const url = `${config.baseUrl}api/public/tag`;
+    // 🔴 同上：`?toListView=true` 让服务端少下发三个零读者字段（实测该响应 −19.0%）。
+    const url = `${config.baseUrl}api/public/tag?toListView=true`;
     const res = await serverFetch(url);
     const { data } = await res.json();
     return data;

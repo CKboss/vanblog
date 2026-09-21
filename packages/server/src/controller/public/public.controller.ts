@@ -362,8 +362,15 @@ export class PublicController {
     };
   }
   @Get('tag')
-  async getArticlesByTag() {
-    const data = await this.tagProvider.getTagsWithArticle(false);
+  async getArticlesByTag(@Query('toListView') toListView?: unknown) {
+    // ⚠️ 布尔口径与 `@Get('category')` 一致（严格 `isTrue`：只认字面量 true / 字符串 "true"），
+    //    而**故意不同于** `@Get('article')` 的真值判断 —— 理由与守卫见 `@Get('category')` 上方注释：
+    //    那边真值判断的失败方向是"给更小的响应"（无害），而这里照抄会让 `?toListView=false`
+    //    给出**比调用方预期更少的字段**（静默的错答案）。⚠️ 别"顺手统一"。
+    // 🔴 默认（不传参数）逐字节不变：实测 23,265 B，与改动前基线相同。
+    const data = await this.tagProvider.getTagsWithArticle(false, {
+      slim: isTrue(toListView),
+    });
     return {
       statusCode: 200,
       data,
