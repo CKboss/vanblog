@@ -75,7 +75,7 @@ export default function ({
           </a>
           &nbsp;·&nbsp;
           <a
-            href="https://github.com/CKboss/vanblog/blob/dev/dsh/README.md#与上游的关系"
+            href="https://github.com/CKboss/vanblog/blob/dev/dsh/README.md#出处与许可"
             target={"_blank"}
             rel="noreferrer"
             title="看看这个分支相对原版改了什么"

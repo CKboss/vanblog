@@ -180,3 +180,133 @@ describe('后台「关于」页只讲当前这个版本，同时保留对原始�
     assert.match(editor, /CKboss\/vanblog\/blob\/dev\/dsh\/docs\/features\/editor\.md/);
   });
 });
+
+/**
+ * GitHub 为一个 markdown 标题生成的锚点 slug。
+ * 🔴 不是照文档猜的：拿本仓库 README 与 GitHub 真实渲染出的 HTML 对过账 ——
+ *    `id="user-content-…"` 共 19 个，本函数算出的集合与之**逐个相同、不多不少**。
+ * ⚠️ 两个容易漏的点（都实测过）：
+ *    ① GitHub 也给 **HTML 块级标题**（README 顶部的 `<h1 align="center">VanBlog</h1>`）生成锚点，
+ *       只解析 markdown 的 `#` 标题会漏掉它 ⇒ 漏算对本守卫是**危险方向**（合法锚点会假红）；
+ *    ② 中文字符原样保留，不做百分号编码。
+ * ⚠️ 与 `packages/website/__tests__/footerAttribution.spec.ts` 里的实现是**同一套口径的两份副本**
+ *    （两边测试框架不同：node:test vs vitest，且都不宜为此引入跨包 import）。改一处请同步另一处。
+ */
+const headingSlug = (text) =>
+  text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[*_~]/g, '')
+    .toLowerCase()
+    // ⚠️ 刻意不用 `/[^\p{L}…]/u`：与 website 那份副本保持同一套口径（那边 tsconfig target 低于 es6，
+    //    `u` 标志会报 TS1501）。只保留 ASCII 词字符 + 连字符 + 空格 + CJK 统一表意文字（含扩展 A），
+    //    中文标点自然被去掉，与 GitHub 的行为一致（已拿 GitHub 真实渲染的 19 个 id 对过账）。
+    .replace(/[^\w\- \u4e00-\u9fff\u3400-\u4dbf]/g, '')
+    .replace(/^\s+|\s+$/g, '')
+    .replace(/ /g, '-');
+
+/** 逐个执行全局正则（与 website 那份副本同口径，不用 matchAll 迭代） */
+const eachMatch = (re, src, fn) => {
+  re.lastIndex = 0;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    fn(m);
+    if (m[0] === '') re.lastIndex += 1; // 零宽匹配防死循环
+  }
+};
+
+/** README 里所有可跳转的锚点：markdown 标题 + HTML 块级标题 + 显式 `<a id>` */
+const readmeAnchors = () => {
+  const out = new Set();
+  let inFence = false;
+  for (const line of read('README.md').split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue; // 代码块里的 # 不是标题
+    const md = line.match(/^(#{1,6})\s+(.*)$/);
+    if (md) {
+      const s = headingSlug(md[2].replace(/^\s+|\s+$/g, ''));
+      if (s) out.add(s);
+    }
+    eachMatch(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, line, (m) => {
+      const s = headingSlug(m[2].replace(/^\s+|\s+$/g, ''));
+      if (s) out.add(s);
+    });
+    eachMatch(/<a\s+[^>]*\bid="([^"]+)"/g, line, (m) => out.add(m[1]));
+  }
+  return out;
+};
+
+/**
+ * 🔴 死锚点守卫：后台代码里每一个指向 `README.md#<锚点>` 的链接，其目标必须在 README 里真实存在。
+ *
+ * 为什么需要它：README 的「与上游的关系」一节改名为「出处与许可」后，前台页脚与后台「关于」页的链接
+ * 都成了死锚点，而**没有任何测试变红** —— 既有守卫钉的是"链接文本里含有那个字面量"，
+ * 钉住了引用方、却没钉住被引用方的存在。上面那条"链接指向的文件必须存在"只覆盖到**文件**，
+ * 锚点是同一类缺陷的另一半。
+ */
+describe('README 锚点必须真实存在（防死锚点）', () => {
+  const anchors = readmeAnchors();
+
+  /** 扫出后台源码里所有 `README.md#<锚点>` 链接（含模板串拼接出来的） */
+  const collectLinks = () => {
+    const seen = new Set();
+    const walk = (dir) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+          if (ent.name === 'node_modules' || ent.name.startsWith('.')) continue;
+          walk(full);
+        } else if (/\.(tsx?|jsx?)$/.test(ent.name)) {
+          const body = code(fs.readFileSync(full, 'utf8'));
+          eachMatch(/README\.md#([^'"`\s)\\]+)/g, body, (m) => {
+            seen.add({ anchor: decodeURIComponent(m[1]), file: path.relative(repoRoot, full) });
+          });
+        }
+      }
+    };
+    walk(path.join(repoRoot, 'packages/admin/src'));
+    return [...seen];
+  };
+
+  it('slug 算法本身是对的（尺子有效性：算法错了下面几条都会变成假的绿）', () => {
+    assert.equal(headingSlug('出处与许可'), '出处与许可'); // 中文原样保留
+    assert.equal(headingSlug('Known Limitations (2026)'), 'known-limitations-2026');
+    assert.equal(headingSlug('**粗体** 与 `代码`'), '粗体-与-代码');
+    assert.equal(headingSlug('[链接文字](https://example.com)'), '链接文字');
+  });
+
+  it('锚点集合非平凡，且同时覆盖 markdown 标题、HTML 块级标题与显式 <a id>', () => {
+    // 反空转：集合若为空，"所有链接都能解析"就恒真
+    assert.ok(anchors.size > 15, `README 锚点数异常：${anchors.size}`);
+    assert.ok(anchors.has('出处与许可'), 'markdown 标题的 slug 没算出来');
+    assert.ok(anchors.has('vanblog'), 'HTML 块级标题 <h1> 的 slug 没算出来');
+    const readme = read('README.md');
+    const explicit = [];
+    eachMatch(/<a\s+[^>]*\bid="([^"]+)"/g, readme, (m) => explicit.push(m[1]));
+    assert.ok(explicit.length > 0, 'README 里没有任何显式 <a id>，这条反证失去意义');
+    for (const id of explicit) assert.ok(anchors.has(id), `显式锚点没被算进集合：${id}`);
+  });
+
+  it('🔴 后台里每个 README 链接的锚点都真实存在', () => {
+    const links = collectLinks();
+    assert.ok(links.length > 0, '反空转：一个 README 锚点链接都没扫到，说明扫描器坏了');
+    for (const { anchor, file } of links) {
+      assert.ok(
+        anchors.has(anchor),
+        `${file} 指向 README.md#${anchor}，但 README 里没有这个锚点（标题改名了？请同步改链接）`,
+      );
+    }
+  });
+
+  it('「关于」页指向的是当前真实的节名，不是已改名的旧锚点', () => {
+    const src = code(read('packages/admin/src/pages/About.tsx'));
+    assert.match(src, /README\.md#出处与许可/);
+    // 旧节名已经不存在于 README 的标题里（只作为 <a id> 兼容锚点保留），产品链接不许再指向它
+    assert.doesNotMatch(src, /README\.md#与上游的关系/);
+  });
+});

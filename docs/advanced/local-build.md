@@ -84,7 +84,7 @@ rootless podman 需要 `/etc/subuid` 里有你的用户（发行版一般已经�
 
    docker 则配 `/etc/docker/daemon.json` 的 `registry-mirrors`。
    ⚠️ 公共加速站拉**大 blob**时可能传到一半就静默卡死（进度行不动、不报错、也不超时）。
-   本仓库五个 stage 的基础镜像全是 `node:24-alpine`（本地解包后约 **170 MB**），冒烟测试还要拉
+   本仓库六个 stage（5 个构建 + 1 个运行）的基础镜像全是 `node:24-alpine`（本地解包后约 **170 MB**），冒烟测试还要拉
    `mongo:7.0`（本地解包后约 **870 MB**）；下载的压缩 blob 比这两个数小，但都是几百 MB 量级。
    遇到就多换几个站重试，或先单独 `pull` 再构建。
 
@@ -151,7 +151,7 @@ podman exec <容器名> cat /var/log/setup.key      # 或：podman logs <容器�
 | 现象 | 原因 | 解法 |
 | --- | --- | --- |
 | server 报 `getaddrinfo EAI_AGAIN vb-mongo` | rootless podman 没装 `aardvark-dns`，**容器名解析不了** | 用 mongo 容器的 IP，或 `--add-host vb-mongo:<IP>` |
-| 前台整站 502，`/admin` 与 `/api` 正常 | Next 13/14 standalone 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID | server 已显式传 `HOSTNAME=0.0.0.0`；自己起 Next 时也要设 |
+| 前台整站 502，`/admin` 与 `/api` 正常 | Next 13/14/15 standalone 用 `HOSTNAME` 决定监听地址，容器里那是容器 ID | server 已显式传 `HOSTNAME=0.0.0.0`；自己起 Next 时也要设 |
 | 恢复后调 `/api/admin/**` 全是 401 | JWT 密钥是**启动时**读的，恢复把 `settings` 换成了备份里的 | 重启一次容器让密钥对齐（用户侧只需重新登录） |
 | `/robots.txt` 404 但 `/sitemap.xml` 200 | caddy 模板有 `srv0(:443)` 和 `srv1(:80)` **两套路由**，只补了一套 | 两个 server 的路由必须一致（有测试守着） |
 | `/sitemap.xml` 刚恢复完 404，一两分钟后 200 | 恢复后才开始生成 | 验证脚本要给足重试，别当故障 |

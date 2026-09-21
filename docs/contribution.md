@@ -7,8 +7,8 @@ order: 7
 ::: info 提示
 
 欢迎提交 issue 和 PR：issue 请看 [CKboss/vanblog 的 issue 页](https://github.com/CKboss/vanblog/issues)
-（⚠️ 仓库的 issue 功能目前是关闭的，`/issues/new` 会 404 —— 在那之前提问走
-[VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)），PR 提到 `dev/dsh` 分支。
+（issue 功能**已开启**，直接[新建 issue](https://github.com/CKboss/vanblog/issues/new) 即可；
+交流也可以走 [VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)），PR 提到 `dev/dsh` 分支。
 合并与打发版 tag 由维护者完成。
 
 :::
@@ -49,7 +49,7 @@ Vanblog 分为以下几个部分，构建后将整合到一个 `docker` 容器�
 
 ```bash
 ├── docker-compose  # docker-compose 编排模板
-├── Dockerfile  # 五阶段构建，全部基于 node:24-alpine
+├── Dockerfile  # 六阶段构建（5 个构建 stage + 1 个运行 stage），全部基于 node:24-alpine
 ├── docs # 项目文档的代码（vuepress）
 ├── entrypoint.sh # 容器入口文件
 ├── LICENSE # 开源协议
@@ -59,7 +59,7 @@ Vanblog 分为以下几个部分，构建后将整合到一个 `docker` 容器�
 |  ├── cli # 命令行工具
 |  ├── server # 后端代码（NestJS 10 + mongoose 8）
 |  ├── waline # 内嵌 waline 评论系统
-|  └── website # 前台前端代码（Next 14 + React 18）
+|  └── website # 前台前端代码（Next 15 + React 18）
 ├── patches # pnpm 补丁（构建时必须进上下文）
 ├── scripts # 部署与运维脚本（vanblog.sh、vanblog-drill.sh、build-image-local.sh、benchmark/、tests/）
 ├── dev-env.sh # 本机开发环境一键脚本（不需要 docker，也不需要 sudo）
@@ -72,7 +72,7 @@ Vanblog 分为以下几个部分，构建后将整合到一个 `docker` 容器�
 
 只列出大体上框架级别的，一些细节就直接看代码吧。
 
-- 前台： [next.js](https://nextjs.org/)（14，pages router）、[react.js](https://reactjs.org/)（18）、[tailwind-css](https://tailwindcss.com/)
+- 前台： [next.js](https://nextjs.org/)（15，pages router）、[react.js](https://reactjs.org/)（18）、[tailwind-css](https://tailwindcss.com/)
 - 后台： [ant design pro](https://pro.ant.design/zh-CN/)、[ant design](https://ant.design/)（umi 3 + antd 4 + React 17）
 - 后端： [nest.js](https://nestjs.com/)（10）、[mongoDB](https://www.mongodb.com/)（mongoose 8）
 - CI / 发布： [github-actions](https://docs.github.com/cn/actions)（`server-test` 跑 shell 守卫 + 三个包的单元测试 + 10 套要真 mongod 的 e2e、`admin-e2e` 跑后台单元测试 + playwright、
@@ -112,7 +112,7 @@ docker run --name mongodb-vanblog -d --restart unless-stopped \
 
 #### node 要求
 
-- Node **24**（CI 用的就是 24；低版本会在 `@nestjs/cli` 与 Next 14 上出问题）
+- Node **24**（CI 用的就是 24）。⚠️ **下限**：Next 15 要求 `^18.18.0 || ^19.8.0 || >=20`，实践上用 **20 及以上**；低版本会在 `@nestjs/cli` 与 Next 15 上出问题。官方镜像与 `scripts/build-image-local.sh` 的源码构建都在 `node:24-alpine` 容器内完成，不依赖宿主的 Node。
 - pnpm **8.11.0**（`package.json` 的 `packageManager` 钉的就是这个版本，corepack 会自动用对）
 
 #### 克隆项目并安装依赖
@@ -377,7 +377,7 @@ cd packages/server && ./node_modules/.bin/tsc -p tsconfig.build.json --noEmit --
 
 ### 手动打包
 
-根目录 `Dockerfile` 的**每一个阶段都是 `node:24-alpine`**（admin_builder / server_builder / website_builder / waline_builder / runner）。前台阶段会设置 `SHARP_IGNORE_GLOBAL_LIBVIPS=1`，让 `sharp`（`^0.35`）走 npm 的 optionalDependencies 拿 musl 预编译包（`@img/sharp-linuxmusl-x64` + `@img/sharp-libvips-linuxmusl-x64`），因此**不需要**在镜像里装 `vips-dev` / `fftw-dev` 从源码编（那是 200 多个 apk 包，构建会慢很多）。⚠️ sharp 必须 `>= 0.33`：更早的版本带一个会在 Alpine 上崩的安装脚本（musl 版本号形如 `1.2.4_git*`，不是合法 semver）。corepack 用仓库钉的 `pnpm@8.11.0`，不要改成 `pnpm@latest`；依赖一律走 `pnpm-lock.yaml` + `--frozen-lockfile`。这几条都有守卫看着：`bash scripts/tests/dockerfile-alpine-sharp.test.sh`。
+根目录 `Dockerfile` 的**每一个阶段都是 `node:24-alpine`**（admin_builder / server_builder / website_builder / waline_builder / cli_builder / runner —— 共 **6 个 `FROM`**：5 个构建 stage + 1 个运行 stage）。前台阶段会设置 `SHARP_IGNORE_GLOBAL_LIBVIPS=1`，让 `sharp`（`^0.35`）走 npm 的 optionalDependencies 拿 musl 预编译包（`@img/sharp-linuxmusl-x64` + `@img/sharp-libvips-linuxmusl-x64`），因此**不需要**在镜像里装 `vips-dev` / `fftw-dev` 从源码编（那是 200 多个 apk 包，构建会慢很多）。⚠️ sharp 必须 `>= 0.33`：更早的版本带一个会在 Alpine 上崩的安装脚本（musl 版本号形如 `1.2.4_git*`，不是合法 semver）。corepack 用仓库钉的 `pnpm@8.11.0`，不要改成 `pnpm@latest`；依赖一律走 `pnpm-lock.yaml` + `--frozen-lockfile`。这几条都有守卫看着：`bash scripts/tests/dockerfile-alpine-sharp.test.sh`。
 
 图床 AVIF 压缩（后台「压缩格式」）优先 `require('sharp')`，并会依次尝试几个候选路径（含镜像里前台 standalone 的 `/app/website/node_modules/sharp`）；sharp 不可用时回退到 `avifenc`（runner 里的 `libavif-apps`）。**不要去掉 runner 的 `libavif-apps` 或 `libwebp-tools`** —— WebP 那条路仍然要 `cwebp`。runner 还装了 `fontconfig ttf-dejavu wqy-zenhei`：可见水印的文字是 SVG 经 librsvg/pango/fontconfig 栅格化的，要的是系统字体，缺字体会退化成「跳过水印 + WARN」。
 

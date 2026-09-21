@@ -24,7 +24,9 @@ const FORK_REPO = 'https://github.com/CKboss/vanblog';
 const FORK_BRANCH = 'dev/dsh';
 const FORK_COMMITS = `${FORK_REPO}/commits/${FORK_BRANCH}`;
 const FORK_CHANGELOG = `${FORK_REPO}/blob/${FORK_BRANCH}/CHANGELOG.md`;
-const FORK_README = `${FORK_REPO}/blob/${FORK_BRANCH}/README.md#与上游的关系`;
+// ⚠️ 这个锚点必须与 README 里真实存在的标题一致：改本节标题会让它变成死锚点（页面能打开，
+//    但停在仓库顶部，看着像链接坏了）。已由 tests/unit/aboutPage.test.js 钉住"目标锚点真实存在"。
+const FORK_README = `${FORK_REPO}/blob/${FORK_BRANCH}/README.md#出处与许可`;
 const FORK_DOCS = `${FORK_REPO}/tree/${FORK_BRANCH}/docs`;
 const FORK_ISSUES = `${FORK_REPO}/issues`;
 const FORK_RUNBOOK = `${FORK_REPO}/blob/${FORK_BRANCH}/AGENTS.md`;

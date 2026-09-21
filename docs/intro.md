@@ -70,8 +70,8 @@ order: 1
 ## 维护
 
 问题与需求请提到本仓库 [CKboss/vanblog](https://github.com/CKboss/vanblog/issues)，代码改动走 PR（目标分支 `dev/dsh`）。
-⚠️ 本仓库的 issue 功能目前是关闭的（`/issues/new` 会 404），打开之前请走
-[VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)。
+issue 功能**已开启**，直接[新建 issue](https://github.com/CKboss/vanblog/issues/new) 即可；
+交流也可以走 [VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)。
 合并与打发版 tag 由维护者完成：推一个 `v*` tag 会自动建 GitHub Release（发布说明取 `CHANGELOG.md` 里同名那一节）
 并构建镜像推到 `ghcr.io/ckboss/vanblog`。每轮改动都会补测试与文档，细节见 [开发指南](./contribution.md)。
 
@@ -176,7 +176,7 @@ PS: 不好意思中间有段时间没管，有些记录找不到了，后续有�
 现在可能用的人有一些了吧。
 
 如果您想把自己的站点加进来，请到 [VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8) 告诉我们
-（本仓库的 issue 功能目前关闭，`/issues/new` 会 404；打开之后也可以直接开 issue），会尽快添加。
+（也可以直接在本仓库[开一个 issue](https://github.com/CKboss/vanblog/issues/new)），会尽快添加。
 
 - [Mereith's Blog](https://www.mereith.com)
 - [GT 的官方博客](https://gt-it.net)
