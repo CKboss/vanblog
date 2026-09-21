@@ -130,15 +130,26 @@ jobs:
         #    `NODE_DIST_URL=none` 会让 Dockerfile 里那条 `if [ -n ... ]` 整段空转
         #    （node-gyp 用它自己的默认源），已核实空值是安全的。
         # ⚠️ `SMOKE_HTTP_PORT` 用默认 18080：runner 是一次性的，没有"正在跑的站点"要避让。
+        # 🔴 2026-09-21 加失败诊断：09-20 那次定时跑在 **2.5 分钟**就死了（正常构建 20-40 分钟，
+        #    说明死在很早期），但 deploy key 读不了 job 日志（403）⇒ 无法定位。现在失败时把
+        #    输出末尾转成 ::error annotations（公开 API /check-runs/{id}/annotations 可读）。
+        #    rc 原样透传（PIPESTATUS），构建命令与环境一个没改。
         run: |
-          set -euo pipefail
+          set -u
+          set +e  # runner 默认 `bash -e`：不关掉 errexit，失败时走不到下面的注解块
+          log="${RUNNER_TEMP:-/tmp}/image-build.log"
           NPM_REGISTRY=https://registry.npmjs.org \
           ALPINE_MIRROR=none \
           NODE_DIST_URL=none \
           SHARP_DIST_HOST=none \
           IMAGE_TAG=vanblog:ci-nightly \
           SMOKE_HTTP_PORT=18080 \
-            bash scripts/build-image-local.sh
+            bash scripts/build-image-local.sh 2>&1 | tee "${log}"
+          rc=${PIPESTATUS[0]}
+          if [ "${rc}" -ne 0 ]; then
+            tail -40 "${log}" | while IFS= read -r l; do echo "::error::image-build 尾部输出 ${l}"; done
+          fi
+          exit "${rc}"
 
       - name: Record what was built
         if: always()

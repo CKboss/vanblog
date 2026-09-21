@@ -81,8 +81,48 @@ function createMemoryUserModel(initial: any[] = []) {
       null
     );
   };
+  const findAllMatching = (query: any) => {
+    if (!query || !Object.keys(query).length) {
+      return [...docs];
+    }
+    return docs.filter((item) =>
+      Object.entries(query).every(([key, value]) => item[key] === value),
+    );
+  };
   return {
     docs,
+    // ⚠️ `validateUser` 已从 `findOne({name})` 改为 `find({name}).sort({id:1}).limit(2).exec()`
+    //    （同名账号的确定性修复），`getNewId` 也直接 `await find({}).sort({id:-1}).limit(1)`
+    //    （不 .exec()，靠 mongoose Query 的 thenable）。假模型必须提供同形状的链式返回，
+    //    否则整套以 `TypeError: this.userModel.find is not a function` 红掉
+    //    —— 这正是 2026-09-19 之后 CI 的 backup-e2e 步骤一直红的第二层原因
+    //    （第一层是 jest 配置缺 ESM 转换白名单，套件根本加载不起来）。
+    find: jest.fn((query: any) => {
+      let result = findAllMatching(query);
+      const chain: any = {
+        sort: (spec: any) => {
+          const entries = Object.entries(spec || {});
+          result = [...result].sort((a, b) => {
+            for (const [key, dir] of entries) {
+              if (a[key] === b[key]) {
+                continue;
+              }
+              return (a[key] > b[key] ? 1 : -1) * (Number(dir) < 0 ? -1 : 1);
+            }
+            return 0;
+          });
+          return chain;
+        },
+        limit: (n: number) => {
+          result = result.slice(0, n);
+          return chain;
+        },
+        exec: () => Promise.resolve(result),
+        then: (onFulfilled: any, onRejected: any) =>
+          Promise.resolve(result).then(onFulfilled, onRejected),
+      };
+      return chain;
+    }),
     findOne: jest.fn((query: any) => asExec(findMatching(query))),
     updateOne: jest.fn((query: any, patch: any) => {
       const target = findMatching(query);

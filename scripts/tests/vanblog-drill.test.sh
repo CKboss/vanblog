@@ -1927,9 +1927,22 @@ else
   fail "预检没有点名损坏（输出里既没有流式完整性也没有清单）"
 fi
 assert_eq "$(grep -cE 'fakeengine (run |network create)' "${FAKE_LOG}" 2>/dev/null)" "0" "预检拒绝：一条容器命令都没发（不是半恢复，是根本不开始）"
-# --skip-preflight 时流式检查必须让路（那条路的用途是演练 server 护栏）
-PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${FD}" VANBLOG_DRILL_TIMEOUT=3 \
-  run_cli drill --skip-preflight --image vanblog:test "${FD}/vanblog-full-20260916-010102.tar.zst" >"${TEST_DIR}/cd7.out" 2>&1
+# --skip-preflight 时流式检查必须让路（那条路的用途是演练 server 护栏）。
+# ⚠️ 夹具刻意**不复用**上面 cd6 的中段翻转归档：中段翻转后"清单还读不读得出来"取决于
+#    编解码器的版本组合 —— 实测 zstd 1.5.5 造的归档，在 zstd 1.4.8 + GNU tar 1.34 组合下
+#    回读时清单与成员表**仍然可得** ⇒ 预检全 PASS ⇒ 输出里没有任何 "skip-preflight"
+#    字样 ⇒ 这条断言变成随环境变色的假红（本仓库 CI 正是 ubuntu-22.04：tar 1.34；
+#    用户机器上"新机器造归档、旧机器演练"同样会撞上）。改用坏 **zstd 帧头**（magic 4 字节
+#    保留：格式仍认得出，但解压必然零输出）：任何版本组合都读不出清单 ⇒ 那条
+#    "（--skip-preflight：照样上传…）" WARN 必然出现，断言钉住的是产品语义
+#    "跳过预检必须明说"本身，而不是赌编解码器组合。cd6 的"中段翻转被流式预检拦下"
+#    覆盖不受影响（那条仍用中段翻转夹具，考的就是 -t 会读完整个流）。
+HD="${TEST_DIR}/hdrdir"
+mkdir -p "${HD}"
+cp "${GOOD}" "${HD}/vanblog-full-20260916-010103.tar.zst"
+printf '\xff\xff\xff\xff' | dd of="${HD}/vanblog-full-20260916-010103.tar.zst" bs=1 seek=4 count=4 conv=notrunc status=none
+PATH="${FAKE_BIN}:${PATH}" VANBLOG_DRILL_ENGINE=fakeengine VANBLOG_BACKUP_DIR="${HD}" VANBLOG_DRILL_TIMEOUT=3 \
+  run_cli drill --skip-preflight --image vanblog:test "${HD}/vanblog-full-20260916-010103.tar.zst" >"${TEST_DIR}/cd7.out" 2>&1
 assert_contains "$(cat "${TEST_DIR}/cd7.out")" "skip-preflight" "--skip-preflight 时明说预检被跳过（既有语义不变）"
 
 # ══════════════════════════ A20) 定期复验护栏（--reverify-days）══════════════════════

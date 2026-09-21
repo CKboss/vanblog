@@ -13,7 +13,11 @@ import { MetaProvider } from '../src/provider/meta/meta.provider';
  * delete through the admin API, and editing it must update in place.
  */
 function createMemoryMetaModel(links: any[] = []) {
-  const state: any = { links: links.map((item) => ({ ...item })) };
+  // ⚠️ `_id` 必须有：2026-09-20 起 MetaProvider 的写路径先过 `requireMetaDocument()`
+  //    （8fc1ae18/7139563d，空 filter 写库加固），meta 文档缺 `_id` 会抛 NotFoundException
+  //    ⇒ 所有写接口在测试里变成 404。产品行为是有意的（宁可 404 也不静默写错文档），
+  //    是这份替身没跟上。
+  const state: any = { _id: 'e2e-meta-doc', links: links.map((item) => ({ ...item })) };
   return {
     state,
     findOne: jest.fn(() => ({

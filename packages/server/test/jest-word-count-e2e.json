@@ -4,8 +4,18 @@
   "testEnvironment": "node",
   "testMatch": ["<rootDir>/test/word-count.e2e-spec.ts"],
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
+    "^.+\\.(t|j)s$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "allowJs": true
+        }
+      }
+    ]
   },
+  "transformIgnorePatterns": [
+    "^(?!.*(@mdit|katex|hast-util|hastscript|parse5|property-information|space-separated-tokens|comma-separated-tokens|stringify-entities|character-entities|html-void-elements|ccount|zwitch|vfile|unist-util|web-namespaces|is-buffer)).*node_modules.*$"
+  ],
   "moduleNameMapper": {
     "^src/(.*)$": "<rootDir>/src/$1"
   }

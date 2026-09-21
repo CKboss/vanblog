@@ -17,7 +17,13 @@ import { DEFAULT_FRIEND_LINK_INTRO, resolvePageCopy } from '../src/utils/pageCop
  * site settings and empty values fall back to the previous hardcoded text.
  */
 function createMemoryMetaModel() {
-  const state: any = { siteInfo: { siteName: 'demo', baseUrl: 'https://blog.example.com' } };
+  // ⚠️ `_id` 必须有：2026-09-20 起 MetaProvider 的写路径先过 `requireMetaDocument()`
+  //    （8fc1ae18/7139563d，空 filter 写库加固），meta 文档缺 `_id` 会抛 NotFoundException
+  //    ⇒ updateSiteInfo 等写接口在测试里变成 404。产品行为是有意的，是替身没跟上。
+  const state: any = {
+    _id: 'e2e-meta-doc',
+    siteInfo: { siteName: 'demo', baseUrl: 'https://blog.example.com' },
+  };
   return {
     state,
     findOne: jest.fn(() => ({

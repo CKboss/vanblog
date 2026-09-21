@@ -238,7 +238,25 @@ jobs:
         #     各有独立的 `test:*-e2e` 命令、独立端口与"拒绝 27017/真实库名"的硬护栏；
         #   - walineMongo / fullBackup / initJwt / audit-hardening-round2 里的 MongoClient 都是假的，
         #     不需要真库（本来就在白名单里、CI 一直是绿的）。
-        run: pnpm test -- --passWithNoTests=false
+        # 🔴 2026-09-21 加失败诊断：本步骤在 CI 上间歇红（仓库有 7 个已知负载敏感假红 spec，
+        #    见 AGENTS.md §7.72 清单），而本机 deploy key 读不了 job 日志（403，日志接口要
+        #    actions:read）⇒ 红了等于盲。现在把 jest 输出 tee 到文件，失败时把 FAIL 套件行与
+        #    `●` 失败用例行转成 ::error annotations —— annotations 走公开 API
+        #    （/check-runs/{id}/annotations）就能读。退出码原样透传（PIPESTATUS），
+        #    不放宽、不加重任何断言；这是**诊断**，不是修 flake 本身（修在 spec 里，另案）。
+        run: |
+          set -u
+          set +e  # ⚠️ runner 默认 shell 是 `bash -e`：不显式关掉 errexit 的话，
+                  #    下面管道一失败整个 step 就地中止，::error 注解永远打不出来。
+          log="${RUNNER_TEMP:-/tmp}/jest-full.log"
+          pnpm test -- --passWithNoTests=false 2>&1 | tee "${log}"
+          rc=${PIPESTATUS[0]}
+          if [ "${rc}" -ne 0 ]; then
+            grep -E '^FAIL ' "${log}" | sort -u | head -20 | while IFS= read -r l; do echo "::error::失败套件 ${l}"; done
+            grep -E '^[[:space:]]+● ' "${log}" | grep -v 'Console' | sort -u | head -30 | while IFS= read -r l; do echo "::error::失败用例 ${l}"; done
+            tail -30 "${log}"
+          fi
+          exit "${rc}"
 
       - name: Run website unit tests
         run: pnpm --filter @vanblog/theme-default exec vitest run
@@ -480,12 +498,28 @@ jobs:
           fi
           zstd --version
 
-      - name: Restore drill logic (620 assertions; the live container part stays off)
-        # ⚠️ 这个守卫分两部分：A) 纯逻辑，**默认全部跑**（620 条，本机实测 148 秒）；
+      - name: Restore drill logic (624 assertions; the live container part stays off)
+        # ⚠️ 这个守卫分两部分：A) 纯逻辑，**默认全部跑**（624 条，本机实测 143 秒）；
         #    B) 活体演练，需要引擎 + 镜像 + **一份真归档**，默认跳过并说明原因，
         #    只有 `VANBLOG_DRILL_LIVE=1` 才跑。CI 里跑不了 B —— 归档是站点数据，
         #    不能进仓库，所以那部分永远是"人工在演练机上跑"，不要以为这里覆盖了它。
-        run: bash scripts/tests/vanblog-drill.test.sh
+        # 🔴 2026-09-21 加失败诊断：本步骤在 CI 上**从加入当天（09-20 首跑）起每次都红**，
+        #    而本机把 runner 的工具链逐个复现（bash 5.1.16、tar 1.34、zstd 1.5.x、mawk/gawk、
+        #    env -i 最小环境、TZ=UTC）全部 624/0 绿 ⇒ 差异还没找到；deploy key 又读不了日志（403）。
+        #    现在失败时把 `FAIL:` 行转成 ::error annotations（公开 API 可读），下一次红会直接
+        #    点名是哪几条断言、got/want 是什么。rc 原样透传，断言一条没动。
+        run: |
+          set -u
+          set +e  # runner 默认 `bash -e`：不关掉 errexit，失败时走不到下面的注解块
+          log="${RUNNER_TEMP:-/tmp}/drill.log"
+          bash scripts/tests/vanblog-drill.test.sh 2>&1 | tee "${log}"
+          rc=${PIPESTATUS[0]}
+          if [ "${rc}" -ne 0 ]; then
+            grep -E '^FAIL:' "${log}" | head -30 | while IFS= read -r l; do echo "::error::drill 断言失败 ${l}"; done
+            grep -E '^passed=' "${log}" | tail -1
+            tail -20 "${log}"
+          fi
+          exit "${rc}"
 
       - name: Source-install path (fake git/docker/compose, no network, no daemon)
         run: bash scripts/tests/vanblog-source-install.test.sh

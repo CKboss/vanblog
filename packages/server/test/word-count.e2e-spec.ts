@@ -93,7 +93,15 @@ describe('public 总字数 matches published editor counts (e2e #293)', () => {
     }));
 
     const model = createMemoryArticleModel([...published, ...notPublic]);
-    const metaDoc: any = { totalWordCount: 0, siteInfo: { baseUrl: 'https://blog.example.com' } };
+    // ⚠️ `_id` 必须有：2026-09-20 起 MetaProvider.update()（updateTotalWords 的落库路径）
+    //    在 meta 文档缺 `_id` 时按设计走「WARN + 不写」降级（8fc1ae18/7139563d 空 filter
+    //    写库加固）⇒ totalWordCount 永远写不进去、getTotalWords() 恒为 0。
+    //    产品行为是有意的（不初始化站点启动时 metas 为空，不该每次刷 ERROR），是替身没跟上。
+    const metaDoc: any = {
+      _id: 'e2e-meta-doc',
+      totalWordCount: 0,
+      siteInfo: { baseUrl: 'https://blog.example.com' },
+    };
     const metaModel = {
       findOne: () => ({ exec: async () => metaDoc }),
       updateOne: async (_query: any, patch: any) => {

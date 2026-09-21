@@ -34,7 +34,13 @@ describe('admin edit refreshes all public post URLs (e2e)', () => {
     };
 
     mockedAxios.get.mockImplementation(async (url: string) => {
-      const path = decodeURIComponent(String(url).split('path=')[1] || '');
+      // ⚠️ 必须按 query 参数解析，不能 `split('path=')[1]` 拿尾巴：2026-09-20 起
+      //    buildRevalidateUrl 用 URLSearchParams 组 `?path=…&secret=…`（ab66caa2，
+      //    revalidate 共享密钥修复），旧写法会把 `&secret=…` 一起当 path，
+      //    revalidate 写进带毒的缓存键 ⇒ /post/<id> 永远是旧内容。
+      //    真前台的 /api/revalidate 也是按参数取 path 的，这里与它同口径。
+      const params = new URLSearchParams(String(url).split('?')[1] || '');
+      const path = params.get('path') || '';
       if (path.startsWith('/post/')) {
         revalidate(path);
       }
