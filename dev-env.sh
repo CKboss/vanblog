@@ -181,13 +181,35 @@ do_stop() {
     local pid; pid=$(port_pid "$port")
     if [ -n "${pid:-}" ]; then kill "$pid" 2>/dev/null && echo "killed :$port (pid $pid)"; fi
   done
-  # 兜底清理：只杀命令行里带本工作区路径的进程；waline 由 server 用相对路径拉起，
-  # 命令行里不含 $ROOT，需要单独按脚本名匹配（否则下次启动会 bind EADDRINUSE :8360）。
-  # 注意排除脚本自身与父进程，避免 pkill -f 把自己的 shell 一起杀掉。
-  local self=$$ parent=$PPID p
-  for p in $(pgrep -f "$ROOT/packages" 2>/dev/null; pgrep -f '@waline/vercel/vanilla\.js' 2>/dev/null); do
+  # 兜底清理：只杀"确实属于 dev 服务"的残留进程。
+  # 🔴 2026-09-21 收窄（原来是 pgrep -f "$ROOT/packages"，会误杀测试与代理进程）：
+  #    旧模式匹配**任何**命令行含 "<工作区>/packages" 的进程，而 jest worker、vitest、tsc、ts-node
+  #    以及任何在工作区里跑的代理/工具，命令行形状都是 <ROOT>/packages/<pkg>/node_modules/.bin/<tool> …
+  #    ⇒ 执行 `./dev-env.sh stop` 会把它们**一起 SIGTERM 掉**（而它的注释只提到"排除脚本自身与父进程"，
+  #    说明当时只考虑了自己的 shell，没考虑并发进程）。
+  #    ⚠️ 而且实测旧模式**连三个记录在 pid 文件里的进程都匹配不到**：
+  #      server  = `node ./node_modules/.bin/../@nestjs/cli/bin/nest.js start --watch`（**相对路径，不含 $ROOT**）
+  #      admin   = `…/.tools/node_modules/pnpm/bin/pnpm.cjs --filter @vanblog/admin dev`（含的是 $ROOT/.tools）
+  #      website = `…/.tools/node_modules/pnpm/bin/pnpm.cjs --filter @vanblog/theme-default dev`（同上）
+  #    它真正匹配到的是 pnpm 派生的孙进程（`next dev` / `umi dev`）。
+  #    ⇒ 所以**不能按目录收窄**（next 与 jest 都在 packages/*/node_modules/.bin/ 下，目录形状无法区分），
+  #      必须**按工具名签名**匹配；`next-server` 这类子进程由上面那段"按端口清理"负责（它持有监听套接字）。
+  # ⚠️ waline 由 server 用相对路径拉起、命令行里不含 $ROOT，需要单独按脚本名匹配
+  #    （否则下次启动会 bind EADDRINUSE :8360）。
+  # 注意排除脚本自身与父进程，避免 pgrep -f 把自己的 shell 一起匹配上。
+  local self=$$ parent=$PPID p cmd
+  for p in $(pgrep -f "$ROOT/packages/website/node_modules/(\.bin/)?next" 2>/dev/null
+             pgrep -f "$ROOT/packages/admin/node_modules/(\.bin/)?umi" 2>/dev/null
+             pgrep -f '@nestjs/cli/bin/nest\.js' 2>/dev/null
+             pgrep -f '@waline/vercel/vanilla\.js' 2>/dev/null); do
     case "$p" in
       "$self" | "$parent") continue ;;
+    esac
+    # 🔴 纵深防御：**绝不**杀测试 / 类型检查 / lint / 格式化工具，即使它们的命令行碰巧命中上面的签名。
+    #    这一层是刻意冗余的 —— 签名收窄是第一道，这里是第二道，因为签名将来可能被人放宽。
+    cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+    case "$cmd" in
+      *jest* | *vitest* | *mocha* | *ts-node* | *eslint* | *prettier* | *"bin/tsc"*) continue ;;
     esac
     kill "$p" 2>/dev/null
   done
