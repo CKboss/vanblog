@@ -3,12 +3,32 @@ import { Injectable, Logger } from '@nestjs/common';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js';
 import taskLists from 'markdown-it-task-lists';
-// ⚠️ 以前是 `markdown-it-katex`：那个包 2016 年就停止维护（2.0.3 至今仍是"最新"），
-// 带着一个**没有修复版本**的 XSS 公告，而且内部钉的是 katex 0.6。
-// `@traptitech/markdown-it-katex` 是社区维护的等价替代（同样的默认导出、同样的
-// markdown-it 插件签名，内部用 katex 0.16），前台/后台/RSS 三处的 katex 版本就此对齐。
-// 渲染出来的数学标记会从 katex 0.6 变成 0.16（class 仍是 .katex，样式表前台已经在加载）。
-import mk from '@traptitech/markdown-it-katex';
+// 数学公式插件的迁移史（两次，理由都是**维护状态**而不是漏洞）：
+//   ① `markdown-it-katex` —— 2016 年停止维护（2.0.3 至今仍是"最新"），带着一个**没有修复版本**
+//      的 XSS 公告，内部钉 katex 0.6 ⇒ 换成 `@traptitech/markdown-it-katex`（见 §7.47）。
+//   ② `@traptitech/markdown-it-katex` 3.6.0 —— **2022-07-08 之后未再更新**，且它是渲染用户正文
+//      这条热路径上唯一的公式插件 ⇒ 2026-09-21 换成 `@mdit/plugin-katex`（见 §7.77.2 / §7.89）。
+//
+// 🔴 迁移前实测过的事实（都是量出来的，不是推理）：
+//   · **katex 0.16.47 与 0.17.0 对同一批公式产出的 HTML 逐字节相同**（8/8）⇒ 新插件依赖的
+//     `katex: ^0.17.0` 不会改变数学标记；前台仍然加载自己的 `katex@0.16` 样式表，选择器是
+//     `.katex`/`.katex-display`，不受影响。
+//   · 语料差分（59 例，含 8 篇真实文章）：markdown-it **13→14 是 59/59 逐字节相同**；
+//     插件替换只有 **2/59** 不同，且都只差 **1 个字节** —— 块级公式的外层容器从
+//     `<p class="katex-block ">`（双引号 + 尾随空格）变成 `<p class='katex-block'>`。
+//     ⚠️ 全仓对 `katex-block` 这个类名的字面依赖是 **0 处**（grep 过 ts/tsx/css/less/scss/js/jsx/md），
+//     所以这 1 字节是惰性的；内部的 `.katex-display`/`.katex` 标记完全一致。
+//   · `@mdit/plugin-katex@1.0.1` 是 **ESM-only**（`"type": "module"`，exports 里只有 `default`
+//     条件、没有 `require`，也没有根 `main`/`types`）。本包是 CommonJS（`module: CommonJS`、
+//     无 `"type": "module"`），运行时**可以**加载它：Node 24（镜像的 runner 就是 node:24-alpine）
+//     支持 `require(esm)`，而该包**没有 top-level await**（实测 require 成功、`typeof katex === 'function'`）。
+//     ⚠️ 但 TypeScript 的 `moduleResolution` 是 **Node10**（`module: CommonJS` 的默认值），
+//     Node10 **不读 exports 映射**、只找根 `main`/`types` ⇒ 直接 import 会报 TS2307。
+//     所以 `tsconfig.json` 里给它加了一条 `paths` 映射指到 `dist/index.d.ts`
+//     （与既有的 `"mongoose"` 那条同一手法），**而不是**把整个包的 moduleResolution 换成
+//     node16/bundler —— 那会改变全仓所有 import 的解析规则，blast radius 太大。
+//     ⚠️ 如果将来把 server 迁到 ESM 或把 moduleResolution 升级到 node16+，那条 paths 就可以删掉。
+import { katex } from '@mdit/plugin-katex';
 
 // x86asm ships without aliases in highlight.js 11; users write ```asm / ```nasm.
 if (hljs.getLanguage('x86asm')) {
@@ -56,7 +76,10 @@ export class MarkdownProvider {
       },
     })
       .use(taskLists)
-      .use(mk);
+      // ⚠️ 不传任何 options：`@mdit/plugin-katex` 的默认分隔符行为与旧插件在本项目语料上
+      //    实测一致（`$…$` 行内、`$$…$$` 块级、`$a \$ b$` 转义都相同，而 `$5 与 $10` 两边都
+      //    **不**当成公式）。显式传 options 反而会引入一处"我们以为等价、其实不等价"的风险。
+      .use(katex);
   }
   renderMarkdown(content: string) {
     return this.md.render(content);

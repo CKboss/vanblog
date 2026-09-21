@@ -21,7 +21,8 @@
     "noFallthroughCasesInSwitch": false,
     "composite": true,
     "paths": {
-      "mongoose": ["./node_modules/mongoose"]
+      "mongoose": ["./node_modules/mongoose"],
+      "@mdit/plugin-katex": ["./node_modules/@mdit/plugin-katex/dist/index.d.ts"]
     }
   }
 }

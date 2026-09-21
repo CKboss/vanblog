@@ -57,7 +57,7 @@
     "js-base64": "^3.7.5",
     "js-sha256": "^0.9.0",
     "lodash": "^4.17.21",
-    "markdown-it": "^13.0.2",
+    "markdown-it": "^14.3.2",
     "markdown-it-task-lists": "^2.1.1",
     "mongodb": "^5.9.1",
     "mongoose": "^8.24.4",
@@ -75,7 +75,7 @@
     "sitemap": "^7.1.1",
     "swagger-ui-express": "^4.6.3",
     "yaml": "^2.3.4",
-    "@traptitech/markdown-it-katex": "^3.0.30"
+    "@mdit/plugin-katex": "^1.0.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
@@ -106,8 +106,18 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true
+          }
+        }
+      ]
     },
+    "transformIgnorePatterns": [
+      "^(?!.*(@mdit|katex)).*node_modules.*$"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
