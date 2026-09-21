@@ -68,6 +68,54 @@ import { envPositiveInt } from 'src/utils/envNumber';
 export type ArticleView = 'admin' | 'public' | 'list' | 'listSlim' | 'tagsOnly';
 
 /**
+ * 🔴 **单文档读（`getById` / `getByPathName`）的 publish 过滤：默认拒绝（deny-by-default）。**
+ *
+ * 这里是一张**显式登记表**：每个 `ArticleView` 成员都必须在此声明它是否跳过
+ * "未到发布时间"过滤（`visiblePublishFilter()`）。**没登记 = 编译不过**，而不是运行时静默放行。
+ *
+ * ## 为什么必须是登记表而不是 `view === 'public'` 这种正向判断
+ * 原来的形状是 `if (view === 'public') { $and.push(visiblePublishFilter()) }` ——
+ * 也就是**只有 `'public'` 过滤，其它一律放行**。这在今天是安全的（所有非 public 的调用方都核实过
+ * 非匿名：admin 控制器在 `AdminGuard` 之后、ISR 的 `runStorm` 只能由定时任务/主题/admin 触发、
+ * `activeArticleById` 根本未接线），但它是**默认放行**：
+ * 🔴 **将来任何人加一个 view 名，就自动跳过 publish 过滤，而且没有任何守卫会红。**
+ * 同一个文件里的**列表读**恰好是相反且更好的形状 —— `getAll` 按 `includeHidden === false` 加过滤、
+ * **与 view 名无关**，所以新增 `'listSlim'`/`'tagsOnly'` 在结构上不可能绕过过滤。
+ * 一个文件里对同一个安全性质有两套门槛口径，本身就是缺陷。
+ *
+ * ## 为什么用 `Record<ArticleView, boolean>` 而不是 `Set`
+ * `Record` 让"漏掉一个成员"成为**类型错误**（编译期就红），而 `Set` 的成员资格只能靠运行时或额外守卫。
+ * ⚠️ 即便如此，运行时仍然可能拿到表外的值（`any` 强转、JS 调用方）⇒ 读取处一律用 `=== true`，
+ * **任何不是字面 true 的值（含 `undefined`）都判定为"要过滤"**，失败方向永远偏向更安全的一侧。
+ */
+const VIEW_SKIPS_PUBLISH_FILTER: Record<ArticleView, boolean> = {
+  // 后台必须能看到定时文章（否则「定时发布」这个功能在后台就查不出来）。
+  // 调用方全部在 `AdminGuard` 之后：`controller/admin/article/article.controller.ts` 的
+  // 108/154/333/483/502，以及 `provider/export/markdownExport.provider.ts:314`
+  // （只由 `controller/admin/export/export.controller.ts` 到达，该控制器 `@UseGuards(...AdminGuard)`）。
+  admin: true,
+  // 内部/后台的整篇读取：ISR 的 `runStorm`（`provider/isr/isr.provider.ts:237`，只能经 `activeAll`
+  // 由 `publish.task`/`isr.task`/`theme.provider`/admin 文章控制器触发 ⇒ 非匿名）与
+  // `article.controller.ts:148`（admin，取更新前的快照）。
+  list: true,
+  // ⚠️ 下面两个**当前没有任何单文档读的调用方**（它们只用于列表投影）。
+  // 🔴 刻意登记为"要过滤"：既然没人依赖它们看到未发布文章，就取更安全的一侧。
+  //    将来若真要用它们做单文档读并需要看到定时文章，必须**显式**改成 true 并在此写明理由。
+  listSlim: false,
+  tagsOnly: false,
+  // 公开面（含 URL 直达 `/post/<pathname>`）：未到点的文章一律按"不存在"处理。
+  public: false,
+};
+
+/**
+ * 单文档读是否跳过 publish 过滤。
+ * 🔴 `=== true` 是有意的：表外的值（`undefined`、`any` 强转进来的字符串）一律返回 false ⇒ **加过滤**。
+ */
+function singleDocReadSkipsPublishFilter(view: ArticleView): boolean {
+  return VIEW_SKIPS_PUBLISH_FILTER[view] === true;
+}
+
+/**
  * 「扫描文章图片」的**分批**参数。
  *
  * 为什么必须分批：这个扫描要读**每篇文章的正文**（图片链接就在正文里），而正文是整个库里
@@ -1502,8 +1550,11 @@ export class ArticleProvider {
       },
     ];
     // P5：公开详情（含 URL 直达 /post/<pathname>）里，publishAt 没到的文章一律
-    // 按"不存在"处理（404）；admin/list 视图不过滤 —— 后台必须能看到定时文章。
-    if (view === 'public') {
+    // 按"不存在"处理（404）；只有**显式登记**的内部视图才不过滤 —— 后台必须能看到定时文章。
+    // 🔴 2026-09-21 改成默认拒绝：原来是 `view === 'public'` 的正向判断（= 除 public 外一律放行），
+    //    加一个新 view 名就会静默跳过过滤。现在口径由 VIEW_SKIPS_PUBLISH_FILTER 登记表决定，
+    //    未登记的值一律加过滤（见该表上方注释）。行为对现有调用方**逐视图不变**。
+    if (!singleDocReadSkipsPublishFilter(view)) {
       $and.push(visiblePublishFilter());
     }
 
@@ -1534,8 +1585,8 @@ export class ArticleProvider {
         ],
       },
     ];
-    // P5：同 getByPathName —— 只有 public 视图过滤未发布文章
-    if (view === 'public') {
+    // P5：同 getByPathName —— 由 VIEW_SKIPS_PUBLISH_FILTER 登记表决定，默认拒绝（未登记 ⇒ 过滤）
+    if (!singleDocReadSkipsPublishFilter(view)) {
       $and.push(visiblePublishFilter());
     }
 
@@ -1637,8 +1688,10 @@ export class ArticleProvider {
         // 🔴 2026-09-21 匿名枚举 oracle 修复：这里**曾经**抛一句专属文案，而"文章不存在"抛的是
         //    NOT_FOUND_MESSAGE ⇒ 匿名调用方靠文案就能区分"这里挂着一篇隐藏文章"与"没有这篇文章"，
         //    从而枚举出隐藏文章的存在（并结合 id 递增摸出站点规模）。现在两者**逐字相同**。
-        // ⚠️ 定时文章在这一支之前就被查询过滤掉了（`getById`/`getByPathName` 对 `view==='public'`
-        //    会加 `visiblePublishFilter()`）⇒ 落到 `!curArticle` 那一支，文案也相同 ⇒ 三种情况同形。
+        // ⚠️ 定时文章在这一支之前就被查询过滤掉了（`getById`/`getByPathName` 按
+        //    `VIEW_SKIPS_PUBLISH_FILTER` 登记表决定是否加 `visiblePublishFilter()`，**默认拒绝**：
+        //    未登记的 view 一律加过滤 ⇒ 公开面永远走过滤）⇒ 落到 `!curArticle` 那一支，
+        //    文案也相同 ⇒ 三种情况同形。
         // ⚠️ 后台**不受影响**：管理端读文章走 `getByIdOrPathname(id,'admin')`
         //    （`controller/admin/article/article.controller.ts:108`），那条路**从来不抛这两句**，
         //    所以"后台要能看出这篇是隐藏的"这个可用性需求本来就由另一个方法满足，无需按身份分支
