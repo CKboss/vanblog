@@ -42,6 +42,8 @@ const SEARCH_SOURCES = [
   "api/searchIndex.ts",
   "components/SearchResults/index.tsx",
   "components/SearchResults/highlight.tsx",
+  // 跳转控件的纯逻辑层也在搜索路径上（它处理用户输入的页码），所以同样受这几条源码级约束
+  "components/SearchResults/jumpForm.ts",
   "pages/search.tsx",
 ];
 

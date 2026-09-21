@@ -229,6 +229,8 @@ describe("没有越界改到别人的领地（本轮的硬约束）", () => {
       "api/searchIndex.ts",
       "components/SearchResults/index.tsx",
       "components/SearchResults/highlight.tsx",
+      // 跳转控件的纯逻辑层也在搜索路径上，同样不许引第三方搜索库、不许 require
+      "components/SearchResults/jumpForm.ts",
       "pages/search.tsx",
     ]) {
       const src = readSrc(rel);

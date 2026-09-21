@@ -194,6 +194,13 @@ export default function SearchPage(props: SearchPageProps) {
             idle={!state.loading && !state.failed && !state.query}
             openInNewWindow={props.layoutProps.openArticleLinksInNewWindow == "true"}
             pageHref={(next) => searchPageUrl(state.query || q, next)}
+            // 跳页走浅路由：不整页刷新，也就不会重新拉索引、重新搜一遍 —— 上面那个搜索
+            // effect 刻意不把 page 放进依赖（翻页是纯客户端切片），这里保持同一个性质，
+            // 手法与本文件 :152 那个查询表单一致（preventDefault + shallow replace）。
+            // ⚠️ 不传这个回调也不会坏：跳转控件是完整的原生 GET 表单，浏览器会自己提交。
+            onJumpHref={(href) => {
+              void router.replace(href, undefined, { shallow: true });
+            }}
           />
         </div>
 
