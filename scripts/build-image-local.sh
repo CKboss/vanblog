@@ -176,18 +176,26 @@ SMOKE_MONGO_VOL="vanblog-smoke-mongo-$$"
 SMOKE_DATA="$(mktemp -d)"
 FAILURES=0
 
+# 🔴 2026-09-21 修：cleanup 是 EXIT trap，而 `--build-only` 会在冒烟变量赋值**之前**就 `exit 0`
+#    （`[[ "${DO_SMOKE}" == "1" ]] || exit 0` 在前、`MONGO_NAME=...` 在后）⇒ `set -u` 下 trap 报
+#    `MONGO_NAME: unbound variable` 并**在 `rm -rf "${SMOKE_DATA}"` 之前中断** ⇒
+#    **每次 --build-only 都静默泄漏一个 mktemp 目录**（退出码仍是 0，所以看不出来）。
+#    已在 /tmp 用最小复现证实：旧形状泄漏、新形状清理干净。
+#    ⇒ cleanup 里所有冒烟变量一律 `${VAR:-}` 取值；为空说明这轮没起冒烟栈，跳过对应的 engine 调用。
 cleanup() {
-  if [[ "${SMOKE_KEEP}" == "1" ]]; then
-    say "${yellow}> SMOKE_KEEP=1，容器保留：${SMOKE_NAME} / ${MONGO_NAME}${plain}"
-    say "  （网络 ${SMOKE_NET}，mongo 数据在卷 ${SMOKE_MONGO_VOL}，其余在 ${SMOKE_DATA}）"
-    say "  看完自己拆：${ENGINE} rm -f ${SMOKE_NAME} ${MONGO_NAME} && ${ENGINE} network rm ${SMOKE_NET} && ${ENGINE} volume rm ${SMOKE_MONGO_VOL} && rm -rf ${SMOKE_DATA}"
+  if [[ "${SMOKE_KEEP:-0}" == "1" ]]; then
+    say "${yellow}> SMOKE_KEEP=1，容器保留：${SMOKE_NAME:-<未起>} / ${MONGO_NAME:-<未起>}${plain}"
+    say "  （网络 ${SMOKE_NET:-<未建>}，mongo 数据在卷 ${SMOKE_MONGO_VOL:-<未建>}，其余在 ${SMOKE_DATA:-<无>}）"
+    say "  看完自己拆：${ENGINE} rm -f ${SMOKE_NAME:-} ${MONGO_NAME:-} && ${ENGINE} network rm ${SMOKE_NET:-} && ${ENGINE} volume rm ${SMOKE_MONGO_VOL:-} && rm -rf ${SMOKE_DATA}"
     return 0
   fi
-  "${ENGINE}" rm -f "${SMOKE_NAME}" >/dev/null 2>&1
-  "${ENGINE}" rm -f "${MONGO_NAME}" >/dev/null 2>&1
-  "${ENGINE}" network rm "${SMOKE_NET}" >/dev/null 2>&1
-  "${ENGINE}" volume rm "${SMOKE_MONGO_VOL}" >/dev/null 2>&1
-  rm -rf "${SMOKE_DATA}"
+  [ -n "${SMOKE_NAME:-}" ]      && "${ENGINE}" rm -f "${SMOKE_NAME}" >/dev/null 2>&1
+  [ -n "${MONGO_NAME:-}" ]      && "${ENGINE}" rm -f "${MONGO_NAME}" >/dev/null 2>&1
+  [ -n "${SMOKE_NET:-}" ]       && "${ENGINE}" network rm "${SMOKE_NET}" >/dev/null 2>&1
+  [ -n "${SMOKE_MONGO_VOL:-}" ] && "${ENGINE}" volume rm "${SMOKE_MONGO_VOL}" >/dev/null 2>&1
+  # 🔴 这一行必须在最后、且不能被上面任何一行中断：它是唯一清掉 mktemp 目录的地方
+  [ -n "${SMOKE_DATA:-}" ] && rm -rf "${SMOKE_DATA}"
+  return 0
 }
 trap cleanup EXIT
 

@@ -67,6 +67,23 @@ has "trap 里清理容器与临时目录" "trap cleanup EXIT"
 #    钉在 14.x 是同一族：守卫的意图对、断言错）。
 #    ⇒ 按**意图**修：断言默认端口既不是特权端口，也不是本机在用的那几个。
 has "默认冒烟端口不是特权端口（80/443）" "SMOKE_HTTP_PORT:-18074"
+# 🔴 EXIT trap 必须对"冒烟变量还没赋值就退出"安全（--build-only 就是这条路径）：
+#    否则 set -u 下会报 unbound variable 并在 `rm -rf "${SMOKE_DATA}"` 之前中断 ⇒ 静默泄漏 mktemp 目录。
+has "cleanup 用 \${MONGO_NAME:-} 取值（trap 早于赋值触发时不炸）" 'MONGO_NAME:-'
+has "cleanup 用 \${SMOKE_DATA:-} 取值" 'SMOKE_DATA:-'
+has "cleanup 用 \${SMOKE_KEEP:-0} 取值" 'SMOKE_KEEP:-0'
+# 并且断言"清临时目录"那一行**在 cleanup 的最后**（前面任何一行中断都不该挡住它）
+if awk '/^cleanup\(\) \{/,/^\}/' "$SCRIPT" | grep -nE 'rm -rf "\$\{SMOKE_DATA' | tail -1 | grep -q .; then
+  _last=$(awk '/^cleanup\(\) \{/,/^\}/' "$SCRIPT" | grep -nvE '^\s*(#|$)' | grep -E 'rm -rf "\$\{SMOKE_DATA' | tail -1 | cut -d: -f1)
+  _tot=$(awk '/^cleanup\(\) \{/,/^\}/' "$SCRIPT" | grep -cvE '^\s*(#|$)')
+  if [ -n "${_last:-}" ] && [ "${_last}" -le "$((_tot - 1))" ]; then
+    pass "清理 mktemp 目录那一行在 cleanup 的末尾附近（不会被前面的调用挡住）"
+  else
+    fail "清理 mktemp 目录那一行的位置可疑（_last=${_last:-?} / _tot=${_tot:-?}），请人工确认它不会被前面的语句中断"
+  fi
+else
+  fail "cleanup 里找不到 rm -rf \${SMOKE_DATA…}（临时目录不会被清理）"
+fi
 # 并且断言默认值**不在**"本机在用/不许碰"的端口集合里（这才是标题一直想说的那件事）
 if grep -qE '^SMOKE_HTTP_PORT="\$\{SMOKE_HTTP_PORT:-(80|443|3000|3001|3002|8360|18080|18097|18107|27017)\}"' "$SCRIPT"; then
   fail "默认冒烟端口撞上了本机在用/不许碰的端口（80/443/3000-3002/8360/18080/18097/18107/27017）"
