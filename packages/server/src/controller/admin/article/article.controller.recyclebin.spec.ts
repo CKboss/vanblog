@@ -4,10 +4,12 @@ import { NotFoundException } from '@nestjs/common';
 import { ArticleController } from './article.controller';
 import { DraftController } from '../draft/draft.controller';
 import {
+  bootstrapRoutes,
   pathPermissionMap,
   permissionRoutes,
   publicRoutes,
 } from 'src/types/access/access';
+import { AccessGuard } from 'src/provider/access/access.guard';
 
 /**
  * P3/P4 的**契约层**钉子：
@@ -78,13 +80,49 @@ describe('协作者权限映射（types/access/access.ts）', () => {
     }
   });
 
-  it('只读回收站/历史版本列表对协作者开放（与既有只读列表一致），写接口不开放', () => {
-    expect(publicRoutes).toContain('get-/api/admin/article/deleted');
-    expect(publicRoutes).toContain('get-/api/admin/draft/deleted');
-    expect(publicRoutes).toContain('get-/api/admin/article/:id/revisions');
-    expect(publicRoutes).toContain('get-/api/admin/article/:id/revisions/:revisionId');
+  // 🔴 2026-09-22 升级（B′ 拆表）：本条原来只断言"这 4 个键在 publicRoutes 里"，标题写的是
+  //    "对协作者开放"。但 publicRoutes 已被拆成两层，而**零权限协作者不再能命中这一层** ——
+  //    原断言在新契约下依然会通过（键确实还在 publicRoutes 里），却**不再证明标题说的那件事**。
+  //    所以这里不是改断言迁就实现，而是把它**升级成同时钉住两半**：
+  //      ① 这 4 条在**免权限档**（不在引导层）⇒ 只有"勾了至少一项权限"的协作者能读；
+  //      ② 用**真的 AccessGuard** 断言零权限协作者被拒、有权限的协作者放行。
+  //    ⚠️ 写接口那两条 not.toContain 原样保留。
+  it('只读回收站/历史版本列表对**有权限的**协作者开放，对**零权限**协作者不开放；写接口一律不开放', async () => {
+    const readOnlyKeys = [
+      'get-/api/admin/article/deleted',
+      'get-/api/admin/draft/deleted',
+      'get-/api/admin/article/:id/revisions',
+      'get-/api/admin/article/:id/revisions/:revisionId',
+    ];
+    // ① 在免权限档、且**不在**引导层（引导层是零权限也能过的极小集）
+    for (const key of readOnlyKeys) {
+      expect(publicRoutes).toContain(key);
+      expect(bootstrapRoutes).not.toContain(key);
+    }
+    // 写接口不开放（既有断言，原样保留）
     expect(publicRoutes).not.toContain('delete-/api/admin/article/:id/purge');
     expect(publicRoutes).not.toContain('put-/api/admin/article/:id/restore');
+    expect(bootstrapRoutes).not.toContain('delete-/api/admin/article/:id/purge');
+    expect(bootstrapRoutes).not.toContain('put-/api/admin/article/:id/restore');
+
+    // ② 行为级：用真的 AccessGuard 跑，而不是只看表
+    const guard = new AccessGuard();
+    jest.spyOn(guard.logger, 'warn').mockImplementation(() => undefined);
+    const req = (method: string, path: string, user: any) =>
+      ({ route: { path, methods: { [method.toLowerCase()]: true } }, user }) as any;
+    for (const key of readOnlyKeys) {
+      const i = key.indexOf('-');
+      const method = key.slice(0, i);
+      const path = key.slice(i + 1);
+      // 零权限协作者：拒（🔴 这就是本次修复；改前这里是放行）
+      await expect(guard.validateRequest(req(method, path, { id: 7, permissions: [] }))).resolves.toBe(false);
+      // 勾了任意一项权限的协作者：放行（零回归）
+      await expect(
+        guard.validateRequest(req(method, path, { id: 7, permissions: ['article:update'] })),
+      ).resolves.toBe(true);
+      // 超管：放行（零回归）
+      await expect(guard.validateRequest(req(method, path, { id: 0 }))).resolves.toBe(true);
+    }
   });
 });
 

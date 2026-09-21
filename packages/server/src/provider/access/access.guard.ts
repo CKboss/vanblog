@@ -1,6 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, Logger } from '@nestjs/common';
 
 import {
+  bootstrapRoutes,
   isSuperAdminOnlyRoute,
   isSuperAdminUser,
   pathPermissionMap,
@@ -32,12 +33,20 @@ export class AccessGuard implements CanActivate {
         // `'' == 0` 与 `[] == 0` 都成立，而 id 来自 jwt 的 `sub`（经过 JSON 往返）。
         return true;
       } else {
-        if (publicRoutes.includes(key)) {
+        // ① 引导层：**零权限协作者也必须能调**的极小集（协作者下拉框、后台外壳的 meta、login/logout）。
+        // ⚠️ 必须排在下面那张高危前缀表**之前**：`get-/api/admin/collaborator/list` 落在
+        //    `/api/admin/collaborator` 前缀下，而后台的协作者下拉框靠它。
+        // 🔴 这一层刻意做到极小（4 条）：往这里加键 = 给零权限协作者开能力，见 access.ts 的逐条理由。
+        if (bootstrapRoutes.includes(key)) {
           return true;
         }
         // ⚠️ 凭据类 / 高危路由只认超管，**`'all'` 权限也不例外**。
-        // 必须放在 publicRoutes 之后：`get-/api/admin/collaborator/list` 在 publicRoutes 里，
-        // 协作者的后台要靠它渲染下拉框，而它正好落在 `/api/admin/collaborator` 前缀下。
+        // 必须放在**引导层**之后（理由见上）。
+        // 🔴 2026-09-22：免权限档 `publicRoutes` 已从这里移到下面 `permissions.length == 0` 那道拒绝**之后**
+        //    —— 以前它排在这张表之前、也排在那道拒绝之前，于是**零权限协作者能命中全部 24 条**，
+        //    包括能读到全站正文的 `get-/api/admin/article/:id` 与能一次打包带走正文+图片的
+        //    `post-/api/admin/export/markdown`。免权限档那 20 条**没有一条**落在高危前缀下（已逐条核实），
+        //    所以把它移到这张表之后既安全又更保守。
         if (isSuperAdminOnlyRoute(path)) {
           // 以前这里是 `if (permissions.includes('all')) return true;` —— 后台那个
           // 「所有权限」勾选项因此等价于超管：能改管理员口令、能签超管 API Token、
@@ -52,9 +61,22 @@ export class AccessGuard implements CanActivate {
         }
         // 其他都为协作者
         const { permissions } = user || {};
-        if (!permissions || permissions.length == 0) {
+        // 🔴 2026-09-22 顺带修掉一个 fail-open：原来是 `!permissions || permissions.length == 0`，
+        //    而**字符串也有 `.length` 也有 `.includes`** ⇒ `permissions: 'all'` 会一路走到下面的
+        //    `permissions.includes('all')` 并**放行**（实测确认）。守卫是安全边界，不该依赖上游归一化：
+        //    `pickPermissions` 只在**写入**时收口成数组，而 `jwt.strategy.ts` 是把库里的
+        //    `user.permissions` **原样**塞进 user 的，历史数据的形状并不保证（该文件注释记载过
+        //    DTO 单复数与 schema 字段名写错的历史 bug）。⇒ 改成显式 `Array.isArray`，"看不懂就关门"。
+        if (!Array.isArray(permissions) || permissions.length == 0) {
+          // 🔴 协作者功能首版 `ebc85431` 的原始契约："没勾权限就什么都不能干"。
+          //    免权限档以前排在这一句**之前**，所以这道门形同虚设 —— 现在它真的关上了。
           return false;
         } else {
+          // ② 免权限档：只读列表、图片/附件上传、导出、回收站与历史版本等。
+          // 🔴 走到这里说明**至少勾了一项权限**，所以这一档对"有权限的协作者"行为与改前逐条相同（零回归）。
+          if (publicRoutes.includes(key)) {
+            return true;
+          }
           if (permissions.includes('all')) {
             return true;
           } else {

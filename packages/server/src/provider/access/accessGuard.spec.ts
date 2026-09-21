@@ -27,6 +27,7 @@ import { AccessGuard } from './access.guard';
 import {
   ALL_PERMISSION_VALUES,
   SUPER_ADMIN_ONLY_ROUTE_PREFIXES,
+  bootstrapRoutes,
   isSuperAdminOnlyRoute,
   isSuperAdminUser,
   normalizeRoutePath,
@@ -172,18 +173,45 @@ describe('AccessGuard：高危路由对协作者（含 all）一律拒绝', () =
     expect(msg).toContain('id=9');
   });
 
-  it('⚠️ 顺序钉子：publicRoutes 在高危前缀判定**之前**，否则协作者列表接口会被一起关掉', async () => {
-    // get-/api/admin/collaborator/list 在 publicRoutes 里，而 /api/admin/collaborator 在高危前缀里。
+  it('⚠️ 顺序钉子：**引导层** bootstrapRoutes 在高危前缀判定之前，否则协作者列表接口会被一起关掉', async () => {
+    // get-/api/admin/collaborator/list 在引导层里，而 /api/admin/collaborator 在高危前缀里。
     // 后台的协作者下拉框靠它，所以这条必须对**没有任何权限**的协作者也开放。
-    expect(publicRoutes).toContain('get-/api/admin/collaborator/list');
+    expect(bootstrapRoutes).toContain('get-/api/admin/collaborator/list');
+    expect(publicRoutes).not.toContain('get-/api/admin/collaborator/list');
     expect(isSuperAdminOnlyRoute('/api/admin/collaborator/list')).toBe(true);
     await expect(
       guard.validateRequest(req('get', '/api/admin/collaborator/list', collaborator([]))),
     ).resolves.toBe(true);
-    // 源码级：publicRoutes 的判定必须出现在高危前缀判定之前
+    // 源码级：引导层的判定必须出现在高危前缀判定之前
     const src = code(read('./access.guard.ts'));
-    expect(src.indexOf('publicRoutes.includes(key)')).toBeGreaterThan(0);
-    expect(src.indexOf('publicRoutes.includes(key)')).toBeLessThan(src.indexOf('isSuperAdminOnlyRoute(path)'));
+    expect(src.indexOf('bootstrapRoutes.includes(key)')).toBeGreaterThan(0);
+    expect(src.indexOf('bootstrapRoutes.includes(key)')).toBeLessThan(src.indexOf('isSuperAdminOnlyRoute(path)'));
+  });
+
+  it('🔴 顺序钉子（B′ 的核心）：免权限档 publicRoutes 必须在「零权限拒绝」**之后**判定', () => {
+    // 这条就是本次安全修复本身：以前 publicRoutes 排在那道拒绝之前，
+    // 于是 permissions:[] 的协作者能命中全部 24 条（含能读全站正文与导出打包的两条）。
+    const src = code(read('./access.guard.ts'));
+    const iZero = src.indexOf('permissions.length == 0');
+    const iPublic = src.indexOf('publicRoutes.includes(key)');
+    const iSuper = src.indexOf('isSuperAdminOnlyRoute(path)');
+    const iBoot = src.indexOf('bootstrapRoutes.includes(key)');
+    // 反空转：四个锚点都真的存在（否则 indexOf 返回 -1 会让下面的比大小恒真）
+    for (const [name, idx] of [
+      ['bootstrapRoutes.includes(key)', iBoot],
+      ['isSuperAdminOnlyRoute(path)', iSuper],
+      ['permissions.length == 0', iZero],
+      ['publicRoutes.includes(key)', iPublic],
+    ] as Array<[string, number]>) {
+      expect({ anchor: name, found: idx }).toEqual({ anchor: name, found: expect.any(Number) });
+      if (idx < 0) {
+        throw new Error(`锚点未找到：${name}（剥注释后的源码里没有它）`);
+      }
+    }
+    // 引导层 < 高危前缀 < 零权限拒绝 < 免权限档
+    expect(iBoot).toBeLessThan(iSuper);
+    expect(iSuper).toBeLessThan(iZero);
+    expect(iZero).toBeLessThan(iPublic);
   });
 });
 
@@ -226,10 +254,41 @@ describe('AccessGuard：不能一刀切 —— 协作者的正常能力必须还
     ).resolves.toBe(false);
   });
 
-  it('没有权限 / 没有 user / 判定异常，全都关门（既有行为不回退）', async () => {
+  // 🔴 2026-09-22 更正：这一条原来把三种不同情况塞在一个用例里，而标题写的是"没有权限"——
+  // 但第一行传的第三个参数是 **user**（helper 是 req(method, path, user)），测的其实是"没有 user"；
+  // 第二行打的路由**不在**免权限档里。⇒ 整个文件此前**没有任何一条**断言用 permissions:[] 去打
+  // 免权限档里的键，而那正是本次修复的缺陷所在。下面把四种情况拆成独立断言。
+  it('没有 user ⇒ 关门（helper 第三个参数是 user，不是 permissions）', async () => {
     await expect(guard.validateRequest(req('get', '/api/admin/meta', undefined))).resolves.toBe(false);
+    await expect(guard.validateRequest(req('get', '/api/admin/meta', null))).resolves.toBe(false);
+  });
+
+  it('permissions 缺失 / 空数组 / 不是数组 ⇒ 全都关门', async () => {
     await expect(guard.validateRequest(req('post', '/api/admin/article', { id: 3 }))).resolves.toBe(false);
+    await expect(guard.validateRequest(req('post', '/api/admin/article', { id: 3, permissions: [] }))).resolves.toBe(
+      false,
+    );
+    await expect(
+      guard.validateRequest(req('post', '/api/admin/article', { id: 3, permissions: undefined })),
+    ).resolves.toBe(false);
+    await expect(
+      guard.validateRequest(req('post', '/api/admin/article', { id: 3, permissions: null })),
+    ).resolves.toBe(false);
+    // 不是数组：`permissions.length` 对字符串也存在，所以必须显式核实它不会放行
+    await expect(
+      guard.validateRequest(req('post', '/api/admin/article', { id: 3, permissions: 'all' })),
+    ).resolves.toBe(false);
+    await expect(
+      guard.validateRequest(req('post', '/api/admin/article', { id: 3, permissions: {} })),
+    ).resolves.toBe(false);
+  });
+
+  it('判定过程抛异常 ⇒ 关门（失败方向不许反）', async () => {
     await expect(guard.validateRequest({} as any)).resolves.toBe(false);
+    // route 存在但 methods 为空 ⇒ Object.keys(...)[0] 是 undefined，仍必须关门而不是抛出去
+    await expect(
+      guard.validateRequest({ route: { path: '/api/admin/meta', methods: {} }, user: { id: 3, permissions: [] } }),
+    ).resolves.toBe(false);
   });
 
   it('ALL_PERMISSION_VALUES 就是 pathPermissionMap 的值 + all（去重），且不含未知值', () => {
@@ -241,6 +300,129 @@ describe('AccessGuard：不能一刀切 —— 协作者的正常能力必须还
     expect(ALL_PERMISSION_VALUES.length).toBeLessThanOrEqual(Object.keys(pathPermissionMap).length + 1);
     // permissionRoutes 仍然从 pathPermissionMap 的 keys 派生（既有钉子，别回退）
     expect(permissionRoutes).toEqual(Object.keys(pathPermissionMap));
+  });
+});
+
+/**
+ * 🔴 B′ 拆表的核心契约：**零权限协作者只能命中引导层那 4 条，免权限档那 20 条一律拒绝**。
+ *
+ * 这一节就是本次安全修复的判据。它**穷举**两层的每一个键（不抽样），所以
+ * 将来往任意一层加键都会**自动**被覆盖 —— 加到免权限档 ⇒ 自动断言「零权限打它被拒」；
+ * 加到引导层 ⇒ 自动断言「零权限打它放行」，而引导层还有一条「恰好等于这 4 条」的断言会红。
+ *
+ * ⚠️ 键的形状是 method 与 path 用第一个连字符连接（与 AccessGuard 内部拼的一致）。
+ * 🔴 拆开时不能用 split：path 里将来若出现连字符就会错 ⇒ 用 indexOf 取第一个。
+ */
+describe('AccessGuard：B′ 分层契约（零权限协作者）', () => {
+  const guard = new AccessGuard();
+  jest.spyOn(guard.logger, 'warn').mockImplementation(() => undefined);
+
+  const splitKey = (key: string): [string, string] => {
+    const i = key.indexOf('-');
+    if (i <= 0) {
+      throw new Error('路由键形状不对（应当是 method-path）：' + key);
+    }
+    return [key.slice(0, i), key.slice(i + 1)];
+  };
+
+  /** 拆表前的原始 24 条（从 git 历史逐字取出，不手抄）。并集必须恒等于它。 */
+  const ORIGINAL_24: string[] = [
+  'get-/api/admin/meta',
+  'post-/api/admin/auth/login',
+  'post-/api/admin/auth/logout',
+  'get-/api/admin/article',
+  'get-/api/admin/draft',
+  'get-/api/admin/category/all',
+  'get-/api/admin/tag/all',
+  'get-/api/admin/article/:id',
+  'get-/api/admin/draft/:id',
+  'get-/api/admin/img/all',
+  'get-/api/admin/img',
+  'get-/api/admin/file/all',
+  'get-/api/admin/file',
+  'post-/api/admin/file/upload',
+  'get-/api/admin/collaborator/list',
+  'post-/api/admin/img/upload',
+  'post-/api/admin/img/references',
+  'post-/api/admin/img/stego/detect',
+  'post-/api/admin/article/searchByLink',
+  'post-/api/admin/export/markdown',
+  'get-/api/admin/article/deleted',
+  'get-/api/admin/draft/deleted',
+  'get-/api/admin/article/:id/revisions',
+  'get-/api/admin/article/:id/revisions/:revisionId',
+  ];
+
+  it('反空转：两层都非空，且条数是 4 / 20（防止有人把某一层清空后断言恒真）', () => {
+    expect(bootstrapRoutes.length).toBe(4);
+    expect(publicRoutes.length).toBe(20);
+    expect(ORIGINAL_24.length).toBe(24);
+  });
+
+  it('🔴 引导层恰好是站长裁定的那 4 条（多一条 = 给零权限协作者开了新能力）', () => {
+    expect([...bootstrapRoutes].sort()).toEqual(
+      [
+        'get-/api/admin/collaborator/list',
+        'get-/api/admin/meta',
+        'post-/api/admin/auth/login',
+        'post-/api/admin/auth/logout',
+      ].sort(),
+    );
+  });
+
+  it('🔴 两层不重叠，且并集恰好等于拆表前的 24 条（漏一条 / 多一条 / 重复都会红）', () => {
+    const overlap = bootstrapRoutes.filter((k) => (publicRoutes as string[]).includes(k));
+    expect(overlap).toEqual([]);
+    const union = [...bootstrapRoutes, ...publicRoutes];
+    expect(new Set(union).size).toBe(union.length);
+    expect([...union].sort()).toEqual([...ORIGINAL_24].sort());
+  });
+
+  it.each(publicRoutes)('🔴 零权限协作者被拒：%s', async (key) => {
+    const [method, path] = splitKey(key);
+    await expect(guard.validateRequest(req(method, path, collaborator([])))).resolves.toBe(false);
+  });
+
+  it.each(bootstrapRoutes)('引导层对零权限协作者放行：%s', async (key) => {
+    const [method, path] = splitKey(key);
+    await expect(guard.validateRequest(req(method, path, collaborator([])))).resolves.toBe(true);
+  });
+
+  it.each(publicRoutes)('零回归：勾了 article:update 的协作者仍可用 %s', async (key) => {
+    const [method, path] = splitKey(key);
+    expect(isSuperAdminOnlyRoute(path)).toBe(false);
+    await expect(
+      guard.validateRequest(req(method, path, collaborator(['article:update']))),
+    ).resolves.toBe(true);
+  });
+
+  it('零回归：超管（id=0）对两层的每一条都放行', async () => {
+    for (const key of [...bootstrapRoutes, ...publicRoutes]) {
+      const [method, path] = splitKey(key);
+      await expect(guard.validateRequest(req(method, path, { id: 0 }))).resolves.toBe(true);
+    }
+  });
+
+  it('🔴 修复生效的直接证据：能读全站正文、能打包导出、能上传的那几条，零权限协作者现在被拒', async () => {
+    for (const key of [
+      'get-/api/admin/article/:id',
+      'get-/api/admin/draft/:id',
+      'post-/api/admin/export/markdown',
+      'post-/api/admin/img/upload',
+      'post-/api/admin/file/upload',
+      'get-/api/admin/article/:id/revisions/:revisionId',
+    ]) {
+      const [method, path] = splitKey(key);
+      await expect(guard.validateRequest(req(method, path, collaborator([])))).resolves.toBe(false);
+    }
+  });
+
+  it('🔴 非数组 permissions 一律关门（字符串 all 曾能一路走到 includes 而放行）', async () => {
+    for (const bad of ['all', 'article:update', {}, 0, 1, true, NaN]) {
+      await expect(
+        guard.validateRequest(req('post', '/api/admin/article', { id: 3, permissions: bad })),
+      ).resolves.toBe(false);
+    }
   });
 });
 

@@ -80,9 +80,13 @@ export const permissionRoutes = Object.keys(pathPermissionMap);
  * 他们仍然能做的（刻意保留，否则 `'all'` 就没意义了）：文章、草稿、图片、附件、评论、
  * 分类与标签、导航/友链/社交/捐赠等 meta、自定义页面、主题、统计分析、导出 markdown、ISR 手动触发。
  *
- * ⚠️ 顺序很关键：`AccessGuard` 先查 `publicRoutes` 再查这张表，所以
- * `get-/api/admin/collaborator/list`（在 publicRoutes 里，只返回 id/name/nickname）
- * 对协作者仍然开放 —— 后台的协作者下拉框靠它。别把这张表的判定挪到 publicRoutes 之前。
+ * ⚠️ 顺序很关键：`AccessGuard` 先查**引导层 `bootstrapRoutes`** 再查这张表，所以
+ * `get-/api/admin/collaborator/list`（在引导层里，只返回 id/name/nickname）
+ * 对协作者仍然开放 —— 后台的协作者下拉框靠它。别把这张表的判定挪到 `bootstrapRoutes` 之前。
+ * 🔴 2026-09-22 更正措辞：这里以前写的是 `publicRoutes`，而那张表已被拆成
+ * "引导层 `bootstrapRoutes`（4 条，在本表之前）"与"免权限档 `publicRoutes`（20 条，在本表**之后**、
+ * 且在 `permissions.length == 0` 那道拒绝之后）"⇒ **只有引导层需要排在本表之前**。
+ * 免权限档的 20 条里没有一条落在本表的前缀下（已逐条核实），所以把它挪到本表之后是安全的、而且更保守。
  */
 export const SUPER_ADMIN_ONLY_ROUTE_PREFIXES: readonly string[] = [
   '/api/admin/auth',
@@ -149,10 +153,58 @@ export const ALL_PERMISSION_VALUES: readonly string[] = Array.from(
 );
 
 
-export const publicRoutes = [
+/**
+ * ## ① 引导层（bootstrap）：**零权限协作者也必须能调**的极小集
+ *
+ * 🔴 2026-09-22 从原 `publicRoutes`（24 条）里拆出来的 4 条。拆分的理由见下面 ② 的注释。
+ *
+ * 为什么这 4 条必须留在"`permissions.length == 0` 那道拒绝**之前**"：
+ *  - `get-/api/admin/collaborator/list`：后台的协作者下拉框靠它。🔴 它落在**超管专属前缀**
+ *    `/api/admin/collaborator` 下，所以本层的判定还必须在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
+ *    之前 —— 这是 `accessGuard.spec.ts` 里那条"顺序钉子"真正在保护的东西。
+ *  - `get-/api/admin/meta`：后台外壳渲染站点信息靠它。零权限协作者登录后如果连外壳都拿不到，
+ *    看到的会是一片报错而不是"你没有权限"，无法自助理解现状。
+ *  - `post-/api/admin/auth/login` / `post-/api/admin/auth/logout`：⚠️ **实测这两条目前根本到不了
+ *    `AccessGuard`** —— `auth.controller.ts` 的 `@Post('/login')` 挂的是
+ *    `@UseGuards(LoginGuard, AuthGuard('local'))`、`@Post('/logout')` 挂的是 `@UseGuards(TokenGuard)`，
+ *    都**不含** AdminGuard/AccessGuard；而且本守卫第一步就是 `if (!user) return false`，
+ *    未认证的 login 本来就过不去。⇒ 这两条是**历史遗留的防御性条目**（vestigial）。
+ *    🔴 **刻意保留**：它们无害，而且万一将来有人把 login 挂进 AdminGuard 链，留在引导层才不会把登录搞坏。
+ *
+ * ⚠️ **宁少勿多**：往这一层加键 = 给零权限协作者开一个能力，必须有明确理由并同步更新守卫。
+ */
+export const bootstrapRoutes = [
   'get-/api/admin/meta',
   'post-/api/admin/auth/login',
   'post-/api/admin/auth/logout',
+  'get-/api/admin/collaborator/list',
+];
+
+/**
+ * ## ② 免权限档：**只对"至少勾了一项权限"的协作者开放**（原 `publicRoutes` 的其余 20 条）
+ *
+ * 🔴 **2026-09-22 的安全修复（站长裁定 B′）**：这张表以前和上面那 4 条混在一起，
+ * 而 `AccessGuard` 的判定顺序是"**先查本表、后查 `permissions.length == 0` 那道拒绝**"
+ * ⇒ **一个权限为空数组的协作者能命中全部 24 条**。后果按严重度：
+ *  - 🔴 `get-/api/admin/article/:id` 与 `get-/api/admin/draft/:id` 用的 `adminView` **都投影 `content: 1`**
+ *    ⇒ 能读全站文章与草稿正文；
+ *  - 🔴 `post-/api/admin/export/markdown` 也在这张表里，而 `markdownExport.provider.ts` 在
+ *    `type` 为 `article`/`draft` 时会 `loadDoc(id,…)` **从库里取正文并把图片打包成 zip**
+ *    ⇒ **一次请求带走任意一篇的正文与图片**；
+ *  - 🔴 `get-/api/admin/article/:id/revisions/:revisionId` 返回**历史版本的完整 `content`**；
+ *  - 🔴 `post-/api/admin/img/upload` 与 `post-/api/admin/file/upload` 是**写接口**
+ *    ⇒ 零权限协作者能上传图片与附件（⚠️ 磁盘配额与专用限流是**后来**才补的纵深防御）。
+ *  （⚠️ 减轻情节：`password` 出口经 `redactAccessSecretList` 换成布尔 `hasPassword`，**访问密码不外泄**。）
+ *
+ * **为什么会变成这样**：`permissions.length == 0` 那道拒绝是协作者功能首版 `ebc85431` 的原始契约
+ * （"没勾权限就什么都不能干"），而本表的免检是**后来** `d3d95363` 叠加的 ⇒ **两者从未对齐**。
+ *
+ * **修法**：本表整体移到 `permissions.length == 0` 那道拒绝**之后**判定，引导层留在之前。
+ * 🔴 **对"勾了至少一项权限"的协作者行为逐条不变**（零回归），只有零权限协作者在这 20 条上从放行变成拒绝。
+ *
+ * ⚠️ 下面几条注释里"协作者本来就能读"的措辞，前提已从"任何协作者"收窄为"**有权限的**协作者"。
+ */
+export const publicRoutes = [
   'get-/api/admin/article',
   'get-/api/admin/draft',
   'get-/api/admin/category/all',
@@ -164,21 +216,24 @@ export const publicRoutes = [
   'get-/api/admin/file/all',
   'get-/api/admin/file',
   'post-/api/admin/file/upload',
-  'get-/api/admin/collaborator/list',
   'post-/api/admin/img/upload',
   // 只读：批量查图片被哪些文章引用（列表视图用）
   'post-/api/admin/img/references',
   // 只读：检测图片里的隐写水印（协作者也能用来验图）
   'post-/api/admin/img/stego/detect',
   'post-/api/admin/article/searchByLink',
-  // 只读：导出文章/草稿为 Markdown（含图片打包），协作者本来就能读这些内容
+  // 只读：导出文章/草稿为 Markdown（含图片打包）。⚠️ 2026-09-22 更正：原注释写"协作者本来就能读这些内容"，
+  // 那个前提只对**有权限的**协作者成立 —— 零权限协作者此前也能靠这条一次带走任意一篇的正文与图片。
   'post-/api/admin/export/markdown',
-  // 只读：回收站列表（P3）。协作者本来就能读文章/草稿列表（上面两条 get-），
-  // 软删列表不含 content，泄露面不大于既有列表接口。
+  // 只读：回收站列表（P3）。软删列表不含 content，泄露面不大于既有列表接口。
+  // ⚠️ 2026-09-22 更正：原注释的理由是"协作者本来就能读文章/草稿列表"，现在这条对**零权限**协作者不再成立
+  // （本表已移到那道拒绝之后），所以理由收窄为"**有权限的**协作者与既有只读列表口径一致"。
   'get-/api/admin/article/deleted',
   'get-/api/admin/draft/deleted',
-  // 只读：历史版本列表与单条（P4）。协作者有 article:update（能读能改正文），
-  // 读历史版本没有额外授权；**还原**是写操作，走 pathPermissionMap 的 article:update 档。
+  // 只读：历史版本列表与单条（P4）。**还原**是写操作，走 pathPermissionMap 的 article:update 档。
+  // ⚠️ 2026-09-22 更正：原注释写"协作者有 article:update（能读能改正文），读历史版本没有额外授权"——
+  // 🔴 那个前提对**零权限**协作者根本不成立（他们没有任何权限，却能读到历史版本的完整 content）。
+  // 现在本表在 `permissions.length == 0` 之后判定，所以理由改为"**勾了权限的**协作者读历史版本没有额外授权"。
   'get-/api/admin/article/:id/revisions',
   'get-/api/admin/article/:id/revisions/:revisionId',
 ];
