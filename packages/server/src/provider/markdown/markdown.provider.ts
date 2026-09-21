@@ -53,7 +53,20 @@ export class MarkdownProvider {
         if (lang && hljs.getLanguage(lang)) {
           try {
             return (
-              '<pre class="hljs" style="background: #f3f3f3; padding: 8px;><code>' +
+              // 🔴 2026-09-21 修：这一行的 style 属性**少了收尾引号**（属性值直接吞掉了标签的
+              //    右尖括号与紧随其后的 code 开标签，直到下一个引号才结束）。而下面 :71 的兜底路径
+              //    是**正确**的，`rss.provider.ts:178` 那个 mermaid 的 div 也是正确的 ⇒ 笔误，不是有意。
+              //    后果：按 HTML5 解析规则，**pre 与 code 根本没有作为元素被打开**，代码块的结构在
+              //    RSS 里是坏的（`hljs-keyword` 之类的 class 退化成一个裸属性）。
+              //    ⚠️ 影响面**只有 RSS**：前台文章页走 bytemd，不经过这个 provider。
+              //    ⚠️ 它从 `5e08dbf7`（"feat: 支持 RSS 订阅"，本文件创建那次提交）起就是这样。
+              //    十五个月没人发现的原因有两条：①**没有任何测试钉住这段字符串**；②RSS 的 HTML 在
+              //    阅读器里"看起来还行"—— 畸形 HTML 被阅读器的解析器容错了。
+              //    🔴 而且它必须先修：把畸形 HTML 喂给"解析 → 消毒 → 序列化"之后，输出**仍然畸形、
+              //    而且更糟**（实测 class 名会丢），所以消毒修不好它。
+              //    ⚠️ 守卫钉的是**性质**（每个 style 属性都有配对的收尾引号、pre/code 真的成为元素），
+              //    不是这一句字面量 —— 那样才能抓住将来同类的笔误，见 markdownWellFormedHtml.spec.ts。
+              '<pre class="hljs" style="background: #f3f3f3; padding: 8px;"><code>' +
               hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
               '</code></pre>'
             );

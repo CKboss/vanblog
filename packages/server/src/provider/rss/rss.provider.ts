@@ -10,6 +10,8 @@ import path from 'path';
 import { config } from 'src/config';
 import { MarkdownProvider } from '../markdown/markdown.provider';
 import { washUrl } from 'src/utils/washUrl';
+// 🔴 RSS 是服务端"原始 HTML 直通"渲染链唯一的对外出口，所以出口处必须消毒（依据见该文件头）。
+import { sanitizeRenderedHtml } from 'src/utils/rssHtmlSanitize';
 
 /** 订阅源默认保留多少条（0 = 不限制）。可用 VANBLOG_RSS_ITEM_LIMIT 覆盖。 */
 export const DEFAULT_RSS_ITEM_LIMIT = 50;
@@ -167,22 +169,57 @@ export class RssProvider {
               domain: `${base}/tag/${encodeURIComponent(t)}`,
             })),
         );
+        // 🔴 2026-09-21：RSS 是服务端这条"原始 HTML 直通"渲染链**唯一的对外出口**，所以在这里消毒。
+        //    背景与白名单依据见 `utils/rssHtmlSanitize.ts` 的文件头；接线由
+        //    `utils/rssHtmlSanitizeWiring.spec.ts` 的**调用方枚举守卫**钉住（新增出口忘了消毒就会红）。
+        //
+        // 🔴 **消毒只作用于正文，绝不能作用到整个 html 外壳**（实测依据，不是推理）：
+        //    `<link rel="stylesheet">` **不在白名单里**，整段消毒会把它摘掉
+        //    （实测 `<link …>` 单独消毒后得到空串；带外壳消毒后三个 link 全部消失）。
+        //    那会让 RSS 丢掉三份样式表（markdown.css / katex / highlight.js），
+        //    **每个阅读器里的公式与代码高亮都变成无样式** —— 为了安全把功能弄坏，违背"每次迭代都要
+        //    保证功能正常"。外壳（`div.markdown-body.rss` + 三个 link）是我们自己写的常量、
+        //    不含作者内容，本来就不需要消毒。
+        //
+        // ⚠️ **mermaid 的 replace 放在消毒之前**（与改动前顺序一致）：它匹配的是 markdown-it 自己
+        //    产出的那个 div 开标签，而消毒要经过"解析 → 序列化"，序列化后的属性写法理论上可能变
+        //    （例如属性值不带引号），让 replace **静默失配**。实测两种顺序当前输出相同，
+        //    但"先 replace 后消毒"不依赖序列化形状，更稳。有守卫钉住这条顺序。
+        //
+        // 🔴 **失败方向**：消毒抛错时 `sanitizeRenderedHtml` 返回**空串**（宁可这一篇少发正文，
+        //    也绝不把未消毒的原文发出去），并由下面的 onError **大声记一条 ERROR**（含是哪一篇），
+        //    否则"某篇文章的 RSS 正文莫名空了"会完全查不出原因。
+        const onSanitizeError = (where: string) => (err: unknown) =>
+          this.logger.error(
+            `RSS ${where}消毒失败，这一篇已按空内容发出（宁可不发也不发未消毒的内容）：` +
+              `文章 ${article.pathname || article.id}：` +
+              (err instanceof Error ? err.stack || err.message : String(err)),
+          );
+        const renderedBody = sanitizeRenderedHtml(
+          this.markdownProvider
+            .renderMarkdown(article.content)
+            .replace(
+              /<div class="mermaid">/g,
+              `<div class="mermaid" style="background: #f3f3f3; padding: 8px;"> <p>Mermaid 图表 RSS 暂无法显示，具体请查看原文</p>`,
+            ),
+          onSanitizeError('正文'),
+        );
         const html = `<div class="markdown-body rss">
       <link rel="stylesheet" href="${siteUrl}markdown.css">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.6.0/build/styles/default.min.css">
-      ${this.markdownProvider
-        .renderMarkdown(article.content)
-        .replace(
-          /<div class="mermaid">/g,
-          `<div class="mermaid" style="background: #f3f3f3; padding: 8px;"> <p>Mermaid 图表 RSS 暂无法显示，具体请查看原文</p>`,
-        )}</div>`;
+      ${renderedBody}</div>`;
         feed.addItem({
           title: article.title,
           id: url,
           link: url,
-          description: this.markdownProvider.renderMarkdown(
-            this.markdownProvider.getDescription(article.content),
+          // ⚠️ description 也必须消毒：它是摘要（`<!-- more -->` 之前那一段），同样来自作者正文，
+          //    很多阅读器**只显示 description**、不展开 content ⇒ 漏掉它等于留了半个口子。
+          description: sanitizeRenderedHtml(
+            this.markdownProvider.renderMarkdown(
+              this.markdownProvider.getDescription(article.content),
+            ),
+            onSanitizeError('摘要'),
           ),
           category: categories,
           content: html,
