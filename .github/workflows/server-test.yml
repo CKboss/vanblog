@@ -263,7 +263,32 @@ jobs:
 
       - name: Run admin editor unit tests
         working-directory: packages/admin
-        run: node --test tests/unit/*.test.js
+        # 🔴 2026-09-21 加失败诊断（与上面 "Run server unit tests" 同一手法，复用已验证的 wrapper 形状）：
+        #    这一步曾在 CI 上**长期红而本机全绿**，而本机 deploy key 读不了 job 日志
+        #    （/actions/jobs/<id>/logs 返回 403「Must have admin rights」）⇒ 红了等于瞎。
+        #    ::error annotations 走**公开** API（/check-runs/{id}/annotations）就能读，
+        #    本轮正是靠它才定位到 guards-slow 演练守卫的确切失败断言。
+        #    根因（已复现）：package.json 的 `postinstall: umi g tmp` 会在 CI 的 install 步骤里
+        #    **生成 src/.umi**，所以 CI 上 `.umi` 是**存在**的、只是没有 `.cache/`；
+        #    而 `showQuickJumper` 只存在于 `.cache/**` ⇒ 旧断言"存在就要求命中 >0"必然红。
+        #    已改成三态断言（见 paginationQuickJumper.test.js 的 (B0)/(B)）。
+        # ⚠️ 退出码原样透传（PIPESTATUS），不放宽、不加重任何断言 —— 这是**诊断**，不是修 flake。
+        # ⚠️ `set +e` 是必需的：runner 默认 `bash -e`，否则管道一失败整个 step 就地中止、注解打不出来。
+        run: |
+          set -u
+          set +e
+          log="${RUNNER_TEMP:-/tmp}/admin-unit.log"
+          node --test tests/unit/*.test.js 2>&1 | tee "${log}"
+          rc=${PIPESTATUS[0]}
+          if [ "${rc}" -ne 0 ]; then
+            # node --test 失败时的可用信号：✖ 用例行、"✖ failing tests:" 段里的 AssertionError、
+            # 以及 ℹ 汇总行。⚠️ 只取前若干条，不把整段日志塞进 annotation（有长度限制且会淹没有用信息）。
+            grep -aE '^(✖|not ok )' "${log}" | sort -u | head -20 | while IFS= read -r l; do echo "::error::admin 单测失败用例 ${l}"; done
+            grep -aE 'AssertionError|Error \[|SyntaxError|Cannot find module|ENOENT' "${log}" | sort -u | head -15 | while IFS= read -r l; do echo "::error::admin 单测错误 ${l}"; done
+            grep -aE '^ℹ (tests|suites|pass|fail|cancelled|skipped)' "${log}" | while IFS= read -r l; do echo "::error::admin 单测汇总 ${l}"; done
+            tail -40 "${log}"
+          fi
+          exit "${rc}"
 
       - name: Run backup restore e2e
         working-directory: packages/server

@@ -1588,7 +1588,29 @@ EOF
   [[ "${variant}" == *" copy-mismatch "* ]] && echo 'tamper' >>"${st}/MANIFEST.copy.json"
   [[ "${variant}" == *" missing-copy "* ]] && rm -f "${st}/MANIFEST.copy.json"
   [[ "${variant}" == *" corrupt-content "* ]] && echo 'tampered' >>"${st}/static/img/a.webp"
-  [[ "${variant}" == *" tamper-sha "* ]] && sed -i '0,/"sha256":"/s/"sha256":"[0-9a-f]/"sha256":"f/' "${st}/manifest.json"
+  # 🔴 2026-09-21 修（这是 guards-slow 在 CI 上「每跑必红」而本机全绿的**根因**）：
+  #    原来这一行是 `s/"sha256":"[0-9a-f]/"sha256":"f/` —— **把表里第一个十六进制位替换成 `f`**。
+  #    ⇒ 当那一位**本来就是 `f`** 时，整个篡改是**空操作**：manifest.json 逐字节不变 ⇒
+  #      校验合法地通过（rc=0）⇒ 下游断言「清单哈希表被篡改 → 非 0 (want 1)」与
+  #      「merkleRoot 抓住了表篡改」必然红，而**看起来像"产品的篡改检测失效"**（其实夹具根本没打上）。
+  #    CI 的 annotation 正是点名了这两条（/check-runs/{id}/annotations 公开可读），
+  #    而它与 zstd/tar/bash 版本无关 ⇒ 此前 8 种 runner 工具链仿真都仿真不出来。
+  #    修法：整段替换成 **64 个 0** —— 对真实内容的 sha256 来说不可能恰好相等 ⇒ 篡改必定生效，
+  #    且**格式仍然合法**（64 位十六进制、长度不变），于是 merkleRoot 必然对不上（断言原文一字未动）。
+  if [[ "${variant}" == *" tamper-sha "* ]]; then
+    local _tb _ta
+    _tb=$(sha256sum "${st}/manifest.json" | cut -d' ' -f1)
+    sed -i '0,/"sha256":"[0-9a-f]\{64\}"/s//"sha256":"0000000000000000000000000000000000000000000000000000000000000000"/' "${st}/manifest.json"
+    _ta=$(sha256sum "${st}/manifest.json" | cut -d' ' -f1)
+    # 🔴 夹具自检：篡改**必须**真的改变了文件。否则下游拿到的是"看起来像产品漏检"的假红，
+    #    而真因是夹具没打上 —— 这正是本仓库那条规矩：NOT_RED 必须能区分
+    #    "守卫没拦住"与"变异没打上"，而区分手段就是**先证明 sha 变了**。
+    if [[ "${_tb}" == "${_ta}" ]]; then
+      echo "FATAL: tamper-sha 夹具是空操作（manifest.json 未被改变）—— 下游的 merkleRoot 断言会假红" >&2
+      rm -rf "${st}" "${recs}" "${payf}"
+      return 9
+    fi
+  fi
   (cd "${st}" && tar -cf - .) | zstd -19 --long=27 -q -o "${dest}"
   local rc=$?
   rm -rf "${st}" "${recs}" "${payf}"

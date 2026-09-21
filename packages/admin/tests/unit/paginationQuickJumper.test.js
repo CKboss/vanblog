@@ -38,8 +38,14 @@ const {
 } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// 🔴 (B0) 的确定性正对照要跑 `git check-ignore`：它证明 `src/.umi` 是**入库之外**的生成物，
+// 因此扫描器必须排除它 —— 这条判据**不依赖 `.umi` 是否存在、也不依赖本机跑没跑过 umi dev**，
+// 所以在 CI（只有 postinstall 的 `umi g tmp`）与本机开发机（有 625MB 的 .cache）上都成立。
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const SRC = path.join(__dirname, '../../src');
+// 仓库根（本文件在 packages/admin/tests/unit/ 下 ⇒ 上四级）
+const ROOT = path.join(__dirname, '../../../..');
 const EXTS = new Set(['.jsx', '.tsx', '.js', '.ts']);
 // ⚠️ 必须排除 umi 的构建缓存目录：`src/.umi/**` 里是 antd/rc-pagination **自己的源码**，
 // 父代理第一次 grep `showQuickJumper` 时命中的全在那里 —— 数进来会让守卫既假绿又假红。
@@ -259,6 +265,47 @@ function walk(dir, acc) {
   return acc;
 }
 
+/**
+ * 在 dir 下找**第一个**内容含 needle 的文件，找到就早退。
+ *
+ * 🔴 为什么必须有预算：本机 `src/.umi/.cache` 实测 **625 MB / 641 个文件**，
+ *    其中单个 `.webpackFSCache/.../0.pack` 就有 **483 MB**。`.pack` 不在 EXTS 里所以不会被读，
+ *    但 `.mfsu/**.async.js` 有 8.7 MB 量级的 ⇒ 无上限地读会把这条用例从毫秒级拖成分钟级。
+ *    （原来那版用 `walk(...).slice(0, 400)` 限流，但 `walk` 的返回顺序取决于 readdir 顺序，
+ *     而本机 `.umi` 有 691 个文件 > 400 ⇒ 命中项落在前 400 之外时会**假红**，是个潜在的顺序依赖。）
+ *
+ * ⚠️ 预算耗尽时返回 `budgetExhausted: true` 而**不是** `found: false` —— 调用方必须把它当
+ *    "不可判定"处理（打 NOTE），🔴 **绝不能当成"没找到"而失败**，否则缓存特别大的机器会假红。
+ */
+function findFirstFileContaining(dir, needle, { maxFiles = 4000, maxBytes = 192 * 1024 * 1024 } = {}) {
+  let files = 0;
+  let bytes = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const d = stack.pop();
+    for (const name of readdirSync(d)) {
+      if (SKIP_DIRS.has(name)) continue;
+      const full = path.join(d, name);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!EXTS.has(path.extname(name))) continue;
+      if (files + 1 > maxFiles || bytes + st.size > maxBytes) {
+        return { found: false, budgetExhausted: true, files, bytes };
+      }
+      files += 1;
+      bytes += st.size;
+      // 这里**不剥注释**：只是要证明"那个目录里确实存在这个词"
+      if (readFileSync(full, 'utf8').includes(needle)) {
+        return { found: true, budgetExhausted: false, files, bytes };
+      }
+    }
+  }
+  return { found: false, budgetExhausted: false, files, bytes };
+}
+
 // ---------------------------------------------------------------------------
 // 显式白名单：`pagination={false}` 的三处 —— 它们**根本没有分页器**，所以谈不上"页码跳转"。
 // ⚠️ 每条都必须写清"为什么是 false"，否则白名单会变成"看不见的例外"堆积处。
@@ -365,28 +412,120 @@ describe('admin pagination quick jumper (站长要求：所有能翻页的地方
     //（antd/rc-pagination 的源码真的会被 grep 命中）。干净 checkout 上没有这个目录 ⇒ 如实打 NOTE，
     // 正对照的职责由上面 (A) 承担。🔴 断言本身**不放宽**：目录存在时 umiHits 仍必须 > 0。
     // ---------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // 🔴 (B0) **确定性**正对照：`src/.umi` 是 git-ignored 的生成物 ⇒ 扫描器必须排除它。
+    //
+    // 为什么需要它：下面 (B) 的三种状态里，有两种（无 .umi / 有 .umi 无 .cache）都**无法**用
+    // "真实缓存里有 showQuickJumper"来证明排除是有意义的。而 `git check-ignore` 是**路径模式**
+    // 判定，🔴 **不依赖目录是否存在、也不依赖本机跑没跑过构建** ⇒ 三种状态下都成立，
+    // 于是"必须排除 .umi"这件事在 CI 上也被真正断言到了，而不是只在本机开发机上成立。
+    // ---------------------------------------------------------------------
+    const ignoredProbe = execFileSync(
+      'git',
+      ['check-ignore', '-v', path.join(SRC, '.umi')],
+      { cwd: ROOT, encoding: 'utf8' },
+    ).trim();
+    assert.ok(
+      ignoredProbe.includes('.umi'),
+      'src/.umi 应当被 git 忽略（它由 `umi g tmp` / `umi dev` 生成、不入库），' +
+        '所以扫描器必须排除它；实际 git check-ignore 输出：' +
+        (ignoredProbe || '(空 ⇒ 没被忽略？)'),
+    );
+    // 尺子有效性：同一个判据对**入库**目录必须返回"未被忽略"，否则上面那条可能恒真
+    const trackedProbe = spawnSync(
+      'git',
+      ['check-ignore', '-q', path.join(SRC, 'pages')],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.notStrictEqual(
+      trackedProbe.status,
+      0,
+      'src/pages 是入库目录，git check-ignore 不该命中它 —— 命中说明上面那条正对照的尺子坏了',
+    );
+
+    // ---------------------------------------------------------------------
+    // 🔴 (B) 真实 `.umi` 正对照：**按三种状态分别断言**（2026-09-21 第二次修）。
+    //
+    // 这才是 CI「Run admin editor unit tests」长期红的**真正根因**，而它与"`.umi` 缺失"无关：
+    //   `packages/admin/package.json` 里有 **`"postinstall": "umi g tmp"`** ⇒
+    //   CI 的 `pnpm install --frozen-lockfile` **会生成 `src/.umi`**。所以 CI 上 `.umi` 是**存在**的，
+    //   只是里面**没有 `.cache/`**（webpack/MFSU 缓存只有真跑过 `umi dev`/`umi build` 才会有）。
+    //   而 `showQuickJumper` 这个词在真实 `.umi` 里**只出现在 `.cache/**` 内** —— 实测：
+    //   本机 `.umi` 共 691 个文件、命中 3 处**全在 `.cache/`**；排除 `.cache` 后剩下的
+    //   50 个生成文件（core / dumi / plugin-* / umi.ts）命中 **0**。
+    //   ⇒ 上一版"`.umi` 存在就断言 umiHits > 0"在 CI 上**必然红**。
+    //   🔴 已复现：在干净 worktree 里跑一次 `umi g tmp`（= CI 的 postinstall）后执行本套件，
+    //      得到 `tests 623 / pass 622 / fail 1`，失败原文正是
+    //      「src/.umi 里居然找不到 showQuickJumper」。
+    //
+    // ⇒ 所以必须区分三态，而**每一态都要断言一个真事实**（不许静默跳过）：
+    //    态1 无 `.umi`            ：没跑过 install，也没跑过构建
+    //    态2 有 `.umi` + `.cache` ：本机开发机（跑过 umi dev）⇒ 原正对照仍然成立、仍然要求
+    //    态3 有 `.umi` 无 `.cache`：🔴 **CI 的形状**（只有 postinstall 的 `umi g tmp`）
+    // ---------------------------------------------------------------------
     const umiDir = path.join(SRC, '.umi');
-    if (existsSync(umiDir)) {
-      assert.ok(statSync(umiDir).isDirectory(), 'src/.umi 存在但不是目录？请复核');
-      let umiHits = 0;
-      for (const f of walk(umiDir, []).slice(0, 400)) {
-        // 这里**不剥注释**：只是要证明"那个目录里确实存在这个词"
-        if (readFileSync(f, 'utf8').includes('showQuickJumper')) umiHits += 1;
-      }
-      assert.ok(
-        umiHits > 0,
-        'src/.umi 里居然找不到 showQuickJumper —— 说明"排除缓存目录"这条断言的正对照不成立，请复核 SKIP_DIRS',
-      );
-    } else {
-      // 🔴 如实跳过并说明（不是静默跳过）：让读日志的人知道这条正对照在本机没执行、
-      // 以及为什么"扫到 0 个 .umi 落点"在这台机器上是恒真的。
+    const umiCacheDir = path.join(umiDir, '.cache');
+    if (!existsSync(umiDir)) {
+      // 态1：如实说明（不是静默跳过）——此时"扫到 0 个 .umi 落点"是恒真的，
+      // 而"必须排除 .umi"由上面 (B0) 的 git check-ignore 断言承担、排除**机制**由 (A) 的合成树承担。
       console.log(
-        'NOTE: 干净 checkout 上没有 src/.umi（umi 构建缓存、git-ignored），' +
+        'NOTE: 本机没有 src/.umi（既没跑过 install 的 `umi g tmp`、也没跑过 umi dev）。' +
           '所以"真实缓存里确实有 showQuickJumper"这条正对照本次未执行；' +
-          '排除机制已由 os.tmpdir() 下的合成正对照验证（.umi/.umi-production/node_modules 三个都被跳过、' +
-          '而自己的文件被扫到）。此时"扫到 0 个 .umi 落点"是恒真的，' +
+          '"必须排除 .umi"已由 git check-ignore 断言、排除机制已由 os.tmpdir() 下的合成正对照验证' +
+          '（.umi/.umi-production/node_modules 三个都被跳过、而自己的文件被扫到）。' +
+          '此时"扫到 0 个 .umi 落点"是恒真的，' +
           '但本文件其余断言（每一处分页都带 showQuickJumper）不依赖 .umi 是否存在。',
       );
+    } else {
+      assert.ok(statSync(umiDir).isDirectory(), 'src/.umi 存在但不是目录？请复核');
+      if (existsSync(umiCacheDir)) {
+        // 态2：本机跑过 umi dev/build ⇒ 缓存里确实有 antd/rc-pagination 的源码
+        //      ⇒ 原正对照成立，🔴 断言不放宽（仍要求真的找到）。
+        const probe = findFirstFileContaining(umiCacheDir, 'showQuickJumper');
+        if (probe.budgetExhausted) {
+          // ⚠️ 预算耗尽 = **不可判定**，不是"没找到" ⇒ 打 NOTE 而不是失败
+          //（否则缓存特别大的机器会假红）。机制仍由 (A) 与 (B0) 承担。
+          console.log(
+            'NOTE: src/.umi/.cache 太大（已读 ' +
+              probe.files +
+              ' 个文件 / ' +
+              Math.round(probe.bytes / 1048576) +
+              ' MB 仍未命中），本次不做"真实缓存里有 showQuickJumper"的判定；' +
+              '排除机制已由合成正对照 (A) 与 git check-ignore (B0) 验证。',
+          );
+        } else {
+          assert.ok(
+            probe.found,
+            'src/.umi/.cache 里找不到 showQuickJumper —— 这台机器跑过 umi dev/build，' +
+              '缓存里本应有 antd/rc-pagination 的源码；找不到说明"排除缓存目录"这条断言的' +
+              '正对照不成立，请复核 SKIP_DIRS 与 EXTS',
+          );
+        }
+      } else {
+        // 态3 = 🔴 CI 的形状：只有 `umi g tmp` 生成的文件、没有 .cache。
+        // 这里 showQuickJumper **本来就该是 0**（实测：45 个生成文件全 0 命中）⇒
+        // 断言它是 0，把"CI 上这条正对照不适用"变成一个**被钉住的事实**，
+        // 而不是一个静默跳过、也不是一条必然失败的 >0。
+        let genHits = 0;
+        for (const f of walk(umiDir, [])) {
+          if (readFileSync(f, 'utf8').includes('showQuickJumper')) genHits += 1;
+        }
+        assert.strictEqual(
+          genHits,
+          0,
+          'src/.umi 里没有 .cache，却出现了 showQuickJumper（' +
+            genHits +
+            ' 个文件）—— 说明 umi 生成的 tmp 文件里也带进了 antd 分页源码；' +
+            '那么"排除 .umi"在 CI 上也是承重的，请把态3 的 NOTE 改成与态2 同样的 >0 断言',
+        );
+        console.log(
+          'NOTE: src/.umi 存在但没有 .cache/ —— 这是 `umi g tmp`（package.json 的 postinstall，' +
+            'CI 的 install 步骤会跑它）生成的形状，里面只有 core/plugin-*/umi.ts 这类文件、' +
+            '不含 antd 分页源码，所以"真实缓存里有 showQuickJumper"这条正对照在本状态下**不适用**' +
+            '（已断言命中数恰为 0）。"必须排除 .umi"由 git check-ignore (B0) 断言、' +
+            '排除机制由合成正对照 (A) 验证。',
+        );
+      }
     }
   });
 
