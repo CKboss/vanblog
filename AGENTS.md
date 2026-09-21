@@ -1011,7 +1011,7 @@ sed 's/\x1b\[[0-9;]*m//g' vanblog_dev/logs/server-dev.log | tail -50
     动态 import + `onTocMathReady()` 订阅，`core.tsx` 用 `mathTick` state 触发重渲染。
   - **列表页只用轻量渲染器**：PostCard 的摘要走 `dynamic(() => import("../Markdown/MarkdownBase"))`；
     文章页/关于页把自己的 `dynamic(() => import("../Markdown"))` 通过新 prop `markdownRenderer` 传进来。
-    ⚠️ **PostCard 里千万不能静态 import `../Markdown`**：实测首页 First Load JS 从 286kB 涨回 432kB。
+    ⚠️ **PostCard 里千万不能静态 import `../Markdown`**：实测首页 First Load JS 从 286kB 涨回 432kB。（⚠️ **2026-09-21 标注：本节所有 First Load JS 绝对值是当时的实测，代码后来长大了，不要拿它当今天的基线** —— 同一份代码下 W2 的 A/B 实测 next 14 = 360 kB、next 15 = 363 kB，见 §7.95。**相对结论仍然成立**：静态 import 那条链的代价、以及 `dynamic(...,{ssr:true})` 不被 Next 的表统计。）
 - 嗅探规则（`needsRichMarkdown`）：mermaid 围栏（带 `\b` 词边界，避免 ```mermaidx 误判）、`$$`、
   或行内 `$…$`（`$` 后不能是空白，和 remark-math 的规则一致）。**只判断「有没有 `$`」是不行的**：
   `$PATH`、`5$` 太常见，实测会让首页白背 KaTeX。已知可接受误判：同一行出现两个 `$`。
@@ -3977,6 +3977,7 @@ Base/Rich（靠嗅探 mermaid 围栏与行内公式）之外加了 **`MarkdownPl
 （有代码块的文章不受影响），首页与 `/link`、`/about`、`/tag`、`/timeline` 不再引用。
 全局 CSS 的 hash 前后完全相同（`d9c0aa857e98492b.css`）—— 这轮改动是纯 JS 的，不可能影响样式。
 Next 自己的 First Load JS 表几乎不动（`/` 297→293 kB），因为它**不统计 `dynamic(...,{ssr:true})`
+  （⚠️ **2026-09-21 标注：本节所有 First Load JS 绝对值是当时的实测，代码后来长大了，不要拿它当今天的基线** —— 同一份代码下 W2 的 A/B 实测 next 14 = 360 kB、next 15 = 363 kB，见 §7.95。**相对结论仍然成立**：静态 import 那条链的代价、以及 `dynamic(...,{ssr:true})` 不被 Next 的表统计。）
 的 chunk** —— 这也正是上一条错误结论的来源，看这张表会以为什么都没变。
 
 **阅读量数字：既慢又是错的**。每张列表卡都渲染一个 `<PostViewer>`，它在 `useEffect` 里
