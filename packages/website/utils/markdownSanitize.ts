@@ -37,6 +37,32 @@
  *    （`Object.assign({}, toPropertyValueMap(attrs['*']), toPropertyValueMap(attrs[name]))`，
  *    `:232-236`，后者胜出）。⇒ "iframe 的 src 只准 http(s)" 就是这么表达的。
  *    ⚠️ 值不匹配时**属性被丢掉、元素保留**（返回 undefined），不是整段删掉。
+ *
+ * ## 关于 MathML：这份白名单**不含** MathML 元素，但前台的公式读屏支持并没有因此丢失
+ * （2026-09-21 实测记录，断言见 `packages/website/__tests__/mathMlFateAndBytemdBase.spec.ts`）
+ *
+ * 起因：服务端给 RSS 接同一套白名单的**镜像**时，活体测到 feed 里的 MathML 元素从 4 处变成 0
+ * （不在白名单 ⇒ 被 drop、子节点保留）。因为前台用的是**这同一份** schema，当时的推论是
+ * "前台大概也一直在丢 MathML ⇒ 读屏器支持丢失"。
+ *
+ * 🔴 **实测推翻了这个推论**，原因正是**本文件开头第 5-6 行已经写明的管线顺序**：
+ * 消毒（rehype-sanitize）跑在 **plugin rehype hooks 之前**，而 katex 就是一个 plugin rehype hook。
+ *  - **前台**：… → rehype-raw → **消毒** → **katex（plugin hook）** → stringify
+ *    ⇒ katex 生成的 MathML 在消毒**之后**才出现，**活下来**（读屏支持完好）；
+ *  - **RSS**：markdown-it + `@mdit/plugin-katex` 先渲染出 **HTML 字符串**，再 parse → 消毒 → stringify
+ *    ⇒ 那时 MathML 已经在树里了，**被 drop**（feed 里丢读屏支持）。
+ * 而**作者手写**的 MathML 在两边**都**会被 drop（这份白名单里确实没有它们）。
+ * ⇒ 两边测到的现象都对，只是**不是同一件事**。
+ *
+ * 🔴 **由此得到一件必须记住的安全事实：在前台，katex 产出的整棵子树是绕过这份白名单的。**
+ * 它的安全性不由这里兜底，而由 **katex 自己的转义**兜底（实测：`\text{}` 里的 HTML 被转义成实体；
+ * `\href{javascript:…}` 在 trust 关闭时渲染成红色错误框、**不产出锚元素**，`javascript:` 只作为
+ * 惰性源文本待在 annotation 里）。⇒ **不要给 math 插件打开 katex 的 trust 选项**：一旦打开，
+ * 产出的锚元素**这份白名单永远看不到**（它在消毒之后才生成）。已有守卫钉住"没有传 trust"。
+ *
+ * ⚠️ 所以：**不要"顺手"把 MathML 元素加进下面这个数组来"修复读屏支持"** —— 前台本来就没坏，
+ * 而 MathML 有自己的 mXSS 历史，加白需要单独评估（还会让 RSS 与前台的行为进一步分叉）。
+ * 真要改善 RSS 的读屏支持，应当在**服务端那条管线**上想办法，而不是改这份白名单。
  */
 // mark = `==高亮==`；dl/dt/dd = 定义列表（remark-definition-list）
 export const MARKDOWN_EXTRA_TAG_NAMES = [

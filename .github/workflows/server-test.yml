@@ -133,6 +133,19 @@ jobs:
       - name: Strict-null ratchet (definite null dereferences may only decrease)
         run: bash scripts/tests/strict-null-ratchet.test.sh
 
+      - name: Gitignore hygiene (no source directory may be silently swallowed)
+        # 🔴 2026-09-21 加：`.gitignore` 里曾有一条**裸 `log`**（本意是根级日志目录），而
+        #    **没有前导 `/` 的 gitignore 模式在任意层级都匹配** ⇒ 它把 `packages/server/src/provider/log/`
+        #    与 `packages/server/src/controller/admin/log/` 两个**源码目录**整个吞掉了。
+        #    已跟踪的文件因为"gitignore 不会取消跟踪"而照常存在 ⇒ 目录看起来健康、git status 干净，
+        #    但**新增文件会被静默忽略**。实际受害者：一个 9 用例的 spec 在全量 jest 里跑了 5 天却从未入库，
+        #    导致"跟踪套件数 + 新增 = 267 而 jest --listTests 报 268"永远对不上。
+        # ⚠️ 这一步在 guards-core 与 server-test **各出现一次**，是有意的：
+        #    守卫的 git 部分不需要依赖（guards-core 就能跑、且失败得早），
+        #    而"用 runner 自己的清单再对一次账"那部分需要 jest（只有 server-test 有 node_modules），
+        #    缺依赖时守卫会 NOTE 跳过而不是假绿 ⇒ 放在这里它才真的执行。
+        run: bash scripts/tests/gitignore-hygiene.test.sh
+
       # ── 真实构建 ─────────────────────────────────────────────────────────────
       # `--noEmit` 看不到"只在真正产出文件时才发生"的失败（输出目录冲突、声明文件产出、
       # 打包期的路径解析）。镜像里跑的就是 `nest build`，所以这里也跑它 ——
@@ -378,6 +391,19 @@ jobs:
 
   # 慢守卫：同样**无外部依赖**，只是单个耗时 30 秒以上，分开跑以免拖慢 guards-core。
   # 两个加起来约 3 分钟（本机实测：drill 148s、source-install 32s）。
+      - name: Gitignore hygiene (no source directory may be silently swallowed)
+        # 🔴 2026-09-21 加：`.gitignore` 里曾有一条**裸 `log`**（本意是根级日志目录），而
+        #    **没有前导 `/` 的 gitignore 模式在任意层级都匹配** ⇒ 它把 `packages/server/src/provider/log/`
+        #    与 `packages/server/src/controller/admin/log/` 两个**源码目录**整个吞掉了。
+        #    已跟踪的文件因为"gitignore 不会取消跟踪"而照常存在 ⇒ 目录看起来健康、git status 干净，
+        #    但**新增文件会被静默忽略**。实际受害者：一个 9 用例的 spec 在全量 jest 里跑了 5 天却从未入库，
+        #    导致"跟踪套件数 + 新增 = 267 而 jest --listTests 报 268"永远对不上。
+        # ⚠️ 这一步在 guards-core 与 server-test **各出现一次**，是有意的：
+        #    守卫的 git 部分不需要依赖（guards-core 就能跑、且失败得早），
+        #    而"用 runner 自己的清单再对一次账"那部分需要 jest（只有 server-test 有 node_modules），
+        #    缺依赖时守卫会 NOTE 跳过而不是假绿 ⇒ 放在这里它才真的执行。
+        run: bash scripts/tests/gitignore-hygiene.test.sh
+
       - name: Every guard script must be wired into some workflow
         # 🔴 这一步是 2026-09-21 加的，因为刚刚发现 `vanblog-backup-signing.test.sh`
         #    （210 条断言，覆盖 ed25519 签名 / `.sig` 旁证 / 五种验签结论 / "匿名恢复没有跳过验签的开关"）
