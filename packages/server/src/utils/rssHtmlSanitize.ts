@@ -50,7 +50,7 @@ import { toHtml } from 'hast-util-to-html';
  *        所以旧行为的准确描述是"**给读屏器喂垃圾**"，比"丢支持"更糟。
  *      · 🔴 **前台并没有丢**：前台是"先消毒、后由 katex 的 plugin rehype hook 产出"，
  *        MathML 在消毒**之后**才生成 ⇒ 天然活下来（已在镜像里印证：公式页 katex 30 处、math 元素 10 处）。
- *    ⇒ 修法见下面的 `RSS_MATHML_TAG_NAMES`（**窄白名单 + 逐属性定值**，18 个标签、
+ *    ⇒ 修法见下面的 `RSS_MATHML_TAG_NAMES`（**窄白名单 + 逐属性定值**，19 个标签、
  *    刻意排除 `annotation-xml`/`mglyph`/`malignmark` 这些 mXSS 载体，以及 `mathcolor`/`mathbackground`）。
  *    ⚠️ **这也意味着服务端这份白名单现在是 canonical 的严格超集**，差异**仅限 MathML**，
  *    由 `rssHtmlSanitizeParity.spec.ts` 按"超集 + 差异集合恰好等于 MathML 那组"钉住（不是放宽成空断言）。
