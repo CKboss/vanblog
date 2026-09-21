@@ -8867,6 +8867,44 @@ if (clusterWorkers > 1 && cluster.isPrimary) { …runBootstrapWithDbRetry(startP
    差一点把"采不到容器侧数据"当成结论。（本仓库已因此栽过两次。）
 5. ⚠️ `pgrep -fc loadtest.cjs` 报 2 又是**自匹配**（逐个核实后真实遗留 = 0）—— 与 `pkill -f` 同族，**第 6 次**。
 
+### 7.89 🔴 站长第二次裁定（2026-09-21）：**先做依赖升级，性能优化到此为止、不要无限做**
+
+原话：**"先进行包的升级，next / markdown 插件之类的事情，不要无限制的优化性能。"**
+
+⇒ 这条**覆盖**了 §7.87 里"②加固程序自身性能"那一项的开放性：性能优化**收口**，不再排新的性能项。
+
+**已经做完并入库的性能项（保留，不回退）**：
+- `/timeline`：`yearGroups` 从 53 篇 × 16 字段裁到 4 字段（HTML −11.7%、gzip −10.4%、`yearGroups` −56.8%）
+- `/category`：HTML −15.6%、gzip −16.6%（16 字段 → 4）；`/category/[category]` gzip −5.9%；`/tag/[tag]` gzip −5.0%
+- `layoutProps`：8,021B → 7,166B（三个只有单页读者的字段改成**显式 opt-in**）⇒ **全站每页 gzip −2.7%~−5.5%**
+- `/api/public/category` 与 `/api/public/tag`：opt-in `?toListView=true`（−18.3% / −18.0%），**默认形状逐字节不变**
+- 前台 SSR 取数接线（省 server→website 那一跳：分类页 4,041B、标签页 4,195B/次渲染）
+- 🔴 **明确判定"不做"的**（有实测依据，别再重提）：首页/`/page/N` 裁字段（未读字段只占 gzip **0.59%**，不值得给 `PostCard` 那条链加窄类型）；
+  `/tag` 索引与 `/search` **本来就不带文章数据**（问题不存在）；`customHtml`/`customCss`/`customHead`/`menus`
+  （**每页都有真实读者**，不是白传）
+
+**在飞的两个包按裁定收口**（做完就停，不再派新的性能项）：
+- `/api/public/meta` 的 `tagsOnly` 窄投影（≈**350 MB/天**的无谓 Mongo→Node 传输；这条严格说是**服务端资源浪费**而不是"页面体积优化"，
+  而且它是全站最热的读 ⇒ 做完它，性能线就**关闭**）
+- `getArticlesByTag(tagName)` 忽略自己的参数（渲染一个标签页却下载全部标签的文章）⇒ **做完这一条就停**
+
+**性能线关闭后不再做的（已登记，⚠️ 别再排）**：`/category` 与 `/tag` 无分页的放大面（⚠️ 这条**不是性能问题而是抗攻击问题**，
+如果要做得按"匿名攻击面"立项，不要挂在性能名下）；`layoutProps` 之外的其它体积项；apple 皮肤 46KB CSS；外部字体域名。
+
+🔴 **接下来的优先级（按站长裁定）**：**W1 → W2 依赖升级**，见 §7.77 的 W1–W4 计划：
+- **W1**：`markdown-it` → `^14.3.2`、scoped `postcss@8` override（`^8.5.23`）、`katex` → **`@mdit/plugin-katex`**
+  （⚠️ 站长已裁定 katex 与 markdown-it 14 **一起**迁移）。⚠️ **需要 `pnpm install`**，本项目有过一次 **39 分钟中断**的先例；
+  ⚠️ 而且**会清空/重装 `node_modules` ⇒ 站长正在跑的 dev 环境（3000/3001/3002）会挂，之后需要 `./dev-env.sh restart`**。
+  ⚠️ **验收必须有"差分渲染语料"**：升级前后用同一批 markdown（含 katex 公式、代码块、表格、HTML 内联、`<!-- more -->`、
+  CJK、emoji、超长行）渲染并**逐字对比 HTML**，任何差异都要能解释（是 bug 修复还是行为变化）。
+- **W2**：`next` → **15.5.25**（+ `@next/bundle-analyzer`、`eslint-config-next`）。
+  ⚠️ 验收：复跑 **600 假 slug 探针**、`beforeInteractive` **仍在初始 HTML 里**（⚠️ 这条必须在**配了 `customScript` 的站点**上验 ——
+  dev 这套没配，所以改前改后都是 0 命中，量不出来）、**并复测性能**（用 `scripts/benchmark/measure.sh` 的
+  单请求延迟 / 页面重量 / 混合流量并发扫描三节；⚠️ **不要**跑万级并发那一节，它在 rootless podman 发布端口形态下受
+  rootlessport 限制，见 §7.86/§7.88）。
+- 🔴 **次序约束（必须遵守）**：`pnpm install` 会重装依赖 ⇒ **必须等在飞的两个包落地并提交之后**再开 W1 窗口，
+  否则它们的测试跑到一半依赖被换掉，结果不可信；而且**W1 期间不要派任何需要跑测试的代理**。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
