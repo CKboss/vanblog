@@ -25,6 +25,7 @@ import { projectPublicSiteInfo } from 'src/provider/meta/meta.provider';
 import { sanitizePagination } from 'src/utils/pagination';
 import { isInternalRequest } from 'src/utils/rateLimit';
 import { readPublicMetaWithSingleFlight } from 'src/utils/publicMetaCache';
+import { createKeyedSingleFlight, KeyedSingleFlight } from 'src/utils/keyedSingleFlight';
 import { isTrue } from 'src/utils/isTrue';
 
 /**
@@ -43,6 +44,38 @@ import { isTrue } from 'src/utils/isTrue';
  * ⚠️ 想放宽就调这个常量；不要指望用 `pageSize` 绕（`sanitizePagination` 会夹住）。
  */
 export const FULL_CONTENT_MAX_PAGE_SIZE = 20;
+
+/**
+ * `/api/public/category` 与 `/api/public/tag` 的单飞缓存键。
+ *
+ * 🔴 **键必须包含所有会影响结果的参数，否则就是越权泄漏。**
+ * 这两个端点的结果由三件事决定：
+ * - `kind`：分类分组还是标签分组（两者的响应形状与内容都不同）；
+ * - `includeHidden`：**是否包含隐藏文章** —— 管理端内部调用走 `true`，公开面走 `false`。
+ *   🔴 如果这个参数不进键，管理端那次调用的结果（**含隐藏文章**）就会被公开面命中，
+ *   等于把隐藏文章泄露给匿名访客。这不是理论风险：`getPieData()` 与 `getColumnData()`
+ *   确实用 `includeHidden = true` 调同一批 provider 方法。
+ * - `slim`：投影是 16 字段还是 13 字段（少了 `hidden` / `lastVisitedTime` / `wordCount`）。
+ *   ⚠️ 混用的后果是"调用方拿到比预期更少的字段"，即静默的错答案。
+ *
+ * ⚠️ 目前公开面这两个端点恒以 `includeHidden = false` 调用，而缓存也**只**加在控制器层
+ * （provider 方法本身不缓存），所以内部调用不会写进这个缓存。但键里仍然带上 `includeHidden`：
+ * 这样"将来有人把缓存下移到 provider 层"时不会静默地共用一个条目。
+ * 有守卫钉住"不同的参数组合 ⇒ 不同的键 ⇒ 不共享缓存条目"。
+ *
+ * 分隔符用 `|`，而三个取值都是受限集合（两个字面量 + 两个布尔）⇒ 不存在拼接歧义。
+ */
+export function publicListCacheKey(
+  kind: 'category' | 'tag',
+  includeHidden: boolean,
+  slim: boolean,
+): string {
+  if (kind !== 'category' && kind !== 'tag') {
+    // 🔴 不要静默降级成一个共用键：那样两种语义会共享缓存条目。
+    throw new TypeError(`publicListCacheKey: 未知的 kind（只接受 category 或 tag）`);
+  }
+  return `public-list|${kind}|hidden=${includeHidden ? 1 : 0}|slim=${slim ? 1 : 0}`;
+}
 
 /**
  * 每篇加密文章、每 10 分钟的**全局**（跨 IP）密码尝试预算。
@@ -86,6 +119,39 @@ const PUBLIC_READ_CACHE_CONTROL = 'public, max-age=30, s-maxage=300, stale-while
 @ApiTags('public')
 @Controller('/api/public/')
 export class PublicController {
+  /**
+   * 🔴 `/api/public/category` 与 `/api/public/tag` 的单飞缓存。
+   *
+   * ⚠️ **刻意做成实例级而不是模块级全局**：Nest 的 controller 默认是单例、每个进程一个实例，
+   * 所以生产行为与"模块级 Map"完全等价（多 worker 时本来就是每进程各一份）；
+   * 但实例级让"每个新建的 controller 自带一份空缓存"，于是既有那些
+   * "每次迭代新建一个 controller + 新替身来观察 slim 传了什么"的白盒守卫**不必改动就继续成立**。
+   * 模块级的第一版实测打破了它们（第二次迭代直接命中缓存、根本不调用新替身）。
+   * 详见 `utils/keyedSingleFlight.ts` 头注释里那条教训。
+   */
+  private publicListCache?: KeyedSingleFlight;
+
+  /**
+   * 🔴 **惰性创建**，不要在字段声明处直接 `= createKeyedSingleFlight()`。
+   *
+   * 原因（实测踩到的）：本仓库多条既有守卫用 `Object.create(PublicController.prototype)` 造控制器替身
+   * （见 `provider/tag/tag.provider.slimListView.spec.ts` 的 `makeControllerSpy`、
+   * 以及 `provider/article/article.provider.slimListView.spec.ts` 的同名手法）。
+   * `Object.create` **既不跑构造函数、也不跑类字段初始化器** ⇒ 字段初始化的缓存会是 `undefined`，
+   * 于是 `this.publicListCache.read(...)` 直接抛 TypeError，而那些守卫看到的现象是
+   * "替身一次都没被调用"（`calls` 为空），**离真正的根因很远**。
+   * 惰性创建对两种构造方式都成立：正常 new 出来的实例、以及 `Object.create` 出来的替身。
+   *
+   * 👉 通用教训：**给一个已被 `Object.create(Cls.prototype)` 式替身覆盖的类加实例字段时，
+   * 必须惰性初始化** —— 类字段初始化器在这类替身上根本不会执行。
+   */
+  private listCache(): KeyedSingleFlight {
+    if (!this.publicListCache) {
+      this.publicListCache = createKeyedSingleFlight();
+    }
+    return this.publicListCache;
+  }
+
   constructor(
     private readonly articleProvider: ArticleProvider,
     private readonly categoryProvider: CategoryProvider,
@@ -338,6 +404,57 @@ export class PublicController {
   /**
    * 分类 → 该分类下的文章。
    *
+   * 🔴 **2026-09-21：本端点与下面的 `/tag` 一起接上了单飞缓存。为什么，以及为什么不是别的修法。**
+   *
+   * ## 放大面（实测 + 外推，改这里之前先读）
+   * 本端点**没有分页、没有上限**：一次匿名请求返回**全部分类及其下全部文章**（每篇 16 字段的列表项）。
+   * 本机 53 篇时实测 22,131 B（gzip 6,367）、**每条目 417.6 B**。按此线性外推（⚠️ 是外推不是实测）：
+   * 500 篇 ≈ 204 KB、5000 篇 ≈ 2.0 MB、**50000 篇 ≈ 19.9 MB —— 单次匿名请求**。
+   * 配合全局限流（默认 600 次/分钟/IP），修之前**单个 IP 每分钟可拉走 ≈ 11.9 GB**，
+   * 而且服务端每次都要把全部文章从 Mongo 捞回来、在 Node 里分组、再序列化。
+   *
+   * ## 🔴 反直觉但关键：**响应分页压不掉服务端成本**
+   * `articleProvider.getAll(view, includeHidden, includeDelete?)` **没有 limit/skip 参数**
+   * ⇒ 它永远捞全表。所以在控制器层加分页**只能减少响应字节，减不掉 Mongo→Node 传输、JS 分组与对象构造**。
+   * 实测佐证：本端点（2 次查询、53 篇）p50 **22.8 ms**，而 `/api/public/meta`（**7 次查询**、走单飞缓存）
+   * p50 **2.0 ms** —— 差 11 倍，差别不在查询数量而在**有没有缓存**；
+   * 又 `/api/public/article?pageSize=5`（DB 级真分页、只取 5 篇）p50 **19.6 ms** ≈ 本端点取 53 篇的 22.8 ms
+   * ⇒ **单请求成本几乎与返回多少篇无关**。而带宽恰好是 gzip 已经压掉 3.5 倍的那部分，
+   * **CPU / 内存 / DB 才是没被任何东西压住的部分**。
+   *
+   * ## ⚠️ 被评估过但**故意没做**的两条（别重新发明它们）
+   * - **(A) 匿名条目数上限**（照 `FULL_CONTENT_MAX_PAGE_SIZE` 那套范式：匿名夹上限 + `isInternalRequest`
+   *   豁免 + 响应里显式标注截断）。**没做的理由**：它只压响应字节、**压不掉服务端成本**（见上），
+   *   却是**默认行为变更**（会截断匿名第三方消费者的响应）⇒ 发版前引入一个
+   *   "没有额外保护效果的破坏性变更"不划算。单飞缓存 + 专用限流桶已把**成本**与**频次**两个维度都上界住了。
+   * - **(4) opt-in 响应分页**（`?page=&pageSize=`）。**没做的理由**：同样只省带宽不省成本；
+   *   而且消费者已有更好的选择 —— `/api/public/article?category=X&tags=Y&page=N&pageSize=M`
+   *   走 `findPublicPage`，那是 **DB 级真分页**。🔴 更要紧的是：
+   *   **"提供了工具但没上界"很容易被误读成"修好了"** —— 匿名攻击者只要不传参数就仍然拉全量。
+   *
+   * ## ⚠️ 将来若要加 `Cache-Control`，这份核实不必重做
+   * 这两个端点**目前没有 `Cache-Control` 头**（全控制器只有 `getBuildMeta` 与 `getByOption` 有）。
+   * 加它会撞上 `publicReadAmplification.spec.ts` 里那条"带缓存头的方法**恰好 2 个**"的安全 tripwire
+   * （它担心的是"访问密码保护的内容进了共享缓存就是越权泄露"）。**这个前提已经核实掉了**：
+   * 本端点用的 `listView` 投影是 **16 个字段、不含 `content` 也不含 `password`**
+   * （`adminView` 的注释明写"与 listView 逐字段一致，只多 select 一个 password"、
+   * 且"公开面永远用 listView"），活体响应也逐字段核过、敏感字段命中 **0**，
+   * 并且 `includeHidden = false` ⇒ 隐藏与未发布文章都被过滤。⇒ **它们是公开列表，可以安全地被共享缓存。**
+   * ⚠️ **但本轮仍然没加**：默认部署里**没有任何共享缓存**（`scripts/caddyConfig.js` 无 `cache` 指令）
+   * ⇒ 对攻击者无效，只对"站长自己挂了 CDN"的场景有效；为了一个零保护效果的一致性补齐去动一条安全
+   * tripwire，风险收益不划算。**已登记为待办**（真要做时记得连 `/tag/:name` 一起补，它同样是公开列表）。
+   *
+   * ## 🔴 缓存的陈旧窗口（**用户可见的行为变化**，必须写进 CHANGELOG）
+   * 默认 TTL **5 秒**（`VANBLOG_PUBLIC_LIST_CACHE_MS` 可调，上限 60 秒）⇒
+   * **发文 / 改文 / 删文之后，本端点与 `/tag` 最多 5 秒才反映变化。**
+   * ⚠️ **这里没有显式失效钩子**（`invalidateKeyed` 存在，但生产代码里没有任何调用点）。
+   * 为什么可以接受：①与 `/api/public/meta` **同量级**（它也是 5 秒）；②前台本来就是 **ISR**，
+   * 文章页 `revalidate` 是**天**量级 ⇒ 5 秒比用户现在已经体验到的陈旧窗口**紧得多**，
+   * 所以这不是"新增一种陈旧"，而是"在一个陈旧得多的系统里加一个很短的窗口"；
+   * ③要做显式失效就得在**文章写入点**加调用（`provider/article/**`），本轮刻意不交叉改动。
+   * 👉 **将来若要加失效钩子：加在文章的创建/更新/删除处，对 `publicListCacheKey` 的四种组合
+   * （category/tag × slim 真/假）逐个调 `invalidateKeyed`。**
+   *
    * @param toListView **可选**，默认不传 = 今天的行为（每篇 16 个字段的完整列表形状）。
    *   传 `true` 时改用公开精简投影（少 `hidden`/`lastVisitedTime`/`wordCount` 三个
    *   "公开响应里零消费者"的字段），实测这三个占响应的 **19.2%**（53 篇时 3,882 B / 20,255 B）。
@@ -353,9 +470,24 @@ export class PublicController {
    */
   @Get('category')
   async getArticlesByCategory(@Query('toListView') toListView?: unknown) {
-    const data = await this.categoryProvider.getCategoriesWithArticle(false, {
-      slim: isTrue(toListView),
-    });
+    // 🔴 缓存键必须包含**所有影响结果的参数**（`slim` 决定投影、`includeHidden` 决定可见性过滤）。
+    //    这里 includeHidden 恒为 false（公开面），但仍然写进键里 —— 漏掉一个参数就会让
+    //    两种不同语义的调用共享同一份结果，见 `publicListCacheKey` 的注释与它的守卫。
+    // ⚠️ 下面这行刻意把 `isTrue(toListView)` **写在原处**（而不是先存进一个局部变量再传）：
+    //    有既有的源码文本守卫钉着 `slim: isTrue(toListView)` 这个形状，用来防止有人把这个
+    //    严格口径"顺手统一"成 `/api/public/article` 的真值判断。`isTrue` 是纯函数，调两次无副作用。
+    const data = await this.listCache().read(
+      publicListCacheKey('category', false, isTrue(toListView)),
+      // ⚠️ 这里的多行形状（`{` 后换行、`slim: isTrue(toListView),` 带尾逗号）是**被守卫钉住的**：
+      //    `provider/tag/tag.provider.slimListView.spec.ts` 与
+      //    `provider/article/article.provider.slimListView.spec.ts` 都用正则钉这个形状，
+      //    防止有人把严格 isTrue 口径"顺手统一"成 /article 的真值判断。
+      //    🔴 重排这几行之前先看那两条守卫，不要为了让代码好看而把它们改红。
+      () =>
+        this.categoryProvider.getCategoriesWithArticle(false, {
+          slim: isTrue(toListView),
+        }),
+    );
     return {
       statusCode: 200,
       data,
@@ -368,9 +500,15 @@ export class PublicController {
     //    那边真值判断的失败方向是"给更小的响应"（无害），而这里照抄会让 `?toListView=false`
     //    给出**比调用方预期更少的字段**（静默的错答案）。⚠️ 别"顺手统一"。
     // 🔴 默认（不传参数）逐字节不变：实测 23,265 B，与改动前基线相同。
-    const data = await this.tagProvider.getTagsWithArticle(false, {
-      slim: isTrue(toListView),
-    });
+    //    ⚠️ 接上单飞缓存**不改响应体一个字节**（缓存的是同一份结果），所以这条不变量继续成立。
+    const data = await this.listCache().read(
+      publicListCacheKey('tag', false, isTrue(toListView)),
+      // ⚠️ 多行形状同样被源码文本守卫钉住（见上面 @Get('category') 处的说明）。
+      () =>
+        this.tagProvider.getTagsWithArticle(false, {
+          slim: isTrue(toListView),
+        }),
+    );
     return {
       statusCode: 200,
       data,
