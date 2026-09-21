@@ -239,6 +239,55 @@ export type TimelineArticleRef = Pick<
 >;
 
 /**
+ * 裁剪 `Record<string, Article[]>`（"某个键 → 该组文章"）成只含 `TimelineArticleRef` 的形状。
+ *
+ * ## 为什么需要它（2026-09-21 实测）
+ *
+ * `/category`、`/category/[category]`、`/tag/[tag]` 三页都通过
+ * `CategoryList → TimeLineItem → ArticleList` 渲染，而 `ArticleList` 每篇**只读 4 样**
+ * （`pathname`→`getArticlePath()`、`id`→React key、`createdAt`→日期、`title`→链接文字）。
+ * 但三页的 pageProps 里装的字段数各不相同：
+ *
+ * | 页面 | 取数路径 | 改前每篇字段 | 改前数组字节（dev 站 53 篇真数据） |
+ * | --- | --- | --- | --- |
+ * | `/category` | `getArticlesByCategory()` **原样透传** server 的 `/api/public/category` | **16** | **23,795B** |
+ * | `/category/[category]` | `getArticlesByOption(toListView)` → `washArticlesByKey` | 5 | 11,207B |
+ * | `/tag/[tag]` | 同上 | 5 | 与标签下文章数成正比 |
+ *
+ * 🔴 `/category` 是最大的一块：16 个字段里 `lastVisitedTime`(2,385B)、`updatedAt`(2,067B)、
+ * `cover`(1,548B)、`tags`(1,068B)、`author`(1,060B)、`category`(1,060B)、`wordCount`(861B)、
+ * `private`(848B)、`hidden`(795B)、`visited`(713B)、`viewer`(660B)、`top`(424B) **一个都没被读**
+ * ⇒ 23,795B 里只有 8,504B（36%）是渲染真正需要的。
+ * 而 `hidden` 与 `lastVisitedTime` 在**整个 website 包里零读者**（`grep -rn "\.hidden\b"` /
+ * `\.lastVisitedTime\b` 排除类型声明后命中 0），`wordCount` 同样零读者。
+ *
+ * ## ⚠️ 为什么不在 `washArticlesByKey` 里改
+ *
+ * 那个函数是**共享**的，而且 `__tests__/washArticlesGrouping.spec.ts:23` 明确钉住了它的
+ * 5 字段输出（`createdAt/id/pathname/title/updatedAt`）。改它等于改一个有既有契约的公共工具，
+ * 而真正要紧的是**进 pageProps 的那一刻**装了什么 ⇒ 所以在 pageProps 边界上裁，
+ * 既不动公共工具、也不动它的测试。
+ *
+ * ## ⚠️ 键顺序必须逐字保留
+ *
+ * `CategoryList` 直接按 `Object.keys(sortedArticles)` 的顺序渲染，而 `washArticlesByKey`
+ * 的注释明写"键序 = 首次出现顺序，分类页直接依赖这个顺序渲染"。
+ * 这里用 `Object.keys` 顺序插入新对象 ⇒ 顺序不变（有守卫钉住）。
+ */
+export function trimArticleRecord<T extends TimelineArticleLike>(
+  record: Record<string, T[]> | null | undefined
+): Record<string, TimelineArticleRef[]> {
+  const out: Record<string, TimelineArticleRef[]> = {};
+  if (!record) {
+    return out;
+  }
+  for (const key of Object.keys(record)) {
+    out[key] = (record[key] || []).map(toTimelineArticleRef);
+  }
+  return out;
+}
+
+/**
  * 把一篇（可能很肥的）文章裁成 `TimelineArticleRef`。
  *
  * ⚠️ `pathname` 只在**真的是非空字符串**时才带上：它本来就是可选字段，

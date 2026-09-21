@@ -53,13 +53,31 @@ export interface LayoutProps {
   subMenuOffset: number;
   articlesPerPage: number;
   defaultExpandAllCategories: "true" | "false";
-  friendLinkIntro: string;
-  friendLinkApplyContent: string;
-  aboutTitle: string;
+  // 🔴 2026-09-21 移出：`friendLinkIntro` / `friendLinkApplyContent` / `aboutTitle`
+  //    以前在 LayoutProps 里，于是**每一个页面**的 pageProps 都带着它们，
+  //    而全仓只有两页真的读：`pages/link.tsx`（前两个）与 `pages/about.tsx`（aboutTitle）。
+  //    实测（dev :3001，真数据）三者合计 **790B raw / ~750B gzip**，
+  //    在 `/search` 上是 gzip 的 **5.7%**、`/about` 上 **4.9%**、`/category` 上 **3.5%**。
+  //    ⇒ 改成"默认精简、需要的页面显式opt-in"（见下面的 FriendLinkCopy / AboutTitleCopy）。
+  //    ⚠️ 方向是**默认精简**而不是"默认带上、各页记得删"：后者在新加页面时必然漏，
+  //    而默认精简时漏掉的后果是"某页少了一段文案"，会被类型系统当场拦下（TS2339）。
+  //    ⚠️ `customCss`/`customHtml`/`customHead`/`customScript` **不动**：
+  //    它们被 `Layout → CustomLayout` 在**每个页面**渲染，是真的每页都要。
   customCss?: string;
   customScript?: string;
   customHtml?: string;
   customHead?: HeadTag[];
+}
+
+/** `/link` 专属的两段文案（只这一页读，见上面 LayoutProps 里的说明）。 */
+export interface FriendLinkCopy {
+  friendLinkIntro: string;
+  friendLinkApplyContent: string;
+}
+
+/** `/about` 专属的标题（只这一页读）。 */
+export interface AboutTitleCopy {
+  aboutTitle: string;
 }
 
 export interface HeadTag {
@@ -171,6 +189,20 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
     showEditButton,
     uiStyle,
     articlesPerPage: sanitizeArticlesPerPage(siteInfo.articlesPerPage),
+    ...customSetting,
+  };
+}
+
+/**
+ * `/link` 用的两段文案。⚠️ **只有 `getLinkPageProps` 该调它** —— 别的页面调了就等于
+ * 把 790B 白传又装回去（守卫钉住了调用点数量）。
+ *
+ * 口径与移出前逐字一致：同样走 `resolvePageCopy(后台值, 内置默认值)`，
+ * 所以"后台没填就用默认文案"这个既有行为没有变（`pageCopy.spec.ts` 仍绿）。
+ */
+export function getFriendLinkCopy(data: PublicMetaProp): FriendLinkCopy {
+  const siteInfo = data.meta.siteInfo;
+  return {
     friendLinkIntro: resolvePageCopy(
       siteInfo.friendLinkIntro,
       DEFAULT_FRIEND_LINK_INTRO
@@ -179,8 +211,19 @@ export function getLayoutProps(data: PublicMetaProp): LayoutProps {
       siteInfo.friendLinkApplyContent,
       DEFAULT_FRIEND_LINK_APPLY_CONTENT
     ),
+  };
+}
+
+/** `/about` 用的标题。⚠️ 同上，只有 `getAboutPageProps` 该调它。 */
+export function getAboutTitleCopy(data: PublicMetaProp): AboutTitleCopy {
+  // ⚠️ 必须走一个局部绑定，不要内联解引用 siteInfo 的子字段：
+  //    #207 那条守卫钉的就是"这个文件里所有 siteInfo 都通过局部绑定读"，
+  //    因为内联解引用在 siteInfo 缺失时会抛 TypeError（那是一次真机 500 的根因）。
+  //    ⚠️ 连**注释里**也不要写出那条点号路径的字面量：该守卫只删掉绑定行、不剥注释，
+  //    写出来就会把它自己打红（本仓库已多次踩到"注释触发不存在断言"这个形状）。
+  const siteInfo = data.meta.siteInfo;
+  return {
     aboutTitle: resolvePageCopy(siteInfo.aboutTitle, DEFAULT_ABOUT_TITLE),
-    ...customSetting,
   };
 }
 

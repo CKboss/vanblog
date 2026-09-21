@@ -4,7 +4,7 @@ import { DonateItem } from "../api/getAllData";
 import AuthorCard, { AuthorCardProps } from "../components/AuthorCard";
 import Layout from "../components/Layout";
 import PostCard from "../components/PostCard";
-import { LayoutProps } from "../utils/getLayoutProps";
+import { LayoutProps, AboutTitleCopy } from "../utils/getLayoutProps";
 import { getAboutPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
 import dynamic from "next/dynamic";
@@ -19,7 +19,8 @@ export interface About {
   content: string;
 }
 export interface AboutPageProps {
-  layoutProps: LayoutProps;
+  // ⚠️ 这一页是全站**唯一**读 aboutTitle 的地方 ⇒ 只有它带上这个字段
+  layoutProps: LayoutProps & AboutTitleCopy;
   authorCardProps: AuthorCardProps;
   donates: DonateItem[];
   about: About;

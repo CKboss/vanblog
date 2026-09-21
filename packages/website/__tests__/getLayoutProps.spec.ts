@@ -3,7 +3,9 @@ import path from "path";
 import { describe, expect, it } from "vitest";
 import { PublicMetaProp, SiteInfo } from "../api/getAllData";
 import {
+  getAboutTitleCopy,
   getAuthorCardProps,
+  getFriendLinkCopy,
   getLayoutProps,
 } from "../utils/getLayoutProps";
 import {
@@ -100,8 +102,15 @@ describe("siteInfo is required on public meta (#207)", () => {
 
   it("reads layout and author-card siteInfo through one local binding", () => {
     const src = readSrc("utils/getLayoutProps.ts");
+    // 🔴 2026-09-21：期望值 2 → 4。这条守卫的性质是"**每个读 siteInfo 的函数都走一个局部绑定**"
+    //    （内联 `data.meta.siteInfo.x` 在 siteInfo 缺失时抛 TypeError，是一次真机 500 的根因），
+    //    而不是"这个文件里恰好有两个函数"。本轮新增了两个读 siteInfo 的函数
+    //    （`getFriendLinkCopy` / `getAboutTitleCopy`，把只被 /link 与 /about 读的三段文案
+    //    从 LayoutProps 里移出来），所以计数随之变成 4。
+    //    ⚠️ 真正防回归的是下面那条"删掉绑定行后不许再出现 data.meta.siteInfo"——
+    //    它才是性质本身，计数只是它的伴随指标。新函数若内联解引用，那条会红。
     expect(src.match(/const siteInfo = data\.meta\.siteInfo;/g)?.length).toBe(
-      2
+      4
     );
     const withoutLocal = src.replace(
       /const siteInfo = data\.meta\.siteInfo;/g,
@@ -150,9 +159,17 @@ describe("getLayoutProps / getAuthorCardProps with complete siteInfo (#207)", ()
     expect(layout.defaultTheme).toBe("dark");
     expect(layout.articlesPerPage).toBe(10);
     expect(layout.defaultExpandAllCategories).toBe("true");
-    expect(layout.friendLinkIntro).toBe("friends here");
-    expect(layout.friendLinkApplyContent).toBe("please email");
-    expect(layout.aboutTitle).toBe("About us");
+    // 🔴 2026-09-21 升级（不是放宽）：这三段文案已从 LayoutProps 移出，
+    //    因为全仓只有 /link 与 /about 读它们，而它们以前出现在**每一个**页面的 pageProps 里
+    //    （实测 790B raw / ~750B gzip，在 /search 上是 gzip 的 5.7%）。
+    //    原先断言的性质（后台填了什么就解析出什么）**逐条保留**，只是改由 opt-in helper 承担；
+    //    并额外钉住"默认路径不再带它们"这条新性质。
+    expect(getFriendLinkCopy(data).friendLinkIntro).toBe("friends here");
+    expect(getFriendLinkCopy(data).friendLinkApplyContent).toBe("please email");
+    expect(getAboutTitleCopy(data).aboutTitle).toBe("About us");
+    expect("friendLinkIntro" in layout).toBe(false);
+    expect("friendLinkApplyContent" in layout).toBe(false);
+    expect("aboutTitle" in layout).toBe(false);
     expect(layout.categories).toEqual(["随笔", "教程"]);
 
     expect(author.author).toBe("Alice");
@@ -207,11 +224,16 @@ describe("sparse siteInfo fields do not crash (#207)", () => {
     expect(layout.description).toBe("");
     expect(layout.articlesPerPage).toBe(5);
     expect(layout.defaultExpandAllCategories).toBe("false");
-    expect(layout.friendLinkIntro).toBe(DEFAULT_FRIEND_LINK_INTRO);
-    expect(layout.friendLinkApplyContent).toBe(
+    // 🔴 同上：性质是"后台没填 ⇒ 回落到内置默认文案"，改由 opt-in helper 断言
+    expect(getFriendLinkCopy(data).friendLinkIntro).toBe(
+      DEFAULT_FRIEND_LINK_INTRO
+    );
+    expect(getFriendLinkCopy(data).friendLinkApplyContent).toBe(
       DEFAULT_FRIEND_LINK_APPLY_CONTENT
     );
-    expect(layout.aboutTitle).toBe(DEFAULT_ABOUT_TITLE);
+    expect(getAboutTitleCopy(data).aboutTitle).toBe(DEFAULT_ABOUT_TITLE);
+    expect("friendLinkIntro" in layout).toBe(false);
+    expect("aboutTitle" in layout).toBe(false);
     expect(layout.since).toEqual(expect.any(String));
     expect(layout.since.length).toBeGreaterThan(0);
     // Required-looking fields stay undefined when omitted — no invented names/icons.

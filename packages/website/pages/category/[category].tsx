@@ -2,15 +2,16 @@ import { getPublicMeta } from "../../api/getAllData";
 import AuthorCard, { AuthorCardProps } from "../../components/AuthorCard";
 import Layout from "../../components/Layout";
 import TimeLineItem from "../../components/TimeLineItem";
-import { Article } from "../../types/article";
 import { LayoutProps } from "../../utils/getLayoutProps";
+// ⚠️ 窄类型：同 /category，这一页的文章只经 TimeLineItem → ArticleList 渲染，每篇只读 4 个字段
+import { type TimelineArticleRef } from "../../utils/timelineMonths";
 import { getCategoryPagesProps } from "../../utils/getPageProps";
 import { revalidate } from "../../utils/loadConfig";
 export interface CategoryPagesProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
   curCategory: string;
-  sortedArticles: Record<string, Article[]>;
+  sortedArticles: Record<string, TimelineArticleRef[]>;
   curNum: number;
   wordTotal: number;
 }

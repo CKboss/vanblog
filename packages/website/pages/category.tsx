@@ -1,8 +1,9 @@
 import AuthorCard, { AuthorCardProps } from "../components/AuthorCard";
 import CategoryList from "../components/CategoryList";
 import Layout from "../components/Layout";
-import { Article } from "../types/article";
 import { isDefaultExpandAllCategories } from "../utils/categoryExpand";
+// ⚠️ 窄类型：这一页的文章只经 CategoryList → TimeLineItem → ArticleList 渲染，每篇只读 4 个字段
+import { type TimelineArticleRef } from "../utils/timelineMonths";
 import { LayoutProps } from "../utils/getLayoutProps";
 import { getCategoryPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
@@ -10,7 +11,7 @@ import { revalidate } from "../utils/loadConfig";
 export interface CategoryPageProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
-  sortedArticles: Record<string, Article[]>;
+  sortedArticles: Record<string, TimelineArticleRef[]>;
   wordTotal: number;
 }
 const CategoryPage = (props: CategoryPageProps) => {

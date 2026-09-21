@@ -2,7 +2,11 @@ import { readFileSync } from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
 import { PublicMetaProp } from "../api/getAllData";
-import { getLayoutProps } from "../utils/getLayoutProps";
+import {
+  getAboutTitleCopy,
+  getFriendLinkCopy,
+  getLayoutProps,
+} from "../utils/getLayoutProps";
 import {
   DEFAULT_ABOUT_TITLE,
   DEFAULT_FRIEND_LINK_APPLY_CONTENT,
@@ -110,23 +114,32 @@ describe("pageCopy fallbacks (#373)", () => {
 
 describe("layout props expose resolved page copy (#373)", () => {
   it("falls back when siteInfo omits the new fields", () => {
-    const layout = getLayoutProps(metaOf());
-    expect(layout.friendLinkIntro).toBe(DEFAULT_FRIEND_LINK_INTRO);
-    expect(layout.friendLinkApplyContent).toBe(DEFAULT_FRIEND_LINK_APPLY_CONTENT);
-    expect(layout.aboutTitle).toBe(DEFAULT_ABOUT_TITLE);
+    const data = metaOf();
+    // 🔴 2026-09-21 升级（不是放宽）：#373 的性质是"后台没填这些字段时要回落到内置默认文案"，
+    //    这条性质**原样保留**；变的只是承载者 —— 三段文案已从 LayoutProps 移到 opt-in helper，
+    //    因为它们只被 /link 与 /about 读，却曾出现在每个页面的 pageProps 里（~750B gzip/页）。
+    expect(getFriendLinkCopy(data).friendLinkIntro).toBe(DEFAULT_FRIEND_LINK_INTRO);
+    expect(getFriendLinkCopy(data).friendLinkApplyContent).toBe(
+      DEFAULT_FRIEND_LINK_APPLY_CONTENT
+    );
+    expect(getAboutTitleCopy(data).aboutTitle).toBe(DEFAULT_ABOUT_TITLE);
+    // 并钉住新性质：默认路径不再带它们
+    const layout = getLayoutProps(data);
+    expect("friendLinkIntro" in layout).toBe(false);
+    expect("friendLinkApplyContent" in layout).toBe(false);
+    expect("aboutTitle" in layout).toBe(false);
   });
 
   it("uses custom text when the setting is set", () => {
-    const layout = getLayoutProps(
-      metaOf({
-        friendLinkIntro: "这些是朋友们的站点：",
-        friendLinkApplyContent: "请发邮件申请。站点：{{siteName}}",
-        aboutTitle: "About this blog",
-      })
-    );
+    const data = metaOf({
+      friendLinkIntro: "这些是朋友们的站点：",
+      friendLinkApplyContent: "请发邮件申请。站点：{{siteName}}",
+      aboutTitle: "About this blog",
+    });
+    const layout = { ...getLayoutProps(data), ...getFriendLinkCopy(data) };
     expect(layout.friendLinkIntro).toBe("这些是朋友们的站点：");
     expect(layout.friendLinkApplyContent).toBe("请发邮件申请。站点：{{siteName}}");
-    expect(layout.aboutTitle).toBe("About this blog");
+    expect(getAboutTitleCopy(data).aboutTitle).toBe("About this blog");
     expect(
       renderFriendLinkApplyContent(layout.friendLinkApplyContent, {
         siteName: "VanBlog",
@@ -138,16 +151,19 @@ describe("layout props expose resolved page copy (#373)", () => {
   });
 
   it("empty strings still fall back so existing sites look unchanged", () => {
-    const layout = getLayoutProps(
-      metaOf({
-        friendLinkIntro: "",
-        friendLinkApplyContent: "  ",
-        aboutTitle: "",
-      })
+    // 🔴 2026-09-21 升级（不是放宽）：这条的性质是"后台填了空串/空白 ⇒ 仍回落到内置默认文案，
+    //    老站看起来不变"。性质**原样保留**，只是承载者从 LayoutProps 换成了 opt-in helper
+    //    （三段文案只被 /link 与 /about 读，却曾出现在每个页面的 pageProps 里）。
+    const data = metaOf({
+      friendLinkIntro: "",
+      friendLinkApplyContent: "  ",
+      aboutTitle: "",
+    });
+    expect(getFriendLinkCopy(data).friendLinkIntro).toBe(DEFAULT_FRIEND_LINK_INTRO);
+    expect(getFriendLinkCopy(data).friendLinkApplyContent).toBe(
+      DEFAULT_FRIEND_LINK_APPLY_CONTENT
     );
-    expect(layout.friendLinkIntro).toBe(DEFAULT_FRIEND_LINK_INTRO);
-    expect(layout.friendLinkApplyContent).toBe(DEFAULT_FRIEND_LINK_APPLY_CONTENT);
-    expect(layout.aboutTitle).toBe(DEFAULT_ABOUT_TITLE);
+    expect(getAboutTitleCopy(data).aboutTitle).toBe(DEFAULT_ABOUT_TITLE);
   });
 });
 

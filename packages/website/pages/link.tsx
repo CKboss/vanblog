@@ -5,13 +5,15 @@ import Layout from "../components/Layout";
 import LinkCard from "../components/LinkCard";
 import Markdown from "../components/Markdown";
 import CommentArea from "../components/CommentArea";
-import { LayoutProps } from "../utils/getLayoutProps";
+// ⚠️ 这一页是全站**唯一**读 friendLinkIntro / friendLinkApplyContent 的地方，
+//    所以这两段文案只在这一页的 pageProps 里出现（见 utils/getLayoutProps.ts 的说明）。
+import { FriendLinkCopy, LayoutProps } from "../utils/getLayoutProps";
 import { getLinkPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
 import { renderFriendLinkApplyContent } from "../utils/pageCopy";
 
 export interface LinkPageProps {
-  layoutProps: LayoutProps;
+  layoutProps: LayoutProps & FriendLinkCopy;
   authorCardProps: AuthorCardProps;
   links: LinkItem[];
 }

@@ -3,7 +3,12 @@ import { IndexPageProps } from "../pages/index";
 import { TagPageProps } from "../pages/tag";
 import { TimeLinePageProps } from "../pages/timeline";
 import { CategoryPageProps } from "../pages/category";
-import { getAuthorCardProps, getLayoutProps } from "./getLayoutProps";
+import {
+  getAboutTitleCopy,
+  getAuthorCardProps,
+  getFriendLinkCopy,
+  getLayoutProps,
+} from "./getLayoutProps";
 import { sanitizeArticlesPerPage } from "./articlesPerPage";
 import { washArticlesByKey } from "./washArticles";
 import { AboutPageProps } from "../pages/about";
@@ -21,6 +26,7 @@ import { LinkPageProps } from "../pages/link";
 import { isListedPublicCategory } from "./publicCategories";
 import {
   groupTimelineByYearAndMonth,
+  trimArticleRecord,
   trimTimelineYearGroups,
 } from "./timelineMonths";
 import { Article } from "../types/article";
@@ -103,7 +109,15 @@ export async function getCategoryPageProps(): Promise<CategoryPageProps> {
   //    触发条件很现实：构建前台时 server 不可达（先构建后起服务、或 CI/Docker 里指不到活的服务），
   //    getAllData 的降级对象可能缺这个字段。同文件 :158 早有 `|| 0`，这三处漏了。
   const wordTotal = data.totalWordCount ?? 0;
-  const sortedArticles = await getArticlesByCategory();
+  // 🔴 必须在进 pageProps 之前裁：`getArticlesByCategory()` 是把 server
+  //    `/api/public/category` 的返回**原样透传**的（没有 toListView、也没有 wash），
+  //    于是每篇 16 个字段全都进了 `__NEXT_DATA__`。
+  //    实测（dev 站 53 篇真数据）：数组 23,795B = 该页 __NEXT_DATA__(30,499B) 的 78%、
+  //    HTML 的 25.8%，而 CategoryList → TimeLineItem → ArticleList 每篇**只读 4 个字段**
+  //    （id/title/createdAt/pathname）⇒ 裁完 8,504B，白传的 15,291B（64%）去掉。
+  //    ⚠️ 其中 `hidden`/`lastVisitedTime`/`wordCount` 在**整个 website 包里零读者**。
+  //    ⚠️ 键顺序逐字保留（CategoryList 直接按 Object.keys 渲染）。
+  const sortedArticles = trimArticleRecord(await getArticlesByCategory());
   return {
     layoutProps,
     authorCardProps,
@@ -116,7 +130,8 @@ export async function getLinkPageProps(): Promise<LinkPageProps> {
   const layoutProps = getLayoutProps(data);
   const authorCardProps = getAuthorCardProps(data);
   return {
-    layoutProps,
+    // 🔴 `/link` 是全站唯一读这两段文案的页面 ⇒ 只在这里把它们并进 layoutProps
+    layoutProps: { ...layoutProps, ...getFriendLinkCopy(data) },
     authorCardProps,
     links: data.meta.links,
   };
@@ -150,7 +165,8 @@ export async function getAboutPageProps(): Promise<AboutPageProps> {
   };
   return {
     showDonateInfo,
-    layoutProps,
+    // 🔴 `/about` 是全站唯一读 aboutTitle 的页面 ⇒ 只在这里并进 layoutProps
+    layoutProps: { ...layoutProps, ...getAboutTitleCopy(data) },
     authorCardProps,
     about,
     donates: data.meta?.rewards || [],
@@ -177,10 +193,17 @@ export async function getTagPagesProps(
   });
   const wordTotal = totalWordCount || 0;
   const curNum = total;
-  const sortedArticles = washArticlesByKey(
-    articlesInThisTag,
-    (each) => new Date(each.createdAt).getFullYear(),
-    false
+  // ⚠️ `washArticlesByKey` 已经把每篇洗成 5 个字段，但其中的 `updatedAt` 在
+  //    TimeLineItem → ArticleList 这条链上**没有任何读者**（ArticleList 只读 createdAt）。
+  //    实测 53 篇时它是 2,067B（占该页文章数组 11,207B 的 18%）。
+  //    ⇒ 再裁一道到 4 字段。⚠️ 不动 `washArticlesByKey` 本身：它是共享工具，
+  //    且 __tests__/washArticlesGrouping.spec.ts:23 钉住了它的 5 字段契约。
+  const sortedArticles = trimArticleRecord(
+    washArticlesByKey(
+      articlesInThisTag,
+      (each) => new Date(each.createdAt).getFullYear(),
+      false
+    )
   );
   return {
     layoutProps,
@@ -266,10 +289,10 @@ export async function getCategoryPagesProps(
   //    然后由 Next 的序列化在生产构建里炸掉。改成真兜底。
   const wordTotal = totalWordCount ?? 0;
   const curNum = total;
-  const sortedArticles = washArticlesByKey(
-    articlesInThisCategory,
-    (each) => each.category,
-    false
+  // ⚠️ 同 getTagPagesProps：wash 之后仍有没人读的 `updatedAt`（53 篇时 2,067B / 18%），
+  //    在进 pageProps 前再裁一道到 4 字段。
+  const sortedArticles = trimArticleRecord(
+    washArticlesByKey(articlesInThisCategory, (each) => each.category, false)
   );
   return {
     layoutProps,

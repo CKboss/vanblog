@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { Article } from "../../types/article";
+// ⚠️ 刻意**不要** `Article`：本组件只把 sortedArticles 透传给 TimeLineItem，
+//    而那条链每篇只读 4 个字段（见 utils/timelineMonths.ts 的 TimelineArticleRef）。
+//    声明成完整 Article 会让调用方以为"必须传整篇"，从而把没人读的字段一路带进 pageProps
+//    —— /category 改前就是这样白传了 23,795B 里的 15,291B。
+import { type TimelineArticleRef } from "../../utils/timelineMonths";
 import TimeLineItem from "../TimeLineItem";
 import {
   CATEGORY_COLLAPSE_ALL_LABEL,
@@ -9,7 +13,7 @@ import {
 } from "../../utils/categoryExpand";
 
 export default function CategoryList(props: {
-  sortedArticles: Record<string, Article[]>;
+  sortedArticles: Record<string, TimelineArticleRef[]>;
   defaultExpandAll: boolean;
   openArticleLinksInNewWindow: boolean;
 }) {
