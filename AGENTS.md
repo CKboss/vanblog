@@ -9116,6 +9116,84 @@ website tsc **0 错**｜admin **622**｜`docs-consistency` **52/0**｜`docs-link
   （`jest --silent` 会把失败详情吞掉一部分，必要时用 `--verbose` 或读完整输出），
   否则"形状看起来不像时钟"仍然是推理而不是证据。
 
+### 7.95 🔴 W2 最后一条验收项闭环（在真运行时下），以及两条必须记住的 standalone 规矩
+
+**闭环结论**：在**镜像真正使用的运行时**（`node .next/standalone/packages/website/server.js`、`Next.js 15.5.25`、
+`PORT=3111 HOSTNAME=127.0.0.1 NODE_ENV=production`、`Ready in 376ms`）下：
+- **两轮共 1200 个假 slug**（并发 10：600/600 → 404、墙钟 2008ms、平均 3.3ms；串行：600/600 → 404、3592ms、6.0ms）
+- 🔴 **产物零增长**：`.next` 总字节 **13,639,690 → 13,639,690（Δ=0）**、文件数 **379 → 379（Δ=0）**、
+  `post/*.html` 恒 **53**、**名字含 `chaos` 的文件/目录 = 0**
+- 🔴 **正对照成立**（这正是上一轮在 `next start` 下失败的那一条）：删掉真文章的 `.html`+`.json`（`post/*.html` **53 → 52**）
+  → 请求它 ⇒ **200 / 65,064B / 0.58s** → **两个文件都在磁盘上重新生成**（mtime **17:30 → 17:32**、数量回到 **53**）
+⇒ **"0 个 chaos 产物"这个结论现在有了正对照支撑：量的确实是对的目录。**
+⇒ **`fallback:"blocking"` + `notFound:true` 不构成磁盘/inode 放大面，这条结论在 next 15 下继续成立。**
+
+⚠️ **可比性如实标注**：next 14 那个 12 秒/19ms 的记录是**在容器里、18097 端口**量的，本次是**裸机、3111** ⇒
+**耗时数字只是方向性对比，不是受控对比**；而**产物类判据（chaos 0、字节 Δ0、文件数 Δ0、53 篇不变）与环境无关**，
+那才是这条验收的实质。
+
+🔴 **三条实测出来的部署事实**：
+1. **`next start` 不能用来做 ISR 落盘类验收** —— 它明确不支持 `output:"standalone"`，增量缓存行为与镜像运行时不同
+   （这就是上一轮正对照失败的唯一原因）。**必须用 standalone server。**
+2. 🔴 **standalone 运行时会真的调后端 API**：正对照里重新生成的 `.html` 是 **65,064B**，而构建期那份是 **65,034B**
+   （**差 30 字节**）⇒ 它取到了**新鲜数据**，不是回放构建期固化的内容。
+   ⇒ **部署时 standalone 容器必须能访问 server**（这条对 compose/k8s 的网络编排是硬要求）。
+3. 🔴 **镜像布局已从"推理"升级为"实测 + Dockerfile 逐条吻合"**：standalone 内是 **`packages/website/server.js`**，
+   `Dockerfile:640-644` 五条 COPY 逐条吻合；⚠️ **`.next/static` 不在 standalone 里**（next 的设计如此），
+   所以 `:644` 那条单独 COPY 是**必需**的。
+   ⚠️ **家目录那个游离 `/home/ckboss/pnpm-lock.yaml` 确实是上一轮"工作区根推断"警告的唯一成因**：
+   在 `/tmp` 复刻的 monorepo 形状里（根目录只有一个 lockfile）**警告 = 0 次** ⇒ **镜像里不会触发**。
+
+🔴 **两条新规矩（都是本轮实测出来的）**：
+1. **`output:"standalone"` 下 `node server.js` 会派生一个 `next-server` 子进程持有监听套接字 ⇒
+   kill 记录的 PID 不会释放端口**。收尾必须用 **`ss -ltnp` 从套接字取权威 PID** 再清掉子进程。
+   ⚠️ 这与"`ps|grep` 自匹配"是同一族：**"我杀了记录的 PID"不等于"端口释放了"**。
+2. 🔴 **要在不干扰 dev 的前提下做生产构建，可在 `/tmp` 复刻 monorepo 形状**：
+   website 真拷贝（排除 `.next`/`node_modules`）+ `packages/server`、`packages/admin`、`node_modules` 符号链接 +
+   **根目录只放一个 `pnpm-lock.yaml`**（与镜像的 `/app` 同形）。
+   ⇒ 构建产物落在 `/tmp`、**dev 的 `.next` 完全不受影响**，**不需要停 dev、也不需要站长授权**。
+   ⚠️ **这比"停 dev 再构建"更安全**，应当成为默认做法（上一轮 dev 500 正是因为"在运行中的 dev 底下构建"）。
+
+⚠️ **一条交办预期被实测更正**：我要求它把"dev 的 `post/*.html` 仍是 53"当负对照，**这个预期本身是错的** ——
+**dev 模式不产出构建产物**（实测 dev 的 `.next/server/pages/post/*.html` = **0**、`.next/standalone` 不存在），
+只有 `next build` 会产出；上一轮之所以看到 53，是因为那次在仓库里跑过生产构建，而**产物随后被 dev 重启冲掉了**。
+👉 **它如实更正了，没有为了"符合交办"而去找一个不存在的 53** —— 这正是要的行为。
+⚠️ 由此：**"ISR 产物数量"这个判据只在构建过的树上成立**，用它做负对照前要先确认那棵树构建过。
+
+📌 **`outputFileTracingRoot` 建议显式设置**（例如 `path.join(__dirname, '../../')`），作为纵深防御：
+本轮实测证明"仓库上方多一个 lockfile"就会把 standalone 布局改成
+`.next/standalone/WorkSpace/WorkSpaceL/vanblog/packages/website/server.js`，而 **Dockerfile 那五条 COPY 全都会落空 ⇒
+镜像构建会在 COPY 阶段失败**（⚠️ 这其实是"吵闹地失败"，比静默错位好，但仍是一次构建失败）。
+⚠️ **未做**：`next.config.js` 有守卫钉着形状，且改它会影响镜像布局 ⇒ 应当单独一轮 + 一次真实镜像构建验证。
+
+### 7.96 ⚠️ 未结案：站长的一次 dev 环境全挂，成因未查明（已排除"守卫主动杀进程"）
+
+**事实**：本轮取证的代理开工时（约 17:2x）发现 **dev 三端口全部拒绝连接、mongod 27017 也是空的**，
+dev 日志结尾是 `Command failed with signal "SIGTERM"` ⇒ **整个 dev 栈被 SIGTERM 了**。
+它**先恢复了 dev**（`dev-env.sh start`，150 秒后三端口全 200）再继续取证。⚠️ **不是它造成的**：
+它此前只做过只读操作，而我在 17:16 还核过 dev 全 200。
+
+**时间相关性**：我在 **17:00-17:10** 跑过"全量脚本守卫（31 个文件）+ 全量 server jest（268 套件）"。
+
+**已排除的假设**（我逐个查过）：🔴 **没有任何守卫会做宽泛的进程杀** ——
+`benchmark-tool.test.sh` 只 `kill -9` 它自己 spawn 的 `FAKE_PID`；`start-js.test.sh:59` 只 `kill -TERM` 它自己起的测试进程；
+`image-runtime`/`build-image-local`/`vanblog-drill` 里出现的 `SIGTERM` 全是**静态断言**（grep 源码文本，
+例如"main.ts 必须处理 SIGTERM"）或注释；`grep -lE "pkill|killall|dev-env\.sh (stop|restart)"` 在 31 个守卫里**命中 0**。
+
+**剩下的候选（未验证）**：①**资源压力/OOM** —— 31 个守卫 + 268 套件的 jest 同时跑，本机还有 dev 三进程与 18080 容器；
+⚠️ 但 OOM killer 发的是 SIGKILL 而不是 SIGTERM，与日志不符；②`timeout 400 bash "$t"` 发出的 SIGTERM
+**传播到了同一进程组**（⚠️ 我没有用 `setsid` 隔离那次循环）；③`dev-env.sh` 自己的 trap/监督逻辑在某个子进程异常退出时
+把整栈停掉。
+
+👉 **规矩（现在就生效，不必等结案）**：
+1. 🔴 **在站长正在使用 dev 环境时，不要跑"全量脚本守卫 + 全量 jest"这种量级的组合**；
+   要跑就先问，或者**用 `setsid` 把循环隔离成独立进程组**（`setsid bash -c 'for t in …'`），
+   这样 `timeout` 的 SIGTERM 不会沿进程组传播。
+2. ⚠️ **任何长循环跑守卫时，中途要顺手核一次 dev 三端口的状态**（本轮是代理**开工时**才发现，
+   意味着 dev 可能已经挂了十几分钟而没人知道）。
+3. 📌 **结案需要**：复现（在受控条件下重跑那个组合并盯着 dev 日志），或读 `dev-env.sh` 的 trap 逻辑确认③。
+   ⚠️ 在此之前**不要断言成因**，也不要把它记成"偶发"就翻篇 —— "跑测试会把站长的环境搞挂"是真隐患。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
