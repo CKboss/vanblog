@@ -25,6 +25,7 @@ import { projectPublicSiteInfo } from 'src/provider/meta/meta.provider';
 import { sanitizePagination } from 'src/utils/pagination';
 import { isInternalRequest } from 'src/utils/rateLimit';
 import { readPublicMetaWithSingleFlight } from 'src/utils/publicMetaCache';
+import { isTrue } from 'src/utils/isTrue';
 
 /**
  * 匿名请求"含全文的公开文章列表"的单页上限。
@@ -334,9 +335,27 @@ export class PublicController {
       data,
     };
   }
+  /**
+   * 分类 → 该分类下的文章。
+   *
+   * @param toListView **可选**，默认不传 = 今天的行为（每篇 16 个字段的完整列表形状）。
+   *   传 `true` 时改用公开精简投影（少 `hidden`/`lastVisitedTime`/`wordCount` 三个
+   *   "公开响应里零消费者"的字段），实测这三个占响应的 **19.2%**（53 篇时 3,882 B / 20,255 B）。
+   *   ⚠️ **向后兼容**：这是公开接口，第三方主题/脚本可能在调它，所以精简**必须显式 opt-in**，
+   *   缺省形状一个字节都不变。
+   *   🔴 **布尔口径与 `/api/public/article` 的 `toListView` 不同，这是有意的**：那边是
+   *   `if (option.toListView)` 的**真值判断**（历史行为，查询串 `?toListView=false` 会走列表视图，
+   *   见本文件 `getByOption` 里的说明），这边用 `utils/isTrue` 的**严格口径**（只认 `true`/`'true'`）。
+   *   为什么不一致反而更安全：两边的**失败方向**不同 —— `/article` 的真值判断失败方向是"给更小的响应"
+   *   （无害），而这里如果照抄真值判断，`?toListView=false` 就会给出**比调用方预期更少**的字段
+   *   （静默的错答案）。严格口径让"没明确要求精简"的一切输入都落回今天的完整形状。
+   *   ⚠️ 不要去"统一"成同一套而不同时检查两侧的失败方向。
+   */
   @Get('category')
-  async getArticlesByCategory() {
-    const data = await this.categoryProvider.getCategoriesWithArticle(false);
+  async getArticlesByCategory(@Query('toListView') toListView?: unknown) {
+    const data = await this.categoryProvider.getCategoriesWithArticle(false, {
+      slim: isTrue(toListView),
+    });
     return {
       statusCode: 200,
       data,

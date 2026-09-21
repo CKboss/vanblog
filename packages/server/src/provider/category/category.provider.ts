@@ -23,8 +23,24 @@ export class CategoryProvider {
     private readonly articleProvider: ArticleProvider,
     private readonly draftProvider: DraftProvider,
   ) {}
-  async getCategoriesWithArticle(includeHidden: boolean) {
-    const allArticles = await this.articleProvider.getAll('list', includeHidden);
+  /**
+   * @param includeHidden 是否包含隐藏文章/隐藏分类。**true 只有管理端会传。**
+   * @param opts.slim 用公开精简投影（少 `hidden`/`lastVisitedTime`/`wordCount`，
+   *   见 `ArticleProvider.slimListView`）。**默认 false ⇒ 响应形状与体积与今天逐字节一致**
+   *   （公开接口的向后兼容：这个端点是公开的，第三方主题/脚本可能在调它）。
+   *   🔴 `includeHidden=true` 时**强制忽略 slim**：精简投影不含 `hidden` 字段，
+   *   而管理端正是靠它显示"这篇是隐藏的"；两者同时生效会让后台拿到一批
+   *   **无法区分可见性**的文章（静默的错答案）。守卫钉住了这条不变量。
+   */
+  async getCategoriesWithArticle(
+    includeHidden: boolean,
+    opts?: { slim?: boolean },
+  ) {
+    const slim = opts?.slim === true && !includeHidden;
+    const allArticles = await this.articleProvider.getAll(
+      slim ? 'listSlim' : 'list',
+      includeHidden,
+    );
     const categories = await this.getAllCategories(false, includeHidden);
     const data = {};
     categories.forEach((c) => {

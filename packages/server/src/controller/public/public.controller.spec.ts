@@ -222,7 +222,13 @@ describe('PublicController category hide (#359)', () => {
     });
 
     const result = await controller.getArticlesByCategory();
-    expect(categoryProvider.getCategoriesWithArticle).toHaveBeenCalledWith(false);
+    // ⚠️ 2026-09-21 升级（不是放宽）：`getCategoriesWithArticle` 多了第二个参数（精简投影的开关）。
+    // 原来这条只钉住 `includeHidden=false`（#359：/category 只列公开分类），现在**同时**钉住
+    // "不传 toListView 时 slim 必须是 false" —— 也就是公开接口的**向后兼容**：
+    // 缺省响应形状与体积必须与加这个参数之前逐字节一致（活体实测 22,131 B / 16 字段）。
+    expect(categoryProvider.getCategoriesWithArticle).toHaveBeenCalledWith(false, {
+      slim: false,
+    });
     expect(Object.keys(result.data)).toEqual(['随笔', '教程']);
     expect(result.data['私密']).toBeUndefined();
     expect(result.data['随笔']).toHaveLength(1);

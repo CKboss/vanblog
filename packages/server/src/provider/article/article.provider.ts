@@ -60,7 +60,12 @@ import { escapeRegExp, safeSearchPattern } from 'src/utils/regex';
 import { asQueryString } from 'src/utils/sanitizeRequest';
 import { envPositiveInt } from 'src/utils/envNumber';
 
-export type ArticleView = 'admin' | 'public' | 'list';
+/**
+ * 取哪一份投影。⚠️ `'listSlim'` 是**公开列表**的精简形状（少 `hidden`/`lastVisitedTime`/
+ * `wordCount` 三个"公开响应里零消费者"的字段，见 `slimListView` 的注释），
+ * **只能**由公开接口在调用方显式要求时使用；管理端一律用 `'admin'`/`'list'`。
+ */
+export type ArticleView = 'admin' | 'public' | 'list' | 'listSlim';
 
 /**
  * 「扫描文章图片」的**分批**参数。
@@ -257,6 +262,60 @@ export class ArticleProvider {
   adminListView = {
     ...this.listView,
     password: 1,
+  };
+
+  /**
+   * **公开列表的精简投影**（`view: 'listSlim'`）：`listView` 去掉三个"公开响应里没有任何消费者"
+   * 的字段 —— `hidden`、`lastVisitedTime`、`wordCount`。
+   *
+   * ## 为什么是这三个（逐个核实过，不是猜的）
+   * 实测 `/api/public/category`（53 篇）里每个字段的 JSON 字节占比：这三个合计
+   * **3,882 B = 响应的 19.2%**（`lastVisitedTime` 2,332 B / 11.5%、`wordCount` 808 B / 4.0%、
+   * `hidden` 742 B / 3.7%）；`/api/public/tag` 与 `/api/public/timeline` 同量级（19.0% / 19.1%）。
+   *  - `hidden`：公开**列表**路径一律带 `hidden:false` 过滤（`getAll(view, includeHidden=false)`
+   *    与 `getTimeLineInfo` 都是），所以响应里它**恒为 false** —— 实测 53/53 全是 `false`，
+   *    零信息量。公开**详情**路径（`publicView`）才可能出现 `hidden:true`，而那只在站长开启了
+   *    `allowOpenHiddenPostByUrl` 时发生，此时调用方**已经拿到这篇文章**了，这个布尔不透露任何
+   *    它还不知道的事。⇒ 它是**白传**，不是泄漏（真正可区分的是 404 文案，见
+   *    `audit-hardening-round4-security-bruteforce.spec.ts` 里那条已登记、待与前台协同修的 oracle）。
+   *  - `lastVisitedTime`：访问台账，前台不显示。`packages/website` 里产品代码**零读者**
+   *    （命中的全是测试与注释）；sitemap 的 `lastmod` 用的是 `updatedAt || createdAt`
+   *    （`provider/sitemap/sitemap.provider.ts:140`），**不是**它；ISR 只用 `id`/`pathname`
+   *    （`utils/articlePublicPaths.ts`）。后台确实用它（阅读排行/最近浏览），但后台走
+   *    `adminView`/`adminListView`，与这条投影无关。
+   *  - `wordCount`：`packages/website` 产品代码零读者；前台要的"阅读时长"是服务端算好的
+   *    `readingMinutes`（`getByOption` 里由 `content` 或这个存量副本推出）。搜索索引虽然读
+   *    `article.wordCount`，但它走的是 `getAll('public', …)`（`publicView`，本来就不带 wordCount），
+   *    且**已经**有"取不到就用同一个 `utils/wordCount` 现算"的回落（`searchIndexBuild.ts:248-254`）。
+   *
+   * ## 为什么写成"显式清单"而不是 `{...this.listView}` 再删键
+   * 🔴 **默认精简、新增字段要显式 opt-in**：将来给 `listView` 加字段时，它**不会**自动出现在
+   * 公开精简响应里 —— 漏掉的失败方向是"少发一个字段"（可诊断、可补），而不是"又白传一个字段"
+   * （静默、没人发现）。这与前台上一轮确立的"lean by default + explicit opt-in"是同一条原则。
+   * 配套的守卫在 `article.provider.slimListView.spec.ts`：钉住"slim 恰好比 listView 少这三个字段"
+   * 与"slim ⊂ listView"，所以两侧漂移都会红。
+   *
+   * ⚠️ **不要把它用在管理端**：后台的分类/标签页要显示"隐藏"标记、阅读排行要 `lastVisitedTime`、
+   * 统计要 `wordCount`。管理端走 `includeHidden=true` 的调用方，默认仍是 `listView`。
+   * ⚠️ **也不含 `content`**（与 `listView` 一致）⇒ 用它算不出 `readingMinutes`；需要阅读时长的
+   * 消费方应当走 `/api/public/article?toListView=true&withExcerpt=true`（那条会算好再下发）。
+   */
+  slimListView = {
+    title: 1,
+    tags: 1,
+    category: 1,
+    updatedAt: 1,
+    createdAt: 1,
+    id: 1,
+    top: 1,
+    private: 1,
+    _id: 0,
+    viewer: 1,
+    visited: 1,
+    author: 1,
+    copyright: 1,
+    pathname: 1,
+    cover: 1,
   };
 
   toPublic(oldArticles: Article[]) {
@@ -885,13 +944,23 @@ export class ArticleProvider {
   }
 
   getView(view: ArticleView) {
-    let thisView: any = this.adminView;
+    // ⚠️ 兜底值从 `adminView` 改成最窄的 `slimListView`（**fail-closed**）。
+    // 原来这里默认 `adminView`，而 `adminView` 是**唯一 select 了 `password`** 的投影 ⇒
+    // 任何没匹配上的 view 都会拿到最宽的那份（含存储态密码，靠 schema 的 toJSON transform
+    // 才没出网）。今天四个 case 覆盖了 `ArticleView` 的全部成员、且所有调用方传的都是
+    // 类型内的字面量，所以这条分支**不可达**；但"投影选择器的兜底是最宽投影"是个
+    // 只要有人加一个 view 忘了加 case 就会静默成立的形状，而失败方向是**多下发字段**。
+    // 改成最窄的公开投影后，漏 case 的失败方向变成"少下发字段"（会被调用方的测试抓到）。
+    let thisView: any = this.slimListView;
     switch (view) {
       case 'admin':
         thisView = this.adminView;
         break;
       case 'list':
         thisView = this.listView;
+        break;
+      case 'listSlim':
+        thisView = this.slimListView;
         break;
       case 'public':
         thisView = this.publicView;
