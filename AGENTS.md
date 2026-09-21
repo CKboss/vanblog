@@ -9234,6 +9234,111 @@ done
    剩下 OOM（信号不符）与"我的循环没用 setsid 隔离"（信号吻合、未证实）。
    ⚠️ **在结案前，§7.96 那三条规矩继续有效**（不跑全量组合 / 用 setsid 隔离 / 长循环中途核 dev 端口）。
 
+### 7.97 🔴 主线第四阶段记账：C10K 的口径陷阱、两种失败机制的判据、以及 `setsid` 并不足以隔离后台任务
+
+**本轮做完的主线**：W1（`markdown-it` 14.3.2 + `@mdit/plugin-katex` 1.0.1 + scoped `postcss@8`）→
+W2（`next` 15.5.25，React 仍 18.2.0）→ 全面复测 → 重建镜像 `r29-mainline`（`e8acbb58b45e`、894 MB、+23 MB）→
+C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10、`docs/advanced/performance.md`、`CHANGELOG.md`）。
+
+#### 🔴 A. C10K 的数字**必须标注 `VANBLOG_CLUSTER_WORKERS` 的取值**，否则可比性为零
+
+本轮一开始就因为口径不同，得到了与 §5.2/§5.3 **相反**的结论：
+
+| 口径 | 静态路径 | API 路径 | 失败类 | 容器 netns `ListenOverflows` |
+|---|---|---|---|---|
+| **默认**（未设置 ⇒ 单进程 Node） | 10000/0 | **8221–8952 / 10000** | 🔴 `http_502` | 🔴 Δ 达 **25224 / 16881 / 19415** |
+| **`cluster=auto`**（本机 6 核 ⇒ 1 主 + 6 worker） | 10000/0 | **6 臂里 5 臂 10000/0**（含两个发布端口臂） | 唯一失败臂 `CLOSED_NO_RESPONSE`+`ECONNRESET` | 🔴 **所有臂 Δ=0** |
+
+⚠️ **代价**：cluster 把内存乘以 worker 数 ⇒ 默认是关的（`main.ts:612-618` 早有记载，与 §7.44 一致）
+⇒ 🔴 **"单进程下 API 只有 8221–8952"不是回归，是默认配置的既有天花板**。
+👉 **站长已同意**：文档把 `VANBLOG_CLUSTER_WORKERS=auto` 写成"多核机上要万级并发"的部署前提，**并标明内存×核数的代价**
+（已写进 `benchmark.md` §5.4 与 §10 第 2 条 —— ⚠️ §10 原来写着"**N>1 从未真跑过**"，本轮已更正）。
+
+#### 🔴 B. 两种失败机制的判据（比"看失败数"强得多；同样的失败数，处置相反）
+
+| 形状 | 成因 | 处置 |
+|---|---|---|
+| **`http_502`** 且 **`ListenOverflows` 上涨** | **服务端 accept 队列溢出**（单进程天花板；backlog 4096 对 1 万连接必然溢出） | 开 cluster；再不够加 backlog 与核数 |
+| **`CLOSED_NO_RESPONSE`/`ECONNRESET`** 且 **Δ=0** | **请求根本没到达容器** = rootless podman 发布端口形态下的 **rootlessport** 瓶颈 | **不是 VanBlog 的问题**：换容器网络内部口径测，或换 root 的引擎（§5.3 那张已实测否掉缓解手段的表照旧有效） |
+
+⚠️ **判据的关键是"内核计数器有没有动"**：`ListenOverflows Δ=0` 而客户端报大量失败 ⇒ **失败发生在到达容器之前**
+（这也解释了 §5.3 那次"客户端 `failures=399` 而 caddy 只记录 9601 条"）。
+
+⚠️ **本轮数字的可比性限制（如实记）**：Arm B/C 是 **6 臂背靠背、无冷却**，收尾 1 分钟负载 **14.66–15.64**（6 核）
+⇒ **后面的臂比前面的臂更疲劳**（正是既有的"首跑干净、后续退化"现象），而**唯一失败的那一臂恰好是最后一臂**
+⇒ 它的失败**无法与"机器疲劳"完全分离**。Arm A 之前核实过宿主安静（load 0.67 / nproc=6）。
+⚠️ **§6（容器资源占用）本轮只拿到"空闲"那一半**（CPU 19.27% / MEM 1.072 GB），"加压 30 秒"那半被打断 ⇒ 引用时要标明。
+
+#### 🔴 C. §7.96 那件未结案的事：**新增一个候选，而且它推翻了我上一轮立的规矩的一半**
+
+本轮实测：**`nohup setsid` 没能保住后台任务** —— 前台 bash 被 **60 秒上限 SIGTERM** 时，
+**后台的 `measure.sh` 也一起被终止了**（日志尾部就是 `Terminated`）。
+⇒ 🔴 **终止范围可能是会话/cgroup 级，而不只是进程组 ⇒ `setsid` 不足以隔离。**
+👉 **实务规避：长任务分节跑**（本轮因此改成"自己写 6 臂驱动、每臂单独一次调用"，**反而拿到了更干净的对照**）。
+⚠️ §7.96 里"这类循环用 `setsid` 隔离"那条**仍然值得做**（它至少让 `timeout` 的 SIGTERM 不沿进程组传播），
+但**不能再声称它能保住跨调用的后台任务** ⇒ 两条并列记，候选清单更新为：
+①资源压力/OOM（⚠️ 信号不符：OOM 发 SIGKILL）②`timeout` 的 SIGTERM 沿进程组传播（未证实）
+③🔴 **终止范围是会话/cgroup 级**（本轮新增，有实测：后台 `measure.sh` 随前台 bash 一起 `Terminated`）
+④`dev-env.sh` 的兜底杀进程（**已排除**：它只在显式执行 `stop` 时才跑，且已在 `a91187b3` 收窄）。
+
+#### ⚠️ D. 本轮新踩/新证的四个坑（都值得进手册）
+
+1. 🔴 **`ps|grep` 自匹配的**第 9 次****：数 `node main.js` 得到 **8**，其中 **1 个是自己那条 `sh -c` 命令行里含字面 `main.js`**
+   ⇒ 真实是 **7**（1 主 + 6 worker）。⚠️ **方括号技巧不够**：同一条命令行里可能有字面路径自己匹配上。
+2. 🔴 **`/proc/<pid>/stat` 不能用 `awk '{print $4}'` 取 ppid**：`next-server (v15.5.25)` 的 **comm 含空格与括号**
+   ⇒ 字段错位（先拿到了 `ppid=S`）。👉 **正确做法：先剥到最后一个 `)` 再取字段。**
+3. ⚠️ **"数出来是 0 要先怀疑自己的尺子"**：用 `grep -o '"_id"'` 数 `/api/public/category` 的篇数得 **0**
+   —— 那个接口返回的是 `pathname`，**不是 `_id`**。（与"断言 filter 形状前先 dump 真实形状"同族。）
+4. ⚠️ **"报坏了之前先查是不是设计如此"**：`/swagger-ui` 返回 404 差点被报成回归，查了 `main.ts:333` 才知道
+   🔴 **`VANBLOG_SWAGGER` 默认关**，而且路径是 **`/swagger`**、**不是 `/swagger-ui`**。
+   （⚠️ 已核实 `docs/**` 里**没有**把路径写成 `/swagger-ui` 的地方 —— 三处命中都是包名
+   `swagger-ui-express` / `swagger-ui-react`，不是路径。）
+
+#### 🔴 E. 基线更新（本轮全面复测的实测值）
+
+- server jest **268 套件 / 3838 用例**（⚠️ **3836 → 3838**，+2 来自 `loginThrottle` 那次假定时器改造）
+- 脚本守卫 **31 文件 / 3044 条 / 0 失败**｜website vitest **97 文件 / 1084**｜admin **622 / 154 套件**
+- 四个 tsc 口径**各 0 错**｜`strictNullChecks` 四类 **10**（伞形对照 `--strict` 下 **0** ⇒ 尺子仍分辨得出）
+- `docs-consistency` **52/0**｜`docs-links` **5/5**
+- 镜像：**`r29-mainline` / `e8acbb58b45e` / 894 MB**（上一版 871 MB ⇒ +23 MB）、构建 ~17 分钟、
+  镜像内 **node v24.21.0 / next-server v15.5.25**、standalone 布局 `/app/website/packages/website/server.js` +
+  `.next/static` 就位、`ulimit -n` **1048576**、`somaxconn` **4096**
+
+⚠️ **`utils/watermark.spec.ts#322` 从"本机必现失败"改成"间歇"**（本轮它**通过了**）⇒
+`AGENTS.local.md §6` 同步更正。🔴 **不改这条的危害是**：下一个人会拿它当"已知失败"，从而**掩盖真红**。
+
+⚠️ **负载敏感假红清单 7 → 8**：新增 **`utils/fullBackup.memberCap`**。
+🔴 **但它的根因不是负载，而是"断言缺口 + 一个可能的 SIGKILL 竞争"**：失败原文是
+`Expected /unexpected end of file|short read|…/  Received "gzip 解压失败（退出码 1）："`（**冒号后为空**）；
+`explainTarFailure`（`fullBackup.ts:743`）**有意**在 stderr 为空时 `return ''`（`:745-747`）⇒ **产品行为正常，缺口在断言**；
+机制假设是 `hashTarStreamCapped` 超过成员上限时会 **SIGKILL 解压器** ⇒ **被 SIGKILL 的 gzip 不留 stderr**。
+🔴 **若假设成立，这不只是测试脆弱**：真实用户命中成员上限时会拿到一条**尾巴空着、没有任何可照做提示**的报错，
+而那个函数的整个设计目的就是"把天书翻译成可照做的提示"。
+👉 **登记为待修，三步**：①给断言加"stderr 为空"分支（⚠️ 是**升级**不是放宽：空 stderr 时改为断言
+`explainTarFailure` 的返回值 + "上限已触发"这个事实）；②构造**必然超限**的归档验证 SIGKILL 竞争；
+③若竞争成立，产品侧补一句"解压器没有留下诊断信息，但成员数已超过上限 X"的兜底提示。
+
+#### ⚠️ F. 登记待办（本轮只报告、未动手）
+
+- 🔴 **`/tmp` 里有 15,529 个 `tmp.*` 目录**（未清、未归因）。⚠️ 一个已证实的贡献者是
+  `build-image-local.sh` 的 EXIT trap 缺陷（每次 `--build-only` 泄漏一个 `mktemp -d`，已在 `348a7d60` 修）；
+  但**归因需要查年龄与属主**，而且**有些可能正被在跑的代理使用** ⇒ **本轮一个都没删**。
+- ⚠️ **`build-image-local.sh --build-only` 不会因为 tag 已存在而跳过** ⇒ 想用它"看看行为"就会触发一次
+  **约 17 分钟的完整重建**（父代理本轮就这么踩了一次，还因此给并发压测加了 2 分钟背景负载）。
+- ⚠️ **HEALTHCHECK 被 OCI 格式丢弃**：`podman`/`buildah` 构建时 Dockerfile 的 `HEALTHCHECK` 会丢
+  （镜像 `Config.Healthcheck` 在 OCI config 类型里不存在、`podman ps` 无健康列）。
+  🔴 **但 compose 模板自带一份 healthcheck**（有守卫钉住两处逐字节相同）⇒ **compose 部署有健康探测，
+  裸 `podman run`/`docker run` 没有**，此时 `restart: always` 不会因 unhealthy 重启 ⇒ 已写进 `benchmark.md` §7 第 4 条。
+  ⚠️ **处置未定**（要不要改成 `--format docker` 构建、或只在文档里要求用 compose），留待裁定。
+- ⚠️ **镜像构建期三条观察**（不影响产物，都待查）：`tree-sitter{,-yaml,-json}` 三个原生模块 **gyp 失败**而构建仍成功
+  ⇒ 需确认运行时是否有代码路径 require 它们；pnpm WARN `/deploy/node_modules/.bin/{markdown-it,sitemap,rimraf,picgo,picgo,pino}`
+  **bin 软链创建失败**（⚠️ `markdown-it` 正是 W1 升级的那个包）；容器日志里**三条 `Ready in`、PID 64/64/62**
+  ⇒ 疑似 cluster 设计，但**未确证不是重启循环**（判据：同一 PID 多次 `Ready in`、或 PID 递增且旧 PID 消失 = 重启循环）。
+- ⚠️ **待站长裁定的第二条**（本轮 C10K 代理提出，**只登记不改代码**）：
+  **计划内重启期间那 151 行 ISR ERROR 是否降级为 WARN** —— 日志卫生问题：它们会**淹没真错误**。
+- 🔴 **`r29-mainline` 镜像保留着**（等裁定留不留作回滚/对比）；**悬空镜像 84 → 89（+5）、总数 100 → 106（+6）**，
+  ⚠️ **没有 prune**（等裁定）。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
