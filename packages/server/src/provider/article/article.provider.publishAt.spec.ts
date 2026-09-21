@@ -175,7 +175,15 @@ describe('公开读路径全部过滤未发布文章', () => {
     expect(hasPublishFilter(m3.captured[0].query)).toBe(true);
   });
 
-  it('getByIdWithPassword：未来文章 404 —— 就算密码正确、就算站点开了 allowOpenHiddenPostByUrl', async () => {
+  it('getByIdWithPassword：未来文章一律拿不到 —— 就算密码正确、就算站点开了 allowOpenHiddenPostByUrl', async () => {
+    // ⚠️ 2026-09-21 升级（不是放宽）：本用例钉的性质是「**未发布文章的正文绝不从这个匿名口子出去**」，
+    //    而**不是**「必须用 404 表达」。原来的机制是抛 NotFoundException，但那条 404 与"文章不存在"
+    //    的 `return null`（HTTP 201 + data:null）**不同形** ⇒ 未鉴权调用方可以逐个 id 试出
+    //    "这里挂着一篇定时文章"（匿名枚举 oracle，见 audit-hardening-round4 的 FINDING R4-5）。
+    //    修复后三种"看不到"的结果逐字节同形（都 return null），所以断言改成 toBeNull()。
+    // 🔴 这条断言**仍然能抓住"把 isFuturePublish 检查删掉"**：本用例的文章是 `private:false`，
+    //    少了那道检查它就会一路走到 `return plain` ⇒ 拿到全文而不是 null。
+    //    （变异对照 M2 就是"删掉这道检查"，必须红在这里。）
     const m = createCapturingModel([
       { id: 1, title: 't', content: 'c', publishAt: FUTURE, hidden: true, private: false },
     ]);
@@ -184,9 +192,11 @@ describe('公开读路径全部过滤未发布文章', () => {
       getSiteInfo: async () => ({ allowOpenHiddenPostByUrl: 'true' }),
     };
     const provider = createProvider(m, undefined, meta);
-    await expect(provider.getByIdWithPassword(1, 'any-password')).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    // allowOpenHiddenPostByUrl 只放行"隐藏"，**从不**放行"未到发布时间"⇒ 仍然 null
+    expect(await provider.getByIdWithPassword(1, 'any-password')).toBeNull();
+    // 且响应形状必须与"文章不存在"完全一致（同形才有不可区分性）
+    const empty = createProvider(createCapturingModel([]), undefined, meta);
+    expect(await empty.getByIdWithPassword(1, 'any-password')).toBeNull();
   });
 });
 

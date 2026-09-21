@@ -125,6 +125,23 @@ export const RELATED_CANDIDATE_LIMIT = 50;
 /** 相关文章最多返回几条（任务契约：max 5） */
 export const RELATED_MAX = 5;
 
+/**
+ * 🔴 公开文章详情口"看不到这篇文章"时**唯一**允许的对外文案（GET 与 POST 两条路共用）。
+ *
+ * 为什么必须是**一个常量**而不是两处相同的字面量：这个值承担的是**安全性质**——
+ * "文章不存在"、"文章被隐藏且不允许按 URL 打开"、"文章还没到发布时间"三种情况对匿名调用方
+ * **必须不可区分**。如果写成两处字面量，将来任何人改其中一处（哪怕只是改个标点）就会
+ * **静默地重新打开一个枚举 oracle**，而所有测试可能仍然全绿（除非有测试逐字比对，
+ * 而"逐字比对两处字符串"这种断言本身也容易被顺手改掉）。共用一个常量把"不可区分"
+ * 变成**结构性**事实：改它就是同时改三种情况，想制造差异必须显式引入第二个字符串，
+ * 而那会被守卫抓到（`audit-hardening-round4-security-bruteforce.spec.ts` 与本文件的
+ * 不可区分性用例都钉住了"公开路径只允许这一个文案"）。
+ *
+ * ⚠️ 措辞本身不重要，重要的是**唯一性**：不要给它加任何区分性的后缀（例如"（隐藏）"），
+ *    也不要为某一种情况另造一句"更友好"的文案 —— 那正是本常量要防止的事。
+ */
+export const NOT_FOUND_MESSAGE = '找不到文章';
+
 /** 公开详情 payload 里 relatedArticles 的条目形状（前台另一个 agent 按这个契约消费） */
 export interface RelatedArticleItem {
   /** 数字 id 的字符串形式（本站文章的对外标识一直是数字 id，不是 mongo ObjectId） */
@@ -1503,18 +1520,37 @@ export class ArticleProvider {
     if (!article) {
       return null;
     }
+    // 🔴 2026-09-21 匿名枚举 oracle 修复：下面这两个分支**以前抛 404**，而"文章不存在"那一支
+    //    `return null`（控制器包成 HTTP 201 + `data:null`）⇒ **404 唯一地证明了"这个数字 id 上
+    //    挂着一篇还没发布/被隐藏的文章"**，未鉴权调用方可以逐个 id 试出来（活体记录见
+    //    `audit-hardening-round4-security-bruteforce.spec.ts` 的 FINDING R4-5）。
+    //    现在三种"看不到"的结果**逐字节同形**（都是 `return null` ⇒ 201 + `data:null`）。
+    // ⚠️ 为什么选"都返回 null"而不是"都抛 404"：两者都能消除 oracle，但改状态码会动到
+    //    HTTP 层的形状（第三方主题/脚本可能在 POST 这个口子），而 null 这条路**一个状态码都不变**，
+    //    blast radius 为零。⚠️ 那条 `xit` 里写的 blast radius 警告（"前台按 data===null 判密码错"）
+    //    **与现状不符**：`components/UnLockCard/index.tsx:28` 用的是 `if (!res)` **外加一个 catch-all**，
+    //    所以 null、undefined（404 时解构 `{data}` 得到的就是 undefined）与抛错**三种都会**显示
+    //    "密码错误！请重试！"⇒ 前台**无需改动**，两个方向都安全。以现实为准，按 null 方向做。
+    //
+    // 🔴🔴 **这两个 if 绝不能因为"三支都返回 null 了"就被当成冗余删掉。**
+    //    删掉 `isFuturePublish` 这一支 ⇒ 定时文章会**继续往下走**到密码逻辑，而它若未加密
+    //    （`!isPrivate`）就会 `return plain` ⇒ **未发布文章的全文在未鉴权口子上泄漏**。
+    //    删掉 `hidden` 这一支同理 ⇒ 隐藏文章正文泄漏（这个 POST 口子历史上就因为没查 hidden
+    //    而泄漏过，见下面保留的原注释）。它们的价值不在"返回什么"，而在"**不再往下走**"。
+    //    两条都有变异对照钉住（把 if 去掉必须红）。
+    //
     // P5：这条解锁接口用 admin 视图取文（要读 password/private），公开的 publishAt
     // 查询过滤帮不到它 —— 必须显式挡。与 hidden 不同：allowOpenHiddenPostByUrl
-    // **不放行**定时文章（到点前 URL 直达也不能确认它的存在，按 404 处理）。
+    // **不放行**定时文章（到点前 URL 直达也不能确认它的存在）。
     if (isFuturePublish(article.publishAt)) {
-      throw new NotFoundException('找不到文章');
+      return null;
     }
     // 隐藏文章必须和 GET /api/public/article/:id 一样受 allowOpenHiddenPostByUrl 约束。
     // 这个 POST 口子以前完全没检查 hidden，于是未登录也能拿到隐藏文章正文。
     if (article.hidden) {
       const siteInfo = await this.metaProvider.getSiteInfo();
       if (!siteInfo?.allowOpenHiddenPostByUrl || siteInfo?.allowOpenHiddenPostByUrl == 'false') {
-        throw new NotFoundException('该文章是隐藏文章！');
+        return null;
       }
     }
     if (!password) {
@@ -1558,13 +1594,23 @@ export class ArticleProvider {
   async getByIdOrPathnameWithPreNext(id: string | number, view: ArticleView) {
     const curArticle = await this.getByIdOrPathname(id, view);
     if (!curArticle) {
-      throw new NotFoundException('找不到文章');
+      throw new NotFoundException(NOT_FOUND_MESSAGE);
     }
 
     if (curArticle.hidden) {
       const siteInfo = await this.metaProvider.getSiteInfo();
       if (!siteInfo?.allowOpenHiddenPostByUrl || siteInfo?.allowOpenHiddenPostByUrl == 'false') {
-        throw new NotFoundException('该文章是隐藏文章！');
+        // 🔴 2026-09-21 匿名枚举 oracle 修复：这里**曾经**抛一句专属文案，而"文章不存在"抛的是
+        //    NOT_FOUND_MESSAGE ⇒ 匿名调用方靠文案就能区分"这里挂着一篇隐藏文章"与"没有这篇文章"，
+        //    从而枚举出隐藏文章的存在（并结合 id 递增摸出站点规模）。现在两者**逐字相同**。
+        // ⚠️ 定时文章在这一支之前就被查询过滤掉了（`getById`/`getByPathName` 对 `view==='public'`
+        //    会加 `visiblePublishFilter()`）⇒ 落到 `!curArticle` 那一支，文案也相同 ⇒ 三种情况同形。
+        // ⚠️ 后台**不受影响**：管理端读文章走 `getByIdOrPathname(id,'admin')`
+        //    （`controller/admin/article/article.controller.ts:108`），那条路**从来不抛这两句**，
+        //    所以"后台要能看出这篇是隐藏的"这个可用性需求本来就由另一个方法满足，无需按身份分支
+        //    （也就避免了"分支判据来自请求参数、可被伪造"这个坑）。本方法的调用方只有两个：
+        //    公开控制器（`view='public'`）与 ISR 的 `activeArticleById`（`view='list'`，且全仓无调用方）。
+        throw new NotFoundException(NOT_FOUND_MESSAGE);
       }
     }
     if (curArticle.private) {

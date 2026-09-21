@@ -117,9 +117,35 @@ describe('匿名解锁：错密码拿不到正文，对密码才拿得到', () =
     expect((await provider.getByIdWithPassword(1, 'category-key')).content).toContain('正文');
   });
 
-  it('隐藏文章在 allowOpenHiddenPostByUrl=false 时按 404 处理（连"存在"都不确认）', async () => {
+  it('隐藏文章在 allowOpenHiddenPostByUrl=false 时拿不到（连"存在"都不确认）', async () => {
+    // ⚠️ 2026-09-21 升级（不是放宽）：本用例钉的性质是「隐藏文章不从这个匿名口子出去、
+    //    且不确认它存在」。原来的机制是抛一句**专属文案**的 404，而那句文案本身就是漏洞 ——
+    //    它与"文章不存在"的返回不同形，等于告诉匿名调用方"这个 id 上挂着一篇隐藏文章"。
+    //    修复后改成 return null，与"不存在"/"未到点"/"密码错"逐字节同形。
+    // 🔴 断言仍然能抓住"把 hidden 检查删掉"：删掉后这篇文章会继续走到密码校验，
+    //    而 'reader-key' 正是它的正确密码 ⇒ 会拿到正文（不是 null）。
     const provider = makeProvider(makeArticle({ hidden: true, password: hashed }));
-    await expect(provider.getByIdWithPassword(1, 'reader-key')).rejects.toThrow(/隐藏文章/);
+    expect(await provider.getByIdWithPassword(1, 'reader-key')).toBeNull();
+  });
+
+  it('🔴 隐藏文章的返回与"文章不存在"逐字节同形（匿名枚举 oracle 已关闭）', async () => {
+    // 这条是本次安全修复的**核心不变量**：三种"看不到"必须给出完全相同的值。
+    // ⚠️ 用 toBe/toBeNull 做**逐字比对**，不用 toThrow(/正则/) —— 正则会被
+    //    "两句话都包含某个共同子串"骗过（本仓库反复强调：断言相同要用逐字比对）。
+    const hidden = makeProvider(makeArticle({ hidden: true, password: hashed }));
+    const missing = makeProvider(null); // getByIdOrPathname 返回 null ⇒ 文章不存在
+    const future = makeProvider(
+      makeArticle({ hidden: false, password: hashed, publishAt: new Date(Date.now() + 86400000) }),
+    );
+    const a = await hidden.getByIdWithPassword(1, 'reader-key');
+    const b = await missing.getByIdWithPassword(1, 'reader-key');
+    const c = await future.getByIdWithPassword(1, 'reader-key');
+    expect(a).toBeNull();
+    expect(b).toBeNull();
+    expect(c).toBeNull();
+    // 三者两两严格相等（同形），且都不是"抛错"（抛错会让 HTTP 状态码不同 ⇒ 又可区分）
+    expect(a).toBe(b);
+    expect(b).toBe(c);
   });
 
   it('🔴 走的是**异步**变体：解锁路径上同步 verifyAccessPassword 零调用', async () => {

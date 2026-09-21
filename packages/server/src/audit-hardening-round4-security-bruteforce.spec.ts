@@ -25,7 +25,17 @@ import { pickTrustedClientIp } from './utils/trustedProxy';
  * 活体证据（一次性 mongod:27099 + 临时端口的一次性实例）见交付报告里的 curl 记录。
  */
 
+import { stripCommentsForAnchor } from './test-utils/anchorCode';
+
 const read = (rel: string) => readFileSync(join(__dirname, rel), 'utf8');
+
+/**
+ * 🔴 修复前"隐藏文章"那一句**专属**文案的标记片段。
+ * ⚠️ 故意用拼接而不是写完整字面量：本 spec 会被各种"全仓搜文案"的脚本扫到，
+ *    写完整字面量会让人误以为代码里还有这句话（也让"搜这个字符串还有没有残留"这类排查失去意义）。
+ *    拼出来的值与当年代码里那句**逐字相同**，所以 includes 判定是准确的。
+ */
+const HIDDEN_LEGACY_MARKER = '该文章是隐藏' + '文章！';
 
 /** public.controller.ts 里那把解锁限流钥匙的构造方式（逐字复刻，见下面的源码钉子） */
 const unlockKeyOf = (ip: string, id: unknown) => `unlock-${ip}-${String(id).slice(0, 80)}`;
@@ -179,45 +189,98 @@ describe('REGRESSION R4-2：三处防爆破计数曾经共用"反代的套接字
   });
 });
 
-describe('FINDING R4-5（尚未修）：解锁 POST 用「404 vs 200/null」把还没发布的定时文章出卖了', () => {
+describe('FINDING R4-5（✅ 2026-09-21 已修，这里钉住不变量）：解锁 POST 曾用「404 vs 200/null」把还没发布的定时文章出卖了', () => {
   const articleProvider = read('./provider/article/article.provider.ts');
 
   it('getByIdWithPassword 对"不存在"返回 null（HTTP 200 信封），对"存在但未到点"抛 404（源码钉子）', () => {
     // article.provider.ts:1221-1231
     expect(articleProvider).toMatch(/async getByIdWithPassword\(id: number \| string, password: string\): Promise<any> \{\s*\n\s*const article: any = await this\.getByIdOrPathname\(id, 'admin'\);\s*\n\s*if \(!article\) \{\s*\n\s*return null;/);
-    expect(articleProvider).toMatch(/if \(isFuturePublish\(article\.publishAt\)\) \{\s*\n\s*throw new NotFoundException\('找不到文章'\);/);
+    // 🔴 2026-09-21 升级：这一支**曾经**抛 404，而那正是 oracle —— "文章不存在"走的是
+    //    `return null`（控制器包成 HTTP 201 + `data:null`），于是 404 唯一地证明了
+    //    "这个 id 上挂着一篇还没发布的定时文章"。现在两支都 `return null` ⇒ 同形。
+    expect(articleProvider).toMatch(/if \(isFuturePublish\(article\.publishAt\)\) \{\s*\n\s*return null;/);
+    // 🔴 这道检查本身**必须还在**：删掉它，未发布文章就会一路走到 `return plain`（全文泄漏）。
+    //    它现在的价值不在"返回什么"，而在"不再往下走"⇒ 必须钉住它存在。
+    expect(stripCommentsForAnchor(articleProvider)).toMatch(/if \(isFuturePublish\(article\.publishAt\)\) \{/);
     // 控制器把 null 原样塞进 200 信封（public.controller.ts:104-111）
     expect(read('./controller/public/public.controller.ts')).toMatch(/const data = await this\.articleProvider\.getByIdWithPassword\(id, body\?\.password\);[\s\S]{0,200}?statusCode: 200,\s*\n\s*data: data,/);
   });
 
-  it('于是三种结果互不相同，而未鉴权调用方能一眼分辨（活体记录见报告）', () => {
-    // 活体（一次性实例，312 篇语料，id=9 是排到一年后的定时文章）：
-    //   POST /api/public/article/999999 -> HTTP 201 {"statusCode":200,"data":null}   不存在
-    //   POST /api/public/article/9      -> HTTP 404 {"message":"找不到文章"}          存在但未到点
-    //   POST /api/public/article/7      -> HTTP 201 {"statusCode":200,"data":null}   加密+密码错
-    // ⇒ 404 唯一地证明了"这个数字 id 上挂着一篇还没发布的文章"。
-    // 而 GET /api/public/article/:id 对"不存在"与"未到点"都抛同一个 404 ⇒ GET 不是 oracle，POST 是。
-    const outcomes: Record<string, string> = {
+  it('🔴 修复后：三种结果**完全相同**，未鉴权调用方无从分辨（不变量）', () => {
+    // ⚠️ 下面是**修复前**的活体记录（一次性实例，312 篇语料，id=9 是排到一年后的定时文章），
+    //    保留作历史证据 —— 它当年证明了这个 oracle 是真的、可远程利用的：
+    //      POST /api/public/article/999999 -> HTTP 201 {"statusCode":200,"data":null}   不存在
+    //      POST /api/public/article/9      -> HTTP 404 {"message":"..."}                存在但未到点
+    //      POST /api/public/article/7      -> HTTP 201 {"statusCode":200,"data":null}   加密+密码错
+    //    ⇒ 当时 404 唯一地证明了"这个数字 id 上挂着一篇还没发布的文章"。
+    //    而 GET /api/public/article/:id 对"不存在"与"未到点"都抛同一个 404 ⇒ GET 不是 oracle，POST 是。
+    // 🔴 修复后（2026-09-21，本机 dev 活体复核，见 vanblog_dev/tmp/oracle-evidence/）：
+    //      POST /api/public/article/999999（带密码 / 不带密码）-> HTTP 201 {"statusCode":200,"data":null}
+    //      POST 存在但未到点                                  -> HTTP 201 {"statusCode":200,"data":null}
+    //      POST 加密且密码错                                  -> HTTP 201 {"statusCode":200,"data":null}
+    //    ⇒ 三种（外加"隐藏"）全部同形，Set 的大小必须是 **1**。
+    const outcomesAfterFix: Record<string, string> = {
       '不存在': 'HTTP 201 / data:null',
-      '存在但未到点': 'HTTP 404',
+      '存在但未到点': 'HTTP 201 / data:null',
+      '隐藏且不允许按 URL 打开': 'HTTP 201 / data:null',
       '加密且密码错': 'HTTP 201 / data:null',
     };
-    expect(new Set(Object.values(outcomes)).size).toBe(2);
-    expect(outcomes['存在但未到点']).not.toBe(outcomes['不存在']);
+    expect(new Set(Object.values(outcomesAfterFix)).size).toBe(1);
+    // ⚠️ 并且状态码不许再出现 404 这一档（那正是当年的区分信号）
+    expect(Object.values(outcomesAfterFix).some((v) => v.includes('404'))).toBe(false);
   });
 
-  it('隐藏文章还多送一句可区分的文案（GET 与 POST 都有）', () => {
-    expect(articleProvider).toMatch(/throw new NotFoundException\('该文章是隐藏文章！'\);/g);
-    // 两处（getByIdWithPassword 与 getByIdOrPathnameWithPreNext）都用了这句专属文案
-    expect((articleProvider.match(/该文章是隐藏文章！/g) || []).length).toBeGreaterThanOrEqual(2);
+  it('🔴 修复后：隐藏文章**不再**有专属文案，GET 的两支共用同一个常量（不变量）', () => {
+    // ⚠️ 修复前这里钉的是缺陷现状：两处（getByIdWithPassword 与 getByIdOrPathnameWithPreNext）
+    //    都抛一句专属文案，于是匿名调用方靠文案就能区分"这里挂着一篇隐藏文章"与"没有这篇文章"。
+    //    现在改成钉**修复后**的性质。⚠️ 刻意不删除本用例：保留"这里曾经有个 oracle"的历史。
+    const stripped = stripCommentsForAnchor(articleProvider);
+    // ① 那句专属文案在**代码里**必须彻底消失（用剥注释后的文本，这样注释可以自由讨论历史；
+    //    ⚠️ 尺子有效性：同一把尺子在"未剥注释"时对合成样本必须能命中，见下面那条反证）
+    expect(stripped.includes(HIDDEN_LEGACY_MARKER)).toBe(false);
+    // ② 公开详情口的两支（不存在 / 隐藏）必须**共用同一个常量**，而不是两处相同的字面量 ——
+    //    共用常量让"不可区分"成为结构性事实：想制造差异必须显式引入第二个字符串。
+    expect((stripped.match(/throw new NotFoundException\(NOT_FOUND_MESSAGE\)/g) || []).length).toBe(2);
+    // ③ 那个常量必须真的被导出并定义（否则 ② 是在钉一个不存在的名字）
+    expect(articleProvider).toMatch(/export const NOT_FOUND_MESSAGE = '找不到文章';/);
+    // ④ 🔴 尺子有效性反证：证明"剥注释器 + includes"这把尺子**真的能命中**这个标记
+    //    （否则 ① 恒真 —— 一个永远找不到东西的尺子也能让 not-includes 通过）
+    const synthetic = `const a = 1; throw new NotFoundException('${HIDDEN_LEGACY_MARKER}');`;
+    expect(stripCommentsForAnchor(synthetic).includes(HIDDEN_LEGACY_MARKER)).toBe(true);
+    // ⑤ 反证：注释里出现该标记时，剥注释后**不该**命中（证明剥注释器真的在工作）
+    const syntheticComment = `const a = 1; // ${HIDDEN_LEGACY_MARKER}\nconst b = 2;`;
+    expect(stripCommentsForAnchor(syntheticComment).includes(HIDDEN_LEGACY_MARKER)).toBe(false);
   });
 
-  xit('AFTER THE FIX：三种结果必须同形（要么都 404，要么都 200/null），文案也不该区分隐藏', () => {
-    // 最小补丁：getByIdWithPassword 里把 `return null` 换成 `throw new NotFoundException('找不到文章')`
-    // （或反过来把 isFuturePublish 的 404 改成 return null）——两者取其一即可让 oracle 消失。
-    // 注意 blast radius：前台的解锁弹窗现在按 data===null 判"密码错"，改成 404 要同步看
-    // packages/website 里对这个 POST 的错误处理。
-    expect(true).toBe(true);
+  it('AFTER THE FIX（✅ 已实现）：三种结果同形、文案不区分隐藏，且前台解锁流程无需改动', () => {
+    // 本用例当年是 `xit`（跳过），里面写好了最小补丁：
+    //   「getByIdWithPassword 里把 `return null` 换成 `throw new NotFoundException(...)`
+    //     （或反过来把 isFuturePublish 的 404 改成 return null）—— 两者取其一即可让 oracle 消失。」
+    // 🔴 实际采用的是**第二个方向**（都 return null），理由：两者都能消除 oracle，但改状态码会动
+    //    HTTP 层的形状（第三方主题/脚本可能在 POST 这个口子），而 null 方向**一个状态码都不变**，
+    //    blast radius 为零。
+    // 🔴 并且当年那条 blast radius 警告（"前台按 data===null 判密码错，改成 404 要同步看 website"）
+    //    **与代码现状不符**：`components/UnLockCard/index.tsx:28` 用的是 `if (!res)` **外加 catch-all**，
+    //    而 `api/getArticles.ts` 的 `getArticleByIdOrPathnameWithPassword` 是 `const { data } = await res.json()`
+    //    ⇒ 404 时解构得到的是 **undefined**（不是 null）。`!res` 对 null 与 undefined 同样成立，
+    //    catch 分支也显示同一句"密码错误！请重试！"⇒ **两个方向前台都不用改**。
+    //    以现实为准（本仓库规矩：交办/旧注释与代码冲突时，以代码为准并说明）。
+    const stripped = stripCommentsForAnchor(articleProvider);
+    // ① POST 解锁口的三支"看不到"必须都是 return null（同形）
+    const unlockBody = stripped.slice(
+      stripped.indexOf('async getByIdWithPassword('),
+      stripped.indexOf('async getByIdOrPathnameWithPreNext('),
+    );
+    expect(unlockBody.length).toBeGreaterThan(200); // 尺子自检：真的切到了方法体
+    expect((unlockBody.match(/return null;/g) || []).length).toBeGreaterThanOrEqual(4);
+    // ② 该方法体里**不许再出现** throw NotFoundException（否则状态码又与"不存在"分叉了）
+    expect(unlockBody.includes('NotFoundException')).toBe(false);
+    // ③ 前台判据仍然是 `!res`（falsy），不是 `=== null` ⇒ null/undefined/抛错 三者都能被正确处理
+    const unlockCard = read('../../website/components/UnLockCard/index.tsx');
+    expect(unlockCard).toMatch(/if \(!res\) \{/);
+    expect(unlockCard.includes('=== null')).toBe(false);
+    // ④ 前台取数确实是解构 { data }（⇒ 404 会得到 undefined，佐证 ③ 的必要性）
+    expect(read('../../website/api/getArticles.ts')).toMatch(/const \{ data \} = await res\.json\(\);/);
   });
 });
 
