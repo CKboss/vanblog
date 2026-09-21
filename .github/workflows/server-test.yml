@@ -112,6 +112,33 @@ jobs:
         working-directory: packages/server
         run: ./node_modules/.bin/tsc -p tsconfig.build.json --noEmit --tsBuildInfoFile "${{ runner.temp }}/server-build.tsbuildinfo"
 
+      - name: Ensure Next's generated route types exist (next 15 reference in next-env.d.ts)
+        # 🔴 next 15 起，`next-env.d.ts` 会自动多出一行
+        #    `/// <reference path="./.next/types/routes.d.ts" />`，
+        #    而 `packages/website/tsconfig.json` 的 include 里**就有 `next-env.d.ts`** ⇒
+        #    在**没构建过的干净 checkout** 上跑 website 的 tsc 会报"找不到该文件"。
+        #    那个文件只由 `next build`/`next dev` 生成，而本 job 在这一步之前不构建 website。
+        # ⚠️ 为什么用类型桩而不是直接加一个 `next build` 步骤：
+        #    ①`next build` 会执行所有页面的 `getStaticProps`，而它们要调后端 API
+        #      （本机验证时 server 正在 :3000 跑，所以**无法确认它在没有后端的 CI 里能否成功**）；
+        #    ②本项目是纯 Pages Router、**没有启用 typedRoutes**，所以那个文件的内容对类型检查
+        #      没有实际贡献 —— 缺的只是"这个路径存在"。
+        #    ⇒ 桩文件是最小且确定可行的修法。⚠️ **不要 revert `next-env.d.ts`**：
+        #    下次 `next build`/`next dev` 会把那行重新写回来，revert 只会让工作树永久脏。
+        # 📌 更好的长期做法（未做，需要单独验证）：像上面 "Build server" 那一步一样，
+        #    加一个 "Build website（镜像里跑的同一条命令 `cross-env isBuild=t next build`）"，
+        #    并把 typecheck 放在它之后 —— 那样连"镜像的构建命令能过"也一起覆盖了。
+        #    前提是确认 `isBuild=t` 真的能让 `getStaticProps` 在没有后端时返回桩数据。
+        working-directory: packages/website
+        run: |
+          mkdir -p .next/types
+          if [ ! -f .next/types/routes.d.ts ]; then
+            printf '// Generated stub: next 15 adds a reference to this path in next-env.d.ts.\n// The real file is produced by `next build`; this project does not enable typedRoutes.\nexport {}\n' > .next/types/routes.d.ts
+            echo "已创建 .next/types/routes.d.ts 类型桩（干净 checkout 上 next-env.d.ts 的 reference 需要它）"
+          else
+            echo ".next/types/routes.d.ts 已存在（说明这一步之前跑过构建），沿用真实文件"
+          fi
+
       - name: Typecheck website
         working-directory: packages/website
         run: ./node_modules/.bin/tsc --noEmit -p tsconfig.json

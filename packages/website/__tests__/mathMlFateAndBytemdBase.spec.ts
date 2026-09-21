@@ -257,12 +257,30 @@ describe("🔴 bytemd 基底 ≡ hast-util-sanitize 的 defaultSchema + classNam
     const fromHtml = require_(
       require_.resolve("hast-util-from-html", { paths: [bytemdEntry] }),
     );
-    // ⚠️ hast-util-to-html v8 经 require() 拿到的**就是函数本身**（typeof === "function"、无具名导出），
-    //    而 sanitize / from-html 是 { sanitize } / { fromHtml }。三个包导出形状不一致，逐个核实过
-    //    （第一版按 `.toHtml(...)` 调用直接 TypeError）。
-    const toHtml = require_(
+    // ⚠️ 三个包的导出形状**不一致**，而且 🔴 **同一个包的形状还会随加载方式变化**：
+    //    sanitize / from-html 是 `{ sanitize }` / `{ fromHtml }`（具名导出对象）；
+    //    hast-util-to-html 在 2026-09-21 之前经 require() 拿到的是**函数本身**
+    //    （typeof === "function"、无具名导出），而 W2 升级（next 14→15）重装依赖之后
+    //    变成了**命名空间对象 `{ toHtml }`** ⇒ 原来那句 `as (tree) => string` 让 TS 闭了嘴，
+    //    运行时却直接 `toHtml is not a function`（类型断言掩盖了形状变化）。
+    //    ⚠️ 核实过这**不是安全相关的变化**：从 bytemd 的位置解析，三个包版本一个都没变
+    //    （`hast-util-sanitize@4.1.0`、`hast-util-from-html@1.0.2`、`hast-util-to-html@8.0.4`），
+    //    变的只是 ESM/CJS 互操作拿到的**导出形状**。
+    //    ⇒ 所以这里**同时兼容两种形状**，而不是钉死一种：钉死形状等于把"依赖布局"变成被测对象，
+    //    任何一次 install 重排都会让这条**安全**守卫假红，而假红的安全守卫最终会被人放宽。
+    //    🔴 但两种形状都不匹配时**必须抛错**，不许静默回退（那会让下游断言恒真）。
+    const toHtmlMod = require_(
       require_.resolve("hast-util-to-html", { paths: [bytemdEntry] }),
-    ) as (tree: unknown) => string;
+    ) as unknown;
+    const toHtml: (tree: unknown) => string =
+      typeof toHtmlMod === "function"
+        ? (toHtmlMod as (tree: unknown) => string)
+        : (toHtmlMod as { toHtml: (tree: unknown) => string }).toHtml;
+    if (typeof toHtml !== "function") {
+      throw new Error(
+        "hast-util-to-html 的导出形状既不是函数、也没有具名 toHtml，请重新核实（不要放宽这条）",
+      );
+    }
 
     const sanitizeWith = (schemaBase: any) => {
       const tree = fromHtml.fromHtml('<span class="katex">x</span>', {

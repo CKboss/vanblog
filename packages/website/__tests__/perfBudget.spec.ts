@@ -143,11 +143,32 @@ describe("性能：构建配置", () => {
     expect(code).not.toMatch(/^\s*domains:/m);
   });
 
-  it("next 已升到 14.x 且 react 仍是 18（Next 15 要 React 19，@bytemd 的 peer 只到 18）", () => {
+  it("next 已升到 15.x，而 react 刻意留在 18（理由见下，两条旧前提都被实测推翻）", () => {
     // 读**已安装**的 package.json，不是声明的范围
     const next = require("next/package.json");
     const react = require("react/package.json");
-    expect(String(next.version)).toMatch(/^14\./);
+    expect(String(next.version)).toMatch(/^15\./);
     expect(String(react.version)).toMatch(/^18\./);
+    // 🔴 2026-09-21 升级（W2 窗口）：这条断言原本钉的是 `next` 必须是 **14.x**，标题写着
+    //    「Next 15 要 React 19，@bytemd 的 peer 只到 18」。**两个前提都被实测推翻**：
+    //    ① next 15.5.25 的 peerDependencies 是
+    //       `react: ^18.2.0 || 19.0.0-rc-de68d2f4-20241204 || ^19.0.0` ⇒ **接受 React 18**；
+    //       官方升级指南那句「react 的最低版本现在是 19」与它自己的 peer 范围矛盾，
+    //       而以 peer 范围 + 实测为准：在一个最小的 **Pages Router** 项目里用
+    //       next@15.5.25 + react@18.2.0 + `getStaticProps`/`revalidate`/`output:"standalone"`
+    //       /`experimental.largePageDataBytes` 跑 `next build`，**rc=0、零告警**，
+    //       路由表里 `Revalidate` 也在 ⇒ Next 15 的 Pages Router 不要求 React 19。
+    //    ② `bytemd@1.21.0` 的 peerDependencies 是**空对象 `{}`**，`@bytemd/react@1.21.0` 的
+    //       peer 是 `react: "*"`（**无上限**）⇒ bytemd 根本不是留在 18 的理由。
+    //    ⚠️ 但「react 留在 18」这个**结论仍然正确**，真正的原因是另外三个直接依赖把上限钉在 18：
+    //       `react-copy-to-clipboard@5.1.0` peer `^15.3.0 || 16 || 17 || 18`、
+    //       `react-tiny-popover@7.2.4` 与 `react-use@17.4.1` peer `^16.8.0 || ^17.0.0 || ^18.0.0`
+    //       ⇒ 三者都**排除 19**。要升 React 19 必须先替换或升级这三个包（另一个量级的窗口）。
+    //    🔴 教训：**守卫会把错误的前提固化成"不许改"** —— 这条断言凭两个未经核实的信念把 next
+    //       钉在 14.x，而它挡住的升级其实是安全的。写这类"版本必须停在 X"的守卫时，
+    //       必须把**可核实的依据**（peer 范围的确切字符串、实测命令）写进注释，
+    //       否则下一个人无从判断它还有没有成立。
+    //    ⚠️ 本条只钉"已安装的版本"，不钉"行为"；行为由 W2 的验收清单负责
+    //       （ISR 产物路径与数量、600 假 slug 零产物、next build 成功）。
   });
 });
