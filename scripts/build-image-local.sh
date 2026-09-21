@@ -17,7 +17,14 @@
 # 环境变量：
 #   ENGINE=docker|podman   默认自动探测（docker daemon 连不上就用 podman，rootless 免 sudo）
 #   IMAGE_TAG              默认 vanblog:local-test
-#   SMOKE_HTTP_PORT        冒烟测试用的宿主机端口，默认 18080（避免和正在跑的站点撞）
+#   SMOKE_HTTP_PORT        冒烟测试用的宿主机端口，默认 18074。
+#                          🔴 2026-09-21 改：**原来的默认值是 18080，而注释写着"避免和正在跑的站点撞"——
+#                          事实恰好相反：18080 正是站长在用的那套栈的宿主机端口**，而本脚本 :241 会
+#                          `-p "${SMOKE_HTTP_PORT}:80"` 真的去 bind 它。也就是说，**跑一次带冒烟的构建
+#                          就会去抢站长站点的端口**（端口被占时 podman 会失败，所以通常是"构建白跑一趟"，
+#                          但那套栈一旦在重启窗口里，就可能被这个临时容器占住）。
+#                          ⚠️ 18080 属于站长，绝不能当任何脚本的默认值。同类隐患见
+#                          `scripts/benchmark/measure.sh` 的 BASE 默认值（那条需要站长裁定，未改）。
 #   SMOKE_KEEP             设 1 则测完不拆容器（自己进去看）
 #
 # 下载源（国内默认全部走镜像；海外或想验证"官方源也能构建"就设成 none）：
@@ -39,7 +46,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}" || exit 1
 
 IMAGE_TAG="${IMAGE_TAG:-vanblog:local-test}"
-SMOKE_HTTP_PORT="${SMOKE_HTTP_PORT:-18080}"
+SMOKE_HTTP_PORT="${SMOKE_HTTP_PORT:-18074}"
 SMOKE_KEEP="${SMOKE_KEEP:-0}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 # Alpine 源：官方 dl-cdn 在国内经常 10 秒以上（构建会看起来卡死在 apk add），
