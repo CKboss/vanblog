@@ -1,3 +1,0 @@
-```notareallanguage
-some text & <tags>
-```
