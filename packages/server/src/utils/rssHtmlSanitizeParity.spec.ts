@@ -44,12 +44,24 @@ import {
   rssBaseSchema,
   RSS_EXTRA_TAG_NAMES,
   RSS_FORBIDDEN_TAG_NAMES,
+  RSS_MATHML_ALLOWED_ATTRIBUTES,
+  RSS_MATHML_TAG_NAMES,
   RSS_STYLE_ALLOWED_TAG_NAMES,
   RSS_URL_VALUED_ATTRIBUTE_NAMES,
 } from './rssHtmlSanitize';
 
 /**
  * 🔴 跨包一致性守卫：服务端这份 RSS 白名单**必须**与前台 canonical 那份等价。
+ *
+ * ⚠️ **2026-09-21 更正：口径从"逐字等价"改成"严格超集，且差异恰好等于 MathML 那一组"。**
+ * 原口径（"必须等价"）在加入 `RSS_MATHML_TAG_NAMES` 之后不再成立，而**加 MathML 是必要的**：
+ * 两条管线里 katex 与消毒的先后顺序不同（前台是"先消毒、后由 katex 的 rehype hook 产出"，
+ * RSS 是"先渲染成 HTML 字符串、再消毒"）⇒ 前台不需要 MathML 白名单而 RSS 需要。
+ * 🔴 **新口径不是放宽**：差异被钉成"**恰好**等于 MathML 那 19 个标签，多一个少一个都红"，
+ * 并且"canonical 有的 server 必须都有、逐项相同"、"除 tagNames 与 MathML 属性键外其余一切逐字相同"、
+ * 以及"MathML 加白之后危险构造仍然被挡住、且没有顺带放行 mXSS 的经典载体
+ * （annotation-xml / mglyph / malignmark / svg）"都各有断言。
+ * ⚠️ 放宽的形状是删断言或 `expect(true).toBe(true)`；这里是把"零差异"换成"差异被完全枚举"。
  *
  * 为什么要这条：白名单是**安全相关的判断**，而本仓库反复吃过"同一个判断散落多处然后漂移"的亏
  * （`tag.provider.ts` 里 `getAllTags` 上方的注释就是这么写的："复制一个安全相关的判断到第二处，
@@ -128,8 +140,94 @@ describe('RSS 白名单 ↔ 前台 canonical：必须等价（跨包一致性守
     expect([...RSS_URL_VALUED_ATTRIBUTE_NAMES]).toEqual([...URL_VALUED_ATTRIBUTE_NAMES]);
   });
 
-  it('🔴 解析后的 schema 对象深度相等（这比文本比对强：挡得住"字面量都在但组合方式变了"）', () => {
-    expect(serverSchema()).toEqual(siteSchema());
+  it('🔴 解析后的 schema：server 侧是 canonical 的**严格超集**，且差异**恰好**等于 MathML 那一组', () => {
+    // ⚠️ 2026-09-21 起这条**不再是"深度相等"**，原因见下面的说明。
+    //
+    // 🔴 **为什么允许差异存在**：两条管线里 katex 与消毒的**先后顺序不同**（实测，不是推理）：
+    //   · 前台：rehype-raw → **消毒** → **katex（plugin rehype hook）** ⇒ MathML 在消毒之后才生成，
+    //     canonical 白名单里**一个 MathML 标签都不需要**；
+    //   · RSS：markdown-it + @mdit/plugin-katex **先出 HTML 字符串** → parse → **消毒** ⇒ MathML 已在树里，
+    //     不放行就会被 drop，而 `.katex-mathml` **没有 aria-hidden**（读屏器读的正是它），
+    //     drop 之后子节点塌成乱码重复文本（`E=mc2E=mc^2`）⇒ **给读屏器喂垃圾**。
+    // ⇒ 差异是**管线顺序造成的、必要的**，而两条路径的**最终效果**一致（katex 的 MathML 都活下来）。
+    //
+    // 🔴 **但这不是把守卫放宽**：下面四条把差异钉成"**恰好等于 MathML 那一组，多一个少一个都红**"，
+    // 而"深度相等"只能表达"零差异"。放宽的形状是 `expect(true).toBe(true)` 或删掉断言；
+    // 这里是把断言从 A 换成**更强的 A′**（A′ 蕴含"除 MathML 外一切相同"，而 A 蕴含"一切相同"，
+    // A′ 比 A 弱一点点、但那一点正好是被证明必要的那一点，并且被逐条钉死）。
+    const server = serverSchema();
+    const site = siteSchema();
+
+    // ① 尺子有效性：canonical 那份**确实一个 MathML 标签都没有**（否则"差异恰好是 MathML"会恒真）
+    // ⚠️ 必须显式标注 `string[]`：`RSS_MATHML_TAG_NAMES` 是 `as const` 的字面量元组，
+    //    它的 `.includes()` 只接受那 19 个字面量之一，传 `string` 会报 TS2345。
+    const mathml: string[] = [...RSS_MATHML_TAG_NAMES];
+    expect(mathml.length).toBeGreaterThanOrEqual(18);
+    expect(site.tagNames.filter((t: string) => mathml.includes(t))).toEqual([]);
+    expect(site.tagNames.some((t: string) => t === 'math')).toBe(false);
+
+    // ② 🔴 server 侧**绝不比 canonical 少放行任何东西**（少放行 = 弄坏既有文章，方向上更隐蔽）
+    const missingOnServer = site.tagNames.filter((t: string) => !server.tagNames.includes(t));
+    expect(missingOnServer).toEqual([]);
+
+    // ③ 🔴 差异集合**恰好等于** MathML 那一组（不是"包含"，是**逐项相等**）
+    //    ⇒ 将来谁往服务端白名单里多塞一个标签（例如 svg / annotation-xml / mglyph），这条会红
+    const extra = server.tagNames.filter((t: string) => !site.tagNames.includes(t));
+    expect([...extra].sort()).toEqual([...mathml].sort());
+
+    // ④ 🔴 除 `tagNames` 与 MathML 那几个属性键以外，**其余一切都必须逐字相同**
+    const { tagNames: _st, attributes: _sa, ...serverRest } = server;
+    const { tagNames: _ct, attributes: _ca, ...siteRest } = site;
+    expect(serverRest).toEqual(siteRest);
+    const siteAttrKeys = Object.keys(site.attributes);
+    const serverAttrKeys = Object.keys(server.attributes);
+    // canonical 有的属性键，server 必须都有，且**逐项相同**
+    for (const k of siteAttrKeys) {
+      expect(serverAttrKeys).toContain(k);
+      expect(server.attributes[k]).toEqual(site.attributes[k]);
+    }
+    // server 多出来的属性键**只能是** MathML 那一组，且必须与声明的定值白名单逐字相同
+    const extraAttrKeys = serverAttrKeys.filter((k) => !siteAttrKeys.includes(k));
+    expect([...extraAttrKeys].sort()).toEqual(
+      Object.keys(RSS_MATHML_ALLOWED_ATTRIBUTES)
+        .filter((k) => !siteAttrKeys.includes(k))
+        .sort(),
+    );
+    for (const k of extraAttrKeys) {
+      expect(k).toMatch(/^m|^annotation$|^math$/);
+      expect(mathml).toContain(k);
+    }
+  });
+
+  it('🔴 MathML 是**有意**的分歧：同一份公式在两边输出**必须不同**（否则上面那条超集断言可能是空转）', () => {
+    const MATHML_VECTORS = [
+      '<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>x</mi></semantics></math>',
+      '<span class="katex-mathml"><math><mrow><mi>E</mi></mrow></math></span>',
+      '<math><annotation encoding="application/x-tex">x^2</annotation></math>',
+    ];
+    for (const v of MATHML_VECTORS) {
+      const siteOut = runWith(siteSchema(), v);
+      const serverOut = runWith(serverSchema(), v);
+      // server 侧保留 math 元素，canonical 侧把它 drop（只留文本）⇒ 必然不同
+      expect(serverOut).not.toBe(siteOut);
+      expect(serverOut).toContain('<math');
+      expect(siteOut).not.toContain('<math');
+    }
+  });
+
+  it('🔴 MathML 的分歧**没有**削弱任何既有安全性质（24 条共享向量仍然逐字相同）', () => {
+    // 这条与上面那条"全部共享向量的消毒输出逐字相同"是互补的：
+    // 那条证明"非 MathML 的一切都没变"，这条把"MathML 加白之后危险构造仍然被挡住"单独钉一遍，
+    // 因为加白之后 schema 变了，需要证明变的只是 MathML 那一小块。
+    const s = serverSchema();
+    expect(runWith(s, '<script>alert(1)</script>')).toBe('');
+    expect(runWith(s, '<img src=x onerror="alert(3)">')).toBe('<img src="x">');
+    expect(runWith(s, '<p><a href="javascript:alert(2)">裸 a</a></p>')).toBe('<p><a>裸 a</a></p>');
+    // MathML 白名单**没有**顺带放行 mXSS 的经典载体
+    expect(s.tagNames).not.toContain('annotation-xml');
+    expect(s.tagNames).not.toContain('mglyph');
+    expect(s.tagNames).not.toContain('malignmark');
+    expect(s.tagNames).not.toContain('svg');
   });
 
   it('🔴 全部共享向量的消毒输出逐字相同（行为级一致性）', () => {

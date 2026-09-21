@@ -39,12 +39,23 @@ import { toHtml } from 'hast-util-to-html';
  * `rss.provider.ts` 自己加的 `<div class="markdown-body rss">`。⇒ 见下面 `rssBaseSchema()` 里那一步。
  *
  * ## ⚠️ 两条**继承自 canonical 的已知局限**（有意不修，别在这里"顺手修好"）
- * 1. **MathML 会被 drop**：katex 输出里 `<span class="katex-mathml">` 内部的 `math`/`semantics`/`mrow`
- *    等元素不在白名单里，消毒后只剩文本 ⇒ **读屏器支持会丢**（视觉渲染不受影响，因为 katex 的
- *    `.katex-mathml` 本来就是视觉隐藏的）。⚠️ canonical 也是同一份白名单，所以**前台很可能一直在丢**；
- *    MathML 有自己的 XSS 史，加白需要单独评估 ⇒ 已登记，本轮不动。
+ * 1. ~~**MathML 会被 drop**~~ —— 🔴 **2026-09-21 已修，本条不再是局限**（原文保留在下面以免历史断层）：
+ *    原文是"katex 输出里 `<span class="katex-mathml">` 内部的 math/semantics/mrow 等元素不在白名单里，
+ *    消毒后只剩文本 ⇒ 读屏器支持会丢（视觉渲染不受影响，因为 katex 的 `.katex-mathml` 本来就是视觉隐藏的）。
+ *    canonical 也是同一份白名单，所以**前台很可能一直在丢**；MathML 有自己的 XSS 史，加白需要单独评估"。
+ *    ⚠️ **原文里有两处事实是错的，都被实测更正了**：
+ *      · 🔴 **`.katex-mathml` 并不是"视觉隐藏所以对读屏器无关"** —— 它**没有** `aria-hidden`
+ *        （只有 `.katex-html` 有），**读屏器读的正是它**；而 drop 之后 rehype-sanitize 保留子节点，
+ *        于是里面塌成**乱码重复文本**（实测 `$E=mc^2$` → `E=mc2E=mc^2`）。
+ *        所以旧行为的准确描述是"**给读屏器喂垃圾**"，比"丢支持"更糟。
+ *      · 🔴 **前台并没有丢**：前台是"先消毒、后由 katex 的 plugin rehype hook 产出"，
+ *        MathML 在消毒**之后**才生成 ⇒ 天然活下来（已在镜像里印证：公式页 katex 30 处、math 元素 10 处）。
+ *    ⇒ 修法见下面的 `RSS_MATHML_TAG_NAMES`（**窄白名单 + 逐属性定值**，18 个标签、
+ *    刻意排除 `annotation-xml`/`mglyph`/`malignmark` 这些 mXSS 载体，以及 `mathcolor`/`mathbackground`）。
+ *    ⚠️ **这也意味着服务端这份白名单现在是 canonical 的严格超集**，差异**仅限 MathML**，
+ *    由 `rssHtmlSanitizeParity.spec.ts` 按"超集 + 差异集合恰好等于 MathML 那组"钉住（不是放宽成空断言）。
  * 2. **拦不住 `position:fixed` 之类的内联样式遮罩**：`div`/`span`/`p` 是合法排版必需、必须留在
- *    `RSS_STYLE_ALLOWED_TAG_NAMES` 里，所以 `<div style="position:fixed;inset:0;z-index:9999">` 会原样保留。
+ *    `RSS_STYLE_ALLOWED_TAG_NAMES` 里，所以一个带 `position:fixed;inset:0;z-index:9999` 的 div 会原样保留。
  *    canonical 的注释里明写了这条局限（真要拦只能过滤 style 的**值**，会误伤正常排版）。
  *
  * ## ⚠️ 刻意**不做**角色分支（偏离裁定字面表述，已获站长确认）
@@ -161,6 +172,166 @@ const RSS_IFRAME_SRC_HTTPS_ONLY = /^(https?:)?\/\//i;
 
 /** 允许携带 `src` 的额外标签。`img` 不需要在这里声明（基底 schema 的 `attributes.img` 本来就有）。 */
 const RSS_SRC_BEARING_EXTRA_TAGS = ['iframe'] as const;
+
+/**
+ * 🔴 **RSS 独有**：katex 实际会产出的那一组 MathML 标签（2026-09-21 实测清点，不是照规范抄的）。
+ *
+ * ## 为什么 RSS 需要它、而前台不需要
+ * 两条管线里 katex 与消毒的**先后顺序不同**：
+ *   · 前台（bytemd）：`rehype-raw` → **消毒** → **katex（plugin rehype hook）** → stringify
+ *     ⇒ katex 的 MathML 在消毒**之后**才生成，天然活下来，所以 canonical 白名单里**一个 MathML 标签都没有**。
+ *   · RSS（服务端）：markdown-it + `@mdit/plugin-katex` **先出 HTML 字符串** → parse → **消毒** → stringify
+ *     ⇒ MathML 消毒时**已经在树里**，不在白名单就会被 drop。
+ * ⇒ 所以这一组是**服务端独有**的、用于抵消管线顺序差异；它让两条路径的**最终效果**一致
+ *   （katex 的 MathML 都活下来），而不是让两份白名单逐字相同。
+ *
+ * ## 🔴 不修它会造成什么（比"丢读屏支持"更糟）
+ * `.katex-mathml` **没有** `aria-hidden`（只有 `.katex-html` 有）⇒ **读屏器读的正是它**。
+ * 而 MathML 元素被 drop 时 rehype-sanitize 会**保留子节点**，于是里面塌成一串**乱码重复文本**：
+ * 实测 `$E=mc^2$` 消毒后 `.katex-mathml` 里是 `E=mc2E=mc^2`（MathML 摊平的文本 + annotation 里的 LaTeX 源），
+ * 块级公式更糟（`∫0∞e−x2dx=π2\int_{0}^{\infty}…`）。⇒ **读屏器不是"读不到公式"，而是"读到垃圾"。**
+ *
+ * ## 🔴 为什么是"精确的 18 个"，而不是"把 MathML 加白"
+ * 这 18 个就是 katex 实测会产出的全集（`math semantics mrow mi mn mo msup msub msubsup mfrac msqrt mroot`
+ * `mtext mstyle mtable mtr mtd annotation mpadded`）。MathML 有自己的 **mXSS 史**，而**经典的 mXSS 载体
+ * 一个都不在里面**，并且都**刻意不放行**：
+ *   · `annotation-xml` —— 当 `encoding` 是 `text/html`/`application/xhtml+xml` 时**内部按 HTML 规则解析**，
+ *     是命名空间混淆型 mXSS 的主要载体；
+ *   · `mglyph` / `malignmark` —— MathML 文本集成点里的"特殊元素"，`mtext` + `table` + `mglyph` + style
+ *     是教科书式的那条利用链；
+ *   · `maction` / `menclose` / `mover` / `munder` / `munderover` / `mspace` / `ms` / `mprescripts` / `none`
+ *     —— katex 当前版本用不到（实测 0 次），所以**按"实测需要"最小化放行**，将来 katex 真的产出了再逐个评估。
+ * ⚠️ 放行的判据是**"katex 实测会产出"**，不是"规范里存在"。
+ *
+ * ## 🔴 为什么不能改用"抽走 katex 子树、消毒后再放回"（那条路已被实测否掉）
+ * 直觉上更好的方案是：因为 MathML 是我们自己的 katex 生成的、可信，所以消毒前抽走、消毒后放回
+ * （这样白名单一个字都不用改）。🔴 **但"可信"这个前提不成立**：markdown-it 是 `html: true`，
+ * 作者写的原始 HTML 会**原样透传**，而 `class` 在白名单里 ⇒ 作者在正文里写一段
+ * `<span class="katex-mathml">…</span>` 就能**伪装成 katex 的输出**（实测确认：伪造的 span 消毒后
+ * 原样保留）。要让标记不可伪造，就得在**渲染阶段**打一个作者拿不到的标记，而那要改
+ * `provider/markdown/markdown.provider.ts`（不在本轮授权范围，且它是前台/后台共用的渲染入口）。
+ * ⇒ 所以选"窄白名单 + 逐属性定值"这条**不依赖信任假设**的路。
+ */
+export const RSS_MATHML_TAG_NAMES = [
+  'math',
+  'semantics',
+  'mrow',
+  'mi',
+  'mn',
+  'mo',
+  'msup',
+  'msub',
+  'msubsup',
+  'mfrac',
+  'msqrt',
+  'mroot',
+  'mtext',
+  'mstyle',
+  'mtable',
+  'mtr',
+  'mtd',
+  'annotation',
+  'mpadded',
+] as const;
+
+/**
+ * MathML 属性的**定值白名单**（每个属性都带正则，不是"给了名字就什么值都收"）。
+ *
+ * 🔴 **属性名用小写原名**（实测结论，别照 HTML 的习惯改成驼峰）：`hast-util-sanitize` 对
+ * HTML 属性会走 property-information 的驼峰名（本文件上面 iframe 那条注释就记着
+ * `allowfullscreen` → `allowFullScreen` 这个坑），但 **MathML 属性不在那张表里**，
+ * 实测按小写原名挂白名单，katex 产出的 16 个属性**全部原样存活**。
+ *
+ * ## 🔴 刻意**排除**的两个（katex 会产出，但不给）
+ * `mstyle@mathcolor` 与 `mpadded@mathbackground` —— 它们接受**颜色值**，而颜色值是可以塞
+ * `url(javascript:…)` 这类东西的属性族。**排除的代价是零视觉损失**：katex 同时产出
+ * `.katex-html` 那份**视觉**副本，颜色在那一份里是用内联 `style` 表达的（而 `style` 对
+ * `span` 是放行的）⇒ `\textcolor{red}{x}` 在 RSS 里**看起来仍然是红的**，只是 MathML 那份
+ * （给读屏器的）不带颜色 —— 而颜色对读屏器本来就没有意义。
+ *
+ * ## 🔴 定值正则挡住了什么（都实测过）
+ * `xmlns` 只收 MathML 那一个 URI ⇒ **命名空间混淆**（换成 `…/1999/xhtml`）会被整条摘掉；
+ * `encoding` 只收 `application/x-tex` ⇒ `text/html` 那种"内部按 HTML 解析"的值进不来；
+ * 长度类只收数字+单位 ⇒ `expression(…)`、`url(…)` 进不来；
+ * `mathvariant` 只收字母 ⇒ 引号与标记（`a" onmouseover="…`）进不来。
+ * ⚠️ 而"过紧"这一侧也实测过：katex 实际产出的 18 个属性里 **16 个全部存活**、
+ * 只有上面那两个刻意排除的没活 ⇒ **没有误杀真公式**。
+ */
+const RSS_MATHML_NS_URI = /^http:\/\/www\.w3\.org\/1998\/Math\/MathML$/;
+const RSS_MATHML_BOOL = /^(true|false)$/;
+const RSS_MATHML_LENGTH = /^[-+]?[0-9]*\.?[0-9]+(pt|em|ex|px|cm|mm|in|%)?$/;
+const RSS_MATHML_LENGTH_LIST = /^([-+]?[0-9]*\.?[0-9]+(pt|em|ex|px|cm|mm|in|%)(\s+|$))+$/;
+const RSS_MATHML_ALIGN_LIST = /^((left|right|center)(\s+|$))+$/;
+const RSS_MATHML_INTEGER = /^[-+]?[0-9]+$/;
+
+export const RSS_MATHML_ALLOWED_ATTRIBUTES: Readonly<Record<string, ReadonlyArray<unknown>>> = {
+  math: [['xmlns', RSS_MATHML_NS_URI], ['display', /^(block|inline)$/]],
+  // ⚠️ `annotation` 的内容在 HTML 解析里**不是**原始文本（实测：里面写 `<b>` 会被当标记解析，
+  //    并且序列化后**迁移到 annotation 外面**成为兄弟节点）。它无害（迁出去的仍受同一份白名单约束），
+  //    但这条行为是"知道的、钉住的"，不是"没想到的"——见 rssHtmlSanitize.spec.ts 里那条断言。
+  annotation: [['encoding', /^application\/x-tex$/]],
+  mi: [['mathvariant', /^[a-z]+$/i]],
+  mo: [
+    ['fence', RSS_MATHML_BOOL],
+    ['stretchy', RSS_MATHML_BOOL],
+    ['separator', RSS_MATHML_BOOL],
+    ['accent', RSS_MATHML_BOOL],
+    ['form', /^(prefix|infix|postfix)$/],
+    ['lspace', RSS_MATHML_LENGTH],
+    ['rspace', RSS_MATHML_LENGTH],
+    ['maxsize', RSS_MATHML_LENGTH],
+    ['minsize', RSS_MATHML_LENGTH],
+  ],
+  mtable: [
+    ['rowspacing', RSS_MATHML_LENGTH_LIST],
+    ['columnspacing', RSS_MATHML_LENGTH_LIST],
+    ['columnalign', RSS_MATHML_ALIGN_LIST],
+    ['rowalign', RSS_MATHML_ALIGN_LIST],
+    ['displaystyle', RSS_MATHML_BOOL],
+    ['frame', /^(none|solid|dashed)$/],
+    ['align', /^(axis|top|bottom|center|baseline)$/],
+    ['width', RSS_MATHML_LENGTH],
+  ],
+  mtr: [
+    ['rowalign', RSS_MATHML_ALIGN_LIST],
+    ['columnalign', RSS_MATHML_ALIGN_LIST],
+  ],
+  mtd: [
+    ['rowalign', RSS_MATHML_ALIGN_LIST],
+    ['columnalign', RSS_MATHML_ALIGN_LIST],
+    ['rowspan', RSS_MATHML_INTEGER],
+    ['columnspan', RSS_MATHML_INTEGER],
+  ],
+  mstyle: [
+    ['scriptlevel', RSS_MATHML_INTEGER],
+    ['displaystyle', RSS_MATHML_BOOL],
+    ['scriptsizemultiplier', RSS_MATHML_LENGTH],
+    ['scriptminsize', RSS_MATHML_LENGTH],
+  ],
+  mpadded: [
+    ['width', RSS_MATHML_LENGTH],
+    ['height', RSS_MATHML_LENGTH],
+    ['depth', RSS_MATHML_LENGTH],
+    ['lspace', RSS_MATHML_LENGTH],
+    ['voffset', RSS_MATHML_LENGTH],
+  ],
+  mfrac: [['linethickness', RSS_MATHML_LENGTH]],
+};
+
+/**
+ * 把 MathML 那组挂进 schema。
+ * ⚠️ **必须在 `withoutEventHandlers` 与 `ensureUrlAttributeProtocols` 之前调用**：
+ * 前者要对所有属性键过一遍事件属性过滤（多一层兜底），后者只看 URL 属性名（MathML 这组一个都不是，
+ * 所以不会被误加协议表 —— 但顺序仍然要保持，以免将来有人往 MathML 里加 URL 属性时静默绕过协议白名单）。
+ */
+function applyRssMathmlSchema(schema: any): void {
+  for (const tag of RSS_MATHML_TAG_NAMES) {
+    if (!schema.tagNames.includes(tag)) schema.tagNames.push(tag);
+  }
+  for (const [tag, attrs] of Object.entries(RSS_MATHML_ALLOWED_ATTRIBUTES)) {
+    schema.attributes[tag] = mergeAttrs(schema.attributes[tag], [...attrs]);
+  }
+}
 
 /** `open`（details）只有 4 个字符，必须不被当成事件处理器。 */
 const RSS_EVENT_HANDLER_ATTR = /^on[a-z]{3,}$/i;
@@ -300,6 +471,9 @@ export function applyRssMarkdownSchema(schema: any): any {
       schema.attributes[tag] = schema.attributes[tag].filter((entry) => entry !== 'style');
     }
   }
+
+  // 🔴 MathML 那组必须在事件属性过滤与协议收口**之前**挂上（理由见 applyRssMathmlSchema 的注释）。
+  applyRssMathmlSchema(schema);
 
   // remark-rehype 已经给脚注 id 加过前缀，再加一次会弄断 href。
   schema.clobberPrefix = '';

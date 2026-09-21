@@ -16,6 +16,53 @@ import { sanitizeRenderedHtml } from 'src/utils/rssHtmlSanitize';
 /** 订阅源默认保留多少条（0 = 不限制）。可用 VANBLOG_RSS_ITEM_LIMIT 覆盖。 */
 export const DEFAULT_RSS_ITEM_LIMIT = 50;
 
+/**
+ * 🔴 两个第三方 CDN 样式表的**版本 + SRI 完整性校验**（2026-09-21 加，此前两个 link 都没有
+ * `integrity` 也没有 `crossorigin`）。
+ *
+ * ## 为什么要加（后果的准确形状，不夸大也不淡化）
+ * CSS 本身不执行 JS，所以这不是"CDN 被劫持就能跑任意脚本"。真实的后果是：
+ * 域被劫持/被投毒时可以做 **UI 重绘与遮罩钓鱼**（用 CSS 盖一层假登录框），以及用
+ * **属性选择器 + `background:url()`** 把页面内容逐字符**外泄**到攻击者域。
+ * ⚠️ 在 RSS 语境下影响面取决于**阅读器是否加载外链样式**（多数会剥掉 link），
+ * 所以严重性低于站内同源 XSS —— 但"零成本的纵深防御没做"仍然是缺陷。
+ *
+ * ## 🔴 hash 是**真下载真算**出来的，不是凭记忆写的
+ * 写错的 SRI 会让样式表**加载失败**（浏览器拒绝应用），**比没有 SRI 更糟** ⇒
+ * 这两个值各**独立下载并计算了两次**，两次结果逐字一致：
+ *   · katex 0.16.47 `dist/katex.min.css` —— 23,827 B，
+ *     sha256 `0289a02cf451a44dd73add683a09644252363871ac11713a647b732cee8b1ee3`
+ *   · highlight.js 11.6.0 `build/styles/default.min.css` —— 1,144 B，
+ *     sha256 `fbde0ac0921d86c356c41532e7319c887a23bd1b8ff00060cab447249f03c7cf`
+ * 算法：`openssl dgst -sha384 -binary <file> | openssl base64 -A`。
+ * ⚠️ **换版本就必须重算**（守卫 `rssHtmlSanitize.spec.ts` 钉住了"版本与 hash 的对应关系"，
+ * 改了版本没改 hash 会红）。
+ *
+ * ## 🔴 为什么顺带把 katex CSS 从 0.16.9 升到 0.16.47（这是**修 bug**，不是顺手升级）
+ * 原来钉的是 **0.16.9**，而**产生这些公式标记的渲染器是 0.16.47/0.17.0**
+ * （服务端经 `@mdit/plugin-katex`，前台 `packages/website` 的 katex 是 0.16.47）⇒ **三处版本不一致**。
+ * 这不是纸面担忧，实测出**具体的渲染缺陷**：
+ *   · 两份 CSS 的类选择器集合差集 = 0.16.47 独有 **`smash`** 与 **`mathsfit`** 两条，0.16.9 独有 0 条；
+ *   · 而**当前渲染器确实会产出这两个类**：`\smash{x}` → 类名里含 `smash`，`\mathsfit{x}` → 含 `mathsfit`；
+ *   ⇒ **用 `\smash` 或 `\mathsfit` 的公式在 RSS 阅读器里今天是错排的**（0.16.9 没有对应规则）。
+ * ⚠️ 0.16.47 的 CSS 还多了 `font-display:block`（避免公式字体加载期的闪烁/隐形）。
+ * 🔴 **这次升级不改任何 HTML 结构**：CSS 不参与我们生成的标记，`markdown.provider.ts` 头注释里
+ * 已实测记录"katex 0.16.47 与 0.17.0 对同一批公式产出的 HTML **逐字节相同**（8/8）"，
+ * 所以变的只是 link 上的 URL 与 integrity 两个字符串（每条 item 各 3 个 link，50 条 item ⇒ feed 体积略增）。
+ * ⚠️ 选 0.16.47 而不是 0.17.0 的理由：与**前台自己加载的那份**保持一致，而标记在两个版本间逐字节相同。
+ *
+ * ⚠️ **`markdown.css` 那条不加 SRI**：它是本站自己的文件、随每次部署变化，钉 hash 会让它每次发版都失效。
+ * ⚠️ **这些 link 在外壳模板里，不经过消毒器**（消毒只作用于 `renderedBody` 与 `description`）⇒
+ * 加 `integrity`/`crossorigin` 不会被摘掉。🔴 这一点由既有守卫钉住（"消毒范围不许吞进 rel=stylesheet"，
+ * 变异 M7 证明有效）—— 因为 `<link>` **不在白名单里**，整段消毒会把三个样式表全摘掉。
+ */
+export const RSS_KATEX_CSS_VERSION = '0.16.47';
+export const RSS_KATEX_CSS_SRI =
+  'sha384-nH0MfJ44wi1dd7w6jinlyBgljjS8EJAh2JBoRad8a3VDw2K69vfaaqm4WnR+gXtA';
+export const RSS_HLJS_CSS_VERSION = '11.6.0';
+export const RSS_HLJS_CSS_SRI =
+  'sha384-4Y0nObtF3CbKnh+lpzmAVdAMtQXl+ganWiiv73RcGVdRdfVIya8Cao1C8ZsVRRDz';
+
 @Injectable()
 export class RssProvider {
   logger = new Logger(RssProvider.name);
@@ -206,8 +253,8 @@ export class RssProvider {
         );
         const html = `<div class="markdown-body rss">
       <link rel="stylesheet" href="${siteUrl}markdown.css">
-      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-      <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.6.0/build/styles/default.min.css">
+      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@${RSS_KATEX_CSS_VERSION}/dist/katex.min.css" integrity="${RSS_KATEX_CSS_SRI}" crossorigin="anonymous">
+      <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@${RSS_HLJS_CSS_VERSION}/build/styles/default.min.css" integrity="${RSS_HLJS_CSS_SRI}" crossorigin="anonymous">
       ${renderedBody}</div>`;
         feed.addItem({
           title: article.title,

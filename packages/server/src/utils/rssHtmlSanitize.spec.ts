@@ -251,14 +251,142 @@ describe('RSS 消毒：className 陷阱 —— katex 与代码高亮的 class �
     expect(String(pres[0].properties?.style)).not.toContain('<');
   });
 
-  it('⚠️ 已知局限（如实钉住现状，不是认可它）：katex 的 MathML 被 drop，读屏器支持会丢', () => {
+  it('🔴 katex 的 MathML 现在**保留**（2026-09-21 修好了，原"已知局限"那条断言按设计变红并被替换）', () => {
+    // ⚠️ 这条原来是"如实钉住现状：MathML 被 drop、读屏器支持会丢"，并且**它自己的注释就写着**
+    //    "将来谁修了它，这条会红，逼他有意识地更新这里与文档" ⇒ 它按设计变红了，这里是**有意识地更新**。
+    // 🔴 旧行为比"丢读屏支持"更糟：`.katex-mathml` **没有** aria-hidden（只有 `.katex-html` 有），
+    //    读屏器读的正是它，而 drop 之后子节点塌成**乱码重复文本**（实测 `E=mc2E=mc^2`）。
     const out = renderThenSanitize('公式 $E=mc^2$ 结束');
-    // katex-mathml 那个 span 还在（class 保留），但里面的 MathML 元素不在白名单里 ⇒ 被 drop、文字保留
     expect(anyElementWithClass(out, 'katex-mathml')).toBe(true);
-    expect(elementsOf(out, 'math').length).toBe(0);
-    // ⚠️ canonical（前台）用的是同一份白名单，所以前台很可能一直是同样的形状。
-    //    MathML 有自己的 XSS 史，加白需要单独评估 ⇒ 已登记，本轮**有意不修**。
-    //    这条断言的意义是：将来谁修了它，这条会红，逼他有意识地更新这里与文档。
+    // ① MathML 元素活着，而且结构完整（math → semantics → mrow → mi/mo/msup）
+    const maths = elementsOf(out, 'math');
+    expect(maths.length).toBe(1);
+    expect(elementsOf(out, 'semantics').length).toBe(1);
+    expect(elementsOf(out, 'mi').length).toBeGreaterThan(0);
+    expect(elementsOf(out, 'msup').length).toBe(1);
+    // ② LaTeX 源仍在 annotation 里（读屏器/复制公式都靠它），且 encoding 是 katex 那一个
+    const ann = elementsOf(out, 'annotation');
+    expect(ann.length).toBe(1);
+    expect(ann[0].properties?.encoding).toBe('application/x-tex');
+    // ③ 命名空间 URI 原样保留（被定值正则钉住，换成别的命名空间会被整条摘掉，见下面走私那组）
+    expect(maths[0].properties?.xmlns).toBe('http://www.w3.org/1998/Math/MathML');
+    // ④ 🔴 视觉副本也还在（两份都在，说明不是"用 MathML 换掉了视觉渲染"）
+    expect(anyElementWithClass(out, 'katex-html')).toBe(true);
+    expect(out).toContain('aria-hidden="true"');
+    // ⑤ 🔴 **不再是乱码重复文本**：旧行为下 katex-mathml 里是 `E=mc2E=mc^2`（摊平文本 + LaTeX 源拼接）。
+    //    现在 katex-mathml 内部是**元素**而不是那串裸文本 ⇒ 断言"那串乱码不在输出里"。
+    expect(out).not.toContain('E=mc2E=mc^2');
+  });
+
+  it('🔴 块级公式与含表格/颜色的公式：MathML 同样保留，且 katex 的排版属性一个都没被误杀', () => {
+    // ⚠️ 这组是"定值正则没有过紧"的证据：这些属性都是 katex 真实产出的，
+    //    实测 18 个属性里 16 个存活，只有刻意排除的两个颜色属性没活（见下一条）。
+    const block = renderThenSanitize('$$\\int_{0}^{\\infty} e^{-x^2}dx=\\frac{\\sqrt{\\pi}}{2}$$');
+    expect(elementsOf(block, 'math').length).toBe(1);
+    expect(elementsOf(block, 'msubsup').length).toBe(1);
+    expect(elementsOf(block, 'mfrac').length).toBe(1);
+    expect(elementsOf(block, 'msqrt').length).toBe(1);
+    expect(block).toContain('display="block"');
+
+    const cases = renderThenSanitize('$$\\begin{cases} x+y=3 \\\\ x-y=1 \\end{cases}$$');
+    expect(elementsOf(cases, 'mtable').length).toBe(1);
+    expect(elementsOf(cases, 'mtr').length).toBe(2);
+    expect(elementsOf(cases, 'mstyle').length).toBeGreaterThan(0);
+    // mtable 的三个排版属性都是"列表值"，正则必须接受空格分隔
+    expect(cases).toContain('rowspacing=');
+    expect(cases).toContain('columnalign=');
+    expect(cases).toContain('columnspacing=');
+    expect(cases).toContain('scriptlevel=');
+
+    const smash = renderThenSanitize('$\\smash{x}$ 与 $\\sqrt[3]{8}$');
+    expect(elementsOf(smash, 'math').length).toBe(2);
+    expect(elementsOf(smash, 'mpadded').length).toBeGreaterThan(0);
+    expect(elementsOf(smash, 'mroot').length).toBe(1);
+  });
+
+  it('🔴 刻意排除的两个颜色属性确实没放行，而**视觉**颜色仍然在（零视觉损失的证据）', () => {
+    const out = renderThenSanitize('$\\textcolor{red}{x}$ 与 $\\colorbox{yellow}{y}$');
+    // MathML 那份不带颜色（mathcolor / mathbackground 接受颜色值，属于可以塞 url(...) 的属性族）
+    expect(out).not.toContain('mathcolor');
+    expect(out).not.toContain('mathbackground');
+    // 🔴 但 katex 的**视觉**副本用内联 style 表达颜色，而 span 上的 style 是放行的 ⇒ 看起来仍然是红的
+    expect(anyElementWithClass(out, 'katex-html')).toBe(true);
+    expect(out).toMatch(/style="[^"]*color:\s*red/);
+    // ⚠️ 所以排除颜色属性的代价是"读屏器那份不带颜色"，而颜色对读屏器本来没有意义 ⇒ 零视觉损失。
+  });
+
+  it('🔴 MathML 白名单**没有**顺带放行 mXSS 的经典载体', () => {
+    const s = buildRssSanitizeSchema();
+    // annotation-xml（encoding=text/html 时内部按 HTML 解析）、mglyph / malignmark（mtext+table+mglyph 利用链）
+    for (const bad of ['annotation-xml', 'mglyph', 'malignmark', 'maction', 'svg']) {
+      expect(s.tagNames).not.toContain(bad);
+    }
+    // 实测后果：这些元素被 drop，而它们内部的危险构造也一起消失
+    const out = sanitizeRenderedHtml(
+      '<math><annotation-xml encoding="text/html"><img src=x onerror=alert(1)></annotation-xml></math>',
+    );
+    expect(out).not.toContain('annotation-xml');
+    expect(out).not.toContain('text/html');
+    expect(out).not.toMatch(/onerror/i);
+    const glyph = sanitizeRenderedHtml('<math><mtext><table><mglyph src="x"></mglyph></table></mtext></math>');
+    expect(glyph).not.toContain('mglyph');
+  });
+
+  it('🔴 属性**值**走私全部被定值正则挡住（含命名空间混淆，这是 MathML 特有的风险）', () => {
+    const cases: Array<[string, string, RegExp]> = [
+      // 命名空间混淆：把 math 的命名空间换成 XHTML
+      ['xmlns 换成 XHTML', '<math xmlns="http://www.w3.org/1999/xhtml"><mtext>x</mtext></math>', /1999\/xhtml/],
+      // annotation 的 encoding 换成会让内部按 HTML 解析的值
+      ['encoding=text/html', '<math><annotation encoding="text/html">x</annotation></math>', /text\/html/],
+      // 长度属性里塞 CSS 函数
+      ['width 塞 expression', '<math><mpadded width="expression(alert(1))"><mi>x</mi></mpadded></math>', /expression\(/i],
+      ['fence 塞 url(javascript:)', '<math><mo fence="url(javascript:alert(1))">x</mo></math>', /javascript:/i],
+      // 属性值里塞引号与标记（试图逃出属性）
+      ['mathvariant 塞引号', '<math><mi mathvariant=\'a" onmouseover="alert(1)\'>x</mi></math>', /onmouseover/i],
+    ];
+    for (const [name, html, forbidden] of cases) {
+      const out = sanitizeRenderedHtml(html);
+      // 🔴 双向：既断言"走私的值没活下来"，也断言"元素本身还在"（否则"整段被丢掉"也能让上一条恒真）
+      expect({ name, out }).toEqual({ name, out: expect.not.stringMatching(forbidden) });
+      expect(out).toContain('<math');
+    }
+  });
+
+  it('🔴 **作者手写的** MathML 走的是同一份白名单（不存在"katex 专用通道"可以绕过）', () => {
+    // ⚠️ 这条钉住的是方案选择的核心前提：本轮**没有**用"抽走 katex 子树再放回"那种依赖信任的方案，
+    //    因为作者可以伪造 class="katex-mathml"（markdown-it 是 html:true，原始 HTML 原样透传，
+    //    而 class 在白名单里）⇒ 实测伪造的 span 会被保留。既然伪造挡不住，就只能让
+    //    "katex 产出的"与"作者手写的"走**完全相同**的白名单，谁都拿不到额外信任。
+    const forged = renderThenSanitize(
+      '正文 <span class="katex-mathml"><math><mrow><mi>x</mi></mrow></math></span> 结束',
+    );
+    expect(forged).toContain('katex-mathml'); // 伪造的 class 确实保留（这是既有行为，不是本轮引入）
+    // 但作者借这个通道**得不到任何额外能力**：危险构造照样被摘
+    const forgedBad = renderThenSanitize(
+      '<span class="katex-mathml"><math><annotation-xml encoding="text/html"><img src=x onerror=alert(1)></annotation-xml></math></span>',
+    );
+    expect(forgedBad).not.toContain('annotation-xml');
+    expect(forgedBad).not.toMatch(/onerror/i);
+    // 事件属性在 MathML 元素上同样被摘（withoutEventHandlers 对所有属性键生效）
+    expect(sanitizeRenderedHtml('<math onload="alert(1)"><mi>x</mi></math>')).not.toMatch(/onload/i);
+    // href 在 MathML 上**根本没有放行**（MathML 的 href 是经典向量）
+    const hrefOut = sanitizeRenderedHtml('<math><mrow href="javascript:alert(1)"><mi>x</mi></mrow></math>');
+    expect(hrefOut).not.toContain('javascript:');
+    expect(hrefOut).not.toContain('href');
+  });
+
+  it('⚠️ 如实钉住：annotation 的内容按**标记**解析，嵌套元素会迁移到它外面（已知且无害）', () => {
+    // 实测行为：`<annotation>` 在 HTML 解析里不是原始文本容器，里面写的元素会被当标记解析；
+    // 序列化后该元素**迁移到 annotation 外面**成为兄弟节点。
+    // ⚠️ 这条本身无害（迁出去的仍受同一份白名单约束，且 katex 只往 annotation 里放已转义的 LaTeX 文本），
+    // 但"知道并钉住"与"没想到"是两件事 —— 将来若有人依赖"annotation 里都是纯文本"，这条会提醒他。
+    const out = sanitizeRenderedHtml(
+      '<math><annotation encoding="application/x-tex">a &lt; b <b>粗</b></annotation></math>',
+    );
+    expect(out).toContain('<annotation');
+    expect(out).toContain('<b>粗</b>');
+    // 迁移的证据：b 在 annotation **之后**（成为兄弟），而不是在它内部
+    expect(out.indexOf('</annotation>')).toBeLessThan(out.indexOf('<b>'));
   });
 
   it('⚠️ 已知局限（继承自 canonical）：div 上的 position:fixed 遮罩与 style 里的 url() 拦不住', () => {
