@@ -28,9 +28,9 @@
 ---
 
 > **这个项目从哪里来**：VanBlog 由 [Mereithhh/vanblog](https://github.com/Mereithhh/vanblog)（GPL-3.0）继续开发而来，
-> 原文出处、许可与"去哪儿提问"见文末[「出处与许可」](#出处与许可)。
-> 到今天两边已经差别很大（截至 `v2026.9.2`：**172 个提交、724 个文件、+130,351 / −6,237 行**）：
-> 依赖整体现代化（Node 24 · NestJS 10 · mongoose 8 · Next 14 · TypeScript 5.9 · sharp 0.35 · multer 2），
+> 版权归原作者所有；原文出处、许可与"去哪儿提问"见文末[「出处与许可」](#出处与许可)。
+> 两边已经差别很大，所以本 README 与 [`docs/`](docs/README.md) **只描述当前这个版本**，不以"与上游的差异"为叙事主线。
+> 当前技术栈：Node 24 · NestJS 10 · mongoose 8 · **Next 15** · React 18 · TypeScript 5.9 · sharp 0.35 · multer 2；
 > 补上了整站备份的**恢复演练**、站内搜索、零接触初始化与初始化密钥、文章版本历史、回收站、定时发布、
 > 迁移账本、健康检查、事件日志轮转、可见水印重写等一批能力，并修掉了一批"看着成功其实没成"的真 bug
 > （含三个未认证漏洞）。
@@ -78,7 +78,9 @@
 - **整站备份/恢复**：数据库（含 waline 评论）+ 图床 + 附件 + 自定义页面 + 主题，高压缩归档；
   支持定时备份、**导出后立刻自校验**、`verify-deep` 语义校验，以及 **`drill` 恢复演练**（在一次性栈上真恢复一遍并断言语义）
 - **初始化页直接上传整站备份恢复**：全新安装不必再手填站点信息与账号
-- 健康检查端点 `/api/public/health`（数据库 ping 不通返回 503，镜像 HEALTHCHECK 打的就是它）
+- 健康检查端点 `/api/public/health`（数据库 ping 不通返回 503，镜像 HEALTHCHECK 打的就是它）。
+  ⚠️ podman/buildah 以 **OCI 格式**构建的镜像会**丢掉** Dockerfile 的 `HEALTHCHECK` ⇒ **推荐按 compose 部署**
+  （模板自带同一份 healthcheck）；裸 `docker run` / `podman run` 没有健康探测，`restart: always` 也不会因 unhealthy 重启
 - 事件日志按大小轮转、后台可直接查看登录/系统/Caddy 日志、迁移账本记录每一项数据修复
 - 限流分档（全局/静态/公开写/初始化）、可信代理判定（限流不再能被一个请求头绕过）、登录防爆破、
   加密文章解锁限次、请求体上限、request-id 与慢请求日志、协作者细粒度权限、API Token 管理、忘记密码恢复密钥
@@ -104,14 +106,13 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
   && chmod +x vanblog.sh && ./vanblog.sh
 ```
 
-⚠️ **不要用 Release 附件里的 `vanblog.sh`**：附件是**打标签那一刻**的脚本，之后修的 bug 不会进去。
-实测 `v2026.9.2` 的附件比当前脚本少 25 KB（173,377 vs 198,281 字节），既没有 `update <版本号>`，
-也**不会带初始化密钥** —— 拿它在全新站点上跑 `reset` 或 `VANBLOG_RESTORE_FROM=… install`
-会被服务端 400 拒绝（`setupKeyRequired`）。要可复现请钉**镜像**版本（`./vanblog.sh update v2026.9.2`），
-脚本本身用上面这条 raw 地址；确实担心 raw 的 CDN 缓存，就把 URL 里的 `dev/dsh` 换成具体 commit sha。
+⚠️ **不要用 Release 附件里的 `vanblog.sh`**：附件是**打标签那一刻**的脚本快照，之后修的 bug 不会进去
+（实测 `v2026.9.2` 的附件既没有 `update <版本号>`，也**不会带初始化密钥** —— 拿它在全新站点上跑 `reset` 或
+`VANBLOG_RESTORE_FROM=… install` 会被服务端 400 拒绝，报 `setupKeyRequired`）。
 
 > ⚠️ `raw.githubusercontent.com` 对**分支**地址有几分钟 CDN 缓存：刚推完就装可能拿到上一版脚本。
-> 要确定版本就用上面的发布版地址，或把 `dev/dsh` 换成具体 commit sha。
+> 真在意就把 URL 里的 `dev/dsh` 换成具体 commit sha。**要可复现该钉的是镜像版本**
+> （`./vanblog.sh update v2026.9.2`），而不是安装器。
 
 脚本会：检测环境 → 默认**先拉镜像** `ghcr.io/ckboss/vanblog:latest`（= 最近一次发布构建；
 `v2026.9.2` 这类发布号内容固定，`latest` 会随下次发版移动）→
@@ -153,20 +154,22 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 
 完整报告在 **[docs/advanced/benchmark.md](docs/advanced/benchmark.md)**，采集脚本入库在
 [`scripts/benchmark/`](scripts/benchmark/measure.sh)，每个数字都能重跑对账。
-下面是生产镜像 + 真实数据（53 篇公开文章、93 个静态文件，从 66MB 整站备份恢复）在同机 podman 栈上的结果：
+下面是生产镜像 + 真实数据（53 篇公开文章、93 个静态文件，从 66MB 整站备份恢复）在同机 podman 栈上的结果。
+⚠️ 口径说明：**页面重量与延迟**是依赖升级（next 15）后的新基线（报告 §2.1）；**吞吐、C10K 与内存**是
+同一协议下的留档实测（报告 §3–§6）；且 C10K 的数字**必须连同 `VANBLOG_CLUSTER_WORKERS` 的取值一起读**
+（默认未设 = 单进程 Node），否则不可比：
 
 | 指标 | 实测 |
 | --- | --- |
-| 首页（ISR HTML） | **93,359 B / gzip 22,961 B，8–10 ms** |
-| 文章页 | 78,830 B / gzip 23,729 B，**8 ms** |
+| 首页（ISR HTML） | **96,750 B / gzip 22,697 B，p50 8 ms** |
+| 文章页 | 84,670 B / gzip 26,583 B，**8 ms** |
 | 公开列表接口（5 篇摘要） | 5,621 B，**12 ms** |
 | 图床图片 / 缩略图（caddy 直服，不过 Node） | **1 ms** |
 | 混合流量吞吐 | **456–506 rps / 673–763 Mbps**（并发 50→1000，**0 个 5xx、0 个 socket 错误**） |
 | 持续加压（并发 200 × 20,000 请求 / 35.7 秒） | **560.9 rps / 820.5 Mbps**，p50 138 ms，0 错误 |
 | 纯静态吞吐 | **1,487 rps / 3,432 Mbps（≈429 MB/s）**，p50 29 ms、p95 64 ms |
-| **C10K**：一万条连接同时挂住 | 1.1–1.8 秒全部建立，**0 拒绝** |
-| **C10K**：一万条连接同时取静态图 | **10,000/10,000 全部 200，1.4 秒，0 失败** |
-| **C10K**：一万条连接同时打动态接口 | 10.7 秒完成 **5,872** 个（天花板是单进程 Node，不是网络层） |
+| **C10K**：一万条连接同时取静态图（caddy 直服） | **10,000/10,000 全部 200，0 失败**（默认与 cluster 两种口径下都成立） |
+| **C10K**：一万条连接同时打动态接口（caddy → Node） | 默认（单进程）**8,221–8,952 / 10,000**，失败是 502 —— 天花板是单进程 Node 的 accept 队列，不是网络层；**`VANBLOG_CLUSTER_WORKERS=auto` 下 6 臂里 5 臂 10,000/0**（代价：内存 × worker 数；判据与复现见报告 §5.4） |
 | 一次文章页浏览的数据库开销 | **~1 条 Mongo 命令**（改造前 8 条 / 4 次写） |
 | 容器内存 | mongo 142–162 MB；应用稳定加压时 **627 MB** |
 
@@ -174,11 +177,12 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 页面都是 **ISR 缓存命中**。并发扫描是**抬掉限流**测的 —— 默认限流是每 IP 每分钟 600 次
 （静态资源另有 10 倍独立桶），不抬的话测到的是"限流器多快返回 429"。报告第 0 节写了完整协议与复现命令。
 
-还有一个**默认关闭**的开关 `VANBLOG_CADDY_SERVE_HTML`：让 caddy 直接发 6 个固定页的 ISR HTML，
-实测 **3.7–4.5× rps、p95 降 78–84%**、首页单请求 p50 **8 → 1 ms**。为什么默认关、代价是什么、
-为什么动态路由曾经明确不做、以及现在靠什么保证安全（失效产物清理器），都写在报告第 9.1 节。
-⚠️ 顺便更正一句我早先写错的话：我曾说"开了直发这些路径就完全绕过限流"——**字面为真但暗示了一个不存在的损失**：
-**HTML 页面本来就不在限流覆盖范围内**：反代模式下 caddy 把页面请求转给 Next(:3001)，缓存命中的页面根本不碰 Nest(:3000) —— 实测 700 个反代页面请求 **0 个 429**。所以直发**不改变限流覆盖率（0 个百分点）**；限流器覆盖的一直只有 `/api/*` 与 `/static/*` 这些。真正变化的是"爬虫烧谁的 CPU"：Node 的单个事件循环 → caddy 的 sendfile。
+还有一个**默认关闭**的开关 `VANBLOG_CADDY_SERVE_HTML`：让 caddy 直接发 ISR 生成的 HTML ——
+`true` 覆盖 6 个固定页（实测 **3.7–4.5× rps、p95 降 78–84%**、首页单请求 p50 **8 → 1 ms**），
+`all` 再覆盖 `/post/*` `/page/*` `/category/*` `/tag/*`（文章页突发 **8.8×**、p50 7 → 1–2 ms）。
+**HTML 页面本来就不在限流覆盖范围内**（缓存命中的页面不碰 Nest），所以直发不改变限流覆盖率；
+变化的是"爬虫烧谁的 CPU"：Node 的单个事件循环 → caddy 的 sendfile。
+为什么默认关、代价是什么、以及靠什么保证安全（失效产物清理器），都写在报告第 9 节。
 
 ## 备份与恢复：能演练才算数
 
@@ -247,7 +251,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 | `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 回到上游官方镜像（**不含本仓库的任何改动**，优先级最高） |
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（静态资源另有 10 倍独立桶） |
 | `VANBLOG_TRUST_FORWARDED_HEADERS` | `auto` | 限流采信转发头的条件。⚠️ CDN/隧道**直连源站**（对端是公网代理 IP）要设 `always` |
-| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程。⚠️ N>1 尚未实跑验证，打开前请自己压一遍 |
+| `VANBLOG_CLUSTER_WORKERS` | `1` | 多进程（`auto`/`max` = 按 CPU 核数，上限 32）。⚠️ 内存 × worker 数，所以默认关；多核机上要万级并发请把 `auto` 当**部署前提**（实测 6 臂里 5 臂 10,000/0，见 [benchmark.md §5.4](docs/advanced/benchmark.md)） |
 | `VANBLOG_ARTICLE_REVISIONS_KEEP` | `10` | 每篇文章保留多少历史版本（`0` = 关） |
 | `VANBLOG_BACKUP_STALE_WARN_HOURS` | `48` | 太久没有"已校验的成功备份"就在启动与每次失败后 WARN（`0` = 关） |
 | `VANBLOG_THUMB_AVIF` | `false` | 缩略图额外产 `.avif`（省 26–41% 字节）。⚠️ 原图故意不做（实测最高 241 秒/张 CPU） |
@@ -273,7 +277,9 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 整站恢复默认把静态目录修剪成与归档一致；事件日志会轮转改名；文章版本历史默认开；
 匿名初始化默认要求初始化密钥；限流的可信代理判定与覆盖范围；浏览统计的内存/行数封顶），
 以及一批安全修复会让**以前能做的事现在被拒**（公开搜索不再返回私有文章标题、
-上一篇/下一篇与相关文章不再包含私有文章、匿名登出不再触发流水线事件）。
+上一篇/下一篇与相关文章不再包含私有文章、匿名登出不再触发流水线事件、
+RSS/Atom 的正文与摘要现在会做 **HTML 消毒** —— script/style 元素整段移除、`on*` 事件属性与
+`javascript:` 链接被摘、HTML 注释被删；前台文章页此前就是同一套白名单，这条只影响 RSS 阅读面）。
 回滚方式与升级后常见问题见 [`docs/guide/update.md`](docs/guide/update.md) 与 [`docs/faq/update.md`](docs/faq/update.md)。
 
 ## 开发
@@ -302,33 +308,36 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 
 ### 测试
 
-| 套件 | 命令 | 现状（2026-09-21 本机实测；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39） |
+| 套件 | 命令 | 现状（2026-09-21 依赖升级后本机实测；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39 与最新一轮记账 §7.97） |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **258 套件 / 3657 用例**（3649 绿 + 8 跳过 + **0 失败**，约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（本轮就因此漏过一次真红，`68d7ac6f` 修的） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **91 文件 / 992 用例全绿** |
-| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **152 套件 / 611 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **268 套件 / 3838 用例、0 真红**（约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（曾因此漏过一次真红，`68d7ac6f` 修的） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **97 文件 / 1084 用例全绿** |
+| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **154 套件 / 622 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
 | admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件）。CI 里跑并且是绿的；本机没装浏览器所以没跑。⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **30 文件 / 3033 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **31 文件 / 3044 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
 | 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **52/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
-| 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.dev.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | 两包各 **0 错**（⚠️ CI 查的是**入库**的那两份：server 的 `tsconfig.json` 与 `tsconfig.build.json`；`tsconfig.dev.json` 没有入库） |
-| 空值解引用棘轮 | `bash scripts/tests/strict-null-ratchet.test.sh` | **11 条断言 / 0 失败**（约 29 秒）。`strictNullChecks` 在 tsconfig 里是关的，这条守卫让"四类确定性空值解引用"的命中数**只减不增**（当前基线 **32**）。🔴 它必须用**单项开关**而不是伞形 `--strict`：tsconfig 里显式的 `false` 能压过伞形开关、压不过单项开关，实测 `--strict` 下这四类是 **0**、单项开关下是 **32** ⇒ 用伞形开关写的守卫会**恒绿**（守卫里有一条断言专门钉住这件事）。详见 `docs/contribution.md` |
+| 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **入库的三份配置各 0 错**（CI 查 server 的 `tsconfig.json` 与 `tsconfig.build.json`、再加 website 的 `tsconfig.json`；本机的 `tsconfig.dev.json` 没有入库） |
+| 空值解引用棘轮 | `bash scripts/tests/strict-null-ratchet.test.sh` | **11 条断言 / 0 失败**（约 29 秒）。`strictNullChecks` 在 tsconfig 里是关的，这条守卫让"四类确定性空值解引用"的命中数**只减不增**（当前基线 **10**，2026-09-21 清掉三个热点文件后由 32 下调）。🔴 它必须用**单项开关**而不是伞形 `--strict`：tsconfig 里显式的 `false` 能压过伞形开关、压不过单项开关，实测 `--strict` 下这四类是 **0**、单项开关下是 **10** ⇒ 用伞形开关写的守卫会**恒绿**（守卫里有一条断言专门钉住这件事）。详见 `docs/contribution.md` |
 | 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md)。⚠️ `--c10k N` 的 **N 是「目标连接数」不是秒数**；采集完**必须检查退出码**，`2` 表示 C10K 有目标未产出结果、那份报告不能用 |
 
 用 `./dev-env.sh bootstrap` 装的工具链跑（Node 24 + pnpm 8 + MongoDB 7）；系统 Node 也可以，但版本要 ≥ 24
 （本项目的 `@nestjs/cli` 已经升到 11，不再有上游那个 `util.isObject` 在新 Node 上崩溃的问题）。
+⚠️ 不走本仓库脚本/镜像、**自行编译**的话（例如前后端分离部署）：`next` 15 的 Node 下限是
+`^18.18.0 || ^19.8.0 || >=20`（**实践上建议 ≥ 20**）。官方镜像（`node:24-alpine`）与一键脚本的
+源码构建都在容器内完成编译，不依赖宿主机的 Node 版本。
 
 ### 项目结构
 
 ```
 packages/server     NestJS 10 + mongoose 8：接口、图床、备份、流水线、统计、caddy 管理
-packages/website    Next 14（pages router）+ React 18：读者看到的前台，ISR 静态化
+packages/website    Next 15（pages router）+ React 18：读者看到的前台，ISR 静态化
 packages/admin      umi 3 + antd 4 + React 17：后台
 packages/waline     评论子系统（可选，内置评论之外的另一条路）
 packages/cli        命令行工具
 docs/               文档站源码（vuepress）
 scripts/            部署与运维脚本（vanblog.sh 及其双胞胎、benchmark/、tests/）
 docker-compose/     compose 模板（每一项环境变量都带注释）
-Dockerfile          五阶段构建，全部基于 node:24-alpine
+Dockerfile          多阶段构建（5 个构建 stage + 1 个运行 stage），全部基于 node:24-alpine
 AGENTS.md           工程运行手册：环境、测试、排错速查、每一项改动的根因与踩过的坑
 ```
 
@@ -340,12 +349,17 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
   机器一起丢就全丢 —— 这是目前最大的单点。（"能不能恢复"现在有证据了：导出后自校验 + `drill` 演练。）
 - ~~文章/分类的访问密码仍是明文存储~~ —— **已修**：改存 scrypt 哈希、任何接口不回显（后台只给 `hasPassword` 布尔），
   表单语义变成「留空 = 不修改、清除要显式开关」。代价：**忘记访问密码不再可找回**，只能后台清除/重设。
-- **没有 CSP**：内联样式 + bytemd 注入的脚本 + 可选第三方统计，严 CSP 会把站点搞坏，要先给内联样式发 nonce。
+- **只有最小 CSP**：现在发的只有"加了不可能弄坏功能"的三条（`frame-ancestors 'self'; object-src 'none'; base-uri 'none'`）；
+  **没有 script-src/style-src 级的严 CSP** —— 内联样式与脚本（bytemd 注入 + 可选第三方统计 + 后台任意 `customScript`）
+  是结构性必需，严 CSP 要先给内联发 nonce，而 ISR 缓存的 HTML 里 nonce 会被复用，得先解决这个。
 - **搜索仍是子串匹配**：现在有了静态索引（`/static/search/index.json`）+ `/search` 结果页（排序/高亮/分页，索引不可用时回退服务端搜索），
   但没有中文分词、没有拼写容错、没有拼音；摘要 ≤200 字，正文深处的词要走服务端回退。也没有 `/metrics`（Prometheus 指标）。
-- **后台技术栈停更**：umi 3 + antd 4 + **React 17**；前台是 Next **14**（15/16 要 React 19，而 `@bytemd/react` 的 peer 只到 18）；
-  Express 仍是 4.x（Nest 11 = Express 5 = path-to-regexp v8，而 `app.module.ts` 有 4 处 `path:'*'`）。
-- **`cluster` 默认关且 N>1 从未实跑**：守卫都铺好了，但内存随 worker 数近似线性增长，打开前必须自己压一遍。
+- **后台技术栈停更**：umi 3 + antd 4 + **React 17**；前台是 Next **15** + React **18** —— React 19 被三个直接依赖
+  （`react-copy-to-clipboard` / `react-tiny-popover` / `react-use`）的 peer 上限钉在 18（next 15 自己的 peer 允许
+  18.2，不是障碍）；Express 仍是 4.x（Nest 11 = Express 5 = path-to-regexp v8，而 `app.module.ts` 有 4 处 `path:'*'`）。
+- **`cluster` 默认关**：`VANBLOG_CLUSTER_WORKERS=auto` 已在 6 核机实测（1 主 + 6 worker，万级并发 6 臂里 5 臂
+  10,000/0，见 [benchmark.md §5.4](docs/advanced/benchmark.md)）；默认关的原因是内存随 worker 数近似线性增长 ⇒
+  多核机上要万级并发请把它当**部署前提**，并预留数倍内存。
 - **AVIF 只覆盖缩略图且默认关**（原图实测最高 241 秒/张 CPU，数学上不成立）；小图用 AVIF 反而更大。
 - **caddy 直发 HTML 默认关**：`true` 覆盖 6 个固定页，`all` 再覆盖 `/post/* /page/* /category/* /tag/*`（要求 ISR onDemand 模式）。
   动态路由曾经的硬阻塞（删除文章的 HTML 永远留在磁盘上）现在由失效产物清理器（默认每 15 分钟对账）兜底，但这条路的活体验证还不如固定页充分。
@@ -365,11 +379,17 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 3. ~~**caddy 直发 HTML 扩到动态路由**~~ —— **已完成**（`VANBLOG_CADDY_SERVE_HTML=all` + 失效产物清理器；默认仍关）
 4. **后台 2FA（TOTP）与会话管理**（"登出所有设备"）
 5. **`/metrics`** + 外部 uptime 探测告警（打 `/api/public/health` 即可，不用改代码）
-6. **cluster 压测**后再决定要不要默认开
+6. ~~**cluster 压测**~~ —— **已压**（2026-09-21，`auto` 万级并发 6 臂里 5 臂 10,000/0，见 benchmark.md §5.4）；要不要**默认开**仍待定（代价：内存 × worker 数）
 7. 从 WordPress / Hexo / Hugo / Markdown 目录导入（迁移是高频需求，底座都在：front-matter 解析 + 图片本地化 + JSON 导入 + `.mdz` 往返）
 8. 响应式图片 `srcset`（现在只有"缩略图 + 原图"两档）
 9. ~~**可见水印在镜像里补上系统字体**~~ —— **已完成**（2026-09）：镜像装了 `fontconfig ttf-dejavu wqy-zenhei`（860 → 892 MB），中文水印可用；缺字体的自建镜像是"跳过 + WARN"而不是盖满 `.notdef` 方块（旧镜像实测会盖）
 10. **自定义图片水印**（上传一张 logo 当水印）：文字水印已经够用，但品牌场景要图形；底座（sharp 合成 + 按图尺寸自适应 + 跳过过小图）都在
+
+<!-- 兼容锚点：前台页脚与后台「关于」页的"增强修改版"链接指向 `#与上游的关系`（本节旧名），
+     分别被 `packages/website/__tests__/footerAttribution.spec.ts` 与
+     `packages/admin/tests/unit/aboutPage.test.js` 钉住。若再改本节标题，请保留这个锚点，
+     或同步改那两处链接与其测试。 -->
+<a id="与上游的关系"></a>
 
 ## 出处与许可
 
@@ -392,9 +412,9 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 
 ## 问题反馈
 
-请提到**本仓库**：[CKboss/vanblog 的 issue 页](https://github.com/CKboss/vanblog/issues)。
-⚠️ 截至 `v2026.9.2`，本仓库的 issue 功能是**关闭**的（`/issues/new` 会 404）；在维护者打开它之前，
-提问与需求请走 [VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)，代码改动照样走 PR（目标分支 `dev/dsh`）。
+请提到**本仓库**：[CKboss/vanblog 的 Issues](https://github.com/CKboss/vanblog/issues)（issue 功能已开启，
+直接[新建 issue](https://github.com/CKboss/vanblog/issues/new) 即可）；交流也可以走
+[VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)，代码改动照样走 PR（目标分支 `dev/dsh`）。
 报问题时请带上：`./vanblog.sh status` 的输出、容器日志里的相关片段（`./vanblog.sh log`）、
 以及后台「关于」里显示的版本号（形如 `v2026.9.2@<短 sha>`：tag + 构建时的 commit，能直接对上）。
 
