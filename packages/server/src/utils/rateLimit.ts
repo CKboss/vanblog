@@ -129,6 +129,16 @@ export const PUBLIC_LIST_LIMIT_PER_MIN = envInt(
  * ⚠️ 归一化只做这两件事，不做百分号解码之类 —— `req.path` 已经是解码后的路径，
  * 而多做一层解码只会引入新的不一致。
  *
+ * 🔴 **2026-09-21 更正：上面那句"`req.path` 已经是解码后的路径"是错的**（结论"不要解码"仍然对，
+ * 但理由不是这个）。实测（本地起真 Express 逐个打）：`GET /api/public/%63omments` 的
+ * `req.path` 是 **`/api/public/%63omments`（原样未解码）**，而且 **HTTP 404** ——
+ * 因为 Express 的路由匹配用的就是**未解码**的 pathname。
+ * ⇒ 所以"不要解码"的真正理由是：**编码变体根本不会命中任何路由（404）**，
+ * 如果我们解码，限流器就会把一批 404 请求算进比路由器更严的档里（口径不一致，方向偏严但没意义）。
+ * ⚠️ 同时实测：`//api//public//comments`（内部双斜杠）也是 **404** ⇒ **不要折叠内部斜杠**，
+ * 理由同上（折叠会让 404 被算进档里）。只有**尾斜杠**要处理，因为 `strict routing=false`
+ * 时尾斜杠是可选的、`/api/public/comments/` 确实 **200**。
+ *
  * 🔴 **仍然用相等而不是 `startsWith`**：`/api/public/tag/:name`（单个标签下的文章）也以
  * `/api/public/tag` 开头，但它的形状完全不同 —— 实测 p50 12.8 ms、响应只有 **1,333 B**
  * （只含一个标签下的文章），所以它**不是**同一量级的放大面。
@@ -138,9 +148,67 @@ export const PUBLIC_LIST_LIMIT_PER_MIN = envInt(
  * 将来若要收，记得连 `Cache-Control` 一起考虑（它也是公开列表）。
  */
 export function isPublicAggregateListPath(path: string): boolean {
-  if (typeof path !== 'string' || path.length === 0) return false;
-  const normalized = path.replace(/\/+$/, '').toLowerCase();
+  const normalized = normalizeRateLimitPath(path);
+  if (!normalized) return false;
   return normalized === '/api/public/category' || normalized === '/api/public/tag';
+}
+
+/**
+ * 🔴 把请求路径归一化成**与 Express 路由匹配口径一致**的形状，供所有"按路径分档"的判定共用。
+ *
+ * ## 为什么必须有这个函数
+ * Express 默认 `case sensitive routing=false` 且 `strict routing=false`，而本项目 `main.ts`
+ * 两项都没有改（只读核实过：`main.ts` 里没有 `app.set('case sensitive routing', …)` 与
+ * `app.set('strict routing', …)`）⇒ **路由匹配是大小写不敏感、尾斜杠可选的**。
+ * 活体实测（dev :3000，全 GET 只读）：
+ * `/api/public/category`、`/API/public/category`、`/api/public/CATEGORY`、`/api/public/category/`
+ * **四种写法全部 200、且返回逐字节相同的 22,131 B** ⇒ 它们打到的是同一个处理器。
+ *
+ * 🔴 而限流器的分档判定历史上是**大小写敏感**的 `startsWith`，于是"加个尾斜杠或改个大小写"
+ * 就能让请求**照样命中处理器、却完全不进那个更严的档**，只落进全局档（600/分钟）。
+ * 受影响的两个严档：`/api/admin/init`（5 次/10 分钟的**初始化/恢复爆破防护**）与
+ * `/api/public/`（30/分钟的匿名写档）。
+ *
+ * ## 口径（三条，每条都有实测依据）
+ * 1. **去 query 与 hash**：中间件取的是 `req.path || req.url`，而实测 `req.url` **带 query**
+ *    （`req.url="/api/public/comments?x=1"` 而 `req.path="/api/public/comments"`）。
+ *    Express 下 `req.path` 总是存在，所以这一条是纵深防御：万一某个调用方只有 `req.url`，
+ *    带 query 的路径不会因为多了 `?x=1` 就逃出档位。
+ * 2. **去尾斜杠**（`strict routing=false` ⇒ 尾斜杠可选，实测 `/api/public/comments/` 是 200）。
+ * 3. **转小写**（`case sensitive routing=false` ⇒ 实测 `/API/public/comments` 是 200）。
+ *
+ * ⚠️ **刻意不做**的两件事（都实测过，做了反而错）：
+ * - **不做百分号解码**：`/api/public/%63omments` 的 `req.path` 原样未解码且 **404** ⇒
+ *   解码会把 404 算进档里，与路由器口径不一致。
+ * - **不折叠内部斜杠**：`//api//public//comments` 也是 **404** ⇒ 同理。
+ *
+ * ## 失败方向
+ * 非字符串 / 空串 / 归一化后为空 ⇒ 返回 `''`。🔴 `''` **不匹配任何专用档，但仍会落进全局档**
+ * （中间件末尾那个 `rl-global-<ip>` 是无条件的）⇒ **绝不存在"因为路径奇怪就不限流"这条路**。
+ *
+ * ⚠️ **各档的"宽严方向"不一样，所以归一化对它们的影响要分别看**（这条写下来是因为它不显然）：
+ * - **严档**（init / public-write / public-list）：归一化让它们**变宽**（更多写法被算进档）⇒ **更安全**。
+ * - 🔴 **松档**（static，额度是全局的 10 倍且命中后 `return next()` 跳过全局档）：归一化会让
+ *   `/STATIC/x` 也进这一档。实测 `/STATIC/img/<真文件>` 确实 **200 并返回完整 199,304 B**
+ *   （`useStaticAssets` 的挂载前缀匹配同样大小写不敏感）⇒ 把它算成静态请求是**符合事实的**；
+ *   而且**攻击者并没有获得新能力**：规范写法 `/static/x` 本来就能拿到 6000/分钟，
+ *   额度上限没有变，只是大小写变体不再额外消耗全局桶。
+ * - ⚠️ **一处刻意的窄化**：裸前缀 `POST /api/public/`（无后续段）归一化成 `/api/public`，
+ *   不再匹配 `startsWith('/api/public/')` ⇒ 从 30/分钟落到全局 600/分钟。
+ *   这个路径**没有任何处理器**（404），所以消耗的只是一次 404；
+ *   而**所有真实路由**（`/api/public/comments` 等）归一化后仍以 `/api/public/` 开头 ⇒ **额度一点没放宽**。
+ *   🔴 之所以不改成 `path === '/api/public' || path.startsWith('/api/public/')` 来保住这一格：
+ *   `audit-hardening-round4-security-anonymous-writes.spec.ts:57` 钉着
+ *   `path.startsWith\('/api/public/'\) && !SAFE_METHODS\.has\(method\)` 这个**逐字形状**，
+ *   而那个文件不在本次改动的授权范围内 ⇒ 保留原文，把这一格的取舍显式记在这里并加断言钉住。
+ */
+export function normalizeRateLimitPath(path: unknown): string {
+  if (typeof path !== 'string' || path.length === 0) return '';
+  let p = path;
+  const cut = p.search(/[?#]/);
+  if (cut >= 0) p = p.slice(0, cut);
+  p = p.replace(/\/+$/, '');
+  return p.toLowerCase();
 }
 
 /** 这个路径算不算"静态资源"（只认前缀，别用正则去猜后缀，省 CPU 也少误判） */
@@ -210,7 +278,14 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
     // ⚠️ 防爆破类的计数（登录 / 评论 / 文章解锁）**不要**换成这个函数，
     // 它们继续用 pickSocketIp()：那边的收益正是"换一个 key 重新开始"，理由见 trustedProxy.ts。
     const ip = pickTrustedClientIp(req);
-    const path = String((req as any).path || (req as any).url || '');
+    // 🔴 归一化后再分档：Express 的路由匹配大小写不敏感且尾斜杠可选（活体实测过四种写法
+    //    返回同一份响应），而下面几档的判定是大小写敏感的 startsWith ⇒ 不归一化就能被
+    //    "加个尾斜杠或改个大小写"平凡绕过。口径、失败方向与各档宽严影响见
+    //    normalizeRateLimitPath 的文档注释。
+    // ⚠️ 下面四个判定的**源码文本一律保持不变**（`path.startsWith('/api/admin/init')`、
+    //    `path.startsWith('/api/public/')`、`isStaticAssetPath(path)`、`isPublicAggregateListPath(path)`）：
+    //    它们被多条既有守卫按逐字形状钉住，改文本会打红不属于本次授权范围的文件。
+    const path = normalizeRateLimitPath((req as any).path || (req as any).url);
     const method = String(req.method || 'GET').toUpperCase();
 
     // `/api/admin/init*`：初始化一辈子只该成功一次，而 `init/upload` 与 `init/restore`
