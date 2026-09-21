@@ -9022,6 +9022,64 @@ website vitest **96 文件 / 1075 全绿**（= 基线）。⚠️ dev 环境（3
 👉 **这条要进手册：发现"工作树里有不属于我的改动"时，必须立刻报告并给出归属证据（mtime / 自己的操作记录），
 因为父代理对工作树的模型可能已经错了。**
 
+### 7.93 W1+W2 依赖升级完成后的基线，以及两条必须记住的升级规矩
+
+**当前依赖**：`markdown-it` **14.3.2**（server）、`@mdit/plugin-katex` **1.0.1**、scoped `postcss@8` override、
+`next` **15.5.25**（website）、**React 仍 18.2.0**（未升 19）。
+
+🔴 **升级 React 19 的真正前置条件**（别再猜）：`react-copy-to-clipboard@5.1.0`（peer `^15.3.0||16||17||18`）、
+`react-tiny-popover@7.2.4` 与 `react-use@17.4.1`（都是 `^16.8.0||^17.0.0||^18.0.0`）—— **这三个直接依赖把上限钉在 18**。
+⚠️ **bytemd 不是障碍**（`bytemd@1.21.0` 的 peer 是 `{}`、`@bytemd/react@1.21.0` 是 `react:"*"`），
+**next 15 也不是障碍**（它的 peer 含 `^18.2.0`；官方升级指南那句"react 最低版本现在是 19"**与它自己的 peer 范围矛盾**）。
+👉 **规矩：`peerDependencies` 的实测范围优先于升级指南的散文。**
+
+🔴 **一条守卫曾把错误前提固化成"不许改"**：`perfBudget.spec.ts` 原先把 next 钉在 `/^14\./`，标题写着
+「Next 15 要 React 19，@bytemd 的 peer 只到 18」—— **两个前提都是错的**，而它挡住的那次升级其实是安全的。
+⇒ **写"版本必须停在 X"这类守卫时，必须把可核实的依据（peer 字符串原文、最小复现命令）写进注释**，
+否则下一个人只能选择"相信它"或"偷偷放宽它"。
+
+🔴 **两条升级操作规矩（都是本轮实测出来的）**：
+1. **`next dev` 在跑的时候，绝不要 `rm -rf .next` 或 `next build`** —— dev 进程与构建共用同一个 `.next`，
+   dev 会开始读**生产 manifest** ⇒ `Cannot read properties of undefined (reading '/_app')`、
+   `handler is not a function {page:'/'}`、`reading 'filter'`，整站 500。
+   恢复手法：kill 记录的 PID → `./dev-env.sh stop`（⚠️ 它还会清掉一个**残留子进程**，这就是"杀了记录的 PID 后 3001 仍 500"的原因）
+   → `rm -rf packages/website/.next` 与 admin 的 `.umi`/`.umi-production` → `start`（25 秒内三端口全 200）。
+   ⚠️ **生产镜像不受这个成因影响**（容器里从零构建、无并发 dev 进程）。
+2. **做 A/B 性能对比必须用同一份代码分别构建两个版本**，不能拿手册里记的旧数字当基线（那些数字的代码已经不是现在这份了）。
+   🔴 实证：手册 §7.28/§7.74 记的"首页 First Load JS 286→293 kB"是**陈旧数字**，同一份代码下 next 14 实测就是 **360 kB**、
+   next 15 是 **363 kB** ⇒ 差点被误判成"next 15 让首页涨了 70 kB"。**这两个数字待更新。**
+
+⚠️ **next 15 的两个部署相关事实**：
+- **Node 下限 `^18.18.0 || ^19.8.0 || >=20`**；镜像的 `website_builder` 阶段是 `FROM node:24-alpine` ⇒ **不阻塞**。
+  ⚠️ 但自建镜像/自编译的用户必须确认 Node ≥ 18.18（实践上 ≥ 20），**文档要写**。
+- 🔴 **`next-env.d.ts` 会多出 `/// <reference path="./.next/types/routes.d.ts" />`**，而
+  `packages/website/tsconfig.json` 的 include 里**就有 `next-env.d.ts`** ⇒ **干净 checkout 上跑 website tsc 会报找不到该文件**。
+  已在 CI 的 `Typecheck website` 之前加了一步创建类型桩（⚠️ **不要 revert `next-env.d.ts`**：下次 build/dev 会重新写回，
+  revert 只会让工作树永久脏）。⚠️ 用桩而不是真跑 `next build` 的理由：build 会执行所有页面的 `getStaticProps`（要调后端 API），
+  而本机验证时 server 正在 :3000 跑 ⇒ **无法确认它在没有后端的 CI 里能否成功**；且本项目**没有启用 typedRoutes**，
+  那个文件对类型检查没有实际贡献。📌 更好的长期做法是像 "Build server" 那样加一个 "Build website" 步骤并把 typecheck 放它之后
+  （顺带覆盖"镜像的构建命令能过"），前提是确认 `isBuild=t` 真能让 `getStaticProps` 在没有后端时返回桩数据。
+- ⚠️ **`next start` 明确不支持 `output: standalone`**（会警告"Use `node .next/standalone/server.js` instead"）⇒
+  用它做验收会得到与镜像运行时**不同**的行为（600 假 slug 探针的正对照就是这样没成立的：删掉真产物后请求仍 200 但磁盘未重写）。
+  👉 **涉及 ISR 增量落盘的验收，必须在容器里用 `node .next/standalone/server.js` 跑。**
+- ⚠️ **ISR 产物路径未变**（本次升级最大的风险点，已核实）：`.next/server/pages/post/*.html` = **53**、`*.json` = 54、
+  固定页 **9** 个 ⇒ 降级期 caddy 直发、artifact reaper 扫描、哨兵目录**都继续有效**。
+
+**W2 后的完整基线（父代理亲自复跑，含代理如实报告"没跑"的四项）**：
+server jest **268 套件 / 3836 用例（3827 passed + 7 skipped + 2 假红）**｜server 三个 tsc 口径 **各 0 错**｜
+**strictNullChecks 四类 = 10（未涨）**｜脚本守卫 **31 文件 / 3044 条 / 0 失败**｜website vitest **97 文件 / 1084**｜
+website tsc **0 错**｜admin **622**｜`docs-consistency` **52/0**｜`docs-links` **5/5**。
+
+⚠️ **负载敏感假红清单从 7 个增加到 8 个**：新增 **`utils/storedFileName.spec.ts`**
+（全量跑时红、单独连跑 2 次 **61/61 全绿**）。
+🔴 **但"红自己消失"不等于"负载假红"** —— 上一轮已证明它也可能是**断言本身写错**（墙上时钟）：
+`provider/auth/loginThrottle.spec.ts` 就是那一族（`expect(Date.now()-started).toBeLessThan(80)` **收到 80**，边界差 1ms），
+它**既是负载敏感、断言本身也偏紧**，应当单独排一轮放宽阈值。
+⚠️ **`storedFileName` 的形状还没查** ⇒ 在把它永久归入假红清单之前，应当先确认它不是"断言写错"那一族
+（判据：读那条断言，看它是否依赖墙上时钟、文件系统时序、端口、或任何全局状态）。
+👉 **规矩：把一个 spec 加进假红清单之前，必须先看一眼它红的那条断言长什么样** ——
+"单独跑就绿"只证明它**不稳定**，不证明它**没错**。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
