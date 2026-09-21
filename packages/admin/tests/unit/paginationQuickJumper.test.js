@@ -26,7 +26,17 @@
 // ---------------------------------------------------------------------------
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync, readdirSync, statSync } = require('node:fs');
+const {
+  readFileSync,
+  readdirSync,
+  statSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+} = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const SRC = path.join(__dirname, '../../src');
@@ -299,18 +309,130 @@ describe('admin pagination quick jumper (站长要求：所有能翻页的地方
       0,
       '扫到了 src/.umi/** —— 那是 antd/rc-pagination 的源码，不是我们的代码',
     );
-    // 反向确认：缓存目录里确实**有** showQuickJumper（否则上面那条 0 命中是"根本没扫到"而不是"正确排除"）
+
+    // ---------------------------------------------------------------------
+    // 🔴 (A) 合成正对照：**永远执行**，不依赖任何 git-ignored 的构建缓存。
+    //
+    // 为什么需要它（2026-09-21）：原来这里的正对照是直接 `statSync(path.join(SRC,'.umi'))`，
+    // 而 `src/.umi` 是 umi 的构建缓存、**被 git-ignored** ⇒ 在**干净 checkout（CI）上必然 ENOENT**，
+    // `statSync` 对缺失路径是**抛异常**而不是返回（那个 `if (…isDirectory())` 本意是保护，
+    // 但抛发生在 `if` 求值之前）⇒ 整条用例在 CI 上 3 秒就红，而本机因为缓存存在所以绿。
+    // 这就是"本机全绿、CI 长期红"的成因之一（由 d414bf76 引入）。
+    //
+    // ⚠️ 但"直接跳过"会**丢掉正对照**：上面那条"扫到 0 个 .umi 落点"在没有缓存的机器上会**恒真**
+    //（根本没扫到任何东西 ⇒ 0 命中），于是"正确排除"与"扫描器坏了"变得不可区分。
+    // ⇒ 所以正对照改成**在 os.tmpdir() 下合成一个 .umi 形状的树**：
+    //    `walk(dir, acc)` 的 `dir` 本来就是入参，所以能把扫描器指向临时目录，
+    //    这比依赖真实缓存**更强**（确定性、可控内容、干净 checkout 上也能跑）。
+    // ---------------------------------------------------------------------
+    const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'qj-skipdirs-'));
+    try {
+      // 自己的代码：一处**缺** showQuickJumper 的分页落点 ⇒ 必须被扫到（否则守卫假绿）
+      writeFileSync(
+        path.join(tmpRoot, 'own.jsx'),
+        ['export default () => <Table pagination={{ pageSize: 10 }} />;', ''].join('\n'),
+      );
+      // 三个被 SKIP_DIRS 排除的目录，每个里面都放"会被数进来"的东西：
+      // 既含 showQuickJumper（对应真实 .umi 里 antd 自己的源码），也含一处缺跳转的分页落点。
+      for (const ignored of ['.umi', '.umi-production', 'node_modules']) {
+        const d = path.join(tmpRoot, ignored, 'nested');
+        mkdirSync(d, { recursive: true });
+        writeFileSync(
+          path.join(d, 'antd.jsx'),
+          [
+            '// 这里同时放两种"如果没被排除就会被数进来"的形状',
+            'export const showQuickJumper = true;',
+            'export default () => <Table pagination={{ pageSize: 20 }} />;',
+          ].join('\n'),
+        );
+      }
+
+      const scanned = walk(tmpRoot, []).map((f) => path.relative(tmpRoot, f).split(path.sep).join('/'));
+      // ① 自己的文件必须被扫到 ⇒ 证明 walker 在这个临时树上真的工作（反空转）
+      assert.deepEqual(scanned, ['own.jsx'], `walker 在合成树上的结果不对：${JSON.stringify(scanned)}`);
+      // ② 合成树里确实存在"会被数进来"的东西 ⇒ 证明上面那条 0 命中不是"根本没扫到"
+      const ignoredHits = ['.umi', '.umi-production', 'node_modules'].filter((d) =>
+        readFileSync(path.join(tmpRoot, d, 'nested', 'antd.jsx'), 'utf8').includes('showQuickJumper'),
+      );
+      assert.equal(ignoredHits.length, 3, '合成正对照失效：被排除的目录里没有 showQuickJumper');
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+
+    // ---------------------------------------------------------------------
+    // ⚠️ (B) 真实缓存正对照：**只在 src/.umi 存在时执行**。
+    // 它证明的是"在这台机器上，真实缓存里确实有 showQuickJumper"，也就是排除它是有实际意义的
+    //（antd/rc-pagination 的源码真的会被 grep 命中）。干净 checkout 上没有这个目录 ⇒ 如实打 NOTE，
+    // 正对照的职责由上面 (A) 承担。🔴 断言本身**不放宽**：目录存在时 umiHits 仍必须 > 0。
+    // ---------------------------------------------------------------------
     const umiDir = path.join(SRC, '.umi');
-    let umiHits = 0;
-    if (statSync(umiDir).isDirectory()) {
+    if (existsSync(umiDir)) {
+      assert.ok(statSync(umiDir).isDirectory(), 'src/.umi 存在但不是目录？请复核');
+      let umiHits = 0;
       for (const f of walk(umiDir, []).slice(0, 400)) {
         // 这里**不剥注释**：只是要证明"那个目录里确实存在这个词"
         if (readFileSync(f, 'utf8').includes('showQuickJumper')) umiHits += 1;
       }
+      assert.ok(
+        umiHits > 0,
+        'src/.umi 里居然找不到 showQuickJumper —— 说明"排除缓存目录"这条断言的正对照不成立，请复核 SKIP_DIRS',
+      );
+    } else {
+      // 🔴 如实跳过并说明（不是静默跳过）：让读日志的人知道这条正对照在本机没执行、
+      // 以及为什么"扫到 0 个 .umi 落点"在这台机器上是恒真的。
+      console.log(
+        'NOTE: 干净 checkout 上没有 src/.umi（umi 构建缓存、git-ignored），' +
+          '所以"真实缓存里确实有 showQuickJumper"这条正对照本次未执行；' +
+          '排除机制已由 os.tmpdir() 下的合成正对照验证（.umi/.umi-production/node_modules 三个都被跳过、' +
+          '而自己的文件被扫到）。此时"扫到 0 个 .umi 落点"是恒真的，' +
+          '但本文件其余断言（每一处分页都带 showQuickJumper）不依赖 .umi 是否存在。',
+      );
     }
+  });
+
+  // 🔴 防复发守卫（2026-09-21）：本文件里对 `src/.umi` 的 statSync **必须**先 existsSync。
+  // 起因就是上面那条：`statSync` 对缺失路径抛 ENOENT，而 `.umi` 是 git-ignored ⇒
+  // 干净 checkout 上必然缺失 ⇒ CI 长期红。⚠️ 这是一条**源码文本级**守卫，
+  // 作用范围只覆盖本文件（仓库级的同类检查属于 scripts/tests/**，不在本文件职责内）。
+  it('防复发：对 git-ignored 的 src/.umi 做 statSync 之前必须先 existsSync', () => {
+    // 🔴 口径：**必须连字符串一起剥**（用本文件已有的 maskCommentsAndStrings）。
+    // 这正是手册里那条"剥多少取决于你要断言什么"：这里要钉的是"**代码里**有没有一次无保护的调用"，
+    // 而下面几条断言的**消息字符串里就写着 `statSync(umiDir)` 这个字面量** ——
+    // 只剥注释不剥字符串的话，守卫会把自己的提示语数成调用点（实测会是 3 处而不是 1 处），
+    // 于是恒红；反过来若为了消红而放宽计数，守卫就废了。
+    // ⚠️ maskCommentsAndStrings 把注释与字符串换成等长空格并**保留换行**，所以行号仍然可用。
+    const masked = maskCommentsAndStrings(readFileSync(__filename, 'utf8')).split('\n');
+    const code = masked.map((line, i) => ({ line, n: i + 1 }));
+
+    const statLines = code.filter(({ line }) => line.includes('statSync(umiDir)'));
+    assert.equal(
+      statLines.length,
+      1,
+      '本文件里 statSync(umiDir) 的代码调用应当恰好 1 次（实际 ' +
+        statLines.length +
+        ' 次）；多出来的一处很可能没有 existsSync 保护，会在干净 checkout 上抛 ENOENT',
+    );
+    const guardLines = code.filter(({ line }) => line.includes('existsSync(umiDir)'));
+    assert.equal(guardLines.length, 1, 'existsSync(umiDir) 的保护应当恰好有 1 处（实际 ' + guardLines.length + ' 处）');
     assert.ok(
-      umiHits > 0,
-      'src/.umi 里居然找不到 showQuickJumper —— 说明"排除缓存目录"这条断言的正对照不成立，请复核 SKIP_DIRS',
+      guardLines[0].n < statLines[0].n,
+      'existsSync 的保护在第 ' + guardLines[0].n + ' 行，而 statSync 在第 ' + statLines[0].n + ' 行 —— 保护必须在前面',
+    );
+
+    // 🔴 更一般的一条：本文件里**任何** statSync/readdirSync 的直接实参都不许是
+    //    含 git-ignored 目录名的字面量表达式（例如 path.join(SRC, '.umi')）。
+    //    经变量间接传入的（如 walk 内部的 statSync(full)）由调用方负责先 existsSync。
+    // ⚠️ 在剥过字符串的文本上，`path.join(SRC, '.umi')` 会变成 `path.join(SRC,      )`，
+    //    所以这条要匹配的是"**标识符形态**的 ignored 名字"，字符串形态由上一条 existsSync 检查覆盖。
+    const risky = code.filter(({ line }) =>
+      /(statSync|readdirSync)\([^)]*\b(umiDir|umiProdDir)\b/.test(line),
+    );
+    // 允许恰好那一处（它有 existsSync 保护）；再多一处就是无保护的
+    assert.ok(
+      risky.length <= 1,
+      '发现对 git-ignored 目录的额外 statSync/readdirSync 调用（' +
+        risky.map((r) => r.n + ': ' + r.line.trim()).join(' | ') +
+        '）—— 干净 checkout 上会 ENOENT，请改成先 existsSync',
     );
   });
 
