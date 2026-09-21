@@ -37,6 +37,18 @@ import { join } from 'path';
  *  2. 延迟**有封顶**（不能叠加到不可用）；
  *  3. 节流期间登录**仍然成功**（是变慢，不是拒绝）。
  */
+// ⚠️ 2026-09-21：本项目的 @types/jest 里**没有** `advanceTimersByTimeAsync` 的类型
+//    （运行时 jest 29.5.0 有它，但类型缺 ⇒ TS2551）。这里用**同步的 `advanceTimersByTime`
+//    + 显式冲微任务**代替：假定时器下同步推进会立刻触发回调，随后冲微任务让 await 链继续，
+//    与 async 版等价，而且**不需要 `any` 断言**（本仓库不许为了测试好写而放宽类型）。
+const flushMicrotasks = async (): Promise<void> => {
+  for (let i = 0; i < 12; i += 1) await Promise.resolve();
+};
+const advanceFake = async (ms: number): Promise<void> => {
+  jest.advanceTimersByTime(ms);
+  await flushMicrotasks();
+};
+
 describe('全局登录失败节流', () => {
   let savedEnv: NodeJS.ProcessEnv;
 
@@ -182,11 +194,25 @@ describe('全局登录失败节流', () => {
   });
 
   describe('守卫集成', () => {
-    it('正常水位：canActivate 立刻放行，零延迟', async () => {
-      const guard = makeGuard();
-      const started = Date.now();
-      await expect(guard.canActivate(ctxOf(reqOf('203.0.113.5')))).resolves.toBe(true);
-      expect(Date.now() - started).toBeLessThan(50);
+    // 🔴 2026-09-21：这三条原先用**墙上时钟**区分"睡了 ~100ms 节流延迟"与"没睡"，
+    //    而 :235 的上界与 :203 的下界**是同一个数字 80** ⇒ 全量 jest 的并行负载下
+    //    纯调度延迟就能吃掉 50-80ms，实测收到过**恰好 80**（`toBeLessThan(80)` 失败），
+    //    单独跑又 20/20 全绿 —— 既是负载敏感、断言本身也偏紧（§7.93/§7.96）。
+    //    现在改成**假定时器 + 数定时器个数**：判据是"有没有排定时器"，与调度延迟完全无关。
+    // ⚠️ 只假定时器、**保留真 Date**（`doNotFake: ['Date']`）：本模块内部大量用 `Date.now()`
+    //    做窗口计算（`noteGlobalLoginFailure(now = Date.now())`、`globalThrottleDelayMs(now = Date.now())`、
+    //    `LOGIN_GLOBAL_WINDOW_MS` 的过期判断），把 Date 一起冻会让窗口逻辑与本文件其它用例失真。
+    it('正常水位：canActivate 立刻放行，零延迟（不排任何定时器）', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      try {
+        const guard = makeGuard();
+        // ⚠️ 不 advance 就能 resolve ⇒ 证明它没有 await 任何定时器；
+        //    如果正常水位被注入了 sleep，这里会**挂住直到超时**（M3 由此变红）。
+        await expect(guard.canActivate(ctxOf(reqOf('203.0.113.5')))).resolves.toBe(true);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('⚠️ 节流期间登录**仍然成功**，只是变慢（是加延迟，不是拒绝）', async () => {
@@ -196,11 +222,21 @@ describe('全局登录失败节流', () => {
       for (let i = 0; i < 6; i += 1) noteGlobalLoginFailure();
       expect(guard.globalThrottleDelayMs()).toBeGreaterThan(0);
 
-      const started = Date.now();
-      await expect(guard.canActivate(ctxOf(reqOf('203.0.113.6')))).resolves.toBe(true);
-      const elapsed = Date.now() - started;
-      expect(elapsed).toBeGreaterThanOrEqual(80); // 真的等了（定时器没有 unref 成空转）
-      expect(elapsed).toBeLessThan(2000); // 但被封顶住了，不会无限拖
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      try {
+        const p = guard.canActivate(ctxOf(reqOf('203.0.113.6')));
+        // 冲一遍微任务，让 canActivate 走到 sleep 那一行（它前面可能有 await）
+        await advanceFake(0);
+        // 🔴 真的排了一个定时器（不是空转、不是被 unref 掉就不算）⇒ M2（sleep 变空转）由此变红
+        expect(jest.getTimerCount()).toBeGreaterThan(0);
+        // 🔴 封顶：只推进到配置的上限（LOGIN_THROTTLE_MAX_ENV=100）就必须 settle
+        //    ⇒ 如果封顶被去掉（M4，睡一个远大于 100ms 的值），这里不会 settle，用例超时变红
+        await advanceFake(100);
+        await expect(p).resolves.toBe(true);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('全局计数由 recordFailure 驱动，且**不受** per-IP 开关影响', async () => {
@@ -229,10 +265,58 @@ describe('全局登录失败节流', () => {
       for (let i = 0; i < 5; i += 1) await guard.recordFailure(req);
       for (let i = 0; i < 20; i += 1) noteGlobalLoginFailure();
 
-      const started = Date.now();
-      await expect(guard.canActivate(ctxOf(req))).rejects.toThrow(/错误次数过多/);
-      // 已经要拒了，就别再拖 100ms（拖了只是浪费自己的连接与内存）
-      expect(Date.now() - started).toBeLessThan(80);
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      try {
+        // ⚠️ 用**增量**而不是绝对值：recordFailure/attemptLimit 那条链自己可能排定时器，
+        //    绝对值断言会被它们干扰。这里要钉的性质是"拒绝路径**没有新增**节流定时器"。
+        const before = jest.getTimerCount();
+        const p = guard.canActivate(ctxOf(req));
+        await advanceFake(0);
+        // 已经要拒了，就别再拖 100ms（拖了只是浪费自己的连接与内存）
+        await expect(p).rejects.toThrow(/错误次数过多/);
+        // 🔴 拒绝路径一个节流定时器都没排 ⇒ M1（给拒绝路径注入 sleep）由此变红
+        expect(jest.getTimerCount() - before).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    // 🔴 尺子有效性反证：上面三条都靠 `jest.getTimerCount()` 当尺子，
+    //    所以必须先证明这把尺子**真的能看见本模块排出的定时器**，
+    //    否则"0 个定时器"可能在"睡了"和"没睡"两种情况下都成立而恒真。
+    it('尺子有效性：假定时器下 getTimerCount 确实能看见 setTimeout，推进后确实归零', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      try {
+        expect(jest.getTimerCount()).toBe(0);
+        let fired = false;
+        setTimeout(() => {
+          fired = true;
+        }, 50);
+        expect(jest.getTimerCount()).toBe(1); // 排上了就看得见
+        await advanceFake(49);
+        expect(fired).toBe(false); // 还没到点
+        await advanceFake(1);
+        expect(fired).toBe(true); // 到点就触发 ⇒ 尺子对"延迟"是敏感的
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    // ⚠️ 并且证明 `doNotFake: ['Date']` 确实生效：假定时器下 Date 仍然在走，
+    //    否则本模块的窗口计算（LOGIN_GLOBAL_WINDOW_MS 过期判断）会被冻住而让别的用例失真。
+    it('尺子有效性：假定时器下 Date 仍然是真时钟（窗口逻辑不被冻住）', async () => {
+      jest.useFakeTimers({ doNotFake: ['Date'] });
+      try {
+        const t0 = Date.now();
+        await advanceFake(5);
+        // 真时钟：advanceTimers 不会把 Date 拨快，但 Date 自己会继续走 ⇒ 差值必须 >= 0 且不是被冻结的假值
+        expect(Date.now() - t0).toBeGreaterThanOrEqual(0);
+        // 🔴 关键：推进 5 秒的假时间后，Date 不应当跳到 +5000（那说明 Date 被一起假了）
+        expect(Date.now() - t0).toBeLessThan(4000);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('节流日志有间隔限制（被打的时候不能自己制造日志炸弹）', async () => {
