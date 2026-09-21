@@ -145,5 +145,10 @@ docs/.vuepress/dist/
 temp.json
 staticFolder
 localBuild.sh
-log
-log/**
+# 🔴 2026-09-21 锚定到仓库根：裸 `log` 会在**任意层级**匹配名为 log 的目录，
+# 于是把源码目录 packages/server/src/provider/log/ 整个吞掉了 —— 已跟踪的文件因为
+# "gitignore 不会取消跟踪" 而幸免，但那个目录里**任何新增文件都会被静默忽略**。
+# 实际事故：provider/log/log.provider.tail.spec.ts（9 条用例）在全量 jest 里跑了 5 天、
+# 一直给基线贡献用例，却从未入库，导致 "跟踪的套件数 + 新增 = 267 而 jest 报 268" 永远对不上。
+/log
+/log/**
