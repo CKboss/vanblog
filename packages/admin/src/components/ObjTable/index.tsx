@@ -35,6 +35,7 @@ export default function (props: { obj: any }) {
         },
       ]}
       pagination={{
+        showQuickJumper: true,
         hideOnSinglePage: true,
       }}
     ></Table>

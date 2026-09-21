@@ -305,6 +305,7 @@ const ImgPage = () => {
           content: (
             <Table
               pagination={{
+                showQuickJumper: true,
                 hideOnSinglePage: true,
               }}
               rowKey={'id'}
@@ -709,6 +710,7 @@ const ImgPage = () => {
             </Image.PreviewGroup>
           )}
           <Pagination
+            showQuickJumper
             style={{ marginTop: 20, textAlign: 'right' }}
             hideOnSinglePage={true}
             current={page as number}

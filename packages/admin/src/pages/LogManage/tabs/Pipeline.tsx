@@ -116,6 +116,7 @@ export default function () {
         options={true}
         headerTitle="流水线日志"
         pagination={{
+          showQuickJumper: true,
           pageSize: 10,
           simple: true,
           hideOnSinglePage: true,

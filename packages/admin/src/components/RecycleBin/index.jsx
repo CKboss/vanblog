@@ -373,6 +373,7 @@ export default function RecycleBin(props) {
               : RECYCLE_EMPTY_TEXT,
         }}
         pagination={{
+          showQuickJumper: true,
           current: page,
           pageSize,
           total,

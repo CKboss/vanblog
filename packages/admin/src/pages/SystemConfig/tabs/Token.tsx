@@ -127,6 +127,7 @@ export default function () {
           search={false}
           options={false}
           pagination={{
+            showQuickJumper: true,
             hideOnSinglePage: true,
             simple: true,
           }}

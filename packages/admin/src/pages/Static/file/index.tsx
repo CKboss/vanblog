@@ -55,7 +55,7 @@ export default () => {
       width: 600,
       content: (
         <Table
-          pagination={{ hideOnSinglePage: true }}
+          pagination={{ hideOnSinglePage: true, showQuickJumper: true }}
           rowKey={'id'}
           dataSource={data || []}
           size="small"
@@ -219,7 +219,7 @@ export default () => {
         rowKey="sign"
         columns={columns}
         search={{ labelWidth: 'auto' }}
-        pagination={{ pageSize: 10, showSizeChanger: true }}
+        pagination={{ pageSize: 10, showSizeChanger: true, showQuickJumper: true }}
         dateFormatter="string"
         request={async (params) => {
           const { current, pageSize, displayName } = params as any;

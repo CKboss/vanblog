@@ -40,6 +40,7 @@ export default function () {
                   content: (
                     <Table
                       pagination={{
+                        showQuickJumper: true,
                         hideOnSinglePage: true,
                       }}
                       rowKey={'link'}

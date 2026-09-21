@@ -194,6 +194,7 @@ export default () => {
             className: 'searchCard',
           }}
           pagination={{
+            showQuickJumper: true,
             pageSize: pageSize,
             simple: simplePage,
             onChange: (p, ps) => {

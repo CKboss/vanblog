@@ -158,6 +158,7 @@ export default () => {
             span: searchSpan,
           }}
           pagination={{
+            showQuickJumper: true,
             pageSize: pageSize,
             onChange: (p, ps) => {
               if (ps != pageSize) {

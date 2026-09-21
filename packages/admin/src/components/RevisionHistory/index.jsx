@@ -201,7 +201,7 @@ export default function RevisionHistory(props) {
           rowKey="key"
           columns={columns}
           dataSource={outcome?.revisions || []}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          pagination={{ pageSize: 20, hideOnSinglePage: true, showQuickJumper: true }}
         />
       )}
     </Spin>

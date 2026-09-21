@@ -448,7 +448,7 @@ export default function (props) {
             size="small"
             dataSource={list}
             columns={columns}
-            pagination={{ hideOnSinglePage: true, pageSize: 10 }}
+            pagination={{ hideOnSinglePage: true, pageSize: 10, showQuickJumper: true }}
             locale={{ emptyText: '还没有整站备份，点上面的「导出整站备份」生成一个' }}
           />
         </Spin>

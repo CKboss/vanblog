@@ -126,6 +126,7 @@ export default function () {
       <ProTable
         actionRef={actionRef}
         pagination={{
+          showQuickJumper: true,
           hideOnSinglePage: true,
         }}
         toolBarRender={(action) => {

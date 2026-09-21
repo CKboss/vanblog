@@ -68,6 +68,7 @@ export default function () {
         options={true}
         headerTitle="登录日志"
         pagination={{
+          showQuickJumper: true,
           pageSize: 10,
           simple: true,
           hideOnSinglePage: true,

@@ -323,6 +323,7 @@ export default function BuiltinComments() {
         }}
         scroll={{ x: 1080 }}
         pagination={{
+          showQuickJumper: true,
           current: page,
           pageSize,
           total,
