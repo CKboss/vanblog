@@ -52,13 +52,15 @@ export class TagProvider {
    *    而这里漂移的后果不是报错，是**隐藏文章（以及未到点的定时文章）的标签泄漏到公开标签列表**
    *    —— 静默的信息暴露。⇒ 宁可多传字段，也不复制过滤逻辑。
    *
-   * ⚠️ 正确的省法是**给 `ArticleView` 加一个只含 tags 的窄投影**（例如 `'tagsOnly'`），
-   *    让本方法走 `getAll('tagsOnly', includeHidden)`：过滤仍然由 `getAll` 独家负责，
-   *    只有投影变窄。⚠️ 那需要在 `provider/article/article.provider.ts` 里加约 8 行
-   *    （union 成员 + 投影常量 + `getView()` 的 case），并同步升级
-   *    `article.provider.slimListView.spec.ts:277` 那条**字面量全 union 正则**
-   *    与 `getView` 分派断言、以及 `getView()` 上方"四个 case 覆盖全部成员"的注释。
-   *    本轮未做（那个文件由另一路改动独占）。
+   * ✅ **上面那条"正确的省法"已于 2026-09-21 实现**：`ArticleView` 有了 `'tagsOnly'` 成员、
+   *    `ArticleProvider.tagsOnlyView = { tags: 1, _id: 0 }`，本方法现在走
+   *    `getAll('tagsOnly', includeHidden)` ⇒ **过滤仍然由 `getAll` 独家负责，只有投影变窄**。
+   *    🔴 **所以这段"为什么不自己注入 model"的推理仍然成立、不要删**：省的是投影，
+   *    **不是**把过滤逻辑搬过来。谁要是觉得"既然只要 tags，不如自己 find 一下"，
+   *    就等于重新引入上面那条静默信息暴露。
+   *    ⚠️ 注意 `/api/public/meta` 的**响应字节数不会变**（它本来就只用标签名），
+   *    所以这条优化的验收判据是"**响应逐字节不变 + 发给 model 的投影恰好是 `{tags:1,_id:0}`**"，
+   *    别拿响应字节当收益证据（守卫在 `tag.provider.tagsOnly.spec.ts`）。
    *
    * ⚠️ 调用方（5 处，全部只用返回的字符串数组）：`analysis.provider:90`、`sitemap.provider:103`、
    *    `public.controller:396`（`buildPublicMeta`，**全站最热的一次读**）、
@@ -68,9 +70,29 @@ export class TagProvider {
    *    （已由 `tag.provider.slimListView.spec.ts` 的行为级守卫钉住）。
    */
   //TODO tag 改为缓存模式
+  /**
+   * 🔴 **实现口径（改过，别再改回去）**：走 `getAll('tagsOnly', …)` 的窄投影，
+   * **不再**经 `getTagsWithArticle()`（那条会把全站文章 × 16 字段捞回来只为取键名）。
+   *
+   * ⚠️ 三件必须保持的事：
+   *  1. **排序口径是 `localeCompare`**：改前是 `Object.keys(d).sort((a,b)=>a.localeCompare(b))`。
+   *     换成默认 `sort()`（按 UTF-16 码元）会**改变前台标签列表的顺序** —— 用户可见的回归，
+   *     而且不会有任何测试以外的信号。有守卫钉住。
+   *  2. **`getTagsWithArticle()` 一个字都不能动**：它有 3 个消费者依赖**完整文章**
+   *     （`public.controller` 的 `/api/public/tag` 返回整个分组映射、`getColumnData()` 要
+   *     `data[t].length` 计数、`getArticlesByTag()` 要文章对象，且 `updateTagByName`/`deleteOne`
+   *     经它拿 `article.id`）。⇒ 只能改本方法，不能改共用 helper 的默认行为。
+   *  3. **`a.tags || []`**：窄投影下文档可能根本没有 `tags` 字段（Mongoose 读时不补默认值），
+   *     而 `getTagsWithArticle()` 里写的是裸 `a.tags.forEach(...)` —— 本方法**不要**照抄那个形状。
+   *
+   * ⚠️ 语义等价性：`Set` 与 `Object.keys()` 都天然去重，且两边最后都过同一个 `localeCompare`
+   * 排序 ⇒ **相同输入必然产出逐字相同的数组**（顺序与内容都不变）。守卫按"改前改后逐字相同"钉住。
+   */
   async getAllTags(includeHidden: boolean) {
-    const d = await this.getTagsWithArticle(includeHidden);
-    return Object.keys(d).sort((a, b) => a.localeCompare(b));
+    const arts = await this.articleProvider.getAll('tagsOnly', includeHidden);
+    const set = new Set<string>();
+    arts.forEach((a) => (a.tags || []).forEach((t) => set.add(t)));
+    return [...set].sort((a, b) => a.localeCompare(b));
   }
 
   async getColumnData(topNum: number, includeHidden: boolean) {

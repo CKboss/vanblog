@@ -355,6 +355,41 @@ function makeArticleProviderWithFakeModel(articles: any[] = []) {
   return { provider, seen };
 }
 
+/**
+ * ⚠️ 与 `tag.provider.tagsOnly.spec.ts` 里同名 helper 是同一件事（两个文件各自本地定义，
+ * 因为测试文件之间不互相 import）：`visiblePublishFilter()` 带墙上时钟，
+ * 裸 `toEqual` 两个 filter 会**偶发红**（跨毫秒），必须先归一化 `publishAt.$lte`。
+ */
+function normalizePublishAtForFilter(input: any): any {
+  if (Array.isArray(input)) return input.map(normalizePublishAtForFilter);
+  if (input instanceof Date) return 'DATE';
+  if (input && typeof input === 'object') {
+    const out: Record<string, any> = {};
+    for (const k of Object.keys(input)) {
+      out[k] =
+        k === '$lte' && input[k] instanceof Date ? 'NOW' : normalizePublishAtForFilter(input[k]);
+    }
+    return out;
+  }
+  return input;
+}
+
+function extractPublishAtLteFrom(filter: any): any {
+  // ⚠️ 真实形状（实测 dump 出来的，别按猜的写）：
+  //   $and: [ {$or:[deleted…]}, {$or:[hidden…]},
+  //           {$or:[{publishAt:null},{publishAt:{$exists:false}},{publishAt:{$lte:<Date>}}]} ]
+  // ⇒ `$lte` 在**第三支 $or 的第三个元素**里，不是 `$and` 元素的直接键，所以必须递归找。
+  const stack: any[] = [filter];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+    const pa = (cur as any).publishAt;
+    if (pa && typeof pa === 'object' && pa.$lte instanceof Date) return pa.$lte;
+    for (const k of Object.keys(cur)) stack.push((cur as any)[k]);
+  }
+  return undefined;
+}
+
 /** 从 $and 里找出"排除隐藏文章"那一支（形状核实自 getAll 的实现） */
 function findHiddenClause(filter: any): any {
   const and = filter?.$and;
@@ -375,8 +410,19 @@ describe('🔴 安全：slim 投影**绝不改变过滤语义**（真实 getAll 
     // 替身自检：两边都真的发了一次查询
     expect(wide.seen).toHaveLength(1);
     expect(slim.seen).toHaveLength(1);
-    // 🔴 核心：过滤条件完全一致 ⇒ 精简不可能让隐藏文章漏进公开响应
-    expect(slim.seen[0].filter).toEqual(wide.seen[0].filter);
+    // 🔴 核心：过滤条件完全一致 ⇒ 精简不可能让隐藏文章漏进公开响应。
+    // ⚠️ 2026-09-21 修：原来这里是裸 `toEqual`，而 `visiblePublishFilter()` 带的是**墙上时钟**
+    // （`publishAt: {$lte: new Date()}`）⇒ 两次 getAll 跨过一个毫秒就会**偶发红**，
+    // 差异只有 `$lte` 那一行。这不是负载假红，是断言本身写错了。
+    // 现在先归一化 `$lte` 再比，并单独断言两边的 `$lte` 都真的存在（防止归一化把"子句缺失"藏掉）。
+    expect(normalizePublishAtForFilter(slim.seen[0].filter)).toEqual(
+      normalizePublishAtForFilter(wide.seen[0].filter),
+    );
+    const slimLte = extractPublishAtLteFrom(slim.seen[0].filter);
+    const wideLte = extractPublishAtLteFrom(wide.seen[0].filter);
+    expect(slimLte).toBeInstanceOf(Date);
+    expect(wideLte).toBeInstanceOf(Date);
+    expect(Math.abs(slimLte.getTime() - wideLte.getTime())).toBeLessThan(60_000);
     // 且这一致的过滤里**确实**有隐藏排除子句（否则上面那条 toEqual 可能在比两个都没有过滤的东西）
     const hidden = findHiddenClause(slim.seen[0].filter);
     expect(hidden).toBeDefined();

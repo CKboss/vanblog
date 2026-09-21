@@ -65,7 +65,7 @@ import { envPositiveInt } from 'src/utils/envNumber';
  * `wordCount` 三个"公开响应里零消费者"的字段，见 `slimListView` 的注释），
  * **只能**由公开接口在调用方显式要求时使用；管理端一律用 `'admin'`/`'list'`。
  */
-export type ArticleView = 'admin' | 'public' | 'list' | 'listSlim';
+export type ArticleView = 'admin' | 'public' | 'list' | 'listSlim' | 'tagsOnly';
 
 /**
  * 「扫描文章图片」的**分批**参数。
@@ -333,6 +333,33 @@ export class ArticleProvider {
     copyright: 1,
     pathname: 1,
     cover: 1,
+  };
+
+  /**
+   * 🔴 **只含 `tags` 的最窄投影**，专给 `TagProvider.getAllTags()` 用。
+   *
+   * 为什么需要它：`getAllTags()` 只要**标签名**，但它以前经 `getTagsWithArticle()` →
+   * `getAll('list', …)` 把**全站文章 × 16 个字段**捞回来，再 `Object.keys()` 丢掉其余。
+   * 而它的调用方之一是 `buildPublicMeta()`（`controller/public/public.controller.ts`，
+   * **全站最热的一次读**：每个页面渲染都调，5 秒 single-flight 缓存）⇒ 按 5s TTL 上限估，
+   * 每天最多 17,280 次重建 × 约 20 KB ≈ **350 MB/天**的无谓 Mongo→Node 传输。
+   * 换成这个投影后只传 `tags` 一个字段（`tags` 约占公开响应 3.6% ⇒ 约 −96%）。
+   *
+   * 🔴 **过滤逻辑一行都没有复制**：隐藏文章过滤与定时发布过滤（`visiblePublishFilter()`）
+   * 仍然**独家**由 `getAll()` 负责 —— 这正是"不让 TagProvider 自己注入 Article model"的理由，
+   * 完整推理写在 `provider/tag/tag.provider.ts` 的 `getAllTags()` 上方（`utils/publishAt.ts`
+   * 的头注释明写"所有公开读路径共用同一段过滤，**漏一条就是泄露**"）。这里**只**换投影，
+   * 发出的 `filter` 与宽投影逐字相同 ⇒ 行为级守卫钉住了这一点
+   * （`provider/tag/tag.provider.tagsOnly.spec.ts`）。
+   *
+   * ⚠️ 与 `slimListView` 同一条原则：**显式字段清单**，不用 spread 再删键 ⇒
+   * 将来给别的投影加字段不会自动漏进这里。
+   * ⚠️ **不要把它用在任何需要文章内容的路径上**：它只有 `tags`（且 `_id: 0`，连 `id` 都没有），
+   * 拿它渲染列表会得到一堆空对象。它唯一的合法消费者是"只要标签名"。
+   */
+  tagsOnlyView = {
+    tags: 1,
+    _id: 0,
   };
 
   toPublic(oldArticles: Article[]) {
@@ -964,8 +991,9 @@ export class ArticleProvider {
     // ⚠️ 兜底值从 `adminView` 改成最窄的 `slimListView`（**fail-closed**）。
     // 原来这里默认 `adminView`，而 `adminView` 是**唯一 select 了 `password`** 的投影 ⇒
     // 任何没匹配上的 view 都会拿到最宽的那份（含存储态密码，靠 schema 的 toJSON transform
-    // 才没出网）。今天四个 case 覆盖了 `ArticleView` 的全部成员、且所有调用方传的都是
-    // 类型内的字面量，所以这条分支**不可达**；但"投影选择器的兜底是最宽投影"是个
+    // 才没出网）。今天五个 case 覆盖了 `ArticleView` 的全部成员（`admin`/`list`/`listSlim`/
+    // `public`/`tagsOnly`，最后一个是 2026-09-21 为 `TagProvider.getAllTags()` 加的窄投影）、
+    // 且所有调用方传的都是类型内的字面量，所以这条分支**不可达**；但"投影选择器的兜底是最宽投影"是个
     // 只要有人加一个 view 忘了加 case 就会静默成立的形状，而失败方向是**多下发字段**。
     // 改成最窄的公开投影后，漏 case 的失败方向变成"少下发字段"（会被调用方的测试抓到）。
     let thisView: any = this.slimListView;
@@ -978,6 +1006,12 @@ export class ArticleProvider {
         break;
       case 'listSlim':
         thisView = this.slimListView;
+        break;
+      case 'tagsOnly':
+        // 🔴 只给 `TagProvider.getAllTags()`（只要标签名）。⚠️ 上面的兜底**不要**改成它：
+        // 漏 case 的失败方向应当是"少发几个字段"（`slimListView`，调用方测试能抓到），
+        // 而不是"只发 tags"（列表页会渲染出一堆空对象，症状离根因很远、更难诊断）。
+        thisView = this.tagsOnlyView;
         break;
       case 'public':
         thisView = this.publicView;

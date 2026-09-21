@@ -18,7 +18,8 @@
  *     "这篇是隐藏的"。两者同时生效会让后台拿到一批**无法区分可见性**的文章 —— 静默的错答案，
  *     比多传几个字段糟得多。
  *  3. 🔴 **`getView` 的兜底必须 fail-closed**：它以前默认返回 `adminView`（唯一 select 了
- *     `password` 的投影）。今天不可达（四个 case 覆盖全部 union 成员、调用方都传字面量），
+ *     `password` 的投影）。今天不可达（五个 case 覆盖全部 union 成员、调用方都传字面量；
+ *     第五个 `'tagsOnly'` 是 2026-09-21 为 `TagProvider.getAllTags()` 加的窄投影），
  *     但"投影选择器的兜底是最宽投影"是只要有人加一个 view 忘了加 case 就静默成立的形状，
  *     而失败方向是**多下发字段**。
  *
@@ -148,12 +149,17 @@ describe('slimListView：投影形状（相对 listView 恰好少三个字段）
 });
 
 describe('getView：分派正确，且兜底 fail-closed', () => {
-  it('四个 view 各归各的投影（同一对象引用，不是"形状像"）', () => {
+  it('五个 view 各归各的投影（同一对象引用，不是"形状像"）', () => {
     const p = makeProvider();
     expect(p.getView('listSlim')).toBe(p.slimListView as any);
     expect(p.getView('list')).toBe(p.listView as any);
     expect(p.getView('admin')).toBe(p.adminView as any);
     expect(p.getView('public')).toBe(p.publicView as any);
+    // 🔴 2026-09-21 新增：`tagsOnly` 必须分派到它自己的窄投影，
+    //    而且**不能**与别的投影是同一个对象（否则"窄"就是假的）。
+    expect(p.getView('tagsOnly')).toBe(p.tagsOnlyView as any);
+    expect(p.getView('tagsOnly')).not.toBe(p.listView as any);
+    expect(p.getView('tagsOnly')).not.toBe(p.slimListView as any);
   });
 
   it('🔴 未知 view 兜底到**最窄**的公开投影：不含 password、不含 content', () => {
@@ -269,12 +275,20 @@ describe('源码接线（剥注释后断言，防"只改了注释"）', () => {
     expect(getViewBlock.length).toBeGreaterThan(40);
     expect(getViewBlock).toMatch(/let thisView: any = this\.slimListView;/);
     expect(getViewBlock).not.toMatch(/let thisView: any = this\.adminView;/);
+    // 🔴 2026-09-21 新增两条：
+    //  ① `tagsOnly` 必须真的有 case（否则它落到兜底，窄投影就成了死代码，
+    //     `getAllTags()` 会静默退回"传 22 个字段"—— 正是这次要消除的白传）；
+    //  ② 兜底**不许**被改成 `tagsOnlyView`。漏 case 的失败方向应当是"少发几个字段"
+    //     （slimListView，调用方测试抓得到），而不是"只发 tags"（列表页渲染出一堆空对象，
+    //     症状离根因很远、更难诊断）。
+    expect(getViewBlock).toMatch(/case 'tagsOnly':/);
+    expect(getViewBlock).not.toMatch(/let thisView: any = this\.tagsOnlyView;/);
   });
 
   it("ArticleView 联合类型含 'listSlim'", () => {
     const src = stripCommentsForAnchor(read('provider/article/article.provider.ts'));
     expect(src).toMatch(
-      /export type ArticleView = 'admin' \| 'public' \| 'list' \| 'listSlim';/,
+      /export type ArticleView = 'admin' \| 'public' \| 'list' \| 'listSlim' \| 'tagsOnly';/,
     );
   });
 
