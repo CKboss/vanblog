@@ -9191,8 +9191,47 @@ dev 日志结尾是 `Command failed with signal "SIGTERM"` ⇒ **整个 dev 栈�
    这样 `timeout` 的 SIGTERM 不会沿进程组传播。
 2. ⚠️ **任何长循环跑守卫时，中途要顺手核一次 dev 三端口的状态**（本轮是代理**开工时**才发现，
    意味着 dev 可能已经挂了十几分钟而没人知道）。
-3. 📌 **结案需要**：复现（在受控条件下重跑那个组合并盯着 dev 日志），或读 `dev-env.sh` 的 trap 逻辑确认③。
+3. 📌 **结案需要**：复现（在受控条件下重跑那个组合并盯着 dev 日志）。
    ⚠️ 在此之前**不要断言成因**，也不要把它记成"偶发"就翻篇 —— "跑测试会把站长的环境搞挂"是真隐患。
+
+**⚠️ 追加排查（2026-09-21 17:48）：候选③（`dev-env.sh` 自己的 trap/监督）与"守卫经由 ops 脚本杀进程"都已被排除，
+但排查过程挖出了一件比本次事件更值得记的事。**
+
+**排除依据（逐条实测）**：
+- `dev-env.sh` 里**没有任何 `trap`**，也没有 watchdog/`while true` 监督循环（`grep -nE "^\s*trap|while true|monitor|supervis"` 命中 0）
+  ⇒ **候选③不成立**：它不会在子进程异常退出时自己把整栈停掉。
+- 🔴 `grep -rnE "dev-env\.sh (stop|restart)" scripts/ .github/` **命中 0** ⇒ **没有任何守卫或 CI 步骤会调用 `dev-env.sh stop`**。
+- `scripts/vanblog.sh` 里 `pgrep|pkill|kill |kill --|fuser` **命中 0** ⇒ **ops 脚本根本不杀进程**。
+- 唯一 `source vanblog.sh` 的守卫是 `vanblog-drill.test.sh:2558`，而那句是**写进临时夹具的文本**；
+  并且 `:2541` 的注释明写"兜底只在 source 不到 vanblog.sh 时生效，所以这里把 `VANBLOG_MAIN_SCRIPT` 指向不存在的路径"
+  ⇒ **它刻意不 source 真的 `vanblog.sh`**。
+
+**剩下的候选**：①资源压力/OOM（⚠️ 但 OOM killer 发 SIGKILL，与日志里的 SIGTERM 不符）；
+②🔴 **我那次 `for t in scripts/tests/*.test.sh; do timeout 400 bash "$t"; done` 没有用 `setsid` 隔离** ⇒
+`timeout` 的 SIGTERM 有可能沿进程组传播（⚠️ 未证实，但这是唯一与"SIGTERM"这个信号吻合的候选）。
+
+🔴 **排查过程中挖出的一件更值得记的事：`dev-env.sh stop` 的兜底清理是一段"按路径模式杀进程"的代码**（约 `:187-192`）：
+```
+for p in $(pgrep -f "$ROOT/packages" 2>/dev/null; pgrep -f '@waline/vercel/vanilla\.js' 2>/dev/null); do
+  case "$p" in "$self"|"$parent") continue ;; esac
+  kill "$p" 2>/dev/null          # ← 默认信号就是 SIGTERM
+done
+```
+⚠️ **`pgrep -f "$ROOT/packages"` 会匹配任何命令行里含"工作区路径 + /packages"的进程** ——
+那正好包括 **jest worker、vitest、tsc、ts-node**，以及**任何在工作区里跑的代理/工具进程**。
+它排除了 `$$` 与 `$PPID`，但**排除不了别的 shell 里的进程**。
+👉 **两条规矩**：
+1. 🔴 **在跑测试/代理期间绝不执行 `./dev-env.sh stop`** —— 它会把 jest worker、vitest、tsc 以及正在工作的代理进程
+   一起 SIGTERM 掉（这**正是**本仓库反复警告的 `pkill -f` 那一族，只是写在了自己的脚本里；
+   而它的注释还写着"注意排除脚本自身与父进程，避免 `pkill -f` 把自己的 shell 一起杀掉"⇒ **作者当时只考虑了自己，没考虑并发进程**）。
+   ⚠️ 要停 dev，应当**先确认没有测试/代理在跑**。
+2. ⚠️ **`dev-env.sh:168` 是 `kill -- -"$pid"`（杀整个进程组）** ⇒ 如果那个 pid 是某个共享进程组的组长，
+   波及面会更大。⚠️ 这条本身没被证实与本次事件有关，但它是同一族风险，改 `dev-env.sh` 时要一并考虑
+   （例如把兜底清理的模式收窄到 `$ROOT/packages/(server|website|admin)/(dist|\.next|node_modules/\.bin)`，
+   或者只杀记录在 pid 文件里的那些 + 它们的子进程）。
+3. 📌 **本次事件仍记为未结案**：已排除"守卫杀进程""守卫调用 dev-env.sh stop""ops 脚本杀进程""dev-env.sh 自身 trap"四条，
+   剩下 OOM（信号不符）与"我的循环没用 setsid 隔离"（信号吻合、未证实）。
+   ⚠️ **在结案前，§7.96 那三条规矩继续有效**（不跑全量组合 / 用 setsid 隔离 / 长循环中途核 dev 端口）。
 
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
