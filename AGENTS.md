@@ -9372,6 +9372,54 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 - 🔴 **`r29-mainline` 镜像保留着**（等裁定留不留作回滚/对比）；**悬空镜像 84 → 89（+5）、总数 100 → 106（+6）**，
   ⚠️ **没有 prune**（等裁定）。
 
+### 7.98 ✅ v2026.9.3 已发版（2026-09-21），以及本轮学到的四条 CI 相关规矩
+
+**发版事实**（都实测核实过）：
+- tag **`v2026.9.3`** → 提交 **`2ec18e5f`**（tag 对象 `012e7d15`）；**远端与本地指向同一个 commit**；
+  🔴 **只推了 `ckboss`，`origin`（上游）上 `v2026.9.3` 命中 0**（已核实，没有误推）。
+- 🔴 **`publish-ghcr` success** ⇒ 这是 **09-17（`v2026.9.2`）之后第一次经过 CI 的镜像构建验证**，"盲构建"风险解除。
+- **`release` success**（GitHub Release 由 bot 发布，非草稿非预发布，2 个附件：`docker-compose-template.yml` 27,056 B、
+  `vanblog.sh` **331,150 B**）；**`docs-test` success**；`a22d5e64` 上 **`server-test` 与 `admin-e2e` 双双 success**
+  （含 `server-test`/`guards-slow`/`guards-core` 三个 job ⇒ **演练守卫也绿了**）。
+- ⚠️ **版本号口径**：`package.json` 的 `version` 仍是 **`0.54.0`**（`v2026.9.2` 时也是 0.54.0）⇒
+  **本项目用日期式 tag，与 `package.json` 的 version 不对应**；镜像里 `/api/public/meta` 返回的 `version` 取的是
+  git 信息（形如 `local@<sha>`），不是 `package.json`。⚠️ 发版时**只需要打 tag，不需要 bump `package.json`**（沿用既有惯例）。
+- 🔴 **`publish-ghcr` 的触发条件是 `v*` 标签 push 或 `workflow_dispatch`**（分支 push 那段被注释掉了）⇒
+  **日常 push 永不触发它**。⚠️ 所以"最近 N 次运行里没看到它"是**采样窗口错觉**（那 N 次全是测试 workflow），
+  不要据此推断它坏了 —— 本轮我就犯过这个错，还据此报了"发版从未经过 CI 构建验证"。
+
+🔴 **CI 从长期红到全绿：三个根因**（都已修，见 `d06a4981`、`a22d5e64`）：
+1. **20 个 e2e jest 配置漏了 ESM transform 白名单** —— `5d2d823b`（W1：katex → `@mdit/plugin-katex`）**只改了主 jest 配置**。
+2. **admin 的 `postinstall: umi g tmp` 会在 CI 上生成 `src/.umi`，但不生成其中的 `.cache`** ——
+   而一条守卫假设"`.umi` 存在 ⇒ 里面必有 antd 分页源码"（那个词**只存在于 `.cache` 里**）。
+3. 🔴 **演练守卫的篡改夹具曾是静默空操作**：`sed` 把第一个十六进制位替换成 `f`，而**那一位本来就是 `f` 时等于没改** ⇒
+   manifest 逐字节不变、校验**合法地**通过、下游断言必然红，**看起来像"产品的篡改检测失效"**。
+
+👉 **四条手册级规矩（都是本轮实测出来的新形状）**：
+1. 🔴 **「干净 checkout」不等于「CI 的状态」**：CI 会跑 `postinstall`，而 postinstall 可能**生成**被 git-ignore 的目录。
+   ⇒ **复现 CI 必须在干净树里跑一次真实的 install/postinstall 链**，不是 `git worktree add` 就开测。
+   ⚠️ 本轮那条 admin 守卫有**三个状态**（干净未 install / 本机开发机 / CI 只有 postinstall），
+   而上一版修复**只验了前两个** ⇒ 把"必崩"变成了"只在 CI 那一态崩"。
+   ⚠️ 配套：测试**可以**依赖 `node_modules`（CI 会 install），但**绝不能依赖构建缓存**（`.umi`/`.cache`/`dist`/`.next`）；
+   🔴 而且判据要精确到**哪一层** —— `.umi` 本身在 CI 上**会**存在，缺的是它里面的 `.cache`。
+2. 🔴 **夹具/变异"打上了没有"必须自证**：任何"故意弄坏一个东西再看守卫是否报警"的夹具，
+   都要在弄坏之后**断言它真的变了**（比对 sha）。否则"守卫没报警"会被误读成"产品漏检"，而真因是夹具空操作。
+   🔴 **本轮两条 CI 红都是这个形状**（一条前提错、一条夹具空操作）；此前也有变异驱动因"没 assert 锚点命中数"而把
+   NOT_RED 误判成"守卫没拦住"。
+3. 📌 **`::error` annotations 是绕开日志 403 的正解**：`/actions/jobs/<id>/logs` 用 deploy key 永远返回
+   **403 "Must have admin rights to Repository"**，但 `/check-runs/<job-id>/annotations` 是**公开可读**的。
+   ⇒ 给所有可能红的步骤都加上失败注解（目前已覆盖：全量 jest、演练守卫、nightly 镜像构建、两个 admin 单测步骤）。
+   ⚠️ 注解内容要有节制（取前 N 条 + `sort -u`，尾部若干行进普通日志），否则会淹没有用信息；
+   🔴 且 wrapper **必须保持退出码透传**（按 runner 默认的 `bash -e` 用桩验证过：失败桩 rc=1 且有注解、成功桩 rc=0 且无注解）。
+4. 🔴 **改 jest 的 transform / 模块解析口径时，必须 `grep -rl` 找出所有 jest 配置文件，不只是主配置** ——
+   本仓库在 `packages/server/test/` 下有 **20 个**独立的 e2e jest 配置。
+   ⚠️ 本轮的教训是"跑了主配置的全量 jest 全绿"完全掩盖了这 20 个的破坏。
+
+⚠️ **仍未定位的一条**：`nightly` 的 image-build（09-20 那次 2.5 分钟即败）。那一步现在已有 annotations ⇒
+**下次 nightly 跑完查 `/check-runs/{id}/annotations` 应当能直接点名**。
+⚠️ **另外要预期**：`admin-e2e` 的 Playwright 步骤**此前从未在 CI 跑过**（单测那步 3 秒就崩），本轮才第一次跑通 ⇒
+将来那一段若暴露新的红，**不要误读成"本轮修复无效"**。
+
 ### 7.39 测试基线（本分支最后一次全量运行的结果；2026-09-21 **第 15–22 轮之后**复跑，本机实测、**串行**）
 
 | 套件 | 结果 |
