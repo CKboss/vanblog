@@ -87,6 +87,32 @@ export const getArticlesByCategory = async () => {
     }
   }
 };
+/**
+ * 🔴 **死代码，而且是「看起来该修、其实是陷阱」的那一类 —— 动它之前先读完这段。**（2026-09-21 核实）
+ *
+ * 1. **它没有任何调用方**：全仓（排除 `.next`、`.umi`、`dist`）只有这一处定义；
+ *    `utils/getPageProps.ts` 从本文件导入的是 `getArticleByIdOrPathname`、`getArticlesByCategory`、
+ *    `getArticlesByOption`、`getArticlesByTimeLine` 四个名字，**不含它**；也没有命名空间导入或动态引用。
+ *    标签页 `pages/tag/[tag].tsx` → `getTagPagesProps(currTag)` 走的是
+ *    `getArticlesByOption({ page: 1, pageSize: -1, tags: currTag, toListView: true })`
+ *    ⇒ **服务端按标签过滤**。所以「渲染一个标签页却下载全部标签的文章」这条白传
+ *    **实际并不存在**（`__tests__/tagPageFetchShape.spec.ts` 钉住了这一点）。
+ * 2. **它忽略自己的 `tagName` 参数**（拉的是整个标签映射）⇒ 谁把它接上去，谁就**真的**引入那条白传。
+ *    所以那条「零调用方」守卫是有意的：接线就会红，逼改的人先读这段。
+ * 3. 🔴 **不要把它「修好」成调 `/api/public/tag/:name`** —— 那是更隐蔽的坑。实测该端点每篇只返回
+ *    **7 个字段：category、createdAt、id、tags、title、top、updatedAt，没有 `pathname`**
+ *    （服务端 `toPublic()` 的显式映射就是这样）。而 `utils/getArticlePath.ts` 是
+ *    `pathname ? pathname : id` ⇒ 换过去之后每个链接会**静默**从 `/post/<拼音别名>` 变成
+ *    `/post/<数字 id>`（多一跳 301、渲染出的 HTML 也变了），而 `pathname` 是窄类型
+ *    `TimelineArticleRef` 的**必需**字段之一。⚠️ 真要做这个改造，得先让服务端那个端点补上
+ *    `pathname`，而不是在前台换个 URL。
+ * 4. ⚠️ **为什么还留着它**：`packages/server/src/provider/tag/tag.provider.slimListView.spec.ts`
+ *    **跨包**读取本文件源码，断言里面出现带 `toListView=true` 的那个 URL 字面量（它的本意是钉住
+ *    「两个 SSR 取数点都带 slim 参数」）⇒ 删掉这个函数会让**另一个包的守卫**变红。
+ *    正确的清理顺序是：先把那条服务端守卫改成钉 `getArticlesByCategory`（真正被调用的那个），
+ *    再删本函数。⚠️ 这也是一条守卫设计教训：**跨包的源码文本守卫会把死代码冻在原地**，
+ *    让「删掉没人用的东西」看起来像回归。
+ */
 export const getArticlesByTag = async (tagName: string) => {
   try {
     // 🔴 同上：`?toListView=true` 让服务端少下发三个零读者字段（实测该响应 −19.0%）。
