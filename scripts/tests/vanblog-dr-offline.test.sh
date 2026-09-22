@@ -609,15 +609,36 @@ OUT="$(doctor 2>&1)"; rc=$?
 assert_contains "${OUT}" "响应体没读到" "读不到响应体时如实说清"
 assert_contains "${OUT}" "无法按 mongo/website 字段诊断" "并说清因此诊断不了（而不是猜一个结论）"
 assert_not_contains "${OUT}" "健康接口：" "🔴 绝不报成 ✓（"没有数据"不等于"数据说没事"）"
-# 🔴 **已登记、待修的产品缺陷（本守卫现在覆盖不到它，因为上面刻意做了隔离）**：
-#    `doctor()` 的 body 临时文件是固定名 + `$$`，且**用前不清空、用后不删除**。
-#    生产里一次 doctor 是一个进程、只调一次 curl，所以正常路径没问题；但那个文件**永不清理**，
-#    而 🔴 **PID 会被复用** ⇒ 某次运行若恰好拿到与旧文件相同的 `$$`、并且这一次 curl **写不出**响应体
-#    （只读文件系统、TMPDIR 不可写 —— 正是 `body_ok` 那一支存在的理由），
-#    `[[ -s "${body}" ]]` 会因**旧文件**为真 ⇒ doctor 把**上一次的陈旧健康状态当成当前结论**报出来。
-#    👉 建议的一行修法：在 curl 之前把那个文件截断（`: >"${body}" 2>/dev/null || true`），
-#       这样"写不出来"就一定被 `body_ok=0` 抓到；修好之后应当补一条断言钉住
-#       "存在陈旧 body 文件时，读不到新响应体必须走'诊断不了'那一支、绝不报陈旧结论"。
+# ✅ **上面那条产品缺陷已于 2026-09-22 修好**（`doctor()` 在 curl 之前先 `: >"${body}"` 截断），
+#    并由下面这一格钉住。⚠️ **注意它与象限③的分工**：象限③用**全新的** `VB_DOCTOR_TMP` 隔离，
+#    测的是"读不到响应体 ⇒ 如实说诊断不了"；而下面这一格**刻意制造陈旧文件**，
+#    测的是"隔离被去掉时（= 生产里 PID 复用的真实形状）也不会报陈旧结论"。
+#    🔴 **两格都必须保留**：只有隔离那一格的话，截断这行被删掉也不会红（隔离本身就够了）；
+#    只有这一格的话，就丢掉了"正常路径下如实说诊断不了"的契约。
+
+# 象限③b：**存在陈旧 body 文件**（模拟 PID 复用撞上上一次留下的同名文件）
+#          + 本次 curl 写不出响应体 ⇒ 🔴 必须走"诊断不了"那一支，**绝不报陈旧结论**
+setup_case
+vb_dr_compose
+export CURL_HEALTH_CODE=200
+export CURL_HEALTH_NOBODY=1
+export VB_DOCTOR_TMP="${TEST_DIR}/stale-body-dir"
+mkdir -p "${VB_DOCTOR_TMP}"
+# 🔴 **手动造出 doctor 将会读的那个确切路径**：文件名是固定的 `vanblog-doctor-health-$$.json`，
+#    而 `$$` 在命令替换的子 shell 里**仍然是本测试脚本的 PID**（bash 的 `$$` 不随子 shell 变，
+#    变的是 `$BASHPID`）⇒ 这里算出来的路径与 doctor 内部算出来的是同一个。
+stale_body="${VB_DOCTOR_TMP}/vanblog-doctor-health-$$.json"
+# 陈旧内容刻意选一个**会被判成故障**的结论：如果截断那行被删掉，doctor 就会读到它、
+# 把 "mongo":"down" 当成当前状态 ⇒ 打印「mongo 连不上」并指路 --offline-full。
+printf '%s' '{"status":"degraded","mongo":"down","website":"up"}' >"${stale_body}"
+# 🔴 **替身自检的前置**：确认陈旧文件真的存在且非空（否则本格的断言会因为"没有陈旧文件"而恒真）
+[[ -s "${stale_body}" ]] || { echo "FATAL: 陈旧 body 文件没造出来，本格无效"; exit 9; }
+OUT="$(doctor 2>&1)"; rc=$?
+assert_contains "${OUT}" "响应体没读到" "🔴 有陈旧文件时仍然如实说"读不到本次响应体""
+assert_contains "${OUT}" "无法按 mongo/website 字段诊断" "并说清因此诊断不了"
+assert_not_contains "${OUT}" "mongo 连不上" "🔴 绝不把上一次的陈旧结论当成当前诊断"
+assert_not_contains "${OUT}" "--offline-full" "🔴 也就绝不会据陈旧结论指路破坏性恢复"
+assert_not_contains "${OUT}" "健康接口：" "🔴 更不许报成 ✓"
 
 # 象限④：响应体里**没有** website 字段（服务端版本较旧）⇒ 说明清楚，且不算故障
 setup_case
