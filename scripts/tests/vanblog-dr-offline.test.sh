@@ -74,14 +74,37 @@ EOS
 chmod +x "${BIN}/docker"
 export DOCKER_CALLS="${TEST_DIR}/docker-calls.log"
 
-# 假 curl：默认健康接口 200；CURL_HEALTH_CODE 可以改成 503/000
+# 假 curl：默认健康接口 200；CURL_HEALTH_CODE 改状态码、CURL_HEALTH_BODY 改响应体、
+# CURL_HEALTH_NOBODY=1 模拟"响应体读不到"。
+# 🔴 **这个桩必须实现外部命令的真实语义（含把响应体写进 -o 的目标文件），不能只实现
+#    "产品当前恰好怎么调用它"**。早先它只认 -o /dev/null 与 -w（打印状态码就退出），
+#    因为当时的 doctor 就是那么调的；2026-09-22 doctor 改成把响应体写进一个临时文件之后，
+#    这个桩就**不再提供响应体** ⇒ doctor 读不到 mongo/website 字段 ⇒ 走"响应体没读到 ⇒
+#    无法按字段诊断"那一支（warn、不计 problem）⇒ 503 那条用例的三条断言全红
+#    （rc 从 1 变 0、输出里既没有"mongo 连不上"也没有"--offline-full"）。
+#    👉 教训：**替身钉住的是作者当年对"产品怎么调用外部命令"的假设**；产品的调用形状一变，
+#       替身就静默停止供数据，而红看起来像"产品坏了"。所以下面配了一条**替身自检**。
 cat >"${BIN}/curl" <<'EOS'
 #!/usr/bin/env bash
 echo "curl $*" >>"${CURL_CALLS:-/dev/null}"
 if [[ "$*" == *"/api/public/health"* ]]; then
   code="${CURL_HEALTH_CODE:-200}"
-  if [[ "$*" == *"-o /dev/null"* || "$*" == *"-w"* ]]; then printf '%s' "${code}"; exit 0; fi
-  printf '{"status":"ok"}'; exit 0
+  out=""; prev=""
+  for a in "$@"; do
+    if [[ "${prev}" == "-o" ]]; then out="${a}"; fi
+    prev="${a}"
+  done
+  body="${CURL_HEALTH_BODY}"
+  if [[ -z "${body}" ]]; then body='{"status":"ok","mongo":"up","website":"up"}'; fi
+  if [[ "${CURL_HEALTH_NOBODY:-0}" != "1" ]]; then
+    if [[ -n "${out}" && "${out}" != "/dev/null" ]]; then
+      printf '%s' "${body}" >"${out}" 2>/dev/null || true
+    elif [[ -z "${out}" ]]; then
+      printf '%s' "${body}"
+    fi
+  fi
+  if [[ "$*" == *"-o /dev/null"* || "$*" == *"-w"* ]]; then printf '%s' "${code}"; fi
+  exit 0
 fi
 # webhook / 其它：按 CURL_OTHER_RC 决定
 exit "${CURL_OTHER_RC:-0}"
@@ -96,6 +119,7 @@ setup_case() {
   export VANBLOG_SKIP_MAIN=1
   export VANBLOG_ASSUME_YES=1
   unset VANBLOG_BACKUP_MIRROR_DIR VANBLOG_BACKUP_ALERT_WEBHOOK DOCKER_MODE CURL_HEALTH_CODE CURL_OTHER_RC
+  unset CURL_HEALTH_BODY CURL_HEALTH_NOBODY VB_DOCTOR_TMP
   export DOCKER_MODE=ok
   rm -rf "${DATA}/data/mongo" "${DATA}/data"/mongo.broken-* "${DATA}/log/vanblog-backups/cron-status.json"
   # ⚠️ 调用日志必须每个用例清空：它跨用例累积，会让"这次不该调用 X"这类断言读到上一个用例的记录
@@ -513,20 +537,96 @@ assert_rc "${rc}" "0" "一切正常时 doctor 返回 0（可以直接挂 cron/�
 assert_contains "${OUT}" "体检结果" "并给出一句总结"
 assert_contains "${OUT}" "caddy 证书目录已持久化" "检查了证书目录有没有真的挂出来"
 assert_contains "${OUT}" "cron 备份成功" "读到了 cron 的旁路状态"
+# 🔴 反空转：这条用例必须真的走"健康接口 ✓"那一支。桩修好之前它其实走的是
+#    "响应体没读到 ⇒ 无法按字段诊断"那一支（warn、不计 problem）⇒ rc 同样是 0、
+#    于是这条用例**在测错的东西却还是绿的**。两条断言把分支钉死。
+assert_contains "${OUT}" "健康接口：" "一切正常时走的是 ✓ 那一支（打印了端点 URL）"
+assert_not_contains "${OUT}" "响应体没读到" "🔴 而不是靠"响应体没读到"那一支混成 rc=0"
 
-# 7b) 健康接口 503 = server 活着但 mongo 连不上 ⇒ 必须报红并指路 --offline-full
-setup_case
-cat >"${BASE}/docker-compose.yaml" <<'YML'
+# 🔴 替身自检：假 curl 必须真的把响应体写进 -o 的目标文件。
+#    没有这一条，下面所有"按字段诊断"的断言都可能其实在测"读不到字段"那一支而看不出来 ——
+#    本节此前就是这样静默失效的（桩只打印状态码、从不写 body 文件）。
+PROBE_BODY="${TEST_DIR}/curl-selfcheck.json"; rm -f "${PROBE_BODY}"
+PROBE_CODE="$(curl -sS -m 8 -o "${PROBE_BODY}" -w '%{http_code}' http://127.0.0.1:1/api/public/health 2>/dev/null)"
+assert_eq "${PROBE_CODE}" "200" "替身自检：-w 的状态码打到 stdout"
+assert_file_contains "${PROBE_BODY}" '"mongo"' "替身自检：-o 的目标文件里真的有响应体（doctor 才读得到字段）"
+
+# 7b) 🔴 健康接口的**四象限契约**：doctor 按 body 的 mongo/website 两个字段诊断，不按状态码猜。
+#     ⚠️ 本节曾经只有一条"503 ⇒ mongo 连不上 ⇒ 指路 --offline-full"，那是**旧契约**：
+#        健康端点当时只在 mongo 不通时返回 503。2026-09-22 起**前台坏死也返回 503**，
+#        继续按状态码猜会把"前台起不来"误诊成"库连不上"，并把运维引去执行
+#        `restore --offline-full` —— 一个破坏性操作。所以这里按象限逐条钉，
+#        并且**两个象限都放一份新鲜归档**，把"备份缺失"这个无关维度隔离掉。
+vb_dr_compose() {
+  cat >"${BASE}/docker-compose.yaml" <<'YML'
 services:
   vanblog:
     volumes:
       - /var/vanblog/caddy/data:/root/.local/share/caddy
 YML
+  echo "fake" >"${DATA}/log/vanblog-backups/vanblog-full-20260920-050505.tar.zst"
+}
+
+# 象限①：mongo down + 前台 up ⇒ 报红、说清库不通、指路 --offline-full（旧契约的**意图**完整保留）
+setup_case
+vb_dr_compose
 export CURL_HEALTH_CODE=503
+export CURL_HEALTH_BODY='{"status":"degraded","mongo":"down","website":"up"}'
 OUT="$(doctor 2>&1)"; rc=$?
-assert_rc "${rc}" "1" "健康接口 503 时 doctor 返回 1"
-assert_contains "${OUT}" "mongo 连不上" "并说清 503 的含义（server 活着但库不通）"
-assert_contains "${OUT}" "--offline-full" "直接指路唯一可行的恢复命令"
+assert_rc "${rc}" "1" "mongo down（503）时 doctor 返回 1"
+assert_contains "${OUT}" "mongo 连不上" "并说清是库不通（而不是笼统地说站点坏了）"
+assert_contains "${OUT}" "--offline-full" "库修不回来时指路唯一可行的恢复命令"
+assert_not_contains "${OUT}" "不要为此恢复备份" "🔴 库真不通时**不该**说"不要恢复备份"（那时恢复正是出路）"
+
+# 象限②：mongo up + 前台坏死 ⇒ 同样是 503，但结论必须**反过来**
+setup_case
+vb_dr_compose
+export CURL_HEALTH_CODE=503
+export CURL_HEALTH_BODY='{"status":"degraded","mongo":"up","website":"down"}'
+OUT="$(doctor 2>&1)"; rc=$?
+assert_rc "${rc}" "1" "前台坏死（也是 503）时 doctor 返回 1"
+assert_contains "${OUT}" "前台渲染进程已坏死" "并说清坏死的是前台渲染进程"
+assert_contains "${OUT}" "不要为此恢复备份" "🔴 明确拦住"去恢复备份"这个破坏性误操作"
+assert_not_contains "${OUT}" "mongo 连不上" "🔴 不许把前台坏死误诊成库不通（这正是旧契约的缺陷）"
+
+# 象限③：响应体读不到（真实成因是临时文件写不出来）⇒ 如实说"诊断不了"，
+#          但**不许**报成 ✓、也**不许**把它计成站点故障
+setup_case
+vb_dr_compose
+export CURL_HEALTH_CODE=200
+export CURL_HEALTH_NOBODY=1
+# 🔴 这一格必须用一个**全新的** VB_DOCTOR_TMP，否则会测不到想测的东西：
+#    doctor 的 body 临时文件是**固定名 + `$$`**（`vanblog-doctor-health-$$.json`），
+#    而本节四个象限跑在**同一个 shell 进程**里 ⇒ `$$` 相同 ⇒ 文件名相同，
+#    于是象限①②写进去的响应体在这一格仍然存在；curl 这一格不写 body，
+#    但 `[[ -s "${body}" ]]` 仍然为真 ⇒ doctor 读到的是**上一个象限的陈旧字段**，
+#    走的根本不是"响应体没读到"那一支。隔离之后才是本节要测的契约。
+#    ⚠️ 这同时暴露了产品侧一个窄缺陷（见本节末尾注释）：doctor 用前不清空那个文件，
+#       所以"curl 写不出响应体"这一支在存在陈旧文件时会被绕过、并报出陈旧结论。
+export VB_DOCTOR_TMP="${TEST_DIR}/nobody-body-dir"
+mkdir -p "${VB_DOCTOR_TMP}"
+OUT="$(doctor 2>&1)"; rc=$?
+assert_contains "${OUT}" "响应体没读到" "读不到响应体时如实说清"
+assert_contains "${OUT}" "无法按 mongo/website 字段诊断" "并说清因此诊断不了（而不是猜一个结论）"
+assert_not_contains "${OUT}" "健康接口：" "🔴 绝不报成 ✓（"没有数据"不等于"数据说没事"）"
+# 🔴 **已登记、待修的产品缺陷（本守卫现在覆盖不到它，因为上面刻意做了隔离）**：
+#    `doctor()` 的 body 临时文件是固定名 + `$$`，且**用前不清空、用后不删除**。
+#    生产里一次 doctor 是一个进程、只调一次 curl，所以正常路径没问题；但那个文件**永不清理**，
+#    而 🔴 **PID 会被复用** ⇒ 某次运行若恰好拿到与旧文件相同的 `$$`、并且这一次 curl **写不出**响应体
+#    （只读文件系统、TMPDIR 不可写 —— 正是 `body_ok` 那一支存在的理由），
+#    `[[ -s "${body}" ]]` 会因**旧文件**为真 ⇒ doctor 把**上一次的陈旧健康状态当成当前结论**报出来。
+#    👉 建议的一行修法：在 curl 之前把那个文件截断（`: >"${body}" 2>/dev/null || true`），
+#       这样"写不出来"就一定被 `body_ok=0` 抓到；修好之后应当补一条断言钉住
+#       "存在陈旧 body 文件时，读不到新响应体必须走'诊断不了'那一支、绝不报陈旧结论"。
+
+# 象限④：响应体里**没有** website 字段（服务端版本较旧）⇒ 说明清楚，且不算故障
+setup_case
+vb_dr_compose
+export CURL_HEALTH_CODE=200
+export CURL_HEALTH_BODY='{"status":"ok","mongo":"up"}'
+OUT="$(doctor 2>&1)"; rc=$?
+assert_contains "${OUT}" "服务端版本较旧" "缺 website 字段时说清是服务端版本旧，而不是"前台正常""
+assert_contains "${OUT}" "健康接口：" "但这一格仍然算健康（缺字段不是故障）"
 
 # 7c) 崩溃循环要能看出来
 setup_case

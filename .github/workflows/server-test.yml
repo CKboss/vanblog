@@ -158,8 +158,7 @@ jobs:
       #    （显式的 CLI 单项开关能压过 tsconfig 里的 false，伞形开关不能）⇒ 换成 --strict 会让守卫恒绿。
       #    脚本内部有一条断言专门钉住这个事实，所以谁「简化」了命令就会红。
       - name: Strict-null ratchet (definite null dereferences may only decrease)
-        run: bash scripts/tests/strict-null-ratchet.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/strict-null-ratchet.test.sh
       - name: Gitignore hygiene (no source directory may be silently swallowed)
         # 🔴 2026-09-21 加：`.gitignore` 里曾有一条**裸 `log`**（本意是根级日志目录），而
         #    **没有前导 `/` 的 gitignore 模式在任意层级都匹配** ⇒ 它把 `packages/server/src/provider/log/`
@@ -171,8 +170,7 @@ jobs:
         #    守卫的 git 部分不需要依赖（guards-core 就能跑、且失败得早），
         #    而"用 runner 自己的清单再对一次账"那部分需要 jest（只有 server-test 有 node_modules），
         #    缺依赖时守卫会 NOTE 跳过而不是假绿 ⇒ 放在这里它才真的执行。
-        run: bash scripts/tests/gitignore-hygiene.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/gitignore-hygiene.test.sh
       # ── 真实构建 ─────────────────────────────────────────────────────────────
       # `--noEmit` 看不到"只在真正产出文件时才发生"的失败（输出目录冲突、声明文件产出、
       # 打包期的路径解析）。镜像里跑的就是 `nest build`，所以这里也跑它 ——
@@ -221,8 +219,7 @@ jobs:
         #    `vanblog.sh` 的登录口令派生与后台 `encryptPwd.js` 逐字节一致。
         #    找不到时它**不失败、只是少跑那几条断言** ⇒ 放在没装依赖的 job 里会得到一个
         #    "覆盖面悄悄变小但仍然绿"的结果，所以它必须跟在 Install 之后跑。
-        run: bash scripts/tests/vanblog-restore.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-restore.test.sh
       - name: Run server unit tests
         working-directory: packages/server
         # ⚠️ 这里以前是一条 80 项的 `--testPathPattern` 白名单。2026-09-17 盘点：
@@ -379,14 +376,11 @@ jobs:
           zstd --version
 
       - name: Docs internal links
-        run: bash scripts/tests/docs-links.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/docs-links.test.sh
       - name: Docs ↔ code consistency (env var names, script copies, --help coverage)
-        run: bash scripts/tests/docs-consistency.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/docs-consistency.test.sh
       - name: Caddy config generation
-        run: bash scripts/tests/caddy-config.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/caddy-config.test.sh
       - name: Caddy pages-dir cross-language parity (TS resolver vs generator)
 
         # ⚠️ 同一个环境变量被 TS（服务端三处）与 JS（生成器）两种语言消费时，规则必须逐条对齐。
@@ -397,68 +391,57 @@ jobs:
 
         # 本机 91 条约 25 秒 ⇒ 放 PR 档。
 
-        run: bash scripts/tests/caddy-pages-dir-parity.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/caddy-pages-dir-parity.test.sh
       - name: Caddy performance-related config (validate steps skip without a caddy binary)
-        run: bash scripts/tests/caddy-perf.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/caddy-perf.test.sh
       - name: Official Dockerfile Alpine/sharp assertions
-        run: bash scripts/tests/dockerfile-alpine-sharp.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/dockerfile-alpine-sharp.test.sh
       - name: Dockerfile patch/npmrc assertions
-        run: bash scripts/tests/dockerfile-patches.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/dockerfile-patches.test.sh
       - name: Image runtime (entrypoint, HEALTHCHECK, start.js contract)
-        run: bash scripts/tests/image-runtime.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/image-runtime.test.sh
       - name: start.js process supervision
-        run: bash scripts/tests/start-js.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/start-js.test.sh
       - name: build-image-local.sh static contract
-        run: bash scripts/tests/build-image-local.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/build-image-local.test.sh
       - name: Benchmark harness (failure classification, kernel counters, no silent hangs)
-        run: bash scripts/tests/benchmark-tool.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/benchmark-tool.test.sh
       - name: vanblog.sh hardening assertions
-        run: bash scripts/tests/vanblog-hardening.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-hardening.test.sh
       - name: Generated compose health
-        run: bash scripts/tests/vanblog-compose-health.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-compose-health.test.sh
       - name: vanblog.sh install-cron
-        run: bash scripts/tests/vanblog-install-cron.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-install-cron.test.sh
       - name: vanblog.sh reset
-        run: bash scripts/tests/vanblog-reset.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-reset.test.sh
       - name: vanblog.sh verify
-        run: bash scripts/tests/vanblog-verify.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-verify.test.sh
       - name: vanblog.sh backup-restore
-        run: bash scripts/tests/vanblog-backup-restore.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-backup-restore.test.sh
       - name: vanblog.sh disaster recovery / offline install
-        run: bash scripts/tests/vanblog-dr-offline.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-dr-offline.test.sh
       - name: waline reset
-        run: bash scripts/tests/reset-waline.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/reset-waline.test.sh
       - name: vanblog.sh update
-        run: bash scripts/tests/vanblog-update.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-update.test.sh
       - name: vanblog.sh https reset
-        run: bash scripts/tests/vanblog-reset-https.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-reset-https.test.sh
       - name: vanblog.sh uninstall
-        run: bash scripts/tests/vanblog-uninstall.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-uninstall.test.sh
       - name: vanblog.sh download fallback
-        run: bash scripts/tests/vanblog-download-fallback.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-download-fallback.test.sh
       - name: Reverse-proxy nginx Host header and cache-bypass docs
-        run: bash scripts/tests/reverse-proxy-host-header.test.sh
+        run: bash scripts/tests/run-guard.sh scripts/tests/reverse-proxy-host-header.test.sh
 
+      - name: CI guard wrapper (exit-code passthrough for all 34 wrapped guard steps)
+        # 🔴 **这一步刻意不经过 run-guard.sh 自己**：它测的就是那个 wrapper，
+        #    而 wrapper 若坏了（吞掉退出码），用它来跑"测它的守卫"会把失败一起吞掉
+        #    —— 那是循环依赖。所以这里用裸形式，让失败一定能冒出来。
+        # 🔴 为什么它值得单独一步：run-guard.sh 是 CI 里 34 个守卫步骤的共同入口，
+        #    它唯一的关键职责是原样透传退出码；一旦吞掉，**所有守卫会同时变成装饰品**
+        #    （照跑、照打印 FAIL，而 job 依然 success）—— 一种"全绿但什么都没在守"的失效，
+        #    而且从 CI 界面上完全看不出来。
+        run: bash scripts/tests/ci-guard-wrapper.test.sh
   # 慢守卫：同样**无外部依赖**，只是单个耗时 30 秒以上，分开跑以免拖慢 guards-core。
   # 两个加起来约 3 分钟（本机实测：drill 148s、source-install 32s）。
       - name: Gitignore hygiene (no source directory may be silently swallowed)
@@ -472,8 +455,7 @@ jobs:
         #    守卫的 git 部分不需要依赖（guards-core 就能跑、且失败得早），
         #    而"用 runner 自己的清单再对一次账"那部分需要 jest（只有 server-test 有 node_modules），
         #    缺依赖时守卫会 NOTE 跳过而不是假绿 ⇒ 放在这里它才真的执行。
-        run: bash scripts/tests/gitignore-hygiene.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/gitignore-hygiene.test.sh
       - name: Every guard script must be wired into some workflow
         # 🔴 这一步是 2026-09-21 加的，因为刚刚发现 `vanblog-backup-signing.test.sh`
         #    （210 条断言，覆盖 ed25519 签名 / `.sig` 旁证 / 五种验签结论 / "匿名恢复没有跳过验签的开关"）
@@ -547,4 +529,4 @@ jobs:
           exit "${rc}"
 
       - name: Source-install path (fake git/docker/compose, no network, no daemon)
-        run: bash scripts/tests/vanblog-source-install.test.sh
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-source-install.test.sh

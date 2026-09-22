@@ -61,17 +61,14 @@ jobs:
 
       # ── 不需要依赖的三个守卫先跑：它们只是 shell + grep + python3，几秒就出结果 ──
       - name: Docs internal links and anchors
-        run: bash scripts/tests/docs-links.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/docs-links.test.sh
       - name: Docs ↔ code consistency
         # 检查文档里出现的每个 VANBLOG_* / VAN_BLOG_* 都真有读取点（防死旋钮）、
         # 两份 vanblog.sh 逐字节相同、`--help` 覆盖所有子命令、以及若干措辞约定。
-        run: bash scripts/tests/docs-consistency.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/docs-consistency.test.sh
       - name: Reverse-proxy Host header and cache-bypass docs
         # 这个守卫读 docs/advanced/security.md 的正文，所以文档改动可能让它红。
-        run: bash scripts/tests/reverse-proxy-host-header.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/reverse-proxy-host-header.test.sh
       - name: Setup pnpm
         uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b  # 分支 v2（该仓库没有 v2 这个 tag，@v2 解析到的是可移动的分支引用，所以钉 sha）
         with:

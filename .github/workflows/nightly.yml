@@ -104,8 +104,7 @@ jobs:
           fi
 
       - name: Run caddy config generation guards
-        run: bash scripts/tests/caddy-config.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/caddy-config.test.sh
   image-build:
     runs-on: ubuntu-22.04
     # 本机实测一次完整构建 + 冒烟约 20–40 分钟（含拉基础镜像与装依赖）；
@@ -185,8 +184,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Docs consistency (env var names really exist, both vanblog.sh copies identical)
-        run: bash scripts/tests/docs-consistency.test.sh
-
+        run: bash scripts/tests/run-guard.sh scripts/tests/docs-consistency.test.sh
       - name: Build the documentation site
         run: pnpm run docs:build
 
