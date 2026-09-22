@@ -141,6 +141,11 @@ describe('FINDING R4-12（尚未修）：公开搜索把 ≤200 篇**全文**捞
     for (const field of ['title', 'id', 'category', 'tags', 'updatedAt', 'createdAt']) {
       expect(toSearchResult).toContain(field);
     }
+    // 🔴 2026-09-23 补：标题承诺的是「**只**回 6 个字段」，而上面那个循环只证明这 6 个**在**，
+    //    多回一个第 7 字段（例如把正文或某个敏感字段加进投影）不会红 ⇒ 补一条精确计数，
+    //    让「只回 6 个」这个"只"字真的被钉住。判据数的是 `each.<字段>` 的取值个数，
+    //    与上面循环用的是同一个语料切片，所以不会与它重复计数。
+    expect((toSearchResult.match(/each\.\w+/g) || []).length).toBe(6);
     expect(toSearchResult).not.toContain('content');
     expect(toSearchResult).not.toContain('password');
     // 而且 searchByString 的**唯一**调用方就是这个公开控制器（grep 全仓库确认过）

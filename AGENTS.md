@@ -9469,6 +9469,79 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.119 🔴 "标题承诺的性质 ≠ 断言红的条件"排查第二轮：47 条候选的处置清单
+
+**这一节是清单，不是叙事** —— 目的是让下一轮不必重新扫描。判据沿用 §7.118 那五条，
+并补上上一轮承认漏掉的第六条：🔴 **"标题措辞平淡但断言不承重"（逐条问"什么改动会让它红"，答不出来就是可疑）**。
+
+**扫描规模（🔴 这本身就是反空转）**：27 个审计类/横切类 spec、**366 条 `it`**、可疑候选 **47 条**
+（判据：标题含全称量词或关系词、`not.toContain`、标题里有数字或通配、弱断言）。
+🔴 **人工逐条读了 8 条的完整断言体**（下面 A 组），其余 39 条只经过尺子分类、**未逐条读**（如实标注）。
+
+**A 组｜逐条读过、判定为真阳性（4 处）**
+| 位置 | 标题承诺 | 断言实际证明 | 处置 |
+|---|---|---|---|
+| 🔴 `audit-hardening-round4-security-public-cost.spec.ts` | `toSearchResult` **只回 6 个**字段 | 循环证明那 6 个**在**；`not.toContain('content'/'password')` 只挡两个具体名字 ⇒ **多回第 7 个字段不会红** | ✅ **本轮已修**：补精确计数 `match(/each\.\w+/g).length === 6`。变异 M-C 注入第 7 个字段 `excerpt` ⇒ `Expected: 6 / Received: 7`、`Tests: 1 failed`（**干净对照**，不是 `Tests: 0 total`）；M-D 语义空操作 ⇒ 绿 |
+| 🔴 `audit-hardening-round3.spec.ts` | "**源码里**不再有裸的 `parseInt(query)`" | 语料只有 `analysis.controller.ts` **一个文件** | ⚠️ **未修（该文件在禁区）** ⇒ 与 §7.118 已修的 `parseInt(idString)` 那处**同形状**，建议同样只改范围措辞 |
+| 🔴 `audit-hardening-round3.spec.ts` | "源码里不再有 **O(k²) 的 includes 去重**"（承诺的是**性质**） | `not.toContain('resData.includes(e)')` 只钉**一个历史字面量**（换个变量名的 O(k²) 去重不会红）+ `toContain('const seen = new Set<Article>()')` | ⚠️ **未修（禁区）** ⇒ 建议改标题为"那个形状已换成 Set 去重"（正向断言是承重的，负向那条近乎恒真） |
+| 🔴 `audit-hardening-round2.spec.ts` | "每进程的限流预算与连接池**都**按 worker 数摊薄"（全称） | 8 条 `toContain` 逐个点名**已知的** 8 处，🔴 **没有枚举** ⇒ **新增一个未摊薄的限流桶不会红** | ⚠️ **未修（禁区）** ⇒ 建议补枚举下界：`rateLimit.ts` 里每一处桶级 `max:` 都必须含 `scaleLimit(`（🔴 **实测可行**：全文 `max:` 共 6 处、其中 5 处是桶、第 6 处是 `scaleLimit(max: number)` 自己的**函数签名**，需排除 `/max:\s*number\)/`）。**这一处是 4 处里后果最重的** —— 它与 `rl-public-list` 那个"整桶被漏掉"的历史缺陷同形状 |
+
+**B 组｜逐条读过、判定为"其实没问题"（4 处，成因各不相同）**
+- `audit-hardening-round3.spec.ts`「三处 env 数字都走了带校验的 helper」：标题**枚举了三处**，而三处各自都有
+  **正向**（`toContain(envPositiveInt('X', 默认值)`）+ **负向**（`not.toContain(Number(process.env.X`) 双向钉子 ⇒ 
+  🔴 "三处"不是全称量词而是清单，**已逐条钉住**。
+- `audit-hardening-round3-pipeline.spec.ts`「(b) 磁盘上已有同名脚本时按库里的内容覆盖」：`not.toContain('SHOULD_BE_GONE')`
+  是**埋在夹具里的哨兵** ⇒ 🔴 这正是"只有该性质被破坏才会出现"的取值，**是良构范例**（与 §7.118 的 `THEME_SUBDIR` 同类）。
+- `audit-hardening-round2.spec.ts`「searchLog 从尾部读，不再逐行 JSON.parse」：负向只排除 `lineReader` 一个库名（**弱**），
+  但正向钉了 `readLogTailLines(` 与 `LOG_SCAN_MAX_LINES` ⇒ **实质性质（从尾部读 + 有行数上界）是被钉住的**，
+  标题的"不再逐行 parse"是**历史描述**而不是被断言的性质 ⇒ 判定可接受（⚠️ 若要更严可改标题，属可选）。
+- `audit-hardening-round3-backup.spec.ts`「可再生/临时目录一个都不在归档清单里（每条都带着理由）」：**循环**遍历目录并
+  逐条 `not.toContain(dir)` + `why.length > 5`（理由非空）⇒ 枚举来自清单本身，🔴 **"一个都"被循环覆盖**。
+
+**C 组｜已被前几轮处置、本轮复扫仍出现在候选里（4 处，不必再看）**
+`round2.spec.ts`「上传路径没有被那道插件门禁影响」（§7.118 已改标题）、
+`round3-silent.spec.ts`「`parseInt(idString)` 且**恰好 4 处**」（§7.118 已改范围措辞、且已有精确计数）、
+`round3-silent.spec.ts`「不再有任何 `washViewerInfo` 前缀的方法」（🔴 **本轮已按裁定补通配断言**，见下）、
+`round3-backup.spec.ts`「themes 确实是主题 CSS 的落地目录」（§7.118 判定为良构范例）。
+
+**D 组｜只经尺子分类、未逐条读（39 条）**：分数 2-5，多数是 `toContain` + `toBe` 混合或已带计数断言的横切守卫
+（`pagesDirParity`、`rssHtmlSanitizeParity`、`cryptoUsageDrift`、`queryFilterDrift`、`securityDocDefaultsParity`、
+`staticguard` 的 11 条 `toBe` 等）。⚠️ **这些文件多为前几轮刚建、且都做过变异对照** ⇒ 命中率先验较低；
+🔴 **但"未逐条读"就是未读**，按 A 组命中率（8 读 4 真）推算，**39 条里很可能还有真阳性** ⇒ 建议下一轮继续。
+🔴 **复现这份清单的方法**（扫描器是启发式的、已随 `/tmp` 清掉，但判据可复现）：
+范围 = `audit-hardening-*.spec.ts` + `*Parity*.spec.ts` + `*Drift*.spec.ts` + `*Guarded*.spec.ts` + `envVarMentions.spec.ts`；
+打分 = ①标题含全称/关系词且断言只有 `toContain`（+2）②同上且 `toContain>=2`（+1）③有 `not.toContain`（+1）
+④标题里有数字或通配（+1）⑤有 `toBeDefined`/`not.toThrow` 这类弱断言（+1），取 `>=2` 者。
+
+### 7.119.1 🔴 已裁定并执行：`washViewerInfo*` 的通配断言
+
+`audit-hardening-round3-silent.spec.ts` 的标题此前承诺通配，而断言只查两个完整函数名（§7.118 只改了标题）。
+本轮按裁定**补上通配**，并把标题改回通配口径（现在标题与断言一致了）。
+🔴 **补之前核实了三件事**（这三件事决定这条断言会不会一上来就假红）：
+1. **语料是否剥注释**：该 `it` 用的是 `code(read('provider/article/article.provider.ts'))` ⇒ **剥注释**，
+   而且语料是**产品文件**、不是本 spec ⇒ 🔴 **本 spec 自己的更正注释里提到该前缀是安全的**
+   （⚠️ 这正是"注释里不要写要断言不存在的字面量"那个坑的**例外情形**：坑只在"语料含自己的注释"时成立）。
+2. **语料范围**：单个文件。🔴 **实测：原始文件里该前缀出现 4 次、全在解释"为什么删"的注释里；剥注释后 0 次** ⇒ 
+   🔴 **通配断言必须针对剥注释后的语料**，否则会与同一个 `it` 最后那条
+   `expect(read(...)).toContain('零调用方')`（**要求那段注释存在**）**直接冲突而永久假红**。
+3. **红了指向什么**：判据用 `Array.from(new Set(src.match(/前缀\w*/g) || []))` 再 `toEqual([])`，
+   🔴 **而不是 `not.toMatch`** —— 后者失败时会把 **54KB 的语料整段打印出来**，读日志的人看不出该改哪里；
+   前者失败时**直接点名是哪几个同前缀的方法**。
+🔴 **变异对照**：M-A 注入同前缀、但**不匹配**那两个既有 `not.toContain` 名字的**代码级**标识符
+（`export const washViewerInfoSyntheticProbe = 0;`，🔴 必须是代码级，因为语料剥注释）⇒ 
+`Tests: 1 failed, 31 passed`、失败信息点名该合成名 ⇒ **通配断言承重、且与既有两条不重复**；
+M-B 注入**不同前缀**的标识符（语义空操作对照）⇒ **绿** ⇒ 不是对任何改动都红。
+还原 sha 逐字核实一致、备份已清、产品文件与 HEAD 逐字相同。
+
+### 7.119.2 🔴 新规矩：**"只回 N 个 / 恰好 N 处"这类标题必须配精确计数，而计数要能区分"代码"与"签名"**
+本轮两处真阳性都是同一个形状：**标题里的"只/恰好/都"是全称或精确计数，而断言只是"逐个点名已知的那几个"** ⇒ 
+**新增一个成员不会红**。修法是补精确计数或枚举下界。
+⚠️ **补计数时有一个具体的坑**：`rateLimit.ts` 里 `max:` 共 6 处，而**第 6 处是 `scaleLimit(max: number)` 自己的函数签名**
+⇒ 朴素的"数 `max:` 出现次数"会把签名算成一个桶，得到 6 而真值是 5 ⇒ 🔴 **枚举类计数必须先排除"定义处/签名处"**
+（本仓库已有同族实例：`adminRoutesGuarded` 数路由方法时要排除装饰器定义本身）。
+🔴 **另一条：断言红的信息必须指向"该改哪里"** —— 用 `toEqual([])` 配"匹配到的名字清单"，
+而不是 `not.toMatch` 配一整份大语料（后者会打印 54KB，等于没有信息）。
+
 ### 7.118 🔴 系统性排查「断言红的条件 ≠ 标题承诺的性质」：376 条里查出 3 处真的、3 处假阳性
 
 **形状定义**：一条断言（或一个 `it`/`describe`）**红的条件**，与它**标题/注释承诺的性质**不是同一件事 ⇒

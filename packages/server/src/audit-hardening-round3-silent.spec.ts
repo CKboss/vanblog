@@ -450,14 +450,19 @@ describe('B9 · 超过上限时的淘汰不能拖慢热路径', () => {
 });
 
 describe('B4 · 两个改统计口径的死方法已删除', () => {
-  // 🔴 2026-09-23 更正标题：原标题写的是通配 `washViewerInfo*`（任何以此开头的函数），
-  //    而断言只查**两个完整函数名** ⇒ 新增一个同前缀的函数不会红，标题承诺的范围比断言宽。
-  //    👉 要真的钉住通配，需要一条 `not.toMatch(/washViewerInfo\w*/)`；那是实质性断言（可能误伤），
-  //    已交站长裁定，本轮只把标题改成断言真正证明的两个名字。
-  it('article.provider 里不再有 washViewerInfoByVisitProvider / washViewerInfoToVisitProvider（零调用方 + N+1 + 直接改统计口径）', () => {
+  // 🔴 2026-09-23 站长裁定已执行：补上通配断言（原标题承诺的就是通配，此前只查两个完整函数名，
+  //    新增一个同前缀的方法不会红 ⇒ 标题承诺的范围比断言宽）。
+  //    ⚠️ 通配断言必须针对**剥注释后**的语料（下面的 src）：原始文件里有 4 处该前缀的提及，
+  //    全部在解释「为什么删这两个方法」的注释里，而本 it 最后一条断言正**要求那段注释存在**
+  //    （toContain 零调用方）⇒ 对未剥注释的语料做通配断言会立刻假红。
+  //    👉 判据用「匹配到的名字清单为空」而不是 not.toMatch：失败信息会**点名是哪几个同前缀的方法**，
+  //    而不是把 54KB 的语料整段打印出来（那样读日志的人看不出该改哪里）。
+  it('article.provider 里不再有任何 washViewerInfo 前缀的方法（原本那两个：零调用方 + N+1 + 直接改统计口径）', () => {
     const src = code(read('provider/article/article.provider.ts'));
     expect(src).not.toContain('washViewerInfoByVisitProvider');
     expect(src).not.toContain('washViewerInfoToVisitProvider');
+    const prefixed = Array.from(new Set(src.match(/washViewerInfo\w*/g) || []));
+    expect(prefixed).toEqual([]);
     // 说明为什么删（免得下一个人再写一个回来）
     expect(read('provider/article/article.provider.ts')).toContain('零调用方');
   });
