@@ -6,7 +6,19 @@ import { Connection } from 'mongoose';
 import { version } from 'src/utils/loadConfig';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
 import cluster from 'node:cluster';
-import type { WebsiteProvider } from 'src/provider/website/website.provider';
+// 🔴 **必须是值导入，不能是类型专用导入**（2026-09-22 修复的一条真实缺陷）。
+//    类型导入在编译期被完全擦除 ⇒ 不给 Nest 的 DI 提供任何运行时值：Nest 靠发射的
+//    `design:paramtypes` 元数据解析构造参数，擦除后第二个参数退化成 `Function`，无法当 provider token；
+//    又因为下面标了 `@Optional()`，于是**静默注入 undefined** ⇒ `website` 字段恒为 `unknown`、状态码恒 200，
+//    而 k8s/HEALTHCHECK 那个盲区**根本没被修掉**（曾在真实镜像里活体确证：连续 12 次采样恒为 unknown）。
+//    ⚠️ 这类缺陷单元测试抓不到：直接 `new HealthController(conn, stub)` 会手工把 provider 喂进去、绕过 DI，
+//    而**替身绕过的那一层恰好就是唯一会坏的那一层** ⇒ 由 `health.controller.di.spec.ts` 用**真实的 Nest 容器**
+//    解析来钉住（`WebsiteProvider` 无 onModuleInit/onModuleDestroy，所以 compile() 不会 spawn 子进程）。
+//    ⚠️ `@Optional()` 刻意保留：解析不到时应当降级成 `unknown`（诚实，且消费方已被告知去看容器层那个直接探 3001
+//    的信号），而不是让**整个应用启动不了** —— 为一个监控字段把可用性搭进去不划算。
+//    ⚠️ 注意上面第 2 行对 express 的 `Request`/`Response` **仍然是**类型专用导入，那是正确的：
+//    它们只当类型用、不作为 DI token 注入 ⇒ **不要把那一行也"顺手改成值导入"**。
+import { WebsiteProvider } from 'src/provider/website/website.provider';
 
 /**
  * 健康检查端点：`GET /api/public/health`。

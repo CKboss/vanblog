@@ -388,6 +388,109 @@ assert_file_contains "${SCRIPT}" '"status")' "dispatcher 支持 status 子命令
 assert_file_contains "${SCRIPT}" '"-h" | "--help" | "help")' "dispatcher 支持 --help"
 
 
+# ---------------------------------------------------------------------------
+# 🔴 doctor 的健康段：`curl -o` 的目标变量必须先被赋值（2026-09-22 修的一条回归）
+#
+# 缺陷：`doctor()` 里只有 `local base body code` 声明、**从未给 body 赋值** ⇒
+#   `curl -o ""` 打不开输出文件 ⇒ `code` 为空、被兜成 `000` ⇒
+#   **doctor 无论站点实际状态如何都恒报「✗ 健康接口 → 000（站点没在服务）」**，
+#   而 doctor 是用户排障的第一入口。
+# ⚠️ 三类既有守卫都抓不到它：`bash -n`（语法合法）、演练守卫（钉的是 drill）、
+#   以及"mongo/website 判据存在"那类源码断言（它们钉的是判据、不是"变量被赋值过"）。
+# 🔴 全部断言都跑在剥掉注释的 ${SCRIPT_CODE} 上 —— 因为解释这条缺陷的注释里
+#   正好含有 `curl -o "${body}"` 这个字面量，不剥就会自己匹配自己（本仓库第五次踩这个坑）。
+# ---------------------------------------------------------------------------
+
+# 取出某个函数的函数体（从 "name() {" 到下一个行首 "}"）。切不出来必须报 fail，不能当成通过。
+vb_function_body() {
+  printf '%s\n' "$1" | awk -v fn="$2" '
+    $0 ~ ("^" fn "\\(\\) \\{") { f = 1 }
+    f { print }
+    f && /^\}/ { exit }
+  '
+}
+
+# 断言：在指定函数体内，变量 ${var} 的赋值出现在锚点 ${use} 之前。
+vb_assert_assigned_before_use() {
+  local code="$1" fname="$2" var="$3" use="$4" label="$5"
+  local body aoff uoff acount ucount
+  body="$(vb_function_body "$code" "$fname")"
+  if [[ -z "$body" ]]; then
+    fail "$label（切不出 ${fname}() 的函数体 —— 切片失败必须报 fail，绝不能当成通过）"
+    return
+  fi
+  acount="$(printf '%s' "$body" | grep -coF "${var}=" || true)"
+  ucount="$(printf '%s' "$body" | grep -coF "$use" || true)"
+  if [[ "$ucount" -lt 1 ]]; then
+    fail "$label（找不到使用点锚，可能锚文本已漂移；不要静默通过）"
+    return
+  fi
+  if [[ "$acount" -lt 1 ]]; then
+    fail "$label（${var} 在 ${fname}() 内从未被赋值，只有声明）"
+    return
+  fi
+  aoff="$(printf '%s' "$body" | grep -boF "${var}=" | head -1 | cut -d: -f1)"
+  uoff="$(printf '%s' "$body" | grep -boF "$use" | head -1 | cut -d: -f1)"
+  if [[ "$aoff" -lt "$uoff" ]]; then
+    pass "$label"
+  else
+    fail "$label（赋值出现在使用点之后：assign@${aoff} use@${uoff}）"
+  fi
+}
+
+VB_CURL_ANCHOR='curl -sS -m 8 -o "${body}"'
+vb_assert_assigned_before_use "$SCRIPT_CODE" doctor body "$VB_CURL_ANCHOR" \
+  "doctor 的 curl -o 目标 body 在使用前已赋值（否则恒报 000「站点没在服务」）"
+
+# 反空转：上面那条断言依赖的两个锚点都真实存在，且函数体确实被切出来了。
+VB_DOCTOR_BODY="$(vb_function_body "$SCRIPT_CODE" doctor)"
+[[ -n "$VB_DOCTOR_BODY" ]] && pass "反空转：doctor() 函数体切出来了（$(printf '%s\n' "$VB_DOCTOR_BODY" | wc -l) 行）" \
+  || fail "反空转：doctor() 函数体没切出来"
+assert_contains "$VB_DOCTOR_BODY" 'vanblog-doctor-health-' "doctor 的 body 用固定文件名 + \$\$（照 :2541 的先例，不需要 trap 清理）"
+assert_contains "$VB_DOCTOR_BODY" 'VB_DOCTOR_TMP' "body 的路径可用 VB_DOCTOR_TMP 覆盖（临时目录不可写时的逃生口）"
+
+# 🔴 尺子有效性：同一把尺子对"只声明未赋值"的合成脚本必须报 fail，对"先赋值"的必须报 pass。
+#    没有这两条，上面那条断言可能恒真（例如切片函数坏了、锚点漂移成永不匹配）。
+VB_SAVE_PASS="$PASS"; VB_SAVE_FAIL="$FAIL"
+VB_BAD_SYNTH='doctor() {
+  local base body code
+  base="x"
+  code="$(curl -sS -m 8 -o "${body}" -w "%{http_code}" "y")"
+}'
+vb_assert_assigned_before_use "$VB_BAD_SYNTH" doctor body "$VB_CURL_ANCHOR" "尺子(坏)" >/dev/null 2>&1
+VB_DF=$((FAIL - VB_SAVE_FAIL))
+PASS="$VB_SAVE_PASS"; FAIL="$VB_SAVE_FAIL"
+if [[ "$VB_DF" -ge 1 ]]; then
+  pass "尺子有效性：只声明未赋值的合成脚本被抓到（fail +${VB_DF}）"
+else
+  fail "尺子有效性：只声明未赋值的合成脚本**没有**被抓到 ⇒ 上面那条断言可能恒真"
+fi
+
+VB_SAVE_PASS="$PASS"; VB_SAVE_FAIL="$FAIL"
+VB_GOOD_SYNTH='doctor() {
+  local base body code
+  base="x"
+  body="/tmp/b-$$.json"
+  code="$(curl -sS -m 8 -o "${body}" -w "%{http_code}" "y")"
+}'
+vb_assert_assigned_before_use "$VB_GOOD_SYNTH" doctor body "$VB_CURL_ANCHOR" "尺子(好)" >/dev/null 2>&1
+VB_DF2=$((FAIL - VB_SAVE_FAIL))
+PASS="$VB_SAVE_PASS"; FAIL="$VB_SAVE_FAIL"
+if [[ "$VB_DF2" -eq 0 ]]; then
+  pass "尺子有效性：先赋值的合成脚本不被误报"
+else
+  fail "尺子有效性：先赋值的合成脚本被误报了（fail +${VB_DF2}）⇒ 尺子太严，会天天红"
+fi
+
+# 🔴 第二条同族缺陷：curl 即使写不出 -o 的目标文件也照样打印 %{http_code}（`bash -x` 实测），
+#   所以"拿到状态码"不等于"读到了响应体"。若把"字段为空"当成 up，doctor 会在
+#   **根本没读到任何字段**时打印「✓ 健康」⇒ 必须显式区分。
+assert_contains "$SCRIPT_CODE" 'body_ok=0' "doctor 显式区分「没读到响应体」与「读到了」"
+assert_contains "$SCRIPT_CODE" '响应体没读到' "读不到响应体时如实说「诊断不了」，而不是报 ✓ 健康"
+# 🔴 `up` 与 `""` 必须是 case 里的两个独立分支：合并成 up|"") 就是"没有数据"与"数据说没事"混为一谈。
+assert_not_contains "$SCRIPT_CODE" 'up|"")' 'case 里 up 与空值不能合并成一个分支（空值 = 服务端版本旧、没有该字段）'
+assert_contains "$SCRIPT_CODE" '响应体里没有 website 字段' "字段缺失（旧服务端）有独立的、可见的说明"
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then

@@ -5226,6 +5226,16 @@ doctor() {
   # 3) 站点接口与 mongo 连通性（health 里带 mongo 字段）
   local base body code
   base="$(vanblog_api_base 2>/dev/null)"
+  # 🔴 **`body` 必须在这里就赋值** —— 它是下面 `curl -o "${body}"` 的写入目标。
+  #    2026-09-22 修复一条回归：此前只有 `local base body code` 声明、**从未赋值** ⇒
+  #    `curl -o ""` 失败 ⇒ `code` 为空、被下一行兜成 `000` ⇒ **doctor 无论站点实际状态如何，
+  #    都恒报「✗ 健康接口 → 000（站点没在服务）」并把它计成一个 problem**，
+  #    而 doctor 是用户排障的第一入口 ⇒ 这比修复前更糟（修复前它按状态码判断、是能工作的）。
+  #    ⚠️ 三类守卫都抓不到它：`bash -n` 抓不到（语法合法）、演练守卫钉的是 drill 不是 doctor、
+  #    源码级断言钉的是"mongo/website 判据存在"与"没有裸状态码 if"，而不是"`body` 被赋值过"。
+  #    形状照本脚本 :2541 的先例：**固定文件名 + 按 `$$` 区分** ⇒ 不需要清理
+  #    （doctor 有多个 return 出口，用 trap 清理反而容易漏），且并发跑两个 doctor 不会撞车。
+  body="${VB_DOCTOR_TMP:-${TMPDIR:-/tmp}}/vanblog-doctor-health-$$.json"
   # 🔴 **按 body 里的 `mongo` 与 `website` 两个字段分别诊断，不再按状态码猜原因。**
   #    2026-09-22 更正：健康端点此前只在 mongo 不通时返回 503，所以"503 ⇒ mongo 连不上"成立；
   #    现在**前台渲染进程坏死也会 503**（`website: "down"`），继续按状态码猜就会给出
@@ -5234,14 +5244,25 @@ doctor() {
   #    （多进程部署下的非 leader worker）**都不是故障**，绝不能报成问题。
   code="$(curl -sS -m 8 -o "${body}" -w '%{http_code}' "${base}/api/public/health" 2>/dev/null)"
   [[ -n "${code}" ]] || code="000"
-  local h_mongo="" h_website=""
+  local h_mongo="" h_website="" body_ok=0
   if [[ -s "${body}" ]]; then
+    body_ok=1
     # ⚠️ 用 sed 而不是 jq（本脚本不依赖 jq）。`"mongo"` 后面紧跟引号，所以不会误匹配
     #    `mongoState`/`mongoStateText`/`mongoPingMs`。
     h_mongo="$(sed -n 's/.*"mongo"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "${body}" 2>/dev/null | head -1)"
     h_website="$(sed -n 's/.*"website"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "${body}" 2>/dev/null | head -1)"
   fi
-  if [[ "${code}" == "200" || "${code}" == "503" ]]; then
+  # 🔴 **"拿到状态码"不等于"读到了响应体"**（2026-09-22，用 `bash -x` 实测出来的）：
+  #    `curl -o <不可写的路径> -w '%{http_code}'` 仍然会打印 `200` —— 它先完成请求、再失败于打开输出文件。
+  #    此时 `h_mongo`/`h_website` 都是空的，而下面 `case` 里如果把"空"当成 `up`，
+  #    doctor 就会在**根本没读到任何字段**的情况下打印「✓ 健康」⇒ 🔴 这正是 `a || b` 把
+  #    "没有数据"与"数据说没事"混为一谈的那个形状。所以这里显式区分，并且**不计入 problems**
+  #    （这不是站点故障），但也**绝不报成 ✓**。
+  if (( body_ok == 0 )) && [[ "${code}" == "200" || "${code}" == "503" ]]; then
+    echo -e "  ${yellow}!${plain} 健康接口返回了 ${code}，但**响应体没读到** ⇒ 无法按 mongo/website 字段诊断"; warns=$((warns+1))
+    echo -e "      ${plain}· 大概率是临时文件写不出来：${body}"
+    echo -e "      ${plain}· 换一个可写的临时目录再跑：${yellow}VB_DOCTOR_TMP=/path/to/writable ${VANBLOG_SELF_NAME} doctor${plain}"
+  elif [[ "${code}" == "200" || "${code}" == "503" ]]; then
     # 前台维度：只有 down 是故障；starting 是宽限窗口内（正常重启也会经过）；
     # disabled/unknown 是"本站不由 server 管前台"/"本进程无从判断"，都不是故障。
     local web_bad=0 web_note=""
@@ -5250,7 +5271,10 @@ doctor() {
       starting) web_note="前台正在启动或重启中（60 秒宽限窗口内）" ;;
       disabled) web_note="前台不由本 server 拉起（前后端分离部署）" ;;
       unknown)  web_note="本进程无法判断前台状态（多进程部署下不是 leader）" ;;
-      up|"")    web_note="" ;;
+      up)       web_note="" ;;
+      # 🔴 `""` 必须与 `up` 分开：读到了响应体、但里面没有 `website` 字段 ⇒
+      #    那是**服务端版本较旧**（本字段是 2026-09-22 才加的），不是"前台正常"。
+      "")       web_note="响应体里没有 website 字段（服务端版本较旧，升级后才能看到前台维度）" ;;
       *)        web_note="前台状态未知（${h_website}）" ;;
     esac
     local mongo_bad=0
@@ -5273,7 +5297,19 @@ doctor() {
       fi
     fi
   else
-    echo -e "  ${red}✗${plain} 健康接口 → ${code}（站点没在服务）"; problems=$((problems+1))
+    # 🔴 **失败方向必须分清"诊断不了"与"站点没在服务"**（2026-09-22）：
+    #    `code` 为 `000` 有两种成因 —— ①站点真的没在服务；②`body` 那个临时文件写不出来
+    #    （只读文件系统、`TMPDIR` 指向不可写的地方）⇒ curl 打不开输出文件就直接失败。
+    #    ⚠️ 两者用 `code` **区分不了**（都是 000），所以这里不去猜：临时文件写不出来时只 warn、
+    #    **不计入 problems**，并且**如实说清两种可能都存在**。
+    #    🔴 反过来，把②报成①会让 doctor 在最需要它的机器上给出错误结论（"站点没在服务"）。
+    if ! : > "${body}" 2>/dev/null; then
+      echo -e "  ${yellow}!${plain} 健康检查这一段**诊断不了**：临时文件写不出来（${body}）"; warns=$((warns+1))
+      echo -e "      ${plain}· curl 拿不到状态码（${code}）既可能是站点没在服务，也可能只是写不出这个文件 —— 两者区分不了。"
+      echo -e "      ${plain}· 换一个可写的临时目录再跑：${yellow}VB_DOCTOR_TMP=/path/to/writable ${VANBLOG_SELF_NAME} doctor${plain}"
+    else
+      echo -e "  ${red}✗${plain} 健康接口 → ${code}（站点没在服务）"; problems=$((problems+1))
+    fi
   fi
 
   # 4) 磁盘剩余（磁盘满是"小机器 + 被攻击"最现实的死法）
