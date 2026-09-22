@@ -9469,6 +9469,67 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.111 🔴 逐个 workflow 审计 `paths:` —— 三处真实缺口，以及"守卫存在但永远不会在该跑的时候跑"这一族
+
+**这一族缺口在两轮里出现了三次**，形状都是：守卫本身是对的、也接进了 CI，
+但 🔴 **改动能让它变红的那些文件不在触发这个 workflow 的 `paths:` 里** ⇒ 守卫存在却永远不会在该跑的时候跑。
+这与"守卫恒真"是同一类失效，只是发生在**触发层**，而且从 CI 界面上完全看不出来（workflow 根本不运行，
+所以既没有红也没有绿）。
+
+**审计结果（PyYAML 精确解析 6 个 workflow，不靠 grep）**：
+| workflow | 触发 | 缺口 |
+|---|---|---|
+| `server-test.yml` | push + pull_request | 🔴 **不含 `docs/**`**，而 guards-core 里有 **10 个** vanblog-* 守卫读 docs/（drill、hardening、restore、backup-restore、compose-health、download-fallback、reset-https、source-install、uninstall、update，多数断言"文档不许教破坏性命令"或"文档片段与 compose 模板一致"），而 `docs-test.yml` **不跑它们** ⇒ 改文档不触发任何跑这些守卫的 workflow。⚠️ 这个缺口此前还被第 7 行一句注释**正当化**过（"只改文档时不用跑测试"），🔴 而那个前提是错的（注释已更正）。<br>🔴 还缺 `CaddyfileTemplate` / `CaddyfileTemplateLocal`（**入库文件**，被 `reverse-proxy-host-header.test.sh` 读取；注意它们与已列的 `caddyTemplate.json` 是**不同文件**）。<br>⚠️ 以及 `.github/workflows/**` 应放宽成 `.github/**`（`docs-consistency` 用 find 扫整个 `.github`，而 `.github` 下还有 `ISSUE_TEMPLATE`）。 |
+| `admin-e2e.yml` | pull_request | ⚠️ push 列了自己、**pull_request 一条 workflow 都没列** ⇒ 只改 `admin-e2e.yml` 的 PR 不会被验证（已补，两边同口径 11 条）。 |
+| `docs-test.yml` | push + pull_request | ✅ 上一轮已补 `CHANGELOG.md`/`releaseDoc.js`/`doc-version`/`changelog-mirror-sync`。本轮审计确认**无新缺口**：它的 `docs-consistency` 依赖 `packages/**`、`scripts/**`、`.github/**`，而那些改动会触发 `server-test`，而 **`server-test` 的 guards-core 也跑 `docs-consistency`** ⇒ 按"跑同一守卫的任一 workflow 触发即算覆盖"的并集口径，是覆盖的。 |
+| `nightly.yml` | schedule + workflow_dispatch | ✅ **没有 `paths:` 是设计如此**（定时触发），不是缺口。 |
+| `publish-ghcr.yml` / `release-fork.yml` | tags `v*` + dispatch | ✅ 同上，不是缺口。 |
+
+👉 **判定口径（这条很重要，否则会报一堆假缺口）**：一条依赖算"被覆盖"，
+只要 🔴 **跑同一个守卫的任一 workflow** 的 `paths:` 匹配它 —— 因为同一个守卫常被多个 workflow 跑
+（`docs-consistency` 就被 docs-test、server-test、nightly 三个跑），只要有一个会触发，守卫就会跑。
+**逐 workflow 单独判定会把"由另一个 workflow 覆盖"误报成缺口**（我第一版就是这么错的）。
+⚠️ 依赖只统计**入库文件**（`git ls-files`）⇒ git-ignored 的 `.tools/`、`vanblog_dev/` 自动排除，**不需要白名单**。
+⚠️ 依赖抽取要**剥掉整行注释**（注释里提到的路径不算"读取"），且 🔴 **文件路径不要塌成 `top/**`**
+（否则 `${ROOT}/scripts/releaseDoc.js` 会变成 `scripts/**`，对只列了 `scripts/releaseDoc.js` 的 workflow 产生**假缺口**）。
+
+**已修**：`server-test.yml` 的 push 与 pull_request 各补 `docs/**`、`README.md`、`CaddyfileTemplate`、
+`CaddyfileTemplateLocal`，并把 `.github/workflows/**` 放宽成 `.github/**`（两边现在都是 **15 条、完全同口径**）；
+`admin-e2e.yml` 的 pull_request 补上自身 workflow 文件（两边 **11 条**）。
+⚠️ **只改 `paths:`，没有动任何 job/step 的逻辑、名字或顺序。**
+⚠️ **代价如实说明**：`server-test` 现在会在**只改文档**的推送上也跑一遍（typecheck + 全量 jest + 31 个守卫步骤）⇒
+CI 分钟数上升。🔴 **这是有意的**：那 10 个守卫断言的正是文档内容，不跑就等于没有守卫；
+⚠️ 而"过度触发"这一类缺口的修复风险是"改窄之后漏触发"，所以**倾向保持宽**。
+
+**新守卫 `scripts/tests/ci-paths-coverage.test.sh`（14 条断言，已接进 guards-core 并用 `run-guard.sh` 包装）**：
+- **反空转三条**：解析到 ≥6 个 workflow、≥25 个被 CI 跑的守卫、≥40 条依赖（实测 **6 / 33 / 118**）；
+- **push 与 pull_request 的 `paths:` 必须同口径**（否则 PR 上验不到、合并后才第一次红 —— 这正是 `admin-e2e.yml` 那个缺口）；
+- **三条尺子有效性反证**，全部在**合成沙箱**里做（🔴 不碰真实 workflow 文件）：
+  A 摘掉 `docs/**` ⇒ 必须点名 docs 下的依赖缺口（实测 20 处）；B 造一个"依赖未被 paths 覆盖"的新守卫 ⇒ 必须被点名；
+  C 删光 workflow ⇒ 枚举数归 0、反空转必须红（而不是"没解析到东西 ⇒ 全部通过"的空绿）。
+- ⚠️ **与那条内联断言「每个守卫都被接入 CI」的分工**（写在守卫文件头，避免第二份会漂移的口径）：
+  那条管**"守卫有没有被接进 CI"**（含反方向"引用的守卫是否存在"）；
+  本守卫管**"接进来之后，改哪些文件会真的触发它"**。两件事不同、不重叠。
+- 🔴 **沙箱必须复用真实仓库的 `git ls-files` 清单**（通过 `PATHS_COV_TRACKED_FILE`）：
+  沙箱没有 `.git`，若让 `is_tracked` 退化成"全部算入库"，git-ignored 的 `.tools/`、`vanblog_dev/` 会被当成依赖
+  ⇒ **产生 18 处假缺口、基线不忠实**；而若反过来把"git 返回空"当成"没有入库文件"，
+  依赖会被**全过滤掉** ⇒ **"0 缺口"变成一个空的绿**。🔴 **两个方向都踩过，都在守卫注释里记了。**
+
+🔴 **变异对照 3/3 全红**（备份按"每次变异"记账、驱动挂 SIGTERM/SIGINT 先还原再退出、收尾按 sha 逐文件核实、复跑 14/0）：
+M1 从真实 `server-test.yml` 摘掉 `docs/**`（两处）→ **RED 4**，FAIL 原文点名"20 处缺口"；
+M2 只从 pull_request 那一份摘掉 `CaddyfileTemplate` ⇒ push/PR 不对称 → **RED 4**；
+M3 弄坏守卫自己的 workflow 枚举（指向不存在的目录）→ **RED 6**，反空转三条全红。
+
+⚠️ **GitHub 用「改动前」的 workflow 文件判定 `paths:`** ⇒ 本轮新增的路径**从下一次触发才生效**，
+本次推送本身可能仍按旧过滤器判定（已写进 `server-test.yml` 的注释，否则下一个人会以为"补了没用"）。
+
+**基线更新**：wrapper 包装步骤 **35 → 36**（`server-test.yml` 30、`docs-test.yml` 4、`nightly.yml` 2；
+**裸形式仍恰好 1 处且是刻意的** = `ci-guard-wrapper.test.sh` 自己，循环依赖）；
+shell 守卫 **33 → 34**（内联断言实测："34 个守卫全部已接入 CI，35 处引用全部指向真实文件"）；
+`guards-core` 步骤数 **30 → 31**；`ci-paths-coverage` **14/0**。
+⚠️ `gitignore-hygiene` 在新守卫**未提交**时是 10/0（它把"可见未跟踪文件"记成 NOTE 而不是断言），
+**提交之后**会回到 11/0 ⇒ 这不是回归。
+
 ### 7.110 🔴 那条"守卫必须接进 CI"的常驻断言确实存在，但它的判据能被**注释**满足（已收紧），并补上反方向对账
 
 **先更正 §7.109 的一条错判**：那条断言**一直存在**（`server-test.yml` 的 `guards-core` 里的内联步骤

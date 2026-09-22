@@ -4,14 +4,26 @@ on:
   push:
     branches:
       - dev/dsh
-    # 只改文档时不用跑测试（文档站有自己的构建检查）
+    # 🔴 2026-09-23 更正：原来这里写的是「只改文档时不用跑测试（文档站有自己的构建检查）」，
+    #    那个前提**是错的** —— guards-core 里有 **10 个** vanblog-* 守卫会读 docs/（drill、hardening、
+    #    restore、backup-restore、compose-health、download-fallback、reset-https、source-install、
+    #    uninstall、update，多数是断言「文档不许教破坏性命令」或「文档片段与 compose 模板一致」），
+    #    而 docs-test.yml **不跑它们** ⇒ 改 docs/ 不会触发任何跑这些守卫的 workflow，
+    #    守卫存在却永远不会在该跑的时候跑（与「守卫恒真」同类，只是发生在触发层）。
+    #    同理 CaddyfileTemplate / CaddyfileTemplateLocal 是入库文件，被
+    #    reverse-proxy-host-header.test.sh 读取，此前也不在任何 paths 里。
+    # ⚠️ GitHub 用**改动前**的 workflow 文件判定 paths ⇒ 本次新增的路径从**下一次**触发才生效。
     paths:
       - 'packages/**'
       - 'scripts/**'
+      - 'docs/**'
+      - 'README.md'
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'caddyTemplate.json'
       - 'caddyFallbackTemplate.json'
+      - 'CaddyfileTemplate'
+      - 'CaddyfileTemplateLocal'
       - 'docker-compose/**'
       - 'pnpm-lock.yaml'
       - 'package.json'
@@ -20,23 +32,31 @@ on:
       #    的常驻断言，以及它反方向那半（workflow 引用的守卫必须存在），都会在**别的** workflow 被改动时
       #    失效或漂移。只列 server-test.yml 自己 ⇒ 改 docs-test.yml/nightly.yml 摘掉某个守卫引用时
       #    这个 workflow 根本不触发，断言也就永远没机会红。
-      - '.github/workflows/**'
+      # 🔴 整个 .github 而不只是 workflows：docs-consistency 用 find 扫 ${ROOT}/.github 全目录，
+      #    而 .github 下除 workflows 还有 ISSUE_TEMPLATE。
+      - '.github/**'
   pull_request:
     branches:
       - master
       - dev/dsh
+    # 🔴 与上面 push 的 paths 保持一致（理由见 push 那段的注释）：两个触发器必须同口径，
+    #    否则 PR 上跑不到的守卫会在合并后才第一次红。
     paths:
       - 'packages/**'
       - 'scripts/**'
+      - 'docs/**'
+      - 'README.md'
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'caddyTemplate.json'
       - 'caddyFallbackTemplate.json'
+      - 'CaddyfileTemplate'
+      - 'CaddyfileTemplateLocal'
       - 'docker-compose/**'
       - 'pnpm-lock.yaml'
       - 'package.json'
       - 'patches/**'
-      - '.github/workflows/**'
+      - '.github/**'
 
 # 同一个分支上连着推两次时，把还在跑的那次取消掉：
 # 这个 job 要装整个 workspace 的依赖，排队很浪费。
@@ -438,7 +458,17 @@ jobs:
       - name: Reverse-proxy nginx Host header and cache-bypass docs
         run: bash scripts/tests/run-guard.sh scripts/tests/reverse-proxy-host-header.test.sh
 
-      - name: CI guard wrapper (exit-code passthrough for all 34 wrapped guard steps)
+      - name: CI paths coverage (a guard must be triggered by the files it reads)
+        # 🔴 与下面那条「每个守卫都被接入 CI」是**两件事**：那条管"有没有接进来"，
+        #    这条管"接进来之后，改哪些文件会真的触发它"。这类缺口在两轮里出现过三次：
+        #    ① docs-test 的 paths 不含 CHANGELOG.md（而它跑 changelog-mirror-sync）；
+        #    ② server-test 的 pull_request 过滤器一个 workflow 都没列；
+        #    ③ 🔴 server-test 的 paths 不含 docs/**，而 guards-core 里有 10 个守卫读 docs/
+        #       ⇒ 改文档不会触发任何跑它们的 workflow（此前还被一句注释正当化成
+        #       "只改文档时不用跑测试"，而那个前提是错的）。
+        run: bash scripts/tests/run-guard.sh scripts/tests/ci-paths-coverage.test.sh
+
+      - name: CI guard wrapper (exit-code passthrough for all 36 wrapped guard steps)
         # 🔴 **这一步刻意不经过 run-guard.sh 自己**：它测的就是那个 wrapper，
         #    而 wrapper 若坏了（吞掉退出码），用它来跑"测它的守卫"会把失败一起吞掉
         #    —— 那是循环依赖。所以这里用裸形式，让失败一定能冒出来。

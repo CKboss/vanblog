@@ -32,6 +32,9 @@ on:
       - 'pnpm-lock.yaml'
       - 'package.json'
       - 'patches/**'
+      # 🔴 与 push 的 paths 保持同口径：PR 只改本 workflow 文件时也要跑一次，
+      #    否则一个改坏的 admin-e2e.yml 可以在 PR 上不被验证就合并（push 那边本来就列了自己）。
+      - '.github/workflows/admin-e2e.yml'
 
 # 同一个分支上连着推两次时，把还在跑的那次取消掉：
 # 这个 job 要装整个 workspace 的依赖，排队很浪费。
