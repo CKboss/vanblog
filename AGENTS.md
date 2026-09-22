@@ -9469,6 +9469,38 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.104 🔴 假红清单更正：`utils/storedFileName` 不是负载假红，是**装置缺陷**（清单 7 → 6）
+
+**清单现在是 6 个**：`utils/logRotate`、`utils/rateLimit`（⚠️ 已根除真因、见 §7.101，但保留观察）、
+`utils/markdownExport`、`provider/rss/rss.provider`、`utils/cryptoAsync`、`utils/backupSigning`。
+🔴 **`utils/storedFileName` 已从清单移除**，改记为"**已根除的装置缺陷**"（`6ccf7563` 之后的那一轮修好）。
+
+**真因**（读了失败原文才定位，不是靠"单独跑绿了"）：它的断言写的是"不会在 **root 之外**留下东西"，
+而 `root = mkdtempSync(path.join(tmpdir(), 'vanblog-stored-name-'))`、`outside = path.resolve(root, '..')`
+⇒ 🔴 **`outside` 就是系统 `/tmp` 本身**，于是它断言的实际是"**整个 `/tmp` 在这条用例执行期间没有任何新条目出现**"。
+而 `/tmp` 全机共享（当时 **22,938** 个条目），失败 diff 里多出来的正是**别的套件与变异驱动 concurrently 造的**：
+`mdz-read-*`、`vanblog-md-export-*`（来自 `markdownExport.provider.ts:239` 的 `mkdtempSync`）、
+`vanblog-gate-src-*`/`-target-*`、以及 🔴 **`vanblog-mutation.*`（变异驱动留下的）**。
+**修法**：`beforeEach` 先建一个私有 `-outer-` 目录、把 `root` 建在它里面 ⇒ `path.resolve(root,'..') === outer`，
+而 `outer` 只有本用例在动；断言强度**完全保留**（仍能抓到"往 root 的父目录写东西"）。
+🔴 **修后单独连跑 3 次 61/61 全绿，且在全量 jest 里也不再红**；变异 M7（把观测面改回系统 tmpdir）→ **RED 61 failed**
+⇒ 证明这个装置缺陷是**真实可观测的**。
+
+🔴 **这一族的处置与负载假红相反，必须分清**：
+| | 负载敏感假红 | **测试装置写错** |
+|---|---|---|
+| 例子 | `provider/rss/rss.provider`（文件系统计时）、`utils/cryptoAsync` | 🔴 `storedFileName`（断言整个 `/tmp`）、`rateLimit` 的 `uniqueIp()` 撞车、`loginThrottle` 的墙上时钟 |
+| 症状 | 单独跑绿、并发跑红、**红的位置随负载变** | 单独跑绿、并发跑红、**红的 diff 里是别人的产物** |
+| 🔴 处置 | 重试或降并发（**不要改断言**） | **必须修装置**（改断言/改观测面，🔴 不改产品） |
+⚠️ **§7.93 早就警告过"把它当已知失败的危害是下一个人会拿它掩盖真红"** ⇒ 本轮正是这个危害的实例：
+它在清单里待了多轮，而真因是装置。👉 **规矩：沿用假红清单之前必须读那条断言钉的是什么**
+（判据：**红的 diff 里出现的是不是别人的产物** —— 如果是，那就不是负载问题）。
+
+🔴 **另一条本轮挣来的规矩：变异驱动的判红必须同时读 `Test Suites:` 与 `Tests:` 两行。**
+只看 `Tests:` 会把"**整套 failed to run**"读成"全绿"（本轮 M1 删掉唯一调用点后那个私有方法变成未使用 ⇒ 
+新 spec 整套跑不起来，它的 24 条用例对 `Tests:` 那一行**贡献为 0**，于是驱动误判 NOT_RED）。
+⚠️ **这是本仓库第四次栽在 `Tests:` 行的判读上**（前三次是人工判读，这次是驱动）。
+
 ### 7.103 🔴 死旋钮排查的结论，以及"守卫语料"这一族的三条规矩
 
 **排查结论：没有死旋钮，但发现了一条更严重的事** —— `docs-consistency` 那条"文档提到的环境变量名必须存在"的断言，
@@ -9629,7 +9661,7 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 **基线更新**：server jest **278 套件 / 4064 用例（4056 passed + 7 skipped）**｜website vitest **97 文件 / 1088**｜
 admin **629 tests / 156 suites**｜脚本守卫 **31 文件 / 3044 条**｜四个 tsc 口径各 **0 错**｜
 strict-null 棘轮 **11/0**（四类 **10**）｜`docs-consistency` **52/0**｜`docs-links` **5/0**｜`benchmark-tool` **114/0**。
-⚠️ 已知负载敏感假红清单仍是 7 个，但 🔴 **`utils/rateLimit` 已从清单里根除**（真因是 `uniqueIp()` 从 200 个地址随机取导致撞车，
+⚠️ 已知负载敏感假红清单仍是 **6 个**，但 🔴 **`utils/rateLimit` 已从清单里根除**（真因是 `uniqueIp()` 从 200 个地址随机取导致撞车，
 已改成递增）；⚠️ 而 `utils/storedFileName` 与 `utils/markdownExport` 的红**至今没人读过那条断言的形状**
 （按 §7.93 的规矩，加入/沿用假红清单前应先读）⇒ **这两条的定性弱一档**。
 
