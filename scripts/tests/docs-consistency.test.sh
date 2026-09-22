@@ -96,37 +96,100 @@ else
   fail "安装文档里没有本分支的脚本地址"
 fi
 
-# ---------- 4) 安装/备份文档提到的 VANBLOG_* 变量，必须真的存在 ----------
-# ⚠️ "存在"的判据是三处之一：一键脚本、编排模板、**或 server 源码**。
-# 只认前两处不够：`docs/advanced/backup.md` 会写恢复侧的 server 变量
-# （`VANBLOG_RESTORE_PRUNE_STATIC` / `VANBLOG_RESTORE_DROP_ABSENT_COLLECTIONS`，定义在
-# packages/server/src/utils/fullBackup.ts）—— 它们是真的、也确实该写进编排的 `environment:`，
-# 但脚本自己从来不读 ⇒ 只查脚本会把真变量判成"编造的"。
-# 这条守卫要抓的是"文档写了一个任何地方都不存在的变量名"，所以语料要覆盖三处。
-DOC_VARS="$(grep -rhoE 'VANBLOG_[A-Z_]+' \
-  "${ROOT}/docs/guide/script.snippet.md" "${ROOT}/docs/guide/backup.md" \
-  "${ROOT}/docs/guide/update.md" "${ROOT}/docs/advanced/backup.md" \
-  "${ROOT}/docs/advanced/local-build.md" 2>/dev/null | sort -u)"
-COMPOSE_TPL="${ROOT}/docker-compose/docker-compose-template.yml"
-SERVER_SRC="${ROOT}/packages/server/src"
-# ⚠️ 还要收 `scripts/vanblog-drill.sh`：`VANBLOG_BACKUP_STALE_DAYS` / `_REVERIFY_DAYS` /
-#    那 19 个 `VANBLOG_DRILL_*` 旋钮都定义在它里面，而 backup.md / env.md 会提到它们。
-#    漏掉的结果是**真变量被判成编造的**（本轮两个代理各踩了一次）。
-DRILL_SCRIPT="${ROOT}/scripts/vanblog-drill.sh"
-unknown=""
-for v in ${DOC_VARS}; do
-  if grep -qF "${v}" "${SCRIPT}" || grep -qF "${v}" "${COMPOSE_TPL}" ||
-    grep -qF "${v}" "${DRILL_SCRIPT}" ||
-    grep -rqF --include='*.ts' "${v}" "${SERVER_SRC}" 2>/dev/null; then
-    continue
-  fi
-  unknown="${unknown} ${v}"
+# ---------- 4) 文档提到的环境变量名，必须真的在代码里有读取点 ----------
+# 🔴 2026-09-22 扩宽。原来只扫 5 份文档、只认 `VANBLOG_[A-Z_]+`、"存在"语料只有
+#    一键脚本 + compose 模板 + drill 脚本 + `packages/server/src`。三处缺口都是实测出来的：
+#    ① `docs/reference/env.md` 是变量的**权威清单**（210 个名字），却不在语料里 ⇒
+#       全部文档里的 246 个名字有 **165 个从来没被这条守卫扫过**；
+#    ② 正则漏掉 `VAN_BLOG_*` 家族（`loadConfig('a.b.c')` 推导出的那一支，共 33 个）——
+#       而 🔴 **第二次死旋钮事故正是这个家族**：文档写 `VANBLOG_CADDY_DATA_PATH`，
+#       真名是 `VAN_BLOG_CADDY_DATA_PATH`（差一个下划线）⇒ **那条因它而生的守卫抓不到它的复发**；
+#    ③ `[A-Z_]+` 不含数字 ⇒ `VANBLOG_INIT_LIMIT_PER_10MIN` 会被截成 `..._PER_`，
+#       而判据是 `grep -qF`（**子串**匹配）⇒ 截断后的前缀能在真名里找到 ⇒ 🔴 **静默放行**
+#       （比误报更糟：它让守卫看起来在跑，实际那一条从来没被检查过）。
+# ⚠️ 语料口径的两点刻意选择，都别"顺手统一"：
+#   - **"存在"语料包含 spec 文件**，这与 `packages/server/src/utils/envVarMentions.spec.ts`
+#     刻意**排除** spec 相反，而 🔴 **两边都对**：那条守卫问的是"用户可见文案里提到的变量
+#     是否真有**运行期**读取点"（只有测试读的变量不算数）；这一条问的是"文档写的名字是否
+#     **在仓库里存在**"，而 `env.md` 有一节专门登记**测试专用**变量
+#     （`VANBLOG_TEST_ENV_NUM`、`VANBLOG_SEARCH_MONGOD`、`VANBLOG_SEARCH_REALDB*`）⇒
+#     排除 spec 会把这些**合法的**登记判成"编造的"。👉 同一条性质、两个不同的问题 ⇒ 两套语料。
+#   - **通配家族写法（结尾是下划线，如 `VANBLOG_ISR_RETRY_`、`VANBLOG_WATERMARK_`）不算名字**，
+#     所以正则要求**以字母数字结尾**；否则会把"某家族"当成"某个变量"去查，必然查不到。
+# ⚠️ 已知宽松处（与扩宽前一致，未新增）：判据是"名字在语料里出现过"，所以**只在代码注释里
+#    被提过**也算存在。要收紧到"真的有 `process.env[...]` 读取点"需要数据流分析，成本与
+#    假阳性都会大幅上升；`envVarMentions.spec.ts` 已从"用户可见文案"那一侧覆盖了更严的口径。
+# 🔴 提取口径：**一条贪婪正则 + 按结尾字符分流**，不要用两条正则。
+#    贪婪 `(VAN_BLOG|VANBLOG)_[A-Z0-9_]*` 会把 `VANBLOG_ADMIN_PASSWORD_FILE` **整体**取出，
+#    所以不会另外产生截断形 `VANBLOG_ADMIN_PASSWORD`；而**通配家族写法**（文档里写成
+#    `VANBLOG_ISR_RETRY_`、`VANBLOG_WATERMARK_` 这种结尾带下划线的）取出后**以下划线结尾**，
+#    用 `grep -E '[A-Z0-9]$'` 一律滤掉 ⇒ 不需要单独再抠一遍家族写法。
+#    ⚠️ 曾经踩过：用第二条"以 `_` 结尾"的正则去抠家族写法，它会匹配**任何真名字的前半段**
+#    （`VANBLOG_ADMIN_PASSWORD_FILE` 的前缀 `VANBLOG_ADMIN_PASSWORD_`）⇒ 一次误删了 9 个真变量
+#    （`VANBLOG_ADMIN_PASSWORD`、`VANBLOG_BACKUP_PASSPHRASE`、`VANBLOG_DATA_PATH`、
+#    `VAN_BLOG_REVALIDATE` 等），而守卫**不会变红、只会静默变弱**。
+#    🔴 判据不能是"是别的名字的严格前缀"（`VANBLOG_BACKUP_PASSPHRASE` 正是 `..._FILE` 的严格前缀，
+#    两者都是真变量），只能是"**原文里这个 token 以下划线结尾**"。
+ENV_TOKEN_RE='(VAN_BLOG|VANBLOG)_[A-Z0-9_]*'
+DOC_ENV_NAMES="$(mktemp)"
+CODE_ENV_NAMES="$(mktemp)"
+SYN_ENV_NAMES="$(mktemp)"
+# 文档侧：全部 docs/**/*.md（🔴 排除生成镜像 docs/changelog.md —— 它整篇是历史记录，
+# 里面合法地提到"某变量已删除"这类事实）+ README.md；排除 .vuepress 的构建产物。
+find "${ROOT}/docs" -name '*.md' \
+  -not -path "${ROOT}/docs/changelog.md" \
+  -not -path '*/.vuepress/*' -print0 2>/dev/null \
+  | xargs -0 grep -ohIE "${ENV_TOKEN_RE}" 2>/dev/null > "${DOC_ENV_NAMES}.raw"
+grep -ohIE "${ENV_TOKEN_RE}" "${ROOT}/README.md" 2>/dev/null >> "${DOC_ENV_NAMES}.raw"
+grep -E '[A-Z0-9]$' "${DOC_ENV_NAMES}.raw" 2>/dev/null | sort -u > "${DOC_ENV_NAMES}"
+# 代码侧：所有包的源码与配置、scripts/**、.github/**，外加 Dockerfile / compose / 根 package.json。
+find "${ROOT}/packages" "${ROOT}/scripts" "${ROOT}/.github" \
+  \( -name node_modules -o -name dist -o -name .next -o -name .umi -o -name .umi-production \
+     -o -name coverage -o -name .turbo -o -name .vuepress \) -prune -o \
+  -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.cjs' \
+     -o -name '*.mjs' -o -name '*.json' -o -name '*.sh' -o -name '*.yml' -o -name '*.yaml' \) \
+  -print0 2>/dev/null \
+  | xargs -0 grep -ohIE "${ENV_TOKEN_RE}" 2>/dev/null > "${CODE_ENV_NAMES}.raw"
+for extra in Dockerfile docker-compose/docker-compose-template.yml docker-compose/docker-compose.yml package.json; do
+  grep -ohIE "${ENV_TOKEN_RE}" "${ROOT}/${extra}" 2>/dev/null >> "${CODE_ENV_NAMES}.raw"
 done
-if [[ -z "${unknown}" ]]; then
-  pass "文档里的 VANBLOG_* 变量都真实存在（$(printf '%s' "${DOC_VARS}" | wc -w) 个；脚本 / 编排模板 / server 源码任一即算）"
+grep -E '[A-Z0-9]$' "${CODE_ENV_NAMES}.raw" 2>/dev/null | sort -u > "${CODE_ENV_NAMES}"
+doc_env_count="$(wc -l < "${DOC_ENV_NAMES}" | tr -d ' ')"
+code_env_count="$(wc -l < "${CODE_ENV_NAMES}" | tr -d ' ')"
+unknown_env="$(comm -23 "${DOC_ENV_NAMES}" "${CODE_ENV_NAMES}")"
+# 🔴 反空转：语料 glob 坏掉时"没有未知名字"会变成一个空的绿（本仓库已因此写出过恒真守卫）
+if [[ "${doc_env_count}" -ge 200 ]]; then
+  pass "反空转：文档侧提取到 ${doc_env_count} 个变量名（下界 200）"
 else
-  fail "文档提到不存在的变量（脚本、编排模板、server 源码里都找不到）:${unknown}"
+  fail "反空转：文档侧只提取到 ${doc_env_count} 个变量名（下界 200）⇒ docs 语料的 find/grep 或结尾过滤可能坏了"
 fi
+if [[ "${code_env_count}" -ge 200 ]]; then
+  pass "反空转：代码侧提取到 ${code_env_count} 个变量名（下界 200）"
+else
+  fail "反空转：代码侧只提取到 ${code_env_count} 个变量名（下界 200）⇒ 代码语料的 find/grep 或结尾过滤可能坏了"
+fi
+# 🔴 尺子有效性反证：同一套差集逻辑，对"一个真名字 + 一个编造名字"的合成语料，
+#    必须**只**抓到编造的那个（否则会误报真名字 ⇒ 守卫一上线就天天红 ⇒ 被加白名单加到失效）。
+# 🔴 探针名用**相邻字符串拼接**构造：完整字面量绝不出在本文件里。
+#    原因（实测踩过）：代码语料包含 `scripts/**`，也就是**包含这条守卫自己**，
+#    所以直接写 `probe_env="VANBLOG_XXX"` 会让 XXX 立刻"存在于代码语料"⇒ 差集为空 ⇒
+#    尺子反证恒真地"通过"。👉 这正是"不要写你要断言不存在的字面量"那条规矩的新形态：
+#    **守卫自己的源码也在它的语料里**。拼接后源码里只有 `VANBLOG_` 与 `ZZ_RULER_PROBE_KNOB`
+#    两半，都不匹配名字正则（前者后面紧跟引号、不以字母数字结尾；后者不带前缀）。
+probe_env="VANBLOG_""ZZ_RULER_PROBE_KNOB"
+printf '%s\n%s\n' 'VANBLOG_TRUST_FORWARDED_HEADERS' "${probe_env}" | sort -u > "${SYN_ENV_NAMES}"
+syn_unknown="$(comm -23 "${SYN_ENV_NAMES}" "${CODE_ENV_NAMES}")"
+if [[ "${syn_unknown}" == "${probe_env}" ]]; then
+  pass "尺子有效性：合成语料里编造的名字被抓到、真名字没被误报"
+else
+  fail "尺子失效：合成语料的差集结果不是恰好那个编造名（got '${syn_unknown}'）"
+fi
+if [[ -z "${unknown_env}" ]]; then
+  pass "文档里的 ${doc_env_count} 个 VAN_BLOG_*/VANBLOG_* 名字都在代码语料里存在（含 env.md 权威清单）"
+else
+  fail "文档提到代码里不存在的变量名（可能是编造的、改名后没同步、或差一个下划线）:$(printf '%s' "${unknown_env}" | tr '\n' ' ')"
+fi
+rm -f "${DOC_ENV_NAMES}" "${DOC_ENV_NAMES}.raw" "${CODE_ENV_NAMES}" "${CODE_ENV_NAMES}.raw" "${SYN_ENV_NAMES}"
 
 # ---------- 5) 文档写的默认值要和脚本一致 ----------
 # ⚠️ `${VAR:-default}` 里 cut -d: -f2- 会多带一个 `-`，要把开头的 `-` 去掉
