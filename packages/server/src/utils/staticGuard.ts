@@ -48,13 +48,26 @@ export function guardedStaticFirstSegment(rawPath: unknown): string | null {
   }
   // Windows 风格分隔符与重复斜杠都要收掉：`//export/` 与 `/export/` 是同一个目录
   p = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
-  if (p === '/static') {
+  // 🔴 2026-09-22 修：**前缀**的比较也必须大小写不敏感（此前只有下面第一段做了 toLowerCase）。
+  //    `main.ts` 用 `app.use(prefix, express.static(...))` 挂载，而 Express 的前缀匹配
+  //    **默认大小写不敏感**（没有设 `case sensitive routing`）⇒ `/STATIC/export/x` 会真的被
+  //    serve-static 服务；而守卫当时只对 `/static/` 做**大小写敏感**的前缀匹配，
+  //    于是 `/STATIC/export/x` 落到 `seg = null` 分支被放行。**活体已证实**：
+  //    `/static/export/<归档>` → 403，而 `/STATIC/export/<同一个>` 与 `/Static/export/<同一个>` → **200**。
+  //    ⚠️ 这是"同一个文件里对同一性质有两套口径"：第一段大小写不敏感、前缀大小写敏感，相隔 14 行。
+  //    🔴 下面的 `slice` 偏移必须基于**原串** `p` 而不是小写副本：`toLowerCase()` 对非 ASCII
+  //    **可能改变长度**（例如 'İ' 小写后是 2 个字符），用小写副本去切会切错位置。
+  //    ⚠️ 这里的归一化口径与 `utils/rateLimit.ts` 的 `normalizeRateLimitPath` **故意不同**，
+  //    不要"顺手统一"：本模块**必须解码百分号**（因为下游 serve-static/send 在打开文件前会解码），
+  //    而限流那边**必须不解码**（因为 Express 路由匹配用的是未解码的 `req.path`，
+  //    解码会让限流器比路由器更宽）。**两边各自对齐自己的下游，才是正确口径。**
+  if (p.toLowerCase() === '/static') {
     // 静态根本身（没有尾斜杠）：不是"逃出"，也不需要挡，交给 serve-static 处理目录请求
     return null;
   }
-  const hadStaticPrefix = p.startsWith('/static/');
+  const hadStaticPrefix = p.toLowerCase().startsWith('/static/');
   p = path.posix.normalize(p);
-  if (!p.startsWith('/static/')) {
+  if (!p.toLowerCase().startsWith('/static/')) {
     if (hadStaticPrefix) {
       // ⚠️ 原本以 /static 开头、归一化后却逃出去了（`/static/%2e%2e/export/x` → `/export/x`）。
       // serve-static 的 send 层会拒这种"恶意路径"，但**守卫不该把判断权交出去** ——
