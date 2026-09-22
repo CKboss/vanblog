@@ -63,8 +63,10 @@ function buildController() {
 
 function buildRequest(ip = '203.0.113.7') {
   const headers: Record<string, string> = {};
-  // ⚠️ 用**非回环**地址：防爆破类计数走套接字口径（`bruteForceClientIp`），
-  //    回环地址在既有口径下可能被特殊处理，那会让限流断言变成空转。
+  // ⚠️ 用**非回环**地址：防爆破类计数走 `bruteForceClientIp`。🔴 2026-09-23 更正措辞：它默认是
+  //    **trusted** 口径，不是旧注释说的"套接字口径"（口径以 utils/trustedProxy.ts 为权威）。
+  //    **但"必须用非回环地址"这条建议没变，而且理由更强了**：回环对端会让默认的 auto 模式
+  //    转而采信转发头，而本用例不设任何转发头 ⇒ 键会退化到兜底分支，限流断言就成了空转。
   const request: any = {
     socket: { remoteAddress: ip },
     ip,

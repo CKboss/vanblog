@@ -275,8 +275,11 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
     // 以前是 `pickClientIp(req) || pickSocketIp(req)`，而 pickClientIp 优先读
     // cf-connecting-ip / x-real-ip / x-forwarded-for —— 全是客户端可控的头，
     // 于是"每个请求换一个头"就能把四档限流全部绕过（实测 20/20 放行）。
-    // ⚠️ 防爆破类的计数（登录 / 评论 / 文章解锁）**不要**换成这个函数，
-    // 它们继续用 pickSocketIp()：那边的收益正是"换一个 key 重新开始"，理由见 trustedProxy.ts。
+    // ⚠️ 防爆破类的计数（登录 / 评论 / 文章解锁 / 隐写检测 / 备份恢复）**不要**直接换成这个函数。
+    // 🔴 2026-09-23 更正：它们统一走 `bruteForceClientIp()`，**不是**旧注释说的 `pickSocketIp()`。
+    //    "不要在这里直接调 pickTrustedClientIp 当防爆破的 key"这一点没变 —— 防爆破类要有自己一个
+    //    入口（保证 key 永不为空、并留 `socket` 逃生口）；但**口径、默认值与完整理由以
+    //    utils/trustedProxy.ts 里 bruteForceClientIp 的文档注释为权威，这里刻意不复述**。
     const ip = pickTrustedClientIp(req);
     // 🔴 归一化后再分档：Express 的路由匹配大小写不敏感且尾斜杠可选（活体实测过四种写法
     //    返回同一份响应），而下面几档的判定是大小写敏感的 startsWith ⇒ 不归一化就能被

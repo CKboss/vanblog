@@ -9469,6 +9469,88 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.117 🔴 "一族五处"实测是**七处、跨五个文件**，而且有一条守卫的标题声称"不再互相矛盾"却不检查矛盾
+
+§7.116 登记的是"四处待修"。🔴 **实际修下来是七处、跨五个文件**（含 §7.116 已修的 `trustedProxy.ts` 文件头，
+本轮修了其余六处）：
+
+| 位置 | 陈旧的说法 | 本轮 |
+| --- | --- | --- |
+| `provider/log/utils.ts` 的 `pickClientIp` 文档注释 | "防爆破类计数 → 用下面的 `pickSocketIp()`" | ✅ 已修 |
+| 🔴 `provider/log/utils.ts` 的 **IP 归属地查询**文档注释 | "限流等关键路径不要用这个函数，**用本地的 `pickSocketIp()`**" | ✅ 已修（**§7.116 漏了这处**） |
+| 🔴 `provider/log/utils.ts` 的 **`pickSocketIp` 自己的**文档注释 | "用在哪：**防爆破/防刷类**计数 —— `LoginGuard.keyOf`、`comment.provider` 的三档、`public.controller` 的加密文章解锁" + 一整段被推翻的理由 | ✅ 已修（**§7.116 漏了这处，而它是写得最详细的一处**） |
+| `utils/rateLimit.ts` 分档处 | "防爆破类的计数**不要**换成这个函数，它们继续用 pickSocketIp()" | ✅ 已修 |
+| `controller/admin/img/img.controller.ts` 隐写检测处 | "计数用**套接字口径**的 IP" | ✅ 已修 |
+| `controller/admin/auth/auth.controller.ts` 恢复处 | "计数用 `bruteForceClientIp`（**套接字地址优先**）" | ✅ 已修 |
+| 🔴 `utils/uploadQuota.spec.ts` 的 `buildRequest` 注释 | "防爆破类计数走**套接字口径**" | ✅ 已修（**在 spec 里，§7.116 的搜索没覆盖到**） |
+
+👉 **对 §7.116 那条规矩的两处补强**：
+1. 🔴 **搜"旧结论的措辞变体"时必须把 spec 文件也算进去** —— 测试里的注释同样是给下一个人看的文档，
+   而且它就在断言旁边，误导性更强（本例 `uploadQuota.spec.ts` 那句是**测试装置的理由说明**，
+   读的人会以为"限流走套接字口径"是这个用例成立的前提）。
+2. 🔴 **最该搜的是那个函数自己的文档注释** —— 决定被推翻时，"这个函数用在哪"那段是**最详细、最像权威**的一处，
+   而它恰恰最容易漏（本例 `pickSocketIp` 自己的 docstring 点名了三个调用点，全都已经迁走）。
+
+🔴 **本轮最重要的发现：有一条守卫的标题声称这件事已经被守住了，而它的断言并不检查这件事。**
+`audit-hardening-round3-trustedproxy.spec.ts` 里有一个 `it`，标题是
+**「两个 IP 函数的 docstring 都指向了新 helper（**不再互相矛盾**）」**，它 **不剥注释**地读 `provider/log/utils.ts`，断言：
+```
+expect(src).toContain('utils/trustedProxy.ts');
+expect(src).toContain('pickTrustedClientIp');
+expect(src).not.toContain('用本地的 `pickClientIp()`');
+```
+🔴 **这三条在本轮修复之前全部通过** —— 因为文件里确实提到了 `trustedProxy.ts` 与 `pickTrustedClientIp`
+（在**体量类限流**那一条 bullet 里），而那第三条 `not.toContain` 针对的是**另一个函数名**（`pickClientIp`，
+不是 `pickSocketIp`）。⇒ **标题承诺的"不再互相矛盾"从来没有被断言过**，而 docstring 里"防爆破类 → 用 `pickSocketIp()`"
+与同文件里 `bruteForceClientIp` 的口径**矛盾了好几个轮次**。
+👉 **这是"守卫看着绿其实没在守"那一族的新形状：断言与 `it` 标题承诺的性质不是同一件事。**
+⚠️ 与既有的几条并列：复刻漂移（自我认证）、`not.toContain` 在两边都空时恒真、18 条断言在测一个从未执行的分支、
+枚举 0 条 ⇒ "未覆盖清单为空"的恒真绿。🔴 **规矩：读一条断言时要问"它红的条件，是不是 `it` 标题说的那件事"。**
+
+⚠️ **并且这条守卫反过来成了本轮的一个约束**：因为它**不剥注释**地读 `provider/log/utils.ts`，
+🔴 **改那个文件的注释必须保留 `utils/trustedProxy.ts` 与 `pickTrustedClientIp` 两个字面量**，
+否则会把一条与本意无关的断言弄红。改前核实它们的位置、改后核实仍存在（分别 6 处与 5 处）。
+👉 **规矩：改注释之前要先查"有没有 spec 是不剥注释地读这个文件的"** —— 
+本仓库大部分源码级断言都用 `stripCommentsForAnchor`，但**不是全部**，而不剥注释的那些会让"只改注释"变成破坏性改动。
+
+🔴 **证据强度如实标注：这一族没有任何守卫能钉住。** 实测变异 M1（把 `pickSocketIp` 的 docstring 换回旧结论）⇒
+**7 套件 / 152 用例全绿，没有任何东西变红**。⇒ 与 §7.116 同结论：**mitigation 不是加守卫（钉散文会产生噪音），
+而是让注释不持有会漂的内容** —— 六处全部改成**指向权威**（`bruteForceClientIp` 与 `BRUTE_FORCE_IP_SOURCE_ENV`
+的文档注释）而**不复述取值、数字与理由**，同时**保留每处原本只有本地才知道的信息**
+（`pickSocketIp` 现在真正的三个调用点、`isInternalRequest` 为什么恰恰要不可伪造的对端、
+隐写检测与备份恢复为什么各自要一个防爆破桶、以及那个测试为什么必须用非回环地址）。
+⚠️ 顺带把 `pickSocketIp` docstring 里的 `600/分钟` 也去掉了（那是会漂的数字）。
+
+🔴 **"可执行代码一行未动"用了两个独立证明**（本轮只被授权改注释，所以这条必须证死）：
+① `git diff -U0` 的 **+41 / −16 行逐行判定，全部是注释行**（`//`、`*`、`/*` 开头）；
+② 用仓库自己的 `stripCommentsForAnchor` 把 `git show HEAD:<file>` 与工作树版本**都剥掉注释后逐字节比对**，
+5 个文件**全部相同**（写成一个临时 spec 跑，5/5 绿，含 `length > 100` 的反空转，跑完即删）。
+
+⚠️ **本轮三个尺子/取证错误，都被自查抓到**：
+1. 🔴 **又踩了"assert 失败而后续命令照跑"那条**：更新状态表的 python 脚本锚点写错（我凭**被终端截断的**输出
+   重建锚点，多加了 `**` 粗体标记）⇒ `AssertionError` ⇒ **文件根本没被写**，而同一条命令链后面的
+   `grep -c`、`sha1sum` 照跑 ⇒ 差点把"sha 没变"读成别的结论。**是 sha 对比那一步抓住的。**
+   👉 教训加强版：**重建锚点必须用 `repr()` 打印逐字原文，不能用被 `cut`/`head` 截断过的输出**；
+   并且**改完必须核 sha 真的变了**。
+2. 🔴 **判定"AGENTS 有重号"的尺子连着错了两次**（同一个问题、两种错法，都值得记）：
+   - 第一版 `grep -oE '^### 7\.[0-9]+'` 把 `### 7.12.1` **截断**成 `### 7.12`，`uniq -d` 于是报出 5 个"重号"；
+   - 🔴 **修完第一版仍然错**：加上 `(\.[0-9]+)?` 之后，`uniq -d` 又报出 `### 7.78` 与 `### 7.79` ⇒
+     查原文才发现本手册还有**字母后缀**这一族编号（`7.78b`、`7.78c`、`7.79b`、`7.79c`、`7.79-archived`），
+     而我的 `([^0-9]|$)` 边界把字母当成了"节号结束"⇒ 又被截断。
+   - 🔴 **结论：手册里根本没有重号**，编号约定是 `7.N`、`7.N.M`（子节）、`7.Nx`（字母后缀）与 `7.N-archived`。
+   👉 与"计数异常先怀疑尺子"同族（本仓库已**九次**），而**本轮的特殊之处是同一个尺子错了两次、
+   第二次是在"我已经修好尺子"之后** ⇒ **修尺子之后要拿已知样本再验一次**（这里的已知样本就是"把标题原文打出来看"，
+   而我第一次没打原文、只信了计数）。🔴 **两次都是在写进汇报之前自己抓到的。**
+3. ⚠️ **重定向顺序写错**：`jest 2>&1 > /tmp/log` 让 stderr 去了终端、只有 stdout 进文件 ⇒ 
+   对文件 `grep` 汇总行是空的。👉 **`> file 2>&1` 才是"两者都进文件"**；
+   与"计数/取证类判据不要接在会截断的管道后面"同族（都是**取证通道本身**出错，而不是被测对象出错）。
+
+🔴 **节号规矩的一个补充**（§7.116 那条"取最大值 + 1"）：**求最大值时要排除子节**（`7.38.4` 不是 `7.38` 的竞争者，
+但 `grep -oE '^### 7\.[0-9]+'` 会把它截断成 `7.38` 从而污染计数）。本轮用
+`grep -oE '^### 7\.[0-9]+' | sed 's/^### 7\.//' | sort -n | tail -1` 得到 **116**，新节取 **7.117**，并核实它此前 0 命中。
+⚠️ 另核实本手册是**降序排列**（7.116 在 7.115 之前）⇒ 新节插在 §7.116 之前。
+
+
 ### 7.116 🔴 一个决定被推翻时，"理由见 X"那种指针会让**指向它的那些句子自己变陈旧**（一族五处）
 
 **实例**：防爆破类计数的 IP 口径从 `pickSocketIp()` 改成 `bruteForceClientIp()`（默认 `trusted`）时，
@@ -9481,10 +9563,10 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 | 位置 | 陈旧的说法 | 状态 |
 | --- | --- | --- |
 | `utils/trustedProxy.ts` **文件头**「哪些调用点该用哪个」 | "防爆破类**继续用 `pickSocketIp()`**，不要换" | ✅ 本轮已修 |
-| `provider/log/utils.ts` 的 `pickClientIp` 文档注释 | "防爆破类计数（登录、评论频率、加密文章解锁）→ 用下面的 `pickSocketIp()`" | 🔴 未修（待排） |
-| `utils/rateLimit.ts` 分档处 | "防爆破类的计数**不要**换成这个函数，它们继续用 pickSocketIp()" | 🔴 未修（待排） |
-| `controller/admin/img/img.controller.ts` 隐写检测处 | "计数用**套接字口径**的 IP（`bruteForceClientIp`…）" | 🔴 未修（**函数名对、口径描述错**） |
-| `controller/admin/auth/auth.controller.ts` 恢复处 | "计数用 `bruteForceClientIp`（**套接字地址优先**）" | 🔴 未修（同上） |
+| `provider/log/utils.ts` 的 `pickClientIp` 文档注释 | "防爆破类计数（登录、评论频率、加密文章解锁）→ 用下面的 `pickSocketIp()`" | ✅ **已修（§7.117）** |
+| `utils/rateLimit.ts` 分档处 | "防爆破类的计数**不要**换成这个函数，它们继续用 pickSocketIp()" | ✅ **已修（§7.117）** |
+| `controller/admin/img/img.controller.ts` 隐写检测处 | "计数用**套接字口径**的 IP（`bruteForceClientIp`…）" | ✅ **已修（§7.117）** |
+| `controller/admin/auth/auth.controller.ts` 恢复处 | "计数用 `bruteForceClientIp`（**套接字地址优先**）" | ✅ **已修（§7.117）** |
 
 🔴 **最讽刺的一处**：`trustedProxy.ts` 文件头那一节的标题原文就是
 「⚠️ **哪些调用点该用哪个**（**这条最容易被下一个人改错**）」，而 `audit-hardening-round3-trustedproxy.spec.ts`

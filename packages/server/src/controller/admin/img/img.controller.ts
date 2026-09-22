@@ -180,8 +180,11 @@ export class ImgController {
     //    检测要把整图解码成 raw RGBA
     //    再逐像素比对（实测 36MP → 401ms、RSS 477MB），600 次/分钟 = 每分钟 240 秒 CPU，
     //    3 个并发就足以让 1–2GB 的容器 OOMKilled。这里压到 10 次/分钟/IP。
-    //    计数用**套接字口径**的 IP（`bruteForceClientIp`，与登录/恢复那两个防爆破桶同源），
-    //    因为"换个 X-Forwarded-For 就重新开始计数"正是这类桶要防的；`scaleLimit` 按 worker
+    //    计数用 `bruteForceClientIp`（与登录/恢复那两个防爆破桶同源）。🔴 2026-09-23 更正措辞：
+    //    原文写"**套接字口径**"是错的 —— 它默认是 **trusted** 口径（口径、默认值与理由以
+    //    utils/trustedProxy.ts 里 bruteForceClientIp 的文档注释为权威，这里不复述）。
+    //    "换个 X-Forwarded-For 就重新开始计数"仍然是这类桶要防的，只是它靠的是"只采信可信代理
+    //    追加的那一跳"而不是"只认套接字地址"；`scaleLimit` 按 worker
     //    数摊薄（桶是进程内的，多 worker 时总量会翻倍）。
     const ip = bruteForceClientIp(request);
     const hit = consumeAttempt(`stego-detect-${ip}`, {

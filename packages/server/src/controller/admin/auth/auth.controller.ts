@@ -129,8 +129,10 @@ export class AuthController {
     // 以前只剩全局的 600 次/分钟。恢复密钥是 32 字节随机（爆破不可行），
     // 真正要防的是：①拿着泄露的密钥反复试；②把它当免费的"改管理员口令"接口刷；
     // ③在 cluster 多进程下用大流量放大任何判定缺陷。
-    // ⚠️ 计数用 `bruteForceClientIp`（套接字地址优先）而不是 `pickTrustedClientIp`：
-    //    防爆破类计数的收益正是"换一个 key 就重新开始"，理由见 utils/trustedProxy.ts。
+    // ⚠️ 计数用 `bruteForceClientIp` 而不是直接调 `pickTrustedClientIp`。🔴 2026-09-23 更正措辞：
+    //    原文写"（套接字地址优先）"是错的 —— 它默认是 **trusted** 口径。防爆破类要有自己一个入口
+    //    （保证 key 永不为空、并留 `socket` 逃生口），而**口径、默认值与完整理由以
+    //    utils/trustedProxy.ts 里 bruteForceClientIp 的文档注释为权威，这里刻意不复述**。
     //    `rateLimit.ts` 由别的改动负责，这里只用它导出的阈值常量，不去改它。
     const restoreIp = bruteForceClientIp(request);
     const restoreHit = consumeAttempt(`auth-restore-${restoreIp}`, {

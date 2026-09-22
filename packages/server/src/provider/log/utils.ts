@@ -111,7 +111,9 @@ function firstPublicIp(candidates: string[]): string | undefined {
  * 不会剥掉客户端自带的 cf-connecting-ip），所以它**只适合做日志归属**，不适合做任何安全判定：
  *  - 体量类限流（全局/静态/公开写/初始化）→ 用 `utils/trustedProxy.ts` 的 `pickTrustedClientIp()`
  *    （只在"对端是回环/私网"时采信转发头，且只取 XFF 的最右一项）；
- *  - 防爆破类计数（登录、评论频率、加密文章解锁）→ 用下面的 `pickSocketIp()`；
+ *  - 防爆破类计数（登录、评论频率、加密文章解锁、隐写检测、备份恢复）→ 用
+ *    `utils/trustedProxy.ts` 的 `bruteForceClientIp()`（🔴 **不是**下面的 `pickSocketIp()`，
+ *    那一版口径已被推翻，理由以那边为权威）；
  *  - 需要"这个请求是不是站内服务发的" → 用 `utils/rateLimit.ts` 的 `isInternalRequest()`。
  */
 export function pickClientIp(req: any): string {
@@ -163,7 +165,8 @@ export function pickClientIp(req: any): string {
  * - 3 秒超时（`VAN_BLOG_IP_GEO_TIMEOUT` 可调）；
  * - `VANBLOG_DISABLE_IP_GEO=true` 可以完全关掉（不想把访客 IP 发给第三方就用它）；
  * - 失败只影响日志里的归属地字段，不影响任何业务逻辑。
- * 限流等**关键路径不要用这个函数**（它会发外网请求），用本地的 `pickSocketIp()`。
+ * 限流等**关键路径不要用这个函数**（它会发外网请求）：体量类限流用 `utils/trustedProxy.ts`
+ * 的 `pickTrustedClientIp()`，防爆破类计数用同文件的 `bruteForceClientIp()`。
  */
 // ⚠️ 必须是"校验过再交出去"：`Number('3s')` 是 NaN，而 axios 把 `timeout: NaN`
 // 当成**没设超时**（NaN 是 falsy）⇒ 一个写错的 env 就能把这个函数悄悄变回
@@ -173,14 +176,26 @@ export const IP_GEO_TIMEOUT_MS = envPositiveInt('VAN_BLOG_IP_GEO_TIMEOUT', 3000,
 /**
  * 只取 TCP 套接字对端地址（**不可被请求头伪造**）。
  *
- * 用在哪：**防爆破/防刷类**计数 —— `LoginGuard.keyOf`、`comment.provider` 的三档、
- * `public.controller` 的加密文章解锁。这些地方攻击者的收益正是"换一个 key 重新开始"，
- * 而反代（caddy）追加 XFF 时**不会剥掉**客户端自带的 `cf-connecting-ip`/`x-real-ip`，
- * 所以哪怕对端可信，采信转发头也等于把"无限试密码 + 用受害者 IP 把对方锁在门外"重新打开。
+ * 🔴 **2026-09-23 更正**：这一节此前写的是"用在**防爆破/防刷类**计数 —— `LoginGuard.keyOf`、
+ * `comment.provider` 的三档、`public.controller` 的加密文章解锁"，并给出理由说"采信转发头就等于
+ * 把无限试密码与栽赃重新打开"。**那个结论与那条理由都已被推翻**：这几类计数现在全部走
+ * `utils/trustedProxy.ts` 的 `bruteForceClientIp()`。🔴 **结论与完整论证以 `bruteForceClientIp`
+ * 与 `BRUTE_FORCE_IP_SOURCE_ENV` 的文档注释为权威，本节刻意不复述取值、数字与理由**
+ * （复述出来的数字就是下一次漂移的地方）。代码事实由 `utils/bruteForceIp.spec.ts`、
+ * `audit-hardening-round3-trustedproxy.spec.ts` 与 `audit-hardening-round4-security-bruteforce.spec.ts`
+ * 钉住。
+ *
+ * 现在**真正**调用它的地方（都不在防爆破计数的判定路径上）：
+ *  - `utils/trustedProxy.ts` 内部：`pickTrustedClientIp()` 取对端做信任判定，
+ *    以及 `bruteForceClientIp()` 的 `socket` 逃生口分支与"什么都读不到"时的兜底；
+ *  - `utils/rateLimit.ts` 的 `isInternalRequest()`：判断"这个请求是不是站内服务发的"，
+ *    那里要的正是**不可伪造**的对端，与"客户端是谁"无关；
+ *  - `provider/init/init.provider.ts`：归因记录里**额外**存一份 `socketIp`
+ *    （与 `pickTrustedClientIp` 的结果并存，那边注释写了为什么两个都要留）。
  *
  * ⚠️ **体量类**限流（全局/静态/公开写/初始化）不要直接用这个函数：反代后面所有访客会共用
- * 一个 600/分钟 的桶（§7.44 那场 429 风暴）。那边用 `utils/trustedProxy.ts` 的
- * `pickTrustedClientIp()`，它按 `VANBLOG_TRUST_FORWARDED_HEADERS`（默认 `auto`）决定
+ * 一个桶（§7.44 那场 429 风暴）。那边用 `utils/trustedProxy.ts` 的
+ * `pickTrustedClientIp()`，它按 `VANBLOG_TRUST_FORWARDED_HEADERS` 决定
  * 要不要采信转发头、以及采信到哪一跳。
  */
 export function pickSocketIp(req: any): string {
