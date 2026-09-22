@@ -9469,6 +9469,58 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.112 🔴 `docs/reference/config.md` **不是** `config.yaml` 的文档 —— 文件名骗过人，字段级审计的正确口径
+
+**这个文件名已经造成过一次真实错误**：此前一次"字段级核对"照着文件名去比 `config.yaml`，
+**普查只得到 3 个字段**就被当成核对完了。真相是：
+
+| 文档 | 实际文档化的对象 | 权威来源 |
+|---|---|---|
+| 🔴 `docs/reference/config.md` | **后台「站点管理 / 系统设置」的站点配置项**（落库在 `Meta.siteInfo`，改完立即生效、不重启） | `packages/server/src/types/site.dto.ts` 的 `SiteInfo` 类（字段与类型）＋ `packages/admin/src/components/SiteInfoForm/index.tsx`（label / 分 tab / 必填）＋ `packages/admin/src/utils/analysisFields.js`（两个统计 ID 字段的 label，**第三处口径**） |
+| 🔴 `docs/reference/env.md` | **`config.yaml` 与环境变量**（部署期配置） | `packages/server/src/utils/loadConfig.ts` ＋ 全部 `loadConfig('<key>', <default>)` 调用点（**`config.yaml` 没有 schema，键面就是调用点**） |
+| ⚠️ `docs/features/config.md` | **叙事型**文档（主题与界面风格、Apple 风格、一键补封面），207 行 | 不是字段表，与 reference 那份**用途不同**（但开头第一句与 reference 那份**逐字相同**，容易看混） |
+
+🔴 **审计结论（2026-09-23，三方一一对应，零字段缺口）**：`SiteInfo` **45** 个字段 / 表单 **45** 个元素 / 文档 **45** 行，
+双向集合差都是空；**21 条默认值声明逐条核实全部正确**（读侧默认值分散在
+`website/utils/getLayoutProps.ts`、`website/utils/getPageProps.ts`、`website/utils/pageCopy.ts`、
+`server/src/utils/articlesPerPage.ts`、`website/utils/categoryExpand.ts`、`server/src/provider/article/article.provider.ts`）；
+**7 个必填标记全部正确**（表单里恰好 7 处 `required`，与文档「基本设置」标"是"的 7 行一一对应）。
+⚠️ **表单里 `initialValue` 出现 0 次** —— 默认值是靠 **`placeholder`** 展示的（只是提示、不是预填），
+所以文档「默认值」那一列描述的是**读侧生效默认值**，不是表单里的预填值（两者当前一致，但成因不同，别混）。
+🔴 **`config.yaml` 的 15 个真实键在 `env.md` 里全部有记录**（`backup.path`、`caddy.data.path`、`codeRunner.path`、
+`database.{host,name,passwd,port,url,user}`、`demo`、`log`、`pluginRunner.path`、`server.host`、`static.path`、`waline.db`）。
+👉 **查"某个配置项有没有被文档化"时，必须两种形式都查**：`VAN_BLOG_<KEY>` **和**点号键本身 ——
+`env.md` 里两种写法混用（`static.path`（config.yaml）与 `VAN_BLOG_STATIC_PATH` 是不同行）。
+🔴 **只查一种会得到 6 个假缺口**（本轮实测：只查 `VAN_BLOG_*` 时 `codeRunner.path`/`database.*`/`demo`/`pluginRunner.path` 全部误报为缺）。
+
+**本轮修的两处**（都很小）：① 🔴 `{{siteDesc}}` 此前未被文档化 —— `interpolatePageCopy` 的占位符正则接受
+**5** 个键（`siteName|description|siteDesc|url|logo`，`siteDesc` 是 `description` 的别名），而文档只列了 4 个；
+② 🔴 `config.md` 开头加了一个 tip 块说明"本页是后台站点设置、**不是 `config.yaml`**"并指向 `env.md`
+（⚠️ 这是该文件**第一个**容器块，改前 `:::` 行数为 0；改后核实：2 行、未闭合 0、最大嵌套 1）。
+⚠️ 另有 **8 处 label 仅大小写不同**（文档 `网站 URL` / 表单 `网站 Url`；文档 `icp 备案号` / 表单 `ICP 备案号` 等）
+🔴 **两边各有更规范的一侧，是双向不一致**（UI 自己也不统一：`ICP` 大写而 `Url` 混写）⇒ **未改，留给站长裁定**
+（改文档会把不规范写法扩散进散文，改 UI 属产品代码）。
+
+🔴 **新增守卫 `packages/admin/tests/unit/siteInfoFieldParity.test.js`（6 条，admin 单测 629 → 635 / 156 → 157 套件）**：
+钉住"表单字段集合 ↔ `SiteInfo` 字段集合"双向相等、以及"文档字段行数 == DTO 字段数"。
+🔴 **刻意不做「文档 label ↔ DTO 字段名」的逐字段对账**：label 是中文散文、字段名是 camelCase，
+**两者之间没有可机械推导的对应关系**，要做就必须在守卫里硬编码一张映射表 ⇒
+🔴 **那等于新造一处会漂移的口径**（本仓库对"同一性质两处口径"已吃过多次亏）。
+所以只比**数量**作为"加了字段忘了写文档"的绊线，并在断言消息里写明这个取舍。
+⚠️ **admin 单测由 `node --test tests/unit/*.test.js` 这个 glob 跑**（`admin-e2e.yml` 与 `server-test.yml` 各一处）
+⇒ **新增测试文件自动纳入，不需要改 workflow**。
+🔴 **变异 5/5 全红**（M1r 真删一行文档字段 → 数量对账红；M2 表单塞孤儿字段 → 集合对账红；
+M3r 类名改成不含被搜子串 → 解析器 fail-loud；M4 让文档行解析器不再排除分隔行 → 红；
+M5 改 DTO 字段缩进 → 红），收尾按**开工前独立记录的 sha** 逐文件核实全部还原。
+👉 **两条驱动教训**：① 🔴 **变异设计错了会伪装成"守卫没咬住"** —— 第一版 M1 只是把 label 改了个名
+（行数没变）、第一版 M3 把 `SiteInfo` 改成 `SiteInfoRenamed`（**仍含被搜子串** `export class SiteInfo`，等于没改）⇒
+两条都 NOT_RED，而原因是**变异体本身是空操作**，不是守卫弱；② 🔴 **驱动自己的路径要相对 `cwd` 解析** ——
+第一版把仓库相对路径传给了 `cwd=packages/admin` 的子进程 ⇒ 基线 rc=1，
+**而驱动"先跑基线"那一步正好把它挡住了**（这就是"沙箱/对照必须先跑基线证明忠实"的价值）。
+⚠️ 另一处尺子错误：容器块检查器的 opener 正则写成 `^:::[a-zA-Z]`，而实际是 `::: tip`（**`:::` 后有空格**）
+⇒ 把 opener 当成 closer、报出"未闭合 -1"。🔴 **计数异常先怀疑尺子**（本仓库已七次），
+修正为 `^:::[ \t]*[a-zA-Z]` 后 config.md 得 0 未闭合 / 嵌套 1，并用 `env.md`（已知良好）反向验证尺子本身。
+
 ### 7.111 🔴 逐个 workflow 审计 `paths:` —— 三处真实缺口，以及"守卫存在但永远不会在该跑的时候跑"这一族
 
 **这一族缺口在两轮里出现了三次**，形状都是：守卫本身是对的、也接进了 CI，
