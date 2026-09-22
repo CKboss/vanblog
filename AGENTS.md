@@ -9469,6 +9469,32 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.106 🔴 核 Nest 的构造器注入元数据时，`design:paramtypes` 在一个编译产物里**命中两处**
+
+**规矩**：判定构造器注入的元数据，**必须取 `__decorate([...], ClassName)` 那一处（不带 `.prototype`）**，
+🔴 **不能取 `__decorate([...], ClassName.prototype, "method", null)` 那一处**（那是**方法**的参数元数据）。
+
+**为什么这条会复发**：任何人核 Nest 的 DI 都会 `grep 'design:paramtypes'`，而一个 controller 的编译产物里
+**每个方法各有一处 + 类本身一处** ⇒ `grep | head -1` 拿到的几乎总是**第一个方法**的那处，不是构造器的。
+
+**本轮的实例**（父代理与执行代理**都**先抓错了）：`health.controller.js` 里
+- **方法那处**（`Get('/health')` 的 `health(@Req() req, @Res() res)`）= `[Object, Object]` —— 
+  🔴 **而这是正确的**：`Request`/`Response` 来自源码第 2 行的 `import type`（类型专用导入被擦除 ⇒ TS 只能发射 `Object`），
+  且**方法的参数元数据对 Nest 不重要**（`@Req()`/`@Res()` 是显式参数装饰器，不靠 `design:paramtypes`）；
+- **构造器那处**（`__decorate([Controller('api/public'), …, __param(0, InjectConnection()), __param(1, Optional())], HealthController)`）
+  = 🔴 **`[mongoose_2.Connection, website_provider_1.WebsiteProvider]`** ⇒ **真类引用、DI 能解析**。
+
+🔴 **误读的代价**：父代理抓到 `[Object, Object]` 后推断"连第一项 `Connection` 都退化了 ⇒ 整个文件的元数据发射口径变了 ⇒ 
+怀疑循环 require / swagger 插件 / `emitDecoratorMetadata`"，并把它当成"必须优先查的方向"发给执行代理 ⇒ 
+**如果照做就会白查一整轮循环依赖**。🔴 **执行代理没有照做，而是回去把两处都读了**，才判死。
+👉 **这正好印证了那条反复强调的纪律：不要把父代理（或任何上游）的转述当权威，要自己复核。**
+
+⚠️ **同族的既有记录**（本仓库已**四次**栽在"锚点没有在正确范围里唯一命中"上）：
+`tar.on('close', (code) => {` 在同一文件出现两处、`const fail = (message: string) => {` 出现三处（⇒ 量错了对象）；
+变异锚点在**自己写的文件头注释里也出现**（⇒ `replace(...,1)` 打到注释上、代码纹丝不动 ⇒ sha 变了但行为没变）；
+负向对照被 **`elif` 里的子串 `if`** 骗过、又因扫全文命中了**无关的同形状**而假红（⇒ 必须收窄范围 + "切不出来就 fail"）。
+👉 **通用规矩：源码级断言与取证的锚点，必须先证明"在正确范围里唯一命中（`== 1`，不是 `>= 1`）"。**
+
 ### 7.105 🔴 `/api/public/health` 的口径变了：它现在同时反映 mongo 与前台（§7.101/§7.103 里记的是旧口径）
 
 **新契约（四象限）**：`healthy = mongo.up && website !== 'down'` ⇒ `statusCode` = 200/503、`status` = `ok`/`degraded`。
