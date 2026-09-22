@@ -677,7 +677,11 @@ export class StaticProvider {
       // ⚠️ 上传**总量配额**：以前只有"单文件不超过 50MB/200MB"，没有任何"磁盘还剩多少"的概念
       //    （全仓库 quota|totalBytes|diskUsage|statfs 在 static/uploadLimits 里零命中），而
       //    `post-/api/admin/img/upload`(50MB) 与 `post-/api/admin/file/upload`(200MB) 都在
-      //    publicRoutes 里 ⇒ 零权限协作者可以无限次上传，一台 20GB 盘的小机器几分钟就写满。
+      //    免权限路由表里 ⇒ 协作者可以无限次上传，一台 20GB 盘的小机器几分钟就写满。
+      //    ⚠️ 2026-09-22 更正措辞（原文写的是"零权限协作者"）：`AccessGuard` 的免权限表已拆成两层
+      //    （见 `types/access/access.ts` 的 `bootstrapRoutes` 与 `publicRoutes`），这两个上传口现在属于
+      //    **②免权限档**，只对**勾了至少一项权限**的协作者开放 ⇒ 零权限协作者已经打不到它们了。
+      //    🔴 **但这条配额防御必须保留**：有权限的协作者照样能无限次上传，磁盘满的连锁反应不变。
       //    磁盘满的连锁反应比"上传失败"严重得多：mongo 的 WiredTiger 写失败、备份写流 ENOSPC、
       //    日志写不进 ⇒ 站点进入"容器 Up 但什么都写不了"的半死状态，而 restart 策略不会介入。
       //    所以在落盘之前查一次剩余空间，低于下限就拒绝并给出可照做的消息。

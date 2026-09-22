@@ -9,7 +9,14 @@
  *  - 而且写库时写的也是 `permission:`，而 `scheme/user.schema.ts` 声明的是 `permissions?: Permission[]`
  *    ⇒ 不在 schema 里的路径被 mongoose 的 strict 模式**静默丢弃**；
  *  - `jwt.strategy.ts` 读的是 `user.permissions`（复数）⇒ 永远 `undefined`；
- *  - `AccessGuard` 于是走 `if (!permissions || permissions.length == 0) return false;`。
+ *  - `AccessGuard` 于是走"permissions 为空就拒绝"那一支。
+ *    ⚠️ 2026-09-22 更正：这里原先逐字引用了当时的代码形状 `!permissions || permissions.length == 0`，
+ *    而它已被改成 `!Array.isArray(permissions) || permissions.length == 0`
+ *    （顺带修掉一个 fail-open：**字符串也有 `.length` 与 `.includes`**，所以 `permissions: 'all'`
+ *    这个字符串此前会一路走到 `permissions.includes('all')` 并被**放行**）。
+ *    🔴 引用具体代码形状的注释会随代码漂移而变成假信息 ⇒ 这里改成描述**性质**而不是抄字面量。
+ *    ⚠️ 本文件的源码文本断言（`read()`）全部指向 `./user.provider.ts`，**没有一条钉 `access.guard.ts`**，
+ *    所以那次改动既没让本文件变红、也没让任何断言静默变弱（已实跑核实：18/18 全绿）。
  *
  * 净效果：**协作者权限此前根本没有生效过** —— 无论后台勾了什么，协作者只能用 publicRoutes 里那些
  * 只读接口，`'all'` 也一样。这一条同时意味着"协作者 `'all'` = 超管"在过去是**不可达**的

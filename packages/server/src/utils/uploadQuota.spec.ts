@@ -16,20 +16,29 @@ import {
 } from './uploadLimits';
 
 /**
- * 两条"零权限就能打"的资源面：
+ * 两条"协作者就能打"的资源面：
  *
- * **A. `POST /api/admin/img/stego/detect`** —— 它在 publicRoutes 里（`types/access/access.ts`，
+ * ⚠️ 2026-09-22 更正措辞：本文件原先写的是"两条**零权限**就能打的资源面"，而 `AccessGuard` 的免权限表
+ * 已拆成两层（`types/access/access.ts` 的 `bootstrapRoutes` 4 条 + `publicRoutes` 20 条），下面这两条路由
+ * 都属于**②免权限档**，在 `permissions.length == 0` 那道拒绝**之后**判定 ⇒
+ * 🔴 **零权限协作者已经打不到它们了**，能打的是"**勾了至少一项权限**的协作者"。
+ * 🔴 **而这两条防御（专用限流 + 磁盘配额）都必须保留** —— 有权限的协作者照样能调，
+ * 下面那些 CPU/内存/磁盘代价一点没变；把"零权限"读成"任何协作者"会误以为防御可以撤掉。
+ *
+ * **A. `POST /api/admin/img/stego/detect`** —— 它在 `publicRoutes`（②档）里（`types/access/access.ts`，
  * 注释明写"协作者也能用来验图"，admin 侧调用点是 `pages/Static/img/index.tsx` 的
- * `detectStegoByFile` / `detectStegoBySign`，即图片管理页 ⇒ **不能移出 publicRoutes**，
- * 否则零权限协作者的图片管理页会坏）。以前它只过 `IMAGE_UPLOAD_OPTIONS`（50MB + 后缀过滤），
+ * `detectStegoByFile` / `detectStegoBySign`，即图片管理页 ⇒ **必须留在②档**，
+ * 否则有权限协作者的图片管理页会坏；⚠️ 原文写的理由是"否则**零权限**协作者的图片管理页会坏"，
+ * 那个理由在拆两层之后已不成立）。以前它只过 `IMAGE_UPLOAD_OPTIONS`（50MB + 后缀过滤），
  * 既没有内容校验也没有专用限流：检测要把整图解码成 raw RGBA 再逐像素比对，实测
  * 1MP → 23 ms，**36MP → 401 ms、heap 49MB、RSS 477MB** ⇒ 3 个并发约 1.4GB RSS，
  * 常见 1–2GB 容器直接 OOMKilled；而全局桶 600/分钟/IP 等于每分钟 240 秒 CPU。
  *
  * **B. 上传没有任何总量配额** —— 以前只有"单文件 ≤ 50MB/200MB"，没有"磁盘还剩多少"的概念
  * （`quota|totalBytes|diskUsage|statfs` 在 static/uploadLimits 里零命中），而
- * `post-/api/admin/img/upload`(50MB) 与 `post-/api/admin/file/upload`(200MB) 都在 publicRoutes
- * ⇒ 零权限协作者可以无限次上传，一台 20GB 盘的小机器几分钟写满。磁盘满的连锁反应比
+ * `post-/api/admin/img/upload`(50MB) 与 `post-/api/admin/file/upload`(200MB) 都在 `publicRoutes`（②档）
+ * ⇒ 有权限的协作者可以无限次上传，一台 20GB 盘的小机器几分钟写满（⚠️ 原文写"零权限协作者"，见上面的更正）。
+ * 磁盘满的连锁反应比
  * "上传失败"严重得多：mongo 的 WiredTiger 写失败、备份写流 ENOSPC、日志写不进 ⇒
  * 站点进入"容器 Up 但什么都写不了"的半死状态，而 restart 策略不会介入。
  *

@@ -148,8 +148,11 @@ export const JSON_IMPORT_UPLOAD_OPTIONS = makeOptions(MAX_JSON_IMPORT_BYTES);
  *
  * 为什么比上传那个 40MP 小得多：检测要把整图解码成 raw RGBA 再逐像素比对，
  * 实测 1MP → 23 ms，**36MP → 401 ms、heap 49MB、RSS 477MB** ⇒ 3 个并发就约 1.4GB RSS，
- * 常见的 1–2GB 容器直接 OOMKilled。而 `post-/api/admin/img/stego/detect` 在 publicRoutes 里
- * （零权限协作者可调，是有意为之：图片管理页要给协作者用），全局桶 600/分钟/IP 对它太宽
+ * 常见的 1–2GB 容器直接 OOMKilled。而 `post-/api/admin/img/stego/detect` 在 `publicRoutes`（②免权限档）里
+ * （**勾了至少一项权限的**协作者可调，是有意为之：图片管理页要给协作者用；⚠️ 2026-09-22 更正措辞：
+ * 原文写"零权限协作者可调"，而 `AccessGuard` 拆两层之后零权限协作者已打不到这条 ——
+ * 🔴 但这个 8MP 上限必须保留，因为有权限的协作者照样能调，上面那个 RSS 代价没变），
+ * 全局桶 600/分钟/IP 对它太宽
  * （等于每分钟 240 秒 CPU）。"验一张图"不需要 40MP —— 真要验更大的图，先上传到图床
  * （上传口仍是 40MP），再用列表里的按 sign 检测。
  *
