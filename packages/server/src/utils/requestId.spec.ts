@@ -1,5 +1,6 @@
 import express from 'express';
 import request from 'supertest';
+import { isStaticAssetPath, normalizeRateLimitPath } from './rateLimit';
 import {
   REQUEST_ID_HEADER,
   SLOW_REQUEST_MS_DEFAULT,
@@ -217,4 +218,71 @@ describe('源码断言（剥掉注释再查）', () => {
     expect(SLOW_REQUEST_MS_DEFAULT).toBe(5000);
     expect(resolveAccessLogFlag(undefined)).toBe(false);
   });
+});
+
+describe('访问日志的静态资源判定必须与限流分档同口径（2026-09-22）', () => {
+  // 🔴 背景：`isStaticAssetPath` 是大小写敏感的 startsWith，而 Express 默认路由大小写不敏感、
+  //    静态挂载前缀同样不敏感 ⇒ 传原始 req.path 会让"真的是静态资源"的大小写变体照常写访问日志。
+  //    后果不是安全问题（这一行只决定写不写日志），而是**日志放大**：静态资源本就是访问量最大的
+  //    一类路径，正因如此才被排除在访问日志外。
+  it('静态资源的大小写变体也不写访问日志（与规范写法一致）', async () => {
+    const { app, logger } = buildApp({ slowMs: 5000, accessLog: true });
+    // 先证明 Express 的路由确实大小写不敏感（否则这条用例的前提不成立、会变成空的绿）
+    await request(app).get('/STATIC/img/x.webp').expect(200);
+    await request(app).get('/Static/Img/x.webp').expect(200);
+    await request(app).get('/static/img/x.webp/').expect(200);
+    await request(app).get('/static/img/x.webp').expect(200);
+    expect(logger.log).not.toHaveBeenCalled();
+  });
+
+  it('非静态路径仍然照常写访问日志（反证：不是把所有日志都关掉了）', async () => {
+    const { app, logger } = buildApp({ slowMs: 5000, accessLog: true });
+    await request(app).get('/api/ok').expect(200);
+    expect(logger.log).toHaveBeenCalledTimes(1);
+    expect(String(logger.log.mock.calls[0][0])).toContain('GET /api/ok 200');
+  });
+
+  it('🔴 同口径：两个调用点都用同一个归一化组合（跨文件源码级钉子）', () => {
+    // ⚠️ 这条**不能**写成"在测试里各算一遍再比对" —— 两边用同一个表达式算出来的值必然相等，
+    //    那是恒真断言（本仓库已多次栽在"尺子自己坏了"上）。真正的不变量是**两个文件的源码
+    //    都用同一个组合**，所以这里钉源码，并在下面单独钉住期望值本身。
+    const { readFileSync } = require('fs');
+    const { join } = require('path');
+    const strip = (f: string) =>
+      (readFileSync(join(__dirname, f), 'utf8') as string)
+        .split('\n')
+        .filter((l: string) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n');
+    const reqId = strip('requestId.ts');
+    const rate = strip('rateLimit.ts');
+    // 访问日志侧
+    expect(reqId).toContain('isStaticAssetPath(normalizeRateLimitPath(req.path))');
+    // 限流分档侧：中间件里的 path 只能由归一化函数赋值，且静态判定吃的是那个 path
+    expect(rate).toMatch(/const path = normalizeRateLimitPath\(/);
+    expect(rate).toContain('isStaticAssetPath(path)');
+    // 反证：两侧都不许再出现"喂原始路径"的形状
+    expect(reqId).not.toMatch(/isStaticAssetPath\(String\(req\.path/);
+    expect(reqId).not.toContain('isStaticAssetPath(req.path)');
+  });
+
+  it('静态判定的期望值本身（避免上面那条在两边都错时恒真）', () => {
+    const cases: Array<[string, boolean]> = [
+      ['/static/img/a.webp', true],
+      ['/STATIC/img/a.webp', true],
+      ['/Static/Img/a.webp/', true],
+      ['/static/', false],
+      ['/static', false],
+      ['/statics/x', false],
+      ['/api/public/category', false],
+      ['/API/public/category', false],
+      ['/', false],
+      ['', false],
+    ];
+    for (const [p, want] of cases) {
+      expect({ p, hit: isStaticAssetPath(normalizeRateLimitPath(p)) }).toEqual({ p, hit: want });
+    }
+    // 🔴 反向对照：不归一化时大小写变体会被判成非静态（这正是修复前的行为）
+    expect(isStaticAssetPath('/STATIC/img/a.webp')).toBe(false);
+  });
+
 });

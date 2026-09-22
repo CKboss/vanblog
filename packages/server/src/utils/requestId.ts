@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
-import { isStaticAssetPath } from './rateLimit';
+import { isStaticAssetPath, normalizeRateLimitPath } from './rateLimit';
 
 /**
  * request-id + 慢请求日志 + （默认关闭的）API 访问日志。
@@ -113,7 +113,20 @@ export function makeRequestIdMiddleware(
         logger.warn(`慢请求（>= ${slowMs}ms）：${line}`);
         return;
       }
-      if (accessLog && !isStaticAssetPath(String(req.path || ''))) {
+      // 🔴 2026-09-22：这里必须喂**归一化后**的路径，与限流分档保持同一口径。
+      //    原来传的是原始 `req.path`，而 `isStaticAssetPath` 是**大小写敏感**的 `startsWith('/static/')`；
+      //    但 Express 默认 `strict routing=false` 且 `case sensitive routing=false`，静态挂载前缀
+      //    同样大小写不敏感（实测 `/STATIC/img/<真文件>` 返回 200 且字节完整）⇒
+      //    `/STATIC/...` 这类**真的是静态资源**的请求，在限流侧被归到静态松档、在这里却**不被认出来**，
+      //    于是照常写一行访问日志。
+      //    ⚠️ 后果不是安全问题（这一行只决定要不要写日志，不参与鉴权/限流/响应），
+      //    而是**日志放大**：静态资源是访问量最大的一类路径，正因为如此才被排除在访问日志之外；
+      //    留一个"改个大小写就能让每条静态请求都写日志"的口子，等于给磁盘与日志轮转开了一个廉价放大器。
+      //    ⚠️ 函数名叫 `normalizeRateLimitPath` 但它其实是**中间件层唯一的路径归一化口径**
+      //    （去尾斜杠 + 转小写 + 切掉 query/hash，且**刻意不做百分号解码、不折叠内部斜杠** ——
+      //    那会让判定比路由器更宽）。🔴 不要给它改名：`rateLimitPathNormalization.spec.ts`
+      //    有三条断言钉着这个名字、中间件里的赋值形状与函数体。
+      if (accessLog && !isStaticAssetPath(normalizeRateLimitPath(req.path))) {
         logger.log(`访问：${line}`);
       }
     });

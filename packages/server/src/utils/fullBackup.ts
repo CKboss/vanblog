@@ -2144,6 +2144,20 @@ export async function listArchiveMembers(
         return;
       }
       if (code !== 0) {
+        // ⚠️ **已知残留的窄竞争（有意不修，取舍见下）**：`decErr` 靠解压器 stderr 的 data 事件累积，
+        //    而 tar 的 close 只保证 **tar 自己的** stdio 已排空 ⇒ tar 先退出时，解压器刚写的 stderr
+        //    可能还没送达。两种后果：①`decErr` 非空但不完整 ⇒ 报错带的是部分诊断（可用）；
+        //    ②`decErr` 仍是空串 ⇒ 走 `explainSilentToolFailure`，而它说的"没有留下任何诊断输出"
+        //    在此刻**可能不准确**，且 fail() 已置 settled ⇒ 解压器的 close 分支变 no-op，
+        //    **它真正的 stderr 就不会展示给站长了**。
+        //    🔴 为什么不修：修法是"等解压器 stderr 排空后再 settle"，而那正是下面这段注释防的事 ——
+        //    settle 时机动过一次就让**截断/损坏的归档使 promise 永不 settle**（实测必现），
+        //    会挂住 verifyFullBackup 与两条恢复路由，匿名 init/restore 还会**永久占着单飞锁**。
+        //    ⚖️ 一边是"提示可能不完整"，另一边是"恢复路径可能永久挂死"⇒ 保留现状。
+        //    实际危害有限：兜底提示仍引导站长核对 .sha256 sidecar 并单独跑 gzip -t / zstd -t / xz -t，
+        //    **照做就能拿到解压器真正的报错**。
+        //    🔴 这条取舍由 `fullBackup.toolFailureInvariant.spec.ts` 钉住：那个 spec 断言本分支里
+        //    **不许出现 await**，所以"顺手加个 await 等排空"会直接变红，迫使改的人先读到这段。
         // ⚠️ 以前的写法是先 `settled = true` 再调 fail() —— 而 fail() 的第一行就是
         // `if (settled) return`，于是**截断/损坏的归档会让这个 promise 永远不 settle**
         // （tar 退出码非 0 → fail 变 no-op → 两个子进程都死了 → 事件循环排空 → 进程静默退出）。

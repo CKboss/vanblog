@@ -294,8 +294,20 @@ describe('文件名与 front matter', () => {
  *   `http://[64:ff9b::7f00:1]:2019/`    → NAT64 前缀，翻译到内网 IPv4
  *   `http://[::]:2019/`                 → 未指定地址
  * 连通性是实测过的（本机 bind 127.0.0.1 的 TCP 靶子，`net.connect(port,'::ffff:127.0.0.1')` 连上并拿到响应）。
- * 触发面是**最低权限协作者**：`fetchRemoteSafely` 的两个调用方（外链图片转存、导出抓远程图）都在
- * 协作者可达面，而 `post-/api/admin/export/markdown` 在 `types/access/access.ts` 的 publicRoutes 里。
+ * 触发面是**勾了至少一项权限的协作者**：`fetchRemoteSafely` 的两个调用方（外链图片转存、导出抓远程图）
+ * 都在协作者可达面，而 `post-/api/admin/export/markdown` 在 `types/access/access.ts` 的
+ * `publicRoutes`（**②免权限档**）里。
+ * ⚠️ 2026-09-22 更正措辞（原文写的是"最低权限协作者"）：`AccessGuard` 的免权限路由表已被拆成两层
+ *    （`95761b7b`）—— **①引导层 `bootstrapRoutes`** 只有 4 条（`get-/api/admin/meta`、login、logout、
+ *    `get-/api/admin/collaborator/list`），排在"零权限就什么都不能干"那道拒绝**之前**；
+ *    **②免权限档 `publicRoutes`**（20 条，含本条 export）排在那道拒绝**之后** ⇒
+ *    🔴 **零权限协作者已经打不到 export 了**，触发面收窄成"勾了至少一项权限的协作者"。
+ * 🔴 **但这条 SSRF 防御本身一点没变、必须保留**：有权限的协作者照样能调 export，
+ *    而 SSRF 的代价（打到内网/云 IMDS）与调用者的权限高低无关。
+ * 📌 方法论（本仓库已多次踩）：**引用具体代码形状或权限措辞的注释会随代码漂移而变成假信息** ⇒
+ *    注释应当描述**性质**（"协作者可达面"），而不是抄当时的分层名与权限档位。
+ *    ⚠️ 而且按关键词 grep 找这类过时注释会漏：本处写的是"最低权限"而不是"零权限"，
+ *    上一轮按"零权限"搜就漏掉了它（`utils/imageLimits.ts` 同样如此）。
  */
 describe('SSRF：IPv6 的内嵌/过渡形式必须被识别为内网', () => {
   const BYPASS_HOSTS = [
