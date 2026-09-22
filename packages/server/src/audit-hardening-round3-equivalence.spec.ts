@@ -1,4 +1,8 @@
-import { articleOverviewMarkdown, findMoreMarker } from './utils/articleExcerpt';
+import {
+  articleOverviewMarkdown,
+  findMoreMarker,
+  MARKER_EXCERPT_MAX_CHARS,
+} from './utils/articleExcerpt';
 import { maskCodeRegions } from './utils/markdownExport';
 import { extractImageRefs } from './utils/transferRemoteImages';
 import { pickCoverFromContent } from './utils/coverFromContent';
@@ -487,21 +491,42 @@ describe('摘要/首图/代码区涂黑：优化后与改动前逐字节一致',
     expect(withMarker).toBeGreaterThan(50);
   });
 
-  it(`articleOverviewMarkdown：${docs.length} 个向量全部相同`, () => {
+  // 🔴 2026-09-22 升级（**不是放宽**）：这条对拍原本钉的是"一次纯优化重构没有改变输出"，
+  //    所以要求全部向量逐字节相同。R4-11 给标记分支加了硬上限，**契约有意变了**，
+  //    于是这里改成：上限不生效时仍要求逐字节相同；上限生效时只允许"内容一致、截得更早"这一种偏离。
+  //    ⚠️ 断言因此仍然很强：偏离形状被逐个条件卡死，且必须真的被走到（capped > 0），
+  //    否则"改坏了输出"照样红 —— 这与把对拍删掉或改成恒真是两回事。
+  it(`articleOverviewMarkdown：${docs.length} 个向量在上限不生效时逐字节相同，生效时只允许截得更早`, () => {
     let nonTrivial = 0;
+    let capped = 0;
     for (const doc of docs) {
       const now = articleOverviewMarkdown(doc);
       const before = OLD_articleOverviewMarkdown(doc);
       if (before.length > 0) nonTrivial += 1;
-      if (now !== before) {
+      if (now === before) continue;
+      const shared = Math.min(now.length, before.length);
+      const samePrefix = now.slice(0, shared) === before.slice(0, shared);
+      if (
+        !samePrefix ||
+        before.length <= MARKER_EXCERPT_MAX_CHARS ||
+        now.length >= before.length ||
+        now.length < MARKER_EXCERPT_MAX_CHARS - 1 // -1：不把代理对切成两半时会少一个字符
+      ) {
         throw new Error(
-          `articleOverviewMarkdown 不一致：\nnew=${JSON.stringify(now)}\nold=${JSON.stringify(
-            before,
-          )}\n---\n${JSON.stringify(doc.slice(0, 400))}`,
+          `articleOverviewMarkdown 出现了上限解释不了的偏离：new(len ${now.length}) vs old(len ${
+            before.length
+          }) samePrefix=${samePrefix} cap=${MARKER_EXCERPT_MAX_CHARS}\nnew=${JSON.stringify(
+            now.slice(0, 120),
+          )}\nold=${JSON.stringify(before.slice(0, 120))}\n---\n${JSON.stringify(
+            doc.slice(0, 400),
+          )}`,
         );
       }
+      capped += 1;
     }
     expect(nonTrivial).toBeGreaterThan(50);
+    // 反证：向量集里必须真的有"标记超过上限"的文档，否则上面那条放宽是空的
+    expect(capped).toBeGreaterThan(0);
   });
 
   it(`maskCodeRegions：${docs.length} 个向量全部相同（含长度不变这条硬约束）`, () => {

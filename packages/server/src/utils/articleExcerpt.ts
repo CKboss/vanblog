@@ -12,14 +12,40 @@ import { stripFrontMatter } from './frontMatter';
  * 就会出现「ISR 重渲染前后卡片文字不一样」。website 的
  * `__tests__/articleExcerptParity.spec.ts` 用同一组向量钉住两个实现，改这里必须同步改那边。
  *
- * 语义（与 website 相同的注释保留在这里，防止只改一边）：
- * - 有 `<!-- more -->`：标记之前的部分就是摘要（原样保留）；标记在围栏/行内代码里的不算。
+ * 语义（与 website 相同的注释保留在这里，防止只改两边漂移）：
+ * - 有 `<!-- more -->`：标记之前的部分就是摘要，**但以 `MARKER_EXCERPT_MAX_CHARS`（400）为硬上限**；
+ *   标记在围栏/行内代码里的不算。
  * - 没有标记：取前 `DEFAULT_OVERVIEW_CHARS`（200）字符 —— 编辑器告诉作者「不写 more
  *   就自动取前 200 字」，这个预算是产品决定，不是渲染细节。
+ *
+ * 🔴 为什么标记分支需要上限（R4-11）：原来那条分支是 `return content.slice(0, cut)`，
+ * **`maxChars` 根本不参与** ⇒ 作者把标记放在文末（或导入工具批量在末尾追加标记）时，
+ * **列表页与 RSS 的 description 会下发整篇正文**，而 §7.42/§7.48 的整个目的正是不要下发全文。
+ * 实测过的一次性实例：`withExcerpt` 把响应从 37,884 B 撑到 1,685,104 B（44×）。
+ * 上限取 400 而不是 200：「卡片摘要的自动预算」与「作者手写的 more 位置」是两件事，
+ * 后者是**有意的编辑行为**，值得比自动回退更宽 —— 但仍然是「一张卡片」，不该是全文。
+ *
+ * 🔴 **上限是常量、不是环境变量**，这是有意的：前台那份实现在 `PostCard` 里被调用，而
+ * `PostCard` 用了 `useMemo`/`useState` ⇒ **它跑在浏览器里**，`process.env.VANBLOG_*`
+ * 在客户端是 `undefined`（Next 只内联 `NEXT_PUBLIC_*`，且那是**构建期**内联，而 server 与
+ * website 是镜像里分开构建的）。⇒ 一侧读 env、另一侧用常量会让两边**在生产环境算出不同摘要**，
+ * 正好触发上面那条「ISR 重渲染前后卡片文字跳变」。要可配，得两侧都能读到同一个值，
+ * 那需要把上限放进站点设置并随列表响应下发 —— 与本条护栏的收益不成比例。
+ *
+ * ⚠️ 上限用 `Math.max(maxChars, MARKER_EXCERPT_MAX_CHARS)` 而不是直接 400：调用方**显式**要了
+ * 更大预算时不能把它砍小。搜索索引就是这么调的（`searchIndexBuild.ts` 传
+ * `budget * SEARCH_SNIPPET_OVERSCAN`，OVERSCAN=4），所以那条路径的行为**逐字不变**。
  * - 截断落在 `[text](url)` 中间时把整个链接补全（issue #410：50 字时代截断露出裸括号
  *   和半个 autolink），并且绝不把代理对（emoji）切成两半。
  */
 export const DEFAULT_OVERVIEW_CHARS = 200;
+
+/**
+ * 有 `<!-- more -->` 时摘要的硬上限（字符数）。见上面文件头对 R4-11 的说明。
+ * 🔴 两个包必须同值：`packages/website/__tests__/articleExcerptParity.spec.ts` 与
+ * `utils/crossPackageConstants.spec.ts` 都会核对，改一边不改另一边会红。
+ */
+export const MARKER_EXCERPT_MAX_CHARS = 400;
 
 export function articleOverviewMarkdown(
   content: string,
@@ -33,7 +59,10 @@ export function articleOverviewMarkdown(
   content = stripFrontMatter(content);
   const cut = findMoreMarker(content);
   if (cut >= 0) {
-    return content.slice(0, cut);
+    // 🔴 标记分支也必须有上限（R4-11）：作者把标记放在文末时，原来这里会把整篇正文当摘要返回。
+    //    `Math.max` 保证不砍小调用方**显式**要的预算（搜索索引传的是 budget × 4）。
+    const cap = Math.max(maxChars, MARKER_EXCERPT_MAX_CHARS);
+    return cut <= cap ? content.slice(0, cut) : completeTruncatedInlineLinks(content, cap);
   }
   if (content.length <= maxChars) {
     return content;

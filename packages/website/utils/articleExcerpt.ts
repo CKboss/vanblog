@@ -12,8 +12,33 @@ import { stripFrontMatter } from "./frontMatter";
  *
  * So: keep the character budget, but if the cut splits an inline link or image,
  * include the rest of that construct so parse and href stay complete.
+ *
+ * 🔴 With `<!-- more -->` the excerpt is now capped at `MARKER_EXCERPT_MAX_CHARS` (400).
+ * The marker branch used to be `return content.slice(0, cut)`, where **`maxChars` took no
+ * part at all**, so an author who put the marker at the end of a long post (or an import tool
+ * that appends one) made the list page and the RSS description ship the **entire body**.
+ * 400 rather than 200 because "the automatic card budget" and "where the author deliberately
+ * put the marker" are different things — the latter is an intentional editorial act and earns
+ * more room, but a card is still a card.
+ *
+ * 🔴 **The cap is a constant, not an environment variable, on purpose.** This function runs in
+ * the browser: `PostCard` uses `useMemo`/`useState`, so `process.env.VANBLOG_*` is `undefined`
+ * there (Next only inlines `NEXT_PUBLIC_*`, and that happens at **build** time while server and
+ * website are built separately in the image). One side reading env and the other a constant would
+ * make the two implementations disagree **in production** — exactly the "card text jumps across an
+ * ISR re-render" failure this file's parity contract exists to prevent.
+ *
+ * ⚠️ The cap is `Math.max(maxChars, MARKER_EXCERPT_MAX_CHARS)`, never a bare 400, so a caller that
+ * explicitly asked for a larger budget is not cut down. 🔴 Both packages must keep this value and
+ * this branch identical; `__tests__/articleExcerptParity.spec.ts` pins the outputs byte-for-byte.
  */
 export const DEFAULT_OVERVIEW_CHARS = 200;
+
+/**
+ * Hard cap on the excerpt when `<!-- more -->` is present. See the file header (R4-11).
+ * 🔴 Must equal the server's value — the parity and cross-package-constant specs check it.
+ */
+export const MARKER_EXCERPT_MAX_CHARS = 400;
 
 export function articleOverviewMarkdown(
   content: string,
@@ -27,7 +52,11 @@ export function articleOverviewMarkdown(
   content = stripFrontMatter(content);
   const cut = findMoreMarker(content);
   if (cut >= 0) {
-    return content.slice(0, cut);
+    // 🔴 The marker branch needs a cap too (R4-11): with the marker at the end of a long post this
+    //    used to return the whole body as the "excerpt". `Math.max` keeps a caller's explicitly
+    //    larger budget intact.
+    const cap = Math.max(maxChars, MARKER_EXCERPT_MAX_CHARS);
+    return cut <= cap ? content.slice(0, cut) : completeTruncatedInlineLinks(content, cap);
   }
   if (content.length <= maxChars) {
     return content;

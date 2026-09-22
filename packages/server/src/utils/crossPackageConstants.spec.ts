@@ -70,6 +70,24 @@ describe('摘要长度（server ↔ website）', () => {
   it('并且就是文档里写的那个 200', () => {
     expect(server).toBe(200);
   });
+
+  // 🔴 R4-11：标记分支的硬上限也必须两边同值。它是常量而不是环境变量，
+  //    因为前台那份实现跑在浏览器里（PostCard 用 useMemo/useState），读不到 process.env.VANBLOG_*；
+  //    一侧可配一侧不可配会让两边在生产环境算出不同摘要。
+  describe('标记摘要上限 MARKER_EXCERPT_MAX_CHARS', () => {
+    const capRe = /export const MARKER_EXCERPT_MAX_CHARS\s*=\s*(\d+)/;
+    const serverCap = num(SERVER_EXCERPT, capRe, 'server MARKER_EXCERPT_MAX_CHARS');
+    const websiteCap = num(WEBSITE_EXCERPT, capRe, 'website MARKER_EXCERPT_MAX_CHARS');
+
+    it('两个包相等', () => {
+      expect({ serverCap, websiteCap }).toEqual({ serverCap: websiteCap, websiteCap });
+    });
+
+    it('并且就是文档里写的那个 400（且大于自动回退预算 200）', () => {
+      expect(serverCap).toBe(400);
+      expect(serverCap).toBeGreaterThan(server);
+    });
+  });
 });
 
 describe('缩略图默认宽（server ↔ admin）', () => {

@@ -1,7 +1,12 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { articleOverviewMarkdown, MORE_MARKER } from './utils/articleExcerpt';
+import {
+  articleOverviewMarkdown,
+  MORE_MARKER,
+  MARKER_EXCERPT_MAX_CHARS,
+  DEFAULT_OVERVIEW_CHARS,
+} from './utils/articleExcerpt';
 import { MAX_SEARCH_INPUT, safeSearchPattern, escapeRegExp } from './utils/regex';
 import { MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE, sanitizePagination } from './utils/pagination';
 import { MAX_ARTICLES_PER_PAGE, sanitizeArticlesPerPage } from './utils/articlesPerPage';
@@ -19,19 +24,39 @@ import { MAX_ARTICLES_PER_PAGE, sanitizeArticlesPerPage } from './utils/articles
 
 const read = (rel: string) => readFileSync(join(__dirname, rel), 'utf8');
 
-describe('FINDING R4-11（尚未修）：excerpt 没有长度上限 —— `<!-- more -->` 放得晚，列表页就下发全文', () => {
-  it('有标记时直接返回标记之前的**全部内容**，maxChars 根本不参与', () => {
+describe('REGRESSION R4-11（已修）：excerpt 现在有硬上限 —— `<!-- more -->` 放得晚也不会把全文当摘要下发', () => {
+  // 🔴 2026-09-22 升级（原断言钉的是"无上限"那个现状，修完必然要改 —— 这是**契约变了**，不是放宽）：
+  //    旧契约 = 有标记时 `return content.slice(0, cut)`，maxChars 完全不参与，摘要可以等于整篇正文
+  //             （旧断言原文：`expect(articleOverviewMarkdown(lateMarker).length).toBeGreaterThan(300_000)`
+  //              与 `).toBe('# Title\n\n' + filler + '\n\n')`，即"摘要 = 400 KB 正文"）。
+  //    新契约 = 标记分支也有硬上限，且**上限之内完全尊重作者的标记位置**。
+  //    ⚠️ 断言因此变得**更强**：既钉源码形状（上限存在、且用 Math.max 不砍小调用方显式要的预算），
+  //    又钉三种行为（超上限被截 / 上限之内原样保留 / 没有标记时仍是 200 字回退）。
+  it('有标记时以 MARKER_EXCERPT_MAX_CHARS 为硬上限，且上限之内尊重作者的标记位置', () => {
     const src = read('./utils/articleExcerpt.ts');
-    expect(src).toMatch(/const cut = findMoreMarker\(content\);\s*\n\s*if \(cut >= 0\) \{\s*\n\s*return content\.slice\(0, cut\);/);
-    // 只有"没有标记"那条分支才用 maxChars（200 字回退）
+    // 源码形状：标记分支必须先算 cap，再按 cap 决定原样返回还是截断
+    expect(src).toMatch(/if \(cut >= 0\) \{\s*\n[\s\S]{0,400}?const cap = Math\.max\(maxChars, MARKER_EXCERPT_MAX_CHARS\);\s*\n\s*return cut <= cap \? content\.slice\(0, cut\) : completeTruncatedInlineLinks\(content, cap\);/);
+    // "没有标记"那条分支的 200 字回退**没被动过**
     expect(src).toMatch(/if \(content\.length <= maxChars\) \{\s*\n\s*return content;/);
 
     const filler = 'Lorem ipsum 中文内容 '.repeat(20000); // ~400 KB
     const lateMarker = `# Title\n\n${filler}\n\n${MORE_MARKER}\n\ntail`;
     const noMarker = `# Title\n\n${filler}`;
-    expect(articleOverviewMarkdown(lateMarker).length).toBeGreaterThan(300_000); // ← 摘要 = 正文
-    expect(articleOverviewMarkdown(lateMarker)).toBe(`# Title\n\n${filler}\n\n`);
-    expect(articleOverviewMarkdown(noMarker).length).toBeLessThanOrEqual(210); // 没有标记时才是 200 字
+
+    // ① 标记放得极晚 ⇒ 摘要被截到上限，而不再是整篇正文（旧行为是 300_000+ 字符）
+    const capped = articleOverviewMarkdown(lateMarker);
+    expect(capped.length).toBeLessThanOrEqual(MARKER_EXCERPT_MAX_CHARS);
+    expect(capped).toBe(lateMarker.slice(0, MARKER_EXCERPT_MAX_CHARS));
+    expect(capped.length).toBeLessThan(lateMarker.length / 100); // 不到原文的 1%
+
+    // ② 🔴 上限**之内**作者的标记位置原样保留 —— 这是"卡片摘要预算"与"作者手写 more 位置"
+    //    是两件事的直接体现：标记在 300 字处时，摘要就是那 300 字，**不会**被砍到 200。
+    const midMarker = `${'甲'.repeat(300)}\n\n${MORE_MARKER}\n\n后面的正文`;
+    expect(articleOverviewMarkdown(midMarker)).toBe(`${'甲'.repeat(300)}\n\n`);
+    expect(articleOverviewMarkdown(midMarker).length).toBeGreaterThan(DEFAULT_OVERVIEW_CHARS);
+
+    // ③ 没有标记时仍然是 200 字回退（这条行为一个字没变）
+    expect(articleOverviewMarkdown(noMarker).length).toBeLessThanOrEqual(DEFAULT_OVERVIEW_CHARS + 10);
   });
 
   it('活体实测：withExcerpt 把响应从 37 KB 撑到 1.68 MB，而 content 字段其实已经被剥掉了', () => {
@@ -60,7 +85,8 @@ describe('FINDING R4-11（尚未修）：excerpt 没有长度上限 —— `<!--
     expect(src).toMatch(/content: undefined,\s*\n\s*password: undefined,/);
   });
 
-  xit('AFTER THE FIX：给 excerpt 一个与"摘要"这个词相符的硬上限', () => {
+  // 🔴 2026-09-22 由 xit 翻成 it（本文件头 :16-17 就写着"打完补丁请把断言翻成 xit 里的内容"）。
+  it('R4-11 的修复契约：上限是常量而不是环境变量，且不砍小调用方显式要的预算', () => {
     // 最小补丁（utils/articleExcerpt.ts）：把
     //   if (cut >= 0) return content.slice(0, cut);
     // 换成
@@ -74,7 +100,32 @@ describe('FINDING R4-11（尚未修）：excerpt 没有长度上限 —— `<!--
     //   `website/__tests__/articleExcerptParity.spec.ts` 是 server/website 两份实现的对拍，
     //   改这边必须同步改 website/utils/articleExcerpt.ts，否则那条对拍会红 —— 这是好事。
     //   ⚠️ 也会改变 ISR 已缓存页面的字节，所以要在 CHANGELOG 里写成"默认行为变更"。
-    expect(true).toBe(true);
+    //
+    // 🔴 实施时与原方案的两处偏离（都有实测依据，写在下面）：
+    //  ① **没有引入 `VANBLOG_EXCERPT_MAX_CHARS` 环境变量**。前台那份实现在 `PostCard` 里被调用，
+    //     而 `PostCard` 用了 `useMemo`/`useState` ⇒ **它跑在浏览器里**，客户端读不到
+    //     `process.env.VANBLOG_*`（Next 只内联 `NEXT_PUBLIC_*`，且是**构建期**内联，而 server 与
+    //     website 在镜像里分开构建）⇒ 一侧读 env、另一侧用常量会让两边在生产环境算出**不同摘要**，
+    //     正好触发对拍注释里那条「ISR 重渲染前后卡片文字跳变」。所以用**常量**，两侧同值。
+    //  ② 上限是 `Math.max(maxChars, 400)` 而不是固定 400 —— 搜索索引显式传 `budget × 4`
+    //     （`searchIndexBuild.ts:183`，OVERSCAN=4），固定 400 会砍小它的过采样预算。
+    const src = read('./utils/articleExcerpt.ts');
+
+    // 上限是一个**普通数字常量**（不是 env 读取）：声明形状被钉住，改成读 env 就会红。
+    // ⚠️ 这里刻意**不断言** "源码里不含 process.env" —— 文件头注释为了说明"为什么不用 env"
+    //    恰好写了那个字面量，那条断言会被自己的注释喂饱（本仓库已三次栽在这个形状上）。
+    const m = /export const MARKER_EXCERPT_MAX_CHARS\s*=\s*(\d+);/.exec(src);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBe(400);
+    expect(MARKER_EXCERPT_MAX_CHARS).toBe(400);
+
+    // 🔴 调用方显式要更大预算时**不被砍小**（搜索索引那条路径的行为因此逐字不变）
+    const filler = 'Lorem ipsum 中文内容 '.repeat(20000);
+    const lateMarker = `# Title\n\n${filler}\n\n${MORE_MARKER}\n\ntail`;
+    expect(articleOverviewMarkdown(lateMarker, 5000).length).toBe(5000);
+    expect(articleOverviewMarkdown(lateMarker, 400).length).toBe(400);
+    // 默认调用（列表接口与 RSS description 都走这条）落在 400
+    expect(articleOverviewMarkdown(lateMarker).length).toBe(MARKER_EXCERPT_MAX_CHARS);
   });
 });
 
