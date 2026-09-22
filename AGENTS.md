@@ -9469,6 +9469,50 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.116 🔴 一个决定被推翻时，"理由见 X"那种指针会让**指向它的那些句子自己变陈旧**（一族五处）
+
+**实例**：防爆破类计数的 IP 口径从 `pickSocketIp()` 改成 `bruteForceClientIp()`（默认 `trusted`）时，
+🔴 **权威处更新得很完整** —— `utils/trustedProxy.ts` 里 `bruteForceClientIp` 的文档注释写了"更正一条早先写错的理由"
+与全部论证，`utils/bruteForceIp.spec.ts` 与 `audit-hardening-round3-trustedproxy.spec.ts`、
+`audit-hardening-round4-security-bruteforce.spec.ts` 也把代码事实钉住了（默认值与失败方向、
+"伪造 XFF 既拿不到新预算也栽赃不了"、"直连暴露时不采信转发头"、三类计数必须走 `bruteForceClientIp`）。
+🔴 **但有五处注释仍在说旧结论**，其中四处写着"理由见 `trustedProxy.ts`"：
+
+| 位置 | 陈旧的说法 | 状态 |
+| --- | --- | --- |
+| `utils/trustedProxy.ts` **文件头**「哪些调用点该用哪个」 | "防爆破类**继续用 `pickSocketIp()`**，不要换" | ✅ 本轮已修 |
+| `provider/log/utils.ts` 的 `pickClientIp` 文档注释 | "防爆破类计数（登录、评论频率、加密文章解锁）→ 用下面的 `pickSocketIp()`" | 🔴 未修（待排） |
+| `utils/rateLimit.ts` 分档处 | "防爆破类的计数**不要**换成这个函数，它们继续用 pickSocketIp()" | 🔴 未修（待排） |
+| `controller/admin/img/img.controller.ts` 隐写检测处 | "计数用**套接字口径**的 IP（`bruteForceClientIp`…）" | 🔴 未修（**函数名对、口径描述错**） |
+| `controller/admin/auth/auth.controller.ts` 恢复处 | "计数用 `bruteForceClientIp`（**套接字地址优先**）" | 🔴 未修（同上） |
+
+🔴 **最讽刺的一处**：`trustedProxy.ts` 文件头那一节的标题原文就是
+「⚠️ **哪些调用点该用哪个**（**这条最容易被下一个人改错**）」，而 `audit-hardening-round3-trustedproxy.spec.ts`
+里那个 `describe` 的标题**与它同名**、并且已经带着一大段"这条钉子被第四轮审计推翻了"的更正注释 ⇒
+🔴 **spec 更新了、函数文档注释写了，唯独那份"最容易被改错"的文件头没更新**，
+而下一个读它的人正是它警告的对象。
+
+👉 **规矩（本轮挣来的）**：**一个决定被推翻时，不能只改权威处。** 那些写着"理由见 X"的指针
+**只解决了"论证在哪"，没有解决"这句话自己的结论是错的"** ⇒ 
+🔴 **要 grep 旧结论的措辞本身**（本例是 `pickSocketIp`、"不要换"、"套接字口径"、"套接字地址优先"），
+**覆盖 `packages/**` 的注释、`docs/**` 与 `scripts/**`**，逐处过一遍。
+⚠️ 与 §7.114 那条"改默认值要 grep 变量名的全部口径"是同一族，而**这一族更难**：
+默认值改动可以 grep **变量名**，而结论改动只能 grep **措辞**，而措辞各处写法不同
+（本例就有四种写法）⇒ 🔴 **推翻一个决定时，应当同时列出"旧结论的所有措辞变体"再逐个搜。**
+
+🔴 **另一条：文件头/总览型注释应当指向权威而不复述结论。** 本轮把那一节改成
+"统一走 `bruteForceClientIp()`（默认 `trusted`，`VANBLOG_BRUTE_FORCE_IP_SOURCE=socket` 是逃生口）+ 当前调用点清单 +
+**结论与论证以 `bruteForceClientIp` 的文档注释为权威、本节刻意不复述任何数字**"，
+并列出钉住代码事实的三个 spec 名。⚠️ **这样它自己就没有可漂的东西**（数字与论证都在权威处，
+而权威处有 spec 钉着）⇒ **漂移面从"五处散文"缩到"一处有守卫的结论"。**
+
+⚠️ **证据强度如实标注**：🔴 **这条修复没有守卫能钉住**。变异对照实测 —— 
+把文件头改回旧措辞（"继续用 `pickSocketIp()`，不要换"）之后，
+**相关的 7 个 spec / 115 条用例全绿，没有任何东西变红**（还原后 sha 与基线逐字一致）。
+👉 **这是注释类修复的固有局限**：钉住散文会产生噪音（本仓库已多次确认），
+所以** mitigation 不是加守卫，而是让注释不持有会漂的内容**（见上一条）。
+⚠️ **并且要如实告诉下一个人："这一处没有守卫，它可能再次漂移"。**
+
 ### 7.115 🔴 权威表纳入守卫时发现的"假通过"洞，以及一条会因散文编辑而假红的坏对照
 
 **背景**：`docs/reference/secure.md` 与 `docs/reference/api.md` 现在都**指向** `docs/advanced/security.md#限流`

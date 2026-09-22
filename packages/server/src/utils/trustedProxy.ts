@@ -36,15 +36,28 @@ import { pickClientIp, pickSocketIp } from 'src/provider/log/utils';
  * 只设 X-Real-IP 不设 XFF 的反代请用 `always`。同理也不看 `cf-connecting-ip`/`true-client-ip`
  * （CDN 专用头，只有 CDN 会覆写它，而 `auto` 的前提是"对端就是我的代理"）。
  *
- * ⚠️ **哪些调用点该用哪个**（这条最容易被下一个人改错）：
+ * ⚠️ **哪些调用点该用哪个**（这条最容易被下一个人改错 —— 🔴 而它自己就曾被改错，见下面那条更正）：
  *  - **体量类**限流（全局 / 静态 / 公开写 / 初始化，`utils/rateLimit.ts`）用 `pickTrustedClientIp()`：
  *    反代后面必须按真实客户端分桶，而轮换头的收益只是"攻击者自己拿到新的体量预算"（与旧行为相同）。
- *  - **防爆破/防刷类**计数（`LoginGuard.keyOf`、`comment.provider` 的三档、`public.controller`
- *    的文章解锁）**继续用 `pickSocketIp()`**，不要换：那几处攻击者的收益正是"换一个 key 重新开始"，
- *    而 `auto` 模式下对端是回环（一体式部署就是）⇒ 头会被采信 ⇒ 换过去就等于把
- *    "每次换一个 X-Real-IP 就能无限试密码，反过来还能用受害者的真实 IP 把对方锁在门外"
- *    这个洞重新打开（`login.guard.ts` 的注释原本就是这么写的）。
- *    套接字地址是唯一不可伪造的身份。
+ *  - **防爆破/防刷类**计数统一走 `bruteForceClientIp()`（默认 `trusted`，
+ *    `VANBLOG_BRUTE_FORCE_IP_SOURCE` 设成 `socket` 是逃生口）。当前调用点：登录
+ *    （`provider/auth/login.guard.ts`）、评论三档与存库的评论 IP
+ *    （`provider/comment/comment.provider.ts`）、加密文章解锁（`controller/public/public.controller.ts`）、
+ *    隐写检测（`controller/admin/img/img.controller.ts`）、备份恢复
+ *    （`controller/admin/auth/auth.controller.ts`）。
+ *
+ * 🔴 **2026-09-23 更正**：这一节此前写的是"防爆破/防刷类计数**继续用 `pickSocketIp()`**，不要换"，
+ * **那是错的**，而且与本文件下面 `bruteForceClientIp` 的文档注释**直接矛盾** ——
+ * 那段注释的标题就是"更正一条早先写错的理由"（AGENTS §7.55 F）。
+ * 🔴 **结论与完整论证以 `bruteForceClientIp` 的文档注释为权威，本节刻意不复述任何数字**
+ * （复述的数字就是下一次漂移的地方）。代码事实已由 `utils/bruteForceIp.spec.ts`、
+ * `audit-hardening-round3-trustedproxy.spec.ts` 与 `audit-hardening-round4-security-bruteforce.spec.ts`
+ * 钉住：默认值与失败方向、"客户端伪造 XFF 既拿不到新预算也栽赃不了受害者"、
+ * "直连暴露（对端是公网地址）时不采信任何转发头"、以及三类计数与存库的评论 IP 都必须走
+ * `bruteForceClientIp`。⚠️ 一句话摘要（细节看权威处）：坚持套接字地址的代价是
+ * **一体式部署里所有访客共用一个桶**（caddy 从回环拨到回环）⇒ 匿名请求就能把登录 / 评论 / 文章解锁
+ * 锁死并持续续期；而 `auto` 取 XFF 的**最右一跳**，客户端伪造的那一项会被可信代理追加到**它左边**，
+ * 所以既绕不过也栽赃不了。
  *
  * ⚠️ 不要复用 `provider/log/utils.ts` 的 `isSkippedPrivateIp()` 做信任判断：它把 `10.x` 里
  * **只有 `10.7.*`** 当私网（上游遗留写法），还把 `172.32` 算进 `172.16/12`。
