@@ -345,7 +345,19 @@ describe('REGRESSION R4-3（已修）：/static/** 与 /swagger 曾经完全绕�
       const app = express();
       // ↓ 修复后 main.ts 挂在 useStaticAssets 之前的那层（前缀白名单 + 安全头 → 限流）
       app.use((req: any, res: any, next: () => void) => {
-        if (!PRE_NEST_LIMITED_PREFIXES.some((p) => req.path.startsWith(p))) return next();
+        // 🔴 2026-09-22 与 main.ts 同口径：比较大小写不敏感、并且解码后再比一次。
+        //    复刻必须忠实，否则读这份复刻的人会以为门控是大小写敏感的（那正是被绕过的那个形状）。
+        const cands = [req.path];
+        try {
+          const dec = decodeURIComponent(req.path);
+          if (dec !== req.path) cands.push(dec);
+        } catch {
+          /* 解不开就只按字面判定 */
+        }
+        if (!cands.some((c) => {
+          const lo = c.toLowerCase();
+          return PRE_NEST_LIMITED_PREFIXES.some((p) => lo.startsWith(p.toLowerCase()));
+        })) return next();
         securityHeadersMiddleware(req, res, () => rateLimitMiddleware(req, res, next));
       });
       app.use('/static', express.static(dir));
@@ -402,7 +414,20 @@ describe('REGRESSION R4-3（已修）：/static/** 与 /swagger 曾经完全绕�
     //  2) 多了一层「百分号解码后再比一次」（matchesPreNestPrefix，与 staticGuard 同口径）——
     //     占位文字里的裸 startsWith 可以被 %2Fstatic%2F… 之类的编码溜过去，实现比占位更严：
     expect(main).toMatch(/const decoded = decodeURIComponent\(rawPath\);/);
-    expect(main).toMatch(/candidates\.some\(\(p\) => PRE_NEST_LIMITED_PREFIXES\.some\(\(prefix\) => p\.startsWith\(prefix\)\)\)/);
+    // 🔴 2026-09-22 **升级**（不是放宽）：这条原先钉的是逐字形状
+    //    `candidates.some((p) => PRE_NEST_LIMITED_PREFIXES.some((prefix) => p.startsWith(prefix)))`，
+    //    而那个形状是**大小写敏感**的 ⇒ `/STATIC/…` 能绕过这道门控：Express 的
+    //    `app.use(prefix, express.static(...))` 前缀匹配默认大小写不敏感，所以大写变体
+    //    **会被 serve-static 正常服务、却不过安全头与限流**（活体证实：小写路径的响应有
+    //    X-Frame-Options / Referrer-Policy / Permissions-Policy 三个头，大写变体只剩
+    //    serve-static 自己加的 X-Content-Type-Options）。
+    //    修法是比较改用小写副本 ⇒ 这里改成钉**更强的性质**，意图（双层遍历 candidates × 前缀清单）不变：
+    expect(main).toMatch(/candidates\.some\(\(p\) => \{/);
+    expect(main).toMatch(/const lower = p\.toLowerCase\(\);/);
+    expect(main).toMatch(/PRE_NEST_LIMITED_PREFIXES\.some\(\(prefix\) => lower\.startsWith\(prefix\.toLowerCase\(\)\)\)/);
+    // ⚠️ 小写副本只用于**比较**：本函数只返回布尔、不做 slice，所以没有"用小写副本算偏移会切错"的问题
+    //    （`toLowerCase()` 对非 ASCII 可能改变长度；`utils/staticGuard.ts` 那处需要切片，所以那边必须用原串偏移）。
+    // 🔴 横切守卫 `utils/pathPrefixCaseDrift.spec.ts` 也钉着这三条 + 前缀清单恰好四项 + decodeURIComponent 仍在。
     //  3) 占位文字说"挂在 useStaticAssets 之前；因为静态/swagger 永远走不到 Nest 中间件，
     //     所以两边不会重复计数"——实现正是如此（顺序钉子 + 上一条的可执行复刻都验证了）：
     const iPre = main.indexOf('const PRE_NEST_LIMITED_PREFIXES');
