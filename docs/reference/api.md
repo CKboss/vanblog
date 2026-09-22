@@ -33,8 +33,11 @@ order: 6
 
 swagger 的分组来自代码里的 `@ApiTags`，那是**按模块**分的，不是按"要不要登录"分的。
 实际的错位有好几处：匿名可达的健康检查挂在 `PublicHealth` 组、三条匿名初始化接口挂在 `init` 组、
-匿名评论接口和**需要登录**的后台评论接口同挂 `comment` 组，而登录 / 登出 / 找回密码三个接口挂在 `tag` 组里
-（和标签管理混在一起）。所以**不要**用"某个组是不是叫 public"来判断一条接口要不要登录 ——
+匿名评论接口和**需要登录**的后台评论接口同挂 `comment` 组。更极端的例子是 `caddy` 组：
+**同一个组、同一个 `/api/admin/caddy` 前缀下**，`GET /api/admin/caddy/ask` 是匿名的，
+而它的兄弟路由（如 `GET /api/admin/caddy/https`）要超管 —— 组名和路径前缀都说明不了鉴权。
+（⚠️ 登录 / 登出 / 找回密码在 `auth` 组，不在 `tag` 组；`tag` 组是标签管理。）
+所以**不要**用"某个组是不是叫 public"来判断一条接口要不要登录 ——
 照下面[哪些接口不需要登录](#哪些接口不需要登录)那张表判断。
 
 :::
@@ -98,12 +101,24 @@ curl -sS http://127.0.0.1/api/admin/article \
 
 第 1、2 道不过返回 **401**，第 3 道不过返回 **403**。
 
+⚠️ **第 3 道不是对每条接口都生效**，有三类例外（判据以 `types/access/access.ts` 的三张表为准）：
+
+| 例外 | 规模 | 含义 |
+| --- | --- | --- |
+| **引导层**（`bootstrapRoutes`） | 4 条 | `GET /api/admin/meta`、`POST /api/admin/auth/login`、`POST /api/admin/auth/logout`、`GET /api/admin/collaborator/list`。🔴 **零权限的协作者也能调** —— 否则登录后连后台外壳都渲染不出来 |
+| **免权限档**（`publicRoutes`） | 20 条，**全部在 `/api/admin/**` 下** | 查看/上传/导出这一类（文章与草稿的读取、分类与标签全量、图床与文件、markdown 导出、修订版本等）。🔴 **只要账号有至少一项权限就能调，与勾选的是哪一项无关** |
+| **超管专属前缀**（`isSuperAdminOnlyRoute`） | 7 个前缀 | `auth`、`token`、`backup`、`pipeline`、`collaborator`、`setting`、`caddy`。🔴 **连 `'all'` 权限也不例外**，只认超管本人 |
+
+⇒ 所以"协作者能干什么"**不等于**它勾选的权限清单：免权限档那 20 条是任何非零权限协作者都有的。
+🔴 **零权限账号则只剩引导层那 4 条**（后台外壳），其余一律 403。完整口径与老账号升级处置见
+[协作者](../advanced/collaborator.md)，本页不重复那张能力清单（避免两份口径漂移）。
+
 token 有两种，都在后台 **系统设置 / Token 管理** 里签发与吊销：
 
 | 类型 | 怎么来 | 有效期 | 权限 |
 | --- | --- | --- | --- |
 | 登录凭证 | 登录时自动签发，前端存在 LocalStorage 的 `token` 里 | 后台「登录凭证(Token)有效期(秒)」，默认 **7 天** | 登录的是谁就是谁的权限（协作者受限） |
-| API Token | 在 Token 管理里手动新建 | 默认 **365 天**（`VANBLOG_API_TOKEN_TTL_DAYS` 可调，见下） | ⚠️ **等于超管**，不受协作者权限限制 |
+| API Token | 在 Token 管理里手动新建 | 默认 **90 天**（`VANBLOG_API_TOKEN_TTL_DAYS` 可调，见下） | ⚠️ **等于超管**，不受协作者权限限制 |
 
 ::: danger API Token 等于把整站交出去
 
@@ -112,8 +127,10 @@ API Token 签出来时身份就是超管，所以它能调**所有** `/api/admin
 
 - 不要写进前台代码、不要提交进仓库、不要贴到聊天里；
 - 只想让别人读文章的话，用匿名接口（`/api/public/**`），别发 Token；
-- 有效期默认 365 天，`VANBLOG_API_TOKEN_TTL_DAYS` 可调，范围 **1 ~ 36500 天**；
-  ⚠️ 填 `0`、填字母、或干脆不设，都会回落成 **365**（不会变成 1 天）；
+- 有效期默认 **90** 天，`VANBLOG_API_TOKEN_TTL_DAYS` 可调，范围 **1 ~ 36500 天**；
+  ⚠️ 填 `0`、填字母、或干脆不设，都会回落成 **90**（不会变成 1 天）；
+  🔴 **默认值曾经是 365 天，更早是 100 年（等于永不过期）**，逐步压到 90 天：
+  这个 token 等价超管，有效期就是"泄露之后攻击者能用的时长"上限；
 - 已经签出去的 Token 不受这个变量影响（有效期在签发时就写进库里了），介意就到后台吊销重签。
 
 :::
@@ -156,12 +173,34 @@ API Token 签出来时身份就是超管，所以它能调**所有** `/api/admin
 - 发评论在这之上还有三把自己的锁，超限返回的是 **400**（不是 429），消息里会写还要等多久：
   每 IP 每 10 分钟若干条（后台「评论设置」里可配，默认 **10**，上限 1000）、
   每 IP 每天 **50** 条、同一 IP 发同样内容 5 分钟内只允许 **1** 条；
-- `POST /api/public/article/:id`（输密码解锁加密文章）单独限次：**同一 IP + 同一篇文章 20 次 / 10 分钟**，
-  超了返回 **429**。文章 id 会先归一化，所以 `07`、`7.0`、`0x7` 这类写法**不会**各自拿到一份新预算。
+- `POST /api/public/article/:id`（输密码解锁加密文章）有**两道**闸，都是 10 分钟窗口、超限 **429**：
+  **同一 IP + 同一篇文章 20 次**，以及 🔴 **同一篇文章跨所有 IP 合计 500 次**
+  （`VANBLOG_UNLOCK_GLOBAL_BUDGET_PER_10MIN`，最小 20、最大 100000，非法值回落 500）。
+  ⚠️ **第二道是跨 IP 的**，所以哪怕你自己一次没试错，也可能因为**别人**在爆破这篇文章而拿到 429
+  （文案是「这篇文章的密码尝试次数过多」，与第一道的「尝试次数过多」不同，可据此区分）。
+  它统计**所有**尝试，包括密码正确的那次。文章 id 会先归一化，所以 `07`、`7.0`、`0x7` 这类写法
+  **不会**各自拿到一份新预算（🔴 两道闸用的是同一个归一化结果，否则前导零能换来一整份新的全局预算）。
 
-`/api/public/health` 有个特例：`status`、`mongo*`、`now`、`version` 匿名可见（版本号本来就渲染在每个前台页脚上），
-而 `uptimeSeconds` 与内存字段要带正确的 `x-vanblog-internal` 令牌，或站长显式设 `VANBLOG_HEALTH_DETAILS=true`；
-数据库 ping 不通时它返回 **503**（这样容器健康检查才有意义）。
+`/api/public/health` 有个特例：`status`、`mongo`、`mongoState`、`mongoStateText`、`mongoPingMs`、🔴 **`website`**、
+`now`、`version` 匿名可见（版本号本来就渲染在每个前台页脚上），而 `uptimeSeconds` 与内存字段要带正确的
+`x-vanblog-internal` 令牌，或站长显式设 `VANBLOG_HEALTH_DETAILS=true`。
+
+🔴 **它返回 503 的条件不止"数据库 ping 不通"** —— 判据是 `mongo` 通 **且** 前台渲染进程不是 `down`：
+
+| `mongo` | `website` | `statusCode` | `status` |
+| --- | --- | --- | --- |
+| `up` | `up` / `starting` / `disabled` / `unknown` | 200 | `ok` |
+| `up` | **`down`** | **503** | `degraded` |
+| `down` | 任意 | 503 | `degraded` |
+
+⇒ 🔴 **503 不再唯一意味着"库连不上"，必须读 body 里的 `mongo` 与 `website` 两个字段分别判断，不能靠状态码猜原因。**
+`website` 的五个取值：`up`（前台子进程在）、`starting`（不在，但在 **60 秒**宽限窗口内 —— 防抖动，
+否则每次在后台保存站点信息都会让容器被判定不健康）、`down`（超过宽限窗口仍未拉起）、
+`disabled`（**按设计**不由 server 拉起前台，即 `VANBLOG_DISABLE_WEBSITE=true` 的前后端分离部署）、
+`unknown`（**本进程无从判断**：多进程部署下不是 leader 的那个 worker）。
+⚠️ **`disabled` 与 `unknown` 都不是故障，都不会导致 503。**
+⚠️ 前后端分离部署里 server 不拉起前台，因此**这个字段保护不到你的前台** —— 请直接探测你自己的 website 容器，
+见 [环境变量](./env.md) 里 `VANBLOG_DISABLE_WEBSITE` 那条。
 
 ## 限流
 
@@ -170,7 +209,15 @@ API Token 签出来时身份就是超管，所以它能调**所有** `/api/admin
 | 初始化 | `/api/admin/init*`（含 upload / restore） | 每 IP 10 分钟 5 次 | `VANBLOG_INIT_LIMIT_PER_10MIN` |
 | 公开写 | `/api/public/**` 的非 GET 请求 | 每 IP 每分钟 30 次 | `VANBLOG_PUBLIC_WRITE_LIMIT_PER_MIN` |
 | 静态 | `/static/**` | 全局的 10 倍 | `VANBLOG_STATIC_LIMIT_PER_MIN` |
+| 🔴 聚合列表 | `/api/public/category` 与 `/api/public/tag`（**只有这两条**） | 每 IP 每分钟 **60** 次 | `VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN` |
 | 全局 | 其余所有请求（含 `/rss/`、`/sitemap/`、`/swagger`、`/robots.txt`） | 每 IP 每分钟 600 次 | `VANBLOG_RATE_LIMIT_PER_MIN` |
+
+⚠️ **聚合列表那一档比全局紧 10 倍**（60 对 600），因为这两个匿名端点**没有分页**，
+一次请求就要把全部分类 / 标签连同文章计数算出来。写抓取脚本时按 **60/分钟** 做预算，不要按全局的 600。
+⚠️ 这一档的路径判定**先做归一化**，所以 `/api/public/category/`、`/API/public/category`、
+`/api/public/CATEGORY` 这些写法**共用同一个桶**，换写法换不来新预算。
+🔴 另有若干**按接口**而非按路径分桶的限制（评论的三把锁、加密文章解锁的两道闸、登录失败锁定、
+`/api/admin/auth/restore` 与 `/api/admin/init*` 同档），见上面[哪些接口不需要登录](#哪些接口不需要登录)一节与[登录安全策略](./secure.md)。
 
 超限返回 **429**，并带一个 **`Retry-After`** 响应头（单位秒，最小 1）—— 写脚本时读它就行，
 不用去解析中文消息。响应体是 `{"statusCode":429,"message":"请求过于频繁，请稍后再试"}`。
