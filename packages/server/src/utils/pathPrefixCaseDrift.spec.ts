@@ -197,6 +197,15 @@ function isCaseInsensitiveShape(hit: Hit, lines: string[]): boolean {
   if (hit.text.includes('toLowerCase(')) {
     return true;
   }
+  // 🔴 2026-09-22：**经仓库唯一的归一化函数**也算安全形状。
+  //    `normalizeRateLimitPath` 内部就是"切 query/hash + 去尾斜杠 + 转小写"，
+  //    所以 `normalizeRateLimitPath(req.path) === '…'` 与 `p.toLowerCase().startsWith('…')` 等价安全。
+  //    ⚠️ 认它而不是把它塞进白名单，是因为它**就是正确的修法**：
+  //    将来别处也这样修时应当自动被认成安全，而不是每处都要登记一条豁免。
+  //    （由 `rateLimitPathNormalization.spec.ts` 与 `initMiddleware.spec.ts` 的行为级断言钉住其语义。）
+  if (/normalizeRateLimitPath\s*\(/.test(hit.text)) {
+    return true;
+  }
   const recv = receiverOf(hit.text);
   if (!recv) {
     return false;
@@ -462,6 +471,233 @@ describe('isAdminNoStorePath：大小写变体与规范路径同样拿到 no-sto
       '/category',
     ]) {
       expect([p, isAdminNoStorePath(p)]).toEqual([p, false]);
+    }
+  });
+});
+
+
+/* ------------------------------------------------------------------ *
+ * 🔴 2026-09-22 扩展：第三类形状 —— **完整路径的精确相等**
+ *
+ * 原守卫扫的是"对 `/` 开头的**字面量**做 startsWith/=== 前缀比较"，
+ * 而 `provider/auth/init.middleware.ts` 那处是 `req.path == '/api/admin/init'`
+ * —— **完整路径的精确相等**，原口径**扫不到**（它既不含 startsWith，
+ * 而 `==` 也不在 COMPARISON_RE 里）。⇒ 第 6 处会从这个形状长出来。
+ *
+ * 🔴 但扩展口径必须**收窄到 A 类语义**，否则会把 B 类（数据形状校验）全部命中、
+ * 天天误报 ⇒ 最后被人加白名单加到失效（横切守卫最常见的死法）：
+ * **只报"比较的一侧来自请求"**（`req.path` / `req.url` / `req.originalUrl` /
+ * `request.*` / `pathFromRequest(...)`，或回溯窗口内由它们赋值的变量）。
+ * B 类的操作数是归档成员名、容器内文件路径、我们自己生成并存库的 URL —— 都不是请求侧取值，
+ * 所以天然不会被这一类命中（已实测：全仓只有 init.middleware 一处）。
+ *
+ * ⚠️ **这一类的失败方向可能与前缀那四处相反**：前缀比较不匹配 ⇒ **跳过防护**（安全洞）；
+ * 而 init.middleware 的豁免不匹配 ⇒ **跳过豁免**（可用性问题，fail-closed）。
+ * ⇒ 所以这一类既防"绕过防护"，也防"豁免范围与路由可达范围不一致"。
+ * ------------------------------------------------------------------ */
+
+/** 视为"请求侧取值"的形状。 */
+const REQUEST_SIDE_RE = /\b(?:req|request)\s*\.\s*(?:path|url|originalUrl)\b|\bpathFromRequest\s*\(/;
+
+/** 完整路径字面量：`'/` 开头、至少还有一段（不是单纯的前缀），且用 == 或 === 比较。 */
+const EXACT_PATH_CMP_RE = /(===|==)\s*'(\/[^']*\/[^']*)'/;
+
+type ExactHit = { file: string; line: number; text: string; lines: string[] };
+
+/** 在一行（或其回溯窗口）里判断"比较的那一侧是不是来自请求"。 */
+function requestSideNear(hit: { line: number; text: string; lines: string[] }): boolean {
+  if (REQUEST_SIDE_RE.test(hit.text)) return true;
+  // 回溯窗口：`const p = req.path;` 然后 `p === '/x'`
+  for (let i = Math.max(0, hit.line - 1 - BACK_WINDOW); i < hit.line - 1; i += 1) {
+    if (REQUEST_SIDE_RE.test(hit.lines[i])) return true;
+  }
+  return false;
+}
+
+/** 这一处是不是"安全形状"：比较前已归一化（normalizeRateLimitPath / toLowerCase）。 */
+function exactIsNormalized(hit: { line: number; text: string; lines: string[] }): boolean {
+  if (/normalizeRateLimitPath\s*\(/.test(hit.text) || hit.text.includes('toLowerCase(')) return true;
+  for (let i = Math.max(0, hit.line - 1 - BACK_WINDOW); i < hit.line - 1; i += 1) {
+    const l = hit.lines[i];
+    if (/=\s*normalizeRateLimitPath\s*\(/.test(l) || /=.*toLowerCase\(/.test(l)) return true;
+  }
+  return false;
+}
+
+function collectExactPathHits(srcRoot: string): ExactHit[] {
+  const hits: ExactHit[] = [];
+  for (const full of walk(srcRoot, [])) {
+    const rel = path.relative(srcRoot, full).split(path.sep).join('/');
+    const stripped = stripCommentsKeepStrings(readFileSync(full, 'utf8'));
+    const lines = stripped.split('\n');
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const text = lines[idx];
+      if (!EXACT_PATH_CMP_RE.test(text)) continue;
+      const hit = { file: rel, line: idx + 1, text: text.trim(), lines };
+      // 🔴 收窄：只报请求侧取值参与的那一类（B 类的操作数不是请求侧，天然不命中）
+      if (!requestSideNear(hit)) continue;
+      hits.push(hit);
+    }
+  }
+  return hits;
+}
+
+/**
+ * 第三类形状的白名单：**逐条写明为什么这一处大小写敏感是可以接受的**。
+ * 🔴 与前两类共用同一套防腐纪律：anchor 必须真实存在、不许有死条目、理由必须够长。
+ */
+const EXACT_ALLOWLIST: Entry[] = [
+  {
+    file: 'utils/degradedHold.ts',
+    anchor: "if (req.method === 'GET' && normalized === '/api/public/health') {",
+    klass: 'A-低严重度（不改）',
+    reason:
+      '降级驻留用的是 Node 原生 http.createServer，**完全没有路由**，也不挂任何静态中间件 ⇒ ' +
+      '不存在"大小写不敏感的下游会服务别的内容"这个前提，而那个前提正是前四处成为安全洞的原因。' +
+      '大写变体只会落到通用 503 分支：**两个分支都返回 503**，差别只是 body 形状（health JSON vs 通用），' +
+      '所以后果是外观级。而探测方是本站自己配置的（Dockerfile HEALTHCHECK 与 compose 模板都用规范小写路径），' +
+      '不会发大写。⚠️ 反过来，降级期是站点最脆弱的时刻，在这条路径上引入行为变化的风险与收益不成比例。' +
+      '🔴 但要注意前提：如果将来给降级服务器加了任何路由或静态服务，这一条豁免立刻失效，必须重新评估。',
+  },
+];
+
+describe('横切守卫（第三类形状）：完整路径的精确相等，若一侧来自请求则必须先归一化', () => {
+  const hits = collectExactPathHits(SRC_ROOT);
+
+  it('🔴 反空转：扫描器真的扫到了东西（否则"全部安全"是一个空的绿）', () => {
+    // ⚠️ 全仓目前应当**恰好 1 处**（init.middleware 那条已归一化的比较）。
+    //    下界设为 1：如果将来口径写错导致扫不到任何东西，这条会红 ——
+    //    上一轮就有一个代理因此写出过恒真守卫（TS 5.x 的 Decorator.expression 不含前导 at 符号，
+    //    而它的正则都以 ^@ 开头 ⇒ 枚举出 0 条 ⇒ "未覆盖清单为空"变成空的绿）。
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('🔴 每一处"请求侧的完整路径精确相等"要么已归一化，要么在白名单里且写明理由', () => {
+    const unclassified: string[] = [];
+    for (const h of hits) {
+      if (exactIsNormalized(h)) continue;
+      const entry = EXACT_ALLOWLIST.find((e) => e.file === h.file && h.text.includes(e.anchor.trim()));
+      if (!entry) {
+        unclassified.push(`${h.file}:${h.line} ${h.text}`);
+        continue;
+      }
+      // 白名单条目本身也要合格：理由够长、分类只允许那两种
+      expect(entry.reason.length).toBeGreaterThan(60);
+      expect(['A-已在上游归一化', 'A-低严重度（不改）', 'B-数据形状校验']).toContain(entry.klass);
+    }
+    // 失败信息要能直接照着去看
+    expect(unclassified).toEqual([]);
+  });
+
+  it('🔴 第三类白名单的防腐机制：每条 anchor 都必须在对应文件里真实存在', () => {
+    for (const e of EXACT_ALLOWLIST) {
+      const src = stripCommentsKeepStrings(readFileSync(path.join(SRC_ROOT, e.file), 'utf-8'));
+      expect({ file: e.file, anchorExists: src.includes(e.anchor) }).toEqual({
+        file: e.file,
+        anchorExists: true,
+      });
+    }
+  });
+
+  it('🔴 第三类白名单不是死的：每一条都真的被某次命中用到', () => {
+    for (const e of EXACT_ALLOWLIST) {
+      const used = hits.some((h) => h.file === e.file && h.text.includes(e.anchor.trim()));
+      expect({ file: e.file, used }).toEqual({ file: e.file, used: true });
+    }
+  });
+
+  it('🔴 已知那一处确实在扫描结果里（不是靠"扫不到"混过去的）', () => {
+    const found = hits.find((h) => h.file === 'provider/auth/init.middleware.ts');
+    expect(found).toBeDefined();
+    expect(found!.text).toContain('normalizeRateLimitPath');
+    expect(found!.text).toContain("'/api/admin/init'");
+  });
+
+  it('🔴 尺子有效性①：喂合成源码，"未归一化的请求侧精确相等"必须被抓出来', () => {
+    // 用合成源码而不是改真实文件：真实那一处已经修好了，
+    // 所以必须证明"如果它退回旧形状，扫描器会抓到"。
+    const os = require('os');
+    const fs = require('fs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exactpath-'));
+    try {
+      const bad = [
+        "import { Request } from 'express';",
+        'export function f(req: Request) {',
+        "  if (req.path == '/api/admin/init') { return 1; }",
+        "  if (req.url === '/api/admin/thing') { return 2; }",
+        '  return 0;',
+        '}',
+        '',
+      ].join('\n');
+      const good = [
+        "import { Request } from 'express';",
+        'export function f(req: Request) {',
+        "  if (normalizeRateLimitPath(req.path) === '/api/admin/init') { return 1; }",
+        '  return 0;',
+        '}',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'bad.ts'), bad);
+      fs.writeFileSync(path.join(dir, 'good.ts'), good);
+      const found = collectExactPathHits(dir);
+      // ⚠️ 扫描器**收集**所有请求侧的精确相等命中，"安全不安全"由 exactIsNormalized **分类**
+      //    （两步分开，否则白名单机制没法表达"这处命中但它是安全的"）。
+      //    所以 good.ts 也会出现在 found 里 —— 关键是它必须被分类成安全。
+      expect(found.length).toBe(3);
+      const badHits = found.filter((h) => h.file === 'bad.ts');
+      const goodHits = found.filter((h) => h.file === 'good.ts');
+      expect(badHits.length).toBe(2); // bad.ts 里两行都抓到
+      expect(goodHits.length).toBe(1);
+      // 🔴 本体断言：坏的全部被判为"未归一化"，好的被判为"已归一化" ⇒ 分类器真的在分辨
+      expect(badHits.every((h) => !exactIsNormalized(h))).toBe(true);
+      expect(goodHits.every((h) => exactIsNormalized(h))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('🔴 尺子有效性②：B 类（数据形状校验）**不被**这一类命中 —— 收窄口径有效', () => {
+    // 合成一个 B 类形状：操作数是归档成员名/容器路径/存库 URL，**不是请求侧取值**
+    // ⇒ 即使它是大小写敏感的精确相等，也不该被报（那是正确的）。
+    const os = require('os');
+    const fs = require('fs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exactpath-b-'));
+    try {
+      const bClass = [
+        'export function g(memberName: string, storedUrl: string, containerPath: string) {',
+        "  if (memberName === '/etc/passwd') return 1;",
+        "  if (storedUrl === '/post/hello') return 2;",
+        "  if (containerPath === '/app/config.yaml') return 3;",
+        '  return 0;',
+        '}',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'bclass.ts'), bClass);
+      expect(collectExactPathHits(dir)).toEqual([]); // 🔴 零命中 ⇒ 不会天天误报
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('🔴 尺子有效性③：注释里出现的同形字面量不算命中（剥注释器在工作）', () => {
+    const os = require('os');
+    const fs = require('fs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exactpath-c-'));
+    try {
+      const src = [
+        'export function h(req: any) {',
+        "  // 旧的写法是 req.path == '/api/admin/init'，已改成归一化后比较",
+        "  if (normalizeRateLimitPath(req.path) === '/api/admin/init') return 1;",
+        '  return 0;',
+        '}',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'commented.ts'), src);
+      const found = collectExactPathHits(dir);
+      expect(found.length).toBe(1); // 🔴 只有代码那一行，注释那行不算
+      expect(found[0].text).toContain('normalizeRateLimitPath');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

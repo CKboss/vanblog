@@ -13,9 +13,16 @@ import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
  * 三条真正要紧的性质：
  * 1. **未初始化时绝不能调用 `next()`**：那等于把请求放进业务路由，
  *    而业务路由此时面对的是一个空库（`users` 里没有管理员、`metas` 里没有站点信息）。
- * 2. **它自己的放行是精确匹配 `req.path == '/api/admin/init'`**（没有尾斜杠、没有前缀匹配）。
- *    ⚠️ 于是 `/api/admin/init/upload`、`/api/admin/init/restore`、`/api/public/health`
- *    **不是**被中间件放行的，而是靠 `app.module.ts` 里 `.exclude(...)` 那一串。
+ * 2. **它自己的放行是"归一化后与 `/api/admin/init` 精确相等"**（不是前缀匹配）。
+ *    🔴 2026-09-22 更正：此前是 `req.path == '/api/admin/init'`（请求侧 + 大小写敏感 + 松散精确相等），
+ *    而 Express 默认**大小写不敏感且尾斜杠可选** ⇒ `/api/admin/init/` 与 `/API/admin/init` 会被路由送到
+ *    **同一个处理器**、却匹配不上那个字面量 ⇒ 未初始化时被挡在门外（"站点卡在未初始化"）。
+ *    现在先经 `normalizeRateLimitPath`（去尾斜杠 + 转小写，**刻意不解码百分号** —— 下游是 Express 路由）
+ *    再比较，使**中间件的豁免范围与路由的可达范围一致**。
+ *    ⚠️ **失败方向要注意**：不匹配 ⇒ 走 `else` ⇒ 未初始化时返回 233 提示而**不是**放行
+ *    ⇒ 这一处**不是安全边界**，与"大小写敏感的前缀比较绕过防护"那四处方向相反（那四处是"不匹配 ⇒ 跳过防护"）。
+ *    ⚠️ 而 `/api/admin/init/upload`、`/api/admin/init/restore`、`/api/public/health` 这些**子路径/别的路径**
+ *    仍然**不是**被中间件放行的，而是靠 `app.module.ts` 里 `.exclude(...)` 那一串。
  *    这意味着"未初始化时必须能用的路径"这件事被**分散在两个文件里**，
  *    删掉 exclude 清单里的任何一条都会让灾难恢复直接失效（`/api/admin/init/restore`
  *    正是站点还没初始化时导入整站备份的唯一入口）⇒ 两条跨文件漂移守卫。
@@ -92,8 +99,35 @@ describe('InitMiddleware.use：放行与拦截', () => {
     }
   });
 
-  it('⚠️ 精确匹配的边界：带尾斜杠、子路径、大小写变化都**不**被中间件放行（要靠 exclude 清单）', async () => {
-    for (const p of ['/api/admin/init/', '/api/admin/init/restore', '/api/admin/init/upload', '/API/admin/init']) {
+  it('🔴 豁免范围与 Express 路由的可达范围一致：尾斜杠与大小写变体**同样被放行**', async () => {
+    // Express 默认 strict routing=false、case sensitive routing=false（`main.ts` 两项都没改），
+    // 所以这三种写法都会被路由送到**同一个** init 处理器 ⇒ 中间件也必须同样豁免它们，
+    // 否则处理器可达而中间件挡着，未初始化的站点就完不成首次初始化。
+    for (const p of ['/api/admin/init', '/api/admin/init/', '/API/admin/init', '/Api/Admin/Init//']) {
+      const { mw, next, json, checkHasInited, res } = makeMiddleware(false);
+      await mw.use(req(p), res, next);
+      expect({ path: p, nextCalled: next.mock.calls.length, jsonCalled: json.mock.calls.length }).toEqual({
+        path: p,
+        nextCalled: 1,
+        jsonCalled: 0,
+      });
+      // 放行分支不该去查库（豁免的意义就是"未初始化也能过"）
+      expect(checkHasInited).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it('⚠️ 子路径与其它路径**不**被中间件放行（它们要靠 exclude 清单，豁免没有扩大）', async () => {
+    // 🔴 这条是上一条的**反方向对照**：归一化只消除了"尾斜杠/大小写"这两个维度，
+    //    **没有**把豁免扩大到子路径或任何别的路径 —— 否则"归一化"就退化成了"前缀匹配"。
+    for (const p of [
+      '/api/admin/init/restore',
+      '/api/admin/init/upload',
+      '/api/admin/initX',
+      '/api/admin/initialise',
+      '/api/admin/ini',
+      '/api/public/health',
+      '/x',
+    ]) {
       const { mw, next, json, checkHasInited, res } = makeMiddleware(false);
       await mw.use(req(p), res, next);
       expect({ path: p, nextCalled: next.mock.calls.length, jsonCalled: json.mock.calls.length }).toEqual({
@@ -102,6 +136,32 @@ describe('InitMiddleware.use：放行与拦截', () => {
         jsonCalled: 1,
       });
       expect(checkHasInited).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('🔴 百分号编码变体**不**被放行（归一化刻意不解码：解码会让判定比 Express 路由更宽）', async () => {
+    // `/api/admin/%69nit` 这类写法：Express 路由匹配用的是**未解码**的 req.path，所以它并**不会**
+    // 命中 init 处理器；若中间件解码后再比，就会豁免一个路由根本到不了的路径（判定比路由更宽）。
+    for (const p of ['/api/admin/%69nit', '/api/admin/init%2f', '//api//admin//init']) {
+      const { mw, next, json, checkHasInited, res } = makeMiddleware(false);
+      await mw.use(req(p), res, next);
+      expect({ path: p, nextCalled: next.mock.calls.length, jsonCalled: json.mock.calls.length }).toEqual({
+        path: p,
+        nextCalled: 0,
+        jsonCalled: 1,
+      });
+      expect(checkHasInited).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('🔴 非法输入不抛错、且一律落到"不放行"（失败方向更严）', async () => {
+    for (const weird of [undefined, '', null, 42, {}, ['/api/admin/init']]) {
+      const { mw, next, json, res } = makeMiddleware(false);
+      await mw.use(req(weird as any), res, next);
+      expect({ nextCalled: next.mock.calls.length, jsonCalled: json.mock.calls.length }).toEqual({
+        nextCalled: 0,
+        jsonCalled: 1,
+      });
     }
   });
 
@@ -172,8 +232,15 @@ describe('漂移守卫 B：中间件的放行字符串必须与后台前端实�
     'utf-8',
   );
 
-  it('中间件放行的是 `/api/admin/init`（精确匹配，无尾斜杠）', () => {
-    expect(MW).toMatch(/req\.path\s*===?\s*'\/api\/admin\/init'/);
+  it('中间件放行的是 `/api/admin/init`（归一化后精确相等，字面量无尾斜杠）', () => {
+    // 🔴 2026-09-22 升级：字面量本身仍必须逐字是 `/api/admin/init`（这条守卫的**原意**），
+    //    但比较的**左侧**现在是归一化后的路径，所以形状从 `req.path ==` 变成
+    //    `normalizeRateLimitPath(req.path) ===`。
+    expect(MW).toMatch(/normalizeRateLimitPath\(req\.path\)\s*===\s*'\/api\/admin\/init'/);
+    // 🔴 并且必须真的从 rateLimit 引入那个共享口径（而不是就地另写一份，两份就会漂）
+    expect(MW).toMatch(/import\s*\{\s*normalizeRateLimitPath\s*\}\s*from\s*'\.\.\/\.\.\/utils\/rateLimit'/);
+    // 🔴 刻意不解码百分号：源码里不许出现 decodeURI/decodeURIComponent（解码会让判定比路由更宽）
+    expect(MW).not.toMatch(/decodeURI(Component)?\(/);
   });
 
   it('后台前端 POST 的初始化路径就是 `/api/admin/init`（两边逐字相同）', () => {
@@ -182,10 +249,22 @@ describe('漂移守卫 B：中间件的放行字符串必须与后台前端实�
     expect(ADMIN_API).not.toContain("request('/api/admin/init/'");
   });
 
-  it('负向对照：给中间件加上尾斜杠，第一条断言必须红', () => {
-    const mutated = MW.replace("req.path == '/api/admin/init'", "req.path == '/api/admin/init/'");
+  it('负向对照：给中间件的字面量加上尾斜杠，第一条断言必须红', () => {
+    // ⚠️ 变异锚点必须**唯一命中代码**：文件头注释里也提到了这个字面量，
+    //    所以这里用带 `normalizeRateLimitPath(` 的完整形状做锚点（注释里没有这个形状）。
+    const anchor = "normalizeRateLimitPath(req.path) === '/api/admin/init'";
+    expect(MW.split(anchor).length - 1).toBe(1); // 🔴 唯一命中，不是 >= 1
+    const mutated = MW.replace(anchor, "normalizeRateLimitPath(req.path) === '/api/admin/init/'");
     expect(mutated).not.toBe(MW); // 变异真的发生了
-    expect(mutated).toMatch(/req\.path\s*===?\s*'\/api\/admin\/init\//);
-    expect(MW).not.toMatch(/req\.path\s*===?\s*'\/api\/admin\/init\//);
+    expect(mutated).not.toMatch(/normalizeRateLimitPath\(req\.path\)\s*===\s*'\/api\/admin\/init'/);
+    expect(MW).toMatch(/normalizeRateLimitPath\(req\.path\)\s*===\s*'\/api\/admin\/init'/);
+  });
+
+  it('🔴 负向对照：把归一化去掉（退回请求侧原始值比较），第一条断言必须红', () => {
+    const anchor = 'normalizeRateLimitPath(req.path)';
+    expect(MW.split(anchor).length - 1).toBe(1); // 唯一命中
+    const mutated = MW.replace(anchor, 'req.path');
+    expect(mutated).not.toBe(MW);
+    expect(mutated).not.toMatch(/normalizeRateLimitPath\(req\.path\)\s*===/);
   });
 });

@@ -94,6 +94,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       moreDto.permissions = user.permissions;
       moreDto.nickname = user.nickname;
     }
-    return { name: payload.username, id: payload.sub, ...moreDto };
+    // 🔴 2026-09-22：**权威身份字段必须在展开之后赋值**（此前是 `{ name, id, ...moreDto }`）。
+    //    `moreDto` 来自 `{ ...payload }`，所以 payload 里若含 `id` 或 `name`，旧顺序会让它**覆盖**
+    //    这两个权威值；而下游 `AccessGuard` 判超管认 `user.id === 0` 或字面字符串 `"0"`
+    //    ⇒ **一张 payload 带 `id: 0` 的令牌就会被判成超管**。
+    //    ⚠️ 已穷举核实**当前不可利用**：全仓只有两处真的签 JWT（`token.provider.ts:61` 的
+    //    `{ sub, username, role }` 与 `:83` 的 `createToken`，其唯一调用方 `auth.provider.ts:33`
+    //    传 `{ username, sub, type, nickname, permissions }`），**都不含 `id`/`name`** ⇒
+    //    本次改动**行为逐字节不变**。修它是为了把"未来某条新签发路径放了 `id`"
+    //    从**静默提权成超管**变成**不可能**（守卫见 `jwtStrategyIdentityFields.spec.ts`）。
+    //    ⚠️ 协作者分支**故意**往 `moreDto` 里放的 `permissions` 与 `nickname` 不在下面两个
+    //    权威字段里，所以**仍然照常生效**（有断言钉住）。
+    return { ...moreDto, name: payload.username, id: payload.sub };
   }
 }
