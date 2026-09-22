@@ -374,6 +374,85 @@ else
   pass "--help 对默认安装方式的描述是新的"
 fi
 
+echo "== 文档里的\"当前最新发布版\"断言不得硬编码版本号 =="
+
+# 这类腐烂真实发生过：docs 里约 70 处硬编码 v2026.9.2、而 v2026.9.3 发布后 0 命中，
+# 其中几处是**现在时**的"这就是最新发布版"断言 ⇒ 照文档钉版本的人会钉到旧版，
+# 且没有任何守卫会红。修法是把这类断言改成指向 Releases 页面（权威出处），
+# 这条守卫钉住"改后的形状不再退化"。
+#
+# ⚠️ 口径刻意收窄，否则天天误报（横切守卫最常见的死法是误报太多 ⇒ 被人加白名单加到失效）：
+#   - **只报**同一行里既有"最新/当前 + 发布版/最新版本/release"这类现在时断言、又有硬编码 vX 的；
+#   - **不报**格式示例（"发布号长这样 vX"）、**不报**历史实测记录、
+#     **不报**"写这段时是 vX"这种**带时间限定的历史陈述**（发新版后它并不会变成假的）；
+#   - 排除生成镜像 docs/changelog.md（它整篇都是历史条目）。
+# ⚠️ 已知局限：这是**按行**匹配，跨行的断言扫不到。
+
+# 权威出处：CHANGELOG.md 里最新的**已发布**版本节（顶部的 [Unreleased] 不算）。
+LATEST_RELEASED="$(grep -m1 -oE '^## \[v[0-9]{4}\.[0-9]+(\.[0-9]+)?\]' "${ROOT}/CHANGELOG.md" 2>/dev/null | grep -oE 'v[0-9]{4}\.[0-9]+(\.[0-9]+)?' || true)"
+
+# 反空转①：权威版本号必须真的解析出来了，否则"docs 里没有过时断言"是恒真的。
+if [[ -n "${LATEST_RELEASED}" ]]; then
+  pass "从 CHANGELOG.md 解析出最新的已发布版本节：${LATEST_RELEASED}（不是 [Unreleased]）"
+else
+  fail "没能从 CHANGELOG.md 解析出最新的已发布版本节 ⇒ 本节其余断言会恒真"
+fi
+
+# 反空转②：必须真的扫到了文档文件。
+DOCS_SCANNED="$(find "${ROOT}/docs" -name '*.md' ! -name 'changelog.md' 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "${DOCS_SCANNED}" -ge 40 ]]; then
+  pass "扫描覆盖了 ${DOCS_SCANNED} 个文档文件（排除生成镜像 changelog.md）"
+else
+  fail "只扫到 ${DOCS_SCANNED} 个文档文件（预期 >= 40）⇒ 扫描范围可能坏了"
+fi
+
+# 核心断言：不得存在"现在时的最新发布版断言 + 硬编码版本号"。
+PRESENT_TENSE_HITS="$(grep -rnE '(最新|当前)[^。|]{0,14}(发布版|发布的版本|最新版本|release)' \
+  "${ROOT}/docs" "${ROOT}/README.md" --include='*.md' 2>/dev/null \
+  | grep -v "^${ROOT}/docs/changelog.md:" \
+  | grep -E 'v20[0-9]{2}\.[0-9]+' || true)"
+if [[ -z "${PRESENT_TENSE_HITS}" ]]; then
+  pass "docs 与 README 里没有\"现在时的最新发布版 + 硬编码版本号\"（权威出处应指向 Releases 页面）"
+else
+  fail "发现现在时的最新发布版断言里硬编码了版本号（发版后会静默过时）：$(printf '%s' "${PRESENT_TENSE_HITS}" | head -3 | tr '\n' ';')"
+fi
+
+# 尺子有效性反证：把匹配器喂一条**已知坏**的合成文本，必须能抓到；
+# 喂三类**合法**形状（格式示例、带时间限定的历史陈述、历史实测记录），必须不误报。
+probe_matcher() {
+  printf '%s\n' "$1" | grep -qE '(最新|当前)[^。|]{0,14}(发布版|发布的版本|最新版本|release)' \
+    && printf '%s\n' "$1" | grep -qE 'v20[0-9]{2}\.[0-9]+\.'
+}
+if probe_matcher '当前最新发布版是 v2020.1.1，直接钉它就行'; then
+  pass "尺子有效：合成的\"现在时断言 + 旧版本号\"被抓到"
+else
+  fail "尺子失效：合成的坏样本没被抓到 ⇒ 上面那条核心断言可能是恒真的"
+fi
+BAD_FP=0
+probe_matcher '发布号长这样：v2026.9.2（一个固定的标签，内容永不变）' && BAD_FP=$((BAD_FP + 1))
+probe_matcher '权威出处是 Releases 页面，写这段时是 v2026.9.3' && BAD_FP=$((BAD_FP + 1))
+probe_matcher '实测 v2026.9.2 的附件是 173,377 字节（历史快照，不改写）' && BAD_FP=$((BAD_FP + 1))
+if [[ "${BAD_FP}" -eq 0 ]]; then
+  pass "口径够窄：格式示例、带时间限定的历史陈述、历史实测记录三类合法形状都不误报"
+else
+  fail "口径太宽：${BAD_FP} 类合法形状被误报 ⇒ 这条守卫会天天红并被人加白名单加到失效"
+fi
+
+# 附带不变量：任何"写这段时是 vX"的带时间限定陈述，其版本号必须**真实存在**于 CHANGELOG
+# （不要求等于最新版 —— 它是历史陈述，发新版后不会变成假的；但不得指向不存在的版本）。
+ASOF_BAD=0
+while IFS= read -r V; do
+  [[ -z "${V}" ]] && continue
+  grep -qF "## [${V}]" "${ROOT}/CHANGELOG.md" 2>/dev/null || ASOF_BAD=$((ASOF_BAD + 1))
+done < <(grep -rhoE '写这段时是 `v[0-9]{4}\.[0-9]+(\.[0-9]+)?`' "${ROOT}/docs" --include='*.md' 2>/dev/null \
+  | grep -oE 'v[0-9]{4}\.[0-9]+(\.[0-9]+)?' | sort -u)
+if [[ "${ASOF_BAD}" -eq 0 ]]; then
+  pass "所有\"写这段时是 vX\"的时间限定陈述都指向 CHANGELOG 里真实存在的版本节"
+else
+  fail "${ASOF_BAD} 个\"写这段时是 vX\"指向了 CHANGELOG 里不存在的版本节"
+fi
+
+
 echo
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
