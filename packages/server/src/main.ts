@@ -274,7 +274,22 @@ async function bootstrap() {
     } catch {
       // 解不开就只按字面判定
     }
-    return candidates.some((p) => PRE_NEST_LIMITED_PREFIXES.some((prefix) => p.startsWith(prefix)));
+    // 🔴 2026-09-22 修：前缀比较必须**大小写不敏感**。Express 的 `app.use(prefix, express.static(...))`
+    //    前缀匹配默认大小写不敏感（本文件没有设 `case sensitive routing`），所以 `/STATIC/img/x` 会真的被
+    //    serve-static 服务；而这个门控此前用大小写敏感的 `startsWith`，于是 `/STATIC/…` **既不命中门控、
+    //    又被静态层正常服务** ⇒ 匿名可以不受任何频率限制地反复拉走任意大的静态文件，
+    //    并且拿不到 `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy`（活体已证实：
+    //    小写路径的响应有 4 个安全头，大写变体只剩 serve-static 自己加的 `X-Content-Type-Options`）。
+    //    ⚠️ 这是上面那段栈顺序注释所记载的"静态响应在限流器之前就结束了"这一事实的**唯一防线**，
+    //    所以它被绕过就等于回到"完全没有限流"的状态。
+    //    ⚠️ 比较用小写副本即可：本函数**只返回布尔、不做 `slice`**，所以不存在
+    //    "用小写副本算偏移会切错位置"的问题（`toLowerCase()` 对非 ASCII 可能改变长度，
+    //    例如 'İ' 小写后是 2 个字符 —— `utils/staticGuard.ts` 那一处需要切片，所以那边必须用原串偏移）。
+    //    ⚠️ 上面那个 `decodeURIComponent` 是**另一个维度**的正确防护（静态层会解码），不要顺手去掉。
+    return candidates.some((p) => {
+      const lower = p.toLowerCase();
+      return PRE_NEST_LIMITED_PREFIXES.some((prefix) => lower.startsWith(prefix.toLowerCase()));
+    });
   };
   app.disable('x-powered-by'); // 少送一个指纹；Express 默认在每个响应上带 X-Powered-By
   app.use((req, res, next) => {

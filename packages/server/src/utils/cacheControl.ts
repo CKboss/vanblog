@@ -47,11 +47,24 @@ export function pathFromRequest(req: {
  */
 export function isAdminNoStorePath(pathname: string): boolean {
   const path = normalizeRequestPath(pathname);
+  // 🔴 2026-09-22 修：比较必须**大小写不敏感**。Express 路由默认大小写不敏感
+  //    （`main.ts` 没有设 `case sensitive routing`），所以 `/API/admin/meta` 与 `/api/admin/meta`
+  //    命中同一个处理器；而本函数此前用大小写敏感的比较 ⇒ 大写变体上的管理响应**拿不到 no-store**
+  //    （活体已证实：`/api/admin/meta` 有 `Cache-Control: private, no-store, …` 与 `CDN-Cache-Control: no-store`，
+  //    而 `/API/admin/meta` 同样返回 401 但**完全没有这两个头**）。
+  //    ⚠️ 后果要说准：这一层的意义就是"**无条件** no-store"，而它能被大小写绕过 ⇒
+  //    在**前面挂了共享缓存/CDN**的部署里，已认证的管理响应可能被存进共享缓存。
+  //    ⚠️ 现实可利用性低（默认部署没有共享缓存，且多数 CDN 默认不缓存带凭据头的请求），
+  //    但"能被绕过的无条件保证"就不是无条件保证。
+  //    🔴 只在**本函数内**小写化，**不改共享的 `normalizeRequestPath`** —— 后者还有别的调用方
+  //    （`pathFromRequest` 等），改它会扩大 blast radius 并可能影响别处对路径大小写的语义。
+  //    ⚠️ 本函数**只返回布尔、不做 `slice`**，所以用小写副本比较是安全的（不存在偏移切错的问题）。
+  const lower = path.toLowerCase();
   return (
-    path === '/admin' ||
-    path.startsWith('/admin/') ||
-    path === '/api/admin' ||
-    path.startsWith('/api/admin/')
+    lower === '/admin' ||
+    lower.startsWith('/admin/') ||
+    lower === '/api/admin' ||
+    lower.startsWith('/api/admin/')
   );
 }
 
