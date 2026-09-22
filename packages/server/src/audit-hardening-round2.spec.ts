@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { stripCommentsForAnchor } from 'src/test-utils/anchorCode';
 
@@ -242,7 +242,7 @@ describe('多进程（cluster）守卫', () => {
     expect(code(read('utils/clusterRole.ts'))).toContain('if (value <= 1) return 1;');
   });
 
-  it('每进程的限流预算与连接池都按 worker 数摊薄', () => {
+  it('限流预算与连接池：点名已知的 8 处都按 worker 数摊薄', () => {
     const rl = code(read('utils/rateLimit.ts'));
     expect(rl).toContain('max: scaleLimit(GLOBAL_LIMIT_PER_MIN)');
     expect(rl).toContain('max: scaleLimit(STATIC_LIMIT_PER_MIN)');
@@ -252,6 +252,64 @@ describe('多进程（cluster）守卫', () => {
     expect(code(read('controller/public/public.controller.ts'))).toContain('max: scaleLimit(20)');
     expect(code(read('provider/comment/comment.provider.ts'))).toContain('max: scaleLimit(50)');
     expect(code(read('app.module.ts'))).toContain('scaleLimit(num(process.env.VANBLOG_MONGO_MAX_POOL_SIZE, 100)');
+  });
+
+  // 🔴 2026-09-23 新增（§7.119 裁定 1）：上面那条只**点名**已知的 8 处，所以"新增一个未摊薄的桶"不会红 ——
+  //    而 `utils/rateLimit.ts` 里当时就已经有第 5 个桶（PUBLIC_LIST_LIMIT_PER_MIN）不在那份点名清单里。
+  //    这条改成**枚举**：扫全部非 spec 的 server 源码，把每一处桶级 `max:` / `maxPoolSize:` 分类，
+  //    要求它要么含 `scaleLimit(`，要么在白名单里（并写明为什么摊薄对它无意义）。
+  //    ⚠️ 枚举计数必须排除"定义处/签名处"：`max: number` 是形参/字段的**类型标注**，不是桶
+  //    （实测全仓 21 处 `max:` 里有 9 处是签名；朴素计数会得到 6 而真值是 5 —— 与 §7.119.2 那条规矩同源）。
+  it('限流预算与连接池：**每一处**桶级 max:/maxPoolSize: 都摊薄了（枚举，不是点名）', () => {
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== 'node_modules') walk(p);
+        } else if (e.name.endsWith('.ts') && !e.name.endsWith('.spec.ts')) files.push(p);
+      }
+    };
+    walk(root);
+    // 反空转：枚举必须真的扫到了东西，否则"没有未摊薄的桶"是一个空的绿
+    expect(files.length).toBeGreaterThanOrEqual(100);
+
+    // `max: number` / `maxPoolSize: number` 是类型标注（形参或接口字段），不是桶的取值
+    const SIGNATURE = /max(?:PoolSize)?:\s*number\b/;
+    const BUCKET = /max(?:PoolSize)?:/;
+    // 真桶、但摊薄对它无意义：预算为 1，按 worker 数除会得到 0（等于把这道闸关掉）。
+    // ⚠️ 白名单不许有死条目 —— 下面断言每一条都必须真的命中。
+    const ALLOWED_UNTHINNED = ['consumeAttempt(dedupeKey, { max: 1,'];
+
+    const thinned: string[] = [];
+    const allowedHits: string[] = [];
+    const unthinned: string[] = [];
+    for (const f of files) {
+      const rel = f.slice(root.length + 1);
+      const lines = code(readFileSync(f, 'utf8')).split('\n');
+      lines.forEach((line, i) => {
+        if (!BUCKET.test(line) || SIGNATURE.test(line)) return;
+        // 🔴 不报行号：`stripCommentsForAnchor` 会把**整行注释连行一起丢掉**，
+        //    所以剥注释后的行号与原文对不上（实测原文第 343 行在剥注释后是第 141 行）。
+        //    报一个错的行号比不报更糟 —— 它会把人引到错误的位置。改成报**可 grep 的行文本**。
+        const at = rel;
+        // ⚠️ `maxPoolSize:` 的取值跨多行（`Math.max(\n  10,\n  scaleLimit(...),\n)`）⇒ 只看 4 行窗口；
+        //    `max:` 一律要求**同一行**，避免"附近恰好有个 scaleLimit"把未摊薄的桶掩盖过去。
+        const scope = /maxPoolSize:/.test(line) ? lines.slice(i, i + 4).join('\n') : line;
+        if (scope.includes('scaleLimit(')) thinned.push(`${at}:${i + 1}`);
+        else {
+          const ok = ALLOWED_UNTHINNED.find((a) => line.includes(a));
+          if (ok) allowedHits.push(ok);
+          else unthinned.push(`${at} → 未摊薄的一行（可直接 grep）：${line.trim().slice(0, 110)}`);
+        }
+      });
+    }
+    // 反空转：真的解析出了桶（当前实测 11 处已摊薄）
+    expect(thinned.length).toBeGreaterThanOrEqual(11);
+    // 白名单反腐烂：每条都必须命中，否则白名单在掩盖别的东西
+    expect(allowedHits.sort()).toEqual([...ALLOWED_UNTHINNED].sort());
+    // 🔴 核心性质。失败信息直接点名 file:line 与该行内容 ⇒ 读日志的人知道该改哪里。
+    expect(unthinned).toEqual([]);
   });
 
   it('主进程会先解析 jwt 密钥再 fork（全新安装时 worker 不会各生成一个）', () => {

@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 import {
@@ -358,5 +358,104 @@ describe('REGRESSION R4-C：公开面的护栏（前几轮修的）全部还在'
     expect(fn).toMatch(/if \(isFuturePublish\(article\.publishAt\)\)/);
     expect(fn).toMatch(/if \(article\.hidden\) \{[\s\S]{0,260}?allowOpenHiddenPostByUrl/);
     expect(fn).toMatch(/getByIdOrPathname\(id, 'admin'\)/); // 用 admin 视图取文，所以上面两道门必须显式加
+  });
+});
+
+
+// 🔴 2026-09-23 新增（§7.119 裁定 3）：本文件里有 2 条停用的 `xit`，标题都是 `AFTER THE FIX…`、
+//    body 都是恒真的 `expect(true).toBe(true)`。它们**不是**"静默缺席的守卫"：
+//    这个文件头就写明了约定 ——「`FINDING R4-x（尚未修）` 钉住当前行为，**打完补丁会变红** ——
+//    那时请把断言翻成同一条里 `xit('AFTER THE FIX …')` 的内容」，而真正承重的是 FINDING 那条 `it`
+//    （R4-12 的「查询没有投影」源码钉子）；R4-13 的修复落地后，它的 `xit` 就已被翻成
+//    `it('AFTER THE FIX（已实现）…')`（见上面那一条），这是本约定做对了的先例。
+//    🔴 但"约定写在注释里"不等于"约定被钉住"：一条裸 `xit` 从 CI 界面上看只是 skipped，
+//    谁都可以再停用一个测试而不触发任何东西。所以这里把约定本身钉住 ——
+//    **全仓每一条停用的测试都必须以 AFTER THE FIX 开头，且所在文件写明了那条约定**。
+describe('停用的测试必须遵守 AFTER THE FIX 约定，不许静默停着（§7.119 裁定 3）', () => {
+  // 🔴 探测器用拼接构造，避免本文件自己出现"行首就是 xit("的形状而自我命中
+  const PARKED_LINE = new RegExp('^\\s*(' + ['x' + 'it', 'x' + 'describe', 'x' + 'test'].join('|') + ')\\(');
+  const CONVENTION_MARK = '打完补丁会变红';
+
+  /** 纯函数：喂给它一组 {rel, raw}，返回三组结论。这样尺子可以用合成输入反证。 */
+  const scanParked = (entries: { rel: string; raw: string }[]) => {
+    const parked: string[] = [];
+    const badTitle: string[] = [];
+    const noConvention: string[] = [];
+    for (const { rel, raw } of entries) {
+      const lines = raw.split('\n');
+      const hits = lines
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => PARKED_LINE.test(l));
+      if (!hits.length) continue;
+      if (!raw.includes(CONVENTION_MARK)) noConvention.push(rel);
+      for (const { l, i } of hits) {
+        parked.push(`${rel}:${i + 1}`);
+        // 🔴 取标题不能用「排除三种引号」的字符类：标题里合法地含有**另一种**引号时
+        //    （本文件那两条就在中文里夹了 ASCII 双引号）匹配会在第一个引号处停住 ⇒ 解析不到。
+        //    改用纯字符串操作：跳过 `xit(` 与前导空白，把第一个字符当引号，找它的下一次出现。
+        //    ⚠️ 解析不到时**当作违规**（fail-loud）而不是跳过 —— 否则尺子坏掉会变成恒真的绿
+        //    （这一条不是假想：本守卫的第一版就是这样红的，见 §7.120）。
+        const head = l.match(/^\s*x(?:it|describe|test)\(\s*/);
+        let title = '';
+        if (head) {
+          const rest = l.slice(head[0].length);
+          const q = rest.slice(0, 1);
+          if (q === "'" || q === '"' || q === '`') {
+            const end = rest.indexOf(q, 1);
+            if (end > 0) title = rest.slice(1, end);
+          }
+        }
+        if (!title.startsWith('AFTER THE FIX')) {
+          badTitle.push(`${rel}:${i + 1} → ${title.slice(0, 80) || '（标题解析不到）'}`);
+        }
+      }
+    }
+    return { parked, badTitle, noConvention };
+  };
+
+  it('尺子有效性：合成的"随便停用一个测试"必须被抓到，而遵守约定的必须放行', () => {
+    const bad = scanParked([
+      { rel: 'synthetic/a.spec.ts', raw: "describe('x', () => {\n  " + "xit('某个被静默停用的用例', () => {});\n});\n" },
+    ]);
+    expect(bad.parked.length).toBe(1);
+    expect(bad.badTitle.length).toBe(1);          // 标题不是 AFTER THE FIX
+    expect(bad.noConvention).toEqual(['synthetic/a.spec.ts']);  // 文件没写约定
+    const good = scanParked([
+      {
+        rel: 'synthetic/b.spec.ts',
+        raw:
+          '// 未修的 FINDING 钉住当前行为，' + CONVENTION_MARK + '。\n' +
+          "describe('FINDING（尚未修）', () => {\n  " + "xit('AFTER THE FIX：做某事', () => {});\n});\n",
+      },
+    ]);
+    expect(good.parked.length).toBe(1);
+    expect(good.badTitle).toEqual([]);
+    expect(good.noConvention).toEqual([]);
+  });
+
+  it('全仓没有任何"不遵守约定就停着"的测试；本文件那 2 条都遵守', () => {
+    const specs: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== 'node_modules') walk(p);
+        } else if (e.name.endsWith('.spec.ts')) specs.push(p);
+      }
+    };
+    walk(__dirname);
+    // 反空转：扫描器必须真的扫到了 spec，否则"没有违规"是一个空的绿
+    expect(specs.length).toBeGreaterThanOrEqual(100);
+
+    const entries = specs.map((f) => ({
+      rel: f.slice(__dirname.length + 1),
+      raw: readFileSync(f, 'utf8'),
+    }));
+    const { parked, badTitle, noConvention } = scanParked(entries);
+    // 反空转第二层：这个扫描器在本文件里必须真的看到那 2 条（否则口径坏了也看不出来）
+    expect(parked.filter((x) => x.startsWith('audit-hardening-round4-security-public-cost.spec.ts')).length).toBe(2);
+    // 🔴 核心性质。失败信息点名 file:line 与标题 ⇒ 读日志的人知道该改哪里。
+    expect(badTitle).toEqual([]);
+    expect(noConvention).toEqual([]);
   });
 });

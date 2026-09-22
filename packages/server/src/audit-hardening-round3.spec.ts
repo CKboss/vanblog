@@ -343,7 +343,7 @@ describe('后台仪表盘的 num 参数：夹住，别把 NaN 和大数交给循
     expect(sanitizeDataNum('  90  ', 5)).toBe(90);
   });
 
-  it('源码里不再有裸的 parseInt(query)（那正是 NaN 与十亿次循环的来源）', () => {
+  it('analysis.controller 里不再有裸的 parseInt(，且走了 sanitizeDataNum（那正是 NaN 与十亿次循环的来源）', () => {
     const src = code(read('controller/admin/analysis/analysis.controller.ts'));
     expect(src).not.toContain('parseInt(');
     expect(src).toContain('sanitizeDataNum(');
@@ -527,7 +527,7 @@ describe('公开搜索：去重从 O(k²) 降到 O(k)，结果逐项不变', () 
     expect(res.length).toBe(2);
   });
 
-  it('源码里不再有 O(k²) 的 includes 去重（剥掉注释再断言）', () => {
+  it('article.provider 的公开搜索去重已换成 Set，那个历史形状不再出现（剥掉注释再断言）', () => {
     const src = code(read('provider/article/article.provider.ts'));
     expect(src).not.toContain('resData.includes(e)');
     expect(src).toContain('const seen = new Set<Article>()');
