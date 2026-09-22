@@ -10,6 +10,29 @@ redirectFrom: /ref/changelog.html
 
 > 下面是 `v2026.9.4` 打标之后累积的改动，还没发版。
 
+### 2026-09-22：🔴 反代文档补上「转发头与限流分桶」—— 配错会让按 IP 的限流与登录锁定静默失效
+
+- 🔴 **`docs/reference/reverse-proxy.md` 此前对 `VANBLOG_TRUST_FORWARDED_HEADERS`、`VANBLOG_BRUTE_FORCE_IP_SOURCE`
+  与「追加 vs 覆盖 X-Forwarded-For」**一个字都没提**，而这一页正是运维**配 nginx/caddy 时会打开的那一页**。
+  默认的 `auto` 模式取 XFF **最右一跳**，正是因为"caddy/nginx 会把真实对端**追加**到客户端自带的 XFF 之后"⇒
+  🔴 **外层反代若覆盖而不是追加 XFF，按 IP 的限流与登录锁定会静默失效**：
+  攻击者**每换一个伪造 XFF 就拿到一份全新的 600 次/分钟预算**，而且 🔴 **还能把 XFF 写成受害者的真实 IP、
+  让对方被登录失败锁定挡在门外**（栽赃）。
+- 🔴 **而服务端那条 CIDR 拒绝日志的原文已经在指路这两件事**（"检查 `VANBLOG_TRUST_FORWARDED_HEADERS`，
+  或反代是否在覆盖而不是追加 X-Forwarded-For"），运维顺着这句话翻反代文档**此前什么也找不到**。
+  ⚠️ 这两个变量在 `env.md` 里是有记录的 ⇒ 所以不是"没人写过"，而是 🔴 **"写在运维不会去看的那一页"**。
+- 🔴 **现已写明**：三种取值（`auto`/`always`/`never`）该怎么选、`never` 为什么会导致 429 风暴、
+  "最右一跳 + 只在回环/私网时采信"的判定、多进程下按 worker 摊薄，以及 🔴 **配错了怎么发现**（指路那条日志）。
+- ⚠️ **并修正一条只在特定模式下成立的建议**：文档原说"Cloudflare 后面把 `CF-Connecting-IP` 原样转给 VanBlog"，
+  而 🔴 **默认的 `auto` 模式不看 `CF-Connecting-IP`、也不看 `X-Real-IP`** ⇒ 那种部署必须把
+  `VANBLOG_TRUST_FORWARDED_HEADERS` 设成 `always`，否则统计与限流分桶拿到的是**边缘节点 IP**。
+- ✅ **nginx 片段本身是对的**（`$proxy_add_x_forwarded_for` 就是追加语义），未改。
+- 🔴 **新增两条守卫**：一条钉住"反代文档必须讲清转发头信任这一维"；
+  另一条把**权威限流表**（`docs/advanced/security.md#限流`）纳入数值对账，并 🔴 **修掉了原判据的一个"假通过"洞** ——
+  限流数字互为子串（`60` ⊂ `600` ⊂ `6000`、`5` ⊂ `15`/`50`/`500`、`30` ⊂ `300`），
+  原来的子串匹配会让"把 60 写成 600"**仍然通过**（已改成"数字前后都不再接数字"的边界匹配，并用变异证明它承重）。
+
+
 ### 2026-09-22：🔴 安全口径核对 —— 修正 API Token 有效期的最后两处错误值，以及一处"后台能收紧爆破阈值"的错误说法
 
 - 🔴 **API Token 有效期口径的最后两处错误值已修**：`docs/advanced/token.md` 与 `docs/advanced/security.md`

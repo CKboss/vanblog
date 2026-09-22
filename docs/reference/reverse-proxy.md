@@ -41,6 +41,36 @@ ports:
 
 :::
 
+## 转发头与限流分桶：追加而不是覆盖 `X-Forwarded-For`
+
+🔴 **这一节直接关系到「按 IP 的限流与登录锁定」在你这套反代下面是否真的生效**，配错了会**静默失效**（不报错，只是挡不住人、或者反过来把所有人当成同一个人）。
+
+VanBlog 的限流与防爆破计数都要一个「客户端 IP」。在反代后面，套接字对端是你的反代（一体式部署里就是容器内的 caddy，即回环地址），所以真实客户端只能从转发头里取 —— 而**转发头是客户端想写什么就写什么**。判据由 `VANBLOG_TRUST_FORWARDED_HEADERS` 决定（权威说明见 [环境变量参考](./env.md)）：
+
+| 取值 | 行为 | 什么时候用 |
+| --- | --- | --- |
+| **`auto`（默认）** | **只有当套接字对端是回环/私网时**才采信转发头，而且只信**一跳**：取 `X-Forwarded-For` 的**最右**一项 | 绝大多数部署：同机/内网反代，或一体式镜像里内置的 caddy |
+| `always` | 始终采信转发头（并优先看 CDN 头 `CF-Connecting-IP` / `True-Client-IP`） | CDN 或隧道**直连源站**、对端就是公网代理 IP 的部署 |
+| `never` | 只认套接字地址 | ⚠️ 反代后面等于**全站共用一个限流桶**，会引发 429 风暴，一般不要用 |
+
+🔴 **为什么默认取「最右一跳」**：caddy 与 nginx 的常规配置是把真实对端**追加**到客户端自带的 XFF 之后，所以**最右一项才是「可信代理看到的对端」**，左边的都可能是客户端伪造的。
+
+::: warning 外层反代必须「追加」XFF，不能「覆盖」
+
+- ✅ **追加**（正确）：nginx `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`、caddy `reverse_proxy`（默认就追加）、宝塔/NPM 的默认模板。此时 XFF 形如 `<客户端伪造的一串>, <你的反代看到的真实对端>`，最右一项可信。
+- 🔴 **覆盖**（错误）：把 XFF 直接设成客户端传来的值、或只设成 `$remote_addr` 而丢掉原有内容。此时**最右一项就是攻击者自己写的**，于是：
+  - **体量类限流被绕过**：攻击者每次请求换一个新的伪造 XFF，就拿到一份全新的 600 次/分钟预算；
+  - 🔴 **反过来还能栽赃**：把 XFF 写成受害者的真实 IP，让对方被登录失败锁定挡在门外。
+- ⚠️ 如果你**必须**在多层代理后面（例如 Cloudflare → 自己的 caddy → VanBlog），`auto` 取到的最右一项是**上一层代理**的地址而不是访客的 ⇒ 这种部署应当用 `always`（它会优先看 CDN 头）。
+
+:::
+
+⚠️ **登录防爆破 / 评论频率 / 加密文章解锁**这几处计数用哪个 IP，由 `VANBLOG_BRUTE_FORCE_IP_SOURCE` 单独决定（默认 `trusted`，即与上面同一套可信判定）。这几处之所以要单独一个旋钮：对它们而言攻击者的收益正是「换一个 key 重新开始」，所以身份来源必须谨慎；而**体量类**限流（全局 / 静态 / 公开写 / 初始化）轮换头的收益只是「攻击者自己拿到新的体量预算」，与旧行为相同。
+
+🔴 **配错了怎么发现**：如果你配了 `VANBLOG_ADMIN_LOGIN_ALLOW_CIDR`（后台登录网段白名单）却一直被 403 挡在外面，服务端日志里那条拒绝记录会**直接告诉你原因** —— 它会在「被拒的 IP 是私网/回环、而白名单里全是公网网段」时提示：这通常意味着**转发头没被采信**，请检查 `VANBLOG_TRUST_FORWARDED_HEADERS`，或者**你的反代是在覆盖而不是追加 `X-Forwarded-For`**。
+
+⚠️ **多进程（cluster）部署**：各档限流阈值会按 worker 数**摊薄**，因为计数器是每进程内存的 —— 不摊薄等于把预算悄悄放宽 N 倍。所以你在文档里看到的「600 次/分钟」在 N 个 worker 下是**每个 worker 600/N 次**。
+
 ## 协议：HTTP/2 与 HTTP/3 在哪一层生效
 
 VanBlog 容器里的 caddy 在 `:443` 上默认就是 `h1 / h2 / h3`（HTTP/3 要真的可用，还需要编排文件映射
@@ -112,7 +142,9 @@ Caddy 的 `reverse_proxy` **默认不缓存** HTML，一般不会出现「后台
 - 宝塔面板用 Nginx 反代，后台发布后前台仍是旧文章时，先关 `proxy_cache`（见下文），不要只靠缩短缓存或重装 Nginx。
 - location 下面的配置块只保留下面提供配置的那几行就可以了，不要加奇奇怪怪的语句和请求头（看不懂请忽略）
 - **必须转发 `Host`**（`proxy_set_header Host $host;`）。否则内嵌 Waline 评论登录 / 管理后台的 OAuth 回调会写成 `localhost` 或容器监听地址（如 `0.0.0.0`），而不是站点域名。见 [部署常见问题](../faq/deploy.md#反代后-waline-登录跳到-localhost)。
-- 建议同时转发 `X-Forwarded-For`。若站点在 Cloudflare（或同类 CDN）后面，请把来访请求的 `CF-Connecting-IP` 原样转给 VanBlog，不要改写成边缘节点 IP。Nginx 默认会透传该头；登录日志会优先读它。
+- **必须转发 `X-Forwarded-For`，而且是「追加」不是「覆盖」**（nginx 写 `$proxy_add_x_forwarded_for`，它就是把真实对端**追加**到客户端自带的 XFF 之后；🔴 **不要写成 `$http_x_forwarded_for` 或自己拼一个只含 `$remote_addr` 的值**）。原因见下面「转发头与限流分桶」一节：VanBlog 默认取 XFF 的**最右一跳**，**追加**时最右一项才是你的反代看到的真实对端，**覆盖**时最右一项就变成客户端自己写的值。
+- 建议同时转发 `X-Real-IP`。⚠️ **但默认的 `auto` 模式不看 `X-Real-IP`**（它没有「由代理追加」的语义，无法区分「代理写的」与「客户端写的」），所以只设 X-Real-IP 不设 XFF 是不够的。
+- 若站点在 Cloudflare（或同类 CDN）后面，请把来访请求的 `CF-Connecting-IP` 原样转给 VanBlog，不要改写成边缘节点 IP。🔴 **注意：默认的 `auto` 模式也不看 `CF-Connecting-IP`**（CDN 专用头，只有 CDN 会覆写它，而 `auto` 的前提是「对端就是我自己的代理」）⇒ **这种部署要把 `VANBLOG_TRUST_FORWARDED_HEADERS` 设成 `always`**，否则访问统计与限流分桶拿到的是边缘节点 IP。Nginx 默认会透传该头；登录日志会优先读它。
 - 若 CDN 使用「缓存全部」，请为 `/admin*` 和 `/api/admin*` 设置绕过缓存。VanBlog 源站已对这两类路径发送 `Cache-Control: private, no-store` 以及 `CDN-Cache-Control` / `Cloudflare-CDN-Cache-Control: no-store`，避免后台 HTML/JSON 被边缘存储；页面规则仍建议保留。见 [部署常见问题](../faq/deploy.md#cloudflare-缓存了后台或后台-api)。
 - 外层 Nginx / 宝塔若开启了 `proxy_cache`（宝塔常在 `/www/server/nginx/conf/proxy.conf` 里写 `proxy_cache cache_one;`），会把**前台 HTML** 缓存很久。后台发布、更新或迁移后，公网站点可能仍是旧文章。官方示例已加上 `proxy_no_cache 1;` 与 `proxy_cache_bypass 1;`。源站后台/API 已发 no-store，**前台 HTML 不会强制 no-store**，代理和 CDN 仍可能缓存整页。见 [后台发布后前台不刷新仍显示旧文章](#后台发布后前台不刷新仍显示旧文章)（[#469](https://github.com/Mereithhh/vanblog/issues/469)）。
 
