@@ -64,13 +64,35 @@ const HOSTILE = [...TRAVERSAL, ...INERT_SINGLE_SEGMENT];
 
 describe('图片落盘名：净化 + 容器化校验', () => {
   let root: string;
+  /**
+   * 🔴 `root` 的**私有**父目录，专门给下面那条"不会在 root 之外留下东西"的断言当观测面。
+   *
+   * 为什么不能直接用 `path.resolve(root, '..')`（= 系统 tmpdir）：那条断言要证明的是
+   * **被测函数**没有在 `root` 之外写东西，而"root 的父目录"只是最近的可观测代理 ——
+   * 它恰好是系统 `/tmp` 纯属偶然（`mkdtempSync(tmpdir(), …)`），**不是有意要检查整个 `/tmp`**。
+   * 于是它实际断言的是"**整个 `/tmp` 在这条用例执行期间没有任何新条目出现**"，
+   * 而 `/tmp` 是全机共享的：并发跑全量 jest 时，别的套件与变异驱动会不停在里面
+   * `mkdtempSync`（`mdz-read-*`、`vanblog-md-export-*`、`vanblog-gate-*`、`vanblog-mutation.*`）
+   * ⇒ **断言必然偶发红，而红的原因与被测代码毫无关系**。
+   *
+   * 🔴 这正是本仓库反复出现的一族："红自己消失"被误记成**负载敏感假红**，
+   * 而真因是**测试装置写错**（同族：`rateLimit.spec.ts` 的 `uniqueIp()` 从 200 个地址里随机取
+   * 导致两条用例撞进同一个限流桶；`loginThrottle` 用墙上时钟判断"有没有等待"）。
+   * 三者的处置相反：负载假红要重试或降并发，而装置写错必须**修装置**。
+   *
+   * 修法是把观测面收成一个**本用例私有**的目录：`root` 建在 `outer` 里面，
+   * 于是 `path.resolve(root, '..') === outer`，而 `outer` 只有本用例在动
+   * ⇒ **断言语义一字未变**（仍然是"root 之外没有任何新条目"），但不再受别的进程干扰。
+   */
+  let outer: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), 'vanblog-stored-name-'));
+    outer = mkdtempSync(path.join(tmpdir(), 'vanblog-stored-name-outer-'));
+    root = mkdtempSync(path.join(outer, 'root-'));
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(outer, { recursive: true, force: true });
   });
 
   describe('sanitizeStoredImageName（生产者那层）', () => {
@@ -144,8 +166,15 @@ describe('图片落盘名：净化 + 容器化校验', () => {
     );
 
     it('拒绝时不会创建任何文件，也不会在 root 之外留下东西', () => {
+      // 🔴 `outside` 现在是 `beforeEach` 里那个**私有**父目录（见其注释），不再是系统 tmpdir。
+      //    断言本身一字未改：仍然是"这段执行期间 root 之外没有新条目"。
       const outside = path.resolve(root, '..');
+      // 反空转：观测面必须真的是那个私有目录，否则这条断言会退化成"扫了整个 /tmp"或"扫了 root 自己"
+      expect(outside).toBe(outer);
+      expect(outside).not.toBe(tmpdir());
       const before = readdirSync(outside).slice().sort();
+      // 反空转：观测面必须非空（里面至少有 root 自己），否则"前后相等"可能只是两边都空
+      expect(before).toContain(path.basename(root));
       for (const raw of TRAVERSAL) {
         expect(() => resolveStoredFileAbs(root, 'img', raw)).toThrow(BadRequestException);
       }

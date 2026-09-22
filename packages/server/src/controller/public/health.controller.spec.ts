@@ -110,9 +110,20 @@ describe('GET /api/public/health', () => {
     expect(dockerfile).toMatch(/HEALTHCHECK[\s\S]*probe\(80,'\/api\/public\/health'/);
     // 2) 判据仍然是 statusCode<500 —— mongo 不通时本端点返回 503，这样才映射成 unhealthy
     expect(dockerfile).toMatch(/probe\(80,'\/api\/public\/health',s=>s<500\)/);
-    // 3) 🔴 也必须探前台（Next，3001）：`/api/public/health` 只 ping mongo，前台永久挂掉时容器
-    //    仍然 healthy，而 website.provider 明写着"连续退出 5 次后停止自动重启"⇒ 站点发不出页面
-    //    却没人知道，restart: always 也不介入。
+    // 3) 🔴 也必须探前台（Next，3001）：`/api/public/health` 的核心判据（status / statusCode）只看 mongo，
+    //    前台永久挂掉时容器仍然 healthy ⇒ 站点发不出页面却没人知道，restart: always 也不介入。
+    //    ⚠️ 2026-09-22 更正：这里原先引用了 website.provider 的"连续退出 5 次后停止自动重启"，
+    //    而那句话已经过时 —— 那一处后来改成了**放弃快速退避、转入每 5 分钟一次的慢速重试，永不彻底放弃**
+    //    （`VANBLOG_WEBSITE_SLOW_RETRY_MS`；waline 侧同族同口径，见 `VANBLOG_WALINE_SLOW_RETRY_MS`）。
+    //    🔴 **但这条断言本身一个字都不改，它仍然完全必要**，理由有三：
+    //    ① 慢速重试的默认间隔是 5 分钟 ⇒ **仍然有最长 5 分钟的 502 窗口**，而 HEALTHCHECK 30 秒一次看得见它；
+    //    ② **永久性原因**（前台构建产物缺失、3001 被别的进程占住）下前台仍然起不来，重试多少次都没用；
+    //    ③ 间隔可以被配到 1 小时 ⇒ 窗口可以远大于 5 分钟。
+    //    🔴 另外：health 现在虽然多了一个公开的 `website` 字段，但它与"直接探 3001"**不等价、不能互相替代** ——
+    //    直接探 3001 证明的是"**HTTP 层面真的能拿到响应**"（端到端，含端口在听、Next 能应答）；
+    //    而 `website` 字段只反映"**server 认为它 spawn 的那个子进程还在**"（`ctx` 非 null）⇒
+    //    子进程活着但端口没在听、或 Next 卡死不响应，字段会报 `up` 而直接探测会失败。
+    //    而且集群模式下非 leader worker 只能报 `unknown`。⇒ **两个信号都要保留。**
     expect(dockerfile).toMatch(/probe\(3001,'\/__vanblog_health_probe__'/);
     // 4) 前台探测**不许**打 `/`：那会触发真实渲染（ISR 未命中还要回源查库），高峰期慢响应会被
     //    误判成坏死并触发重启，把情况弄得更糟。404 由 Next 路由层直接给，不渲染、不查库。
