@@ -4,6 +4,7 @@ import cluster from 'node:cluster';
 import { isPrimaryInstance } from 'src/utils/clusterRole';
 import { applyRuntimeCdnPrefix, getWebsiteRoot } from 'src/utils/cdnUrl';
 import { ensureRevalidateSecret, REVALIDATE_SECRET_ENV } from 'src/utils/revalidateSecret';
+import { envPositiveInt } from 'src/utils/envNumber';
 import { MetaProvider } from '../meta/meta.provider';
 import { SettingProvider } from '../setting/setting.provider';
 
@@ -94,6 +95,35 @@ export class WebsiteProvider {
   private stopping = false;
   private restartAttempts = 0;
   private restartTimer: NodeJS.Timeout | null = null;
+  /**
+   * 🔴 慢速重试（self-healing）状态。
+   *
+   * 缺陷（改动前）：`scheduleRestart()` 在 `restartAttempts >= 5` 时直接 `return`，
+   * 而 `restartAttempts` 只在两处归零 —— 手动 `restart()`（调用方全是人触发的：
+   * 初始化、恢复整站备份、改 ISR 设置）与"子进程稳定跑过 60 秒"（此时已经没有子进程了）。
+   * ⇒ **一次瞬态原因导致的崩溃风暴之后（端口被残留进程占住、磁盘临时满、mongo 短暂不可达），
+   * 前台会永久不再自动拉起，即使那个瞬态原因早已消失**，需要人工干预。
+   * 此时页面是 502 而不是"发旧内容"：`utils/degradedHold.ts` 明写降级驻留保不住页面，
+   * 唯一现成的兜底是 `VANBLOG_CADDY_SERVE_HTML`，而它默认关闭。
+   *
+   * ⚠️ 为什么选"长间隔的无限退避"而不是"距上次尝试超过 M 分钟就把计数清零"：
+   * 后者**单独用是不能自愈的** —— 放弃之后 `scheduleRestart()` 不再设定时器，
+   * 而没有子进程就不会再有 `exit` 事件，于是**没有任何东西会再调用 `scheduleRestart()`**，
+   * 那个"超过 M 分钟"的判断永远不会被求值。要让它可以被求值就必须保留一个定时器 ⇒
+   * 那正好就是本方案。计数清零这件事已由既有的"稳定跑过 60 秒"判据负责
+   * （慢速重试一旦拉起成功并活过 60 秒，快速退避阶梯就完整恢复）。
+   *
+   * 🔴 间隔不能为 0：那会变成紧密重启风暴（烧 CPU、刷日志，每次重试还要查两次库），
+   * 比永久放弃更糟。`envPositiveInt` 保证缺失/空串/非数字/NaN/Infinity/≤0 一律落默认值，
+   * 并把合法值夹在 [1 分钟, 1 小时]，所以**任何输入都产生不出 0 间隔**。
+   */
+  private inSlowRetry = false;
+  private slowRetries = 0;
+
+  /** 每次调用都读 env（不是模块级常量），这样改了环境变量并重启就能生效，也便于测试。 */
+  private slowRetryMs(): number {
+    return envPositiveInt('VANBLOG_WEBSITE_SLOW_RETRY_MS', 5 * 60 * 1000, 60 * 1000, 60 * 60 * 1000);
+  }
 
   async restart(reason: string) {
     // 保存**任何**站点信息都会走到这里，而 stop() 会杀掉整个进程组、再由 exit 钩子重新拉起 next，
@@ -112,6 +142,10 @@ export class WebsiteProvider {
     this.logger.log(`${reason}重启 website`);
     // 后台明确要求的重启：把崩溃退避计数清零，别让它被之前的崩溃次数挡住
     this.restartAttempts = 0;
+    // 慢速重试状态也一起清：人工介入之后应当从干净的快速阶梯重新开始，
+    // 而且"进入慢速段"那条 ERROR 也要能再记一次（它只在状态转换时记）
+    this.inSlowRetry = false;
+    this.slowRetries = 0;
     if (this.ctx) {
       await this.stop();
     }
@@ -195,20 +229,41 @@ export class WebsiteProvider {
     }
   }
 
-  /** 崩溃后的有界退避重启（对齐 waline 的做法：最多连续 5 次，间隔 2s/4s/…最多 30s） */
+  /**
+   * 崩溃后的退避重启：先是**有界快速阶梯**（对齐 waline 的做法：最多连续 5 次，间隔 2s/4s/…最多 30s），
+   * 阶梯用尽后进入 🔴 **慢速重试**（默认每 5 分钟一次，永不彻底放弃）。
+   *
+   * ⚠️ 两段各自的职责不要混：快速阶梯负责"崩溃风暴时不要烧 CPU、不要刷日志"，
+   * 慢速重试负责"瞬态原因消失之后能自愈"。改动前只有前半段，后半段是永久放弃（见字段注释）。
+   * 🔴 慢速重试**不会**让快速阶梯失效：`restartAttempts` 在慢速段不再自增，
+   * 而"稳定跑过 60 秒"那条既有判据仍会把它清零 ⇒ 一次成功的慢速重试之后，阶梯完整恢复。
+   */
   private scheduleRestart() {
     if (this.stopping) {
       return;
     }
+    let delay: number;
     if (this.restartAttempts >= 5) {
-      this.logger.error(
-        'website 已连续退出 5 次，停止自动重启。请检查前台构建产物与 3001 端口占用，' +
-          '或在后台改一次站点信息触发重启。',
-      );
-      return;
+      delay = this.slowRetryMs();
+      if (!this.inSlowRetry) {
+        this.inSlowRetry = true;
+        // ⚠️ 只在**进入**慢速段时记一条 ERROR：站点确实坏了，这条必须落地
+        // （`./vanblog.sh doctor` 统计近 24h 的 ERROR/FATAL）。
+        // 之后每次慢速重试不再重复记 ERROR —— 持续坏死这个状态仍然会有 ERROR 信号，
+        // 来源是 exit 钩子里"异常退出记 ERROR"与下面 run() 失败那条，所以不会丢信号，
+        // 也不会让 doctor 的计数被一个稳态问题每 5 分钟刷一次。
+        this.logger.error(
+          'website 已连续退出 5 次，停止自动重启（快速退避阶梯已用尽）。请检查前台构建产物与 3001 端口占用，' +
+            '或在后台改一次站点信息触发重启。' +
+            `此后每 ${Math.round(delay / 1000)} 秒仍会自动重试一次，以便瞬态原因消失后自愈` +
+            '（间隔可用 VANBLOG_WEBSITE_SLOW_RETRY_MS 调整，范围 1 分钟到 1 小时）。',
+        );
+      }
+      this.slowRetries += 1;
+    } else {
+      this.restartAttempts += 1;
+      delay = Math.min(30000, 2000 * this.restartAttempts);
     }
-    this.restartAttempts += 1;
-    const delay = Math.min(30000, 2000 * this.restartAttempts);
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
     }
@@ -217,7 +272,11 @@ export class WebsiteProvider {
       if (this.stopping || this.ctx) {
         return;
       }
-      this.logger.log(`第 ${this.restartAttempts} 次尝试重新拉起 website（${delay}ms 后）`);
+      this.logger.log(
+        this.inSlowRetry
+          ? `慢速重试第 ${this.slowRetries} 次拉起 website（每 ${Math.round(delay / 1000)} 秒一次）`
+          : `第 ${this.restartAttempts} 次尝试重新拉起 website（${delay}ms 后）`,
+      );
       this.run().catch((err) => {
         this.logger.error(`重新拉起 website 失败：${(err as Error)?.message || err}`);
         this.scheduleRestart();
@@ -316,6 +375,11 @@ export class WebsiteProvider {
         if (Date.now() - startedAt > 60 * 1000) {
           // 稳定跑过一分钟才算"正常运行后退出"，重置退避计数
           this.restartAttempts = 0;
+          // 🔴 慢速重试的状态也在这里复位：一次成功的慢速重试（拉起后活过 60 秒）
+          // 说明前台已经恢复正常，此后应当重新拥有完整的快速退避阶梯，
+          // 并且下一次真的进入慢速段时那条 ERROR 要能再记一次。
+          this.inSlowRetry = false;
+          this.slowRetries = 0;
         }
         this.scheduleRestart();
       });

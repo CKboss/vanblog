@@ -256,7 +256,7 @@ describe('WebsiteProvider 意外退出的退避重启', () => {
     expect(mockedSpawn).toHaveBeenCalledTimes(2);
   });
 
-  it('连续崩 5 次就放弃，不会无限重启刷日志', async () => {
+  it('快速退避阶梯有界：连续崩 5 次后不再快速重试（不会刷日志、不会烧 CPU）', async () => {
     const provider = createProvider();
     await provider.run();
     for (let i = 0; i < 8; i += 1) {
@@ -265,8 +265,17 @@ describe('WebsiteProvider 意外退出的退避重启', () => {
       await advanceAsync(31000);
       await flush();
     }
-    // 1 次正常启动 + 最多 5 次退避重启
+    // 1 次正常启动 + 最多 5 次快速退避重启
     expect(mockedSpawn.mock.calls.length).toBeLessThanOrEqual(6);
+    // 🔴 升级（2026-09-22）：原来这条只断言"总数 <= 6"，在"进入慢速重试"之后会**静默变弱**
+    // —— 因为 8 轮 x 31s = 248s 短于默认 5 分钟的慢速间隔，慢速定时器根本没在窗口内触发，
+    // 于是"总数 <= 6"仍然成立，但它已经不再证明标题所说的"放弃"。
+    // 现在把两半分开钉：这一条只负责**快速阶梯有界**（再多推进一段远小于慢速间隔的时间，
+    // 也一次都不许多 spawn），"会不会自愈"由下面那个 describe 负责。
+    const before = mockedSpawn.mock.calls.length;
+    await advanceAsync(60 * 1000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(before);
   });
 
   it('VANBLOG_DISABLE_WEBSITE=true 时不 spawn（无前台模式）', async () => {
@@ -298,5 +307,238 @@ describe('WebsiteProvider 源码守卫', () => {
     const src = stripComments(fs.readFileSync(require.resolve('./website.provider.ts'), 'utf8'));
     expect(src).toMatch(/this\.starting\s*=\s*task/);
     expect(src).toMatch(/if\s*\(this\.starting\)/);
+  });
+});
+
+describe('WebsiteProvider 慢速重试（放弃快速阶梯之后仍能自愈）', () => {
+  /**
+   * 🔴 这一组钉的是 2026-09-22 修掉的那个轴⑤（自愈）缺陷：
+   * 改动前 `scheduleRestart()` 在 `restartAttempts >= 5` 时直接 return，
+   * 而计数只在"手动 restart()"与"子进程稳定跑过 60 秒"时归零 —— 放弃之后既没有子进程、
+   * 也没有人触发 restart()，于是**前台永久不再自动拉起**，即使崩溃的瞬态原因早已消失。
+   *
+   * ⚠️ 两半都要钉，只钉一半会被"过度修复"钻空子：
+   *  - **会自愈**：经过一个慢速间隔之后必须再试一次（否则缺陷还在）；
+   *  - **不会风暴**：慢速间隔之内一次都不许多试，且间隔**不可能被配成 0**
+   *    （否则有人会把它改成紧密重启循环 —— 那比永久放弃更糟：烧 CPU、刷日志、每次重试还要查两次库）。
+   *
+   * ⚠️ 全部用假定时器：本仓库已有两次因墙上时钟断言而偶发红，其中一次的症状与负载假红完全一致。
+   * ⚠️ 一个必须注意的语义细节：exit 钩子用 `Date.now() - startedAt > 60s` 判"稳定运行"，
+   * 而假定时器下推进时间会同时推进 `Date.now()` ⇒ **要在"刚 spawn 完、还没推进时间"时 emitExit**
+   * 才能模拟"秒退"；要模拟"稳定跑过 60 秒后退出"则必须先推进 >60s 再 emitExit。
+   */
+  const SLOW_ENV = 'VANBLOG_WEBSITE_SLOW_RETRY_MS';
+  const DEFAULT_SLOW_MS = 5 * 60 * 1000;
+
+  beforeEach(() => {
+    installSpawnMock();
+    jest.useFakeTimers();
+    delete process.env.VANBLOG_DISABLE_WEBSITE;
+    delete process.env[SLOW_ENV];
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    killSpy?.mockRestore();
+    delete process.env[SLOW_ENV];
+  });
+
+  /**
+   * 崩到快速阶梯用尽、进入慢速段。返回时的 spawn 数应当是 6（1 次正常启动 + 5 次快速退避）。
+   *
+   * ⚠️ 最后一次 emitExit **后面不能推进时间**：慢速定时器是在那次 emitExit 里安排的，
+   * 再推进就把间隔吃掉一截。第一版正是这么错的 —— 循环里每轮都推进 31 秒，
+   * 于是慢速间隔只剩 269 秒，"差 1 秒满 5 分钟不许重试"那条断言在 269 秒时就红了。
+   * 前 5 轮推进是为了让快速阶梯的定时器逐个触发。
+   */
+  async function exhaustFastLadder(provider: WebsiteProvider) {
+    await provider.run();
+    for (let i = 0; i < 5; i += 1) {
+      children[children.length - 1].emitExit(1, null);
+      await advanceAsync(31000);
+      await flush();
+    }
+    // 第 6 个子进程秒退 ⇒ 进入慢速段，且慢速定时器是**完整**的一个间隔
+    children[children.length - 1].emitExit(1, null);
+    await flush();
+    return mockedSpawn.mock.calls.length;
+  }
+
+  it('进入慢速段之前：快速阶梯恰好 5 次，且慢速间隔之内一次都不多试', async () => {
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    expect(afterLadder).toBe(6);
+    // 反空转：确实已经 spawn 过（否则上面的 6 是假的）
+    expect(children.length).toBe(6);
+    // 🔴 不会风暴：推进到差 1 秒就满一个默认慢速间隔，一次都不许多
+    await advanceAsync(DEFAULT_SLOW_MS - 1000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder);
+  });
+
+  it('🔴 瞬态原因消失后能自愈：一个慢速间隔之后会再试一次', async () => {
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    await advanceAsync(DEFAULT_SLOW_MS);
+    await flush();
+    // 修复生效的那一半：改动前这里永远是 6
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder + 1);
+  });
+
+  it('🔴 节奏有界：K 个慢速间隔恰好换来 K 次重试，每次秒退也不会加速', async () => {
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    // ⚠️ "秒退"必须在**假时间轴上真的只活了 0 秒**：emitExit 要紧跟在 spawn 它的那次推进之后，
+    // 中间不能再推进时间。第一版在两次推进之间 emitExit，于是那个子进程在假时间轴上已经
+    // "活了" 299 秒 ⇒ 合法地触发既有的"稳定跑过 60 秒 ⇒ 计数归零"判据 ⇒ 掉回 2 秒快速阶梯，
+    // 看起来像产品多 spawn 了一次。**那是产品行为正确、测试模型错了**（插桩实测确认）。
+    const FAST_LADDER_WINDOW = 60 * 1000;
+    for (let k = 1; k <= 4; k += 1) {
+      await advanceAsync(k === 1 ? DEFAULT_SLOW_MS : DEFAULT_SLOW_MS - FAST_LADDER_WINDOW);
+      await flush();
+      expect(mockedSpawn.mock.calls.length).toBe(afterLadder + k);
+      // 刚 spawn 完就秒退（存活 0 秒）⇒ 仍然在慢速段
+      children[children.length - 1].emitExit(1, null);
+      // 🔴 秒退之后**不许**掉回 2 秒的快速阶梯（那才是风暴）：推进 60 秒一次都不许多
+      await advanceAsync(FAST_LADDER_WINDOW);
+      await flush();
+      expect(mockedSpawn.mock.calls.length).toBe(afterLadder + k);
+    }
+  });
+
+  it('一次成功的慢速重试（活过 60 秒）会把快速阶梯完整恢复', async () => {
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    await advanceAsync(DEFAULT_SLOW_MS);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder + 1);
+    const healed = children[children.length - 1];
+    // 模拟"稳定跑过一分钟之后才退出"：先推进 >60s，再 emitExit
+    await advanceAsync(61 * 1000);
+    healed.emitExit(1, null);
+    await flush();
+    // 计数已归零 ⇒ 下一次是 2 秒的快速退避，而不是 5 分钟的慢速重试
+    await advanceAsync(2000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder + 2);
+  });
+
+  it('间隔可配：VANBLOG_WEBSITE_SLOW_RETRY_MS 生效', async () => {
+    process.env[SLOW_ENV] = '60000';
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    await advanceAsync(59000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder);
+    await advanceAsync(1000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder + 1);
+  });
+
+  it('🔴 任何非法输入都不可能产生 0 间隔（一律落回默认 5 分钟）', async () => {
+    // 逐个喂：0、负数、非数字、空串、纯空白、Infinity、NaN 字面量
+    for (const bad of ['0', '-1', 'abc', '', '   ', 'Infinity', 'NaN']) {
+      installSpawnMock();
+      process.env[SLOW_ENV] = bad;
+      const provider = createProvider();
+      const afterLadder = await exhaustFastLadder(provider);
+      // 如果 0 间隔生效，这里会立刻多 spawn 一次甚至打转；正确行为是仍然等满 5 分钟
+      await advanceAsync(30 * 1000);
+      await flush();
+      expect(mockedSpawn.mock.calls.length).toBe(afterLadder);
+      await advanceAsync(DEFAULT_SLOW_MS - 30 * 1000);
+      await flush();
+      expect(mockedSpawn.mock.calls.length).toBe(afterLadder + 1);
+    }
+  });
+
+  it('🔴 间隔被夹在 [1 分钟, 1 小时]：超大值不会变成"实际上永不重试"', async () => {
+    process.env[SLOW_ENV] = '999999999';
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    await advanceAsync(59 * 60 * 1000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder);
+    await advanceAsync(60 * 1000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder + 1);
+  });
+
+  it('🔴 下限也被夹住：配成 1 毫秒不会变成紧密重启风暴', async () => {
+    process.env[SLOW_ENV] = '1';
+    const provider = createProvider();
+    const afterLadder = await exhaustFastLadder(provider);
+    // 1 毫秒会被夹到下限 1 分钟 ⇒ 推进 30 秒仍然不该有新的 spawn
+    await advanceAsync(30 * 1000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(afterLadder);
+  });
+
+  it('人工 restart() 之后从干净的快速阶梯重新开始（慢速状态被清掉）', async () => {
+    const provider = createProvider();
+    await exhaustFastLadder(provider);
+    const before = mockedSpawn.mock.calls.length;
+    await provider.restart('测试');
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(before + 1);
+    // 新拉起的这个秒退 ⇒ 应当走 2 秒的快速阶梯，而不是 5 分钟的慢速重试
+    children[children.length - 1].emitExit(1, null);
+    await advanceAsync(2000);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(before + 2);
+  });
+
+  it('主动 stop() 优先：慢速定时器被清掉，不会再拉起', async () => {
+    const provider = createProvider();
+    await exhaustFastLadder(provider);
+    const before = mockedSpawn.mock.calls.length;
+    await provider.stop();
+    await advanceAsync(DEFAULT_SLOW_MS * 3);
+    await flush();
+    expect(mockedSpawn.mock.calls.length).toBe(before);
+  });
+});
+
+describe('WebsiteProvider 慢速重试源码守卫', () => {
+  /** 去掉注释再断言：仓库里踩过十次"断言匹配到了记录这个坑的注释" */
+  const stripComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const readSrc = () => {
+    const fs = require('fs');
+    return stripComments(fs.readFileSync(require.resolve('./website.provider.ts'), 'utf8'));
+  };
+
+  it('慢速间隔走 envPositiveInt，且默认值与下限都被钉住（下限不许降到 0）', () => {
+    const src = readSrc();
+    // 反空转：确实读到了这个文件的实质内容
+    expect(src.length).toBeGreaterThan(2000);
+    expect(src).toContain('private slowRetryMs(): number {');
+    // 🔴 这一条同时钉住三件事：变量名、默认 5 分钟、**下限 1 分钟**、上限 1 小时。
+    // 下限是防"紧密重启风暴"的那一半 —— 有人把它改成 0 或 1 就会红。
+    expect(src).toMatch(
+      /envPositiveInt\(\s*'VANBLOG_WEBSITE_SLOW_RETRY_MS',\s*5 \* 60 \* 1000,\s*60 \* 1000,\s*60 \* 60 \* 1000/,
+    );
+  });
+
+  it('放弃快速阶梯之后仍然会安排一次重试（不再是不设定时器就 return）', () => {
+    const src = readSrc();
+    // 尺子有效性：切出 scheduleRestart 的函数体，断言"进入慢速段"那一支里确实在算间隔
+    const start = src.indexOf('private scheduleRestart()');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('private async doRun()', start));
+    expect(body.length).toBeGreaterThan(200);
+    expect(body).toContain('this.restartAttempts >= 5');
+    expect(body).toContain('delay = this.slowRetryMs()');
+    // 🔴 快速阶梯那一支必须仍然自增计数（否则"连续 5 次"的语义就没了）
+    expect(body).toContain('this.restartAttempts += 1');
+    // 🔴 慢速段**不许**自增计数（否则 60 秒稳定判据清零之后就再也回不到快速阶梯）
+    expect(body.match(/this\.restartAttempts \+= 1/g) || []).toHaveLength(1);
+  });
+
+  it('两处复位点都在：手动 restart() 与"稳定跑过 60 秒"', () => {
+    const src = readSrc();
+    // 复位必须是"计数 + 慢速状态"一起清，只清一半会让 ERROR 再也记不出来或阶梯回不来
+    expect(src.match(/this\.inSlowRetry = false;/g) || []).toHaveLength(2);
+    expect(src.match(/this\.slowRetries = 0;/g) || []).toHaveLength(2);
+    expect(src.match(/this\.restartAttempts = 0;/g) || []).toHaveLength(2);
   });
 });
