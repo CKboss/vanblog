@@ -189,6 +189,39 @@ spec:
 
 :::
 
+::: warning 🔴 这个 livenessProbe 探不到前台进程，前台永久挂掉时 pod 不会被重启
+
+上面的 `livenessProbe` 打的是 `/api/public/health`，而 🔴 **那个端点只反映数据库连通性，对前台渲染进程（容器内 3001）一无所知**
+（它的判定就是 `mongo.up ? ok : degraded`）。所以**前台进程永久挂掉时，这个探针会一直通过 ⇒ k8s 永远认为 pod 健康 ⇒ 不会重启它**，
+而用户看到的是 502。
+
+这正是 compose 模板与镜像 `HEALTHCHECK` **同时探两处**的原因（80 的 `/api/public/health` + 3001 的
+`/__vanblog_health_probe__`，两个都过才算健康），而 [Docker 部署那一页](./docker.snippet.md) 也明确写着
+"在 k8s 里把 liveness probe 配成**上面那两个探测**" —— 本清单只配了一个，两份文档口径不一致，这里补齐。
+
+⚠️ **一个容器只能有一个 `livenessProbe`**，所以不能用"再加一个 httpGet"的办法。忠实的等价做法是改用 `exec`，
+把 compose 模板里那条**同时探两个端口**的检查原样搬过来：
+
+```yaml
+          livenessProbe:
+            exec:
+              command: ['node', '-e', '<把编排模板 healthcheck 里 test: 的那段 node 单行脚本原样贴进来>']
+            initialDelaySeconds: 180
+            periodSeconds: 60
+            timeoutSeconds: 8
+            failureThreshold: 3
+```
+
+那段脚本在仓库的 `docker-compose/docker-compose-template.yml` 里（vanblog 服务的 `healthcheck.test`），
+它探 80 的 `/api/public/health`（状态码 <500 即过）与 3001 的 `/__vanblog_health_probe__`（**有任何 HTTP 响应即过**，
+这个路径是故意不存在的，404 正好，约 1 毫秒）。⚠️ **第二个探测不要改成打首页**：打首页会触发一次真实渲染
+（ISR 未命中要读库），高峰期或缓存冷时容易超时，会把"慢但活着"误判成"死了"从而触发重启 —— 那比不探更糟。
+
+⚠️ 如果你不想用 `exec`，那就**明确接受这个盲区**：保留 httpGet 版本，但要知道"前台挂了不会自愈"，
+需要靠外部监控（探 3001，或探首页）来发现。
+
+:::
+
 ### 部署后确认
 
 ```bash

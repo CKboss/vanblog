@@ -52,7 +52,8 @@ VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2 ./vanblog.sh update   # 等�
 ::: danger 不带版本号 = 升到 latest，它会随下次发版移动
 
 `./vanblog.sh update`（不带参数）用默认镜像 `ghcr.io/ckboss/vanblog:latest`，也就是
-**最近一次发布构建**（此刻就是 `v2026.9.2`）。它不是钉死的版本：下次发版后会跟着走。
+**最近一次发布构建**（⚠️ 具体是哪个发布号会变，权威出处是 [Releases 页面](https://github.com/CKboss/vanblog/releases)；
+写这段时是 `v2026.9.3`）。它不是钉死的版本：下次发版后会跟着走。
 想永远说得清"我在哪一版"，就带上发布号。
 
 ⚠️ 还有个标签叫 `dev-dsh`，它**只在有人手动触发构建时才更新**（往分支 push 不会自动构建镜像），
@@ -62,6 +63,9 @@ VANBLOG_IMAGE_REF=ghcr.io/ckboss/vanblog:v2026.9.2 ./vanblog.sh update   # 等�
 | --- | --- | --- |
 | `v2026.9.2` | `v2026.9.2@23f2e9c` | 2026-09-17 |
 | `latest`（**脚本默认**） | `v2026.9.2@23f2e9c`（与发布版同一个 digest） | 2026-09-17 |
+
+> ⚠️ **2026-09-22 标注**：上表是那一次实测的**快照**，历史值按惯例不改写。此后已发布 `v2026.9.3`，
+> 所以 **`latest` 现在指向 `v2026.9.3`**，与表里那一行不再相同 —— 这正是"不带版本号 = 会移动"的实例。
 | `dev-dsh` | `dev-dsh@b31a1ec` | ⚠️ **2026-09-13，比发布版旧 4 天** |
 
 所以显式用 `dev-dsh`（`./vanblog.sh update dev-dsh` 或 `VANBLOG_IMAGE_REF=…:dev-dsh`）时，

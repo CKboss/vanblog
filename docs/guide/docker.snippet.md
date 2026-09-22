@@ -12,7 +12,7 @@ ghcr.io/ckboss/vanblog:v2026.9.2
 
 | 标签 | 它是什么 | 什么时候用 |
 | --- | --- | --- |
-| `v2026.9.2` | **固定发布号**，内容永不变（当前最新发布版） | ✅ 推荐给新手：稳定、可复现，回滚就是换回旧标签 |
+| `v2026.9.3` | **固定发布号**，内容永不变（⚠️ 这不是"最新版"的权威出处 —— 最新发布号请看 [Releases 页面](https://github.com/CKboss/vanblog/releases)） | ✅ 推荐给新手：稳定、可复现，回滚就是换回旧标签 |
 | `latest` | 最近一次**发布构建**（一键脚本的默认值） | 想自动跟上新发版又不想记版本号。⚠️ 有人在 Actions 里手动触发构建时它也会跟着走 |
 | `dev-dsh` | 分支的上一次**手动**构建 | 明确想跟开发进度。⚠️ **可能落后于发布版**（写这段时它停在 4 天前的构建） |
 | `dev-dsh-<短sha>` | 某一次构建对应的那个提交 | 回滚 / 钉死某一次构建 |
@@ -131,6 +131,8 @@ systemctl enable --now docker
 本分支维护着一份**逐行带注释**的编排模板：仓库里的
 [`docker-compose/docker-compose-template.yml`](https://github.com/CKboss/vanblog/blob/dev/dsh/docker-compose/docker-compose-template.yml)
 （每个 Release 的附件里也有同名文件，一键脚本装的就是它）。它比下面的最小示例多了
+**vanblog 自身的健康检查**（同时探 80 的 `/api/public/health` 与 3001 的 `/__vanblog_health_probe__`，
+见下面「健康检查」一节 —— 🔴 **podman 用户尤其需要它**，因为 podman 构建会丢掉镜像里的 `HEALTHCHECK`）、
 mongo 健康检查、日志大小上限、`stop_grace_period`、ulimits 等生产细节，推荐以它为准，
 把 `vanblog_image` / `vanblog_mongo_image` / 端口 / 数据目录几个占位符替换掉即可。
 
