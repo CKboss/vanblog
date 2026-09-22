@@ -8,11 +8,18 @@
  * 5000 篇 × 300 KB ≈ **1.5 GB** ⇒ worker 被 OOMKilled。
  *
  * ⚠️ 可达性（决定严重度，已核实）：唯一调用方是 `static.provider.scanLinksOfArticles()`，
- * 由 `POST /api/admin/img/scan`（`img.controller.ts:230`）触发。这条路由**既不在** `publicRoutes`
- * **也不在** `pathPermissionMap` 里，而 `/api/admin/img` **不在** `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
+ * 由 `POST /api/admin/img/scan` 触发（处理器是 `controller/admin/img/img.controller.ts` 的
+ * `scanImgsOfArticles()`；⚠️ 这里刻意用**文件 + 符号名**而不是行号指路 —— 行号必然漂移，
+ * 而漂移后的行号看起来仍然像个引用、不会有任何守卫报红，本文件原先写的行号就已经漂了）。
+ * 这条路由**不在 `types/access/access.ts` 的任何一张放行表里**：引导层 `bootstrapRoutes`、
+ * 免权限档 `publicRoutes`、按权限档 `pathPermissionMap`（`permissionRoutes` 是它的键集）
+ * 三张都逐条核实过不含它（🔴 本文件下面有一条断言把这个结论钉住），
+ * 而 `/api/admin/img` **不在** `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
  * 里 ⇒ 走到 `access.guard.ts` 的 `permissions.includes('all')` 分支就放行，
  * **勾了「所有权限」的协作者可以调**。在"低权限账号按已被攻陷设计"的威胁模型下，这是
  * "一个廉价请求打死整个 worker、且可反复触发（重启后再来一次）"的放大链。
+ * 🔴 **可达性论证必须穷尽所有放行表**：B′ 把免权限表拆成两层之后，`bootstrapRoutes` 也是放行表，
+ * 少说一张的论证即使结论碰巧对也不成立。
  *
  * ## 现在的契约（逐条钉住）
  *  1. **分批**：按 `_id` keyset 分页，每批 50 篇 ⇒ 峰值内存只与批大小有关，与全站规模无关；
@@ -25,6 +32,14 @@
  * 把投影去掉 ⇒ 用例 3 变红。
  */
 import { ArticleProvider } from './article.provider';
+import {
+  SUPER_ADMIN_ONLY_ROUTE_PREFIXES,
+  bootstrapRoutes,
+  isSuperAdminOnlyRoute,
+  pathPermissionMap,
+  permissionRoutes,
+  publicRoutes,
+} from 'src/types/access/access';
 
 /** 每批多少篇 —— 与实现里的 `IMG_LINK_SCAN_BATCH_SIZE` 对齐（改实现就要改这里，刻意的） */
 const BATCH = 50;
@@ -312,5 +327,52 @@ describe('getAllImageLinks / scanAllImageLinks：分批、投影与诚实的上�
     expect(model.find).toHaveBeenCalledTimes(1);
     expect(calls[0].limit).toBeUndefined();
     expect(model.find).not.toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * 🔴 **把「可达性论证」的结论钉住，而不是钉注释措辞。**
+ *
+ * 上面文件头那段论证说的是：`post-/api/admin/img/scan` 不在任何一张放行表里，
+ * 而 `/api/admin/img` 不在超管专属前缀里 ⇒ **勾了「所有权限」的协作者可以调**，
+ * 所以这条重活必须按「低权限账号也能触发」设防。
+ *
+ * ⚠️ 为什么钉结论而不是钉措辞：注释是散文，改措辞不会红；而**结论一旦变化，
+ * 上面那一整组「按可达性设防」的断言就失去了前提**（例如哪天这条路由被收进超管专属前缀，
+ * 分批与投影就只是纵深防御、不再是必需）。钉住结论之后，改动放行表的人会立刻看到这条红，
+ * 从而被强制回来重新评估严重度 —— 这正是「守卫应当钉性质、不钉字面」的取向。
+ *
+ * 🔴 **并且必须穷尽所有放行表**：B′ 把免权限表拆成两层之后，`bootstrapRoutes` 也是放行表，
+ * 少查一张的论证即使结论碰巧正确也不成立。
+ */
+describe('可达性前提：post-/api/admin/img/scan 不在任何一张放行表里', () => {
+  const KEY = 'post-/api/admin/img/scan';
+
+  it('三张放行表逐个核实都不含它（引导层 / 免权限档 / 按权限档）', () => {
+    expect(bootstrapRoutes).not.toContain(KEY);
+    expect(publicRoutes).not.toContain(KEY);
+    expect(Object.keys(pathPermissionMap)).not.toContain(KEY);
+    // `permissionRoutes` 就是 `pathPermissionMap` 的键集，这里一并钉住，防止将来两者脱钩
+    expect(permissionRoutes).not.toContain(KEY);
+  });
+
+  it('🔴 反空转：三张表都非空，且查表方式对**在表里的**键确实返回真（否则上面的 not.toContain 恒真）', () => {
+    expect(bootstrapRoutes.length).toBeGreaterThan(0);
+    expect(publicRoutes.length).toBeGreaterThan(0);
+    expect(Object.keys(pathPermissionMap).length).toBeGreaterThan(0);
+    // 尺子有效性：各取一个真实成员，用同一套查表方式必须命中
+    expect(bootstrapRoutes).toContain(bootstrapRoutes[0]);
+    expect(publicRoutes).toContain(publicRoutes[0]);
+    const somePermKey = Object.keys(pathPermissionMap)[0];
+    expect(permissionRoutes).toContain(somePermKey);
+    expect(KEY).not.toBe(somePermKey);
+  });
+
+  it('另一半前提：/api/admin/img 不在超管专属前缀里（所以「所有权限」协作者能走到放行分支）', () => {
+    expect(isSuperAdminOnlyRoute('/api/admin/img')).toBe(false);
+    expect(isSuperAdminOnlyRoute('/api/admin/img/scan')).toBe(false);
+    // 尺子有效性：同一把尺子对真在高危前缀下的路径必须返回真，否则上面的 false 没有意义
+    expect(SUPER_ADMIN_ONLY_ROUTE_PREFIXES.length).toBeGreaterThan(0);
+    expect(isSuperAdminOnlyRoute(`${SUPER_ADMIN_ONLY_ROUTE_PREFIXES[0]}/anything`)).toBe(true);
   });
 });

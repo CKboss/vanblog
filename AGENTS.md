@@ -9469,6 +9469,59 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.108 🔴 "替身缺字段"的危害比 §7.107 之前登记的更具体，而登记的机制是错的
+
+**登记的说法**（§7.101 等处）是：替身缺请求侧字段 ⇒ 守卫改读 `request.path` 时会读到 `undefined` ⇒ 
+**抛异常** ⇒ 落进 `catch` ⇒ 返回 false ⇒ "期望 false"的用例恒真。
+🔴 **实测不是这样**：变异只改了 `path` 的取值来源，`request.route.methods` 仍在读 ⇒ **不抛异常**；
+键变成垃圾值 `get-undefined` ⇒ `isSuperAdminOnlyRoute(undefined)` 为 false（`normalizeRoutePath` 对 undefined 返回 `''`）⇒
+① `permissions:['all']` 那一族会一路走到 `permissions.includes('all')` 并被**放行**（所以那 24 条本来就红）；
+② 🔴 **"带具体权限"那一族落到最后的兜底 `return false`** ⇒ "期望 false"**因为错误的理由通过**。
+🔴 **决定性证据**：变异下整份日志里 `已拒绝` 出现 **0 次** ⇒ **高危前缀那一支根本没执行**，
+而那 18 条断言的正是"高危路由对带具体权限的协作者也拒绝"⇒ **它们在测一个从未执行的分支，却是绿的**。
+👉 所以"静默失效"是真的，但形状是 **"垃圾键落到兜底"**，不是"抛异常落进 catch"。
+
+**量化证据**（把守卫改成读请求侧后跑 `accessGuard.spec.ts`）：
+| | 失败 | 通过 | 总数 |
+|---|---|---|---|
+| 补字段**之前** | **45** | 79 | 124 |
+| 补字段**之后** | **63** | 62 | 125 |
+⇒ 🔴 **差额 18，精确等于那一族的条数。**
+
+👉 **两条规矩**：
+1. 🔴 **替身必须两侧都有、且故意不同**（例如定义侧小写、请求侧大写），让"读错侧"产生**可观测的判定差异**，
+   而不是被兜底路径吸收。⚠️ 并且要配**替身自检**：断言两侧都在、**且确实不同**，
+   并钉住机制本身（`isSuperAdminOnlyRoute(请求侧)` 为 false 而 `(定义侧)` 为 true ⇒ 
+   "读错侧会改变结论"是**被断言的事实**而不是假设）。
+2. 🔴 **断言"被拒"时必须同时断言"因为哪一支被拒"** —— 例如那条**只在目标分支里打的 WARN**
+   （`expect(warn).toHaveBeenCalledTimes(1)` + 消息里含路由键）。
+   🔴 **否则兜底路径会让断言恒真** ⇒ **"结论对"不等于"理由对"**。
+   ⚠️ 这条是本仓库"守卫看着绿其实没在守"那一族的**新形状**，与既有的几条并列：
+   复刻漂移（自我认证）、`not.toContain` 在两边都空时恒真、尺子没剥字符串被自己的消息喂饱、
+   枚举 0 条 ⇒ "未覆盖清单为空"的恒真绿、以及"计数为 0/异常大先怀疑尺子"。
+
+🔴 **另一条相关规矩：可达性论证必须穷尽所有放行表。** B′ 拆两层之后 `bootstrapRoutes` 也是放行表，
+🔴 **少说一张的论证即使结论碰巧正确也不成立**（本轮补齐了三处：`provider/article/article.provider.ts`、
+`articleImageLinksScan.spec.ts`、`provider/static/staticScanLinks.spec.ts`；
+经脚本核实 `bootstrapRoutes` **4 条**、`publicRoutes` **20 条**、`pathPermissionMap` **15 条**，
+三张都不含 `img/scan`，所以结论未变、只是论证不完整）。
+⚠️ **`permissionRoutes` 的形状是 `Object.keys(pathPermissionMap)`（不是数组字面量）** ⇒ 
+第一版正则解析不到它 ⇒ 🔴 **解析不到 ≠ 不存在**（与"计数为 0 先怀疑尺子"同族）。
+👉 **守卫选择"钉住结论"而不是"钉住注释措辞"**：注释是散文、改措辞不会红；
+而结论一旦变化（例如那条路由被收进超管专属前缀），上面那一整组"按可达性设防"的断言就**失去了前提** ⇒ 
+钉住结论能让改动放行表的人立刻看到红、被强制回来重新评估严重度。
+🔴 **并且全部改用"文件 + 符号名"指路** —— 这不是空谈：`articleImageLinksScan.spec.ts` 原先写的 `img.controller.ts:230`
+**已经漂了**（实际处理器是 `scanImgsOfArticles()`，在 `:234`）。
+
+**基线更新**：全量 server jest **284 套件 / 4170 用例**（+4：替身自检 1 + 可达性前提 3）｜
+`accessGuard.spec.ts` **124 → 125 条**｜其余基线不变（`vanblog-dr-offline` **177/0**、`vanblog-hardening` **74/0**、
+`vanblog-drill` **629/0**、`docs-consistency` **61/0**、`docs-links` **5/0**、`ci-guard-wrapper` **13/0**、
+strict-null 棘轮 **11/0**、shell 守卫 **32 个全绿**）。
+🔴 **`v2026.9.4` 已发版并完整闭环**：tag `ca4e2997` → `publish-ghcr` **success**、`release` **success**、
+`ead3f43f` 上 `server-test`/`admin-e2e`/`docs-test` **全 success**、🔴 **`origin`（上游）上该 tag 404（没有误推）**。
+⚠️ **这也验证了那个 annotations wrapper 在真实 CI 里有效**（此前只能用桩验证）。
+📌 **核实"有没有误推上游"要用 GitHub API，不要靠 `git ls-remote origin`**（本轮它超时卡住过）。
+
 ### 7.107 🔴 两条规矩：shell 守卫也在消费方网里；变异驱动的备份按"每次变异"记账
 
 **背景**：`scripts/tests/vanblog-dr-offline.test.sh` **从 `68c0772c` 起红了整整两轮**（本机 **155/3**），

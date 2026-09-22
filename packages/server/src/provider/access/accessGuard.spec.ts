@@ -42,9 +42,31 @@ import { join } from 'path';
 const read = (rel: string) => readFileSync(join(__dirname, rel), 'utf8');
 const code = stripCommentsForAnchor;
 
-/** 造一个 guard 请求上下文：`request.route.path` + `route.methods`，与 Express 一致。 */
+/**
+ * 造一个 guard 请求上下文，🔴 **两侧都有、且故意不同**：
+ * - `route.path` / `route.methods`：**路由定义**那一侧（Express 匹配后挂上的，攻击者改不了）；
+ * - 请求侧的四个字段：**攻击者可控**的那一侧，刻意用大写变体。
+ *
+ * 🔴 **为什么必须两侧都有**：这个替身此前只有定义侧，等于把「守卫读的是 route.path」这个假设
+ * **悄悄编码进了替身自己的形状**。若有人把守卫改成读请求侧，用例会读到 undefined ⇒
+ * 键变成 `get-undefined` ⇒ 不命中任何表 ⇒ 🔴 **所有「期望拒绝」的用例会因为错误的理由通过**
+ * （实测：把守卫改成读请求侧之后，本文件 18 条「带具体权限的协作者也被拒」全绿，
+ * 而拒绝 WARN 一次都没打 ⇒ 高危前缀那一支根本没走到，拒绝来自垃圾键的兜底）。
+ * 两侧故意不同之后，「读错了哪一侧」会产生**可观测的判定差异**，而不是被兜底掩盖。
+ * ⚠️ `method` 用大写也是忠实的：真实 Express 的请求方法是大写，而表里的键是小写，
+ * 守卫取的是 `Object.keys(route.methods)[0]`（小写）—— 这正是它能对上表的原因。
+ * ⚠️ 同族的 `accessGuardRouteKeyCase.spec.ts` 用 `reqBothSides()` 做同一件事；
+ * 本文件保留 `req(method, path, user)` 的签名不变，以免改动 24 处调用点的语义。
+ */
 const req = (method: string, path: string, user: any) =>
-  ({ route: { path, methods: { [method.toLowerCase()]: true } }, user }) as any;
+  ({
+    route: { path, methods: { [method.toLowerCase()]: true } },
+    path: path.toUpperCase(),
+    url: path.toUpperCase(),
+    originalUrl: path.toUpperCase(),
+    method: method.toUpperCase(),
+    user,
+  }) as any;
 
 const collaborator = (permissions: string[], id = 7) => ({ id, permissions });
 
@@ -152,10 +174,36 @@ describe('AccessGuard：高危路由对协作者（含 all）一律拒绝', () =
   it.each(cases)('%s %s：带具体权限的协作者也被拒（不能靠凑权限绕过）', async (method, path) => {
     const perms = Object.values(pathPermissionMap);
     await expect(guard.validateRequest(req(method, path, collaborator(perms)))).resolves.toBe(false);
+    // 🔴 **并且必须是因为「高危前缀只认超管」这一支而拒，不是因为键对不上表而落到兜底。**
+    //    只断言结论的话，这条用例在「守卫读错了路径来源」时会因为错误的理由通过：
+    //    键变成垃圾值 ⇒ 不命中任何表 ⇒ 兜底也是拒绝 ⇒ 断言恒真（实测过 18 条全绿而 WARN 零次）。
+    //    那条 WARN 只在 isSuperAdminOnlyRoute 命中的分支里打，所以它正好钉住「拒绝的理由」。
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain(`${method}-${path}`);
   });
 
   it.each(cases)('%s %s：超管（id=0）照常放行', async (method, path) => {
     await expect(guard.validateRequest(req(method, path, { id: 0 }))).resolves.toBe(true);
+  });
+
+  it('🔴 替身自检：请求上下文两侧都有、且故意不同（否则「读错侧」会被兜底掩盖）', () => {
+    const r = req('put', '/api/admin/setting/layout', collaborator(['all'], 9));
+    // 定义侧（守卫应当读的那一侧）
+    expect(r.route.path).toBe('/api/admin/setting/layout');
+    expect(Object.keys(r.route.methods)[0]).toBe('put');
+    // 请求侧四个字段都必须存在（缺任何一个，「守卫改读请求侧」就又会读到 undefined）
+    for (const f of ['path', 'url', 'originalUrl', 'method']) {
+      expect({ field: f, present: typeof r[f] === 'string' && r[f].length > 0 }).toEqual({
+        field: f,
+        present: true,
+      });
+    }
+    // 🔴 两侧必须**不同**：相同的话，读错侧不会产生任何可观测差异，上面那些断言就白加了
+    expect(r.path).not.toBe(r.route.path);
+    expect(r.method).not.toBe(Object.keys(r.route.methods)[0]);
+    // 并且请求侧那个值**不命中**高危前缀判定（这正是"读错侧会改变结论"的机制）
+    expect(isSuperAdminOnlyRoute(r.path)).toBe(false);
+    expect(isSuperAdminOnlyRoute(r.route.path)).toBe(true);
   });
 
   it('API Token（sub:0 ⇒ id:0）不受影响：它本来就是超管身份', async () => {

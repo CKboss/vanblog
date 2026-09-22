@@ -6,8 +6,11 @@
  * 并且**没有任何上限**；循环里还有一句 `console.log(link, dto)`，每个链接打一行。
  * 于是"一篇塞了几千个外链的文章"就能让一个请求跑上几小时、把 stdout 刷爆。
  *
- * ⚠️ 可达性（已核实，决定严重度）：`post-/api/admin/img/scan` 既不在 `publicRoutes`
- * 也不在 `pathPermissionMap`，而 `/api/admin/img` 不在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
+ * ⚠️ 可达性（已核实，决定严重度）：`post-/api/admin/img/scan` **不在 `types/access/access.ts`
+ * 的任何一张放行表里** —— 引导层 `bootstrapRoutes`、免权限档 `publicRoutes`、按权限档
+ * `pathPermissionMap`（`permissionRoutes` 是它的键集）三张都核实过不含它（🔴 钉住这个结论的断言在
+ * `provider/article/articleImageLinksScan.spec.ts`，本文件不重复造），
+ * 而 `/api/admin/img` 不在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
  * ⇒ `access.guard.ts` 的 `permissions.includes('all')` 分支会放行，**勾了「所有权限」的
  * 协作者可以调**。所以它必须按"低权限账号也能触发的重活"设防。
  *

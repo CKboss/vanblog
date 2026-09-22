@@ -121,10 +121,15 @@ function singleDocReadSkipsPublishFilter(view: ArticleView): boolean {
  * 为什么必须分批：这个扫描要读**每篇文章的正文**（图片链接就在正文里），而正文是整个库里
  * 最大的字段。以前是一次 `find()` 把全部未删除文章连正文一起拉进堆：
  * 5000 篇 × 300 KB ≈ **1.5 GB** ⇒ worker 直接 OOMKilled。
- * ⚠️ 而这条路径**不是只有管理员能碰**：`post-/api/admin/img/scan` 既不在 `publicRoutes`
- * 也不在 `pathPermissionMap` 里，但 `/api/admin/img` 不在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
+ * ⚠️ 而这条路径**不是只有管理员能碰**：`post-/api/admin/img/scan` 不在 `types/access/access.ts`
+ * 的**任何一张放行表**里 —— 引导层 `bootstrapRoutes`、免权限档 `publicRoutes`、按权限档
+ * `pathPermissionMap`（`permissionRoutes` 就是它的键集）三张都逐条核实过不含它 ——
+ * 但 `/api/admin/img` 不在 `SUPER_ADMIN_ONLY_ROUTE_PREFIXES`
  * 里 ⇒ **勾了「所有权限」的协作者可以调**。在"低权限账号应当按已被攻陷来设计"的威胁模型下，
  * 这就是"一个廉价请求打死整个 worker"的放大链（而且可反复触发：重启后再来一次）。
+ * 🔴 **可达性论证必须穷尽所有放行表**：B′（拆两层）之后 `bootstrapRoutes` 也是一张放行表，
+ * 漏掉它的论证即使结论碰巧正确也不成立 —— 下一次往引导层加键时没人会想起这里。
+ * 这条结论由 `articleImageLinksScan.spec.ts` 的断言钉住（钉结论，不钉注释措辞）。
  *
  * 分批之后**峰值**内存只与批大小有关（50 篇 × 300 KB ≈ 15 MB），与全站规模无关。
  */
