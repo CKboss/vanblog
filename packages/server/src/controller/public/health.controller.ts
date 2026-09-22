@@ -205,15 +205,37 @@ export class HealthController {
   async health(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const mongo = await this.probeMongo();
     const readyState = this.connection?.readyState;
-    if (!mongo.up) {
+    // 🔴 **只调用一次**：`websiteState()` 会写 `this.websiteAbsentSince`（宽限窗口的起点），
+    //    多调一次就会把窗口重新起算 ⇒ 永远到不了 `down`。
+    const website = this.websiteState();
+    // 🔴 **四象限契约**（`status` 与 `statusCode` 同时反映 mongo 与前台）：
+    //    | mongo | website                        | status   | statusCode |
+    //    |-------|--------------------------------|----------|------------|
+    //    | up    | up / starting / disabled / unknown | ok   | 200        |
+    //    | up    | **down**                         | degraded | **503**    |
+    //    | down  | 任意                             | degraded | 503        |
+    // 🔴 **只有 `down` 会导致 503**，`starting`/`disabled`/`unknown` 都**不会**，三条理由各自独立：
+    //    - `starting`：60 秒宽限窗口内。若它也 503，那么**每次保存站点信息**（走 `restart()`，
+    //      会先杀进程组再拉起）都会让容器被判定不健康 ⇒ 可能触发不必要的容器重启，**那比原缺陷更糟**。
+    //      ⚠️ 代价：前台真坏死时最长先 60 秒不反映到状态码上 —— 而容器层 HEALTHCHECK 本来就
+    //      **另外直接探 3001**，所以那 60 秒里容器层仍看得见。
+    //    - `disabled`：**按设计**不由 server 拉起前台（`VANBLOG_DISABLE_WEBSITE=true`，
+    //      即前后端分离部署与 dev）。若它 503，**那些部署的健康检查会永久失败**。
+    //    - `unknown`：**本进程无从判断**（拿不到 provider，或本进程是 cluster 非 leader worker）。
+    //      若它 503，多 worker 部署下状态码会随"请求落到哪个 worker"抖动。
+    // ⚠️ **`status` 刻意沿用既有的两个词**（`ok`/`degraded`），不发明第三个：
+    //    🔴 改完之后"mongo 挂"与"前台坏死"**都会** 503 ⇒ **消费方必须靠 body 的 `mongo` 与 `website`
+    //    两个字段区分，不能靠状态码猜原因**（这正是 `vanblog.sh doctor` 同一次被改掉的原因）。
+    const healthy = mongo.up && website !== 'down';
+    if (!healthy) {
       res.status(503);
     }
     const detailed = detailsAllowed(req);
     return {
-      statusCode: mongo.up ? 200 : 503,
+      statusCode: healthy ? 200 : 503,
       data: {
         // 这几个是健康检查与 `vanblog.sh drill` 真正要读的，且不标识版本/容量 ⇒ 保持公开
-        status: mongo.up ? 'ok' : 'degraded',
+        status: healthy ? 'ok' : 'degraded',
         mongo: mongo.up ? 'up' : 'down',
         // ⚠️ mongoose 的语义是 **0=disconnected、1=connected、2=connecting、3=disconnecting**
         // （第一版注释写反了，会把 1 当成断开 —— 错误的注释比没有注释更糟）。
@@ -233,14 +255,16 @@ export class HealthController {
         //    前台永久坏死时，用它做监控的外部系统一直看到 `ok`，而 k8s 的 livenessProbe
         //    一个容器只能有一个 ⇒ 它探的就是这个端点 ⇒ **pod 永远不会被重启，用户只看到 502**。
         //    容器层的 HEALTHCHECK 早就另外直接探 3001 了，所以这补的是**外部监控与 k8s** 那两个盲区。
-        // ⚠️ `status` 与 `statusCode` **刻意不变**（仍然只反映 mongo）：把它们也改成反映前台是
-        //    **破坏性变更**，而现有消费方会产生**错误输出**而不只是不同的输出 ——
-        //    `vanblog.sh doctor` 把 503 硬编码解读成"server 活着但 **mongo 连不上**"并建议
-        //    `restore --offline-full`（前台坏死时这是错误诊断，会把人引去恢复备份）；
-        //    `vanblog-drill.sh` 用 `code == 200` 当"服务就绪"判据（前台比 mongo 起得慢时演练会等到超时并记 fail）；
-        //    `main.ts` 的启动就绪注释明写"判据与 /api/public/health 完全一致"。
-        //    那三处都不在本轮改动范围内 ⇒ 先只加字段，状态码的变更要与它们同一次做。
-        website: this.websiteState(),
+        // ⚠️ **2026-09-22 更正（上一轮的"刻意不变"已在本轮反转）**：`status` 与 `statusCode`
+        //    现在**同时反映 mongo 与前台**（见上面的四象限表）。上一轮之所以先只加字段，是因为
+        //    直接改状态码会让三个消费方产生**错误输出**而不只是不同的输出：
+        //    `vanblog.sh doctor` 曾把 503 硬编码解读成"server 活着但 mongo 连不上"并建议
+        //    `restore --offline-full`（前台坏死时是错误诊断，会把人引去做破坏性恢复）；
+        //    `vanblog-drill.sh` 曾用 `code == 200` 当"服务就绪"判据（前台比 mongo 起得慢时演练会等到超时并记 fail）；
+        //    `main.ts` 的启动就绪注释曾明写"判据与 /api/public/health 完全一致"。
+        //    🔴 **这三处已在本轮同一次改掉**：doctor 改成按 body 的 `mongo`/`website` 分别诊断，
+        //    drill 的就绪判据改成读 body 而不是状态码，`main.ts` 的注释改成如实描述两者的差别。
+        website,
         now: new Date().toISOString(),
         // ⚠️ **版本号是公开的，不算秘密**（站长决定）：它已经渲染在每个前台页面的页脚上，
         // 也从 /api/public/meta 下发 —— 只在健康端点藏它属于安全表演，攻击者从页脚就能读到 commit。

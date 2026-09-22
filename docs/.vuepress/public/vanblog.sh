@@ -5226,13 +5226,52 @@ doctor() {
   # 3) 站点接口与 mongo 连通性（health 里带 mongo 字段）
   local base body code
   base="$(vanblog_api_base 2>/dev/null)"
-  code="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' "${base}/api/public/health" 2>/dev/null)"
+  # 🔴 **按 body 里的 `mongo` 与 `website` 两个字段分别诊断，不再按状态码猜原因。**
+  #    2026-09-22 更正：健康端点此前只在 mongo 不通时返回 503，所以"503 ⇒ mongo 连不上"成立；
+  #    现在**前台渲染进程坏死也会 503**（`website: "down"`），继续按状态码猜就会给出
+  #    **错误诊断**，并把运维引去执行 `restore --offline-full`（一个破坏性操作）。
+  #    ⚠️ `website` 的 `disabled`（前后端分离/dev，前台不由 server 拉起）与 `unknown`
+  #    （多进程部署下的非 leader worker）**都不是故障**，绝不能报成问题。
+  code="$(curl -sS -m 8 -o "${body}" -w '%{http_code}' "${base}/api/public/health" 2>/dev/null)"
   [[ -n "${code}" ]] || code="000"
-  if [[ "${code}" == "200" ]]; then
-    echo -e "  ${green}✓${plain} 健康接口：${base}/api/public/health → 200"
-  elif [[ "${code}" == "503" ]]; then
-    echo -e "  ${red}✗${plain} 健康接口 → 503：server 活着但 **mongo 连不上**（库损坏/被删/mongo 容器没起）"; problems=$((problems+1))
-    echo -e "      库修不回来时用：${yellow}${VANBLOG_SELF_NAME} restore --offline-full <归档>${plain}"
+  local h_mongo="" h_website=""
+  if [[ -s "${body}" ]]; then
+    # ⚠️ 用 sed 而不是 jq（本脚本不依赖 jq）。`"mongo"` 后面紧跟引号，所以不会误匹配
+    #    `mongoState`/`mongoStateText`/`mongoPingMs`。
+    h_mongo="$(sed -n 's/.*"mongo"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "${body}" 2>/dev/null | head -1)"
+    h_website="$(sed -n 's/.*"website"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "${body}" 2>/dev/null | head -1)"
+  fi
+  if [[ "${code}" == "200" || "${code}" == "503" ]]; then
+    # 前台维度：只有 down 是故障；starting 是宽限窗口内（正常重启也会经过）；
+    # disabled/unknown 是"本站不由 server 管前台"/"本进程无从判断"，都不是故障。
+    local web_bad=0 web_note=""
+    case "${h_website}" in
+      down)     web_bad=1; web_note="前台渲染进程已坏死（超过 60 秒宽限窗口仍未拉起）" ;;
+      starting) web_note="前台正在启动或重启中（60 秒宽限窗口内）" ;;
+      disabled) web_note="前台不由本 server 拉起（前后端分离部署）" ;;
+      unknown)  web_note="本进程无法判断前台状态（多进程部署下不是 leader）" ;;
+      up|"")    web_note="" ;;
+      *)        web_note="前台状态未知（${h_website}）" ;;
+    esac
+    local mongo_bad=0
+    [[ "${h_mongo}" == "down" ]] && mongo_bad=1
+    if (( mongo_bad == 0 && web_bad == 0 )); then
+      echo -e "  ${green}✓${plain} 健康接口：${base}/api/public/health → ${code}"
+      [[ -n "${web_note}" ]] && echo -e "      ${plain}· ${web_note}"
+    else
+      echo -e "  ${red}✗${plain} 健康接口 → ${code}："; problems=$((problems+1))
+      if (( mongo_bad == 1 )); then
+        echo -e "      ${red}·${plain} **mongo 连不上**（库损坏/被删/mongo 容器没起）"
+        echo -e "        库修不回来时用：${yellow}${VANBLOG_SELF_NAME} restore --offline-full <归档>${plain}"
+      fi
+      if (( web_bad == 1 )); then
+        echo -e "      ${red}·${plain} ${web_note}"
+        echo -e "        先看前台日志：${yellow}${VANBLOG_SELF_NAME} logs website${plain}"
+        echo -e "        ⚠️ server 会每 5 分钟自动重试拉起（永不放弃），瞬态原因消失后会自愈；"
+        echo -e "           想立刻重试：${yellow}${VANBLOG_SELF_NAME} restart${plain}"
+        echo -e "        🔴 **不要为此恢复备份** —— 数据层是好的，恢复归档解决不了前台起不来。"
+      fi
+    fi
   else
     echo -e "  ${red}✗${plain} 健康接口 → ${code}（站点没在服务）"; problems=$((problems+1))
   fi

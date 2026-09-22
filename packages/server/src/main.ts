@@ -514,7 +514,15 @@ async function bootstrap() {
       //
       // 连接对象从 DI 容器按 `getConnectionToken()` 取，与 `health.controller.ts` 的
       // `@InjectConnection()` 是**同一个**对象（默认连接，token 为 `DatabaseConnection`），
-      // 所以"就绪"的判据与 `/api/public/health` 完全一致，不会出现"health 说 503 而这里说就绪"。
+      // ⚠️ **2026-09-22 更正**：这里说"判据与 `/api/public/health` 完全一致"曾经是对的
+      //    （当时 health 的 503 只由 mongo 决定），但**现在不再成立**：health 端点在
+      //    **前台渲染进程坏死（`website: "down"`）时也会返回 503**，而这里的启动就绪只等 mongo。
+      //    🔴 **这个差别是有意的、不是缺陷**：启动阶段的职责是"数据层可用就可以开始服务"，
+      //    前台子进程由 `WebsiteProvider` 异步拉起（有自己的退避阶梯），不该阻塞启动；
+      //    而 health 端点的职责是"对外报告站点整体是否健康"，所以它要包含前台维度。
+      //    ⇒ **可能出现"这里认为就绪、而 health 报 503"**，那表示 mongo 已就绪但前台还没起来/已坏死。
+      //    ⚠️ 消费方（`vanblog.sh doctor`、`vanblog-drill.sh`）已改成**读 body 的 `mongo` 与
+      //    `website` 两个字段分别诊断**，不再按状态码猜原因。
       const connection = app.get<Connection>(getConnectionToken());
       const mongoReady = await waitForMongoReady(connection, {
         onProgress: (waitedMs, stateText) =>

@@ -2838,7 +2838,20 @@ cmd_drill() {
   while ((waited < DRILL_TIMEOUT)); do
     if http_get "${base}/api/public/health" "${health_body}" 10; then
       code="${HTTP_CODE}"
-      if [[ "${code}" == "200" ]]; then
+      # 🔴 **就绪判据读 body 的 `mongo` 字段，不读状态码。**
+      #    2026-09-22 更正：健康端点现在**前台坏死时也返回 503**，而恢复演练测的是**数据层恢复**；
+      #    前台比 mongo 起得慢时（它有 60 秒宽限窗口，期间报 `starting`）用 `code == 200` 会
+      #    让演练干等到 `DRILL_TIMEOUT` 并记 fail ⇒ **直接损害"可测量的 RTO"这个指标**。
+      #    ⚠️ 但**不能因此对"前台真的起不来"变得不敏感** —— 那是演练的价值之一 ⇒
+      #    就绪只看 mongo，而前台状态在就绪之后**单独断言一次**（见下面的 rec_pass/rec_fail）。
+      local h_mongo=""
+      if [[ -s "${health_body}" ]]; then
+        h_mongo="$(sed -n 's/.*"mongo"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "${health_body}" 2>/dev/null | head -1)"
+      fi
+      # ⚠️ 兼容旧镜像：body 里没有 `mongo` 字段时退回状态码判据。
+      if [[ -n "${h_mongo}" ]]; then
+        if [[ "${h_mongo}" == "up" ]]; then ready=1; break; fi
+      elif [[ "${code}" == "200" ]]; then
         ready=1
         break
       fi
@@ -2877,10 +2890,35 @@ cmd_drill() {
   health_state="$(json_get "${health_json}" data.mongoStateText)"
   health_ping="$(json_get "${health_json}" data.mongoPingMs)"
   if [[ "${health_mongo}" == "up" ]]; then
-    rec_pass "服务就绪（/api/public/health 200）" "约 ${waited} 秒；mongo=up（${health_state:-?}，ping ${health_ping:-?}ms）"
+    rec_pass "服务就绪（/api/public/health 的 mongo=up）" "约 ${waited} 秒；mongo=up（${health_state:-?}，ping ${health_ping:-?}ms）"
   else
-    rec_warn "服务就绪（/api/public/health 200）" "HTTP 200 但 mongo=${health_mongo:-?}（${health_state:-?}）：健康端点在库连不上时会回 503，这里读到 200 说明它认为库是通的"
+    rec_warn "服务就绪（/api/public/health 的 mongo=up）" "就绪判据已放行但 mongo=${health_mongo:-?}（${health_state:-?}）：健康端点在库连不上时会回 503，这里读到 200 说明它认为库是通的"
   fi
+
+  # 🔴 **前台状态单独断言一次**（就绪判据只看 mongo，所以这里必须补上，否则演练会对
+  #    "恢复之后前台起不来"变得不敏感 —— 那正是演练的价值之一）。
+  #    ⚠️ `starting` 是 60 秒宽限窗口内的正常状态（前台比 mongo 起得慢），只 warn 不 fail；
+  #    `disabled`/`unknown` 不是故障（前后端分离部署、多进程下的非 leader worker）；
+  #    🔴 只有 `down` 才 fail。
+  local health_website
+  health_website="$(json_get "${health_json}" data.website)"
+  case "${health_website}" in
+    up)
+      rec_pass "前台渲染进程存活（health 的 website 字段）" "website=up"
+      ;;
+    down)
+      rec_fail "前台渲染进程存活（health 的 website 字段）" "website=down：数据层恢复了但前台起不来 ⇒ 站点仍是 502，看 app 日志里的前台段"
+      ;;
+    starting)
+      rec_warn "前台渲染进程存活（health 的 website 字段）" "website=starting：仍在 60 秒宽限窗口内（前台比 mongo 起得慢是正常的），稍后可复查"
+      ;;
+    disabled|unknown)
+      rec_pass "前台渲染进程存活（health 的 website 字段）" "website=${health_website}：本站不由 server 拉起前台/本进程无从判断，均非故障"
+      ;;
+    *)
+      rec_warn "前台渲染进程存活（health 的 website 字段）" "website=${health_website:-?}（旧镜像没有这个字段，或取值不认识）"
+      ;;
+  esac
 
   # ── 8) 恢复前必须是"未初始化"，否则这次演练什么都没证明 ─────────────────
   local meta_body="${DRILL_TMP}/meta-before.json"

@@ -523,14 +523,14 @@ jobs:
           fi
           zstd --version
 
-      - name: Restore drill logic (624 assertions; the live container part stays off)
-        # ⚠️ 这个守卫分两部分：A) 纯逻辑，**默认全部跑**（624 条，本机实测 143 秒）；
+      - name: Restore drill logic (629 assertions; the live container part stays off)
+        # ⚠️ 这个守卫分两部分：A) 纯逻辑，**默认全部跑**（629 条，本机实测 143 秒）；
         #    B) 活体演练，需要引擎 + 镜像 + **一份真归档**，默认跳过并说明原因，
         #    只有 `VANBLOG_DRILL_LIVE=1` 才跑。CI 里跑不了 B —— 归档是站点数据，
         #    不能进仓库，所以那部分永远是"人工在演练机上跑"，不要以为这里覆盖了它。
         # 🔴 2026-09-21 加失败诊断：本步骤在 CI 上**从加入当天（09-20 首跑）起每次都红**，
         #    而本机把 runner 的工具链逐个复现（bash 5.1.16、tar 1.34、zstd 1.5.x、mawk/gawk、
-        #    env -i 最小环境、TZ=UTC）全部 624/0 绿 ⇒ 差异还没找到；deploy key 又读不了日志（403）。
+        #    env -i 最小环境、TZ=UTC）全部 629/0 绿 ⇒ 差异还没找到；deploy key 又读不了日志（403）。
         #    现在失败时把 `FAIL:` 行转成 ::error annotations（公开 API 可读），下一次红会直接
         #    点名是哪几条断言、got/want 是什么。rc 原样透传，断言一条没动。
         run: |

@@ -2630,6 +2630,48 @@ else
   assert_contains "${STRIPPED_FALLBACK}" 'VANBLOG_DATA_PATH' "兜底块真的读 VANBLOG_DATA_PATH"
 fi
 
+# ── 🔴 就绪判据与前台断言（2026-09-22 新增）────────────────────────────────────
+# 背景：`/api/public/health` 现在**前台坏死时也返回 503**（此前只由 mongo 决定）。
+# 若演练仍用 `code == 200` 当"服务就绪"，前台比 mongo 起得慢时（它有 60 秒宽限窗口）
+# 演练会干等到 DRILL_TIMEOUT 并记 fail ⇒ 直接损害"可测量的 RTO"这个指标。
+# 🔴 但**不能因此对"前台真的起不来"变得不敏感** —— 那是演练的价值之一 ⇒
+#    就绪只看 mongo，而前台状态在就绪之后**单独断言一次**（down ⇒ rec_fail）。
+# ⚠️ 这 4 条断言此前**不存在**：变异对照 M4/M5（把 rec_fail 改成 rec_warn、
+#    把就绪判据退回只看状态码）都是 NOT_RED，说明这两处改动**没有任何守卫覆盖** ⇒
+#    退化不会报警。这正是"守卫缺口"而不是"变异没打上"（驱动已验证 sha 变化）。
+DRILLSRC="$(cat "${SCRIPT}" 2>/dev/null)"
+if [[ -n "${DRILLSRC}" ]]; then
+  assert_contains "${DRILLSRC}" 'h_mongo="$(sed -n' \
+    "就绪判据读 body 的 mongo 字段（不是只看状态码）—— 前台有 60 秒宽限窗口，比 mongo 起得慢是正常的"
+  # 🔴 **钉住"mongo 分支是主分支"**：状态码那条只是**旧镜像兼容回退**（body 里没有 mongo 字段时才用）。
+  #    若把 `-n` 改成 `-z`，回退就成了主路径 ⇒ 就绪判据实际上退回"只看状态码"，
+  #    而上面那条"不存在裸状态码 if"的反证抓不到它（回退分支是 `elif`，行首锚定匹配不到）。
+  #    变异对照 M5 正是这个形状，第一版因为缺这条断言而 NOT_RED。
+  assert_contains "${DRILLSRC}" 'if [[ -n "${h_mongo}" ]]; then' \
+    "mongo 字段存在时走 mongo 判据（主分支）；状态码判据只是旧镜像的兼容回退"
+  assert_contains "${DRILLSRC}" 'rec_fail "前台渲染进程存活（health 的 website 字段）" "website=down' \
+    "前台 down 记 FAIL（🔴 不能退化成 WARN，否则演练对'恢复之后前台起不来'不敏感）"
+  assert_contains "${DRILLSRC}" 'website=down：数据层恢复了但前台起不来' \
+    "FAIL 的说明要点明'数据层是好的'，否则运维会去查库/恢复备份（错误的排障方向）"
+  # 🔴 尺子有效性反证：把就绪判据退回"只看状态码"这个旧形状，必须能被抓到
+  # ⚠️ 必须**行首锚定**：`elif` 里含子串 `if`，用 -qF 会把刻意保留的"旧镜像兼容回退分支"
+  #    （body 里没有 mongo 字段时才退回状态码判据）误判成旧形状 ⇒ 第一版这条反证就是因此假红的。
+  # 🔴 **而且必须把范围收窄到"等就绪"那一段**：整个脚本里另有一处无关的
+  #    `if [[ "${code}" == "200" ]]`（备份签名覆盖度分类函数，返回 covered/refused/no-key/inconclusive），
+  #    第二版反证因为扫全文而假红。⇒ 这与"源码级断言的锚点必须先证明在正确范围里唯一命中"是同一条规矩。
+  local READY_BLOCK
+  READY_BLOCK="$(printf '%s\n' "${DRILLSRC}" | awk '/等就绪（用健康端点/,/── 8\)/')"
+  if [[ -z "${READY_BLOCK}" ]]; then
+    fail "切不出'等就绪'那一段 ⇒ 反证无法进行（锚点失效，不要当成通过）"
+  elif printf '%s' "${READY_BLOCK}" | grep -qE '^[[:space:]]*if \[\[ "\$\{code\}" == "200" \]\][[:space:]]*;[[:space:]]*then'; then
+    fail "反证失败：drill 里仍存在'只用状态码当就绪判据'的旧形状 ⇒ 上面那条 PASS 没有意义"
+  else
+    pass "反证成立：就绪判据已不再只看状态码（旧形状抓不到 ⇒ 不是空转）"
+  fi
+else
+  fail "读不到 ${SCRIPT} ⇒ 上面 4 条无法验证"
+fi
+
 echo "passed=${PASS} failed=${FAIL}"
 if [[ "${FAIL}" -ne 0 ]]; then
   exit 1

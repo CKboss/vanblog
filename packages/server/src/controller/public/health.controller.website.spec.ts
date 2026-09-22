@@ -85,8 +85,14 @@ describe('health 的 website 字段：前台存活是公开信息', () => {
     const at = src.indexOf('async health(');
     expect(at).toBeGreaterThan(0);
     const body = src.slice(at);
-    const websiteAt = body.indexOf('website: this.websiteState()');
+    // ⚠️ 2026-09-22：产品改成了先 `const website = this.websiteState()`（**只调一次**，
+    //    因为它会写宽限窗口的起点，多调一次窗口就会重新起算 ⇒ 永远到不了 down），
+    //    返回体里用对象简写 `website,`。锚点跟着改，并**断言唯一命中**（8 空格缩进 + 简写 + 换行，
+    //    与构造函数参数 `private readonly website?: WebsiteProvider,` 的缩进不同 ⇒ 不会误匹配）。
+    const websiteAt = body.indexOf('\n        website,\n');
     const detailedAt = body.indexOf('...(detailed');
+    expect(body.split('\n        website,\n').length - 1).toBe(1);
+    expect(body.indexOf('const website = this.websiteState()')).toBeGreaterThan(0);
     expect(websiteAt).toBeGreaterThan(0);
     expect(detailedAt).toBeGreaterThan(0);
     // 🔴 关键：字段出现在 detailed 展开**之前**，即它是无条件返回的
@@ -175,7 +181,7 @@ describe('health 的 website 字段：前台存活是公开信息', () => {
     expect(['starting', 'down', 'unknown']).toContain(out.data.website);
   });
 
-  it('🔴 状态码与 status 仍然**只**反映 mongo（前台坏死不改它们）—— 这是刻意的非破坏性取舍', async () => {
+  it('🔴 四象限契约：前台 down ⇒ 503 + degraded；starting/disabled/unknown ⇒ 仍 200 + ok', async () => {
     const c = new HealthController(okConn(), websiteStub(false));
     const res = resStub();
     // ⚠️ 必须先问一次再推进时钟：宽限窗口是从"**本端点第一次观察到前台不在**"开始算的，
@@ -186,13 +192,49 @@ describe('health 的 website 字段：前台存活是公开信息', () => {
     jest.advanceTimersByTime(10 * 60 * 1000); // 前台确实 down 了
     const out: any = await c.health({} as any, res);
     expect(out.data.website).toBe('down');
-    // ⚠️ 下面四条钉住的是"还没有做那半个破坏性变更"这件事本身。
-    //    🔴 如果将来要改，必须同一次改 `vanblog.sh doctor`（它把 503 解读成 mongo 连不上并建议恢复备份）、
-    //    `vanblog-drill.sh`（它用 code==200 当"服务就绪"）与 `main.ts` 那句"判据与本端点完全一致"的注释。
-    expect(out.statusCode).toBe(200);
-    expect(res.statusCode).toBe(200);
-    expect(out.data.status).toBe('ok');
-    expect(out.data.mongo).toBe('up');
+    // 🔴 **2026-09-22 契约变更（这条断言此前钉的是相反的取舍，现在被有意反转 —— 是升级不是放宽）**
+    //    旧契约：`status` 与 `statusCode` **只**反映 mongo，前台坏死时仍是 200/ok（刻意的非破坏性取舍，
+    //            因为三个消费方会产生**错误输出**而不只是不同的输出）。
+    //    新契约：`statusCode = (mongo.up && website !== 'down') ? 200 : 503`，`status` 同步。
+    //    🔴 **那三处消费方已在本轮同一次改掉**：
+    //      - `vanblog.sh doctor`：不再按状态码猜原因，改成读 body 的 `mongo` 与 `website` 分别诊断
+    //        （前台坏死时明确写"不要为此恢复备份 —— 数据层是好的"，因为旧措辞会把人引去做破坏性恢复）；
+    //      - `vanblog-drill.sh`：就绪判据改成读 body 的 `mongo` 字段（演练测的是数据层恢复，
+    //        而前台有 60 秒宽限窗口、比 mongo 起得慢），并**另外单独断言一次前台状态**，
+    //        所以对"恢复之后前台起不来"仍然敏感（`down` ⇒ rec_fail）；
+    //      - `main.ts` 的启动就绪注释：改成如实描述两者差别（启动只等 mongo 是有意的，
+    //        前台由 WebsiteProvider 异步拉起、不该阻塞启动）。
+    //    ⚠️ **容器层不需要改**：HEALTHCHECK 的判据本来就是 `s<500`，而且它**本来就另外直接探 3001**
+    //       ⇒ 前台坏死时容器**早就**会变 unhealthy，本轮没有引入新的重启循环风险。
+    expect(out.statusCode).toBe(503);
+    expect(res.statusCode).toBe(503);
+    expect(out.data.status).toBe('degraded');
+    expect(out.data.mongo).toBe('up'); // mongo 仍是好的 ⇒ 两个维度互不掩盖
+    // 🔴 **只有 `down` 会导致 503**：`disabled` 与 `unknown` 都不是故障，
+    //    若它们也 503，那么 dev、前后端分离部署、以及多进程下的非 leader worker
+    //    的健康检查会**永久失败**（或多 worker 下随"请求落到哪个 worker"抖动）。
+    const disabledCtl = new HealthController(okConn(), undefined);
+    process.env['VANBLOG_DISABLE_WEBSITE'] = 'true';
+    try {
+      const dRes = resStub();
+      const dOut: any = await disabledCtl.health({} as any, dRes);
+      expect(dOut.data.website).toBe('disabled');
+      expect(dOut.statusCode).toBe(200);
+      expect(dOut.data.status).toBe('ok');
+      expect(dRes.statusCode).not.toBe(503);
+    } finally {
+      delete process.env['VANBLOG_DISABLE_WEBSITE'];
+    }
+    // 🔴 **`starting`（60 秒宽限窗口内）也不能 503** —— 否则**每次保存站点信息**
+    //    （走 `restart()`，先杀进程组再拉起）都会让容器被判定不健康 ⇒ 可能触发不必要的容器重启，
+    //    那比原缺陷更糟。⚠️ 代价：前台真坏死时最长先 60 秒不反映到状态码上，
+    //    而容器层 HEALTHCHECK 本来就另外直接探 3001，所以那 60 秒里容器层仍看得见。
+    const graceCtl = new HealthController(okConn(), websiteStub(false));
+    const gRes = resStub();
+    const gOut: any = await graceCtl.health({} as any, gRes);
+    expect(gOut.data.website).toBe('starting');
+    expect(gOut.statusCode).toBe(200);
+    expect(gOut.data.status).toBe('ok');
   });
 
   it('mongo 挂而前台正常 ⇒ degraded + 503，且 website 仍然是 up（两个维度互不掩盖）', async () => {

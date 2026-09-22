@@ -189,6 +189,27 @@ spec:
 
 :::
 
+::: note 2026-09-22 更正：`/api/public/health` 现在**也反映前台**了，但下面那条建议**仍然成立**
+
+健康端点新增了公开的 `website` 字段（取值 `up` / `starting` / `down` / `disabled` / `unknown`），并且 🔴 **前台坏死
+（`website: "down"`）时状态码会变成 503** ⇒ 只探 `/api/public/health` 的 `livenessProbe` 现在**能**看见前台坏死了。
+
+🔴 **但下面那条 `exec` 探针的建议不要撤掉**，因为两个信号**不等价**：
+
+- `website` 字段反映的是 **server 认为它拉起的那个子进程还在不在**；
+- 直接探 `3001` 上的健康探针路径，证明的是**端到端 HTTP 真的能拿到响应**（端口在听、Next 能应答）。
+
+⇒ **子进程活着但端口没在听、或 Next 卡死不响应时，字段会报 `up` 而直接探测会失败。** 另外多进程（cluster）部署下，
+非 leader worker 只能报 `unknown`。
+
+⚠️ 还有一个 **60 秒宽限窗口**：前台刚消失时会先报 `starting`（状态码仍 200），60 秒后才转 `down`。这是刻意的防抖动
+取舍 —— 否则**每次在后台保存站点信息**（会重启前台子进程）都会让探针失败、进而触发不必要的 pod 重启。
+
+⚠️ **前后端分离部署**（设了 `VANBLOG_DISABLE_WEBSITE=true`）里这个字段报 `disabled`，**保护不到你的前台** ⇒
+请直接探测你自己的 website 容器。
+
+:::
+
 ::: warning 🔴 这个 livenessProbe 探不到前台进程，前台永久挂掉时 pod 不会被重启
 
 上面的 `livenessProbe` 打的是 `/api/public/health`，而 🔴 **那个端点只反映数据库连通性，对前台渲染进程（容器内 3001）一无所知**
