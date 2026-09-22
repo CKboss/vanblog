@@ -9469,6 +9469,86 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.109 🔴 补上"CHANGELOG 镜像同步"守卫；并更正两处计数、揭穿一条"常驻断言"其实不存在
+
+**做了什么**：`docs/changelog.md` 是 `scripts/releaseDoc.js` 的产物，而 `docs-consistency` **刻意排除了它**
+（镜像按设计重写链接，与根文件永远不会逐字节相同）⇒ 🔴 **两者不同步不会有任何东西变红**。
+本周期已因此出过一次事故（编辑 `assert` 失败 ⇒ 根 CHANGELOG 根本没被写，而同一条命令链里后面的生成器**照跑** ⇒ 
+产生**假的 `doc-version` bump**，靠人工看 `git status` 才识破）。
+
+🔴 **阻塞点是自指的**：判定不同步的唯一可靠办法是**真的跑一次生成器再比对**，而生成器默认会写
+`docs/changelog.md` 与 `doc-version` ⇒ **守卫本身会有副作用**。解法分两步：
+1. 给 `scripts/releaseDoc.js` 加 **`--out <file>`** 模式（也支持 `--out=<file>`）：只把内容写到指定路径，
+   🔴 **一个字节都不碰仓库**。⚠️ **参数错误一律 `exit 9`（fail-loud），绝不静默回退到默认行为** ——
+   静默回退会让守卫以为"我验过了"，而它验的其实是"生成器又把仓库改了一遍"。
+2. 新建 `scripts/tests/changelog-mirror-sync.test.sh`（**10 条断言**）：用 `--out` 生成到临时文件、
+   `cmp` 比对（⚠️ **770 KB 不要读进 shell 变量**）、失败信息给出可照做的修法
+   （"跑 `node scripts/releaseDoc.js`，然后 `git add docs/changelog.md doc-version` 一起提交"）。
+   🔴 **反空转**：两边的字节数（下界 20000）、行数（下界 200）、以及"都含至少一个已发布版本节且数量一致"，
+   否则"两边都是空文件"会恒真通过。🔴 **尺子有效性反证（内部、不碰仓库）**：把生成产物复制一份并追加一个字节，
+   `cmp` **必须**报出不同 —— 否则那条"同步"的 pass 可能来自一个坏掉的比较器。
+   🔴 **并且钉住"`--out` 无副作用"这个前提本身**（`doc-version`/镜像/`git status` 三者的 sha 前后必须一致、
+   两次 `--out` 产物必须逐字节相同）—— 这条若失效，守卫就变成"每跑一次就把仓库改一次"的东西。
+   🔴 **还有源码级的顺序断言**：`--out` 分支必须在碰 `doc-version` 之前 return（用剥注释后的行号比较）。
+
+🔴 **默认行为逐字节不变，已证明**（不是声称）：把 `git show HEAD:scripts/releaseDoc.js` 取出来、
+**放进 `scripts/` 下临时文件名**再跑（⚠️ **必须放对目录** —— 脚本用 `path.resolve(__dirname, '..')` 求仓库根，
+🔴 **第一次我把它放 `/tmp` 跑，`REPO_ROOT` 变成 `/tmp`、脚本直接抛错 rc=1 什么都没写，
+而我差点把"产物 sha 与基线相同"当成"逐字节不变"的证据** —— 那其实是在比"没被改过"与"新生成"）：
+旧版与新版的**镜像产物 sha 相同、`doc-version` 递增值相同（198→199）、stdout 逐字相同**。
+🔴 **顺带证实当前是同步的**：从当前 `CHANGELOG.md` 重新生成的镜像与入库镜像 sha 完全一致。
+
+**变异对照 3/3 全 RED**（备份按"每次变异"记账、驱动挂 `trap INT TERM` 先还原再退出、
+每条先证明 sha 变了、🔴 **收尾用独立记录的基线 sha 逐文件核实**）：
+M1 给根 CHANGELOG 追加一行（核心）→ RED 1（FAIL 正是"不同步"+ 修法）；
+M2 让 `--out` 偷偷也写 `doc-version` → RED 1（FAIL 正是"守卫有副作用"）；
+M3 把镜像清空 → **RED 4**（反空转的三条 + 不同步 ⇒ 证明"两边都空"不会恒真通过）。
+还原后 `CHANGELOG.md` 与 `docs/changelog.md` 的 sha **与基线逐字一致**、`doc-version` 仍 **0.12.198**、
+收尾复跑守卫 **10/0 绿**。
+
+🔴 **CI 接线，以及一个必须一起修的缺口**：接进 `docs-test.yml`（排在 **Setup Node 之后、Install 之前** ——
+它需要 node 但不需要 node_modules，这样能省 1-2 分钟），用 `run-guard.sh` 包装。
+🔴 **但只加步骤是不够的**：`docs-test.yml` 的 `paths:` 过滤器原本只有 `docs/**`、`README.md`、
+`scripts/vanblog.sh` 与它自己，**不含 `CHANGELOG.md`** ⇒ 
+🔴 **"改了根 CHANGELOG 却忘了重新生成镜像"这个正是它要抓的情形，根本不会触发这个 workflow**。
+已把这四个路径补进 `paths:`（push 与 pull_request 两处）：`CHANGELOG.md`、`scripts/releaseDoc.js`、
+`doc-version`、`scripts/tests/changelog-mirror-sync.test.sh`。
+👉 **规矩：加一条守卫时，必须同时核实"触发它的那个 workflow 的 paths 过滤器覆盖了会让它变红的文件"** ——
+否则守卫存在但永远不会在该跑的时候跑（这与"守卫恒真"是同一类失效，只是发生在更外面一层）。
+
+🔴 **一处"常驻断言"其实不存在（此前多轮都以为它存在）**：多轮汇报里都提到跑过
+"每个 `scripts/tests/*.test.sh` 都被某个 workflow 按文件名引用"那条**常驻断言**，
+`ci-guard-wrapper.test.sh:12` 的注释也这么写。🔴 **实测核查：仓库里没有任何文件同时枚举守卫脚本并扫 `.github/workflows`**
+（`grep` 过 `scripts/tests/*.test.sh`、`scripts/*.sh`、`scripts/*.js`、`packages/server/src/**` 与 `.github/**`）⇒ 
+**那条断言不存在，历轮跑的是一次性的手工核查**。⚠️ **后果**：新增守卫忘了接 CI **不会有任何东西变红**，
+只能靠人记得。👉 **建议单独排一轮把它做成真守卫**（口径很小：枚举 `scripts/tests/*.test.sh` 的 basename，
+逐个 `grep -rqF` `.github/workflows/`，未引用就红；配反空转"守卫总数 >= 30"与尺子反证）。
+⚠️ **在那之前，"新增守卫必须同时接进 CI"是纯人工纪律。**
+
+🔴 **计数更正（都是实测，不是照抄）**：
+- **wrapper 包装步骤 34 → 35**（`server-test.yml` **29**、`docs-test.yml` **3 → 4**、`nightly.yml` **2**）；
+  **裸形式仍然恰好 1 处且是刻意的**（`ci-guard-wrapper.test.sh` 自己，`server-test.yml:444`，因为循环依赖）。
+  ⚠️ 数法要用精确形状 `run: bash scripts/tests/run-guard\.sh`，**不要用 `grep -rc 'run-guard.sh'`**
+  （上一轮那样数得到 36，多出的 2 是**注释里的提及**）。
+- **shell 守卫 32 → 33**（新增的就是本条）；🔴 **33 个全部被某个 workflow 按文件名引用（未引用 0）** —— 
+  但这是**本轮手工核的**，不是常驻断言（见上）。
+- ⚠️ §7.107/§7.108 里写的"32 个 shell 守卫""34 处 annotations"是**当时的实测值**，按惯例不改写历史，
+  以本节为准。
+
+⚠️ **`doc-version` 的核实结果（回答"那个假 bump 有没有实际后果"）**：
+🔴 **全仓没有任何消费者** —— `grep` 过 `scripts/`、`.github/`、`docs/.vuepress/`、`packages/`，
+只有 `scripts/releaseDoc.js` 自己读它（读出来 +1 再写回）并打印。⇒ **它是一个纯记账用的单调计数器**，
+🔴 **此前那次假 bump（以及任何漂移）没有实际后果**（不影响构建、不影响文档站、不对外展示）。
+⚠️ 但它仍然值得由本守卫间接保护：`--out` 模式不碰它，所以**守卫自己不会再制造新的假 bump**。
+
+**验证**：新守卫 **10/0**、`bash -n` OK、`docs-consistency` **61/0**、`docs-links` **5/0**、
+`ci-guard-wrapper` **13/0**、`gitignore-hygiene` **10/0**（它会硬失败于"被 gitignore 吞掉的测试文件"，
+新守卫是 `??` 可见未跟踪 ⇒ 按它的口径只 NOTE 不 fail）、`envVarMentions` **6/6**
+（它的语料含 `.github/workflows`，本轮改了那里）、PyYAML 解析 **6 个 workflow 全通过**、
+`uses:` **29 处全部钉 40 位 sha（未钉 0）**。⚠️ 没跑全量 server jest（本轮没改 `packages/**`）。
+🔴 **收尾核实**：`CHANGELOG.md`/`docs/changelog.md`/`doc-version` **全部还原干净**（sha 与基线一致、
+`doc-version` 仍 0.12.198）；工作树恰好 3 个路径；变异驱动的临时备份已删。
+
 ### 7.108 🔴 "替身缺字段"的危害比 §7.107 之前登记的更具体，而登记的机制是错的
 
 **登记的说法**（§7.101 等处）是：替身缺请求侧字段 ⇒ 守卫改读 `request.path` 时会读到 `undefined` ⇒ 

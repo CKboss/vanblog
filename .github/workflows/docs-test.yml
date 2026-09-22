@@ -14,6 +14,9 @@ name: docs-test
 #     以及一个**新子命令没写进 `--help`**。
 #   · 两份 `vanblog.sh` 不同步：`scripts/vanblog.sh` 与 `docs/.vuepress/public/vanblog.sh`
 #     必须逐字节相同（用户从文档站下载的就是后者），有 6 条断言 `cmp` 它们。
+#   · 🔴 `docs/changelog.md` 与根 `CHANGELOG.md` 不同步：前者是 `scripts/releaseDoc.js` 的产物，
+#     而 `docs-consistency` **刻意排除了它**（镜像按设计重写链接，与根文件永远不会逐字节相同）
+#     ⇒ 不同步是**静默的**。`changelog-mirror-sync` 用生成器的 `--out` 模式（无副作用）补这个缺口。
 #   · vuepress 渲染：`:::` 容器嵌套会让内层提前关闭外层、容器标题里的 `**`/反引号会原样显示、
 #     表格列数不一致会静默错位 —— 这些只有 `docs:build` 与人工复核能抓。
 #
@@ -31,6 +34,13 @@ on:
       - 'README.md'
       - 'scripts/vanblog.sh'
       - '.github/workflows/docs-test.yml'
+      # 🔴 下面三个是 `changelog-mirror-sync` 那一步需要的：镜像同步守卫只有在"根 CHANGELOG 变了"
+      #    或"生成器变了"或"doc-version 变了"时才有意义。少了它们，
+      #    "改了根 CHANGELOG 却忘了重新生成 docs/changelog.md" 这个**正是它要抓的情形**不会触发本 workflow。
+      - 'CHANGELOG.md'
+      - 'scripts/releaseDoc.js'
+      - 'doc-version'
+      - 'scripts/tests/changelog-mirror-sync.test.sh'
   pull_request:
     branches:
       - master
@@ -40,6 +50,13 @@ on:
       - 'README.md'
       - 'scripts/vanblog.sh'
       - '.github/workflows/docs-test.yml'
+      # 🔴 下面三个是 `changelog-mirror-sync` 那一步需要的：镜像同步守卫只有在"根 CHANGELOG 变了"
+      #    或"生成器变了"或"doc-version 变了"时才有意义。少了它们，
+      #    "改了根 CHANGELOG 却忘了重新生成 docs/changelog.md" 这个**正是它要抓的情形**不会触发本 workflow。
+      - 'CHANGELOG.md'
+      - 'scripts/releaseDoc.js'
+      - 'doc-version'
+      - 'scripts/tests/changelog-mirror-sync.test.sh'
 
 concurrency:
   group: docs-test-${{ github.ref }}
@@ -79,6 +96,18 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      - name: CHANGELOG mirror in sync with the root changelog
+        # 🔴 `docs/changelog.md` 是 `scripts/releaseDoc.js` 的产物，而 `docs-consistency` **刻意排除了它**
+        #    （镜像按设计重写链接，与根文件永远不会逐字节相同）⇒ 两者不同步**不会有任何东西变红**。
+        #    本周期真出过事故：一次编辑 `assert` 失败 ⇒ 根 CHANGELOG 根本没被写，而同一条命令链里后面的
+        #    生成器**照跑** ⇒ 产生一个**假的 doc-version bump**。这条守卫就是补那个静默缺口。
+        # ⚠️ 它用生成器的 `--out <file>` 模式（只写临时路径、一个字节都不碰仓库），所以本身无副作用；
+        #    它自己还钉住了"--out 无副作用"这个前提。
+        # ⚠️ 需要 node 但不需要 node_modules，所以排在 Setup Node 之后、Install 之前（省 1-2 分钟）。
+        # 🔴 这一步能触发的前提是上面的 paths: 里含 CHANGELOG.md / scripts/releaseDoc.js / doc-version
+        #    —— 否则"改了根 CHANGELOG 却忘了重新生成镜像"这个**正是它要抓的情形**根本不会触发本 workflow。
+        run: bash scripts/tests/run-guard.sh scripts/tests/changelog-mirror-sync.test.sh
 
       - name: Install
         # ⚠️ 装整个 workspace 而不是 `--filter docs...`：docs 的 vuepress 配置会引用仓库根的

@@ -3,6 +3,20 @@
  *
  * 用法：`pnpm release-doc`（等价于 `node scripts/releaseDoc.js`），在仓库根目录跑。
  *
+ * ## `--out <file>`：只生成、不落地（2026-09-22 加）
+ *
+ * 🔴 **为什么需要它**：`docs/changelog.md` 是本脚本的产物，而 `scripts/tests/docs-consistency.test.sh`
+ *    **刻意排除了它**（镜像会按设计重写链接，与根 `CHANGELOG.md` 永远不会逐字节相同）
+ *    ⇒ **两者不同步不会有任何东西变红**。本周期已经因此出过一次事故：一次 python 编辑 `assert` 失败
+ *    ⇒ 根文件根本没被写，而同一条命令链里后面的本脚本**照跑** ⇒ 产生了一个**假的 `doc-version` bump**。
+ *    要加一条"镜像与根文件同步"的守卫，唯一可靠的判定办法是**真的跑一次生成器再比对**，
+ *    而生成器默认会写 `docs/changelog.md` 与 `doc-version` ⇒ **守卫本身会有副作用**。
+ *    `--out` 就是为解开这个自指而加的：把内容写到指定路径，**一个字节都不碰仓库**。
+ *
+ * ⚠️ **默认行为（不带参数）必须逐字节不变** —— 它被 `scripts/tests/changelog-mirror-sync.test.sh` 钉着。
+ * 🔴 **参数错误一律 fail-loud（退出码 9）**，绝不静默回退到默认行为：静默回退会让守卫以为
+ *    "我验过了"，而实际上它验的是"生成器又把仓库改了一遍"。
+ *
  * ## 两件这个脚本**不再**做的事（2026-09 改）
  *
  * 1. ⚠️ 以前它结尾会自动执行：
@@ -41,14 +55,62 @@ function rewriteLinksForDocsSite(body) {
   return out;
 }
 
-function main() {
+// 🔴 抽出来的唯一原因：`--out` 模式与默认模式必须生成**完全相同**的内容，
+//    否则"用 --out 比对"验的就不是真实产物。默认路径的写盘顺序与输出文案一律未改。
+function buildMirrorContent() {
   const changelogPath = path.join(REPO_ROOT, 'CHANGELOG.md');
-  const outPath = path.join(REPO_ROOT, 'docs', 'changelog.md');
+  const log = fs.readFileSync(changelogPath, { encoding: 'utf-8' });
+  return FRONT_MATTER + rewriteLinksForDocsSite(log.replace('# Changelog', '', 1));
+}
+
+// 解析参数。🔴 任何不认识的形状都 exit 9（fail-loud），绝不静默回退到默认行为。
+function parseArgs(argv) {
+  const args = argv.slice(2);
+  let outPath = null;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--out') {
+      const v = args[i + 1];
+      // ⚠️ 以 `-` 开头的"值"一律当成缺值：合法的目标路径不会这么写，
+      //    而把它当文件名会让后面的 shell 用法出各种意外。
+      if (v === undefined || v === '' || v.startsWith('-')) {
+        console.error('错误：--out 需要一个目标文件路径（例如 --out /tmp/mirror.md）');
+        process.exit(9);
+      }
+      outPath = v;
+      i += 1;
+    } else if (a.startsWith('--out=')) {
+      const v = a.slice('--out='.length);
+      if (v === '' || v.startsWith('-')) {
+        console.error('错误：--out= 后面需要一个目标文件路径（例如 --out=/tmp/mirror.md）');
+        process.exit(9);
+      }
+      outPath = v;
+    } else {
+      console.error(`错误：未知参数 ${a}（本脚本只认 --out <file>；不带参数就是原来的行为）`);
+      process.exit(9);
+    }
+  }
+  return { outPath };
+}
+
+function main() {
+  const { outPath } = parseArgs(process.argv);
+
+  // 🔴 --out 模式：只写指定路径，**不碰 docs/changelog.md、不碰 doc-version**。
+  //    写失败（目录不存在、不可写）时 fs 会抛 ⇒ 非 0 退出，🔴 不静默回退。
+  if (outPath !== null) {
+    const content = buildMirrorContent();
+    fs.writeFileSync(outPath, content, { encoding: 'utf-8' });
+    console.log(`已把镜像内容写到 ${outPath}（${Buffer.byteLength(content, 'utf-8')} 字节）；未改 docs/changelog.md，也未改 doc-version。`);
+    return;
+  }
+
+  const outPathDefault = path.join(REPO_ROOT, 'docs', 'changelog.md');
   const docVersionPath = path.join(REPO_ROOT, 'doc-version');
 
-  const log = fs.readFileSync(changelogPath, { encoding: 'utf-8' });
-  const body = rewriteLinksForDocsSite(log.replace('# Changelog', '', 1));
-  fs.writeFileSync(outPath, FRONT_MATTER + body, { encoding: 'utf-8' });
+  const content = buildMirrorContent();
+  fs.writeFileSync(outPathDefault, content, { encoding: 'utf-8' });
 
   // doc-version：文档修订号（三段，最后一段自增）。以前它同时被用来打 doc-<v> 标签，
   // 现在只是记录"文档站内容更新过多少次"。
@@ -58,7 +120,7 @@ function main() {
   const newVersion = arr.join('.');
   fs.writeFileSync(docVersionPath, newVersion + '\n', { encoding: 'utf-8' });
 
-  const bytes = fs.statSync(outPath).size;
+  const bytes = fs.statSync(outPathDefault).size;
   console.log(`已生成 docs/changelog.md（${bytes} 字节），doc-version: ${version} → ${newVersion}`);
   console.log('');
   console.log('接下来自己提交（这个脚本不再替你 git add/commit/tag/push）：');
