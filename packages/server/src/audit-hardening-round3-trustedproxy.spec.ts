@@ -373,7 +373,21 @@ describe('哪些调用点用哪个 IP 函数（这条最容易被下一个人改
     expect(proxy).toContain('VANBLOG_BRUTE_FORCE_IP_SOURCE');
   });
 
-  it('两个 IP 函数的 docstring 都指向了新 helper（不再互相矛盾）', () => {
+  // 🔴 2026-09-23 更正标题：原标题写的是「两个 IP 函数的 docstring 都指向了新 helper（不再互相矛盾）」，
+  //    而下面三条断言**证明不了那个性质**，它们在"docstring 与 bruteForceClientIp 的口径互相矛盾"的
+  //    那几个轮次里**全部通过**：①②两条只查文件里存在两个字面量，而它们存在于**体量类限流**那条 bullet 里
+  //    （不是防爆破那一段）；③排除的是**另一个函数名**（pickClientIp）的一句旧建议，
+  //    而当时的实际矛盾来自 pickSocketIp ⇒ **标题承诺的"不再互相矛盾"从来没有被断言过**。
+  // 🔴 下面这三条断言**实际证明的**是（文件级、含注释原文，不逐函数核实）：
+  //    这个文件里仍然能看到指向权威出处的引用与 pickTrustedClientIp 这个名字，
+  //    以及那句指向 pickClientIp 的旧建议已经删除。
+  // 🔴 **这里刻意不检查"docstring 之间是否矛盾"**：那等于把散文钉进断言，会产生噪音
+  //    （措辞一改就红，而红并不代表行为错了）。这一族的 mitigation 是**让注释不持有会漂的内容** ——
+  //    2026-09-23 已把那七处注释全部改成"指向权威、不复述取值与数字"（见 AGENTS §7.117）。
+  //    ⚠️ 所以**不要**在这里补一条"检查矛盾"的断言，那会把已经消掉的漂移面重新造出来。
+  // 👉 规矩：读一条断言时要问 **"它红的条件，是不是标题说的那件事"** ——
+  //    这个形状（标题承诺强性质、断言只查字面量存在）曾在本文件真实存在过好几个轮次。
+  it('log/utils.ts（含注释原文）文件级：仍提到 trustedProxy 的出处与 pickTrustedClientIp，且指向 pickClientIp 的旧建议已删', () => {
     const src = read('provider/log/utils.ts');
     expect(src).toContain('utils/trustedProxy.ts');
     expect(src).toContain('pickTrustedClientIp');

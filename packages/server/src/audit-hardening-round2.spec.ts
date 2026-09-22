@@ -157,7 +157,15 @@ describe('picgo 插件安装的开关', () => {
     expect(src).toContain("PICGO_PLUGIN_ENV = 'VANBLOG_ALLOW_PICGO_PLUGINS'");
   });
 
-  it('上传路径没有被开关影响（saveFile 里没有任何门禁）', () => {
+  // 🔴 2026-09-23 更正标题：原标题是「上传路径没有被开关影响（saveFile 里没有任何门禁）」，
+  //    而下面两条断言证明不了"没有任何门禁"这个全称否定 —— 它只排除了 `isPicgoPluginsAllowed`
+  //    **这一个**标识符（🔴 正是"排除了 A、而实际风险可能是 B"那个形状），
+  //    换一个门禁（别的函数名、一个 env 判断、一段新的白名单）都不会红。
+  //    ⚠️ 另外范围也比标题宽：`src.slice(src.indexOf('async saveFile('))` 是**切到文件末尾**，
+  //    不是只切 saveFile 这一个方法 ⇒ 实际断言的是"saveFile 及其之后的所有代码"。
+  //    👉 要真的钉住"没有任何门禁"，需要断言"这段里不存在任何条件分支/环境判断"，
+  //    那是实质性的语义改动（且容易误伤合法代码），已交站长裁定，本轮只把标题改成断言真正证明的性质。
+  it('上传路径没有被那道插件门禁影响（saveFile 及其之后不含 isPicgoPluginsAllowed）', () => {
     const src = code(read('provider/static/picgo.provider.ts'));
     const saveFile = src.slice(src.indexOf('async saveFile('));
     expect(saveFile).toContain('await this.picgo.upload([srcPath])');

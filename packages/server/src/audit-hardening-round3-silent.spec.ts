@@ -71,7 +71,11 @@ describe('B3 · 流水线 id 不再是裸 parseInt（NaN 与"没有这条"必须
     },
   );
 
-  it('源码里不再有裸的 parseInt(idString)', () => {
+  // ⚠️ 2026-09-23 更正标题的范围措辞：原写"源码里"（听起来是全仓），而语料只有
+  //    pipeline.controller.ts 一个文件 ⇒ 别的文件里出现同形状不会被这条抓到。
+  //    ✅ 但它**已有一条精确计数断言**（`parsePipelineId(idString)` 恰好 4 次），
+  //    所以"这三处都改成了 helper"这件事是钉得住的，只是**范围**要说清。
+  it('pipeline.controller 里不再有裸的 parseInt(idString)，且恰好 4 处走了 parsePipelineId', () => {
     const src = code(read('controller/admin/pipeline/pipeline.controller.ts'));
     expect(src).not.toContain('parseInt(idString)');
     expect(src.split('parsePipelineId(idString)').length - 1).toBe(4);
@@ -446,7 +450,11 @@ describe('B9 · 超过上限时的淘汰不能拖慢热路径', () => {
 });
 
 describe('B4 · 两个改统计口径的死方法已删除', () => {
-  it('article.provider 里不再有 washViewerInfo*（零调用方 + N+1 + 直接改统计口径）', () => {
+  // 🔴 2026-09-23 更正标题：原标题写的是通配 `washViewerInfo*`（任何以此开头的函数），
+  //    而断言只查**两个完整函数名** ⇒ 新增一个同前缀的函数不会红，标题承诺的范围比断言宽。
+  //    👉 要真的钉住通配，需要一条 `not.toMatch(/washViewerInfo\w*/)`；那是实质性断言（可能误伤），
+  //    已交站长裁定，本轮只把标题改成断言真正证明的两个名字。
+  it('article.provider 里不再有 washViewerInfoByVisitProvider / washViewerInfoToVisitProvider（零调用方 + N+1 + 直接改统计口径）', () => {
     const src = code(read('provider/article/article.provider.ts'));
     expect(src).not.toContain('washViewerInfoByVisitProvider');
     expect(src).not.toContain('washViewerInfoToVisitProvider');

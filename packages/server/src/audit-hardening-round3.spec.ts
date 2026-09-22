@@ -257,6 +257,13 @@ describe('ISR：activeWithRetry 必须真的 await 到那一轮渲染', () => {
     expect(src).toContain('return this.activeUrl(`/link`, false);');
     // 花括号里只调用不 return 的老写法不许回来
     expect(src).not.toMatch(/activeWithRetry\(\(\) => \{\s*this\.activeAllFn/);
+    // 🔴 2026-09-23 补的下界：上面三条只钉住"这三个已知调用点是对的"，而标题说的是"**三处**…都"。
+    //    上面那条否定只针对 activeAllFn 这一个函数名 ⇒ 若新增第 4 个调用点写成
+    //    `activeWithRetry(() => { this.someOtherFn(...) })`（不 return），标题承诺的性质就被破坏了，
+    //    而此前**没有任何东西会红**。这条计数把"出现新调用点"变成**响的**：它会红，
+    //    提醒来人复核新调用点有没有把 promise 交出去（并同步更新这里的计数与上面三条）。
+    //    ⚠️ 数的是 `this.activeWithRetry(`（调用点），不含方法定义 `async activeWithRetry(`。
+    expect(src.split('this.activeWithRetry(').length - 1).toBe(3);
   });
 });
 
