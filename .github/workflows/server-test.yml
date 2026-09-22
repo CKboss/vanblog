@@ -16,7 +16,11 @@ on:
       - 'pnpm-lock.yaml'
       - 'package.json'
       - 'patches/**'
-      - '.github/workflows/server-test.yml'
+      # 🔴 必须覆盖全部 workflow，不能只列本文件：guards-core 里那条"每个守卫都被某个 workflow 引用"
+      #    的常驻断言，以及它反方向那半（workflow 引用的守卫必须存在），都会在**别的** workflow 被改动时
+      #    失效或漂移。只列 server-test.yml 自己 ⇒ 改 docs-test.yml/nightly.yml 摘掉某个守卫引用时
+      #    这个 workflow 根本不触发，断言也就永远没机会红。
+      - '.github/workflows/**'
   pull_request:
     branches:
       - master
@@ -32,6 +36,7 @@ on:
       - 'pnpm-lock.yaml'
       - 'package.json'
       - 'patches/**'
+      - '.github/workflows/**'
 
 # 同一个分支上连着推两次时，把还在跑的那次取消掉：
 # 这个 job 要装整个 workspace 的依赖，排队很浪费。
@@ -463,19 +468,39 @@ jobs:
         #    而这是**第二次**漏接守卫（第一次是 `caddy-pages-dir-parity`，当时是"新增了守卫但没接 CI"）。
         #    ⇒ 只补那一个不解决"还会再漏"，所以把差集检查本身做成常驻守卫：
         #    **新增 `scripts/tests/*.test.sh` 而忘了接 CI，这一步就会红。**
-        # ⚠️ 判据是"被某个 workflow 文件按文件名引用"，通配循环（`for t in scripts/tests/*`）不算 ——
+        # ⚠️ 判据是"被某个 workflow 文件的**非注释行**按文件名引用"，通配循环不算、注释里提名也不算 ——
         #    本仓库的三个 workflow 都是**逐个点名**跑的（为了给每个守卫写清"为什么在这个 job"），
         #    所以这里也只认点名。⚠️ 如果将来改成通配循环，这一步要同步改成"确认循环真的覆盖到"。
         run: |
+          # 🔴 判据收紧（2026-09-22）：只在**非注释行**里找守卫名。
+          #    旧判据 grep 整个 workflow 目录，会命中注释 —— 而这些 workflow 的注释里
+          #    大量点名守卫（用来说明"为什么这一步在这个 job"）。后果是**假绿**：
+          #    把某个守卫的真实调用步骤删掉，只要注释里还提着它的名字，这一步照样通过，
+          #    而那个守卫从此不再被 CI 执行。这个场景已实测（删掉一个守卫的调用行、保留注释）：
+          #    旧判据 missing 为空（绿），收紧后 missing 点名该守卫（红）。
+          #    剥注释用 '^[[:space:]]*#'，所以行尾注释不受影响，真正的调用行仍算数。
+          wf_nc="$(mktemp -d)"
+          trap 'rm -rf "${wf_nc}"' EXIT
+          for w in .github/workflows/*.yml; do
+            grep -vE '^[[:space:]]*#' "$w" > "${wf_nc}/$(basename "$w")" || true
+          done
           missing=""
           for f in scripts/tests/*.test.sh; do
             b="$(basename "$f")"
-            if ! grep -rqF "$b" .github/workflows/ ; then
+            if ! grep -rqF "$b" "${wf_nc}" ; then
               missing="${missing} ${b}"
             fi
           done
           total="$(ls scripts/tests/*.test.sh | wc -l)"
           echo "守卫脚本共 ${total} 个"
+          # 🔴 反空转下界：glob 不展开时 total 会是 0（且 missing 里会出现字面量通配名），
+          #    那种情况下上面那条 missing 判定虽然也会红，但报错信息会指向一个不存在的 "*.test.sh"，
+          #    把人引向"守卫漏接"而不是"枚举本身坏了"。所以这里显式给出下界并说明真实成因。
+          if [ "${total}" -lt 30 ]; then
+            echo "::error::只枚举到 ${total} 个守卫脚本（下界 30）⇒ 枚举本身坏了，不是守卫漏接。"
+            echo "        先确认工作目录是仓库根、且 scripts/tests 下的 *.test.sh 没有被改名或 gitignore 吞掉。"
+            exit 1
+          fi
           if [ -n "${missing}" ]; then
             echo "::error::以下守卫脚本没有被任何 workflow 引用（CI 不会跑它）：${missing}"
             echo "接法：需要 dist 或 node_modules 的放 server-test job（并断言 note=0，否则它会静默少跑）；"
@@ -484,6 +509,32 @@ jobs:
             exit 1
           fi
           echo "✔ ${total} 个守卫全部已接入 CI"
+          # 🔴 反方向对账（2026-09-22 加）：workflow 引用的守卫文件必须真实存在。
+          #    上面那半防的是"新增守卫忘了接 CI"（静默失效：守卫存在但永远不跑）；
+          #    这半防的是"删掉或改名了守卫却忘了改 workflow"（显性失败：那一步会直接报错，
+          #    但报错信息是 bash 的 "No such file or directory"，不会告诉你是哪个守卫没了、
+          #    也不会告诉你是不是本来就打算删）。两个方向合起来才是完整对账。
+          dangling=""
+          refs="$(grep -rhoE 'scripts/tests/[A-Za-z0-9._-]+\.sh' "${wf_nc}" | sort -u)"
+          refcount="$(printf '%s\n' "${refs}" | grep -c . || true)"
+          for r in ${refs}; do
+            if [ ! -f "${r}" ]; then
+              dangling="${dangling} ${r}"
+            fi
+          done
+          echo "workflow 引用的守卫路径共 ${refcount} 个"
+          # 反空转：一个都没解析到就说明正则坏了（例如某天守卫换了后缀），
+          # 那时"悬空 0"是恒真的绿，必须红。
+          if [ "${refcount}" -lt 30 ]; then
+            echo "::error::只从 workflow 里解析出 ${refcount} 个守卫路径引用（下界 30）⇒ 解析口径坏了。"
+            exit 1
+          fi
+          if [ -n "${dangling}" ]; then
+            echo "::error::以下被 workflow 引用的守卫脚本已不存在（删了或改名了但没改 workflow）：${dangling}"
+            echo "修法：把对应步骤改成新文件名；如果那个守卫是有意删除的，就把那一步一起删掉。"
+            exit 1
+          fi
+          echo "✔ 双向对账通过：${total} 个守卫全部接入 CI，${refcount} 处引用全部指向真实文件"
 
   guards-slow:
     runs-on: ubuntu-22.04
