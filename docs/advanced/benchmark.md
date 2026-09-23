@@ -380,7 +380,7 @@ caddy 模板里 `max_idle_conns_per_host":512`。压测机 `somaxconn=4096`、fd
 
 1. **`VANBLOG_CLUSTER_WORKERS` 要大于 1**（`auto`/`cpus`/`max`/具体数字，上限 32）。这是本轮最重要的一条：
    backlog 提到 4096 只解决了"队列太浅"，**万级并发新建连接需要多个进程一起 accept**。
-   ⚠️ 代价要如实说：每个 worker 一份完整应用（内存近似线性增长）、限流与 mongo 连接池按 worker 数摊薄、
+   ⚠️ 代价要如实说：每个 worker 一份完整应用（🔴 **2026-09-23 实测更正：不是线性** —— 1 worker 1.426 GB、6 worker 1.934 GB，即约 +100–194 MB/worker、总量 1.36–1.85×，因为 worker 间共享只读代码页）、限流与 mongo 连接池按 worker 数摊薄、
    进程内缓存各一份（命中率下降）。打开前请自己压一遍。
 2. **`net.core.somaxconn` 必须 ≥ `VANBLOG_LISTEN_BACKLOG`**：生效值是两者的最小值。本机是 4096，
    但**发行版常见默认是 128** —— 那样配 4096 会被夹到 128，C10K 必然大量 502。
@@ -838,6 +838,8 @@ node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile late
    结果见 **§5.4** —— `auto`（本机 6 核 ⇒ 1 主 + 6 worker）下 **6 臂里 5 臂 `10000/0`、所有臂 `ListenOverflows` Δ=0**，
    而**默认单进程**下 API 路径只有 **8221–8952/10000** 且失败类是 `http_502`、`ListenOverflows` Δ 达 25224。
    👉 **多核机上要万级并发，请把 `VANBLOG_CLUSTER_WORKERS=auto` 当部署前提。**
+   🔴 **2026-09-23 更新：这一条已经不再是"部署者要自己记得设"的前提了 —— 镜像里已经默认 `auto`**
+   （`Dockerfile` 的 `ENV VANBLOG_CLUSTER_WORKERS=auto`）。理由与完整 A/B 见下面第 11 节。
    ⚠️ 取舍不变：**内存随 worker 数近似线性增长
    （与"占用更低"是相反的取舍）。打开前必须自己压一遍。
 3. **AVIF 缩略图**：✅ **已实现，但默认关**（`VANBLOG_THUMB_AVIF=true` 打开）。缩略图会额外产一份
@@ -859,6 +861,99 @@ node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile late
 5. **站点数据里的第三方脚本**（不是代码问题，但对首屏影响最大）：一个 798 KB 的 MathJax（公式已由 KaTeX
    服务端渲染，纯重复）、gtag 与百度统计各加载两次、两个 51la 属性且开着 `screenRecord`、一个超时的计数器图片。
    在后台「定制化」里删掉即可，见 AGENTS §7.38.2。
+
+---
+
+## 11. 🔴 cluster 默认值的 A/B：镜像默认从 1 个 worker 改成 `auto`（2026-09-23）
+
+**为什么做这一轮**：站长要求「以单节点 C10K 为目标，找到最关键的卡点，解决主要问题」。
+本轮的方法是 **测量 → 定位唯一主卡点 → 只改那一件事 → 同镜像复测给差值**。
+
+### 11.1 测量口径（先说清楚，否则数字没法读）
+
+- 🔴 **全部在容器内走 loopback 测**（把压测器 `podman cp` 进容器，打 `http://127.0.0.1:80`）。
+  **这是刻意的**：§5.3 已经证明 **rootless podman 的用户态端口转发器（rootlessport）自己就是瓶颈**
+  （经它的一次测量里有 16.08% 的请求根本没到达 caddy），而它是**本机的运行时属性、不是 VanBlog 的属性**。
+  🔴 站长的部署形态是 **Docker**，而 root 的 docker/podman 发布端口走的是 **iptables DNAT（内核态）**，
+  数据路径里没有用户态转发器 ⇒ **容器内 loopback 才是与"Docker 部署"可比的口径**。
+- 🔴 **每一臂都是"完整部署"**：恢复了真实数据（53 篇文章的整站备份归档），前台 next-server 活着，
+  不是 §5.2 那种"前台已死"的部署。
+- 🔴 **同镜像、同数据、同参数，唯一变量是 `VANBLOG_CLUSTER_WORKERS`**。
+- 🔴 **等 ISR 全量渲染平息后才开测**（恢复会触发全量渲染，不等就会把渲染的 CPU 算进压测）。
+- 压测器：`scripts/benchmark/loadtest.cjs`（未改动）；内核计数器按 `/proc/net/netstat` 的**表头名**定位，
+  在**容器自己的 netns** 里读（🔴 容器内没有 `nstat`，要自己解析那个"键一行、值下一行"的两行格式）。
+
+### 11.2 🔴 结果：唯一的变量就是 worker 数
+
+| 形状 | 1 个 worker（旧默认） | `auto` = 6 worker（新默认） | 变化 |
+| --- | --- | --- | --- |
+| **C10K**（一万条连接挂住后一起请求 `/api/public/meta`） | 建连 10000/10000（0.8s）；请求 **200=8592 失败=1408（14.1%）**，全是 `http_502` | **200=10000 失败=0**（两次复测都是） | 🔴 **达标** |
+| 同上，容器 netns 计数器 | **`TcpExtListenOverflows Δ=18883`**、`ListenDrops Δ=18883`、`TCPSynRetrans Δ=11551`、`TCPTimeouts Δ=13407` | 🔴 **`ListenOverflows`/`ListenDrops`/`SynRetrans` 全 Δ=0** | 内核不再丢 |
+| 同上，用时 | 10.3 s | **6.6 s / 5.5 s** | 约 **1.6–1.9×** |
+| **混合流量**（`mixed`，并发 200，4000 请求） | **470.6 rps**、p50 109 ms、p95 678 ms、**p99 7857 ms**、717.9 Mbps、0 失败 | **591.0 rps**、p50 253 ms、p95 697 ms、**p99 1064 ms**、906.8 Mbps、0 失败 | 🔴 **rps +25.6%、Mbps +26.3%、p99 好 7.4×** |
+| **混合流量**（并发 1000，4000 请求） | **473.2 rps**、p95 6021 ms、707.0 Mbps、0 失败 | **661.6 rps**、p95 3365 ms、999.4 Mbps、0 失败 | 🔴 **rps +39.8%、Mbps +41.4%、p95 好 1.8×** |
+| 容器常驻内存 | **1.426 GB** | **1.934 GB** | **+508 MB**（≈ +100 MB/worker） |
+
+⚠️ **另一组同口径的 A/B（早一步做的，旧镜像 `r32-c10k`）数字略有不同但结论一致**：
+1 worker 两次分别 **失败 23.3%（200=7671）与 13.7%（200=8634）**、`ListenOverflows Δ=22067`；
+6 worker 两次都 **10000/0**、计数器全 Δ=0、内存 1.141 GB → 2.113 GB（≈ +194 MB/worker）。
+🔴 **失败率在 13.7%–23.3% 之间波动（非确定性），但"单 worker 必然大量 502、多 worker 零失败"是稳定可复现的。**
+⚠️ 两组的内存基数不同（1.426 vs 1.141 GB）是因为两次恢复后的 ISR 产物与缓存状态不同 ⇒
+**请按"每 worker 约 +100–194 MB"这个区间预留，不要用某一个单点数字。**
+
+### 11.3 🔴 主卡点的定位（为什么是它，而不是别的）
+
+排除法，每一项都有实测：
+
+| 候选 | 实测结论 |
+| --- | --- |
+| fd 上限 | ❌ 不是。容器内 `ulimit -n` = **1048576** |
+| `somaxconn` | ❌ 不是。容器内实测 **4096**（不是发行版常见的 128） |
+| 应用 listen backlog | ❌ 不是。`VANBLOG_LISTEN_BACKLOG` **代码默认已是 4096**，并且确实透传到 `http.Server.listen(port, host, backlog, cb)`（`main.ts` 的 `listenWithBacklog`）⇒ Node 那个 **511** 的默认值没有生效 |
+| 建连能力 | ❌ 不是。**建连阶段 10000/10000、0.8 s、0 失败**（caddy 收连接毫无压力） |
+| rootlessport | ❌ 不是本轮的对象。它在**本机 rootless** 的发布端口路径上确实是瓶颈（§5.3），但**容器内 loopback 完全绕开它**，而失败依然发生 ⇒ 卡点在服务端 |
+| 🔴 **单个 Node 进程 accept() 的速度** | ✅ **就是它**。失败全部是 `http_502`（caddy 拨上游失败），**且发生在请求阶段而不是建连阶段**；同时容器 netns 的 `TcpExtListenOverflows` 暴涨到 **18883–22067** ⇒ **内核的 accept 队列在溢出**，而 `tcp_abort_on_overflow=0` 让它表现为静默丢包 + 重传 + 超时，最终 caddy 报 502。**加到 6 个进程一起 accept，溢出立刻归零。** |
+
+👉 **一句话：卡点不是"队列太浅"（backlog 早就是 4096），而是"只有一个进程在抽干队列"。**
+
+### 11.4 改了什么（🔴 只改了这一件事）
+
+- 🔴 **`Dockerfile`（runner 阶段）新增 `ENV VANBLOG_CLUSTER_WORKERS=auto`**，附实测数字与代价的注释。
+  ⚠️ 放在 runner 阶段（与 `UV_THREADPOOL_SIZE` 同一个坑：放错 stage 对最终镜像毫无作用）。
+- 🔴 **`docker-compose/docker-compose-template.yml`**：把原来注释掉的 `# VANBLOG_CLUSTER_WORKERS: '2'`
+  改成"镜像已默认 `auto`、通常不用再设"，并 🔴 **更正它自己那句"内存近似线性增长"**（实测是 1.36–1.85×），
+  以及 🔴 **补上它与 `mem_limit: 768m` 的冲突**（6 worker 实测要 1.9–2.1 GB，按模板建议设 768m 会 OOM）。
+- 🔴 **`docs/reference/env.md`**：这个旋钮现在有**两个默认值**（代码 1／镜像 `auto`），
+  表格里必须同时写清并说明**用 Docker 部署时以镜像为准**；并补了 A/B 结论、内存代价、
+  以及 `website` 字段在非 leader worker 上报 `unknown` 的监控口径。
+- 🔴 **`docs/advanced/benchmark.md`**：更正第 10 节那句"内存近似线性增长"，
+  以及 §5.4 那句"请把 `auto` 当部署前提"（现在镜像已经默认打开，不再是部署者要自己记得的前提）。
+- 🔴 **应用代码一行未改**（`resolveClusterWorkers` 的代码默认仍是 **1**，所以 dev 与单测的行为完全不变）。
+
+### 11.5 🔴 如实标注的代价与边界
+
+1. ⚠️ **内存**：+508 MB（1→6 worker，同镜像实测），另一组是 +972 MB。**要设 `mem_limit` 必须按 worker 数预留。**
+2. 🔴 **p50 反而变差了**（并发 200 时 109 ms → 253 ms）。**这不是测量误差，是真实取舍**：
+   每个 worker 各有一份进程内缓存（`/api/public/meta` 的 single-flight 缓存等），
+   **worker 越多、单份缓存的命中率越低** ⇒ 中位数请求更常走到 mongo；
+   但**并行 accept + 并行处理**让尾部（p99 7857 → 1064 ms）与总吞吐大幅改善。
+   🔴 **"p50 变差而 p99 与吞吐变好"要一起报，只报吞吐就是挑数字。**
+3. ⚠️ **限流与 mongo 连接池按 worker 数摊薄**（这是既有设计，`scaleLimit()` 做的，否则阈值会被悄悄放宽 N 倍）。
+4. 🔴 **监控口径变化**：`/api/public/health` 的 `website` 字段在**非 leader** worker 上返回 `unknown`
+   （实测确认）。⚠️ **它不会让探针误判**——四象限契约是 `healthy = mongo.up && website !== 'down'`，
+   `unknown` 仍然是 healthy、`statusCode` 仍 200 ⇒ **不会触发无谓重启**；
+   但"前台是否活着"这个信号在多 worker 下确实变弱了 ⇒ 🔴 **想用它做前台存活告警的人要知道这一点**。
+5. ⚠️ **单核机不受影响**：`auto` = `min(max(1, cpus), 32)` ⇒ 1 核机仍是 1 个 worker，行为与从前完全一致。
+6. 🔴 **本轮没有做"按内存自适应的 worker 数"**（例如 `min(cpus, floor(可用内存 / 每 worker 开销))`）。
+   那是下一步该做的事，本轮刻意不做：①一次只改一件事，才能把提升归因到这个改动；
+   ②它需要读 cgroup 内存上限，是新的代码路径，不该与"改默认值"混在一轮里。
+   ⚠️ **因此低内存多核机（例如 4 核 / 1 GB）开 `auto` 有 OOM 风险** ⇒
+   🔴 **这类部署应当显式设 `VANBLOG_CLUSTER_WORKERS: '1'`**，模板与 env.md 都写了这一点。
+7. ⚠️ **经 rootless 发布端口的那条路径本轮没有复测**（§5.3 已证明瓶颈是 rootlessport 本身，
+   改 cluster 不会改变它）⇒ 🔴 **rootless podman + `ports:` 的部署形态仍然受 rootlessport 限制**，
+   而**这与本轮改动无关、也不是 VanBlog 能在镜像里解决的**（要 root 的 docker/podman，
+   或者让 caddy 监听高位端口以便用 `network_mode: host`——后者需要改 `caddyTemplate.json` 里写死的 `:80`/`:443`，
+   🔴 **本轮没有做，留作候选**）。
 
 ---
 

@@ -184,10 +184,23 @@ services:
       # 访问统计保留天数。**默认 0 = 一行都不删**；最近 30 天无论怎么设都会保留。
       # 参考：本站 8767 行里，90 天的设置会删掉 6520 行（74%）。
       # VANBLOG_VISIT_RETENTION_DAYS: '365'
-      # 多进程（cluster）。默认 1 = 单进程，与以前完全一致。
-      # ⚠️ 打开前请自己压测：每个 worker 一份完整应用，内存近似线性增长；
-      #    限流与连接池会按 worker 数摊薄（这是对的，否则阈值会被悄悄放宽 N 倍）。
-      # VANBLOG_CLUSTER_WORKERS: '2'
+      # 多进程（cluster）。🔴 **镜像已经默认 `auto`**（= 按 CPU 核数开 worker，上限 32；
+      # 单核机 ⇒ 1 个 worker，行为与从前完全一致），所以**这里通常不用再设**。
+      # 为什么镜像要默认打开：万级并发下单进程 accept() 抽不干内核的 accept 队列 ——
+      # 2026-09-23 同镜像同数据同参数的 A/B（容器内 loopback，排除端口转发器）实测：
+      #   1 个 worker ⇒ 一万并发请求 **13.7%–23.3% 失败**（全是 502），
+      #                  容器内 TcpExtListenOverflows Δ=22067；
+      #   auto（6 核 ⇒ 6 worker）⇒ **10000/10000 全 200、ListenOverflows Δ=0**，且快约 **1.8×**。
+      # ⚠️ 代价（实测）：常驻内存 1 worker = 1.141 GB、6 worker = 2.113 GB ⇒ **约 +194 MB/worker**、
+      #    总量 **1.85×**。🔴 所以旧注释里"内存近似线性增长"的说法**不准确**（worker 间共享只读代码页），
+      #    按核数预留内存请用 194 MB/worker。
+      # ⚠️ 与下面的 mem_limit 有交互：6 个 worker 实测要 2.1 GB，**mem_limit: 768m 会 OOM** ⇒
+      #    要设 mem_limit 就按 `1.1 GB + 194 MB × (worker 数 − 1)` 预留，
+      #    或者显式把 worker 数压下来（例如 VANBLOG_CLUSTER_WORKERS: '1'）。
+      # ⚠️ 限流与 mongo 连接池会按 worker 数摊薄（这是对的，否则阈值会被悄悄放宽 N 倍）。
+      # ⚠️ 监控：cluster 下只有 leader worker 会 spawn 前台子进程，所以 /api/public/health 的
+      #    website 字段在非 leader 上会是 "unknown"（不是 "down"，健康判定仍为 healthy）。
+      # VANBLOG_CLUSTER_WORKERS: '1'   # 小内存机器退回单进程
       # picgo 第三方插件安装。**默认关闭**：picgo 1.5.6 依赖的 git-clone（命令注入）与
       # decompress（路径穿越）都没有修复版本，而插件名来自后台的一个输入框。
       # 内置的图床（本地/阿里OSS/七牛/又拍云/sm.ms/github…）都不需要插件。

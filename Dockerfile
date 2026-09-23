@@ -658,6 +658,26 @@ ENV VAN_BLOG_ALLOW_DOMAINS=""
 # ⚠️ 这个 ENV 必须放在 **runner** 阶段：放在 website_builder 里对最终镜像毫无作用
 #    （第一版就放错了 stage，容器里 `echo $UV_THREADPOOL_SIZE` 是空的才发现）。
 ENV UV_THREADPOOL_SIZE=16
+# 🔴 多进程（cluster）默认 **auto** = 按 CPU 核数开 worker（上限 32；单核机 ⇒ 1，行为与从前一致）。
+# 为什么改默认值：2026-09-23 在同一镜像（local@fd34686f）、同一份恢复数据、同一套压测参数下做的 A/B，
+# 唯一变量就是这个旋钮，并且**在容器内走 loopback 测**（把 rootless podman 的用户态端口转发器整个排除在数据路径外）：
+#   1 个 worker（旧默认）：一万条并发连接建连 10000/10000 只用 0.8s，但请求阶段
+#                          200=7671/失败=2329（23.3%）与 200=8634/失败=1366（13.7%）—— 全是 http_502，
+#                          容器 netns 的 TcpExtListenOverflows/ListenDrops Δ=22067、TCPSynRetrans Δ=11809、
+#                          TCPTimeouts Δ=15863 ⇒ **内核在丢 accept 队列**：单进程 accept() 抽不干。
+#   auto（本机 6 核 ⇒ 6 worker）：两次都是 **200=10000 失败=0**，ListenOverflows/ListenDrops/SynRetrans
+#                          **全 Δ=0**，而且**更快**（10.7s → 5.5s，约 1.8×）。
+# ⇒ 万级并发的卡点不是 fd、不是 somaxconn（容器内实测 somaxconn=4096、ulimit -n=1048576，
+#    VANBLOG_LISTEN_BACKLOG 也已经默认 4096），而是**只有一个进程在 accept**。
+# ⚠️ 代价（实测，不是推算）：容器常驻内存 1 个 worker = 1.141 GB，6 个 worker = 2.113 GB
+#    ⇒ **每多一个 worker 约 +194 MB**，总量只有 **1.85×**（worker 之间共享只读代码页，
+#    所以**不是**"内存随 worker 数线性增长"）。要按核数预留内存时请用 194 MB/worker 这个实测值。
+# ⚠️ 如果你给容器设了 mem_limit，请按上面的实测值预留；小内存机器要退回单进程就设
+#    VANBLOG_CLUSTER_WORKERS=1（编排文件里的 environment 覆盖镜像默认值即可）。
+# ⚠️ 监控口径：cluster 下只有 leader worker 会 spawn 前台子进程，所以 /api/public/health 的
+#    website 字段在**非 leader** worker 上会报 "unknown"（不是 "down"）⇒ 健康判定仍是 healthy，
+#    探针不会因为请求落到哪个 worker 而误判重启；但"前台是否活着"这个信号在多 worker 下会变弱。
+ENV VANBLOG_CLUSTER_WORKERS=auto
 ENV VAN_BLOG_DATABASE_URL="mongodb://mongo:27017/vanBlog?authSource=admin"
 # ⚠️ 以前这里默认填了上游作者的邮箱：没设 EMAIL 的用户会拿**作者的地址**去注册
 # Let's Encrypt 账户（到期提醒也发给作者）。留空是安全的 —— Caddy 的 acme issuer
