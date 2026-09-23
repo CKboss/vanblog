@@ -281,7 +281,7 @@ describe('恢复之后 RSS 与 sitemap 必须真的被写出来（容器实测�
     }
   });
 
-  it('两条恢复路由都传了 delay=1000（源码级钉子：漏掉就是"恢复完 3 分钟内 /feed.xml 404"）', () => {
+  it('已知的两条恢复路由都传了 delay=1000（源码级钉子：漏掉就是"恢复完 3 分钟内 /feed.xml 404"）', () => {
     const backup = code(read('controller/admin/backup/backup.controller.ts'));
     expect(backup).toContain("this.isrProvider.activeAll('整站恢复触发全量渲染！', 1000)");
     const init = code(read('controller/admin/init/init.controller.ts'));
@@ -329,7 +329,7 @@ describe('needsRestartForPipelineDeps：恢复响应里必须带这个布尔值'
     warn.mockRestore();
   });
 
-  it('两条路由的 data 里都透出这个字段（前台不必解析中文 notes）', () => {
+  it('已知的两条路由的 data 里都透出这个字段（前台不必解析中文 notes）', () => {
     for (const file of [
       'controller/admin/backup/backup.controller.ts',
       'controller/admin/init/init.controller.ts',
@@ -386,7 +386,7 @@ describe('B7 · 日志卫生（空 catch 与 console.log 会把失败藏起来�
     expect(src).toContain('代码高亮失败');
   });
 
-  it('图床导出不再用 console.log 记录成功/失败', () => {
+  it('图床导出不再用 console.log(r)/console.log(err) 这两个形状记录成功/失败', () => {
     const src = code(read('provider/static/local.provider.ts'));
     expect(src).not.toContain('console.log(r)');
     expect(src).not.toContain('console.log(err)');

@@ -22,7 +22,9 @@ import {
  * `<static>/tmp/full-restore-*` 是整站恢复的解包树（**含密码哈希与 JWT 密钥的 NDJSON 明文**）⇒
  * 绕过暴露的是全系统最敏感的数据（JWT 密钥可用于**伪造管理员会话**）。
  *
- * ⚠️ **为什么现有测试没覆盖这一维**：`audit-hardening-round4-security-staticguard.spec.ts:123`
+ * ⚠️ **为什么现有测试没覆盖这一维**：`audit-hardening-round4-security-staticguard.spec.ts` 里
+ * （🔴 按符号指路，不写行号 —— 行号必然漂移且漂移后不会有任何东西变红；本行原先写着 `:123`，
+ *  在 2026-09-23 那次给同文件补条数断言之后就漂到了 126，而没有任何守卫报红）
  * 钉的是 `guardedStaticFirstSegment('/static/Export/f.zip') === 'export'`，即**段**的大小写；
  * 而**前缀**的大小写（`/STATIC/export/…`）一条都没有 ⇒ 两套口径里只测了被修过的那一套。
  */

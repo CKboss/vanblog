@@ -16,7 +16,7 @@ const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 const code = stripCommentsForAnchor;
 
 describe('每次浏览的数据库开销：合并写入', () => {
-  it('MetaProvider.addViewer 不再自己写四个集合，而是交给 ViewStatsProvider', () => {
+  it('MetaProvider.addViewer 已改为交给 ViewStatsProvider，那四个旧写入形状不再出现', () => {
     const src = code(read('provider/meta/meta.provider.ts'));
     expect(src).toContain('this.viewStats.record(');
     // 以前那四处直接写库的痕迹必须消失
@@ -101,7 +101,7 @@ describe('visits 的重复行与唯一索引', () => {
     expect(util).toContain("RETENTION_FLOOR = '0000-00-00'");
   });
 
-  it('每日 cron 里的两处 fire-and-forget 写入都挂了 catch', () => {
+  it('每日 cron 里已知的两处 fire-and-forget 写入都挂了 catch（未做枚举，新增第三处不会红）', () => {
     const src = code(read('schedule/viewer.task.ts'));
     expect(src).toMatch(/createOrUpdate\([\s\S]*?\)\s*\n\s*\.catch\(/);
     expect(src).toMatch(/pruneStats\('每日定时清理'\)\s*\n\s*\.catch\(/);

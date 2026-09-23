@@ -283,6 +283,8 @@ describe('SiteMap：从 setTimeout 里发出去就不管地调，所以必须自
       .spyOn((provider as any).logger, 'error')
       .mockImplementation(() => undefined);
     await expect(provider.generateSiteMapFn('整站恢复')).resolves.toBeUndefined();
+    // 🔴 标题承诺「只打一条」，而此前只断言了内容含来源、没有断言条数 ⇒ 打三条也照样绿（§7.119.2）。
+    expect(error.mock.calls).toHaveLength(1);
     const text = error.mock.calls.map((c) => String(c[0])).join('\n');
     expect(text).toContain('生成 SiteMap 失败');
     expect(text).toContain('整站恢复');

@@ -77,7 +77,7 @@ describe('REGRESSION R4-4：/static 的匿名 403 护栏曾经可以被编码/�
     expect(main).not.toMatch(/req\.path\.startsWith\('\/static\/upload-tmp\/'\)/);
   });
 
-  it('新实现对全部 6 种绕过写法都判定为"该挡"，同时不误伤公开路径', () => {
+  it('新实现对全部绕过写法（当前 15 条，条数已钉住）都判定为"该挡"，同时不误伤公开路径', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { isGuardedStaticPath, guardedStaticFirstSegment, backupFirstSegmentUnderStatic, ESCAPED } = require('./utils/staticGuard');
     const guarded = [
@@ -100,6 +100,9 @@ describe('REGRESSION R4-4：/static 的匿名 403 护栏曾经可以被编码/�
     for (const p of guarded) {
       expect([p, isGuardedStaticPath(p, null)]).toEqual([p, true]);
     }
+    // 🔴 标题此前写「6 种」而实际枚举 15 条（断言比标题强，但那个数字是错的）⇒ 改成钉住条数：
+    // 增删绕过写法必须显式改这里，否则「新增一种绕过写法而没人注意到」不会有任何东西变红。
+    expect(guarded.length).toBe(15);
     const allowed = [
       '/static/img/a.webp',
       '/static/img/thumb/a.webp',
@@ -129,7 +132,7 @@ describe('REGRESSION R4-4：/static 的匿名 403 护栏曾经可以被编码/�
     expect(isGuardedStaticPath('/static/%62ackups/full.tar.zst', 'backups')).toBe(true);
   });
 
-  it('端到端：把新护栏 + express.static 串起来，6 种绕过写法全部 403，公开文件照常 200', async () => {
+  it('端到端：把新护栏 + express.static 串起来，绕过写法全部 403，公开文件照常 200', async () => {
     const express = require('express');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { isGuardedStaticPath } = require('./utils/staticGuard');
