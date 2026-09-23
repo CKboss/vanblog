@@ -59,7 +59,7 @@ describe('REGRESSION R4-11（已修）：excerpt 现在有硬上限 —— `<!--
     expect(articleOverviewMarkdown(noMarker).length).toBeLessThanOrEqual(DEFAULT_OVERVIEW_CHARS + 10);
   });
 
-  it('活体实测：withExcerpt 把响应从 37 KB 撑到 1.68 MB，而 content 字段其实已经被剥掉了', () => {
+  it('活体实测（**本组修复落地前**的历史记录）：withExcerpt 曾把响应从 37 KB 撑到 1.68 MB，而 content 字段其实已经被剥掉了', () => {
     // 一次性实例（312 篇 × ~20 KB，标记都在正文末尾）：
     //   GET /api/public/article?pageSize=100&toListView=true                  ->  37,884 B
     //   GET /api/public/article?pageSize=100&toListView=true&withExcerpt=true -> 1,685,104 B  (44×)
@@ -68,10 +68,19 @@ describe('REGRESSION R4-11（已修）：excerpt 现在有硬上限 —— `<!--
     // 服务端时间：p50 629 ms（8 并发），单请求吞吐上限约 11.7 rps
     // ⇒ 一个匿名客户端按 600 次/分钟（全局限流）打，就能吃满一个进程。
     expect(Math.round(1685104 / 37884)).toBe(44);
-    // 真实站点上暂时看不出来（53 篇里最大的 excerpt 只有 687 字），因为站长的标记都放得很早 ——
-    // 也就是说这条**当前不是事故，而是一个由作者行为决定的、没有护栏的放大器**：
-    // 一篇把 `<!-- more -->` 放在文末的长文（或导入工具批量追加的标记）就能让首页
-    // 与这个匿名接口重新变成"下发全文"，而 §7.42/§7.48 的整个目的正是不要下发全文。
+    // 🔴 2026-09-23 更正：**下面这段原文与本 describe 的标题直接矛盾**，而矛盾存在了整整一轮。
+    //    原文（修复落地前写的）：「真实站点上暂时看不出来（53 篇里最大的 excerpt 只有 687 字），
+    //    因为站长的标记都放得很早 —— 也就是说这条**当前不是事故，而是一个由作者行为决定的、
+    //    没有护栏的放大器**：一篇把 `<!-- more -->` 放在文末的长文（或导入工具批量追加的标记）
+    //    就能让首页与这个匿名接口重新变成"下发全文"，而 §7.42/§7.48 的整个目的正是不要下发全文。」
+    //    🔴 而本 describe 的标题写的是「REGRESSION R4-11（**已修**）：excerpt 现在**有硬上限** ——
+    //    `<!-- more -->` 放得晚**也不会**把全文当摘要下发」⇒ **护栏已经在了**
+    //    （`MARKER_EXCERPT_MAX_CHARS = 400`，由本组第一条与最后一条断言钉住），
+    //    所以"没有护栏"与"放得晚就能重新变成下发全文"**都已不成立**：现在最坏是 400 字/篇。
+    //    ⚠️ 上面那句"53 篇里最大的 excerpt 只有 687 字"也是当时的语料：本站现在是 59 篇，
+    //    而 687 > 400 ⇒ 那一篇现在会被截到 400（见 CHANGELOG 的 excerpt 上限那一条）。
+    //    👉 这与 R4-14 那一族同源：**修复落地时只改了承重的那条断言，没有回头清理同一块里的旧叙述** ⇒
+    //    一个 describe 内部出现"标题说已修、正文说没护栏"的自相矛盾，而两者都不会让测试变红。
     expect(MAX_ARTICLES_PER_PAGE).toBe(50);
   });
 
@@ -241,19 +250,62 @@ describe('REGRESSION R4-13（已修）：GET /api/public/comments/counts 曾经�
   });
 });
 
-describe('FINDING R4-14（设计取舍，但值得知道）：GET /api/public/article 默认视图**带正文**，pageSize 上限 100', () => {
-  it('匿名一次 GET 最多拿走 100 篇全文（实测 1.73 MB），而前台自己用的是 toListView+withExcerpt', () => {
-    // 实测（312 篇语料）：
+describe('REGRESSION R4-14（已修：全文列表闸门已落地）：匿名"带正文"形态被夹到 20 篇，不再是 100', () => {
+  // 🔴 2026-09-23 更正（本块此前是 `FINDING R4-14（设计取舍，但值得知道）`，而它描述的现状已经不存在了）：
+  //    审计写于 2026-09-17；**三天后**的 `791e3b75`（"close the anonymous resource-exhaustion paths"）
+  //    就落地了本块那条 `xit` 里提的**第二个选项** —— 把"公开列表带正文"这一形态的单页上限单独降到 20
+  //    （`controller/public/public.controller.ts` 的 `FULL_CONTENT_MAX_PAGE_SIZE`），
+  //    并在同一个提交里带来了 `controller/public/publicReadAmplification.spec.ts` 的 6 条行为级断言
+  //    （含一条"把闸门拿掉 ⇒ 第一条必须红"的负向对照）。
+  //    🔴 而本块的 describe 标题、第一条 `it` 的标题、以及那条 `xit` 的建议**一个字都没跟着改**，
+  //    于是它在**三天里**一直按"匿名一次能拿 100 篇全文（1.73 MB）、单 IP 每分钟 ~0.9 GB 出口"描述现状，
+  //    并且 `xit` 还在劝人「建议**不要**默默改；要么加环境变量，要么只做 R4-11」⇒
+  //    🔴 **一条 parked 的设计方案在劝人不要做一件已经做了的事。**
+  //    这是 §7.121 那条规矩的实例：**parked 方案会随时间变成一份过时的说明书，而它比注释更危险**
+  //    （更长、更完整、看起来更权威），所以**实施前必须复核**。
+  //
+  // ⚠️ 落地形状与原方案的两处偏离（都是刻意的，理由写在 `FULL_CONTENT_MAX_PAGE_SIZE` 的文档注释里）：
+  //    ① **没有加环境变量**（原方案的第一选项是"加 env、默认保持今天的行为"）：放宽就直接改那个常量。
+  //       原方案担心的是"破坏第三方 API 契约"，而落地选了更温和的形状 ——
+  //       🔴 **默认视图仍然含正文（契约没变）**，只压单次放大倍数（第三方拉全文要分 5 倍多的页），
+  //       所以不需要用 env 去保住旧行为。
+  //    ② **不是"收给内部调用"**：匿名仍然能拿到全文，只是单页最多 20 篇；
+  //       内部调用（`isInternalRequest`：回环直连或带内部令牌）完全不受闸门影响。
+  //
+  // 🔴 **分工（不要在这里重复行为级断言）**：本块只钉**审计的处置结论与选定的数值**；
+  //    "闸门对哪些请求形态生效"由 `controller/public/publicReadAmplification.spec.ts` 行为级钉住
+  //    （匿名+默认⇒夹到 20；`toListView=true`⇒不夹；`?toListView=false` 这个**字符串**按 provider
+  //    的真值口径算列表视图⇒不夹；内部调用⇒`pageSize=-1` 仍表示全部；小 pageSize⇒照常放行；
+  //    把闸门拿掉⇒第一条必须红）。同一性质只留一处权威口径。
+  it('处置结论：闸门存在、值是 20、且远小于 MAX_PAGE_SIZE；下面的 1.73 MB / 0.9 GB 是闸门落地前的历史实测', () => {
+    // 历史实测（312 篇语料，2026-09-17 审计时，**闸门尚未落地**）：
     //   ?pageSize=100                                  -> 1,687,940 B / p50 629 ms / 11.7 rps
     //   ?pageSize=100&toListView=true                  ->    37,884 B
     //   ?pageSize=100&toListView=true&withExcerpt=true -> 1,685,104 B（见 R4-11）
     // 全仓库没有任何前台代码调 `/api/public/article` 的"带正文"形态（grep 过 packages/website
     // 与 packages/admin），所以这 1.73 MB 纯粹是给外部消费者的 —— 也就是给攻击者的放大器。
-    expect(MAX_PAGE_SIZE).toBe(100);
     expect(DEFAULT_PAGE_SIZE).toBe(5);
     // 按全局限流 600 次/分钟/IP 算：单 IP 就能拉 ~1 GB/分钟 的出口流量，
     // 同时把进程钉在 ~11.7 rps 的上限（p50 629 ms ⇒ 8 并发即饱和）。
+    // 🔴 这两行是**闸门落地前**的历史记录，保留作为审计依据（数字本身是算术，不会漂）。
     expect(Math.round((1687940 * 600) / 1024 / 1024 / 1024 * 10) / 10).toBe(0.9);
+    expect(MAX_PAGE_SIZE).toBe(100);
+
+    // 🔴 **处置结论**：闸门存在、值是 20、且远小于 MAX_PAGE_SIZE(100)。
+    //    ⚠️ 从源码取这个数（本文件既有口径就是 `read(...)` 源码钉子），**不 import 控制器类** ——
+    //    那会把 Nest 的模块图拖进这个纯静态的审计 spec。
+    const ctrl = read('./controller/public/public.controller.ts');
+    const gate = /export const FULL_CONTENT_MAX_PAGE_SIZE = (\d+);/.exec(ctrl);
+    expect(gate).not.toBeNull();
+    expect(Number(gate![1])).toBe(20);
+    expect(Number(gate![1]) < MAX_PAGE_SIZE).toBe(true);
+    // 🔴 单次放大倍数因此降到 1/5（这是**确定性**的比值，不是实测；
+    //    出口字节数会按每篇正文大小线性缩放，本轮没有复测，所以这里不断言字节数）。
+    expect(Number(gate![1]) / MAX_PAGE_SIZE).toBe(0.2);
+    // 🔴 但**放大没有被消灭**，如实写明：按同一份历史实测线性折算，单 IP 每分钟出口上界
+    //    从 ~0.9 GB 降到 ~0.19 GB（折算值，非复测）。闸门压的是**单次**放大倍数，
+    //    而按 IP 的限流对僵尸网络仍然无效 —— 这一点 R4-14 没有改变，也没有声称改变。
+    expect(Math.round((1687940 * 0.2 * 600) / 1024 / 1024 / 1024 * 100) / 100).toBe(0.19);
   });
 
   it('publicView 投影**不含 password**，加密文章的 content 也在 isPublic 分支里被抹掉（源码钉子）', () => {
@@ -264,30 +316,60 @@ describe('FINDING R4-14（设计取舍，但值得知道）：GET /api/public/ar
     expect(src).toMatch(/content: undefined,\s*\n\s*password: undefined,\s*\n\s*private: true,/);
   });
 
-  xit('AFTER THE FIX（可选）：把"公开列表带正文"这条路收给内部调用', () => {
-    // 与 pageSize=-1 同一个开关：`const unlimited = isInternalRequest(req)` 已经在控制器里了，
-    // 只要再加一句"isPublic && !toListView && !unlimited ⇒ 强制 toListView"，
-    // 或者把公开列表的 MAX_PAGE_SIZE 单独降到 20。
-    // blast radius：**会改公开 API 契约** —— 任何直接消费 `GET /api/public/article`
-    // 且不带 toListView 的第三方（RSS 阅读器插件、别人的前台）会拿不到 content。
-    // 因为这是破坏性的，建议**不要**默默改；要么加环境变量（默认保持今天的行为），
-    // 要么只做 R4-11（给 excerpt 封顶）——后者已经把最贵的那条路收住了。
-    expect(true).toBe(true);
+  // 🔴 2026-09-23 由 xit 翻成 it（照 R4-12/R4-13 的先例）。⚠️ **与那两条不同**：
+  //    R4-12/R4-13 是"当轮实施了修复"，而 R4-14 的修复**早在 2026-09-20 的 `791e3b75` 就落地了**，
+  //    这条 `xit` 只是**一直没人翻** ⇒ 翻它的语义是"**确认现状已符合 AFTER THE FIX 的描述**"，
+  //    所以 body 必须是**对当前代码的真断言**，🔴 不能再是一条恒真的 `expect(true)`。
+  // ⚠️ 原方案给的第一个选项（"强制 toListView"，即把这条路**收给内部调用**）**没有被采用** ——
+  //    落地的是第二个选项（单独降上限），所以标题也跟着改成了实际落地的形状。
+  it('AFTER THE FIX（已实现，采用原方案的第二个选项）：公开"带正文"列表的单页上限单独降到 20', () => {
+    // 原方案（保留作为审计记录）：
+    //   与 pageSize=-1 同一个开关：`const unlimited = isInternalRequest(req)` 已经在控制器里了，
+    //   只要再加一句"isPublic && !toListView && !unlimited ⇒ 强制 toListView"，
+    //   或者把公开列表的 MAX_PAGE_SIZE 单独降到 20。
+    //   blast radius：**会改公开 API 契约** —— 任何直接消费 `GET /api/public/article`
+    //   且不带 toListView 的第三方（RSS 阅读器插件、别人的前台）会拿不到 content。
+    //   因为这是破坏性的，建议**不要**默默改；要么加环境变量（默认保持今天的行为），
+    //   要么只做 R4-11（给 excerpt 封顶）——后者已经把最贵的那条路收住了。
+    //
+    // 🔴 实际落地的是"单独降上限"，但**不是给整个公开列表降**，而是**按响应是否含全文分档**：
+    //    `wantsFullContent = !toListView` 时才夹到 20 ⇒ 契约没有破坏（默认视图仍含正文），
+    //    前台列表（显式传 `toListView=true`）与内部调用都不受影响。
+    //    也因此**不需要**原方案担心的那个环境变量：没有"旧行为"需要保住。
+    const ctrl = read('./controller/public/public.controller.ts');
+    // ① 闸门常量存在、值是 20（**选定的数值**由本条钉住；
+    //    `publicReadAmplification.spec.ts` 刻意只钉相对关系 `toBeLessThan(MAX_PAGE_SIZE)`，两边不重复）
+    expect(ctrl).toMatch(/export const FULL_CONTENT_MAX_PAGE_SIZE = 20;/);
+    // ② 🔴 它不是死常量：真的接到了 `sanitizePagination` 的 `maxPageSize` 上。
+    //    ⚠️ 这里**刻意不钉完整的条件表达式**（`wantsFullContent && !unlimited ? … : undefined`）——
+    //    "对哪些请求形态生效"是 `publicReadAmplification.spec.ts` 的职责（它有 6 条行为级断言
+    //    与一条"把闸门拿掉必须红"的负向对照），在这里再钉一遍源码形状就会造出第二份会漂移的口径。
+    expect(ctrl).toMatch(/maxPageSize:[\s\S]{0,80}?FULL_CONTENT_MAX_PAGE_SIZE/);
+    // ③ 🔴 "内部调用不受影响"这个前提仍然在（闸门用它做例外，所以它必须存在）
+    expect(ctrl).toMatch(/const unlimited = isInternalRequest\(req\);/);
   });
 });
 
 describe('REGRESSION R4-C：公开面的护栏（前几轮修的）全部还在', () => {
-  it('pageSize=-1 仍然只给内部调用：匿名请求被夹到 MAX_PAGE_SIZE', () => {
+  it('pageSize=-1 仍然只给内部调用；匿名请求被夹到上限（列表视图是 MAX_PAGE_SIZE，"带正文"形态另受 R4-14 的 20 篇闸门）', () => {
     // 控制器：const unlimited = isInternalRequest(req); sanitizePagination(..., {allowUnlimited: unlimited})
     const c = read('./controller/public/public.controller.ts');
     expect(c).toMatch(/const unlimited = isInternalRequest\(req\);/);
     expect(c).toMatch(/allowUnlimited: unlimited,/);
     expect(sanitizePagination(1, -1, { allowUnlimited: false }).pageSize).toBe(DEFAULT_PAGE_SIZE);
     expect(sanitizePagination(1, -1, { allowUnlimited: true }).pageSize).toBe(-1);
+    // ⚠️ 2026-09-23 更正：这几次调用**都没有传 `maxPageSize`**，所以它们钉的是
+    //    `sanitizePagination` 的**默认**夹取行为（上限 = MAX_PAGE_SIZE = 100）。
+    //    🔴 而控制器在"响应含全文"那一档会**另外**传 `maxPageSize: FULL_CONTENT_MAX_PAGE_SIZE`(20)
+    //    （见上面 R4-14 那块）⇒ **"匿名请求被夹到 100"只对列表视图成立**。
+    //    那一档的行为级覆盖在 `controller/public/publicReadAmplification.spec.ts`，这里不重复。
     expect(sanitizePagination(1, 100000, { allowUnlimited: false }).pageSize).toBe(MAX_PAGE_SIZE);
     expect(sanitizePagination(1, 0, { allowUnlimited: false }).pageSize).toBe(DEFAULT_PAGE_SIZE);
     expect(sanitizePagination(1, 'abc', { allowUnlimited: false }).pageSize).toBe(DEFAULT_PAGE_SIZE);
-    // 活体：外部客户端（带 XFF）?pageSize=-1 -> 返回 5 篇（回落到默认），?pageSize=100000 -> 100 篇
+    // 活体（**闸门落地前**测的）：外部客户端（带 XFF）?pageSize=-1 -> 返回 5 篇（回落到默认），
+    //   ?pageSize=100000 -> 100 篇。
+    // 🔴 2026-09-23 更正：`?pageSize=100000` 现在**要看形态** —— 默认（含全文）会被夹到 **20**，
+    //   只有显式 `toListView=true` 才是 100（`?pageSize=-1` 回落默认那一条没变）。
   });
 
   it('搜索词限长 200 且元字符被转义（防 500 与灾难性回溯）', () => {
@@ -453,7 +535,33 @@ describe('停用的测试必须遵守 AFTER THE FIX 约定，不许静默停着�
     expect(good.noConvention).toEqual([]);
   });
 
-  it('全仓没有任何"不遵守约定就停着"的测试；本文件那 1 条遵守', () => {
+  // 🔴 2026-09-23 新增（R4-14 落地后全仓 parked 数变成 0）：**N=0 之后唯一承重的那条反空转**。
+  //    上面那条合成对照喂的是**手写的小字符串**，它证明不了扫描器在**真实文件的形状**上有效
+  //    （真实文件有几百行、有 import、有中文标题、有各种缩进）。而 `toBe(0)` 在扫描器坏掉时也是绿的
+  //    ⇒ 所以这里把合成的停用行**注入一份真实 spec 的内容之后**再喂给扫描器。
+  //    🔴 判据是"扫描器必须真的在真实文件里把它找出来"，因此把扫描器弄坏（例如恒返回空清单）
+  //    会让这一条红 —— 这正是原来那条 `toBe(1)` 提供的保证，只是不再依赖"仓库里恰好还有 parked 测试"。
+  it('反空转（parked 数为 0 之后承重的那一条）：把停用行注入一份真实 spec，扫描器必须识别出来', () => {
+    const realRel = 'audit-hardening-round4-security-public-cost.spec.ts';
+    const realRaw = readFileSync(join(__dirname, realRel), 'utf8');
+    // ① 先证明这份真实文件现在**确实**是 0 条（R4-12 与 R4-14 都已翻成真 `it`）
+    expect(scanParked([{ rel: realRel, raw: realRaw }]).parked).toEqual([]);
+    // ② 注入一条**遵守约定**的停用行 ⇒ 必须被数到，且不报标题违规、不报缺约定
+    const conforming = realRaw + '\n  ' + "xit('AFTER THE FIX：注入的对照行', () => {});\n";
+    const inj = scanParked([{ rel: realRel, raw: conforming }]);
+    expect(inj.parked.length).toBe(1);
+    expect(inj.parked[0].startsWith(realRel + ':')).toBe(true);
+    expect(inj.badTitle).toEqual([]);
+    expect(inj.noConvention).toEqual([]);
+    // ③ 注入一条**不遵守约定**的停用行 ⇒ 标题违规必须被抓到，且失败信息里带着那个标题
+    const violating = realRaw + '\n  ' + "xit('随便停一个用例', () => {});\n";
+    const bad = scanParked([{ rel: realRel, raw: violating }]);
+    expect(bad.parked.length).toBe(1);
+    expect(bad.badTitle.length).toBe(1);
+    expect(bad.badTitle[0]).toContain('随便停一个用例');
+  });
+
+  it('全仓没有任何"不遵守约定就停着"的测试；R4-14 翻掉之后全仓 parked 数为 0', () => {
     const specs: string[] = [];
     const walk = (dir: string) => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -472,11 +580,16 @@ describe('停用的测试必须遵守 AFTER THE FIX 约定，不许静默停着�
       raw: readFileSync(f, 'utf8'),
     }));
     const { parked, badTitle, noConvention } = scanParked(entries);
-    // 反空转第二层：这个扫描器在本文件里必须真的看到那 1 条（否则口径坏了也看不出来）
-    // 🔴 2026-09-23：R4-12 落地后它的 `xit` 已翻成真 `it`，所以这里从 2 降到 1。
-    //    ⚠️ 这条下界**不是**"必须存在 xit"—— 若 R4-14 也落地，它应当再降到 0，
-    //    那时请把断言改成 toBe(0) 而不是删掉它（删掉会让扫描器坏掉时变成空的绿）。
-    expect(parked.filter((x) => x.startsWith('audit-hardening-round4-security-public-cost.spec.ts')).length).toBe(1);
+    // 🔴 2026-09-23（R4-14 落地）：本文件的 parked 数从 1 降到 **0**，所以这条按约定改成 toBe(0)
+    //    而不是删掉 —— 它现在钉的是"**这个文件里一条停用的测试都不许有**"（R4-12 与 R4-14 都已翻）。
+    //    ⚠️ 但 `toBe(0)` **本身发现不了扫描器坏掉**（恒返回空清单时 0 == 0 照样绿）⇒
+    //    🔴 "扫描器在真实文件上确实有效"这个反空转责任已经移到下面那条**注入对照**上，
+    //    两层合起来才等价于原来那条 `toBe(1)` 提供的保证。
+    expect(parked.filter((x) => x.startsWith('audit-hardening-round4-security-public-cost.spec.ts')).length).toBe(0);
+    // 🔴 全仓也一条都不许有：R4-14 翻掉之后，仓库里已经没有任何停用的测试了。
+    //    （若将来有人按约定新停一条，这条会红 ⇒ 他必须回来把这里的期望值改成对应的数，
+    //     而那个"必须回来改"正是要的摩擦。）
+    expect(parked).toEqual([]);
     // 🔴 核心性质。失败信息点名 file:line 与标题 ⇒ 读日志的人知道该改哪里。
     expect(badTitle).toEqual([]);
     expect(noConvention).toEqual([]);
