@@ -524,7 +524,20 @@ describe('公开搜索：去重从 O(k²) 降到 O(k)，结果逐项不变', () 
     ];
     const { provider } = makeSearchProvider(rows);
     const res = await provider.searchByString('kafka', false);
-    expect(res.length).toBe(2);
+    // 🔴 2026-09-23：R4-12（公开搜索投影掉 content）之后这里是 3，不是 2。
+    //    这不是"随手改的数字"，而是 R4-12 的**固有行为差异**，来源是：投影掉 content 之后
+    //    Node 侧无法再判断"某篇是不是命中在正文"，只能用**集合差**
+    //    （content 命中 = rawData 减去 title/tag/category 的命中）⇒
+    //    于是"JS 四个字段都匹配不上"的文档会被**保留 = 相信数据库的判定**，
+    //    而不再像以前那样被 JS 那一趟**静默丢掉**。夹具第 2 行那个 `{}` 就是这一类的替身。
+    //    🔴 真实世界的等价情形：用户搜 `İstanbul`，Mongo 的 `$regex($options:'i')` 认为某篇命中，
+    //    而 JS 的 `toLocaleLowerCase` 认为不命中 ⇒ **旧行为把这篇丢掉，用户搜不到本该搜到的东西**。
+    //    ⇒ 所以 R4-12 修掉的不只是内存与耗时，还有这个**召回缺陷**（已写进 CHANGELOG）。
+    //    ⚠️ 安全性不受影响：deleted / hidden / visiblePublishFilter() / private / 加密分类名单
+    //    全部是 DB 侧的 `$and` 条件，投影不改任何一条 ⇒ 被保留的文档本来就已通过全部可见性过滤。
+    //    ⚠️ 生产里 Mongo 只返回"在 4 个字段之一命中"的文档，所以那个 `{}` 在真实查询下不会被返回；
+    //    本用例要证的"字段缺失不会让公开搜索 500"仍然成立（没有抛异常，三篇都被正常处理）。
+    expect(res.length).toBe(3);
   });
 
   it('article.provider 的公开搜索去重已换成 Set，那个历史形状不再出现（剥掉注释再断言）', () => {

@@ -129,14 +129,20 @@ describe('REGRESSION R4-11（已修）：excerpt 现在有硬上限 —— `<!--
   });
 });
 
-describe('FINDING R4-12（尚未修）：公开搜索把 ≤200 篇**全文**捞回 Node，而响应里一个字的正文都没有', () => {
-  it('查询没有投影；而控制器的 toSearchResult 只回 6 个字段（源码钉子）', () => {
+describe('REGRESSION R4-12（已修）：公开搜索曾把 ≤200 篇**全文**捞回 Node，而响应里一个字的正文都没有', () => {
+  it('查询现在带 { content: 0, password: 0 } 投影；toSearchResult 仍只回 6 个字段（源码钉子）', () => {
     const src = read('./provider/article/article.provider.ts');
     const searchFn = src.slice(src.indexOf('async searchByString('), src.indexOf('async deleteById('));
     expect(searchFn).toMatch(/\.limit\(SEARCH_MAX_RESULTS\)/);
     expect(searchFn).toMatch(/\.maxTimeMS\(SEARCH_MAX_TIME_MS\)/);
-    expect(searchFn).not.toMatch(/\.select\(|\.projection\(|, \{ content: 0/); // ← 没有投影
-    expect(searchFn).toMatch(/const contentData = rawData\.filter\(\(each\) => text\(each\.content\)\.includes\(s\)\);/);
+    // 🔴 R4-12 已修：投影写在 find 的第二个实参（本仓库既有风格，不用链式写法）
+    expect(searchFn).toMatch(/\{ content: 0, password: 0 \},/);
+    expect(searchFn).not.toMatch(/\.select\(|\.projection\(/);
+    // 🔴 "命中在正文"这一趟不再读 content，改成集合差
+    expect(searchFn).toMatch(/const contentData = rawData\.filter\(\(each\) => !matchedOutsideContent\.has\(each\)\);/);
+    expect(searchFn).not.toMatch(/text\(each\.content\)/);
+    // 🔴 可见性过滤一条都没被投影削弱（与 §7.57 H 那条钉子互为印证）
+    expect(searchFn).toMatch(/visiblePublishFilter\(\)/);
     const toSearchResult = src.slice(src.indexOf('toSearchResult(articles'), src.indexOf('toSearchResult(articles') + 400);
     for (const field of ['title', 'id', 'category', 'tags', 'updatedAt', 'createdAt']) {
       expect(toSearchResult).toContain(field);
@@ -172,7 +178,7 @@ describe('FINDING R4-12（尚未修）：公开搜索把 ≤200 篇**全文**捞
     expect(read('./controller/public/public.controller.ts')).toMatch(/data: this\.articleProvider\.toSearchResult\(data\),/);
   });
 
-  xit('AFTER THE FIX：投影掉 content，并把"匹配在正文里"这一趟改成"Mongo 已经匹配上了"', () => {
+  it('AFTER THE FIX（已实现）：投影掉 content，并把"匹配在正文里"这一趟改成"Mongo 已经匹配上了"', () => {
     // Mongo 的 $regex($options:'i') 已经保证了每篇返回的文档至少在 4 个字段之一里命中，
     // 所以 JS 那四趟过滤只是在做"命中在哪个字段"的分组（决定输出顺序）。改成：
     //   .select({ content: 0, password: 0 })
@@ -187,7 +193,21 @@ describe('FINDING R4-12（尚未修）：公开搜索把 ≤200 篇**全文**捞
     // 改完会**保留**（= 相信数据库的判定）。这个差异要在 CHANGELOG 里写一句。
     // blast radius：公开搜索的响应形状零变化；内存峰值从 ~4 MB/请求降到 ~0.1 MB/请求。
     // 不需要环境变量。
-    expect(true).toBe(true);
+    // 🔴 2026-09-23 落地。与占位方案只有一处不同：投影写在 find 的第二个实参
+    //    （`{ content: 0, password: 0 }`）而不是链式写法 —— 因为本仓库既有风格是前者
+    //    （revision.provider 的 `{ content: 0 }`、user.provider 的 `{ salt: 0, password: 0 }`），
+    //    而链式写法在非 spec 源码里出现 0 次。集合差的形状与占位方案一致。
+    // 🔴 "结果集合与顺序都相同"不是靠这段注释保证的，而是由 round3.spec.ts 那两条行为钉子证明：
+    //    「同一篇命中多个字段时只出现一次，顺序仍是 标题 > 正文 > 标签 > 分类」与
+    //    「800 条全命中同一篇文章时也只返回一条」—— 本轮实施后两条都仍然绿。
+    const src2 = read('./provider/article/article.provider.ts');
+    const fn = src2.slice(src2.indexOf('async searchByString('), src2.indexOf('async deleteById('));
+    expect(fn).toMatch(/\{ content: 0, password: 0 \},/);
+    expect(fn).toMatch(/const matchedOutsideContent = new Set<Article>\(\[/);
+    expect(fn).toMatch(/const contentData = rawData\.filter\(\(each\) => !matchedOutsideContent\.has\(each\)\);/);
+    expect(fn).toMatch(/const sortedData = \[\.\.\.titleData, \.\.\.contentData, \.\.\.tagData, \.\.\.categoryData\];/);
+    // 响应形状零变化：控制器仍然只经 toSearchResult 输出那 6 个字段
+    expect(read('./controller/public/public.controller.ts')).toMatch(/data: this\.articleProvider\.toSearchResult\(data\),/);
   });
 });
 
@@ -362,7 +382,7 @@ describe('REGRESSION R4-C：公开面的护栏（前几轮修的）全部还在'
 });
 
 
-// 🔴 2026-09-23 新增（§7.119 裁定 3）：本文件里有 2 条停用的 `xit`，标题都是 `AFTER THE FIX…`、
+// 🔴 2026-09-23 新增（§7.119 裁定 3）：本文件里曾有 2 条停用的 `xit`（R4-12 落地后只剩 R4-14 那 1 条），标题都是 `AFTER THE FIX…`、
 //    body 都是恒真的 `expect(true).toBe(true)`。它们**不是**"静默缺席的守卫"：
 //    这个文件头就写明了约定 ——「`FINDING R4-x（尚未修）` 钉住当前行为，**打完补丁会变红** ——
 //    那时请把断言翻成同一条里 `xit('AFTER THE FIX …')` 的内容」，而真正承重的是 FINDING 那条 `it`
@@ -433,7 +453,7 @@ describe('停用的测试必须遵守 AFTER THE FIX 约定，不许静默停着�
     expect(good.noConvention).toEqual([]);
   });
 
-  it('全仓没有任何"不遵守约定就停着"的测试；本文件那 2 条都遵守', () => {
+  it('全仓没有任何"不遵守约定就停着"的测试；本文件那 1 条遵守', () => {
     const specs: string[] = [];
     const walk = (dir: string) => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -452,8 +472,11 @@ describe('停用的测试必须遵守 AFTER THE FIX 约定，不许静默停着�
       raw: readFileSync(f, 'utf8'),
     }));
     const { parked, badTitle, noConvention } = scanParked(entries);
-    // 反空转第二层：这个扫描器在本文件里必须真的看到那 2 条（否则口径坏了也看不出来）
-    expect(parked.filter((x) => x.startsWith('audit-hardening-round4-security-public-cost.spec.ts')).length).toBe(2);
+    // 反空转第二层：这个扫描器在本文件里必须真的看到那 1 条（否则口径坏了也看不出来）
+    // 🔴 2026-09-23：R4-12 落地后它的 `xit` 已翻成真 `it`，所以这里从 2 降到 1。
+    //    ⚠️ 这条下界**不是**"必须存在 xit"—— 若 R4-14 也落地，它应当再降到 0，
+    //    那时请把断言改成 toBe(0) 而不是删掉它（删掉会让扫描器坏掉时变成空的绿）。
+    expect(parked.filter((x) => x.startsWith('audit-hardening-round4-security-public-cost.spec.ts')).length).toBe(1);
     // 🔴 核心性质。失败信息点名 file:line 与标题 ⇒ 读日志的人知道该改哪里。
     expect(badTitle).toEqual([]);
     expect(noConvention).toEqual([]);

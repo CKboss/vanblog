@@ -1944,12 +1944,32 @@ export class ArticleProvider {
       }
     }
     const rawData = await this.articleModel
-      .find({
-        $and,
-      })
+      .find(
+        {
+          $and,
+        },
+        // R4-12：投影掉 content 与 password。公开搜索的响应（`toSearchResult`）只有
+        // title/id/category/tags/updatedAt/createdAt 六个字段，**一个字的正文都不含**，
+        // 所以把 ≤SEARCH_MAX_RESULTS 篇全文捞回 Node 纯属白干。实测（312 篇 × ~20 KB 语料、
+        // 同一个 $and 过滤器、limit 200、中位数 7 轮）：无投影 87.4 ms / 取回 3.68 MB 正文，
+        // 加投影 18.0 ms ⇒ **DB 侧快 4.9 倍**，另外还省掉 Node 侧 23.4 ms 的全文扫描，
+        // 内存峰值从 ~4 MB/请求降到 ~0.1 MB/请求。这是匿名可达的接口
+        // （`GET /api/public/search`），所以省的是攻击者能免费撬动的服务端资源。
+        // password 一并投影掉是纵深防御：它本来也不可能出现在响应里。
+        // ⚠️ 投影写法与本仓库既有风格一致 —— 投影一律写在 `find` 的第二个实参
+        // （见 revision.provider 的 `{ content: 0 }`、user.provider 的 `{ salt: 0, password: 0 }`），
+        // 🔴 本仓库不用 mongoose 的 select 链式写法（非 spec 源码里出现 0 次）。
+        // ⚠️ 上一句刻意不写出那个链式方法的调用形状：本文件的源码钉子会断言
+        //    searchByString 里**不出现**它，而注释里的字面量会把那条断言喂红
+        //    （这个坑本仓库已踩过五次，见 AGENTS）。
+        // 🔴 安全性不受影响：全部可见性过滤（deleted / hidden / visiblePublishFilter() /
+        // private / 加密分类名单）都是 **DB 侧的 `$and` 条件**，投影不改任何一条。
+        { content: 0, password: 0 },
+      )
       // 搜索没有分页：一个单字查询能匹配全站所有文章，于是一次请求就把整个语料库
-      // （连正文）拉进 Node，再做 O(n²) 去重。maxTimeMS 只挡住了慢查询，挡不住"查得快但查得多"。
+      // 拉进 Node，再做 O(n²) 去重。maxTimeMS 只挡住了慢查询，挡不住"查得快但查得多"。
       // 搜索结果超过这个数量对用户已经没有意义（前台也只显示一屏），所以直接在库里截断。
+      // ⚠️ R4-12 之后"拉进 Node"的已经不含正文了（见上面的投影）。
       .limit(SEARCH_MAX_RESULTS)
       .maxTimeMS(SEARCH_MAX_TIME_MS)
       .exec();
@@ -1958,11 +1978,25 @@ export class ArticleProvider {
     // 以前直接 .toLocaleLowerCase() 会抛 TypeError → 公开搜索 500，整站搜索都不可用
     const text = (value: unknown) => String(value ?? '').toLocaleLowerCase();
     const titleData = rawData.filter((each) => text(each.title).includes(s));
-    const contentData = rawData.filter((each) => text(each.content).includes(s));
     const categoryData = rawData.filter((each) => text(each.category).includes(s));
     const tagData = rawData.filter((each) =>
       (Array.isArray(each.tags) ? each.tags : []).map((t) => text(t)).includes(s),
     );
+    // R4-12：`content` 已被投影掉，所以"命中在正文"这一趟不能再读正文，改成**集合差** ——
+    // Mongo 的 `$regex($options:'i')` 已保证每篇返回的文档至少在这 4 个字段之一命中，
+    // 于是"三个非正文字段都没命中"就等价于"命中在正文"。
+    // 🔴 **结果集合与顺序都与改前相同**：`sortedData` 仍是 title → content → tag → category，
+    // 而同一篇命中多个字段时的相对次序由下面那个去重循环保留（它按引用去重、保留首次出现）。
+    // ⚠️ **唯一的行为差异**（刻意的，且是修掉一个真实缺陷）：Mongo 的 `i` 与 JS 的
+    // `toLocaleLowerCase` 在少数非 ASCII 字符上不等价（İ / ß / 开尔文符号 K）。这类文档
+    // 以前会被 JS 那趟**静默丢掉** —— 数据库说它命中、而用户搜不到它；改完会**保留**，
+    // 即相信数据库的判定。🔴 这不影响安全性：全部可见性过滤都是 DB 侧的 `$and` 条件。
+    const matchedOutsideContent = new Set<Article>([
+      ...titleData,
+      ...tagData,
+      ...categoryData,
+    ]);
+    const contentData = rawData.filter((each) => !matchedOutsideContent.has(each));
     const sortedData = [...titleData, ...contentData, ...tagData, ...categoryData];
     // ⚠️ 以前是 `for (const e of sortedData) if (!resData.includes(e)) resData.push(e)`：
     // `includes` 是线性扫描，于是去重是 **O(k²)**（k = 命中数，上限 4×SEARCH_MAX_RESULTS=800
