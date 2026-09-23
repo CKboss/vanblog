@@ -262,6 +262,11 @@ API Token 签出来时身份就是超管，所以它能调**所有** `/api/admin
 要拿全文就**不要传** `toListView`（缺省即含全文），并按**单页 20 条**写分页；
 拉完整库要分 5 倍多的页，这是刻意的取舍。
 
+⚠️ **匿名调用传 `pageSize=-1` 不会返回全部**，而是**静默回落到默认每页条数**
+（`-1` 这个"要全部"的写法**只对内部调用有意义**；对匿名请求，`sanitizePagination` 在
+`allowUnlimited` 为假时会把它当成非法值处理）。⇒ 🔴 **想拉完整库请老实分页**，
+不要指望 `-1` 是一个"拖库按钮"（它确实不是，这是刻意的）。
+
 ⚠️ 那个 **20** 是 `controller/public/public.controller.ts` 的常量 `FULL_CONTENT_MAX_PAGE_SIZE`，
 🔴 **不是环境变量**（想放宽只能改常量并重新构建镜像）；它经 `sanitizePagination` 的 `maxPageSize` 生效，
 只在 `getByOption` 判定"要全文**且**不是内部调用"时才传下去。
