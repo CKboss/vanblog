@@ -446,7 +446,7 @@ POST /api/admin/backup/jwt/rotate        # 要管理员登录态（token 头）
 
 ### 读放大：出口带宽是最先耗尽的资源
 
-- **匿名的"含全文列表"单页夹到 20 条**（`controller/public/public.controller.ts` 的 `FULL_CONTENT_MAX_PAGE_SIZE`）：文章列表默认（`toListView` 缺省 = false）会在每一项里带**完整正文**，于是一个约 60 字节的匿名请求能换回约等于整库正文的响应体（本站 59 篇 / 41,508 字，`pageSize=100` 一次就是整库）。⚠️ 在极端环境下**出口带宽是最先耗尽、且最难恢复的资源**，而按 IP 限流对僵尸网络无效。谁不受影响：①**前台**（列表页一律显式传 `toListView=true`）；②**本站内部调用**（SSR 带 `VAN_BLOG_INTERNAL_TOKEN` 或回环直连）；③第三方消费者仍然可用，只是拉全文要分 5 倍多的页。
+- **匿名的"含全文列表"单页夹到 20 条**（`controller/public/public.controller.ts` 的 `FULL_CONTENT_MAX_PAGE_SIZE`）：文章列表默认（`toListView` 缺省 = false）会在每一项里带**完整正文**，于是一个约 60 字节的匿名请求能换回约等于整库正文的响应体（本站 59 篇 / 41,508 字，`pageSize=100` 一次就是整库）。⚠️ 在极端环境下**出口带宽是最先耗尽、且最难恢复的资源**，而按 IP 限流对僵尸网络无效。谁不受影响：①**前台**（列表页一律显式传 `toListView=true`）；②**本站内部调用**（SSR 带 `VAN_BLOG_INTERNAL_TOKEN` 或回环直连）；③第三方消费者仍然可用，只是拉全文要分 5 倍多的页。 🔴 **按请求形态的分档表以 [接口参考 → 分页与单页上限](../reference/api.md) 为权威**（本页讲的是为什么要有这个闸门，不复制那张表）。
 - **公开只读接口带缓存头**：`GET /api/public/meta` 与 `GET /api/public/article` 下发 `Cache-Control: public, max-age=30, s-maxage=300, stale-while-revalidate=86400`。意义是**站长只要在前面挂任意 CDN 或带缓存的反代，就能把这类流量吸收在边缘** —— 这是极端环境下唯一能横向扩展的防线。⚠️ **文章详情与解锁接口故意不给**：含访问密码保护的内容绝不能被共享缓存存住。
 - **meta 接口的并发合并（single-flight）**（`utils/publicMetaCache.ts`）：这是全站最热的一次读（前台每个页面渲染都要调），有 5 秒进程内缓存。⚠️ 但**光有 TTL 缓存不够**：TTL 到期的那一瞬间，一万个并发未命中会各自跑一遍 7 个查询的 `Promise.all`，一起压向 100 条连接的 Mongo 池 —— 这是个**周期性必然发生**的故障形状。现在同一时刻只有一次底层取数，其余请求等同一个 Promise。设 `VANBLOG_PUBLIC_META_CACHE_MS=0` 可以关掉（关掉时并发合并也一并失效）。
 

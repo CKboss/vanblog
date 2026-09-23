@@ -9469,6 +9469,61 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.123 🔴 文档里的数值没有守卫：**代码的 `20` 有两条守卫钉着，文档的 `20` 一条都没有**（实测）
+
+**背景**：`FULL_CONTENT_MAX_PAGE_SIZE = 20`（匿名"含全文"列表的单页上限，`controller/public/public.controller.ts`）
+此前**只写在 `docs/advanced/security.md` 的加固清单里**，而 🔴 **第三方调用者会读的 `docs/reference/api.md` 一个字都没提**
+⇒ 按文档写分页的集成会以为一页能拿 100 篇，实际从第 21 篇起被夹掉。本轮已补进 `api.md` 新的一节
+「分页与单页上限」（四档表 + 🔴 **`?toListView=false` 那个反直觉行为的说明** + "它是常量不是环境变量"）。
+
+🔴 **上一轮那条"`docs/**` 里一次都没提过"的说法不准确，本轮精确分类后更正**：
+`grep -rl FULL_CONTENT_MAX_PAGE_SIZE docs/` 得 **11 个文件**，但其中 **9 个是生成物**
+（`docs/.vuepress/.temp/**`、`docs/.vuepress/dist/**`）、**1 个是生成镜像**（`docs/changelog.md`）⇒
+🔴 **作者写的文档里恰好 1 处，就是 `security.md`**。
+👉 **规矩：在 `docs/` 下 grep 任何东西，必须先排除 `.vuepress/.temp/`、`.vuepress/dist/` 与 `changelog.md`
+（生成镜像），否则计数会被生成物放大一个量级** —— 与"`grep -rc 'run-guard.sh'` 把注释里的提及算进去而得到 36"同族。
+
+🔴 **本轮最重要的实测结论：文档侧的数值没有任何守卫。** 变异对照（每条都先 assert 锚点 `==1`、
+再证明 sha 变了、还原后用**独立记录的基线**逐文件核实一致）：
+
+| 变异 | 结果 |
+|---|---|
+| **M1** 删掉 `api.md` 里整节「分页与单页上限」 | 🔴 **`docs-consistency` 61/0、`docs-links` 5/0、`apiDocRateLimitParity` + `securityDocDefaultsParity` 17/17 —— 全绿，没有任何东西变红** |
+| **M2** 把**文档里**的 `20` 改成 `21` | 🔴 **同样全绿，没有任何东西变红** |
+| **M2b** 把**代码里**的 `20` 改成 `21`（对照组） | ✅ **RED，2 failed / 37 passed** ⇒ 代码侧被 `publicReadAmplification.spec.ts`（导入常量做行为断言）与 `audit-hardening-round4-security-public-cost.spec.ts` 的 `toMatch(/export const FULL_CONTENT_MAX_PAGE_SIZE = 20;/)` **两条钉住** |
+
+⇒ 🔴 **不对称是实测出来的：代码的值有守卫，文档的值没有。** 这与本周期已经付过两次学费的那一族完全同形：
+API Token 的 TTL 默认值有**六处**口径、其中**两处**是错的（`security.md` 甚至在**同一文件内自相矛盾**）；
+`api.md` 的限流表**漏了一整个桶**（聚合列表 60/分钟被写成归全局 600/分钟）。
+👉 🔴 **建议排一轮补一条守卫**：口径与 `securityDocDefaultsParity` 同族（**从代码取权威值，断言文档里
+以"当前值"口吻出现的数字必须与它一致**），⚠️ **但必须用边界匹配**（`20` ⊂ `200`/`1200`，`100` ⊂ `1000`/`100000`
+⇒ 朴素子串匹配会把"200 条"这种正确文本判成漂移，正是 `365` ⊂ `36500` 与 `60` ⊂ `600` 那两个坑的同族）。
+🔴 **本轮没有建这条守卫**（新建 spec 不在授权范围，而 `securityDocDefaultsParity` 在禁区）⇒ **如实记为待办，
+并且不要因为它"看起来已经被文档写清楚了"就以为它有防线。**
+
+🔴 **口径分工（照"一个性质只留一处权威、别处指向它"那条规矩）**：`api.md` 是**分页契约**的权威（四档表 + 调用者要知道的反直觉行为），
+`security.md` 讲**为什么要这个闸门**（出口放大、按 IP 限流对僵尸网络无效）⇒ 两处互相指向、不复述彼此的内容。
+⚠️ **但"20"这个数字在两处都出现**（调用者需要它、加固清单也算到了它）⇒ 🔴 **改这个常量时两处文档都要改**，
+而上面 M2 已证明**没有守卫会提醒**。
+
+⚠️ **另一处本轮核实的现状**：`?toListView=false`（字符串）按真值口径**就是列表视图** ⇒ 它拿不到全文、也不受 20 那一档限制。
+🔴 **这是刻意与 provider 同口径**（`article.provider.ts` 是 `if (option.toListView)`），
+用"严格等于 true"会放过真正返回全文的形状 ⇒ **不是缺陷**，但 🔴 **它是第三方最容易踩的一处，此前任何文档都没写**，
+现在写进了 `api.md`。
+
+**基线更新**：全量 server jest 见本轮汇报（`api.md` 与 `security.md` 的改动只影响文档守卫）｜
+`docs-consistency` **61/0**｜`docs-links` **5/0**｜`changelog-mirror-sync` **10/0**｜`apiDocRateLimitParity` **8/0**｜
+`securityDocDefaultsParity` + `envVarMentions` + `reverseProxyDocTrust` **22/22**（3 套件）｜
+`audit-hardening-round4-security-public-cost` **26/26**｜shell 守卫：`benchmark-tool` **114/0**、
+`reverse-proxy-host-header` **49/0**｜`doc-version` **0.12.203 → 0.12.204**。
+🔴 **上一轮那两条裁定的状态：均已执行**（⚠️ **更正一处我自己的口径**：那两条裁定记录在上一轮的**汇报**里，
+🔴 **§7.122 的正文并没有记它们** —— 我最初在这里写"§7.122 里那两条裁定的状态已更新"是没核实就写的，
+已据实改成这句。👉 这正是本手册反复强调的"引用别处的结论之前先核实它真的在那里"，父代理也会犯）。
+裁定 1（把分档写进 `api.md`）= 本节上面那条；裁定 2（给 R4-12 的历史测量加本机复测标注）=
+`audit-hardening-round4-security-public-cost.spec.ts` 里那条 `it('实测：加一个 {content:0} 投影…')` 的
+2026-09-23 补注（🔴 **断言 `expect(87.4 / 18.0).toBeGreaterThan(4)` 一字未动**，它是审计记录；
+补注写明两份数字的语料相差约 18 倍、倍数不可直接比）。
+
 ### 7.122 🔴 落地一个审计修复时，要 grep **审计编号**（`R4-x`）—— 它比"旧结论的措辞变体"好搜得多
 
 **本轮的实例**：R4-14（"公开列表带正文是匿名放大器"）的修复**早在 2026-09-20 的 `791e3b75` 就落地了**
