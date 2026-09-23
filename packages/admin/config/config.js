@@ -21,12 +21,60 @@ export default defineConfig({
   },
   publicPath: process.env.EEE === 'production' ? '/admin/' : '/',
   antd: {},
+  /**
+   * 🔴 多语言（第一期：安装页 + 后台骨架 + 一键切换）。
+   *
+   * `@umijs/plugin-locale@0.16.0` 随 `@umijs/preset-react` 早已装好，但它是
+   * `enableBy: api.EnableBy.config`（plugin-locale `lib/index.js`）⇒ **必须有这个顶层
+   * `locale` 键才会注册**。注册之后自动拿到三件事：
+   *   1. `antd: true` ⇒ 插件自动用 `ConfigProvider` 接管 antd 的 locale。
+   *      🔴 这顺带修掉一个既有缺陷：此前 admin 源码没有任何 `ConfigProvider` 配置，
+   *      而 antd 4 的 `lib/locale/default.js` 是用 **`en_US`** 组装的 ⇒ 后台一直是
+   *      「自己的文案全中文、antd 组件文案全英文」的混用状态（分页器 `1-10 of 100`、
+   *      Modal 的 OK/Cancel、Table 空状态 `No Data`、DatePicker 的月份与 Today）。
+   *   2. `plugin-layout` 的头部自动渲染 `<SelectLang />`：它的
+   *      `genRenderRightContent({ locale: api.hasPlugins(['@umijs/plugin-locale']) })`
+   *      **只看插件有没有注册**，与下面的 `layout.locale` 无关 ⇒ 一键切换自动出现在后台头部。
+   *      ⚠️ 但 `/init` 路由是 `layout: false`（不带 ProLayout）⇒ 安装页需要自己放一个
+   *      `<SelectLang />`，见 `pages/InitPage/index.tsx`。
+   *   3. 语言包是**静态 ES import 编译进 bundle**（`templates/locale.tpl`），不是运行时拉取 ⇒
+   *      🔴 安装页在「站点尚未初始化、服务端接口还不能依赖」的阶段也能正常切换语言。
+   *
+   * 各选项的理由：
+   * - `default: 'zh-CN'` ⇒ **对现有用户视觉零变化**（除了 antd 组件文案从英文变中文，那是修缺陷）。
+   *   🔴 这个值同时充当站长裁定的「站点级默认语言」：首次访问的初值。
+   *   ⚠️ 第一期**刻意不把它做成 `siteInfo` 字段**（那会牵动 `siteInfoFieldParity` 守卫：
+   *   它钉「表单 ↔ DTO ↔ 文档三方字段集合相等」⇒ 加字段要同一次改三处）。
+   *   🔴 「可在后台配置的站点默认语言」留作独立一期，届时需要连带处理那条守卫。
+   * - `useLocalStorage: true` ⇒ 个人选择**跟人走**（存 localStorage），符合站长裁定。
+   * - `baseNavigator: false` ⇒ 🔴 **不按浏览器语言自动切换**。否则一个英文浏览器的站长
+   *   升级后会突然发现后台变成英文（而第一期的翻译覆盖面还不全，那会看起来像坏了）。
+   *   语言应当由用户**显式**点切换器选择。
+   * - ⚠️ `ignoreMomentLocale: true` **保持不变**：它用的是 webpack
+   *   `IgnorePlugin({ resourceRegExp: /^\.\/locale$/, contextRegExp: /moment$/ })`，
+   *   只拦 moment **自己内部**那个动态 `require('./locale')`（= 全部 135 个语言包、约 740KB）。
+   *   而 plugin-locale 的模板是 `import 'moment/locale/{{.}}'` 这种**显式静态导入**
+   *   （resource 是 `./zh-cn`、context 是 `moment/locale`，**不匹配上面那对正则**）⇒
+   *   🔴 **需要的语言包照样会被打进来，且插件的 `_onCreate()` 会自动 `moment.locale(...)`**。
+   *   所以「启用 i18n 就必须关掉 ignoreMomentLocale」这个担忧**不成立**：
+   *   保持 true 只多约 11KB（zh-cn 4.5K + zh-tw 3.7K + en-gb 2.6K），关掉则要 +740KB。
+   */
+  locale: {
+    default: 'zh-CN',
+    antd: true,
+    baseNavigator: false,
+    useLocalStorage: true,
+  },
   dva: {
     hmr: true,
   },
   layout: {
     // https://umijs.org/zh-CN/plugins/plugin-layout
-    locale: false,
+    // 🔴 由 false 改成 true：这是 plugin-layout 自己的 `layoutOpts.locale`（会被 JSON 序列化进
+    // 生成的 `Layout.tsx`、当作 ProLayout 的 userConfig），语义是「这个布局是 locale-aware 的」。
+    // ⚠️ 它**不控制**头部 `<SelectLang />` 的渲染 —— 那个只看 locale 插件有没有注册（见上面的注释）；
+    // 但保持 false 会让布局层拿不到 locale 语义，所以一并打开。
+    locale: true,
     siderWidth: 208,
     ...defaultSettings,
   },

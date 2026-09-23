@@ -34,7 +34,7 @@ const INIT_RESTORE_ACCEPT = '.zst,.xz,.gz,.tgz,.tar';
  *   失败结果**只在**服务端 body 带 `setupKeyRequired:true` 时才附加同名键
  *   （初始化保护开启时的 400，见 ./setupKeyCore.js 的契约说明）。
  */
-function parseRestoreResponse(httpStatus, responseText) {
+function parseRestoreResponse(httpStatus, responseText, t) {
   let body = null;
   const text = String(responseText == null ? '' : responseText);
   if (text) {
@@ -66,10 +66,17 @@ function parseRestoreResponse(httpStatus, responseText) {
     }
   }
   if (!message) {
+    // 🔴 中文保留为 defaultMessage，`{code}`/`{status}` 用 react-intl 的占位符语法；
+    //    不传翻译器时 identityTranslate 会把占位符插值成与旧实现逐字相同的结果。
+    const tr = normalizeT(t);
     message =
       body && body.statusCode
-        ? `恢复被拒绝（statusCode=${body.statusCode}）`
-        : `恢复请求失败（HTTP ${httpStatus}）`;
+        ? tr('init.restore.err.rejected', '恢复被拒绝（statusCode={code}）', {
+            code: body.statusCode,
+          })
+        : tr('init.restore.err.httpFailed', '恢复请求失败（HTTP {status}）', {
+            status: httpStatus,
+          });
   }
   const failure = { ok: false, message };
   // 服务端开了初始化保护（VANBLOG_INIT_REQUIRE_SETUP_KEY=true）时，400 的 body 里带
@@ -82,11 +89,32 @@ function parseRestoreResponse(httpStatus, responseText) {
   return failure;
 }
 
+/**
+ * 🔴 多语言：本模块是纯 JS、被 `node --test` 直接 `require()`，拿不到 umi 运行时，
+ * 所以**不在这里 import umi**，而是让调用方（React 层）把翻译器注入进来。
+ *
+ * 约定：`t(id, defaultMessage, values?)` → 已本地化并完成 `{占位符}` 插值的字符串。
+ * 🔴 **不传 `t` 时用下面的 identity 实现，输出与引入 i18n 之前逐字相同** ⇒
+ * 直接 require 本模块的单测（`tests/unit/initRestore.test.js`）行为不变。
+ */
+function identityTranslate(id, defaultMessage, values) {
+  const dm = String(defaultMessage == null ? '' : defaultMessage);
+  if (!values || typeof values !== 'object') {
+    return dm;
+  }
+  return dm.replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m));
+}
+
+/** 归一化调用方传进来的翻译器：不是函数就回落到 identity（永不抛错）。 */
+function normalizeT(t) {
+  return typeof t === 'function' ? t : identityTranslate;
+}
+
 /** 给确认弹窗展示文件大小（不引新依赖，手写足够） */
-function describeFileSize(bytes) {
+function describeFileSize(bytes, t) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n <= 0) {
-    return '未知大小';
+    return normalizeT(t)('init.restore.count.unknownSize', '未知大小');
   }
   if (n < 1024) {
     return `${n} B`;
@@ -114,24 +142,26 @@ const INIT_RESTORE_TOKEN_KEY = 'token';
  * 服务端 counts 取自归档清单：{articles,statics,users,visits,viewers,settings,total}。
  */
 const RESTORE_COUNT_LABELS = [
-  ['articles', '文章'],
-  ['statics', '图片'],
-  ['users', '用户'],
-  ['visits', '访问记录'],
-  ['viewers', '访客'],
-  ['settings', '设置'],
-  ['total', '合计'],
+  ['articles', '文章', 'init.restore.count.articles'],
+  ['statics', '图片', 'init.restore.count.images'],
+  ['users', '用户', 'init.restore.count.users'],
+  ['visits', '访问记录', 'init.restore.count.visits'],
+  ['viewers', '访客', 'init.restore.count.viewers'],
+  ['settings', '设置', 'init.restore.count.settings'],
+  ['total', '合计', 'init.restore.count.total'],
 ];
 
 /** 把 counts 渲染成「文章 59 · 图片 93 · 访问记录 8746」；没有可用数字时返回空串。 */
-function formatRestoreCounts(counts) {
+function formatRestoreCounts(counts, t) {
   if (!counts || typeof counts !== 'object') {
     return '';
   }
   const parts = [];
   for (let i = 0; i < RESTORE_COUNT_LABELS.length; i += 1) {
     const key = RESTORE_COUNT_LABELS[i][0];
-    const label = RESTORE_COUNT_LABELS[i][1];
+    const labelId = RESTORE_COUNT_LABELS[i][2];
+    // 🔴 中文标签保留为 defaultMessage：漏翻译时回落中文，而不是把裸 key 显示给用户
+    const label = normalizeT(t)(labelId, RESTORE_COUNT_LABELS[i][1]);
     const value = counts[key];
     if (typeof value === 'number' && Number.isFinite(value)) {
       parts.push(`${label} ${value}`);
@@ -178,27 +208,28 @@ function classifyRestoreSuccess(data) {
  *   `manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新`）→ 升级 server 镜像；
  * - 其余（含 demo 401 信封、网络错误）→ 通用两条（文件类型 / 已初始化走后台）。
  */
-function describeRestoreFailure(httpStatus, message) {
+function describeRestoreFailure(httpStatus, message, t) {
   const text = String(message == null ? '' : message);
+  const tr = normalizeT(t);
   if (httpStatus === 409) {
-    return ['已经有一个恢复在进行中：等它结束再试；若那一次成功了，刷新页面即可进入后台。'];
+    return [tr('init.restore.err.409', '已经有一个恢复在进行中：等它结束再试；若那一次成功了，刷新页面即可进入后台。')];
   }
   if (httpStatus === 403) {
     return [
-      '这个站点已经初始化过了：init 入口只对全新站点开放。请登录后台，用「系统设置 → 备份与恢复 → 上传备份并恢复」。',
+      tr('init.restore.err.403', '这个站点已经初始化过了：init 入口只对全新站点开放。请登录后台，用「系统设置 → 备份与恢复 → 上传备份并恢复」。'),
     ];
   }
   if (httpStatus === 429) {
-    return ['初始化相关请求太频繁（限流：每 10 分钟 5 次），请稍后再试。'];
+    return [tr('init.restore.err.429', '初始化相关请求太频繁（限流：每 10 分钟 5 次），请稍后再试。')];
   }
   if (httpStatus === 400 && /版本过新|不是 VanBlog 整站备份/.test(text)) {
     return [
-      '这个文件不是本站导出的整站备份，或它由「更新版本」的 VanBlog 生成、当前 server 读不了：先确认文件来源；确实是新版本备份的话，升级 server 镜像后再恢复。',
+      tr('init.restore.err.400', '这个文件不是本站导出的整站备份，或它由「更新版本」的 VanBlog 生成、当前 server 读不了：先确认文件来源；确实是新版本备份的话，升级 server 镜像后再恢复。'),
     ];
   }
   return [
-    '请确认选的是「导出整站备份」生成的归档（文件名形如 vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz）；后台导出的 JSON 数据备份不走这里 —— 那个要先完成初始化，再到「数据管理」导入。',
-    '如果这个站点其实已经初始化过，这里会拒绝恢复 —— 请登录后台，用「系统设置 → 备份与恢复」的上传恢复。',
+    tr('init.restore.err.fallback1', '请确认选的是「导出整站备份」生成的归档（文件名形如 vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz）；后台导出的 JSON 数据备份不走这里 —— 那个要先完成初始化，再到「数据管理」导入。'),
+    tr('init.restore.err.fallback2', '如果这个站点其实已经初始化过，这里会拒绝恢复 —— 请登录后台，用「系统设置 → 备份与恢复」的上传恢复。'),
   ];
 }
 

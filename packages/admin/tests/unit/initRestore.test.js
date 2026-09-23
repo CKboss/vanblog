@@ -118,7 +118,10 @@ describe('RestoreFromBackup 组件接线（源码断言，已剔除注释）', (
   it('上传前必须确认，确认不需要任何输入', () => {
     assert.ok(comp.includes('beforeUpload'));
     assert.ok(comp.includes('Modal.confirm'));
-    assert.ok(comp.includes("okText: '我确定，恢复'"));
+    // 🔴 i18n 之后的形状：确认弹窗仍然有一个显式的危险确认按钮文案（性质不变）。
+    //    中文保留为 defaultMessage ⇒ 这行断言仍然同时钉住「文案存在」与「走了 i18n」。
+    //    key 是否在三份语言包里都存在，由 tests/unit/localePackParity.test.js 钉住。
+    assert.ok(comp.includes("okText: t('init.restore.confirmOk', '我确定，恢复')"));
     // beforeUpload 返回 false 拦截 antd 的自动上传，确认后才手动传
     assert.ok(/return false;\s*\}/.test(comp));
     assert.ok(comp.includes('startUpload(file'));
@@ -148,9 +151,10 @@ describe('RestoreFromBackup 组件接线（源码断言，已剔除注释）', (
 
   it('失败：服务端 message 原样透出，提示由 describeRestoreFailure 按状态码给出', () => {
     assert.ok(comp.includes('{result.message}'));
-    assert.ok(comp.includes('describeRestoreFailure(xhr.status, result.message)'));
+    // 🔴 第三个实参是注入的翻译器 `t`（restoreCore 不传 t 时原样返回中文）
+    assert.ok(comp.includes('describeRestoreFailure(xhr.status, result.message, t)'));
     assert.ok(comp.includes('{hints.map((hint) => ('));
-    assert.ok(comp.includes('parseRestoreResponse(xhr.status, xhr.responseText)'));
+    assert.ok(comp.includes('parseRestoreResponse(xhr.status, xhr.responseText, t)'));
     // 原来写死在组件里的「两个最常见误操作提示」搬进了 restoreCore 的默认分支，
     // 由下面 describeRestoreFailure 的用例逐字钉住（等价且更强：行为断言）
   });
@@ -326,14 +330,18 @@ describe('组件的成功分支接线（源码断言，已剔除注释）', () =
   });
 
   it('未初始化分支：留在本页、提示继续走向导，不碰 token 不跳转', () => {
-    assert.ok(comp.includes("okText: '继续初始化'"));
+    assert.ok(comp.includes("okText: t('init.restore.continueInit', '继续初始化')"));
     assert.ok(comp.includes('数据已恢复，但备份里没有管理员账号'));
     assert.ok(comp.includes('初始化向导创建管理员账号'));
     assert.ok(!comp.includes('location.href'), '不允许整页跳转绕过向导状态');
   });
 
   it('counts / notes / seconds 都渲染，counts 为空时整行不出现', () => {
-    assert.ok(comp.includes('info.countsText ? <p>恢复进来：{info.countsText}</p> : null'));
+    // 🔴 折行之后形状变了，但性质不变：counts 为空时整行不出现（三元条件仍在），
+    //    且渲染走 i18n（key 的存在性由 localePackParity 钉住）。
+    assert.ok(comp.includes('info.countsText ? ('));
+    assert.ok(comp.includes("t('init.restore.detail.counts'"));
+    assert.ok(comp.includes('counts: info.countsText'));
     assert.ok(comp.includes('info.notes.map((note) => ('));
     assert.ok(comp.includes('info.seconds !== null'));
   });

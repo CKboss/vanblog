@@ -3,7 +3,7 @@ import { fetchInit } from '@/services/van-blog/api';
 import ProCard from '@ant-design/pro-card';
 import { ProFormInstance } from '@ant-design/pro-form';
 import { Alert, Input, Modal } from 'antd';
-import { useHistory } from 'umi';
+import { SelectLang, useHistory, useIntl } from 'umi';
 //@ts-ignore
 import styles from './index.less';
 
@@ -14,10 +14,23 @@ import { encryptPwd } from '@/services/van-blog/encryptPwd';
 import { accountPasswordMinRule } from '@/services/van-blog/passwordPolicy';
 import { useRef, useState } from 'react';
 import RestoreFromBackup from './RestoreFromBackup';
-import { SETUP_KEY_FIELD, SETUP_KEY_HINTS, extractSetupKeyRejection } from './setupKeyCore';
+import { SETUP_KEY_FIELD, extractSetupKeyRejection, getSetupKeyHints } from './setupKeyCore';
 
 const InitPage = () => {
   const history = useHistory();
+  const intl = useIntl();
+  /**
+   * 🔴 多语言（第一期）。`/init` 路由是 `layout: false`（不带 ProLayout），
+   * 所以后台头部那个由 plugin-layout 自动渲染的 `<SelectLang />` **不会出现在本页**
+   * ⇒ 下面自己放一个。语言包是静态 import 编译进 bundle 的（plugin-locale 的 locale.tpl），
+   * 不是运行时拉取 ⇒ 站点尚未初始化、服务端接口还不能依赖时也能正常切换。
+   *
+   * `t` 同时用于把翻译器注入 `setupKeyCore`（纯 JS、被 node --test 直接 require，
+   * 拿不到 umi 运行时；不传时原样返回中文，所以那些单测逐字不变）。
+   */
+  const t = (id: string, defaultMessage: string, values?: Record<string, unknown>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
+  const setupKeyHints = getSetupKeyHints(t);
   const formMapRef = useRef<React.MutableRefObject<ProFormInstance<any> | undefined>[]>([]);
   const formRef1 = useRef<ProFormInstance>();
   const formRef2 = useRef<ProFormInstance>();
@@ -43,16 +56,30 @@ const InitPage = () => {
   return (
     <div className={styles.container}>
       <div className={styles.content}>
+        {/* 🔴 `/init` 是 `layout: false`，拿不到 ProLayout 头部那个自动渲染的切换器，
+            所以在这里自己放一个。右对齐，不占用向导的视觉主线。 */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <SelectLang />
+        </div>
         {setupKeyRequired && (
-          <ProCard title="本站开启了初始化保护：请填写初始化密钥" style={{ marginBottom: 16 }}>
+          <ProCard
+            title={t('init.setupKey.cardTitle', '本站开启了初始化保护：请填写初始化密钥')}
+            style={{ marginBottom: 16 }}
+          >
             <Alert
               type="warning"
               showIcon
               style={{ marginBottom: 12 }}
-              message={setupKeyNotice || '服务端要求携带初始化密钥（setup key）后才能完成初始化/恢复'}
+              message={
+                setupKeyNotice ||
+                t(
+                  'init.setupKey.alertFallback',
+                  '服务端要求携带初始化密钥（setup key）后才能完成初始化/恢复',
+                )
+              }
               description={
                 <ul style={{ paddingLeft: 20, marginBottom: 0, color: '#888' }}>
-                  {SETUP_KEY_HINTS.map((hint) => (
+                  {setupKeyHints.map((hint) => (
                     <li key={hint}>{hint}</li>
                   ))}
                 </ul>
@@ -64,7 +91,10 @@ const InitPage = () => {
               value={setupKeyValue}
               onChange={(e) => setSetupKeyValue(e.target.value)}
               autoComplete="off"
-              placeholder="粘贴 setup.key 文件的完整内容（或启动日志里「初始化密钥」那一行）"
+              placeholder={t(
+                'init.setupKey.placeholder',
+                '粘贴 setup.key 文件的完整内容（或启动日志里「初始化密钥」那一行）',
+              )}
               style={{ maxWidth: 520 }}
             />
           </ProCard>
@@ -72,34 +102,43 @@ const InitPage = () => {
         {/* 「用备份恢复」放在向导**前面**且完全独立：手里有整站备份的用户
             一个初始化字段都不用填（管理员账号、站点设置、文章、图片全在归档里）。
             它不读任何表单状态，所以也不影响「站点已初始化 → 跳走」的重定向逻辑。 */}
-        <ProCard title="已有整站备份？直接恢复" style={{ marginBottom: 16 }}>
+        <ProCard
+          title={t('init.restore.cardTitle', '已有整站备份？直接恢复')}
+          style={{ marginBottom: 16 }}
+        >
           <Alert
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="上传 full 备份归档，一步恢复整个旧站点"
+            message={t('init.restore.cardMessage', '上传 full 备份归档，一步恢复整个旧站点')}
             description={
               <div>
-                管理员账号、站点设置、文章、图片<b>全部来自备份文件</b>，
-                不需要填写下面初始化向导的任何信息；恢复完成后用备份里的账号密码登录。
+                {t('init.restore.cardNotePrefix', '管理员账号、站点设置、文章、图片')}
+                <b>{t('init.restore.cardNoteStrong', '全部来自备份文件')}</b>
+                {t(
+                  'init.restore.cardNoteSuffix',
+                  '，不需要填写下面初始化向导的任何信息；恢复完成后用备份里的账号密码登录。',
+                )}
               </div>
             }
           />
           <RestoreFromBackup setupKey={setupKeyValue} onSetupKeyRequired={markSetupKeyRequired} />
         </ProCard>
         <div style={{ textAlign: 'center', color: '#999', margin: '4px 0 20px' }}>
-          —— 或者，手动初始化 ——
+          {t('init.divider', '—— 或者，手动初始化 ——')}
         </div>
         <ProCard
           title={
             <div>
-              <p style={{ fontSize: 20, marginBottom: 0 }}>欢迎使用 VanBlog 个人博客系统</p>
+              <p style={{ fontSize: 20, marginBottom: 0 }}>
+                {t('init.wizard.title', '欢迎使用 VanBlog 个人博客系统')}
+              </p>
               <a
                 target={'_blank'}
                 rel="noreferrer"
                 href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/config.md"
               >
-                帮助文档
+                {t('init.wizard.helpDoc', '帮助文档')}
               </a>
             </div>
           }
@@ -130,9 +169,11 @@ const InitPage = () => {
                 const res = await fetchInit(newData);
                 if (res?.statusCode == 200) {
                   Modal.success({
-                    title: '初始化成功!',
-                    content:
+                    title: t('init.success.title', '初始化成功!'),
+                    content: t(
+                      'init.success.content',
                       '首次使用请记得去后台 “站点管理/评论管理” 中注册一下评论系统的管理员账号哦！评论通知等设置可在 “系统设置/评论设置” 中找到。',
+                    ),
                     onOk: goLogin,
                     onCancel: goLogin,
                   });
@@ -151,8 +192,8 @@ const InitPage = () => {
                 const status = info?.statusCode ?? (err as any)?.response?.status;
                 if (status == 500 && String(info?.message || '').includes('已初始化')) {
                   Modal.info({
-                    title: '本站已经初始化过了',
-                    content: '初始化只能执行一次，接下来请直接登录。',
+                    title: t('init.alreadyInit.title', '本站已经初始化过了'),
+                    content: t('init.alreadyInit.content', '初始化只能执行一次，接下来请直接登录。'),
                     onOk: goLogin,
                     onCancel: goLogin,
                   });
@@ -163,18 +204,18 @@ const InitPage = () => {
               }
             }}
           >
-            <StepsForm.StepForm name="step1" title="配置用户">
+            <StepsForm.StepForm name="step1" title={t('init.step.user', '配置用户')}>
               <Alert
                 type="info"
-                message="初始化页面所有配置都可在初始化后进入后台修改。"
+                message={t('init.alert.allEditable', '初始化页面所有配置都可在初始化后进入后台修改。')}
                 style={{ marginBottom: 8 }}
               ></Alert>
               <ProFormText
                 name="name"
                 required={true}
-                rules={[{ required: true, message: '这是必填项' }]}
-                label="登录用户名"
-                placeholder={'请输入登录用户名'}
+                rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
+                label={t('init.field.username', '登录用户名')}
+                placeholder={t('init.field.usernamePlaceholder', '请输入登录用户名')}
               ></ProFormText>
               {/* <ProFormText
                 name="nickname"
@@ -191,14 +232,17 @@ const InitPage = () => {
               <ProFormText.Password
                 name="password"
                 required={true}
-                rules={[{ required: true, message: '这是必填项' }, accountPasswordMinRule()]}
-                label="登录密码"
-                placeholder={'请输入登录密码'}
+                rules={[
+                  { required: true, message: t('init.field.required', '这是必填项') },
+                  accountPasswordMinRule(),
+                ]}
+                label={t('init.field.password', '登录密码')}
+                placeholder={t('init.field.passwordPlaceholder', '请输入登录密码')}
               ></ProFormText.Password>
             </StepsForm.StepForm>
             <StepsForm.StepForm
               name="step2"
-              title={'基本配置'}
+              title={t('init.step.basic', '基本配置')}
               formRef={formRef1}
               onFinish={async (values) => {
                 let ok = true;
@@ -209,11 +253,11 @@ const InitPage = () => {
                 }
                 if (!ok) {
                   Modal.warn({
-                    title: '网站 URL 不合法！',
+                    title: t('init.baseUrl.invalidTitle', '网站 URL 不合法！'),
                     content: (
                       <div>
-                        <p>请输入包含完整协议的 URL</p>
-                        <p>例: https://blog.example.com</p>
+                        <p>{t('init.baseUrl.invalidLine1', '请输入包含完整协议的 URL')}</p>
+                        <p>{t('init.baseUrl.invalidLine2', '例: https://blog.example.com')}</p>
                       </div>
                     ),
                   });
@@ -224,7 +268,10 @@ const InitPage = () => {
             >
               <Alert
                 type="info"
-                message="默认的上传图片会到内置图床，如需配置 oss 图床，可在初始化后去设置页更改。初始化页面所有配置都可在初始化后进入后台修改。"
+                message={t(
+                  'init.alert.uploadDefault',
+                  '默认的上传图片会到内置图床，如需配置 oss 图床，可在初始化后去设置页更改。初始化页面所有配置都可在初始化后进入后台修改。',
+                )}
                 style={{ marginBottom: 8 }}
               ></Alert>
               <SiteInfoForm
@@ -235,10 +282,17 @@ const InitPage = () => {
                 isInit={true}
               />
             </StepsForm.StepForm>
-            <StepsForm.StepForm name="step3" title={'高级配置'} formRef={formRef2}>
+            <StepsForm.StepForm
+              name="step3"
+              title={t('init.step.advanced', '高级配置')}
+              formRef={formRef2}
+            >
               <Alert
                 type="info"
-                message="默认的上传图片会到内置图床，如需配置 oss 图床，可在初始化后去设置页更改。初始化页面所有配置都可在初始化后进入后台修改。"
+                message={t(
+                  'init.alert.uploadDefault',
+                  '默认的上传图片会到内置图床，如需配置 oss 图床，可在初始化后去设置页更改。初始化页面所有配置都可在初始化后进入后台修改。',
+                )}
                 style={{ marginBottom: 8 }}
               ></Alert>
               <SiteInfoForm
@@ -249,10 +303,10 @@ const InitPage = () => {
                 isInit={true}
               />
             </StepsForm.StepForm>
-            <StepsForm.StepForm name="step4" title={'布局配置'}>
+            <StepsForm.StepForm name="step4" title={t('init.step.layout', '布局配置')}>
               <Alert
                 type="info"
-                message="初始化页面所有配置都可在初始化后进入后台修改。"
+                message={t('init.alert.allEditable', '初始化页面所有配置都可在初始化后进入后台修改。')}
                 style={{ marginBottom: 8 }}
               ></Alert>
               <SiteInfoForm

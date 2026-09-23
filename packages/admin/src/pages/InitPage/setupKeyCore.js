@@ -42,6 +42,35 @@ const SETUP_KEY_HINTS = [
   '只有运维显式设置了 VANBLOG_INIT_REQUIRE_SETUP_KEY=false（逃生口，不推荐）时才不要求密钥 —— 那种情况下这一栏留空提交即可',
 ];
 
+/**
+ * 🔴 与 `SETUP_KEY_HINTS` **一一对应、顺序必须一致**的 i18n key。
+ * 语言包在 `src/locales/{zh-CN,zh-TW,en-US}.ts`，三份的 key 集合由
+ * `tests/unit/localePackParity.test.js` 钉住（含「key 数 == 本数组长度」的反空转）。
+ */
+const SETUP_KEY_HINT_IDS = [
+  'init.setupKey.hint1',
+  'init.setupKey.hint2',
+  'init.setupKey.hint3',
+  'init.setupKey.hint4',
+];
+
+/**
+ * 🔴 取「去哪找密钥」的提示，按传入的翻译器本地化。
+ *
+ * @param {(id: string, defaultMessage: string) => string} [t] 翻译器。
+ *   🔴 **不传时原样返回中文常量** ⇒ 直接 `require()` 本模块的单测
+ *   （`tests/unit/initSetupKey.test.js`，它断言 `SETUP_KEY_HINTS` 的内容）
+ *   **行为逐字不变**。这些模块是纯 JS、被 `node --test` 直接 require，
+ *   拿不到 umi 运行时 ⇒ 所以用**依赖注入**而不是在模块里 import umi。
+ *   React 层传 `(id, dm) => intl.formatMessage({ id, defaultMessage: dm })`。
+ */
+function getSetupKeyHints(t) {
+  if (typeof t !== 'function') {
+    return SETUP_KEY_HINTS.slice();
+  }
+  return SETUP_KEY_HINTS.map((defaultMessage, i) => t(SETUP_KEY_HINT_IDS[i], defaultMessage));
+}
+
 /** 一个响应 body（对象）是不是"要求初始化密钥"的拒绝 */
 function isSetupKeyRejectionPayload(body) {
   if (!body || typeof body !== 'object') {
@@ -86,6 +115,8 @@ function extractSetupKeyRejection(err) {
 module.exports = {
   SETUP_KEY_FIELD,
   SETUP_KEY_HINTS,
+  SETUP_KEY_HINT_IDS,
+  getSetupKeyHints,
   isSetupKeyRejectionPayload,
   extractSetupKeyRejection,
 };

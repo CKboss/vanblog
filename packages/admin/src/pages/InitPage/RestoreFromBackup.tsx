@@ -1,6 +1,6 @@
 import { Alert, Button, Modal, Progress, Upload, message } from 'antd';
 import { useState } from 'react';
-import { useHistory } from 'umi';
+import { useHistory, useIntl } from 'umi';
 import {
   INIT_RESTORE_ACCEPT,
   INIT_RESTORE_ENDPOINT,
@@ -12,7 +12,7 @@ import {
   describeRestoreFailure,
   parseRestoreResponse,
 } from './restoreCore';
-import { SETUP_KEY_FIELD, SETUP_KEY_HINTS } from './setupKeyCore';
+import { SETUP_KEY_FIELD, getSetupKeyHints } from './setupKeyCore';
 
 /**
  * init 页的「用整站备份恢复」卡片。
@@ -54,6 +54,15 @@ interface RestoreFromBackupProps {
 export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
   const { setupKey, onSetupKeyRequired } = props;
   const history = useHistory();
+  const intl = useIntl();
+  /**
+   * 🔴 注入给 `restoreCore` / `setupKeyCore` 的翻译器。那两个模块是纯 JS、被 `node --test`
+   * 直接 require，拿不到 umi 运行时 ⇒ 它们接受一个可选的 `t`，**不传时原样返回中文**
+   * （所以那些单测逐字不变）。这里把 react-intl 的 `formatMessage` 适配成同一个签名。
+   * `defaultMessage` 一律带上：漏翻译时回落中文，而不是把裸 key 显示给用户。
+   */
+  const t = (id: string, defaultMessage: string, values?: Record<string, unknown>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const [phase, setPhase] = useState<Phase>('idle');
   const [percent, setPercent] = useState(0);
   const busy = phase !== 'idle';
@@ -86,7 +95,7 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
       setPhase('restoring');
     };
     xhr.onload = () => {
-      const result = parseRestoreResponse(xhr.status, xhr.responseText);
+      const result = parseRestoreResponse(xhr.status, xhr.responseText, t);
       setPhase('idle');
       setPercent(0);
       if (result.ok) {
@@ -95,19 +104,29 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
         // 也只是少显示几行，不会崩
         const detail = (
           <>
-            {info.seconds !== null && <p>耗时 {info.seconds} 秒。</p>}
-            {info.countsText ? <p>恢复进来：{info.countsText}</p> : null}
+            {info.seconds !== null && (
+              <p>{t('init.restore.detail.seconds', '耗时 {seconds} 秒。', { seconds: info.seconds })}</p>
+            )}
+            {info.countsText ? (
+              <p>{t('init.restore.detail.counts', '恢复进来：{counts}', { counts: info.countsText })}</p>
+            ) : null}
             {info.databases &&
               Object.entries(info.databases).map(([dbName, item]) => (
                 <p key={dbName}>
-                  {dbName}：{(item as any)?.collections ?? 0} 张表 /{' '}
-                  {(item as any)?.documents ?? 0} 条
+                  {t('init.restore.detail.db', '{db}：{collections} 张表 / {documents} 条', {
+                    db: dbName,
+                    collections: (item as any)?.collections ?? 0,
+                    documents: (item as any)?.documents ?? 0,
+                  })}
                 </p>
               ))}
             {info.static &&
               Object.entries(info.static).map(([folder, item]) => (
                 <p key={folder}>
-                  静态文件 {folder}：{(item as any)?.files ?? 0} 个
+                  {t('init.restore.detail.static', '静态文件 {folder}：{files} 个', {
+                    folder,
+                    files: (item as any)?.files ?? 0,
+                  })}
                 </p>
               ))}
             {info.notes.length > 0 && (
@@ -124,20 +143,24 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
           // 旧 token 必然失效（jwt 密钥来自备份），按登出路径的写法清掉再进登录页
           window.localStorage.removeItem(INIT_RESTORE_TOKEN_KEY);
           Modal.success({
-            title: '恢复完成',
+            title: t('init.restore.doneTitle', '恢复完成'),
             width: 560,
-            okText: '去登录',
+            okText: t('init.restore.toSignIn', '去登录'),
             onOk: goLogin,
             onCancel: goLogin,
             content: (
               <div>
                 <p style={{ fontWeight: 600 }}>
-                  请用<b>备份文件里的那套账号密码</b>登录 —— 不是这个页面上填过的任何内容。
+                  {t('init.restore.doneLine1Prefix', '请用')}
+                  <b>{t('init.restore.doneLine1Strong', '备份文件里的那套账号密码')}</b>
+                  {t('init.restore.doneLine1Suffix', '登录 —— 不是这个页面上填过的任何内容。')}
                 </p>
                 {info.adminUserFromArchive ? null : (
                   <p style={{ color: '#fa8c16' }}>
-                    注意：这份归档本身没有带用户记录。若备份里的账号登录不上，可用 server
-                    日志里的恢复密钥走「忘记密码」流程。
+                    {t(
+                      'init.restore.noAdminNote',
+                      '注意：这份归档本身没有带用户记录。若备份里的账号登录不上，可用 server 日志里的恢复密钥走「忘记密码」流程。',
+                    )}
                   </p>
                 )}
                 {detail}
@@ -150,17 +173,21 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
         // 管理员账号，站点仍算未初始化 —— **留在本页**，向导照常可用；
         // 不清不写任何 token、不跳转（跳去登录页会把用户扔进一个没有账号的站点）。
         Modal.success({
-          title: '数据已恢复，但备份里没有管理员账号',
+          title: t('init.restore.noAdminTitle', '数据已恢复，但备份里没有管理员账号'),
           width: 560,
-          okText: '继续初始化',
+          okText: t('init.restore.continueInit', '继续初始化'),
           content: (
             <div>
               <p>
-                归档里的数据已经导入本站，但它<b>不包含</b>管理员账号 ——
-                站点仍处于未初始化状态。
+                {t('init.restore.uninitLine1Prefix', '归档里的数据已经导入本站，但它')}
+                <b>{t('init.restore.uninitLine1Strong', '不包含')}</b>
+                {t('init.restore.uninitLine1Suffix', '管理员账号 —— 站点仍处于未初始化状态。')}
               </p>
               <p>
-                请继续用下面的初始化向导创建管理员账号；刚恢复进来的文章、图片、设置都会保留。
+                {t(
+                  'init.restore.uninitLine2',
+                  '请继续用下面的初始化向导创建管理员账号；刚恢复进来的文章、图片、设置都会保留。',
+                )}
               </p>
               {detail}
             </div>
@@ -175,11 +202,14 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
           onSetupKeyRequired(result.message);
         }
       }
+      const setupKeyHints = getSetupKeyHints(t);
       const hints = result.setupKeyRequired
-        ? SETUP_KEY_HINTS.concat(describeRestoreFailure(xhr.status, result.message))
-        : describeRestoreFailure(xhr.status, result.message);
+        ? setupKeyHints.concat(describeRestoreFailure(xhr.status, result.message, t))
+        : describeRestoreFailure(xhr.status, result.message, t);
       Modal.error({
-        title: result.setupKeyRequired ? '需要初始化密钥' : '恢复失败',
+        title: result.setupKeyRequired
+          ? t('init.restore.needSetupKey', '需要初始化密钥')
+          : t('init.restore.failedTitle', '恢复失败'),
         width: 560,
         content: (
           <div>
@@ -198,7 +228,12 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
     xhr.onerror = () => {
       setPhase('idle');
       setPercent(0);
-      message.error('上传失败：网络错误或服务不可达，请确认 server 正在运行后重试。');
+      message.error(
+        t(
+          'init.restore.uploadFailed',
+          '上传失败：网络错误或服务不可达，请确认 server 正在运行后重试。',
+        ),
+      );
     };
     xhr.onabort = () => {
       setPhase('idle');
@@ -217,23 +252,39 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
             return false;
           }
           Modal.confirm({
-            title: `用 ${file.name}（${describeFileSize(file.size)}）恢复整个站点？`,
+            title: t('init.restore.confirmTitle', '用 {name}（{size}）恢复整个站点？', {
+              name: file.name,
+              size: describeFileSize(file.size, t),
+            }),
             width: 560,
-            okText: '我确定，恢复',
+            okText: t('init.restore.confirmOk', '我确定，恢复'),
             okButtonProps: { danger: true },
-            cancelText: '取消',
+            cancelText: t('init.restore.confirmCancel', '取消'),
             content: (
               <div>
-                <p>将用这份整站备份覆盖并初始化本站：</p>
+                <p>{t('init.restore.confirmIntro', '将用这份整站备份覆盖并初始化本站：')}</p>
                 <ul style={{ paddingLeft: 20 }}>
-                  <li>数据库全部集合（文章、草稿、分类、标签、图床记录、设置、访问统计…）</li>
-                  <li>waline 评论库</li>
-                  <li>本地静态文件（图床图片与缩略图、附件、自定义页面）</li>
+                  <li>
+                    {t(
+                      'init.restore.confirmItem1',
+                      '数据库全部集合（文章、草稿、分类、标签、图床记录、设置、访问统计…）',
+                    )}
+                  </li>
+                  <li>{t('init.restore.confirmItem2', 'waline 评论库')}</li>
+                  <li>
+                    {t(
+                      'init.restore.confirmItem3',
+                      '本地静态文件（图床图片与缩略图、附件、自定义页面）',
+                    )}
+                  </li>
                 </ul>
                 <p style={{ color: '#888' }}>
-                  管理员账号与密码<b>来自备份文件</b>，下面初始化向导里的任何输入都不需要。
-                  备份带有管理员账号时，恢复完成后直接去登录页；万一这份归档里没有账号，
-                  站点会保持未初始化，回来继续走向导建一个即可。
+                  {t('init.restore.confirmNotePrefix', '管理员账号与密码')}
+                  <b>{t('init.restore.confirmNoteStrong', '来自备份文件')}</b>
+                  {t(
+                    'init.restore.confirmNoteSuffix',
+                    '，下面初始化向导里的任何输入都不需要。备份带有管理员账号时，恢复完成后直接去登录页；万一这份归档里没有账号，站点会保持未初始化，回来继续走向导建一个即可。',
+                  )}
                 </p>
               </div>
             ),
@@ -249,7 +300,11 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
         disabled={busy}
       >
         <Button type="primary" loading={busy} disabled={busy}>
-          {busy ? (phase === 'restoring' ? '正在恢复…' : '正在上传…') : '上传备份并恢复'}
+          {busy
+            ? phase === 'restoring'
+              ? t('init.restore.restoring', '正在恢复…')
+              : t('init.restore.uploading', '正在上传…')
+            : t('init.restore.uploadButton', '上传备份并恢复')}
         </Button>
       </Upload>
       {busy && (
@@ -263,7 +318,10 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
               type="info"
               showIcon
               style={{ marginTop: 8 }}
-              message="上传完成，服务端正在恢复（解压 + 导入数据库 + 写回静态文件）。几十 MB 的备份通常要 1–2 分钟，请不要关闭或刷新页面。"
+              message={t(
+                'init.restore.uploadingLong',
+                '上传完成，服务端正在恢复（解压 + 导入数据库 + 写回静态文件）。几十 MB 的备份通常要 1–2 分钟，请不要关闭或刷新页面。',
+              )}
             />
           )}
         </div>

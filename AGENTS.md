@@ -9469,6 +9469,74 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.128 🔴 多语言第一期落地：umi locale 插件「早就装好、只是被关着」，以及三条实测挣来的规矩
+
+**站长裁定（2026-09-23）**：第一期范围 = **安装页 + 后台骨架 + 语言一键切换**；
+语言偏好 **跟人走（localStorage）+ 站点级默认值**，但 🔴 **第一期不在 `siteInfo` 加字段**
+（那会牵动 `siteInfoFieldParity`：它钉「表单 ↔ DTO ↔ 文档三方字段集合相等」⇒ 加字段要同一次改三处）⇒
+站点默认值就是 `config.js` 里 `locale.default: 'zh-CN'` 这个**常量**，「可在后台配置的站点默认语言」留作独立一期。
+🔴 **「内容 i18n / 文档 i18n / 前台 / 服务端消息」四项本轮未裁定 ⇒ 是开放待办，不是已关闭**（不要写成「站长决定不做」）。
+
+**基础设施早就装好了**：`@umijs/plugin-locale@0.16.0`（随 `@umijs/preset-react` 进来，含 react-intl 3.12.1）、
+antd 4 的 `lib/locale/{zh_CN,zh_TW,en_US}.js`、`@waline/client` 自带 `zh-CN/zh-TW/en` —— **零新增依赖**。
+插件是 `enableBy: config` ⇒ **加一个顶层 `locale` 键就启用**。启用后自动拿到：
+`antd: true` ⇒ 插件用 `ConfigProvider` 接管 antd locale；`plugin-layout` 的
+`genRenderRightContent({ locale: api.hasPlugins(['@umijs/plugin-locale']) })` ⇒ **头部 `<SelectLang />` 自动出现**
+（🔴 **它只看插件有没有注册，与 `layout.locale` 无关** —— 这一点靠读 `getLayoutContent.tsx` 的
+`props.locale ? "import { SelectLang } from 'umi'" : ''` 确认，不是猜的）。
+
+🔴 **规矩一：`ignoreMomentLocale: true` 与 i18n 不冲突，不要关掉它。**
+它的实现是 webpack `IgnorePlugin({ resourceRegExp: /^\.\/locale$/, contextRegExp: /moment$/ })`（在
+`@umijs/bundler-webpack` 的 `getConfig.js`），**只拦 moment 自己内部那个动态 `require('./locale')`**（= 全部 135 个语言包、约 740KB）。
+而 plugin-locale 的 `locale.tpl` 是 `import 'moment/locale/{{.}}'` 这种**显式静态导入**
+（resource 是 `./zh-cn`、context 是 `moment/locale`，**不匹配那对正则**）⇒ **照样打得进来**，
+且插件 `_onCreate()` 会自动 `moment.locale(...)`。实测生成的 `.umi/plugin-locale/locale.tsx` 里确实有
+`import 'moment/locale/zh-cn'` 与 `'moment/locale/zh-tw'` 两行。👉 **保持 true 只多约 11KB，关掉要 +740KB。**
+⚠️ 调研报告曾把这一项标成「启用 i18n 时必须重新评估的冲突」—— **实测结论是不冲突**。
+
+🔴 **规矩二：纯 JS 模块的多语言用「注入翻译器」，不要在模块里 import umi。**
+`setupKeyCore.js` / `restoreCore.js` 是纯 JS、被 `node --test` **直接 `require()`**，拿不到 umi 运行时 ⇒
+如果让它们 `import { getIntl } from 'umi'`，那些单测会**直接加载失败**。
+做法是给它们一个**可选的翻译器参数**，不传时用 identity 实现（返回 `defaultMessage` 并做 `{占位符}` 插值）：
+🔴 **实测不传 t 时输出与改造前逐字相同**（`恢复请求失败（HTTP 500）`、`文章 59 · 图片 93 · 访问记录 8746 · 合计 8898`、
+`getSetupKeyHints()` === `SETUP_KEY_HINTS`）⇒ **那四个测试文件一条断言都没改就仍然全绿**。
+
+🔴 **规矩三：组件里一律 `t(id, defaultMessage)`，让中文留在源码里。**
+这样既有的**源码文本断言**（`comp.includes('请不要关闭或刷新页面')` 这类）继续有效，
+而 `localePackParity.test.js` 反过来钉住「每个 `defaultMessage` 都与 `zh-CN` 包里同 id 的值逐字相同」⇒
+**中文虽然出现在两处，但两处被强制对账**，不会漂。
+
+🔴 **本轮实测挣到的三个具体教训**：
+1. 🔴 **`grep` 产物时非 ASCII 会被 terser 转义成 `\uXXXX`** ⇒ 用原文搜 zh-TW/antd 中文会得到 **0 命中**，
+   看起来像「语言包没打进产物」。父代理就差点把它当成缺陷上报；改成不区分大小写搜 `\uXXXX` 形式后
+   zh-CN/zh-TW/en-US/antd 的 `条/页`、`暂无数据` **全部命中**。👉 **「计数为 0 先怀疑尺子」又一次成立。**
+2. 🔴 **i18n 的 key 名不要撞上被测代码里的标识符**：我把一个 key 命名为 `init.restore.goLogin`，
+   而 `initRestore.test.js` 用「`goLogin` 出现次数 == 3」钉住「未初始化分支不得跳登录页」⇒ 计数变 4、断言红。
+   🔴 **正确修法是把 key 改名（`init.restore.toSignIn`），而不是把期望值改成 4** ——
+   后者会让将来真的多出一次调用被掩盖（**「结论对」不等于「理由对」**）。
+3. 🔴 **「繁中与简中逐字相同」不总是缺陷**：`取消`/`文章`/`不包含`/`未知大小`/`初始化成功!` 这 5 条
+   本来就不含简繁异形字 ⇒ 守卫不能一刀切要求「zh-TW ≠ zh-CN」。
+   做法是**显式白名单 + 断言「实际相同的集合恰好等于白名单」**（多一条少一条都红）⇒
+   新增第 6 条相同值时必须有人有意识地把它加进白名单；
+   另配一条**简体专用字表**兜住「整包复制简体」。⚠️ 而那张字表**本身也会错**：
+   第一版把 `填`/`目`/`粘` 当成简体专用字，其实它们在繁体里同样合法（填寫、目錄、粘合）⇒ **产生假阳性**，已剔除。
+   👉 **尺子自己也要被验。**
+
+🔴 **第一期实测数字**：三份语言包各 **82 key**、集合两两相等；admin 单测 **635/157 → 656/162（0 fail）**
+（+21/+5 全部来自新守卫 `localePackParity.test.js`）；server 全量 jest **287 套件 / 4209 用例 / 0 失败（基线不变）**；
+三个 tsc 口径各 **0 错**；棘轮 **11/0**；`docs-consistency` **61/0**、`docs-links` **5/0**、`changelog-mirror-sync` **10/0**；
+admin 构建 **rc=0**，`umi.js` **1,118,463 → 1,284,420 B（+165,957 B，+14.8%）**、dist 总量 25,189,246 → 25,325,263 B。
+变异对照 **4/4 结论正确**（删 zh-TW 一个 key → 3 红；让 zh-TW 等于 zh-CN → 1 红；弄坏解析器 → 7 红证明反空转承重；
+语义空操作 → 绿），三个被改文件还原后 sha 逐字一致。
+
+⚠️ **第一期已知边界（如实记录，不要当成已完成）**：`components/SiteInfoForm`（108 个去重中文字面量、被 9 个测试文件钉住、
+与 `docs/reference/config.md` 的 45 行标签表互相对账）**未翻译** ⇒ 安装页第 2–4 步的**字段标签仍是中文**，
+它是第二期。🔴 **`waline` 也没接**：它在前台（`packages/website`），而前台第一期不做 i18n
+（`CLIENT_EXTRA_KEYS` 白名单里已有 `lang`/`locale`，接的时候一行代码就够，但需要前台先知道当前语言）。
+🔴 **没有浏览器 ⇒ 语言切换没有活体目视确认**：证据是「构建产物里三份语言包与 antd locale 都在（按 `\uXXXX` 形式核实）」
++「`.umi/plugin-locale/SelectLang.tsx` 已生成」+「`localeExports.ts` 里 `localeInfo` 注册了 en-US/zh-CN/zh-TW 三份、
+各带 antd locale 与正确的 momentLocale」⇒ **建议站长自己在后台与 `/init` 页各点一次切换器目视确认**。
+
 ### 7.127 🔴 "标题承诺 ≠ 断言红的条件"排查第三轮：D 组 39 条读完，40 条候选里查出 6 处真阳性
 
 **这一节是清单，不是叙事** —— 目的与 §7.119 相同：让下一轮不必重新扫描。

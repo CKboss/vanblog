@@ -162,7 +162,10 @@ describe('InitPage 接线（源码断言，已剔除注释）', () => {
 
   it('服务端 400 的原话被挂在面板上，提示里指路 docker logs / setup.key', () => {
     assert.ok(page.includes('markSetupKeyRequired(rejection.message)'));
-    assert.ok(page.includes('SETUP_KEY_HINTS.map'));
+    // 🔴 i18n 之后：提示通过 getSetupKeyHints(t) 取（不传 t 时逐字等于 SETUP_KEY_HINTS，
+    //    所以本文件上面那些针对常量内容的断言依旧有效）。性质不变：提示确实被渲染成列表。
+    assert.ok(page.includes('getSetupKeyHints(t)'));
+    assert.ok(page.includes('setupKeyHints.map'));
   });
 
   it('向导提交只在真的有值时携带 setupKey（默认请求体与旧版逐字节一致）', () => {
@@ -190,7 +193,11 @@ describe('RestoreFromBackup 接线（源码断言，已剔除注释）', () => {
   it('400 setupKeyRequired → 通知父组件显示输入框 + 弹窗原样展示服务端 message + 指路提示', () => {
     assert.ok(comp.includes('if (result.setupKeyRequired) {'));
     assert.ok(comp.includes('onSetupKeyRequired(result.message)'));
-    assert.ok(comp.includes('SETUP_KEY_HINTS.concat(describeRestoreFailure(xhr.status, result.message))'));
+    assert.ok(
+      comp.includes(
+        'setupKeyHints.concat(describeRestoreFailure(xhr.status, result.message, t))',
+      ),
+    );
     assert.ok(comp.includes('{result.message}'));
   });
 });
