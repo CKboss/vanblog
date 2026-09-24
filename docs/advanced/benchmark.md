@@ -381,6 +381,7 @@ caddy 模板里 `max_idle_conns_per_host":512`。压测机 `somaxconn=4096`、fd
 1. **`VANBLOG_CLUSTER_WORKERS` 要大于 1**（`auto`/`cpus`/`max`/具体数字，上限 32）。这是本轮最重要的一条：
    backlog 提到 4096 只解决了"队列太浅"，**万级并发新建连接需要多个进程一起 accept**。
    ⚠️ 代价要如实说：每个 worker 一份完整应用（🔴 **2026-09-23 实测更正：不是线性** —— 1 worker 1.426 GB、6 worker 1.934 GB，即约 +100–194 MB/worker、总量 1.36–1.85×，因为 worker 间共享只读代码页）、限流与 mongo 连接池按 worker 数摊薄、
+   🔴 **2026-09-24 更正：这句里的内存数字（1.426 / 1.934 GB）口径错了 —— 那是 `podman stats`（= `memory.current`，含可回收 page cache）在负载下的读数；按 cgroup `anon` 重测是 1 worker = 271.8 MiB、6 worker = 1215.9 MiB、边际约 163 MiB/worker。详见 §11 末尾那个带日期的更正块。**
    进程内缓存各一份（命中率下降）。打开前请自己压一遍。
 2. **`net.core.somaxconn` 必须 ≥ `VANBLOG_LISTEN_BACKLOG`**：生效值是两者的最小值。本机是 4096，
    但**发行版常见默认是 128** —— 那样配 4096 会被夹到 128，C10K 必然大量 502。
@@ -901,6 +902,48 @@ node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile late
 ⚠️ 两组的内存基数不同（1.426 vs 1.141 GB）是因为两次恢复后的 ISR 产物与缓存状态不同 ⇒
 **请按"每 worker 约 +100–194 MB"这个区间预留，不要用某一个单点数字。**
 
+> 🔴 **2026-09-24 更正（口径错误，上面那组内存数字全部高估了一倍以上；原文按惯例保留不改写）**
+>
+> 上面表里的「1.426 GB / 1.934 GB / +508 MB」与另一组的「1.141 GB / 2.113 GB / +194 MB」
+> **都是 `podman stats` 的读数，也就是 cgroup 的 `memory.current`** —— 它**包含可回收的 page cache**，
+> 而且是在**压测负载下**采的。🔴 **定内存预算必须用 `memory.stat` 里的 `anon`**（不可回收的匿名页），
+> 因为内存吃紧时内核会先回收 cache，`memory.current` 会因此**高估 OOM 风险**。
+>
+> 按 `anon` 口径重测（2026-09-24，镜像 `vanblog:drill-v2026.9.6`，自建 mongo 的一次性容器，
+> 每档就绪后打几次前台再静置 75 秒取稳态）：
+>
+> | worker 数 | `anon` | `memory.current` |
+> |---|---|---|
+> | 1 | **271.8 MiB** | 296.7 MiB |
+> | 2 | **565.0 MiB** | 604.3 MiB |
+> | 4 | **888.1 MiB** | 943.6 MiB |
+> | 6 | **1215.9 MiB** | 1290.9 MiB |
+>
+> ⇒ **边际约 163 MiB/worker**（2→6 的斜率），⚠️ 而 1→2 那一跳是 **293 MiB** —— 因为
+> 🔴 **`workers=1` 时根本没有 cluster 主进程**（`main.ts` 的判据是"worker 数 > 1 且自己是主进程"），
+> ≥2 时才多出一个 primary ⇒ **base 与 marginal 必须分开建模，不能压成一个数**
+> （压平之后 6 个 worker 会算成 2688 MiB，而实测只有 1215.9 MiB）。
+>
+> 🔴 **同一个"6 worker"在不同时机测出过 882 / 1216 / 2113 MiB 三个数**
+> （活体运行 40 分钟后 V8 已把堆还给 OS ⇒ 882；刚启动的新栈 ⇒ 1216；压测中按 `memory.current` ⇒ 2113）
+> ⇒ 👉 **规矩：报内存数字必须同时报口径（`anon` 还是 `memory.current`）与采样时机
+> （空载稳态 / 负载中 / 刚启动），否则同一个东西能差 2.4 倍而读者无从判断。**
+>
+> 🔴 **据此，「`mem_limit: 768m` 会 OOM」这个断言也更正为**：实测 768m 下硬开 6 个 worker
+> **不会立刻 OOM**（`OOMKilled=false`、`RestartCount=0`、`/` 与 `/admin` 都 200），
+> 但它是靠**把 page cache 榨到 4096 字节**活下来的 ⇒ **余量为零**，
+> 任何一次峰值（整站备份导出、sharp 图片处理、ISR 渲染）都可能把它推过上限被杀。
+> ⚠️ **这个更正的价值不在于"承认说错了"，而在于它把一条不可操作的断言换成了可操作的告警** ——
+> 部署者读到"会 OOM"只会觉得文档在吓人，读到"余量为零、峰值会被杀"才知道该加内存还是该设
+> `VANBLOG_CLUSTER_WORKERS=1`。
+>
+> 🔴 **而这件事现在已经由代码兜住了**：`auto` 改成 **CPU 与内存两维取小**
+> （读 cgroup v2 `memory.max` → v1 `memory.limit_in_bytes` → 都没有才回落 `os.totalmem()`；
+> 🔴 容器里 `os.totalmem()` 报的是**宿主机**内存，实测 `--memory 768m` 的容器里它是 31.11 GiB），
+> 预算 = 固定 256 MiB + 每 worker 192 MiB（比实测斜率 163 高约 18%，取保守侧）+ 峰值预留 96 MiB
+> ⇒ **768 MiB 的容器只会起 2 个 worker、1 GiB 起 3 个、512 MiB 起 1 个**，启动日志会打一行说明依据。
+> 🔴 显式写数字则完全尊重、不做内存裁剪。
+
 ### 11.3 🔴 主卡点的定位（为什么是它，而不是别的）
 
 排除法，每一项都有实测：
@@ -923,6 +966,7 @@ node scripts/benchmark/loadtest.cjs --base http://127.0.0.1:18080 --profile late
 - 🔴 **`docker-compose/docker-compose-template.yml`**：把原来注释掉的 `# VANBLOG_CLUSTER_WORKERS: '2'`
   改成"镜像已默认 `auto`、通常不用再设"，并 🔴 **更正它自己那句"内存近似线性增长"**（实测是 1.36–1.85×），
   以及 🔴 **补上它与 `mem_limit: 768m` 的冲突**（6 worker 实测要 1.9–2.1 GB，按模板建议设 768m 会 OOM）。
+  🔴 **2026-09-24 更正：那一句的「6 worker 实测要 1.9–2.1 GB」与「会 OOM」都不准确** —— 数字口径是 `memory.current`（含可回收 cache）而非 `anon`，而 768m 下硬开 6 个 worker 实测**没有被 OOM 杀**（只是 page cache 被榨到 4096 字节、余量为零）。详见 §11 末尾的更正块。
 - 🔴 **`docs/reference/env.md`**：这个旋钮现在有**两个默认值**（代码 1／镜像 `auto`），
   表格里必须同时写清并说明**用 Docker 部署时以镜像为准**；并补了 A/B 结论、内存代价、
   以及 `website` 字段在非 leader worker 上报 `unknown` 的监控口径。

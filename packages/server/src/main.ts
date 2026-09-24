@@ -32,7 +32,7 @@ import { MigrationKind, MigrationProvider } from './provider/migration/migration
 import { ArticleProvider } from './provider/article/article.provider';
 import cluster from 'node:cluster';
 import os from 'node:os';
-import { isPrimaryInstance, resolveClusterWorkers, CLUSTER_ENV } from './utils/clusterRole';
+import { isPrimaryInstance, decideClusterWorkers, formatClusterWorkerDecision, CLUSTER_ENV } from './utils/clusterRole';
 import { startClusterPrimary } from './utils/clusterBootstrap';
 import { DEFAULT_SERVER_PORT, getListenTarget } from './utils/listenHost';
 import { sanitizeRequestPayloads, SanitizeBodyPipe } from './utils/sanitizeRequest';
@@ -632,12 +632,16 @@ async function bootstrap() {
   }, 3000);
 }
 /**
- * 多进程开关：`VANBLOG_CLUSTER_WORKERS`（默认 **1** = 今天的单进程行为）。
+ * 多进程开关：`VANBLOG_CLUSTER_WORKERS`。
+ * 🔴 **代码默认 1（读不到该变量时回落），而镜像默认 `auto`**（`Dockerfile` 里设的）⇒ 以镜像为准。
  *
  * 单进程 Node 是动态请求的实测天花板（AGENTS §7.44：一万条连接拿 caddy 直服的静态图片
  * 0.8 秒全部 200，同样一万条连接打反代到 Node 的动态接口，30 秒只完成 1600 个）。
- * cluster 能把动态吞吐乘以核数，但代价是**内存也乘以核数**（每个 worker 一份完整的
- * Nest 应用 + mongoose 连接池 + Next 的 ISR 缓存），所以默认关着，由部署者按机器决定。
+ * cluster 能把动态吞吐乘以核数，代价是内存上升 —— ⚠️ **但不是"乘以核数"**：
+ * worker 之间共享只读代码页，2026-09-24 按 cgroup `anon`（不可回收部分）实测
+ * 1 worker = 271.8 MiB、6 worker = 1215.9 MiB，**边际约 163 MiB/worker**、总量约 4.5×而不是 6×。
+ * 🔴 所以 `auto` 是 **CPU 与内存两维取小**（见 `decideClusterWorkers`），
+ * 4 核 / 1 GB 的小机不会因此起 4 个 worker；显式写数字则完全尊重、不做内存裁剪。
  *
  * 打开之后由主实例独占的东西（`isPrimaryInstance()` 守卫）：
  * 每小时 ISR cron、每日 viewer 结算与统计清理、启动期数据清洗、restore.key、
@@ -645,16 +649,21 @@ async function bootstrap() {
  * 按 worker 数摊薄的东西：内存限流与登录防爆破阈值（`scaleLimit`）、mongoose 连接池上限。
  * 仍然每进程一份、但**语义正确**的东西：浏览统计缓冲（都是原子 $inc）、publicMetaCache。
  */
-const clusterWorkers = resolveClusterWorkers(process.env[CLUSTER_ENV], os.cpus().length);
+const clusterDecision = decideClusterWorkers(process.env[CLUSTER_ENV], os.cpus().length);
+// 🔴 变量名 `clusterWorkers` 与文件末尾那个"worker 数 > 1 且自己是 cluster 主进程"的入口分支
+//    被 audit-hardening-round2.spec.ts 与 clusterLeaderElection.spec.ts 按源码文本钉住，别改名。
+//    ⚠️ 这条注释刻意**不逐字引用**那个表达式：否则将来改了代码，注释里的副本仍会让 toContain 绿着。
+const clusterWorkers = clusterDecision.workers;
+
 
 async function startPrimary() {
   // ⚠️ jwt 密钥必须由主进程先解析好再 fork：全新安装时 N 个 worker 同时跑
   // "没有就生成一个"，即便有原子 upsert 兜着，也让它们全部走"读已存在的"这条分支更稳。
   global.jwtSecret = await initJwt();
+  // 🔴 这行把"为什么是这个 worker 数"的依据一起打出来（核数 / 内存预算 / 固定开销 /
+  //    每 worker 开销 / 峰值预留 / 到底是哪一维在约束）。部署者一眼能看懂，排障不用猜。
   // eslint-disable-next-line no-console
-  console.log(
-    `[cluster] 主进程启动 ${clusterWorkers} 个 worker（${CLUSTER_ENV}=${clusterWorkers}）`,
-  );
+  console.log(`[cluster] 主进程启动 ${clusterWorkers} 个 worker —— ${formatClusterWorkerDecision(clusterDecision)}`);
   startClusterPrimary(clusterWorkers, cluster as any, {
     // eslint-disable-next-line no-console
     log: (message) => console.log(`[cluster] ${message}`),
@@ -936,6 +945,14 @@ if (clusterWorkers > 1 && cluster.isPrimary) {
       process.exit(1);
     });
 } else {
+  // 🔴 单进程时也把决策打出来：这正是部署者会问"为什么只有 1 个 worker"的场景
+  //    （可能是 `auto` 被内存预算裁到了 1，也可能是显式设了 1）。
+  //    用 `cluster.isPrimary` 把 worker 排除掉 —— 集群模式下这个 else 分支每个 worker 都会走到，
+  //    而 worker 的 `isPrimary` 是 false，所以这行只在"真的单进程"时打印一次。
+  if (cluster.isPrimary) {
+    // eslint-disable-next-line no-console
+    console.log(`[cluster] 单进程启动 —— ${formatClusterWorkerDecision(clusterDecision)}`);
+  }
   // ⚠️ 一定要有 `.catch()`：`main()` 内部已经接住了数据库类错误，但"接住错误"这件事本身
   //    也可能抛（例如占位服务模块加载失败）。裸调用会把那种情况变成一坨无人解释的 stack。
   main().catch((err) => {

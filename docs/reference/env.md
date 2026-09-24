@@ -380,9 +380,11 @@ SVG 文字是经 libvips → librsvg → pango → **fontconfig** 栅格化的�
 （`envForWorker` 先展开继承的环境、再写这个角色），所以把每个进程都设成 `leader` **不会**让它们都变成主实例
 ——这是有意的，否则 N 个 worker 会各生成一把 `setup.key` 互相覆盖、各拉一个前台抢同一个端口。有守卫钉住这一点。
 
+🔴 **`auto` 不是"把核数用满"，而是 CPU 与内存两维取小**：它会读容器的 cgroup 配额（v2 `memory.max` → v1 `memory.limit_in_bytes` → 都没有才回落 `os.totalmem()`），按「固定 256 MiB + 每 worker 192 MiB + 峰值预留 96 MiB」算出养得起几个，再与核数上限取小 ⇒ **4 核 / 1 GB 的小机不会起 4 个 worker**（768 MiB ⇒ 2 个、1 GiB ⇒ 3 个、512 MiB ⇒ 1 个）。启动日志会打一行说明依据。🔴 **显式写数字则完全尊重、不做内存裁剪**。⚠️ 容器里 `os.totalmem()` 报的是**宿主机**内存（实测 `--memory 768m` 的容器里它是 31.11 GiB），所以必须优先读 cgroup —— 这就是回落顺序的原因。
+
 🔴 **为什么这个旋钮有两个"默认值"，以及该信哪个**：代码里读不到该变量时回落到 **1**（`resolveClusterWorkers`，保持单进程的历史行为，dev 与单测都是这个），而**镜像里通过 `ENV VANBLOG_CLUSTER_WORKERS=auto` 设成了 `auto`** ⇒ **用 Docker/compose 部署时生效的是 `auto`**（= 按 CPU 核数开 worker，上限 32；单核机 ⇒ 1）。这与 `UV_THREADPOOL_SIZE` 的形状一致（代码默认与镜像默认不同，以镜像为准）。
 为什么镜像要默认打开：万级并发下**单进程 accept() 抽不干内核的 accept 队列**，实测（2026-09-23，同镜像同数据、容器内 loopback 排除端口转发器、唯一变量就是这个旋钮）1 个 worker 时一万并发请求**失败 14.1%**（全 502、`TcpExtListenOverflows Δ=18883`），`auto`（6 核 ⇒ 6 worker）时**10000/10000 全 200、计数器全 Δ=0**，混合流量吞吐还高 **+25.6%（并发 200）／+39.8%（并发 1000）**。完整对照见 [benchmark 的 cluster A/B 一节](../advanced/benchmark.md)。
-⚠️ **代价（实测）**：常驻内存 1 worker = 1.426 GB、6 worker = 1.934 GB ⇒ **约 +100–194 MB/worker**、总量 **1.36–1.85×**（worker 间共享只读代码页，所以**不是**线性增长）。要设 `mem_limit` 就按这个预留；小内存机器显式设 `VANBLOG_CLUSTER_WORKERS: '1'` 退回单进程即可。
+⚠️ **代价（🔴 2026-09-24 按 cgroup `anon` 口径重测更正）**：1 worker = **271.8 MiB**、2 = 565.0、4 = 888.1、6 = **1215.9 MiB** ⇒ **边际约 163 MiB/worker**，⚠️ **不是线性**（worker 间共享只读代码页）。🔴 旧版本这里写的「1 worker = 1.426 GB、6 worker = 1.934 GB、+100–194 MB/worker」来自 `podman stats`（= cgroup `memory.current`）**在压测负载下**的读数，里面含可回收的 page cache ⇒ **高估一倍以上**。🔴 而且同一配置在不同时机测出过 **882 / 1216 / 2113 MiB** 三个数（活体运行 40 分钟后 V8 已把堆还给 OS／刚启动的新栈／压测中按 `memory.current` 读）⇒ **报内存数字必须同时报口径（`anon` 还是 `memory.current`）与采样时机（空载稳态／负载中／刚启动）**，否则同一个东西能差 2.4 倍而读者无从判断。
 ⚠️ **监控口径**：cluster 下只有 leader worker 会 spawn 前台子进程，所以 `/api/public/health` 的 `website` 字段在**非 leader** worker 上会报 `unknown`（**不是** `down`，健康判定仍是 healthy、探针不会误判重启），但"前台是否活着"这个信号在多 worker 下会变弱。
 
 ⚠️ 为什么它值得单独写一段：`VANBLOG_CLUSTER_WORKERS>1` 时，cluster 的**主进程不跑 Nest 应用**

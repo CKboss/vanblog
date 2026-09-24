@@ -9469,6 +9469,113 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.131 🔴 `auto` 改成 CPU 与内存两维取小；以及**上一轮那组内存数字口径错了**（高估一倍以上）
+
+**触发**：站长 2026-09-24 追问「不应该是按 CPU 确认 worker 数嘛？这样会不会默认把机器的内存占满。」
+🔴 **这个担心是对的** —— `auto` 原先等于 `min(max(1, cpus), 32)`，**完全不看内存**，
+而 `v2026.9.6` 已经把 `auto` 设成**镜像默认值** ⇒ 一台 4 核 / 1 GB 的小机会开箱起 4 个 worker。
+🔴 **所以这不是"优化"，是补一个已经发版的默认值引入的风险。**
+
+**改法**（`packages/server/src/utils/clusterRole.ts`）：`auto`/`max`/`cpus` 这条关键字分支
+= **CPU 上限与内存预算取小**。预算 = 固定 `CLUSTER_MEM_BASE_BYTES`(256 MiB) + 每 worker
+`CLUSTER_MEM_PER_WORKER_BYTES`(192 MiB) + 峰值预留 `CLUSTER_MEM_RESERVE_BYTES`(96 MiB)，
+`n = clamp(floor((limit − reserve − base) / perWorker), 1, cpuLimit)`。
+可用内存依次读 **cgroup v2 `memory.max`** → **v1 `memory.limit_in_bytes`** → 回落 `os.totalmem()`。
+🔴 **显式写数字则完全尊重、不裁剪**（那是部署者的决定）；🔴 **下界 clamp 到 1，绝不算出 0 个 worker**。
+🔴 **只有关键字分支才做内存这一维**，`fallback`（缺省/非法/0/负数）与 `explicit`（显式整数）都不解析预算。
+
+🔴 **一个结构性发现（它让这件事几乎零成本）**：`clusterBootstrap.ts` 的 `envForWorker` 早就把
+**解析后的整数**写进每个 worker 的 `VANBLOG_CLUSTER_WORKERS`（`[CLUSTER_ENV]: String(workers)`）⇒
+**worker 进程走的是"显式数字"分支、根本不会去读 cgroup**，
+而 `scaleLimit(base, workers = configuredWorkerCount())` 那个**每次调用都求默认参数**的热路径也就没有任何文件 I/O。
+⇒ 🔴 **内存探测只在主进程发生一次**（另外给 `resolveMemoryBudgetBytes()` 加了记忆当保险）。
+👉 **这条已用单测钉住**（判据是"显式分支不产生预算"即 `memoryBudgetBytes === 0`，
+🔴 而不是"没有调用 fs"—— 后者要 mock 全局，Node 24 下做不到）。
+
+🔴 **必须读 cgroup 而不是 `os.totalmem()` —— 活体证实**：一个 `--memory 768m` 的容器里
+`os.totalmem()` = **31.11 GiB**（宿主机的值），而 `/sys/fs/cgroup/memory.max` = **805306368**。
+⚠️ 回落那一级**不是缺陷**：容器没设配额、或裸机/虚拟机直接跑时，`os.totalmem()` 才是正确值。
+⚠️ 唯一不完美的情形是"多个容器共享一台没设配额的宿主机"⇒ 会按整机内存算、加起来可能超发；
+🔴 **这是有意的取舍**（那种部署本来就该设 `mem_limit`，而在这里猜"别人用掉多少"只会让单机部署也少起 worker）。
+
+🔴 **上一轮那组内存数字口径错了（本轮最重要的更正）**
+
+`v2026.9.6` 的 CHANGELOG、tag 信息、`Dockerfile` 注释、compose 模板、`env.md`、`benchmark.md` §11 里写的
+「1 worker = 1.141–1.426 GB」「6 worker = 1.934–2.113 GB」「每 worker +100–194 MB」「`mem_limit: 768m` 会 OOM」
+—— 🔴 **全部来自 `podman stats`，也就是 cgroup 的 `memory.current`，而且是在压测负载下采的**。
+`memory.current` **包含可回收的 page cache**，内存吃紧时内核会先回收它 ⇒ 🔴 **定预算必须用 `memory.stat` 的 `anon`**（不可回收的匿名页）。
+
+按 `anon` 重测（2026-09-24，镜像 `vanblog:drill-v2026.9.6`，自建 mongo 的一次性容器，就绪后打几次前台再静置 75 秒）：
+
+| worker 数 | 🔴 `anon` | `memory.current` |
+|---|---|---|
+| 1 | **271.8 MiB** | 296.7 MiB |
+| 2 | **565.0 MiB** | 604.3 MiB |
+| 4 | **888.1 MiB** | 943.6 MiB |
+| 6 | **1215.9 MiB** | 1290.9 MiB |
+
+⇒ **边际约 163 MiB/worker**（2→6 的斜率）。⚠️ 而 **1→2 那一跳是 293 MiB** —— 因为
+🔴 **`workers=1` 时根本没有 cluster 主进程**（`main.ts` 的判据是"worker 数 > 1 且自己是 cluster 主进程"），
+≥2 时才多出一个 primary ⇒ 🔴 **base 与 marginal 必须分开建模**（压平成"每 worker 448 MiB"的话，
+6 个 worker 会算成 2688 MiB，而实测只有 1215.9 ⇒ 一台 2 GB 的机器会被误判成"只养得起 1 个"）。
+**这条已用单测钉住**（`clusterRole.spec.ts` 的「base 与 marginal 是两个不同的模型，不能合并成一个数」）。
+
+🔴 **常量取保守侧**：`perWorker` 用 **192 MiB** 而不是实测的 163（高约 18%），
+理由是 🔴 **同一个"6 worker"在不同时机测出过 882 / 1216 / 2113 MiB 三个数**
+（活体运行 40 分钟后 V8 已把堆还给 OS ⇒ 882；刚启动的新栈 ⇒ 1216；压测中按 `memory.current` ⇒ 2113）。
+👉 🔴 **新规矩：报内存数字必须同时报口径（`anon` 还是 `memory.current`）与采样时机（空载稳态 / 负载中 / 刚启动），
+否则同一个东西能差 2.4 倍而读者无从判断。**
+
+🔴 **「`mem_limit: 768m` 会 OOM」这个断言实测不支持，更正为**：768m 下硬开 6 个 worker
+**不会立刻 OOM**（`OOMKilled=false`、`RestartCount=0`、`/` 与 `/admin` 都 200），
+但它是靠**把 page cache 榨到 4096 字节**活下来的 ⇒ 🔴 **余量为零**，
+任何一次峰值（整站备份导出、sharp 图片处理、ISR 渲染）都可能把它推过上限被杀。
+⚠️ **警告保留、断言更正** —— 价值在于把一条不可操作的断言换成可操作的告警：
+读到"会 OOM"只会觉得文档在吓人，读到"余量为零、峰值会被杀"才知道该加内存还是该设 `VANBLOG_CLUSTER_WORKERS=1`。
+🔴 **而它是怎么从实测数字变成过头断言的**：`memory.current` 在负载下读到 2.1 GB，
+就直接推出"768m 会 OOM"，🔴 **而没有核实"不可回收的部分到底是多少"** ⇒ **"数字对、推论错"的又一例**。
+
+🔴 **更正的落地方式**（照本仓库规矩）：**不改写已发版的 CHANGELOG 与 tag**（历史不可改）；
+`Dockerfile` / compose 模板 / `env.md` 是**当前状态的说明** ⇒ **就地更正**；
+`benchmark.md` §11 与 §7.130 是**历史测量记录** ⇒ 🔴 **保留原文、加带日期的更正块**
+（篡改测量记录比留着错数字更糟），并在新的 `[Unreleased]` 条目里说明。
+
+🔴 **三个坑**
+1. 🔴 **`jest.spyOn(fs, 'readFileSync')` 在 Node 24 下抛 `TypeError: Cannot redefine property: readFileSync`** ——
+   本仓库 `fullBackup.hardening.spec.ts` 里**早就记着同一个坑**（它当年的绕法是"制造真失败"）。
+   这里没法在宿主上造 `/sys/fs/cgroup/memory.max`，所以改成**注入 reader**
+   （`detectCgroupMemoryLimitBytes(read = readTextFile)`、`resolveMemoryBudgetBytes({ read, totalmem })`），
+   与本仓库既有做法一致（`isPrimaryInstance(clusterLike?, env?)`、`startClusterPrimary(workers, cluster, hooks)`、
+   多语言那轮的"注入式翻译器"）。👉 **规矩：要 mock 之前先 grep 仓库里有没有同类先例，别自己发明。**
+2. 🔴 **父代理这一轮的记账脚本又在"写完之后"的核实断言上抛了 `AssertionError`** ——
+   我写的核实条件是 `'271.8 MiB' 出现 >= 2 次`，而条目里其实只有 1 次 ⇒ **CHANGELOG 已落盘、AGENTS 没写**。
+   ⚠️ 这次**闸门生效了**（`test … && … || exit 9` 拦住了 `releaseDoc.js`，没有产生半套记账），
+   但形状与 §7.129 记的那条完全一样。👉 🔴 **强化版规矩：核实断言要写"实际应该成立的形状"，
+   不要凭"我大概写了几次"下界；而且多文件编辑必须"全部在内存里改完、全部 assert 通过、再统一落盘"**
+   （本轮就是先写了 CHANGELOG 才去算 AGENTS 的节号）。
+3. 🔴 **`grep -rl "main\.ts" | head -12` 让我以为只有 12 个消费方，实际是 35 个** ⇒
+   **"计数被管道截断"又一次**（本项目第 14 次怀疑尺子）。👉 数消费方时**不要接 `head`**。
+   ⚠️ 另一处：我第一版单测断言 `reads` 是 1、实际是 2（v2 读到 `max` 后还要再探 v1）⇒
+   **是实现符合预期、断言写错了**，读失败原文才发现。
+
+⚠️ **本轮刻意没做的两件事**（都给了方案，交站长裁定）：
+① 🔴 **`health` 的 `website` 字段在多 worker 下实际失效** —— 6 次采样 **4 次 `unknown`、2 次 `up`**
+（只有 leader 会报 `up`，命中率约 1/N）。⚠️ 不会让探针误判重启（`unknown` 仍 healthy、仍 200），
+但"前台是否活着"这个信号等于没有了。**修法方向**：leader 把前台状态写到一个共享处
+（哨兵文件 / DB 一行 / 共享内存映射），让任意 worker 都能读到真实状态。
+🔴 **代价与 blast radius**：要动 `WebsiteProvider` 与 `health.controller`，而四象限契约由
+`health.controller*.spec.ts` 与 `vanblog-compose-health`（119 条）钉着 ⇒ **改动不小、且要重验四象限**；
+另一个候选是"caddy 直接探前台端口"，但那会把判定搬出应用、与现有契约冲突。**建议单独一轮。**
+② 🔴 **`scripts/build-image-local.sh` 的冒烟测试对 cluster 镜像会假红** ——
+它只等**服务端**就绪（`/api/public/meta`）就立刻打 `/`，而前台子进程是 leader 稍后才拉起的
+⇒ 探测落在前台还没监听的窗口里（实测：`drill-v2026.9.6` 冒烟 3 项失败全是前台路由 502，
+而**隔离实验证明完全启动后 `cluster=auto` 的前台路由全部 200** ⇒ 是就绪竞态、不是产品回归）。
+🔴 **实际后果**：`nightly.yml` 与 `server-test.yml` 都跑这个冒烟 ⇒ **CI 可能对 cluster 镜像假红**。
+**修法方向**：就绪判据改成等前台（或对前台路径加重试窗口）。
+⚠️ 它被 4 处钉着（`build-image-local.test.sh`、`docs-consistency`、`nightly.yml`、`server-test.yml`）⇒ 改它要连带跑守卫。
+🔴 **本轮没做，理由是改动量已经不小**（代码 + 21 条单测 + 4 份文档 + 记账），而这两件都需要独立验证。
+⚠️ **本轮构建因此用了 `--build-only`**（跳过那个已知会假红的冒烟），改用内存阶梯做验证 —— 🔴 **这是绕过、不是修好**。
+
 ### 7.130 🔴 性能轮（C10K）：主卡点是「只有一个进程在 accept」，修法是**镜像默认打开 cluster**；以及「代码默认 vs 镜像默认」这个新的口径维度
 
 **站长本轮推翻了 §7.87 与 §7.89 的性能裁定**：原话是「对项目继续进行性能优化…**找到最关键的卡点，

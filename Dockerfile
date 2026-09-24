@@ -669,11 +669,24 @@ ENV UV_THREADPOOL_SIZE=16
 #                          **全 Δ=0**，而且**更快**（10.7s → 5.5s，约 1.8×）。
 # ⇒ 万级并发的卡点不是 fd、不是 somaxconn（容器内实测 somaxconn=4096、ulimit -n=1048576，
 #    VANBLOG_LISTEN_BACKLOG 也已经默认 4096），而是**只有一个进程在 accept**。
-# ⚠️ 代价（实测，不是推算）：容器常驻内存 1 个 worker = 1.141 GB，6 个 worker = 2.113 GB
-#    ⇒ **每多一个 worker 约 +194 MB**，总量只有 **1.85×**（worker 之间共享只读代码页，
-#    所以**不是**"内存随 worker 数线性增长"）。要按核数预留内存时请用 194 MB/worker 这个实测值。
-# ⚠️ 如果你给容器设了 mem_limit，请按上面的实测值预留；小内存机器要退回单进程就设
-#    VANBLOG_CLUSTER_WORKERS=1（编排文件里的 environment 覆盖镜像默认值即可）。
+# ⚠️ 代价（🔴 2026-09-24 按 cgroup `anon` 口径**重测更正**；上面那组旧数字来自 `podman stats`
+#    在**压测负载下**读的 `memory.current`，里面含可回收的 page cache ⇒ **高估了一倍以上**）：
+#      1 worker = 271.8 MiB｜2 = 565.0｜4 = 888.1｜6 = 1215.9 MiB  ⇒ **边际约 163 MiB/worker**
+#    ⚠️ 不是线性（worker 之间共享只读代码页）。🔴 而且**同一配置在不同时机测出过 882 / 1216 / 2113 MiB**
+#    （活体运行 40 分钟后 V8 已把堆还给 OS / 刚启动的新栈 / 压测中按 memory.current 读）
+#    ⇒ **报内存数字必须同时报口径（`anon` 还是 `memory.current`）与采样时机**，否则无从判断。
+# 🔴 `auto` 现在**按内存自适应**：CPU 与内存两维**取小**（读 cgroup v2 `memory.max` →
+#    v1 `memory.limit_in_bytes` → 都没有才回落 `os.totalmem()`；🔴 容器里 `os.totalmem()` 报的是
+#    **宿主机**内存，实测 `--memory 768m` 的容器里它是 31.11 GiB，所以必须优先读 cgroup）。
+#    预算 = 固定 256 MiB + 每 worker 192 MiB（比实测斜率 163 高约 18%，取保守侧）+ 峰值预留 96 MiB
+#    ⇒ **768 MiB 的容器只会起 2 个 worker、1 GiB 起 3 个、512 MiB 起 1 个**，不会把小内存机器吃爆。
+#    启动日志会打一行说明依据（核数 / 内存预算 / 哪一维在约束）。
+#    🔴 显式写数字（例如 VANBLOG_CLUSTER_WORKERS=6）则**完全尊重、不做内存裁剪** —— 那是部署者的决定。
+# ⚠️ 关于 mem_limit：实测 768m 下硬开 6 个 worker **不会立刻 OOM**（OOMKilled=false、RestartCount=0、
+#    / 与 /admin 都 200），但它是靠**把 page cache 榨到 4096 字节**活下来的 ⇒ **余量为零**，
+#    任何一次峰值（整站备份导出、sharp 图片处理、ISR 渲染）都可能把它推过上限被 OOM 杀。
+#    ⇒ 要么按上面的预算公式设 mem_limit，要么干脆不设、让 `auto` 按实际可用内存自己决定；
+#    小内存机器要退回单进程就设 VANBLOG_CLUSTER_WORKERS=1（编排文件里的 environment 覆盖镜像默认值即可）。
 # ⚠️ 监控口径：cluster 下只有 leader worker 会 spawn 前台子进程，所以 /api/public/health 的
 #    website 字段在**非 leader** worker 上会报 "unknown"（不是 "down"）⇒ 健康判定仍是 healthy，
 #    探针不会因为请求落到哪个 worker 而误判重启；但"前台是否活着"这个信号在多 worker 下会变弱。
