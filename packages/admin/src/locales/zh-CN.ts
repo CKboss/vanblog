@@ -143,4 +143,25 @@ export default {
   'login.passwordRequired': '密码是必填项！',
   'login.autoLogin': '自动登录',
   'login.forgotPassword': '忘记密码',
+
+  // 🔴 第二期第一块：后台侧边栏菜单（`config/routes.js` 的 `locale` 字段指向这些 key）。
+  // ⚠️ 菜单文字由 ProLayout 用 formatMessage({id: locale, defaultMessage: name}) 渲染，
+  //    所以**漏一条不会显示裸 key，而是回落到 routes.js 里的中文 name**（这正是保留中文 name 的理由）。
+  // 🔴 英文/繁中的术语刻意与本包既有散文一致（例如「系统设置」在 init.* 的英文里就是 System settings），
+  //    否则菜单与提示文案会互相矛盾。
+  'menu.welcome': '分析概览',
+  'menu.article': '文章管理',
+  'menu.editor': '图形编辑器',
+  'menu.code': '代码编辑器',
+  'menu.about': '关于',
+  'menu.draft': '草稿管理',
+  'menu.img': '图片管理',
+  'menu.file': '附件管理',
+  'menu.site': '站点管理',
+  'menu.site.data': '数据管理',
+  'menu.site.comment': '评论管理',
+  'menu.site.pipeline': '流水线',
+  'menu.site.setting': '系统设置',
+  'menu.site.customPage': '自定义页面',
+  'menu.site.log': '日志管理',
 };

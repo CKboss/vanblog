@@ -1,5 +1,8 @@
 /**
- * 🔴 多语言第一期守卫：三份语言包的 key 集合必须完全相等，且翻译必须真的存在。
+ * 🔴 多语言守卫：三份语言包的 key 集合必须完全相等，且翻译必须真的存在。
+ *
+ * 覆盖面：**第一期**＝安装页家族 + 登录/忘记密码页 + 语言切换器；
+ * 🔴 **第二期第一块**＝后台侧边栏菜单（`config/routes.js` 的 `locale` 字段 ↔ 三份包的 `menu.*`）。
  *
  * **它防的是本仓库反复付过学费的那一族失效**：一个性质有多处口径 ⇒ 改一处忘另一处
  * （API Token 默认值曾有六处口径、两处是错的；`api.md` 的限流表曾漏掉一整个桶）。
@@ -85,6 +88,13 @@ const IDENTICAL_ZH_TW_OK = [
   'init.restore.count.articles', // 文章
   'init.restore.count.unknownSize', // 未知大小
   'init.restore.uninitLine1Strong', // 不包含 —— 三个字简繁同形
+  // 🔴 第二期第一块（侧边栏菜单）新增的三条：这几个词简繁逐字相同，
+  //    「文章」「草稿」「附件」「管理」四个字都不含简繁异形字。
+  //    ⚠️ 这不是偷懒：把它们排除在「必须不同」之外是正确的，而白名单必须**恰好等于**
+  //    实际相同的那一批 ⇒ 谁再多复制一条简体当繁中，这条就会红。
+  'menu.article', // 文章管理
+  'menu.draft', // 草稿管理
+  'menu.file', // 附件管理
 ];
 
 /**
@@ -335,6 +345,15 @@ describe('多语言第一期：语言切换器必须真的被渲染（不是只�
       scope: /rightContentRender:\s*\(\)\s*=>\s*\{[\s\S]*?\n    \},/,
     },
     {
+      file: 'src/app.jsx',
+      why:
+        '🔴 侧边栏 links 区：handleSizeChange() 在视口 >768px 时把 header 设成 display:none，' +
+        '所以 rightContentRender 里的切换器在桌面端不可见；links 区是桌面端唯一常驻可见的操作区' +
+        '（主题按钮与登出本来就在这里各重复了一份）',
+      // 🔴 必须落在 links 数组里，不能只是"文件里某处出现过"
+      scope: /links:\s*\[[\s\S]*?\n    \],/,
+    },
+    {
       file: 'src/pages/user/Login/index.jsx',
       why: '登录页是 layout:false 且是站长看到的第一屏 ⇒ 登录之前就要能切换语言',
       scope: null,
@@ -352,7 +371,7 @@ describe('多语言第一期：语言切换器必须真的被渲染（不是只�
   ];
 
   it('反空转：清单必须是这 4 处、且每个文件都真实存在', () => {
-    assert.equal(REQUIRED.length, 4, '清单条数变了 ⇒ 这条期望值必须一起改（这个摩擦是刻意留的）');
+    assert.equal(REQUIRED.length, 5, '清单条数变了 ⇒ 这条期望值必须一起改（这个摩擦是刻意留的）');
     for (const r of REQUIRED) {
       assert.ok(existsSync(path.join(adminRoot, r.file)), `文件不存在：${r.file}`);
     }
@@ -367,13 +386,16 @@ describe('多语言第一期：语言切换器必须真的被渲染（不是只�
       if (r.scope) {
         assert.ok(
           target.length > 0,
-          `🔴 在 ${r.file} 里找不到 rightContentRender 的作用域 ⇒ 尺子失效（不是"没有切换器"）。` +
+          `🔴 在 ${r.file} 里找不到该处应有的作用域（rightContentRender / links 数组）⇒ 尺子失效（不是"没有切换器"）。` +
             `请先核实这个正则是否还对得上当前源码形状；解析不到 ≠ 不存在。`,
         );
       }
       assert.match(
         target,
-        /^\s*<SelectLang\s*\/>/m,
+        // ⚠️ 允许带属性：放在 links 数组里的那一份必须带 key（React 对数组子元素的要求），
+        //    所以形状是 `<SelectLang key="langSider" />`。仍然要求"行首 + 自闭合"，
+        //    因此注释里提到的 <SelectLang /> 不会算数（注释已被 stripComments 剥掉）。
+        /^\s*<SelectLang(\s[^>]*)?\/>/m,
         `🔴 ${r.file} 没有渲染 <SelectLang />。${r.why}。` +
           `⚠️ 注意"组件被编译进产物"不等于"它被渲染"—— v2026.9.6 就是这样发出去的。`,
       );
@@ -429,6 +451,130 @@ describe('多语言第一期：语言切换器必须真的被渲染（不是只�
       /^\s*<SelectLang\s*\/>/m,
       '🔴 尺子坏了：真实的 <SelectLang /> 渲染点没被认出来 ⇒ 正则需要修，而不是放宽断言',
     );
+  });
+});
+
+describe('多语言第二期第一块：侧边栏菜单的 locale 接线（routes.js ↔ 三份语言包）', () => {
+  /**
+   * 🔴 这一组钉的是**方案 (B) 的接线**：`config/routes.js` 保留中文 `name`、另加显式
+   * `locale: 'menu.xxx'`，由 ProLayout 的 `formatMessage({ id: locale, defaultMessage: name })`
+   * 渲染（权威实现：`@umijs/route-utils` 的 `transformRoute`，`getItemLocaleName` 里
+   * `return item.locale || `${parentName}.${name}`` ⇒ 显式 locale 优先）。
+   *
+   * 🔴 为什么不是把 `name` 改成 key（方案 A）：`defaultMessage` 永远是 `name`，所以
+   *   - (B) 漏翻译 ⇒ 用户看到**中文**（与改动前一致）；
+   *   - (A) 漏翻译 ⇒ 用户看到**裸 key**（菜单上出现 `article`），而且所有直接读 `name` 的
+   *     消费方（面包屑、`document.title`、`attachmentManage.test.js` 的两条断言）全部跟着变。
+   * 👉 下面那条「name 必须仍是中文显示文本」钉的**不是文案，而是这个安全前提本身**。
+   */
+  const routesSrc = stripComments(read('config/routes.js'));
+
+  function parseRouteLocales(src) {
+    const out = [];
+    const re = /locale:\s*'([^']+)'/g;
+    let m;
+    while ((m = re.exec(src)) !== null) out.push(m[1]);
+    return out;
+  }
+  function parseRouteNames(src) {
+    const out = [];
+    const re = /name:\s*'([^']+)'/g;
+    let m;
+    while ((m = re.exec(src)) !== null) out.push(m[1]);
+    return out;
+  }
+
+  const routeLocales = parseRouteLocales(routesSrc);
+  const routeNames = parseRouteNames(routesSrc);
+  const menuKeys = Object.keys(packs['zh-CN'])
+    .filter((k) => k.startsWith('menu.'))
+    .sort();
+  const CJK = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+  it('反空转：routes.js 恰好 15 处 locale，全部 menu. 前缀且互不重复', () => {
+    assert.equal(
+      routeLocales.length,
+      15,
+      `抽到 ${routeLocales.length} 处 locale（期望 15）⇒ 要么解析器坏了，要么菜单增删了而这条期望值没跟着改`,
+    );
+    for (const l of routeLocales) {
+      assert.ok(l.startsWith('menu.'), `locale 必须是 menu. 前缀：${l}`);
+    }
+    assert.equal(new Set(routeLocales).size, routeLocales.length, 'routes.js 里有重复的 locale');
+  });
+
+  it('反空转：确实抽到了 name（不是解析器坏了）', () => {
+    assert.ok(routeNames.length >= 17, `只抽到 ${routeNames.length} 个 name，疑似解析器坏了`);
+  });
+
+  it('每个路由 locale 都在三份语言包里存在', () => {
+    const missing = [];
+    for (const l of routeLocales) {
+      for (const loc of LOCALES) {
+        if (!(l in packs[loc])) missing.push(`${l} 缺 ${loc}`);
+      }
+    }
+    assert.deepEqual(
+      missing,
+      [],
+      `路由引用了语言包里没有的 key（菜单会静默回落到中文 name，切语言时那一格不变）：\n  ${missing.join('\n  ')}`,
+    );
+  });
+
+  it('🔴 反向：语言包里的每个 menu.* 都被某个路由用到（不留死条目）', () => {
+    const dead = menuKeys.filter((k) => !routeLocales.includes(k));
+    assert.deepEqual(
+      dead,
+      [],
+      `语言包里有 ${dead.length} 条 menu.* 没有任何路由引用 ⇒ 死条目，改菜单时必然漂：${dead.join(', ')}`,
+    );
+  });
+
+  it('🔴 方案 (B) 的安全前提：routes.js 的 name 必须仍是中文显示文本，不是 key', () => {
+    const bad = routeNames.filter((n) => !CJK.test(n));
+    assert.deepEqual(
+      bad,
+      [],
+      `routes.js 里这些 name 不是中文显示文本：${bad.join(', ')}\n` +
+        '🔴 把 name 改成 key 等于把方案从 (B) 退化成 (A)：漏翻译时菜单会显示裸 key，' +
+        '而且所有直接读 name 的消费方（面包屑 / document.title / attachmentManage.test.js）都会跟着变。',
+    );
+    assert.ok(
+      routeNames.every((n) => !n.startsWith('menu.')),
+      'name 不许是 menu. 开头的 key（同上）',
+    );
+  });
+
+  it('locale 不许侵占既有命名空间（init. / common. / login.）', () => {
+    const clash = routeLocales.filter((l) => /^(init|common|login)\./.test(l));
+    assert.deepEqual(clash, [], `locale 用了既有命名空间：${clash.join(', ')}`);
+  });
+
+  it('menu.* 的 en-US 值必须与 zh-CN 不同（防拿中文充英文）', () => {
+    const same = menuKeys.filter((k) => packs['en-US'][k] === packs['zh-CN'][k]);
+    assert.deepEqual(same, [], `这些 menu.* 的 en-US 与 zh-CN 逐字相同：${same.join(', ')}`);
+  });
+
+  it('尺子反证：合成"一份包少一个 menu key" ⇒ 必须被上面那条点名', () => {
+    const fake = {};
+    for (const loc of LOCALES) fake[loc] = { ...packs[loc] };
+    delete fake['en-US']['menu.welcome'];
+    const missing = [];
+    for (const l of routeLocales) {
+      for (const loc of LOCALES) if (!(l in fake[loc])) missing.push(`${l} 缺 ${loc}`);
+    }
+    assert.deepEqual(missing, ['menu.welcome 缺 en-US'], '尺子失效：少一个 key 竟然没被点名');
+  });
+
+  it('尺子反证：合成"一个死条目" ⇒ 必须被反向那条点名', () => {
+    const fakeLocales = routeLocales.filter((l) => l !== 'menu.about');
+    const dead = menuKeys.filter((k) => !fakeLocales.includes(k));
+    assert.deepEqual(dead, ['menu.about'], '尺子失效：死条目竟然没被点名');
+  });
+
+  it('尺子反证：合成"一个被改成 key 的 name" ⇒ 必须被安全前提那条点名', () => {
+    const bad = [...routeNames, 'article'].filter((n) => !CJK.test(n));
+    assert.deepEqual(bad, ['article'], '尺子失效：name 被改成 key 竟然没被点名');
   });
 });
 

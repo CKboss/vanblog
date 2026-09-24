@@ -149,4 +149,24 @@ export default {
   'login.passwordRequired': 'Password is required',
   'login.autoLogin': 'Keep me signed in',
   'login.forgotPassword': 'Forgot password',
+
+  // 🔴 Phase 2, first slice: the admin sidebar menu (`config/routes.js` points at these keys via `locale`).
+  // ⚠️ Terms are deliberately aligned with the wording this pack already uses in prose
+  //    ("System settings", "Site management / Comments", "Posts", "Images") so the menu and the
+  //    help text never contradict each other.
+  'menu.welcome': 'Overview',
+  'menu.article': 'Posts',
+  'menu.editor': 'Visual editor',
+  'menu.code': 'Code editor',
+  'menu.about': 'About',
+  'menu.draft': 'Drafts',
+  'menu.img': 'Images',
+  'menu.file': 'Attachments',
+  'menu.site': 'Site management',
+  'menu.site.data': 'Data',
+  'menu.site.comment': 'Comments',
+  'menu.site.pipeline': 'Pipelines',
+  'menu.site.setting': 'System settings',
+  'menu.site.customPage': 'Custom pages',
+  'menu.site.log': 'Logs',
 };

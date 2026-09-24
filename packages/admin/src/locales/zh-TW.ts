@@ -138,4 +138,23 @@ export default {
   'login.passwordRequired': '密碼是必填項！',
   'login.autoLogin': '自動登入',
   'login.forgotPassword': '忘記密碼',
+
+  // 🔴 第二期第一块：後台側邊欄選單。术语沿用第一期的地区用词表（資料/留言/設定/自訂/網站/圖片/日誌）。
+  // ⚠️ 「文章管理」「草稿管理」「附件管理」三条简繁逐字相同 ⇒ 已加进 localePackParity 的
+  //    IDENTICAL_ZH_TW_OK 白名单（白名单必须恰好等于实际相同的那一批，多一条少一条都会红）。
+  'menu.welcome': '分析概覽',
+  'menu.article': '文章管理',
+  'menu.editor': '圖形編輯器',
+  'menu.code': '程式碼編輯器',
+  'menu.about': '關於',
+  'menu.draft': '草稿管理',
+  'menu.img': '圖片管理',
+  'menu.file': '附件管理',
+  'menu.site': '網站管理',
+  'menu.site.data': '資料管理',
+  'menu.site.comment': '留言管理',
+  'menu.site.pipeline': '流水線',
+  'menu.site.setting': '系統設定',
+  'menu.site.customPage': '自訂頁面',
+  'menu.site.log': '日誌管理',
 };

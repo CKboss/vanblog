@@ -9469,6 +9469,116 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.134 🔴 多语言第二期第一块：侧边栏菜单国际化 —— 以及"后台头部在桌面端是隐藏的"这个真相
+
+**做了什么**：`packages/admin/config/routes.js` 的 15 条菜单路由各加一个显式 `locale: 'menu.xxx'`，
+三份语言包各加 15 条 `menu.*`（90 → 105 key），并把语言切换器**补到侧边栏 links 区**。
+🔴 **浏览器活体证据**（一次性栈 + playwright，桌面 1600px）：菜单在三种语言下真的变了 ——
+zh-CN `分析概览/文章管理/草稿管理/图片管理/附件管理/站点管理` → en-US `Overview/Posts/Drafts/Images/Attachments/Site management`
+→ zh-TW `分析概覽/文章管理/草稿管理/圖片管理/附件管理/網站管理`，子页面 `/site/setting` 下
+`資料管理/留言管理/流水線/系統設定/自訂頁面/日誌管理`；`document.title` 同步（`文章管理 - VanBlog` →
+`Posts - VanBlog` → `系統設定 - VanBlog`）；🔴 **裸 key 泄漏 = 无、`pageerror` = 0**；
+🔴 **切换是靠"真点侧边栏那个控件"完成的**（不是直接改 localStorage），English 与繁體中文两次都 `clicked=true`。
+
+#### A. 🔴 方案 (B)：保留中文 `name`、另加显式 `locale`，而不是把 `name` 改成 key
+权威实现是 `@umijs/route-utils@2.2.2` 的 `dist/transformRoute/transformRoute.js`
+（由 `@ant-design/pro-layout@6.38.22` 的 `es/utils/getMenuData.js` 引入）：
+`getItemLocaleName` 返回 **`item.locale || parentName + '.' + name`** ⇒ 🔴 **显式 `locale` 优先**；
+`formatMessage({ id: locale, defaultMessage: name })` ⇒ 🔴 **回落值永远是 `name`**；
+`finallyItem.name = localeName` ⇒ 菜单渲染的是译文；子路由 `parentName = 父的 locale`。
+`pro-layout` 的 `getPageTitle` 与 `SiderMenu/BaseMenu.getIntlName` 是同一口径 ⇒
+🔴 **侧边栏、面包屑、页面标题三者一起被翻译，不需要各改一处**。
+👉 因此 (B) 严格优于 (A)：**(A) 漏翻译时菜单会显示裸 key（`article`），且所有直接读 `name` 的消费方
+（面包屑、`document.title`、`attachmentManage.test.js` 的两条断言）全部跟着变**；
+**(B) 漏翻译时回落到中文，与改动前完全一样，消费方零影响**。
+🔴 **能消掉风险的做法优于能规避风险的做法** —— (A) 要靠"扫清所有消费方"去规避，(B) 让风险不存在。
+⚠️ 这条前提由守卫的「routes.js 的 `name` 必须仍是中文显示文本」那条钉住，
+🔴 **它钉的不是文案而是方案本身**（将来谁把 `name` 改成 key 就会红）。
+
+#### B. 🔴 umi 会保留额外的路由字段 —— 要直接证据，不要类比
+父代理最初用「`hideInMenu`/`hideInBreadcrumb` 在 `src/.umi/core/routes.ts` 里各出现 3 次」来推断
+"umi 不会吃掉 `locale`"，🔴 **那是类比证据**（那两个是 umi 与 plugin-layout 都认识的字段）。
+✅ **正确做法是改完之后直接在生成物里搜自己新加的字段**：实测 `.umi/core/routes.ts` 里
+`"locale": "menu.` **恰好 15 处**，与 `routes.js` 里加的条数相等 ⇒ **这才证明它活过了序列化**。
+👉 **"某个东西存在"与"某个东西会被传递"是两件事**（上一轮那个缺陷正是"组件被编译进产物"
+但"没有任何可达页面渲染它"）。
+
+#### C. 🔴 后台头部在桌面端是 `display:none` —— 第一期的切换器放错了地方
+`src/app.jsx` 的 `handleSizeChange()`：`const show = window.innerWidth > 768 ? false : true;`
+然后 `document.querySelector('header.ant-layout-header').style.display = show ? 'block' : 'none'`，
+并在 `window.onresize` 与 `export const layout` 里各调一次 ⇒ 🔴 **视口 >768px 时整个头部被隐藏**。
+实测（playwright，同一栈同一登录态）：
+
+| 视口 | `header.ant-layout-header` | 语言控件 |
+|---|---|---|
+| 1600px（桌面） | 🔴 **`display:none`，0×0** | 🔴 **0×0 不可见** |
+| 700px（窄屏） | `display:block`，700×48 | ✅ **42×42 可见** |
+
+⇒ 🔴 **第一期把 `<SelectLang />` 加进 `rightContentRender` 是对的但不够**：那个容器在桌面端不可见，
+所以站长"登录后右上角什么都没有"是**准确的观察，不是误认图标**。而 `rightContentRender` 里的
+`ThemeButton` 与 `LogoutButton` 同样只在窄屏可见 —— 桌面端它们是通过 **`links` 数组**在侧边栏底部
+又放了一份（`主站 / 关于 / 主题 / 登出`）。
+🔴 **修法就照这个既有模式**：在 `links` 数组里再放一份 `<SelectLang key="langSider" />`
+（⚠️ 数组子元素必须带 `key`，所以守卫的正则要从 `^\s*<SelectLang\s*\/>` 放宽成
+`^\s*<SelectLang(\s[^>]*)?\/>`，仍要求"行首 + 自闭合"，所以注释里的提及不算数）。
+实测修完后桌面 1600px 下侧边栏里的语言控件是 **38×38、visible=true**，且点击可切换。
+👉 🔴 **规矩：给后台加任何"头部"元素之前，先确认那个头部在当前视口下是可见的** ——
+本仓库的头部是**按视口条件隐藏**的，`rightContentRender` 不是可靠的落点。
+
+#### D. 🔴 新发现的坑：`vanblog_dev/run-image-stack.sh` 建的临时账号**无法在浏览器里登录**
+`src/services/van-blog/encryptPwd.ts`：
+`sha256(lower(username) + sha256(sha256(sha256(sha256(password)))) + sha256(lower(username)))`
+⇒ 🔴 **`InitPage` 与 `Login` 都先做这个派生再发请求**（恒 64 位十六进制）。
+而那个 helper（以及任何用 curl 打 `/api/admin/init` 的脚本）发的是**明文**口令 ⇒
+🔴 **建出来的账号只能用 curl 登录，浏览器 UI 登录必然 401「用户名或密码错误！」**。
+⚠️ 表现极具误导性：**表单值正确（DOM 里 username/password 长度都对）、请求也确实发出、
+password 也确实是 64 位十六进制**，只是它等于 `encryptPwd(u, 明文)`，而库里存的是明文。
+👉 **正确做法**：初始化时就发**派生后的摘要**（用真实的 `js-sha256` 模块算，🔴 **不要自己复刻公式**），
+或者绕开密码、用 curl 登录拿到 token 后注入 `localStorage['token']`（本轮两条都用了）。
+🔴 **复刻公式的教训**：我第一版自己写 `sha256` 嵌套时把**层数写成 5 层**（真值是 4 层），
+两边都是 64 位十六进制、形状完全一样，只有**与真实模块逐字比对**才发现不同 ⇒
+🔴 **"用同一算法的另一个实现交叉验证"必须拿真实模块的输出比，不能拿自己重敲的两份比**。
+
+#### E. 守卫与变异
+`packages/admin/tests/unit/localePackParity.test.js`：**28 → 39 条**（suites 6 → 7）。
+新增：菜单 locale 接线一组（反空转"恰好 15 处且全为 `menu.` 前缀且不重复"、
+"每个路由 locale 都在三份包里"、🔴 **反向"包里每个 `menu.*` 都被某个路由用到"（防死条目）**、
+🔴 **方案 (B) 的安全前提"name 仍是中文显示文本"**、"locale 不侵占 init./common./login. 命名空间"、
+"menu.* 的 en-US ≠ zh-CN"、三条合成输入的尺子反证）；切换器清单 **4 → 5 处**（新增侧边栏 links 那一处，
+带 `scope` 正则要求它真的落在 `links:` 数组里，且**作用域匹配不到时 fail-loud**）；
+`IDENTICAL_ZH_TW_OK` 白名单 **+3**（`menu.article`/`menu.draft`/`menu.file` —— 简繁逐字相同，
+🔴 白名单必须**恰好等于**实际相同的那一批）。
+🔴 **变异 5/5 结论正确**：M1 删一处 `locale`（15→14）→ RED 4；M2 从 zh-TW 删一个 `menu.*` → RED 3；
+M3 把一处 `name` 改成 key → RED 2（**正是 (B) 退化成 (A) 的形状**）；M4 删掉 links 里的 `<SelectLang>` → RED 1；
+M5 只改注释措辞 → ✅ GREEN 39/39。还原后逐文件 sha 与基线一致（🔴 逆序还原）。
+
+#### F. 🔴 本轮我踩的 5 个坑
+1. 🔴 **列错位 + 幂等检查掩盖了它**：第一版插包脚本用 `for k, *r in ROWS` 取值，`r` 只剩 3 个元素 ⇒
+   **zh-CN 写进了繁中值、zh-TW 写进了英文值**，而 en-US 那次抛 `IndexError`；
+   🔴 **修正脚本用"已含 `menu.welcome` 就跳过"做幂等，恰好把两个被写坏的包跳过了** ⇒
+   差点带着"三份包值互相错位"交付。**是逐列打印三份值才发现的**（`menu.welcome | 分析概覽 | Overview | Overview`）。
+   👉 **规矩：改多份同构数据后，必须逐列打印实际值核对，"key 数对上了"完全不能证明"值放对了列"；
+   而幂等跳过必须先验证已有内容的正确性，否则会掩盖损坏。**
+2. 🔴 **我在注释里写了别处要 `indexOf` 的字面量 ⇒ 制造了一条假红**：新增的文件头注释里引用了
+   `attachmentManage.test.js` 的搜索串（`name: '附件管理'`），而那条测试用
+   `routes.indexOf("name: '图片管理'") < routes.indexOf("name: '附件管理'")` 比较顺序，
+   `indexOf` 取**最早出现**的位置 ⇒ 基准被抢到注释里、断言假红。
+   👉 这正是本仓库记过多次的「**注释里不要写别处要搜索或断言的字面量**」，
+   🔴 **而这次是"在解释这条规矩的注释里"踩的**。已在注释里改为不逐字引用，并写明原因。
+3. ⚠️ **内联 `node -e` / `python3 -c` 的反斜杠与引号被 shell 吃掉**（正则里的 `\` 变成 `\` ⇒ `Unterminated regexp literal`；
+   嵌套引号 ⇒ `exit 127`）⇒ 🔴 **多行脚本一律写文件再执行，并先 `node --check` / `python3 -c pass` 语法核实**。
+4. 🔴 **`require` 路径凭记忆猜**（`./packages/admin/node_modules/js-sha256` 在 `$( )` 里失败被吞成空串 ⇒
+   `DIGEST_LEN=0`，于是 init 用了空密码）⇒ 👉 **`$( )` 里的命令失败是静默的，必须核实输出非空再用**。
+5. ⚠️ **playwright 的 `page.fill` 不驱动 rc-field-form 的状态** ⇒ `onFinish` 里 `encryptPwd(values.password)`
+   可能拿到空值；改用 `click` + `keyboard.type` 逐字键入后请求体才正确。
+   👉 **测 antd/ProForm 表单要用真实键入，不要只用 `fill`。**
+
+#### G. 🔴 仍未翻译的部分（如实标注，属后续切片）
+桌面端侧边栏底部仍有 4 处中文：`主站`、`关于`（`links` 数组里的硬编码 `<span>`）、
+`亮色模式/暗色模式/自动模式`（`ThemeButton` 内部）、`登出`（`LogoutButton` 的 trigger）⇒
+它们是**组件级字符串**，不属"菜单 name"这一片，留待第二期后续切片。
+🔴 另外 `SiteInfoForm`（462 行 / 152 行含中文 / **110** 个去重中文字面量，实测值，上游说的 108 不准）仍未翻译。
+
 ### 7.133 🔴 「本机没浏览器」是一条**错误的环境记录**，它让多轮验证退化成间接证据；以及第四把弱尺子
 
 **触发**：站长在 18080 上看了多语言第一期，反馈两条：「**是的有**（切换器），但**点击不会切换英文**」、

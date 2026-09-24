@@ -244,6 +244,16 @@ export const layout = ({ initialState, setInitialState }) => {
         <ProjectOutlined />
         <span>关于</span>
       </Link>,
+      // 🔴 这里必须再放一个语言切换器：本文件上方的 `handleSizeChange()` 在
+      // `window.innerWidth > 768` 时把 `header.ant-layout-header` 直接设成 `display: none`
+      // ⇒ **桌面端整个后台头部是隐藏的**，所以 rightContentRender 里的切换器 / 主题 / 登出
+      //    在桌面端一个都看不见（实测：1600px 视口下 header 与语言控件都是 0×0，
+      //    700px 视口下 header 700×48、语言控件 42×42 可见）。
+      // 侧边栏的 links 区是桌面端唯一常驻可见的操作区 —— 主题按钮与登出本来就已经在这里
+      // 各重复了一份，所以语言切换器也照同一个模式放一份。
+      // ⚠️ 这**不是冗余**：两处对应两种视口（≤768px 走头部，>768px 走侧边栏）。
+      // 🔴 由 tests/unit/localePackParity.test.js 钉住"links 数组里必须有 SelectLang"，删掉会红。
+      <SelectLang key="langSider" />,
       <ThemeButton key="themeBtn" showText={true} />,
       <LogoutButton
         key="logoutSider"
