@@ -92,6 +92,15 @@ const IDENTICAL_ZH_TW_OK = [
   //    「文章」「草稿」「附件」「管理」四个字都不含简繁异形字。
   //    ⚠️ 这不是偷懒：把它们排除在「必须不同」之外是正确的，而白名单必须**恰好等于**
   //    实际相同的那一批 ⇒ 谁再多复制一条简体当繁中，这条就会红。
+  // 🔴 第二期第二块（侧边栏底部 / 主题三档 / 登出提示）新增的五条：
+  //    「主站」「登出」「亮色模式」「暗色模式」「登出成功！」简繁逐字相同
+  //    （不含简繁异形字：主/站/登/出/亮/色/模/式/暗/成/功 都同形）。
+  //    ⚠️ 白名单必须**恰好等于**实际相同的那一批 ⇒ 谁再多复制一条简体当繁中，这条就会红。
+  'common.mainSite', // 主站
+  'common.logout', // 登出
+  'theme.light', // 亮色模式
+  'theme.dark', // 暗色模式
+  'logout.ok', // 登出成功！
   'menu.article', // 文章管理
   'menu.draft', // 草稿管理
   'menu.file', // 附件管理
@@ -191,7 +200,14 @@ describe('多语言第一期：翻译必须真的存在（不是复制简体充�
 });
 
 describe('多语言第一期：组件里的每个 id 都必须在三份包里存在，且 defaultMessage 与 zh-CN 一致', () => {
-  const COMPONENTS = ['index.tsx', 'RestoreFromBackup.tsx'].map((f) => `${INIT_DIR}/${f}`);
+  const COMPONENTS = [
+    ...['index.tsx', 'RestoreFromBackup.tsx'].map((f) => `${INIT_DIR}/${f}`),
+    // 🔴 第二期第二块：侧边栏底部与主题/登出组件也开始用 t()，
+    //    所以它们的 defaultMessage 同样必须与 zh-CN 包逐字相同。
+    'src/app.jsx',
+    'src/components/ThemeButton/index.tsx',
+    'src/components/LogoutButton/index.jsx',
+  ];
   const calls = [];
   for (const rel of COMPONENTS) {
     for (const c of parseTCalls(read(rel))) calls.push({ ...c, rel });

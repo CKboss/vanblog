@@ -4,7 +4,7 @@ import { HomeOutlined, LogoutOutlined, ProjectOutlined } from '@ant-design/icons
 import { PageLoading, SettingDrawer } from '@ant-design/pro-layout';
 import { message, Modal, notification } from 'antd';
 import moment from 'moment';
-import { history, Link, SelectLang } from 'umi';
+import { history, Link, SelectLang, useIntl } from 'umi';
 import defaultSettings from '../config/defaultSettings';
 import LogoutButton from './components/LogoutButton';
 import ThemeButton from './components/ThemeButton';
@@ -170,6 +170,33 @@ const handleSizeChange = () => {
 
 window.onresize = handleSizeChange;
 
+// 🔴 侧边栏底部这三个文字必须在**组件里**翻译，不能在 `links` 数组里直接调：
+//    `links` 位于 `export const layout = {...}` 这个**普通对象**里、在模块加载期就求值，
+//    所以 ① 在那里调 `useIntl()` 会违反 hooks 规则（它不是 React 组件）；
+//    ② 在模块加载期调 `getIntl(getLocale())` 也有时序风险 —— `getLocale()` 内部会走
+//       `plugin.applyPlugins(...)`，依赖 umi 插件运行时已初始化。
+//    用三个微型组件把翻译推迟到渲染期，同时**保留 `t('id', '默认文案')` 的字面量形状**，
+//    这样 tests/unit/localePackParity.test.js 的 parseTCalls 仍能扫到它们，
+//    并钉住「defaultMessage 与 zh-CN 语言包逐字相同」这条唯一口径。
+//    ⚠️ 语言切换走 setLocale(lang, true) 的整页 reload，所以渲染期取值总是最新的。
+function MainSiteLabel() {
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  return <span>{t('common.mainSite', '主站')}</span>;
+}
+
+function AboutLabel() {
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  return <span>{t('common.about', '关于')}</span>;
+}
+
+function LogoutLabel() {
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  return <span>{t('common.logout', '登出')}</span>;
+}
+
 export const layout = ({ initialState, setInitialState }) => {
   handleSizeChange();
   return {
@@ -238,11 +265,11 @@ export const layout = ({ initialState, setInitialState }) => {
     links: [
       <a key="mainSiste" rel="noreferrer" target="_blank" href={'/'}>
         <HomeOutlined />
-        <span>主站</span>
+        <MainSiteLabel />
       </a>,
       <Link key="AboutLink" to={'/about'}>
         <ProjectOutlined />
-        <span>关于</span>
+        <AboutLabel />
       </Link>,
       // 🔴 这里必须再放一个语言切换器：本文件上方的 `handleSizeChange()` 在
       // `window.innerWidth > 768` 时把 `header.ant-layout-header` 直接设成 `display: none`
@@ -260,7 +287,7 @@ export const layout = ({ initialState, setInitialState }) => {
         trigger={
           <a>
             <LogoutOutlined />
-            <span>登出</span>
+            <LogoutLabel />
           </a>
         }
       />,

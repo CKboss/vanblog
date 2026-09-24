@@ -157,4 +157,16 @@ export default {
   'menu.site.setting': '系統設定',
   'menu.site.customPage': '自訂頁面',
   'menu.site.log': '日誌管理',
+
+  // 🔴 第二期第二块：侧边栏底部（主站/关于/登出）、主题三档、登出提示。
+  //    繁中套地区用词（關於 / 自動 / 登入 / 伺服器 / 工作階段），不是字形转换。
+  'common.mainSite': '主站',
+  'common.about': '關於',
+  'common.logout': '登出',
+  'theme.light': '亮色模式',
+  'theme.dark': '暗色模式',
+  'theme.auto': '自動模式',
+  'logout.ok': '登出成功！',
+  'logout.sessionGone': '已退出登入（伺服器工作階段已失效）',
+  'logout.local': '已退出登入',
 };

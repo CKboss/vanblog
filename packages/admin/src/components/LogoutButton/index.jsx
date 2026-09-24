@@ -1,6 +1,6 @@
 import { logout } from '@/services/van-blog/api';
 import { message } from 'antd';
-import { history, useModel } from 'umi';
+import { history, useIntl, useModel } from 'umi';
 const loginOut = async () => {
   // 登出接口本身就可能失败：token 早就失效时服务端返回 401，
   // 以前这个 await 会把异常一路抛出去，下面的跳转和 removeItem('token') 全被跳过 ——
@@ -29,6 +29,9 @@ const loginOut = async () => {
 };
 export default function (props) {
   const { setInitialState } = useModel('@@initialState');
+  const intl = useIntl();
+  // 🔴 与既有的 t() 同一个形状（id + defaultMessage），由 localePackParity 守卫钉住一致性。
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const { trigger } = props;
   return (
     <div
@@ -37,10 +40,10 @@ export default function (props) {
         loginOut()
           .then((ok) => {
             // 服务端可能本来就没这个会话了，但本地确实已经登出，仍然要给一个明确反馈
-            message.success(ok ? '登出成功！' : '已退出登录（服务端会话已失效）');
+            message.success(ok ? t('logout.ok', '登出成功！') : t('logout.sessionGone', '已退出登录（服务端会话已失效）'));
           })
           .catch(() => {
-            message.success('已退出登录');
+            message.success(t('logout.local', '已退出登录'));
           });
       }}
     >

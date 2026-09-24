@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useModel } from 'umi';
+import { useIntl, useModel } from 'umi';
 import { beforeSwitchTheme } from '../../services/van-blog/theme';
 import style from './index.less';
 export default function (props: { showText: boolean }) {
   const { current: currentTimer } = useRef<any>({ timer: null });
   const { initialState, setInitialState } = useModel('@@initialState');
+  const intl = useIntl();
+  // 🔴 与第一期/第二期既有的 t() 保持**同一个形状**（id + defaultMessage），
+  //    这样「defaultMessage 与 zh-CN 语言包逐字相同」这条约定只有一处口径，
+  //    并由 localePackParity 守卫钉住。
+  const t = (id: string, defaultMessage: string, values?: Record<string, unknown>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const setTheme = (newTheme: 'auto' | 'light' | 'dark') => {
     const navTheme = beforeSwitchTheme(newTheme);
     // 函数式更新：这个函数也会在 10s 轮询定时器里被调用，闭包里的 initialState
@@ -80,7 +86,7 @@ export default function (props: { showText: boolean }) {
         </svg>
         {props.showText ? (
           <span style={textStyle} className="theme-text">
-            亮色模式
+            {t('theme.light', '亮色模式')}
           </span>
         ) : null}
       </div>
@@ -103,7 +109,7 @@ export default function (props: { showText: boolean }) {
         </svg>
         {props.showText ? (
           <span style={textStyle} className="theme-text">
-            暗色模式
+            {t('theme.dark', '暗色模式')}
           </span>
         ) : null}
       </div>
@@ -126,7 +132,7 @@ export default function (props: { showText: boolean }) {
         </svg>
         {props.showText ? (
           <span style={textStyle} className="theme-text">
-            自动模式
+            {t('theme.auto', '自动模式')}
           </span>
         ) : null}
       </div>

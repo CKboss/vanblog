@@ -169,4 +169,16 @@ export default {
   'menu.site.setting': 'System settings',
   'menu.site.customPage': 'Custom pages',
   'menu.site.log': 'Logs',
+
+  // 🔴 第二期第二块：侧边栏底部（主站/关于/登出）、主题三档、登出提示。
+  //    繁中套地区用词（關於 / 自動 / 登入 / 伺服器 / 工作階段），不是字形转换。
+  'common.mainSite': 'Site',
+  'common.about': 'About',
+  'common.logout': 'Sign out',
+  'theme.light': 'Light',
+  'theme.dark': 'Dark',
+  'theme.auto': 'Auto',
+  'logout.ok': 'Signed out',
+  'logout.sessionGone': 'Signed out (the server session had already expired)',
+  'logout.local': 'Signed out',
 };
