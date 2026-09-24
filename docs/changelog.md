@@ -8,6 +8,33 @@ redirectFrom: /ref/changelog.html
 
 ## [Unreleased]
 
+### 2026-09-24：🔴 修复 —— 语言切换器**能找到、点了有可见效果**了（`v2026.9.6` 声明的第三处更正）
+
+- 🔴 **可发现性修复**：`SelectLang` 渲染的是 antd `Dropdown` 的**纯图标触发器**，浏览器实测它的
+  `aria-label`、`title`、文本**全为空**（42×42 的一个图标）⇒ **站长连着两次都没认出来它是语言切换器**。
+  现在四处渲染点各包一层 `role="group"` + **静态双语** `title`/`aria-label`（`语言 · Language`）⇒
+  **悬停就有提示，读屏软件也能念出来**。
+  ⚠️ 用静态双语而不是当前语言的译文，是因为这一层要服务**还没切语言的人**。
+- 🔴 **点 English 现在真的看得见效果**：登录页的 **7 条**可见文案（副标题、两个 placeholder、
+  两条必填校验、`自动登录`、`忘记密码`）已进语言包，三份语言包 **82 → 90 个 key**。
+  🔴 **浏览器实测**：点 `English` 后页面从
+  `VanBlog 博客管理后台 自动登录 忘记密码 登 录` 变成
+  🔴 **`VanBlog Admin Console Keep me signed in Forgot password Login`**，
+  placeholder 从 `用户名 / 密码` 变成 🔴 **`Username / Password`**，`localStorage.umi_locale` = `en-US`
+  且 reload 后仍然生效。
+- 🔴 **更正 `v2026.9.6` 的声明（第三处）**：那一版写「后台与安装页原生支持三种语言…各有一个语言切换器」。
+  实测结论是：**切换器一直都在、机制也一直是好的**（locale 真的切过去、antd 组件文案真的跟随），
+  但 🔴 **用户能到达的页面上几乎没有被翻译的文案** —— 当时语言包 82 个 key **全是安装页的**，
+  而 🔴 **安装页 `/init` 在已初始化的站点上不可达** ⇒ 升级后点 English **只有登录按钮一个词变了**
+  （那还是 ProComponents 的内置默认文案跟随 antd locale 的结果，不是本仓库翻译的）。
+  ⚠️ 已发版的 CHANGELOG 与 tag 不改写，在此更正。
+- ⚠️ **仍然存在的边界（如实说明）**：🔴 **后台其余页面与侧边栏菜单尚未翻译**，
+  所以切到 English 后**后台主体仍是中文**（那是第二期；侧边栏菜单需要把 `routes.js` 的 17 个 `name`
+  从中文显示文本改成 i18n key，会影响面包屑等消费方）。`SiteInfoForm` 也仍未翻译。
+  ⚠️ 另：切到 English 后 `document.documentElement.lang` 仍是 `zh-CN`（umi plugin-locale 不更新它），
+  对无障碍与浏览器翻译提示有小影响，已记为待办。
+
+
 ### 2026-09-24：🔴 性能 —— `VANBLOG_CLUSTER_WORKERS=auto` 现在**按内存自适应**，低内存多核机不会再被吃爆
 
 - 🔴 **`auto` 的语义从"把核数用满"改成"CPU 与内存两维取小"**：先按核数算上限（`min(max(1, 核数), 32)`），

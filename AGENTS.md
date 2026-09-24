@@ -9469,6 +9469,105 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.133 🔴 「本机没浏览器」是一条**错误的环境记录**，它让多轮验证退化成间接证据；以及第四把弱尺子
+
+**触发**：站长在 18080 上看了多语言第一期，反馈两条：「**是的有**（切换器），但**点击不会切换英文**」、
+「**在后台管理界面里也看不到任何语言切换的选项**」。父代理随即用无头 chrome `--dump-dom` 取证，
+得到「DOM 里 `简体中文`/`繁體中文`/`English` 全 0 命中」，一度判断切换器没被编译进产物。
+🔴 **两个判断都不对。**
+
+**一、🔴 本机一直有浏览器，而 `AGENTS.local.md` §6 记着「本机没浏览器」。**
+实测：`google-chrome` **152.0.7977.82**、`google-chrome-stable`、`firefox` 都在 `PATH`；
+`~/.cache/ms-playwright/` 下有 `chromium-1208` 与 `chromium_headless_shell-1208`；
+`node_modules` 里 **`playwright@1.40.0`、`playwright-core@1.40.0`、`puppeteer-core@1.12.2` 都在**。
+⚠️ **当初得出「跑不了」的原因很可能是版本对不上**：`playwright@1.40.0` 的 `browsers.json` 期望
+chromium **revision 1091**，而缓存里是 **1208** ⇒ 默认解析必然报「找不到浏览器」。
+🔴 **但 `executablePath` 指过去就能跑**（可执行文件在 `chromium-1208/chrome-linux64/chrome`，
+⚠️ **是 `chrome-linux64/` 不是 `chrome-linux/`**）。已实测跑通：`goto`/`screenshot`/`evaluate`/
+`hover`/`click`/`localStorage`/`console`/`pageerror` 全部正常。
+👉 🔴 **规矩：「环境不具备某个能力」这种前提必须实测（`command -v`、`ls` 缓存目录、`require` 一次），
+绝不能沿用记录或上一轮的结论。** ⚠️ **代价是具体的**：这条错误记录让本项目**连续多轮**以
+「没有浏览器 ⇒ 只能给间接证据」收尾，而语言切换器那个缺陷**本可以在发版前用浏览器一眼看出来**。
+
+**二、🔴 第四把弱尺子：「DOM 里搜得到语言名」也不能证明「用户看得到、用得了」。**
+无头 `--dump-dom` 拿到的是**静态 DOM**，而 🔴 **antd `Dropdown` 的菜单内容是懒渲染的**：
+实测初始 DOM 16,568 B 里语言名 **0 命中**、`ant-dropdown-menu` **0 命中**；
+🔴 **悬停之后** DOM 变 17,850 B，`简体中文`/`繁體中文`/`English` 各 **2** 命中、`ant-dropdown-menu` **11** 命中，
+菜单文本是 `🇺🇸English 🇨🇳简体中文 🇭🇰繁體中文`。
+⇒ 🔴 **静态 DOM dump 永远搜不到它。** 这与前三把弱尺子同族：
+①「`.umi/plugin-locale/SelectLang.tsx` 已生成」、②「产物里搜到 `\uXXXX` 转义的语言名」、
+③「`localeInfo` 注册了三份 / `ConfigProvider` 已接管」。
+👉 🔴 **唯一能证明「用户看得到、用得了」的尺子是：在真浏览器里悬停/点开、看到、交互成功、并核实状态真的变了。**
+（⚠️ 产物级探针仍有价值，但它证明的是「编译进去了」，不是「渲染出来了」，更不是「找得到」。）
+
+**三、🔴 站长那两条观察的真实成因（都已实测定性，不是推断）。**
+1. **「点击不会切换英文」⇒ 机制完全正常，缺陷是「可达页面上翻译覆盖面为零」。**
+   逐帧实测：初始 `localStorage` **空**；悬停后菜单出现；点 `English` 后
+   🔴 **`umi_locale = en-US`**、`setLocale` 的整页 reload 真的发生、reload 后仍是 `en-US`（持久化成功），
+   而 🔴 **整页只有「登 录」一个词变成了 `Login`**（36 → 38 字符）。
+   🔴 **而「为什么恰好只有那一个词变了」是一条很强的证据**：三份语言包当时各 **82 个 key、全是 `init.*`**，
+   **一个登录页的 key 都没有** ⇒ 变的绝不可能是本仓库的文案；
+   🔴 **那一个词来自 ProComponents 的内置默认值**（登录按钮由 `@ant-design/pro-form` 的 `LoginForm` 渲染，
+   其提交按钮默认文案跟随 antd / ProProvider 的 locale）⇒
+   🔴 **它变成 `Login` 恰好证明「antd locale 链路（`antd: true` + `ConfigProvider`）端到端是通的」，
+   而我们自己写的文案覆盖率是 0。**
+2. 🔴 **「后台看不到切换器」⇒ 大概率不是「没渲染」，而是「图标不可辨识」。**
+   浏览器抓到的触发器真实 HTML 是
+   `<span class="ant-dropdown-trigger" style="cursor:pointer;padding:12px;…font-size:18px"><i class="anticon"><svg viewBox="0 0 24 24"…>`
+   ⇒ 🔴 **`aria-label` 空、`title` 空、文本空**，就是一个 42×42 的纯图标。
+   而源码侧是正确的：`app.jsx` 的 `rightContentRender` 里 `<SelectLang />` 确实在 `<ThemeButton/>` 之前，
+   umi 生成物 `src/.umi/plugin-layout/layout/layout/index.tsx` 确实消费
+   `layoutRestProps.rightContentRender`，且 🔴 **后台没有自定义 layout**（`src/layouts/` 不存在）⇒
+   不存在「整个 rightContentRender 不生效」的可能；而登录页那个切换器与 `app.jsx` 的改动
+   **出自同一个提交、同一个镜像**且已实测能渲染能点 ⇒ **镜像里有这次修复**。
+   ⚠️ **头部那一处仍未活体证实**（要登录才渲染，而禁止猜密码/打 `/api/admin/init`/签 token）⇒
+   🔴 **需要站长登录后看一眼**（清单见下）。
+
+**四、🔴 本轮的修复与浏览器复验（判据是「看得到、点得动、点了有可见变化」）。**
+- **可发现性**：四处渲染点各包一层 `<span role="group" title="语言 · Language" aria-label="语言 · Language">`。
+  🔴 **用静态双语而不是 `t()`**，两个理由：① 这一层要服务「还没切语言的人」，
+  切成某一种语言后单语提示对另一批人就失效；② 🔴 **`app.jsx` 的 `rightContentRender` 是普通函数、
+  不是 React 组件，在里面调 `useIntl()` 会违反 hooks 规则**（这是一个很容易踩的坑，已写进注释）。
+  🔴 **并且刻意不写任何语言自称**（简体中文/繁體中文/English）—— 那是 `SelectLang` 内置
+  `defaultLangUConfigMap` 的职责，`localePackParity` 钉住「语言自称不许在本仓库硬编码第二遍」。
+  ⚠️ **也不要再包一层 antd `Tooltip`**：`SelectLang` 自己就是 `Dropdown`，两个触发器会打架。
+- **最小可感知集**：登录页 **7 条**可见文案 + `common.language` ⇒ 语言包 **82 → 90 key**（三份仍两两相等）。
+  🔴 **`t()` 的形状照抄第一期**（`intl.formatMessage({ id, defaultMessage }, values)`），
+  这样「`defaultMessage` 与 zh-CN 包逐字相同」这条约定只有一处口径，并由守卫钉住。
+- 🔴 **浏览器复验（在 dev 的 admin 3002 上，它从工作树跑 ⇒ 不需要重建镜像、不需要动 18080）**：
+  切换前 `VanBlog 博客管理后台 自动登录 忘记密码 登 录` / placeholder `["用户名","密码"]` / `umi_locale` 无；
+  点 `English` 后 🔴 **`VanBlog Admin Console Keep me signed in Forgot password Login`** /
+  placeholder 🔴 **`["Username","Password"]`** / 🔴 **`umi_locale = en-US`**；
+  三条正文 `zhGone=true & enPresent=true`、两个 placeholder `enPresent=true & zhStill=false`、
+  `pageerror` **0 条**、外层 `title`/`aria-label`/`role` 都在。截图存
+  `vanblog_dev/i18n-browser-evidence/`（`dev-login-zh.png`、`dev-login-menu-open.png`、`dev-login-en.png`）。
+- 验证：`localePackParity` **28/28**（四处 `<SelectLang />` 仍**独占一行**，守卫的
+  `/^\s*<SelectLang\s*\/>/m` 与作用域正则都没被破坏）、admin 单测 **663/163/0 fail**、
+  🔴 **改过的 6 个文件全部用 babel 真解析通过**（上一轮的教训：改 JSX 之后肉眼和 sha 都不够）。
+
+**五、🔴 顺带查清的两件事（都是「先量再猜」的实例）。**
+1. 🔴 **`menu.*` 那条「低成本翻译整个侧边栏」的路不成立**：机制确实在
+   （`Layout.tsx` 把 `locale:true` 序列化进 ProLayout 的 userConfig、并把 `formatMessage` 传进去），
+   但 🔴 **ant-design-pro 的约定是 `name` 为 key**（`name: 'dashboard'` + 语言包 `'menu.dashboard'`），
+   而本仓库 `routes.js` 的 **`name` 直接就是中文显示文本**（`name: '分析概览'` 等，共 **17 个**）⇒
+   ProLayout 会去查 `menu.分析概览`、查不到就回落原文。
+   ⇒ 🔴 **要走这条路必须把 17 处 `name` 改成 key（会影响面包屑等消费方）+ 三份语言包各加 17 条**，
+   那是第二期的正经工作量，**不是顺手能做的**。
+2. ⚠️ **切到 `en-US` 后 `document.documentElement.lang` 仍是 `zh-CN`**（umi plugin-locale 不更新它）⇒
+   对无障碍与浏览器「是否翻译此页」的提示有影响。🔴 **小缺陷，本轮未修，留作待办。**
+
+**六、🔴 需要站长登录后核实的清单（头部那一处只能这样验）。**
+登录 `http://127.0.0.1:18080/admin` 之后，请看头部右侧：
+1. 主题按钮（`ThemeButton`）**左边**有没有一个**地球/语言图标**（42×42 的纯图标）；
+2. 🔴 **悬停它**会不会弹出 `🇺🇸English / 🇨🇳简体中文 / 🇭🇰繁體中文` 三项菜单；
+3. 🔴 **悬停时有没有出现「语言 · Language」的原生 tooltip**（这是本轮加的可发现性修复）；
+4. 🔴 **关键对照：`ThemeButton` 与「登出」在不在？**
+   - 它们在、而语言图标不在 ⇒ 问题在 `SelectLang` 本身（或被条件渲染掉）；
+   - 🔴 **它们也不在 ⇒ 整个 `rightContentRender` 没生效**，那才是真根因（而源码与生成物都表明它应当生效）。
+⚠️ **注意 18080 上跑的镜像是 `f289c5a5cfa0`，它含「切换器修复」但 🔴 不含本轮的「可发现性 + 登录页翻译」**
+（本轮改动尚未构建进任何镜像）⇒ 在 18080 上看不到 tooltip 与英文登录页是正常的；
+🔴 **本轮的改动已在 dev 的 admin（3002）上浏览器验证过**，要在 18080 上看到需要重建镜像并重挂（要站长批准）。
+
 ### 7.132 🔴 CI 长期红的真因是一条计时断言的 0.05ms 地板；以及上一轮矩阵跑出的 5 条新发现（不入册就会丢）
 
 > 本节由「只修两条已定位缺陷 + 把上一轮矩阵的发现入册」这一轮写下。

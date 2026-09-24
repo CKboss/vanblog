@@ -5,12 +5,18 @@ import { notifyLoginSuccess } from '@/services/van-blog/requestError';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { LoginForm, ProFormCheckbox, ProFormText } from '@ant-design/pro-form';
 import { message } from 'antd';
-import { history, SelectLang, useModel } from 'umi';
+import { history, SelectLang, useIntl, useModel } from 'umi';
 import styles from './index.less';
 
 const Login = () => {
   const type = 'account';
   const { initialState, setInitialState } = useModel('@@initialState');
+  const intl = useIntl();
+  // 🔴 与 InitPage/index.tsx 里第一期的 t() 保持**同一个形状**（id + defaultMessage），
+  //    这样 defaultMessage 与 zh-CN 语言包逐字相同的约定只有一处口径，
+  //    并由 localePackParity 守卫钉住（它断言两者逐字相等）。
+  const t = (id, defaultMessage, values) =>
+    intl.formatMessage({ id, defaultMessage }, values);
 
   const handleSubmit = async (values) => {
     try {
@@ -57,13 +63,30 @@ const Login = () => {
             ⚠️ 复用 umi `plugin-locale` 导出的 SelectLang，语言自称（简体中文/繁體中文/
             English）来自它内置的 defaultLangUConfigMap ⇒ 不在本仓库硬编码第二遍。 */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          <SelectLang />
+          {/* 🔴 可发现性修复：SelectLang 渲染的是 antd Dropdown 的**纯图标触发器**，
+              实测它的 aria-label / title / 文本**全为空**（浏览器抓到的真实 HTML：
+              <span class="ant-dropdown-trigger" style="…"><i class="anticon"><svg …/>），
+              ⇒ 站长连着两次都没认出来它是语言切换器。
+              ⚠️ 这里用**静态双语** title/aria-label 而不是 t()：这一层要同时服务
+              「还没切语言的人」，而切成某一种语言后单语提示对另一批人就失效了。
+              🔴 并且刻意不写任何语言自称（简体中文/繁體中文/English）——
+              那是 SelectLang 内置 defaultLangUConfigMap 的职责，
+              localePackParity 守卫钉住「语言自称不许在本仓库硬编码第二遍」。
+              ⚠️ 不要再包一层 antd Tooltip：SelectLang 自己就是 Dropdown，两个触发器会打架。 */}
+          <span
+            role="group"
+            title={'语言 · Language'}
+            aria-label={'语言 · Language'}
+            style={{ display: 'inline-flex', alignItems: 'center' }}
+          >
+            <SelectLang />
+          </span>
         </div>
         <LoginForm
           className={styles.loginForm}
           logo={<img alt="logo" src="/logo.svg" />}
           title="VanBlog"
-          subTitle={'VanBlog 博客管理后台'}
+          subTitle={t('login.subTitle', 'VanBlog 博客管理后台')}
           initialValues={{
             autoLogin: true,
           }}
@@ -84,11 +107,11 @@ const Login = () => {
                   size: 'large',
                   prefix: <UserOutlined className={styles.prefixIcon} />,
                 }}
-                placeholder={'用户名'}
+                placeholder={t('login.usernamePlaceholder', '用户名')}
                 rules={[
                   {
                     required: true,
-                    message: '用户名是必填项！',
+                    message: t('login.usernameRequired', '用户名是必填项！'),
                   },
                 ]}
               />
@@ -99,11 +122,11 @@ const Login = () => {
                   size: 'large',
                   prefix: <LockOutlined className={styles.prefixIcon} />,
                 }}
-                placeholder={'密码'}
+                placeholder={t('login.passwordPlaceholder', '密码')}
                 rules={[
                   {
                     required: true,
-                    message: '密码是必填项！',
+                    message: t('login.passwordRequired', '密码是必填项！'),
                   },
                 ]}
               />
@@ -117,14 +140,14 @@ const Login = () => {
             }}
           >
             <ProFormCheckbox noStyle name="autoLogin">
-              自动登录
+              {t('login.autoLogin', '自动登录')}
             </ProFormCheckbox>
             <a
               onClick={() => {
                 history.push('/user/restore');
               }}
             >
-              忘记密码
+              {t('login.forgotPassword', '忘记密码')}
             </a>
           </div>
         </LoginForm>

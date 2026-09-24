@@ -129,4 +129,13 @@ export default {
   'init.restore.confirmNotePrefix': '管理員帳號與密碼',
   'init.restore.confirmNoteStrong': '來自備份檔',
   'init.restore.confirmNoteSuffix': '，下面初始化精靈裡的任何輸入都不需要。備份帶有管理員帳號時，還原完成後直接到登入頁；萬一這份備份檔裡沒有帳號，網站會保持未初始化，回來繼續走精靈建一個即可。',
+
+  'common.language': '語言',
+  'login.subTitle': 'VanBlog 部落格管理後台',
+  'login.usernamePlaceholder': '使用者名稱',
+  'login.usernameRequired': '使用者名稱是必填項！',
+  'login.passwordPlaceholder': '密碼',
+  'login.passwordRequired': '密碼是必填項！',
+  'login.autoLogin': '自動登入',
+  'login.forgotPassword': '忘記密碼',
 };

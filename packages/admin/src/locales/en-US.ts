@@ -140,4 +140,13 @@ export default {
   'init.restore.confirmNoteStrong': 'come from the backup file',
   'init.restore.confirmNoteSuffix':
     '; nothing you type in the setup wizard below is needed. If the backup contains an admin account you will go straight to the sign-in page after the restore; if this archive has no account, the site stays uninitialized and you can come back and create one with the wizard.',
+
+  'common.language': 'Language',
+  'login.subTitle': 'VanBlog Admin Console',
+  'login.usernamePlaceholder': 'Username',
+  'login.usernameRequired': 'Username is required',
+  'login.passwordPlaceholder': 'Password',
+  'login.passwordRequired': 'Password is required',
+  'login.autoLogin': 'Keep me signed in',
+  'login.forgotPassword': 'Forgot password',
 };

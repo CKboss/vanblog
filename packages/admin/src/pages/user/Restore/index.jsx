@@ -22,7 +22,16 @@ export default function () {
           拿不到后台头部的切换器；忘记密码时同样需要在登录之前就能切换语言。
           ⚠️ 绝对定位，避免扰动这层 `display:flex; justifyContent:center` 的布局。 */}
       <div style={{ position: 'absolute', top: 16, right: 24 }}>
-        <SelectLang />
+        {/* 🔴 同 Login：SelectLang 是纯图标触发器（无 title/aria-label/文本），
+            加一层静态双语提示让它可被辨识；不写语言自称（守卫钉住）。 */}
+        <span
+          role="group"
+          title={'语言 · Language'}
+          aria-label={'语言 · Language'}
+          style={{ display: 'inline-flex', alignItems: 'center' }}
+        >
+          <SelectLang />
+        </span>
       </div>
       <ProCard
         title="忘记密码"

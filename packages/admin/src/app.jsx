@@ -185,7 +185,21 @@ export const layout = ({ initialState, setInitialState }) => {
               组件确实被编译进了产物，但从来没有被渲染。
               ⚠️ 判据是"产物里搜得到切换器要显示的文字"（注意 terser 会把非 ASCII
               转义成 \uXXXX，必须按转义形式搜），而不是"某个生成文件存在"。 */}
-          <SelectLang />
+          {/* 🔴 可发现性修复：这一处同样只是纯图标（无 title/aria-label/文本），
+              站长在后台头部连着两次都没认出来。
+              ⚠️ 这里**不能用 t()/useIntl**：rightContentRender 是普通函数、不是 React
+              组件，在里面调 hook 会违反 hooks 规则 ⇒ 用静态双语 title。
+              🔴 并且 <SelectLang /> 必须**独占一行且行首只有空白**，因为
+              localePackParity 守卫用 /^\s*<SelectLang\s*\/>/m 在 rightContentRender
+              的作用域里断言它被渲染。 */}
+          <span
+            role="group"
+            title={'语言 · Language'}
+            aria-label={'语言 · Language'}
+            style={{ display: 'inline-flex', alignItems: 'center' }}
+          >
+            <SelectLang />
+          </span>
           <ThemeButton showText={false} />
           <LogoutButton
             key="logoutRightContent"

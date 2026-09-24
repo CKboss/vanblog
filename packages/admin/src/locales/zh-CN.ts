@@ -134,4 +134,13 @@ export default {
   'init.restore.confirmNotePrefix': '管理员账号与密码',
   'init.restore.confirmNoteStrong': '来自备份文件',
   'init.restore.confirmNoteSuffix': '，下面初始化向导里的任何输入都不需要。备份带有管理员账号时，恢复完成后直接去登录页；万一这份归档里没有账号，站点会保持未初始化，回来继续走向导建一个即可。',
+
+  'common.language': '语言',
+  'login.subTitle': 'VanBlog 博客管理后台',
+  'login.usernamePlaceholder': '用户名',
+  'login.usernameRequired': '用户名是必填项！',
+  'login.passwordPlaceholder': '密码',
+  'login.passwordRequired': '密码是必填项！',
+  'login.autoLogin': '自动登录',
+  'login.forgotPassword': '忘记密码',
 };
