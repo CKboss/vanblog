@@ -5,7 +5,7 @@ import { notifyLoginSuccess } from '@/services/van-blog/requestError';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { LoginForm, ProFormCheckbox, ProFormText } from '@ant-design/pro-form';
 import { message } from 'antd';
-import { history, useModel } from 'umi';
+import { history, SelectLang, useModel } from 'umi';
 import styles from './index.less';
 
 const Login = () => {
@@ -51,6 +51,14 @@ const Login = () => {
   return (
     <div className={styles.container}>
       <div className={styles.content}>
+        {/* 🔴 `/user` 整棵子树是 `layout: false`（见 config/routes.js），拿不到后台头部
+            那个切换器；而登录页是站长/读者看到的**第一屏**，且文案默认是中文 ⇒
+            英文用户在登录之前就没法切换语言。所以在页内自己放一个，右对齐。
+            ⚠️ 复用 umi `plugin-locale` 导出的 SelectLang，语言自称（简体中文/繁體中文/
+            English）来自它内置的 defaultLangUConfigMap ⇒ 不在本仓库硬编码第二遍。 */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <SelectLang />
+        </div>
         <LoginForm
           className={styles.loginForm}
           logo={<img alt="logo" src="/logo.svg" />}

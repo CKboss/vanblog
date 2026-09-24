@@ -4,7 +4,7 @@ import { accountPasswordMinRule } from '@/services/van-blog/passwordPolicy';
 import ProCard from '@ant-design/pro-card';
 import ProForm, { ProFormText } from '@ant-design/pro-form';
 import { Alert, message } from 'antd';
-import { history } from 'umi';
+import { history, SelectLang } from 'umi';
 export default function () {
   return (
     <div
@@ -18,6 +18,12 @@ export default function () {
         justifyContent: 'center',
       }}
     >
+      {/* 🔴 与登录页同理：`/user/restore` 也在 `layout: false` 子树里（config/routes.js），
+          拿不到后台头部的切换器；忘记密码时同样需要在登录之前就能切换语言。
+          ⚠️ 绝对定位，避免扰动这层 `display:flex; justifyContent:center` 的布局。 */}
+      <div style={{ position: 'absolute', top: 16, right: 24 }}>
+        <SelectLang />
+      </div>
       <ProCard
         title="忘记密码"
         bordered

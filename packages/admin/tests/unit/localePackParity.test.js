@@ -300,6 +300,138 @@ describe('多语言第一期：纯 JS 核心模块的注入式翻译器', () => 
   });
 });
 
+/**
+ * 🔴 语言切换器必须**真的被渲染**，而不只是"被编译进产物"。
+ *
+ * **它防的是 v2026.9.6 那个已发版的缺陷**：`@umijs/plugin-locale` 启用后，`SelectLang`
+ * 组件确实被编译进了 bundle（产物里按 `\uXXXX` 转义形式能搜到 `简体中文`/`繁體中文`），
+ * 但**没有任何用户能到达的页面渲染它** ⇒ 站长在后台"什么都没看到"。两个成因：
+ *   1. 🔴 `src/app.jsx` 导出的运行时 `layout` 配置里提供了 `rightContentRender`，
+ *      它会**整体覆盖** plugin-layout 生成的右侧内容 —— 而那个"自动出现"的切换器
+ *      正是 plugin-layout 的 `genRenderRightContent({ locale: hasPlugins([...]) })`
+ *      放进去的 ⇒ **"启用插件头部就会自动出现切换器"这个推断在本仓库不成立**。
+ *   2. `/user`（登录、忘记密码）与 `/init` 都是 `layout: false` ⇒ 拿不到头部；
+ *      而 `/init` 在**已初始化**的站点上不可达 ⇒ 上一轮写在安装页里的那个只有全新安装才看得到。
+ *
+ * ⚠️ **判据的口径**（这一节的存在理由）：
+ * 🔴 **"某个生成文件存在"（`.umi/plugin-locale/SelectLang.tsx`）、"localeInfo 注册了三份"、
+ * "ConfigProvider 已接管"这三条都是真的，但没有一条能证明切换器会被渲染。**
+ * 唯一可靠的尺子是：①**源码里那个真正生效的渲染点确实引用了它**（本节），
+ * ②**构建产物里搜得到切换器要显示的文字**（见 `docs`/手册记录的转义形式口径）。
+ *
+ * ⚠️ 一律**先剥注释再断言**：本仓库的注释里会写 `<SelectLang />` 来解释成因，
+ * 若不剥注释，那些注释会喂饱断言 ⇒ 守卫变成恒真（本仓库已为此付过 5 次学费）。
+ */
+describe('多语言第一期：语言切换器必须真的被渲染（不是只被编译进产物）', () => {
+  /**
+   * 四个"必须有切换器"的位置。
+   * 🔴 `why` 说明每一处为什么必须有 —— 断言失败时要能看出是哪一处、为什么。
+   */
+  const REQUIRED = [
+    {
+      file: 'src/app.jsx',
+      why: '后台头部：运行时 layout 的 rightContentRender 会覆盖 plugin-layout 生成的右侧内容',
+      // 🔴 必须落在这个函数体内，不能只是"文件里某处出现过"
+      scope: /rightContentRender:\s*\(\)\s*=>\s*\{[\s\S]*?\n    \},/,
+    },
+    {
+      file: 'src/pages/user/Login/index.jsx',
+      why: '登录页是 layout:false 且是站长看到的第一屏 ⇒ 登录之前就要能切换语言',
+      scope: null,
+    },
+    {
+      file: 'src/pages/user/Restore/index.jsx',
+      why: '忘记密码页同为 layout:false，同样在登录之前',
+      scope: null,
+    },
+    {
+      file: 'src/pages/InitPage/index.tsx',
+      why: '安装页是 layout:false（⚠️ 已初始化的站点上 /init 不可达，只有全新安装看得到）',
+      scope: null,
+    },
+  ];
+
+  it('反空转：清单必须是这 4 处、且每个文件都真实存在', () => {
+    assert.equal(REQUIRED.length, 4, '清单条数变了 ⇒ 这条期望值必须一起改（这个摩擦是刻意留的）');
+    for (const r of REQUIRED) {
+      assert.ok(existsSync(path.join(adminRoot, r.file)), `文件不存在：${r.file}`);
+    }
+  });
+
+  for (const r of REQUIRED) {
+    it(`${r.file} 必须 import 并渲染 <SelectLang />（${r.why}）`, () => {
+      const raw = read(r.file);
+      // 🔴 剥注释后再断言：注释里提到 <SelectLang /> 不算数
+      const src = stripComments(raw);
+      const target = r.scope ? (src.match(r.scope) || [''])[0] : src;
+      if (r.scope) {
+        assert.ok(
+          target.length > 0,
+          `🔴 在 ${r.file} 里找不到 rightContentRender 的作用域 ⇒ 尺子失效（不是"没有切换器"）。` +
+            `请先核实这个正则是否还对得上当前源码形状；解析不到 ≠ 不存在。`,
+        );
+      }
+      assert.match(
+        target,
+        /^\s*<SelectLang\s*\/>/m,
+        `🔴 ${r.file} 没有渲染 <SelectLang />。${r.why}。` +
+          `⚠️ 注意"组件被编译进产物"不等于"它被渲染"—— v2026.9.6 就是这样发出去的。`,
+      );
+      assert.match(
+        src,
+        /^import\s*\{[^}]*\bSelectLang\b[^}]*\}\s*from\s*'umi';/m,
+        `🔴 ${r.file} 没有从 'umi' 导入 SelectLang（渲染点存在但导入缺失 ⇒ 运行时是 undefined）。`,
+      );
+    });
+  }
+
+  it('🔴 语言自称不许在本仓库硬编码第二遍（必须来自 umi SelectLang 内置的 defaultLangUConfigMap）', () => {
+    // ⚠️ 一个性质只留一处权威口径：语言自称（简体中文/繁體中文/English）由 umi 的
+    //    defaultLangUConfigMap 提供；本仓库再抄一份就一定会漂。
+    const LABELS = ['简体中文', '繁體中文'];
+    for (const r of REQUIRED) {
+      const src = stripComments(read(r.file));
+      for (const label of LABELS) {
+        assert.ok(
+          !src.includes(label),
+          `🔴 ${r.file} 里硬编码了语言自称「${label}」⇒ 应当复用 SelectLang 内置的标签，` +
+            `否则就出现了第二处会漂移的口径。`,
+        );
+      }
+    }
+  });
+
+  it('尺子反证：只出现在注释里的 <SelectLang /> 必须**不**算数', () => {
+    // 🔴 这条证明上面的 stripComments 是承重的：把渲染点删掉、只在注释里留一份，
+    //    守卫必须红。若哪天有人"顺手"把 stripComments 去掉，这条会先红。
+    const onlyInComment = [
+      "import { SelectLang } from 'umi';",
+      'export default function () {',
+      '  return (',
+      '    <div>',
+      '      {/* <SelectLang /> 这里只是注释，不是渲染 */}',
+      '    </div>',
+      '  );',
+      '}',
+    ].join('\n');
+    const stripped = stripComments(onlyInComment);
+    assert.ok(
+      !/^\s*<SelectLang\s*\/>/m.test(stripped),
+      '🔴 尺子坏了：只写在注释里的 <SelectLang /> 被判成"已渲染" ⇒ stripComments 没生效',
+    );
+    // 反向：真实渲染的形状必须被认出来（否则上面那条"不红"只是因为正则太严）
+    const real = onlyInComment.replace(
+      "      {/* <SelectLang /> 这里只是注释，不是渲染 */}",
+      '      <SelectLang />',
+    );
+    assert.match(
+      stripComments(real),
+      /^\s*<SelectLang\s*\/>/m,
+      '🔴 尺子坏了：真实的 <SelectLang /> 渲染点没被认出来 ⇒ 正则需要修，而不是放宽断言',
+    );
+  });
+});
+
 describe('尺子有效性反证（合成输入，不碰真实语言包）', () => {
   // 🔴 把判定逻辑抽成纯函数，才能用合成输入证明它真的会抓到问题 ——
   //    否则「三份包恰好相等」永远可能只是因为比较器坏了。

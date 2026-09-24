@@ -4,7 +4,7 @@ import { HomeOutlined, LogoutOutlined, ProjectOutlined } from '@ant-design/icons
 import { PageLoading, SettingDrawer } from '@ant-design/pro-layout';
 import { message, Modal, notification } from 'antd';
 import moment from 'moment';
-import { history, Link } from 'umi';
+import { history, Link, SelectLang } from 'umi';
 import defaultSettings from '../config/defaultSettings';
 import LogoutButton from './components/LogoutButton';
 import ThemeButton from './components/ThemeButton';
@@ -176,6 +176,16 @@ export const layout = ({ initialState, setInitialState }) => {
     rightContentRender: () => {
       return (
         <div style={{ display: 'flex', alignItems: 'center' }}>
+          {/* 🔴 必须在这里显式渲染 <SelectLang />：本文件导出的运行时 `layout` 配置里
+              一旦提供了 `rightContentRender`，它就会**整体覆盖** plugin-layout 生成的
+              右侧内容 —— 而 `@umijs/plugin-locale` 注册后那个"自动出现在头部"的语言
+              切换器，正是由 plugin-layout 的
+              `genRenderRightContent({ locale: api.hasPlugins([...]) })` 放进去的。
+              ⇒ 所以"启用 locale 插件头部就会自动出现切换器"这个推断在本仓库**不成立**：
+              组件确实被编译进了产物，但从来没有被渲染。
+              ⚠️ 判据是"产物里搜得到切换器要显示的文字"（注意 terser 会把非 ASCII
+              转义成 \uXXXX，必须按转义形式搜），而不是"某个生成文件存在"。 */}
+          <SelectLang />
           <ThemeButton showText={false} />
           <LogoutButton
             key="logoutRightContent"
