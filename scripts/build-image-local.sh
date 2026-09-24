@@ -285,6 +285,33 @@ if [[ "${ready}" != "1" ]]; then
 fi
 say "  ${green}服务已就绪${plain}"
 
+# 🔴 服务端就绪 ≠ 前台就绪。cluster 模式下只有 **leader** worker 会拉起 Next.js 前台子进程，
+# 而 `/api/public/meta` 是**任意** worker 都能答的 ⇒ 只等它就在往下走，会落在前台还没监听的窗口里。
+# 🔴 实测（2026-09-24，同一镜像逐 5 秒采样）：t=15s 时 /api/public/meta=200 而 /=502，t=20s 时 /=200
+# ⇒ 窗口约 5 秒，而下面那三条前台路径（/ /post/1 /timeline）会全部假红。
+# 🔴 后果不是理论上的：nightly.yml 与 server-test.yml 都跑这个冒烟，而 v2026.9.6 起镜像默认就是
+# cluster（VANBLOG_CLUSTER_WORKERS=auto）⇒ **对任何 cluster 镜像都可能假红**。
+# ⚠️ 接受的状态码与下面「关键路径」那段**完全一致**（200/301/302/308/404）——
+# 🔴 **刻意不把 502 加进接受列表**：502 意味着 caddy 拨不到前台，那是要抓的真缺陷，不是竞态。
+# ⚠️ 超时给 60 秒（30 × 2s）：前台实测约 5-15 秒起来，60 秒已经很宽；
+# 🔴 **刻意不给几分钟** —— 那会让每次构建都变慢，而超时本身就该 fail-loud。
+say "  等待前台就绪（最多 60 秒；cluster 下前台由 leader 稍后拉起）..."
+fready=0
+fcode="000"
+for _ in $(seq 1 30); do
+  fcode="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${SMOKE_HTTP_PORT}/" 2>/dev/null || echo 000)"
+  case "${fcode}" in
+  200 | 301 | 302 | 308 | 404) fready=1; break ;;
+  esac
+  sleep 2
+done
+if [[ "${fready}" != "1" ]]; then
+  say "${red}  前台没有就绪（/ 最后一次是 ${fcode}；502 = caddy 拨不到前台子进程），下面是容器日志尾部：${plain}"
+  "${ENGINE}" logs --tail 60 "${SMOKE_NAME}" 2>&1 | sed 's/^/    /'
+  exit 1
+fi
+say "  ${green}前台已就绪${plain}（/ → ${fcode}）"
+
 BASE="http://127.0.0.1:${SMOKE_HTTP_PORT}"
 say "> 请求关键路径"
 for path in / /api/public/meta /admin /robots.txt /sitemap.xml /rss/feed.xml /post/1 /timeline; do

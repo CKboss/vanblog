@@ -595,21 +595,65 @@ describe('FIX B9：stripDataUriImages 与旧正则逐字节等价，且对二次
     expect(stripDataUriImages(pinned[3])).toBe(pinned[3]);
   });
 
-  it('二次方输入现在是线性的：80k 空白 < 500ms（旧实现同输入实测 32s）', () => {
+  // 🔴 2026-09-24 重写：原判据是 `expect(t80 / Math.max(t20, 0.05)).toBeLessThan(8)`，
+  // 输入 20k/80k。它长期在 CI 上假红（本机也曾实测到 8.302，超阈值 3.8%）。
+  // 🔴 根因不是"阈值太紧"，而是**纯比值这个形状本身不稳**：
+  //   ① 两个测量各自含固定开销（函数调用、字符串分配、GC），比值在小输入下被这些常量主导；
+  //   ② `Math.max(t20, 0.05)` 那个 0.05ms 地板在快机器上会把分母钉死、**人为抬高比值**
+  //      （20k 的扫描可以低于 0.05ms）；
+  //   ③ 🔴 冷/暖与 GC 让两次测量不同步 —— 本机同一次运行里 20k 冷测 0.763ms、暖测 0.2245ms，
+  //      **差 3.4 倍**，而 `Math.min` 只压低单侧、不能保证两侧同步。
+  // 🔴 修法（三处，每一处都有 2026-09-24 本机标定实测依据）：
+  //   (a) **输入放大并改成 8× 比例（200k → 1.6M）** —— 时间远高于任何测量地板，
+  //       而且 8× 比例让"线性 vs 二次方"的判别力最大化：线性给 ×8，二次方给 ×64。
+  //       ⚠️ 原来用 4× 比例时判别力不足（线性 ×4、二次方 ×16，阈值只能放中间，
+  //       加上常量项后二次方只超出 1.27 倍 ⇒ 噪声就能翻盘）。
+  //   (b) **纯比值换成仿射界** `t_large < 16 * t_small + 2` —— 这才是正确的形状：
+  //       线性 ⇒ t(n) ≈ a·n + b，所以 t(8n) ≈ 8·t(n) − 7b ≤ 8·t(n)；二次方 ⇒ t(8n) ≈ 64·t(n)。
+  //       阈值 16 = 线性期望的 2 倍、二次方期望的 1/4 ⇒ **安全侧 2 倍余量、危险侧 4 倍余量**。
+  //   (c) **保留一条绝对界**（< 2000ms），它与仿射界**各自独立**都能抓住二次方实现。
+  // 🔴 标定实测（2026-09-24，本机，`min` of 3，暖机后）：
+  //   线性（真实实现）：t(200k)=2.254ms、t(1.6M)=17.975ms ⇒ 比值 **7.97**；
+  //     仿射界 16×2.254+2 = **38.07ms** vs 实测 17.98ms ⇒ **余量 2.12×**；
+  //     8 轮复测比值稳定在 **7.921–8.027**，实测恒为 18.0ms。
+  //   二次方替身（`substring(i).indexOf(不存在的串)`）：t(200k)=27.5ms、t(1.6M)=3137ms ⇒ 比值 **114**；
+  //     仿射界 442ms vs 实测 3137ms ⇒ **超出 7.09×，决定性变红**；绝对界 2000ms 也同时抓住它。
+  // 🔴 变异对照已实测承重（见 §7.132）：收紧系数 ⇒ 红；换二次方替身 ⇒ 红；语义空操作 ⇒ 绿。
+  //   ⚠️ 做"换回二次方"这条变异时踩到一个坑并记进手册：**`s.slice(i).length` 会被 V8 优化成
+  //   `s.length - i` 而不真的分配字符串 ⇒ 那个"二次方替身"实测比值只有 4.08，其实是线性的**，
+  //   于是变异成了语义空操作、NOT_RED 差点被误读成"判据不守线性"。🔴 **变异体本身必须先实测验证。**
+  // ⚠️ 历史记录保留：旧的**正则**实现在 **80k** 空白输入上实测 **32s**
+  //   （源码注释里的完整阶梯：5k→125ms、10k→495ms、20k→2.0s、40k→8.0s、80k→32s，每翻倍 ×4）。
+  it('二次方输入现在是线性的：1.6M 空白 < 2000ms，且 t(8n) 不超过 16·t(n)+2（旧正则实现在 80k 上实测 32s）', () => {
+    const SMALL = 200_000;
+    const LARGE = 1_600_000; // = SMALL × 8 ⇒ 线性给 ×8，二次方给 ×64
     const mk = (n: number) => `![a](data:${' '.repeat(n)}`;
     const time = (s: string) => {
       const t0 = process.hrtime.bigint();
       stripDataUriImages(s);
       return Number(process.hrtime.bigint() - t0) / 1e6;
     };
-    time(mk(20_000)); // 预热
-    const t20 = Math.min(time(mk(20_000)), time(mk(20_000)), time(mk(20_000)));
-    const t80 = Math.min(time(mk(80_000)), time(mk(80_000)), time(mk(80_000)));
+    const minOf3 = (n: number) => {
+      const s = mk(n);
+      return Math.min(time(s), time(s), time(s));
+    };
+    time(mk(SMALL)); // 预热，避免把 JIT 编译算进第一次测量
+    const tSmall = minOf3(SMALL);
+    const tLarge = minOf3(LARGE);
     // eslint-disable-next-line no-console
-    console.log(`[B9] stripDataUriImages 二次方输入：20k=${t20.toFixed(2)}ms 80k=${t80.toFixed(2)}ms`);
-    expect(t80).toBeLessThan(500);
-    // 输入 ×4 ⇒ 线性实现约 ×4；旧实现是 ×16（每翻倍 ×4）。阈值放到 8 已经非常宽。
-    expect(t80 / Math.max(t20, 0.05)).toBeLessThan(8);
+    console.log(
+      `[B9] stripDataUriImages 二次方输入：200k=${tSmall.toFixed(2)}ms 1.6M=${tLarge.toFixed(2)}ms 比值=${(
+        tLarge / tSmall
+      ).toFixed(2)}`,
+    );
+    // 🔴 fail-loud 的尺子自检：计时器必须真的测到了非零耗时，否则下面的仿射界会退化成恒真。
+    expect(tSmall).toBeGreaterThan(0);
+    expect(tLarge).toBeGreaterThan(0);
+    // 绝对界：本机实测 17.98ms；CI runner 慢 20 倍也才 360ms。
+    // 🔴 二次方实现在 1.6M 上实测 3137ms ⇒ 这一条自己就能抓住它（与仿射界互相独立）。
+    expect(tLarge).toBeLessThan(2000);
+    // 🔴 仿射界（承重的那一条）：线性 ⇒ t(8n) ≤ 8·t(n)；给到 16 倍 + 2ms 常量余量。
+    expect(tLarge).toBeLessThan(16 * tSmall + 2);
   });
 
   it('没有 data: 的长文走快速路径（一次字面量探测，不进扫描器）', () => {

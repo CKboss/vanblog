@@ -9469,6 +9469,193 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.132 🔴 CI 长期红的真因是一条计时断言的 0.05ms 地板；以及上一轮矩阵跑出的 5 条新发现（不入册就会丢）
+
+> 本节由「只修两条已定位缺陷 + 把上一轮矩阵的发现入册」这一轮写下。
+> 🔴 **上一轮那个代理按授权跳过了 `AGENTS.md`，并明确警告「这五条新发现目前只存在于汇报与 `/tmp` 证据里，
+> 如果下一轮不入册，它们会丢」** ⇒ 本节就是那次入册。证据文件仍在 `/tmp/mx-*`（🔴 **不要删**）。
+
+#### A. 🔴 本轮修掉的缺陷 1：`server-test` 长期红，真因是一条计时断言的**地板**
+
+**症状**：`server-test` 在 `8af8f03b` 与 `60354ad4` 上都 failure；失败 job = `server-test`、
+失败步骤 = **"Run server unit tests"**（`guards-core` 与 `guards-slow` 两个 job 都 success）。
+🔴 **公开 annotations 给出了确切用例**（证据：`/tmp/mx-ci-ann.json`）：
+`FAIL src/audit-hardening-round4-fixes-comment.spec.ts` →
+「FIX B9：stripDataUriImages 与旧正则逐字节等价，且对二次方输入是线性的 › 二次方输入现在是线性的：80k 空白 < 500ms」。
+
+**根因（读了断言体确认，不是猜）**：原判据是
+`expect(t80 / Math.max(t20, 0.05)).toBeLessThan(8)`，输入 20k/80k。
+🔴 **根因不是"阈值太紧"，而是"纯比值"这个形状本身不稳**，三条独立原因：
+1. 两个测量各自含固定开销（函数调用、字符串分配、GC），**比值在小输入下被这些常量主导**；
+2. 🔴 **`Math.max(t20, 0.05)` 那个 0.05ms 地板在快机器上把分母钉死、人为抬高比值**（20k 的扫描可以低于 0.05ms）；
+3. 🔴 **冷/暖与 GC 让两侧测量不同步** —— 本机同一次运行里 20k 冷测 **0.763ms**、暖测 **0.2245ms**，
+   **差 3.4 倍**，而 `Math.min` 只压低单侧、不能保证两侧同步。
+⚠️ 注释里那句"输入 ×4 ⇒ 阈值 8 已经非常宽"**在地板生效时不成立**，实际余量远小于 2 倍。
+
+🔴 **严重度是流程级（高），而不只是"一条测试偶尔红"**：`publish-ghcr` 与 `release-fork` 的 `needs` 都是 `None`
+⇒ **发版不被红 CI 拦住** ⇒ 红被常态化。而本手册自己写过 **"假缺口比没守卫更糟，因为它会训练下一个人忽略红灯"**
+—— 🔴 **一条长期红的 CI 是同一件事的另一面**。
+
+**修法（本轮已实施，三处都有标定实测依据）**：
+- (a) **输入放大并改成 8× 比例（200k → 1.6M）**：时间远高于任何测量地板；而且 8× 比例让判别力最大化
+  （线性给 ×8、二次方给 ×64）。⚠️ **原来 4× 比例时判别力不足** —— 线性 ×4、二次方 ×16，阈值只能放中间，
+  加上常量项后二次方只超出 **1.27 倍** ⇒ 噪声就能翻盘。
+- (b) **纯比值换成仿射界** `t_large < 16 * t_small + 2`：线性 ⇒ `t(n) ≈ a·n + b` ⇒ `t(8n) ≤ 8·t(n)`；
+  二次方 ⇒ `t(8n) ≈ 64·t(n)`。阈值 16 = 线性期望的 2 倍、二次方期望的 1/4 ⇒ **安全侧 2 倍余量、危险侧 4 倍余量**。
+- (c) **保留一条绝对界**（`< 2000ms`），它与仿射界**各自独立**都能抓住二次方。
+
+🔴 **标定实测（2026-09-24，本机，`min` of 3，暖机后）**：
+线性（真实实现）t(200k)=**2.254ms**、t(1.6M)=**17.975ms** ⇒ 比值 **7.97**；仿射界 38.07ms ⇒ **余量 2.12×**；
+**8 轮复测比值稳定在 7.921–8.027**，实测恒为 18.0ms。
+二次方替身 t(200k)=**27.5ms**、t(1.6M)=**3137ms** ⇒ 比值 **114**；仿射界 442ms ⇒ **超出 7.09×**。
+
+🔴 **变异对照 4 条，全部实测**：M0 基线绿｜M1 系数 16→1.05 ⇒ **RED**｜
+M2 换二次方替身 ⇒ **RED**（被绝对界抓住：`Expected < 2000 / Received 2836.08`）｜
+🔴 **M2b 把绝对界放开到 1e9、只留仿射界 ⇒ 仍 RED**（`Expected < 433.26 / Received 3330.45`，
+失败行正是 `expect(tLarge).toBeLessThan(16 * tSmall + 2)`）⇒ **证明仿射界自己就承重，不是靠绝对界兜的**｜
+M3 只改注释措辞（语义空操作）⇒ **GREEN 20/20**。
+🔴 **负载下复跑 3 次全绿**（同时并发跑 `logRotate`/`rateLimit`/`cryptoAsync`/`markdownExport` 四个已知负载敏感 spec）
+⇒ **这条不再是负载敏感假红**。⚠️ **因此它可以从"负载敏感假红清单"里除名**（清单从 7 个回到 6 个）。
+
+🔴 **本轮踩的坑（值得单独记，因为它是"变异体本身是语义空操作"的新形状）**：
+第一版 M2 用 `for (i+=64) acc += s.slice(i).length` 当"二次方替身"，结果 **NOT_RED**。
+🔴 **真因是 V8 把 `s.slice(i).length` 优化成 `s.length - i`，根本不分配字符串 ⇒ 那个替身实测比值只有 4.08，
+其实是线性的** ⇒ 变异成了语义空操作，而 NOT_RED 差点被误读成"判据不守住线性"。
+👉 **规矩（强化版）：做"让被测性质真的被破坏"的变异时，🔴 变异体本身必须先单独实测验证它真的破坏了那个性质**
+（这里是先量三个候选替身的比值：`slice(i).length` = 4.08 ❌、`substring(i).indexOf(不存在)` = **14.39** ✅、
+显式双重循环 = 4.16 ❌），**再拿它去跑对照**。⚠️ 这与既有的"变异体不能是语义空操作"是同一条，
+但**新形状是：空操作不是因为我写错了语法，而是因为编译器把我的二次方优化成了线性**。
+
+⚠️ **标题也跟着改了**（本仓库有 §7.118/§7.119 那一族"标题与断言不是同一件事"的教训）：
+`80k 空白 < 500ms` → `1.6M 空白 < 2000ms，且 t(8n) 不超过 16·t(n)+2`，
+而 🔴 **历史记录保留**：旧正则实现在 80k 上实测 32s（完整阶梯见 `comment.provider.ts` 的函数头注释：
+5k→125ms、10k→495ms、20k→2.0s、40k→8.0s、80k→32s，每翻倍 ×4）。
+
+⚠️ **仍未能验证的**：🔴 **本机无法复现 CI runner 的环境** ⇒ "改完 CI 会变绿"这一点
+**只能等下一次推送才知道**。本轮能给出的最强证据是：①根因已被读代码确认（地板 + 纯比值）；
+②新判据在本机 8 轮复测比值稳定在 7.92–8.03、余量 2.12×；③负载下 3 次全绿；
+④两条界各自独立都能抓住二次方（M2 与 M2b）。🔴 **不要把这四条当成"CI 已验证变绿"。**
+
+#### B. 🔴 本轮修掉的缺陷 2：冒烟测试对 cluster 镜像的**就绪竞态**
+
+**机制（上一轮已实测，本轮复述）**：`scripts/build-image-local.sh` 的就绪循环探的是
+**`/api/public/meta`（服务端）**，🔴 **不等前台**；而 cluster 下**只有 leader 会拉起 Next.js 子进程**。
+同一镜像逐 5 秒采样：**t=15s 时 meta=200 而 `/`=502，t=20s 时 `/`=200** ⇒ 窗口约 5 秒，
+`/`、`/post/1`、`/timeline` 三条全部假红。
+🔴 **后果不是理论上的**：`nightly.yml` 与 `server-test.yml` 都跑这个冒烟，
+而 **`v2026.9.6` 起镜像默认就是 cluster** ⇒ **对任何 cluster 镜像都可能假红**。
+
+**修法（本轮已实施）**：在"服务已就绪"之后、"请求关键路径"之前，插入一段**等前台就绪**的循环
+（探 `/`，30 × 2s = **最多 60 秒**，超时则打印容器日志尾部并 `exit 1`）。
+🔴 **两条刻意的设计决定**：
+1. 🔴 **接受的状态码与「关键路径」那段完全一致（200/301/302/308/404），刻意不把 502 加进接受列表** ——
+   502 意味着 caddy 拨不到前台，**那是要抓的真缺陷，不是竞态**；
+2. 🔴 **超时给 60 秒而不是几分钟** —— 前台实测约 5-15 秒起来，60 秒已经很宽；
+   给几分钟会让每次构建都变慢，而**超时本身就该 fail-loud**。
+
+⚠️ **兼容性已核实**：`build-image-local.test.sh`（**49 条**）钉的是 `/api/public/meta` 字面量与
+`SMOKE_HTTP_PORT:-18074` 默认值 ⇒ **改动后 49/0 仍绿**，且 `/api/public/meta` 在脚本里仍有 5 处命中；
+`docs-consistency` **61/0**；🔴 **两个 workflow 的调用方式未变**（`nightly.yml:146` 仍是
+`bash scripts/build-image-local.sh`、`server-test.yml:431` 仍是跑那个守卫）⇒ **workflow 不需要改**。
+
+🔴 **这一条同时是"cluster 破坏前台"那个错误归因的第二次推翻**（第一次是隔离实验）：
+**cluster 没有破坏前台，是测试工具的就绪判据不等前台。**
+
+#### C. 🔴 上一轮矩阵的 5 条新发现（入册，否则会丢）
+
+**C-1. 🔴 20 个 server e2e spec 里有 10 个从不被执行。**
+`server-test.yml` 只接了 10 个 config；server 的 `test:e2e` 会跑全部 20 个，但 🔴 **被 0 个 workflow 引用**；
+而 `admin-e2e.yml` 里那条 `pnpm test:e2e` 的 `working-directory` 是 **`packages/admin`**（playwright）而不是 server。
+🔴 **从不执行的 10 个**：`access-password`、`app`、`audit-fixes-comment`、`backup-fidelity`、
+`backup-restore-bson`、`import-batch`、`init-restore`、`opscount`、`setup-key-init`、`stats-maintenance`
+⇒ 🔴 **其中一批是安全与灾备路径**（访问密码、初始化/恢复、初始化密钥、备份恢复的 BSON 保真）
+⇒ **它们可以静默腐烂**。
+🔴 **workflow 自己的注释已承认过这个失效模式**（「白名单的问题是它只会烂…**本项目已经因此让一条永久红的 e2e 混了 20 次**」），
+而 2026-09-17 那次盘点修的是 **src 下 169 个 spec 里 47 个从没在 CI 跑过** ⇒
+🔴 **`test/` 下这 20 个是同一族的、尚未处置的另一半**。
+⚠️ **待站长裁定**：接线成本不低（大多需要 mongod，config 里有"拒绝 27017/真实库名"的硬护栏），
+且 🔴 **"永久红就删掉"是不可逆的信息损失**。
+
+**C-2. 🔴 admin 的 9,400 行 TS（84 个文件）在任何地方都没有被类型检查。**
+本机 `tsc --noEmit` **rc=2、115 个 error TS**，而 🔴 **全部来自家目录的 `bun-types`**
+（53 个 `bun.d.ts` + 48 个 `sql.d.ts` + 14 个 `test.d.ts`），🔴 **来自 admin 自己 `src/` 的错误 = 0**。
+🔴 **这与 `AGENTS.local.md` §5 记的 server 那个坑同源**，而 **server 用 `tsconfig.dev.json` 限制 `typeRoots`
+解决了、admin 没有对应物**（只有一个 `tsconfig.json`，无 `typeRoots`、无 `skipLibCheck`）。
+🔴 **CI 也不跑**（`.github/workflows/` 里 `run tsc`/`run lint`/`pnpm lint` **0 命中**）；
+🔴 **lint 也不会自动跑**（`lint-staged` = `null`、`gitHooks` = `null`、根 `package.json` 没有 husky 依赖）。
+⚠️ **待站长裁定**：要不要给 admin 上类型检查棘轮（本仓库已有 `strict-null-ratchet` 的先例）；
+🔴 **第一步必须是"测出打开类型检查后 admin 自己有多少真错"**（很可能不是 0）。
+
+**C-3. 🔴 `nightly` 连红 3 次，已缩小但未定位。**
+失败 job = **`image-build`**、失败步骤 = **"Build the image and run its smoke test"**
+（`caddy-validate` 与 `docs-build` 都 success；`summary` 因 `if: failure()` 跟着红）。
+🔴 **三次耗时 3.9 / 2.7 / 4.3 分钟，而该 job `timeout-minutes: 90` ⇒ 不是超时**（推翻了一个自然假设）。
+🔴 **2026-09-21 加的那个诊断（把日志尾部转成 `::error` annotations）对这种失败结构性不足**：
+11 条 annotation 里**含错误特征的 0 条**，全是正常构建进度 ⇒ **只截到约 9 行尾巴，看不到真正的错误行**。
+🔴 **一条具体线索**：尾巴停在 runner 阶段 **28/35 = `WORKDIR /app/admin`**，而 Dockerfile 里它的**下一条指令正是
+`COPY --from=admin_builder /app/packages/admin/dist/ ./`** ⇒ **主假设是 `admin_builder` 阶段没产出 `dist/`（或为空）**。
+⚠️ **这是假设不是结论**（buildkit 的阶段输出会交错，尾巴未必是死亡点）。
+🔴 **并且它早于 cluster 默认值的改动**（09-21 与 09-22 就已红，cluster 默认是 09-23 才落的）
+⇒ 🔴 **cluster 不是 nightly 红的原因**（🔴 **这一点很重要，否则会误归因到刚发版的性能改动上**）。
+🔴 **修法方向**：①把捕获的日志尾部从约 9 行提高到能包含错误行
+（或改成"抓 `error|ERROR|not found|COPY failed` 的行 + 尾部"）；
+②构建后**显式断言 `admin_builder` 产出了非空的 `dist/`**；
+③把 `df -h` 的输出也转成 annotation（步骤里已在采集但没进 annotation）。
+
+**C-4. 🔴 首次测出本仓库的覆盖率基线**（用
+`jest --coverage --coverageReporters=json-summary --coverageDirectory=/tmp/mx-cov`，
+🔴 **没改任何配置文件、仓库没被写脏**）：
+lines **79.11%**（13721/17343）、statements **78.92%**、functions **73.77%**、
+🔴 **branches 65.08%**（8931/13722）、纳入统计 **238 个文件**。
+🔴 **0% 覆盖且 ≥40 行的非 spec 文件共 9 个**：`src/main.ts`（**304 行**）、`src/app.module.ts`（115）、
+`controller/admin/customPage`（70）、`controller/admin/caddy`（68）、`controller/admin/setting`（62）、
+`controller/admin/theme`（51）、`controller/admin/category`（48）、`controller/admin/comment`（46）、
+`controller/admin/link/link.meta`（40）。
+🔴 **低覆盖**：`provider/visit/visit.provider.ts` **10.2%**、`provider/static/local.provider.ts` **26.4%**、
+`controller/customPage/customPage.controller.ts`（公开面）**30.0%**。
+🔴 **要点**：`main.ts` 是 **0% 执行覆盖**，而 🔴 **有 35 个 spec 读它的源码文本** ⇒
+🔴 **它是"被文本钉子钉住、但从未被执行"的形状**（`listenWithBacklog`、staticGuard 接线、cluster 引导都在里面）
+⇒ **文本钉子能防"字符串消失"，防不了逻辑错**。
+🔴 **`local.provider.ts` 26.4% 值得优先**（与本周期修过的 `staticGuard` 匿名下载绕过同一片代码）。
+⚠️ **`collectCoverageFrom` 是 `**/*.(t|j)s` 且没有 `coverageThreshold`** ⇒
+**覆盖率目前不构成任何门禁，只是可观测**。
+🔴 **口径警告**：这一跑**有 1 条红**（`rss.provider`）⇒ **覆盖率百分比是在"有一条测试失败"的情况下测出来的**；
+⚠️ 判断影响可忽略（失败在断言阶段、被测代码已执行），但 🔴 **严格口径应当是"全绿那一跑再测一次"**。
+
+**C-5. 🔴 `packages/cli` 没有任何测试。**
+test 脚本是 `echo "Error: no test specified" && exit 1`，包内非 node_modules 文件只有 3 个
+（`README.md`、`package.json`、🔴 **`resetHttps.js`**）⇒
+🔴 **`resetHttps.js` 这个会改 HTTPS 配置的脚本零测试覆盖**。
+⚠️ **对照**：`scripts/vanblog.sh` 的 `reset-https` 子命令有 `vanblog-reset-https.test.sh`（**26 条**）钉着 ⇒
+🔴 **同一个能力的两个实现，一个有守卫一个没有。**
+
+#### D. 🔴 对父代理三处口径的实测更正（上一轮测出来的，一并入册）
+
+1. 🔴 **`/user/login` → 502，而 `/init`、`/nonexistent-xyz`、`/api/public/nonexistent` → 404** ⇒
+   **不是"所有未知根路径都 502"，而是特定于 `/user/*`**（被代理到一个没在监听的上游）；
+   🔴 **真实登录页是 `/admin/user/login` → 200**（admin 的 `base` 与 `publicPath` 都是 `/admin/`）。
+2. 🔴 **UI label 大小写：实测是 6 个用户可见 label**（全在 `SiteInfoForm/index.tsx`），
+   **"8 处"这个数复现不出来**。
+3. 🔴 **`SiteInfoForm`：462 行、152 行含中文、去重后 110 个中文字面量、i18n import 0 处**
+   （⚠️ 上游说的"108 个"以实测 **110** 为准）。
+
+#### E. 🔴 34 个 shell 守卫的基线（合计 **3,129 条断言、0 失败**）与那条正向判据
+
+上一轮逐个跑了 34 个守卫（逐守卫日志在 `/tmp/mx-guard-*.log`、汇总在 `/tmp/mx-guards-results.txt`），
+合计 **3,129 条断言、0 失败** ⇒ 可作为基线。
+🔴 **并且要记那条正向判据**：34 个守卫**每一个都产出了 `passed=/failed=` 汇总行** ⇒
+**没有一个提前崩溃**（⚠️ **不是用"没有失败"证明的** —— 提前崩溃的守卫也会"没有失败"）。
+⚠️ **取 rc 的口径**：🔴 **`rc=${PIPESTATUS[0]}`，而且不要在它后面再写 `rc=$?`** ——
+上一轮有代理正是这么把 rc 列写坏的（没有管道时 `$?` 是那条赋值语句的状态、**恒为 0** ⇒ rc 列全是 0、没有信息）。
+
+#### F. 🔴 `queryFilterDrift` 裁定 (b) 的可行性已核实（下一轮可以直接做）
+
+站长裁定按 **(b)** 处置那 2 条恒真断言（改成"旧形状**仍在** + 守卫在它**之前**"的正向断言）。
+🔴 **可行性已实测核实**：`token.provider.ts` 里旧形状 `findOne({ token, disabled: false })` **命中 2 次**，
+而守卫 `if (typeof token !== 'string' || !token.trim())` **确实在它之前**；
+`user.provider.ts` 里 `assertCollaboratorName` **定义与两处调用**都在，旧解构形状命中 1 次 ⇒
+🔴 **两侧都能写成正向断言**。
+
 ### 7.131 🔴 `auto` 改成 CPU 与内存两维取小；以及**上一轮那组内存数字口径错了**（高估一倍以上）
 
 **触发**：站长 2026-09-24 追问「不应该是按 CPU 确认 worker 数嘛？这样会不会默认把机器的内存占满。」
