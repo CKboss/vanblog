@@ -36,12 +36,14 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 // 🔴 114 → 186（2026-09-25 期 3 第二批）→ 194（期 9 第一批：8 个 `error.<code>`）→ 204（期 9 第二批：+10 个）→ 216（期 9 第三批：+12 个）→ 267（期 9 第四批：回收站 +51 个）→ 307（期 3 第三批：Token/高级设置 +41，并把 recycle.colOption 提升为 common.colOption）
 //   → 325（期 3 第四批：用户设置 +19，并把 sysconf.token.deleteConfirmTitle 提升为 common.deleteConfirmTitle）
 //   → 356（期 3 第五批：HTTPS/Caddy +32，并把 sysconf.token.relatedDocs 提升为 common.relatedDocs）
-//   → **462**（期 4：SiteInfoForm +106 —— 目前最大的单文件批次）
+//   → 462（期 4：SiteInfoForm +106 —— 目前最大的单文件批次）
+//   → 493（期 5 第一批：WaterMarkForm +31，新组 `watermark`）
+//   → **506**（期 5 第一批同轮追加：StaticForm +13，新组 `storage`）
 //   这条是**进度下界**（key 变少 = 有人删了译文、或包被截断），所以每翻完一批就该跟着抬 ——
 //   期 3 第一批（145 key）时没抬，本轮补上。
 //   🔴 这里也是"key 数下界"的**唯一权威口径**：`i18nSharedImpl` 只证明 readPack 没坏（三份相等且非平凡），
 //   `localePackParity` 只做"三份都空 ⇒ 集合相等"的反空转（>= 50），都不写具体进度数字。
-const BASELINE_KEY_COUNT = 462;
+const BASELINE_KEY_COUNT = 506;
 const BASELINE_GRANDFATHERED = 20;
 const REGISTERED = astInventory.REGISTERED_KEY_GROUPS;
 

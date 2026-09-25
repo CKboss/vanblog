@@ -23,9 +23,12 @@ describe('图片设置：缩放 / 缩略图 / 隐写水印', () => {
       assert.match(form, new RegExp(`name="${name}"`), `缺少字段 ${name}`);
     }
     // 原来的「水印」改名成「可见水印」，和隐写水印区分开
-    assert.match(form, /label="可见水印"/);
-    assert.match(form, /label="大图自动缩放"/);
-    assert.match(form, /label="隐写水印"/);
+    // 🔴 期 5 第一批起标签走 t()：锚点换成**新形状**（key + zh-CN defaultMessage 一起钉），性质没放 ——
+    //    仍然要求"这三个字段的标签就是这三句话"，而且现在连它们的 key 也一起钉住了
+    //    （key 名来自字段名 ⇒ 谁把字段改名而不同步 key，这条会红）。
+    assert.match(form, /label=\{t\('watermark\.enableWaterMark\.label', '可见水印'\)\}/);
+    assert.match(form, /label=\{t\('watermark\.enableResize\.label', '大图自动缩放'\)\}/);
+    assert.match(form, /label=\{t\('watermark\.enableStegoWaterMark\.label', '隐写水印'\)\}/);
     assert.match(form, /1080p/);
     assert.match(form, /默认 300/);
   });

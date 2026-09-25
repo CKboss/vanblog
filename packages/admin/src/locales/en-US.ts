@@ -401,8 +401,10 @@ export default {
   'sysconf.advance.delayTooltip': 'Only used in "On a timer" mode: every this many seconds the front end tries to regenerate the static pages from the latest server data.\n\nThe front end clamps this value to a minimum of 60 seconds (anything smaller is treated as 60), and a non-numeric value is ignored rather than failing the build.\n\nThe default "On demand" mode ignores this value: the server triggers a re-render when a post changes, and there is a 24-hour safety cycle so a lost trigger heals itself.',
   'sysconf.advance.isrManualCard': 'Trigger a static page refresh manually',
   'sysconf.advance.isrManualAlert': 'You normally do not need this, but in some situations you can trigger an incremental re-render yourself. The server will try to revalidate and re-render every known route (it takes a little while to take effect).',
-  'sysconf.advance.isrManualOk': 'Incremental re-render triggered',
-  'sysconf.advance.isrManualFail': 'Could not trigger the re-render',
+  // 🔴 保留 ISR 这个缩写：中文文案里有它，而它是**技术标识符**（用户在文档/日志里看到的就是 ISR）
+  //    —— 上一版翻成 "Incremental re-render" 把缩写丢了，被"数字与技术标识符三份一致"那条守卫抓到。
+  'sysconf.advance.isrManualOk': 'ISR re-render triggered',
+  'sysconf.advance.isrManualFail': 'Could not trigger the ISR re-render',
   'sysconf.advance.isrManualBtn': 'Trigger now',
 
 
@@ -447,8 +449,10 @@ export default {
   'sysconf.caddy.stuckLink': 'Cannot turn off the https redirect after enabling it',
   'sysconf.caddy.demoBlocked': 'This option cannot be changed on the demo site, otherwise the k8s ingress might break',
   'sysconf.caddy.noChange': 'Nothing changed, so there is nothing to save',
-  'sysconf.caddy.confirmOff': 'Turn off the automatic https redirect? The site will be reachable over http again. Two seconds after you confirm, the page switches to http automatically.',
-  'sysconf.caddy.confirmOn': 'Before enabling the automatic https redirect, make sure the site really works over https with your domain name — once it is on, http access stops working. Two seconds after you confirm, the page switches to https automatically. If you reverse-proxy port 80 yourself, do not enable this.',
+  // 🔴 "2 seconds" 用数字而不是 "Two seconds"：中文写的是「2 秒」，而数字是**契约**（守卫按数字多重集比对）。
+  //    UI 文案里用数字也更符合"倒计时"的语感。
+  'sysconf.caddy.confirmOff': 'Turn off the automatic https redirect? The site will be reachable over http again. 2 seconds after you confirm, the page switches to http automatically.',
+  'sysconf.caddy.confirmOn': 'Before enabling the automatic https redirect, make sure the site really works over https with your domain name — once it is on, http access stops working. 2 seconds after you confirm, the page switches to https automatically. If you reverse-proxy port 80 yourself, do not enable this.',
   'sysconf.caddy.configTitle': 'Caddy configuration',
   'sysconf.caddy.configError': 'Could not read the Caddy configuration',
   'sysconf.caddy.viewConfig': 'View Caddy config',
@@ -461,7 +465,8 @@ export default {
   'sysconf.caddy.triggerCertTitle': 'Trigger an on-demand certificate request',
   'sysconf.caddy.triggerCertContent': 'A new window will open and load the current address over https, which triggers the on-demand certificate request. Give it a moment (how long it takes depends on the network); once the certificate is issued, the page that opened will load normally over https.',
   'sysconf.caddy.triggerCertBtn': 'Trigger a request using the current domain',
-  'sysconf.caddy.redirectLabel': 'Automatic https redirect',
+  // 🔴 HTTPS 全大写：zh-CN 的标签就是 'HTTPS 自动重定向'，缩写大小写属于"必须原样保留的技术标识符"
+  'sysconf.caddy.redirectLabel': 'Automatic HTTPS redirect',
   'sysconf.caddy.redirectTooltip': 'When on, http requests to this site are redirected to https automatically',
 
 
@@ -574,5 +579,60 @@ export default {
   'siteInfo.aboutTitle.placeholder': 'About me',
   'siteInfo.aboutTitle.tooltip': 'The title of the front-end about page. Leave empty for "About me". The body of the about page is still edited through "Edit about" in the post list, not through this setting.',
   'siteInfo.uiStyle.customSuffix': ' (custom, {id})',
+
+
+  // ── 🔴 期 5 第一批（31 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ 文案里提到的后台界面词按**目标语言**写（父代理裁定：向前一致）：图片管理 = "Images"（沿用 menu.img 的英文），
+  //    补缩略图 = "Add thumbnails"，检测隐写水印 = "Detect steganographic watermark"。
+  //    🔴 那两个界面此刻还没接 i18n（Static/img 是下一批）⇒ 在 en-US 下会出现"英文说明指向尚未翻译的按钮"，
+  //    这是**已知且有意**的中间状态（与评论设置页签那 7 英 4 中同类），不是漏翻。
+  'watermark.demoBlocked': 'This setting cannot be changed on the demo site',
+  'watermark.needText': 'A watermark text is required when the visible watermark is on',
+  'watermark.enableWebp.label': 'Automatic image compression',
+  'watermark.enableWebp.placeholder': 'Whether to compress uploaded images automatically',
+  'watermark.enableWebp.tooltip': 'When on, uploaded images are compressed to the chosen format so pages load faster, whichever storage backend is in use. Only new uploads are affected; existing files are not rewritten.',
+  'watermark.compressFormat.label': 'Compression format',
+  'watermark.compressFormat.webp': 'WebP (default)',
+  'watermark.compressFormat.placeholder': 'Choose the output format',
+  'watermark.compressFormat.tooltip': 'Only used when automatic compression is on. AVIF is usually smaller than WebP and is widely supported by modern browsers. Encoding prefers sharp (the same version the front end uses, see package.json); if the official Alpine image cannot load the musl build of sharp, avifenc from libavif-apps is used instead.',
+  'watermark.enableWaterMark.label': 'Visible watermark',
+  'watermark.enableWaterMark.placeholder': 'Whether to add a visible watermark',
+  'watermark.enableWaterMark.tooltip': 'A visible text watermark (off by default, since many people find it gets in the way of the image). When on, every uploaded image gets one, whichever image host is used. The default style tiles small rotated text across the whole image so it cannot be cropped away; the style and position are set by the server environment variables VANBLOG_WATERMARK_STYLE and VANBLOG_WATERMARK_POSITION, not by this form. Images whose shorter edge is under 52px are skipped (the server logs a WARN and the image is still uploaded). If you want a watermark that is invisible yet verifiable, use the steganographic watermark below.',
+  'watermark.waterMarkText.label': 'Visible watermark text',
+  'watermark.waterMarkText.tooltip': 'The watermark text. It may contain dots (for example a domain name) and Chinese characters are supported (rendering happens on the server, and the official image ships Latin plus Chinese fonts). Longer text needs a larger image: the font size is derived from the image dimensions and shrinks automatically when the text does not fit; if it still does not fit at 8px the image is skipped (a WARN is logged and the upload is unaffected).',
+  'watermark.waterMarkText.placeholder': 'Enter the watermark text',
+  'watermark.enableResize.label': 'Automatic downscaling of large images',
+  'watermark.enableResize.placeholder': 'Whether to scale down oversized images',
+  'watermark.enableResize.tooltip': 'When on, images whose longest edge exceeds the limit below are scaled down proportionally at upload time (only ever down, never up; small images are left alone). Scaling happens before compression and before the steganographic watermark, so the watermark can still be read. Only new uploads are affected.',
+  'watermark.maxImageEdge.label': 'Longest edge limit',
+  'watermark.maxImageEdge.tooltip': 'In pixels. 1920 is what people usually mean by 1080p; 0 means no limit; values below 320 are raised to 320.',
+  'watermark.enableThumb.label': 'Generate thumbnails',
+  'watermark.enableThumb.placeholder': 'Whether to generate thumbnails',
+  'watermark.enableThumb.tooltip': 'An extra small image is generated at upload time (a 300px-wide WebP by default, about 10KB). The "Images" list loads that instead of the original, which makes paging through dozens of images much faster. Existing images can be backfilled in one go under "Images - Add thumbnails".',
+  'watermark.thumbWidth.label': 'Thumbnail width',
+  'watermark.thumbWidth.tooltip': 'In pixels, 300 by default. Changing it only affects thumbnails generated afterwards.',
+  'watermark.enableStegoWaterMark.label': 'Steganographic watermark',
+  'watermark.enableStegoWaterMark.placeholder': 'Whether to embed a steganographic watermark',
+  'watermark.enableStegoWaterMark.tooltip': 'Hides a piece of text in the pixels (the brightness of each 8x8 block moves by at most 4 levels, which the eye cannot see) and it can still be read after the image is compressed to WebP or re-saved as JPEG by someone else. To verify: right-click an image in the Images list and choose "Detect steganographic watermark", or use "Detect watermark" in the toolbar to upload one. Note that it cannot be read any more once the image has been scaled or cropped, and GIFs are not processed.',
+  'watermark.stegoWaterMarkText.label': 'Hidden payload',
+  'watermark.stegoWaterMarkText.tooltip': 'Leave empty to write "domain | uploader | upload time" automatically, which makes it easy to trace who uploaded what and when. At most 200 bytes; Chinese characters are supported. The longer the payload, the larger the image has to be (images that are too small are skipped, and the upload is unaffected).',
+  'watermark.stegoWaterMarkText.placeholder': 'Leave empty to use the default payload',
+
+
+  // ── 🔴 期 5 第一批（同轮追加，13 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `picgo` / `picgoConfig` / `OSS` / `s3` 是**技术标识符**，三份包都必须原样保留（生成脚本已比对）。
+  'storage.demoBlocked': 'The image-host configuration cannot be changed on the demo site',
+  'storage.picgoJsonInvalid': 'picgoConfig is not valid JSON and could not be parsed',
+  'storage.storageType.label': 'Storage backend',
+  'storage.storageType.placeholder': 'Choose a storage backend',
+  'storage.storageType.local': 'Local storage',
+  'storage.storageType.picgo': 'OSS image host',
+  'storage.storageType.tooltip': 'Before choosing local storage, make sure the directory is mapped to a persistent volume, otherwise images can be lost',
+  'storage.picgoConfig.label': 'picgo configuration',
+  'storage.picgoConfig.tooltip': 'The OSS image host backend uses picgo',
+  'storage.picgoConfig.placeholder': 'Enter the picgo configuration (JSON)',
+  'storage.picgoPlugins.label': 'Custom picgo plugins',
+  'storage.picgoPlugins.tooltip': 'Enter plugin names (for example s3), separated by commas',
+  'storage.picgoPlugins.placeholder': 'Ignore this if you are not sure',
 
 };

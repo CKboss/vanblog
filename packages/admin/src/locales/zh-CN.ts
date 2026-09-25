@@ -598,4 +598,67 @@ export default {
   'siteInfo.aboutTitle.tooltip': '前台关于页标题。留空则为「关于我」。关于页正文仍在文章管理里点「编辑关于」修改，不是这段设置。',
   'siteInfo.uiStyle.customSuffix': '（自定义·{id}）',
 
+
+  // ── 🔴 期 5 第一批：`components/WaterMarkForm`（图床设置里的压缩/水印/缩略图表单，31 条）──
+  //    zh-CN 的值由脚本**直接从源码的 defaultMessage 抽出**（AST 定位 + 偏移替换，35 个替换点）。
+  //    🔴 新组 `watermark`：这是**跨页复用的组件**（被 SystemConfig 的图床设置页签用），按组件名做组；
+  //    不放 `sysconf.img.*` 是因为那会变成 **4 段**（命名守卫不允许）。
+  //    ⚠️ 通用词复用：开启/关闭 → `common.enabled|disabled`，「这是必填项」→ `init.field.required`，
+  //    「更新成功！」→ `common.updateSuccess`（🔴 不新增同值的第二处口径）。
+  //    🔴 这批文案里的**数字与技术门槛**（52px / 8px / 320 / 1920 / 8x8 / 4 个色阶 / 200 字节 / 300px / 10KB）
+  //    是**契约**：`watermarkText.test.js` 有一条跨包钉子把 52px 与服务端 `utils/watermark.ts` 钉在一起，
+  //    所以生成脚本逐个 key 比对了三份的**数字序列**与环境变量名/技术词（sharp、avifenc、WARN、GIF…）。
+  'watermark.demoBlocked': '演示站禁止修改此配置！',
+  'watermark.needText': '开启水印必须指定水印文字！',
+  'watermark.enableWebp.label': '图片自动压缩',
+  'watermark.enableWebp.placeholder': '是否开启图片自动压缩',
+  'watermark.enableWebp.tooltip': '开启之后上传图片将压缩为所选格式以提高加载速度，无论哪种存储策略都生效。只影响新上传，不会改写已有文件。',
+  'watermark.compressFormat.label': '压缩格式',
+  'watermark.compressFormat.webp': 'WebP（默认）',
+  'watermark.compressFormat.placeholder': '选择压缩输出格式',
+  'watermark.compressFormat.tooltip': '仅在开启自动压缩时生效。AVIF 通常比 WebP 更小；现代浏览器已广泛支持。编码优先用 sharp（与前台同一个版本，见 package.json）；官方 Alpine 镜像若无法加载 musl sharp，则使用 libavif-apps 的 avifenc。',
+  'watermark.enableWaterMark.label': '可见水印',
+  'watermark.enableWaterMark.placeholder': '是否开启水印',
+  'watermark.enableWaterMark.tooltip': '可见的文字水印（默认关闭，很多人嫌它挡图）。开启后上传图片会自动加上，无论哪种图床。默认样式是「满图斜排平铺」（旋转小字，裁不掉），样式与位置由服务端环境变量 VANBLOG_WATERMARK_STYLE / VANBLOG_WATERMARK_POSITION 调，不在本表单里。短边小于 52px 的图会跳过水印（服务端记一条 WARN，图片照常上传）。想要看不出来又能验真的水印，请用下面的「隐写水印」。',
+  'watermark.waterMarkText.label': '可见水印文字',
+  'watermark.waterMarkText.tooltip': '水印文字，可包含 .（如域名），支持中文（渲染在服务端做，官方镜像已装 Latin + 中文字体）。文字越长需要的图越大：字号会按图片尺寸自动算，放不下时自动缩小，缩到 8px 还放不下就跳过这一张（记一条 WARN，不影响上传）。',
+  'watermark.waterMarkText.placeholder': '请输入水印文字',
+  'watermark.enableResize.label': '大图自动缩放',
+  'watermark.enableResize.placeholder': '是否缩放过大的图片',
+  'watermark.enableResize.tooltip': '开启后，长边超过下面「长边上限」的图片会在上传时等比缩小（只缩不放，小图不动）。缩放发生在压缩和隐写水印之前，所以水印照样读得出来。只影响新上传的图片。',
+  'watermark.maxImageEdge.label': '长边上限',
+  'watermark.maxImageEdge.tooltip': '单位 px。1920 就是常说的 1080p 级；填 0 表示不限制；小于 320 的值会被抬到 320。',
+  'watermark.enableThumb.label': '生成缩略图',
+  'watermark.enableThumb.placeholder': '是否生成缩略图',
+  'watermark.enableThumb.tooltip': '上传时额外生成一张小图（默认 300px 宽的 WebP，约 10KB），「图片管理」列表加载它而不是原图，翻几十张图快得多。存量图片在「图片管理 → 补缩略图」里一次性补齐。',
+  'watermark.thumbWidth.label': '缩略图宽度',
+  'watermark.thumbWidth.tooltip': '单位 px，默认 300。改完只影响之后生成的缩略图。',
+  'watermark.enableStegoWaterMark.label': '隐写水印',
+  'watermark.enableStegoWaterMark.placeholder': '是否嵌入隐写水印',
+  'watermark.enableStegoWaterMark.tooltip': '把一段文字藏进像素里（每个 8x8 块的亮度最多动 4 个色阶，肉眼看不出来），压成 WebP、被别人另存为 JPEG 之后仍然读得出来。验证方式：图片管理里对着图片右键「检测隐写水印」，或用工具栏「检测水印」上传一张图。注意：图片被缩放或裁剪后就读不出来了；GIF 不处理。',
+  'watermark.stegoWaterMarkText.label': '隐写内容',
+  'watermark.stegoWaterMarkText.tooltip': '留空则自动写「域名|上传者|上传时间」，方便追到是谁什么时候传的。最多 200 字节，支持中文；内容越长，需要的图片越大（太小的图会跳过水印，不影响上传）。',
+  'watermark.stegoWaterMarkText.placeholder': '留空使用默认内容',
+
+
+  // ── 🔴 期 5 第一批（同轮追加）：`components/StaticForm`（图床设置里的存储策略表单，13 条）──
+  //    🔴 与 WaterMarkForm 一起做，是为了让**整个「图床设置」页签**不再有中英混排：
+  //    这个页签由两个表单组件拼成（ImgTab 自己的卡片标题在期 3 第一批已翻），只翻一个的话
+  //    页面上会同时出现"存储策略"（简体）与"Visible watermark"（英文）—— 活体探针就是这么发现的。
+  //    🔴 新组 `storage`（组件级命名空间）；通用词复用：更新成功！→ `common.updateSuccess`、这是必填项 → `init.field.required`。
+  //    ⚠️ `picgoConfig` 的 label 是一个 **`<a>` 元素**（指向文档）⇒ 只翻链接文字，href 原样保留。
+  'storage.demoBlocked': '演示站禁止修改图床配置！',
+  'storage.picgoJsonInvalid': 'picgoConfig 格式错误，无法解析成 json',
+  'storage.storageType.label': '存储策略',
+  'storage.storageType.placeholder': '请选择存储策略',
+  'storage.storageType.local': '本地存储',
+  'storage.storageType.picgo': 'OSS 图床',
+  'storage.storageType.tooltip': '本地存储之前请确保映射了永久目录以防丢失哦',
+  'storage.picgoConfig.label': 'picgo 配置',
+  'storage.picgoConfig.tooltip': 'OSS 图床后端采用了 picgo',
+  'storage.picgoConfig.placeholder': '请输入 picgo 配置 (json)',
+  'storage.picgoPlugins.label': '自定义 picgo 插件',
+  'storage.picgoPlugins.tooltip': '请填写插件名（如 s3），多个请用英文逗号分隔',
+  'storage.picgoPlugins.placeholder': '看不懂的话请忽略',
+
 };

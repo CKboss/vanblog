@@ -286,12 +286,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 17,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 17）⇒ 遍历或解析器坏了`,
+      FILES.length >= 19,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 19）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 470,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 470）⇒ 疑似解析器坏了`,
+      calls.length >= 535,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 535）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -306,6 +306,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/SystemConfig/tabs/User.jsx',
       'src/pages/SystemConfig/tabs/Caddy.jsx',
       'src/components/SiteInfoForm/index.tsx',
+      'src/components/WaterMarkForm/index.tsx',
+      'src/components/StaticForm/index.tsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -494,6 +496,57 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       '🔴 这些地方把 `t` 用作形参/解构名，会**遮蔽**组件的翻译器（不报错，只会让文案悄悄不跟随语言）：\n  ' +
         offenders.join('\n  ') +
         '\n修法：把那个形参/解构名改掉（例如 `map((tag) => …)`、`const { total: rowCount } = …`）。',
+    );
+  });
+
+  it('🔴 三份包里的**数字集合**与**必须原样保留的技术标识符**必须一致（翻译不许改契约）', () => {
+    // ## 为什么要有这条（2026-09-26 期 5 第一批）
+    // 水印那批文案里全是**契约数字**：短边 52px 跳过、缩到 8px 还放不下就跳过、长边小于 320 抬到 320、
+    // 每个 8x8 块最多动 4 个色阶、隐写内容最多 200 字节、缩略图默认 300px 约 10KB…
+    // 而 `watermarkText.test.js` 有一条**跨包钉子**把 52px 与服务端 `utils/watermark.ts` 钉在一起 ——
+    // 🔴 但那条钉子只看**中文源码**，翻译时把 en-US 写成 60px 它**看不见**。
+    // 生成语言包的脚本当时逐 key 比对了数字序列（一次性），🔴 这条把它变成**常驻守卫**：
+    // 以后任何人改任何一条译文，数字变了就红。
+    //
+    // ## 判据
+    // ① 每个 key 的**数字序列**（按出现顺序）三份必须完全相同；
+    // ② zh-CN 里出现的**技术标识符**必须在另两份里原样出现：
+    //    全大写词（VANBLOG_WATERMARK_STYLE / JSON / WARN / GIF / OSS…）、带扩展名的文件名
+    //    （package.json / vanblog-access.log…）、以及一小撮必须原样保留的工具/字段名。
+    // ⚠️ 刻意**不**比单位词（字节/位元組/bytes）：那是本该翻的东西。
+    // 🔴 比**排序后的多重集**，不比出现顺序：翻译本来就会改语序
+    //    （实测 `init.restore.err.429`：zh「每 10 分钟 5 次」↔ en "5 per 10 minutes" —— 数字没变、只是顺序变了，
+    //    那是**合法**的；第一版按序列比，把它误报成契约漂移）。
+    //    ⚠️ 但多重集仍然抓得住"少了一个数字""把 52 改成 60"这类真漂移。
+    const digits = (v) => (String(v).match(/\d+(?:\.\d+)?/g) || []).slice().sort((a, b) => a - b).join(',');
+    const TOKEN_RE =
+      /\b[A-Z][A-Z0-9_]{2,}\b|\b[A-Za-z0-9_.-]+\.(?:js|ts|tsx|jsx|json|md|log|png|webp|zip)\b|\b(?:sharp|avifenc|picgo|picgoConfig|libavif-apps|Waline|waline|Caddy|caddy)\b/g;
+    const bad = [];
+    // 🔴 用本文件既有的 `packs`（不是我自己再造一份解析）—— 一个性质只留一处权威口径
+    const ALL = Object.keys(packs['zh-CN']);
+    for (const k of ALL) {
+      const cn = String(packs['zh-CN'][k]);
+      const dCN = digits(cn);
+      const tokens = [...new Set(cn.match(TOKEN_RE) || [])];
+      for (const l of ['zh-TW', 'en-US']) {
+        const v = String(packs[l][k]);
+        if (digits(v) !== dCN) {
+          bad.push(`${l}  ${k}: 数字集合 [${digits(v)}] ≠ zh-CN [${dCN}]（已排序；顺序不同是合法的）`);
+        }
+        for (const tok of tokens) {
+          if (!v.includes(tok)) bad.push(`${l}  ${k}: 缺少必须原样保留的技术标识符 ${tok}`);
+        }
+      }
+    }
+    assert.ok(ALL.length >= 400, `只比了 ${ALL.length} 个 key（下界 400）⇒ 解析器坏了，这条会假绿`);
+    assert.deepEqual(
+      bad,
+      [],
+      '🔴 译文改了**契约**（数字或技术标识符）—— 这类漂移没有任何别处会红：\n  ' +
+        bad.slice(0, 20).join('\n  ') +
+        (bad.length > 20 ? `\n  …共 ${bad.length} 条` : '') +
+        '\n修法：把数字/标识符改回与 zh-CN 一致。' +
+        '\n⚠️ 如果确实是**有意**改的（例如服务端门槛变了），那要三份一起改，并且先改服务端与那条跨包钉子。',
     );
   });
 

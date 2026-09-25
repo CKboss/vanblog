@@ -553,4 +553,57 @@ export default {
   'siteInfo.aboutTitle.tooltip': '前台關於頁標題。留空則為「關於我」。關於頁內文仍在文章管理裡點「編輯關於」修改，不是這段設定。',
   'siteInfo.uiStyle.customSuffix': '（自訂·{id}）',
 
+
+  // ── 🔴 期 5 第一批（31 條）── 術語：**浮水印**（水印）/ 隱寫（隐写）/ 縮圖（缩略图）/ 壓縮 / 載入 /
+  //    儲存策略 / 檔案 / 支援 / 網域 / 產生 / 環境變數 / 映像（镜像）/ 工具列（工具栏）/ 位元組（字节）。
+  //    🔴 数字与技术门槛与 zh-CN 逐字对应（生成脚本已比对），改任何一个都要三份一起改。
+  'watermark.demoBlocked': '示範站禁止修改此設定！',
+  'watermark.needText': '開啟浮水印必須指定浮水印文字！',
+  'watermark.enableWebp.label': '圖片自動壓縮',
+  'watermark.enableWebp.placeholder': '是否開啟圖片自動壓縮',
+  'watermark.enableWebp.tooltip': '開啟之後上傳圖片將壓縮為所選格式以提高載入速度，無論哪種儲存策略都生效。只影響新上傳，不會改寫既有檔案。',
+  'watermark.compressFormat.label': '壓縮格式',
+  'watermark.compressFormat.webp': 'WebP（預設）',
+  'watermark.compressFormat.placeholder': '選擇壓縮輸出格式',
+  'watermark.compressFormat.tooltip': '僅在開啟自動壓縮時生效。AVIF 通常比 WebP 更小；現代瀏覽器已廣泛支援。編碼優先用 sharp（與前台同一個版本，見 package.json）；官方 Alpine 映像若無法載入 musl sharp，則使用 libavif-apps 的 avifenc。',
+  'watermark.enableWaterMark.label': '可見浮水印',
+  'watermark.enableWaterMark.placeholder': '是否開啟浮水印',
+  'watermark.enableWaterMark.tooltip': '可見的文字浮水印（預設關閉，很多人嫌它擋圖）。開啟後上傳圖片會自動加上，無論哪種圖床。預設樣式是「滿圖斜排平鋪」（旋轉小字，裁不掉），樣式與位置由伺服器環境變數 VANBLOG_WATERMARK_STYLE / VANBLOG_WATERMARK_POSITION 調，不在本表單裡。短邊小於 52px 的圖會跳過浮水印（伺服器記一條 WARN，圖片照常上傳）。想要看不出來又能驗真的浮水印，請用下面的「隱寫浮水印」。',
+  'watermark.waterMarkText.label': '可見浮水印文字',
+  'watermark.waterMarkText.tooltip': '浮水印文字，可包含 .（如網域），支援中文（渲染在伺服器做，官方映像已裝 Latin + 中文字體）。文字越長需要的圖越大：字號會依圖片尺寸自動算，放不下時自動縮小，縮到 8px 還放不下就跳過這一張（記一條 WARN，不影響上傳）。',
+  'watermark.waterMarkText.placeholder': '請輸入浮水印文字',
+  'watermark.enableResize.label': '大圖自動縮放',
+  'watermark.enableResize.placeholder': '是否縮放過大的圖片',
+  'watermark.enableResize.tooltip': '開啟後，長邊超過下面「長邊上限」的圖片會在上傳時等比縮小（只縮不放，小圖不動）。縮放發生在壓縮和隱寫浮水印之前，所以浮水印照樣讀得出來。只影響新上傳的圖片。',
+  'watermark.maxImageEdge.label': '長邊上限',
+  'watermark.maxImageEdge.tooltip': '單位 px。1920 就是常說的 1080p 級；填 0 表示不限制；小於 320 的值會被抬到 320。',
+  'watermark.enableThumb.label': '產生縮圖',
+  'watermark.enableThumb.placeholder': '是否產生縮圖',
+  'watermark.enableThumb.tooltip': '上傳時額外產生一張小圖（預設 300px 寬的 WebP，約 10KB），「圖片管理」列表載入它而不是原圖，翻幾十張圖快得多。存量圖片在「圖片管理 → 補縮圖」裡一次性補齊。',
+  'watermark.thumbWidth.label': '縮圖寬度',
+  'watermark.thumbWidth.tooltip': '單位 px，預設 300。改完只影響之後產生的縮圖。',
+  'watermark.enableStegoWaterMark.label': '隱寫浮水印',
+  'watermark.enableStegoWaterMark.placeholder': '是否嵌入隱寫浮水印',
+  'watermark.enableStegoWaterMark.tooltip': '把一段文字藏進像素裡（每個 8x8 塊的亮度最多動 4 個色階，肉眼看不出來），壓成 WebP、被別人另存為 JPEG 之後仍然讀得出來。驗證方式：圖片管理裡對著圖片按右鍵「檢測隱寫浮水印」，或用工具列「檢測浮水印」上傳一張圖。注意：圖片被縮放或裁剪後就讀不出來了；GIF 不處理。',
+  'watermark.stegoWaterMarkText.label': '隱寫內容',
+  'watermark.stegoWaterMarkText.tooltip': '留空則自動寫「網域|上傳者|上傳時間」，方便追到是誰什麼時候傳的。最多 200 位元組，支援中文；內容越長，需要的圖片越大（太小的圖會跳過浮水印，不影響上傳）。',
+  'watermark.stegoWaterMarkText.placeholder': '留空使用預設內容',
+
+
+  // ── 🔴 期 5 第一批（同轮追加，13 條）── 術語：**儲存策略**（存储策略）/ 本機儲存（本地存储）/ 圖床 /
+  //    設定（配置）/ 外掛（插件）/ 自訂（自定义）/ 對應（映射）/ 遺失（丢失）。
+  'storage.demoBlocked': '示範站禁止修改圖床設定！',
+  'storage.picgoJsonInvalid': 'picgoConfig 格式錯誤，無法解析成 json',
+  'storage.storageType.label': '儲存策略',
+  'storage.storageType.placeholder': '請選擇儲存策略',
+  'storage.storageType.local': '本機儲存',
+  'storage.storageType.picgo': 'OSS 圖床',
+  'storage.storageType.tooltip': '本機儲存之前請確保對應了永久目錄以防遺失喔',
+  'storage.picgoConfig.label': 'picgo 設定',
+  'storage.picgoConfig.tooltip': 'OSS 圖床後端採用了 picgo',
+  'storage.picgoConfig.placeholder': '請輸入 picgo 設定 (json)',
+  'storage.picgoPlugins.label': '自訂 picgo 外掛',
+  'storage.picgoPlugins.tooltip': '請填寫外掛名（如 s3），多個請用英文逗號分隔',
+  'storage.picgoPlugins.placeholder': '看不懂的話請忽略',
+
 };

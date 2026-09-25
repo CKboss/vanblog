@@ -559,7 +559,11 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `siteInfo` = 站点设置表单（`components/SiteInfoForm`，2026-09-26 期 4 登记）。
 //   它同时被**初始化向导**与**系统设置→站点配置**复用 ⇒ 按"跨页复用的组件用自己的名字做组"归到组件名，
 //   而不是塞进 `init.*` 或 `sysconf.*`（那两个都是**页面**组，塞进去会让另一侧的调用方跨组借 key）。
-const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'sysconf', 'theme'];
+// 🔴 `watermark` = 图床设置里的压缩/水印/缩略图表单（`components/WaterMarkForm`，2026-09-26 期 5 第一批登记）。
+//   ⚠️ 它被 `SystemConfig/tabs/ImgTab.jsx` 用，但**不能**放 `sysconf.img.*`：那会变成 **4 段**
+//   （`sysconf.img.enableWebp.label`）⇒ 命名守卫不允许；组件级命名空间正好 3 段。
+// 🔴 `storage` = 图床设置里的存储策略表单（`components/StaticForm`，与 `watermark` 同轮登记）。
+const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',
