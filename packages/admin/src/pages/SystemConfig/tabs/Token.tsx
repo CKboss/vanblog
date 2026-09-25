@@ -36,7 +36,8 @@ export default function () {
           style={{ marginLeft: 8 }}
           onClick={() => {
             Modal.confirm({
-              title: t('sysconf.token.deleteConfirmTitle', '删除确认'),
+              // 🔴 用 common.deleteConfirmTitle（从 sysconf.token.deleteConfirmTitle 提升）：用户页也要用它
+              title: t('common.deleteConfirmTitle', '删除确认'),
               content: t('sysconf.token.deleteConfirmBody', '是否确认删除该 Token？'),
               onOk: async () => {
                 await deleteApiToken(record._id);

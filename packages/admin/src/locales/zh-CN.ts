@@ -377,7 +377,6 @@ export default {
   'common.colName': '名称',
   'common.colContent': '内容',
   'common.colOption': '操作',
-  'sysconf.token.deleteConfirmTitle': '删除确认',
   'sysconf.token.deleteConfirmBody': '是否确认删除该 Token？',
   'common.deleteSuccess': '删除成功！',
   'common.delete': '删除',
@@ -415,5 +414,31 @@ export default {
   'sysconf.advance.isrManualOk': 'ISR 手动触发成功！',
   'sysconf.advance.isrManualFail': 'ISR 触发失败！',
   'sysconf.advance.isrManualBtn': '手动触发',
+
+
+  // ── 🔴 期 3 第四批：SystemConfig 的「用户设置」页签（19 条）──
+  //    `common.deleteConfirmTitle` 是从 `sysconf.token.deleteConfirmTitle` **提升**上来的（Token 页与用户页同一个性质）。
+  //    ⚠️ 权限列里的**权限名**仍是中文：它来自 `getPermissionLabel()`（CollaboratorModal 的口径），
+  //    属于那一批的工作量 ⇒ 🔴 刻意不在这里翻第二遍（同一份权限名两处口径必然漂）。
+  //    ⚠️ 口令最短长度的提示（`accountPasswordMinRule()`）是**共享常量**，被 passwordPolicy.test.js 钉着 ⇒ 本批不动。
+  'common.colUsername': '用户名',
+  'common.colNickname': '昵称',
+  'common.colPermissions': '权限',
+  'sysconf.user.collaboratorUpdated': '修改协作者成功！',
+  'common.edit': '修改',
+  'common.deleteConfirmTitle': '删除确认',
+  'sysconf.user.collaboratorDeleteConfirm': '是否确认删除该协作者？',
+  'sysconf.user.cardTitle': '用户设置',
+  'sysconf.user.updateOk': '更新用户成功！请重新登录！',
+  'sysconf.user.usernameLabel': '登录用户名',
+  'sysconf.user.usernamePlaceholder': '请输入登录用户名',
+  'sysconf.user.passwordLabel': '登录密码',
+  'sysconf.user.passwordPlaceholder': '请输入登录密码',
+  'sysconf.user.collaboratorCard': '协作者',
+  'sysconf.user.collaboratorCreated': '新建协作者成功！',
+  'sysconf.user.helpTitle': '协作者功能',
+  'sysconf.user.helpP1': '您可以添加一些具有指定权限的协作者用户。',
+  'sysconf.user.helpP2': '协作者默认具有文章、草稿、图片的查看/上传权限，其余权限需要您显式指定。',
+  'sysconf.user.helpP3': '协作者登录后将看到被精简的后台页面（除非此协作者具备所有权限），同时无权限的接口将抛错。',
 
 };

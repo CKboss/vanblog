@@ -134,6 +134,8 @@ const IDENTICAL_ZH_TW_OK = [
   //    与 `sysconf.token.title`（'Token 管理' —— Token 是拉丁字母，管理简繁同形）。
   'common.colOption', // 操作
   'sysconf.token.title', // Token 管理
+  // 🔴 期 3 第四批：`common.edit`（修改 —— 修/改 两字简繁同形）
+  'common.edit', // 修改
 ];
 
 /**
@@ -279,12 +281,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 14,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 14）⇒ 遍历或解析器坏了`,
+      FILES.length >= 15,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 15）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 260,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 260）⇒ 疑似解析器坏了`,
+      calls.length >= 290,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 290）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -296,6 +298,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/RecycleBin/recycleCore.js',
       'src/pages/SystemConfig/tabs/Token.tsx',
       'src/pages/SystemConfig/tabs/Advance.jsx',
+      'src/pages/SystemConfig/tabs/User.jsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -402,6 +405,88 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       '🔴 这些 hook 闭包住了**首轮渲染的翻译器**（切语言后提示/文案仍是旧语言，要重挂载才更新）：\n  ' +
         stale.join('\n  ') +
         '\n修法：把 t 加进依赖数组（并且 t 必须是 useCallback([intl]) 包的，见上一条断言）。',
+    );
+  });
+
+  it('🔴 翻译器名 `t` 不许被遮蔽（形参 / 解构），否则那几条文案会悄悄不跟随语言', () => {
+    // ## 这条守的是什么（本仓库已实测踩到 **3 次**）
+    // 组件里的翻译器叫 `t`，而 `t` 是 JS 里最常见的临时形参名之一 ⇒ **遮蔽不会报错**，
+    // 只会让某几条文案悄悄用上错误的值（甚至把翻译器当成标签字符串渲染出来）。
+    // 实测三例：`RecycleBin/index.jsx` 的 `const { articles: list, total: t } = …`、
+    // 同文件的 `record.tags.map((t) => …)`、以及 `User.jsx` 的 `data.map((t) => getPermissionLabel(t))`。
+    // 🔴 更阴的是 `fetchList` 里那个：`try` 块里的 `t` 是 total、`catch` 块里的 `t` 是翻译器 ——
+    //    **同一个函数里同名不同物**，读代码的人一定会看错。
+    //
+    // ## 判据（两条，都是 AST，不靠正则）
+    // ① 文件里声明了翻译器（`const t = …`）⇒ 任何函数/箭头函数的**形参**都不许叫 `t`；
+    // ② 任何**解构**（对象/数组模式）都不许绑定出名为 `t` 的变量。
+    // ⚠️ `recycleCore.js` 那类**注入式翻译器**模块故意豁免①：它的每个文案函数都用形参 `t`
+    //    （`function purgeOkText(t = IDENTITY_T)`），那是**同一个东西**、不是遮蔽；它没有 `const t = …`。
+    const offenders = [];
+    for (const rel of FILES) {
+      const src = read(rel);
+      // 🔴 判据要挑对：**"组件级翻译器"**= 这个文件用 `useIntl()` 且声明了 `const t = …`。
+      //    第一版只看 `const t = ` ⇒ `recycleCore.js` 被误伤（它里面那句
+      //    `const t = typeof options.t === 'function' ? options.t : IDENTITY_T` 是**局部翻译器绑定**，
+      //    而它的 `function xxx(t = IDENTITY_T)` 形参正是注入式翻译器本身，不是遮蔽）。
+      const declaresTranslator = /useIntl\(\)/.test(src) && /const\s+t\s*=/.test(src);
+      const ast = astInventory.parseSource(src, rel);
+      const paramHits = [];
+      const destructHits = [];
+      const checkPattern = (pat, where) => {
+        if (!pat) return;
+        if (pat.type === 'Identifier' && pat.name === 't') destructHits.push(where);
+        if (pat.type === 'ObjectPattern') {
+          for (const pr of pat.properties || []) {
+            const v = pr.value || pr.argument;
+            if (v && v.type === 'Identifier' && v.name === 't') destructHits.push(`${where}（对象解构）`);
+            checkPattern(v, where);
+          }
+        }
+        if (pat.type === 'ArrayPattern') {
+          for (const el of pat.elements || []) if (el) checkPattern(el, `${where}（数组解构）`);
+        }
+      };
+      astInventory.walkAst(ast.program, (nd) => {
+        const line = nd.loc ? nd.loc.start.line : '?';
+        if (
+          nd.type === 'FunctionDeclaration' ||
+          nd.type === 'FunctionExpression' ||
+          nd.type === 'ArrowFunctionExpression'
+        ) {
+          for (const pa of nd.params || []) {
+            if (pa.type === 'Identifier' && pa.name === 't') paramHits.push(`第 ${line} 行形参 t`);
+            if (
+              declaresTranslator &&
+              pa.type === 'AssignmentPattern' &&
+              pa.left &&
+              pa.left.type === 'Identifier' &&
+              pa.left.name === 't'
+            ) {
+              paramHits.push(`第 ${line} 行形参 t（带默认值）`);
+            }
+            // 🔴 只对**解构形状**的形参查（ObjectPattern/ArrayPattern/带默认值的解构）；
+            //    普通 Identifier 形参由上面那条"组件级翻译器"规则管 ——
+            //    第一版把两者混在一起，结果 `recycleCore.js` 的 `function xxx(t = IDENTITY_T)`
+            //    被当成"解构出 t"误伤了 5 处（判据写错的典型症状：红的地方全是**合法**代码）。
+            if (pa.type !== 'Identifier') checkPattern(pa, `第 ${line} 行`);
+          }
+        }
+        if (nd.type === 'VariableDeclarator' && (nd.id.type === 'ObjectPattern' || nd.id.type === 'ArrayPattern')) {
+          checkPattern(nd.id, `第 ${line} 行`);
+        }
+      });
+      if (declaresTranslator) {
+        for (const h of paramHits) offenders.push(`${rel}: 声明了翻译器 const t，但${h}会遮蔽它`);
+      }
+      for (const h of destructHits) offenders.push(`${rel}: ${h}解构出了名为 t 的变量（会遮蔽翻译器）`);
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      '🔴 这些地方把 `t` 用作形参/解构名，会**遮蔽**组件的翻译器（不报错，只会让文案悄悄不跟随语言）：\n  ' +
+        offenders.join('\n  ') +
+        '\n修法：把那个形参/解构名改掉（例如 `map((tag) => …)`、`const { total: rowCount } = …`）。',
     );
   });
 

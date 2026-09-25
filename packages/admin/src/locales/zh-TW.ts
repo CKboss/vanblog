@@ -345,7 +345,6 @@ export default {
   'common.colName': '名稱',
   'common.colContent': '內容',
   'common.colOption': '操作',
-  'sysconf.token.deleteConfirmTitle': '刪除確認',
   'sysconf.token.deleteConfirmBody': '是否確認刪除該 Token？',
   'common.deleteSuccess': '刪除成功！',
   'common.delete': '刪除',
@@ -383,5 +382,27 @@ export default {
   'sysconf.advance.isrManualOk': 'ISR 手動觸發成功！',
   'sysconf.advance.isrManualFail': 'ISR 觸發失敗！',
   'sysconf.advance.isrManualBtn': '手動觸發',
+
+
+  // ── 🔴 期 3 第四批（19 條）── 術語沿用：使用者（用户）/ 名稱（名）/ 設定（设置）/ 預設（默认）/ 登入（登录）/ 檢視（查看）/ 介面（接口）。
+  'common.colUsername': '使用者名稱',
+  'common.colNickname': '暱稱',
+  'common.colPermissions': '權限',
+  'sysconf.user.collaboratorUpdated': '修改協作者成功！',
+  'common.edit': '修改',
+  'common.deleteConfirmTitle': '刪除確認',
+  'sysconf.user.collaboratorDeleteConfirm': '是否確認刪除該協作者？',
+  'sysconf.user.cardTitle': '使用者設定',
+  'sysconf.user.updateOk': '更新使用者成功！請重新登入！',
+  'sysconf.user.usernameLabel': '登入使用者名稱',
+  'sysconf.user.usernamePlaceholder': '請輸入登入使用者名稱',
+  'sysconf.user.passwordLabel': '登入密碼',
+  'sysconf.user.passwordPlaceholder': '請輸入登入密碼',
+  'sysconf.user.collaboratorCard': '協作者',
+  'sysconf.user.collaboratorCreated': '新增協作者成功！',
+  'sysconf.user.helpTitle': '協作者功能',
+  'sysconf.user.helpP1': '您可以新增一些具有指定權限的協作者使用者。',
+  'sysconf.user.helpP2': '協作者預設具有文章、草稿、圖片的檢視/上傳權限，其餘權限需要您明確指定。',
+  'sysconf.user.helpP3': '協作者登入後將看到被精簡的後台頁面（除非此協作者具備所有權限），同時無權限的介面會報錯。',
 
 };

@@ -58,9 +58,15 @@ function stripWholeLineComments(source) {
  */
 function extractPasswordFields(source) {
   const out = [];
+  // 🔴 **先剥整行注释再抽**（2026-09-26 实测到的安全相关假绿）：
+  //    原来直接在生源码上跑正则，于是 `hasRule` 只需要**注释里出现过那个调用形状**就为真 ——
+  //    实测把 `User.jsx` 里真正的规则调用删掉、只留一行提到它的注释，
+  //    这条"四个后台口令表单都接上了规则"的守卫**照样 18/18 全绿**。
+  //    🔴 这正是本仓库第 4 次踩"注释里写了别处要搜索的字面量"，但这次踩中的是**口令最短长度**这种安全接线。
+  const code = stripWholeLineComments(source);
   const re = /<ProFormText\.Password\b([\s\S]*?)(?:\/>|><\/ProFormText\.Password>)/g;
   let m;
-  while ((m = re.exec(source)) !== null) {
+  while ((m = re.exec(code)) !== null) {
     out.push({ attrs: m[1], hasRule: /accountPasswordMinRule\(\s*\)/.test(m[1]) });
   }
   return out;
@@ -120,11 +126,29 @@ describe('四个后台口令表单都接上了这条规则（接线级断言）'
     });
 
     it(`${rel}：确实 import 了 passwordPolicy（不是靠巧合的同名函数）`, () => {
-      const source = read(ADMIN_SRC, rel);
+      // 🔴 同样在**剥掉注释**的源码上断言：否则一行注释就能冒充 import 与接线
+      const source = stripWholeLineComments(read(ADMIN_SRC, rel));
       assert.match(source, /from\s+'@\/services\/van-blog\/passwordPolicy'/);
       assert.match(source, /accountPasswordMinRule/);
     });
   }
+
+  it('🔴 抽取器不许被注释骗到：规则只出现在注释里时必须判为缺失（负向对照）', () => {
+    // 这条就是 2026-09-26 那个假绿的**常驻回归钉**：谁把剥注释那步去掉，这条会红。
+    const onlyInComment = `
+      <ProFormText.Password
+        name="password"
+        // accountPasswordMinRule()  ← 只在注释里提到
+        rules={[{ required: true, message: '这是必填项' }]}
+      />`;
+    const fields = extractPasswordFields(onlyInComment);
+    assert.equal(fields.length, 1, '要能扫到这个元素');
+    assert.equal(
+      fields[0].hasRule,
+      false,
+      '🔴 注释里出现 accountPasswordMinRule() 就被当成"已接线"⇒ 剥注释那步被去掉了（安全相关的假绿）',
+    );
+  });
 
   it('抽取器本身有效：漏掉规则的写法必须被判为缺失（负向对照）', () => {
     const withoutRule = `

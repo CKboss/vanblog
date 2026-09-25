@@ -178,6 +178,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/RecycleBin/recycleCore.js': 0,
     'src/pages/SystemConfig/tabs/Token.tsx': 0,
     'src/pages/SystemConfig/tabs/Advance.jsx': 0,
+    'src/pages/SystemConfig/tabs/User.jsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

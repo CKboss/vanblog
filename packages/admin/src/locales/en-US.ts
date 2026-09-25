@@ -368,7 +368,6 @@ export default {
   'common.colName': 'Name',
   'common.colContent': 'Content',
   'common.colOption': 'Actions',
-  'sysconf.token.deleteConfirmTitle': 'Confirm deletion',
   'sysconf.token.deleteConfirmBody': 'Delete this token?',
   'common.deleteSuccess': 'Deleted',
   'common.delete': 'Delete',
@@ -406,5 +405,27 @@ export default {
   'sysconf.advance.isrManualOk': 'Incremental re-render triggered',
   'sysconf.advance.isrManualFail': 'Could not trigger the re-render',
   'sysconf.advance.isrManualBtn': 'Trigger now',
+
+
+  // ── 🔴 期 3 第四批（19 keys）── 英文人工写；🔴 不用缩写（ICU 把单引号当转义符）。
+  'common.colUsername': 'Username',
+  'common.colNickname': 'Nickname',
+  'common.colPermissions': 'Permissions',
+  'sysconf.user.collaboratorUpdated': 'Collaborator updated',
+  'common.edit': 'Edit',
+  'common.deleteConfirmTitle': 'Confirm deletion',
+  'sysconf.user.collaboratorDeleteConfirm': 'Delete this collaborator?',
+  'sysconf.user.cardTitle': 'Account',
+  'sysconf.user.updateOk': 'Account updated. Please sign in again.',
+  'sysconf.user.usernameLabel': 'Sign-in username',
+  'sysconf.user.usernamePlaceholder': 'Enter the sign-in username',
+  'sysconf.user.passwordLabel': 'Sign-in password',
+  'sysconf.user.passwordPlaceholder': 'Enter the sign-in password',
+  'sysconf.user.collaboratorCard': 'Collaborators',
+  'sysconf.user.collaboratorCreated': 'Collaborator created',
+  'sysconf.user.helpTitle': 'About collaborators',
+  'sysconf.user.helpP1': 'You can add collaborator accounts with specific permissions.',
+  'sysconf.user.helpP2': 'By default a collaborator can view and upload posts, drafts and images; every other permission has to be granted explicitly.',
+  'sysconf.user.helpP3': 'After signing in, a collaborator sees a reduced admin panel (unless they have every permission), and any endpoint they are not allowed to call returns an error.',
 
 };

@@ -85,6 +85,11 @@ const BUDGET = {
   //   改它必须保证 `admin-typecheck-ratchet` 不倒退。
   'src/pages/SystemConfig/tabs/Token.tsx': 0,
   'src/pages/SystemConfig/tabs/Advance.jsx': 0,
+  // 🔴 期 3 第四批（2026-09-26）：用户设置页签全量接完 ⇒ 预算 0。
+  //   ⚠️ 两处**刻意不在本批翻**的中文都不在这个文件里，所以 0 是真的 0：
+  //   ① 权限列的权限名来自 `getPermissionLabel()`（CollaboratorModal 的口径）；
+  //   ② 口令最短长度提示来自共享常量 `accountPasswordMinRule()`（被 passwordPolicy.test.js 钉着）。
+  'src/pages/SystemConfig/tabs/User.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -191,7 +196,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 17, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 18, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   assert.strictEqual(TOTAL_BUDGET, 52, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   assert.strictEqual(REQUIRED_EXCEPTIONS.length, 4, '例外清单条数变了 ⇒ 必须是有意的');
 });
