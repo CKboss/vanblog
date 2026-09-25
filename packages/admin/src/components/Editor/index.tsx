@@ -20,8 +20,8 @@ import './index.less';
 import './mermaid-safety.css';
 import './toc-viewport.css';
 import { insertMore } from './insertMore';
-import { cn } from './locales';
-import { useModel } from 'umi';
+import { pickEditorLocale } from './locales';
+import { getLocale, useModel } from 'umi';
 import { customContainer } from './plugins/customContainer';
 import { extraSyntax } from './plugins/extraSyntax';
 import { defListHastHandlers } from 'remark-definition-list';
@@ -70,6 +70,15 @@ export default function EditorComponent(props: {
   const { initialState } = useModel('@@initialState');
   const navTheme = initialState.settings.navTheme;
   const themeClass = navTheme.toLowerCase().includes('dark') ? 'dark' : 'light';
+  /**
+   * 🔴 编辑器文案跟随站点语言。**选择必须发生在渲染期**：`getLocale()` 内部会走 umi 的
+   * `plugin.applyPlugins(...)`，依赖插件运行时已初始化，在模块加载期调用会拿到 undefined
+   * （与 `app.jsx` 的 `links` 数组是同一条约束）。
+   * 🔴 `pickEditorLocale()` 返回的是稳定引用（不是每次新建对象），所以把它放进下面 `plugins`
+   * 的 `useMemo` 依赖**不会**导致插件数组反复重建、编辑器状态被重置。
+   * ⚠️ 切换语言走 `setLocale(lang, true)` 的整页 reload，因此每次挂载读一次就够。
+   */
+  const editorLocale = pickEditorLocale(getLocale());
   // 前台皮肤是 Apple 风格时，预览也用同一套字体（Maple Mono），做到所见即所得。
   // 站点设置里没有这个字段（/api/admin/meta 只返回 version/user/baseUrl 等），
   // 所以单独取一次 /api/admin/meta/site；取不到就当默认皮肤，不影响编辑器其它功能。
@@ -111,7 +120,7 @@ export default function EditorComponent(props: {
           return;
         }
         const factory = mods[0]?.default ?? mods[0];
-        setMathPlugin(() => factory({ locale: cn }));
+        setMathPlugin(() => factory({ locale: editorLocale }));
       })
       .catch(() => {
         // 加载失败就保持原文显示，不要让编辑器崩掉
@@ -119,19 +128,19 @@ export default function EditorComponent(props: {
     return () => {
       cancelled = true;
     };
-  }, [hasMath, mathPlugin]);
+  }, [hasMath, mathPlugin, editorLocale]);
 
   const plugins = useMemo(() => {
     return withSafeViewerEffects([
       ...(mathPlugin ? [mathPlugin] : []),
       customContainer(),
       // singleTilde:false —— 单个 `~x~` 让给下标（remark-supersub），删除线仍用 `~~x~~`
-      gfm({ locale: cn, singleTilde: false }),
+      gfm({ locale: editorLocale, singleTilde: false }),
       extraSyntax(),
       highlightSsr(),
       frontmatter(),
       mediumZoom(),
-      mermaidForEditor({ locale: cn }),
+      mermaidForEditor({ locale: editorLocale }),
       tocViewportGuard(),
       imgUploadPlugin(setLoading),
       fileUploadPlugin(setLoading),
@@ -152,7 +161,7 @@ export default function EditorComponent(props: {
         getEnabled: () => softLineBreaksRef.current === true || softLineBreaksRef.current === 'open',
       }),
     ]);
-  }, [themeClass, mathPlugin]);
+  }, [themeClass, mathPlugin, editorLocale]);
 
   return (
     <div
@@ -166,7 +175,7 @@ export default function EditorComponent(props: {
           value={props.value}
           plugins={plugins}
           onChange={props.onChange}
-          locale={cn}
+          locale={editorLocale}
           mode="auto"
           remarkRehype={{ allowDangerousHtml: true, handlers: defListHastHandlers }}
           sanitize={sanitize}

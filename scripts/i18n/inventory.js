@@ -64,6 +64,7 @@ function collectFiles(dir, out) {
 
 /**
  * 🔴 归类（四类互斥）。判据基于**可核实的结构特征**，不是文件名直觉：
+ *  - 「语言包（已多语言）」：形似语言包**且提供 ≥2 种语言** ⇒ 它真的是语言包，不计入工作量。
  *  - 丙「形似语言包」：文件里导出的是一个**扁平 key → 中文字符串**的大对象，
  *    且 🔴 **对 umi 的 locale 运行时（`umi` / `getLocale` / `useIntl` / `formatMessage`）引用数为 0**
  *    ⇒ **它形似语言包、实为单语常量**（实例：`components/Editor/locales.ts` 只导出一个 `cn`，
@@ -74,11 +75,36 @@ function collectFiles(dir, out) {
  *  - 乙「仅注释」：UI 三个桶都是 0，只有注释里有中文 ⇒ **不需要翻译**。
  *  - 甲「UI 文案」：其余含中文的 ⇒ **真正的工作量**。
  */
+/**
+ * 🔴 这个文件是否**提供多于一种语言**？判据是源码里出现的语言代码字面量种类数 ≥2。
+ * 认两类写法：本项目语言包的 `zh-CN`/`zh-TW`/`en-US`，以及上游库 locale 文件的
+ * `zh_Hans`/`zh_Hant`（例如 `import x from 'bytemd/locales/zh_Hant.json'`）。
+ * ⚠️ 这是一个**结构特征**判据，不是"文件名像不像语言包"的直觉。
+ */
+function providesMultipleLanguages(src) {
+  const found = new Set();
+  const re = /['"](zh-CN|zh-TW|en-US|zh_Hans|zh_Hant|en)['"]/g;
+  let mm;
+  while ((mm = re.exec(src)) !== null) found.add(mm[1]);
+  // `zh_Hans.json` 这种出现在 import 路径里时不带引号包裹整体，所以再补一次路径形状的匹配
+  const re2 = /locales\/(zh_Hans|zh_Hant|en|ja|ko|fr|de|es|ru|ar)\.json/g;
+  while ((mm = re2.exec(src)) !== null) found.add(mm[1]);
+  return found.size >= 2;
+}
+
 function classify(rel, src, inv) {
   const uiCount = inv.literals.size + inv.templates.size + inv.jsxTexts.size;
   const looksLikePack = /(^|\/)locales?\.(ts|js|tsx|jsx)$/.test(rel) || /(^|\/)locales?\//.test(rel);
-  const refsUmiLocale = /\bfrom 'umi'|\bfrom "umi"|getLocale|useIntl|formatMessage/.test(src);
-  if (looksLikePack && !refsUmiLocale) return '丙-形似语言包（实为单语常量，切语言不跟随）';
+  // 🔴 判据从「有没有引用 umi 的 locale 运行时」改成「**提供了几种语言**」，因为前者会误判：
+  // 一个合法的语言包文件**刻意不应该**在模块加载期调 `getLocale()`（它内部走 umi 的
+  // `plugin.applyPlugins(...)`，依赖插件运行时已初始化 ⇒ 模块加载期调用会拿到 undefined），
+  // 语言选择必须由**消费方在渲染期**做。所以「不引用 umi」不是缺陷特征，「只有一种语言」才是。
+  if (looksLikePack) {
+    // 🔴 提供多语言 ⇒ 它**就是**语言包，里面的中文是合法译文、不是待翻译文案。
+    // 单列一类，否则它会落进甲类把工作量虚增，并误导下一个人去"翻译"一个语言包。
+    if (providesMultipleLanguages(src)) return '语言包（已多语言，不计入工作量）';
+    return '丙-形似语言包（只提供单一语言，切语言不跟随）';
+  }
   if (uiCount === 0 && inv.comments > 0) return '乙-仅注释（不翻译）';
   if (uiCount === 0) return '（无中文）';
   if (/Core\.js$/.test(rel)) return '丁-核心模块消息（需注入式翻译器）';
@@ -196,4 +222,11 @@ function main() {
   return parseFailures > 0 ? 1 : 0;
 }
 
-process.exitCode = main();
+// 🔴 导出给守卫用（`i18nEditorLocaleFollows.test.js` 会在进程内调 `classify`，
+// 这样"丙类归零"这个验收判据可以被断言，而不必靠跑一次 CLI 再解析输出）。
+module.exports = { classify, providesMultipleLanguages };
+
+// 🔴 只有作为 CLI 直接执行时才跑 main()（被 require 时不能跑，否则守卫会触发一次全量盘点）
+if (require.main === module) {
+  process.exitCode = main();
+}

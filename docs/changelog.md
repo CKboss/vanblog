@@ -8,6 +8,34 @@ redirectFrom: /ref/changelog.html
 
 ## [Unreleased]
 
+### 2026-09-25：🔴 编辑器（Markdown）界面现在跟随站点语言
+
+- 🔴 **此前编辑器界面永远是中文**：`packages/admin/src/components/Editor/locales.ts` 名字叫 locales，
+  实际**只导出一个单语常量 `cn`**（66 条中文），硬接线到编辑器的 4 处（数学公式插件、`gfm`、`mermaid`、`<Editor locale>`），
+  而对 umi 的 locale 运行时**引用数为 0** ⇒ 切换语言时**工具栏、菜单、图表类型名全都不变**。本版修复。
+- ✅ **浏览器实测三语对照**（真实登录后打开图形编辑器，从 DOM 取工具栏文案）：
+  `粗体 / Bold / 粗體`、`代码块 / Code block / 代碼塊`、`一级标题 / Heading 1 / 一級標題`、
+  `图片 / Image / 圖像`、`链接 / Link / 連結`、`任务列表 / Task list / 任務列表`、
+  `Mermaid图表 / Mermaid diagrams / Mermaid圖表`；`pageerror` **0** 条、控制台 `Missing message` **0** 条、
+  🔴 **没有裸 key、没有 `undefined`**；`<html lang>` 同步跟随（`zh-CN` → `en-US` → `zh-TW`）。
+- 🔴 **实现方式让维护成本降了约 90%**：实测发现那 66 条里 **62 条是上游 locale 文件的逐字副本**
+  （`bytemd` 47 + `@bytemd/plugin-gfm` 6 + `@bytemd/plugin-mermaid` 9，三个来源**零 key 重叠**），
+  所以现在**直接复用上游的 `zh_Hans`/`zh_Hant`/`en` JSON**，只手写上游不提供的部分：
+  ⚠️ **`@bytemd/plugin-mermaid` 不提供繁中**（它的 locales 目录只有 13 种、无 `zh_Hant`）⇒ 11 个图表名手写，
+  用**地区用词**（心智圖 / 圓餅圖 / 使用者旅程圖，而不是字形转换）；
+  🔴 **`@bytemd/plugin-math-ssr` 完全不带 locale 文件**（只有内置英文默认值）⇒ 公式那 4 条三语手写。
+  ⇒ **合成后每种语言 68 条、三份 key 集合完全相同**，并且 🔴 **顺带补上了上游有而旧副本缺的 `mindmap` 与 `timeline`**。
+- 🔴 **好处不只是省事**：62 条从此**跟随上游**，bytemd 升级时不会静默漂移（手工副本会）；
+  繁中的地区用词也由上游维护（实测用的是 連結/圖像/編輯/目錄，是真正的地区用词）。
+- 🔴 **新增守卫**（`i18nEditorLocaleFollows`，16 条）钉住：上游三份各自同形、
+  **手写的 mermaid 繁中 key 集合必须与上游简中一致**（上游改键名就会红，防静默漏译）、
+  合成后三份同形且各 68 条、🔴 **`en-US` 与 `zh-TW` 的"与简中相同"白名单必须恰好等于实测那一组**、
+  🔴 **语言选择必须发生在渲染期**（`locales.ts` 里不许**调用** `getLocale`）、四处接线都在、
+  `editorLocale` 进了两个依赖数组、`pickEditorLocale` 返回稳定引用且兜底绝不返回 `undefined`。
+  它**替换**了上一轮那条钉"已知缺陷现状"的 `i18nEditorLocalesKnownGap`（那条守卫写下来时就注明"期 2 改造时应当被有意改红"）。
+- ⚠️ **仍未翻译**：编辑器里我们自己的 `customContainer` 插件那一条「自定义高亮块」在三语下都不变
+  （它属后台文案的后续批次，不是编辑器库的文案）；后台其余页面与 `SiteInfoForm` 也仍未翻译。
+
 ### 2026-09-25：🔴 多语言框架期 0/期 1 —— `<html lang>` 跟随语言、英文复数正确、并消除登录页 48 条控制台报错
 
 - 🔴 **`<html lang>` 与 `<html dir>` 现在跟随所选语言**（此前切到 English 后 `<html lang>` 仍是 `zh-CN`，

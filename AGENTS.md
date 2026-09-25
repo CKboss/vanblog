@@ -9469,6 +9469,114 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.138 🔴 期 2：编辑器跟随语言 —— 62/66 条文案原来是上游 locale 的逐字副本，以及"本地构建的 admin dist 不可直接拷进镜像"
+
+**A｜真因与方案：不要手工维护库自带的文案。**
+`components/Editor/locales.ts` 名叫 locales，实际**只导出一个单语常量 `cn`**（66 条中文）、硬接线到
+`components/Editor/index.tsx` 的 4 处（`factory({locale:cn})` 数学插件、`gfm({locale:cn})`、
+`mermaidForEditor({locale:cn})`、`<Editor locale={cn}>`），对 umi locale 运行时引用数 **0** ⇒ 编辑器永远中文。
+🔴 **逐键 AST 比对发现：那 66 条里 62 条是上游 locale 文件的逐字副本**（`bytemd/locales/zh_Hans.json` 47 +
+`@bytemd/plugin-gfm/locales/zh_Hans.json` 6 + `@bytemd/plugin-mermaid/locales/zh_Hans.json` 9，
+🔴 **同 key 值差异 = 0、三个来源零 key 重叠**），只有 4 条（`block`/`blockText`/`inline`/`inlineText`）无上游认领
+—— 它们属 `@bytemd/plugin-math-ssr` 的 `Partial<MathLocale>`，而 🔴 **那个包完全不带 locale 文件、只有内置英文默认值**。
+⇒ **正确修法是复用上游 JSON 按语言合成，只手写上游不提供的部分**：手工维护量从 66×3=198 条降到约 15 条（**降约 90%**），
+且 62 条**跟随上游、不会因升级静默漂移**。🔴 **两个上游缺口必须记住**：
+`@bytemd/plugin-mermaid` **不提供 `zh_Hant.json`**（目录只有 ar/ca/de/en/es/fr/id/nb_NO/pl/pt_BR/ru/tr/zh_Hans）⇒ 繁中 11 个图表名手写、用地区用词；
+`bytemd` 的 `exports` 明确列了 `"./locales/*"` ⇒ **深导入 JSON 是官方支持的**。
+合成后每种语言 **68 条**（🔴 顺带补上上游有而旧副本缺的 `mindmap`/`timeline`），三份 key 集合完全相同。
+👉 **规矩：给一个第三方组件做 i18n 之前，先查它自己带不带 locale** —— 本项目已在 waline 上验证过同一条路
+（`@waline/client` 自带三语、`CLIENT_EXTRA_KEYS` 白名单里已有 `lang`/`locale` ⇒ 一行翻译都不用写）。
+🔴 **而"手工副本"的危险是静默的**：它与上游逐字相同的期间看不出问题，升级后才漂。
+
+**B｜🔴 语言选择必须在渲染期，且必须返回稳定引用。**
+`locales.ts` **只合成纯数据**（模块加载期），选择留给 `pickEditorLocale(getLocale())` 在 `index.tsx` 的渲染期调用 ——
+因为 `getLocale()` 内部走 umi 的 `plugin.applyPlugins(...)`，模块加载期调用会拿到 `undefined`（与 §7.134 的 `links` 数组同一条约束）。
+🔴 **`pickEditorLocale` 必须返回 `EDITOR_LOCALES` 里的同一个引用**，因为 `index.tsx` 把它放进了 `plugins` 的 `useMemo` 依赖：
+**每次渲染返回新对象 ⇒ 插件数组反复重建 ⇒ 编辑器状态被重置**。兜底也重要：未知语言一律回落 `en-US`，
+🔴 **绝不返回 `undefined`**（那会让 bytemd 的工具栏 tooltip 显示成 `undefined`）。
+
+**C｜🔴 本地构建的 admin dist 不能直接 `podman cp` 进镜像 —— 少一个环境变量就会让整个后台白屏。**
+`config/config.js` 是 `publicPath: process.env.EEE === 'production' ? '/admin/' : '/'`，而 🔴 **`Dockerfile` 的 `admin_builder`
+阶段有 `ENV EEE=production`，admin 自己的 `build`/`build:lowmem` 脚本却只设了 `NODE_OPTIONS`、没设 `EEE`** ⇒
+本地 `npm run build` 产物的资源路径是**根相对**（`/umi.xxx.js`），拷进容器后浏览器去 `/umi.xxx.js` 取资源，
+🔴 **那个路径被 caddy 路由到前台（Next.js）、返回 HTML** ⇒ JS 从不执行 ⇒ React 从不挂载。
+🔴 **症状极具误导性**：HTTP **200**、URL **没有重定向**、`pageerror` **0 条**、DOM 里有 script 标签、`waitForSelector` 只会超时；
+**唯一暴露它的是 `console.error` 的 MIME 拒绝**（`Refused to execute script … MIME type ('text/html') is not executable`）
+与 **`bodyText` 为空 / `inputs === 0`**。
+👉 🔴 **三条规矩**：① **`podman cp` 本地 dist 之前必须以 `EEE=production` 构建，并核实 `dist/index.html` 里的资源路径带 `/admin/` 前缀**
+（这一步很便宜，能防止重复踩）；② ⚠️ **`EEE` 要在外层传，不要塞进 `NODE_OPTIONS`**（`cross-env` 会**整体替换**而不是追加）；
+③ 🔴 **UI 探针必须 fail-loud：`bodyText` 为空或 `inputs === 0` 就立刻报错并打印 `console.error` 与资源 URL/MIME**，
+不要继续等某个 selector 超时 —— **"页面返回 200"完全不能证明"页面渲染了"**（这是"控制台报错数是 UI 改动一等判据"的又一次实证）。
+⚠️ 另一条：**"本地构建成功"不等于"产物可部署"**（同一份源码，`EEE` 不同 ⇒ 产物不可用）。
+
+**D｜🔴 playwright 探针的三个实测坑（都让"看起来该成功"的验证失败）。**
+① `playwright` **没有 hoist 到顶层 `node_modules`**，只在 `node_modules/.pnpm/playwright@1.40.0/node_modules/playwright` ⇒
+`require.resolve('playwright', {paths:[adminDir]})` **解析不到**，要用绝对路径（🔴 **用 `find` 定位，不要凭记忆**）；
+② 🔴 **登录页有 4 个 `input`，第一个不可见** ⇒ `page.waitForSelector('input')` 默认等**可见**会超时，
+要用 `{ state: 'attached' }` 并按 `:visible` 过滤；
+③ 🔴 **ProForm 的提交按钮不带 `type="submit"`**（按钮文本是「登 录」）⇒ `button[type="submit"]` 永远等不到，
+**回车提交**才可靠（`.ant-btn-primary` 可作兜底）。
+⚠️ 并沿用既有两条：`executablePath` 指 `~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome`
+（playwright 1.40 期望 revision 1091 ⇒ 必须显式指）；**表单要 `click` + `keyboard.type`，`page.fill` 不驱动 rc-field-form**。
+🔴 **`process.env.HOME` 被工具链改写成 `$PWD/.tools/home`** ⇒ 用户级缓存路径要用绝对路径，不要用 `HOME` 拼。
+
+**E｜🔴 守卫判据必须"与注释无关"（本轮同一个坑犯了两次）。**
+反转后的守卫最初用裸文本断言 `locales.ts` 里不许出现 `getLocale`、不许有 `export const cn` ⇒
+🔴 **而 `locales.ts` 的头注释里正好写了这两样**（用来说明历史与设计约束）⇒ 必然假红。
+修法是 🔴 **改用 AST 判据**：判"有没有**调用** `getLocale`"（`CallExpression` 的 callee 名）与
+"有没有**导出** `cn` 这个绑定"（`ExportNamedDeclaration`），而不是"文本里有没有出现过"。
+👉 这与手册里"注释里不要写别处要断言的字面量"是同一条，但 🔴 **更稳的方向是让判据本身剥掉注释/走 AST**，
+而不是要求所有人不写那样的注释。⚠️ **并且 AST 收集导出绑定时要覆盖三种形状**：
+`export const X`（VariableDeclaration）、🔴 **`export function X`（FunctionDeclaration）**、`export class X`
+—— 第一版只处理了变量，导致 `pickEditorLocale` 收不到而假红。
+
+**F｜🔴 盘点分类要能表达"真正的语言包"，否则工作量会被虚增。**
+`scripts/i18n/inventory.js` 的丙类判据原本是 `looksLikePack && !refsUmiLocale`（"形似语言包但不引用 umi 运行时"）⇒
+🔴 **改造后 `locales.ts` 仍然刻意不引用 umi 运行时**（见 B）⇒ 它会被继续误判成丙类。
+判据改成语义的：**`looksLikePack && !providesMultipleLanguages(src)`**（源码里出现的语言代码字面量种类 ≥2），
+并 🔴 **新增一类「语言包（已多语言，不计入工作量）」** —— 否则它会落进甲类，
+把**合法译文**当成待翻译文案（实测：甲类会从 114 文件/1282 字面量虚增到 115/1298）。
+🔴 **实测结果：丙类归零**（正是上一轮定的验收判据），甲类回到 **114 文件 / 1282 字面量 / 186 模板 / 352 JSX**（与上一轮逐字一致）。
+⚠️ 另：`inventory.js` 原本没有 `module.exports`（末尾是 `process.exitCode = main()`）⇒
+为了让守卫能在进程内断言归类，改成 `module.exports = { classify, providesMultipleLanguages }` +
+`if (require.main === module) { process.exitCode = main(); }`（🔴 **CLI 行为不变，已实测**）。
+
+**G｜🔴 浏览器活体证据（本轮的验收判据，全部来自 DOM 度量与真实交互）。**
+一次性栈（临时账号、占位归档、🔴 **没读那个不可变归档**）+ `EEE=production` 构建的 dist `podman cp` 进容器 + playwright：
+登录后打开图形编辑器，三语工具栏文案实测对照 —— `粗体/Bold/粗體`、`代码块/Code block/代碼塊`、
+`一级标题/Heading 1/一級標題`、`图片/Image/圖像`、`链接/Link/連結`、`任务列表/Task list/任務列表`、
+`Mermaid图表/Mermaid diagrams/Mermaid圖表`、`删除线/Strikethrough/刪除線`、`回到顶部/Scroll to top/回到頂部`；
+🔴 **`pageerror` 0、`consoleErrors` 0、`Missing message` 0、裸 key 与 `undefined` 三语全为空**；
+🔴 **`<html lang>` 同步跟随**（`zh-CN`→`en-US`→`zh-TW`，这顺带补上了 §7.136 里"后台头部未活体验证"的缺口）；
+`.bytemd` 三语下都渲染（`editorFound: true`）。证据：`vanblog_dev/i18n-browser-evidence/phase2-editor/`（3 张截图 + `result.json`）。
+🔴 **顺带查出一条真问题**：`自定义高亮块` 在三语下**完全不变** —— 它来自我们自己的 `customContainer` 插件
+（盘点里 `customContainer.tsx` 属甲类、1 条字面量），🔴 **是编辑器里唯一仍未翻译的文案**，属后台文案的后续批次。
+⚠️ **`titles` 三语都是空数组**（bytemd 的工具栏不用 `title`/`aria-label`，文案在叶子节点的 `textContent` 里）⇒
+🔴 **取证时要同时收 `title`/`aria-label` 与叶子文本，只收前者会得到"空的绿"**。
+
+**H｜变异 3/3 结论正确，且"理由也对"。**
+M1 把渲染期选择退回单语（`pickEditorLocale('zh-CN')`，即旧缺陷形状）→ **RED 2**，
+🔴 红的正是「语言选择发生在渲染期」那一条；M2 从手写繁中删掉一个 key → **RED 7**，
+🔴 红的正是「手写 mermaid 繁中 key 集合 == 上游简中」那一条（这条承重的是"上游改键名后我们不会静默漏译"）；
+M3 只改注释措辞 → ✅ **GREEN 16/16**。三条全部还原、**逐文件 sha 与基线一致**，`atexit` 兜底（异常不是信号）。
+
+**I｜本轮我自己的 4 个坑（都被闸门或交叉核实抓到）。**
+① 🔴 **核实断言写严了**：断言 `editorLocale` 出现 5 次，实测 7 次（1 定义 + 4 消费 + **2 个依赖数组**，我漏算了后者）⇒
+assert 在写文件之前触发、**文件未被改动**（fail-safe 生效）；👉 与上一轮"闸门对了、判据错了"同族。
+② 🔴 **`require.resolve` 的解析基准是脚本所在位置**：把测量脚本放 `/tmp` 就解析不到 `bytemd/locales/*.json` ⇒
+要传 `{ paths: [adminDir] }`（🔴 **"驱动/脚本的路径必须相对它自己的位置解析"这条的第 N 次**）。
+③ 🔴 **我写了一个恒真的存在性检查**：用 `fs.existsSync(M.replace('zh_Hans','zh_Hant'))` 判断"mermaid 有没有繁中"，
+而 `M` 是**目录路径**（以 `/locales/` 结尾）⇒ 替换没生效、目录当然存在 ⇒ **恒为 true、毫无意义**；
+真正的证据是**目录清单**。👉 **写存在性检查时要确认被检查的路径真的是"那个文件"，而不是它的父目录。**
+④ 🔴 **第一次 `podman cp` 的是非生产口径的 dist**（见 C）⇒ 后台白屏，而我只看到"探针超时"。
+
+**J｜基线更新**：admin 单测 **713 tests / 164 suites / 0 fail**（上一轮 703 − KnownGap 的 6 + 新守卫 16 = 713，精确对账）；
+i18n 守卫组 **6 个文件**：`i18nHardcodedRatchet` 6、`i18nSharedImpl` 5、`i18nKeyNaming` 7、`i18nPluralConvention` 5、
+🔴 `i18nEditorLocaleFollows` **16**（新，替换 `i18nEditorLocalesKnownGap`）、`localePackParity` 39；
+`admin-typecheck-ratchet` **23/0** 且 🔴 **admin src 错误仍是 29（我的 `.tsx`/`.ts` 改动引入 0 个新类型错）**；
+生产口径构建 `umi.2b7c67ec.js` = **1,290,198 B**（非生产口径 1,290,189 B，差 9 字节 = chunk 路径里的 `/admin/` 前缀），
+dist 总量比上一轮 **+4,851 B**（三份合成语言包）；盘点：含中文文件 **137**（比上一轮 +1 = 上一轮新增的 `src/typings.d.ts`，17 行中文）。
+
 ### 7.137 🔴 admin 终于有了类型检查门禁：那条「故意不加、有 115 个错、要加就得先清零」的记录是**量错了口径**，而"先清零"与本仓库自己的棘轮先例自相矛盾
 
 **A｜被更正的旧结论。** `.github/workflows/server-test.yml` 里长期写着「admin 的类型检查**故意不加**：
