@@ -28,7 +28,12 @@ const InitPage = () => {
    * `t` 同时用于把翻译器注入 `setupKeyCore`（纯 JS、被 node --test 直接 require，
    * 拿不到 umi 运行时；不传时原样返回中文，所以那些单测逐字不变）。
    */
-  const t = (id: string, defaultMessage: string, values?: Record<string, unknown>) =>
+  // 🔴 `values` 必须是 `Record<string, any>`：react-intl 3 的 `formatMessage` 第二个形参要的是
+  //    `Record<string, PrimitiveType | FormatXMLElementFn<…>>`，而 `Record<string, unknown>` **不可赋值**给它
+  //    ⇒ 实测报 **TS2769（没有匹配的重载）**。这个形状在仓库里复制过 4 次，4 处都因此各背一条类型错误
+  //    （admin 类型门禁的 TS2769 基线本来就是 3）⇒ 期 4 一并改成 any、把基线降到 0。
+  //    ⚠️ 别"好心"改回 unknown：那会把 TS2769 带回来（棘轮会红，而且红得很莫名）。
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
     intl.formatMessage({ id, defaultMessage }, values);
   const setupKeyHints = getSetupKeyHints(t);
   const formMapRef = useRef<React.MutableRefObject<ProFormInstance<any> | undefined>[]>([]);

@@ -97,6 +97,12 @@ const BUDGET = {
   //   （GitHub 的锚点由标题生成）。⚠️ 链接**文字**照翻（那才是给用户看的）；
   //   已登记进 REQUIRED_EXCEPTIONS **反向钉住**（防止将来有人"好心"把它翻掉）。
   'src/pages/SystemConfig/tabs/Caddy.jsx': 1,
+  // 🔴 期 4（2026-09-26）：`SiteInfoForm` —— **目前最大的单文件批次**（108 条裸中文 / 150 个替换点）⇒ 预算 0。
+  //   用 AST 定位 + 按字符偏移反向替换做的机械化改造（脚本 `vanblog_dev/migrate-siteinfoform.cjs`），
+  //   🔴 改完立刻用 `bareChinese` 验证归零、用 `collectTCalls` 验证 150 个调用点都带字面量 defaultMessage。
+  //   ⚠️ 两处**刻意不在本批翻**：GA / 百度统计那两个统计 ID 字段的文案来自共享模块 `@/utils/analysisFields`
+  //   （被 `analysisFields` 守卫与**文档措辞**钉在一起，属已裁定的暂缓项）⇒ 它们不在这个文件里，所以 0 是真的 0。
+  'src/components/SiteInfoForm/index.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -215,7 +221,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 19, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 20, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**

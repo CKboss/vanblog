@@ -181,6 +181,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/SystemConfig/tabs/User.jsx': 0,
     // 🔴 预算 1 = Caddy 页那个**URL 锚点**（永久例外，不是欠条；账目见棘轮里 TOTAL_BUDGET 的注释）
     'src/pages/SystemConfig/tabs/Caddy.jsx': 1,
+    'src/components/SiteInfoForm/index.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

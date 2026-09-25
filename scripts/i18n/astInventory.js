@@ -556,7 +556,10 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `recycle` = 回收站抽屉（`components/RecycleBin/**`，2026-09-26 期 9 第四批登记）。
 //   它是**第一个组件级命名空间**：跨页复用的组件用自己的名字做组（recycle / 将来的 editor / imgPicker…），
 //   页面组用页面名（sysconf），真正通用的动作词才进 common。
-const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'recycle', 'sysconf', 'theme'];
+// 🔴 `siteInfo` = 站点设置表单（`components/SiteInfoForm`，2026-09-26 期 4 登记）。
+//   它同时被**初始化向导**与**系统设置→站点配置**复用 ⇒ 按"跨页复用的组件用自己的名字做组"归到组件名，
+//   而不是塞进 `init.*` 或 `sysconf.*`（那两个都是**页面**组，塞进去会让另一侧的调用方跨组借 key）。
+const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'sysconf', 'theme'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

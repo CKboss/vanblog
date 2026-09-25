@@ -21,9 +21,13 @@ describe('Apple 界面风格：后台开关', () => {
   it('站点信息表单里有「界面风格」下拉，两个选项都在', () => {
     const form = read('src/components/SiteInfoForm/index.tsx');
     assert.match(form, /name=\{'uiStyle'\}/);
-    assert.match(form, /label="界面风格"/);
-    assert.match(form, /apple: 'Apple 风格（推荐）'/);
-    assert.match(form, /default: '默认（原卡片风格）'/);
+    // 🔴 期 4 起这些文案走 t()：锚点换成**新形状**（key + zh-CN defaultMessage 一起钉），性质没放 ——
+    //    仍然要求"下拉存在、两个内置选项的中文没被改"，另外现在连它们的 key 也一起钉住
+    //    （🔴 两个选项在 `request` 的 builtin 数组与 `valueEnum` 里**共用同一个 key**，
+    //     那是"同一性质一处口径"，谁把它们拆成两个 key，localePackParity 的同值检查会看出来）。
+    assert.match(form, /label=\{t\('siteInfo\.uiStyle\.label', '界面风格'\)\}/);
+    assert.match(form, /apple: t\('siteInfo\.uiStyle\.apple', 'Apple 风格（推荐）'\)/);
+    assert.match(form, /default: t\('siteInfo\.uiStyle\.default', '默认（原卡片风格）'\)/);
     assert.match(form, /fieldProps=\{\{ defaultValue: 'apple' \}\}/);
     // 说明清楚它只改样式、可随时切回
     assert.match(form, /只改样式不改结构/);

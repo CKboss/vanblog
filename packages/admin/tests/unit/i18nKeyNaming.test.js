@@ -35,12 +35,13 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 /** 🔴 当前实测基线（改这些数字必须是有意的，并在注释里写明理由）。 */
 // 🔴 114 → 186（2026-09-25 期 3 第二批）→ 194（期 9 第一批：8 个 `error.<code>`）→ 204（期 9 第二批：+10 个）→ 216（期 9 第三批：+12 个）→ 267（期 9 第四批：回收站 +51 个）→ 307（期 3 第三批：Token/高级设置 +41，并把 recycle.colOption 提升为 common.colOption）
 //   → 325（期 3 第四批：用户设置 +19，并把 sysconf.token.deleteConfirmTitle 提升为 common.deleteConfirmTitle）
-//   → **356**（期 3 第五批：HTTPS/Caddy +32，并把 sysconf.token.relatedDocs 提升为 common.relatedDocs）
+//   → 356（期 3 第五批：HTTPS/Caddy +32，并把 sysconf.token.relatedDocs 提升为 common.relatedDocs）
+//   → **462**（期 4：SiteInfoForm +106 —— 目前最大的单文件批次）
 //   这条是**进度下界**（key 变少 = 有人删了译文、或包被截断），所以每翻完一批就该跟着抬 ——
 //   期 3 第一批（145 key）时没抬，本轮补上。
 //   🔴 这里也是"key 数下界"的**唯一权威口径**：`i18nSharedImpl` 只证明 readPack 没坏（三份相等且非平凡），
 //   `localePackParity` 只做"三份都空 ⇒ 集合相等"的反空转（>= 50），都不写具体进度数字。
-const BASELINE_KEY_COUNT = 356;
+const BASELINE_KEY_COUNT = 462;
 const BASELINE_GRANDFATHERED = 20;
 const REGISTERED = astInventory.REGISTERED_KEY_GROUPS;
 
@@ -212,7 +213,17 @@ test('i18n key 命名 · 尺子反证：合成输入必须被点名（证明判�
     `四段 key 的失败理由必须点名"段数"，实际：${r1.reasons.join('；')}`,
   );
   // ② 未登记的组 ⇒ 必须不合规，且理由点名"组"
-  const r2 = v('siteInfo.basic.title');
+  // 🔴 这个合成组名**当初就踩过坑**：原来写的是 `siteInfo.basic.title`，
+  //    而 2026-09-26 期 4 真的把 `siteInfo` 登记成了组（SiteInfoForm 那批）⇒ 合成用例变成合法，
+  //    反证反过来报"尺子失效" —— 🔴 红的消息指向了错误的方向（听起来像判据坏了，其实是夹具过期了）。
+  //    ⇒ **规矩：合成夹具要用"一看就是假"的名字，并且先断言它当前确实不合法**；
+  //      这样将来它被真的登记了，红的是"换个名字重做这条反证"，而不是"尺子失效"。
+  const SYNTH_GROUP = 'zzNotARealGroup';
+  assert.ok(
+    !astInventory.REGISTERED_KEY_GROUPS.includes(SYNTH_GROUP),
+    `${SYNTH_GROUP} 居然已经是登记组了 ⇒ 换一个一看就是假的名字重做这条反证`,
+  );
+  const r2 = v(`${SYNTH_GROUP}.basic.title`);
   assert.strictEqual(r2.ok, false, '尺子失效：未登记组的 key 被判为合规');
   assert.ok(
     r2.reasons.some((x) => x.includes('不是已登记的组')),

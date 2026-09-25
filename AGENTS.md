@@ -9469,6 +9469,101 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.148 期 4：`SiteInfoForm`（106 条，目前最大的单文件批次）—— 顺手把 admin 类型门禁的 TS2769 **清零**
+
+**交付**：`components/SiteInfoForm/index.tsx` 全量接 i18n（🔴 **108 条裸中文 → 0**，**150 个替换点** / 109 个 key 引用）；
+语言包 **356 → 462 key**（新增 106：`siteInfo.*` 102 + `common.show|hide|allow|disallow` 4）；
+棘轮清单 **19 → 20 个文件**（新文件预算 0，🔴 **TOTAL 仍 53**）；`i18nKeyNaming` 下界 → **462**；
+新登记组 🔴 **`siteInfo`**（组件被**初始化向导**与**系统设置→站点配置**共用 ⇒ 按"跨页复用的组件用自己的名字做组"，
+不塞进 `init.*` / `sysconf.*` 那两个**页面**组，否则另一侧的调用方就得跨组借 key）；
+`localePackParity` 自动发现下界 **16 → 17 个文件 / 320 → 470 个调用点**（实测 17 / 477）。
+🔴 **顺手把 admin 类型门禁的一类错误清零**：**TS2769 3 → 0**、admin src 错误 **29 → 26**（棘轮基线随之下调）。
+🔴 **浏览器活体 19/19（6–7 项判据 × 3 语），problems 0、skipped 0**：三个内层页签（基本/高级/布局）里
+**45 个 label 全部渲染且逐个等于语言包里的值**（顺带证明"没有死 key"）、placeholder **按字段逐个**核对、
+5 个下拉的选项文案、一条长 tooltip 全文、label 的 bounding box 非 0；
+并且 🔴 **en-US 下"仍应是中文"的那两个统计 ID 字段恰好还是中文**（反向钉住：暂缓项既没被偷翻、也没丢）。
+证据：`vanblog_dev/i18n-browser-evidence/phase4-siteinfoform/`（3 张全页截图 + `result.json` + trace）。
+
+#### A. 🔴 机械化改造要用 **AST + 偏移替换**，不能靠正则（108 条 / 150 个替换点）
+这个文件是 45 个字段 × (label / placeholder / tooltip / valueEnum) 的重复形状，而形状有 4 种变体
+（`label="x"`、`placeholder={'x'}`、`tooltip={\n 'x'\n}`、`valueEnum={{ true: '显示' }}`）⇒
+🔴 **正则改必漏**，而漏一条**不会报错、只会让那条文案永远中文**。
+做法（脚本 `vanblog_dev/migrate-siteinfoform.cjs`，一次性、不入库）：
+① AST 遍历 `JSXOpeningElement`，从**同一元素的 `name` 属性**取字段名（不需要父节点信息）；
+② 生成 key `siteInfo.<字段名>.<label|placeholder|tooltip|枚举键>`（3 段，命名守卫认）；
+③ 🔴 按**字符偏移**收集替换 → 排序 → **断言区间不重叠** → 反向应用 → **一次写盘**（并核对前后 sha）；
+④ 写完立刻用**共享模块**验证：`bareChinese` 归 **0**、`collectTCalls` = **150** 且**每条都带字面量 defaultMessage**、动态 id = **0**。
+🔴 **去重规则**（"同一性质一处口径"）：同字段同值只给一个 key ⇒ `uiStyle` 的两个内置主题在 `request` 的 builtin 数组
+与 `valueEnum` 里**共用** `siteInfo.uiStyle.apple|default`（`appleTheme` 守卫的锚点已同步换成新形状、并把这个 key 钉住）。
+通用词**复用**既有 key：显示/隐藏/允许/不允许 → 新增 `common.show|hide|allow|disallow`；
+开启/关闭 → 既有 `common.enabled|disabled`；「这是必填项」→ 既有 `init.field.required`。
+⚠️ 两处**刻意不在本批翻**（都不在这个文件里 ⇒ 预算 0 是真的 0）：GA / 百度统计那两个统计 ID 字段的文案来自共享模块
+`@/utils/analysisFields`（被 `analysisFields` 守卫与**文档措辞**钉在一起，属已裁定的暂缓项）。
+
+#### B. 🔴 顺手清掉一类**被复制了 4 次**的类型错误（TS2769 3 → 0，admin src 29 → 26）
+新写的 `SiteInfoForm` 是 `.tsx`，抄了仓库里既有的翻译器声明形状：
+`const t = (id: string, defaultMessage: string, values?: Record<string, unknown>) => intl.formatMessage({ id, defaultMessage }, values)`
+⇒ 🔴 **react-intl 3 的 `formatMessage` 第二个形参要的是 `Record<string, PrimitiveType | FormatXMLElementFn<…>>`，
+而 `Record<string, unknown>` 不可赋值给它** ⇒ 每个这样写的 `.tsx` 都背一条 **TS2769（没有匹配的重载）**。
+这个形状在仓库里被复制过 **4 次**（`ThemeButton` / `InitPage` / `RestoreFromBackup` + 本批的 `SiteInfoForm`），
+🔴 前 3 条早就在门禁基线里（`BASE_TS2769=3`）⇒ **基线把"同一个错误复制了 3 份"当成了正常水位**。
+修法：4 处一起改成 `Record<string, any>`，并在声明处写明理由（防止有人"好心"改回 unknown）；
+门禁基线随之下调 **29 → 26、TS2769 3 → 0**（棘轮只许调小，这次是**真的调小**）。
+🔴 **变异对照（类型级）**：把 `any` 改回 `unknown` ⇒ 门禁 **21/2 红**并点名 `SiteInfoForm/index.tsx(25,48) TS2769`；
+改回 `any` ⇒ **23/0 绿**。
+👉 **教训：棘轮的"分类基线"里如果某一类全是同一个形状，那通常不是水位、而是一个被复制的 bug** ——
+遇到"新增 1 处 TS2769"时先去读那 3 处老的，很可能一并就能清掉。
+⚠️ 另：本轮我自己又踩了一次 **TS5069**（手动跑 tsc 时给了 `--tsBuildInfoFile` 而配置里没有 `incremental`
+⇒ tsc 只报这一条、看起来像"0 错误"）⇒ 手册那条"先确认 TS5xxx/TS6xxx 为 0 再信任何计数"再次生效
+（门禁脚本自己的调用是对的，踩的是我临时敲的那条命令）。
+
+#### C. 🔴 真发现：「界面风格」下拉里的**主题名是服务端数据，不是文案**
+三语实测：那个下拉的选项**永远是**「Apple 风格」「默认（原卡片风格）」（简体），因为选项来自
+`listThemes()` → 🔴 **`/api/admin/theme/all`**（服务端返回的主题名；`skinTheme.js` 只是接口封装，它的 `bareChinese` = 0）。
+⇒ 我翻的 `siteInfo.uiStyle.apple|default` **不是死 key**，但只在两条路径上生效：
+① **初始化向导**（`props.isInit` ⇒ 用 `valueEnum`；那时没有登录态、调不了 `/api/admin/**`）；
+② 请求失败回落到 `builtin` 数组时。
+🔴 **这属于"数据 i18n"**（与站长已裁定不做的"内容 i18n"同族）：要让内置主题名跟随语言，
+得让服务端返回 **id** 而由 admin 映射文案，或服务端按 locale 出名字；而**用户上传的主题名**天然不可翻（那是用户数据）。
+⇒ 本轮**不改**，登记为待站长裁定项；🔴 探针里把 `uiStyle` 从下拉判据中**显式排除并记录原因**（`phSkipped`），不是悄悄少查。
+
+#### D. 🔴 合成夹具的名字**过期**了，而红的消息指向了错误的方向
+`i18nKeyNaming` 的尺子反证原本用 `siteInfo.basic.title` 当"未登记组"的反例 —— 而本批**真的登记了 `siteInfo` 组**
+⇒ 合成用例变成合法，反证反过来报「尺子失效：未登记组的 key 被判为合规」。
+🔴 这条红的消息**指向了错误的方向**（听起来像判据坏了，其实是夹具过期）。
+修法：换成一看就是假的 `zzNotARealGroup`，并且 🔴 **先断言它当前确实未登记**
+（`assert.ok(!REGISTERED_KEY_GROUPS.includes(SYNTH_GROUP), '…居然已经是登记组了 ⇒ 换个名字重做这条反证')`）
+⇒ 将来它被真的登记时，红的是"换个名字"，而不是"尺子失效"。
+👉 **规矩：合成夹具要用"一看就是假"的名字，并且自带"它当前确实不合法"的前置断言** ——
+这与 `siteInfoFieldParity` 里那条"合成字段名居然真的存在于 DTO ⇒ 换个名字重做"是同一个模式（那处早就写对了）。
+
+#### E. 探针教训（4 条，全是**尺子**的问题，不是产品的问题）
+1. 🔴 **Select 的 placeholder 不是 `input[placeholder]`**：antd 渲染成 `.ant-select-selection-placeholder`
+   （有值时是 `.ant-select-selection-item`）⇒ 第一版只量 input 属性，4 个下拉的 placeholder 全被误判成"没渲染"。
+   改成**按字段逐个量**（从 key 反推字段名 → 找那个控件 → 三种位置都看）。
+2. 🔴 **`.ant-tabs-tab-active` 会先命中外层页签**：`PageContainer` 的外层页签与 `Card tabList` 的内层页签**都是 `.ant-tabs`**
+   ⇒ 必须限定 `.ant-card-head .ant-tabs-tab-active`（第一版三语都报"激活的是站点配置"，看起来像 URL 导航失效）。
+3. 🔴 **诊断信息别用 `a || b || c` 兜底**：第一版 `note(JSON.stringify(snap.missingLabels || snap.unexpectedLabels || snap.selectBad))`
+   **恒打印 `[]`** —— 因为 🔴 **`[]` 在 JS 里是 truthy**！⇒ 红灯有了、线索没有。改成按判据名取对应字段。
+   👉 这与"空的绿"是同一族错误：**空数组做兜底会把诊断吃掉**。
+4. ⚠️ 内层页签用 `useTab('basic','siteInfoTab')` ⇒ **key 在查询串里**（`?tab=siteInfo&siteInfoTab=layout`）
+   ⇒ 用 URL 导航比"按中文文案点击"稳（切语言后文案会变、key 不会），并且要**验证导航真的生效**（量激活页签的文本）。
+
+#### F. 基线
+- admin `node --test` **743 tests / 165 suites / 0 fail**；i18n 守卫组仍 **100**（本批只改判据数值与夹具，没加新断言）；
+- 🔴 **admin 类型门禁 23/0，基线 29 → 26、TS2769 3 → 0**（B 段）；
+- 变异对照 **6/6（B8）+ 1 条类型级**（`any` ↔ `unknown`）；
+- 语言包 **462 key** ×3；`--zh-tw-audit`：462 key / **606** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **20 个文件 / TOTAL 53**（= 48 目标底 + 4 欠条 + 1 永久例外）；
+- 矩阵（5 个阶段全 rc=0）：admin **743/165/0**、守卫 **35 文件 / 3152 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.1d154364.js` = **1,420,155 B**）；
+- 🔴 **真实剩余（bareChinese 口径）：109 → 108 个文件 / 1,610 → 1,502 条**（本批 −108 条，是目前单批最大的一次）。
+- 🔴 **下一批**：① `SystemConfig` 只剩 `Backup.jsx`(89) / `Theme.jsx`(59) / `migrate.tsx`(5) /
+  `SiteInfo.tsx`(8，含 3 个内层页签标签)，🔴 其中 Backup/Theme 的译文要**交站长人工复核**（备份/恢复/主题属运维高危文案）；
+  ② 期 5 `components` 大桶（`Static/img` 71、`Editor/index.jsx` 64、`WaterMarkForm` 35…）；
+  ③ 期 9 批 5：`user.provider` 那 5 处带中文 `label` 参数的模板消息；
+  ④ C 段那个"内置主题名要不要跟随语言"待站长裁定；⑤ §7.145 H 的导出族临时目录可注入化。
 ### 7.147 期 3 第五批：HTTPS（Caddy）页签（32 条）—— 棘轮里第一笔**永久例外**（URL 锚点），以及"文字+链接+文字"混排怎么翻
 
 **交付**：`SystemConfig/tabs/Caddy.jsx` 的 33 条裸中文翻了 **32** 条（34 个调用点），🔴 **预算 1**；

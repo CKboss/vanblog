@@ -61,7 +61,12 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
    * （所以那些单测逐字不变）。这里把 react-intl 的 `formatMessage` 适配成同一个签名。
    * `defaultMessage` 一律带上：漏翻译时回落中文，而不是把裸 key 显示给用户。
    */
-  const t = (id: string, defaultMessage: string, values?: Record<string, unknown>) =>
+  // 🔴 `values` 必须是 `Record<string, any>`：react-intl 3 的 `formatMessage` 第二个形参要的是
+  //    `Record<string, PrimitiveType | FormatXMLElementFn<…>>`，而 `Record<string, unknown>` **不可赋值**给它
+  //    ⇒ 实测报 **TS2769（没有匹配的重载）**。这个形状在仓库里复制过 4 次，4 处都因此各背一条类型错误
+  //    （admin 类型门禁的 TS2769 基线本来就是 3）⇒ 期 4 一并改成 any、把基线降到 0。
+  //    ⚠️ 别"好心"改回 unknown：那会把 TS2769 带回来（棘轮会红，而且红得很莫名）。
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
     intl.formatMessage({ id, defaultMessage }, values);
   const [phase, setPhase] = useState<Phase>('idle');
   const [percent, setPercent] = useState(0);

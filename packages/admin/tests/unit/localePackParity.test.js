@@ -136,6 +136,11 @@ const IDENTICAL_ZH_TW_OK = [
   'sysconf.token.title', // Token 管理
   // 🔴 期 3 第四批：`common.edit`（修改 —— 修/改 两字简繁同形）
   'common.edit', // 修改
+  // 🔴 期 4（SiteInfoForm）新增 3 条：`作者名字` / `作者描述` / `作者 Logo` ——
+  //    作/者/名/字/描/述 与 Logo 全部简繁同形，逐字核实过（不是偷懒）。
+  'siteInfo.author.label', // 作者名字
+  'siteInfo.authorDesc.label', // 作者描述
+  'siteInfo.authorLogo.label', // 作者 Logo
 ];
 
 /**
@@ -281,12 +286,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 16,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 16）⇒ 遍历或解析器坏了`,
+      FILES.length >= 17,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 17）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 320,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 320）⇒ 疑似解析器坏了`,
+      calls.length >= 470,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 470）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -300,6 +305,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/SystemConfig/tabs/Advance.jsx',
       'src/pages/SystemConfig/tabs/User.jsx',
       'src/pages/SystemConfig/tabs/Caddy.jsx',
+      'src/components/SiteInfoForm/index.tsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }

@@ -32,7 +32,12 @@ describe('admin copy sync (#197)', () => {
 
   it('uses 定制化 on layout toggle, tooltip, and save confirm', () => {
     assert.match(siteInfoFormSrc, /name=\{'enableCustomizing'\}/);
-    assert.match(siteInfoFormSrc, /label="是否开启定制化功能"/);
+    // 🔴 期 4 起标签走 t()：锚点换成**新形状**（key + zh-CN defaultMessage 一起钉），性质没放 ——
+    //    仍然要求"这个字段的标签就是『是否开启定制化功能』这句话"，而且现在连它的 key 也一起钉住了。
+    assert.match(
+      siteInfoFormSrc,
+      /label=\{t\('siteInfo\.enableCustomizing\.label', '是否开启定制化功能'\)\}/,
+    );
     assert.match(siteInfoFormSrc, /通过定制化面板/);
     assert.doesNotMatch(siteInfoFormSrc, /客制化/);
 

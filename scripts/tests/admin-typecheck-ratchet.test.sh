@@ -54,14 +54,22 @@ TIMEOUT_S=300
 #    （减少时本守卫会**打出提示但仍然 pass** —— 与 strict-null-ratchet 同一取舍。）
 # 实测于 2026-09-25，口径：`tsconfig.typecheck.json`（typeRoots 受限 + `@@/*` 别名 + 样式声明），
 # tsc 4.9.5，`allowJs: false` ⇒ **只覆盖 `.ts`/`.tsx`（105 个文件），不含 `.jsx`/`.js`**。
-BASELINE_ADMIN=29   # admin 自己 src/ 里的错误总数
+# 🔴 29 → **26**（2026-09-26 期 4）：清掉了 **TS2769 ×3** ——
+#   那 3 条都是同一个形状：`const t = (id, defaultMessage, values?: Record<string, unknown>) =>
+#   intl.formatMessage({ id, defaultMessage }, values)`。react-intl 3 的 `formatMessage` 第二个形参要的是
+#   `Record<string, PrimitiveType | FormatXMLElementFn<…>>`，而 `Record<string, unknown>` **不可赋值**给它
+#   ⇒ 每个这样写的 .tsx 都背一条"没有匹配的重载"。这个形状在仓库里被复制过 4 次
+#   （ThemeButton / InitPage / RestoreFromBackup，加上期 4 新写的 SiteInfoForm 正好第 4 次撞上）
+#   ⇒ 一并改成 `Record<string, any>` 并在声明处写明理由（防止有人"好心"改回 unknown）。
+#   🔴 所以 TS2769 的分类基线也从 3 降到 **0**：将来再出现就是**新形状的新问题**，必须当场修。
+BASELINE_ADMIN=26   # admin 自己 src/ 里的错误总数
 BASELINE_DEP=2      # 依赖自带 .ts 的错误（mdast-util-mark@1.0.0），admin 侧修不了 ⇒ 单独一桶
 
 # 分类基线（🔴 必须分类计数：否则"某一类涨了、另一类降了"会被总数掩盖）
-#   实测分布：TS2322 14 / TS2339 7 / TS2769 3 / TS2345 2 / TS18048 2 / TS2538 1 = 29
+#   实测分布（2026-09-26 期 4 之后）：TS2322 14 / TS2339 7 / TS2769 **0** / TS2345 2 / TS18048 2 / TS2538 1 = 26
 BASE_TS2322=14   # 类型不可赋值（多是 antd 4 的 props 形状 vs 实际传值）
 BASE_TS2339=7    # 属性不存在
-BASE_TS2769=3    # 没有匹配的重载
+BASE_TS2769=0    # 没有匹配的重载（🔴 期 4 清零：那 3 条是同一个 t() 声明形状，见 BASELINE_ADMIN 上的注释）
 BASE_TS2345=2    # 实参类型不匹配（admin src 内的；依赖那 2 条另算）
 BASE_TS18048=2   # 可能是 undefined
 BASE_TS2538=1    # 类型不能用作索引
