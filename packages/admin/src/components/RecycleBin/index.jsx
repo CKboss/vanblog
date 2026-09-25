@@ -257,7 +257,8 @@ export default function RecycleBin(props) {
     render: (_, record) => formatDeletedAt(record?.deletedAt),
   };
   const optionColumn = {
-    title: t('recycle.colOption', '操作'),
+    // 🔴 用 common.colOption（从 recycle.colOption 提升）：这一列头在回收站与 Token 页是同一个性质 ⇒ 一个 key
+    title: t('common.colOption', '操作'),
     key: 'option',
     width: 150,
     render: (_, record) => (

@@ -80,6 +80,11 @@ const BUDGET = {
   //   🔴 而"不传 t 时输出与改造前逐字相同"由 `recycleBin.test.js` 的既有 30 条断言钉住（一条都没改就全绿）。
   'src/components/RecycleBin/index.jsx': 0,
   'src/components/RecycleBin/recycleCore.js': 0,
+  // 🔴 期 3 第三批（2026-09-26）：SystemConfig 的 Token 与高级设置两个页签全量接完 ⇒ 预算 0。
+  //   ⚠️ `Token.tsx` 是 **.tsx** ⇒ 它在 admin 的类型检查门禁范围内（`allowJs:false` 只放过 .js/.jsx），
+  //   改它必须保证 `admin-typecheck-ratchet` 不倒退。
+  'src/pages/SystemConfig/tabs/Token.tsx': 0,
+  'src/pages/SystemConfig/tabs/Advance.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -186,7 +191,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 15, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 17, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   assert.strictEqual(TOTAL_BUDGET, 52, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   assert.strictEqual(REQUIRED_EXCEPTIONS.length, 4, '例外清单条数变了 ⇒ 必须是有意的');
 });

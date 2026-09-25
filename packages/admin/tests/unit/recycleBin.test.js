@@ -313,6 +313,8 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
       删除时间: 'recycle.colDeletedAt',
       字数: 'recycle.colWordCount',
       作者: 'recycle.colAuthor',
+      // 🔴 「操作」已提升为 common.colOption（Token 页也要用它）⇒ 锚点跟着换，性质不变
+      操作: 'common.colOption',
     };
     for (const [label, key] of Object.entries(COLS)) {
       assert.ok(

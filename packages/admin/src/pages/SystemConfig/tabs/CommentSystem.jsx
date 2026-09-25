@@ -47,7 +47,13 @@ export default function CommentSystem() {
   //    在模块加载期调用会拿到 undefined（与 app.jsx 的 links 数组同一条约束，见手册 §7.134）。
   //    t() 的第二个实参是 defaultMessage，必须与 zh-CN 语言包里的值逐字相同（localePackParity 钉住）。
   const intl = useIntl();
-  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  // 🔴 **必须 useCallback**：下面的 `load` 把 `t` 放进了依赖数组，而"每次渲染新建一个函数"会让
+  //    useCallback → useEffect 每轮都重跑 ⇒ 无限请求循环（回收站那批实测过：表格永远 loading、把限流打满）。
+  //    `intl` 只在语言变化时换引用 ⇒ 既稳定、又能在切语言后拿到新译文（修掉"切语言后错误提示仍是旧语言"）。
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,7 +67,9 @@ export default function CommentSystem() {
     } finally {
       setLoading(false);
     }
-  }, []);
+    // 🔴 依赖数组里必须有 t：否则这个 callback 会**永远闭包住首轮渲染的翻译器**，
+    //    切语言之后再触发的失败提示仍是旧语言（要重挂载才更新）。
+  }, [t]);
 
   useEffect(() => {
     load();

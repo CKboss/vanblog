@@ -322,7 +322,6 @@ export default {
   'recycle.colTags': '标签',
   'recycle.colUpdatedAt': '更新时间',
   'recycle.colDeletedAt': '删除时间',
-  'recycle.colOption': '操作',
   'recycle.restore': '恢复',
   'recycle.purge': '永久删除',
   'recycle.noPermission': '当前账号无操作权限',
@@ -366,5 +365,55 @@ export default {
   'recycle.actionFailure403': '当前账号没有{action}这条{label}的权限{permission}，请联系管理员。',
   'recycle.actionFailure401': '登录已失效，请重新登录后再试。',
   'recycle.actionFailureGeneric': '{action}失败{detail}，请稍后重试。',
+
+
+  // ── 🔴 期 3 第三批：SystemConfig 的「Token 管理」与「高级设置」两个页签（41 条）──
+  //    zh-CN 的值由脚本**直接从源码的 defaultMessage 抽出**（构造出逐字相同，不靠人核对）。
+  //    🔴 `common.colOption` 是从 `recycle.colOption` **提升**上来的：「操作」这一列头在回收站与 Token 页
+  //    是同一个性质 ⇒ 一个 key（提升后 RecycleBin 也改用它，不留同值的第二处口径）。
+  //    ⚠️ `common.enabled`/`common.disabled`（开启/关闭）与 `sysconf.comment.on`/`off`（开/关）刻意分开：
+  //    前者是**通用开关选项**（英文 Enabled/Disabled），后者是评论系统那一档的**短标签**（英文 On/Off），
+  //    是两个不同性质，不是同值重复。
+  'common.colName': '名称',
+  'common.colContent': '内容',
+  'common.colOption': '操作',
+  'sysconf.token.deleteConfirmTitle': '删除确认',
+  'sysconf.token.deleteConfirmBody': '是否确认删除该 Token？',
+  'common.deleteSuccess': '删除成功！',
+  'common.delete': '删除',
+  'sysconf.token.title': 'Token 管理',
+  'sysconf.token.createTitle': '新建 API Token',
+  'common.create': '新建',
+  'sysconf.token.swaggerOffWithDocs': '实时 API 文档（swagger）默认关闭：设 VANBLOG_SWAGGER=true 并重启后可用。已为你打开仓库里的 API 文档。',
+  'sysconf.token.swaggerOff': '实时 API 文档（swagger）默认关闭：设 VANBLOG_SWAGGER=true 并重启后可用。',
+  'sysconf.token.apiDocs': 'API 文档',
+  'sysconf.token.helpTitle': 'Token 管理功能介绍',
+  'sysconf.token.helpP1': '创建的 Api Token 可以用来调用 VanBlog 的 API',
+  'sysconf.token.helpP2': '结合 API 文档，您可以做到很多有意思的事情。',
+  'sysconf.token.helpP3': 'API 文档现在比较水，会慢慢完善的，未来会有 API Playgroud，敬请期待。',
+  'sysconf.token.helpP4': 'PS：暂时没必要通过 API 开发自己的前台，后面会出主题功能（完善的文档和开发指南，不限制技术栈），届时再开发会更好。',
+  'sysconf.token.relatedDocs': '相关文档',
+  'sysconf.advance.loginCard': '登录安全策略',
+  'sysconf.advance.retryLockedAlert': '开启最大登录失败次数限制目前还不稳定！暂时先不可配置，稳定后开放。',
+  'sysconf.advance.demoBlockedLogin': '演示站禁止修改登录安全策略！',
+  'sysconf.advance.maxRetryLabel': '开启最大登录失败次数限制',
+  'common.enabled': '开启',
+  'common.disabled': '关闭',
+  'sysconf.advance.maxRetryTooltip': '设置里没有显式关掉时是开启的：同一访客 IP 连续登录失败 5 次后要等 5 分钟才能再试（服务端默认值；此项在界面里是锁定的）',
+  'sysconf.advance.expiresInLabel': '登录凭证(Token)有效期(秒)',
+  'sysconf.advance.expiresInPlaceholder': '默认为 7 天',
+  'sysconf.advance.expiresInTooltip': '默认为 7 天。最小 60 秒：这个值会原样进 JWT 的 expiresIn，0/负数会让签出来的 token 立刻过期（登录看起来成功、下一个请求就被踢回登录页），所以在表单这一层就夹住。',
+  'sysconf.advance.isrCard': '静态页面更新策略',
+  'sysconf.advance.demoBlockedIsr': '演示站禁止修改静态页面更新策略！',
+  'sysconf.advance.isrModeDelay': '延时自动',
+  'sysconf.advance.isrModeOnDemand': '按需自动',
+  'sysconf.advance.isrModeTooltip': '默认「按需自动」：后台有改动时由后端立刻触发重渲染，实时性高、可能需要更多性能。改成「延时自动」则按下面的秒数周期性重建。',
+  'sysconf.advance.delayLabel': '延时自动更新时间(秒)',
+  'sysconf.advance.delayTooltip': '仅在「延时自动更新」模式下生效：每隔这么多秒，前台会尝试用最新的后端数据重新生成静态页面。\n\n前台会把这个值夹到最小 60 秒（填更小也按 60 算），填非数字会被忽略而不是让构建失败。\n\n默认的「按需更新」模式不看这个值：改文章时由后端主动触发重渲染，另外有一个 24 小时的兜底周期，万一某次触发丢了也能自愈。',
+  'sysconf.advance.isrManualCard': '手动触发静态页面更新',
+  'sysconf.advance.isrManualAlert': '通常来说你不需要这样做，但某些情况下你也可以手动触发增量渲染。这会让后端尝试重新验证/渲染已知所有路由（触发完成后需要一些时间生效）。',
+  'sysconf.advance.isrManualOk': 'ISR 手动触发成功！',
+  'sysconf.advance.isrManualFail': 'ISR 触发失败！',
+  'sysconf.advance.isrManualBtn': '手动触发',
 
 };

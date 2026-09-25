@@ -123,7 +123,6 @@ const IDENTICAL_ZH_TW_OK = [
   // 🔴 期 9 第四批（回收站）新增 8 条：都是**简繁同形**的短词或纯标点/占位符模板 ——
   //    操作 / 作者（两个字简繁同形）、文章 / 草稿（同上）、「{title}」与（{message}）（只有引号与占位符）、
   //    （需要 {permission}）（需/要/perm 均同形）。逐字核实过，不是偷懒。
-  'recycle.colOption', // 操作
   'recycle.colAuthor', // 作者
   'recycle.titleQuoted', // 「{title}」
   'recycle.actionFallback', // 操作
@@ -131,6 +130,10 @@ const IDENTICAL_ZH_TW_OK = [
   'recycle.labelDraft', // 草稿
   'recycle.detailWrap', // （{message}）
   'recycle.permissionWrap', // （需要 {permission}）
+  // 🔴 期 3 第三批：`common.colOption`（从 recycle.colOption **提升**上来，Token 页与回收站共用）
+  //    与 `sysconf.token.title`（'Token 管理' —— Token 是拉丁字母，管理简繁同形）。
+  'common.colOption', // 操作
+  'sysconf.token.title', // Token 管理
 ];
 
 /**
@@ -273,15 +276,15 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     //    （纯 JS、被 `node --test` 直接 require、拿不到 umi 运行时）⇒ 它们用**注入式翻译器**，
     //    调用点是 `t(id, 中文常量)` 这种**动态 id**，自动发现**看不见**（`collectTCalls` 刻意跳过动态 id）。
     //    它们的对账由本文件下面那个「纯 JS 核心模块的注入式翻译器」describe 单独钉（SETUP_KEY_HINT_IDS ↔ 三份包）。
-    // 🔴 10 → **12**、160 → **210**（期 9 第四批：`RecycleBin/index.jsx` 23 个调用点 +
-    //    `RecycleBin/recycleCore.js` 32 个）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
+    // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
+    //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 12,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 12）⇒ 遍历或解析器坏了`,
+      FILES.length >= 14,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 14）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 210,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 210）⇒ 疑似解析器坏了`,
+      calls.length >= 260,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 260）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -291,6 +294,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/SystemConfig/tabs/Customizing.jsx',
       'src/components/RecycleBin/index.jsx',
       'src/components/RecycleBin/recycleCore.js',
+      'src/pages/SystemConfig/tabs/Token.tsx',
+      'src/pages/SystemConfig/tabs/Advance.jsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -340,6 +345,63 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       '🔴 这些地方的依赖数组里放了**每次渲染都会变**的 t（会造成无限渲染/请求循环，界面上表现为永远 loading）：\n  ' +
         offenders.join('\n  ') +
         '\n修法：const t = useCallback((id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values), [intl]);',
+    );
+  });
+
+  it('🔴 hook 的回调体里用了 `t`，依赖数组就必须带上 `t`（否则切语言后仍是旧译文）', () => {
+    // ## 这条与上一条（"不稳定的 t 不许进依赖数组"）是**一对**，缺一条就有缺陷：
+    //   - 只钉"稳定" ⇒ 有人图省事把 `t` 从依赖数组里删掉，闭包永远闭住**首轮渲染**的翻译器
+    //     ⇒ 🔴 切语言之后再触发的提示仍是旧语言（要重挂载才更新）。实测就是这样发现的：
+    //     `CommentSystem.jsx` 的 `load` 原本是 `useCallback(..., [])`，而它体内用了 `t`。
+    //   - 只钉"声明" ⇒ 有人会放一个不稳定的 `t` 进去 ⇒ 无限渲染/请求循环（§7.144 A）。
+    // ⇒ 正确的形状只有一个：`t` 用 `useCallback([intl])` 包，**并且**出现在用到它的那些依赖数组里。
+    const HOOKS = new Set(['useCallback', 'useEffect', 'useMemo']);
+    const refersToT = (nd) => {
+      let found = false;
+      const walk = (n) => {
+        if (!n || typeof n !== 'object' || found) return;
+        if (n.type === 'Identifier' && n.name === 't') {
+          found = true;
+          return;
+        }
+        for (const k of Object.keys(n)) {
+          if (k === 'loc') continue;
+          const v = n[k];
+          if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walk(x));
+          else if (v && typeof v === 'object' && v.type) walk(v);
+        }
+      };
+      walk(nd);
+      return found;
+    };
+    const stale = [];
+    for (const rel of FILES) {
+      const src = read(rel);
+      const ast = astInventory.parseSource(src, rel);
+      astInventory.walkAst(ast.program, (nd) => {
+        if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
+        if (!HOOKS.has(nd.callee.name)) return;
+        const args = nd.arguments || [];
+        if (args.length < 2) return; // 没有依赖数组（例如 useEffect(fn)）⇒ 每次渲染都跑，不存在 staleness
+        const deps = args[args.length - 1];
+        if (!deps || deps.type !== 'ArrayExpression') return;
+        if (!refersToT(args[0])) return;
+        const names = (deps.elements || []).map((e) => (e && e.type === 'Identifier' ? e.name : null));
+        if (!names.includes('t')) {
+          stale.push(
+            `${rel}:${nd.loc ? nd.loc.start.line : '?'} ${nd.callee.name} 的回调体用了 t，但依赖数组是 [${names
+              .filter(Boolean)
+              .join(', ')}]`,
+          );
+        }
+      });
+    }
+    assert.deepEqual(
+      stale,
+      [],
+      '🔴 这些 hook 闭包住了**首轮渲染的翻译器**（切语言后提示/文案仍是旧语言，要重挂载才更新）：\n  ' +
+        stale.join('\n  ') +
+        '\n修法：把 t 加进依赖数组（并且 t 必须是 useCallback([intl]) 包的，见上一条断言）。',
     );
   });
 

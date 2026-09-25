@@ -9469,6 +9469,106 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.145 期 3 第三批：Token 管理 + 高级设置（41 条）—— 以及"切语言后仍说旧语言"的 staleness、我自己的矩阵脚本"绿得像样"的缺陷
+
+**交付**：`SystemConfig/tabs/Token.tsx`(20 条) 与 `Advance.jsx`(24 条) 全量接 i18n（**裸中文都归 0**）；
+语言包 **267 → 307 key**；棘轮清单 **15 → 17 个文件**（两个新文件预算 0，🔴 **TOTAL_BUDGET 仍 52**）；
+`i18nKeyNaming` 下界 267 → **307**；`localePackParity` 自动发现下界 **12 → 14 个文件 / 210 → 260 个调用点**（实测 14 / 266）。
+🔴 **浏览器活体 45/45（15 项判据 × 3 语），problems 0**：卡片标题、表格列头、三个按钮、帮助弹窗（标题 + 4 段正文）、
+新建弹窗（标题 + 表单标签）、**删除确认**（标题 + 正文；🔴 真建了一个 token 才采得到）、高级设置三张卡片标题、
+两条 Alert、四个表单标签、Select 当前值、ISR 两个下拉选项、**长 tooltip 全文**、手动触发 ISR 的成功 toast。
+`Missing message` **0**、非预期 `console.error`/`pageerror` **0**、`<html lang>` 跟随。
+🔴 **期望值不重敲**：探针直接从三份语言包 `readPack()` 读出来比对 ⇒ 它证明的是"**屏幕上那串字 == 语言包里那串字**"，
+而不是"我以为它应该长这样"。证据：`vanblog_dev/i18n-browser-evidence/phase3-sysconf-batch3/`（3 张截图 + `result.json` + 31 步 trace）。
+
+#### A. 🔴 修掉一个真缺陷：切语言之后再触发的提示仍是**旧语言**（staleness）
+`CommentSystem.jsx` 的 `load` 原本是 `useCallback(..., [])`，而它体内用了 `t` ⇒
+这个闭包**永远持有首轮渲染的翻译器** ⇒ 切语言之后再触发的失败提示仍是旧语言（要重挂载才更新）。
+修法：`t` 用 `useCallback([intl])` 包 + 把 `t` 放进依赖数组。
+🔴 **并且把"另一半"也变成守卫**：上一批只钉了"不稳定的 `t` 不许进依赖数组"（防无限请求循环，§7.144 A），
+这批补上"**hook 回调体里用了 `t`，依赖数组就必须带上 `t`**"（防 staleness），判据是 AST 扫全部已接 i18n 的文件。
+👉 🔴 **这两条是一对，缺一条就有缺陷**：只钉前者 ⇒ 有人图省事把 `t` 从依赖里删掉（staleness）；
+只钉后者 ⇒ 有人放一个不稳定的 `t` 进去（无限循环）。**正确形状只有一个**：
+`const t = useCallback((id, dm, values) => intl.formatMessage({ id, defaultMessage: dm }, values), [intl]);`
+并且出现在用到它的那些依赖数组里。变异对照 B5-M1（删依赖）/ B5-M2（改回不稳定）分别打这两条。
+
+#### B. 🔴 `Token.tsx` 的 `columns` 是**模块级常量** ⇒ 必须搬进组件
+与 `Customizing.jsx` 的 helpMap、`app.jsx` 的 links 数组同一条约束：**模块加载期 umi 插件运行时还没初始化**
+（`getLocale()`/`useIntl()` 拿到 undefined）⇒ 任何要翻译的数据结构都不能在模块顶层求值。
+⚠️ 它是 **.tsx** ⇒ 在 admin 类型门禁范围内（`allowJs:false` 只放过 .js/.jsx），改完必须确认门禁不倒退（本批 **23/0 未变**）。
+
+#### C. 🔴 提升一个 key，而不是新增同值的第二个（`recycle.colOption` → `common.colOption`）
+「操作」这一列头在回收站与 Token 页是**同一个性质** ⇒ 一个 key。做法：新增 `common.colOption`、把 RecycleBin 改用它、
+🔴 **并从三份包里删掉 `recycle.colOption`**（不是留着不管）。变异对照 B5-M6：把 RecycleBin 改回 `recycle.colOption` ⇒ 红。
+⚠️ 反过来，`common.enabled`/`common.disabled`（开启/关闭）与 `sysconf.comment.on`/`off`（开/关）**刻意分开**：
+前者是通用开关选项（英文 Enabled/Disabled），后者是评论系统那一档的短标签（英文 On/Off）。
+👉 🔴 **判据是"是不是同一个性质"，不是"中文是不是同值"**：中文同值但英文不同 ⇒ 两个 key；中文不同值但同一性质 ⇒ 一个 key。
+
+#### D. 🔴 变异对照的"**理由**对不对"：一次多文件一致变异才证明得了命名守卫承重
+第一版 M5 只改源码里的 key（`sysconf.token.helpP1` → 4 段）⇒ 确实红了，但红的是**对账**（"id 不在三份包里"），
+🔴 **命名守卫根本没参与**（它读的是语言包的 key，源码里的野 key 它看不见）⇒ 典型的"结论对但理由不对"。
+修法：给变异 harness 加**多文件一致变异**能力（三份包 + 源码一起改名 ⇒ 对账仍自洽），
+并加 🔴 `expectAbsent`（**断言对账那两条没红**）⇒ 现在红的只可能是命名守卫。
+👉 **规矩：说"这条守卫承重"之前，先确认变异体确实是从那条守卫红的**；
+`expectAbsent` 是这件事的唯一硬证据（否则一次变异打红五个测试，你以为证明了 A，其实证明的是 B）。
+
+#### E. 🔴 发现一个**上游**的繁中缺陷（不是本仓库的文案，但用户看得见）
+高级设置里两个 ProForm 的**自带提交按钮**，三语实测：zh-CN「提 交」/ zh-TW「**提 交**（简体！）」/ en-US「Submit」。
+根因**已定位到上游文件与行**：`@ant-design/pro-provider@1.10.0` 的 `es/locale/zh_TW.js:14` 写的就是 `submit: '提交'`（简体）
+⇒ 🔴 **pro-provider 自己的繁中包没翻干净**，而我们的 locale 已经正确传给它了（en-US 出「Submit」就是证据）。
+👉 登记为待办（🔴 **全局修，不要逐表单改**，否则 20 多处各写一遍），两个候选做法：
+① 在 `app.jsx` 的 `rootContainer` 用 pro-provider 的 `ConfigProviderWrap`/`intlMap` 覆盖 zh-TW 的 `submit`/`reset` 等条目；
+② 给每个 ProForm 传 `submitter={{ searchConfig: { submitText: t('common.submit'), resetText: t('common.reset') } }}`。
+⚠️ 本轮**刻意没做**：它是跨全部 ProForm 的框架级改动，需要它自己的变异对照与活体证据，不该塞在一批文案里。
+👉 顺带一条方法论：**"界面某处是简体"不一定是我们漏翻** —— 先分清是**我们的 key**、还是**组件库自己的文案**。
+
+#### F. 🔴 我自己的矩阵脚本也有一个"绿得像样"的缺陷（已修 + 已变异对照）
+`vanblog_dev/run-matrix.sh` 每个阶段都打印了 rc，但**从不汇总** ⇒ 本轮 jest 红了（2 个套件失败）时，
+结尾照样打印 `=== MATRIX DONE ===` 且 **exit 0**。这与"守卫循环静默少跑 7 个"（§7.143）是**同一族错误**：
+🔴 **看起来绿的汇总行**。修法：逐阶段 rc 收集 + 结尾打印逐阶段表 + **任一阶段非 0 就 exit 1**；
+jest 阶段还多打印**失败的用例名与 Expected/Received**（定性假红时第一件事就是看这个）。
+🔴 **变异对照**：把 admin 阶段换成 `false` ⇒ 脚本 **exit 1** 且汇总表点名 `admin: rc=1`（顺带验证了守卫计数自检那条也会红）。
+👉 **规矩：测量工具本身也要有变异对照** —— 它红不红，只有让它红一次才知道。
+
+#### G. 探针教训（3 条，每条都让"看起来该成功"的验证失败或误导）
+1. 🔴 **不要用语言包的值直接构造正则**：`'登录凭证(Token)有效期(秒)'` 里的括号会造出**非法正则**（`new RegExp` 直接抛）。
+   改成：按钮用 `evaluate` 按"去掉空白后的文本"**精确匹配**点击；表单项用**字段 id**（`#expiresIn` / `#mode` / `#name`）定位
+   —— 🔴 后者还与语言无关，比按文案找稳得多（切语言后文案会变，id 不会）。
+2. 🔴 **antd 的 message 默认 3 秒就消失**：上一版"点完等 4 秒再采"⇒ 采到空数组，看起来像"文案没翻"，其实是**尺子采晚了**。
+   改成轮询（每 250ms、最多 6s，一出现就采）。
+3. ⚠️ antd 会给**两个汉字**的按钮插空格（zh-TW 的帮助按钮实测渲染成「說 明」）⇒ 比对前两边都要 `replace(/\s+/g,'')`。
+
+#### H. 🔴 负载敏感假红：**第三次**（这次连红两轮）⇒ 不再只记账，直接修掉 `logRotate` 那条**测量竞态**
+本轮两次全量 jest 各红 1–2 条：`utils/logRotate.spec.ts`（🔴 **2/2 复现**）与 `provider/export/markdownExport.provider.spec.ts`（1/2）。
+两者**单独跑全绿**（logRotate 8/8、导出族两文件 17/17），且 🔴 **本轮一行 server 代码都没改**
+（`git diff --stat HEAD -- packages/server` 为空）⇒ 与本次改动无关。
+🔴 **`logRotate` 那条读完断言之后定性为"测量侧的竞态"，已修**：
+`rotate()` 的形状是 `rotateLogFiles()`（**同步** rename：`logPath` → `.1`）之后再 `fs.createWriteStream(logPath)`，
+而 🔴 **createWriteStream 的 open 是异步的** ⇒ 最后一次轮转刚结束时 `logPath` 还不存在，`files.length` 就量到 **3 而不是 4**。
+`flush()` 只保证"写入缓冲落盘"、**不保证流已 open** ⇒ 这是测量竞态，**不是实现的缺陷**。
+修法 🔴 **不是放宽断言**（"当前 + keep 份历史"是真性质），而是**等它稳定下来再量**（轮询 `existsSync(logPath)`，上限 5s）。
+🔴 **变异对照**：把 `keep` 从 3 改成 2 ⇒ 红出**一模一样**的 `Expected: 4 / Received: 3` ⇒
+证明那条计数断言**仍然承重**（没被新加的等待磨平），也顺带证明"少一份"长什么样。
+🔴 **修后连续两次全量 jest 都绿**：`288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL` ×2
+（`markdownExport.provider` 这两次也没再红 ⇒ 它是**偶发**，logRotate 修前是 **2/2 必现**）。
+⚠️ `markdownExport.provider` 与 §7.142 / §7.144 那两次**同族** ⇒ 🔴 **导出族的临时目录可注入化**升级为专项待办
+（三次同族假红的代价已经是"每次全量跑都要重新定性一遍"）。
+👉 **方法论**：假红读完断言之后只有两种**正当**结论 —— ① **尺子/测量有竞态** ⇒ 修测量（本例）；
+② **断言本身偏紧**（如 §7.93 的 `storedFileName`）⇒ 显式放宽**并写明理由**。
+🔴 "把它加进负载敏感清单"是第三种，也是最差的一种：它让下一次真红被当成假红。
+
+#### I. 基线
+- admin `node --test` **735 tests / 165 suites / 0 fail**；i18n 守卫组 **92 → 93**（`localePackParity` 42 → **43**）；
+- 变异对照 **7/7**（6 红 + 1 语义空操作绿；其中 M5 是**多文件一致变异** + `expectAbsent`）+ 矩阵脚本自身 1 条；
+- 语言包 **307 key** ×3；`--zh-tw-audit`：307 key / **540** 个不同汉字 / **0 命中**简体专用字表；
+- 棘轮 **17 个文件 / TOTAL 52**；admin 类型门禁 **23/0（src 仍 29）**；构建 `EEE=production` **rc=0**（`dist/umi.1ee44587.js`）；
+- 🔴 **真实剩余（bareChinese 口径）：112 → 110 个文件 / 1,713 → 1,669 条**（本批 −2 文件 / −44 条）；
+- 矩阵：**admin 735/165/0**、**守卫 35 文件 / 3152 条 / 0 失败**、**vitest 97 文件 / 1095**、
+  **server 与 website 的 tsc 各 0 错**、**jest 288 套件 / 4238 用例 / 0 FAIL（连续两次）**；
+  🔴 矩阵脚本本轮起**会因任一阶段非 0 而 exit 1** 并打印逐阶段表（F 段）。
+- 🔴 **下一批**：① `SystemConfig` 剩下的 `Caddy.jsx`(34) 与 `User.jsx`(26)；
+  ② E 里那个 pro-provider 繁中按钮（全局修 + 自己的变异对照与活体证据）；
+  ③ H 里那个**导出族**的临时目录可注入化（logRotate 本轮已修）；④ 期 9 批 5：`user.provider` 那 5 处带中文 `label` 参数的模板消息。
 ### 7.144 期 9 第四批：回收站垂直切片（51 条 + 注入式翻译器）—— 以及一个**只有浏览器能抓到**的真缺陷（无限请求循环）
 
 **交付**：`components/RecycleBin/**` 两个文件全量接 i18n（组件 **23** 个调用点、纯 JS 核心 **32** 个，🔴 **裸中文都归 0**）；

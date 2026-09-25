@@ -83,6 +83,17 @@ describe('事件日志轮转', () => {
       await s.flush();
     }
     expect(s.rotations).toBeGreaterThan(5);
+    // 🔴 断言文件数之前，**等轮转后的新流真的把当前文件建出来**。
+    //    `rotate()` 的形状是 `rotateLogFiles()`（同步 rename：`logPath` → `.1`）之后再
+    //    `fs.createWriteStream(logPath)`，而 🔴 **createWriteStream 的 open 是异步的** ⇒
+    //    最后一次轮转刚结束时 `logPath` 可能还不存在，于是下面量到的是 **3 份而不是 4 份**。
+    //    `flush()` 只保证"写入缓冲落盘"，**不保证流已 open** ⇒ 这是**测量侧的竞态**，不是实现的缺陷。
+    //    实测：全量并行跑 2/2 复现（`Expected: 4 / Received: 3`），单独跑 0/2 ⇒ 典型的负载放大窗口。
+    //    ⚠️ 修法不是放宽断言（"当前 + keep 份历史"是真性质），而是**等它稳定下来再量**。
+    for (let i = 0; i < 200 && !fs.existsSync(logPath); i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     const files = [logPath, 1, 2, 3]
       .map((x) => (typeof x === 'string' ? x : rotatedPath(logPath, x)))
       .filter((p2) => fs.existsSync(p2));
