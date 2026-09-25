@@ -9469,6 +9469,146 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.141 🔴 期 9 第一批：服务端错误码框架落地（方案 B）—— 以及站长的四项裁定
+
+> **本节 A 是「站长裁定」，不是父代理裁定。** 它**覆盖**历轮记录里"内容 i18n / 文档 i18n / 前台 i18n 仍未裁定"
+> 的那些措辞（§7.128、§7.135、§7.139 等处）—— 按本仓库惯例不改写历史，用这一节统一覆盖。
+
+#### A. 🔴 站长裁定（2026-09-25，四项，均为"父代理提问 + 站长选择"）
+1. **文档（`docs/**`）i18n：暂不做，docs 保持中文。**
+   ⇒ 直接后果：跨面"导航路径词汇"继续暂缓 —— 系统设置的 **11 个外层页签** + 定制化的 **4 个内层页签**、
+   `utils/analysisFields.js` 的 `ANALYSIS_ADMIN_PATH`、`utils/walineEmailFields.js` 的 `WALINE_ADMIN_PATH`、
+   以及 `WalineForm/index.tsx`(12+1) 与 `walineEmailFields.js`(24) 这 **37 条**（它们与 `WALINE_ADMIN_PATH` 同文件）。
+   🔴 这批的可见后果**已取证**：en-US 下"评论设置"页的 11 个表单标签里前 7 个是英文、后 4 个仍是中文
+   （证据：`vanblog_dev/i18n-browser-evidence/phase3-sysconf-batch2/result.json` 的 `comment.labels`）。
+2. **内容 i18n（文章/分类/标签/自定义页面本身多语言）：不做，也不预留。**
+   ⇒ 沿用既有裁定：不加 `lang` 字段、不动 15 个 schema 与备份/恢复形状；只守三条零成本约束
+   （口径数字入册／新增取内容的代码不要假设"一条记录只有一种语言文本"／别名唯一性要意识到将来可能每语言一份）。
+3. **前台（访客站点）i18n：继续延后，先把后台做完。**
+   ⇒ Next i18n 路由方案与它的**安全审计**（locale 前缀 vs `PRE_NEST_LIMITED_PREFIXES` / `staticGuard` 三段判断 /
+   限流路径匹配）留到后台 1,887 条做完之后那一轮。
+4. **下一批优先级：期 9（服务端错误码框架）** ⇒ 就是本节 B–H 做的事。
+
+#### B. 交付：机制 + 第一批迁移（8 个码 / 9 个调用点）
+- 🔴 **服务端登记表**：新增 `packages/server/src/utils/serverErrorCodes.ts`
+  （`SERVER_ERROR_CODES`：码 → `{ zh, Ctor, status? }`；`codedError(code, params?)` 造异常、`codedBody(code, params?)` 造返回体、
+  `fillServerErrorMessage()` 做 `{name}` 插值）。
+- 🔴 **机制的三个约束**（每一条都有钉子，见 D）：
+  ① `message` **仍是中文、且与迁移前逐字相同** ⇒ 日志与排障线索不变，**钉住那 222 个字面量的既有测试一条都不用改**；
+  ② 响应体**只多两个字段**（`code` 与可选 `params`），其余由 Nest 决定 ——
+  🔴 实现手法是"先用旧构造方式造一个**探针异常**、取它的 `getResponse()` 当模板、补两个字段、再用**同一个异常类**重新构造"，
+  所以 `error: 'Not Acceptable'` 这类字段**原样保留**（**手写 body 会把它弄丢**，而丢字段会让按 `error` 分支的调用方静默改变行为）；
+  ③ admin **有码用码、无码回落 `message`** ⇒ 🔴 渐进迁移，**任何时刻都可用**（没有"半坏"的中间态）。
+- **第一批迁移**：`provider/category/category.provider.ts` 的 **9** 处 `throw new NotAcceptableException('中文')`
+  → `throw codedError('<code>')`（8 个码，其中"无有效排序信息！"被两个调用点共用 ⇒ **这正是登记表的价值：同值不再有两处口径**）。
+- **admin 侧**：`services/van-blog/requestError.js` 新增 `translateServerErrorMessage(resData, t)`，
+  `mapAdminErrorMessage(resData, t)` / `adaptAdminResponse(resData, { t })` / `handleAdminRequestError(error, { t })` 一路透传；
+  `app.jsx` 新增 `makeServerErrorTranslator()`（🔴 **调用期**用 `getIntl(getLocale())` 造，模块加载期会拿到 undefined），
+  在 `errorConfig.adaptor` 与 `errorHandler` **两个入口都注入**（只接一个会出现"同一句话一处翻译、一处中文"）。
+  🔴 **拿不到 intl 就返回 `undefined`**（= 回落中文），这是刻意选的"更安全的那一侧"：
+  翻译不可用时退回旧行为，**绝不能**让错误提示变成裸 key 或空字符串。
+- **语言包**：`error.*` **8 条 ×3**（186 → **194** key）。🔴 zh-CN 的值 = 服务端登记表的 `zh`（逐字），
+  en-US 是**人工写的英文**（不是逐字直译：说清"发生了什么、为什么、能不能改"），zh-TW 套地区用词（建立 / 資訊 / 刪除）。
+- **替身忠实度**：`packages/admin/tests/e2e/category-rename-server.mjs` 的 3 处假响应补上了 `code`
+  （🔴 否则 e2e 再也走不到 admin 的"有码用码"那条路径 = **静默失去覆盖**），
+  并**刻意留一处不带 code**（`分类不存在`）⇒ 那个 e2e 同时覆盖"无码回落"。
+
+#### C. 🔴 实测口径（服务端"带中文的错误"到底有多少；数字与任务书不同，以本节为准）
+口径：AST 遍历 `packages/server/src/**/*.ts`，**排除 `*.spec.ts` 与 `test/`** ⇒ **246 个文件、0 解析失败**。
+- **`throw` 站点 252 处**（146 只含字符串字面量 + 97 只含模板片段 + 9 两者都有）。
+  ⚠️ 任务书里的"167 处"是另一个口径（未复核）；🔴 **只数字面量会漏掉 106 处模板拼接的消息**（低估四成）。
+- **`message:` 带中文的属性 108 处**，其中 **8 处在 `throw` 里、100 处在 `throw` 之外**（`return { statusCode, message }` 那一族，
+  绝大多数是"演示站禁止…"）⇒ 🔴 **机制必须同时覆盖两种形状**（这就是 `codedBody()` 存在的理由，虽然第一批没用到它）。
+- 迁移 9 处后，棘轮预算 = **243**（`node scripts/i18n/inventory.js --server-throws` 可复算：246 文件 / 53 个命中文件 / 合计 243）。
+
+#### D. 三条守卫（新文件 `packages/admin/tests/unit/i18nServerErrorCodes.test.js`，**8 条**）+ 运行时钉子（server spec，**7 条**）
+- ① **每个码都有三语译文** + **zh-CN 与登记表逐字相同**（否则"回落"与"翻译"会给用户两句不同的话）；
+- ① **反向：语言包里的每个 `error.*` 都有登记的码**（不留死条目）；
+- ② 🔴 **反向：每个登记的码都真的被某处抛出/返回**（防死码）。判据用 `codedError('<code>'` / `codedBody('<code>'`
+  这种**只有代码才会出现的形状** —— 🔴 用裸 `'<code>'` 会**恒真**（登记表自己就含这个字符串）；
+- ③ 🔴 **棘轮：带中文的 `throw` 站点 ≤ 243，只许减不许增**（存量慢慢还、**增量立刻止住**）。
+  失败消息里给出修法三步、🔴 明确写"不要通过调大预算来修这条：那是把棘轮拆了"，并指向 `--server-throws` 定位工具；
+- 反空转（登记表 ≥8 码、包 ≥100 key、**遍历到 ≥200 个 server 文件**、站点数 **>100**）——
+  🔴 后两条是棘轮的反空转：遍历坏了会得到 0，而 `0 ≤ 预算` 恒真；
+- 尺子自证（合成输入）：裸中文 throw 数得出、`codedError()` **不**被计入、模板拼接**要**计入、纯 ASCII 不算、
+  登记表解析**必须 fail-loud**（`找不到 SERVER_ERROR_CODES` / `解析出 0 个错误码` 两种形状各钉一条）；
+- 🔴 **admin 侧行为钉子**（不是源码级）：不传 `t` 时输出与改造前**逐字相同**（含 401→登录失效、403→权限不足两条协议特例）、
+  传 `t` 且有码时走 `error.<code>` 且 **`params` 透传给 ICU**、传 `t` 但**无码**时原样回落；
+- 🔴 **接线钉子**：`adaptor` 与 `errorHandler` **两个入口都注入了** `t`、翻译器是 `getIntl(getLocale())` 在**调用期**造的、
+  且有"拿不到就 `return undefined`"的回落分支；
+- server 侧 `utils/serverErrorCodes.spec.ts`（**7 条**）：响应体 = 迁移前的 body **+ 恰好一个 `code` 字段**
+  （`Object.keys` 全量对齐）、`message` 逐字不变、`error: 'Not Acceptable'` 保留、`instanceof` 与状态码不变、
+  未登记的码 **fail-loud**、`fillServerErrorMessage` 的四种形状（含"未提供的占位符原样留着"与"不许把原型链属性当参数"）。
+🔴 **变异对照 7/7**：6 红（漏译 / zh-CN 与登记表差一个标点 / 死条目 / 死码 / 新增裸中文 throw / 破坏无码回落）
++ 1 条**刻意语义空操作**绿（登记表相邻两条换序）；每条都核实"红在声称承重的那条断言上"、sha 三段核对还原一致。
+
+#### E. 🔴 浏览器活体证据：**整条链路**（这是本节的验收判据）
+一次性栈 + 本机构建 + `podman cp` + playwright 真点击：**在"数据管理 → 分类管理"里故意创建一个重名分类**，三语各一次。
+- 🔴 **真实 HTTP 响应体**（探针直接抓的）：`{"statusCode":406,"message":"分类名重复，无法创建！","error":"Not Acceptable","code":"categoryDuplicateOnCreate"}`
+  ⇒ **`code` 有了、`message` 仍是中文、`error` 字段没丢**（服务端那一半真的生效了）；
+- 🔴 **用户看到的 toast**（量了 bounding box：1440×58、可见）：
+  zh-CN `分类名重复，无法创建！`｜en-US `A category with that name already exists`｜zh-TW `分類名重複，無法建立！`
+  —— 三者**两两不同**且与语言包里的值逐字相同（前端那一半真的生效了）；
+- 🔴 **对照组（未迁移的消息）**：在 **en-US** 下用错误密码登录 ⇒ toast 仍是 `用户名或密码错误！`（中文）
+  ⇒ **"无码回落"这条路没被改坏**（🔴 对照组必须在 en-US 下跑：在 zh-TW 下"中文 vs 中文"证明不了任何事 —— 第一版就是这么错的）；
+- `<html lang>` 三语跟随、`Missing message` **0**、裸 key **0**、`undefined` **0**；
+- 🔴 **"预期中的红"必须分类，否则真问题会被噪音淹没**：本轮 7 条 `console.error` 与 4 条 `pageerror` **全部**是预期的 ——
+  前者是**浏览器自己**给失败请求打的资源日志（`Failed to load resource: …406/401`，而本轮就是要故意触发 406），
+  后者是 `umi-request@1.4.0` 的 `throw new ResponseError(copy, 'http error', …)`（对任何 ≥400 都抛）
+  再被**既有的** `handleAdminRequestError` 末尾那句 `throw error` 透出来 ⇒ 🔴 **与本轮改动无关**
+  （来源已核实到 `node_modules/.pnpm/umi-request@1.4.0/.../index.esm.js`，不是猜的）。
+  证据：`vanblog_dev/i18n-browser-evidence/phase9-error-codes/`（5 张截图 + `result.json`）。
+
+#### F. 🔴 本轮最贵的一条教训：**部署路径要看进程表，不能只看 Dockerfile 的 `COPY` 行**
+第一次探针**三语全部显示中文**，而响应体看起来完全正常（406 + 正确的中文 message），只是**少了 `code`** ⇒
+症状极具误导性（"前端没生效？语言包漏了？"）。真因：我把 server 产物 `podman cp` 到了 **`/app/`**，
+而容器里真正跑的是 **`/app/server/main.js`**（`WORKDIR /app/server` 在 Dockerfile 的 **634** 行、`COPY` 在 **637** 行 ——
+我只读了 `COPY` 那行）。🔴 **`podman exec ps aux` 一眼就能看出来**（`head -12` 里就有 6 个 `/app/server/main.js` worker，路径写得清清楚楚）。
+👉 **规矩：往容器里塞产物之前，先用 `ps aux` 确认"真正被加载的那个文件路径"，别从构建脚本推。**
+（与 §7.138 C 的"本地 admin dist 少一个 `EEE=production` 就白屏"同族：**"拷进去了"不等于"被加载了"**。）
+🔴 顺带两条 podman 陷阱：① `podman rm -f A B` 里 **A 不存在会让 B 也没被删**，而脚本用 `>/dev/null 2>&1`
+把这个失败**吞掉了** ⇒ 下一次重跑报"容器名已被占用"（修法：逐个 rm，或先看 `podman ps -a`）；
+② 重建容器要**连 mongo 一起**重建（脚本会重新 inspect IP），只删 app 容器会让脚本在第 2 步就退出。
+
+#### G. 🔴 尺子缺陷两则（都是"看起来合理的 0"）
+1. 探针第一版数"`message:` 带中文的属性"得到 **0**，而任务书口径是 107 ⇒ 真值是 **108**，
+   尺子写错了：在 `ObjectProperty` 上 `nd.value` 是**子节点对象**（`String(它)` = `"[object Object]"` ⇒ `HAN.test` 恒 false），
+   要写 `nd.value.value`。👉 **同一个属性名在不同节点层级上含义不同**；而这是"计数异常先怀疑尺子"的**第 16 次**。
+2. 🔴 **变异对照的期望串必须从守卫的真实消息里抄，不要凭记忆重写**（**连续第二轮**栽在这条上）：
+   本轮 M5 写成 `/244 > 243/`，而真实消息是「实测 244 > 预算 243」⇒ 守卫红得对、我的期望错了；
+   第二次又加了 `/__mutation_probe\.ts/`，而守卫消息只列"前 10 个文件"、新增的那处只有 1 个站点排不进去 ⇒ 又不命中。
+   修法两条：① harness 现在**打印未命中的期望**（不打印就只能靠猜，而猜出来的修法往往是把判据放宽 = 把变异对照废掉）；
+   ② 把守卫消息改成指向 `--server-throws`（列**全部**文件与行号），并写明"前 10 只是提示"。
+   👉 而"计数 243 → 244"这件事本身就是**遍历能发现新文件**的硬证据，比文件名匹配更有力。
+
+#### H. 基线、工具与下一批
+- **新工具**：`node scripts/i18n/inventory.js --server-throws`（列服务端带中文 throw 的**完整分布**：文件 + 行号 + 合计 + 与预算的差）。
+  🔴 它里面的 `THROW_BUDGET` 与守卫里的那个是**两处口径**（守卫是权威、工具只打印），已在工具注释里写明出处与理由
+  （互相 require 会把"守卫"与"报数工具"耦合成一条依赖链）；⚠️ 改预算时**两处都要改**。
+- **共享模块**新增 4 个导出：`collectTCalls` / `collectTCallsFromFile`（§7.140）+ `collectChineseThrows` / `collectServerErrorCodes`（本节）；
+  消费方网 5 → **6** 个（新增 `i18nServerErrorCodes.test.js`），由 `i18nSharedImpl` 钉住"都 require 同一份、且不许内联第二份 AST"。
+- admin `node --test` **717 → 725 tests / 164 suites / 0 fail**（+8 = 新守卫 8 条）；
+  i18n 守卫组 **82 → 90 条**（`localePackParity` 41、`i18nSharedImpl` 7、`i18nHardcodedRatchet` 6、`i18nKeyNaming` 7、
+  `i18nPluralConvention` 5、`i18nEditorLocaleFollows` 16、🔴 `i18nServerErrorCodes` **8（新）**）；
+  `i18nKeyNaming` 的进度下界 **186 → 194**。
+- server jest **287 套件 / 4230 用例 → 288 套件 / 4237 用例（4233 passed + 4 skipped）/ 0 FAIL**（+1 套件 +7 用例 = 新 spec，精确对账）；
+  website vitest **97 文件 / 1095** 未变；server `tsc` **0 错**、website `tsc` **0 错**、admin 门禁 **23/0（src 仍 29）**；
+  脚本守卫 **35 文件 / 3148 条 / 0 失败**。
+  🔴 **3148 不是退化**：`gitignore-hygiene` 的 `passed` 从 **11 掉到 7**，因为本轮有 2 个**新的、尚未 `git add`** 的测试文件，
+  它把"磁盘数 == 已跟踪数"那几条从 PASS 改成 **NOTE**（并跳过 jest 数量对账）—— 这正是它设计的行为，
+  顺带**证明了两个新测试文件没有被 gitignore 吞掉**；🔴 **提交之后应当回到 11 / 合计 3152**（已复核）。
+- 构建：admin `EEE=production` **rc=0**，`dist/umi.223a4a31.js` = **1,319,798 B**（上一轮 1,317,119 B ⇒ +2,679 B），
+  `index.html` 资源前缀 `/admin/` ✓；server `nest build` **rc=0**（本机 Node 24 + `@nestjs/cli` 11 可用）。
+- 🔴 **下一批（期 9）建议顺序**：① "演示站禁止…"那一族（**100 处返回体**，用 `codedBody`，机械且集中）；
+  ② `user.provider.ts`(12) 与 `article.controller.ts`(9)（含模板插值 ⇒ 顺便验证 `params` 的端到端）；
+  ③ `init.controller.ts`(11) —— ⚠️ 里面有**协议字符串** `已初始化`，迁移时 🔴 **只能加码、绝不能改 message**
+  （admin 用 `includes('已初始化')` 匹配它，且 `localePackParity` 钉着"这个字符串不许进语言包"）；
+  ④ `fullBackup.ts`(24) / `backupCrypto.ts`(12) —— ⚠️ 备份那族的中文措辞被 **210 条** `vanblog-backup-signing` 断言与
+  `docs/**` 钉着，迁移前必须先跑一遍消费方网。
+- 🔴 **仍未做**（本节只落地了机制 + 8 个码）：admin 那 **22 处**直接透出服务端 `message` 的调用点**没有逐个改**——
+  因为机制在**全局** `errorHandler`/`adaptor` 上，那 22 处自动受益；⚠️ 但**如果某处自己 `catch` 后直接用了 `err.message`**
+  （绕过全局），它仍然只会显示中文 ⇒ 迁到那一批时要逐个核实。
+
 ### 7.140 多语言期 3 第二批（评论设置 + 定制化）：**守卫自己的覆盖面是假的**、简体字表又漏一个字，以及三个"空的绿"
 
 **交付**：`SystemConfig/tabs/CommentSystem.jsx`（**37** 个 `t()` 调用点、裸中文 **0**）与 `tabs/Customizing.jsx`

@@ -1,4 +1,9 @@
-import { Injectable, NotAcceptableException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：错误消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，
+//    这里只写码。那个 helper 造出来的仍是**同一个 Nest 异常类**（状态码与 body 里的 error 字段都由它决定）、
+//    `message` 仍是那句中文（逐字不变），只是响应体多了 `code`
+//    （admin 用它查三语文案；查不到就回落 message ⇒ 渐进迁移任何时刻都可用）。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ArticleProvider } from '../article/article.provider';
@@ -154,7 +159,7 @@ export class CategoryProvider {
       name,
     });
     if (existData) {
-      throw new NotAcceptableException('分类名重复，无法创建！');
+      throw codedError('categoryDuplicateOnCreate');
     } else {
       const existing = await this.categoryModal.find({});
       await this.categoryModal.create({
@@ -196,12 +201,12 @@ export class CategoryProvider {
     // 空库（或文章全删光）时它会一路走到删除。与本仓库已修的同族缺陷（checkToken、
     // updateCollaborator、customPage 的 update/delete）是同一个形状，所以按同一条规矩显式校验。
     if (!isUsableFilterValue(name)) {
-      throw new NotAcceptableException('删除分类必须带分类名（name 不能为空）。');
+      throw codedError('categoryDeleteNeedsName');
     }
     // 先检查一下有没有这个分类的文章
     const d = await this.getArticlesByCategory(name, true);
     if (d && d.length) {
-      throw new NotAcceptableException('分类已有文章，无法删除！');
+      throw codedError('categoryHasArticles');
     }
     const filter: Record<string, unknown> = { name };
     assertSafeWriteFilter(filter, 'CategoryProvider.deleteOne');
@@ -210,15 +215,15 @@ export class CategoryProvider {
 
   async reorderCategories(names: string[]) {
     if (!Array.isArray(names) || !names.length) {
-      throw new NotAcceptableException('无有效排序信息！');
+      throw codedError('categoryReorderNoPayload');
     }
     const docs = await this.categoryModal.find({});
     if (!docs || !docs.length) {
-      throw new NotAcceptableException('无分类可排序！');
+      throw codedError('categoryNoneToReorder');
     }
     const updates = applyCategoryNameOrder(docs, names);
     if (!updates.length) {
-      throw new NotAcceptableException('无有效排序信息！');
+      throw codedError('categoryReorderNoPayload');
     }
     for (const item of updates) {
       await this.categoryModal.updateOne({ name: item.name }, { order: item.order });
@@ -228,10 +233,10 @@ export class CategoryProvider {
 
   async updateCategoryByName(name: string, dto: UpdateCategoryDto) {
     if (Object.keys(dto).length == 0) {
-      throw new NotAcceptableException('无有效信息，无法修改！');
+      throw codedError('categoryUpdateNoPayload');
     }
     if (dto.order !== undefined && (typeof dto.order !== 'number' || !Number.isFinite(dto.order))) {
-      throw new NotAcceptableException('排序值无效！');
+      throw codedError('categoryOrderInvalid');
     }
     // 访问密码（P1/P5）：与文章完全同一套规则（utils/accessPassword.ts）——
     // 留空/缺键 = **不修改**，`clearPassword: true` = 解除加密，填了新值 = 存 scrypt 哈希。
@@ -264,7 +269,7 @@ export class CategoryProvider {
         name: dto.name,
       });
       if (existData) {
-        throw new NotAcceptableException('分类名重复，无法修改！');
+        throw codedError('categoryDuplicateOnUpdate');
       }
       // Articles and drafts store the category as a name string, so rename
       // must rewrite every reference. updateMany avoids depending on list

@@ -21,6 +21,7 @@
  *   node scripts/i18n/inventory.js --tsv <file>   # 额外写出逐文件 TSV
  *   node scripts/i18n/inventory.js --json <file>  # 额外写出机器可读 JSON
  *   node scripts/i18n/inventory.js --zh-tw-audit  # 繁中用字审计（🔴 每翻译完一批繁中跑一次，见 zhTwAudit 的说明）
+ *   node scripts/i18n/inventory.js --server-throws # 服务端「带中文的 throw」完整分布（期 9 棘轮的定位工具）
  *
  * ⚠️ **本工具只读，不改任何文件**（除了你显式指定的 --tsv/--json 输出路径）。
  * 🔴 **测量类命令绝不接 `2>/dev/null`** —— 那会把工具失败静默变成"看起来合理的 0"
@@ -177,6 +178,53 @@ function zhTwAudit() {
   return hits.length > 0 ? 1 : 0;
 }
 
+/**
+ * 🔴 `--server-throws`：列出服务端「带中文的 `throw` 站点」的**完整分布**。
+ *
+ * ## 为什么需要它
+ * `i18nServerErrorCodes.test.js` 的棘轮红了之后只打印"前 10 个文件"，
+ * 🔴 而**新增的那一处往往落在只有 1 个站点的小文件里**（变异对照实测过：新加一个文件 ⇒ 计数 243 → 244，
+ * 而那个文件根本不在前 10 里）⇒ 光看守卫消息定位不到。
+ * 口径与守卫**完全一致**（同一个 `astInventory.collectChineseThrows`、同一套排除规则），
+ * 所以"守卫数的"与"这里列的"必然是同一个集合。
+ * @returns {number} 退出码：超过预算 ⇒ 1（预算与守卫里的 `THROW_BUDGET` 同源，见下面的常量说明）
+ */
+function serverThrows() {
+  const SERVER_SRC = path.join(ROOT, 'packages/server/src');
+  // 🔴 这个数字必须与 `packages/admin/tests/unit/i18nServerErrorCodes.test.js` 的 `THROW_BUDGET` 一致。
+  //    ⚠️ 两处写同一个数字就是两处口径 —— 但守卫在 admin 的 node:test 里、本工具在 scripts/ 下，
+  //    互相 require 会把"守卫"与"报数工具"耦合成一条依赖链；折中办法是**在这里注明出处**，
+  //    并由守卫那条断言负责"数字漂了就红"（守卫是权威，本工具只是打印）。
+  const THROW_BUDGET = 243;
+  const walk = (dir, out) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (ent.name === 'node_modules' || ent.name === 'test') continue;
+        walk(abs, out);
+      } else if (ent.isFile() && abs.endsWith('.ts') && !abs.endsWith('.spec.ts')) out.push(abs);
+    }
+    return out;
+  };
+  const files = walk(SERVER_SRC, []);
+  const perFile = [];
+  let total = 0;
+  for (const abs of files) {
+    const rel = path.relative(ROOT, abs).split(path.sep).join('/');
+    const hits = astInventory.collectChineseThrows(fs.readFileSync(abs, 'utf8'), rel);
+    if (hits.length > 0) {
+      perFile.push({ rel, n: hits.length, lines: hits.map((h) => h.line) });
+      total += hits.length;
+    }
+  }
+  perFile.sort((a, b) => b.n - a.n || a.rel.localeCompare(b.rel));
+  console.log('=== 服务端「带中文的 throw 站点」分布（口径同 i18nServerErrorCodes 棘轮）===');
+  console.log(`  扫描文件 ${files.length} 个（排除 *.spec.ts 与 test/）；命中文件 ${perFile.length} 个；站点合计 ${total}`);
+  console.log(`  棘轮预算 ${THROW_BUDGET} ⇒ ${total <= THROW_BUDGET ? '✓ 未超' : '🔴 超了 ' + (total - THROW_BUDGET)}`);
+  for (const f of perFile) console.log(`    ${String(f.n).padStart(3)}  ${f.rel}  (行 ${f.lines.join(',')})`);
+  return total <= THROW_BUDGET ? 0 : 1;
+}
+
 function main() {
   const args = process.argv.slice(2);
   let tsvOut = null;
@@ -185,10 +233,12 @@ function main() {
     if (args[i] === '--tsv') tsvOut = args[++i];
     else if (args[i] === '--json') jsonOut = args[++i];
     else if (args[i] === '--zh-tw-audit') return zhTwAudit();
+    else if (args[i] === '--server-throws') return serverThrows();
     else if (args[i] === '--help' || args[i] === '-h') {
       console.log(
         '用法: node scripts/i18n/inventory.js [--tsv <file>] [--json <file>]\n' +
-          '      node scripts/i18n/inventory.js --zh-tw-audit   # 繁中用字审计（每翻译完一批跑一次）',
+          '      node scripts/i18n/inventory.js --zh-tw-audit   # 繁中用字审计（每翻译完一批跑一次）\n' +
+          '      node scripts/i18n/inventory.js --server-throws # 服务端带中文 throw 的完整分布（期 9 棘轮红了用它定位）',
       );
       return 0;
     } else {

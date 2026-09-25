@@ -26,12 +26,15 @@ const PLURAL = path.join(ADMIN, 'tests/unit/i18nPluralConvention.test.js');
 //    和一份**手维护**的"哪些文件接了 i18n"清单 ⇒ 实测漏过一整批文件（期 3 第一批的 ImgTab/WalineTab
 //    从来没被对账过，守卫却全绿）。现在它也 require 共享模块，所以一并钉进消费方网。
 const PARITY = path.join(ADMIN, 'tests/unit/localePackParity.test.js');
+// 🔴 期 9（服务端错误码框架）新增的消费方：它要 AST 解析**服务端的 TS 登记表**
+//    （`node --test` 不能 require TS）与三份语言包，两件事都只有共享模块一份实现。
+const SERVER_CODES = path.join(ADMIN, 'tests/unit/i18nServerErrorCodes.test.js');
 
 // 🔴 共享模块（唯一权威实现）
 const astInventory = require(SHARED);
 
 test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', () => {
-  for (const f of [SHARED, CLI, RATCHET, NAMING, PLURAL, PARITY]) {
+  for (const f of [SHARED, CLI, RATCHET, NAMING, PLURAL, PARITY, SERVER_CODES]) {
     assert.ok(fs.existsSync(f), `文件不存在：${f}`);
     assert.ok(fs.statSync(f).size > 500, `文件异常小（${fs.statSync(f).size} B）：${f}`);
   }
@@ -44,6 +47,8 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
     'bareChineseFromFile',
     'collectTCalls',
     'collectTCallsFromFile',
+    'collectChineseThrows',
+    'collectServerErrorCodes',
     'readPack',
     'validateKeyShape',
     'needsIcuPlural',
@@ -65,7 +70,14 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
 });
 
 test('i18n 共享实现 · 所有消费方都 require 同一份模块（结构判据）', () => {
-  const consumers = { [CLI]: null, [RATCHET]: null, [NAMING]: null, [PLURAL]: null, [PARITY]: null };
+  const consumers = {
+    [CLI]: null,
+    [RATCHET]: null,
+    [NAMING]: null,
+    [PLURAL]: null,
+    [PARITY]: null,
+    [SERVER_CODES]: null,
+  };
   for (const f of Object.keys(consumers)) {
     const src = fs.readFileSync(f, 'utf8');
     // 🔴 剥掉注释再判：注释里提到模块名不算"用了它"
@@ -90,7 +102,7 @@ test('i18n 共享实现 · 所有消费方都 require 同一份模块（结构�
 test('i18n 共享实现 · 没有第二份 AST 实现（守卫里不许再内联 babel 解析）', () => {
   // 🔴 判据：消费方里不许出现"自己 parse AST"的形状。
   //    以前 i18nHardcodedRatchet 里有 loadParser() 与 parser.parse(...)，重构后应当只剩 require。
-  for (const f of [RATCHET, NAMING, PLURAL, PARITY]) {
+  for (const f of [RATCHET, NAMING, PLURAL, PARITY, SERVER_CODES]) {
     const src = fs.readFileSync(f, 'utf8');
     const stripped = src
       .replace(/\/\*[\s\S]*?\*\//g, '')

@@ -247,4 +247,15 @@ export default {
   'sysconf.customizing.saveConfirmBody': '保存前請確認程式碼的正確性，有問題的程式碼可能導致前台報錯！如未生效，請檢查是否在「站點配置 / 布局設定」中開啟了客製化功能。',
   'sysconf.customizing.resetOk': '重設成功！',
   'common.help': '說明',
+
+  // ── 🔴 期 9：服務端錯誤碼（`error.<code>`）── 說明見 zh-CN 包同一處
+  //    套地區用詞：建立 / 資訊 / 刪除（不是字形轉換）。
+  'error.categoryDuplicateOnCreate': '分類名重複，無法建立！',
+  'error.categoryDeleteNeedsName': '刪除分類必須帶分類名（name 不能為空）。',
+  'error.categoryHasArticles': '分類已有文章，無法刪除！',
+  'error.categoryReorderNoPayload': '無有效排序資訊！',
+  'error.categoryNoneToReorder': '無分類可排序！',
+  'error.categoryUpdateNoPayload': '無有效資訊，無法修改！',
+  'error.categoryOrderInvalid': '排序值無效！',
+  'error.categoryDuplicateOnUpdate': '分類名重複，無法修改！',
 };

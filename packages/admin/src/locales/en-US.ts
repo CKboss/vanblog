@@ -266,4 +266,16 @@ export default {
   'sysconf.customizing.saveConfirmBody': 'Please check the code before saving — broken code can make the front end throw errors. If it has no effect, verify that customisation is turned on under Site settings / Layout.',
   'sysconf.customizing.resetOk': 'Reset complete',
   'common.help': 'Help',
+
+  // ── 🔴 期 9：服务端错误码（`error.<code>`）── 说明见 zh-CN 包同一处。
+  //    🔴 英文必须人工写（不是逐字直译）：这些是**操作失败那一刻**用户读到的话，
+  //    要说清"发生了什么、为什么、能不能改"，而不是把中文语序搬过来。
+  'error.categoryDuplicateOnCreate': 'A category with that name already exists',
+  'error.categoryDeleteNeedsName': 'Deleting a category requires its name (name must not be empty)',
+  'error.categoryHasArticles': 'That category still contains posts, so it cannot be deleted',
+  'error.categoryReorderNoPayload': 'No valid ordering information was sent',
+  'error.categoryNoneToReorder': 'There are no categories to reorder',
+  'error.categoryUpdateNoPayload': 'Nothing to update: no valid fields were sent',
+  'error.categoryOrderInvalid': 'Invalid order value',
+  'error.categoryDuplicateOnUpdate': 'Another category already uses that name',
 };

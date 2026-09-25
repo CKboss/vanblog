@@ -256,4 +256,20 @@ export default {
   'sysconf.customizing.saveConfirmBody': '在保存前请确认代码的正确性,有问题的代码可能导致前台报错！如不生效，请检查是否在站点配置/布局设置中打开了定制化功能。',
   'sysconf.customizing.resetOk': '重置成功！',
   'common.help': '帮助',
+
+  // ── 🔴 期 9：服务端错误码（`error.<code>`）──────────────────────────────────
+  // 码的**权威登记表在服务端** `packages/server/src/utils/serverErrorCodes.ts`：
+  // 服务端抛错时响应体多带一个 `code`（与可选的 `params`），而 `message` **仍是中文**。
+  // 🔴 所以本包 `error.*` 的 zh-CN 值必须与登记表里的 `zh` **逐字相同** ——
+  //    由 `tests/unit/i18nServerErrorCodes.test.js` 双向对账（漏译 / 死条目 / 码没被抛出 都会红）。
+  // ⚠️ 这里的中文**不是**"待翻译的硬编码"，而是**回退文案**：admin 拿不到翻译器时走
+  //    `t(key, 服务端 message)` 的 defaultMessage 位，行为与迁移前逐字一致。
+  'error.categoryDuplicateOnCreate': '分类名重复，无法创建！',
+  'error.categoryDeleteNeedsName': '删除分类必须带分类名（name 不能为空）。',
+  'error.categoryHasArticles': '分类已有文章，无法删除！',
+  'error.categoryReorderNoPayload': '无有效排序信息！',
+  'error.categoryNoneToReorder': '无分类可排序！',
+  'error.categoryUpdateNoPayload': '无有效信息，无法修改！',
+  'error.categoryOrderInvalid': '排序值无效！',
+  'error.categoryDuplicateOnUpdate': '分类名重复，无法修改！',
 };

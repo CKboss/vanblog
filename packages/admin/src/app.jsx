@@ -4,7 +4,7 @@ import { HomeOutlined, LogoutOutlined, ProjectOutlined } from '@ant-design/icons
 import { PageLoading, SettingDrawer } from '@ant-design/pro-layout';
 import { message, Modal, notification } from 'antd';
 import moment from 'moment';
-import { getDirection, getLocale, history, Link, SelectLang, useIntl } from 'umi';
+import { getDirection, getIntl, getLocale, history, Link, SelectLang, useIntl } from 'umi';
 import defaultSettings from '../config/defaultSettings';
 import LogoutButton from './components/LogoutButton';
 import ThemeButton from './components/ThemeButton';
@@ -385,11 +385,40 @@ export const layout = ({ initialState, setInitialState }) => {
     ...initialState?.settings,
   };
 };
+/**
+ * 🔴 造一个"服务端错误码 → 当前语言文案"的翻译器（期 9：服务端错误码框架）。
+ *
+ * ## 为什么是**注入**而不是在 `requestError.js` 里直接 import umi
+ * 那个模块是**纯 JS**、会被 `node --test` 直接 `require()` ⇒ 拿不到 umi 插件运行时
+ * （与 `InitPage/setupKeyCore.js`、`restoreCore.js` 同一条约束，见手册"纯 JS 模块用注入式翻译器"）。
+ *
+ * ## 🔴 为什么在**调用期**取 intl（而不是模块加载期）
+ * `getLocale()`/`getIntl()` 内部走 `plugin.applyPlugins(...)`，模块加载期调用会拿到 undefined
+ * （与 `links` 数组同一条约束）。`request` 这个导出对象本身在加载期求值，
+ * 但 `adaptor`/`errorHandler` 的**函数体**是在请求发生时才跑 ⇒ 在函数体里造翻译器是安全的，
+ * 而且 🔴 **每次请求都重造**，所以切语言之后的下一次报错就用新语言（不需要监听语言变化事件）。
+ *
+ * ## 🔴 失败方向：拿不到 intl 就返回 undefined
+ * 那时 `requestError` 会**原样回落服务端的中文 message** —— 也就是今天的行为。
+ * 👉 这是刻意选的"更安全的那一侧"：翻译不可用时退回旧行为，绝不能让错误提示变成裸 key 或空字符串
+ * （用户在"操作失败"的那一刻最需要看懂那句话）。
+ */
+const makeServerErrorTranslator = () => {
+  try {
+    const intl = getIntl(getLocale());
+    if (!intl || typeof intl.formatMessage !== 'function') return undefined;
+    return (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  } catch (e) {
+    return undefined;
+  }
+};
+
 export const request = {
   errorConfig: {
     adaptor: (resData) => {
       return adaptAdminResponse(resData, {
         pathname: history?.location?.pathname,
+        t: makeServerErrorTranslator(),
       });
     },
   },
@@ -397,6 +426,7 @@ export const request = {
     handleAdminRequestError(error, {
       message,
       pathname: history?.location?.pathname,
+      t: makeServerErrorTranslator(),
     });
   },
   requestInterceptors: [

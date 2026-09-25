@@ -339,6 +339,98 @@ function collectTCallsFromFile(abs, label) {
 }
 
 /**
+ * 🔴 数出一份源码里「**带中文的 `throw` 站点**」（期 9 服务端错误码棘轮的判据）。
+ *
+ * ## 口径（必须写清，否则数字没法对账）
+ * 一个站点 = 一条 `ThrowStatement`，其**实参子树里**至少有一个含汉字的 `StringLiteral`
+ * 或 `TemplateElement`。⇒ 模板字符串拼接的消息也算（实测占 97 + 9 处，漏掉它们会把工作量低估四成）。
+ * 🔴 **迁移到 `codedError('<code>')` 之后就不再被计入** —— 这正是棘轮想要的方向：
+ * 存量慢慢还、**增量立刻止住**（新增裸中文 throw 会让计数超过预算而红）。
+ *
+ * ## 🔴 为什么判据放在共享模块里
+ * 守卫（`packages/admin/tests/unit/i18nServerErrorCodes.test.js`）与将来可能的 CLI 报数
+ * 必须用**同一份**实现，否则又会出现"两个工具报出不同数字、无法判断哪个对"。
+ *
+ * @returns {Array<{line:number|null, texts:string[]}>}
+ */
+function collectChineseThrows(src, label) {
+  const ast = parseSource(src, label);
+  const out = [];
+  const sub = (nd, texts) => {
+    if (!nd || typeof nd !== 'object') return;
+    if (nd.type === 'StringLiteral' && typeof nd.value === 'string' && HAN.test(nd.value)) {
+      texts.push(nd.value);
+    } else if (nd.type === 'TemplateElement' && nd.value && HAN.test(nd.value.raw || '')) {
+      texts.push('TPL:' + (nd.value.raw || '').trim());
+    }
+    for (const k of Object.keys(nd)) {
+      if (k === 'loc') continue;
+      const v = nd[k];
+      if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && sub(x, texts));
+      else if (v && typeof v === 'object' && v.type) sub(v, texts);
+    }
+  };
+  walkAst(ast.program, (nd) => {
+    if (nd.type !== 'ThrowStatement') return;
+    const texts = [];
+    sub(nd.argument, texts);
+    if (texts.length > 0) out.push({ line: nd.loc ? nd.loc.start.line : null, texts });
+  });
+  return out;
+}
+
+/**
+ * 🔴 解析**服务端错误码登记表**（`packages/server/src/utils/serverErrorCodes.ts` 里的
+ * `export const SERVER_ERROR_CODES = { <code>: entry('<中文>', <Ctor>[, <status>]) }`）。
+ *
+ * ## 为什么它在共享模块里
+ * admin 的守卫跑在 `node --test` 下，🔴 **不能 `require()` 那个 TS 文件** ⇒ 只能 AST 解析；
+ * 而"登记表长什么样"只能有**一处**口径（两处实现必然漂移）。
+ *
+ * ## 🔴 fail-loud（这条比解析本身更重要）
+ * 解析出 **0 个码**时抛错：否则"每个码都有三语译文"与"每个码都被抛出"这两条会**同时恒真**
+ * （空集合上的全称命题），而那是本仓库最怕的假绿形状（已有先例：枚举出 0 条路由 ⇒"未覆盖清单为空"恒真）。
+ *
+ * @returns {Record<string, {zh:string, ctor:string, status:number|null}>}
+ */
+function collectServerErrorCodes(src, label) {
+  const ast = parseSource(src, label);
+  const out = {};
+  let found = false;
+  walkAst(ast.program, (nd) => {
+    if (nd.type !== 'VariableDeclarator' || !nd.id || nd.id.name !== 'SERVER_ERROR_CODES') return;
+    found = true;
+    const obj = nd.init;
+    if (!obj || obj.type !== 'ObjectExpression') {
+      throw new Error(`astInventory: ${label || '<registry>'} 里的 SERVER_ERROR_CODES 不是对象字面量（形状变了？请更新解析器，不要放宽断言）`);
+    }
+    for (const prop of obj.properties) {
+      if (!prop || prop.type !== 'ObjectProperty' || !prop.key) continue;
+      const code = prop.key.name || prop.key.value;
+      const call = prop.value;
+      if (!call || call.type !== 'CallExpression') {
+        throw new Error(`astInventory: 错误码 ${code} 的值不是 entry(...) 调用（形状变了？）`);
+      }
+      const args = call.arguments || [];
+      const zh = args[0] && args[0].type === 'StringLiteral' ? args[0].value : null;
+      const ctor = args[1] && args[1].type === 'Identifier' ? args[1].name : null;
+      const status = args[2] && args[2].type === 'NumericLiteral' ? args[2].value : null;
+      if (typeof zh !== 'string' || !ctor) {
+        throw new Error(`astInventory: 错误码 ${code} 的 entry() 参数形状不认识（zh=${JSON.stringify(zh)} ctor=${JSON.stringify(ctor)}）`);
+      }
+      out[code] = { zh, ctor, status };
+    }
+  });
+  if (!found) {
+    throw new Error(`astInventory: ${label || '<registry>'} 里找不到 SERVER_ERROR_CODES（文件路径错了？还是登记表被改名了？）`);
+  }
+  if (Object.keys(out).length === 0) {
+    throw new Error(`astInventory: ${label || '<registry>'} 解析出 0 个错误码（登记表被清空 ⇒ 所有对账断言会恒真，这是尺子坏了）`);
+  }
+  return out;
+}
+
+/**
  * 🔴 高频「简体专用字」表：这些字在繁体里**一定**是另一个字形 ⇒
  *    只要 zh-TW 语言包的值里出现其中任何一个，就说明有人**直接把简体复制过来当繁中**。
  *
@@ -513,6 +605,8 @@ module.exports = {
   bareChineseFromFile,
   collectTCalls,
   collectTCallsFromFile,
+  collectChineseThrows,
+  collectServerErrorCodes,
   SIMPLIFIED_ONLY_ZH,
   SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW,
   readPack,

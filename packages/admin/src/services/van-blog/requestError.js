@@ -14,6 +14,13 @@ const FORBIDDEN_MESSAGE = '权限不足！';
 const DEFAULT_ERROR_MESSAGE = '操作失败，请稍后重试！';
 const LOGIN_SUCCESS_GRACE_MS = 5000;
 const SILENT_SHOW_TYPE = 0;
+/**
+ * 🔴 服务端错误码 → admin i18n key 的前缀（`error.<code>`）。
+ * 码的权威登记表在**服务端** `packages/server/src/utils/serverErrorCodes.ts`；
+ * 三语文案在本包 `src/locales/*.ts` 的 `error.*` 下；
+ * 两边由 `tests/unit/i18nServerErrorCodes.test.js` 双向对账（含"zh-CN 的值必须与服务端登记表的中文逐字相同"）。
+ */
+const SERVER_ERROR_KEY_PREFIX = 'error.';
 
 let loginSuccessAt = 0;
 
@@ -67,8 +74,32 @@ function shouldSuppressSessionExpiredToast({ pathname, now = Date.now() } = {}) 
   return hasJustLoggedIn(now);
 }
 
-function mapAdminErrorMessage(resData) {
-  let errorMessage = resData?.message;
+/**
+ * 🔴 期 9（服务端错误码框架）：**有码用码、无码回落服务端的 message**。
+ *
+ * 为什么要"回落"而不是"必须有码"：迁移是渐进的（服务端今天还有 243 处带中文的 `throw`），
+ * 🔴 任何时刻都必须是可用状态 —— 没迁移的接口照旧显示服务端那句中文，迁移过的显示当前语言的译文。
+ *
+ * @param {*} resData 服务端响应体（可能带 `code` 与 `params`）
+ * @param {Function} [t] **注入式翻译器** `(id, defaultMessage, values) => string`。
+ *   🔴 本模块是纯 JS、会被 `node --test` 直接 `require()` ⇒ 拿不到 umi 运行时，
+ *   所以翻译器由调用方（`app.jsx`，在**调用期**用 `getIntl(getLocale())` 造）注入。
+ *   🔴 **不传 t 时本模块的输出与改造前逐字相同**（这条由 requestError.test.js 钉住）。
+ * @returns {string|undefined} 译文；没有码或没有翻译器时返回 `undefined`（表示"交回原逻辑"）
+ */
+function translateServerErrorMessage(resData, t) {
+  const code = resData?.code;
+  if (!code || typeof t !== 'function') {
+    return undefined;
+  }
+  // 🔴 defaultMessage 用**服务端那句中文**：万一语言包漏了这个码，用户看到的仍是今天的行为（中文），
+  //    而不是裸 key 或 undefined。漏译由守卫拦（不靠运行时兜底），但兜底方向必须是"退回旧行为"。
+  return t(SERVER_ERROR_KEY_PREFIX + code, resData?.message, resData?.params);
+}
+
+function mapAdminErrorMessage(resData, t) {
+  const translated = translateServerErrorMessage(resData, t);
+  let errorMessage = translated === undefined ? resData?.message : translated;
   if (resData?.statusCode == 401 && resData?.message === 'Unauthorized') {
     errorMessage = SESSION_EXPIRED_MESSAGE;
   }
@@ -81,7 +112,7 @@ function mapAdminErrorMessage(resData) {
 function adaptAdminResponse(resData = {}, context = {}) {
   const statusCode = resData?.statusCode;
   const success = statusCode == 200 || statusCode == 233;
-  const errorMessage = mapAdminErrorMessage(resData);
+  const errorMessage = mapAdminErrorMessage(resData, context?.t);
   const result = {
     ...resData,
     success,
@@ -136,11 +167,13 @@ function shouldShowRequestError(error, context = {}) {
 }
 
 function handleAdminRequestError(error, deps = {}) {
-  const { message: messageApi, pathname, now } = deps;
+  const { message: messageApi, pathname, now, t } = deps;
   if (error?.request?.options?.skipErrorHandler) {
     throw error;
   }
-  const context = { pathname, now };
+  // 🔴 `t` 一路透传到 mapAdminErrorMessage：全局 errorHandler 是服务端错误码唯一的翻译落点
+  //    （业务代码里的 reportRequestError 只负责"全局没弹时兜一句本地文案"）。
+  const context = { pathname, now, t };
   if (shouldShowRequestError(error, context)) {
     const info = resolveErrorInfo(error, context);
     const text = info.errorMessage || error.message;
@@ -187,6 +220,7 @@ module.exports = {
   DEFAULT_ERROR_MESSAGE,
   LOGIN_SUCCESS_GRACE_MS,
   SILENT_SHOW_TYPE,
+  SERVER_ERROR_KEY_PREFIX,
   markLoginSuccess,
   resetRequestErrorState,
   hasJustLoggedIn,
@@ -195,6 +229,8 @@ module.exports = {
   isSessionExpiredError,
   shouldSuppressSessionExpiredToast,
   shouldShowRequestError,
+  translateServerErrorMessage,
+  mapAdminErrorMessage,
   adaptAdminResponse,
   handleAdminRequestError,
   reportRequestError,

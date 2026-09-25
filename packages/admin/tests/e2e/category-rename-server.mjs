@@ -61,10 +61,19 @@ function renameCategory(oldName, newName) {
     return { ok: true };
   }
   if (store.categories.some((item) => item.name === newName)) {
-    return { ok: false, status: 406, message: '分类名重复，无法修改！' };
+    // 🔴 替身忠实度：真服务端这一处已迁到错误码（`codedError('categoryDuplicateOnUpdate')`），
+    //    响应体是 `{ statusCode, message(中文), error, code }` ⇒ 替身也必须带 `code`，
+    //    否则 e2e 就再也走不到 admin 的"有码用码"那条路径（静默失去覆盖）。
+    return {
+      ok: false,
+      status: 406,
+      message: '分类名重复，无法修改！',
+      code: 'categoryDuplicateOnUpdate',
+    };
   }
   const target = store.categories.find((item) => item.name === oldName);
   if (!target) {
+    // ⚠️ 这一条**刻意不带 code**：真服务端也还没迁移它 ⇒ 它正好覆盖 admin 的"无码回落 message"那条路径。
     return { ok: false, status: 404, message: '分类不存在' };
   }
   // Same contract as CategoryProvider.updateCategoryByName: rewrite every
@@ -109,7 +118,11 @@ const server = createServer(async (req, res) => {
       return json(res, 406, { statusCode: 406, message: '分类名不能为空' });
     }
     if (store.categories.some((item) => item.name === name)) {
-      return json(res, 406, { statusCode: 406, message: '分类名重复，无法创建！' });
+      return json(res, 406, {
+        statusCode: 406,
+        message: '分类名重复，无法创建！',
+        code: 'categoryDuplicateOnCreate',
+      });
     }
     store.categories.push({
       id: store.nextCategoryId++,
@@ -126,7 +139,12 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     const result = renameCategory(oldName, body.name);
     if (!result.ok) {
-      return json(res, result.status, { statusCode: result.status, message: result.message });
+      // 🔴 `code` 透传（没有 code 的那条会被 JSON.stringify 自然丢掉，形状与真服务端一致）
+      return json(res, result.status, {
+        statusCode: result.status,
+        message: result.message,
+        code: result.code,
+      });
     }
     return json(res, 200, { statusCode: 200, data: true });
   }
@@ -134,7 +152,11 @@ const server = createServer(async (req, res) => {
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/admin/category/')) {
     const name = decodeURIComponent(url.pathname.slice('/api/admin/category/'.length));
     if (store.articles.some((item) => item.category === name && !item.deleted)) {
-      return json(res, 406, { statusCode: 406, message: '分类已有文章，无法删除！' });
+      return json(res, 406, {
+        statusCode: 406,
+        message: '分类已有文章，无法删除！',
+        code: 'categoryHasArticles',
+      });
     }
     store.categories = store.categories.filter((item) => item.name !== name);
     return json(res, 200, { statusCode: 200, data: true });
