@@ -118,7 +118,13 @@ export default {
   // ── 恢复结果的细节区块与确认弹窗（JSX 文本节点，第一轮清单漏了这批）──
   'init.restore.detail.seconds': 'Took {seconds}s.',
   'init.restore.detail.counts': 'Restored: {counts}',
-  'init.restore.detail.db': '{db}: {collections} collections / {documents} documents',
+  // 🔴 ICU 复数：`{collections} collections` 在 collections=1 时会渲染成 "1 collections"。
+  //    仓库已装的 react-intl@3.12.1 实测支持 `{n, plural, one {# x} other {# xs}}`，
+  //    而现有 t() 形状（intl.formatMessage({id, defaultMessage}, values)）天然支持 ⇒ 不需要改造运行时。
+  //    ⚠️ 只有 en-US 这类屈折语言需要；zh-CN / zh-TW 保持「{collections} 张表」（汉语无复数变化）。
+  //    由 tests/unit/i18nPluralConvention.test.js 钉住（含"用 react-intl 真的渲染一次"的正向断言）。
+  'init.restore.detail.db':
+    '{db}: {collections, plural, one {# collection} other {# collections}} / {documents, plural, one {# document} other {# documents}}',
   'init.restore.detail.static': 'Static files {folder}: {files}',
   'init.restore.doneLine1Prefix': 'Sign in with ',
   'init.restore.doneLine1Strong': 'the credentials from the backup file',

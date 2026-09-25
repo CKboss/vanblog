@@ -31,30 +31,16 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-// 🔴 解析 @babel/parser：先走正常解析，失败再扫 pnpm 的真实目录。
-// ⚠️ 两者都失败必须 fail-loud —— "解析不到"绝不等于"没有问题"（跳过就等于给这些文件发永久通行证）。
-function loadParser() {
-  try {
-    return require('@babel/parser');
-  } catch (_) {
-    const root = path.resolve(__dirname, '../../../../node_modules/.pnpm');
-    if (fs.existsSync(root)) {
-      for (const d of fs.readdirSync(root).sort().reverse()) {
-        if (!d.startsWith('@babel+parser@')) continue;
-        const cand = path.join(root, d, 'node_modules/@babel/parser');
-        if (fs.existsSync(cand)) return require(cand);
-      }
-    }
-  }
-  throw new Error(
-    'i18nHardcodedRatchet: 找不到 @babel/parser。这条守卫拒绝静默跳过 —— ' +
-      '解析不到不等于没有问题，请修好依赖解析而不是放宽断言。',
-  );
-}
-const parser = loadParser();
+// 🔴 AST 逻辑不再内联在本文件里，而是 require 仓库内的**唯一权威实现**
+//    `scripts/i18n/astInventory.js`（CLI 工具 `scripts/i18n/inventory.js` 用的是同一份）。
+// 为什么：此前守卫与一次性分类脚本各有一份 AST 逻辑 ⇒ 🔴 **两处实现同一件事就一定会漂移**。
+// 由 `i18nSharedImpl.test.js` 钉住"两边确实共用同一实现"。
+// ⚠️ 那个模块内部同样 fail-loud：找不到 @babel/parser 或解析失败都会抛错，
+//    🔴 **"解析不到"绝不等于"没有问题"**（跳过就等于给这些文件发永久通行证）。
+const astInventory = require('../../../../scripts/i18n/astInventory.js');
 
 const ADMIN = path.resolve(__dirname, '../..');
-const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+// 🔴 汉字正则（HAN）也在共享模块里，本文件不再各自定义一份。
 
 /**
  * 🔴 已接入 i18n 的文件 → 裸中文预算（只许减少不许增加）。
@@ -89,74 +75,22 @@ const REQUIRED_EXCEPTIONS = [
 
 /**
  * 数出一个文件里"裸中文"的去重条数。
- * 🔴 排除：注释（AST 的 comments 天然不在遍历里）、t()/formatMessage() 的第 2 个实参（defaultMessage 位）、
- *          以及对象字面量里 key 名为 defaultMessage 的属性值。
- * ⚠️ 那个 index===1 的判断很容易写反（写成 index===0 就会把 id 跳过、把 defaultMessage 算进来，
- *    本文件第一版就是这么错的，实测把 ThemeButton 报成 3 条而真值是 0）。
+ *
+ * 🔴 **实现不在这个文件里** —— 它是 `scripts/i18n/astInventory.js` 的 `bareChineseFromFile()`，
+ *    与 CLI 工具 `scripts/i18n/inventory.js` **共用同一份 AST 实现**（一个性质只留一处权威口径）。
+ *    由 `i18nSharedImpl.test.js` 钉住这件事。
+ *
+ * 语义（在共享模块里实现，这里只记录口径，避免两处描述漂移）：
+ * 🔴 排除注释、排除 `t()`/`formatMessage()` 的**第 2 个实参**（defaultMessage 位）、
+ *    以及对象字面量里 key 名为 `defaultMessage` 的属性值 —— 那些是**刻意保留的中文**，不是"未翻译"。
+ * ⚠️ 那个 `index === 1` 极易写反（写成 0 就会把 id 跳过、把 defaultMessage 算进来，
+ *    本文件第一版就是这么错的，实测把 ThemeButton 报成 3 条而真值是 0）⇒
+ *    🔴 共享模块里保留了这个警告，本文件的"尺子自证"断言（已翻干净的文件必须是 0）也仍然守着它。
  */
 function countBare(rel) {
   const abs = path.join(ADMIN, rel);
-  assert.ok(fs.existsSync(abs), `i18nHardcodedRatchet: 清单里的文件不存在：${rel}（清单已过期，请更新而不是放宽断言）`);
-  const src = fs.readFileSync(abs, 'utf8');
-  let ast;
-  try {
-    ast = parser.parse(src, {
-      sourceType: 'unambiguous',
-      errorRecovery: true,
-      // 🔴 插件列表必须覆盖本仓库真实用到的语法：漏掉 optionalChaining 时 src/app.jsx 会解析失败
-      // （第一版就漏了，而 fail-loud 让它明确报错而不是静默当成 0 条 —— 那正是想要的行为）
-      plugins: [
-        'jsx',
-        'typescript',
-        ['decorators', { decoratorsBeforeExport: true }],
-        'classProperties',
-        'classPrivateProperties',
-        'optionalChaining',
-        'nullishCoalescingOperator',
-        'objectRestSpread',
-        'dynamicImport',
-        'logicalAssignment',
-        'optionalCatchBinding',
-        'topLevelAwait',
-      ],
-    });
-  } catch (e) {
-    // 🔴 fail-loud：解析失败必须红，不能当成"0 条"
-    assert.fail(`i18nHardcodedRatchet: ${rel} 解析失败（不能当成 0 条）：${String(e.message).split('\n')[0]}`);
-  }
-  const found = new Set();
-  const walk = (nd) => {
-    if (!nd || typeof nd !== 'object') return;
-    if (
-      nd.type === 'ObjectProperty' &&
-      nd.key &&
-      (nd.key.name === 'defaultMessage' || nd.key.value === 'defaultMessage')
-    ) {
-      return; // 排除 { id, defaultMessage } 形式
-    }
-    if (nd.type === 'CallExpression') {
-      const cn = nd.callee && (nd.callee.name || (nd.callee.property && nd.callee.property.name));
-      if (cn === 't' || cn === 'formatMessage') {
-        // 🔴 排除第 2 个实参（index 1）= defaultMessage；其余（id、values）照常遍历
-        (nd.arguments || []).forEach((a, i) => {
-          if (i === 1) return;
-          walk(a);
-        });
-        return;
-      }
-    }
-    if (nd.type === 'StringLiteral' && HAN.test(nd.value)) found.add(nd.value);
-    if (nd.type === 'TemplateElement' && nd.value && HAN.test(nd.value.raw || '')) found.add('TPL:' + (nd.value.raw || '').trim());
-    if (nd.type === 'JSXText' && HAN.test(nd.value)) found.add('JSX:' + nd.value.replace(/\s+/g, ' ').trim());
-    for (const k of Object.keys(nd)) {
-      if (k === 'loc') continue;
-      const v = nd[k];
-      if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walk(x));
-      else if (v && typeof v === 'object' && v.type) walk(v);
-    }
-  };
-  walk(ast.program);
-  return found;
+  // 🔴 fail-loud：文件不存在 / 解析失败都会抛错，绝不当成"0 条"
+  return astInventory.bareChineseFromFile(abs, rel);
 }
 
 test('i18n 棘轮 · 反空转：清单里的文件全部真实存在且内容正常', () => {

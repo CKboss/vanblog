@@ -40,13 +40,24 @@ export default [
   {
     path: '/user',
     layout: false,
-    // ⚠️ 这两条刻意**不加** `locale`：`layout: false` 的整棵子树不经过 ProLayout，
-    // `name` 既不进菜单也不进面包屑/页面标题 ⇒ 加了也是永远不会被读到的死条目
-    // （而 localePackParity 有"包里的 menu.* 必须被某个路由用到"的反向断言）。
+    // 🔴 这两条必须显式写 `locale: false`（2026-09-25 浏览器实测后更正）。
+    //
+    // ⚠️ **此前这里的注释说的是"刻意不加 locale，因为 layout:false 的子树不经过 ProLayout、
+    //    加了也是死条目"—— 那个推理是不完整的，实测推翻了它。**
+    // 🔴 实测：不加任何东西时，`transformRoute` 仍然会为**整棵路由树**（含 layout:false 的路由）
+    //    计算 `locale = item.locale || 'menu.' + name` 并调用 `formatMessage`，
+    //    于是浏览器控制台出现 **48 条 `[React Intl] Missing message`**：
+    //    `menu.登录`（36 次）与 `menu.忘记密码`（12 次）—— 因为语言包里没有这两个 key
+    //    （它们本来也不该有：这两页不是菜单项）。
+    // 🔴 **正确做法就是权威实现里那个逃生口**：
+    //    `if (('locale' in item && locale === false) || !name) return false;`
+    //    ⇒ 显式写 `locale: false` 后 `getItemLocaleName` 返回 false，**根本不会调用 formatMessage**，
+    //    48 条报错消失，而且**语言包里不需要任何 menu.* 死条目**（反向断言仍然成立）。
+    // ⚠️ 父路由 `/user` 本身**没有 name** ⇒ 它已经由 `|| !name` 那一支返回 false，不需要写。
     // 🔴 这两页自己的文案由第一期加的 <SelectLang /> 与 login.* 语言包覆盖。
     routes: [
-      { name: '登录', path: '/user/login', component: './user/Login' },
-      { name: '忘记密码', path: '/user/restore', component: './user/Restore' },
+      { name: '登录', path: '/user/login', component: './user/Login', locale: false },
+      { name: '忘记密码', path: '/user/restore', component: './user/Restore', locale: false },
       { component: './404' },
     ],
   },

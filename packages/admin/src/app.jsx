@@ -4,7 +4,7 @@ import { HomeOutlined, LogoutOutlined, ProjectOutlined } from '@ant-design/icons
 import { PageLoading, SettingDrawer } from '@ant-design/pro-layout';
 import { message, Modal, notification } from 'antd';
 import moment from 'moment';
-import { history, Link, SelectLang, useIntl } from 'umi';
+import { getDirection, getLocale, history, Link, SelectLang, useIntl } from 'umi';
 import defaultSettings from '../config/defaultSettings';
 import LogoutButton from './components/LogoutButton';
 import ThemeButton from './components/ThemeButton';
@@ -17,6 +17,55 @@ import {
 import { beforeSwitchTheme, getInitTheme, mapTheme } from './services/van-blog/theme';
 const isDev = process.env.UMI_ENV === 'dev';
 const loginPath = '/user/login';
+
+/**
+ * 🔴 把当前语言同步到 `<html lang>` 与 `<html dir>`。
+ *
+ * ## 为什么需要它
+ * umi 的 `@umijs/plugin-locale` **不会**碰 `document.documentElement`（实测：它的生成物里
+ * `documentElement` 出现 0 次）⇒ 切到 English 之后 `<html lang>` 仍是 `zh-CN`。后果是具体的：
+ *   - 屏幕阅读器会用**中文发音规则**读英文界面；
+ *   - 浏览器的"要不要翻译此页"提示会判断错；
+ *   - 🔴 将来加 RTL 语言时 `dir` 不会跟着变，整个布局会错。
+ *
+ * ## 🔴 为什么用 umi 自己的 `getDirection()` 而不是自己列 RTL 语言
+ * `plugin-locale/localeExports.ts` 已经导出了 `getDirection()`，它的实现是
+ * `['he','ar','fa','ku'].some(前缀匹配) ? 'rtl' : 'ltr'`，并且经 `umiExports.ts` 的
+ * `export * from '../plugin-locale/localeExports'` 可以从 `'umi'` 直接导入。
+ * ⇒ 🔴 **复用它 = 不引入第二份"哪些语言是 RTL"的口径**（那正是本仓库反复吃过亏的形状）。
+ * ⚠️ 注意 `SelectLang` 的 `|| { lang: key, label: key }` 回落分支意味着：**谁只要新增一个 `ar.ts`
+ *    语言包，切换器就会立刻提供阿拉伯语** —— 那时 `dir` 会自动变成 `rtl`，但**整套布局从未按 RTL 验证过**。
+ *    所以"新增 RTL 语言"是一次需要专门验证的改动，不是"加个语言包"那么轻。
+ *
+ * ## 🔴 为什么在这里调用（而不是在 `links` 数组那种模块加载期的位置）
+ * `getLocale()` 内部会走 `plugin.applyPlugins(...)`，**依赖 umi 插件运行时已初始化** ⇒
+ * 不能在模块加载期调用（`export const layout = {...}` 那个普通对象就是加载期求值的，上一轮已踩过）。
+ * 这里定义成函数、在 `getInitialState()` 与 `layout` 工厂里调用，两者都是**运行时钩子**，
+ * 一定在插件运行时之后执行。
+ * 🔴 **两处都调**是因为覆盖面不同：`getInitialState()` 对**所有路由**生效（含 `layout: false` 的
+ * 登录页与安装页），而 `layout` 工厂只对走 ProLayout 的路由生效 ⇒ 只放后者会漏掉登录页。
+ * 幂等：重复调用只是把同一个值再写一次。
+ */
+const syncDocumentLocale = () => {
+  if (typeof document === 'undefined' || !document.documentElement) return;
+  try {
+    const lang = getLocale();
+    if (lang) document.documentElement.setAttribute('lang', lang);
+    // 🔴 dir 用 umi 的 getDirection()（它已经处理了 RTL 语言清单）
+    const dir = typeof getDirection === 'function' ? getDirection() : 'ltr';
+    document.documentElement.setAttribute('dir', dir || 'ltr');
+  } catch (e) {
+    // 🔴 这是纯装饰性的副作用，绝不能因为它失败而让整个应用起不来。
+    //    但也不要完全静默：留一条 warn 便于排障（本仓库的日志一直是排障的主要线索）。
+    // 🔴 这条 warn 刻意用 ASCII 而不是中文：它是**开发者控制台**消息、不是用户界面文案，
+    //    而本文件已被 i18nHardcodedRatchet 的"裸中文预算"钉住（预算 18）。
+    //    实测：写成中文会让预算变成 19 并当场弄红棘轮 —— 那正是棘轮想要的行为
+    //    （它在被写出来的同一轮就抓住了作者自己新加的硬编码中文）。
+    // eslint-disable-next-line no-console
+    console.warn('[i18n] failed to sync <html lang>/<html dir>:', e && e.message);
+  }
+};
+
 /** 获取用户信息比较慢的时候会展示一个 loading */
 
 export const initialStateConfig = {
@@ -26,6 +75,8 @@ export const initialStateConfig = {
  * @see  https://umijs.org/zh-CN/plugins/plugin-initial-state
  * */
 export async function getInitialState() {
+  // 🔴 第一句就同步 <html lang>/<html dir>：这里对所有路由生效（含 layout:false 的登录页与安装页）
+  syncDocumentLocale();
   const fetchInitData = async (option) => {
     try {
       const msg = await fetchAllMeta(option);
@@ -199,6 +250,9 @@ function LogoutLabel() {
 
 export const layout = ({ initialState, setInitialState }) => {
   handleSizeChange();
+  // 🔴 与 handleSizeChange 并列：这里覆盖走 ProLayout 的路由（getInitialState 已覆盖全部路由，
+  //    重复调用是幂等的；两处都放是为了"哪条路径先渲染都不会漏"）
+  syncDocumentLocale();
   return {
     rightContentRender: () => {
       return (

@@ -9469,6 +9469,201 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.136 🔴 多语言「期 0/期 1」：命名规范守卫、共享 AST 实现、`<html lang>` 跟随、ICU 复数，以及**一个被浏览器实测抓出来的真缺陷**
+
+本轮做四件事（站长裁定「开干，大胆改造，小心求证」）：期 0 的两件（key 命名规范守卫、把 AST 分类器提升为仓库工具）、
+期 1 的两件（`<html lang>`/`dir` 跟随语言、ICU 复数约定），外加一项只读测量（admin 打开类型检查后有多少真错）。
+
+#### A. 🔴 头号发现：`layout: false` 的路由**不加 `locale` 会产生 48 条控制台报错**（上一轮的推理不完整）
+
+上一轮（§7.134）给 15 条菜单路由加了显式 `locale`，并**刻意不给 `/user/login` 与 `/user/restore` 加**，
+理由是「它们 `layout: false`、不经过 ProLayout ⇒ 加了也是永远不会被读到的死条目」。
+🔴 **这个推理是错的，本轮用浏览器实测推翻**：
+
+- 实测（playwright，dev 3002 登录页）：`console.error` **59 条**，其中 🔴 **48 条是
+  `[React Intl] Missing message: "menu.登录"（36 次）/ "menu.忘记密码"（12 次）`**；
+- 🔴 **成因**：`@umijs/route-utils@2.2.2` 的 `transformRoute` 会为**整棵路由树**（含 `layout: false` 的路由）
+  计算 `locale = item.locale || 'menu.' + name` 并调用 `formatMessage` ⇒
+  **「不经过 ProLayout 渲染」与「不被 transformRoute 处理」是两件事**，上一轮把前者当成了后者；
+- 🔴 **正确修法是权威实现自带的逃生口**（`transformRoute.js:129`）：
+  `if ('locale' in item && locale === false || !name) return false;` ⇒
+  **给那两条路由显式写 `locale: false`**，`getItemLocaleName` 返回 false、`formatMessage` 根本不会被调用；
+- 🔴 **实测修后：`console.error` 从 59 条降到 11 条，48 条 Missing message 全部消失**，
+  剩下 11 条是 3× 401（登录页未认证，预期）+ 8 条 antd 弃用警告（`Drawer visible`/`Dropdown overlay`/`Menu children`，
+  与 i18n 无关的既有库噪音）。
+- ⚠️ 父路由 `/user` 本身**没有 `name`** ⇒ 它已由 `|| !name` 那一支返回 false，不需要写 `locale: false`。
+
+👉 🔴 **规矩：判断"某个配置会不会被读到"，要看**处理这棵树的代码**，不要看**渲染这棵树的代码**。**
+「这个路由不渲染菜单」推不出「这个路由不参与菜单数据的生成」。
+🔴 **并且：控制台报错数是 UI 改动的一等判据** —— 本轮如果不是抓了 `console.error`，
+这 48 条噪音会继续存在，而所有"页面看起来对"的判据都是绿的。
+
+#### B. 🔴 共享 AST 实现：`scripts/i18n/astInventory.js`（守卫与工具**同一份**）
+
+此前 `i18nHardcodedRatchet.test.js` 内联了一份 AST 逻辑、一次性分类脚本另有一份 ⇒ **两处实现同一件事就一定会漂移**。
+现在两边都 require 这一份，并由 `i18nSharedImpl.test.js`（5 条）钉住：
+① 四个消费方 require 的是**同一个文件**（解析成绝对路径后比较）；
+② 🔴 消费方里**不许再出现自己的 `loadParser()` 或 `parser.parse(src,{plugins})`**（防分叉）；
+③ 🔴 **反向**：共享模块里**必须**有那份实现（否则②会变成"两边都没有"的假绿）；
+④ 🔴 **行为等价**：用共享模块重算棘轮的 9 个文件基线，必须与棘轮里写死的数字**逐个一致**（合计 48）；
+⑤ 尺子反证 6 条（裸中文数得出 / defaultMessage 位被排除 / 🔴 **`t()` 的第 1 个实参照常统计**（防 index 写反复活）/
+JSX 文本数得出且带 `JSX:` 前缀 / 注释单独计数 / 🔴 **解析失败必须抛错**）。
+
+🔴 **`scripts/i18n/inventory.js`（CLI，零新依赖）**输出**四个互不重叠的桶**：字面量 / 模板片段 / JSX 文本 / 注释行数。
+🔴 **口径必须分开报**：实测 `packages/admin/src` 含中文 **3,441 行**里含 **1,354 行注释**（注释不翻译）⇒
+**"含中文行数"是上界不是工作量**。真实待翻译量：**甲类 114 文件 / 1,282 字面量 + 186 模板 + 352 JSX**。
+🔴 **与上一轮数字的对账**：136 个含中文文件 ✅、3,441 行 ✅、352 JSX ✅ 全部一致；
+上一轮的「甲类 1,466 字面量」= 本轮 **1,282 字面量 + 186 模板**（=1,468，差 2 属去重口径）⇒
+🔴 **不是矛盾，是上一轮把模板算进了字面量**。
+🔴 **`SiteInfoForm` 单文件 107 字面量 + 1 模板 = 108**，与上一轮的 108 一致。
+🔴 **一个与直觉相反的排序结论**：`pages` 聚合 **1,124 条 / 49 文件** > `components` **529 条 / 44 文件**；
+但 🔴 **对"单个页面组"而言 components 更大**（最大单组是 `pages/SystemConfig` **366 条 / 13 文件**，与上一轮逐字一致）⇒
+**排期要按"单个页面组"看，不要按顶层目录看。**
+
+🔴 **`scripts/i18n/**` 不需要接 CI**：那条「每个守卫脚本都必须被某个 workflow 引用」的内联断言，
+实测其 glob 是 **`scripts/tests/*.test.sh`**（`server-test.yml` 里的 `for f in scripts/tests/*.test.sh`），
+而 `ci-paths-coverage` 只匹配 **`scripts/tests/*.sh`** ⇒ **两者都覆盖不到 `scripts/i18n/*.js`**（已读代码核实，不是读注释）。
+
+#### C. 🔴 key 命名规范守卫（`i18nKeyNaming.test.js`，7 条）
+
+规范：`<组>.<区域>.<项>`，**最多三段**；段字符集 `A-Za-z0-9_-`；不以点开头/结尾、无空段；
+🔴 **第一段必须属于已登记的组**（`common`/`error`/`init`/`login`/`logout`/`menu`/`theme`）⇒
+**新增组必须显式登记**，这就是"防止命名空间失控"的机制：让扩张变成一次需要过守卫的、有记录的决定。
+🔴 **`error.*` 是预留给服务端错误码那一期的**（与前端 key 复用同一套命名，避免两套口径）。
+
+🔴 **祖父条款**：实测 114 个 key 里有 **20 个是四段**（`init.restore.{count,err,detail}.*`）。
+**不为了让守卫绿而改它们的 key 名**（改名会牵动所有 `t('…')` 引用点与"defaultMessage 与 zh-CN 逐字相同"那条对账）⇒
+**白名单豁免段数规则、只对增量生效**，但仍受"组必须已登记"约束。
+🔴 **白名单必须恰好等于实际的四段 key 集合**（双向 deepStrictEqual + 条数钉死 20 + 每条都真实存在于包中，防死条目）。
+🔴 **现状 `init.*` 占 114 个 key 里的 82 个（72%）** ⇒ 这就是"规范必须在期 3（`SystemConfig` 366 条）之前定下来"的理由。
+🔴 **另钉一条**：`menu.*` 只允许被 `config/routes.js` 的 `locale` 字段使用（方案 B 专用命名空间），
+防止将来有组件开始 `t('menu.xxx')` 造成两套机制混用。
+
+#### D. 🔴 `<html lang>` / `<html dir>` 跟随语言（**浏览器活体验证**）
+
+**缺陷**：umi 的 `plugin-locale` **不碰 `document.documentElement`**（实测其生成物里 `documentElement` 0 命中）⇒
+切到 English 后 `<html lang>` 仍是 `zh-CN`。后果是具体的：屏幕阅读器用中文发音规则读英文界面、
+浏览器"要不要翻译此页"判断错、🔴 **将来加 RTL 语言时 `dir` 不会跟着变、整个布局会错**。
+
+**修法**：`app.jsx` 新增 `syncDocumentLocale()`，用 🔴 **umi 自己的 `getLocale()` 与 `getDirection()`**
+（`plugin-locale/localeExports.ts` 导出、经 `umiExports.ts` 的 `export * from '../plugin-locale/localeExports'` 可从 `'umi'` 导入；
+`getDirection()` 的实现是 `['he','ar','fa','ku']` 前缀匹配 ⇒ `'rtl'`/`'ltr'`）。
+🔴 **复用它 = 不引入第二份"哪些语言是 RTL"的口径。**
+🔴 **调用点放两处**：`getInitialState()` 的第一句（对**所有路由**生效，含 `layout: false` 的登录页与安装页）
+与 `layout` 工厂里、与既有的 `handleSizeChange()` 并列（对走 ProLayout 的路由生效）⇒ **只放后者会漏掉登录页**。
+⚠️ **不能在模块加载期调用**：`getLocale()` 内部走 `plugin.applyPlugins(...)`，依赖 umi 插件运行时已初始化
+（与 §7.134 里 `links` 数组那条同一个约束）。
+🔴 **副作用失败绝不能拖垮应用** ⇒ try/catch + `console.warn`；
+🔴 **而那条 warn 刻意用 ASCII**：它是开发者控制台消息、不是用户界面文案，而 `app.jsx` 已被棘轮预算（18）钉住 ——
+**实测写成中文会让预算变成 19 并当场弄红棘轮**（👉 棘轮在写出来的同一轮就抓住了作者自己新加的硬编码中文）。
+
+🔴 **浏览器实测（playwright + `executablePath`，dev 3002 登录页，真点击）**：
+
+| 步骤 | `<html lang>` | `dir` | `umi_locale` | 页面文本 |
+|---|---|---|---|---|
+| 初始 | `zh-CN` | `ltr` | null | `博客管理后台 自动登录 忘记密码 登 录` |
+| 点 English 后 | 🔴 **`en-US`** | `ltr` | `en-US` | `Admin Console Keep me signed in Forgot password Login` |
+| 切回简中后 | 🔴 **`zh-CN`** | `ltr` | `zh-CN` | 回到中文 |
+
+语言控件 boundingBox **42×42 @ (1398,185)**（🔴 **量了尺寸与可见性，不是只判"DOM 里存在"**）、
+菜单**恰好三项**（`🇺🇸English / 🇨🇳简体中文 / 🇭🇰繁體中文`）⇒ 🔴 **再次证实 §7.135 那条"阿拉伯语不是缺陷"**。
+⚠️ `dir` 恒为 `ltr` 是正确的（这三种语言都是 LTR）；🔴 **RTL 那条路径已接好但无法在缺少 RTL 语言包时验证**。
+
+#### E. 🔴 ICU 复数：修掉一个真缺陷，并把约定变成守卫
+
+🔴 **实测出的真缺陷**：`init.restore.detail.db` 的 en-US 值是 `{db}: {collections} collections / {documents} documents`
+⇒ **collections=1 时渲染成 "1 collections"**。已改成 ICU：
+`{db}: {collections, plural, one {# collection} other {# collections}} / {documents, plural, one {# document} other {# documents}}`。
+🔴 **只改 en-US**：zh-CN/zh-TW 保持 `{collections} 张表 / {documents} 条`（汉语无复数变化），
+并由守卫**反向钉住"不要好心给中文也加 plural"**。
+🔴 **不需要改造运行时**：仓库已装的 `react-intl@3.12.1` 实测支持，而现有 `t()` 形状就是
+`intl.formatMessage({id, defaultMessage}, values)`；守卫里有一条 🔴 **用 `createIntl` 真的渲染一次**
+（`collections:1` → 必须匹配 `1 collection` 且不匹配 `1 collections`；`7/42` → 必须是 `7 collections`/`42 documents`）⇒
+**将来若 react-intl 被降级/替换导致 plural 失效，这条会红。**
+
+🔴 **判据是收窄过的（朴素判据噪音 75%）**：朴素判据「数字或占位符 + 复数名词」在 114 个 key 上命中 **4 条，
+其中 3 条是假阳性**（`every 10 minutes`、`1–2 minutes`、`5 per 10 minutes` 都是**散文里的常量数字**，不是插值计数）；
+🔴 收窄成「**`{占位符}` 紧跟复数名词**」后**恰好命中 1 条**（就是那个真缺陷）。
+⇒ 守卫的判据是**后者**，并且 🔴 **守卫里保留了一条"朴素判据命中数 > 收窄判据命中数"的断言**，
+把"为什么要收窄"这个事实钉住（而不是只写在注释里）。
+🔴 这条与本仓库另一条同源：**假缺口比没守卫更糟，它会训练下一个人忽略红灯。**
+
+#### F. 🔴 只读测量：admin 打开类型检查后有多少真错（期 3 之前的安全网）
+
+用**临时探针 tsconfig**（放 `vanblog_dev/`，🔴 **不入库**）照抄 `packages/server/tsconfig.dev.json` 的手法限制
+`typeRoots: ["../packages/admin/node_modules/@types","../node_modules/@types"]`，
+用 **admin 自己的 tsc（4.9.5）** 跑 `--noEmit`，口径为 **84 个 TS/TSX 文件 / 9,535 行**（排除 `.umi*`）：
+
+- 🔴 **`error TS` 共 44 条**，其中 **42 条在 `packages/admin/src/`**、2 条在 `node_modules`
+  （`mdast-util-mark@1.0.0` 自己的 `.ts`）、🔴 **来自家目录 `@types` 的 0 条**
+  ⇒ **`typeRoots` 限制彻底消除了上一轮那 115 条 `bun-types` 噪音**（那 115 条不是 admin 的错）。
+- 分布：**TS2322 ×14**（类型不可赋值）、**TS2305 ×10**、**TS2724 ×7**、**TS2339 ×7**、
+  **TS2345 ×2**、**TS2307 ×2**、**TS18048 ×2**（possibly undefined）。
+- 错误最多的文件：`components/WaterMarkForm/index.tsx` 5、`components/UpdateModal/index.tsx` 5、
+  `pages/Static/img/index.tsx` 4、`pages/LogManage/tabs/System.tsx` 4、`pages/Code/index.tsx` 4。
+- 🔴 **关键判断：44 里有 12 条是"配置产物"而不是真错**：
+  **TS2305 ×10 全是 `Module '"umi"' has no exported member 'SelectLang'/'useIntl'/'useModel'`**
+  ⇒ 因为探针 **排除了 `src/.umi`**（那里才有 umi 生成的类型），
+  **TS2307 ×2 是 `Cannot find module './index.less' / 'katex/dist/katex.css'`** ⇒ 缺一个样式模块的环境声明。
+  ⇒ 🔴 **真实缺陷约 32 条**（TS2322 14 + TS2724 7 + TS2339 7 + TS18048 2 + TS2345 2）。
+- 🔴 **因此"上棘轮"的正确顺序是**：**先把配置修对**（把 `src/.umi` 的类型纳进来 + 加样式模块声明），
+  **再把基线定在修对之后的数字**（预计 ~32）；🔴 **否则会把 12 条幻影错误永久钉进基线**，
+  那正是"假缺口比没守卫更糟"的另一种形状。
+- ⚠️ **本轮只测量、不修、不上门禁**（那是下一步的裁定）。
+
+#### G. 🔴 变异对照 6/6 结论正确（每条都先 assert 锚点 `==1`、再证明 sha 变了、🔴 **逆序还原**）
+
+| | 变异 | 结果 |
+|---|---|---|
+| M1 | 撤掉一条 `locale: false`（复现 48 条 Missing message 的缺陷形状） | 🔴 RED 1，**失败信息点名 `menu.登录`** |
+| M2 | 把 en-US 的 ICU plural 退回 `{collections} collections` | 🔴 RED 4 |
+| M3 | 在预算为 0 的 `ThemeButton` 里加一条硬编码中文 | 🔴 RED 3，**失败信息点名 ThemeButton** |
+| M4 | 往语言包加一个未登记组的 key（`siteInfo.basic.title`） | 🔴 RED 3，**点名未登记的组** |
+| M5 | 弄坏共享模块的枚举（`bareChinese` 恒返回空） | 🔴 **棘轮 RED 2 + 共享实现 RED 2**（反空转承重） |
+| M6 | 只改一处注释措辞（刻意的语义空操作） | ✅ **GREEN：棘轮 6 / 共享 5 / 命名 7 / 复数 5 / localePackParity 39** |
+
+还原后逐文件 sha 与基线一致；备份残留 0（🔴 **`atexit` 兜底**：M3 的锚点第一次命中 0 次并抛 `AssertionError`，
+`atexit` 正确还原了文件 —— 🔴 **异常不是信号，只挂 SIGTERM/SIGINT 会留下变异态**）。
+
+#### H. 🔴 本轮踩的坑（每条都被闸门或交叉验证抓到）
+
+1. 🔴 **`npx umi build` 会失败，必须用仓库自己的 `npm run build`**：admin 的 build 脚本是
+   `cross-env NODE_OPTIONS="--openssl-legacy-provider --max_old_space_size=4096" umi build`，
+   而 umi3/webpack4 用 **md4** 算 chunk hash、OpenSSL 3 不支持 ⇒ 直接 `npx umi build` 报
+   `ERR_OSSL_EVP_UNSUPPORTED`。🔴 **Dockerfile 第 72-78 行早就把这条写清楚了**（还包括
+   "cross-env 会**整体替换**而不是追加 NODE_OPTIONS"这个二级坑）⇒
+   👉 **规矩：构建/测试一律用仓库自己的脚本，不要自己拼命令**（与"不要凭记忆重建路径"同族）。
+2. 🔴 **测量类命令的空输出必须先怀疑尺子**：第一次跑 admin 类型检查时 `find` 没找到 tsc
+   （路径模式写错），而 `node "$TSC"` 带着空路径照样"跑完"、日志 0 行 ⇒
+   **得到"0 个错误"的假结果**。🔴 **是"日志 0 行"这个数字本身暴露了它** ⇒
+   👉 **规矩：测量结果为零时，先核实"工具真的跑了"（日志非空 / 有汇总行），再相信那个零。**
+   （本项目"计数异常先怀疑尺子"已 **15 次**。）
+3. 🔴 **`process.env.HOME` 被工具链导出改写过**（`HOME=$PWD/.tools/home`）⇒
+   用它拼 `~/.cache/ms-playwright/...` 会指向不存在的目录，playwright 报
+   `executable doesn't exist`。👉 **规矩：涉及用户级缓存的路径要用绝对路径或 `find` 实测，
+   不要用 `process.env.HOME` 拼**（本仓库的工具链刻意改写了 HOME）。
+4. 🔴 **`awk '{print $1,$2}'` 会把 `error TS2322` 截成 `error`**（错误码分布那一栏第一次全是 "error"）⇒
+   👉 **打印计数表时不要用 `$2` 取带空格的标签**，用 `while read -r n code`。
+5. ⚠️ **edit 工具要求先 read 目标文件**（否则报 `file has not been read`）⇒ 改文件前先读那一段。
+6. 🔴 **`grep -oaE '^### 7\.[0-9]+...' | sort -u | tail` 会把 `7.98` 排在 `7.135` 之后**
+   （字符串排序）⇒ 第一次算节号得到"最大 7.98"。👉 **数字要用 `sort -n`，或先抽主号再取 max**
+   （这与 §7.122 那条"不要 `split+int`"是同一个坑的两面：**既不能按字符串排，也不能对字母后缀 `int()`**）。
+
+#### I. 🔴 基线更新（2026-09-25 实测）
+
+- **admin 单测：680 → 697 tests / 164 suites / 0 fail**（🔴 **+17 = 命名 7 + 复数 5 + 共享实现 5**，精确对账；
+  ⚠️ 注意基线 680 里**已含**棘轮那 6 条，所以本轮新增的是三个新文件共 17 条，不是 23 条）。
+  🔴 **一条自纠**：中途曾按"696"记录，那是**在补上 `routes.js` 那条断言之前**算的（命名守卫当时是 6 条、后来是 7 条）⇒
+  **最终实测 697**。👉 这正是本仓库那条规矩的实例：**报数字要在全部改动落地之后再取一次，不要用中途的数字。**
+- **i18n 守卫**：`i18nHardcodedRatchet` **6**、`i18nSharedImpl` **5**、`i18nKeyNaming` **7**、
+  `i18nPluralConvention` **5**、`localePackParity` **39**（未改）。
+- **语言包：114 → 114 key**（本轮没加 key，只改了 `init.restore.detail.db` 的 en-US 值）。
+- **admin 构建**：`umi.js` **1,284,441 → 1,290,189 B（+5,748 B）**，dist 总量 **25,336,903 B**，
+  🔴 **必须用 `npm run build`**（见 H.1）。
+- 🔴 **`console.error` 基线：登录页从 59 条降到 11 条**（48 条 `Missing message` 已消除）⇒
+  **这 11 条是新的基线**：3× 401（登录页未认证，预期）+ 8 条 antd 弃用警告
+  （`Drawer visible` / `Dropdown overlay` / `Menu children`）⇒ 🔴 **将来做 UI 改动时，超过 11 条就要查。**
+
 ### 7.135 🔴 多语言的**框架级**评估与第一条防回归棘轮（附：上一轮欠的 6 项入册）
 
 > 站长本轮把目标从"翻译字符串"提升为「**不只是为了多语言，更是为了改造框架以在未来实现多语言的支持**」，
