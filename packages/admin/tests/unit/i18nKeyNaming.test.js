@@ -33,12 +33,12 @@ for (const l of LOCALES) {
 const KEYS = Object.keys(PACKS['zh-CN']);
 
 /** 🔴 当前实测基线（改这些数字必须是有意的，并在注释里写明理由）。 */
-// 🔴 114 → 186（2026-09-25 期 3 第二批）→ 194（期 9 第一批：8 个 `error.<code>`）→ 204（期 9 第二批：+10 个）→ **216**（期 9 第三批：+12 个）。
+// 🔴 114 → 186（2026-09-25 期 3 第二批）→ 194（期 9 第一批：8 个 `error.<code>`）→ 204（期 9 第二批：+10 个）→ 216（期 9 第三批：+12 个）→ **267**（期 9 第四批：回收站 +51 个）。
 //   这条是**进度下界**（key 变少 = 有人删了译文、或包被截断），所以每翻完一批就该跟着抬 ——
 //   期 3 第一批（145 key）时没抬，本轮补上。
 //   🔴 这里也是"key 数下界"的**唯一权威口径**：`i18nSharedImpl` 只证明 readPack 没坏（三份相等且非平凡），
 //   `localePackParity` 只做"三份都空 ⇒ 集合相等"的反空转（>= 50），都不写具体进度数字。
-const BASELINE_KEY_COUNT = 216;
+const BASELINE_KEY_COUNT = 267;
 const BASELINE_GRANDFATHERED = 20;
 const REGISTERED = astInventory.REGISTERED_KEY_GROUPS;
 

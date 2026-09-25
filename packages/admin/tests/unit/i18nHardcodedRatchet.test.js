@@ -74,6 +74,12 @@ const BUDGET = {
   //   ⚠️ 所以这 4 条**刻意不登记进 REQUIRED_EXCEPTIONS**：那张清单的语义是"改掉会破坏行为"
   //   （协议字符串 / 要照着敲的命令 / 静态双语标签），而这 4 条只是**欠着**，tab 那批落地时必须归 0。
   'src/pages/SystemConfig/tabs/Customizing.jsx': 4,
+  // 🔴 期 9 第四批（2026-09-26）：回收站抽屉两个文件都已全量接 i18n ⇒ 预算 0。
+  //   ⚠️ `recycleCore.js` 是**注入式翻译器**模式（纯 JS、被 node --test 直接 require），
+  //   它的中文全部待在 `t()` 的 defaultMessage 位 ⇒ 裸中文 0；
+  //   🔴 而"不传 t 时输出与改造前逐字相同"由 `recycleBin.test.js` 的既有 30 条断言钉住（一条都没改就全绿）。
+  'src/components/RecycleBin/index.jsx': 0,
+  'src/components/RecycleBin/recycleCore.js': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -180,7 +186,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 13, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 15, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   assert.strictEqual(TOTAL_BUDGET, 52, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   assert.strictEqual(REQUIRED_EXCEPTIONS.length, 4, '例外清单条数变了 ⇒ 必须是有意的');
 });

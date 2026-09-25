@@ -553,7 +553,10 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `sysconf` = 后台「系统设置」页（`pages/SystemConfig/**`）专用的组（2026-09-25 期 3 第一批登记）。
 //   与 `common.*` 的边界：**只在本页组出现的用 `sysconf`，跨页共用的用 `common`**；
 //   与 `menu.*` 的边界：`menu.*` 是方案 B 的专属命名空间，只允许被 `config/routes.js` 的 `locale` 字段使用。
-const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'sysconf', 'theme'];
+// 🔴 `recycle` = 回收站抽屉（`components/RecycleBin/**`，2026-09-26 期 9 第四批登记）。
+//   它是**第一个组件级命名空间**：跨页复用的组件用自己的名字做组（recycle / 将来的 editor / imgPicker…），
+//   页面组用页面名（sysconf），真正通用的动作词才进 common。
+const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'recycle', 'sysconf', 'theme'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',
@@ -622,10 +625,39 @@ const ICU_PLURAL_RE = /\{[A-Za-z_][A-Za-z0-9_]*\s*,\s*plural\s*,/;
  * 一个 en-US 值是否"该用 ICU plural 却没用"。
  * 🔴 已经用了 plural 的不再报（一条值里可能同时有 plural 段与普通占位符）。
  */
+/**
+ * 🔴 「`{占位符}` 后面那个以 s 结尾的词」里，**永远不可能是复数名词**的那一批（英语功能词/动词）。
+ *
+ * ## 为什么需要它（实测到的假阳性，2026-09-26 期 9 第四批）
+ * `PLACEHOLDER_PLURAL_RE` 判的是"占位符 + 以 s 结尾的词"，而英语里以 s 结尾的**功能词**一大堆：
+ * 新写的两条文案 `{label} is no longer in the recycle bin…` 与 `not allowed to {action} this {label}…`
+ * 分别被 `is` 与 `this` 命中 ⇒ 🔴 **守卫报了 2 条假缺口**，而那两条根本不含计数。
+ * 这与本仓库那条老经验同源：**假缺口比没守卫更糟 —— 它会训练下一个人忽略红灯。**
+ *
+ * ## 🔴 收词纪律
+ * 只收"**绝不可能是复数名词**"的词（be/have 的变位、指示代词、比较连词、物主代词…）。
+ * ⚠️ 刻意**不收** bus / gas / class / address 这类"以 s 结尾但真的是名词"的词 ——
+ * 收了就会漏掉真缺陷（假阴性）。逐个词核实过，与"简体专用字表"是同一条纪律。
+ */
+const ICU_PLURAL_STOPWORDS = new Set([
+  'is', 'was', 'as', 'has', 'this', 'that', 'thus', 'us', 'vs', 'his', 'its',
+  'ours', 'yours', 'theirs', 'always', 'sometimes', 'perhaps', 'yes', 'plus', 'minus',
+]);
+
+/** 全局版（要逐个匹配来看命中词是不是功能词，`test()` 那种"有一个就算"的语义不够用）。 */
+const PLACEHOLDER_PLURAL_GLOBAL_RE = /\{[A-Za-z_][A-Za-z0-9_]*\}\s+([A-Za-z]+)s\b/g;
+
 function needsIcuPlural(value) {
   if (typeof value !== 'string') return false;
   if (ICU_PLURAL_RE.test(value)) return false;
-  return PLACEHOLDER_PLURAL_RE.test(value);
+  PLACEHOLDER_PLURAL_GLOBAL_RE.lastIndex = 0;
+  let m;
+  while ((m = PLACEHOLDER_PLURAL_GLOBAL_RE.exec(value)) !== null) {
+    const word = (m[1] + 's').toLowerCase();
+    // 🔴 功能词（is / this / as …）不是复数名词 ⇒ 跳过；其它命中就是真缺陷
+    if (!ICU_PLURAL_STOPWORDS.has(word)) return true;
+  }
+  return false;
 }
 
 module.exports = {
@@ -651,6 +683,8 @@ module.exports = {
   GRANDFATHERED_KEYS,
   validateKeyShape,
   PLACEHOLDER_PLURAL_RE,
+  PLACEHOLDER_PLURAL_GLOBAL_RE,
+  ICU_PLURAL_STOPWORDS,
   ICU_PLURAL_RE,
   needsIcuPlural,
 };

@@ -8,29 +8,29 @@ import {
 } from '@/services/van-blog/api';
 import { Alert, Button, Drawer, Modal, Popconfirm, Space, Table, Tag, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useModel } from 'umi';
+import { useIntl, useModel } from 'umi';
 import {
-  DRAFT_PURGE_CONFIRM_CONTENT,
-  DRAFT_RECYCLE_EMPTY_TEXT,
-  DRAFT_RESTORE_CONFIRM_TEXT,
-  DRAFT_RESTORE_CONFIRM_TITLE,
-  PURGE_CONFIRM_CONTENT,
-  PURGE_OK_TEXT,
-  RECYCLE_EMPTY_TEXT,
   RECYCLE_PERMISSIONS,
-  RESTORE_CONFIRM_TEXT,
-  RESTORE_CONFIRM_TITLE,
   describeListFailure,
   describeRecycleActionFailure,
+  draftPurgeConfirmContent,
   draftPurgeConfirmTitle,
   draftPurgeSuccessText,
+  draftRecycleEmptyText,
+  draftRestoreConfirmText,
+  draftRestoreConfirmTitle,
   draftRestoreSuccessText,
   formatDeletedAt,
   formatWordCount,
   isNotFoundFailure,
   normalizeDeletedList,
+  purgeConfirmContent,
   purgeConfirmTitle,
+  purgeOkText,
   purgeSuccessText,
+  recycleEmptyText,
+  restoreConfirmText,
+  restoreConfirmTitle,
   restoreSuccessText,
 } from './recycleCore';
 
@@ -71,6 +71,20 @@ export default function RecycleBin(props) {
   const { type = 'article', visible, onClose, onChanged } = props;
   const isDraft = type === 'draft';
   const { initialState } = useModel('@@initialState');
+  // 🔴 语言选择必须在**渲染期**（`useIntl()` 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  //    `t()` 的第二个实参是 defaultMessage，必须与 zh-CN 语言包里的值逐字相同（localePackParity 钉住）；
+  //    而 recycleCore 里那些文案函数**不传 t 时输出与改造前逐字相同**（它那 30 条既有单测就是证据）。
+  const intl = useIntl();
+  // 🔴 **必须用 `useCallback` 包**：`t` 会进 `fetchList` 的依赖数组，而"每次渲染新建一个函数"
+  //    会让 `useCallback` → `useEffect` 这条链每轮都重跑 ⇒ **实测造成无限请求循环**：
+  //    抽屉表格永远 `loading`、一行都不渲染，而且把服务端的 admin 限流打满（后续请求全 429）。
+  //    🔴 这个缺陷**单测看不见**（组件根本不跑），只有浏览器活体证据能抓到 ——
+  //    诊断线索是 `spin: 1` + `/api/admin/article/deleted` 已经 200 返回了 6 条数据。
+  //    `intl` 只在语言变化时换引用 ⇒ 这样既稳定、又能在切语言后拿到新译文。
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
   const perms = RECYCLE_PERMISSIONS[type] || RECYCLE_PERMISSIONS.article;
   const canRestore = useMemo(
     () => hasPermission(initialState, perms.restore),
@@ -92,12 +106,14 @@ export default function RecycleBin(props) {
       setErrorText('');
       try {
         const res = isDraft ? await getDeletedDrafts(p, ps) : await getDeletedArticles(p, ps);
-        const { articles: list, total: t } = normalizeDeletedList(res);
+        // 🔴 这里原本把 total 解构成 `t` —— 与本组件的翻译器 `t` **同名**（会遮蔽），
+        //    而且 try 里的 `t` 与 catch 里的 `t` 含义还不一样 ⇒ 改名，别留这种坑。
+        const { articles: list, total: rowCount } = normalizeDeletedList(res, t);
         setArticles(list);
-        setTotal(t);
+        setTotal(rowCount);
         // 删完最后一页的最后一篇时页码会越界：夹回最后一页，别停在空页上
-        if (list.length === 0 && t > 0 && p > 1) {
-          const lastPage = Math.max(1, Math.ceil(t / ps));
+        if (list.length === 0 && rowCount > 0 && p > 1) {
+          const lastPage = Math.max(1, Math.ceil(rowCount / ps));
           if (lastPage !== p) {
             setPage(lastPage);
           }
@@ -105,12 +121,12 @@ export default function RecycleBin(props) {
       } catch (err) {
         setArticles([]);
         setTotal(0);
-        setErrorText(describeListFailure(err));
+        setErrorText(describeListFailure(err, t));
       } finally {
         setLoading(false);
       }
     },
-    [isDraft],
+    [isDraft, t],
   );
 
   useEffect(() => {
@@ -121,17 +137,17 @@ export default function RecycleBin(props) {
 
   const handleRestore = async (record) => {
     if (record?.id == null) {
-      message.error('这条记录缺少 ID，无法恢复');
+      message.error(t('recycle.missingIdRestore', '这条记录缺少 ID，无法恢复'));
       return;
     }
     setBusyId(record.key);
     try {
       if (isDraft) {
         await restoreDraft(record.id);
-        message.success(draftRestoreSuccessText(record));
+        message.success(draftRestoreSuccessText(record, t));
       } else {
         await restoreArticle(record.id);
-        message.success(restoreSuccessText(record));
+        message.success(restoreSuccessText(record, t));
       }
       await fetchList(page, pageSize);
       // 恢复后主列表要能看到这条内容
@@ -139,9 +155,11 @@ export default function RecycleBin(props) {
     } catch (err) {
       message.error(
         describeRecycleActionFailure(err, {
-          action: '恢复',
-          label: isDraft ? '草稿' : '文章',
+          // 🔴 传 **key** 而不是中文：这些词会被插进句子里，传中文的话英文界面会出现夹生句
+          actionKey: 'restore',
+          labelKey: isDraft ? 'draft' : 'article',
           permission: perms.restore,
+          t,
         }),
       );
       // 404 = 已不在回收站（别人恢复/清除了）：刷新列表恢复一致视图
@@ -155,24 +173,24 @@ export default function RecycleBin(props) {
 
   const handlePurge = (record) => {
     if (record?.id == null) {
-      message.error('这条记录缺少 ID，无法永久删除');
+      message.error(t('recycle.missingIdPurge', '这条记录缺少 ID，无法永久删除'));
       return;
     }
     Modal.confirm({
-      title: isDraft ? draftPurgeConfirmTitle(record) : purgeConfirmTitle(record),
-      content: isDraft ? DRAFT_PURGE_CONFIRM_CONTENT : PURGE_CONFIRM_CONTENT,
-      okText: PURGE_OK_TEXT,
+      title: isDraft ? draftPurgeConfirmTitle(record, t) : purgeConfirmTitle(record, t),
+      content: isDraft ? draftPurgeConfirmContent(t) : purgeConfirmContent(t),
+      okText: purgeOkText(t),
       // 危险操作要长得危险：红色按钮 + 明确「不可撤销」
       okButtonProps: { danger: true },
-      cancelText: '取消',
+      cancelText: t('init.restore.confirmCancel', '取消'),
       onOk: async () => {
         try {
           if (isDraft) {
             await purgeDraft(record.id);
-            message.success(draftPurgeSuccessText(record));
+            message.success(draftPurgeSuccessText(record, t));
           } else {
             await purgeArticle(record.id);
-            message.success(purgeSuccessText(record));
+            message.success(purgeSuccessText(record, t));
           }
           await fetchList(page, pageSize);
           onChanged?.();
@@ -180,9 +198,10 @@ export default function RecycleBin(props) {
           // purge 只对已在回收站的条目有效（否则 404）：给出人话并刷新
           message.error(
             describeRecycleActionFailure(err, {
-              action: '永久删除',
-              label: isDraft ? '草稿' : '文章',
+              actionKey: 'purge',
+              labelKey: isDraft ? 'draft' : 'article',
               permission: perms.purge,
+              t,
             }),
           );
           if (isNotFoundFailure(err)) {
@@ -194,14 +213,14 @@ export default function RecycleBin(props) {
   };
 
   const titleColumn = {
-    title: '标题',
+    title: t('recycle.colTitle', '标题'),
     dataIndex: 'title',
     key: 'title',
     ellipsis: true,
     render: (text, record) => <span title={record?.title}>{record?.title ?? '-'}</span>,
   };
   const categoryColumn = {
-    title: '分类',
+    title: t('recycle.colCategory', '分类'),
     dataIndex: 'category',
     key: 'category',
     width: 100,
@@ -209,35 +228,36 @@ export default function RecycleBin(props) {
     render: (_, record) => record?.category || '-',
   };
   const tagsColumn = {
-    title: '标签',
+    title: t('recycle.colTags', '标签'),
     dataIndex: 'tags',
     key: 'tags',
     width: 140,
     render: (_, record) =>
       record?.tags?.length
-        ? record.tags.map((t) => (
-            <Tag key={`recycle-tag-${record.key}-${t}`} style={{ marginBottom: 4 }}>
-              {t}
+        ? // 🔴 这里的 map 参数原本也叫 `t`（与翻译器同名、会遮蔽）⇒ 改名 tag
+          record.tags.map((tag) => (
+            <Tag key={`recycle-tag-${record.key}-${tag}`} style={{ marginBottom: 4 }}>
+              {tag}
             </Tag>
           ))
         : '-',
   };
   const updatedAtColumn = {
-    title: '更新时间',
+    title: t('recycle.colUpdatedAt', '更新时间'),
     dataIndex: 'updatedAt',
     key: 'updatedAt',
     width: 160,
     render: (_, record) => formatDeletedAt(record?.updatedAt),
   };
   const deletedAtColumn = {
-    title: '删除时间',
+    title: t('recycle.colDeletedAt', '删除时间'),
     dataIndex: 'deletedAt',
     key: 'deletedAt',
     width: 160,
     render: (_, record) => formatDeletedAt(record?.deletedAt),
   };
   const optionColumn = {
-    title: '操作',
+    title: t('recycle.colOption', '操作'),
     key: 'option',
     width: 150,
     render: (_, record) => (
@@ -246,18 +266,18 @@ export default function RecycleBin(props) {
           <Popconfirm
             title={
               <div style={{ maxWidth: isDraft ? 340 : 260 }}>
-                <div>{isDraft ? DRAFT_RESTORE_CONFIRM_TITLE : RESTORE_CONFIRM_TITLE}</div>
+                <div>{isDraft ? draftRestoreConfirmTitle(t) : restoreConfirmTitle(t)}</div>
                 <div style={{ color: 'rgba(0,0,0,0.45)' }}>
-                  {isDraft ? DRAFT_RESTORE_CONFIRM_TEXT : RESTORE_CONFIRM_TEXT}
+                  {isDraft ? draftRestoreConfirmText(t) : restoreConfirmText(t)}
                 </div>
               </div>
             }
-            okText="恢复"
-            cancelText="取消"
+            okText={t('recycle.restore', '恢复')}
+            cancelText={t('init.restore.confirmCancel', '取消')}
             disabled={busyId === record?.key}
             onConfirm={() => handleRestore(record)}
           >
-            <a data-recycle-restore={String(record?.id)}>恢复</a>
+            <a data-recycle-restore={String(record?.id)}>{t('recycle.restore', '恢复')}</a>
           </Popconfirm>
         ) : null}
         {/* 永久删除用 Modal.confirm（danger 按钮），文案明说不可撤销；无权限直接不渲染 */}
@@ -267,11 +287,13 @@ export default function RecycleBin(props) {
             data-recycle-purge={String(record?.id)}
             onClick={() => handlePurge(record)}
           >
-            永久删除
+            {t('recycle.purge', '永久删除')}
           </a>
         ) : null}
         {!canRestore && !canPurge ? (
-          <span style={{ color: 'rgba(0,0,0,0.45)' }}>当前账号无操作权限</span>
+          <span style={{ color: 'rgba(0,0,0,0.45)' }}>
+            {t('recycle.noPermission', '当前账号无操作权限')}
+          </span>
         ) : null}
       </Space>
     ),
@@ -284,7 +306,7 @@ export default function RecycleBin(props) {
         categoryColumn,
         tagsColumn,
         {
-          title: '作者',
+          title: t('recycle.colAuthor', '作者'),
           dataIndex: 'author',
           key: 'author',
           width: 100,
@@ -298,7 +320,7 @@ export default function RecycleBin(props) {
     : [
         titleColumn,
         {
-          title: '别名',
+          title: t('recycle.colPathname', '别名'),
           dataIndex: 'pathname',
           key: 'pathname',
           width: 140,
@@ -310,7 +332,7 @@ export default function RecycleBin(props) {
         updatedAtColumn,
         deletedAtColumn,
         {
-          title: '字数',
+          title: t('recycle.colWordCount', '字数'),
           dataIndex: 'wordCount',
           key: 'wordCount',
           width: 80,
@@ -321,7 +343,11 @@ export default function RecycleBin(props) {
 
   return (
     <Drawer
-      title={isDraft ? '回收站（已删除的草稿）' : '回收站（已删除的文章）'}
+      title={
+        isDraft
+          ? t('recycle.drawerTitleDraft', '回收站（已删除的草稿）')
+          : t('recycle.drawerTitleArticle', '回收站（已删除的文章）')
+      }
       width={920}
       visible={visible}
       onClose={onClose}
@@ -338,7 +364,7 @@ export default function RecycleBin(props) {
             fetchList(page, pageSize);
           }}
         >
-          刷新
+          {t('recycle.refresh', '刷新')}
         </Button>
       </div>
       {isDraft ? (
@@ -348,12 +374,11 @@ export default function RecycleBin(props) {
           showIcon
           style={{ marginBottom: 12 }}
           data-recycle-draft-warning
-          message="发布成功的草稿也会自动进入回收站"
-          description={
-            '恢复只作用于草稿本身，不会改动已发布的文章：如果某条草稿是发布时归档进来的，' +
-            '恢复它只会得到一份发布前的旧草稿，再次编辑并发布会产生一篇重复的文章。' +
-            '列表本身无法区分「误删」与「发布后归档」这两种情况，恢复前请留意。'
-          }
+          message={t('recycle.draftWarningTitle', '发布成功的草稿也会自动进入回收站')}
+          description={t(
+            'recycle.draftWarningDesc',
+            '恢复只作用于草稿本身，不会改动已发布的文章：如果某条草稿是发布时归档进来的，恢复它只会得到一份发布前的旧草稿，再次编辑并发布会产生一篇重复的文章。列表本身无法区分「误删」与「发布后归档」这两种情况，恢复前请留意。',
+          )}
         />
       ) : null}
       {errorText ? (
@@ -367,10 +392,10 @@ export default function RecycleBin(props) {
         dataSource={articles}
         locale={{
           emptyText: errorText
-            ? '列表加载失败，见上方提示。'
+            ? t('recycle.listLoadFailed', '列表加载失败，见上方提示。')
             : isDraft
-              ? DRAFT_RECYCLE_EMPTY_TEXT
-              : RECYCLE_EMPTY_TEXT,
+              ? draftRecycleEmptyText(t)
+              : recycleEmptyText(t),
         }}
         pagination={{
           showQuickJumper: true,

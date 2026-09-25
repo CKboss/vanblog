@@ -29,12 +29,15 @@ const PARITY = path.join(ADMIN, 'tests/unit/localePackParity.test.js');
 // 🔴 期 9（服务端错误码框架）新增的消费方：它要 AST 解析**服务端的 TS 登记表**
 //    （`node --test` 不能 require TS）与三份语言包，两件事都只有共享模块一份实现。
 const SERVER_CODES = path.join(ADMIN, 'tests/unit/i18nServerErrorCodes.test.js');
+// 🔴 期 9 第四批新增的消费方：`recycleBin.test.js` 用 AST 断言"组件里每个 core 文案函数调用都传了 t"
+//    （判据是 CallExpression 的最后一个实参是不是 `t`），所以它也 require 共享模块、一并钉进网里。
+const RECYCLE = path.join(ADMIN, 'tests/unit/recycleBin.test.js');
 
 // 🔴 共享模块（唯一权威实现）
 const astInventory = require(SHARED);
 
 test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', () => {
-  for (const f of [SHARED, CLI, RATCHET, NAMING, PLURAL, PARITY, SERVER_CODES]) {
+  for (const f of [SHARED, CLI, RATCHET, NAMING, PLURAL, PARITY, SERVER_CODES, RECYCLE]) {
     assert.ok(fs.existsSync(f), `文件不存在：${f}`);
     assert.ok(fs.statSync(f).size > 500, `文件异常小（${fs.statSync(f).size} B）：${f}`);
   }
@@ -78,6 +81,7 @@ test('i18n 共享实现 · 所有消费方都 require 同一份模块（结构�
     [PLURAL]: null,
     [PARITY]: null,
     [SERVER_CODES]: null,
+    [RECYCLE]: null,
   };
   for (const f of Object.keys(consumers)) {
     const src = fs.readFileSync(f, 'utf8');
@@ -103,7 +107,7 @@ test('i18n 共享实现 · 所有消费方都 require 同一份模块（结构�
 test('i18n 共享实现 · 没有第二份 AST 实现（守卫里不许再内联 babel 解析）', () => {
   // 🔴 判据：消费方里不许出现"自己 parse AST"的形状。
   //    以前 i18nHardcodedRatchet 里有 loadParser() 与 parser.parse(...)，重构后应当只剩 require。
-  for (const f of [RATCHET, NAMING, PLURAL, PARITY, SERVER_CODES]) {
+  for (const f of [RATCHET, NAMING, PLURAL, PARITY, SERVER_CODES, RECYCLE]) {
     const src = fs.readFileSync(f, 'utf8');
     const stripped = src
       .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -170,6 +174,8 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
     'src/pages/SystemConfig/tabs/CommentSystem.jsx': 0,
     'src/pages/SystemConfig/tabs/Customizing.jsx': 4,
+    'src/components/RecycleBin/index.jsx': 0,
+    'src/components/RecycleBin/recycleCore.js': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

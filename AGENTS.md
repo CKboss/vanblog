@@ -9469,6 +9469,118 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.144 期 9 第四批：回收站垂直切片（51 条 + 注入式翻译器）—— 以及一个**只有浏览器能抓到**的真缺陷（无限请求循环）
+
+**交付**：`components/RecycleBin/**` 两个文件全量接 i18n（组件 **23** 个调用点、纯 JS 核心 **32** 个，🔴 **裸中文都归 0**）；
+语言包 **216 → 267 key**（新组 **`recycle`**，51 条）；棘轮清单 **13 → 15 个文件**（两个新文件预算 0，🔴 **TOTAL_BUDGET 仍 52**）；
+`i18nKeyNaming` 下界 216 → **267**；服务端**未改**（本批纯 admin）。
+🔴 **浏览器活体 18/18（6 项判据 × 3 语），problems 0**：抽屉标题、8 个列头、行内「还原 / 永久删除」、
+Popconfirm（标题 + 正文 + 两个按钮）、永久删除的 `Modal.confirm`（标题含**插值的文章名** + 不可撤销正文 + danger 按钮）、
+**空状态那段 100 多字的长文案**、以及 🔴 **404 竞态那句"由组件自己组"的消息**三语各自正确
+（同时抓到真实响应 `404 + code=articleNotInRecycleBin` ⇒ 批 2 的码与这批的组件译文在同一次操作里都对上了）；
+`Missing message` **0**、非预期 `console.error`/`pageerror` **0**、`<html lang>` 跟随。
+证据：`vanblog_dev/i18n-browser-evidence/phase9-batch4-recyclebin/`（3 张截图 + `result.json` + 完整步骤 trace）。
+
+#### A. 🔴 本轮最值钱的发现：一个**单测结构上不可能发现**的真缺陷 —— 不稳定的 `t` 进了依赖数组 ⇒ 无限请求循环
+把 `t` 加进 `fetchList` 的 `useCallback` 依赖之后（`const t = (id, dm, v) => intl.formatMessage(...)` **每次渲染都是新函数**），
+`useCallback → useEffect` 这条链每轮渲染都重跑 ⇒ 🔴 **抽屉表格永远 loading、一行都不渲染，并把服务端 admin 限流打满（后续请求全 429）**。
+🔴 **诊断线索（记下来，下次能省一小时）**：`spin: 1` + 网络里 `/api/admin/article/deleted` **已经 200 返回了 6 条数据**
+⇒ "数据到了但界面没渲染" = **状态没落地**，而不是接口 / 权限 / 数据的问题。
+修法：`const t = useCallback((id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values), [intl])`
+（`intl` 只在语言变化时换引用 ⇒ 既稳定、又能在切语言后拿到新译文）。
+🔴 **并且把它变成通用守卫**（不是只修这一处）：`localePackParity` 新增一条 ——
+**任何 `useCallback`/`useEffect`/`useMemo` 的依赖数组里出现 `t`，那个文件里的 `t` 必须是 `useCallback` 包的**
+（AST 判据，扫**全部**已接 i18n 的文件）。变异对照 B4-M8：把 `t` 退回不稳定的箭头函数 ⇒ 红在这条。
+👉 🔴 **规矩（本批挣来的）：给组件加名为 `t` 的翻译器时，要么用 `useCallback` 包、要么绝不把它放进任何依赖数组。**
+⚠️ 顺带查出**同类隐患（较轻、本轮刻意没改，登记为待办）**：期 3 的 `CommentSystem.jsx` / `Customizing.jsx` 与批 1 的 `ImgTab.jsx`
+里 `t` **没有**进依赖数组（`useCallback(..., [])`）⇒ **不会死循环**，但有一个 **staleness**：
+`load` 是首轮渲染时创建的，🔴 **切语言之后再触发的错误提示会用旧语言**（要重挂载才更新）。
+待办是统一的：把这 4 处改成 `useCallback([intl])` + 把 `t` 加进依赖 —— 那时上面这条新守卫会自动要求它们是稳定引用。
+
+#### B. 🔴 中文文案在源码里**只有一份**（"注入式翻译器"模式最容易做错的地方）
+`recycleCore.js` 的常量改成**由函数算出来**：`const RECYCLE_EMPTY_TEXT = recycleEmptyText();`，
+而函数把中文写在 `t()` 的 **defaultMessage 位**；不传 t 时落到 `IDENTITY_T`（拿 defaultMessage 做 `{k}` 插值）
+⇒ 既没有"常量一份、模板一份"的第二口径，也保证 🔴 **不传 t 时输出与改造前逐字相同** ——
+**证据是那 30 条既有单测一条都没改就全绿**（不是"我核对过"，是"它们本来就钉着这件事"）。
+🔴 另加一条**"两条路径不许漂"**的断言：用 zh-CN 包的值插值 == 不传 t 的输出（14 组样本逐条比），
+它同时证明了"包里的 ICU 模板"与"源码里 JS 拼出来的中文"是同一句话。
+
+#### C. 🔴 `t()` 的 **callee 名字是判据的一部分**（第一版就栽在这）
+`recycleCore.js` 第一版写成 `pickT(t)('id', '中文')` ⇒ `collectTCalls` **一个调用点都发现不了**
+（它只认 callee 名为 `t` / `formatMessage`），而 `bareChinese` 也不排除它的第二个实参 ⇒
+🔴 **实测 28 条合法译文被算成"裸中文"**（棘轮与对账全失真）。修法：改用**默认参数** `t = IDENTITY_T`，让调用点就是字面的 `t(…)`。
+👉 **规矩：注入式翻译器的形参名必须叫 `t`（或 `formatMessage`）——包一层就会从所有 AST 判据里消失。**
+
+#### D. 🔴 不能传中文参数（与服务端 `${label}` 同一个坑），而且 ICU 模板要按目标语言**重新设计**
+`describeRecycleActionFailure` 原本由组件传中文 `action: '恢复'` / `label: '文章'` 进句子 ⇒ 直译会让英文出现夹生句。
+改成传 **key**（`actionKey`/`labelKey`），由 core 的 `actionText()`/`labelText()` 翻；
+⚠️ 同时保留"传中文也能用"的兼容分支（既有单测就是这么调的），并 🔴 用**结构性断言**（AST 查 options 里有没有 `action`/`label`）钉住组件不许再传中文。
+🔴 **英文模板因此故意不用 `{action}` 开头**：英文的动词原形/动名词无法同时满足"句首"与"to 后面"两种位置 ⇒
+通用失败那句写成 `Could not complete this action{detail}`（不含动作词），只有 403 那句用 `{action}`（放在句中）。
+👉 **ICU 模板不是"把中文的占位符照搬过去"，要按目标语言的语序重新设计。**
+⚠️ 另一条硬约束：**英文译文里不许有单引号**（ICU 把 `'` 当转义符，一个撇号能让整句解析出错）⇒
+已写成断言（所以全部用 cannot / does not / it is，不用缩写）。
+
+#### E. 🔴 ICU 复数守卫的判据又太粗了一次（**第三次**假缺口）
+`{占位符} + 以 s 结尾的词` 把 `{label} is no longer…` 与 `{action} this {label}` 当成了"需要复数" ⇒ 报了 **2 条假缺口**。
+修法：加一张**停用词表**（is/was/as/has/this/that/thus/us/vs/his/its/ours/yours/theirs/always/sometimes/perhaps/yes/plus/minus），
+🔴 **只收"绝不可能是复数名词"的功能词**（bus/gas/class/address 这类"以 s 结尾的真名词"**刻意不收**），
+并各加一条反证（`{n} class` / `{n} address` 仍必须报）。变异对照 B4-M6：把 `is` 从表里删掉 ⇒ 那两条假阳性立刻回来。
+👉 这是"假缺口比没守卫更糟"的**第三次**实例（前两次：朴素判据噪音 75%、简体字表一次加 158 字误伤 4 条）。
+
+#### F. 🔴 `t` 这个名字**会被遮蔽**（本轮实测两处）
+`fetchList` 里 `const { total: t } = …`、`tags.map((t) => …)` —— 引入翻译器 `t` 之后这两处会遮蔽它，
+而且 🔴 **try 块里的 `t` 与 catch 块里的 `t` 含义还不一样**（catch 里那个是翻译器）。已改名（`rowCount` / `tag`），
+并加了两条断言钉住"不许再出现 `total: t` 与 `map((t)`"。
+👉 **规矩：给一个组件加名为 `t` 的翻译器之前，先 grep 这个文件里所有叫 `t` 的形参/解构名** ——
+遮蔽不会报错，只会让某几条文案悄悄不跟随语言。
+
+#### G. 探针/工具教训（7 条，每条都让"看起来该成功"的验证失败或误导）
+1. 🔴 **`page.evaluate` 里的 `fetch` 不受 playwright 超时管** ⇒ 一慢就永久挂住（实测卡死 8–9 分钟、日志里什么都没有）。
+   修法：页面上下文里一律用带 `AbortController` 的 `fetchT`、`ctx.setDefaultTimeout(12000)`、**每一步都打时间戳**，
+   并且 🔴 **别用 `locator.count()` 做诊断**（它也挂住了）—— 用 `page.evaluate(() => document.querySelectorAll(sel).length)`。
+2. 🔴 **`eval(helperSrc)` 里的 `const` 不会泄漏到外层函数作用域**（ES2015 语义）⇒ `fetchT is not defined`；改用 `new Function(...)`。
+3. 🔴 **用两个 index 之间"整段切掉"来删代码，会顺手删掉夹在中间的采集行** —— 本轮因此把 `drawerTitle/cols/toolbar` 三行删了，
+   快照里只剩一个说不清的 `rowCount`。👉 删一段代码要用**首尾各一行的完整锚点**替换。
+4. 🔴 **对每个 `th` 都要求 `w>0 && h>0` 会把第一列量成 0** ⇒ 三语下都"少一列"（**尺子的假象**，不是缺列）。
+   改成两把尺子各管一件事：列头采**文本**，"用户真的看得见"由**表格容器的 bounding box** 证明。
+5. 🔴 **`rowCount` 会数到 antd 的空状态占位行**（`.ant-table-placeholder` 也是一个 `tr`）⇒ "有 1 行"其实可能是"表是空的"；
+   要数 `tr:not(.ant-table-placeholder)`。⚠️ 而"空状态"这条判据本身也曾写错：bin 里有上一轮留下的行时表格**本来就不空**
+   ⇒ 改成"先 purge 全部、再采空状态"（这次真的采到了那段长文案）。
+6. 🔴 `pkill -f "ms-playwright/chromium-1208"` **会匹配到自己的 shell 并把当前命令打死**（本仓库第 **7** 次踩 pkill/pgrep 自匹配）
+   ⇒ 用 `chromium-120[8]` 这种自避开形状。顺带清掉了一个**上一轮遗留、已挂 10 小时**的探针
+   （`node /tmp/p3-probe.js` + 它的整棵 chromium 进程树）⇒ 🔴 **规矩：探针结束必须确认自己的浏览器进程树没了**
+   （`finally { browser.close() }` 在 SIGTERM 下**不执行**）。
+7. ⚠️ 播种要按 DTO 的**必填项**来：`CreateArticleDto.category` 必填，漏了它播种 400，症状却是"抽屉里没有恢复入口"（看起来像组件坏了）。
+   🔴 另外**打写接口前要确认它不会踩限流**：本轮那个死循环把 admin 限流打满，之后连 `curl` 都是 429 ——
+   差点把"限流"误判成"接口坏了"。
+
+#### H. 🔴 工作量口径更正：`inventory.js` 原来**高估**剩余量，已补一个诚实的口径
+甲/丁类计数用的是 `collectChinese(..., {})`，🔴 **它把 `defaultMessage` 位也算进去** ⇒ 已翻译文件的中文会被继续计入。
+新增一段输出用 **`bareChinese` 口径**（= 棘轮口径：排除注释、排除 defaultMessage 位）：
+**真实剩余 = 112 个文件 / 1,713 条**（起点是 129 文件 / 1,887 条 ⇒ 已完成 **17 文件 / 174 条**）。
+前 5 大：`SiteInfoForm` 108、`Backup.jsx` 89、`Static/img` 71、`Editor/index.jsx` 64、`Theme.jsx` 59。
+👉 **报"还剩多少"一律用这个口径**；甲/丁类那份只能用来分类，不能当工作量。
+
+#### I. 基线
+- admin `node --test` **734 tests / 165 suites / 0 fail**（+8 = `recycleBin.test.js` 的多语言接线 7 条 + `localePackParity` 的新守卫 1 条）；
+  i18n 守卫组 **91 → 92**（`localePackParity` 41 → **42**、`recycleBin` 30 → **37**）；
+- 脚本守卫 **35 文件 / 3152 条 / 0 失败**；website vitest **97 文件 / 1095**；server 与 website 的 `tsc` 各 **0 错**；
+  admin 门禁 **23/0（src 仍 29）**；
+- server jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL** —— ⚠️ 但**第一次全量跑红了 1 条**，见 J；
+- 变异对照 **8/8**（7 红 + 1 语义空操作绿；B4-M8 打的就是 A 里那个真缺陷）；
+- 构建：admin `EEE=production` **rc=0**，`dist/umi.48ab1b63.js` = **1,351,875 B**；
+- `--zh-tw-audit`：267 key / **491** 个不同汉字 / **0 命中**简体专用字表；`--server-throws`：throw **211**、返回体 **108**（本批未动服务端）。
+
+#### J. 🔴 负载敏感假红：`markdownExportFormat.spec.ts` **第二次**（换了另一条用例）
+第一次全量跑红的是 `不传 format（与 format='zip'）…外层 zip 里同时有 md 与 mdz`：
+`expect(namesA).toContain('格式测试.mdz')` 收到 `["格式测试.md"]`（**mdz 没进 zip**）。
+**四步定性**：① 不是本轮改动（本批只碰 admin 与 `scripts/i18n/**`，这条 spec 用 mocked `axios`/`dns` 测 server 导出）；
+② **单独跑 9/9 绿**；③ **全量重跑 288/4238 全绿**；④ 非真缺陷 ⇒ 定为间歇假红（失败原文已留存）。
+🔴 **但它已经是同一个文件的第 2 次**（§7.142 L 记的是 `.assets/` 那次），两次都出在**产出 mdz / 图片资产**的用例上
+⇒ 按 §7.93 的规矩读过断言之后，判断是"**负载敏感 + 装置偏紧**"的混合形状（最可能是 `/tmp` 上真实 IO 的争抢，
+与 `storedFileName` 那次同族）⇒ 🔴 **登记为待修**：若第 3 次再红，就不要再归因"负载"，
+而应当把 mdz 的产出改成可注入的临时目录（或给断言加重试/放宽到"md 必须在、mdz 允许缺"并写明理由）。
 ### 7.143 期 9 第三批：19 处错误接上码（**第一个用户真能看到译文的批次**），以及"状态码会静默漂移"这个盲区
 
 **交付**：登记表 **18 → 30 个码**；迁移 `provider/customPage/customPage.provider.ts`(5) +

@@ -332,6 +332,26 @@ function main() {
     );
   }
 
+  // 🔴 **真实剩余工作量**（bareChinese 口径：排除注释、排除 t()/formatMessage() 的 defaultMessage 位）。
+  //    为什么必须单列：上面那份甲/丁类计数用的是 `collectChinese(..., {})`，它**把 defaultMessage 位也算进去**
+  //    ⇒ 已经翻译完的文件里的中文会被继续计入，🔴 **高估剩余工作量**（实测差 174 条：1,887 → 1,713）。
+  //    棘轮（i18nHardcodedRatchet）用的就是这个口径 ⇒ 两边必然一致。
+  let bareTotal = 0;
+  const bareFiles = [];
+  for (const abs of files) {
+    const rel = path.relative(path.join(ROOT, 'packages/admin'), abs);
+    const n = astInventory.bareChineseFromFile(abs, rel).size;
+    if (n > 0) {
+      bareTotal += n;
+      bareFiles.push({ rel, n });
+    }
+  }
+  bareFiles.sort((a, b) => b.n - a.n || a.rel.localeCompare(b.rel));
+  console.log(`  --- 🔴 真实剩余（bareChinese 口径 = 棘轮口径）---`);
+  console.log(`    ${bareFiles.length} 个文件 / ${bareTotal} 条（甲/丁类那份计数含 defaultMessage 位，会高估）`);
+  console.log('    前 10：');
+  for (const f of bareFiles.slice(0, 10)) console.log(`      ${String(f.n).padStart(4)}  ${f.rel}`);
+
   // 🔴 按目录聚合，便于排期（实测最大的桶是 components，不是任何页面组）
   const byTop = {};
   for (const r of withHan) {

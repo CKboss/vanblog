@@ -148,6 +148,17 @@ test('i18n 复数 · 尺子反证：合成输入必须被点名，且收窄判�
   assert.strictEqual(n('reprints it every 10 minutes'), false, '散文常量被误报 ⇒ 判据没收窄');
   assert.strictEqual(n('usually takes 1–2 minutes'), false, '散文常量被误报 ⇒ 判据没收窄');
   assert.strictEqual(n('rate limit: 5 per 10 minutes'), false, '散文常量被误报 ⇒ 判据没收窄');
+  // ③b 🔴 以 s 结尾的**英语功能词**不是复数名词（期 9 第四批实测到的两个假阳性）
+  assert.strictEqual(n('That {label} is no longer in the recycle bin'), false, '`{label} is` 被误报成需要复数');
+  assert.strictEqual(
+    n('Your account is not allowed to {action} this {label}'),
+    false,
+    '`{action} this` 被误报成需要复数',
+  );
+  assert.strictEqual(n('{who} has {n} posts'), true, '同一句里既有功能词又有真复数名词时，仍然要报');
+  // 🔴 反向：停用词表**不许**把真的复数名词放过去（bus/gas/class 这类"以 s 结尾的名词"刻意没收）
+  assert.strictEqual(n('{n} class'), true, '停用词表把真名词 class 吞了');
+  assert.strictEqual(n('{n} address'), true, '停用词表把真名词 address 吞了');
   // ④ 占位符后面没有复数名词的不报（例如中文量词、或纯数值单位）
   assert.strictEqual(n('Took {seconds}s.'), false, '单位后缀不应被点名');
   assert.strictEqual(n('Static files {folder}: {files}'), false, '占位符在句尾、后面没有名词 ⇒ 不该点名');

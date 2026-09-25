@@ -120,6 +120,17 @@ const IDENTICAL_ZH_TW_OK = [
   //    ⚠️ 别把这条当成"可以随便加"的先例：白名单必须**恰好等于**实际相同的那一批。
   'common.save', // 保存
   'common.updateSuccess', // 更新成功！
+  // 🔴 期 9 第四批（回收站）新增 8 条：都是**简繁同形**的短词或纯标点/占位符模板 ——
+  //    操作 / 作者（两个字简繁同形）、文章 / 草稿（同上）、「{title}」与（{message}）（只有引号与占位符）、
+  //    （需要 {permission}）（需/要/perm 均同形）。逐字核实过，不是偷懒。
+  'recycle.colOption', // 操作
+  'recycle.colAuthor', // 作者
+  'recycle.titleQuoted', // 「{title}」
+  'recycle.actionFallback', // 操作
+  'recycle.labelArticle', // 文章
+  'recycle.labelDraft', // 草稿
+  'recycle.detailWrap', // （{message}）
+  'recycle.permissionWrap', // （需要 {permission}）
 ];
 
 /**
@@ -262,13 +273,15 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     //    （纯 JS、被 `node --test` 直接 require、拿不到 umi 运行时）⇒ 它们用**注入式翻译器**，
     //    调用点是 `t(id, 中文常量)` 这种**动态 id**，自动发现**看不见**（`collectTCalls` 刻意跳过动态 id）。
     //    它们的对账由本文件下面那个「纯 JS 核心模块的注入式翻译器」describe 单独钉（SETUP_KEY_HINT_IDS ↔ 三份包）。
+    // 🔴 10 → **12**、160 → **210**（期 9 第四批：`RecycleBin/index.jsx` 23 个调用点 +
+    //    `RecycleBin/recycleCore.js` 32 个）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 10,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 10）⇒ 遍历或解析器坏了`,
+      FILES.length >= 12,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 12）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 160,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 160）⇒ 疑似解析器坏了`,
+      calls.length >= 210,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 210）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -276,6 +289,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/InitPage/index.tsx',
       'src/pages/SystemConfig/tabs/CommentSystem.jsx',
       'src/pages/SystemConfig/tabs/Customizing.jsx',
+      'src/components/RecycleBin/index.jsx',
+      'src/components/RecycleBin/recycleCore.js',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -289,6 +304,42 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       bare.map((c) => `${c.rel}:${c.line} → ${c.id}`),
       [],
       '这些 t() 调用点没有字面量 defaultMessage（第二实参必须是与 zh-CN 包逐字相同的中文）：\n  ',
+    );
+  });
+
+  it('🔴 不稳定的 `t` 不许出现在 useCallback/useEffect/useMemo 的依赖数组里（会造成无限渲染/请求循环）', () => {
+    // ## 这条守的是什么（实测事故，2026-09-26 期 9 第四批）
+    // `const t = (id, dm, values) => intl.formatMessage(...)` **每次渲染都是新函数**；
+    // 一旦它进了 `useCallback(..., [t])`，而那个 callback 又被 `useEffect` 依赖 ⇒
+    // 每轮渲染都重建 ⇒ effect 每轮都重跑 ⇒ **无限请求循环**（回收站抽屉表格永远 loading、
+    // 一行都不渲染，还把服务端 admin 限流打满，后续请求全 429）。
+    // 🔴 **单测看不见这个缺陷**（组件不跑），只有浏览器活体证据能抓到 ⇒ 所以要在这里用 AST 钉住。
+    // 修法：`const t = useCallback((id, dm, values) => intl.formatMessage(...), [intl])`
+    //（`intl` 只在语言变化时换引用 ⇒ 既稳定、又能在切语言后拿到新译文）。
+    const HOOKS = new Set(['useCallback', 'useEffect', 'useMemo']);
+    const offenders = [];
+    for (const rel of FILES) {
+      const src = read(rel);
+      const stableT = /const\s+t\s*=\s*useCallback\(/.test(src);
+      const ast = astInventory.parseSource(src, rel);
+      astInventory.walkAst(ast.program, (nd) => {
+        if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
+        if (!HOOKS.has(nd.callee.name)) return;
+        const args = nd.arguments || [];
+        const last = args[args.length - 1];
+        if (!last || last.type !== 'ArrayExpression') return;
+        const hasT = (last.elements || []).some((el) => el && el.type === 'Identifier' && el.name === 't');
+        if (hasT && !stableT) {
+          offenders.push(`${rel}:${nd.loc ? nd.loc.start.line : '?'} ${nd.callee.name}([…, t]) 而 t 不是 useCallback 包的`);
+        }
+      });
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      '🔴 这些地方的依赖数组里放了**每次渲染都会变**的 t（会造成无限渲染/请求循环，界面上表现为永远 loading）：\n  ' +
+        offenders.join('\n  ') +
+        '\n修法：const t = useCallback((id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values), [intl]);',
     );
   });
 

@@ -306,4 +306,65 @@ export default {
   'error.collaboratorNotFound': '没有此协作者！无法更新！',
   'error.collaboratorPasswordInvalidOnUpdate': '密码不合法，未修改协作者',
 
+
+  // ── 🔴 期 9 第四批：回收站抽屉（`components/RecycleBin`）—— 组件 23 条 + 纯 JS 核心 28 条 ──
+  //    zh-CN 的值由脚本**直接从源码的 defaultMessage 抽出**（不是重敲），所以逐字相同是构造出来的。
+  //    ⚠️ `recycleCore.js` 是纯 JS 模块（被 node --test 直接 require）⇒ 用**注入式翻译器**：
+  //    🔴 不传 t 时输出与改造前**逐字相同**（它那 30 条既有单测就是证据），传了才走这里的 key。
+  //    ⚠️ 术语沿用既有包：流水线→流水線、设置→設定、恢复→還原、缓存→快取、数据库→資料庫、账号→帳號；
+  //    本批新增：回收站→**資源回收筒**、刷新→**重新整理**、彻底删除→**永久刪除**、不可撤销→**無法復原**、
+  //    加载→載入、联系→聯絡、记录→記錄（🔴 期 5 翻其它组件时沿用同一套，别再定第二遍）。
+  //    ⚠️ 「归档」与「备份档」刻意分开：export 打出来的 zip 用**歸檔**，整站备份用**備份檔**（既有包口径）。
+  'recycle.missingIdRestore': '这条记录缺少 ID，无法恢复',
+  'recycle.missingIdPurge': '这条记录缺少 ID，无法永久删除',
+  'recycle.colTitle': '标题',
+  'recycle.colCategory': '分类',
+  'recycle.colTags': '标签',
+  'recycle.colUpdatedAt': '更新时间',
+  'recycle.colDeletedAt': '删除时间',
+  'recycle.colOption': '操作',
+  'recycle.restore': '恢复',
+  'recycle.purge': '永久删除',
+  'recycle.noPermission': '当前账号无操作权限',
+  'recycle.colAuthor': '作者',
+  'recycle.colPathname': '别名',
+  'recycle.colWordCount': '字数',
+  'recycle.drawerTitleDraft': '回收站（已删除的草稿）',
+  'recycle.drawerTitleArticle': '回收站（已删除的文章）',
+  'recycle.refresh': '刷新',
+  'recycle.draftWarningTitle': '发布成功的草稿也会自动进入回收站',
+  'recycle.draftWarningDesc': '恢复只作用于草稿本身，不会改动已发布的文章：如果某条草稿是发布时归档进来的，恢复它只会得到一份发布前的旧草稿，再次编辑并发布会产生一篇重复的文章。列表本身无法区分「误删」与「发布后归档」这两种情况，恢复前请留意。',
+  'recycle.listLoadFailed': '列表加载失败，见上方提示。',
+  'recycle.emptyArticle': '这里列出的是在「文章管理」中被删除的文章（软删除）：它们不会出现在前台，也不计入统计。你可以随时「恢复」把它们放回文章列表，或「永久删除」彻底移除（不可撤销）。当前没有已删除的文章。',
+  'recycle.emptyDraft': '这里列出的是被删除的草稿。注意：草稿在发布成功后也会自动进入这里（发布即归档草稿，是既有行为）。恢复只作用于草稿本身：误删的草稿会回到草稿列表；发布后归档的草稿恢复出来只是一份发布前的旧副本，不会改动已发布的文章。当前没有已删除的草稿。',
+  'recycle.titleQuoted': '「{title}」',
+  'recycle.untitled': '(无标题)',
+  'recycle.restoreConfirmTitle': '确认恢复这篇文章吗？',
+  'recycle.restoreConfirmText': '恢复后文章会带着删除前的内容和设置回到「文章管理」列表。',
+  'recycle.purgeConfirmTitle': '永久删除{label}？',
+  'recycle.purgeConfirmContent': '永久删除会把这篇文章（含正文、别名、标签等全部内容）从数据库里彻底移除，此操作不可撤销，删除后无法再从回收站恢复。如果只是误删，请改用「恢复」。',
+  'recycle.purgeOk': '永久删除',
+  'recycle.draftRestoreConfirmTitle': '确认恢复这个草稿吗？',
+  'recycle.draftRestoreConfirmText': '恢复只作用于草稿本身：它会回到「草稿管理」列表，可以继续编辑。注意：发布成功的草稿也会自动进入回收站 —— 如果这条正是发布时归档的，恢复它不会改动已发布的文章，你只会得到一份发布前的旧草稿；再次编辑并发布它会产生一篇重复的文章，请先确认这是你要的。',
+  'recycle.draftPurgeConfirmTitle': '永久删除草稿{label}？',
+  'recycle.draftPurgeConfirmContent': '永久删除会把这份草稿从数据库里彻底移除，此操作不可撤销，删除后无法再从回收站恢复。如果它已经发布过，删除这份草稿不影响那篇已发布的文章。',
+  'recycle.restoreSuccess': '已恢复{label}，它已回到文章列表。恢复按「文章更新」处理：绑定文章更新的流水线会运行，前台缓存与总字数会刷新。',
+  'recycle.purgeSuccess': '已永久删除{label}，此操作不可撤销；总字数与前台缓存会随之刷新。',
+  'recycle.draftRestoreSuccess': '已恢复草稿{label}，它已回到草稿列表。如果它曾发布过：已发布的文章不受影响，这只是发布前的旧草稿。',
+  'recycle.draftPurgeSuccess': '已永久删除草稿{label}，此操作不可撤销。',
+  'recycle.actionRestore': '恢复',
+  'recycle.actionPurge': '永久删除',
+  'recycle.actionFallback': '操作',
+  'recycle.labelArticle': '文章',
+  'recycle.labelDraft': '草稿',
+  'recycle.labelFallback': '内容',
+  'recycle.listFailure404': '当前 server 还没有回收站接口（404）：请把 server 升级到包含「文章回收站」的版本后再用这个列表。',
+  'recycle.detailWrap': '（{message}）',
+  'recycle.listFailureGeneric': '回收站列表加载失败{detail}，请稍后重试；这不影响文章管理里的其它功能。',
+  'recycle.actionFailure404': '这条{label}已不在回收站中（可能刚被恢复或已被永久删除），列表将刷新为最新状态。',
+  'recycle.permissionWrap': '（需要 {permission}）',
+  'recycle.actionFailure403': '当前账号没有{action}这条{label}的权限{permission}，请联系管理员。',
+  'recycle.actionFailure401': '登录已失效，请重新登录后再试。',
+  'recycle.actionFailureGeneric': '{action}失败{detail}，请稍后重试。',
+
 };

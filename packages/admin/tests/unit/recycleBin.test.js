@@ -245,7 +245,9 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
 
   it('恢复是「一次点击 + Popconfirm 确认」，且不用 antd5 才有的 description 属性', () => {
     assert.match(comp, /<Popconfirm/);
-    assert.match(comp, /okText="恢复"/);
+    // 🔴 期 9 第四批起按钮文案走 t()：锚点换成新形状，性质不变（确认按钮必须是「恢复」那一句，
+    //    且带 zh-CN 的 defaultMessage）
+    assert.match(comp, /okText=\{t\('recycle\.restore', '恢复'\)\}/);
     assert.match(comp, /onConfirm=\{\(\) => handleRestore\(record\)\}/);
     // 只查 Popconfirm 块（Alert 的 description 是 antd4 合法属性，别误伤）
     const pop = comp.slice(comp.indexOf('<Popconfirm'), comp.indexOf('</Popconfirm>'));
@@ -256,9 +258,9 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
   it('永久删除走 Modal.confirm：danger 按钮 + core 里的不可撤销文案', () => {
     assert.match(comp, /Modal\.confirm/);
     assert.match(comp, /okButtonProps: \{ danger: true \}/);
-    assert.match(comp, /okText: PURGE_OK_TEXT/);
-    assert.match(comp, /isDraft \? DRAFT_PURGE_CONFIRM_CONTENT : PURGE_CONFIRM_CONTENT/);
-    assert.match(comp, /isDraft \? draftPurgeConfirmTitle\(record\) : purgeConfirmTitle\(record\)/);
+    assert.match(comp, /okText: purgeOkText\(t\)/);
+    assert.match(comp, /isDraft \? draftPurgeConfirmContent\(t\) : purgeConfirmContent\(t\)/);
+    assert.match(comp, /isDraft \? draftPurgeConfirmTitle\(record, t\) : purgeConfirmTitle\(record, t\)/);
   });
 
   it('恢复/永久删除成功后都刷新抽屉列表并通知父组件（主列表同步）', () => {
@@ -266,16 +268,16 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
     assert.ok(refreshes.length >= 4, 'restore/purge 的成功路径、404 失败路径与刷新按钮都要重拉列表');
     const notifies = comp.match(/onChanged\?\.\(\)/g) || [];
     assert.equal(notifies.length, 2, '恢复与永久删除成功后都要 onChanged');
-    assert.match(comp, /message\.success\(restoreSuccessText\(record\)\)/);
-    assert.match(comp, /message\.success\(purgeSuccessText\(record\)\)/);
-    assert.match(comp, /message\.success\(draftRestoreSuccessText\(record\)\)/);
-    assert.match(comp, /message\.success\(draftPurgeSuccessText\(record\)\)/);
+    assert.match(comp, /message\.success\(restoreSuccessText\(record, t\)\)/);
+    assert.match(comp, /message\.success\(purgeSuccessText\(record, t\)\)/);
+    assert.match(comp, /message\.success\(draftRestoreSuccessText\(record, t\)\)/);
+    assert.match(comp, /message\.success\(draftPurgeSuccessText\(record, t\)\)/);
   });
 
   it('失败路径不静默也不裸报：按状态码定制的文案 + 404 时刷新列表', () => {
     assert.match(comp, /describeRecycleActionFailure\(err, \{/);
     assert.match(comp, /if \(isNotFoundFailure\(err\)\)/);
-    assert.match(comp, /setErrorText\(describeListFailure\(err\)\)/);
+    assert.match(comp, /setErrorText\(describeListFailure\(err, t\)\)/);
     assert.match(comp, /<Alert\s+type="error"/);
     assert.ok(!comp.includes('reportRequestError'), '文案统一走 core 的 describe*，不再用通用兜底');
   });
@@ -298,10 +300,25 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
   });
 
   it('空状态用 core 的解释文案；文章列覆盖契约要求的字段，草稿列换成作者', () => {
-    assert.match(comp, /RECYCLE_EMPTY_TEXT/);
-    assert.match(comp, /DRAFT_RECYCLE_EMPTY_TEXT/);
-    for (const col of ['标题', '别名', '分类', '标签', '更新时间', '删除时间', '字数', '作者']) {
-      assert.ok(comp.includes(`title: '${col}'`), `缺少列：${col}`);
+    assert.match(comp, /recycleEmptyText\(t\)/);
+    assert.match(comp, /draftRecycleEmptyText\(t\)/);
+    // 🔴 列标题现在都走 t()：锚点是「key + zh-CN defaultMessage」这一对，
+    //    既钉住"列在"，也钉住"它的中文默认文案没被顺手改掉"（那是语言包对账的另一半）
+    const COLS = {
+      标题: 'recycle.colTitle',
+      别名: 'recycle.colPathname',
+      分类: 'recycle.colCategory',
+      标签: 'recycle.colTags',
+      更新时间: 'recycle.colUpdatedAt',
+      删除时间: 'recycle.colDeletedAt',
+      字数: 'recycle.colWordCount',
+      作者: 'recycle.colAuthor',
+    };
+    for (const [label, key] of Object.entries(COLS)) {
+      assert.ok(
+        comp.includes(`title: t('${key}', '${label}')`),
+        `缺少列「${label}」（或它没接 i18n / key 改名了）：期望 title: t('${key}', '${label}')`,
+      );
     }
   });
 
@@ -340,5 +357,209 @@ describe('回收站入口与删除文案（Article 页 / columns / Editor）', (
     const editor = codeOnly(read('src/pages/Editor/index.jsx'));
     assert.match(editor, /删除后文章会移入「文章管理 → 回收站」/);
     assert.match(editor, /删除文章成功，已移入回收站（可恢复）/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 期 9 第四批：多语言接线（注入式翻译器）
+//
+// 这一组断言守的是"**接线**"而不是"文案好不好"：
+//  ① 组件里每个 core 文案函数都必须拿到翻译器（漏一个 ⇒ 那条文案永远中文，而且**看不出来**）；
+//  ② 组件不许再用那些**模块加载期就固定**的中文常量（用了就等于切语言不跟随）；
+//  ③ 🔴 不传翻译器时输出与改造前**逐字相同**（黄金样本）—— 这是"注入式翻译器"模式的验收线；
+//  ④ 🔴 传翻译器（用 zh-CN 包的值插值）时结果与 ③ **逐字相同** ⇒ 两条路径不许漂
+//     （这条同时证明了"包里的 ICU 模板"与"源码里的 defaultMessage"是同一句话）；
+//  ⑤ 🔴 期 9 接线：服务端带 `code` 时 detail 用 `error.<code>` 的译文，没有码就回落中文原文。
+// ─────────────────────────────────────────────────────────────────────────────
+const astInventory = require('../../../../scripts/i18n/astInventory.js');
+
+describe('RecycleBin 多语言接线（期 9 第四批）', () => {
+  const compSrc = read('src/components/RecycleBin/index.jsx');
+  const packs = {};
+  for (const l of ['zh-CN', 'zh-TW', 'en-US']) {
+    packs[l] = astInventory.readPack(path.join(adminRoot, `src/locales/${l}.ts`), `${l}.ts`);
+  }
+  // 用某一份语言包的值当译文的假翻译器（`{k}` 插值与 react-intl 的 ICU 简单占位符同形）
+  const makeFakeT = (locale) => (id, defaultMessage, values) => {
+    const tpl = id in packs[locale] ? packs[locale][id] : defaultMessage;
+    if (!values) return tpl;
+    return String(tpl).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, k) =>
+      Object.prototype.hasOwnProperty.call(values, k) ? String(values[k]) : whole,
+    );
+  };
+  const zhT = makeFakeT('zh-CN');
+  const enT = makeFakeT('en-US');
+
+  it('反空转：core 的文案函数确实抽得到 t() 调用点，且三份包都被解析到', () => {
+    const calls = astInventory.collectTCalls(read('src/components/RecycleBin/recycleCore.js'), 'recycleCore.js');
+    assert.ok(calls.length >= 25, `recycleCore.js 只抽到 ${calls.length} 个 t() 调用点（下界 25）⇒ 判据或文件坏了`);
+    assert.deepEqual(
+      calls.filter((c) => typeof c.defaultMessage !== 'string').map((c) => c.id),
+      [],
+      '有调用点没有字面量 defaultMessage（语言包漏 key 时用户会看到裸 key）',
+    );
+    for (const l of ['zh-CN', 'zh-TW', 'en-US']) {
+      assert.ok(Object.keys(packs[l]).length >= 250, `${l} 只解析出 ${Object.keys(packs[l]).length} 个 key`);
+    }
+  });
+
+  it('🔴 组件里每一个 core 文案函数调用都把翻译器传进去了（漏一个 = 那条文案永远中文）', () => {
+    const TEXT_FNS = new Set([
+      'recycleEmptyText', 'draftRecycleEmptyText', 'untitledText',
+      'restoreConfirmTitle', 'restoreConfirmText', 'draftRestoreConfirmTitle', 'draftRestoreConfirmText',
+      'purgeConfirmContent', 'draftPurgeConfirmContent', 'purgeOkText',
+      'purgeConfirmTitle', 'draftPurgeConfirmTitle',
+      'restoreSuccessText', 'purgeSuccessText', 'draftRestoreSuccessText', 'draftPurgeSuccessText',
+      'describeListFailure', 'normalizeDeletedList',
+    ]);
+    const ast = astInventory.parseSource(compSrc, 'RecycleBin/index.jsx');
+    const missing = [];
+    astInventory.walkAst(ast.program, (nd) => {
+      if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
+      const name = nd.callee.name;
+      const args = nd.arguments || [];
+      if (name === 'describeRecycleActionFailure') {
+        const opt = args[1];
+        const props =
+          opt && opt.type === 'ObjectExpression'
+            ? (opt.properties || []).map((p) => p.key && (p.key.name || p.key.value))
+            : [];
+        if (!props.includes('t')) missing.push(`${name}(…) 的 options 里没有 t（译文不会生效）`);
+        // 🔴 不许再传中文的 action/label：它们会被插进句子里，英文界面就会出现夹生句
+        if (props.includes('action') || props.includes('label')) {
+          missing.push(`${name}(…) 仍在传 action/label（应传 actionKey/labelKey，中文参数会插进外文句子）`);
+        }
+        if (!props.includes('actionKey') || !props.includes('labelKey')) {
+          missing.push(`${name}(…) 缺 actionKey/labelKey`);
+        }
+        return;
+      }
+      if (!TEXT_FNS.has(name)) return;
+      const last = args[args.length - 1];
+      if (!last || last.type !== 'Identifier' || last.name !== 't') {
+        missing.push(`${name}(…) 的最后一个实参不是 t（实际 ${last ? last.type : '无实参'}）`);
+      }
+    });
+    assert.deepEqual(
+      missing,
+      [],
+      '🔴 这些调用点没有把翻译器传进去（那几条文案会永远显示中文，而且从界面上看不出差别）：\n  ' +
+        missing.join('\n  '),
+    );
+  });
+
+  it('组件不再引用那些中文常量（常量仍导出给既有消费方，但组件必须走函数）', () => {
+    const comp = codeOnly(compSrc);
+    for (const c of [
+      'RECYCLE_EMPTY_TEXT', 'DRAFT_RECYCLE_EMPTY_TEXT', 'PURGE_OK_TEXT',
+      'PURGE_CONFIRM_CONTENT', 'DRAFT_PURGE_CONFIRM_CONTENT',
+      'RESTORE_CONFIRM_TITLE', 'RESTORE_CONFIRM_TEXT',
+      'DRAFT_RESTORE_CONFIRM_TITLE', 'DRAFT_RESTORE_CONFIRM_TEXT',
+    ]) {
+      assert.ok(
+        !comp.includes(c),
+        `组件仍在用常量 ${c} —— 那是**模块加载期**就固定的中文，切语言不跟随（要改用同名函数并传 t）`,
+      );
+    }
+    // 🔴 翻译器必须在渲染期取（useIntl 是 hook）
+    assert.match(comp, /const intl = useIntl\(\)/);
+    // 🔴 也不许有与翻译器同名的局部变量遮蔽它（本批就抓到过两个：`total: t` 与 `tags.map((t) =>`）
+    assert.ok(!comp.includes('total: t'), 'fetchList 里又把 total 解构成 t 了（会遮蔽翻译器）');
+    assert.ok(!comp.includes('map((t)'), 'tags 的 map 参数又叫 t 了（会遮蔽翻译器）');
+  });
+
+  it('🔴 不传翻译器时，输出与改造前逐字相同（黄金样本）', () => {
+    assert.equal(core.purgeConfirmTitle({ title: '旧文' }), '永久删除「旧文」？');
+    assert.equal(core.purgeConfirmTitle(null), '永久删除「(无标题)」？');
+    assert.equal(core.draftPurgeConfirmTitle({ title: '旧草稿' }), '永久删除草稿「旧草稿」？');
+    assert.equal(
+      core.restoreSuccessText({ title: '旧文' }),
+      '已恢复「旧文」，它已回到文章列表。恢复按「文章更新」处理：绑定文章更新的流水线会运行，前台缓存与总字数会刷新。',
+    );
+    assert.equal(
+      core.describeRecycleActionFailure({ response: { status: 404 } }, { action: '恢复', label: '文章' }),
+      '这条文章已不在回收站中（可能刚被恢复或已被永久删除），列表将刷新为最新状态。',
+    );
+    assert.equal(
+      core.describeRecycleActionFailure(
+        { response: { status: 403 } },
+        { action: '永久删除', label: '草稿', permission: 'draft:delete' },
+      ),
+      '当前账号没有永久删除这条草稿的权限（需要 draft:delete），请联系管理员。',
+    );
+    assert.equal(
+      core.describeRecycleActionFailure({ data: { statusCode: 500, message: 'boom' } }, { action: '恢复', label: '文章' }),
+      '恢复失败（boom），请稍后重试。',
+    );
+    assert.equal(
+      core.describeListFailure({ data: { statusCode: 500, message: '数据库炸了' } }),
+      '回收站列表加载失败（数据库炸了），请稍后重试；这不影响文章管理里的其它功能。',
+    );
+    assert.equal(core.normalizeDeletedArticle({}, 0).title, '(无标题)');
+    assert.equal(core.RECYCLE_EMPTY_TEXT, core.recycleEmptyText());
+  });
+
+  it('🔴 传翻译器（用 zh-CN 包插值）时结果与不传时逐字相同 —— 两条路径不许漂', () => {
+    const rec = { title: '旧文' };
+    const pairs = [
+      ['purgeConfirmTitle', core.purgeConfirmTitle(rec), core.purgeConfirmTitle(rec, zhT)],
+      ['draftPurgeConfirmTitle', core.draftPurgeConfirmTitle(rec), core.draftPurgeConfirmTitle(rec, zhT)],
+      ['restoreSuccessText', core.restoreSuccessText(rec), core.restoreSuccessText(rec, zhT)],
+      ['purgeSuccessText', core.purgeSuccessText(rec), core.purgeSuccessText(rec, zhT)],
+      ['draftRestoreSuccessText', core.draftRestoreSuccessText(rec), core.draftRestoreSuccessText(rec, zhT)],
+      ['draftPurgeSuccessText', core.draftPurgeSuccessText(rec), core.draftPurgeSuccessText(rec, zhT)],
+      ['recycleEmptyText', core.recycleEmptyText(), core.recycleEmptyText(zhT)],
+      ['draftRecycleEmptyText', core.draftRecycleEmptyText(), core.draftRecycleEmptyText(zhT)],
+      ['restoreConfirmText', core.restoreConfirmText(), core.restoreConfirmText(zhT)],
+      ['draftRestoreConfirmText', core.draftRestoreConfirmText(), core.draftRestoreConfirmText(zhT)],
+      ['purgeConfirmContent', core.purgeConfirmContent(), core.purgeConfirmContent(zhT)],
+      ['draftPurgeConfirmContent', core.draftPurgeConfirmContent(), core.draftPurgeConfirmContent(zhT)],
+      [
+        'actionFailure403',
+        core.describeRecycleActionFailure({ response: { status: 403 } }, { action: '永久删除', label: '草稿', permission: 'draft:delete' }),
+        core.describeRecycleActionFailure(
+          { response: { status: 403 } },
+          { actionKey: 'purge', labelKey: 'draft', permission: 'draft:delete', t: zhT },
+        ),
+      ],
+      [
+        'listFailureGeneric',
+        core.describeListFailure({ data: { statusCode: 500, message: '数据库炸了' } }),
+        core.describeListFailure({ data: { statusCode: 500, message: '数据库炸了' } }, zhT),
+      ],
+    ];
+    const drift = pairs.filter(([, a, b]) => a !== b).map(([n, a, b]) => `${n}\n     不传 t: ${a}\n     传 zhT : ${b}`);
+    assert.deepEqual(
+      drift,
+      [],
+      '🔴 zh-CN 包里的模板与源码里 JS 拼出来的中文**不是同一句话**（两条路径漂了）：\n  ' + drift.join('\n  '),
+    );
+  });
+
+  it('🔴 期 9 接线：服务端带 code 时用 error.<code> 的译文，没有码就回落中文原文', () => {
+    const coded = { data: { statusCode: 400, message: '非法的归档名', code: 'exportArchiveNameInvalid' } };
+    const out = core.describeRecycleActionFailure(coded, { actionKey: 'restore', labelKey: 'article', t: enT });
+    assert.ok(out.includes('Invalid archive name'), `没有用上 error.<code> 的英文译文：${out}`);
+    assert.ok(!out.includes('非法的归档名'), `仍然夹着服务端那句中文：${out}`);
+    // 🔴 无码回落（渐进迁移：任何时刻都可用）
+    const uncoded = { data: { statusCode: 400, message: '还没迁移的中文原因' } };
+    const out2 = core.describeRecycleActionFailure(uncoded, { actionKey: 'restore', labelKey: 'article', t: enT });
+    assert.ok(out2.includes('还没迁移的中文原因'), `无码时没有回落服务端原文：${out2}`);
+    // 列表加载失败那条也要走同一套
+    const out3 = core.describeListFailure(coded, enT);
+    assert.ok(out3.includes('Invalid archive name'), `describeListFailure 没有用上译文：${out3}`);
+  });
+
+  it('🔴 英文译文里没有汉字、没有 ICU 会当转义符的单引号，且与中文不同形', () => {
+    const keys = Object.keys(packs['zh-CN']).filter((k) => k.startsWith('recycle.'));
+    assert.ok(keys.length >= 45, `recycle.* 只有 ${keys.length} 个 key（下界 45）`);
+    const bad = [];
+    for (const k of keys) {
+      const en = packs['en-US'][k];
+      if (/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(en)) bad.push(`${k}: 英文里有汉字`);
+      if (en.includes("'")) bad.push(`${k}: 英文里有单引号（ICU 会把它当转义符 ⇒ 整句解析出错）`);
+      if (en === packs['zh-CN'][k]) bad.push(`${k}: 英文与中文相同（疑似没翻）`);
+    }
+    assert.deepEqual(bad, [], bad.join('\n  '));
   });
 });
