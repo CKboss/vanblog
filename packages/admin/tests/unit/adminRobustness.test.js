@@ -238,7 +238,9 @@ describe('后台健壮性：HTTPS 页 / 初始化页 / 接口地址', () => {
     const fn = slice(
       code,
       'const updateHttpsConfig = async (data) => {',
-      'return (\n    <Card title="HTTPS 相关配置">',
+      // 🔴 期 3 第五批起 Card 标题走 t()：切片终点跟着换成**新形状**，性质没放
+      //    （仍然是"切到 return 的那个 Card 为止"，用来断言 await 排在 setTimeout 之前）
+      'return (\n    <Card title={t(\'sysconf.caddy.card\', \'HTTPS 相关配置\')}>',
     );
     const awaitIdx = fn.indexOf('await setHttpsConfig(data);');
     const timerIdx = fn.indexOf('setTimeout(');

@@ -90,12 +90,22 @@ const BUDGET = {
   //   ① 权限列的权限名来自 `getPermissionLabel()`（CollaboratorModal 的口径）；
   //   ② 口令最短长度提示来自共享常量 `accountPasswordMinRule()`（被 passwordPolicy.test.js 钉着）。
   'src/pages/SystemConfig/tabs/User.jsx': 0,
+  // 🔴 期 3 第五批（2026-09-26）：HTTPS 页签（Caddy）33 条里翻了 32 条，**预算 1**。
+  //   那 1 条是 🔴 **永久例外**、不是欠条：FAQ 链接的 **URL 锚点**
+  //   （`…docs/faq/usage.md#开启了-https-重定向后关不掉`）必须逐字对上中文文档的标题 ——
+  //   站长已裁定文档暂不做 i18n（§7.141 A）⇒ 文档仍是中文 ⇒ 锚点翻了就跳不到那一节
+  //   （GitHub 的锚点由标题生成）。⚠️ 链接**文字**照翻（那才是给用户看的）；
+  //   已登记进 REQUIRED_EXCEPTIONS **反向钉住**（防止将来有人"好心"把它翻掉）。
+  'src/pages/SystemConfig/tabs/Caddy.jsx': 1,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
-//   所以那时总量没动。等"文档 i18n"裁定、tab 那批（外层 11 个 + 内层 4 个）落地后，
-//   🔴 **本数字必须回到 48 或更低** —— 谁调大它都要在这里写清"涨的是哪几条、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 52
+//   所以那时总量没动。等"文档 i18n"裁定、tab 那批（外层 11 个 + 内层 4 个）落地后必须还掉。
+// 🔴 52 → **53**（2026-09-26 期 3 第五批）：涨的 1 条是 Caddy 页那个 **URL 锚点**，
+//   它是 🔴 **永久例外**（文档按站长裁定仍是中文 ⇒ 锚点必须逐字对上中文标题），**不是欠条、不会还**。
+//   ⇒ 账目拆开记：🔴 **53 = 48（目标底）+ 4（Customizing 欠条，tab 那批落地时必须归 0）+ 1（Caddy URL 永久例外）**。
+//   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 53
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
@@ -103,6 +113,15 @@ const REQUIRED_EXCEPTIONS = [
   { file: 'src/pages/InitPage/setupKeyCore.js', text: '初始化密钥', why: '要照着敲进 shell 的命令与启动日志标签；服务端输出就是简体，翻译了 grep 抓不到' },
   { file: 'src/pages/user/Login/index.jsx', text: '语言 · Language', why: '静态双语 tooltip，服务于"还没切语言的人"，刻意不走 t()' },
   { file: 'src/pages/user/Restore/index.jsx', text: '语言 · Language', why: '同上' },
+  // 🔴 期 3 第五批（2026-09-26）新增：**URL 锚点**也必须逐字是中文（这是第 4 类例外形状：
+  //    前三类是协议字符串 / 要照着敲的命令 / 静态双语标签，这一类是"指向中文文档的锚点"）
+  {
+    file: 'src/pages/SystemConfig/tabs/Caddy.jsx',
+    text: 'usage.md#开启了-https-重定向后关不掉',
+    why:
+      'URL 锚点：必须逐字对上 docs/faq/usage.md 里的中文标题（站长已裁定文档暂不做 i18n，文档仍是中文）；' +
+      '翻成英文就跳不到那一节（GitHub 的锚点由标题生成）',
+  },
 ];
 
 /**
@@ -196,7 +215,10 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 18, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
-  assert.strictEqual(TOTAL_BUDGET, 52, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 4, '例外清单条数变了 ⇒ 必须是有意的');
+  assert.strictEqual(Object.keys(BUDGET).length, 19, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
+  assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
+  //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 5, '例外清单条数变了 ⇒ 必须是有意的');
 });

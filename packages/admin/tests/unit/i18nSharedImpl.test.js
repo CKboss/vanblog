@@ -179,6 +179,8 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/SystemConfig/tabs/Token.tsx': 0,
     'src/pages/SystemConfig/tabs/Advance.jsx': 0,
     'src/pages/SystemConfig/tabs/User.jsx': 0,
+    // 🔴 预算 1 = Caddy 页那个**URL 锚点**（永久例外，不是欠条；账目见棘轮里 TOTAL_BUDGET 的注释）
+    'src/pages/SystemConfig/tabs/Caddy.jsx': 1,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -194,7 +196,11 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     );
     total += got;
   }
-  assert.strictEqual(total, 52, `裸中文总数应当是 52（棘轮的 TOTAL_BUDGET，含 Customizing 那 4 条欠条），实际 ${total}`);
+  assert.strictEqual(
+    total,
+    53,
+    `裸中文总数应当是 53（棘轮的 TOTAL_BUDGET = 48 目标底 + Customizing 那 4 条欠条 + Caddy 那 1 条 URL 锚点永久例外），实际 ${total}`,
+  );
   // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
   //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——
   //    同一个数字写两处就是两处口径，改一处忘另一处只是时间问题。

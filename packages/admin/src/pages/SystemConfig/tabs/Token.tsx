@@ -129,7 +129,8 @@ export default function () {
                           rel="noreferrer"
                           href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/advanced/token.md"
                         >
-                          {t('sysconf.token.relatedDocs', '相关文档')}
+                          {/* 🔴 用 common.relatedDocs（从 sysconf.token.relatedDocs 提升）：Caddy 页也要用它 */}
+                          {t('common.relatedDocs', '相关文档')}
                         </a>
                       </p>
                     </div>

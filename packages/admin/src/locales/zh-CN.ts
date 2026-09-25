@@ -391,7 +391,6 @@ export default {
   'sysconf.token.helpP2': '结合 API 文档，您可以做到很多有意思的事情。',
   'sysconf.token.helpP3': 'API 文档现在比较水，会慢慢完善的，未来会有 API Playgroud，敬请期待。',
   'sysconf.token.helpP4': 'PS：暂时没必要通过 API 开发自己的前台，后面会出主题功能（完善的文档和开发指南，不限制技术栈），届时再开发会更好。',
-  'sysconf.token.relatedDocs': '相关文档',
   'sysconf.advance.loginCard': '登录安全策略',
   'sysconf.advance.retryLockedAlert': '开启最大登录失败次数限制目前还不稳定！暂时先不可配置，稳定后开放。',
   'sysconf.advance.demoBlockedLogin': '演示站禁止修改登录安全策略！',
@@ -440,5 +439,46 @@ export default {
   'sysconf.user.helpP1': '您可以添加一些具有指定权限的协作者用户。',
   'sysconf.user.helpP2': '协作者默认具有文章、草稿、图片的查看/上传权限，其余权限需要您显式指定。',
   'sysconf.user.helpP3': '协作者登录后将看到被精简的后台页面（除非此协作者具备所有权限），同时无权限的接口将抛错。',
+
+
+  // ── 🔴 期 3 第五批：SystemConfig 的「HTTPS」页签（Caddy，32 条）──
+  //    zh-CN 的值由脚本**直接从源码的 defaultMessage 抽出**（构造出逐字相同）。
+  //    🔴 `common.relatedDocs` 是从 `sysconf.token.relatedDocs` **提升**上来的（Token 页与 HTTPS 页同一个性质）。
+  //    ⚠️ 本页签有一条中文**永远不翻**：那个 FAQ 链接的 URL 锚点（`…usage.md#开启了-https-重定向后关不掉`）
+  //    必须逐字对上中文文档的标题（站长已裁定文档暂不做 i18n）⇒ 它在棘轮里的预算是 1，属**永久例外**、不是欠账。
+  //    ⚠️ 顺带记录（未改）：zh-CN 原文 `触发请后稍等一会` 疑为笔误（应为「触发后」）—— 属**中文文案修订**，
+  //    不在多语言批次范围里，交站长裁定后再动（改了要三份包同步改，否则对账会红）。
+  'sysconf.caddy.changedOk': '更改成功！将自动刷新至新协议',
+  'sysconf.caddy.updateFailed': '更新失败！',
+  'sysconf.caddy.card': 'HTTPS 相关配置',
+  'sysconf.caddy.introPrefix': 'VanBlog 是通过',
+  'sysconf.caddy.introSuffix': '实现的证书全自动按需申请。',
+  'common.relatedDocs': '相关文档',
+  'sysconf.caddy.advancedHint': '高级玩家可点击按钮查看 Caddy 运行日志或配置排查错误。',
+  'sysconf.caddy.accessLogHint': 'access 日志可进入容器 /var/log/vanblog-access.log 查看',
+  'sysconf.caddy.portsHint': '请确保 80/443 端口处于开放状态。',
+  'sysconf.caddy.firstVisitHint': '第一次通过某域名 https 访问时，如果没有证书会自动申请证书的。你也可以点击下面的按钮手动触发证书申请。',
+  'sysconf.caddy.stableHint': '稳定后可打开 https 自动重定向功能，开启通过 http 访问将自动跳转至 https。开启后请用无痕窗口访问 http://你的域名 确认会跳到 https；也可点「查看 Caddy 配置」，srv1 的 listener_wrappers 应含 http_redirect。',
+  'sysconf.caddy.reverseProxyWarn': '如果你用了 80 端口反代，请不要开启 https 自动重定向！否则你的反代可能会失效。',
+  'sysconf.caddy.stuckPrefix': '如果不小心开启了此选项后关不掉，可以参考：',
+  'sysconf.caddy.stuckLink': '开启了 https 重定向后关不掉',
+  'sysconf.caddy.demoBlocked': '演示站不可修改此选项，不然怕 k8s ingress 失效',
+  'sysconf.caddy.noChange': '未修改任何信息，无需保存！',
+  'sysconf.caddy.confirmOff': '确定关闭 https 自动重定向吗？关闭后可通过 http 进行访问。点击确定后 2 秒将自动切换到 http 访问',
+  'sysconf.caddy.confirmOn': '开启 https 自动重定向之前，请确保通过域名可正常用 https 访问本站。开启将无法使用 http 访问本站。点击确定后 2 秒将自动切换到 https 访问。注意如果是自己反代了 80 端口的话，请务必不要开启此项！',
+  'sysconf.caddy.configTitle': 'Caddy 配置',
+  'sysconf.caddy.configError': '获取 Caddy 配置错误！',
+  'sysconf.caddy.viewConfig': '查看 Caddy 配置',
+  'sysconf.caddy.logTitle': 'Caddy 运行日志',
+  'sysconf.caddy.logError': '获取 Caddy 日志错误！',
+  'sysconf.caddy.viewLog': '查看 Caddy 日志',
+  'sysconf.caddy.clearLogConfirm': '确定清除 Caddy 运行日志吗？清除后将无法恢复！',
+  'sysconf.caddy.clearLogOk': '清除 Caddy 运行日志成功！',
+  'sysconf.caddy.clearLog': '清除 Caddy 日志',
+  'sysconf.caddy.triggerCertTitle': '触发证书按需申请',
+  'sysconf.caddy.triggerCertContent': '点击确认后将打开新窗口并用 https 访问当前网址以触发证书按需申请。触发请后稍等一会（申请时间取决于网络环境），申请完成后弹出页面将通过 https 正常加载。',
+  'sysconf.caddy.triggerCertBtn': '使用当前访问域名触发按需申请',
+  'sysconf.caddy.redirectLabel': 'HTTPS 自动重定向',
+  'sysconf.caddy.redirectTooltip': '开启后通过 http 访问本站将自动重定向至 https',
 
 };
