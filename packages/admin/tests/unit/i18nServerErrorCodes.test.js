@@ -55,9 +55,19 @@ for (const l of LOCALES) {
  * 🔴 棘轮预算：`packages/server/src/**\/*.ts`（排除 `*.spec.ts` 与 `test/`）里
  * 「带中文的 `throw` 站点」总数，**只许减不许增**。
  * 基线：2026-09-25 实测 **252**（146 只含字符串字面量 + 97 只含模板片段 + 9 两者都有）；
- * 期 9 第一批把 `category.provider.ts` 的 **9** 处迁到错误码 ⇒ **243**。
+ * 期 9 第一批迁掉 `category.provider.ts` 的 **9** 处 ⇒ 243；
+ * 期 9 第二批迁掉 `article.controller.ts`(9) + `draft.controller.ts`(2) + `export.controller.ts`(2) = **13** 处 ⇒ **230**。
+ * 🔴 复算命令：`node scripts/i18n/inventory.js --server-throws`（同一个共享实现，口径必然一致）。
  */
-const THROW_BUDGET = 243;
+const THROW_BUDGET = 230;
+
+/**
+ * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
+ * 为什么必须单列：只数 `throw` 的话，🔴 这一族可以随便新增而没有任何守卫会红 ——
+ * 而实测它有 **108** 处（8 在 throw 里 + **100 在 throw 外**，"演示站禁止…"几乎全是这个形状），
+ * 比 throw 那一族的一半还多。基线 2026-09-25 实测 **108**（30 个文件），只许减不许增。
+ */
+const MESSAGE_BODY_BUDGET = 108;
 
 function walkServerSources(dir, out) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -72,14 +82,14 @@ function walkServerSources(dir, out) {
   return out;
 }
 
-function scanServerThrows() {
+function scanServerSources(collect) {
   const files = walkServerSources(SERVER_SRC, []);
   let total = 0;
   const perFile = {};
   for (const abs of files) {
     const rel = path.relative(ROOT, abs).split(path.sep).join('/');
     // 🔴 解析失败会抛（fail-loud）："解析不到"绝不等于"没有问题"
-    const hits = astInventory.collectChineseThrows(fs.readFileSync(abs, 'utf8'), rel);
+    const hits = collect(fs.readFileSync(abs, 'utf8'), rel);
     if (hits.length > 0) {
       perFile[rel] = hits.length;
       total += hits.length;
@@ -87,6 +97,9 @@ function scanServerThrows() {
   }
   return { files: files.length, total, perFile };
 }
+
+const scanServerThrows = () => scanServerSources(astInventory.collectChineseThrows);
+const scanServerMessageProps = () => scanServerSources(astInventory.collectChineseMessageProps);
 
 test('服务端错误码 · 反空转：登记表、语言包与源码遍历都真的拿到了东西', () => {
   assert.ok(CODES.length >= 8, `登记表只解析出 ${CODES.length} 个码（下界 8）⇒ 尺子坏了或登记表被清空`);
@@ -97,6 +110,12 @@ test('服务端错误码 · 反空转：登记表、语言包与源码遍历都�
   // 🔴 这条是棘轮的**反空转**：遍历坏了（例如目录名改了）会得到 0 个站点，而 `0 <= 预算` 恒真
   assert.ok(scan.files >= 200, `只遍历到 ${scan.files} 个 server 源文件（下界 200）⇒ 遍历坏了，棘轮会假绿`);
   assert.ok(scan.total > 100, `只数出 ${scan.total} 个带中文的 throw 站点（应远大于 100）⇒ 尺子坏了`);
+  const scan2 = scanServerMessageProps();
+  assert.ok(scan2.files === scan.files, `两个口径遍历到的文件数不一致（${scan2.files} vs ${scan.files}）⇒ 有一把尺子遍历坏了`);
+  assert.ok(
+    scan2.total > 50,
+    `只数出 ${scan2.total} 个「message: 中文」站点（应远大于 50）⇒ 尺子坏了（而 0 ≤ 预算 会让棘轮恒真）`,
+  );
 });
 
 test('服务端错误码 · ① 每个码都有三语译文，且 zh-CN 与服务端登记表逐字相同', () => {
@@ -190,6 +209,26 @@ test('服务端错误码 · ③ 棘轮：带中文的 throw 站点不得超过�
   }
 });
 
+test('服务端错误码 · ③ 第二个棘轮：`message:` 带中文的返回体不得超过预算（只许减不许增）', () => {
+  const scan = scanServerMessageProps();
+  assert.ok(
+    scan.total <= MESSAGE_BODY_BUDGET,
+    `🔴 服务端出现了新的「中文返回体」：实测 ${scan.total} > 预算 ${MESSAGE_BODY_BUDGET}。\n` +
+      '修法与 throw 那一族相同：在 `serverErrorCodes.ts` 登记一个码（`zh` 逐字照抄今天这句），\n' +
+      "调用点改成 `return codedBody('<code>')`，再在 admin 三份语言包里各加一条 `error.<code>`。\n" +
+      '⚠️ 不要通过调大 `MESSAGE_BODY_BUDGET` 来"修"这条：那是把棘轮拆了。\n' +
+      '🔴 定位：`node scripts/i18n/inventory.js --server-throws`（它同时报两个口径的完整分布）。\n' +
+      `当前分布（前 8）：\n  ${Object.entries(scan.perFile)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([f, n]) => `${n} ${f}`)
+        .join('\n  ')}`,
+  );
+  if (scan.total < MESSAGE_BODY_BUDGET) {
+    console.log(`NOTE: 「message: 中文」站点已降到 ${scan.total}，MESSAGE_BODY_BUDGET 可以下调到 ${scan.total}`);
+  }
+});
+
 test('服务端错误码 · 尺子自证：合成输入必须被正确分类（证明判据真的在判）', () => {
   // ① 裸中文 throw 必须数得出（否则棘轮恒真）
   const bare = astInventory.collectChineseThrows(`throw new BadRequestException('中文消息');`, 'synthetic');
@@ -204,6 +243,24 @@ test('服务端错误码 · 尺子自证：合成输入必须被正确分类（�
   // ④ 没有中文的 throw 不算
   const ascii = astInventory.collectChineseThrows(`throw new Error('boom');`, 'synthetic');
   assert.strictEqual(ascii.length, 0, '纯 ASCII 的 throw 被误算了');
+  // ④b 🔴 返回体那一族：throw 里的与 return 里的都要数得出，且 `inThrow` 要分得清
+  const inThrow = astInventory.collectChineseMessageProps(
+    `throw new HttpException({ statusCode: 401, message: '演示站禁止修改此项！' }, 401);`,
+    'synthetic',
+  );
+  assert.strictEqual(inThrow.length, 1, 'throw 里的 message: 中文没被数出来');
+  assert.strictEqual(inThrow[0].inThrow, true, 'inThrow 标记错了（它明明在 throw 里）');
+  const inReturn = astInventory.collectChineseMessageProps(
+    `const r = () => ({ statusCode: 401, message: '演示站禁止修改此项！' });`,
+    'synthetic',
+  );
+  assert.strictEqual(inReturn.length, 1, 'return 体里的 message: 中文没被数出来');
+  assert.strictEqual(inReturn[0].inThrow, false, 'inThrow 标记错了（它在 return 体里，不在 throw 里）');
+  assert.strictEqual(
+    astInventory.collectChineseMessageProps(`const r = { message: 'ok' };`, 'synthetic').length,
+    0,
+    '纯 ASCII 的 message 被误算了',
+  );
   // ⑤ 🔴 登记表解析必须 fail-loud（0 个码会让上面所有全称断言恒真）
   assert.throws(
     () => astInventory.collectServerErrorCodes(`export const OTHER = { a: entry('中文', Error) };`, 'synthetic'),

@@ -48,6 +48,7 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
     'collectTCalls',
     'collectTCallsFromFile',
     'collectChineseThrows',
+    'collectChineseMessageProps',
     'collectServerErrorCodes',
     'readPack',
     'validateKeyShape',

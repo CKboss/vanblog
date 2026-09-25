@@ -1,15 +1,17 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
   Logger,
-  NotFoundException,
   Post,
   Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变、`error` 字段保留），
+//    admin 侧**有码用码、无码回落 message** ⇒ 渐进迁移任何时刻都可用。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import * as fs from 'fs';
@@ -163,12 +165,12 @@ export class ExportController {
   async downloadArchive(@Query('name') name: string, @Res() res: Response) {
     const base = String(name || '').trim();
     if (!base || base !== path.basename(base) || !base.startsWith('export-')) {
-      throw new BadRequestException('非法的归档名');
+      throw codedError('exportArchiveNameInvalid');
     }
     const dir = path.resolve(config.backupPath, 'export');
     const target = path.resolve(dir, base);
     if (!target.startsWith(dir + path.sep) || !fs.existsSync(target)) {
-      throw new NotFoundException('归档不存在（可能已被清理，请重新导出）');
+      throw codedError('exportArchiveMissing');
     }
     res.download(target, base, () => {
       // 下载完就删：这些归档里可能有只被隐藏文章引用的图片，不该长期留在磁盘上

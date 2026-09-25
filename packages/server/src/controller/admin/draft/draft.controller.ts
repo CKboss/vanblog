@@ -3,7 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  NotFoundException,
   Param,
   Post,
   Put,
@@ -11,6 +10,10 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变、`error` 字段保留），
+//    admin 侧**有码用码、无码回落 message** ⇒ 渐进迁移任何时刻都可用。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { CreateDraftDto, PublishDraftDto, UpdateDraftDto } from 'src/types/draft.dto';
 import { SortOrder } from 'src/types/sort';
@@ -191,7 +194,7 @@ export class DraftController {
     }
     const restored: any = await this.draftProvider.restoreById(id);
     if (!restored) {
-      throw new NotFoundException('回收站里没有这篇草稿（可能已恢复或已彻底删除）');
+      throw codedError('draftNotInRecycleBin');
     }
     this.pipelineProvider.dispatchEvent('afterUpdateDraft', restored);
     return {
@@ -208,7 +211,7 @@ export class DraftController {
     }
     const target = await this.draftProvider.findDeletedById(id);
     if (!target) {
-      throw new NotFoundException('只能彻底删除回收站里的草稿（请先移入回收站）');
+      throw codedError('draftPurgeRequiresRecycleBin');
     }
     const data = await this.draftProvider.purgeById(id);
     return {

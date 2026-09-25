@@ -195,7 +195,9 @@ function serverThrows() {
   //    ⚠️ 两处写同一个数字就是两处口径 —— 但守卫在 admin 的 node:test 里、本工具在 scripts/ 下，
   //    互相 require 会把"守卫"与"报数工具"耦合成一条依赖链；折中办法是**在这里注明出处**，
   //    并由守卫那条断言负责"数字漂了就红"（守卫是权威，本工具只是打印）。
-  const THROW_BUDGET = 243;
+  const THROW_BUDGET = 230;
+  // 🔴 第二个口径的预算（`message:` 带中文的返回体），与守卫里的 `MESSAGE_BODY_BUDGET` 必须一致。
+  const MESSAGE_BODY_BUDGET = 108;
   const walk = (dir, out) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       const abs = path.join(dir, ent.name);
@@ -218,11 +220,30 @@ function serverThrows() {
     }
   }
   perFile.sort((a, b) => b.n - a.n || a.rel.localeCompare(b.rel));
+  const msgPerFile = [];
+  let msgTotal = 0;
+  let msgOutside = 0;
+  for (const abs of files) {
+    const rel = path.relative(ROOT, abs).split(path.sep).join('/');
+    const hits = astInventory.collectChineseMessageProps(fs.readFileSync(abs, 'utf8'), rel);
+    if (hits.length > 0) {
+      msgPerFile.push({ rel, n: hits.length, outside: hits.filter((h) => !h.inThrow).length });
+      msgTotal += hits.length;
+      msgOutside += hits.filter((h) => !h.inThrow).length;
+    }
+  }
+  msgPerFile.sort((a, b) => b.n - a.n || a.rel.localeCompare(b.rel));
   console.log('=== 服务端「带中文的 throw 站点」分布（口径同 i18nServerErrorCodes 棘轮）===');
   console.log(`  扫描文件 ${files.length} 个（排除 *.spec.ts 与 test/）；命中文件 ${perFile.length} 个；站点合计 ${total}`);
   console.log(`  棘轮预算 ${THROW_BUDGET} ⇒ ${total <= THROW_BUDGET ? '✓ 未超' : '🔴 超了 ' + (total - THROW_BUDGET)}`);
   for (const f of perFile) console.log(`    ${String(f.n).padStart(3)}  ${f.rel}  (行 ${f.lines.join(',')})`);
-  return total <= THROW_BUDGET ? 0 : 1;
+  console.log('--- 第二个口径：`message:` 带中文的返回体（棘轮同样只许减不许增）---');
+  console.log(
+    `  命中文件 ${msgPerFile.length} 个；站点合计 ${msgTotal}（其中在 throw 外 ${msgOutside}）；` +
+      `预算 ${MESSAGE_BODY_BUDGET} ⇒ ${msgTotal <= MESSAGE_BODY_BUDGET ? '✓ 未超' : '🔴 超了 ' + (msgTotal - MESSAGE_BODY_BUDGET)}`,
+  );
+  for (const f of msgPerFile.slice(0, 12)) console.log(`    ${String(f.n).padStart(3)}  ${f.rel}  (throw 外 ${f.outside})`);
+  return total <= THROW_BUDGET && msgTotal <= MESSAGE_BODY_BUDGET ? 0 : 1;
 }
 
 function main() {

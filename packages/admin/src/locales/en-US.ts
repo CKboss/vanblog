@@ -278,4 +278,17 @@ export default {
   'error.categoryUpdateNoPayload': 'Nothing to update: no valid fields were sent',
   'error.categoryOrderInvalid': 'Invalid order value',
   'error.categoryDuplicateOnUpdate': 'Another category already uses that name',
+
+  // ── 🔴 期 9 第二批（10 codes）── 说明见 zh-CN 包同一处；英文是人工写的
+  'error.articleImportMdzNoFile': 'No file received: upload a .mdz as multipart data with the field name \"file\"',
+  'error.articleNotInRecycleBin': 'That post is no longer in the recycle bin — it may already have been restored or permanently deleted',
+  'error.articlePurgeRequiresRecycleBin': 'Only posts in the recycle bin can be permanently deleted. Move the post to the recycle bin first',
+  'error.articleNotFoundForRevision': 'That post does not exist. Restore it from the recycle bin before reverting to a revision',
+  'error.revisionFeatureUnavailable': 'Revision history is unavailable (RevisionProvider is not registered)',
+  'error.revisionNotFound': 'That revision does not exist, or it does not belong to this post',
+  'error.draftNotInRecycleBin': 'That draft is no longer in the recycle bin — it may already have been restored or permanently deleted',
+  'error.draftPurgeRequiresRecycleBin': 'Only drafts in the recycle bin can be permanently deleted. Move the draft to the recycle bin first',
+  'error.exportArchiveNameInvalid': 'Invalid archive name',
+  'error.exportArchiveMissing': 'That archive no longer exists — it may have been cleaned up. Please export again',
+
 };

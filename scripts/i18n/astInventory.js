@@ -380,6 +380,40 @@ function collectChineseThrows(src, label) {
 }
 
 /**
+ * 🔴 数出一份源码里「**`message:` 属性带中文**」的站点（返回体那一族），并标出它**在不在 `throw` 里**。
+ *
+ * ## 为什么单列一个口径
+ * 服务端的用户可见错误有**两种形状**：`throw new XException('中文')` 与 `return { statusCode, message: '中文' }`。
+ * 棘轮如果只数 `throw`，🔴 **后一种就能随便新增而没有任何守卫会红** —— 而实测后者有 **100 处**
+ * （"演示站禁止…"那一族几乎全是这个形状），比 throw 那一族的一半还多。
+ * ⇒ 两个口径都要有棘轮（`i18nServerErrorCodes.test.js` 里各一条预算）。
+ *
+ * @returns {Array<{line:number|null, text:string, inThrow:boolean}>}
+ */
+function collectChineseMessageProps(src, label) {
+  const ast = parseSource(src, label);
+  const throwRanges = [];
+  walkAst(ast.program, (nd) => {
+    if (nd.type === 'ThrowStatement' && nd.loc) throwRanges.push([nd.loc.start.line, nd.loc.end.line]);
+  });
+  const out = [];
+  walkAst(ast.program, (nd) => {
+    if (nd.type !== 'ObjectProperty' || !nd.key) return;
+    const k = nd.key.name || nd.key.value;
+    if (k !== 'message') return;
+    if (!nd.value || nd.value.type !== 'StringLiteral' || typeof nd.value.value !== 'string') return;
+    if (!HAN.test(nd.value.value)) return;
+    const line = nd.loc ? nd.loc.start.line : null;
+    out.push({
+      line,
+      text: nd.value.value,
+      inThrow: line === null ? false : throwRanges.some(([a, b]) => line >= a && line <= b),
+    });
+  });
+  return out;
+}
+
+/**
  * 🔴 解析**服务端错误码登记表**（`packages/server/src/utils/serverErrorCodes.ts` 里的
  * `export const SERVER_ERROR_CODES = { <code>: entry('<中文>', <Ctor>[, <status>]) }`）。
  *
@@ -606,6 +640,7 @@ module.exports = {
   collectTCalls,
   collectTCallsFromFile,
   collectChineseThrows,
+  collectChineseMessageProps,
   collectServerErrorCodes,
   SIMPLIFIED_ONLY_ZH,
   SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW,

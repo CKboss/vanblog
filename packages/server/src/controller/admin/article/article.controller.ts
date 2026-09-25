@@ -1,11 +1,9 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   Logger,
-  NotFoundException,
   Optional,
   Param,
   Post,
@@ -16,6 +14,10 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变、`error` 字段保留），
+//    admin 侧**有码用码、无码回落 message** ⇒ 渐进迁移任何时刻都可用。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiHeader, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
@@ -236,7 +238,7 @@ export class ArticleController {
       return { statusCode: 401, message: '演示站禁止修改此项！' };
     }
     if (!file?.buffer?.length) {
-      throw new BadRequestException('没有收到文件：请用 multipart 上传一个 .mdz（字段名 file）');
+      throw codedError('articleImportMdzNoFile');
     }
     // 可见水印默认**不加**：.mdz 里的图片多半就是本站导出时的成品（当年该加的水印已经加上），
     // 再盖一层会毁掉「导出→导入」的往返保真；要加可以显式传 withWaterMark=true。
@@ -362,7 +364,7 @@ export class ArticleController {
     }
     const restored: any = await this.articleProvider.restoreById(id);
     if (!restored) {
-      throw new NotFoundException('回收站里没有这篇文章（可能已恢复或已彻底删除）');
+      throw codedError('articleNotInRecycleBin');
     }
     // 与删除对称：删除时发过 deleteArticle 事件、重算过总字数、触发过 ISR，
     // 恢复同样要让流水线/缓存/静态页知道"这篇文章回来了"。
@@ -396,7 +398,7 @@ export class ArticleController {
     // ISR 需要它的 pathname 去失效 /post/<pathname> 与 /post/<id> 两条路径。
     const target: any = await this.articleProvider.findDeletedById(id, 'list');
     if (!target) {
-      throw new NotFoundException('只能彻底删除回收站里的文章（请先移入回收站）');
+      throw codedError('articlePurgeRequiresRecycleBin');
     }
     const data = await this.articleProvider.purgeById(id);
     this.isrProvider.activeAll('彻底删除文章触发增量渲染！', undefined, {
@@ -423,7 +425,7 @@ export class ArticleController {
   ) {
     const numericId = parseNumericId(id);
     if (!this.revisionProvider) {
-      throw new NotFoundException('历史版本功能不可用（RevisionProvider 未注册）');
+      throw codedError('revisionFeatureUnavailable');
     }
     const data = await this.revisionProvider.listMeta(numericId, page, pageSize);
     return {
@@ -437,11 +439,11 @@ export class ArticleController {
   async getRevision(@Param('id') id: number, @Param('revisionId') revisionId: string) {
     const numericId = parseNumericId(id);
     if (!this.revisionProvider) {
-      throw new NotFoundException('历史版本功能不可用（RevisionProvider 未注册）');
+      throw codedError('revisionFeatureUnavailable');
     }
     const revision: any = await this.revisionProvider.getOne(numericId, revisionId);
     if (!revision) {
-      throw new NotFoundException('找不到这条历史版本（或它不属于这篇文章）');
+      throw codedError('revisionNotFound');
     }
     const doc = typeof revision.toObject === 'function' ? revision.toObject() : revision;
     return {
@@ -474,15 +476,15 @@ export class ArticleController {
     }
     const numericId = parseNumericId(id);
     if (!this.revisionProvider) {
-      throw new NotFoundException('历史版本功能不可用（RevisionProvider 未注册）');
+      throw codedError('revisionFeatureUnavailable');
     }
     const revision: any = await this.revisionProvider.getOne(numericId, revisionId);
     if (!revision) {
-      throw new NotFoundException('找不到这条历史版本（或它不属于这篇文章）');
+      throw codedError('revisionNotFound');
     }
     const current: any = await this.articleProvider.getById(numericId, 'admin');
     if (!current) {
-      throw new NotFoundException('找不到文章（回收站里的文章请先恢复再还原历史版本）');
+      throw codedError('articleNotFoundForRevision');
     }
     // 1) 先给"恢复前的当前状态"拍快照（appendIfChanged：与目标一致时不会白记一条）
     const snapshot = await this.revisionProvider.appendSafe(

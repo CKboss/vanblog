@@ -1,4 +1,4 @@
-import { HttpException, NotAcceptableException } from '@nestjs/common';
+import { BadRequestException, HttpException, NotAcceptableException, NotFoundException } from '@nestjs/common';
 
 /**
  * 🔴 服务端**错误码登记表**（方案 B）：稳定错误码 + 三语文案在 admin 侧，而 `message` **仍然是中文**。
@@ -67,6 +67,26 @@ export const SERVER_ERROR_CODES = {
   categoryUpdateNoPayload: entry('无有效信息，无法修改！', NotAcceptableException),
   categoryOrderInvalid: entry('排序值无效！', NotAcceptableException),
   categoryDuplicateOnUpdate: entry('分类名重复，无法修改！', NotAcceptableException),
+
+  // ── 文章的回收站 / 历史版本 / .mdz 导入（article.controller.ts，期 9 第二批）──────────
+  // ⚠️ 这几条的 admin 消费方**目前还会自己组消息**（`components/RecycleBin` 用
+  //    `describeRecycleActionFailure()` 拼一句更详细的人话，而不是直接透出服务端 message）
+  //    ⇒ 码先登记好、响应体先带上，等那一批组件接上注入式翻译器时直接可用
+  //    （🔴 见手册 §7.141 H 记录的"21 处绕过全局 errorHandler 的直通点"）。
+  articleImportMdzNoFile: entry('没有收到文件：请用 multipart 上传一个 .mdz（字段名 file）', BadRequestException),
+  articleNotInRecycleBin: entry('回收站里没有这篇文章（可能已恢复或已彻底删除）', NotFoundException),
+  articlePurgeRequiresRecycleBin: entry('只能彻底删除回收站里的文章（请先移入回收站）', NotFoundException),
+  articleNotFoundForRevision: entry('找不到文章（回收站里的文章请先恢复再还原历史版本）', NotFoundException),
+  revisionFeatureUnavailable: entry('历史版本功能不可用（RevisionProvider 未注册）', NotFoundException),
+  revisionNotFound: entry('找不到这条历史版本（或它不属于这篇文章）', NotFoundException),
+
+  // ── 草稿的回收站（draft.controller.ts，期 9 第二批）──────────────────────────────
+  draftNotInRecycleBin: entry('回收站里没有这篇草稿（可能已恢复或已彻底删除）', NotFoundException),
+  draftPurgeRequiresRecycleBin: entry('只能彻底删除回收站里的草稿（请先移入回收站）', NotFoundException),
+
+  // ── Markdown 导出归档的下载（export.controller.ts，期 9 第二批）───────────────────
+  exportArchiveNameInvalid: entry('非法的归档名', BadRequestException),
+  exportArchiveMissing: entry('归档不存在（可能已被清理，请重新导出）', NotFoundException),
 };
 
 export type ServerErrorCode = keyof typeof SERVER_ERROR_CODES;

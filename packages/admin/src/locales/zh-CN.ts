@@ -272,4 +272,21 @@ export default {
   'error.categoryUpdateNoPayload': '无有效信息，无法修改！',
   'error.categoryOrderInvalid': '排序值无效！',
   'error.categoryDuplicateOnUpdate': '分类名重复，无法修改！',
+
+  // ── 🔴 期 9 第二批：文章/草稿的回收站、历史版本、.mdz 导入、导出归档下载（10 个码）──
+  //    zh-CN 的值由脚本**直接从服务端登记表读出**（不是重敲一遍），所以逐字相同是构造出来的、不是核对出来的。
+    //    ⚠️ 繁中术语决定（期 5 翻译那些组件时要沿用同一套，别再定第二遍）：
+    //    回收站 → **資源回收筒**、彻底删除 → **永久刪除**、恢复 → **還原**、文件 → **檔案**、字段 → **欄位**、
+    //    导出 → **匯出**、归档 → **歸檔**、清理 → **清除**、非法 → **不合法**。
+  'error.articleImportMdzNoFile': '没有收到文件：请用 multipart 上传一个 .mdz（字段名 file）',
+  'error.articleNotInRecycleBin': '回收站里没有这篇文章（可能已恢复或已彻底删除）',
+  'error.articlePurgeRequiresRecycleBin': '只能彻底删除回收站里的文章（请先移入回收站）',
+  'error.articleNotFoundForRevision': '找不到文章（回收站里的文章请先恢复再还原历史版本）',
+  'error.revisionFeatureUnavailable': '历史版本功能不可用（RevisionProvider 未注册）',
+  'error.revisionNotFound': '找不到这条历史版本（或它不属于这篇文章）',
+  'error.draftNotInRecycleBin': '回收站里没有这篇草稿（可能已恢复或已彻底删除）',
+  'error.draftPurgeRequiresRecycleBin': '只能彻底删除回收站里的草稿（请先移入回收站）',
+  'error.exportArchiveNameInvalid': '非法的归档名',
+  'error.exportArchiveMissing': '归档不存在（可能已被清理，请重新导出）',
+
 };

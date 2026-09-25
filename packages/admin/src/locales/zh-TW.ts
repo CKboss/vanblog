@@ -258,4 +258,17 @@ export default {
   'error.categoryUpdateNoPayload': '無有效資訊，無法修改！',
   'error.categoryOrderInvalid': '排序值無效！',
   'error.categoryDuplicateOnUpdate': '分類名重複，無法修改！',
+
+  // ── 🔴 期 9 第二批（10 個碼）── 術語決定見 zh-CN 包同一處的註解
+  'error.articleImportMdzNoFile': '沒有收到檔案：請用 multipart 上傳一個 .mdz（欄位名 file）',
+  'error.articleNotInRecycleBin': '資源回收筒裡沒有這篇文章（可能已還原或已永久刪除）',
+  'error.articlePurgeRequiresRecycleBin': '只能永久刪除資源回收筒裡的文章（請先移入資源回收筒）',
+  'error.articleNotFoundForRevision': '找不到文章（資源回收筒裡的文章請先還原，再回復歷史版本）',
+  'error.revisionFeatureUnavailable': '歷史版本功能不可用（RevisionProvider 未註冊）',
+  'error.revisionNotFound': '找不到這筆歷史版本（或它不屬於這篇文章）',
+  'error.draftNotInRecycleBin': '資源回收筒裡沒有這篇草稿（可能已還原或已永久刪除）',
+  'error.draftPurgeRequiresRecycleBin': '只能永久刪除資源回收筒裡的草稿（請先移入資源回收筒）',
+  'error.exportArchiveNameInvalid': '不合法的歸檔名',
+  'error.exportArchiveMissing': '歸檔不存在（可能已被清除，請重新匯出）',
+
 };
