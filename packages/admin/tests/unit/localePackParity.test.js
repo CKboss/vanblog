@@ -2,7 +2,9 @@
  * 🔴 多语言守卫：三份语言包的 key 集合必须完全相等，且翻译必须真的存在。
  *
  * 覆盖面：**第一期**＝安装页家族 + 登录/忘记密码页 + 语言切换器；
- * 🔴 **第二期第一块**＝后台侧边栏菜单（`config/routes.js` 的 `locale` 字段 ↔ 三份包的 `menu.*`）。
+ * 🔴 **第二期第一块**＝后台侧边栏菜单（`config/routes.js` 的 `locale` 字段 ↔ 三份包的 `menu.*`）；
+ * 🔴 **期 2 / 期 3 起**＝**所有**已接 i18n 的源文件，覆盖面由 `discoverI18nFiles()` 遍历 `src/`
+ * 自动发现（不再是手维护的清单）⇒ 每翻一批，这批的对账自动生效，不需要记得回来改本文件。
  *
  * **它防的是本仓库反复付过学费的那一族失效**：一个性质有多处口径 ⇒ 改一处忘另一处
  * （API Token 默认值曾有六处口径、两处是错的；`api.md` 的限流表曾漏掉一整个桶）。
@@ -12,13 +14,24 @@
  * 形状刻意与 `siteInfoFieldParity.test.js` 同族（三方集合双向相等 + 反空转 + 尺子反证），
  * 因为那一条已被证明是有效的模式。
  *
- * ⚠️ 语言包是 `.ts`，而本目录是 `node --test`（解析不到 TS 别名与 ESM）⇒
- * 这里**按文本解析**，与 `siteInfoFieldParity` 同一套做法。
+ * ⚠️ 语言包是 `.ts`，而本目录是 `node --test`（解析不到 TS 别名与 ESM）⇒ 不能 `require()` 它们。
+ * 🔴 但也**不要退回正则解析**：包与调用点都走共享模块 `scripts/i18n/astInventory.js` 的
+ * `readPack()` / `collectTCalls()`（`@babel/parser` + typescript 插件，与其它三条 i18n 守卫同一份实现）。
  */
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync, existsSync } = require('node:fs');
+const { readFileSync, readdirSync, existsSync } = require('node:fs');
 const path = require('node:path');
+
+// 🔴 AST 逻辑（解析语言包 / 抽 t() 调用点）**只用共享模块这一份实现**：
+//    `scripts/i18n/astInventory.js`（CLI 工具 `scripts/i18n/inventory.js` 与另外三条 i18n 守卫同源，
+//    由 `i18nSharedImpl.test.js` 钉住）。
+// ⚠️ 本文件曾经自带两份正则实现（`parsePack` / `parseTCalls`）：
+//    🔴 正则数语言包 key 在本仓库已被证明不可靠（`grep -c "^\s*'"` 得 128/117/116，真值 105/105/105），
+//    🔴 而手维护的"哪些文件接了 i18n"清单**实测漏过**（期 3 第一批的 ImgTab/WalineTab 没进清单
+//       ⇒ 它们 31 条 defaultMessage 与语言包是否一致从来没被查过，守卫却全绿）。
+//    ⇒ 现在：包用 AST 解析，覆盖面**遍历源码目录自动发现**（跟着代码走，不跟着清单走）。
+const astInventory = require('../../../../scripts/i18n/astInventory.js');
 
 const adminRoot = path.resolve(__dirname, '../..');
 const read = (rel) => readFileSync(path.join(adminRoot, rel), 'utf8');
@@ -36,42 +49,36 @@ function stripComments(src) {
     .join('\n');
 }
 
-/**
- * 解析语言包成 { key: value }。
- * 🔴 只认「单引号 key + 单引号 value」这一种形状（三份包都是自己生成的、形状统一）。
- * ⚠️ **解析不到必须 fail-loud**，不能静默返回空对象 —— 否则「三份都是空 ⇒ 集合相等」
- * 会变成一个恒真的绿（本仓库已有先例：枚举出 0 条路由 ⇒「未覆盖清单为空」恒真）。
- */
-function parsePack(locale) {
-  const rel = PACK_REL(locale);
-  assert.ok(existsSync(path.join(adminRoot, rel)), `语言包不存在：${rel}`);
-  const body = stripComments(read(rel));
-  const out = {};
-  const re = /'([^']+)':\s*\n?\s*'((?:[^'\\]|\\.)*)'/g;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    out[m[1]] = m[2].replace(/\\'/g, "'");
-  }
-  return out;
-}
-
-/**
- * 从组件源码里抽出所有 `t('id', 'defaultMessage'` 调用对。
- * 🔴 用 `[\s\S]` 而不是 `.`：本仓库的 prettier 会把长调用折成多行。
- */
-function parseTCalls(src) {
-  const body = stripComments(src);
-  const out = [];
-  const re = /\bt\(\s*'([^']+)',\s*\n?\s*'((?:[^'\\]|\\.)*)'/g;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    out.push({ id: m[1], defaultMessage: m[2].replace(/\\'/g, "'") });
-  }
-  return out;
-}
-
 const packs = {};
-for (const l of LOCALES) packs[l] = parsePack(l);
+for (const l of LOCALES) {
+  const rel = PACK_REL(l);
+  assert.ok(existsSync(path.join(adminRoot, rel)), `语言包不存在：${rel}`);
+  // 🔴 readPack 内部 fail-loud：解析出 0 个 key 会抛错，不会出现"三份都空 ⇒ 集合相等"的假绿
+  packs[l] = astInventory.readPack(path.join(adminRoot, rel), rel);
+}
+
+/**
+ * 🔴 自动发现「已经接了 i18n 的源文件」：遍历 `src/`，谁的 AST 里有 `collectTCalls`
+ *    抽得到的调用点（`t('id','默认文案')` 或 `formatMessage({id, defaultMessage})`），谁就在覆盖面里。
+ *
+ * 为什么不用手维护的清单：见文件头（清单实测漏过一整批文件，而漏的那批守卫全绿）。
+ * ⚠️ 跳过 `.umi*`（umi 生成物，数它会把覆盖面变成假的）与 `locales`（语言包本身没有调用点）。
+ */
+const SCAN_SKIP_DIRS = new Set(['node_modules', '.umi', '.umi-production', 'locales']);
+const SCAN_EXTS = new Set(['.js', '.jsx', '.ts', '.tsx']);
+function discoverI18nFiles(dir, out) {
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (SCAN_SKIP_DIRS.has(ent.name)) continue;
+      discoverI18nFiles(abs, out);
+    } else if (ent.isFile() && SCAN_EXTS.has(path.extname(ent.name))) {
+      // 🔴 解析失败会抛错（fail-loud）—— "解析不了"绝不等于"这个文件没接 i18n"
+      if (astInventory.collectTCalls(readFileSync(abs, 'utf8'), abs).length > 0) out.push(abs);
+    }
+  }
+  return out;
+}
 
 /**
  * 🔴 允许 zh-TW 与 zh-CN **逐字相同**的 key 白名单。
@@ -106,25 +113,24 @@ const IDENTICAL_ZH_TW_OK = [
   'menu.file', // 附件管理
   // 🔴 「文章 ID」简繁逐字相同（ID 是拉丁字母，无繁简差异）
   'sysconf.img.colArticleId',
+  // 🔴 期 3 第二批（CommentSystem / Customizing）新增的两条：
+  //    「保存」= 保 + 存，「更新成功！」= 更 + 新 + 成 + 功 + ！
+  //    逐字核实这 6 个字**都不是简化字**（简繁同形，没有对应的繁体异形字）；
+  //    本机可查的繁中语料 antd `lib/locale/zh_TW.js` 里「成」「功」也正是这两个字形。
+  //    ⚠️ 别把这条当成"可以随便加"的先例：白名单必须**恰好等于**实际相同的那一批。
+  'common.save', // 保存
+  'common.updateSuccess', // 更新成功！
 ];
 
 /**
- * 🔴 高频「简体专用字」：这些字在繁体里**一定**是另一个字形。
- * 只要 zh-TW 里出现其中任何一个，就说明有人**直接把简体复制过来当繁中**。
- * 这条与上面的白名单互补：白名单管「合法相同」，这条管「非法相同」。
- * 🔴 2026-09-25 期 3 第一批扩充：原表漏了「现」，导致 zh-TW 里写出「掃描现有…」而守卫全绿
- *    （是浏览器活体证据发现的，不是守卫）⇒ 本轮补进 ${missing_count} 个逐字核实过的字。
- *    ⚠️ 扩充时**只收「繁体里一定换成另一个字形」的字**；刻意不收 准/别/云/余/只/台/强/松/核/没/量/限/里/黑/静/降 等
- *    简繁同形或繁体合法的字 —— 上一轮误收 填/目/粘、本轮我一次性加 158 字又误伤 4 条（量/限/钥/…），
- *    两次都证明：**这张表只能逐字对照繁中语料（例如 bytemd 的 zh_Hant.json）来扩，不能凭"我看着像简体"批量加**。
- *    🔴 而假阳性比漏报更糟：它会训练下一个人忽略红灯。
+ * 🔴 「简体专用字」表与它的例外清单**只有一处权威实现**：`scripts/i18n/astInventory.js` 的
+ * `SIMPLIFIED_ONLY_ZH` / `SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW`。
+ * 扩充纪律、两次漏字（「现」「点」）的实测教训、以及"凭看着像简体批量加会误伤"的证据都记在那里 ——
+ * 因为审计工具 `node scripts/i18n/inventory.js --zh-tw-audit` 用的是同一份，
+ * 🔴 两处各存一份必然漂移（本仓库已为"同一性质两处口径"反复付过学费）。
+ * 这条与上面的白名单互补：白名单管「合法相同」，这张表管「非法相同」。
  */
-// 🔴 这张表只收「在繁体里一定换成另一个字形」的字。
-// ⚠️ 刻意**不含** 填 / 目 / 粘 / 包 / 含 / 不 / 文 / 章 等简繁同形字 ——
-//    把它们放进来会产生假阳性（填寫、目錄、粘合 里的这些字简繁是一样的），
-//    而假阳性比漏报更糟：它会训练下一个人忽略红灯。
-const SIMPLIFIED_ONLY =
-  '设备复务网页图导录账号评论处动进级单击确认时间题误报读压缩数据库静态档称随机闭开启传输应该这会说请试频简护贴载键运显实个为来对过还现';
+const SIMPLIFIED_ONLY = astInventory.SIMPLIFIED_ONLY_ZH;
 
 describe('多语言第一期：三份语言包的 key 集合完全相等', () => {
   it('zh-CN / zh-TW / en-US 三方的 key 集合两两相等（双向）', () => {
@@ -192,37 +198,98 @@ describe('多语言第一期：翻译必须真的存在（不是复制简体充�
     );
   });
 
-  it('zh-TW 里不许出现高频简体专用字（防「整包复制简体」）', () => {
+  it('zh-TW 里不许出现简体专用字（防「整包复制简体」）', () => {
     const hits = [];
     for (const [k, v] of Object.entries(packs['zh-TW'])) {
-      // 🔴 白名单里的那几条本来就与简体相同，跳过（它们不含简体专用字，但别误判）
+      // 🔴 逐值全扫，**不跳过任何 key**：`IDENTICAL_ZH_TW_OK` 那批本来就与简体逐字相同，
+      //    但它们（取消 / 文章 / 保存 / 更新成功！…）不含简体专用字 ⇒ 不会误报。
+      //    ⚠️ 这里以前写着"白名单里的那几条跳过"而代码并没有跳过 —— 注释与代码不符已修正。
       const found = [...v].filter((ch) => SIMPLIFIED_ONLY.includes(ch));
       if (found.length > 0) hits.push(`${k}: ${[...new Set(found)].join('')}`);
     }
     assert.deepEqual(
       hits,
       [],
-      `zh-TW 这些值里含简体专用字（疑似直接复制简体）：\n  ${hits.join('\n  ')}`,
+      `zh-TW 这些值里含简体专用字（疑似直接复制简体）：\n  ${hits.join('\n  ')}\n` +
+        '修法：改成繁体字形（套地区用词，不是字形转换）；' +
+        '🔴 若你确信某个字**在繁体里也合法**（例如 只 / 量 / 限 / 台），那是字表收错了字 —— ' +
+        '去 `scripts/i18n/astInventory.js` 的 SIMPLIFIED_ONLY_ZH 把它删掉，并对照上游繁中语料逐字核实。',
     );
+  });
+
+  it('🔴 「简体专用字表」与「刻意保留简体」的例外清单必须互斥、有理由、且不留死条目', () => {
+    const allowed = astInventory.SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW;
+    // 反空转：清单为空时下面两条会恒真（"没有重叠""没有死条目"），所以先钉住它非空
+    assert.ok(
+      allowed.length >= 1,
+      '例外清单空了 ⇒ 要么确实没有例外（那就把本断言与共享模块里的清单一并删掉，别留恒真的绿），要么被误删了',
+    );
+    const overlap = allowed.filter((e) => SIMPLIFIED_ONLY.includes(e.ch)).map((e) => e.ch);
+    assert.deepEqual(
+      overlap,
+      [],
+      `这些字同时出现在「简体专用字表」与「刻意保留例外」里（两套机制打架，必须二选一）：${overlap.join(' ')}`,
+    );
+    const dead = allowed.filter((e) => !Object.values(packs['zh-TW']).some((v) => v.includes(e.ch)));
+    assert.deepEqual(
+      dead.map((e) => e.ch),
+      [],
+      `例外清单里有死条目（zh-TW 里已经不含这些字了）：${dead.map((e) => e.ch).join(' ')} —— 请连理由一起删掉`,
+    );
+    for (const e of allowed) {
+      assert.ok(
+        typeof e.why === 'string' && e.why.length > 10,
+        `例外「${e.ch}」没有写理由 —— 没有理由的例外就是缺陷（下一个人无法判断它该不该留）`,
+      );
+    }
   });
 });
 
-describe('多语言第一期：组件里的每个 id 都必须在三份包里存在，且 defaultMessage 与 zh-CN 一致', () => {
-  const COMPONENTS = [
-    ...['index.tsx', 'RestoreFromBackup.tsx'].map((f) => `${INIT_DIR}/${f}`),
-    // 🔴 第二期第二块：侧边栏底部与主题/登出组件也开始用 t()，
-    //    所以它们的 defaultMessage 同样必须与 zh-CN 包逐字相同。
-    'src/app.jsx',
-    'src/components/ThemeButton/index.tsx',
-    'src/components/LogoutButton/index.jsx',
-  ];
+describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三份包里存在，且 defaultMessage 与 zh-CN 一致', () => {
+  // 🔴 覆盖面**自动发现**（理由见文件头与 discoverI18nFiles）：不再手维护"哪些文件接了 i18n"的清单。
+  const FILES = discoverI18nFiles(path.join(adminRoot, 'src'), [])
+    .map((abs) => path.relative(adminRoot, abs).split(path.sep).join('/'))
+    .sort();
   const calls = [];
-  for (const rel of COMPONENTS) {
-    for (const c of parseTCalls(read(rel))) calls.push({ ...c, rel });
+  for (const rel of FILES) {
+    for (const c of astInventory.collectTCalls(read(rel), rel)) calls.push({ ...c, rel });
   }
 
-  it('反空转：确实抽到了 t() 调用（不是解析器坏了）', () => {
-    assert.ok(calls.length >= 30, `只抽到 ${calls.length} 个 t() 调用，疑似解析器坏了`);
+  it('反空转：自动发现确实找到了文件与调用点（不是遍历/解析器坏了）', () => {
+    // 🔴 这两个下界**只许往上调**：每翻译完一批文件，覆盖面就该跟着涨；
+    //    谁把它调小 ⇒ 等于悄悄缩覆盖面（本仓库最忌讳的那类"假绿"）。
+    // ⚠️ 文件下界是 **10** 而不是 11：`InitPage/setupKeyCore.js` 与 `restoreCore.js` 是**丁类核心模块**
+    //    （纯 JS、被 `node --test` 直接 require、拿不到 umi 运行时）⇒ 它们用**注入式翻译器**，
+    //    调用点是 `t(id, 中文常量)` 这种**动态 id**，自动发现**看不见**（`collectTCalls` 刻意跳过动态 id）。
+    //    它们的对账由本文件下面那个「纯 JS 核心模块的注入式翻译器」describe 单独钉（SETUP_KEY_HINT_IDS ↔ 三份包）。
+    assert.ok(
+      FILES.length >= 10,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 10）⇒ 遍历或解析器坏了`,
+    );
+    assert.ok(
+      calls.length >= 160,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 160）⇒ 疑似解析器坏了`,
+    );
+    // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
+    for (const rel of [
+      'src/app.jsx',
+      'src/pages/InitPage/index.tsx',
+      'src/pages/SystemConfig/tabs/CommentSystem.jsx',
+      'src/pages/SystemConfig/tabs/Customizing.jsx',
+    ]) {
+      assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
+    }
+  });
+
+  it('每个调用点都必须带字面量 defaultMessage（缺了它，语言包万一少一个 key 用户就看到裸 key）', () => {
+    const bare = calls.filter(
+      (c) => typeof c.defaultMessage !== 'string' || c.defaultMessage.length === 0,
+    );
+    assert.deepEqual(
+      bare.map((c) => `${c.rel}:${c.line} → ${c.id}`),
+      [],
+      '这些 t() 调用点没有字面量 defaultMessage（第二实参必须是与 zh-CN 包逐字相同的中文）：\n  ',
+    );
   });
 
   it('每个 id 都在三份语言包里存在', () => {

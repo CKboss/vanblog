@@ -20,6 +20,7 @@
  *   node scripts/i18n/inventory.js                # 人类可读的汇总
  *   node scripts/i18n/inventory.js --tsv <file>   # 额外写出逐文件 TSV
  *   node scripts/i18n/inventory.js --json <file>  # 额外写出机器可读 JSON
+ *   node scripts/i18n/inventory.js --zh-tw-audit  # 繁中用字审计（🔴 每翻译完一批繁中跑一次，见 zhTwAudit 的说明）
  *
  * ⚠️ **本工具只读，不改任何文件**（除了你显式指定的 --tsv/--json 输出路径）。
  * 🔴 **测量类命令绝不接 `2>/dev/null`** —— 那会把工具失败静默变成"看起来合理的 0"
@@ -111,6 +112,71 @@ function classify(rel, src, inv) {
   return '甲-UI 文案（需翻译）';
 }
 
+/**
+ * 🔴 `--zh-tw-audit`：繁中用字审计。**每翻译完一批繁中就跑一次**（手册里的规矩）。
+ *
+ * ## 为什么需要一个人工审计工具，而不是全靠守卫
+ * `localePackParity` 那条守卫用的是「简体专用字表」（`astInventory.SIMPLIFIED_ONLY_ZH`），
+ * 🔴 而那张表**天生不可能完备**：本机没有任何简繁映射数据源，也不许装新依赖。
+ * 实测代价：表里漏「现」⇒ zh-TW 写出「掃描现有…」守卫全绿（靠浏览器活体证据才发现）；
+ * 表里漏「点」⇒ zh-TW 写出「站点配置」守卫全绿（靠**这个审计**逐字过才发现）。
+ * ⇒ 所以本工具的输出**不是**"绿了就没事"：它把 zh-TW 里出现过的每个不同汉字摊开给人看，
+ * 🔴 **判断"某个字是不是简体专用字"这一步只能由人做**（并且要对照上游繁中语料，
+ * 例如 antd `lib/locale/zh_TW.js`、bytemd `locales/zh_Hant.json`，不能凭"我看着像简体"）。
+ *
+ * 口径：AST 解析语言包后的**值**（不是正则、不是"含中文的行数"）。
+ * @returns {number} 退出码：表里的字出现在 zh-TW 里 ⇒ 1（与守卫同判据），否则 0
+ */
+function zhTwAudit() {
+  const packs = {};
+  for (const l of ['zh-CN', 'zh-TW', 'en-US']) {
+    const abs = path.join(ROOT, 'packages/admin/src/locales', `${l}.ts`);
+    packs[l] = astInventory.readPack(abs, l);
+  }
+  const table = astInventory.SIMPLIFIED_ONLY_ZH;
+  const allowed = astInventory.SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW;
+
+  const where = new Map(); // 汉字 → 出现它的 key 列表
+  for (const [k, v] of Object.entries(packs['zh-TW'])) {
+    for (const ch of v) {
+      if (!astInventory.HAN.test(ch)) continue;
+      if (!where.has(ch)) where.set(ch, []);
+      where.get(ch).push(k);
+    }
+  }
+  const distinct = [...where.keys()].sort();
+
+  console.log('=== 繁中用字审计（口径：AST 解析 zh-TW 语言包的值，逐字去重）===');
+  console.log(`  zh-TW: ${Object.keys(packs['zh-TW']).length} key，值里出现过的不同汉字 ${distinct.length} 个`);
+  console.log(`  简体专用字表 ${[...table].length} 字；刻意保留简体的例外 ${allowed.length} 个`);
+
+  const hits = distinct.filter((ch) => table.includes(ch));
+  if (hits.length > 0) {
+    console.log(`  🔴 命中简体专用字 ${hits.length} 个（守卫同样会红）：`);
+    for (const ch of hits) console.log(`     ${ch} ← ${where.get(ch).join(', ')}`);
+  } else {
+    console.log('  ✓ 没有命中简体专用字表里的字');
+  }
+
+  for (const e of allowed) {
+    const keys = [...where.entries()].filter(([ch]) => ch === e.ch).flatMap(([, ks]) => ks);
+    console.log(`  ⚠️ 刻意保留简体「${e.ch}」出现在 ${keys.length} 条：${keys.join(', ') || '（🔴 一条都没有 = 死条目）'}`);
+    console.log(`     理由：${e.why}`);
+  }
+
+  // 🔴 这一段才是本工具的重点：表外的字**必须人工逐字过一遍**
+  const review = distinct.filter((ch) => !table.includes(ch) && !allowed.some((e) => e.ch === ch));
+  console.log(`  --- 🔴 表外汉字 ${review.length} 个：请人工逐字核实（表不完备，只有人能判断）---`);
+  const LINE = 40;
+  for (let i = 0; i < review.length; i += LINE) {
+    console.log('    ' + review.slice(i, i + LINE).join(''));
+  }
+  console.log('  判定规矩：只把「繁体里一定换成另一个字形」的字加进 SIMPLIFIED_ONLY_ZH；');
+  console.log('            简繁同形或繁体合法的（只/量/限/台/准/别/云/余/强/松/核/没/里/黑/静/降/填/目/粘…）绝不收。');
+  console.log('            加字之前先对照上游繁中语料核实，加完必须重跑 localePackParity（假阳性比漏报更糟）。');
+  return hits.length > 0 ? 1 : 0;
+}
+
 function main() {
   const args = process.argv.slice(2);
   let tsvOut = null;
@@ -118,8 +184,12 @@ function main() {
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === '--tsv') tsvOut = args[++i];
     else if (args[i] === '--json') jsonOut = args[++i];
+    else if (args[i] === '--zh-tw-audit') return zhTwAudit();
     else if (args[i] === '--help' || args[i] === '-h') {
-      console.log('用法: node scripts/i18n/inventory.js [--tsv <file>] [--json <file>]');
+      console.log(
+        '用法: node scripts/i18n/inventory.js [--tsv <file>] [--json <file>]\n' +
+          '      node scripts/i18n/inventory.js --zh-tw-audit   # 繁中用字审计（每翻译完一批跑一次）',
+      );
       return 0;
     } else {
       console.error(`inventory: 未知参数 ${args[i]}（用 --help 看用法）`);
@@ -224,7 +294,7 @@ function main() {
 
 // 🔴 导出给守卫用（`i18nEditorLocaleFollows.test.js` 会在进程内调 `classify`，
 // 这样"丙类归零"这个验收判据可以被断言，而不必靠跑一次 CLI 再解析输出）。
-module.exports = { classify, providesMultipleLanguages };
+module.exports = { classify, providesMultipleLanguages, zhTwAudit };
 
 // 🔴 只有作为 CLI 直接执行时才跑 main()（被 require 时不能跑，否则守卫会触发一次全量盘点）
 if (require.main === module) {

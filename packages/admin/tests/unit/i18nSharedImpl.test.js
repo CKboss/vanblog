@@ -22,12 +22,16 @@ const CLI = path.join(ROOT, 'scripts/i18n/inventory.js');
 const RATCHET = path.join(ADMIN, 'tests/unit/i18nHardcodedRatchet.test.js');
 const NAMING = path.join(ADMIN, 'tests/unit/i18nKeyNaming.test.js');
 const PLURAL = path.join(ADMIN, 'tests/unit/i18nPluralConvention.test.js');
+// 🔴 期 3 第二批新增的消费方：`localePackParity` 原本自带两份正则实现（parsePack / parseTCalls）
+//    和一份**手维护**的"哪些文件接了 i18n"清单 ⇒ 实测漏过一整批文件（期 3 第一批的 ImgTab/WalineTab
+//    从来没被对账过，守卫却全绿）。现在它也 require 共享模块，所以一并钉进消费方网。
+const PARITY = path.join(ADMIN, 'tests/unit/localePackParity.test.js');
 
 // 🔴 共享模块（唯一权威实现）
 const astInventory = require(SHARED);
 
 test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', () => {
-  for (const f of [SHARED, CLI, RATCHET, NAMING, PLURAL]) {
+  for (const f of [SHARED, CLI, RATCHET, NAMING, PLURAL, PARITY]) {
     assert.ok(fs.existsSync(f), `文件不存在：${f}`);
     assert.ok(fs.statSync(f).size > 500, `文件异常小（${fs.statSync(f).size} B）：${f}`);
   }
@@ -38,6 +42,8 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
     'collectChinese',
     'bareChinese',
     'bareChineseFromFile',
+    'collectTCalls',
+    'collectTCallsFromFile',
     'readPack',
     'validateKeyShape',
     'needsIcuPlural',
@@ -46,10 +52,20 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
   }
   assert.ok(Array.isArray(astInventory.REGISTERED_KEY_GROUPS) && astInventory.REGISTERED_KEY_GROUPS.length >= 7);
   assert.ok(Array.isArray(astInventory.GRANDFATHERED_KEYS) && astInventory.GRANDFATHERED_KEYS.length === 20);
+  // 🔴 简体专用字表也只许有共享模块这一份（localePackParity 与 `inventory.js --zh-tw-audit` 都用它）
+  assert.ok(
+    typeof astInventory.SIMPLIFIED_ONLY_ZH === 'string' && [...astInventory.SIMPLIFIED_ONLY_ZH].length >= 60,
+    `SIMPLIFIED_ONLY_ZH 不见了或异常短（${[...(astInventory.SIMPLIFIED_ONLY_ZH || '')].length} 字）⇒ 守卫会退化成恒真`,
+  );
+  assert.ok(
+    Array.isArray(astInventory.SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW) &&
+      astInventory.SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW.every((e) => e && typeof e.ch === 'string' && typeof e.why === 'string'),
+    'SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW 必须是 [{ch, why}] 形状（没有理由的例外就是缺陷）',
+  );
 });
 
-test('i18n 共享实现 · 三个消费方都 require 同一份模块（结构判据）', () => {
-  const consumers = { [CLI]: null, [RATCHET]: null, [NAMING]: null, [PLURAL]: null };
+test('i18n 共享实现 · 所有消费方都 require 同一份模块（结构判据）', () => {
+  const consumers = { [CLI]: null, [RATCHET]: null, [NAMING]: null, [PLURAL]: null, [PARITY]: null };
   for (const f of Object.keys(consumers)) {
     const src = fs.readFileSync(f, 'utf8');
     // 🔴 剥掉注释再判：注释里提到模块名不算"用了它"
@@ -74,7 +90,7 @@ test('i18n 共享实现 · 三个消费方都 require 同一份模块（结构�
 test('i18n 共享实现 · 没有第二份 AST 实现（守卫里不许再内联 babel 解析）', () => {
   // 🔴 判据：消费方里不许出现"自己 parse AST"的形状。
   //    以前 i18nHardcodedRatchet 里有 loadParser() 与 parser.parse(...)，重构后应当只剩 require。
-  for (const f of [RATCHET, NAMING, PLURAL]) {
+  for (const f of [RATCHET, NAMING, PLURAL, PARITY]) {
     const src = fs.readFileSync(f, 'utf8');
     const stripped = src
       .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -90,6 +106,27 @@ test('i18n 共享实现 · 没有第二份 AST 实现（守卫里不许再内联
       `${path.relative(ROOT, f)} 里出现了自己的 parser.parse(..., {plugins}) ⇒ AST 实现分叉了`,
     );
   }
+  // 🔴 localePackParity 曾经自带两份**正则**实现（`parsePack` 解析语言包、`parseTCalls` 抽调用点），
+  //    已改成用共享模块的 readPack / collectTCalls ⇒ 这里钉住它们**不许再回来**：
+  //    正则数语言包 key 在本仓库已被证明不可靠（`grep -c "^\s*'"` 得 128/117/116，真值 105/105/105）。
+  const paritySrc = fs
+    .readFileSync(PARITY, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|#)/.test(l))
+    .join('\n');
+  assert.ok(
+    !/function\s+parsePack\s*\(/.test(paritySrc),
+    'localePackParity 里又出现了自己的 parsePack（正则解析语言包）⇒ 请改用 astInventory.readPack',
+  );
+  assert.ok(
+    !/function\s+parseTCalls\s*\(/.test(paritySrc),
+    'localePackParity 里又出现了自己的 parseTCalls（正则抽 t() 调用）⇒ 请改用 astInventory.collectTCalls',
+  );
+  assert.ok(
+    /astInventory\.readPack\(/.test(paritySrc) && /astInventory\.collectTCalls\(/.test(paritySrc),
+    'localePackParity 没有用上共享模块的 readPack / collectTCalls（那上面两条会变成"两边都没有"的假绿）',
+  );
   // 🔴 反向：共享模块里**必须**有那份实现（否则上面两条会变成"两边都没有"的假绿）
   const sharedSrc = fs.readFileSync(SHARED, 'utf8');
   assert.ok(/function\s+loadParser\s*\(/.test(sharedSrc), '共享模块里没有 loadParser（实现被删了？）');
@@ -103,6 +140,9 @@ test('i18n 共享实现 · 没有第二份 AST 实现（守卫里不许再内联
 
 test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既有基线逐字一致', () => {
   // 🔴 这条是"行为等价"的实证：用共享模块重算棘轮的基线，必须与棘轮里写死的数字一致。
+  // ⚠️ 本处 EXPECTED 是 `i18nHardcodedRatchet` 的 BUDGET 的**副本**（故意的：副本对不上就说明有一边漂了）。
+  // 🔴 期 3 第一批只把两个新文件加进了棘轮、忘了同步这份副本（预算都是 0 所以总数没露馅）；
+  //    第二批起补齐 ⇒ **两处的文件清单与总数必须逐字相同**（棘轮那条"清单条数"断言钉住条数，本条钉住数字）。
   const EXPECTED = {
     'src/app.jsx': 18,
     'src/components/ThemeButton/index.tsx': 0,
@@ -113,6 +153,10 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/InitPage/restoreCore.js': 16,
     'src/pages/user/Login/index.jsx': 1,
     'src/pages/user/Restore/index.jsx': 8,
+    'src/pages/SystemConfig/tabs/WalineTab.jsx': 0,
+    'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
+    'src/pages/SystemConfig/tabs/CommentSystem.jsx': 0,
+    'src/pages/SystemConfig/tabs/Customizing.jsx': 4,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -128,12 +172,19 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     );
     total += got;
   }
-  assert.strictEqual(total, 48, `裸中文总数应当是 48（棘轮的 TOTAL_BUDGET），实际 ${total}`);
-  // 🔴 语言包解析也要与既有基线一致（114/114/114）
-  for (const l of ['zh-CN', 'zh-TW', 'en-US']) {
-    const n = Object.keys(astInventory.readPack(path.join(ADMIN, `src/locales/${l}.ts`), l)).length;
-    assert.ok(n >= 114, `${l}.ts 解析出 ${n} 个 key，低于基线 114`);
-  }
+  assert.strictEqual(total, 52, `裸中文总数应当是 52（棘轮的 TOTAL_BUDGET，含 Customizing 那 4 条欠条），实际 ${total}`);
+  // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
+  //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——
+  //    同一个数字写两处就是两处口径，改一处忘另一处只是时间问题。
+  const counts = ['zh-CN', 'zh-TW', 'en-US'].map(
+    (l) => Object.keys(astInventory.readPack(path.join(ADMIN, `src/locales/${l}.ts`), l)).length,
+  );
+  assert.deepStrictEqual(
+    counts,
+    [counts[0], counts[0], counts[0]],
+    `三份包解析出的 key 数不相等（${counts.join('/')}）⇒ readPack 坏了或包真的不齐`,
+  );
+  assert.ok(counts[0] >= 100, `只解析出 ${counts[0]} 个 key，疑似 readPack 坏了（不是包真的这么小）`);
 });
 
 test('i18n 共享实现 · 尺子反证：合成输入必须被正确分类（证明判据真的在判）', () => {
@@ -163,5 +214,65 @@ test('i18n 共享实现 · 尺子反证：合成输入必须被正确分类（�
     () => astInventory.parseSource('const = ;', 'broken.js'),
     /解析失败/,
     '解析失败没有抛错 ⇒ 会被当成"0 条"，那是最坏的假阴性',
+  );
+});
+
+test('i18n 共享实现 · collectTCalls 的尺子反证：三种形状都认，helper 定义与动态 id 不认', () => {
+  // ① 最常见形状：t('id', '默认文案')
+  const a = astInventory.collectTCalls(`const x = t('common.save', '保存');`, 'synthetic');
+  assert.strictEqual(a.length, 1, `t('id','dm') 没被抽出来：${JSON.stringify(a)}`);
+  assert.strictEqual(a[0].id, 'common.save');
+  assert.strictEqual(a[0].defaultMessage, '保存');
+  // ② 带插值的第三实参不能干扰前两个
+  const b = astInventory.collectTCalls(`t('a.b.c', '共 {n} 项', { n: 3 });`, 'synthetic');
+  assert.strictEqual(b.length, 1);
+  assert.strictEqual(b[0].defaultMessage, '共 {n} 项');
+  // ③ formatMessage({ id, defaultMessage }) 对象形状
+  const c = astInventory.collectTCalls(`intl.formatMessage({ id: 'a.b', defaultMessage: '中文' });`, 'synthetic');
+  assert.strictEqual(c.length, 1, 'formatMessage 的对象形状没被抽出来');
+  assert.strictEqual(c[0].id, 'a.b');
+  assert.strictEqual(c[0].defaultMessage, '中文');
+  // ④ 🔴 `t` helper 自己的定义处（简写属性、没有字面量）**必须不算**调用点 ——
+  //    否则会对账出一个 id=undefined 的幽灵条目（实测：11 个文件里每个都有这一处）
+  const d = astInventory.collectTCalls(`const t = (id, dm, v) => intl.formatMessage({ id, dm }, v);`, 'synthetic');
+  assert.strictEqual(d.length, 0, `t() helper 的定义被当成了调用点：${JSON.stringify(d)}`);
+  // ⑤ 动态 id 跳过；有字面量 id 但 defaultMessage 是变量的，仍要抽出 id（dm 记为 null，
+  //    由消费方那条"每个调用点都必须带字面量 defaultMessage"去点名）
+  const e = astInventory.collectTCalls(`t(someKey);\nt('a.b', dyn);`, 'synthetic');
+  assert.strictEqual(e.length, 1, `动态 id 应当被跳过，实际：${JSON.stringify(e)}`);
+  assert.strictEqual(e[0].id, 'a.b');
+  assert.strictEqual(e[0].defaultMessage, null);
+  // ⑥ 🔴 注释里的 t() 不算（AST 天然满足，但必须钉住 —— 正则实现正是在这里翻车：
+  //    注释里写一句 t('x.y','…') 就会凭空多出一个"必须存在于语言包"的 key）
+  const f = astInventory.collectTCalls(`// t('dead.key', '死条目')\nconst x = 1;\n`, 'synthetic');
+  assert.strictEqual(f.length, 0, `注释里的 t() 被算成了调用点：${JSON.stringify(f)}`);
+  // ⑦ fail-loud
+  assert.throws(
+    () => astInventory.collectTCalls('const = ;', 'broken.js'),
+    /解析失败/,
+    '解析失败没有抛错 ⇒ 会被当成"这个文件没接 i18n"，覆盖面就悄悄少了一个文件',
+  );
+});
+
+test('i18n 共享实现 · 反向：真实源码里抽到的调用点必须与"人工数得出来的"一致（防抽多/抽漏）', () => {
+  // 🔴 上面全是合成输入。这一条拿**真实文件**做交叉核实：
+  //    CommentSystem.jsx 里 t() 调用点的数量，用另一把独立的尺子（剥注释后数 `t('` 出现次数）复核，
+  //    两把尺子必须给出同一个数字 ⇒ 既证明没抽漏，也证明没把 helper 定义/注释抽进来。
+  const rel = 'src/pages/SystemConfig/tabs/CommentSystem.jsx';
+  const src = fs.readFileSync(path.join(ADMIN, rel), 'utf8');
+  const viaAst = astInventory.collectTCalls(src, rel).length;
+  const viaText = (
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join('\n')
+      .match(/\bt\(\s*'/g) || []
+  ).length;
+  assert.ok(viaAst >= 30, `${rel} 只抽到 ${viaAst} 个调用点，疑似尺子坏了（这个文件已全量接 i18n）`);
+  assert.strictEqual(
+    viaAst,
+    viaText,
+    `${rel}: AST 抽到 ${viaAst} 个调用点，而独立文本尺子数到 ${viaText} 个 ⇒ 有一把尺子抽多/抽漏了`,
   );
 });

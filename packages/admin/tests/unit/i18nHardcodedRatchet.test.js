@@ -65,8 +65,21 @@ const BUDGET = {
   // 🔴 期 3 第一批（2026-09-25）：这两个文件已全量接 i18n ⇒ 预算 0，新增硬编码中文会立刻红。
   'src/pages/SystemConfig/tabs/WalineTab.jsx': 0,
   'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
+  // 🔴 期 3 第二批（2026-09-25）：CommentSystem 全量接完 ⇒ 0。
+  'src/pages/SystemConfig/tabs/CommentSystem.jsx': 0,
+  // 🔴 Customizing 的 4 条 = 那四个**内层页签标签**（自定义 CSS / Script / HTML(body) / HTML(head)）。
+  //   它们属**已裁定的暂缓项**，不是漏翻：页签标签是一套跨面"导航路径词汇"（docs 里有一张表逐条列出、
+  //   `analysisFields`/`adminCopySync` 把「后台措辞 ↔ 文档措辞」钉在一起），而"文档 i18n"站长尚未裁定
+  //   ⇒ 只翻这一侧会造成"界面英文、文档仍中文"的可见不一致（详见手册 §7.139 A）。
+  //   ⚠️ 所以这 4 条**刻意不登记进 REQUIRED_EXCEPTIONS**：那张清单的语义是"改掉会破坏行为"
+  //   （协议字符串 / 要照着敲的命令 / 静态双语标签），而这 4 条只是**欠着**，tab 那批落地时必须归 0。
+  'src/pages/SystemConfig/tabs/Customizing.jsx': 4,
 };
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 48
+// 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
+//   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
+//   所以那时总量没动。等"文档 i18n"裁定、tab 那批（外层 11 个 + 内层 4 个）落地后，
+//   🔴 **本数字必须回到 48 或更低** —— 谁调大它都要在这里写清"涨的是哪几条、什么时候还"。
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 52
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
@@ -163,10 +176,11 @@ test('i18n 棘轮 · 反向钉住刻意保留的例外：它们必须仍然存�
 
 test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都钉死', () => {
   // 🔴 9 → 11（2026-09-25 期 3 第一批）：新增 `SystemConfig/tabs/WalineTab.jsx` 与
-  //   `SystemConfig/tabs/ImgTab.jsx`，两者都**已全量接 i18n ⇒ 预算 0**。
-  //   🔴 注意 TOTAL_BUDGET 仍是 48：加进来的两个文件预算都是 0，所以**总预算不变** ——
-  //   这正是棘轮该有的形状（覆盖面扩大、允许的硬编码中文总量不增加）。
-  assert.strictEqual(Object.keys(BUDGET).length, 11, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
-  assert.strictEqual(TOTAL_BUDGET, 48, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  //   `SystemConfig/tabs/ImgTab.jsx`，两者都**已全量接 i18n ⇒ 预算 0** ⇒ 总预算不变（48）。
+  // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
+  //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
+  //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
+  assert.strictEqual(Object.keys(BUDGET).length, 13, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(TOTAL_BUDGET, 52, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   assert.strictEqual(REQUIRED_EXCEPTIONS.length, 4, '例外清单条数变了 ⇒ 必须是有意的');
 });

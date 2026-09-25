@@ -269,6 +269,114 @@ function bareChineseFromFile(abs, label) {
 }
 
 /**
+ * 🔴 抽出一个文件里所有 i18n 调用点的 `{ id, defaultMessage }`（**AST，不是正则**）。
+ *
+ * ## 为什么它必须在共享模块里
+ * `localePackParity` 原本自己拿正则抽 `t()` 调用、并且**手维护一份"哪些文件接了 i18n"的清单**。
+ * 🔴 后果实测到了：期 3 第一批翻完的 `ImgTab.jsx`/`WalineTab.jsx` **忘了加进那份清单** ⇒
+ * 它们的 31 个 defaultMessage 与语言包是否一致**从来没被检查过**（守卫全绿，覆盖面是假的）。
+ * 👉 这与本仓库最高频的自伤同族：**手维护的覆盖面清单一定会漏**
+ * （"只找 `*.spec.ts` 而漏掉 admin 的 `.test.js`" 已犯过 6 次）。
+ * 现在的形状是：调用方**遍历源码目录自动发现**，判据就是"本函数在这个文件里抽得到调用点"，
+ * 而"什么算一个调用点"只有这一处定义 ⇒ 覆盖面跟着代码走，不再跟着清单走。
+ *
+ * ## 认哪些形状
+ *   - `t('a.b', '默认文案')`                    → id + defaultMessage
+ *   - `t('a.b', '默认文案', { n: 1 })`           → 同上（第三个实参是插值，忽略）
+ *   - `intl.formatMessage({ id: 'a.b', defaultMessage: '默认文案' })` → 同上
+ * 🔴 **不认**动态 id（`t(key)`）与非字面量 defaultMessage（例如 `t` 这个 helper 自己的定义处
+ *   `intl.formatMessage({ id, defaultMessage }, values)`，那是简写属性、没有文本可对账）：
+ *   这类调用点**跳过而不报错** ⇒ 调用方必须用"抽到的条数下界"做反空转断言，
+ *   🔴 否则"一条都没抽到"与"确实没有调用点"就分不开了。
+ *
+ * @returns {Array<{id:string, defaultMessage:string|null, callee:string, line:number|null}>}
+ */
+function collectTCalls(src, label) {
+  const ast = parseSource(src, label);
+  const out = [];
+  walkAst(ast.program, (nd) => {
+    if (nd.type !== 'CallExpression' || !nd.callee) return;
+    const callee = nd.callee;
+    const name =
+      callee.type === 'Identifier'
+        ? callee.name
+        : callee.type === 'MemberExpression' && callee.property
+          ? callee.property.name || callee.property.value
+          : null;
+    if (name !== 't' && name !== 'formatMessage') return;
+    const args = nd.arguments || [];
+    const first = args[0];
+    let id = null;
+    let defaultMessage = null;
+    if (first && first.type === 'StringLiteral' && typeof first.value === 'string') {
+      id = first.value;
+      const second = args[1];
+      if (second && second.type === 'StringLiteral' && typeof second.value === 'string') {
+        defaultMessage = second.value;
+      }
+    } else if (first && first.type === 'ObjectExpression') {
+      for (const p of first.properties || []) {
+        if (!p || p.type !== 'ObjectProperty' || !p.key) continue;
+        const k = p.key.name || p.key.value;
+        if (k === 'id' && p.value && p.value.type === 'StringLiteral') id = p.value.value;
+        if (k === 'defaultMessage' && p.value && p.value.type === 'StringLiteral') {
+          defaultMessage = p.value.value;
+        }
+      }
+    }
+    if (id === null) return; // 动态 id ⇒ 没有可对账的文本
+    out.push({ id, defaultMessage, callee: name, line: nd.loc ? nd.loc.start.line : null });
+  });
+  return out;
+}
+
+/** 读文件后调用 `collectTCalls`（含"文件必须存在"的 fail-loud）。 */
+function collectTCallsFromFile(abs, label) {
+  if (!fs.existsSync(abs)) {
+    throw new Error(`astInventory: 文件不存在：${label || abs}`);
+  }
+  return collectTCalls(fs.readFileSync(abs, 'utf8'), label);
+}
+
+/**
+ * 🔴 高频「简体专用字」表：这些字在繁体里**一定**是另一个字形 ⇒
+ *    只要 zh-TW 语言包的值里出现其中任何一个，就说明有人**直接把简体复制过来当繁中**。
+ *
+ * ## 为什么它在共享模块里（而不是留在守卫里）
+ * 消费方有两个：`packages/admin/tests/unit/localePackParity.test.js`（守卫）与
+ * `scripts/i18n/inventory.js --zh-tw-audit`（每批翻译后的人工审计工具）。
+ * 🔴 两处各存一份就一定会漂移 —— 本仓库已为"同一性质两处口径"反复付过学费。
+ *
+ * ## 🔴 这张表**天生不可能完备**，别把它当安全网
+ * 本机没有任何简繁映射数据源（也不许装新依赖）⇒ 表只能逐字人工核实来扩。已实测两次教训：
+ *  - 期 3 第一批：表里漏「现」⇒ zh-TW 写出「掃描现有…」而守卫全绿（是浏览器活体证据发现的）；
+ *  - 期 3 第二批：表里漏「点」⇒ zh-TW 写出「站点配置」而守卫全绿（这次是**逐字审计 zh-TW 值里
+ *    出现过的全部 454 个不同汉字**发现的；审计工具：`node scripts/i18n/inventory.js --zh-tw-audit`；
+ *    核实依据：上游繁中语料 antd `lib/locale/zh_TW.js` 用「點」2 处、「点」0 处）。
+ * 🔴 而"凭看着像简体批量加"同样有害：期 3 第一批曾一次加 158 字，立刻误伤 4 条
+ *    （量 / 限 在繁体里合法：數量、限制）⇒ **假阳性比漏报更糟，它会训练下一个人忽略红灯。**
+ * ⚠️ 刻意**不收**：准 别 云 余 只 台 强 松 核 没 量 限 里 黑 静 降 填 目 粘 包 含 不 文 章
+ *    （简繁同形，或在繁体里同样合法）。
+ * 🔴 规矩：**每翻译完一批繁中，就跑一次 `--zh-tw-audit` 把该批用字逐个过一遍**，别指望这张表替你兜住。
+ */
+const SIMPLIFIED_ONLY_ZH =
+  '设备复务网页图导录账号评论处动进级单击确认时间题误报读压缩数据库静态档称随机闭开启传输应该这会说请试频简护贴载键运显实个为来对过还现点';
+
+/**
+ * 🔴 zh-TW 里**刻意保留简体**的字（与上面那张表互补）：必须是"有理由的例外"，不是"漏网"。
+ * 每个字都要写清理由 —— 没有理由的例外就是缺陷。
+ */
+const SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW = [
+  {
+    ch: '钥',
+    why:
+      '「初始化密钥」是要照着敲进 shell 的命令与启动日志标签（服务端输出的就是简体），' +
+      '翻译了 grep 就抓不到东西 ⇒ 那两条 zh-TW 值里刻意保留简体。' +
+      '同族的反向断言（"这个字面量必须仍然存在"）在 i18nHardcodedRatchet 的 REQUIRED_EXCEPTIONS 里。',
+  },
+];
+
+/**
  * 🔴 解析一份语言包（`export default { 'a.b': '值', … }`）为 key → value 映射。
  * ⚠️ **不要用正则**：值会跨行，`grep -A2 | tail -1` 会整体错位一个 key（实测踩过）。
  * 🔴 解析不到任何 key 时抛错（fail-loud），因为"0 个 key"会让所有集合断言恒真。
@@ -403,6 +511,10 @@ module.exports = {
   collectChinese,
   bareChinese,
   bareChineseFromFile,
+  collectTCalls,
+  collectTCallsFromFile,
+  SIMPLIFIED_ONLY_ZH,
+  SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW,
   readPack,
   KEY_MAX_SEGMENTS,
   KEY_SEGMENT_RE,

@@ -171,7 +171,7 @@ export default function () {
           onClick={() => {
             if (typeof window !== 'undefined' && location.hostname == 'blog-demo.mereith.com') {
               Modal.info({
-                title: t('sysconf.img.demoBlocked', '演示站禁止修改此项！'),
+                title: t('common.demoBlocked', '演示站禁止修改此项！'),
                 content: t('sysconf.img.demoBlockedBody', '演示站不允许批量改写文章内容。'),
               });
               return;

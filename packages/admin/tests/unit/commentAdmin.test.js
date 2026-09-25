@@ -229,15 +229,24 @@ describe('「评论系统」设置卡片：七个字段全量提交，保存后�
 
   it('保存成功后 message.success + 重新 getCommentSetting 回读', () => {
     const saveIdx = code.indexOf('await updateCommentSetting(payload);');
-    const successIdx = code.indexOf("message.success('更新成功！');");
+    // 🔴 期 3 第二批起成功提示走 t()：断言换成**新形状**，但性质一寸没放 ——
+    //    仍然钉住「保存 → 成功提示 → 回读」这个先后顺序，以及"第三个实参是给用户看的成功文案"。
+    //    🔴 刻意**不**放宽成"只要有 message.success 就行"（那会丢掉顺序与文案两维）；
+    //    而"这个 key 在三份语言包里都存在、defaultMessage 与 zh-CN 逐字相同"由 localePackParity 统一钉，
+    //    不在这里重复（一个性质只留一处权威口径）。
+    const successIdx = code.indexOf("message.success(t('common.updateSuccess', '更新成功！'));");
     const reloadIdx = code.indexOf('await load();', successIdx);
     assert.ok(saveIdx > -1, '必须调用 updateCommentSetting');
+    assert.ok(successIdx > -1, '成功提示不见了（多语言改造不该把它挪走或删掉）');
     assert.ok(saveIdx < successIdx, '成功提示要在保存之后');
     assert.ok(successIdx < reloadIdx, '保存成功后必须回读一次设置（服务端会夹取/规范化）');
     assert.match(code, /const \{ data \} = await getCommentSetting\(\);/);
     // 保存同样要 try/catch/finally：saving 不许卡死
     const onFinish = slice(code, 'const onFinish = async (values) => {', 'return (');
-    assert.match(onFinish, /reportRequestError\(message, err, '保存失败！'\)/);
+    assert.match(
+      onFinish,
+      /reportRequestError\(message, err, t\('sysconf\.comment\.saveFailed', '保存失败！'\)\)/,
+    );
     assert.match(onFinish, /\} finally \{\s*setSaving\(false\);\s*\}/);
   });
 
