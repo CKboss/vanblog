@@ -5,6 +5,9 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变），admin 有码用码、无码回落 message。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { UpdateUserDto } from 'src/types/user.dto';
@@ -22,7 +25,7 @@ import {
 function assertCollaboratorName(name: unknown): string {
   const value = typeof name === 'string' ? name.trim() : '';
   if (!value || value.length > 50) {
-    throw new BadRequestException('协作者用户名不合法（1-50 个字符）');
+    throw codedError('collaboratorNameInvalid');
   }
   return value;
 }
@@ -287,7 +290,7 @@ export class UserProvider {
     const name = typeof updateUserDto?.name === 'string' ? updateUserDto.name.trim() : '';
     const password = typeof updateUserDto?.password === 'string' ? updateUserDto.password : '';
     if (!name || name.length > 50) {
-      throw new BadRequestException('用户名不合法（1-50 个字符）');
+      throw codedError('accountNameInvalid');
     }
     // 口令校验走统一入口（空值 / 超长 / 过短），见 assertAccountPasswordStrength。
     // ⚠️ 这条路覆盖两个调用点：后台「系统设置 → 用户」改密码，以及匿名的「忘记密码」
@@ -296,7 +299,7 @@ export class UserProvider {
     const nextPassword = await hashSecretAsync(password);
     if (!nextPassword) {
       // 理论上到不了这里（上面已经挡掉空值），留一道兜底：绝不把空哈希写进库
-      throw new BadRequestException('密码不合法，未做任何修改');
+      throw codedError('adminPasswordInvalidNoChange');
     }
     // ⚠️ 不许把管理员改成与某个协作者同名：`validateUser` 是按 name 找账号的，
     //    同名会让"这个用户名登录进哪个账号"变得不确定（现在虽然有 `sort({id:1})` 保证
@@ -366,7 +369,7 @@ export class UserProvider {
     const password = assertCollaboratorPassword(collaboratorDto?.password);
     const oldData = await this.getCollaboratorByName(name);
     if (oldData) {
-      throw new ForbiddenException('已有为该用户名的协作者，不可重复创建！');
+      throw codedError('collaboratorNameDuplicate');
     }
     // ⚠️ 不许与管理员同名（旧实现只查了 `{name, type:'collaborator'}`，所以这条路是开的）。
     //    同名会让 `validateUser(name, …)` 落到不确定的账号上 —— 见 validateUser 里的说明。
@@ -379,7 +382,7 @@ export class UserProvider {
     const salt = makeSalt();
     const encrypted = await hashSecretAsync(password);
     if (!encrypted) {
-      throw new BadRequestException('密码不合法，未创建协作者');
+      throw codedError('collaboratorPasswordInvalidOnCreate');
     }
     const { values: permissions, dropped } = pickPermissions(readPermissionsInput(collaboratorDto));
     this.logDroppedPermissions('创建协作者', name, dropped);
@@ -423,13 +426,13 @@ export class UserProvider {
     const name = assertCollaboratorName(collaboratorDto?.name);
     const oldData = await this.getCollaboratorByName(name);
     if (!oldData) {
-      throw new ForbiddenException('没有此协作者！无法更新！');
+      throw codedError('collaboratorNotFound');
     }
     const password = assertCollaboratorPassword(collaboratorDto?.password);
     const salt = makeSalt();
     const encrypted = await hashSecretAsync(password);
     if (!encrypted) {
-      throw new BadRequestException('密码不合法，未修改协作者');
+      throw codedError('collaboratorPasswordInvalidOnUpdate');
     }
     const { values: permissions, dropped } = pickPermissions(readPermissionsInput(collaboratorDto));
     this.logDroppedPermissions('更新协作者', name, dropped);

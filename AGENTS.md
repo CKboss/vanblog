@@ -9469,6 +9469,93 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.143 期 9 第三批：19 处错误接上码（**第一个用户真能看到译文的批次**），以及"状态码会静默漂移"这个盲区
+
+**交付**：登记表 **18 → 30 个码**；迁移 `provider/customPage/customPage.provider.ts`(5) +
+`controller/customPage/customPage.controller.ts`(6) + `provider/user/user.provider.ts`(7) +
+`controller/admin/auth/auth.controller.ts`(1) = **19 处**；语言包 **204 → 216 key**（`error.*` 30×3）；
+`THROW_BUDGET` **230 → 211**（守卫与 `--server-throws` 两处同步）；`MESSAGE_BODY_BUDGET` 仍 **108**（本批没动返回体那一族）。
+
+#### A. 🔴 这一批是期 9 **第一次"用户真能看到译文"**，而原因不在服务端、在**消费方走哪条路**
+批 2 那 13 处的消费方（`components/RecycleBin`）**自己组消息** ⇒ 码到了前端也不翻译；
+而 `components/CustomPageModal` 的 `onFinish` **没有本地 catch** ⇒ 错误直接落到全局 `errorHandler` ⇒ **翻译生效**。
+🔴 **活体证据**（一次性栈 + 真浏览器 + **真表单**，不是 fetch 拼的）：在「自定义页面」里用**同一个路径**创建两次，
+三语 toast 实测 —— zh-CN `已有此路由的自定义页面！无法重复创建！`｜
+en-US `A custom page with that route already exists, so it cannot be created again`｜
+zh-TW `已有此路由的自訂頁面！無法重複建立！`；
+`Missing message` **0**、**非预期** `console.error`/`pageerror` **0**、`<html lang>` 跟随、toast 量了 bounding box 与可见性。
+另有 **5 个新码的 HTTP 层核对**（状态码 / `code` / `message` 逐字 / `error` 字段）。
+证据：`vanblog_dev/i18n-browser-evidence/phase9-batch3/`（3 张截图 + `result.json`）。
+👉 🔴 **排期规矩（本批挣来的）：迁移一个服务端错误码之前，先看它的 admin 消费方走全局 handler 还是自己组消息** ——
+前者迁完**立刻**有用户可见收益；后者要连组件一起改，否则就是 §7.142 B 那个"三段各自都绿、用户还是看中文"的假象。
+
+#### B. 🔴 A/B 实测出一个我原本**会猜错**的形状：基类 `HttpException` 的 body 里**没有 `error` 字段**
+`customPage.controller.ts` 用的是 `new HttpException('未找到该页面！', 404)`（**基类 + 字符串消息**），
+而 Nest 只给 `NotFoundException` 这类**子类**填 `error: 'Not Found'`。我最初按"所有 404 都有 error 字段"写探针期望 ⇒ 假红一条。
+🔴 **用旧镜像做了 A/B**（演练栈上那个**未含本轮改动**的镜像；只发一个**公开 GET**、非破坏性、不碰它的任何写接口）：
+- 旧：`{"statusCode":404,"message":"未找到该页面！"}`（Content-Length **52**）
+- 新：`{"statusCode":404,"message":"未找到该页面！","code":"customPageNotFound"}`（Content-Length **80** = 52 + 28）
+⇒ **恰好只多一个字段**、`message` 逐字不变。
+👉 **"迁移前后 body 形状一致"必须按异常类逐类核实**，不能按状态码想当然（这也是 `codedError()` 用"探针异常取模板"
+而不是手写 body 的理由：手写就会在这一族上**多塞**一个 `error` 字段，那才是真的改了形状）。
+
+#### C. 🔴 补上一个盲区：**状态码会静默漂移，而"message 逐字相同"那条看不见它**
+`codedError()` 的状态码来自登记表里的 `Ctor`/`status` ⇒ 谁把 `NotFoundException` 写成 `BadRequestException`，
+线上那个接口的状态码就变了，而 message 一个字都没动 ⇒ 既有断言全绿。
+而调用方**按状态码分支**（实例：回收站的 `isNotFoundFailure(err)` ⇒ "404 = 已不在回收站，刷新列表"）
+⇒ 🔴 **状态码漂了就是行为漂了。**
+修法：`serverErrorCodes.spec.ts` 里加一张 **30 个码的 HTTP 黄金快照**（`code → { status, error }`，照迁移前的真实形状逐条抄），
+并**双向**钉住"快照恰好覆盖登记表"（少了 = 有码没被钉住；多了 = 死条目）。
+🔴 **变异对照当场暴露了这条守卫的消息不可用**：逐条 `expect(ex.getStatus()).toBe(want.status)` 失败时只打印
+`400 ≠ 404`，**没说是哪个码** ⇒ 改成"先收集全部漂移、再一次性断言"，消息里带码名与前后值。
+👉 **规矩：红的消息必须能直接照做**；🔴 **变异对照不只是证明"会红"，还要证明"红了能定位"。**
+
+#### D. 🔴 顺手合并了一处**同值不同源**的口径
+`用户名不合法（1-50 个字符）` 在 `user.provider.ts` 与 `auth.controller.ts` **各写了一遍**（grep 才发现）
+⇒ 现在共用一个码 `accountNameInvalid`（登记表里注明了这件事）。与"复用而不是新增同值 key"是同一条纪律，
+只是这次是在**服务端**发现的。👉 迁移错误码时顺带能查出这一族重复，算额外收益。
+
+#### E. 🔴 探针又踩三个形状坑（都让"看起来该成功"的验证失败）
+1. **antd 会给"两个汉字"的按钮插一个空格**：按钮实际文本是「新 建」⇒ `has-text("新建")` **匹配不到**（超时）。
+   修法是正则容忍空白（`/新\s*建/`）。👉 与"antd 页面上同类元素常有不可见的那一份"同族：**别按字面文本猜选择器。**
+2. **Nest 的 POST 成功返回 201**（`body.statusCode` 才是 200）⇒ 我的"播种成功"判据 `status !== 200` **假红**，
+   而播种其实成功了（后面的重名触发全靠它）。👉 判"成功"要看**真实形状**，不要按 200 想当然。
+3. ⚠️ **打写接口的探针要失败关闭**：为触发 `accountNameInvalid` 必须打 `PUT /api/admin/auth`，
+   而那个接口**就是改管理员账号的**。虽然源码里 name 校验在密码校验之前（不会写库），
+   我仍然把 `password` **刻意留空** ⇒ 🔴 即使哪天顺序被改，这一发也不会把一次性栈的管理员口令改掉、把自己锁在外面。
+   👉 **规矩：探针要打写接口时，先读那条路径的校验顺序，并让载荷在"顺序被改"的情况下也失败关闭。**
+
+#### F. 🔴 `node -e "..."` 里写反引号 = 让 bash 先做一次命令替换
+本轮生成语言包的脚本里有 `` `_id` `` 这样的反引号，bash 末尾报了 `error.accountNameInvalid: command not found`。
+这次侥幸没写坏（转义正好对了），但**没有靠侥幸过关**：落盘后用 AST 重新解析三份包核实
+（**216/216/216**、12 条新值逐条打印核对、含反引号那条也完整）。
+👉 **规矩：含反引号 / `$` 的脚本要写成文件（heredoc 用引号定界）再跑，别塞进 `node -e "..."`；
+而"写多份同构数据"之后必须重新解析核实，不能只看脚本自己打印的日志。**
+
+#### G. 繁中与审计
+术语沿用 §7.142 E 那份决定（自訂頁面 / 使用者名稱 / 建立 / 伺服器 / 字元 / 變更 / 找不到 / 協作者）。
+🔴 `--zh-tw-audit` 复跑：zh-TW 值里 **472** 个不同汉字（+8），**0 命中**简体专用字表；
+这 8 个"首次出现在包里"的字**逐个核实过**：做 / 列 / 哪 / 推 / 缺 / 辜 简繁同形，薦 / 詢 正是繁体字形（荐 / 询 才是简体）。
+🔴 zh-CN 的 12 条新值同样**不是重敲的**：迁移驱动先用 AST 把每个 throw 的实参**求值**出来
+（含 `+` 拼接的多段字面量 —— 有两条是 3 段拼接的长消息），再把它写进登记表与语言包
+⇒ "迁移前后逐字相同"是**构造出来的**（人核对 3 段拼接的长句一定会漏）。
+迁移驱动本身也带闸门：**全部改动在内存里做完、所有 assert 通过后才统一落盘**，落盘后重新 parse + 核 sha。
+
+#### H. 基线
+- admin `node --test` **726 tests / 164 suites / 0 fail**（🔴 **12 个新码一条守卫都没加就自动被覆盖**，与批 2 同一形状）；
+- server jest **288 套件 / 4238 用例（4234 passed + 4 skipped）/ 0 FAIL**（**+1 用例** = 新的黄金快照那条；
+  🔴 被迁移的四个文件**一条 spec 都没改**就全绿 ⇒ 这就是"0 处外部钉子"那步排期测量的兑现）；
+- website vitest **97 文件 / 1095**；脚本守卫 **35 文件 / 3152 条 / 0 失败**（`start-js` 本轮**没有**再抖，§7.142 G 那条仍留在清单里）；
+  server 与 website 的 `tsc` 各 **0 错**；admin 门禁 **23/0（src 仍 29）**；
+- `--server-throws` 复算：246 文件 / **48** 个命中文件 / throw 站点 **211**、返回体 **108**；
+- `i18nKeyNaming` 进度下界 **204 → 216**；变异对照 **4/4**（3 红 + 1 语义空操作绿；其中 1 条打 **jest**、1 条带 `expectAbsent`）；
+- 构建：admin `EEE=production` **rc=0**，`dist/umi.d0d3c5e7.js` = **1,330,516 B**；server `nest build` **rc=0**。
+- 🔴 **本批刻意不含**：`user.provider.ts` 里那 **5 处**带 `${label}` / `${MIN}` / `${name}` 的模板消息 ——
+  其中 `label` 是**中文参数**（'管理员'/'协作者'），🔴 直接当 ICU 参数会让英文里夹中文
+  ⇒ 要么**按 label 拆成不同的码**、要么用 ICU `select`，单独排一批（登记表里也写了这条理由）。
+- 🔴 **CHANGELOG 仍不写**：批 3 虽然第一次有用户可见效果，但只覆盖"自定义页面重名"这一条路径，
+  等期 9 的直通点那批做完、能一句话讲清"后台的服务端错误现在跟随语言"时再写一条（并附活体证据）。
+
 ### 7.142 期 9 第二批：13 处错误接上错误码、**第二个棘轮**（返回体那一族），以及"服务端迁完了用户还是看中文"的真相
 
 **交付**：登记表 **8 → 18 个码**；迁移 `controller/admin/article/article.controller.ts`(**9**) +

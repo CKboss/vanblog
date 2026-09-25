@@ -56,10 +56,12 @@ for (const l of LOCALES) {
  * 「带中文的 `throw` 站点」总数，**只许减不许增**。
  * 基线：2026-09-25 实测 **252**（146 只含字符串字面量 + 97 只含模板片段 + 9 两者都有）；
  * 期 9 第一批迁掉 `category.provider.ts` 的 **9** 处 ⇒ 243；
- * 期 9 第二批迁掉 `article.controller.ts`(9) + `draft.controller.ts`(2) + `export.controller.ts`(2) = **13** 处 ⇒ **230**。
+ * 期 9 第二批迁掉 `article.controller.ts`(9) + `draft.controller.ts`(2) + `export.controller.ts`(2) = **13** 处 ⇒ 230；
+ * 期 9 第三批迁掉 `customPage.provider.ts`(5) + `customPage.controller.ts`(6) + `user.provider.ts`(7) +
+ * `auth.controller.ts`(1) = **19** 处 ⇒ **211**。
  * 🔴 复算命令：`node scripts/i18n/inventory.js --server-throws`（同一个共享实现，口径必然一致）。
  */
-const THROW_BUDGET = 230;
+const THROW_BUDGET = 211;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。

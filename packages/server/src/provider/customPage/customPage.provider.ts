@@ -1,4 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变），admin 有码用码、无码回落 message。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { assertSafeWriteFilter, isUsableFilterValue } from 'src/utils/queryFilter';
@@ -21,13 +24,11 @@ export class CustomPageProvider {
     //    请求里根本没有路径。后果比 update/delete 轻（它是**失败关闭**的：不会写坏数据，只是报错
     //    报错了地方），但同样属于"条件静默消失"这一族，一并修掉。
     if (!isUsableFilterValue(dto.path)) {
-      throw new BadRequestException(
-        '创建自定义页面必须带 path（页面路由，例如 /uptime）。收到的请求里没有可用的 path。',
-      );
+      throw codedError('customPageCreateNeedsPath');
     }
     const old = await this.customPageModal.findOne({ path: dto.path });
     if (old) {
-      throw new ForbiddenException('已有此路由的自定义页面！无法重复创建！');
+      throw codedError('customPagePathDuplicate');
     }
     return await this.customPageModal.create(dto);
   }
@@ -50,11 +51,7 @@ export class CustomPageProvider {
     const hasId = isUsableFilterValue(id);
     const hasPath = isUsableFilterValue(dto.path);
     if (!hasId && !hasPath) {
-      throw new BadRequestException(
-        '必须指明要修改哪一个自定义页面：请在请求体里带 `_id`（推荐，改路由时也只有它能命中原来那一行）' +
-          '或 `path`（页面路由，例如 /uptime）。两者都缺失时无法定位目标，服务端已拒绝执行' +
-          '（否则查询条件会退化成"任意一页"）。',
-      );
+      throw codedError('customPageUpdateNeedsTarget');
     }
     const update: Partial<CustomPage> = { updatedAt: new Date() };
     if (dto.name != null) {
@@ -73,7 +70,7 @@ export class CustomPageProvider {
     if (hasId && hasPath) {
       const conflict = await this.customPageModal.findOne({ path: dto.path });
       if (conflict && String(conflict._id) !== String(id)) {
-        throw new ForbiddenException('已有此路由的自定义页面！无法重复创建！');
+        throw codedError('customPagePathDuplicate');
       }
     }
 
@@ -106,10 +103,7 @@ export class CustomPageProvider {
     //    会让 `deleteOne({ path: undefined })` 退化成 `deleteOne({})` ⇒ 删掉集合里自然顺序的
     //    第一个自定义页面。静态分析最初只点出了 updateCustomPage 一处写侧，这一处是复核时发现的。
     if (!isUsableFilterValue(path)) {
-      throw new BadRequestException(
-        '删除自定义页面必须带 path（页面路由，例如 /uptime）。收到的请求里没有可用的 path，' +
-          '服务端已拒绝执行（否则查询条件会退化成"任意一页"，删掉一个无辜的页面）。',
-      );
+      throw codedError('customPageDeleteNeedsPath');
     }
     const filter: Record<string, unknown> = { path };
     assertSafeWriteFilter(filter, 'CustomPageProvider.deleteByPath');

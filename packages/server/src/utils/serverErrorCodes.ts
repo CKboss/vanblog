@@ -1,4 +1,10 @@
-import { BadRequestException, HttpException, NotAcceptableException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  NotAcceptableException,
+  NotFoundException,
+} from '@nestjs/common';
 
 /**
  * 🔴 服务端**错误码登记表**（方案 B）：稳定错误码 + 三语文案在 admin 侧，而 `message` **仍然是中文**。
@@ -87,6 +93,27 @@ export const SERVER_ERROR_CODES = {
   // ── Markdown 导出归档的下载（export.controller.ts，期 9 第二批）───────────────────
   exportArchiveNameInvalid: entry('非法的归档名', BadRequestException),
   exportArchiveMissing: entry('归档不存在（可能已被清理，请重新导出）', NotFoundException),
+
+  // ── 自定义页面（customPage.provider.ts / customPage.controller.ts，期 9 第三批）──────────
+  customPageCreateNeedsPath: entry('创建自定义页面必须带 path（页面路由，例如 /uptime）。收到的请求里没有可用的 path。', BadRequestException),
+  customPagePathDuplicate: entry('已有此路由的自定义页面！无法重复创建！', ForbiddenException),
+  customPageUpdateNeedsTarget: entry('必须指明要修改哪一个自定义页面：请在请求体里带 `_id`（推荐，改路由时也只有它能命中原来那一行）或 `path`（页面路由，例如 /uptime）。两者都缺失时无法定位目标，服务端已拒绝执行（否则查询条件会退化成"任意一页"）。', BadRequestException),
+  customPageDeleteNeedsPath: entry('删除自定义页面必须带 path（页面路由，例如 /uptime）。收到的请求里没有可用的 path，服务端已拒绝执行（否则查询条件会退化成"任意一页"，删掉一个无辜的页面）。', BadRequestException),
+  customPageNotFound: entry('未找到该页面！', HttpException, 404),
+
+  // ── 账号与协作者（user.provider.ts / auth.controller.ts，期 9 第三批）──────────────────
+  // 🔴 `accountNameInvalid` 一处登记、**两个调用点**（user.provider 与 auth.controller 曾各写一遍同一句话，
+  //    那就是"同一性质两处口径"）⇒ 合并成一个码正是登记表的价值。
+  // ⚠️ 本批**刻意不含** user.provider 里那 5 处带 `${label}` / `${MIN}` / `${name}` 的模板消息：
+  //    其中 `label` 是**中文参数**（'管理员'/'协作者'），直接当 ICU 参数会让英文里夹中文 ⇒
+  //    要么按 label 拆成不同的码、要么用 ICU select，单独排一批（见手册 §7.142 F）。
+  collaboratorNameInvalid: entry('协作者用户名不合法（1-50 个字符）', BadRequestException),
+  accountNameInvalid: entry('用户名不合法（1-50 个字符）', BadRequestException),
+  adminPasswordInvalidNoChange: entry('密码不合法，未做任何修改', BadRequestException),
+  collaboratorNameDuplicate: entry('已有为该用户名的协作者，不可重复创建！', ForbiddenException),
+  collaboratorPasswordInvalidOnCreate: entry('密码不合法，未创建协作者', BadRequestException),
+  collaboratorNotFound: entry('没有此协作者！无法更新！', ForbiddenException),
+  collaboratorPasswordInvalidOnUpdate: entry('密码不合法，未修改协作者', BadRequestException),
 };
 
 export type ServerErrorCode = keyof typeof SERVER_ERROR_CODES;

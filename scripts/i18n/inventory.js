@@ -195,7 +195,7 @@ function serverThrows() {
   //    ⚠️ 两处写同一个数字就是两处口径 —— 但守卫在 admin 的 node:test 里、本工具在 scripts/ 下，
   //    互相 require 会把"守卫"与"报数工具"耦合成一条依赖链；折中办法是**在这里注明出处**，
   //    并由守卫那条断言负责"数字漂了就红"（守卫是权威，本工具只是打印）。
-  const THROW_BUDGET = 230;
+  const THROW_BUDGET = 211;
   // 🔴 第二个口径的预算（`message:` 带中文的返回体），与守卫里的 `MESSAGE_BODY_BUDGET` 必须一致。
   const MESSAGE_BODY_BUDGET = 108;
   const walk = (dir, out) => {

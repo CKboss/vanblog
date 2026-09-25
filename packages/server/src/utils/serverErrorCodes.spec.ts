@@ -99,11 +99,89 @@ describe('服务端错误码（serverErrorCodes）', () => {
     expect(body.statusCode).toBe(viaThrow.statusCode);
   });
 
+/**
+ * 🔴 每个码的 **HTTP 状态码 + body.error** 的黄金快照（照迁移前的真实形状逐条抄）。
+ *
+ * ## 为什么需要它（"message 逐字相同"那条看不见的维度）
+ * `codedError()` 的状态码来自登记表里的 `Ctor` / `status` ⇒ 谁把 `NotFoundException` 改成
+ * `BadRequestException`，线上那个接口的**状态码就静默变了**，而 message 一个字都没动
+ * ⇒ 现有那条"逐字相同"的断言**完全看不出来**。
+ * 而调用方常常**按状态码分支**（实例：回收站的 `isNotFoundFailure(err)` ⇒ "404 = 已不在回收站，刷新列表"）
+ * ⇒ 🔴 状态码漂了就是**行为**漂了。
+ *
+ * ## ⚠️ 基类 `HttpException` + 字符串消息这一族**没有 `error` 字段**
+ * Nest 只对 `NotFoundException` 这类子类填 `error`。已用**旧镜像 A/B 实测**（不是推断）：
+ * `GET /c/<不存在的路径>` 迁移前 body = `{"statusCode":404,"message":"未找到该页面！"}`（Content-Length **52**），
+ * 迁移后 = 它 **+ 恰好一个 `code` 字段**（Content-Length **80** = 52 + 28）。
+ */
+const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
+  // 分类（NotAcceptableException ⇒ 406）
+  categoryDuplicateOnCreate: { status: 406, error: 'Not Acceptable' },
+  categoryDeleteNeedsName: { status: 406, error: 'Not Acceptable' },
+  categoryHasArticles: { status: 406, error: 'Not Acceptable' },
+  categoryReorderNoPayload: { status: 406, error: 'Not Acceptable' },
+  categoryNoneToReorder: { status: 406, error: 'Not Acceptable' },
+  categoryUpdateNoPayload: { status: 406, error: 'Not Acceptable' },
+  categoryOrderInvalid: { status: 406, error: 'Not Acceptable' },
+  categoryDuplicateOnUpdate: { status: 406, error: 'Not Acceptable' },
+  // 文章 / 草稿 / 导出
+  articleImportMdzNoFile: { status: 400, error: 'Bad Request' },
+  articleNotInRecycleBin: { status: 404, error: 'Not Found' },
+  articlePurgeRequiresRecycleBin: { status: 404, error: 'Not Found' },
+  articleNotFoundForRevision: { status: 404, error: 'Not Found' },
+  revisionFeatureUnavailable: { status: 404, error: 'Not Found' },
+  revisionNotFound: { status: 404, error: 'Not Found' },
+  draftNotInRecycleBin: { status: 404, error: 'Not Found' },
+  draftPurgeRequiresRecycleBin: { status: 404, error: 'Not Found' },
+  exportArchiveNameInvalid: { status: 400, error: 'Bad Request' },
+  exportArchiveMissing: { status: 404, error: 'Not Found' },
+  // 自定义页面（🔴 customPageNotFound 用的是基类 HttpException ⇒ **没有 error 字段**）
+  customPageCreateNeedsPath: { status: 400, error: 'Bad Request' },
+  customPagePathDuplicate: { status: 403, error: 'Forbidden' },
+  customPageUpdateNeedsTarget: { status: 400, error: 'Bad Request' },
+  customPageDeleteNeedsPath: { status: 400, error: 'Bad Request' },
+  customPageNotFound: { status: 404 },
+  // 账号 / 协作者
+  collaboratorNameInvalid: { status: 400, error: 'Bad Request' },
+  accountNameInvalid: { status: 400, error: 'Bad Request' },
+  adminPasswordInvalidNoChange: { status: 400, error: 'Bad Request' },
+  collaboratorNameDuplicate: { status: 403, error: 'Forbidden' },
+  collaboratorPasswordInvalidOnCreate: { status: 400, error: 'Bad Request' },
+  collaboratorNotFound: { status: 403, error: 'Forbidden' },
+  collaboratorPasswordInvalidOnUpdate: { status: 400, error: 'Bad Request' },
+};
+
   it('🔴 码名必须是合法的 i18n key 段（admin 侧的 key 就是 error.<code>）', () => {
     for (const code of codes) {
       expect(code).toMatch(/^[A-Za-z0-9_-]+$/);
       expect(code.includes('.')).toBe(false);
       expect(code.length).toBeGreaterThan(2);
     }
+  });
+
+  it('🔴 每个码的 HTTP 状态码与 error 字段都必须与迁移前一致（黄金快照，防"状态码静默漂移"）', () => {
+    // 反空转 + 双向：快照必须**恰好**覆盖登记表里的码（少了 = 有码没被快照钉住；多了 = 死条目）
+    expect(Object.keys(HTTP_SNAPSHOT).sort()).toEqual(codes.slice().sort());
+    // 🔴 先把**所有**漂移收集起来再一次断言，而不是逐条 expect：
+    //    逐条 expect 失败时只会打印 `400 ≠ 404` 这种**没说是哪个码**的信息（变异对照实测踩过：
+    //    守卫红得对，但我无法从输出里定位是哪个码漂了）⇒ 红的消息必须能直接照做。
+    const drift: string[] = [];
+    for (const code of codes) {
+      const want = HTTP_SNAPSHOT[code];
+      const ex = codedError(code);
+      const body = ex.getResponse() as Record<string, unknown>;
+      // 🔴 状态码：调用方按它分支（例如回收站的 404 = "已不在回收站，刷新列表"）
+      if (ex.getStatus() !== want.status) {
+        drift.push(`${code}: getStatus() = ${ex.getStatus()}，迁移前是 ${want.status}`);
+      }
+      if (body.statusCode !== want.status) {
+        drift.push(`${code}: body.statusCode = ${String(body.statusCode)}，迁移前是 ${want.status}`);
+      }
+      // 🔴 error 字段：`undefined` 也要逐字比（基类 HttpException 那一族本来就没有这个字段）
+      if (body.error !== want.error) {
+        drift.push(`${code}: body.error = ${JSON.stringify(body.error)}，迁移前是 ${JSON.stringify(want.error)}`);
+      }
+    }
+    expect(drift).toEqual([]);
   });
 });

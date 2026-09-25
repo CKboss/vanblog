@@ -291,4 +291,20 @@ export default {
   'error.exportArchiveNameInvalid': 'Invalid archive name',
   'error.exportArchiveMissing': 'That archive no longer exists — it may have been cleaned up. Please export again',
 
+
+  // ── 🔴 期 9 第三批（12 codes）── 英文人工写：这几条是操作被服务端拒绝时用户读到的话，
+  //    要说清**为什么被拒**与**能不能自己修**（例如带 path / 带 _id），不是逐字直译。
+  'error.customPageCreateNeedsPath': 'Creating a custom page requires a path (the page route, e.g. /uptime). The request did not contain a usable path.',
+  'error.customPagePathDuplicate': 'A custom page with that route already exists, so it cannot be created again',
+  'error.customPageUpdateNeedsTarget': 'Specify which custom page to update: include `_id` in the request body (recommended — it is the only field that still matches the row when you change the route) or `path` (the page route, e.g. /uptime). With neither, the server cannot identify the target and refused to run the update (otherwise the query would degrade to "any page").',
+  'error.customPageDeleteNeedsPath': 'Deleting a custom page requires a path (the page route, e.g. /uptime). The request did not contain a usable path, so the server refused to delete anything (otherwise the query would degrade to "any page" and remove an innocent one).',
+  'error.customPageNotFound': 'That page does not exist',
+  'error.collaboratorNameInvalid': 'Invalid collaborator username (1–50 characters)',
+  'error.accountNameInvalid': 'Invalid username (1–50 characters)',
+  'error.adminPasswordInvalidNoChange': 'Invalid password: nothing was changed',
+  'error.collaboratorNameDuplicate': 'A collaborator with that username already exists, so it cannot be created again',
+  'error.collaboratorPasswordInvalidOnCreate': 'Invalid password: the collaborator was not created',
+  'error.collaboratorNotFound': 'That collaborator does not exist, so it cannot be updated',
+  'error.collaboratorPasswordInvalidOnUpdate': 'Invalid password: the collaborator was not updated',
+
 };

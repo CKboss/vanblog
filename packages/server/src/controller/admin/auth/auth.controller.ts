@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Controller,
   HttpException,
   HttpStatus,
@@ -11,6 +10,9 @@ import {
   Body,
   UnauthorizedException,
 } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变），admin 有码用码、无码回落 message。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config/index';
@@ -183,7 +185,7 @@ export class AuthController {
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     const password = typeof body?.password === 'string' ? body.password : '';
     if (!name || name.length > 50) {
-      throw new BadRequestException('用户名不合法（1-50 个字符）');
+      throw codedError('accountNameInvalid');
     }
     // ⚠️ 口令校验走 user.provider 的**统一入口**（空值 / 超长 / 过短都在那里判），
     //    不在这里再抄一份 `!password || password.length > 200`：两份校验一定会漂移

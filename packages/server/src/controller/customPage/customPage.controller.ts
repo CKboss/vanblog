@@ -1,4 +1,7 @@
-import { Controller, Get, HttpException, Param, Req, Res } from '@nestjs/common';
+import { Controller, Get, Param, Req, Res } from '@nestjs/common';
+// 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
+//    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变），admin 有码用码、无码回落 message。
+import { codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 import { CustomPageProvider } from 'src/provider/customPage/customPage.provider';
@@ -38,16 +41,16 @@ export class PublicCustomPageController {
     const foldername = pathname;
     if (!foldername) {
       res.status(404);
-      throw new HttpException('未找到该页面！', 404);
+      throw codedError('customPageNotFound');
     }
     const cur = await this.customPageProvider.getCustomPageByPath(`/${foldername}`);
     if (!cur) {
       res.status(404);
-      throw new HttpException('未找到该页面！', 404);
+      throw codedError('customPageNotFound');
     }
     if (cur.type == 'file' && !cur.html) {
       res.status(404);
-      throw new HttpException('未找到该页面！', 404);
+      throw codedError('customPageNotFound');
     } else if (cur.type == 'file' && cur.html) {
       res.status(200);
       res.send(cur.html);
@@ -60,20 +63,20 @@ export class PublicCustomPageController {
         const location = assertSameOriginRedirect(target.location);
         if (!location) {
           res.status(404);
-          throw new HttpException('未找到该页面！', 404);
+          throw codedError('customPageNotFound');
         }
         res.redirect(302, location);
         return;
       }
       if (target.kind === 'missing') {
         res.status(404);
-        throw new HttpException('未找到该页面！', 404);
+        throw codedError('customPageNotFound');
       }
       res.sendFile(target.absPath);
       return;
     }
     res.status(404);
-    throw new HttpException('未找到该页面！', 404);
+    throw codedError('customPageNotFound');
   }
 }
 

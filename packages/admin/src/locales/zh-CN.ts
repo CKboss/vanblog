@@ -289,4 +289,21 @@ export default {
   'error.exportArchiveNameInvalid': '非法的归档名',
   'error.exportArchiveMissing': '归档不存在（可能已被清理，请重新导出）',
 
+
+  // ── 🔴 期 9 第三批：自定义页面（5 处）与账号/协作者（8 处），共 12 个码 ──
+  //    zh-CN 的值同样由脚本**直接从登记表读出**（构造出逐字相同，不靠人核对）。
+  //    🔴  一处登记、两个调用点：user.provider 与 auth.controller 曾各写一遍同一句话。
+  'error.customPageCreateNeedsPath': '创建自定义页面必须带 path（页面路由，例如 /uptime）。收到的请求里没有可用的 path。',
+  'error.customPagePathDuplicate': '已有此路由的自定义页面！无法重复创建！',
+  'error.customPageUpdateNeedsTarget': '必须指明要修改哪一个自定义页面：请在请求体里带 `_id`（推荐，改路由时也只有它能命中原来那一行）或 `path`（页面路由，例如 /uptime）。两者都缺失时无法定位目标，服务端已拒绝执行（否则查询条件会退化成"任意一页"）。',
+  'error.customPageDeleteNeedsPath': '删除自定义页面必须带 path（页面路由，例如 /uptime）。收到的请求里没有可用的 path，服务端已拒绝执行（否则查询条件会退化成"任意一页"，删掉一个无辜的页面）。',
+  'error.customPageNotFound': '未找到该页面！',
+  'error.collaboratorNameInvalid': '协作者用户名不合法（1-50 个字符）',
+  'error.accountNameInvalid': '用户名不合法（1-50 个字符）',
+  'error.adminPasswordInvalidNoChange': '密码不合法，未做任何修改',
+  'error.collaboratorNameDuplicate': '已有为该用户名的协作者，不可重复创建！',
+  'error.collaboratorPasswordInvalidOnCreate': '密码不合法，未创建协作者',
+  'error.collaboratorNotFound': '没有此协作者！无法更新！',
+  'error.collaboratorPasswordInvalidOnUpdate': '密码不合法，未修改协作者',
+
 };

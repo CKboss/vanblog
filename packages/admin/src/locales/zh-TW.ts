@@ -271,4 +271,19 @@ export default {
   'error.exportArchiveNameInvalid': '不合法的歸檔名',
   'error.exportArchiveMissing': '歸檔不存在（可能已被清除，請重新匯出）',
 
+
+  // ── 🔴 期 9 第三批（12 個碼）── 術語沿用 zh-CN 包裡那份決定：自訂頁面 / 使用者名稱 / 建立 / 伺服器 / 字元。
+  'error.customPageCreateNeedsPath': '建立自訂頁面必須帶 path（頁面路由，例如 /uptime）。收到的請求裡沒有可用的 path。',
+  'error.customPagePathDuplicate': '已有此路由的自訂頁面！無法重複建立！',
+  'error.customPageUpdateNeedsTarget': '必須指明要修改哪一個自訂頁面：請在請求內容裡帶 `_id`（推薦，改路由時也只有它能命中原來那一列）或 `path`（頁面路由，例如 /uptime）。兩者都缺時無法定位目標，伺服器已拒絕執行（否則查詢條件會退化為「任意一頁」）。',
+  'error.customPageDeleteNeedsPath': '刪除自訂頁面必須帶 path（頁面路由，例如 /uptime）。收到的請求裡沒有可用的 path，伺服器已拒絕執行（否則查詢條件會退化為「任意一頁」，刪掉一個無辜的頁面）。',
+  'error.customPageNotFound': '找不到該頁面！',
+  'error.collaboratorNameInvalid': '協作者使用者名稱不合法（1-50 個字元）',
+  'error.accountNameInvalid': '使用者名稱不合法（1-50 個字元）',
+  'error.adminPasswordInvalidNoChange': '密碼不合法，未做任何變更',
+  'error.collaboratorNameDuplicate': '已有該使用者名稱的協作者，不可重複建立！',
+  'error.collaboratorPasswordInvalidOnCreate': '密碼不合法，未建立協作者',
+  'error.collaboratorNotFound': '沒有此協作者！無法更新！',
+  'error.collaboratorPasswordInvalidOnUpdate': '密碼不合法，未變更協作者',
+
 };
