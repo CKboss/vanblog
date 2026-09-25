@@ -168,10 +168,19 @@ jobs:
         working-directory: packages/website
         run: ./node_modules/.bin/tsc --noEmit -p tsconfig.json
 
-      # ⚠️ admin 的类型检查**故意不加**：`tsc --noEmit -p packages/admin/tsconfig.json`
-      #    当前有 **115 个错**（umi 3 + antd 4 + React 17 的历史包袱）。加进来等于给每个 PR
-      #    挂一盏常红灯，而常红灯训练出来的习惯是"忽略红" —— 那比没有检查更糟。
-      #    要加就得先清零，那是独立的一件事。
+      # 🔴 2026-09-25 更正：这里曾长期写着「admin 的类型检查**故意不加**：当前有 **115 个错**，
+      #    加进来等于给每个 PR 挂一盏常红灯；要加就得先清零」。🔴 **那个 115 是量错了口径**：
+      #    它是用**裸的** `packages/admin/tsconfig.json` 跑出来的，而那份配置
+      #    ① 没有限制 `typeRoots` ⇒ TS 4.9 会扫到家目录的 `@types/bun`（bun-types 需要 TS 5+），
+      #       实测**单独贡献 115 条语法错误**；② 没有 `@@/*` 别名 ⇒ umi 的插件导出全部解析不到
+      #       （`umi/types.d.ts` 的内容是 `export * from '@@/core/umiExports'`，而 `@@/*` 只在 umi
+      #       自己的构建流程里注入）；③ 没有样式模块的 ambient 声明。
+      #    🔴 **把这三处修对之后（`packages/admin/tsconfig.typecheck.json` + `src/typings.d.ts`）实测是
+      #       31 条：admin 自己 src/ 里 29 条、依赖自带的 2 条**（配置产物消掉 19 条 = TS2305×10 +
+      #       TS2724×7 + TS2307×2，同时揭露 6 条此前被 error-any 掩盖的真错）。
+      #    🔴 **而"必须先清零"这个前提与本仓库既有的做法自相矛盾**：下面的 strictNullChecks 棘轮
+      #       基线就是 **10**、不是 0。棘轮不要求清零，只要求**不倒退** ⇒ "常红灯"的顾虑正是棘轮要解决的。
+      #    ⇒ 现已改为下面那一步的**棘轮守卫**（admin-typecheck-ratchet）。
 
       # ── strictNullChecks 棘轮（只许减不许增）───────────────────────
       # 上面两个 typecheck 用的是仓库配置，而 `tsconfig.json` 里显式写了 `"strictNullChecks": false`，
@@ -184,6 +193,26 @@ jobs:
       #    脚本内部有一条断言专门钉住这个事实，所以谁「简化」了命令就会红。
       - name: Strict-null ratchet (definite null dereferences may only decrease)
         run: bash scripts/tests/run-guard.sh scripts/tests/strict-null-ratchet.test.sh
+
+      # ── admin 类型错误棘轮（只许减不许增）──────────────────────────
+      # 🔴 2026-09-25 新增。admin（umi 3 + antd 4 + React 17，9,535 行 TS/TSX）此前**在任何地方都没有
+      #    类型检查**：CI 不跑、`lint-staged`/`gitHooks` 都是 null、根 package.json 没有 husky。
+      #    而多语言改造要动 **129 个文件**（把中文标签换成 t(...) 调用最容易引入 TS2322/TS2345），
+      #    🔴 **没有类型检查就等于蒙着眼睛重构** ⇒ 这是那批改造的安全网。
+      # ⚠️ 放在本 job 而不是 guards-core：它需要 admin 的 node_modules、tsc 与 `src/.umi`
+      #    生成物（实测约 10 秒），而 guards-core 的定位是「不需要依赖」。
+      # 🔴 `src/.umi` 由 admin 的 `postinstall: umi g tmp` 生成，而上面的 `pnpm install --frozen-lockfile`
+      #    会跑 postinstall ⇒ CI 上它**存在**（只是没有 `.cache/`，而守卫本来就排除 `.cache`）。
+      #    🔴 万一缺失，守卫会 **fail-loud 并给出可操作提示**（`npm run postinstall`），
+      #    **绝不静默跳过** —— 静默跳过会变成"永远绿"的假门禁，而空的绿比红更危险。
+      # 🔴 守卫内部有四条防假绿断言：TS5xxx/TS6xxx 必须为 0（命令没跑对时计数毫无意义）、
+      #    `--listFiles` 清单必须 >1000 行且含 5 个热点文件、配置产物三类码（TS2305/TS2724/TS2307）
+      #    必须为 0、以及"admin src 错误数为 0 就报红"（0 是歧义信号：要么真修完了、要么测量坏了）。
+      #    ⚠️ 这四条不是装饰：本守卫第一次实跑就因为多传了 `--tsBuildInfoFile` 而报 TS5069
+      #    （composite:false 时不允许），tsc 在类型检查前就中止 ⇒ 计数为 0，
+      #    🔴 **是前两条各自独立抓住的**。
+      - name: Admin typecheck ratchet (admin type errors may only decrease)
+        run: bash scripts/tests/run-guard.sh scripts/tests/admin-typecheck-ratchet.test.sh
       - name: Gitignore hygiene (no source directory may be silently swallowed)
         # 🔴 2026-09-21 加：`.gitignore` 里曾有一条**裸 `log`**（本意是根级日志目录），而
         #    **没有前导 `/` 的 gitignore 模式在任意层级都匹配** ⇒ 它把 `packages/server/src/provider/log/`

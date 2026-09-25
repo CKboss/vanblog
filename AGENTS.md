@@ -9469,6 +9469,117 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.137 🔴 admin 终于有了类型检查门禁：那条「故意不加、有 115 个错、要加就得先清零」的记录是**量错了口径**，而"先清零"与本仓库自己的棘轮先例自相矛盾
+
+**A｜被更正的旧结论。** `.github/workflows/server-test.yml` 里长期写着「admin 的类型检查**故意不加**：
+当前有 **115 个错**（umi 3 + antd 4 + React 17 的历史包袱）…要加就得先清零，那是独立的一件事」。
+🔴 **两处都站不住**：
+- **115 是量错了口径**：它是用**裸的** `packages/admin/tsconfig.json` 跑的，而那份配置
+  ① 没有限制 `typeRoots` ⇒ TS 4.9 扫到家目录的 `@types/bun`（bun-types 需要 TS 5+），实测**单独贡献 115 条语法错误**；
+  ② 没有 `@@/*` 别名 ⇒ umi 的插件导出全部解析不到（`node_modules/umi/types.d.ts` 的内容是
+  `export * from '@@/core/umiExports'`，而 `@@/*` 只在 umi 自己的构建流程里注入；
+  `src/.umi/core/umiExports.ts` 才是 `useIntl`/`useModel`/`SelectLang`/`history`/`request` 的真实来源）；
+  ③ 没有样式模块的 ambient 声明。
+- 🔴 **"必须先清零"与本仓库自己的做法矛盾**：同一份 workflow 里的 `strict-null-ratchet` 基线就是 **10、不是 0**。
+  **棘轮不要求清零，只要求不倒退** ⇒ "常红灯训练出忽略红"这个顾虑正是棘轮要解决的，不是不做检查的理由。
+
+**B｜修法与实测（`packages/admin/tsconfig.typecheck.json` + `src/typings.d.ts`，都入库）。**
+🔴 **44 → 31**（tsc 4.9.5，`allowJs:false` ⇒ 口径是 **105 个 `.ts`/`.tsx`**，不含 `.jsx`/`.js`）：
+- 消掉 **19 条配置产物**：**TS2305 ×10 + TS2724 ×7**（全是 `Module '"umi"' has no exported member …`，
+  真因是缺 `@@/*` 别名）与 **TS2307 ×2**（样式模块缺 ambient 声明）⇒ **三类码全部归零**；
+- 🔴 **同时揭露了 6 条此前被掩盖的真错**（TS2345 2→4、新增 TS2769 ×3、TS2538 ×1）——
+  因为 `history`/`request`/`useModel` 此前是 error-any，**调用点根本没被检查**；
+- ⇒ 🔴 **"44 → 31"不是"少了 13 条"，而是"消掉 19 条配置产物、揭露 6 条真错"**。
+- 🔴 **`composite` 必须关掉**：继承来的 `tsconfig.json` 里是 `true`，而 TS 4.9 不允许 composite 项目 `noEmit`。
+- 🔴 **`.umi` 与 `.umi-production` 不作根文件、但通过 `@@/*` 被 import 跟进来**（这正是我们要的：拿到插件导出类型
+  而不检查生成物本身；生成物大多带 `// @ts-nocheck`，实测 `umi.ts`/`umiExports.ts`/`localeExports.ts`/
+  `SelectLang.tsx`/`request.ts`/`history.ts` 都有）；🔴 **`.umi/.cache` 必须排除**（mfsu 构建缓存，
+  含 `import 'katex/dist/katex.css'` 之类与源码无关的东西）。
+
+**C｜真错的分布（下一轮的输入）。** 🔴 **admin 自己 src/ 里 29 条**：TS2322 ×14、TS2339 ×7、TS2769 ×3、
+TS2345 ×2、TS18048 ×2、TS2538 ×1；**依赖自带 2 条**（`mdast-util-mark@1.0.0` 自己的 `.ts`，admin 侧不可修 ⇒ **单独一桶**）。
+按文件：`pages/Code/index.tsx` 6、`components/WaterMarkForm/index.tsx` 5、`components/UpdateModal/index.tsx` 5、
+`pages/LogManage/tabs/System.tsx` 4、`pages/Static/img/index.tsx` 2、`pages/LogManage/tabs/Pipeline.tsx` 2，
+其余各 1（`SystemConfig/tabs/Token.tsx`、`InitPage/RestoreFromBackup.tsx`、`InitPage/index.tsx`、`About.tsx`、
+`ThemeButton/index.tsx`）。🔴 **逐条清单在 `vanblog_dev/admin-typecheck/real-errors-<日期>.txt`**（git-ignored）。
+⚠️ **按鉴权/密码/token/guard 关键词扫过，没有明显安全相关的**（唯一沾边的是 `Token.tsx` 的
+`actionRef.current` 可能 undefined，属 UI 空值，不是鉴权逻辑）。
+🔴 **多语言改造最可能引入的就是 TS2322/TS2345**（把中文标签换成 `t(...)` 时 props 形状变了、
+或把 `ReactNode` 传给了只接受 `string` 的位置）⇒ **这条棘轮正是那 129 个文件重构的安全网。**
+
+**D｜棘轮守卫 `scripts/tests/admin-typecheck-ratchet.test.sh`（23 条）。** 基线：admin src **29**、依赖 **2**，
+并按**六个错误码分类计数**（🔴 必须分类，否则"某一类涨了、另一类降了"会被总数掩盖），
+外加一条 🔴 **「六类之和 == admin src 总数」**（防"出现了未登记的错误码而被漏掉"）。
+🔴 **四条防假绿断言，缺一不可**：① **TS5xxx/TS6xxx 必须为 0**（出现它们说明命令本身没跑对，此时计数毫无意义）；
+② **`--listFiles` 清单 >1000 行、admin 的 `.ts/.tsx` ≥100 个、5 个热点文件都在编译范围内、
+`.umi/.cache` 与 `.umi-production` 都不在**（热点文件钉的是**编译范围**而不是错误数 ⇒
+把文件排除出编译会让错误数"变少"从而假绿，这条就是防它）；③ **配置产物三类码 TS2305/TS2724/TS2307 必须为 0**
+（它们一回来就说明 `@@/*` 别名、`src/typings.d.ts` 或 `.umi` 生成物退化了）；
+④ 🔴 **admin src 错误数为 0 就报红**（0 是**歧义**信号：要么真修完了 ⇒ 那就把基线改成 0 并说明，
+要么测量坏了；静默通过等于让守卫悄悄失效）。
+🔴 **`.umi` 缺失时 fail-loud 而不是跳过**，并给出可操作提示（`cd packages/admin && npm run postinstall`，即 `umi g tmp`）——
+🔴 **静默跳过会变成"永远绿"的假门禁，而空的绿比红更危险**。⚠️ CI 上不缺：admin 的 `postinstall: umi g tmp`
+会在 `pnpm install --frozen-lockfile` 时跑（这一点 `server-test.yml` 与 `admin-e2e.yml` 早就复现并记录过）。
+
+**E｜🔴 这四条防假绿不是装饰：守卫第一次实跑就"假绿"了，是被其中两条各自独立抓住的。**
+第一版给 tsc 传了 `--tsBuildInfoFile`，而新配置是 `composite:false` 且没有 `incremental` ⇒
+🔴 **TS5069（Option tsBuildInfoFile cannot be specified without incremental/composite）⇒ tsc 在做任何类型检查之前就中止 ⇒ 错误数 0**。
+当时 `passed=21 failed=2`：① 那条 TS5xxx 断言报了 TS5069；② 那条"计数为 0 就报红"也报了。
+👉 🔴 **两条各自独立地抓住了同一个假绿** ⇒ **防假绿断言要冗余，不要"精简"**。
+⚠️ 与 `strict-null-ratchet` 的区别要写清：那份**必须**传全新的 `tsBuildInfoFile`（它用的 `tsconfig.build.json` 是
+composite/增量，复用旧 buildinfo 会让 tsc 跳过错误、命中数变 0）；**本配置不是增量 ⇒ 每次全量检查，传了反而报 TS5069。**
+🔴 **变异 5/5 结论正确**：M1 在 `About.tsx` 造一个新类型错误 → RED 3（棘轮 + TS2322 分类 + 六类之和）；
+M2 基线 29→28 → RED 1；🔴 **M3 把 tsconfig 名写错让 tsc 根本跑不起来 → RED 9（不是绿！）**；
+🔴 **M3b 让 `.umi` 缺失 → RED 1 且 fail-loud（不是静默跳过）**；M4 只改注释措辞 → GREEN 23/23。
+🔴 **M1 还顺带证明了"六类之和"那条承重**：它造的错误里有 2 条属于**未登记的错误码**，
+总和断言报 `got 30, want 32` 并把未登记的码打出来 ⇒ 正是设计意图。
+
+**F｜🔴 `gitignore-hygiene` 的断言数会随"未跟踪但可见的测试文件"漂移（11 → 10 → 9），这不是缺陷。**
+本轮它报 **9/0**，而此前记的是 11/0、今天早些时候是 10/0 ⇒ 看起来像"守卫在悄悄少跑断言"。
+🔴 **实测成因**：它的 `reconcile()` 对每个测试目录比较"find 到的文件数"与"git ls-files 到的文件数"，
+而当差集里的文件**在 `git status` 里是 `??`（未跟踪但可见）**时，它输出 **`NOTE:` 而不是 `PASS:`/`FAIL:`**
+（视为开发中间态，不算失败）⇒ 🔴 **每一个这样的文件就把一条 PASS 换成一条 NOTE，`passed=` 因此 -1**。
+本轮恰好有 2 个（新建的 `i18nEditorLocalesKnownGap.test.js` 与 `admin-typecheck-ratchet.test.sh`）⇒ 11-2=9。
+👉 🔴 **规矩：看到某个守卫的断言数变了，先去读它的 `NOTE:` 行，不要直接判定"守卫坏了"。**
+**预测：这两个文件入库后它会回到 11/0**（父代理提交后请核实这条预测）。
+
+**G｜任务 C 的守卫钉的是「已知缺陷的现状」，不是「期望行为」。**
+`packages/admin/tests/unit/i18nEditorLocalesKnownGap.test.js`（6 条）钉住：
+`components/Editor/locales.ts` **只导出一个单语常量 `cn`**（不许出现 `export const en`/`zhTw`/`locales` 等第二份语言）、
+🔴 **对 umi locale 运行时的 7 个符号引用数全部为 0**（`from 'umi'`/`getLocale`/`useIntl`/`setLocale`/
+`getDirection`/`formatMessage`/`getIntl`）、`Editor/index.tsx` 把 `cn` **硬接线到恰好 4 处**
+（`locale: cn` ×3 + `locale={cn}` ×1）、以及**反空转**（用共享 AST 模块实测它有 **60 条中文字面量**，
+⇒ 证明那些"0 引用"不是空文件造成的假绿）与**尺子反证**（合成一段"已接线"的文本必须被 ≥2 个符号命中）。
+🔴 **它的标题与注释都写明：期 2 真正改造编辑器时，这条守卫会被有意改红**（那时应当删掉或反转，
+改成钉"编辑器跟随语言"的正向性质）⇒ **看到它红，先确认是不是期 2 在动手。**
+🔴 **变异 2/2**：给 `locales.ts` 接上 `getLocale` → **RED 3，且红的正是"引用数为 0"那一条**（结论对、理由也对）；
+只改守卫的注释措辞 → GREEN 6/6。两次还原都 sha 核实一致。
+⚠️ **为什么不用"产物里搜字符串"或浏览器验证**：这条缺陷是"编辑器**不**跟随语言"，
+🔴 **证否无法靠搜产物**（本仓库已有四把弱尺子的教训），而要证明"跟随"只能在浏览器里切一次 ⇒ 那是期 2 的验收，不是本轮的。
+
+**H｜本轮踩的 4 个坑（都被闸门或独立核实抓到）。**
+1. 🔴 **我把"要被断言不存在"的字面量写进了自己的替换文本里** —— 更正那段陈旧注释时，新文本引用了原话
+   （「这里曾长期写着『admin 的类型检查**故意不加**…』」），而我的写后核实断言是 `'故意不加' not in s2` ⇒
+   **断言必然失败**。⚠️ **而且写入发生在断言之前 ⇒ 文件其实已经改对了**，是断言错了。
+   👉 这与手册里"**注释里不要写别处要 `indexOf`/断言的字面量**"是同一条，🔴 **只是这次犯在"核实断言"自己身上**。
+   **改法：核实"旧文本已消失"要用旧文本里**独有**的句子**（我改用了「要加就得先清零，那是独立的一件事。」）。
+2. 🔴 **我在"修补丁脚本"时又凭记忆重建锚点，命中 0** ⇒ 改成**从头重写脚本**（不要补丁打补丁）。
+   这是本项目第 **7** 次栽在"凭记忆/转述重建路径或文本"。
+3. 🔴 **写后核实断言本身也会过严**：我断言 `TS5069` 出现 ≥2 次，而实际只写进 1 次 ⇒ 断言失败、
+   但**文件已写对** ⇒ 又一次"闸门对了、判据错了"。👉 **核实断言也要按"实际会有几处"来写，不要凭"我觉得写了两遍"。**
+4. ⚠️ **`composite:false` 与 `--tsBuildInfoFile` 互斥（TS5069）**，见 E。
+
+**I｜基线更新。** admin 单测 **697 → 703 tests / 164 suites / 0 fail**（+6 = 新的 Editor 守卫；
+⚠️ suites 不变是因为它用顶层 `test()` + 嵌套 `t.test()`，不产生 `describe`  Suite 计数）。
+六条 i18n 守卫：`i18nHardcodedRatchet` **6**、`i18nSharedImpl` **5**、`i18nKeyNaming` **7**、
+`i18nPluralConvention` **5**、🔴 **`i18nEditorLocalesKnownGap` 6（新）**、`localePackParity` **39**。
+新 shell 守卫 `admin-typecheck-ratchet` **23/0**（实测约 **9-10 秒**）⇒ **shell 守卫从 34 个变 35 个**。
+`ci-guard-wrapper` **13/0**、`ci-paths-coverage` **14/0**、`gitignore-hygiene` **9/0**（见 F）、
+`docs-consistency` **61/0**、`docs-links` **5/0**。
+🔴 **`paths:` 过滤器不需要改**：两个 trigger 都已含 `packages/**` ⇒ admin 的 TS 文件本来就覆盖。
+🔴 **接线方式**：放在 `server-test` job（与 `strict-null-ratchet` 同档，因为需要 admin 的 node_modules/tsc/`.umi`，
+而 `guards-core` 的定位是"不需要依赖"），并 🔴 **经 `scripts/tests/run-guard.sh` 包装**（红了能出 `::error` annotations）。
+
 ### 7.136 🔴 多语言「期 0/期 1」：命名规范守卫、共享 AST 实现、`<html lang>` 跟随、ICU 复数，以及**一个被浏览器实测抓出来的真缺陷**
 
 本轮做四件事（站长裁定「开干，大胆改造，小心求证」）：期 0 的两件（key 命名规范守卫、把 AST 分类器提升为仓库工具）、

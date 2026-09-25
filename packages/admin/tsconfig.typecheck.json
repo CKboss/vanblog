@@ -1,0 +1,56 @@
+{
+  // 🔴 类型检查专用配置（入库；`scripts/tests/admin-typecheck-ratchet.test.sh` 与 CI 都用它）。
+  //
+  // 为什么不直接用 `tsconfig.json`：那份是 umi 构建用的最小配置，没有 `include`、没有
+  // `typeRoots`、也没有 `@@/*` 别名，直接拿它跑 `tsc --noEmit` 会得到两类**配置产物**错误：
+  //   ① TS2305 / TS2724 —— `Module '"umi"' has no exported member 'useIntl'/'useModel'/'SelectLang'/'history'/'request'`。
+  //      真因：`node_modules/umi/types.d.ts` 的内容是 `export * from '@@/core/umiExports'`，
+  //      而 `@@/*` 这个别名 umi 只在**它自己的构建流程**里注入；`src/.umi/core/umiExports.ts`
+  //      才是 `useIntl`/`useModel`/`SelectLang`/`history`/`request` 的真实来源
+  //      （它 `export * from '../plugin-locale/localeExports'`、`'../plugin-locale/SelectLang'`、
+  //      `'../plugin-model/useModel'`、`'../plugin-request/request'`，并 `export { history }`）。
+  //      ⇒ **不声明 `@@/*` 别名，tsc 就看不到 umi 的任何插件导出。**
+  //      🔴 实测这一类共 17 条（TS2305 ×10 + TS2724 ×7），全部是配置产物、不是真错。
+  //   ② TS2307 —— 样式模块找不到类型，由 `src/typings.d.ts` 解决（实测 2 条）。
+  //
+  // 🔴 `typeRoots` 必须限制：否则 TypeScript 4.9 会扫到家目录的 `@types/bun`
+  // （bun-types 需要 TS 5+），实测报 **115** 个语法错误、把真实信号完全淹没。
+  // 手法照抄 `packages/server/tsconfig.dev.json`。
+  //
+  // ⚠️ `composite` 必须关掉：继承来的 `tsconfig.json` 里是 `true`，而 TS 4.9 不允许
+  // composite 项目 `noEmit`（会报 TS6304）。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowJs": false,
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "module": "esnext",
+    "target": "es2017",
+    "resolveJsonModule": true,
+    "typeRoots": ["./node_modules/@types", "../../node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@@/*": ["./src/.umi/*"]
+    }
+  },
+  // 🔴 `src/.umi` 是 `umi g tmp` 的生成物（由 `postinstall` 生成，且被 gitignore），
+  // 它**不作为根文件**参与编译，但通过上面的 `@@/*` 别名被 import 跟进来 ——
+  // 这正是我们要的：拿到 umi 的插件导出类型，而不去检查生成物本身。
+  // ⚠️ 生成物大多带 `// @ts-nocheck`（实测 umi.ts / umiExports.ts / localeExports.ts /
+  // SelectLang.tsx / request.ts / history.ts 都有），所以跟进来也不会产生噪音。
+  // 🔴 `.umi/.cache` 必须排除：里面是 mfsu 的构建缓存（含 `import 'katex/dist/katex.css'` 之类），
+  // 纳进来会引入与源码无关的报错。
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/typings.d.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/.umi",
+    "src/.umi-production",
+    "src/.umi/.cache",
+    "src/.umi-production/.cache"
+  ]
+}
