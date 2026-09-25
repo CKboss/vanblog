@@ -15,10 +15,47 @@ describe('事件日志轮转', () => {
   });
   const read = (p: string) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
 
+  /**
+   * 🔴 **等到轮转静止**再断言（本文件里所有断言轮转状态的用例都必须用它，不是只用 `s.flush()`）。
+   *
+   * ## 为什么（2026-09-26 实测：同一个竞态打中了**三条**用例，逐条补是打地鼠）
+   * `flush()` 只保证 ① 写入缓冲落盘、② 让出**一次**事件循环；而 🔴 **轮转是延迟的**：
+   * `maybeRotate()` 要等 `opened === true` 且没有在飞的写入（或超出 `ROTATE_SLACK_BYTES` 才强制转），
+   * 而 `rotate()` 里 `createWriteStream` 的 open 又是**异步**的 ⇒ 一次 `setImmediate` 不够，
+   * 断言就会读到"还没转完"的中间状态。实测被打中的三条：
+   *   · `历史文件依次后移…`（`.1` 里是 `bbbb` 而不是 `cccc`）
+   *   · `持续写入会反复轮转…`（轮转把当前文件 rename 走后新流还没 open ⇒ 那一瞬间当前文件**不存在**，
+   *     于是 `files.length` 量到 3 而不是 4）
+   *   · `多字节字符按字节数计…`（`rotations` 还是 0）
+   * 🔴 这是**测量侧**的竞态、不是实现缺陷 ⇒ 修在测试里，不去改产品代码的契约。
+   *
+   * 判据是"**静止**"而不是"等固定时长"：连续 5 次（≈50ms）轮转次数不变才算落地，上限 3s。
+   * ⚠️ 用"静止"而不是"等到某个具体次数"，是因为不同用例期望的次数不一样，
+   *    而且 🔴 **期望次数本身就是要断言的东西** —— 用它当等待条件会把断言变成恒真。
+   */
+  const flushed = async (s: RotatingFileStream) => {
+    // 🔴 这里必须调**方法** `s.flush()`：上一版写成 `await flushed(s)`（自己被自己的全局替换命中）
+    //    ⇒ **无限递归**，8 条用例全部 `RangeError: Maximum call stack size exceeded`。
+    //    👉 规矩：先做全局替换、**再**插入 helper；或者让 helper 里的调用形状与被替换的形状不同。
+    await s.flush();
+    const t0 = Date.now();
+    let last = s.rotations;
+    let stable = 0;
+    while (Date.now() - t0 < 3000 && stable < 5) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (s.rotations === last) stable += 1;
+      else {
+        last = s.rotations;
+        stable = 0;
+      }
+    }
+  };
+
   it('没到阈值不轮转', async () => {
     const s = new RotatingFileStream(logPath, 1000, 3);
     s.write('hello\n');
-    await s.flush();
+    await flushed(s);
     expect(s.rotations).toBe(0);
     expect(read(logPath)).toBe('hello\n');
     expect(read(rotatedPath(logPath, 1))).toBeNull();
@@ -27,9 +64,9 @@ describe('事件日志轮转', () => {
   it('到阈值就轮转，新内容写进新文件', async () => {
     const s = new RotatingFileStream(logPath, 10, 3);
     s.write('0123456789'); // 正好 10 字节 ⇒ 触发
-    await s.flush(); // 轮转发生在"写入落盘"这个安全点，所以要 flush 后才可断言
+    await flushed(s); // 轮转发生在"写入落盘"这个安全点，所以要 flush 后才可断言
     s.write('after\n');
-    await s.flush();
+    await flushed(s);
     expect(s.rotations).toBe(1);
     expect(read(rotatedPath(logPath, 1))).toBe('0123456789');
     expect(read(logPath)).toBe('after\n');
@@ -38,11 +75,11 @@ describe('事件日志轮转', () => {
   it('历史文件依次后移，最老的一份被删掉（保留 K 份）', async () => {
     const s = new RotatingFileStream(logPath, 4, 2);
     s.write('aaaa'); // → .1
-    await s.flush();
+    await flushed(s);
     s.write('bbbb'); // → .1，原 .1 变 .2
-    await s.flush();
+    await flushed(s);
     s.write('cccc'); // → .1，原 .1('bbbb') 变 .2，原 .2('aaaa') 被删
-    await s.flush();
+    await flushed(s);
     // keep=2 ⇒ 只留 .1 与 .2；每写满 4 字节就转一次，所以三轮之后 .1 是最新那份
     expect(read(rotatedPath(logPath, 1))).toBe('cccc');
     expect(read(rotatedPath(logPath, 2))).toBe('bbbb');
@@ -54,10 +91,10 @@ describe('事件日志轮转', () => {
     fs.writeFileSync(logPath, 'x'.repeat(50));
     const s = new RotatingFileStream(logPath, 60, 3);
     s.write('y'.repeat(5)); // 50 + 5 < 60 ⇒ 不轮转
-    await s.flush();
+    await flushed(s);
     expect(s.rotations).toBe(0);
     s.write('z'.repeat(10)); // 65 ≥ 60 ⇒ 轮转
-    await s.flush();
+    await flushed(s);
     expect(s.rotations).toBe(1);
     expect(read(rotatedPath(logPath, 1))).toContain('x'.repeat(50));
   });
@@ -65,7 +102,7 @@ describe('事件日志轮转', () => {
   it('多字节字符按字节数计，不按字符数', async () => {
     const s = new RotatingFileStream(logPath, 6, 3);
     s.write('中文'); // 6 字节 ⇒ 触发
-    await s.flush();
+    await flushed(s);
     expect(s.rotations).toBe(1);
   });
 
@@ -80,7 +117,7 @@ describe('事件日志轮转', () => {
       for (let i = 0; i < 50; i += 1) {
         s.write('x'.repeat(100)); // 每轮 5000B，远超阈值 ⇒ 每轮都该转
       }
-      await s.flush();
+      await flushed(s);
     }
     expect(s.rotations).toBeGreaterThan(5);
     // 🔴 断言文件数之前，**等轮转后的新流真的把当前文件建出来**。

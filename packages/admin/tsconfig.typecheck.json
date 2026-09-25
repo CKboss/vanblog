@@ -24,7 +24,19 @@
     "composite": false,
     "noEmit": true,
     "skipLibCheck": true,
-    "allowJs": false,
+    // 🔴 2026-09-26：`allowJs: false → true`，并把 .js/.jsx 纳进 include ——
+    //    门禁的编译范围从 **105 个文件（只 .ts/.tsx）扩到 204 个（含全部 .jsx/.js）**。
+    //    为什么值得：① .jsx 里的**语法**错误从此在门禁范围内（🔴 实测一条 JSX 文本里的裸 `>`
+    //    会报 TS1382，而**语法错误会让 tsc 跳过整个程序的语义诊断** ⇒ 一处裸 `>` 就能让门禁整体假绿）；
+    //    ② .tsx 从 .jsx 导入时不再是 `any`，跨文件契约能被检查（实测因此**新揭露 9 条真错**，
+    //    例如 `UrlFormItem` 的 props 缺 `id` ⇒ UpdateModal 里 TS2741 ×2）。
+    //    ⚠️ 代价：src 错误基线 26 → **35**（不是新写的 bug，是** newly visible **的旧账；
+    //    与"修对配置揭露 6 条被掩盖的真错"同一次性质）。
+    // 🔴 **`checkJs` 刻意不开**：开了要检查 .js/.jsx 自身的类型，实测**226 条**
+    //    （TS2339 76 / TS2322 61 / TS18048 44 / TS2345 13 / TS2304 12 / …）—— 那是一个**独立的还债项目**，
+    //    与多语言无关，塞进本轮只会把 226 条旧账变成"看起来已被守卫接受"的水位。
+    //    要开的话请单独立项、按文件分批清，并保留两桶基线（.ts/.tsx 与 .js/.jsx 分开）。
+    "allowJs": true,
     "esModuleInterop": true,
     "moduleResolution": "node",
     "module": "esnext",
@@ -44,7 +56,7 @@
   // SelectLang.tsx / request.ts / history.ts 都有），所以跟进来也不会产生噪音。
   // 🔴 `.umi/.cache` 必须排除：里面是 mfsu 的构建缓存（含 `import 'katex/dist/katex.css'` 之类），
   // 纳进来会引入与源码无关的报错。
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/typings.d.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "src/**/*.jsx", "src/typings.d.ts"],
   "exclude": [
     "node_modules",
     "dist",

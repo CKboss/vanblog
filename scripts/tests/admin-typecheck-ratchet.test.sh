@@ -52,8 +52,10 @@ TIMEOUT_S=300
 # ── 基线：只许减不许增 ────────────────────────────────────────────────
 # 🔴 减少之后请把常量改成新的实测值，并在提交信息里写清"清掉了哪几处、各自的正确修法是什么"。
 #    （减少时本守卫会**打出提示但仍然 pass** —— 与 strict-null-ratchet 同一取舍。）
-# 实测于 2026-09-25，口径：`tsconfig.typecheck.json`（typeRoots 受限 + `@@/*` 别名 + 样式声明），
-# tsc 4.9.5，`allowJs: false` ⇒ **只覆盖 `.ts`/`.tsx`（105 个文件），不含 `.jsx`/`.js`**。
+# 实测于 2026-09-25，口径：`tsconfig.typecheck.json`（typeRoots 受限 + `@@/*` 别名 + 样式声明），tsc 4.9.5。
+# 🔴 2026-09-26 口径**扩大**：`allowJs: false → true` + include 加上 `.js`/`.jsx`
+#   ⇒ 编译范围从 **105 个文件（只 .ts/.tsx）扩到 204 个**（`checkJs` 仍**不开**，理由见 tsconfig 里的注释：
+#   开了是 **226 条**旧账，属独立还债项目）。
 # 🔴 29 → **26**（2026-09-26 期 4）：清掉了 **TS2769 ×3** ——
 #   那 3 条都是同一个形状：`const t = (id, defaultMessage, values?: Record<string, unknown>) =>
 #   intl.formatMessage({ id, defaultMessage }, values)`。react-intl 3 的 `formatMessage` 第二个形参要的是
@@ -62,22 +64,36 @@ TIMEOUT_S=300
 #   （ThemeButton / InitPage / RestoreFromBackup，加上期 4 新写的 SiteInfoForm 正好第 4 次撞上）
 #   ⇒ 一并改成 `Record<string, any>` 并在声明处写明理由（防止有人"好心"改回 unknown）。
 #   🔴 所以 TS2769 的分类基线也从 3 降到 **0**：将来再出现就是**新形状的新问题**，必须当场修。
-BASELINE_ADMIN=26   # admin 自己 src/ 里的错误总数
+# 🔴 26 → **35**（2026-09-26，扩大编译范围到 .js/.jsx 之后）：涨的 9 条**不是新写的 bug**，
+#   而是 .tsx 从 .jsx 导入时**不再是 `any`** 之后新揭露的旧账（与"修对配置揭露 6 条被掩盖的真错"同一性质）：
+#   TS2339 7 → **14**、TS2322 14 → 14、新增 **TS2741 ×2**（`UrlFormItem` 的 props 要 `id`，UpdateModal 没传）、
+#   TS2345 2 → 2、TS18048 2 → 2、TS2538 1 → 1。
+#   ⚠️ 所以本守卫**不能只看"数字变小=进步"**：范围变窄也会让数字变小 ⇒ 下面有专门的"范围钉"
+#   （HOT_FILES 里放了 .jsx、SRC_JSX_N 有下界、还有一条直接读 tsconfig 断言 allowJs=true）。
+BASELINE_ADMIN=35   # admin 自己 src/ 里的错误总数（口径：含 .js/.jsx 在编译范围内、checkJs 不开）
 BASELINE_DEP=2      # 依赖自带 .ts 的错误（mdast-util-mark@1.0.0），admin 侧修不了 ⇒ 单独一桶
 
 # 分类基线（🔴 必须分类计数：否则"某一类涨了、另一类降了"会被总数掩盖）
-#   实测分布（2026-09-26 期 4 之后）：TS2322 14 / TS2339 7 / TS2769 **0** / TS2345 2 / TS18048 2 / TS2538 1 = 26
+#   实测分布（2026-09-26 扩范围之后）：TS2322 14 / TS2339 **14** / TS2769 0 / TS2345 2 / TS18048 2 /
+#   TS2538 1 / TS2741 **2** = **35**
 BASE_TS2322=14   # 类型不可赋值（多是 antd 4 的 props 形状 vs 实际传值）
-BASE_TS2339=7    # 属性不存在
+BASE_TS2339=14   # 属性不存在（7 → 14：.jsx 的导出不再是 any，属性名写错终于看得见）
 BASE_TS2769=0    # 没有匹配的重载（🔴 期 4 清零：那 3 条是同一个 t() 声明形状，见 BASELINE_ADMIN 上的注释）
 BASE_TS2345=2    # 实参类型不匹配（admin src 内的；依赖那 2 条另算）
 BASE_TS18048=2   # 可能是 undefined
 BASE_TS2538=1    # 类型不能用作索引
+BASE_TS2741=2    # 缺少必需属性（新登记的一类：都是 UpdateModal 传给 UrlFormItem 的 props 缺 id）
 
 # 🔴 配置产物三类码：必须为 0（非 0 就说明配置或 .umi 生成物退化了）
 CFG_ARTEFACT_RE='error (TS2305|TS2724|TS2307)'
 # 配置/工程类错误（TS5xxx / TS6xxx）：出现它们说明**命令本身没跑对** ⇒ 计数不可信 ⇒ 硬失败
 CFG_CODES_RE='error TS[56][0-9][0-9][0-9]'
+# 🔴 语法类错误（TS1xxx）：必须为 **0**。
+#   为什么单独一类：**tsc 一旦报出语法诊断，就会跳过整个程序的语义诊断** ——
+#   实测把 `.jsx` 纳进编译范围后，`CommentManage/index.jsx` 里 JSX 文本的 4 个裸 `>` 报 TS1382，
+#   那次 tsc **只输出这 4 条**，连既有的 26 条 .ts/.tsx 类型错误都不报了 ⇒ 🔴 **门禁整体假绿**。
+#   ⚠️ 正则要带冒号（`TS1[0-9]{3}:`）：否则会把 **TS18048** 的前 5 位当成 TS1xxx 误报。
+SYNTAX_CODES_RE='error TS1[0-9][0-9][0-9]:'
 
 # 「仍在编译范围内」的热点文件：钉的是**编译范围**而不是错误数，
 # 所以把它们修干净不会打红本守卫，而把它们排除出编译（或改名/挪走）会。
@@ -89,6 +105,10 @@ HOT_FILES=(
   "src/components/SiteInfoForm/index.tsx"
   "src/pages/Code/index.tsx"
   "src/components/UpdateModal/index.tsx"
+  # 🔴 这两个是 **.jsx**：钉住"编译范围包含 .jsx"（allowJs 被改回 false、或 include 变窄都会红）。
+  #    没有它们的话，把范围改窄会让错误数**变少** ⇒ 棘轮会当成"进步"而假绿。
+  "src/pages/CommentManage/index.jsx"
+  "src/pages/SystemConfig/tabs/Advance.jsx"
 )
 # 🔴 必须**不**在编译范围内的（纳进来会引入与源码无关的噪音）
 MUST_ABSENT=(
@@ -175,9 +195,40 @@ fi
 
 SRC_N="$(grep -acE '^/.*packages/admin/src/.*\.tsx?$' "${MAIN_OUT}" 2>/dev/null || true)"; SRC_N="${SRC_N:-0}"
 if [[ "${SRC_N}" -ge 100 ]]; then
-  pass "编译范围覆盖 admin 的 ${SRC_N} 个 .ts/.tsx（allowJs:false ⇒ 不含 .jsx/.js，这是已知口径）"
+  pass "编译范围覆盖 admin 的 ${SRC_N} 个 .ts/.tsx（期望 ≥100）"
 else
   fail "编译范围只有 ${SRC_N} 个 admin .ts/.tsx（期望 ≥100）⇒ include/exclude 可能被改坏了"
+fi
+
+# 🔴 范围钉（.jsx/.js）：2026-09-26 把 allowJs 打开后，实测 .js/.jsx 共 **99** 个进编译范围
+#    （总 204 = 105 个 .ts/.tsx + 99 个 .js/.jsx）。下界取 90：谁把 allowJs 改回 false、
+#    或把 include 里的 .js/.jsx 去掉，这条就会红 —— 🔴 否则"范围变窄 ⇒ 错误变少 ⇒ 棘轮假绿"。
+SRC_JSX_N="$(grep -acE '^/.*packages/admin/src/.*\.jsx?$' "${MAIN_OUT}" 2>/dev/null || true)"; SRC_JSX_N="${SRC_JSX_N:-0}"
+if [[ "${SRC_JSX_N}" -ge 90 ]]; then
+  pass "编译范围覆盖 admin 的 ${SRC_JSX_N} 个 .js/.jsx（期望 ≥90 ⇒ allowJs 真的开着）"
+else
+  fail "🔴 编译范围只有 ${SRC_JSX_N} 个 admin .js/.jsx（期望 ≥90）⇒ allowJs 被关掉了或 include 变窄了。
+      这会让错误总数**变少**、棘轮看起来"进步"，实则**丢了 99 个文件的覆盖**。
+      修法：tsconfig.typecheck.json 里 allowJs 必须是 true，include 必须含 src/**/*.js 与 src/**/*.jsx。"
+fi
+
+# 🔴 直接读配置断言（比数文件更早、更直白地告诉人是哪一处被改了）
+TSCONFIG_RAW="$(cat "${ADMIN}/${TSCONFIG}" 2>/dev/null || true)"
+if grep -qE '"allowJs"\s*:\s*true' <<<"${TSCONFIG_RAW}"; then
+  pass "tsconfig.typecheck.json 里 allowJs = true"
+else
+  fail "🔴 tsconfig.typecheck.json 里 allowJs 不是 true ⇒ .js/.jsx 不在编译范围内（范围被悄悄缩窄）"
+fi
+if grep -qF 'src/**/*.jsx' <<<"${TSCONFIG_RAW}"; then
+  pass "tsconfig.typecheck.json 的 include 覆盖 src/**/*.jsx"
+else
+  fail "🔴 tsconfig.typecheck.json 的 include 不含 src/**/*.jsx"
+fi
+if grep -qE '"checkJs"\s*:\s*true' <<<"${TSCONFIG_RAW}"; then
+  fail "🔴 checkJs 被打开了：实测那会引入 **226 条** .js/.jsx 自身的旧账（TS2339 76 / TS2322 61 / …），
+      基线会被迫从 35 跳到 226 ⇒ 请先单独立项分批清，并改成 .ts/.tsx 与 .js/.jsx **两桶**基线再来。"
+else
+  pass "checkJs 未开（有意为之：那是 226 条旧账的独立还债项目，见 tsconfig 注释）"
 fi
 
 # ---------- 2c) 🔴 防假绿（三）：热点文件必须都在编译范围内 ----------
@@ -197,7 +248,19 @@ for ma in "${MUST_ABSENT[@]}"; do
   fi
 done
 
-# ---------- 2d) 🔴 防假绿（四）：配置产物三类码必须为 0 ----------
+# ---------- 2d) 🔴 防假绿（四）：**语法类**错误必须为 0（否则语义诊断根本没跑） ----------
+SYN_N="$(grep -acE "${SYNTAX_CODES_RE}" "${MAIN_OUT}" 2>/dev/null || true)"; SYN_N="${SYN_N:-0}"
+if [[ "${SYN_N}" == "0" ]]; then
+  pass "TS1xxx（语法类）= 0 ⇒ tsc 真的做了**语义**检查（不是只报了语法就收工）"
+else
+  fail "🔴 出现 ${SYN_N} 条 TS1xxx 语法类错误 ⇒ **tsc 会跳过整个程序的语义诊断**，
+      下面所有计数（包括"admin src 错误 = N"）都**不可信**，门禁等于整体假绿。
+      实测过的形状：JSX 文本里的裸 \`>\`（TS1382，Babel 能忍、tsc 不能）。前 5 条：
+      $(grep -aE "${SYNTAX_CODES_RE}" "${MAIN_OUT}" | head -5 | tr '\n' '|')
+      修法：把裸 \`>\` 写成 {'>'}（或 &gt;）；修完重跑，语义错误才会重新出现。"
+fi
+
+# ---------- 2e) 🔴 防假绿（五）：配置产物三类码必须为 0 ----------
 ART_N="$(count_artefact "${MAIN_OUT}")"; ART_N="${ART_N:-0}"
 if [[ "${ART_N}" == "0" ]]; then
   pass "TS2305/TS2724/TS2307 = 0（⇒ \`@@/*\` 别名与样式声明都生效，umi 的插件导出解析得到）"
@@ -255,16 +318,17 @@ check_code TS2769 "${BASE_TS2769}" "没有匹配的重载"
 check_code TS2345 "${BASE_TS2345}" "实参类型不匹配"
 check_code TS18048 "${BASE_TS18048}" "可能是 undefined"
 check_code TS2538 "${BASE_TS2538}" "类型不能用作索引"
+check_code TS2741 "${BASE_TS2741}" "缺少必需属性"
 
 # ---------- 5) 分类之和必须等于总数（防"分类漏了一类"造成的假绿） ----------
 SUM_CODES=0
-for c in TS2322 TS2339 TS2769 TS2345 TS18048 TS2538; do
+for c in TS2322 TS2339 TS2769 TS2345 TS18048 TS2538 TS2741; do
   n="$(count_admin_code "${MAIN_OUT}" "$c")"; n="${n:-0}"; SUM_CODES=$((SUM_CODES + n))
 done
-assert_eq "${SUM_CODES}" "${ADMIN_N}" "六类之和 == admin src 总数（⇒ 没有未登记的错误码被漏掉）"
+assert_eq "${SUM_CODES}" "${ADMIN_N}" "七类之和 == admin src 总数（⇒ 没有未登记的错误码被漏掉）"
 if [[ "${SUM_CODES}" != "${ADMIN_N}" ]]; then
   echo "      🔴 出现了未登记的错误码，请把它加进上面的分类基线（不要靠总数掩盖）："
-  grep -aE '^src/.*error TS[0-9]+' "${MAIN_OUT}" | grep -avE 'TS2322|TS2339|TS2769|TS2345|TS18048|TS2538' | head -5 | sed 's/^/        /'
+  grep -aE '^src/.*error TS[0-9]+' "${MAIN_OUT}" | grep -avE 'TS2322|TS2339|TS2769|TS2345|TS18048|TS2538|TS2741' | head -5 | sed 's/^/        /'
 fi
 
 echo
