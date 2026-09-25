@@ -9605,9 +9605,18 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
   （admin 用 `includes('已初始化')` 匹配它，且 `localePackParity` 钉着"这个字符串不许进语言包"）；
   ④ `fullBackup.ts`(24) / `backupCrypto.ts`(12) —— ⚠️ 备份那族的中文措辞被 **210 条** `vanblog-backup-signing` 断言与
   `docs/**` 钉着，迁移前必须先跑一遍消费方网。
-- 🔴 **仍未做**（本节只落地了机制 + 8 个码）：admin 那 **22 处**直接透出服务端 `message` 的调用点**没有逐个改**——
-  因为机制在**全局** `errorHandler`/`adaptor` 上，那 22 处自动受益；⚠️ 但**如果某处自己 `catch` 后直接用了 `err.message`**
-  （绕过全局），它仍然只会显示中文 ⇒ 迁到那一批时要逐个核实。
+- 🔴 **仍未做，而且比任务书里写的更麻烦**（本节只落地了机制 + 8 个码）：admin 里有一批调用点**绕过全局
+  `errorHandler`/`adaptor`**、自己把服务端消息塞进 toast。
+  **实测口径**：`message.error(...)` / `notification.*(...)` 的实参里直接出现 `.message` 的有 **21 处**
+  （`grep -rnE "(message\.error|notification\.[a-z]+)\(.*\.message" packages/admin/src`，排除 `.umi` 生成物；
+  任务书里记的"22 处"是同一族、口径略异，本轮**未逐条比对**）。
+  🔴 **这些点对错误码机制是"看不见"的**：它们读的是 `res?.message` / `err?.message`
+  （实例：`SystemConfig/tabs/Theme.jsx` 的三处、`SystemConfig/tabs/ImgTab.jsx` 的导出失败那处），
+  既不经过 `adaptor` 也不经过 `errorHandler` ⇒ 🔴 **只迁移服务端不会让它们变成三语。**
+  👉 下一批要么把它们改成走 `reportRequestError`（全局那条），要么复用已经导出的
+  `translateServerErrorMessage(res, t)`（它就是为了这种"自己 catch 的调用点"准备的形状）。
+  ⚠️ 顺带一条：这批点里有不少**同时**硬编码了中文兜底文案（`'读取主题列表失败'` 之类），
+  它们本来就属于期 3/期 5 的待翻译量 ⇒ **两件事应当合并成一批做**，别翻两次。
 
 ### 7.140 多语言期 3 第二批（评论设置 + 定制化）：**守卫自己的覆盖面是假的**、简体字表又漏一个字，以及三个"空的绿"
 
