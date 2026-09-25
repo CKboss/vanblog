@@ -316,7 +316,10 @@ function readPack(abs, label) {
  */
 const KEY_MAX_SEGMENTS = 3;
 const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
-const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'theme'];
+// 🔴 `sysconf` = 后台「系统设置」页（`pages/SystemConfig/**`）专用的组（2026-09-25 期 3 第一批登记）。
+//   与 `common.*` 的边界：**只在本页组出现的用 `sysconf`，跨页共用的用 `common`**；
+//   与 `menu.*` 的边界：`menu.*` 是方案 B 的专属命名空间，只允许被 `config/routes.js` 的 `locale` 字段使用。
+const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'sysconf', 'theme'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

@@ -139,7 +139,15 @@ describe('后台健壮性：请求失败也要把 loading 收掉', () => {
       code,
       /import \{ saveExportArchive \} from '@\/services\/van-blog\/downloadArchive';/,
     );
-    assert.match(code, /reportRequestError\(message, err, '扫描失败！'\)/);
+    // 🔴 性质未变：扫描失败必须走 `reportRequestError` **上报**（三个实参：message / err / 用户可见消息），
+    //    而不是被空 catch 吞掉。2026-09-25 期 3 第一批把第三个实参换成了 `t()`（i18n），
+    //    所以这里钉的是**同一条性质的新形状**：调用形状 + 那条消息的 key + 中文兜底文案仍在。
+    //    ⚠️ 刻意不放宽成「只要有 reportRequestError 就行」—— 那会丢掉「第三个实参是用户可见消息」这一维。
+    //    🔴 「那个 key 在三份语言包里都存在」由 localePackParity 统一钉（它扫全部 t() 调用），这里不重复。
+    assert.match(
+      code,
+      /reportRequestError\(message, err, t\('sysconf\.img\.scanFailed', '扫描失败！'\)\)/,
+    );
     assert.match(code, /const \{ errorLinks \} = data \|\| \{\};/);
   });
 });

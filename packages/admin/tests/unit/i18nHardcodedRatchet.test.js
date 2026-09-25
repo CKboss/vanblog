@@ -62,6 +62,9 @@ const BUDGET = {
   // 1 条 = 静态双语 tooltip「语言 · Language」
   'src/pages/user/Login/index.jsx': 1,
   'src/pages/user/Restore/index.jsx': 8,
+  // 🔴 期 3 第一批（2026-09-25）：这两个文件已全量接 i18n ⇒ 预算 0，新增硬编码中文会立刻红。
+  'src/pages/SystemConfig/tabs/WalineTab.jsx': 0,
+  'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
 };
 const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 48
 
@@ -159,7 +162,11 @@ test('i18n 棘轮 · 反向钉住刻意保留的例外：它们必须仍然存�
 });
 
 test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都钉死', () => {
-  assert.strictEqual(Object.keys(BUDGET).length, 9, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  // 🔴 9 → 11（2026-09-25 期 3 第一批）：新增 `SystemConfig/tabs/WalineTab.jsx` 与
+  //   `SystemConfig/tabs/ImgTab.jsx`，两者都**已全量接 i18n ⇒ 预算 0**。
+  //   🔴 注意 TOTAL_BUDGET 仍是 48：加进来的两个文件预算都是 0，所以**总预算不变** ——
+  //   这正是棘轮该有的形状（覆盖面扩大、允许的硬编码中文总量不增加）。
+  assert.strictEqual(Object.keys(BUDGET).length, 11, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   assert.strictEqual(TOTAL_BUDGET, 48, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   assert.strictEqual(REQUIRED_EXCEPTIONS.length, 4, '例外清单条数变了 ⇒ 必须是有意的');
 });

@@ -6,9 +6,13 @@ import { exportAllImgs, rewriteArticleBaseUrl, scanImgsOfArticles } from '@/serv
 import { saveExportArchive } from '@/services/van-blog/downloadArchive';
 import { reportRequestError } from '@/services/van-blog/requestError';
 import { Alert, Button, Card, Input, message, Modal, Table, Typography } from 'antd';
+import { useIntl } from 'umi';
 import { useState } from 'react';
 
 export default function () {
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [rewriting, setRewriting] = useState(false);
@@ -18,25 +22,27 @@ export default function () {
   );
   return (
     <>
-      <Card title="图床功能设置">
+      <Card title={t('sysconf.img.featureCard', '图床功能设置')}>
         <WatchMarkForm />
       </Card>
-      <Card title="存储策略设置" style={{ marginTop: 8 }}>
+      <Card title={t('sysconf.img.storageCard', '存储策略设置')} style={{ marginTop: 8 }}>
         <StaticForm />
       </Card>
-      <Card title="高级操作" style={{ marginTop: 8 }}>
+      <Card title={t('sysconf.img.advancedCard', '高级操作')} style={{ marginTop: 8 }}>
         <Button
           style={{ margin: '20px 0' }}
           onClick={async () => {
             setLoading(true);
             try {
               const { data } = await scanImgsOfArticles();
-              message.success(`扫描成功！共 ${data?.total || 0} 项`);
+              message.success(
+                t('sysconf.img.scanOk', '扫描成功！共 {total} 项', { total: data?.total || 0 }),
+              );
               // data 为空时直接解构会抛 TypeError，被下面的 catch 吞掉就只剩「按钮不转了」
               const { errorLinks } = data || {};
               if (errorLinks && errorLinks.length) {
                 Modal.info({
-                  title: '失效链接：',
+                  title: t('sysconf.img.deadLinks', '失效链接：'),
                   content: (
                     <Table
                       pagination={{
@@ -48,13 +54,13 @@ export default function () {
                       size="small"
                       columns={[
                         {
-                          title: '文章 ID',
+                          title: t('sysconf.img.colArticleId', '文章 ID'),
                           dataIndex: 'artcileId',
                           key: 'artcileId',
                         },
-                        { title: '标题', dataIndex: 'title', key: 'title' },
+                        { title: t('sysconf.img.colTitle', '标题'), dataIndex: 'title', key: 'title' },
                         {
-                          title: '链接',
+                          title: t('sysconf.img.colLink', '链接'),
                           dataIndex: 'link',
                           key: 'link',
                           render: (val) => {
@@ -79,7 +85,7 @@ export default function () {
             } catch (err) {
               // 只 setLoading(false) 等于把失败静默吞掉：用户点了扫描，
               // 按钮转完圈什么也没发生，看不出是接口挂了还是没扫到东西。
-              reportRequestError(message, err, '扫描失败！');
+              reportRequestError(message, err, t('sysconf.img.scanFailed', '扫描失败！'));
             } finally {
               setLoading(false);
             }
@@ -87,11 +93,14 @@ export default function () {
           type="primary"
           loading={loading}
         >
-          扫描现有文章图片到图床
+          {t('sysconf.img.scanBtn', '扫描现有文章图片到图床')}
         </Button>
         <Alert
           type="info"
-          message="PS: 扫描文章图片会把文章内的所有图片扫描到数据库中，就可以在图床页面看到了。只支持外链。"
+          message={t(
+            'sysconf.img.scanTip',
+            'PS: 扫描文章图片会把文章内的所有图片扫描到数据库中，就可以在图床页面看到了。只支持外链。',
+          )}
         ></Alert>
         <Button
           style={{ margin: '20px 0' }}
@@ -107,33 +116,39 @@ export default function () {
               // 必须走带 token 的下载接口。
               const name = data?.path;
               if (!data?.success || !name) {
-                message.error('打包失败！');
+                message.error(t('sysconf.img.packFailed', '打包失败！'));
                 return;
               }
-              await saveExportArchive(name, '图片打包完成，已开始下载');
+              await saveExportArchive(name, t('sysconf.img.packDone', '图片打包完成，已开始下载'));
             } catch (err) {
               // 空的 catch 会把失败吞掉，用户只看到按钮转圈结束
-              message.error(err?.message || '导出失败');
+              message.error(err?.message || t('sysconf.img.exportFailed', '导出失败'));
             } finally {
               setExporting(false);
             }
           }}
         >
-          导出全部本地图床内容（压缩包）
+          {t('sysconf.img.exportBtn', '导出全部本地图床内容（压缩包）')}
         </Button>
         <Alert
           type="info"
-          message="PS: 导出全部图片会把本地图床的全部文件打包成一个 zip 压缩包并在完成后弹出下载窗口。"
+          message={t(
+            'sysconf.img.exportTip',
+            'PS: 导出全部图片会把本地图床的全部文件打包成一个 zip 压缩包并在完成后弹出下载窗口。',
+          )}
         ></Alert>
       </Card>
-      <Card title="域名变更后改写文章图片链接" style={{ marginTop: 8 }}>
+      <Card title={t('sysconf.img.rewriteCard', '域名变更后改写文章图片链接')} style={{ marginTop: 8 }}>
         <Alert
           type="warning"
           style={{ marginBottom: 16 }}
-          message="换域名后，文章/草稿里已经写成绝对地址的图片（如 https://旧域名/static/...）不会跟着改。这里只改 Mongo 里的正文链接，不会移动磁盘上的文件，也不会改写你没填写的第三方图床。"
+          message={t(
+            'sysconf.img.rewriteWarn',
+            '换域名后，文章/草稿里已经写成绝对地址的图片（如 https://旧域名/static/...）不会跟着改。这里只改 Mongo 里的正文链接，不会移动磁盘上的文件，也不会改写你没填写的第三方图床。',
+          )}
         />
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4 }}>旧站点 / 图床地址</div>
+          <div style={{ marginBottom: 4 }}>{t('sysconf.img.oldBase', '旧站点 / 图床地址')}</div>
           <Input
             placeholder="https://old.example.com"
             value={oldBase}
@@ -142,7 +157,7 @@ export default function () {
           />
         </div>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4 }}>新站点 / 图床地址</div>
+          <div style={{ marginBottom: 4 }}>{t('sysconf.img.newBase', '新站点 / 图床地址')}</div>
           <Input
             placeholder="https://new.example.com"
             value={newBase}
@@ -156,21 +171,25 @@ export default function () {
           onClick={() => {
             if (typeof window !== 'undefined' && location.hostname == 'blog-demo.mereith.com') {
               Modal.info({
-                title: '演示站禁止修改此项！',
-                content: '演示站不允许批量改写文章内容。',
+                title: t('sysconf.img.demoBlocked', '演示站禁止修改此项！'),
+                content: t('sysconf.img.demoBlockedBody', '演示站不允许批量改写文章内容。'),
               });
               return;
             }
             const from = (oldBase || '').trim();
             const to = (newBase || '').trim();
             if (!from || !to) {
-              message.warning('请填写旧地址和新地址');
+              message.warning(t('sysconf.img.fillBoth', '请填写旧地址和新地址'));
               return;
             }
             Modal.confirm({
-              title: '确认改写文章和草稿中的链接？',
-              content: `将把以「${from}」开头的链接改写成「${to}」。建议先在「备份恢复」导出一份数据。相对路径 /static/... 不会改动。`,
-              okText: '开始改写',
+              title: t('sysconf.img.rewriteConfirm', '确认改写文章和草稿中的链接？'),
+              content: t(
+                'sysconf.img.rewriteConfirmBody',
+                '将把以「{from}」开头的链接改写成「{to}」。建议先在「备份恢复」导出一份数据。相对路径 /static/... 不会改动。',
+                { from, to },
+              ),
+              okText: t('sysconf.img.rewriteOk', '开始改写'),
               okButtonProps: { danger: true },
               onOk: async () => {
                 setRewriting(true);
@@ -180,9 +199,15 @@ export default function () {
                     newBase: to,
                   });
                   message.success(
-                    `改写完成：文章 ${data?.articlesUpdated || 0} 篇，草稿 ${
-                      data?.draftsUpdated || 0
-                    } 篇，共 ${data?.replacements || 0} 处`,
+                    t(
+                      'sysconf.img.rewriteDone',
+                      '改写完成：文章 {articles} 篇，草稿 {drafts} 篇，共 {replacements} 处',
+                      {
+                        articles: data?.articlesUpdated || 0,
+                        drafts: data?.draftsUpdated || 0,
+                        replacements: data?.replacements || 0,
+                      },
+                    ),
                   );
                 } finally {
                   setRewriting(false);
@@ -191,12 +216,15 @@ export default function () {
             });
           }}
         >
-          改写文章与草稿中的链接
+          {t('sysconf.img.rewriteBtn', '改写文章与草稿中的链接')}
         </Button>
         <Alert
           type="info"
           style={{ marginTop: 16 }}
-          message="之后请到「站点配置」把网站 Url 改成新域名，并确认 DNS 已指向本站。新上传的图片会按当前访问域名写入。"
+          message={t(
+            'sysconf.img.afterRewrite',
+            '之后请到「站点配置」把网站 Url 改成新域名，并确认 DNS 已指向本站。新上传的图片会按当前访问域名写入。',
+          )}
         />
       </Card>
     </>
