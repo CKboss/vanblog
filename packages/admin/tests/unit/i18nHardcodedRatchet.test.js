@@ -124,6 +124,11 @@ const BUDGET = {
   //   是**活体探针**发现它的：图片管理页翻完后，en-US 下那个弹窗的表头仍是简体「属性/值」
   //   ⇒ 再次印证"批次要按**页面**切"（这一页由 index.tsx + tools.tsx + ObjTable 三块拼成）。
   'src/components/ObjTable/index.tsx': 0,
+  // 🔴 期 5 第三批（2026-09-26）：**自定义页面**整页（列表页 + 新建/修改弹窗）⇒ 都预算 0。
+  //   ⚠️ `CustomPageModal` 原本是**隐式返回**的箭头组件（`() => (<ModalForm …/>)`），
+  //   要用 hook 就得改成块体 + 显式 return（这是本批唯一的结构性改动）。
+  'src/pages/CustomPage/index.jsx': 0,
+  'src/components/CustomPageModal/index.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -242,7 +247,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 25, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 27, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**

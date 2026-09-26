@@ -751,4 +751,48 @@ export default {
   'common.colProperty': '属性',
   'common.colValue': '值',
 
+
+  // ── 🔴 期 5 第三批：自定义页面（`pages/CustomPage/index.jsx` + `components/CustomPageModal`，36 条）──
+  //    🔴 按**页面**切批次：列表页与它的新建/修改弹窗是同一页的两块，只翻一块会留下半页中文。
+  //    🔴 卡片标题**复用** `menu.site.customPage`（同一个东西 ⇒ 一处口径，与图片管理页复用 menu.img 同做法）。
+  //    ⚠️ 帮助弹窗是"文本 + <code>/<strong> + 文本"的混排 ⇒ 拆成 helpP1a/P1b、helpP3a/P3b/P3strong/P3c、
+  //    helpP4a…P4e 这些**片段** key；`customPage.helpPathSample`（/c/路径/）在三处复用同一个 key。
+  //    🔴 片段的译文必须能按 JSX 顺序拼成一句通顺的话（英文是照着拼出来的整句校对的，不是逐段直译）。
+  'customPage.colIndex': '序号',
+  'customPage.type': '类型',
+  'customPage.typeFile': '单文件页面',
+  'customPage.typeFolder': '多文件页面',
+  'customPage.colPath': '路径',
+  'customPage.editContent': '编辑内容',
+  'customPage.fileManager': '文件管理',
+  'customPage.view': '查看',
+  'customPage.editInfo': '修改信息',
+  'customPage.demoBlocked': '演示站不可修改此项！',
+  'customPage.deleteConfirmBody': '是否确认删除该自定义页面？',
+  'customPage.helpP1a': '自定义页面把静态内容挂到站点的',
+  'customPage.helpPathSample': '/c/路径/',
+  'customPage.helpP1b': '下，不是通用应用托管。',
+  'customPage.helpP2': '分为两种：单文件页面（后台编辑一段 HTML）、多文件页面（上传 HTML/CSS/JS 等静态文件）。',
+  'customPage.helpP3a': '多文件页面访问',
+  'customPage.helpP3b': '时读取',
+  'customPage.helpP3strong': '根目录的 index.html',
+  'customPage.helpP3c': '。请在文件树根上确认能看到它，不要多包一层解压文件夹。',
+  'customPage.helpP4a': 'React / Vue 等 SPA 若资源写成',
+  'customPage.helpP4b': '这种站点根路径，放到',
+  'customPage.helpP4c': '下通常是白屏。请改成相对路径（如',
+  'customPage.helpP4d': '），或构建时把 homepage / base 设为',
+  'customPage.helpP4e': '。需要后端或独立域名时请用反代，不要把整个项目塞进自定义页面。',
+  'customPage.createdOk': '新建成功！',
+  'customPage.modalEditTitle': '修改自定义页面',
+  'customPage.modalCreateTitle': '新建自定义页面',
+  'customPage.pathMustStartSlash': '路径必须以斜杠为开头！',
+  'customPage.pathMustBeSingleLevel': '路径必须是单级，例如 /uptime（对应 /c/uptime/），不要写成 /foo/bar',
+  'customPage.createAlert': '创建后到列表里编辑内容或上传文件。多文件页面只托管静态 HTML/CSS/JS，入口必须是根目录的 index.html（路径 /uptime 对应 /c/uptime/）。带 /static/... 绝对路径的 React 打包产物通常打不开，请改相对路径或用反代。',
+  'customPage.typeTooltip': '单文件：后台编辑一段 HTML。多文件：上传 HTML/CSS/JS 等静态文件；不支持 Node/PHP 后端。SPA 请用相对资源路径，并保证根目录有 index.html。',
+  'customPage.typePlaceholder': '请选择类型',
+  'customPage.namePlaceholder': '请输入名称',
+  'customPage.nameTooltip': '自定义页面的名称',
+  'customPage.pathPlaceholder': '例如 /uptime',
+  'customPage.pathTooltip': '必须以 / 开头，且只能有一级，例如 /uptime。实际地址是 /c + 路径，即 /c/uptime/。多文件页面会读取该目录下的 index.html。',
+
 };

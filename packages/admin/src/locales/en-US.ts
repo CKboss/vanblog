@@ -716,4 +716,54 @@ export default {
   'common.colProperty': 'Property',
   'common.colValue': 'Value',
 
+
+  // ── 🔴 期 5 第三批（36 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ 帮助文案是**片段**：每个片段都要能在 JSX 的顺序里拼成通顺英文
+  //    （例如 helpP4a + <code>/static/...</code> + helpP4b + <code>/c/uptime/</code> + helpP4c + …）。
+  'customPage.colIndex': 'No.',
+  'customPage.type': 'Type',
+  'customPage.typeFile': 'Single-file page',
+  'customPage.typeFolder': 'Multi-file page',
+  'customPage.colPath': 'Path',
+  'customPage.editContent': 'Edit content',
+  'customPage.fileManager': 'Manage files',
+  'customPage.view': 'View',
+  'customPage.editInfo': 'Edit details',
+  'customPage.demoBlocked': 'This cannot be changed on the demo site',
+  'customPage.deleteConfirmBody': 'Delete this custom page?',
+  'customPage.helpP1a': 'A custom page mounts static content under',
+  'customPage.helpPathSample': '/c/<path>/',
+  // 🔴 片段式翻译的代价：`{helpP1a} <code>/c/<path>/</code> {' '} {helpP1b}` 拼出来的英文
+  //    第一版是 "…under /c/<path>/ It is not general-purpose app hosting." —— 🔴 **少了一个句读**
+  //    （中文那边 P1b 以「下，」开头所以看不出来）。用破折号接上，读起来才是一句话。
+  'customPage.helpP1b': '— it is not general-purpose app hosting.',
+  'customPage.helpP2': 'There are two kinds: a single-file page (edit one HTML document in the admin panel) and a multi-file page (upload static HTML/CSS/JS files).',
+  'customPage.helpP3a': 'A multi-file page served at',
+  'customPage.helpP3b': 'reads',
+  // 🔴 同上，这一处是**少了一个空格**：JSX 里 `{helpP3b}` 与 `<strong>` 之间没有 `{' '}`
+  //    （中文「时读取根目录的 index.html」本来就不需要空格 ⇒ 不能为了英文去改 JSX，那会动中文渲染结果）
+  //    ⇒ 把空格放在**英文片段的开头**（zh-CN / zh-TW 都没有这个前导空格，逐字对账仍然成立）。
+  'customPage.helpP3strong': ' index.html in the root of that folder',
+  'customPage.helpP3c': '. Make sure it is visible at the top level of the file tree, without an extra folder left over from unzipping.',
+  'customPage.helpP4a': 'A React or Vue SPA whose assets are written as',
+  'customPage.helpP4b': '(a site-root path) usually shows a blank page when placed under',
+  // 🔴 第三处同类缺陷：JSX 在 `<code>/c/uptime/</code>` 与这个片段之间放了一个 `{' '}`，
+  //    所以以 '.' 开头会渲染成 "/c/uptime/ ."（**句号前多一个空格**）。
+  //    不能为了英文去删那个空格（中文渲染结果会变）⇒ 让片段以破折号开头，空格就变成正常的插入语分隔。
+  'customPage.helpP4c': '— use relative paths instead (such as',
+  'customPage.helpP4d': '), or set homepage / base to',
+  'customPage.helpP4e': 'at build time. If you need a backend or a separate domain, use a reverse proxy instead of putting the whole project into a custom page.',
+  'customPage.createdOk': 'Created',
+  'customPage.modalEditTitle': 'Edit custom page',
+  'customPage.modalCreateTitle': 'New custom page',
+  'customPage.pathMustStartSlash': 'The path must start with a slash',
+  'customPage.pathMustBeSingleLevel': 'The path must have a single level, for example /uptime (which maps to /c/uptime/); do not use /foo/bar',
+  'customPage.createAlert': 'After creating it, edit the content or upload files from the list. A multi-file page only hosts static HTML/CSS/JS and its entry point must be index.html in the root folder (the path /uptime maps to /c/uptime/). React build output that references /static/... absolute paths usually does not open; use relative paths or a reverse proxy.',
+  'customPage.typeTooltip': 'Single file: edit one HTML document in the admin panel. Multi-file: upload static HTML/CSS/JS files; Node or PHP backends are not supported. For an SPA use relative asset paths and make sure the root folder has index.html.',
+  'customPage.typePlaceholder': 'Choose a type',
+  'customPage.namePlaceholder': 'Enter a name',
+  'customPage.nameTooltip': 'The name of the custom page',
+  'customPage.pathPlaceholder': 'For example /uptime',
+  'customPage.pathTooltip': 'Must start with / and have a single level, for example /uptime. The real address is /c plus the path, i.e. /c/uptime/. A multi-file page reads index.html from that folder.',
+
 };

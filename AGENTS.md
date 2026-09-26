@@ -9469,6 +9469,86 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.152 期 5 第三批：自定义页面（整页 53 条）—— 活体证据抓到 **3 处英文片段拼接缺陷**，以及一条"英文措辞没有单测护栏"的反证
+
+**交付**：`pages/CustomPage/index.jsx`（35 条 → **0**，38 个调用点）+ `components/CustomPageModal/index.tsx`
+（18 条 → **0**，20 个调用点）；语言包 **577 → 613 key**（新组 **`customPage`** 36 条）；
+棘轮清单 **25 → 27 个文件**（都预算 0，🔴 **TOTAL 仍 53**）；`i18nKeyNaming` 下界 → **613**；
+`localePackParity` 自动发现下界 **22 → 24 个文件 / 625 → 680 个调用点**（实测 24 / 687）。
+🔴 **浏览器活体 36/36（12 项判据 × 3 语），problems 0**：卡片标题、6 个列头、两个工具栏按钮、
+**帮助弹窗的 13 个片段全部渲染**、新建弹窗的标题/Alert/三个 label/两个 placeholder/两个类型选项、
+以及 🔴 **两条路径校验的 `Modal.info`**（真填 `uptime` 与 `/foo/bar` 触发，不是猜）。
+`skipped 3`（打印出来、不静默）：类型 Select 有 `initialValue` ⇒ 它的 placeholder 活体观察不到（见 F）。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-custompage/`。
+
+#### A. 🔴 口径修正：**测试文件里的中文不算待翻工作量**（`inventory.js` 新增「戊类」）
+`packages/admin/src/` 下有 2 个共存式测试文件（`components/Editor/plugins/mermaidSafety.test.ts`、`tocViewport.test.ts`，
+合计 **7 条**中文），它们本来被算进「甲-UI 文案」⇒ 🔴 **虚增了待翻工作量**，还会误导下一个人去"翻译"一个测试文件
+（与丙类"形似语言包"同一个理由：**分类要反映"该不该翻"**）。
+修法：`*.test.*` / `*.spec.*` 单列为 **戊-测试文件（不翻）**，并且 🔴 在"真实剩余"那一段**单独报出来**
+（`⚠️ 另有 2 个测试文件 / 7 条中文不计入`）——不静默扣掉，免得"数字变小了"看起来像进度而其实是口径变了。
+👉 **数字变化必须同时给出"是进度还是口径"**：本轮 103 文件 / 1,364 条 → **101 / 1,357**（口径）→ **99 / 1,304**（进度）。
+
+#### B. 🔴 活体证据抓到 **3 处英文片段拼接缺陷**（这就是片段式翻译的真实代价）
+帮助弹窗那段是"文本 + `<code>`/`<strong>` + 文本"的混排 ⇒ 只能拆成片段 key（`helpP1a`/`helpP1b`/`helpP3a`…`helpP4e`）。
+拆完**单测全绿、类型门禁全绿、构建 rc=0**，而把渲染结果**拼出来读一遍**（探针 dump 了 `helpText`）立刻看出三处：
+1. `"…under /c/<path>/ It is not general-purpose app hosting."` —— 🔴 **少一个句读**（中文那边 P1b 以「下，」开头所以看不出来）；
+2. `"…/c/<path>/ readsindex.html in the root…"` —— 🔴 **少一个空格**（JSX 里 `{P3b}` 与 `<strong>` 之间没有 `{' '}`，
+   而中文「时读取根目录的 index.html」本来就不需要空格 ⇒ 🔴 不能为了英文去改 JSX，那会动中文渲染结果
+   ⇒ 把空格放进**英文片段的开头**，zh-CN/zh-TW 都没有这个前导空格，逐字对账仍然成立）；
+3. `"…placed under /c/uptime/ . Use relative paths…"` —— 🔴 **句号前多一个空格**（JSX 在 `<code>` 与片段之间放了 `{' '}`）
+   ⇒ 让片段以破折号开头，那个空格就变成正常的插入语分隔。
+👉 🔴 **规矩：片段式翻译必须把"拼出来的整句"作为证据**（探针 dump 拼接后的 `textContent` 并读一遍），
+不能只断言"每个片段都出现了"——**每个片段都对、拼起来却不通顺**是这类改造的默认失败模式。
+⚠️ 也记一条**替代方案**（本轮没用，留给后续大改）：react-intl 3 支持**富文本占位符**
+（`t('k', '… <code>/static/...</code> …', { code: (chunks) => <code>{chunks}</code> })`），
+一条 key 就是一整段、语序自由 ⇒ 比拆 13 个片段好；代价是 defaultMessage 里带伪标签、
+且需要活体验证 react-intl 3.12 的富文本解析行为。
+
+#### C. 🔴 反证：**英文与繁中的"措辞"没有单测护栏**（变异对照 B13-M4 必须绿）
+把 en-US 的 `helpP4e` 从 "at build time" 改成 "at compile time" ⇒ 🔴 **没有任何守卫会红**。
+这不是漏配，而是一条**量过的覆盖边界**：单测能保证的是 ① zh-CN 的值 == 源码 defaultMessage（逐字对账）；
+② 三份都非空、繁中不等于简体（反复制）；③ 数字集合 / 占位符名 / 技术标识符三份一致（契约）；④ key 命名与三份齐全。
+🔴 但"英文好不好、拼出来通不通顺"没有护栏 ⇒ **只能靠活体探针把渲染结果拼出来读**（B 段那 3 处就是这么抓到的）。
+👉 **所以每批文案都必须留活体证据，不能只交"单测全绿"**；这条已经写进变异对照里当**反证**（必须绿），
+免得下一个人以为"绿色 = 英文没问题"。
+
+#### D. 两处结构性改动（都是为了能在渲染期取语言）
+1. `CustomPageModal` 原本是**隐式返回**的箭头组件（`({…}) => (<ModalForm …/>)`）⇒ 要用 hook 就必须改成**块体 + 显式 return**；
+2. `CustomPage/index.jsx` 的 `columns` 原本是**模块级常量** ⇒ 搬进组件内部（与 Token.tsx / SiteInfoForm / app.jsx 的 links 同一条约束：
+   🔴 模块加载期 umi 插件运行时还没初始化）。
+⚠️ 两个文件都没有把 `t` 放进任何 hook 的依赖数组；将来若要放，必须先用 `useCallback([intl])` 包（§7.144 A）。
+
+#### E. 🔴 卡片标题**复用菜单那一条**，不新增同值 key
+`menu.site.customPage`（自定义页面 / 自訂頁面 / Custom pages）与页面卡片标题是**同一个东西** ⇒ 复用同一个 key
+（与图片管理页复用 `menu.img` 同一套做法）。变异对照 B13-M3 把它换成 `customPage.cardTitle` ⇒ 🔴 红
+（"必须在三份包里存在"），所以这个复用是**被钉住的**，不是随手写的。
+另外复用：`common.colName`（名称）、`common.colOption`（操作）、`common.delete`、`common.deleteConfirmTitle`、
+`common.deleteSuccess`、`common.help`、`common.create`、`init.field.required`、`init.wizard.helpDoc`（帮助文档）。
+
+#### F. 🔴 Select 有 `initialValue` ⇒ 它的 placeholder **活体观察不到**（本项目第 2 次遇到）
+类型下拉有 `initialValue={'folder'}` ⇒ antd 渲染的是**选中项**（"多文件页面"）而不是占位符
+⇒ `customPage.typePlaceholder` 在活体里永远看不到。处理与上一批那 6 个 Select 一致：
+🔴 **不硬判、记进 `skipped` 打印出来**，交给 `localePackParity` 的 defaultMessage↔包对账覆盖。
+👉 探针里"某个文案观察不到"是**常态**（有值的 Select、隐藏的面板、只有出错才出现的提示）；
+🔴 关键是**必须打印**，否则"少查了一项"和"查过了"长得一模一样。
+
+#### G. 基线
+- admin `node --test` **746 tests / 165 suites / 0 fail**；i18n 守卫组 **103**（`localePackParity` **47**）；
+- 变异对照 **5/5**（3 条红 + 2 条必须绿：英文措辞反证、语义空操作）；
+- 语言包 **613 key** ×3；`--zh-tw-audit`：613 key / **678** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **27 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（新翻的 `.tsx` 弹窗与 `.jsx` 页面都在门禁范围内，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **746/165/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.cdfd5c4b.js` = **1,465,971 B**，即容器里被探针验过的那一份）；
+  //   ⚠️ 记账时差点写错：本轮构建了**两次**（10:15 修 helpP1b/P3strong、10:17 修 helpP4c），
+  //   第一次的 `umi.1cba6ee0.js` 已被第二次覆盖 ⇒ 🔴 记基线要用 `ls dist/umi.*.js` 现量，不要抄上一段的输出。
+- 🔴 **真实剩余（bareChinese 口径，已扣除测试文件）：101 → 99 个文件 / 1,357 → 1,304 条**（本批 −2 文件 / −53 条）。
+- 🔴 **下一批**：① `pages/LogManage/**`（29 条 / 4 个文件：index + Login/Pipeline/System 三个页签，是一个完整页面）；
+  ② `pages/Draft/**`（22 条，与文章列表同形状）；③ `pages/Article/**`（56 条，🔴 被 **10 个**测试文件钉着，要单独一轮）；
+  ④ `pages/Editor/**`（**143 条 / 15 个文件**，最大的一个页面，同样要单独一轮；翻 `Editor/imgUpload.tsx` 时
+  要把 `t` 传给 `copyImgLink(...)` 并从 `NOT_YET_I18N_CONSUMERS` 表里删掉）；
+  ⑤ 🔴 `Backup.jsx`(89) / `Theme.jsx`(59) 的译文要**交站长人工复核**。
 ### 7.151 期 5 第二批：图片管理页（**三块**拼成的一页，88 条）—— 以及活体探针抓到的第二个"单测结构上看不见"的真缺陷
 
 **交付**：`pages/Static/img/index.tsx`（71 条 → **0**，73 个调用点）、`pages/Static/img/tools.tsx`

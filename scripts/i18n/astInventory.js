@@ -565,7 +565,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `storage` = 图床设置里的存储策略表单（`components/StaticForm`，与 `watermark` 同轮登记）。
 // 🔴 `img` = 图片管理页（`pages/Static/img/**`，2026-09-26 期 5 第二批登记）。
 //   它是**页面**组（不是组件组）：这一页由 index.tsx + tools.tsx 两份文件拼成，共用 `img.*`。
-const REGISTERED_KEY_GROUPS = ['common', 'error', 'img', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `customPage` = 自定义页面（列表页 `pages/CustomPage` + 弹窗 `components/CustomPageModal`，期 5 第三批登记）。
+//   页面组用页面名（与 `img` 同一套做法）；卡片标题复用 `menu.site.customPage`，不新增同值 key。
+const REGISTERED_KEY_GROUPS = ['common', 'customPage', 'error', 'img', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

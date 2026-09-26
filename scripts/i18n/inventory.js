@@ -107,6 +107,14 @@ function classify(rel, src, inv) {
     if (providesMultipleLanguages(src)) return '语言包（已多语言，不计入工作量）';
     return '丙-形似语言包（只提供单一语言，切语言不跟随）';
   }
+  // 🔴 戊「测试文件」：`*.test.*` / `*.spec.*` 里的中文是**测试自己的**（断言消息、夹具、注释），
+  //    不是用户看得见的 UI 文案 ⇒ **不翻**。
+  //    为什么要单列：admin 的 `src/` 下有 2 个共存式测试文件（`components/Editor/plugins/mermaidSafety.test.ts`、
+  //    `tocViewport.test.ts`，合计 7 条），它们本来被算进「甲-UI 文案」⇒ 🔴 **虚增了待翻工作量**，
+  //    还会误导下一个人去"翻译"一个测试文件（与丙类"形似语言包"同一个理由：分类要反映**该不该翻**）。
+  if (/(^|\/)[^/]*\.(test|spec)\.(js|jsx|ts|tsx)$/.test(rel)) {
+    return '戊-测试文件（测试内部的中文，不是 UI 文案 ⇒ 不翻）';
+  }
   if (uiCount === 0 && inv.comments > 0) return '乙-仅注释（不翻译）';
   if (uiCount === 0) return '（无中文）';
   if (/Core\.js$/.test(rel)) return '丁-核心模块消息（需注入式翻译器）';
@@ -338,9 +346,17 @@ function main() {
   //    棘轮（i18nHardcodedRatchet）用的就是这个口径 ⇒ 两边必然一致。
   let bareTotal = 0;
   const bareFiles = [];
+  let testFileItems = 0;
+  let testFiles = 0;
   for (const abs of files) {
     const rel = path.relative(path.join(ROOT, 'packages/admin'), abs);
     const n = astInventory.bareChineseFromFile(abs, rel).size;
+    // 🔴 `*.test.*` / `*.spec.*` 不计入"待翻工作量"（那是测试自己的中文，见上面戊类的说明）；
+    //    但**单独报出来**，免得"少了几条"看起来像进度而其实是口径变了。
+    if (/(^|\/)[^/]*\.(test|spec)\.(js|jsx|ts|tsx)$/.test(rel)) {
+      if (n) { testFileItems += n; testFiles += 1; }
+      continue;
+    }
     if (n > 0) {
       bareTotal += n;
       bareFiles.push({ rel, n });
@@ -349,6 +365,9 @@ function main() {
   bareFiles.sort((a, b) => b.n - a.n || a.rel.localeCompare(b.rel));
   console.log(`  --- 🔴 真实剩余（bareChinese 口径 = 棘轮口径）---`);
   console.log(`    ${bareFiles.length} 个文件 / ${bareTotal} 条（甲/丁类那份计数含 defaultMessage 位，会高估）`);
+  console.log(
+    `    ⚠️ 另有 ${testFiles} 个**测试文件** / ${testFileItems} 条中文**不计入**（那是测试自己的断言消息与夹具，不是 UI 文案）`,
+  );
   console.log('    前 10：');
   for (const f of bareFiles.slice(0, 10)) console.log(`      ${String(f.n).padStart(4)}  ${f.rel}`);
 
