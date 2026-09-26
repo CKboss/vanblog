@@ -213,6 +213,10 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/services/van-blog/coverBackfill.js': 0,
     'src/components/RevisionHistory/index.jsx': 0,
     'src/components/RevisionHistory/revisionCore.js': 0,
+    'src/services/van-blog/tagTokens.js': 0,
+    'src/services/van-blog/importPathname.js': 0,
+    'src/services/van-blog/schedule.js': 0,
+    'src/components/PathnameField/index.jsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

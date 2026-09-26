@@ -1,17 +1,18 @@
 import { getTags } from '@/services/van-blog/api';
 import {
-  TAG_FIELD_PLACEHOLDER,
-  TAG_FIELD_TOOLTIP,
   TAG_TOKEN_SEPARATORS,
+  tagFieldPlaceholder,
+  tagFieldTooltip,
 } from '@/services/van-blog/tagTokens';
 import { ProFormSelect } from '@ant-design/pro-form';
 import { useIntl } from 'umi';
 
 export default function TagSelectField({ name, ...rest }) {
   // 🔴 语言选择必须在**渲染期**（useIntl 是 hook）。
-  // ⚠️ 下面 placeholder / tooltip 用的 `TAG_FIELD_PLACEHOLDER` / `TAG_FIELD_TOOLTIP` 来自
-  //    `services/van-blog/tagTokens`（**服务层常量**，被 tagTokens.test.js 钉着）⇒ 本轮**不动**，
-  //    🔴 所以切到英文时这个字段的占位符与提示仍然是中文（已知中间态，随"期 7 services"那批闭合）。
+  // 🔴 placeholder / tooltip 来自服务层 `tagTokens.js` 的**函数版**（`tagFieldPlaceholder(t)` / `tagFieldTooltip(t)`）：
+  //   那个模块是纯逻辑、模块加载期拿不到 umi 运行时 ⇒ 翻译器由这里（渲染期）注入。
+  //   ⚠️ 不要改回 `TAG_FIELD_PLACEHOLDER` / `TAG_FIELD_TOOLTIP` 那两个 identity 常量 ——
+  //   它们永远是中文，而 localePackParity 有一条判据专门盯"已接 i18n 的文件不许用 identity 常量取文案"。
   const intl = useIntl();
   const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   return (
@@ -22,8 +23,8 @@ export default function TagSelectField({ name, ...rest }) {
       name={name}
       id={name}
       label={t('common.colTags', '标签')}
-      placeholder={TAG_FIELD_PLACEHOLDER}
-      tooltip={TAG_FIELD_TOOLTIP}
+      placeholder={tagFieldPlaceholder(t)}
+      tooltip={tagFieldTooltip(t)}
       request={async () => {
         const msg = await getTags();
         return msg?.data?.map((item) => ({ label: item, value: item })) || [];

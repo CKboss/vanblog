@@ -15,16 +15,46 @@
  */
 const { formatDateTime } = require('./formatTime');
 
-const SCHEDULED_TAG_TEXT = '定时待发布';
+/**
+ * 🔴 多语言：**注入式翻译器**（与 accessPassword.js / coverBackfill.js / batch.ts / revisionCore.js 同一套模式）。
+ * 服务层是纯逻辑（模块加载期拿不到 umi 运行时）⇒ 翻译器由**组件在渲染期注入**。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前**逐字相同**（既有消费方与黄金样本一个字都不用改）。
+ * 🔴 SCREAMING_CASE 常量保留为**同一份文案的 identity 视图**（中文只有一份，在 defaultMessage 里）；
+ * 🔴 而且**函数体内不许再引用这些常量**（那就等于"注入了 t 也不生效"，localePackParity 有一条判据专门盯这件事）。
+ */
+function interpolate(template, values) {
+  if (!values) return String(template);
+  return String(template).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+  );
+}
+const IDENTITY_T = (id, defaultMessage, values) => interpolate(defaultMessage, values);
 
-const PUBLISH_AT_PLACEHOLDER = '留空 = 不定时（立即发布）';
+function scheduledTagText(t = IDENTITY_T) {
+  return t('schedule.tagText', '定时待发布');
+}
+const SCHEDULED_TAG_TEXT = scheduledTagText();
 
-const PUBLISH_AT_TOOLTIP =
-  '设置一个未来时间后，文章在到点之前对所有前台页面不可见（列表、搜索、RSS、sitemap 都不出现），' +
-  '到点后由服务端定时任务在一分钟内自动发布。清空此字段 = 取消定时（立即发布/保持已发布）。';
+function publishAtPlaceholder(t = IDENTITY_T) {
+  return t('schedule.publishAtPlaceholder', '留空 = 不定时（立即发布）');
+}
+const PUBLISH_AT_PLACEHOLDER = publishAtPlaceholder();
 
-const PUBLISH_AT_HELP =
-  '定时发布：到点之前这篇文章在前台完全不可见，服务端会在设定时刻起一分钟内自动把它发布出来。';
+function publishAtTooltip(t = IDENTITY_T) {
+  return t(
+    'schedule.publishAtTooltip',
+    '设置一个未来时间后，文章在到点之前对所有前台页面不可见（列表、搜索、RSS、sitemap 都不出现），到点后由服务端定时任务在一分钟内自动发布。清空此字段 = 取消定时（立即发布/保持已发布）。',
+  );
+}
+const PUBLISH_AT_TOOLTIP = publishAtTooltip();
+
+function publishAtHelp(t = IDENTITY_T) {
+  return t(
+    'schedule.publishAtHelp',
+    '定时发布：到点之前这篇文章在前台完全不可见，服务端会在设定时刻起一分钟内自动把它发布出来。',
+  );
+}
+const PUBLISH_AT_HELP = publishAtHelp();
 
 /**
  * 解析 publishAt 为毫秒时间戳；解析不了 → NaN。
@@ -107,25 +137,38 @@ function normalizePublishAtForSave(value) {
 }
 
 /** 列表/编辑器里的定时徽标文案：'定时待发布 · 2026-09-20 09:00:00'；没定时 → null。 */
-function describeScheduledTag(publishAt, now = Date.now()) {
+// 🔴 t 放在**第三位**（这个函数本来就有 now 这个可选参）⇒ 调用方写 `describeScheduledTag(x, undefined, t)`。
+//    ⚠️ 还没接 i18n 的消费方（`pages/Editor/index.jsx`）继续写 `describeScheduledTag(x)` ⇒ 逐字与今天相同。
+function describeScheduledTag(publishAt, now = Date.now(), t = IDENTITY_T) {
   if (!isScheduled(publishAt, now)) {
     return null;
   }
-  return `${SCHEDULED_TAG_TEXT} · ${formatDateTime(publishAt)}`;
+  return `${scheduledTagText(t)} · ${formatDateTime(publishAt)}`;
 }
 
 /** 选了过去时间的警告文案（Modal.confirm 的 content；确认后才继续保存）。 */
-function pastScheduleWarningText(publishAt, now = Date.now()) {
-  return (
-    `你选择的定时发布时间「${formatDateTime(publishAt)}」早于当前时间` +
-    `（${formatDateTime(new Date(now))}）。它不会处于「定时待发布」状态：` +
-    '保存后服务端会认为它已到期，未发布的文章会在一分钟内直接发布出去。仍要使用这个时间吗？'
+// 🔴 原来是"三段拼接 + 两个日期插值"⇒ 收成**一条带两个 ICU 占位符**的整句
+//    （英文语序不同，拼接式翻不对；这与 §7.152 B / §7.156 B 那两次"接缝缺陷"是同一家族的预防）
+function pastScheduleWarningText(publishAt, now = Date.now(), t = IDENTITY_T) {
+  return t(
+    'schedule.pastWarningText',
+    '你选择的定时发布时间「{when}」早于当前时间（{now}）。它不会处于「定时待发布」状态：保存后服务端会认为它已到期，未发布的文章会在一分钟内直接发布出去。仍要使用这个时间吗？',
+    { when: formatDateTime(publishAt), now: formatDateTime(new Date(now)) },
   );
 }
 
-const PAST_SCHEDULE_WARNING_TITLE = '定时时间早于当前时间';
+function pastScheduleWarningTitle(t = IDENTITY_T) {
+  return t('schedule.pastWarningTitle', '定时时间早于当前时间');
+}
+const PAST_SCHEDULE_WARNING_TITLE = pastScheduleWarningTitle();
 
 module.exports = {
+  IDENTITY_T,
+  scheduledTagText,
+  publishAtPlaceholder,
+  publishAtTooltip,
+  publishAtHelp,
+  pastScheduleWarningTitle,
   SCHEDULED_TAG_TEXT,
   PUBLISH_AT_PLACEHOLDER,
   PUBLISH_AT_TOOLTIP,

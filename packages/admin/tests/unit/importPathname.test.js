@@ -140,7 +140,9 @@ describe('pathnameFromFrontMatter (#383 / #487)', () => {
     );
 
     assert.match(fieldSrc, /PATHNAME_FIELD/);
-    assert.match(fieldSrc, /label=\{PATHNAME_FIELD\.label\}/);
+    // 🔴 期 7 第二批起 PathnameField 用**函数版**（传 t）⇒ 锚点换形状，性质没放（label 仍来自服务层那一份）
+    assert.match(fieldSrc, /label=\{F\.label\}/);
+    assert.match(fieldSrc, /pathnameField\(t\)/);
     assert.match(importSrc, /PathnameField/);
     assert.match(createSrc, /PathnameField/);
     assert.match(createSrc, /name="pathnameC"/);

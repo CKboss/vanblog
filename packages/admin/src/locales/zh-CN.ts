@@ -1075,4 +1075,26 @@ export default {
   'revision.restoreSnapshotAlt': '恢复前的内容也存成了新版本，可随时再恢复回来。',
   'revision.restoreSuccess': '已恢复到「{title}」{when}；{snapshot}',
 
+
+  // ── 🔴 期 7 第二批：**服务层字段常量**（tagTokens / importPathname / schedule，11 条）──
+  //    🔴 这批用的就是 §7.157 B 定下的形状：**函数版 + identity 视图**
+  //    （`tagFieldPlaceholder(t = IDENTITY_T)` + `const TAG_FIELD_PLACEHOLDER = tagFieldPlaceholder();`）。
+  //    ⚠️ `describeScheduledTag` / `pastScheduleWarningText` 本来就有 `now` 这个可选参 ⇒ t 放**第三位**，
+  //    调用方写 `describeScheduledTag(x, undefined, t)`；还没接 i18n 的 `pages/Editor/index.jsx` 继续写
+  //    `describeScheduledTag(x)` ⇒ 输出与今天逐字相同（登记在 NOT_YET_I18N_CONSUMERS 里）。
+  //    🔴 `pastScheduleWarningText` 原来是"三段拼接 + 两个日期插值"⇒ 收成**一条带两个 ICU 占位符**的整句
+  //    （拼接式在英文里必然出接缝问题，见 §7.152 B / §7.156 B / §7.160 C 那三次）。
+  //    🔴 这批做完，文章页/草稿页的**表单**里不再有服务层中文（只剩 exportFormats 那个导出下拉）。
+  'tagTokens.placeholder': '选择、输入或粘贴多个标签（逗号 / 分号 / 换行分隔）',
+  'tagTokens.tooltip': '可一次粘贴多个标签。用英文/中文逗号、分号或换行分隔；空格不会拆开，以便保留「machine learning」这类多词标签。',
+  'pathname.label': '自定义路径名',
+  'pathname.placeholder': '例如 Hugo 的 slug；留空则按标题生成拼音，而不是数字 id',
+  'pathname.tooltip': '发布后地址为 /post/[自定义路径名]，对应 Hugo 的 permalinks.post = "/post/:slug"。从 Hugo 迁移时把旧 slug 填到这里，可保持旧 URL、不影响 SEO。留空则按标题自动生成汉语拼音路径（重名依次追加 -2、-3，最后兜底 -文章id）；标题里没有可用字符时才退回数字 id。已填的别名不会随标题修改而变动，数字 id 地址始终可用；没有站点级固定链接模板。',
+  'schedule.tagText': '定时待发布',
+  'schedule.publishAtPlaceholder': '留空 = 不定时（立即发布）',
+  'schedule.publishAtTooltip': '设置一个未来时间后，文章在到点之前对所有前台页面不可见（列表、搜索、RSS、sitemap 都不出现），到点后由服务端定时任务在一分钟内自动发布。清空此字段 = 取消定时（立即发布/保持已发布）。',
+  'schedule.publishAtHelp': '定时发布：到点之前这篇文章在前台完全不可见，服务端会在设定时刻起一分钟内自动把它发布出来。',
+  'schedule.pastWarningText': '你选择的定时发布时间「{when}」早于当前时间（{now}）。它不会处于「定时待发布」状态：保存后服务端会认为它已到期，未发布的文章会在一分钟内直接发布出去。仍要使用这个时间吗？',
+  'schedule.pastWarningTitle': '定时时间早于当前时间',
+
 };

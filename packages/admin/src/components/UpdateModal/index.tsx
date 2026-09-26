@@ -1,13 +1,13 @@
 import { getAllCategories, updateArticle, updateDraft } from '@/services/van-blog/api';
 import { reportRequestError } from '@/services/van-blog/requestError';
 import {
-  PAST_SCHEDULE_WARNING_TITLE,
-  PUBLISH_AT_HELP,
-  PUBLISH_AT_PLACEHOLDER,
-  PUBLISH_AT_TOOLTIP,
   isPastSchedule,
   normalizePublishAtForSave,
   pastScheduleWarningText,
+  pastScheduleWarningTitle,
+  publishAtHelp,
+  publishAtPlaceholder,
+  publishAtTooltip,
 } from '@/services/van-blog/schedule';
 import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormSwitch, ProFormText } from '@ant-design/pro-form';
 import { Form, message, Modal } from 'antd';
@@ -169,8 +169,8 @@ export default function (props: {
           if (values?.publishAt && isPastSchedule(values?.publishAt)) {
             const proceed = await new Promise<boolean>((resolve) => {
               Modal.confirm({
-                title: PAST_SCHEDULE_WARNING_TITLE,
-                content: pastScheduleWarningText(values?.publishAt),
+                title: pastScheduleWarningTitle(t),
+                content: pastScheduleWarningText(values?.publishAt, undefined, t),
                 okText: t('common.okSaveAnyway', '仍要保存'),
                 cancelText: t('common.cancelGoBack', '回去改时间'),
                 onOk: () => resolve(true),
@@ -346,10 +346,10 @@ export default function (props: {
             name="publishAt"
             id="publishAt"
             label={t('common.scheduledPublish', '定时发布')}
-            placeholder={PUBLISH_AT_PLACEHOLDER}
-            tooltip={PUBLISH_AT_TOOLTIP}
+            placeholder={publishAtPlaceholder(t)}
+            tooltip={publishAtTooltip(t)}
             formItemProps={{
-              extra: PUBLISH_AT_HELP,
+              extra: publishAtHelp(t),
             }}
             showTime={{
               defaultValue: moment('00:00:00', 'HH:mm:ss'),

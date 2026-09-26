@@ -1003,4 +1003,20 @@ export default {
   'revision.restoreSnapshotAlt': 'The content from before the restore was also saved as a new revision, so you can restore it back at any time.',
   'revision.restoreSuccess': 'Restored to "{title}"{when}. {snapshot}',
 
+
+  // ── 🔴 期 7 第二批（11 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `Hugo` / `slug` / `SEO` / `URL` / `/post/` / `:slug` / `RSS` / `sitemap` / `permalinks.post` /
+  //    `machine learning` 都是技术标识符，三份包原样保留（闸门会查）。
+  'tagTokens.placeholder': 'Choose, type or paste several tags (separate with commas, semicolons or new lines)',
+  'tagTokens.tooltip': 'You can paste several tags at once. Separate them with commas, semicolons or new lines (either script); spaces do not split, so multi-word tags such as "machine learning" stay intact.',
+  'pathname.label': 'Custom path name',
+  'pathname.placeholder': 'For example the slug from Hugo; leave empty to generate a pinyin path from the title instead of a numeric id',
+  'pathname.tooltip': 'After publishing, the address is /post/[custom path name], which matches permalinks.post = "/post/:slug" in Hugo. When migrating from Hugo, put the old slug here to keep the old URL and its SEO. Leave empty to generate a pinyin path from the title automatically (duplicates get -2, -3 and finally -post id); it falls back to the numeric id only when the title has no usable characters. A path name that is already set does not change when the title changes, and the numeric id address always works; there is no site-level permalink template.',
+  'schedule.tagText': 'Scheduled',
+  'schedule.publishAtPlaceholder': 'Leave empty = not scheduled (publish immediately)',
+  'schedule.publishAtTooltip': 'After you set a future time, the post is invisible to every public page (list, search, RSS and sitemap) until that time; a server cron job publishes it within a minute after it. Clearing this field = cancel the schedule (publish immediately, or keep it published).',
+  'schedule.publishAtHelp': 'Scheduled publishing: before the set time this post is completely invisible on the site, and the server publishes it within a minute of that time.',
+  'schedule.pastWarningText': 'The scheduled time you chose, {when}, is earlier than the current time ({now}). It will not be in the scheduled state: after saving, the server treats it as due and publishes an unpublished post within a minute. Do you still want to use this time?',
+  'schedule.pastWarningTitle': 'The scheduled time is in the past',
+
 };

@@ -136,9 +136,10 @@ describe('UpdateModal 接线（源码断言，已剔除注释）', () => {
     assert.match(comp, /name="publishAt"/);
     // 🔴 期 5 第六批起标签走 t()：锚点换成**新形状**（key + zh-CN defaultMessage 一起钉），性质没放
     assert.match(comp, /label=\{t\('common\.scheduledPublish', '定时发布'\)\}/);
-    assert.match(comp, /placeholder=\{PUBLISH_AT_PLACEHOLDER\}/);
-    assert.match(comp, /tooltip=\{PUBLISH_AT_TOOLTIP\}/);
-    assert.match(comp, /extra: PUBLISH_AT_HELP/);
+    // 🔴 期 7 第二批起这三处用**函数版**（传 t）⇒ 锚点换形状，性质没放
+    assert.match(comp, /placeholder=\{publishAtPlaceholder\(t\)\}/);
+    assert.match(comp, /tooltip=\{publishAtTooltip\(t\)\}/);
+    assert.match(comp, /extra: publishAtHelp\(t\)/);
     assert.match(comp, /allowClear: true/);
     // 只在 type == 'article' 分支里渲染（草稿没有定时发布）
     const articleBlock = comp.slice(comp.indexOf("{type == 'article' && ("));
@@ -160,8 +161,8 @@ describe('UpdateModal 接线（源码断言，已剔除注释）', () => {
 
   it('过去的时间：先 Modal.confirm 警告，用户取消则不保存（返回 false 弹窗留着）', () => {
     assert.match(comp, /if \(values\?\.publishAt && isPastSchedule\(values\?\.publishAt\)\)/);
-    assert.match(comp, /title: PAST_SCHEDULE_WARNING_TITLE/);
-    assert.match(comp, /content: pastScheduleWarningText\(values\?\.publishAt\)/);
+    assert.match(comp, /title: pastScheduleWarningTitle\(t\)/);
+    assert.match(comp, /content: pastScheduleWarningText\(values\?\.publishAt, undefined, t\)/);
     // 🔴 期 5 第六批起两个按钮文案走 t()：锚点换成新形状（key + 中文默认值一起钉），性质没放
     assert.match(comp, /okText: t\('common\.okSaveAnyway', '仍要保存'\)/);
     assert.match(comp, /cancelText: t\('common\.cancelGoBack', '回去改时间'\)/);
@@ -176,7 +177,7 @@ describe('文章列表接线：定时文章必须显眼、不能被误认为已�
     // 🔴 期 5 第八批起列标题走 t()：锚点换成新形状（key + zh-CN defaultMessage 一起钉），性质没放
     assert.match(cols, /title: t\('common\.scheduledPublish', '定时发布'\)/);
     assert.match(cols, /dataIndex: 'publishAt'/);
-    assert.match(cols, /describeScheduledTag\(record\?\.publishAt\)/);
+    assert.match(cols, /describeScheduledTag\(record\?\.publishAt, undefined, t\)/);
     assert.match(cols, /<Tag color="orange" data-article-scheduled-tag=/);
     // 列在桌面与小屏的 keys 里都开着
     assert.match(cols, /articleKeys = \[[^\]]*'publishAt'/);

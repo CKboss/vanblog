@@ -194,6 +194,15 @@ const BUDGET = {
   //   （实测：迁移后那 27 条测试全绿，一个字都没改）。
   'src/components/RevisionHistory/index.jsx': 0,
   'src/components/RevisionHistory/revisionCore.js': 0,
+  // 🔴 期 7 第二批（2026-09-26）：**服务层字段常量**三个模块 ⇒ 都预算 0。
+  //   形状 = §7.157 B 定下的"函数版 + identity 视图"；`PathnameField` 顺带接上 i18n（它本来 0 条，
+  //   但文案全部来自 `PATHNAME_FIELD` ⇒ 也必须在这里挂个 0，免得下一个人以为它没接）。
+  //   ⚠️ `pages/Editor/index.jsx` 仍调 `describeScheduledTag(x)`（不传 t）⇒ 走 identity、逐字与今天相同，
+  //   已登记在 localePackParity 的 NOT_YET_I18N_CONSUMERS 里（Editor 那批落地时要传 t 并从表里删掉）。
+  'src/services/van-blog/tagTokens.js': 0,
+  'src/services/van-blog/importPathname.js': 0,
+  'src/services/van-blog/schedule.js': 0,
+  'src/components/PathnameField/index.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -320,7 +329,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 51, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 55, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

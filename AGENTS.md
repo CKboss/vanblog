@@ -9469,6 +9469,93 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.161 期 7 第二批：服务层字段常量（tagTokens / importPathname / schedule，15 条）—— 🔴 变异对照**打不红两次**，当场补了两条判据
+
+**交付**：`services/van-blog/tagTokens.js`(2) + `importPathname.js`(3) + `schedule.js`(10) = **15 条 → 0**；
+消费方接线 `TagSelectField` / 🔴 **`PathnameField`（新接 i18n）** / `UpdateModal` / `pages/Article/columns.jsx`；
+语言包 **804 → 815 key**（新组 **`tagTokens` / `pathname` / `schedule`**）；棘轮清单 **51 → 55 个文件**（TOTAL 仍 53）；
+`i18nKeyNaming` → **815**；`localePackParity` 自动发现下界 **48 → 51 个文件 / 1030 → 1040 个调用点**（实测 51 / 1045）。
+🔴 **浏览器活体 30/30（zh-CN 9 + en-US 11 + zh-TW 10），problems 0、skipped 0**：
+新建文章弹窗的 **12 个标签** + 标签字段的 placeholder/tooltip + 自定义路径名的 label/placeholder；
+「修改信息」（article 模式）的 **13 个标签** + 定时发布的 placeholder/**tooltip（服务层）** + 密码提示（accessPassword）；
+🔴 en-US 两个弹窗**零汉字**、zh-TW **零简体专用字**。
+🔴 这一批做完，**文章页 / 草稿页的表单里不再有服务层中文**（只剩 `exportFormats` 那个导出下拉）。
+证据：`vanblog_dev/i18n-browser-evidence/phase7-service-fields/`。
+
+#### A. 形状与两个必须记住的细节
+- 三个模块都按 §7.157 B 的"**函数版 + identity 视图**"接（`tagFieldPlaceholder(t = IDENTITY_T)` +
+  `const TAG_FIELD_PLACEHOLDER = tagFieldPlaceholder();`）⇒ 既有消费方与黄金样本**一个字都不用改**
+  （`tagTokens.test.js` / `importPathname.test.js` / `scheduledPublish.test.js` 的**值断言**全绿，只有 7 处**形状锚点**跟着换）。
+- 🔴 `describeScheduledTag` / `pastScheduleWarningText` 本来就有 `now` 这个可选参 ⇒ **t 放第三位**，
+  调用方写 `describeScheduledTag(x, undefined, t)`；未接 i18n 的 `pages/Editor/index.jsx` 继续写 `describeScheduledTag(x)`
+  ⇒ 逐字与今天相同（已登记进 `NOT_YET_I18N_CONSUMERS`）。
+- 🔴 `pastScheduleWarningText` 原来是"三段拼接 + 两个日期插值" ⇒ **收成一条带两个 ICU 占位符的整句**
+  （拼接式在英文里必然出接缝问题：§7.152 B / §7.156 B / §7.160 C 已经三次）。
+- ⚠️ 🔴 **"接了 i18n 但不持有文案"的文件**：`PathnameField` 自己没有任何字面量 `t()` 调用点（文案全来自
+  `pathnameField(t)`）⇒ "自动发现"（判据 = 抽得到 t() 调用点）**找不到它**，这是对的。
+  它的文案由 `importPathname.js` 那条对账覆盖，它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
+  👉 一个文件可以"接了 i18n 但不持有文案"，**两份守卫各管一段，别把它们混成一条判据**
+  （第一版把它加进"必须被自动发现"的清单 ⇒ 假红；同时"wired"的判据也补了 `const t =` 这一形状）。
+
+#### B. 🔴 变异对照 B22-M1 **打不红** ⇒ 补判据①：已接 i18n 的文件不许从 identity 常量取文案
+M1 把 `placeholder={tagFieldPlaceholder(t)}` 改回 `placeholder={TAG_FIELD_PLACEHOLDER}`，**全绿**。
+后果很具体：那个字段的占位符**永远是中文** —— 不报错、类型检查过、单测（走 identity）也绿，
+只有活体切到 en-US 才看得出来；而上一批那条"每个调用点都要传 t"**看不见它**（那里根本没有函数调用，只是引用了一个常量）。
+⇒ 新判据：登记每个模块的 identity 常量名，在**已接 i18n**（wired）的文件里出现即红。
+两个例外都写死在判据里：① **定义模块自己**（identity 视图 + `module.exports`）；② `X.name` 这种**表单字段名**
+（与服务端 DTO 逐字一致的契约，本来就不该翻译 —— `PathnameField` 的默认参 `name = PATHNAME_FIELD.name` 就是这一类）。
+⚠️ 顺带发现一条**陈旧注释**：`TagSelectField` 里还写着"下面用的是 `TAG_FIELD_PLACEHOLDER` ⇒ 本轮不动、英文下仍是中文"
+（那是期 5 的中间态说明）⇒ 已改成现状，并把"不要改回常量"写进去（🔴 注释与代码不符比没注释更危险）。
+🔴 改完之后 M1 红了（红在新判据上）✓。
+
+#### C. 🔴 变异对照 B22-M3 **打不红** ⇒ 补判据②：defaultMessage 里每个占位符都必须在 values 实参里给到
+M3 把 `pastScheduleWarningText` 的 values 里那个 `now` 拿掉，**全绿**。
+后果：界面上会渲染出**字面的 `{now}`**（react-intl 对缺失的 value 就是这么处理的），三种语言一样难看。
+为什么以前没人管：占位符与 values 的一致性此前只在**生成语言包的一次性脚本**里查过（那不是仓库里的守卫）。
+⇒ 新判据（AST）：对每个 `t(...)` / `formatMessage(...)` 调用点，从**字面量** defaultMessage 抽占位符名，
+与 values 实参（字面量对象）的 key 对账；values 不是字面量对象的记进"无法静态核验"清单
+（🔴 现在**恰好为空**，多一处就要登记，别让它悄悄变长）。配套一条**合成反证**：
+漏喂 / 部分喂 / ICU plural / 无占位符 / 双花括号 / 混合形状，六种输入分别判定正确。
+🔴 改完之后 M3 红了 ✓。
+
+#### D. 🔴 新判据②第一次跑就报了一处**假红** —— ICU 的**第二种**转义形状
+`siteInfo.friendLinkApplyContent.tooltip` 被报"有占位符 siteName/description/url/logo 但没喂值"。
+实采那条文案：`可用占位符 {{siteName}}、{{description}}、{{url}}、{{logo}} 插入本站信息。`
+🔴 **双花括号是 ICU 的转义**，意思是"给用户看字面的 `{siteName}`" —— 这条 tooltip 正是在**教站长**站点自己的占位符语法，
+它**本来就不该**有 values 实参。判据已修：先把 `{{`/`}}` 挖掉再匹配占位符，并把这一形状加进合成反证。
+👉 🔴 **规矩：ICU 有两种形状会让朴素的 `\{name\}` 正则出错** ——
+① `{k, plural, one {# …} other {# …}}` 的子消息（本项目已误报 3 次）；② **`{{name}}` 转义**（这次）。
+写占位符相关的判据前，先把这两种都放进**反证集合**。
+
+#### E. 🔴 测量口径的一个坑：`node --test` 的 TAP 汇总会在"套件级失败"时仍报 `fail 0`
+本轮加判据时我把 `describe` 写坏了（`discoverI18nFiles()` 少传目录参数 ⇒ 套件在**加载期**抛错），
+而 TAP 汇总是 `# tests 47 / # pass 47 / # fail 0` —— 🔴 **只有 `not ok N - <套件名>` 那行暴露了问题**
+（`failureType: 'subtestsFailed'`：套件里的 `it` 一个都没跑，所以计数不变）。
+👉 🔴 **规矩：判"admin 单测全绿"必须看 `node --test` 的**退出码**（或 `grep -c '^not ok'`），不能只看 `# fail`。**
+（矩阵脚本一直按 rc 判 ⇒ 没有假绿进过账；但我这几轮**手工复述基线**时用的是 `# fail`，这次差点被骗。）
+
+#### F. 探针尺子错一处（同一个坑的**第 4 次**）
+标签字段的 placeholder 用 `input[placeholder]` 采不到 —— 它是 **Select（mode="tags"）**，
+占位符在 `.ant-select-selection-placeholder` 里。同一个坑第 4 次（水印表单、自定义页面、批量导入、这次）
+⇒ 已写死在探针里：**凡是 antd Select 的占位符，都要采 `.ant-select-selection-placeholder`**。
+
+#### G. 基线
+- admin `node --test` **758 tests / 168 suites / 0 fail**（+3 = 两条新判据 + 它们的合成反证）；i18n 守卫组 **108**；
+- 变异对照 **7/7**（🔴 两条是"打不红 ⇒ 当场补判据"的那两个 / PathnameField 用回 identity 视图 /
+  函数体内引用 identity 常量 / defaultMessage 改动 / UpdateModal 漏传尾参 t / 语义空操作）；
+- 语言包 **815 key** ×3；`--zh-tw-audit`：815 key / **711** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **55 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（`PathnameField` 是新接 i18n 的 `.jsx`，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **758/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.dffd5f22.js` = **1,529,373 B**）；
+- 🔴 **真实剩余：75 → 72 个文件 / 967 → 952 条**；文章页表面只剩 **47 条 / 8 个文件**（全是服务层模块）。
+- 🔴 **下一批**：① `exportFormats.js`(30) —— 导出下拉的三项标签/说明 + 导出结果那段**多子句汇总**
+  （11 个模板片段，是本批 `pastScheduleWarningText` 那个"收成整句"手法的放大版）；
+  ② `exportMarkdown.tsx`(7) / `requestError.js`(4) / `relativeTime.js`(5) / `formatTime.js`(1) / `check.ts`(1) /
+  `parseMarkdownFile.jsx`(2) ⇒ 服务层就只剩 `importMdzCore`(23) 与 `commentAdmin`(11)；
+  ③ `pages/Editor/**`（最大，143 条 / 15 文件）；④ `DataManage/**`(134) / `CommentManage`(71)；
+  ⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.160 期 5 第十批：历史版本（抽屉 + `revisionCore.js`，47 条）—— 🔴 活体抓到"注入了 t 却引用 identity 常量"这个**守卫看不见**的缺陷，而它上一批就已经在库里
 
 **交付**：`components/RevisionHistory/index.jsx`(21) + `components/RevisionHistory/revisionCore.js`(26)

@@ -329,12 +329,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 48,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 48）⇒ 遍历或解析器坏了`,
+      FILES.length >= 51,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 51）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1030,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1030）⇒ 疑似解析器坏了`,
+      calls.length >= 1040,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1040）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -380,6 +380,13 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/coverBackfill.js',
       'src/components/RevisionHistory/index.jsx',
       'src/components/RevisionHistory/revisionCore.js',
+      'src/services/van-blog/tagTokens.js',
+      'src/services/van-blog/importPathname.js',
+      'src/services/van-blog/schedule.js',
+      // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
+      //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
+      //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
+      //    👉 一个文件可以"接了 i18n 但不持有文案"，两份守卫各管一段，别把它们混成一条判据。
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -663,6 +670,13 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         'summarizeBackfill', 'normalizeBackfillItems', 'emptyResultText',
       ],
       // 🔴 期 5 第十批：历史版本的纯逻辑模块（7 个常量函数 + 9 个产文案函数）
+      // 🔴 期 7 第二批：三个服务层字段常量模块（函数版 + identity 视图）
+      'src/services/van-blog/tagTokens.js': ['tagFieldPlaceholder', 'tagFieldTooltip'],
+      'src/services/van-blog/importPathname.js': ['pathnameField'],
+      'src/services/van-blog/schedule.js': [
+        'scheduledTagText', 'publishAtPlaceholder', 'publishAtTooltip', 'publishAtHelp',
+        'pastScheduleWarningTitle', 'describeScheduledTag', 'pastScheduleWarningText',
+      ],
       'src/components/RevisionHistory/revisionCore.js': [
         'featureOffText', 'emptyText', 'detailEmptyContentText', 'revisionReasonLabels',
         'revisionRestoreOkText', 'revisionRestoreConfirmContent', 'revisionRestoreNotAppliedText',
@@ -691,6 +705,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/DataManage/tabs/Category.jsx',
       // 🔴 `NewArticleModal` 本轮已接 i18n（并把 t 传给了 accessPassword 的函数）⇒ **从这张表删掉**
       //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
+      // 🔴 期 7 第二批新增：Editor 调 `describeScheduledTag(x)`（还没接 i18n ⇒ 走 identity，逐字与今天相同）
+      'src/pages/Editor/index.jsx',
     ];
     // 🔴 每个 it 都有自己的作用域：上一版直接用了**别的 it 里**定义的 stripComments ⇒ ReferenceError。
     const noComments = (x) =>
@@ -726,7 +742,11 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       const raw = readFileSync(abs, 'utf8');
       const isDefiningModule = rel in INJECTED;
       // 🔴 "wired" = 这个文件里**自己声明/使用了翻译器**（有 t() 调用点）
-      const wired = astInventory.collectTCalls(raw, rel).length > 0;
+      // 🔴 "wired" 不能只看 collectTCalls：`PathnameField` 的文案全部来自服务层函数（`pathnameField(t)`），
+      //    它自己**没有**字面量 t() 调用点 ⇒ collectTCalls 返回 0，但它明明声明了翻译器
+      //    ⇒ 补一条"文件里声明了 `const t =`"也算 wired（否则它会被误当成"未接 i18n 的消费方"）。
+      const wired =
+        astInventory.collectTCalls(raw, rel).length > 0 || /const\s+t\s*=/.test(noComments(raw));
       if (!wired && !isDefiningModule) {
         // 尚未接 i18n 的文件：只统计它有没有调用这些函数（有就必须登记在表里）
         const names = Object.values(INJECTED).flat();
@@ -1414,4 +1434,192 @@ describe('尺子有效性反证（合成输入，不碰真实语言包）', () =
     assert.ok([...'設定'].some((c) => SIMPLIFIED_ONLY.includes(c)) === false, '合法繁体不该被报');
     assert.ok([...'设置'].some((c) => SIMPLIFIED_ONLY.includes(c)) === true, '简体必须被报');
   });
+
+// 🔴🔴 期 7 第二批新增的两条判据（都是**变异对照打不红**⇒ 当场暴露的守卫盲区，见 §7.161 B/C）
+describe('多语言：占位符与 identity 常量这两个"静默失效"的坑', () => {
+  // 🔴 与上面那些判据**同一份**覆盖面（自动发现），不要另起一套遍历口径
+  const FILES = discoverI18nFiles(path.join(adminRoot, 'src'), [])
+    .map((abs) => path.relative(adminRoot, abs).split(path.sep).join('/'))
+    .filter((rel) => rel.startsWith('src/'));
+  const read = (rel) => readFileSync(path.join(adminRoot, rel), 'utf8');
+
+  const placeholdersOf = (dm) => {
+    const names = new Set();
+    // 🔴 ICU 有**两种**形状会让朴素的 `\{name\}` 正则出错，都要排掉（本项目两种都实测踩过）：
+    //    ① `{count, plural, one {# post} other {# posts}}` —— 子消息里的 `{# …}` 没有标识符，天然不会误认；
+    //    ② 🔴 **双花括号** `{{siteName}}` 是 ICU 的转义，意思是"给用户看字面的 {siteName}"
+    //       （`siteInfo.friendLinkApplyContent.tooltip` 就是这么写的：它是在**教站长**站点自己的占位符语法）。
+    //       第一版把它当成"没喂值的占位符"报了假红 ⇒ 先把 `{{`/`}}` 挖掉再匹配。
+    const masked = String(dm).replace(/\{\{|\}\}/g, '\u0000');
+    for (const m of masked.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\s*[,}]/g)) names.add(m[1]);
+    return names;
+  };
+
+  it('🔴 t() 调用点的 defaultMessage 里每个占位符都必须在 values 实参里给到（否则界面渲染出字面 {now}）', () => {
+    const offenders = [];
+    const unverifiable = [];
+    for (const rel of FILES) {
+      const ast = astInventory.parseSource(read(rel), rel);
+      const walk = (nd) => {
+        if (!nd || typeof nd !== 'object') return;
+        if (
+          nd.type === 'CallExpression' && nd.callee && nd.callee.type === 'Identifier' &&
+          (nd.callee.name === 't' || nd.callee.name === 'formatMessage')
+        ) {
+          const args = nd.arguments || [];
+          const line = nd.loc ? nd.loc.start.line : '?';
+          let id = null;
+          let dm = null;
+          let valuesNode = null;
+          const a0 = args[0];
+          if (a0 && a0.type === 'ObjectExpression') {
+            for (const pr of a0.properties || []) {
+              const k = pr.key && (pr.key.name || pr.key.value);
+              if (k === 'id' && pr.value && pr.value.type === 'StringLiteral') id = pr.value.value;
+              if (k === 'defaultMessage' && pr.value && pr.value.type === 'StringLiteral') dm = pr.value.value;
+            }
+            valuesNode = args[1];
+          } else if (a0 && a0.type === 'StringLiteral') {
+            id = a0.value;
+            if (args[1] && args[1].type === 'StringLiteral') dm = args[1].value;
+            valuesNode = args[2];
+          }
+          if (typeof dm === 'string') {
+            const names = placeholdersOf(dm);
+            if (names.size) {
+              if (!valuesNode) {
+                offenders.push(`${rel}:${line} ${id} 有占位符 ${[...names].join(',')}，但**没有** values 实参`);
+              } else if (valuesNode.type === 'ObjectExpression') {
+                const keys = new Set(
+                  (valuesNode.properties || [])
+                    .map((pr) => (pr.key ? pr.key.name || pr.key.value : null))
+                    .filter(Boolean),
+                );
+                const missing = [...names].filter((n) => !keys.has(n));
+                if (missing.length) {
+                  offenders.push(`${rel}:${line} ${id} 的占位符 ${missing.join(',')} 在 values 实参里**没给**（界面上会渲染出字面 {${missing[0]}}）`);
+                }
+              } else {
+                unverifiable.push(`${rel}:${line} ${id}（values 实参是 ${valuesNode.type}，不是字面量对象）`);
+              }
+            }
+          }
+        }
+        for (const k of Object.keys(nd)) {
+          if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+          const v = nd[k];
+          if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walk(x));
+          else if (v && typeof v === 'object' && v.type) walk(v);
+        }
+      };
+      walk(ast.program);
+    }
+    assert.deepStrictEqual(offenders, [], '🔴 这些调用点的占位符没被喂值（界面上会渲染出字面 {名字}）');
+    // 🔴 "判据看不见的那些"必须**恰好**是钉住的这几处：多一处 ⇒ 判据在退化（有人把 values 写成了变量/展开）
+    assert.deepStrictEqual(unverifiable, [], '无法静态核验的 values 实参（应当为空；有就逐个改成字面量对象或登记在此）');
+  });
+
+  it('🔴 尺子反证：漏喂占位符 / 多喂一个 / ICU plural 都必须被正确判定（证明判据真的在判）', () => {
+    const src = [
+      "const a = t('x.missing', '已撤销 {count} 篇');",
+      "const b = t('x.partial', '{when} 与 {now}', { when: 1 });",
+      "const c = t('x.ok', '{count} 篇', { count: 1 });",
+      "const d = t('x.plural', '{count, plural, one {# post} other {# posts}}', { count: 1 });",
+      "const e = t('x.none', '没有占位符');",
+    ].join('\n');
+    const found = [];
+    const ast = astInventory.parseSource(src, 'synthetic.jsx');
+    const walk = (nd) => {
+      if (!nd || typeof nd !== 'object') return;
+      if (nd.type === 'CallExpression' && nd.callee && nd.callee.name === 't') {
+        const dm = nd.arguments[1] && nd.arguments[1].value;
+        const names = placeholdersOf(dm);
+        const vals = nd.arguments[2];
+        const keys = vals && vals.type === 'ObjectExpression'
+          ? new Set((vals.properties || []).map((pr) => pr.key.name || pr.key.value))
+          : new Set();
+        const missing = [...names].filter((n) => !keys.has(n));
+        // 🔴 只比"漏了哪些占位符"（判据要验的性质），不要比 defaultMessage 的截断片段 ——
+        //    第一版比了 `dm.slice(0,12)`，结果被"中文字符数 vs 字节数"这种与性质无关的细节绊红了一次
+        if (missing.length) found.push(missing.join(','));
+      }
+      for (const k of Object.keys(nd)) {
+        if (k === 'loc') continue;
+        const v = nd[k];
+        if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walk(x));
+        else if (v && typeof v === 'object' && v.type) walk(v);
+      }
+    };
+    walk(ast.program);
+    assert.deepStrictEqual(found, ['count', 'now']);
+    // 🔴 反证另一半：两种 ICU 转义形状都**不许**被当成占位符（否则就是假红）
+    assert.deepStrictEqual([...placeholdersOf('{count, plural, one {# post} other {# posts}}')], ['count']);
+    assert.deepStrictEqual([...placeholdersOf('没有占位符')], []);
+    // ② 双花括号 = "给用户看字面的 {name}"（实测：友链页底部文案那条 tooltip 就是这么写的）
+    assert.deepStrictEqual(
+      [...placeholdersOf('可用占位符 {{siteName}}、{{url}} 插入本站信息。')],
+      [],
+      '🔴 `{{name}}` 是 ICU 转义、不是占位符；把它当占位符就会报"没喂值"的假红',
+    );
+    // 混合形状：真占位符要认出来，转义的要放过
+    assert.deepStrictEqual([...placeholdersOf('已为 {count} 篇文章补上封面（模板 {{slug}}）')], ['count']);
+  });
+
+  it('🔴 已接 i18n 的文件不许再从 **identity 常量**取文案（那等于"注入了 t 也不生效"）', () => {
+    // ## 为什么要有这条（2026-09-26 期 7 第二批，变异对照 B22-M1 打不红 ⇒ 当场补的）
+    // 服务层模块的文案现在是"函数版 + identity 视图"两份：`tagFieldPlaceholder(t)` 与
+    // `const TAG_FIELD_PLACEHOLDER = tagFieldPlaceholder()`。🔴 组件如果还用**常量**那份，
+    // 文案就永远是模块加载期的中文 —— 不报错、类型检查也过、单测（走 identity）也绿，
+    // 只有活体切到 en-US 才看得出来。上一批"每个调用点都要传 t"那条判据**看不见它**
+    // （那里根本没有函数调用，只是引用了一个常量）。
+    const IDENTITY_CONSTANTS = {
+      'src/services/van-blog/tagTokens.js': ['TAG_FIELD_PLACEHOLDER', 'TAG_FIELD_TOOLTIP'],
+      'src/services/van-blog/importPathname.js': ['PATHNAME_FIELD'],
+      'src/services/van-blog/schedule.js': [
+        'SCHEDULED_TAG_TEXT', 'PUBLISH_AT_PLACEHOLDER', 'PUBLISH_AT_TOOLTIP', 'PUBLISH_AT_HELP',
+        'PAST_SCHEDULE_WARNING_TITLE',
+      ],
+      'src/services/van-blog/coverBackfill.js': ['EMPTY_RESULT_TEXT'],
+      'src/components/RevisionHistory/revisionCore.js': [
+        'FEATURE_OFF_TEXT', 'EMPTY_TEXT', 'DETAIL_EMPTY_CONTENT_TEXT', 'REVISION_REASON_LABELS',
+        'REVISION_RESTORE_OK_TEXT', 'REVISION_RESTORE_CONFIRM_CONTENT', 'REVISION_RESTORE_NOT_APPLIED_TEXT',
+      ],
+      'src/services/van-blog/accessPassword.js': [
+        'PASSWORD_UNRECOVERABLE_WARNING', 'CLEAR_PASSWORD_LABEL', 'CLEAR_PASSWORD_TOOLTIP', 'PRIVATE_TOGGLE_HINT',
+      ],
+      'src/components/CoverImageField/index.jsx': ['COVER_FIELD'],
+    };
+    const ALL = new Set(Object.values(IDENTITY_CONSTANTS).flat());
+    const DEFINING = new Set(Object.keys(IDENTITY_CONSTANTS));
+    const offenders = [];
+    for (const rel of FILES) {
+      if (DEFINING.has(rel)) continue; // 定义模块自己合法（identity 视图 + module.exports）
+      const raw = read(rel);
+      const wired = astInventory.collectTCalls(raw, rel).length > 0 || /const\s+t\s*=/.test(raw);
+      if (!wired) continue; // 🔴 还没接 i18n 的消费方走 identity 是**预期**（登记在 NOT_YET_I18N_CONSUMERS 里）
+      const ast = astInventory.parseSource(raw, rel); // AST 天然不含注释 ⇒ 说明性注释里提到常量名不算
+      const walk = (nd, parent) => {
+        if (!nd || typeof nd !== 'object') return;
+        if (nd.type === 'ImportDeclaration') return; // import 列表里的标识符不是"取文案"
+        if (nd.type === 'Identifier' && ALL.has(nd.name)) {
+          // ⚠️ 唯一例外：`PATHNAME_FIELD.name` 这类**表单字段名**（与服务端 DTO 逐字一致的契约，本来就不该翻译）
+          const isFieldName =
+            parent && parent.type === 'MemberExpression' && parent.object === nd &&
+            parent.property && (parent.property.name === 'name' || parent.property.value === 'name');
+          if (!isFieldName) {
+            offenders.push(`${rel}:${nd.loc ? nd.loc.start.line : '?'} 用了 identity 常量 ${nd.name}（应改成函数版并传 t）`);
+          }
+        }
+        for (const k of Object.keys(nd)) {
+          if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+          const v = nd[k];
+          if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walk(x, nd));
+          else if (v && typeof v === 'object' && v.type) walk(v, nd);
+        }
+      };
+      walk(ast.program, null);
+    }
+    assert.deepStrictEqual(offenders, [], '🔴 这些地方从 identity 常量取文案 ⇒ 注入了 t 也不会跟随语言');
+  });
+});
 });

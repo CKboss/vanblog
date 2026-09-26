@@ -19,13 +19,34 @@
  * used by the existing importer.
  */
 
-const PATHNAME_FIELD = Object.freeze({
-  name: 'pathname',
-  label: '自定义路径名',
-  placeholder: '例如 Hugo 的 slug；留空则按标题生成拼音，而不是数字 id',
-  tooltip:
-    '发布后地址为 /post/[自定义路径名]，对应 Hugo 的 permalinks.post = "/post/:slug"。从 Hugo 迁移时把旧 slug 填到这里，可保持旧 URL、不影响 SEO。留空则按标题自动生成汉语拼音路径（重名依次追加 -2、-3，最后兜底 -文章id）；标题里没有可用字符时才退回数字 id。已填的别名不会随标题修改而变动，数字 id 地址始终可用；没有站点级固定链接模板。',
-});
+/**
+ * 🔴 多语言：**注入式翻译器**（与 accessPassword.js / coverBackfill.js / batch.ts / revisionCore.js 同一套模式）。
+ * 服务层是纯逻辑（模块加载期拿不到 umi 运行时）⇒ 翻译器由**组件在渲染期注入**。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前**逐字相同**（既有消费方与黄金样本一个字都不用改）。
+ * 🔴 SCREAMING_CASE 常量保留为**同一份文案的 identity 视图**（中文只有一份，在 defaultMessage 里）；
+ * 🔴 而且**函数体内不许再引用这些常量**（那就等于"注入了 t 也不生效"，localePackParity 有一条判据专门盯这件事）。
+ */
+function interpolate(template, values) {
+  if (!values) return String(template);
+  return String(template).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+  );
+}
+const IDENTITY_T = (id, defaultMessage, values) => interpolate(defaultMessage, values);
+
+/** 🔴 "导出对象字面量"这一类的标准接法（§7.156 A / §7.157 B）：函数版 + identity 视图。 */
+function pathnameField(t = IDENTITY_T) {
+  return Object.freeze({
+    name: 'pathname',
+    label: t('pathname.label', '自定义路径名'),
+    placeholder: t('pathname.placeholder', '例如 Hugo 的 slug；留空则按标题生成拼音，而不是数字 id'),
+    tooltip: t(
+      'pathname.tooltip',
+      '发布后地址为 /post/[自定义路径名]，对应 Hugo 的 permalinks.post = "/post/:slug"。从 Hugo 迁移时把旧 slug 填到这里，可保持旧 URL、不影响 SEO。留空则按标题自动生成汉语拼音路径（重名依次追加 -2、-3，最后兜底 -文章id）；标题里没有可用字符时才退回数字 id。已填的别名不会随标题修改而变动，数字 id 地址始终可用；没有站点级固定链接模板。',
+    ),
+  });
+}
+const PATHNAME_FIELD = pathnameField();
 
 function asPathname(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -96,6 +117,8 @@ function pathnameFromFrontMatter(attributes) {
 }
 
 module.exports = {
+  IDENTITY_T,
+  pathnameField,
   PATHNAME_FIELD,
   extractPostSlug,
   pathnameFromFrontMatter,

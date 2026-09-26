@@ -180,7 +180,7 @@ export const getColumns = (t) => [
       '定时中的文章在到点之前对所有前台页面不可见（列表/搜索/RSS/sitemap 都不出现），到点后服务端会在一分钟内自动发布。以 publishAt 是否晚于当前时间为准。',
     ),
     render: (_, record) => {
-      const text = describeScheduledTag(record?.publishAt);
+      const text = describeScheduledTag(record?.publishAt, undefined, t);
       // 没定时的显示 '-'：定时状态只由 publishAt 推导，服务端加没加指示字段都不影响这里
       return text ? (
         <Tag color="orange" data-article-scheduled-tag={String(record?.id)}>

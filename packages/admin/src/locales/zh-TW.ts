@@ -950,4 +950,19 @@ export default {
   'revision.restoreSnapshotAlt': '還原前的內容也存成了新版本，可隨時再還原回來。',
   'revision.restoreSuccess': '已還原到「{title}」{when}；{snapshot}',
 
+
+  // ── 🔴 期 7 第二批（11 條）── 術語：標籤 / **貼上**（粘贴）/ 自訂路徑名 / **位址**（地址）/ 發布 /
+  //    產生 / 依（按）/ **欄位**（字段）/ 伺服器 / 設定 / 搜尋 / 目前（当前）/ 儲存 / 字元（字符）/ 固定連結。
+  'tagTokens.placeholder': '選擇、輸入或貼上多個標籤（逗號 / 分號 / 換行分隔）',
+  'tagTokens.tooltip': '可一次貼上多個標籤。用英文/中文逗號、分號或換行分隔；空格不會拆開，以便保留「machine learning」這類多詞標籤。',
+  'pathname.label': '自訂路徑名',
+  'pathname.placeholder': '例如 Hugo 的 slug；留空則依標題產生拼音，而不是數字 id',
+  'pathname.tooltip': '發布後位址為 /post/[自訂路徑名]，對應 Hugo 的 permalinks.post = "/post/:slug"。從 Hugo 遷移時把舊 slug 填到這裡，可保留舊 URL、不影響 SEO。留空則依標題自動產生漢語拼音路徑（重名依次追加 -2、-3，最後兜底 -文章id）；標題裡沒有可用字元時才退回數字 id。已填的別名不會隨標題修改而變動，數字 id 位址始終可用；沒有站點級固定連結模板。',
+  'schedule.tagText': '定時待發布',
+  'schedule.publishAtPlaceholder': '留空 = 不定時（立即發布）',
+  'schedule.publishAtTooltip': '設定一個未來時間後，文章在到點之前對所有前台頁面不可見（列表、搜尋、RSS、sitemap 都不出現），到點後由伺服器定時任務在一分鐘內自動發布。清空此欄位 = 取消定時（立即發布/保持已發布）。',
+  'schedule.publishAtHelp': '定時發布：到點之前這篇文章在前台完全不可見，伺服器會在設定時刻起一分鐘內自動把它發布出來。',
+  'schedule.pastWarningText': '你選擇的定時發布時間「{when}」早於目前時間（{now}）。它不會處於「定時待發布」狀態：儲存後伺服器會認為它已到期，未發布的文章會在一分鐘內直接發布出去。仍要使用這個時間嗎？',
+  'schedule.pastWarningTitle': '定時時間早於目前時間',
+
 };
