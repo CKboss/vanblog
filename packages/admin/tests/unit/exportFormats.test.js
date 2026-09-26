@@ -103,7 +103,10 @@ test('接线：三个调用点都提供格式选择，而不是写死一种', ()
 
   const editor = readSrc('src/pages/Editor/index.jsx');
   assert.match(editor, /const handleExport = async \(format\)/, 'handleExport 必须收 format');
-  assert.match(editor, /children: EXPORT_FORMATS\.map/, '编辑器菜单应是三项子菜单');
+  // 🔴 期 6 第四批起编辑器页已接 i18n ⇒ 用**函数版**（传 t），identity 常量不许再用
+  //    （localePackParity 有一条判据专门盯"已接 i18n 的文件不许从 identity 常量取文案"）
+  assert.match(editor, /children: exportFormats\(t\)\.map/, '编辑器菜单应是三项子菜单（且标题跟着语言走）');
+  assert.ok(!/children: EXPORT_FORMATS\.map/.test(editor), '不能再从 identity 常量取菜单文案（那永远是中文）');
   assert.match(editor, /onClick: \(\) => handleExport\(f\.key\)/);
   // 反证：不能再有"onClick: handleExport"这种把事件对象当 format 传进去的写法
   assert.ok(!/onClick: handleExport,/.test(editor), 'onClick 直接传 handleExport 会把事件对象当 format');

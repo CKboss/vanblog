@@ -33,7 +33,9 @@ describe('导出 Markdown（含图片）：后台入口', () => {
     // 关于页没有文章 id（调用改成多行后，这条钉子也顺带钉住 raw 路径把 format 带下去了）
     assert.match(
       editor,
-      /type: 'raw',\s*\n\s*title: currObj\?\.title \|\| '关于',\s*\n\s*content: value,\s*\n\s*format,/,
+      // 🔴 期 6 第四批起「关于」走 t()（`common.about`）⇒ 锚点换形状，性质没放：
+      //    关于页仍然走 raw（不查库、直接用当前编辑器内容），title 仍然兜底成「关于」
+      /type: 'raw',\s*\n\s*title: currObj\?\.title \|\| t\('common\.about', '关于'\),\s*\n\s*content: value,\s*\n\s*format,/,
     );
     // 文章/草稿把当前编辑器内容一起发过去，所见即所得
     assert.match(editor, /content: value,/);

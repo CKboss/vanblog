@@ -68,7 +68,11 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   `common.uploadFailed`（上一批为上传按钮建的）与 `init.restore.confirmCancel`（取消））
 // 🔴 879 → **892**（期 6 第三批：编辑器偏好设置弹窗 +13；15 条文案里 `开启`/`关闭` 四个标签复用了
 //   `common.enabled` / `common.disabled`，「保存成功！」提升为 `common.saveSuccess`）
-const BASELINE_KEY_COUNT = 892;
+// 🔴 892 → **928**（期 6 第四批：编辑器页主体 +36；另有 2 个**提升**：`recycle.labelArticle` →
+//   `common.article`、`recycle.labelDraft` → `common.draft` —— 提升不增 key 数。
+//   🔴 63 条文案里 21 条**复用**既有 key，是本项目复用率最高的一批）
+// 🔴 928 → **930**（期 6 第四批补：`SaveTip` 那 2 个 key —— 活体探针抓出来的漏块）
+const BASELINE_KEY_COUNT = 930;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

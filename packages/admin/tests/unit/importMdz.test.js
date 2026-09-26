@@ -134,7 +134,8 @@ describe('接线钉子：Editor / 服务层 / 服务端三方契约不漂移', (
     assert.match(editor, /importMdzFile\(/);
   });
   it('.md 的浏览器端老路径没被动过（parseMarkdownFile 仍在）', () => {
-    assert.match(editor, /parseMarkdownFile\(file\)/);
+    // 🔴 期 6 第四批起 Editor 页已接 i18n ⇒ 调用点带上尾参 t（锚点换形状，性质没放）
+    assert.match(editor, /parseMarkdownFile\(file, undefined, t\)/);
   });
   it('服务层：端点、multipart 字段名 file、token 头，与服务端一致', () => {
     assert.match(svc, /'\/api\/admin\/article\/import-mdz'/);

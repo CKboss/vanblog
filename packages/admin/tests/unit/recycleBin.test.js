@@ -554,7 +554,10 @@ describe('RecycleBin 多语言接线（期 9 第四批）', () => {
 
   it('🔴 英文译文里没有汉字、没有 ICU 会当转义符的单引号，且与中文不同形', () => {
     const keys = Object.keys(packs['zh-CN']).filter((k) => k.startsWith('recycle.'));
-    assert.ok(keys.length >= 45, `recycle.* 只有 ${keys.length} 个 key（下界 45）`);
+    // 🔴 45 → **43**（期 6 第四批）：`recycle.labelArticle` / `recycle.labelDraft` 被**提升**成
+    //    `common.article` / `common.draft`（编辑器页也要用「文章 / 草稿」这两个词，不该引回收站组下的 key）。
+    //    ⚠️ 这个下界只因为"提升出组"才允许调小；因为"翻译丢了"而变小必须红。
+    assert.ok(keys.length >= 43, `recycle.* 只有 ${keys.length} 个 key（下界 43）`);
     const bad = [];
     for (const k of keys) {
       const en = packs['en-US'][k];

@@ -350,8 +350,8 @@ export default {
   'recycle.actionRestore': 'restore',
   'recycle.actionPurge': 'delete forever',
   'recycle.actionFallback': 'act on',
-  'recycle.labelArticle': 'post',
-  'recycle.labelDraft': 'draft',
+  'common.article': 'post',
+  'common.draft': 'draft',
   'recycle.labelFallback': 'item',
   'recycle.listFailure404': 'This server does not have the recycle-bin endpoints yet (404). Upgrade the server to a version that includes the post recycle bin, then use this list.',
   'recycle.detailWrap': ' ({message})',
@@ -1121,5 +1121,52 @@ export default {
   'editorProfile.softWrapLabel': 'Soft wrap',
   'editorProfile.softWrapTooltip': 'Off by default, which keeps standard Markdown: a single Enter stays in the same paragraph, and a line break needs two spaces at the end of the line or a blank line. When it is on, pressing Enter or pasting several lines adds the two trailing spaces automatically to make a soft wrap; existing posts are not rewritten when you open or save them.',
   'editorProfile.softWrapPlaceholder': 'Whether to add the trailing spaces automatically',
+
+
+  // ── 🔴 期 6 第四批（38 keys）── 英文人工写；术语与既有包对齐（Edit details / Actions / Recycle bin /
+  //    Delete forever / restore / post / draft）。不用缩写（ICU 把单引号当转义符）。
+  //    🔴 两处**拼接缝的空格只加在英文值里**：`editor.noTagsYet` 带**前导**空格（接在 `Save now?` 后面）、
+  //    `editor.moreHintP2` 带**结尾**空格（后面紧跟「相关文档」那个链接）；中文两份都不带 ⇒ 逐字对账仍成立。
+  'editor.restoredFromCache': 'Restored from the local cache',
+  'editor.docTitle': '{title} - VanBlog editor',
+  'editor.articleNotFound': 'That post was not found; your current edits were kept so nothing is overwritten',
+  'editor.draftNotFound': 'That draft was not found; your current edits were kept so nothing is overwritten',
+  'editor.invalidDocId': 'Invalid document ID, so it cannot be loaded',
+  'editor.loadFailed': 'Could not load the document; your current content was kept so nothing is overwritten',
+  'editor.saveNeedsArticleId': 'Cannot save: there is no valid post ID',
+  'editor.saveNeedsDraftId': 'Cannot save: there is no valid draft ID',
+  'editor.demoBlockedEdit': 'This cannot be changed on the demo site',
+  'editor.saveConfirmTitle': 'Save now?{warning}',
+  'editor.noTagsYet': ' This post has no tags yet.',
+  'editor.moreHintP1': 'There is no more marker, so the site takes the first 200 characters of the body as the excerpt (what appears before Read more in the list).',
+  'editor.moreHintP2': 'Taking the excerpt automatically can cut an image syntax in half so that image does not show in the excerpt, and when the cut falls inside [text](url) the link is completed automatically. To control the excerpt exactly, use the last button in the editor toolbar to insert a more marker where you want it. ',
+  'editor.exportNeedsSave': 'This has not been saved yet. Save it first, then export; otherwise the front matter (category, tags and path name) is not available.',
+  'editor.importConfirmTitle': 'Confirm the content',
+  'editor.importFailed': 'Import failed. Please check the file format.',
+  'editor.importedNotSaved': 'The content is now in the editor but it is not saved yet: check the title, category, tags and the other fields in Edit details, then save.',
+  'editor.importMdzFailed': 'Could not import the .mdz',
+  'editor.resetOk': 'Reset to the initial values',
+  'common.publishDraft': 'Publish the draft',
+  'editor.importContent': 'Import content',
+  'editor.exportType': 'Export the {type}',
+  'editor.viewFrontend': 'View on the site',
+  'editor.scheduledWarningP2': 'To change the time or cancel the schedule, use Actions, then Edit details, then Scheduled publishing.',
+  'editor.deleteType': 'Delete the {type}',
+  'editor.deleteConfirmTitle': 'Delete "{title}"?',
+  'editor.deleteArticleContent': 'After deleting, the post moves to Posts and then the Recycle bin, and it disappears from the site immediately. You can restore it at any time; only Delete forever in the Recycle bin cannot be undone.',
+  'editor.deleteDraftContent': 'After deleting, the draft moves to Drafts and then the Recycle bin. You can restore it at any time; only Delete forever in the Recycle bin cannot be undone.',
+  'editor.articleDeletedOk': 'The post was deleted and moved to the Recycle bin, so it can be restored. Back to the list.',
+  'editor.draftDeletedOk': 'The draft was deleted and moved to the Recycle bin, so it can be restored. Back to the list.',
+  'editor.preferences': 'Preferences',
+  'editor.clearCache': 'Clear the cache',
+  'editor.clearCacheTitle': 'Clear the autosave cache',
+  'editor.clearCacheContent': 'Clear the autosave cache for the current content? Anything not saved will be lost, and the editor will be reset to the latest data from the server.',
+  'editor.clearCacheOk': 'Clear it',
+  'editor.clearCacheDone': 'The autosave cache was cleared, and the editor now shows the data from the server',
+
+
+  // ── 🔴 期 6 第四批（补，2 keys）── `Save Ctrl + S`：占位符前**保留一个空格**（与中文同形）。
+  'editor.save': 'Save',
+  'editor.saveShortcut': 'Save {shortcut}',
 
 };

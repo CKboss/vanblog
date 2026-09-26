@@ -1,5 +1,6 @@
 import Editor from '@/components/Editor';
 import EditorProfileModal from '@/components/EditorProfileModal';
+import { useIntl } from 'umi';
 import PublishDraftModal from '@/components/PublishDraftModal';
 import RevisionHistory from '@/components/RevisionHistory';
 import Tags from '@/components/Tags';
@@ -27,7 +28,7 @@ const {
   describeImportOutcome,
 } = require('@/services/van-blog/importMdzCore');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { EXPORT_FORMATS } = require('@/services/van-blog/exportFormats');
+const { exportFormats } = require('@/services/van-blog/exportFormats');
 import { describeScheduledTag, isScheduled } from '@/services/van-blog/schedule';
 import { formatDateTime } from '@/services/van-blog/formatTime';
 import { useCacheState } from '@/services/van-blog/useCacheState';
@@ -48,6 +49,14 @@ function parseDocId(id) {
 }
 
 export default function () {
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  // 🔴 t 用 useCallback([intl]) 包成**稳定引用**：这个文件里 `typeMap` 与多个 useMemo/useCallback
+  //    都会用到它，不稳定 ⇒ 每次渲染都是新函数 ⇒ 依赖数组全变 ⇒ 无限重渲染/重复请求（§7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
   const [value, setValue] = useState('');
   const [currObj, setCurrObj] = useState({});
   const [loading, setLoading] = useState(true);
@@ -83,9 +92,10 @@ export default function () {
   }, []);
 
   const typeMap = {
-    article: '文章',
-    draft: '草稿',
-    about: '关于',
+    // 🔴 这三个是"文档类型"的名字（页头标题、导出/删除菜单都用它拼句子）
+    article: t('common.article', '文章'),
+    draft: t('common.draft', '草稿'),
+    about: t('common.about', '关于'),
   };
   const fetchData = useCallback(
     async (noMessage) => {
@@ -137,13 +147,15 @@ export default function () {
         const cache = checkCache(data);
         if (cache) {
           if (!noMessage) {
-            message.success('从缓存中恢复状态！');
+            message.success(t('editor.restoredFromCache', '从缓存中恢复状态！'));
           }
           setValue(cache);
         } else {
           setValue(data?.content || '');
         }
-        document.title = `关于 - VanBlog 编辑器`;
+        document.title = t('editor.docTitle', '{title} - VanBlog 编辑器', {
+          title: t('common.about', '关于'),
+        });
         setCurrObj(data);
       }
       if (type == 'article' && id) {
@@ -152,16 +164,16 @@ export default function () {
         if (cache) {
           setValue(cache);
           if (!noMessage) {
-            message.success('从缓存中恢复状态！');
+            message.success(t('editor.restoredFromCache', '从缓存中恢复状态！'));
           }
         } else if (data) {
           setValue(data.content || '');
         } else {
-          message.error('未找到文章，已保留当前编辑内容以免覆盖');
+          message.error(t('editor.articleNotFound', '未找到文章，已保留当前编辑内容以免覆盖'));
           setLoading(false);
           return;
         }
-        document.title = `${data?.title || ''} - VanBlog 编辑器`;
+        document.title = t('editor.docTitle', '{title} - VanBlog 编辑器', { title: data?.title || '' });
         setCurrObj(data);
       }
       if (type == 'draft' && id) {
@@ -169,29 +181,32 @@ export default function () {
         const cache = checkCache(data);
         if (cache) {
           if (!noMessage) {
-            message.success('从缓存中恢复状态！');
+            message.success(t('editor.restoredFromCache', '从缓存中恢复状态！'));
           }
           setValue(cache);
         } else if (data) {
           setValue(data.content || '');
         } else {
-          message.error('未找到草稿，已保留当前编辑内容以免覆盖');
+          message.error(t('editor.draftNotFound', '未找到草稿，已保留当前编辑内容以免覆盖'));
           setLoading(false);
           return;
         }
         setCurrObj(data);
-        document.title = `${data?.title || ''} - VanBlog 编辑器`;
+        document.title = t('editor.docTitle', '{title} - VanBlog 编辑器', { title: data?.title || '' });
       }
       if ((type == 'article' || type == 'draft') && !id) {
-        message.error('无效的文档 ID，无法加载');
+        message.error(t('editor.invalidDocId', '无效的文档 ID，无法加载'));
       }
       } catch (err) {
-        message.error('加载文档失败，已保留当前内容以免覆盖');
+        message.error(t('editor.loadFailed', '加载文档失败，已保留当前内容以免覆盖'));
       } finally {
         setLoading(false);
       }
     },
-    [history, setLoading, setValue, type],
+    // 🔴 依赖数组必须带上 t：这个 useCallback 的回调体里用了 t（未找到/加载失败/从缓存恢复那几句提示），
+    //    不带就会闭包住**首轮渲染的翻译器** ⇒ 切语言后仍是旧译文（§7.144 B）。
+    //    t 是 useCallback([intl]) 包过的稳定引用 ⇒ 加进来不会造成重复请求。
+    [history, setLoading, setValue, type, t],
   );
 
   useEffect(() => {
@@ -213,24 +228,24 @@ export default function () {
     try {
       if (type == 'article') {
         if (docId == null) {
-          message.error('无法保存：缺少有效的文章 ID');
+          message.error(t('editor.saveNeedsArticleId', '无法保存：缺少有效的文章 ID'));
           return;
         }
         await updateArticle(docId, { content: v });
         await fetchData();
-        message.success('保存成功！');
+        message.success(t('common.saveSuccess', '保存成功！'));
       } else if (type == 'draft') {
         if (docId == null) {
-          message.error('无法保存：缺少有效的草稿 ID');
+          message.error(t('editor.saveNeedsDraftId', '无法保存：缺少有效的草稿 ID'));
           return;
         }
         await updateDraft(docId, { content: v });
         await fetchData();
-        message.success('保存成功！');
+        message.success(t('common.saveSuccess', '保存成功！'));
       } else if (type == 'about') {
         await updateAbout({ content: v });
         await fetchData();
-        message.success('保存成功！');
+        message.success(t('common.saveSuccess', '保存成功！'));
       }
       if (editorConfig.afterSave && editorConfig.afterSave == 'goBack') {
         history.go(-1);
@@ -243,8 +258,11 @@ export default function () {
   const handleSave = async () => {
     if (location.hostname == 'blog-demo.mereith.com' && type != 'draft') {
       Modal.info({
-        title: '演示站禁止修改此信息！',
-        content: '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+        title: t('editor.demoBlockedEdit', '演示站禁止修改此信息！'),
+        content: t(
+          'common.demoBlockedReason',
+          '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+        ),
       });
       return;
     }
@@ -263,21 +281,32 @@ export default function () {
       hasTags = true;
     }
     Modal.confirm({
-      title: `确定保存吗？${hasTags ? '' : '此文章还没设置标签呢'}`,
+      // 🔴 原来是"标题 + 条件后缀"拼接 ⇒ 收成一条带 {warning} 占位符的整句：
+      //    英文语序不同，拼接会出接缝（§7.152 B / §7.156 B / §7.160 C / §7.162 A / §7.166 D 已五次）。
+      //    ⚠️ 英文那份 warning 值**自带前导空格**（拼接处需要；中文两份都不带，逐字对账仍成立）。
+      title: t('editor.saveConfirmTitle', '确定保存吗？{warning}', {
+        warning: hasTags ? '' : t('editor.noTagsYet', '此文章还没设置标签呢'),
+      }),
       content: hasMore ? undefined : (
         <div style={{ marginTop: 8 }}>
-          <p>没有 more 标记：前台会自动截取正文前 200 字作为摘要（列表页「阅读全文」之前的内容）。</p>
+          <p>{t(
+            'editor.moreHintP1',
+            '没有 more 标记：前台会自动截取正文前 200 字作为摘要（列表页「阅读全文」之前的内容）。',
+          )}</p>
           <p>
-            自动截取可能把图片语法从中间切开导致摘要里图片不显示；截断点落在 [文字](网址)
-            里时会自动补全这条链接。想精确控制摘要，就点编辑器工具栏最后一个按钮在合适的位置插入
-            more 标记。
+            {/* 🔴 这三行 JSX 文本渲染时会被折成一行（换行处变空格）⇒ defaultMessage 用**折叠后**的那一句，
+                改成 t() 之后渲染结果与今天逐字相同。链接在最后 ⇒ 只需要一个前缀 key（prefix/suffix 那套手法）。 */}
+            {t(
+              'editor.moreHintP2',
+              '自动截取可能把图片语法从中间切开导致摘要里图片不显示；截断点落在 [文字](网址) 里时会自动补全这条链接。想精确控制摘要，就点编辑器工具栏最后一个按钮在合适的位置插入 more 标记。',
+            )}
             <a
               target={'_blank'}
               rel="noreferrer"
               // 上游文档站的这个深链已经失效（文档结构变了），改指本分支仓库里的文档
               href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/editor.md"
             >
-              相关文档
+              {t('common.relatedDocs', '相关文档')}
             </a>
           </p>
           <img src="/more.png" alt="more" width={200}></img>
@@ -294,14 +323,17 @@ export default function () {
     if (type == 'about') {
       await downloadMarkdownExport({
         type: 'raw',
-        title: currObj?.title || '关于',
+        title: currObj?.title || t('common.about', '关于'),
         content: value,
         format,
       });
       return;
     }
     if (!currObj?.id) {
-      message.warning('还没保存过，先保存再导出（否则拿不到分类、标签、别名这些 front matter）');
+      message.warning(t(
+        'editor.exportNeedsSave',
+        '还没保存过，先保存再导出（否则拿不到分类、标签、别名这些 front matter）',
+      ));
       return;
     }
     // 带上当前编辑器内容：未保存的改动也能导出来（所见即所得），元信息仍取自已保存的那份
@@ -322,17 +354,17 @@ export default function () {
     }
     setLoading(true);
     try {
-      const { content } = await parseMarkdownFile(file);
+      const { content } = await parseMarkdownFile(file, undefined, t);
       Modal.confirm({
-        title: '确认内容',
+        title: t('editor.importConfirmTitle', '确认内容'),
         content: <Input.TextArea value={content} autoSize={{ maxRows: 10, minRows: 5 }} />,
         onOk: () => {
           setValue(content);
-          message.success('导入成功！');
+          message.success(t('common.importOk', '导入成功！'));
         },
       });
     } catch (err) {
-      message.error('导入失败！请检查文件格式！');
+      message.error(t('editor.importFailed', '导入失败！请检查文件格式！'));
     }
     setLoading(false);
   };
@@ -366,7 +398,7 @@ export default function () {
       if (type != 'about') {
         const patch = frontMatterPatchForEditor(data?.frontMatter);
         setCurrObj((prev) => ({ ...(prev || {}), ...patch }));
-        document.title = `${data?.title || patch.title || ''} - VanBlog 编辑器`;
+        document.title = t('editor.docTitle', '{title} - VanBlog 编辑器', { title: data?.title || patch.title || '' });
       }
       const outcome = describeImportOutcome(data);
       const open = outcome.tone === 'warn' ? Modal.warning : Modal.success;
@@ -381,7 +413,10 @@ export default function () {
               </p>
             ))}
             <p style={{ marginBottom: 0, color: '#888' }}>
-              内容已填入编辑器但尚未保存：请在「修改信息」里核对标题/分类/标签等字段后点保存。
+              {t(
+                'editor.importedNotSaved',
+                '内容已填入编辑器但尚未保存：请在「修改信息」里核对标题/分类/标签等字段后点保存。',
+              )}
             </p>
           </div>
         ),
@@ -392,7 +427,7 @@ export default function () {
         hide = null;
       }
       Modal.error({
-        title: '导入 .mdz 失败',
+        title: t('editor.importMdzFailed', '导入 .mdz 失败'),
         content: importMdzErrorMessage(err),
       });
     } finally {
@@ -405,16 +440,16 @@ export default function () {
       items={[
         {
           key: 'resetBtn',
-          label: '重置',
+          label: t('common.reset', '重置'),
           onClick: () => {
             setValue(currObj?.content || '');
-            message.success('重置为初始值成功！');
+            message.success(t('editor.resetOk', '重置为初始值成功！'));
           },
         },
         type != 'about'
           ? {
               key: 'updateModalBtn',
-              label: '修改信息',
+              label: t('common.editInfo', '修改信息'),
               onClick: () => {
                 setUpdateModalVisible(true);
               },
@@ -428,7 +463,9 @@ export default function () {
                 <RevisionHistory
                   articleId={currObj?.id}
                   articleTitle={currObj?.title}
-                  trigger={<a key={'revisionsTrigger' + currObj?.id}>历史版本</a>}
+                  trigger={
+                    <a key={'revisionsTrigger' + currObj?.id}>{t('revision.title', '历史版本')}</a>
+                  }
                   onRestored={() => {
                     // 恢复版本后重拉正文，编辑器里立刻是新内容
                     fetchData(true);
@@ -445,7 +482,9 @@ export default function () {
                   title={currObj?.title}
                   key="publishModal1"
                   id={currObj?.id}
-                  trigger={<a key={'publishBtn' + currObj?.id}>发布草稿</a>}
+                  trigger={
+                    <a key={'publishBtn' + currObj?.id}>{t('common.publishDraft', '发布草稿')}</a>
+                  }
                   onFinish={() => {
                     history.push(`/article`);
                   }}
@@ -455,7 +494,7 @@ export default function () {
           : null,
         {
           key: 'importBtn',
-          label: '导入内容',
+          label: t('editor.importContent', '导入内容'),
           onClick: () => {
             const el = document.querySelector('#importBtn');
             if (el) {
@@ -465,10 +504,12 @@ export default function () {
         },
         {
           key: 'exportBtn',
-          label: `导出${typeMap[type]}`,
+          label: t('editor.exportType', '导出{type}', { type: typeMap[type] }),
           // ⚠️ 子菜单而不是单个 onClick：以前点这里**永远**得到一个外层 zip，
           // 想要一个能直接拖进 Typora 的 .md 还得先解包。
-          children: EXPORT_FORMATS.map((f) => ({
+          // 🔴 期 6 第四批：改用**函数版**（传 t）⇒ 导出下拉的三项标签/说明跟着语言走。
+          //    ⚠️ 不要改回 `EXPORT_FORMATS` 那个 identity 常量（localePackParity 有判据盯着）
+          children: exportFormats(t).map((f) => ({
             key: `export-${f.key}`,
             label: f.label,
             title: f.hint,
@@ -478,20 +519,23 @@ export default function () {
         type != 'draft'
           ? {
               key: 'viewFE',
-              label: `查看前台`,
+              label: t('editor.viewFrontend', '查看前台'),
               onClick: () => {
                 let url = '';
                 if (type == 'article') {
                   if (currObj.hidden) {
                     Modal.confirm({
-                      title: '此文章为隐藏文章！',
+                      title: t('article.hiddenWarningTitle', '此文章为隐藏文章！'),
                       content: (
                         <div>
                           <p>
-                            隐藏文章在未开启通过 URL 访问的情况下（默认关闭），会出现 404 页面！
+                            {t(
+                              'article.hiddenWarningP1',
+                              '隐藏文章在未开启通过 URL 访问的情况下（默认关闭），会出现 404 页面！',
+                            )}
                           </p>
                           <p>
-                            您可以在{' '}
+                            {t('article.hiddenWarningPrefix', '您可以在')}{' '}
                             <a
                               onClick={() => {
                                 // `subTab` 这个 key 没人读（SystemConfig 读 `tab`、SiteInfo 读
@@ -499,9 +543,9 @@ export default function () {
                                 history.push('/site/setting?tab=siteInfo&siteInfoTab=layout');
                               }}
                             >
-                              布局配置
+                              {t('article.layoutConfig', '布局配置')}
                             </a>{' '}
-                            中修改此项。
+                            {t('article.hiddenWarningSuffix', '中修改此项。')}
                           </p>
                         </div>
                       ),
@@ -509,30 +553,33 @@ export default function () {
                         window.open(`/post/${getPathname(currObj)}`, '_blank');
                         return true;
                       },
-                      okText: '仍然访问',
-                      cancelText: '返回',
+                      okText: t('common.visitAnyway', '仍然访问'),
+                      cancelText: t('common.back', '返回'),
                     });
                     return;
                   }
                   if (isScheduled(currObj?.publishAt)) {
                     // 定时中的文章前台还不可见：别让「查看前台」看起来像已经发布了
                     Modal.confirm({
-                      title: '此文章处于「定时待发布」状态！',
+                      title: t('article.scheduledWarningTitle', '此文章处于「定时待发布」状态！'),
                       content: (
                         <div>
                           <p>
-                            这篇文章定时于 <b>{formatDateTime(currObj?.publishAt)}</b>{' '}
-                            自动发布，在那之前它对所有前台页面不可见，现在打开会是 404 页面。
+                            {t('article.scheduledWarningP1a', '这篇文章定时于')} <b>{formatDateTime(currObj?.publishAt)}</b>{' '}
+                            {t(
+                              'article.scheduledWarningP1b',
+                              '自动发布，在那之前它对所有前台页面不可见，现在打开会是 404 页面。',
+                            )}
                           </p>
-                          <p>想改时间或取消定时：「操作 → 修改信息 → 定时发布」。</p>
+                          <p>{t('editor.scheduledWarningP2', '想改时间或取消定时：「操作 → 修改信息 → 定时发布」。')}</p>
                         </div>
                       ),
                       onOk: () => {
                         window.open(`/post/${getPathname(currObj)}`, '_blank');
                         return true;
                       },
-                      okText: '仍然访问',
-                      cancelText: '返回',
+                      okText: t('common.visitAnyway', '仍然访问'),
+                      cancelText: t('common.back', '返回'),
                     });
                     return;
                   }
@@ -547,31 +594,37 @@ export default function () {
         type != 'about'
           ? {
               key: 'deleteBtn',
-              label: `删除${typeMap[type]}`,
+              label: t('editor.deleteType', '删除{type}', { type: typeMap[type] }),
               onClick: () => {
                 Modal.confirm({
-                  title: `确定删除 “${currObj.title}” 吗？`,
+                  title: t('editor.deleteConfirmTitle', '确定删除 “{title}” 吗？', { title: currObj.title }),
                   // 文章与草稿现在都是软删除：说清去向和撤销路径
                   content:
                     type == 'article'
-                      ? '删除后文章会移入「文章管理 → 回收站」，前台立刻不可见，可随时恢复；只有在回收站里「永久删除」才不可撤销。'
+                      ? t(
+                          'editor.deleteArticleContent',
+                          '删除后文章会移入「文章管理 → 回收站」，前台立刻不可见，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
+                        )
                       : type == 'draft'
-                        ? '删除后草稿会移入「草稿管理 → 回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。'
+                        ? t(
+                            'editor.deleteDraftContent',
+                            '删除后草稿会移入「草稿管理 → 回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
+                          )
                         : undefined,
                   onOk: async () => {
                     if (location.hostname == 'blog-demo.mereith.com' && type == 'article') {
                       if ([28, 29].includes(currObj.id)) {
-                        message.warn('演示站禁止删除此文章！');
+                        message.warn(t('common.demoBlockedDelete', '演示站禁止删除此文章！'));
                         return false;
                       }
                     }
                     if (type == 'article') {
                       await deleteArticle(currObj.id);
-                      message.success('删除文章成功，已移入回收站（可恢复）！返回列表页！');
+                      message.success(t('editor.articleDeletedOk', '删除文章成功，已移入回收站（可恢复）！返回列表页！'));
                       history.push('/article');
                     } else if (type == 'draft') {
                       await deleteDraft(currObj.id);
-                      message.success('删除草稿成功，已移入回收站（可恢复）！返回列表页！');
+                      message.success(t('editor.draftDeletedOk', '删除草稿成功，已移入回收站（可恢复）！返回列表页！'));
                       history.push('/draft');
                     }
                   },
@@ -585,31 +638,34 @@ export default function () {
             <EditorProfileModal
               value={editorConfig}
               setValue={setEditorConfig}
-              trigger={<a key={'editerConfigBtn'}>偏好设置</a>}
+              trigger={<a key={'editerConfigBtn'}>{t('editor.preferences', '偏好设置')}</a>}
             />
           ),
         },
         {
           key: 'clearCacheBtn',
-          label: '清理缓存',
+          label: t('editor.clearCache', '清理缓存'),
           onClick: () => {
             Modal.confirm({
-              title: '清理实时保存缓存',
+              title: t('editor.clearCacheTitle', '清理实时保存缓存'),
               content:
-                '确定清理当前内容的实时保存缓存吗？清理后未保存的内容将会丢失，编辑器内容将重置为服务端返回的最新数据。',
-              okText: '确认清理',
-              cancelText: '返回',
+                t(
+                  'editor.clearCacheContent',
+                  '确定清理当前内容的实时保存缓存吗？清理后未保存的内容将会丢失，编辑器内容将重置为服务端返回的最新数据。',
+                ),
+              okText: t('editor.clearCacheOk', '确认清理'),
+              cancelText: t('common.back', '返回'),
               onOk: () => {
                 window.localStorage.removeItem(getCacheKey());
                 setValue(currObj?.content || '');
-                message.success('清除实时保存缓存成功！已重置为服务端返回数据');
+                message.success(t('editor.clearCacheDone', '清除实时保存缓存成功！已重置为服务端返回数据'));
               },
             });
           },
         },
         {
           key: 'helpBtn',
-          label: '帮助文档',
+          label: t('init.wizard.helpDoc', '帮助文档'),
           onClick: () => {
             // 上游文档站的这个地址已经 404，改指本分支仓库里的文档（跟着代码一起版本化）
             window.open('https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/editor.md', '_blank');
@@ -625,8 +681,8 @@ export default function () {
       header={{
         title: (
           <Space>
-            <span title={type == 'about' ? '关于' : currObj?.title}>
-              {type == 'about' ? '关于' : currObj?.title}
+            <span title={type == 'about' ? t('common.about', '关于') : currObj?.title}>
+              {type == 'about' ? t('common.about', '关于') : currObj?.title}
             </span>
             {type != 'about' && (
               <>
@@ -634,9 +690,9 @@ export default function () {
                 <Tag color="blue">{currObj?.category || '-'}</Tag>
                 <Tags tags={currObj?.tags} />
                 {/* 定时待发布：到点之前前台不可见，标题栏必须能一眼看出来 */}
-                {describeScheduledTag(currObj?.publishAt) ? (
+                {describeScheduledTag(currObj?.publishAt, undefined, t) ? (
                   <Tag color="orange" data-editor-scheduled-tag>
-                    {describeScheduledTag(currObj?.publishAt)}
+                    {describeScheduledTag(currObj?.publishAt, undefined, t)}
                   </Tag>
                 ) : null}
               </>
@@ -653,11 +709,11 @@ export default function () {
               history.go(-1);
             }}
           >
-            返回
+            {t('common.back', '返回')}
           </Button>,
           <Dropdown key="moreAction" overlay={actionMenu} trigger={['click']}>
             <Button size="middle">
-              操作
+              {t('common.colOption', '操作')}
               <DownOutlined />
             </Button>
           </Dropdown>,
@@ -689,7 +745,7 @@ export default function () {
             style={{ display: 'none', height: 0 }}
           >
             <a key="importBtn" type="link" style={{ display: 'none' }} id="importBtn">
-              导入内容
+              {t('editor.importContent', '导入内容')}
             </a>
           </Upload>
         </div>

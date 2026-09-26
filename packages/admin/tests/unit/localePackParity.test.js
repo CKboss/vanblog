@@ -126,8 +126,8 @@ const IDENTICAL_ZH_TW_OK = [
   'common.colAuthor', // 作者（🔴 从 recycle.colAuthor 提升，键名跟着改）
   'recycle.titleQuoted', // 「{title}」
   'recycle.actionFallback', // 操作
-  'recycle.labelArticle', // 文章
-  'recycle.labelDraft', // 草稿
+  'common.article', // 文章
+  'common.draft', // 草稿
   'recycle.detailWrap', // （{message}）
   'recycle.permissionWrap', // （需要 {permission}）
   // 🔴 期 3 第三批：`common.colOption`（从 recycle.colOption **提升**上来，Token 页与回收站共用）
@@ -184,6 +184,8 @@ const IDENTICAL_ZH_TW_OK = [
   'export.formatZipLabel',
   // 🔴 期 6 第一批：`重做` 简繁同形
   'editor.redo',
+  // 🔴 期 6 第四批：`查看前台` 简繁同形
+  'editor.viewFrontend',
   // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
   'time.secondsAgo',
   'time.daysAgo',
@@ -337,12 +339,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 69,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 69）⇒ 遍历或解析器坏了`,
+      FILES.length >= 71,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 71）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1130,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1130）⇒ 疑似解析器坏了`,
+      calls.length >= 1210,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1210）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -403,6 +405,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/Editor/imgUpload.tsx',
       'src/components/Editor/transferRemote.tsx',
       'src/components/EditorProfileModal/index.tsx',
+      'src/pages/Editor/index.jsx',
+      'src/components/SaveTip/index.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -765,8 +769,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/DataManage/tabs/Category.jsx',
       // 🔴 `NewArticleModal` 本轮已接 i18n（并把 t 传给了 accessPassword 的函数）⇒ **从这张表删掉**
       //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
-      // 🔴 期 7 第二批新增：Editor 调 `describeScheduledTag(x)`（还没接 i18n ⇒ 走 identity，逐字与今天相同）
-      'src/pages/Editor/index.jsx',
+      // 🔴 `src/pages/Editor/index.jsx` 期 6 第四批**已接 i18n**（并给 describeScheduledTag / parseMarkdownFile /
+      //    exportFormats 都传了 t）⇒ **从这张表删掉**（表是钉死的：留着它就会掩盖"已接 i18n 却没传 t"）
       // 🔴 期 7 第四批新增：这四个调 `parseMarkdownFile` / `getRecentTimeDes` / `formatTimeAgo`
       //    但**自己还没接 i18n** ⇒ 走 identity、输出与今天逐字相同（不是缺陷，是 backlog）
       'src/pages/SystemConfig/tabs/migrate.tsx',

@@ -353,8 +353,8 @@ export default {
   'recycle.actionRestore': '恢复',
   'recycle.actionPurge': '永久删除',
   'recycle.actionFallback': '操作',
-  'recycle.labelArticle': '文章',
-  'recycle.labelDraft': '草稿',
+  'common.article': '文章',
+  'common.draft': '草稿',
   'recycle.labelFallback': '内容',
   'recycle.listFailure404': '当前 server 还没有回收站接口（404）：请把 server 升级到包含「文章回收站」的版本后再用这个列表。',
   'recycle.detailWrap': '（{message}）',
@@ -1234,5 +1234,60 @@ export default {
   'editorProfile.softWrapLabel': '软换行',
   'editorProfile.softWrapTooltip': '默认关闭，保持标准 Markdown：单独回车仍是同一段，需行末两个空格或空行才换行。开启后，按 Enter 或粘贴多行时会自动补两个空格写成软换行；已有文章不会在打开或保存时被改写。',
   'editorProfile.softWrapPlaceholder': '是否自动补行末空格',
+
+
+  // ── 🔴 期 6 第四批：编辑器页主体（`pages/Editor/index.jsx`，63 条 → 38 个新 key + 21 条复用）──
+  //    🔴 复用率是本项目最高的一批：页头「操作」下拉里的 修改信息 / 历史版本 / 导出 / 删除 / 返回 /
+  //    重置 / 帮助文档 / 相关文档，以及隐藏文章与定时发布那两段警告（`article.hiddenWarning*` /
+  //    `article.scheduledWarning*`）都是**既有 key** —— 前几批把共用文案放 common.*/article.* 的回报。
+  //    🔴 两处**提升**：`recycle.labelArticle` → `common.article`、`recycle.labelDraft` → `common.draft`
+  //    （编辑器页也要用「文章 / 草稿」这两个词，不该去引一个"回收站"组下的 key）。
+  //    🔴 三处拼接收成整句：`确定保存吗？${…}` ⇒ `{warning}` 占位符；`导出${typeMap[type]}` ⇒ `导出{type}`；
+  //    `删除${typeMap[type]}` ⇒ `删除{type}`（英文语序不同，拼接必出接缝，本项目已五次）。
+  //    ⚠️ `more` / `front matter` / `.mdz` / `VanBlog` / `[文字](网址)` 是技术标识符，三份包原样保留。
+  'editor.restoredFromCache': '从缓存中恢复状态！',
+  'editor.docTitle': '{title} - VanBlog 编辑器',
+  'editor.articleNotFound': '未找到文章，已保留当前编辑内容以免覆盖',
+  'editor.draftNotFound': '未找到草稿，已保留当前编辑内容以免覆盖',
+  'editor.invalidDocId': '无效的文档 ID，无法加载',
+  'editor.loadFailed': '加载文档失败，已保留当前内容以免覆盖',
+  'editor.saveNeedsArticleId': '无法保存：缺少有效的文章 ID',
+  'editor.saveNeedsDraftId': '无法保存：缺少有效的草稿 ID',
+  'editor.demoBlockedEdit': '演示站禁止修改此信息！',
+  'editor.saveConfirmTitle': '确定保存吗？{warning}',
+  'editor.noTagsYet': '此文章还没设置标签呢',
+  'editor.moreHintP1': '没有 more 标记：前台会自动截取正文前 200 字作为摘要（列表页「阅读全文」之前的内容）。',
+  'editor.moreHintP2': '自动截取可能把图片语法从中间切开导致摘要里图片不显示；截断点落在 [文字](网址) 里时会自动补全这条链接。想精确控制摘要，就点编辑器工具栏最后一个按钮在合适的位置插入 more 标记。',
+  'editor.exportNeedsSave': '还没保存过，先保存再导出（否则拿不到分类、标签、别名这些 front matter）',
+  'editor.importConfirmTitle': '确认内容',
+  'editor.importFailed': '导入失败！请检查文件格式！',
+  'editor.importedNotSaved': '内容已填入编辑器但尚未保存：请在「修改信息」里核对标题/分类/标签等字段后点保存。',
+  'editor.importMdzFailed': '导入 .mdz 失败',
+  'editor.resetOk': '重置为初始值成功！',
+  'common.publishDraft': '发布草稿',
+  'editor.importContent': '导入内容',
+  'editor.exportType': '导出{type}',
+  'editor.viewFrontend': '查看前台',
+  'editor.scheduledWarningP2': '想改时间或取消定时：「操作 → 修改信息 → 定时发布」。',
+  'editor.deleteType': '删除{type}',
+  'editor.deleteConfirmTitle': '确定删除 “{title}” 吗？',
+  'editor.deleteArticleContent': '删除后文章会移入「文章管理 → 回收站」，前台立刻不可见，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
+  'editor.deleteDraftContent': '删除后草稿会移入「草稿管理 → 回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
+  'editor.articleDeletedOk': '删除文章成功，已移入回收站（可恢复）！返回列表页！',
+  'editor.draftDeletedOk': '删除草稿成功，已移入回收站（可恢复）！返回列表页！',
+  'editor.preferences': '偏好设置',
+  'editor.clearCache': '清理缓存',
+  'editor.clearCacheTitle': '清理实时保存缓存',
+  'editor.clearCacheContent': '确定清理当前内容的实时保存缓存吗？清理后未保存的内容将会丢失，编辑器内容将重置为服务端返回的最新数据。',
+  'editor.clearCacheOk': '确认清理',
+  'editor.clearCacheDone': '清除实时保存缓存成功！已重置为服务端返回数据',
+
+
+  // ── 🔴 期 6 第四批（补）：编辑器页头那个「保存 Ctrl + S」提示（`components/SaveTip`）──
+  //    🔴 它是**活体探针抓出来的漏块**：本批只做 `pages/Editor/index.jsx`，而这个组件在页面表面清单里
+  //    （`pageSurface.js` 早就列出了 `SaveTip/index.tsx 3 条`），是我切批次时没把它一起做。
+  //    快捷键名（`⌘ + S` / `Ctrl + S`）**不翻译** ⇒ 一条带 `{shortcut}` 占位符的整句就够，不用三份。
+  'editor.save': '保存',
+  'editor.saveShortcut': '保存 {shortcut}',
 
 };

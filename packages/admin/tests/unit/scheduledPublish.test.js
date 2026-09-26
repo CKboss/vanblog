@@ -200,7 +200,8 @@ describe('编辑器接线：标题栏一眼看出定时状态', () => {
   const editor = codeOnly(read('src/pages/Editor/index.jsx'));
 
   it('头部有定时 Tag（describeScheduledTag 推导，非服务端字段）', () => {
-    assert.match(editor, /describeScheduledTag\(currObj\?\.publishAt\)/);
+    // 🔴 期 6 第四批起 Editor 页已接 i18n ⇒ 传 t（锚点换形状，性质没放）
+    assert.match(editor, /describeScheduledTag\(currObj\?\.publishAt, undefined, t\)/);
     assert.match(editor, /data-editor-scheduled-tag/);
     assert.match(editor, /<Tag color="orange"/);
   });

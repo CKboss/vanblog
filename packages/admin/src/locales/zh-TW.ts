@@ -326,8 +326,8 @@ export default {
   'recycle.actionRestore': '還原',
   'recycle.actionPurge': '永久刪除',
   'recycle.actionFallback': '操作',
-  'recycle.labelArticle': '文章',
-  'recycle.labelDraft': '草稿',
+  'common.article': '文章',
+  'common.draft': '草稿',
   'recycle.labelFallback': '內容',
   'recycle.listFailure404': '目前 server 還沒有資源回收筒介面（404）：請把 server 升級到包含「文章資源回收筒」的版本後再使用這個列表。',
   'recycle.detailWrap': '（{message}）',
@@ -1066,5 +1066,52 @@ export default {
   'editorProfile.softWrapLabel': '軟換行',
   'editorProfile.softWrapTooltip': '預設關閉，保持標準 Markdown：單獨按 Enter 仍是同一段，需行末兩個空格或空行才換行。開啟後，按 Enter 或貼上多行時會自動補兩個空格寫成軟換行；既有文章不會在開啟或儲存時被改寫。',
   'editorProfile.softWrapPlaceholder': '是否自動補行末空格',
+
+
+  // ── 🔴 期 6 第四批（38 條）── 術語與既有包**對齊**（不重新發明）：修改資訊 / 重設 / 關於 / 返回 /
+  //    仍然存取 / 相關文件 / 歷史版本 / 說明文件 / **示範站**（演示站）/ 匯入 / 匯出 / 儲存 /
+  //    **資源回收筒** / **還原** / 版面配置 / 定時發布 / 操作 / **快取**（缓存）/ **即時儲存**（实时保存）/
+  //    載入 / 覆蓋 / 欄位 / 遺失 / 工具列。
+  'editor.restoredFromCache': '已從快取還原狀態！',
+  'editor.docTitle': '{title} - VanBlog 編輯器',
+  'editor.articleNotFound': '找不到文章，已保留目前編輯內容以免覆蓋',
+  'editor.draftNotFound': '找不到草稿，已保留目前編輯內容以免覆蓋',
+  'editor.invalidDocId': '無效的文件 ID，無法載入',
+  'editor.loadFailed': '載入文件失敗，已保留目前內容以免覆蓋',
+  'editor.saveNeedsArticleId': '無法儲存：缺少有效的文章 ID',
+  'editor.saveNeedsDraftId': '無法儲存：缺少有效的草稿 ID',
+  'editor.demoBlockedEdit': '示範站禁止修改此資訊！',
+  'editor.saveConfirmTitle': '確定儲存嗎？{warning}',
+  'editor.noTagsYet': '這篇文章還沒有設定標籤',
+  'editor.moreHintP1': '沒有 more 標記：前台會自動截取正文前 200 字作為摘要（列表頁「閱讀全文」之前的內容）。',
+  'editor.moreHintP2': '自動截取可能把圖片語法從中間切開導致摘要裡圖片不顯示；截斷點落在 [文字](網址) 裡時會自動補完這條連結。想精確控制摘要，就點編輯器工具列最後一個按鈕在合適的位置插入 more 標記。',
+  'editor.exportNeedsSave': '還沒有儲存過，先儲存再匯出（否則拿不到分類、標籤、別名這些 front matter）',
+  'editor.importConfirmTitle': '確認內容',
+  'editor.importFailed': '匯入失敗！請檢查檔案格式！',
+  'editor.importedNotSaved': '內容已填入編輯器但尚未儲存：請在「修改資訊」裡核對標題/分類/標籤等欄位後點儲存。',
+  'editor.importMdzFailed': '匯入 .mdz 失敗',
+  'editor.resetOk': '已重設為初始值！',
+  'common.publishDraft': '發布草稿',
+  'editor.importContent': '匯入內容',
+  'editor.exportType': '匯出{type}',
+  'editor.viewFrontend': '查看前台',
+  'editor.scheduledWarningP2': '想改時間或取消定時：「操作 →「修改資訊」→「定時發布」。」',
+  'editor.deleteType': '刪除{type}',
+  'editor.deleteConfirmTitle': '確定刪除「{title}」嗎？',
+  'editor.deleteArticleContent': '刪除後文章會移入「文章管理 → 資源回收筒」，前台立刻不可見，可隨時還原；只有在資源回收筒裡「永久刪除」才不可撤銷。',
+  'editor.deleteDraftContent': '刪除後草稿會移入「草稿管理 → 資源回收筒」，可隨時還原；只有在資源回收筒裡「永久刪除」才不可撤銷。',
+  'editor.articleDeletedOk': '刪除文章成功，已移入資源回收筒（可還原）！返回列表頁！',
+  'editor.draftDeletedOk': '刪除草稿成功，已移入資源回收筒（可還原）！返回列表頁！',
+  'editor.preferences': '偏好設定',
+  'editor.clearCache': '清理快取',
+  'editor.clearCacheTitle': '清理即時儲存快取',
+  'editor.clearCacheContent': '確定清理目前內容的即時儲存快取嗎？清理後未儲存的內容將會遺失，編輯器內容將重設為伺服器返回的最新資料。',
+  'editor.clearCacheOk': '確認清理',
+  'editor.clearCacheDone': '清除即時儲存快取成功！已重設為伺服器返回資料',
+
+
+  // ── 🔴 期 6 第四批（补，2 條）── 術語與既有包對齊：**儲存**（保存）。
+  'editor.save': '儲存',
+  'editor.saveShortcut': '儲存 {shortcut}',
 
 };

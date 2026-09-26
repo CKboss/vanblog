@@ -255,6 +255,16 @@ const BUDGET = {
   //   15 条文案只用了 **13 个新 key**（`开启`/`关闭` 四个选项标签复用 `common.enabled`/`common.disabled`），
   //   并把「保存成功！」提升成 `common.saveSuccess`（这句后台到处都在用）。
   'src/components/EditorProfileModal/index.tsx': 0,
+  // 🔴 期 6 第四批（2026-09-26）：**编辑器页主体**（页头「操作」下拉、加载/保存/导入/导出/删除/清理缓存的全部提示）
+  //   ⇒ 预算 0。63 条文案只用了 **36 个新 key + 2 个提升**（其余 21 条复用既有 key，本项目复用率最高的一批）。
+  //   🔴 顺带把三个"走 identity"的调用点接上：`exportFormats(t)`、`parseMarkdownFile(file, undefined, t)`、
+  //   `describeScheduledTag(x, undefined, t)` ⇒ 这个文件也从 `NOT_YET_I18N_CONSUMERS` 里**删掉**了。
+  'src/pages/Editor/index.jsx': 0,
+  // 🔴 期 6 第四批（补）：编辑器页头那个「保存 Ctrl + S」提示 —— **活体探针抓出来的漏块**。
+  //   `pageSurface.js` 早就把它列在页面表面里（`SaveTip/index.tsx 3 条`），是切批次时没带上；
+  //   en-US 活体里那条中文就是它 ⇒ 反向判据当场报出来（这正是"反向判据要查残留"的价值）。
+  //   快捷键名（⌘ + S / Ctrl + S）**不翻译** ⇒ 只用 2 个 key（`editor.save` / `editor.saveShortcut`）。
+  'src/components/SaveTip/index.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -417,7 +427,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 75, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 77, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

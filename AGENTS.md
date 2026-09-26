@@ -9469,6 +9469,69 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.168 期 6 第四批：编辑器页主体（63 + 3 条）—— 🔴 复用率最高的一批（63 条只用 36 个新 key），以及**活体又一次抓到漏块**
+
+**交付**：`pages/Editor/index.jsx`(63) + 🔴 `components/SaveTip/index.tsx`(3，活体抓出来的漏块) = **66 条 → 0**；
+语言包 **892 → 930 key**（**38 新 + 2 个提升**，其余 **21 条复用**既有 key）；棘轮清单 **75 → 77 个文件**（**TOTAL 仍 61**）；
+`i18nKeyNaming` → **930**；`localePackParity` 自动发现下界 **69 → 71 个文件 / 1130 → 1210 个调用点**（实测 71 / 1216）。
+🔴 **提升 2 个 key**：`recycle.labelArticle` → **`common.article`**、`recycle.labelDraft` → **`common.draft`**
+（编辑器页也要用「文章 / 草稿」，不该去引一个"回收站"组下的 key；提升不增 key 数，`recycle.*` 的下界随之 45 → 43 并写明理由）。
+🔴 **浏览器活体 36/36（zh-CN 11 + en-US 13 + zh-TW 12），problems 0、skipped 0**：
+`document.title`（ICU `{title}`）、页头三件（`儲存 Ctrl + S` / `返回` / `操作`）、类型 Tag、
+「操作」下拉**十个菜单项**、导出二级菜单的三项**标签 + 三条 hint（title 属性）**、
+🔴 **Ctrl+S 触发的保存确认**（标题 `確定儲存嗎？這篇文章還沒有設定標籤` + 那两段 more 提示 + 「相關文件」链接）、
+删除确认（ICU `{title}` + 那段"移入資源回收筒"的正文）、清理缓存确认；
+外加两条反向判据：🔴 **en-US 整页零汉字**、zh-TW **零简体专用字**（并且先证明"采到了 ≥20 段文字"）。
+证据：`vanblog_dev/i18n-browser-evidence/phase6-editor-page/`。
+
+#### A. 🔴 复用率最高的一批：63 条文案 → 36 个新 key + 21 条复用
+页头「操作」下拉里的 修改信息 / 历史版本 / 导出 / 删除 / 返回 / 重置 / 帮助文档 / 相关文档，
+以及隐藏文章与定时发布那两段警告（`article.hiddenWarning*`、`article.scheduledWarning*`）**全是既有 key**。
+👉 这是前几批"共用文案放 `common.*` / `article.*`"的**回报**：越往后，同样条数的页面需要的新 key 越少
+（对比：期 5 第七批 48 条 → 9 个新 key；期 6 第四批 63 条 → 36 个，其中 15 个是这个页面**独有**的长句）。
+🔴 三处拼接同时收成整句（第 6/7/8 次）：`确定保存吗？${hasTags ? '' : '此文章还没设置标签呢'}` ⇒ `{warning}` 占位符；
+`导出${typeMap[type]}` ⇒ `导出{type}`；`删除${typeMap[type]}` ⇒ `删除{type}`。
+⚠️ 拼接缝的空格**只加在英文值里**：`editor.noTagsYet` 带**前导**空格（接在 `Save now?` 后面）、
+`editor.moreHintP2` 带**结尾**空格（后面紧跟「相关文档」链接）；中文两份都不带 ⇒ 逐字对账仍成立（§7.152 B 那套手法）。
+
+#### B. 🔴 活体又抓到一个漏块：`SaveTip`（页面表面清单里**早就列着**）
+en-US 反向判据报出一条中文：`保存 Ctrl + S`。追下去是 `components/SaveTip/index.tsx`（3 条）。
+🔴 **这次不是工具漏报**：`pageSurface.js` 上一轮就把 `SaveTip/index.tsx 3 条` 列在编辑器页表面里了，
+是**我切批次时只挑了 `pages/Editor/index.jsx`**（"按文件切"而不是"按页面切"）。
+⇒ 当场补做（2 个 key：`editor.save` / `editor.saveShortcut`，快捷键名 `⌘ + S` / `Ctrl + S` **不翻译**，用 `{shortcut}` 占位符）。
+👉 🔴 **规矩升级：批次边界按"页面表面清单"划，不按"文件名"划** —— 清单上还有条目却宣布这一页做完，
+就是给自己留一个"半页中文"（本项目这是第 **5** 次漏块，前 4 次是工具/人读 import 漏，这次是**明明列出来了却没做**）。
+⚠️ 顺带一条：`SaveTip` 的文案在 `useMemo(..., [])` 里算 ⇒ 接 t 之后**必须**把 t 放进依赖数组
+（并且 t 要 `useCallback([intl])` 包稳定），否则切语言后仍显示旧译文（§7.144 B）。
+
+#### C. 🔴 守卫又抓到一个真缺陷：`fetchData` 的 useCallback 闭包住了首轮翻译器
+`pages/Editor/index.jsx:100` 的 `useCallback` 回调体里用了 t（未找到 / 加载失败 / 从缓存恢复那几句），
+但依赖数组是 `[history, setLoading, setValue, type]` ⇒ 切语言后那几句仍是旧译文（要重挂载才更新）。
+守卫当场红了 ⇒ 补 `t`（它本身是稳定引用，加进来不会造成重复请求）。变异对照 M2/M4 把两个文件的依赖数组
+各拿掉一次 t ⇒ 都红在这条判据上（🔴 这条判据已**连续四批**立功）。
+
+#### D. 探针的三处尺子错（都被实采数据纠正）
+1. 「操作」是**下拉**：删除/清理缓存两项要先 `openActions()` 重新打开 —— hover 完二级菜单按 Escape 会把整个下拉关掉，
+   第一版直接点 ⇒ 采到三个空数组，看着像"翻译没生效"（🔴 空数组 + 全等判据 = 假失败，与 §7.167 C 的假绿同源）。
+2. 导出二级菜单**只显示 label**，hint 挂在 `title` 属性上 ⇒ 判 label 用可见文字、判 hint 用 `[title]`（第一版拿 hint 去比可见文字）。
+3. 既有噪声登记：编辑器拉外部字体 `static.zeoseven.com/…/result.css` ⇒ `ERR_NAME_NOT_RESOLVED`（与 i18n 无关）。
+
+#### E. 基线
+- admin `node --test` **765 tests / 168 suites / 0 fail**；i18n 守卫组 **115**；
+- 变异对照 **7/7**（页头按钮退回硬编码 / 🔴 两个文件的 hook 依赖数组去掉 t / 导出子菜单改回 identity 常量 /
+  占位符↔values 对账 / 🔴 提升过的 key 换回旧名 / 语义空操作）；
+- 语言包 **930 key** ×3；`--zh-tw-audit`：930 key / **725** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **77 个文件 / TOTAL 61**（9 条永久例外）；admin 类型门禁 **31/0**；
+- 矩阵（5 个阶段全 rc=0）：admin **765/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.7b43fb4b.js` = **1,566,757 B**）；
+- 🔴 **真实剩余：57 → 54 个文件 / 864 → 783 条**；编辑器页表面 **38 条 / 6 文件**（`importMdzCore` 23 是大头）。
+- 🔴 **剩余的大块（实测排序，2026-09-26 21:14）**：`Backup.jsx` 89、`Theme.jsx` 59（🔴 这两块**等站长人工复核**）、
+  `DataManage/Category.jsx` 58、`CommentManage/BuiltinComments.jsx` 50、`About.tsx` 35、`Code/index.tsx` 29、
+  `Static/file/index.tsx` 28、`CollaboratorModal` 26、`walineEmailFields.js` 24（🔴 站长裁定延期）、
+  `importMdzCore.js` 23、`CommentManage/index.jsx` 21、`Pipeline/index.tsx` 20、`DataManage/Tag.jsx` 19、
+  `app.jsx` 18、`Welcome/viewer.jsx` 18、`DataManage/Social.jsx` 17、`restoreCore.js` 16 …（其余 27 个文件合计 106 条）。
+
 ### 7.167 期 6 第三批：编辑器偏好设置弹窗（15 条）+ 🔴 把"语言包文件"的判据收回**一份权威**（两个尺子口径漂过一次）
 
 **交付**：`components/EditorProfileModal/index.tsx`(15) → **0**；语言包 **879 → 892 key**（新组 **`editorProfile`**；

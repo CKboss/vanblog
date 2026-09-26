@@ -281,8 +281,8 @@ function actionText(key, t = IDENTITY_T) {
 }
 
 function labelText(key, t = IDENTITY_T) {
-  if (key === 'article') return t('recycle.labelArticle', '文章');
-  if (key === 'draft') return t('recycle.labelDraft', '草稿');
+  if (key === 'article') return t('common.article', '文章');
+  if (key === 'draft') return t('common.draft', '草稿');
   return t('recycle.labelFallback', '内容');
 }
 
