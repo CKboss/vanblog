@@ -203,6 +203,14 @@ const BUDGET = {
   'src/services/van-blog/importPathname.js': 0,
   'src/services/van-blog/schedule.js': 0,
   'src/components/PathnameField/index.jsx': 0,
+  // 🔴 期 7 第三批（2026-09-26）：**文章导出**（格式常量 + 结果汇总 + 下载流程）⇒ 两个 0、一个 **1**。
+  //   那 1 条是 `EXPORT_NOTE_FILENAME = '导出说明.md'` —— **服务端产物的文件名**
+  //   （`markdownExport.provider.ts` 里写死的 `relativePath`）⇒ 它是**线路契约**、不是文案，
+  //   三种语言的界面都得显示这个字面名，否则用户在压缩包里找不到那个文件。
+  //   🔴 所以它不进语言包（文案用 `{note}` 占位符），并且：① 进 REQUIRED_EXCEPTIONS 反向钉住；
+  //   ② `exportFormats.test.js` 里有一条**跨层断言**：服务端那个 `relativePath` 改名 ⇒ 这里必须跟着改。
+  'src/services/van-blog/exportFormats.js': 1,
+  'src/services/van-blog/exportMarkdown.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -217,15 +225,27 @@ const BUDGET = {
 // 🔴 **54 → 53（2026-09-26 期 7 第一批）：上面那张欠条已还。**
 //   `accessPassword.js` 接了注入式翻译器，模板改成 ICU `{target}`，实参也走 t
 //   （`clearConfirmTitle(t('accessPassword.targetThisArticle', '这篇文章'), t)`）⇒ `UpdateModal` 预算 1 → **0**。
-//   ⇒ 账目回到：🔴 **53 = 48（目标底）+ 4（Customizing 欠条，tab 那批落地时归 0）+ 1（Caddy URL 永久例外）**。
+//   ⇒ 账目回到：53 = 48（目标底）+ 4（Customizing 欠条，tab 那批落地时归 0）+ 1（Caddy URL 永久例外）。
+// 🔴 **53 → 54（2026-09-26 期 7 第三批）：多出的 1 条是 `exportFormats.js` 的 `导出说明.md`** ——
+//   **服务端产物文件名**（线路契约，不是文案），属**永久例外**那一类（与 Caddy URL 同类）：
+//   翻译了它，用户在压缩包里就找不到那个文件。⇒ 账目现在是：
+//   🔴 **54 = 48（目标底）+ 4（Customizing 欠条）+ 2（永久例外：Caddy URL、导出说明.md）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 53
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 54
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
   { file: 'src/pages/InitPage/index.tsx', text: '已初始化', why: '协议字符串：匹配服务端 HttpException 文本，翻译会静默破坏初始化检测' },
   { file: 'src/pages/InitPage/setupKeyCore.js', text: '初始化密钥', why: '要照着敲进 shell 的命令与启动日志标签；服务端输出就是简体，翻译了 grep 抓不到' },
   { file: 'src/pages/user/Login/index.jsx', text: '语言 · Language', why: '静态双语 tooltip，服务于"还没切语言的人"，刻意不走 t()' },
+  // 🔴 期 7 第三批新增（第 5 类例外形状：**服务端产物的文件名**）
+  {
+    file: 'src/services/van-blog/exportFormats.js',
+    text: '导出说明.md',
+    why:
+      '服务端把它写进 zip（markdownExport.provider.ts 的 relativePath）⇒ 是线路契约不是文案；' +
+      '界面三种语言都要显示这个字面名，否则用户在压缩包里找不到它。跨层断言在 exportFormats.test.js。',
+  },
   { file: 'src/pages/user/Restore/index.jsx', text: '语言 · Language', why: '同上' },
   // 🔴 期 3 第五批（2026-09-26）新增：**URL 锚点**也必须逐字是中文（这是第 4 类例外形状：
   //    前三类是协议字符串 / 要照着敲的命令 / 静态双语标签，这一类是"指向中文文档的锚点"）
@@ -329,15 +349,22 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 55, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 57, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
   //   🔴 两处必须一起翻（只翻实参会拼出「确定清除this post的访问密码？」这种半截话）。
   //   **还款条件**：accessPassword.js 那批落地时一起改，预算归 0、TOTAL 回到 53。
   // 🔴 54 → 53：UpdateModal 那张跨层欠条**已还**（期 7 第一批），账目见 TOTAL_BUDGET 上面那段
-  assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  // 🔴 53 → 54（2026-09-26 期 7 第三批）：涨的 1 条是 `exportFormats.js` 的 `EXPORT_NOTE_FILENAME = '导出说明.md'`
+  //   —— **服务端产物的文件名**（`markdownExport.provider.ts` 写死的 `relativePath`），属**永久例外**（与 Caddy URL 同类）：
+  //   翻译了它，用户在压缩包里就找不到那个文件。它已进 REQUIRED_EXCEPTIONS（反向钉住），
+  //   而且 `exportFormats.test.js` 有一条**跨层断言**盯着服务端那个名字。
+  assert.strictEqual(TOTAL_BUDGET, 54, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 5, '例外清单条数变了 ⇒ 必须是有意的');
+  // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
+  //   （`exportFormats.js` 的 `导出说明.md`；前四类是协议字符串 / 要照着敲的命令 / 静态双语标签 / 中文文档 URL 锚点）。
+  //   🔴 它同时被 `exportFormats.test.js` 的**跨层断言**盯着：服务端那个 `relativePath` 改名 ⇒ 两边一起改。
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 6, '例外清单条数变了 ⇒ 必须是有意的');
 });

@@ -68,7 +68,8 @@ describe('导出 Markdown（含图片）：前端封装', () => {
     assert.match(helper, /URL\.createObjectURL/);
     assert.match(helper, /revokeObjectURL/);
     // 结果文案已移进纯函数 exportFormats.js（可 node:test 直接跑，不需要 DOM）
-    assert.match(helper, /describeExportOutcome\(report, format\)/);
+    // 🔴 期 7 第三批起 exportFormats 的函数收注入式翻译器（尾参 t）⇒ 锚点换形状，性质没放
+    assert.match(helper, /describeExportOutcome\(report, format, t\)/);
     const formats = read('src/services/van-blog/exportFormats.js');
     assert.match(formats, /导出完成，但有图片没打进包/);
     assert.match(formats, /导出说明\.md/);

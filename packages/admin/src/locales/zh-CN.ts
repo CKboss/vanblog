@@ -1097,4 +1097,44 @@ export default {
   'schedule.pastWarningText': '你选择的定时发布时间「{when}」早于当前时间（{now}）。它不会处于「定时待发布」状态：保存后服务端会认为它已到期，未发布的文章会在一分钟内直接发布出去。仍要使用这个时间吗？',
   'schedule.pastWarningTitle': '定时时间早于当前时间',
 
+
+  // ── 🔴 期 7 第三批：文章导出（`exportFormats.js` + `exportMarkdown.tsx`，29 条）──
+  //    形状仍是"函数版 + identity 视图"：`exportFormats(t = IDENTITY_T)` / `loadingText(format, t)` /
+  //    `describeExportOutcome(report, format, t)` / `classifyExportFailure(body, format, t)`。
+  //    🔴 导出结果那段"多子句汇总"原来是 **4 个插值分成两句模板字符串相加** ⇒ 收成一条带 4 个 ICU 占位符的整句
+  //    （拼接式在英文里必然出接缝/复数问题：§7.152 B、§7.156 B、§7.160 C、§7.161 A 已经四次）。
+  //    🔴 `exportMarkdown.tsx` 弹的全是 `message.*` / `Modal.*`（脱离 React 树的独立根，§7.151）
+  //    ⇒ 它用 `getIntl(getLocale())` 在**调用期**取翻译器，不是 `useIntl()`（它不是组件）。
+  //    ⚠️ `导出说明.md` 是**服务端产物文件名**（线路契约）⇒ 不进语言包：文案用 `{note}` 占位符，
+  //    调用期喂 `EXPORT_NOTE_FILENAME`；`exportFormats.test.js` 有一条**跨层反向断言**钉住服务端那个名字。
+  'export.formatMdHint': '只要正文，图片仍指向站点（最快）',
+  'export.formatMdzLabel': 'Typora 图片包 (.mdz)',
+  'export.formatMdzHint': '正文 + 图片，链接改成相对路径',
+  'export.formatZipLabel': '全部打包 (.zip)',
+  'export.formatZipHint': 'md + mdz + 导出说明，一次拿全',
+  'export.loadingMd': '正在导出 Markdown…',
+  'export.loadingPack': '正在打包 Markdown 与图片…',
+  'export.outcomeMdTitle': '已导出 Markdown（不含图片）',
+  'export.outcomeMdRefs': '正文里识别到 {refs} 个图片引用，链接仍指向站点 —— 这是 .md 格式的预期行为。',
+  'export.outcomeMdPickMdz': '需要把图片一起带走（例如离线用 Typora/Obsidian 打开），请改选 Typora 图片包 (.mdz)。',
+  'export.outcomeNoImagesMdzTitle': '这篇内容没有图片',
+  'export.outcomeNoImagesTitle': '导出完成（这篇文章没有图片）',
+  'export.outcomeNoImagesWhy': '这篇文章没有图片，所以没有 .mdz —— .mdz 的意义就是把图片一起带走并改成相对路径。',
+  'export.outcomeNoImagesPickMd': '请改选 Markdown (.md)，内容是一样的。',
+  'export.outcomeNoImagesAllContent': '拿到的 .md 就是全部内容。',
+  'export.outcomeProblemsTitle': '导出完成，但有图片没打进包',
+  'export.outcomeProblemsSummary': '正文里识别到 {refs} 个图片引用，成功打包 {packed} 张（本站 {local} / 外链 {remote}）。',
+  'export.outcomeProblemsFailed': '抓取失败 {failed} 张，md 里保留了原链接。',
+  'export.outcomeProblemsSkipped': '跳过 {skipped} 个（data URI、无法定位的相对路径等）。',
+  'export.outcomeZipNote': '压缩包里的「{note}」有完整清单。',
+  'export.noImagesFallback': '这篇内容没有图片，所以没有 .mdz。',
+  'export.noImagesDetailRefs': '正文里识别到 {refs} 个图片引用，但都不是能打包进 .mdz 的本地/可抓取图片。',
+  'export.noImagesDetailNone': '正文里没有任何图片引用，.mdz 与 .md 的内容完全相同。',
+  'export.failed': '导出失败！',
+  'export.noFileFromServer': '导出失败：服务端没有返回文件',
+  'export.noImagesModalTitle': '这篇内容没有图片，所以没有 .mdz',
+  'export.noImagesModalOk': '改为导出 Markdown (.md)',
+  'export.noImagesModalNote': '.mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。',
+  'export.success': '导出成功！',
+
 };

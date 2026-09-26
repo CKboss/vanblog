@@ -2,7 +2,7 @@ import { Dropdown, Menu } from 'antd';
 import { DownOutlined } from '@ant-design/icons';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { EXPORT_FORMATS } = require('@/services/van-blog/exportFormats');
+const { exportFormats } = require('@/services/van-blog/exportFormats');
 import { useIntl } from 'umi';
 
 /**
@@ -18,8 +18,10 @@ import { useIntl } from 'umi';
 export default function ExportFormatDropdown({ payload, text, ...rest }) {
   // 🔴 原来 `text = '导出'` 是**默认参数**里的中文：默认参数在函数签名上，没法在那里调 hook ⇒
   //    改成"默认值 undefined + 函数体里用 t() 兜底"，文案与行为都不变（调用方仍可显式传 text）。
-  // ⚠️ 菜单里的 `f.label` / `f.hint` 来自 `services/van-blog/exportFormats`（服务层常量，
-  //    被 exportFormats.test.js 钉着）⇒ 本轮不动，🔴 切英文时那三行格式说明仍是中文（已知中间态，期 7 闭合）。
+  // 🔴 菜单里的 `f.label` / `f.hint` 来自 `services/van-blog/exportFormats` 的**函数版**
+  //    （`exportFormats(t)`，期 7 第三批接上）⇒ 三行格式说明现在跟着语言走。
+  //    ⚠️ 不要改回 `EXPORT_FORMATS` 那个 identity 常量 —— 它永远是中文，
+  //    而 localePackParity 有一条判据专门盯"已接 i18n 的文件不许用 identity 常量取文案"。
   const intl = useIntl();
   const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const triggerText = text || t('common.export', '导出');
@@ -30,7 +32,7 @@ export default function ExportFormatDropdown({ payload, text, ...rest }) {
         downloadMarkdownExport({ ...(payload || {}), format: key });
       }}
     >
-      {EXPORT_FORMATS.map((f) => (
+      {exportFormats(t).map((f) => (
         <Menu.Item key={f.key} title={f.hint}>
           <div>
             <div>{f.label}</div>

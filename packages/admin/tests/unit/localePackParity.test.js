@@ -180,6 +180,8 @@ const IDENTICAL_ZH_TW_OK = [
   'common.back',
   // 🔴 期 5 第九批：`文章 {id}`（标题为空时的回退）简繁同形
   'coverBackfill.untitled',
+  // 🔴 期 7 第三批：`全部打包 (.zip)` 简繁同形
+  'export.formatZipLabel',
   // 🔴 期 5 第十批（历史版本）：返回列表 / 大小 {size} / （{message}）三条简繁同形
   'revision.backToList',
   'revision.sizeValue',
@@ -329,12 +331,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 51,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 51）⇒ 遍历或解析器坏了`,
+      FILES.length >= 53,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 53）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1040,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1040）⇒ 疑似解析器坏了`,
+      calls.length >= 1070,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1070）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -383,6 +385,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/tagTokens.js',
       'src/services/van-blog/importPathname.js',
       'src/services/van-blog/schedule.js',
+      'src/services/van-blog/exportFormats.js',
+      'src/services/van-blog/exportMarkdown.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -670,6 +674,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         'summarizeBackfill', 'normalizeBackfillItems', 'emptyResultText',
       ],
       // 🔴 期 5 第十批：历史版本的纯逻辑模块（7 个常量函数 + 9 个产文案函数）
+      // 🔴 期 7 第三批：文章导出（格式数组 + 下载中提示 + 结果汇总 + 失败分类）
+      'src/services/van-blog/exportFormats.js': [
+        'exportFormats', 'loadingText', 'describeExportOutcome', 'classifyExportFailure',
+      ],
       // 🔴 期 7 第二批：三个服务层字段常量模块（函数版 + identity 视图）
       'src/services/van-blog/tagTokens.js': ['tagFieldPlaceholder', 'tagFieldTooltip'],
       'src/services/van-blog/importPathname.js': ['pathnameField'],
@@ -1579,6 +1587,9 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
         'SCHEDULED_TAG_TEXT', 'PUBLISH_AT_PLACEHOLDER', 'PUBLISH_AT_TOOLTIP', 'PUBLISH_AT_HELP',
         'PAST_SCHEDULE_WARNING_TITLE',
       ],
+      // 🔴 期 7 第三批：`EXPORT_FORMATS`（`ExportFormatDropdown` 必须改用 `exportFormats(t)`；
+      //    `pages/Editor/index.jsx` 还没接 i18n ⇒ 继续用常量、走 identity，这是**预期**）
+      'src/services/van-blog/exportFormats.js': ['EXPORT_FORMATS'],
       'src/services/van-blog/coverBackfill.js': ['EMPTY_RESULT_TEXT'],
       'src/components/RevisionHistory/revisionCore.js': [
         'FEATURE_OFF_TEXT', 'EMPTY_TEXT', 'DETAIL_EMPTY_CONTENT_TEXT', 'REVISION_REASON_LABELS',

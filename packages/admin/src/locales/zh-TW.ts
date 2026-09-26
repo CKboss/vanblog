@@ -965,4 +965,37 @@ export default {
   'schedule.pastWarningText': '你選擇的定時發布時間「{when}」早於目前時間（{now}）。它不會處於「定時待發布」狀態：儲存後伺服器會認為它已到期，未發布的文章會在一分鐘內直接發布出去。仍要使用這個時間嗎？',
   'schedule.pastWarningTitle': '定時時間早於目前時間',
 
+
+  // ── 🔴 期 7 第三批（29 條）── 術語：**匯出**（导出）/ 圖片 / 連結 / 相對路徑 / 打包 / 壓縮包 / 清單 /
+  //    正文 / 站點 / **外部連結**（外链）/ 識別 / 抓取失敗 / 跳過 / 開啟（打开）/ 離線 / 伺服器 / 檔案。
+  'export.formatMdHint': '只要正文，圖片仍指向站點（最快）',
+  'export.formatMdzLabel': 'Typora 圖片包 (.mdz)',
+  'export.formatMdzHint': '正文 + 圖片，連結改成相對路徑',
+  'export.formatZipLabel': '全部打包 (.zip)',
+  'export.formatZipHint': 'md + mdz + 匯出說明，一次拿全',
+  'export.loadingMd': '正在匯出 Markdown…',
+  'export.loadingPack': '正在打包 Markdown 與圖片…',
+  'export.outcomeMdTitle': '已匯出 Markdown（不含圖片）',
+  'export.outcomeMdRefs': '正文裡識別到 {refs} 個圖片引用，連結仍指向站點 —— 這是 .md 格式的預期行為。',
+  'export.outcomeMdPickMdz': '需要把圖片一起帶走（例如離線用 Typora/Obsidian 開啟），請改選 Typora 圖片包 (.mdz)。',
+  'export.outcomeNoImagesMdzTitle': '這篇內容沒有圖片',
+  'export.outcomeNoImagesTitle': '匯出完成（這篇文章沒有圖片）',
+  'export.outcomeNoImagesWhy': '這篇文章沒有圖片，所以沒有 .mdz —— .mdz 的意義就是把圖片一起帶走並改成相對路徑。',
+  'export.outcomeNoImagesPickMd': '請改選 Markdown (.md)，內容是一樣的。',
+  'export.outcomeNoImagesAllContent': '拿到的 .md 就是全部內容。',
+  'export.outcomeProblemsTitle': '匯出完成，但有圖片沒打進包',
+  'export.outcomeProblemsSummary': '正文裡識別到 {refs} 個圖片引用，成功打包 {packed} 張（本站 {local} / 外部連結 {remote}）。',
+  'export.outcomeProblemsFailed': '抓取失敗 {failed} 張，md 裡保留了原連結。',
+  'export.outcomeProblemsSkipped': '跳過 {skipped} 個（data URI、無法定位的相對路徑等）。',
+  'export.outcomeZipNote': '壓縮包裡的「{note}」有完整清單。',
+  'export.noImagesFallback': '這篇內容沒有圖片，所以沒有 .mdz。',
+  'export.noImagesDetailRefs': '正文裡識別到 {refs} 個圖片引用，但都不是能打包進 .mdz 的本地/可抓取圖片。',
+  'export.noImagesDetailNone': '正文裡沒有任何圖片引用，.mdz 與 .md 的內容完全相同。',
+  'export.failed': '匯出失敗！',
+  'export.noFileFromServer': '匯出失敗：伺服器沒有返回檔案',
+  'export.noImagesModalTitle': '這篇內容沒有圖片，所以沒有 .mdz',
+  'export.noImagesModalOk': '改為匯出 Markdown (.md)',
+  'export.noImagesModalNote': '.mdz 的意義就是把圖片一起帶走並改成相對路徑；沒有圖片時它與 .md 完全等價。',
+  'export.success': '匯出成功！',
+
 };

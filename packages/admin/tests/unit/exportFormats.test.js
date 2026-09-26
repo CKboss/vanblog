@@ -84,8 +84,9 @@ test('接线：服务层把 format 传给接口，并按格式决定文件名与
   assert.match(src, /format,\s*\n?\s*\}\);|format,\n\s*\}\);/s, '请求体里必须带 format');
   assert.match(src, /normalizeExportFormat\(opts\.format\)/);
   assert.match(src, /fallbackFileName\(safeName\(opts\.title \|\| ''\), format\)/);
-  assert.match(src, /loadingText\(format\)/);
-  assert.match(src, /describeExportOutcome\(report, format\)/);
+  assert.match(src, /loadingText\(format, t\)/);
+  // 🔴 期 7 第三批起 exportFormats 的函数收注入式翻译器（尾参 t）⇒ 锚点换形状，性质没放
+    assert.match(src, /describeExportOutcome\(report, format, t\)/);
   // 老的"按 problems 数量弹警告"逻辑必须已经被纯函数取代（否则 md 会误报）
   assert.ok(!src.includes('const problems = (report.failed || 0) + (report.skipped || 0);'), '旧的内联判断应已移入纯函数');
 });
@@ -164,7 +165,7 @@ test('⚠️ 判据是机器可读的 code，不是中文文案（改文案不�
     require('node:path').join(__dirname, '..', '..', 'src/services/van-blog/exportMarkdown.tsx'),
     'utf8',
   );
-  assert.match(tsx, /classifyExportFailure\(parsed, format\)/);
+  assert.match(tsx, /classifyExportFailure\(parsed, format, t\)/);
   assert.match(tsx, /failure\.kind === 'no-images'/);
   assert.match(tsx, /改为导出 Markdown \(\.md\)/);
   assert.match(tsx, /onOk: \(\) => downloadMarkdownExport\(\{ \.\.\.opts, format: 'md' \}\)/);
@@ -175,4 +176,154 @@ test('⚠️ 判据是机器可读的 code，不是中文文案（改文案不�
   );
   assert.match(ctrl, /code: 'NO_IMAGES_FOR_MDZ'/);
   assert.match(ctrl, /imageRefs: report\.imageRefs/);
+});
+
+// 🔴 期 7 第三批新增：**跨层**断言 —— 界面上那个文件名与服务端写进 zip 的那个必须**逐字相同**
+const fsx = require('fs');
+const pathx = require('path');
+
+test('🔴 导出说明.md：admin 文案里引用的文件名 = 服务端产物的文件名（跨层线路契约）', () => {
+  // 🔴 四层：tests/unit → tests → admin → packages → 仓库根（第一版写了三层 ⇒ 路径变成 packages/packages/…）
+  const repoRoot = pathx.resolve(__dirname, '../../../..');
+  const SERVER = pathx.join(repoRoot, 'packages/server/src/provider/export/markdownExport.provider.ts');
+  {
+    // ## 为什么要这条（2026-09-26 期 7 第三批）
+    // `EXPORT_NOTE_FILENAME` 是**唯一一条刻意不翻译**的中文（棘轮预算 1、REQUIRED_EXCEPTIONS 里反向钉住）：
+    // 它是服务端产物的文件名，翻译了用户就在压缩包里找不到它。
+    // 🔴 但"不翻译"必须**两边一起成立** —— 服务端哪天改了名（或者反过来，有人把好心的翻译加回来），
+    // 界面就会指向一个不存在的文件，而且**所有测试照旧全绿**（没有任何一条断言跨这两层）。
+    const core = require('../../src/services/van-blog/exportFormats.js');
+    assert.equal(core.EXPORT_NOTE_FILENAME, '导出说明.md', 'admin 这边必须是这个字面名');
+    assert.ok(fsx.existsSync(SERVER), `找不到服务端文件：${SERVER}`);
+    const src = fsx.readFileSync(SERVER, 'utf8');
+    assert.match(
+      src,
+      /relativePath:\s*'导出说明\.md'/,
+      '🔴 服务端不再把说明文件写成 导出说明.md ⇒ admin 的 EXPORT_NOTE_FILENAME 与那条文案必须同步改（这是线路契约）',
+    );
+    // 🔴 文案里必须是**占位符**，不是把文件名写死在语言包里（否则 en-US 会出现汉字、zh-TW 会出现简体字）
+    const packs = ['zh-CN', 'zh-TW', 'en-US'].map((l) => {
+      const p = pathx.join(repoRoot, `packages/admin/src/locales/${l}.ts`);
+      const m = fsx.readFileSync(p, 'utf8').match(/'export\.outcomeZipNote':\s*'([^']*)'/);
+      assert.ok(m, `${l} 包里必须有 export.outcomeZipNote`);
+      return m[1];
+    });
+    for (const v of packs) {
+      assert.ok(v.includes('{note}'), `export.outcomeZipNote 必须用 {note} 占位符，实际：${v}`);
+      assert.ok(!v.includes('导出说明'), `语言包里不许出现那个文件名（它是线路契约、由调用期喂进去），实际：${v}`);
+    }
+    // 🔴 组装出来必须与 identity 时代的文案逐字相同（这是"不传 t 时输出不变"的具体一例）
+    const out = core.describeExportOutcome({ imageRefs: 2, packedImages: 1, failed: 1 }, 'zip');
+    assert.ok(
+      out.lines.some((l) => l === `压缩包里的「${core.EXPORT_NOTE_FILENAME}」有完整清单。`),
+      `identity 路径下那句话必须逐字不变，实际：${JSON.stringify(out.lines)}`,
+    );
+  }
+});
+
+// 🔴 期 7 第三批：注入翻译器之后，**identity 与注入两条路径都要对**（与 revisionCore 那组同一手法）。
+// ⚠️ 其中"无图选 .mdz"那条分支在**浏览器里走不到**（umi-request 对 400 直接 reject，嗅探分支成了死代码，
+//    实测浮层只有 `http error`；服务端契约本身是对的：400 + NO_IMAGES_FOR_MDZ）⇒ 只能在这里验（§7.162 E）。
+const pathL = require('node:path');
+const astInv = require(pathL.resolve(__dirname, '../../../../scripts/i18n/astInventory.js'));
+const adminRootL = pathL.resolve(__dirname, '../..');
+const packOfL = (l) => astInv.readPack(pathL.join(adminRootL, `src/locales/${l}.ts`), `${l}.ts`);
+// 🔴 用**真的 react-intl** 来格式化，不要自己实现 ICU：
+//    英文那几条是 `{refs, plural, one {# image reference} other {# image references}}`，
+//    自己写的"只替换 {name}"的假 t 会把整段 plural 原样吐出来（第一版就是这么红的）。
+//    👉 这也是本项目"不要复刻别人的公式/语法"那条规矩的又一次应用（同族：encryptPwd 的 6 次 sha256）。
+// 🔴 `react-intl` 不是 admin 的**直接**依赖（它是 `@umijs/plugin-locale` 带进来的），
+//    在 pnpm 的 store 里 ⇒ 直接 `require('react-intl')` 会 MODULE_NOT_FOUND。
+//    这里**按目录形状找**（`node_modules/.pnpm/react-intl@*/node_modules/react-intl`），不写死版本号；
+//    找不到就**大声失败**（不许静默跳过 —— 那几条 ICU 复数断言是本批唯一的复数证据）。
+const repoRootL = pathL.resolve(__dirname, '../../../..');
+const pnpmDirL = pathL.join(repoRootL, 'node_modules/.pnpm');
+const reactIntlDirL = (() => {
+  if (!fs.existsSync(pnpmDirL)) return null;
+  const hit = fs.readdirSync(pnpmDirL).filter((d) => d.startsWith('react-intl@')).sort().pop();
+  return hit ? pathL.join(pnpmDirL, hit, 'node_modules/react-intl') : null;
+})();
+assert.ok(reactIntlDirL && fs.existsSync(reactIntlDirL),
+  `🔴 在 ${pnpmDirL} 下找不到 react-intl（本文件要用**真的 ICU 实现**验复数，不接受自己实现的替代品）`);
+// eslint-disable-next-line import/no-dynamic-require
+const { createIntl } = require(reactIntlDirL);
+const makeTL = (locale) => {
+  const pack = packOfL(locale);
+  const intl = createIntl({ locale, messages: pack, defaultLocale: 'en-US' });
+  return (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+};
+
+test('🔴 注入 t 之后：导出下拉三项、下载中提示、结果汇总都是英文（identity 路径仍逐字是中文）', () => {
+  const en = makeTL('en-US');
+  const tw = makeTL('zh-TW');
+  const formats = core.exportFormats(en);
+  assert.equal(formats.length, 3);
+  assert.equal(formats[0].label, 'Markdown (.md)', '.md 那项的标签本来就没有中文 ⇒ 三种语言一样');
+  assert.equal(formats[1].label, 'Typora image bundle (.mdz)');
+  assert.equal(formats[2].label, 'Everything in one archive (.zip)');
+  assert.equal(formats[0].hint, 'Body only; images still point at the site (fastest)');
+  // 🔴 key/ext 是**契约字段**，不许跟着语言变（服务端与文件名都靠它）
+  assert.deepEqual(formats.map((f) => f.key), ['md', 'mdz', 'zip']);
+  assert.deepEqual(formats.map((f) => f.ext), ['.md', '.mdz', '-markdown.zip']);
+  assert.deepEqual(core.exportFormats().map((f) => f.key), ['md', 'mdz', 'zip'], 'identity 路径的 key 顺序不变');
+  assert.equal(core.loadingText('md', en), 'Exporting Markdown…');
+  assert.equal(core.loadingText('zip', en), 'Packing Markdown and images…');
+  assert.equal(core.loadingText('zip'), '正在打包 Markdown 与图片…', 'identity 路径逐字不变');
+  assert.equal(core.loadingText('zip', tw), '正在打包 Markdown 與圖片…');
+});
+
+test('🔴 结果汇总：英文的计数句必须是 ICU 复数**渲染后**的形状（不是字面 {refs}）', () => {
+  const en = makeTL('en-US');
+  const out = core.describeExportOutcome(
+    { imageRefs: 1, packedImages: 1, localImages: 1, remoteImages: 0, failed: 1, skipped: 2 },
+    'zip',
+    en,
+  );
+  assert.equal(out.title, 'Export finished, but some images did not make it into the archive');
+  assert.equal(
+    out.lines[0],
+    'Found 1 image reference in the body and packed 1 image (1 local, 0 external).',
+    '🔴 单数必须是 "1 image reference" / "1 image"（ICU plural 生效），实测：' + out.lines[0],
+  );
+  assert.equal(out.lines[1], '1 image could not be fetched; the md keeps the original links.');
+  assert.equal(out.lines[2], 'Skipped 2 references (data URIs, relative paths that could not be resolved, and so on).');
+  assert.equal(out.lines[3], `The ${core.EXPORT_NOTE_FILENAME} inside the archive has the full list.`);
+  assert.ok(!out.lines.join(' ').includes('{'), '🔴 任何一行都不许留下字面占位符');
+  // 复数形状
+  const plural = core.describeExportOutcome({ imageRefs: 3, packedImages: 2, failed: 0, skipped: 0 }, 'md', en);
+  assert.equal(
+    plural.lines[0],
+    'Found 3 image references in the body; the links still point at the site. That is what the .md format does.',
+  );
+  // identity 路径仍逐字是中文（黄金样本在上面那几组里，这里再钉一次"两条路径不同"）
+  assert.ok(core.describeExportOutcome({ imageRefs: 3 }, 'md').lines[0].includes('正文里识别到 3 个图片引用'));
+});
+
+test('🔴 无图选 .mdz：失败分类的文案（浏览器走不到这条分支 ⇒ 只能在这里验）', () => {
+  const en = makeTL('en-US');
+  const tw = makeTL('zh-TW');
+  const body = { statusCode: 400, code: 'NO_IMAGES_FOR_MDZ', imageRefs: 0, message: '这篇内容里没有可打包的图片' };
+  const out = core.classifyExportFailure(body, 'mdz', en);
+  assert.equal(out.kind, 'no-images');
+  assert.equal(out.message, '这篇内容里没有可打包的图片', '🔴 服务端的 message 是**权威文案**，照实显示（不翻译）');
+  assert.equal(out.tone, 'info', '这不是失败 ⇒ 必须是 info，不能弹红');
+  assert.equal(out.offerMd, true, 'mdz 才需要"一键改导 .md"');
+  assert.equal(out.detail, 'The body has no image references at all, so .mdz and .md would be identical.');
+  const withRefs = core.classifyExportFailure({ ...body, imageRefs: 2 }, 'mdz', en);
+  assert.equal(
+    withRefs.detail,
+    'Found 2 image references in the body, but none of them is a local or fetchable image that can go into a .mdz.',
+  );
+  // 繁体
+  assert.equal(core.classifyExportFailure({ code: 'NO_IMAGES_FOR_MDZ', imageRefs: 0 }, 'mdz', tw).detail,
+    '正文裡沒有任何圖片引用，.mdz 與 .md 的內容完全相同。');
+  // 服务端没给 message 时才用我们的兜底
+  assert.equal(core.classifyExportFailure({ code: 'NO_IMAGES_FOR_MDZ' }, 'mdz', en).message,
+    'This post has no images, so there is no .mdz.');
+  // 真错误那条
+  const err = core.classifyExportFailure({ message: 'boom' }, 'zip', en);
+  assert.equal(err.kind, 'error');
+  assert.equal(err.message, 'boom');
+  assert.equal(core.classifyExportFailure({}, 'zip', en).message, 'Export failed');
+  assert.equal(core.classifyExportFailure({}, 'zip').message, '导出失败！', 'identity 路径逐字不变');
 });

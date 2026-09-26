@@ -1,4 +1,5 @@
 import { Modal, message } from 'antd';
+import { getIntl, getLocale } from 'umi';
 import { exportMarkdownZip } from './api';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
@@ -84,8 +85,15 @@ async function readErrorJson(blob: Blob): Promise<any> {
 }
 
 export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promise<boolean> {
+  // 🔴 这个函数弹的全是 `message.*` / `Modal.*` —— 它们渲染进**脱离 React 树的独立根**，
+  //    umi 不会给它们套 IntlProvider（§7.151 那条实测缺陷）⇒ 这里必须用 `getIntl(getLocale())`
+  //    （**调用期**取当前语言），不能用 `useIntl()`（这不是组件，没有 hook 上下文）。
+  //    ⚠️ values 的类型必须是 `Record<string, any>`（写成 `unknown` 会撞 TS2769）。
+  const intl = getIntl(getLocale());
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const format = normalizeExportFormat(opts.format);
-  const hide = message.loading(loadingText(format), 0);
+  const hide = message.loading(loadingText(format, t), 0);
   try {
     const res: any = await exportMarkdownZip({
       id: opts.id,
@@ -97,7 +105,7 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
     const blob: Blob | undefined = res?.data;
     const response = res?.response;
     if (!blob) {
-      message.error('导出失败：服务端没有返回文件');
+      message.error(t('export.noFileFromServer', '导出失败：服务端没有返回文件'));
       return false;
     }
     // 出错时服务端返回的是 JSON，但 responseType 是 blob，得先嗅探一下
@@ -105,18 +113,21 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
       // ⚠️ 这里不能一律弹红色报错：「这篇文章没有图片所以没有 .mdz」不是失败，
       // 是一条提示，而且用户真正想要的东西一键就能拿到（改导 .md）。
       const parsed = await readErrorJson(blob);
-      const failure = classifyExportFailure(parsed, format);
+      const failure = classifyExportFailure(parsed, format, t);
       if (failure.kind === 'no-images') {
         Modal.confirm({
-          title: '这篇内容没有图片，所以没有 .mdz',
+          title: t('export.noImagesModalTitle', '这篇内容没有图片，所以没有 .mdz'),
           width: 520,
-          okText: '改为导出 Markdown (.md)',
-          cancelText: '取消',
+          okText: t('export.noImagesModalOk', '改为导出 Markdown (.md)'),
+          cancelText: t('init.restore.confirmCancel', '取消'),
           content: (
             <div>
               <p>{failure.detail}</p>
               <p style={{ color: '#888' }}>
-                .mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。
+                {t(
+                  'export.noImagesModalNote',
+                  '.mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。',
+                )}
               </p>
             </div>
           ),
@@ -124,7 +135,7 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
         });
         return false;
       }
-      message.error(failure.message || '导出失败！');
+      message.error(failure.message || t('export.failed', '导出失败！'));
       return false;
     }
 
@@ -148,13 +159,13 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
     }
 
     if (!report) {
-      message.success('导出成功！');
+      message.success(t('export.success', '导出成功！'));
       return true;
     }
     // ⚠️ 按格式解释结果：.md 本来就不含图片，不能弹「有图片没打进包」
-    const outcome = describeExportOutcome(report, format);
+    const outcome = describeExportOutcome(report, format, t);
     if (!outcome) {
-      message.success('导出成功！');
+      message.success(t('export.success', '导出成功！'));
       return true;
     }
     if (outcome.tone === 'info') {
@@ -191,7 +202,7 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
     });
     return true;
   } catch (err: any) {
-    message.error(err?.message || '导出失败！');
+    message.error(err?.message || t('export.failed', '导出失败！'));
     return false;
   } finally {
     hide();

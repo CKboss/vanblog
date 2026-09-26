@@ -9469,6 +9469,89 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.162 期 7 第三批：文章导出（37 条）—— 🔴 第 5 类"不可翻译"例外（服务端产物文件名），以及活体量出一个**与 i18n 无关的真缺陷**
+
+**交付**：`services/van-blog/exportFormats.js`(30) + `services/van-blog/exportMarkdown.tsx`(7) = **37 条 → 0**
+（另有 **1 条刻意保留**，见 A 段）；消费方 `ExportFormatDropdown` 改用 `exportFormats(t)`；
+语言包 **815 → 844 key**（新组 **`export`**）；棘轮清单 **55 → 57 个文件**，🔴 **TOTAL 53 → 54**
+（多的 1 条是**永久例外**，账目注释同步改成 `54 = 48 目标底 + 4 Customizing 欠条 + 2 永久例外`）；
+`REQUIRED_EXCEPTIONS` **5 → 6**；`i18nKeyNaming` → **844**；`localePackParity` 下界 **51 → 53 个文件 /
+1040 → 1070 个调用点**（实测 53 / 1078）。
+🔴 **浏览器活体 16/16（zh-CN 4 + en-US 7 + zh-TW 5），problems 0**，skipped 3（同一条已登记缺陷，每个语言各记一次）：
+导出下拉的**三项标签 + 三句代价说明**（全来自服务层 `exportFormats(t)`）、.md 导出后的 `Modal.info`
+（标题 + 🔴 **ICU 复数渲染后的整句** `Found 1 image reference in the body; …`）、下载中提示
+（`Packing Markdown and images…`）、以及两条反向判据（en-US 菜单**零汉字** / zh-TW **零简体专用字**）。
+证据：`vanblog_dev/i18n-browser-evidence/phase7-export/`。
+
+#### A. 🔴 第 5 类"不可翻译"例外：**服务端产物的文件名**
+`导出说明.md` 是服务端写进 zip 的文件（`markdownExport.provider.ts` 的 `relativePath: '导出说明.md'`）
+⇒ 它是**线路契约**、不是文案：翻译了它，用户在压缩包里就找不到那个文件。三件事一起做（缺一件都会留坑）：
+1. 它**不进语言包**：文案写成 `'压缩包里的「{note}」有完整清单。'`，调用期喂 `EXPORT_NOTE_FILENAME`
+   ⇒ 🔴 于是 en-US 里**没有汉字**、zh-TW 里**没有简体字**，两条既有判据都不用开例外
+   （第一版打算往简体字表的例外里加"导/说"两个字 —— 那会把**真的简体泄漏**一起放过去 ⇒ 🔴 放弃）；
+2. 棘轮给这个文件预算 **1**（不是 0）并写清理由；`TOTAL_BUDGET` 与 `i18nSharedImpl` 里**两处** 53 都改成 54
+   （🔴 这两个数字是分开的两处断言，只改一处会红在另一处 —— 本批实测踩过）；
+3. 🔴 进 `REQUIRED_EXCEPTIONS`（反向钉住"它必须仍是这个字面量"），**并且**加一条**跨层断言**：
+   服务端那个 `relativePath` 一旦改名 ⇒ 红（两边必须一起改），同时断言三份语言包里那条文案
+   **必须用 `{note}` 占位符、不许出现文件名本身**。
+👉 🔴 **规矩：界面文案里嵌着"由别的层决定的字面量"（文件名 / URL 锚点 / 协议字符串 / 要照着敲的命令）时，
+一律走"占位符 + 常量 + 跨层反向断言"** —— 不要为了"翻干净"去翻它，也不要靠放宽字符表来放行它。
+（这是第 5 类例外形状；前四类：协议字符串 `已初始化`、要照着敲的 `初始化密钥`、静态双语标签、中文文档 URL 锚点。）
+
+#### B. 🔴 活体量出一个**与 i18n 无关的真缺陷**：无图文章选 .mdz 时，"改导 .md"那条 UX 是**死代码**
+探针播了两篇文章（A 有图、B 无图）。B 选 .mdz 之后**什么弹窗都没有**。逐级查证：
+1. 服务端契约是**对的**：直接 POST `/api/admin/export/markdown`（mdz）⇒
+   `400 {"statusCode":400,"code":"NO_IMAGES_FOR_MDZ","imageRefs":0,"message":"这篇内容里没有可打包的图片…"}`；
+2. 🔴 但 `exportMarkdownZip` 走 umi-request，**非 2xx 直接 reject** ⇒ `exportMarkdown.tsx` 里那段
+   "嗅探 blob 是不是 JSON、再 `classifyExportFailure`"的分支**永远不执行**；
+3. 用户实际看到的是 catch 里的 `err?.message` —— 实测浮层是 🔴 **`msg: http error`**
+   （既不是翻好的文案，也不是任何有意义的提示；`skipErrorHandler: true` 只关掉全局 toast，不改变 reject 行为）。
+⇒ 本批**不动行为**（修它要改请求错误处理 + 补测试，属独立一批），做三件事：
+① 探针判据改成钉**实测现状**（下载中提示必须是翻好的那句 + 确认框**没出现** + 出现的是 `http error`），skip 写明原因；
+② 那条分支的文案改用**单测 + 真实语言包**验（C 段）；③ 缺陷与修法记在这里 + 待办清单（E 段）。
+🔴 **教训（口径类）**：`waitForSelector` 超时之后再抓浮层**必然抓空** —— antd 的 `message.*` 3 秒就自己消失。
+第一版就是这么被骗的（dump 全空 ⇒ 一度以为"点击没生效"，还去怀疑第二层下拉）。修法：**边等边采**
+（每 500ms 收一次、去重累积）。👉 与"探针要量可见性/边界框"同一条：**瞬态 UI 要用时间轴采，不能用事后快照**。
+⚠️ 同一次排查里还踩了两个"我以为的形状"：诊断请求用了 **GET + query**（真实接口是 **POST + JSON body** ⇒ 404 `Cannot GET …`）；
+文章列表的形状是 `data.articles`（不是 `data.data`）。
+
+#### C. 🔴 单测里验 ICU 复数，必须用**真的 react-intl**（不许自己实现）
+`{refs, plural, one {# image reference} other {# image references}}` 这类值，用"只替换 `{name}`"的假 t
+会把整段 plural **原样吐出来**（第一版就是这么红的：actual 里带着 `{refs, plural, one {…}}`）。
+⇒ 改用 `createIntl({ locale, messages: 真实语言包 })`，于是断言可以钉**渲染后的整句**：
+`Found 1 image reference in the body and packed 1 image (1 local, 0 external).`（🔴 单数形状）与
+`Found 3 image references …`（复数形状），再加一条 `!lines.join(' ').includes('{')`（不许留字面占位符）。
+⚠️ `react-intl` **不是 admin 的直接依赖**（`@umijs/plugin-locale` 带进来的）⇒ `require('react-intl')` 会 MODULE_NOT_FOUND；
+改成按目录形状在 `node_modules/.pnpm/react-intl@*/` 下找（🔴 **不写死版本号**），找不到就**大声失败**（不许静默跳过）。
+👉 🔴 与"不要复刻 `encryptPwd` 的 6 次 sha256"同一条规矩：**别人的语法/公式要用别人的实现验**。
+
+#### D. 变异对照 6/6 —— 🔴 上一批新加的两条判据在生效当轮就被证明承重
+M1（下拉改回 `EXPORT_FORMATS`）红在**上一批新加的** identity 常量判据；
+M3（values 里删掉 `packed`）红在**上一批新加的**占位符↔values 对账；
+M5（英文 plural 改回裸占位符）红在复数守卫；M4（把 `导出说明.md` 改成 `export-notes.md`）**一次红 4 条**
+（跨层断言 / REQUIRED_EXCEPTIONS / 棘轮逐文件 / identity 整句对账）；M2（`loadingText` 漏传 t）红在调用点判据；M6 语义空操作绿。
+
+#### E. 🔴 已登记待办（本批发现，未修）
+1. **无图选 .mdz 的错误处理**（B 段）：要么让 `exportMarkdownZip` 在非 2xx 时把 body 交回来，
+   要么在 catch 里按 `err.response.status` 走 `classifyExportFailure`；同时 🔴 `err?.message` 这个兜底
+   **不许直接给用户看**（`http error` 就是它漏出来的）⇒ 与"~21 处 `message.error(….message)` 直通点"是同一件事，
+   一起接 `translateServerErrorMessage`。
+2. `pages/Editor/index.jsx` 仍用 identity 的 `EXPORT_FORMATS`（Editor 那批落地时改成 `exportFormats(t)`）。
+
+#### F. 基线
+- admin `node --test` **762 tests / 168 suites / 0 fail**（+4 = C 段那三组两条路径断言 + A 段那条跨层断言）；i18n 守卫组 **112**；
+- 语言包 **844 key** ×3；`--zh-tw-audit`：844 key / **716** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **57 个文件 / TOTAL 54**（🔴 其中 2 条是永久例外）；admin 类型门禁 **31/0**（`.tsx` 服务层新接 i18n，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **762/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.0a3b3a08.js` = **1,539,468 B**）；
+- 🔴 **真实剩余：72 → 71 个文件 / 952 → 916 条**；文章页表面只剩 **11 条 / 7 个文件**
+  （🔴 逐个抄自 `pageSurface.js` 的实测输出，不是凭印象：`requestError` 4 / `parseMarkdownFile` 2 /
+  `CopyUploadBtn` 1 / `UploadBtn` 1 / `check.ts` 1 / `formatTime` 1 / `exportFormats` 1 ← 就是 A 段那条**永久例外**）。
+- 🔴 **下一批**：① 把文章页那 10 条扫掉（`requestError` / `parseMarkdownFile` / `formatTime` / `check` /
+  两个上传按钮）⇒ 🔴 **文章管理页整页归零**（只剩那条刻意的文件名）；② `pages/Editor/**`（最大，143 条 / 15 文件）；③ `DataManage/**`(134) / `CommentManage`(71)；
+  ④ `SystemConfig` 收尾（`SiteInfo.tsx` 8 / `migrate.tsx` 5）；⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.161 期 7 第二批：服务层字段常量（tagTokens / importPathname / schedule，15 条）—— 🔴 变异对照**打不红两次**，当场补了两条判据
 
 **交付**：`services/van-blog/tagTokens.js`(2) + `importPathname.js`(3) + `schedule.js`(10) = **15 条 → 0**；

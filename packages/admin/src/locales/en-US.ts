@@ -1019,4 +1019,39 @@ export default {
   'schedule.pastWarningText': 'The scheduled time you chose, {when}, is earlier than the current time ({now}). It will not be in the scheduled state: after saving, the server treats it as due and publishes an unpublished post within a minute. Do you still want to use this time?',
   'schedule.pastWarningTitle': 'The scheduled time is in the past',
 
+
+  // ── 🔴 期 7 第三批（29 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    🔴 计数句一律 ICU plural；`({local} local, {remote} external)` 是"占位符 + 形容词"⇒ **不用** plural。
+  //    ⚠️ `Markdown` / `.md` / `.mdz` / `.zip` / `Typora` / `Obsidian` / `data URI` 都是技术标识符，原样保留。
+  //    🔴 `{note}` 是服务端产物文件名（`导出说明.md`）⇒ 英文值里**不出现汉字**，因为那个字面量在调用期才喂进来。
+  'export.formatMdHint': 'Body only; images still point at the site (fastest)',
+  'export.formatMdzLabel': 'Typora image bundle (.mdz)',
+  'export.formatMdzHint': 'Body + images, with the links rewritten to relative paths',
+  'export.formatZipLabel': 'Everything in one archive (.zip)',
+  'export.formatZipHint': 'md + mdz + the export notes, all at once',
+  'export.loadingMd': 'Exporting Markdown…',
+  'export.loadingPack': 'Packing Markdown and images…',
+  'export.outcomeMdTitle': 'Markdown exported (without images)',
+  'export.outcomeMdRefs': 'Found {refs, plural, one {# image reference} other {# image references}} in the body; the links still point at the site. That is what the .md format does.',
+  'export.outcomeMdPickMdz': 'If you need the images too (for example to open the post offline in Typora or Obsidian), choose Typora image bundle (.mdz) instead.',
+  'export.outcomeNoImagesMdzTitle': 'This post has no images',
+  'export.outcomeNoImagesTitle': 'Export finished (this post has no images)',
+  'export.outcomeNoImagesWhy': 'This post has no images, so there is no .mdz. The point of .mdz is to carry the images along and rewrite their links to relative paths.',
+  'export.outcomeNoImagesPickMd': 'Choose Markdown (.md) instead; the content is the same.',
+  'export.outcomeNoImagesAllContent': 'The .md you got is the whole content.',
+  'export.outcomeProblemsTitle': 'Export finished, but some images did not make it into the archive',
+  'export.outcomeProblemsSummary': 'Found {refs, plural, one {# image reference} other {# image references}} in the body and packed {packed, plural, one {# image} other {# images}} ({local} local, {remote} external).',
+  'export.outcomeProblemsFailed': '{failed, plural, one {# image} other {# images}} could not be fetched; the md keeps the original links.',
+  'export.outcomeProblemsSkipped': 'Skipped {skipped, plural, one {# reference} other {# references}} (data URIs, relative paths that could not be resolved, and so on).',
+  'export.outcomeZipNote': 'The {note} inside the archive has the full list.',
+  'export.noImagesFallback': 'This post has no images, so there is no .mdz.',
+  'export.noImagesDetailRefs': 'Found {refs, plural, one {# image reference} other {# image references}} in the body, but none of them is a local or fetchable image that can go into a .mdz.',
+  'export.noImagesDetailNone': 'The body has no image references at all, so .mdz and .md would be identical.',
+  'export.failed': 'Export failed',
+  'export.noFileFromServer': 'Export failed: the server did not return a file',
+  'export.noImagesModalTitle': 'This post has no images, so there is no .mdz',
+  'export.noImagesModalOk': 'Export as Markdown (.md) instead',
+  'export.noImagesModalNote': 'The point of .mdz is to carry the images along and rewrite their links to relative paths; without images it is exactly the same as .md.',
+  'export.success': 'Exported',
+
 };
