@@ -255,50 +255,124 @@ describe('恢复确认与成功文案：可撤销性必须说透（snapshotRevis
   });
 });
 
+describe('🔴 revisionCore 注入翻译器之后：identity 与注入两条路径都要对（覆盖活体到不了的分支）', () => {
+  // ## 为什么要有这一组（2026-09-26 期 5 第十批）
+  // 一次性栈里服务端**没开**版本历史（VANBLOG_ARTICLE_REVISIONS_KEEP 未设）⇒ 抽屉只会走
+  // "功能未开启 / 还没有版本"那两种状态，🔴 **表格列头、详情面板、恢复确认与成功 toast 在活体里到不了**。
+  // 那些分支的文案只能在这里用**真实语言包**造一个 t 来验（与 accessPassword 那组同一手法）：
+  // 既验"注入后是英文/繁体"，也验"拼接处的空格与占位符"。
+  const path = require('path');
+  const astInventory = require(path.resolve(__dirname, '../../../../scripts/i18n/astInventory.js'));
+  const adminRoot = path.resolve(__dirname, '../..');
+  const packOf = (l) => astInventory.readPack(path.join(adminRoot, `src/locales/${l}.ts`), `${l}.ts`);
+  const makeT = (pack) => (id, defaultMessage, values) => {
+    const tpl = Object.prototype.hasOwnProperty.call(pack, id) ? pack[id] : defaultMessage;
+    if (!values) return String(tpl);
+    return String(tpl).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, k) =>
+      Object.prototype.hasOwnProperty.call(values, k) ? String(values[k]) : whole,
+    );
+  };
+  const en = makeT(packOf('en-US'));
+  const tw = makeT(packOf('zh-TW'));
+
+  it('空列表 / 功能未开启：注入 t 之后是英文（这两条正是活体验到的那两种状态）', () => {
+    const empty = core.classifyRevisionsPayload({ data: { enabled: true, revisions: [] } }, en);
+    assert.equal(empty.kind, 'empty');
+    assert.equal(empty.text, packOf('en-US')['revision.empty']);
+    const off = core.classifyRevisionsPayload({ data: { enabled: false } }, en);
+    assert.equal(off.text, packOf('en-US')['revision.featureOff']);
+    // 🔴 identity 路径必须仍是中文（黄金样本在上面那几组里已经钉过，这里再钉一次"两条路径不同"）
+    assert.ok(core.classifyRevisionsPayload({ data: { enabled: true, revisions: [] } }).text.includes('还没有历史版本'));
+  });
+
+  it('🔴 加载失败：服务端原因要用 detailWrap 包一层，且英文的括号前**有空格**', () => {
+    const out = core.classifyRevisionsError({ data: { message: 'boom' } }, en);
+    assert.equal(out.text, 'Could not load the revision history (boom). Please try again later.');
+    const twOut = core.classifyRevisionsError({ data: { message: 'boom' } }, tw);
+    assert.equal(twOut.text, '歷史版本載入失敗（boom），請稍後重試。');
+  });
+
+  it('🔴 恢复成功文案：标题/时间/快照三段拼出来是通顺英文（活体到不了这条分支）', () => {
+    const record = { title: 'My post', savedAt: '2026-09-26T00:00:00.000Z' };
+    const withSnapshot = core.revisionRestoreSuccessText(record, { snapshotRevisionId: 's1' }, en);
+    assert.ok(withSnapshot.startsWith('Restored to "My post" (the revision saved at '), withSnapshot);
+    assert.ok(withSnapshot.endsWith('so you can restore it back.'), withSnapshot);
+    assert.ok(!/\.[A-Za-z]/.test(withSnapshot), '英文拼接处句号后必须有空格：' + withSnapshot);
+    const noSnapshot = core.revisionRestoreSuccessText({ title: 'X' }, {}, en);
+    assert.equal(
+      noSnapshot,
+      'Restored to "X". The content from before the restore was also saved as a new revision, so you can restore it back at any time.',
+    );
+    // 繁体：术语要用「還原」「儲存」
+    const twText = core.revisionRestoreSuccessText(record, { snapshotRevisionId: 's1' }, tw);
+    assert.ok(twText.startsWith('已還原到「My post」（'), twText);
+    assert.ok(twText.includes('儲存的版本'), twText);
+  });
+
+  it('恢复确认与"未生效"警示：注入 t 之后是英文，identity 仍是中文', () => {
+    assert.equal(
+      core.revisionRestoreConfirmTitle({ title: 'My post' }, en),
+      'Restore the post to the revision "My post"?',
+    );
+    assert.equal(core.revisionRestoreOkText(en), 'Restore this revision');
+    assert.ok(core.revisionRestoreNotAppliedText(en).includes('restored=false'));
+    assert.ok(core.revisionRestoreNotAppliedText(tw).includes('伺服器'));
+    assert.equal(core.revisionRestoreConfirmContent(), core.REVISION_RESTORE_CONFIRM_CONTENT);
+    // 标题为空时用「(无标题)」/「(untitled)」回退（normalizeRevisionMeta 与确认框共用同一个 key）
+    assert.equal(core.revisionRestoreConfirmTitle({}, en), 'Restore the post to the revision "(untitled)"?');
+    assert.equal(core.normalizeRevisionMeta({ id: 'r1' }, 0, en).title, '(untitled)');
+    assert.equal(core.normalizeRevisionMeta({ id: 'r1' }, 0).title, '(无标题)');
+    assert.equal(core.formatRevisionReason('update', en), 'Saved an update');
+    assert.equal(core.formatRevisionReason('pre-restore', tw), '還原前自動儲存');
+  });
+});
+
 describe('RevisionHistory 组件接线（源码断言，已剔除注释）', () => {
   const comp = codeOnly(read('src/components/RevisionHistory/index.jsx'));
 
   it('打开抽屉才拉列表；列表失败走 classifyRevisionsError，不弹全局 toast', () => {
     assert.match(comp, /if \(visible\) \{/);
     assert.match(comp, /await getArticleRevisions\(articleId\)/);
-    assert.match(comp, /setOutcome\(classifyRevisionsPayload\(payload\)\)/);
-    assert.match(comp, /setOutcome\(classifyRevisionsError\(err\)\)/);
+    // 🔴 期 5 第十批起 revisionCore 的函数收注入式翻译器（尾参 t）⇒ 锚点换形状，性质没放
+    assert.match(comp, /setOutcome\(classifyRevisionsPayload\(payload, t\)\)/);
+    assert.match(comp, /setOutcome\(classifyRevisionsError\(err, t\)\)/);
   });
 
   it('功能关闭/空列表用 Alert 平静说明，而不是坏掉的空表格', () => {
     assert.match(comp, /outcome\.kind !== 'ok'/);
     assert.match(comp, /<Alert/);
-    assert.match(comp, /message=\{outcome\.text \|\| EMPTY_TEXT\}/);
+    assert.match(comp, /message=\{outcome\.text \|\| emptyText\(t\)\}/);
   });
 
   it('列表展示 reason 来源列（pre-restore 解释「没主动存过的版本」）', () => {
-    assert.match(comp, /title: '来源'/);
-    assert.match(comp, /formatRevisionReason\(record\?\.reason\)/);
+    assert.match(comp, /title: t\('revision\.colReason', '来源'\)/);
+    assert.match(comp, /formatRevisionReason\(record\?\.reason, t\)/);
   });
 
   it('正文只读展示：纯 <pre>，绝无 dangerouslySetInnerHTML（不引新渲染依赖，也不给 XSS 机会）', () => {
     assert.match(comp, /<pre/);
     assert.match(comp, /data-revision-content/);
     assert.match(comp, /whiteSpace: 'pre-wrap'/);
-    assert.match(comp, /\{detail\.content \|\| DETAIL_EMPTY_CONTENT_TEXT\}/);
+    assert.match(comp, /\{detail\.content \|\| detailEmptyContentText\(t\)\}/);
     assert.ok(!comp.includes('dangerouslySetInnerHTML'));
     assert.ok(!comp.includes('MarkdownView'));
   });
 
   it('恢复：确认弹窗（解释可撤销）→ PUT → normalized 结果；restored:false 弹 warning 不弹成功', () => {
     assert.match(comp, /Modal\.confirm/);
-    assert.match(comp, /content: REVISION_RESTORE_CONFIRM_CONTENT/);
-    assert.match(comp, /okText: REVISION_RESTORE_OK_TEXT/);
+    // 🔴 期 5 第十批起改用函数版（传 t）⇒ 锚点换形状，性质没放
+    assert.match(comp, /content: revisionRestoreConfirmContent\(t\)/);
+    assert.match(comp, /okText: revisionRestoreOkText\(t\)/);
     assert.match(comp, /const payload = await restoreArticleRevision\(articleId, record\.id\)/);
     assert.match(comp, /normalizeRestoreResult\(payload\)/);
     assert.match(comp, /if \(result\.restored === false\) \{/);
-    assert.match(comp, /message\.warning\(REVISION_RESTORE_NOT_APPLIED_TEXT\)/);
-    assert.match(comp, /message\.success\(revisionRestoreSuccessText\(record, result\)\)/);
+    assert.match(comp, /message\.warning\(revisionRestoreNotAppliedText\(t\)\)/);
+    assert.match(comp, /message\.success\(revisionRestoreSuccessText\(record, result, t\)\)/);
     assert.match(comp, /onRestored\?\.\(\)/);
   });
 
   it('恢复失败：按状态码定制的文案；404 时刷新列表恢复一致视图', () => {
-    assert.match(comp, /message\.error\(describeRestoreRevisionFailure\(err\)\)/);
+    assert.match(comp, /message\.error\(describeRestoreRevisionFailure\(err, t\)\)/);
     assert.match(comp, /if \(isNotFoundFailure\(err\)\)/);
     assert.ok(!comp.includes('reportRequestError'), '文案统一走 core 的 describe*，不再用通用兜底');
   });
@@ -310,9 +384,11 @@ describe('RevisionHistory 组件接线（源码断言，已剔除注释）', () 
 
   it('详情拉取走嵌套路由（带 articleId）；失败给 Alert 而不是白屏；详情面板展示「来源」', () => {
     assert.match(comp, /await getRevisionById\(articleId, record\.id\)/);
-    assert.match(comp, /setDetailError\(describeDetailFailure\(err\)\)/);
+    assert.match(comp, /setDetailError\(describeDetailFailure\(err, t\)\)/);
     assert.match(comp, /detailError \? \(/);
-    assert.match(comp, /来源 \{formatRevisionReason\(detail\.reason\)\}/);
+    // 🔴 期 5 第十批起详情面板的「来源」走 t() + ICU 占位符 ⇒ 锚点换形状，
+    //    性质没放：仍然要求「来源」这一行由 formatRevisionReason 渲染
+    assert.match(comp, /t\('revision\.reasonValue', '来源 \{reason\}', \{ reason: formatRevisionReason\(detail\.reason, t\) \}\)/);
   });
 });
 

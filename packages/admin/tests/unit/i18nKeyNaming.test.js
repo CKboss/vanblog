@@ -48,12 +48,13 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   → 700（期 7 第一批：服务层 accessPassword.js +15，新组 `accessPassword`）
 //   → 709（期 5 第七批：文章弹窗 + 题头图 +9，新组 `article` / `cover`；48 条文案只用 9 个新 key）
 //   → 739（期 5 第八批：文章管理页 +30，复用 61 个既有 key，并把 draft.* 的 7 个批量动作提升为 common.*）
-//   → **768**（期 5 第九批：补封面弹窗 + 服务层 +29，新组 `coverBackfill`）
+//   → 768（期 5 第九批：补封面弹窗 + 服务层 +29，新组 `coverBackfill`）
+//   → **804**（期 5 第十批：历史版本 +36，新组 `revision`）
 //   这条是**进度下界**（key 变少 = 有人删了译文、或包被截断），所以每翻完一批就该跟着抬 ——
 //   期 3 第一批（145 key）时没抬，本轮补上。
 //   🔴 这里也是"key 数下界"的**唯一权威口径**：`i18nSharedImpl` 只证明 readPack 没坏（三份相等且非平凡），
 //   `localePackParity` 只做"三份都空 ⇒ 集合相等"的反空转（>= 50），都不写具体进度数字。
-const BASELINE_KEY_COUNT = 768;
+const BASELINE_KEY_COUNT = 804;
 const BASELINE_GRANDFATHERED = 20;
 const REGISTERED = astInventory.REGISTERED_KEY_GROUPS;
 

@@ -9469,6 +9469,94 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.160 期 5 第十批：历史版本（抽屉 + `revisionCore.js`，47 条）—— 🔴 活体抓到"注入了 t 却引用 identity 常量"这个**守卫看不见**的缺陷，而它上一批就已经在库里
+
+**交付**：`components/RevisionHistory/index.jsx`(21) + `components/RevisionHistory/revisionCore.js`(26)
+= **47 条 → 0**；语言包 **768 → 804 key**（新组 **`revision`**）；棘轮清单 **49 → 51 个文件**（都预算 0，**TOTAL 仍 53**）；
+`i18nKeyNaming` → **804**；`localePackParity` 自动发现下界 **46 → 48 个文件 / 980 → 1030 个调用点**（实测 48 / 1034）。
+🔴 **浏览器活体 9/9（3 项判据 × 3 语），problems 0**：更多菜单里的「历史版本」触发器、
+抽屉标题（ICU `历史版本：{title}`）、🔴 **服务层的状态文案**（功能未开启 / 还没有版本）、
+以及两条反向判据（en-US 抽屉里**无汉字**、zh-TW 抽屉里**无简体专用字**）。
+🔴 **单测 +4 条**（`revisionHistory.test.js` 27 → **31**）覆盖活体到不了的分支；原有 ~15 条黄金样本**一个字没改**照旧全绿。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-revision/`。
+
+#### A. 🔴 缺陷：注入了 t，却在函数体里引用 **identity 常量** —— 而"每个调用点都要传 t"那条守卫**看不见**它
+活体（en-US）量到：抽屉标题是 `Revision history: i18n revision probe`（英文 ✓），
+正文却是 `这篇文章还没有历史版本。…`（中文 ✗）。根因：`classifyRevisionsPayload` 的 empty 分支写的是
+`text: EMPTY_TEXT`（**模块加载期就固定成中文**的常量），而不是 `emptyText(t)`。
+🔴 **为什么守卫没抓到**：上一批那条判据只看**函数调用**的尾参；这里根本没有调用，只是**引用了一个常量**。
+⇒ 补一条判据：**定义模块的任何函数体内都不许引用自己的 identity 常量**
+（模块顶层的 `const X = xxx()` 与 `module.exports = { X }` 合法，函数体内不合法；判据用 AST 认出
+"顶层零实参调用注入函数赋给的常量"这一形状，再查函数体内的 Identifier 引用）。
+🔴 **新判据当场又抓出一处 —— 而且是上一批就已提交进库的**：`coverBackfill.js` 的
+`emptyText: items.length ? '' : EMPTY_RESULT_TEXT`（期 5 第九批）。它上一批**没被活体发现**，
+因为那次预览**有结果** ⇒ 走的是非空分支（空结果文案根本没渲染）。
+👉 🔴 **两条规矩**：① "注入了 t" 与 "用上了 t" 是两件事 —— **凡是模块里有 identity 常量，
+就要有一条判据禁止在函数体里引用它**（否则静默退回中文，而且 identity 黄金样本照样全绿）；
+② 🔴 **活体证据只覆盖走到的分支**："没红"不等于"没问题"，空态/错误态要用**单测 + 真实语言包**补（见 C）。
+
+#### B. 🔴 `revisionCore.js`：注入式翻译器**最大的一单**（7 个常量 + 9 个产文案函数）
+形状与 `accessPassword.js` 完全一致（函数收 `t = IDENTITY_T` 尾参 + SCREAMING_CASE 常量保留为 identity 视图），
+但规模大 3 倍，而且 🔴 **内部转发点更多**：`classifyRevisionsPayload` → `normalizeRevisionMeta(row, index, t)`；
+`revisionRestoreSuccessText` → `savedVersionWhen` / `restoreSnapshot(Alt)` / `untitled`；
+三个失败分类函数 → `detailWrap`。
+实测：迁移后原有 **27 条**测试（含 ~15 条黄金样本：`FEATURE_OFF_TEXT` 含「未开启」、`EMPTY_TEXT` 含那个环境变量名、
+`REVISION_REASON_LABELS['update'] === '保存更新'`、`describeRestoreRevisionFailure(403)` 含 `article:update`…）
+**一个字没改全绿** ⇒ identity 路径逐字未变。
+⚠️ 迁移时踩了一个**全局替换**的坑：把常量名换成 `xxx(t)` 时 🔴 **连 import 列表里的标识符也换了**
+（`revisionRestoreOkText(t),` 出现在 import 里）⇒ 语法错、AST 解析失败。
+👉 这类"名字 → 调用"的改写必须**避开 import / 声明位置**（本项目"全局替换伤到自己"已 3 次：
+`flush()` 自递归、注释里的常量名、这次的 import 列表）。
+
+#### C. 🔴 活体到不了的分支，用"真实语言包造一个 t"在单测里补齐（4 条新断言）
+一次性栈的服务端**没开**版本历史（`VANBLOG_ARTICLE_REVISIONS_KEEP` 未设）⇒ 抽屉只会走"功能未开启 / 还没有版本"
+两种状态，🔴 **表格列头、详情面板、恢复确认、恢复成功 toast 在活体里到不了**（探针如实记 skipped 并写明原因）。
+补法与 accessPassword 那组同一手法：用 `readPack` 读**真实语言包**造一个 t，直接调 core 的函数验**整句**：
+`classifyRevisionsError({data:{message:'boom'}}, en)` 必须逐字等于
+`Could not load the revision history (boom). Please try again later.`（🔴 连"括号前那个空格"一起验）；
+`revisionRestoreSuccessText(record, {snapshotRevisionId}, en)` 必须
+`startsWith('Restored to "My post" (the revision saved at ')` 且 `endsWith('so you can restore it back.')`，
+并且 🔴 `!/\.[A-Za-z]/`（**接缝不许粘连**，§7.156 B 那条教训）；`(无标题)` 回退英文是 `(untitled)`、identity 仍是 `(无标题)`；
+`formatRevisionReason('pre-restore', tw) === '還原前自動儲存'`。
+👉 🔴 **规矩：活体验不到的分支，用"真实语言包 + 注入 t"的单测补，并且验整句（含接缝），不是验关键词。**
+
+#### D. 🔴 `pageSurface.js` 的钉子**第三次**因为"钉住中间态"假红 ⇒ 这次改成与进度无关的形状
+新增 `SHOW_ALL=1`（把**已翻完、0 条**的文件也列出来）⇒ 钉子从"某某文件必须还在表里（因为它还没翻）"
+改成 🔴 "**闭包成员**必须包含 RevisionHistory / CoverBackfillModal / UpdateModal / exportFormats.js"
++ "**闭包规模 ≥30 个文件**"（结构性质，不随翻译进度缩小）；多行 import 那条也改成
+"从 RevisionHistory 入口必须看到 `revisionCore.js` 与**第 2 层**的 `formatTime.js`"。
+👉 同一个坑的**第三次**（§7.153 B、§7.159 B、这次）⇒ 🔴 规矩定型：
+**"还没翻"这类断言一律改成"翻完就该消失"或"闭包成员/规模"这种与进度无关的形状**；
+需要看 0 条文件时给工具加 `SHOW_ALL`，而不是让守卫去猜进度。
+
+#### E. 🔴 变异对照生成器的转义坑**第三次**（同一个 `\n`）
+`frm` 里写 Python 的 `"\\n"` ⇒ 经 `js()` 再转义一次变成 JS 源码里的 `\\n`（字面反斜杠+n）⇒ 锚点 0 命中，
+harness 报"变异没做，本条无效"（🔴 三次都是它挡住的，没有一次假绿）。
+修法：这类锚点用 **JS 双引号串**写 `\n`，让 JS 自己解释，避免"Python 转义 + JS 转义"两层打架。
+⚠️ 另一条：M5 第一版拿 `t('revision.untitled', '(无标题)')` 当锚点 ⇒ 命中 **4 次**（那个 key 在四处用）⇒ 换成唯一的那条。
+
+#### F. 🔴 一次矩阵假红的四步定性（`assertSafeRemoteUrl › 放行正常的公网地址`）
+① 不是本轮改动（本轮只碰 admin 与 scripts/i18n；这条是**服务端 SSRF 守卫**的用例，要解析公网域名）；
+② 单独跑绿（`-t "放行正常的公网地址"` ⇒ 1 passed / 52s）；③ **全量重跑绿**（288 套件 / 4238 用例 / 0 FAIL）；
+④ 不是真缺陷：它依赖 **DNS/网络**，在 5 阶段满载并行时会超时 ⇒ 与"导出/备份族临时目录"同属**环境敏感**类（本项目已 5 次）。
+👉 已登记待办：给它注入 resolver（或"能解析/明确失败"两种都算过），别让 CI 靠运气。
+
+#### G. 基线
+- admin `node --test` **755 tests / 167 suites / 0 fail**（+4 = C 段那组两条路径断言）；i18n 守卫组 **105**；
+- 变异对照 **6/6**（列标题退回硬编码 / 🔴 empty 分支改回 identity 常量 / 🔴 coverBackfill 那处同样改回去 /
+  hook 依赖数组去掉 t / defaultMessage 改动 / 语义空操作）；
+- 语言包 **804 key** ×3；`--zh-tw-audit`：804 key / **706** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **51 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（`.jsx` 与 `.js` 都在门禁范围内，**没加新错**）；
+- 矩阵：admin **755/167/0**、守卫 **35 文件 / 3160 条 / 0 失败**、vitest **97 文件 / 1095**、两个 tsc 各 **0 错**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**（第一次跑有 1 条 DNS 假红，四步定性见 F，重跑绿）；
+  生产构建 rc=0（`umi.981059b1.js` = **1,521,124 B**）；
+- 🔴 **真实剩余：77 → 75 个文件 / 1,014 → 967 条**；文章页表面（`pageSurface.js`）只剩 **62 条 / 11 个文件**，
+  🔴 **全部是服务层常量**（exportFormats 30 / schedule 10 / exportMarkdown 7 / requestError 4 / importPathname 3 /
+  tagTokens 2 / parseMarkdownFile 2 / formatTime 1 / UploadBtn 1 / CopyUploadBtn 1 / check 1）。
+- 🔴 **下一批**：① 服务层常量那一类（`exportFormats` 30 / `schedule` 10 / `importPathname` 3 / `tagTokens` 2，
+  用 `coverField(t)` 那套"对象字面量 → 函数 + identity 视图"的形状）⇒ 做完文章页与草稿页的表单就没有中文了；
+  ② `pages/Editor/**`（最大，143 条 / 15 文件）；③ `DataManage/**`(134) / `CommentManage`(71)；
+  ④ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.159 期 5 第九批：从正文首图补封面（弹窗 + 服务层，35 条）—— 🔴 上一轮新建的 `pageSurface.js` **自己漏了块**，以及第二次踩"守卫钉住中间态"
 
 **交付**：`components/CoverBackfillModal/index.jsx`(27) + `services/van-blog/coverBackfill.js`(8) = **35 条 → 0**；

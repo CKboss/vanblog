@@ -5,12 +5,13 @@ import {
 } from '@/services/van-blog/api';
 import { Alert, Button, Drawer, Modal, Space, Spin, Table, Tag, message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { useIntl } from 'umi';
 import {
-  DETAIL_EMPTY_CONTENT_TEXT,
-  EMPTY_TEXT,
-  REVISION_RESTORE_CONFIRM_CONTENT,
-  REVISION_RESTORE_NOT_APPLIED_TEXT,
-  REVISION_RESTORE_OK_TEXT,
+  detailEmptyContentText,
+  emptyText,
+  revisionRestoreConfirmContent,
+  revisionRestoreNotAppliedText,
+  revisionRestoreOkText,
   classifyRevisionsError,
   classifyRevisionsPayload,
   describeDetailFailure,
@@ -44,6 +45,14 @@ import {
  * trigger 可外部传入（默认一个 <a>历史版本</a>），模式与 UpdateModal 的触发器一致。
  */
 export default function RevisionHistory(props) {
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook）。
+  // 🔴 本文件的 t **会进 useCallback 的依赖数组**（load / 恢复流程里都用它）⇒ 必须用 useCallback([intl])
+  //    包成稳定引用，否则每次渲染都是新函数 ⇒ 无限重渲染/重复请求（§7.144 A 那个坑本项目踩过）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
   const { articleId, articleTitle, onRestored, trigger } = props;
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -54,19 +63,26 @@ export default function RevisionHistory(props) {
 
   const fetchRevisions = useCallback(async () => {
     if (articleId == null || articleId === '') {
-      setOutcome({ kind: 'noid', revisions: [], text: '文章还没有保存过（缺少 ID），保存后再来查看历史版本。' });
+      setOutcome({
+        kind: 'noid',
+        revisions: [],
+        text: t('revision.needArticleId', '文章还没有保存过（缺少 ID），保存后再来查看历史版本。'),
+      });
       return;
     }
     setLoading(true);
     try {
       const payload = await getArticleRevisions(articleId);
-      setOutcome(classifyRevisionsPayload(payload));
+      setOutcome(classifyRevisionsPayload(payload, t));
     } catch (err) {
-      setOutcome(classifyRevisionsError(err));
+      setOutcome(classifyRevisionsError(err, t));
     } finally {
       setLoading(false);
     }
-  }, [articleId]);
+    // 🔴 依赖数组必须带上 t：这个 useCallback 的回调体里用了 t（缺 ID 时的提示），
+    //    不带就会闭包住**首轮渲染的翻译器** ⇒ 切语言后仍是旧译文（§7.144 B）。
+    //    t 本身是 useCallback([intl]) 包过的稳定引用 ⇒ 加进依赖不会造成重复请求。
+  }, [articleId, t]);
 
   useEffect(() => {
     if (visible) {
@@ -78,7 +94,7 @@ export default function RevisionHistory(props) {
 
   const handleView = async (record) => {
     if (record?.id == null) {
-      message.error('这个版本缺少 ID，无法查看');
+      message.error(t('revision.detailMissingId', '这个版本缺少 ID，无法查看'));
       return;
     }
     setDetailLoading(true);
@@ -86,9 +102,9 @@ export default function RevisionHistory(props) {
     setDetail(null);
     try {
       const payload = await getRevisionById(articleId, record.id);
-      setDetail(normalizeRevisionDetail(payload));
+      setDetail(normalizeRevisionDetail(payload, t));
     } catch (err) {
-      setDetailError(describeDetailFailure(err));
+      setDetailError(describeDetailFailure(err, t));
     } finally {
       setDetailLoading(false);
     }
@@ -96,31 +112,31 @@ export default function RevisionHistory(props) {
 
   const handleRestore = (record) => {
     if (record?.id == null || articleId == null || articleId === '') {
-      message.error('缺少文章或版本 ID，无法恢复');
+      message.error(t('revision.restoreMissingId', '缺少文章或版本 ID，无法恢复'));
       return;
     }
     Modal.confirm({
-      title: revisionRestoreConfirmTitle(record),
+      title: revisionRestoreConfirmTitle(record, t),
       // 必须解释清楚：当前状态会先被存成一个新版本，所以恢复是可撤销的
-      content: REVISION_RESTORE_CONFIRM_CONTENT,
-      okText: REVISION_RESTORE_OK_TEXT,
-      cancelText: '取消',
+      content: revisionRestoreConfirmContent(t),
+      okText: revisionRestoreOkText(t),
+      cancelText: t('init.restore.confirmCancel', '取消'),
       onOk: async () => {
         try {
           const payload = await restoreArticleRevision(articleId, record.id);
           const result = normalizeRestoreResult(payload);
           if (result.restored === false) {
             // 接口没抛但服务端明说没生效：不能弹成功
-            message.warning(REVISION_RESTORE_NOT_APPLIED_TEXT);
+            message.warning(revisionRestoreNotAppliedText(t));
           } else {
-            message.success(revisionRestoreSuccessText(record, result));
+            message.success(revisionRestoreSuccessText(record, result, t));
           }
           setDetail(null);
           await fetchRevisions();
           // 编辑器入口用这个回调刷新正文；列表入口用它刷新行数据
           onRestored?.();
         } catch (err) {
-          message.error(describeRestoreRevisionFailure(err));
+          message.error(describeRestoreRevisionFailure(err, t));
           // 404：版本已被清理或属于另一篇文章 —— 刷新列表恢复一致视图
           if (isNotFoundFailure(err)) {
             setDetail(null);
@@ -133,28 +149,28 @@ export default function RevisionHistory(props) {
 
   const columns = [
     {
-      title: '保存时间',
+      title: t('revision.colSavedAt', '保存时间'),
       dataIndex: 'savedAt',
       key: 'savedAt',
       width: 170,
       render: (_, record) => formatSavedAt(record?.savedAt),
     },
     {
-      title: '标题',
+      title: t('common.colTitle', '标题'),
       dataIndex: 'title',
       key: 'title',
       ellipsis: true,
       render: (_, record) => record?.title ?? '-',
     },
     {
-      title: '字数',
+      title: t('revision.colWordCount', '字数'),
       dataIndex: 'wordCount',
       key: 'wordCount',
       width: 80,
       render: (_, record) => formatRevisionWordCount(record?.wordCount),
     },
     {
-      title: '大小',
+      title: t('img.colBytes', '大小'),
       dataIndex: 'sizeBytes',
       key: 'sizeBytes',
       width: 100,
@@ -163,23 +179,23 @@ export default function RevisionHistory(props) {
     {
       // 'pre-restore' 的版本是服务端在某次恢复前自动存的快照 —— 展示出来，
       // 用户才明白为什么有一个自己没主动保存过的版本
-      title: '来源',
+      title: t('revision.colReason', '来源'),
       dataIndex: 'reason',
       key: 'reason',
       width: 130,
-      render: (_, record) => formatRevisionReason(record?.reason),
+      render: (_, record) => formatRevisionReason(record?.reason, t),
     },
     {
-      title: '操作',
+      title: t('common.colOption', '操作'),
       key: 'option',
       width: 170,
       render: (_, record) => (
         <Space>
           <a data-revision-view={String(record?.id)} onClick={() => handleView(record)}>
-            查看
+            {t('common.view', '查看')}
           </a>
           <a data-revision-restore={String(record?.id)} onClick={() => handleRestore(record)}>
-            恢复到这个版本
+            {t('revision.restoreOkBtn', '恢复到这个版本')}
           </a>
         </Space>
       ),
@@ -193,7 +209,7 @@ export default function RevisionHistory(props) {
         <Alert
           type={outcome.kind === 'error' ? 'error' : 'info'}
           showIcon
-          message={outcome.text || EMPTY_TEXT}
+          message={outcome.text || emptyText(t)}
         />
       ) : (
         <Table
@@ -217,7 +233,7 @@ export default function RevisionHistory(props) {
             setDetailError('');
           }}
         >
-          返回列表
+          {t('revision.backToList', '返回列表')}
         </Button>
         <Button
           size="small"
@@ -225,17 +241,17 @@ export default function RevisionHistory(props) {
           onClick={() => handleRestore(detail)}
           disabled={!detail || detail.id == null}
         >
-          {REVISION_RESTORE_OK_TEXT}
+          {revisionRestoreOkText(t)}
         </Button>
       </Space>
       {detail ? (
         <>
           <div style={{ marginBottom: 8 }} data-revision-detail-meta>
             <Tag color="blue">{detail.title}</Tag>
-            <span>保存于 {formatSavedAt(detail.savedAt)}</span>
-            <span style={{ marginLeft: 12 }}>字数 {formatRevisionWordCount(detail.wordCount)}</span>
-            <span style={{ marginLeft: 12 }}>大小 {formatRevisionSize(detail.sizeBytes)}</span>
-            <span style={{ marginLeft: 12 }}>来源 {formatRevisionReason(detail.reason)}</span>
+            <span>{t('revision.savedAt', '保存于 {when}', { when: formatSavedAt(detail.savedAt) })}</span>
+            <span style={{ marginLeft: 12 }}>{t('revision.wordCountValue', '字数 {count}', { count: formatRevisionWordCount(detail.wordCount) })}</span>
+            <span style={{ marginLeft: 12 }}>{t('revision.sizeValue', '大小 {size}', { size: formatRevisionSize(detail.sizeBytes) })}</span>
+            <span style={{ marginLeft: 12 }}>{t('revision.reasonValue', '来源 {reason}', { reason: formatRevisionReason(detail.reason, t) })}</span>
           </div>
           {/* 只读展示：纯 preformatted text，不引任何渲染依赖，正文里的 HTML 也不会被执行 */}
           <pre
@@ -252,7 +268,7 @@ export default function RevisionHistory(props) {
               margin: 0,
             }}
           >
-            {detail.content || DETAIL_EMPTY_CONTENT_TEXT}
+            {detail.content || detailEmptyContentText(t)}
           </pre>
         </>
       ) : null}
@@ -262,10 +278,10 @@ export default function RevisionHistory(props) {
   return (
     <>
       <span data-revision-trigger onClick={() => setVisible(true)}>
-        {trigger || <a key="revisionsTrigger">历史版本</a>}
+        {trigger || <a key="revisionsTrigger">{t('revision.title', '历史版本')}</a>}
       </span>
       <Drawer
-        title={articleTitle ? `历史版本：${articleTitle}` : '历史版本'}
+        title={articleTitle ? t('revision.titleWithArticle', '历史版本：{title}', { title: articleTitle }) : t('revision.title', '历史版本')}
         width={780}
         visible={visible}
         onClose={() => setVisible(false)}
@@ -273,7 +289,7 @@ export default function RevisionHistory(props) {
       >
         {detailLoading ? (
           <div style={{ textAlign: 'center', padding: 48 }}>
-            <Spin tip="正在加载版本内容…" />
+            <Spin tip={t('revision.loadingDetail', '正在加载版本内容…')} />
           </div>
         ) : detailError ? (
           <Alert type="error" showIcon message={detailError} />

@@ -211,6 +211,8 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/services/van-blog/batch.ts': 0,
     'src/components/CoverBackfillModal/index.jsx': 0,
     'src/services/van-blog/coverBackfill.js': 0,
+    'src/components/RevisionHistory/index.jsx': 0,
+    'src/components/RevisionHistory/revisionCore.js': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -312,46 +314,40 @@ test('i18n 共享实现 · 🔴 `pageSurface.js` 必须把**整页的块**都量
   // 并且 🔴 在这里钉住它的输出：文章页必须量到 RevisionHistory 与 CoverBackfillModal（那两个漏过的），
   // 总量必须 ≥ 100 条（现在实测 117 条；工具坏掉时会变成"只报入口文件自己"⇒ 立刻红）。
   const { execFileSync } = require('child_process');
-  const out = execFileSync(
-    process.execPath,
-    [path.join(ROOT, 'scripts/i18n/pageSurface.js'), 'packages/admin/src/pages/Article/index.jsx'],
-    { cwd: ROOT, encoding: 'utf8' },
-  );
-  assert.ok(out.includes('RevisionHistory'), '🔴 页面表面里必须量到 RevisionHistory（本项目曾漏掉它）：\n' + out.slice(0, 400));
-  // 🔴 这里原来还钉着 `out.includes('CoverBackfillModal')` —— **期 5 第九批把它翻完之后那条就假红了**：
-  //    pageSurface 只列"还有 bare 中文"的文件，翻完的文件**从表里消失**（这正是我们想要的结果）。
-  //    👉 这是本项目**第二次**踩"守卫钉住了改造过程中的中间态"（第一次见 §7.153 B）：
-  //    🔴 凡是"某文件还没翻"这类断言，都要写成"**翻完之后就该消失**"的形状（下面这条反向断言），
-  //    否则每翻一个文件就要回来改一次守卫，而那种红与"工具坏了"长得一模一样。
-  assert.ok(
-    !out.includes('CoverBackfillModal'),
-    '🔴 CoverBackfillModal 已经翻完了（期 5 第九批）⇒ 它**不该**再出现在页面表面里；' +
-      '如果它又出现了，说明那一批的翻译被回退了',
-  );
+  const SURFACE = path.join(ROOT, 'scripts/i18n/pageSurface.js');
+  const run = (entry, env) =>
+    execFileSync(process.execPath, [SURFACE, entry], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, env || {}),
+    });
+  // 🔴 用 `SHOW_ALL=1` 拿**闭包成员**（含已翻完的 0 条文件）：判据钉的是"**结构**"（谁在这个页面里、
+  //    多行 import 有没有被跟进去），🔴 与翻译进度无关 ⇒ 翻完一个文件不会再让这条假红
+  //    （前两版钉子都因为钉了"还没翻"这个中间态而假红过，见 §7.153 B / §7.159 B）。
+  const out = run('packages/admin/src/pages/Article/index.jsx', { SHOW_ALL: '1' });
+  for (const must of ['RevisionHistory', 'CoverBackfillModal', 'exportFormats.js', 'UpdateModal']) {
+    assert.ok(out.includes(must), `🔴 文章页闭包里必须有 ${must}（本项目曾漏掉 RevisionHistory）：\n` + out.slice(0, 400));
+  }
   assert.ok(out.includes('exportFormats.js'), '🔴 服务层常量也算页面表面的一部分（导出格式的三项说明）');
-  const m = out.match(/合计 (\d+) 条 \/ (\d+) 个文件/);
+  const m = out.match(/合计 (\d+) 条 \/ (\d+) 个文件（闭包共 (\d+) 个文件/);
   assert.ok(m, '🔴 没读到合计行 ⇒ 工具的输出形状变了（判据要跟着改，不要放宽）：\n' + out.slice(-300));
-  // 🔴 下界的含义要说清：它是"**工具坏了**"的兜底，不是进度钉子。
-  //    期 5 第九批翻掉 CoverBackfillModal(27) + coverBackfill.js(8) 之后，文章页表面从 144 条降到 109 条，
-  //    下界 100 仍然成立；等这一页全翻完，这条要改成"合计 0 条 / 0 个文件"的形状（而不是删掉）。
-  assert.ok(Number(m[1]) >= 100, `🔴 文章页表面只剩 ${m[1]} 条（下界 100）⇒ 工具的递归坏了，会假绿`);
-  assert.ok(Number(m[2]) >= 10, `🔴 只量到 ${m[2]} 个文件（下界 10）⇒ 递归没跟着 import 走`);
+  // 🔴 钉**闭包规模**（结构，不随进度缩小）：文章页的 import 闭包实测 40+ 个文件；
+  //    掉到 30 以下 ⇒ 递归没跟着 import 走（例如多行 import 又没被认出来）
+  assert.ok(Number(m[3]) >= 30, `🔴 文章页闭包只有 ${m[3]} 个文件（下界 30）⇒ 递归坏了，会假绿`);
 
   // 🔴 第二条钉子专门打**多行 import**（这个工具自己刚踩过的坑）：
   //    `RevisionHistory/index.jsx` 的 `import { …20 行… } from './revisionCore'` 曾被
   //    "正则 + 200 字符窗口"整块漏掉（revisionCore.js 26 条没被量到），而当时那条钉子**没抓到**
   //    （它只查了两个名字、而且都在第 1 层）⇒ 🔴 工具的钉子必须覆盖"工具最容易坏的那种输入"。
-  const out2 = execFileSync(
-    process.execPath,
-    [path.join(ROOT, 'scripts/i18n/pageSurface.js'), 'packages/admin/src/components/RevisionHistory/index.jsx'],
-    { cwd: ROOT, encoding: 'utf8' },
-  );
+  const out2 = run('packages/admin/src/components/RevisionHistory/index.jsx', { SHOW_ALL: '1' });
   assert.ok(
     out2.includes('revisionCore.js'),
-    '🔴 多行 import 没被跟进去（revisionCore.js 是 26 条文案的所在，漏了它就是"半页中文"）：\n' + out2.slice(0, 400),
+    '🔴 多行 import 没被跟进去（revisionCore.js 就在那条 20 行的 import 后面）：\n' + out2.slice(0, 400),
   );
-  const m2 = out2.match(/合计 (\d+) 条 \/ (\d+) 个文件/);
-  assert.ok(m2 && Number(m2[1]) >= 45, `🔴 RevisionHistory 表面只有 ${m2 && m2[1]} 条（下界 45 = 21 + 26）⇒ 又漏块了`);
+  assert.ok(
+    out2.includes('formatTime.js'),
+    '🔴 第 2 层依赖（revisionCore → formatTime）没被跟进去 ⇒ 递归深度不够：\n' + out2.slice(0, 400),
+  );
 });
 
 test('i18n 共享实现 · 尺子反证：合成输入必须被正确分类（证明判据真的在判）', () => {

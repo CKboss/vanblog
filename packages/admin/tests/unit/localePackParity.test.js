@@ -180,6 +180,10 @@ const IDENTICAL_ZH_TW_OK = [
   'common.back',
   // 🔴 期 5 第九批：`文章 {id}`（标题为空时的回退）简繁同形
   'coverBackfill.untitled',
+  // 🔴 期 5 第十批（历史版本）：返回列表 / 大小 {size} / （{message}）三条简繁同形
+  'revision.backToList',
+  'revision.sizeValue',
+  'revision.detailWrap',
 ];
 
 /**
@@ -325,12 +329,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 46,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 46）⇒ 遍历或解析器坏了`,
+      FILES.length >= 48,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 48）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 980,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 980）⇒ 疑似解析器坏了`,
+      calls.length >= 1030,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1030）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -374,6 +378,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/batch.ts',
       'src/components/CoverBackfillModal/index.jsx',
       'src/services/van-blog/coverBackfill.js',
+      'src/components/RevisionHistory/index.jsx',
+      'src/components/RevisionHistory/revisionCore.js',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -656,6 +662,14 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/coverBackfill.js': [
         'summarizeBackfill', 'normalizeBackfillItems', 'emptyResultText',
       ],
+      // 🔴 期 5 第十批：历史版本的纯逻辑模块（7 个常量函数 + 9 个产文案函数）
+      'src/components/RevisionHistory/revisionCore.js': [
+        'featureOffText', 'emptyText', 'detailEmptyContentText', 'revisionReasonLabels',
+        'revisionRestoreOkText', 'revisionRestoreConfirmContent', 'revisionRestoreNotAppliedText',
+        'formatRevisionReason', 'normalizeRevisionMeta', 'classifyRevisionsPayload',
+        'classifyRevisionsError', 'describeDetailFailure', 'describeRestoreRevisionFailure',
+        'normalizeRevisionDetail', 'revisionRestoreConfirmTitle', 'revisionRestoreSuccessText',
+      ],
       // 🔴 期 7 第一批：**服务层**的访问密码模块（产文案的 9 个函数都收尾参 t）
       'src/services/van-blog/accessPassword.js': [
         'passwordPlaceholder', 'passwordHelp', 'buildAccessPasswordPatch',
@@ -771,6 +785,48 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         }
       };
       visit(ast.program, false);
+
+      // 🔴 追加判据：**定义模块的函数体内不许引用 identity 常量**（2026-09-26 期 5 第十批补的）。
+      //    为什么：`revisionCore.js` 的 `classifyRevisionsPayload` 里有一处 `text: EMPTY_TEXT`
+      //    —— 那是**模块加载期就固定成中文**的常量，用它等于"注入了 t 也不生效"，
+      //    而上面那条判据只看**函数调用**、根本看不见"引用了一个常量"。
+      //    🔴 这个缺陷是活体探针在 en-US 下量出来的（抽屉标题是英文、正文却是中文）。
+      //    判据：模块顶层那些 `const X = <注入函数>()` 就是 identity 视图；
+      //    在**任何函数体内**引用 X 都算漏（`module.exports = { X }` 在顶层，不算）。
+      if (isDefiningModule) {
+        const injectedNames = new Set(INJECTED[rel] || []);
+        const identityConsts = new Set();
+        for (const st of (ast.program.body || [])) {
+          if (st.type !== 'VariableDeclaration') continue;
+          for (const d of st.declarations || []) {
+            if (
+              d.id && d.id.type === 'Identifier' &&
+              d.init && d.init.type === 'CallExpression' &&
+              d.init.callee && d.init.callee.type === 'Identifier' &&
+              injectedNames.has(d.init.callee.name) &&
+              (d.init.arguments || []).length === 0
+            ) {
+              identityConsts.add(d.id.name);
+            }
+          }
+        }
+        if (identityConsts.size) {
+          const walkConst = (nd, insideFn) => {
+            if (!nd || typeof nd !== 'object') return;
+            if (nd.type === 'Identifier' && insideFn && identityConsts.has(nd.name)) {
+              missing.push(`${rel}: 函数体内引用了 identity 常量 ${nd.name}（那里永远是中文，必须改成函数版并传 t）`);
+            }
+            const next = FN_TYPES.has(nd.type) ? true : insideFn;
+            for (const k of Object.keys(nd)) {
+              if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+              const v = nd[k];
+              if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walkConst(x, next));
+              else if (v && typeof v === 'object' && v.type) walkConst(v, next);
+            }
+          };
+          walkConst(ast.program, false);
+        }
+      }
     }
     assert.deepEqual(
       unregistered,

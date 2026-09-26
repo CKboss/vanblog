@@ -1029,4 +1029,50 @@ export default {
   'coverBackfill.rowSkippedHasCover': '已有封面跳过',
   'coverBackfill.rowSkippedNoImage': '无图跳过',
 
+
+  // ── 🔴 期 5 第十批：历史版本（`RevisionHistory/index.jsx` + `revisionCore.js`，36 条）──
+  //    🔴 `revisionCore.js` 是**注入式翻译器最大的一单**：7 个 SCREAMING_CASE 常量 + 9 个产文案函数，
+  //    而 `revisionHistory.test.js` 有 ~15 条**黄金样本**直接调这些函数 ⇒ 不传 t 时必须**逐字相同**
+  //    （实测：迁移后那 27 条测试全绿，一个字都没改）。
+  //    🔴 **内部转发**：`classifyRevisionsPayload/Error` 的 text、`revisionRestoreSuccessText` 里的
+  //    `（{when} 保存的版本）` 与两句快照说明，都要把 t 一路传下去（§7.156 A ③ / §7.159 C 那个坑，已踩两次）。
+  //    ⚠️ 服务端原因用 `revision.detailWrap`（`（{message}）`）包一层：英文的括号与前导空格与中文不同。
+  //    🔴 这一批做完，**文章管理页的块就齐了**（pageSurface 从 144 条降到只剩服务层常量那几处）。
+  'revision.needArticleId': '文章还没有保存过（缺少 ID），保存后再来查看历史版本。',
+  'revision.detailMissingId': '这个版本缺少 ID，无法查看',
+  'revision.restoreMissingId': '缺少文章或版本 ID，无法恢复',
+  'revision.colSavedAt': '保存时间',
+  'revision.colWordCount': '字数',
+  'revision.colReason': '来源',
+  'revision.restoreOkBtn': '恢复到这个版本',
+  'revision.backToList': '返回列表',
+  'revision.savedAt': '保存于 {when}',
+  'revision.wordCountValue': '字数 {count}',
+  'revision.sizeValue': '大小 {size}',
+  'revision.reasonValue': '来源 {reason}',
+  'revision.title': '历史版本',
+  'revision.titleWithArticle': '历史版本：{title}',
+  'revision.loadingDetail': '正在加载版本内容…',
+  'revision.featureOff': '版本历史功能未开启（服务端 VANBLOG_ARTICLE_REVISIONS_KEEP=0，或 server 版本还不支持）。开启后每次保存文章都会自动记录一个版本，超出保留上限的旧版本由服务端自动清理。',
+  'revision.empty': '这篇文章还没有历史版本。保存文章时会自动记录版本（保留条数上限由服务端控制）；若服务端未开启版本历史（VANBLOG_ARTICLE_REVISIONS_KEEP=0），这里会一直为空。',
+  'revision.detailEmptyContent': '（这个版本没有正文内容）',
+  'revision.reasonUpdate': '保存更新',
+  'revision.reasonPreRestore': '恢复前自动保存',
+  'revision.untitled': '(无标题)',
+  'revision.detailWrap': '（{message}）',
+  'revision.listFailed': '历史版本加载失败{detail}，请稍后重试。',
+  'revision.detailNotFound': '这个版本的内容拿不到（404）：可能刚被服务端的保留策略清理掉，或它属于另一篇文章；请刷新列表确认。',
+  'revision.detailFailed': '版本内容加载失败{detail}，请稍后重试。',
+  'revision.restoreNotFound': '找不到这个版本（404）：它可能已被服务端的保留策略清理，或属于另一篇文章；列表将刷新为最新状态。',
+  'revision.restoreForbidden': '当前账号没有恢复版本的权限（需要 article:update），请联系管理员。',
+  'revision.restoreUnauthorized': '登录已失效，请重新登录后再试。',
+  'revision.restoreFailed': '恢复版本失败{detail}，请稍后重试。',
+  'revision.restoreConfirmTitle': '把文章恢复到「{title}」这个版本吗？',
+  'revision.restoreConfirmContent': '恢复前，服务端会先把文章当前的状态保存成一个新的历史版本，所以这次恢复本身也是可撤销的（之后可以再恢复回现在的内容）。确认后用该版本的正文覆盖文章当前正文。',
+  'revision.restoreNotApplied': '服务端报告这次恢复没有生效（restored=false），文章未改动；请刷新列表后重试。',
+  'revision.savedVersionWhen': '（{when} 保存的版本）',
+  'revision.restoreSnapshot': '恢复前的当前内容已自动存为一个新的历史版本，可再次恢复回来。',
+  'revision.restoreSnapshotAlt': '恢复前的内容也存成了新版本，可随时再恢复回来。',
+  'revision.restoreSuccess': '已恢复到「{title}」{when}；{snapshot}',
+
 };

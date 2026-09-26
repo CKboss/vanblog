@@ -98,7 +98,13 @@ function main() {
     const rel = path.relative(ROOT, file);
     if (info.missing) { console.log(`  ⚠️ 解析不到：${rel}`); continue; }
     if (info.parseError) { console.log(`  ⚠️ 解析失败：${rel} → ${info.parseError}`); continue; }
-    if (!info.items.length) continue;
+    if (!info.items.length) {
+      // 🔴 `SHOW_ALL=1` 时把**已翻完**（0 条）的文件也列出来：这样守卫可以钉"**闭包成员**"这种
+      //    与翻译进度**无关**的结构性质。之前钉子写的是"某某文件必须还在表里（因为它还没翻）"，
+      //    结果每翻完一个文件钉子就假红一次（§7.153 B / §7.159 B，本项目已踩**两次**）。
+      if (process.env.SHOW_ALL) rows.push([0, rel, []]);
+      continue;
+    }
     total += info.items.length;
     rows.push([info.items.length, rel, info.items]);
   }
@@ -108,7 +114,10 @@ function main() {
     console.log(`  ${String(n).padStart(3)} 条  ${rel}`);
     if (process.env.SHOW_ITEMS) items.slice(0, 6).forEach((x) => console.log(`         · ${x.slice(0, 68)}`));
   }
-  console.log(`  ---- 合计 ${total} 条 / ${rows.length} 个文件（口径 = bareChinese，与棘轮一致）----`);
+  const withItems = rows.filter((r) => r[0] > 0).length;
+  console.log(
+    `  ---- 合计 ${total} 条 / ${withItems} 个文件（闭包共 ${rows.length} 个文件；口径 = bareChinese，与棘轮一致）----`,
+  );
   console.log('  🔴 切批次时把这张表**整个**看完：漏掉任何一个文件都会留下"半页中文"。');
 }
 

@@ -160,7 +160,7 @@ function summarizeBackfill(data, t = IDENTITY_T) {
       { key: 'skippedHasCover', label: t('coverBackfill.rowSkippedHasCover', '已有封面跳过'), value: skippedHasCover },
       { key: 'skippedNoImage', label: t('coverBackfill.rowSkippedNoImage', '无图跳过'), value: skippedNoImage },
     ],
-    emptyText: items.length ? '' : EMPTY_RESULT_TEXT,
+    emptyText: items.length ? '' : emptyResultText(t),
   };
 }
 

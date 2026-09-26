@@ -961,4 +961,46 @@ export default {
   'coverBackfill.rowSkippedHasCover': 'Skipped: has a cover',
   'coverBackfill.rowSkippedNoImage': 'Skipped: no image',
 
+
+  // ── 🔴 期 5 第十批（36 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `VANBLOG_ARTICLE_REVISIONS_KEEP=0` / `404` / `article:update` / `restored=false` 是技术标识符，原样保留。
+  //    🔴 `{count} words` 用 ICU plural；`revision.savedVersionWhen` 与 `revision.detailWrap` 的英文
+  //    **带前导空格**（拼接处需要，中文两份都不带 ⇒ 逐字对账仍成立，手法同 §7.152 B）。
+  'revision.needArticleId': 'The post has not been saved yet (it has no ID). Save it first, then come back to the revision history.',
+  'revision.detailMissingId': 'This revision has no ID, so it cannot be opened',
+  'revision.restoreMissingId': 'The post or revision ID is missing, so it cannot be restored',
+  'revision.colSavedAt': 'Saved at',
+  'revision.colWordCount': 'Words',
+  'revision.colReason': 'Source',
+  'revision.restoreOkBtn': 'Restore this revision',
+  'revision.backToList': 'Back to the list',
+  'revision.savedAt': 'Saved at {when}',
+  'revision.wordCountValue': '{count, plural, one {# word} other {# words}}',
+  'revision.sizeValue': 'Size {size}',
+  'revision.reasonValue': 'Source {reason}',
+  'revision.title': 'Revision history',
+  'revision.titleWithArticle': 'Revision history: {title}',
+  'revision.loadingDetail': 'Loading the revision content…',
+  'revision.featureOff': 'The revision history feature is off (VANBLOG_ARTICLE_REVISIONS_KEEP=0 on the server, or the server version does not support it yet). Once it is on, every save records a revision, and the server prunes revisions beyond the retention limit.',
+  'revision.empty': 'This post has no revisions yet. Saving the post records a revision automatically (the retention limit is controlled by the server); if revision history is off on the server (VANBLOG_ARTICLE_REVISIONS_KEEP=0), this list stays empty.',
+  'revision.detailEmptyContent': '(This revision has no body content)',
+  'revision.reasonUpdate': 'Saved an update',
+  'revision.reasonPreRestore': 'Saved automatically before a restore',
+  'revision.untitled': '(untitled)',
+  'revision.detailWrap': ' ({message})',
+  'revision.listFailed': 'Could not load the revision history{detail}. Please try again later.',
+  'revision.detailNotFound': 'The content of this revision is not available (404): it may have just been pruned by the server retention policy, or it belongs to another post. Refresh the list to confirm.',
+  'revision.detailFailed': 'Could not load the revision content{detail}. Please try again later.',
+  'revision.restoreNotFound': 'That revision was not found (404): it may have been pruned by the server retention policy, or it belongs to another post. The list will refresh to the latest state.',
+  'revision.restoreForbidden': 'This account does not have permission to restore revisions (article:update is required). Please contact an administrator.',
+  'revision.restoreUnauthorized': 'The session has expired. Please sign in again and try once more.',
+  'revision.restoreFailed': 'Could not restore the revision{detail}. Please try again later.',
+  'revision.restoreConfirmTitle': 'Restore the post to the revision "{title}"?',
+  'revision.restoreConfirmContent': 'Before restoring, the server saves the current state of the post as a new revision, so this restore is itself reversible (you can restore back to the current content later). Confirming overwrites the current body of the post with the body of that revision.',
+  'revision.restoreNotApplied': 'The server reported that this restore did not take effect (restored=false); the post was not changed. Refresh the list and try again.',
+  'revision.savedVersionWhen': ' (the revision saved at {when})',
+  'revision.restoreSnapshot': 'The content from before the restore was saved as a new revision automatically, so you can restore it back.',
+  'revision.restoreSnapshotAlt': 'The content from before the restore was also saved as a new revision, so you can restore it back at any time.',
+  'revision.restoreSuccess': 'Restored to "{title}"{when}. {snapshot}',
+
 };
