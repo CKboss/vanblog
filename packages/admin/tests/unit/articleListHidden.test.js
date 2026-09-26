@@ -6,7 +6,8 @@ const path = require('node:path');
 describe('admin article list hidden column (#268)', () => {
   it('shows 是否隐藏 on the first-level table and toggles via updateArticle', () => {
     const src = readFileSync(path.join(__dirname, '../../src/pages/Article/columns.jsx'), 'utf8');
-    assert.match(src, /title:\s*'是否隐藏'/);
+    // 🔴 期 5 第八批起列标题走 t()：锚点换成新形状（key + zh-CN defaultMessage 一起钉），性质没放
+    assert.match(src, /title: t\('common\.hiddenField', '是否隐藏'\)/);
     assert.match(src, /dataIndex:\s*'hidden'/);
     assert.match(src, /updateArticle\(/);
     assert.match(src, /hidden:\s*checked/);

@@ -163,7 +163,7 @@ export const getColumns = (t) => [
                   ),
                   onOk: async () => {
                     await deleteDraft(record.id);
-                    message.success(t('draft.deleteOk', '删除成功，已移入回收站（可恢复）!'));
+                    message.success(t('common.movedToRecycleOk', '删除成功，已移入回收站（可恢复）!'));
                     action?.reload();
                   },
                 });

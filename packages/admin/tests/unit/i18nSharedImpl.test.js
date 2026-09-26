@@ -206,6 +206,9 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/NewArticleModal/index.jsx': 0,
     'src/components/ImportArticleModal/index.jsx': 0,
     'src/components/CoverImageField/index.jsx': 0,
+    'src/pages/Article/index.jsx': 0,
+    'src/pages/Article/columns.jsx': 0,
+    'src/services/van-blog/batch.ts': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -296,6 +299,29 @@ test('i18n 共享实现 · 🔴 bareChinese 排除 `console.*` 的实参（口�
     /console\.error\('\[系统日志\] 拉取失败'/.test(sysSrc),
     '🔴 那句 console.error 的文本必须**逐字保持简体**（日志要能按文本 grep；leakAndErrorHardening 也钉着它）',
   );
+});
+
+test('i18n 共享实现 · 🔴 `pageSurface.js` 必须把**整页的块**都量出来（漏一个就会留下半页中文）', () => {
+  // ## 为什么要有这条（2026-09-26 期 5 第八批）
+  // "按页面切批次"的前提是**知道页面有哪些块**，而这件事本项目**靠人读 import 列表错了 4 次**：
+  // `StaticForm`（图床设置页）、`ObjTable`（图片信息弹窗）、`UpdateModal`（草稿页）、
+  // 🔴 `RevisionHistory`（文章页 —— 它是 **columns.jsx** 引进来的，不在 index.jsx 的 import 里）。
+  // 所以把测量做成了工具（`scripts/i18n/pageSurface.js`：从入口递归跟 import，逐文件量 bareChinese），
+  // 并且 🔴 在这里钉住它的输出：文章页必须量到 RevisionHistory 与 CoverBackfillModal（那两个漏过的），
+  // 总量必须 ≥ 100 条（现在实测 117 条；工具坏掉时会变成"只报入口文件自己"⇒ 立刻红）。
+  const { execFileSync } = require('child_process');
+  const out = execFileSync(
+    process.execPath,
+    [path.join(ROOT, 'scripts/i18n/pageSurface.js'), 'packages/admin/src/pages/Article/index.jsx'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  assert.ok(out.includes('RevisionHistory'), '🔴 页面表面里必须量到 RevisionHistory（本项目曾漏掉它）：\n' + out.slice(0, 400));
+  assert.ok(out.includes('CoverBackfillModal'), '🔴 页面表面里必须量到 CoverBackfillModal：\n' + out.slice(0, 400));
+  assert.ok(out.includes('exportFormats.js'), '🔴 服务层常量也算页面表面的一部分（导出格式的三项说明）');
+  const m = out.match(/合计 (\d+) 条 \/ (\d+) 个文件/);
+  assert.ok(m, '🔴 没读到合计行 ⇒ 工具的输出形状变了（判据要跟着改，不要放宽）：\n' + out.slice(-300));
+  assert.ok(Number(m[1]) >= 100, `🔴 文章页表面只剩 ${m[1]} 条（下界 100）⇒ 工具的递归坏了，会假绿`);
+  assert.ok(Number(m[2]) >= 10, `🔴 只量到 ${m[2]} 个文件（下界 10）⇒ 递归没跟着 import 走`);
 });
 
 test('i18n 共享实现 · 尺子反证：合成输入必须被正确分类（证明判据真的在判）', () => {

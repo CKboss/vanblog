@@ -9,13 +9,22 @@ import { PageContainer } from '@ant-design/pro-layout';
 import { ProTable } from '@ant-design/pro-table';
 import { Button, Modal, Space, message } from 'antd';
 import RcResizeObserver from 'rc-resize-observer';
-import { useMemo, useRef, useState } from 'react';
-import { history } from 'umi';
-import { articleObjAll, articleObjSmall, columns } from './columns';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { history, useIntl } from 'umi';
+import { articleObjAll, articleObjSmall, getColumns } from './columns';
 
 export default () => {
   const actionRef = useRef();
   const [colKeys, setColKeys] = useState(articleObjAll);
+  // 🔴 语言选择必须在**渲染期**；而下面 `useMemo(() => getColumns(t), [t])` 把 t 放进了依赖数组 ⇒
+  //    t **必须**用 useCallback([intl]) 包成稳定引用（否则每次渲染重算列 ⇒ ProTable 重建，
+  //    本项目已因此踩过"抽屉永远 loading + 打爆限流"，见 §7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+  const columns = useMemo(() => getColumns(t), [t]);
   const [simplePage, setSimplePage] = useState(false);
   const [simpleSearch, setSimpleSearch] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
@@ -32,20 +41,30 @@ export default () => {
   /** 给没有自定义路径名的老文章补上标题拼音，已有别名不动。 */
   const handleBackfillPathname = () => {
     Modal.confirm({
-      title: '批量生成拼音路径名？',
-      content:
+      title: t('article.genPinyinTitle', '批量生成拼音路径名？'),
+      content: t(
+        'article.genPinyinContent',
         '为所有「自定义路径名」为空的文章按标题生成汉语拼音路径（重名自动追加 -2、-3）。已有路径名不会被修改，旧的 /post/数字id 链接依然可用。',
-      okText: '生成',
-      cancelText: '取消',
+      ),
+      okText: t('common.generate', '生成'),
+      cancelText: t('init.restore.confirmCancel', '取消'),
       onOk: async () => {
         setBackfilling(true);
         try {
           const res = await backfillArticlePathname(false);
           const data = res?.data || {};
+          // 🔴 3 个计数收进一条 ICU 模板；⚠️ 英文用**列表式**表达（不逐项加 plural，
+          //    那样句子读不成人话；复数守卫只要求"计数紧跟复数名词"时才用 plural）
           message.success(
-            `已生成 ${data.updated || 0} 个路径名（扫描 ${data.scanned || 0} 篇，跳过 ${
-              data.skipped || 0
-            } 篇）`,
+            t(
+              'article.genPinyinDone',
+              '已生成 {updated} 个路径名（扫描 {scanned} 篇，跳过 {skipped} 篇）',
+              {
+                updated: data.updated || 0,
+                scanned: data.scanned || 0,
+                skipped: data.skipped || 0,
+              },
+            ),
           );
           actionRef?.current?.reload();
         } finally {
@@ -90,13 +109,13 @@ export default () => {
               <Space>
                 <a
                   onClick={async () => {
-                    await batchDelete(selectedRowKeys);
-                    message.success('批量删除成功！');
+                    await batchDelete(selectedRowKeys, false, t);
+                    message.success(t('common.batchDeleteOk', '批量删除成功！'));
                     actionRef.current.reload();
                     onCleanSelected();
                   }}
                 >
-                  批量删除
+                  {t('common.batchDelete', '批量删除')}
                 </a>
                 <a
                   onClick={() => {
@@ -104,9 +123,9 @@ export default () => {
                     onCleanSelected();
                   }}
                 >
-                  批量导出
+                  {t('common.batchExport', '批量导出')}
                 </a>
-                <a onClick={onCleanSelected}>取消选择</a>
+                <a onClick={onCleanSelected}>{t('common.clearSelection', '取消选择')}</a>
               </Space>
             );
           }}
@@ -204,7 +223,8 @@ export default () => {
             },
           }}
           dateFormatter="string"
-          headerTitle={simpleSearch ? undefined : '文章管理'}
+          // 🔴 表头标题复用**菜单那一条** `menu.article`（与图片管理/草稿管理/自定义页面同一套做法）
+          headerTitle={simpleSearch ? undefined : t('menu.article', '文章管理')}
           options={simpleSearch ? false : true}
           toolBarRender={() => [
             <Button
@@ -213,7 +233,7 @@ export default () => {
                 history.push(`/editor?type=about&id=${0}`);
               }}
             >
-              {`编辑关于`}
+              {t('article.editAbout', '编辑关于')}
             </Button>,
             <NewArticleModal
               key="newArticle123"
@@ -226,7 +246,7 @@ export default () => {
               key="importArticleBtn"
               onFinish={() => {
                 actionRef?.current?.reload();
-                message.success('导入成功！');
+                message.success(t('common.importOk', '导入成功！'));
               }}
             />,
             <Button
@@ -234,10 +254,10 @@ export default () => {
               loading={backfilling}
               onClick={handleBackfillPathname}
             >
-              生成拼音路径
+              {t('article.genPinyin', '生成拼音路径')}
             </Button>,
             <Button key="recycleBinBtn" onClick={() => setRecycleVisible(true)}>
-              回收站
+              {t('common.recycleBin', '回收站')}
             </Button>,
             // 与其它批量操作并排：组件自带按钮 + 弹窗，打开就先跑 dryRun 预览，
             // 写入成功后留在弹窗里给「撤销本次改动」，同时 reload 列表让新封面立刻可见

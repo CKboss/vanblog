@@ -69,13 +69,13 @@ export default () => {
               <Space>
                 <a
                   onClick={async () => {
-                    await batchDelete(selectedRowKeys, true);
-                    message.success(t('draft.batchDeleteOk', '批量删除成功！'));
+                    await batchDelete(selectedRowKeys, true, t);
+                    message.success(t('common.batchDeleteOk', '批量删除成功！'));
                     actionRef.current.reload();
                     onCleanSelected();
                   }}
                 >
-                  {t('draft.batchDelete', '批量删除')}
+                  {t('common.batchDelete', '批量删除')}
                 </a>
                 <a
                   onClick={() => {
@@ -83,9 +83,9 @@ export default () => {
                     onCleanSelected();
                   }}
                 >
-                  {t('draft.batchExport', '批量导出')}
+                  {t('common.batchExport', '批量导出')}
                 </a>
-                <a onClick={onCleanSelected}>{t('draft.clearSelection', '取消选择')}</a>
+                <a onClick={onCleanSelected}>{t('common.clearSelection', '取消选择')}</a>
               </Space>
             );
           }}
@@ -192,11 +192,11 @@ export default () => {
               key="importDraftMarkdown"
               onFinish={() => {
                 actionRef?.current?.reload();
-                message.success(t('draft.importOk', '导入成功！'));
+                message.success(t('common.importOk', '导入成功！'));
               }}
             />,
             <Button key="draftRecycleBinBtn" onClick={() => setRecycleVisible(true)}>
-              {t('draft.recycleBinBtn', '回收站')}
+              {t('common.recycleBin', '回收站')}
             </Button>,
           ]}
         />

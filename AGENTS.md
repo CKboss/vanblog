@@ -9469,6 +9469,84 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.158 期 5 第八批：文章管理页（59 条 / 3 文件）—— 页面表面**终于做成了工具**，以及复数尺子的两条真实边界
+
+**交付**：`pages/Article/index.jsx`(17) + `pages/Article/columns.jsx`(39) + `services/van-blog/batch.ts`(3)
+= **59 条 → 0**；语言包 **709 → 739 key**（🔴 30 个新 key、**复用 61 个**）；棘轮清单 **44 → 47 个文件**
+（都预算 0，**TOTAL 仍 53**）；`i18nKeyNaming` → **739**；`localePackParity` 自动发现下界
+**41 → 44 个文件 / 890 → 950 个调用点**（实测 44 / 954）；
+🔴 **提升 8 个 key**：`draft.batchDelete` / `batchExport` / `clearSelection` / `batchDeleteOk` / `importOk` /
+`recycleBinBtn` / `deleteOk` 与 `customPage.view` → `common.*`（文章页与草稿页/自定义页面是同一批动作）。
+🔴 **浏览器活体 30/30（en-US 11 + zh-TW 10 + zh-CN 9 项判据），problems 0**：表头标题（复用 `menu.article`）、
+工具栏 5 个按钮、9 个列头、隐藏开关的 aria-label（ICU `{title}`）、行内 6 个操作（含更多下拉）、
+**生成拼音路径的确认框**（标题/正文/两个按钮）、🔴 **批量删除确认框（来自服务层 `batch.ts`）**、
+行内删除确认（ICU `{title}` + 那段"移入回收站"的正文）与删除成功 toast。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-article-page/`。
+
+#### A. 🔴 页面表面做成了工具：`scripts/i18n/pageSurface.js`（"漏块"错误犯了 4 次之后）
+"按页面切批次"的前提是**知道页面有哪些块**，而这件事靠人读 import 列表**错了 4 次**：
+`StaticForm`（图床设置页）、`ObjTable`（图片信息弹窗）、`UpdateModal`（草稿页）、
+🔴 `RevisionHistory`（文章页 —— 它是 **columns.jsx** 引进来的，**不在 index.jsx 的 import 里**，
+所以"读入口文件的 import"必然漏）。本轮又漏了这一次（活体在 zh-TW 的行内操作里量到简体「历史版本」才发现）
+⇒ 🔴 **不再靠人**：`node scripts/i18n/pageSurface.js <入口>` 从入口**递归**跟 import（含 `@/` 别名），
+逐文件用共享模块量 bareChinese（与棘轮同口径），按条数排序打印并给合计。
+实测文章页表面 = **42 个文件**，其中本轮**没做**的还有 **118 条 / 14 个文件**：
+`exportFormats`(30)、`CoverBackfillModal`(27)、`RevisionHistory`(21)、`schedule`(10)、`coverBackfill`(8)、
+`exportMarkdown`(7)、`requestError`(4)、`importPathname`(3)、`tagTokens`(2)、`parseMarkdownFile`(2)、`formatTime`(1)…
+🔴 **并且给工具本身加了钉子**（`i18nSharedImpl`）：文章页表面必须量到 `RevisionHistory` 与 `CoverBackfillModal`
+（那两个漏过的）、必须含 `exportFormats.js`、合计 **≥100 条**、文件数 **≥10**
+⇒ 工具的递归坏掉（例如别名解析失效）就会红。变异对照 M6：把 `@/` 别名解析弄坏 ⇒ 🔴 红在那条钉子上。
+👉 🔴 **规矩升级：切批次前先跑 `pageSurface.js`，把整张表看完** —— 漏掉任何一个文件都会留下"半页中文"。
+
+#### B. 🔴 复数尺子的**两条真实边界**（都是变异对照打出来的，不是读代码猜的）
+M4 想验"英文计数句必须用 ICU plural"，改了**两次都没红**，两次各暴露一条边界：
+1. 只把 `{updated, plural, …}` 改成 `{updated} path names` ⇒ **不红**：判据正则是
+   `/\{占位符\}\s+([A-Za-z]+)s\b/`，即"占位符**紧跟**复数名词"；中间隔一个形容词（`path names`）就看不见；
+2. 只把 `{scanned, plural, …}` 改成 `{scanned} posts`、留着前一处 plural ⇒ 🔴 **还是不红**：
+   `needsIcuPlural` 一见消息里**已经有** ICU plural 就**整条跳过**（"每消息一次"而不是"每处一次"）。
+⇒ 要验这条判据，必须把**整条**消息的 plural 都拿掉（改完果然红）。
+👉 🔴 **规矩：变异对照打不红时，先怀疑"尺子的判据边界"，而不是"守卫没接线"**；
+把边界量出来写进手册比"把尺子改宽"更安全（改宽会带进假红：`{n} class address` 那类散文，本项目已误报 3 次）。
+⚠️ 已登记待办：把 `needsIcuPlural` 改成**每处**都查（并给它自己的反证集合）。
+
+#### C. 🔴 服务层第二个模块接了注入式翻译器：`batch.ts`
+`batchDelete(ids, isDraft, t = IDENTITY_T)` ⇒ 批量删除的确认框（"确定要删除选中内容吗？/ 删除后无法恢复"）跟着语言走；
+🔴 **两个调用点都补了 t**（文章页 `batchDelete(keys, false, t)`、草稿页 `batchDelete(keys, true, t)`）。
+活体证据（en-US）：`{"title":["Delete the selected items?"],"content":["This cannot be undone"]}`。
+⚠️ 变异对照 M2 就是把草稿页那个 t 拿掉 ⇒ 红在"注入式翻译器每个调用点都要传 t"上
+（🔴 这条守卫**连续三批立功**：UpdateModal、NewArticleModal、这次是 Draft 的 batchDelete）。
+
+#### D. 🔴 `t` 遮蔽守卫改成**作用域感知**（否则 `getColumns(t)` 这种形状一律假红）
+`Article/columns.jsx` 是"同文件里既有 `getColumns = (t) => […]`（工厂收翻译器）、又有 `function HiddenSwitch()`
+（组件自己 `const t = …`）"的形状 —— 两者**不同作用域、互不干扰**，而旧判据是"文件里有 `const t` 就不许有形参 t"⇒ 🔴 假红。
+修法：预扫描建一张"**形参 t 落在已绑定 t 的作用域里**"的行号表（自己递归、带 outerBound 标记
++ "本层块里有没有 `const t`"），只有命中的才报。⚠️ 真遮蔽仍要抓到：`RecycleBin` 的 `record.tags.map((t) => …)`、
+`const { total: t } = …` 都在**同一作用域**内 ⇒ 照旧报。
+👉 这是这条守卫**第二次**收窄（上次是 `t = IDENTITY_T` 例外）：🔴 **判据要按作用域/形状写，不要按文件写**（与 §7.157 D 同一条教训）。
+
+#### E. 🔴 反向判据要查"残留"，不能只查"该有的在不在"
+第一版对行内操作只断言"编辑/查看/修改信息/导出/删除都在" ⇒ 🔴 zh-TW 下混进来的简体「历史版本」**没人管**。
+现在加了 `rowActionsNoStrayCjk`：en-US 查汉字、zh-TW 查**简体专用字**（用 `SIMPLIFIED_ONLY_ZH`），
+并与"已登记延期清单"逐条对上（**多一个少一个都红**）；工具栏那条（`toolbarDeferredOnly`）本来就是这个形状 ⇒ 两处一致了。
+
+#### F. 源码笔误（不改，登记交站长）
+列头「**顶置**」应为「置顶」（`article.colTop`）⇒ 与 caddy 那条「触发请后」同类：
+🔴 **翻译批次不改中文文案**，照原样进包、繁体用正确词「置頂」。
+
+#### G. 基线
+- admin `node --test` **751 tests / 166 suites / 0 fail**（+1 = pageSurface 那条钉子）；i18n 守卫组 **105**；
+- 变异对照 **8/8**（棘轮 ×2、服务层漏传 t、batch.ts 逐字对账、🔴 复数守卫（整条消息）、key 提升、
+  🔴 pageSurface 递归、articleListHidden 锚点换新形状后仍承重、语义空操作）；
+- 语言包 **739 key** ×3；`--zh-tw-audit`：739 key / **699** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **47 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（`batch.ts` 与两个 `.jsx` 都在门禁范围内，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **751/166/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.96a032dd.js` = **1,500,778 B**）；
+- 🔴 **真实剩余：82 → 79 个文件 / 1,108 → 1,049 条**（本批 −3 文件 / −59 条）。
+- 🔴 **下一批**（用 `pageSurface.js` 量的，不再靠人读 import）：① `RevisionHistory`(21) + `CoverBackfillModal`(27)
+  ⇒ 文章页的块就齐了；② **对象字面量常量**那一类（`exportFormats` 30 / `schedule` 10 / `importPathname` 3 /
+  `tagTokens` 2 / `coverBackfill` 8），沿用 `coverField(t)` 那套形状；③ `pages/Editor/**`（最大，143 条 / 15 文件）；
+  ④ `DataManage/**`(134) / `CommentManage`(71)；⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.157 期 5 第七批：文章侧两个弹窗 + 题头图字段（48 条**只用 9 个新 key**）—— "对象字面量常量"的接法定型，变异对照还查出我自己建了个**没有消费方的兼容层**
 
 **交付**：`components/NewArticleModal`(22) + `components/ImportArticleModal`(19) + `components/CoverImageField`(7)

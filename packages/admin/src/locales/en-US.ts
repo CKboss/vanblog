@@ -726,7 +726,7 @@ export default {
   'customPage.colPath': 'Path',
   'customPage.editContent': 'Edit content',
   'customPage.fileManager': 'Manage files',
-  'customPage.view': 'View',
+  'common.view': 'View',
   'common.editInfo': 'Edit details',
   'customPage.demoBlocked': 'This cannot be changed on the demo site',
   'customPage.deleteConfirmBody': 'Delete this custom page?',
@@ -794,12 +794,12 @@ export default {
   // ── 🔴 期 5 第五批（26 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
   //    ⚠️ 术语与回收站那批一致：Recycle bin / Restore / **Delete forever**（= `recycle.purge`）。
   //    🔴 `draft.deleteConfirmTitle` 带 ICU 占位符 `{title}`（草稿标题），三份包占位符名一致（生成脚本已比对）。
-  'draft.batchDeleteOk': 'Deleted the selected drafts',
-  'draft.batchDelete': 'Delete selected',
-  'draft.batchExport': 'Export selected',
-  'draft.clearSelection': 'Clear selection',
-  'draft.importOk': 'Imported',
-  'draft.recycleBinBtn': 'Recycle bin',
+  'common.batchDeleteOk': 'Deleted the selected drafts',
+  'common.batchDelete': 'Delete selected',
+  'common.batchExport': 'Export selected',
+  'common.clearSelection': 'Clear selection',
+  'common.importOk': 'Imported',
+  'common.recycleBin': 'Recycle bin',
   'draft.colTitleTip': 'Long titles are truncated automatically',
   'common.fieldRequired': 'This field is required',
   'common.searchOrSelect': 'Search or choose',
@@ -807,7 +807,7 @@ export default {
   'common.publish': 'Publish',
   'draft.deleteConfirmTitle': 'Delete the draft "{title}"?',
   'draft.deleteConfirmContent': 'The draft moves to the Recycle bin in the toolbar on this page and can be restored at any time. Only Delete forever inside the Recycle bin is irreversible.',
-  'draft.deleteOk': 'Deleted. It moved to the Recycle bin and can be restored!',
+  'common.movedToRecycleOk': 'Deleted. It moved to the Recycle bin and can be restored!',
   'common.importHint': 'Import from markdown files; you can select several',
   'common.importBtn': 'Import',
   'draft.importTitle': 'Import drafts',
@@ -888,5 +888,44 @@ export default {
   'cover.uploadedOk': '{name} uploaded!',
   'cover.uploadedExists': '{name} already exists!',
   'cover.clear': 'Clear the header image',
+
+
+  // ── 🔴 期 5 第八批（30 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ 术语与回收站那批一致：Recycle bin / restored / **Delete forever**。
+  //    🔴 片段句（hiddenWarningPrefix + <a>Layout</a> + hiddenWarningSuffix、
+  //    scheduledWarningP1a + <b>时间</b> + P1b）是**按 JSX 顺序拼出整句**校对过的，不是逐段直译。
+  'article.genPinyinTitle': 'Generate pinyin path names for every post?',
+  'article.genPinyinContent': 'For every post whose custom path name is empty, a pinyin path is generated from the title (duplicates get -2, -3 appended). Existing path names are not changed, and the old /post/ numeric id links keep working.',
+  'common.generate': 'Generate',
+  // 🔴 两处"计数紧跟复数名词"⇒ 必须用 ICU plural（否则渲染出 "1 path names"）；
+  //    zh-CN / zh-TW 保持 `{updated} 个路径名` 这种形状（汉语没有复数变化，加了只会让文案变丑）。
+  'article.genPinyinDone':
+    '{updated, plural, one {# path name} other {# path names}} generated ({scanned, plural, one {# post} other {# posts}} scanned, {skipped} skipped)',
+  'article.editAbout': 'Edit the About page',
+  'article.genPinyin': 'Generate pinyin paths',
+  'article.hiddenAriaLabel': 'Whether {title} is hidden',
+  'article.hiddenOn': 'Hidden',
+  'article.hiddenOff': 'No longer hidden',
+  'article.colTop': 'Pinned',
+  'article.colViews': 'Views',
+  'article.hiddenTooltip': 'A hidden post is not shown on the site and is not counted in the total word count, the timeline and so on. Toggle it here instead of opening the details dialog.',
+  'article.scheduledTooltip': 'A scheduled post is invisible to every public page (list, search, RSS and sitemap) until its time comes; the server publishes it within a minute after that. It is based on whether publishAt is later than the current time.',
+  'article.hiddenWarningTitle': 'This post is hidden',
+  'article.hiddenWarningP1': 'A hidden post shows a 404 page unless access by URL is turned on (it is off by default).',
+  'article.hiddenWarningPrefix': 'You can change this in the',
+  'article.layoutConfig': 'Layout',
+  'article.hiddenWarningSuffix': 'section of the site settings.',
+  'common.visitAnyway': 'Open it anyway',
+  'common.back': 'Back',
+  'article.scheduledWarningTitle': 'This post is scheduled and not published yet',
+  'article.scheduledWarningP1a': 'This post is scheduled to publish at',
+  'article.scheduledWarningP1b': 'and until then it is invisible to every public page, so opening it now shows a 404 page.',
+  'article.scheduledWarningP2': 'To change the time or cancel the schedule, use Edit, then Edit details, then Scheduled publishing.',
+  'article.deleteConfirmTitle': 'Delete "{title}"?',
+  'article.deleteConfirmContent': 'The post moves to the Recycle bin in the toolbar on this page and disappears from the site at once. It can be restored at any time; only Delete forever inside the Recycle bin is irreversible.',
+  'common.demoBlockedDelete': 'This post cannot be deleted on the demo site',
+  'common.batchDeleteConfirmTitle': 'Delete the selected items?',
+  'common.batchDeleteConfirmContent': 'This cannot be undone',
+  'common.batchDeleteFailed': '{failed} of {total} could not be deleted',
 
 };

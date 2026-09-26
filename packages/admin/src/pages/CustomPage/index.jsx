@@ -61,7 +61,7 @@ export default function () {
         return (
           <Space>
             <a key="view" target="_blank" rel="noreferrer" href={`/c${record.path}`}>
-              {t('customPage.view', '查看')}
+              {t('common.view', '查看')}
             </a>
 
             <CustomPageModal

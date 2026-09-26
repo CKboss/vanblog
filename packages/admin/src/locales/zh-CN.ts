@@ -764,7 +764,7 @@ export default {
   'customPage.colPath': '路径',
   'customPage.editContent': '编辑内容',
   'customPage.fileManager': '文件管理',
-  'customPage.view': '查看',
+  'common.view': '查看',
   'common.editInfo': '修改信息',
   'customPage.demoBlocked': '演示站不可修改此项！',
   'customPage.deleteConfirmBody': '是否确认删除该自定义页面？',
@@ -836,12 +836,12 @@ export default {
   //    🔴 是**两句不同的中文**，不是同值重复；要不要统一属中文文案修订，交站长裁定。
   //    ⚠️ `common.createdAtPlaceholder`（不填默认为此刻）与 `siteInfo.since.placeholder` 同文，
   //    但一个是**站点创建时间**、一个是**草稿创建时间** ⇒ 不同性质，刻意不合并。
-  'draft.batchDeleteOk': '批量删除成功！',
-  'draft.batchDelete': '批量删除',
-  'draft.batchExport': '批量导出',
-  'draft.clearSelection': '取消选择',
-  'draft.importOk': '导入成功！',
-  'draft.recycleBinBtn': '回收站',
+  'common.batchDeleteOk': '批量删除成功！',
+  'common.batchDelete': '批量删除',
+  'common.batchExport': '批量导出',
+  'common.clearSelection': '取消选择',
+  'common.importOk': '导入成功！',
+  'common.recycleBin': '回收站',
   'draft.colTitleTip': '标题过长会自动收缩',
   'common.fieldRequired': '此项为必填项',
   'common.searchOrSelect': '请搜索或选择',
@@ -849,7 +849,7 @@ export default {
   'common.publish': '发布',
   'draft.deleteConfirmTitle': '确定删除草稿 "{title}" 吗？',
   'draft.deleteConfirmContent': '删除后草稿会移入本页工具栏的「回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
-  'draft.deleteOk': '删除成功，已移入回收站（可恢复）!',
+  'common.movedToRecycleOk': '删除成功，已移入回收站（可恢复）!',
   'common.importHint': '从 markdown 文件导入，可多选',
   'common.importBtn': '导入',
   'draft.importTitle': '导入草稿',
@@ -949,5 +949,46 @@ export default {
   'cover.uploadedOk': '{name} 上传成功!',
   'cover.uploadedExists': '{name} 已存在!',
   'cover.clear': '清除题头图',
+
+
+  // ── 🔴 期 5 第八批：文章管理页（index + columns + 服务层 batch.ts，30 条新 key，**复用 61 个**）──
+  //    🔴 提升 8 个：`draft.batchDelete` / `batchExport` / `clearSelection` / `batchDeleteOk` / `importOk` /
+  //    `recycleBinBtn` / `deleteOk` 与 `customPage.view` → `common.*`（文章页与草稿页/自定义页面是同一批动作）。
+  //    🔴 `batch.ts`（批量删除的确认框）用**注入式翻译器**：`batchDelete(ids, isDraft, t = IDENTITY_T)`
+  //    ⇒ 不传 t 时与改造前逐字相同；文章页与草稿页两个调用点都已补上 t。
+  //    ⚠️ 列头「顶置」是**源码里的笔误**（应为「置顶」）⇒ 翻译批次不改中文，照原样进包；
+  //    🔴 已登记为待站长裁定的文案笔误（与 caddy 那条「触发请后」同一类）。繁体用正确词「置頂」。
+  //    ⚠️ `describeScheduledTag()`（schedule.js）与 `PATHNAME_FIELD`（importPathname.js）仍是服务层常量
+  //    ⇒ 定时状态标签、路径名字段在英文下仍是中文（已记录的中间态，下一批做）。
+  'article.genPinyinTitle': '批量生成拼音路径名？',
+  'article.genPinyinContent': '为所有「自定义路径名」为空的文章按标题生成汉语拼音路径（重名自动追加 -2、-3）。已有路径名不会被修改，旧的 /post/数字id 链接依然可用。',
+  'common.generate': '生成',
+  'article.genPinyinDone': '已生成 {updated} 个路径名（扫描 {scanned} 篇，跳过 {skipped} 篇）',
+  'article.editAbout': '编辑关于',
+  'article.genPinyin': '生成拼音路径',
+  'article.hiddenAriaLabel': '是否隐藏 {title}',
+  'article.hiddenOn': '已设为隐藏',
+  'article.hiddenOff': '已取消隐藏',
+  'article.colTop': '顶置',
+  'article.colViews': '浏览量',
+  'article.hiddenTooltip': '隐藏后前台不展示，也不计入总字数 / 时间线等。可在此直接开关，不必打开修改信息。',
+  'article.scheduledTooltip': '定时中的文章在到点之前对所有前台页面不可见（列表/搜索/RSS/sitemap 都不出现），到点后服务端会在一分钟内自动发布。以 publishAt 是否晚于当前时间为准。',
+  'article.hiddenWarningTitle': '此文章为隐藏文章！',
+  'article.hiddenWarningP1': '隐藏文章在未开启通过 URL 访问的情况下（默认关闭），会出现 404 页面！',
+  'article.hiddenWarningPrefix': '您可以在',
+  'article.layoutConfig': '布局配置',
+  'article.hiddenWarningSuffix': '中修改此项。',
+  'common.visitAnyway': '仍然访问',
+  'common.back': '返回',
+  'article.scheduledWarningTitle': '此文章处于「定时待发布」状态！',
+  'article.scheduledWarningP1a': '这篇文章定时于',
+  'article.scheduledWarningP1b': '自动发布，在那之前它对所有前台页面不可见，现在打开会是 404 页面。',
+  'article.scheduledWarningP2': '想改时间或取消定时：编辑 →「修改信息」→「定时发布」。',
+  'article.deleteConfirmTitle': '确定删除 "{title}"吗？',
+  'article.deleteConfirmContent': '删除后文章会移入本页工具栏的「回收站」，前台立刻不可见，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
+  'common.demoBlockedDelete': '演示站禁止删除此文章！',
+  'common.batchDeleteConfirmTitle': '确定要删除选中内容吗？',
+  'common.batchDeleteConfirmContent': '删除后无法恢复',
+  'common.batchDeleteFailed': '{failed} / {total} 条删除失败',
 
 };

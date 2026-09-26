@@ -175,6 +175,9 @@ const IDENTICAL_ZH_TW_OK = [
   'accessPassword.targetIt',
   // 🔴 期 5 第七批：`{name} 已存在!` 简繁同形
   'cover.uploadedExists',
+  // 🔴 期 5 第八批（文章管理页）：「您可以在」与「返回」简繁同形
+  'article.hiddenWarningPrefix',
+  'common.back',
 ];
 
 /**
@@ -320,12 +323,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 41,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 41）⇒ 遍历或解析器坏了`,
+      FILES.length >= 44,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 44）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 890,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 890）⇒ 疑似解析器坏了`,
+      calls.length >= 950,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 950）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -364,6 +367,9 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/NewArticleModal/index.jsx',
       'src/components/ImportArticleModal/index.jsx',
       'src/components/CoverImageField/index.jsx',
+      'src/pages/Article/index.jsx',
+      'src/pages/Article/columns.jsx',
+      'src/services/van-blog/batch.ts',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -512,6 +518,58 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
           for (const el of pat.elements || []) if (el) checkPattern(el, `${where}（数组解构）`);
         }
       };
+      // 🔴 **作用域感知**的预扫描（2026-09-26 期 5 第八批加的）：
+      //    只有"形参 t 落在**已经绑定了 t 的作用域里面**"才算遮蔽。
+      //    为什么必须这样：`Article/columns.jsx` 是"同文件里既有 `getColumns = (t) => […]`（工厂函数收翻译器）、
+      //    又有 `function HiddenSwitch()`（组件自己 `const t = …`）"的形状 —— 两者**不同作用域、互不干扰**，
+      //    而按"文件里有 const t 就不许有形参 t"的旧判据会 🔴 误报（本批实测红在这条上）。
+      //    ⚠️ 真遮蔽仍要抓到：`RecycleBin` 的 `record.tags.map((t) => …)`、`const { total: t } = …`
+      //    都在**同一作用域**内 ⇒ 照旧报。
+      const FN_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+      const paramBindsT = (fn) =>
+        (fn.params || []).some(
+          (pa) =>
+            (pa.type === 'Identifier' && pa.name === 't') ||
+            (pa.type === 'AssignmentPattern' && pa.left && pa.left.type === 'Identifier' && pa.left.name === 't'),
+        );
+      const scopeBindsT = (body) => {
+        const stmts = body && body.body ? body.body : Array.isArray(body) ? body : [];
+        for (const st of stmts) {
+          if (st && st.type === 'VariableDeclaration') {
+            for (const d of st.declarations || []) {
+              if (d.id && d.id.type === 'Identifier' && d.id.name === 't') return true;
+            }
+          }
+        }
+        return false;
+      };
+      const shadowParamLines = new Set();
+      const scopeWalk = (nd, outerBound) => {
+        if (!nd || typeof nd !== 'object') return;
+        if (FN_TYPES.has(nd.type)) {
+          const fnLine = nd.loc ? nd.loc.start.line : -1;
+          const pT = paramBindsT(nd);
+          if (pT && outerBound) shadowParamLines.add(fnLine);
+          const bodyBound = pT || outerBound || scopeBindsT(nd.body);
+          for (const k of Object.keys(nd)) {
+            if (k === 'loc' || k === 'params') continue;
+            const v = nd[k];
+            if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && scopeWalk(x, bodyBound));
+            else if (v && typeof v === 'object' && v.type) scopeWalk(v, bodyBound);
+          }
+          return;
+        }
+        let bound = outerBound;
+        if ((nd.type === 'Program' || nd.type === 'BlockStatement') && scopeBindsT(nd)) bound = true;
+        for (const k of Object.keys(nd)) {
+          if (k === 'loc') continue;
+          const v = nd[k];
+          if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && scopeWalk(x, bound));
+          else if (v && typeof v === 'object' && v.type) scopeWalk(v, bound);
+        }
+      };
+      scopeWalk(ast.program, false);
+
       astInventory.walkAst(ast.program, (nd) => {
         const line = nd.loc ? nd.loc.start.line : '?';
         if (
@@ -519,10 +577,15 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
           nd.type === 'FunctionExpression' ||
           nd.type === 'ArrowFunctionExpression'
         ) {
+          const fnLine = nd.loc ? nd.loc.start.line : -1;
           for (const pa of nd.params || []) {
-            if (pa.type === 'Identifier' && pa.name === 't') paramHits.push(`第 ${line} 行形参 t`);
+            // 🔴 只有"落在已绑定 t 的作用域里"的形参才算遮蔽（见上面 scopeWalk）
+            if (pa.type === 'Identifier' && pa.name === 't' && shadowParamLines.has(fnLine)) {
+              paramHits.push(`第 ${line} 行形参 t`);
+            }
             if (
               declaresTranslator &&
+              shadowParamLines.has(fnLine) &&
               pa.type === 'AssignmentPattern' &&
               pa.left &&
               pa.left.type === 'Identifier' &&
@@ -583,6 +646,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/Static/img/tools.tsx': ['copyImgLink', 'mergeMetaInfo'],
       // 🔴 期 5 第七批：**对象字面量常量**那一类的第一个样板（`coverField(t)` + `COVER_FIELD` identity 视图）
       'src/components/CoverImageField/index.jsx': ['coverField'],
+      // 🔴 期 5 第八批：批量删除的确认框在服务层（文章页与草稿页共用）
+      'src/services/van-blog/batch.ts': ['batchDelete'],
       // 🔴 期 7 第一批：**服务层**的访问密码模块（产文案的 9 个函数都收尾参 t）
       'src/services/van-blog/accessPassword.js': [
         'passwordPlaceholder', 'passwordHelp', 'buildAccessPasswordPatch',

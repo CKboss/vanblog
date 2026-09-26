@@ -173,7 +173,8 @@ describe('文章列表接线：定时文章必须显眼、不能被误认为已�
   const cols = codeOnly(read('src/pages/Article/columns.jsx'));
 
   it('有「定时发布」列：定时中给橙色 Tag（含时间），否则 "-"', () => {
-    assert.match(cols, /title: '定时发布'/);
+    // 🔴 期 5 第八批起列标题走 t()：锚点换成新形状（key + zh-CN defaultMessage 一起钉），性质没放
+    assert.match(cols, /title: t\('common\.scheduledPublish', '定时发布'\)/);
     assert.match(cols, /dataIndex: 'publishAt'/);
     assert.match(cols, /describeScheduledTag\(record\?\.publishAt\)/);
     assert.match(cols, /<Tag color="orange" data-article-scheduled-tag=/);
