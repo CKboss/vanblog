@@ -928,4 +928,37 @@ export default {
   'common.batchDeleteConfirmContent': 'This cannot be undone',
   'common.batchDeleteFailed': '{failed} of {total} could not be deleted',
 
+
+  // ── 🔴 期 5 第九批（29 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `Revert these changes` 在 `cover.revertHint` 里被**引用**（"点右下角「撤销本次改动」"）⇒ 两处必须逐字一致。
+  'cover.previewFailed': 'Could not load the preview',
+  'cover.writtenFor': 'Added a cover to {count, plural, one {# post} other {# posts}}',
+  'cover.writeFailed': 'Could not write the covers',
+  'cover.revertedFor': 'Reverted the cover changes on {count, plural, one {# post} other {# posts}}',
+  'cover.revertFailed': 'Could not revert',
+  'common.close': 'Close',
+  'cover.revertedDone': 'Changes reverted',
+  'cover.revertBtn': 'Revert these changes',
+  'cover.confirmWrite': 'Confirm writing ({count, plural, one {# post} other {# posts}})',
+  'cover.triggerTooltip': 'Scans post bodies and fills in the first usable image for posts whose cover is empty. Preview first; you can revert after writing.',
+  'cover.triggerBtn': 'Add covers from the first image',
+  'cover.doneTitle': 'Covers added',
+  'cover.writtenSummary': 'Added a cover to {changed, plural, one {# post} other {# posts}} ({scanned} scanned)',
+  'cover.revertHint': 'If a post got the wrong image, use Revert these changes at the bottom right to put the covers of this batch back to their previous values (empty stays empty).',
+  'cover.scanning': 'Scanning post bodies for the first image…',
+  'cover.onlyEmpty': 'Only posts with an empty cover are filled in; existing covers are not changed. You can untick individual posts before writing.',
+  'cover.previewRetry': 'The preview did not run; use the button below to try again',
+  'cover.rescan': 'Scan again',
+  'common.selectAll': 'Select all',
+  'common.invertSelection': 'Invert selection',
+  'cover.selectedCount': '{selected} of {total} selected',
+  'coverBackfill.emptyResult': 'Every post already has a cover, or no usable image was found in the bodies',
+  'coverBackfill.untitled': 'Post {id}',
+  'coverBackfill.rowScanned': 'Scanned',
+  'coverBackfill.rowMatched': 'With a first image',
+  'coverBackfill.rowWillWrite': 'Will write',
+  'coverBackfill.rowWritten': 'Written',
+  'coverBackfill.rowSkippedHasCover': 'Skipped: has a cover',
+  'coverBackfill.rowSkippedNoImage': 'Skipped: no image',
+
 };

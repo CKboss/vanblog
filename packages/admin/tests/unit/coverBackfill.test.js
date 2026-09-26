@@ -284,7 +284,8 @@ describe('补封面弹窗：dryRun 预览 → 勾选 → 写入 → 撤销', () 
   it('打开弹窗先跑 dryRun，确认写入才发 dryRun:false + 选中的 ids', () => {
     const preview = slice(only, 'const runPreview = async () => {', 'const handleOpen');
     assert.match(preview, /backfillCoversFromContent\(\{ dryRun: true, onlyMissing: true \}\)/);
-    assert.match(preview, /summarizeBackfill\(res\?\.data\)/);
+    // 🔴 期 5 第九批起 summarizeBackfill 收注入式翻译器（尾参 t）⇒ 锚点换形状，性质没放
+    assert.match(preview, /summarizeBackfill\(res\?\.data, t\)/);
     // 默认全选，用户只做减法
     assert.match(preview, /setSelectedIds\(data\.ids\);/);
 
@@ -313,7 +314,8 @@ describe('补封面弹窗：dryRun 预览 → 勾选 → 写入 → 撤销', () 
     const footer = slice(only, 'const footer = result ? (', 'return (\n    <>');
     assert.match(footer, /disabled=\{!selectedIds\.length \|\| busy\}/);
     assert.match(footer, /loading=\{writing\}/);
-    assert.match(footer, /\{`确认写入（\$\{selectedIds\.length\} 篇）`\}/);
+    // 🔴 期 5 第九批起文案走 t() + ICU ⇒ 锚点换形状，🔴 仍然钉住「篇数来自 selectedIds.length」
+    assert.match(footer, /t\('cover\.confirmWrite', '确认写入（\{count\} 篇）', \{ count: selectedIds\.length \}\)/);
     assert.match(footer, /取消/);
     // 一条都没匹配上时 selectedIds 必为空 → 同一个 disabled 条件就把确认按钮关掉了，
     // 并且要把原因说清楚
@@ -350,7 +352,8 @@ describe('补封面弹窗：dryRun 预览 → 勾选 → 写入 → 撤销', () 
       code,
       /setSelectedIds\(allIds\.filter\(\(id\) => !selectedIds\.includes\(id\)\)\)/,
     );
-    assert.match(code, /\{`已选 \$\{selectedIds\.length\} \/ \$\{allIds\.length\} 篇`\}/);
+    // 🔴 同上：已选计数走 t() + ICU，两个计数都必须还在
+    assert.match(code, /t\('cover\.selectedCount', '已选 \{selected\} \/ \{total\} 篇'/);
     assert.match(code, /data-cover-backfill-count/);
   });
 
@@ -383,7 +386,8 @@ describe('补封面弹窗：dryRun 预览 → 勾选 → 写入 → 撤销', () 
     assert.equal((only.match(/\} finally \{/g) || []).length, 3);
     assert.equal((only.match(/reportRequestError\(message, err, /g) || []).length, 3);
     for (const text of ['预览失败！', '写入失败！', '撤销失败！']) {
-      assert.match(only, new RegExp(`reportRequestError\\(message, err, '${text}'\\)`));
+      // 🔴 期 5 第九批起兜底文案走 t()：仍然要求"这三句话逐字还在"（只是多包了一层 t + key）
+      assert.match(only, new RegExp(`reportRequestError\\(message, err, t\\('[a-zA-Z.]+', '${text}'\\)\\)`));
     }
     // 每个 loading 只在 finally 里清一次
     for (const setter of ['setPreviewLoading(false)', 'setWriting(false)', 'setReverting(false)']) {

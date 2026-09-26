@@ -55,9 +55,28 @@ function walk(entry) {
       continue;
     }
     seen.set(file, { items });
-    for (const m of src.matchAll(/(?:import|export)[\s\S]{0,200}?from\s+'([^']+)'|require\(\s*'([^']+)'\s*\)/g)) {
-      const spec = m[1] || m[2];
-      if (!spec) continue;
+    // 🔴 用 **AST** 收集依赖，不用正则（2026-09-26 修的真实缺陷）：
+    //    第一版是 `/import[\s\S]{0,200}?from\s+'([^']+)'/`，而 `RevisionHistory/index.jsx` 的
+    //    `import { …20 行… } from './revisionCore'` **远超 200 字符窗口** ⇒ 🔴 整个 revisionCore.js（26 条）被漏掉，
+    //    而这个工具存在的**唯一理由**就是"别再漏块"。它的钉子当时也没抓到（只查了两个名字、且都在第 1 层）。
+    //    👉 教训：**新工具自己也要有变异对照**，而且钉子要覆盖"工具最容易坏的那种输入"（这里是多行 import）。
+    const specs = [];
+    try {
+      const ast = astInventory.parseSource(src, file);
+      astInventory.walkAst(ast.program, (nd) => {
+        if (!nd) return;
+        if ((nd.type === 'ImportDeclaration' || nd.type === 'ExportNamedDeclaration' || nd.type === 'ExportAllDeclaration') && nd.source && typeof nd.source.value === 'string') {
+          specs.push(nd.source.value);
+        } else if (nd.type === 'CallExpression' && nd.callee && nd.callee.type === 'Identifier' && nd.callee.name === 'require') {
+          const a = (nd.arguments || [])[0];
+          if (a && a.type === 'StringLiteral' && typeof a.value === 'string') specs.push(a.value);
+        }
+      });
+    } catch (e) {
+      // 解析不了的文件（例如非 JS 资源）不阻断遍历，但要**说出来**（沉默少报是这个工具最坏的失败模式）
+      console.log(`  ⚠️ 依赖收集失败（该文件的下游不会被遍历）：${path.relative(ROOT, file)} → ${String(e.message).slice(0, 80)}`);
+    }
+    for (const spec of specs) {
       const target = resolveImport(spec, file);
       if (target && !seen.has(target)) queue.push(target);
     }

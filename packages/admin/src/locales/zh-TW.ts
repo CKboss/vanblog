@@ -877,4 +877,37 @@ export default {
   'common.batchDeleteConfirmContent': '刪除後無法還原',
   'common.batchDeleteFailed': '{failed} / {total} 筆刪除失敗',
 
+
+  // ── 🔴 期 5 第九批（29 條）── 術語：封面 / 正文 / 掃描 / 寫入 / **撤銷** / **變更**（改动）/ 預覽 /
+  //    全選 / 反選 / 已選 / 篇 / **還原**（恢复）/ 勾選 / 首圖。
+  'cover.previewFailed': '預覽失敗！',
+  'cover.writtenFor': '已為 {count} 篇文章補上封面',
+  'cover.writeFailed': '寫入失敗！',
+  'cover.revertedFor': '已撤銷 {count} 篇文章的封面變更',
+  'cover.revertFailed': '撤銷失敗！',
+  'common.close': '關閉',
+  'cover.revertedDone': '已撤銷本次變更',
+  'cover.revertBtn': '撤銷本次變更',
+  'cover.confirmWrite': '確認寫入（{count} 篇）',
+  'cover.triggerTooltip': '掃描文章正文，把第一張可用圖片補進「封面為空」的文章；先看預覽，寫入後可撤銷',
+  'cover.triggerBtn': '從正文首圖補封面',
+  'cover.doneTitle': '補封面完成',
+  'cover.writtenSummary': '已為 {changed} 篇文章補上封面（掃描 {scanned} 篇）',
+  'cover.revertHint': '如果發現某篇配錯了圖，點右下角「撤銷本次變更」可以把這批文章的封面還原成寫入前的值（原本為空就還原為空）。',
+  'cover.scanning': '正在掃描文章正文裡的首圖…',
+  'cover.onlyEmpty': '只給「封面為空」的文章補，已有封面不會變更；寫入前可以先取消勾選個別文章。',
+  'cover.previewRetry': '預覽沒跑起來，點下面按鈕重試',
+  'cover.rescan': '重新掃描',
+  'common.selectAll': '全選',
+  'common.invertSelection': '反選',
+  'cover.selectedCount': '已選 {selected} / {total} 篇',
+  'coverBackfill.emptyResult': '所有文章都已有封面，或正文裡沒有可用圖片',
+  'coverBackfill.untitled': '文章 {id}',
+  'coverBackfill.rowScanned': '掃描',
+  'coverBackfill.rowMatched': '有首圖',
+  'coverBackfill.rowWillWrite': '將寫入',
+  'coverBackfill.rowWritten': '已寫入',
+  'coverBackfill.rowSkippedHasCover': '已有封面跳過',
+  'coverBackfill.rowSkippedNoImage': '無圖跳過',
+
 };

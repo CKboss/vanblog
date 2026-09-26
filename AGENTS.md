@@ -9469,6 +9469,78 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.159 期 5 第九批：从正文首图补封面（弹窗 + 服务层，35 条）—— 🔴 上一轮新建的 `pageSurface.js` **自己漏了块**，以及第二次踩"守卫钉住中间态"
+
+**交付**：`components/CoverBackfillModal/index.jsx`(27) + `services/van-blog/coverBackfill.js`(8) = **35 条 → 0**；
+语言包 **739 → 768 key**（新组 **`coverBackfill`**）；棘轮清单 **47 → 49 个文件**（都预算 0，**TOTAL 仍 53**）；
+`i18nKeyNaming` → **768**；`localePackParity` 自动发现下界 **44 → 46 个文件 / 950 → 980 个调用点**（实测 46 / 986）。
+🔴 这一批做完，**文章管理页在 en-US 下一个中文按钮都不剩**（上一轮活体量到的最后一个「从正文首图补封面」就是它）。
+🔴 **浏览器活体 17/17（5–6 项判据 × 3 语），problems 0、skipped 0**：触发器 tooltip、弹窗标题、
+🔴 **服务层的 5 个汇总行标签**（en-US 实采 `Scanned 1 / With a first image 1 / Will write 1 / Skipped: has a cover 0 / Skipped: no image 0`）、
+空结果文案或「文章 &lt;id&gt;」标题回退、footer 五个控件（含 **Checkbox 标签**「全选」），
+以及两条反向判据（en-US 弹窗里**无汉字** / zh-TW 弹窗里**无简体专用字**）。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-cover-backfill/`。
+
+#### A. 🔴 上一轮刚建的 `pageSurface.js`，**自己漏了块**（正则找 import 的经典失败）
+上一轮它报"文章页表面 118 条 / 14 个文件"。本轮从 `RevisionHistory/index.jsx` 入口跑它，只报 **21 条 / 1 个文件** ——
+🔴 `revisionCore.js`（**26 条**）没被算进去。根因：它用 `/import[\s\S]{0,200}?from\s+'([^']+)'/` 找依赖，
+而那个文件写的是 `import { …20 行… } from './revisionCore'` ⇒ **远超 200 字符窗口**。
+修法：改成 **AST**（`parseSource` + `walkAst` 收 `ImportDeclaration` / `ExportNamedDeclaration` / `require()`）——
+🔴 这正是本仓库早就写下的规矩（"结构化数据要解析、不要正则"），我在**新工具里又犯了一次**。
+修完重测：文章页表面 = **144 条 / 15 个文件**（+26 条 / +1 文件，正好是 revisionCore）。
+🔴 **手册里那个错数字就地划掉更正**（§7.158 A 用删除线保留原值）—— 不偷偷改：留着痕迹是为了让下一个人看见"工具也会假绿"。
+🔴 **钉子也补上了**：`i18nSharedImpl` 多一条 —— 从 `RevisionHistory` 入口必须量到 `revisionCore.js`，且合计 **≥45 条**（= 21 + 26）。
+👉 **规矩：新工具自己也要有变异对照，而且钉子要覆盖"这个工具最容易坏的那种输入"**（这里是**多行 import**，不是别名）。
+⚠️ 上一轮那条钉子为什么没抓到？因为它只查了两个名字（RevisionHistory / CoverBackfillModal），而这两个都在**第 1 层** import 里
+⇒ 🔴 **钉子只覆盖深度 1，就等于没覆盖递归**。
+
+#### B. 🔴 第二次踩"守卫钉住了改造过程中的中间态"
+上一轮我给 pageSurface 写的钉子是 `out.includes('CoverBackfillModal')`（"这个块还没翻，必须还在表里"）。
+本轮把它翻完 ⇒ 它从表里**消失**（工具只列还有 bare 中文的文件）⇒ 🔴 那条钉子假红。
+修法：改成**反向**断言 `!out.includes('CoverBackfillModal')`（"翻完了就不该再出现；再出现说明翻译被回退了"），
+并把"合计 ≥100"那条的**含义**写清：它是"**工具坏了**"的兜底、不是进度钉子
+（等这一页全翻完，要改成"合计 0 条"的形状，🔴 **不是删掉**）。
+👉 与 §7.153 B 同族（那次是 `bareChinese(System.tsx) >= 3`）。🔴 **两次了 ⇒ 规矩升级**：
+**凡是"某文件还没翻"这类断言，一律写成"翻完就该消失"的反向形状** ——
+否则每翻一个文件都要回来改守卫，而那种红与"守卫真的坏了"长得一模一样（本轮我一度以为工具又坏了）。
+
+#### C. 🔴 "内部转发"这条规矩第二次救场（而且是守卫抓的，不是我）
+`summarizeBackfill(data, t)` 内部要调 `normalizeBackfillItems(data)` —— 我第一版**忘了转发 t**。
+后果：标题为空时预览里的回退文案「文章 &lt;id&gt;」永远中文，而 🔴 **identity 黄金样本照样全绿**
+（那些样本测的就是"不传 t"的路径）⇒ 只有"注入式翻译器每个调用点都要传 t"那条守卫能抓到（它当场红了）。
+与 §7.156 A ③（`passwordHelp` 内部那句警告）是**同一个坑的第二次**；变异对照 M3 把它钉住了。
+👉 🔴 **规矩：给服务层函数加 `t` 尾参时，必须顺着它**内部的**每一个产文案调用一起转发**；
+"黄金样本全绿"只证明 identity 路径没坏，🔴 **不证明注入路径通了**。
+
+#### D. 探针的三处尺子错（都被实采数据纠正）
+1. 「全选」是 **Checkbox 的标签**、不是 `.ant-btn` ⇒ 只采按钮会判它"没渲染"（补 `.ant-checkbox-wrapper`）；
+2. `cover.confirmWrite` 的英文是 **ICU plural** 形状（`Confirm writing ({count, plural, …})`）⇒
+   我按 `split('{count}')` 取前缀得到的是**整串** ⇒ 必然不匹配；改成按**第一个 `{`** 切；
+3. 播种文章时**故意把 title 留空**，好让预览走到服务层的「文章 &lt;id&gt;」回退分支（否则那条文案永远验不到）。
+👉 又一次：**判据要照实采数据核**（这三处全是"我以为的形状"与"真实 DOM / 包值"不符）。
+
+#### E. 锚点**子串**陷阱（第 3 次）
+变异对照 M1/M2 的锚点各命中 **2 次** ⇒ harness 直接判"变异没做，本条无效"（🔴 这是它该有的行为）：
+`"        {t('cover.rescan', …)}"`（8 空格）是 18/20 空格那两行的**子串**；`summarizeBackfill(res?.data, t);` 有两个调用点。
+修法：带上**唯一邻居**（下一行的缩进、上一行的 `const res = await …`）。
+⚠️ 修 harness 时又踩一次**转义**：用 regex 重写 `from:`/`to:` 时把 `\n` 写成了**真换行** ⇒ JS 单引号串里断行、语法错。
+👉 改 harness 之后**永远先 `node --check`**（本项目已因此停下 3 次，每次都是它挡住的）。
+
+#### F. 基线
+- admin `node --test` **751 tests / 166 suites / 0 fail**；i18n 守卫组 **105**；
+- 变异对照 **6/6**（弹窗退回硬编码 / 服务层调用点漏传 t / 🔴 **内部**漏转发 t / defaultMessage 改动 /
+  🔴 白名单**双向**钉子 / 语义空操作）；
+- 语言包 **768 key** ×3；`--zh-tw-audit`：768 key / **705** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **49 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（`.jsx` 与 `.js` 都在门禁范围内，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **751/166/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.3ac07403.js` = **1,507,831 B**）；
+- 🔴 **真实剩余：79 → 77 个文件 / 1,049 → 1,014 条**；文章页表面（`pageSurface.js` 实测）**109 条 / 13 个文件**。
+- 🔴 **下一批**：① `RevisionHistory`(21) + `revisionCore.js`(26) —— 🔴 这是 §7.156 A 那套注入式翻译器的
+  **最大一单**（`revisionCore` 有 ~15 条黄金样本断言，identity 路径必须逐字不变）；
+  ② 之后文章页只剩服务层常量：`exportFormats`(30) / `schedule`(10) / `exportMarkdown`(7) / `importPathname`(3) / `tagTokens`(2)；
+  ③ `pages/Editor/**`（最大，143 条 / 15 文件）；④ `DataManage/**`(134) / `CommentManage`(71)；
+  ⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.158 期 5 第八批：文章管理页（59 条 / 3 文件）—— 页面表面**终于做成了工具**，以及复数尺子的两条真实边界
 
 **交付**：`pages/Article/index.jsx`(17) + `pages/Article/columns.jsx`(39) + `services/van-blog/batch.ts`(3)
@@ -9490,7 +9562,10 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 所以"读入口文件的 import"必然漏）。本轮又漏了这一次（活体在 zh-TW 的行内操作里量到简体「历史版本」才发现）
 ⇒ 🔴 **不再靠人**：`node scripts/i18n/pageSurface.js <入口>` 从入口**递归**跟 import（含 `@/` 别名），
 逐文件用共享模块量 bareChinese（与棘轮同口径），按条数排序打印并给合计。
-实测文章页表面 = **42 个文件**，其中本轮**没做**的还有 **118 条 / 14 个文件**：
+实测文章页表面 = **42 个文件**，其中本轮**没做**的还有 ~~118 条 / 14 个文件~~
+🔴 **更正：144 条 / 15 个文件**（下一轮 §7.159 A 发现这个工具**自己漏了块**：它当时用"正则 + 200 字符窗口"找 import，
+而 `RevisionHistory/index.jsx` 的 `import { …20 行… } from './revisionCore'` 远超窗口 ⇒ `revisionCore.js` 的 26 条没被量到。
+改成 AST 遍历后才是 144/15。🔴 所以这里原来那个数字是**错的**，留着划掉是为了让下一个人看见"工具也会假绿"）：
 `exportFormats`(30)、`CoverBackfillModal`(27)、`RevisionHistory`(21)、`schedule`(10)、`coverBackfill`(8)、
 `exportMarkdown`(7)、`requestError`(4)、`importPathname`(3)、`tagTokens`(2)、`parseMarkdownFile`(2)、`formatTime`(1)…
 🔴 **并且给工具本身加了钉子**（`i18nSharedImpl`）：文章页表面必须量到 `RevisionHistory` 与 `CoverBackfillModal`

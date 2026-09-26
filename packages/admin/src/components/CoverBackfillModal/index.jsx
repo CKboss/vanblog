@@ -3,7 +3,8 @@ import { summarizeBackfill, toRevertPayload } from '@/services/van-blog/coverBac
 import { reportRequestError } from '@/services/van-blog/requestError';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Col, Empty, message, Modal, Row, Space, Spin, Tag } from 'antd';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useIntl } from 'umi';
 
 // 一行文本的省略样式：不用 Typography 的 ellipsis（它要量宽度，几十行里跑测量不划算），
 // 父容器给了 minWidth:0，纯 CSS 就能截断，鼠标悬停用 title 看全文。
@@ -40,6 +41,11 @@ const LIST_STYLE = {
  * 因此失败时既不会误报成功，也不会进入撤销阶段。
  */
 export default function CoverBackfillModal(props) {
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  // ⚠️ 本文件的 t **没有**进任何 hook 的依赖数组（那几个 useEffect 的依赖是 visible/props）；
+  //    🔴 谁要往里加 t，必须先用 useCallback([intl]) 包（§7.144 A）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const { onFinish } = props;
   const [visible, setVisible] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -66,11 +72,11 @@ export default function CoverBackfillModal(props) {
     setSelectedIds([]);
     try {
       const res = await backfillCoversFromContent({ dryRun: true, onlyMissing: true });
-      const data = summarizeBackfill(res?.data);
+      const data = summarizeBackfill(res?.data, t);
       setSummary(data);
       setSelectedIds(data.ids);
     } catch (err) {
-      reportRequestError(message, err, '预览失败！');
+      reportRequestError(message, err, t('cover.previewFailed', '预览失败！'));
     } finally {
       setPreviewLoading(false);
     }
@@ -106,16 +112,16 @@ export default function CoverBackfillModal(props) {
         onlyMissing: true,
         ids: selectedIds,
       });
-      const data = summarizeBackfill(res?.data);
+      const data = summarizeBackfill(res?.data, t);
       setResult(data);
       setSelectedIds([]);
-      message.success(`已为 ${data.changed} 篇文章补上封面`);
+      message.success(t('cover.writtenFor', '已为 {count} 篇文章补上封面', { count: data.changed }));
       if (onFinish) {
         // 列表要立刻显示新封面，不能等用户手动刷新
         onFinish();
       }
     } catch (err) {
-      reportRequestError(message, err, '写入失败！');
+      reportRequestError(message, err, t('cover.writeFailed', '写入失败！'));
     } finally {
       setWriting(false);
     }
@@ -130,12 +136,14 @@ export default function CoverBackfillModal(props) {
     try {
       const res = await revertBackfilledCovers(toRevertPayload(writtenItems));
       setReverted(true);
-      message.success(`已撤销 ${res?.data?.reverted ?? 0} 篇文章的封面改动`);
+      message.success(
+        t('cover.revertedFor', '已撤销 {count} 篇文章的封面改动', { count: res?.data?.reverted ?? 0 }),
+      );
       if (onFinish) {
         onFinish();
       }
     } catch (err) {
-      reportRequestError(message, err, '撤销失败！');
+      reportRequestError(message, err, t('cover.revertFailed', '撤销失败！'));
     } finally {
       setReverting(false);
     }
@@ -204,19 +212,19 @@ export default function CoverBackfillModal(props) {
 
   const footer = result ? (
     <Space>
-      <Button onClick={handleClose}>关闭</Button>
+      <Button onClick={handleClose}>{t('common.close', '关闭')}</Button>
       <Button
         data-cover-backfill-revert
         loading={reverting}
         disabled={!writtenItems.length || reverted}
         onClick={handleRevert}
       >
-        {reverted ? '已撤销本次改动' : '撤销本次改动'}
+        {reverted ? t('cover.revertedDone', '已撤销本次改动') : t('cover.revertBtn', '撤销本次改动')}
       </Button>
     </Space>
   ) : (
     <Space>
-      <Button onClick={handleClose}>取消</Button>
+      <Button onClick={handleClose}>{t('init.restore.confirmCancel', '取消')}</Button>
       <Button
         type="primary"
         data-cover-backfill-confirm
@@ -225,7 +233,7 @@ export default function CoverBackfillModal(props) {
         disabled={!selectedIds.length || busy}
         onClick={handleConfirm}
       >
-        {`确认写入（${selectedIds.length} 篇）`}
+        {t('cover.confirmWrite', '确认写入（{count} 篇）', { count: selectedIds.length })}
       </Button>
     </Space>
   );
@@ -233,13 +241,16 @@ export default function CoverBackfillModal(props) {
   return (
     <>
       <Button
-        title="扫描文章正文，把第一张可用图片补进「封面为空」的文章；先看预览，写入后可撤销"
+        title={t(
+          'cover.triggerTooltip',
+          '扫描文章正文，把第一张可用图片补进「封面为空」的文章；先看预览，写入后可撤销',
+        )}
         onClick={handleOpen}
       >
-        从正文首图补封面
+        {t('cover.triggerBtn', '从正文首图补封面')}
       </Button>
       <Modal
-        title={result ? '补封面完成' : '从正文首图补封面'}
+        title={result ? t('cover.doneTitle', '补封面完成') : t('cover.triggerBtn', '从正文首图补封面')}
         visible={visible}
         width={760}
         maskClosable={false}
@@ -252,8 +263,14 @@ export default function CoverBackfillModal(props) {
               type="success"
               showIcon
               style={{ marginBottom: 12 }}
-              message={`已为 ${result.changed} 篇文章补上封面（扫描 ${result.scanned} 篇）`}
-              description="如果发现某篇配错了图，点右下角「撤销本次改动」可以把这批文章的封面恢复成写入前的值（原来为空就恢复为空）。"
+              message={t('cover.writtenSummary', '已为 {changed} 篇文章补上封面（扫描 {scanned} 篇）', {
+                changed: result.changed,
+                scanned: result.scanned,
+              })}
+              description={t(
+                'cover.revertHint',
+                '如果发现某篇配错了图，点右下角「撤销本次改动」可以把这批文章的封面恢复成写入前的值（原来为空就恢复为空）。',
+              )}
             />
             {renderRows(result.rows)}
             <div style={LIST_STYLE} data-cover-backfill-written>
@@ -261,21 +278,24 @@ export default function CoverBackfillModal(props) {
             </div>
           </>
         ) : (
-          <Spin spinning={previewLoading} tip="正在扫描文章正文里的首图…">
+          <Spin spinning={previewLoading} tip={t('cover.scanning', '正在扫描文章正文里的首图…')}>
             <Alert
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="只给「封面为空」的文章补，已有封面不会改动；写入前可以先取消勾选个别文章。"
+              message={t(
+                'cover.onlyEmpty',
+                '只给「封面为空」的文章补，已有封面不会改动；写入前可以先取消勾选个别文章。',
+              )}
             />
             {summary ? renderRows(summary.rows) : null}
             {!summary && !previewLoading ? (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="预览没跑起来，点下面按钮重试"
+                description={t('cover.previewRetry', '预览没跑起来，点下面按钮重试')}
               >
                 <Button icon={<ReloadOutlined />} onClick={runPreview}>
-                  重新扫描
+                  {t('cover.rescan', '重新扫描')}
                 </Button>
               </Empty>
             ) : null}
@@ -295,7 +315,7 @@ export default function CoverBackfillModal(props) {
                     disabled={busy}
                     onChange={(e) => setSelectedIds(e.target.checked ? allIds : [])}
                   >
-                    全选
+                    {t('common.selectAll', '全选')}
                   </Checkbox>
                   <Button
                     size="small"
@@ -303,10 +323,13 @@ export default function CoverBackfillModal(props) {
                     disabled={busy}
                     onClick={() => setSelectedIds(allIds.filter((id) => !selectedIds.includes(id)))}
                   >
-                    反选
+                    {t('common.invertSelection', '反选')}
                   </Button>
                   <span data-cover-backfill-count>
-                    {`已选 ${selectedIds.length} / ${allIds.length} 篇`}
+                    {t('cover.selectedCount', '已选 {selected} / {total} 篇', {
+                      selected: selectedIds.length,
+                      total: allIds.length,
+                    })}
                   </span>
                   <Button
                     size="small"
@@ -315,7 +338,7 @@ export default function CoverBackfillModal(props) {
                     loading={previewLoading}
                     onClick={runPreview}
                   >
-                    重新扫描
+                    {t('cover.rescan', '重新扫描')}
                   </Button>
                 </Space>
                 <div style={LIST_STYLE} data-cover-backfill-preview>

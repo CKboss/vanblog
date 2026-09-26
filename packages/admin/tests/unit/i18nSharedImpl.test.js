@@ -209,6 +209,8 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/Article/index.jsx': 0,
     'src/pages/Article/columns.jsx': 0,
     'src/services/van-blog/batch.ts': 0,
+    'src/components/CoverBackfillModal/index.jsx': 0,
+    'src/services/van-blog/coverBackfill.js': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -316,12 +318,40 @@ test('i18n 共享实现 · 🔴 `pageSurface.js` 必须把**整页的块**都量
     { cwd: ROOT, encoding: 'utf8' },
   );
   assert.ok(out.includes('RevisionHistory'), '🔴 页面表面里必须量到 RevisionHistory（本项目曾漏掉它）：\n' + out.slice(0, 400));
-  assert.ok(out.includes('CoverBackfillModal'), '🔴 页面表面里必须量到 CoverBackfillModal：\n' + out.slice(0, 400));
+  // 🔴 这里原来还钉着 `out.includes('CoverBackfillModal')` —— **期 5 第九批把它翻完之后那条就假红了**：
+  //    pageSurface 只列"还有 bare 中文"的文件，翻完的文件**从表里消失**（这正是我们想要的结果）。
+  //    👉 这是本项目**第二次**踩"守卫钉住了改造过程中的中间态"（第一次见 §7.153 B）：
+  //    🔴 凡是"某文件还没翻"这类断言，都要写成"**翻完之后就该消失**"的形状（下面这条反向断言），
+  //    否则每翻一个文件就要回来改一次守卫，而那种红与"工具坏了"长得一模一样。
+  assert.ok(
+    !out.includes('CoverBackfillModal'),
+    '🔴 CoverBackfillModal 已经翻完了（期 5 第九批）⇒ 它**不该**再出现在页面表面里；' +
+      '如果它又出现了，说明那一批的翻译被回退了',
+  );
   assert.ok(out.includes('exportFormats.js'), '🔴 服务层常量也算页面表面的一部分（导出格式的三项说明）');
   const m = out.match(/合计 (\d+) 条 \/ (\d+) 个文件/);
   assert.ok(m, '🔴 没读到合计行 ⇒ 工具的输出形状变了（判据要跟着改，不要放宽）：\n' + out.slice(-300));
+  // 🔴 下界的含义要说清：它是"**工具坏了**"的兜底，不是进度钉子。
+  //    期 5 第九批翻掉 CoverBackfillModal(27) + coverBackfill.js(8) 之后，文章页表面从 144 条降到 109 条，
+  //    下界 100 仍然成立；等这一页全翻完，这条要改成"合计 0 条 / 0 个文件"的形状（而不是删掉）。
   assert.ok(Number(m[1]) >= 100, `🔴 文章页表面只剩 ${m[1]} 条（下界 100）⇒ 工具的递归坏了，会假绿`);
   assert.ok(Number(m[2]) >= 10, `🔴 只量到 ${m[2]} 个文件（下界 10）⇒ 递归没跟着 import 走`);
+
+  // 🔴 第二条钉子专门打**多行 import**（这个工具自己刚踩过的坑）：
+  //    `RevisionHistory/index.jsx` 的 `import { …20 行… } from './revisionCore'` 曾被
+  //    "正则 + 200 字符窗口"整块漏掉（revisionCore.js 26 条没被量到），而当时那条钉子**没抓到**
+  //    （它只查了两个名字、而且都在第 1 层）⇒ 🔴 工具的钉子必须覆盖"工具最容易坏的那种输入"。
+  const out2 = execFileSync(
+    process.execPath,
+    [path.join(ROOT, 'scripts/i18n/pageSurface.js'), 'packages/admin/src/components/RevisionHistory/index.jsx'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  assert.ok(
+    out2.includes('revisionCore.js'),
+    '🔴 多行 import 没被跟进去（revisionCore.js 是 26 条文案的所在，漏了它就是"半页中文"）：\n' + out2.slice(0, 400),
+  );
+  const m2 = out2.match(/合计 (\d+) 条 \/ (\d+) 个文件/);
+  assert.ok(m2 && Number(m2[1]) >= 45, `🔴 RevisionHistory 表面只有 ${m2 && m2[1]} 条（下界 45 = 21 + 26）⇒ 又漏块了`);
 });
 
 test('i18n 共享实现 · 尺子反证：合成输入必须被正确分类（证明判据真的在判）', () => {

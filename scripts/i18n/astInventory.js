@@ -612,7 +612,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 //   组名用**模块名**而不是页面名：它被文章、草稿、分类三处共用，不属于任何单一页面。
 // 🔴 `article` = 文章侧弹窗（新建/导入）；`cover` = 题头图字段（`components/CoverImageField`）。
 //   两个都是**跨页复用的组件**（文章列表、草稿列表、编辑器都会用）⇒ 用自己的组名，不塞进 common。
-const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `coverBackfill` = 服务层 `services/van-blog/coverBackfill.js`（补封面的汇总行标签与空结果文案）。
+//   与 `cover`（弹窗自己的文案）分开：一个是**服务层模块**、一个是组件，跟 `accessPassword` 的分组方式一致。
+const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

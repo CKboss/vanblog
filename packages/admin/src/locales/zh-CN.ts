@@ -991,4 +991,42 @@ export default {
   'common.batchDeleteConfirmContent': '删除后无法恢复',
   'common.batchDeleteFailed': '{failed} / {total} 条删除失败',
 
+
+  // ── 🔴 期 5 第九批：从正文首图补封面（`CoverBackfillModal` + 服务层 `coverBackfill.js`，29 条）──
+  //    🔴 服务层同样是**注入式翻译器**：`summarizeBackfill(data, t = IDENTITY_T)` /
+  //    `normalizeBackfillItems(data, t = IDENTITY_T)` / `emptyResultText(t = IDENTITY_T)`；
+  //    🔴 `summarizeBackfill` **内部**调 `normalizeBackfillItems(data, t)`（内部也必须转发，见 §7.156 A ③）。
+  //    ⚠️ `EMPTY_RESULT_TEXT` 常量保留为 identity 视图（`coverBackfill.test.js` 的黄金样本照旧通过）。
+  //    ⚠️ 计数句用 ICU plural（英文），zh-CN / zh-TW 保持 `{count} 篇` 的形状；
+  //    但 `{scanned} scanned` / `{total} selected` 这种"占位符 + 过去分词"**不用** plural（不是复数名词）。
+  'cover.previewFailed': '预览失败！',
+  'cover.writtenFor': '已为 {count} 篇文章补上封面',
+  'cover.writeFailed': '写入失败！',
+  'cover.revertedFor': '已撤销 {count} 篇文章的封面改动',
+  'cover.revertFailed': '撤销失败！',
+  'common.close': '关闭',
+  'cover.revertedDone': '已撤销本次改动',
+  'cover.revertBtn': '撤销本次改动',
+  'cover.confirmWrite': '确认写入（{count} 篇）',
+  'cover.triggerTooltip': '扫描文章正文，把第一张可用图片补进「封面为空」的文章；先看预览，写入后可撤销',
+  'cover.triggerBtn': '从正文首图补封面',
+  'cover.doneTitle': '补封面完成',
+  'cover.writtenSummary': '已为 {changed} 篇文章补上封面（扫描 {scanned} 篇）',
+  'cover.revertHint': '如果发现某篇配错了图，点右下角「撤销本次改动」可以把这批文章的封面恢复成写入前的值（原来为空就恢复为空）。',
+  'cover.scanning': '正在扫描文章正文里的首图…',
+  'cover.onlyEmpty': '只给「封面为空」的文章补，已有封面不会改动；写入前可以先取消勾选个别文章。',
+  'cover.previewRetry': '预览没跑起来，点下面按钮重试',
+  'cover.rescan': '重新扫描',
+  'common.selectAll': '全选',
+  'common.invertSelection': '反选',
+  'cover.selectedCount': '已选 {selected} / {total} 篇',
+  'coverBackfill.emptyResult': '所有文章都已有封面，或正文里没有可用图片',
+  'coverBackfill.untitled': '文章 {id}',
+  'coverBackfill.rowScanned': '扫描',
+  'coverBackfill.rowMatched': '有首图',
+  'coverBackfill.rowWillWrite': '将写入',
+  'coverBackfill.rowWritten': '已写入',
+  'coverBackfill.rowSkippedHasCover': '已有封面跳过',
+  'coverBackfill.rowSkippedNoImage': '无图跳过',
+
 };

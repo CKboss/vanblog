@@ -20,7 +20,27 @@ const STATIC_THUMB_PREFIX = '/static/img/thumb/';
 const PREVIEW_LIMIT = 200;
 
 // dryRun 一条都没匹配上时必须说清原因，否则用户会以为接口坏了
-const EMPTY_RESULT_TEXT = '所有文章都已有封面，或正文里没有可用图片';
+/**
+ * 🔴 多语言：**注入式翻译器**（与 accessPassword.js / recycleCore.js / batch.ts 同一套模式）。
+ * 本模块是纯逻辑（`node --test` 直接 require），模块加载期拿不到 umi 运行时 ⇒ 翻译器由调用方在渲染期注入。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前**逐字相同**：`coverBackfill.test.js` 那些黄金样本
+ * （`label === '已写入'`、`EMPTY_RESULT_TEXT === '所有文章都已有封面…'`、`items[0].title === '文章 0'`）
+ * 一个字都不用改就照旧通过 —— 这是本批最重要的兼容性证据。
+ */
+function interpolate(template, values) {
+  if (!values) return String(template);
+  return String(template).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+  );
+}
+const IDENTITY_T = (id, defaultMessage, values) => interpolate(defaultMessage, values);
+
+/** 空结果的文案（函数版：跟着语言走） */
+function emptyResultText(t = IDENTITY_T) {
+  return t('coverBackfill.emptyResult', '所有文章都已有封面，或正文里没有可用图片');
+}
+/** 🔴 identity 视图：留给还没接 i18n 的消费方与 `assert.equal(EMPTY_RESULT_TEXT, …)` 这类黄金样本 */
+const EMPTY_RESULT_TEXT = emptyResultText();
 
 function toText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -70,7 +90,7 @@ function toThumbUrl(url) {
  * @param {unknown} data 接口 data 字段（或直接传 items 数组也认）
  * @returns {Array<{id:number,title:string,cover:string,previousCover:string,thumb:string}>}
  */
-function normalizeBackfillItems(data) {
+function normalizeBackfillItems(data, t = IDENTITY_T) {
   const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
   const out = [];
   for (const raw of list) {
@@ -84,7 +104,7 @@ function normalizeBackfillItems(data) {
     }
     out.push({
       id,
-      title: toText(raw?.title) || `文章 ${id}`,
+      title: toText(raw?.title) || t('coverBackfill.untitled', '文章 {id}', { id }),
       cover,
       // previousCover 可能是空串（原来就没封面），撤销时要把空串写回去，不能丢字段
       previousCover: typeof raw?.previousCover === 'string' ? raw.previousCover : '',
@@ -105,8 +125,10 @@ function normalizeBackfillItems(data) {
  *
  * @param {unknown} data
  */
-function summarizeBackfill(data) {
-  const items = normalizeBackfillItems(data);
+function summarizeBackfill(data, t = IDENTITY_T) {
+  // 🔴 **内部调用也要把 t 转发下去**（§7.156 A ③）：否则"标题为空时回退成 文章 <id>"那半句
+  //    永远是中文 —— 而且 identity 黄金样本照样绿（它测的就是不传 t 的路径），只有注入路径会露馅。
+  const items = normalizeBackfillItems(data, t);
   const dryRun = Boolean(data?.dryRun);
   const scanned = toCount(data?.scanned);
   const matched = toCount(data?.matched);
@@ -125,11 +147,18 @@ function summarizeBackfill(data) {
     items,
     ids: items.map((item) => item.id),
     rows: [
-      { key: 'scanned', label: '扫描', value: scanned },
-      { key: 'matched', label: '有首图', value: matched },
-      { key: 'willChange', label: dryRun ? '将写入' : '已写入', value: willChange, primary: true },
-      { key: 'skippedHasCover', label: '已有封面跳过', value: skippedHasCover },
-      { key: 'skippedNoImage', label: '无图跳过', value: skippedNoImage },
+      { key: 'scanned', label: t('coverBackfill.rowScanned', '扫描'), value: scanned },
+      { key: 'matched', label: t('coverBackfill.rowMatched', '有首图'), value: matched },
+      {
+        key: 'willChange',
+        label: dryRun
+          ? t('coverBackfill.rowWillWrite', '将写入')
+          : t('coverBackfill.rowWritten', '已写入'),
+        value: willChange,
+        primary: true,
+      },
+      { key: 'skippedHasCover', label: t('coverBackfill.rowSkippedHasCover', '已有封面跳过'), value: skippedHasCover },
+      { key: 'skippedNoImage', label: t('coverBackfill.rowSkippedNoImage', '无图跳过'), value: skippedNoImage },
     ],
     emptyText: items.length ? '' : EMPTY_RESULT_TEXT,
   };
@@ -165,6 +194,7 @@ module.exports = {
   STATIC_IMG_PREFIX,
   STATIC_THUMB_PREFIX,
   PREVIEW_LIMIT,
+  emptyResultText,
   EMPTY_RESULT_TEXT,
   toThumbUrl,
   normalizeBackfillItems,
