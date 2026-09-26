@@ -170,6 +170,9 @@ const IDENTICAL_ZH_TW_OK = [
   'common.encrypted',
   'common.no',
   'common.yes',
+  // 🔴 期 7 第一批（accessPassword）：「留空表示不加密」与「它」简繁同形
+  'accessPassword.placeholderCreate',
+  'accessPassword.targetIt',
 ];
 
 /**
@@ -315,12 +318,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 37,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 37）⇒ 遍历或解析器坏了`,
+      FILES.length >= 38,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 38）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 815,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 815）⇒ 疑似解析器坏了`,
+      calls.length >= 835,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 835）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -355,6 +358,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/ExportFormatDropdown/index.jsx',
       'src/components/PublishDraftModal/index.jsx',
       'src/components/UpdateModal/index.tsx',
+      'src/services/van-blog/accessPassword.js',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -564,6 +568,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         'describeListFailure', 'normalizeDeletedList', 'actionText', 'labelText', 'articleLabel',
       ],
       'src/pages/Static/img/tools.tsx': ['copyImgLink', 'mergeMetaInfo'],
+      // 🔴 期 7 第一批：**服务层**的访问密码模块（产文案的 9 个函数都收尾参 t）
+      'src/services/van-blog/accessPassword.js': [
+        'passwordPlaceholder', 'passwordHelp', 'buildAccessPasswordPatch',
+        'clearConfirmTitle', 'clearConfirmContent',
+        'passwordUnrecoverableWarning', 'clearPasswordLabel', 'clearPasswordTooltip', 'privateToggleHint',
+      ],
     };
     const OPTIONS_STYLE = new Set(['describeRecycleActionFailure']);
     // 🔴 三类**合法**的"不传 t"，都要显式登记（否则这条判据会把设计好的行为当成缺陷）：
@@ -572,7 +582,13 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     //     （recycleBin.test.js 的"两条路径不许漂" + 黄金样本）。
     //  ② **尚未接 i18n** 的消费方：走 identity ⇒ 输出与今天逐字相同（不是缺陷，是 backlog）。
     //     🔴 这张表是**钉死的**：谁新增一个不传 t 的消费方，这里就会红（要么补 t、要么登记进表并说明）。
-    const NOT_YET_I18N_CONSUMERS = ['src/components/Editor/imgUpload.tsx'];
+    const NOT_YET_I18N_CONSUMERS = [
+      'src/components/Editor/imgUpload.tsx',
+      // 🔴 期 7 第一批新增：这两个文件调 accessPassword 的产文案函数但**自己还没接 i18n**
+      //    ⇒ 走 identity，输出与今天逐字相同（不是缺陷，是 backlog；翻它们的那批要把 t 传进来并从这张表删掉）
+      'src/pages/DataManage/tabs/Category.jsx',
+      'src/components/NewArticleModal/index.jsx',
+    ];
     // 🔴 每个 it 都有自己的作用域：上一版直接用了**别的 it 里**定义的 stripComments ⇒ ReferenceError。
     const noComments = (x) =>
       x

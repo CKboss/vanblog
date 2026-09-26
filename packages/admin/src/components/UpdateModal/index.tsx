@@ -18,14 +18,16 @@ import { stopMenuKeydown } from '@/services/van-blog/editableKeyboard';
 import {
   buildAccessPasswordPatch,
   buildSubmitValues,
-  CLEAR_PASSWORD_LABEL,
-  CLEAR_PASSWORD_TOOLTIP,
+  // 🔴 已接 i18n 的组件用**函数版**（传 t），不要用那几个 SCREAMING_CASE 常量
+  //    （常量是同一份文案的 identity 视图，留给还没接 i18n 的消费方，见 accessPassword.js 顶部注释）
+  clearPasswordLabel,
+  clearPasswordTooltip,
   clearConfirmContent,
   clearConfirmTitle,
   hasPasswordFromRecord,
   passwordHelp,
   passwordPlaceholder,
-  PRIVATE_TOGGLE_HINT,
+  privateToggleHint,
   sanitizeRecordForForm,
   shouldShowClearOption,
 } from '@/services/van-blog/accessPassword';
@@ -117,13 +119,19 @@ export default function (props: {
         // 清除是**不可撤销**的（服务端只存 scrypt 哈希，谁也读不出原密码），所以二次确认。
         let accessPatch: any = {};
         if (type == 'article') {
-          const access = buildAccessPasswordPatch({
-            password: (values as any)?.password,
-            clearRequested: (values as any)?.clearPassword,
-            hasPassword: passwordSet,
-            isCreate: false,
-            isPrivate: (values as any)?.private,
-          });
+          // 🔴 尾参必须传 t：不传就走 IDENTITY_T ⇒ 那 3 条校验错误（又填又勾 / 无需清除 /
+          //    如若加密请填写密码）在英文界面下**永远是中文**，而且不报错、界面上看不出差别。
+          //    这一处是**新加的"注入式翻译器每个调用点都要传 t"守卫当场抓出来的**（迁移时漏了）。
+          const access = buildAccessPasswordPatch(
+            {
+              password: (values as any)?.password,
+              clearRequested: (values as any)?.clearPassword,
+              hasPassword: passwordSet,
+              isCreate: false,
+              isPrivate: (values as any)?.private,
+            },
+            t,
+          );
           if (access.error) {
             message.error(access.error);
             return false;
@@ -131,8 +139,10 @@ export default function (props: {
           if ((access.patch as any)?.clearPassword) {
             const proceed = await new Promise<boolean>((resolve) => {
               Modal.confirm({
-                title: clearConfirmTitle('这篇文章'),
-                content: clearConfirmContent('这篇文章'),
+                // 🔴 **还欠条**（§7.155 A）：实参与模板分属两层 ⇒ 必须一起翻。
+                //    现在实参也走 t（accessPassword.targetThisArticle），模板在服务层用 ICU `{target}`。
+                title: clearConfirmTitle(t('accessPassword.targetThisArticle', '这篇文章'), t),
+                content: clearConfirmContent(t('accessPassword.targetThisArticle', '这篇文章'), t),
                 okText: t('common.okClear', '确定清除'),
                 okButtonProps: { danger: true },
                 cancelText: t('common.cancelReconsider', '再想想'),
@@ -264,7 +274,7 @@ export default function (props: {
             id="private"
             label={t('common.encrypted', '是否加密')}
             placeholder={t('common.encrypted', '是否加密')}
-            tooltip={PRIVATE_TOGGLE_HINT}
+            tooltip={privateToggleHint(t)}
             request={async () => {
               return [
                 {
@@ -283,14 +293,14 @@ export default function (props: {
             width="md"
             id="password"
             name="password"
-            placeholder={passwordPlaceholder({ hasPassword: passwordSet })}
+            placeholder={passwordPlaceholder({ hasPassword: passwordSet }, t)}
             tooltip={
               passwordSet
                 ? t('common.passwordTooltipSet', '已设置密码。留空表示不修改；填新值表示改密码。')
                 : t('common.passwordTooltipUnset', '留空表示不加密；填了就用这个密码加密。')
             }
             formItemProps={{
-              extra: passwordHelp({ hasPassword: passwordSet }),
+              extra: passwordHelp({ hasPassword: passwordSet }, t),
             }}
             // autoComplete="new-password"：挡住浏览器的密码自动填充。
             // 「留空 = 不修改」之后，一次自动填充就等于"用户没想改，却被改了密码"。
@@ -302,8 +312,8 @@ export default function (props: {
               width="md"
               name="clearPassword"
               id="clearPassword"
-              label={CLEAR_PASSWORD_LABEL}
-              tooltip={CLEAR_PASSWORD_TOOLTIP}
+              label={clearPasswordLabel(t)}
+              tooltip={clearPasswordTooltip(t)}
               formItemProps={{
                 extra: t(
                   'common.clearPasswordExtra',

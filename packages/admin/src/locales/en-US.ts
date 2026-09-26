@@ -853,4 +853,27 @@ export default {
   'common.demoBlockedCreate': 'New posts cannot be created on the demo site',
   'draft.publishOk': 'Published. The original draft moved to the Recycle bin for drafts automatically (restoring it does not affect the published post).',
 
+
+  // ── 🔴 期 7 第一批（15 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `scrypt` 是技术标识符，三份包都必须原样保留（生成脚本的闸门会查）。
+  'accessPassword.unrecoverable': 'The password is stored as a scrypt hash and the server cannot read it back: if you forget or clear it, it cannot be recovered, only set again.',
+  'accessPassword.clearLabel': 'Clear password',
+  'accessPassword.clearTooltip': 'Tick this and submit = remove the encryption (the server sets the password to empty). Leave it unticked and the password box empty = keep the current password.',
+  'accessPassword.placeholderCreate': 'Leave empty for no encryption',
+  'accessPassword.placeholderSet': 'A password is set; leave empty to keep it',
+  // 🔴 尾部那个空格是**刻意**的：`passwordHelp` 把"语义句"与"不可找回警告"**直接拼接**
+  //    （`${semantic}${warning}`）；中文不需要空格，而英文拼出来会是 "…that password.The password is stored…"。
+  //    🔴 这是活体探针在 en-US 下量出来的（单测当时只断言 startsWith/endsWith，没验**接缝**）。
+  //    修法与 §7.152 B 的 `img.helpP3strong` 同一手法：空格放进**英文片段**，中文两份都不带 ⇒ 对账仍成立。
+  'accessPassword.helpCreate': 'Leave empty = no encryption; enter one = encrypt with that password. ',
+  'accessPassword.helpSet': 'This post or category already has a password. Leave empty = keep it; enter a new value = change it; to remove the encryption, tick Clear password. ',
+  'accessPassword.errBothFillAndClear': 'You cannot enter a new password and clear it at the same time: to change the password only enter the new one, to remove the encryption only tick clear.',
+  'accessPassword.errNothingToClear': 'This post or category has no password, so there is nothing to clear.',
+  'accessPassword.errPrivateNeedsPassword': 'If you turn on encryption, enter a password',
+  'accessPassword.clearTitle': 'Clear the access password for {target}?',
+  'accessPassword.clearContent': 'This removes the encryption on {target}, so anyone can see the content. The password is stored as a hash and cannot be recovered after clearing. If you only want a different password, do not tick clear and enter the new password in the password box.',
+  'accessPassword.targetIt': 'it',
+  'accessPassword.privateToggleHint': 'Turning encryption off does not delete the password that is already set (use Clear password for that); turning it back on keeps using the original password.',
+  'accessPassword.targetThisArticle': 'this post',
+
 };

@@ -903,4 +903,32 @@ export default {
   'common.demoBlockedCreate': '演示站禁止新建文章！',
   'draft.publishOk': '发布成功！原草稿已自动移入草稿回收站（恢复它不会影响这篇已发布的文章）。',
 
+
+  // ── 🔴 期 7 第一批：**服务层常量怎么接 i18n** —— `services/van-blog/accessPassword.js`（15 条）──
+  //    🔴 这是"模块级常量/纯函数产出文案"的**框架解法**（与 recycleCore.js、Static/img/tools.tsx 同一套）：
+  //    每个产文案的函数收一个**尾参** `t = IDENTITY_T`；不传 t 时用 defaultMessage 做 `{k}` 插值
+  //    ⇒ 🔴 输出与改造前**逐字相同**（既有消费方 `DataManage/tabs/Category.jsx` 与
+  //    `accessPassword.test.js` 那 6 条黄金样本断言一个字都没改就照旧通过）。
+  //    🔴 4 个 SCREAMING_CASE 常量保留为**同一份文案的 identity 视图**（`privateToggleHint()` 这样求值一次），
+  //    留给还没接 i18n 的消费方与 `assert.equal(CLEAR_PASSWORD_LABEL, ...)` 这类断言；
+  //    中文仍然只有一份（在函数的 defaultMessage 里）⇒ 不存在两处口径。已接 i18n 的组件一律用**函数 + t**。
+  //    🔴 顺带还掉 §7.155 A 那张欠条：`clearConfirmTitle(t(accessPassword.targetThisArticle), t)` ——
+  //    实参与模板**一起**翻，模板改成 ICU `{target}`（英文语序不同，拼接式翻不对）。
+  //    ⚠️ 这是**安全相关文案**（密码不可找回、清除即解除加密）⇒ 译文逐句对着中文核过，不意译、不省后果。
+  'accessPassword.unrecoverable': '密码以 scrypt 哈希存储，服务端也读不出来：忘记或清除之后无法找回，只能重新设置。',
+  'accessPassword.clearLabel': '清除密码',
+  'accessPassword.clearTooltip': '勾上并提交 = 解除加密（服务端把密码置空）。不勾、密码框留空 = 保持原来的密码不变。',
+  'accessPassword.placeholderCreate': '留空表示不加密',
+  'accessPassword.placeholderSet': '已设置密码，留空表示不修改',
+  'accessPassword.helpCreate': '留空 = 不加密；填了 = 用这个密码加密。',
+  'accessPassword.helpSet': '这篇/这个分类已经设过密码。留空 = 保持原密码不变；填新值 = 改成新密码；要解除加密请勾选「清除密码」。',
+  'accessPassword.errBothFillAndClear': '不能同时「填写新密码」和「清除密码」：要换密码就只填新密码，要解除加密就只勾清除。',
+  'accessPassword.errNothingToClear': '这篇/这个分类本来就没有设置密码，无需清除。',
+  'accessPassword.errPrivateNeedsPassword': '如若加密，请填写密码！',
+  'accessPassword.clearTitle': '确定清除{target}的访问密码吗？',
+  'accessPassword.clearContent': '这会解除{target}的加密，任何人都能看到内容。密码是哈希存储的，清除之后「无法恢复」原来的密码；如果只是想换一个密码，请不要勾选清除，直接在密码框里填新密码。',
+  'accessPassword.targetIt': '它',
+  'accessPassword.privateToggleHint': '取消加密不会删除已设置的密码（要删除请用「清除密码」）；重新打开加密时会继续沿用原密码。',
+  'accessPassword.targetThisArticle': '这篇文章',
+
 };

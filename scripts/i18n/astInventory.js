@@ -607,7 +607,10 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 //   页签标签与子表的 headerTitle 是**同一个东西** ⇒ 共用 `log.system` / `log.pipeline` / `log.login`。
 // 🔴 `draft` = 草稿管理页（`pages/Draft/**` + 它的新建/导入弹窗，期 5 第五批登记）。
 //   ⚠️ 与文章页共用的字段（作者/标签/分类/创建时间/导出）走 `common.*`，不放 `draft.*`。
-const REGISTERED_KEY_GROUPS = ['common', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `accessPassword` = **服务层**纯逻辑模块 `services/van-blog/accessPassword.js` 的文案
+//   （访问密码的 placeholder / help / 二次确认 / 三条校验错误，期 7 第一批登记）。
+//   组名用**模块名**而不是页面名：它被文章、草稿、分类三处共用，不属于任何单一页面。
+const REGISTERED_KEY_GROUPS = ['accessPassword', 'common', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

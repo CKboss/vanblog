@@ -9469,6 +9469,85 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.156 期 7 第一批：**服务层常量怎么接 i18n**（`accessPassword.js`，15 条）—— 还掉上一轮那张跨层欠条，活体又抓到一处英文拼接缺陷
+
+**交付**：`services/van-blog/accessPassword.js`（18 条 → **0**，15 个调用点）；🔴 **§7.155 A 那张跨层欠条已还**
+（`UpdateModal` 预算 **1 → 0**、**TOTAL 54 → 53**）；`PublishDraftModal` / `UpdateModal` 的调用点补上尾参 `t`；
+语言包 **685 → 700 key**（新组 **`accessPassword`**，组名用**模块名**：它被文章/草稿/分类三处共用，不属于任何单一页面）；
+棘轮清单 **40 → 41 个文件**；`i18nKeyNaming` → **700**；`localePackParity` 自动发现下界 **37 → 38 个文件 / 815 → 835 个调用点**（实测 38 / 838）。
+🔴 **浏览器活体 32/32（三语）+ 修完接缝后 en-US 复测 13/13，problems 0**：新增两项判据专门验服务层文案
+（`pwdPlaceholder` = 密码框占位符、`pwdHelp` = 下方常驻说明的**整段拼接结果**）。
+🔴 **单测新增 3 条"两条路径"断言**（`accessPassword.test.js` 37 → **40**）：注入 en-US 后整句是英文（逐字）、
+注入 zh-TW 后是繁体且术语对（雜湊/伺服器/存取密碼）、🔴 **identity 与注入 zh-CN 的输出逐字相同**（证明中文只有一份口径）。
+
+#### A. 🔴 框架解法（这批把"服务层样板"定型了）
+问题：`accessPassword.js` 是**纯逻辑 CommonJS 模块**（`node --test` 直接 require），文案有两种形状：
+① 4 个**模块级常量**（`PASSWORD_UNRECOVERABLE_WARNING` / `CLEAR_PASSWORD_LABEL` / `CLEAR_PASSWORD_TOOLTIP` / `PRIVATE_TOGGLE_HINT`）；
+② 5 个**返回文案的函数**（`passwordPlaceholder` / `passwordHelp` / `buildAccessPasswordPatch` 的 error /
+`clearConfirmTitle` / `clearConfirmContent`）。模块加载期 umi 运行时还没初始化 ⇒ 两种都不能直接 `useIntl()` / `getIntl()`。
+🔴 **解法**（与 `recycleCore.js`、`Static/img/tools.tsx` 同一套，这批定型为服务层样板）：
+1. 每个产文案的函数收一个**尾参** `t = IDENTITY_T`（`IDENTITY_T` 拿 defaultMessage 做 `{k}` 插值）；
+2. 🔴 4 个常量**保留**，但改成"同一份文案的 **identity 视图**"：`const PRIVATE_TOGGLE_HINT = privateToggleHint();`
+   ⇒ **中文只有一份**（在函数的 defaultMessage 里），常量只是它的一次求值 ⇒ 🔴 不是两处口径；
+   已接 i18n 的组件一律用**函数 + t**，还没接的（`Category.jsx`）继续用常量 ⇒ **零改动、逐字相同**
+   （`accessPassword.test.js` 那 6 条黄金样本断言一个字都没改就照旧通过 —— 这是本批最重要的兼容性证据）；
+3. 🔴 **函数内部也必须用注入的 t**：`passwordHelp` 里那句警告要写 `passwordUnrecoverableWarning(t)`，不能用常量
+   —— 否则"切了语言但**后半句**还是中文"（变异对照 M4 专门打这一点）。
+👉 这套形状适用于 `services/van-blog/**` 剩下的 133 条（exportFormats 30、importMdzCore 23、commentAdmin 11、schedule 10…）。
+⚠️ 🔴 **但有一类不适用**：`PATHNAME_FIELD` / `COVER_FIELD` / `TAG_FIELD_*` / `PUBLISH_AT_*` 这种
+"**导出一个对象字面量**、消费方写 `label={X.label}`"的形状 —— 没有函数可挂尾参。两种候选（下一批要定）：
+① 改成 `getXxx(t)` 函数；② 改成 `{ id, defaultMessage }` 对、消费方写 `t(X.id, X.defaultMessage)`。
+🔴 **②的代价**：`collectTCalls` 看到的是**非字面量** defaultMessage ⇒ 🔴 **defaultMessage↔语言包的逐字对账会失效**
+（那条守卫是本项目的核心防线之一）⇒ 除非同时给对账守卫加"能解析这种对象"的能力，否则**优先选①**。
+
+#### B. 🔴 活体又抓到一处英文**拼接**缺陷（同族第二次）
+`passwordHelp` 是 `${semantic}${warning}` 直接拼接：中文不需要空格，英文拼出来是
+`"…encrypt with that password.The password is stored as a scrypt hash…"` —— 🔴 **句号后没空格**。
+单测当时只断言了 `startsWith` / `endsWith` ⇒ **接缝漏过去了**；是活体探针在 en-US 下量 `pwdHelp` 才发现的。
+修法与 §7.152 B 的 `img.helpP3strong` 同一手法：把空格放进**英文片段的尾部**（中文两份都不带 ⇒ 对账仍成立），
+并把单测从"验头尾"升级成 🔴 **整句逐字** + 一条接缝判据（`assert.ok(!/\.[A-Za-z]/.test(help))`）。
+复测活体：`"…encrypt with that password. The password is stored as a scrypt hash…"` ✓。
+👉 🔴 **规矩（本批定型）：凡是"A + B 拼接"或"片段 + 内联元素"的文案，单测必须验整句、活体必须量渲染结果**；
+只验头尾等于**不验接缝**，而接缝正是翻译最容易坏的地方（本项目已 3 次：少句读、句号前多空格、这次少空格）。
+
+#### C. 🔴 新守卫第一次真实立功：抓出**我自己漏传 t**
+`UpdateModal` 里 `buildAccessPasswordPatch({…})` 忘了传尾参 ⇒ 那 3 条校验错误
+（又填又勾 / 无需清除 / 如若加密请填写密码）在英文界面下会**永远是中文**，而且不报错、界面上看不出差别。
+🔴 是上一轮新加的"注入式翻译器每个调用点都要传 t"守卫**红的**（不是我自己发现的）⇒ 已补 `t`，并写进变异对照 M2。
+👉 **"漏传 t"是静默失败**：中文界面下人眼永远看不出来，只有常驻判据能抓 —— 这条守卫的价值到此被证实。
+
+#### D. 还欠条 + 记账（欠条的生命周期完整走了一遍）
+`clearConfirmTitle(t('accessPassword.targetThisArticle', '这篇文章'), t)`，模板改成 ICU `{target}`
+（英文 `Clear the access password for {target}?` 语序不同，拼接式翻不对）⇒ 🔴 `UpdateModal` 预算 **1 → 0**、
+**TOTAL 54 → 53**（账目回到 48 目标底 + 4 Customizing 欠条 + 1 Caddy URL 永久例外），
+`i18nSharedImpl` 里那份"总数应当是 53"的断言与注释**同步改回**。
+👉 **欠条三步**：记（写明还款条件）→ 还（同一处账目改回）→ 守卫跟着改（两处 53/54 的钉子都要动）。
+
+#### E. 🔴 变异对照生成器又踩两次坑（都被 fail-loud 挡住，没有一次假绿）
+1. Python 的 `"\\n"` 是字面反斜杠+n、JS 单引号串里的引号又是 `\'` ⇒ 按 `"'common.yes'"` 去找 **0 命中**（上一轮同族）；
+2. 本轮我写的"去重"逻辑把 `st.index(' ')` 当成名字结束位置 ⇒ 🔴 命中的是 `const` 后面那个空格 ⇒
+   所有名字都成了空串 ⇒ 只留第一条、其余全删（跑起来是 `APM is not defined`）。
+🔴 另外 M6（语义空操作）我一度把 `from` 与 `to` 写成**同一串**（等于没变异）。
+三次都被 harness 挡住：`命中 0 次（期望 1）⇒ 变异没做，本条无效` / ReferenceError / 期望断言未命中并**打印实际红的那几条**。
+👉 **规矩**：① 改完生成器要先跑一次、确认每条变异体**真的造出来了**（harness 打印的 `命中 N 次` 就是为此存在）；
+② 🔴 **语义空操作那条也要检查"确实改了字节"**（from == to 的空操作不是空操作，是"没做"）；
+③ 期望断言**照 harness 打印的实际红条**写，不要凭记忆猜（M3 我猜错了两次）。
+
+#### F. 基线
+- admin `node --test` **750 tests / 166 suites / 0 fail**（+3 = accessPassword 的两条路径对照）；i18n 守卫组 **104**；
+- 变异对照 **6/6**（改一个字 ⇒ 对账红 / 漏传 t ⇒ 调用点守卫红 / 去掉 IDENTITY_T 默认值 ⇒ 黄金样本红 /
+  内部用回 identity 常量 ⇒ 注入路径红 / ICU 占位符写错名 ⇒ 整句断言红 / 语义空操作 ⇒ 绿）；
+- 语言包 **700 key** ×3；`--zh-tw-audit`：700 key / **691** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **41 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（服务层是 `.js`、UpdateModal 是 `.tsx`，都在门禁范围内，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **750/166/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.ba0e61e3.js` = **1,488,525 B**）；
+- 🔴 **真实剩余：87 → 85 个文件 / 1,175 → 1,156 条**（另不计入：测试文件 2/7、console.* 3 文件/7 条）。
+- 🔴 **下一批**：① `NewArticleModal`(22) + `ImportArticleModal`(19) + `CoverImageField`(7)（复用这两批的 `common.*`）；
+  ② 🔴 **对象字面量常量**那一类的解法定型（`PATHNAME_FIELD` / `COVER_FIELD` / `TAG_FIELD_*` / `PUBLISH_AT_*`，见 A 段②的取舍）；
+  ③ `pages/Article/**`(56，被 10 个测试文件钉着)；④ `pages/Editor/**`(143 / 15 文件，最大)；
+  ⑤ `services/van-blog/**` 其余 133 条（exportFormats 30、importMdzCore 23、commentAdmin 11、schedule 10…）；
+  ⑥ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.155 期 5 第六批：「修改信息 / 发布草稿」两个弹窗（48 条）—— 第一条**跨层欠条**，以及"服务层常量"这个半页中文的第二来源
 
 **交付**：`components/UpdateModal/index.tsx`（34 条 → **1 条欠条**，38 个调用点）

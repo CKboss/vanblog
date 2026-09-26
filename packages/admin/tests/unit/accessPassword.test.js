@@ -32,6 +32,10 @@ const {
   shouldShowClearOption,
   clearConfirmContent,
   clearConfirmTitle,
+  privateToggleHint,
+  clearPasswordTooltip,
+  clearPasswordLabel,
+  passwordUnrecoverableWarning,
 } = require('../../src/services/van-blog/accessPassword');
 
 // ---------------------------------------------------------------------------
@@ -213,6 +217,112 @@ describe('访问密码表单：hasPassword 的读法（含旧服务端兜底）'
   });
 });
 
+describe('🔴 访问密码文案：注入翻译器之后**两条路径**都要对（identity 逐字不变 / 注入后跟着语言走）', () => {
+  // ## 为什么要这一组（2026-09-26 期 7 第一批）
+  // 这个模块改成了"产文案的函数收尾参 `t = IDENTITY_T`"。上面那组黄金样本证明的是**identity 路径**
+  // （不传 t ⇒ 与改造前逐字相同，既有消费方与断言一个字都不用改）。
+  // 🔴 但"注入之后真的会跟着语言走"**没有任何别处会验**：组件里传不传 t 是运行时行为，
+  // 而语言包里的值对不对也没有第二处口径 ⇒ 所以在这里用**真实语言包**造一个 t，把整句拼出来比。
+  const path = require('path');
+  const astInventory = require(path.resolve(__dirname, '../../../../scripts/i18n/astInventory.js'));
+  const adminRoot = path.resolve(__dirname, '../..');
+  const packOf = (l) => astInventory.readPack(path.join(adminRoot, `src/locales/${l}.ts`), `${l}.ts`);
+  // 与 IDENTITY_T 同一套 `{k}` 插值（react-intl 的 ICU 在这里只用到简单占位符）
+  const makeT = (pack) => (id, defaultMessage, values) => {
+    const tpl = Object.prototype.hasOwnProperty.call(pack, id) ? pack[id] : defaultMessage;
+    if (!values) return String(tpl);
+    return String(tpl).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, k) =>
+      Object.prototype.hasOwnProperty.call(values, k) ? String(values[k]) : whole,
+    );
+  };
+  const en = makeT(packOf('en-US'));
+  const tw = makeT(packOf('zh-TW'));
+  // 🔴 「这篇文章」这个**实参**现在也来自语言包（期 5 第六批那张欠条的还款形状）
+  const accessPasswordTargetThisArticle = (t) => t('accessPassword.targetThisArticle', '这篇文章');
+
+  it('注入 en-US 的 t 之后，每条文案都变成英文（而且**整句拼出来**是通顺的）', () => {
+    assert.equal(passwordPlaceholder({ isCreate: true }, en), 'Leave empty for no encryption');
+    assert.equal(
+      passwordPlaceholder({ hasPassword: true }, en),
+      'A password is set; leave empty to keep it',
+    );
+    // 🔴 help = 语义句 + 不可找回警告**拼接**：两段都必须是英文（内部那次调用也要走注入的 t）
+    // 🔴 断言**整句逐字**（不是 startsWith/endsWith）：这两段是**直接拼接**的，
+    //    第一版只验头尾 ⇒ 🔴 **接缝少一个空格**（"…that password.The password is stored…"）漏过去了，
+    //    是活体探针在 en-US 下量出来的。👉 规矩：**拼接出来的文案要整句验**，接缝也在被验的范围内。
+    const WARN_EN =
+      'The password is stored as a scrypt hash and the server cannot read it back: if you forget or clear it, it cannot be recovered, only set again.';
+    assert.equal(
+      passwordHelp({ hasPassword: true }, en),
+      'This post or category already has a password. Leave empty = keep it; enter a new value = change it; to remove the encryption, tick Clear password. ' + WARN_EN,
+    );
+    assert.equal(
+      passwordHelp({ isCreate: true }, en),
+      'Leave empty = no encryption; enter one = encrypt with that password. ' + WARN_EN,
+    );
+    const help = passwordHelp({ hasPassword: true }, en);
+    assert.ok(!/[\u3400-\u4dbf\u4e00-\u9fff]/.test(help), '注入英文后 help 里不该再有汉字：' + help);
+    // 🔴 接缝判据：英文里句号后必须有空格（不许出现 "password.The" 这种粘连）
+    assert.ok(!/\.[A-Za-z]/.test(help), '英文拼接处的句号后必须有空格：' + help);
+    // 🔴 ICU `{target}` 占位符：实参也翻（这就是 §7.155 A 那张欠条的还款验收）
+    assert.equal(
+      clearConfirmTitle(accessPasswordTargetThisArticle(en), en),
+      'Clear the access password for this post?',
+    );
+    assert.ok(
+      clearConfirmContent(accessPasswordTargetThisArticle(en), en).startsWith(
+        'This removes the encryption on this post, so anyone can see the content.',
+      ),
+    );
+    // 三条校验错误
+    assert.equal(
+      buildAccessPasswordPatch({ password: 'x', clearRequested: true }, en).error,
+      'You cannot enter a new password and clear it at the same time: to change the password only enter the new one, to remove the encryption only tick clear.',
+    );
+    assert.equal(
+      buildAccessPasswordPatch({ clearRequested: true, hasPassword: false }, en).error,
+      'This post or category has no password, so there is nothing to clear.',
+    );
+    assert.equal(
+      buildAccessPasswordPatch({ isPrivate: true, isCreate: true }, en).error,
+      'If you turn on encryption, enter a password',
+    );
+    // 四个常量的函数版
+    assert.equal(clearPasswordLabel(en), 'Clear password');
+    assert.ok(privateToggleHint(en).startsWith('Turning encryption off does not delete'));
+    assert.ok(clearPasswordTooltip(en).startsWith('Tick this and submit'));
+  });
+
+  it('注入 zh-TW 的 t 之后是**繁体**（且术语与既有各批一致：雜湊 / 伺服器 / 存取密碼）', () => {
+    const help = passwordHelp({ hasPassword: true }, tw);
+    assert.ok(help.includes('已經設過密碼'), help);
+    assert.ok(help.includes('無法找回'), help);
+    assert.ok(passwordUnrecoverableWarning(tw).includes('scrypt 雜湊儲存'), '术语要用「雜湊」');
+    assert.ok(passwordUnrecoverableWarning(tw).includes('伺服器'), '术语要用「伺服器」');
+    assert.equal(clearConfirmTitle('這篇文章', tw), '確定清除這篇文章的存取密碼嗎？');
+    assert.equal(clearPasswordLabel(tw), '清除密碼');
+  });
+
+  it('🔴 反向：identity 路径（不传 t）与注入 zh-CN 的 t，输出**逐字相同**（证明中文只有一份口径）', () => {
+    const cn = makeT(packOf('zh-CN'));
+    const cases = [
+      () => [passwordPlaceholder({ hasPassword: true }), passwordPlaceholder({ hasPassword: true }, cn)],
+      () => [passwordHelp({ isCreate: true }), passwordHelp({ isCreate: true }, cn)],
+      () => [clearConfirmTitle('这篇文章'), clearConfirmTitle('这篇文章', cn)],
+      () => [clearConfirmContent(), clearConfirmContent(undefined, cn)],
+      () => [privateToggleHint(), privateToggleHint(cn)],
+      () => [
+        buildAccessPasswordPatch({ password: 'x', clearRequested: true }).error,
+        buildAccessPasswordPatch({ password: 'x', clearRequested: true }, cn).error,
+      ],
+    ];
+    for (const c of cases) {
+      const [a, b] = c();
+      assert.equal(a, b, '不传 t 与传 zh-CN 的 t 必须逐字相同，否则中文就有两处口径');
+    }
+  });
+});
+
 describe('访问密码表单：文案把"不可找回"讲清楚', () => {
   it('编辑 + 已设密码的 placeholder 明说"留空表示不修改"', () => {
     assert.match(passwordPlaceholder({ hasPassword: true }), /已设置密码，留空表示不修改/);
@@ -272,7 +382,9 @@ describe('UpdateModal（文章「修改信息」）接线', () => {
 
   it('不可找回的警告出现在用户看得见的地方', () => {
     assert.match(src, /passwordHelp\(/);
-    assert.match(src, /PRIVATE_TOGGLE_HINT/);
+    // 🔴 期 7 第一批起改用**函数版 + t**（SCREAMING_CASE 常量是同一份文案的 identity 视图，
+    //    只留给还没接 i18n 的消费方）⇒ 锚点跟着换形状，性质没放（提示必须真的挂上去、而且跟着语言走）
+    assert.match(src, /privateToggleHint\(t\)/);
   });
 });
 
@@ -326,8 +438,9 @@ describe('新建/发布路径：加密却没密码时拦在表单里', () => {
   it('两个新建入口都写清了"留空 = 不加密"与不可找回', () => {
     assert.match(newArticle, /passwordPlaceholder\(\{ isCreate: true \}\)/);
     assert.match(newArticle, /passwordHelp\(\{ isCreate: true \}\)/);
-    assert.match(publishDraft, /passwordPlaceholder\(\{ isCreate: true \}\)/);
-    assert.match(publishDraft, /passwordHelp\(\{ isCreate: true \}\)/);
+    // 🔴 期 7 第一批：这两个调用现在把 t 作为尾参传进去（不传就永远是中文）
+    assert.match(publishDraft, /passwordPlaceholder\(\{ isCreate: true \}, t\)/);
+    assert.match(publishDraft, /passwordHelp\(\{ isCreate: true \}, t\)/);
   });
 });
 

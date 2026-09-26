@@ -32,12 +32,15 @@ export default function (props) {
           }
           // 发布 = 新建文章：选了「加密」却没填密码会造出一篇谁也打不开的文章
           // （服务端存空密码，解锁口对"标记加密但没密码"一律拒绝），而密码不可找回。
-          const access = buildAccessPasswordPatch({
-            password: values?.pc,
-            hasPassword: false,
-            isCreate: true,
-            isPrivate: values?.private,
-          });
+          const access = buildAccessPasswordPatch(
+            {
+              password: values?.pc,
+              hasPassword: false,
+              isCreate: true,
+              isPrivate: values?.private,
+            },
+            t,
+          );
           if (access.error) {
             message.error(access.error);
             return false;
@@ -106,8 +109,8 @@ export default function (props) {
           autocomplete="new-password"
           id="password"
           name="pc"
-          placeholder={passwordPlaceholder({ isCreate: true })}
-          formItemProps={{ extra: passwordHelp({ isCreate: true }) }}
+          placeholder={passwordPlaceholder({ isCreate: true }, t)}
+          formItemProps={{ extra: passwordHelp({ isCreate: true }, t) }}
           dependencies={['private']}
           fieldProps={{
             autocomplete: 'new-password',

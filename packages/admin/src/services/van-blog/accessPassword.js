@@ -25,14 +25,57 @@
  *           POST /api/admin/draft/publish?id=、PUT /api/admin/category/:name。
  */
 
+/**
+ * 🔴 多语言：**注入式翻译器**（与 `components/RecycleBin/recycleCore.js`、`pages/Static/img/tools.tsx` 同一套模式）。
+ *
+ * ## 为什么不在这里 import umi
+ * 本模块是**纯逻辑**（刻意 CommonJS，`node --test` 能直接 require），而且在模块加载期
+ * umi 插件运行时还没初始化 ⇒ `getIntl()` / `getLocale()` 都拿不到值。所以翻译器由**调用方在渲染期注入**。
+ *
+ * ## 🔴 不传 t 时：输出与改造前**逐字相同**
+ * 每个产文案的函数都默认落到 `IDENTITY_T`（拿 `t()` 的第二个实参 defaultMessage 做 `{k}` 插值）。
+ * ⇒ 中文在源码里**只有一份**（就是那个 defaultMessage 字面量），不是"一份给 t()、一份给 identity 路径"。
+ * 🔴 所以既有消费方一个字都不用改：`DataManage/tabs/Category.jsx`（还没接 i18n）与
+ * `accessPassword.test.js` 里那 6 条**黄金样本断言**（`passwordPlaceholder({hasPassword:true})` 必须含
+ * 「已设置密码，留空表示不修改」等）全部照旧通过 —— 这是本批最重要的兼容性证据。
+ *
+ * ## 🔴 为什么下面还留着 4 个 SCREAMING_CASE 常量
+ * 它们是**同一份文案的 identity 视图**（`privateToggleHint()` 这样调一次得到中文），留给
+ * ①还没接 i18n 的消费方（Category.jsx 把它拼进模板串）②`assert.equal(CLEAR_PASSWORD_LABEL, '清除密码')` 这类断言。
+ * 🔴 中文仍然只有一份（在函数的 defaultMessage 里），常量只是它的求值结果 ⇒ 不存在"两处口径"。
+ * 已接 i18n 的组件一律用**函数 + t**（`privateToggleHint(t)`），不要用常量。
+ */
+function interpolate(template, values) {
+  if (!values) return String(template);
+  return String(template).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+  );
+}
+
+/** 不传翻译器时的回落：把 defaultMessage 当中文模板直接插值（`{k}` 语法与 react-intl 一致）。 */
+const IDENTITY_T = (id, defaultMessage, values) => interpolate(defaultMessage, values);
+
 /** 密码一旦忘记就找不回来了 —— 这句要出现在用户真的会看到的地方 */
-const PASSWORD_UNRECOVERABLE_WARNING =
-  '密码以 scrypt 哈希存储，服务端也读不出来：忘记或清除之后无法找回，只能重新设置。';
+function passwordUnrecoverableWarning(t = IDENTITY_T) {
+  return t(
+    'accessPassword.unrecoverable',
+    '密码以 scrypt 哈希存储，服务端也读不出来：忘记或清除之后无法找回，只能重新设置。',
+  );
+}
+const PASSWORD_UNRECOVERABLE_WARNING = passwordUnrecoverableWarning();
 
-const CLEAR_PASSWORD_LABEL = '清除密码';
+function clearPasswordLabel(t = IDENTITY_T) {
+  return t('accessPassword.clearLabel', '清除密码');
+}
+const CLEAR_PASSWORD_LABEL = clearPasswordLabel();
 
-const CLEAR_PASSWORD_TOOLTIP =
-  '勾上并提交 = 解除加密（服务端把密码置空）。不勾、密码框留空 = 保持原来的密码不变。';
+function clearPasswordTooltip(t = IDENTITY_T) {
+  return t(
+    'accessPassword.clearTooltip',
+    '勾上并提交 = 解除加密（服务端把密码置空）。不勾、密码框留空 = 保持原来的密码不变。',
+  );
+}
+const CLEAR_PASSWORD_TOOLTIP = clearPasswordTooltip();
 
 /** 表单字段名（与服务端 DTO 逐字一致，别改） */
 const PASSWORD_FIELD = 'password';
@@ -82,21 +125,26 @@ function sanitizeRecordForForm(record) {
 }
 
 /** 密码框的 placeholder：把"留空是什么后果"写在用户看得见的地方 */
-function passwordPlaceholder({ hasPassword = false, isCreate = false } = {}) {
+function passwordPlaceholder({ hasPassword = false, isCreate = false } = {}, t = IDENTITY_T) {
   if (isCreate) {
-    return '留空表示不加密';
+    return t('accessPassword.placeholderCreate', '留空表示不加密');
   }
-  return hasPassword ? '已设置密码，留空表示不修改' : '留空表示不加密';
+  return hasPassword
+    ? t('accessPassword.placeholderSet', '已设置密码，留空表示不修改')
+    : t('accessPassword.placeholderCreate', '留空表示不加密');
 }
 
 /** 密码框下方的常驻说明（extra）：语义 + 不可找回的警告 */
-function passwordHelp({ hasPassword = false, isCreate = false } = {}) {
-  const semantic = isCreate
-    ? '留空 = 不加密；填了 = 用这个密码加密。'
-    : hasPassword
-    ? '这篇/这个分类已经设过密码。留空 = 保持原密码不变；填新值 = 改成新密码；要解除加密请勾选「清除密码」。'
-    : '留空 = 不加密；填了 = 用这个密码加密。';
-  return `${semantic}${PASSWORD_UNRECOVERABLE_WARNING}`;
+function passwordHelp({ hasPassword = false, isCreate = false } = {}, t = IDENTITY_T) {
+  const semantic =
+    isCreate || !hasPassword
+      ? t('accessPassword.helpCreate', '留空 = 不加密；填了 = 用这个密码加密。')
+      : t(
+          'accessPassword.helpSet',
+          '这篇/这个分类已经设过密码。留空 = 保持原密码不变；填新值 = 改成新密码；要解除加密请勾选「清除密码」。',
+        );
+  // 🔴 内部也走注入的 t（不是那个 identity 常量），否则"切了语言但警告那半句还是中文"
+  return `${semantic}${passwordUnrecoverableWarning(t)}`;
 }
 
 /** 「清除密码」开关只在"确实设过密码"且不是新建时出现 */
@@ -111,27 +159,36 @@ function shouldShowClearOption({ hasPassword = false, isCreate = false } = {}) {
  *  - `error` 非空 ⇒ 不要发请求，直接把这句话给用户看；
  *  - `patch` 是要 merge 进提交体的键（可能是 `{}`，即"不带任何密码相关的键"）。
  */
-function buildAccessPasswordPatch({
-  password,
-  clearRequested = false,
-  hasPassword = false,
-  isCreate = false,
-  isPrivate = undefined,
-} = {}) {
+function buildAccessPasswordPatch(
+  {
+    password,
+    clearRequested = false,
+    hasPassword = false,
+    isCreate = false,
+    isPrivate = undefined,
+  } = {},
+  t = IDENTITY_T,
+) {
   const blank = isBlank(password);
   const clear = clearRequested === true || clearRequested === 'true';
 
   if (clear && !blank) {
     return {
       patch: {},
-      error: '不能同时「填写新密码」和「清除密码」：要换密码就只填新密码，要解除加密就只勾清除。',
+      error: t(
+        'accessPassword.errBothFillAndClear',
+        '不能同时「填写新密码」和「清除密码」：要换密码就只填新密码，要解除加密就只勾清除。',
+      ),
     };
   }
   if (clear) {
     // 只有"确实设过密码"才允许清除；新建时勾它没有意义（本来就是空的），
     // 而且服务端会把它当成"写入空串"——一样是 no-op，但别让用户以为做了什么
     if (!isCreate && !hasPassword) {
-      return { patch: {}, error: '这篇/这个分类本来就没有设置密码，无需清除。' };
+      return {
+        patch: {},
+        error: t('accessPassword.errNothingToClear', '这篇/这个分类本来就没有设置密码，无需清除。'),
+      };
     }
     return { patch: { [CLEAR_PASSWORD_FIELD]: true }, error: null };
   }
@@ -143,7 +200,7 @@ function buildAccessPasswordPatch({
     // 选了"加密"却没有任何密码可用：以前服务端会存一个空密码，
     // 结果是"标记为加密但没有密码"—— 谁填什么都能进（或谁都进不去，取决于版本）。
     // 现在直接在表单里拦下来。
-    return { patch: {}, error: '如若加密，请填写密码！' };
+    return { patch: {}, error: t('accessPassword.errPrivateNeedsPassword', '如若加密，请填写密码！') };
   }
   return { patch: {}, error: null };
 }
@@ -164,24 +221,40 @@ function buildSubmitValues(values, accessPatch) {
   return Object.assign(out, accessPatch || {});
 }
 
-/** 二次确认的文案（清除密码是**不可撤销**的，必须让用户在读完之后再点一次） */
-function clearConfirmTitle(targetLabel) {
-  return `确定清除${targetLabel || ''}的访问密码吗？`;
+/**
+ * 二次确认的文案（清除密码是**不可撤销**的，必须让用户在读完之后再点一次）。
+ * 🔴 原来是"前缀 + `${targetLabel}` + 后缀"拼的三段；改成 **ICU 占位符** `{target}` 一条整句 ——
+ * 英文语序不同（"Clear the access password for {target}?"），拼接式根本翻不对。
+ * ⚠️ identity 路径仍然逐字相同：`interpolate` 用的是同一套 `{k}` 语法。
+ */
+function clearConfirmTitle(targetLabel, t = IDENTITY_T) {
+  return t('accessPassword.clearTitle', '确定清除{target}的访问密码吗？', { target: targetLabel || '' });
 }
 
-function clearConfirmContent(targetLabel) {
-  return (
-    `这会解除${targetLabel || '它'}的加密，任何人都能看到内容。` +
-    '密码是哈希存储的，清除之后「无法恢复」原来的密码；' +
-    '如果只是想换一个密码，请不要勾选清除，直接在密码框里填新密码。'
+function clearConfirmContent(targetLabel, t = IDENTITY_T) {
+  return t(
+    'accessPassword.clearContent',
+    '这会解除{target}的加密，任何人都能看到内容。密码是哈希存储的，清除之后「无法恢复」原来的密码；如果只是想换一个密码，请不要勾选清除，直接在密码框里填新密码。',
+    { target: targetLabel || t('accessPassword.targetIt', '它') },
   );
 }
 
 /** 「加密」列/字段旁边的提示：取消加密**不会**删掉已设置的密码 */
-const PRIVATE_TOGGLE_HINT =
-  '取消加密不会删除已设置的密码（要删除请用「清除密码」）；重新打开加密时会继续沿用原密码。';
+function privateToggleHint(t = IDENTITY_T) {
+  return t(
+    'accessPassword.privateToggleHint',
+    '取消加密不会删除已设置的密码（要删除请用「清除密码」）；重新打开加密时会继续沿用原密码。',
+  );
+}
+const PRIVATE_TOGGLE_HINT = privateToggleHint();
 
 module.exports = {
+  // 🔴 注入式翻译器的回落实现也导出：消费方的单测可以用它验"不传 t 时逐字相同"
+  IDENTITY_T,
+  passwordUnrecoverableWarning,
+  clearPasswordLabel,
+  clearPasswordTooltip,
+  privateToggleHint,
   PASSWORD_UNRECOVERABLE_WARNING,
   CLEAR_PASSWORD_LABEL,
   CLEAR_PASSWORD_TOOLTIP,

@@ -812,4 +812,23 @@ export default {
   'common.demoBlockedCreate': '示範站禁止新增文章！',
   'draft.publishOk': '發布成功！原草稿已自動移入草稿的資源回收筒（還原它不會影響這篇已發布的文章）。',
 
+
+  // ── 🔴 期 7 第一批（15 條）── 術語：密碼 / **雜湊**（哈希）/ 儲存 / **伺服器**（服务端）/ 設定 /
+  //    **存取密碼**（访问密码）/ 勾選 / 解除加密 / 還原（恢复）/ 這篇文章。
+  'accessPassword.unrecoverable': '密碼以 scrypt 雜湊儲存，伺服器也讀不出來：忘記或清除之後無法找回，只能重新設定。',
+  'accessPassword.clearLabel': '清除密碼',
+  'accessPassword.clearTooltip': '勾上並提交 = 解除加密（伺服器把密碼置空）。不勾、密碼框留空 = 保持原來的密碼不變。',
+  'accessPassword.placeholderCreate': '留空表示不加密',
+  'accessPassword.placeholderSet': '已設定密碼，留空表示不修改',
+  'accessPassword.helpCreate': '留空 = 不加密；填了 = 用這個密碼加密。',
+  'accessPassword.helpSet': '這篇/這個分類已經設過密碼。留空 = 保持原密碼不變；填新值 = 改成新密碼；要解除加密請勾選「清除密碼」。',
+  'accessPassword.errBothFillAndClear': '不能同時「填寫新密碼」和「清除密碼」：要換密碼就只填新密碼，要解除加密就只勾清除。',
+  'accessPassword.errNothingToClear': '這篇/這個分類本來就沒有設定密碼，無需清除。',
+  'accessPassword.errPrivateNeedsPassword': '如若加密，請填寫密碼！',
+  'accessPassword.clearTitle': '確定清除{target}的存取密碼嗎？',
+  'accessPassword.clearContent': '這會解除{target}的加密，任何人都能看到內容。密碼是雜湊儲存的，清除之後「無法還原」原來的密碼；如果只是想換一個密碼，請不要勾選清除，直接在密碼框裡填新密碼。',
+  'accessPassword.targetIt': '它',
+  'accessPassword.privateToggleHint': '取消加密不會刪除已設定的密碼（要刪除請用「清除密碼」）；重新打開加密時會繼續沿用原密碼。',
+  'accessPassword.targetThisArticle': '這篇文章',
+
 };
