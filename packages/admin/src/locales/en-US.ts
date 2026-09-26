@@ -727,7 +727,7 @@ export default {
   'customPage.editContent': 'Edit content',
   'customPage.fileManager': 'Manage files',
   'customPage.view': 'View',
-  'customPage.editInfo': 'Edit details',
+  'common.editInfo': 'Edit details',
   'customPage.demoBlocked': 'This cannot be changed on the demo site',
   'customPage.deleteConfirmBody': 'Delete this custom page?',
   'customPage.helpP1a': 'A custom page mounts static content under',
@@ -820,5 +820,37 @@ export default {
   'common.createdAtPlaceholder': 'Leave empty to use the current time',
   'common.authorPlaceholder': 'Leave empty to use the signed-in user',
   'common.export': 'Export',
+
+
+  // ── 🔴 期 5 第六批（26 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ 「黄色信息」写 explicit content；术语与回收站那批一致（Recycle bin / restoring）。
+  //    🔴 这批是**安全相关文案**（密码不可找回、清除即解除加密）⇒ 译文逐句对着中文核过，
+  //    并且生成脚本的术语闸门会检查"含回收站/恢复/永久删除的条目必须用既有术语"。
+  'common.demoBlockedUpdate': 'The details cannot be changed on the demo site',
+  'common.demoBlockedReason': 'It used to be allowed, but someone put explicit content on the demo home page, so the permission was turned off.',
+  'common.okClear': 'Clear it',
+  'common.cancelReconsider': 'Let me reconsider',
+  'common.okSaveAnyway': 'Save anyway',
+  'common.cancelGoBack': 'Go back and change the time',
+  'common.articleUpdated': 'Post updated',
+  'common.draftUpdated': 'Draft updated',
+  'common.updateFailedCheck': 'Could not save. Please check the values you entered.',
+  'common.topPriority': 'Pin priority',
+  'common.topPriorityPlaceholder': 'Leave empty or 0 to keep it unpinned; the larger the number, the higher the priority',
+  'common.encrypted': 'Encrypt',
+  'common.no': 'No',
+  'common.yes': 'Yes',
+  'common.password': 'Password',
+  'common.passwordTooltipSet': 'A password is already set. Leave empty to keep it, or enter a new value to change it.',
+  'common.passwordTooltipUnset': 'Leave empty for no encryption; if you enter one, the post is encrypted with that password.',
+  'common.clearPasswordExtra': 'Ticking this and submitting removes the encryption on this post. The original password cannot be recovered afterwards. To only change the password, do not tick it and enter the new password above.',
+  'common.hiddenField': 'Hide',
+  'common.scheduledPublish': 'Scheduled publishing',
+  'common.copyright': 'Copyright notice',
+  'common.copyrightTooltip': 'Replaces the default copyright notice at the bottom of the post page. Leave empty to follow the related options in the system settings.',
+  'common.copyrightPlaceholder': 'Replaces the default copyright notice at the bottom of the post',
+  'draft.publishTitle': 'Publish draft: {title}',
+  'common.demoBlockedCreate': 'New posts cannot be created on the demo site',
+  'draft.publishOk': 'Published. The original draft moved to the Recycle bin for drafts automatically (restoring it does not affect the published post).',
 
 };

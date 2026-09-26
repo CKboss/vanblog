@@ -13,6 +13,7 @@ import { ModalForm, ProFormDateTimePicker, ProFormSelect, ProFormSwitch, ProForm
 import { Form, message, Modal } from 'antd';
 import moment from 'moment';
 import { useEffect } from 'react';
+import { useIntl } from 'umi';
 import { stopMenuKeydown } from '@/services/van-blog/editableKeyboard';
 import {
   buildAccessPasswordPatch,
@@ -57,6 +58,13 @@ export default function (props: {
   // 所以：① 初始值里必须把 password 摘干净（对着还没升级的旧服务端也绝不回填）；
   //      ② 密码框留空 = 「不修改」，解除加密走下面那个独立开关 + 二次确认。
   const passwordSet = type == 'article' && hasPasswordFromRecord(currObj);
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook）。`values` 用 `Record<string, any>`：
+  //    写 `unknown` 会报 **TS2769**（这个形状在仓库里复制过 4 次、各背一条类型错误，期 4 已一并清掉）。
+  // ⚠️ 本文件的 `useEffect(..., [currObj])` **不用 t**（只做表单回填）⇒ 没有陈旧语言闭包问题；
+  //    🔴 谁要往它的依赖数组里加 t，必须先把 t 用 useCallback([intl]) 包（§7.144 A/B）。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   useEffect(() => {
     // publishAt 从服务端来是 ISO 串（或 null）；DatePicker 需要 moment。
     // 不合法或缺失都回落成 null，清空后才真的是「不定时」。
@@ -74,11 +82,11 @@ export default function (props: {
   return (
     <ModalForm
       form={form}
-      title="修改信息"
+      title={t('common.editInfo', '修改信息')}
       trigger={
         controlled ? undefined : (
           <a key="button" type="link">
-            修改信息
+            {t('common.editInfo', '修改信息')}
           </a>
         )
       }
@@ -94,8 +102,11 @@ export default function (props: {
       onFinish={async (values) => {
         if (location.hostname == 'blog-demo.mereith.com' && type != 'draft') {
           Modal.info({
-            title: '演示站禁止修改信息！',
-            content: '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+            title: t('common.demoBlockedUpdate', '演示站禁止修改信息！'),
+            content: t(
+              'common.demoBlockedReason',
+              '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+            ),
           });
           return;
         }
@@ -122,9 +133,9 @@ export default function (props: {
               Modal.confirm({
                 title: clearConfirmTitle('这篇文章'),
                 content: clearConfirmContent('这篇文章'),
-                okText: '确定清除',
+                okText: t('common.okClear', '确定清除'),
                 okButtonProps: { danger: true },
-                cancelText: '再想想',
+                cancelText: t('common.cancelReconsider', '再想想'),
                 onOk: () => resolve(true),
                 onCancel: () => resolve(false),
               });
@@ -150,8 +161,8 @@ export default function (props: {
               Modal.confirm({
                 title: PAST_SCHEDULE_WARNING_TITLE,
                 content: pastScheduleWarningText(values?.publishAt),
-                okText: '仍要保存',
-                cancelText: '回去改时间',
+                okText: t('common.okSaveAnyway', '仍要保存'),
+                cancelText: t('common.cancelGoBack', '回去改时间'),
                 onOk: () => resolve(true),
                 onCancel: () => resolve(false),
               });
@@ -169,11 +180,11 @@ export default function (props: {
           if (type == 'article') {
             await updateArticle(currObj?.id, submitValues);
             onFinish();
-            message.success('修改文章成功！');
+            message.success(t('common.articleUpdated', '修改文章成功！'));
           } else if (type == 'draft') {
             await updateDraft(currObj?.id, values);
             onFinish();
-            message.success('修改草稿成功！');
+            message.success(t('common.draftUpdated', '修改草稿成功！'));
           } else {
             return false;
           }
@@ -181,7 +192,7 @@ export default function (props: {
         } catch (err) {
           // 全局 errorHandler 弹过服务端原因时不再叠加提示；这里返回 false 让弹窗留着，
           // 用户改完能直接再提交一次。
-          reportRequestError(message, err, '修改失败，请检查填写的内容！');
+          reportRequestError(message, err, t('common.updateFailedCheck', '修改失败，请检查填写的内容！'));
           return false;
         } finally {
           setLoading(false);
@@ -198,9 +209,9 @@ export default function (props: {
         required
         id="title"
         name="title"
-        label="文章标题"
-        placeholder="请输入标题"
-        rules={[{ required: true, message: '这是必填项' }]}
+        label={t('common.articleTitle', '文章标题')}
+        placeholder={t('common.titlePlaceholder', '请输入标题')}
+        rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
         fieldProps={{ onKeyDown: stopMenuKeydown }}
       />
       <AuthorField />
@@ -209,11 +220,11 @@ export default function (props: {
         width="md"
         required
         id="category"
-        tooltip="首次使用请先在站点管理-数据管理-分类管理中添加分类"
+        tooltip={t('common.categoryTooltip', '首次使用请先在站点管理-数据管理-分类管理中添加分类')}
         name="category"
-        label="分类"
-        placeholder="请选择分类"
-        rules={[{ required: true, message: '这是必填项' }]}
+        label={t('common.colCategory', '分类')}
+        placeholder={t('common.categoryPlaceholder', '请选择分类')}
+        rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
         request={async () => {
           const { data: categories } = await getAllCategories();
           return categories?.map((e) => {
@@ -228,8 +239,8 @@ export default function (props: {
         width="md"
         name="createdAt"
         id="createdAt"
-        label="创建时间"
-        placeholder="不填默认为此刻"
+        label={t('common.createdAt', '创建时间')}
+        placeholder={t('common.createdAtPlaceholder', '不填默认为此刻')}
         showTime={{
           defaultValue: moment('00:00:00', 'HH:mm:ss'),
         }}
@@ -240,40 +251,43 @@ export default function (props: {
             width="md"
             id="top"
             name="top"
-            label="置顶优先级"
-            placeholder="留空或0表示不置顶，其余数字越大表示优先级越高"
+            label={t('common.topPriority', '置顶优先级')}
+            placeholder={t(
+              'common.topPriorityPlaceholder',
+              '留空或0表示不置顶，其余数字越大表示优先级越高',
+            )}
           />
           <PathnameField fieldProps={{ onKeyDown: stopMenuKeydown }} />
           <ProFormSelect
             width="md"
             name="private"
             id="private"
-            label="是否加密"
-            placeholder="是否加密"
+            label={t('common.encrypted', '是否加密')}
+            placeholder={t('common.encrypted', '是否加密')}
             tooltip={PRIVATE_TOGGLE_HINT}
             request={async () => {
               return [
                 {
-                  label: '否',
+                  label: t('common.no', '否'),
                   value: false,
                 },
                 {
-                  label: '是',
+                  label: t('common.yes', '是'),
                   value: true,
                 },
               ];
             }}
           />
           <ProFormText.Password
-            label="密码"
+            label={t('common.password', '密码')}
             width="md"
             id="password"
             name="password"
             placeholder={passwordPlaceholder({ hasPassword: passwordSet })}
             tooltip={
               passwordSet
-                ? '已设置密码。留空表示不修改；填新值表示改密码。'
-                : '留空表示不加密；填了就用这个密码加密。'
+                ? t('common.passwordTooltipSet', '已设置密码。留空表示不修改；填新值表示改密码。')
+                : t('common.passwordTooltipUnset', '留空表示不加密；填了就用这个密码加密。')
             }
             formItemProps={{
               extra: passwordHelp({ hasPassword: passwordSet }),
@@ -291,7 +305,10 @@ export default function (props: {
               label={CLEAR_PASSWORD_LABEL}
               tooltip={CLEAR_PASSWORD_TOOLTIP}
               formItemProps={{
-                extra: '勾选并提交 = 解除这篇文章的加密。清除后原密码无法找回；只想换密码请不要勾选，直接在上面填新密码。',
+                extra: t(
+                  'common.clearPasswordExtra',
+                  '勾选并提交 = 解除这篇文章的加密。清除后原密码无法找回；只想换密码请不要勾选，直接在上面填新密码。',
+                ),
               }}
             />
           )}
@@ -299,16 +316,16 @@ export default function (props: {
             width="md"
             name="hidden"
             id="hidden"
-            label="是否隐藏"
-            placeholder="是否隐藏"
+            label={t('common.hiddenField', '是否隐藏')}
+            placeholder={t('common.hiddenField', '是否隐藏')}
             request={async () => {
               return [
                 {
-                  label: '否',
+                  label: t('common.no', '否'),
                   value: false,
                 },
                 {
-                  label: '是',
+                  label: t('common.yes', '是'),
                   value: true,
                 },
               ];
@@ -318,7 +335,7 @@ export default function (props: {
             width="md"
             name="publishAt"
             id="publishAt"
-            label="定时发布"
+            label={t('common.scheduledPublish', '定时发布')}
             placeholder={PUBLISH_AT_PLACEHOLDER}
             tooltip={PUBLISH_AT_TOOLTIP}
             formItemProps={{
@@ -336,9 +353,12 @@ export default function (props: {
             width="md"
             id="copyright"
             name="copyright"
-            label="版权声明"
-            tooltip="设置后会替换掉文章页底部默认的版权声明文字，留空则根据系统设置中的相关选项进行展示"
-            placeholder="设置后会替换掉文章底部默认的版权"
+            label={t('common.copyright', '版权声明')}
+            tooltip={t(
+              'common.copyrightTooltip',
+              '设置后会替换掉文章页底部默认的版权声明文字，留空则根据系统设置中的相关选项进行展示',
+            )}
+            placeholder={t('common.copyrightPlaceholder', '设置后会替换掉文章底部默认的版权')}
           />
           <CoverImageField fieldProps={{ onKeyDown: stopMenuKeydown }} />
         </>

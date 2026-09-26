@@ -200,6 +200,8 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/AuthorField/index.tsx': 0,
     'src/components/TagSelectField/index.jsx': 0,
     'src/components/ExportFormatDropdown/index.jsx': 0,
+    'src/components/PublishDraftModal/index.jsx': 0,
+    'src/components/UpdateModal/index.tsx': 1,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -217,8 +219,10 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
   }
   assert.strictEqual(
     total,
-    53,
-    `裸中文总数应当是 53（棘轮的 TOTAL_BUDGET = 48 目标底 + Customizing 那 4 条欠条 + Caddy 那 1 条 URL 锚点永久例外），实际 ${total}`,
+    54,
+    // 🔴 53 → 54：UpdateModal 那 1 条**欠条**（clearConfirmTitle/Content 的实参「这篇文章」，
+    //   模板本体在服务层 accessPassword.js ⇒ 必须一起翻；那批落地时回到 53）
+    `裸中文总数应当是 54（棘轮的 TOTAL_BUDGET = 48 目标底 + Customizing 4 条欠条 + UpdateModal 1 条欠条 + Caddy 1 条 URL 锚点永久例外），实际 ${total}`,
   );
   // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
   //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——

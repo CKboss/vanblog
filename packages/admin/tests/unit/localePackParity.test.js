@@ -162,6 +162,14 @@ const IDENTICAL_ZH_TW_OK = [
   'customPage.pathPlaceholder', // 例如 /uptime（只有「例如」两字… 例/如 简繁同形）
   // 🔴 期 5 第四批（日志管理）：「成功」简繁同形（成/功 都一样）
   'common.success',
+  // 🔴 期 5 第六批（修改信息 / 发布草稿弹窗）：这 6 条简繁同形 —— 再想想 / 修改文章成功！/ 修改草稿成功！
+  //    （修改文章草稿成功 六字简繁同形）/ 是否加密 / 否 / 是。逐字核实过，不是偷懒。
+  'common.cancelReconsider',
+  'common.articleUpdated',
+  'common.draftUpdated',
+  'common.encrypted',
+  'common.no',
+  'common.yes',
 ];
 
 /**
@@ -307,12 +315,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 35,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 35）⇒ 遍历或解析器坏了`,
+      FILES.length >= 37,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 37）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 760,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 760）⇒ 疑似解析器坏了`,
+      calls.length >= 815,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 815）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -345,6 +353,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/AuthorField/index.tsx',
       'src/components/TagSelectField/index.jsx',
       'src/components/ExportFormatDropdown/index.jsx',
+      'src/components/PublishDraftModal/index.jsx',
+      'src/components/UpdateModal/index.tsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }

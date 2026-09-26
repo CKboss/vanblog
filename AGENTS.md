@@ -9469,6 +9469,82 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.155 期 5 第六批：「修改信息 / 发布草稿」两个弹窗（48 条）—— 第一条**跨层欠条**，以及"服务层常量"这个半页中文的第二来源
+
+**交付**：`components/UpdateModal/index.tsx`（34 条 → **1 条欠条**，38 个调用点）
++ `components/PublishDraftModal/index.jsx`（14 条 → **0**，18 个调用点）；语言包 **659 → 685 key**
+（26 条新增，绝大多数落在 `common.*` 供下一批文章弹窗复用）；棘轮清单 **38 → 40 个文件**；
+🔴 **TOTAL 53 → 54**（涨的 1 条是欠条，账目见 A）；`i18nKeyNaming` → **685**；
+`localePackParity` 自动发现下界 **35 → 37 个文件 / 760 → 815 个调用点**（实测 37 / 821）；
+提升 `customPage.editInfo` → `common.editInfo`（自定义页面与文章/草稿的"修改信息"是同一个动作）。
+🔴 **浏览器活体 30/30（8–11 项判据 × 3 语），problems 0**：草稿行"更多"菜单三项（**en-US 下无汉字**）、
+「修改信息」弹窗（标题 + 5 个 label + 2 个 placeholder，**en-US 下无汉字**）、
+「发布草稿」弹窗（🔴 ICU `{title}` 模板标题带真实草稿名 + 5 个 label + 占位符 + 是/否 两个选项 +
+**真发布一次**拿到 `draft.publishOk` 的 toast 全文）。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-modals/`。
+
+#### A. 🔴 第一条**跨层欠条**：实参与模板分属两层时，只翻一半比全不翻更糟
+`UpdateModal` 里有 `clearConfirmTitle('这篇文章')` / `clearConfirmContent('这篇文章')`：
+🔴 **实参**是页面里的中文字面量，而**模板本体**（"确定清除{label}的访问密码？"）在服务层 `accessPassword.js`。
+只翻实参 ⇒ en-US 会拼出 `确定清除this post的访问密码？` 这种**半截话**，比整句中文更难懂。
+⇒ 本轮**两处都不动**，把这 1 条（去重后算 1 条，虽然出现 2 次）记成 🔴 **欠条**：
+`'src/components/UpdateModal/index.tsx': 1`，还款条件写死在棘轮注释里
+（**accessPassword.js 那批落地时把实参一起改成 t(...)，预算归 0、TOTAL 回到 53**）。
+🔴 账目：**54 = 48（目标底）+ 4（Customizing 欠条）+ 1（UpdateModal 欠条）+ 1（Caddy URL 永久例外）**。
+👉 **规矩：欠条必须写"什么时候还、还的时候改哪几处"**；这是本项目第 2 张欠条（第 1 张是 Customizing 的 4 个内层页签标签）。
+⚠️ 注意它与"永久例外"的区别：Caddy 那条 URL 锚点**永远不会还**（文档按站长裁定是中文），欠条**必须还**。
+
+#### B. 🔴 "半页中文"的第二个来源：**服务层常量**（这次是量出来的，不是估的）
+两个弹窗里仍有几处中文，全部来自 `services/van-blog/**` 的**模块级常量**（不是组件自己的文案）：
+`PUBLISH_AT_PLACEHOLDER/TOOLTIP/HELP`（schedule.js）、`PATHNAME_FIELD`（importPathname.js）、
+`PRIVATE_TOGGLE_HINT` / `passwordHelp()` / `passwordPlaceholder()` / `CLEAR_PASSWORD_LABEL/TOOLTIP`（accessPassword.js）、
+`TAG_FIELD_PLACEHOLDER/TOOLTIP`（tagTokens.js）、`COVER_FIELD`（CoverImageField）。
+🔴 **活体量出来的精确数字**：en-US 的发布弹窗里**只剩 1 个**中文标签 —— 简体「自定义路径名」（= `PATHNAME_FIELD.label`）；
+zh-TW 下它同样是**简体**（在满是繁体的表单里格外显眼）。修改信息弹窗（草稿模式）则**一个都不剩**。
+🔴 **期 7 的设计题**（本轮刻意不做，因为它是**框架**问题不是文案问题）：模块级常量没法调 hook ⇒
+要么改成 `{ id, defaultMessage }` 对（调用方 `t(C.id, C.defaultMessage)`），要么改成 `getXxx(t)` 函数。
+两种都会动到**专门守卫的锚点**（`assert.match(fieldSrc, /label=\{PATHNAME_FIELD\.label\}/)` 这类），
+所以要单独一轮、带自己的变异对照。
+👉 这批的量：`services/van-blog/**` 共 **134 条 / 18 个文件**（accessPassword 18、exportFormats 30、importMdzCore 23、
+commentAdmin 11、schedule 10、coverBackfill 8、exportMarkdown 7、relativeTime 5、requestError 4…）。
+
+#### C. 🔴 antd 关闭的弹窗**仍留在 DOM 里**（`display:none`）⇒ 弹窗选择器必须限定"可见的那个"
+第一版探针在关闭「修改信息」后去等「发布草稿」的 `.ant-modal-title`，结果
+`locator resolved to 2 elements. Proceeding with the first one: <div class="ant-modal-title">Edit details</div>`
+⇒ 🔴 它盯住的是**上一个弹窗**（不可见）⇒ 10s 超时。
+修法：所有弹窗查询都加前缀 `VIS = '.ant-modal-wrap:not([style*="display: none"])'`。
+👉 **规矩：凡是"开弹窗 → 关弹窗 → 再开另一个"的探针，选择器必须限定可见容器**；
+否则 `texts()` 会把上一个弹窗的文本读进来（那种错**看起来像通过**，比超时更坏）。
+
+#### D. 🔴 尺子自己的两处粗糙（都已就地标注在探针里）
+1. "还有几个中文标签"的筛子用了 `[\u3400-\u9fff]` ⇒ 🔴 **把繁体也算成中文**：zh-TW 那条报出 6 个，
+   其中 5 个其实是**已经翻好的繁体**（是否加密/置頂優先順序/密碼/是否隱藏/版權聲明），真没翻的只有 1 个。
+   要精确就得用 `SIMPLIFIED_ONLY_ZH` 字表按字判（像 `--zh-tw-audit` 那样）。en-US 那条本来就是精确的。
+2. 这条 skip 在 **zh-CN 下是噪音**（"还有中文标签"在简体中文界面里理所当然）⇒ 已收窄到 `loc !== 'zh-CN'`。
+👉 🔴 **"哪些算没翻"本身也是一把尺子**，它同样会被验证（这次是靠人读输出发现的：zh-TW 那 6 个里有 5 个是繁体）。
+
+#### E. 🔴 变异对照生成器的**转义**坑（好在 harness 会报，不会假绿）
+生成 M6（语义空操作：zh-TW 包里相邻两个 key 换序）时，锚点里有换行与单引号：
+Python 的 `"\\n"` 是**字面反斜杠+n**，写进 JS 单引号串后变成 `\\n`（= 反斜杠+n，不是换行）；
+而且 JS 串里的引号是 `\'` ⇒ 我按 `"'common.yes'"` 去找**当然 0 命中**。
+🔴 harness 直接报 `命中 0 次（期望 1）⇒ 变异没做，本条无效` —— **这正是它该有的行为**：
+"变异体没造出来"必须与"造出来了但守卫没红"一样**算失败**，否则语义空操作那条会**假绿**。
+👉 **规矩：生成变异体时，锚点里的换行/引号要按目标语言的转义规则走；而 harness 必须对"0 命中"报错**（本项目已有）。
+
+#### F. 基线
+- admin `node --test` **747 tests / 165 suites / 0 fail**；i18n 守卫组 **104**；
+- 变异对照 **6/6**（棘轮 ×1、逐字对账 ×1、🔴 scheduledPublish 锚点换新形状后仍承重 ×1、
+  🔴 adminRobustness 锚点 ×1、key 提升 ×1、语义空操作 ×1）；
+- 语言包 **685 key** ×3；`--zh-tw-audit`：685 key / **688** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **40 个文件 / TOTAL 54**（= 48 + 4 + 1 + 1）；admin 类型门禁 **31/0**（UpdateModal 是 `.tsx`，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **747/165/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.af6ca8b7.js` = **1,481,140 B**）；
+- 🔴 **真实剩余：88 → 87 个文件 / 1,222 → 1,175 条**（本批 −1 文件 / −47 条；UpdateModal 仍在清单里，因为那 1 条欠条）。
+- 🔴 **下一批**：① `services/van-blog/accessPassword.js`(18) —— 🔴 落地时**一起还掉 A 段那张欠条**；
+  ② `NewArticleModal`(22) + `ImportArticleModal`(19) + `CoverImageField`(7)（复用本轮这批 `common.*`）；
+  ③ `pages/Article/**`(56，被 10 个测试文件钉着)；④ `pages/Editor/**`(143 / 15 文件，最大)；
+  ⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.154 期 5 第五批：草稿管理页（47 条 / **7 个文件**）+ 三个 key 的提升，以及"模块级列定义怎么接 i18n"的标准解法
 
 **交付**：`pages/Draft/index.jsx`(7) + `pages/Draft/columes.jsx`(15) + `components/NewDraftModal`(10)

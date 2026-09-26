@@ -66,7 +66,7 @@ export default function () {
 
             <CustomPageModal
               key={'editInfo'}
-              trigger={<a>{t('customPage.editInfo', '修改信息')}</a>}
+              trigger={<a>{t('common.editInfo', '修改信息')}</a>}
               initialValues={record}
               onFinish={() => {
                 action?.reload();

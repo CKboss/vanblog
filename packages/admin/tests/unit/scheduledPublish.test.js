@@ -134,7 +134,8 @@ describe('UpdateModal 接线（源码断言，已剔除注释）', () => {
 
   it('文章表单里有定时发布选择器：可清空、有帮助文案（antd4 的 ProFormDateTimePicker）', () => {
     assert.match(comp, /name="publishAt"/);
-    assert.match(comp, /label="定时发布"/);
+    // 🔴 期 5 第六批起标签走 t()：锚点换成**新形状**（key + zh-CN defaultMessage 一起钉），性质没放
+    assert.match(comp, /label=\{t\('common\.scheduledPublish', '定时发布'\)\}/);
     assert.match(comp, /placeholder=\{PUBLISH_AT_PLACEHOLDER\}/);
     assert.match(comp, /tooltip=\{PUBLISH_AT_TOOLTIP\}/);
     assert.match(comp, /extra: PUBLISH_AT_HELP/);
@@ -161,8 +162,9 @@ describe('UpdateModal 接线（源码断言，已剔除注释）', () => {
     assert.match(comp, /if \(values\?\.publishAt && isPastSchedule\(values\?\.publishAt\)\)/);
     assert.match(comp, /title: PAST_SCHEDULE_WARNING_TITLE/);
     assert.match(comp, /content: pastScheduleWarningText\(values\?\.publishAt\)/);
-    assert.match(comp, /okText: '仍要保存'/);
-    assert.match(comp, /cancelText: '回去改时间'/);
+    // 🔴 期 5 第六批起两个按钮文案走 t()：锚点换成新形状（key + 中文默认值一起钉），性质没放
+    assert.match(comp, /okText: t\('common\.okSaveAnyway', '仍要保存'\)/);
+    assert.match(comp, /cancelText: t\('common\.cancelGoBack', '回去改时间'\)/);
     assert.match(comp, /if \(!proceed\) \{\s*return false;/);
   });
 });

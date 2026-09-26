@@ -153,6 +153,13 @@ const BUDGET = {
   'src/components/AuthorField/index.tsx': 0,
   'src/components/TagSelectField/index.jsx': 0,
   'src/components/ExportFormatDropdown/index.jsx': 0,
+  // 🔴 期 5 第六批（2026-09-26）：文章/草稿的「修改信息」与「发布草稿」两个弹窗。
+  //   `PublishDraftModal` 预算 0；`UpdateModal` 预算 **1 = 欠条**（`clearConfirmTitle/Content` 的实参
+  //   「这篇文章」，模板本体在服务层 accessPassword.js ⇒ 必须一起翻，见 TOTAL_BUDGET 上面那段账目）。
+  //   ⚠️ 这两个弹窗里仍有几处**服务层常量**是中文（PUBLISH_AT_* / PATHNAME_FIELD / PRIVATE_TOGGLE_HINT /
+  //   passwordHelp / passwordPlaceholder / CLEAR_PASSWORD_* / TAG_FIELD_* / COVER_FIELD）⇒ 属期 7，本轮不动。
+  'src/components/PublishDraftModal/index.jsx': 0,
+  'src/components/UpdateModal/index.tsx': 1,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -160,8 +167,14 @@ const BUDGET = {
 // 🔴 52 → **53**（2026-09-26 期 3 第五批）：涨的 1 条是 Caddy 页那个 **URL 锚点**，
 //   它是 🔴 **永久例外**（文档按站长裁定仍是中文 ⇒ 锚点必须逐字对上中文标题），**不是欠条、不会还**。
 //   ⇒ 账目拆开记：🔴 **53 = 48（目标底）+ 4（Customizing 欠条，tab 那批落地时必须归 0）+ 1（Caddy URL 永久例外）**。
+// 🔴 53 → **54**（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 里 `clearConfirmTitle` / `clearConfirmContent`
+//   的**实参**「这篇文章」（去重后算 1 条）。它是 🔴 **欠条**，不是永久例外：
+//   模板本体在服务层 `accessPassword.js`（18 条，属期 7），🔴 **两处必须一起翻** ——
+//   只翻实参会拼出「确定清除this post的访问密码？」这种半截话，比整句中文更糟。
+//   **还款条件**：accessPassword.js 那批落地时把实参一起改成 t(...)，本文件预算归 0、TOTAL 回到 53。
+//   ⇒ 账目：🔴 **54 = 48（目标底）+ 4（Customizing 欠条）+ 1（UpdateModal 欠条）+ 1（Caddy URL 永久例外）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 53
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 54
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
@@ -271,9 +284,13 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 38, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 40, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
-  assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
+  //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
+  //   🔴 两处必须一起翻（只翻实参会拼出「确定清除this post的访问密码？」这种半截话）。
+  //   **还款条件**：accessPassword.js 那批落地时一起改，预算归 0、TOTAL 回到 53。
+  assert.strictEqual(TOTAL_BUDGET, 54, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   assert.strictEqual(REQUIRED_EXCEPTIONS.length, 5, '例外清单条数变了 ⇒ 必须是有意的');

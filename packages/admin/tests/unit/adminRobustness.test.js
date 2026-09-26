@@ -83,7 +83,8 @@ describe('后台健壮性：请求失败也要把 loading 收掉', () => {
       'setLoading(false) 只应该出现在 finally 里',
     );
     assert.match(code, /\} finally \{\s*setLoading\(false\);\s*\}/);
-    assert.match(code, /reportRequestError\(message, err, '修改失败/);
+    // 🔴 期 5 第六批起兜底文案走 t()：锚点换成新形状（key + zh-CN defaultMessage 一起钉），性质没放
+    assert.match(code, /reportRequestError\(message, err, t\('common\.updateFailedCheck', '修改失败/);
     // 失败时要让弹窗留着（返回 false），用户改完能直接再提交
     assert.match(code, /\} catch \(err\) \{[\s\S]{0,300}?return false;/);
   });

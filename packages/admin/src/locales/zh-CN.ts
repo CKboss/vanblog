@@ -765,7 +765,7 @@ export default {
   'customPage.editContent': '编辑内容',
   'customPage.fileManager': '文件管理',
   'customPage.view': '查看',
-  'customPage.editInfo': '修改信息',
+  'common.editInfo': '修改信息',
   'customPage.demoBlocked': '演示站不可修改此项！',
   'customPage.deleteConfirmBody': '是否确认删除该自定义页面？',
   'customPage.helpP1a': '自定义页面把静态内容挂到站点的',
@@ -862,5 +862,45 @@ export default {
   'common.createdAtPlaceholder': '不填默认为此刻',
   'common.authorPlaceholder': '不填默认为登录者本人',
   'common.export': '导出',
+
+
+  // ── 🔴 期 5 第六批：文章/草稿的「修改信息」与「发布草稿」两个弹窗（26 条）──
+  //    🔴 绝大多数放 `common.*`：`NewArticleModal` / `ImportArticleModal` / 文章列表**下一批就要复用**
+  //    （是否加密 / 置顶优先级 / 密码 / 是否隐藏 / 版权声明 / 文章标题… 是同一片字段）。
+  //    🔴 提升：`customPage.editInfo` → `common.editInfo`（自定义页面与文章/草稿的"修改信息"是同一个动作）。
+  //    ⚠️ 🔴 **欠条 1 条**（记在棘轮里，TOTAL 53 → 54）：`UpdateModal` 里 `clearConfirmTitle` 的实参「这篇文章」
+  //    与 `clearConfirmContent` 的同名实参是中文，而模板本体在服务层 `accessPassword.js`
+  //    ⇒ 两处必须**一起**翻（只翻实参会拼出「确定清除this post的访问密码？」这种半截话）。
+  //    还款条件：`services/van-blog/accessPassword.js` 那批（18 条）落地时一起改掉，预算归 0。
+  //    ⚠️ 另外这些**服务层常量**本轮不动（各有专门守卫钉着，属期 7）：`PUBLISH_AT_*`（schedule.js）、
+  //    `PATHNAME_FIELD`（importPathname.js）、`PRIVATE_TOGGLE_HINT` / `passwordHelp` / `passwordPlaceholder` /
+  //    `CLEAR_PASSWORD_*`（accessPassword.js）、`TAG_FIELD_*`（tagTokens.js）、`COVER_FIELD`（CoverImageField）
+  //    ⇒ 🔴 切英文时这两个弹窗里上述几处仍是中文（已记录的中间态，不是漏翻）。
+  'common.demoBlockedUpdate': '演示站禁止修改信息！',
+  'common.demoBlockedReason': '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+  'common.okClear': '确定清除',
+  'common.cancelReconsider': '再想想',
+  'common.okSaveAnyway': '仍要保存',
+  'common.cancelGoBack': '回去改时间',
+  'common.articleUpdated': '修改文章成功！',
+  'common.draftUpdated': '修改草稿成功！',
+  'common.updateFailedCheck': '修改失败，请检查填写的内容！',
+  'common.topPriority': '置顶优先级',
+  'common.topPriorityPlaceholder': '留空或0表示不置顶，其余数字越大表示优先级越高',
+  'common.encrypted': '是否加密',
+  'common.no': '否',
+  'common.yes': '是',
+  'common.password': '密码',
+  'common.passwordTooltipSet': '已设置密码。留空表示不修改；填新值表示改密码。',
+  'common.passwordTooltipUnset': '留空表示不加密；填了就用这个密码加密。',
+  'common.clearPasswordExtra': '勾选并提交 = 解除这篇文章的加密。清除后原密码无法找回；只想换密码请不要勾选，直接在上面填新密码。',
+  'common.hiddenField': '是否隐藏',
+  'common.scheduledPublish': '定时发布',
+  'common.copyright': '版权声明',
+  'common.copyrightTooltip': '设置后会替换掉文章页底部默认的版权声明文字，留空则根据系统设置中的相关选项进行展示',
+  'common.copyrightPlaceholder': '设置后会替换掉文章底部默认的版权',
+  'draft.publishTitle': '发布草稿: {title}',
+  'common.demoBlockedCreate': '演示站禁止新建文章！',
+  'draft.publishOk': '发布成功！原草稿已自动移入草稿回收站（恢复它不会影响这篇已发布的文章）。',
 
 };
