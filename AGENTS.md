@@ -9469,6 +9469,105 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.151 期 5 第二批：图片管理页（**三块**拼成的一页，88 条）—— 以及活体探针抓到的第二个"单测结构上看不见"的真缺陷
+
+**交付**：`pages/Static/img/index.tsx`（71 条 → **0**，73 个调用点）、`pages/Static/img/tools.tsx`
+（15 条 → **0**，注入式翻译器）、`components/ObjTable/index.tsx`（2 条 → **0**）；
+语言包 **506 → 577 key**（新组 **`img`** 69 条 + `common.colTitle`（从 `recycle.colTitle` **提升**）
++ `common.download` + `common.editPost` + `common.colProperty`/`colValue`）；
+棘轮清单 **22 → 25 个文件**（都预算 0，🔴 **TOTAL 仍 53**）；`i18nKeyNaming` 下界 → **577**；
+`localePackParity` 自动发现下界 **19 → 22 个文件 / 535 → 625 个调用点**（实测 22 / 629）；
+🔴 **新增两条常驻守卫**（C、D 段）。
+🔴 **浏览器活体 45/45（15 项判据 × 3 语），problems 0、skipped 0**：页头标题（复用 `menu.img`）+ tip 全文、
+三个视图切换按钮、四个工具栏按钮、空状态、列表 8 个列头、**检测结果弹窗**（标题 = ICU `{name}` 模板 + 两段正文）、
+**上传成功 toast**（`{name} 上传成功! ` 紧跟着 tools.tsx 那句 `已复制 markdown 链接到剪切板！`
+⇒ 🔴 一次同时验到"页面文案"与"注入式翻译器"）、行内 6 个操作、引用列的「未被引用」、分页 showTotal、
+**右键菜单 9 项**、**图片信息弹窗**（= `mergeMetaInfo(item, t)` 的字段名 + ObjTable 的表头）、删除确认与删除成功 toast。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-imgpage{,-objtable}/`。
+
+#### A. 🔴 活体探针抓到的**第二个**"单测结构上看不见"的真缺陷：`useIntl()` 在 `Modal.info` 里**没有 context**
+给 `ObjTable` 接 i18n 时我按惯例写了 `const intl = useIntl()`。单测全绿、类型门禁全绿、构建 rc=0。
+🔴 **活体探针点右键「信息」时弹窗根本不出现**（`waitForSelector('.ant-modal-confirm')` 8s 超时）。
+根因（**读了 antd 源码确认**，不是猜）：antd 4 的 `Modal.info/confirm/...` 会 `ReactDOM.render` 到**新建的容器**
+（`antd/es/modal/confirm.js` 里的 `render()` / `reactUnmount(container)`），而 umi 的 plugin-locale
+**不给这些静态方法打补丁** ⇒ 🔴 那棵树是**独立 React 根**、上面没有 `IntlProvider`
+⇒ `useIntl()` 直接抛错、content 整块渲染不出来。
+修法：改用 **`getIntl(getLocale())`**（普通函数、不依赖 context；与 `app.jsx` 的 `makeServerErrorTranslator` 同一套路），
+🔴 且必须在**渲染期**调（提到模块顶层的话 `getLocale()` 拿不到值）。
+修完活体复测：en-US 弹窗表头 = **Property / Value**、zh-TW = **屬性 / 值**、zh-CN = **属性 / 值** ✓。
+👉 🔴 **规矩（新，很重要）：会被塞进 `Modal.info/confirm/success/error/warning` 的 `content` 里的组件，
+不许用 `useIntl()`，只能用 `getIntl(getLocale())`。**（`message.*` / `notification.*` 同理，也是独立根。）
+⚠️ 反过来，**在调用方把 `t(...)` 算好再传进去**（字符串或已渲染的元素）是安全的 ——
+本批其余弹窗都是这么做的（Token 页的帮助弹窗、回收站的永久删除确认、图片页的替换确认），所以它们没中招。
+
+#### B. 🔴 这一页是**三块**拼的，只翻两块仍会留"半页中文"（又是探针发现的，不是我推演的）
+上一轮刚记下"按页面切批次"，本轮**又踩了一次同款**：翻完 `index.tsx` + `tools.tsx` 之后，
+活体证据里 en-US 的图片信息弹窗表头仍然是简体 **「属性 / 值」** —— 它来自第三个组件 `components/ObjTable`。
+⇒ 同轮把它也翻完（2 条），这一页才算真的闭合。
+👉 **规矩升级：动手前先量"这个页面由哪几块拼成"**（顺着 JSX 里的自定义组件标签找一遍），别等探针拍出来。
+本轮这三块是：`index.tsx`（页面）+ `tools.tsx`（纯函数，注入式翻译器）+ `ObjTable`（通用键值表，独立 React 根里渲染）。
+
+#### C. 🔴 新守卫一：**独立 React 根里不许用 `useIntl`**（把 A 段那个缺陷变成常驻判据）
+`localePackParity` 新增一条：AST 扫全部 admin 源文件，找 `Modal.(info|confirm|success|error|warning|warn)({ … content: … })`，
+取 **content 那棵子树**里的 JSX 组件名 → 顺着本文件的 import 解析到组件文件 → 断言它**不含 `useIntl(`**。
+🔴 第一版用"从 `Modal.` 往后截 1500 字符、再从 `content:` 往后截 900 字符"的**窗口式**判据 ⇒ **误报 2 条**
+（说 `InitPage` 与 `SiteInfo.tsx` 的 `Modal.warn` "渲染了 `<SiteInfoForm>`"）—— 窗口越过了 Modal 调用本身，
+把后面正常渲染的 JSX 也算了进来。改成 AST 子树之后误报归零。
+👉 **判据要用结构（AST 子树），不要用字符窗口** —— 窗口一定会越界，而越界产生的假红会让人开始忽略这条守卫。
+⚠️ 三条反空转：`Modal.*` 调用点 **≥10**、扫到的源文件 **≥100**、🔴 **AST 解析失败必须报出来**
+（第一版把**剥注释后**的源码喂给解析器，`Static/img/index.tsx` 解析失败 ⇒ 那条"解析失败清单"当场抓出来了；
+修法：**AST 用原始源码解析，剥注释只用于文本级判据**）。
+
+#### D. 🔴 新守卫二：**注入式翻译器的每个调用点都必须传 t**
+`recycleCore.js` 与 `Static/img/tools.tsx` 都是"不传 t 就走 `IDENTITY_T`（输出中文，逐字与改造前相同）"——
+🔴 这个设计的代价是：**漏传 t 不会报错**，界面上只是一直是中文（上一批为 RecycleBin 写过一条局部判据，这批升级成通用的）。
+判据：这些函数在 admin 源码里的每个调用点，最后一个实参必须是 `t`
+（`describeRecycleActionFailure` 那种 options 形状则查 options 里有没有 `t`）。
+🔴 **三类合法的"不传 t"必须显式登记**，否则这条会把设计好的行为当缺陷：
+① **定义模块自己**（`const RECYCLE_EMPTY_TEXT = recycleEmptyText()` 这类刻意 identity 的常量，由该模块自己的单测钉）；
+② **尚未接 i18n 的消费方**（`Editor/imgUpload.tsx` 那处 `copyImgLink(src, true, '上传成功！ ')`）⇒ 走 identity、
+   输出与今天逐字相同，属 backlog；🔴 而这张表是**钉死的**：谁新增一个不传 t 的消费方就会红
+   （要么补 t、要么登记进表并写明属于哪一批）。
+变异对照：`mergeMetaInfo(clickItem, t)` → `mergeMetaInfo(clickItem)` ⇒ 红；把表里那条删掉 ⇒ 红。
+
+#### E. 🔴 ICU plural 真的用上了（4 条），以及生成脚本的两道新闸门
+英文里 4 条计数句用了 ICU plural：`img.refPopoverTitle`、`img.refCount`、`img.totalCount`、`img.backfillDone`
+（`{count, plural, one {# post} other {# posts}}`）；zh-CN / zh-TW 保持 `{count} 篇` 这种形状（汉语没有复数变化）。
+生成语言包的脚本这次多带两道闸门：① **数字集合**三份一致（上一批那条常驻守卫的口径）；
+② 🔴 **占位符名**三份一致 —— 而且必须**同时认** `{name}` 与 ICU 的 `{name, plural, …}` 两种形状，
+否则英文一用 plural 就会被误判成"少了占位符"。
+③ 技术词闸门自己也踩了一个坑：一律区分大小写时卡在 `img.copiedMarkdown`
+（zh 源码是小写 `markdown`、英文正确写法是 `Markdown`）⇒ 改成"全大写缩写严格比、普通词比小写形式"。
+
+#### F. 🔴 对账守卫又抓出一条**我自己借错 key**
+「被引用文章」弹窗里那个编辑链接，我顺手写了 `t('common.edit', '编辑')` —— 而 `common.edit` 的值是**「修改」**
+（上一批用户设置页改协作者用的）⇒ `localePackParity` 的"defaultMessage 必须与 zh-CN 包逐字相同"当场红。
+处理：**不借用**，新增 `common.editPost`（'编辑' / '編輯' / 'Edit'）。
+👉 这不是"同值第二处口径"（中文本来就是两个词：修改 vs 编辑），而是 🔴 **两个不同性质**；
+⚠️ 而"要不要把「修改/编辑」统一成一个词"属**中文文案修订**，交站长裁定（翻译批次不改中文文案）。
+
+#### G. 🔴 用**行号**当键的白名单，本轮连红两次
+`paginationQuickJumper.test.js` 的白名单用 `pages/Static/img/index.tsx:660` 这种 **文件:行号** 当键 ⇒
+接 i18n 之后文件变长，行号 660 → 724 → **728**（第二次是因为修 `common.editPost` 时又加了 4 行注释）⇒ 同一轮红了两次。
+本轮按现状同步了行号，并把"换成符号/形状锚点"登记为待办（那要它自己的变异对照，不该塞在文案批次里）。
+👉 **规矩（早就有，这次代价具象了）：守卫的键不要用行号** —— 任何改动那个文件的批次都会打红它，
+而红的原因与"分页有没有 quickJumper"这个性质毫无关系（噪音会训练人忽略红灯）。
+
+#### H. 基线
+- admin `node --test` **746 tests / 165 suites / 0 fail**；i18n 守卫组 **101 → 103**（`localePackParity` 45 → **47**：+C、+D 两条）；
+- 变异对照 **6/6**（ObjTable 退回 useIntl / 漏传 t / 去掉 ICU plural / 列标题退回硬编码 / 删掉消费方登记表 / 语义空操作）；
+- 语言包 **577 key** ×3；`--zh-tw-audit`：577 key / **668** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **25 个文件 / TOTAL 53**（= 48 目标底 + 4 欠条 + 1 永久例外）；admin 类型门禁 **31/0**（三个新翻文件都是 `.tsx`，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **746/165/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.bde5b16a.js` = **1,455,241 B**）；
+- 🔴 **真实剩余（bareChinese 口径）：106 → 103 个文件 / 1,452 → 1,364 条**（本批 −3 文件 / −88 条）。
+- 🔴 **上一批留下的中间态已闭合**：`watermark.*` 的英文 tooltip 里提到的 "Images" / "Add thumbnails" /
+  "Detect steganographic watermark" 现在都能在图片管理页上**逐字对上**（活体证据里三个都量到了）。
+- 🔴 **下一批**：① `pages/Editor/index.jsx`（64 条，⚠️ 它里面那处 `copyImgLink(...)` 目前登记在
+  "尚未接 i18n 的消费方"表里，翻它的时候要把 t 传进去并从表里删掉）；② `DataManage/tabs/Category.jsx`(58)、
+  `CommentManage/BuiltinComments.jsx`(50)、`pages/About.tsx`(35)、`CommentManage/index.jsx`(21)；
+  ③ `SystemConfig` 收尾（`SiteInfo.tsx` 8 / `migrate.tsx` 5）；④ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.150 期 5 第一批：图床设置**整个页签**（WaterMarkForm 31 + StaticForm 13）—— 以及"翻译不许改契约"这条新守卫（它当场抓出我自己 4 处译文）
 
 **交付**：`components/WaterMarkForm/index.tsx`（35 条裸中文 → **0**，48 个调用点）与

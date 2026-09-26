@@ -317,7 +317,6 @@ export default {
   //    ⚠️ 「归档」与「备份档」刻意分开：export 打出来的 zip 用**歸檔**，整站备份用**備份檔**（既有包口径）。
   'recycle.missingIdRestore': '这条记录缺少 ID，无法恢复',
   'recycle.missingIdPurge': '这条记录缺少 ID，无法永久删除',
-  'recycle.colTitle': '标题',
   'recycle.colCategory': '分类',
   'recycle.colTags': '标签',
   'recycle.colUpdatedAt': '更新时间',
@@ -425,6 +424,8 @@ export default {
   'common.colPermissions': '权限',
   'sysconf.user.collaboratorUpdated': '修改协作者成功！',
   'common.edit': '修改',
+  // 🔴 `common.editPost`（编辑）与 `common.edit`（修改）刻意分开：中文是两个词，英文都是 Edit
+  'common.editPost': '编辑',
   'common.deleteConfirmTitle': '删除确认',
   'sysconf.user.collaboratorDeleteConfirm': '是否确认删除该协作者？',
   'sysconf.user.cardTitle': '用户设置',
@@ -660,5 +661,94 @@ export default {
   'storage.picgoPlugins.label': '自定义 picgo 插件',
   'storage.picgoPlugins.tooltip': '请填写插件名（如 s3），多个请用英文逗号分隔',
   'storage.picgoPlugins.placeholder': '看不懂的话请忽略',
+
+
+  // ── 🔴 期 5 第二批：图片管理页（`pages/Static/img/index.tsx` + 同目录 `tools.tsx`，70 条）──
+  //    🔴 按**页面**切批次（不是按文件）：这两份文件拼成同一个页面，只翻一个会留下半页中文。
+  //    `tools.tsx` 是**纯函数模块**（被 `Editor/imgUpload.tsx` 也调用）⇒ 用**注入式翻译器**：
+  //    `copyImgLink(…, t = IDENTITY_T)` / `mergeMetaInfo(item, t = IDENTITY_T)`，
+  //    🔴 不传 t 时输出与改造前**逐字相同** ⇒ 既有调用方一个字都不用改（与 recycleCore 同一套模式）。
+  //    🔴 提升/复用：`common.colTitle`（从 recycle.colTitle 提升）、`common.download`（新增）、
+  //    `common.colName`/`colOption`/`edit`/`delete`（既有）、页头标题复用 `menu.img`（与侧边栏同一个性质）。
+  //    ⚠️ 英文里的 "Add thumbnails" / "Detect steganographic watermark" / "Images" 必须与
+  //    `watermark.enableThumb.tooltip`、`watermark.enableStegoWaterMark.tooltip` 里提到的**逐字相同**
+  //    （上一批那两条 tooltip 向前一致地引用了这几个界面词）⇒ 这批落地就把那个中间态闭合了。
+  'img.detectFoundTitle': '检测到本站的隐写水印：',
+  'img.detectMeta': '尺寸 {width}×{height}，重复度 {repetition}，擦边 bit {uncertain}',
+  'img.detectNoneTitle': '没有检测到本站水印。',
+  'img.detectNoneReasons': '常见原因：不是本站上传的图；上传时「隐写水印」是关着的；图片被缩放/裁剪过；或者站点换过水印密钥。',
+  'img.detectTitle': '检测水印：{name}',
+  'img.detectFailed': '检测失败！',
+  'img.backfillConfirmTitle': '为所有图片生成缩略图？',
+  'img.backfillConfirmContent': '已经有缩略图的会跳过，只处理本地存储的图片；图片多时可能要等一会儿。',
+  'img.backfillDone': '共 {total} 张：新生成 {generated}，已存在 {existed}，跳过 {skipped}，失败 {failed}',
+  'img.backfillFailed': '补缩略图失败！',
+  'img.deleteOkOss': '删除成功！但是 OSS 存储中并未删除哦',
+  'img.deleteOkLocal': '删除成功！已彻底删除',
+  'img.deleteFailed': '删除失败！',
+  'img.replaceConfirmTitle': '替换这张图片？',
+  'img.replaceConfirmP1': '链接保持不变，文章里的引用会自动指向新图：',
+  'img.replaceConfirmP2': '新文件同样会走缩放 / 隐写水印 / 压缩，并重新生成缩略图。原内容不可恢复。',
+  'img.replaceOk': '替换成功！链接没有变化。',
+  'img.replaceFailed': '替换失败！',
+  'img.infoTitle': '图片信息',
+  'img.deleteConfirmTitle': '确定删除该图片吗？删除后不可恢复！',
+  'img.refsTitle': '被引用文章',
+  'img.refsColId': '文章 ID',
+  'common.colTitle': '标题',
+  'img.colImage': '图片',
+  'img.colFormat': '格式',
+  'img.colDimensions': '尺寸',
+  'img.colBytes': '大小',
+  'img.colUploadedAt': '上传时间',
+  'img.colRefs': '引用文章',
+  'img.notReferenced': '未被引用',
+  'img.refPopoverTitle': '被 {count} 篇文章引用',
+  'img.refArticleFallback': '文章 {id}',
+  'img.refMore': '…等共 {count} 篇',
+  'img.refCount': '{count} 篇',
+  'img.actCopyLink': '复制链接',
+  'common.download': '下载',
+  'img.actReplace': '替换',
+  'img.actDetect': '检测水印',
+  'img.pageTip': '设置页可更改图片存储方式、缩放与水印。对着图片点右键可解锁更多操作哦（含检测隐写水印）',
+  'img.viewThumb': '小图',
+  'img.viewLarge': '大图',
+  'img.viewList': '列表',
+  'img.backfillBtn': '补缩略图',
+  'img.clipboardEmpty': '剪切板无图片！',
+  'img.clipboardBtn': '剪切板上传',
+  'img.clipboardNew': '剪切板图片上传成功! ',
+  'img.clipboardExists': '剪切板图片已存在! ',
+  'img.uploadBtn': '上传图片',
+  'img.uploadNew': '{name} 上传成功! ',
+  'img.uploadExists': '{name} 已存在! ',
+  'img.menuCopyMarkdown': '复制 Markdown 链接',
+  'img.menuCopyMarkdownAbs': '复制完整 Markdown 链接',
+  'img.menuInfo': '信息',
+  'img.menuSearchRefs': '搜索引用文章',
+  'img.menuDetectStego': '检测隐写水印',
+  'img.menuReplace': '替换图片',
+  'img.empty': '暂无图片，快上传呀~',
+  'img.totalCount': '共 {total} 张',
+  'img.copiedMarkdown': '{prefix}已复制 markdown 链接到剪切板！',
+  'img.copiedLink': '{prefix}已复制图片链接到剪切板！',
+  'img.copyFailed': '{prefix}复制链接到剪切板失败！',
+  'img.meta.height': '高',
+  'img.meta.width': '宽',
+  'img.meta.storageType': '存储',
+  'img.meta.url': '外链',
+  'img.meta.thumb': '缩略图',
+  'img.meta.thumbWidth': '缩略图宽',
+  'img.meta.thumbHeight': '缩略图高',
+  'img.meta.local': '本地',
+
+
+  // ── 🔴 期 5 第二批（同轮追加）：`components/ObjTable`（图片信息弹窗用的键值表，2 条）──
+  //    🔴 活体探针发现它的：图片管理页翻完之后，en-US 下那个弹窗的表头仍是简体「属性/值」
+  //    ⇒ 页面还差这一个组件（这一页由 index.tsx + tools.tsx + ObjTable **三块**拼成）。
+  //    它是跨页可复用的通用组件 ⇒ 两个列头进 `common.*`（与 名称/操作/标题 同一类）。
+  'common.colProperty': '属性',
+  'common.colValue': '值',
 
 };

@@ -305,7 +305,7 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
     // 🔴 列标题现在都走 t()：锚点是「key + zh-CN defaultMessage」这一对，
     //    既钉住"列在"，也钉住"它的中文默认文案没被顺手改掉"（那是语言包对账的另一半）
     const COLS = {
-      标题: 'recycle.colTitle',
+      标题: 'common.colTitle', // 🔴 已从 recycle.colTitle 提升（图片管理页也要用）
       别名: 'recycle.colPathname',
       分类: 'recycle.colCategory',
       标签: 'recycle.colTags',

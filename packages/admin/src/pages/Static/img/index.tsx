@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Item, Menu, Separator, useContextMenu } from 'react-contexify';
 import 'react-contexify/dist/ReactContexify.css';
 import { createPortal } from 'react-dom';
-import { history, useModel } from 'umi';
+import { history, useIntl, useModel } from 'umi';
 import TipTitle from '../../../components/TipTitle';
 import { useTab } from '../../../services/van-blog/useTab';
 import type { StaticItem } from '../type';
@@ -78,6 +78,13 @@ const ImgPage = () => {
   const [backfilling, setBackfilling] = useState(false);
   /** 引用文章数：realPath -> {count, articles} */
   const [refs, setRefs] = useState<Record<string, any>>({});
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook）。`values` 用 `Record<string, any>`：
+  //    写 `unknown` 会报 **TS2769**（这个形状在仓库里复制过 4 次、各背一条类型错误，期 4 已一并清掉）。
+  // ⚠️ 本文件的 `t` **没有**进任何 useCallback/useEffect 的依赖数组（`fetchData` 的依赖是既有那 5 个 setter）；
+  //    🔴 将来若要放进去，必须先把 t 用 `useCallback([intl])` 包起来（否则无限渲染/请求循环，见手册 §7.144 A）。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const [viewMode, setViewModeState] = useState<ViewMode>(() => {
     const saved = window.localStorage.getItem(VIEW_MODE_KEY);
     return saved === 'large' || saved === 'list' ? saved : 'thumb';
@@ -145,20 +152,29 @@ const ImgPage = () => {
       width: 560,
       content: d.found ? (
         <div>
-          <p>检测到本站的隐写水印：</p>
+          <p>{t('img.detectFoundTitle', '检测到本站的隐写水印：')}</p>
           <p style={{ wordBreak: 'break-all' }}>
             <b>{d.payload}</b>
           </p>
+          {/* 🔴 原来是"文本 + 4 个表达式"混排 ⇒ 收成一个带占位符的模板（英文语序不同，混排翻不了）。
+              ⚠️ `×` 是**乘号字符**、不是字母 x，三份包都要原样保留（契约守卫会查数字，这个符号靠人核）。 */}
           <p style={{ color: '#888' }}>
-            尺寸 {d.width}×{d.height}，重复度 {d.repetition}，擦边 bit {d.uncertain ?? 0}
+            {t('img.detectMeta', '尺寸 {width}×{height}，重复度 {repetition}，擦边 bit {uncertain}', {
+              width: d.width,
+              height: d.height,
+              repetition: d.repetition,
+              uncertain: d.uncertain ?? 0,
+            })}
           </p>
         </div>
       ) : (
         <div>
-          <p>没有检测到本站水印。</p>
+          <p>{t('img.detectNoneTitle', '没有检测到本站水印。')}</p>
           <p style={{ color: '#888' }}>
-            常见原因：不是本站上传的图；上传时「隐写水印」是关着的；图片被缩放/裁剪过；
-            或者站点换过水印密钥。
+            {t(
+              'img.detectNoneReasons',
+              '常见原因：不是本站上传的图；上传时「隐写水印」是关着的；图片被缩放/裁剪过；或者站点换过水印密钥。',
+            )}
           </p>
         </div>
       ),
@@ -169,9 +185,9 @@ const ImgPage = () => {
     setLoading(true);
     try {
       const res = await detectStegoByFile(file);
-      showDetectResult(res, `检测水印：${file.name}`);
+      showDetectResult(res, t('img.detectTitle', '检测水印：{name}', { name: file.name }));
     } catch (err) {
-      message.error('检测失败！');
+      message.error(t('img.detectFailed', '检测失败！'));
     } finally {
       setLoading(false);
     }
@@ -179,21 +195,35 @@ const ImgPage = () => {
 
   function handleBackfill() {
     Modal.confirm({
-      title: '为所有图片生成缩略图？',
-      content: '已经有缩略图的会跳过，只处理本地存储的图片；图片多时可能要等一会儿。',
+      title: t('img.backfillConfirmTitle', '为所有图片生成缩略图？'),
+      content: t(
+        'img.backfillConfirmContent',
+        '已经有缩略图的会跳过，只处理本地存储的图片；图片多时可能要等一会儿。',
+      ),
       onOk: async () => {
         setBackfilling(true);
         try {
           const res: any = await backfillThumbnails(false);
           const d = res?.data || {};
+          // 🔴 5 个计数收进一个模板（ICU 占位符）；⚠️ 这里刻意**不用** ICU plural ——
+          //    汉语没有复数变化，而英文这句用 "5 generated, 2 already existed" 这种**列表式**表达，
+          //    逐项加 plural 会让句子读不成人话（复数守卫只要求"计数紧跟复数名词"时才用 plural）。
           message.success(
-            `共 ${d.total ?? 0} 张：新生成 ${d.generated ?? 0}，已存在 ${d.existed ?? 0}，跳过 ${
-              d.skipped ?? 0
-            }，失败 ${d.failed ?? 0}`,
+            t(
+              'img.backfillDone',
+              '共 {total} 张：新生成 {generated}，已存在 {existed}，跳过 {skipped}，失败 {failed}',
+              {
+                total: d.total ?? 0,
+                generated: d.generated ?? 0,
+                existed: d.existed ?? 0,
+                skipped: d.skipped ?? 0,
+                failed: d.failed ?? 0,
+              },
+            ),
           );
           fetchData();
         } catch (err) {
-          message.error('补缩略图失败！');
+          message.error(t('img.backfillFailed', '补缩略图失败！'));
         } finally {
           setBackfilling(false);
         }
@@ -209,11 +239,14 @@ const ImgPage = () => {
     try {
       setLoading(true);
       await deleteImgBySign(sign);
+      // 🔴 原来是"前缀 + 三目后半句"拼的 ⇒ 拆成两个**完整句子**的 key（英文两句话的结构完全不同）
       message.success(
-        `删除成功！${target?.storageType == 'picgo' ? '但是 OSS 存储中并未删除哦' : '已彻底删除'}`,
+        target?.storageType == 'picgo'
+          ? t('img.deleteOkOss', '删除成功！但是 OSS 存储中并未删除哦')
+          : t('img.deleteOkLocal', '删除成功！已彻底删除'),
       );
     } catch (err) {
-      message.error('删除失败！');
+      message.error(t('img.deleteFailed', '删除失败！'));
     } finally {
       // ⚠️ 以前 setLoading(false) 只写在 try 的成功路径上：删除一失败，
       // 整页的 Spin 就永远转下去（只能刷新页面），错误提示还被遮罩盖住。
@@ -230,13 +263,18 @@ const ImgPage = () => {
 
   function handleReplace(item: StaticItem, file: File) {
     Modal.confirm({
-      title: '替换这张图片？',
+      title: t('img.replaceConfirmTitle', '替换这张图片？'),
       width: 540,
       content: (
         <div>
-          <p>链接保持不变，文章里的引用会自动指向新图：</p>
+          <p>{t('img.replaceConfirmP1', '链接保持不变，文章里的引用会自动指向新图：')}</p>
           <p style={{ wordBreak: 'break-all', color: '#888' }}>{item.realPath}</p>
-          <p>新文件同样会走缩放 / 隐写水印 / 压缩，并重新生成缩略图。原内容不可恢复。</p>
+          <p>
+            {t(
+              'img.replaceConfirmP2',
+              '新文件同样会走缩放 / 隐写水印 / 压缩，并重新生成缩略图。原内容不可恢复。',
+            )}
+          </p>
         </div>
       ),
       onOk: async () => {
@@ -244,13 +282,13 @@ const ImgPage = () => {
         try {
           const res: any = await replaceImgBySign(item.sign, file);
           if (res?.statusCode === 200) {
-            message.success('替换成功！链接没有变化。');
+            message.success(t('img.replaceOk', '替换成功！链接没有变化。'));
             fetchData();
           } else {
-            message.error(res?.message || '替换失败！');
+            message.error(res?.message || t('img.replaceFailed', '替换失败！'));
           }
         } catch (err: any) {
-          message.error(err?.message || '替换失败！');
+          message.error(err?.message || t('img.replaceFailed', '替换失败！'));
         } finally {
           setLoading(false);
         }
@@ -261,26 +299,26 @@ const ImgPage = () => {
     switch (data) {
       case 'info':
         Modal.info({
-          title: '图片信息',
+          title: t('img.infoTitle', '图片信息'),
           content: (
             <div>
-              <ObjTable obj={mergeMetaInfo(clickItem)} />
+              <ObjTable obj={mergeMetaInfo(clickItem, t)} />
             </div>
           ),
         });
         break;
       case 'copy':
-        copyImgLink(clickItem.realPath);
+        copyImgLink(clickItem.realPath, false, undefined, true, t);
         break;
       case 'copyMarkdown':
-        copyImgLink(clickItem.realPath, true, undefined, false);
+        copyImgLink(clickItem.realPath, true, undefined, false, t);
         break;
       case 'copyMarkdownAbsolutely':
-        copyImgLink(clickItem.realPath, true, undefined, true);
+        copyImgLink(clickItem.realPath, true, undefined, true, t);
         break;
       case 'delete':
         Modal.confirm({
-          title: '确定删除该图片吗？删除后不可恢复！',
+          title: t('img.deleteConfirmTitle', '确定删除该图片吗？删除后不可恢复！'),
           onOk: () => {
             deleteImg(clickItem.sign);
           },
@@ -291,7 +329,10 @@ const ImgPage = () => {
         break;
       case 'detectStego': {
         const res: any = await detectStegoBySign(clickItem.sign);
-        showDetectResult(res, `检测水印：${displayImgName(clickItem.name)}`);
+        showDetectResult(
+          res,
+          t('img.detectTitle', '检测水印：{name}', { name: displayImgName(clickItem.name) }),
+        );
         break;
       }
       case 'replace':
@@ -300,7 +341,7 @@ const ImgPage = () => {
       case 'searchByLink':
         const { data } = await searchArtclesByLink(getImgLink(clickItem.realPath));
         Modal.info({
-          title: '被引用文章',
+          title: t('img.refsTitle', '被引用文章'),
 
           content: (
             <Table
@@ -312,10 +353,11 @@ const ImgPage = () => {
               dataSource={data || []}
               size="small"
               columns={[
-                { title: '文章 ID', dataIndex: 'id', key: 'id' },
-                { title: '标题', dataIndex: 'title', key: 'title' },
+                { title: t('img.refsColId', '文章 ID'), dataIndex: 'id', key: 'id' },
+                // 🔴 「标题」与「操作」提升/复用为 common.*（回收站的列头是同一个性质 ⇒ 一个 key）
+                { title: t('common.colTitle', '标题'), dataIndex: 'title', key: 'title' },
                 {
-                  title: '操作',
+                  title: t('common.colOption', '操作'),
                   key: 'action',
                   render: (val, record) => {
                     return (
@@ -325,7 +367,11 @@ const ImgPage = () => {
                           history.push(`/editor?type=${'article'}&id=${record.id}`);
                         }}
                       >
-                        编辑
+                        {/* 🔴 不是 `common.edit`：那个 key 的值是「修改」（用户设置页改协作者用的）。
+                            这里源码写的是「编辑」，两个中文词不同 ⇒ 各自一个 key（英文都是 Edit，
+                            这不是"同值第二处口径"，而是**中文本来就有两个词**）。
+                            ⚠️ 翻译批次**不改中文文案**：要不要把「修改/编辑」统一成一个词属**文案修订**，交站长裁定。 */}
+                        {t('common.editPost', '编辑')}
                       </a>
                     );
                   },
@@ -389,7 +435,7 @@ const ImgPage = () => {
 
   const columns = [
     {
-      title: '图片',
+      title: t('img.colImage', '图片'),
       dataIndex: 'realPath',
       width: 84,
       render: (_: any, record: StaticItem) => (
@@ -404,7 +450,7 @@ const ImgPage = () => {
       ),
     },
     {
-      title: '名称',
+      title: t('common.colName', '名称'),
       dataIndex: 'name',
       ellipsis: true,
       render: (_: any, record: StaticItem) => (
@@ -414,13 +460,13 @@ const ImgPage = () => {
       ),
     },
     {
-      title: '格式',
+      title: t('img.colFormat', '格式'),
       dataIndex: 'fileType',
       width: 72,
       render: (value: string) => (value ? String(value).toUpperCase() : '-'),
     },
     {
-      title: '尺寸',
+      title: t('img.colDimensions', '尺寸'),
       width: 108,
       render: (_: any, record: StaticItem) => {
         const meta: any = record.meta || {};
@@ -428,18 +474,18 @@ const ImgPage = () => {
       },
     },
     {
-      title: '大小',
+      title: t('img.colBytes', '大小'),
       width: 92,
       render: (_: any, record: StaticItem) => (record.meta as any)?.size || '-',
     },
     {
-      title: '上传时间',
+      title: t('img.colUploadedAt', '上传时间'),
       dataIndex: 'updatedAt',
       width: 168,
       render: (value: any) => formatDateTime(value),
     },
     {
-      title: '引用文章',
+      title: t('img.colRefs', '引用文章'),
       width: 116,
       render: (_: any, record: StaticItem) => {
         const info = refs[record.realPath];
@@ -447,61 +493,72 @@ const ImgPage = () => {
           return <span style={{ color: '#bbb' }}>…</span>;
         }
         if (!info.count) {
-          return <span style={{ color: '#bbb' }}>未被引用</span>;
+          return <span style={{ color: '#bbb' }}>{t('img.notReferenced', '未被引用')}</span>;
         }
         return (
           <Popover
-            title={`被 ${info.count} 篇文章引用`}
+            title={t('img.refPopoverTitle', '被 {count} 篇文章引用', { count: info.count })}
             content={
               <div style={{ maxWidth: 320 }}>
                 {(info.articles || []).map((article: any) => (
                   <div key={article.id} style={{ marginBottom: 4 }}>
                     <a onClick={() => history.push(`/editor?type=article&id=${article.id}`)}>
-                      {article.title || `文章 ${article.id}`}
+                      {article.title || t('img.refArticleFallback', '文章 {id}', { id: article.id })}
                     </a>
                   </div>
                 ))}
                 {info.count > (info.articles || []).length && (
-                  <div style={{ color: '#888' }}>…等共 {info.count} 篇</div>
+                  <div style={{ color: '#888' }}>
+                    {t('img.refMore', '…等共 {count} 篇', { count: info.count })}
+                  </div>
                 )}
               </div>
             }
           >
-            <a>{info.count} 篇</a>
+            <a>{t('img.refCount', '{count} 篇', { count: info.count })}</a>
           </Popover>
         );
       },
     },
     {
-      title: '操作',
+      title: t('common.colOption', '操作'),
       width: 268,
       render: (_: any, record: StaticItem) => (
         <Space size="small" wrap>
-          <a onClick={() => copyImgLink(record.realPath)}>复制链接</a>
-          <a onClick={() => copyImgLink(record.realPath, true, undefined, false)}>Markdown</a>
-          <a onClick={() => downloadImg(record.name, record.realPath)}>下载</a>
-          {showReplaceBtn && <a onClick={() => askReplace(record)}>替换</a>}
+          <a onClick={() => copyImgLink(record.realPath, false, undefined, true, t)}>
+            {t('img.actCopyLink', '复制链接')}
+          </a>
+          <a onClick={() => copyImgLink(record.realPath, true, undefined, false, t)}>Markdown</a>
+          <a onClick={() => downloadImg(record.name, record.realPath)}>
+            {t('common.download', '下载')}
+          </a>
+          {showReplaceBtn && (
+            <a onClick={() => askReplace(record)}>{t('img.actReplace', '替换')}</a>
+          )}
           <a
             onClick={async () => {
               const res: any = await detectStegoBySign(record.sign);
-              showDetectResult(res, `检测水印：${displayImgName(record.name)}`);
+              showDetectResult(
+                res,
+                t('img.detectTitle', '检测水印：{name}', { name: displayImgName(record.name) }),
+              );
             }}
           >
-            检测水印
+            {t('img.actDetect', '检测水印')}
           </a>
           {showDelBtn && (
             <a
               style={{ color: '#ff4d4f' }}
               onClick={() => {
                 Modal.confirm({
-                  title: '确定删除该图片吗？删除后不可恢复！',
+                  title: t('img.deleteConfirmTitle', '确定删除该图片吗？删除后不可恢复！'),
                   onOk: async () => {
                     await deleteImg(record.sign);
                   },
                 });
               }}
             >
-              删除
+              {t('common.delete', '删除')}
             </a>
           )}
         </Space>
@@ -515,8 +572,13 @@ const ImgPage = () => {
       header={{
         title: (
           <TipTitle
-            title="图片管理"
-            tip="设置页可更改图片存储方式、缩放与水印。对着图片点右键可解锁更多操作哦（含检测隐写水印）"
+            // 🔴 标题复用 `menu.img`（侧边栏菜单那一条）：页头与菜单指向的是**同一个东西** ⇒ 一个 key，
+            //    这样英文两处都是 "Images"，也正好对上 WaterMarkForm 的 tooltip 里提到的 "Images"。
+            title={t('menu.img', '图片管理')}
+            tip={t(
+              'img.pageTip',
+              '设置页可更改图片存储方式、缩放与水印。对着图片点右键可解锁更多操作哦（含检测隐写水印）',
+            )}
           />
         ),
       }}
@@ -528,13 +590,13 @@ const ImgPage = () => {
             optionType="button"
             buttonStyle="solid"
           >
-            <Radio.Button value="thumb">小图</Radio.Button>
-            <Radio.Button value="large">大图</Radio.Button>
-            <Radio.Button value="list">列表</Radio.Button>
+            <Radio.Button value="thumb">{t('img.viewThumb', '小图')}</Radio.Button>
+            <Radio.Button value="large">{t('img.viewLarge', '大图')}</Radio.Button>
+            <Radio.Button value="list">{t('img.viewList', '列表')}</Radio.Button>
           </Radio.Group>
           {showBackfillBtn && (
             <Button loading={backfilling} onClick={handleBackfill}>
-              补缩略图
+              {t('img.backfillBtn', '补缩略图')}
             </Button>
           )}
           <Upload
@@ -545,20 +607,23 @@ const ImgPage = () => {
               return false;
             }}
           >
-            <Button>检测水印</Button>
+            <Button>{t('img.actDetect', '检测水印')}</Button>
           </Upload>
           <CopyUploadBtn
             setLoading={setLoading}
             onError={() => {
-              message.error('剪切板无图片！');
+              message.error(t('img.clipboardEmpty', '剪切板无图片！'));
             }}
-            text="剪切板上传"
+            text={t('img.clipboardBtn', '剪切板上传')}
             onFinish={(data) => {
               copyImgLink(
                 data.src,
                 true,
-                data.isNew ? '剪切板图片上传成功! ' : '剪切板图片已存在! ',
+                data.isNew
+                  ? t('img.clipboardNew', '剪切板图片上传成功! ')
+                  : t('img.clipboardExists', '剪切板图片已存在! '),
                 false,
+                t,
               );
 
               fetchData();
@@ -569,13 +634,16 @@ const ImgPage = () => {
           <UploadBtn
             setLoading={setLoading}
             muti={true}
-            text="上传图片"
+            text={t('img.uploadBtn', '上传图片')}
             onFinish={(info) => {
               copyImgLink(
                 info?.response?.data?.src,
                 true,
-                info?.response?.data?.isNew ? `${info.name} 上传成功! ` : `${info.name} 已存在! `,
+                info?.response?.data?.isNew
+                  ? t('img.uploadNew', '{name} 上传成功! ', { name: info.name })
+                  : t('img.uploadExists', '{name} 已存在! ', { name: info.name }),
                 false,
+                t,
               );
 
               fetchData();
@@ -589,36 +657,36 @@ const ImgPage = () => {
       <Portal>
         <Menu id={MENU_ID}>
           <Item onClick={handleItemClick} data="copy">
-            复制链接
+            {t('img.actCopyLink', '复制链接')}
           </Item>
           <Item onClick={handleItemClick} data="copyMarkdown">
-            复制 Markdown 链接
+            {t('img.menuCopyMarkdown', '复制 Markdown 链接')}
           </Item>
           <Item onClick={handleItemClick} data="copyMarkdownAbsolutely">
-            复制完整 Markdown 链接
+            {t('img.menuCopyMarkdownAbs', '复制完整 Markdown 链接')}
           </Item>
           <Separator />
           <Item onClick={handleItemClick} data="download">
-            下载
+            {t('common.download', '下载')}
           </Item>
           {showDelBtn && (
             <Item onClick={handleItemClick} data="delete">
-              删除
+              {t('common.delete', '删除')}
             </Item>
           )}
           <Separator />
           <Item onClick={handleItemClick} data="info">
-            信息
+            {t('img.menuInfo', '信息')}
           </Item>
           <Item onClick={handleItemClick} data="searchByLink">
-            搜索引用文章
+            {t('img.menuSearchRefs', '搜索引用文章')}
           </Item>
           <Item onClick={handleItemClick} data="detectStego">
-            检测隐写水印
+            {t('img.menuDetectStego', '检测隐写水印')}
           </Item>
           {showReplaceBtn && (
             <Item onClick={handleItemClick} data="replace">
-              替换图片
+              {t('img.menuReplace', '替换图片')}
             </Item>
           )}
         </Menu>
@@ -649,7 +717,7 @@ const ImgPage = () => {
       >
         <Spin spinning={loading}>
           {data.length == 0 && !listMode && (
-            <Empty description="暂无图片，快上传呀~" style={{ marginTop: 100 }} />
+            <Empty description={t('img.empty', '暂无图片，快上传呀~')} style={{ marginTop: 100 }} />
           )}
           {listMode ? (
             <Table
@@ -658,7 +726,7 @@ const ImgPage = () => {
               columns={columns as any}
               size="small"
               pagination={false}
-              locale={{ emptyText: <Empty description="暂无图片，快上传呀~" /> }}
+              locale={{ emptyText: <Empty description={t('img.empty', '暂无图片，快上传呀~')} /> }}
               scroll={{ x: 1000 }}
             />
           ) : (
@@ -722,7 +790,8 @@ const ImgPage = () => {
               }
             }}
             total={total}
-            showTotal={(t) => `共 ${t} 张`}
+            // 🔴 这个形参原本叫 `t` —— 与翻译器**同名会遮蔽**（本仓库第 5 次踩到，见手册 §7.146 C）⇒ 改名 total
+            showTotal={(total) => t('img.totalCount', '共 {total} 张', { total })}
           />
         </Spin>
       </RcResizeObserver>

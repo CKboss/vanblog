@@ -213,7 +213,8 @@ export default function RecycleBin(props) {
   };
 
   const titleColumn = {
-    title: t('recycle.colTitle', '标题'),
+    // 🔴 用 common.colTitle（从 recycle.colTitle 提升）：图片管理页的「被引用文章」弹窗也要用它
+    title: t('common.colTitle', '标题'),
     dataIndex: 'title',
     key: 'title',
     ellipsis: true,

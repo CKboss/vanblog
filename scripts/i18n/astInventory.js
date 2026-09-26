@@ -563,7 +563,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 //   ⚠️ 它被 `SystemConfig/tabs/ImgTab.jsx` 用，但**不能**放 `sysconf.img.*`：那会变成 **4 段**
 //   （`sysconf.img.enableWebp.label`）⇒ 命名守卫不允许；组件级命名空间正好 3 段。
 // 🔴 `storage` = 图床设置里的存储策略表单（`components/StaticForm`，与 `watermark` 同轮登记）。
-const REGISTERED_KEY_GROUPS = ['common', 'error', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `img` = 图片管理页（`pages/Static/img/**`，2026-09-26 期 5 第二批登记）。
+//   它是**页面**组（不是组件组）：这一页由 index.tsx + tools.tsx 两份文件拼成，共用 `img.*`。
+const REGISTERED_KEY_GROUPS = ['common', 'error', 'img', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

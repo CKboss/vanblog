@@ -141,6 +141,24 @@ const IDENTICAL_ZH_TW_OK = [
   'siteInfo.author.label', // 作者名字
   'siteInfo.authorDesc.label', // 作者描述
   'siteInfo.authorLogo.label', // 作者 Logo
+  // 🔴 期 5 第二批（图片管理页）新增 14 条：都是**简繁同形**的短词或纯占位符模板 ——
+  //    高 / 格式 / 尺寸 / 大小 / 列表 / 信息类短词，以及 `{count} 篇`、`文章 {id}`、`被 {count} 篇文章引用`
+  //    这类"只有量词与占位符"的模板（篇/文章/引用/被/等共 都简繁同形）。逐字核实过，不是偷懒。
+  'img.refsTitle', // 被引用文章
+  'img.refsColId', // 文章 ID
+  'img.colFormat', // 格式
+  'img.colDimensions', // 尺寸
+  'img.colBytes', // 大小
+  'img.colRefs', // 引用文章
+  'img.notReferenced', // 未被引用
+  'img.refPopoverTitle', // 被 {count} 篇文章引用
+  'img.refArticleFallback', // 文章 {id}
+  'img.refMore', // …等共 {count} 篇
+  'img.refCount', // {count} 篇
+  'img.viewList', // 列表
+  'img.uploadExists', // {name} 已存在!
+  'img.meta.height', // 高
+  'common.colValue', // 值（ObjTable 的列头，简繁同形）
 ];
 
 /**
@@ -286,12 +304,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 19,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 19）⇒ 遍历或解析器坏了`,
+      FILES.length >= 22,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 22）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 535,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 535）⇒ 疑似解析器坏了`,
+      calls.length >= 625,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 625）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -308,6 +326,9 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/SiteInfoForm/index.tsx',
       'src/components/WaterMarkForm/index.tsx',
       'src/components/StaticForm/index.tsx',
+      'src/pages/Static/img/index.tsx',
+      'src/pages/Static/img/tools.tsx',
+      'src/components/ObjTable/index.tsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -496,6 +517,231 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       '🔴 这些地方把 `t` 用作形参/解构名，会**遮蔽**组件的翻译器（不报错，只会让文案悄悄不跟随语言）：\n  ' +
         offenders.join('\n  ') +
         '\n修法：把那个形参/解构名改掉（例如 `map((tag) => …)`、`const { total: rowCount } = …`）。',
+    );
+  });
+
+  it('🔴 注入式翻译器模块的**每个调用点**都必须把 t 传进去（漏一个 = 那条文案永远中文，而且看不出来）', () => {
+    // ## 这条守的是什么
+    // 有两个**纯 JS/TS 模块**用"注入式翻译器"（不传 t 时落到 IDENTITY_T ⇒ 输出中文，逐字与改造前相同）：
+    //   · `components/RecycleBin/recycleCore.js`
+    //   · `pages/Static/img/tools.tsx`（`copyImgLink` / `mergeMetaInfo`）
+    // 🔴 "不传 t 也能跑、只是显示中文"这个设计的代价是：**漏传 t 不会报错**，界面上只是一直是中文。
+    // 所以要在这里用 AST 钉住：这些函数在 admin 源码里的**每一个调用点**，最后一个实参都必须是 `t`
+    //（或 options 对象里带 `t`，那是 `describeRecycleActionFailure` 的形状）。
+    const INJECTED = {
+      'src/components/RecycleBin/recycleCore.js': [
+        'recycleEmptyText', 'draftRecycleEmptyText', 'untitledText',
+        'restoreConfirmTitle', 'restoreConfirmText', 'draftRestoreConfirmTitle', 'draftRestoreConfirmText',
+        'purgeConfirmContent', 'draftPurgeConfirmContent', 'purgeOkText',
+        'purgeConfirmTitle', 'draftPurgeConfirmTitle',
+        'restoreSuccessText', 'purgeSuccessText', 'draftRestoreSuccessText', 'draftPurgeSuccessText',
+        'describeListFailure', 'normalizeDeletedList', 'actionText', 'labelText', 'articleLabel',
+      ],
+      'src/pages/Static/img/tools.tsx': ['copyImgLink', 'mergeMetaInfo'],
+    };
+    const OPTIONS_STYLE = new Set(['describeRecycleActionFailure']);
+    // 🔴 三类**合法**的"不传 t"，都要显式登记（否则这条判据会把设计好的行为当成缺陷）：
+    //  ① 定义模块自己：`const RECYCLE_EMPTY_TEXT = recycleEmptyText()` 这类**刻意 identity** 的常量
+    //     （既有消费方与 30 条单测就靠它保持逐字相同）；模块内部有没有漏传 t 由它自己的单测钉
+    //     （recycleBin.test.js 的"两条路径不许漂" + 黄金样本）。
+    //  ② **尚未接 i18n** 的消费方：走 identity ⇒ 输出与今天逐字相同（不是缺陷，是 backlog）。
+    //     🔴 这张表是**钉死的**：谁新增一个不传 t 的消费方，这里就会红（要么补 t、要么登记进表并说明）。
+    const NOT_YET_I18N_CONSUMERS = ['src/components/Editor/imgUpload.tsx'];
+    // 🔴 每个 it 都有自己的作用域：上一版直接用了**别的 it 里**定义的 stripComments ⇒ ReferenceError。
+    const noComments = (x) =>
+      x
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((l) => {
+          const y = l.trim();
+          return !y.startsWith('//') && !y.startsWith('*');
+        })
+        .join('\n');
+    const missing = [];
+    const unregistered = [];
+    let callSites = 0;
+    let checkedSites = 0;
+    const all = [];
+    (function walk(d) {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const a = path.join(d, e.name);
+        if (e.isDirectory()) {
+          if (!SCAN_SKIP_DIRS.has(e.name)) walk(a);
+        } else if (SCAN_EXTS.has(path.extname(e.name))) all.push(a);
+      }
+    })(path.join(adminRoot, 'src'));
+    for (const abs of all) {
+      const rel = path.relative(adminRoot, abs).split(path.sep).join('/');
+      let ast;
+      try {
+        ast = astInventory.parseSource(readFileSync(abs, 'utf8'), rel);
+      } catch (e) {
+        continue; // 解析失败由上面那条 AST 判据负责报（不重复报）
+      }
+      const raw = readFileSync(abs, 'utf8');
+      const isDefiningModule = rel in INJECTED;
+      const wired = astInventory.collectTCalls(raw, rel).length > 0;
+      if (!wired && !isDefiningModule) {
+        // 尚未接 i18n 的文件：只统计它有没有调用这些函数（有就必须登记在表里）
+        const names = Object.values(INJECTED).flat();
+        if (names.some((n) => new RegExp(`\\b${n}\\s*\\(`).test(noComments(raw)))) {
+          if (!NOT_YET_I18N_CONSUMERS.includes(rel)) unregistered.push(rel);
+        }
+        continue;
+      }
+      if (isDefiningModule) continue; // ① 定义模块自己豁免
+      const wanted = new Set(Object.values(INJECTED).flat());
+      astInventory.walkAst(ast.program, (nd) => {
+        if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
+        const name = nd.callee.name;
+        if (!wanted.has(name) && !OPTIONS_STYLE.has(name)) return;
+        const args = nd.arguments || [];
+        callSites += 1;
+        checkedSites += 1;
+        if (OPTIONS_STYLE.has(name)) {
+          const opt = args[1];
+          const props = opt && opt.type === 'ObjectExpression'
+            ? (opt.properties || []).map((pr) => pr.key && (pr.key.name || pr.key.value))
+            : [];
+          if (!props.includes('t')) missing.push(`${rel}: ${name}(…) 的 options 里没有 t`);
+          return;
+        }
+        const last = args[args.length - 1];
+        if (!last || last.type !== 'Identifier' || last.name !== 't') {
+          missing.push(`${rel}: ${name}(…) 的最后一个实参不是 t（实际 ${last ? last.type : '无实参'}）`);
+        }
+      });
+    }
+    assert.deepEqual(
+      unregistered,
+      [],
+      '🔴 这些文件调用了注入式翻译器函数、但自己**还没接 i18n**、也没登记在 NOT_YET_I18N_CONSUMERS 里：\n  ' +
+        unregistered.join('\n  ') +
+        '\n要么把 t 传进去（更好），要么登记进那张表并写明它属于哪一批。',
+    );
+    assert.ok(
+      checkedSites >= 20,
+      `只检查了 ${checkedSites} 个调用点（下界 20）⇒ 判据没在干活，这条会假绿`,
+    );
+    void callSites;
+    assert.deepEqual(
+      missing,
+      [],
+      '🔴 这些调用点没把翻译器传进去（那几条文案会**永远显示中文**，而且不报错、界面上看不出差别）：\n  ' +
+        missing.join('\n  ') +
+        '\n修法：把组件里的 t 作为最后一个实参传进去（options 形状的函数则放进 options）。',
+    );
+  });
+
+  it('🔴 被渲染进 `Modal.info/confirm/...` 的组件不许用 `useIntl()`（那是**独立 React 根**，没有 IntlProvider）', () => {
+    // ## 这条守的是什么（2026-09-26 期 5 第二批，活体探针抓到的真缺陷）
+    // antd 4 的 `Modal.info/confirm/success/error/warning` 会 `ReactDOM.render` 到一个**新建的容器**
+    // （`antd/es/modal/confirm.js` 里的 `render()` / `reactUnmount(container)`），而 umi 的 plugin-locale
+    // **不给这些静态方法打补丁** ⇒ 🔴 那棵树上没有 `IntlProvider`，content 里的组件调 `useIntl()` 会**直接抛错**，
+    // 表现为"点了没反应/弹窗空白"。实测：`ObjTable` 用了 `useIntl()` 之后，en-US 下右键「信息」弹窗**不出现**。
+    // 🔴 单测看不见这个（组件不跑），只有浏览器活体能抓到 ⇒ 所以在这里用**静态判据**把它钉住。
+    // 修法：那种组件用 `getIntl(getLocale())`（普通函数、不依赖 context），与 `app.jsx` 同一套路。
+    const stripComments = (src) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((l) => {
+          const x = l.trim();
+          return !x.startsWith('//') && !x.startsWith('*');
+        })
+        .join('\n');
+    const all = [];
+    (function walk(d) {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const a = path.join(d, e.name);
+        if (e.isDirectory()) {
+          if (!SCAN_SKIP_DIRS.has(e.name)) walk(a);
+        } else if (SCAN_EXTS.has(path.extname(e.name))) all.push(a);
+      }
+    })(path.join(adminRoot, 'src'));
+    assert.ok(all.length >= 100, `只扫到 ${all.length} 个源文件（下界 100）⇒ 遍历坏了，这条会假绿`);
+
+    const offenders = [];
+    let modalSites = 0;
+    let parseFails = [];
+    for (const abs of all) {
+      const raw = readFileSync(abs, 'utf8');
+      const rel = path.relative(adminRoot, abs);
+      const src = stripComments(raw);
+      // 🔴 用 **AST** 取 `Modal.<method>({ content: … })` 里 content 的那棵子树。
+      //    第一版是"从 Modal. 往后截 1500 字符、再从 content: 往后截 900 字符"——
+      //    🔴 那个窗口会**越过 Modal 调用本身**，把后面正常渲染的 `<SiteInfoForm>` 也算进来
+      //    （实测误报 2 条：InitPage 与 SiteInfo 的 Modal.warn）。窗口式判据在这种嵌套结构上不可靠。
+      let ast;
+      try {
+        // 🔴 AST 用**原始源码**解析，不要用剥掉注释的那份：本仓库的注释里有 JSX 片段
+        //    （例如 `{/* … */}` 被块注释正则啃掉后剩下的形状），实测剥完再解析会在
+        //    `Static/img/index.tsx` 上报 "Unexpected token"（原始文件是好的）。
+        //    剥注释只用于**文本级**的 `useIntl(` 判据（那里必须剥，否则注释里提到 useIntl 就会误报）。
+        ast = astInventory.parseSource(raw, rel);
+      } catch (e) {
+        parseFails.push(`${rel}: ${String(e.message).slice(0, 80)}`);
+        continue;
+      }
+      // 本文件的 import 映射：组件名 → 源文件绝对路径
+      const imports = {};
+      for (const m of src.matchAll(/import\s+([A-Z][A-Za-z0-9_]*)\s+from\s+'([^']+)'/g)) {
+        let target = m[2];
+        if (target.startsWith('@/')) target = path.join(adminRoot, 'src', target.slice(2));
+        else if (target.startsWith('.')) target = path.resolve(path.dirname(abs), target);
+        else continue;
+        const cand = ['.tsx', '.jsx', '.ts', '.js', '/index.tsx', '/index.jsx', '/index.ts', '/index.js']
+          .map((ext) => target + ext)
+          .find((f) => existsSync(f));
+        if (cand) imports[m[1]] = cand;
+      }
+      astInventory.walkAst(ast.program, (nd) => {
+        if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'MemberExpression') return;
+        if (!nd.callee.object || nd.callee.object.name !== 'Modal') return;
+        const method = nd.callee.property && (nd.callee.property.name || nd.callee.property.value);
+        if (!['info', 'confirm', 'success', 'error', 'warning', 'warn'].includes(method)) return;
+        modalSites += 1;
+        const arg0 = (nd.arguments || [])[0];
+        if (!arg0 || arg0.type !== 'ObjectExpression') return;
+        const contentProp = (arg0.properties || []).find(
+          (pr) => pr.type === 'ObjectProperty' && pr.key && (pr.key.name || pr.key.value) === 'content',
+        );
+        if (!contentProp) return;
+        const comps = new Set();
+        astInventory.walkAst(contentProp.value, (n2) => {
+          if (
+            n2.type === 'JSXOpeningElement' &&
+            n2.name &&
+            n2.name.type === 'JSXIdentifier' &&
+            /^[A-Z]/.test(n2.name.name)
+          ) {
+            comps.add(n2.name.name);
+          }
+        });
+        for (const comp of comps) {
+          const file = imports[comp];
+          if (!file) continue; // 第三方组件或本文件内定义的组件（不在本判据范围）
+          const csrc = stripComments(readFileSync(file, 'utf8'));
+          if (/\buseIntl\s*\(/.test(csrc)) {
+            offenders.push(
+              `${rel} 的 Modal.${method} content 里渲染了 <${comp}>，而 ${path.relative(adminRoot, file)} 用了 useIntl()`,
+            );
+          }
+        }
+      });
+    }
+    assert.deepEqual(
+      parseFails,
+      [],
+      '🔴 这些文件 AST 解析失败（判据没覆盖到它们 ⇒ 会假绿）：\n  ' + parseFails.join('\n  '),
+    );
+    assert.ok(modalSites >= 10, `只扫到 ${modalSites} 处 Modal.* 调用（下界 10）⇒ 判据没在干活，这条会假绿`);
+    assert.deepEqual(
+      offenders,
+      [],
+      '🔴 这些组件会在**没有 IntlProvider 的 React 根**里调 useIntl()（弹窗会抛错/空白，单测看不见）：\n  ' +
+        offenders.join('\n  ') +
+        '\n修法：把那个组件里的 `useIntl()` 换成 `getIntl(getLocale())`（渲染期调用，不要提到模块顶层）。',
     );
   });
 

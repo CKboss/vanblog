@@ -113,6 +113,17 @@ const BUDGET = {
   //   与 WaterMarkForm 一起做是为了让**整个「图床设置」页签**不再中英混排（活体探针发现只翻一个的话，
   //   页面上会同时出现「存储策略」与 "Visible watermark"）。
   'src/components/StaticForm/index.tsx': 0,
+  // 🔴 期 5 第二批（2026-09-26）：**图片管理页**两份文件一起翻完 ⇒ 都预算 0。
+  //   按页面切批次（不是按文件）：只翻 index.tsx 的话，右键「信息」弹窗里的字段名（来自 tools.tsx 的
+  //   `mergeMetaInfo`）与复制链接的 toast 仍是中文 ⇒ 半页中文比整页中文更糟。
+  //   ⚠️ `tools.tsx` 是**纯函数模块**（`Editor/imgUpload.tsx` 也调它）⇒ 用注入式翻译器：
+  //   🔴 不传 t 时输出与改造前逐字相同，所以那个既有调用方一个字都没改。
+  'src/pages/Static/img/index.tsx': 0,
+  'src/pages/Static/img/tools.tsx': 0,
+  // 🔴 期 5 第二批（同轮追加）：`ObjTable`（图片信息弹窗用的键值表，2 条）⇒ 预算 0。
+  //   是**活体探针**发现它的：图片管理页翻完后，en-US 下那个弹窗的表头仍是简体「属性/值」
+  //   ⇒ 再次印证"批次要按**页面**切"（这一页由 index.tsx + tools.tsx + ObjTable 三块拼成）。
+  'src/components/ObjTable/index.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -231,7 +242,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 22, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 25, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**

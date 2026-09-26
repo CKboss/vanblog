@@ -48,8 +48,9 @@ describe('图片管理：缩略图视图与工具栏', () => {
     const page = read('src/pages/Static/img/index.tsx');
     assert.match(page, /VAN_BLOG|van-blog-admin-img-view-mode/);
     assert.match(page, /<Radio\.Group/);
-    assert.match(page, /value="thumb">小图/);
-    assert.match(page, /value="large">大图/);
+    // 🔴 期 5 第二批起按钮文案走 t()：锚点换成**新形状**（key + zh-CN defaultMessage 一起钉），性质没放
+    assert.match(page, /value="thumb">\{t\('img\.viewThumb', '小图'\)\}/);
+    assert.match(page, /value="large">\{t\('img\.viewLarge', '大图'\)\}/);
     assert.match(page, /window\.localStorage\.setItem\(VIEW_MODE_KEY/);
   });
 
@@ -69,23 +70,40 @@ describe('图片管理：缩略图视图与工具栏', () => {
 
   it('列表视图给出图片/时间/引用/替换/删除', () => {
     const page = read('src/pages/Static/img/index.tsx');
-    assert.match(page, /<Radio.Button value="list">列表<\/Radio.Button>/);
+    // 🔴 同上：期 5 第二批起走 t()
+    assert.match(page, /<Radio\.Button value="list">\{t\('img\.viewList', '列表'\)\}<\/Radio\.Button>/);
     assert.match(page, /listMode \? \(/);
-    for (const title of ['图片', '名称', '格式', '尺寸', '大小', '上传时间', '引用文章', '操作']) {
-      assert.match(page, new RegExp(`title: '${title}'`), `列表缺少列 ${title}`);
+    // 🔴 期 5 第二批起列标题走 t()：判据从"有这句中文"升级成"**这句中文挂在正确的 key 上**"
+    //    （顺带把"同一性质两处口径"也钉住了：名称/操作用的是 common.*，不是 img.* 的第二份）
+    const COLS = {
+      图片: 'img.colImage',
+      名称: 'common.colName',
+      格式: 'img.colFormat',
+      尺寸: 'img.colDimensions',
+      大小: 'img.colBytes',
+      上传时间: 'img.colUploadedAt',
+      引用文章: 'img.colRefs',
+      操作: 'common.colOption',
+    };
+    for (const [title, key] of Object.entries(COLS)) {
+      assert.match(
+        page,
+        new RegExp(`title: t\\('${key.replace(/\./g, '\\.')}', '${title}'\\)`),
+        `列表缺少列 ${title}（或它的 key 不是 ${key}）`,
+      );
     }
     assert.match(page, /formatDateTime/);
     assert.match(page, /displayImgName/);
-    // 行内操作
-    assert.match(page, /复制链接/);
+    // 行内操作（🔴 同样按 key + 中文默认值一起钉；Markdown 那一项没有中文，形状不变）
+    assert.match(page, /\{t\('img\.actCopyLink', '复制链接'\)\}/);
     assert.match(page, />Markdown</);
-    assert.match(page, /下载/);
-    assert.match(page, />替换</);
-    assert.match(page, /检测水印/);
-    assert.match(page, />\s*删除\s*</);
+    assert.match(page, /\{t\('common\.download', '下载'\)\}/);
+    assert.match(page, /\{t\('img\.actReplace', '替换'\}<\/a>|\{t\('img\.actReplace', '替换'\)\}/);
+    assert.match(page, /\{t\('img\.actDetect', '检测水印'\)\}/);
+    assert.match(page, /\{t\('common\.delete', '删除'\)\}/);
     // 右键菜单也能替换
     assert.match(page, /data="replace"/);
-    assert.match(page, /替换图片/);
+    assert.match(page, /\{t\('img\.menuReplace', '替换图片'\)\}/);
   });
 
   it('引用文章按页批量查一次，不是每行一个请求', () => {
@@ -154,7 +172,8 @@ describe('图片管理：缩略图视图与工具栏', () => {
     assert.match(tools, /export const getThumbLink/);
     // 没有缩略图时要退回原图，老数据才不至于裂图
     assert.match(tools, /item\?\.realPath/);
-    assert.match(tools, /thumb: '缩略图'/);
+    // 🔴 tools.tsx 的字段名字典改成注入式翻译器了：锚点换成新形状（key + 中文默认值一起钉）
+    assert.match(tools, /thumb: t\('img\.meta\.thumb', '缩略图'\)/);
   });
 });
 
