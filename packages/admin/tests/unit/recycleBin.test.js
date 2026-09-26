@@ -307,12 +307,12 @@ describe('RecycleBin 组件接线（源码断言，已剔除注释）', () => {
     const COLS = {
       标题: 'common.colTitle', // 🔴 已从 recycle.colTitle 提升（图片管理页也要用）
       别名: 'recycle.colPathname',
-      分类: 'recycle.colCategory',
-      标签: 'recycle.colTags',
+      分类: 'common.colCategory', // 🔴 已从 recycle.* 提升（草稿/文章列表也用）
+      标签: 'common.colTags',
       更新时间: 'recycle.colUpdatedAt',
       删除时间: 'recycle.colDeletedAt',
       字数: 'recycle.colWordCount',
-      作者: 'recycle.colAuthor',
+      作者: 'common.colAuthor',
       // 🔴 「操作」已提升为 common.colOption（Token 页也要用它）⇒ 锚点跟着换，性质不变
       操作: 'common.colOption',
     };

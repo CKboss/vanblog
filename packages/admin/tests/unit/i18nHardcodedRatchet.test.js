@@ -137,6 +137,22 @@ const BUDGET = {
   'src/pages/LogManage/tabs/Login.jsx': 0,
   'src/pages/LogManage/tabs/Pipeline.tsx': 0,
   'src/pages/LogManage/tabs/System.tsx': 0,
+  // 🔴 期 5 第五批（2026-09-26）：**草稿管理页**整页 ⇒ 7 个文件都预算 0。
+  //   页面 = index（工具栏/批量操作/表头）+ columes（列与行内操作，`export const columns` 改成
+  //   🔴 `export const getColumns = (t)`）+ 新建草稿弹窗 + 导入草稿弹窗 + 三个共用字段组件
+  //   （AuthorField / TagSelectField / ExportFormatDropdown）。
+  //   ⚠️ 两处**已知中间态**（本轮刻意不动，都记在手册 §7.154）：
+  //     · `UpdateModal`(34 条) 与 `PublishDraftModal`(14 条) 共用一大片字段（是否加密/置顶优先级/密码/
+  //       是否隐藏/版权声明…）⇒ 与文章页那批一起做，避免同一片文案翻两遍；
+  //     · `services/van-blog/{tagTokens,exportFormats,accessPassword}` 是**服务层常量**（各有专门守卫钉着）
+  //       ⇒ 属"期 7 services"，本轮不动 ⇒ 切英文时标签字段的占位符/提示、导出格式说明、密码帮助仍是中文。
+  'src/pages/Draft/index.jsx': 0,
+  'src/pages/Draft/columes.jsx': 0,
+  'src/components/NewDraftModal/index.jsx': 0,
+  'src/components/ImportDraftModal/index.jsx': 0,
+  'src/components/AuthorField/index.tsx': 0,
+  'src/components/TagSelectField/index.jsx': 0,
+  'src/components/ExportFormatDropdown/index.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -255,7 +271,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 31, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 38, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**

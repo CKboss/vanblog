@@ -290,14 +290,14 @@ export default {
   // ── 🔴 期 9 第四批：資源回收筒（51 個 key）── 術語決定見 zh-CN 包同一處
   'recycle.missingIdRestore': '這筆記錄缺少 ID，無法還原',
   'recycle.missingIdPurge': '這筆記錄缺少 ID，無法永久刪除',
-  'recycle.colCategory': '分類',
-  'recycle.colTags': '標籤',
+  'common.colCategory': '分類',
+  'common.colTags': '標籤',
   'recycle.colUpdatedAt': '更新時間',
   'recycle.colDeletedAt': '刪除時間',
   'recycle.restore': '還原',
   'recycle.purge': '永久刪除',
   'recycle.noPermission': '目前帳號無操作權限',
-  'recycle.colAuthor': '作者',
+  'common.colAuthor': '作者',
   'recycle.colPathname': '別名',
   'recycle.colWordCount': '字數',
   'recycle.drawerTitleDraft': '資源回收筒（已刪除的草稿）',
@@ -749,5 +749,37 @@ export default {
   'log.systemCardTitle': '系統日誌（每 5s 自動重新整理）',
   'common.manualRefresh': '手動重新整理',
   'log.systemFetchFailed': '日誌拉取失敗（server 不可達或工作階段過期），每 5 秒會自動重試',
+
+
+  // ── 🔴 期 5 第五批（26 條）── 術語**與回收站那批逐字對齊**（同一頁面上會同時出現）：
+  //    回收站 → **資源回收筒**、恢复 → **還原**、永久删除 → **永久刪除**、发布 → **發布**；
+  //    另：导入/导出 → **匯入/匯出**、批量 → **批次**、创建 → **建立**、新建 → **新增**、
+  //    默认 → **預設**、搜索 → **搜尋**、文件 → **檔案**、内容 → **內容**。
+  'draft.batchDeleteOk': '批次刪除成功！',
+  'draft.batchDelete': '批次刪除',
+  'draft.batchExport': '批次匯出',
+  'draft.clearSelection': '取消選擇',
+  'draft.importOk': '匯入成功！',
+  'draft.recycleBinBtn': '資源回收筒',
+  'draft.colTitleTip': '標題過長會自動收縮',
+  'common.fieldRequired': '此項為必填項',
+  'common.searchOrSelect': '請搜尋或選擇',
+  'common.createdAt': '建立時間',
+  'common.publish': '發布',
+  'draft.deleteConfirmTitle': '確定刪除草稿 "{title}" 嗎？',
+  'draft.deleteConfirmContent': '刪除後草稿會移入本頁工具列的「資源回收筒」，可隨時還原；只有在資源回收筒裡「永久刪除」才不可復原。',
+  'draft.deleteOk': '刪除成功，已移入資源回收筒（可還原）!',
+  'draft.importHint': '從 markdown 檔案匯入，可多選',
+  'draft.importBtn': '匯入',
+  'draft.importTitle': '匯入草稿',
+  'common.articleTitle': '文章標題',
+  'common.titlePlaceholder': '請輸入標題',
+  'common.categoryPlaceholder': '請選擇分類',
+  'common.categoryTooltip': '首次使用請先在站點管理-資料管理-分類管理中新增分類',
+  'common.content': '內容',
+  'draft.newTitle': '新增草稿',
+  'common.createdAtPlaceholder': '不填預設為此刻',
+  'common.authorPlaceholder': '不填預設為登入者本人',
+  'common.export': '匯出',
 
 };

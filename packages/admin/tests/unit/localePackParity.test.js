@@ -123,7 +123,7 @@ const IDENTICAL_ZH_TW_OK = [
   // 🔴 期 9 第四批（回收站）新增 8 条：都是**简繁同形**的短词或纯标点/占位符模板 ——
   //    操作 / 作者（两个字简繁同形）、文章 / 草稿（同上）、「{title}」与（{message}）（只有引号与占位符）、
   //    （需要 {permission}）（需/要/perm 均同形）。逐字核实过，不是偷懒。
-  'recycle.colAuthor', // 作者
+  'common.colAuthor', // 作者（🔴 从 recycle.colAuthor 提升，键名跟着改）
   'recycle.titleQuoted', // 「{title}」
   'recycle.actionFallback', // 操作
   'recycle.labelArticle', // 文章
@@ -307,12 +307,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 28,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 28）⇒ 遍历或解析器坏了`,
+      FILES.length >= 35,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 35）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 705,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 705）⇒ 疑似解析器坏了`,
+      calls.length >= 760,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 760）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -338,6 +338,13 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/LogManage/tabs/Login.jsx',
       'src/pages/LogManage/tabs/Pipeline.tsx',
       'src/pages/LogManage/tabs/System.tsx',
+      'src/pages/Draft/index.jsx',
+      'src/pages/Draft/columes.jsx',
+      'src/components/NewDraftModal/index.jsx',
+      'src/components/ImportDraftModal/index.jsx',
+      'src/components/AuthorField/index.tsx',
+      'src/components/TagSelectField/index.jsx',
+      'src/components/ExportFormatDropdown/index.jsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }

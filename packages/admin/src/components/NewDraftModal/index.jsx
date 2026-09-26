@@ -5,14 +5,19 @@ import moment from 'moment';
 import { stopMenuKeydown } from '@/services/van-blog/editableKeyboard';
 import AuthorField from '../AuthorField';
 import TagSelectField from '../TagSelectField';
+import { useIntl } from 'umi';
 export default function (props) {
   const { onFinish } = props;
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  // ⚠️ 本文件的 t **没有**进任何 hook 的依赖数组；将来若要放，必须先用 useCallback([intl]) 包（§7.144 A）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   return (
     <ModalForm
-      title="新建草稿"
+      title={t('draft.newTitle', '新建草稿')}
       trigger={
         <Button key="button" type="primary">
-          新建草稿
+          {t('draft.newTitle', '新建草稿')}
         </Button>
       }
       width={450}
@@ -43,9 +48,9 @@ export default function (props) {
         required
         id="titleC"
         name="titleC"
-        label="文章标题"
-        placeholder="请输入标题"
-        rules={[{ required: true, message: '这是必填项' }]}
+        label={t('common.articleTitle', '文章标题')}
+        placeholder={t('common.titlePlaceholder', '请输入标题')}
+        rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
       />
       <AuthorField />
       <TagSelectField name="tagsC" />
@@ -54,10 +59,10 @@ export default function (props) {
         required
         id="categoryC"
         name="categoryC"
-        label="分类"
-        tooltip="首次使用请先在站点管理-数据管理-分类管理中添加分类"
-        placeholder="请选择分类"
-        rules={[{ required: true, message: '这是必填项' }]}
+        label={t('common.colCategory', '分类')}
+        tooltip={t('common.categoryTooltip', '首次使用请先在站点管理-数据管理-分类管理中添加分类')}
+        placeholder={t('common.categoryPlaceholder', '请选择分类')}
+        rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
         request={async () => {
           const { data: categories } = await getAllCategories();
           return categories?.map((e) => {
@@ -72,8 +77,8 @@ export default function (props) {
         width="md"
         name="createdAtC"
         id="createdAtC"
-        label="创建时间"
-        placeholder="不填默认为此刻"
+        label={t('common.createdAt', '创建时间')}
+        placeholder={t('common.createdAtPlaceholder', '不填默认为此刻')}
         showTime={{
           defaultValue: moment('00:00:00', 'HH:mm:ss'),
         }}

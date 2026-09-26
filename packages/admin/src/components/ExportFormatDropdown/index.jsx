@@ -3,6 +3,7 @@ import { DownOutlined } from '@ant-design/icons';
 import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { EXPORT_FORMATS } = require('@/services/van-blog/exportFormats');
+import { useIntl } from 'umi';
 
 /**
  * 「导出」下拉：md / mdz / zip 三选一。
@@ -14,7 +15,14 @@ const { EXPORT_FORMATS } = require('@/services/van-blog/exportFormats');
  * ⚠️ 用 antd 4 的 `overlay` + `<Menu>` 写法，不是 antd 5 的 `menu={{ items }}`
  * （本仓库后台仍是 antd 4.24，混用会静默不渲染）。
  */
-export default function ExportFormatDropdown({ payload, text = '导出', ...rest }) {
+export default function ExportFormatDropdown({ payload, text, ...rest }) {
+  // 🔴 原来 `text = '导出'` 是**默认参数**里的中文：默认参数在函数签名上，没法在那里调 hook ⇒
+  //    改成"默认值 undefined + 函数体里用 t() 兜底"，文案与行为都不变（调用方仍可显式传 text）。
+  // ⚠️ 菜单里的 `f.label` / `f.hint` 来自 `services/van-blog/exportFormats`（服务层常量，
+  //    被 exportFormats.test.js 钉着）⇒ 本轮不动，🔴 切英文时那三行格式说明仍是中文（已知中间态，期 7 闭合）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  const triggerText = text || t('common.export', '导出');
   const overlay = (
     <Menu
       onClick={({ key }) => {
@@ -35,7 +43,7 @@ export default function ExportFormatDropdown({ payload, text = '导出', ...rest
   return (
     <Dropdown overlay={overlay} trigger={['click']} {...rest}>
       <a onClick={(e) => e.preventDefault()}>
-        {text} <DownOutlined style={{ fontSize: 10 }} />
+        {triggerText} <DownOutlined style={{ fontSize: 10 }} />
       </a>
     </Dropdown>
   );

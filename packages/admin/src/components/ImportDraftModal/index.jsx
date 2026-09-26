@@ -6,10 +6,15 @@ import { Button, Form, Upload } from 'antd';
 import moment from 'moment';
 import { useState } from 'react';
 import TagSelectField from '../TagSelectField';
+import { useIntl } from 'umi';
 export default function (props) {
   const { onFinish } = props;
   const [visible, setVisible] = useState(false);
   const [form] = Form.useForm();
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  // ⚠️ 本文件的 t **没有**进任何 hook 的依赖数组；将来若要放，必须先用 useCallback([intl]) 包（§7.144 A）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const handleUpload = async (file) => {
     const vals = await parseMarkdownFile(file);
     if (vals) {
@@ -33,13 +38,13 @@ export default function (props) {
   return (
     <>
       <Upload showUploadList={false} multiple={true} accept={'.md'} beforeUpload={beforeUpload}>
-        <Button key="button" type="primary" title="从 markdown 文件导入，可多选">
-          导入
+        <Button key="button" type="primary" title={t('draft.importHint', '从 markdown 文件导入，可多选')}>
+          {t('draft.importBtn', '导入')}
         </Button>
       </Upload>
       <ModalForm
         form={form}
-        title="导入草稿"
+        title={t('draft.importTitle', '导入草稿')}
         visible={visible}
         onVisibleChange={(v) => {
           setVisible(v);
@@ -73,9 +78,9 @@ export default function (props) {
           required
           id="title"
           name="title"
-          label="文章标题"
-          placeholder="请输入标题"
-          rules={[{ required: true, message: '这是必填项' }]}
+          label={t('common.articleTitle', '文章标题')}
+          placeholder={t('common.titlePlaceholder', '请输入标题')}
+          rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
         />
         <TagSelectField name="tags" />
         <ProFormSelect
@@ -83,10 +88,10 @@ export default function (props) {
           required
           id="category"
           name="category"
-          label="分类"
-          placeholder="请选择分类"
-          tooltip="首次使用请先在站点管理-数据管理-分类管理中添加分类"
-          rules={[{ required: true, message: '这是必填项' }]}
+          label={t('common.colCategory', '分类')}
+          placeholder={t('common.categoryPlaceholder', '请选择分类')}
+          tooltip={t('common.categoryTooltip', '首次使用请先在站点管理-数据管理-分类管理中添加分类')}
+          rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
           request={async () => {
             const { data: categories } = await getAllCategories();
             return categories?.map((e) => {
@@ -101,14 +106,14 @@ export default function (props) {
           width="md"
           name="createdAt"
           id="createdAt"
-          label="创建时间"
+          label={t('common.createdAt', '创建时间')}
           showTime={{
             defaultValue: moment('00:00:00', 'HH:mm:ss'),
           }}
         />
         <ProFormTextArea
           name="content"
-          label="内容"
+          label={t('common.content', '内容')}
           id="content"
           fieldProps={{ autoSize: { minRows: 3, maxRows: 5 } }}
         />

@@ -605,7 +605,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 //   页面组用页面名（与 `img` 同一套做法）；卡片标题复用 `menu.site.customPage`，不新增同值 key。
 // 🔴 `log` = 日志管理页（`pages/LogManage/**`：index 的三个页签 + 系统/流水线/登录三个子表，期 5 第四批登记）。
 //   页签标签与子表的 headerTitle 是**同一个东西** ⇒ 共用 `log.system` / `log.pipeline` / `log.login`。
-const REGISTERED_KEY_GROUPS = ['common', 'customPage', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `draft` = 草稿管理页（`pages/Draft/**` + 它的新建/导入弹窗，期 5 第五批登记）。
+//   ⚠️ 与文章页共用的字段（作者/标签/分类/创建时间/导出）走 `common.*`，不放 `draft.*`。
+const REGISTERED_KEY_GROUPS = ['common', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

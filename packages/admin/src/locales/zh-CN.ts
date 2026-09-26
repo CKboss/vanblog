@@ -317,14 +317,14 @@ export default {
   //    ⚠️ 「归档」与「备份档」刻意分开：export 打出来的 zip 用**歸檔**，整站备份用**備份檔**（既有包口径）。
   'recycle.missingIdRestore': '这条记录缺少 ID，无法恢复',
   'recycle.missingIdPurge': '这条记录缺少 ID，无法永久删除',
-  'recycle.colCategory': '分类',
-  'recycle.colTags': '标签',
+  'common.colCategory': '分类',
+  'common.colTags': '标签',
   'recycle.colUpdatedAt': '更新时间',
   'recycle.colDeletedAt': '删除时间',
   'recycle.restore': '恢复',
   'recycle.purge': '永久删除',
   'recycle.noPermission': '当前账号无操作权限',
-  'recycle.colAuthor': '作者',
+  'common.colAuthor': '作者',
   'recycle.colPathname': '别名',
   'recycle.colWordCount': '字数',
   'recycle.drawerTitleDraft': '回收站（已删除的草稿）',
@@ -825,5 +825,42 @@ export default {
   'log.systemCardTitle': '系统日志（每5s自动刷新）',
   'common.manualRefresh': '手动刷新',
   'log.systemFetchFailed': '日志拉取失败（server 不可达或会话过期），每 5 秒会自动重试',
+
+
+  // ── 🔴 期 5 第五批：草稿管理页（index + columes + 新建/导入弹窗 + 三个共用字段组件，26 条）──
+  //    🔴 表头标题**复用** `menu.draft`（与图片管理复用 menu.img、自定义页面复用 menu.site.customPage 同做法）。
+  //    🔴 提升：`recycle.colCategory` / `recycle.colTags` / `recycle.colAuthor` → `common.col*`
+  //    （回收站的列、草稿/文章列表的列、表单字段标签是**同一个性质** ⇒ 一个 key；
+  //    同步改了 RecycleBin/index.jsx 与三处按 key 定位的守卫锚点）。
+  //    ⚠️ `common.fieldRequired`（此项为必填项）与既有 `init.field.required`（这是必填项）
+  //    🔴 是**两句不同的中文**，不是同值重复；要不要统一属中文文案修订，交站长裁定。
+  //    ⚠️ `common.createdAtPlaceholder`（不填默认为此刻）与 `siteInfo.since.placeholder` 同文，
+  //    但一个是**站点创建时间**、一个是**草稿创建时间** ⇒ 不同性质，刻意不合并。
+  'draft.batchDeleteOk': '批量删除成功！',
+  'draft.batchDelete': '批量删除',
+  'draft.batchExport': '批量导出',
+  'draft.clearSelection': '取消选择',
+  'draft.importOk': '导入成功！',
+  'draft.recycleBinBtn': '回收站',
+  'draft.colTitleTip': '标题过长会自动收缩',
+  'common.fieldRequired': '此项为必填项',
+  'common.searchOrSelect': '请搜索或选择',
+  'common.createdAt': '创建时间',
+  'common.publish': '发布',
+  'draft.deleteConfirmTitle': '确定删除草稿 "{title}" 吗？',
+  'draft.deleteConfirmContent': '删除后草稿会移入本页工具栏的「回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
+  'draft.deleteOk': '删除成功，已移入回收站（可恢复）!',
+  'draft.importHint': '从 markdown 文件导入，可多选',
+  'draft.importBtn': '导入',
+  'draft.importTitle': '导入草稿',
+  'common.articleTitle': '文章标题',
+  'common.titlePlaceholder': '请输入标题',
+  'common.categoryPlaceholder': '请选择分类',
+  'common.categoryTooltip': '首次使用请先在站点管理-数据管理-分类管理中添加分类',
+  'common.content': '内容',
+  'draft.newTitle': '新建草稿',
+  'common.createdAtPlaceholder': '不填默认为此刻',
+  'common.authorPlaceholder': '不填默认为登录者本人',
+  'common.export': '导出',
 
 };

@@ -6,14 +6,23 @@ import { useNum } from '@/services/van-blog/useNum';
 import { PageContainer } from '@ant-design/pro-layout';
 import { ProTable } from '@ant-design/pro-table';
 import RcResizeObserver from 'rc-resize-observer';
-import { useMemo, useRef, useState } from 'react';
-import { history } from 'umi';
-import { columns, draftKeysObj, draftKeysObjSmall } from './columes';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { history, useIntl } from 'umi';
+import { getColumns, draftKeysObj, draftKeysObjSmall } from './columes';
 import { Button, Space, message } from 'antd';
 import { batchExport, batchDelete } from '@/services/van-blog/batch';
 export default () => {
   const actionRef = useRef();
   const [colKeys, setColKeys] = useState(draftKeysObj);
+  // 🔴 这里的 t **必须**用 useCallback([intl]) 包：下面 `useMemo(() => getColumns(t), [t])`
+  //    把 t 放进了依赖数组 —— 不稳定的 t 会让每次渲染都重算列 ⇒ ProTable 重建
+  //    （本项目已因此踩过"抽屉永远 loading + 打爆限流"的坑，见 §7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+  const columns = useMemo(() => getColumns(t), [t]);
   const [simplePage, setSimplePage] = useState(false);
   const [simpleSearch, setSimpleSearch] = useState(false);
   const [recycleVisible, setRecycleVisible] = useState(false);
@@ -61,12 +70,12 @@ export default () => {
                 <a
                   onClick={async () => {
                     await batchDelete(selectedRowKeys, true);
-                    message.success('批量删除成功！');
+                    message.success(t('draft.batchDeleteOk', '批量删除成功！'));
                     actionRef.current.reload();
                     onCleanSelected();
                   }}
                 >
-                  批量删除
+                  {t('draft.batchDelete', '批量删除')}
                 </a>
                 <a
                   onClick={() => {
@@ -74,9 +83,9 @@ export default () => {
                     onCleanSelected();
                   }}
                 >
-                  批量导出
+                  {t('draft.batchExport', '批量导出')}
                 </a>
-                <a onClick={onCleanSelected}>取消选择</a>
+                <a onClick={onCleanSelected}>{t('draft.clearSelection', '取消选择')}</a>
               </Space>
             );
           }}
@@ -168,7 +177,8 @@ export default () => {
             simple: simplePage,
           }}
           dateFormatter="string"
-          headerTitle={simpleSearch ? undefined : '草稿管理'}
+          // 🔴 表头标题复用**菜单那一条** `menu.draft`（同一个东西 ⇒ 一处口径，与图片管理/自定义页面同做法）
+          headerTitle={simpleSearch ? undefined : t('menu.draft', '草稿管理')}
           options={simpleSearch ? false : true}
           toolBarRender={() => [
             <NewDraftModal
@@ -182,11 +192,11 @@ export default () => {
               key="importDraftMarkdown"
               onFinish={() => {
                 actionRef?.current?.reload();
-                message.success('导入成功！');
+                message.success(t('draft.importOk', '导入成功！'));
               }}
             />,
             <Button key="draftRecycleBinBtn" onClick={() => setRecycleVisible(true)}>
-              回收站
+              {t('draft.recycleBinBtn', '回收站')}
             </Button>,
           ]}
         />

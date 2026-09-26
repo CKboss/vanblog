@@ -9469,6 +9469,84 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.154 期 5 第五批：草稿管理页（47 条 / **7 个文件**）+ 三个 key 的提升，以及"模块级列定义怎么接 i18n"的标准解法
+
+**交付**：`pages/Draft/index.jsx`(7) + `pages/Draft/columes.jsx`(15) + `components/NewDraftModal`(10)
++ `components/ImportDraftModal`(11) + `components/AuthorField`(2) + `components/TagSelectField`(1)
++ `components/ExportFormatDropdown`(1) = **47 条 → 0**；语言包 **633 → 659 key**（新组 **`draft`**）；
+棘轮清单 **31 → 38 个文件**（都预算 0，🔴 **TOTAL 仍 53**）；`i18nKeyNaming` → **659**；
+`localePackParity` 自动发现下界 **28 → 35 个文件 / 705 → 760 个调用点**（实测 35 / 765）；
+🔴 提升 `recycle.col{Category,Tags,Author}` → `common.col*`。
+🔴 **浏览器活体 39/39（12–13 项判据 × 3 语），problems 0**：表头标题（复用 `menu.draft`）、工具栏三个入口、
+6 个列头、导入按钮的 `title` 属性、新建草稿弹窗（标题 + 5 个 label + 2 个 placeholder）、
+行内四个操作（含**更多下拉里的**导出/删除）、批量选中后的三个动作、批量删除 toast、
+**行内删除确认**（ICU `{title}` 模板 + 那段"移入回收站可恢复"的正文）与删除成功 toast。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-draft/`。
+
+#### A. 🔴 `export const columns = [...]` 这种**模块级列定义**怎么接 i18n（新形状，文章页马上要用同一套）
+草稿列表的列定义在**另一个模块**里（`Draft/columes.jsx` 导出 `columns`），而文案必须在**渲染期**取语言。
+做法：改成 **`export const getColumns = (t) => [...]`**，页面里：
+`const t = useCallback((id, dm, values) => intl.formatMessage({ id, defaultMessage: dm }, values), [intl]);`
+`const columns = useMemo(() => getColumns(t), [t]);`
+🔴 这里 **t 进了依赖数组** ⇒ 必须 `useCallback([intl])` 包（否则每次渲染都重算列 ⇒ ProTable 重建；
+本项目已因此踩过"抽屉永远 loading + 打爆限流"，§7.144 A）。两条既有守卫**都**打在这个点上（变异对照 M3/M4）：
+把 `[t]` 改成 `[]` ⇒ 红（陈旧语言闭包）；把 `useCallback` 拆掉 ⇒ 红（不稳定引用）。
+👉 `Article/columns.jsx`（39 条，下一个大页面）是**同一个形状** ⇒ 直接复用这套解法。
+⚠️ 另有两处结构改动：`AuthorField` 从**隐式返回**箭头组件改成块体（要用 hook）；
+`ExportFormatDropdown` 的 `text = '导出'` 是**默认参数**里的中文（签名上没法调 hook）
+⇒ 改成"默认值 undefined + 函数体里 `text || t('common.export', '导出')` 兜底"，调用方仍可显式传 text。
+
+#### B. 🔴 第三次"页面由更多组件拼成"：这次是 7 个文件，而且**还差 2 处**（都已记录，不是漏翻）
+顺着 JSX 里的自定义组件标签往下找，草稿页由 7 个文件拼成。🔴 但仍有两处**已知中间态**（刻意不做，理由写在棘轮注释里）：
+1. `UpdateModal`(34 条) 与 `PublishDraftModal`(14 条) **共用一大片字段**（是否加密 / 置顶优先级 / 密码 / 是否隐藏 /
+   版权声明 + 三段提示）⇒ 与文章页那批**一起做**，否则同一片文案翻两遍、还容易两处措辞不一致。
+   🔴 活体证据里看得见：en-US 的行内操作是 `["Edit","Publish","修改信息","Export","Delete"]` —— 中间那个就是 `UpdateModal` 的触发器。
+2. `services/van-blog/{tagTokens,exportFormats,accessPassword}` 是**服务层常量**（各有专门守卫钉着）⇒ 属"期 7 services"；
+   所以切英文时**标签字段的占位符与提示、导出格式说明、密码帮助**仍是中文。
+👉 **规矩补充：动手前把页面的组件闭包量一遍（逐个数 bare），并把"这一轮刻意不做的部分"写进棘轮注释与手册** ——
+中间态不可怕，🔴 **没记录的**中间态才可怕（下一个人会以为是漏翻）。
+
+#### C. 🔴 三个 key 的提升：`recycle.col{Category,Tags,Author}` → `common.col*`
+回收站的列、草稿/文章列表的列、表单里的字段标签说的是**同一个性质** ⇒ 一个 key。
+提升要同步改 **5 个文件 8 处**：`RecycleBin/index.jsx`(3) + `recycleBin.test.js` 的 COLS 映射(3)
++ `localePackParity` 白名单(1，键名跟着改) + `draftRecycleBin.test.js` 里那条**按 key 定位**的锚点(1) + 三份语言包。
+变异对照 M5：把 `common.colAuthor` 换回 `recycle.colAuthor` ⇒ 红（旧 key 已删，"必须在三份包里存在"）
+⇒ 🔴 提升是**真的做了**，不是新旧两处并存。
+👉 累计已提升 6 个：`recycle.colOption`/`colTitle`、`customPage.colIndex`、以及这三个 ⇒ **通用列头一律走 `common.*`**。
+
+#### D. 🔴 探针的三个"点不到"，全是尺子错、不是产品错（同族第三次）
+1. **`ColumnsToolBar` 把行内操作分两层**：`outs`（编辑/发布）平铺、`nodes`（修改信息/导出/删除）收进**"更多"下拉**
+   ⇒ 第一版只量平铺那几个，判成"导出/删除没翻"。修法：先展开下拉再采（`.ant-dropdown-menu-item`）。
+2. 🔴 **antd 下拉项点不动**：菜单项是 `<li class="ant-dropdown-menu-item"><a>删除</a></li>`，React 的 onClick 挂在 `<a>` 上；
+   `el.click()` 打在父 `<li>` 上**不会触发子元素的 handler** ⇒ 看起来"点不到删除"（而下拉项文本明明采到了）。
+   修法：`clickDeepByText()` —— 在文本匹配的元素里挑**最深**的那个（没有匹配后代的那个）点。
+   👉 **"文本对上了但点不动"通常是点在了包装元素上。**
+3. **播种名带时间戳**：`delConfirmTitle` 那条判据拿写死的 `'i18n probe draft'` 去整串比对模板渲染结果 ⇒ 必然红。
+   修法：只比"模板按 `{title}` 切开后的**前后缀**"（`delConfirmTemplate`）—— 这才是 ICU 插值该验的形状。
+⚠️ 还有一个**探针自身的 bug**：`if (!clicked) skip(...)` 之后**没有 return**，继续 `waitForSelector` ⇒ 假 fatal。
+👉 🔴 **skip 分支必须真的跳过后续步骤**，否则"跳过"会变成"崩溃"，而崩溃会让人以为是产品坏了。
+
+#### E. 🔴 术语对齐做成了**生成脚本里的闸门**（不靠记忆）
+草稿页与回收站在**同一个页面**上（工具栏那个「回收站」按钮打开的就是回收站抽屉）⇒ 术语必须逐字一致。
+本轮把对齐写进生成脚本：中文含「回收站」⇒ zh-TW 必须含 **資源回收筒**、en 必须含 **Recycle bin**；
+含「恢复」⇒ zh-TW 必须 **還原**；含「永久删除」⇒ en 必须 **Delete forever**（= `recycle.purge` 的既有值）。
+🔴 依据是**实测读出来的既有译文**（`recycle.drawerTitleDraft` / `recycle.restore` / `recycle.purge` 三份包的值），不是记忆。
+👉 **规矩：跨批复用的术语，用"从既有语言包读出来"的方式对齐，并写成闸门** —— 靠人记一定会漂（本项目已 4 次）。
+
+#### F. 基线
+- admin `node --test` **747 tests / 165 suites / 0 fail**；i18n 守卫组 **104**；
+- 变异对照 **7/7**（棘轮 ×2、逐字对账 ×1、🔴 useMemo 依赖 ×1、🔴 useCallback 稳定性 ×1、key 提升 ×1、语义空操作 ×1）；
+- 语言包 **659 key** ×3；`--zh-tw-audit`：659 key / **682** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **38 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（新翻的 1 个 `.tsx` 与 6 个 `.jsx` 都在门禁范围内，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **747/165/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.30b4b476.js` = **1,473,890 B**）；
+- 🔴 **真实剩余：95 → 88 个文件 / 1,269 → 1,222 条**（本批 −7 文件 / −47 条）。
+- 🔴 **下一批**：① `UpdateModal`(34) + `PublishDraftModal`(14) + `NewArticleModal`(22) + `ImportArticleModal`(19)
+  —— 🔴 这四个弹窗**共用一大片字段**，必须一批做完（B 段那个中间态就在这里闭合）；
+  ② `pages/Article/**`(56，被 10 个测试文件钉着)；③ `pages/Editor/**`(143 / 15 文件，最大)；
+  ④ `services/van-blog/{tagTokens,exportFormats,accessPassword}`（服务层常量，各有专门守卫）；
+  ⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.153 期 5 第四批：日志管理（整页 29 条）+ 🔴 一条口径裁定：`console.*` 里的中文**不是 UI 文案**，不翻也不计入
 
 **交付**：`pages/LogManage/index.jsx`(3) + `tabs/Login.jsx`(9) + `tabs/Pipeline.tsx`(13) + `tabs/System.tsx`(4)

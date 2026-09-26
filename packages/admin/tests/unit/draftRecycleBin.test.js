@@ -116,7 +116,8 @@ describe('草稿回收站入口与相关文案接线（源码断言，已剔除�
     assert.match(comp, /data-recycle-draft-warning/);
     // 🔴 期 9 第四批起列标题走 t()：锚点跟着换成**新形状**，但性质没放（作者列必须存在，
     //    而且它必须带 zh-CN 的 defaultMessage，否则语言包漏 key 时用户会看到裸 key）
-    const authorIdx = comp.indexOf(`title: t('recycle.colAuthor', '作者')`);
+    // 🔴 期 5 第五批：`recycle.colAuthor` 提升为 `common.colAuthor`（草稿/文章列表的作者字段是同一性质）
+    const authorIdx = comp.indexOf(`title: t('common.colAuthor', '作者')`);
     assert.ok(authorIdx > 0, '草稿模式缺少「作者」列（或它没接 i18n）');
     // 警示 description 说清「无法区分误删与发布归档」——这是 server 要求的诚实性
     assert.match(comp, /无法区分「误删」与「发布后归档」/);

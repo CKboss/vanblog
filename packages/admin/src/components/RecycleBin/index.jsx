@@ -221,7 +221,8 @@ export default function RecycleBin(props) {
     render: (text, record) => <span title={record?.title}>{record?.title ?? '-'}</span>,
   };
   const categoryColumn = {
-    title: t('recycle.colCategory', '分类'),
+    // 🔴 提升为 common.colCategory：草稿/文章列表的「分类」列与这里是同一个性质
+    title: t('common.colCategory', '分类'),
     dataIndex: 'category',
     key: 'category',
     width: 100,
@@ -229,7 +230,7 @@ export default function RecycleBin(props) {
     render: (_, record) => record?.category || '-',
   };
   const tagsColumn = {
-    title: t('recycle.colTags', '标签'),
+    title: t('common.colTags', '标签'),
     dataIndex: 'tags',
     key: 'tags',
     width: 140,
@@ -308,7 +309,7 @@ export default function RecycleBin(props) {
         categoryColumn,
         tagsColumn,
         {
-          title: t('recycle.colAuthor', '作者'),
+          title: t('common.colAuthor', '作者'),
           dataIndex: 'author',
           key: 'author',
           width: 100,

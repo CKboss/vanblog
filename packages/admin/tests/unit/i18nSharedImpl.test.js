@@ -193,6 +193,13 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/LogManage/tabs/Login.jsx': 0,
     'src/pages/LogManage/tabs/Pipeline.tsx': 0,
     'src/pages/LogManage/tabs/System.tsx': 0,
+    'src/pages/Draft/index.jsx': 0,
+    'src/pages/Draft/columes.jsx': 0,
+    'src/components/NewDraftModal/index.jsx': 0,
+    'src/components/ImportDraftModal/index.jsx': 0,
+    'src/components/AuthorField/index.tsx': 0,
+    'src/components/TagSelectField/index.jsx': 0,
+    'src/components/ExportFormatDropdown/index.jsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
