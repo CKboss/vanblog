@@ -9469,6 +9469,64 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.167 期 6 第三批：编辑器偏好设置弹窗（15 条）+ 🔴 把"语言包文件"的判据收回**一份权威**（两个尺子口径漂过一次）
+
+**交付**：`components/EditorProfileModal/index.tsx`(15) → **0**；语言包 **879 → 892 key**（新组 **`editorProfile`**；
+15 条文案只用 **13 个新 key** —— `开启`/`关闭` 四个选项标签复用 `common.enabled`/`common.disabled`，
+「保存成功！」提升为 **`common.saveSuccess`**，这句后台到处都在用）；棘轮清单 **74 → 75 个文件**（**TOTAL 仍 61**）；
+`i18nKeyNaming` → **892**；`localePackParity` 自动发现下界 **68 → 69 个文件 / 1110 → 1130 个调用点**（实测 69 / 1139）。
+🔴 **浏览器活体 24/24（zh-CN 7 + en-US 8 + zh-TW 9），problems 0、skipped 3**（三个 placeholder 不可观察，见 C 段）：
+弹窗标题 / 顶部 Alert / 三个字段标签 / 两个下拉选项 / **两个 tooltip**（本机缓存、软换行那两段长文案）/
+选择器里的选中项标签（`留在此頁` + 两个 `關閉` ← 复用的 `common.disabled` 真的生效）/ **保存成功的 toast**。
+zh-TW 实采：`編輯器偏好設定`、`儲存後行為`、🔴 **`本機快取`**（不是「本地緩存」）、`軟換行`、`儲存成功！`。
+证据：`vanblog_dev/i18n-browser-evidence/phase6-editor-profile/`。
+
+#### A. 🔴 `Editor/locales.ts` 那 16 条**不是"还没翻"**，它本身就是译文 ⇒ 两个尺子的口径要收回一份
+上一批的待办写着"给 `Editor/locales.ts` 那 16 条登记有理由的预算"。实测之后 🔴 **改成不做预算、而是修正口径**：
+那 16 条是 bytemd 生态**缺料**处我们手写的**译文数据** —— `@bytemd/plugin-mermaid` 不提供 `zh_Hant.json`
+（11 个繁中图表名手写），`@bytemd/plugin-math-ssr` 完全不带 locale（公式那几条三语都由我们给）。
+把它算进"待翻译工作量"= **叫下一个人去翻译一个语言包**（与 `src/locales/*.ts` 被排除是同一个理由）。
+🔴 而且实测发现：`inventory.js` **早就**这么分类了（`语言包（已多语言，不计入工作量）: 1 文件 / 字面量 16`），
+但 `pageSurface.js` 是后加的、直接调 `bareChinese` ⇒ **两个尺子口径漂了**（它把那 16 条算进编辑器页表面）。
+修法（一份权威）：判据挪进共享模块 —— `astInventory.isLocalePayloadFile(rel)`，
+`inventory.js` 与 `pageSurface.js` 都改用它；`pageSurface` 把这类文件**打印出来**（`ℹ️ 语言包/locale 数据（不计入工作量）`）
+而不是沉默跳过（🔴 沉默少报是这个工具最坏的失败模式）。
+配套钉子：`pageSurface` 从编辑器页入口必须**认出并说出** `Editor/locales.ts`、且**不得**把它计成"N 条"；
+判据本身有反证（`isLocalePayloadFile` 对 `locales.ts` / `src/locales/zh-CN.ts` 为真，对 `Editor/index.tsx` /
+`EditorProfileModal/index.tsx` 为假）。变异对照 M3 把判据改成恒 `false` ⇒ 红在那条钉子上。
+👉 🔴 **规矩：新工具复用旧口径时，要**调用同一份判据**，不要照抄一遍正则** —— 抄一遍就是两处口径，
+而"两处口径"迟早会漂（本项目已实测 3 次：`TOTAL_BUDGET` 与 sharedImpl 的总数、`i18nKeyNaming` 的下界、这次）。
+🔴 修完口径后：编辑器页表面 = **104 条 / 8 文件**（原报 135/10，其中 16 条是 locale 数据、`locales.ts` 不再单列）。
+
+#### B. 🔴 触发器藏在**下拉里**，而且触发器文字本身还没翻（已登记的中间态）
+探针第一版在页面上直接找 `<a>偏好设置</a>` ⇒ **一个都找不到**：那条 trigger 在页头「**操作**」按钮的
+`<Dropdown key="moreAction">` 菜单里，菜单没点开就不渲染。⇒ 先点「操作」再点菜单项。
+🔴 而「操作」与「偏好设置」这两个词都在 `pages/Editor/index.jsx`（**下一批**才翻）⇒ 现在 en-US 下
+页头是中文的「操作 → 偏好设置」，点开却是**全英文**的弹窗（活体已量到）。这是**已登记的中间态**，
+探针按字面中文找触发器（不按语言包值找），下一批翻完 `pages/Editor/index.jsx` 时这两处会一起变英文。
+
+#### C. 🔴 三个 placeholder **在活体里观察不到**（本项目第 3 次踩同一条）
+这个表单有 `initialValues`（afterSave / useLocalCache / softLineBreaks 都有默认值）⇒ antd Select 选中后
+**不渲染** placeholder 元素。第一版判据"三个 placeholder 必须等于语言包里的值"必然失败，
+而失败的样子很像"翻译没生效"⇒ 🔴 差点误判成缺陷。
+处理：判据换成**能观察到的东西**（选中项标签：`留在此頁` / 两个 `關閉`，后者正好把"复用 `common.disabled`"验了），
+placeholder 那三条记 **skip 并写明原因**（它们由"逐字对账 + 三份包一致"两条守卫覆盖）。
+👉 这是"placeholder 在有值时不可观察"的**第 3 次**（前两次：水印表单、自定义页面）⇒
+🔴 **规矩：写 UI 判据前先问"这个属性在当前状态下到底渲不渲染"**，不渲染就登记 skip，不要改成宽松匹配。
+
+#### D. 基线
+- admin `node --test` **765 tests / 168 suites / 0 fail**；i18n 守卫组 **115**；
+- 变异对照 **5/5**（标签退回硬编码 / key 改成包里不存在的 / 🔴 语言包判据改成恒 false / defaultMessage 改一个字 / 语义空操作）；
+- 语言包 **892 key** ×3；`--zh-tw-audit`：892 key / **721** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **75 个文件 / TOTAL 61**（9 条永久例外）；admin 类型门禁 **31/0**；
+- 矩阵（5 个阶段全 rc=0）：admin **765/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.bc62bebe.js` = **1,553,435 B**）；
+- 🔴 **真实剩余：57 → 56 个文件 / 864 → 849 条**（口径修正后 `locales.ts` 本来就不在里面）。
+- 🔴 **下一批**：① `pages/Editor/index.jsx`(**63**) —— 编辑器页主体（含本批登记的两个中间态：「操作」按钮与「偏好设置」触发器）；
+  ② `importMdzCore.js`(23)（.mdz 导入的纯逻辑，注入式翻译器）；③ `DataManage/**`(134) / `CommentManage`(71)；
+  ④ `SystemConfig` 收尾（`SiteInfo.tsx` 8 / `migrate.tsx` 5）；⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.166 期 6 第二批：编辑器的三个上传/转存插件（21 条）—— 🔴 注入链的**中间一环**原本没有判据（变异对照全绿），以及两处源码笔误的处理方式
 
 **交付**：`Editor/imgUpload.tsx`(5) + `Editor/fileUpload.tsx`(3) + `Editor/transferRemote.tsx`(13) = **21 条 → 0**；

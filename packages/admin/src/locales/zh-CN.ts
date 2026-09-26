@@ -1216,4 +1216,23 @@ export default {
   'editor.transferDone': '已转存 {transferred} 张外链图片到本站图床（跳过 {skipped} 张）',
   'editor.transferFailed': '外链图片转存失败！',
 
+
+  // ── 🔴 期 6 第三批：编辑器偏好设置弹窗（`EditorProfileModal`，15 条 → 13 个新 key + 2 条复用）──
+  //    复用：`common.enabled`（开启）/ `common.disabled`（关闭）—— 四个选项标签就是这两条各两次。
+  //    🔴 新增 `common.saveSuccess`（保存成功！）：这句在后台到处都会用到，放 common 而不是 editorProfile。
+  //    ⚠️ 软换行那条 tooltip 里 `Markdown` / `Enter` 是技术标识符，三份包原样保留。
+  'editorProfile.title': '编辑器偏好设置',
+  'common.saveSuccess': '保存成功！',
+  'editorProfile.storageNote': '此配置保存在浏览器存储中，切换设备需重新设置。',
+  'editorProfile.afterSaveLabel': '保存后行为',
+  'editorProfile.afterSavePlaceholder': '请选择保存后行为，默认留在此页面',
+  'editorProfile.stayHere': '留在此页',
+  'editorProfile.goBack': '返回之前页面',
+  'editorProfile.localCacheLabel': '本地缓存',
+  'editorProfile.localCacheTooltip': '默认关闭，开启后将在本地缓存编辑器内容，当本地内容比服务器内容更新时间更近时，将使用本地内容展示在编辑器中。',
+  'editorProfile.localCachePlaceholder': '是否开启本地缓存',
+  'editorProfile.softWrapLabel': '软换行',
+  'editorProfile.softWrapTooltip': '默认关闭，保持标准 Markdown：单独回车仍是同一段，需行末两个空格或空行才换行。开启后，按 Enter 或粘贴多行时会自动补两个空格写成软换行；已有文章不会在打开或保存时被改写。',
+  'editorProfile.softWrapPlaceholder': '是否自动补行末空格',
+
 };

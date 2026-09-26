@@ -96,7 +96,9 @@ function providesMultipleLanguages(src) {
 
 function classify(rel, src, inv) {
   const uiCount = inv.literals.size + inv.templates.size + inv.jsxTexts.size;
-  const looksLikePack = /(^|\/)locales?\.(ts|js|tsx|jsx)$/.test(rel) || /(^|\/)locales?\//.test(rel);
+  // 🔴 判据挪到共享模块（`astInventory.isLocalePayloadFile`）：`pageSurface.js` 也要用同一条，
+  //    两个尺子各写一份正则就是两处口径（本批实测已经漂过一次：pageSurface 把 locales.ts 算进了工作量）。
+  const looksLikePack = astInventory.isLocalePayloadFile(rel);
   // 🔴 判据从「有没有引用 umi 的 locale 运行时」改成「**提供了几种语言**」，因为前者会误判：
   // 一个合法的语言包文件**刻意不应该**在模块加载期调 `getLocale()`（它内部走 umi 的
   // `plugin.applyPlugins(...)`，依赖插件运行时已初始化 ⇒ 模块加载期调用会拿到 undefined），

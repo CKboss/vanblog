@@ -1106,4 +1106,20 @@ export default {
   'editor.transferDone': 'Transferred {transferred, plural, one {# remote image} other {# remote images}} into the image storage of this site ({skipped} skipped)',
   'editor.transferFailed': 'Could not transfer the remote images',
 
+
+  // ── 🔴 期 6 第三批（13 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  'editorProfile.title': 'Editor preferences',
+  'common.saveSuccess': 'Saved',
+  'editorProfile.storageNote': 'These preferences are stored in this browser, so you need to set them again on another device.',
+  'editorProfile.afterSaveLabel': 'After saving',
+  'editorProfile.afterSavePlaceholder': 'Choose what happens after saving; the default is to stay on this page',
+  'editorProfile.stayHere': 'Stay on this page',
+  'editorProfile.goBack': 'Go back to the previous page',
+  'editorProfile.localCacheLabel': 'Local cache',
+  'editorProfile.localCacheTooltip': 'Off by default. When it is on, the editor content is cached in this browser, and if the local copy is newer than the copy on the server, the local copy is shown in the editor.',
+  'editorProfile.localCachePlaceholder': 'Whether to cache the editor content in this browser',
+  'editorProfile.softWrapLabel': 'Soft wrap',
+  'editorProfile.softWrapTooltip': 'Off by default, which keeps standard Markdown: a single Enter stays in the same paragraph, and a line break needs two spaces at the end of the line or a blank line. When it is on, pressing Enter or pasting several lines adds the two trailing spaces automatically to make a soft wrap; existing posts are not rewritten when you open or save them.',
+  'editorProfile.softWrapPlaceholder': 'Whether to add the trailing spaces automatically',
+
 };

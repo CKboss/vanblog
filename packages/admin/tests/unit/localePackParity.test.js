@@ -337,12 +337,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 68,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 68）⇒ 遍历或解析器坏了`,
+      FILES.length >= 69,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 69）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1110,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1110）⇒ 疑似解析器坏了`,
+      calls.length >= 1130,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1130）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -402,6 +402,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/Editor/plugins/customContainer.tsx',
       'src/components/Editor/imgUpload.tsx',
       'src/components/Editor/transferRemote.tsx',
+      'src/components/EditorProfileModal/index.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。

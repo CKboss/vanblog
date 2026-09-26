@@ -53,6 +53,8 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
     'collectChineseThrows',
     'collectChineseMessageProps',
     'collectServerErrorCodes',
+    // 🔴 期 6 第三批新增：语言包/locale 数据文件的判据（`inventory.js` 与 `pageSurface.js` 共用一份权威）
+    'isLocalePayloadFile',
     'readPack',
     'validateKeyShape',
     'needsIcuPlural',
@@ -237,6 +239,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/Editor/imgUpload.tsx': 0,
     'src/components/Editor/fileUpload.tsx': 0,
     'src/components/Editor/transferRemote.tsx': 0,
+    'src/components/EditorProfileModal/index.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -369,6 +372,26 @@ test('i18n 共享实现 · 🔴 `pageSurface.js` 必须把**整页的块**都量
   //    `RevisionHistory/index.jsx` 的 `import { …20 行… } from './revisionCore'` 曾被
   //    "正则 + 200 字符窗口"整块漏掉（revisionCore.js 26 条没被量到），而当时那条钉子**没抓到**
   //    （它只查了两个名字、而且都在第 1 层）⇒ 🔴 工具的钉子必须覆盖"工具最容易坏的那种输入"。
+  // 🔴 期 6 第三批：`pageSurface.js` 必须把**语言包/locale 数据**文件挑出去（口径与 `inventory.js` 一致）。
+  //    `components/Editor/locales.ts` 里那 16 条中文**就是译文**（bytemd 的 mermaid 没有 zh_Hant、
+  //    math-ssr 完全不带 locale）⇒ 数它等于叫下一个人去"翻译一个语言包"。
+  //    第一版 pageSurface 直接调 bareChinese ⇒ 🔴 两个尺子口径漂了（它把 locales.ts 算进 16 条）。
+  const outEditor = run('packages/admin/src/pages/Editor/index.jsx', { SHOW_ALL: '1' });
+  assert.ok(
+    outEditor.includes('语言包/locale 数据（不计入工作量）') && outEditor.includes('Editor/locales.ts'),
+    '🔴 pageSurface 必须把 Editor/locales.ts 认成语言包并**说出来**（沉默少报与多报一样坏）：\n' +
+      outEditor.slice(0, 500),
+  );
+  assert.ok(
+    !/\d+ 条\s+packages\/admin\/src\/components\/Editor\/locales\.ts/.test(outEditor),
+    '🔴 Editor/locales.ts 不该被当成"待翻译工作量"计数（它是 locale 数据本身）',
+  );
+  // 🔴 判据本身也要有反证：共享模块那条 isLocalePayloadFile 必须认得这两种形状、且不误伤普通组件
+  assert.strictEqual(astInventory.isLocalePayloadFile('src/components/Editor/locales.ts'), true);
+  assert.strictEqual(astInventory.isLocalePayloadFile('src/locales/zh-CN.ts'), true);
+  assert.strictEqual(astInventory.isLocalePayloadFile('src/components/Editor/index.tsx'), false);
+  assert.strictEqual(astInventory.isLocalePayloadFile('src/components/EditorProfileModal/index.tsx'), false);
+
   const out2 = run('packages/admin/src/components/RevisionHistory/index.jsx', { SHOW_ALL: '1' });
   assert.ok(
     out2.includes('revisionCore.js'),

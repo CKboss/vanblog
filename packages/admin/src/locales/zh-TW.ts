@@ -1049,4 +1049,22 @@ export default {
   'editor.transferDone': '已轉存 {transferred} 張外部連結圖片到本站圖床（跳過 {skipped} 張）',
   'editor.transferFailed': '外部連結圖片轉存失敗！',
 
+
+  // ── 🔴 期 6 第三批（13 條）── 地區用詞：**設定**（设置/配置）/ **儲存**（保存）/ **裝置**（设备）/
+  //    **瀏覽器儲存空間**（浏览器存储）/ **本機快取**（本地缓存）/ 預設（默认）/ 顯示（展示）/ **貼上**（粘贴）/
+  //    既有（已有）/ 軟換行 / 伺服器。
+  'editorProfile.title': '編輯器偏好設定',
+  'common.saveSuccess': '儲存成功！',
+  'editorProfile.storageNote': '此設定儲存在瀏覽器儲存空間中，切換裝置需重新設定。',
+  'editorProfile.afterSaveLabel': '儲存後行為',
+  'editorProfile.afterSavePlaceholder': '請選擇儲存後行為，預設留在此頁面',
+  'editorProfile.stayHere': '留在此頁',
+  'editorProfile.goBack': '返回之前頁面',
+  'editorProfile.localCacheLabel': '本機快取',
+  'editorProfile.localCacheTooltip': '預設關閉，開啟後將在本機快取編輯器內容，當本機內容比伺服器內容更新時間更近時，將使用本機內容顯示在編輯器中。',
+  'editorProfile.localCachePlaceholder': '是否開啟本機快取',
+  'editorProfile.softWrapLabel': '軟換行',
+  'editorProfile.softWrapTooltip': '預設關閉，保持標準 Markdown：單獨按 Enter 仍是同一段，需行末兩個空格或空行才換行。開啟後，按 Enter 或貼上多行時會自動補兩個空格寫成軟換行；既有文章不會在開啟或儲存時被改寫。',
+  'editorProfile.softWrapPlaceholder': '是否自動補行末空格',
+
 };

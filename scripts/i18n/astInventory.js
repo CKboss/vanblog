@@ -539,6 +539,29 @@ const SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW = [
 ];
 
 /**
+ * 🔴 "这个文件是不是**语言包/locale 数据**"（一份权威，`inventory.js` 与 `pageSurface.js` 都用它）。
+ *
+ * ## 为什么要单列（2026-09-26 期 6 第三批）
+ * `components/Editor/locales.ts` 里那 16 条中文**不是"还没翻"**，它**本身就是译文**：
+ * bytemd 的 mermaid 插件不提供 `zh_Hant.json`，那 11 个繁中图表名是我们手写的；
+ * `@bytemd/plugin-math-ssr` 完全不带 locale 文件，公式那几条三语都由我们给。
+ * 🔴 把它算进"待翻译工作量"会**误导下一个人去翻译一个语言包**（与 `src/locales/*.ts` 被排除是同一个理由）。
+ * `inventory.js` 早就这么分类了（"语言包（已多语言，不计入工作量）"），
+ * 但 `pageSurface.js` 是后加的、直接调 bareChinese ⇒ 🔴 **两个尺子口径不一致**（它把 locales.ts 算进了 16 条）。
+ * 这条判据就是为了把口径收回一份。
+ *
+ * ⚠️ 只认**文件名/目录名**（`locales.ts` / `locale.js` / `locales/**`）；
+ * "是不是真的提供了多语言"由调用方再判（`inventory.js` 用 `providesMultipleLanguages`，
+ * 单一语言的会被它归到"丙-形似语言包"那一类，照样算工作量）。
+ */
+const LOCALE_PAYLOAD_FILE_RE = /(^|\/)locales?\.(ts|js|tsx|jsx)$/;
+const LOCALE_PAYLOAD_DIR_RE = /(^|\/)locales?\//;
+function isLocalePayloadFile(rel) {
+  const p = String(rel || '').split('\\').join('/');
+  return LOCALE_PAYLOAD_FILE_RE.test(p) || LOCALE_PAYLOAD_DIR_RE.test(p);
+}
+
+/**
  * 🔴 解析一份语言包（`export default { 'a.b': '值', … }`）为 key → value 映射。
  * ⚠️ **不要用正则**：值会跨行，`grep -A2 | tail -1` 会整体错位一个 key（实测踩过）。
  * 🔴 解析不到任何 key 时抛错（fail-loud），因为"0 个 key"会让所有集合断言恒真。
@@ -617,7 +640,8 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
 const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
 //   ⚠️ 移动端工具栏那 11 条**不在语言包里**：它们与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 editorLocale。
-'draft', 'editor', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
+// 🔴 `editorProfile` = 编辑器偏好设置弹窗（保存后行为 / 本机缓存 / 软换行）。
+'draft', 'editor', 'editorProfile', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
 //   组名用模块名（与 `accessPassword` / `coverBackfill` 同一套做法），因为它们的文案被多个页面共用。
 // 🔴 `request` = 全局请求错误提示（requestError.js 的四条兜底）。
 //   ⚠️ **不能**并进 `error.*`：那一组是服务端错误码的专用命名空间，
@@ -743,6 +767,7 @@ module.exports = {
   collectChineseThrows,
   collectChineseMessageProps,
   collectServerErrorCodes,
+  isLocalePayloadFile,
   SIMPLIFIED_ONLY_ZH,
   SIMPLIFIED_ZH_ALLOWED_IN_ZH_TW,
   readPack,

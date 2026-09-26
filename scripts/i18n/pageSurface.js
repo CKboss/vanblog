@@ -47,6 +47,14 @@ function walk(entry) {
     if (seen.has(file)) continue;
     if (!fs.existsSync(file)) { seen.set(file, { missing: true }); continue; }
     const src = fs.readFileSync(file, 'utf8');
+    const rel0 = path.relative(ROOT, file);
+    // 🔴 语言包/locale 数据文件**不算工作量**（口径与 inventory.js 一致，判据在共享模块里）：
+    //    `components/Editor/locales.ts` 里那 16 条中文**就是译文**（bytemd 的 mermaid 没有 zh_Hant、
+    //    math-ssr 完全不带 locale）⇒ 数它等于叫下一个人去"翻译一个语言包"。
+    if (astInventory.isLocalePayloadFile(rel0)) {
+      seen.set(file, { localePayload: true });
+      continue;
+    }
     let items = [];
     try {
       items = [...astInventory.bareChinese(src, file)];
@@ -98,6 +106,7 @@ function main() {
     const rel = path.relative(ROOT, file);
     if (info.missing) { console.log(`  ⚠️ 解析不到：${rel}`); continue; }
     if (info.parseError) { console.log(`  ⚠️ 解析失败：${rel} → ${info.parseError}`); continue; }
+    if (info.localePayload) { console.log(`  ℹ️ 语言包/locale 数据（不计入工作量）：${rel}`); continue; }
     if (!info.items.length) {
       // 🔴 `SHOW_ALL=1` 时把**已翻完**（0 条）的文件也列出来：这样守卫可以钉"**闭包成员**"这种
       //    与翻译进度**无关**的结构性质。之前钉子写的是"某某文件必须还在表里（因为它还没翻）"，
