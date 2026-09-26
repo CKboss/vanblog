@@ -1019,4 +1019,15 @@ export default {
   'request.forbidden': '權限不足！',
   'request.defaultError': '操作失敗，請稍後重試！',
 
+
+  // ── 🔴 期 6 第一批（6 條）── 地區用詞：編輯器的「撤销」在繁中是 **復原**（不是「撤銷」，
+  //    也不是回收站那批的「還原」—— 三個語境三個詞，這是刻意的）；表情 → **表情符號**；复制 → **複製**；
+  //    自定义 → **自訂**；高亮块 → **高亮區塊**；标记 → **標記**。
+  'editor.undo': '復原',
+  'editor.redo': '重做',
+  'editor.emoji': '表情符號',
+  'editor.insertMore': '插入 more 標記',
+  'editor.copied': '複製成功',
+  'editor.customContainer': '自訂高亮區塊',
+
 };

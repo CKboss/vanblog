@@ -6,7 +6,7 @@ import mediumZoom from '@bytemd/plugin-medium-zoom';
 import { Editor } from '@bytemd/react';
 import { Spin } from 'antd';
 import 'bytemd/dist/index.css';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BytemdPlugin } from 'bytemd';
 import '../../style/github-markdown.css';
 import '../../style/code-light.css';
@@ -21,7 +21,7 @@ import './mermaid-safety.css';
 import './toc-viewport.css';
 import { insertMore } from './insertMore';
 import { pickEditorLocale } from './locales';
-import { getLocale, useModel } from 'umi';
+import { getLocale, useIntl, useModel } from 'umi';
 import { customContainer } from './plugins/customContainer';
 import { extraSyntax } from './plugins/extraSyntax';
 import { defListHastHandlers } from 'remark-definition-list';
@@ -79,6 +79,16 @@ export default function EditorComponent(props: {
    * ⚠️ 切换语言走 `setLocale(lang, true)` 的整页 reload，因此每次挂载读一次就够。
    */
   const editorLocale = pickEditorLocale(getLocale());
+  // 🔴 编辑器**自己那几条**文案（撤销/重做/表情/插入 more/复制成功/自定义高亮块）走 admin 语言包：
+  //    bytemd 插件的 action 是纯对象、在工厂里就构造好了，拿不到 React 上下文 ⇒ 在这里（渲染期）把 t 传进去。
+  // 🔴 t 必须**稳定**（useCallback([intl])）：它会进下面 `plugins` 的 useMemo 依赖数组，
+  //    不稳定 ⇒ 每次渲染都重建插件数组 ⇒ 编辑器状态被重置（§7.144 A 那个坑）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id: string, defaultMessage: string, values?: Record<string, any>) =>
+      intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
   // 前台皮肤是 Apple 风格时，预览也用同一套字体（Maple Mono），做到所见即所得。
   // 站点设置里没有这个字段（/api/admin/meta 只返回 version/user/baseUrl 等），
   // 所以单独取一次 /api/admin/meta/site；取不到就当默认皮肤，不影响编辑器其它功能。
@@ -133,7 +143,7 @@ export default function EditorComponent(props: {
   const plugins = useMemo(() => {
     return withSafeViewerEffects([
       ...(mathPlugin ? [mathPlugin] : []),
-      customContainer(),
+      customContainer(t),
       // singleTilde:false —— 单个 `~x~` 让给下标（remark-supersub），删除线仍用 `~~x~~`
       gfm({ locale: editorLocale, singleTilde: false }),
       extraSyntax(),
@@ -145,23 +155,27 @@ export default function EditorComponent(props: {
       imgUploadPlugin(setLoading),
       fileUploadPlugin(setLoading),
       transferRemotePlugin(setLoading, props.onChange),
-      emoji(),
-      insertMore(),
+      emoji(t),
+      insertMore(t),
       rawHTML(),
-      historyIcon(),
+      historyIcon(t),
       Heading(),
-      customCodeBlock(),
+      customCodeBlock(t),
       LinkTarget(),
       // Keep mode="auto" (tab under 800px). Expand that toolbar; do not dump desktop icons.
       mobileToolbarPlugin({
         uploadImages: (files) => uploadEditorImages(files, setLoading),
+        // 🔴 移动端工具栏那 11 个标题**不进 admin 语言包**：它们与上游 bytemd 的 zh_Hans 值逐字相同
+        //    （headingText/bold/italic/quote/link/image/ul/code/h1/h2/h3）⇒ 直接读 editorLocale，
+        //    繁中与英文由上游给（实测 zh_Hant 是 標題/粗體/連結/圖像，真正的地区用词）。
+        locale: editorLocale,
       }),
       // Enter / paste can complete trailing spaces. Preview stays CommonMark (#311).
       softLineBreaksPlugin({
         getEnabled: () => softLineBreaksRef.current === true || softLineBreaksRef.current === 'open',
       }),
     ]);
-  }, [themeClass, mathPlugin, editorLocale]);
+  }, [themeClass, mathPlugin, editorLocale, t]);
 
   return (
     <div

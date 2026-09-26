@@ -207,14 +207,105 @@ test('编辑器文案跟随语言：上游复用 + 手写补充 + 渲染期选�
       `🔴 locales.ts 还在导出旧的单语常量 cn（导出的绑定：${lf2.exportedBindings.join(', ')}）`);
     assert.ok(lf2.exportedBindings.includes('EDITOR_LOCALES') && lf2.exportedBindings.includes('pickEditorLocale'),
       `🔴 locales.ts 必须导出 EDITOR_LOCALES 与 pickEditorLocale（实测导出：${lf2.exportedBindings.join(', ')}）`);
-    for (const frag of ['factory({ locale: editorLocale })', 'gfm({ locale: editorLocale, singleTilde: false })', 'mermaidForEditor({ locale: editorLocale })', 'locale={editorLocale}']) {
+    // 🔴 期 6 第一批新增第 5 处消费：**移动端工具栏**的 11 个标题改为读 editorLocale
+    //    （它们以前是手抄的中文，与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 不该自己再维护一份）
+    for (const frag of ['factory({ locale: editorLocale })', 'gfm({ locale: editorLocale, singleTilde: false })', 'mermaidForEditor({ locale: editorLocale })', 'locale={editorLocale}', 'locale: editorLocale,']) {
       assert.ok(editor.includes(frag), `缺少接线：${frag}`);
     }
-    assert.strictEqual((editor.match(/editorLocale/g) || []).length, 7, 'editorLocale 应当出现 7 次（1 定义 + 4 消费 + 2 个依赖数组）');
+    // 🔴 计数口径改成**只看代码行**（剔除注释）：上一版连注释一起数，
+    //    于是"在注释里提到 editorLocale"也会改变这个数（本批加了一段说明注释就红了）。
+    //    👉 计数量到的必须是**代码**，不是文本（同族教训：counters after head / 注释里的字面量）。
+    const editorCode = editor
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+      .join('\n');
+    assert.strictEqual(
+      (editorCode.match(/editorLocale/g) || []).length,
+      8,
+      'editorLocale 在**代码**里应当出现 8 次（1 定义 + 5 消费 + 2 个依赖数组）',
+    );
+  });
+
+  await t.test('C2 🔴 移动端工具栏那 11 个标题：上游三种语言的 locale 都必须有对应的 key（否则退化成显示 id）', () => {
+    // ## 为什么要有这条（2026-09-26 期 6 第一批）
+    // 工具栏标题从"手抄中文"改成"读上游 bytemd locale"（那 11 个值与上游 zh_Hans **逐字相同**）⇒
+    // 🔴 新风险：上游哪天改名/删 key，按钮就会**静默退化成 id**（直接显示 `bold`）。
+    // ⚠️ 这里**不 require `locales.ts`**（它是 .ts，裸 node 加载不了）⇒ 直接量上游 JSON + 那个 CJS 插件模块。
+    const mt = require('../../src/components/Editor/plugins/mobileToolbar.js');
+    const needed = mt.MOBILE_TOOLBAR_ACTION_KEYS.map((a) => a.localeKey)
+      .concat(mt.HEADING_LEVELS.map((h) => h.localeKey));
+    assert.strictEqual(needed.length, 11, `应当是 11 个标题，实测 ${needed.length}`);
+    const sources = {
+      'zh-CN': upstream('bytemd/locales/zh_Hans.json'),
+      'zh-TW': upstream('bytemd/locales/zh_Hant.json'),
+      'en-US': upstream('bytemd/locales/en.json'),
+    };
+    for (const [lang, locale] of Object.entries(sources)) {
+      for (const key of needed) {
+        assert.ok(
+          typeof locale[key] === 'string' && locale[key].length > 0,
+          `🔴 上游 ${lang} 的 locale 缺少 \`${key}\`（移动端工具栏会退化成显示 id）`,
+        );
+      }
+    }
+    // 🔴 identity 视图（不传 locale）必须与改造前**逐字相同** —— mobileToolbar.test.js 的黄金样本靠它
+    assert.deepEqual(
+      mt.MOBILE_TOOLBAR_ACTIONS.map((a) => a.title),
+      ['标题', '粗体', '斜体', '引用', '链接', '图片', '无序列表', '代码'],
+    );
+    assert.deepEqual(
+      mt.buildHeadingLevels(sources['zh-CN']).map((h) => h.title),
+      ['一级标题', '二级标题', '三级标题'],
+      'zh-CN 下三个标题级别必须与改造前逐字相同',
+    );
+    assert.deepEqual(
+      mt.buildHeadingLevels(undefined).map((h) => h.title),
+      ['h1', 'h2', 'h3'],
+      '没有 locale 时退化成可见占位（不是空白、也不是中文）',
+    );
+    // 🔴 繁中要用**上游的地区用词**（不是字形转换）：实测 zh_Hant 给的是 標題/粗體/連結/圖像
+    assert.equal(sources['zh-TW'].bold, '粗體');
+    assert.equal(sources['zh-TW'].link, '連結');
+    assert.equal(sources['zh-TW'].image, '圖像');
+    assert.equal(sources['zh-TW'].h1, '一級標題');
+    assert.equal(sources['en-US'].h1, 'Heading 1');
+    // 🔴 locales.ts 必须仍然把上游 bytemd 的核心 locale 并进这三种语言（否则上面这些 key 到不了编辑器）
+    const localesSrc = readOrFail(LOCALES_TS);
+    for (const spec of ["bytemd/locales/zh_Hans.json", "bytemd/locales/zh_Hant.json", "bytemd/locales/en.json"]) {
+      assert.ok(localesSrc.includes(spec), `🔴 locales.ts 必须并入上游 ${spec}（工具栏标题就靠它）`);
+    }
+  });
+
+  await t.test('C3 🔴 容器模板与 remark 识别的标题是**同一套契约的两端**（改一边就会让存量文章的容器不渲染）', () => {
+    // ## 为什么要有这条
+    // `plugins/customContainer.tsx` 把 `:::info{title="相关信息"}` 这类**中文标题**插进用户文章正文，
+    // 而 `plugins/customContainerRemark.js` 靠**同样那几个中文标题**识别并渲染容器。
+    // 🔴 这 6 条模板因此是"内容 + 协议"，本轮**刻意不翻**（棘轮预算 6、REQUIRED_EXCEPTIONS 反向钉住）；
+    // 但"两边必须一致"这件事以前**没有任何断言** ⇒ 谁改一边都不会红（存量文章的容器会静默变成普通段落）。
+    const containerSrc = readOrFail(path.join(SRC, 'components/Editor/plugins/customContainer.tsx'));
+    const remarkSrc = readOrFail(path.join(SRC, 'components/Editor/plugins/customContainerRemark.js'));
+    for (const title of ['相关信息', '注', '注意', '警告', '提示']) {
+      assert.ok(
+        containerSrc.includes(`title="${title}"`),
+        `🔴 容器模板里必须有 title="${title}"（它是插进用户正文的内容，也是识别契约的一端）`,
+      );
+      assert.ok(
+        remarkSrc.includes(title),
+        `🔴 remark 那端必须仍然识别「${title}」，否则存量文章里的这个容器会静默退化成普通段落`,
+      );
+    }
+    for (const kind of ['info', 'note', 'warning', 'danger', 'tip']) {
+      assert.ok(remarkSrc.includes(kind), `remark 端缺少容器类型 ${kind}`);
+      assert.ok(containerSrc.includes(`:::${kind}`), `模板端缺少容器类型 ${kind}`);
+    }
   });
 
   await t.test('D 🔴 editorLocale 进了两个依赖数组，且 pickEditorLocale 返回稳定引用（否则插件数组会被反复重建、编辑器状态被重置）', () => {
-    assert.ok(editor.includes('}, [themeClass, mathPlugin, editorLocale]);'), 'plugins 的 useMemo 依赖里必须有 editorLocale');
+    // 🔴 期 6 第一批起依赖里还有 t（插件的标题现在由 t 产出）：t 必须是 useCallback([intl]) 的稳定引用，
+    //    否则每次渲染都重建插件数组 ⇒ 编辑器状态被重置（这正是这条断言存在的理由）
+    assert.ok(editor.includes('}, [themeClass, mathPlugin, editorLocale, t]);'), 'plugins 的 useMemo 依赖里必须有 editorLocale 与 t');
+    assert.ok(/const t = useCallback\(/.test(editor), '🔴 t 必须用 useCallback 包成稳定引用（它会进 useMemo 依赖）');
+    assert.ok(/\[intl\],\n?\s*\);/.test(editor) || editor.includes('[intl],'), '🔴 useCallback 的依赖必须是 [intl]');
     assert.ok(editor.includes('}, [hasMath, mathPlugin, editorLocale]);'), 'math 插件的 useEffect 依赖里必须有 editorLocale');
     assert.ok(/return EDITOR_LOCALES\[raw\];/.test(locales), 'pickEditorLocale 必须返回 EDITOR_LOCALES 里的引用（不是新建对象）');
     assert.ok(/return EDITOR_LOCALES\['en-US'\];/.test(locales), '兜底必须返回 en-US 那一份，绝不能返回 undefined（否则工具栏 tooltip 会显示 undefined）');

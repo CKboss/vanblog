@@ -232,6 +232,18 @@ const BUDGET = {
   //   ⇒ 显示文案走 `sessionExpiredMessage(t)`，比对走这个常量，**两个东西**。
   //   它进 REQUIRED_EXCEPTIONS 反向钉住（第 6 类例外形状：与别层比对的协议字面量）。
   'src/services/van-blog/requestError.js': 1,
+  // 🔴 期 6 第一批（2026-09-26）：**编辑器插件的界面文案**。
+  //   移动端工具栏那 11 条**不进语言包**（与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 `editorLocale`，
+  //   繁中/英文由上游给）；剩下 6 条上游没有 ⇒ 走 `editor.*`，由 `components/Editor/index.tsx` 在渲染期注入 t。
+  //   🔴 `customContainer.tsx` 预算 **6**：那 6 条 `:::info{title="相关信息"}` 模板是被**插入用户文章正文**的
+  //   Markdown（= 内容，不是界面文案），而且 `customContainerRemark.js` 靠这几个中文标题**识别存量文章**里的容器
+  //   ⇒ 翻译它们会让老文章的容器不再渲染、还会往用户正文里写英文（内容 i18n 站长裁定：暂不做）。
+  'src/components/Editor/history.tsx': 0,
+  'src/components/Editor/emoji.tsx': 0,
+  'src/components/Editor/insertMore.tsx': 0,
+  'src/components/Editor/plugins/codeBlock.tsx': 0,
+  'src/components/Editor/plugins/mobileToolbar.js': 0,
+  'src/components/Editor/plugins/customContainer.tsx': 6,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -253,15 +265,28 @@ const BUDGET = {
 //   54 = 48（目标底）+ 4（Customizing 欠条）+ 2（永久例外：Caddy URL、导出说明.md）。
 // 🔴 **54 → 55（2026-09-26 期 7 第五批）：多出的 1 条是 `requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`**
 //   （= '登录失效'）—— **与服务端比对的线路字面量**，属永久例外（与 `已初始化` 同族）。
-//   ⇒ 账目现在是：🔴 **55 = 48（目标底）+ 4（Customizing 欠条）+ 3（永久例外：Caddy URL、导出说明.md、登录失效）**。
+//   ⇒ 账目现在是：55 = 48（目标底）+ 4（Customizing 欠条）+ 3（永久例外：Caddy URL、导出说明.md、登录失效）。
+// 🔴 **55 → 61（2026-09-26 期 6 第一批）：多出的 6 条是 `customContainer.tsx` 的容器模板** ——
+//   它们是被**插入用户文章正文**的 Markdown（内容，不是界面文案），而且 `customContainerRemark.js`
+//   靠这几个中文标题识别**存量文章**里的容器 ⇒ 属永久例外（内容 i18n 站长裁定：暂不做、也没预留）。
+//   ⇒ 账目现在是：🔴 **61 = 48（目标底）+ 4（Customizing 欠条）+ 9（永久例外：Caddy URL 1、导出说明.md 1、
+//   登录失效 1、容器模板 6）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 55
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 61
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
   { file: 'src/pages/InitPage/index.tsx', text: '已初始化', why: '协议字符串：匹配服务端 HttpException 文本，翻译会静默破坏初始化检测' },
   { file: 'src/pages/InitPage/setupKeyCore.js', text: '初始化密钥', why: '要照着敲进 shell 的命令与启动日志标签；服务端输出就是简体，翻译了 grep 抓不到' },
   { file: 'src/pages/user/Login/index.jsx', text: '语言 · Language', why: '静态双语 tooltip，服务于"还没切语言的人"，刻意不走 t()' },
+  // 🔴 期 6 第一批新增（第 7 类例外形状：**被插入用户文章正文的 Markdown 模板**）
+  //   这 6 条与 `customContainerRemark.js` 的 5 个标题是**同一套契约的两端**：一端写进文章、一端负责识别
+  //   ⇒ 只改一边，存量文章的容器就不再渲染（跨文件断言在 i18nEditorLocaleFollows.test.js）。
+  {
+    file: 'src/components/Editor/plugins/customContainer.tsx',
+    text: ':::info{title="相关信息"}',
+    why: '插入用户文章正文的 Markdown 模板（= 内容）；customContainerRemark.js 靠这个中文标题识别存量文章的容器',
+  },
   // 🔴 期 7 第五批新增（第 6 类例外形状：**与别层比对的协议字面量**）
   {
     file: 'src/services/van-blog/requestError.js',
@@ -381,7 +406,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 65, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 71, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
@@ -392,7 +417,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   //   —— **服务端产物的文件名**（`markdownExport.provider.ts` 写死的 `relativePath`），属**永久例外**（与 Caddy URL 同类）：
   //   翻译了它，用户在压缩包里就找不到那个文件。它已进 REQUIRED_EXCEPTIONS（反向钉住），
   //   而且 `exportFormats.test.js` 有一条**跨层断言**盯着服务端那个名字。
-  assert.strictEqual(TOTAL_BUDGET, 55, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  assert.strictEqual(TOTAL_BUDGET, 61, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
@@ -401,5 +426,5 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 6 → **7**（期 7 第五批）：新增第 6 类例外形状 —— **与别层比对的协议字面量**
   //   （`requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`；前五类：协议字符串 / 要照着敲的命令 /
   //   静态双语标签 / 中文文档 URL 锚点 / 服务端产物文件名）。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 7, '例外清单条数变了 ⇒ 必须是有意的');
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 8, '例外清单条数变了 ⇒ 必须是有意的');
 });

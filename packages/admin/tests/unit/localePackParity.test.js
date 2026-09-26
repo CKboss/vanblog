@@ -182,6 +182,8 @@ const IDENTICAL_ZH_TW_OK = [
   'coverBackfill.untitled',
   // 🔴 期 7 第三批：`全部打包 (.zip)` 简繁同形
   'export.formatZipLabel',
+  // 🔴 期 6 第一批：`重做` 简繁同形
+  'editor.redo',
   // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
   'time.secondsAgo',
   'time.daysAgo',
@@ -335,12 +337,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 60,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 60）⇒ 遍历或解析器坏了`,
+      FILES.length >= 65,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 65）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1090,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1090）⇒ 疑似解析器坏了`,
+      calls.length >= 1095,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1095）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -396,6 +398,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/CopyUploadBtn/index.tsx',
       'src/components/UploadBtn/index.tsx',
       'src/services/van-blog/requestError.js',
+      'src/components/Editor/history.tsx',
+      'src/components/Editor/plugins/customContainer.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -700,6 +704,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/requestError.js': [
         'sessionExpiredMessage', 'loginSuccessMessage', 'forbiddenMessage', 'defaultErrorMessage',
       ],
+      // 🔴 期 6 第一批：bytemd 插件工厂（action 是纯对象、在工厂里就构造好 ⇒ 只能由渲染期注入 t）
+      'src/components/Editor/history.tsx': ['historyIcon'],
+      'src/components/Editor/emoji.tsx': ['emoji'],
+      'src/components/Editor/insertMore.tsx': ['insertMore'],
+      'src/components/Editor/plugins/codeBlock.tsx': ['customCodeBlock'],
+      'src/components/Editor/plugins/customContainer.tsx': ['customContainer'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -792,10 +802,38 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         astInventory.collectTCalls(raw, rel).length > 0 || /const\s+t\s*=/.test(noComments(raw));
       if (!wired && !isDefiningModule) {
         // 尚未接 i18n 的文件：只统计它有没有调用这些函数（有就必须登记在表里）
-        const names = Object.values(INJECTED).flat();
-        if (names.some((n) => new RegExp(`\\b${n}\\s*\\(`).test(noComments(raw)))) {
-          if (!NOT_YET_I18N_CONSUMERS.includes(rel)) unregistered.push(rel);
+        // 🔴 判据从"正则找 `name(`"改成 **AST 找 CallExpression**（2026-09-26 期 6 第一批）：
+        //    正则会把**函数声明**也算成调用 —— 实测误报：`src/components/Editor/customContainer.tsx`
+        //    里那句 `export function customContainer(): BytemdPlugin {`（它是 `plugins/customContainer.tsx`
+        //    的一份**没人 import 的旧副本**，既不调用也不被调用）被当成"未登记的消费方"。
+        //    👉 又一次"结构化数据要解析、不要正则"（这条规矩本项目已违反 5 次，每次都在新判据里）。
+        const names = new Set(Object.values(INJECTED).flat());
+        let callsInjected = false;
+        try {
+          const ast = astInventory.parseSource(raw, rel);
+          const walkCall = (nd) => {
+            if (!nd || typeof nd !== 'object' || callsInjected) return;
+            if (
+              nd.type === 'CallExpression' && nd.callee &&
+              nd.callee.type === 'Identifier' && names.has(nd.callee.name)
+            ) {
+              callsInjected = true;
+              return;
+            }
+            for (const k of Object.keys(nd)) {
+              if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+              const v = nd[k];
+              if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && walkCall(x));
+              else if (v && typeof v === 'object' && v.type) walkCall(v);
+            }
+          };
+          walkCall(ast.program);
+        } catch (e) {
+          // 解析不了 ⇒ 退回正则（宁可误报也不要漏报），但**说出来**（沉默少报是这条判据最坏的失败模式）
+          console.log(`  ⚠️ ${rel} 解析失败，退回正则判据：${String(e.message).slice(0, 80)}`);
+          callsInjected = [...names].some((n) => new RegExp(`\\b${n}\\s*\\(`).test(noComments(raw)));
         }
+        if (callsInjected && !NOT_YET_I18N_CONSUMERS.includes(rel)) unregistered.push(rel);
         continue;
       }
       // ① 定义模块自己豁免 —— 🔴 但**只豁免"自己没有翻译器"的纯模块**：

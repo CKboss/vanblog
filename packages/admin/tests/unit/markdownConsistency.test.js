@@ -236,9 +236,10 @@ describe('编辑器预览 与 前台渲染：插件与流水线', () => {
       ['math', /import\('@bytemd\/plugin-math-ssr'\)|math\(/],
       ['highlight', /highlightSsr\(\)/],
       ['mermaid', /mermaid/],
-      ['customContainer', /customContainer\(\)/],
+      // 🔴 期 6 第一批起插件工厂收注入式翻译器（尾参 t）⇒ 锚点换形状，性质没放
+      ['customContainer', /customContainer\((t)?\)/],
       ['rawHTML', /rawHTML\(\)/],
-      ['codeBlock', /customCodeBlock\(\)/],
+      ['codeBlock', /customCodeBlock\((t)?\)/],
       ['linkTarget', /LinkTarget\(\)/],
       ['heading', /Heading\(\)/],
       // 6 种补充语法（==高亮== / 上下标 / :emoji: / 定义列表 / GitHub 提示块 / [[toc]]）

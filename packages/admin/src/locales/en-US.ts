@@ -1077,4 +1077,13 @@ export default {
   'request.forbidden': 'You do not have permission to do that',
   'request.defaultError': 'The action failed. Please try again later.',
 
+
+  // ── 🔴 期 6 第一批（6 keys）── 英文人工写；`more marker` 指文章里的 `<!-- more -->` 摘要分割标记。
+  'editor.undo': 'Undo',
+  'editor.redo': 'Redo',
+  'editor.emoji': 'Emoji',
+  'editor.insertMore': 'Insert the more marker',
+  'editor.copied': 'Copied',
+  'editor.customContainer': 'Custom callout',
+
 };

@@ -60,7 +60,11 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   结果 🔴 **期 7 第三批与第四批都忘了把它调上来**（844、854 都没写），而它一直绿 —— 判据在悄悄变松。
 //   ⇒ 改成 `n === BASELINE_KEY_COUNT`：漏更就红，多更也红，逼着每批都记账。
 //   账目：739（期5批8）→ 768（期5批9）→ 804（期5批10）→ 815（期7批2）→ 844（期7批3）→ 854（期7批4）→ **858**（期7批5）。
-const BASELINE_KEY_COUNT = 858;
+// 🔴 858 → **864**（期 6 第一批：编辑器自己的 6 条界面文案，新组 `editor`）。
+//   🔴 只 +6 而不是 +17：移动端工具栏那 11 条与上游 bytemd 的 zh_Hans 值**逐字相同**
+//   （headingText/bold/italic/quote/link/image/ul/code/h1..h3）⇒ 直接读 editorLocale、不进语言包
+//   （少维护 33 条，也不会与 bytemd 升级漂移）。
+const BASELINE_KEY_COUNT = 864;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

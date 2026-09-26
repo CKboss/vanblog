@@ -615,7 +615,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `coverBackfill` = 服务层 `services/van-blog/coverBackfill.js`（补封面的汇总行标签与空结果文案）。
 //   与 `cover`（弹窗自己的文案）分开：一个是**服务层模块**、一个是组件，跟 `accessPassword` 的分组方式一致。
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
-const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', 'draft', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
+const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
+//   ⚠️ 移动端工具栏那 11 条**不在语言包里**：它们与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 editorLocale。
+'draft', 'editor', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
 //   组名用模块名（与 `accessPassword` / `coverBackfill` 同一套做法），因为它们的文案被多个页面共用。
 // 🔴 `request` = 全局请求错误提示（requestError.js 的四条兜底）。
 //   ⚠️ **不能**并进 `error.*`：那一组是服务端错误码的专用命名空间，

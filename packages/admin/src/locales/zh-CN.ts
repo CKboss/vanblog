@@ -1174,4 +1174,22 @@ export default {
   'request.forbidden': '权限不足！',
   'request.defaultError': '操作失败，请稍后重试！',
 
+
+  // ── 🔴 期 6 第一批：编辑器自己的界面文案（bytemd 插件的 action 标题 + 一条 toast，6 条）──
+  //    🔴 **移动端工具栏那 11 条不在这里**：实测它们与上游 `bytemd/locales/zh_Hans.json` 的值
+  //    **逐字相同**（headingText=标题 / bold=粗体 / italic=斜体 / quote=引用 / link=链接 / image=图片 /
+  //    ul=无序列表 / code=代码 / h1..h3=一级..三级标题）⇒ 直接读 `pickEditorLocale()` 合成的那个对象，
+  //    繁中/英文由**上游**给（实测 zh_Hant 是 標題/粗體/連結/圖像/一級標題 —— 真正的地区用词）。
+  //    👉 收益具体：少维护 11×3 = 33 条，而且不会与 bytemd 升级漂移。
+  //    🔴 剩下这 6 条是上游**没有**的（撤销/重做/表情/插入 more/复制成功/自定义高亮块）⇒ 走 admin 语言包，
+  //    由 `components/Editor/index.tsx` 在渲染期把 t 传给插件工厂（action 是纯对象，拿不到 React 上下文）。
+  //    ⚠️ `customContainer` 那 6 条 `:::info{title="相关信息"}` 模板**不翻**：它们是被插入用户文章正文的
+  //    Markdown（= 内容），而且 `customContainerRemark.js` 靠这几个中文标题识别存量文章里的容器。
+  'editor.undo': '撤销',
+  'editor.redo': '重做',
+  'editor.emoji': '表情',
+  'editor.insertMore': '插入 more 标记',
+  'editor.copied': '复制成功',
+  'editor.customContainer': '自定义高亮块',
+
 };

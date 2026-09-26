@@ -10,22 +10,48 @@
 const BYTEMD_SPLIT_MIN_WIDTH = 800;
 const MOBILE_TOOLBAR_CLASS = 'vanblog-mobile-toolbar';
 
-const MOBILE_TOOLBAR_ACTIONS = [
-  { id: 'heading', title: '标题' },
-  { id: 'bold', title: '粗体' },
-  { id: 'italic', title: '斜体' },
-  { id: 'quote', title: '引用' },
-  { id: 'link', title: '链接' },
-  { id: 'image', title: '图片' },
-  { id: 'ul', title: '无序列表' },
-  { id: 'code', title: '代码' },
+// 🔴 多语言（2026-09-26 期 6 第一批）：这 11 个标题以前是**手抄的中文**，
+//    实测与上游 `bytemd/locales/zh_Hans.json` 的值**逐字相同**（headingText=标题、bold=粗体、italic=斜体、
+//    quote=引用、link=链接、image=图片、ul=无序列表、code=代码、h1/h2/h3=一级/二级/三级标题）。
+//    ⇒ 🔴 不再自己维护一份：直接读 `pickEditorLocale()` 合成出来的那个对象（`Editor/index.tsx` 传进来），
+//    繁中/英文由**上游**给（实测 zh_Hant 用 標題/粗體/連結/圖像/一級標題，是真正的地区用词）。
+//    ⚠️ 兜底 `|| id`／`|| ('h' + level)` 只是"上游哪天删了 key"时的可见退化（不会静默空白）；
+//    🔴 `editorLocales.test.js` 里有一条断言钉住"三种语言的 locale 都必须含这 11 个 key"。
+const MOBILE_TOOLBAR_ACTION_KEYS = [
+  { id: 'heading', localeKey: 'headingText' },
+  { id: 'bold', localeKey: 'bold' },
+  { id: 'italic', localeKey: 'italic' },
+  { id: 'quote', localeKey: 'quote' },
+  { id: 'link', localeKey: 'link' },
+  { id: 'image', localeKey: 'image' },
+  { id: 'ul', localeKey: 'ul' },
+  { id: 'code', localeKey: 'code' },
 ];
 
 const HEADING_LEVELS = [
-  { level: 1, title: '一级标题' },
-  { level: 2, title: '二级标题' },
-  { level: 3, title: '三级标题' },
+  { level: 1, localeKey: 'h1' },
+  { level: 2, localeKey: 'h2' },
+  { level: 3, localeKey: 'h3' },
 ];
+
+function buildMobileToolbarActions(locale) {
+  const L = locale || {};
+  return MOBILE_TOOLBAR_ACTION_KEYS.map((a) => ({ id: a.id, title: L[a.localeKey] || a.id }));
+}
+
+function buildHeadingLevels(locale) {
+  const L = locale || {};
+  return HEADING_LEVELS.map((h) => ({ level: h.level, title: L[h.localeKey] || `h${h.level}` }));
+}
+
+/**
+ * 🔴 identity 视图：用**上游 zh_Hans** 合成（不是手抄一份中文）⇒ 既有测试
+ * （`mobileToolbar.test.js` 里 `title === '粗体'` 那些断言）一个字都不用改，
+ * 而这个文件里也**一条中文字面量都不剩**。
+ */
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const BYTEMD_ZH_HANS = require('bytemd/locales/zh_Hans.json');
+const MOBILE_TOOLBAR_ACTIONS = buildMobileToolbarActions(BYTEMD_ZH_HANS);
 
 const ICONS = {
   bold: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M4 2.5h4.6c1.9 0 3.2 1.1 3.2 2.7 0 1-.6 1.9-1.5 2.3 1.2.4 2 1.4 2 2.6 0 1.8-1.5 3-3.5 3H4V2.5zm2.1 4.4h2.2c.9 0 1.4-.5 1.4-1.2S9.2 4.6 8.3 4.6H6.1v2.3zm0 4.6h2.6c1 0 1.6-.5 1.6-1.3s-.6-1.3-1.6-1.3H6.1V11.5z"/></svg>',
@@ -153,16 +179,20 @@ function createToolButton(action, onClick) {
   return button;
 }
 
-function createHeadingSelect(ctx) {
+function createHeadingSelect(ctx, locale) {
+  const L = locale || {};
+  // 🔴 aria-label 与下拉占位项也读上游 locale（`headingText`）：这两处是**无障碍/占位**文案，
+  //    漏掉的话读屏软件在英文界面下仍会念中文（"看不见的那部分文案"教训之一）
+  const headingLabel = L.headingText || 'heading';
   const select = document.createElement('select');
   select.className = 'vanblog-mobile-heading';
-  select.setAttribute('aria-label', '标题');
+  select.setAttribute('aria-label', headingLabel);
   select.setAttribute('data-tool', 'heading');
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = '标题';
+  placeholder.textContent = headingLabel;
   select.appendChild(placeholder);
-  HEADING_LEVELS.forEach(({ level, title }) => {
+  buildHeadingLevels(locale).forEach(({ level, title }) => {
     const option = document.createElement('option');
     option.value = String(level);
     option.textContent = title;
@@ -182,8 +212,11 @@ function createMobileToolbarElement(ctx, options) {
   const wrap = document.createElement('div');
   wrap.className = MOBILE_TOOLBAR_CLASS;
   wrap.setAttribute('data-vanblog-mobile-toolbar', 'true');
-  wrap.appendChild(createHeadingSelect(ctx));
-  MOBILE_TOOLBAR_ACTIONS.filter((action) => action.id !== 'heading').forEach((action) => {
+  const locale = (options && options.locale) || undefined;
+  wrap.appendChild(createHeadingSelect(ctx, locale));
+  buildMobileToolbarActions(locale)
+    .filter((action) => action.id !== 'heading')
+    .forEach((action) => {
     wrap.appendChild(
       createToolButton(action, () => {
         if (action.id === 'image') {
@@ -193,7 +226,7 @@ function createMobileToolbarElement(ctx, options) {
         applyToolbarAction(ctx, action.id);
       }),
     );
-  });
+    });
   return wrap;
 }
 
@@ -221,6 +254,17 @@ function syncMobileToolbar(root, createBar) {
   return { mounted: false };
 }
 
+/**
+ * 🔴 `options.locale` 是 `pickEditorLocale()` 合成的那个对象（期 6 第一批加的）：
+ * 工具栏 11 个标题从它里面读，不再手抄中文（那些值与上游 bytemd 的 zh_Hans 逐字相同）。
+ *
+ * ⚠️🔴 **类型权威是同目录的 `mobileToolbar.d.ts`**：TS 解析这个模块时**优先用 .d.ts**，
+ * 所以在 .js 里写 JSDoc `@param`/`@typedef` **不会生效**（本批实测：写了 typedef 之后
+ * `components/Editor/index.tsx` 仍然报 TS2345，因为 .d.ts 里没有 `locale` 这个字段）。
+ * 👉 **规矩：改 `.js` 模块的签名时，先看有没有同名 `.d.ts`；有就改它，别在 .js 里补 JSDoc 类型。**
+ *
+ * @param {{ uploadImages?: Function, locale?: Record<string, string> }} [options]
+ */
 function mobileToolbarPlugin(options) {
   const pluginOptions = options || {};
   return {
@@ -258,6 +302,10 @@ function mobileToolbarPlugin(options) {
 
 module.exports = {
   BYTEMD_SPLIT_MIN_WIDTH,
+  MOBILE_TOOLBAR_ACTION_KEYS,
+  HEADING_LEVELS,
+  buildMobileToolbarActions,
+  buildHeadingLevels,
   MOBILE_TOOLBAR_ACTIONS,
   MOBILE_TOOLBAR_CLASS,
   applyToolbarAction,

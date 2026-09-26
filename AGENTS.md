@@ -9469,6 +9469,106 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.165 期 6 第一批：编辑器插件的界面文案（17 条）—— 🔴 其中 11 条**不该进语言包**（与上游 bytemd 逐字相同），以及 `.d.ts` 才是类型权威
+
+**交付**：`Editor/plugins/mobileToolbar.js`(11) + `Editor/history.tsx`(2) + `emoji.tsx`(1) + `insertMore.tsx`(1)
++ `plugins/codeBlock.tsx`(1) + `plugins/customContainer.tsx` 的菜单标签(1) = **17 条 → 0**；
+语言包 **858 → 864 key**（🔴 **只 +6**，新组 **`editor`**）；棘轮清单 **65 → 71 个文件**，🔴 **TOTAL 55 → 61**
+（多的 6 条是容器模板 = 内容/协议，见 C 段）；`REQUIRED_EXCEPTIONS` **7 → 8**
+（🔴 第 7 类例外形状：**被插入用户文章正文的 Markdown 模板**）；`i18nKeyNaming` → **864**。
+🔴 **浏览器活体 19/19（zh-CN 5 + en-US 7 + zh-TW 7），problems 0、skipped 2**（已登记的延期项）：
+桌面工具栏 26 个图标的 **tippy tooltip**（实测 en-US：`Undo / Redo / Emoji / Insert the more marker / Custom callout`
++ 上游那批 `Heading 1..6 / Bold / Italic / Quote / Link / Image / Code block / Strikethrough / Task list / Table / Mermaid…`；
+zh-TW：`復原 / 重做 / 表情符號 / 插入 more 標記 / 自訂高亮區塊` + `粗體 / 連結 / 圖像 / 一級標題 / Mermaid圖表 / 心智圖 / 時間軸`），
+以及 🔴 **视口压到 700px 之后**才出现的移动端工具栏（en `Bold/Italic/Quote/Link/Image/Unordered list/Code` +
+下拉 aria `heading` 与 `Heading 1..3`；zh-TW `粗體/…/代碼` + aria `標題` + `一級標題…`）。
+证据：`vanblog_dev/i18n-browser-evidence/phase6-editor/`。
+
+#### A. 🔴 11 条**不该进语言包**：它们与上游 bytemd 的 zh_Hans 值**逐字相同**
+移动端工具栏的标题以前是**手抄的中文**。逐字比对上游 `bytemd/locales/zh_Hans.json`：
+`headingText=标题`、`bold=粗体`、`italic=斜体`、`quote=引用`、`link=链接`、`image=图片`、`ul=无序列表`、
+`code=代码`、`h1/h2/h3=一级/二级/三级标题` —— 🔴 **11/11 全中**。
+⇒ 改成从 `pickEditorLocale()` 合成的那个对象里读（`Editor/index.tsx` 把 `locale: editorLocale` 传进工厂）：
+① 🔴 **少维护 33 条**（11 × 3 语言），② **不会与 bytemd 升级漂移**，③ 繁中拿到的是**上游的地区用词**
+（实测 `粗體 / 連結 / 圖像 / 一級標題`，不是字形转换），英文同理（`Bold / Link / Image / Heading 1`）。
+剩下 6 条上游**没有**（撤销/重做/表情/插入 more 标记/复制成功/自定义高亮块）⇒ 走 admin 语言包 `editor.*`，
+由 `Editor/index.tsx` 在**渲染期**把 t 注入插件工厂（bytemd 的 action 是**纯对象**、在工厂里就构造好，拿不到 React 上下文）。
+⚠️ 其中 `message.success('复制成功')` 是 `message.*`（脱离 React 树的独立根，§7.151）⇒ 用**模块级 `let t`**（工厂注入），
+不要在模块加载期取 intl；🔴 而且变量名必须叫 `t` —— `collectTCalls` 只认 `t(...)` / `formatMessage(...)` 两种被调名，
+第一版叫 `copyToastT` ⇒ **两头都不认**（既不算"已接 i18n"、那条 defaultMessage 也仍被算成裸中文）。
+⚠️ 还有个坑：工厂参数**不能也叫 `t`**（会遮蔽模块级那个 `t` ⇒ 变成"赋给自己"、永远是 IDENTITY_T，而且看不出来）⇒ 用 `injectedT`。
+👉 🔴 **规矩：接第三方组件的文案前，先量"我们的字符串是不是上游 locale 的逐字副本"** —— 是就**读上游**
+（一个属性一个权威），不要复制进自己的语言包（`Editor/locales.ts` 那份 66 条里 62 条是副本，同一个教训）。
+🔴 并且给它加了钉子（C2）：上游三种语言的 locale 里**必须有这 11 个 key**（上游改名 ⇒ 按钮会静默退化成显示 `bold`），
+外加"identity 视图与改造前逐字相同"、"没有 locale 时退化成 `h1/h2/h3` 这种**可见**占位而不是空白"。
+
+#### B. 🔴 `.js` 模块的**类型权威是同目录的 `.d.ts`**；在 `.js` 里写 JSDoc 类型**不生效**
+给 `mobileToolbarPlugin` 加 `locale` 字段之后，`components/Editor/index.tsx` 撞 **TS2345**。三次尝试（都实测过）：
+① 在 `.js` 里写内联 `@param {{ uploadImages?: …, locale?: … }}` ⇒ 错误里报的参数类型**只有 uploadImages**；
+② 改成 `@typedef` + `@property` ⇒ 🔴 **仍然一样**；
+③ 打开同目录的 **`mobileToolbar.d.ts`**（手写声明文件）⇒ 它才是 TS 眼里的权威，
+加上 `locale?: Record<string, string>` 后类型门禁立刻回到 **31/0**。
+👉 🔴 **规矩：改 `.js` 模块的签名时，先看有没有同名 `.d.ts`；有就改它，别在 `.js` 里补 JSDoc 类型。**
+⚠️ 而且 🔴 **变异对照 harness 看不见类型级缺陷**（它只跑 `node --test`）：把 `.d.ts` 里的 `locale` 删掉，
+harness 报"全绿"⇒ 这条性质只能靠**类型门禁本身** + 本轮那三次实测来钉。
+👉 已登记待办：给 harness 加一个"跑类型门禁"的变异类别（否则**类型层的守卫永远没有变异对照**）。
+
+#### C. 🔴 6 条容器模板是"内容 + 协议"，刻意不翻；两端一致性**第一次**有了断言
+`:::info{title="相关信息"}` 这类模板是**被插入用户文章正文**的 Markdown（= 内容；站长裁定：内容 i18n 暂不做、也没预留），
+而 `customContainerRemark.js` 靠**同样那几个中文标题**识别并渲染存量文章里的容器 ⇒ 翻译它们会让老文章的容器
+静默退化成普通段落、还会往用户正文里写英文。⇒ 棘轮给 `customContainer.tsx` 预算 **6**、进 `REQUIRED_EXCEPTIONS`
+（第 7 类例外形状），并 🔴 新增一条**跨文件断言**（C3）：5 个中文标题（相关信息/注/注意/警告/提示）与
+5 种容器类型（info/note/warning/danger/tip）**两端都必须还在**。（此前"两边必须一致"这件事**没有任何断言**：改一边不会红。）
+
+#### D. 🔴 探针的三处尺子错，其中一处是**假绿**
+1. **bytemd 的工具栏 tooltip 不是 `title` 属性**：图标是 `.bytemd-toolbar-icon.bytemd-tippy`，
+   文案由 **tippy.js** 在 hover 时才渲染进 `.tippy-content` ⇒ 第一版按 `[title]` 采到**空数组**，
+   而"en-US 无汉字"那条判据 🔴 **因此假绿**（空集合当然没有汉字）。
+   修法：逐个 hover 采集（26 个图标），把 tooltips 并进反向判据、并扣掉已登记的延期项。
+   👉 🔴 **反向判据必须先证明"采到了东西"**（空集恒真是这类判据的经典假绿；同族：§7.164 B 的空转断言）。
+2. 下拉类 action 的 tooltip 会把子项一起渲染（实测 `"Custom calloutinfonotewarningdangertip"`、`"Heading 1Heading 2…"`）
+   ⇒ 判据要用 **includes**、不能全等。
+3. 移动端工具栏要**把视口压到 800px 以下**才渲染（bytemd 的 tab 模式阈值 `BYTEMD_SPLIT_MIN_WIDTH`）⇒ 先 1600 采桌面、再 700 采移动端。
+⚠️ 顺带量到一条**既有噪声**：编辑器会去拉外部字体 `static.zeoseven.com/zsft/442/main/result.css`，
+本环境解析不到 ⇒ `net::ERR_NAME_NOT_RESOLVED` + 一条 console.error（已登记为可接受；换域名/换文件会重新变红）。
+🔴 已登记的延期项（活体**实采**，不是推演）：en-US 工具栏仍有 3 条中文 tooltip
+`剪切板图片上传 / 上传附件并插入链接 / 外链图片转存`（= `imgUpload.tsx` 5 + `fileUpload.tsx` 3 + `transferRemote.tsx` 13，共 21 条，下一批）。
+
+#### E. 🔴 判据收窄一次 + 一个**死代码**发现
+"未接 i18n 的消费方"那条判据原用**正则** `name(` 找调用 ⇒ 把**函数声明**也算成调用：
+`src/components/Editor/customContainer.tsx` 里那句 `export function customContainer(): BytemdPlugin {` 被误报。
+🔴 顺带查出：那个文件是 `plugins/customContainer.tsx` 的一份**逐字副本**（只差 import 路径），
+而且 **没有任何文件 import 它** ⇒ 🔴 **死代码**（旧副本）。已登记待办（删除要单独一批 + 构建验证，本轮不动）。
+判据改成 **AST 找 CallExpression**（解析失败才退回正则，并且**打印出来**）。
+👉 又一次"结构化数据要解析、不要正则"（本项目已违反 5 次，每次都在新判据/新工具里）。
+
+#### F. 🔴 一次矩阵假红的四步定性（`markdownExport.provider.spec.ts › 外链图片抓得到就打包…`）
+① 不是本轮改动（本轮只碰 admin 的编辑器插件与语言包；这条是**服务端**导出用例）；
+② 单独跑绿（`jest src/provider/export/markdownExport.provider.spec.ts` ⇒ **9 passed / 7.2s**）；
+③ **全量重跑绿**（288 套件 / 4238 用例 / 0 FAIL）；
+④ 不是真缺陷：它要**真抓一张外链图片**，失败时的实测现象是 zip 里只剩 `外链测试.md`
+（既没有 `.mdz`、也没有 `导出说明.md`）⇒ 与 `assertSafeRemoteUrl` 那条同属**网络/DNS 敏感**类（本项目已 6 次）。
+👉 已登记待办：把外链抓取注入化（给一个本地 fixture server），别让 CI 靠运气。
+
+#### G. 基线
+- admin `node --test` **765 tests / 168 suites / 0 fail**（+2 = C2/C3 两条新钉子）；i18n 守卫组 **115**；
+- 变异对照 **6/6**（工具栏退回 id / `historyIcon()` 漏传 t / 拿掉 `locale: editorLocale` /
+  🔴 改容器模板的中文标题（跨文件契约）/ 🔴 删掉一个 localeKey（C2 的"11 个 key"）/ 语义空操作）；
+- 语言包 **864 key** ×3；`--zh-tw-audit`：864 key / **718** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **71 个文件 / TOTAL 61**（🔴 其中 **9 条永久例外**：Caddy URL 1、导出说明.md 1、登录失效 1、容器模板 6）；
+  admin 类型门禁 **31/0**（`.d.ts` 补了 `locale` 字段之后）；
+- 矩阵：admin **765/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**、生产构建 rc=0（`umi.09c20a88.js` = **1,543,660 B**）；
+  jest 第一次跑有 1 条网络假红（四步定性见 F），**重跑 288 / 4238（4234 + 4 skip）/ 0 FAIL**；
+- 🔴 **真实剩余：65 → 60 个文件 / 902 → 885 条**；编辑器页面表面还剩 **156 条 / 13 文件**
+  （`pages/Editor/index.jsx` 63、`importMdzCore` 23、`Editor/locales.ts` 16 ← **locale 数据本身**、
+  `EditorProfileModal` 15、`transferRemote` 13、`customContainer` 6 ← 内容契约、`imgUpload` 5 …）。
+- 🔴 **下一批**：① `Editor/imgUpload.tsx`(5) + `fileUpload.tsx`(3) + `transferRemote.tsx`(13) ⇒
+  把 en-US 工具栏那 3 条已登记的中文 tooltip 清掉（顺带把 `imgUpload.tsx` 从 `NOT_YET_I18N_CONSUMERS` 删掉、
+  并给 `copyImgLink` 传 t）；② `EditorProfileModal`(15) + `pages/Editor/index.jsx`(63) —— 编辑器页主体；
+  ③ `importMdzCore`(23)；④ `DataManage/**`(134) / `CommentManage`(71)；⑤ `SystemConfig` 收尾；
+  ⑥ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.164 期 7 第五批：全局请求错误提示（`requestError.js`，4 条）—— 🔴 "线路字面量 vs 显示文案"拆开、在 en-US 下**活体验了 401**，顺带查出两条**空转断言**
 
 **交付**：`requestError.js` 的四条（`登录失效` / `登录成功！` / `权限不足！` / `操作失败，请稍后重试！`）显示文案全部走 t；

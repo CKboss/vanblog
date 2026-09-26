@@ -228,6 +228,12 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/CopyUploadBtn/index.tsx': 0,
     'src/components/UploadBtn/index.tsx': 0,
     'src/services/van-blog/requestError.js': 1,
+    'src/components/Editor/history.tsx': 0,
+    'src/components/Editor/emoji.tsx': 0,
+    'src/components/Editor/insertMore.tsx': 0,
+    'src/components/Editor/plugins/codeBlock.tsx': 0,
+    'src/components/Editor/plugins/mobileToolbar.js': 0,
+    'src/components/Editor/plugins/customContainer.tsx': 6,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -245,14 +251,16 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
   }
   assert.strictEqual(
     total,
-    55,
+    61,
+    // 🔴 55 → 61（期 6 第一批）：多的 6 条是 `customContainer.tsx` 的容器模板 —— 被**插入用户文章正文**的
+    //    Markdown（内容，不是界面文案），且 `customContainerRemark.js` 靠这几个中文标题识别存量文章的容器。
     // 🔴 54 → 55（期 7 第五批）：多的 1 条是 `requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT = '登录失效'`
     //    —— **与服务端比对的线路字面量**（永久例外，与 `已初始化` 同族）；显示文案已拆成 `request.sessionExpired` 走 t。
     // 🔴 53 → 54（期 7 第三批）：多的 1 条是 `exportFormats.js` 的 `导出说明.md`（**服务端产物文件名** = 线路契约，
     //    永久例外，与 Caddy URL 同类；文案那条走 `{note}` 占位符 ⇒ 语言包里没有汉字）。
     // 🔴 54 → 53：UpdateModal 那张跨层欠条**已还**（期 7 第一批把 accessPassword.js 接了注入式翻译器，
     //   实参与模板一起翻 ⇒ 该文件预算归 0）
-    `裸中文总数应当是 55（棘轮的 TOTAL_BUDGET = 48 目标底 + Customizing 4 条欠条 + 3 条永久例外：Caddy URL 锚点、导出说明.md、登录失效线路字面量），实际 ${total}`,
+    `裸中文总数应当是 61（棘轮的 TOTAL_BUDGET = 48 目标底 + Customizing 4 条欠条 + 9 条永久例外：Caddy URL 锚点 1、导出说明.md 1、登录失效线路字面量 1、容器模板 6），实际 ${total}`,
   );
   // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
   //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——

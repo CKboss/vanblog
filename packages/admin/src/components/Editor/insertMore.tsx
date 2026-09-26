@@ -1,12 +1,25 @@
 import { BytemdPlugin } from 'bytemd';
 import { moreMarkerRehype } from './plugins/moreMarker';
 
-export function insertMore(): BytemdPlugin {
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。bytemd 插件的 action 是**纯对象**、
+ * 在工厂函数里就构造好了，拿不到 React 上下文 ⇒ 由 `Editor/index.tsx` 在渲染期把 t 传进来。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前逐字相同。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type EditorT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
+
+export function insertMore(t: EditorT = IDENTITY_T): BytemdPlugin {
   return {
     rehype: (processor) => processor.use(moreMarkerRehype),
     actions: [
       {
-        title: '插入 more 标记',
+        title: t('editor.insertMore', '插入 more 标记'),
         icon: icon, // 16x16 SVG icon
         handler: {
           type: 'action',

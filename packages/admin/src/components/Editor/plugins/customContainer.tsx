@@ -27,13 +27,31 @@ const CUSTOM_CONTAINER_ACTIONS = [
     code: `:::tip{title="提示"}\n提示\n:::`,
   },
 ];
-export function customContainer(): BytemdPlugin {
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。bytemd 插件的 action 是**纯对象**、
+ * 在工厂函数里就构造好了，拿不到 React 上下文 ⇒ 由 `Editor/index.tsx` 在渲染期把 t 传进来。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前逐字相同。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type EditorT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
+
+// 🔴 只有**菜单标签**（'自定义高亮块'）走 t。
+// 🔴 下面那 6 条 `:::info{title="相关信息"}` 之类的**模板不动**：它们是被**插入用户文章正文**的 Markdown
+//    （= 内容，不是界面文案），而且 `customContainerRemark.js` 靠这几个中文标题**识别**已有文章里的容器
+//    ⇒ 翻译它们会让存量文章的容器不再渲染，也会往用户正文里写英文。属"内容 i18n"（站长裁定：暂不做）。
+//    这 6 条在棘轮里是**有理由的预算**，并由 customContainer.test 里的跨文件断言钉住两边一致。
+export function customContainer(t: EditorT = IDENTITY_T): BytemdPlugin {
   return {
     remark: (processor) =>
       useDirectivePlugin(processor, remarkDirective).use(() => applyCustomContainers),
     actions: [
       {
-        title: '自定义高亮块',
+        title: t('editor.customContainer', '自定义高亮块'),
         icon: CUSTOM_CONTAINER_ICON,
         cheatsheet: `:::info{title="标题"}`,
         handler: {

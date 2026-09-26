@@ -80,7 +80,20 @@ const handleClick = (event: Event) => {
   }
 };
 
-export const emoji = (): BytemdPlugin => ({
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。bytemd 插件的 action 是**纯对象**、
+ * 在工厂函数里就构造好了，拿不到 React 上下文 ⇒ 由 `Editor/index.tsx` 在渲染期把 t 传进来。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前逐字相同。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type EditorT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
+
+export const emoji = (t: EditorT = IDENTITY_T): BytemdPlugin => ({
   editorEffect: (ctx) => {
     // 只建容器、不渲染 Picker（见文件头注释）；编辑器实例留给 onEmojiSelect 用
     currentEditor = ctx.editor;
@@ -122,7 +135,7 @@ export const emoji = (): BytemdPlugin => ({
   },
   actions: [
     {
-      title: '表情',
+      title: t('editor.emoji', '表情'),
       icon: EMOJI_ICON,
       handler: {
         type: 'action',
