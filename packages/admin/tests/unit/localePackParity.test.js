@@ -93,7 +93,7 @@ const IDENTICAL_ZH_TW_OK = [
   'init.baseUrl.invalidLine2', // 例: https://blog.example.com —— 只有「例」一个字，简繁同形
   'init.restore.confirmCancel', // 取消
   'init.restore.count.articles', // 文章
-  'init.restore.count.unknownSize', // 未知大小
+  'common.unknownSize', // 未知大小（🔴 期 7 第四批从 init.restore.count.unknownSize 提升上来）
   'init.restore.uninitLine1Strong', // 不包含 —— 三个字简繁同形
   // 🔴 第二期第一块（侧边栏菜单）新增的三条：这几个词简繁逐字相同，
   //    「文章」「草稿」「附件」「管理」四个字都不含简繁异形字。
@@ -182,6 +182,10 @@ const IDENTICAL_ZH_TW_OK = [
   'coverBackfill.untitled',
   // 🔴 期 7 第三批：`全部打包 (.zip)` 简繁同形
   'export.formatZipLabel',
+  // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
+  'time.secondsAgo',
+  'time.daysAgo',
+  'common.demoForbidden',
   // 🔴 期 5 第十批（历史版本）：返回列表 / 大小 {size} / （{message}）三条简繁同形
   'revision.backToList',
   'revision.sizeValue',
@@ -331,12 +335,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 53,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 53）⇒ 遍历或解析器坏了`,
+      FILES.length >= 59,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 59）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1070,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1070）⇒ 疑似解析器坏了`,
+      calls.length >= 1085,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1085）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -387,6 +391,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/schedule.js',
       'src/services/van-blog/exportFormats.js',
       'src/services/van-blog/exportMarkdown.tsx',
+      'src/services/van-blog/relativeTime.js',
+      'src/services/van-blog/parseMarkdownFile.jsx',
+      'src/components/CopyUploadBtn/index.tsx',
+      'src/components/UploadBtn/index.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -678,6 +686,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/exportFormats.js': [
         'exportFormats', 'loadingText', 'describeExportOutcome', 'classifyExportFailure',
       ],
+      // 🔴 期 7 第四批：零散小服务模块（尾参 t）
+      'src/services/van-blog/formatTime.js': ['formatBytes'],
+      'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
+      'src/services/van-blog/tool.js': ['getRecentTimeDes'],
+      'src/services/van-blog/check.ts': ['checkDemo'],
+      'src/services/van-blog/parseMarkdownFile.jsx': ['parseMarkdownFile'],
       // 🔴 期 7 第二批：三个服务层字段常量模块（函数版 + identity 视图）
       'src/services/van-blog/tagTokens.js': ['tagFieldPlaceholder', 'tagFieldTooltip'],
       'src/services/van-blog/importPathname.js': ['pathnameField'],
@@ -686,6 +700,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         'pastScheduleWarningTitle', 'describeScheduledTag', 'pastScheduleWarningText',
       ],
       'src/components/RevisionHistory/revisionCore.js': [
+        'formatRevisionSize',
         'featureOffText', 'emptyText', 'detailEmptyContentText', 'revisionReasonLabels',
         'revisionRestoreOkText', 'revisionRestoreConfirmContent', 'revisionRestoreNotAppliedText',
         'formatRevisionReason', 'normalizeRevisionMeta', 'classifyRevisionsPayload',
@@ -715,6 +730,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
       // 🔴 期 7 第二批新增：Editor 调 `describeScheduledTag(x)`（还没接 i18n ⇒ 走 identity，逐字与今天相同）
       'src/pages/Editor/index.jsx',
+      // 🔴 期 7 第四批新增：这四个调 `parseMarkdownFile` / `getRecentTimeDes` / `formatTimeAgo`
+      //    但**自己还没接 i18n** ⇒ 走 identity、输出与今天逐字相同（不是缺陷，是 backlog）
+      'src/pages/SystemConfig/tabs/migrate.tsx',
+      'src/pages/Welcome/tabs/viewer.jsx',
+      'src/components/ArticleList/index.tsx',
+      'src/pages/CommentManage/BuiltinComments.jsx',
     ];
     // 🔴 每个 it 都有自己的作用域：上一版直接用了**别的 it 里**定义的 stripComments ⇒ ReferenceError。
     const noComments = (x) =>
@@ -1144,7 +1165,8 @@ describe('多语言第一期：纯 JS 核心模块的注入式翻译器', () => 
       '#init.restore.count.articles 3',
     );
     assert.equal(restoreCore.formatRestoreCounts({ articles: 3 }), '文章 3');
-    assert.equal(restoreCore.describeFileSize(0, (id) => `#${id}`), '#init.restore.count.unknownSize');
+    // 🔴 期 7 第四批：key 提升 init.restore.count.unknownSize → common.unknownSize（值不变、只改名）
+    assert.equal(restoreCore.describeFileSize(0, (id) => `#${id}`), '#common.unknownSize');
     assert.equal(restoreCore.describeFileSize(0), '未知大小');
   });
 });

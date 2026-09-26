@@ -56,7 +56,10 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   🔴 这里也是"key 数下界"的**唯一权威口径**：`i18nSharedImpl` 只证明 readPack 没坏（三份相等且非平凡），
 //   `localePackParity` 只做"三份都空 ⇒ 集合相等"的反空转（>= 50），都不写具体进度数字。
 const BASELINE_KEY_COUNT = 815;
-const BASELINE_GRANDFATHERED = 20;
+// 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
+//   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
+//   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。
+const BASELINE_GRANDFATHERED = 19;
 const REGISTERED = astInventory.REGISTERED_KEY_GROUPS;
 
 test('i18n key 命名 · 反空转：三份包都真的被解析到，且 key 数不低于基线', () => {
@@ -88,7 +91,7 @@ test('i18n key 命名 · 每个 key 的形状都合法（段数 / 字符集 / �
       `第一段必须属于已登记的组（${REGISTERED.join(', ')}）。\n` +
       '修法：①新 key 请按规范命名；②如果是**新增一个组**，请把它加进 astInventory.js 的 ' +
       'REGISTERED_KEY_GROUPS（🔴 那是一次有意的命名空间扩张，要在 AGENTS.md 里说明）；' +
-      '③🔴 **不要**为了让这条绿而给存量 key 加进祖父白名单 —— 白名单只覆盖那 20 条历史四段 key。',
+      '③🔴 **不要**为了让这条绿而给存量 key 加进祖父白名单 —— 白名单只覆盖那 19 条历史四段 key（原来是 20 条，期 7 第四批提升掉了一条）。',
   );
 });
 

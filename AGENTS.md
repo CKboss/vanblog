@@ -9469,6 +9469,78 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.163 期 7 第四批：零散小服务模块（11 条 / 6 模块 + 2 个上传按钮）—— 🔴 祖父条款白名单**第一次减少**，以及"调用点判据"连抓三个漏传
+
+**交付**：`formatTime.js`(1) + `relativeTime.js`(5) + `tool.js`(转发) + `check.ts`(1) + `parseMarkdownFile.jsx`(2)
++ `CopyUploadBtn`(1) + `UploadBtn`(1) = **11 条 → 0**；语言包 **844 → 854 key**（新组 **`time`**）；
+棘轮清单 **57 → 64 个文件**（都预算 0，**TOTAL 仍 54**）；`i18nKeyNaming` → **854**；
+`localePackParity` 自动发现下界 **53 → 59 个文件 / 1070 → 1085 个调用点**（实测 59 / 1091）。
+🔴 **key 提升**：`init.restore.count.unknownSize` → **`common.unknownSize`**（`formatBytes` 也要用「未知大小」，
+不该让通用字节格式化去依赖一个"恢复流程计数"专用的 key）⇒ 🔴 **祖父条款白名单 20 → 19，这是它第一次减少**。
+🔴 **浏览器活体 11/11（zh-CN 3 + en-US 4 + zh-TW 4），problems 0、skipped 0**：
+导入一个 **非 .md** 文件 ⇒ 服务层 `parseMarkdownFile` 的 `Modal.error` 三种语言各自正确
+（`目前仅支持导入 Markdown 文件！` / `目前僅支援匯入 Markdown 檔案！` / `Only Markdown files can be imported for now!`），
+外加两条反向判据（en-US 弹窗**零汉字** / zh-TW **零简体专用字**）与上一批历史版本抽屉的**回归**（没被这批改动弄坏）。
+🔴 **做完这批，文章管理页与草稿管理页的表面都只剩 5 条 / 2 文件**：`requestError.js` 的 4 条
++ `exportFormats.js` 那条**永久例外**（服务端产物文件名）。
+
+#### A. 🔴 `requestError.js` 为什么**故意留到单独一批**（不是漏了）
+它那 4 条（`登录失效` / `登录成功！` / `权限不足！` / `操作失败，请稍后重试！`）看起来最简单，但
+`SESSION_EXPIRED_MESSAGE` **同时被当成"与服务端比对的线路字面量"**：
+`isSessionExpiredPayload` 里 `status == 401 && (raw === SESSION_EXPIRED_MESSAGE || mapped === SESSION_EXPIRED_MESSAGE)`、
+`isSessionExpiredError` 里 `mapped === 'Unauthorized' || mapped === SESSION_EXPIRED_MESSAGE`。
+🔴 一旦 `mapAdminErrorMessage(resData, t)` 开始返回**译文**，而比对仍拿**中文常量**去比，
+**401 检测会在 en-US 下静默失效**（表现是：会话过期后不再弹"登录失效"、也不再抑制重复弹窗 —— 全都不报错）。
+⇒ 正确做法是把**线路字面量**与**显示文案**拆成两个东西（`SERVER_SESSION_EXPIRED_TEXT` 永不翻译、显示走 t），
+并且 🔴 改完必须在 **en-US 下活体重验一次 401 路径**（这不是能靠单测绿就宣布完成的事）。
+👉 **规矩：一个常量同时承担"给人看"与"跟别的层比对"两种角色时，翻译前必须先把它拆成两个。**
+（同族：`已初始化`（协议字符串）、`初始化密钥`（要照着敲的命令）、`导出说明.md`（产物文件名）、Caddy 那条 URL 锚点。）
+
+#### B. 🔴 "每个调用点都要传 t"这条判据本批**连抓三个**（都是我第一版漏的）
+1. `ImportArticleModal/index.jsx`：两处 `parseMarkdownFile(file)` ⇒ 补 `undefined, t`；
+2. `ImportDraftModal/index.jsx`：两处同样 ⇒ 补；
+3. `RevisionHistory/index.jsx`：🔴 `formatRevisionSize(record?.sizeBytes)`（**列渲染里那一处**）——
+   我第一版只改了详情面板那一处（`formatRevisionSize(detail.sizeBytes, t)`），
+   因为我是按"我记得有几处"改的，而不是按**判据报出来的清单**改。
+👉 🔴 **规矩：给服务层函数加尾参 t 之后，先用 `grep -rn "<fn>("` 把调用点全列出来逐个改，
+不要凭记忆改**（本项目"我以为改全了"已经第 5 次）。判据一次只报第一个文件 ⇒ 改完要**再跑一遍**，直到它闭嘴。
+⚠️ 另外 `formatRevisionSize` 自己在 `revisionCore.js` 里也要**转发**给 `formatBytes(bytes, t)`（内部转发第 4 次）。
+
+#### C. 🔴 探针的两处尺子错（都被实采数据纠正）+ 一个上游 UX 小毛病
+1. 「导入」按钮**点不开弹窗**：它包在 `<Upload>` 里，点它是打开文件选择器 ⇒ 必须 `setInputFiles`
+   （本项目第 2 次踩；第 1 次记在 §7.150 那批）。而且非 .md 时**只弹 `Modal.error`、不开导入弹窗** —— 
+   🔴 实测发现导入弹窗**居然也开了**：`beforeUpload` 里 `parseMarkdownFile` 返回 `undefined` 之后，
+   代码仍然 `form.setFieldsValue(undefined); setVisible(true)`（上游 UX 小毛病，与本批无关，已登记）。
+   ⇒ 判据必须**只采 `.ant-modal-confirm-*` 那一层**：第一版把 `.ant-modal-body` 一起采，
+   抓到的是导入表单那堆标签，🔴 判据看着"过了"其实什么都没验（假绿）。
+2. `revisionDrawer` 判据：needle 做了 `sq()`（去空白）而 **haystack 没做** ⇒ 必然不匹配。
+   👉 两边口径要一致（这条本项目已踩 3 次）。
+3. ⚠️ antd 给**两个汉字**的按钮插空格（zh-TW 的「匯 入」）⇒ 过滤按钮要用"逐字之间允许空白"的正则（既有教训，本批复用）。
+
+#### D. 🔴 变异对照生成器：`src.index('const CASES = [')` 会切在**字符串里**
+从 b23 派生 b24 时，`index()` 命中的是汇总打印代码里的一段文本 ⇒ 拼出来的文件语法错。
+修法：用 **`rindex('let failed = 0;')`** 定位尾段，并在生成后**永远先 `node --check`**。
+⚠️ 还有一次 `BATCHTS` **重复声明**（b19 那套里已有）⇒ 派生 harness 时要先看已有哪些常量。
+🔴 M2 第一版锚点命中 **2 次**（ImportDraftModal 里两处调用一模一样）⇒ 换成 ImportArticleModal 里
+**缩进唯一**的那一处（4 空格 vs 6 空格）。这是"锚点子串/重复"陷阱的第 4 次，harness 每次都判"变异没做，本条无效"。
+
+#### E. 基线
+- admin `node --test` **762 tests / 168 suites / 0 fail**（本批没加新 `it`，是**加宽**了既有判据：
+  INJECTED 表 +5 个模块、NOT_YET_I18N_CONSUMERS +4 个文件、自动发现下界上调、白名单 +3）；i18n 守卫组 **112**；
+- 变异对照 **7/7**（checkDemo 漏传 t / parseMarkdownFile 漏传 t / 🔴 formatRevisionSize 内部转发 /
+  棘轮预算 0 / 🔴 英文 ICU 复数 / 🔴 祖父条款基线"只许减" / 语义空操作）；
+- 语言包 **854 key** ×3；`--zh-tw-audit`：854 key / **717** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **64 个文件 / TOTAL 54**（其中 2 条永久例外）；admin 类型门禁 **31/0**（`check.ts` / 两个 `.tsx` 按钮都新接了 i18n，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **762/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.8dc1f186.js` = **1,541,196 B**）；
+- 🔴 **真实剩余：71 → 65 个文件 / 916 → 905 条**；🔴 **文章页与草稿页表面都只剩 5 条 / 2 文件**。
+- 🔴 **下一批**：① `requestError.js`(4) —— 按 A 段那套"线路字面量 vs 显示文案"拆开做，并且**必须在 en-US 下活体验 401**；
+  ② `pages/Editor/**`（最大，143 条 / 15 文件；落地时把 `EXPORT_FORMATS` 改成 `exportFormats(t)`、
+  `describeScheduledTag(x)` 补 t、`parseMarkdownFile(file)` 补 t，并把 `Editor/index.jsx` 与
+  `Editor/imgUpload.tsx` 从 NOT_YET_I18N_CONSUMERS 删掉）；③ `DataManage/**`(134) / `CommentManage`(71)；
+  ④ `SystemConfig` 收尾（`SiteInfo.tsx` 8 / `migrate.tsx` 5）；⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.162 期 7 第三批：文章导出（37 条）—— 🔴 第 5 类"不可翻译"例外（服务端产物文件名），以及活体量出一个**与 i18n 无关的真缺陷**
 
 **交付**：`services/van-blog/exportFormats.js`(30) + `services/van-blog/exportMarkdown.tsx`(7) = **37 条 → 0**

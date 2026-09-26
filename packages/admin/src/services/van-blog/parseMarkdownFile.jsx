@@ -3,11 +3,25 @@ import { pathnameFromFrontMatter } from '@/services/van-blog/importPathname';
 import { message, Modal } from 'antd';
 import fm from 'front-matter';
 
-export const parseMarkdownFile = async (file, allowNotExistCategory) => {
+/**
+ * 🔴 多语言：尾参 `t = IDENTITY_T`（注入式翻译器）⇒ 不传 t 时输出与改造前逐字相同。
+ * ⚠️ 这里弹的是 `message.*`（脱离 React 树的独立根，§7.151）⇒ 只能是调用期算好的字符串。
+ */
+const IDENTITY_T = (id, defaultMessage, values) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+
+export { IDENTITY_T };
+
+export const parseMarkdownFile = async (file, allowNotExistCategory, t = IDENTITY_T) => {
   const name = file.name.split('.')[0];
   const type = file.name.split('.').pop();
   if (type != 'md') {
-    Modal.error({ title: '目前仅支持导入 Markdown 文件！' });
+    // 🔴 `Modal.*` 也是**脱离 React 树的独立根**（§7.151）⇒ 传算好的字符串，不要塞组件
+    Modal.error({ title: t('common.importMarkdownOnly', '目前仅支持导入 Markdown 文件！') });
     return;
   }
   const txt = await file.text();
@@ -20,7 +34,7 @@ export const parseMarkdownFile = async (file, allowNotExistCategory) => {
     const { data } = await getAllCategories();
     allCategories = data;
   } catch (err) {
-    message.error('获取当前分类信息失败！');
+    message.error(t('common.loadCategoriesFailed', '获取当前分类信息失败！'));
     return;
   }
   let category = undefined;

@@ -93,7 +93,7 @@ export default {
   'init.restore.count.viewers': '訪客',
   'init.restore.count.settings': '設定',
   'init.restore.count.total': '合計',
-  'init.restore.count.unknownSize': '未知大小',
+  'common.unknownSize': '未知大小',
 
   // ── 還原失敗的解釋（restoreCore.describeRestoreFailure）───────
   'init.restore.err.rejected': '還原被拒絕（statusCode={code}）',
@@ -997,5 +997,19 @@ export default {
   'export.noImagesModalOk': '改為匯出 Markdown (.md)',
   'export.noImagesModalNote': '.mdz 的意義就是把圖片一起帶走並改成相對路徑；沒有圖片時它與 .md 完全等價。',
   'export.success': '匯出成功！',
+
+
+  // ── 🔴 期 7 第四批（10 條）── 術語：上傳 / 失敗 / 演示站 / 禁止 / **取得**（获取）/ **檔案**（文件）/
+  //    **支援**（支持）/ 分類 / 資訊 / 未知大小 / 剛剛 / 秒前 / 分鐘前 / 小時前 / 天前。
+  'time.justNow': '剛剛',
+  'time.secondsAgo': '{n}秒前',
+  'time.minutesAgo': '{n}分鐘前',
+  'time.hoursAgo': '{n}小時前',
+  'time.daysAgo': '{n}天前',
+  'common.demoForbidden': '演示站禁止此操作！',
+  'common.importMarkdownOnly': '目前僅支援匯入 Markdown 檔案！',
+  'common.loadCategoriesFailed': '取得目前分類資訊失敗！',
+  'common.uploadFailed': '上傳失敗！',
+  'common.uploadFailedWithName': '{name} 上傳失敗!',
 
 };

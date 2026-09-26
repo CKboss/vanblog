@@ -174,7 +174,7 @@ export default function RevisionHistory(props) {
       dataIndex: 'sizeBytes',
       key: 'sizeBytes',
       width: 100,
-      render: (_, record) => formatRevisionSize(record?.sizeBytes),
+      render: (_, record) => formatRevisionSize(record?.sizeBytes, t),
     },
     {
       // 'pre-restore' 的版本是服务端在某次恢复前自动存的快照 —— 展示出来，
@@ -250,7 +250,7 @@ export default function RevisionHistory(props) {
             <Tag color="blue">{detail.title}</Tag>
             <span>{t('revision.savedAt', '保存于 {when}', { when: formatSavedAt(detail.savedAt) })}</span>
             <span style={{ marginLeft: 12 }}>{t('revision.wordCountValue', '字数 {count}', { count: formatRevisionWordCount(detail.wordCount) })}</span>
-            <span style={{ marginLeft: 12 }}>{t('revision.sizeValue', '大小 {size}', { size: formatRevisionSize(detail.sizeBytes) })}</span>
+            <span style={{ marginLeft: 12 }}>{t('revision.sizeValue', '大小 {size}', { size: formatRevisionSize(detail.sizeBytes, t) })}</span>
             <span style={{ marginLeft: 12 }}>{t('revision.reasonValue', '来源 {reason}', { reason: formatRevisionReason(detail.reason, t) })}</span>
           </div>
           {/* 只读展示：纯 preformatted text，不引任何渲染依赖，正文里的 HTML 也不会被执行 */}

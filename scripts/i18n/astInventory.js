@@ -617,7 +617,8 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
 const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', 'draft', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
 //   组名用模块名（与 `accessPassword` / `coverBackfill` 同一套做法），因为它们的文案被多个页面共用。
-'menu', 'pathname', 'recycle', 'revision', 'schedule', 'siteInfo', 'storage', 'sysconf', 'tagTokens', 'theme', 'watermark'];
+'menu', 'pathname', 'recycle', 'revision', 'schedule', 'siteInfo', // 🔴 `time` = 相对时间（relativeTime.js 的「刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前」）。
+'storage', 'sysconf', 'tagTokens', 'theme', 'time', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',
@@ -626,7 +627,8 @@ const GRANDFATHERED_KEYS = [
   'init.restore.count.viewers',
   'init.restore.count.settings',
   'init.restore.count.total',
-  'init.restore.count.unknownSize',
+  // 🔴 `init.restore.count.unknownSize` 已**提升**为 `common.unknownSize`（期 7 第四批）⇒ 从祖父条款里删掉：
+  //    它是 2 段、本来就合法，留在表里等于给一个不存在的 key 开例外（这张表是钉死的：多一条少一条都红）
   'init.restore.err.rejected',
   'init.restore.err.httpFailed',
   'init.restore.err.409',

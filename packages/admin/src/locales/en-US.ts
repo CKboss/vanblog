@@ -94,7 +94,7 @@ export default {
   'init.restore.count.viewers': 'Visitors',
   'init.restore.count.settings': 'Settings',
   'init.restore.count.total': 'Total',
-  'init.restore.count.unknownSize': 'unknown size',
+  'common.unknownSize': 'unknown size',
 
   // ── Restore failure explanations (restoreCore.describeRestoreFailure) ──
   // ⚠️ These ids map one-to-one onto the branches of `describeRestoreFailure`, which takes an
@@ -1053,5 +1053,20 @@ export default {
   'export.noImagesModalOk': 'Export as Markdown (.md) instead',
   'export.noImagesModalNote': 'The point of .mdz is to carry the images along and rewrite their links to relative paths; without images it is exactly the same as .md.',
   'export.success': 'Exported',
+
+
+  // ── 🔴 期 7 第四批（10 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    🔴 "N 秒/分/时/天前" 一律 ICU plural（`{n, plural, one {# second} other {# seconds}} ago`）。
+  //    ⚠️ `{name} 上传失败!` 的叹号在中文原文里就是**半角** ⇒ 英文也用半角、不加句点（翻译批次不改中文文案的语气符号）。
+  'time.justNow': 'just now',
+  'time.secondsAgo': '{n, plural, one {# second} other {# seconds}} ago',
+  'time.minutesAgo': '{n, plural, one {# minute} other {# minutes}} ago',
+  'time.hoursAgo': '{n, plural, one {# hour} other {# hours}} ago',
+  'time.daysAgo': '{n, plural, one {# day} other {# days}} ago',
+  'common.demoForbidden': 'This action is not allowed on the demo site!',
+  'common.importMarkdownOnly': 'Only Markdown files can be imported for now!',
+  'common.loadCategoriesFailed': 'Could not load the current categories!',
+  'common.uploadFailed': 'Upload failed',
+  'common.uploadFailedWithName': '{name} failed to upload!',
 
 };

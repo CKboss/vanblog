@@ -16,7 +16,7 @@ export default function (props) {
   const intl = useIntl();
   const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const handleUpload = async (file) => {
-    const vals = await parseMarkdownFile(file);
+    const vals = await parseMarkdownFile(file, undefined, t);
     if (vals) {
       await createDraft(vals);
     }
@@ -30,7 +30,7 @@ export default function (props) {
         }
       }
     } else {
-      const vals = await parseMarkdownFile(file);
+      const vals = await parseMarkdownFile(file, undefined, t);
       form.setFieldsValue(vals);
       setVisible(true);
     }

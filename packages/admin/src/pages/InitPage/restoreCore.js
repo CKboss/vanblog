@@ -114,7 +114,7 @@ function normalizeT(t) {
 function describeFileSize(bytes, t) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n <= 0) {
-    return normalizeT(t)('init.restore.count.unknownSize', '未知大小');
+    return normalizeT(t)('common.unknownSize', '未知大小');
   }
   if (n < 1024) {
     return `${n} B`;

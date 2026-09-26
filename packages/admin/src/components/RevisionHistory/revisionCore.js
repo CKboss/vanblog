@@ -280,8 +280,9 @@ function formatSavedAt(value) {
   return formatDateTime(value);
 }
 
-function formatRevisionSize(bytes) {
-  return bytes == null ? '-' : formatBytes(bytes);
+// 🔴 t 要**转发**给 formatBytes（否则"未知大小"那半句永远中文 —— §7.156 A ③ 那个坑，本项目已踩三次）
+function formatRevisionSize(bytes, t = IDENTITY_T) {
+  return bytes == null ? '-' : formatBytes(bytes, t);
 }
 
 function formatRevisionWordCount(value) {

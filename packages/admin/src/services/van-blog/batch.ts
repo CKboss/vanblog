@@ -25,7 +25,8 @@ export const batchDelete = (
   t: (id: string, defaultMessage: string, values?: Record<string, any>) => string = IDENTITY_T,
 ) => {
   return new Promise((resolve, reject) => {
-    const result = checkDemo();
+    // 🔴 内部转发：`checkDemo` 的提示文案也收 t（不传就永远中文 —— 这个坑本项目已踩三次）
+    const result = checkDemo(t);
     if (!result) {
       reject();
       return;

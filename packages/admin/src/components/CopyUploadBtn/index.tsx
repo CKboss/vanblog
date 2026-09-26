@@ -1,4 +1,5 @@
 import { Button, message } from 'antd';
+import { useIntl } from 'umi';
 
 import { getClipboardContents } from '@/services/van-blog/clipboard';
 
@@ -12,6 +13,12 @@ export interface CopyUploadBtnProps {
 }
 
 export default function (props: CopyUploadBtnProps) {
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook）。这里弹的是 `message.*` —— 它渲染进
+  //    **脱离 React 树的独立根**（§7.151 那条实测缺陷）⇒ 传进去的必须是**这里算好的字符串**，
+  //    不能塞一个自己调 useIntl 的组件进去。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const handleClick = async () => {
     props.setLoading(true);
 
@@ -38,11 +45,11 @@ export default function (props: CopyUploadBtnProps) {
         if (statusCode === 200) {
           props?.onFinish(data);
         } else {
-          message.error('上传失败！');
+          message.error(t('common.uploadFailed', '上传失败！'));
         }
       })
       .catch(() => {
-        message.error('上传失败！');
+        message.error(t('common.uploadFailed', '上传失败！'));
       })
       .finally(() => {
         props.setLoading(false);

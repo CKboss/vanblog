@@ -1,4 +1,5 @@
 import { Button, message, Upload } from 'antd';
+import { useIntl } from 'umi';
 import ImgCrop from 'antd-img-crop';
 import { RcFile } from 'antd/lib/upload';
 
@@ -18,6 +19,12 @@ export default function (props: {
   loading?: boolean;
   plainText?: boolean;
 }) {
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook）。这里弹的是 `message.*` —— 它渲染进
+  //    **脱离 React 树的独立根**（§7.151 那条实测缺陷）⇒ 传进去的必须是**这里算好的字符串**，
+  //    不能塞一个自己调 useIntl 的组件进去。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const upload = (file: RcFile, rPath: string) => {
     const formData = new FormData();
     let fileName = toPosix(rPath || file.name);
@@ -45,7 +52,7 @@ export default function (props: {
         props?.onFinish(file, fileName);
       })
       .catch(() => {
-        message.error(`${fileName} 上传失败!`);
+        message.error(t('common.uploadFailedWithName', '{name} 上传失败!', { name: fileName }));
       })
       .finally(() => {
         props.setLoading(false);
@@ -85,7 +92,7 @@ export default function (props: {
           props?.setLoading(false);
           props?.onFinish(info.file);
         } else if (info.file.status === 'error') {
-          message.error(`${info.file.name} 上传失败!`);
+          message.error(t('common.uploadFailedWithName', '{name} 上传失败!', { name: info.file.name }));
           props?.setLoading(false);
         }
       }}

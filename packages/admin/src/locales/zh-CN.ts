@@ -96,7 +96,7 @@ export default {
   'init.restore.count.viewers': '访客',
   'init.restore.count.settings': '设置',
   'init.restore.count.total': '合计',
-  'init.restore.count.unknownSize': '未知大小',
+  'common.unknownSize': '未知大小',
 
   // ── 恢复失败的解释（restoreCore.describeRestoreFailure）───────
   // ⚠️ 这几条的 id 与 `describeRestoreFailure` 里的分支一一对应；
@@ -1136,5 +1136,28 @@ export default {
   'export.noImagesModalOk': '改为导出 Markdown (.md)',
   'export.noImagesModalNote': '.mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。',
   'export.success': '导出成功！',
+
+
+  // ── 🔴 期 7 第四批：零散小服务模块（formatTime / relativeTime / check / parseMarkdownFile / 两个上传按钮，10 条）──
+  //    形状仍是"尾参 `t = IDENTITY_T`"；🔴 `formatRevisionSize(bytes, t)` 内部要转发给 `formatBytes(bytes, t)`
+  //    （内部转发这个坑本项目已踩三次）。`getRecentTimeDes(timestr, now, t)` 同理转发给 `formatTimeAgo`。
+  //    ⚠️ `check.ts` / `parseMarkdownFile.jsx` 弹的是 `message.*` / `Modal.*`（脱离 React 树的独立根，§7.151）
+  //    ⇒ 只能是**调用期算好的字符串**，不能塞组件进去。
+  //    🔴 key 提升：`init.restore.count.unknownSize` → `common.unknownSize`（字节格式化是通用能力，
+  //    不该挂在"恢复流程计数"下面；值不变、只改名，消费方与三份包一起改）。
+  //    🔴 这批做完，文章管理页表面只剩 **5 条 / 2 文件**：requestError.js 的 4 条 +
+  //    exportFormats.js 那条**永久例外**（服务端产物文件名）。requestError 单独留一批：
+  //    它的 `SESSION_EXPIRED_MESSAGE` 同时被当成**与服务端比对的线路字面量**（`raw === …`、`mapped === …`）
+  //    ⇒ 翻译它要把"线路字面量"与"显示文案"拆开，并且 401 检测要在 en-US 下重新活体验一遍。
+  'time.justNow': '刚刚',
+  'time.secondsAgo': '{n}秒前',
+  'time.minutesAgo': '{n}分钟前',
+  'time.hoursAgo': '{n}小时前',
+  'time.daysAgo': '{n}天前',
+  'common.demoForbidden': '演示站禁止此操作！',
+  'common.importMarkdownOnly': '目前仅支持导入 Markdown 文件！',
+  'common.loadCategoriesFailed': '获取当前分类信息失败！',
+  'common.uploadFailed': '上传失败！',
+  'common.uploadFailedWithName': '{name} 上传失败!',
 
 };

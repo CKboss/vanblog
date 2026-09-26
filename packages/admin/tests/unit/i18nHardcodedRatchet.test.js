@@ -211,6 +211,20 @@ const BUDGET = {
   //   ② `exportFormats.test.js` 里有一条**跨层断言**：服务端那个 `relativePath` 改名 ⇒ 这里必须跟着改。
   'src/services/van-blog/exportFormats.js': 1,
   'src/services/van-blog/exportMarkdown.tsx': 0,
+  // 🔴 期 7 第四批（2026-09-26）：零散小服务模块 + 两个上传按钮 ⇒ 都预算 0。
+  //   `formatTime.js`（未知大小）/ `relativeTime.js`（刚刚、N 秒前…）/ `tool.js`（getRecentTimeDes 转发）/
+  //   `check.ts`（演示站禁止）/ `parseMarkdownFile.jsx`（两个导入提示）/ `CopyUploadBtn` / `UploadBtn`。
+  //   🔴 做完这批，**文章管理页表面只剩 5 条 / 2 文件**：requestError.js 的 4 条 +
+  //   exportFormats.js 那条永久例外（服务端产物文件名）。
+  //   ⚠️ requestError.js **单独留一批**：它的 `SESSION_EXPIRED_MESSAGE` 同时是"与服务端比对的线路字面量"
+  //   （`raw === …` / `mapped === …`）⇒ 翻译它必须把线路字面量与显示文案拆开，并在 en-US 下重新活体验 401 检测。
+  'src/services/van-blog/formatTime.js': 0,
+  'src/services/van-blog/relativeTime.js': 0,
+  'src/services/van-blog/tool.js': 0,
+  'src/services/van-blog/check.ts': 0,
+  'src/services/van-blog/parseMarkdownFile.jsx': 0,
+  'src/components/CopyUploadBtn/index.tsx': 0,
+  'src/components/UploadBtn/index.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -349,7 +363,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 57, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 64, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

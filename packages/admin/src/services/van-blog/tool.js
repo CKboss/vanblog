@@ -19,6 +19,7 @@ export const formatTimes = (...args) => {
   }
   return '-';
 };
-export const getRecentTimeDes = (timestr, now) => {
-  return formatTimeAgo(timestr, now);
+// 🔴 t 要**转发**给 formatTimeAgo（否则"N 秒前"永远中文）；尾参可选 ⇒ 老调用点行为不变
+export const getRecentTimeDes = (timestr, now, t) => {
+  return formatTimeAgo(timestr, now, t);
 };

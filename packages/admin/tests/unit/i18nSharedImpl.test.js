@@ -60,7 +60,8 @@ test('i18n 共享实现 · 反空转：这些文件都真实存在且非空', ()
     assert.strictEqual(typeof astInventory[fn], 'function', `共享模块没有导出 ${fn}（消费方会拿到 undefined）`);
   }
   assert.ok(Array.isArray(astInventory.REGISTERED_KEY_GROUPS) && astInventory.REGISTERED_KEY_GROUPS.length >= 7);
-  assert.ok(Array.isArray(astInventory.GRANDFATHERED_KEYS) && astInventory.GRANDFATHERED_KEYS.length === 20);
+  // 🔴 20 → 19（期 7 第四批）：`init.restore.count.unknownSize` 提升为 `common.unknownSize` ⇒ 除名（这张表只许减）
+  assert.ok(Array.isArray(astInventory.GRANDFATHERED_KEYS) && astInventory.GRANDFATHERED_KEYS.length === 19);
   // 🔴 简体专用字表也只许有共享模块这一份（localePackParity 与 `inventory.js --zh-tw-audit` 都用它）
   assert.ok(
     typeof astInventory.SIMPLIFIED_ONLY_ZH === 'string' && [...astInventory.SIMPLIFIED_ONLY_ZH].length >= 60,
@@ -219,6 +220,13 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/PathnameField/index.jsx': 0,
     'src/services/van-blog/exportFormats.js': 1,
     'src/services/van-blog/exportMarkdown.tsx': 0,
+    'src/services/van-blog/formatTime.js': 0,
+    'src/services/van-blog/relativeTime.js': 0,
+    'src/services/van-blog/tool.js': 0,
+    'src/services/van-blog/check.ts': 0,
+    'src/services/van-blog/parseMarkdownFile.jsx': 0,
+    'src/components/CopyUploadBtn/index.tsx': 0,
+    'src/components/UploadBtn/index.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

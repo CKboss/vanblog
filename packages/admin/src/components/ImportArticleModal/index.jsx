@@ -14,7 +14,7 @@ export default function (props) {
   const [visible, setVisible] = useState(false);
   const [form] = Form.useForm();
   const handleUpload = async (file) => {
-    const vals = await parseMarkdownFile(file);
+    const vals = await parseMarkdownFile(file, undefined, t);
     if (vals) {
       await createArticle(vals);
     }
@@ -28,7 +28,7 @@ export default function (props) {
         }
       }
     } else {
-      const vals = await parseMarkdownFile(file);
+      const vals = await parseMarkdownFile(file, undefined, t);
       form.setFieldsValue(vals);
       setVisible(true);
     }
