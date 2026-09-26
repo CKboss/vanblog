@@ -1386,4 +1386,71 @@ export default {
   'backup.exportAllBtn': '导出全部数据',
   'backup.includesWaline': 'waline 评论库',
 
+
+  // ── 🔴 期 6 第七批：**主题页**（`SystemConfig/tabs/Theme.jsx`，59 条 → 55 个新 key + 3 条复用）──
+  //    复用：`common.colOption`（操作）/ `common.delete`（删除）/ `common.close`（关闭）。
+  //    🔴 4 个提升进 common：`common.deletedToast`（已删除）/ `common.refresh`（刷新）/
+  //    `common.optional`（可选）/ `common.copy`（复制）—— 这四句后台到处都在用。
+  //    🔴 8 处模板字符串收成 ICU 整句（失败原因一律 `{reason}`，与 requestError 那批一致）。
+  //    🔴 2 条"文字 + <Text code> + 文字"的片段链（`builtinP1a/b/c`、`uploadP2a/b/c/d`）：
+  //    react-intl 3.x 没有富文本占位符，只能拆；接缝空格由**值自己带**（JSX 里没有字面空格），
+  //    并且 localePackParity 里有一条守卫**按页面顺序组装起来查接缝**（上一批的双空格就是这么抓到的）。
+  //    ⚠️ 给用户看的**示例代码里也有中文**（`[data-ui="你的id"]`、`<html data-ui="主题id">`）⇒ 一并翻。
+  //    ⚠️ `theme.cssTitle` 的中文用**全角括号**（`{name}（{id}）`）、英文用半角（`{name} ({id})`）。
+  'theme.loadListFailed': '读取主题列表失败',
+  'theme.loadListFailedReason': '读取主题列表失败：{reason}',
+  'theme.activated': '已切换到「{id}」，前台刷新后即可看到（首次会触发一轮全量渲染）',
+  'theme.activateFailed': '切换失败',
+  'theme.activateFailedReason': '切换失败：{reason}',
+  'common.deletedToast': '已删除',
+  'theme.deleteFailed': '删除失败',
+  'theme.deleteFailedReason': '删除失败：{reason}',
+  'theme.builtinTitle': '内置主题「{name}」',
+  'theme.builtinP1a': '内置主题的样式打包在前台产物里（',
+  'theme.builtinP1b': '）， 没有单独的 CSS 文件可以下载。想改它就改仓库里那份文件；想做自己的皮肤， 上传一份 CSS 即可（id 用 ',
+  'theme.builtinCodeSelector': '[data-ui="你的id"]',
+  'theme.builtinP1c': ' 收窄作用域）。',
+  'theme.readCssFailed': '读取 CSS 失败',
+  'theme.cssTitle': '{name}（{id}）',
+  'theme.readCssFailedReason': '读取 CSS 失败：{reason}',
+  'theme.colName': '主题',
+  'theme.tagBuiltin': '内置',
+  'theme.tagUploaded': '上传',
+  'theme.inUse': '使用中',
+  'theme.colVersionAuthor': '版本 / 作者',
+  'theme.colSizeUpdated': '大小 / 更新时间',
+  'theme.activate': '启用',
+  'theme.viewCss': '查看 CSS',
+  'theme.deleteConfirmTitle': '删除主题「{name}」？',
+  'theme.deleteBlockedActive': '正在使用中，先切换到别的主题',
+  'theme.deleteWillRemoveCss': '会同时删掉它的 CSS 文件',
+  'common.refresh': '刷新',
+  'theme.uploadModalTitle': '上传主题（.css）',
+  'theme.cardHint': '主题就是一份 CSS',
+  'theme.uploadP2a': '前台会把主题 id 写到 ',
+  'theme.uploadCodeHtml': '<html data-ui="主题id">',
+  'theme.uploadP2b': ' 上， 所以你的样式都写在 ',
+  'theme.uploadCodeSelector': '[data-ui="主题id"] 选择器 ',
+  'theme.uploadP2c': ' 里面就能只在这个主题下生效， 切回别的主题不会残留。上传后点「启用」，前台刷新即可看到（不需要重新构建、不需要重启容器）。 写法与示例见 ',
+  'theme.devDoc': '主题开发文档',
+  'theme.uploadP2d': ' 。',
+  'theme.uploadBtn': '上传主题',
+  'theme.uploadNote1': '上传的 CSS 会注入到前台每一个页面',
+  'theme.uploadNote2': '只能写样式：含 javascript:、expression()、<script> 之类的会被拒绝；上限 512KB。远程 @import（比如引字体）允许，但会把访客 IP 交给第三方。',
+  'theme.fieldId': '主题 id',
+  'theme.fieldIdHint': '留空则用文件名，例如 my-theme（小写字母/数字/-/_，2-40 位）',
+  'theme.fieldName': '名称',
+  'theme.fieldNameHint': '显示在列表里，例如「我的暗色主题」',
+  'theme.fieldDescription': '描述',
+  'common.optional': '可选',
+  'theme.fieldAuthor': '作者',
+  'theme.fieldVersion': '版本',
+  'theme.fieldVersionHint': '可选，例如 1.0.0',
+  'theme.uploadedOk': '主题「{id}」上传成功',
+  'theme.uploadOkWithWarnings': '上传成功，但有几点提醒',
+  'theme.uploadFailedReason': '上传失败：{reason}',
+  'theme.uploadSelectBtn': '选择 .css 文件并上传',
+  'theme.uploadOverwriteNote': '同一个 id 再次上传就是覆盖（文件名带内容 hash，所以访客不会拿到旧缓存）。',
+  'common.copy': '复制',
+
 };

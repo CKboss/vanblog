@@ -75,7 +75,10 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 // 🔴 930 → **1013**（期 6 第六批：备份与恢复页 +83，其中 3 条复用既有 key：`common.colOption` /
 //   `common.delete` / `common.uploadFailedWithName`；`backup.overwriteWaline` 与 `backup.includesWaline`
 //   是**同一个中文、两个语境**⇒ 刻意拆成两个 key：列表项要大写、句子里要小写带 the）
-const BASELINE_KEY_COUNT = 1013;
+// 🔴 1013 → **1068**（期 6 第七批：主题页 +55，复用 3 条：`common.colOption` / `common.delete` / `common.close`；
+//   另有 4 个提升进 common：`common.deletedToast`（已删除）/ `common.refresh`（刷新）/
+//   `common.optional`（可选）/ `common.copy`（复制）—— 这四句后台到处都在用）
+const BASELINE_KEY_COUNT = 1068;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

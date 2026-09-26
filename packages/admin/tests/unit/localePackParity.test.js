@@ -192,6 +192,17 @@ const IDENTICAL_ZH_TW_OK = [
   'backup.colFormat',
   'backup.includesPrefix',
   'backup.includesAnd',
+  // 🔴 期 6 第七批（主题页）：这八个繁中与简体逐字相同 —— 要么没有简体专用字（`使用中`、`版本 / 作者`、
+  //   `描述`、`作者`、`版本`），要么本来就是**代码/示例**（`[data-ui="你的id"]`、`{name}（{id}）`），
+  //   要么是**一个句号**（`theme.uploadP2d` = ' 。'，片段链的收尾）。都不是"没翻"。
+  'theme.builtinCodeSelector',
+  'theme.cssTitle',
+  'theme.inUse',
+  'theme.colVersionAuthor',
+  'theme.uploadP2d',
+  'theme.fieldDescription',
+  'theme.fieldAuthor',
+  'theme.fieldVersion',
   // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
   'time.secondsAgo',
   'time.daysAgo',
@@ -345,12 +356,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 72,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 72）⇒ 遍历或解析器坏了`,
+      FILES.length >= 73,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 73）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1300,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1300）⇒ 疑似解析器坏了`,
+      calls.length >= 1360,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1360）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -414,6 +425,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/Editor/index.jsx',
       'src/components/SaveTip/index.tsx',
       'src/pages/SystemConfig/tabs/Backup.jsx',
+      'src/pages/SystemConfig/tabs/Theme.jsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -1792,6 +1804,21 @@ describe('🔴 片段拼接的接缝（备份页 4 条链）', () => {
       name: '体积那一格（压缩前 N MB 静态文件）',
       build: (g) => '12.3 MB' + g('backup.sizePrefix') + '64.0' + g('backup.sizeSuffix'),
     },
+    // 🔴 期 6 第七批（主题页）新增两条链：都是"文字 + <Text code> + 文字"，JSX 里**没有**字面空格
+    //    ⇒ 接缝空格全靠值自己带（`builtinP1b` 结尾一个、`builtinP1c` 开头一个）。
+    //    这正是上一批出双空格的那种形状 ⇒ 一并纳入静态守卫（不用建栈就能红）。
+    {
+      name: '主题页：内置主题那段说明（文字 + code + 文字 + code + 文字）',
+      build: (g) =>
+        g('theme.builtinP1a') + B('packages/website/styles/apple.css') + g('theme.builtinP1b') +
+        B(g('theme.builtinCodeSelector')) + g('theme.builtinP1c'),
+    },
+    {
+      name: '主题页：上传弹窗那段说明（文字 + code×2 + 文字 + 链接 + 句号）',
+      build: (g) =>
+        g('theme.uploadP2a') + B(g('theme.uploadCodeHtml')) + g('theme.uploadP2b') +
+        B(g('theme.uploadCodeSelector') + '{ … }') + g('theme.uploadP2c') + B(g('theme.devDoc')) + g('theme.uploadP2d'),
+    },
   ];
   for (const [loc, pack] of [['zh-CN', cn], ['zh-TW', tw], ['en-US', en]]) {
     const g = (k) => {
@@ -1805,8 +1832,39 @@ describe('🔴 片段拼接的接缝（备份页 4 条链）', () => {
         assert.ok(!text.includes('  '), `🔴 ${loc}/${chain.name}: 接缝处出现**双空格** ⇒ ${JSON.stringify(text.slice(0, 160))}`);
         assert.ok(!/ [.,;:)]/.test(text), `🔴 ${loc}/${chain.name}: 标点前多了空格 ⇒ ${JSON.stringify(text.slice(0, 160))}`);
         assert.ok(!/\([ ]/.test(text), `🔴 ${loc}/${chain.name}: 左括号后多了空格 ⇒ ${JSON.stringify(text.slice(0, 160))}`);
+        // 🔴 接缝**缺**空格也要红（2026-09-27 期 6 第七批实测：英文组装出 `selector { … }makes them apply` ——
+        //    代码片段后面直接接下一个单词）。只查"多空格"查不到这种 ⇒ 两个方向都要查。
+        assert.ok(!/[}\]]([A-Za-z])/.test(text),
+          `🔴 ${loc}/${chain.name}: 代码片段/右括号后面**缺空格** ⇒ ${JSON.stringify(text.match(/[}\]][A-Za-z]/g))} / ${JSON.stringify(text.slice(0, 200))}`);
       }
       // 🔴 中文两份的组装结果必须与**改造前页面上的原文**逐字相同（这才是"没改语义"的证据）
+      // 🔴 主题页那两条链的 zh-CN 组装结果也必须与**改造前页面上的原文**逐字相同
+      //    （原文里 JSX 换行会折叠成一个空格，所以"）， 没有单独…"中间那个空格是**本来就有**的）
+      // 🔴 期 6 第七批：主题页那两处**示例代码**（给用户照着写的选择器 / HTML 片段）的形状必须保住。
+      //    它们看着像普通文案，其实是"技术标识符"：写错了用户照抄就无效（而且没有任何测试会红 ——
+      //    变异对照 B32-M5 把 `your-id` 改成 `yourId`，一开始**全绿**，说明这条判据是补出来的，不是本来就有的）。
+      if (chain.name.startsWith('主题页')) {
+        for (const k of ['theme.builtinCodeSelector', 'theme.uploadCodeHtml', 'theme.uploadCodeSelector']) {
+          assert.ok(String(pack[k]).includes('data-ui="'),
+            `🔴 ${loc}/${k}: 示例代码里必须有 data-ui=" 这个属性形状（用户要照着抄）⇒ 实际是 ${JSON.stringify(pack[k])}`);
+        }
+        assert.ok(/^[\[{<]/.test(String(pack['theme.builtinCodeSelector'])),
+          `🔴 ${loc}: 示例选择器必须以 [ 开头（CSS 属性选择器的形状）⇒ ${JSON.stringify(pack['theme.builtinCodeSelector'])}`);
+      }
+      if (loc === 'zh-CN' && chain.name.startsWith('主题页：内置主题')) {
+        assert.strictEqual(
+          text,
+          '内置主题的样式打包在前台产物里（packages/website/styles/apple.css）， 没有单独的 CSS 文件可以下载。想改它就改仓库里那份文件；想做自己的皮肤， 上传一份 CSS 即可（id 用 [data-ui="你的id"] 收窄作用域）。',
+          '🔴 zh-CN 组装结果与改造前页面上的原文不一致（等于悄悄改了文案）',
+        );
+      }
+      if (loc === 'zh-CN' && chain.name.startsWith('主题页：上传弹窗')) {
+        assert.strictEqual(
+          text,
+          '前台会把主题 id 写到 <html data-ui="主题id"> 上， 所以你的样式都写在 [data-ui="主题id"] 选择器 { … } 里面就能只在这个主题下生效， 切回别的主题不会残留。上传后点「启用」，前台刷新即可看到（不需要重新构建、不需要重启容器）。 写法与示例见 主题开发文档 。',
+          '🔴 zh-CN 组装结果与改造前页面上的原文不一致（等于悄悄改了文案）',
+        );
+      }
       if (loc === 'zh-CN' && chain.name.startsWith('整站备份卡片')) {
         assert.strictEqual(
           text,

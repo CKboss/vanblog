@@ -314,7 +314,10 @@ function findFirstFileContaining(dir, needle, { maxFiles = 4000, maxBytes = 192 
 // ---------------------------------------------------------------------------
 const FALSE_WHITELIST = {
   // 主题列表：主题数量是个位数（内置几套 + 用户自己上传的），一次渲染全部比翻页更好用。
-  'pages/SystemConfig/tabs/Theme.jsx:241':
+  // 🔴 行号 241 → **261**（期 6 第七批：主题页接了 i18n，文件长了 20 行）。
+  //    已核对：还是**同一处** —— 主题列表那个 `<Table rowKey="id" … pagination={false}>`（第 255 行起，
+  //    白名单的键取的是 `pagination={false}` **所在行**，不是 `<Table` 那一行），不是新出现的一处分页。
+  'pages/SystemConfig/tabs/Theme.jsx:261':
     '主题列表，条目数量个位数，前端全量渲染，不需要分页',
   // 图片管理的**列表（表格）视图**：它不是"不分页"，而是分页交给了页面底部那个
   // 共用的 <Pagination>（在 listMode 三元之外，两种视图共用同一份 page/pageSize/total）。

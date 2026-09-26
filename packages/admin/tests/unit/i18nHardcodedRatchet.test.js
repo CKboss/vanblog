@@ -271,6 +271,14 @@ const BUDGET = {
   //   （literal 34 / jsxAttr 14 / jsxText 27），一轮就从 89 条清到 0。
   //   ⚠️ 运维语义一条都没改：不可撤销、覆盖、重新登录、离线保存公钥这些警告逐字对应（站长要复核的就是这些）。
   'src/pages/SystemConfig/tabs/Backup.jsx': 0,
+  // 🔴 期 6 第七批（2026-09-27）：**主题页**（前台皮肤）59 条 ⇒ 预算 0。
+  //   手工 21 处（hook、8 处模板收成 ICU、cssTitle、2 条 `<Text code>` 片段链、删除确认那句文字夹表达式），
+  //   其余 **40 处由 `wrapTCalls.js` 按 AST 位置改写**（literal 14 / jsxAttr 15 / jsxText 11）。
+  //   ⚠️ 给用户看的**示例代码里也有中文**（`[data-ui="你的id"]`、`<html data-ui="主题id">`）⇒ 一并翻
+  //   （英文 `your-id` / `theme-id`，选择器与 HTML 形状逐字保留）。
+  //   ⚠️ `{name}（{id}）` 用的是**全角括号**：bareChinese 数不到，但英文下很怪 ⇒ 也走了 t（英文用半角）。
+  //   🔴 教训：**反向判据只查"有没有汉字"，查不到"全角标点漏翻"**。
+  'src/pages/SystemConfig/tabs/Theme.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -433,7 +441,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 78, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 79, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
