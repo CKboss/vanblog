@@ -9469,6 +9469,109 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.157 期 5 第七批：文章侧两个弹窗 + 题头图字段（48 条**只用 9 个新 key**）—— "对象字面量常量"的接法定型，变异对照还查出我自己建了个**没有消费方的兼容层**
+
+**交付**：`components/NewArticleModal`(22) + `components/ImportArticleModal`(19) + `components/CoverImageField`(7)
+= **48 条 → 0**；语言包 **700 → 709 key**（🔴 48 条文案只用 **9 个新 key**、复用 **25** 个既有的）；
+棘轮清单 **41 → 44 个文件**（都预算 0，**TOTAL 仍 53**）；`i18nKeyNaming` → **709**；
+`localePackParity` 自动发现下界 **38 → 41 个文件 / 835 → 890 个调用点**（实测 41 / 896）；
+提升 `draft.importHint` / `draft.importBtn` → `common.importHint` / `common.importBtn`（草稿与文章的"导入"是同一个动作）；
+新组 **`article`** / **`cover`**。
+🔴 **浏览器活体 37/37（12–13 项判据 × 3 语），problems 0**：文章页工具栏、导入按钮的 `title`、
+**新建文章弹窗**（标题 + 12 个 label + 题头图 placeholder + 🔴 服务层密码 placeholder 与 help 整段 + 清除题头图/上传图片两个按钮）、
+**导入文章弹窗**（标题 + 11 个 label + 密码 placeholder）、以及两条**按语言分开的反向判据**
+（en-US 无汉字 / zh-TW 无简体专用字，都放过唯一那条已登记的延期项）。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-article-modals/`。
+
+#### A. 🔴 复用的回报被量化了：48 条文案 ⇒ **9 个新 key**
+复用到的 25 个既有 key：`common.articleTitle` / `titlePlaceholder` / `colCategory` / `categoryPlaceholder` /
+`categoryTooltip` / `createdAt` / `createdAtPlaceholder` / `topPriority` / `topPriorityPlaceholder` / `encrypted` /
+`yes` / `no` / `password` / `hiddenField` / `copyright` / `copyrightTooltip` / `copyrightPlaceholder` / `content` /
+`demoBlockedCreate` / `demoBlockedReason` / `init.field.required` / `img.uploadBtn`，
+以及服务层那 4 条（`accessPassword.placeholderCreate` / `helpCreate` / `unrecoverable` 由函数带 t 产出）。
+👉 🔴 **规矩的量化验收：新批次的"新 key 数 ÷ 条数"应该越来越低**（本批 9/48 ≈ 0.19，上批 26/48 ≈ 0.54）。
+如果某批又冒出大量新 key，先怀疑是不是**又造了同值第二处**（本批因此把 `draft.importHint/importBtn` 提升成 `common.*`）。
+⚠️ 顺手量了一个**待清理项**：zh-CN 包里"同值多 key"共 **21 组**（例如 `内容` = `recycle.labelFallback` |
+`common.colContent` | `common.content`；`标题` = `sysconf.img.colTitle` | `common.colTitle`；`密码` =
+`login.passwordPlaceholder` | `common.password`）。其中一部分是**不同性质恰好同词**（合法），
+一部分是我这几批造出来的重复 ⇒ 🔴 已登记为待办：**给"同值多 key"加一条棘轮**（钉住当前 21 组、只许减不许增）。
+
+#### B. 🔴 "**导出对象字面量**"这类常量的接法定型（§7.156 A 留的设计题，这批定了）
+`COVER_FIELD = { name, label, placeholder, tooltip }` 没有函数可挂尾参 ⇒ 采用**函数 + identity 视图**：
+`export const coverField = (t = IDENTITY_T) => ({ … })` + `export const COVER_FIELD = coverField();`
+🔴 中文只有一份（在 defaultMessage 里）；`COVER_FIELD.name` 这种"只取字段名"的用法与未来未接 i18n 的消费方**零改动**。
+🔴 明确**否掉**另一种候选（`{ id, defaultMessage }` 对、消费方写 `t(X.id, X.defaultMessage)`）：
+那样 `collectTCalls` 看到的是**非字面量** defaultMessage ⇒ 🔴 **"defaultMessage↔语言包逐字对账"会失效**（核心防线）。
+👉 下一批（`PATHNAME_FIELD` / `TAG_FIELD_*` / `PUBLISH_AT_*` / `EXPORT_FORMATS`）沿用这个形状。
+
+#### C. 🔴 变异对照查出**我自己建了个没有消费方的兼容层**（B18-M4 无从打起 ⇒ 删掉该条）
+M4 想把 `COVER_FIELD` 的 identity 视图改坏（只留 `name`）⇒ 🔴 **没有任何守卫会红**。
+追查：`COVER_FIELD` 的 label/placeholder/tooltip **根本没有消费方**（组件只用它的 `.name`，全仓 grep 过）
+⇒ 那个"留给未接 i18n 消费方"的兼容视图，🔴 **目前兼容的是空气**。
+处理：本轮**删掉 M4**（打不到任何性质的变异不是变异），并记下结论：
+👉 🔴 **规矩：兼容层要有真实消费方，否则它就是死代码；建它之前先 grep 一遍"谁会用它"。**
+（对照：`accessPassword.js` 那 4 个常量**有**真实消费方 —— `Category.jsx` 把它们拼进模板串、
+`accessPassword.test.js` 用 `.includes` / `assert.equal` 断言 ⇒ 那里的 identity 视图是必需的，且有黄金样本钉着。）
+⚠️ 待办：把 `COVER_FIELD` 收缩成 `COVER_FIELD_NAME = 'cover'`，或等文章列表那批给它找到真实消费方。
+
+#### D. 🔴 守卫的两处收紧（都是被变异对照逼出来的）
+1. **`coverField(t)` → `coverField()` 一开始没有任何守卫会红**（B18-M3）⇒ 与"漏传 t"同族的静默失败。
+   修法：把 `coverField` 加进 INJECTED 表，并 🔴 **改掉"定义模块一律豁免"**：豁免只适用于
+   "**自己没有翻译器**的纯模块"（recycleCore / tools / accessPassword）；`CoverImageField` 这种
+   "同一文件里既有 `coverField(t = IDENTITY_T)`、又有组件级 `const t`" 的形状**不豁免**。
+2. 但那样会误伤**模块顶层的 identity 视图**（`export const COVER_FIELD = coverField();` 是合法的）⇒
+   🔴 判据再收一层：自己递归遍历、带一个"**是否在函数体内**"的标记 ⇒
+   **定义模块 + 模块顶层 + 零实参** 放行；函数体内的一律要求尾参是 `t`。
+👉 🔴 **规矩：豁免条款要按"形状"写（顶层 / 零实参 / 是否 wired），不要按"文件"写** ——
+按文件豁免一定会漏掉同一文件里的真缺陷（这次就是）。
+🔴 同类：`t` 遮蔽那条守卫也在这批放了一个**精确**例外 —— `t = IDENTITY_T` 这种"形参本身就是翻译器"的形状不算遮蔽
+（`CoverImageField` 同时有模块级 `coverField(t = IDENTITY_T)` 与组件级 `const t`，两者不同作用域、互不干扰）；
+⚠️ 但 `function f(t)`（**无**默认值）仍然要报，那种在组件文件里几乎总是意外遮蔽。
+
+#### E. 🔴 反向判据必须**按语言**分开（第一版报了 11 条假红）
+"弹窗里不许有汉字"对 en-US 成立，但 🔴 对 zh-TW 会把**已经翻好的繁体**全判成"未登记的中文"（实测一次报 11 条）。
+修法：en-US 查"有没有汉字"、zh-TW 查"有没有**简体专用字**"（用 `astInventory.SIMPLIFIED_ONLY_ZH`，
+与 `--zh-tw-audit` 同一把尺子）、zh-CN 不查。👉 与 §7.155 D 同族：**"哪些算没翻"本身是尺子，尺子不分语言就会自己造假红**。
+⚠️ 另一个尺子坑：antd 会给**两个汉字**的按钮插空格（zh-TW 实测渲染成「匯 入」）⇒ 按文本定位要用
+"逐字之间允许空白"的正则，直接 `hasText: '匯入'` 一个都匹配不到（第一版因此在 zh-TW 下打不开导入弹窗）。
+
+#### F. 🔴 探针又两条"打不开弹窗"：这次是**产品行为**，不是选择器
+「导入」按钮包在 `<Upload>` 里 ⇒ 点它是**打开文件选择器**；ModalForm 只有在 `beforeUpload` 拿到**单个 .md** 之后才
+`setVisible(true)` ⇒ 必须 `setInputFiles` 喂一个真的 .md（不提交 ⇒ 无副作用）。
+👉 与上一批"更多下拉里的删除"同族：**"点了没反应"要先问这个控件的真实交互是什么**，别先怀疑文案。
+🔴 还有一条自己写错的判据：我把「定时发布」列进了新建弹窗的期望标签里 —— 它只在**修改信息**弹窗有
+（新建时还没有可定时的对象）⇒ 假红。👉 期望清单要**照着实采结果核一遍**，别照记忆写。
+
+#### G. 🔴 已量出的新中间态（记录、不判红）
+文章管理页工具栏在 en-US 下实测是 `["编辑关于","New post","Import","生成拼音路径","回收站","从正文首图补封面"]`
+⇒ 🔴 还有 **4 个**按钮属 `pages/Article/index.jsx`(17 条) 与 `CoverBackfillModal`，下一批（文章页）闭合；
+两个弹窗里只剩 **1 个**已登记延期项：`PATHNAME_FIELD.label`（自定义路径名）。
+👉 这条是**探针量出来的**：反向判据 + "已登记延期清单"逐条对上（**多一个或少一个都会红**）。
+
+#### H. 🔴 一次矩阵假红的四步定性（`backupVerify.integrity.spec.ts`）
+本轮矩阵 `jest rc=1`，红的是 `hashArchiveMembers … 内存与临时目录都不涨`：
+`expect(fs.readdirSync(os.tmpdir()).length).toBeLessThanOrEqual(before + 1)`，**Expected <= 27417 / Received 27418**（只差 1）。
+四步定性：① **不是本轮改动**（本轮只碰 admin 与 scripts/i18n，红的是 server 的备份校验，量的是 `/tmp` 条目数）；
+② **单独跑绿**（该 spec 单跑 16/16 通过，8.3s）；③ **全量重跑绿**（见下）；
+④ **不是真缺陷**：`/tmp` 当时有 **27,417** 个条目（1,666 个 `code-*`、258 个 `temp*`、120 个 `vanblog-c10k-*`、
+56 个 `vanblog-doctor-health-*`…），而这条断言只容忍 +1 ⇒ 🔴 任何并发进程往 `/tmp` 写一个文件就会打红它。
+👉 这正是已登记的**"导出/备份族临时目录可注入化"专项**（同族假红已 4 次）：
+🔴 **判据不该读共享的 `os.tmpdir()`，要读注入进来的目录** —— 在那之前，遇到它红先按四步定性，**别改产品代码**。
+
+#### I. 基线
+- admin `node --test` **750 tests / 166 suites / 0 fail**；i18n 守卫组 **104**（`localePackParity` **47**）；
+- 变异对照 **6/6**（棘轮 / 漏传 t（NewArticleModal）/ 🔴 `coverField()` 漏传 t / key 换组 / 消费方登记表 / 语义空操作；
+  🔴 另有 1 条被**删掉**，理由见 C 段）；
+- 语言包 **709 key** ×3；`--zh-tw-audit`：709 key / **693** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **44 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（新翻的 3 个都是 `.jsx`，在门禁范围内，**没加新错**）；
+- 矩阵：admin **750/166/0**、守卫 **35 文件 / 3160 条 / 0 失败**、vitest **97 文件 / 1095**、两个 tsc 各 **0 错**、
+  jest **288 套件 / 4238 用例**（第一次跑有 1 条 `/tmp` 计数假红，四步定性见 H 段，重跑 **0 FAIL**）；
+  生产构建 rc=0（`umi.6c897a2f.js` = **1,490,908 B**）；
+- 🔴 **真实剩余：85 → 82 个文件 / 1,156 → 1,108 条**（本批 −3 文件 / −48 条）。
+- 🔴 **下一批**：① `pages/Article/**`(56，被 10 个测试文件钉着；列定义用 `getColumns(t)` 那套) + `CoverBackfillModal`
+  ⇒ 闭合 G 段那 4 个按钮；② **对象字面量常量**那一类（`PATHNAME_FIELD` / `TAG_FIELD_*` / `PUBLISH_AT_*` / `EXPORT_FORMATS`）；
+  ③ 给"同值多 key"加棘轮（当前 21 组，只许减不许增）；④ `pages/Editor/**`(143 / 15 文件，最大)；
+  ⑤ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
 ### 7.156 期 7 第一批：**服务层常量怎么接 i18n**（`accessPassword.js`，15 条）—— 还掉上一轮那张跨层欠条，活体又抓到一处英文拼接缺陷
 
 **交付**：`services/van-blog/accessPassword.js`（18 条 → **0**，15 个调用点）；🔴 **§7.155 A 那张跨层欠条已还**

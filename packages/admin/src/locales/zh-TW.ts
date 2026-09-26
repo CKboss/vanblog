@@ -769,8 +769,8 @@ export default {
   'draft.deleteConfirmTitle': '確定刪除草稿 "{title}" 嗎？',
   'draft.deleteConfirmContent': '刪除後草稿會移入本頁工具列的「資源回收筒」，可隨時還原；只有在資源回收筒裡「永久刪除」才不可復原。',
   'draft.deleteOk': '刪除成功，已移入資源回收筒（可還原）!',
-  'draft.importHint': '從 markdown 檔案匯入，可多選',
-  'draft.importBtn': '匯入',
+  'common.importHint': '從 markdown 檔案匯入，可多選',
+  'common.importBtn': '匯入',
   'draft.importTitle': '匯入草稿',
   'common.articleTitle': '文章標題',
   'common.titlePlaceholder': '請輸入標題',
@@ -830,5 +830,17 @@ export default {
   'accessPassword.targetIt': '它',
   'accessPassword.privateToggleHint': '取消加密不會刪除已設定的密碼（要刪除請用「清除密碼」）；重新打開加密時會繼續沿用原密碼。',
   'accessPassword.targetThisArticle': '這篇文章',
+
+
+  // ── 🔴 期 5 第七批（9 條）── 術語沿用既有各批：新增（新建）/ 匯入 / **題頭圖** / 上傳 / 已存在 / 清除 / 設定 / 預覽圖。
+  'article.newTitle': '新增文章',
+  'article.importTitle': '匯入文章',
+  'common.passwordInputPlaceholder': '請輸入密碼',
+  'cover.label': '題頭圖',
+  'cover.placeholder': '可選，圖片 URL，留空不顯示題頭圖',
+  'cover.tooltip': '可選。設定後顯示在文章頁頂部，並作為分享到其他應用時的預覽圖（Open Graph / Twitter）。可上傳到現有圖床或填寫圖片 URL。留空則不顯示，已有文章不受影響。',
+  'cover.uploadedOk': '{name} 上傳成功!',
+  'cover.uploadedExists': '{name} 已存在!',
+  'cover.clear': '清除題頭圖',
 
 };

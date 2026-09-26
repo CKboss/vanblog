@@ -850,8 +850,8 @@ export default {
   'draft.deleteConfirmTitle': '确定删除草稿 "{title}" 吗？',
   'draft.deleteConfirmContent': '删除后草稿会移入本页工具栏的「回收站」，可随时恢复；只有在回收站里「永久删除」才不可撤销。',
   'draft.deleteOk': '删除成功，已移入回收站（可恢复）!',
-  'draft.importHint': '从 markdown 文件导入，可多选',
-  'draft.importBtn': '导入',
+  'common.importHint': '从 markdown 文件导入，可多选',
+  'common.importBtn': '导入',
   'draft.importTitle': '导入草稿',
   'common.articleTitle': '文章标题',
   'common.titlePlaceholder': '请输入标题',
@@ -930,5 +930,24 @@ export default {
   'accessPassword.targetIt': '它',
   'accessPassword.privateToggleHint': '取消加密不会删除已设置的密码（要删除请用「清除密码」）；重新打开加密时会继续沿用原密码。',
   'accessPassword.targetThisArticle': '这篇文章',
+
+
+  // ── 🔴 期 5 第七批：文章侧的两个弹窗 + 题头图字段（9 条新 key，**复用 25 个既有 key**）──
+  //    🔴 这批最能说明"前几批把共用字段放 common.* 是对的"：22 + 19 + 7 = 48 条文案，只需要 9 个新 key。
+  //    🔴 提升：`draft.importHint` / `draft.importBtn` → `common.importHint` / `common.importBtn`
+  //    （草稿与文章的"导入"是同一个动作 ⇒ 一个 key）。
+  //    🔴 `COVER_FIELD` 用了 §7.156 A 里定的**对象字面量常量**解法：改成 `coverField(t)` 函数，
+  //    并保留 `COVER_FIELD = coverField()` 作为 identity 视图（中文只有一份，在 defaultMessage 里）。
+  //    ⚠️ `cover.uploadedOk/Exists` 与 `img.uploadNew/Exists` **不是同一句**：那两条尾部有一个空格
+  //    （后面还要拼"已复制…链接"），这里没有 ⇒ 各自一个 key，不为省一个 key 去改任一侧的可见文案。
+  'article.newTitle': '新建文章',
+  'article.importTitle': '导入文章',
+  'common.passwordInputPlaceholder': '请输入密码',
+  'cover.label': '题头图',
+  'cover.placeholder': '可选，图片 URL，留空不显示题头图',
+  'cover.tooltip': '可选。设置后显示在文章页顶部，并作为分享到其他应用时的预览图（Open Graph / Twitter）。可上传到现有图床或填写图片 URL。留空则不显示，已有文章不受影响。',
+  'cover.uploadedOk': '{name} 上传成功!',
+  'cover.uploadedExists': '{name} 已存在!',
+  'cover.clear': '清除题头图',
 
 };

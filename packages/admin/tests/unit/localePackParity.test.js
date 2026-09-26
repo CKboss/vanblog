@@ -173,6 +173,8 @@ const IDENTICAL_ZH_TW_OK = [
   // 🔴 期 7 第一批（accessPassword）：「留空表示不加密」与「它」简繁同形
   'accessPassword.placeholderCreate',
   'accessPassword.targetIt',
+  // 🔴 期 5 第七批：`{name} 已存在!` 简繁同形
+  'cover.uploadedExists',
 ];
 
 /**
@@ -318,12 +320,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 38,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 38）⇒ 遍历或解析器坏了`,
+      FILES.length >= 41,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 41）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 835,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 835）⇒ 疑似解析器坏了`,
+      calls.length >= 890,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 890）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -359,6 +361,9 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/PublishDraftModal/index.jsx',
       'src/components/UpdateModal/index.tsx',
       'src/services/van-blog/accessPassword.js',
+      'src/components/NewArticleModal/index.jsx',
+      'src/components/ImportArticleModal/index.jsx',
+      'src/components/CoverImageField/index.jsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }
@@ -523,7 +528,15 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
               pa.left.type === 'Identifier' &&
               pa.left.name === 't'
             ) {
-              paramHits.push(`第 ${line} 行形参 t（带默认值）`);
+              // 🔴 例外：`t = IDENTITY_T` 是**注入式翻译器**的约定形状（accessPassword.js /
+              //    recycleCore.js / Static/img/tools.tsx / CoverImageField 的 coverField）——
+              //    那个形参**本身就是翻译器**，不是遮蔽。
+              //    实测误报：`CoverImageField` 同时有"模块级 `coverField(t = IDENTITY_T)`"与
+              //    "组件级 `const t = …`"（两者不同作用域、互不干扰）⇒ 第一版把它判成遮蔽。
+              //    ⚠️ 只豁免**默认值就是 IDENTITY_T** 的那一种；`function f(t)`（无默认值）仍然要报，
+              //    因为那种形状在组件文件里几乎总是意外遮蔽。
+              const isInjected = pa.right && pa.right.type === 'Identifier' && pa.right.name === 'IDENTITY_T';
+              if (!isInjected) paramHits.push(`第 ${line} 行形参 t（带默认值）`);
             }
             // 🔴 只对**解构形状**的形参查（ObjectPattern/ArrayPattern/带默认值的解构）；
             //    普通 Identifier 形参由上面那条"组件级翻译器"规则管 ——
@@ -568,6 +581,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         'describeListFailure', 'normalizeDeletedList', 'actionText', 'labelText', 'articleLabel',
       ],
       'src/pages/Static/img/tools.tsx': ['copyImgLink', 'mergeMetaInfo'],
+      // 🔴 期 5 第七批：**对象字面量常量**那一类的第一个样板（`coverField(t)` + `COVER_FIELD` identity 视图）
+      'src/components/CoverImageField/index.jsx': ['coverField'],
       // 🔴 期 7 第一批：**服务层**的访问密码模块（产文案的 9 个函数都收尾参 t）
       'src/services/van-blog/accessPassword.js': [
         'passwordPlaceholder', 'passwordHelp', 'buildAccessPasswordPatch',
@@ -587,7 +602,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       // 🔴 期 7 第一批新增：这两个文件调 accessPassword 的产文案函数但**自己还没接 i18n**
       //    ⇒ 走 identity，输出与今天逐字相同（不是缺陷，是 backlog；翻它们的那批要把 t 传进来并从这张表删掉）
       'src/pages/DataManage/tabs/Category.jsx',
-      'src/components/NewArticleModal/index.jsx',
+      // 🔴 `NewArticleModal` 本轮已接 i18n（并把 t 传给了 accessPassword 的函数）⇒ **从这张表删掉**
+      //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
     ];
     // 🔴 每个 it 都有自己的作用域：上一版直接用了**别的 it 里**定义的 stripComments ⇒ ReferenceError。
     const noComments = (x) =>
@@ -622,6 +638,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       }
       const raw = readFileSync(abs, 'utf8');
       const isDefiningModule = rel in INJECTED;
+      // 🔴 "wired" = 这个文件里**自己声明/使用了翻译器**（有 t() 调用点）
       const wired = astInventory.collectTCalls(raw, rel).length > 0;
       if (!wired && !isDefiningModule) {
         // 尚未接 i18n 的文件：只统计它有没有调用这些函数（有就必须登记在表里）
@@ -631,13 +648,40 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         }
         continue;
       }
-      if (isDefiningModule) continue; // ① 定义模块自己豁免
+      // ① 定义模块自己豁免 —— 🔴 但**只豁免"自己没有翻译器"的纯模块**：
+      //    `recycleCore.js` / `tools.tsx` / `accessPassword.js` 里没有 `const t = …`，它们那些
+      //    `xxx()`（零实参）就是**刻意的 identity 常量**；而 `CoverImageField` 这种
+      //    "同一个文件里既有 `coverField(t = IDENTITY_T)`、又有组件级 `const t`" 的形状，
+      //    🔴 组件里那句 `coverField(t)` 一旦写成 `coverField()` 就**静默变回中文**，
+      //    实测（变异对照 B18-M3）**没有任何守卫会红** ⇒ 所以"文件里声明了翻译器"的就不豁免。
+      if (isDefiningModule && !wired) continue;
       const wanted = new Set(Object.values(INJECTED).flat());
-      astInventory.walkAst(ast.program, (nd) => {
-        if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
+      const FN_TYPES = new Set([
+        'FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod',
+      ]);
+      // 🔴 自己递归（不用 walkAst）：要带一个"**是否在函数体内**"的标记。
+      //    因为定义模块里有一种**合法**的零实参调用：模块顶层的 identity 视图
+      //    （`export const COVER_FIELD = coverField();`）；而组件**函数体内**的 `coverField()`
+      //    就是漏传 t（实测变异对照 B18-M3：改成 `coverField()` 后文案静默变回中文）。
+      const visit = (nd, insideFn) => {
+        if (!nd || typeof nd !== 'object') return;
+        if (nd.type === 'CallExpression' && nd.callee && nd.callee.type === 'Identifier') {
+          handleCall(nd, insideFn);
+        }
+        const next = FN_TYPES.has(nd.type) ? true : insideFn;
+        for (const k of Object.keys(nd)) {
+          if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments') continue;
+          const v = nd[k];
+          if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && visit(x, next));
+          else if (v && typeof v === 'object' && v.type) visit(v, next);
+        }
+      };
+      const handleCall = (nd, insideFn) => {
         const name = nd.callee.name;
         if (!wanted.has(name) && !OPTIONS_STYLE.has(name)) return;
         const args = nd.arguments || [];
+        // 🔴 定义模块 + 模块**顶层** + 零实参 ⇒ 那是刻意的 identity 视图，放行
+        if (isDefiningModule && !insideFn && args.length === 0) return;
         callSites += 1;
         checkedSites += 1;
         if (OPTIONS_STYLE.has(name)) {
@@ -652,7 +696,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         if (!last || last.type !== 'Identifier' || last.name !== 't') {
           missing.push(`${rel}: ${name}(…) 的最后一个实参不是 t（实际 ${last ? last.type : '无实参'}）`);
         }
-      });
+      };
+      visit(ast.program, false);
     }
     assert.deepEqual(
       unregistered,

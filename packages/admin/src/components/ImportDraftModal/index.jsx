@@ -38,8 +38,8 @@ export default function (props) {
   return (
     <>
       <Upload showUploadList={false} multiple={true} accept={'.md'} beforeUpload={beforeUpload}>
-        <Button key="button" type="primary" title={t('draft.importHint', '从 markdown 文件导入，可多选')}>
-          {t('draft.importBtn', '导入')}
+        <Button key="button" type="primary" title={t('common.importHint', '从 markdown 文件导入，可多选')}>
+          {t('common.importBtn', '导入')}
         </Button>
       </Upload>
       <ModalForm

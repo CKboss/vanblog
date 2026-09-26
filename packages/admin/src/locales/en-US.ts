@@ -808,8 +808,8 @@ export default {
   'draft.deleteConfirmTitle': 'Delete the draft "{title}"?',
   'draft.deleteConfirmContent': 'The draft moves to the Recycle bin in the toolbar on this page and can be restored at any time. Only Delete forever inside the Recycle bin is irreversible.',
   'draft.deleteOk': 'Deleted. It moved to the Recycle bin and can be restored!',
-  'draft.importHint': 'Import from markdown files; you can select several',
-  'draft.importBtn': 'Import',
+  'common.importHint': 'Import from markdown files; you can select several',
+  'common.importBtn': 'Import',
   'draft.importTitle': 'Import drafts',
   'common.articleTitle': 'Post title',
   'common.titlePlaceholder': 'Enter a title',
@@ -875,5 +875,18 @@ export default {
   'accessPassword.targetIt': 'it',
   'accessPassword.privateToggleHint': 'Turning encryption off does not delete the password that is already set (use Clear password for that); turning it back on keeps using the original password.',
   'accessPassword.targetThisArticle': 'this post',
+
+
+  // ── 🔴 期 5 第七批（9 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `URL` / `Open Graph` / `Twitter` 是技术标识符，三份包都要原样保留（闸门会查）。
+  'article.newTitle': 'New post',
+  'article.importTitle': 'Import posts',
+  'common.passwordInputPlaceholder': 'Enter a password',
+  'cover.label': 'Header image',
+  'cover.placeholder': 'Optional image URL; leave empty for no header image',
+  'cover.tooltip': 'Optional. Shown at the top of the post page and used as the preview image when sharing to other apps (Open Graph / Twitter). Upload it to the existing image host or enter an image URL. Leave empty to show nothing; existing posts are not affected.',
+  'cover.uploadedOk': '{name} uploaded!',
+  'cover.uploadedExists': '{name} already exists!',
+  'cover.clear': 'Clear the header image',
 
 };

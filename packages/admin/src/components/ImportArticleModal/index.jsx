@@ -8,6 +8,7 @@ import { useState } from 'react';
 import CoverImageField from '../CoverImageField';
 import PathnameField from '../PathnameField';
 import TagSelectField from '../TagSelectField';
+import { useIntl } from 'umi';
 export default function (props) {
   const { onFinish } = props;
   const [visible, setVisible] = useState(false);
@@ -32,16 +33,20 @@ export default function (props) {
       setVisible(true);
     }
   };
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  // ⚠️ 本文件的 t **没有**进任何 hook 的依赖数组；将来若要放，必须先用 useCallback([intl]) 包（§7.144 A）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   return (
     <>
       <Upload showUploadList={false} multiple={true} accept={'.md'} beforeUpload={beforeUpload}>
-        <Button key="button" type="primary" title="从 markdown 文件导入，可多选">
-          导入
+        <Button key="button" type="primary" title={t('common.importHint', '从 markdown 文件导入，可多选')}>
+          {t('common.importBtn', '导入')}
         </Button>
       </Upload>
       <ModalForm
         form={form}
-        title="导入文章"
+        title={t('article.importTitle', '导入文章')}
         visible={visible}
         onVisibleChange={(v) => {
           setVisible(v);
@@ -75,16 +80,19 @@ export default function (props) {
           required
           id="title"
           name="title"
-          label="文章标题"
-          placeholder="请输入标题"
-          rules={[{ required: true, message: '这是必填项' }]}
+          label={t('common.articleTitle', '文章标题')}
+          placeholder={t('common.titlePlaceholder', '请输入标题')}
+          rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
         />
         <ProFormText
           width="md"
           id="top"
           name="top"
-          label="置顶优先级"
-          placeholder="留空或0表示不置顶，其余数字越大表示优先级越高"
+          label={t('common.topPriority', '置顶优先级')}
+          placeholder={t(
+            'common.topPriorityPlaceholder',
+            '留空或0表示不置顶，其余数字越大表示优先级越高',
+          )}
         />
         <PathnameField />
         <TagSelectField name="tags" />
@@ -93,10 +101,10 @@ export default function (props) {
           required
           id="category"
           name="category"
-          label="分类"
-          placeholder="请选择分类"
-          tooltip="首次使用请先在站点管理-数据管理-分类管理中添加分类"
-          rules={[{ required: true, message: '这是必填项' }]}
+          label={t('common.colCategory', '分类')}
+          placeholder={t('common.categoryPlaceholder', '请选择分类')}
+          tooltip={t('common.categoryTooltip', '首次使用请先在站点管理-数据管理-分类管理中添加分类')}
+          rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
           request={async () => {
             const { data: categories } = await getAllCategories();
             return categories?.map((e) => {
@@ -114,50 +122,50 @@ export default function (props) {
           width="md"
           name="createdAt"
           id="createdAt"
-          label="创建时间"
+          label={t('common.createdAt', '创建时间')}
         />
         <ProFormSelect
           width="md"
           name="private"
           id="private"
-          label="是否加密"
-          placeholder="是否加密"
+          label={t('common.encrypted', '是否加密')}
+          placeholder={t('common.encrypted', '是否加密')}
           request={async () => {
             return [
               {
-                label: '否',
+                label: t('common.no', '否'),
                 value: false,
               },
               {
-                label: '是',
+                label: t('common.yes', '是'),
                 value: true,
               },
             ];
           }}
         />
         <ProFormText.Password
-          label="密码"
+          label={t('common.password', '密码')}
           width="md"
           id="password"
           name="password"
           autocomplete="new-password"
-          placeholder="请输入密码"
+          placeholder={t('common.passwordInputPlaceholder', '请输入密码')}
           dependencies={['private']}
         />
         <ProFormSelect
           width="md"
           name="hidden"
           id="hidden"
-          label="是否隐藏"
-          placeholder="是否隐藏"
+          label={t('common.hiddenField', '是否隐藏')}
+          placeholder={t('common.hiddenField', '是否隐藏')}
           request={async () => {
             return [
               {
-                label: '否',
+                label: t('common.no', '否'),
                 value: false,
               },
               {
-                label: '是',
+                label: t('common.yes', '是'),
                 value: true,
               },
             ];
@@ -166,7 +174,7 @@ export default function (props) {
         <CoverImageField />
         <ProFormTextArea
           name="content"
-          label="内容"
+          label={t('common.content', '内容')}
           id="content"
           fieldProps={{ autoSize: { minRows: 3, maxRows: 5 } }}
         />

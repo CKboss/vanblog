@@ -436,8 +436,9 @@ describe('新建/发布路径：加密却没密码时拦在表单里', () => {
   });
 
   it('两个新建入口都写清了"留空 = 不加密"与不可找回', () => {
-    assert.match(newArticle, /passwordPlaceholder\(\{ isCreate: true \}\)/);
-    assert.match(newArticle, /passwordHelp\(\{ isCreate: true \}\)/);
+    // 🔴 期 5 第七批：NewArticleModal 也接了 i18n ⇒ 这两个调用现在把 t 作为尾参传进去
+    assert.match(newArticle, /passwordPlaceholder\(\{ isCreate: true \}, t\)/);
+    assert.match(newArticle, /passwordHelp\(\{ isCreate: true \}, t\)/);
     // 🔴 期 7 第一批：这两个调用现在把 t 作为尾参传进去（不传就永远是中文）
     assert.match(publishDraft, /passwordPlaceholder\(\{ isCreate: true \}, t\)/);
     assert.match(publishDraft, /passwordHelp\(\{ isCreate: true \}, t\)/);

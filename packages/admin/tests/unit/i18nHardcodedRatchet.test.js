@@ -167,6 +167,13 @@ const BUDGET = {
   //   ⚠️ 4 个 SCREAMING_CASE 常量保留为"同一份文案的 identity 视图"（`privateToggleHint()` 求值一次），
   //   留给还没接 i18n 的消费方；中文只有一份（在 defaultMessage 里）⇒ 不是两处口径。
   'src/services/van-blog/accessPassword.js': 0,
+  // 🔴 期 5 第七批（2026-09-26）：文章侧两个弹窗 + 题头图字段 ⇒ 都预算 0。
+  //   🔴 48 条文案只用了 **9 个新 key**（复用 25 个既有的）—— 前几批把共用字段放 `common.*` 的回报。
+  //   ⚠️ `CoverImageField` 的 `COVER_FIELD` 是"**导出对象字面量**"形状 ⇒ 用 §7.156 A 定的解法：
+  //   改成 `coverField(t)` 函数 + 保留 `COVER_FIELD = coverField()` 作为 identity 视图（中文只有一份）。
+  'src/components/NewArticleModal/index.jsx': 0,
+  'src/components/ImportArticleModal/index.jsx': 0,
+  'src/components/CoverImageField/index.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -293,7 +300,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 41, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 44, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

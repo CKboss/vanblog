@@ -610,7 +610,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `accessPassword` = **服务层**纯逻辑模块 `services/van-blog/accessPassword.js` 的文案
 //   （访问密码的 placeholder / help / 二次确认 / 三条校验错误，期 7 第一批登记）。
 //   组名用**模块名**而不是页面名：它被文章、草稿、分类三处共用，不属于任何单一页面。
-const REGISTERED_KEY_GROUPS = ['accessPassword', 'common', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `article` = 文章侧弹窗（新建/导入）；`cover` = 题头图字段（`components/CoverImageField`）。
+//   两个都是**跨页复用的组件**（文章列表、草稿列表、编辑器都会用）⇒ 用自己的组名，不塞进 common。
+const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'customPage', 'draft', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',
