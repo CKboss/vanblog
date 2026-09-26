@@ -34,7 +34,9 @@ describe('整站备份：后台页面', () => {
   it('列表给出体积/格式/内容/时间，并能下载、看清单、恢复、删除', () => {
     const page = read('src/pages/SystemConfig/tabs/Backup.jsx');
     for (const title of ['备份文件', '体积', '格式', '内容', '生成时间', '操作']) {
-      assert.match(page, new RegExp(`title: '${title}'`), `列表缺少列 ${title}`);
+      // 🔴 期 6 第六批起列标题走 t() ⇒ 锚点从 `title: '中文'` 换成 `title: t('<key>', '中文')`
+      //    （性质没放：仍然要求这一列存在、且标题就是这句中文）
+      assert.match(page, new RegExp(`title: t\\('[^']+', '${title}'\\)`), `列表缺少列 ${title}`);
     }
     assert.match(page, /handleDownload/);
     assert.match(page, /handleInspect/);

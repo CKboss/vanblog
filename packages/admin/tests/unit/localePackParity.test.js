@@ -186,6 +186,12 @@ const IDENTICAL_ZH_TW_OK = [
   'editor.redo',
   // 🔴 期 6 第四批：`查看前台` 简繁同形
   'editor.viewFrontend',
+  // 🔴 期 6 第六批（备份页）：这四个繁中与简体**逐字相同**，因为没有简体专用字
+  //   （`{seconds} 秒` 是 ICU 占位符 + 单位、`格式`、`包含`、`，以及`）⇒ 进白名单，不是"没翻"
+  'backup.secondsValue',
+  'backup.colFormat',
+  'backup.includesPrefix',
+  'backup.includesAnd',
   // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
   'time.secondsAgo',
   'time.daysAgo',
@@ -339,12 +345,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 71,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 71）⇒ 遍历或解析器坏了`,
+      FILES.length >= 72,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 72）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1210,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1210）⇒ 疑似解析器坏了`,
+      calls.length >= 1300,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1300）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -407,6 +413,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/EditorProfileModal/index.tsx',
       'src/pages/Editor/index.jsx',
       'src/components/SaveTip/index.tsx',
+      'src/pages/SystemConfig/tabs/Backup.jsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -726,6 +733,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/Editor/transferRemote.tsx': ['transferRemotePlugin'],
       // `uploadEditorImages` 是 `Editor/index.tsx` 自己的模块级 helper（两个调用点都在同文件）
       'src/components/Editor/index.tsx': ['uploadEditorImages'],
+      // 🔴 期 6 第六批：`summarizeTotals` 是 Backup.jsx 里的**模块级**函数（组件外，拿不到 hook）
+      //    ⇒ 收尾参 t；三个调用点（data.totals / manifest.totals / 表格列 render）都必须传
+      // 🔴 变异对照 B31-M5 抓到：`formatLabels` 也是模块级注入式函数（原来是模块级**常量** FORMAT_LABELS，
+      //    被工具包上 t 之后会在加载期炸 ⇒ 改成函数版），但第一版只登记了 `summarizeTotals`
+      //    ⇒ 把 `formatLabels(t)` 的 t 拿掉**全绿**。👉 还是那条规矩：**整条链每一环都要登记**。
+      'src/pages/SystemConfig/tabs/Backup.jsx': ['summarizeTotals', 'formatLabels'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -1741,4 +1754,67 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
     assert.deepStrictEqual(offenders, [], '🔴 这些地方从 identity 常量取文案 ⇒ 注入了 t 也不会跟随语言');
   });
 });
+});
+
+// 🔴 用 describe/it（本文件没有 import `test`；直接写 test(...) 会在**加载期**炸成
+//    "ReferenceError: test is not defined"，而 node --test 的 TAP 摘要只报 1 test 1 fail，很容易看漏）
+describe('🔴 片段拼接的接缝（备份页 4 条链）', () => {
+  it('按页面上的真实顺序组装起来，不许出现双空格 / 标点前空格，且中文与改造前逐字相同', () => {
+  // ## 为什么要这条（2026-09-26 期 6 第六批，Backup.jsx 实测）
+  // react-intl 3.x **没有富文本占位符** ⇒ "文字 + <b> + 文字" 只能拆成 prefix/suffix 多个 key（§7.152 B）。
+  // 拆完最容易出的缺陷就是**接缝**：英文值自带一个空格，而 JSX 里 `{t(...)} <b>` 又有一个 ⇒ 渲染成双空格。
+  // 本批真的踩到了（`Includes  all database collections` / `, and  local static files`），
+  // 而且是**活体探针**采到的文本才看出来 —— 静态判据一条都没红。
+  // ⇒ 这条守卫把"按真实顺序组装 + 查接缝"变成静态可查的（不用建栈就能红）。
+  // 🔴 组装式必须**照抄页面上的 JSX 结构**：`SP` 表示 JSX 里那个字面空格（React 会渲染出来）。
+  const SP = ' ';
+  const B = (x) => x; // <b> 不改变文本，只为读起来像页面
+  const cn = packs['zh-CN'];
+  const tw = packs['zh-TW'];
+  const en = packs['en-US'];
+  const CHAINS = [
+    {
+      name: '整站备份卡片那段说明（包含 …）',
+      build: (g) =>
+        g('backup.includesPrefix') + SP + B(g('backup.includesDatabases')) + g('backup.includesDatabasesDetail') +
+        B(g('backup.includesWaline')) + g('backup.includesAnd') + SP + B(g('backup.includesStatic')) +
+        g('backup.includesStaticDetail'),
+    },
+    {
+      name: '压缩格式那段说明（归档存在 …）',
+      build: (g) => g('backup.compressorNote') + B(g('backup.archiveNoteBold')) + g('backup.archiveNoteSuffix'),
+    },
+    {
+      name: '恢复确认第一句（将用 X 覆盖：）',
+      build: (g) => g('backup.overwritePrefix') + B('vanblog-full-20260926.tar.zst') + g('backup.overwriteSuffix'),
+    },
+    {
+      name: '体积那一格（压缩前 N MB 静态文件）',
+      build: (g) => '12.3 MB' + g('backup.sizePrefix') + '64.0' + g('backup.sizeSuffix'),
+    },
+  ];
+  for (const [loc, pack] of [['zh-CN', cn], ['zh-TW', tw], ['en-US', en]]) {
+    const g = (k) => {
+      assert.ok(k in pack, `${loc}: 缺 key ${k}`);
+      return pack[k];
+    };
+    for (const chain of CHAINS) {
+      const text = chain.build(g);
+      assert.ok(text.length > 20, `${loc}/${chain.name}: 组装出来太短，疑似 key 取错：${JSON.stringify(text)}`);
+      if (loc === 'en-US') {
+        assert.ok(!text.includes('  '), `🔴 ${loc}/${chain.name}: 接缝处出现**双空格** ⇒ ${JSON.stringify(text.slice(0, 160))}`);
+        assert.ok(!/ [.,;:)]/.test(text), `🔴 ${loc}/${chain.name}: 标点前多了空格 ⇒ ${JSON.stringify(text.slice(0, 160))}`);
+        assert.ok(!/\([ ]/.test(text), `🔴 ${loc}/${chain.name}: 左括号后多了空格 ⇒ ${JSON.stringify(text.slice(0, 160))}`);
+      }
+      // 🔴 中文两份的组装结果必须与**改造前页面上的原文**逐字相同（这才是"没改语义"的证据）
+      if (loc === 'zh-CN' && chain.name.startsWith('整站备份卡片')) {
+        assert.strictEqual(
+          text,
+          '包含 数据库全部集合（文章、草稿、分类、标签、图床记录、设置、访问统计）、waline 评论库，以及 本地静态文件（图床图片与缩略图、附件、自定义页面）。 拿这一个文件就能在新机器上把博客整体恢复出来。',
+          '🔴 zh-CN 组装结果与改造前页面上的原文不一致（等于悄悄改了文案）',
+        );
+      }
+    }
+  }
+  });
 });

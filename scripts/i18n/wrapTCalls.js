@@ -65,6 +65,12 @@ function main() {
   const edits = []; // { start, end, text, kind, key, line }
   const templates = [];
   const unmapped = [];
+  // 🔴 **模块作用域**里的字面量：那里没有 `t`（t 来自组件里的 useIntl）⇒ 包上去就是
+  //    `ReferenceError: t is not defined`，而且是在**模块加载期**炸 ⇒ 整个路由 chunk 白屏。
+  //    2026-09-26 在 `Backup.jsx` 上真炸过一次（`const FORMAT_LABELS = { auto: t(...) }`）：
+  //    构建照样成功（语法没问题）、单测照样绿（没有渲染那个页面），只有浏览器活体才看得见。
+  //    ⇒ 工具**拒绝**改写这类节点，并且单独列出来交给人（正确做法是改成函数版 + 尾参 t = IDENTITY_T）。
+  const moduleScope = [];
 
   // 记录"已经是 t() 的 defaultMessage 位"与"console.* 的实参"，两类都不改
   const skipRanges = [];
@@ -74,8 +80,10 @@ function main() {
   const inSkip = (node) => skipRanges.some(([a, b]) => node.start >= a && node.end <= b);
 
   const FN = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
-  const walk = (nd, parent) => {
+  // depth = 当前节点外面套了几层函数（0 = 模块作用域）
+  const walk = (nd, parent, depth) => {
     if (!nd || typeof nd !== 'object') return;
+    const childDepth = FN.has(nd.type) ? (depth || 0) + 1 : (depth || 0);
     // t(...) / formatMessage(...) 的第二个实参 = defaultMessage 位（本工具改写后不能再改一次）
     if (
       nd.type === 'CallExpression' && nd.callee &&
@@ -102,7 +110,9 @@ function main() {
     const line = nd.loc ? nd.loc.start.line : 0;
     if (nd.type === 'StringLiteral' && HAN.test(nd.value) && !inSkip(nd)) {
       const key = map[nd.value];
-      if (key) {
+      if (key && (depth || 0) === 0) {
+        moduleScope.push({ line, text: nd.value, key });
+      } else if (key) {
         // JSX 属性里的字符串要包一层 {}（`label="中文"` → `label={t(...)}`）
         const isJsxAttrValue = parent && parent.type === 'JSXAttribute' && parent.value === nd;
         edits.push({
@@ -118,8 +128,14 @@ function main() {
       }
     } else if (nd.type === 'JSXText' && HAN.test(nd.value)) {
       const trimmed = nd.value.trim();
-      const key = map[trimmed] || map[nd.value];
-      if (key) {
+      // 🔴 JSX 文本**跨行**时，React 渲染会把"换行 + 缩进"折叠成**一个空格** ⇒ 映射表按"折叠后"的形状查，
+      //    写进 defaultMessage 的也用折叠后的那一份（这样渲染结果与改造前逐字相同）。
+      //    第一版只按 trim 查 ⇒ 跨行的 JSX 文本一个都匹配不上（`Backup.jsx` 里那几段说明文字就是这样）。
+      const folded = trimmed.replace(/\s+/g, ' ');
+      const key = map[trimmed] || map[folded] || map[nd.value];
+      if (key && (depth || 0) === 0) {
+        moduleScope.push({ line, text: folded, key });
+      } else if (key) {
         const lead = nd.value.slice(0, nd.value.indexOf(trimmed));
         const tail = nd.value.slice(nd.value.indexOf(trimmed) + trimmed.length);
         // 🔴 JSX 文本节点里换行+缩进会被 React 折叠掉；这里保留**同一行内**的前后空白，跨行的按 JSX 规则不留
@@ -131,10 +147,11 @@ function main() {
           kind: 'jsxText',
           key,
           line,
-          text: `${keepLead}{t(${q(key)}, ${q(trimmed)})}${keepTail}`,
+          // 🔴 用**折叠后**的文本当 defaultMessage（= 浏览器实际渲染出来的那一份）
+          text: `${keepLead}{t(${q(key)}, ${q(folded)})}${keepTail}`,
         });
       } else if (trimmed) {
-        unmapped.push({ line, kind: 'JSXText', text: trimmed });
+        unmapped.push({ line, kind: 'JSXText', text: trimmed.replace(/\s+/g, ' ') });
       }
     } else if (nd.type === 'TemplateLiteral' && HAN.test(nd.value === undefined ? (nd.quasis || []).map((x) => x.value.raw).join('') : '')) {
       templates.push({ line, text: (nd.quasis || []).map((x) => x.value.raw).join('${…}') });
@@ -143,11 +160,11 @@ function main() {
     for (const k of Object.keys(nd)) {
       if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments' || k === 'start' || k === 'end') continue;
       const v = nd[k];
-      if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && x.type && walk(x, nd));
-      else if (v && typeof v === 'object' && v.type) walk(v, nd);
+      if (Array.isArray(v)) v.forEach((x) => x && typeof x === 'object' && x.type && walk(x, nd, childDepth));
+      else if (v && typeof v === 'object' && v.type) walk(v, nd, childDepth);
     }
   };
-  walk(ast.program, null);
+  walk(ast.program, null, 0);
 
   // 🔴 从后往前改（否则前面的改写会让后面的位置失效）
   edits.sort((a, b) => b.start - a.start);
@@ -176,10 +193,16 @@ function main() {
 
   console.log(`=== ${path.relative(process.cwd(), abs)} ===`);
   console.log(`  改写 ${edits.length} 处（literal ${edits.filter((e) => e.kind === 'literal').length} / jsxAttr ${edits.filter((e) => e.kind === 'jsxAttr').length} / jsxText ${edits.filter((e) => e.kind === 'jsxText').length}）`);
-  console.log(`  裸中文：${before} → ${after}${typeof after === 'number' && after === 0 ? ' ✅' : ' 🔴 还没清完'}`);
+  const clean = typeof after === 'number' && after === 0 && moduleScope.length === 0;
+  console.log(`  裸中文：${before} → ${after}${clean ? ' ✅' : ' 🔴 还没清完'}${moduleScope.length ? `（其中 ${moduleScope.length} 处是模块作用域，要手工改）` : ''}`);
   if (templates.length) {
     console.log(`  🔴 模板字符串 ${templates.length} 处要**手工**改成 ICU 整句（本工具不动它们）：`);
     templates.forEach((t) => console.log(`     L${t.line}  ${t.text.slice(0, 96)}`));
+  }
+  if (moduleScope.length) {
+    console.log(`  🔴 **模块作用域** ${moduleScope.length} 处**没有改写**（那里没有 t，包上去会在加载期炸、整页白屏）：`);
+    moduleScope.forEach((m) => console.log(`     L${m.line}  ${JSON.stringify(m.text).slice(0, 70)}  → 想用的 key 是 ${m.key}`));
+    console.log('     👉 手工改成函数版：`const xxx = (t = IDENTITY_T) => ({…})`，调用点传 t（本项目既有做法）。');
   }
   if (unmapped.length) {
     console.log(`  🔴 映射表里没有的中文 ${unmapped.length} 处：`);

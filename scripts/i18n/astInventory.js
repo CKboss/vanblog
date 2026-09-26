@@ -638,7 +638,8 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `coverBackfill` = 服务层 `services/van-blog/coverBackfill.js`（补封面的汇总行标签与空结果文案）。
 //   与 `cover`（弹窗自己的文案）分开：一个是**服务层模块**、一个是组件，跟 `accessPassword` 的分组方式一致。
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
-const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
+const REGISTERED_KEY_GROUPS = [// 🔴 `backup` = 系统配置「备份与恢复」页（整站备份 / 数据备份 / 签名 / 清单 / 恢复）。
+'accessPassword', 'article', 'backup', 'common', 'cover', 'coverBackfill', 'customPage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
 //   ⚠️ 移动端工具栏那 11 条**不在语言包里**：它们与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 editorLocale。
 // 🔴 `editorProfile` = 编辑器偏好设置弹窗（保存后行为 / 本机缓存 / 软换行）。
 'draft', 'editor', 'editorProfile', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：

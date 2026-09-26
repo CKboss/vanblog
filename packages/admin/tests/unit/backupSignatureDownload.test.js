@@ -49,7 +49,8 @@ describe('后台能下载归档旁边的 .sig（离线签名）', () => {
     //    第一版写成 />签名/ 匹配不到，那是**我的正则错**，不是产品缺动作。
     assert.match(
       pageSrc,
-      /handleDownloadSignature\(record\.name\)[\s\S]{0,160}?>\s*签名\s*</,
+      // 🔴 期 6 第六批起按钮文字走 t() ⇒ 锚点从"文本节点里就是签名"换成"t() 的 defaultMessage 是签名"
+      /handleDownloadSignature\(record\.name\)[\s\S]{0,160}?>\s*\{t\('[^']+', '签名'\)\}\s*</,
     );
   });
 
@@ -69,7 +70,9 @@ describe('后台能下载归档旁边的 .sig（离线签名）', () => {
     );
     const i404 = fn.indexOf('status === 404');
     const iWarn = fn.indexOf('从没被签过');
-    const iErr = fn.indexOf("message.error(err?.message || '下载 .sig 失败！')");
+    // 🔴 期 6 第六批起这条兜底文案走 t() ⇒ 锚点换成"包含那句 defaultMessage 的 message.error 调用"
+    //    （性质没放：仍然要求"通用失败提示"存在，而且**在** 404 分支之后 ⇒ 顺序判据照旧有效）
+    const iErr = fn.indexOf("message.error(err?.message || t(");
     assert.ok(i404 > 0, '没有对 404 做判断');
     assert.ok(iWarn > 0, '404 的文案没有说清"从没被签过"');
     assert.ok(iErr > 0, '通用失败提示不见了');

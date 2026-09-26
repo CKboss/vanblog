@@ -126,7 +126,8 @@ describe('后台健壮性：请求失败也要把 loading 收掉', () => {
       fn,
       /try \{[\s\S]*?\} catch \(err\) \{[\s\S]*?\} finally \{\s*setLoading\(false\);/,
     );
-    assert.match(fn, /message\.error\('导出失败！'\)/);
+    // 🔴 期 6 第六批起走 t()（性质没放：catch 里仍然必须弹「导出失败！」）
+    assert.match(fn, /message\.error\(t\('[^']+', '导出失败！'\)\)/);
     assert.match(fn, /URL\.revokeObjectURL\(url\)/);
     assert.equal((codeOnly(fn).match(/setLoading\(false\)/g) || []).length, 1);
   });

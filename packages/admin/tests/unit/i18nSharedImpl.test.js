@@ -242,6 +242,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/EditorProfileModal/index.tsx': 0,
     'src/pages/Editor/index.jsx': 0,
     'src/components/SaveTip/index.tsx': 0,
+    'src/pages/SystemConfig/tabs/Backup.jsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

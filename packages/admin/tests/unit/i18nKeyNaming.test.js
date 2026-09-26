@@ -72,7 +72,10 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   `common.article`、`recycle.labelDraft` → `common.draft` —— 提升不增 key 数。
 //   🔴 63 条文案里 21 条**复用**既有 key，是本项目复用率最高的一批）
 // 🔴 928 → **930**（期 6 第四批补：`SaveTip` 那 2 个 key —— 活体探针抓出来的漏块）
-const BASELINE_KEY_COUNT = 930;
+// 🔴 930 → **1013**（期 6 第六批：备份与恢复页 +83，其中 3 条复用既有 key：`common.colOption` /
+//   `common.delete` / `common.uploadFailedWithName`；`backup.overwriteWaline` 与 `backup.includesWaline`
+//   是**同一个中文、两个语境**⇒ 刻意拆成两个 key：列表项要大写、句子里要小写带 the）
+const BASELINE_KEY_COUNT = 1013;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。
