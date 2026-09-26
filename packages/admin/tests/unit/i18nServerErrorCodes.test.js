@@ -303,7 +303,10 @@ test('服务端错误码 · admin 侧行为：有码用码、无码回落，且�
     return `#${id}`;
   };
   assert.strictEqual(re.adaptAdminResponse(coded, { t: fakeT }).errorMessage, '#error.categoryDuplicateOnCreate');
-  assert.deepStrictEqual(seen[0], {
+  // 🔴 按 **id** 找，不要按**下标**找：`adaptAdminResponse` 内部还会为了 401 判定取一次
+  //    `request.sessionExpired` 的译文（期 7 第五批），下标会随之错位（本批实测被绊红过一次）。
+  const byId = (id) => seen.find((x) => x.id === id);
+  assert.deepStrictEqual(byId('error.categoryDuplicateOnCreate'), {
     id: 'error.categoryDuplicateOnCreate',
     // 🔴 defaultMessage 必须是**服务端那句中文**：漏译时用户看到的是今天的行为，而不是裸 key
     defaultMessage: '分类名重复，无法创建！',
@@ -313,13 +316,61 @@ test('服务端错误码 · admin 侧行为：有码用码、无码回落，且�
     re.adaptAdminResponse(codedWithParams, { t: fakeT }).errorMessage,
     '#error.someFutureCode',
   );
-  assert.deepStrictEqual(seen[1].values, { n: 30 }, 'params 没有透传给翻译器（ICU 插值会失效）');
+  assert.deepStrictEqual(byId('error.someFutureCode').values, { n: 30 }, 'params 没有透传给翻译器（ICU 插值会失效）');
 
   // 🔴 传了 t 但**没有码** ⇒ 原样回落 message（渐进迁移的关键：任何时刻都可用）
   assert.strictEqual(re.adaptAdminResponse(uncoded, { t: fakeT }).errorMessage, '还没有迁移的中文消息');
-  // 🔴 协议级的两条特例仍然优先（它们不带码，也不许被翻译盖掉）
+  // 🔴 协议级的两条特例仍然优先（它们不带码）—— 但**显示文案现在跟着语言走**（期 7 第五批）：
+  //    401 时用户看到的是 `request.sessionExpired` 的译文，不再是写死的中文常量。
   assert.strictEqual(
     re.adaptAdminResponse({ statusCode: 401, message: 'Unauthorized' }, { t: fakeT }).errorMessage,
+    '#request.sessionExpired',
+  );
+  // 🔴 而**线路字面量**那一半没变：服务端 `message` 里那句中文仍然被认成"会话过期"，
+  //    并且"我们已经把 mapped 翻译成外文了"这种情况也必须照样认出来（否则 401 检测会静默失效，§7.163 A）
+  assert.strictEqual(re.SERVER_SESSION_EXPIRED_TEXT, '登录失效', '线路字面量不许被翻译');
+  assert.strictEqual(
+    re.isSessionExpiredPayload({ statusCode: 401, message: '登录失效' }, undefined, fakeT),
+    true,
+    '服务端给的是中文线路字面量 ⇒ 必须认出来',
+  );
+  assert.strictEqual(
+    re.isSessionExpiredPayload(
+      { statusCode: 401, message: 'Unauthorized' },
+      re.mapAdminErrorMessage({ statusCode: 401, message: 'Unauthorized' }, fakeT),
+      fakeT,
+    ),
+    true,
+    '🔴 mapped 已经是译文了 ⇒ 401 判定仍然要成立（这一条就是"拆成线路 vs 显示"要守的性质）',
+  );
+  // 🔴 上面那条**不够**：`raw === 'Unauthorized'` 那个分支会先返回 true，
+  //    于是"接受译文"那半句根本没被执行 —— 变异对照 B25-M2 把它整句换掉，测试**照旧全绿**（空转）。
+  //    ⇒ 再补一条**只能靠那半句**才过的：raw 既不是 'Unauthorized' 也不是线路字面量，只有 mapped 是译文。
+  assert.strictEqual(
+    re.isSessionExpiredPayload(
+      { statusCode: 401, message: 'some other server text' },
+      re.sessionExpiredMessage(fakeT),
+      fakeT,
+    ),
+    true,
+    '🔴 只有 mapped 是当前语言的译文时也必须认出来（这条不能被前面的分支短路掉）',
+  );
+  assert.strictEqual(
+    re.isSessionExpiredError(
+      { response: { status: 401 }, message: re.sessionExpiredMessage(fakeT) },
+      fakeT,
+    ),
+    true,
+    '🔴 isSessionExpiredError 走 error.message 那条路时同样要认译文',
+  );
+  assert.strictEqual(
+    re.isSessionExpiredPayload({ statusCode: 500, message: '登录失效' }, undefined, fakeT),
+    false,
+    '非 401 不许误判成会话过期',
+  );
+  // 🔴 不传 t（identity 路径）时仍然逐字是中文 —— 老行为一个字没变
+  assert.strictEqual(
+    re.adaptAdminResponse({ statusCode: 401, message: 'Unauthorized' }).errorMessage,
     '登录失效',
   );
 });

@@ -8,10 +8,56 @@
  * stale unauthorized race.
  */
 
-const SESSION_EXPIRED_MESSAGE = '登录失效';
-const LOGIN_SUCCESS_MESSAGE = '登录成功！';
-const FORBIDDEN_MESSAGE = '权限不足！';
-const DEFAULT_ERROR_MESSAGE = '操作失败，请稍后重试！';
+/**
+ * 🔴 多语言（期 7 第五批）：这四条以前是**一份常量同时干两件事**，本轮把它拆开：
+ *
+ * ① **线路字面量**（`SERVER_SESSION_EXPIRED_TEXT`）：服务端的 `message` 字段里可能出现的那句中文。
+ *    🔴 它是**协议的一部分**（与 `已初始化` / `初始化密钥` / `导出说明.md` / Caddy URL 锚点同一类），
+ *    **永不翻译** —— `isSessionExpiredPayload` / `isSessionExpiredError` 靠它认 401。
+ * ② **显示文案**（`sessionExpiredMessage(t)` 等四个函数）：跟着语言走，由调用方在**调用期**注入 t
+ *    （`app.jsx` 的 `makeServerErrorTranslator()` 已经在 adaptor 与 errorHandler 两处注入了）。
+ *
+ * 🔴 为什么必须拆：只把显示文案翻译掉、比对仍拿中文常量，那么 en-US 下 `mapped`（已翻译）
+ * 与 `SESSION_EXPIRED_MESSAGE`（中文）**永不相等** ⇒ 401 检测静默失效：会话过期不再弹提示、
+ * 也不再抑制"刚登录却又弹一条登录失效"的竞态 —— 而且**全都不报错**（§7.163 A 预判的就是这个）。
+ * ⇒ 现在比对**同时接受**线路字面量与当前语言的显示文案（见 isSessionExpiredPayload）。
+ *
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前**逐字相同**（requestError.test.js / adminRobustness.test.js
+ * 的黄金样本一个字都不用改）。SCREAMING_CASE 常量保留为 identity 视图；
+ * 🔴 函数体内不许再引用它们（localePackParity 有一条判据专门盯这件事）。
+ */
+function interpolate(template, values) {
+  if (!values) return String(template);
+  return String(template).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+  );
+}
+const IDENTITY_T = (id, defaultMessage, values) => interpolate(defaultMessage, values);
+
+/** 🔴 线路字面量：服务端 401 时 `message` 里可能就是这句中文（不是文案，是协议） */
+const SERVER_SESSION_EXPIRED_TEXT = '登录失效';
+/** 🔴 线路字面量：NestJS 的 403 默认短语（本来就是英文，与语言无关） */
+const SERVER_FORBIDDEN_TEXT = 'Forbidden resource';
+
+function sessionExpiredMessage(t = IDENTITY_T) {
+  return t('request.sessionExpired', '登录失效');
+}
+const SESSION_EXPIRED_MESSAGE = sessionExpiredMessage();
+
+function loginSuccessMessage(t = IDENTITY_T) {
+  return t('request.loginSuccess', '登录成功！');
+}
+const LOGIN_SUCCESS_MESSAGE = loginSuccessMessage();
+
+function forbiddenMessage(t = IDENTITY_T) {
+  return t('request.forbidden', '权限不足！');
+}
+const FORBIDDEN_MESSAGE = forbiddenMessage();
+
+function defaultErrorMessage(t = IDENTITY_T) {
+  return t('request.defaultError', '操作失败，请稍后重试！');
+}
+const DEFAULT_ERROR_MESSAGE = defaultErrorMessage();
 const LOGIN_SUCCESS_GRACE_MS = 5000;
 const SILENT_SHOW_TYPE = 0;
 /**
@@ -51,20 +97,30 @@ function getAdminPathname(pathname) {
   return '';
 }
 
-function isSessionExpiredPayload(resData, mappedMessage) {
+function isSessionExpiredPayload(resData, mappedMessage, t = IDENTITY_T) {
   if (!resData || typeof resData !== 'object') {
     return false;
   }
   const status = resData.statusCode;
   const raw = resData.message;
   const mapped = mappedMessage || resData.errorMessage;
-  if (status == 401 && raw === 'Unauthorized') {
+  // 🔴 `raw` 只跟**线路字面量**比（服务端不会因为界面语言而改口）；
+  //    `mapped` 是**我们自己产的显示文案** ⇒ 要同时接受"线路字面量""identity 中文""当前语言的译文"三种，
+  //    否则注入 t 之后这条判定会静默失效（§7.163 A）。
+  // 🔴 而且**只在真的是 401 时才去取译文**：非 401 的响应根本不需要那句话，
+  //    白取一次会往翻译器的调用记录里塞一条无关项（`i18nServerErrorCodes.test.js` 就是这么被绊红的：
+  //    它按**下标**读 spy 日志 ⇒ 多一次调用就整体错位。那边也一并改成按 id 找，两边都更结实）。
+  if (status != 401) {
+    return false;
+  }
+  if (
+    raw === 'Unauthorized' ||
+    raw === SERVER_SESSION_EXPIRED_TEXT ||
+    mapped === SERVER_SESSION_EXPIRED_TEXT
+  ) {
     return true;
   }
-  if (status == 401 && (raw === SESSION_EXPIRED_MESSAGE || mapped === SESSION_EXPIRED_MESSAGE)) {
-    return true;
-  }
-  return false;
+  return mapped === sessionExpiredMessage(t);
 }
 
 function shouldSuppressSessionExpiredToast({ pathname, now = Date.now() } = {}) {
@@ -101,10 +157,10 @@ function mapAdminErrorMessage(resData, t) {
   const translated = translateServerErrorMessage(resData, t);
   let errorMessage = translated === undefined ? resData?.message : translated;
   if (resData?.statusCode == 401 && resData?.message === 'Unauthorized') {
-    errorMessage = SESSION_EXPIRED_MESSAGE;
+    errorMessage = sessionExpiredMessage(t);
   }
-  if (errorMessage === 'Forbidden resource') {
-    errorMessage = FORBIDDEN_MESSAGE;
+  if (errorMessage === SERVER_FORBIDDEN_TEXT) {
+    errorMessage = forbiddenMessage(t);
   }
   return errorMessage;
 }
@@ -120,7 +176,7 @@ function adaptAdminResponse(resData = {}, context = {}) {
   };
   if (
     !success &&
-    isSessionExpiredPayload(resData, errorMessage) &&
+    isSessionExpiredPayload(resData, errorMessage, context?.t) &&
     shouldSuppressSessionExpiredToast(context)
   ) {
     result.showType = SILENT_SHOW_TYPE;
@@ -139,17 +195,23 @@ function resolveErrorInfo(error, context) {
   };
 }
 
-function isSessionExpiredError(error) {
+function isSessionExpiredError(error, t = IDENTITY_T) {
   if (!error) {
     return false;
   }
   const data = error.data || error.info || {};
   const mapped = data.errorMessage || error.message;
-  if (isSessionExpiredPayload(data, mapped)) {
+  if (isSessionExpiredPayload(data, mapped, t)) {
     return true;
   }
   const httpStatus = error.response && error.response.status;
-  return httpStatus == 401 && (mapped === 'Unauthorized' || mapped === SESSION_EXPIRED_MESSAGE);
+  // 🔴 同上：`mapped` 可能是线路字面量、identity 中文，或当前语言的译文 ⇒ 三种都认
+  return (
+    httpStatus == 401 &&
+    (mapped === 'Unauthorized' ||
+      mapped === SERVER_SESSION_EXPIRED_TEXT ||
+      mapped === sessionExpiredMessage(t))
+  );
 }
 
 function shouldShowRequestError(error, context = {}) {
@@ -160,7 +222,7 @@ function shouldShowRequestError(error, context = {}) {
   if (info.showType === SILENT_SHOW_TYPE) {
     return false;
   }
-  if (isSessionExpiredError(error) && shouldSuppressSessionExpiredToast(context)) {
+  if (isSessionExpiredError(error, context?.t) && shouldSuppressSessionExpiredToast(context)) {
     return false;
   }
   return Boolean(info.errorMessage || error?.message);
@@ -196,24 +258,39 @@ function reportRequestError(messageApi, error, fallbackText, context) {
   if (shouldShowRequestError(error, context)) {
     return false;
   }
-  const text = fallbackText || DEFAULT_ERROR_MESSAGE;
+  // 🔴 兜底文案也跟着语言走（context 里有 t 就用；没有 ⇒ identity，与今天逐字相同）
+  const text = fallbackText || defaultErrorMessage(context?.t);
   if (text && messageApi && typeof messageApi.error === 'function') {
     messageApi.error(text);
   }
   return true;
 }
 
-function notifyLoginSuccess(messageApi, text = LOGIN_SUCCESS_MESSAGE, now = Date.now()) {
+// 🔴 默认值**不写**在签名上（那等于在函数体里引用 identity 常量 ⇒ 判据会报，而且理由正当）：
+//    改成"没传 text 就在函数体里调**函数版**"⇒ 老调用点（不传 t）行为逐字不变，
+//    已接 i18n 的调用方（登录页）显式传 `t('request.loginSuccess', '登录成功！')`。
+function notifyLoginSuccess(messageApi, text, now = Date.now(), t = IDENTITY_T) {
+  // 🔴 兜底那句也要能跟着语言走 ⇒ 这个函数自己也收 t（尾参，identity 兜底）。
+  //    现在的调用方（登录页）**显式**传了译文，所以这条兜底暂时走不到；
+  //    但不收 t 就等于"将来任何新调用点都必然是中文"，而且 localePackParity 会当场报出来。
+  const finalText = text || loginSuccessMessage(t);
   markLoginSuccess(now);
   if (messageApi && typeof messageApi.destroy === 'function') {
     messageApi.destroy();
   }
   if (messageApi && typeof messageApi.success === 'function') {
-    messageApi.success(text);
+    messageApi.success(finalText);
   }
 }
 
 module.exports = {
+  IDENTITY_T,
+  SERVER_SESSION_EXPIRED_TEXT,
+  SERVER_FORBIDDEN_TEXT,
+  sessionExpiredMessage,
+  loginSuccessMessage,
+  forbiddenMessage,
+  defaultErrorMessage,
   SESSION_EXPIRED_MESSAGE,
   LOGIN_SUCCESS_MESSAGE,
   FORBIDDEN_MESSAGE,

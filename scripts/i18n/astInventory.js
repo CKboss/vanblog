@@ -617,7 +617,10 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
 const REGISTERED_KEY_GROUPS = ['accessPassword', 'article', 'common', 'cover', 'coverBackfill', 'customPage', 'draft', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
 //   组名用模块名（与 `accessPassword` / `coverBackfill` 同一套做法），因为它们的文案被多个页面共用。
-'menu', 'pathname', 'recycle', 'revision', 'schedule', 'siteInfo', // 🔴 `time` = 相对时间（relativeTime.js 的「刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前」）。
+// 🔴 `request` = 全局请求错误提示（requestError.js 的四条兜底）。
+//   ⚠️ **不能**并进 `error.*`：那一组是服务端错误码的专用命名空间，
+//   `i18nServerErrorCodes.test.js` 有反向断言"包里的 `error.*` 必须都有对应的码"。
+'menu', 'pathname', 'recycle', 'request', 'revision', 'schedule', 'siteInfo', // 🔴 `time` = 相对时间（relativeTime.js 的「刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前」）。
 'storage', 'sysconf', 'tagTokens', 'theme', 'time', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',

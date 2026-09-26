@@ -179,6 +179,34 @@ describe('admin request error toasts (#316)', () => {
     assert.deepEqual(api.calls, [{ type: 'error', text: SESSION_EXPIRED_MESSAGE }]);
   });
 
+  it('🔴 登录页必须**显式**把译文传给 notifyLoginSuccess（默认值是 identity，英文下会永远中文）', () => {
+    // ## 为什么要有这条（2026-09-26 期 7 第五批，变异对照 B25-M3 打不红 ⇒ 当场补的）
+    // `notifyLoginSuccess(messageApi, text, now, t)` 的 `text` 不传就落到 identity 视图（中文）。
+    // 把登录页那句显式译文删掉，**所有测试照旧全绿**（棘轮也不会红：中文在**服务层**、不在登录页），
+    // 只有活体切到 en-US 才看得见 —— 而这条 toast 是用户登录成功那一刻唯一看到的一句话。
+    // ⚠️ 本文件没有 readSrc 这个 helper（第一版凭记忆用了它 ⇒ ReferenceError）⇒ 用与既有断言同一套写法
+    const read = (rel) => readFileSync(path.join(__dirname, '../../', rel), 'utf8');
+    const loginSrc = read('src/pages/user/Login/index.jsx');
+    assert.match(
+      loginSrc,
+      /notifyLoginSuccess\(message, t\('request\.loginSuccess', '登录成功！'\)\)/,
+      '🔴 登录页必须显式传 t(...) 的译文；改回 notifyLoginSuccess(message) 会让英文/繁中用户看到简体中文',
+    );
+    // 🔴 反向：服务层那个默认值必须仍然是 identity（老调用点行为不变），且函数自己收 t
+    assert.match(
+      read('src/services/van-blog/requestError.js'),
+      /function notifyLoginSuccess\(messageApi, text, now = Date\.now\(\), t = IDENTITY_T\)/,
+    );
+    // ⚠️ 本文件顶部是**解构**引入的（没有 `re` 这个命名空间对象）⇒ 这里就地 require 一次整个模块
+    const mod = require('../../src/services/van-blog/requestError.js');
+    const calls = [];
+    mod.notifyLoginSuccess({ success: (x) => calls.push(x), destroy() {} }, undefined, Date.now());
+    assert.deepEqual(calls, ['登录成功！'], '不传 text/t ⇒ 逐字仍是中文（identity）');
+    const calls2 = [];
+    mod.notifyLoginSuccess({ success: (x) => calls2.push(x), destroy() {} }, undefined, Date.now(), (id) => `#${id}`);
+    assert.deepEqual(calls2, ['#request.loginSuccess'], '传了 t ⇒ 走译文');
+  });
+
   it('login page and request config use the helper so success cannot stack with 登录失效', () => {
     const loginSrc = readFileSync(
       path.join(__dirname, '../../src/pages/user/Login/index.jsx'),

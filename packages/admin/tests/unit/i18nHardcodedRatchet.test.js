@@ -225,6 +225,13 @@ const BUDGET = {
   'src/services/van-blog/parseMarkdownFile.jsx': 0,
   'src/components/CopyUploadBtn/index.tsx': 0,
   'src/components/UploadBtn/index.tsx': 0,
+  // 🔴 期 7 第五批（2026-09-26）：全局请求错误提示 ⇒ 预算 **1**（不是 0）。
+  //   那 1 条是 `SERVER_SESSION_EXPIRED_TEXT = '登录失效'` —— 🔴 **线路字面量**：
+  //   服务端 401 时 `message` 里可能就是这句中文，`isSessionExpiredPayload` 靠它认会话过期。
+  //   翻译了它 ⇒ en-US 下 401 检测静默失效（不弹提示、也不再抑制重复弹窗，而且全都不报错）。
+  //   ⇒ 显示文案走 `sessionExpiredMessage(t)`，比对走这个常量，**两个东西**。
+  //   它进 REQUIRED_EXCEPTIONS 反向钉住（第 6 类例外形状：与别层比对的协议字面量）。
+  'src/services/van-blog/requestError.js': 1,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -243,15 +250,26 @@ const BUDGET = {
 // 🔴 **53 → 54（2026-09-26 期 7 第三批）：多出的 1 条是 `exportFormats.js` 的 `导出说明.md`** ——
 //   **服务端产物文件名**（线路契约，不是文案），属**永久例外**那一类（与 Caddy URL 同类）：
 //   翻译了它，用户在压缩包里就找不到那个文件。⇒ 账目现在是：
-//   🔴 **54 = 48（目标底）+ 4（Customizing 欠条）+ 2（永久例外：Caddy URL、导出说明.md）**。
+//   54 = 48（目标底）+ 4（Customizing 欠条）+ 2（永久例外：Caddy URL、导出说明.md）。
+// 🔴 **54 → 55（2026-09-26 期 7 第五批）：多出的 1 条是 `requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`**
+//   （= '登录失效'）—— **与服务端比对的线路字面量**，属永久例外（与 `已初始化` 同族）。
+//   ⇒ 账目现在是：🔴 **55 = 48（目标底）+ 4（Customizing 欠条）+ 3（永久例外：Caddy URL、导出说明.md、登录失效）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 54
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 55
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
   { file: 'src/pages/InitPage/index.tsx', text: '已初始化', why: '协议字符串：匹配服务端 HttpException 文本，翻译会静默破坏初始化检测' },
   { file: 'src/pages/InitPage/setupKeyCore.js', text: '初始化密钥', why: '要照着敲进 shell 的命令与启动日志标签；服务端输出就是简体，翻译了 grep 抓不到' },
   { file: 'src/pages/user/Login/index.jsx', text: '语言 · Language', why: '静态双语 tooltip，服务于"还没切语言的人"，刻意不走 t()' },
+  // 🔴 期 7 第五批新增（第 6 类例外形状：**与别层比对的协议字面量**）
+  {
+    file: 'src/services/van-blog/requestError.js',
+    text: '登录失效',
+    why:
+      '服务端 401 时 message 里可能就是这句中文，isSessionExpiredPayload / isSessionExpiredError 靠它认会话过期；' +
+      '翻译了它 ⇒ en-US 下 401 检测静默失效（显示文案已拆成 request.sessionExpired 走 t）。',
+  },
   // 🔴 期 7 第三批新增（第 5 类例外形状：**服务端产物的文件名**）
   {
     file: 'src/services/van-blog/exportFormats.js',
@@ -363,7 +381,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 64, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 65, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
@@ -374,11 +392,14 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   //   —— **服务端产物的文件名**（`markdownExport.provider.ts` 写死的 `relativePath`），属**永久例外**（与 Caddy URL 同类）：
   //   翻译了它，用户在压缩包里就找不到那个文件。它已进 REQUIRED_EXCEPTIONS（反向钉住），
   //   而且 `exportFormats.test.js` 有一条**跨层断言**盯着服务端那个名字。
-  assert.strictEqual(TOTAL_BUDGET, 54, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  assert.strictEqual(TOTAL_BUDGET, 55, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
   //   （`exportFormats.js` 的 `导出说明.md`；前四类是协议字符串 / 要照着敲的命令 / 静态双语标签 / 中文文档 URL 锚点）。
   //   🔴 它同时被 `exportFormats.test.js` 的**跨层断言**盯着：服务端那个 `relativePath` 改名 ⇒ 两边一起改。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 6, '例外清单条数变了 ⇒ 必须是有意的');
+  // 🔴 6 → **7**（期 7 第五批）：新增第 6 类例外形状 —— **与别层比对的协议字面量**
+  //   （`requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`；前五类：协议字符串 / 要照着敲的命令 /
+  //   静态双语标签 / 中文文档 URL 锚点 / 服务端产物文件名）。
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 7, '例外清单条数变了 ⇒ 必须是有意的');
 });

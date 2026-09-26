@@ -1012,4 +1012,11 @@ export default {
   'common.uploadFailed': '上傳失敗！',
   'common.uploadFailedWithName': '{name} 上傳失敗!',
 
+
+  // ── 🔴 期 7 第五批（4 條）── 術語：**登入**（登录）/ 失效 / 權限不足 / 操作失敗 / 稍後重試。
+  'request.sessionExpired': '登入失效',
+  'request.loginSuccess': '登入成功！',
+  'request.forbidden': '權限不足！',
+  'request.defaultError': '操作失敗，請稍後重試！',
+
 };

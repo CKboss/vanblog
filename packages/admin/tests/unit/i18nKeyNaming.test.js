@@ -55,7 +55,12 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   期 3 第一批（145 key）时没抬，本轮补上。
 //   🔴 这里也是"key 数下界"的**唯一权威口径**：`i18nSharedImpl` 只证明 readPack 没坏（三份相等且非平凡），
 //   `localePackParity` 只做"三份都空 ⇒ 集合相等"的反空转（>= 50），都不写具体进度数字。
-const BASELINE_KEY_COUNT = 815;
+// 🔴 **815 → 858，并且判据从"下界"改成"精确等值"**（2026-09-26 期 7 第五批）：
+//   这个数原来是 `n >= BASELINE_KEY_COUNT`（只防"key 被删/进度倒退"），
+//   结果 🔴 **期 7 第三批与第四批都忘了把它调上来**（844、854 都没写），而它一直绿 —— 判据在悄悄变松。
+//   ⇒ 改成 `n === BASELINE_KEY_COUNT`：漏更就红，多更也红，逼着每批都记账。
+//   账目：739（期5批8）→ 768（期5批9）→ 804（期5批10）→ 815（期7批2）→ 844（期7批3）→ 854（期7批4）→ **858**（期7批5）。
+const BASELINE_KEY_COUNT = 858;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。
@@ -68,8 +73,10 @@ test('i18n key 命名 · 反空转：三份包都真的被解析到，且 key �
     // 🔴 解析到 0 个 key 会让下面所有断言恒真 ⇒ 这里必须 fail-loud
     assert.ok(n > 0, `${l}.ts 解析出 0 个 key（尺子坏了，不是语言包真的空）`);
     assert.ok(
-      n >= BASELINE_KEY_COUNT,
-      `${l}.ts 只有 ${n} 个 key，低于基线 ${BASELINE_KEY_COUNT}（key 被删了？翻译进度在倒退）`,
+      n === BASELINE_KEY_COUNT,
+      `${l}.ts 有 ${n} 个 key，与基线 ${BASELINE_KEY_COUNT} 不符 ⇒ ` +
+        '🔴 判据是**精确等值**（不是下界）：加了 key 就必须同步改 BASELINE_KEY_COUNT，' +
+        '删了 key 更要说清为什么（下界形状曾让"漏更两批"一路绿过来）',
     );
   }
   // 🔴 三份包的 key 集合必须相等（这条在 localePackParity 里也钉，这里只钉"本守卫扫到的是同一批"）

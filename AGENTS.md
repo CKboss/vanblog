@@ -9469,6 +9469,83 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.164 期 7 第五批：全局请求错误提示（`requestError.js`，4 条）—— 🔴 "线路字面量 vs 显示文案"拆开、在 en-US 下**活体验了 401**，顺带查出两条**空转断言**
+
+**交付**：`requestError.js` 的四条（`登录失效` / `登录成功！` / `权限不足！` / `操作失败，请稍后重试！`）显示文案全部走 t；
+语言包 **854 → 858 key**（新组 **`request`**）；棘轮清单 **64 → 65 个文件**，🔴 **TOTAL 54 → 55**
+（多的 1 条是**线路字面量** `SERVER_SESSION_EXPIRED_TEXT = '登录失效'`，永久例外）；
+`REQUIRED_EXCEPTIONS` **6 → 7**（🔴 第 6 类例外形状：**与别层比对的协议字面量**）；
+`i18nKeyNaming` → **858**，且 🔴 **判据从"下界"改成"精确等值"**（见 C 段）。
+🔴 **做完这批，文章管理页表面只剩 2 条 / 2 文件 —— 两条都是刻意保留的永久例外**
+（`exportFormats.js` 的 `导出说明.md`、`requestError.js` 的 `登录失效`）⇒ **那一大页的文案覆盖收工**。
+🔴 **浏览器活体 9/9（zh-CN 2 + en-US 4 + zh-TW 3），problems 0、skipped 0**。
+
+#### A. 🔴 拆分：一个常量同时"给人看"和"跟服务端比对"，翻译前必须先拆成两个
+以前 `SESSION_EXPIRED_MESSAGE = '登录失效'` **既是 toast 文案，又被拿去与 `resData.message` / `mapped` 比对**
+（`isSessionExpiredPayload` / `isSessionExpiredError`）。现在：
+- **线路字面量**：`SERVER_SESSION_EXPIRED_TEXT = '登录失效'`（🔴 永不翻译；进棘轮永久例外 + `REQUIRED_EXCEPTIONS` 反向钉住）、
+  `SERVER_FORBIDDEN_TEXT = 'Forbidden resource'`；
+- **显示文案**：`sessionExpiredMessage(t)` / `loginSuccessMessage(t)` / `forbiddenMessage(t)` / `defaultErrorMessage(t)`
+  + 四个 identity 视图常量（🔴 老消费方与黄金样本一个字都没改）；
+- 🔴 **401 判定同时接受三种**：线路字面量、identity 中文、**当前语言的译文**
+  （`raw` 只跟线路字面量比 —— 服务端不会因为界面语言改口；`mapped` 是我们自己产的，三种都可能）；
+- 🔴 并且**只在真的是 401 时**才去取译文：非 401 白取一次会往翻译器的 spy 日志里塞一条无关项
+  —— 实测把 `i18nServerErrorCodes.test.js` 里**按下标**读日志那两条绊红了；那边也一并改成按 **id** 找（两边都更结实）；
+- `notifyLoginSuccess(messageApi, text, now, t)`：默认值**不再写在签名上**（那等于在函数体里引用 identity 常量，判据会报、而且理由正当），
+  改成"没传 text 就在函数体里调**函数版**"；🔴 登录页**显式**传 `t('request.loginSuccess', '登录成功！')`。
+
+**活体证据（§7.163 A 点名要求的那一条）**：en-US 下把 token 换成废的、🔴 **等过 5 秒"刚登录"宽限**
+（否则按 #316 的设计**故意**不弹），再触发一次请求 ⇒ toast = **"Your session has expired"**、并跳回 `/admin/user/login`；
+重新登录 ⇒ toast = **"Signed in"**。三语实测：`登录成功！/登录失效`、`登入成功！/登入失效`、`Signed in / Your session has expired`，
+en-US 两条都**零汉字**、zh-TW **零简体专用字**。证据：`vanblog_dev/i18n-browser-evidence/phase7-request-error/`。
+👉 🔴 这就是"拆线路 vs 显示"**必须活体验**的原因：判定失效时**所有单测都可以是绿的**（它们大多不传 t）。
+⚠️ 探针仍然是"边等边采"（toast 3 秒自消；§7.162 B 那条教训已经用上）。
+
+#### B. 🔴 变异对照又打不红两条 ⇒ 都是**空转断言**（"结论对不等于理由对"的守卫版）
+1. **M2**（把"接受译文"那半句换成只比线路字面量）**全绿** —— 因为我新加的那条断言用的是
+   `{ statusCode: 401, message: 'Unauthorized' }` ⇒ 🔴 `raw === 'Unauthorized'` 那个分支**先返回 true**，
+   被验的那半句**根本没执行**。改成"raw 既不是 'Unauthorized' 也不是线路字面量、只有 mapped 是译文"才真的压上去
+   （另外补了 `isSessionExpiredError` 走 `error.message` 那条路的同款断言）。
+   👉 🔴 **规矩：写"某分支必须成立"的断言时，要确认它**只能**靠那个分支过** —— 前面的短路分支会把它变成空转；
+   最省事的自检就是**变异对照**（打不红 = 没压到）。
+2. **M3**（把登录页那句显式译文删掉）**全绿** —— 棘轮不会红（中文在**服务层**、不在登录页），也没有形状断言管它。
+   ⇒ 补一条源码形状断言 + 两条行为断言（不传 t ⇒ 逐字中文；传 t ⇒ 走译文）。
+   🔴 **新认识：「某个已接 i18n 的调用点必须显式传译文」这类性质，棘轮与逐字对账都管不到** ——
+   棘轮只看"文件里有没有裸中文"，对账只看"defaultMessage 与包一致"，**都不看"该传的地方传没传"**。
+
+#### C. 🔴 `i18nKeyNaming` 的 key 数基线**漏更了两批**而一路绿 ⇒ 判据从"下界"改成"精确等值"
+`BASELINE_KEY_COUNT` 还停在 **815**，而包里已经是 844（期 7 第三批）、854（第四批）⇒ 断言是 `n >= BASELINE`，
+🔴 **漏更不会红**（判据在悄悄变松）。本轮改成 `n === BASELINE_KEY_COUNT`（858），漏更/多更都红。
+👉 🔴 **规矩：凡"只许涨"的量，用**精确等值**钉，不要用下界** —— 下界形状会让"忘了记账"永远绿。
+（同族：`TOTAL_BUDGET` 与 `i18nSharedImpl` 里那个总数是**两处**独立断言，上批与本批都因此各红过一次。）
+⚠️ **手册更正**：§7.162 G / §7.163 E 里写的"`i18nKeyNaming` → 844 / → 854"是**意图**、不是实测（当时没改成）⇒
+真实账目是 815 →（漏更）→（漏更）→ **858**。
+
+#### D. 两处判据收窄（都是本批实测误报，收窄后真缺陷仍被抓）
+1. **解构出 `t`**：`const { message: messageApi, pathname, now, t } = deps;` 被判成"遮蔽翻译器" ——
+   可那个 `t` **就是**注入进来的翻译器本身（与 `t = IDENTITY_T` 形参同一性质）。
+   ⇒ 收窄成"只有文件自己声明了**组件级**翻译器（`useIntl()` + `const t =`）时才算遮蔽"。
+   ⚠️ 真缺陷仍要抓到：`RecycleBin` 的 `const { articles: list, total: t } = …` 在组件文件里 ⇒ 照旧报。
+   👉 这条判据**第三次**收窄（前两次：`t = IDENTITY_T` 例外、作用域感知）：🔴 **判据要按"这个 t 到底是不是翻译器"写，不要按名字一刀切。**
+2. **"最后一个实参必须是 t"**：`defaultErrorMessage(context?.t)` 被误报（`OptionalMemberExpression`）⇒
+   认可三种形状：`t` / `x.t` / `x?.t`（后两种就是"从 deps/context 里取注入的翻译器"，与裸 `t` 等价）。
+
+#### E. 基线
+- admin `node --test` **763 tests / 168 suites / 0 fail**（+1 = B 段那条"登录页必须显式传译文"）；i18n 守卫组 **113**；
+- 变异对照 **6/6**（🔴 翻译掉线路字面量 / 🔴 拿掉"接受译文"那半句 / 拿掉登录页的显式译文 /
+  函数体内引用 identity 常量 / defaultMessage 改动 / 语义空操作）；
+- 语言包 **858 key** ×3；`--zh-tw-audit`：858 key / **718** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **65 个文件 / TOTAL 55**（🔴 其中 **3 条永久例外**：Caddy URL 锚点、`导出说明.md`、`登录失效`）；
+  admin 类型门禁 **31/0**；
+- 矩阵（5 个阶段全 rc=0）：admin **763/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.e1909ad8.js` = **1,542,975 B**）；
+- 🔴 **真实剩余：65 个文件 / 902 条**；🔴 **文章管理页表面 = 2 条 / 2 文件（都是永久例外）⇒ 该页收工**。
+- 🔴 **下一批**：① `pages/Editor/**`（最大，**143 条 / 15 文件**；落地时把 `EXPORT_FORMATS` → `exportFormats(t)`、
+  `describeScheduledTag(x)` 补 t、`parseMarkdownFile(file)` 补 t，并把 `Editor/index.jsx` 与 `Editor/imgUpload.tsx`
+  从 `NOT_YET_I18N_CONSUMERS` 删掉）；② `DataManage/**`(134，含 `Category.jsx` 58) / `CommentManage`(71)；
+  ③ `SystemConfig` 收尾（`SiteInfo.tsx` 8 / `migrate.tsx` 5）；④ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.163 期 7 第四批：零散小服务模块（11 条 / 6 模块 + 2 个上传按钮）—— 🔴 祖父条款白名单**第一次减少**，以及"调用点判据"连抓三个漏传
 
 **交付**：`formatTime.js`(1) + `relativeTime.js`(5) + `tool.js`(转发) + `check.ts`(1) + `parseMarkdownFile.jsx`(2)

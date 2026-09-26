@@ -24,7 +24,9 @@ const Login = () => {
       const msg = await login({ ...values, type });
 
       if (msg.statusCode === 200) {
-        notifyLoginSuccess(message);
+        // 🔴 显式传译文：`notifyLoginSuccess` 的默认值是 identity 视图（永远中文），
+        //    而这条 toast 是**登录成功那一刻**用户唯一看到的一句话（§7.163 A 那类"静默不跟随语言"）
+        notifyLoginSuccess(message, t('request.loginSuccess', '登录成功！'));
         const token = msg.data.token;
         const user = {
           name: msg.data.user.name,

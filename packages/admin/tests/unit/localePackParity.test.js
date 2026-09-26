@@ -335,12 +335,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 59,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 59）⇒ 遍历或解析器坏了`,
+      FILES.length >= 60,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 60）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1085,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1085）⇒ 疑似解析器坏了`,
+      calls.length >= 1090,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1090）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -395,6 +395,7 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/parseMarkdownFile.jsx',
       'src/components/CopyUploadBtn/index.tsx',
       'src/components/UploadBtn/index.tsx',
+      'src/services/van-blog/requestError.js',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -533,13 +534,22 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       const ast = astInventory.parseSource(src, rel);
       const paramHits = [];
       const destructHits = [];
+      // 🔴 **收窄（期 7 第五批）**：解构出名为 `t` 的变量，只有在"这个文件自己声明了**组件级**翻译器"时才算遮蔽。
+      //    误报实例（本批实测）：`requestError.js` 的 `const { message: messageApi, pathname, now, t } = deps;`
+      //    —— 那个 `t` **就是**注入进来的翻译器本身（与 `t = IDENTITY_T` 形参同一性质），不是遮蔽。
+      //    真缺陷仍要抓到：`RecycleBin` 的 `const { articles: list, total: t } = …` 在组件文件里
+      //    （有 useIntl + const t）⇒ declaresTranslator 为真 ⇒ 照旧报。
+      //    👉 这是这条判据**第三次**收窄（前两次：`t = IDENTITY_T` 例外、作用域感知）：
+      //    🔴 判据要按"这个 `t` 到底是不是翻译器"来写，不要按名字一刀切。
       const checkPattern = (pat, where) => {
         if (!pat) return;
-        if (pat.type === 'Identifier' && pat.name === 't') destructHits.push(where);
+        if (pat.type === 'Identifier' && pat.name === 't' && declaresTranslator) destructHits.push(where);
         if (pat.type === 'ObjectPattern') {
           for (const pr of pat.properties || []) {
             const v = pr.value || pr.argument;
-            if (v && v.type === 'Identifier' && v.name === 't') destructHits.push(`${where}（对象解构）`);
+            if (v && v.type === 'Identifier' && v.name === 't' && declaresTranslator) {
+              destructHits.push(`${where}（对象解构）`);
+            }
             checkPattern(v, where);
           }
         }
@@ -686,6 +696,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/exportFormats.js': [
         'exportFormats', 'loadingText', 'describeExportOutcome', 'classifyExportFailure',
       ],
+      // 🔴 期 7 第五批：全局请求错误提示（401 判定 / 兜底文案）
+      'src/services/van-blog/requestError.js': [
+        'sessionExpiredMessage', 'loginSuccessMessage', 'forbiddenMessage', 'defaultErrorMessage',
+      ],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -829,7 +843,19 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
           return;
         }
         const last = args[args.length - 1];
-        if (!last || last.type !== 'Identifier' || last.name !== 't') {
+        // 🔴 认可的形状有三种（本批实测：只认第一种会误报 `defaultErrorMessage(context?.t)`）：
+        //    ① 裸 `t`；② `x.t`；③ `x?.t` —— 后两种是"从 deps / context 里取注入进来的翻译器"，
+        //    与裸 `t` 完全等价（`requestError.js` 的 `reportRequestError(…, context?.t)` 就是这个形状）。
+        const isTranslatorArg = (nd) => {
+          if (!nd) return false;
+          if (nd.type === 'Identifier') return nd.name === 't';
+          if (nd.type === 'MemberExpression' || nd.type === 'OptionalMemberExpression') {
+            const prop = nd.property;
+            return Boolean(prop && (prop.name === 't' || prop.value === 't'));
+          }
+          return false;
+        };
+        if (!isTranslatorArg(last)) {
           missing.push(`${rel}: ${name}(…) 的最后一个实参不是 t（实际 ${last ? last.type : '无实参'}）`);
         }
       };
@@ -1612,6 +1638,11 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
       // 🔴 期 7 第三批：`EXPORT_FORMATS`（`ExportFormatDropdown` 必须改用 `exportFormats(t)`；
       //    `pages/Editor/index.jsx` 还没接 i18n ⇒ 继续用常量、走 identity，这是**预期**）
       'src/services/van-blog/exportFormats.js': ['EXPORT_FORMATS'],
+      // 🔴 期 7 第五批：这四条以前"既是显示文案又是比对字面量"⇒ 现在显示走函数、比对走
+      //    `SERVER_SESSION_EXPIRED_TEXT` / `SERVER_FORBIDDEN_TEXT`；常量只剩 identity 视图这一个身份
+      'src/services/van-blog/requestError.js': [
+        'SESSION_EXPIRED_MESSAGE', 'LOGIN_SUCCESS_MESSAGE', 'FORBIDDEN_MESSAGE', 'DEFAULT_ERROR_MESSAGE',
+      ],
       'src/services/van-blog/coverBackfill.js': ['EMPTY_RESULT_TEXT'],
       'src/components/RevisionHistory/revisionCore.js': [
         'FEATURE_OFF_TEXT', 'EMPTY_TEXT', 'DETAIL_EMPTY_CONTENT_TEXT', 'REVISION_REASON_LABELS',

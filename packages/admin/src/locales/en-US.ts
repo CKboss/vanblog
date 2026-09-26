@@ -1069,4 +1069,12 @@ export default {
   'common.uploadFailed': 'Upload failed',
   'common.uploadFailedWithName': '{name} failed to upload!',
 
+
+  // ── 🔴 期 7 第五批（4 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ 这四条是**全局兜底**：任何一次失败的请求都可能弹它，所以英文要短、要说清"下一步怎么办"。
+  'request.sessionExpired': 'Your session has expired',
+  'request.loginSuccess': 'Signed in',
+  'request.forbidden': 'You do not have permission to do that',
+  'request.defaultError': 'The action failed. Please try again later.',
+
 };

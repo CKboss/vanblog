@@ -1160,4 +1160,18 @@ export default {
   'common.uploadFailed': '上传失败！',
   'common.uploadFailedWithName': '{name} 上传失败!',
 
+
+  // ── 🔴 期 7 第五批：全局请求错误提示（`requestError.js`，4 条）──
+  //    🔴 组名用 `request`（**不能**用 `error.*`：那一组是服务端错误码的专用命名空间，
+  //    `i18nServerErrorCodes.test.js` 有反向断言"包里的 error.* 必须有对应的码"）。
+  //    🔴 这四条以前是"一份常量同时干两件事"：既显示给用户，又被拿去与服务端比对（401 判定）。
+  //    本轮拆成两份：**线路字面量** `SERVER_SESSION_EXPIRED_TEXT`（永不翻译，进棘轮的永久例外）
+  //    与**显示文案** `sessionExpiredMessage(t)` 等四个函数。
+  //    🔴 401 判定现在同时接受"线路字面量 / identity 中文 / 当前语言的译文"三种，
+  //    并且**只在真的是 401 时**才去取译文（否则白调一次翻译器，还会把 spy 日志的下标搞乱）。
+  'request.sessionExpired': '登录失效',
+  'request.loginSuccess': '登录成功！',
+  'request.forbidden': '权限不足！',
+  'request.defaultError': '操作失败，请稍后重试！',
+
 };
