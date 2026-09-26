@@ -9469,6 +9469,87 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.153 期 5 第四批：日志管理（整页 29 条）+ 🔴 一条口径裁定：`console.*` 里的中文**不是 UI 文案**，不翻也不计入
+
+**交付**：`pages/LogManage/index.jsx`(3) + `tabs/Login.jsx`(9) + `tabs/Pipeline.tsx`(13) + `tabs/System.tsx`(4)
+全部 → **0**；语言包 **613 → 633 key**（新组 **`log`**）；棘轮清单 **27 → 31 个文件**（都预算 0，🔴 **TOTAL 仍 53**）；
+`i18nKeyNaming` 下界 → **633**；`localePackParity` 自动发现下界 **24 → 28 个文件 / 680 → 705 个调用点**（实测 28 / 716）；
+`customPage.colIndex` **提升**为 `common.colIndex`。
+🔴 **浏览器活体 27/27（9 项判据 × 3 语），problems 0**：三个页签、系统日志卡片标题（每 5s 自动刷新）+「手动刷新」按钮
++ 终端区域可见（量了宽高）、流水线 6 个列头 + 表标题、登录 6 个列头 + 表标题、
+以及 🔴 **登录状态列的「成功」标签**（本栈刚登录过 ⇒ 有真数据，`common.success` 是活体验过的）。
+`skipped 6`（每语 2 条，都写明理由）：流水线详情弹窗需要一条**运行记录**、错误 Alert 需要让 `/api/admin/log` 失败
+⇒ 活体触发不了，交给 defaultMessage↔包对账覆盖。证据：`vanblog_dev/i18n-browser-evidence/phase5-logmanage/`。
+
+#### A. 🔴 口径裁定：`console.*` 里的中文**不翻、也不计入待翻工作量**
+起因：`System.tsx` 有一句 `console.error('[系统日志] 拉取失败', err)`。三个选项：
+① **翻它** —— 🔴 反过来坏事：日志文本跟着界面语言漂 ⇒ 按文本 grep 日志失效、`leakAndErrorHardening`
+那条"这个文件必须打 console.error"的钉子也得跟着改；而且控制台是**开发者界面**，不是用户看得见的 UI；
+② **不翻、给这个文件开一条永久例外**（预算 1）—— 会把"必须保持简体"钉在棘轮里，
+但 🔴 例外越攒越多，而且 `Footer`(5 条)/`Editor`(1 条) 迟早同样撞上；
+③ 🔴 **改口径**：`bareChinese` 排除 `console.*` 的实参（**选定**）。实测影响：admin src 里 **7 条 / 3 个文件**。
+🔴 **口径改动的三条纪律**（这次都做了，缺一条就分不清"数字变小"是进度还是放水）：
+1. **单独报出来**、不静默扣掉：新增 `consoleChinese()`，`inventory.js` 明着打印
+   `⚠️ 另有 3 个文件 / 7 条落在 console.* 里的中文不计入`（与上一批"测试文件"那一桶同一个做法）；
+2. **正负两个方向都钉住**：正 —— console 里的不计入（字面量与模板串都算）；
+   🔴 负 —— `message.error('保存失败')` **必须照常计入**，而且"**定义在 console 之外、只是被 console 打印**"的字符串也必须计入
+   （🔴 排除的是**位置**，不是"这句话"；否则口径会悄悄放大成"放过所有错误提示"）；
+3. **变异对照三条**：去掉排除 ⇒ 红；把排除扩大到所有 MemberExpression 调用 ⇒ 红（反向）；
+   把那句 console.error 翻成英文 ⇒ 红（"日志文本必须逐字保持简体"那条钉子）。
+⚠️ 还有个**统计口径的坑**：那段计数原本写在 `if (n > 0)` 里面 ⇒ 已经翻完的文件（n === 0，正是 System.tsx）
+会从 console 那一桶里**消失**（少报 1 条）。🔴 报"被排除了多少"必须与"还剩多少待翻"**互相独立**地统计。
+
+#### B. 🔴 一个陈旧断言：我上一段刚写的钉子，被这一段自己的改造打红了
+A 段那条守卫里我顺手加了"真实源码上的正例"：`System.tsx` 的 `bareChinese >= 3`（写它的时候这个文件还没翻）。
+**同一轮里**把 System.tsx 翻完 ⇒ 它变成 0 ⇒ 🔴 我自己刚写的断言立刻假红。
+修法：换成**改造完成后仍然成立**的形状 —— `bareChinese(System.tsx) === 0`（整页翻完）
++ `consoleChinese(System.tsx) >= 1`（那句刻意不翻的还在、且被单独报出来）+ 那句文本**逐字仍是简体**（正则钉子）。
+👉 🔴 **规矩：守卫的期望值要选"改造完成后仍然成立"的形状，别钉住改造过程中的中间态。**
+（与上一批"合成夹具会过期"是同族问题：`zzNotARealGroup` 那个例子也是因为**真实数据长大了**而失效。）
+
+#### C. 🔴 陈旧语言闭包的**新形状**：被 `setInterval` 抓住的 `fetchLog`
+`System.tsx` 原本把**错误文案**存进 state（`setError('日志拉取失败（…），每 5 秒会自动重试')`）。
+而 `fetchLog` 被 `setInterval(fetchLog, 5000)` 抓住、`useEffect(..., [])` 只跑一次
+⇒ 🔴 interval 里那个 `fetchLog` 永远是**首次渲染的闭包**：如果按惯例把 `t(...)` 的结果存进 state，
+切语言之后**新出现的**错误提示仍然是旧语言 —— 而且它只在"出错时"才显形 ⇒ 🔴 极难被发现（正常路径永远是绿的）。
+修法：state 只存**布尔**（"出错了"），文案在渲染期由 `t()` 现取。
+👉 🔴 **规矩：会被 timer / interval / 事件订阅抓住的函数里，不要把 `t()` 的结果存进 state**；
+存"事实"（布尔 / 错误码 / 原始数据），文案在渲染期算。
+（与"依赖数组里放 t 必须先 `useCallback([intl])`"是同一家族的两侧：一个防**循环**，一个防**陈旧**。）
+
+#### D. 复用与提升（都有变异对照钉着）
+页签标签与子表 `headerTitle` 是**同一个东西**（同一种日志的名字）⇒ 共用 `log.system`/`log.pipeline`/`log.login`；
+`customPage.colIndex` **提升**为 `common.colIndex`（三个页面都有「序号」列）；
+新增 `common.success`/`common.fail`（两个表都用）、`common.manualRefresh`；`名称` 复用 `common.colName`。
+变异对照：把 `common.colIndex` 换回 `customPage.colIndex` ⇒ 红（那个 key 已删，"必须在三份包里存在"）。
+
+#### E. 🔴 数据 i18n 的又一处（**待站长裁定**）：流水线的「触发事件」显示的是服务端字段 `eventNameChinese`
+`Pipeline.tsx` 那一列渲染的是 `pipelineConfig.find(...)?.eventNameChinese` —— 🔴 **服务端存的中文字符串**。
+所以 en-US 下这一列的**列头**是 "Trigger event"、**值**仍然是中文。
+与"内置主题名"同一类：**这是数据 i18n，不是文案 i18n**，需要站长裁定（选项：服务端补 `eventNameEn`；
+或前端按 `eventName` 这个英文标识符自己映射；或接受现状）。
+🔴 本轮**没有**擅自改它（改法涉及服务端字段与既有流水线数据），只把问题量出来记在这里。
+
+#### F. 锚点**子串**陷阱（又一次，好在 fail-loud）
+`"      title: '详情',"`（6 空格）是 Modal.info 那行（16 空格）的**子串** ⇒ `s.count()` 数到 2、
+迁移脚本按"锚点必须唯一"直接报错退出（🔴 这是好事：宁可停下也不要改错地方）。
+👉 锚点要**跨行**或带唯一邻居（这里用了 `title: '详情',\n      dataIndex: 'detail',`）。
+
+#### G. 基线
+- admin `node --test` **747 tests / 165 suites / 0 fail**；i18n 守卫组 **103 → 104**（`i18nSharedImpl` +1 条口径正负对照）；
+- 变异对照 **6/6**（列标题退回硬编码 / 去掉 console 排除 / 🔴 把排除扩大到所有成员调用（反向）/
+  翻掉那句 console.error / 换回已删的 key / 语义空操作）；
+- 语言包 **633 key** ×3；`--zh-tw-audit`：633 key / **682** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **31 个文件 / TOTAL 53**；admin 类型门禁 **31/0**（新翻的 2 个 `.tsx` 与 2 个 `.jsx` 都在门禁范围内，**没加新错**）；
+- 矩阵（5 个阶段全 rc=0）：admin **747/165/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.52bde849.js` = **1,468,754 B**）；
+- 🔴 **真实剩余（bareChinese 口径）：99 → 95 个文件 / 1,297 → 1,269 条**（本批 −4 文件 / −28 条）。
+  另**不计入**：测试文件 2 个 / 7 条、`console.*` 3 个文件 / 7 条（两桶都明着打印）。
+- 🔴 **下一批**：① `pages/Draft/**`（22 条，与文章列表同形状）；② `pages/Article/**`（56 条，🔴 被 **10 个**测试文件钉着，单独一轮）；
+  ③ `pages/Editor/**`（**143 条 / 15 个文件**，最大的一个页面，单独一轮；翻 `Editor/imgUpload.tsx` 时要把 `t`
+  传给 `copyImgLink(...)` 并从 `NOT_YET_I18N_CONSUMERS` 表里删掉）；④ `SystemConfig` 收尾（`SiteInfo.tsx` 8 / `migrate.tsx` 5）；
+  ⑤ 🔴 `Backup.jsx`(89) / `Theme.jsx`(59) 的译文要**交站长人工复核**。
 ### 7.152 期 5 第三批：自定义页面（整页 53 条）—— 活体证据抓到 **3 处英文片段拼接缺陷**，以及一条"英文措辞没有单测护栏"的反证
 
 **交付**：`pages/CustomPage/index.jsx`（35 条 → **0**，38 个调用点）+ `components/CustomPageModal/index.tsx`

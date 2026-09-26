@@ -129,6 +129,14 @@ const BUDGET = {
   //   要用 hook 就得改成块体 + 显式 return（这是本批唯一的结构性改动）。
   'src/pages/CustomPage/index.jsx': 0,
   'src/components/CustomPageModal/index.tsx': 0,
+  // 🔴 期 5 第四批（2026-09-26）：**日志管理整页**（index 的三个页签 + 系统/流水线/登录三个子表）⇒ 都预算 0。
+  //   ⚠️ `System.tsx` 里那句 `console.error('[系统日志] 拉取失败', err)` **刻意不翻**（开发者界面），
+  //   它已经被 bareChinese 的口径排除（见 i18nSharedImpl 那条正负对照），所以这里预算仍然是 0 而**不是 1**。
+  //   ⚠️ `Login.jsx` 的 columns 原本是模块级常量 ⇒ 搬进了组件（模块加载期 umi 运行时还没初始化）。
+  'src/pages/LogManage/index.jsx': 0,
+  'src/pages/LogManage/tabs/Login.jsx': 0,
+  'src/pages/LogManage/tabs/Pipeline.tsx': 0,
+  'src/pages/LogManage/tabs/System.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -247,7 +255,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 27, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 31, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   assert.strictEqual(TOTAL_BUDGET, 53, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**

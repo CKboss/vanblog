@@ -689,7 +689,6 @@ export default {
   // ── 🔴 期 5 第三批（36 條）── 術語：自訂頁面 / **檔案**（文件）/ 路徑 / 檢視（查看）/ 資訊（信息）/
   //    託管 / 建置（构建）/ 專案（项目）/ 反向代理（反代）/ **白畫面**（白屏）/ 資料夾（文件夹）/ 解壓縮 /
   //    斜線（斜杠）/ **單層**（单级）/ 位址（地址）/ 新增（新建）。
-  'customPage.colIndex': '序號',
   'customPage.type': '類型',
   'customPage.typeFile': '單檔案頁面',
   'customPage.typeFolder': '多檔案頁面',
@@ -725,5 +724,30 @@ export default {
   'customPage.nameTooltip': '自訂頁面的名稱',
   'customPage.pathPlaceholder': '例如 /uptime',
   'customPage.pathTooltip': '必須以 / 開頭，且只能有一層，例如 /uptime。實際位址是 /c + 路徑，即 /c/uptime/。多檔案頁面會讀取該目錄下的 index.html。',
+
+
+  // ── 🔴 期 5 第四批（21 條）── 術語：**登入**（登录）/ 日誌 / 流水線 / **指令碼**（脚本）/
+  //    **裝置**（设备）/ **位址**（地址）/ **工作階段**（会话）/ **重新整理**（刷新）/ 序號 / 觸發 / 詳情。
+  'log.system': '系統日誌',
+  'log.pipeline': '流水線日誌',
+  'log.login': '登入日誌',
+  'common.colIndex': '序號',
+  'log.colLoginTime': '登入時間',
+  'log.colLoginAddress': '登入位址',
+  'log.colLoginIp': '登入 IP',
+  'log.colLoginDevice': '登入裝置',
+  'log.colLoginStatus': '登入狀態',
+  'common.success': '成功',
+  'common.fail': '失敗',
+  'log.colPipelineId': '流水線 id',
+  'log.colTriggerEvent': '觸發事件',
+  'log.colResult': '結果',
+  'log.detail': '詳情',
+  'log.scriptLogs': '指令碼日誌：',
+  'log.input': '輸入：',
+  'log.output': '輸出：',
+  'log.systemCardTitle': '系統日誌（每 5s 自動重新整理）',
+  'common.manualRefresh': '手動重新整理',
+  'log.systemFetchFailed': '日誌拉取失敗（server 不可達或工作階段過期），每 5 秒會自動重試',
 
 };

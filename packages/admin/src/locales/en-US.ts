@@ -720,7 +720,6 @@ export default {
   // ── 🔴 期 5 第三批（36 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
   //    ⚠️ 帮助文案是**片段**：每个片段都要能在 JSX 的顺序里拼成通顺英文
   //    （例如 helpP4a + <code>/static/...</code> + helpP4b + <code>/c/uptime/</code> + helpP4c + …）。
-  'customPage.colIndex': 'No.',
   'customPage.type': 'Type',
   'customPage.typeFile': 'Single-file page',
   'customPage.typeFolder': 'Multi-file page',
@@ -765,5 +764,30 @@ export default {
   'customPage.nameTooltip': 'The name of the custom page',
   'customPage.pathPlaceholder': 'For example /uptime',
   'customPage.pathTooltip': 'Must start with / and have a single level, for example /uptime. The real address is /c plus the path, i.e. /c/uptime/. A multi-file page reads index.html from that folder.',
+
+
+  // ── 🔴 期 5 第四批（21 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `Sign-in status`（登录状态）与 `Result`（流水线结果）是**两个不同的列**，别混成一个词。
+  'log.system': 'System log',
+  'log.pipeline': 'Pipeline log',
+  'log.login': 'Sign-in log',
+  'common.colIndex': 'No.',
+  'log.colLoginTime': 'Sign-in time',
+  'log.colLoginAddress': 'Sign-in address',
+  'log.colLoginIp': 'Sign-in IP',
+  'log.colLoginDevice': 'Device',
+  'log.colLoginStatus': 'Sign-in status',
+  'common.success': 'Succeeded',
+  'common.fail': 'Failed',
+  'log.colPipelineId': 'Pipeline ID',
+  'log.colTriggerEvent': 'Trigger event',
+  'log.colResult': 'Result',
+  'log.detail': 'Details',
+  'log.scriptLogs': 'Script log:',
+  'log.input': 'Input:',
+  'log.output': 'Output:',
+  'log.systemCardTitle': 'System log (refreshes every 5s)',
+  'common.manualRefresh': 'Refresh now',
+  'log.systemFetchFailed': 'Could not fetch the log (the server is unreachable or the session expired). It retries automatically every 5 seconds.',
 
 };

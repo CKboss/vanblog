@@ -160,6 +160,8 @@ function collectChinese(src, label, options) {
   const literals = new Set();
   const templates = new Set();
   const jsxTexts = new Set();
+  // 🔴 落在 `console.*` 实参里的中文**单独收一堆**（不计入 UI 文案），理由见 bareChinese 的注释。
+  const consoleTexts = new Set();
 
   const visit = (nd) => {
     if (excludeDefaultMessage) {
@@ -220,6 +222,28 @@ function collectChinese(src, label, options) {
           if (nd.callee) walkSkip(nd.callee);
           return;
         }
+        // 🔴 `console.log/info/warn/error/debug(...)` 的实参**整棵子树跳过**，改收进 consoleTexts。
+        //    为什么：控制台输出是**给开发者看的**，不是 UI 文案；而且翻它会**反过来坏事** ——
+        //    日志文本跟着界面语言变，`grep '\[系统日志\]'` 与那些"按日志文本断言"的守卫
+        //    （例如 `leakAndErrorHardening` 钉住 System.tsx 必须打 console.error）就都失效了。
+        //    ⚠️ 这是**口径**改动（影响 bareChinese ⇒ 影响棘轮与"真实剩余"），所以：
+        //    ① 单独返回 consoleTexts，让 inventory **明着报出来**（不静默扣掉）；
+        //    ② `i18nSharedImpl.test.js` 里有正负两个方向的断言钉住它（见 §7.153 A）。
+        if (nd.callee && nd.callee.type === 'MemberExpression' && nd.callee.object && nd.callee.object.name === 'console') {
+          const grab = (x) => {
+            if (!x || typeof x !== 'object') return;
+            if (x.type === 'StringLiteral' && typeof x.value === 'string' && HAN.test(x.value)) consoleTexts.add(x.value);
+            else if (x.type === 'TemplateElement' && x.value && HAN.test(x.value.raw || '')) consoleTexts.add('TPL:' + (x.value.raw || '').trim());
+            for (const k of Object.keys(x)) {
+              if (k === 'loc') continue;
+              const v = x[k];
+              if (Array.isArray(v)) v.forEach((y) => y && typeof y === 'object' && grab(y));
+              else if (v && typeof v === 'object' && v.type) grab(v);
+            }
+          };
+          (nd.arguments || []).forEach(grab);
+          return;
+        }
       }
       collectFromNode(nd);
       for (const k of Object.keys(nd)) {
@@ -243,21 +267,33 @@ function collectChinese(src, label, options) {
     }
   }
 
-  return { literals, templates, jsxTexts, comments };
+  return { literals, templates, jsxTexts, comments, consoleTexts };
 }
 
 /**
  * 🔴 `i18nHardcodedRatchet` 需要的语义：一个文件里"裸中文"的去重条数集合。
- * = literals ∪ templates ∪ jsxTexts，**排除注释、排除 defaultMessage 位**。
+ * = literals ∪ templates ∪ jsxTexts，**排除注释、排除 defaultMessage 位、排除 `console.*` 的实参**。
+ *
+ * 🔴 为什么排除 console：那是**开发者界面**（浏览器控制台 / 服务端日志），不是用户看得见的 UI 文案；
+ * 而且翻译它会**反过来坏事**：日志文本跟着界面语言漂 ⇒ 按文本 grep 日志、以及那些"按日志文本断言"的守卫都失效。
+ * ⚠️ 这是口径改动（2026-09-26，实测影响 admin src 的 **7 条** / 3 个文件：Footer 5、Editor 1、LogManage/System 1）；
+ * 这些条数由 `consoleChinese()` 单独报出来，inventory 会明着打印，**不是静默扣掉**。
  * @returns {Set<string>}
  */
 function bareChinese(src, label) {
   const r = collectChinese(src, label, { excludeDefaultMessage: true });
+  // consoleTexts 刻意**不**并入结果（理由见上面那段注释）
   const out = new Set();
   for (const v of r.literals) out.add(v);
   for (const v of r.templates) out.add(v);
   for (const v of r.jsxTexts) out.add(v);
   return out;
+}
+
+/** 🔴 单独取"落在 `console.*` 实参里的中文"（口径见 bareChinese）；inventory 用它明着报数。 */
+function consoleChinese(src, label) {
+  const r = collectChinese(src, label, { excludeDefaultMessage: true });
+  return r.consoleTexts || new Set();
 }
 
 /** 读文件后调用 `bareChinese`（守卫用的便捷入口，含"文件必须存在"的 fail-loud）。 */
@@ -567,7 +603,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 //   它是**页面**组（不是组件组）：这一页由 index.tsx + tools.tsx 两份文件拼成，共用 `img.*`。
 // 🔴 `customPage` = 自定义页面（列表页 `pages/CustomPage` + 弹窗 `components/CustomPageModal`，期 5 第三批登记）。
 //   页面组用页面名（与 `img` 同一套做法）；卡片标题复用 `menu.site.customPage`，不新增同值 key。
-const REGISTERED_KEY_GROUPS = ['common', 'customPage', 'error', 'img', 'init', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
+// 🔴 `log` = 日志管理页（`pages/LogManage/**`：index 的三个页签 + 系统/流水线/登录三个子表，期 5 第四批登记）。
+//   页签标签与子表的 headerTitle 是**同一个东西** ⇒ 共用 `log.system` / `log.pipeline` / `log.login`。
+const REGISTERED_KEY_GROUPS = ['common', 'customPage', 'error', 'img', 'init', 'log', 'login', 'logout', 'menu', 'recycle', 'siteInfo', 'storage', 'sysconf', 'theme', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',
@@ -680,6 +718,7 @@ module.exports = {
   collectChinese,
   bareChinese,
   bareChineseFromFile,
+  consoleChinese,
   collectTCalls,
   collectTCallsFromFile,
   collectChineseThrows,

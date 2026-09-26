@@ -160,6 +160,8 @@ const IDENTICAL_ZH_TW_OK = [
   'img.meta.height', // 高
   'common.colValue', // 值（ObjTable 的列头，简繁同形）
   'customPage.pathPlaceholder', // 例如 /uptime（只有「例如」两字… 例/如 简繁同形）
+  // 🔴 期 5 第四批（日志管理）：「成功」简繁同形（成/功 都一样）
+  'common.success',
 ];
 
 /**
@@ -305,12 +307,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 24,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 24）⇒ 遍历或解析器坏了`,
+      FILES.length >= 28,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 28）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 680,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 680）⇒ 疑似解析器坏了`,
+      calls.length >= 705,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 705）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -332,6 +334,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/ObjTable/index.tsx',
       'src/pages/CustomPage/index.jsx',
       'src/components/CustomPageModal/index.tsx',
+      'src/pages/LogManage/index.jsx',
+      'src/pages/LogManage/tabs/Login.jsx',
+      'src/pages/LogManage/tabs/Pipeline.tsx',
+      'src/pages/LogManage/tabs/System.tsx',
     ]) {
       assert.ok(FILES.includes(rel), `${rel} 没被自动发现 ⇒ 遍历跳过了它（覆盖面是假的）`);
     }

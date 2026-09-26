@@ -14,7 +14,8 @@ export default function () {
   const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const columns = [
     {
-      title: t('customPage.colIndex', '序号'),
+      // 🔴 用 common.colIndex（从 customPage.colIndex 提升）：日志管理的两个表也有「序号」列
+      title: t('common.colIndex', '序号'),
       render: (_, record, index) => {
         return index;
       },

@@ -348,6 +348,8 @@ function main() {
   const bareFiles = [];
   let testFileItems = 0;
   let testFiles = 0;
+  let consoleItems = 0;
+  let consoleFiles = 0;
   for (const abs of files) {
     const rel = path.relative(path.join(ROOT, 'packages/admin'), abs);
     const n = astInventory.bareChineseFromFile(abs, rel).size;
@@ -356,6 +358,15 @@ function main() {
     if (/(^|\/)[^/]*\.(test|spec)\.(js|jsx|ts|tsx)$/.test(rel)) {
       if (n) { testFileItems += n; testFiles += 1; }
       continue;
+    }
+    // 🔴 `console.*` 实参里的中文：不计入待翻工作量（开发者界面；翻它会让日志文本跟着界面语言漂，
+    //    按文本 grep 日志与相关守卫都会失效），但**单独报出来**（口径变化必须看得见，不能静默扣掉）。
+    //    ⚠️ 这段必须在 `if (n > 0)` **外面**：已经翻完的文件（n === 0，例如 LogManage/tabs/System.tsx）
+    //    仍然留着那句刻意不翻的 console.error ⇒ 放在里面的话它会从统计里消失（第一版就漏了 1 条）。
+    const nc = astInventory.consoleChinese(fs.readFileSync(abs, 'utf8'), rel).size;
+    if (nc) {
+      consoleItems += nc;
+      consoleFiles += 1;
     }
     if (n > 0) {
       bareTotal += n;
@@ -367,6 +378,9 @@ function main() {
   console.log(`    ${bareFiles.length} 个文件 / ${bareTotal} 条（甲/丁类那份计数含 defaultMessage 位，会高估）`);
   console.log(
     `    ⚠️ 另有 ${testFiles} 个**测试文件** / ${testFileItems} 条中文**不计入**（那是测试自己的断言消息与夹具，不是 UI 文案）`,
+  );
+  console.log(
+    `    ⚠️ 另有 ${consoleFiles} 个文件 / ${consoleItems} 条落在 **console.*** 里的中文**不计入**（开发者界面；翻它会让日志文本跟着界面语言漂）`,
   );
   console.log('    前 10：');
   for (const f of bareFiles.slice(0, 10)) console.log(`      ${String(f.n).padStart(4)}  ${f.rel}`);

@@ -189,6 +189,10 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/ObjTable/index.tsx': 0,
     'src/pages/CustomPage/index.jsx': 0,
     'src/components/CustomPageModal/index.tsx': 0,
+    'src/pages/LogManage/index.jsx': 0,
+    'src/pages/LogManage/tabs/Login.jsx': 0,
+    'src/pages/LogManage/tabs/Pipeline.tsx': 0,
+    'src/pages/LogManage/tabs/System.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -221,6 +225,62 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     `三份包解析出的 key 数不相等（${counts.join('/')}）⇒ readPack 坏了或包真的不齐`,
   );
   assert.ok(counts[0] >= 100, `只解析出 ${counts[0]} 个 key，疑似 readPack 坏了（不是包真的这么小）`);
+});
+
+test('i18n 共享实现 · 🔴 bareChinese 排除 `console.*` 的实参（口径），且**只**排除 console 里的', () => {
+  // ## 为什么要有这条（2026-09-26 期 5 第四批）
+  // `LogManage/tabs/System.tsx` 有一句 `console.error('[系统日志] 拉取失败', err)`：
+  // 那是**开发者界面**、不是 UI 文案；而且翻它会反过来坏事 —— 日志文本跟着界面语言漂，
+  // 按文本 grep 日志、以及 `leakAndErrorHardening` 那条"这个文件必须打 console.error"的钉子都会失效。
+  // 🔴 这是**口径**改动（实测影响 admin src 的 7 条 / 3 个文件：Footer 5、Editor 1、LogManage/System 1），
+  // 所以正负两个方向都要钉住：
+  //   正：console 里的中文不计入 bareChinese，但 `consoleChinese()` 要能单独报出来（inventory 明着打印）；
+  //   负：🔴 **同一个字符串出现在 console 之外时必须照常被计入**（否则"排除 console"会退化成"排除这句话"）。
+  const eq = (a, b, m) => assert.strictEqual(a, b, m);
+  eq(
+    astInventory.bareChinese("console.error('[系统日志] 拉取失败', err);", 't').size,
+    0,
+    '🔴 console.* 里的中文不该计入 bareChinese（它是开发者界面，不是 UI 文案）',
+  );
+  eq(
+    astInventory.bareChinese('console.log(`共 ${n} 张：失败`);', 't').size,
+    0,
+    '🔴 console.* 里的**模板串**同样不该计入',
+  );
+  assert.ok(
+    astInventory.consoleChinese("console.error('[系统日志] 拉取失败', err);", 't').size >= 1,
+    '🔴 consoleChinese 必须能把这些条数**单独报出来**（口径变化要看得见，不能静默扣掉）',
+  );
+  eq(
+    astInventory.bareChinese("message.error('保存失败');", 't').size,
+    1,
+    '🔴 反向：`message.error` 是 UI 文案，必须照常被计入（否则这条口径就把所有错误提示都放过了）',
+  );
+  eq(
+    astInventory.bareChinese("const a = '拉取失败';\nconsole.log(a);", 't').size,
+    1,
+    '🔴 反向：字符串**定义在 console 之外**、只是被 console 打印 ⇒ 必须计入（排除的是"位置"，不是"这句话"）',
+  );
+  // 🔴 真实源码上的钉子：`LogManage/tabs/System.tsx` 现在是"整页翻完、只留那句 console.error"的状态 ⇒
+  //    它的 bareChinese 必须**恰好是 0**（UI 文案全进了 t() 的 defaultMessage 位，console 那句被口径排除），
+  //    而 consoleChinese 必须仍然报得出那 1 条（证明"排除"是**看得见**的，不是悄悄丢掉）。
+  //    ⚠️ 第一版这里写的是 `bareChinese >= 3`（当时 System.tsx 还没翻）⇒ 翻完就变成陈旧的假红；
+  //    🔴 教训：**守卫的期望值要选一个"改造完成后仍然成立"的形状**，别钉住改造过程中的中间态。
+  const sysRel = 'src/pages/LogManage/tabs/System.tsx';
+  const sysSrc = fs.readFileSync(path.join(ADMIN, sysRel), 'utf8'); // 🔴 本文件没有 read() 助手，用 fs+ADMIN
+  eq(
+    astInventory.bareChinese(sysSrc, sysRel).size,
+    0,
+    '🔴 System.tsx 应该已经全量接 i18n（只剩那句刻意不翻的 console.error，而它不计入 bareChinese）',
+  );
+  assert.ok(
+    astInventory.consoleChinese(sysSrc, sysRel).size >= 1,
+    '🔴 System.tsx 里那句 console.error 的中文必须由 consoleChinese **单独报出来**（口径变化要看得见）',
+  );
+  assert.ok(
+    /console\.error\('\[系统日志\] 拉取失败'/.test(sysSrc),
+    '🔴 那句 console.error 的文本必须**逐字保持简体**（日志要能按文本 grep；leakAndErrorHardening 也钉着它）',
+  );
 });
 
 test('i18n 共享实现 · 尺子反证：合成输入必须被正确分类（证明判据真的在判）', () => {

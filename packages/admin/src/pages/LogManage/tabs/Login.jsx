@@ -2,59 +2,64 @@ import { getLog } from '@/services/van-blog/api';
 import { ProTable } from '@ant-design/pro-table';
 import { Tag } from 'antd';
 import { useRef } from 'react';
+import { useIntl } from 'umi';
 
-const columns = [
-  {
-    title: '序号',
-    align: 'center',
-    width: 50,
-    render: (text, record, index) => {
-      return index + 1;
-    },
-  },
-  {
-    title: '登录时间',
-    dataIndex: 'time',
-    key: 'time',
-    align: 'center',
-    render: (text, record) => {
-      return new Date(record.time).toLocaleString();
-    },
-  },
-  {
-    title: '登录地址',
-    dataIndex: 'address',
-    key: 'address',
-    align: 'center',
-  },
-  {
-    title: '登录IP',
-    dataIndex: 'ip',
-    key: 'ip',
-    align: 'center',
-  },
-  {
-    title: '登录设备',
-    dataIndex: 'platform',
-    key: 'platform',
-    align: 'center',
-  },
-  {
-    title: '登录状态',
-    dataIndex: 'success',
-    key: 'success',
-    align: 'center',
-    render: (text, record) => {
-      return (
-        <Tag color={record.success ? 'success' : 'error'} style={{ marginRight: 0 }}>
-          {record.success ? '成功' : '失败'}
-        </Tag>
-      );
-    },
-  },
-];
 export default function () {
   const actionRef = useRef();
+  // 🔴 语言选择必须在**渲染期**（useIntl 是 hook；模块加载期 umi 插件运行时还没初始化）。
+  // ⚠️ 本文件没有把 t 放进任何 hook 的依赖数组；将来若要放，必须先用 useCallback([intl]) 包（§7.144 A）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+  const columns = [
+    {
+      title: t('common.colIndex', '序号'),
+      align: 'center',
+      width: 50,
+      render: (text, record, index) => {
+        return index + 1;
+      },
+    },
+    {
+      title: t('log.colLoginTime', '登录时间'),
+      dataIndex: 'time',
+      key: 'time',
+      align: 'center',
+      render: (text, record) => {
+        return new Date(record.time).toLocaleString();
+      },
+    },
+    {
+      title: t('log.colLoginAddress', '登录地址'),
+      dataIndex: 'address',
+      key: 'address',
+      align: 'center',
+    },
+    {
+      title: t('log.colLoginIp', '登录IP'),
+      dataIndex: 'ip',
+      key: 'ip',
+      align: 'center',
+    },
+    {
+      title: t('log.colLoginDevice', '登录设备'),
+      dataIndex: 'platform',
+      key: 'platform',
+      align: 'center',
+    },
+    {
+      title: t('log.colLoginStatus', '登录状态'),
+      dataIndex: 'success',
+      key: 'success',
+      align: 'center',
+      render: (text, record) => {
+        return (
+          <Tag color={record.success ? 'success' : 'error'} style={{ marginRight: 0 }}>
+            {record.success ? t('common.success', '成功') : t('common.fail', '失败')}
+          </Tag>
+        );
+      },
+    },
+  ];
   return (
     <>
       <ProTable
@@ -66,7 +71,7 @@ export default function () {
         dateFormatter="string"
         actionRef={actionRef}
         options={true}
-        headerTitle="登录日志"
+        headerTitle={t('log.login', '登录日志')}
         pagination={{
           showQuickJumper: true,
           pageSize: 10,

@@ -758,7 +758,6 @@ export default {
   //    ⚠️ 帮助弹窗是"文本 + <code>/<strong> + 文本"的混排 ⇒ 拆成 helpP1a/P1b、helpP3a/P3b/P3strong/P3c、
   //    helpP4a…P4e 这些**片段** key；`customPage.helpPathSample`（/c/路径/）在三处复用同一个 key。
   //    🔴 片段的译文必须能按 JSX 顺序拼成一句通顺的话（英文是照着拼出来的整句校对的，不是逐段直译）。
-  'customPage.colIndex': '序号',
   'customPage.type': '类型',
   'customPage.typeFile': '单文件页面',
   'customPage.typeFolder': '多文件页面',
@@ -794,5 +793,37 @@ export default {
   'customPage.nameTooltip': '自定义页面的名称',
   'customPage.pathPlaceholder': '例如 /uptime',
   'customPage.pathTooltip': '必须以 / 开头，且只能有一级，例如 /uptime。实际地址是 /c + 路径，即 /c/uptime/。多文件页面会读取该目录下的 index.html。',
+
+
+  // ── 🔴 期 5 第四批：日志管理（`pages/LogManage/**`，4 个文件 / 21 条）──
+  //    一个页面 = index（三个页签）+ 三个子表（系统 / 流水线 / 登录）⇒ 一起做，别留半页中文。
+  //    🔴 页签标签与子表的 headerTitle 是**同一个东西**（同一种日志的名字）⇒ 共用 `log.system/pipeline/login`。
+  //    🔴 提升/新增通用词：`common.colIndex`（从 customPage.colIndex 提升，三个页面都有「序号」列）、
+  //    `common.success` / `common.fail`（两个表都用）、`common.manualRefresh`；`名称` 复用 common.colName。
+  //    ⚠️ `System.tsx` 的 error state 从"存文案"改成"存布尔"：fetchLog 被 setInterval 抓住、
+  //    useEffect 依赖是 [] ⇒ 那个闭包永远是首次渲染的（切语言后会用旧语言写提示，§7.144 B）。
+  //    🔴 而 `console.error('[系统日志] 拉取失败')` **刻意不翻**：日志是开发者界面，翻了 grep 就抓不到
+  //    （已被 bareChinese 的口径排除，见手册 §7.153 A）。
+  'log.system': '系统日志',
+  'log.pipeline': '流水线日志',
+  'log.login': '登录日志',
+  'common.colIndex': '序号',
+  'log.colLoginTime': '登录时间',
+  'log.colLoginAddress': '登录地址',
+  'log.colLoginIp': '登录IP',
+  'log.colLoginDevice': '登录设备',
+  'log.colLoginStatus': '登录状态',
+  'common.success': '成功',
+  'common.fail': '失败',
+  'log.colPipelineId': '流水线 id',
+  'log.colTriggerEvent': '触发事件',
+  'log.colResult': '结果',
+  'log.detail': '详情',
+  'log.scriptLogs': '脚本日志：',
+  'log.input': '输入：',
+  'log.output': '输出：',
+  'log.systemCardTitle': '系统日志（每5s自动刷新）',
+  'common.manualRefresh': '手动刷新',
+  'log.systemFetchFailed': '日志拉取失败（server 不可达或会话过期），每 5 秒会自动重试',
 
 };
