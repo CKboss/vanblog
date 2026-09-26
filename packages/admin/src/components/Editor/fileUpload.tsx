@@ -4,7 +4,11 @@ import { BytemdPlugin } from 'bytemd';
 const ATTACHMENT_UPLOAD_URL = '/api/admin/file/upload';
 
 /** 上传一个附件，返回可写进正文的 URL（失败返回 null）。 */
-export const uploadAttachment = async (file: File): Promise<string | null> => {
+// 🔴 同 imgUpload：文案在模块级导出函数里 ⇒ 它自己收尾参 t，由插件工厂转发
+export const uploadAttachment = async (
+  file: File,
+  t: any = IDENTITY_T,
+): Promise<string | null> => {
   const formData = new FormData();
   formData.append('file', file);
   try {
@@ -19,20 +23,37 @@ export const uploadAttachment = async (file: File): Promise<string | null> => {
     if (data && data.statusCode == 200 && data.data?.src) {
       return data.data.src as string;
     }
-    message.error(data?.message || '附件上传失败！');
+    message.error(data?.message || t('editor.attachmentUploadFailed', '附件上传失败！'));
     return null;
   } catch (err) {
-    message.error('附件上传失败！');
+    message.error(t('editor.attachmentUploadFailed', '附件上传失败！'));
     return null;
   }
 };
 
 /** 编辑器工具栏「上传附件」：选文件 → 上传 → 在光标处插入 [文件名](/static/file/...) */
-export function fileUploadPlugin(setLoading: (loading: boolean) => void): BytemdPlugin {
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。bytemd 插件的 action 是纯对象、在工厂里就构造好，
+ * 拿不到 React 上下文 ⇒ 由 `components/Editor/index.tsx` 在渲染期把 t 传进来。
+ * 🔴 不传 t ⇒ 落到 IDENTITY_T ⇒ 输出与改造前逐字相同。
+ * ⚠️ `message.*` / `Modal.*` 渲染进**脱离 React 树的独立根**（§7.151）⇒ 只能传算好的字符串。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type EditorT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
+
+export function fileUploadPlugin(
+  setLoading: (loading: boolean) => void,
+  t: EditorT = IDENTITY_T,
+): BytemdPlugin {
   return {
     actions: [
       {
-        title: '上传附件并插入链接',
+        title: t('editor.uploadAttachment', '上传附件并插入链接'),
         icon,
         handler: {
           type: 'action',
@@ -47,7 +68,7 @@ export function fileUploadPlugin(setLoading: (loading: boolean) => void): Bytemd
                 return;
               }
               setLoading(true);
-              const url = await uploadAttachment(file);
+              const url = await uploadAttachment(file, t);
               setLoading(false);
               if (!url) {
                 return;
@@ -55,7 +76,7 @@ export function fileUploadPlugin(setLoading: (loading: boolean) => void): Bytemd
               const pos = ctx.appendBlock(`[${file.name}](${url})`);
               ctx.editor.setSelection(pos, ctx.codemirror.Pos(pos.line + 1));
               ctx.editor.focus();
-              message.success(`附件已上传：${url}`);
+              message.success(t('editor.attachmentUploaded', '附件已上传：{url}', { url }));
             };
             document.body.appendChild(input);
             input.click();

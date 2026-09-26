@@ -234,6 +234,9 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/Editor/plugins/codeBlock.tsx': 0,
     'src/components/Editor/plugins/mobileToolbar.js': 0,
     'src/components/Editor/plugins/customContainer.tsx': 6,
+    'src/components/Editor/imgUpload.tsx': 0,
+    'src/components/Editor/fileUpload.tsx': 0,
+    'src/components/Editor/transferRemote.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

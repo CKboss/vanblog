@@ -9469,6 +9469,69 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.166 期 6 第二批：编辑器的三个上传/转存插件（21 条）—— 🔴 注入链的**中间一环**原本没有判据（变异对照全绿），以及两处源码笔误的处理方式
+
+**交付**：`Editor/imgUpload.tsx`(5) + `Editor/fileUpload.tsx`(3) + `Editor/transferRemote.tsx`(13) = **21 条 → 0**；
+语言包 **864 → 879 key**（+15 新 / **2 条复用**：`common.uploadFailed`、`init.restore.confirmCancel`）；
+棘轮清单 **71 → 74 个文件**（都预算 0，**TOTAL 仍 61**）；`i18nKeyNaming` → **879**；
+`localePackParity` 自动发现下界 **65 → 68 个文件 / 1095 → 1110 个调用点**（实测 68 / 1122）。
+🔴 **做完这批，en-US 的编辑器工具栏一条中文都不剩**（上一批活体登记的那 3 条 tooltip 就是这三个文件）。
+🔴 **浏览器活体 22/22（zh-CN 6 + en-US 8 + zh-TW 8），problems 0、skipped 0**：26 个 tooltip 全采到
+（`tooltipsCollected >= 20` **先证明采到了东西**），en-US 实采 `Upload an image from the clipboard` /
+`Upload an attachment and insert the link` / `Copy remote images to this site`；
+zh-TW 实采 `剪貼簿圖片上傳` / `上傳附件並插入連結` / `外部連結圖片轉存`；移动端工具栏与标题级别同上一批（未回退）。
+证据：`vanblog_dev/i18n-browser-evidence/phase6-editor-uploads/`。
+
+#### A. 🔴 注入链的**中间一环**原本没有判据（变异对照 B27-M1 / M2 **全绿**）
+这三个文件的文案**不在插件工厂里**，而在**模块级导出函数**里：`uploadImg(file)` / `uploadAttachment(file)`，
+工厂只是把它们包起来；`Editor/index.tsx` 还有自己的 helper `uploadEditorImages(files, setLoading)` 也调 `uploadImg`
+⇒ 注入链是 **`Editor/index.tsx → uploadEditorImages → uploadImg`（三环）**。
+我第一版只把**插件工厂**登记进 INJECTED 表 ⇒ 🔴 变异对照把中间那环的 t 拿掉（`uploadImg(file)`），**全绿**：
+棘轮不红（文件里已无裸中文）、逐字对账不红（defaultMessage 没变）、调用点判据**根本不认识 `uploadImg`**。
+修法：把链条上**每一环**都登记（`uploadImg` / `uploadAttachment` / `uploadEditorImages`）⇒ M1/M2 立刻红在声称的那条断言上。
+👉 🔴 **规矩：登记注入式翻译器时，要顺着"谁调谁"把**整条链**登记完，不是只登记最外层那个入口** ——
+判据只认识表里的名字，少一环就等于那一环**没有守卫**（而且看起来一切都绿）。
+⚠️ 同一个结构也是本批 6 处 TS 报错的根因：`t` 在工厂里、文案在**工厂外**的模块级函数里 ⇒ `Cannot find name 't'`。
+👉 🔴 **给"文案在模块级函数里"的文件加 t，先看清文案在哪个作用域**（类型门禁替你抓到了，这就是它开着的原因）。
+
+#### B. 🔴 两处源码笔误：**zh-CN 逐字保留**，繁中/英文按正确意思写
+- `'上传成功！ '`（结尾多一个**空格**）；
+- `'剪切板没的图片！'`（应为「没有」；而且「剪切板」的规范写法是「剪贴板」）。
+处理：zh-CN 的值与 defaultMessage **逐字保留**（🔴 翻译批次不改中文文案；改了会让"逐字对账"红 —— 那正是它的作用），
+繁中/英文按**正确意思**写（`剪貼簿裡沒有圖片！` / `There is no image on the clipboard`）—— 译文没有义务复刻笔误。
+🔴 并且给那个空格单独做了一条变异对照（M5：把空格去掉 ⇒ 红在逐字对账上），把"不许顺手修中文"钉住。
+👉 笔误本身登记交站长裁定（与「顶置」应为置顶、caddy「触发请后」同一批）。
+
+#### C. 🔴 反向判据要先证明"采到了东西"（上一批的假绿这次升级成正判据）
+上一批"en-US 工具栏无汉字"因为按 `[title]` 采到**空数组**而假绿；这批改成 hover 采 tippy 之后，判据升级成两条：
+① `tooltipsCollected = tooltips.length >= 20`（**先证明采到了**）；② 中文条数 = 0（🔴 延期清单已清空）。
+采不到 20 条时打印 note（"反向判据不可信"）而不是安静通过。
+👉 与 §7.164 B 的"空转断言"同一家族：**判据必须先证明自己看到了东西，再断言那样东西是对的。**
+
+#### D. 多子句汇总句：第 5 次"收成一条 ICU 整句"
+`已转存 ${transferred} 张，跳过 ${skipped} 张，失败 ${failed.length} 张：${failed.map(…).join('、')}`
+⇒ 一条 `editor.transferPartial` + 4 个占位符（`{transferred}/{skipped}/{failed}/{urls}`），英文三处都用 ICU plural。
+（同族：§7.152 B、§7.156 B、§7.160 C、§7.162 A —— 🔴 **凡是"模板字符串相加"的文案，一律收成一条整句**。）
+⚠️ `copyImgLink` 的翻译器是**第 5 个**参数（第 4 个是 `autoCompleteHost`）⇒ 调用时要显式补 `undefined`；
+`imgUpload.tsx` 因此从 `NOT_YET_I18N_CONSUMERS` 里**删掉**了（表是钉死的：留着会掩盖"已接 i18n 却没传 t"）。
+
+#### E. 基线
+- admin `node --test` **765 tests / 168 suites / 0 fail**；i18n 守卫组 **115**；
+- 变异对照 **6/6**（🔴 注入链中间环 ×2 / 跨文件那一环 `copyImgLink` / 占位符↔values 对账 /
+  🔴 "不许顺手修中文"（结尾空格）/ 语义空操作）；
+- 语言包 **879 key** ×3；`--zh-tw-audit`：879 key / **719** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **74 个文件 / TOTAL 61**（9 条永久例外）；admin 类型门禁 **31/0**（修掉那 6 处 `Cannot find name 't'` 之后）；
+- 矩阵（5 个阶段全 rc=0）：admin **765/168/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.47f45b1d.js` = **1,548,585 B**）；
+- 🔴 **真实剩余：60 → 57 个文件 / 885 → 864 条**；编辑器页表面还剩 **135 条 / 10 文件**
+  （`pages/Editor/index.jsx` 63、`importMdzCore` 23、`Editor/locales.ts` 16 ← **locale 数据本身**、
+  `EditorProfileModal` 15、`customContainer` 6 ← 内容契约、其余零散）。
+- 🔴 **下一批**：① `EditorProfileModal`(15) + `pages/Editor/index.jsx`(63) —— 编辑器页主体（最大的一块）；
+  ② `importMdzCore`(23)（.mdz 导入的纯逻辑，注入式翻译器）；③ 🔴 给 `Editor/locales.ts` 那 16 条**登记有理由的预算**
+  （它是 locale 数据本身：11 个手写繁中图表名 + 公式那几条，不是"没翻"）；
+  ④ `DataManage/**`(134) / `CommentManage`(71)；⑤ `SystemConfig` 收尾；⑥ 🔴 `Backup.jsx`(89)/`Theme.jsx`(59) 需站长人工复核。
+
 ### 7.165 期 6 第一批：编辑器插件的界面文案（17 条）—— 🔴 其中 11 条**不该进语言包**（与上游 bytemd 逐字相同），以及 `.d.ts` 才是类型权威
 
 **交付**：`Editor/plugins/mobileToolbar.js`(11) + `Editor/history.tsx`(2) + `emoji.tsx`(1) + `insertMore.tsx`(1)

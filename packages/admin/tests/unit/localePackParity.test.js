@@ -337,12 +337,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 65,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 65）⇒ 遍历或解析器坏了`,
+      FILES.length >= 68,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 68）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1095,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1095）⇒ 疑似解析器坏了`,
+      calls.length >= 1110,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1110）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -400,6 +400,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/requestError.js',
       'src/components/Editor/history.tsx',
       'src/components/Editor/plugins/customContainer.tsx',
+      'src/components/Editor/imgUpload.tsx',
+      'src/components/Editor/transferRemote.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -710,6 +712,15 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/Editor/insertMore.tsx': ['insertMore'],
       'src/components/Editor/plugins/codeBlock.tsx': ['customCodeBlock'],
       'src/components/Editor/plugins/customContainer.tsx': ['customContainer'],
+      // 🔴 期 6 第二批：三个上传/转存插件（工厂收尾参 t）
+      // 🔴 不只是插件工厂：文案其实在**模块级导出函数**里（`uploadImg` / `uploadAttachment`），
+      //    工厂只是把它们包起来 ⇒ 整条注入链的**每一环**都要登记，否则中间那一环漏传 t 不会红
+      //    （变异对照 B27-M1/M2 第一版就是**全绿**的：`uploadImg(file)` 少传 t，没有任何判据管）。
+      'src/components/Editor/imgUpload.tsx': ['imgUploadPlugin', 'uploadImg'],
+      'src/components/Editor/fileUpload.tsx': ['fileUploadPlugin', 'uploadAttachment'],
+      'src/components/Editor/transferRemote.tsx': ['transferRemotePlugin'],
+      // `uploadEditorImages` 是 `Editor/index.tsx` 自己的模块级 helper（两个调用点都在同文件）
+      'src/components/Editor/index.tsx': ['uploadEditorImages'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -746,7 +757,8 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     //  ② **尚未接 i18n** 的消费方：走 identity ⇒ 输出与今天逐字相同（不是缺陷，是 backlog）。
     //     🔴 这张表是**钉死的**：谁新增一个不传 t 的消费方，这里就会红（要么补 t、要么登记进表并说明）。
     const NOT_YET_I18N_CONSUMERS = [
-      'src/components/Editor/imgUpload.tsx',
+      // 🔴 `src/components/Editor/imgUpload.tsx` 期 6 第二批**已接 i18n**（并给 `copyImgLink` 传了 t）⇒ 从这张表删掉
+      //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
       // 🔴 期 7 第一批新增：这两个文件调 accessPassword 的产文案函数但**自己还没接 i18n**
       //    ⇒ 走 identity，输出与今天逐字相同（不是缺陷，是 backlog；翻它们的那批要把 t 传进来并从这张表删掉）
       'src/pages/DataManage/tabs/Category.jsx',

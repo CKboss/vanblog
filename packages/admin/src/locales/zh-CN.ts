@@ -1192,4 +1192,28 @@ export default {
   'editor.copied': '复制成功',
   'editor.customContainer': '自定义高亮块',
 
+
+  // ── 🔴 期 6 第二批：编辑器的三个上传/转存插件（imgUpload / fileUpload / transferRemote，15 条）──
+  //    形状与期 6 第一批相同：插件工厂收尾参 `t = IDENTITY_T`，由 `components/Editor/index.tsx` 在渲染期注入。
+  //    🔴 做完这批，en-US 的编辑器工具栏**一条中文都不剩**（上一批活体登记的那 3 条 tooltip 就是这三个文件）。
+  //    ⚠️ `editor.uploadSuccess` 结尾的空格、`editor.clipboardEmpty` 的「剪切板**没**的图片」都是**源码原样**
+  //    （笔误已登记交站长裁定）⇒ zh-CN 逐字保留；繁中/英文按正确意思写（译文不需要复刻笔误）。
+  //    🔴 `editor.transferPartial` 原来是"模板字符串 + 三个插值 + 一段 join"⇒ 收成一条带 4 个 ICU 占位符的整句。
+  //    🔴 `imgUpload.tsx` 调 `copyImgLink(...)` 现在**传了 t**（第 5 个参数）⇒ 它已从 NOT_YET_I18N_CONSUMERS 删掉。
+  'editor.uploadSuccess': '上传成功！ ',
+  'editor.clipboardUpload': '剪切板图片上传',
+  'editor.clipboardEmpty': '剪切板没的图片！',
+  'editor.clipboardUploadFailed': '剪切板图片上传失败！',
+  'editor.attachmentUploadFailed': '附件上传失败！',
+  'editor.uploadAttachment': '上传附件并插入链接',
+  'editor.attachmentUploaded': '附件已上传：{url}',
+  'editor.transferTitle': '外链图片转存',
+  'editor.transferConfirmContent': '将扫描正文中的远程图片（Markdown 与 HTML <img>），下载后存入本站图床并改写链接。已是本站 /static 或图床中的地址、相对路径和 data: 图片会跳过。失败的链接保持原样。是否继续？',
+  'editor.transferStart': '开始转存',
+  'editor.transferFailedNoData': '转存失败！',
+  'editor.transferPartial': '已转存 {transferred} 张，跳过 {skipped} 张，失败 {failed} 张：{urls}',
+  'editor.transferNone': '没有需要转存的外链图片（跳过 {skipped} 张）',
+  'editor.transferDone': '已转存 {transferred} 张外链图片到本站图床（跳过 {skipped} 张）',
+  'editor.transferFailed': '外链图片转存失败！',
+
 };

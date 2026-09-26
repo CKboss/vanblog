@@ -64,7 +64,9 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   🔴 只 +6 而不是 +17：移动端工具栏那 11 条与上游 bytemd 的 zh_Hans 值**逐字相同**
 //   （headingText/bold/italic/quote/link/image/ul/code/h1..h3）⇒ 直接读 editorLocale、不进语言包
 //   （少维护 33 条，也不会与 bytemd 升级漂移）。
-const BASELINE_KEY_COUNT = 864;
+// 🔴 864 → **879**（期 6 第二批：编辑器三个上传/转存插件 +15，其中 2 条复用既有 key：
+//   `common.uploadFailed`（上一批为上传按钮建的）与 `init.restore.confirmCancel`（取消））
+const BASELINE_KEY_COUNT = 879;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

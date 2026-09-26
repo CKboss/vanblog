@@ -43,12 +43,18 @@ import { sanitizeMarkdownSchema as sanitize } from './markdownSanitize';
 import { softLineBreaksPlugin } from './plugins/softLineBreaks';
 import './mobile-toolbar.css';
 
-async function uploadEditorImages(files: File[], setLoading: (loading: boolean) => void) {
+// 🔴 t 是**可选**的：不传 ⇒ `uploadImg` 自己落到 IDENTITY_T（逐字与改造前相同）；
+//    两个调用点都在组件里、都拿得到 t ⇒ 都传（否则那几条上传提示会永远中文，而且看不出来）。
+async function uploadEditorImages(
+  files: File[],
+  setLoading: (loading: boolean) => void,
+  t?: (id: string, defaultMessage: string, values?: Record<string, any>) => string,
+) {
   setLoading(true);
   const res: { url: string }[] = [];
   try {
     for (const each of files) {
-      const url = await uploadImg(each);
+      const url = await uploadImg(each, t);
       if (url) {
         res.push({ url: encodeURI(url) });
       }
@@ -152,9 +158,9 @@ export default function EditorComponent(props: {
       mediumZoom(),
       mermaidForEditor({ locale: editorLocale }),
       tocViewportGuard(),
-      imgUploadPlugin(setLoading),
-      fileUploadPlugin(setLoading),
-      transferRemotePlugin(setLoading, props.onChange),
+      imgUploadPlugin(setLoading, t),
+      fileUploadPlugin(setLoading, t),
+      transferRemotePlugin(setLoading, props.onChange, t),
       emoji(t),
       insertMore(t),
       rawHTML(),
@@ -164,7 +170,7 @@ export default function EditorComponent(props: {
       LinkTarget(),
       // Keep mode="auto" (tab under 800px). Expand that toolbar; do not dump desktop icons.
       mobileToolbarPlugin({
-        uploadImages: (files) => uploadEditorImages(files, setLoading),
+        uploadImages: (files) => uploadEditorImages(files, setLoading, t),
         // 🔴 移动端工具栏那 11 个标题**不进 admin 语言包**：它们与上游 bytemd 的 zh_Hans 值逐字相同
         //    （headingText/bold/italic/quote/link/image/ul/code/h1/h2/h3）⇒ 直接读 editorLocale，
         //    繁中与英文由上游给（实测 zh_Hant 是 標題/粗體/連結/圖像，真正的地区用词）。
@@ -193,7 +199,7 @@ export default function EditorComponent(props: {
           mode="auto"
           remarkRehype={{ allowDangerousHtml: true, handlers: defListHastHandlers }}
           sanitize={sanitize}
-          uploadImages={(files: File[]) => uploadEditorImages(files, setLoading)}
+          uploadImages={(files: File[]) => uploadEditorImages(files, setLoading, t)}
         />
       </Spin>
     </div>

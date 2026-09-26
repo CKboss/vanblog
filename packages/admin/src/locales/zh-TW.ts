@@ -1030,4 +1030,23 @@ export default {
   'editor.copied': '複製成功',
   'editor.customContainer': '自訂高亮區塊',
 
+
+  // ── 🔴 期 6 第二批（15 條）── 地區用詞：**剪貼簿**（剪贴板）/ 附件 / 上傳 / **外部連結**（外链）/ 轉存 /
+  //    圖床 / 位址（地址）/ 連結（链接）/ 遠端（远程）/ 掃描 / 跳過 / 改寫。
+  'editor.uploadSuccess': '上傳成功！',
+  'editor.clipboardUpload': '剪貼簿圖片上傳',
+  'editor.clipboardEmpty': '剪貼簿裡沒有圖片！',
+  'editor.clipboardUploadFailed': '剪貼簿圖片上傳失敗！',
+  'editor.attachmentUploadFailed': '附件上傳失敗！',
+  'editor.uploadAttachment': '上傳附件並插入連結',
+  'editor.attachmentUploaded': '附件已上傳：{url}',
+  'editor.transferTitle': '外部連結圖片轉存',
+  'editor.transferConfirmContent': '將掃描正文中的遠端圖片（Markdown 與 HTML <img>），下載後存入本站圖床並改寫連結。已是本站 /static 或圖床中的位址、相對路徑和 data: 圖片會跳過。失敗的連結保持原樣。是否繼續？',
+  'editor.transferStart': '開始轉存',
+  'editor.transferFailedNoData': '轉存失敗！',
+  'editor.transferPartial': '已轉存 {transferred} 張，跳過 {skipped} 張，失敗 {failed} 張：{urls}',
+  'editor.transferNone': '沒有需要轉存的外部連結圖片（跳過 {skipped} 張）',
+  'editor.transferDone': '已轉存 {transferred} 張外部連結圖片到本站圖床（跳過 {skipped} 張）',
+  'editor.transferFailed': '外部連結圖片轉存失敗！',
+
 };

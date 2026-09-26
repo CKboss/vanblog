@@ -1086,4 +1086,24 @@ export default {
   'editor.copied': 'Copied',
   'editor.customContainer': 'Custom callout',
 
+
+  // ── 🔴 期 6 第二批（15 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）。
+  //    ⚠️ `Markdown` / `HTML` / `<img>` / `/static` / `data:` 是技术标识符，三份包原样保留。
+  //    🔴 计数句一律 ICU plural（`{transferred, plural, one {# image} other {# images}}`）。
+  'editor.uploadSuccess': 'Uploaded',
+  'editor.clipboardUpload': 'Upload an image from the clipboard',
+  'editor.clipboardEmpty': 'There is no image on the clipboard',
+  'editor.clipboardUploadFailed': 'Could not upload the clipboard image',
+  'editor.attachmentUploadFailed': 'Could not upload the attachment',
+  'editor.uploadAttachment': 'Upload an attachment and insert the link',
+  'editor.attachmentUploaded': 'Attachment uploaded: {url}',
+  'editor.transferTitle': 'Copy remote images to this site',
+  'editor.transferConfirmContent': 'This scans the body for remote images (Markdown and HTML <img>), downloads them into the image storage of this site and rewrites the links. Addresses that are already on this site under /static or in the image storage, relative paths and data: images are skipped. Links that fail stay as they are. Continue?',
+  'editor.transferStart': 'Start copying',
+  'editor.transferFailedNoData': 'The transfer failed',
+  'editor.transferPartial': 'Transferred {transferred, plural, one {# image} other {# images}}, skipped {skipped, plural, one {# image} other {# images}}, failed {failed, plural, one {# image} other {# images}}: {urls}',
+  'editor.transferNone': 'No remote images need transferring ({skipped, plural, one {# image} other {# images}} skipped)',
+  'editor.transferDone': 'Transferred {transferred, plural, one {# remote image} other {# remote images}} into the image storage of this site ({skipped} skipped)',
+  'editor.transferFailed': 'Could not transfer the remote images',
+
 };
