@@ -206,6 +206,141 @@ pnpm docs:dev
 
 端口号为: `8080`
 
+## 多语言（i18n）：硬性要求
+
+后台（`packages/admin`）已全量支持三种语言：**简体中文 / 繁體中文 / English**，
+语言包在 `packages/admin/src/locales/{zh-CN,zh-TW,en-US}.ts`（1400+ 个 key，三份 key 集合逐条对齐）。
+切换入口在后台**侧边栏底部**（地球图标）。前台（访客站点）尚未做多语言。
+
+::: danger 一句话要求
+**任何给用户看的文字都不许硬编码**：新增或修改界面文案时，必须走 `t()` 并同步三份语言包；
+服务端的用户可见错误必须走**错误码**。下面每一条都有守卫盯着，写错会直接测试失败。
+:::
+
+### 1. 后台界面文案
+
+```jsx
+// ✅ 组件里（渲染期）
+const intl = useIntl();
+const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
+<Button>{t('common.save', '保存')}</Button>
+
+// ✅ 带插值：用 ICU 占位符，不要拼字符串
+t('comment.bulkApproved', '已批量通过 {count} 条评论！', { count: n })
+```
+
+硬性规则：
+
+1. 🔴 **三份包同步**：新 key 必须在 `zh-CN` / `zh-TW` / `en-US` 里都有，且 **`t()` 的第二个实参（defaultMessage）
+   与 `zh-CN` 的值逐字相同**（守卫 `localePackParity` 会逐 key 对账；漂移就红）。
+2. 🔴 **key 命名** `<组>.<区域>.<项>`（最多 3 段），第一段必须在 `scripts/i18n/astInventory.js` 的
+   `REGISTERED_KEY_GROUPS` 里登记（防命名空间失控）。
+3. 🔴 **中文只能待在 `t()` 的第二个实参（字面量）位上**。绕一层就数不到 ⇒ 账目会骗人：
+   不要写 `LABELS[i]` 当 defaultMessage、不要 `normalizeT(t)('id', '中文')`（callee 是 CallExpression）、
+   不要把中文放进模块级数组再间接取用。模块级常量请改成**函数版 + identity 视图**：
+   ```js
+   const permissionOptions = (t = IDENTITY_T) => [{ label: t('collab.permAll', '所有权限'), value: 'all' }];
+   const PERMISSION_OPTIONS = permissionOptions();   // identity 视图（给单测与未接 i18n 的调用方）
+   ```
+4. 🔴 **三种作用域，三条路**（走错就是白屏或永远中文）：
+   | 作用域 | 用法 | 反例（真实事故） |
+   | --- | --- | --- |
+   | React 组件 | `useIntl()` hook | 在模块加载期调 `getIntl()` ⇒ 拿到 undefined |
+   | 模块级纯函数 / 工厂 | **注入式尾参** `t = IDENTITY_T`，由调用方在渲染期传 | 在模块级常量上直接包 `t(...)` ⇒ **加载期 ReferenceError、整页白屏**（build 与单测都看不出来） |
+   | umi 运行时配置（`app.jsx` 的 `getInitialState` / `layout` / `rightContentRender`）、模块作用域事件回调 | **懒取翻译器** `rt(id, dm, values)`：调用时才 `getIntl(getLocale())` | 在这些普通函数里调 hook ⇒ 违反 hooks 规则 |
+5. 🔴 **已接 i18n 的文件不许再读 identity 常量**（`PERMISSION_OPTIONS` / `FORK_HIGHLIGHTS` / `IMPORT_PHASE_TEXT` …）：
+   那等于"注入了 t 也不生效"，文案永远中文。守卫会点名。
+6. 🔴 **hook 依赖数组**：回调体里用了 `t` 就必须在依赖数组里声明 `t`，且 `t` 要用 `useCallback(…, [intl])`
+   包成**稳定引用**（否则依赖每轮都变 ⇒ 重复请求）。**不要把 `t()` 的结果存进 state 而不带 `t` 依赖**
+   —— 存进 state 就等于把译文冻结在那一轮渲染，切语言后仍是旧译文。
+7. 🔴 **英文计数用 ICU plural**，子消息里一律用 `#`：
+   `{count, plural, one {# comment} other {# comments}}`（写成 `{count} comments` 会渲染出 "1 comments"，守卫会红）。
+8. 🔴 **英文不许出现单引号**（ICU 把 `'` 当转义符）：写 `cannot` / `do not` / `it is`；也不许出现全角标点。
+9. 🔴 **片段链的接缝**：`文字 + <a>/<b> + 文字` 这种形状（react-intl 3.x 没有富文本占位符）要拆成
+   prefix / suffix 两个 key，而**空格归属必须看清 JSX**：JSX 里有 `{' '}` 的地方，英文值两端就**不要**带空格；
+   JSX 里没有的地方（例如紧贴 `<b>`），英文值必须自己带。守卫按页面真实顺序组装三份包并检查
+   "不许双空格 / 不许标点前空格 / `<b>` 前必须有空白或连接符"。
+10. 🔴 **繁体用地区用词**，不是字形转换：儲存 / 匯入·匯出 / 檔案 / 資料 / 使用者 / 登入 / 快取 / 指令碼 /
+    非同步 / 圓餅圖 / 長條圖 / 金鑰 / 復原（不可逆）vs 還原（restore）/ 站點 / 路徑 / 請 / 外掛。
+    守卫 `node scripts/i18n/inventory.js --zh-tw-audit` 会逐字扫简体专用字（**0 命中**才算过）。
+11. 🔴 **别把"给用户看的文字"当协议值传**：`<NumSelect d="天" />`、`assertAccountPasswordStrength(pw, '管理员')`
+    都是真实踩过的坑 —— 中文当参数拼进消息，英文界面就会夹中文。改成**语义键**（`unit="days"`、`kind: 'admin'`）。
+12. 🔴 **图表字段名 ≠ 坐标轴文字**：`{ 访客数: n }` + `yField="访客数"` 是"两栖字符串"，
+    必须拆成 ASCII 字段名 + `meta: { visitors: { alias: t('…') } }`。
+
+### 2. 不译的东西（线路字面量 / 产物内容 / 开发者界面）
+
+以下**刻意保持中文或原样**，而且必须登记进 `packages/admin/tests/unit/i18nHardcodedRatchet.test.js`
+的 `REQUIRED_EXCEPTIONS`（写明理由；那张清单有反向断言，登记了就必须真的还在）：
+
+| 类别 | 例子 | 为什么不译 |
+| --- | --- | --- |
+| 与服务端比对的协议字符串 | `已初始化`、`登录失效` | 服务端返回的就是这句中文，译了检测就静默失效 |
+| 要照着敲进 shell 的命令 | `docker logs <容器名> 2>&1 \| grep 初始化密钥` | 服务端日志输出是简体，译了用户 grep 不到（🔴 三份**译文**里都必须原样保留这条命令，有跨包断言钉住） |
+| 指向中文文档的 URL 锚点 | `README.md#出处与许可`、`usage.md#开启了-https-重定向后关不掉` | 文档暂不做 i18n，译了就是死锚点 |
+| 服务端产物文件名 | `导出说明.md` | 它被写进 zip，是线路契约 |
+| 插入用户文章正文的 Markdown 模板与它的识别标题 | `:::info{title="相关信息"}` | 属**内容**；识别端靠这几个中文标题认存量文章，只改一边老文章就不渲染 |
+| 上游库的 locale 数据 | `components/Editor/locales.ts` 里 bytemd/mermaid/math 的三语表 | 直接复用上游文件，按语言挑；进语言包等于把上游 62 条副本重新手抄 |
+| 静态双语标签 | `语言 · Language` | 服务于"还没切语言的人"；而且那几处不能用 hook |
+| 开发者界面 | `logger.*` / `console.*` 的文本 | 翻它会让同一条日志在不同语言下长得不一样，排查时 grep 不到 |
+
+🔴 判定标准是**"这段文字给谁看"**，不是"它是不是字符串"。
+
+### 3. 服务端错误消息：必须带**错误码**
+
+服务端（`packages/server`）的用户可见错误一律走码表，不许直接 `throw new BadRequestException('中文')`：
+
+```ts
+// ① packages/server/src/utils/serverErrorCodes.ts —— 登记（zh 就是今天这句中文，逐字照抄）
+adminPasswordTooShort: entry('管理员密码太短：至少 {min} 个字符（当前 {count} 个）。…', BadRequestException),
+
+// ② 调用点
+throw codedError('adminPasswordTooShort', { min: MIN, count: value.length });
+// 需要返回体而不是异常时：return codedBody('<code>', params);
+
+// ③ admin 三份语言包各加一条 error.<code>（zh-CN 必须与码表的 zh **逐字相同**）
+'error.adminPasswordTooShort': '管理员密码太短：至少 {min} 个字符（当前 {count} 个）。…',
+```
+
+响应体形状是 `{ statusCode, message(中文), code, params }`；后台按 `code` 查 `error.<code>` 的译文并用 `params`
+插值，🔴 **找不到译文时回落到服务端那句中文**（不会显示裸码）。所以：
+
+- 新增一条用户可见错误 = **码表 + 三份译文 + 调用点**三样一起交；
+- 🔴 `zh-CN` 的值必须与码表 `zh` 逐字相同（守卫会查漂移）；
+- 🔴 状态码/`error` 字段有**黄金快照**（`serverErrorCodes.spec.ts`），新增码必须同步；
+- 🔴 不许留**死码**（登记了却没人抛）与**死条目**（包里有 `error.*` 但码表没有）—— 两个方向都有反向断言；
+- 🔴 两条棘轮**只许减**：带中文的 `throw` 站点、带中文的 `message:` 返回体
+  （定位命令：`node scripts/i18n/inventory.js --server-throws`，与棘轮同口径且给行号）；
+- ⚠️ 服务端的 `fillServerErrorMessage()` 只做 `{name}` 替换，**不实现 ICU select** ⇒
+  需要按"账号类型/资源类型"分文案时**按类型拆码**，不要用 select；
+- ⚠️ 写进**备份清单 / 校验报告文件**的文本属产物内容（与 `导出说明.md` 同族），动手前先分类。
+
+### 4. 提交前自检（5 步，都有命令）
+
+```bash
+# ① 还剩多少硬编码中文（口径与棘轮一致；--zh-tw-audit 顺带扫繁中简体字）
+node scripts/i18n/inventory.js
+node scripts/i18n/inventory.js --zh-tw-audit
+node scripts/i18n/inventory.js --server-throws      # 服务端两个口径 + 行号
+
+# ② 后台单测（含全部 i18n 守卫：三份包对账 / 占位符 / 复数 / 棘轮 / 注入链 / hook 依赖 / 遮蔽 …）
+cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js
+
+# ③ 服务端（错误码表、黄金快照、口令策略）
+cd packages/server && ./node_modules/.bin/jest src/utils/serverErrorCodes.spec.ts src/utils/passwordPolicy.spec.ts
+
+# ④ 类型门禁（🔴 语法错会让 tsc 跳过整个程序的语义诊断 ⇒ 这一步不是形式检查）
+bash scripts/tests/admin-typecheck-ratchet.test.sh
+
+# ⑤ 改了界面就**用真浏览器看一眼**：切三种语言，重点看片段链接缝、计数复数、tooltip 与弹窗
+#    （静态判据看不见的东西：译文好不好、接缝有没有多/少空格、有没有半截中文）
+```
+
+🔴 **UI 可见的改动必须有真实浏览器的证据**：本项目已经多次出现"所有静态判据全绿、界面上却是
+`act on`（该是 Actions）/ `inthis repository`（漏空格）/ `Last 3天`（半截中文）"的情况 ——
+这类问题**只有活体能看见**。反过来，能造数据就不要只看静态文案（例如真的上传一个 `.mdz`、
+真的触发一次 400）。
+
 ## 测试
 
 改完代码**必须**跑对应的那一套；跨包改动（例如同时动了 server 与文档）全都跑一遍。

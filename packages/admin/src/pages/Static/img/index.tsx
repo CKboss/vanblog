@@ -1,4 +1,5 @@
 import CopyUploadBtn from '@/components/CopyUploadBtn';
+import { serverErrorText } from '@/services/van-blog/requestError';
 import ObjTable from '@/components/ObjTable';
 import UploadBtn from '@/components/UploadBtn';
 import {
@@ -285,10 +286,10 @@ const ImgPage = () => {
             message.success(t('img.replaceOk', '替换成功！链接没有变化。'));
             fetchData();
           } else {
-            message.error(res?.message || t('img.replaceFailed', '替换失败！'));
+            message.error(serverErrorText(res, t) || t('img.replaceFailed', '替换失败！'));
           }
         } catch (err: any) {
-          message.error(err?.message || t('img.replaceFailed', '替换失败！'));
+          message.error(serverErrorText(err, t) || t('img.replaceFailed', '替换失败！'));
         } finally {
           setLoading(false);
         }

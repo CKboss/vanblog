@@ -357,7 +357,17 @@ export default function () {
     }
     setLoading(true);
     try {
-      const { content } = await parseMarkdownFile(file, undefined, t);
+      const parsed = await parseMarkdownFile(file, undefined, t);
+      // 🔴 修一个实测到的真缺陷：`parseMarkdownFile` 对非 .md 文件会**自己弹**一条
+      //    「目前仅支持导入 Markdown 文件！」然后 return undefined，而这里原来直接
+      //    `const { content } = await …` ⇒ 🔴 解构 undefined 抛 TypeError、被下面的 catch 兜住，
+      //    于是用户看到**两条错误叠在一起**（一条准确的 + 一条笼统的"导入失败！请检查文件格式！"）。
+      //    靠异常兜底还会把"文件类型不对"与"真的解析炸了"混成同一句话。
+      if (!parsed) {
+        setLoading(false);
+        return false;
+      }
+      const { content } = parsed;
       Modal.confirm({
         title: t('editor.importConfirmTitle', '确认内容'),
         content: <Input.TextArea value={content} autoSize={{ maxRows: 10, minRows: 5 }} />,

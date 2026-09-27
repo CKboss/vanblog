@@ -317,7 +317,7 @@ const FALSE_WHITELIST = {
   // 🔴 行号 241 → **261**（期 6 第七批：主题页接了 i18n，文件长了 20 行）。
   //    已核对：还是**同一处** —— 主题列表那个 `<Table rowKey="id" … pagination={false}>`（第 255 行起，
   //    白名单的键取的是 `pagination={false}` **所在行**，不是 `<Table` 那一行），不是新出现的一处分页。
-  'pages/SystemConfig/tabs/Theme.jsx:261':
+  'pages/SystemConfig/tabs/Theme.jsx:262':
     '主题列表，条目数量个位数，前端全量渲染，不需要分页',
   // 图片管理的**列表（表格）视图**：它不是"不分页"，而是分页交给了页面底部那个
   // 共用的 <Pagination>（在 listMode 三元之外，两种视图共用同一份 page/pageSize/total）。
@@ -329,7 +329,7 @@ const FALSE_WHITELIST = {
   //     本轮先按现状同步，不在文案批次里顺手改守卫的判据形状（那要它自己的变异对照）。
   // 🔴 行号又漂了一次（724 → **728**）：同一轮里第二次 —— 因为修 `common.editPost` 时又加了 4 行注释。
   //   ⇒ 这正是"用行号当键"的代价：**改这一页的任何批次都要回来同步它**（本轮共 2 次）。
-  'pages/Static/img/index.tsx:728':
+  'pages/Static/img/index.tsx:729':
     '图片列表(表格视图)的分页由页面底部共用的 <Pagination> 负责（已带 showQuickJumper），此处再加一套会出现两个打架的分页器',
   // 分类管理：分类是树形/少量数据，前端全量渲染。
   // 🔴 行号随期 6 第九批（接 i18n）移动；已核对还是**同一处**（分类列表那个 `pagination={false}`）

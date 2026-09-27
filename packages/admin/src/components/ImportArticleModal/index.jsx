@@ -29,6 +29,14 @@ export default function (props) {
       }
     } else {
       const vals = await parseMarkdownFile(file, undefined, t);
+      // 🔴 修一个实测到的真缺陷：`parseMarkdownFile` 在**文件不是 .md**（或读分类失败）时
+      //    会自己弹一个 `Modal.error('目前仅支持导入 Markdown 文件！')` 然后 **return undefined** ——
+      //    而这里原来不看返回值，照样 `setFieldsValue(undefined)` + `setVisible(true)`：
+      //    🔴 结果是**两个弹窗叠在一起**（错误提示 + 一个字段全空的导入弹窗），
+      //    用户以为导入流程开始了，填完提交才发现问题（`setFieldsValue(undefined)` 本身也可能抛）。
+      if (!vals) {
+        return false;
+      }
       form.setFieldsValue(vals);
       setVisible(true);
     }

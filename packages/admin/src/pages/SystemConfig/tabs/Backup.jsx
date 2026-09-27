@@ -9,6 +9,7 @@ import {
   listFullBackups,
   restoreFullBackup,
 } from '@/services/van-blog/api';
+import { serverErrorText } from '@/services/van-blog/requestError';
 import {
   Alert,
   Button,
@@ -136,7 +137,7 @@ export default function (props) {
       const res = await exportFullBackup(format);
       const data = res?.data;
       if (!data) {
-        message.error(res?.message || t('backup.exportFailed', '导出失败！'));
+        message.error(serverErrorText(res, t) || t('backup.exportFailed', '导出失败！'));
         return;
       }
       Modal.success({
@@ -166,7 +167,7 @@ export default function (props) {
       });
       loadList();
     } catch (err) {
-      message.error(err?.message || t('backup.exportFailed', '导出失败！'));
+      message.error(serverErrorText(err, t) || t('backup.exportFailed', '导出失败！'));
     } finally {
       setExporting(false);
     }
@@ -224,7 +225,7 @@ export default function (props) {
         );
         return;
       }
-      message.error(err?.message || t('backup.downloadSigFailed', '下载 .sig 失败！'));
+      message.error(serverErrorText(err, t) || t('backup.downloadSigFailed', '下载 .sig 失败！'));
     }
   };
 
@@ -280,7 +281,7 @@ export default function (props) {
         ),
       });
     } catch (err) {
-      message.error(err?.message || t('backup.inspectFailed', '读取清单失败！'));
+      message.error(serverErrorText(err, t) || t('backup.inspectFailed', '读取清单失败！'));
     }
   };
 
@@ -319,7 +320,7 @@ export default function (props) {
           const res = await restoreFullBackup(name);
           const data = res?.data;
           if (!data) {
-            message.error(res?.message || t('backup.restoreFailedToast', '恢复失败！'));
+            message.error(serverErrorText(res, t) || t('backup.restoreFailedToast', '恢复失败！'));
             return;
           }
           Modal.success({
@@ -360,7 +361,7 @@ export default function (props) {
           });
           loadList();
         } catch (err) {
-          message.error(err?.message || t('backup.restoreFailedToast', '恢复失败！'));
+          message.error(serverErrorText(err, t) || t('backup.restoreFailedToast', '恢复失败！'));
         } finally {
           setRestoring(false);
         }
@@ -374,7 +375,7 @@ export default function (props) {
       message.success(t('backup.deletedToast', '已删除'));
       loadList();
     } catch (err) {
-      message.error(err?.message || t('backup.deleteFailed', '删除失败！'));
+      message.error(serverErrorText(err, t) || t('backup.deleteFailed', '删除失败！'));
     }
   };
 

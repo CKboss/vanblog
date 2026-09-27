@@ -72,7 +72,13 @@ describe('后台能下载归档旁边的 .sig（离线签名）', () => {
     const iWarn = fn.indexOf('从没被签过');
     // 🔴 期 6 第六批起这条兜底文案走 t() ⇒ 锚点换成"包含那句 defaultMessage 的 message.error 调用"
     //    （性质没放：仍然要求"通用失败提示"存在，而且**在** 404 分支之后 ⇒ 顺序判据照旧有效）
-    const iErr = fn.indexOf("message.error(err?.message || t(");
+    // 🔴 2026-09-27：通用失败提示从**直通服务端 message**（`err?.message || t(…)`）改成走
+    //    `serverErrorText(err, t)`（有 `code` 就显示译文，没码才回落服务端中文）⇒ 锚点两种形状都认。
+    //    性质没放：仍然要求"通用失败提示存在，且在 404 分支之后"（顺序判据照旧有效）。
+    const iErr = (() => {
+      const a = fn.indexOf('message.error(serverErrorText(err, t) || t(');
+      return a >= 0 ? a : fn.indexOf('message.error(err?.message || t(');
+    })();
     assert.ok(i404 > 0, '没有对 404 做判断');
     assert.ok(iWarn > 0, '404 的文案没有说清"从没被签过"');
     assert.ok(iErr > 0, '通用失败提示不见了');

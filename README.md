@@ -86,6 +86,21 @@
   加密文章解锁限次、请求体上限、request-id 与慢请求日志、协作者细粒度权限、API Token 管理、忘记密码恢复密钥
 - 内置访问统计与看板（访客/浏览量/每日快照），也可注入 GA、百度统计等
 
+**多语言后台**
+
+- 后台界面**三种语言**：简体中文 / 繁體中文 / English，侧边栏底部一键切换，`<html lang>` 与排版方向（`dir`）跟着走；
+  语言包 1400+ 个 key，三份 key 集合逐条对齐（有守卫钉住，漏译 / 多译 / 漂移都会红）
+- 繁体用**地区用词**而不是字形转换（儲存 / 匯入·匯出 / 檔案 / 資料 / 使用者 / 登入 / 快取 / 指令碼 / 金鑰 /
+  圓餅圖·長條圖），有一条守卫逐字扫"繁中包里不许出现简体专用字"
+- 英文的计数用**正确的复数**（ICU `plural`）：`1 comment` / `3 comments`、`Last 1 day` / `Last 30 days`，
+  不会出现 "1 items"
+- 编辑器（bytemd）界面同样跟随语言：直接复用上游 `zh_Hans` / `zh_Hant` / `en` 三份 locale，
+  上游缺的（mermaid 的繁中图表名、math 插件）自己补 ⇒ 不与库升级漂移
+- 服务端的用户可见错误带**错误码**（`code` + `params`），后台按码显示当前语言的译文并插值；
+  🔴 找不到译文时回落到服务端那句中文，**不会显示裸码**
+- 🔴 **写代码时的硬性要求**（新增界面文案必须走 `t()`、服务端错误必须登记错误码、日志刻意不翻 …）
+  写在 [多语言（i18n）：硬性要求](docs/contribution.md)，每一条都有守卫盯着
+
 **部署**
 
 - 一条命令部署（脚本自动决定拉镜像还是本地构建，构建前会实测 CPU 与可用内存，不够就直接劝退而不是让你白等）
@@ -294,6 +309,11 @@ RSS/Atom 的正文与摘要现在会做 **HTML 消毒** —— script/style 元�
 **不需要 docker，也不需要 sudo**：工具链、数据库、数据目录、日志全部在仓库内（`.tools/`、`vanblog_dev/`，已本地忽略），
 整套环境可以随目录搬走，不污染系统。
 
+🔴 **改后台界面文案、或新增服务端错误之前，先读 [多语言（i18n）：硬性要求](docs/contribution.md)**：
+新增文案必须走 `t()` 并同步三份语言包，服务端错误必须登记错误码，否则守卫会红。
+那不是形式检查 —— 本项目已经多次出现"所有静态判据全绿、界面上却是半截中文（`Last 3天`）、
+漏空格（`inthis repository`）或直译（列头 `act on`）"的情况，这类问题只有真实浏览器能看见。
+
 改了 `Dockerfile` / `entrypoint.sh` / `scripts/start.js` / caddy 模板这类**只有镜像里才会暴露**的东西时，别只跑单元测试：
 
 ```bash
@@ -310,12 +330,12 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 
 | 套件 | 命令 | 现状（2026-09-21 依赖升级后本机实测；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39 与最新一轮记账 §7.97） |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **268 套件 / 3838 用例、0 真红**（约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（曾因此漏过一次真红，`68d7ac6f` 修的） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **97 文件 / 1084 用例全绿** |
-| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **154 套件 / 622 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **288 套件 / 4238 用例（4234 通过 + 4 skip）、0 真红**（约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（曾因此漏过一次真红，`68d7ac6f` 修的） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **97 文件 / 1095 用例全绿** |
+| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **174 套件 / 780 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
 | admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件）。CI 里跑并且是绿的；本机没装浏览器所以没跑。⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **31 文件 / 3044 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
-| 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **52/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **35 文件 / 3160 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
+| 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **61/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
 | 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **入库的三份配置各 0 错**（CI 查 server 的 `tsconfig.json` 与 `tsconfig.build.json`、再加 website 的 `tsconfig.json`；本机的 `tsconfig.dev.json` 没有入库） |
 | 空值解引用棘轮 | `bash scripts/tests/strict-null-ratchet.test.sh` | **11 条断言 / 0 失败**（约 29 秒）。`strictNullChecks` 在 tsconfig 里是关的，这条守卫让"四类确定性空值解引用"的命中数**只减不增**（当前基线 **10**，2026-09-21 清掉三个热点文件后由 32 下调）。🔴 它必须用**单项开关**而不是伞形 `--strict`：tsconfig 里显式的 `false` 能压过伞形开关、压不过单项开关，实测 `--strict` 下这四类是 **0**、单项开关下是 **10** ⇒ 用伞形开关写的守卫会**恒绿**（守卫里有一条断言专门钉住这件事）。详见 `docs/contribution.md` |
 | 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md)。⚠️ `--c10k N` 的 **N 是「目标连接数」不是秒数**；采集完**必须检查退出码**，`2` 表示 C10K 有目标未产出结果、那份报告不能用 |
@@ -367,6 +387,10 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 - **前台全局 CSS 拆不开**：apple 皮肤 46KB + markdown 专用表约 27KB 对 `/link`、`/tag`、`/timeline` 是死重，
   被 Next 的 pages router 挡住（只允许在 `_app` 引第一方全局 CSS）。字体已自托管，
   但**站点数据里的自定义 CSS/HTML 仍可能引用第三方**（那是用户数据，只能在后台「定制化」里清）。
+- **多语言只覆盖后台**：前台（访客站点）与文档仍是中文；服务端还有约 **200 处**用户可见错误消息没接错误码
+  （棘轮只许减不许增，进度可查：`node scripts/i18n/inventory.js --server-throws`）。后台里剩下的 35 条中文
+  全部是**登记在册的永久例外**（协议字符串、要照着敲的命令、指向中文文档的 URL 锚点、服务端产物文件名、
+  插入用户文章正文的 Markdown 模板、上游 locale 数据、静态双语标签），**欠条为 0**。
 - 内置评论没有邮件 / webhook 通知（Waline 有）、没有点赞 UI（`likeCount` 已存着）、没有验证码。
 - 没有全局 `ValidationPipe`（`class-validator` 不是依赖），参数校验靠各处手写；净化中间件是黑名单不是白名单。
 - `/api/admin/init` 仍靠「库里有没有用户」判断是否已初始化，但现在有三层缓解：初始化密钥**默认开启**、

@@ -6,6 +6,7 @@ import {
   THEME_UPLOAD_ACTION,
   themeTokenHeader,
 } from '@/services/van-blog/skinTheme';
+import { serverErrorText } from '@/services/van-blog/requestError';
 import { Alert, Button, Card, Input, message, Modal, Popconfirm, Space, Table, Tag, Typography, Upload } from 'antd';
 import moment from 'moment';
 import { useEffect, useState } from 'react';
@@ -45,10 +46,10 @@ export default function (props) {
         setThemes(res.data?.themes || []);
         setActive(res.data?.active || '');
       } else {
-        message.error(res?.message || t('theme.loadListFailed', '读取主题列表失败'));
+        message.error(serverErrorText(res, t) || t('theme.loadListFailed', '读取主题列表失败'));
       }
     } catch (e) {
-      message.error(t('theme.loadListFailedReason', '读取主题列表失败：{reason}', { reason: e?.message || e }));
+      message.error(t('theme.loadListFailedReason', '读取主题列表失败：{reason}', { reason: serverErrorText(e, t) || e }));
     } finally {
       setLoading(false);
     }
@@ -67,10 +68,10 @@ export default function (props) {
         );
         setActive(id);
       } else {
-        message.error(res?.message || t('theme.activateFailed', '切换失败'));
+        message.error(serverErrorText(res, t) || t('theme.activateFailed', '切换失败'));
       }
     } catch (e) {
-      message.error(t('theme.activateFailedReason', '切换失败：{reason}', { reason: e?.message || e }));
+      message.error(t('theme.activateFailedReason', '切换失败：{reason}', { reason: serverErrorText(e, t) || e }));
     }
   };
 
@@ -81,10 +82,10 @@ export default function (props) {
         message.success(t('common.deletedToast', '已删除'));
         load();
       } else {
-        message.error(res?.message || t('theme.deleteFailed', '删除失败'));
+        message.error(serverErrorText(res, t) || t('theme.deleteFailed', '删除失败'));
       }
     } catch (e) {
-      message.error(t('theme.deleteFailedReason', '删除失败：{reason}', { reason: e?.message || e }));
+      message.error(t('theme.deleteFailedReason', '删除失败：{reason}', { reason: serverErrorText(e, t) || e }));
     }
   };
 
@@ -115,7 +116,7 @@ export default function (props) {
       const res = await getThemeCss(record.id);
       if (res?.statusCode !== 200) {
         // 后端用 NotFoundException 时 umi 会抛错，但也可能返回信封里的错误，两边都兜住
-        message.error(res?.message || t('theme.readCssFailed', '读取 CSS 失败'));
+        message.error(serverErrorText(res, t) || t('theme.readCssFailed', '读取 CSS 失败'));
         return;
       }
       // ⚠️ 这一处 bareChinese **数不到**（全角括号不在汉字范围里），但英文下 `Name（id）` 很怪
@@ -349,7 +350,7 @@ export default function (props) {
                 setForm({ id: '', name: '', description: '', author: '', version: '' });
                 load();
               } else if (info.file.status === 'error' || body) {
-                message.error(body?.message || t('theme.uploadFailedReason', '上传失败：{reason}', { reason: info.file.status }));
+                message.error(serverErrorText(body, t) || t('theme.uploadFailedReason', '上传失败：{reason}', { reason: info.file.status }));
               }
             }}
           >

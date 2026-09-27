@@ -1,4 +1,5 @@
 import { message } from 'antd';
+import { serverErrorText } from '@/services/van-blog/requestError';
 import { BytemdPlugin } from 'bytemd';
 
 const ATTACHMENT_UPLOAD_URL = '/api/admin/file/upload';
@@ -23,7 +24,8 @@ export const uploadAttachment = async (
     if (data && data.statusCode == 200 && data.data?.src) {
       return data.data.src as string;
     }
-    message.error(data?.message || t('editor.attachmentUploadFailed', '附件上传失败！'));
+    // 🔴 走 serverErrorText：服务端返回体里带 `code` 时显示**译文**，没有码才回落服务端那句中文
+    message.error(serverErrorText(data, t) || t('editor.attachmentUploadFailed', '附件上传失败！'));
     return null;
   } catch (err) {
     message.error(t('editor.attachmentUploadFailed', '附件上传失败！'));

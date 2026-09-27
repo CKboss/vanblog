@@ -2196,3 +2196,62 @@ describe('🔴 三份包里都必须原样保留的**用户要照着敲的命令
     }
   });
 });
+
+describe('🔴 服务端错误文案不许**直通**（有 code 就必须显示译文）', () => {
+  // 🔴 与上面那些判据**同一份**覆盖面（自动发现），不另起一套遍历口径
+  const FILES = discoverI18nFiles(path.join(adminRoot, 'src'), [])
+    .map((abs) => path.relative(adminRoot, abs).split(path.sep).join('/'))
+    .filter((rel) => rel.startsWith('src/'));
+  const read = (rel) => readFileSync(path.join(adminRoot, rel), 'utf8');
+
+  it('后台里不许再出现 `message.error(x.message || …)` 这种绕过翻译的写法', () => {
+    // ## 为什么要这条（2026-09-27 实测到的真缺陷，21 处）
+    // 服务端从期 9 起在错误响应里带 `code` 与 `params`（`codedError()` / `codedBody()`），
+    // 后台要靠 `error.<code>` 把它翻成当前语言。但后台有 **21 处**写成
+    // `message.error(err?.message || t('…'))` / `message.error(res?.message || t('…'))`
+    // —— 🔴 那是**直通服务端 message**：明明有码却不查译文，于是英文/繁中界面上弹出一句中文。
+    // 这类缺陷 🔴 **不报错、静态判据也不红**（文案确实"有"），只有真去触发一次错误才看得见。
+    // 修法：统一走 `serverErrorText(source, t)`（requestError.js 里新增的那个单点助手：
+    // 认响应体 / `err.data` / `err.info` 三种形状，有码就翻译并用服务端 params 插值，
+    // 没码就**原样返回服务端那句中文**，什么都没有就返回 undefined 让调用点的兜底生效）。
+    //
+    // ⚠️ 判据刻意**只认这一种形状**（`message.error|warning(...)` 里出现 `X.message`），
+    //    不去管别的写法：判据太宽会制造假缺口，而假缺口比没守卫更糟（它会训练下一个人忽略红灯）。
+    // 🔴 **先剥整行注释再匹配**（与 passwordPolicy.test.js 同一套做法）：
+    //    否则"注释里提到那个形状"就会被当成违规（实测：requestError.js 的文档注释里
+    //    正好写着 `message.error(err?.message || t('…'))` 这个反例 ⇒ 假红）。
+    //    ⚠️ 反过来也成立：剥注释这一步**不能省**，否则有人会靠"把调用写成注释"骗过判据。
+    const stripWholeLineComments = (code) =>
+      code
+        .split('\n')
+        .map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line))
+        .join('\n');
+    const offenders = [];
+    for (const rel of FILES) {
+      const src = stripWholeLineComments(read(rel));
+      const lines = src.split('\n');
+      lines.forEach((line, i) => {
+        if (!/message\.(error|warning)\(/.test(line)) return;
+        if (/serverErrorText\(/.test(line)) return; // 已经走单点助手
+        // 🔴 `X.message` / `X?.message` 直通（X 是响应体或捕获到的异常）
+        if (/\b[A-Za-z_$][A-Za-z0-9_$]*\??\.message\b/.test(line)) {
+          offenders.push(`${rel}:${i + 1}  ${line.trim().slice(0, 110)}`);
+        }
+      });
+    }
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      '🔴 这些地方把服务端的 message **直通**给了用户（有错误码也不翻译 ⇒ 英文/繁中界面弹中文）：\n  ' +
+        offenders.slice(0, 10).join('\n  ') +
+        '\n修法：改成 `serverErrorText(<响应体或异常>, t) || t(\'<兜底 key>\', \'兜底中文\')`' +
+        '（助手在 `services/van-blog/requestError.js`，认响应体 / err.data / err.info 三种形状）。',
+    );
+    // 🔴 反空转：那个助手必须真的存在且被用起来了（否则这条判据会变成"禁止一切错误提示"）
+    const helper = read('src/services/van-blog/requestError.js');
+    assert.ok(/function serverErrorText\(/.test(helper), 'requestError.js 里找不到 serverErrorText（判据的前提没了）');
+    assert.ok(/serverErrorText,/.test(helper), 'serverErrorText 没有导出');
+    const users = FILES.filter((rel) => /serverErrorText\(/.test(read(rel)));
+    assert.ok(users.length >= 6, `只有 ${users.length} 个文件在用 serverErrorText（下界 6）⇒ 判据可能空转`);
+  });
+});

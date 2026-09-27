@@ -4,7 +4,7 @@ import { exportAllImgs, rewriteArticleBaseUrl, scanImgsOfArticles } from '@/serv
 // 「导出全部本地图床内容」用到了 saveExportArchive，但一直没 import：
 // 点下去就是 ReferenceError，再被 catch 吞成一句看不懂的报错，压缩包永远下不下来。
 import { saveExportArchive } from '@/services/van-blog/downloadArchive';
-import { reportRequestError } from '@/services/van-blog/requestError';
+import { reportRequestError, serverErrorText } from '@/services/van-blog/requestError';
 import { Alert, Button, Card, Input, message, Modal, Table, Typography } from 'antd';
 import { useIntl } from 'umi';
 import { useState } from 'react';
@@ -122,7 +122,7 @@ export default function () {
               await saveExportArchive(name, t('sysconf.img.packDone', '图片打包完成，已开始下载'), t);
             } catch (err) {
               // 空的 catch 会把失败吞掉，用户只看到按钮转圈结束
-              message.error(err?.message || t('sysconf.img.exportFailed', '导出失败'));
+              message.error(serverErrorText(err, t) || t('sysconf.img.exportFailed', '导出失败'));
             } finally {
               setExporting(false);
             }

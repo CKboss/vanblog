@@ -1,4 +1,5 @@
 import { Modal, message } from 'antd';
+import { serverErrorText } from '@/services/van-blog/requestError';
 import { getIntl, getLocale } from 'umi';
 import { exportMarkdownZip } from './api';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -93,6 +94,50 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
   const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
     intl.formatMessage({ id, defaultMessage }, values);
   const format = normalizeExportFormat(opts.format);
+
+  /**
+   * 🔴 处理服务端返回的**失败 JSON**（含 `code` / `imageRefs` / `message`）。
+   *
+   * ## 为什么要抽出来（2026-09-27 实测到的真缺陷）
+   * 原来这段逻辑只写在"blob 嗅探"分支里（`blob.type.includes('application/json')`）——
+   * 但 🔴 **服务端返回 4xx 时 umi-request 会直接 reject**（`ResponseError`，body 挂在 `err.data`），
+   * 根本不会走到那个分支。实测：无图文章导 `.mdz` 时服务端返回 **400**，用户只看到一句
+   * `http error`，而"这篇没有图片 ⇒ 一键改导 .md"那个出口是**死代码**（写下来了但永远进不去）。
+   * ⇒ 两条路径（blob 嗅探 / catch 里的 err.data）共用这一个函数。
+   *
+   * @returns 是否**已经**把这件事处理掉了（弹了 Modal 或弹了 error）
+   */
+  const handleFailureJson = (parsed: any): boolean => {
+    if (!parsed || typeof parsed !== 'object') return false;
+    // ⚠️ 这里不能一律弹红色报错：「这篇文章没有图片所以没有 .mdz」不是失败，
+    // 是一条提示，而且用户真正想要的东西一键就能拿到（改导 .md）。
+    const failure = classifyExportFailure(parsed, format, t);
+    if (failure.kind === 'no-images') {
+      Modal.confirm({
+        title: t('export.noImagesModalTitle', '这篇内容没有图片，所以没有 .mdz'),
+        width: 520,
+        okText: t('export.noImagesModalOk', '改为导出 Markdown (.md)'),
+        cancelText: t('init.restore.confirmCancel', '取消'),
+        content: (
+          <div>
+            <p>{failure.detail}</p>
+            <p style={{ color: '#888' }}>
+              {t(
+                'export.noImagesModalNote',
+                '.mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。',
+              )}
+            </p>
+          </div>
+        ),
+        onOk: () => downloadMarkdownExport({ ...opts, format: 'md' }),
+      });
+      return true;
+    }
+    // 🔴 有错误码就走译文（`serverErrorText`），没有码才用分类器给的中文 message
+    message.error(serverErrorText(parsed, t) || failure.message || t('export.failed', '导出失败！'));
+    return true;
+  };
+
   const hide = message.loading(loadingText(format, t), 0);
   try {
     const res: any = await exportMarkdownZip({
@@ -110,33 +155,7 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
     }
     // 出错时服务端返回的是 JSON，但 responseType 是 blob，得先嗅探一下
     if (blob.type && blob.type.includes('application/json')) {
-      // ⚠️ 这里不能一律弹红色报错：「这篇文章没有图片所以没有 .mdz」不是失败，
-      // 是一条提示，而且用户真正想要的东西一键就能拿到（改导 .md）。
-      const parsed = await readErrorJson(blob);
-      const failure = classifyExportFailure(parsed, format, t);
-      if (failure.kind === 'no-images') {
-        Modal.confirm({
-          title: t('export.noImagesModalTitle', '这篇内容没有图片，所以没有 .mdz'),
-          width: 520,
-          okText: t('export.noImagesModalOk', '改为导出 Markdown (.md)'),
-          cancelText: t('init.restore.confirmCancel', '取消'),
-          content: (
-            <div>
-              <p>{failure.detail}</p>
-              <p style={{ color: '#888' }}>
-                {t(
-                  'export.noImagesModalNote',
-                  '.mdz 的意义就是把图片一起带走并改成相对路径；没有图片时它与 .md 完全等价。',
-                )}
-              </p>
-            </div>
-          ),
-          onOk: () => downloadMarkdownExport({ ...opts, format: 'md' }),
-        });
-        return false;
-      }
-      message.error(failure.message || t('export.failed', '导出失败！'));
-      return false;
+      return handleFailureJson(await readErrorJson(blob)) ? false : false;
     }
 
     const fallback = fallbackFileName(safeName(opts.title || ''), format);
@@ -202,7 +221,28 @@ export async function downloadMarkdownExport(opts: MarkdownExportOptions): Promi
     });
     return true;
   } catch (err: any) {
-    message.error(err?.message || t('export.failed', '导出失败！'));
+    // 🔴 服务端 4xx/5xx 会走到这里（umi-request 直接 reject）⇒ body 在 `err.data`（也可能是 `err.info`）。
+    //    先按"失败 JSON"处理（无图导 .mdz 那条一键改导 .md 的出口就在这里被激活），
+    //    处理不了再退回通用错误提示。
+    let body: any =
+      err && typeof err === 'object'
+        ? (err as any).data && typeof (err as any).data === 'object'
+          ? (err as any).data
+          : (err as any).info && typeof (err as any).info === 'object'
+            ? (err as any).info
+            : null
+        : null;
+    // 🔴 关键一步（实测出来的）：这个请求的 `responseType` 是 **blob** ⇒ umi-request reject 时
+    //    挂在 `err.data` 上的是一个 **Blob**，不是解析好的 JSON！直接读 `body.code` 永远是 undefined
+    //    ⇒ 第一版修完仍然只弹一句笼统的"导出失败"，那个"一键改导 .md"的出口还是进不去。
+    //    ⇒ 是 Blob 就先用既有的 `readErrorJson()` 把它读成 JSON（与嗅探分支同一个函数）。
+    if (body && typeof Blob !== 'undefined' && body instanceof Blob) {
+      body = await readErrorJson(body);
+    }
+    if (body && (body.code || body.message) && handleFailureJson(body)) {
+      return false;
+    }
+    message.error(serverErrorText(err, t) || t('export.failed', '导出失败！'));
     return false;
   } finally {
     hide();

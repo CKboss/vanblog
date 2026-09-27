@@ -153,6 +153,40 @@ function translateServerErrorMessage(resData, t) {
   return t(SERVER_ERROR_KEY_PREFIX + code, resData?.message, resData?.params);
 }
 
+/**
+ * 🔴 从"服务端响应体**或**捕获到的异常"里取出**该显示给用户的那句话**（能翻译就翻译）。
+ *
+ * ## 为什么需要它（2026-09-27 实测到的真缺陷）
+ * 后台有 21 处写成 `message.error(err?.message || t('…'))` / `message.error(res?.message || t('…'))`
+ * —— 🔴 那是**直通**服务端 message：服务端返回体里明明带着 `code` 与 `params`
+ * （`codedError()` 放进去的），而直通写法**绕过了翻译**，于是英文/繁中界面上弹出一句中文。
+ * 这类缺陷在界面上不报错、在测试里也不红（文案确实"有"），只有真去触发一次错误才看得见。
+ *
+ * 语义（🔴 每一步都有理由）：
+ * ① 认三种形状：响应体本身、`err.data`（umi-request 的 reject 会把 body 挂在这里）、`err.info`；
+ * ② 有 `code` 且有翻译器 ⇒ 走 `error.<code>` 的译文，并用服务端的 `params` 插值；
+ * ③ 没有码 ⇒ 原样返回服务端那句中文（**与今天逐字相同**，绝不静默改成兜底文案）；
+ * ④ 什么都没有 ⇒ 返回 `undefined`，让调用点的 `|| t('…兜底…')` 生效。
+ *
+ * @param {*} source 响应体 / 捕获到的异常 / null
+ * @param {Function} [t] 注入式翻译器（不传 ⇒ 等价于今天的 `source?.message`）
+ * @returns {string|undefined}
+ */
+function serverErrorText(source, t) {
+  const env =
+    source && typeof source === 'object'
+      ? source.data && typeof source.data === 'object'
+        ? source.data
+        : source.info && typeof source.info === 'object'
+          ? source.info
+          : source
+      : null;
+  if (!env || typeof env !== 'object') return undefined;
+  const mapped = mapAdminErrorMessage(env, t);
+  if (typeof mapped === 'string' && mapped.length > 0) return mapped;
+  return typeof env.message === 'string' && env.message ? env.message : undefined;
+}
+
 function mapAdminErrorMessage(resData, t) {
   const translated = translateServerErrorMessage(resData, t);
   let errorMessage = translated === undefined ? resData?.message : translated;
@@ -308,6 +342,7 @@ module.exports = {
   shouldShowRequestError,
   translateServerErrorMessage,
   mapAdminErrorMessage,
+  serverErrorText,
   adaptAdminResponse,
   handleAdminRequestError,
   reportRequestError,
