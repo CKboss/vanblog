@@ -67,7 +67,12 @@ for (const l of LOCALES) {
 //   jwt.strategy 3、initJwt 2、login.guard 1、init.provider 1）。
 //   ⚠️ init.controller 里那两处 `已初始化` **刻意没迁**：它是协议字符串（admin 拿它与响应文本比对），
 //   译了会让初始化检测静默失效 ⇒ 要改得前后端一起改成按 code 判断，单独排一批。
-const THROW_BUDGET = 186;
+// 🔴 186 → **164**（期 9 第三批）：评论族 24 处 throw 迁进码表（22 个码，两处重复文本各共用一个）。
+//   ⚠️ 这一族**大多是访客可见**的（前台评论表单）⇒ 前台仍显示服务端返回的中文（与今天逐字相同，无回归），
+//   等前台多语言那一批直接按 code 取译文。
+//   （实测 162：24 处 throw 里有两处重复文本共用同一个码，另一处 `个人主页地址只支持 http/https`
+//   也出现两次 ⇒ 站点数 24、码数 22。）
+const THROW_BUDGET = 162;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。

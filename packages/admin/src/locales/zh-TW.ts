@@ -1768,4 +1768,31 @@ export default {
   'error.jwtSecretRotateConflict': 'JWT 金鑰在輪換過程中被另一個請求改動了（CAS 未命中）：請重新載入頁面後再試一次。',
   'error.loginThrottled': '錯誤次數過多！請 {seconds} 秒後再試！',
   'error.initFailed': '初始化失敗',
+
+  // ── 🔴 期 9 第三批（22 條）── 地區用詞：**示範站**（演示站）/ **內建**（内置）/ 評論 / 發表 / 暱稱 /
+  //    **字元**（字符）/ 電子郵件 / **網址**（地址）/ **支援**（支持）/ **參照**（引用）/ **建構**（构造）/
+  //    回覆 / 所屬 / 路徑 / 過於頻繁 / 剛剛 / 該行已跳過 / 公開顯示。
+  //    ⚠️ `http/https` 與 `data:` 三份都逐字相同（技術標識符）。
+  'error.commentDemoBlocked': '示範站禁止發表評論',
+  'error.commentNotBuiltin': '目前評論系統不是內建評論，無法透過該介面發表',
+  'error.commentClosedForArticle': '該篇文章未開放評論',
+  'error.commentRateLimited': '評論太頻繁了，請 {seconds} 秒後再試',
+  'error.commentDailyLimit': '今天評論太多了，請明天再來',
+  'error.commentDuplicate': '剛剛已經發過一樣的評論了',
+  'error.commentParentMissing': '要回覆的評論不存在',
+  'error.commentParentNotReplyable': '要回覆的評論已無法回覆',
+  'error.commentCrossArticleReply': '不能跨文章回覆',
+  'error.commentArticleMissing': '評論所屬的文章不存在',
+  'error.commentArticlePathInvalid': '評論所屬的文章路徑不合法',
+  'error.commentNickRequired': '暱稱必填，且不超過 30 個字元',
+  'error.commentEmailRequired': '本站要求填寫電子郵件（不會公開顯示）',
+  'error.commentEmailInvalid': '電子郵件格式不正確',
+  'error.commentSiteTooLong': '個人主頁網址過長',
+  'error.commentSiteHttpOnly': '個人主頁網址只支援 http/https',
+  'error.commentSiteInvalid': '個人主頁網址不正確',
+  'error.commentContentEmpty': '評論內容不能為空',
+  'error.commentContentIllegalChars': '評論內容包含非法字元',
+  'error.commentContentTooLong': '評論內容不能超過 {max} 個字元',
+  'error.commentNotFound': '評論不存在',
+  'error.commentDataImageBudget': '評論裡包含無法在合理時間內解析的 data: 圖片參照（疑似建構輸入），該行已跳過',
 };

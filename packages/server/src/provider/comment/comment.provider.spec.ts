@@ -597,3 +597,69 @@ describe('评论路径：/post/<数字id> 与 /post/<别名> 视为同一篇', (
     expect(expanded.get('/post/999')).toEqual(['/post/999']);
   });
 });
+
+describe('🔴 resolveArticle 的路径归一化（三种形状都要能查到同一篇文章）', () => {
+  // ## 为什么要有这条（2026-09-28 活体实测到的既有缺陷）
+  // 原实现只剥 `/post/` 前缀、**没有再剥剩下的前导斜杠** ⇒ `/foo` 与 `/53` 这两种形状
+  // 会以 `/foo` / `/53` 去查（`Number('/53')` 是 NaN ⇒ 退化成按 pathname 查 `/53`）⇒ 一律
+  // 「评论所属的文章不存在」。活体证据：dev:3000 真实数据下 `/qdii-…` 与 `/53` 都失败，
+  // 而 `/post/qdii-…` 正常；mongo 里按 `{$or:[{id:53},{pathname:'53'}]}` 直接查是**能查到的**。
+  // 🔴 更糟的是"数字分支"（按 id 查）本来就是为了兼容只给 id 的调用方，而它
+  // **只在带 `/post/` 前缀时才可能生效** ⇒ 对最常见的 `/53` 形状永远走不到（等于半个死代码）。
+  const ARTICLES = [{ id: 53, pathname: 'hello-world', deleted: false, hidden: false }];
+  const build = () => {
+    const seen: any[] = [];
+    const provider: any = Object.create(CommentProvider.prototype);
+    provider.articleModel = {
+      findOne: (q: any) => ({
+        exec: async () => {
+          seen.push(JSON.parse(JSON.stringify(q)));
+          // 复刻 mongo 的匹配语义：**两种查询形状都要认**（这是本用例的关键，第一版只认 $or ⇒
+          // `/hello-world` 那种"按 pathname 直查"的形状假红）：
+          //   ① 数字 key ⇒ `{ $or: [{id:n}, {pathname:'n'}], deleted:false }`
+          //   ② 非数字 key ⇒ `{ pathname:'x', deleted:false }`
+          const ors = Array.isArray(q?.$or)
+            ? q.$or
+            : Object.keys(q || {})
+                .filter((k) => k !== 'deleted')
+                .map((k) => ({ [k]: q[k] }));
+          const matchOne = (a: any, c: any) =>
+            Object.keys(c).every((k) => String(a[k]) === String(c[k]));
+          const hit = ARTICLES.find(
+            (a) =>
+              (a as any).deleted === (q?.deleted ?? false) &&
+              ors.length > 0 &&
+              // $or ⇒ 任一命中；普通查询 ⇒ 所有条件都要命中
+              (Array.isArray(q?.$or)
+                ? ors.some((c: any) => matchOne(a, c))
+                : ors.every((c: any) => matchOne(a, c))),
+          );
+          return hit || null;
+        },
+      }),
+    };
+    return { provider, seen };
+  };
+
+  it('`/post/<pathname>`、`/<pathname>`、`/<id>`、`/post/<id>` 四种形状都解析到同一篇文章', async () => {
+    for (const p of ['/post/hello-world', '/hello-world', '/53', '/post/53', '//hello-world', '/post//53']) {
+      const { provider } = build();
+      const got = await provider.resolveArticle(p);
+      expect(got).toEqual({ id: 53, hidden: false });
+    }
+  });
+
+  it('🔴 只给 id 时走的是**数字分支**（`$or: [{id}, {pathname}]`），不是退化成 pathname 查询', async () => {
+    const { provider, seen } = build();
+    await provider.resolveArticle('/53');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].$or).toEqual([{ id: 53 }, { pathname: '53' }]);
+    // 🔴 反向：归一化后的 key 里不许再有前导斜杠（那正是本缺陷的成因）
+    expect(JSON.stringify(seen[0])).not.toContain('/53');
+  });
+
+  it('查不到时仍然是那条错误码（迁移后的形状：codedError(commentArticleMissing)）', async () => {
+    const { provider } = build();
+    await expect(provider.resolveArticle('/nope')).rejects.toThrow(/评论所属的文章不存在/);
+  });
+});

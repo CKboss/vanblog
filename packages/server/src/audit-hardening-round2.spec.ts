@@ -277,24 +277,29 @@ describe('多进程（cluster）守卫', () => {
     // `max: number` / `maxPoolSize: number` 是类型标注（形参或接口字段），不是桶的取值
     const SIGNATURE = /max(?:PoolSize)?:\s*number\b/;
     const BUCKET = /max(?:PoolSize)?:/;
+    // 🔴 判据收窄（2026-09-28，**第三次**被 `max:` 绊到之后做的）：只有"看起来像限流/连接池配置"的
+    //    `max:` 行才算桶。判据（任一成立即可）：
+    //      ① 冒号后的取值里**有数字**（`max: 600`、`max: 60 * 5`、`maxPoolSize: Math.max(10, …)`）；
+    //      ② 本行或**相邻一行**出现限流词汇（scaleLimit / Throttler / consumeAttempt / window / ttl /
+    //         attempts / bucket / rateLimit）。
+    //    ⇒ 领域常量自然被排除，不必再来白名单登记。此前有三处**假阳性**：`max: maxLength`（评论内容上限）、
+    //      `max: RESTORE_SIG_MAX_BYTES`（签名文件字节上限）、`{ min: …, max: MAX_ACCOUNT_PASSWORD_LENGTH }`（口令长度）
+    //      —— 前两处已经登记过白名单，第三处正要登记时改成了收窄判据（并删掉那两条已成死条目的登记）。
+    //    ⚠️ 真桶一定满足 ① 或 ②：不满足就意味着它连一个数字都没有、周围也没有限流词汇 ——
+    //      那种"桶"本身就该被人看一眼，而不是被这条守卫拦。
+    //    🔴 收窄之后必须证明**没把真桶放跑**：下面那条反空转下界 `thinned.length >= 11` 保留（实测仍是 11），
+    //      并且变异对照验过"在限流文件里新写一个没摊薄的桶 ⇒ 仍然红"。
+    const LIMITER_HINT = /scaleLimit\(|Throttler|consumeAttempt|\bwindow\b|\bttl\b|attempts|bucket|rateLimit/i;
+    const looksLikeBucket = (line: string, prev: string, next: string) => {
+      const m = /max(?:PoolSize)?:\s*([^,;}]*)/.exec(line);
+      const value = m ? m[1] : '';
+      if (/\d/.test(value)) return true;
+      return LIMITER_HINT.test(line) || LIMITER_HINT.test(prev) || LIMITER_HINT.test(next);
+    };
     // 真桶、但摊薄对它无意义：预算为 1，按 worker 数除会得到 0（等于把这道闸关掉）。
     // ⚠️ 白名单不许有死条目 —— 下面断言每一条都必须真的命中。
-    // 🔴 期 9 第一批新增一条：**口令长度上限**（不是限流桶 ⇒ 摊薄对它无意义）。
-    //    那行是 `const LIMITS = { min: MIN_ACCOUNT_PASSWORD_LENGTH, max: MAX_ACCOUNT_PASSWORD_LENGTH };`
-    //    （`provider/user/user.provider.ts`，被 `assertAccountPasswordStrength` 用来喂错误码的 params）。
-    //    👉 这是一次**尺子相撞**：`max:` 这个属性名太常见，而 cluster 守卫按行扫它。
-    //    处理方式是走它自己的白名单（不改判据、不放宽"必须同一行有 scaleLimit"那条），
-    //    并且 🔴 白名单不许有死条目（下面那条断言会逐条验证真的命中）。
     const ALLOWED_UNTHINNED = [
       'consumeAttempt(dedupeKey, { max: 1,',
-      'const LIMITS = { min: MIN_ACCOUNT_PASSWORD_LENGTH, max: MAX_ACCOUNT_PASSWORD_LENGTH };',
-      // 🔴 期 9 第二批再加一条：**签名文件的字节上限**（`RESTORE_SIG_MAX_BYTES`），
-      //    它是"上传的 .sig 最大多少字节"，不是限流桶 ⇒ 按 worker 数摊薄毫无意义。
-      //    👉 这已经是本守卫第二次被 `max:` 这个**过于常见的属性名**绊到（上一次是口令长度上限）。
-      //    🔴 待办：把判据从"按行扫 `max:`"收窄成"只在限流/连接池上下文里扫"
-      //    （例如同一文件里出现 `Throttler`/`scaleLimit`/`maxPoolSize` 才算），否则每加一个
-      //    含 `max:` 的正常对象字面量都要来白名单登记一次。在那之前，走白名单（它有断言防死条目）。
-      'max: RESTORE_SIG_MAX_BYTES,',
     ];
 
     const thinned: string[] = [];
@@ -305,6 +310,8 @@ describe('多进程（cluster）守卫', () => {
       const lines = code(readFileSync(f, 'utf8')).split('\n');
       lines.forEach((line, i) => {
         if (!BUCKET.test(line) || SIGNATURE.test(line)) return;
+        // 🔴 收窄：不像限流/连接池配置的 `max:` 行直接跳过（领域常量：内容长度上限、字节上限、口令长度…）
+        if (!looksLikeBucket(line, lines[i - 1] || '', lines[i + 1] || '')) return;
         // 🔴 不报行号：`stripCommentsForAnchor` 会把**整行注释连行一起丢掉**，
         //    所以剥注释后的行号与原文对不上（实测原文第 343 行在剥注释后是第 141 行）。
         //    报一个错的行号比不报更糟 —— 它会把人引到错误的位置。改成报**可 grep 的行文本**。

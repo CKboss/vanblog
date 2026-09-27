@@ -1821,4 +1821,31 @@ export default {
   'error.jwtSecretRotateConflict': 'The JWT secret was changed by another request during rotation (the CAS check did not match). Please reload the page and try again.',
   'error.loginThrottled': 'Too many failed attempts! Please try again in {seconds, plural, one {# second} other {# seconds}}!',
   'error.initFailed': 'Initialization failed.',
+
+  // ── 🔴 期 9 第三批（22 keys）── 英文人工写，面向**访客**的 toast：短、自然、不加原文没有的解释。
+  //    🔴 计数用 ICU plural（`{seconds, plural, one {# second} other {# seconds}}`、
+  //    `{max, plural, one {# character} other {# characters}}`）；中文没有复数 ⇒ zh-CN/zh-TW 保持 `{seconds} 秒`。
+  //    🔴 不用缩写（ICU 把单引号当转义符）、不用全角标点。
+  'error.commentDemoBlocked': 'Commenting is disabled on the demo site',
+  'error.commentNotBuiltin': 'The current comment system is not the built-in one, so comments cannot be posted through this API',
+  'error.commentClosedForArticle': 'Comments are closed for this article',
+  'error.commentRateLimited': 'You are commenting too frequently. Please try again in {seconds, plural, one {# second} other {# seconds}}',
+  'error.commentDailyLimit': 'You have posted too many comments today. Please come back tomorrow',
+  'error.commentDuplicate': 'You just posted the same comment',
+  'error.commentParentMissing': 'The comment you are replying to does not exist',
+  'error.commentParentNotReplyable': 'The comment you are replying to no longer accepts replies',
+  'error.commentCrossArticleReply': 'Cross-article replies are not allowed',
+  'error.commentArticleMissing': 'The article this comment belongs to does not exist',
+  'error.commentArticlePathInvalid': 'The article path of this comment is invalid',
+  'error.commentNickRequired': 'A nickname is required and cannot exceed 30 characters',
+  'error.commentEmailRequired': 'This site requires an email address (it will not be shown publicly)',
+  'error.commentEmailInvalid': 'The email format is incorrect',
+  'error.commentSiteTooLong': 'The homepage URL is too long',
+  'error.commentSiteHttpOnly': 'The homepage URL supports only http/https',
+  'error.commentSiteInvalid': 'The homepage URL is invalid',
+  'error.commentContentEmpty': 'The comment cannot be empty',
+  'error.commentContentIllegalChars': 'The comment contains invalid characters',
+  'error.commentContentTooLong': 'The comment cannot exceed {max, plural, one {# character} other {# characters}}',
+  'error.commentNotFound': 'The comment does not exist',
+  'error.commentDataImageBudget': 'The comment contains a data: image reference that cannot be parsed within a reasonable time (suspected constructed input), so that line was skipped',
 };

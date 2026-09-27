@@ -366,6 +366,10 @@ describe('REGRESSION R4-B：匿名写入面上已经修好的那些仍然成立'
 
   it('评论内容超过 maxContentLength 直接 400，不是静默截断（活体钉住）', () => {
     // 活体：20000 字的 content -> HTTP 400「评论内容不能超过 2000 个字符」
-    expect(read('./provider/comment/comment.provider.ts')).toMatch(/评论内容不能超过/);
+    // 🔴 期 9 第三批：那句中文**搬进了错误码登记表**（`commentContentTooLong`），provider 里只剩码名
+    //    ⇒ 锚点跟着搬，而且**跨文件钉住**：① provider 必须抛这个码；② 码表里那条必须仍然说"不能超过 … 个字符"
+    //    （性质没放：超长内容必须 400、且文案要说清上限是多少）。
+    expect(read('./provider/comment/comment.provider.ts')).toMatch(/codedError\('commentContentTooLong', \{ max: maxLength \}\)/);
+    expect(read('./utils/serverErrorCodes.ts')).toMatch(/commentContentTooLong: entry\('评论内容不能超过 \{max\} 个字符'/);
   });
 });

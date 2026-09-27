@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import cluster from 'node:cluster';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -207,18 +208,18 @@ export class CommentProvider implements OnApplicationBootstrap {
     req: any,
   ): Promise<{ comment: PublicComment; pending: boolean; reason?: string }> {
     if (config.demo && config.demo == 'true') {
-      throw new ForbiddenException('演示站禁止发表评论');
+      throw codedError('commentDemoBlocked');
     }
     const setting = await this.getSetting();
     if (setting.provider !== 'builtin') {
-      throw new ForbiddenException('当前评论系统不是内置评论，无法通过该接口发表');
+      throw codedError('commentNotBuiltin');
     }
 
     const path = this.assertPath(dto?.path);
     const article = await this.resolveArticle(path);
     if (article.hidden) {
       // 隐藏文章不开放评论：否则等于给「靠 URL 才能访问」的文章留了一个可枚举的入口
-      throw new ForbiddenException('该文章未开放评论');
+      throw codedError('commentClosedForArticle');
     }
     const nick = this.assertNick(dto?.nick);
     const email = this.assertEmail(dto?.email, setting.requireEmail);
@@ -239,9 +240,8 @@ export class CommentProvider implements OnApplicationBootstrap {
       windowMs: RATE_WINDOW_MS,
     });
     if (!limit.allowed) {
-      throw new BadRequestException(
-        `评论太频繁了，请 ${limit.retryAfterSeconds} 秒后再试`,
-      );
+      // 🔴 期 9 第三批：秒数走 params（`{seconds}`）⇒ 三份译文各自决定复数形态。
+      throw codedError('commentRateLimited', { seconds: limit.retryAfterSeconds });
     }
     // 每 IP 每天最多 50 条：防止长时间低频灌库
     const daily = consumeAttempt(`comment-day-${ip}`, {
@@ -249,13 +249,13 @@ export class CommentProvider implements OnApplicationBootstrap {
       windowMs: 24 * 60 * 60 * 1000,
     });
     if (!daily.allowed) {
-      throw new BadRequestException('今天评论太多了，请明天再来');
+      throw codedError('commentDailyLimit');
     }
     // 同 IP + 同内容 5 分钟内只允许一条：挡住复制粘贴式刷屏
     const dedupeKey = `comment-dup-${ip}-${simpleHash(content)}`;
     const dup = consumeAttempt(dedupeKey, { max: 1, windowMs: 5 * 60 * 1000 });
     if (!dup.allowed) {
-      throw new BadRequestException('刚才已经发过一样的评论了');
+      throw codedError('commentDuplicate');
     }
 
     // 蜜罐：真人看不见这个输入框，填了就说明是脚本。
@@ -383,13 +383,13 @@ export class CommentProvider implements OnApplicationBootstrap {
     }
     const parent = await this.commentModel.findOne({ id }).exec();
     if (!parent) {
-      throw new BadRequestException('要回复的评论不存在');
+      throw codedError('commentParentMissing');
     }
     if (parent.status === 'deleted' || parent.status === 'spam') {
-      throw new BadRequestException('要回复的评论已不可回复');
+      throw codedError('commentParentNotReplyable');
     }
     if (parent.path !== path) {
-      throw new BadRequestException('不能跨文章回复');
+      throw codedError('commentCrossArticleReply');
     }
     return parent;
   }
@@ -413,7 +413,18 @@ export class CommentProvider implements OnApplicationBootstrap {
    * （而且这些垃圾永远不会被前台展示，只能靠人工清）。
    */
   private async resolveArticle(path: string): Promise<{ id: number; hidden: boolean }> {
-    let key = path.replace(/^\/post\//, '');
+    // 🔴 修一个**实测到的既有缺陷**（2026-09-28，与多语言改造无关，来自 df3c2380 那版实现）：
+    //    原来只剥 `/post/` 前缀，剥完**没有再去掉剩下的前导斜杠** ⇒
+    //      `/post/foo` → `foo` ✓、`/post/53` → `53` ✓（走数字分支）
+    //      `/foo`      → `/foo` ✗、`/53`   → `/53` ✗（`Number('/53')` 是 NaN ⇒ 退化成按 pathname 查 `/53`）
+    //    活体证据（dev:3000，真实数据）：`/qdii-…` 与 `/53` 都返回「评论所属的文章不存在」，
+    //    而 `/post/qdii-…` 正常走到下一条校验。mongo 里直接按 `{$or:[{id:53},{pathname:'53'}]}` 查是**能查到的**
+    //    ⇒ 不是数据问题，是 key 归一化少了一步。
+    //    🔴 危害不只是"少一个入口"：数字分支（`{$or:[{id},{pathname}]}`）本来就是为了兼容
+    //    "只给 id / 只给 pathname"的调用方而写的，而它**只在带 `/post/` 前缀时才可能生效** ⇒ 那条分支
+    //    对最常见的 `/53` 形状永远走不到（等于半个死代码）。
+    //    修法：剥掉 `/post/` 之后再剥掉**所有**前导斜杠（`/post//foo`、`//foo` 也一并归一）。
+    let key = path.replace(/^\/+post\/+/, '').replace(/^\/+/, '');
     try {
       key = decodeURIComponent(key);
     } catch {
@@ -425,7 +436,7 @@ export class CommentProvider implements OnApplicationBootstrap {
       : { pathname: key };
     const article: any = await this.articleModel.findOne({ ...filter, deleted: false }).exec();
     if (!article) {
-      throw new BadRequestException('评论所属的文章不存在');
+      throw codedError('commentArticleMissing');
     }
     return { id: Number(article.id) || 0, hidden: !!article.hidden };
   }
@@ -439,7 +450,7 @@ export class CommentProvider implements OnApplicationBootstrap {
   private assertPath(raw: unknown): string {
     const path = String(raw ?? '').trim();
     if (!path || path.length > 300 || !path.startsWith('/') || path.includes('..')) {
-      throw new BadRequestException('评论所属的文章路径不合法');
+      throw codedError('commentArticlePathInvalid');
     }
     return path;
   }
@@ -448,7 +459,7 @@ export class CommentProvider implements OnApplicationBootstrap {
     // eslint-disable-next-line no-control-regex
     const nick = String(raw ?? '').replace(/[\u0000-\u001f<>]/g, '').trim();
     if (!nick || nick.length > 30) {
-      throw new BadRequestException('昵称必填，且不超过 30 个字符');
+      throw codedError('commentNickRequired');
     }
     return nick;
   }
@@ -457,12 +468,12 @@ export class CommentProvider implements OnApplicationBootstrap {
     const email = String(raw ?? '').trim();
     if (!email) {
       if (required) {
-        throw new BadRequestException('本站要求填写邮箱（不会公开显示）');
+        throw codedError('commentEmailRequired');
       }
       return '';
     }
     if (email.length > 100 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      throw new BadRequestException('邮箱格式不正确');
+      throw codedError('commentEmailInvalid');
     }
     return email;
   }
@@ -473,23 +484,23 @@ export class CommentProvider implements OnApplicationBootstrap {
       return '';
     }
     if (site.length > 200) {
-      throw new BadRequestException('个人主页地址过长');
+      throw codedError('commentSiteTooLong');
     }
     // 显式挡掉任何非 http/https 的 scheme（javascript: / data: / vbscript: / blob: …）。
     // 不能只靠 new URL() 失败来拦：`javascript:alert(1)` 前面被拼上 https:// 之后确实解析不了，
     // 但那是「碰巧」，换个写法就可能漏过去，而且报错也说不清原因。
     if (/^[a-z][a-z0-9+.-]*:/i.test(site) && !/^https?:\/\//i.test(site)) {
-      throw new BadRequestException('个人主页地址只支持 http/https');
+      throw codedError('commentSiteHttpOnly');
     }
     let parsed: URL;
     try {
       parsed = new URL(/^https?:\/\//i.test(site) ? site : `https://${site}`);
     } catch {
-      throw new BadRequestException('个人主页地址不正确');
+      throw codedError('commentSiteInvalid');
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       // javascript: 之类的一律拒绝，否则评论区会变成 XSS 跳板
-      throw new BadRequestException('个人主页地址只支持 http/https');
+      throw codedError('commentSiteHttpOnly');
     }
     return parsed.toString().slice(0, 200);
   }
@@ -498,18 +509,18 @@ export class CommentProvider implements OnApplicationBootstrap {
     const content = String(raw ?? '');
     const trimmed = content.trim();
     if (!trimmed) {
-      throw new BadRequestException('评论内容不能为空');
+      throw codedError('commentContentEmpty');
     }
     // eslint-disable-next-line no-control-regex
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(trimmed)) {
-      throw new BadRequestException('评论内容包含非法字符');
+      throw codedError('commentContentIllegalChars');
     }
     // 双向控制符（U+202A~U+202E、U+2066~U+2069）能把显示顺序反过来，
     // 用来伪装昵称或链接（经典的 RLO 欺骗），直接删掉
     // eslint-disable-next-line no-misleading-character-class
     const withoutBidi = trimmed.replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
     if (withoutBidi.length > Math.max(1, maxLength)) {
-      throw new BadRequestException(`评论内容不能超过 ${maxLength} 个字符`);
+      throw codedError('commentContentTooLong', { max: maxLength });
     }
     return withoutBidi.slice(0, 20000);
   }
@@ -760,7 +771,7 @@ export class CommentProvider implements OnApplicationBootstrap {
   async updateById(id: number, dto: UpdateCommentDto) {
     const found = await this.commentModel.findOne({ id: Number(id) }).exec();
     if (!found) {
-      throw new BadRequestException('评论不存在');
+      throw codedError('commentNotFound');
     }
     const update: any = { updatedAt: new Date() };
     if (dto?.status && ['pending', 'approved', 'spam', 'deleted'].includes(dto.status)) {
@@ -783,7 +794,7 @@ export class CommentProvider implements OnApplicationBootstrap {
   async deleteById(id: number): Promise<{ deleted: number }> {
     const found = await this.commentModel.findOne({ id: Number(id) }).exec();
     if (!found) {
-      throw new BadRequestException('评论不存在');
+      throw codedError('commentNotFound');
     }
     const ids = found.rootId ? [found.id] : [found.id];
     if (!found.rootId) {
@@ -1124,9 +1135,9 @@ export function stripDataUriImages(text: string): string {
     }
     const hit = matchDataUriImage(input, anchor, scan);
     if (hit === 'BUDGET') {
-      throw new BadRequestException(
-        '评论里包含无法在合理时间内解析的 data: 图片引用（疑似构造输入），该行已跳过',
-      );
+      // 🔴 这条是"构造输入防护"的拒绝原因（解析 data: 图片超预算）⇒ 也进码表，
+      //    前台/后台都能按 code 显示译文，而服务端日志里那一句仍是中文（日志不翻）。
+      throw codedError('commentDataImageBudget')
     }
     if (hit) {
       out += input.slice(pos, anchor);

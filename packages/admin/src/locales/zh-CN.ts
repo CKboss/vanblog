@@ -1986,4 +1986,33 @@ export default {
   'error.jwtSecretRotateConflict': 'JWT 密钥在轮换过程中被另一个请求改动了（CAS 未命中）：请重新加载页面后再试一次。',
   'error.loginThrottled': '错误次数过多！请 {seconds} 秒后再试！',
   'error.initFailed': '初始化失败',
+
+  // ── 🔴 期 9 第三批：评论族 22 个服务端错误码（`comment.provider.ts` 的 24 处 throw，两处重复文本共用一个码）。
+  //    🔴 这一族**大多是访客可见**的（前台评论表单的拒绝原因）：错误码先到位，前台（访客站）的多语言是
+  //    **另一批工作**，届时按 code 取译文即可；⚠️ 在那之前前台仍显示服务端返回的中文（与今天逐字相同，无回归）。
+  //    后台侧会显示的是评论管理那几条（`commentNotFound` 等）。
+  //    🔴 zh-CN 与码表逐字相同，且这些中文被服务端**行为断言**钉着（`rejects.toThrow(/今天评论太多了/)`）⇒
+  //    迁移一个字都没改。
+  'error.commentDemoBlocked': '演示站禁止发表评论',
+  'error.commentNotBuiltin': '当前评论系统不是内置评论，无法通过该接口发表',
+  'error.commentClosedForArticle': '该文章未开放评论',
+  'error.commentRateLimited': '评论太频繁了，请 {seconds} 秒后再试',
+  'error.commentDailyLimit': '今天评论太多了，请明天再来',
+  'error.commentDuplicate': '刚才已经发过一样的评论了',
+  'error.commentParentMissing': '要回复的评论不存在',
+  'error.commentParentNotReplyable': '要回复的评论已不可回复',
+  'error.commentCrossArticleReply': '不能跨文章回复',
+  'error.commentArticleMissing': '评论所属的文章不存在',
+  'error.commentArticlePathInvalid': '评论所属的文章路径不合法',
+  'error.commentNickRequired': '昵称必填，且不超过 30 个字符',
+  'error.commentEmailRequired': '本站要求填写邮箱（不会公开显示）',
+  'error.commentEmailInvalid': '邮箱格式不正确',
+  'error.commentSiteTooLong': '个人主页地址过长',
+  'error.commentSiteHttpOnly': '个人主页地址只支持 http/https',
+  'error.commentSiteInvalid': '个人主页地址不正确',
+  'error.commentContentEmpty': '评论内容不能为空',
+  'error.commentContentIllegalChars': '评论内容包含非法字符',
+  'error.commentContentTooLong': '评论内容不能超过 {max} 个字符',
+  'error.commentNotFound': '评论不存在',
+  'error.commentDataImageBudget': '评论里包含无法在合理时间内解析的 data: 图片引用（疑似构造输入），该行已跳过',
 };

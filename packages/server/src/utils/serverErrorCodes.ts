@@ -237,6 +237,41 @@ export const SERVER_ERROR_CODES = {
   // 🔴 用 BadRequestException：这是**迁移前那处的实际类型**（`throw new BadRequestException('初始化失败')`）。
   //    黄金快照的意义就是"迁移不许悄悄改状态码"⇒ 先照抄，要改状态码得单独论证并同步快照。
   initFailed: entry('初始化失败', BadRequestException),
+
+  // ── 评论族（comment.provider.ts，期 9 第三批）────────────────────────────────
+  // 🔴 这一族**大多数是访客可见**的（前台评论表单的拒绝原因）：错误码先到位，
+  //    前台（访客站）的多语言是**另一批工作**，届时直接按 code 取译文即可 ——
+  //    ⚠️ 前台目前仍显示服务端返回的中文（与今天逐字相同，没有回归）。
+  //    后台侧会显示的是评论管理那几条（`commentNotFound` 等）。
+  // 🔴 zh **逐字照抄**迁移前的文本：`audit-hardening-round4-fixes-comment.spec.ts` 用
+  //    `rejects.toThrow(/今天评论太多了/)` 这类**行为断言**钉着它们 ⇒ 迁移不许改一个字。
+  // ⚠️ 两处重复文本各**共用一个码**（`个人主页地址只支持 http/https` 有两个调用点、
+  //    `评论不存在` 有两个调用点）：同一句话登记两遍就是"两处口径"，迟早漂。
+  commentDemoBlocked: entry('演示站禁止发表评论', ForbiddenException),
+  commentNotBuiltin: entry('当前评论系统不是内置评论，无法通过该接口发表', ForbiddenException),
+  commentClosedForArticle: entry('该文章未开放评论', ForbiddenException),
+  commentRateLimited: entry('评论太频繁了，请 {seconds} 秒后再试', BadRequestException),
+  commentDailyLimit: entry('今天评论太多了，请明天再来', BadRequestException),
+  commentDuplicate: entry('刚才已经发过一样的评论了', BadRequestException),
+  commentParentMissing: entry('要回复的评论不存在', BadRequestException),
+  commentParentNotReplyable: entry('要回复的评论已不可回复', BadRequestException),
+  commentCrossArticleReply: entry('不能跨文章回复', BadRequestException),
+  commentArticleMissing: entry('评论所属的文章不存在', BadRequestException),
+  commentArticlePathInvalid: entry('评论所属的文章路径不合法', BadRequestException),
+  commentNickRequired: entry('昵称必填，且不超过 30 个字符', BadRequestException),
+  commentEmailRequired: entry('本站要求填写邮箱（不会公开显示）', BadRequestException),
+  commentEmailInvalid: entry('邮箱格式不正确', BadRequestException),
+  commentSiteTooLong: entry('个人主页地址过长', BadRequestException),
+  commentSiteHttpOnly: entry('个人主页地址只支持 http/https', BadRequestException),
+  commentSiteInvalid: entry('个人主页地址不正确', BadRequestException),
+  commentContentEmpty: entry('评论内容不能为空', BadRequestException),
+  commentContentIllegalChars: entry('评论内容包含非法字符', BadRequestException),
+  commentContentTooLong: entry('评论内容不能超过 {max} 个字符', BadRequestException),
+  commentNotFound: entry('评论不存在', BadRequestException),
+  commentDataImageBudget: entry(
+    '评论里包含无法在合理时间内解析的 data: 图片引用（疑似构造输入），该行已跳过',
+    BadRequestException,
+  ),
 };
 
 export type ServerErrorCode = keyof typeof SERVER_ERROR_CODES;
