@@ -213,7 +213,8 @@ describe('后台健壮性：登出、深链与本地存储 key', () => {
       code,
       /data\.filter\(\(item\) => String\(item\.name\)\.toLowerCase\(\)\.includes\(keyword\)\)/,
     );
-    assert.match(code, /emptyText: '没有匹配的标签'/);
+    // 🔴 期 6 第九批起这些文案走 t() ⇒ 锚点改成**两种形状都认**（硬编码 或 t('<key>', '中文')），性质没放。
+    assert.match(code, /emptyText: (t\('[^']+', )?'没有匹配的标签'/);
   });
 
   it('useNum：每个调用方一个 key，老 key 的值迁移一次', () => {

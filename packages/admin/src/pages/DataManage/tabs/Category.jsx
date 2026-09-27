@@ -9,17 +9,19 @@ import { encodeQuerystring } from '@/services/van-blog/encode';
 import {
   buildAccessPasswordPatch,
   buildSubmitValues,
-  CLEAR_PASSWORD_LABEL,
-  CLEAR_PASSWORD_TOOLTIP,
+  clearPasswordLabel,
+  clearPasswordTooltip,
   clearConfirmContent,
   clearConfirmTitle,
   hasPasswordFromRecord,
   PASSWORD_UNRECOVERABLE_WARNING,
+  passwordUnrecoverableWarning,
   passwordHelp,
   passwordPlaceholder,
-  PRIVATE_TOGGLE_HINT,
+  privateToggleHint,
   shouldShowClearOption,
 } from '@/services/van-blog/accessPassword';
+import { useIntl } from 'umi';
 import { PlusOutlined } from '@ant-design/icons';
 import { ModalForm, ProFormSelect, ProFormSwitch, ProFormText } from '@ant-design/pro-form';
 import { ProTable } from '@ant-design/pro-table';
@@ -30,41 +32,57 @@ function isDemoHost() {
   return location.hostname == 'blog-demo.mereith.com';
 }
 
-function showDemoBlocked() {
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。这是模块级普通函数（`Modal.info` 还是脱离 React 树的
+ * 独立根，§7.151）⇒ 拿不到 hook，只能由调用方把 t 传进来；🔴 不传 t ⇒ 输出与改造前逐字相同。
+ */
+const IDENTITY_T = (id, defaultMessage, values) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+
+function showDemoBlocked(t = IDENTITY_T) {
   Modal.info({
-    title: '演示站禁止修改信息！',
-    content: '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+    title: t('common.demoBlockedUpdate', '演示站禁止修改信息！'),
+    content: t(
+      'common.demoBlockedReason',
+      '本来是可以的，但有个人在演示站首页放黄色信息，所以关了这个权限了。',
+    ),
   });
 }
 
 function OrderButtons({ record, index, total, onMove }) {
+  // 🔴 期 6 第九批：接上 i18n。⚠️ 这是一个**模块级组件**（不是页面组件），但它是组件 ⇒ 可以自己用 hook。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   return (
     <span data-category-order={String(record.name)}>
       <Button
         type="link"
         size="small"
         disabled={index <= 0}
-        aria-label={`上移分类 ${record.name}`}
+        aria-label={t('dataManage.moveUpCategoryAria', '上移分类 {name}', { name: record.name })}
         data-category-move-up={String(record.name)}
         onClick={() => onMove(record.name, -1)}
-      >
-        上移
-      </Button>
+      >{t('dataManage.moveUp', '上移')}</Button>
       <Button
         type="link"
         size="small"
         disabled={index < 0 || index >= total - 1}
-        aria-label={`下移分类 ${record.name}`}
+        aria-label={t('dataManage.moveDownCategoryAria', '下移分类 {name}', { name: record.name })}
         data-category-move-down={String(record.name)}
         onClick={() => onMove(record.name, 1)}
-      >
-        下移
-      </Button>
+      >{t('dataManage.moveDown', '下移')}</Button>
     </span>
   );
 }
 
 function HiddenSwitch({ record, action }) {
+  // 🔴 期 6 第九批：接上 i18n。⚠️ 这是一个**模块级组件**（不是页面组件），但它是组件 ⇒ 可以自己用 hook。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const [loading, setLoading] = useState(false);
   return (
     <span data-category-hidden-toggle={String(record.name)}>
@@ -72,18 +90,18 @@ function HiddenSwitch({ record, action }) {
         size="small"
         loading={loading}
         checked={Boolean(record.hidden)}
-        checkedChildren="是"
-        unCheckedChildren="否"
-        aria-label={`是否隐藏 ${record.name}`}
+        checkedChildren={t('common.yes', '是')}
+        unCheckedChildren={t('common.no', '否')}
+        aria-label={t('dataManage.hiddenSwitchAria', '是否隐藏 {name}', { name: record.name })}
         onChange={async (checked) => {
           if (isDemoHost()) {
-            showDemoBlocked();
+            showDemoBlocked(t);
             return;
           }
           setLoading(true);
           try {
             await updateCategory(record.name, { hidden: checked });
-            message.success(checked ? '已设为隐藏' : '已取消隐藏');
+            message.success(checked ? t('article.hiddenOn', '已设为隐藏') : t('article.hiddenOff', '已取消隐藏'));
             action?.reload();
           } finally {
             setLoading(false);
@@ -94,17 +112,20 @@ function HiddenSwitch({ record, action }) {
   );
 }
 
-function createColumns({ onMove, rows }) {
+// 🔴 列定义是模块级工厂 ⇒ **尾参** t（与 showDemoBlocked 同一套做法）；调用点在页面组件里，把 t 传进来。
+//    ⚠️ t 必须是**独立的最后一个参数**，不能塞进第一个对象里：调用点判据就是按「最后一个实参是不是 t」看的
+//    （藏在对象里它不认 ⇒ 变异对照会告诉你；而且这个约定本身有价值：尾参一眼就能看出有没有传）。
+function createColumns({ onMove, rows }, t = IDENTITY_T) {
   return [
   {
     dataIndex: 'name',
-    title: '题目',
+    title: t('dataManage.categoryColTitle', '题目'),
     search: false,
   },
   {
-    title: '排序',
+    title: t('dataManage.colOrder', '排序'),
     tooltip:
-      '上移 / 下移可调整分类在前台导航、分类列表和分类页中的显示顺序。隐藏分类仍参与后台排序，但不会出现在前台。',
+      t('dataManage.orderTooltip', '上移 / 下移可调整分类在前台导航、分类列表和分类页中的显示顺序。隐藏分类仍参与后台排序，但不会出现在前台。'),
     search: false,
     width: 140,
     render: (_, record) => {
@@ -115,42 +136,51 @@ function createColumns({ onMove, rows }) {
     },
   },
   {
-    title: '是否隐藏',
+    title: t('common.hiddenField', '是否隐藏'),
     tooltip:
-      '隐藏后，前台分类列表、导航分类子菜单、分类页和 sitemap 不再展示该分类。后台仍可见。该分类下的文章仍按各自的隐藏/加密规则展示，不会因为分类隐藏而被加密。',
+      t('dataManage.hiddenTooltip', '隐藏后，前台分类列表、导航分类子菜单、分类页和 sitemap 不再展示该分类。后台仍可见。该分类下的文章仍按各自的隐藏/加密规则展示，不会因为分类隐藏而被加密。'),
     dataIndex: 'hidden',
     search: false,
     render: (_, record, __, action) => <HiddenSwitch record={record} action={action} />,
   },
   {
-    title: '加密',
-    tooltip:
-      '分类加密后，此分类下的所有文章都会被加密。密码以分类的密码为准。加密后，访客仍可正常访问分类并获取文章列表。' +
-      PASSWORD_UNRECOVERABLE_WARNING,
+    title: t('dataManage.encryptedText', '加密'),
+    // 🔴 原来是"字符串 + 常量"拼接 ⇒ 收成一条带 {warning} 的 ICU 整句（英文语序不同，拼接必出接缝）。
+    //    ⚠️ 那个警告本身也是**注入式**的 ⇒ 这里用函数版 `passwordUnrecoverableWarning(t)`，
+    //    不能读 identity 常量 `PASSWORD_UNRECOVERABLE_WARNING`（那样它永远是中文）。
+    tooltip: t(
+      'dataManage.encryptTooltip',
+      '分类加密后，此分类下的所有文章都会被加密。密码以分类的密码为准。加密后，访客仍可正常访问分类并获取文章列表。{warning}',
+      { warning: passwordUnrecoverableWarning(t) },
+    ),
     dataIndex: 'private',
     search: false,
     valueType: 'select',
     valueEnum: {
       [true]: {
-        text: '加密',
+        text: t('dataManage.encryptedText', '加密'),
         status: 'Error',
       },
       [false]: {
-        text: '未加密',
+        text: t('dataManage.notEncryptedText', '未加密'),
         status: 'Success',
       },
     },
   },
   {
-    title: '访问密码',
-    tooltip: `服务端只存 scrypt 哈希，后台也读不出原密码，所以这一列只能告诉你"设没设"。${PASSWORD_UNRECOVERABLE_WARNING}要改密码或解除加密，用「重命名」弹窗里的密码框与「清除密码」开关。`,
+    title: t('dataManage.passwordCol', '访问密码'),
+    tooltip: t(
+      'dataManage.passwordColTooltip',
+      '服务端只存 scrypt 哈希，后台也读不出原密码，所以这一列只能告诉你"设没设"。{warning}要改密码或解除加密，用「重命名」弹窗里的密码框与「清除密码」开关。',
+      { warning: passwordUnrecoverableWarning(t) },
+    ),
     dataIndex: 'hasPassword',
     search: false,
     width: 110,
-    render: (_, record) => (hasPasswordFromRecord(record) ? '已设置' : '未设置'),
+    render: (_, record) => (hasPasswordFromRecord(record) ? t('dataManage.passwordSet', '已设置') : t('dataManage.passwordNotSet', '未设置')),
   },
   {
-    title: '操作',
+    title: t('common.colOption', '操作'),
     valueType: 'option',
     width: 240,
     render: (text, record, _, action) => [
@@ -159,13 +189,11 @@ function createColumns({ onMove, rows }) {
         onClick={() => {
           window.open(`/category/${encodeQuerystring(record.name)}`, '_blank');
         }}
-      >
-        查看
-      </a>,
+      >{t('common.view', '查看')}</a>,
       <ModalForm
         key={`editCateoryC%{${record.name}}`}
-        title={`重命名分类 "${record.name}"`}
-        trigger={<a key={'editC' + record.name} data-category-rename={String(record.name)}>重命名</a>}
+        title={t('dataManage.renameCategoryModalTitle', '重命名分类 "{name}"', { name: record.name })}
+        trigger={<a key={'editC' + record.name} data-category-rename={String(record.name)}>{t('dataManage.rename', '重命名')}</a>}
         autoFocusFirstInput
         // ⚠️ 不再回填密码：服务端已经**不下发**分类密码（只给布尔 hasPassword）。
         // 密码框永远是空的，留空 = 不修改；解除加密走下面的「清除密码」开关。
@@ -182,7 +210,9 @@ function createColumns({ onMove, rows }) {
             hasPassword,
             isCreate: false,
             isPrivate: formValues?.private,
-          });
+            // 🔴 第二个参数才是翻译器：它算出来的 `access.error` 是**给用户看的文案**
+            //    （漏传 t 就会永远中文，而且看不出来 —— localePackParity 有判据盯着）
+          }, t);
           if (access.error) {
             message.error(access.error);
             return false;
@@ -190,22 +220,27 @@ function createColumns({ onMove, rows }) {
           // 摘掉 password/hasPassword/clearPassword 三个表单键，只留算出来的那几个
           const values = buildSubmitValues(formValues, access.patch);
           if (Object.keys(values).length == 0) {
-            message.error('无有效信息！请至少填写一个选项！');
+            message.error(t('dataManage.noValidInput', '无有效信息！请至少填写一个选项！'));
             return false;
           }
           const clearing = Boolean(access.patch?.clearPassword);
           const proceed = await new Promise((resolve) => {
             Modal.confirm({
               title: clearing
-                ? clearConfirmTitle(`分类 "${record.name}"`)
-                : `确定重命名分类 "${record.name}" 吗？`,
+                // 🔴 这个"分类 "xxx""是**嵌进另一句译文里**的成分（`clearConfirmTitle` 来自注入式模块
+                //    accessPassword.js）⇒ 它自己也要走 t（英文是 the category "xxx"），不能留中文。
+                ? clearConfirmTitle(
+                    t('dataManage.categoryQuotedName', '分类 "{name}"', { name: record.name }),
+                    t,
+                  )
+                : t('dataManage.renameCategoryConfirmTitle', '确定重命名分类 "{name}" 吗？', { name: record.name }),
               content: clearing
-                ? clearConfirmContent('该分类下的所有文章')
-                : '改动将立即生效!',
-              okText: clearing ? '确定清除' : '确定',
+                ? clearConfirmContent(t('dataManage.allArticlesUnderCategory', '该分类下的所有文章'), t)
+                : t('dataManage.changeTakesEffectNow', '改动将立即生效!'),
+              okText: clearing ? t('common.okClear', '确定清除') : t('common.ok', '确定'),
               // antd 4 的 Modal.confirm 没有 description，危险态靠 okButtonProps + content 表达
               okButtonProps: clearing ? { danger: true } : undefined,
-              cancelText: clearing ? '再想想' : '取消',
+              cancelText: clearing ? t('common.cancelReconsider', '再想想') : t('init.restore.confirmCancel', '取消'),
               onOk: () => resolve(true),
               onCancel: () => resolve(false),
             });
@@ -215,7 +250,7 @@ function createColumns({ onMove, rows }) {
           }
           try {
             await updateCategory(record.name, values);
-            message.success(clearing ? '已清除该分类的访问密码' : '提交成功');
+            message.success(clearing ? t('dataManage.passwordCleared', '已清除该分类的访问密码') : t('common.submitOk', '提交成功'));
             action?.reload();
             return true;
           } catch (err) {
@@ -224,44 +259,44 @@ function createColumns({ onMove, rows }) {
           }
         }}
       >
-        <ProFormText width="md" name="name" label="分类名" placeholder="请输入新的分类名称" />
+        <ProFormText width="md" name="name" label={t('dataManage.categoryNameCol', '分类名')} placeholder={t('dataManage.categoryNamePlaceholder', '请输入新的分类名称')} />
         <ProFormSelect
           width="md"
           name="hidden"
-          label="是否隐藏"
-          placeholder="是否隐藏"
+          label={t('common.hiddenField', '是否隐藏')}
+          placeholder={t('common.hiddenField', '是否隐藏')}
           request={async () => {
             return [
-              { label: '否', value: false },
-              { label: '是', value: true },
+              { label: t('common.no', '否'), value: false },
+              { label: t('common.yes', '是'), value: true },
             ];
           }}
         />
         <ProFormSelect
           width="md"
           name="private"
-          label="是否加密"
-          placeholder="是否加密"
-          tooltip={PRIVATE_TOGGLE_HINT}
+          label={t('common.encrypted', '是否加密')}
+          placeholder={t('common.encrypted', '是否加密')}
+          tooltip={privateToggleHint(t)}
           request={async () => {
             return [
-              { label: '未加密', value: false },
-              { label: '加密', value: true },
+              { label: t('dataManage.notEncryptedText', '未加密'), value: false },
+              { label: t('dataManage.encryptedText', '加密'), value: true },
             ];
           }}
         />
         <ProFormText.Password
           width="md"
           name="password"
-          label="密码"
-          placeholder={passwordPlaceholder({ hasPassword: hasPasswordFromRecord(record) })}
+          label={t('login.passwordPlaceholder', '密码')}
+          placeholder={passwordPlaceholder({ hasPassword: hasPasswordFromRecord(record) }, t)}
           tooltip={
             hasPasswordFromRecord(record)
-              ? '该分类已设置密码。留空表示不修改；填新值表示改密码。'
-              : '留空表示不加密；填了就用这个密码加密该分类下的所有文章。'
+              ? t('dataManage.passwordEditHint', '该分类已设置密码。留空表示不修改；填新值表示改密码。')
+              : t('dataManage.passwordNewHint', '留空表示不加密；填了就用这个密码加密该分类下的所有文章。')
           }
           formItemProps={{
-            extra: passwordHelp({ hasPassword: hasPasswordFromRecord(record) }),
+            extra: passwordHelp({ hasPassword: hasPasswordFromRecord(record) }, t),
           }}
           // 挡浏览器自动填充：「留空 = 不修改」之后，一次自动填充 = 悄悄改了密码
           fieldProps={{ autoComplete: 'new-password' }}
@@ -271,10 +306,14 @@ function createColumns({ onMove, rows }) {
             width="md"
             name="clearPassword"
             id="clearPassword"
-            label={CLEAR_PASSWORD_LABEL}
-            tooltip={CLEAR_PASSWORD_TOOLTIP}
+            label={clearPasswordLabel(t)}
+            tooltip={clearPasswordTooltip(t)}
             formItemProps={{
-              extra: `勾选并提交 = 解除该分类（及其下所有文章）的加密。${PASSWORD_UNRECOVERABLE_WARNING}`,
+              extra: t(
+                'dataManage.decryptHint',
+                '勾选并提交 = 解除该分类（及其下所有文章）的加密。{warning}',
+                { warning: passwordUnrecoverableWarning(t) },
+              ),
             }}
           />
         )}
@@ -284,26 +323,28 @@ function createColumns({ onMove, rows }) {
         key={'deleteCategoryC' + record.name}
         onClick={() => {
           Modal.confirm({
-            title: `确定删除分类 "${record.name}"吗？`,
+            title: t('dataManage.deleteCategoryConfirmTitle', '确定删除分类 "{name}"吗？', { name: record.name }),
             onOk: async () => {
               try {
                 await deleteCategory(record.name);
-                message.success('删除成功!');
+                message.success(t('dataManage.deleteOk', '删除成功!'));
               } catch {}
               action?.reload();
             },
           });
           // action?.startEditable?.(record.id);
         }}
-      >
-        删除
-      </a>,
+      >{t('common.delete', '删除')}</a>,
     ],
   },
 ];
 }
 
 export default function () {
+  // 🔴 期 6 第九批：接上 i18n（语言选择必须在渲染期）。⚠️ `message.*` / `Modal.*` 是脱离 React 树的独立根（§7.151）。
+  // 🔴 本文件的 t **没有**进任何 hook 的依赖数组；谁要加，必须先用 useCallback([intl]) 包成稳定引用（§7.144 A）。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const actionRef = useRef();
   const [rows, setRows] = useState([]);
   const fetchData = async () => {
@@ -317,7 +358,7 @@ export default function () {
   };
   const moveCategory = async (name, delta) => {
     if (isDemoHost()) {
-      showDemoBlocked();
+      showDemoBlocked(t);
       return;
     }
     const index = rows.findIndex((item) => item.name === name);
@@ -330,14 +371,14 @@ export default function () {
     names[index] = names[next];
     names[next] = swapped;
     await reorderCategories(names);
-    message.success('已调整分类顺序');
+    message.success(t('dataManage.orderUpdated', '已调整分类顺序'));
     actionRef?.current?.reload();
   };
   return (
     <>
       <ProTable
         rowKey="name"
-        columns={createColumns({ onMove: moveCategory, rows })}
+        columns={createColumns({ onMove: moveCategory, rows }, t)}
         search={false}
         pagination={false}
         dateFormatter="string"
@@ -346,12 +387,10 @@ export default function () {
         options={false}
         toolBarRender={() => [
           <ModalForm
-            title="新建分类"
+            title={t('dataManage.createCategory', '新建分类')}
             key="newCategoryN"
             trigger={
-              <Button key="buttonCN" icon={<PlusOutlined />} type="primary">
-                新建分类
-              </Button>
+              <Button key="buttonCN" icon={<PlusOutlined />} type="primary">{t('dataManage.createCategory', '新建分类')}</Button>
             }
             width={450}
             autoFocusFirstInput
@@ -359,7 +398,7 @@ export default function () {
             onFinish={async (values) => {
               await createCategory(values);
               actionRef?.current?.reload();
-              message.success('新建分类成功！');
+              message.success(t('dataManage.createCategoryOk', '新建分类成功！'));
               return true;
             }}
             layout="horizontal"
@@ -370,10 +409,10 @@ export default function () {
               required
               id="nameC"
               name="name"
-              label="分类名称"
+              label={t('dataManage.categoryNameField', '分类名称')}
               key="nameCCCC"
-              placeholder="请输入分类名称"
-              rules={[{ required: true, message: '这是必填项' }]}
+              placeholder={t('dataManage.categoryNameFieldPlaceholder', '请输入分类名称')}
+              rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
             />
           </ModalForm>,
         ]}

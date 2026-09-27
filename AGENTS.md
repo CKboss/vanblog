@@ -9469,6 +9469,110 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.174 期 6 第九批：**数据管理页整块**（7 个文件 134 条 → 0）—— 🔴 活体抓出一条**译文质量**问题（列头英文是 "act on"），而静态判据一条都管不着
+
+**交付**（站长裁定 C"大块推进"的第一块：一次把 `pageSurface.js` 报的 **7 个文件全做完**，不留半页中文）：
+`DataManage/index.jsx`(6 个页签) + `tabs/Category.jsx`(58) + `tabs/Tag.jsx`(19) + `tabs/Social.jsx`(17) +
+`tabs/Link.jsx`(12) + `tabs/Menu.tsx`(12) + `tabs/Donate.jsx`(10) = **134 条 → 0**；
+语言包 **1123 → 1200 key**（新增 77 / **复用 22**；🔴 新提升 2 句进 common：`common.ok`（确定）、`common.submitOk`（提交成功））；
+棘轮清单 **85 → 92 个文件**（**TOTAL 仍 61**）；`i18nKeyNaming` → **1200**；
+`localePackParity` 自动发现下界 **78 → 86 个文件 / 1440 → 1580 个调用点**（实测 86 / 1589）；繁中同形白名单 **+6**。
+🔴 **真实剩余：46 → 39 个文件 / 568 → 434 条**（累计 **77.0%** 完成）。
+分工：**codemod 改写 108 处**（`wrapTCalls.js`：literal / jsxAttr / jsxText），手工 26 处（7 个 hook、
+8 处模板收成 ICU、模块级工厂改造、3 处 `{warning}` 嵌套）。
+🔴 **浏览器活体 60/60（zh-CN 19 + en-US 22 + zh-TW 19），problems 0、skipped 0**：
+6 个页签标签、**逐个页签**的列头与卡片标题、新建分类弹窗（标题 / 字段标签 / placeholder / 页脚）、
+🔴 **4 个列头 tooltip 的完整长文案**（含 3 条嵌了 `{warning}` 的：断言时先把占位符**代入**语言包里那句警告再比），
+外加三条反向判据：en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**（先证明采到 ≥30 段文字）。
+en-US 实采：`Categories / Tags / Nav menu / Donations / Friend links / Social media`；
+列头 `Category · Order · Hide · Encrypted · Access password · Actions`、`Type · Display name · Value · Icon URL · Last set · Actions`、
+`Donor · Amount · Last donation · Actions`；弹窗 `New category / Category name / Enter a category name`。
+zh-TW 实采：`分類管理 / 標籤管理 / 導覽設定 / 贊助管理 / 友情連結 / 社群媒體`；
+列头 `題目 · 排序 · 是否隱藏 · 加密 · 存取密碼 · 操作`、`類型 · 顯示名稱 · 值 · 圖示 URL · 最後設定時間 · 操作`、`贊助人 · 金額 · 最後贊助時間`。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-datamanage/`。
+
+#### A. 🔴 活体抓出**译文质量**问题：列头英文是 `act on`（静态判据一条都管不着）
+5 个页签的「操作」列头都**复用**了既有 key `recycle.actionFallback` —— 复用本身是对的（避免同值多 key），
+但那个 key 的英文值是早期批次留下的直译 **`act on`** ⇒ en-US 下列头显示 `act on`（该是 `Actions`）。
+🔴 关键在于：**所有静态判据全绿**（key 存在、三份包一致、逐字对账通过、无汉字、无全角标点、占位符对齐），
+只有**活体把列头文字采出来看**才发现。变异对照也证明了这一点：把 `Actions` 改回 `act on`，
+**没有任何测试会红**（B34-M7 是一条"故意不红"的对照，用来把这件事钉在记录里）。
+修法两步：① `recycle.actionFallback` 的英文改成 `Actions`（回收站那一侧也一起变好）；
+② 数据管理页 6 个文件改用语义更对的 `common.colOption`（本来就是 `Actions`）。
+👉 🔴 **规矩：复用既有 key 之前，要把它的三份译文**读一遍**（不只是确认值相同）** ——
+复用会把那个 key 的**译文质量**一起继承过来，而这类问题只有活体能看见。
+👉 另一条：**"译文好不好"目前只有活体这一把尺子**。待办：给高频 UI 词（列头/按钮）建一份
+"英文措辞白名单"（如列头必须是名词短语、不许动词短语），让它变成静态可查的。
+
+#### B. 🔴 三种"模块级"形状，三种接法（`Category.jsx` 是本批最难的一个文件）
+`Category.jsx` 的 58 条里，文案分散在**三种不同的模块级形状**里，接法各不相同：
+1. `showDemoBlocked()` —— 模块级**普通函数**（还是 `Modal.info`，脱离 React 树）⇒ **注入式尾参** `t = IDENTITY_T`；
+2. `createColumns({ onMove, rows })` —— 模块级**工厂** ⇒ 🔴 **t 必须是独立的最后一个参数**
+   （`createColumns({ onMove, rows }, t)`），不能塞进第一个对象里：调用点判据就是按"最后一个实参是不是 t"看的
+   （第一版塞进对象 ⇒ 判据红；而且这个约定本身有价值：尾参一眼就能看出有没有传）；
+3. `OrderButtons` / `HiddenSwitch` —— 模块级**组件** ⇒ 它们**自己可以用 hook**（`useIntl()`），不需要注入。
+👉 🔴 **规矩：接一个文件之前先分清"这段文案在什么作用域、那个作用域能不能用 hook"** ——
+组件用 hook，普通函数/工厂用注入式尾参。搞错了就是上一批那种**加载期 ReferenceError 白屏**。
+⚠️ `.tsx` 里 hook 的 `t` 签名必须写 `values?: Record<string, any>`（`Menu.tsx` 第一版漏了 `?` ⇒ 4 处 **TS2554**
+「Expected 3 arguments, but got 2」；写 `unknown` 则是 TS2769 —— 这两种错本批都遇到了）。
+
+#### C. 🔴 三处 tooltip 里嵌着**另一个注入式模块**的整句 ⇒ 用 `{warning}` 占位符，并且改用函数版
+`加密` / `访问密码` 两列的 tooltip 与"解除加密"那条说明，原文都是 `'…' + PASSWORD_UNRECOVERABLE_WARNING` 或
+`` `…${PASSWORD_UNRECOVERABLE_WARNING}…` ``（那个常量来自 `accessPassword.js`，本身也是注入式的）。
+⇒ 收成一条带 `{warning}` 的 ICU 整句，并且 🔴 **必须调函数版** `passwordUnrecoverableWarning(t)`
+（读 identity 常量的话，嵌进去的那半句会永远中文）。同一批把 `Category.jsx` 里**所有** accessPassword 的
+调用点都补上了 t：`buildAccessPasswordPatch(…, t)`（它算出来的 `access.error` 是给用户看的文案）、
+`clearConfirmTitle(…, t)`、`clearConfirmContent(…, t)`、`passwordPlaceholder(…, t)`、`passwordHelp(…, t)`、
+`clearPasswordLabel(t)`、`clearPasswordTooltip(t)`、`privateToggleHint(t)`。
+🔴 顺手把 `Category.jsx` 从 `NOT_YET_I18N_CONSUMERS` 里**删掉**（表是钉死的：留着会掩盖"已接 i18n 却没传 t"）。
+⚠️ 起草的英文把 `passwordColTooltip` 的**前半句漏译了**（理由是"插进去的 {warning} 已经说了同一件事"）——
+🔴 **技术词闸门当场抓到**（zh 值里有 `scrypt`、en 值里没有）⇒ 补回。
+👉 **译文不许因为"读起来重复"就删掉原文的信息**：中文原文本来就重复（这是文案问题，属站长裁定范围），
+翻译批次的职责是**等值传递**，不是改写。
+
+#### D. 探针尺子四处错（都被实采纠正）
+1. 🔴 **列头 tooltip 的图标不是 `question-circle`**：ProTable 的列 `tooltip` 渲染成
+   `.ant-pro-core-label-tip-icon` 里的 **`anticon-info-circle`** ⇒ 第一版按问号图标找，采到 **0 个**。
+   修法：先 `innerHTML` 取证看清真实形状，再按 `.ant-table-thead .anticon` 全采。
+   👉 又是那条：**采不到就先取证，别猜选择器**。
+2. 🔴 **嵌了 `{warning}` 的 tooltip 不能拿"原始值"全等比**：页面上渲染的是**替换之后**的文本
+   ⇒ 断言前先把 `{warning}` 用语言包里 `accessPassword.unrecoverable` 的值代入（否则 4 条里只有 2 条能对上）。
+3. **新建分类弹窗里只有一个文本字段**（「是否加密 / 是否隐藏」两个开关在编辑弹窗里，而一次性栈没有分类可编辑）
+   ⇒ 判据改成"新建弹窗里真的有那一个标签 + 出现的标签都必须已翻译"，不要硬要求三个。
+4. **`paginationQuickJumper` 的白名单键是 `路径:行号`**（故意的：行号变了逼人确认还是不是同一处）
+   ⇒ `Category.jsx` 这批长了 41 行，键从 `:342` → `:383`，并写明核对过还是同一处 `pagination={false}`。
+
+#### E. 既有守卫的 8 处锚点换成"两种形状都认"
+`renameCopy`(4) / `categoryHidden`(1) / `categoryOrder`(2) / `accessPassword`(1) / `adminCopySync`(2) /
+`adminRobustness`(1)：都是"某个标题/标签/触发器必须是这句中文"。改法统一成
+`/title: (t\('[^']+', )?'访问密码'/` 这种**同时接受硬编码与 t() 两种形状**的写法
+⇒ 以后再翻别的文件，这些锚点不会再红第二次（🔴 但"必须是这句中文"这个性质一点没放）。
+👉 对比上一批（备份页）逐个改成 t() 专属形状的做法：**"两种形状都认"更耐用**，
+代价是它不再能抓"有人把 t() 退回硬编码"—— 那件事由**棘轮预算 0** 兜着（B34-M1 就是验这个）。
+
+#### F. 🔴 委派译文：这次子代理的自检**主动预警**了一个真问题
+brief 里内联了 77 条中文 + 术语表 + `{warning}` 的组装规则 + 一个"样例警告句"让它自己组装验接缝 ⇒ 交付质量可用
+（77/77 key、无单引号无汉字无全角标点、占位符全对、TW **零简体字**、三条 `{warning}` 组装无双空格/无标点前空格）。
+🔴 而且它在报告里**主动写明**："EN 值本身不含字面 `scrypt`，那个词只在 {warning} 代入之后才出现；如果你们的 CI
+直接 grep EN 原值，这条会踩" —— 父代理这边的**技术词闸门果然就踩了**（C 段）。
+👉 两条教训：① 委派时把**父代理这边会跑哪些闸门**一并写进 brief，子代理就能自己先过一遍；
+② 子代理的"我这么选是因为…"要**当真**读（它标出的 judgement call 里就藏着这次唯一的实质缺陷）。
+
+#### G. 基线
+- admin `node --test` **774 tests / 170 suites / 0 fail**；i18n 守卫组 **115**；
+- 变异对照 **8/8**（页签退回硬编码 / `createColumns` 尾参 t 拿掉 / 改回读 identity 常量 /
+  `buildAccessPasswordPatch` 的 t 拿掉 / 占位符 `{to}` 喂值拿掉 / 「重命名」改成「修改」/
+  🔴 **故意不红**的一条：`Actions` 改回 `act on`（证明译文质量只有活体能看见）/ 语义空操作）；
+- 语言包 **1200 key** ×3（🔴 原始 key 行数 == 去重数 == 1200，重复 0）；
+  `--zh-tw-audit`：1200 key / **761** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **92 个文件 / TOTAL 61**（9 条永久例外）；admin 类型门禁 **31/0**；
+- 矩阵（5 个阶段全 rc=0，jest 首跑就绿）：admin **774/170/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.4860614d.js` = **1,641,607 B**）；
+- 🔴 **真实剩余：39 个文件 / 434 条**。下一块：`CommentManage/**`(71：`BuiltinComments.jsx` 50 + `index.jsx` 21) →
+  `About.tsx`(35) → `Code/index.tsx`(29) → `Static/file`(28) → `CollaboratorModal`(26) → `importMdzCore`(23) →
+  `Pipeline`(35) → `Welcome`(33) → `app.jsx`(18) → `restoreCore`(16) → 其余零散。
+
 ### 7.173 期 6 第八批：系统设置页家族（67 条 → 0）—— 🔴 语言包生成脚本**跑两遍**会静默产生 53 个重复 key，而一路全绿
 
 **交付**（站长裁定 B 解锁的那一组：四个**互相引用**的文件一起做 + 两个被活体抓出来的漏块）：

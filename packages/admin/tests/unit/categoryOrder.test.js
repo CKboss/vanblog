@@ -10,14 +10,15 @@ describe('admin category order (#152)', () => {
       'utf8',
     );
     const api = readFileSync(path.join(__dirname, '../../src/services/van-blog/api.js'), 'utf8');
-    assert.match(src, /title:\s*'排序'/);
+    // 🔴 期 6 第九批起这些文案走 t() ⇒ 锚点改成**两种形状都认**（硬编码 或 t('<key>', '中文')），性质没放。
+    assert.match(src, /title:\s*(t\('[^']+', )?'排序'/);
     assert.match(src, /上移/);
     assert.match(src, /下移/);
     assert.match(src, /data-category-move-up/);
     assert.match(src, /data-category-move-down/);
     assert.match(src, /reorderCategories\(/);
     assert.match(api, /\/api\/admin\/category\/all\/order/);
-    assert.match(src, /title:\s*'是否隐藏'/);
+    assert.match(src, /title:\s*(t\('[^']+', )?'是否隐藏'/);
   });
 
   it('documents category display order in category docs and FAQ', () => {

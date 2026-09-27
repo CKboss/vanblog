@@ -301,6 +301,20 @@ const BUDGET = {
   //   复用 3 条：`img.uploadBtn`（上传图片）/ `init.field.required`（这是必填项）/
   //   🔴 `common.uploadOkWithName`（**本批从 `cover.uploadedOk` 提升**：这句"某某上传成功"后台到处都在用）。
   'src/components/UrlFormItem/index.tsx': 0,
+  // 🔴 期 6 第九批（2026-09-27）：**数据管理页整块**（6 个页签 + 页签容器）134 条 ⇒ 都预算 0。
+  //   这是"大块推进"（站长裁定 C）的第一块：一次把 `pageSurface.js` 报的 7 个文件全做完，
+  //   不留"半页中文"。codemod 改了 108 处，手工 26 处（hook ×7、模板收成 ICU、模块级工厂改造）。
+  //   🔴 `Category.jsx` 最难：`showDemoBlocked` / `createColumns` 是**模块级**的（普通函数与工厂），
+  //   `OrderButtons` / `HiddenSwitch` 是**模块级组件**（可以自己用 hook）⇒ 三种形状三种接法。
+  //   🔴 三处 tooltip 里嵌着 `PASSWORD_UNRECOVERABLE_WARNING`（另一个注入式模块的 identity 视图）
+  //   ⇒ 改用函数版 `passwordUnrecoverableWarning(t)` 并以 `{warning}` 占位符嵌进整句。
+  'src/pages/DataManage/index.jsx': 0,
+  'src/pages/DataManage/tabs/Category.jsx': 0,
+  'src/pages/DataManage/tabs/Tag.jsx': 0,
+  'src/pages/DataManage/tabs/Social.jsx': 0,
+  'src/pages/DataManage/tabs/Link.jsx': 0,
+  'src/pages/DataManage/tabs/Menu.tsx': 0,
+  'src/pages/DataManage/tabs/Donate.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -463,7 +477,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 85, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 92, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

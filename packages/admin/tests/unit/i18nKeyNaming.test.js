@@ -85,7 +85,9 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   「高级设置」复用外层 `sysconf.tabAdvance`、URL 那三条复用 `init.baseUrl.*`、`更新成功！` 复用 common）
 // 🔴 1121 → **1123**（期 6 第八批补 2：`UrlFormItem` 的 2 个新 key；另 3 条复用既有 key，
 //   其中 `common.uploadOkWithName` 是本批从 `cover.uploadedOk` **提升**来的 ⇒ 提升不增 key 数）
-const BASELINE_KEY_COUNT = 1123;
+// 🔴 1123 → **1200**（期 6 第九批：数据管理页整块 +77，复用 22 条既有 key；
+//   其中 `common.ok`（确定）与 `common.submitOk`（提交成功）是新提升进 common 的两句通用文案）
+const BASELINE_KEY_COUNT = 1200;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

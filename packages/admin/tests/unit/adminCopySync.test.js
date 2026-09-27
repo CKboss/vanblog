@@ -48,14 +48,16 @@ describe('admin copy sync (#197)', () => {
   });
 
   it('uses 社交媒体 on the data-manage tab without renaming the route key', () => {
-    assert.match(dataManageSrc, /tab: '社交媒体'/);
+    // 🔴 期 6 第九批起这些文案走 t() ⇒ 锚点改成**两种形状都认**（硬编码 或 t('<key>', '中文')），性质没放。
+    assert.match(dataManageSrc, /tab: (t\('[^']+', )?'社交媒体'/);
     assert.match(dataManageSrc, /key: 'socials'/);
     assert.match(dataManageSrc, /socials: <Social \/>/);
     assert.doesNotMatch(dataManageSrc, /联系方式/);
   });
 
   it('uses 社交媒体 in the social editor header and custom-row copy', () => {
-    assert.match(socialSrc, /headerTitle="社交媒体"/);
+    // 🔴 同上：属性形式从 `headerTitle="社交媒体"` 变成 `headerTitle={t('…', '社交媒体')}`
+    assert.match(socialSrc, /headerTitle=(\{t\('[^']+', '社交媒体'\)|"社交媒体")/);
     assert.match(socialSrc, /自定义社交媒体需要填写显示名称/);
     assert.match(socialSrc, /自定义社交媒体的图标地址/);
     assert.match(socialSrc, /CUSTOM_SOCIAL_TYPE = 'custom'/);

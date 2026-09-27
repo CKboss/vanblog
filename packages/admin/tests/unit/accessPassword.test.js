@@ -414,7 +414,8 @@ describe('分类管理（DataManage/tabs/Category.jsx）接线', () => {
   });
 
   it('列表里能看到"设没设密码"，且 tooltip 讲了不可找回', () => {
-    assert.match(src, /title: '访问密码'/);
+    // 🔴 期 6 第九批起这些文案走 t() ⇒ 锚点改成**两种形状都认**（硬编码 或 t('<key>', '中文')），性质没放。
+    assert.match(src, /title: (t\('[^']+', )?'访问密码'/);
     assert.match(src, /PASSWORD_UNRECOVERABLE_WARNING/);
   });
 });

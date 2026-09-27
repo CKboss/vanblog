@@ -332,7 +332,8 @@ const FALSE_WHITELIST = {
   'pages/Static/img/index.tsx:728':
     '图片列表(表格视图)的分页由页面底部共用的 <Pagination> 负责（已带 showQuickJumper），此处再加一套会出现两个打架的分页器',
   // 分类管理：分类是树形/少量数据，前端全量渲染。
-  'pages/DataManage/tabs/Category.jsx:342':
+  // 🔴 行号随期 6 第九批（接 i18n）移动；已核对还是**同一处**（分类列表那个 `pagination={false}`）
+  'pages/DataManage/tabs/Category.jsx:383':
     '分类列表，条目少且需要一次看全（便于排序/展开），前端全量渲染',
 };
 

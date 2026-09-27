@@ -211,6 +211,14 @@ const IDENTICAL_ZH_TW_OK = [
   'sysconf.tabToken',
   // 🔴 期 6 第八批（补 2）：`{name} 已存在!` 简繁同形（已/存/在 都不是简体专用字）
   'urlForm.existsWithName',
+  // 🔴 期 6 第九批（数据管理页）：这六条简繁同形 —— 上移/下移/排序/加密/未加密/提交成功
+  //   （这些词简繁写法本来就一样，不是"复制简体充数"）
+  'dataManage.moveUp',
+  'dataManage.moveDown',
+  'dataManage.colOrder',
+  'dataManage.encryptedText',
+  'dataManage.notEncryptedText',
+  'common.submitOk',
   // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
   'time.secondsAgo',
   'time.daysAgo',
@@ -364,12 +372,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 78,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 78）⇒ 遍历或解析器坏了`,
+      FILES.length >= 86,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 86）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1440,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1440）⇒ 疑似解析器坏了`,
+      calls.length >= 1580,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1580）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -440,6 +448,13 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/WalineForm/index.tsx',
       'src/pages/SystemConfig/tabs/SiteInfo.tsx',
       'src/components/UrlFormItem/index.tsx',
+      'src/pages/DataManage/index.jsx',
+      'src/pages/DataManage/tabs/Category.jsx',
+      'src/pages/DataManage/tabs/Tag.jsx',
+      'src/pages/DataManage/tabs/Social.jsx',
+      'src/pages/DataManage/tabs/Link.jsx',
+      'src/pages/DataManage/tabs/Menu.tsx',
+      'src/pages/DataManage/tabs/Donate.jsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -768,6 +783,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       // 🔴 期 6 第八批：两个"共享字段文案"模块（模块级常量 ⇒ 函数版 + identity 视图）
       'src/utils/analysisFields.js': ['analysisAdminPath', 'gaAnalysisField', 'baiduAnalysisField'],
       'src/utils/walineEmailFields.js': ['walineAdminPath', 'walineEmailFields'],
+      // 🔴 期 6 第九批：Category 的**模块级**函数/工厂与 Tag 的列工厂
+      //    （`OrderButtons` / `HiddenSwitch` 是模块级**组件**，自己用 hook ⇒ 不在这张表里）
+      'src/pages/DataManage/tabs/Category.jsx': ['showDemoBlocked', 'createColumns'],
+      'src/pages/DataManage/tabs/Tag.jsx': ['buildColumns'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -808,7 +827,6 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
       // 🔴 期 7 第一批新增：这两个文件调 accessPassword 的产文案函数但**自己还没接 i18n**
       //    ⇒ 走 identity，输出与今天逐字相同（不是缺陷，是 backlog；翻它们的那批要把 t 传进来并从这张表删掉）
-      'src/pages/DataManage/tabs/Category.jsx',
       // 🔴 `NewArticleModal` 本轮已接 i18n（并把 t 传给了 accessPassword 的函数）⇒ **从这张表删掉**
       //    （表是钉死的：留着它就会掩盖"某个已接 i18n 的文件其实没传 t"这种情况）
       // 🔴 `src/pages/Editor/index.jsx` 期 6 第四批**已接 i18n**（并给 describeScheduledTag / parseMarkdownFile /

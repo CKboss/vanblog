@@ -1,0 +1,189 @@
+{
+ "base": "http://127.0.0.1:18290",
+ "startedAt": "2026-09-27T02:02:43.911Z",
+ "locales": {
+  "en-US": {
+   "htmlLang": "en-US",
+   "tabsSeen": [
+    "category",
+    "tag",
+    "menuConfig",
+    "donateInfo",
+    "links",
+    "socials"
+   ],
+   "tabLabels": [
+    "Categories",
+    "Tags",
+    "Nav menu",
+    "Donations",
+    "Friend links",
+    "Social media"
+   ],
+   "perTab": {
+    "category": {
+     "cols": [
+      "Category",
+      "Order",
+      "Hide",
+      "Encrypted",
+      "Access password",
+      "act on"
+     ],
+     "btns": [
+      "New category"
+     ],
+     "titles": []
+    },
+    "tag": {
+     "cols": [
+      "Tag name",
+      "act on"
+     ],
+     "btns": [
+      "Reset",
+      "Query"
+     ],
+     "titles": []
+    },
+    "menuConfig": {
+     "cols": [
+      "Menu name",
+      "Link URL",
+      "act on"
+     ],
+     "btns": [
+      "add a row of data"
+     ],
+     "titles": [
+      "Navigation menu"
+     ]
+    },
+    "donateInfo": {
+     "cols": [
+      "Donor",
+      "Amount",
+      "Last donation",
+      "act on"
+     ],
+     "btns": [
+      "add a row of data"
+     ],
+     "titles": [
+      "Donation details"
+     ]
+    },
+    "links": {
+     "cols": [
+      "Partner name",
+      "URL",
+      "Description",
+      "Logo",
+      "Last set",
+      "act on"
+     ],
+     "btns": [
+      "add a row of data"
+     ],
+     "titles": [
+      "Friend links"
+     ]
+    },
+    "socials": {
+     "cols": [
+      "Type",
+      "Display name",
+      "Value",
+      "Icon URL",
+      "Last set",
+      "act on"
+     ],
+     "btns": [
+      "add a row of data"
+     ],
+     "titles": [
+      "Social media"
+     ]
+    }
+   },
+   "createModal": {
+    "title": [
+     "New category"
+    ],
+    "labels": [
+     "Category name"
+    ],
+    "placeholders": [
+     "Enter a category name"
+    ],
+    "footer": [
+     "Cancel",
+     "OK"
+    ]
+   },
+   "colTooltips": {
+    "dataManage.orderTooltip": "Use Move up and Move down to change the order in which categories appear in the site navigation, the category list, and category pages. Hidden categories still take part in the ordering in the admin, but they do not appear on the site.",
+    "dataManage.hiddenTooltip": "Once a category is hidden, it no longer shows in the category list, the category submenu in the site navigation, category pages, or the sitemap. It is still visible in the admin. Articles in the category still follow their own hidden and password-protection rules, so hiding the category does not encrypt them."
+   },
+   "theadHtml": "<tr><th class=\"ant-table-cell\">Category</th><th class=\"ant-table-cell\"><div class=\"ant-pro-core-label-tip\"><div class=\"ant-pro-core-label-tip-title\">Order</div><span class=\"ant-pro-core-label-tip-icon\"><span role=\"img\" aria-label=\"info-circle\" class=\"anticon anticon-info-circle\"><svg viewBox=\"64 64 896 896\" focusable=\"false\" data-icon=\"info-circle\" width=\"1em\" height=\"1em\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z\"></path><path d=\"M464 336a48 48 0 1096 0 48 48 0 10-96 0zm72 112h-48c-4.4 0-8 3.6-8 8v272c0 4.4 3.6 8 ",
+   "tipIconCount": 4,
+   "allColTooltips": [
+    "Use Move up and Move down to change the order in which categories appear in the site navigation, the category list, and category pages. Hidden categories still take part in the ordering in the admin, but they do not appear on the site.",
+    "Once a category is hidden, it no longer shows in the category list, the category submenu in the site navigation, category pages, or the sitemap. It is still visible in the admin. Articles in the category still follow their own hidden and password-protection rules, so hiding the category does not encrypt them.",
+    "Once a category is encrypted, all articles in it are encrypted too. The category password is the one that applies. Visitors can still open the category and read the list of articles. The password is stored as a scrypt hash and the server cannot read it back: if you forget or clear it, it cannot be recovered, only set again.",
+    "The server only stores a scrypt hash and the admin cannot read the original password back, so this column only tells you whether one is set. The password is stored as a scrypt hash and the server cannot read it back: if you forget or clear it, it cannot be recovered, only set again. To change the password or remove encryption, use the password field in the \"Rename\" dialog and the \"Clear password\" switch."
+   ],
+   "cjk": [],
+   "fullwidth": [],
+   "checks": {
+    "tabLabels": true,
+    "cols_category": true,
+    "titles_category": true,
+    "cols_tag": true,
+    "cols_menuConfig": true,
+    "titles_menuConfig": true,
+    "cols_donateInfo": true,
+    "titles_donateInfo": true,
+    "cols_links": true,
+    "titles_links": true,
+    "cols_socials": true,
+    "titles_socials": true,
+    "createModalTitle": true,
+    "createModalLabels": true,
+    "createModalLabelsAllTranslated": true,
+    "createModalPlaceholder": true,
+    "colTooltipsFound": false,
+    "colTooltipsTranslated": true,
+    "colTooltipsSeam": true,
+    "collectedEnough": true,
+    "pageNoCjk": true,
+    "pageNoFullwidth": true
+   },
+   "consoleDelta": 0,
+   "pageErrorDelta": 0
+  }
+ },
+ "problems": [
+  "en-US: 列头 tooltip 只采到 [\"dataManage.orderTooltip\",\"dataManage.hiddenTooltip\"]（图标 4 个，实采 4 条）",
+  "en-US: colTooltipsFound 不符合期望 ⇒ [\"Use Move up and Move down to change the order in which categories appear in the site navigation, the category list, and category pages. Hidden categories still take part in the ordering in the admin, but they do not appear on the site.\",\"Once a category is h"
+ ],
+ "skipped": [],
+ "trace": [
+  "[+0.7s] goto login",
+  "[+2.2s] logged in: http://127.0.0.1:18290/admin/",
+  "[+4.4s] language → en-US",
+  "[+7.8s] tabs: [\"Categories\",\"Tags\",\"Nav menu\",\"Donations\",\"Friend links\",\"Social media\"]",
+  "[+50.5s] create modal: {\"title\":[\"New category\"],\"labels\":[\"Category name\"],\"placeholders\":[\"Enter a category name\"],\"footer\":[\"Cancel\",\"OK\"]}",
+  "[+56.7s] column tooltips: [\"dataManage.orderTooltip\",\"dataManage.hiddenTooltip\"] 首条前 90 字：\"Use Move up and Move down to change the order in which categories appear in the site navig\""
+ ],
+ "console": {
+  "total": 1,
+  "unexpected": []
+ },
+ "pageErrors": {
+  "total": 0,
+  "unexpected": []
+ },
+ "missingMessage": 0,
+ "finishedAt": "2026-09-27T02:03:40.782Z"
+}

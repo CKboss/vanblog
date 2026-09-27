@@ -9,12 +9,14 @@ describe('admin category hidden column (#359)', () => {
       path.join(__dirname, '../../src/pages/DataManage/tabs/Category.jsx'),
       'utf8',
     );
-    assert.match(src, /title:\s*'是否隐藏'/);
+    // 🔴 期 6 第九批起这些文案走 t() ⇒ 锚点改成**两种形状都认**（硬编码 或 t('<key>', '中文')），性质没放。
+    assert.match(src, /title:\s*(t\('[^']+', )?'是否隐藏'/);
     assert.match(src, /dataIndex:\s*'hidden'/);
     assert.match(src, /updateCategory\(/);
     assert.match(src, /hidden:\s*checked/);
     assert.match(src, /data-category-hidden-toggle/);
-    assert.match(src, /title:\s*'加密'/);
+    // 🔴 期 6 第九批起走 t() ⇒ 锚点两种形状都认（性质没放：「加密」这一列必须存在，且在「是否隐藏」旁边）
+    assert.match(src, /title:\s*(t\('[^']+', )?'加密'/);
     assert.match(src, /dataIndex:\s*'private'/);
   });
 

@@ -1,4 +1,5 @@
 import { getMenu, updateMenu } from '@/services/van-blog/api';
+import { useIntl } from 'umi';
 import { EditableProTable } from '@ant-design/pro-table';
 // useRefFunction 只是 pro-utils 里的一个小 hook，为了不再拉整个 pro-components 桶，这里就地实现
 const useRefFunction = <T extends (...args: any[]) => any>(fn: T) => {
@@ -37,6 +38,14 @@ const loopDataSourceFilter = (
 };
 
 export default function () {
+  // 🔴 期 6 第九批：接上 i18n（语言选择必须在**渲染期**，useIntl 是 hook）。
+  // ⚠️ `message.*` / `Modal.*` 渲染进脱离 React 树的独立根（§7.151）⇒ 传算好的字符串。
+  const intl = useIntl();
+  // ⚠️ 这是 `.tsx`：`values` 必须写成**可选**且带类型（`values?: Record<string, any>`），
+  //    否则只传两个实参的调用点会撞 TS2554「Expected 3 arguments, but got 2」（写 unknown 则撞 TS2769）。
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
+
   const [loading, setLoading] = useState(false);
   const [editableKeys, setEditableRowKeys] = useState([]);
   const [dataSource, setDataSource] = useState<DataSourceType[]>([]);
@@ -79,26 +88,29 @@ export default function () {
   );
   const columns = [
     {
-      title: '菜单名',
+      title: t('dataManage.menuName', '菜单名'),
       dataIndex: 'name',
       formItemProps: (form, { rowIndex }) => {
         return {
-          rules: [{ required: true, message: '此项为必填项' }],
+          rules: [{ required: true, message: t('common.fieldRequired', '此项为必填项') }],
         };
       },
     },
     {
-      title: '跳转网址',
+      title: t('dataManage.menuUrl', '跳转网址'),
       dataIndex: 'value',
-      tooltip: `内部地址需以 / 开头，外部地址请以协议开头( http/https )`,
+      tooltip: t(
+        'dataManage.menuUrlRule',
+        '内部地址需以 / 开头，外部地址请以协议开头( http/https )',
+      ),
       formItemProps: (form, { rowIndex }) => {
         return {
-          rules: [{ required: true, message: '此项为必填项' }],
+          rules: [{ required: true, message: t('common.fieldRequired', '此项为必填项') }],
         };
       },
     },
     {
-      title: '操作',
+      title: t('common.colOption', '操作'),
       valueType: 'option',
       key: 'option',
       width: 200,
@@ -110,15 +122,13 @@ export default function () {
             onClick={() => {
               action?.startEditable?.(record.id);
             }}
-          >
-            编辑
-          </a>,
+          >{t('common.editPost', '编辑')}</a>,
           l == 0 ? (
             <a
               key="addChild"
               onClick={() => {
                 if (record.level >= 1) {
-                  message.warning('目前最大只支持二级菜单');
+                  message.warning(t('dataManage.menuMaxLevel', '目前最大只支持二级菜单'));
                   return;
                 }
 
@@ -144,9 +154,7 @@ export default function () {
                 setExpendKeys([...expendKeys, record.id]);
                 action.startEditable(newId);
               }}
-            >
-              新增下级
-            </a>
+            >{t('dataManage.addSubmenu', '新增下级')}</a>
           ) : undefined,
           <a
             key="delete"
@@ -155,12 +163,10 @@ export default function () {
                 onOk: async () => {
                   removeRow(record);
                 },
-                title: `确认删除"${record.name || '-'}"吗?`,
+                title: t('dataManage.deleteConfirmTitle', '确认删除"{name}"吗?', { name: record.name || '-' }),
               });
             }}
-          >
-            删除
-          </a>,
+          >{t('common.delete', '删除')}</a>,
         ];
       },
     },
@@ -183,7 +189,7 @@ export default function () {
           }}
           actionRef={actionRef}
           rowKey="id"
-          headerTitle="导航菜单管理"
+          headerTitle={t('dataManage.menuCardTitle', '导航菜单管理')}
           scroll={{
             x: 960,
           }}
