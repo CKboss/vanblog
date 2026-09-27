@@ -92,7 +92,8 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 // 🔴 1342 → **1407**（期 6 第十二批：外壳与共享组件 +65，复用 21 条既有 key）
 // 🔴 1342 → **1413**（期 6 第十二批：外壳与共享组件 +65、Restore 页 +5、🔴 活体抓出的
 //   `install.routeWrap`（包在路由名外面的引号）+1，复用 23 条既有 key）
-const BASELINE_KEY_COUNT = 1413;
+// 🔴 1413 → **1447**（期 6 第十三批：后台首页 Welcome 家族 +34，复用 1 条既有 key）
+const BASELINE_KEY_COUNT = 1447;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

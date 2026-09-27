@@ -239,6 +239,9 @@ const IDENTICAL_ZH_TW_OK = [
   'app.howToUpdateLine',
   // 🔴 `install.routeWrap` 的中文与繁中都是「{name}」（直角引号简繁同形）；英文换成直双引号
   'install.routeWrap',
+  // 🔴 期 6 第十三批：这两条简繁同形（`文章分析` 四个字都无简体专用字；`今日新增` 同）
+  'welcome.tabArticle',
+  'welcome.todayNew',
   // 🔴 期 6 第九批（数据管理页）：这六条简繁同形 —— 上移/下移/排序/加密/未加密/提交成功
   //   （这些词简繁写法本来就一样，不是"复制简体充数"）
   'dataManage.moveUp',
@@ -400,12 +403,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 104,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 104）⇒ 遍历或解析器坏了`,
+      FILES.length >= 108,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 108）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1880,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1880）⇒ 疑似解析器坏了`,
+      calls.length >= 1920,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1920）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -503,6 +506,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/global.jsx',
       'src/services/van-blog/passwordPolicy.js',
       'src/pages/user/Restore/index.jsx',
+      'src/pages/Welcome/index.jsx',
+      'src/pages/Welcome/tabs/overview.jsx',
+      'src/pages/Welcome/tabs/viewer.jsx',
+      'src/pages/Welcome/tabs/article.jsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -1233,13 +1240,21 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     const digits = (v) => (String(v).match(/\d+(?:\.\d+)?/g) || []).slice().sort((a, b) => a - b).join(',');
     const TOKEN_RE =
       /\b[A-Z][A-Z0-9_]{2,}\b|\b[A-Za-z0-9_.-]+\.(?:js|ts|tsx|jsx|json|md|log|png|webp|zip)\b|\b(?:sharp|avifenc|picgo|picgoConfig|libavif-apps|Waline|waline|Caddy|caddy)\b/g;
+    // 🔴 期 6 第十三批新增：**大写但不是技术标识符的普通英文词**白名单。
+    //    `最近访问TOP` / `文章访问量TOP` / `标签文章数 TOP 柱状图` 里的 `TOP` 是中文界面里常见的
+    //    "排行榜"装饰词（英文本来就是 top），不是需要逐字保留的协议/命令/产品名。
+    //    第一版没有这张表 ⇒ 英文写成 "Top recent visits" 就被判"契约漂移"（假红）。
+    //    ⚠️ 只放**确定是普通英文词**的：`ID` / `UA` / `IP` / `URL` / `API` / `SEO` / `BUG` 这些都**不进表**
+    //    （它们是真标识符或产品缩写，必须逐字保留；`about.linkIssues` 那条就是靠这个判据钉住的）。
+    const NOT_TECH_TOKENS = new Set(['TOP', 'PS']);
+
     const bad = [];
     // 🔴 用本文件既有的 `packs`（不是我自己再造一份解析）—— 一个性质只留一处权威口径
     const ALL = Object.keys(packs['zh-CN']);
     for (const k of ALL) {
       const cn = String(packs['zh-CN'][k]);
       const dCN = digits(cn);
-      const tokens = [...new Set(cn.match(TOKEN_RE) || [])];
+      const tokens = [...new Set(cn.match(TOKEN_RE) || [])].filter((x) => !NOT_TECH_TOKENS.has(x));
       for (const l of ['zh-TW', 'en-US']) {
         const v = String(packs[l][k]);
         if (digits(v) !== dCN) {

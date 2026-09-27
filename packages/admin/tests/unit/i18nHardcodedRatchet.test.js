@@ -362,6 +362,18 @@ const BUDGET = {
   'src/pages/Pipeline/index.tsx': 0,
   'src/global.jsx': 0,
   'src/services/van-blog/passwordPolicy.js': 0,
+  // 🔴 期 6 第十三批（2026-09-27）：**后台首页（Welcome）整块** —— 三个 tab 的标签 + 统计卡片标题与
+  //   tip + 图表标题 + 两个集成状态 chip + 表格列 + 加载失败提示（44 条）。
+  //   🔴 `overview.jsx` 的图表数据原来用**中文字段名**（`访客数: each.visited`）而 `yField="访客数"` 指着它：
+  //   那个键**既是数据字段名、又是坐标轴/图例上显示的文字**（两栖）⇒ 改成 ASCII 字段名（visitors / views）
+  //   + `meta.alias` 提供本地化显示名（@ant-design/charts 的正规做法）。这是"线路字面量 vs 显示文案"的
+  //   **第三种形状**：同一个字符串同时是两者 ⇒ 拆成两份（字段名不译、alias 进语言包）。
+  //   🔴 顺手修了上一批的漏改：`viewer.jsx` 里还有 2 个 `<NumSelect d="条" />`（旧 API）
+  //   ⇒ 会退化成 `unit="days"`（单位从"条"变成"天"，是真缺陷，不是风格问题）。
+  'src/pages/Welcome/index.jsx': 0,
+  'src/pages/Welcome/tabs/overview.jsx': 0,
+  'src/pages/Welcome/tabs/viewer.jsx': 0,
+  'src/pages/Welcome/tabs/article.jsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -541,7 +553,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 110, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 114, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

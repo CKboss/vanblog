@@ -1,7 +1,8 @@
 import { useTab } from '@/services/van-blog/useTab';
+import { useIntl } from 'umi';
 import { PageContainer } from '@ant-design/pro-layout';
 import style from './index.less';
-import { lazy, Suspense } from 'react';
+import { useCallback, lazy, Suspense  } from 'react';
 import { Spin } from 'antd';
 
 // 三个 tab 都用 @ant-design/plots（G2，几百 KB）。静态 import 的话，
@@ -16,6 +17,15 @@ const tabFallback = (
   </div>
 );
 const Welcome = () => {
+  // 🔴 期 6 第十三批：接上 i18n（语言选择必须在渲染期）。
+  // ⚠️ t 用 useCallback([intl]) 包成**稳定引用**：本文件的 useMemo / useEffect 依赖数组里要放 t
+  //    （回调体用了 t 就必须声明它，否则切语言后仍是旧译文；§7.144 B），不稳定则依赖每轮都变（§7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+
   const [tab, setTab] = useTab('overview', 'tab');
 
   // const { initialState } = useModel('@@initialState');
@@ -43,15 +53,15 @@ const Welcome = () => {
       tabActiveKey={tab}
       tabList={[
         {
-          tab: '数据概览',
+          tab: t('welcome.tabOverview', '数据概览'),
           key: 'overview',
         },
         {
-          tab: '访客统计',
+          tab: t('welcome.tabViewer', '访客统计'),
           key: 'viewer',
         },
         {
-          tab: '文章分析',
+          tab: t('welcome.tabArticle', '文章分析'),
           key: 'article',
         },
       ]}

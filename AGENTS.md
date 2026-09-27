@@ -9469,6 +9469,92 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.178 期 6 第十三批：后台首页（Welcome）整块 44 条 → 0 —— 🔴 图表的"两栖字符串"（数据字段名 == 坐标轴文字）必须**拆成两份**，以及第二个清点口径缺口（中文对象键数不到）
+
+**交付**：`pages/Welcome/index.jsx`(3 个 tab 标签) + `tabs/overview.jsx`(14) + `tabs/viewer.jsx`(18) + `tabs/article.jsx`(9)
+= **44 条 → 0**；语言包 **1413 → 1447 key**（新组 **`welcome`**：34 新 / 复用 1）；棘轮清单 **110 → 114 个文件**
+（**TOTAL 仍 38**）；`i18nKeyNaming` → **1447**；`localePackParity` 自动发现下界 **104 → 108 个文件 / 1880 → 1920 个调用点**
+（实测 109 / 1936）；繁中同形白名单 **+2**。
+🔴 **真实剩余：22 → 18 个文件 / 140 → 96 条**（累计 **94.9%** 完成）。
+🔴 **浏览器活体 40/40（zh-CN 12 + en-US 14 + zh-TW 14），problems 0、skipped 9**：三个 tab 标签、
+数据概览的 **5 张统计卡** + **4 个图表标题**、访客统计的 **4 张卡** + **两个集成 chip**（百度统计 / Google Analytics，含已开启·未配置）
++ **两个 TOP 榜标题** + 表格列 + **数字下拉的 6 个选项**、文章分析的 **4 张卡** + **2 个图表标题**，
+外加 en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**（先证明采到 ≥400 字）。
+en-US 实采：tab `Overview · Visitor stats · Post analysis`；卡片 `Posts / Total words / Total visitors / New today / Total views`；
+下拉 `Last 3 items … Last 30 items`；文章页 `Categories pie chart` / `Posts per tag (top N bar chart)`。
+zh-TW 实采：tab `資料概覽 · 訪客統計 · 文章分析`；卡片 `文章數 / 總字數 / 總訪客數 / 今日新增 / 總訪問數`；
+下拉 `近3筆 … 近30筆`；文章页 `分類圓餅圖` / `標籤文章數 TOP 長條圖`。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-welcome/`。
+
+#### A. 🔴 图表里的"两栖字符串"：数据字段名**同时**是坐标轴上显示的文字 ⇒ 必须拆成两份
+`overview.jsx` 原来是：
+```js
+res.push({ date: each.date, 访客数: each.visited, 访问量: each.viewer });   // 数据
+<Area yField="访客数" {...eachConfig} />                                    // 指着那个键
+```
+那个中文键**既是数据字段名、又是坐标轴与图例上显示的文字**（两栖）：翻译它要连数据一起改，
+不翻则英文界面上出现中文轴标签。⇒ 拆成两份：
+- **字段名改成 ASCII**（`visitors` / `views`，🔴 不译，属内部契约）；
+- **显示名走 `meta.alias`**（`{ visitors: { alias: t('welcome.chartVisitors', '访客数') } }`）—— @ant-design/charts 的正规做法。
+👉 🔴 这是"线路字面量 vs 显示文案"那条规矩的**第三种形状**（前两种：与服务端比对的字符串、要照着敲的命令）。
+判据：**如果一个字符串同时被"代码用来索引"和"用户用来看"，就必须拆成两份**，各归各位。
+
+#### B. 🔴 第二个清点口径缺口：**中文对象键**（Identifier 形状）棘轮数不到
+变异对照 B38-M2 原本要验"把字段名改回 `访客数:` 会不会红" ⇒ 🔴 **481 个测试全绿**。
+原因：`访客数: each.visited` 里的 `访客数` 是**对象键**（JS 允许 Unicode 标识符 ⇒ 它是 Identifier，不是 StringLiteral），
+而清点器数的是**字符串字面量与 JSX 文本** ⇒ 数不到。
+🔴 这是继上一批"源码里硬编码的中文标点（`「」` 属 CJK 标点区，不在汉字口径里）"之后的**第二个口径缺口**。
+⚠️ 而且把字段名改回中文还会让 `yField="visitors"` 对不上 ⇒ **图表画不出来**（功能缺陷，不是 i18n 缺陷），
+而目前也**没有**判据盯着"yField / xField 必须是数据里真实存在的键"。
+👉 两条待办：① 清点器口径扩到 **CJK 标点区 + 非 ASCII 对象键**（先量影响面再改，别一把梭）；
+② 给图表配置加一条判据：`yField`/`xField`/`angleField`/`colorField` 的值必须是**纯 ASCII**
+（那就逼着所有人走 alias 这条路，两栖字符串不会再出现）。
+（本批的 M2 已重定向到"把 `meta.alias` 的译文退回硬编码中文"——那是字符串字面量，棘轮数得到 ⇒ 红。）
+
+#### C. 🔴 顺手修掉上一批的**漏改**：`viewer.jsx` 还有 2 个 `<NumSelect d="条" />`
+上一批把 `NumSelect` 的 API 从"中文字面量 `d`"改成"语义单位键 `unit`"时，只改了 `overview.jsx`(4) 与 `article.jsx`(1)，
+🔴 **漏了 `viewer.jsx` 的 2 个**。旧 prop 会走 `unit` 的默认值 `days` ⇒ **单位从"条"变成"天"**（真缺陷，不是风格问题）。
+本批改完，并且 🔴 **活体专门加了判据**：`viewerUnitIsItems`（每个选项都含本语言的"条/items/筆"）
++ `viewerUnitNotDays`（不许出现"天/day"）—— 第二条就是**冲着这个回归**去的。
+👉 🔴 **改一个组件的 API 时，调用点要用 grep 全仓扫一遍**（本次是 `grep -rn '<NumSelect'` 就能抓到），
+不要只改"我记得的那几个"。⚠️ 而且这类漏改**不会报错**：默认值让它看起来还在工作，只是单位错了。
+
+#### D. 🔴 hook 依赖数组又抓出四个真缺陷（连续第 7 批立功）
+三个 tab 的 `useEffect(…, [fetchData, setLoading])` 都用了 t（那条"统计数据加载失败"提示），
+`viewer.jsx` 的 `useMemo(…, [data])` 把 t 传给了 `getRecentTimeDes`（相对时间文案）⇒ 四处都要加 t。
+其中 🔴 `getRecentTimeDes(timestr, now, t)` 的 t 是**第 3 个**参数（第 2 个是 now）⇒ 要显式补 `undefined`
+（上一批 `ArticleList` 里踩过同一个位次坑）。三处 t 都用 `useCallback([intl])` 包成稳定引用（§7.144 A/B）。
+
+#### E. 🔴 "大写但不是技术标识符"的普通英文词要进白名单（`TOP`）
+`最近访问TOP` / `文章访问量TOP` / `标签文章数 TOP 柱状图` 里的 `TOP` 是中文界面常见的"排行榜"装饰词
+（英文本来就是 top）⇒ 英文写成 `Top recent visits` 被"技术标识符必须原样保留"那条判据判成**契约漂移**（假红）。
+修法：加一张 `NOT_TECH_TOKENS` 白名单（目前只有 `TOP` 与 `PS`），🔴 并在注释里写明
+**`ID` / `UA` / `IP` / `URL` / `API` / `SEO` / `BUG` 一律不进表**（它们是真标识符或产品缩写；
+`about.linkIssues` 那条就是靠这个判据钉住的）。
+👉 判据要"能松一处、但把不许松的写清楚"，否则下一个人会把整条判据关掉。
+
+#### F. 🔴 探针尺子三处错（其中一处是**同一个错误的第 6 次**）
+1. 🔴 **又拿 ICU 原文去 `includes`**：`common.recentNItems` 的英文值是 `Last {count, plural, one {# item} other {# items}}`，
+   渲染出来是 `Last 3 items` ⇒ 恒不中。这是**第 6 次**犯同一条（前 5 次：备份页 totals、数据管理 tooltip、
+   评论页 totalCount、外壳页 recentNDays…）⇒ 改成量渲染后的形状（每项含单位词 + 条数等于 6）。
+   👉 🔴 **规矩：判据里凡是"期望文字"，一律从语言包的值**推不出**渲染结果时，就改成量形状（含数字/含单位词/条数）**。
+2. 🔴 **判据里写死的期望文字必须照语言包的实际值取**：繁中的量词是 **筆**（本仓库把「条」统一译成「筆」），
+   我第一版写「条」、第二版写「條」，两次都恒不中（假红）。
+3. **图表 `meta.alias` 与卡片 tip 在空数据栈里不可观察**：`articleQuantity` 只出现在坐标轴/tooltip 上，
+   而这个栈的文章数/访客数都是 0 ⇒ 图表没有轴；卡片的 tip 是 tooltip，`.anticon` 逐个 hover 也采不到
+   ⇒ 都**登记 skip 并写明实采条数**（不假装验过，也不判红）。
+
+#### G. 基线
+- admin `node --test` **776 tests / 172 suites / 0 fail**；
+- 变异对照 **8/8**（tab 标签退回硬编码 / 🔴 坐标轴别名退回硬编码（原想验中文字段名，结果挖出第二个口径缺口）/
+  三个 tab 的 useEffect 依赖拿掉 t / viewer 的 useMemo 依赖拿掉 t / `getRecentTimeDes` 拿掉 t /
+  🔴 数字下拉改回旧 API `d="条"`（本批修的真缺陷）/ 图表标题退回硬编码 / 语义空操作）；
+- 语言包 **1447 key** ×3（重复 0）；`--zh-tw-audit`：1447 key / **792** 个不同汉字 / **0 命中**（字表 69 字）；
+- 棘轮 **114 个文件 / TOTAL 38**（15 条永久例外 + 23 条欠条）；admin 类型门禁 **31/0**；
+- 🔴 **真实剩余：18 个文件 / 96 条**。下一块：`importMdzCore.js`(23) + `importMdz.ts`(2) → `restoreCore.js`(16 欠条) →
+  `migrate.tsx`(5) → `setupKeyCore.js`(3 欠条) → `Customizing.jsx`(4 欠条) → 死代码
+  `components/Editor/customContainer.tsx`(7，单独一批删，带构建验证) → 剩下的零散与永久例外。
+
 ### 7.177 期 6 第十二批：外壳与共享组件（10 个文件 124 条 → 2 条永久例外）—— 🔴 活体抓到"源码里硬编码的**中文标点**"（棘轮数不到），以及 umi 运行时里既不能 hook 也不能在加载期取 intl 的第三条路
 
 **交付**（批次边界：`components/**` 里剩下的共享组件 + umi 运行时外壳 + 服务层口令策略 + 被守卫逼出来的 Restore 页）：

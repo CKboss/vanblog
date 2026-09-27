@@ -1857,4 +1857,46 @@ export default {
   'restore.newUsernamePlaceholder': '请输入新用户名',
   'restore.newPasswordPlaceholder': '请输入新密码',
   'restore.hint': 'VanBlog 会在每次启动时在日志中打印随机的恢复密钥，同时也会将其写入到您挂载的日志目录中的 restore.key 文件中。',
+
+  // ── 🔴 期 6 第十三批：**后台首页（Welcome）整块** —— 三个 tab 的标签、统计卡片标题与 tip、
+  //    图表标题、两个集成状态 chip、表格列与加载失败提示（44 条 → 34 个新 key + 1 条复用）。
+  //    🔴 `overview.jsx` 的图表数据原来用**中文字段名**（`访客数: each.visited`）而 `yField="访客数"` 指着它：
+  //    那个键**既是数据字段名、又是坐标轴与图例上显示的文字**（两栖）⇒ 拆成两份：字段名改成 ASCII
+  //    （`visitors` / `views`，不译），显示名走 `meta.alias`（= 下面 chartVisitors / chartViews 这两条）。
+  //    ⚠️ `访客数` 与 `访问量` 的区别由那两条 tip 说明（唯一标识符 vs 每一次访问与跳转），译文必须保住这个对比。
+  'welcome.tabOverview': '数据概览',
+  'welcome.tabViewer': '访客统计',
+  'welcome.tabArticle': '文章分析',
+  'welcome.statsLoadFailed': '统计数据加载失败，请稍后重试！',
+  'welcome.chartVisitors': '访客数',
+  'welcome.chartViews': '访问量',
+  'welcome.articleCount': '文章数',
+  'welcome.totalWords': '总字数',
+  'welcome.totalVisitors': '总访客数',
+  'welcome.totalVisitorsTip': '以浏览器内缓存的唯一标识符为衡量标准计算全站独立访客的数量',
+  'welcome.todayNew': '今日新增',
+  'welcome.totalViews': '总访问数',
+  'welcome.totalViewsTip': '以每一次页面的访问及跳转为衡量标准计算全站的访问数量',
+  'welcome.chartEachVisitors': '访客数趋势图',
+  'welcome.chartEachViews': '访问量趋势图',
+  'welcome.chartTotalVisitors': '总访客数趋势图',
+  'welcome.chartTotalViews': '总访问量趋势图',
+  'welcome.baiduTongji': '百度统计',
+  'welcome.enabled': '已开启',
+  'welcome.notConfigured': '未配置',
+  'welcome.googleAnalytics': '谷歌分析',
+  'welcome.recentVisits': '最近访问',
+  'welcome.recentVisitPath': '最近访问路径',
+  'welcome.topArticleVisitors': '单篇最高访客数',
+  'welcome.topArticleVisitorsTip': '以浏览器内缓存的唯一标识符为衡量标准计算出单篇文章最高的独立访客数',
+  'welcome.topArticleViews': '单篇最高访问量',
+  'welcome.topArticleViewsTip': '以每一次页面的访问及跳转为衡量标准计算出单篇文章最高的访问量',
+  'welcome.recentTop': '最近访问TOP',
+  'welcome.articleTop': '文章访问量TOP',
+  'welcome.articleQuantity': '文章数量',
+  'welcome.categoryCount': '分类数',
+  'welcome.tagCount': '标签数',
+  'welcome.chartCategoryPie': '分类饼图',
+  'welcome.chartTagColumn': '标签文章数 TOP 柱状图',
+
 };

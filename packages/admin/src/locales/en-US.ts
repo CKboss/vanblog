@@ -1704,4 +1704,45 @@ export default {
   'restore.newUsernamePlaceholder': 'Enter a new username',
   'restore.newPasswordPlaceholder': 'Enter a new password',
   'restore.hint': 'VanBlog prints a random recovery key in the log on every start, and it also writes that key to the restore.key file inside the log directory you mounted.',
+
+  // ── 🔴 期 6 第十三批（34 keys）── 英文人工写（子代理起草、父代理跑完四道闸门：key 集合 / 无单引号无汉字
+  //    无全角标点 / 占位符对账 / 繁中零简体字）。
+  //    🔴 tab 标签用 "Visitor stats" 而不是 "Visitors"：同一个 tab 里坐标轴别名就是 "Visitors"，
+  //    两处同名会让人分不清"这是 tab 还是指标"。
+  //    🔴 两条 tip 必须保住对比：unique identifier cached in the browser（访客）vs each page visit and navigation（访问量）。
+  'welcome.tabOverview': 'Overview',
+  'welcome.tabViewer': 'Visitor stats',
+  'welcome.tabArticle': 'Post analysis',
+  'welcome.statsLoadFailed': 'Could not load the statistics. Please try again later.',
+  'welcome.chartVisitors': 'Visitors',
+  'welcome.chartViews': 'Views',
+  'welcome.articleCount': 'Posts',
+  'welcome.totalWords': 'Total words',
+  'welcome.totalVisitors': 'Total visitors',
+  'welcome.totalVisitorsTip': 'Counts the unique visitors of the whole site, measured by a unique identifier cached in the browser.',
+  'welcome.todayNew': 'New today',
+  'welcome.totalViews': 'Total views',
+  'welcome.totalViewsTip': 'Counts the views of the whole site, measured by each page visit and navigation.',
+  'welcome.chartEachVisitors': 'Visitors trend',
+  'welcome.chartEachViews': 'Views trend',
+  'welcome.chartTotalVisitors': 'Total visitors trend',
+  'welcome.chartTotalViews': 'Total views trend',
+  'welcome.baiduTongji': 'Baidu Tongji',
+  'welcome.enabled': 'On',
+  'welcome.notConfigured': 'Not configured',
+  'welcome.googleAnalytics': 'Google Analytics',
+  'welcome.recentVisits': 'Recent visits',
+  'welcome.recentVisitPath': 'Recent visit path',
+  'welcome.topArticleVisitors': 'Most visitors on one post',
+  'welcome.topArticleVisitorsTip': 'The highest number of unique visitors on a single post, measured by a unique identifier cached in the browser.',
+  'welcome.topArticleViews': 'Most views on one post',
+  'welcome.topArticleViewsTip': 'The highest number of views on a single post, measured by each page visit and navigation.',
+  'welcome.recentTop': 'Top recent visits',
+  'welcome.articleTop': 'Top posts by views',
+  'welcome.articleQuantity': 'Post count',
+  'welcome.categoryCount': 'Categories',
+  'welcome.tagCount': 'Tags',
+  'welcome.chartCategoryPie': 'Categories pie chart',
+  'welcome.chartTagColumn': 'Posts per tag (top N bar chart)',
+
 };

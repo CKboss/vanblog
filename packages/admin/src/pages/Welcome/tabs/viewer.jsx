@@ -5,7 +5,7 @@ import { getWelcomeData } from '@/services/van-blog/api';
 import ArticleList from '@/components/ArticleList';
 import { getRecentTimeDes } from '@/services/van-blog/tool';
 import { reportRequestError } from '@/services/van-blog/requestError';
-import { Link } from 'umi';
+import { Link, useIntl } from 'umi';
 import TipTitle from '@/components/TipTitle';
 import style from '../index.less';
 import NumSelect from '@/components/NumSelect';
@@ -13,6 +13,15 @@ import { useNum } from '@/services/van-blog/useNum';
 import RcResizeObserver from 'rc-resize-observer';
 
 const Viewer = () => {
+  // 🔴 期 6 第十三批：接上 i18n（语言选择必须在渲染期）。
+  // ⚠️ t 用 useCallback([intl]) 包成**稳定引用**：本文件的 useMemo / useEffect 依赖数组里要放 t
+  //    （回调体用了 t 就必须声明它，否则切语言后仍是旧译文；§7.144 B），不稳定则依赖每轮都变（§7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+
   const [data, setData] = useState();
   const [loading, setLoading] = useState(true);
   const [responsive, setResponsive] = useState(false);
@@ -26,9 +35,10 @@ const Viewer = () => {
     setLoading(true);
     // 以前只有 .then()：接口失败时 loading 永远收不掉，整页 Spin 转不停
     fetchData()
-      .catch((err) => reportRequestError(message, err, '统计数据加载失败，请稍后重试！'))
+      .catch((err) => reportRequestError(message, err, t('welcome.statsLoadFailed', '统计数据加载失败，请稍后重试！')))
       .finally(() => setLoading(false));
-  }, [fetchData, setLoading]);
+    // 🔴 依赖数组带 t：回调体里那条加载失败提示用了 t（不带就会闭包住首轮渲染的翻译器）
+  }, [fetchData, setLoading, t]);
 
   const recentHref = useMemo(() => {
     if (!data) {
@@ -46,8 +56,10 @@ const Viewer = () => {
     if (!data.siteLastVisitedTime) {
       return '-';
     }
-    return getRecentTimeDes(data?.siteLastVisitedTime);
-  }, [data]);
+    // 🔴 `getRecentTimeDes(timestr, now, t)`：t 是**第 3 个**参数（第 2 个是 now）⇒ 显式补 undefined
+    return getRecentTimeDes(data?.siteLastVisitedTime, undefined, t);
+    // 🔴 依赖数组带 t（回调体里把它传给了 getRecentTimeDes ⇒ 相对时间的文案跟着语言走）
+  }, [data, t]);
 
   return (
     <RcResizeObserver
@@ -72,18 +84,16 @@ const Viewer = () => {
                   className="ua blue"
                   target="_blank"
                   rel="noreferrer"
-                >
-                  百度统计
-                </a>
+                >{t('welcome.baiduTongji', '百度统计')}</a>
               ),
               formatter: () => {
                 if (data?.enableBaidu) {
-                  return <span>已开启</span>;
+                  return <span>{t('welcome.enabled', '已开启')}</span>;
                 } else {
                   // umi 配了 base: '/admin/'，<Link> 里的路径是相对 base 的：
                   // 写成 `/admin/site/setting` 会渲染成 /admin/admin/... 直接 404。
                   // 外层 tab 由 SystemConfig 的 `tab` 读，内层由 SiteInfo 的 `siteInfoTab` 读。
-                  return <Link to={`/site/setting?tab=siteInfo&siteInfoTab=more`}>未配置</Link>;
+                  return <Link to={`/site/setting?tab=siteInfo&siteInfoTab=more`}>{t('welcome.notConfigured', '未配置')}</Link>;
                 }
               },
               status: data?.enableBaidu ? 'success' : 'error',
@@ -99,15 +109,13 @@ const Viewer = () => {
                   className="ua blue"
                   target="_blank"
                   rel="noreferrer"
-                >
-                  谷歌分析
-                </a>
+                >{t('welcome.googleAnalytics', '谷歌分析')}</a>
               ),
               formatter: () => {
                 if (data?.enableGA) {
-                  return <span>已开启</span>;
+                  return <span>{t('welcome.enabled', '已开启')}</span>;
                 } else {
-                  return <Link to={`/site/setting?tab=siteInfo&siteInfoTab=more`}>未配置</Link>;
+                  return <Link to={`/site/setting?tab=siteInfo&siteInfoTab=more`}>{t('welcome.notConfigured', '未配置')}</Link>;
                 }
               },
               status: data?.enableGA ? 'success' : 'error',
@@ -117,7 +125,7 @@ const Viewer = () => {
             colSpan={responsive ? 24 : 6}
             statistic={{
               layout: responsive ? 'horizontal' : 'vertical',
-              title: '最近访问',
+              title: t('welcome.recentVisits', '最近访问'),
               value: recentVisitTime,
             }}
           />
@@ -125,7 +133,7 @@ const Viewer = () => {
             colSpan={responsive ? 24 : 6}
             statistic={{
               layout: responsive ? 'horizontal' : 'vertical',
-              title: '最近访问路径',
+              title: t('welcome.recentVisitPath', '最近访问路径'),
               formatter: (val) => {
                 return (
                   <a className="ua blue" target="_blank" rel="noreferrer" href={recentHref}>
@@ -147,8 +155,8 @@ const Viewer = () => {
               layout: responsive ? 'horizontal' : 'vertical',
               title: (
                 <TipTitle
-                  title="总访客数"
-                  tip="以浏览器内缓存的唯一标识符为衡量标准计算全站独立访客的数量"
+                  title={t('welcome.totalVisitors', '总访客数')}
+                  tip={t('welcome.totalVisitorsTip', '以浏览器内缓存的唯一标识符为衡量标准计算全站独立访客的数量')}
                 />
               ),
               value: data?.totalVisited || 0,
@@ -160,8 +168,8 @@ const Viewer = () => {
               layout: responsive ? 'horizontal' : 'vertical',
               title: (
                 <TipTitle
-                  title="总访问数"
-                  tip="以每一次页面的访问及跳转为衡量标准计算全站的访问数量"
+                  title={t('welcome.totalViews', '总访问数')}
+                  tip={t('welcome.totalViewsTip', '以每一次页面的访问及跳转为衡量标准计算全站的访问数量')}
                 />
               ),
               value: data?.totalViewer || 0,
@@ -173,8 +181,8 @@ const Viewer = () => {
               layout: responsive ? 'horizontal' : 'vertical',
               title: (
                 <TipTitle
-                  title="单篇最高访客数"
-                  tip="以浏览器内缓存的唯一标识符为衡量标准计算出单篇文章最高的独立访客数"
+                  title={t('welcome.topArticleVisitors', '单篇最高访客数')}
+                  tip={t('welcome.topArticleVisitorsTip', '以浏览器内缓存的唯一标识符为衡量标准计算出单篇文章最高的独立访客数')}
                 />
               ),
               value: data?.maxArticleVisited || 0,
@@ -186,8 +194,8 @@ const Viewer = () => {
               layout: responsive ? 'horizontal' : 'vertical',
               title: (
                 <TipTitle
-                  title="单篇最高访问量"
-                  tip="以每一次页面的访问及跳转为衡量标准计算出单篇文章最高的访问量"
+                  title={t('welcome.topArticleViews', '单篇最高访问量')}
+                  tip={t('welcome.topArticleViewsTip', '以每一次页面的访问及跳转为衡量标准计算出单篇文章最高的访问量')}
                 />
               ),
               value: data?.maxArticleViewer || 0,
@@ -208,8 +216,8 @@ const Viewer = () => {
             <StatisticCard
               title={
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div>最近访问TOP</div>
-                  <NumSelect d="条" value={num} setValue={setNum} />
+                  <div>{t('welcome.recentTop', '最近访问TOP')}</div>
+                  <NumSelect unit="items" value={num} setValue={setNum} />
                 </div>
               }
               className={style['card-full-title']}
@@ -224,8 +232,8 @@ const Viewer = () => {
             <StatisticCard
               title={
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div>文章访问量TOP</div>
-                  <NumSelect d="条" value={num} setValue={setNum} />
+                  <div>{t('welcome.articleTop', '文章访问量TOP')}</div>
+                  <NumSelect unit="items" value={num} setValue={setNum} />
                 </div>
               }
               className={style['card-full-title']}
