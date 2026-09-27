@@ -361,7 +361,9 @@ export default {
   'recycle.permissionWrap': ' (requires {permission})',
   'recycle.actionFailure403': 'Your account is not allowed to {action} this {label}{permission}. Please ask an administrator.',
   'recycle.actionFailure401': 'Your session has expired. Please sign in again and try once more.',
-  'recycle.actionFailureGeneric': 'Could not complete this action{detail}. Please try again later.',
+  // 🔴 期 6 第十批修正：原来这条英文**漏了 {action} 占位符**（只用了 {detail}）⇒ 英文提示里不会说是哪个操作失败了。
+  //    是新加的"三份包占位符名必须一致"那条守卫抓到的（既有缺陷，不是本批引入）。
+  'recycle.actionFailureGeneric': '{action} failed{detail}. Please try again later.',
 
 
   // ── 🔴 期 3 第三批（41 keys）── 英文人工写；🔴 一律不用缩写（ICU 把单引号当转义符）。
@@ -1466,5 +1468,67 @@ export default {
   'dataManage.colLastDonate': 'Last donation',
   'dataManage.deleteDonateConfirmTitle': 'Delete the donation from "{name}"?',
   'dataManage.donateCardTitle': 'Donation details',
+
+
+  // ── 🔴 期 6 第十批（55 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 计数一律 ICU plural；`{status}` / `{name}` / `{reason}` / `{id}` 不用 plural。
+  //    🔴 walineEmbedPrefix / Suffix 两端都**不带空格**（JSX 里两侧已有字面空格）⇒
+  //    组装出来是 "Vanblog embeds Waline as the comment system."（单空格，已验）。
+  //    🔴 导航路径用已上线的英文页签措辞：Site management / System settings / Site info / Advanced / Comments。
+  'comment.helpCardTitle': 'How this works',
+  'comment.walineEmbedPrefix': 'Vanblog embeds',
+  'comment.walineEmbedSuffix': 'as the comment system.',
+  'comment.walineAdminNote': 'This admin page is also the embedded Waline admin page.',
+  'comment.walineFirstUserNote': 'Register first when you use it for the first time; the first registered user becomes the administrator by default.',
+  'comment.psWhereToDisable': 'PS: Comments are on by default. To turn them off, go to Site management->System settings->Site info->Advanced->Comment system.',
+  'comment.readSettingsFailed': 'Could not read the comment settings',
+  'comment.readSettingsFailedDetail': 'The comment system configuration could not be fetched (a network problem or the login expired). Please try again.',
+  'common.retry': 'Retry',
+  'comment.walineCardHint': 'Based on the embedded Waline; the first registered user is the administrator. It will be replaced by our own implementation in the future.',
+  'comment.walineAdminBtn': 'waline admin',
+  'comment.builtinCardHint': 'The built-in VanBlog comment system: visitors can post without registering, and you moderate, edit and delete here. Its data is separate from the Waline comments.',
+  'comment.systemOffTitle': 'The comment system is off',
+  'comment.systemOffContent': 'The site shows no comment entry at the moment and past comments are hidden as well. You can switch to the built-in comments or Waline in "System settings → Comments".',
+  'comment.goToSettings': 'Go to the settings',
+  'comment.loadFailed': 'Could not load the comments',
+  'comment.markedAs': 'Marked as "{status}"',
+  'comment.deletedToast': 'Deleted',
+  'comment.bulkApproved': 'Approved {count, plural, one {# comment} other {# comments}}',
+  'comment.bulkDeleted': 'Deleted {count, plural, one {# comment} other {# comments}}',
+  'comment.savedToast': 'Saved',
+  'comment.anonymous': 'Anonymous',
+  'comment.replyTo': 'Reply to @{name}',
+  'comment.unknownNick': 'Unknown',
+  'comment.expand': 'More',
+  'comment.pendingReason': 'Reason it is pending: {reason}',
+  'comment.colStatus': 'Status',
+  'comment.colSubmittedAt': 'Submitted at',
+  'comment.approve': 'Approve',
+  'comment.pendingShort': 'Mark as pending',
+  'comment.markSpam': 'Mark as spam',
+  'comment.deleteConfirmTitle': 'Delete this comment?',
+  'comment.deleteConfirmTitleWithReplies': 'Delete this comment? Deleting a top-level comment also deletes all of its replies.',
+  'comment.searchPlaceholder': 'Search nickname / content / email',
+  'comment.pathFilterPlaceholder': 'Filter by the article path, for example /post/1',
+  'comment.selectedCount': '{count, plural, one {# comment} other {# comments}} selected',
+  'comment.bulkApprove': 'Approve in bulk',
+  'comment.bulkDeleteConfirm': 'Delete the selected {count, plural, one {# comment} other {# comments}}?',
+  'comment.totalCount': '{count, plural, one {# comment} other {# comments}} in total',
+  'comment.noPending': 'No comments are waiting for moderation; everything is handled',
+  'comment.emptyText': 'No comments yet',
+  'comment.editTitleWithId': 'Edit comment #{id}',
+  'comment.editTitle': 'Edit comment',
+  'comment.nickMaxLength': 'At most 30 characters (a server-side limit)',
+  'comment.nickField': 'Nickname of the commenter',
+  'comment.contentField': 'Content (markdown source)',
+  'comment.contentPlaceholder': 'Comment content',
+  'comment.statusPending': 'Pending',
+  'comment.statusApproved': 'Approved',
+  'comment.statusSpam': 'Spam',
+  'comment.statusDeleted': 'Deleted',
+  'comment.statusUnknown': 'Unknown status',
+  'comment.statusAll': 'All',
+  'comment.keywordsTooMany': 'At most {max, plural, one {# moderation keyword} other {# moderation keywords}} are allowed; there are {count, plural, one {# keyword} other {# keywords}} now',
+  'comment.keywordTooLong': 'A single keyword can be at most {max, plural, one {# character} other {# characters}} long: "{keyword}..."',
 
 };

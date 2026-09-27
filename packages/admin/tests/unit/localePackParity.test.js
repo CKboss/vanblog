@@ -211,6 +211,11 @@ const IDENTICAL_ZH_TW_OK = [
   'sysconf.tabToken',
   // 🔴 期 6 第八批（补 2）：`{name} 已存在!` 简繁同形（已/存/在 都不是简体专用字）
   'urlForm.existsWithName',
+  // 🔴 期 6 第十批（评论管理页）：这四条简繁同形（匿名 / 未知 / 垃圾 / 全部 —— 都没有简体专用字）
+  'comment.anonymous',
+  'comment.unknownNick',
+  'comment.statusSpam',
+  'comment.statusAll',
   // 🔴 期 6 第九批（数据管理页）：这六条简繁同形 —— 上移/下移/排序/加密/未加密/提交成功
   //   （这些词简繁写法本来就一样，不是"复制简体充数"）
   'dataManage.moveUp',
@@ -372,12 +377,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 86,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 86）⇒ 遍历或解析器坏了`,
+      FILES.length >= 89,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 89）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1580,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1580）⇒ 疑似解析器坏了`,
+      calls.length >= 1660,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1660）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -455,6 +460,9 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/DataManage/tabs/Link.jsx',
       'src/pages/DataManage/tabs/Menu.tsx',
       'src/pages/DataManage/tabs/Donate.jsx',
+      'src/pages/CommentManage/index.jsx',
+      'src/pages/CommentManage/BuiltinComments.jsx',
+      'src/services/van-blog/commentAdmin.js',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -787,6 +795,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       //    （`OrderButtons` / `HiddenSwitch` 是模块级**组件**，自己用 hook ⇒ 不在这张表里）
       'src/pages/DataManage/tabs/Category.jsx': ['showDemoBlocked', 'createColumns'],
       'src/pages/DataManage/tabs/Tag.jsx': ['buildColumns'],
+      // 🔴 期 6 第十批：服务层 `commentAdmin.js`（状态标签 + 关键词校验文案）
+      'src/services/van-blog/commentAdmin.js': [
+        'commentStatusMeta', 'statusMeta', 'statusTabs', 'validateKeywords',
+      ],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -1749,6 +1761,8 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
       //    就是因为这张表里没有它们 ⇒ 又是那条老规矩：**新增注入式模块时，identity 常量要同时登记**。
       'src/utils/analysisFields.js': ['GA_ANALYSIS_FIELD', 'BAIDU_ANALYSIS_FIELD', 'ANALYSIS_ADMIN_PATH'],
       'src/utils/walineEmailFields.js': ['WALINE_EMAIL_FIELDS', 'WALINE_ADMIN_PATH'],
+      // 🔴 期 6 第十批：commentAdmin 的状态表也有 identity 视图
+      'src/services/van-blog/commentAdmin.js': ['COMMENT_STATUS_META'],
       'src/services/van-blog/tagTokens.js': ['TAG_FIELD_PLACEHOLDER', 'TAG_FIELD_TOOLTIP'],
       'src/services/van-blog/importPathname.js': ['PATHNAME_FIELD'],
       'src/services/van-blog/schedule.js': [
@@ -1940,6 +1954,52 @@ describe('🔴 后台导航路径常量 ↔ 页签标签（三处独立陈述必
       assert.strictEqual(a[0], w[0], `${loc}: 两条导航路径的侧栏组名不一致`);
       assert.strictEqual(a[1], w[1], `${loc}: 两条导航路径的页面名不一致`);
       assert.strictEqual(a[1], pack['menu.site.setting'], `${loc}: 导航路径里的页面名必须等于侧边栏菜单「系统设置」`);
+      // 🔴 期 6 第十批：同族的**第三处**独立陈述 —— 评论管理页那张说明卡里的一句 PS
+      //    （`站点管理->系统设置->站点配置->高级设置->是否开启评论系统`，用 `->` 分隔）。
+      //    它必须与页签标签一致，否则英文用户按路径点不到地方（这一句是"跨面导航路径词汇"，
+      //    当初就是因为它与页签标签互相引用，两组文案被**一起延期**；现在一起翻了，就一起钉住）。
+      const ps = String(pack['comment.psWhereToDisable']);
+      assert.ok(ps.includes(pack['sysconf.tabSiteInfo']),
+        `${loc}: 评论页那句 PS 里的「站点配置」必须与页签标签一致 ⇒ ${JSON.stringify(ps).slice(0, 120)}`);
+      assert.ok(ps.includes(pack['sysconf.tabAdvance']),
+        `${loc}: 评论页那句 PS 里的「高级设置」必须与页签标签一致 ⇒ ${JSON.stringify(ps).slice(0, 120)}`);
+      assert.ok(ps.includes(pack['menu.site.setting']),
+        `${loc}: 评论页那句 PS 里的「系统设置」必须与侧边栏菜单一致 ⇒ ${JSON.stringify(ps).slice(0, 120)}`);
     }
+  });
+});
+
+describe('🔴 三份包里同一个 key 的**占位符名**必须完全一致', () => {
+  it('zh-CN / zh-TW / en-US 的占位符集合逐 key 相同（否则界面会渲染出字面 {count}）', () => {
+    // ## 为什么要这条（2026-09-27 期 6 第十批，变异对照 B35-M6 抓出来的**守卫缺口**）
+    // 把 en-US 里 `comment.totalCount` 的 `{count, plural, …}` 改成 `{total, plural, …}`
+    // （代码传的是 `{ count }`）⇒ 🔴 **454 个测试全绿**。
+    // 原因：既有的"占位符 ↔ values 对账"只比 **defaultMessage（= zh-CN）与调用点实参**，
+    // 从来没人比过**译文里的占位符名**。而译文里写错一个字母，界面上就会原样渲染出 `{total}`
+    // —— 这类缺陷既不会报错、也不会让任何既有判据变红，只有用户看得见。
+    // ⇒ 补上这条：三份包逐 key 比占位符**名字集合**（用与既有判据同一套 ICU 感知口径：
+    //    先挖掉 `{{`/`}}` 转义，再收 `{name` 形式的标识符，并排除 plural 子消息里的 one/other/… 关键字）。
+    const names = (value) => {
+      const masked = String(value == null ? '' : value).replace(/\{\{|\}\}/g, '\u0000');
+      const out = new Set();
+      for (const m of masked.matchAll(/\{\s*([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        const w = m[1];
+        if (['one', 'other', 'few', 'many', 'two', 'zero', 'select', 'plural'].includes(w)) continue;
+        out.add(w);
+      }
+      return [...out].sort().join(',');
+    };
+    const offenders = [];
+    for (const k of Object.keys(packs['zh-CN'])) {
+      const a = names(packs['zh-CN'][k]);
+      const b = names(packs['zh-TW'][k]);
+      const c = names(packs['en-US'][k]);
+      if (a !== b) offenders.push(`${k}: zh-TW 的占位符是 {${b}}，应与 zh-CN 的 {${a}} 相同`);
+      if (a !== c) offenders.push(`${k}: en-US 的占位符是 {${c}}，应与 zh-CN 的 {${a}} 相同`);
+    }
+    // 🔴 反空转：这条判据必须真的在看东西（包里带占位符的 key 不可能只有个位数）
+    const withPh = Object.keys(packs['zh-CN']).filter((k) => names(packs['zh-CN'][k]) !== '');
+    assert.ok(withPh.length >= 60, `带占位符的 key 只有 ${withPh.length} 个（下界 60）⇒ 口径可能坏了`);
+    assert.deepStrictEqual(offenders, [], '🔴 译文里的占位符名与 zh-CN 不一致：\n  ' + offenders.slice(0, 8).join('\n  '));
   });
 });

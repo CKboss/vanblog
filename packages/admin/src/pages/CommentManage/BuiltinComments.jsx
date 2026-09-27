@@ -1,4 +1,5 @@
 import { deleteComment, getComments, updateComment } from '@/services/van-blog/api';
+import { useIntl } from 'umi';
 import { statusMeta, statusTabs } from '@/services/van-blog/commentAdmin';
 import { formatTimeAgo } from '@/services/van-blog/relativeTime';
 import { reportRequestError } from '@/services/van-blog/requestError';
@@ -32,6 +33,18 @@ const { Paragraph, Text } = Typography;
  * 不许 console.log 整条评论对象，也不许把这些字段透传给别的组件。
  */
 export default function BuiltinComments() {
+  // 🔴 期 6 第十批：接上 i18n（语言选择必须在渲染期，useIntl 是 hook）。
+  // ⚠️ `message.*` / `Modal.*` 渲染进脱离 React 树的独立根（§7.151）⇒ 传算好的字符串。
+  // 🔴 t 用 useCallback([intl]) 包成**稳定引用**：本文件的 useCallback 依赖数组里要放 t
+  //    （hook 的回调体用了 t 就必须声明它，否则切语言后仍是旧译文 —— §7.144 B），
+  //    而不稳定的 t 会让依赖数组每轮都变 ⇒ 重复请求/无限重渲染（§7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+
+
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState({});
@@ -62,11 +75,12 @@ export default function BuiltinComments() {
       // counts 是服务端全局计数（不随筛选变化），直接跟着列表回来，页签不用另发请求
       setCounts(data?.counts || {});
     } catch (err) {
-      reportRequestError(message, err, '加载评论失败！');
+      reportRequestError(message, err, t('comment.loadFailed', '加载评论失败！'));
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, status, keyword, pathFilter]);
+    // 🔴 依赖数组必须带 t（回调体里用了它：加载失败/状态标签/空态文案）
+  }, [page, pageSize, status, keyword, pathFilter, t]);
 
   useEffect(() => {
     fetchList();
@@ -86,7 +100,7 @@ export default function BuiltinComments() {
       await fetchList();
       return true;
     } catch (err) {
-      reportRequestError(message, err, '操作失败，请稍后重试！');
+      reportRequestError(message, err, t('request.defaultError', '操作失败，请稍后重试！'));
       return false;
     } finally {
       setMutating(false);
@@ -96,23 +110,28 @@ export default function BuiltinComments() {
   const changeStatus = (record, nextStatus) =>
     runMutation(
       () => updateComment(record.id, { status: nextStatus }),
-      `已标记为「${statusMeta(nextStatus).label}」！`,
+      t('comment.markedAs', '已标记为「{status}」！', { status: statusMeta(nextStatus, t).label }),
     );
 
-  const removeComment = (record) => runMutation(() => deleteComment(record.id), '已删除！');
+  const removeComment = (record) => runMutation(() => deleteComment(record.id), t('comment.deletedToast', '已删除！'));
 
   // 批量只做了「通过 / 删除」两个高频操作，逐条并发调用现有接口，服务端没有批量路由
   const bulkApprove = () =>
     runMutation(async () => {
       await Promise.all(selectedRowKeys.map((id) => updateComment(id, { status: 'approved' })));
       setSelectedRowKeys([]);
-    }, `已批量通过 ${selectedRowKeys.length} 条评论！`);
+    },
+      // 🔴 原来是"模板字符串 + 插值"⇒ 收成一条带 {count} 的 ICU 整句（英文要 plural：1 comment / N comments）
+      t('comment.bulkApproved', '已批量通过 {count} 条评论！', { count: selectedRowKeys.length }),
+    );
 
   const bulkDelete = () =>
     runMutation(async () => {
       await Promise.all(selectedRowKeys.map((id) => deleteComment(id)));
       setSelectedRowKeys([]);
-    }, `已批量删除 ${selectedRowKeys.length} 条评论！`);
+    },
+      t('comment.bulkDeleted', '已批量删除 {count} 条评论！', { count: selectedRowKeys.length }),
+    );
 
   const openEdit = (record) => {
     setEditTarget(record);
@@ -137,7 +156,7 @@ export default function BuiltinComments() {
     }
     const ok = await runMutation(
       () => updateComment(editTarget.id, { nick: values.nick, content: values.content }),
-      '已保存！',
+      t('comment.savedToast', '已保存！'),
     );
     // 保存失败时弹窗留着，用户改完可以直接再提交
     if (ok) {
@@ -147,18 +166,20 @@ export default function BuiltinComments() {
 
   const columns = [
     {
-      title: '昵称',
+      title: t('common.colNickname', '昵称'),
       dataIndex: 'nick',
       width: 170,
       render: (_, record) => (
         <Space direction="vertical" size={0}>
           <Space size={4} wrap>
-            <span>{record.nick || '匿名'}</span>
-            {record.isAuthor ? <Tag color="blue">作者</Tag> : null}
+            <span>{record.nick || t('comment.anonymous', '匿名')}</span>
+            {record.isAuthor ? <Tag color="blue">{t('common.colAuthor', '作者')}</Tag> : null}
           </Space>
           {record.parentId ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              回复 @{record.replyToNick || '未知'}
+              {t('comment.replyTo', '回复 @{name}', {
+                name: record.replyToNick || t('comment.unknownNick', '未知'),
+              })}
             </Text>
           ) : null}
           {record.email ? (
@@ -170,27 +191,27 @@ export default function BuiltinComments() {
       ),
     },
     {
-      title: '内容',
+      title: t('recycle.labelFallback', '内容'),
       dataIndex: 'content',
       render: (_, record) => (
         <div style={{ maxWidth: 480 }}>
           {/* 只显示 markdown 源码、不渲染成 HTML：评论内容来自匿名访客，直接渲染等于存储型 XSS */}
           <Paragraph
             style={{ marginBottom: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-            ellipsis={{ rows: 2, expandable: true, symbol: '展开' }}
+            ellipsis={{ rows: 2, expandable: true, symbol: t('comment.expand', '展开') }}
           >
             {record.content}
           </Paragraph>
           {record.reason ? (
             <Text type="warning" style={{ fontSize: 12 }}>
-              待审原因：{record.reason}
+              {t('comment.pendingReason', '待审原因：{reason}', { reason: record.reason })}
             </Text>
           ) : null}
         </div>
       ),
     },
     {
-      title: '文章',
+      title: t('common.article', '文章'),
       dataIndex: 'articleId',
       width: 90,
       render: (_, record) => (
@@ -200,21 +221,21 @@ export default function BuiltinComments() {
       ),
     },
     {
-      title: '状态',
+      title: t('comment.colStatus', '状态'),
       dataIndex: 'status',
       width: 90,
       render: (_, record) => {
-        const meta = statusMeta(record.status);
+        const meta = statusMeta(record.status, t);
         return <Tag color={meta.color}>{meta.label}</Tag>;
       },
     },
     {
-      title: '提交时间',
+      title: t('comment.colSubmittedAt', '提交时间'),
       dataIndex: 'createdAt',
       width: 110,
       render: (_, record) => (
         <Tooltip title={record.createdAt ? new Date(record.createdAt).toLocaleString() : '-'}>
-          <span>{formatTimeAgo(record.createdAt)}</span>
+          <span>{formatTimeAgo(record.createdAt, t)}</span>
         </Tooltip>
       ),
     },
@@ -225,33 +246,33 @@ export default function BuiltinComments() {
       render: (_, record) => <span style={{ wordBreak: 'break-all' }}>{record.ip || '-'}</span>,
     },
     {
-      title: '操作',
+      title: t('common.colOption', '操作'),
       key: 'action',
       width: 230,
       fixed: 'right',
       render: (_, record) => (
         <Space size={4} wrap>
           {record.status !== 'approved' ? (
-            <a onClick={() => changeStatus(record, 'approved')}>通过</a>
+            <a onClick={() => changeStatus(record, 'approved')}>{t('comment.approve', '通过')}</a>
           ) : null}
           {record.status !== 'pending' ? (
-            <a onClick={() => changeStatus(record, 'pending')}>待审</a>
+            <a onClick={() => changeStatus(record, 'pending')}>{t('comment.pendingShort', '待审')}</a>
           ) : null}
           {record.status !== 'spam' ? (
-            <a onClick={() => changeStatus(record, 'spam')}>标记垃圾</a>
+            <a onClick={() => changeStatus(record, 'spam')}>{t('comment.markSpam', '标记垃圾')}</a>
           ) : null}
-          <a onClick={() => openEdit(record)}>编辑</a>
+          <a onClick={() => openEdit(record)}>{t('common.editPost', '编辑')}</a>
           <Popconfirm
             title={
               record.rootId
-                ? '确认删除这条评论吗？'
-                : '确认删除这条评论吗？删除顶层评论会连带删除它的全部回复'
+                ? t('comment.deleteConfirmTitle', '确认删除这条评论吗？')
+                : t('comment.deleteConfirmTitleWithReplies', '确认删除这条评论吗？删除顶层评论会连带删除它的全部回复')
             }
-            okText="删除"
-            cancelText="取消"
+            okText={t('common.delete', '删除')}
+            cancelText={t('init.restore.confirmCancel', '取消')}
             onConfirm={() => removeComment(record)}
           >
-            <a style={{ color: '#ff4d4f' }}>删除</a>
+            <a style={{ color: '#ff4d4f' }}>{t('common.delete', '删除')}</a>
           </Popconfirm>
         </Space>
       ),
@@ -268,13 +289,13 @@ export default function BuiltinComments() {
           setSelectedRowKeys([]);
         }}
       >
-        {statusTabs(counts).map((tab) => (
+        {statusTabs(counts, t).map((tab) => (
           <TabPane tab={`${tab.label} (${tab.count})`} key={tab.key} />
         ))}
       </Tabs>
       <Space style={{ marginBottom: 12 }} wrap>
         <Input.Search
-          placeholder="搜索昵称 / 内容 / 邮箱"
+          placeholder={t('comment.searchPlaceholder', '搜索昵称 / 内容 / 邮箱')}
           allowClear
           style={{ width: 240 }}
           onSearch={(value) => {
@@ -283,7 +304,7 @@ export default function BuiltinComments() {
           }}
         />
         <Input.Search
-          placeholder="按文章路径过滤，如 /post/1"
+          placeholder={t('comment.pathFilterPlaceholder', '按文章路径过滤，如 /post/1')}
           allowClear
           style={{ width: 240 }}
           onSearch={(value) => {
@@ -291,22 +312,22 @@ export default function BuiltinComments() {
             setPage(1);
           }}
         />
-        <Button onClick={() => fetchList()}>刷新</Button>
+        <Button onClick={() => fetchList()}>{t('recycle.refresh', '刷新')}</Button>
         {selectedRowKeys.length ? (
           <>
-            <Text type="secondary">已选 {selectedRowKeys.length} 条</Text>
-            <Button size="small" type="primary" loading={mutating} onClick={bulkApprove}>
-              批量通过
-            </Button>
+            <Text type="secondary">
+              {t('comment.selectedCount', '已选 {count} 条', { count: selectedRowKeys.length })}
+            </Text>
+            <Button size="small" type="primary" loading={mutating} onClick={bulkApprove}>{t('comment.bulkApprove', '批量通过')}</Button>
             <Popconfirm
-              title={`确认删除选中的 ${selectedRowKeys.length} 条评论吗？`}
-              okText="删除"
-              cancelText="取消"
+              title={t('comment.bulkDeleteConfirm', '确认删除选中的 {count} 条评论吗？', {
+                count: selectedRowKeys.length,
+              })}
+              okText={t('common.delete', '删除')}
+              cancelText={t('init.restore.confirmCancel', '取消')}
               onConfirm={bulkDelete}
             >
-              <Button size="small" danger loading={mutating}>
-                批量删除
-              </Button>
+              <Button size="small" danger loading={mutating}>{t('common.batchDelete', '批量删除')}</Button>
             </Popconfirm>
           </>
         ) : null}
@@ -329,7 +350,9 @@ export default function BuiltinComments() {
           total,
           showSizeChanger: true,
           pageSizeOptions: ['10', '20', '50', '100'],
-          showTotal: (t) => `共 ${t} 条`,
+          // 🔴 这个形参原本就叫 `t`（antd 传进来的是**总数**）⇒ 会遮蔽翻译器（本项目"t 遮蔽"那一族）
+          //    ⇒ 改名 `total`，并把"共 N 条"收成一条 ICU 整句（英文要用 plural）。
+          showTotal: (total) => t('comment.totalCount', '共 {count} 条', { count: total }),
           onChange: (p, ps) => {
             // 改每页条数时回到第一页，否则 current 可能停在不存在的页码上
             setPage(ps !== pageSize ? 1 : p);
@@ -338,15 +361,19 @@ export default function BuiltinComments() {
           },
         }}
         locale={{
-          emptyText: status === 'pending' ? '没有待审核的评论，全部处理完了' : '暂无评论',
+          emptyText: status === 'pending' ? t('comment.noPending', '没有待审核的评论，全部处理完了') : t('comment.emptyText', '暂无评论'),
         }}
       />
       <Modal
-        title={editTarget ? `编辑评论 #${editTarget.id}` : '编辑评论'}
+        title={
+          editTarget
+            ? t('comment.editTitleWithId', '编辑评论 #{id}', { id: editTarget.id })
+            : t('comment.editTitle', '编辑评论')
+        }
         visible={editTarget !== null}
         confirmLoading={mutating}
-        okText="保存"
-        cancelText="取消"
+        okText={t('common.save', '保存')}
+        cancelText={t('init.restore.confirmCancel', '取消')}
         destroyOnClose
         onOk={submitEdit}
         onCancel={() => setEditTarget(null)}
@@ -354,18 +381,18 @@ export default function BuiltinComments() {
         <Form form={editForm} layout="vertical" preserve={false}>
           <Form.Item
             name="nick"
-            label="昵称"
-            rules={[{ required: true, message: '这是必填项' }]}
-            extra="不超过 30 个字符（服务端限制）"
+            label={t('common.colNickname', '昵称')}
+            rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
+            extra={t('comment.nickMaxLength', '不超过 30 个字符（服务端限制）')}
           >
-            <Input maxLength={30} placeholder="评论者昵称" />
+            <Input maxLength={30} placeholder={t('comment.nickField', '评论者昵称')} />
           </Form.Item>
           <Form.Item
             name="content"
-            label="内容（markdown 源码）"
-            rules={[{ required: true, message: '这是必填项' }]}
+            label={t('comment.contentField', '内容（markdown 源码）')}
+            rules={[{ required: true, message: t('init.field.required', '这是必填项') }]}
           >
-            <Input.TextArea rows={8} placeholder="评论内容" />
+            <Input.TextArea rows={8} placeholder={t('comment.contentPlaceholder', '评论内容')} />
           </Form.Item>
         </Form>
       </Modal>

@@ -13,12 +13,28 @@
 // 服务端 comment.provider.ts 认的四个状态，顺序即页签顺序
 const COMMENT_STATUSES = ['pending', 'approved', 'spam', 'deleted'];
 
-const COMMENT_STATUS_META = {
-  pending: { label: '待审核', color: 'orange' },
-  approved: { label: '已通过', color: 'green' },
-  spam: { label: '垃圾', color: 'red' },
-  deleted: { label: '已删除', color: 'default' },
-};
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。这是服务层纯逻辑模块（裸 node 下也要能 require），
+ * 拿不到 hook ⇒ 由消费方在渲染期把 t 传进来；🔴 不传 t ⇒ 输出与改造前**逐字相同**。
+ * ⚠️ 下面大写常量是 **identity 视图**（给单测与还没接 i18n 的消费方用）；
+ *    已接 i18n 的消费方必须调函数版并传 t（localePackParity 有判据 + 反证盯着）。
+ */
+const IDENTITY_T = (id, defaultMessage, values) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+
+const commentStatusMeta = (t = IDENTITY_T) => ({
+  pending: { label: t('comment.statusPending', '待审核'), color: 'orange' },
+  approved: { label: t('comment.statusApproved', '已通过'), color: 'green' },
+  spam: { label: t('comment.statusSpam', '垃圾'), color: 'red' },
+  deleted: { label: t('comment.statusDeleted', '已删除'), color: 'default' },
+});
+
+/** identity 视图 */
+const COMMENT_STATUS_META = commentStatusMeta();
 
 // 与服务端 CommentSetting 的默认值/上限保持一致（server 是权威，这里只做表单兜底）
 const COMMENT_PROVIDERS = ['builtin', 'waline', 'off'];
@@ -39,10 +55,11 @@ const DEFAULT_COMMENT_SETTING = {
 };
 
 /** 状态 → { label, color }；未知状态也要能渲染（脏数据不能让整列崩掉） */
-function statusMeta(status) {
+function statusMeta(status, t = IDENTITY_T) {
+  const meta = commentStatusMeta(t);
   return (
-    COMMENT_STATUS_META[status] || {
-      label: String(status || '未知状态'),
+    meta[status] || {
+      label: status ? String(status) : t('comment.statusUnknown', '未知状态'),
       color: 'default',
     }
   );
@@ -53,17 +70,20 @@ function statusMeta(status) {
  * 服务端 status=all 的过滤器是 `{ $ne: 'deleted' }`，页签计数若把已删除算进去，
  * 数字就会和列表实际条数对不上。
  */
-function statusTabs(counts) {
+// 🔴 注意：这个函数体里原本有一个 `.filter((t) => …)` 的**局部参数也叫 t** ⇒ 会遮蔽翻译器
+//    （本项目"t 遮蔽"那一族）⇒ 局部参数改名 `tab`。
+function statusTabs(counts, t = IDENTITY_T) {
+  const meta = commentStatusMeta(t);
   const safe = counts && typeof counts === 'object' ? counts : {};
   const tabs = COMMENT_STATUSES.map((key) => ({
     key,
-    label: COMMENT_STATUS_META[key].label,
+    label: meta[key].label,
     count: Number(safe[key]) || 0,
   }));
   const all = tabs
-    .filter((t) => t.key !== 'deleted')
-    .reduce((sum, t) => sum + t.count, 0);
-  tabs.push({ key: 'all', label: '全部', count: all });
+    .filter((tab) => tab.key !== 'deleted')
+    .reduce((sum, tab) => sum + tab.count, 0);
+  tabs.push({ key: 'all', label: t('comment.statusAll', '全部'), count: all });
   return tabs;
 }
 
@@ -120,14 +140,21 @@ function normalizeCommentSetting(raw) {
  * 保存前校验关键词，返回给用户的错误文案；合法返回 null。
  * 上限（200 个 / 每个 30 字符）和服务端一致，提前拦下来比等 400 报错友好。
  */
-function validateKeywords(keywords) {
+function validateKeywords(keywords, t = IDENTITY_T) {
   const list = Array.isArray(keywords) ? keywords : [];
   if (list.length > MAX_KEYWORDS) {
-    return `待审关键词最多 ${MAX_KEYWORDS} 个，当前 ${list.length} 个`;
+    // 🔴 原来是"模板字符串 + 两个插值"⇒ 收成一条带 {max}/{count} 的 ICU 整句（英文语序与复数都不同）
+    return t('comment.keywordsTooMany', '待审关键词最多 {max} 个，当前 {count} 个', {
+      max: MAX_KEYWORDS,
+      count: list.length,
+    });
   }
   const tooLong = list.find((k) => String(k).length > MAX_KEYWORD_LENGTH);
   if (tooLong !== undefined) {
-    return `单个关键词不能超过 ${MAX_KEYWORD_LENGTH} 字符：「${String(tooLong).slice(0, 10)}…」`;
+    return t('comment.keywordTooLong', '单个关键词不能超过 {max} 字符：「{keyword}…」', {
+      max: MAX_KEYWORD_LENGTH,
+      keyword: String(tooLong).slice(0, 10),
+    });
   }
   return null;
 }

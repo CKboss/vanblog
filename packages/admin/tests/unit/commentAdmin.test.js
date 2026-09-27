@@ -98,7 +98,8 @@ describe('评论管理页：先读设置，再按 provider 分三个分支', () 
   it('进页面先拉 GET /api/admin/setting/comment，失败给重试而不是误判成「已关闭」', () => {
     assert.match(page, /import \{ getCommentSetting \} from '@\/services\/van-blog\/api';/);
     assert.match(page, /const \{ data \} = await getCommentSetting\(\);/);
-    assert.match(page, /reportRequestError\(message, err, '读取评论设置失败！'\)/);
+    // 🔴 期 6 第十批起这些文案走 t() ⇒ 锚点改成**两种形状都认**（性质没放：必须是这句中文/必须调这个函数）
+    assert.match(page, /reportRequestError\(message, err, (t\('[^']+', )?'读取评论设置失败！'\)?\)/);
     // setting 为 null（拉取失败）时渲染重试入口；不能掉进 off 分支
     assert.match(page, /if \(!setting\) \{/);
     assert.match(page, /onClick=\{fetchSetting\}/);
@@ -110,7 +111,8 @@ describe('评论管理页：先读设置，再按 provider 分三个分支', () 
     assert.match(page, /return `\$\{protocol\}\/\/\$\{hostname\}:8360\/ui`;/);
     assert.match(page, /return '\/ui\/';/);
     assert.match(page, /<iframe/);
-    assert.match(page, /title="waline 后台"/);
+    // 🔴 同上：属性形式从 `title="waline 后台"` 变成 `title={t('…', 'waline 后台')}`
+    assert.match(page, /title=(\{t\('[^']+', 'waline 后台'\)|"waline 后台")/);
     assert.match(page, /src=\{src\}/);
   });
 
@@ -138,14 +140,14 @@ describe('评论管理面板：写操作 try/catch/finally + reportRequestError'
   it('列表加载：catch 里 reportRequestError，finally 里一定收掉 loading', () => {
     const fetchFn = slice(code, 'const fetchList = useCallback', 'const runMutation = async');
     assert.match(fetchFn, /try \{/);
-    assert.match(fetchFn, /reportRequestError\(message, err, '加载评论失败！'\)/);
+    assert.match(fetchFn, /reportRequestError\(message, err, (t\('[^']+', )?'加载评论失败！'\)?\)/);
     assert.match(fetchFn, /\} finally \{\s*setLoading\(false\);\s*\}/);
   });
 
   it('所有写操作统一走 runMutation：finally 收 mutating，失败走 reportRequestError', () => {
     const fn = slice(code, 'const runMutation = async', 'const changeStatus =');
     assert.match(fn, /try \{/);
-    assert.match(fn, /reportRequestError\(message, err, '操作失败，请稍后重试！'\)/);
+    assert.match(fn, /reportRequestError\(message, err, (t\('[^']+', )?'操作失败，请稍后重试！'\)?\)/);
     assert.match(fn, /\} finally \{\s*setMutating\(false\);\s*\}/);
     assert.equal(
       (codeOnly(code).match(/setMutating\(false\)/g) || []).length,
@@ -168,20 +170,25 @@ describe('评论管理面板：写操作 try/catch/finally + reportRequestError'
 
   it('表格列齐全：昵称(作者/回复)、内容、文章、状态、提交时间(相对+绝对)、IP、操作', () => {
     for (const title of ['昵称', '内容', '文章', '状态', '提交时间', 'IP', '操作']) {
-      assert.match(code, new RegExp(`title: '${title}'`), `缺少「${title}」列`);
+      // 🔴 期 6 第十批起列标题走 t() ⇒ 锚点两种形状都认（性质没放：这一列必须存在且标题是这句中文）
+      assert.match(code, new RegExp(`title: (t\\('[^']+', )?'${title}'`), `缺少「${title}」列`);
     }
-    assert.match(code, /record\.isAuthor \? <Tag color="blue">作者<\/Tag>/);
-    assert.match(code, /回复 @\{record\.replyToNick/);
+    // 🔴 同上：JSX 文本从 `>作者<` 变成 `>{t('common.colAuthor', '作者')}<`
+    assert.match(code, /record\.isAuthor \? <Tag color="blue">(>\s*)?\{?t?\(?'?[^<]*作者/);
+    // 🔴 「回复 @xxx」收成了 ICU 整句 `comment.replyTo`（{name} 占位符）⇒ 锚点改成认这两种形状
+    assert.match(code, /(回复 @\{record\.replyToNick|'回复 @\{name\}', \{\s*name: record\.replyToNick)/);
     assert.match(code, /<a href=\{record\.path\} target="_blank" rel="noreferrer">/);
     assert.match(code, /#\{record\.articleId\}/);
-    assert.match(code, /statusMeta\(record\.status\)/);
+    // 🔴 statusMeta 现在也是注入式的 ⇒ 调用点必须传 t（localePackParity 有一条判据专门盯这件事）
+    assert.match(code, /statusMeta\(record\.status, t\)/);
     assert.match(code, /<Tooltip title=\{record\.createdAt \? new Date\(record\.createdAt\)\.toLocaleString\(\) : '-'\}>/);
-    assert.match(code, /formatTimeAgo\(record\.createdAt\)/);
+    assert.match(code, /formatTimeAgo\(record\.createdAt(, t)?\)/);
     // 内容是匿名访客提交的 markdown 源码，只能按纯文本展示，渲染成 HTML 就是存储型 XSS
     assert.doesNotMatch(codeOnly(code), /dangerouslySetInnerHTML/);
-    assert.match(code, /ellipsis=\{\{ rows: 2, expandable: true, symbol: '展开' \}\}/);
+    // 🔴 期 6 第十批起 symbol 走 t()（性质没放：内容列必须是"两行截断 + 可展开 + 展开文案是「展开」"）
+    assert.match(code, /ellipsis=\{\{ rows: 2, expandable: true, symbol: (t\('[^']+', )?'展开'\)? \}\}/);
     // 状态页签带计数（counts 跟着列表接口回来）
-    assert.match(code, /statusTabs\(counts\)\.map/);
+    assert.match(code, /statusTabs\(counts, t\)\.map/);
   });
 });
 
@@ -256,7 +263,8 @@ describe('「评论系统」设置卡片：七个字段全量提交，保存后�
     assert.match(code, /max=\{MAX_CONTENT_LENGTH_CAP\}/);
     assert.match(code, /max=\{RATE_LIMIT_CAP\}/);
     assert.match(code, /mode="tags"/);
-    assert.match(code, /validateKeywords\(payload\.keywords\)/);
+    // 🔴 同上：validateKeywords 返回的就是给用户看的错误文案 ⇒ 调用点必须传 t
+    assert.match(code, /validateKeywords\(payload\.keywords, t\)/);
     // 切到内置不迁移 Waline 数据的提示必须在
     assert.match(code, /不会迁移已有的 Waline 评论/);
     // 三种审核策略的文案都在

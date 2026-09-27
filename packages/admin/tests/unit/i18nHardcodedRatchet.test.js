@@ -315,6 +315,16 @@ const BUDGET = {
   'src/pages/DataManage/tabs/Link.jsx': 0,
   'src/pages/DataManage/tabs/Menu.tsx': 0,
   'src/pages/DataManage/tabs/Donate.jsx': 0,
+  // 🔴 期 6 第十批（2026-09-27）：**评论管理页整块**（pageSurface 报的 3 个文件一起做）82 条 ⇒ 都预算 0。
+  //   `commentAdmin.js` 是服务层纯逻辑 ⇒ 注入式翻译器（函数版 + identity 视图），两个消费方
+  //   （`BuiltinComments.jsx` / `SystemConfig/tabs/CommentSystem.jsx`）都传了 t。
+  //   🔴 `statusTabs` 里原本有个 `.filter((t) => …)` 的**局部参数也叫 t** ⇒ 会遮蔽翻译器，已改名 `tab`；
+  //   🔴 `showTotal: (t) => …`（antd 传的是总数）同理 ⇒ 改名 `total`。这两处都是"t 遮蔽"那一族的**新形状**：
+  //   不是"文件里声明了 t 却又用 t 做别的"，而是**第三方回调的形参恰好叫 t**。
+  //   ⚠️ `services/van-blog/requestError.js` 那 1 条是**永久例外**（线路字面量 `登录失效`），不在这一批里。
+  'src/pages/CommentManage/index.jsx': 0,
+  'src/pages/CommentManage/BuiltinComments.jsx': 0,
+  'src/services/van-blog/commentAdmin.js': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -477,7 +487,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 92, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 95, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

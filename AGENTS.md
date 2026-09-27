@@ -9469,6 +9469,114 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.175 期 6 第十批：评论管理页整块（82 条 → 0）—— 🔴 变异对照又挖出一个**守卫缺口**：译文里的占位符名从来没人对过账（新守卫一上线就抓到一条既有缺陷）
+
+**交付**（`pageSurface.js` 报的 3 个文件一起做；`requestError.js` 那 1 条是永久例外）：
+`pages/CommentManage/index.jsx`(21) + `BuiltinComments.jsx`(50) + `services/van-blog/commentAdmin.js`(11)
+= **82 条 → 0**；语言包 **1200 → 1255 key**（新组 **`comment`**：55 新 / **复用 18**）；
+棘轮清单 **92 → 95 个文件**（**TOTAL 仍 61**）；`i18nKeyNaming` → **1255**；
+`localePackParity` 自动发现下界 **86 → 89 个文件 / 1580 → 1660 个调用点**（实测 89 / 1671）；繁中同形白名单 **+4**。
+🔴 **真实剩余：39 → 36 个文件 / 434 → 352 条**（累计 **81.3%** 完成）。
+🔴 **浏览器活体 28/28（zh-CN 9 + en-US 11 + zh-TW 8），problems 0、skipped 12**（每条 skip 都写明原因）：
+**builtin 面板三语全验**（5 个状态页签含计数、6 个列头、两个搜索框 placeholder、空态文案、批量区）、
+**waline 分支**在 zh-CN 与 en-US 各验到一次完整渲染、**off 分支**三语都验到；
+反向判据：en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**。
+en-US 实采：`How this works` / 🔴 `Vanblog embeds Waline as the comment system.`（片段链接缝**单空格**）/
+`This admin page is also the embedded Waline admin page.` / `Register first when you use it for the first time; the first registered user becomes the administrator by default.` /
+`PS: Comments are on by default. To turn them off, go to Site management->System settings->Site info->Advanced->Comment system.` /
+`The comment system is off` + `Go to the settings` / 列头 `Nickname · Content · Post · Status · Submitted at · Actions` /
+页签 `Pending · Approved · Spam · Deleted · All`。
+zh-TW 实采：`留言管理` 侧栏、`評論` 系列页签与列头、`回覆 @…`、`批次通過 / 批次刪除`、`共 N 筆`、`載入評論失敗`、`暫無評論`。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-comment/`。
+
+#### A. 🔴 变异对照挖出守卫缺口：**译文里的占位符名从来没被对过账**
+B35-M6 把 en-US 里 `comment.totalCount` 的 `{count, plural, …}` 改成 `{total, plural, …}`（代码传的是 `{count}`）
+⇒ 🔴 **454 个测试全绿**。既有的"占位符 ↔ values 对账"只比 **defaultMessage（= zh-CN）与调用点实参**，
+🔴 **从来没人比过译文里的占位符名**；而译文写错一个字母，界面就会原样渲染出 `{total}` —— 不报错、不红、只有用户看得见。
+修法：新增守卫"三份包逐 key 比占位符**名字集合**"（与既有判据同一套 **ICU 感知**口径：先挖掉 `{{`/`}}` 转义，
+再收 `{name`，排除 plural 的 one/other/few/… 关键字），并带**反空转**（带占位符的 key 必须 ≥60 个）。
+🔴 **这条守卫一上线就抓到一条既有缺陷**：`recycle.actionFailureGeneric`
+（zh-CN `{action}失败{detail}，请稍后重试。`、zh-TW 同形）的 en-US 是
+`Could not complete this action{detail}. Please try again later.` —— **漏了 `{action}`** ⇒
+英文提示从来不会说是**哪个操作**失败了（回收站的恢复 / 删除 / 清空都走这条兜底）。
+已修成 `{action} failed{detail}. Please try again later.`（句式与中文对齐）。
+👉 🔴 **"变异对照打不红"时，先别急着改变异 —— 先问"这条性质到底有没有人管"。**
+这是第 **3** 次实证（前两次：B30-M5 指出"示例代码形状没人管"、B31-M3 指出"identity 常量表没登记"）。
+
+#### B. 🔴 两处"第三方回调的形参恰好叫 t"（t 遮蔽的**新形状**）
+- `commentAdmin.js` 的 `statusTabs()` 里：`.filter((t) => t.key !== 'deleted').reduce((sum, t) => …)`；
+- `BuiltinComments.jsx` 的 ProTable：`showTotal: (t) => \`共 ${t} 条\``（antd 传进来的是**总数**）。
+两处都会**遮蔽**翻译器 ⇒ 改名（`tab` / `total`），并把 `showTotal` 那句收成 ICU 整句
+（`共 {count} 条` / `{count, plural, one {# comment} other {# comments}} in total`）。
+👉 与之前登记的"t 遮蔽"不同：以前是"文件里声明了 t 却又用 t 做别的"，这次是 🔴 **第三方 API 的回调形参恰好叫 t**。
+⇒ 规矩补一句：**给一个文件接 i18n 之前，先搜一遍这个文件里所有叫 `t` 的形参**。
+
+#### C. 🔴 hook 依赖数组又抓出两个真缺陷（这条判据连续第 5 批立功）
+`BuiltinComments.jsx:56` 的 `fetchList`（useCallback）依赖是 `[page, pageSize, status, keyword, pathFilter]`、
+`index.jsx:86` 的 `fetchSetting` 依赖是 `[]`，而两个回调体里都用了 t ⇒ 切语言后那几句提示仍是旧译文。
+修法：把 t 加进依赖数组，**并且**把两个文件的 t 都改成 `useCallback([intl])` 包的**稳定引用**
+（否则依赖数组每轮都变 ⇒ 重复请求）⇒ §7.144 A/B 两条一起满足。变异对照 M3/M4 各打一次 ⇒ 都红。
+
+#### D. 🔴 服务层 `commentAdmin.js` 改注入式；补 t 时**又漏了一个**（判据当场抓到）
+状态标签表 `COMMENT_STATUS_META` 是模块级常量 ⇒ 改成 `commentStatusMeta(t = IDENTITY_T)` + identity 视图；
+`statusMeta(status, t)` / `statusTabs(counts, t)` / `validateKeywords(keywords, t)` 都收尾参；
+两个消费方（`BuiltinComments.jsx`、`SystemConfig/tabs/CommentSystem.jsx`）都传 t，并登记进 INJECTED 表与 identity 常量表。
+🔴 但第一轮漏了 `formatTimeAgo(record.createdAt)`（`relativeTime.js` 也是注入式模块）⇒
+调用点判据当场报"最后一个实参不是 t" ⇒ 补成 `formatTimeAgo(record.createdAt, t)`。
+👉 这条判据的价值第 **6** 次被证明：**漏传 t 不报错、界面上看不出来，只有判据能抓**。
+
+#### E. 🔴 ICU plural 的子消息要用 `#`，不要写裸词（否则会被朴素尺子误读）
+第一版英文写 `{count, plural, one {comment} other {comments}}`（子消息里是裸词）⇒
+生成语言包那道闸门把它误读成"多了两个占位符 `comment`/`comments`"而**拒绝写入**。
+改成仓库既有风格 `{count, plural, one {# comment} other {# comments}}`（`#` 是 ICU 的计数占位）即可。
+👉 ① **plural 子消息一律用 `#`**（既是 ICU 惯例，也不会被朴素尺子误读）；
+② 🔴 这把朴素尺子（`\{([A-Za-z_]\w*)`）已经是**第 3 次**在 ICU 复数上误报 ⇒ A 段那条新守卫**特意**用 ICU 感知口径，并把坑写进注释。
+
+#### F. 🔴 一个页面**三个分支**：探针要切 provider 才验得到，切不动时要 skip 而不是判红
+`CommentManage/index.jsx` 按 provider 三选一渲染（waline / builtin / off）⇒ 默认 builtin 时，
+说明卡（含那条"文字 + 链接 + 文字"的片段链与那句 PS 导航路径）与"评论系统已关闭"卡**根本不在 DOM 里**。
+探针改成用后台接口 `PUT /api/admin/setting/comment` 切 provider、采完切回 builtin。🔴 实测三个坑：
+① 第一版把 waline 分支的判据留在 builtin 页面上判 ⇒ **三语全红**（假红，看着像"这批没翻"）；
+② 切完只等固定 4 秒 ⇒ 第二、三个语言下页面还没渲染完（waline 要起子进程），采到 **93 个字符**的空壳
+⇒ 改成**轮询等到 body 文本 > 400 字**；③ 同一轮里反复切 provider，waline 子进程起不来 ⇒
+🔴 **分支没渲染出来就 skip 并留下证据**（API 回显 + 采到的字符数），不判红。
+🔴 行内五个动作与「编辑评论」弹窗需要库里**先有一条评论**（一次性栈是空库）⇒ 登记 skip，
+由"逐字对账 + 三份包一致 + 跨包占位符一致"三条守卫覆盖。
+
+#### G. 措辞复核：采纳子代理一处、否掉一处，简繁审计又抓到我自己两处
+- ✅ **采纳**：`comment.pendingShort`（`待审`）是**行内动作**（把状态改回待审），不是状态标签 ⇒
+  英文从 `Pending` 改成 **`Mark as pending`**（否则与状态列的 `Pending` 撞脸）。
+- ❌ **否掉**：子代理把 `comment.psWhereToDisable` 的繁中路径写成 `站點配置`，而已上线的页签标签是 **`站點設定`**
+  （`sysconf.tabSiteInfo`）⇒ 用后者；🔴 并把"这句 PS 里的路径必须与页签标签一致"写进守卫
+  （导航路径一致性那条现在覆盖**三处**：`analysis.adminPath` / `waline.adminPath` / 评论页那句 PS）。
+- 🔴 简繁审计又抓到我自己写的两处：`首个`（应 `首個`）、`站点`（应 `站點`）—— 这是**第 3 次**栽在同一个「点」字上
+  （前两次：子代理写的 `站点`、我复核时漏掉）。👉 **术语表里凡是含「点」的词，直接写繁体形式进去。**
+
+#### H. 既有锚点 9 处换形状（统一改成"两种形状都认"）
+`commentAdmin.test.js`：三条 `reportRequestError(message, err, '…')`、`title="waline 后台"`、列标题 `title: '中文'`、
+`ellipsis={{ … symbol: '展开' }}`、`statusMeta(record.status)`、`statusTabs(counts).map`、
+`formatTimeAgo(record.createdAt)`、`validateKeywords(payload.keywords)`、`回复 @{record.replyToNick`。
+⚠️ 其中一条正则我少写了一个 `\)` ⇒ 🔴 **测试文件在加载期就炸**（`SyntaxError: Invalid regular expression: Unmatched ')'`），
+而 TAP 只报 `1 test 1 fail`（很容易看漏）。👉 **改完正则必须真跑一遍**：`node --check` 查不出正则语法错
+（它只在字面量求值时才报）。
+
+#### I. 基线
+- admin `node --test` **775 tests / 171 suites / 0 fail**（+1 = A 段那条跨包占位符守卫）；
+- 变异对照 **9/9**（列标题退回硬编码 / `statusTabs` 调用点拿掉 t / 🔴 两个文件的 hook 依赖数组各拿掉一次 t /
+  `{count}` 喂值拿掉 / 🔴 译文占位符改名（原想验 ICU plural，结果挖出守卫缺口）/ 服务层状态标签改一个字 /
+  🔴 `showTotal` 形参改回 `t`（遮蔽）/ 语义空操作）；
+- 语言包 **1255 key** ×3（原始 key 行数 == 去重数 == 1255，重复 0）；
+  `--zh-tw-audit`：1255 key / **762** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **95 个文件 / TOTAL 61**（9 条永久例外）；admin 类型门禁 **31/0**；
+- 矩阵（5 个阶段全 rc=0）：admin **775/171/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.1340f803.js` = **1,654,758 B**）；
+- 🔴 **真实剩余：36 个文件 / 352 条**。下一块：`About.tsx`(35) → `Code/index.tsx`(29) → `Static/file`(28) →
+  `CollaboratorModal`(26) → `importMdzCore`(23) → `Pipeline`(35) → `Welcome`(33) → `app.jsx`(18) →
+  `restoreCore`(16) → 其余零散（含 `InstallRecordBanner` 13、`WalineForm` 已完、`migrate.tsx` 5 等）。
+- 🔴 新增待办（A 段的副产品）：给"该用 ICU plural 的地方必须用"补一条**静态判据**
+  （现在只有活体能看见；`needsIcuPlural` 那条要改成每处都查）。
+
 ### 7.174 期 6 第九批：**数据管理页整块**（7 个文件 134 条 → 0）—— 🔴 活体抓出一条**译文质量**问题（列头英文是 "act on"），而静态判据一条都管不着
 
 **交付**（站长裁定 C"大块推进"的第一块：一次把 `pageSurface.js` 报的 **7 个文件全做完**，不留半页中文）：

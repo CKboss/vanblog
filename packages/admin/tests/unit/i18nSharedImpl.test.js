@@ -257,6 +257,9 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/DataManage/tabs/Link.jsx': 0,
     'src/pages/DataManage/tabs/Menu.tsx': 0,
     'src/pages/DataManage/tabs/Donate.jsx': 0,
+    'src/pages/CommentManage/index.jsx': 0,
+    'src/pages/CommentManage/BuiltinComments.jsx': 0,
+    'src/services/van-blog/commentAdmin.js': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

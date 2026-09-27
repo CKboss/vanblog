@@ -92,7 +92,8 @@ export default function CommentSystem() {
       maxContentLength: Number(values.maxContentLength),
       rateLimitPer10Min: Number(values.rateLimitPer10Min),
     };
-    const keywordError = validateKeywords(payload.keywords);
+    // 🔴 期 6 第十批：`validateKeywords` 现在也是注入式的（它返回的就是给用户看的错误文案）⇒ 传 t
+    const keywordError = validateKeywords(payload.keywords, t);
     if (keywordError) {
       message.error(keywordError);
       return;

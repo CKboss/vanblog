@@ -641,7 +641,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 const REGISTERED_KEY_GROUPS = [// 🔴 `backup` = 系统配置「备份与恢复」页（整站备份 / 数据备份 / 签名 / 清单 / 恢复）。
 // 🔴 `analysis` = 统计 ID 那两个字段（Google Analytics / 百度统计）的共享文案 + 导航路径常量。
 // 🔴 `waline` = 评论通知 SMTP 那一组共享字段文案 + 导航路径常量 + 评论设置表单自己的几条。
-'accessPassword', 'analysis', 'article', 'backup', 'common', 'cover', 'coverBackfill', // 🔴 `dataManage` = 数据管理页（分类 / 标签 / 导航菜单 / 捐赠 / 友情链接 / 社交媒体 六个页签）。
+'accessPassword', 'analysis', 'article', 'backup', 'common', 'cover', // 🔴 `comment` = 评论管理页（内置评论 / Waline 两套 provider 的说明、审核表格、批量操作、编辑弹窗）
+//   + 服务层 `commentAdmin.js` 的状态标签与关键词校验文案。
+'comment', 'coverBackfill', // 🔴 `dataManage` = 数据管理页（分类 / 标签 / 导航菜单 / 捐赠 / 友情链接 / 社交媒体 六个页签）。
 'customPage', 'dataManage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
 //   ⚠️ 移动端工具栏那 11 条**不在语言包里**：它们与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 editorLocale。
 // 🔴 `editorProfile` = 编辑器偏好设置弹窗（保存后行为 / 本机缓存 / 软换行）。

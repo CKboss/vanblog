@@ -1,4 +1,5 @@
 import { getCommentSetting } from '@/services/van-blog/api';
+import { useIntl } from 'umi';
 import { reportRequestError } from '@/services/van-blog/requestError';
 import { PageContainer } from '@ant-design/pro-layout';
 import { Button, message, Modal, Result, Space, Spin } from 'antd';
@@ -15,6 +16,18 @@ import BuiltinComments from './BuiltinComments';
  * 以前这个页面只有 Waline 一种形态，设置接口失败时也不能白屏，所以加载失败给重试入口。
  */
 export default function () {
+  // 🔴 期 6 第十批：接上 i18n（语言选择必须在渲染期，useIntl 是 hook）。
+  // ⚠️ `message.*` / `Modal.*` 渲染进脱离 React 树的独立根（§7.151）⇒ 传算好的字符串。
+  // 🔴 t 用 useCallback([intl]) 包成**稳定引用**：本文件的 useCallback 依赖数组里要放 t
+  //    （hook 的回调体用了 t 就必须声明它，否则切语言后仍是旧译文 —— §7.144 B），
+  //    而不稳定的 t 会让依赖数组每轮都变 ⇒ 重复请求/无限重渲染（§7.144 A）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+
+
   const { initialState } = useModel('@@initialState');
   const [loading, setLoading] = useState(true);
   const [settingLoading, setSettingLoading] = useState(true);
@@ -33,18 +46,20 @@ export default function () {
   }, [initialState]);
   const showTips = () => {
     Modal.info({
-      title: '使用说明',
+      title: t('comment.helpCardTitle', '使用说明'),
       content: (
         <div>
           <p>
-            Vanblog 内嵌了{' '}
+            {/* 🔴 "文字 + 链接 + 文字" ⇒ prefix/suffix 两个 key（react-intl 3.x 没有富文本占位符）。
+                ⚠️ `{' '}` 是 JSX 里的**字面空格** ⇒ 英文值两端就**不要**再带空格（否则双空格：§7.171 B / §7.172 A）。 */}
+            {t('comment.walineEmbedPrefix', 'Vanblog 内嵌了')}{' '}
             <a target={'_blank'} rel="noreferrer" href="https://waline.js.org/">
               Waline
             </a>{' '}
-            作为评论系统。
+            {t('comment.walineEmbedSuffix', '作为评论系统。')}
           </p>
-          <p>本管理页面也是内嵌的 Waline 后台管理页面。</p>
-          <p>首次使用请先注册，首个注册的用户将默认成为管理员。</p>
+          <p>{t('comment.walineAdminNote', '本管理页面也是内嵌的 Waline 后台管理页面。')}</p>
+          <p>{t('comment.walineFirstUserNote', '首次使用请先注册，首个注册的用户将默认成为管理员。')}</p>
           <p>
             {/* 🔴 这一整句写成**一个字符串表达式**，有两个理由：
                 ① JSX 文本里的**裸 `>`** Babel 能忍、`tsc` 会报 **TS1382**，而 🔴 语法错误会让 tsc
@@ -54,9 +69,13 @@ export default function () {
                    🔴 裸中文计数因此从 1 条变 5 条（剩余工作量口径被自己灌水），
                    而且 🔴 **文本节点与表达式之间的换行会被 JSX 吃掉** ⇒ 渲染出来少一个空格
                    （"关闭请前往站点管理" 而不是 "关闭请前往 站点管理"）—— 这是实测发现的**渲染变化**，不是理论。
-                ⚠️ 这句属**跨面导航路径词汇**（与 ANALYSIS_ADMIN_PATH 同族），指向的页签标签本身尚未接 i18n
-                ⇒ 本轮**只修语法、不翻文案**；将来翻它时它正好是**一个** key。 */}
-            {'PS: 评论功能默认开启，关闭请前往 站点管理->系统设置->站点配置->高级设置->是否开启评论系统'}
+                ⚠️ 这句属**跨面导航路径词汇**（与 ANALYSIS_ADMIN_PATH 同族）。
+                🔴 期 6 第十批：它指向的页签标签**已经接了 i18n**（期 6 第八批）⇒ 现在按当初的约定翻成**一个** key，
+                英文里的路径用与页签一致的措辞（Site management -> System settings -> Site info -> Advanced -> …）。 */}
+            {t(
+              'comment.psWhereToDisable',
+              'PS: 评论功能默认开启，关闭请前往 站点管理->系统设置->站点配置->高级设置->是否开启评论系统',
+            )}
           </p>
           <p>
             <a
@@ -64,9 +83,7 @@ export default function () {
               rel="noreferrer"
               // 上游这个地址已经 404；本分支的评论文档同时覆盖内置评论与 Waline
               href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/features/comment.md"
-            >
-              帮助文档
-            </a>
+            >{t('init.wizard.helpDoc', '帮助文档')}</a>
           </p>
         </div>
       ),
@@ -80,12 +97,13 @@ export default function () {
       setSetting(data || null);
     } catch (err) {
       // 全局 errorHandler 已弹过服务端原因；这里兜底并留 null，渲染重试入口而不是误判成「已关闭」
-      reportRequestError(message, err, '读取评论设置失败！');
+      reportRequestError(message, err, t('sysconf.comment.readFailed', '读取评论设置失败！'));
       setSetting(null);
     } finally {
       setSettingLoading(false);
     }
-  }, []);
+    // 🔴 依赖数组必须带 t（回调体里用了它：那条兜底提示）⇒ 否则切语言后仍是旧译文（§7.144 B）
+  }, [t]);
 
   useEffect(() => {
     fetchSetting();
@@ -127,12 +145,10 @@ export default function () {
       <PageContainer title={null} header={{ title: null, ghost: true }}>
         <Result
           status="warning"
-          title="读取评论设置失败"
-          subTitle="没能拿到评论系统配置（网络异常或登录已失效），请重试。"
+          title={t('comment.readSettingsFailed', '读取评论设置失败')}
+          subTitle={t('comment.readSettingsFailedDetail', '没能拿到评论系统配置（网络异常或登录已失效），请重试。')}
           extra={
-            <Button type="primary" onClick={fetchSetting}>
-              重试
-            </Button>
+            <Button type="primary" onClick={fetchSetting}>{t('common.retry', '重试')}</Button>
           }
         />
       </PageContainer>
@@ -153,17 +169,15 @@ export default function () {
               onClick={() => {
                 history.push(`/site/setting?tab=waline`);
               }}
-            >
-              设置
-            </Button>
-            <Button onClick={showTips}>帮助</Button>
+            >{t('init.restore.count.settings', '设置')}</Button>
+            <Button onClick={showTips}>{t('common.help', '帮助')}</Button>
           </Space>
         }
         header={{
           title: (
             <TipTitle
-              title="评论管理"
-              tip="基于内嵌的 Waline，首个注册的用户即为管理员。未来会用自己的实现替代 Waline"
+              title={t('menu.site.comment', '评论管理')}
+              tip={t('comment.walineCardHint', '基于内嵌的 Waline，首个注册的用户即为管理员。未来会用自己的实现替代 Waline')}
             />
           ),
         }}
@@ -173,7 +187,7 @@ export default function () {
             onLoad={() => {
               setLoading(false);
             }}
-            title="waline 后台"
+            title={t('comment.walineAdminBtn', 'waline 后台')}
             src={src}
             width="100%"
             height={'100%'}
@@ -190,17 +204,15 @@ export default function () {
         title={null}
         extra={
           <Space>
-            <Button type="primary" onClick={goSetting}>
-              设置
-            </Button>
-            <Button onClick={() => fetchSetting()}>刷新</Button>
+            <Button type="primary" onClick={goSetting}>{t('init.restore.count.settings', '设置')}</Button>
+            <Button onClick={() => fetchSetting()}>{t('recycle.refresh', '刷新')}</Button>
           </Space>
         }
         header={{
           title: (
             <TipTitle
-              title="评论管理"
-              tip="VanBlog 内置评论系统：访客无需注册即可发表，在这里审核、编辑与删除。与 Waline 的评论数据互不相通"
+              title={t('menu.site.comment', '评论管理')}
+              tip={t('comment.builtinCardHint', 'VanBlog 内置评论系统：访客无需注册即可发表，在这里审核、编辑与删除。与 Waline 的评论数据互不相通')}
             />
           ),
         }}
@@ -215,12 +227,10 @@ export default function () {
     <PageContainer title={null} header={{ title: null, ghost: true }}>
       <Result
         status="info"
-        title="评论系统已关闭"
-        subTitle="前台目前不展示任何评论入口，历史评论也不再显示。可在「系统设置 → 评论设置」里切换到内置评论或 Waline。"
+        title={t('comment.systemOffTitle', '评论系统已关闭')}
+        subTitle={t('comment.systemOffContent', '前台目前不展示任何评论入口，历史评论也不再显示。可在「系统设置 → 评论设置」里切换到内置评论或 Waline。')}
         extra={
-          <Button type="primary" onClick={goSetting}>
-            前往设置
-          </Button>
+          <Button type="primary" onClick={goSetting}>{t('comment.goToSettings', '前往设置')}</Button>
         }
       />
     </PageContainer>
