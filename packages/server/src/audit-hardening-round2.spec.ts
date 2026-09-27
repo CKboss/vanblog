@@ -279,7 +279,16 @@ describe('多进程（cluster）守卫', () => {
     const BUCKET = /max(?:PoolSize)?:/;
     // 真桶、但摊薄对它无意义：预算为 1，按 worker 数除会得到 0（等于把这道闸关掉）。
     // ⚠️ 白名单不许有死条目 —— 下面断言每一条都必须真的命中。
-    const ALLOWED_UNTHINNED = ['consumeAttempt(dedupeKey, { max: 1,'];
+    // 🔴 期 9 第一批新增一条：**口令长度上限**（不是限流桶 ⇒ 摊薄对它无意义）。
+    //    那行是 `const LIMITS = { min: MIN_ACCOUNT_PASSWORD_LENGTH, max: MAX_ACCOUNT_PASSWORD_LENGTH };`
+    //    （`provider/user/user.provider.ts`，被 `assertAccountPasswordStrength` 用来喂错误码的 params）。
+    //    👉 这是一次**尺子相撞**：`max:` 这个属性名太常见，而 cluster 守卫按行扫它。
+    //    处理方式是走它自己的白名单（不改判据、不放宽"必须同一行有 scaleLimit"那条），
+    //    并且 🔴 白名单不许有死条目（下面那条断言会逐条验证真的命中）。
+    const ALLOWED_UNTHINNED = [
+      'consumeAttempt(dedupeKey, { max: 1,',
+      'const LIMITS = { min: MIN_ACCOUNT_PASSWORD_LENGTH, max: MAX_ACCOUNT_PASSWORD_LENGTH };',
+    ];
 
     const thinned: string[] = [];
     const allowedHits: string[] = [];

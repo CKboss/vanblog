@@ -94,7 +94,8 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 //   `install.routeWrap`（包在路由名外面的引号）+1，复用 23 条既有 key）
 // 🔴 1413 → **1447**（期 6 第十三批：后台首页 Welcome 家族 +34，复用 1 条既有 key）
 // 🔴 1447 → **1475**（期 6 第十四批：.mdz 导入家族 20 + 迁移助手 4 + 定制页 4 个 tab，复用 33 条既有 key）
-const BASELINE_KEY_COUNT = 1475;
+// 🔴 1475 → **1483**（期 9 第一批：8 个服务端错误码 × 三份译文）
+const BASELINE_KEY_COUNT = 1483;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。

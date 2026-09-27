@@ -89,28 +89,42 @@ export function isBrowserDerivedPassword(value: string): boolean {
  *  - `provider/init/envBootstrap.ts`：`VANBLOG_ADMIN_PASSWORD(_FILE)` 是**原始口令**，
  *    那里能也应该做 ≥10 的硬校验（零接触初始化是自动化路径，最容易设弱口令）。
  */
-export function assertAccountPasswordStrength(value: unknown, label: string): string {
+// 🔴 期 9 第一批：第二个参数从**中文字面量**（'管理员' / '协作者'）改成**语义 kind**（'admin' | 'collaborator'）。
+//    原因：那个 label 会被拼进给用户看的消息里 ⇒ 它一旦进了 ICU 参数，英文消息里就会夹中文。
+//    改成 kind 之后由**码表**按 kind 选码（adminPasswordXxx / collaboratorPasswordXxx），
+//    中文只留在码表的 `zh`（那是服务端返回体的权威中文），三份译文在 admin 侧按码给。
+//    👉 与 admin 侧 `NumSelect d="天"` 那个坑同一个形状：**别把给用户看的文字当协议值传**。
+export type AccountKind = 'admin' | 'collaborator';
+
+export function assertAccountPasswordStrength(value: unknown, kind: AccountKind): string {
+  // ⚠️ 这一行含 `max:` 字面量 ⇒ 已登记在 cluster 守卫的 ALLOWED_UNTHINNED 白名单里
+  //    （它是**口令长度上限**，不是限流桶，摊薄对它无意义）。
+  const LIMITS = { min: MIN_ACCOUNT_PASSWORD_LENGTH, max: MAX_ACCOUNT_PASSWORD_LENGTH };
   if (typeof value !== 'string' || !value) {
     // ⚠️ 空口令必须硬拒：空值会被哈希成"空口令的哈希"，而历史上空哈希曾经能用空密码登进来。
-    throw new BadRequestException(
-      `${label}密码不合法（不能为空，且必须是 ${MIN_ACCOUNT_PASSWORD_LENGTH}-${MAX_ACCOUNT_PASSWORD_LENGTH} 个字符）`,
-    );
+    // 🔴 写成**两个显式分支**而不是 `codedError(kind === 'admin' ? 'a' : 'b')`：
+    //    admin 侧那条"防死码"判据是按 `codedError('<code>'` 这个**形状**找调用点的
+    //    （不能用裸 `'<code>'`：登记表自己就含那个字符串，会恒真）⇒ 码名必须紧跟左括号。
+    if (kind === 'admin') throw codedError('adminPasswordEmpty', LIMITS);
+    throw codedError('collaboratorPasswordEmpty', LIMITS);
   }
   if (value.length > MAX_ACCOUNT_PASSWORD_LENGTH) {
-    throw new BadRequestException(
-      `${label}密码不合法（1-${MAX_ACCOUNT_PASSWORD_LENGTH} 个字符）`,
-    );
+    // 🔴 复用上面那个 LIMITS（少一处 `max:` 字面量：`audit-hardening-round2.spec.ts` 的 cluster 守卫
+    //    按行扫 `max:` 要求同一行有 `scaleLimit(`，那是给**限流桶**设计的 ⇒ 口令长度上限要进它的白名单，
+    //    能少一条就少一条。多喂一个用不到的 `min` 是无害的：`fillServerErrorMessage` 只替换模板里有的占位符。）
+    if (kind === 'admin') throw codedError('adminPasswordTooLong', LIMITS);
+    throw codedError('collaboratorPasswordTooLong', LIMITS);
   }
   if (isBrowserDerivedPassword(value)) {
     // 服务端看不到原始口令，判不了强度；见函数头注释（这是架构事实，不是偷懒）
     return value;
   }
   if (value.length < MIN_ACCOUNT_PASSWORD_LENGTH) {
-    throw new BadRequestException(
-      `${label}密码太短：至少 ${MIN_ACCOUNT_PASSWORD_LENGTH} 个字符（当前 ${value.length} 个）。` +
-        `弱口令在"5 次/300 秒/IP"的防爆破预算下，用一批代理 IP 仍然可在数小时内撞开，` +
-        `而协作者账号一旦被撞开就能改站点内容。`,
-    );
+    // 🔴 原来是"三段模板字符串拼接"⇒ 收成码表里的一条整句（{min} / {count} 走 params）。
+    //    ⚠️ 那句「5 次/300 秒/IP」是服务端防爆破参数的**描述**，写在码表的 WEAK_PASSWORD_TAIL 里（一处定义）。
+    const shortParams = { min: MIN_ACCOUNT_PASSWORD_LENGTH, count: value.length };
+    if (kind === 'admin') throw codedError('adminPasswordTooShort', shortParams);
+    throw codedError('collaboratorPasswordTooShort', shortParams);
   }
   return value;
 }
@@ -118,7 +132,7 @@ export function assertAccountPasswordStrength(value: unknown, label: string): st
 function assertCollaboratorPassword(password: unknown): string {
   // ⚠️ 走统一入口：协作者与管理员是同一类凭据（都能登录后台），
   //    分成两套校验就一定会漂移（例如哪天只放宽了一边）。
-  return assertAccountPasswordStrength(password, '协作者');
+  return assertAccountPasswordStrength(password, 'collaborator');
 }
 
 function pickNickname(nickname: unknown, fallback: string): string {
@@ -295,7 +309,7 @@ export class UserProvider {
     // 口令校验走统一入口（空值 / 超长 / 过短），见 assertAccountPasswordStrength。
     // ⚠️ 这条路覆盖两个调用点：后台「系统设置 → 用户」改密码，以及匿名的「忘记密码」
     //    恢复接口（auth.controller.ts 的 restore()）—— 两者最终都调 updateUser()。
-    assertAccountPasswordStrength(password, '管理员');
+    assertAccountPasswordStrength(password, 'admin');
     const nextPassword = await hashSecretAsync(password);
     if (!nextPassword) {
       // 理论上到不了这里（上面已经挡掉空值），留一道兜底：绝不把空哈希写进库
@@ -308,9 +322,7 @@ export class UserProvider {
     //    写回管理员账号，等于持恢复密钥者可以顺手造出一个重名局面。
     const nameClash = await this.userModel.findOne({ name, type: 'collaborator' }).exec();
     if (nameClash) {
-      throw new BadRequestException(
-        `用户名「${name}」已被一个协作者占用，请换一个（管理员与协作者不能同名，否则登录会落到不确定的账号上）`,
-      );
+      throw codedError('collaboratorNameTakenByCollaborator', { name });
     }
     const update: Record<string, unknown> = { name, password: nextPassword };
     if (typeof updateUserDto.nickname === 'string') {
@@ -375,9 +387,7 @@ export class UserProvider {
     //    同名会让 `validateUser(name, …)` 落到不确定的账号上 —— 见 validateUser 里的说明。
     const admin = await this.getUser();
     if (admin && admin.name === name) {
-      throw new ForbiddenException(
-        `用户名「${name}」与管理员账号相同，不可用于协作者（否则该用户名登录会落到不确定的账号上）`,
-      );
+      throw codedError('collaboratorNameSameAsAdmin', { name });
     }
     const salt = makeSalt();
     const encrypted = await hashSecretAsync(password);

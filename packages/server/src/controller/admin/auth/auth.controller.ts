@@ -191,7 +191,8 @@ export class AuthController {
     //    不在这里再抄一份 `!password || password.length > 200`：两份校验一定会漂移
     //    （本轮之前这里就是一份独立副本，所以下限只加在了一边）。
     //    下面那次 updateUser() 也会再校验一次，幂等，不会有两套结论。
-    assertAccountPasswordStrength(password, '管理员');
+    // 🔴 期 9 第一批：第二个参数改成语义 kind（原来是中文字面量 '管理员'）
+    assertAccountPasswordStrength(password, 'admin');
     await this.userProvider.updateUser({
       name,
       password,

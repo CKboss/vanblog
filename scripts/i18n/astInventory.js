@@ -484,8 +484,45 @@ function collectChineseMessageProps(src, label) {
  *
  * @returns {Record<string, {zh:string, ctor:string, status:number|null}>}
  */
+/**
+ * 🔴 把"字符串字面量 / 指向模块级字符串常量的标识符 / 二者的 `+` 拼接"解析成一个字符串。
+ * 解析不出来返回 null（调用方 fail-loud）—— 🔴 绝不猜、绝不静默返回空串，
+ * 因为"码表的 zh 解析成空"会让 admin 侧那条"zh-CN 与码表逐字相同"的断言变成**恒真**。
+ */
+function resolveConstString(node, consts) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.type === 'StringLiteral') return typeof node.value === 'string' ? node.value : null;
+  if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node.type === 'Identifier') {
+    return Object.prototype.hasOwnProperty.call(consts || {}, node.name) ? consts[node.name] : null;
+  }
+  if (node.type === 'BinaryExpression' && node.operator === '+') {
+    const l = resolveConstString(node.left, consts);
+    const r = resolveConstString(node.right, consts);
+    return l === null || r === null ? null : l + r;
+  }
+  return null;
+}
+
+/** 收集模块级 `const X = '字面量';`（只认纯字符串，不做任何推断） */
+function collectTopLevelStrings(ast) {
+  const out = {};
+  const body = (ast && ast.program && ast.program.body) || (ast && ast.body) || [];
+  for (const st of body) {
+    if (!st || st.type !== 'VariableDeclaration') continue;
+    for (const d of st.declarations || []) {
+      if (d && d.id && d.id.type === 'Identifier' && d.init &&
+          (d.init.type === 'StringLiteral' || (d.init.type === 'Literal' && typeof d.init.value === 'string'))) {
+        out[d.id.name] = d.init.value;
+      }
+    }
+  }
+  return out;
+}
+
 function collectServerErrorCodes(src, label) {
   const ast = parseSource(src, label);
+  const topLevelStrings = collectTopLevelStrings(ast);
   const out = {};
   let found = false;
   walkAst(ast.program, (nd) => {
@@ -503,7 +540,11 @@ function collectServerErrorCodes(src, label) {
         throw new Error(`astInventory: 错误码 ${code} 的值不是 entry(...) 调用（形状变了？）`);
       }
       const args = call.arguments || [];
-      const zh = args[0] && args[0].type === 'StringLiteral' ? args[0].value : null;
+      // 🔴 期 9 第一批：`zh` 允许是**字符串拼接**（`'管理员密码太短：…' + WEAK_PASSWORD_TAIL`）——
+      //    两条 tooShort 的解释尾巴逐字相同 ⇒ 一处定义（`const WEAK_PASSWORD_TAIL = '…'`），
+      //    否则同一句话在码表里抄两遍，改一处忘另一处只是时间问题（本仓库"两处口径必漂"的教训太多）。
+      //    解析器因此要能**解引用模块级字符串常量**；解不出来时仍然 fail-loud（返回 null ⇒ 下面抛错）。
+      const zh = resolveConstString(args[0], topLevelStrings);
       const ctor = args[1] && args[1].type === 'Identifier' ? args[1].name : null;
       const status = args[2] && args[2].type === 'NumericLiteral' ? args[2].value : null;
       if (typeof zh !== 'string' || !ctor) {

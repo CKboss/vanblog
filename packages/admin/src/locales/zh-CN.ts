@@ -1940,4 +1940,20 @@ export default {
   'sysconf.customizing.tabHtmlBody': '自定义 HTML (body)',
   'sysconf.customizing.tabHtmlHead': '自定义 HTML (head)',
 
+
+  // ── 🔴 期 9 第一批：账号口令与协作者用户名的 8 个服务端错误码（`user.provider.ts` 的 5 处模板消息）──
+  //    🔴 zh-CN 的值必须与服务端 `SERVER_ERROR_CODES[code].zh` **逐字相同**（守卫 ① 会查漂移）：
+  //    服务端返回体里的 message 就是那份中文，这里的 zh-CN 是它的**回退文案**。
+  //    🔴 原来那 5 处是"模板字符串 + 中文 label 参数"（`${label}密码太短…`）⇒ 按 label **拆成两个码**
+  //    （adminXxx / collaboratorXxx）：服务端的 `fillServerErrorMessage` 只做 `{name}` 替换、不实现 ICU select，
+  //    而且 🔴 中文当参数值传进模板，英文里就会夹中文（与 admin 侧 `NumSelect d="天"` 同一个形状的坑）。
+  //    ⚠️ 那句「5 次/300 秒/IP」是服务端防爆破参数的描述 ⇒ 三份包都必须保留同样的数字（数字契约守卫会对账）。
+  'error.adminPasswordEmpty': '管理员密码不合法（不能为空，且必须是 {min}-{max} 个字符）',
+  'error.collaboratorPasswordEmpty': '协作者密码不合法（不能为空，且必须是 {min}-{max} 个字符）',
+  'error.adminPasswordTooLong': '管理员密码不合法（1-{max} 个字符）',
+  'error.collaboratorPasswordTooLong': '协作者密码不合法（1-{max} 个字符）',
+  'error.adminPasswordTooShort': '管理员密码太短：至少 {min} 个字符（当前 {count} 个）。弱口令在"5 次/300 秒/IP"的防爆破预算下，用一批代理 IP 仍然可在数小时内撞开，而协作者账号一旦被撞开就能改站点内容。',
+  'error.collaboratorPasswordTooShort': '协作者密码太短：至少 {min} 个字符（当前 {count} 个）。弱口令在"5 次/300 秒/IP"的防爆破预算下，用一批代理 IP 仍然可在数小时内撞开，而协作者账号一旦被撞开就能改站点内容。',
+  'error.collaboratorNameTakenByCollaborator': '用户名「{name}」已被一个协作者占用，请换一个（管理员与协作者不能同名，否则登录会落到不确定的账号上）',
+  'error.collaboratorNameSameAsAdmin': '用户名「{name}」与管理员账号相同，不可用于协作者（否则该用户名登录会落到不确定的账号上）',
 };

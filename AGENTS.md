@@ -9469,6 +9469,163 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.182 期 9 第一批：服务端错误码**端到端打通** —— 🔴 三种语言下都真的在后台触发了一次服务端 4xx，看到的是译文（这是本项目第一次）
+
+**交付**：`provider/user/user.provider.ts` 里那 5 处**带插值的模板消息**全部迁进错误码表 ⇒
+新增 **8 个码**（口令 3 类 × admin/collaborator + 协作者用户名冲突 2 条）、admin 三份语言包各 **+8 条 `error.*`**
+（**1475 → 1483 key**）、服务端"带中文的 throw 站点"棘轮 **211 → 206**（`THROW_BUDGET` 同步下调）。
+🔴 **端到端活体 13/13（zh-CN 4 + en-US 5 + zh-TW 4），problems 0、skipped 0**：
+在后台**真的**触发了一次服务端 4xx（建一个与管理员同名的协作者 ⇒ 403 + `code`），
+三种语言下显示的都是**译文**、都**没有裸码**、都**没有残留占位符**、en-US **零汉字**：
+- zh-CN：`用户名「localinit」与管理员账号相同，不可用于协作者（否则该用户名登录会落到不确定的账号上）`
+- en-US：`The username "localinit" is the same as the administrator account, so it cannot be used for a collaborator: otherwise signing in with that username lands on an unpredictable account.`
+- zh-TW：`使用者名稱「localinit」與管理員帳號相同，不可用於協作者（否則該使用者名稱登入會落到不確定的帳號上）`
+🔴 这是**本项目第一次**把"服务端消息 → 错误码 → admin 三份译文 → 界面"这条链在真实浏览器里走完
+（此前只有静态对账：码表 ↔ 三份包 ↔ 调用点）。证据：`vanblog_dev/i18n-browser-evidence/phase9-servercodes/`。
+
+#### A. 🔴 `${label}` 那个坑的解法：**按 label 拆码**，并且把中文参数改成**语义 kind**
+上一批（§7.142 F）留了张欠条：那 5 处消息形如 `` `${label}密码太短：至少 ${MIN} 个字符…` ``，
+而 `label` 是**中文字面量**（`'管理员'` / `'协作者'`）⇒ 直接当 ICU 参数会让**英文消息里夹中文**。
+两条候选路：① 按 label 拆成不同的码；② 用 ICU `select`。选了 ①，理由是 🔴 **服务端的
+`fillServerErrorMessage()` 只做 `{name}` 替换、不实现 ICU select** —— 用 select 的话
+服务端返回体里的 `message`（就是码表那份 `zh`）会把 `{kind, select, …}` **原样发给用户**。
+⇒ `assertAccountPasswordStrength(value, label: string)` 的第二个参数改成 **`kind: 'admin' | 'collaborator'`**，
+码表里 6 个口令码按 kind 分（`adminPasswordEmpty` / `collaboratorPasswordEmpty` / …）。
+👉 🔴 这与 admin 侧 `NumSelect d="天"` 是**同一个形状的坑**：**别把"给用户看的文字"当协议值传**。
+调用点 3 处（`user.provider` ×2、`auth.controller` ×1）+ 服务端 spec 6 处一并改。
+⚠️ 数字（`{min}` / `{max}` / `{count}`）走 params、不写死在译文里 ⇒ admin 那条"数字契约"守卫能三份包对账。
+
+#### B. 🔴 两条 tooShort 的解释尾巴**一处定义**（并因此把码表解析器补强了）
+那两句"弱口令在 5 次/300 秒/IP 的防爆破预算下…"逐字相同 ⇒ 提成 `const WEAK_PASSWORD_TAIL`，
+码表里写 `'管理员密码太短：…' + WEAK_PASSWORD_TAIL`（**字符串拼接**）。
+🔴 结果 admin 侧那条守卫**当场 fail-loud**：`astInventory.collectServerErrorCodes()` 只认
+`entry('字面量', Ctor)`，遇到 `BinaryExpression` 就报
+`错误码 adminPasswordTooShort 的 entry() 参数形状不认识（zh=null）`。
+修法：给解析器加 `resolveConstString()`（认字面量 / 指向**模块级字符串常量**的标识符 / 二者的 `+` 拼接），
+🔴 **解不出来仍然返回 null 并抛错**（绝不猜、绝不返回空串 —— "码表的 zh 解析成空"会让
+admin 侧那条"zh-CN 与码表逐字相同"的断言变成**恒真**，那是最坏的失败模式）。
+👉 两条经验：① **fail-loud 的解析器是好东西**（它把"我用了个新形状"这件事当场说出来，而不是静默漏掉一个码）；
+② 想消除"同一句话抄两遍"，就得让工具认得**引用**（否则工具会逼你抄两遍）。
+变异对照 B41-M6 就是钉这件事：把 `WEAK_PASSWORD_TAIL` 的值改一个字 ⇒ **两条码的 zh 一起变** ⇒
+与 admin 包的逐字对账**红**（同时证明解析器真的解开了拼接）。
+
+#### C. 🔴 两次"尺子相撞"，都走**白名单**而不是放宽判据
+1. `audit-hardening-round2.spec.ts` 的 cluster 守卫**按行扫 `max:`**，要求同一行有 `scaleLimit(`
+   （那是给**限流桶**设计的）⇒ 我新写的 `const LIMITS = { min: …, max: MAX_ACCOUNT_PASSWORD_LENGTH };`
+   被当成"未摊薄的桶"报了红。处理：把那一行加进它自己的 `ALLOWED_UNTHINNED` 白名单
+   （🔴 白名单不许有死条目 —— 它有断言逐条验证真的命中），并且**先把代码里第二处 `max:` 合并掉**
+   （两处 params 合成一个 `LIMITS`）⇒ 白名单只多一条。
+2. `securityHardening.test.js` 断言 `user.provider.ts` 里含 `密码不合法` —— 那句中文**搬进了码表**
+   ⇒ 锚点跟着搬：改成断言 ① provider 里抛了那两个码、② **码表里**那两条的中文仍是「密码不合法」
+   （跨文件钉住"文案没被改软"）。👉 性质一条没放，只是换了地方钉。
+
+#### D. 🔴 端到端探针的四个实测坑（都记下来，下一批还要用）
+1. **两层校验**：填一个 3 字符的口令想触发服务端 400，结果**前端表单规则先拦下来了**
+   （`accountPasswordMinRule()` 的 `password.accountMinMessage`）⇒ 请求根本没发出去。
+   👉 这不是失败：前端给即时反馈、服务端是最终权威（前端可被绕过）。
+   于是探针**两步都验**：第 ① 步验前端规则文案跟着语言走（三语都验到），
+   第 ② 步换一个**只有服务端知道**的错误（协作者与管理员重名 ⇒ 403）去真的打服务端。
+2. 🔴 **旧 toast 会留在 DOM 里几秒** ⇒ 第 ② 步一采就采到第 ① 步那条（假红）。
+   修法：点确定前先**轮询等消息容器空掉**，并记下"点击前"的文本，只认**新出现**的那部分。
+3. 🔴 **部署的产物是旧的**：admin 的三份包加了 8 条 `error.*` 之后**忘了重新 build**，
+   于是容器里跑的还是旧 bundle ⇒ en-US 下显示的是**服务端返回的中文**（回退路径生效了，
+   这本身证明"找不到码就回落服务端 message"的设计是对的，但不是我要验的东西）。
+   👉 **改了语言包必须重新 build + 重新拷进容器**，否则活体验的是上一版。
+4. 🔴 **按钮文字 ≠ 弹窗标题**（第 2 次踩，见 §7.177 F.2）：按钮上是 `新建`（`common.create`），
+   `新建協作者` 是**弹窗标题**；而且 antd 会给两个汉字的按钮插空格（`新 建`）
+   ⇒ 匹配要"按当前语言包取值 + 逐字之间允许空白"。
+   顺带：服务端的 dist 要拷到 **`/app/server/`**（镜像里是 `dist/src/*` 摊平的布局，不是 `/app/dist`）。
+
+#### E. 基线
+- admin `node --test` **779 tests / 173 suites / 0 fail**；类型门禁 **31/0**；
+- 服务端 `tsc` **0 错**、jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**、生产构建 rc=0；
+- 语言包 **1483 key** ×3（重复 0）；`--zh-tw-audit`：1483 key / **798** 个不同汉字 / **0 命中**（字表 69 字）；
+- 服务端错误码 **38 个**（全部有三语译文、全部被真实调用、状态码有黄金快照钉住）；
+- 服务端"带中文的 throw 站点" **206**（预算同步下调）、"`message:` 带中文的返回体" **108**（未变）；
+- 变异对照 **6/6**（退回硬编码 throw / 改码表中文一个字 / 改 admin 包里那条中文 /
+  🔴 把英文的数字 300 改成 600（数字契约）/ 🔴 改共享尾巴（两条码一起漂移）/ 语义空操作）；
+  ⚠️ 撤掉一条无效对照（"把黄金快照 403 改成 400"）：那份快照在**服务端 jest** 里，
+  而变异 harness 只跑 admin 的 `node --test` ⇒ 打了也不会红。
+  🔴 它的承重证据是**真实发生过的一次红**：本批新增 8 个码时忘了同步快照，
+  jest 当场红（`- Expected 8 / + Received 0`）。👉 **跨测试运行器的性质，别用只跑一个运行器的 harness 去"证明"**。
+- 下一批（期 9 第二批）：`controller/admin/init/init.controller.ts`(11) + `provider/init/*` ⇒ 初始化与恢复路径；
+  然后 `comment.provider.ts`(24)、`theme.provider.ts`(10)、`static/local`(18)，最后备份族
+  （🔴 备份族里有一类是**写进备份清单/校验报告文件**的文本，属产物内容不是界面文案 ⇒ 动手前先逐条分类）。
+
+### 7.181 期 9 第 0 批：先量服务端 —— 🔴 我造了一把**重复的尺子**，发现既有的那把更强之后删掉自己那份，只把"合成反证"这一条新性质并进去
+
+**这一批没翻一条文案**，产出是：① 期 9 的**权威工作量数字**；② 给既有棘轮补上**正反两向的合成反证**；
+③ 一条关于"动手造工具之前先读既有守卫报错"的教训。
+
+#### A. 🔴 我先造了一把重复的尺子（`scripts/i18n/serverSurface.js`），已删除
+起因是"期 9 到底有多少条用户可见中文"这个数没人说得清（待办清单里的 `user.provider 5 条`、`static/local 18 条`
+全是早期拍脑袋估的）。于是我写了个新工具：AST 遍历服务端，只数 `throw new XxxException('中文')`、
+响应信封里的 `message:`/`msg:`、以及 `codedError(...)`，并**排除** `logger.*` / `console.*`（开发者界面）。
+第一次跑出来 **160 条 / 32 个文件**，还配了一条 shell 棘轮守卫（总量 / 文件数 / 账目完整 / 合成反证）接进了 CI。
+🔴 **然后我发现仓库里早就有一套**：`packages/admin/tests/unit/i18nServerErrorCodes.test.js` 有
+- ① 每个码都有三语译文，且 **zh-CN 与服务端登记表逐字相同**；
+- ①b **反向**：包里的 `error.*` 不许有死条目（服务端没有那个码就红）；
+- ② **反向**：每个登记的码都真的被某处 `codedError('…')` / `codedBody('…')` 抛出（防死码）；
+- ③ **棘轮**：`THROW_BUDGET = 211`（带中文的 throw 站点，实测 48 个文件）；
+- ③b **棘轮**：`MESSAGE_BODY_BUDGET = 108`（`message:` 带中文的返回体）；
+- 以及**定位工具** `node scripts/i18n/inventory.js --server-throws`（口径与棘轮完全一致，还给出**行号**）。
+🔴 我那把尺子在每一个维度上都更弱：没有行号、没有"防死码"、没有"zh-CN 与码表逐字相同"、
+而且**两个口径的数字还对不上**（我 374 vs 既有 211+108=319 —— 因为我去重按文本、它按站点，且我把 `new Error(…)` 也算进去了）。
+⇒ **删掉**：`scripts/i18n/serverSurface.js`、`scripts/tests/server-i18n-surface.test.sh`、
+CI 里那一步、本地矩阵清单里那一行（守卫清单回到 **35** 个）。
+👉 🔴 **教训：动手造工具之前，先去读既有守卫的报错信息。** 那两条棘轮的 assert 消息里
+就写着定位命令 `node scripts/i18n/inventory.js --server-throws`（"口径与本条完全一致，列**全部**文件"）——
+我是**跑完自己的工具、准备写文档时**才在既有断言的文本里看到这句话的。
+👉 第二层教训：**两把尺子并存比没有尺子更糟**（本项目已经因此漂过多次：`pageSurface` 与 `inventory`、
+棘轮与 sharedImpl 的副本、`isLocalePayloadFile` 的两个调用点）。**一个性质只留一处权威口径。**
+
+#### B. 🔴 但这一趟不是白走：既有棘轮缺一条**正反两向的合成反证**，已补上
+既有反空转只验"**总量**够大"（`files ≥ 200`、`throw 站点 > 100`、`message 站点 > 50`）——
+那能抓住"遍历坏了"，🔴 抓不住"**口径错了**"：
+- 一把把**日志**也算进来的尺子，总量只会更大 ⇒ 反空转全绿，而它会逼人去做**错的事**
+  （翻译 `logger.warn(…)`：日志属开发者界面，翻它会让同一条日志在不同语言下长得不一样，排查时 grep 都 grep 不到）；
+- 一把**漏数**的尺子同样危险 —— 而这**本期实测发生过**：我第一版新工具只认 acorn 的 `Literal`/`Property`，
+  而 `astInventory.parseSource()` 出的是 **babel** 的 `StringLiteral`/`ObjectProperty`
+  ⇒ 🔴 **普通字符串字面量一条都没数到**（只数到 `TemplateLiteral`，因为它两边同名），报出 160 条的假数字（真值 374）。
+  抓出它的是我那条合成反证：造一个只有 4 条中文的小文件，期望数出 **2**（异常 + 信封），第一版数出 **0**。
+⇒ 补进既有守卫（`i18nServerErrorCodes.test.js` 新增第 10 条 test，**直接喂合成源码给共享模块的两个收集器**，
+不另起一套遍历、不落临时文件）：
+- **正向**：`throw new BadRequestException('…必须被数到')`（字符串字面量）与 `` throw new BadRequestException(`模板形状…${ctx}`) ``
+  都要被数到（🔴 这两种形状**分别**断言 —— 漏掉任何一种都是本期实测发生过的缺陷）；`{ message: '…' }` 也要被数到；
+- **反向**：`logger.warn('…不该被数进去')`、`console.log('…')`、以及**注释**里的中文都**不许**被数到。
+⚠️ 写这条断言时又踩一个小坑：两个收集器返回的是 `{ line, texts: [...] }`（不是 `{ text }`），
+第一版按 `x.text` 读 ⇒ 恒 undefined ⇒ 正向断言**假红**。👉 **写断言前先把返回值打印出来看形状。**
+
+#### C. 🔴 期 9 的权威基线（以后汇报都用这组数字）
+| 口径 | 数字 | 权威出处 |
+|---|---|---|
+| 带中文的 **throw 站点** | **211**（48 个文件） | `THROW_BUDGET`（`i18nServerErrorCodes.test.js`）|
+| 带中文的 **`message:` 返回体** | **108** | `MESSAGE_BODY_BUDGET`（同上）|
+| 已走码表的调用点（`codedError`/`codedBody`） | **41** | `grep -c` 实测；码表本身 30 个码 |
+| 已登记的错误码 / admin 的 `error.*` 译文 | **30 / 30×3** | 守卫 ① 与 ①b 双向钉住 |
+| 定位命令 | `node scripts/i18n/inventory.js --server-throws` | 与棘轮同口径，**给行号** |
+最大的几处（throw 口径）：`comment.provider.ts` 24、`utils/fullBackup.ts` 24、`utils/backupCrypto.ts` 12、
+`init.controller.ts` 11、`static.provider.ts` 11、`utils/backupSigning.ts` 11、`theme.provider.ts` 10、
+`static/local.provider.ts` 7、`utils/markdownExport.ts` 7、`utils/safeFetch.ts` 7、`auth.controller.ts` 5。
+🔴 口径提醒：**日志（`logger.*` / `console.*`）与注释不在工作量里**，而且**不该翻**（开发者界面）。
+⚠️ 备份族里还有一类要**逐条判"给谁看"**：写进备份清单/校验报告文件的文本属**产物内容**
+（与 `导出说明.md` 那个文件名同族），不是界面文案 —— 动手前先分类，别一股脑迁进码表。
+
+#### D. 期 9 的验收标准（每个码都要凑齐四样）
+① 服务端：`SERVER_ERROR_CODES` 里登记（`zh` 逐字照抄今天这句中文）+ 调用点改 `codedError`/`codedBody`；
+② admin：三份语言包各加一条 `error.<code>`，🔴 **zh-CN 的值必须与码表的 `zh` 逐字相同**（守卫 ① 会查漂移）；
+③ 🔴 **端到端活体**：在后台**真的触发一次**那个错误，三种语言下都要显示译文（不是中文、不是裸码）；
+④ 两条棘轮的数字**同步下调**（`THROW_BUDGET` / `MESSAGE_BODY_BUDGET` 只许减；守卫会在减少时提示可下调）。
+路线（按"能被活体验到"优先）：`user.provider.ts`(7，含被 `scripts/tests/reset-waline.test.sh` 钉住的 `密码太短`) →
+`init.controller.ts`(11) + `provider/init/*` → `comment.provider.ts`(24) + `theme.provider.ts`(10) +
+`static/local`(18) → 备份族（`backupVerify` / `fullBackup` / `backupCrypto` / `backupSigning`，先分类再动手）→ 其余零散。
+
+#### E. 基线（本批只动守卫与文档）
+- admin `node --test` **779 tests / 173 suites / 0 fail**（+1 = B 段那条合成反证）；
+- 服务端 `tsc` **0 错**、jest **288 套件 / 4238 用例**（本批不改服务端代码 ⇒ 数字不变）；
+- 守卫清单 **35 个**（撤掉了我新加又删掉的那一个）；类型门禁 **31/0**；
+- 🔴 期 6（后台文案）已收官：真实剩余 11 文件 / 35 条，全是登记在册的永久例外（棘轮 TOTAL 35、欠条 0）。
+
 ### 7.180 期 6 第十五批（**期 6 收官**）：删掉死代码重复文件 + 🔴 把"账外账"堵死 —— 棘轮清单现在覆盖**每一个**有硬编码中文的文件，欠条 0、TOTAL 35 全是登记在册的永久例外
 
 **交付**：

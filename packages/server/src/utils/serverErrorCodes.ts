@@ -63,6 +63,14 @@ function entry(zh: string, Ctor: ExceptionCtor, status?: number): ServerErrorEnt
   return { zh, Ctor, status };
 }
 
+/**
+ * 🔴 两条"密码太短"共用的解释尾巴（管理员 / 协作者各一个码，但这段解释逐字相同）⇒ 一处定义。
+ * ⚠️ 里面那句「5 次/300 秒/IP」是**服务端防爆破参数的描述**（与 `utils/rateLimit.ts` 的实际配置对应），
+ * 🔴 三份译文都必须保留同样的数字（admin 侧有一条"数字契约"守卫会逐 key 对账）。
+ */
+const WEAK_PASSWORD_TAIL =
+  '弱口令在"5 次/300 秒/IP"的防爆破预算下，用一批代理 IP 仍然可在数小时内撞开，而协作者账号一旦被撞开就能改站点内容。';
+
 export const SERVER_ERROR_CODES = {
   // ── 分类（category.provider.ts，期 9 第一批）──────────────────────────────
   categoryDuplicateOnCreate: entry('分类名重复，无法创建！', NotAcceptableException),
@@ -104,9 +112,35 @@ export const SERVER_ERROR_CODES = {
   // ── 账号与协作者（user.provider.ts / auth.controller.ts，期 9 第三批）──────────────────
   // 🔴 `accountNameInvalid` 一处登记、**两个调用点**（user.provider 与 auth.controller 曾各写一遍同一句话，
   //    那就是"同一性质两处口径"）⇒ 合并成一个码正是登记表的价值。
-  // ⚠️ 本批**刻意不含** user.provider 里那 5 处带 `${label}` / `${MIN}` / `${name}` 的模板消息：
-  //    其中 `label` 是**中文参数**（'管理员'/'协作者'），直接当 ICU 参数会让英文里夹中文 ⇒
-  //    要么按 label 拆成不同的码、要么用 ICU select，单独排一批（见手册 §7.142 F）。
+  // 🔴 期 9 第一批（2026-09-27）：上面那条"刻意不含"的欠条**已还** —— 那 5 处带 `${label}` / `${MIN}` /
+  //    `${name}` 的模板消息全部迁进码表（下面 8 个码）。
+  //    🔴 `label` 那个坑的解法选了**按 label 拆码**（`adminPasswordXxx` / `collaboratorPasswordXxx`），
+  //    而不是 ICU select：`fillServerErrorMessage()` 只做 `{name}` 替换、**不实现 select**
+  //    （服务端返回体里的 message 就是这张表的 `zh` 插值结果 ⇒ 用 select 会把 `{kind, select, …}` 原样发给用户）。
+  //    👉 于是 `assertAccountPasswordStrength(value, label)` 的第二个参数从**中文字面量**（'管理员'/'协作者'）
+  //    改成了**语义 kind**（'admin' | 'collaborator'）—— 🔴 中文当参数值传进消息模板，
+  //    英文里就会夹中文（与 admin 侧 `NumSelect d="天"` 那个坑同一个形状：**别把给用户看的文字当协议值**）。
+  //    ⚠️ 数字（{min} / {max} / {count}）走 params，不写死在译文里：admin 侧那条"数字契约"守卫会三份包对账。
+  adminPasswordEmpty: entry('管理员密码不合法（不能为空，且必须是 {min}-{max} 个字符）', BadRequestException),
+  collaboratorPasswordEmpty: entry('协作者密码不合法（不能为空，且必须是 {min}-{max} 个字符）', BadRequestException),
+  adminPasswordTooLong: entry('管理员密码不合法（1-{max} 个字符）', BadRequestException),
+  collaboratorPasswordTooLong: entry('协作者密码不合法（1-{max} 个字符）', BadRequestException),
+  adminPasswordTooShort: entry(
+    '管理员密码太短：至少 {min} 个字符（当前 {count} 个）。' + WEAK_PASSWORD_TAIL,
+    BadRequestException,
+  ),
+  collaboratorPasswordTooShort: entry(
+    '协作者密码太短：至少 {min} 个字符（当前 {count} 个）。' + WEAK_PASSWORD_TAIL,
+    BadRequestException,
+  ),
+  collaboratorNameTakenByCollaborator: entry(
+    '用户名「{name}」已被一个协作者占用，请换一个（管理员与协作者不能同名，否则登录会落到不确定的账号上）',
+    BadRequestException,
+  ),
+  collaboratorNameSameAsAdmin: entry(
+    '用户名「{name}」与管理员账号相同，不可用于协作者（否则该用户名登录会落到不确定的账号上）',
+    ForbiddenException,
+  ),
   collaboratorNameInvalid: entry('协作者用户名不合法（1-50 个字符）', BadRequestException),
   accountNameInvalid: entry('用户名不合法（1-50 个字符）', BadRequestException),
   adminPasswordInvalidNoChange: entry('密码不合法，未做任何修改', BadRequestException),

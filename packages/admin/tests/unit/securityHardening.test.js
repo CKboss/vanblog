@@ -153,7 +153,16 @@ describe('安全加固：认证与权限', () => {
 
   it('改密码/建协作者都要校验空值，且只写白名单字段', () => {
     const user = read('packages/server/src/provider/user/user.provider.ts');
-    assert.match(user, /密码不合法/);
+    // 🔴 期 9 第一批：那句「密码不合法」的**中文正文搬进了服务端错误码登记表**
+    //    （`utils/serverErrorCodes.ts` 的 `adminPasswordEmpty` / `collaboratorPasswordEmpty` 等），
+    //    `user.provider.ts` 里现在只剩**码名** ⇒ 锚点跟着搬，性质一条没放：
+    //    ① 改密码/建协作者都必须走空值校验（这里断言两个码都被抛出）；
+    //    ② 登记表里那两条的中文必须仍然是「密码不合法」（下面那条断言，跨文件钉住文案没被改软）。
+    assert.match(user, /adminPasswordEmpty|collaboratorPasswordEmpty/);
+    assert.match(user, /adminPasswordTooShort|collaboratorPasswordTooShort/);
+    const codes = read('packages/server/src/utils/serverErrorCodes.ts');
+    assert.match(codes, /adminPasswordEmpty: entry\('管理员密码不合法/);
+    assert.match(codes, /collaboratorPasswordEmpty: entry\('协作者密码不合法/);
     assert.doesNotMatch(user, /\.\.\.updateUserDto,\n\s*password:/);
     assert.doesNotMatch(user, /type: 'collaborator',\n\s*\.\.\.collaboratorDto/);
     // 口令校验走统一入口：scrypt（新）与 sha256（旧）都认，登录成功后自动升级。

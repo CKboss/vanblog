@@ -1729,4 +1729,16 @@ export default {
   'sysconf.customizing.tabHtmlBody': '自訂 HTML (body)',
   'sysconf.customizing.tabHtmlHead': '自訂 HTML (head)',
 
+
+  // ── 🔴 期 9 第一批（8 條）── 地區用詞：**密碼** / **字元**（字符）/ **目前**（当前）/ **帳號**（账号）/
+  //    **使用者名稱**（用户名）/ **佔用** / **登入**（登录）/ **防爆破預算** / **代理** / **數小時** /
+  //    🔴 **請**（不是「请」）；引號用「」（與 zh-CN 的直雙引號不同，這是地區習慣）。
+  'error.adminPasswordEmpty': '管理員密碼不合法（不能為空，且必須是 {min}-{max} 個字元）',
+  'error.collaboratorPasswordEmpty': '協作者密碼不合法（不能為空，且必須是 {min}-{max} 個字元）',
+  'error.adminPasswordTooLong': '管理員密碼不合法（1-{max} 個字元）',
+  'error.collaboratorPasswordTooLong': '協作者密碼不合法（1-{max} 個字元）',
+  'error.adminPasswordTooShort': '管理員密碼太短：至少 {min} 個字元（目前 {count} 個）。弱口令在「5 次/300 秒/IP」的防爆破預算下，用一批代理 IP 仍然可在數小時內被撞開，而協作者帳號一旦被撞開就能改站點內容。',
+  'error.collaboratorPasswordTooShort': '協作者密碼太短：至少 {min} 個字元（目前 {count} 個）。弱口令在「5 次/300 秒/IP」的防爆破預算下，用一批代理 IP 仍然可在數小時內被撞開，而協作者帳號一旦被撞開就能改站點內容。',
+  'error.collaboratorNameTakenByCollaborator': '使用者名稱「{name}」已被一個協作者佔用，請換一個（管理員與協作者不能同名，否則登入會落到不確定的帳號上）',
+  'error.collaboratorNameSameAsAdmin': '使用者名稱「{name}」與管理員帳號相同，不可用於協作者（否則該使用者名稱登入會落到不確定的帳號上）',
 };

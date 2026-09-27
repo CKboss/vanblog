@@ -61,7 +61,9 @@ for (const l of LOCALES) {
  * `auth.controller.ts`(1) = **19** 处 ⇒ **211**。
  * 🔴 复算命令：`node scripts/i18n/inventory.js --server-throws`（同一个共享实现，口径必然一致）。
  */
-const THROW_BUDGET = 211;
+// 🔴 211 → **206**（期 9 第一批）：`user.provider.ts` 那 5 处带 `${label}` / `${MIN}` / `${name}` 的
+//   模板消息全部迁进码表（8 个新码：口令 3 类 × admin/collaborator + 协作者用户名冲突 2 条）。
+const THROW_BUDGET = 206;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -393,4 +395,64 @@ test('服务端错误码 · admin 侧接线：全局 errorHandler 与 adaptor �
   assert.match(factory, /getIntl\(getLocale\(\)\)/, '翻译器不是用 getIntl(getLocale()) 在调用期造的');
   // 🔴 失败方向：拿不到 intl 时必须返回 undefined（= 回落中文），绝不能抛出把整个错误处理搞崩
   assert.match(factory, /return undefined;/, '翻译器没有"拿不到就回落"的分支');
+});
+
+test('🔴 服务端错误码 · 尺子反证（合成输入）：中文 throw 必须被数到，中文**日志**必须不被数到', () => {
+  // ## 为什么要这条（2026-09-27 期 9 第 0 批）
+  // 上面那两条棘轮（THROW_BUDGET / MESSAGE_BODY_BUDGET）的反空转只验了"**总量**够大"
+  // （files ≥200、total >100、total2 >50）—— 那能抓住"遍历坏了"，抓不住"**口径错了**"：
+  // 一把把日志文本也算进来的尺子，总量只会更大，反空转照样全绿，
+  // 而它会逼人去做**错的事**（翻译 `logger.warn(…)`：日志属开发者界面，翻它会让同一条日志
+  // 在不同语言下长得不一样，排查问题时 grep 都 grep 不到）。
+  // 🔴 反过来，一把**漏数**的尺子同样危险：本期实测过一次 —— 我先写了一把新尺子（AST 遍历），
+  // 只认 acorn 的 `Literal`/`Property`，而 `parseSource` 出的是 babel 的 `StringLiteral`/`ObjectProperty`
+  // ⇒ 普通字符串字面量一条都没数到（只数到模板字符串），报出 160 条的假数字（真值 374）。
+  // 👉 所以反证必须**正反两个方向**：该数的形状要数到，不该数的形状要漏掉。
+  //    合成输入直接喂给共享模块的两个收集器（与棘轮同一个口径，不另起一套遍历）。
+  const SRC = [
+    "import { BadRequestException, Logger } from '@nestjs/common';",
+    "const logger = new Logger('synthetic');",
+    "export function boom() {",
+    "  logger.warn('这条是日志，不该被数进去');",
+    "  console.log('这条也不该被数进去');",
+    "  // 这条是注释，也不该被数进去",
+    "  throw new BadRequestException('这条是用户可见的错误消息，必须被数到');",
+    "}",
+    "export function envelope() {",
+    "  return { statusCode: 400, message: '这条是响应信封里的消息，也必须被数到' };",
+    "}",
+    "export function tpl(ctx) {",
+    "  throw new BadRequestException(`模板形状的也要数到：${ctx}`);",
+    "}",
+  ].join('\n');
+
+  const throws = astInventory.collectChineseThrows(SRC, 'synthetic.ts');
+  const msgs = astInventory.collectChineseMessageProps(SRC, 'synthetic.ts');
+  // 🔴 两个收集器返回的形状是 `{ line, texts: [...] }`（不是 `{ text }`）——
+  //    第一版按 `x.text` 读 ⇒ 恒 undefined ⇒ 正向断言假红。👉 写断言前先把返回值**打印出来**看形状。
+  const flat = (rows) => (rows || []).flatMap((r) => (r.texts || []).map((t) => `${r.line}:${t}`));
+  const throwTexts = flat(throws);
+  const msgTexts = flat(msgs);
+
+  // ① 正向：用户可见的三种形状（字符串字面量 / 模板字符串 / 响应信封）都要被数到
+  assert.ok(throws.length >= 2, `🔴 中文 throw 只数到 ${throws.length} 条（期望 ≥2：字符串字面量 + 模板）⇒ 尺子漏数`);
+  assert.ok(
+    throwTexts.some((x) => x.includes('必须被数到')),
+    `🔴 字符串字面量形状的 throw 没被数到（这正是本期实测漏掉的那一类）：${JSON.stringify(throwTexts).slice(0, 200)}`,
+  );
+  assert.ok(
+    throwTexts.some((x) => x.includes('模板形状')),
+    `🔴 模板字符串形状的 throw 没被数到：${JSON.stringify(throwTexts).slice(0, 200)}`,
+  );
+  assert.ok(msgs.length >= 1, `🔴 「message: 中文」只数到 ${msgs.length} 条（期望 ≥1）⇒ 尺子漏数`);
+
+  // ② 反向：日志 / console / 注释都**不该**被数到（数到了就会逼人翻译日志）
+  const all = [...throwTexts, ...msgTexts].join('\n');
+  for (const banned of ['不该被数进去']) {
+    assert.ok(
+      !all.includes(banned),
+      `🔴 尺子把**开发者界面**的中文也算进了用户可见口径（日志/console/注释）⇒ 会逼人翻译日志：${all.slice(0, 200)}`,
+    );
+  }
+  assert.ok(!/logger|console/.test(all), `🔴 计数结果里混进了 logger/console 的文本：${all.slice(0, 200)}`);
 });

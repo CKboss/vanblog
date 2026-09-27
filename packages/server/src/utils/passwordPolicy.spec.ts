@@ -50,11 +50,11 @@ describe('账号口令：assertAccountPasswordStrength', () => {
 
   it('浏览器派生形状被识别，且不因长度被拒（服务端看不到原始口令）', () => {
     expect(isBrowserDerivedPassword(derived)).toBe(true);
-    expect(assertAccountPasswordStrength(derived, '管理员')).toBe(derived);
+    expect(assertAccountPasswordStrength(derived, 'admin')).toBe(derived);
     // 真实的派生值（sha256 of 'x'）也认
     const realSha = '2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881';
     expect(isBrowserDerivedPassword(realSha)).toBe(true);
-    expect(assertAccountPasswordStrength(realSha, '协作者')).toBe(realSha);
+    expect(assertAccountPasswordStrength(realSha, 'collaborator')).toBe(realSha);
   });
 
   it('不是派生形状的大小写/长度变体都不算派生（判定不能放宽）', () => {
@@ -71,15 +71,15 @@ describe('账号口令：assertAccountPasswordStrength', () => {
   });
 
   it('原始口令 ≥10 ⇒ 通过（10 是边界，含）', () => {
-    expect(assertAccountPasswordStrength('abcdefghij', '管理员')).toBe('abcdefghij');
-    expect(assertAccountPasswordStrength('x'.repeat(200), '管理员').length).toBe(200);
+    expect(assertAccountPasswordStrength('abcdefghij', 'admin')).toBe('abcdefghij');
+    expect(assertAccountPasswordStrength('x'.repeat(200), 'admin').length).toBe(200);
   });
 
   it('原始口令 <10 ⇒ 400，消息点名最小长度、当前长度与理由', () => {
     for (const weak of ['1', 'ab', 'pwn12345', 'x'.repeat(9)]) {
       let caught: any = null;
       try {
-        assertAccountPasswordStrength(weak, '管理员');
+        assertAccountPasswordStrength(weak, 'admin');
       } catch (err) {
         caught = err;
       }
@@ -94,11 +94,11 @@ describe('账号口令：assertAccountPasswordStrength', () => {
 
   it('空值 / 非字符串 ⇒ 400 且消息里保留既有措辞「密码不合法」（有跨包锚点钉着它）', () => {
     for (const bad of ['', null, undefined, 12345, {}, [], 'x'.repeat(201)]) {
-      expect(() => assertAccountPasswordStrength(bad, '协作者')).toThrow(BadRequestException);
+      expect(() => assertAccountPasswordStrength(bad, 'collaborator')).toThrow(BadRequestException);
     }
     let caught: any = null;
     try {
-      assertAccountPasswordStrength('', '协作者');
+      assertAccountPasswordStrength('', 'collaborator');
     } catch (err) {
       caught = err;
     }
@@ -106,17 +106,23 @@ describe('账号口令：assertAccountPasswordStrength', () => {
     expect(String(caught.getResponse().message)).toContain('协作者');
   });
 
-  it('label 会出现在消息里（管理员与协作者要能区分）', () => {
-    const msgOf = (label: string) => {
+  // 🔴 期 9 第一批：入参从**中文 label** 改成了**语义 kind**（'admin' | 'collaborator'）⇒
+  //    这条用例的性质没变（两类账号在消息里要能区分），只是传参形状变了。
+  //    ⚠️ 断言仍然查中文（`toContain('管理员')`）：服务端返回体里的 message 就是码表的 `zh`
+  //    （权威中文），译文在 admin 侧按 `error.<code>` 给 —— 两边各有各的口径，别混。
+  it('kind 会决定消息里的账号类型（管理员与协作者要能区分）', () => {
+    const msgOf = (kind: 'admin' | 'collaborator') => {
       try {
-        assertAccountPasswordStrength('short', label);
+        assertAccountPasswordStrength('short', kind);
       } catch (err: any) {
         return String(err.getResponse().message);
       }
       return '';
     };
-    expect(msgOf('管理员')).toContain('管理员');
-    expect(msgOf('协作者')).toContain('协作者');
+    expect(msgOf('admin')).toContain('管理员');
+    expect(msgOf('collaborator')).toContain('协作者');
+    // 🔴 新增：这两条现在都必须是**带码**的异常（admin 侧要靠 code 找译文）
+    expect(msgOf('admin')).toContain('密码太短');
   });
 
   /**
@@ -148,6 +154,10 @@ describe('账号口令：assertAccountPasswordStrength', () => {
 });
 
 describe('账号口令：校验点覆盖 + 不能蔓延到登录路径', () => {
+  // 🔴 期 9 第一批：`assertAccountPasswordStrength` 的第二个参数从**中文字面量**（'管理员'/'协作者'）
+  //    改成了**语义 kind**（'admin' | 'collaborator'）—— 因为那个 label 会被拼进给用户看的消息，
+  //    中文当参数值传进模板，英文里就会夹中文。下面这些**源码锚点**随之换形状，性质一条没放：
+  //    改密码 / 建协作者 / 改协作者 / 忘记密码恢复都必须走**同一个入口**，不许自己抄一份长度判定。
   const userProviderSrc = () =>
     stripCommentsForAnchor(
       readFileSync(join(__dirname, '../provider/user/user.provider.ts'), 'utf-8'),
@@ -163,7 +173,7 @@ describe('账号口令：校验点覆盖 + 不能蔓延到登录路径', () => {
 
   it('改管理员密码（updateUser，也就是「忘记密码」恢复的落点）走统一入口', () => {
     const body = bodyOf(userProviderSrc(), 'async updateUser(');
-    expect(body).toMatch(/assertAccountPasswordStrength\(password, '管理员'\)/);
+    expect(body).toMatch(/assertAccountPasswordStrength\(password, 'admin'\)/);
     // 旧的内联判定不许回来（它只判空与超长，不判过短）
     expect(body).not.toMatch(/if \(!password \|\| password\.length > 200\)/);
   });
@@ -171,7 +181,7 @@ describe('账号口令：校验点覆盖 + 不能蔓延到登录路径', () => {
   it('建协作者与改协作者都走统一入口（经由 assertCollaboratorPassword）', () => {
     const src = userProviderSrc();
     expect(bodyOf(src, 'function assertCollaboratorPassword')).toMatch(
-      /return assertAccountPasswordStrength\(password, '协作者'\)/,
+      /return assertAccountPasswordStrength\(password, 'collaborator'\)/,
     );
     expect(bodyOf(src, 'async createCollaborator(')).toMatch(/assertCollaboratorPassword\(/);
     expect(bodyOf(src, 'async updateCollaborator(')).toMatch(/assertCollaboratorPassword\(/);
@@ -189,8 +199,8 @@ describe('账号口令：校验点覆盖 + 不能蔓延到登录路径', () => {
           return nextPassword;
         }
       }`;
-    expect(gutted).not.toMatch(/assertAccountPasswordStrength\(password, '管理员'\)/);
-    expect(gutted).not.toMatch(/return assertAccountPasswordStrength\(password, '协作者'\)/);
+    expect(gutted).not.toMatch(/assertAccountPasswordStrength\(password, 'admin'\)/);
+    expect(gutted).not.toMatch(/return assertAccountPasswordStrength\(password, 'collaborator'\)/);
   });
 
   it('登录校验（validateUser）**不做**长度校验：口令太短的既有账号仍然能登进来', () => {
@@ -389,7 +399,7 @@ describe('「忘记密码」恢复接口：口令校验走同一个入口', () =
 
   it('restore() 调用统一入口，而不是自己抄一份长度判定', () => {
     const body = src().slice(src().indexOf('async restore('));
-    expect(body).toMatch(/assertAccountPasswordStrength\(password, '管理员'\)/);
+    expect(body).toMatch(/assertAccountPasswordStrength\(password, 'admin'\)/);
     // 旧的独立副本不许回来：两份校验一定会漂移（下限只加在一边就是这么来的）
     expect(body).not.toMatch(/if \(!password \|\| password\.length > 200\)/);
   });
@@ -402,7 +412,7 @@ describe('「忘记密码」恢复接口：口令校验走同一个入口', () =
         }
         await this.userProvider.updateUser({ name, password });
       }`);
-    expect(reverted).not.toMatch(/assertAccountPasswordStrength\(password, '管理员'\)/);
+    expect(reverted).not.toMatch(/assertAccountPasswordStrength\(password, 'admin'\)/);
     expect(reverted).toMatch(/if \(!password \|\| password\.length > 200\)/);
   });
 });

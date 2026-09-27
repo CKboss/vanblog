@@ -1780,4 +1780,17 @@ export default {
   'sysconf.customizing.tabHtmlBody': 'Custom HTML (body)',
   'sysconf.customizing.tabHtmlHead': 'Custom HTML (head)',
 
+
+  // ── 🔴 期 9 第一批（8 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 计数一律 ICU plural（`{min, plural, one {# character} other {# characters}}`）——
+  //    "占位符紧跟复数名词"那条守卫会查（`{min} characters` 会渲染成 "1 characters"）。
+  //    🔴 数字 5 / 300 与 `IP` 必须原样保留（数字契约守卫按 key 对账三份包）。
+  'error.adminPasswordEmpty': 'The administrator password is invalid: it cannot be empty and must be {min} to {max, plural, one {# character} other {# characters}} long',
+  'error.collaboratorPasswordEmpty': 'The collaborator password is invalid: it cannot be empty and must be {min} to {max, plural, one {# character} other {# characters}} long',
+  'error.adminPasswordTooLong': 'The administrator password is invalid: 1 to {max, plural, one {# character} other {# characters}}',
+  'error.collaboratorPasswordTooLong': 'The collaborator password is invalid: 1 to {max, plural, one {# character} other {# characters}}',
+  'error.adminPasswordTooShort': 'The administrator password is too short: at least {min, plural, one {# character} other {# characters}} (it has {count, plural, one {# character} other {# characters}} now). Under the anti-brute-force budget of 5 attempts / 300 seconds / IP, a weak password can still be cracked within hours using a batch of proxy IPs, and a compromised collaborator account can then change the site content.',
+  'error.collaboratorPasswordTooShort': 'The collaborator password is too short: at least {min, plural, one {# character} other {# characters}} (it has {count, plural, one {# character} other {# characters}} now). Under the anti-brute-force budget of 5 attempts / 300 seconds / IP, a weak password can still be cracked within hours using a batch of proxy IPs, and a compromised collaborator account can then change the site content.',
+  'error.collaboratorNameTakenByCollaborator': 'The username "{name}" is already taken by a collaborator. Please pick another one: the administrator and a collaborator cannot share a username, otherwise signing in with it lands on an unpredictable account.',
+  'error.collaboratorNameSameAsAdmin': 'The username "{name}" is the same as the administrator account, so it cannot be used for a collaborator: otherwise signing in with that username lands on an unpredictable account.',
 };

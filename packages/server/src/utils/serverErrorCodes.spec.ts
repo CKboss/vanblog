@@ -56,15 +56,30 @@ describe('服务端错误码（serverErrorCodes）', () => {
 
   it('每个登记的码都能造出异常：状态码是数字、message 是中文、body 里的 code 与登记一致', () => {
     for (const code of codes) {
-      const ex = codedError(code);
+      // 🔴 期 9 第一批起码表里有**带占位符**的模板（`{min}` / `{max}` / `{count}` / `{name}`）⇒
+      //    造异常时要按登记表里的 `zh` **自动喂样例参数**，否则 message 里必然残留 `{min}`。
+      //    ⚠️ 这不是放宽判据：下面那条"不许残留占位符"的断言**照旧**，
+      //    只是从"不传 params 也不许残留"改成"喂了 params 之后不许残留"——
+      //    🔴 前者对带参数的码是**不可能满足的**（那等于禁止码表使用占位符）。
+      const zh = String((SERVER_ERROR_CODES as any)[code].zh || '');
+      const sample: Record<string, string | number> = {};
+      for (const m of zh.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+        sample[m[1]] = m[1] === 'name' ? 'someone' : 10;
+      }
+      const ex = codedError(code, sample);
       expect(ex).toBeInstanceOf(HttpException);
       expect(typeof ex.getStatus()).toBe('number');
       const body = ex.getResponse() as Record<string, unknown>;
       expect(body.code).toBe(code);
       expect(typeof body.message).toBe('string');
       expect((body.message as string).length).toBeGreaterThan(0);
-      // 🔴 未传 params 时 message 里不许残留占位符（那说明登记表里的 zh 写了 {x} 而调用点没传）
+      // 🔴 喂了样例 params 之后，message 里不许残留占位符
+      //    （残留 = 登记表写了 `{x}` 而喂参数的地方漏了 x —— 用户会看见字面 `{min}`）
       expect(body.message).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+      // 🔴 反向：带占位符的码，样例参数必须真的**被填进去**了（防止"喂了个没人用的参数"这种假绿）
+      for (const k of Object.keys(sample)) {
+        expect(String(body.message)).toContain(String(sample[k]));
+      }
     }
   });
 
@@ -149,6 +164,17 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   collaboratorPasswordInvalidOnCreate: { status: 400, error: 'Bad Request' },
   collaboratorNotFound: { status: 403, error: 'Forbidden' },
   collaboratorPasswordInvalidOnUpdate: { status: 400, error: 'Bad Request' },
+  // 🔴 期 9 第一批新增的 8 个码（账号口令的 3 类 × 2 种账号 + 协作者用户名冲突 2 条）。
+  //    状态码与 error 字段**照抄迁移前**那几处 `new BadRequestException(...)` / `new ForbiddenException(...)`
+  //    的实际取值 —— 这份快照的意义就是"迁移不许悄悄改状态码"。
+  adminPasswordEmpty: { status: 400, error: 'Bad Request' },
+  collaboratorPasswordEmpty: { status: 400, error: 'Bad Request' },
+  adminPasswordTooLong: { status: 400, error: 'Bad Request' },
+  collaboratorPasswordTooLong: { status: 400, error: 'Bad Request' },
+  adminPasswordTooShort: { status: 400, error: 'Bad Request' },
+  collaboratorPasswordTooShort: { status: 400, error: 'Bad Request' },
+  collaboratorNameTakenByCollaborator: { status: 400, error: 'Bad Request' },
+  collaboratorNameSameAsAdmin: { status: 403, error: 'Forbidden' },
 };
 
   it('🔴 码名必须是合法的 i18n key 段（admin 侧的 key 就是 error.<code>）', () => {
