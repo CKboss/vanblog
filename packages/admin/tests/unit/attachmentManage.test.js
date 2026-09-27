@@ -29,7 +29,8 @@ describe('附件管理：后台入口', () => {
     assert.match(page, /exportAllAttachments/);
     assert.match(page, /searchArtclesByLink/);
     assert.match(page, /\/api\/admin\/file\/upload/);
-    assert.match(page, /title: '文件名'/);
+    // 🔴 期 6 第十一批起列标题走 t() ⇒ 两种形状都认（性质没放：必须有「文件名」这一列）
+    assert.match(page, /title: (t\('[^']+', )?'文件名'/);
     assert.match(page, /按文件名模糊搜索/);
     assert.match(page, /复制链接/);
     assert.match(page, /复制 Markdown/);
@@ -56,7 +57,9 @@ describe('附件管理：后台入口', () => {
     const tools = read('src/pages/Static/file/tools.ts');
     assert.match(tools, /getImgLink/);
     assert.match(tools, /getAttachmentLink/);
-    assert.match(tools, /\[\$\{displayName \|\| '附件'\}\]\(\$\{url\}\)/);
+    // 🔴 期 6 第十一批：那个兜底名「附件」也走 t 了（它是**复制进用户 Markdown** 的链接文字）
+    //    ⇒ 性质没放：复制出来的必须还是 [名字](url)，且兜底名跟着语言走
+    assert.match(tools, /`\[\$\{displayName \|\| t\('[^']+', '附件'\)\}\]\(\$\{url\}\)`/);
     assert.match(tools, /downloadAttachment/);
   });
 });

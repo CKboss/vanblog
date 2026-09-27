@@ -521,8 +521,12 @@ function collectServerErrorCodes(src, label) {
  *    （简繁同形，或在繁体里同样合法）。
  * 🔴 规矩：**每翻译完一批繁中，就跑一次 `--zh-tw-audit` 把该批用字逐个过一遍**，别指望这张表替你兜住。
  */
+// 🔴 2026-09-27 期 6 第十一批补两个字：`挂`（繁：掛）与 `径`（繁：徑）。
+//   它们出现在繁中包里而审计**没报**（表没收录），是人工复核译文时发现的
+//   （`about.hlComments` 的「外挂」、`code.folderPageHint` 的 `/c/路径/`）。
+//   👉 这张表本来就是不完备、只能逐步长的：每漏一次就补一次，别把 0 命中当成全对。
 const SIMPLIFIED_ONLY_ZH =
-  '设备复务网页图导录账号评论处动进级单击确认时间题误报读压缩数据库静态档称随机闭开启传输应该这会说请试频简护贴载键运显实个为来对过还现点';
+  '设备复务网页图导录账号评论处动进级单击确认时间题误报读压缩数据库静态档称随机闭开启传输应该这会说请试频简护贴载键运显实个为来对过还现点挂径';
 
 /**
  * 🔴 zh-TW 里**刻意保留简体**的字（与上面那张表互补）：必须是"有理由的例外"，不是"漏网"。
@@ -638,22 +642,68 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 // 🔴 `coverBackfill` = 服务层 `services/van-blog/coverBackfill.js`（补封面的汇总行标签与空结果文案）。
 //   与 `cover`（弹窗自己的文案）分开：一个是**服务层模块**、一个是组件，跟 `accessPassword` 的分组方式一致。
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
-const REGISTERED_KEY_GROUPS = [// 🔴 `backup` = 系统配置「备份与恢复」页（整站备份 / 数据备份 / 签名 / 清单 / 恢复）。
-// 🔴 `analysis` = 统计 ID 那两个字段（Google Analytics / 百度统计）的共享文案 + 导航路径常量。
-// 🔴 `waline` = 评论通知 SMTP 那一组共享字段文案 + 导航路径常量 + 评论设置表单自己的几条。
-'accessPassword', 'analysis', 'article', 'backup', 'common', 'cover', // 🔴 `comment` = 评论管理页（内置评论 / Waline 两套 provider 的说明、审核表格、批量操作、编辑弹窗）
-//   + 服务层 `commentAdmin.js` 的状态标签与关键词校验文案。
-'comment', 'coverBackfill', // 🔴 `dataManage` = 数据管理页（分类 / 标签 / 导航菜单 / 捐赠 / 友情链接 / 社交媒体 六个页签）。
-'customPage', 'dataManage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
-//   ⚠️ 移动端工具栏那 11 条**不在语言包里**：它们与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 editorLocale。
-// 🔴 `editorProfile` = 编辑器偏好设置弹窗（保存后行为 / 本机缓存 / 软换行）。
-'draft', 'editor', 'editorProfile', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
-//   组名用模块名（与 `accessPassword` / `coverBackfill` 同一套做法），因为它们的文案被多个页面共用。
-// 🔴 `request` = 全局请求错误提示（requestError.js 的四条兜底）。
-//   ⚠️ **不能**并进 `error.*`：那一组是服务端错误码的专用命名空间，
-//   `i18nServerErrorCodes.test.js` 有反向断言"包里的 `error.*` 必须都有对应的码"。
-'menu', 'pathname', 'recycle', 'request', 'revision', 'schedule', 'siteInfo', // 🔴 `time` = 相对时间（relativeTime.js 的「刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前」）。
-'storage', 'sysconf', 'tagTokens', 'theme', 'time', 'urlForm', 'waline', 'watermark'];
+/**
+ * 🔴 已登记的语言包**组名**（key 的第一段）。新加一组必须在这里登记，否则 `i18nKeyNaming` 会红。
+ *
+ * 各组对应（按字母序）：
+ * - `about` 关于页（版本 / 增强版标识 / 能力清单 / 文档链接 / 致谢与上游警告）
+ * - `accessPassword` / `coverBackfill` / `tagTokens` / `pathname` / `schedule` **服务层字段常量**模块
+ *   （组名用模块名，因为它们的文案被多个页面共用）
+ * - `analysis` 统计 ID 那两个字段（Google Analytics / 百度统计）+ 导航路径常量
+ * - `article` / `draft` / `recycle` 文章、草稿、回收站
+ * - `backup` 系统配置「备份与恢复」页；`theme` 系统配置「主题」页；`sysconf` 系统配置其余各页
+ * - `code` 自定义页面与脚本编辑器；`pipeline` 流水线弹窗（含调试运行）
+ * - `comment` 评论管理页（内置评论 / Waline 两套 provider）+ `commentAdmin.js` 的状态标签与校验文案
+ * - `common` / `menu` / `error` / `request` 通用词、侧边栏菜单、服务端错误码、全局请求错误
+ *   ⚠️ `error.*` 是**服务端错误码专用**命名空间（`i18nServerErrorCodes.test.js` 有反向断言
+ *   "包里的 error.* 必须都有对应的码"）⇒ 新文案不要塞进去，用 `request.*` 或自己的组
+ * - `customPage` / `dataManage` / `editor` / `editorProfile` / `export` / `file`（附件管理页与其链接工具）/
+ *   `img` / `init` / `log` / `login` / `logout` / `revision` / `siteInfo` / `storage` / `time` /
+ *   `urlForm` / `waline` / `watermark` 各自的页面或模块
+ *   ⚠️ `editor` 组只有 6 条：移动端工具栏那 11 条**不在语言包里**（与上游 bytemd 的 zh_Hans 值逐字相同
+ *   ⇒ 直接读 editorLocale）
+ */
+const REGISTERED_KEY_GROUPS = [
+  'about',
+  'accessPassword',
+  'analysis',
+  'article',
+  'backup',
+  'code',
+  'comment',
+  'common',
+  'cover',
+  'coverBackfill',
+  'customPage',
+  'dataManage',
+  'draft',
+  'editor',
+  'editorProfile',
+  'error',
+  'export',
+  'file',
+  'img',
+  'init',
+  'log',
+  'login',
+  'logout',
+  'menu',
+  'pathname',
+  'pipeline',
+  'recycle',
+  'request',
+  'revision',
+  'schedule',
+  'siteInfo',
+  'storage',
+  'sysconf',
+  'tagTokens',
+  'theme',
+  'time',
+  'urlForm',
+  'waline',
+  'watermark',
+];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

@@ -97,11 +97,12 @@ describe('后台健壮性：请求失败也要把 loading 收掉', () => {
       'const fetchData = useCallback',
     );
     assert.match(fetchFileData, /try \{/);
-    assert.match(fetchFileData, /reportRequestError\(message, err, '读取文件内容失败！'\)/);
+    // 🔴 期 6 第十一批起走 t() ⇒ 锚点两种形状都认（性质没放：读文件失败必须弹这句、必须走 reportRequestError）
+    assert.match(fetchFileData, /reportRequestError\(message, err, (t\('[^']+', )?'读取文件内容失败！'\)?/);
     assert.match(fetchFileData, /\} finally \{\s*setEditorLoading\(false\);\s*\}/);
 
     const fetchData = slice(code, 'const fetchData = useCallback', 'const handleSave = async');
-    assert.match(fetchData, /reportRequestError\(message, err, '获取数据失败！'\)/);
+    assert.match(fetchData, /reportRequestError\(message, err, (t\('[^']+', )?'获取数据失败！'\)?\)/);
     // 目录树与编辑器两个 loading 都要收
     assert.match(
       fetchData,
@@ -109,7 +110,7 @@ describe('后台健壮性：请求失败也要把 loading 收掉', () => {
     );
 
     const handleSave = slice(code, 'const handleSave = async', 'const actionMenu = (');
-    assert.match(handleSave, /reportRequestError\(message, err, '保存失败！'\)/);
+    assert.match(handleSave, /reportRequestError\(message, err, (t\('[^']+', )?'保存失败！'\)?\)/);
     assert.match(handleSave, /\} finally \{\s*setEditorLoading\(false\);\s*\}/);
     assert.equal((code.match(/setEditorLoading\(false\)/g) || []).length, 3);
 

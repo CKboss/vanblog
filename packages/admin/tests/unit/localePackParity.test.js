@@ -216,6 +216,14 @@ const IDENTICAL_ZH_TW_OK = [
   'comment.unknownNick',
   'comment.statusSpam',
   'comment.statusAll',
+  // 🔴 期 6 第十一批：这六条简繁同形 —— `about.builtOnPrefix`（本版本的全部工作都建立在原作者：无简体专用字）、
+  //   `非阻塞` / `阻塞`、`提交成功`、`{name} 已存在！ `（只有全角标点与占位符）、`附件`
+  'about.builtOnPrefix',
+  'code.nonBlocking',
+  'code.blocking',
+  'common.submitSuccess',
+  'file.existsPrefix',
+  'file.attachmentFallbackName',
   // 🔴 期 6 第九批（数据管理页）：这六条简繁同形 —— 上移/下移/排序/加密/未加密/提交成功
   //   （这些词简繁写法本来就一样，不是"复制简体充数"）
   'dataManage.moveUp',
@@ -377,12 +385,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 89,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 89）⇒ 遍历或解析器坏了`,
+      FILES.length >= 96,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 96）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1660,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1660）⇒ 疑似解析器坏了`,
+      calls.length >= 1780,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1780）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -463,6 +471,13 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/CommentManage/index.jsx',
       'src/pages/CommentManage/BuiltinComments.jsx',
       'src/services/van-blog/commentAdmin.js',
+      'src/pages/About.tsx',
+      'src/pages/Code/index.tsx',
+      'src/pages/Pipeline/components/PipelineModal.tsx',
+      'src/pages/Pipeline/components/RunCodeModal.tsx',
+      'src/pages/Static/file/index.tsx',
+      'src/pages/Static/file/tools.ts',
+      'src/services/van-blog/downloadArchive.ts',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -799,6 +814,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/services/van-blog/commentAdmin.js': [
         'commentStatusMeta', 'statusMeta', 'statusTabs', 'validateKeywords',
       ],
+      // 🔴 期 6 第十一批：附件链接工具与归档下载（模块级 ⇒ 注入式尾参 t），以及 About 页的能力清单工厂
+      'src/pages/Static/file/tools.ts': ['copyAttachmentLink'],
+      'src/services/van-blog/downloadArchive.ts': ['saveExportArchive'],
+      'src/pages/About.tsx': ['forkHighlights'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -1763,6 +1782,8 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
       'src/utils/walineEmailFields.js': ['WALINE_EMAIL_FIELDS', 'WALINE_ADMIN_PATH'],
       // 🔴 期 6 第十批：commentAdmin 的状态表也有 identity 视图
       'src/services/van-blog/commentAdmin.js': ['COMMENT_STATUS_META'],
+      // 🔴 期 6 第十一批：About 页能力清单的 identity 视图
+      'src/pages/About.tsx': ['FORK_HIGHLIGHTS'],
       'src/services/van-blog/tagTokens.js': ['TAG_FIELD_PLACEHOLDER', 'TAG_FIELD_TOOLTIP'],
       'src/services/van-blog/importPathname.js': ['PATHNAME_FIELD'],
       'src/services/van-blog/schedule.js': [
@@ -2001,5 +2022,81 @@ describe('🔴 三份包里同一个 key 的**占位符名**必须完全一致',
     const withPh = Object.keys(packs['zh-CN']).filter((k) => names(packs['zh-CN'][k]) !== '');
     assert.ok(withPh.length >= 60, `带占位符的 key 只有 ${withPh.length} 个（下界 60）⇒ 口径可能坏了`);
     assert.deepStrictEqual(offenders, [], '🔴 译文里的占位符名与 zh-CN 不一致：\n  ' + offenders.slice(0, 8).join('\n  '));
+  });
+});
+
+describe('🔴 关于页三条片段链的接缝（第 3 组，2026-09-27 期 6 第十一批）', () => {
+  it('按页面真实顺序组装：不许双空格 / 标点前空格 / 词与词粘连，且中文与改造前逐字相同', () => {
+    // ## 为什么要这条（本批**真的漏了一个空格**，而且是活体才看见的）
+    // 关于页那段说明是 `文字 + <a> + 文字 + <b> + 文字` 的形状，JSX 里**只有链接两侧**有 `{' '}` 字面空格，
+    // `<b>` 两侧**没有** ⇒ 英文值必须自己在"接到 <b> 的那一端"带空格。
+    // 第一版英文 `…please report it in` 后面直接跟 `<b>this repository</b>` ⇒ 渲染出 `inthis repository`。
+    // 🔴 静态判据一条都没红（值本身合法、占位符也对），是**活体**采到的段落文本才暴露的
+    // ⇒ 与备份页/主题页那两次同族，这次把关于页的三条链也纳入静态组装检查（不用建栈就能红）。
+    const SP = ' '; // JSX 里的 {' '} 字面空格
+    const B = (x) => x;
+    const cn = packs['zh-CN'];
+    const tw = packs['zh-TW'];
+    const en = packs['en-US'];
+    const CHAINS = [
+      {
+        name: '关于页：当前后台运行的是 …（链接 + <b>）',
+        build: (g) =>
+          g('about.currentRepoPrefix') + SP + B('CKboss/vanblog') + g('about.currentRepoSuffix') +
+          B(g('about.thisRepo')) + g('about.currentRepoSuffix2'),
+      },
+      {
+        name: '关于页：本版本建立在原作者 …（链接两侧都有字面空格）',
+        build: (g) => g('about.builtOnPrefix') + SP + B('@Mereithhh') + SP + g('about.builtOnSuffix'),
+      },
+      {
+        name: '关于页：上游警告（<b>官方镜像</b> + 链接）',
+        build: (g) =>
+          g('about.upstreamWarningP1') + B(g('about.officialMirror')) + g('about.upstreamWarningP2') +
+          SP + B(g('about.thisRepoIssue')) + SP + g('about.upstreamWarningP3'),
+      },
+    ];
+    for (const [loc, pack] of [['zh-CN', cn], ['zh-TW', tw], ['en-US', en]]) {
+      const g = (k) => {
+        assert.ok(k in pack, `${loc}: 缺 key ${k}`);
+        return pack[k];
+      };
+      for (const chain of CHAINS) {
+        const text = chain.build(g);
+        assert.ok(text.length > 20, `${loc}/${chain.name}: 组装出来太短 ⇒ ${JSON.stringify(text)}`);
+        assert.ok(!text.includes('  '), `🔴 ${loc}/${chain.name}: 接缝**双空格** ⇒ ${JSON.stringify(text.slice(0, 180))}`);
+        assert.ok(!/ [.,;:)]/.test(text), `🔴 ${loc}/${chain.name}: 标点前多了空格 ⇒ ${JSON.stringify(text.slice(0, 180))}`);
+        // 🔴 词与词粘连（英文才会犯）：小写字母后面直接接大写字母开头的新词，或 `}`/`]` 后接字母
+        assert.ok(!/[}\]]([A-Za-z])/.test(text), `🔴 ${loc}/${chain.name}: 代码/右括号后**缺空格** ⇒ ${JSON.stringify(text.slice(0, 180))}`);
+        if (loc === 'en-US') {
+          assert.ok(!/[a-z]{2}[\u4e00-\u9fff]/.test(text), `${loc}/${chain.name}: 混进了汉字`);
+        }
+      }
+    }
+    // 🔴 中文两份的组装结果必须与**改造前页面上的原文**逐字相同（这才是"没偷偷改文案"的证据）
+    assert.strictEqual(
+      CHAINS[1].build((k) => cn[k]),
+      '本版本的全部工作都建立在原作者 @Mereithhh 的 VanBlog 之上，遵循 GPL v3 许可，感谢原作者。',
+      '🔴 zh-CN 组装结果与改造前页面上的原文不一致（等于悄悄改了文案）',
+    );
+    // 🔴 英文那条曾经粘连的接缝：**直接量接缝本身**（回归钉子）。
+    //    第一版写的是 `/in [A-Za-z]/`（"句子里某处有 in + 空格 + 字母"）⇒ 变异对照把结尾空格删掉之后
+    //    这个正则**仍然命中**（句子前面别处就有 "in an"）⇒ 全绿。
+    //    👉 教训：**回归钉子要量"出事的那一处"**，不要量"整句里存在某种形状"。
+    // ⚠️ 只在 **en-US** 上查这条：中文没有词间空格，`…请到` + `本仓库` 本来就是紧贴的（不是缺陷）。
+    //    第一版三份包都查 ⇒ 中文两份假红。👉 又是那条：**判据要匹配语言的排版规则**。
+    for (const [loc2, pack2] of [['en-US', en]]) {
+      const text1 = CHAINS[0].build((k) => pack2[k]);
+      const idx = text1.indexOf(pack2['about.thisRepo']);
+      assert.ok(idx > 0, `${loc2}: 链 1 里找不到「本仓库」那一段 ⇒ ${JSON.stringify(text1.slice(0, 120))}`);
+      const before = text1.slice(0, idx);
+      assert.ok(/[\s—–-]$/.test(before),
+        `🔴 ${loc2}/链 1：<b> 前面的接缝**缺空格或连接符** ⇒ 前文结尾是 ${JSON.stringify(before.slice(-24))}`);
+      const text3 = CHAINS[2].build((k) => pack2[k]);
+      const idx3 = text3.indexOf(pack2['about.officialMirror']);
+      assert.ok(idx3 > 0, `${loc2}: 链 3 里找不到「官方镜像」那一段`);
+      assert.ok(/[\s“"(（-]$/.test(text3.slice(0, idx3)),
+        `🔴 ${loc2}/链 3：<b> 前面的接缝缺空格 ⇒ 前文结尾是 ${JSON.stringify(text3.slice(Math.max(0, idx3 - 24), idx3))}`);
+    }
   });
 });

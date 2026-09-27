@@ -119,7 +119,7 @@ export default function () {
                 message.error(t('sysconf.img.packFailed', '打包失败！'));
                 return;
               }
-              await saveExportArchive(name, t('sysconf.img.packDone', '图片打包完成，已开始下载'));
+              await saveExportArchive(name, t('sysconf.img.packDone', '图片打包完成，已开始下载'), t);
             } catch (err) {
               // 空的 catch 会把失败吞掉，用户只看到按钮转圈结束
               message.error(err?.message || t('sysconf.img.exportFailed', '导出失败'));

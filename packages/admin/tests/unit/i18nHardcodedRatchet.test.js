@@ -325,6 +325,21 @@ const BUDGET = {
   'src/pages/CommentManage/index.jsx': 0,
   'src/pages/CommentManage/BuiltinComments.jsx': 0,
   'src/services/van-blog/commentAdmin.js': 0,
+  // 🔴 期 6 第十一批（2026-09-27）：**关于页 / 自定义页面编辑器 / 流水线弹窗 / 附件管理**四块一起做
+  //   （按 `pageSurface.js` 从三个页面入口跑出来的闭包切批次：Code 页的闭包含两个 Pipeline 弹窗，
+  //   附件页的闭包含 `tools.ts` 与 `downloadArchive.ts`）。
+  //   🔴 `About.tsx` 预算是 **1** 而不是 0：`README.md#出处与许可` 是**指向中文 README 的 URL 锚点**
+  //   （`aboutPage.test.js` 钉着"目标锚点真实存在"；文档按站长裁定仍保持中文）⇒ 翻译它会让链接变成死锚点。
+  //   这是**第 10 类**永久例外形状：指向中文文档的 URL 锚点（与 Caddy 文档 URL 同族）。
+  //   🔴 `获取中` 原来既当显示文案又当**内部哨兵**（`version == '获取中'` 决定 Spin 转不转）
+  //   ⇒ 按"线路字面量 vs 显示文案"那条规矩拆开：哨兵改成 ASCII 常量 `VERSION_LOADING`，显示走语言包。
+  'src/pages/About.tsx': 1,
+  'src/pages/Code/index.tsx': 0,
+  'src/pages/Pipeline/components/PipelineModal.tsx': 0,
+  'src/pages/Pipeline/components/RunCodeModal.tsx': 0,
+  'src/pages/Static/file/index.tsx': 0,
+  'src/pages/Static/file/tools.ts': 0,
+  'src/services/van-blog/downloadArchive.ts': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -353,7 +368,7 @@ const BUDGET = {
 //   ⇒ 账目现在是：🔴 **61 = 48（目标底）+ 4（Customizing 欠条）+ 9（永久例外：Caddy URL 1、导出说明.md 1、
 //   登录失效 1、容器模板 6）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 61
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 62（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
@@ -387,6 +402,15 @@ const REQUIRED_EXCEPTIONS = [
   { file: 'src/pages/user/Restore/index.jsx', text: '语言 · Language', why: '同上' },
   // 🔴 期 3 第五批（2026-09-26）新增：**URL 锚点**也必须逐字是中文（这是第 4 类例外形状：
   //    前三类是协议字符串 / 要照着敲的命令 / 静态双语标签，这一类是"指向中文文档的锚点"）
+  // 🔴 期 6 第十一批新增（同族第 2 处：**指向中文 README 的 URL 锚点**）
+  {
+    file: 'src/pages/About.tsx',
+    text: 'README.md#出处与许可',
+    why:
+      'URL 锚点：必须逐字对上仓库 README.md 里的中文标题「出处与许可」（文档按站长裁定仍不做 i18n）；' +
+      '翻成英文就变成死锚点（页面能打开，但停在仓库顶部，看着像链接坏了）。' +
+      'aboutPage.test.js 另有断言钉住"目标锚点在 README 里真实存在"。',
+  },
   {
     file: 'src/pages/SystemConfig/tabs/Caddy.jsx',
     text: 'usage.md#开启了-https-重定向后关不掉',
@@ -487,7 +511,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 95, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 102, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
@@ -498,7 +522,10 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   //   —— **服务端产物的文件名**（`markdownExport.provider.ts` 写死的 `relativePath`），属**永久例外**（与 Caddy URL 同类）：
   //   翻译了它，用户在压缩包里就找不到那个文件。它已进 REQUIRED_EXCEPTIONS（反向钉住），
   //   而且 `exportFormats.test.js` 有一条**跨层断言**盯着服务端那个名字。
-  assert.strictEqual(TOTAL_BUDGET, 61, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  // 🔴 61 → **62**（期 6 第十一批）：About 页那个指向中文 README 的 URL 锚点是**第 10 条永久例外**
+  //   （与 Caddy 文档 URL 同族：翻成英文就变死锚点）。账目：48 目标底 + Customizing 4 条欠条 + 10 条永久例外
+  //   （Caddy URL 1、About README 锚点 1、导出说明.md 1、登录失效线路字面量 1、容器模板 6）。
+  assert.strictEqual(TOTAL_BUDGET, 62, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
@@ -507,5 +534,5 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 6 → **7**（期 7 第五批）：新增第 6 类例外形状 —— **与别层比对的协议字面量**
   //   （`requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`；前五类：协议字符串 / 要照着敲的命令 /
   //   静态双语标签 / 中文文档 URL 锚点 / 服务端产物文件名）。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 8, '例外清单条数变了 ⇒ 必须是有意的');
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 9, '例外清单条数变了 ⇒ 必须是有意的');
 });

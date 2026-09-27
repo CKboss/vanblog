@@ -17,13 +17,23 @@ import { DownOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-layout';
 import { Alert, Button, Dropdown, Menu, message, Modal, Space, Spin, Tag, Tree } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { history } from 'umi';
+import { history, useIntl } from 'umi';
 import PipelineModal from '../Pipeline/components/PipelineModal';
 import RunCodeModal from '../Pipeline/components/RunCodeModal';
 import './index.less';
 const { DirectoryTree } = Tree;
 
 export default function () {
+  // 🔴 期 6 第十一批：接上 i18n（语言选择必须在渲染期）。⚠️ `message.*` / `Modal.*` 是脱离 React 树的独立根（§7.151）。
+  // 🔴 t 用 useCallback([intl]) 包成**稳定引用**：本文件的 useMemo / useCallback 依赖数组里要放 t
+  //    （回调体用了 t 就必须声明它，否则切语言后仍是旧译文），不稳定 ⇒ 依赖每轮都变（§7.144 A/B）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id: string, defaultMessage: string, values?: Record<string, any>) =>
+      intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
+
   const [value, setValue] = useState('');
   const [currObj, setCurrObj] = useState<any>({});
   const [node, setNode] = useState();
@@ -43,9 +53,9 @@ export default function () {
   const menuTimerRef = useRef<any>(null);
   const mountTimerRef = useRef<any>(null);
   const typeMap = {
-    file: '单文件页面',
-    folder: '多文件页面',
-    pipeline: '流水线',
+    file: t('customPage.typeFile', '单文件页面'),
+    folder: t('customPage.typeFolder', '多文件页面'),
+    pipeline: t('menu.site.pipeline', '流水线'),
   };
 
   useEffect(() => {
@@ -81,12 +91,14 @@ export default function () {
       css: cssArr,
     };
     for (const [k, v] of Object.entries(m)) {
-      if (v.some((t) => name.includes('.' + t))) {
+      // 🔴 形参原本叫 `t`（这里遍历的是扩展名）⇒ 会**遮蔽**翻译器 ⇒ 改名 `ext`
+      if (v.some((ext) => name.includes('.' + ext))) {
         return k;
       }
     }
     return 'html';
-  }, [node]);
+    // 🔴 依赖数组必须带 t（回调体里用了它）
+  }, [node, t]);
 
   const onResize = () => {
     updateEditorSize();
@@ -167,14 +179,14 @@ export default function () {
       setValue(data);
     } catch (err) {
       // 读文件失败时以前直接抛出去，editorLoading 永远是 true → 编辑器一直转圈
-      reportRequestError(message, err, '读取文件内容失败！');
+      reportRequestError(message, err, t('code.readFileFailed', '读取文件内容失败！'));
     } finally {
       setEditorLoading(false);
     }
   };
   const fetchData = useCallback(async () => {
     if (!path && !id) {
-      message.error('无有效信息，无法获取数据！');
+      message.error(t('code.noValidInfo', '无有效信息，无法获取数据！'));
       return;
     }
     // 三个分支各自 setXxxLoading(true) 后直接 await，接口一失败就没人收尾：
@@ -187,7 +199,7 @@ export default function () {
         if (data) setTreeData(data);
       } else if (type == 'pipeline') {
         if (!id) {
-          message.error('无有效信息，无法获取数据！');
+          message.error(t('code.noValidInfo', '无有效信息，无法获取数据！'));
           return;
         }
         setEditorLoading(true);
@@ -205,16 +217,17 @@ export default function () {
         }
       }
     } catch (err) {
-      reportRequestError(message, err, '获取数据失败！');
+      reportRequestError(message, err, t('code.fetchDataFailed', '获取数据失败！'));
     } finally {
       setTreeLoading(false);
       setEditorLoading(false);
     }
-  }, [setCurrObj, setValue, path]);
+    // 🔴 依赖数组必须带 t（回调体里用了它：保存成功与失败那几句）
+  }, [setCurrObj, setValue, path, t]);
   const handleSave = async () => {
     if (location.hostname == 'blog-demo.mereith.com') {
       Modal.info({
-        title: '演示站不可修改此项！',
+        title: t('customPage.demoBlocked', '演示站不可修改此项！'),
       });
       return;
     }
@@ -224,16 +237,16 @@ export default function () {
     try {
       if (type == 'file') {
         await updateCustomPage({ ...currObj, html: value });
-        message.success('当前编辑器内文件保存成功！');
+        message.success(t('code.fileSavedOk', '当前编辑器内文件保存成功！'));
       } else if (type == 'pipeline') {
         await updatePipelineById(currObj.id, { script: value });
-        message.success('当前编辑器内脚本保存成功！');
+        message.success(t('code.scriptSavedOk', '当前编辑器内脚本保存成功！'));
       } else {
         await updateCustomPageFileInFolder(path, node?.key, value);
-        message.success('当前编辑器内文件保存成功！');
+        message.success(t('code.fileSavedOk', '当前编辑器内文件保存成功！'));
       }
     } catch (err) {
-      reportRequestError(message, err, '保存失败！');
+      reportRequestError(message, err, t('sysconf.comment.saveFailed', '保存失败！'));
     } finally {
       setEditorLoading(false);
     }
@@ -246,21 +259,21 @@ export default function () {
       items={[
         {
           key: 'saveBtn',
-          label: '保存',
+          label: t('common.save', '保存'),
           onClick: handleSave,
         },
         ...(type == 'pipeline'
           ? [
               {
                 key: 'runPipeline',
-                label: <RunCodeModal pipeline={currObj} trigger={<a>调试脚本</a>} />,
+                label: <RunCodeModal pipeline={currObj} trigger={<a>{t('code.debugScript', '调试脚本')}</a>} />,
               },
               {
                 key: 'editPipelineInfo',
                 label: (
                   <PipelineModal
                     mode="edit"
-                    trigger={<a>编辑信息</a>}
+                    trigger={<a>{t('code.editInfo', '编辑信息')}</a>}
                     onFinish={(vals) => {
                       console.log(vals);
                     }}
@@ -280,7 +293,7 @@ export default function () {
                     folder={true}
                     muti={true}
                     customUpload={true}
-                    text="上传文件夹"
+                    text={t('code.uploadFolder', '上传文件夹')}
                     onFinish={(info) => {
                       fetchData();
                     }}
@@ -301,7 +314,7 @@ export default function () {
                     setLoading={setUploadLoading}
                     folder={false}
                     muti={false}
-                    text="上传文件"
+                    text={t('code.uploadFile', '上传文件')}
                     onFinish={(info) => {
                       fetchData();
                     }}
@@ -313,24 +326,27 @@ export default function () {
               },
               {
                 key: 'deleteFile',
-                label: '删除文件',
+                label: t('code.deleteFile', '删除文件'),
                 disabled: !node || (node as any).type === 'directory',
                 onClick: () => {
                   const current = node as any;
                   if (!current?.key || current.type === 'directory') {
-                    message.warning('请先选择要删除的文件');
+                    message.warning(t('code.selectFileFirst', '请先选择要删除的文件'));
                     return;
                   }
                   Modal.confirm({
-                    title: '删除确认',
-                    content: `是否确认删除文件 ${current.title}？`,
+                    title: t('common.deleteConfirmTitle', '删除确认'),
+                    // 🔴 模板 → ICU 整句（英文语序不同，拼接必出接缝）
+                    content: t('code.deleteFileConfirmContent', '是否确认删除文件 {name}？', {
+                      name: current.title,
+                    }),
                     onOk: async () => {
                       await deleteCustomPageFile(path, current.key);
                       setNode(undefined);
                       setSelectedKeys([]);
                       setValue('');
                       await fetchData();
-                      message.success('删除成功！');
+                      message.success(t('common.deleteSuccess', '删除成功！'));
                     },
                   });
                 },
@@ -341,7 +357,7 @@ export default function () {
           ? [
               {
                 key: 'view',
-                label: '查看',
+                label: t('common.view', '查看'),
                 onClick: () => {
                   window.open(`/c${path}`);
                 },
@@ -362,7 +378,7 @@ export default function () {
           <Space>
             <span title={currObj?.name}>{currObj?.name}</span>
             <>
-              <Tag color="green">{typeMap[type] || '未知类型'}</Tag>
+              <Tag color="green">{typeMap[type] || t('code.unknownType', '未知类型')}</Tag>
               {type == 'pipeline' && (
                 <>
                   <Tag color="blue">
@@ -372,9 +388,9 @@ export default function () {
                     }
                   </Tag>
                   {pipelineConfig?.find((p) => p.eventName == currObj.eventName)?.passive ? (
-                    <Tag color="yellow">非阻塞</Tag>
+                    <Tag color="yellow">{t('code.nonBlocking', '非阻塞')}</Tag>
                   ) : (
-                    <Tag color="red">阻塞</Tag>
+                    <Tag color="red">{t('code.blocking', '阻塞')}</Tag>
                   )}
                 </>
               )}
@@ -383,9 +399,7 @@ export default function () {
         ),
         extra: [
           <Dropdown key="moreAction" overlay={actionMenu} trigger={['click']}>
-            <Button size="middle" type="primary">
-              操作
-              <DownOutlined />
+            <Button size="middle" type="primary">{t('common.colOption', '操作')}<DownOutlined />
             </Button>
           </Dropdown>,
           <Button
@@ -393,9 +407,7 @@ export default function () {
             onClick={() => {
               history.go(-1);
             }}
-          >
-            返回
-          </Button>,
+          >{t('common.back', '返回')}</Button>,
           <Button
             key="docBtn"
             onClick={() => {
@@ -408,9 +420,7 @@ export default function () {
                 );
               }
             }}
-          >
-            文档
-          </Button>,
+          >{t('common.docs', '文档')}</Button>,
         ],
         breadcrumb: {},
       }}
@@ -421,7 +431,7 @@ export default function () {
           type="info"
           showIcon
           style={{ margin: '8px 12px 0' }}
-          message="多文件页面只托管静态 HTML/CSS/JS。访问 /c/路径/ 时读取根目录的 index.html（左侧树根上要能看到它）。React/Vue 等 SPA 请把资源改成相对路径（如 ./static/...），或构建时设置 homepage/base 为 /c/路径/。"
+          message={t('code.folderPageHint', '多文件页面只托管静态 HTML/CSS/JS。访问 /c/路径/ 时读取根目录的 index.html（左侧树根上要能看到它）。React/Vue 等 SPA 请把资源改成相对路径（如 ./static/...），或构建时设置 homepage/base 为 /c/路径/。')}
         />
       )}
       <div style={{ height: '100%', display: 'flex' }} className="code-editor-content">
@@ -485,7 +495,7 @@ export default function () {
                   // }}
                   onSelect={(keys, info) => {
                     if (editorLoading) {
-                      message.warning('加载中请勿选择!');
+                      message.warning(t('code.loadingDoNotSelect', '加载中请勿选择!'));
                       return;
                     }
                     setSelectedKeys(keys);

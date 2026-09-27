@@ -12,7 +12,7 @@ import { PageContainer } from '@ant-design/pro-layout';
 import { ProTable } from '@ant-design/pro-table';
 import { Button, message, Modal, Space, Table } from 'antd';
 import { useMemo, useRef, useState } from 'react';
-import { history, useModel } from 'umi';
+import { history, useIntl, useModel } from 'umi';
 import type { StaticItem } from '../type';
 import { copyAttachmentLink, downloadAttachment, getAttachmentLink } from './tools';
 
@@ -21,6 +21,11 @@ type AttachmentItem = StaticItem & { displayName?: string };
 const ATTACHMENT_UPLOAD_URL = '/api/admin/file/upload';
 
 export default () => {
+  // 🔴 期 6 第十一批：接上 i18n。⚠️ `message.*` / `Modal.*` 是脱离 React 树的独立根（§7.151）。
+  // 🔴 t 还要**往下传**给两个注入式模块：`copyAttachmentLink`（第 6 个参数）与 `saveExportArchive`（第 3 个）。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const actionRef = useRef<ActionType>();
   const [uploading, setUploading] = useState(false);
   const { initialState } = useModel('@@initialState');
@@ -40,9 +45,9 @@ export default () => {
   async function handleDelete(record: AttachmentItem) {
     try {
       await deleteAttachmentBySign(record.sign);
-      message.success('删除成功！已彻底删除本地文件。');
+      message.success(t('file.deleteOkPurged', '删除成功！已彻底删除本地文件。'));
     } catch (err) {
-      message.error('删除失败！');
+      message.error(t('img.deleteFailed', '删除失败！'));
     }
     actionRef.current?.reload();
   }
@@ -51,7 +56,7 @@ export default () => {
     // 正文里可能写相对路径也可能写完整域名，用存储名（含 md5）搜索两种都能命中
     const { data } = await searchArtclesByLink(record.name);
     Modal.info({
-      title: '被引用文章',
+      title: t('img.refsTitle', '被引用文章'),
       width: 600,
       content: (
         <Table
@@ -60,13 +65,13 @@ export default () => {
           dataSource={data || []}
           size="small"
           columns={[
-            { title: '文章 ID', dataIndex: 'id', key: 'id' },
-            { title: '标题', dataIndex: 'title', key: 'title' },
+            { title: t('sysconf.img.colArticleId', '文章 ID'), dataIndex: 'id', key: 'id' },
+            { title: t('sysconf.img.colTitle', '标题'), dataIndex: 'title', key: 'title' },
             {
-              title: '操作',
+              title: t('common.colOption', '操作'),
               key: 'action',
               render: (val: any, row: any) => (
-                <a onClick={() => history.push(`/editor?type=article&id=${row.id}`)}>编辑</a>
+                <a onClick={() => history.push(`/editor?type=article&id=${row.id}`)}>{t('common.editPost', '编辑')}</a>
               ),
             },
           ]}
@@ -77,10 +82,10 @@ export default () => {
 
   const columns: ProColumns<AttachmentItem>[] = [
     {
-      title: '文件名',
+      title: t('file.colName', '文件名'),
       dataIndex: 'displayName',
       ellipsis: true,
-      fieldProps: { placeholder: '按文件名模糊搜索' },
+      fieldProps: { placeholder: t('file.searchPlaceholder', '按文件名模糊搜索') },
       render: (_, record) => (
         <a href={getAttachmentLink(record.realPath)} target="_blank" rel="noreferrer">
           {record.displayName || record.name}
@@ -88,21 +93,21 @@ export default () => {
       ),
     },
     {
-      title: '格式',
+      title: t('img.colFormat', '格式'),
       dataIndex: 'fileType',
       width: 90,
       hideInSearch: true,
       render: (_, record) => (record.fileType ? String(record.fileType).toUpperCase() : '-'),
     },
     {
-      title: '大小',
+      title: t('img.colBytes', '大小'),
       dataIndex: 'meta',
       width: 110,
       hideInSearch: true,
       render: (_, record) => (record.meta && record.meta.size) || '-',
     },
     {
-      title: '链接',
+      title: t('sysconf.img.colLink', '链接'),
       dataIndex: 'realPath',
       ellipsis: true,
       hideInSearch: true,
@@ -110,14 +115,14 @@ export default () => {
       render: (_, record) => getAttachmentLink(record.realPath),
     },
     {
-      title: '上传时间',
+      title: t('img.colUploadedAt', '上传时间'),
       dataIndex: 'updatedAt',
       valueType: 'dateTime',
       width: 180,
       hideInSearch: true,
     },
     {
-      title: '操作',
+      title: t('common.colOption', '操作'),
       valueType: 'option',
       width: 260,
       render: (_, record) => {
@@ -125,22 +130,14 @@ export default () => {
         const actions = [
           <a
             key="copy"
-            onClick={() => copyAttachmentLink(record.realPath, false, name)}
-          >
-            复制链接
-          </a>,
+            onClick={() => copyAttachmentLink(record.realPath, false, name, undefined, true, t)}
+          >{t('img.actCopyLink', '复制链接')}</a>,
           <a
             key="copyMd"
-            onClick={() => copyAttachmentLink(record.realPath, true, name)}
-          >
-            复制 Markdown
-          </a>,
-          <a key="download" onClick={() => downloadAttachment(name, record.realPath)}>
-            下载
-          </a>,
-          <a key="ref" onClick={() => handleSearchReference(record)}>
-            搜索引用
-          </a>,
+            onClick={() => copyAttachmentLink(record.realPath, true, name, undefined, true, t)}
+          >{t('file.copyMarkdown', '复制 Markdown')}</a>,
+          <a key="download" onClick={() => downloadAttachment(name, record.realPath)}>{t('common.download', '下载')}</a>,
+          <a key="ref" onClick={() => handleSearchReference(record)}>{t('file.searchRefs', '搜索引用')}</a>,
         ];
         if (showDelBtn) {
           actions.push(
@@ -149,13 +146,11 @@ export default () => {
               style={{ color: '#ff4d4f' }}
               onClick={() => {
                 Modal.confirm({
-                  title: '确定删除该附件吗？删除后不可恢复！',
+                  title: t('file.deleteConfirmContent', '确定删除该附件吗？删除后不可恢复！'),
                   onOk: () => handleDelete(record),
                 });
               }}
-            >
-              删除
-            </a>,
+            >{t('common.delete', '删除')}</a>,
           );
         }
         return <Space size="middle">{actions}</Space>;
@@ -169,8 +164,8 @@ export default () => {
       header={{
         title: (
           <TipTitle
-            title="附件管理"
-            tip="上传任意文件并生成可分享的链接（/static/file/...）。附件只存本地，单文件上限 200MB；html/svg/js 这类会在站点源上执行的类型会被强制下载。"
+            title={t('menu.file', '附件管理')}
+            tip={t('file.cardHint', '上传任意文件并生成可分享的链接（/static/file/...）。附件只存本地，单文件上限 200MB；html/svg/js 这类会在站点源上执行的类型会被强制下载。')}
           />
         ),
       }}
@@ -181,20 +176,18 @@ export default () => {
               const res: any = await exportAllAttachments();
               const name = res?.data?.path;
               if (!name) {
-                message.error('打包失败！');
+                message.error(t('sysconf.img.packFailed', '打包失败！'));
                 return;
               }
               // 归档在服务器静态目录之外，必须走鉴权下载接口
-              await saveExportArchive(name, '附件打包完成，已开始下载');
+              await saveExportArchive(name, t('file.archiveDownloadStarted', '附件打包完成，已开始下载'), t);
             }}
-          >
-            导出全部附件
-          </Button>
+          >{t('file.exportAll', '导出全部附件')}</Button>
           <UploadBtn
             setLoading={setUploading}
             loading={uploading}
             muti={true}
-            text="上传附件"
+            text={t('file.uploadBtn', '上传附件')}
             url={ATTACHMENT_UPLOAD_URL}
             accept="*"
             onFinish={(info: any) => {
@@ -204,7 +197,17 @@ export default () => {
                   data.src,
                   false,
                   data.name,
-                  data.isNew ? `${info.name} 上传成功！ ` : `${info.name} 已存在！ `,
+                  // 🔴 这两句是**传给 copyAttachmentLink 的前缀**（它会拼在"已复制…链接到剪切板！"前面）
+                  //    ⇒ 各自收成一条带 {name} 的 ICU 整句；⚠️ 结尾那个**空格是源码原样**（拼接缝），逐字保留。
+                  data.isNew
+                    ? t('file.uploadedOkPrefix', '{name} 上传成功！ ', { name: info.name })
+                    : t('file.existsPrefix', '{name} 已存在！ ', { name: info.name }),
+                  // 🔴 签名是 (realPath, isMarkdown, displayName, info, autoCompleteHost, t)
+                  //    ⇒ info 已经在上面（那两条 prefix 之一），这里只需补 autoCompleteHost 与 t。
+                  //    ⚠️ 第一版多补了一个 undefined ⇒ TS2554「Expected 1-6 arguments, but got 7」
+                  //    （🔴 又是那条教训：注入式函数的**参数位次**要照着签名数，别凭印象补）。
+                  true,
+                  t,
                 );
               }
               actionRef.current?.reload();
@@ -214,7 +217,7 @@ export default () => {
       }
     >
       <ProTable<AttachmentItem>
-        headerTitle="附件列表"
+        headerTitle={t('file.listTitle', '附件列表')}
         actionRef={actionRef}
         rowKey="sign"
         columns={columns}

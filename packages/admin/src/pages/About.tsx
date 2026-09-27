@@ -1,8 +1,8 @@
 import ProCard from '@ant-design/pro-card';
 import { PageContainer } from '@ant-design/pro-layout';
 import { Divider, Image, Space, Spin, Tag, Typography } from 'antd';
-import { useMemo } from 'react';
-import { useModel } from 'umi';
+import { useCallback, useMemo } from 'react';
+import { useIntl, useModel } from 'umi';
 
 /**
  * 「关于」页。
@@ -38,31 +38,63 @@ const UPSTREAM_REPO = 'https://github.com/Mereithhh/vanblog';
 // `<仓库首页>#打赏` 是**死锚点** —— 页面能打开，但会停在顶部而不是打赏那一节。
 const UPSTREAM_SPONSOR = `${UPSTREAM_REPO}/blob/master/README.zh-CN.md#%E6%89%93%E8%B5%8F`;
 
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。这份能力清单是模块级常量，拿不到 hook
+ * ⇒ 改成函数版，由组件在渲染期把 t 传进来；🔴 不传 t ⇒ 输出与改造前逐字相同。
+ * ⚠️ 上一批（Backup.jsx 的 `FORMAT_LABELS`）就是直接给模块级常量包了 t ⇒ 模块加载期 ReferenceError、整页白屏。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type AboutT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
+
+// 🔴 「获取中」原来是**既当显示文案又当内部哨兵**（`version == '获取中'` 决定 Spin 转不转）
+//    ⇒ 按"线路字面量 vs 显示文案"那条规矩拆开：哨兵用不会与真实版本号撞车的 ASCII 常量，
+//    显示走语言包。🔴 直接翻译那个字面量也能work（两边同一个 key），但哨兵一旦是译文，
+//    哪天有人只改其中一处就会静默失效（Spin 永远转 / 永不转），而且看不出来。
+const VERSION_LOADING = '__version_loading__';
+
 /** 这个版本的主要能力（只写一句话能说清的，细节在文档与 CHANGELOG） */
-const FORK_HIGHLIGHTS = [
-  '内置评论系统（可替代外挂 Waline，支持从 Waline 导入）',
-  '补齐 6 种 Markdown 语法，编辑器与前台用同一套插件',
-  '整站备份 / 恢复，单篇导出 .md 与带图 .mdz',
-  '图片管线：自动缩放、缩略图、隐写水印、原地替换',
-  '拼音文章别名，旧链接不失效',
-  'Apple 风格前台皮肤（可一键切回默认）',
-  'SEO：canonical 与 301、JSON-LD、sitemap lastmod、动态 robots.txt',
-  '前后台性能优化，多轮 bug 与安全加固',
-  '一键安装脚本：默认拉本仓库镜像，拉不到自动回退源码构建',
+const forkHighlights = (t: AboutT = IDENTITY_T) => [
+  t('about.hlComments', '内置评论系统（可替代外挂 Waline，支持从 Waline 导入）'),
+  t('about.hlMarkdown', '补齐 6 种 Markdown 语法，编辑器与前台用同一套插件'),
+  t('about.hlBackup', '整站备份 / 恢复，单篇导出 .md 与带图 .mdz'),
+  t('about.hlImagePipeline', '图片管线：自动缩放、缩略图、隐写水印、原地替换'),
+  t('about.hlPathname', '拼音文章别名，旧链接不失效'),
+  t('about.hlAppleTheme', 'Apple 风格前台皮肤（可一键切回默认）'),
+  t('about.hlSeo', 'SEO：canonical 与 301、JSON-LD、sitemap lastmod、动态 robots.txt'),
+  t('about.hlPerf', '前后台性能优化，多轮 bug 与安全加固'),
+  t('about.hlInstaller', '一键安装脚本：默认拉本仓库镜像，拉不到自动回退源码构建'),
 ];
+
+/** identity 视图（给还没接 i18n 的调用方 / 单测用） */
+const FORK_HIGHLIGHTS = forkHighlights();
 
 const linkStyle = { whiteSpace: 'nowrap' as const };
 
 export default function (props) {
+  // 🔴 语言选择必须在**渲染期**。t 用 useCallback([intl]) 包成**稳定引用**：下面的 useMemo 依赖数组里有 t，
+  //    不稳定 ⇒ 每轮渲染都变 ⇒ 重复计算（§7.144 A/B 两条一起满足）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id: string, defaultMessage: string, values?: Record<string, any>) =>
+      intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
   const { initialState } = useModel('@@initialState');
   const version = useMemo(() => {
-    let v = initialState?.version || '获取中';
+    const v = initialState?.version || VERSION_LOADING;
     return v;
+    // 🔴 依赖数组必须带 t（回调体里用到了）—— 这里其实没用 t，但下面渲染处用了哨兵判断，
+    //    保持一致：谁用 t 谁声明 t。
   }, [initialState, history]);
 
   return (
     <PageContainer title={null} extra={null} header={{ title: null, extra: null, ghost: true }}>
-      <Spin spinning={version == '获取中'}>
+      <Spin spinning={version === VERSION_LOADING}>
         <ProCard>
           <div
             style={{
@@ -84,28 +116,37 @@ export default function (props) {
             >
               <div>VanBlog</div>
               <div style={{ marginBottom: 4, marginLeft: 4 }}>
-                <Tag color="cyan">{version}</Tag>
+                <Tag color="cyan">
+                  {version === VERSION_LOADING ? t('about.fetchingVersion', '获取中') : version}
+                </Tag>
               </div>
               <div style={{ marginBottom: 4 }}>
                 {/* 明确标出来：这不是上游原版 */}
-                <Tag color="gold">增强修改版</Tag>
+                <Tag color="gold">{t('about.enhancedForkTag', '增强修改版')}</Tag>
               </div>
             </div>
-            <p align="center">一款简洁实用优雅的高性能个人博客系统</p>
+            <p align="center">{t('about.slogan', '一款简洁实用优雅的高性能个人博客系统')}</p>
 
             <Typography.Paragraph
               type="secondary"
               style={{ maxWidth: 660, textAlign: 'center', marginBottom: 4 }}
             >
-              当前后台运行的是{' '}
+              {/* 🔴 "文字 + 链接 + 文字 + <b> + 文字" ⇒ react-intl 3.x 没有富文本占位符，只能拆成 prefix/suffix。
+                  ⚠️ `{' '}` 是 JSX 里的**字面空格** ⇒ 英文值两端不要再带空格（否则双空格：§7.171 B）。 */}
+              {t('about.currentRepoPrefix', '当前后台运行的是')}{' '}
               <a target="_blank" rel="noreferrer" href={FORK_REPO} style={linkStyle}>
                 CKboss/vanblog
               </a>
-              ，具体版本以上方的版本标签为准，遵循 GPL v3 许可。遇到问题请到<b>本仓库</b>提 Issue，这里才有本版本的改动记录。
+              {t(
+                'about.currentRepoSuffix',
+                '，具体版本以上方的版本标签为准，遵循 GPL v3 许可。遇到问题请到',
+              )}
+              <b>{t('about.thisRepo', '本仓库')}</b>
+              {t('about.currentRepoSuffix2', '提 Issue，这里才有本版本的改动记录。')}
             </Typography.Paragraph>
 
             <div style={{ maxWidth: 700, margin: '4px 0 12px', textAlign: 'center' }}>
-              {FORK_HIGHLIGHTS.map((item) => (
+              {forkHighlights(t).map((item) => (
                 <Tag key={item} style={{ marginBottom: 6 }}>
                   {item}
                 </Tag>
@@ -113,24 +154,12 @@ export default function (props) {
             </div>
 
             <Space wrap style={{ justifyContent: 'center' }}>
-              <a target="_blank" rel="noreferrer" href={FORK_REPO} style={linkStyle}>
-                项目仓库
-              </a>
-              <a target="_blank" rel="noreferrer" href={FORK_COMMITS} style={linkStyle}>
-                提交历史
-              </a>
-              <a target="_blank" rel="noreferrer" href={FORK_CHANGELOG} style={linkStyle}>
-                更新日志
-              </a>
-              <a target="_blank" rel="noreferrer" href={FORK_README} style={linkStyle}>
-                改动总览
-              </a>
-              <a target="_blank" rel="noreferrer" href={FORK_DOCS} style={linkStyle}>
-                功能文档
-              </a>
-              <a target="_blank" rel="noreferrer" href={FORK_RUNBOOK} style={linkStyle}>
-                开发手册
-              </a>
+              <a target="_blank" rel="noreferrer" href={FORK_REPO} style={linkStyle}>{t('about.linkRepo', '项目仓库')}</a>
+              <a target="_blank" rel="noreferrer" href={FORK_COMMITS} style={linkStyle}>{t('about.linkCommits', '提交历史')}</a>
+              <a target="_blank" rel="noreferrer" href={FORK_CHANGELOG} style={linkStyle}>{t('about.linkChangelog', '更新日志')}</a>
+              <a target="_blank" rel="noreferrer" href={FORK_README} style={linkStyle}>{t('about.linkDiffOverview', '改动总览')}</a>
+              <a target="_blank" rel="noreferrer" href={FORK_DOCS} style={linkStyle}>{t('about.linkFeatureDocs', '功能文档')}</a>
+              <a target="_blank" rel="noreferrer" href={FORK_RUNBOOK} style={linkStyle}>{t('about.linkRunbook', '开发手册')}</a>
               {/* ⚠️ 不再深链 /swagger：它现在默认关闭（VANBLOG_SWAGGER=true 才开），
                   死链比没有链更糟。改成指向仓库里的 API 文档。 */}
               <a
@@ -138,46 +167,45 @@ export default function (props) {
                 rel="noreferrer"
                 href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/reference/api.md"
                 style={linkStyle}
-              >
-                API文档
-              </a>
+              >{t('about.linkApiDoc', 'API文档')}</a>
             </Space>
             <Space style={{ marginTop: 8 }} wrap>
-              <a target="_blank" rel="noreferrer" href={FORK_ISSUES} style={linkStyle}>
-                提交BUG / 建议
-              </a>
+              <a target="_blank" rel="noreferrer" href={FORK_ISSUES} style={linkStyle}>{t('about.linkIssues', '提交BUG / 建议')}</a>
             </Space>
 
             <Divider style={{ maxWidth: 520, margin: '20px 0 12px' }} plain>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                原始项目
-              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('about.upstreamDivider', '原始项目')}</Typography.Text>
             </Divider>
 
             <Typography.Paragraph
               type="secondary"
               style={{ maxWidth: 660, textAlign: 'center', marginBottom: 8, fontSize: 12 }}
             >
-              本版本的全部工作都建立在原作者{' '}
+              {/* 🔴 两条片段链：链接两侧都有 `{' '}` 字面空格 ⇒ 英文值两端**不带**空格（否则双空格）。 */}
+              {t('about.builtOnPrefix', '本版本的全部工作都建立在原作者')}{' '}
               <a target="_blank" rel="noreferrer" href={UPSTREAM_REPO} style={linkStyle}>
                 @Mereithhh
               </a>{' '}
-              的 VanBlog 之上，遵循 GPL v3 许可，感谢原作者。
+              {t('about.builtOnSuffix', '的 VanBlog 之上，遵循 GPL v3 许可，感谢原作者。')}
               <br />
-              ⚠️ 上游项目的文档站、更新日志与交流群描述的是<b>官方镜像</b>的行为，与本版本不同，所以这里不再列出入口；本版本的问题请到{' '}
+              {t(
+                'about.upstreamWarningP1',
+                '⚠️ 上游项目的文档站、更新日志与交流群描述的是',
+              )}
+              <b>{t('about.officialMirror', '官方镜像')}</b>
+              {t(
+                'about.upstreamWarningP2',
+                '的行为，与本版本不同，所以这里不再列出入口；本版本的问题请到',
+              )}{' '}
               <a target="_blank" rel="noreferrer" href={FORK_ISSUES} style={linkStyle}>
-                本仓库的 Issue
+                {t('about.thisRepoIssue', '本仓库的 Issue')}
               </a>{' '}
-              反馈（上游仓库不认识这里的改动）。
+              {t('about.upstreamWarningP3', '反馈（上游仓库不认识这里的改动）。')}
             </Typography.Paragraph>
 
             <Space wrap style={{ justifyContent: 'center' }}>
-              <a target="_blank" rel="noreferrer" href={UPSTREAM_REPO} style={linkStyle}>
-                原作者的仓库
-              </a>
-              <a target="_blank" rel="noreferrer" href={UPSTREAM_SPONSOR} style={linkStyle}>
-                打赏原作者
-              </a>
+              <a target="_blank" rel="noreferrer" href={UPSTREAM_REPO} style={linkStyle}>{t('about.linkUpstreamRepo', '原作者的仓库')}</a>
+              <a target="_blank" rel="noreferrer" href={UPSTREAM_SPONSOR} style={linkStyle}>{t('about.linkSponsor', '打赏原作者')}</a>
             </Space>
           </div>
         </ProCard>

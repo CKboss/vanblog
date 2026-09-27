@@ -9469,6 +9469,137 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.176 期 6 第十一批：关于页 / 自定义页面编辑器 / 流水线弹窗 / 附件管理（117 条 → 0）—— 🔴 英文片段链又漏一个空格，这次**静态守卫当场抓住**（而且回归钉子第一版写得太松，被变异对照打脸）
+
+**交付**（批次边界按 `pageSurface.js` 从三个页面入口跑出来的**闭包**划）：
+`pages/About.tsx`(35 → **1 条永久例外**) + `pages/Code/index.tsx`(29) +
+`Pipeline/components/PipelineModal.tsx`(15) + `RunCodeModal.tsx`(5) +
+`Static/file/index.tsx`(28) + `Static/file/tools.ts`(4) + `services/van-blog/downloadArchive.ts`(2)
+= **118 条 → 1**（那 1 条是 README 锚点，见 C 段）；语言包 **1255 → 1342 key**（新组 **`about` / `code` / `pipeline` / `file`**：
+87 新 / **复用 29**）；棘轮清单 **95 → 102 个文件**、**TOTAL 61 → 62**（+1 = 新的永久例外）、
+例外清单 **8 → 9 条**；`i18nKeyNaming` → **1342**；`localePackParity` 自动发现下界 **89 → 96 个文件 / 1660 → 1780 个调用点**
+（实测 96 / 1794）；繁中同形白名单 **+6**；🔴 简体专用字表 **67 → 69 字**（补「挂」「径」，见 E 段）。
+🔴 **真实剩余：36 → 30 个文件 / 352 → 235 条**（累计 **87.5%** 完成）。
+🔴 **浏览器活体 43/43（zh-CN 13 + en-US 16 + zh-TW 14），problems 0、skipped 18**（每条 skip 都写明原因）：
+关于页（版本标签 / `增强修改版` 标识 / slogan / **9 条能力标签** / **10 个链接标签** / **三条片段链**）、
+自定义页面列表页与新建弹窗、附件页（卡片说明 / 6 个列头 / 搜索框 / 工具栏），
+外加 en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**（先证明采到 ≥600 字）。
+en-US 实采：`Enhanced fork` / `Built-in comment system (can replace an external Waline and supports importing from Waline)` /
+`Completes 6 Markdown syntax features; the editor and the front end share the same plugin set` /
+列头 `File name · Format · Size · Link · Uploaded · Actions` /
+🔴 链 1 实渲染 `… please report it in an issue in this repository because it is the only place that carries the change history of this version.`
+zh-TW 实采：`增強修改版` / `內建評論系統（可取代外掛 Waline，支援從 Waline 匯入）` / `補齊 6 種 Markdown 語法…` /
+列头 `檔名 · 格式 · 大小 · 連結 · 上傳時間 · 操作` /
+🔴 链 1 实渲染 `目前後台執行的是 CKboss/vanblog，具體版本以上方的版本標籤為準，遵循 GPL v3 授權。遇到問題請到本儲存庫提 Issue，這裡才有本版本的變更記錄。`
+证据：`vanblog_dev/i18n-browser-evidence/phase5-about-code-file/`。
+
+#### A. 🔴 英文片段链**又**漏一个空格 —— 但这次是**静态守卫**抓住的，不用建栈
+关于页那段说明是 `文字 + <a> + 文字 + <b> + 文字` 的形状，JSX 里**只有链接两侧**有 `{' '}` 字面空格，
+🔴 **`<b>` 两侧没有** ⇒ 英文值必须自己在"接到 `<b>` 的那一端"带空格。第一版英文
+`… please report it in` 后面直接跟 `<b>this repository</b>` ⇒ 活体渲染出 **`inthis repository`**。
+链 3 同病：`… describe the behavior of the` + `<b>official mirror</b>` + `, which is …` ⇒ **`theofficial mirror`**。
+修法：链 1 的英文后缀结尾补空格（`… report it in an issue in `），链 3 改成用**直双引号**把 `<b>` 夹起来
+（P1 以 `the "` 结尾、P2 以 `", which is` 开头 —— 直双引号对 ICU 安全，只有单引号是转义符）。
+🔴 并且把关于页这三条链加进了**静态组装守卫**（第 3 组，与备份页 4 条 / 主题页 2 条同一套做法）：
+按页面真实顺序拼起来，不许双空格 / 不许标点前空格 / `<b>` 前必须有空白或连接符，
+并且 🔴 **量接缝本身**（`indexOf(about.thisRepo)` 前面那个字符必须是 `\s` 或破折号）。
+👉 🔴 **这类缺陷现在不用建栈就能红** —— 前三次（备份页 2 次、主题页 1 次）都是活体才发现的，这次静态就抓住了。
+
+#### B. 🔴 回归钉子第一版写得太松，被自己的变异对照打脸
+静态守卫里我原本写的钉子是 `/in [A-Za-z]/.test(enChain1)`（"句子里某处有 in + 空格 + 字母"）。
+变异对照 B36-M2 把结尾空格删掉之后 ⇒ 🔴 **这条正则仍然命中**（句子前面别处就有 `in an`）⇒ 全绿。
+改成"直接量接缝那一处"（`indexOf` 定位 + 检查它前面一个字符）之后，M2 立刻红（5 条断言同时红）。
+👉 🔴 **回归钉子要量"出事的那一处"，不要量"整句里存在某种形状"。**
+（同类教训第 2 次：上一批是"锚点必须命中 1 次"救了重复 key 那次。）
+
+#### C. 🔴 第 10 类永久例外：**指向中文 README 的 URL 锚点**
+`About.tsx` 的 `FORK_README = \`…/README.md#出处与许可\`` —— 这个锚点必须逐字对上 README 里的中文标题
+（文档按站长裁定仍不做 i18n），翻成英文就是**死锚点**（页面能打开，但停在仓库顶部，看着像链接坏了）。
+⇒ 棘轮里 `About.tsx` 预算记 **1**、`TOTAL_BUDGET` 61 → **62**、`REQUIRED_EXCEPTIONS` 8 → **9 条**，
+并在例外清单里写明理由（`aboutPage.test.js` 另有断言钉住"目标锚点在 README 里真实存在"）。
+变异对照 B36-M8 把它翻成 `#credits-and-license` ⇒ **红**（3 条锚点断言同时红）⇒ 这条例外是**反向钉住**的。
+👉 与 Caddy 页那个 `usage.md#开启了-https-重定向后关不掉` 同族：**URL 锚点属线路契约，不属文案**。
+
+#### D. 🔴 「获取中」原来**既当显示文案又当内部哨兵** ⇒ 按"线路字面量 vs 显示文案"拆开
+`About.tsx` 里 `let v = initialState?.version || '获取中'` 之后又用 `<Spin spinning={version == '获取中'}>`
+⇒ 同一个中文字符串既是给用户看的、又是内部状态判断的依据。直接翻译它**也能 work**（两边同一个 key），
+但 🔴 哨兵一旦是译文，哪天有人只改其中一处就会**静默失效**（Spin 永远转 / 永不转），而且界面上看不出来。
+⇒ 改成 ASCII 常量 `VERSION_LOADING = '__version_loading__'` 当哨兵，显示走 `about.fetchingVersion`。
+👉 这与 `requestError.js` 的 `登录失效`、`InitPage` 的 `已初始化` 是**同一条规矩**：
+**与服务端/自己比对的字符串不能是译文**；要比对就用不面向用户的哨兵。
+
+#### E. 🔴 繁中审计的字表**漏了两个字**（人工复核才发现），已补进尺子
+子代理交付的繁中里有 `外挂`（应 `外掛`）与 `/c/路径/`（应 `/c/路徑/`）—— 🔴 `--zh-tw-audit` **没报**，
+因为 `SIMPLIFIED_ONLY_ZH` 那张表（67 字）里**没有「挂」和「径」**。是我逐条读译文时看出来的。
+⇒ ① 两处值改回繁体；② 🔴 **把这两个字补进字表**（67 → 69）；③ 把守卫注释里写死的"67 字"改成
+"字数会随漏检补齐而增长"（写死数字 = 两处口径）。
+👉 🔴 **这张表本来就是不完备、只能逐步长的**：`0 命中` 不等于全对，**每漏一次就补一次**。
+👉 顺带：术语闸门里"恢复 ⇒ 還原"这条太粗 —— 本仓库繁中**两个词分工明确**：
+`還原` = restore（94 处）、`復原` = undo/不可逆（11 处，如 `可隨時還原；…才不可復原`）⇒
+闸门改成"不可逆语境要 `復原`，其余 `恢复` 要 `還原`"（第一版把正确的 `刪除後不可復原！` 判成术语不对齐 = 假红）。
+
+#### F. 🔴 三处"t 遮蔽"的**新形状**：第三方回调的形参恰好叫 `t`
+- `commentAdmin.js`（上一批）：`.filter((t) => …).reduce((sum, t) => …)`；
+- 🔴 本批 `Code/index.tsx:99`：`if (v.some((t) => name.includes('.' + t)))`（这里遍历的是**扩展名**）；
+- 🔴 本批 `BuiltinComments.jsx`（上一批）：ProTable 的 `showTotal: (t) => …`（antd 传的是**总数**）。
+三处都会**遮蔽**组件的翻译器 ⇒ 改名（`ext` / `tab` / `total`）。
+👉 与之前登记的"文件里声明了 t 又用 t 做别的"是**不同形状** ⇒ 规矩：**接 i18n 之前先搜一遍这个文件里所有叫 `t` 的形参**。
+🔴 而且"t 遮蔽"那条判据**当场就报了**（`声明了翻译器 const t，但第 89 行形参 t 会遮蔽它`）—— 第 2 次立功。
+
+#### G. 🔴 hook 依赖数组又抓出三个真缺陷（连续第 6 批立功）
+`Code/index.tsx:67` 的 useMemo（`[node]`）、`:180` 的 useCallback（`[setCurrObj, setValue, path]`）、
+`PipelineModal.tsx:37` 的 useEffect（`[initialValues, config]`）—— 三个回调体里都用了 t 却没声明 t
+⇒ 切语言后仍是旧译文。🔴 其中 `PipelineModal` 那处尤其要命：那个 effect 把**事件说明写进 state**（`setDes`），
+state 里存的是算好的字符串 ⇒ 不带 t 的话切语言后那段说明**永远**是旧语言。
+修法：三个依赖数组都加 t，**并且**把三个文件的 t 都改成 `useCallback([intl])` 的稳定引用（§7.144 A/B 一起满足）。
+变异对照 M6 打其中一处 ⇒ 红。
+
+#### H. 🔴 注入式模块**跨文件**传 t：参数位次要照着签名数（TS2554 当场抓到）
+`Static/file/tools.ts` 的 `copyAttachmentLink(realPath, isMarkdown, displayName, info, autoCompleteHost, t)`
+—— t 是**第 6 个**参数。第一版调用点写成 `(…, info, undefined, true, t)`（多补了一个 undefined）
+⇒ 🔴 **TS2554「Expected 1-6 arguments, but got 7」**（类型门禁 29/2）。
+`downloadArchive.ts` 的 `saveExportArchive(name, successText?, t)` 同理：两个调用方
+（`Static/file/index.tsx` 与 `SystemConfig/tabs/ImgTab.jsx`）都要补 t —— 🔴 其中 ImgTab **早就接了 i18n**，
+但它调这个函数时没传 t ⇒ 那条文案在英文下仍是中文（这正是"注入链判据"要抓的形状）。
+⚠️ `RunCodeModal.tsx` 加了 hook 却忘了 `import { useIntl }` ⇒ **TS2304**（同一个门禁抓到的）。
+👉 🔴 **类型门禁这一批抓了 2 个真错**（TS2554 / TS2304）—— 它不是形式检查，是这批的第 3 把尺子。
+
+#### I. 🔴 探针尺子五处错（都被实采纠正）
+1. **内容区取样**：整页 `body.innerText` 含侧边栏的「登出」（属 `app.jsx`，18 条，**下一批**）
+   ⇒ 反向判据染红。改成只取 `.ant-pro-page-container / .ant-layout-content`，**并且 skip 说出来**
+   （沉默排除与沉默少报一样坏）。
+2. **驼峰专有名**：接缝判据里的 `/[a-z][A-Z]/`（想抓"词粘连"）会把 **VanBlog**、**CKboss** 当成缺陷 ⇒ 假红。
+   真正的粘连由 A 段那条**静态组装守卫**判（它按 key 逐段拼，分得清专有名）。
+3. **不可观察就是不可观察**：`code.folderPageHint` 在**文件夹页面的编辑器视图**里（要真有一个多文件页面才进得去），
+   新建弹窗里那段是 `customPage.*`（早已翻好）；类型下拉是 antd Select，未展开时 innerText 里只有当前选中项
+   ⇒ 两条都**登记 skip**，不假装验过。
+4. **附件页那段说明找不到 tooltip 图标**（实采 0 条 tooltip）⇒ 同样 skip + 写明"实采 N 条"。
+5. **切换 provider / 页面后要轮询等渲染**（上一批的教训延续）：这批 `gotoPage()` 里统一
+   "轮询到 body 文本 > 300 字再采"，没有再出现"采到 93 个字符的空壳"那种假红。
+
+#### J. 🔴 子代理交付：**中途读它的文件 = 读到半成品**
+我在 14:58 把 `/tmp/abc-translations.subagent.cjs` 复制进仓库时，子代理**还在写**（它的最终报告 15:05 才到，
+里面明确说了"链 1 用破折号结尾以避免粘连"）⇒ 我拿到的是**没有那处修正**的中间稿，
+于是 A 段那个 `inthis repository` 就进了包，一直到活体才发现。
+👉 🔴 **规矩：等子代理报完 DONE 再读它的产出文件**；如果必须先读，读完后要拿它的最终报告**逐条对一遍**
+（它标出的 judgement call 与"我为了 X 特意这么写"往往就是缺陷所在）。
+⚠️ 另一个坑：我用正则改 `vanblog_dev/abc-translations.cjs` 里 EN 那一条时，正则**先命中了 TW 块**里的同名 key
+⇒ 把繁中值覆盖成了英文（包里没受影响，因为包是另写的，但工作副本被污染了）。
+👉 🔴 **同一个文件里有 TW/EN 两块时，改正则必须先定位到块的起点**（`s.index('module.exports.EN')` 之后再搜）。
+
+#### K. 基线
+- admin `node --test` **776 tests / 172 suites / 0 fail**（+1 = A 段那条关于页接缝守卫）；
+- 变异对照 **9/9**（能力标签退回硬编码 / 🔴 英文片段链结尾空格去掉（本批真缺陷）/ `forkHighlights` 调用点拿掉 t /
+  `copyAttachmentLink` 第 6 个参数拿掉 t / `saveExportArchive` 拿掉 t / 🔴 PipelineModal 的 useEffect 依赖拿掉 t（本批真缺陷）/
+  「附件」兜底名退回硬编码 / 🔴 README 锚点被翻掉（例外反向钉住）/ 语义空操作）；
+- 语言包 **1342 key** ×3（原始 key 行数 == 去重数 == 1342，重复 0）；
+  `--zh-tw-audit`：1342 key / **776** 个不同汉字 / **0 命中**（字表 69 字，例外仍 1 条：`钥`）；
+- 棘轮 **102 个文件 / TOTAL 62**（10 条永久例外）；admin 类型门禁 **31/0**（过程中抓到 TS2554 / TS2304）；
+- 矩阵（5 个阶段全 rc=0）：见提交信息；生产构建 rc=0（`umi.301d8cf0.js` = **1,676,773 B**）；
+- 🔴 **真实剩余：30 个文件 / 235 条**。下一块：`Pipeline/index.tsx`(35) → `Welcome`(33) → `importMdzCore`(23) →
+  `app.jsx`(18，含侧边栏那条「登出」) → `restoreCore`(16) → `InstallRecordBanner`(13) → `WalineForm` 邻接零散 →
+  `migrate.tsx`(5) → 其余小文件；然后是期 9 服务端。
+
 ### 7.175 期 6 第十批：评论管理页整块（82 条 → 0）—— 🔴 变异对照又挖出一个**守卫缺口**：译文里的占位符名从来没人对过账（新守卫一上线就抓到一条既有缺陷）
 
 **交付**（`pageSurface.js` 报的 3 个文件一起做；`requestError.js` 那 1 条是永久例外）：
