@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { loadMongoUrl } from 'src/config';
 import { MongoClient } from 'mongodb';
 import * as crypto from 'crypto';
@@ -369,9 +370,7 @@ export async function rotateJwtSecret(options: {
     if (typeof oldSecret !== 'string' || !oldSecret) {
       // 站点还没初始化过（密钥是 initJwt 在建站时写的）。这时"轮换"没有意义，
       // 而且贸然插一条会把初始化流程的 $setOnInsert 语义搅乱。
-      throw new BadRequestException(
-        '当前库里还没有 JWT 密钥（站点可能尚未初始化）：请先完成初始化，再考虑轮换。',
-      );
+      throw codedError('jwtSecretMissing');
     }
     const newSecret = makeSalt();
     const rotatedAt = new Date().toISOString();
@@ -395,9 +394,7 @@ export async function rotateJwtSecret(options: {
     const returned: any = updated;
     const value: any = returned?.value ?? returned;
     if (!value || value?.secret !== newSecret) {
-      throw new BadRequestException(
-        'JWT 密钥在轮换过程中被另一个请求改动了（CAS 未命中）：请重新加载页面后再试一次。',
-      );
+      throw codedError('jwtSecretRotateConflict');
     }
     // 内存态：当前 = 新密钥，previous = 刚才那份（带 rotatedAt 与**本次**的宽限期）
     const previousRecord: JwtPreviousKey = { secret: oldSecret, rotatedAt, graceDays };

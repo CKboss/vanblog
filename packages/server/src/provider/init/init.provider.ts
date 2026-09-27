@@ -6,6 +6,7 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { config } from 'src/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -483,7 +484,7 @@ export class InitProvider implements OnModuleInit, OnModuleDestroy {
       // 以前这里把原始错误整个吞掉，env 自动引导失败时运维连"是数据库连不上
       // 还是字段校验没过"都无从知道 —— 静默失败是本仓库记录在案的头号陷阱。
       this.logger.error(`初始化失败：${(err as Error)?.message || err}`);
-      throw new BadRequestException('初始化失败');
+      throw codedError('initFailed');
     }
   }
 

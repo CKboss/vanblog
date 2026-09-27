@@ -1956,4 +1956,34 @@ export default {
   'error.collaboratorPasswordTooShort': '协作者密码太短：至少 {min} 个字符（当前 {count} 个）。弱口令在"5 次/300 秒/IP"的防爆破预算下，用一批代理 IP 仍然可在数小时内撞开，而协作者账号一旦被撞开就能改站点内容。',
   'error.collaboratorNameTakenByCollaborator': '用户名「{name}」已被一个协作者占用，请换一个（管理员与协作者不能同名，否则登录会落到不确定的账号上）',
   'error.collaboratorNameSameAsAdmin': '用户名「{name}」与管理员账号相同，不可用于协作者（否则该用户名登录会落到不确定的账号上）',
+
+  // ── 🔴 期 9 第二批：认证与初始化族的 21 个服务端错误码（auth.controller / init.controller /
+  //    jwt.strategy / initJwt / login.guard / init.provider）。
+  //    🔴 zh-CN 必须与服务端 `SERVER_ERROR_CODES[code].zh` **逐字相同**（守卫会查漂移）：
+  //    跨包测试与部署脚本（`requestError.test.js`、`admin-login-expired.spec.js`、`vanblog-reset.test.sh`）
+  //    钉的就是这几句中文，所以迁移**一个字都没改**。
+  //    ⚠️ `error.authRestoreKeyUnavailable` 与 `error.authRestoreKeyInvalid` 的**中文相同**（都是「恢复密钥错误！」，
+  //    与迁移前一致），但语义不同：前者是"服务端读不到自己的恢复密钥 ⇒ 失败关闭"，后者是"你交上来的密钥不对"
+  //    ⇒ 分成两个码，英文才能说准。
+  'error.initBusySameProcess': '已经有一个初始化/恢复正在进行，请等它结束（若那一次成功了，刷新页面即可）',
+  'error.initBusyOtherProcess': '已经有一个初始化/恢复正在进行（由另一个进程持有锁），请等它结束（若那一次成功了，刷新页面即可）',
+  'error.initRestoreBusySameProcess': '已经有一个恢复正在进行，请等它结束（完成后刷新页面即可进入后台）',
+  'error.initRestoreBusyOtherProcess': '已经有一个恢复正在进行（由另一个进程持有锁），请等它结束（完成后刷新页面即可进入后台）',
+  'error.initRestoreAlreadyInitialized': '站点已经初始化过了：这条接口只对全新站点开放，请登录后到「备份与恢复」里恢复',
+  'error.initRestoreNeedsFile': '请上传整站备份文件（multipart 字段名 file）',
+  'error.initRestoreBadArchiveName': '文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：{name}',
+  'error.initRestoreSigTooLarge': 'signature 字段太大了（{size} 字节，上限 {max}）：.sig 是一份几百字节的 JSON，请确认你上传的是归档旁边那个 `.sig` 文件本身，而不是归档或别的文件',
+  'error.initRestoreSigNotOurs': 'signature 字段不是本功能生成的 `.sig`（应是一份含 magic={magic} 的 JSON）：请上传归档**旁边**那个同名 `.sig` 文件的内容（curl 用 -F "signature=<路径>"）。⚠️ 如果你手上没有 `.sig`，就**不要**带这个字段 —— 不带它恢复照常进行，只是无法证明归档没被换过',
+  'error.authBadCredentials': '用户名或密码错误！',
+  'error.authNoCredentials': '无登录凭证！',
+  'error.authRestoreRateLimited': '恢复接口调用过于频繁，请稍后再试',
+  'error.authRestoreKeyUnavailable': '恢复密钥错误！',
+  'error.authRestoreKeyInvalid': '恢复密钥错误！',
+  'error.jwtAdminMissing': '管理员账号不存在（库里没有 id=0 的用户）：站点数据可能已损坏，或被恢复成了一份空/坏的备份',
+  'error.jwtBadSubject': '令牌缺少有效的用户标识（sub 不是整数）：站点数据可能已损坏，或该令牌由旧版本签发。请重新登录以获取新令牌',
+  'error.jwtCollaboratorGone': '该协作者已不存在',
+  'error.jwtSecretMissing': '当前库里还没有 JWT 密钥（站点可能尚未初始化）：请先完成初始化，再考虑轮换。',
+  'error.jwtSecretRotateConflict': 'JWT 密钥在轮换过程中被另一个请求改动了（CAS 未命中）：请重新加载页面后再试一次。',
+  'error.loginThrottled': '错误次数过多！请 {seconds} 秒后再试！',
+  'error.initFailed': '初始化失败',
 };

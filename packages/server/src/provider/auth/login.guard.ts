@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { bruteForceClientIp, isPrivateOrLoopback } from '../../utils/trustedProxy';
 import {
   ADMIN_LOGIN_ALLOW_CIDR_ENV,
@@ -223,10 +224,9 @@ export class LoginGuard implements CanActivate {
       this.logger.warn(
         `登录失败次数过多，已临时拒绝\nip: ${state.ip}\ncount: ${state.count}\nretryAfter: ${state.retryAfterSeconds}s`,
       );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: `错误次数过多！请 ${state.retryAfterSeconds} 秒后再试！`,
-      });
+      // 🔴 期 9 第二批：秒数走 params（`{seconds}`）⇒ 三份译文各自决定要不要用 ICU 复数
+      //    （中文没有复数概念 ⇒ 保持 `{seconds} 秒`；英文用 `one {# second} other {# seconds}`）。
+      throw codedError('loginThrottled', { seconds: state.retryAfterSeconds });
     }
     // 全局节流：per-IP 桶没超限，但整站正在被大规模爆破 ⇒ 加一点延迟抬高撞库成本。
     // ⚠️ 只在"放行"的分支上做：已经被 per-IP 限制拒掉的请求立刻返回，没必要再拖 3 秒。

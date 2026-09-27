@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { isSuperAdminUser } from 'src/types/access/access';
@@ -57,9 +58,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         // ⚠️ 必须是 401 而不是 500：以前这里直接读 `user.nickname` 抛 TypeError ⇒
         //    鉴权路径变成 500，调用方会以为"服务端坏了"而重试，而真相是"你的凭据不再有效"。
         //    这条路径**每个带 token 的请求都会走**，所以坏库会让整个后台变成一片 500。
-        throw new UnauthorizedException(
-          '管理员账号不存在（库里没有 id=0 的用户）：站点数据可能已损坏，或被恢复成了一份空/坏的备份',
-        );
+        throw codedError('jwtAdminMissing');
       }
       const siteInfo = await this.metaProvider.getSiteInfo();
       // ⚠️ getSiteInfo() 在 metas 里没有 siteInfo 时返回的是 undefined（它 `return raw`），
@@ -82,14 +81,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       //    与上面那条"坏库 ⇒ 明确 401"是同一条路径上的姊妹缺陷。
       const sub = payload?.sub;
       if (typeof sub !== 'number' || !Number.isInteger(sub)) {
-        throw new UnauthorizedException(
-          '令牌缺少有效的用户标识（sub 不是整数）：站点数据可能已损坏，或该令牌由旧版本签发。请重新登录以获取新令牌',
-        );
+        throw codedError('jwtBadSubject');
       }
       const user = await this.userProvider.getCollaboratorById(sub);
       if (!user) {
         // 协作者已被删除但 token 还在有效期内：以前这里会读 user.permissions 直接 500
-        throw new UnauthorizedException('该协作者已不存在');
+        throw codedError('jwtCollaboratorGone');
       }
       moreDto.permissions = user.permissions;
       moreDto.nickname = user.nickname;

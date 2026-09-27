@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ForbiddenException,
   HttpException,
+  InternalServerErrorException,
   NotAcceptableException,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 
 /**
@@ -148,6 +150,93 @@ export const SERVER_ERROR_CODES = {
   collaboratorPasswordInvalidOnCreate: entry('密码不合法，未创建协作者', BadRequestException),
   collaboratorNotFound: entry('没有此协作者！无法更新！', ForbiddenException),
   collaboratorPasswordInvalidOnUpdate: entry('密码不合法，未修改协作者', BadRequestException),
+
+  // ── 认证与初始化族（auth.controller.ts / init.controller.ts / jwt.strategy.ts / initJwt.ts /
+  //    login.guard.ts / init.provider.ts，期 9 第二批）─────────────────────────────
+  // 🔴 这一批里**刻意不含** init.controller 的两处 `已初始化`：那是**协议字符串**
+  //    （admin 的 `InitPage` 拿它与响应文本比对来判断"站点已初始化"，登记在硬编码棘轮的永久例外里），
+  //    译了会让初始化检测静默失效 ⇒ 要改就得**前后端同时**改成按 code 判断，单独排一批。
+  // ⚠️ `authBadCredentials` 等几条的 zh 被跨包测试与部署脚本钉住（`requestError.test.js`、
+  //    `admin-login-expired.spec.js`、`vanblog-reset.test.sh`）⇒ zh 必须**逐字不变**，
+  //    这也是"码表的 zh 就是权威中文"这条设计的价值：迁移不改一个字，那些测试就都还是绿的。
+  // 🔴 形状说明：auth.controller 那几处原本是 `new UnauthorizedException({ statusCode: 401, message: '…' })`
+  //    （**对象体**，没有 `error` 字段）；改走 `codedError` 之后响应体会多出 Nest 自己算的
+  //    `error: 'Unauthorized'` 与我们的 `code`。已核对消费方：admin 的 `isSessionExpiredPayload()`
+  //    只看 `statusCode` 与 **`message`**（不看 `error`），部署脚本只匹配 `message` ⇒ 形状变化是安全的，
+  //    而且**黄金快照会把新形状钉住**（谁再改就红）。
+  initBusySameProcess: entry(
+    '已经有一个初始化/恢复正在进行，请等它结束（若那一次成功了，刷新页面即可）',
+    HttpException,
+    409,
+  ),
+  initBusyOtherProcess: entry(
+    '已经有一个初始化/恢复正在进行（由另一个进程持有锁），请等它结束（若那一次成功了，刷新页面即可）',
+    HttpException,
+    409,
+  ),
+  initRestoreBusySameProcess: entry(
+    '已经有一个恢复正在进行，请等它结束（完成后刷新页面即可进入后台）',
+    HttpException,
+    409,
+  ),
+  initRestoreBusyOtherProcess: entry(
+    '已经有一个恢复正在进行（由另一个进程持有锁），请等它结束（完成后刷新页面即可进入后台）',
+    HttpException,
+    409,
+  ),
+  initRestoreAlreadyInitialized: entry(
+    '站点已经初始化过了：这条接口只对全新站点开放，请登录后到「备份与恢复」里恢复',
+    HttpException,
+    403,
+  ),
+  initRestoreNeedsFile: entry('请上传整站备份文件（multipart 字段名 file）', BadRequestException),
+  initRestoreBadArchiveName: entry(
+    '文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：{name}',
+    BadRequestException,
+  ),
+  // 🔴 这两条的 zh 写成**单引号字符串的 `+` 拼接**，不用模板字符串：
+  //    码表解析器（`astInventory.resolveConstString`）认字面量 / 模块级字符串常量 / 二者拼接，
+  //    **不认 TemplateLiteral** ⇒ 用模板字符串它会 fail-loud（本轮实测就是这么被拦下来的）。
+  //    ⚠️ 反引号在单引号字符串里**不需要**转义（原调用点写在模板字符串里才要 `` \.sig ``）。
+  initRestoreSigTooLarge: entry(
+    'signature 字段太大了（{size} 字节，上限 {max}）：' +
+      '.sig' +
+      ' 是一份几百字节的 JSON，请确认你上传的是归档旁边那个 ' +
+      '`.sig` 文件本身，而不是归档或别的文件',
+    BadRequestException,
+  ),
+  initRestoreSigNotOurs: entry(
+    'signature 字段不是本功能生成的 `.sig`（应是一份含 magic={magic} 的 JSON）：' +
+      '请上传归档**旁边**那个同名 `.sig` 文件的内容（curl 用 -F "signature=<路径>"）。' +
+      '⚠️ 如果你手上没有 `.sig`，就**不要**带这个字段 —— 不带它恢复照常进行，只是无法证明归档没被换过',
+    BadRequestException,
+  ),
+  authBadCredentials: entry('用户名或密码错误！', UnauthorizedException),
+  authNoCredentials: entry('无登录凭证！', UnauthorizedException),
+  authRestoreRateLimited: entry('恢复接口调用过于频繁，请稍后再试', HttpException, 429),
+  authRestoreKeyUnavailable: entry('恢复密钥错误！', UnauthorizedException),
+  authRestoreKeyInvalid: entry('恢复密钥错误！', UnauthorizedException),
+  jwtAdminMissing: entry(
+    '管理员账号不存在（库里没有 id=0 的用户）：站点数据可能已损坏，或被恢复成了一份空/坏的备份',
+    UnauthorizedException,
+  ),
+  jwtBadSubject: entry(
+    '令牌缺少有效的用户标识（sub 不是整数）：站点数据可能已损坏，或该令牌由旧版本签发。请重新登录以获取新令牌',
+    UnauthorizedException,
+  ),
+  jwtCollaboratorGone: entry('该协作者已不存在', UnauthorizedException),
+  jwtSecretMissing: entry(
+    '当前库里还没有 JWT 密钥（站点可能尚未初始化）：请先完成初始化，再考虑轮换。',
+    BadRequestException,
+  ),
+  jwtSecretRotateConflict: entry(
+    'JWT 密钥在轮换过程中被另一个请求改动了（CAS 未命中）：请重新加载页面后再试一次。',
+    BadRequestException,
+  ),
+  loginThrottled: entry('错误次数过多！请 {seconds} 秒后再试！', UnauthorizedException),
+  // 🔴 用 BadRequestException：这是**迁移前那处的实际类型**（`throw new BadRequestException('初始化失败')`）。
+  //    黄金快照的意义就是"迁移不许悄悄改状态码"⇒ 先照抄，要改状态码得单独论证并同步快照。
+  initFailed: entry('初始化失败', BadRequestException),
 };
 
 export type ServerErrorCode = keyof typeof SERVER_ERROR_CODES;

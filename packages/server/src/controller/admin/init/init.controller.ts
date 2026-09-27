@@ -10,6 +10,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import * as fs from 'fs';
@@ -267,17 +268,11 @@ export class InitController {
     let dbLockOwner: string | null = null;
     try {
       if (localOwner === null) {
-        throw new HttpException(
-          '已经有一个初始化/恢复正在进行，请等它结束（若那一次成功了，刷新页面即可）',
-          409,
-        );
+        throw codedError('initBusySameProcess');
       }
       const cross = await acquireCrossProcessInitLock(this.initProvider, this.logger);
       if (cross.busy) {
-        throw new HttpException(
-          '已经有一个初始化/恢复正在进行（由另一个进程持有锁），请等它结束（若那一次成功了，刷新页面即可）',
-          409,
-        );
+        throw codedError('initBusyOtherProcess');
       }
       dbLockOwner = cross.owner;
 
@@ -424,54 +419,41 @@ export class InitController {
         return { statusCode: 401, message: '演示站禁止修改此项！' };
       }
       if (localOwner === null) {
-        throw new HttpException(
-          '已经有一个恢复正在进行，请等它结束（完成后刷新页面即可进入后台）',
-          409,
-        );
+        throw codedError('initRestoreBusySameProcess');
       }
       const cross = await acquireCrossProcessInitLock(this.initProvider, this.logger);
       if (cross.busy) {
-        throw new HttpException(
-          '已经有一个恢复正在进行（由另一个进程持有锁），请等它结束（完成后刷新页面即可进入后台）',
-          409,
-        );
+        throw codedError('initRestoreBusyOtherProcess');
       }
       dbLockOwner = cross.owner;
       // "已初始化"的拒绝要在其它校验之前：这条接口匿名可达，
       // 对一个已经跑着的站点不该透露任何处理细节（与 /init/upload 的顺序一致）
       if (await this.initProvider.checkHasInited()) {
-        throw new HttpException(
-          '站点已经初始化过了：这条接口只对全新站点开放，请登录后到「备份与恢复」里恢复',
-          403,
-        );
+        throw codedError('initRestoreAlreadyInitialized');
       }
       // setup key 闸门（默认开启；显式 VANBLOG_INIT_REQUIRE_SETUP_KEY=false
       // 时是一个纯布尔判断 + return，行为与旧版逐字节一致）。
       // 放在"已初始化 403"之后：对已初始化站点仍然一个字都不多说。
       runSetupKeyGate(this.initProvider, setupKey, this.logger);
       if (!uploadedPath) {
-        throw new BadRequestException('请上传整站备份文件（multipart 字段名 file）');
+        throw codedError('initRestoreNeedsFile');
       }
 
       const originalName = String(file?.originalname || '');
       if (!FULL_BACKUP_ARCHIVE_RE.test(originalName)) {
-        throw new BadRequestException(
-          `文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：${
-            originalName.slice(0, 120) || '(空)'
-          }`,
-        );
+        // 🔴 期 9 第二批：迁进码表。⚠️ `(空)` 那个兜底**留在调用点**（它是"没有文件名"时的填充值，
+        //    不是文案本体的一部分；码表里的 `{name}` 只是把它接上去）。
+        throw codedError('initRestoreBadArchiveName', { name: originalName.slice(0, 120) || '(空)' });
       }
       // 收到 `.sig` 就把它落到归档旁边，让**既有的**验签闸门能找到它。
       // ⚠️ 顺序：在所有"该不该处理这个请求"的闸门（demo / 409 / 已初始化 403 / setupKey /
       //    文件名形状）之后才写盘 —— 被拒的请求不该在磁盘上留任何东西。
       if (typeof signature === 'string' && signature.trim() !== '') {
         if (signature.length > RESTORE_SIG_MAX_BYTES) {
-          throw new BadRequestException(
-            `signature 字段太大了（${signature.length} 字节，上限 ${RESTORE_SIG_MAX_BYTES}）：` +
-              `.sig` +
-              ` 是一份几百字节的 JSON，请确认你上传的是归档旁边那个 ` +
-              `\`.sig\` 文件本身，而不是归档或别的文件`,
-          );
+          throw codedError('initRestoreSigTooLarge', {
+            size: signature.length,
+            max: RESTORE_SIG_MAX_BYTES,
+          });
         }
         let parsedSig: any = null;
         try {
@@ -480,11 +462,8 @@ export class InitController {
           parsedSig = null;
         }
         if (!parsedSig || typeof parsedSig !== 'object' || parsedSig.magic !== BACKUP_SIG_MAGIC) {
-          throw new BadRequestException(
-            `signature 字段不是本功能生成的 \`.sig\`（应是一份含 magic=${BACKUP_SIG_MAGIC} 的 JSON）：` +
-              `请上传归档**旁边**那个同名 \`.sig\` 文件的内容（curl 用 -F "signature=<路径"）。` +
-              `⚠️ 如果你手上没有 \`.sig\`，就**不要**带这个字段 —— 不带它恢复照常进行，只是无法证明归档没被换过`,
-          );
+          // 🔴 这两处原来是模板字符串拼接（里面还有转义的反引号）⇒ 迁进码表后由 `{size}` / `{max}` / `{magic}` 插值。
+          throw codedError('initRestoreSigNotOurs', { magic: BACKUP_SIG_MAGIC });
         }
         // ⚠️ 原样落盘（不重新序列化）：验的就是站长交上来的那份字节。
         sigSidecarPath = signatureSidecarPath(uploadedPath);

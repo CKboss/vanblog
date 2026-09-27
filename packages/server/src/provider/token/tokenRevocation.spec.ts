@@ -149,7 +149,15 @@ describe('AuthController：吊销在响应之前完成，恢复接口有专用�
     expect(src).toMatch(/windowMs: RESTORE_WINDOW_MS/);
     expect(src).toMatch(/resetAttempts\(`auth-restore-\$\{restoreIp\}`\)/);
     // 超限要回 429 且带 Retry-After（与 rateLimit.ts 的形状一致，脚本不必解析中文消息）
-    expect(src).toMatch(/HttpStatus\.TOO_MANY_REQUESTS/);
+    // 🔴 期 9 第二批：429 这个状态码从控制器**搬进了错误码登记表**（`authRestoreRateLimited`）⇒
+    //    锚点跟着搬，而且**跨文件钉住**（性质没放：恢复接口被限流时仍然必须是 429）。
+    //    ⚠️ 不能只断言"控制器里出现了那个码名"：那只证明它抛了这个码，不证明这个码是 429。
+    expect(src).toMatch(/codedError\('authRestoreRateLimited'\)/);
+    const codes = readFileSync(join(__dirname, '../../utils/serverErrorCodes.ts'), 'utf8');
+    // ⚠️ 不能用 `/s`（dotAll）旗标：本包的 TS target 不认，会报 **TS1501**（而它是**编译期**错，
+    //    整个 spec 直接"failed to run"，一个用例都跑不了）⇒ 跨行匹配用 `[\s\S]*` 写。
+    expect(codes).toMatch(/authRestoreRateLimited: entry\([\s\S]*?HttpException,\s*429,?\s*\)/);
+    expect(codes).not.toMatch(/authRestoreRateLimited:[^\n]*BadRequestException/);
     expect(src).toMatch(/setHeader\('Retry-After'/);
   });
 

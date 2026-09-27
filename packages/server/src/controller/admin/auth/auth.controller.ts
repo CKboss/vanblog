@@ -65,10 +65,11 @@ export class AuthController {
       // 只有**失败**才计数（旧实现连成功登录也计数，正常用户会被自己锁在门外）
       await this.loginGuard.recordFailure(request);
       this.logProvider.login(request, false);
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: '用户名或密码错误！',
-      });
+      // 🔴 期 9 第二批：迁进码表。⚠️ 原来是**对象体**（只有 statusCode 与 message）；
+      //    `codedError` 会让响应体多出 Nest 自己算的 `error: 'Unauthorized'` 与我们的 `code`。
+      //    已核对消费方：admin 的 `isSessionExpiredPayload()` 只看 statusCode 与 **message**（不看 error），
+      //    部署脚本（vanblog-reset / vanblog-drill）只匹配 message ⇒ 形状变化安全，且黄金快照会钉住新形状。
+      throw codedError('authBadCredentials');
     }
     // 能到这里登陆就成功了
     await this.loginGuard.reset(request);
@@ -97,10 +98,7 @@ export class AuthController {
   async logout(@Request() request: any) {
     const token = request.headers['token'];
     if (!token) {
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: '无登录凭证！',
-      });
+      throw codedError('authNoCredentials');
     }
     await this.tokenProvider.disableToken(token);
     // ⚠️ 事件必须在**吊销成功之后**才触发（以前在之前：吊销还没发生，
@@ -147,10 +145,7 @@ export class AuthController {
       if (typeof res?.setHeader === 'function') {
         res.setHeader('Retry-After', String(Math.max(1, restoreHit.retryAfterSeconds)));
       }
-      throw new HttpException(
-        { statusCode: 429, message: '恢复接口调用过于频繁，请稍后再试' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      throw codedError('authRestoreRateLimited');
     }
     const token = body.key;
     // ⚠️ 这里以前是：
@@ -169,16 +164,12 @@ export class AuthController {
         '「忘记密码」恢复密钥不可用（内存缓存与 <日志目录>/restore.key 都读不到），已拒绝本次请求。' +
           '这通常意味着本进程不是主实例且日志目录不可读；请检查 VAN_BLOG_LOG 与卷挂载。',
       );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: '恢复密钥错误！',
-      });
+      // 🔴 两个码**中文相同、语义不同**：这条是"服务端读不到自己的恢复密钥 ⇒ 失败关闭"，
+      //    下面那条是"你交上来的密钥不对"。分成两个码，英文才能说准（zh-CN 与码表逐字相同 ⇒ 中文看起来一样）。
+      throw codedError('authRestoreKeyUnavailable');
     }
     if (typeof token !== 'string' || !safeEqual(token, expectedKey)) {
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: '恢复密钥错误！',
-      });
+      throw codedError('authRestoreKeyInvalid');
     }
     // 这是「忘记密码」的自救通道，参数不校验的话：空密码会把账号密码哈希写成空串，
     // 之后**任何密码都登不进来**，只能再去改库——自救工具反而把人锁死。

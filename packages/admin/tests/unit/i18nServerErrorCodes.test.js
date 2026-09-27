@@ -63,7 +63,11 @@ for (const l of LOCALES) {
  */
 // 🔴 211 → **206**（期 9 第一批）：`user.provider.ts` 那 5 处带 `${label}` / `${MIN}` / `${name}` 的
 //   模板消息全部迁进码表（8 个新码：口令 3 类 × admin/collaborator + 协作者用户名冲突 2 条）。
-const THROW_BUDGET = 206;
+// 🔴 206 → **186**（期 9 第二批）：认证与初始化族 21 个码上线（auth.controller 5、init.controller 9、
+//   jwt.strategy 3、initJwt 2、login.guard 1、init.provider 1）。
+//   ⚠️ init.controller 里那两处 `已初始化` **刻意没迁**：它是协议字符串（admin 拿它与响应文本比对），
+//   译了会让初始化检测静默失效 ⇒ 要改得前后端一起改成按 code 判断，单独排一批。
+const THROW_BUDGET = 186;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -71,7 +75,19 @@ const THROW_BUDGET = 206;
  * 而实测它有 **108** 处（8 在 throw 里 + **100 在 throw 外**，"演示站禁止…"几乎全是这个形状），
  * 比 throw 那一族的一半还多。基线 2026-09-25 实测 **108**（30 个文件），只许减不许增。
  */
-const MESSAGE_BODY_BUDGET = 108;
+// 🔴 108 → **103**（期 9 第二批）：auth.controller 那 5 处 `new UnauthorizedException({ statusCode, message: '中文' })`
+//   与 login.guard 那 1 处的对象体一并迁进码表 ⇒ 这一族少了 5 处。
+const MESSAGE_BODY_BUDGET = 103;
+
+/** 码 → 码表里的中文模板（`{name}` 占位符的权威来源）；供"调用点参数对账"那条判据用 */
+const CODE_ZH = (() => {
+  const out = {};
+  for (const [code, e] of Object.entries(REGISTRY)) out[code] = e && e.zh;
+  return out;
+})();
+
+/** "间接传参"（`codedError(code, someVar)`）的调用点计数：静态看不见键名，如实报出来 */
+let indirect = 0;
 
 function walkServerSources(dir, out) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -455,4 +471,100 @@ test('🔴 服务端错误码 · 尺子反证（合成输入）：中文 throw �
     );
   }
   assert.ok(!/logger|console/.test(all), `🔴 计数结果里混进了 logger/console 的文本：${all.slice(0, 200)}`);
+});
+
+test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里的占位符**对得上**（两个方向都查）', () => {
+  // ## 为什么要这条（2026-09-28 期 9 第二批，一条"本该绿"的变异对照揭出来的洞）
+  // 我把调用点写成 `codedError('loginThrottled', { secs: … })`（码表里是 `{seconds}`）⇒
+  // 🔴 **全套测试都是绿的**：admin 侧的三份包对账只看 key 与文本，服务端那条
+  // "填完不许残留占位符"的 spec 是**自己按码表的占位符造样例参数**，所以它也发现不了
+  // "调用点传错了名字"。后果是**用户界面上直接出现字面 `{seconds}`** ——
+  // 这类缺陷静态判据一个都抓不到，只有真触发一次才看得见（而登录限流这条路径很难在验收里撞上）。
+  // ⇒ 补一条静态判据，把"调用点的参数名"与"码表里的占位符"**两个方向**都对上：
+  //   ① 传了码表里没有的名字 ⇒ 那个参数**永远不会被渲染**（多半是拼错，或者占位符被改名忘了同步）；
+  //   ② 码表里有占位符但调用点没传 ⇒ 用户会看到字面 `{name}`。
+  const files = walkServerSources(SERVER_SRC, []);
+  const problems = [];
+  let callSites = 0;
+  for (const abs of files) {
+    if (abs.endsWith('serverErrorCodes.ts')) continue; // 登记表本身不含调用点
+    const rel = path.relative(ROOT, abs).split(path.sep).join('/');
+    const src = fs.readFileSync(abs, 'utf8');
+    if (!/coded(Error|Body)\(/.test(src)) continue;
+    // 🔴 解析失败会抛（fail-loud）："解析不到"绝不等于"没有问题"
+    const ast = astInventory.parseSource(src, rel);
+    // ⚠️ babel 的形状是 StringLiteral / ObjectProperty（acorn 是 Literal / Property）⇒ 两种都认。
+    //    本项目已经因为只认一种而**数漏过一半**（见 §7.181 B）。
+    const str = (nd) =>
+      nd && (nd.type === 'StringLiteral' || nd.type === 'Literal') && typeof nd.value === 'string'
+        ? nd.value
+        : null;
+    const walk = (nd, visit) => {
+      if (!nd || typeof nd !== 'object') return;
+      if (Array.isArray(nd)) {
+        nd.forEach((x) => walk(x, visit));
+        return;
+      }
+      if (typeof nd.type === 'string') visit(nd);
+      for (const k of Object.keys(nd)) {
+        if (k === 'loc' || k === 'start' || k === 'end' || k === 'comments') continue;
+        const v = nd[k];
+        if (v && typeof v === 'object') walk(v, visit);
+      }
+    };
+    walk(ast.program || ast, (nd) => {
+      if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
+      if (!/^coded(Error|Body)$/.test(nd.callee.name)) return;
+      const code = str(nd.arguments && nd.arguments[0]);
+      if (!code) return;
+      callSites += 1;
+      const entry = CODE_ZH[code];
+      if (!entry) {
+        problems.push(`${rel}: codedError('${code}') 但登记表里没有这个码（拼错？）`);
+        return;
+      }
+      const want = new Set(
+        [...String(entry).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
+      );
+      const arg = nd.arguments && nd.arguments[1];
+      const got = new Set();
+      if (arg && (arg.type === 'ObjectExpression')) {
+        for (const p of arg.properties || []) {
+          if (!p || (p.type !== 'ObjectProperty' && p.type !== 'Property') || !p.key) continue;
+          const k = p.key.name || p.key.value;
+          if (typeof k === 'string') got.add(k);
+        }
+      } else if (arg && arg.type === 'Identifier') {
+        // 传的是一个变量（例如 `LIMITS` / `shortParams`）⇒ 静态看不出键名，**跳过但不算通过**：
+        // 这类调用点由"运行时不许残留占位符"那条 spec 兜（它按码表造样例参数），
+        // 这里只登记数量，避免把"看不见"当成"没问题"。
+        indirect += 1;
+        return;
+      }
+      const unknown = [...got].filter((k) => !want.has(k));
+      const missing = [...want].filter((k) => !got.has(k));
+      if (unknown.length) {
+        problems.push(
+          `${rel}: codedError('${code}') 传了码表里没有的参数 {${unknown.join(', ')}}` +
+            `（码表占位符是 {${[...want].join(', ') || '无'}}）⇒ 这些参数永远不会被渲染`,
+        );
+      }
+      if (missing.length) {
+        problems.push(
+          `${rel}: codedError('${code}') 少传了 {${missing.join(', ')}} ⇒ 用户界面上会出现字面占位符`,
+        );
+      }
+    });
+  }
+  assert.deepStrictEqual(
+    problems,
+    [],
+    '🔴 调用点的参数名与码表里的占位符对不上（界面上会渲染出字面 `{xxx}`，或者传了个没人用的参数）：\n  ' +
+      problems.slice(0, 10).join('\n  '),
+  );
+  // 🔴 反空转：这条判据必须真的走到了调用点（否则"0 个问题"是因为一个都没看）
+  assert.ok(callSites >= 40, `只找到 ${callSites} 个 codedError/codedBody 调用点（下界 40）⇒ 遍历或解析坏了`);
+  assert.ok(Object.keys(CODE_ZH).length >= 50, `登记表只解析出 ${Object.keys(CODE_ZH).length} 个码（下界 50）`);
+  // ℹ️ 间接传参（传变量而不是对象字面量）的调用点数量：静态看不见键名，如实报出来
+  console.log(`NOTE: codedError/codedBody 调用点 ${callSites} 个，其中 ${indirect} 个是间接传参（静态判据看不见键名）`);
 });

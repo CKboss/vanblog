@@ -175,6 +175,33 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   collaboratorPasswordTooShort: { status: 400, error: 'Bad Request' },
   collaboratorNameTakenByCollaborator: { status: 400, error: 'Bad Request' },
   collaboratorNameSameAsAdmin: { status: 403, error: 'Forbidden' },
+  // 🔴 期 9 第二批新增的 21 个码（认证与初始化族）。
+  //    状态码与 error 字段**照抄迁移前**那几处的实际取值：
+  //    · `HttpException(msg, 409/403/429)` ⇒ 基类**没有 error 字段**（与 customPageNotFound 同理）；
+  //    · `BadRequestException` ⇒ 400 / 'Bad Request'；`UnauthorizedException` ⇒ 401 / 'Unauthorized'。
+  //    ⚠️ auth.controller 与 login.guard 那几处原来传的是**对象体**（只有 statusCode 与 message），
+  //    改走 `codedError` 之后响应体会多出 Nest 自己算的 `error` 与我们的 `code` —— 这份快照就是把新形状钉住。
+  initBusySameProcess: { status: 409 },
+  initBusyOtherProcess: { status: 409 },
+  initRestoreBusySameProcess: { status: 409 },
+  initRestoreBusyOtherProcess: { status: 409 },
+  initRestoreAlreadyInitialized: { status: 403 },
+  initRestoreNeedsFile: { status: 400, error: 'Bad Request' },
+  initRestoreBadArchiveName: { status: 400, error: 'Bad Request' },
+  initRestoreSigTooLarge: { status: 400, error: 'Bad Request' },
+  initRestoreSigNotOurs: { status: 400, error: 'Bad Request' },
+  authBadCredentials: { status: 401, error: 'Unauthorized' },
+  authNoCredentials: { status: 401, error: 'Unauthorized' },
+  authRestoreRateLimited: { status: 429 },
+  authRestoreKeyUnavailable: { status: 401, error: 'Unauthorized' },
+  authRestoreKeyInvalid: { status: 401, error: 'Unauthorized' },
+  jwtAdminMissing: { status: 401, error: 'Unauthorized' },
+  jwtBadSubject: { status: 401, error: 'Unauthorized' },
+  jwtCollaboratorGone: { status: 401, error: 'Unauthorized' },
+  jwtSecretMissing: { status: 400, error: 'Bad Request' },
+  jwtSecretRotateConflict: { status: 400, error: 'Bad Request' },
+  loginThrottled: { status: 401, error: 'Unauthorized' },
+  initFailed: { status: 400, error: 'Bad Request' },
 };
 
   it('🔴 码名必须是合法的 i18n key 段（admin 侧的 key 就是 error.<code>）', () => {

@@ -288,6 +288,13 @@ describe('多进程（cluster）守卫', () => {
     const ALLOWED_UNTHINNED = [
       'consumeAttempt(dedupeKey, { max: 1,',
       'const LIMITS = { min: MIN_ACCOUNT_PASSWORD_LENGTH, max: MAX_ACCOUNT_PASSWORD_LENGTH };',
+      // 🔴 期 9 第二批再加一条：**签名文件的字节上限**（`RESTORE_SIG_MAX_BYTES`），
+      //    它是"上传的 .sig 最大多少字节"，不是限流桶 ⇒ 按 worker 数摊薄毫无意义。
+      //    👉 这已经是本守卫第二次被 `max:` 这个**过于常见的属性名**绊到（上一次是口令长度上限）。
+      //    🔴 待办：把判据从"按行扫 `max:`"收窄成"只在限流/连接池上下文里扫"
+      //    （例如同一文件里出现 `Throttler`/`scaleLimit`/`maxPoolSize` 才算），否则每加一个
+      //    含 `max:` 的正常对象字面量都要来白名单登记一次。在那之前，走白名单（它有断言防死条目）。
+      'max: RESTORE_SIG_MAX_BYTES,',
     ];
 
     const thinned: string[] = [];

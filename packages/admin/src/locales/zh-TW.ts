@@ -1741,4 +1741,31 @@ export default {
   'error.collaboratorPasswordTooShort': '協作者密碼太短：至少 {min} 個字元（目前 {count} 個）。弱口令在「5 次/300 秒/IP」的防爆破預算下，用一批代理 IP 仍然可在數小時內被撞開，而協作者帳號一旦被撞開就能改站點內容。',
   'error.collaboratorNameTakenByCollaborator': '使用者名稱「{name}」已被一個協作者佔用，請換一個（管理員與協作者不能同名，否則登入會落到不確定的帳號上）',
   'error.collaboratorNameSameAsAdmin': '使用者名稱「{name}」與管理員帳號相同，不可用於協作者（否則該使用者名稱登入會落到不確定的帳號上）',
+
+  // ── 🔴 期 9 第二批（21 條）── 地區用詞：使用者名稱 / 密碼 / 憑證 / **金鑰**（密钥）/ 令牌 / 協作者 /
+  //    **歸檔**（archive）/ **重新整理**（刷新）/ **欄位**（字段）/ **位元組**（字节）/ **行程**（进程）/
+  //    **載入**（加载）/ **介面** / 登入 / 資料 / 帳號 / 目前 / 呼叫 / 過於頻繁 / 鎖 / 簽發 / 輪換；引號用「」。
+  //    ⚠️ `initRestoreSigNotOurs` 裡那條 curl 命令的 `<路徑>` 用繁中，但**命令本身與參數名不動**
+  //    （`curl` / `-F` / `signature` / `.sig` / `vanblog-full-….tar.zst` / `magic` 三份都逐字相同）。
+  'error.initBusySameProcess': '已經有一個初始化/恢復正在進行，請等它結束（若那一次成功了，重新整理頁面即可）',
+  'error.initBusyOtherProcess': '已經有一個初始化/恢復正在進行（由另一個行程持有鎖），請等它結束（若那一次成功了，重新整理頁面即可）',
+  'error.initRestoreBusySameProcess': '已經有一個恢復正在進行，請等它結束（完成後重新整理頁面即可進入後台）',
+  'error.initRestoreBusyOtherProcess': '已經有一個恢復正在進行（由另一個行程持有鎖），請等它結束（完成後重新整理頁面即可進入後台）',
+  'error.initRestoreAlreadyInitialized': '站點已經初始化過了：這個介面只對全新站點開放，請登入後到「備份與恢復」裡恢復',
+  'error.initRestoreNeedsFile': '請上傳整站備份檔案（multipart 欄位名 file）',
+  'error.initRestoreBadArchiveName': '檔案名稱不像是本功能匯出的整站備份（應形如 vanblog-full-20260913-140955.tar.zst），收到：{name}',
+  'error.initRestoreSigTooLarge': 'signature 欄位太大了（{size} 位元組，上限 {max}）：`.sig` 是一份幾百位元組的 JSON，請確認你上傳的是歸檔旁邊那個 `.sig` 檔案本身，而不是歸檔或別的檔案',
+  'error.initRestoreSigNotOurs': 'signature 欄位不是本功能產生的 `.sig`（應是一份含 magic={magic} 的 JSON）：請上傳歸檔**旁邊**那個同名 `.sig` 檔案的內容（curl 用 -F "signature=<路徑>"）。⚠️ 如果你手上沒有 `.sig`，就**不要**帶這個欄位 —— 不帶它恢復照常進行，只是無法證明歸檔沒被換過',
+  'error.authBadCredentials': '使用者名稱或密碼錯誤！',
+  'error.authNoCredentials': '無登入憑證！',
+  'error.authRestoreRateLimited': '恢復介面呼叫過於頻繁，請稍後再試',
+  'error.authRestoreKeyUnavailable': '恢復金鑰錯誤！',
+  'error.authRestoreKeyInvalid': '恢復金鑰錯誤！',
+  'error.jwtAdminMissing': '管理員帳號不存在（庫裡沒有 id=0 的使用者）：站點資料可能已損壞，或被恢復成了一份空/壞的備份',
+  'error.jwtBadSubject': '令牌缺少有效的使用者識別碼（sub 不是整數）：站點資料可能已損壞，或該令牌由舊版本簽發。請重新登入以取得新令牌',
+  'error.jwtCollaboratorGone': '該協作者已不存在',
+  'error.jwtSecretMissing': '目前庫裡還沒有 JWT 金鑰（站點可能尚未初始化）：請先完成初始化，再考慮輪換。',
+  'error.jwtSecretRotateConflict': 'JWT 金鑰在輪換過程中被另一個請求改動了（CAS 未命中）：請重新載入頁面後再試一次。',
+  'error.loginThrottled': '錯誤次數過多！請 {seconds} 秒後再試！',
+  'error.initFailed': '初始化失敗',
 };
