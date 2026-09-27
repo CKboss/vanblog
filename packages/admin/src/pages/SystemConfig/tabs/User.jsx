@@ -32,7 +32,8 @@ export default function () {
             //    ⚠️ 权限标签本身仍是中文：它来自 `getPermissionLabel()`（CollaboratorModal 那个文件的口径），
             //    属于**那一批**的工作量，不在本批范围里（否则同一份权限名会有两处口径）。
             tags={data.map((perm) => {
-              return getPermissionLabel(perm);
+              // 🔴 期 6 第十二批：权限标签现在也是注入式的 ⇒ 传 t（不传就是永远中文）
+              return getPermissionLabel(perm, t);
             })}
           />
         );
@@ -127,7 +128,7 @@ export default function () {
             //    与 MIN_ACCOUNT_PASSWORD_LENGTH 一起钉着）⇒ 🔴 本批不动它，它的翻译属于那个共享模块的批次。
             // 🔴 这条注释**刻意不逐字写出那个工厂函数的调用形状**：它曾经写出过，结果把
             //    "四个后台口令表单都接上了规则"那条守卫**骗绿**了（守卫已修成先剥注释；详见手册 §7.146）。
-            rules={[{ required: true, message: t('init.field.required', '这是必填项') }, accountPasswordMinRule()]}
+            rules={[{ required: true, message: t('init.field.required', '这是必填项') }, accountPasswordMinRule(t)]}
             autocomplete="new-password"
             label={t('sysconf.user.passwordLabel', '登录密码')}
             placeholder={t('sysconf.user.passwordPlaceholder', '请输入登录密码')}

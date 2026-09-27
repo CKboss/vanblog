@@ -1769,4 +1769,92 @@ export default {
   'export.downloadFailed': '下载失败',
   'export.archiveDownloadStarted': '打包完成，已开始下载',
 
+
+  // ── 🔴 期 6 第十二批：**外壳与共享组件**（协作者弹窗 / 初始化记录横幅 / 页脚 / 文章列表 /
+  //    数字下拉 / 流水线列表 / umi 运行时 app.jsx 与 global.jsx / 账号口令策略）117 条 → 65 个新 key + 21 条复用。
+  //    🔴 `app.jsx` / `global.jsx` 的文案在 **umi 运行时配置函数**与**模块作用域事件回调**里：
+  //    既不能调 hook（违反 hooks 规则），也不能在模块加载期取 intl（拿到 undefined）
+  //    ⇒ 用"调用时才 getIntl(getLocale())"的懒取翻译器 `rt(id, defaultMessage, values)`。
+  //    🔴 五条版本行的结尾是**真制表符**（排版对齐用），三份包都必须保留 `:	`。
+  //    🔴 `install.recordDescription` 是**一条** ICU 整句（{at}/{route}/{source}/{socket}/{ua}/{archive}），
+  //    其中 {socket} 与 {archive} 可能是空串 ⇒ 两种读法都不许出现双空格或标点前空格。
+  //    ⚠️ `install.socketSuffix` 的**前导空格是拼接缝**（它直接贴在 {source} 后面）。
+  'collab.permArticleCreate': '创建-文章',
+  'collab.permArticleUpdate': '修改-文章',
+  'collab.permArticleDelete': '删除-文章',
+  'collab.permDraftPublish': '发布-草稿',
+  'collab.permDraftCreate': '创建-草稿',
+  'collab.permDraftUpdate': '修改-草稿',
+  'collab.permDraftDelete': '删除-草稿',
+  'collab.permImgDelete': '删除-图片',
+  'collab.permImgReplace': '替换-图片',
+  'collab.permFileDelete': '删除-附件',
+  'collab.permAll': '所有权限',
+  'collab.editTitle': '修改协作者',
+  'collab.createTitle': '新建协作者',
+  'collab.namePlaceholder': '请输协作者用户名',
+  'collab.nameTooltip': '协作者用来登录的用户名',
+  'collab.nicknamePlaceholder': '请输协作者昵称',
+  'collab.nicknameTooltip': '协作者显示的名字',
+  'collab.passwordPlaceholder': '请输协作者密码',
+  'collab.passwordTooltip': '协作者登录的密码',
+  'collab.permissionsPlaceholder': '请选择协作者具有的权限',
+  'collab.permissionsTooltip': '协作者具有的权限',
+  'install.routeInit': '初始化向导',
+  'install.routeRestore': '上传整站备份恢复',
+  'install.routeEnvBootstrap': '容器启动时的环境变量自动初始化',
+  'install.unknownSource': '未知',
+  'install.recordTitle': '本站的初始化记录',
+  'install.recordDescription': '本站于 {at} 通过 {route} 完成初始化，来源 {source}{socket}，UA {ua}{archive}。如果这不是你本人操作的，请立即修改管理员密码并检查站点内容。',
+  'install.unknownTime': '未知时间',
+  // 🔴 期 6 第十二批（补）：包在路由名外面的**引号**也进语言包（源码硬编码「」会让英文出现全角标点）
+  'install.routeWrap': '「{name}」',
+  'install.unknownRoute': '未知路径',
+  'install.socketSuffix': '（套接字 {ip}）',
+  'install.unknownUa': '未知',
+  'install.archiveSuffix': '，归档 {name}',
+  'footer.fetchingVersion': '获取中...',
+  'footer.showAfterLogin': '登录后显示',
+  'article.viewerCount': '{count}人次',
+  'common.recentNItems': '近{count}条',
+  'common.recentNDays': '近{count}天',
+  'pipeline.colAsync': '是否异步',
+  'pipeline.asyncTag': '异步',
+  'pipeline.disabledTag': '禁用',
+  'pipeline.editScript': '编辑脚本',
+  'pipeline.deleteConfirm': '确定删除该流水线吗？ ',
+  'pipeline.pageTip': '流水线允许用户在特定事件时，自动触发执行自定义代码。',
+  'pipeline.runLog': '运行日志',
+  'pipeline.listTitle': '流水线列表',
+  'app.invalidBaseUrlTitle': '网站 URL 不合法',
+  'app.invalidBaseUrlBody': '您在站点设置中填写的“网站 URL”不合法，这将导致一些奇怪的问题（比如生成的 RSS 订阅源错误等）',
+  'app.invalidBaseUrlProtocol': '网站 URL 需包含完整的协议。',
+  'app.invalidBaseUrlExample': '例如： https://blog.example.com',
+  'app.goToFix': '前往修改',
+  'app.newVersionTitle': '有新版本！',
+  'app.currentVersionLine': '当前版本:	{value}',
+  'app.latestVersionLine': '最新版本:	{value}',
+  'app.updatedAtLine': '更新时间:	{value}',
+  'app.changelogLine': '更新日志:	',
+  'app.clickToView': '点击查看',
+  'app.howToUpdateLine': '更新方法:	',
+  'app.updateCacheHint': 'PS： 更新后如后台一直 loading 或出现 Fetch error 请手动清理一下浏览器缓存',
+  'app.skipVersionOk': '跳过此版本成功！下次进入后台将不会触发此版本的升级提示',
+  'app.skipVersion': '跳过此版本',
+  'app.collaborationMode': '协作模式',
+  'global.offlineWarning': '当前处于离线状态',
+  'global.newContentTitle': '有新内容',
+  'global.newContentBody': '请点击“刷新”按钮或者手动刷新页面',
+  'password.accountMinMessage': '密码至少 {min} 个字符：更短的口令在“5 次/300 秒/IP”的防爆破限制下，用一批代理 IP 仍可能在数小时内被撞开，而账号一旦被盗就能改站点内容',
+
+
+  // ── 🔴 期 6 第十二批（补）：`pages/user/Restore/index.jsx` —— 本来只想给它的 `accountPasswordMinRule()`
+  //    补一个 t，结果发现这个文件**根本还没接 i18n**（没有 useIntl）⇒ 传 t 进去就是渲染期 ReferenceError
+  //    （与第八批 Backup.jsx 那次白屏同一族）。🔴 是 localePackParity 的"注入式模块消费方"判据当场拦下来的。
+  //    ⇒ 顺手把这个文件整块接完（8 条 → 1 条永久例外：`语言 · Language` 静态双语标签）。
+  'restore.resetOk': '重置成功！恢复密钥将重新生成！',
+  'restore.keyPlaceholder': '请输入恢复密钥',
+  'restore.newUsernamePlaceholder': '请输入新用户名',
+  'restore.newPasswordPlaceholder': '请输入新密码',
+  'restore.hint': 'VanBlog 会在每次启动时在日志中打印随机的恢复密钥，同时也会将其写入到您挂载的日志目录中的 restore.key 文件中。',
 };

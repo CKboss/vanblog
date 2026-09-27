@@ -1,3 +1,16 @@
+import { useIntl } from 'umi';
+
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。下面的 `routeText()` 是模块级工厂，
+ * 拿不到 hook ⇒ 由组件在渲染期把 t 传进来；🔴 不传 t ⇒ 输出与改造前**逐字相同**。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type InjectedT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
 import { useEffect, useState } from 'react';
 import { Alert } from 'antd';
 import { request } from 'umi';
@@ -26,13 +39,21 @@ interface InstallDetail {
   archiveName?: string;
 }
 
-const ROUTE_TEXT: Record<string, string> = {
-  init: '初始化向导',
-  'init/restore': '上传整站备份恢复',
-  'env-bootstrap': '容器启动时的环境变量自动初始化',
-};
+// 🔴 期 6 第十二批：模块级常量 ⇒ 函数版（尾参 t）；identity 视图留给还没接 i18n 的调用方。
+const routeText = (t: InjectedT = IDENTITY_T): Record<string, string> => ({
+  init: t('install.routeInit', '初始化向导'),
+  'init/restore': t('install.routeRestore', '上传整站备份恢复'),
+  'env-bootstrap': t('install.routeEnvBootstrap', '容器启动时的环境变量自动初始化'),
+});
+
+/** identity 视图 */
+const ROUTE_TEXT: Record<string, string> = routeText();
 
 export default function InstallRecordBanner() {
+  // 🔴 期 6 第十二批：接上 i18n（语言选择必须在渲染期）。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const [detail, setDetail] = useState<InstallDetail | null>(null);
 
   useEffect(() => {
@@ -58,23 +79,42 @@ export default function InstallRecordBanner() {
   }, []);
 
   if (!detail) return null;
-  const source = detail.trustedClientIp || detail.socketIp || '未知';
+  const source = detail.trustedClientIp || detail.socketIp || t('install.unknownSource', '未知');
+  const rt = routeText(t);
   return (
     <Alert
       type="warning"
       showIcon
       closable
       style={{ marginBottom: 12 }}
-      message="本站的初始化记录"
+      message={t('install.recordTitle', '本站的初始化记录')}
       description={
+        // 🔴 原来是"JSX 文本 + 4 个条件插值"拼出来的一整句 ⇒ 收成**一条** ICU 整句（{at}/{route}/{source}/
+        //    {socket}/{ua}/{archive}），条件部分由调用处算好空串传进去。
+        //    这样英文语序可以整句重排，不会出现"文字 + 表达式"的接缝（§7.152 B / §7.171 B / §7.176 A）。
         <span data-install-record>
-          本站于 {detail.at || '未知时间'} 通过
-          {ROUTE_TEXT[detail.route || ''] ? `「${ROUTE_TEXT[detail.route || '']}」` : detail.route || '未知路径'}
-          完成初始化，来源 {source}
-          {detail.socketIp && detail.socketIp !== source ? `（套接字 ${detail.socketIp}）` : ''}
-          ，UA {detail.userAgent || '未知'}
-          {detail.archiveName ? `，归档 ${detail.archiveName}` : ''}。
-          如果这不是你本人操作的，请立即修改管理员密码并检查站点内容。
+          {t(
+            'install.recordDescription',
+            '本站于 {at} 通过 {route} 完成初始化，来源 {source}{socket}，UA {ua}{archive}。如果这不是你本人操作的，请立即修改管理员密码并检查站点内容。',
+            {
+              at: detail.at || t('install.unknownTime', '未知时间'),
+              // 🔴 那对直角引号「」原来是**源码里硬编码**的（不在语言包里）⇒ 英文下会渲染出全角引号
+              //    （活体 en-US 抓到：`via 「Setup wizard」`，反向判据"零全角标点"当场红）。
+              //    ⇒ 引号也进语言包：中文用「」、英文用直双引号（ICU 只把单引号当转义符，双引号安全）。
+              route: rt[detail.route || '']
+                ? t('install.routeWrap', '「{name}」', { name: rt[detail.route || ''] })
+                : detail.route || t('install.unknownRoute', '未知路径'),
+              source,
+              socket:
+                detail.socketIp && detail.socketIp !== source
+                  ? t('install.socketSuffix', '（套接字 {ip}）', { ip: detail.socketIp })
+                  : '',
+              ua: detail.userAgent || t('install.unknownUa', '未知'),
+              archive: detail.archiveName
+                ? t('install.archiveSuffix', '，归档 {name}', { name: detail.archiveName })
+                : '',
+            },
+          )}
         </span>
       }
     />

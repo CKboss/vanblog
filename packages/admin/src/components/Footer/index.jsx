@@ -1,7 +1,14 @@
-import { useEffect, useRef } from 'react';
-import { history, useModel } from 'umi';
+import { useCallback, useEffect, useRef } from 'react';
+import { history, useIntl, useModel } from 'umi';
 import './index.css';
 const Footer = () => {
+  // 🔴 期 6 第十二批：接上 i18n。⚠️ 下面那个 useEffect 会把**算好的字符串**写进 state
+  //    ⇒ 依赖数组必须带 t，否则切语言后 footer 仍是旧译文（§7.144 B）。
+  const intl = useIntl();
+  const t = useCallback(
+    (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values),
+    [intl],
+  );
   const { initialState } = useModel('@@initialState');
   const { current } = useRef({ hasInit: false });
   // const version = useMemo(() => {
@@ -14,9 +21,9 @@ const Footer = () => {
   useEffect(() => {
     if (!current.hasInit) {
       current.hasInit = true;
-      let v = initialState?.version || '获取中...';
+      let v = initialState?.version || t('footer.fetchingVersion', '获取中...');
       if (history.location.pathname == '/user/login') {
-        v = '登录后显示';
+        v = t('footer.showAfterLogin', '登录后显示');
       }
       console.log('🚀欢迎使用 VanBlog 博客系统');
       console.log('当前版本：', v);
@@ -24,7 +31,8 @@ const Footer = () => {
       console.log('开源地址：', 'https://github.com/mereithhh/van-blog');
       console.log('喜欢的话可以给个 star 哦🙏');
     }
-  }, [initialState, history]);
+    // 🔴 依赖数组带 t（回调体里用了它）
+  }, [initialState, history, t]);
   return null;
   // return (
   //   <>

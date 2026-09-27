@@ -80,7 +80,8 @@ describe('附件管理：编辑器入口', () => {
 describe('附件管理：协作者权限', () => {
   it('后台可授予「删除-附件」', () => {
     const modal = read('src/components/CollaboratorModal/index.tsx');
-    assert.match(modal, /label: '删除-附件'/);
+    // 🔴 期 6 第十二批起权限标签走 t() ⇒ 两种形状都认（性质没放：必须能授予 file:delete）
+    assert.match(modal, /label: (t\('[^']+', )?'删除-附件'/);
     assert.match(modal, /value: 'file:delete'/);
   });
 

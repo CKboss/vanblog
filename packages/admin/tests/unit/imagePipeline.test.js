@@ -127,7 +127,8 @@ describe('图片管理：缩略图视图与工具栏', () => {
     assert.match(api, /\/api\/admin\/img\/\$\{sign\}\/replace/);
 
     const modal = read('src/components/CollaboratorModal/index.tsx');
-    assert.match(modal, /label: '替换-图片'/);
+    // 🔴 同上：权限标签走 t()，两种形状都认（性质没放：必须能授予 img:replace）
+    assert.match(modal, /label: (t\('[^']+', )?'替换-图片'/);
     assert.match(modal, /value: 'img:replace'/);
 
     const access = readRepo('packages/server/src/types/access/access.ts');

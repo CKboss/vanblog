@@ -164,15 +164,14 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
   // 🔴 期 3 第一批只把两个新文件加进了棘轮、忘了同步这份副本（预算都是 0 所以总数没露馅）；
   //    第二批起补齐 ⇒ **两处的文件清单与总数必须逐字相同**（棘轮那条"清单条数"断言钉住条数，本条钉住数字）。
   const EXPECTED = {
-    'src/app.jsx': 18,
-    'src/components/ThemeButton/index.tsx': 0,
+      'src/components/ThemeButton/index.tsx': 0,
     'src/components/LogoutButton/index.jsx': 0,
     'src/pages/InitPage/index.tsx': 1,
     'src/pages/InitPage/RestoreFromBackup.tsx': 0,
     'src/pages/InitPage/setupKeyCore.js': 4,
     'src/pages/InitPage/restoreCore.js': 16,
     'src/pages/user/Login/index.jsx': 1,
-    'src/pages/user/Restore/index.jsx': 8,
+    'src/pages/user/Restore/index.jsx': 1,
     'src/pages/SystemConfig/tabs/WalineTab.jsx': 0,
     'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
     'src/pages/SystemConfig/tabs/CommentSystem.jsx': 0,
@@ -267,6 +266,15 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/Static/file/index.tsx': 0,
     'src/pages/Static/file/tools.ts': 0,
     'src/services/van-blog/downloadArchive.ts': 0,
+    'src/components/CollaboratorModal/index.tsx': 0,
+    'src/components/InstallRecordBanner/index.tsx': 0,
+    'src/components/Footer/index.jsx': 0,
+    'src/components/ArticleList/index.tsx': 0,
+    'src/components/NumSelect/index.tsx': 0,
+    'src/pages/Pipeline/index.tsx': 0,
+    'src/app.jsx': 1,
+    'src/global.jsx': 0,
+    'src/services/van-blog/passwordPolicy.js': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -284,7 +292,12 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
   }
   assert.strictEqual(
     total,
-    62,
+    38,
+    // 🔴 62 → **38**（期 6 第十二批）：`app.jsx` 18 → 1（−17，那条是头部语言切换器的静态双语
+    //    title `语言 · Language`）、`user/Restore` 8 → 1（−7，同样是静态双语标签）。
+    //    口径：本处 EXPECTED 里所有条目**实际**裸中文之和 = 15 条永久例外 + 23 条欠条
+    //    （欠条：restoreCore 16 / setupKeyCore 3 / Customizing 4）。
+    //    ⚠️ 这个数与棘轮的 TOTAL_BUDGET 是**同一个数**（两份必须一致），改一处就要改另一处。
     // 🔴 55 → 61（期 6 第一批）：多的 6 条是 `customContainer.tsx` 的容器模板 —— 被**插入用户文章正文**的
     //    Markdown（内容，不是界面文案），且 `customContainerRemark.js` 靠这几个中文标题识别存量文章的容器。
     // 🔴 54 → 55（期 7 第五批）：多的 1 条是 `requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT = '登录失效'`
@@ -293,7 +306,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     //    永久例外，与 Caddy URL 同类；文案那条走 `{note}` 占位符 ⇒ 语言包里没有汉字）。
     // 🔴 54 → 53：UpdateModal 那张跨层欠条**已还**（期 7 第一批把 accessPassword.js 接了注入式翻译器，
     //   实参与模板一起翻 ⇒ 该文件预算归 0）
-    `裸中文总数应当是 62（棘轮的 TOTAL_BUDGET = 48 目标底 + Customizing 4 条欠条 + 10 条永久例外：Caddy URL 锚点 1、About 页 README 锚点 1、导出说明.md 1、登录失效线路字面量 1、容器模板 6），实际 ${total}`,
+    `裸中文总数应当是 38（= 15 条永久例外 + 23 条尚未翻译文件的欠条：restoreCore 16 / setupKeyCore 3 / Customizing 4），实际 ${total}`,
   );
   // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
   //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——

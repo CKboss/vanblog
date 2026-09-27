@@ -151,7 +151,7 @@ const ArticleTab = () => {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>标签文章数 TOP 柱状图</div>
-                <NumSelect d="条" value={num} setValue={setNum} />
+                <NumSelect unit="items" value={num} setValue={setNum} />
               </div>
             }
             chart={

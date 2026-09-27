@@ -176,7 +176,12 @@ function collectChinese(src, label, options) {
       // 排除 t()/formatMessage() 的第 2 个实参
       if (nd.type === 'CallExpression') {
         const cn = nd.callee && (nd.callee.name || (nd.callee.property && nd.callee.property.name));
-        if (cn === 't' || cn === 'formatMessage') {
+        // 🔴 `rt` = **非组件作用域**的懒取翻译器（`app.jsx` / `global.jsx` 里的 umi 运行时配置函数：
+        //    `getInitialState()` / `layout()` / `rightContentRender` / `window.addEventListener` 回调）。
+        //    那些地方 🔴 不能调 hook（会违反 hooks 规则），也 🔴 不能在模块加载期取 intl（umi 的 locale
+        //    运行时还没初始化 ⇒ undefined）⇒ 做成"调用时才 getIntl(getLocale())"的 `rt(id, defaultMessage, values)`。
+        //    签名与 `t` 完全一致，所以三处判据（收调用点 / 认 defaultMessage 位 / hook 依赖）都按同一套口径处理。
+        if (cn === 't' || cn === 'formatMessage' || cn === 'rt') {
           (nd.arguments || []).forEach((a, i) => {
             if (i === 1) return;
             if (a && typeof a === 'object') collectFromNode(a);
@@ -213,7 +218,12 @@ function collectChinese(src, label, options) {
       }
       if (nd.type === 'CallExpression') {
         const cn = nd.callee && (nd.callee.name || (nd.callee.property && nd.callee.property.name));
-        if (cn === 't' || cn === 'formatMessage') {
+        // 🔴 `rt` = **非组件作用域**的懒取翻译器（`app.jsx` / `global.jsx` 里的 umi 运行时配置函数：
+        //    `getInitialState()` / `layout()` / `rightContentRender` / `window.addEventListener` 回调）。
+        //    那些地方 🔴 不能调 hook（会违反 hooks 规则），也 🔴 不能在模块加载期取 intl（umi 的 locale
+        //    运行时还没初始化 ⇒ undefined）⇒ 做成"调用时才 getIntl(getLocale())"的 `rt(id, defaultMessage, values)`。
+        //    签名与 `t` 完全一致，所以三处判据（收调用点 / 认 defaultMessage 位 / hook 依赖）都按同一套口径处理。
+        if (cn === 't' || cn === 'formatMessage' || cn === 'rt') {
           (nd.arguments || []).forEach((a, i) => {
             if (i === 1) return; // 🔴 第 2 个实参 = defaultMessage 位
             walkSkip(a);
@@ -339,7 +349,8 @@ function collectTCalls(src, label) {
         : callee.type === 'MemberExpression' && callee.property
           ? callee.property.name || callee.property.value
           : null;
-    if (name !== 't' && name !== 'formatMessage') return;
+    // 🔴 `rt` 见上面 collectTCalls 里的注释：非组件作用域的懒取翻译器，口径与 t 相同
+    if (name !== 't' && name !== 'formatMessage' && name !== 'rt') return;
     const args = nd.arguments || [];
     const first = args[0];
     let id = null;
@@ -657,6 +668,10 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
  * - `common` / `menu` / `error` / `request` 通用词、侧边栏菜单、服务端错误码、全局请求错误
  *   ⚠️ `error.*` 是**服务端错误码专用**命名空间（`i18nServerErrorCodes.test.js` 有反向断言
  *   "包里的 error.* 必须都有对应的码"）⇒ 新文案不要塞进去，用 `request.*` 或自己的组
+ * - `restore` 忘记密码 / 用恢复密钥重置账号那个页面
+ * - `app` / `global` umi 运行时外壳（升级弹窗、站点 URL 警告、离线与"有新内容"提示、协作模式标题）
+ * - `collab` 协作者弹窗（11 个权限标签 + 四个字段）；`install` 本站初始化记录横幅；`footer` 页脚版本；
+ *   `password` 账号口令策略提示
  * - `customPage` / `dataManage` / `editor` / `editorProfile` / `export` / `file`（附件管理页与其链接工具）/
  *   `img` / `init` / `log` / `login` / `logout` / `revision` / `siteInfo` / `storage` / `time` /
  *   `urlForm` / `waline` / `watermark` 各自的页面或模块
@@ -667,9 +682,11 @@ const REGISTERED_KEY_GROUPS = [
   'about',
   'accessPassword',
   'analysis',
+  'app',
   'article',
   'backup',
   'code',
+  'collab',
   'comment',
   'common',
   'cover',
@@ -682,16 +699,21 @@ const REGISTERED_KEY_GROUPS = [
   'error',
   'export',
   'file',
+  'footer',
+  'global',
   'img',
   'init',
+  'install',
   'log',
   'login',
   'logout',
   'menu',
+  'password',
   'pathname',
   'pipeline',
   'recycle',
   'request',
+  'restore',
   'revision',
   'schedule',
   'siteInfo',

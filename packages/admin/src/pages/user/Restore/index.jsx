@@ -1,4 +1,5 @@
 import { restore } from '@/services/van-blog/api';
+import { useIntl } from 'umi';
 import { encryptPwd } from '@/services/van-blog/encryptPwd';
 import { accountPasswordMinRule } from '@/services/van-blog/passwordPolicy';
 import ProCard from '@ant-design/pro-card';
@@ -6,6 +7,11 @@ import ProForm, { ProFormText } from '@ant-design/pro-form';
 import { Alert, message } from 'antd';
 import { history, SelectLang } from 'umi';
 export default function () {
+  // 🔴 期 6 第十二批：接上 i18n（语言选择必须在渲染期）。
+  // ⚠️ 这个文件原来**没接** i18n，而上一批给 `accountPasswordMinRule()` 补了 t ⇒ 会是渲染期 ReferenceError
+  //    （整页白屏；与 Backup.jsx 那次同一族）。🔴 是 parity 的"注入式模块消费方"判据拦下来的，不是浏览器。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   return (
     <div
       style={{
@@ -34,7 +40,7 @@ export default function () {
         </span>
       </div>
       <ProCard
-        title="忘记密码"
+        title={t('login.forgotPassword', '忘记密码')}
         bordered
         style={{ maxWidth: '700px', marginTop: '200px', maxHeight: '470px' }}
       >
@@ -42,11 +48,7 @@ export default function () {
           type="info"
           style={{ marginBottom: 12 }}
           message={
-            <p style={{ marginBottom: 0 }}>
-              VanBlog
-              会在每次启动时在日志中打印随机的恢复密钥，同时也会将其写入到您挂载的日志目录中的
-              restore.key 文件中。
-            </p>
+            <p style={{ marginBottom: 0 }}>{t('restore.hint', 'VanBlog 会在每次启动时在日志中打印随机的恢复密钥，同时也会将其写入到您挂载的日志目录中的 restore.key 文件中。')}</p>
           }
         ></Alert>
         <ProForm
@@ -55,12 +57,12 @@ export default function () {
               ...values,
               password: encryptPwd(values.name, values.password),
             });
-            message.success('重置成功！恢复密钥将重新生成！');
+            message.success(t('restore.resetOk', '重置成功！恢复密钥将重新生成！'));
             history.push('/user/login');
           }}
         >
-          <ProFormText.Password name="key" label="请输入恢复密钥" />
-          <ProFormText name="name" label="请输入新用户名" />
+          <ProFormText.Password name="key" label={t('restore.keyPlaceholder', '请输入恢复密钥')} />
+          <ProFormText name="name" label={t('restore.newUsernamePlaceholder', '请输入新用户名')} />
           {/* ⚠️ 「忘记密码」是整条口令策略里最关键的一处：拿着恢复密钥的人在这里**重设管理员口令**。
               如果这里放行弱口令，前面所有表单的 ≥10 都白做了（攻击者只要拿到一次恢复密钥，
               就能把管理员口令换成 1 个字符）。所以 required 与 min 都要有 —— 这个表单原本
@@ -69,8 +71,8 @@ export default function () {
               服务端同样判不了强度：提交前 encryptPwd 已把它派生成恒 64 位摘要。 */}
           <ProFormText.Password
             name="password"
-            label="请输入新密码"
-            rules={[{ required: true, message: '这是必填项' }, accountPasswordMinRule()]}
+            label={t('restore.newPasswordPlaceholder', '请输入新密码')}
+            rules={[{ required: true, message: t('init.field.required', '这是必填项') }, accountPasswordMinRule(t)]}
           />
         </ProForm>
       </ProCard>

@@ -224,6 +224,21 @@ const IDENTICAL_ZH_TW_OK = [
   'common.submitSuccess',
   'file.existsPrefix',
   'file.attachmentFallbackName',
+  // 🔴 期 6 第十二批：这 11 条简繁同形（修改-文章 / 修改-草稿 / 未知 / 人次 / 近N天 /
+  //   `例如： https://blog.example.com` / 前往修改 / 有新版本！/ 最新版本:	 / 更新方法:	）
+  'collab.permArticleUpdate',
+  'collab.permDraftUpdate',
+  'install.unknownSource',
+  'install.unknownUa',
+  'article.viewerCount',
+  'common.recentNDays',
+  'app.invalidBaseUrlExample',
+  'app.goToFix',
+  'app.newVersionTitle',
+  'app.latestVersionLine',
+  'app.howToUpdateLine',
+  // 🔴 `install.routeWrap` 的中文与繁中都是「{name}」（直角引号简繁同形）；英文换成直双引号
+  'install.routeWrap',
   // 🔴 期 6 第九批（数据管理页）：这六条简繁同形 —— 上移/下移/排序/加密/未加密/提交成功
   //   （这些词简繁写法本来就一样，不是"复制简体充数"）
   'dataManage.moveUp',
@@ -385,12 +400,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 96,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 96）⇒ 遍历或解析器坏了`,
+      FILES.length >= 104,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 104）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1780,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1780）⇒ 疑似解析器坏了`,
+      calls.length >= 1880,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1880）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -478,6 +493,16 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/Static/file/index.tsx',
       'src/pages/Static/file/tools.ts',
       'src/services/van-blog/downloadArchive.ts',
+      'src/components/CollaboratorModal/index.tsx',
+      'src/components/InstallRecordBanner/index.tsx',
+      'src/components/Footer/index.jsx',
+      'src/components/ArticleList/index.tsx',
+      'src/components/NumSelect/index.tsx',
+      'src/pages/Pipeline/index.tsx',
+      'src/app.jsx',
+      'src/global.jsx',
+      'src/services/van-blog/passwordPolicy.js',
+      'src/pages/user/Restore/index.jsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -818,6 +843,10 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/Static/file/tools.ts': ['copyAttachmentLink'],
       'src/services/van-blog/downloadArchive.ts': ['saveExportArchive'],
       'src/pages/About.tsx': ['forkHighlights'],
+      // 🔴 期 6 第十二批：协作者权限表、初始化记录的路由文案表、账号口令提示
+      'src/components/CollaboratorModal/index.tsx': ['permissionOptions', 'getPermissionLabel'],
+      'src/components/InstallRecordBanner/index.tsx': ['routeText'],
+      'src/services/van-blog/passwordPolicy.js': ['accountPasswordMinMessage', 'accountPasswordMinRule'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -1784,6 +1813,10 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
       'src/services/van-blog/commentAdmin.js': ['COMMENT_STATUS_META'],
       // 🔴 期 6 第十一批：About 页能力清单的 identity 视图
       'src/pages/About.tsx': ['FORK_HIGHLIGHTS'],
+      // 🔴 期 6 第十二批：三个 identity 视图（权限表 / 路由文案表 / 口令提示常量）
+      'src/components/CollaboratorModal/index.tsx': ['PERMISSION_OPTIONS'],
+      'src/components/InstallRecordBanner/index.tsx': ['ROUTE_TEXT'],
+      'src/services/van-blog/passwordPolicy.js': ['ACCOUNT_PASSWORD_MIN_MESSAGE'],
       'src/services/van-blog/tagTokens.js': ['TAG_FIELD_PLACEHOLDER', 'TAG_FIELD_TOOLTIP'],
       'src/services/van-blog/importPathname.js': ['PATHNAME_FIELD'],
       'src/services/van-blog/schedule.js': [

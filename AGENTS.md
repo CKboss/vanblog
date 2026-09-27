@@ -9469,6 +9469,132 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.177 期 6 第十二批：外壳与共享组件（10 个文件 124 条 → 2 条永久例外）—— 🔴 活体抓到"源码里硬编码的**中文标点**"（棘轮数不到），以及 umi 运行时里既不能 hook 也不能在加载期取 intl 的第三条路
+
+**交付**（批次边界：`components/**` 里剩下的共享组件 + umi 运行时外壳 + 服务层口令策略 + 被守卫逼出来的 Restore 页）：
+`CollaboratorModal`(26) + `InstallRecordBanner`(13) + `Footer`(2) + `ArticleList`(1) + `NumSelect`(1) +
+`pages/Pipeline/index.tsx`(20) + `app.jsx`(18 → **1 条永久例外**) + `global.jsx`(4) +
+`services/van-blog/passwordPolicy.js`(2) + 🔴 `pages/user/Restore/index.jsx`(8 → **1 条永久例外**，见 B 段)
+= **124 条 → 2**；语言包 **1342 → 1413 key**（新组 **`collab` / `install` / `footer` / `app` / `global` / `password` / `restore`**：
+71 新 / **复用 23**）；棘轮清单 **102 → 110 个文件**、🔴 **TOTAL 62 → 38**（`app.jsx` 18 → 1、`Restore` 8 → 1，
+一次还掉 **24 条欠条**）、例外清单 **9 → 10 条**；`i18nKeyNaming` → **1413**；
+`localePackParity` 自动发现下界 **96 → 104 个文件 / 1780 → 1880 个调用点**（实测 105 / 1890）；繁中同形白名单 **+12**。
+🔴 **真实剩余：30 → 22 个文件 / 235 → 140 条**（累计 **92.6%** 完成）。
+🔴 **浏览器活体 42/42（zh-CN 13 + en-US 15 + zh-TW 14），failed 0、skipped 6**（每条 skip 写明原因）：
+流水线页（TipTitle 与列表标题、5 个列头、工具栏、**新建弹窗里 5 个字段标签**）、
+首页（**初始化记录横幅那条 ICU 整句**与它的接缝、**数字下拉的 6 个选项**）、
+系统设置·用户 tab 的**协作者弹窗**（标题 + 4 个字段标签 + **权限下拉里的 chips**）、
+**忘记密码页**（提示长句 + 3 个字段标签 + 标题）、🔴 **离线提示**（直接 `dispatchEvent(new Event('sw.offline'))` 触发），
+外加 en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**（先证明采到 ≥400 字）。
+en-US 实采：列头 `ID · Name · Async · Trigger event · Status · Actions`；弹窗字段 `Name / Description / Trigger event / Status / Dependencies`；
+协作者弹窗 `Username · Nickname · Password · Permissions` + 权限 chips `Create posts / Edit posts / Delete posts / Publish drafts`；
+横幅 `This site was initialized at 2026-09-27T08:42:17.583Z via "Setup wizard". Source: 10.89.2.135 (socket 127.0.0.1). UA: curl/8.5.0. If this was not you, …`；
+数字下拉 `Last 3 days … Last 30 days`；离线提示 `You are offline now`。
+zh-TW 实采：`使用者名稱 · 暱稱 · 密碼 · 權限` + `建立-文章 / 修改-文章 / 刪除-文章 / 發佈-草稿`；
+横幅 `本站於 … 透過「初始化精靈」完成初始化，來源 …（通訊端 127.0.0.1），UA curl/8.5.0。…`；下拉 `近3天 … 近30天`。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-shell/`。
+
+#### A. 🔴 活体抓到"源码里硬编码的**中文标点**"—— 而棘轮**根本数不到**它
+初始化横幅那句里，包在路由名外面的直角引号是**源码硬编码**的：`` `「${ROUTE_TEXT[...]}」` ``
+⇒ en-US 下渲染出 `via 「Setup wizard」`（全角标点）。🔴 反向判据"en-US 零全角标点"当场红。
+修法：引号也进语言包（新 key `install.routeWrap`：中文 `「{name}」`、英文 `"{name}"` —— ICU 只把**单引号**当转义符，双引号安全）。
+🔴 **更值得注意的是变异对照**：把那对引号改回源码硬编码 ⇒ **481 个测试全绿**。
+原因：清点器的汉字口径是 `[\u3400-\u4dbf\u4e00-\u9fff]`，而 `「」` 是 **U+300C/300D（CJK 标点）**
+⇒ 🔴 **源码里硬编码的中文标点，棘轮数不到、预算 0 也拦不住**。
+👉 两条规矩：① **包住译文内容的标点也要进语言包**（引号、括号、破折号都算文案的一部分，各语言不一样）；
+② 🔴 待办：把清点器的汉字口径扩到 CJK 标点区（`\u3000-\u303f` / `\uff00-\uffef`）—— **但要先量影响面**
+（会波及所有既有文件的计数与棘轮预算），所以本轮只记缺口、不改口径（B37-M3 已重定向并把这个缺口钉在记录里）。
+
+#### B. 🔴 守卫逼出一个**白屏级**缺陷：给还没接 i18n 的文件传 t
+上一批给 `accountPasswordMinRule()` 补 t 时，我**顺手**把 5 个调用点都改了 —— 其中 `pages/user/Restore/index.jsx`
+🔴 **根本没接 i18n**（没有 `useIntl`、没有 `t`）⇒ 那一行会变成渲染期 **ReferenceError**（整页白屏，与第八批 Backup.jsx 同族）。
+是 `localePackParity` 的"注入式模块的消费方**要么传 t、要么登记进 NOT_YET_I18N_CONSUMERS**"那条判据当场拦下来的
+（报错原文：`这些文件调用了注入式翻译器函数、但自己还没接 i18n，也没登记`）—— 🔴 **不是浏览器**。
+⇒ 顺手把 Restore 页整块接完（8 → 1，那 1 条是静态双语标签）。
+👉 🔴 **规矩：给一个注入式函数补 t 之前，先确认调用方文件自己已经接了 i18n**；
+没接的话要么当场把它接完，要么登记进 NOT_YET_I18N_CONSUMERS（表是钉死的，留着会掩盖问题）。
+
+#### C. 🔴 umi 运行时里的第三条路：**懒取翻译器 `rt`**（既不能 hook，也不能在加载期取 intl）
+`app.jsx` 的文案在 `getInitialState()` / `layout()` / `rightContentRender` 里，`global.jsx` 的在
+`window.addEventListener('sw.offline'|'sw.updated')` 回调里 —— 🔴 那些都是**普通函数**：
+调 `useIntl()` 会违反 hooks 规则（`rightContentRender` 那句注释本来就写着这条），
+而在**模块加载期**调 `getIntl()` 会拿到 undefined（umi 的 locale 运行时还没初始化；`Static/img/tools.tsx` 记着这条实测）。
+⇒ 做成**每次调用时才取**的懒函数：
+```js
+const rt = (id, defaultMessage, values) => {
+  const intl = getIntl(getLocale());
+  return intl ? intl.formatMessage({ id, defaultMessage }, values) : defaultMessage;
+};
+```
+🔴 并且把它**登记进清点器的口径**：`astInventory` 里三处"callee 名字必须是 `t` / `formatMessage`"都加上 `rt`
+（收调用点 / 认 defaultMessage 位 / hook 依赖判据）⇒ `app.jsx` 18 → 1、`global.jsx` 4 → 0，
+否则那些字符串会被当成"裸中文"永远数在账上（第一版就是这么卡的）。
+👉 三条路的分工现在很清楚：**组件用 hook（`useIntl`）**、**模块级纯函数/工厂用注入式尾参 `t`**、
+**umi 运行时与模块作用域回调用懒取 `rt`**。
+
+#### D. 🔴 「获取中」这类**既当文案又当哨兵**的字符串（About 页与 Footer 各一处）
+About 页：`version == '获取中'` 决定 Spin 转不转 ⇒ 哨兵改成 ASCII 常量 `VERSION_LOADING`，显示走语言包（见 §7.176 D）。
+Footer：`let v = initialState?.version || '获取中...'`，然后 🔴 **把算好的字符串写进 state**
+⇒ 那个 useEffect 的依赖数组必须带 t，且 t 必须是 `useCallback([intl])` 的稳定引用（否则切语言后页脚仍是旧译文）。
+👉 **"把 t() 的结果存进 state"是本项目第 4 次遇到**（前三次：PipelineModal 的 `setDes`、编辑器偏好、回收站）：
+存进 state 就等于把译文**冻结**在那一轮渲染 ⇒ 依赖数组必须带 t。
+
+#### E. 🔴 `NumSelect` 的 API 必须改：调用方给中文字面量的组件**没法翻译**
+原来是 `<NumSelect d="天" />` / `d="条"`，组件内拼 `` `近${n}${d}` `` ⇒ 只翻组件的话英文会渲染成 **`Last 3天`**（半截中文）。
+⇒ 改成收**语义单位键** `unit="days" | "items"`，文案在组件内一次成型（ICU 整句 + 英文 plural），
+Welcome 的 5 个调用点一并改。🔴 并且**不留中文兼容分支**（留了就是把中文字面量重新写回源码，棘轮会红）。
+👉 🔴 **规矩：如果一个组件的 props 里传的是"给用户看的中文"，那它就没法国际化** ——
+要么改成语义键，要么改成传 key/译文。这类"API 形状挡住 i18n"的组件要**当场改 API**，不要绕过。
+⚠️ 另一个坑：`defaultMessage` 必须**写在 `t()` 调用里**，不能从常量表里取
+（`UNIT_DEFAULTS[unit]` 那种写法让清点器数不到 defaultMessage 位 ⇒ 本文件凭空多算 2 条裸中文）。
+
+#### F. 🔴 探针尺子六处错（都被实采纠正）
+1. **antd 会给"恰好两个汉字"的按钮中间插一个空格**：`新建` 渲染成 **`新 建`**（还有 `提 交` / `重 置` / `帮 助`）
+   ⇒ `hasText: '新建'` 恒不中。改成"逐字之间允许空白"的正则。
+2. 🔴 **按钮文字 ≠ 弹窗标题**：协作者那个按钮上是 `新建`（`common.create`），`新建协作者` 是**弹窗标题**
+   ⇒ 第一版拿标题去匹配按钮，恒不中（连着两轮 skip 才发现）。
+3. **antd Select 的下拉是虚拟滚动的**：11 个权限只渲染可见的 4 个 ⇒ 不能要求"全采到"。
+   改成两条**都能成立**的性质：采到的每一项都必须恰好等于期望集合之一 + 至少采到 4 项（少于 4 说明没打开）。
+4. **上一轮停在独立布局的页面会让下一轮找不到语言切换器**（「忘记密码」页没有后台外壳）⇒
+   每轮开始先回 `/admin/welcome`、必要时**重新登录**，再不行走 umi 的持久化键 `umi_locale` + reload 兜底（并验证 `<html lang>`）。
+5. **反向判据要排除"别的批次负责的文字"**：侧边栏「登出」属 `app.jsx`（本批已翻）、首页三个 tab 标签属 `Welcome`（下一批）
+   ⇒ 排除**并 skip 说出来**（沉默排除与沉默少报一样坏）；Welcome 整页排除，但**保留**本批负责的初始化横幅那一段。
+6. **拿 ICU 原文去 `includes` 必然不中**：英文值是 `Last {count, plural, one {# day} other {# days}}`，
+   渲染出来是 `Last 3 days` ⇒ 判据改成量"渲染后的形状"（每项含数字 + 带本语言的前缀词 + 条数等于 6）。
+
+#### G. 🔴 我自己写崩过的两处（都被门禁抓住，没进产物）
+1. `app.jsx` 那个跨行模板改 ICU 时**多留了一个 `}`** ⇒ **TS1381 语法错**。
+   🔴 语法错会让 tsc **跳过整个程序的语义诊断**（§7.149 A）⇒ 类型门禁可能整体假绿；这次是门禁自己报出来的。
+2. `InstallRecordBanner` 用了 `IDENTITY_T` / `InjectedT` / `useIntl` 却**没声明/没 import** ⇒ TS2304 ×3。
+👉 又一次证明：**类型门禁不是形式检查**（本批它抓了 TS1381 / TS2304 / 上一批的 TS2554）。
+
+#### H. 🔴 繁中审计的字表**又漏了两个字**（人工复核发现的，与上一批同族）
+子代理交付的繁中里有 `外挂`（应 `外掛`）与 `/c/路径/`（应 `/c/路徑/`）—— 这是**上一批**的缺口（已把「挂」「径」补进字表）；
+本批交付的 65 条**零命中**（子代理自己按 ~80 个简体字形扫过一遍）。
+另外术语闸门"恢复 ⇒ 還原"过粗：本仓库繁中 `還原` = restore（94 处）、`復原` = 不可逆（11 处）
+⇒ 已改成"不可逆语境要 `復原`"（上一批的修正，本批沿用）。
+本批父代理**手工调整了子代理两处**：① 权限 chips 用后台导航已上线的 `posts` 而不是 `articles`（同一套界面里两种叫法会更糟）；
+② `-isation` → `-ization`（既有拼写是 `customizing` ⇒ 统一美式）。
+🔴 还有一处**父代理自己写错**：往三份包插 5 个新 key 时把 `(key, zh, tw, en)` 的**下标用错**
+（zh-CN 拿到了繁中值、zh-TW 拿到了英文值、en-US 一条没插）⇒ 是"三份包逐字对账"那条守卫会红的形状，
+我在跑守卫**之前**自己核对了一遍才发现。👉 **多语言写入脚本一律按 locale 名字取下标（用字典），不要按位置。**
+
+#### I. 基线
+- admin `node --test` **776 tests / 172 suites / 0 fail**；
+- 变异对照 **8/8**（权限标签退回硬编码 / 改读 identity 常量 / 🔴 横幅路由名退回硬编码（原想验中文标点，结果挖出口径缺口）/
+  `app.jsx` 的 `rt` 退回硬编码 / `global.jsx` 的离线提示退回硬编码 / NumSelect 退回中文字面量 /
+  🔴 英文 `{min}` 的 ICU plural 拆掉（本批真缺陷）/ 语义空操作）；
+- 语言包 **1413 key** ×3（原始 key 行数 == 去重数，重复 0）；
+  `--zh-tw-audit`：1413 key / **785** 个不同汉字 / **0 命中**简体专用字表（69 字，例外仍 1 条：`钥`）；
+- 棘轮 **110 个文件 / 🔴 TOTAL 38**（15 条永久例外 + 23 条欠条：restoreCore 16 / setupKeyCore 3 / Customizing 4）；
+  admin 类型门禁 **31/0**；
+- 🔴 **真实剩余：22 个文件 / 140 条**。下一块：`Welcome` 家族（46：viewer 18 / overview 15 / article 10 / index 3）→
+  `importMdzCore`(23) → `restoreCore`(16) → `InstallRecordBanner` 已完 ⇒ `migrate.tsx`(5) →
+  `setupKeyCore`(3 欠条) → `Customizing`(4 欠条) → 死代码 `components/Editor/customContainer.tsx`(7，单独一批删)。
+- 🔴 新增待办：① 清点器的汉字口径扩到 **CJK 标点区**（先量影响面再改）；
+  ② 给"该用 ICU plural 的地方必须用"补静态判据（上一批记的，本批又用到一次）；
+  ③ 高频 UI 词的**英文措辞白名单**（`act on` 那类直译只有活体能看见）。
+
 ### 7.176 期 6 第十一批：关于页 / 自定义页面编辑器 / 流水线弹窗 / 附件管理（117 条 → 0）—— 🔴 英文片段链又漏一个空格，这次**静态守卫当场抓住**（而且回归钉子第一版写得太松，被变异对照打脸）
 
 **交付**（批次边界按 `pageSurface.js` 从三个页面入口跑出来的**闭包**划）：

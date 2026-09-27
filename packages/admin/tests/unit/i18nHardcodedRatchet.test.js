@@ -48,8 +48,10 @@ const ADMIN = path.resolve(__dirname, '../..');
  * ⚠️ 0 表示"这个文件已经完全翻译干净"，任何新增裸中文都会红。
  */
 const BUDGET = {
-  // 仍有 18 条：站点 URL 校验那一组的文案尚未翻译（属后续批次的体力活，不是框架问题）
-  'src/app.jsx': 18,
+  // 🔴 期 6 第十二批：18 → **1**。剩下的 1 条是头部语言切换器的**静态双语** title / aria-label
+  //   `语言 · Language`（服务于"还没切语言的人"，刻意不走 t()；与 Login / Restore 那两处同族，
+  //   已登记进 REQUIRED_EXCEPTIONS **反向钉住**）。升级弹窗与站点 URL 警告那 17 条已全部翻译。
+  'src/app.jsx': 1,
   'src/components/ThemeButton/index.tsx': 0,
   'src/components/LogoutButton/index.jsx': 0,
   // 1 条 = 协议字符串「已初始化」，刻意保留（见下面的反向断言）
@@ -61,7 +63,11 @@ const BUDGET = {
   'src/pages/InitPage/restoreCore.js': 16,
   // 1 条 = 静态双语 tooltip「语言 · Language」
   'src/pages/user/Login/index.jsx': 1,
-  'src/pages/user/Restore/index.jsx': 8,
+  // 🔴 期 6 第十二批：8 → **1**（那 1 条是静态双语标签 `语言 · Language`，已在例外清单里）。
+  //   ⚠️ 这个文件是**被守卫逼出来的**：上一批只给它的 `accountPasswordMinRule()` 补了 t，
+  //   而文件本身还没接 i18n ⇒ 传 t 进去就是渲染期 ReferenceError（整页白屏，与 Backup.jsx 那次同族）。
+  //   🔴 是 parity 的"注入式模块消费方要么传 t、要么登记"那条判据拦下来的，不是浏览器。
+  'src/pages/user/Restore/index.jsx': 1,
   // 🔴 期 3 第一批（2026-09-25）：这两个文件已全量接 i18n ⇒ 预算 0，新增硬编码中文会立刻红。
   'src/pages/SystemConfig/tabs/WalineTab.jsx': 0,
   'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
@@ -340,6 +346,22 @@ const BUDGET = {
   'src/pages/Static/file/index.tsx': 0,
   'src/pages/Static/file/tools.ts': 0,
   'src/services/van-blog/downloadArchive.ts': 0,
+  // 🔴 期 6 第十二批（2026-09-27）：**外壳与共享组件**这一块（协作者弹窗 / 初始化记录横幅 / 页脚 /
+  //   文章列表 / 数字下拉 / 流水线列表 / umi 运行时 app.jsx 与 global.jsx / 口令策略）。
+  //   🔴 `app.jsx` / `global.jsx` 里的文案在 **umi 运行时配置函数**与**模块作用域事件回调**里
+  //   ⇒ 那里 🔴 不能调 hook（违反 hooks 规则），也 🔴 不能在模块加载期取 intl（会拿到 undefined）
+  //   ⇒ 用"调用时才 getIntl(getLocale())"的懒取翻译器 `rt(id, defaultMessage, values)`
+  //   （`astInventory` 已把 `rt` 与 `t` 按同一套口径识别：收调用点 / 认 defaultMessage 位）。
+  //   🔴 `NumSelect` 的 API 从"调用方给中文字面量 d=天"改成"给语义单位键 unit=days"：
+  //   不改就会留下半截中文（英文渲染成 `Last 3天`）；Welcome 的 5 个调用点已一并改。
+  'src/components/CollaboratorModal/index.tsx': 0,
+  'src/components/InstallRecordBanner/index.tsx': 0,
+  'src/components/Footer/index.jsx': 0,
+  'src/components/ArticleList/index.tsx': 0,
+  'src/components/NumSelect/index.tsx': 0,
+  'src/pages/Pipeline/index.tsx': 0,
+  'src/global.jsx': 0,
+  'src/services/van-blog/passwordPolicy.js': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -368,7 +390,7 @@ const BUDGET = {
 //   ⇒ 账目现在是：🔴 **61 = 48（目标底）+ 4（Customizing 欠条）+ 9（永久例外：Caddy URL 1、导出说明.md 1、
 //   登录失效 1、容器模板 6）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 62（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 38（🔴 期 6 第十二批：app.jsx 18 → 1、user/Restore 8 → 1；上一批曾 61 → 62）（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
@@ -403,6 +425,14 @@ const REQUIRED_EXCEPTIONS = [
   // 🔴 期 3 第五批（2026-09-26）新增：**URL 锚点**也必须逐字是中文（这是第 4 类例外形状：
   //    前三类是协议字符串 / 要照着敲的命令 / 静态双语标签，这一类是"指向中文文档的锚点"）
   // 🔴 期 6 第十一批新增（同族第 2 处：**指向中文 README 的 URL 锚点**）
+  // 🔴 期 6 第十二批新增（同族第 3 处：**静态双语标签**，与 Login / Restore 那两处一样）
+  {
+    file: 'src/app.jsx',
+    text: '语言 · Language',
+    why:
+      '后台头部语言切换器的 title / aria-label：服务于"还没切语言的人"，刻意做成静态双语而不走 t()。' +
+      '⚠️ 这里 🔴 不能用 useIntl —— rightContentRender 是普通函数、不是 React 组件（在里面调 hook 会崩）',
+  },
   {
     file: 'src/pages/About.tsx',
     text: 'README.md#出处与许可',
@@ -511,7 +541,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 102, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 110, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
@@ -525,7 +555,13 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 61 → **62**（期 6 第十一批）：About 页那个指向中文 README 的 URL 锚点是**第 10 条永久例外**
   //   （与 Caddy 文档 URL 同族：翻成英文就变死锚点）。账目：48 目标底 + Customizing 4 条欠条 + 10 条永久例外
   //   （Caddy URL 1、About README 锚点 1、导出说明.md 1、登录失效线路字面量 1、容器模板 6）。
-  assert.strictEqual(TOTAL_BUDGET, 62, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  // 🔴 62 → **38**（期 6 第十二批）：`app.jsx` 18 → 1（−17）、`user/Restore` 8 → 1（−7）。
+  //   账目：38 = 15 条永久例外（InitPage「已初始化」1、setupKeyCore「初始化密钥」1、
+  //   Login / Restore / app.jsx 的静态双语标签各 1、容器模板 6、登录失效线路字面量 1、
+  //   导出说明.md 1、Caddy URL 锚点 1、About README 锚点 1）
+  //   + 23 条欠条（restoreCore 16 / setupKeyCore 3 / Customizing 4）。
+  //   ⚠️ 与 `i18nSharedImpl.test.js` 里那个钉死的总数是**同一个数**：改一处就要改另一处。
+  assert.strictEqual(TOTAL_BUDGET, 38, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
@@ -534,5 +570,5 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 6 → **7**（期 7 第五批）：新增第 6 类例外形状 —— **与别层比对的协议字面量**
   //   （`requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`；前五类：协议字符串 / 要照着敲的命令 /
   //   静态双语标签 / 中文文档 URL 锚点 / 服务端产物文件名）。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 9, '例外清单条数变了 ⇒ 必须是有意的');
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 10, '例外清单条数变了 ⇒ 必须是有意的');
 });

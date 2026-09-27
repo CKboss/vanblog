@@ -239,7 +239,7 @@ const InitPage = () => {
                 required={true}
                 rules={[
                   { required: true, message: t('init.field.required', '这是必填项') },
-                  accountPasswordMinRule(),
+                  accountPasswordMinRule(t),
                 ]}
                 label={t('init.field.password', '登录密码')}
                 placeholder={t('init.field.passwordPlaceholder', '请输入登录密码')}

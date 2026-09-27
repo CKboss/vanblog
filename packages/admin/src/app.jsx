@@ -19,6 +19,22 @@ const isDev = process.env.UMI_ENV === 'dev';
 const loginPath = '/user/login';
 
 /**
+ * 🔴 期 6 第十二批：**非组件作用域**的翻译器（懒取）。
+ *
+ * 这个文件里的 `getInitialState()` / `layout()` / `rightContentRender` 都是 umi 的**运行时配置函数**，
+ * 不是 React 组件 ⇒ 🔴 在里面调 `useIntl()` 会违反 hooks 规则（而且会崩）。
+ * 但 🔴 也不能在**模块加载期**调 `getIntl()`：那时 umi 的 locale 插件运行时还没初始化，会拿到 undefined
+ * （`Static/img/tools.tsx` 的注释里记着这条实测）。
+ * ⇒ 所以做成"每次调用时才取 intl"的懒函数：调用时机都在运行时（请求回来后 / 渲染右侧内容时）。
+ * ⚠️ `Modal.*` / `message.*` 渲染进脱离 React 树的独立根（§7.151）⇒ 只能传**算好的字符串**。
+ */
+const rt = (id, defaultMessage, values) => {
+  const intl = getIntl(getLocale());
+  return intl ? intl.formatMessage({ id, defaultMessage }, values) : defaultMessage;
+};
+
+
+/**
  * 🔴 把当前语言同步到 `<html lang>` 与 `<html dir>`。
  *
  * ## 为什么需要它
@@ -107,22 +123,26 @@ export async function getInitialState() {
 
   if (baseUrl && !checkUrl(baseUrl)) {
     Modal.warn({
-      title: '网站 URL 不合法',
+      title: rt('app.invalidBaseUrlTitle', '网站 URL 不合法'),
       content: (
         <div>
           <p>
-            您在站点设置中填写的“网站 URL”不合法，这将导致一些奇怪的问题（比如生成的 RSS
-            订阅源错误等）
+            {/* 🔴 原来这句被 JSX 折行拆成了两段文本节点（"…RSS" + "订阅源错误等）"）
+                ⇒ 收成**一条** key：折行处的空白会被 JSX 吃掉，拆开翻译必然出接缝（§7.152 B）。 */}
+            {rt(
+              'app.invalidBaseUrlBody',
+              '您在站点设置中填写的“网站 URL”不合法，这将导致一些奇怪的问题（比如生成的 RSS 订阅源错误等）',
+            )}
           </p>
-          <p>网站 URL 需包含完整的协议。</p>
-          <p>例如： https://blog.example.com</p>
+          <p>{rt('app.invalidBaseUrlProtocol', '网站 URL 需包含完整的协议。')}</p>
+          <p>{rt('app.invalidBaseUrlExample', '例如： https://blog.example.com')}</p>
           <a
             onClick={() => {
               history.push('/site/setting?siteInfoTab=basic');
               return true;
             }}
           >
-            前往修改
+            {rt('app.goToFix', '前往修改')}
           </a>
         </div>
       ),
@@ -141,14 +161,22 @@ export async function getInitialState() {
           duration: 3000,
           message: (
             <div>
-              <p style={{ marginBottom: 4 }}>有新版本！</p>
-              <p style={{ marginBottom: 4 }}>{`当前版本:\t${version}`}</p>
-              <p style={{ marginBottom: 4 }}>{`最新版本:\t${latestVersion}`}</p>
-              <p style={{ marginBottom: 4 }}>{`更新时间:\t${moment(updatedAt).format(
-                'YYYY-MM-DD HH:mm:ss',
-              )}`}</p>
+              <p style={{ marginBottom: 4 }}>{rt('app.newVersionTitle', '有新版本！')}</p>
+              {/* 🔴 这五行原来是"模板字符串 + \t"⇒ 收成带 {value} 的 ICU 整句；
+                  ⚠️ `\t` 是**排版用的制表符**（让冒号对齐），三份包都保留它。 */}
               <p style={{ marginBottom: 4 }}>
-                {`更新日志:\t`}
+                {rt('app.currentVersionLine', '当前版本:\t{value}', { value: version })}
+              </p>
+              <p style={{ marginBottom: 4 }}>
+                {rt('app.latestVersionLine', '最新版本:\t{value}', { value: latestVersion })}
+              </p>
+              <p style={{ marginBottom: 4 }}>
+                {rt('app.updatedAtLine', '更新时间:\t{value}', {
+                  value: moment(updatedAt).format('YYYY-MM-DD HH:mm:ss'),
+                })}
+              </p>
+              <p style={{ marginBottom: 4 }}>
+                {rt('app.changelogLine', '更新日志:\t')}
                 <a
                   target={'_blank'}
                   // 更新日志看仓库里的 CHANGELOG.md：里面有本分支专门的 🍴 区块，
@@ -156,33 +184,41 @@ export async function getInitialState() {
                   href="https://github.com/CKboss/vanblog/blob/dev/dsh/CHANGELOG.md"
                   rel="noreferrer"
                 >
-                  点击查看
+                  {rt('app.clickToView', '点击查看')}
                 </a>
               </p>
               <p style={{ marginBottom: 4 }}>
-                {`更新方法:\t`}
+                {rt('app.howToUpdateLine', '更新方法:\t')}
                 <a
                   target={'_blank'}
                   href="https://github.com/CKboss/vanblog/blob/dev/dsh/docs/guide/update.md"
                   rel="noreferrer"
                 >
-                  点击查看
+                  {rt('app.clickToView', '点击查看')}
                 </a>
               </p>
               <p style={{ marginBottom: 4 }}>
-                PS： 更新后如后台一直 loading 或出现 Fetch error 请手动清理一下浏览器缓存
+                {rt(
+                  'app.updateCacheHint',
+                  'PS： 更新后如后台一直 loading 或出现 Fetch error 请手动清理一下浏览器缓存',
+                )}
               </p>
               <a
                 onClick={() => {
                   window.localStorage.setItem('skipVersion', latestVersion);
-                  message.success('跳过此版本成功！下次进入后台将不会触发此版本的升级提示');
+                  message.success(
+                    rt(
+                      'app.skipVersionOk',
+                      '跳过此版本成功！下次进入后台将不会触发此版本的升级提示',
+                    ),
+                  );
                   const el = document.querySelector('.ant-notification-notice-close-x');
                   if (el) {
                     el.click();
                   }
                 }}
               >
-                跳过此版本
+                {rt('app.skipVersion', '跳过此版本')}
               </a>
             </div>
           ),
@@ -287,7 +323,7 @@ export const layout = ({ initialState, setInitialState }) => {
             trigger={
               <a>
                 <LogoutOutlined />
-                <span style={{ marginLeft: 6 }}>登出</span>
+                <span style={{ marginLeft: 6 }}>{rt('common.logout', '登出')}</span>
               </a>
             }
           />
@@ -366,7 +402,8 @@ export const layout = ({ initialState, setInitialState }) => {
                 const user = initialState?.user;
                 const isCollaborator = user?.type && user?.type == 'collaborator';
                 if (isCollaborator) {
-                  settings.title = '协作模式';
+                  // 🔴 layout() 也是运行时配置函数（不是组件）⇒ 用懒取的 rt
+                  settings.title = rt('app.collaborationMode', '协作模式');
                 }
                 if (settings.navTheme != initialState?.settings?.navTheme) {
                   // 切换了主题

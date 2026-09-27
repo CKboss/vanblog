@@ -145,7 +145,7 @@ const OverView = () => {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>访客数趋势图</div>
-                <NumSelect d="天" value={num} setValue={setNum} />
+                <NumSelect unit="days" value={num} setValue={setNum} />
               </div>
             }
             chart={<Area yField="访客数" {...eachConfig} />}
@@ -157,7 +157,7 @@ const OverView = () => {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>访问量趋势图</div>
-                <NumSelect d="天" value={num} setValue={setNum} />
+                <NumSelect unit="days" value={num} setValue={setNum} />
               </div>
             }
             chart={<Area yField="访问量" {...eachConfig} />}
@@ -175,7 +175,7 @@ const OverView = () => {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>总访客数趋势图</div>
-                <NumSelect d="天" value={num} setValue={setNum} />
+                <NumSelect unit="days" value={num} setValue={setNum} />
               </div>
             }
             chart={<Area yField="访客数" {...lineConfig} />}
@@ -187,7 +187,7 @@ const OverView = () => {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>总访问量趋势图</div>
-                <NumSelect d="天" value={num} setValue={setNum} />
+                <NumSelect unit="days" value={num} setValue={setNum} />
               </div>
             }
             chart={<Area yField="访问量" {...lineConfig} />}

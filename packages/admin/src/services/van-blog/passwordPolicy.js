@@ -39,7 +39,29 @@ const MIN_ACCOUNT_PASSWORD_LENGTH = 10;
  * 不是 2 个。文案里只说「字符」，不说「字节」。服务端 env bootstrap 用
  * `Array.from(password).length` 保持同一口径，两边不会出现「表单过了、启动被拒」。
  */
-const ACCOUNT_PASSWORD_MIN_MESSAGE = `密码至少 ${MIN_ACCOUNT_PASSWORD_LENGTH} 个字符：更短的口令在“5 次/300 秒/IP”的防爆破限制下，用一批代理 IP 仍可能在数小时内被撞开，而账号一旦被盗就能改站点内容`;
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t = IDENTITY_T`）。这是纯逻辑模块（`node --test` 直接 require），
+ * 拿不到 hook ⇒ 由表单在渲染期把 t 传进来；🔴 不传 t ⇒ 输出与改造前**逐字相同**。
+ * ⚠️ 原来这句是**模板字符串**（`${MIN_ACCOUNT_PASSWORD_LENGTH}` 插值）⇒ 收成一条带 {min} 的 ICU 整句，
+ *    英文语序可以整句重排；⚠️ 那句「5 次/300 秒/IP」是**服务端防爆破参数的描述**，
+ *    三份包都必须保留同样的数字（跨包数字对账守卫会查）。
+ */
+const IDENTITY_T = (id, defaultMessage, values) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+
+const accountPasswordMinMessage = (t = IDENTITY_T) =>
+  t(
+    'password.accountMinMessage',
+    '密码至少 {min} 个字符：更短的口令在“5 次/300 秒/IP”的防爆破限制下，用一批代理 IP 仍可能在数小时内被撞开，而账号一旦被盗就能改站点内容',
+    { min: MIN_ACCOUNT_PASSWORD_LENGTH },
+  );
+
+/** identity 视图（与改造前逐字相同） */
+const ACCOUNT_PASSWORD_MIN_MESSAGE = accountPasswordMinMessage();
 
 /**
  * 账号口令字段的**最小长度规则**（antd 4 / async-validator 的声明式 `min`）。
@@ -56,15 +78,16 @@ const ACCOUNT_PASSWORD_MIN_MESSAGE = `密码至少 ${MIN_ACCOUNT_PASSWORD_LENGTH
  * ⚠️ `min` 规则作用于**派生之前**的原始输入：表单 rules 校验的是字段值，
  *    而 `encryptPwd` 是在 `onFinish` 里才调用的（拿到的 values 仍是原始口令）。
  */
-function accountPasswordMinRule() {
+function accountPasswordMinRule(t = IDENTITY_T) {
   return {
     min: MIN_ACCOUNT_PASSWORD_LENGTH,
-    message: ACCOUNT_PASSWORD_MIN_MESSAGE,
+    message: accountPasswordMinMessage(t),
   };
 }
 
 module.exports = {
   MIN_ACCOUNT_PASSWORD_LENGTH,
   ACCOUNT_PASSWORD_MIN_MESSAGE,
+  accountPasswordMinMessage,
   accountPasswordMinRule,
 };

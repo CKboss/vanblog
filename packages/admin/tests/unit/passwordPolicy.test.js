@@ -67,7 +67,10 @@ function extractPasswordFields(source) {
   const re = /<ProFormText\.Password\b([\s\S]*?)(?:\/>|><\/ProFormText\.Password>)/g;
   let m;
   while ((m = re.exec(code)) !== null) {
-    out.push({ attrs: m[1], hasRule: /accountPasswordMinRule\(\s*\)/.test(m[1]) });
+    // 🔴 期 6 第十二批起这条规则的**提示文案**也是注入式的 ⇒ 调用形状从 `()` 变成 `(t)`。
+    //    判据接受两种（性质没放：password 字段必须挂上这条规则）；
+    //    ⚠️ 这条守卫是安全相关的（四个后台口令表单都得挂），改它必须同时保住"注释里提到不算"那一步。
+    out.push({ attrs: m[1], hasRule: /accountPasswordMinRule\(\s*(t\s*)?\)/.test(m[1]) });
   }
   return out;
 }
