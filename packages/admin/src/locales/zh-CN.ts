@@ -938,7 +938,7 @@ export default {
   //    （草稿与文章的"导入"是同一个动作 ⇒ 一个 key）。
   //    🔴 `COVER_FIELD` 用了 §7.156 A 里定的**对象字面量常量**解法：改成 `coverField(t)` 函数，
   //    并保留 `COVER_FIELD = coverField()` 作为 identity 视图（中文只有一份，在 defaultMessage 里）。
-  //    ⚠️ `cover.uploadedOk/Exists` 与 `img.uploadNew/Exists` **不是同一句**：那两条尾部有一个空格
+  //    ⚠️ `common.uploadOkWithName/Exists` 与 `img.uploadNew/Exists` **不是同一句**：那两条尾部有一个空格
   //    （后面还要拼"已复制…链接"），这里没有 ⇒ 各自一个 key，不为省一个 key 去改任一侧的可见文案。
   'article.newTitle': '新建文章',
   'article.importTitle': '导入文章',
@@ -946,7 +946,7 @@ export default {
   'cover.label': '题头图',
   'cover.placeholder': '可选，图片 URL，留空不显示题头图',
   'cover.tooltip': '可选。设置后显示在文章页顶部，并作为分享到其他应用时的预览图（Open Graph / Twitter）。可上传到现有图床或填写图片 URL。留空则不显示，已有文章不受影响。',
-  'cover.uploadedOk': '{name} 上传成功!',
+  'common.uploadOkWithName': '{name} 上传成功!',
   'cover.uploadedExists': '{name} 已存在!',
   'cover.clear': '清除题头图',
 
@@ -1452,5 +1452,70 @@ export default {
   'theme.uploadSelectBtn': '选择 .css 文件并上传',
   'theme.uploadOverwriteNote': '同一个 id 再次上传就是覆盖（文件名带内容 hash，所以访客不会拿到旧缓存）。',
   'common.copy': '复制',
+
+
+  // ── 🔴 期 6 第八批（站长裁定 B 解锁的那一组，**四个互相引用的文件一起做**）──
+  //    系统设置页签标签 10 + 统计 ID 字段 7 + waline SMTP/评论设置字段 33 = 50 个新 key；
+  //    复用 4 条：`common.updateSuccess` / `common.enabled` / `common.disabled` / `init.field.required`。
+  //    🔴 为什么必须一起做：页签标签与 `analysisFields.js` / `walineEmailFields.js` 里给用户看的
+  //    **后台导航路径**互相引用（`themeTab` 与 `adminCopySync` 两个测试把"后台标签 ↔ 文档措辞"钉在一起），
+  //    只翻一侧会出现"界面英文、导航路径仍中文"。⚠️ 文档站仍保持中文（裁定不变）。
+  //    🔴 两个 `*.adminPath` 的**末段必须与页签标签逐字一致**（`analysis.adminPath` = …/ 站点配置 / 高级设置）。
+  //    🔴 两个字段模块改成**注入式翻译器**（函数版 + identity 视图），消费方传 t。
+  'analysis.adminPath': '站点管理 / 系统设置 / 站点配置 / 高级设置',
+  'analysis.gaLabel': 'Google Analytics 测量 ID',
+  'analysis.gaPlaceholder': 'G-XXXXXXXXX，留空表示不启用',
+  'analysis.gaTooltip': 'GA4 测量 ID，格式为 G-XXXXXXXXX（旧版 Universal Analytics 的 UA-XXXXXXXXX-X 也可）。只填这一串，不要整段粘贴 gtag 代码。保存后无需重启。大陆访客访问 googletagmanager.com 常会超时，谷歌后台「尚未收到数据」多半是网络/地区问题，不一定是 ID 写错；可先看 Analytics「实时」。替代方案见定制化里插入 Umami。',
+  'analysis.baiduLabel': '百度统计 ID',
+  'analysis.baiduPlaceholder': '请输入百度统计站点 ID，留空表示不启用',
+  'analysis.baiduTooltip': '百度统计后台站点的 hm.js 参数（脚本地址问号后的那一串）。留空不启用。',
+  'waline.adminPath': '站点管理 / 系统设置 / 评论设置',
+  'waline.smtpEnabledLabel': '是否启用邮件通知',
+  'waline.smtpEnabledTooltip': '启用后，新评论会发到「博主邮箱」；访客被回复时会发到其填写的邮箱。换成自定义域名邮箱时，也在本表单改 SMTP / 发件地址，不用另外部署邮件服务。',
+  'waline.smtpEnabledPlaceholder': '默认关闭',
+  'waline.smtpHostLabel': 'SMTP 地址(host)',
+  'waline.smtpHostTooltip': '邮箱服务商的 SMTP 服务器（如 smtp.example.com），不是博客域名。自定义域名邮箱请到服务商后台查看，常见还有 smtp.exmail.qq.com、smtp.gmail.com。',
+  'waline.smtpHostPlaceholder': '例如 smtp.exmail.qq.com 或 smtp.example.com',
+  'waline.smtpPortLabel': 'SMTP 端口号',
+  'waline.smtpPortTooltip': '常见为 465（SSL）或 587（STARTTLS），以邮箱服务商说明为准。',
+  'waline.smtpPortPlaceholder': '例如 465 或 587',
+  'waline.smtpUserLabel': 'SMTP 用户名',
+  'waline.smtpUserTooltip': 'SMTP 登录账号。自定义域名邮箱一般填完整邮箱，例如 noreply@yourdomain.com。',
+  'waline.exampleEmailPlaceholder': '例如 noreply@yourdomain.com',
+  'waline.smtpPasswordLabel': 'SMTP 密码（授权码）',
+  'waline.smtpPasswordTooltip': '多数服务商不是登录密码，而是 SMTP 授权码 / 应用专用密码（App Password）。Gmail、QQ、企业邮和多数自定义域名邮箱都要先在邮箱后台开启 SMTP 并生成授权码。',
+  'waline.smtpPasswordPlaceholder': '请输入 SMTP 授权码或应用专用密码',
+  'waline.authorEmailLabel': '博主邮箱（通知收件人）',
+  'waline.authorEmailTooltip': '有新评论时通知这个地址。可填自定义域名邮箱，也可以和发件地址不同（例如用域名邮箱发信、用常用邮箱收信）。建议与你在评论里用的邮箱一致，避免自己回复时再给自己发通知。',
+  'waline.authorEmailPlaceholder': '新评论通知发到这个邮箱，例如 you@yourdomain.com',
+  'waline.senderNameLabel': '发件人显示名称',
+  'waline.senderNameTooltip': '收件箱里显示的 From 名称，可填站点名。不影响 SMTP 登录账号。',
+  'waline.senderNamePlaceholder': '例如站点名称',
+  'waline.senderEmailLabel': '发件地址（From）',
+  'waline.senderEmailTooltip': '通知邮件的发件邮箱。使用自定义域名邮箱时填该域名邮箱（如 noreply@yourdomain.com）。多数服务商要求与 SMTP 用户名一致，否则可能报 501 Mail from address must be same as authorization user。',
+  'sysconf.tabSiteInfo': '站点配置',
+  'sysconf.tabTheme': '主题',
+  'sysconf.tabCustomizing': '定制化',
+  'sysconf.tabUser': '用户设置',
+  'sysconf.tabImg': '图床设置',
+  'sysconf.tabWaline': '评论设置',
+  'sysconf.tabBackup': '备份恢复',
+  'sysconf.tabToken': 'Token 管理',
+  'sysconf.tabAdvance': '高级设置',
+  'sysconf.tabMigrate': '迁移助手',
+  'waline.demoBlocked': '演示站禁止修改 waline 配置！',
+  'waline.invalidJson': '自定义环境变量不是合法 JSON 格式！',
+  'waline.webhookLabel': '评论后的 webhook 地址',
+  'waline.webhookTooltip': '收到评论后会向此地址发送一条携带评论信息的 HTTP 请求',
+  'waline.loginRequiredLabel': '是否强制登录后评论',
+  'waline.loginRequiredTooltip': '开启后访客必须登录 Waline 评论账号才能发表评论，匿名提交会被拒绝',
+  'waline.loginRequiredPlaceholder': '是否强制登录后评论，默认关闭',
+  'waline.otherConfigLabel': '自定义环境变量',
+  'waline.otherConfigTooltip': 'JSON 对象。大写键（如 IPQPS）会作为环境变量传给内嵌 Waline 服务端；客户端选项（如 imageUploader: false）会传给前台评论组件。布尔请用 false/true，不要加引号。',
+  'sysconf.siteInfoTabBasic': '基本设置',
+  'sysconf.siteInfoTabLayout': '布局设置',
+  'siteInfo.demoBlockedEdit': '演示站禁止修改站点配置！',
+  'urlForm.imgTooltip': '上传之前需要设置好图床哦，默认为本地图床。',
+  'urlForm.existsWithName': '{name} 已存在!',
 
 };

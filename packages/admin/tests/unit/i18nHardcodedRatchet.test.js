@@ -279,6 +279,28 @@ const BUDGET = {
   //   ⚠️ `{name}（{id}）` 用的是**全角括号**：bareChinese 数不到，但英文下很怪 ⇒ 也走了 t（英文用半角）。
   //   🔴 教训：**反向判据只查"有没有汉字"，查不到"全角标点漏翻"**。
   'src/pages/SystemConfig/tabs/Theme.jsx': 0,
+  // 🔴 期 6 第八批（2026-09-27，站长裁定 B 解锁的那一组）：**四个互相引用的文件一起做** ⇒ 都预算 0。
+  //   页签标签（10）+ 两个"后台导航路径"常量与 SMTP/统计字段文案（7 + 24）+ 评论设置表单（13）。
+  //   🔴 为什么必须一起做：`SystemConfig/index.jsx` 里原来那段注释写明，这些标签名被**三处独立陈述**
+  //   （页签清单、`analysisFields.js` / `walineEmailFields.js` 的导航路径、文档站），
+  //   而 `themeTab` 与 `adminCopySync` 两个测试把"后台标签 ↔ 文档措辞"钉在一起 ⇒ 只翻一侧会造成
+  //   "界面英文、导航路径仍中文"的可见不一致。⚠️ 文档站仍保持中文（裁定不变）。
+  //   🔴 两个字段模块改成了**注入式翻译器**（函数版 + identity 视图），消费方（SiteInfoForm / WalineForm）
+  //   都改成调函数版并传 t —— 读 identity 视图的话文案会永远中文（有判据 + 反证盯着）。
+  'src/utils/analysisFields.js': 0,
+  'src/utils/walineEmailFields.js': 0,
+  'src/pages/SystemConfig/index.jsx': 0,
+  'src/components/WalineForm/index.tsx': 0,
+  // 🔴 期 6 第八批（补）：**站点配置页签**（基本/高级/布局）+ 那几条提示（8 条，其中 5 条复用：
+  //   `init.baseUrl.invalidTitle/invalidLine1/invalidLine2`、`common.updateSuccess`、`sysconf.tabAdvance`）
+  //   ⇒ 只新增 3 个 key。🔴 是活体探针抓出来的：en-US 下系统设置页仍有「基本设置/高级设置/布局设置」三个中文页签。
+  'src/pages/SystemConfig/tabs/SiteInfo.tsx': 0,
+  // 🔴 期 6 第八批（补 2）：通用图片 URL 字段 `UrlFormItem`（站点 logo / favicon 都用它）5 条 ⇒ 预算 0。
+  //   🔴 它是**活体探针抓出来的漏块**：en-US 下系统设置页仍有一条中文 tooltip，而这个文件在棘轮清单里
+  //   一直挂着预算（清单上有、但不在本批目标文件里）⇒ 又一次证明"页面级活体反向判据"不可省。
+  //   复用 3 条：`img.uploadBtn`（上传图片）/ `init.field.required`（这是必填项）/
+  //   🔴 `common.uploadOkWithName`（**本批从 `cover.uploadedOk` 提升**：这句"某某上传成功"后台到处都在用）。
+  'src/components/UrlFormItem/index.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -441,7 +463,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 79, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 85, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，

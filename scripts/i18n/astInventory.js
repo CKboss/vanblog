@@ -639,7 +639,9 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 //   与 `cover`（弹窗自己的文案）分开：一个是**服务层模块**、一个是组件，跟 `accessPassword` 的分组方式一致。
 // 🔴 `revision` = 历史版本（`components/RevisionHistory/**`：抽屉 UI + `revisionCore.js` 纯逻辑）。
 const REGISTERED_KEY_GROUPS = [// 🔴 `backup` = 系统配置「备份与恢复」页（整站备份 / 数据备份 / 签名 / 清单 / 恢复）。
-'accessPassword', 'article', 'backup', 'common', 'cover', 'coverBackfill', 'customPage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
+// 🔴 `analysis` = 统计 ID 那两个字段（Google Analytics / 百度统计）的共享文案 + 导航路径常量。
+// 🔴 `waline` = 评论通知 SMTP 那一组共享字段文案 + 导航路径常量 + 评论设置表单自己的几条。
+'accessPassword', 'analysis', 'article', 'backup', 'common', 'cover', 'coverBackfill', 'customPage', // 🔴 `editor` = 编辑器自己那几条界面文案（bytemd 插件的 action 标题与一条 toast）。
 //   ⚠️ 移动端工具栏那 11 条**不在语言包里**：它们与上游 bytemd 的 zh_Hans 值逐字相同 ⇒ 直接读 editorLocale。
 // 🔴 `editorProfile` = 编辑器偏好设置弹窗（保存后行为 / 本机缓存 / 软换行）。
 'draft', 'editor', 'editorProfile', 'error', 'export', 'img', 'init', 'log', 'login', 'logout', // 🔴 `tagTokens` / `pathname` / `schedule` = 三个**服务层字段常量**模块（期 7 第二批登记）：
@@ -648,7 +650,7 @@ const REGISTERED_KEY_GROUPS = [// 🔴 `backup` = 系统配置「备份与恢复
 //   ⚠️ **不能**并进 `error.*`：那一组是服务端错误码的专用命名空间，
 //   `i18nServerErrorCodes.test.js` 有反向断言"包里的 `error.*` 必须都有对应的码"。
 'menu', 'pathname', 'recycle', 'request', 'revision', 'schedule', 'siteInfo', // 🔴 `time` = 相对时间（relativeTime.js 的「刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前」）。
-'storage', 'sysconf', 'tagTokens', 'theme', 'time', 'watermark'];
+'storage', 'sysconf', 'tagTokens', 'theme', 'time', 'urlForm', 'waline', 'watermark'];
 const GRANDFATHERED_KEYS = [
   'init.restore.count.articles',
   'init.restore.count.images',

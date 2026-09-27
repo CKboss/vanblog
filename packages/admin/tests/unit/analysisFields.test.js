@@ -41,10 +41,15 @@ describe('analytics field copy (#350)', () => {
   });
 
   it('wires SiteInfoForm through the shared field copy', () => {
-    assert.match(formSrc, /GA_ANALYSIS_FIELD/);
-    assert.match(formSrc, /BAIDU_ANALYSIS_FIELD/);
-    assert.match(formSrc, /name=\{GA_ANALYSIS_FIELD\.name\}/);
-    assert.match(formSrc, /name=\{BAIDU_ANALYSIS_FIELD\.name\}/);
+    // 🔴 期 6 第八批：字段常量改成了**函数版**（模块级常量拿不到 hook ⇒ 消费方注入 t）
+    //    ⇒ 锚点从"引用大写常量"换成"调用函数版并把 t 传进去"。性质没放：仍然要求走**共享**字段文案。
+    assert.match(formSrc, /gaAnalysisField\(t\)/);
+    assert.match(formSrc, /baiduAnalysisField\(t\)/);
+    assert.match(formSrc, /name=\{GA\.name\}/);
+    assert.match(formSrc, /name=\{BAIDU\.name\}/);
+    // 🔴 反证：不许再读 identity 视图（那样文案会永远中文，而且看不出来）
+    assert.doesNotMatch(formSrc, /GA_ANALYSIS_FIELD\./);
+    assert.doesNotMatch(formSrc, /BAIDU_ANALYSIS_FIELD\./);
     assert.doesNotMatch(formSrc, /label="Google Analysis ID"/);
     assert.doesNotMatch(formSrc, /label="Baidu 分析 ID"/);
   });

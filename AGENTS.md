@@ -9469,6 +9469,102 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.173 期 6 第八批：系统设置页家族（67 条 → 0）—— 🔴 语言包生成脚本**跑两遍**会静默产生 53 个重复 key，而一路全绿
+
+**交付**（站长裁定 B 解锁的那一组：四个**互相引用**的文件一起做 + 两个被活体抓出来的漏块）：
+`pages/SystemConfig/index.jsx`(10 个页签) + `pages/SystemConfig/tabs/SiteInfo.tsx`(8：内层页签 3 + 提示 5)
++ `utils/walineEmailFields.js`(24) + `components/WalineForm/index.tsx`(13) + `utils/analysisFields.js`(7)
+（消费方 `SiteInfoForm` 改接函数版）+ 🔴 `components/UrlFormItem/index.tsx`(5，**活体抓出来的漏块**）
+= **67 条 → 0**；语言包 **1068 → 1123 key**（新增 57 / 复用 9 / 🔴 **1 个提升**：`cover.uploadedOk` →
+`common.uploadOkWithName`）；棘轮清单 **79 → 85 个文件**（**TOTAL 仍 61**）；`i18nKeyNaming` → **1123**；
+`localePackParity` 自动发现下界 **73 → 78 个文件 / 1360 → 1440 个调用点**（实测 79 / 1447）；繁中同形白名单 **+5**。
+🔴 **真实剩余：52 → 46 个文件 / 635 → 568 条**。
+🔴 **浏览器活体 30/30（zh-CN 9 + en-US 11 + zh-TW 10），problems 0、skipped 6**（每条 skip 写明原因）：
+11 个外层页签 + 3 个内层页签、统计 ID 两个字段与**两条长 tooltip**、waline 的 **18 个 label** 与 6 个 placeholder、
+SMTP 密码那条最长 tooltip、以及新翻的 `urlForm.imgTooltip`（三语都采到）。
+反向判据：en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**（都先证明"采到 ≥20 段文字"）。
+en-US 实采页签：`Site info / Theme / Customizing / Users / Image hosting / Comments / Backup and restore / Tokens / HTTPS / Advanced / Migration assistant`（内层 `Basic / Advanced / Layout`）；
+zh-TW：`站點設定 / 主題 / 客製化 / 使用者設定 / 圖床設定 / 評論設定 / 備份還原 / Token 管理 / HTTPS / 進階設定 / 遷移精靈`（内层 `基本設定 / 進階設定 / 版面設定`）。
+证据：`vanblog_dev/i18n-browser-evidence/phase6-sysconf-tabs/`。
+
+#### A. 🔴 语言包生成脚本**跑两遍** ⇒ 53 个重复 key，而且一路绿到人工 grep 才发现
+生成脚本判断"这个 key 在不在包里"用的是**解析后的映射**（重复 key 会折叠成一个），而写入是**追加到文件末尾**
+⇒ 🔴 **同一个脚本跑两遍就把同一批 key 追加两次，而它自己报的 key 数完全正常**（1123 = 去重后的数）。
+实测：三份包各 **53 个重复 key**；`readPack` 的 key 数照常、`node --test` **全绿**（没有测试数原始字面量）、
+只有 `tsc` 会以 **TS1117** 报出来 —— 而那一次类型门禁恰好跑在重复产生**之前** ⇒ 整条链路全绿。
+🔴 发现方式是**变异对照**：M2 报"锚点命中 **2** 次"（⇒ 又一次证明变异对照是"仓库状态的体检"，不只是守卫的体检）。
+修法：① `git checkout` 三份包 → 重做提升 → **只跑一遍**生成脚本，并复核
+（`grep -oP "^  '[^']+':"` 的条数 == 1123、`sort | uniq -d` == 0）；
+② 🔴 **新增永久守卫**：三份包里"源码中 key 字面量的条数 == 去重后的条数"（外加总数 ≥1000 防口径坏掉）。
+👉 🔴 **教训：任何"追加式"生成脚本都必须自带幂等判据** —— "跑两遍会不会坏"要成为一条测试，不能靠人记得只跑一遍
+（本项目已被跑两遍**两次**：上一次是备份页那批，当时靠 TS1117 兜住，这次连 TS1117 都没赶上）。
+
+#### B. 🔴 两个"共享字段文案"模块改成注入式；identity 常量必须**同时**登记（变异对照第一版全绿）
+`analysisFields.js` / `walineEmailFields.js` 原来是 `Object.freeze({…})` 的**模块级常量** ⇒ 改成
+`gaAnalysisField(t = IDENTITY_T)` / `walineEmailFields(t = IDENTITY_T)`，并保留大写 **identity 视图**
+（既有测试钉着它们的中文措辞）。消费方（`SiteInfoForm` / `WalineForm`）都改成调函数版并传 t。
+🔴 变异对照 M3 第一版**全绿**：把 `const F = walineEmailFields(t)` 改回读 `WALINE_EMAIL_FIELDS`，没有任何判据管 ——
+因为 `IDENTITY_CONSTANTS` 表里没有这两个新模块 ⇒ 补登记后立刻红。
+👉 与 §7.167 A 同源（注入链每一环都要登记）：**新增注入式模块时，identity 常量表要同步登记**，
+否则"注入了 t 却仍读 identity 常量"这个最隐蔽的缺陷（界面永远中文、看不出异常）就没有守卫。
+🔴 既有锚点换成新形状时**顺手加了反证**：两个 `wires … through the shared field copy` 现在同时断言
+`doesNotMatch(formSrc, /GA_ANALYSIS_FIELD\./)`（不许再读 identity 视图）。
+
+#### C. 🔴 `.d.ts` 又是类型权威（第二次踩同一条）
+`walineEmailFields.js` 旁边有 `walineEmailFields.d.ts` ⇒ 只改 `.js` 的导出会撞 **TS2724**
+（`has no exported member named 'walineEmailFields'`）。修法与 §7.166 相同：在 `.d.ts` 里补
+`export function walineEmailFields(t?: InjectedT): WalineEmailFieldsCopy;` 与 `walineAdminPath`。
+👉 **改 `.js` 的签名前先看有没有同名 `.d.ts`**（`analysisFields.js` 没有 ⇒ 那侧不报，别以为规律不成立）。
+
+#### D. 🔴 活体又抓到一个漏块：`UrlFormItem`（棘轮清单上一直挂着预算）
+en-US 下系统设置页仍有一条中文 tooltip「上传之前需要设置好图床哦，默认为本地图床。」⇒ 追到
+`components/UrlFormItem/index.tsx`（5 条）。它**在棘轮清单里有预算**，只是不在本批的目标文件里
+⇒ 🔴 这是"清单上有、批次没带上"的**第 2 次**（上次是 `SaveTip`，§7.168 B）。
+👉 同一条规矩：**批次边界按"页面表面清单"划**；开工前先用 `pageSurface.js` 从页面入口跑一遍。
+顺手做了两件对的事：① `上传图片` **复用**既有 `img.uploadBtn`（不新增同值 key）；
+② 🔴 `{name} 上传成功!` 与 `cover.uploadedOk` **同值** ⇒ 把它**提升**成 `common.uploadOkWithName`
+（连消费方 `CoverImageField` 一起改），而不是再造一个同值 key。
+
+#### E. 🔴 "导航路径 ↔ 页签标签"第一次有了机器判据
+`SystemConfig/index.jsx` 里原来那段注释写明：页签标签名被**三处独立陈述**（页签清单、两个字段模块的
+"后台导航路径"常量、文档站），而 `themeTab` / `adminCopySync` 两个测试把"后台标签 ↔ 文档措辞"钉在一起
+⇒ 这正是它们当初被**一起延期**的原因。裁定 B 解锁后，这一批把前两处**一起**接了 i18n，
+于是"路径末段 = 页签标签"这件事第一次可被机器验证 ⇒ 新增守卫（三份包都要）：
+`analysis.adminPath` 按 `' / '` 拆开后的第 3/4 段必须**逐字等于** `sysconf.tabSiteInfo` / `sysconf.tabAdvance`；
+`waline.adminPath` 的末段必须等于 `sysconf.tabWaline`；两条路径的前两段必须相同，且第 2 段必须等于 `menu.site.setting`。
+变异对照 M2 把英文页签 `Comments` 改成 `Comment settings` ⇒ 红在这条上。
+⚠️ 文档站仍保持中文（裁定不变）；这两个常量目前**没有渲染到界面任何地方**（只有测试与文档引用）
+⇒ 活体不可观察，已登记 skip（由"逐字对账 + 三份包一致 + 本条一致性"覆盖）。
+
+#### F. 探针尺子五处错（都被实采数据纠正）
+1. 🔴 **外层与内层页签同名**：「高级设置」既是外层页签又是站点配置的内层页签 ⇒ `.first()` 点到外层，
+   采到的全是"登录失败限制 / 会话时长"。改成**用 URL 查询参数**进内层（`?tab=siteInfo&siteInfoTab=more`，
+   因为 `useTab('basic','siteInfoTab')` 就挂在参数上）。👉 🔴 **有 URL 状态就用 URL，别去点 DOM**（点 DOM 试了两次都没点对）。
+2. **SMTP 那 7 组字段是条件渲染**（`{enableEmail && …}`，默认关闭）⇒ 先把「是否启用邮件通知」选成开启，
+   否则只采到 4 个 label，看着像"没翻"。
+3. **两个下拉的 placeholder 观察不到**（有当前值时 antd 不渲染 placeholder，本项目**第 4 次**踩）⇒ 只验文本框那 6 个，另 2 个记 skip。
+4. **antd tooltip 是全局浮层**：上一个字段的还没消失时取 `[0]` 会拿到**别人的**文案
+   （这次采到了旁边站点图标字段的 tooltip —— 顺带把新翻的 `urlForm.imgTooltip` 三语都验到了）。
+   改成：鼠标移开等浮层收起 → hover → 采**所有可见** tooltip → 按"与语言包值相等"挑那一条。
+5. 🔴 **按 id 找 tooltip 图标会命中隔壁字段**（`:has(#gaAnalysisId)` 匹配到了共同祖先那一行）
+   ⇒ 改成**按标签文字**定位 form-item，再取它自己的问号图标。
+
+#### G. 基线
+- admin `node --test` **774 tests / 170 suites / 0 fail**（+2 = 重复 key 那条 + 导航路径一致性那条）；
+- 变异对照 **8/8**（页签退回硬编码 / 🔴 改英文页签让导航路径失配 / 🔴 改回读 identity 视图 /
+  语义空操作（尾参默认值） / UrlFormItem 的 tooltip 退回硬编码 / 🔴 提升过的 key 换回旧名 /
+  SiteInfo 内层页签写死中文 / 语义空操作（换序））；
+- 语言包 **1123 key** ×3（🔴 原始 key 行数 == 去重数 == 1123，重复 0）；
+  `--zh-tw-audit`：1123 key / **754** 个不同汉字 / **0 命中**简体专用字表（例外仍 1 条：`钥`）；
+- 棘轮 **85 个文件 / TOTAL 61**（9 条永久例外）；admin 类型门禁 **31/0**；
+- 矩阵（5 个阶段全 rc=0）：admin **774/170/0**、守卫 **35 文件 / 3160 条 / 0 失败**、
+  jest **288 套件 / 4238 用例（4234 + 4 skip）/ 0 FAIL**（这次首跑就绿）、vitest **97 文件 / 1095**、
+  server 与 website 的 tsc 各 **0 错**；生产构建 rc=0（`umi.ce7b23d0.js` = **1,621,427 B**）；
+- 🔴 **真实剩余：46 个文件 / 568 条**。下一块：`DataManage/**`(134，`Category.jsx` 58 是大头) →
+  `CommentManage/**`(71) → `About.tsx`(35) → `Code/index.tsx`(29) → `Static/file`(28) → `CollaboratorModal`(26) →
+  `importMdzCore`(23) → `Pipeline`(35) → `Welcome`(33) → `app.jsx`(18) → `restoreCore`(16) → 其余零散。
+- ⚠️ 已知中间态：🔴 **内置主题名与描述仍是中文**（服务端 `/api/admin/theme/all` 给的，等站长裁定 ①）。
+
 ### 7.172 期 6 第七批：主题页（前台皮肤，59 条 → 0）—— 🔴 片段链的接缝**两个方向**都要查，以及"服务端数据"和"后台文案"必须在判据里分开
 
 **交付**：`pages/SystemConfig/tabs/Theme.jsx`(59) → **0**（手工 21 处：hook、8 处模板收成 ICU、`cssTitle`、

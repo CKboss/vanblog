@@ -71,7 +71,7 @@ export default function CoverImageField({ name = COVER_FIELD.name, id, fieldProp
                     // 🔴 与图片管理页那两条（`img.uploadNew` / `img.uploadExists`）**不是同一句**：
                     //    那两条尾部有一个空格（因为后面还要拼"已复制…链接"），这里没有 ⇒ 各自一个 key，
                     //    不为了少一个 key 去改任一侧的可见文案。
-                    message.success(t('cover.uploadedOk', '{name} 上传成功!', { name: info.name }));
+                    message.success(t('common.uploadOkWithName', '{name} 上传成功!', { name: info.name }));
                   } else if (info?.response?.data?.src) {
                     message.warning(t('cover.uploadedExists', '{name} 已存在!', { name: info.name }));
                   }

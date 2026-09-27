@@ -244,6 +244,12 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/SaveTip/index.tsx': 0,
     'src/pages/SystemConfig/tabs/Backup.jsx': 0,
     'src/pages/SystemConfig/tabs/Theme.jsx': 0,
+    'src/utils/analysisFields.js': 0,
+    'src/utils/walineEmailFields.js': 0,
+    'src/pages/SystemConfig/index.jsx': 0,
+    'src/components/WalineForm/index.tsx': 0,
+    'src/pages/SystemConfig/tabs/SiteInfo.tsx': 0,
+    'src/components/UrlFormItem/index.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {

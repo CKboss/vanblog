@@ -52,18 +52,20 @@ function formFields() {
   const inline = [...form.matchAll(/name=[{"]'?([A-Za-z]\w*)'?["}]/g)].map((m) => m[1]);
   // gaAnalysisId / baiduAnalysisId 的 name 来自 `@/utils/analysisFields`，不是字面量
   const shared = [];
-  if (/GA_ANALYSIS_FIELD/.test(form)) {
-    const af = read('src/utils/analysisFields.js');
-    const m = af.match(/GA_ANALYSIS_FIELD\s*=\s*Object\.freeze\(\{[\s\S]*?name:\s*'(\w+)'/);
-    assert.ok(m, 'analysisFields.js 里解析不出 GA_ANALYSIS_FIELD.name —— 解析口径失效了');
-    shared.push(m[1]);
+  // 🔴 期 6 第八批：这两个字段常量改成了**函数版**（`gaAnalysisField(t = IDENTITY_T) => Object.freeze({…})`），
+  //    表单里写的是 `const GA = gaAnalysisField(t)` + `name={GA.name}` ⇒ 解析口径跟着换形状。
+  //    性质没放：仍然要求"表单里那两个统计字段的 name 来自共享模块，而不是各写各的字面量"。
+  for (const [fn, local] of [['gaAnalysisField', 'GA'], ['baiduAnalysisField', 'BAIDU']]) {
+    if (new RegExp(`const ${local} = ${fn}\\(t\\)`).test(form)) {
+      const af = read('src/utils/analysisFields.js');
+      const m = af.match(new RegExp(`${fn}\\s*=\\s*\\(t = IDENTITY_T\\)\\s*=>\\s*Object\\.freeze\\(\\{[\\s\\S]*?name:\\s*'(\\w+)'`));
+      assert.ok(m, `analysisFields.js 里解析不出 ${fn} 的 name —— 解析口径失效了`);
+      shared.push(m[1]);
+      assert.ok(new RegExp(`name=\\{${local}\\.name\\}`).test(form), `表单必须用 ${local}.name（共享模块给的名字）`);
+    }
   }
-  if (/BAIDU_ANALYSIS_FIELD/.test(form)) {
-    const af = read('src/utils/analysisFields.js');
-    const m = af.match(/BAIDU_ANALYSIS_FIELD\s*=\s*Object\.freeze\(\{[\s\S]*?name:\s*'(\w+)'/);
-    assert.ok(m, 'analysisFields.js 里解析不出 BAIDU_ANALYSIS_FIELD.name —— 解析口径失效了');
-    shared.push(m[1]);
-  }
+  // 🔴 反证：不许再读 identity 视图（那样文案会永远中文）
+  assert.doesNotMatch(form, /GA_ANALYSIS_FIELD\.|BAIDU_ANALYSIS_FIELD\./);
   return [...new Set([...inline, ...shared])];
 }
 

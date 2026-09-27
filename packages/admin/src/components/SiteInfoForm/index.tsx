@@ -1,4 +1,4 @@
-import { BAIDU_ANALYSIS_FIELD, GA_ANALYSIS_FIELD } from '@/utils/analysisFields';
+import { baiduAnalysisField, gaAnalysisField } from '@/utils/analysisFields';
 import { listThemes } from '@/services/van-blog/skinTheme';
 import { ProFormDateTimePicker, ProFormDigit, ProFormSelect, ProFormText, ProFormTextArea } from '@ant-design/pro-form';
 import UrlFormItem from '../UrlFormItem';
@@ -21,8 +21,16 @@ export default function (props: {
   //    ⇒ 实测报 **TS2769（没有匹配的重载）**。这个形状在仓库里复制过 4 次，4 处都因此各背一条类型错误
   //    （admin 类型门禁的 TS2769 基线本来就是 3）⇒ 期 4 一并改成 any、把基线降到 0。
   //    ⚠️ 别"好心"改回 unknown：那会把 TS2769 带回来（棘轮会红，而且红得很莫名）。
+  // 🔴 期 6 第八批：统计 ID 那两个字段常量改成了**函数版**（模块级常量拿不到 hook）⇒ 这里注入 t。
+  //    ⚠️ 不要改回读 `GA_ANALYSIS_FIELD` / `BAIDU_ANALYSIS_FIELD` 那两个 identity 视图：
+  //    那样文案会永远中文（localePackParity 有一条判据专门盯"已接 i18n 的消费方不许从 identity 常量取文案"）。
   const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
     intl.formatMessage({ id, defaultMessage }, values);
+  // 🔴 期 6 第八批：统计 ID 那两个字段常量改成了**函数版**（模块级常量拿不到 hook）⇒ 这里注入 t。
+  //    ⚠️ 不要改回读 GA_ANALYSIS_FIELD / BAIDU_ANALYSIS_FIELD 那两个 identity 视图：那样文案会永远中文
+  //    （localePackParity 有一条判据专门盯「已接 i18n 的消费方不许从 identity 常量取文案」）。
+  const GA = gaAnalysisField(t);
+  const BAIDU = baiduAnalysisField(t);
   return (
     <>
       {props.showRequire && (
@@ -186,16 +194,16 @@ export default function (props: {
             required={false}
           />
           <ProFormText
-            name={GA_ANALYSIS_FIELD.name}
-            label={GA_ANALYSIS_FIELD.label}
-            placeholder={GA_ANALYSIS_FIELD.placeholder}
-            tooltip={GA_ANALYSIS_FIELD.tooltip}
+            name={GA.name}
+            label={GA.label}
+            placeholder={GA.placeholder}
+            tooltip={GA.tooltip}
           />
           <ProFormText
-            name={BAIDU_ANALYSIS_FIELD.name}
-            label={BAIDU_ANALYSIS_FIELD.label}
-            placeholder={BAIDU_ANALYSIS_FIELD.placeholder}
-            tooltip={BAIDU_ANALYSIS_FIELD.tooltip}
+            name={BAIDU.name}
+            label={BAIDU.label}
+            placeholder={BAIDU.placeholder}
+            tooltip={BAIDU.tooltip}
           />
           <ProFormSelect
             name={'enableComment'}

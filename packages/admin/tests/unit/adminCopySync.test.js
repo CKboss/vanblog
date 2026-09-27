@@ -24,7 +24,9 @@ const configDocs = readFileSync(path.join(repoRoot, 'docs/reference/config.md'),
 
 describe('admin copy sync (#197)', () => {
   it('uses 定制化 on the system-settings tab without renaming the route key', () => {
-    assert.match(systemConfigSrc, /tab: '定制化'/);
+    // 🔴 期 6 第八批：页签标签接了 i18n ⇒ 锚点换成 t() 形状（性质没放：这个页签必须还叫「定制化」，
+    //    因为 `analysis.gaTooltip` 的文案与文档都叫用户"去定制化里插入 Umami"）
+    assert.match(systemConfigSrc, /tab: t\('sysconf\.tabCustomizing', '定制化'\)/);
     assert.match(systemConfigSrc, /key: 'customizing'/);
     assert.match(systemConfigSrc, /customizing: <Customizing \/>/);
     assert.doesNotMatch(systemConfigSrc, /客制化/);

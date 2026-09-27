@@ -203,6 +203,14 @@ const IDENTICAL_ZH_TW_OK = [
   'theme.fieldDescription',
   'theme.fieldAuthor',
   'theme.fieldVersion',
+  // 🔴 期 6 第八批：这四条繁中与简体逐字相同 —— 三条是**纯技术示例**（SMTP 主机名 / 端口 / 邮箱地址，
+  //   没有汉字可转），一条是 `Token 管理`（Token 是外来词，管理简繁同形）。都不是"没翻"。
+  'waline.smtpHostPlaceholder',
+  'waline.smtpPortPlaceholder',
+  'waline.exampleEmailPlaceholder',
+  'sysconf.tabToken',
+  // 🔴 期 6 第八批（补 2）：`{name} 已存在!` 简繁同形（已/存/在 都不是简体专用字）
+  'urlForm.existsWithName',
   // 🔴 期 7 第四批：`{n}秒前` / `{n}天前` / `演示站禁止此操作！` 简繁同形
   'time.secondsAgo',
   'time.daysAgo',
@@ -356,12 +364,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 73,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 73）⇒ 遍历或解析器坏了`,
+      FILES.length >= 78,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 78）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1360,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1360）⇒ 疑似解析器坏了`,
+      calls.length >= 1440,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1440）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -426,6 +434,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/SaveTip/index.tsx',
       'src/pages/SystemConfig/tabs/Backup.jsx',
       'src/pages/SystemConfig/tabs/Theme.jsx',
+      'src/utils/analysisFields.js',
+      'src/utils/walineEmailFields.js',
+      'src/pages/SystemConfig/index.jsx',
+      'src/components/WalineForm/index.tsx',
+      'src/pages/SystemConfig/tabs/SiteInfo.tsx',
+      'src/components/UrlFormItem/index.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -751,6 +765,9 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       //    被工具包上 t 之后会在加载期炸 ⇒ 改成函数版），但第一版只登记了 `summarizeTotals`
       //    ⇒ 把 `formatLabels(t)` 的 t 拿掉**全绿**。👉 还是那条规矩：**整条链每一环都要登记**。
       'src/pages/SystemConfig/tabs/Backup.jsx': ['summarizeTotals', 'formatLabels'],
+      // 🔴 期 6 第八批：两个"共享字段文案"模块（模块级常量 ⇒ 函数版 + identity 视图）
+      'src/utils/analysisFields.js': ['analysisAdminPath', 'gaAnalysisField', 'baiduAnalysisField'],
+      'src/utils/walineEmailFields.js': ['walineAdminPath', 'walineEmailFields'],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -1709,6 +1726,11 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
     // 只有活体切到 en-US 才看得出来。上一批"每个调用点都要传 t"那条判据**看不见它**
     // （那里根本没有函数调用，只是引用了一个常量）。
     const IDENTITY_CONSTANTS = {
+      // 🔴 期 6 第八批：两个"共享字段文案"模块也改成函数版了 ⇒ identity 视图进这张表。
+      //    变异对照 B33-M3 第一版**全绿**（把 `walineEmailFields(t)` 改回读 `WALINE_EMAIL_FIELDS`），
+      //    就是因为这张表里没有它们 ⇒ 又是那条老规矩：**新增注入式模块时，identity 常量要同时登记**。
+      'src/utils/analysisFields.js': ['GA_ANALYSIS_FIELD', 'BAIDU_ANALYSIS_FIELD', 'ANALYSIS_ADMIN_PATH'],
+      'src/utils/walineEmailFields.js': ['WALINE_EMAIL_FIELDS', 'WALINE_ADMIN_PATH'],
       'src/services/van-blog/tagTokens.js': ['TAG_FIELD_PLACEHOLDER', 'TAG_FIELD_TOOLTIP'],
       'src/services/van-blog/importPathname.js': ['PATHNAME_FIELD'],
       'src/services/van-blog/schedule.js': [
@@ -1874,5 +1896,32 @@ describe('🔴 片段拼接的接缝（备份页 4 条链）', () => {
       }
     }
   }
+  });
+});
+
+describe('🔴 后台导航路径常量 ↔ 页签标签（三处独立陈述必须一致）', () => {
+  it('analysis.adminPath / waline.adminPath 的末段必须与页签标签**逐字相同**（三份包都要）', () => {
+    // ## 为什么要这条（2026-09-27 期 6 第八批）
+    // `SystemConfig/index.jsx` 里原来那段注释写明：页签标签名被**三处独立陈述** ——
+    // 页签清单、`analysisFields.js` / `walineEmailFields.js` 里给用户看的"后台导航路径"常量、以及文档站。
+    // 这一批把前两处一起接了 i18n（站长裁定 B），于是"路径末段 = 页签标签"这件事**第一次可以被机器验证**：
+    // 三份包里，`analysis.adminPath` 用 ' / ' 拆开后的末两段必须等于 `sysconf.tabSiteInfo` 与 `sysconf.tabAdvance`，
+    // `waline.adminPath` 的末段必须等于 `sysconf.tabWaline`。
+    // 🔴 少了这条，改一个页签标签就会让"给用户看的导航路径"悄悄指向一个不存在的页签（用户按路径找不到地方）。
+    for (const loc of ['zh-CN', 'zh-TW', 'en-US']) {
+      const pack = packs[loc];
+      const seg = (k) => String(pack[k]).split(' / ').map((x) => x.trim());
+      const a = seg('analysis.adminPath');
+      assert.ok(a.length === 4, `${loc}: analysis.adminPath 应该有 4 段（侧栏组 / 页面 / 页签 / 内层页签）⇒ ${JSON.stringify(pack['analysis.adminPath'])}`);
+      assert.strictEqual(a[2], pack['sysconf.tabSiteInfo'], `${loc}: 导航路径第 3 段必须等于「站点配置」页签标签`);
+      assert.strictEqual(a[3], pack['sysconf.tabAdvance'], `${loc}: 导航路径第 4 段必须等于「高级设置」页签标签`);
+      const w = seg('waline.adminPath');
+      assert.ok(w.length === 3, `${loc}: waline.adminPath 应该有 3 段 ⇒ ${JSON.stringify(pack['waline.adminPath'])}`);
+      assert.strictEqual(w[2], pack['sysconf.tabWaline'], `${loc}: 导航路径末段必须等于「评论设置」页签标签`);
+      // 🔴 两条路径的前两段必须相同（同一个侧栏组 + 同一个页面），否则说明有一侧写错了
+      assert.strictEqual(a[0], w[0], `${loc}: 两条导航路径的侧栏组名不一致`);
+      assert.strictEqual(a[1], w[1], `${loc}: 两条导航路径的页面名不一致`);
+      assert.strictEqual(a[1], pack['menu.site.setting'], `${loc}: 导航路径里的页面名必须等于侧边栏菜单「系统设置」`);
+    }
   });
 });

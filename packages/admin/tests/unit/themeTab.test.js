@@ -21,7 +21,8 @@ describe('主题（前台皮肤）：后台管理页', () => {
     const index = read('src/pages/SystemConfig/index.jsx');
     assert.match(index, /import Theme from '\.\/tabs\/Theme';/);
     assert.match(index, /theme: <Theme \/>,/);
-    assert.match(index, /tab: '主题',/);
+    // 🔴 期 6 第八批：页签标签接了 i18n ⇒ 锚点换成 t() 形状（性质没放：主题页签必须存在且叫「主题」）
+    assert.match(index, /tab: t\('sysconf\.tabTheme', '主题'\),/);
     assert.match(index, /key: 'theme',/);
   });
 

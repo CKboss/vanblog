@@ -5,6 +5,7 @@ import { Image, message } from 'antd';
 // 按需引入：`from 'lodash'` 是桶式导入，会把整个 lodash 拖进这个 chunk
 import debounce from 'lodash/debounce';
 import { useEffect, useMemo, useState } from 'react';
+import { useIntl } from 'umi';
 import UploadBtn from '../UploadBtn';
 
 export default function (props: {
@@ -16,6 +17,13 @@ export default function (props: {
   isInit: boolean;
   isFavicon?: boolean;
 }) {
+  // 🔴 期 6 第八批：这个通用图片 URL 字段（站点 logo / favicon 等都用它）接上 i18n。
+  //    🔴 它是被**活体探针**抓出来的：en-US 下系统设置页仍有一条中文 tooltip「上传之前需要设置好图床哦…」，
+  //    而棘轮清单里它一直挂着预算 —— 说明"清单上有、但不在当前批次目标文件里"的东西必须靠活体兜住。
+  //    ⚠️ `message.*` 是脱离 React 树的独立根（§7.151）⇒ 传算好的字符串。
+  const intl = useIntl();
+  const t = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+    intl.formatMessage({ id, defaultMessage }, values);
   const [url, setUrl] = useState('');
   const handleOnChange = debounce((ev) => {
     const val = ev?.target?.value;
@@ -47,7 +55,7 @@ export default function (props: {
         label={props.label}
         required={props.required}
         placeholder={props.placeholder}
-        tooltip="上传之前需要设置好图床哦，默认为本地图床。"
+        tooltip={t('urlForm.imgTooltip', '上传之前需要设置好图床哦，默认为本地图床。')}
         fieldProps={{
           onChange: handleOnChange,
         }}
@@ -59,12 +67,12 @@ export default function (props: {
                 setLoading={() => {}}
                 muti={false}
                 crop={true}
-                text="上传图片"
+                text={t('img.uploadBtn', '上传图片')}
                 onFinish={(info) => {
                   if (info?.response?.data?.isNew) {
-                    message.success(`${info.name} 上传成功!`);
+                    message.success(t('common.uploadOkWithName', '{name} 上传成功!', { name: info.name }));
                   } else {
-                    message.warning(`${info.name} 已存在!`);
+                    message.warning(t('urlForm.existsWithName', '{name} 已存在!', { name: info.name }));
                   }
                   const src = getImgLink(info?.response?.data?.src);
                   setUrl(src);
@@ -89,7 +97,7 @@ export default function (props: {
             </div>
           </div>
         }
-        rules={props.required ? [{ required: true, message: '这是必填项' }] : undefined}
+        rules={props.required ? [{ required: true, message: t('init.field.required', '这是必填项') }] : undefined}
       />
     </>
   );

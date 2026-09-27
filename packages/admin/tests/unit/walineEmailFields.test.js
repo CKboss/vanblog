@@ -52,10 +52,13 @@ describe('Waline email field copy (#342)', () => {
   });
 
   it('wires WalineForm through the shared field copy', () => {
-    assert.match(formSrc, /WALINE_EMAIL_FIELDS/);
-    assert.match(formSrc, /name=\{WALINE_EMAIL_FIELDS\.authorEmail\.name\}/);
-    assert.match(formSrc, /name=\{WALINE_EMAIL_FIELDS\.senderEmail\.name\}/);
-    assert.match(formSrc, /name=\{WALINE_EMAIL_FIELDS\.smtpPassword\.name\}/);
+    // 🔴 期 6 第八批：同上（函数版 + 注入 t）；性质没放：仍然要求走**共享**字段文案
+    assert.match(formSrc, /walineEmailFields\(t\)/);
+    assert.match(formSrc, /name=\{F\.authorEmail\.name\}/);
+    assert.match(formSrc, /name=\{F\.senderEmail\.name\}/);
+    assert.match(formSrc, /name=\{F\.smtpPassword\.name\}/);
+    // 🔴 反证：不许再读 identity 视图
+    assert.doesNotMatch(formSrc, /WALINE_EMAIL_FIELDS\./);
     assert.doesNotMatch(formSrc, /label="博主邮箱"/);
     assert.doesNotMatch(formSrc, /label="自定义发送邮件的发件地址"/);
     assert.doesNotMatch(formSrc, /发送邮件使用的 smtp 密码/);

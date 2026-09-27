@@ -1,4 +1,5 @@
 import { useTab } from '@/services/van-blog/useTab';
+import { useIntl } from 'umi';
 import { PageContainer } from '@ant-design/pro-layout';
 import thinstyle from '../Welcome/index.less';
 import Advance from './tabs/Advance';
@@ -13,6 +14,14 @@ import User from './tabs/User';
 import WalineTab from './tabs/WalineTab';
 import Token from './tabs/Token';
 export default function () {
+  // 🔴 期 6 第八批：页签标签接上 i18n。
+  //    ⚠️ 这里原来有一段注释说这组标签**刻意尚未**接入 i18n，理由是它们与 `analysisFields.js` /
+  //    `walineEmailFields.js` 里给用户看的后台导航路径常量、以及文档站**三处互相引用**。
+  //    🔴 站长裁定 B（§7.169）已解锁 ⇒ 这一批把三处**一起做**（两个导航路径常量也改成了注入式翻译器），
+  //    所以不会出现界面英文而导航路径仍中文的不一致。⚠️ 文档站仍保持中文（那条裁定不变）。
+  //    ⚠️ `themeTab` 与 `adminCopySync` 两个测试钉的是 **identity 视图**（中文常量）⇒ 不受影响。
+  const intl = useIntl();
+  const t = (id, defaultMessage, values) => intl.formatMessage({ id, defaultMessage }, values);
   const tabMap = {
     siteInfo: <SiteInfo />,
     theme: <Theme />,
@@ -46,35 +55,35 @@ export default function () {
       tabActiveKey={tab}
       tabList={[
         {
-          tab: '站点配置',
+          tab: t('sysconf.tabSiteInfo', '站点配置'),
           key: 'siteInfo',
         },
         {
-          tab: '主题',
+          tab: t('sysconf.tabTheme', '主题'),
           key: 'theme',
         },
         {
-          tab: '定制化',
+          tab: t('sysconf.tabCustomizing', '定制化'),
           key: 'customizing',
         },
         {
-          tab: '用户设置',
+          tab: t('sysconf.tabUser', '用户设置'),
           key: 'user',
         },
         {
-          tab: '图床设置',
+          tab: t('sysconf.tabImg', '图床设置'),
           key: 'img',
         },
         {
-          tab: '评论设置',
+          tab: t('sysconf.tabWaline', '评论设置'),
           key: 'waline',
         },
         {
-          tab: '备份恢复',
+          tab: t('sysconf.tabBackup', '备份恢复'),
           key: 'backup',
         },
         {
-          tab: 'Token 管理',
+          tab: t('sysconf.tabToken', 'Token 管理'),
           key: 'token',
         },
         {
@@ -82,11 +91,11 @@ export default function () {
           key: 'caddy',
         },
         {
-          tab: '高级设置',
+          tab: t('sysconf.tabAdvance', '高级设置'),
           key: 'advance',
         },
         {
-          tab: '迁移助手',
+          tab: t('sysconf.tabMigrate', '迁移助手'),
           key: 'migrate',
         },
       ]}

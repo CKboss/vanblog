@@ -21,6 +21,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
 const path = require('path');
 const astInventory = require('../../../../scripts/i18n/astInventory.js');
 
@@ -78,7 +79,13 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 // 🔴 1013 → **1068**（期 6 第七批：主题页 +55，复用 3 条：`common.colOption` / `common.delete` / `common.close`；
 //   另有 4 个提升进 common：`common.deletedToast`（已删除）/ `common.refresh`（刷新）/
 //   `common.optional`（可选）/ `common.copy`（复制）—— 这四句后台到处都在用）
-const BASELINE_KEY_COUNT = 1068;
+// 🔴 1068 → **1118**（期 6 第八批：页签标签 10 + 统计字段 7 + waline SMTP/评论设置 33；
+//   复用 4 条：`common.updateSuccess` / `common.enabled` / `common.disabled` / `init.field.required`）
+// 🔴 1118 → **1121**（期 6 第八批补：站点配置内层页签 2 个 + 演示站提示 1 个；
+//   「高级设置」复用外层 `sysconf.tabAdvance`、URL 那三条复用 `init.baseUrl.*`、`更新成功！` 复用 common）
+// 🔴 1121 → **1123**（期 6 第八批补 2：`UrlFormItem` 的 2 个新 key；另 3 条复用既有 key，
+//   其中 `common.uploadOkWithName` 是本批从 `cover.uploadedOk` **提升**来的 ⇒ 提升不增 key 数）
+const BASELINE_KEY_COUNT = 1123;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。
@@ -285,4 +292,27 @@ test('i18n key 命名 · 尺子反证：合成输入必须被点名（证明判�
     true,
     '祖父条款失效：白名单里的 init.restore.detail.db 被判为不合规',
   );
+});
+
+test('🔴 三份语言包里**不许有重复的 key**（源码里的 key 字面量条数 == 去重后的条数）', () => {
+  // ## 为什么要这条（2026-09-27 期 6 第八批，实测踩到）
+  // 生成语言包的脚本是"把新 key 追加到文件末尾"，而它判断"这个 key 在不在"用的是**解析后的映射**
+  // （重复 key 会折叠成一个）⇒ 🔴 **同一个脚本跑两遍就会把同一批 key 追加两次，而它自己报的 key 数看不出问题**。
+  // 这次实测：三份包各有 **53 个重复 key**（`sysconf.tabWaline` 等），而 `readPack` 出来的 key 数照常是 1123，
+  // `node --test` 全绿（没有测试数原始字面量），只有 `tsc` 会以 TS1117 报出来 ——
+  // 而那一次类型门禁恰好是在重复产生**之前**跑的，所以整条链路一路绿到人工 grep 才发现。
+  // 👉 教训：**"跑两遍会不会坏"必须自己成为一条判据**（幂等性），不能靠人记得只跑一遍。
+  for (const loc of ['zh-CN', 'zh-TW', 'en-US']) {
+    const rel = `src/locales/${loc}.ts`;
+    const src = fs.readFileSync(path.join(ADMIN, rel), 'utf8');
+    const raw = [...src.matchAll(/^ {2}'([^']+)':/gm)].map((m) => m[1]);
+    const uniq = new Set(raw);
+    const dupes = raw.filter((k, i) => raw.indexOf(k) !== i);
+    assert.strictEqual(
+      raw.length,
+      uniq.size,
+      `🔴 ${rel} 里有 ${dupes.length} 个**重复 key**（生成脚本被跑了两遍？）：${JSON.stringify([...new Set(dupes)].slice(0, 6))}`,
+    );
+    assert.ok(raw.length >= 1000, `${rel} 只有 ${raw.length} 个 key 字面量（下界 1000）⇒ 解析口径可能坏了`);
+  }
 });
