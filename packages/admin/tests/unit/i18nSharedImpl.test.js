@@ -282,6 +282,8 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/services/van-blog/importMdzCore.js': 0,
     'src/services/van-blog/importMdz.ts': 0,
     'src/pages/SystemConfig/tabs/migrate.tsx': 0,
+    'src/components/Editor/locales.ts': 16,
+    'src/components/Editor/plugins/customContainerRemark.js': 5,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -299,7 +301,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
   }
   assert.strictEqual(
     total,
-    14,
+    35,
     // 🔴 38 → **14**（期 6 第十四批）：三笔欠条一次还清（restoreCore 16 → 0、setupKeyCore 4 → 0、
     //    Customizing 4 → 0）⇒ 现在这个数字**全部是登记在册的永久例外**，一条欠条都没有了。
     //    ⚠️ setupKeyCore 的 `初始化密钥` 原来是清单里的一条例外，现在它待在 t() 的 defaultMessage 位
@@ -315,7 +317,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     //    永久例外，与 Caddy URL 同类；文案那条走 `{note}` 占位符 ⇒ 语言包里没有汉字）。
     // 🔴 54 → 53：UpdateModal 那张跨层欠条**已还**（期 7 第一批把 accessPassword.js 接了注入式翻译器，
     //   实参与模板一起翻 ⇒ 该文件预算归 0）
-    `裸中文总数应当是 14（= 全部 14 条永久例外，**欠条已清零**：容器模板 6、已初始化 1、静态双语标签 3、登录失效 1、导出说明.md 1、Caddy 与 About 的 URL 锚点 2），实际 ${total}`,
+    `裸中文总数应当是 35（= 全部 35 条永久例外，**欠条 0**：上游 locale 数据补齐 16、容器模板 6、容器识别标题 5、静态双语标签 3、URL 锚点 2、已初始化 1、导出说明.md 1、登录失效 1），实际 ${total}`,
   );
   // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
   //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——

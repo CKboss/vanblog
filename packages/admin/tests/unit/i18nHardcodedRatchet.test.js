@@ -394,6 +394,20 @@ const BUDGET = {
   'src/services/van-blog/importMdzCore.js': 0,
   'src/services/van-blog/importMdz.ts': 0,
   'src/pages/SystemConfig/tabs/migrate.tsx': 0,
+  // 🔴 期 6 第十五批（**期 6 收官**）：把此前**没登记在清单里**的两个文件补进来。
+  //   在这之前棘轮只对清单里的文件断言 ⇒ 🔴 **清单外的裸中文是隐形的**（`inventory.js` 报 35 条、
+  //   棘轮只认 14 条，两个口径长期对不上就是这个原因）⇒ 本批新增一条判据堵住这个洞（见下面那条 test）。
+  //   这两个文件的中文都是**登记在册的永久例外**，不是欠条：
+  //   - `Editor/locales.ts`(16)：bytemd 编辑器界面文案**直接复用上游 locale 文件**合成
+  //     （zh_Hans 47 + gfm 6 + mermaid 9），只有两处上游不提供、必须自己写：
+  //     🔴 `@bytemd/plugin-mermaid` **不带 zh_Hant.json** ⇒ 繁中 11 个图表名手写；
+  //     🔴 `@bytemd/plugin-math-ssr` **完全不带 locale** ⇒ 公式那 4 条三语都由我们给。
+  //     这 16 条就是那两份"三语并列的纯数据"，按语言由 `pickEditorLocale()` 挑，**不走语言包**
+  //     （走语言包就等于把上游 62 条逐字副本重新手抄一遍 —— 那正是这个文件当初要消灭的形状）。
+  //   - `plugins/customContainerRemark.js`(5)：容器**识别标题**（`注` / `相关信息` / `注意` …），
+  //     与 `plugins/customContainer.tsx` 那 6 条**插入用户文章正文的 Markdown 模板**是同一套契约的两端。
+  'src/components/Editor/locales.ts': 16,
+  'src/components/Editor/plugins/customContainerRemark.js': 5,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -422,7 +436,7 @@ const BUDGET = {
 //   ⇒ 账目现在是：🔴 **61 = 48（目标底）+ 4（Customizing 欠条）+ 9（永久例外：Caddy URL 1、导出说明.md 1、
 //   登录失效 1、容器模板 6）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 14（🔴 期 6 第十四批：三笔欠条还清 ⇒ 只剩登记在册的永久例外）（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 35（🔴 期 6 第十五批收官：全部是登记在册的永久例外，**欠条 0**；此前清单外的 21 条已纳入账目）（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
@@ -462,6 +476,24 @@ const REQUIRED_EXCEPTIONS = [
   // 🔴 期 3 第五批（2026-09-26）新增：**URL 锚点**也必须逐字是中文（这是第 4 类例外形状：
   //    前三类是协议字符串 / 要照着敲的命令 / 静态双语标签，这一类是"指向中文文档的锚点"）
   // 🔴 期 6 第十一批新增（同族第 2 处：**指向中文 README 的 URL 锚点**）
+  // 🔴 期 6 第十五批新增（第 11 类例外形状：**上游 locale 数据的补齐部分**）
+  {
+    file: 'src/components/Editor/locales.ts',
+    // ⚠️ 这里钉的是**繁中**那个图表名（简体 `流程图` 来自上游 zh_Hans.json，不在本文件里）
+    text: '流程圖',
+    why:
+      'bytemd 编辑器界面文案直接复用上游 locale 文件（三份并列的**纯数据**），只有 mermaid 的繁中 11 个图表名' +
+      '与 math 插件那 4 条上游不提供、必须自己写；按语言由 pickEditorLocale() 挑，不走语言包',
+  },
+  // 🔴 期 6 第十五批新增（与容器模板**同一套契约的另一端**：识别存量文章里的容器）
+  {
+    file: 'src/components/Editor/plugins/customContainerRemark.js',
+    text: '相关信息',
+    why:
+      '容器**识别标题**：remark 插件靠这几个中文标题认出存量文章正文里的容器（:::info{title="相关信息"}）。' +
+      '与 customContainer.tsx 那 6 条模板是同一套契约的两端 —— 只改一边，老文章就不再渲染；' +
+      '跨文件断言在 i18nEditorLocaleFollows.test.js',
+  },
   // 🔴 期 6 第十二批新增（同族第 3 处：**静态双语标签**，与 Login / Restore 那两处一样）
   {
     file: 'src/app.jsx',
@@ -501,6 +533,45 @@ const REQUIRED_EXCEPTIONS = [
  *    本文件第一版就是这么错的，实测把 ThemeButton 报成 3 条而真值是 0）⇒
  *    🔴 共享模块里保留了这个警告，本文件的"尺子自证"断言（已翻干净的文件必须是 0）也仍然守着它。
  */
+/**
+ * 🔴 遍历 `src` 下所有**源码文件**，口径与 CLI 工具 `scripts/i18n/inventory.js` 的"真实剩余"完全一致：
+ * 跳过 `node_modules` / `.umi` / `.umi-production` / `locales`（语言包本身就是中文payload），
+ * 只看 `.js/.jsx/.ts/.tsx`，排除 `*.test.*` / `*.spec.*`（那是测试自己的断言消息与夹具），
+ * 并用共享模块的 `isLocalePayloadFile()` 排除"三语并列的纯数据文件"。
+ * ⚠️ 这个口径必须与 inventory 一致，否则"账目完整"这条判据就会与进度汇报用的那个数**长期对不上**
+ *    （本批之前就是这个毛病：inventory 报 35、棘轮只认 14）。
+ */
+function listSourceFiles() {
+  const SKIP_DIRS = new Set(['node_modules', '.umi', '.umi-production', 'locales']);
+  const EXTS = new Set(['.js', '.jsx', '.ts', '.tsx']);
+  const out = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        walk(abs);
+      } else if (e.isFile()) {
+        if (!EXTS.has(path.extname(e.name))) continue;
+        if (/\.(test|spec)\./.test(e.name)) continue;
+        const rel = path.relative(ADMIN, abs).split(path.sep).join('/');
+        // 🔴 只排除 `locales/` **目录**（真语言包），不排除"任何叫 locales.ts 的文件"：
+        //    `src/components/Editor/locales.ts` 是 bytemd 界面文案的**源码**（里面 16 条中文是登记在册的
+        //    永久例外：上游 mermaid 不带 zh_Hant、math 插件完全不带 locale ⇒ 那两份三语数据由我们写），
+        //    它**要**算进账目。
+        //    ⚠️ 顺带记一个口径不一致：共享模块的 `isLocalePayloadFile()` 用文件名规则 `(^|/)locales?\.(ts|js|…)$`
+        //    会把它判成"语言包"，而 `inventory.js` 的"真实剩余"清单里**是算上它的**（16 条）
+        //    ⇒ 两个尺子在这一个文件上不一致。本批以"它是源码、里面的中文是永久例外"为准登记进清单；
+        //    🔴 待办：把 `isLocalePayloadFile` 收窄成只认目录（或给它加一个 allowlist），让两个尺子重新对齐。
+        if (/(^|\/)locales?\//.test(rel)) continue;
+        out.push(rel);
+      }
+    }
+  };
+  walk(path.join(ADMIN, 'src'));
+  return out.sort();
+}
+
 function countBare(rel) {
   const abs = path.join(ADMIN, rel);
   // 🔴 fail-loud：文件不存在 / 解析失败都会抛错，绝不当成"0 条"
@@ -578,7 +649,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 117, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 119, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
@@ -598,7 +669,13 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   //   导出说明.md 1、Caddy URL 锚点 1、About README 锚点 1）
   //   + 23 条欠条（restoreCore 16 / setupKeyCore 3 / Customizing 4）。
   //   ⚠️ 与 `i18nSharedImpl.test.js` 里那个钉死的总数是**同一个数**：改一处就要改另一处。
-  assert.strictEqual(TOTAL_BUDGET, 14, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  // 🔴 14 → **35**（期 6 第十五批，**期 6 收官**）：把此前**没登记在清单里**的 21 条例外纳入账目
+  //   （`Editor/locales.ts` 16 + `plugins/customContainerRemark.js` 5）。
+  //   🔴 这不是"预算变松"，而是**账目变全**：数字变大是因为以前有 21 条**根本不在账上**（棘轮看不见它们）。
+  //   🔴 账目：35 = 35 条永久例外 + **0 条欠条** ⇒ 后台源码里已经没有"欠着的"硬编码中文。
+  //   ⚠️ "只许调小"这条规矩在这里要**按性质读**：调大必须是因为"把此前隐形的纳入账目"或"新增永久例外"，
+  //   而不是因为"又写了新的硬编码中文"（后者由逐文件那条判据拦）。
+  assert.strictEqual(TOTAL_BUDGET, 35, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
@@ -607,5 +684,39 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 6 → **7**（期 7 第五批）：新增第 6 类例外形状 —— **与别层比对的协议字面量**
   //   （`requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`；前五类：协议字符串 / 要照着敲的命令 /
   //   静态双语标签 / 中文文档 URL 锚点 / 服务端产物文件名）。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 9, '例外清单条数变了 ⇒ 必须是有意的');
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 11, '例外清单条数变了 ⇒ 必须是有意的');
+});
+
+test('🔴 i18n 棘轮 · 账目必须**完整**：任何有裸中文的 src 文件都得登记在清单里（清单外不许有隐形残留）', () => {
+  // ## 为什么要这条（2026-09-27 期 6 第十五批，期 6 收官时补的洞）
+  // 在此之前，上面那两条判据都只遍历 `BUDGET` 的 key ⇒ 🔴 **没登记的文件里写多少硬编码中文都不会红**。
+  // 实测后果：`inventory.js`（真实剩余口径）长期报 35～42 条，而棘轮的 TOTAL 只有 14 —— 两个口径对不上，
+  // 谁也不知道差的那些是"欠条"还是"永久例外"，进度汇报因此**只能引用 inventory 那个数**。
+  // 本批把清单外的两个文件（Editor/locales.ts 16、customContainerRemark.js 5）登记进来之后，
+  // 两边**逐条对齐**（都是 35），于是这条判据才有了意义：
+  // 🔴 从今往后，**任何**新增的硬编码中文（不管在哪个文件）都会立刻红，除非有人显式登记并写明理由。
+  const unregistered = [];
+  for (const rel of listSourceFiles()) {
+    if (rel in BUDGET) continue;
+    const n = countBare(rel).size;
+    if (n > 0) unregistered.push(`${rel}: ${n} 条裸中文，但没登记在 BUDGET 里`);
+  }
+  assert.deepStrictEqual(
+    unregistered,
+    [],
+    '🔴 这些文件有硬编码中文却**没登记**在棘轮清单里（等于账外账，谁都看不见）：\n  ' +
+      unregistered.join('\n  ') +
+      '\n修法（二选一，都要显式）：\n' +
+      '  ① 翻掉它 —— 改成 t(...) 并同步三份语言包，然后在 BUDGET 里登记为 0；\n' +
+      '  ② 它是刻意保留的例外（协议字符串 / 要照着敲的命令 / 静态双语标签 / URL 锚点 / 上游 locale 数据 /\n' +
+      '     容器模板与识别标题）—— 在 BUDGET 里登记条数，并在 REQUIRED_EXCEPTIONS 里写明理由\n' +
+      '     （那张清单有反向断言：登记的例外必须真的还在文件里，防止"登记了但早被改掉"）。',
+  );
+  // 🔴 反空转：这条判据必须真的在遍历文件（口径坏了会静默变成 0 个文件 ⇒ 永远绿）
+  const all = listSourceFiles();
+  assert.ok(all.length >= 119, `只遍历到 ${all.length} 个 src 文件（下界 119）⇒ 遍历口径可能坏了`);
+  // 🔴 清单里的每个文件都必须真的在 src 下（改名/删除后要同步清单，否则那条预算就是死的）
+  const allSet = new Set(all);
+  const stale = Object.keys(BUDGET).filter((rel) => !allSet.has(rel));
+  assert.deepStrictEqual(stale, [], '🔴 棘轮清单里有**已经不存在**的文件（改名或删除后忘了同步）：' + stale.join(', '));
 });
