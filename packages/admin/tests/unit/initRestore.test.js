@@ -295,7 +295,12 @@ describe('describeRestoreFailure：409/403/429/版本过新 各有专门提示�
     assert.ok(hints[0].includes('升级 server 镜像'));
   });
 
-  it('其余 400 / 未知状态 → 通用两条，原「数据管理」「已经初始化过」提示语逐字保留', () => {
+  // 🔴 期 6 第十四批改了这个标题与下面那条断言：这条提示的**权威文案是语言包那一份**
+  //    （zh-TW / en-US 的译文都照着它翻："那個在「系統設定 → 備份與還原」裡還原" /
+  //    "restore that one under System settings → Backup & restore"），
+  //    而源码里的 defaultMessage 是早期漂移的旧版（"…再到「数据管理」导入"）⇒ 已把源码对齐到包。
+  //    👉 判据要盯的**性质**是"第一条提示必须把用户指到正确的那个后台入口"，不是某个字面词。
+  it('其余 400 / 未知状态 → 通用两条，提示语指路「系统设置 → 备份与恢复」并保留「已经初始化过」那条', () => {
     const cases = [
       [400, '请上传整站备份文件（multipart 字段名 file）'],
       [400, '文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：x.tgz'],
@@ -306,7 +311,10 @@ describe('describeRestoreFailure：409/403/429/版本过新 各有专门提示�
     for (const [status, msg] of cases) {
       const hints = core.describeRestoreFailure(status, msg);
       assert.equal(hints.length, 2, `status=${status} 应给通用两条`);
-      assert.ok(hints[0].includes('数据管理'), '第一条提示要指路「数据管理」（JSON 导入）');
+      assert.ok(
+        hints[0].includes('系统设置 → 备份与恢复'),
+        '第一条提示要指路「系统设置 → 备份与恢复」（JSON 数据备份在那里恢复）；实采：' + hints[0].slice(-60),
+      );
       assert.ok(hints[0].includes('vanblog-full-'), '第一条提示要给出正确文件名形状');
       assert.ok(hints[1].includes('已经初始化过'), '第二条提示要覆盖「已初始化」场景');
       assert.ok(hints[1].includes('备份与恢复'));
@@ -318,7 +326,9 @@ describe('组件的成功分支接线（源码断言，已剔除注释）', () =
   const comp = codeOnly(read('src/pages/InitPage/RestoreFromBackup.tsx'));
 
   it('按 info.initialized 分支；清 token / 跳登录只在 initialized 分支里', () => {
-    assert.ok(comp.includes('const info = classifyRestoreSuccess(result.data);'));
+    // 🔴 期 6 第十四批：`classifyRestoreSuccess` 现在也收翻译器（它内部算的 countsText 是给用户看的文案）
+    //    ⇒ 调用点必须传 t。两种形状都认（不传 t 的那版是改造前的形状，已经不允许了）。
+    assert.ok(comp.includes('const info = classifyRestoreSuccess(result.data, t);'));
     assert.ok(comp.includes('if (info.initialized) {'));
     const branchIdx = comp.indexOf('if (info.initialized) {');
     const tokenIdx = comp.indexOf('window.localStorage.removeItem(INIT_RESTORE_TOKEN_KEY)');

@@ -9469,6 +9469,123 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.179 期 6 第十四批：.mdz 导入家族 / 迁移助手 / 定制页 / 初始化两个纯逻辑模块（53 条 → 0）—— 🔴 **欠条清零**：TOTAL 38 → 14，剩下的全是登记在册的永久例外；活体第一次真上传 .mdz 验到 ICU 组装的两种读法
+
+**交付**：`services/van-blog/importMdzCore.js`(23) + `importMdz.ts`(2) + `pages/InitPage/restoreCore.js`(16) +
+`pages/SystemConfig/tabs/migrate.tsx`(5) + `pages/InitPage/setupKeyCore.js`(4) + `tabs/Customizing.jsx`(4)
+= **53 条 → 0**（外加 3 个消费方接线：`Editor/index.jsx`、`RestoreFromBackup.tsx`、`InitPage/index.tsx`）；
+语言包 **1447 → 1475 key**（新组 **`import` / `migrate`**：28 新 / **复用 33**）；
+棘轮清单 **114 → 117 个文件**、🔴 **TOTAL 38 → 14（三笔欠条一次还清：restoreCore 16 / setupKeyCore 4 / Customizing 4）**、
+例外清单 **10 → 9 条**（移除 1 条、新增 1 条跨包契约断言，见 C 段）；`i18nKeyNaming` → **1475**；
+`localePackParity` 自动发现下界 **108 → 113 个文件 / 1920 → 1980 个调用点**（实测 114 / 1985）；繁中同形白名单 **+3**。
+🔴 **真实剩余：18 → 12 个文件 / 96 → 42 条**（累计 **97.8%**）；而且 🔴 这 42 条里 **26 条是登记在册的永久例外**
+（容器模板 6 + 识别标题 5 + 静态双语标签 3 + URL 锚点 2 + 已初始化 1 + 导出说明.md 1 + 登录失效 1）、
+**7 条是那个死代码重复文件**（`components/Editor/customContainer.tsx`，下一批删）⇒
+🔴 **后台源码里已经没有"欠着的"硬编码中文了**（棘轮 TOTAL 14 = 全部是永久例外，欠条 0）。
+🔴 **浏览器活体 27/27（zh-CN 8 + en-US 11 + zh-TW 8），problems 0、skipped 3**：
+迁移助手（卡片标题 / 那条注意 / 两个批量导入按钮）、定制页**四个 tab 标签**、
+🔴 **真的上传了一个 .mdz 小包**（一个 `.md` + 一张 1×1 PNG）走完导入全流程：
+阶段提示 → 结果弹窗标题 → **那条带可选 {dedup} 的 ICU 整句**（而且是**填充读法**：第二次上传同一张图 ⇒ 命中去重），
+外加 en-US **零汉字 + 零全角标点**、zh-TW **零简体专用字**。
+实采（en-US）：`Uploading the .mdz...` /
+`Imported "Probe Doc" - the content is now in the editor and takes effect after you save it` /
+🔴 `1 image was added to the image host (of which 1 matched an existing image by content and took no extra space), and the relative links in the post body were rewritten to image host URLs.`（**接缝单空格、无标点前空格**）。
+实采（zh-TW）：`正在上傳 .mdz…` / `已匯入《Probe Doc》—— 內容已填入編輯器，儲存後才生效` /
+`圖片入庫 1 張（其中 1 張依內容去重命中已有圖片，沒有重複佔空間），正文裡的相對連結已改寫成圖床地址。`。
+证据：`vanblog_dev/i18n-browser-evidence/phase5-import/`。
+
+#### A. 🔴 两处"账目与事实不符"：早就翻好了，却一直挂在欠条上
+1. `restoreCore.js` 挂着 **16 条**欠条，而它其实**早就接了注入式翻译器** —— 只是它把归一化后的翻译器
+   存进本地变量 `const tr = normalizeT(t)` 再用 `tr(id, defaultMessage)` 调用，而清点器只认 callee 叫 `t` / `formatMessage`
+   ⇒ 那些中文全被数成"裸中文"。修法：把 **`tr`** 登记进清点器口径（与上一批的 `rt` 同一套理由：签名完全一致）⇒ 16 → 8。
+2. 剩下 8 条是 `RESTORE_COUNT_LABELS`：一张 `[字段, 中文标签, i18n key]` 的表，中文被**间接**当 defaultMessage 传
+   （`normalizeT(t)(labelId, RESTORE_COUNT_LABELS[i][1])`）⇒ 清点器只认"t() 的第二个实参是**字面量**"这种形状。
+   修法：改成**函数版 + identity 视图**（`restoreCountLabels(t = identityTranslate)`），中文回到 defaultMessage 位 ⇒ 8 → 0。
+3. 同类第三处：`normalizeT(t)('common.unknownSize', '未知大小')` —— callee 是 **CallExpression** 而不是 Identifier
+   ⇒ 认不出来。修法：先 `const tr = normalizeT(t)` 再 `tr(…)`。
+4. `setupKeyCore.js` 那 4 条同理（模块级数组字面量）⇒ 改成 `setupKeyHints(t = IDENTITY_T)` + identity 视图。
+👉 🔴 **规矩：中文只能待在 `t()` 的第二个实参（字面量）位上。** 只要绕一层（数组下标、变量、`f()()` 立即调用），
+清点器就数不到 ⇒ 账目上看着"还欠着"，而实际上早就翻好了（或者反过来：看着干净，其实没接上）。
+👉 反过来说：**看到欠条先别急着"翻译"，先确认它是不是形状问题** —— 这一批 20 条里有 20 条都是形状问题，一条都不用新翻。
+
+#### B. 🔴 `.mdz` 导入家族：三种"不能翻"的东西混在一个文件里
+`importMdzCore.js` 的 `mdzFailureMessage(rawMessage)` 里有七类失败文案，而**分类靠的是正则匹配服务端返回的中文**
+（`/之外|zip-slip|\.\./` + `/成员|解包|拒绝/`、`/没有找到 Markdown/`、`/超过上限|总体积|成员数|炸弹/` …）：
+🔴 **那些正则是线路契约**（与 `requestError.js` 的 `登录失效`、`InitPage` 的 `已初始化` 同族），任何语言下都不许动；
+只有**返回给用户看的那一句**走 t（收成带 `{server}` 的 ICU 整句）。
+`importMdz.ts` 更隐蔽：它 `reject(new Error('网络错误：请求没有到达服务端'))` —— 那个中文 Error message
+**一路透传成用户文案**（`mdzFailureMessage` 认不出这两类 ⇒ 原样返回）。模块作用域拿不到 t、throw 点也不是渲染期
+⇒ 按"线路字面量 vs 显示文案"拆开：抛 **ASCII 哨兵** `MDZ_ERR_NETWORK` / `MDZ_ERR_TIMEOUT`，
+在显示点 `importMdzErrorMessage(err, t)` 才换成译文。
+👉 🔴 **Error message 也可能是文案**：判断标准是"它会不会被显示给用户"，不是"它是不是异常"。
+
+#### C. 🔴 一条永久例外**换了该待的地方**：`grep 初始化密钥`
+`setupKeyCore.js` 的 `初始化密钥` 原来登记在棘轮的 `REQUIRED_EXCEPTIONS` 里，理由是：
+**服务端启动日志打印的就是这个简体词**，用户要照着提示敲 `docker logs <容器名> 2>&1 | grep 初始化密钥`，
+翻译了它就 grep 不到（提示变成假的）。
+这一批把那个数组改成函数版之后，这条中文**不再是"裸中文"**（它进了 `t()` 的 defaultMessage 位）
+⇒ 棘轮那条"源码里必须还留着这段硬编码中文"的反向断言**不再适用**（条目已移除，清单 10 → 9）。
+🔴 但契约本身没有消失，只是**换了该待的地方**：现在要钉的是"**三份译文里**都必须原样留着这个简体命令"
+⇒ 在 `localePackParity` 新增一条跨包契约断言（`grep 初始化密钥` / `docker logs` / `setup.key` 三样，三份包都要有）。
+实测三份包本来就都留着（早期批次做对了）；变异对照 B39-M7 把繁中那份改成 `grep 初始化金鑰` ⇒ **红**。
+👉 🔴 **例外条目失效时，先问"它当初钉的**性质**是什么"，把性质搬到还管得着的地方**，不要因为形状变了就把性质丢了。
+
+#### D. 🔴 抓到两条**早期批次留下的口径漂移**（defaultMessage 与包值不一致）
+`init.restore.err.400`：源码写「升级 server **镜像后再恢复**」，包里写「升级 server **之后再来**」；
+`init.restore.err.fallback1`：源码写「…再到**「数据管理」导入**」，包里写「…在**「系统设置 → 备份与恢复」里恢复**」。
+🔴 两条的修法**方向相反**，判据是"哪一边是权威"：
+- `err.400`：包值是早期提升 key 时随手写的、译文没有依赖它 ⇒ **以源码为准改包**（三份一起改）。
+- `err.fallback1`：🔴 **zh-TW 与 en-US 的译文都是照着包里那版翻的**（`那個在「系統設定 → 備份與還原」裡還原` /
+  `restore that one under System settings → Backup & restore`）⇒ 改包会让三份一起失去一致性，
+  而且改包等于**改用户看得见的文案** ⇒ **以包为准改源码的 defaultMessage**（不改任何运行时行为）。
+  连带把 `initRestore.test.js` 里那条"提示语必须指路「数据管理」"的断言改成"必须指路「系统设置 → 备份与恢复」"——
+  🔴 判据要盯的**性质**是"把用户指到正确的入口"，不是某个字面词。
+👉 🔴 **漂移要修，但修哪一边要看译文跟着谁走：译文跟着谁，谁就是权威。**
+
+#### E. 🔴 `classifyRestoreSuccess` 内部漏传 t（调用点判据第 7 次立功）
+`classifyRestoreSuccess(data)` 内部会算 `countsText`（"文章 59 · 图片 93 …"，给用户看的文案），
+而它调 `formatRestoreCounts(d.counts)` **没传 t** ⇒ 那段计数文案会**永远中文**，不报错、界面上看不出差别。
+修法：`classifyRestoreSuccess(data, t)` + 调用点（`RestoreFromBackup.tsx`）传 t；既有单测是一条参调用 ⇒ 落 identity，逐字不变。
+🔴 同一批还有两处同族：`Editor/index.jsx` 仍然**解构**着 identity 常量 `IMPORT_PHASE_TEXT`（虽然已经不用了）
+⇒ identity 判据报出来（改成只解构函数版）；`setupKeyCore.getSetupKeyHints` 的 t 分支用
+`SETUP_KEY_HINTS.map((dm, i) => t(IDS[i], dm))`（拿 identity 常量当 defaultMessage 源）⇒ 改成统一走函数版。
+
+#### F. 🔴 变异对照第一次"打不红"是因为**没打在判据管的形状上**
+B39-M8 第一版把 `import.skippedHeader` 的 ICU plural 拆掉 ⇒ 英文变成 `{count} image references were not imported…`，
+🔴 **全绿**。原因不是判据坏了：复数判据是**收窄过的**（只认"`{占位符}` **紧跟复数名词**"，
+否则散文里的常量数字 `every 10 minutes` / `5 per 10 minutes` 会大量假阳性 —— 见 `i18nPluralConvention.test.js` 的头注释），
+而拆掉之后紧跟占位符的是**单数** `image` ⇒ 不命中。改打 `import.imagesLine`（拆掉后是 `{count} images …`）⇒ 立刻红。
+👉 🔴 **"变异打不红"有三种原因，要分清**：① 判据真的有缺口（上一批的占位符对账、中文标点、中文对象键）；
+② 变异没打在判据管的形状上（本条）；③ 那条性质本来就没人管（要新增判据）。
+**先分清是哪一种，再决定是补判据、还是改变异** —— 一律"改变异让它红"就是把尺子调成橡皮筋。
+
+#### G. 🔴 活体第一次真跑 .mdz 导入（不是只看静态文案）
+造了个 662 字节的 `.mdz`（`probe-doc.md` + `probe-doc.assets/pixel.png`，front matter 的 title 用 **ASCII**
+——第一版写的是中文标题 `探针文档`，结果它出现在 en-US 的结果弹窗里，被"零汉字"判据当成缺陷报了假红），
+在编辑器页找到 `accept` 含 `.mdz` 的 file input、`setInputFiles` 上传，然后：
+① 阶段提示是 `message.loading(…, 0)`（不自动关，但会被 `hide()` 收掉）⇒ **连续轮询采**，把出现过的都记下来
+（第一版只等 1.2 秒采一次，那条"正在上传 .mdz…"已经过去了）；
+② 结果弹窗的 `.ant-modal-title` 采不到（这个弹窗的标题渲染在 body 里）⇒ **标题与正文合起来判**；
+③ 🔴 **第二次上传同一张图会命中内容去重** ⇒ 正好验到 `{dedup}` 的**填充读法**
+（`1 image was added to the image host (of which 1 matched an existing image by content and took no extra space), and …`）——
+这是本批最容易出接缝的一句（可选片段直接插在计数与后半句之间，**没有分隔符**），活体证明单空格无粘连。
+👉 🔴 **能造数据就不要只看静态文案**：这一条的价值高于前面所有静态断言之和（它同时验了 ICU 组装、
+占位符喂值、可选片段的两种读法、以及 message.loading 的生命周期）。
+
+#### H. 基线
+- admin `node --test` **777 tests / 173 suites / 0 fail**（+1 = C 段那条跨包契约断言）；
+- 变异对照 **9/9**（定制页 tab 退回硬编码 / 改读 identity 常量 / `describeImportOutcome` 拿掉 t /
+  `importMdzErrorMessage` 拿掉 t / 🔴 `classifyRestoreSuccess` 拿掉 t（本批真缺陷）/
+  🔴 `setupKeyCore` 改回读 identity 常量（本批真缺陷）/ 🔴 把 `grep 初始化密钥` 翻掉（新契约断言）/
+  英文 ICU plural 拆掉 / 语义空操作）；
+- 语言包 **1475 key** ×3（重复 0）；`--zh-tw-audit`：1475 key / **797** 个不同汉字 / **0 命中**（字表 69 字）；
+- 棘轮 **117 个文件 / 🔴 TOTAL 14（欠条 0）**；admin 类型门禁 **31/0**；生产构建 rc=0；
+- 🔴 **真实剩余：12 个文件 / 42 条** = 26 条永久例外 + 7 条死代码 + 9 条零散。
+  下一批（**期 6 收官**）：删死代码 `components/Editor/customContainer.tsx`（7 条，先证明没人 import + 构建验证）、
+  给 `customContainerRemark.js` 那 5 条识别标题登记例外（它与容器模板是**同一套契约的两端**）、
+  再核一遍剩下的零散；然后转 **期 9 服务端**（`user.provider` 5 条模板 → `static/local` 18 → 备份族 36 →
+  `init.controller` 11 → 演示站族 100）。
+
 ### 7.178 期 6 第十三批：后台首页（Welcome）整块 44 条 → 0 —— 🔴 图表的"两栖字符串"（数据字段名 == 坐标轴文字）必须**拆成两份**，以及第二个清点口径缺口（中文对象键数不到）
 
 **交付**：`pages/Welcome/index.jsx`(3 个 tab 标签) + `tabs/overview.jsx`(14) + `tabs/viewer.jsx`(18) + `tabs/article.jsx`(9)

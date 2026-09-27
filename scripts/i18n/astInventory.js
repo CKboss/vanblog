@@ -181,7 +181,11 @@ function collectChinese(src, label, options) {
         //    那些地方 🔴 不能调 hook（会违反 hooks 规则），也 🔴 不能在模块加载期取 intl（umi 的 locale
         //    运行时还没初始化 ⇒ undefined）⇒ 做成"调用时才 getIntl(getLocale())"的 `rt(id, defaultMessage, values)`。
         //    签名与 `t` 完全一致，所以三处判据（收调用点 / 认 defaultMessage 位 / hook 依赖）都按同一套口径处理。
-        if (cn === 't' || cn === 'formatMessage' || cn === 'rt') {
+        // 🔴 `tr` = **注入式翻译器在本地的别名**（`restoreCore.js` 的 `const tr = normalizeT(t)`：
+        //    它把"没传 t"归一成 identity 插值器，之后统一用 `tr(id, defaultMessage, values)` 调用）。
+        //    签名与 `t` 完全一致 ⇒ 三处判据都按同一套口径处理；不认它的话那些中文会被当成
+        //    "裸中文"永远挂在账上（实测：restoreCore.js 因此长期挂着 16 条**欠条**，其实早就翻好了）。
+        if (cn === 't' || cn === 'formatMessage' || cn === 'rt' || cn === 'tr') {
           (nd.arguments || []).forEach((a, i) => {
             if (i === 1) return;
             if (a && typeof a === 'object') collectFromNode(a);
@@ -223,7 +227,11 @@ function collectChinese(src, label, options) {
         //    那些地方 🔴 不能调 hook（会违反 hooks 规则），也 🔴 不能在模块加载期取 intl（umi 的 locale
         //    运行时还没初始化 ⇒ undefined）⇒ 做成"调用时才 getIntl(getLocale())"的 `rt(id, defaultMessage, values)`。
         //    签名与 `t` 完全一致，所以三处判据（收调用点 / 认 defaultMessage 位 / hook 依赖）都按同一套口径处理。
-        if (cn === 't' || cn === 'formatMessage' || cn === 'rt') {
+        // 🔴 `tr` = **注入式翻译器在本地的别名**（`restoreCore.js` 的 `const tr = normalizeT(t)`：
+        //    它把"没传 t"归一成 identity 插值器，之后统一用 `tr(id, defaultMessage, values)` 调用）。
+        //    签名与 `t` 完全一致 ⇒ 三处判据都按同一套口径处理；不认它的话那些中文会被当成
+        //    "裸中文"永远挂在账上（实测：restoreCore.js 因此长期挂着 16 条**欠条**，其实早就翻好了）。
+        if (cn === 't' || cn === 'formatMessage' || cn === 'rt' || cn === 'tr') {
           (nd.arguments || []).forEach((a, i) => {
             if (i === 1) return; // 🔴 第 2 个实参 = defaultMessage 位
             walkSkip(a);
@@ -350,7 +358,9 @@ function collectTCalls(src, label) {
           ? callee.property.name || callee.property.value
           : null;
     // 🔴 `rt` 见上面 collectTCalls 里的注释：非组件作用域的懒取翻译器，口径与 t 相同
-    if (name !== 't' && name !== 'formatMessage' && name !== 'rt') return;
+    // 🔴 `rt` / `tr` 见上面 collectTCalls 里的注释：一个是非组件作用域的懒取翻译器，
+    //    一个是注入式翻译器的本地别名，口径都与 `t` 相同。
+    if (name !== 't' && name !== 'formatMessage' && name !== 'rt' && name !== 'tr') return;
     const args = nd.arguments || [];
     const first = args[0];
     let id = null;
@@ -669,6 +679,7 @@ const KEY_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
  *   ⚠️ `error.*` 是**服务端错误码专用**命名空间（`i18nServerErrorCodes.test.js` 有反向断言
  *   "包里的 error.* 必须都有对应的码"）⇒ 新文案不要塞进去，用 `request.*` 或自己的组
  * - `restore` 忘记密码 / 用恢复密钥重置账号那个页面
+ * - `import` .mdz 导入（阶段进度 / 七类失败文案 / 结果描述）；`migrate` 迁移助手（批量导入文章与草稿）
  * - `welcome` 后台首页（三个 tab：数据概览 / 访客统计 / 文章分析；含统计卡片、图表标题与坐标轴别名）
  * - `app` / `global` umi 运行时外壳（升级弹窗、站点 URL 警告、离线与"有新内容"提示、协作模式标题）
  * - `collab` 协作者弹窗（11 个权限标签 + 四个字段）；`install` 本站初始化记录横幅；`footer` 页脚版本；
@@ -703,12 +714,14 @@ const REGISTERED_KEY_GROUPS = [
   'footer',
   'global',
   'img',
+  'import',
   'init',
   'install',
   'log',
   'login',
   'logout',
   'menu',
+  'migrate',
   'password',
   'pathname',
   'pipeline',

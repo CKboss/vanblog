@@ -32,15 +32,29 @@ const SETUP_KEY_FIELD = 'setupKey';
  * 服务端 400 的 message 已经原样展示，这里是运维视角的补充
  * （反复打印的日志块 / docker logs / 挂载目录 / 重启语义）。
  */
-const SETUP_KEY_HINTS = [
-  // ⚠️ 这些提示是当**纯文本**渲染的（`<li>{hint}</li>`，见 InitPage/index.tsx 与
-  //    RestoreFromBackup.tsx），不走 markdown 渲染器 —— 写 `**强调**` 用户会看到字面星号。
-  //    要强调就用中文引号「」或直接改句式。
-  '新版安装默认要求初始化密钥（VANBLOG_INIT_REQUIRE_SETUP_KEY 默认开启）：站点未初始化期间，server 会在启动时打印密钥块，之后每 10 分钟重印一次（VANBLOG_SETUP_KEY_REMIND_MINUTES 可调，0=只印一次），直到完成初始化',
-  '拿密钥：docker logs <容器名> 2>&1 | grep 初始化密钥；或直接读挂载日志目录里的 setup.key 文件（容器内默认 /var/log/setup.key；裸机部署在 config.yaml 的 log 目录下），复制「完整一行」，不要带多余字符',
-  '密钥每次重启 vanblog 都会重新生成；初始化完成后服务端自动删除该文件、停止提醒，两条初始化接口也不再接受密钥',
-  '只有运维显式设置了 VANBLOG_INIT_REQUIRE_SETUP_KEY=false（逃生口，不推荐）时才不要求密钥 —— 那种情况下这一栏留空提交即可',
+/**
+ * 🔴 多语言：改成**函数版 + identity 视图**（与 `accessPassword.js` / `walineEmailFields.js` 同一套做法）。
+ * 原来这四条中文待在一个模块级数组字面量里 ⇒ 清点器把它们数成"裸中文"（长期挂着 4 条欠条），
+ * 而实际上 `getSetupKeyHints(t)` 早就能出译文 —— 🔴 账目与事实不符。
+ * 现在中文只待在 `t()` 的 defaultMessage 位；不传 t ⇒ 输出与改造前**逐字相同**
+ * （`tests/unit/initSetupKey.test.js` 断言的就是 `SETUP_KEY_HINTS` 的内容，一条都没改）。
+ */
+const IDENTITY_T = (id, defaultMessage, values) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+
+const setupKeyHints = (t = IDENTITY_T) => [
+  t('init.setupKey.hint1', '新版安装默认要求初始化密钥（VANBLOG_INIT_REQUIRE_SETUP_KEY 默认开启）：站点未初始化期间，server 会在启动时打印密钥块，之后每 10 分钟重印一次（VANBLOG_SETUP_KEY_REMIND_MINUTES 可调，0=只印一次），直到完成初始化'),
+  t('init.setupKey.hint2', '拿密钥：docker logs <容器名> 2>&1 | grep 初始化密钥；或直接读挂载日志目录里的 setup.key 文件（容器内默认 /var/log/setup.key；裸机部署在 config.yaml 的 log 目录下），复制「完整一行」，不要带多余字符'),
+  t('init.setupKey.hint3', '密钥每次重启 vanblog 都会重新生成；初始化完成后服务端自动删除该文件、停止提醒，两条初始化接口也不再接受密钥'),
+  t('init.setupKey.hint4', '只有运维显式设置了 VANBLOG_INIT_REQUIRE_SETUP_KEY=false（逃生口，不推荐）时才不要求密钥 —— 那种情况下这一栏留空提交即可'),
 ];
+
+/** identity 视图（不传 t 时逐字等于改造前那个数组） */
+const SETUP_KEY_HINTS = setupKeyHints();
 
 /**
  * 🔴 与 `SETUP_KEY_HINTS` **一一对应、顺序必须一致**的 i18n key。
@@ -65,10 +79,14 @@ const SETUP_KEY_HINT_IDS = [
  *   React 层传 `(id, dm) => intl.formatMessage({ id, defaultMessage: dm })`。
  */
 function getSetupKeyHints(t) {
-  if (typeof t !== 'function') {
-    return SETUP_KEY_HINTS.slice();
-  }
-  return SETUP_KEY_HINTS.map((defaultMessage, i) => t(SETUP_KEY_HINT_IDS[i], defaultMessage));
+  // 🔴 期 6 第十四批：这里原来读 identity 常量 `SETUP_KEY_HINTS`（那份永远是中文）
+  //    ⇒ 改成调**函数版**：不传 t 时 `setupKeyHints()` 落到 IDENTITY_T，输出与改造前逐字相同；
+  //    传了 t 就走译文。（localePackParity 有一条判据专门盯"已接 i18n 的文件不许再读 identity 常量"。）
+  // 🔴 归一化后**统一走函数版**：不传 t（或传了非函数）⇒ 落到 IDENTITY_T，输出与改造前逐字相同。
+  //    （原来这里的 t 分支是 `SETUP_KEY_HINTS.map((dm, i) => t(SETUP_KEY_HINT_IDS[i], dm))` —— 读 identity 常量
+  //    当 defaultMessage 源；`SETUP_KEY_HINT_IDS` 仍然导出，parity 里那条"IDs ↔ 三份包"的对账照旧生效。）
+  const tr = typeof t === 'function' ? t : IDENTITY_T;
+  return setupKeyHints(tr);
 }
 
 /** 一个响应 body（对象）是不是"要求初始化密钥"的拒绝 */

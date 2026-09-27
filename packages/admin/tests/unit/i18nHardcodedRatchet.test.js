@@ -58,9 +58,20 @@ const BUDGET = {
   'src/pages/InitPage/index.tsx': 1,
   'src/pages/InitPage/RestoreFromBackup.tsx': 0,
   // 4 条 = 要照着敲的命令与启动日志标签，刻意保留简体
-  'src/pages/InitPage/setupKeyCore.js': 4,
+  // 🔴 期 6 第十四批：4 → **0**。那四条提示原来是模块级数组字面量（identity 视图），
+  //   现在改成 `setupKeyHints(t = IDENTITY_T)` + identity 视图（与 accessPassword.js 同一套做法）
+  //   ⇒ 中文只待在 t() 的 defaultMessage 位。🔴 不传 t 时输出与改造前逐字相同
+  //   （initSetupKey.test.js 的既有断言一条没改就全绿）。
+  'src/pages/InitPage/setupKeyCore.js': 0,
   // 16 条 = 注入式翻译器的 identity 回落分支（不传 t 时必须返回中文，那是刻意设计）
-  'src/pages/InitPage/restoreCore.js': 16,
+  // 🔴 期 6 第十四批：16 → **0**（最大的一笔欠条一次还清）。两处改造：
+  //   ① 清点器口径登记了 **`tr`**（`const tr = normalizeT(t)` 那个本地别名）—— 它的签名与 t 完全一致，
+  //      不认它的话那 8 条早就翻好的文案会永远挂在账上（🔴 账目与事实不符）；
+  //   ② `RESTORE_COUNT_LABELS` 从"数组里存中文标签、再间接当 defaultMessage 传"改成
+  //      **函数版 + identity 视图**（`restoreCountLabels(t)`），中文回到 t() 的 defaultMessage 位；
+  //   ③ `normalizeT(t)('id', '中文')` 这种**callee 是 CallExpression** 的写法清点器认不出来
+  //      ⇒ 一律先 `const tr = normalizeT(t)` 再 `tr(…)`。
+  'src/pages/InitPage/restoreCore.js': 0,
   // 1 条 = 静态双语 tooltip「语言 · Language」
   'src/pages/user/Login/index.jsx': 1,
   // 🔴 期 6 第十二批：8 → **1**（那 1 条是静态双语标签 `语言 · Language`，已在例外清单里）。
@@ -79,7 +90,8 @@ const BUDGET = {
   //   ⇒ 只翻这一侧会造成"界面英文、文档仍中文"的可见不一致（详见手册 §7.139 A）。
   //   ⚠️ 所以这 4 条**刻意不登记进 REQUIRED_EXCEPTIONS**：那张清单的语义是"改掉会破坏行为"
   //   （协议字符串 / 要照着敲的命令 / 静态双语标签），而这 4 条只是**欠着**，tab 那批落地时必须归 0。
-  'src/pages/SystemConfig/tabs/Customizing.jsx': 4,
+  // 🔴 期 6 第十四批：4 → **0**（最后一条"定制"页的欠条还清：四个 tab 标签）
+  'src/pages/SystemConfig/tabs/Customizing.jsx': 0,
   // 🔴 期 9 第四批（2026-09-26）：回收站抽屉两个文件都已全量接 i18n ⇒ 预算 0。
   //   ⚠️ `recycleCore.js` 是**注入式翻译器**模式（纯 JS、被 node --test 直接 require），
   //   它的中文全部待在 `t()` 的 defaultMessage 位 ⇒ 裸中文 0；
@@ -374,6 +386,14 @@ const BUDGET = {
   'src/pages/Welcome/tabs/overview.jsx': 0,
   'src/pages/Welcome/tabs/viewer.jsx': 0,
   'src/pages/Welcome/tabs/article.jsx': 0,
+  // 🔴 期 6 第十四批：.mdz 导入家族与迁移助手
+  //   ⚠️ `importMdzCore.js` 里 `mdzFailureMessage` 的那些**正则是在匹配服务端返回的中文**
+  //   （zip-slip / 没有找到 Markdown / 超过上限 …）⇒ 线路契约，不译；只有返回给用户看的那句走 t。
+  //   ⚠️ `importMdz.ts` 原来抛的是**中文 Error message**（会一路透传成用户文案）⇒ 改成 ASCII 哨兵
+  //   `MDZ_ERR_NETWORK` / `MDZ_ERR_TIMEOUT`，在显示点 `importMdzErrorMessage(err, t)` 才换成译文。
+  'src/services/van-blog/importMdzCore.js': 0,
+  'src/services/van-blog/importMdz.ts': 0,
+  'src/pages/SystemConfig/tabs/migrate.tsx': 0,
 };
 // 🔴 48 → 52（2026-09-25 期 3 第二批）：**这是一张欠条，不是新预算。**
 //   涨的 4 条全部来自上面 Customizing 那四个暂缓的内层页签标签；期 3 第一批时两个新文件预算都是 0，
@@ -402,12 +422,17 @@ const BUDGET = {
 //   ⇒ 账目现在是：🔴 **61 = 48（目标底）+ 4（Customizing 欠条）+ 9（永久例外：Caddy URL 1、导出说明.md 1、
 //   登录失效 1、容器模板 6）**。
 //   谁再调大这个数字都要在这里写清"涨的是哪几条、是欠条还是永久例外、什么时候还"。
-const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 38（🔴 期 6 第十二批：app.jsx 18 → 1、user/Restore 8 → 1；上一批曾 61 → 62）（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
+const TOTAL_BUDGET = Object.values(BUDGET).reduce((a, b) => a + b, 0); // = 14（🔴 期 6 第十四批：三笔欠条还清 ⇒ 只剩登记在册的永久例外）（🔴 期 6 第十一批：+1 = About 页那个指向中文 README 的 URL 锚点）
 
 /** 🔴 刻意保留的例外：必须仍然存在（反向钉住，防止被"好心翻译掉"而破坏行为）。 */
 const REQUIRED_EXCEPTIONS = [
   { file: 'src/pages/InitPage/index.tsx', text: '已初始化', why: '协议字符串：匹配服务端 HttpException 文本，翻译会静默破坏初始化检测' },
-  { file: 'src/pages/InitPage/setupKeyCore.js', text: '初始化密钥', why: '要照着敲进 shell 的命令与启动日志标签；服务端输出就是简体，翻译了 grep 抓不到' },
+  // 🔴 期 6 第十四批**移除**了这里原来的一条例外（`setupKeyCore.js` 的 `初始化密钥`）：
+  //   它不再是"硬编码字面量"，而是待在 `t('init.setupKey.hint2', …)` 的 defaultMessage 位
+  //   ⇒ 本清单的反向断言（"这段中文必须还在文件里、且是裸的"）不再适用。
+  //   🔴 但那条**真正的契约**（用户要照着敲的 `grep 初始化密钥` 必须与服务端的简体日志输出逐字相同，
+  //   三份包都不许翻译它）改由 `localePackParity` 里新增的**跨包契约断言**钉住 —— 那才是它该待的地方：
+  //   本清单钉的是"源码里必须留着硬编码中文"，而这条要钉的是"三份**译文**里都必须留着这个简体命令"。
   { file: 'src/pages/user/Login/index.jsx', text: '语言 · Language', why: '静态双语 tooltip，服务于"还没切语言的人"，刻意不走 t()' },
   // 🔴 期 6 第一批新增（第 7 类例外形状：**被插入用户文章正文的 Markdown 模板**）
   //   这 6 条与 `customContainerRemark.js` 的 5 个标题是**同一套契约的两端**：一端写进文章、一端负责识别
@@ -553,7 +578,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 11 → 13（2026-09-25 期 3 第二批）：新增 `CommentSystem.jsx`（预算 0）与 `Customizing.jsx`
   //   （预算 4 = 四个**已裁定暂缓**的内层页签标签）⇒ 总预算 48 → 52，那是**欠条**，理由与还款条件
   //   写在 TOTAL_BUDGET 上面那段注释里（🔴 调大总预算必须在那里写清"涨的是哪几条、什么时候还"）。
-  assert.strictEqual(Object.keys(BUDGET).length, 114, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
+  assert.strictEqual(Object.keys(BUDGET).length, 117, '清单文件数变了 ⇒ 必须是有意的，并要在注释里说明');
   // 🔴 52 → 53：涨的 1 条是 Caddy 页的 URL 锚点，属**永久例外**（理由写在 BUDGET 与 TOTAL_BUDGET 的注释里）
   // 🔴 53 → 54（2026-09-26 期 5 第六批）：涨的 1 条是 `UpdateModal` 的**欠条** ——
   //   `clearConfirmTitle` / `clearConfirmContent` 的实参「这篇文章」，模板本体在服务层 accessPassword.js，
@@ -573,7 +598,7 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   //   导出说明.md 1、Caddy URL 锚点 1、About README 锚点 1）
   //   + 23 条欠条（restoreCore 16 / setupKeyCore 3 / Customizing 4）。
   //   ⚠️ 与 `i18nSharedImpl.test.js` 里那个钉死的总数是**同一个数**：改一处就要改另一处。
-  assert.strictEqual(TOTAL_BUDGET, 38, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
+  assert.strictEqual(TOTAL_BUDGET, 14, '总预算变了 ⇒ 只允许调小；调大需要在注释里写明理由');
   // 🔴 4 → **5**（2026-09-26 期 3 第五批）：新增第 4 类例外形状 —— **指向中文文档的 URL 锚点**
   //   （Caddy 页那条 FAQ 链接；前三类是协议字符串 / 要照着敲的命令 / 静态双语标签）。
   // 🔴 5 → **6**（2026-09-26 期 7 第三批）：新增第 5 类例外形状 —— **服务端产物的文件名**
@@ -582,5 +607,5 @@ test('i18n 棘轮 · 预算不得被悄悄放宽：清单条数与总预算都�
   // 🔴 6 → **7**（期 7 第五批）：新增第 6 类例外形状 —— **与别层比对的协议字面量**
   //   （`requestError.js` 的 `SERVER_SESSION_EXPIRED_TEXT`；前五类：协议字符串 / 要照着敲的命令 /
   //   静态双语标签 / 中文文档 URL 锚点 / 服务端产物文件名）。
-  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 10, '例外清单条数变了 ⇒ 必须是有意的');
+  assert.strictEqual(REQUIRED_EXCEPTIONS.length, 9, '例外清单条数变了 ⇒ 必须是有意的');
 });

@@ -104,7 +104,8 @@ export default function RestoreFromBackup(props: RestoreFromBackupProps = {}) {
       setPhase('idle');
       setPercent(0);
       if (result.ok) {
-        const info = classifyRestoreSuccess(result.data);
+        // 🔴 t 是尾参：它内部算的 countsText 是给用户看的文案
+        const info = classifyRestoreSuccess(result.data, t);
         // 细节区块：两种成功分支共用；每个字段都是可选的，服务端形状变了
         // 也只是少显示几行，不会崩
         const detail = (

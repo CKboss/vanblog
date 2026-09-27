@@ -109,7 +109,7 @@ export default {
   'init.restore.err.429':
     'Too many initialization requests (rate limit: 5 per 10 minutes). Please try again later.',
   'init.restore.err.400':
-    'This file is not a full-site backup exported by this site, or it was produced by a newer version of VanBlog that this server cannot read. Check where the file came from; if it really is a newer backup, upgrade the server first and try again.',
+    'This file is not a full-site backup exported by this site, or it was produced by a newer version of VanBlog that this server cannot read. Check where the file came from; if it really is a newer backup, upgrade the server image and then restore it again.',
   'init.restore.err.fallback1':
     'Make sure you picked an archive produced by “Export full-site backup” (filenames look like vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz). The JSON data export from the console does not go through here — restore that one under “System settings → Backup & restore”.',
   'init.restore.err.fallback2':
@@ -1744,5 +1744,40 @@ export default {
   'welcome.tagCount': 'Tags',
   'welcome.chartCategoryPie': 'Categories pie chart',
   'welcome.chartTagColumn': 'Posts per tag (top N bar chart)',
+
+
+  // ── 🔴 期 6 第十四批（28 keys）── 英文人工写（子代理起草、父代理跑完五道闸门：key 集合 / 无单引号无汉字
+  //    无全角标点 / 占位符对账 / 繁中零简体字 / ICU 复数）。
+  //    🔴 `import.imagesDedupNote` **带前导空格**（它插在 {count} 与后半句之间，没有分隔符）；
+  //    `import.skippedItem` / `skippedMore` 带 `· ` 项目符号前缀。其余值都不许带首尾空格。
+  //    🔴 ICU plural 四处：imagesLine / imagesDedupNote / skippedHeader / skippedMore（子消息一律用 #）。
+  'import.phaseUpload': 'Uploading the .mdz...',
+  'import.phaseIngest': 'Importing images... (the server unpacks the archive and writes the images into the image host, which may take from a few seconds to tens of seconds)',
+  'import.errZipSlip': 'This .mdz contains a member that would be written outside the unpack directory (a zip-slip attack signature), so the import was rejected before any data was written. The server said: {server}',
+  'import.errNoMarkdown': 'No Markdown file (*.md) was found in this .mdz. An .mdz should be a zip holding one .md plus a same-named .assets image folder, which is the shape of the Typora image pack that the admin export produces. The server said: {server}',
+  'import.errTooLarge': 'This .mdz goes over the size or member count limit once unpacked (zip bomb protection), so the import was rejected. The server said: {server}',
+  'import.errNotMdz': 'This is not a valid .mdz file (an .mdz is really a zip, so the file may be damaged or its extension may have been changed). The server said: {server}',
+  'import.errNoFile': 'The server did not receive a file: choose the .mdz file again and upload it. {server}',
+  'import.errAuth': 'Your login has expired or you do not have permission. Sign in again before importing. {server}',
+  'import.errNoReason': 'Import failed: the server did not give a reason',
+  'import.imagesLine': '{count, plural, one {# image was added to the image host} other {# images were added to the image host}}{dedup}, and the relative links in the post body were rewritten to image host URLs.',
+  'import.imagesDedupNote': ' (of which {count, plural, one {# matched an existing image by content and took no extra space} other {# matched existing images by content and took no extra space}})',
+  'import.passwordDroppedNote': 'The original post had an access password, so set it again after the import (for security, the password does not travel with the file; just type a new one in Edit info).',
+  'import.skippedHeader': '{count, plural, one {# image reference was not imported (the link was left as it is):} other {# image references were not imported (the links were left as they are):}',
+  'import.skippedItem': '· {name} - {reason}',
+  'import.unknownReason': 'Unknown reason',
+  'import.skippedMore': '· ... {count, plural, one {# image reference skipped in total} other {# image references skipped in total}}',
+  'import.importedTitle': 'Imported "{title}" - the content is now in the editor and takes effect after you save it',
+  'import.untitled': 'Untitled',
+  'import.errNetwork': 'Network error: the request never reached the server',
+  'import.errTimeout': 'The request timed out',
+  'migrate.batchUploadDone': 'Batch upload finished!',
+  'migrate.batchImportArticles': 'Batch import posts',
+  'migrate.batchImportDrafts': 'Batch import drafts',
+  'migrate.categoryWarning': 'Note: when you use the migration assistant to import posts or drafts in batch, the category may end up empty and you will need to fix it by hand later',
+  'sysconf.customizing.tabCss': 'Custom CSS',
+  'sysconf.customizing.tabScript': 'Custom Script',
+  'sysconf.customizing.tabHtmlBody': 'Custom HTML (body)',
+  'sysconf.customizing.tabHtmlHead': 'Custom HTML (head)',
 
 };

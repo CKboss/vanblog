@@ -12,6 +12,19 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { mdzFailureMessage } = require('./importMdzCore');
 
+/**
+ * 🔴 多语言：**注入式翻译器**（尾参 `t`）。这是服务层网络模块（模块作用域拿不到 hook，
+ * 也不能在加载期取 intl ⇒ 会拿到 undefined）⇒ 由调用方（编辑器）在渲染期把 t 传进来；
+ * 🔴 不传 t ⇒ 输出与改造前**逐字相同**。
+ */
+const IDENTITY_T = (id: string, defaultMessage: string, values?: Record<string, any>) =>
+  values
+    ? String(defaultMessage).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, key) =>
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole,
+      )
+    : String(defaultMessage);
+type InjectedT = (id: string, defaultMessage: string, values?: Record<string, any>) => string;
+
 export type MdzImportPhase = 'upload' | 'ingest';
 
 export interface ImportMdzOptions {
@@ -61,8 +74,12 @@ export function importMdzFile(file: File | Blob, opts?: ImportMdzOptions): Promi
     };
     // 上传字节全部出去之后，剩下的时间都花在服务端解包+图片入库上
     xhr.upload.onload = () => notifyIngest();
-    xhr.onerror = () => reject(new Error('网络错误：请求没有到达服务端'));
-    xhr.ontimeout = () => reject(new Error('请求超时'));
+    // 🔴 期 6 第十四批：这两句原来是**中文 Error message**，而它会一路透传成给用户看的文案
+    //    （`mdzFailureMessage` 认不出这两种情况 ⇒ 原样返回）。模块作用域里拿不到 t，
+    //    而在 throw 点翻译又不可能（这里不是渲染期）⇒ 按"线路字面量 vs 显示文案"拆开：
+    //    抛**ASCII 哨兵**，在显示点（`importMdzErrorMessage(err, t)`）才换成译文。
+    xhr.onerror = () => reject(new Error(MDZ_ERR_NETWORK));
+    xhr.ontimeout = () => reject(new Error(MDZ_ERR_TIMEOUT));
     xhr.onload = () => {
       notifyIngest();
       let body: any = null;
@@ -85,10 +102,24 @@ export function importMdzFile(file: File | Blob, opts?: ImportMdzOptions): Promi
   });
 }
 
-/** 给调用方的统一失败文案（分类逻辑在纯模块里，方便 node:test） */
-export function importMdzErrorMessage(err: unknown): string {
+/** 🔴 两条网络层失败的**哨兵**（不是给用户看的文案；显示文案在 `importMdzErrorMessage` 里按语言取） */
+export const MDZ_ERR_NETWORK = '__mdz_network_error__';
+export const MDZ_ERR_TIMEOUT = '__mdz_request_timeout__';
+
+/**
+ * 给调用方的统一失败文案（分类逻辑在纯模块里，方便 node:test）。
+ * 🔴 t 是**尾参**（注入式翻译器）；不传 ⇒ 输出与改造前逐字相同。
+ */
+export function importMdzErrorMessage(err: unknown, t?: InjectedT): string {
   const msg = err instanceof Error ? err.message : String(err || '');
-  return mdzFailureMessage(msg);
+  const tr = t || IDENTITY_T;
+  if (msg === MDZ_ERR_NETWORK) {
+    return tr('import.errNetwork', '网络错误：请求没有到达服务端');
+  }
+  if (msg === MDZ_ERR_TIMEOUT) {
+    return tr('import.errTimeout', '请求超时');
+  }
+  return mdzFailureMessage(msg, tr);
 }
 
 export const IMPORT_MDZ_ENDPOINT = ENDPOINT;

@@ -168,14 +168,14 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/components/LogoutButton/index.jsx': 0,
     'src/pages/InitPage/index.tsx': 1,
     'src/pages/InitPage/RestoreFromBackup.tsx': 0,
-    'src/pages/InitPage/setupKeyCore.js': 4,
-    'src/pages/InitPage/restoreCore.js': 16,
+    'src/pages/InitPage/setupKeyCore.js': 0,
+    'src/pages/InitPage/restoreCore.js': 0,
     'src/pages/user/Login/index.jsx': 1,
     'src/pages/user/Restore/index.jsx': 1,
     'src/pages/SystemConfig/tabs/WalineTab.jsx': 0,
     'src/pages/SystemConfig/tabs/ImgTab.jsx': 0,
     'src/pages/SystemConfig/tabs/CommentSystem.jsx': 0,
-    'src/pages/SystemConfig/tabs/Customizing.jsx': 4,
+    'src/pages/SystemConfig/tabs/Customizing.jsx': 0,
     'src/components/RecycleBin/index.jsx': 0,
     'src/components/RecycleBin/recycleCore.js': 0,
     'src/pages/SystemConfig/tabs/Token.tsx': 0,
@@ -279,6 +279,9 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     'src/pages/Welcome/tabs/overview.jsx': 0,
     'src/pages/Welcome/tabs/viewer.jsx': 0,
     'src/pages/Welcome/tabs/article.jsx': 0,
+    'src/services/van-blog/importMdzCore.js': 0,
+    'src/services/van-blog/importMdz.ts': 0,
+    'src/pages/SystemConfig/tabs/migrate.tsx': 0,
   };
   let total = 0;
   for (const [rel, want] of Object.entries(EXPECTED)) {
@@ -296,11 +299,13 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
   }
   assert.strictEqual(
     total,
-    38,
-    // 🔴 62 → **38**（期 6 第十二批）：`app.jsx` 18 → 1（−17，那条是头部语言切换器的静态双语
-    //    title `语言 · Language`）、`user/Restore` 8 → 1（−7，同样是静态双语标签）。
-    //    口径：本处 EXPECTED 里所有条目**实际**裸中文之和 = 15 条永久例外 + 23 条欠条
-    //    （欠条：restoreCore 16 / setupKeyCore 3 / Customizing 4）。
+    14,
+    // 🔴 38 → **14**（期 6 第十四批）：三笔欠条一次还清（restoreCore 16 → 0、setupKeyCore 4 → 0、
+    //    Customizing 4 → 0）⇒ 现在这个数字**全部是登记在册的永久例外**，一条欠条都没有了。
+    //    ⚠️ setupKeyCore 的 `初始化密钥` 原来是清单里的一条例外，现在它待在 t() 的 defaultMessage 位
+    //    ⇒ 棘轮那条反向断言不再适用（条目已移除），🔴 真正的契约（三份译文里都要留着
+    //    `grep 初始化密钥`）改由 localePackParity 的跨包契约断言钉住。
+    // 🔴 62 → **38**（期 6 第十二批）：`app.jsx` 18 → 1、`user/Restore` 8 → 1（都是静态双语标签）。
     //    ⚠️ 这个数与棘轮的 TOTAL_BUDGET 是**同一个数**（两份必须一致），改一处就要改另一处。
     // 🔴 55 → 61（期 6 第一批）：多的 6 条是 `customContainer.tsx` 的容器模板 —— 被**插入用户文章正文**的
     //    Markdown（内容，不是界面文案），且 `customContainerRemark.js` 靠这几个中文标题识别存量文章的容器。
@@ -310,7 +315,7 @@ test('i18n 共享实现 · 行为等价：共享模块的结果与守卫的既�
     //    永久例外，与 Caddy URL 同类；文案那条走 `{note}` 占位符 ⇒ 语言包里没有汉字）。
     // 🔴 54 → 53：UpdateModal 那张跨层欠条**已还**（期 7 第一批把 accessPassword.js 接了注入式翻译器，
     //   实参与模板一起翻 ⇒ 该文件预算归 0）
-    `裸中文总数应当是 38（= 15 条永久例外 + 23 条尚未翻译文件的欠条：restoreCore 16 / setupKeyCore 3 / Customizing 4），实际 ${total}`,
+    `裸中文总数应当是 14（= 全部 14 条永久例外，**欠条已清零**：容器模板 6、已初始化 1、静态双语标签 3、登录失效 1、导出说明.md 1、Caddy 与 About 的 URL 锚点 2），实际 ${total}`,
   );
   // 🔴 语言包解析的"进度下界"权威口径在 `i18nKeyNaming.test.js` 的 BASELINE_KEY_COUNT，
   //    本处**只**证明共享模块的 readPack 没坏（三份都解析得出、条数相等且非平凡）——

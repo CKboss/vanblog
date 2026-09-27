@@ -119,19 +119,19 @@ export default function () {
   const tabList = [
     {
       key: 'css',
-      tab: '自定义 CSS',
+      tab: t('sysconf.customizing.tabCss', '自定义 CSS'),
     },
     {
       key: 'script',
-      tab: '自定义 Script',
+      tab: t('sysconf.customizing.tabScript', '自定义 Script'),
     },
     {
       key: 'html',
-      tab: '自定义 HTML (body)',
+      tab: t('sysconf.customizing.tabHtmlBody', '自定义 HTML (body)'),
     },
     {
       key: 'head',
-      tab: '自定义 HTML (head)',
+      tab: t('sysconf.customizing.tabHtmlHead', '自定义 HTML (head)'),
     },
   ];
   return (

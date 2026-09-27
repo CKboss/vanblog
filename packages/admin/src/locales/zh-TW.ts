@@ -103,7 +103,7 @@ export default {
     '這個網站已經初始化過了：init 入口只對全新網站開放。請登入後台，用「系統設定 → 備份與還原 → 上傳備份並還原」。',
   'init.restore.err.429': '初始化相關請求太頻繁（流量限制：每 10 分鐘 5 次），請稍後再試。',
   'init.restore.err.400':
-    '這個檔案不是本網站匯出的整站備份，或它由「更新版本」的 VanBlog 產生、目前 server 讀不了：先確認檔案來源；確定是新版本備份的話，升級 server 之後再來。',
+    '這個檔案不是本網站匯出的整站備份，或它由「更新版本」的 VanBlog 產生、目前 server 讀不了：先確認檔案來源；確定是新版本備份的話，升級 server 鏡像後再還原。',
   'init.restore.err.fallback1':
     '請確認選的是「匯出整站備份」產生的備份檔（檔名形如 vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz）；後台匯出的 JSON 資料備份不走這裡 —— 那個在「系統設定 → 備份與還原」裡還原。',
   'init.restore.err.fallback2':
@@ -1692,5 +1692,41 @@ export default {
   'welcome.tagCount': '標籤數',
   'welcome.chartCategoryPie': '分類圓餅圖',
   'welcome.chartTagColumn': '標籤文章數 TOP 長條圖',
+
+
+  // ── 🔴 期 6 第十四批（28 條）── 地區用詞：**匯入**（导入）/ **匯出**（导出）/ **上傳** / **伺服器端**（服务端）/
+  //    **解壓縮**（解压）/ **圖床** / **檔案**（文件）/ **副檔名**（后缀）/ **資料**（数据）/ **連結**（链接）/
+  //    **網路錯誤** / **請求逾時**（超时）/ **登入**（登录）/ **權限** / **編輯器** / **儲存**（保存）/
+  //    **批次**（批量）/ **遷移助手** / **自訂**（自定义）/ **分類** / **手動** / **存取密碼** / **資訊**（信息）/
+  //    **張**（张）/ **個**（个）/ 🔴 **請**（不是「请」）/ 🔴 **路徑**（不是「路径」）。
+  //    🔴 `grep 初始化密钥` 这个命令**三份包都原样保留**（服务端日志就是简体，翻译了用户就 grep 不到）。
+  'import.phaseUpload': '正在上傳 .mdz…',
+  'import.phaseIngest': '正在匯入圖片…（伺服器端解壓縮並把圖片寫入圖床，可能需要幾秒到幾十秒）',
+  'import.errZipSlip': '這個 .mdz 裡含有會寫到解包目錄之外的成員（zip-slip 攻擊特徵），已在寫入任何資料之前拒絕匯入。伺服器端說：{server}',
+  'import.errNoMarkdown': '這個 .mdz 裡沒有找到 Markdown 檔案（*.md）。.mdz 應該是「一個 .md + 同名 .assets 圖片目錄」的 zip 包（後台「匯出」的 Typora 圖片包就是這個形狀）。伺服器端說：{server}',
+  'import.errTooLarge': '這個 .mdz 解壓縮後超過了體積或成員數上限（防 zip 炸彈），已拒絕匯入。伺服器端說：{server}',
+  'import.errNotMdz': '這不是一個有效的 .mdz 檔案（.mdz 本質是 zip，檔案可能已損壞或副檔名被改過）。伺服器端說：{server}',
+  'import.errNoFile': '伺服器端沒有收到檔案：請重新選擇 .mdz 檔案上傳。{server}',
+  'import.errAuth': '登入已失效或權限不足，請重新登入後再匯入。{server}',
+  'import.errNoReason': '匯入失敗：伺服器端沒有給出原因',
+  'import.imagesLine': '圖片入庫 {count} 張{dedup}，正文裡的相對連結已改寫成圖床地址。',
+  'import.imagesDedupNote': '（其中 {count} 張依內容去重命中已有圖片，沒有重複佔空間）',
+  'import.passwordDroppedNote': '原文設定了存取密碼，匯入後需要重新設定（基於安全，密碼不會隨檔案遷移；「修改資訊」裡填新密碼即可）。',
+  'import.skippedHeader': '有 {count} 個圖片引用沒有匯入（連結保持原樣）：',
+  'import.skippedItem': '· {name} —— {reason}',
+  'import.unknownReason': '未知原因',
+  'import.skippedMore': '· …等共 {count} 個',
+  'import.importedTitle': '已匯入《{title}》—— 內容已填入編輯器，儲存後才生效',
+  'import.untitled': '未命名',
+  'import.errNetwork': '網路錯誤：請求沒有到達伺服器端',
+  'import.errTimeout': '請求逾時',
+  'migrate.batchUploadDone': '批次上傳完成！',
+  'migrate.batchImportArticles': '批次匯入文章',
+  'migrate.batchImportDrafts': '批次匯入草稿',
+  'migrate.categoryWarning': '注意：使用遷移助手批次匯入文章或草稿時，可能分類會為空，事後需要手動修改',
+  'sysconf.customizing.tabCss': '自訂 CSS',
+  'sysconf.customizing.tabScript': '自訂 Script',
+  'sysconf.customizing.tabHtmlBody': '自訂 HTML (body)',
+  'sysconf.customizing.tabHtmlHead': '自訂 HTML (head)',
 
 };

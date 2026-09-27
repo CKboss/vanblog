@@ -242,6 +242,10 @@ const IDENTICAL_ZH_TW_OK = [
   // 🔴 期 6 第十三批：这两条简繁同形（`文章分析` 四个字都无简体专用字；`今日新增` 同）
   'welcome.tabArticle',
   'welcome.todayNew',
+  // 🔴 期 6 第十四批：这三条简繁同形（`· {name} —— {reason}` 只有标点与占位符、`未知原因`、`未命名`）
+  'import.skippedItem',
+  'import.unknownReason',
+  'import.untitled',
   // 🔴 期 6 第九批（数据管理页）：这六条简繁同形 —— 上移/下移/排序/加密/未加密/提交成功
   //   （这些词简繁写法本来就一样，不是"复制简体充数"）
   'dataManage.moveUp',
@@ -403,12 +407,12 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 🔴 10 → 12（期 9 第四批：RecycleBin 两个文件）→ **14 / 260**（期 3 第三批：`Token.tsx` + `Advance.jsx`；
     //    实测 14 个文件 / 266 个调用点，下界取 260 留一点余量）。⚠️ 下界只许往上调：谁调小就是悄悄缩覆盖面。
     assert.ok(
-      FILES.length >= 108,
-      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 108）⇒ 遍历或解析器坏了`,
+      FILES.length >= 113,
+      `只自动发现 ${FILES.length} 个已接 i18n 的文件（下界 113）⇒ 遍历或解析器坏了`,
     );
     assert.ok(
-      calls.length >= 1920,
-      `只抽到 ${calls.length} 个 t() 调用点（下界 1920）⇒ 疑似解析器坏了`,
+      calls.length >= 1980,
+      `只抽到 ${calls.length} 个 t() 调用点（下界 1980）⇒ 疑似解析器坏了`,
     );
     // 🔴 反向钉住"遍历没跑偏"：这几个是已知必然在覆盖面里的文件（漏了任何一个都说明跳过逻辑写宽了）
     for (const rel of [
@@ -510,6 +514,11 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/pages/Welcome/tabs/overview.jsx',
       'src/pages/Welcome/tabs/viewer.jsx',
       'src/pages/Welcome/tabs/article.jsx',
+      'src/services/van-blog/importMdzCore.js',
+      'src/services/van-blog/importMdz.ts',
+      'src/pages/InitPage/setupKeyCore.js',
+      'src/pages/InitPage/restoreCore.js',
+      'src/pages/SystemConfig/tabs/migrate.tsx',
       // ⚠️ 这里**刻意不含** `components/PathnameField/index.jsx`：它自己**没有任何字面量 t() 调用点**
       //    （文案全部来自 `pathnameField(t)`），所以"自动发现"（判据 = 抽得到 t() 调用点）找不到它 —— 这是对的。
       //    🔴 它的文案由 `importPathname.js` 那条对账覆盖；它"没有硬编码中文"由**棘轮**里的 `PathnameField: 0` 钉住。
@@ -854,6 +863,15 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
       'src/components/CollaboratorModal/index.tsx': ['permissionOptions', 'getPermissionLabel'],
       'src/components/InstallRecordBanner/index.tsx': ['routeText'],
       'src/services/van-blog/passwordPolicy.js': ['accountPasswordMinMessage', 'accountPasswordMinRule'],
+      // 🔴 期 6 第十四批：.mdz 导入家族（阶段文案 / 失败分类 / 结果描述）与初始化那两个纯逻辑模块
+      'src/services/van-blog/importMdzCore.js': [
+        'importPhaseText', 'mdzFailureMessage', 'describeImportOutcome',
+      ],
+      'src/services/van-blog/importMdz.ts': ['importMdzErrorMessage'],
+      'src/pages/InitPage/setupKeyCore.js': ['setupKeyHints', 'getSetupKeyHints'],
+      'src/pages/InitPage/restoreCore.js': [
+        'restoreCountLabels', 'formatRestoreCounts', 'describeFileSize', 'parseRestoreResponse',
+      ],
       // 🔴 期 7 第四批：零散小服务模块（尾参 t）
       'src/services/van-blog/formatTime.js': ['formatBytes'],
       'src/services/van-blog/relativeTime.js': ['formatTimeAgo'],
@@ -1030,10 +1048,14 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
         //    与裸 `t` 完全等价（`requestError.js` 的 `reportRequestError(…, context?.t)` 就是这个形状）。
         const isTranslatorArg = (nd) => {
           if (!nd) return false;
-          if (nd.type === 'Identifier') return nd.name === 't';
+          // 🔴 期 6 第十四批：实参名允许 `t` / `tr` / `rt` —— 与 `astInventory` 认的 callee 名同一套口径。
+          //    `tr` 是注入式模块里的本地别名（`const tr = normalizeT(t)`：把"没传 t"归一成 identity 插值器），
+          //    `rt` 是 umi 运行时那种非组件作用域的懒取翻译器。第一版只认 `t` ⇒
+          //    模块**内部**转调自己的函数版时（`restoreCountLabels(tr)`）会被误报成"没传翻译器"。
+          if (nd.type === 'Identifier') return nd.name === 't' || nd.name === 'tr' || nd.name === 'rt';
           if (nd.type === 'MemberExpression' || nd.type === 'OptionalMemberExpression') {
             const prop = nd.property;
-            return Boolean(prop && (prop.name === 't' || prop.value === 't'));
+            return Boolean(prop && ['t', 'tr', 'rt'].includes(prop.name || prop.value));
           }
           return false;
         };
@@ -1832,6 +1854,10 @@ describe('多语言：占位符与 identity 常量这两个"静默失效"的坑'
       'src/components/CollaboratorModal/index.tsx': ['PERMISSION_OPTIONS'],
       'src/components/InstallRecordBanner/index.tsx': ['ROUTE_TEXT'],
       'src/services/van-blog/passwordPolicy.js': ['ACCOUNT_PASSWORD_MIN_MESSAGE'],
+      // 🔴 期 6 第十四批：四个 identity 视图
+      'src/services/van-blog/importMdzCore.js': ['IMPORT_PHASE_TEXT'],
+      'src/pages/InitPage/setupKeyCore.js': ['SETUP_KEY_HINTS'],
+      'src/pages/InitPage/restoreCore.js': ['RESTORE_COUNT_LABELS'],
       'src/services/van-blog/tagTokens.js': ['TAG_FIELD_PLACEHOLDER', 'TAG_FIELD_TOOLTIP'],
       'src/services/van-blog/importPathname.js': ['PATHNAME_FIELD'],
       'src/services/van-blog/schedule.js': [
@@ -2145,6 +2171,28 @@ describe('🔴 关于页三条片段链的接缝（第 3 组，2026-09-27 期 6 
       assert.ok(idx3 > 0, `${loc2}: 链 3 里找不到「官方镜像」那一段`);
       assert.ok(/[\s“"(（-]$/.test(text3.slice(0, idx3)),
         `🔴 ${loc2}/链 3：<b> 前面的接缝缺空格 ⇒ 前文结尾是 ${JSON.stringify(text3.slice(Math.max(0, idx3 - 24), idx3))}`);
+    }
+  });
+});
+
+describe('🔴 三份包里都必须原样保留的**用户要照着敲的命令**（跨包契约）', () => {
+  it('init.setupKey.hint2 里的 `grep 初始化密钥` 在三份包里逐字相同', () => {
+    // ## 为什么这条要单独钉（2026-09-27 期 6 第十四批）
+    // 那四条"去哪找初始化密钥"的提示原来是 `setupKeyCore.js` 里的**模块级中文字面量**，
+    // 其中 `初始化密钥` 一直登记在棘轮的 REQUIRED_EXCEPTIONS 里，理由是：
+    // 🔴 **服务端启动日志打印的就是这个简体词**，用户要照着提示敲
+    // `docker logs <容器名> 2>&1 | grep 初始化密钥` —— 翻译了它就 grep 不到（提示变成假的）。
+    // 这一批把那个数组改成了函数版（中文回到 t() 的 defaultMessage 位）⇒ 棘轮那条"源码里必须留着硬编码中文"
+    // 的反向断言**不再适用**（它已经不在裸中文里了），于是把例外条目移除。
+    // 🔴 但真正的契约没有消失，只是**换了该待的地方**：现在要钉的是"三份**译文**里都必须留着这个简体命令"。
+    // （同族：Caddy 页的文档 URL 锚点、`导出说明.md` 那个服务端产物文件名。）
+    for (const loc of ['zh-CN', 'zh-TW', 'en-US']) {
+      const v = String(packs[loc]['init.setupKey.hint2'] || '');
+      assert.ok(v.includes('grep 初始化密钥'),
+        `🔴 ${loc}: init.setupKey.hint2 里必须原样保留 \`grep 初始化密钥\`（服务端日志就是简体，翻译了用户就 grep 不到）` +
+        ` ⇒ 实采 ${JSON.stringify(v.slice(0, 120))}`);
+      assert.ok(v.includes('docker logs'), `${loc}: 那条命令的 \`docker logs\` 前缀不见了`);
+      assert.ok(v.includes('setup.key'), `${loc}: 兜底路径 \`setup.key\` 不见了`);
     }
   });
 });

@@ -112,9 +112,13 @@ function normalizeT(t) {
 
 /** 给确认弹窗展示文件大小（不引新依赖，手写足够） */
 function describeFileSize(bytes, t) {
+  // 🔴 先把归一化后的翻译器**存进本地变量再调**（`const tr = normalizeT(t)`）：
+  //    直接写 `normalizeT(t)('id', '中文')` 的话 callee 是 CallExpression 而不是 Identifier，
+  //    清点器认不出来 ⇒ 那条中文会被数成裸中文（本文件最后 1 条就是这么挂着的）。
+  const tr = normalizeT(t);
   const n = Number(bytes);
   if (!Number.isFinite(n) || n <= 0) {
-    return normalizeT(t)('common.unknownSize', '未知大小');
+    return tr('common.unknownSize', '未知大小');
   }
   if (n < 1024) {
     return `${n} B`;
@@ -141,15 +145,23 @@ const INIT_RESTORE_TOKEN_KEY = 'token';
  * counts 字段 → 中文标签（按这个固定顺序渲染，缺失/非数字的字段跳过）。
  * 服务端 counts 取自归档清单：{articles,statics,users,visits,viewers,settings,total}。
  */
-const RESTORE_COUNT_LABELS = [
-  ['articles', '文章', 'init.restore.count.articles'],
-  ['statics', '图片', 'init.restore.count.images'],
-  ['users', '用户', 'init.restore.count.users'],
-  ['visits', '访问记录', 'init.restore.count.visits'],
-  ['viewers', '访客', 'init.restore.count.viewers'],
-  ['settings', '设置', 'init.restore.count.settings'],
-  ['total', '合计', 'init.restore.count.total'],
+// 🔴 期 6 第十四批：改成**函数版 + identity 视图**。原来这张表把中文标签存在数组里、
+//    再用 `tr(labelId, RESTORE_COUNT_LABELS[i][1])` **间接**当 defaultMessage 传进去 ——
+//    清点器只认"t() 的第二个实参是字面量"这种形状 ⇒ 那 7 条中文长期被数成裸中文（账目与事实不符）。
+//    现在中文只待在 `t()` 的 defaultMessage 位；🔴 不传 t ⇒ 输出与改造前逐字相同
+//    （`tests/unit/initRestoreCore.test.js` 那 30 条断言一条都没改就全绿）。
+const restoreCountLabels = (t = identityTranslate) => [
+  ['articles', t('init.restore.count.articles', '文章')],
+  ['statics', t('init.restore.count.images', '图片')],
+  ['users', t('init.restore.count.users', '用户')],
+  ['visits', t('init.restore.count.visits', '访问记录')],
+  ['viewers', t('init.restore.count.viewers', '访客')],
+  ['settings', t('init.restore.count.settings', '设置')],
+  ['total', t('init.restore.count.total', '合计')],
 ];
+
+/** identity 视图（不传 t 时逐字等于改造前那张表的 [字段, 中文标签] 两列） */
+const RESTORE_COUNT_LABELS = restoreCountLabels();
 
 /** 把 counts 渲染成「文章 59 · 图片 93 · 访问记录 8746」；没有可用数字时返回空串。 */
 function formatRestoreCounts(counts, t) {
@@ -157,11 +169,15 @@ function formatRestoreCounts(counts, t) {
     return '';
   }
   const parts = [];
-  for (let i = 0; i < RESTORE_COUNT_LABELS.length; i += 1) {
-    const key = RESTORE_COUNT_LABELS[i][0];
-    const labelId = RESTORE_COUNT_LABELS[i][2];
-    // 🔴 中文标签保留为 defaultMessage：漏翻译时回落中文，而不是把裸 key 显示给用户
-    const label = normalizeT(t)(labelId, RESTORE_COUNT_LABELS[i][1]);
+  // 🔴 直接用函数版（把 t 传进去）：漏翻译时 `identityTranslate` 会回落中文 defaultMessage，
+  //    而不是把裸 key 显示给用户（这条性质与改造前一致）。
+  // 🔴 先归一化到本地变量再传（`restoreCountLabels(normalizeT(t))` 那种写法，
+  //    最后一个实参是 CallExpression ⇒ 调用点判据认不出来；口径与 `tr` 别名一致）
+  const tr = normalizeT(t);
+  const labels = restoreCountLabels(tr);
+  for (let i = 0; i < labels.length; i += 1) {
+    const key = labels[i][0];
+    const label = labels[i][1];
     const value = counts[key];
     if (typeof value === 'number' && Number.isFinite(value)) {
       parts.push(`${label} ${value}`);
@@ -180,7 +196,11 @@ function formatRestoreCounts(counts, t) {
  * 字段缺失（老版本 server 不发它）按 false 处理，同样留在向导。
  * 所有字段都 optional-chain 到安全默认值：服务端形状再变也只是少显示细节，不会崩。
  */
-function classifyRestoreSuccess(data) {
+// 🔴 期 6 第十四批：这个函数**内部**会算 `countsText`（"文章 59 · 图片 93 …"，给用户看的文案）
+//    ⇒ 它也必须收翻译器（尾参，不传 ⇒ 与改造前逐字相同；既有单测就是一条参调用的）。
+//    🔴 第一版漏了：调用点 `formatRestoreCounts(d.counts)` 没有 t ⇒ 那段计数文案会**永远中文**，
+//    而且不报错、界面上看不出来 —— 是调用点判据抓到的。
+function classifyRestoreSuccess(data, t) {
   const d = data && typeof data === 'object' ? data : {};
   return {
     initialized: d.initialized === true,
@@ -192,7 +212,7 @@ function classifyRestoreSuccess(data) {
           .filter((note) => note !== null && note !== undefined)
           .map((note) => String(note))
       : [],
-    countsText: formatRestoreCounts(d.counts),
+    countsText: formatRestoreCounts(d.counts, t),
     databases: d.databases && typeof d.databases === 'object' ? d.databases : null,
     static: d.static && typeof d.static === 'object' ? d.static : null,
   };
@@ -228,7 +248,13 @@ function describeRestoreFailure(httpStatus, message, t) {
     ];
   }
   return [
-    tr('init.restore.err.fallback1', '请确认选的是「导出整站备份」生成的归档（文件名形如 vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz）；后台导出的 JSON 数据备份不走这里 —— 那个要先完成初始化，再到「数据管理」导入。'),
+    // 🔴 期 6 第十四批：这条的 defaultMessage 与语言包**漂移**了（源码写"…再到「数据管理」导入"，
+    //    包里写"…在「系统设置 → 备份与恢复」里恢复"）。🔴 这次以**语言包**为准改源码：
+    //    zh-TW 与 en-US 的译文都是照着包里那版翻的（"那個在「系統設定 → 備份與還原」裡還原" /
+    //    "restore that one under System settings → Backup & restore"），改包会让三份一起失去一致性，
+    //    而且改包等于**改用户看得见的文案**（改源码的 defaultMessage 不改任何运行时行为）。
+    //    👉 漂移要修，但**修哪一边要看哪一边是权威**：译文跟着谁走，谁就是权威。
+    tr('init.restore.err.fallback1', '请确认选的是「导出整站备份」生成的归档（文件名形如 vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz）；后台导出的 JSON 数据备份不走这里 —— 那个在「系统设置 → 备份与恢复」里恢复。'),
     tr('init.restore.err.fallback2', '如果这个站点其实已经初始化过，这里会拒绝恢复 —— 请登录后台，用「系统设置 → 备份与恢复」的上传恢复。'),
   ];
 }

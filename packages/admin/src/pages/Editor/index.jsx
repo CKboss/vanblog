@@ -22,7 +22,10 @@ import { downloadMarkdownExport } from '@/services/van-blog/exportMarkdown';
 import { importMdzFile, importMdzErrorMessage } from '@/services/van-blog/importMdz';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
-  IMPORT_PHASE_TEXT,
+  // 🔴 期 6 第十四批：进度文案改成**函数版** `importPhaseText(t)`（identity 视图 IMPORT_PHASE_TEXT
+  //    只留给单测用）⇒ 这里**不再解构那个常量**：已接 i18n 的文件从 identity 常量取文案的话，
+  //    注入了 t 也不会跟随语言（localePackParity 有一条判据专门盯这件事，本轮就是它报出来的）。
+  importPhaseText,
   isMdzFileName,
   frontMatterPatchForEditor,
   describeImportOutcome,
@@ -377,7 +380,7 @@ export default function () {
     let hide = null;
     try {
       setMdzImportPhase('upload');
-      hide = message.loading(IMPORT_PHASE_TEXT.upload, 0);
+      hide = message.loading(importPhaseText(t).upload, 0);
       const data = await importMdzFile(file, {
         onProgress: (p) => {
           if (p.phase === 'ingest' && mdzImportPhaseRef.current !== 'ingest') {
@@ -386,7 +389,7 @@ export default function () {
             if (hide) {
               hide();
             }
-            hide = message.loading(IMPORT_PHASE_TEXT.ingest, 0);
+            hide = message.loading(importPhaseText(t).ingest, 0);
           }
         },
       });
@@ -400,7 +403,8 @@ export default function () {
         setCurrObj((prev) => ({ ...(prev || {}), ...patch }));
         document.title = t('editor.docTitle', '{title} - VanBlog 编辑器', { title: data?.title || patch.title || '' });
       }
-      const outcome = describeImportOutcome(data);
+      // 🔴 t 是尾参：这个函数算出来的标题与每一行都是**给用户看的文案**
+      const outcome = describeImportOutcome(data, t);
       const open = outcome.tone === 'warn' ? Modal.warning : Modal.success;
       open({
         title: outcome.title,
@@ -428,7 +432,7 @@ export default function () {
       }
       Modal.error({
         title: t('editor.importMdzFailed', '导入 .mdz 失败'),
-        content: importMdzErrorMessage(err),
+        content: importMdzErrorMessage(err, t),
       });
     } finally {
       mdzImportPhaseRef.current = null;

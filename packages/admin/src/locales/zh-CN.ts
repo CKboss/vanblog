@@ -107,8 +107,11 @@ export default {
   'init.restore.err.403':
     '这个站点已经初始化过了：init 入口只对全新站点开放。请登录后台，用「系统设置 → 备份与恢复 → 上传备份并恢复」。',
   'init.restore.err.429': '初始化相关请求太频繁（限流：每 10 分钟 5 次），请稍后再试。',
+  // 🔴 期 6 第十四批：这条的**包值原来与源码的 defaultMessage 漂移**了（包里写「升级 server 之后再来」，
+  //   源码写「升级 server 镜像后再恢复」）⇒ 以**源码**为准对齐三份包。守卫盯的就是这件事：
+  //   同一性质写在两处必然漂移，漂移了就没有权威文案可言（这条漂移是早期批次提升 key 时留下的）。
   'init.restore.err.400':
-    '这个文件不是本站导出的整站备份，或它由「更新版本」的 VanBlog 生成、当前 server 读不了：先确认文件来源；确实是新版本备份的话，升级 server 之后再来。',
+    '这个文件不是本站导出的整站备份，或它由「更新版本」的 VanBlog 生成、当前 server 读不了：先确认文件来源；确实是新版本备份的话，升级 server 镜像后再恢复。',
   'init.restore.err.fallback1':
     '请确认选的是「导出整站备份」生成的归档（文件名形如 vanblog-full-YYYYMMDD-HHMMSS.tar.zst / .tar.xz / .tar.gz）；后台导出的 JSON 数据备份不走这里 —— 那个在「系统设置 → 备份与恢复」里恢复。',
   'init.restore.err.fallback2':
@@ -1898,5 +1901,43 @@ export default {
   'welcome.tagCount': '标签数',
   'welcome.chartCategoryPie': '分类饼图',
   'welcome.chartTagColumn': '标签文章数 TOP 柱状图',
+
+
+  // ── 🔴 期 6 第十四批：**.mdz 导入家族 / 迁移助手 / 定制页四个 tab**（53 条 → 28 个新 key + 33 条复用）。
+  //    🔴 `importMdzCore.js` 是纯逻辑模块（node:test 直接 require）⇒ 注入式翻译器（函数版 + identity 视图）：
+  //    `importPhaseText(t)` / `mdzFailureMessage(msg, t)` / `describeImportOutcome(data, t)`。
+  //    🔴 `mdzFailureMessage` 里那些**正则是在匹配服务端返回的中文**（zip-slip / 没有找到 Markdown / 超过上限…）
+  //    ⇒ 线路契约，任何语言下都不许动（与 requestError.js 的「登录失效」同族）；只有返回给用户看的那句走 t。
+  //    🔴 `importMdz.ts` 原来抛的是**中文 Error message**（一路透传成用户文案）⇒ 改成 ASCII 哨兵
+  //    `MDZ_ERR_NETWORK` / `MDZ_ERR_TIMEOUT`，在显示点 `importMdzErrorMessage(err, t)` 才换成译文。
+  //    ⚠️ `import.imagesLine` 的 {dedup} 是**可选片段**（没有去重时传空串）⇒ 两种读法都不许出接缝。
+  'import.phaseUpload': '正在上传 .mdz…',
+  'import.phaseIngest': '正在导入图片…（服务端解压并把图片写入图床，可能需要几秒到几十秒）',
+  'import.errZipSlip': '这个 .mdz 里含有会写到解包目录之外的成员（zip-slip 攻击特征），已在写入任何数据之前拒绝导入。服务端说：{server}',
+  'import.errNoMarkdown': '这个 .mdz 里没有找到 Markdown 文件（*.md）。.mdz 应该是「一个 .md + 同名 .assets 图片目录」的 zip 包（后台「导出」的 Typora 图片包就是这个形状）。服务端说：{server}',
+  'import.errTooLarge': '这个 .mdz 解压后超过了体积或成员数上限（防 zip 炸弹），已拒绝导入。服务端说：{server}',
+  'import.errNotMdz': '这不是一个有效的 .mdz 文件（.mdz 本质是 zip，文件可能已损坏或后缀被改过）。服务端说：{server}',
+  'import.errNoFile': '服务端没有收到文件：请重新选择 .mdz 文件上传。{server}',
+  'import.errAuth': '登录已失效或权限不足，请重新登录后再导入。{server}',
+  'import.errNoReason': '导入失败：服务端没有给出原因',
+  'import.imagesLine': '图片入库 {count} 张{dedup}，正文里的相对链接已改写成图床地址。',
+  'import.imagesDedupNote': '（其中 {count} 张按内容去重命中已有图片，没有重复占空间）',
+  'import.passwordDroppedNote': '原文设置了访问密码，导入后需要重新设置（出于安全，密码不会随文件迁移；「修改信息」里填新密码即可）。',
+  'import.skippedHeader': '有 {count} 个图片引用没有导入（链接保持原样）：',
+  'import.skippedItem': '· {name} —— {reason}',
+  'import.unknownReason': '未知原因',
+  'import.skippedMore': '· …等共 {count} 个',
+  'import.importedTitle': '已导入《{title}》—— 内容已填入编辑器，保存后才生效',
+  'import.untitled': '未命名',
+  'import.errNetwork': '网络错误：请求没有到达服务端',
+  'import.errTimeout': '请求超时',
+  'migrate.batchUploadDone': '批量上传完成！',
+  'migrate.batchImportArticles': '批量导入文章',
+  'migrate.batchImportDrafts': '批量导入草稿',
+  'migrate.categoryWarning': '注意：使用迁移助手批量导入文章或草稿时，可能分类会为空，后期需要手动修改哦',
+  'sysconf.customizing.tabCss': '自定义 CSS',
+  'sysconf.customizing.tabScript': '自定义 Script',
+  'sysconf.customizing.tabHtmlBody': '自定义 HTML (body)',
+  'sysconf.customizing.tabHtmlHead': '自定义 HTML (head)',
 
 };
