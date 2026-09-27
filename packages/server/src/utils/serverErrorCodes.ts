@@ -268,6 +268,37 @@ export const SERVER_ERROR_CODES = {
   commentContentIllegalChars: entry('评论内容包含非法字符', BadRequestException),
   commentContentTooLong: entry('评论内容不能超过 {max} 个字符', BadRequestException),
   commentNotFound: entry('评论不存在', BadRequestException),
+  // ── 限流信封（utils/rateLimit.ts，期 9 第四批）──────────────────────────────
+  // 🔴 这一处以前**两个棘轮都数不到**：中文不是写在 `throw` 里、也不是写在 `{ message: … }` 里，
+  //    而是当**实参**传给响应助手 `tooManyRequests(res, secs, '请求过于频繁，请稍后再试')`
+  //    （助手内部才拼 `{ statusCode: 429, message }`）⇒ 属清点口径的**盲区**（见手册 §7.186 A）。
+  //    而它偏偏是**访客最先撞到的错误之一**（公开写接口、静态资源、全局三个桶都用它）。
+  rateLimited: entry('请求过于频繁，请稍后再试', HttpException, 429),
+  // 🔴 这两条是**给脚本/运维看的长指引**（提到环境变量、健康检查端点、数据库级分页的替代路径），
+  //    而不是访客 toast ⇒ 译文按"运维文档"的口吻写，且 🔴 环境变量名、HTTP 方法、端点路径
+  //    三份都必须逐字相同（技术标识符契约）。
+  //    ⚠️ 原来是"模板字符串 + 拼接"（`${scaleLimit(INIT_LIMIT_PER_10MIN)}` 直接插值）⇒
+  //    现在数字走 params（`{max}` / `{seconds}`），文案在码表里；`scaleLimit()` 仍在调用点算
+  //    （它按 worker 数摊薄，是**运行时**的值，不能写死在译文里）。
+  initRateLimited: entry(
+    '初始化/恢复接口调用过于频繁：每 10 分钟最多 {max} 次写请求，' +
+      '约 {seconds} 秒后可以重试。' +
+      '只有**写操作**（POST 等非安全方法）计入这个额度，GET/HEAD/OPTIONS 不计。' +
+      '如果你是在做健康检查或"站点是否已初始化"的状态探测，请改用 GET /api/public/health —— ' +
+      '它不占这个额度，也不会把真正的初始化/灾难恢复锁在门外。' +
+      '确需更多次恢复尝试（例如反复试口令）可临时调高 VANBLOG_INIT_LIMIT_PER_10MIN。',
+    HttpException,
+    429,
+  ),
+  publicListRateLimited: entry(
+    '分类/标签列表接口调用过于频繁，请稍后再试。' +
+      '这一档默认每 IP 每分钟 {max} 次，' +
+      '可用 VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN 调整。' +
+      '若你在做站点聚合，请改用 /api/public/article?category=…&page=…&pageSize=…（那是数据库级分页）。',
+    HttpException,
+    429,
+  ),
+
   commentDataImageBudget: entry(
     '评论里包含无法在合理时间内解析的 data: 图片引用（疑似构造输入），该行已跳过',
     BadRequestException,

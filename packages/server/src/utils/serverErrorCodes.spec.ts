@@ -225,6 +225,12 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   commentContentTooLong: { status: 400, error: 'Bad Request' },
   commentNotFound: { status: 400, error: 'Bad Request' },
   commentDataImageBudget: { status: 400, error: 'Bad Request' },
+  // 🔴 期 9 第四批：限流信封 3 个码。基类 `HttpException` + 显式 429 ⇒ **没有 error 字段**
+  //    （与 `customPageNotFound` 同理），而迁移前 `tooManyRequests()` 手写的是
+  //    `{ statusCode: 429, message }`（也没有 error）⇒ 形状一致，只是多了 `code`（与可选 `params`）。
+  rateLimited: { status: 429 },
+  initRateLimited: { status: 429 },
+  publicListRateLimited: { status: 429 },
 };
 
   it('🔴 码名必须是合法的 i18n key 段（admin 侧的 key 就是 error.<code>）', () => {

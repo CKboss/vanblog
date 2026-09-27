@@ -94,6 +94,9 @@ const CODE_ZH = (() => {
 /** "间接传参"（`codedError(code, someVar)`）的调用点计数：静态看不见键名，如实报出来 */
 let indirect = 0;
 
+/** 读一个服务端源文件（相对仓库根） */
+const readServer = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
 function walkServerSources(dir, out) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     const abs = path.join(dir, ent.name);
@@ -572,4 +575,55 @@ test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里�
   assert.ok(Object.keys(CODE_ZH).length >= 50, `登记表只解析出 ${Object.keys(CODE_ZH).length} 个码（下界 50）`);
   // ℹ️ 间接传参（传变量而不是对象字面量）的调用点数量：静态看不见键名，如实报出来
   console.log(`NOTE: codedError/codedBody 调用点 ${callSites} 个，其中 ${indirect} 个是间接传参（静态判据看不见键名）`);
+});
+
+test('🔴 服务端错误码 · ⑤ 响应助手 `tooManyRequests()` 必须走 `codedBody()`（429 信封不许退回"只有 message"）', () => {
+  // ## 为什么要这条（2026-09-28 期 9 第四批）
+  // 🔴 429 限流信封以前是**两个棘轮都数不到的盲区**：中文既不在 `throw` 里、也不在 `{ message: … }` 里，
+  //    而是当**实参**传给响应助手 `tooManyRequests(res, secs, '请求过于频繁，请稍后再试')`，
+  //    由助手内部拼 `res.status(429).json({ statusCode: 429, message })`。
+  //    ⇒ 那 5 处（3 处共用一句短的 + 2 处各一句长的运维指引）**从来没进过任何账**，
+  //    而它偏偏是访客/脚本**最先撞到**的错误之一（全局桶、公开写桶、静态资源桶都用它）。
+  // 现在助手改成收**错误码**（默认 `rateLimited`）并用 `codedBody()` 组装信封 ⇒
+  // 这条判据钉住"不许再退回手写 `{ statusCode, message }`"：一旦有人图省事把助手改回去，
+  // 429 就又不带 code 了，而**两个棘轮都不会红**（因为它们本来就看不见这一族）。
+  const src = readServer('packages/server/src/utils/rateLimit.ts');
+  const fn = src.slice(src.indexOf('function tooManyRequests'), src.indexOf('export function rateLimitMiddleware'));
+  assert.ok(fn.length > 80, `截取到的 tooManyRequests 函数体太短（${fn.length}）⇒ 锚点可能失效`);
+  // 🔴 助手自己**默认**用 `codedBody('rateLimited')`；带码的那两处在**调用点**写 `codedBody('<code>', params)`
+  //    （理由见 rateLimit.ts 里那段注释：admin 的"防死码"判据按 `codedBody('<code>'` 这个形状找码名）。
+  assert.match(
+    fn,
+    /codedBody\('rateLimited'\)/,
+    '🔴 `tooManyRequests()` 的默认信封不再是 `codedBody(\'rateLimited\')` ⇒ 429 可能丢掉 code，前端/后台无法翻译。' +
+      '（这一族是清点口径的盲区：两个棘轮都看不见它，所以只能靠这条判据守。）',
+  );
+  // 🔴 三个码都必须真的出现在这个文件的 `codedBody('…')` 调用点里（默认那个 + 两个长指引）
+  for (const code of ['rateLimited', 'initRateLimited', 'publicListRateLimited']) {
+    assert.ok(
+      src.includes(`codedBody('${code}'`),
+      `🔴 rateLimit.ts 里找不到 codedBody('${code}'…) 的调用点 ⇒ 那个码会变成死码（或信封退回手写）`,
+    );
+  }
+  // 🔴 反向判据要**按性质写、不要按形状写**：第一版写的是
+  //    `doesNotMatch(/json\(\{\s*statusCode:\s*429,\s*message\s*\}\)/)`，
+  //    而变异对照把它打成 `json({ statusCode: 429, message: body.message })` ⇒ **正则没匹配上，判据假绿**
+  //    （B44-M1 实测：rc=0，全套 559 条断言都绿，而 429 信封已经丢掉 code 了）。
+  //    性质其实是："信封不许在助手内部**手写对象字面量**，必须原样发出调用点用 `codedBody()` 造好的那个"
+  //    ⇒ 判据改成 `.json(` 后面**不许紧跟 `{`**（形状无关，怎么改写都拦得住）。
+  assert.doesNotMatch(
+    fn,
+    /\.json\(\s*\{/,
+    '🔴 `tooManyRequests()` 又在内部**手写响应体**了（`json({…})`）⇒ 429 信封会丢掉 `code`，前端/后台无法翻译。' +
+      '正确写法是把调用点用 `codedBody(<code>, params)` 造好的 body 原样发出去。',
+  );
+  // 🔴 反向：调用点不许再传中文文案（第三个参数只能是 `codedBody(…)`）
+  const calls = [...src.matchAll(/tooManyRequests\([\s\S]{0,260}?\n\s*\);|tooManyRequests\([^)]*\)/g)].map((m) => m[0]);
+  assert.ok(calls.length >= 5, `只找到 ${calls.length} 个 tooManyRequests 调用点（下界 5）⇒ 锚点可能失效`);
+  const withChinese = calls.filter((c) => /[\u3400-\u4dbf\u4e00-\u9fff]/.test(c));
+  assert.deepStrictEqual(
+    withChinese,
+    [],
+    '🔴 这些 `tooManyRequests()` 调用点还在传中文文案（应该传错误码）：\n  ' + withChinese.join('\n  '),
+  );
 });

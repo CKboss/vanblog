@@ -1795,4 +1795,12 @@ export default {
   'error.commentContentTooLong': '評論內容不能超過 {max} 個字元',
   'error.commentNotFound': '評論不存在',
   'error.commentDataImageBudget': '評論裡包含無法在合理時間內解析的 data: 圖片參照（疑似建構輸入），該行已跳過',
+
+  // ── 🔴 期 9 第四批（3 條）── 地區用詞：**請求** / **過於頻繁** / **稍後再試**。
+  'error.rateLimited': '請求過於頻繁，請稍後再試',
+  // 🔴 期 9 第四批（續，2 條長指引）── 地區用詞：**介面** / **呼叫**（调用）/ **額度** / **寫入操作** /
+  //    **預設**（默认）/ **這一檔** / **災難恢復** / **鎖在門外** / **確需** / **臨時調高** / **資料庫層級分頁** /
+  //    健康檢查 / 探測 / 請改用 / 稍後再試。🔴 環境變量名、HTTP 方法、端點路徑逐字保留。
+  'error.initRateLimited': '初始化/恢復介面呼叫過於頻繁：每 10 分鐘最多 {max} 次寫入請求，約 {seconds} 秒後可以重試。只有**寫入操作**（POST 等非安全方法）計入這個額度，GET/HEAD/OPTIONS 不計。如果你是在做健康檢查或「站點是否已初始化」的狀態探測，請改用 GET /api/public/health —— 它不佔這個額度，也不會把真正的初始化/災難恢復鎖在門外。確需更多次恢復嘗試（例如反覆試口令）可臨時調高 VANBLOG_INIT_LIMIT_PER_10MIN。',
+  'error.publicListRateLimited': '分類/標籤列表介面呼叫過於頻繁，請稍後再試。這一檔預設每 IP 每分鐘 {max} 次，可用 VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN 調整。若你在做站點聚合，請改用 /api/public/article?category=…&page=…&pageSize=…（那是資料庫層級分頁）。',
 };

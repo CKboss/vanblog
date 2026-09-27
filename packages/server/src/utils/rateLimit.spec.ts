@@ -152,6 +152,39 @@ describe('全局限流中间件', () => {
     expect(last.r.out.status).toBe(429);
     expect(last.r.out.headers['Retry-After']).toBeTruthy();
     expect(last.r.out.body.statusCode).toBe(429);
+    // 🔴 期 9 第四批：429 信封现在由 `codedBody()` 组装 ⇒ 必须带 `code`，
+    //    而 `message` 与迁移前**逐字相同**（这一族以前是两个棘轮都数不到的盲区：
+    //    中文当**实参**传给响应助手，既不在 throw 里也不在 `{ message: … }` 里）。
+    expect(last.r.out.body.code).toBe('rateLimited');
+    expect(last.r.out.body.message).toBe('请求过于频繁，请稍后再试');
+  });
+
+  it('🔴 初始化/恢复那一档的 429 带自己的错误码，且占位符**已被真实数字填掉**', () => {
+    // 为什么要单独钉这一条：`initRateLimited` 的文案里有 `{max}` 与 `{seconds}`，
+    // 而它们的值来自 `scaleLimit(...)` 与 `retryAfterSeconds`（**运行时**才有）⇒
+    // 传错参数名或忘了传，用户就会看到字面 `{max}`（admin 侧那条"调用点参数对账"是静态判据，
+    // 这条是**运行时**判据，两者互补）。
+    const ip = uniqueIp();
+    const req: any = { method: 'POST', path: '/api/admin/init', headers: {}, ip, socket: { remoteAddress: ip } };
+    let out: any = null;
+    for (let i = 0; i < 40; i += 1) {
+      const res: any = {
+        out: {} as any,
+        status(c: number) { this.out.status = c; return this; },
+        setHeader(k: string, v: string) { this.out.headers = { ...(this.out.headers || {}), [k]: v }; return this; },
+        json(b: any) { this.out.body = b; return this; },
+      };
+      let called = false;
+      rateLimitMiddleware({ ...req, res } as any, res as any, () => { called = true; });
+      if (!called) { out = res.out; break; }
+    }
+    expect(out).not.toBeNull();
+    expect(out.status).toBe(429);
+    expect(out.body.code).toBe('initRateLimited');
+    // 🔴 不许残留占位符（这就是"参数名写错"会暴露的地方）
+    expect(String(out.body.message)).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+    expect(String(out.body.message)).toMatch(/每 10 分钟最多 \d+ 次写请求/);
+    expect(out.body.params).toEqual(expect.objectContaining({ max: expect.any(Number), seconds: expect.any(Number) }));
   });
 
   it('初始化接口的额度比公开写接口更严', () => {

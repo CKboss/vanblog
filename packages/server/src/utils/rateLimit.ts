@@ -3,6 +3,7 @@ import { pickSocketIp } from 'src/provider/log/utils';
 import { pickTrustedClientIp } from './trustedProxy';
 import { consumeAttempt } from './attemptLimit';
 import { scaleLimit } from './clusterRole';
+import { codedBody } from 'src/utils/serverErrorCodes';
 
 /**
  * 粗粒度的全局速率限制 + 安全响应头。
@@ -261,9 +262,24 @@ export function isInternalRequest(req: any): boolean {
   return timingSafeEqual(a, b);
 }
 
-function tooManyRequests(res: Response, retryAfterSeconds: number, message: string) {
+// 🔴 期 9 第四批：第三个参数从**中文文案**改成**错误码**（默认 `rateLimited`）。
+//    429 信封从此由 `codedBody()` 组装 ⇒ 响应体是 `{ statusCode, message(中文), code }`：
+//    message 与今天**逐字相同**（无回归），而前端/后台可以按 `code` 显示当前语言的译文。
+//    ⚠️ `rateLimited`（那一档的默认码）文案里没有占位符 ⇒ 不传 params（秒数仍只在 `Retry-After` 头里，
+//    与今天一致）；`initRateLimited` / `publicListRateLimited` 文案里有 `{max}` / `{seconds}` ⇒ 必须传，
+//    否则用户会看到字面占位符（"调用点参数与码表占位符两向对账"那条判据会红）。
+// 🔴 第三个参数收的是**已经组装好的响应体**（`codedBody('<code>', params)`），不是错误码字符串。
+//    理由：admin 侧那条"防死码"判据是按 `codedBody('<code>'` / `codedError('<code>'` 这个**形状**
+//    在调用点里找码名的（不能用裸 `'<code>'`：登记表自己就含那个字符串，会恒真）⇒
+//    如果码名被当成普通字符串实参传进助手，那条判据就找不到它，会把活码判成死码。
+//    👉 让 `codedBody(...)` **出现在调用点**，既满足判据，也让"这处返回什么码"在阅读时一眼可见。
+function tooManyRequests(
+  res: Response,
+  retryAfterSeconds: number,
+  body: ReturnType<typeof codedBody> = codedBody('rateLimited'),
+) {
   res.setHeader('Retry-After', String(Math.max(1, retryAfterSeconds)));
-  res.status(429).json({ statusCode: 429, message });
+  res.status(429).json(body);
 }
 
 export function rateLimitMiddleware(req: Request, res: Response, next: () => void) {
@@ -314,15 +330,16 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
         windowMs: 10 * 60 * 1000,
       });
       if (!hit.allowed) {
+        // 🔴 期 9 第四批：这段长指引迁进码表（`initRateLimited`），数字走 params。
+        //    ⚠️ `scaleLimit(INIT_LIMIT_PER_10MIN)` 仍在**调用点**算：它按 worker 数摊薄，是运行时值，
+        //    不能写死在译文里（否则多进程部署下提示的额度与实际额度不一致 —— 那比不提示更糟）。
         return tooManyRequests(
           res,
           hit.retryAfterSeconds,
-          `初始化/恢复接口调用过于频繁：每 10 分钟最多 ${scaleLimit(INIT_LIMIT_PER_10MIN)} 次写请求，` +
-            `约 ${Math.max(1, Math.round(hit.retryAfterSeconds))} 秒后可以重试。` +
-            '只有**写操作**（POST 等非安全方法）计入这个额度，GET/HEAD/OPTIONS 不计。' +
-            '如果你是在做健康检查或"站点是否已初始化"的状态探测，请改用 GET /api/public/health —— ' +
-            '它不占这个额度，也不会把真正的初始化/灾难恢复锁在门外。' +
-            '确需更多次恢复尝试（例如反复试口令）可临时调高 VANBLOG_INIT_LIMIT_PER_10MIN。',
+          codedBody('initRateLimited', {
+            max: scaleLimit(INIT_LIMIT_PER_10MIN),
+            seconds: Math.max(1, Math.round(hit.retryAfterSeconds)),
+          }),
         );
       }
     }
@@ -333,7 +350,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
         windowMs: 60 * 1000,
       });
       if (!hit.allowed) {
-        return tooManyRequests(res, hit.retryAfterSeconds, '请求过于频繁，请稍后再试');
+        return tooManyRequests(res, hit.retryAfterSeconds);
       }
     }
 
@@ -344,7 +361,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
         windowMs: 60 * 1000,
       });
       if (!hit.allowed) {
-        return tooManyRequests(res, hit.retryAfterSeconds, '请求过于频繁，请稍后再试');
+        return tooManyRequests(res, hit.retryAfterSeconds);
       }
       return next();
     }
@@ -373,10 +390,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
         return tooManyRequests(
           res,
           listHit.retryAfterSeconds,
-          '分类/标签列表接口调用过于频繁，请稍后再试。' +
-            `这一档默认每 IP 每分钟 ${scaleLimit(PUBLIC_LIST_LIMIT_PER_MIN)} 次，` +
-            '可用 VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN 调整。' +
-            '若你在做站点聚合，请改用 /api/public/article?category=…&page=…&pageSize=…（那是数据库级分页）。',
+          codedBody('publicListRateLimited', { max: scaleLimit(PUBLIC_LIST_LIMIT_PER_MIN) }),
         );
       }
     }
@@ -386,7 +400,7 @@ export function rateLimitMiddleware(req: Request, res: Response, next: () => voi
       windowMs: 60 * 1000,
     });
     if (!global.allowed) {
-      return tooManyRequests(res, global.retryAfterSeconds, '请求过于频繁，请稍后再试');
+      return tooManyRequests(res, global.retryAfterSeconds);
     }
     return next();
   } catch {

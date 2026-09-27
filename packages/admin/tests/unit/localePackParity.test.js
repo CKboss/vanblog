@@ -1329,9 +1329,16 @@ describe('多语言：每个已接 i18n 的文件里的每个 id 都必须在三
     // 翻译它会让「站点已初始化 ⇒ 跳登录页」这条分支永久失效。
     const src = read(`${INIT_DIR}/index.tsx`);
     assert.match(src, /includes\('已初始化'\)/, 'wire-contract 匹配被改动了，请确认这是有意的');
+    // 🔴 判据收窄（2026-09-28）：查的是"**某条译文的值就是那个协议字符串**"，不是"值里**提到**了它"。
+    //    第一版用 `v.includes('已初始化')` ⇒ 期 9 第四批那条限流长指引（`error.initRateLimited`）里
+    //    有一句『如果你是在做健康检查或"站点是否**已初始化**"的状态探测…』被误判成"协议字符串进了语言包"。
+    //    👉 危险的情形是**整条译文等于**那个字面量（那意味着有人把协议串当文案翻译了，
+    //      InitPage 的 `includes('已初始化')` 匹配就会跟着语言漂）；
+    //      而一句长文案里**提到**这个词是无害的（它不参与比对）。
+    //    ⚠️ 收窄之后性质没放：`assert.equal(v.trim(), '已初始化')` 仍能抓住"新增一条值就是协议串"的 key。
     for (const l of LOCALES) {
-      const leaked = Object.entries(packs[l]).filter(([, v]) => v.includes('已初始化'));
-      assert.deepEqual(leaked.map(([k]) => k), [], `${l} 里出现了 wire-contract 字符串`);
+      const leaked = Object.entries(packs[l]).filter(([, v]) => String(v).trim() === '已初始化');
+      assert.deepEqual(leaked.map(([k]) => k), [], `${l} 里有一条译文的值**就是** wire-contract 字符串`);
     }
   });
 });

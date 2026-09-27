@@ -2015,4 +2015,14 @@ export default {
   'error.commentContentTooLong': '评论内容不能超过 {max} 个字符',
   'error.commentNotFound': '评论不存在',
   'error.commentDataImageBudget': '评论里包含无法在合理时间内解析的 data: 图片引用（疑似构造输入），该行已跳过',
+
+  // ── 🔴 期 9 第四批：限流信封（`utils/rateLimit.ts` 的 `tooManyRequests()`）──
+  //    🔴 这一族以前**两个棘轮都数不到**：中文既不在 `throw` 里、也不在 `{ message: … }` 里，
+  //    而是当**实参**传给响应助手（助手内部才拼 `{ statusCode: 429, message }`）⇒ 属清点口径的盲区。
+  //    而它偏偏是**访客/脚本最先撞到的错误之一**（全局桶、公开写桶、静态资源桶都用它）。
+  'error.rateLimited': '请求过于频繁，请稍后再试',
+  // 🔴 期 9 第四批（续）：限流族的两条**长指引**（给脚本/运维看的，不是访客 toast）。
+  //    ⚠️ 里面的 `scaleLimit(...)` 值走 params（`{max}` / `{seconds}`）⇒ 多进程部署下提示的额度与实际一致。
+  'error.initRateLimited': '初始化/恢复接口调用过于频繁：每 10 分钟最多 {max} 次写请求，约 {seconds} 秒后可以重试。只有**写操作**（POST 等非安全方法）计入这个额度，GET/HEAD/OPTIONS 不计。如果你是在做健康检查或"站点是否已初始化"的状态探测，请改用 GET /api/public/health —— 它不占这个额度，也不会把真正的初始化/灾难恢复锁在门外。确需更多次恢复尝试（例如反复试口令）可临时调高 VANBLOG_INIT_LIMIT_PER_10MIN。',
+  'error.publicListRateLimited': '分类/标签列表接口调用过于频繁，请稍后再试。这一档默认每 IP 每分钟 {max} 次，可用 VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN 调整。若你在做站点聚合，请改用 /api/public/article?category=…&page=…&pageSize=…（那是数据库级分页）。',
 };

@@ -1848,4 +1848,13 @@ export default {
   'error.commentContentTooLong': 'The comment cannot exceed {max, plural, one {# character} other {# characters}}',
   'error.commentNotFound': 'The comment does not exist',
   'error.commentDataImageBudget': 'The comment contains a data: image reference that cannot be parsed within a reasonable time (suspected constructed input), so that line was skipped',
+
+  // ── 🔴 期 9 第四批（3 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 环境变量名、HTTP 方法、端点路径三份逐字相同（技术标识符契约）。
+  'error.rateLimited': 'Too many requests. Please try again later.',
+  // ── 🔴 期 9 第四批（续，2 keys）── 这两条是**给脚本/运维看的长指引**，按运维文档的口吻写。
+  //    🔴 计数用 ICU plural；🔴 环境变量名 / HTTP 方法 / 端点路径（含省略号 `…`）三份逐字相同；
+  //    🔴 不用缩写、不用全角标点、不用 em dash（用 ` - `）。
+  'error.initRateLimited': 'Too many calls to the initialization/recovery endpoint: at most {max, plural, one {# write request} other {# write requests}} every 10 minutes, and you can retry in about {seconds, plural, one {# second} other {# seconds}}. Only **write operations** (POST and other non-safe methods) count against this quota; GET/HEAD/OPTIONS do not. If you are running a health check or probing whether the site is already initialized, use GET /api/public/health instead - it does not consume this quota and will not lock out a real initialization/disaster recovery. If you truly need more recovery attempts (for example, trying the password repeatedly), temporarily raise VANBLOG_INIT_LIMIT_PER_10MIN.',
+  'error.publicListRateLimited': 'Too many calls to the category/tag list endpoint; please try again later. This tier defaults to {max, plural, one {# request} other {# requests}} per IP per minute and can be adjusted with VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN. If you are performing site aggregation, use /api/public/article?category=…&page=…&pageSize=… instead (that is database-level pagination).',
 };
