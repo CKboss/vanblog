@@ -13,6 +13,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { codedError, ServerErrorCode } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   assertUploadedImage,
@@ -197,10 +198,8 @@ export class ImgController {
       if (typeof res?.setHeader === 'function') {
         res.setHeader('Retry-After', String(Math.max(1, hit.retryAfterSeconds)));
       }
-      throw new HttpException(
-        { statusCode: 429, message: '图片检测过于频繁，请稍后再试' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      // 🔴 期 9 第六批：迁进码表（`Retry-After` 头照旧设，脚本不必解析消息）。
+      throw codedError('imgDetectRateLimited');
     }
     // ⚠️ 上传来的字节要先过内容校验（按内容判类型、拒 SVG），并且用**检测专用的 8MP 上限**：
     //    以前这里只有 IMAGE_UPLOAD_OPTIONS（50MB + 后缀过滤），一个 50MB 的合法图片就能让
@@ -209,10 +208,12 @@ export class ImgController {
     if (file?.buffer) {
       assertUploadedImage(file.buffer, file?.originalname, {
         maxPixels: MAX_STEGO_DETECT_PIXELS,
-        tooLargeHint:
-          `这张图太大了，没法在线检测（上限约 ${Math.round(
-            MAX_STEGO_DETECT_PIXELS / 1_000_000,
-          )}MP）。要验更大的图，请先把它上传到图床，然后在图片列表里用「检测水印」按 sign 验。`,
+        // 🔴 期 9 第六批：这句自定义提示改成**错误码 + params**（原来是把一句中文当参数传进去，
+        //    切到英文时它仍是中文）。MP 上限走 params（`Math.round(...)` 仍在调用点算）。
+        tooLarge: {
+          code: 'stegoImageTooLarge',
+          params: { max: Math.round(MAX_STEGO_DETECT_PIXELS / 1_000_000) },
+        },
       });
     }
     const res = await this.staticProvider.detectStegoWatermark({

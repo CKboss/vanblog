@@ -105,7 +105,15 @@ describe('stego/detect：专用限流（10 次/分钟/IP）', () => {
     }
     expect(thrown).toBeInstanceOf(HttpException);
     expect(thrown.getStatus()).toBe(429);
-    expect(thrown.getResponse()).toEqual({ statusCode: 429, message: '图片检测过于频繁，请稍后再试' });
+    // 🔴 期 9 第六批：这一档限流也接上了错误码 ⇒ 响应体**多出** `code`（`message` 逐字不变）。
+    //    ⚠️ 这条断言原来是 `toEqual({ statusCode, message })`（严格相等）⇒ 多一个字段就红。
+    //    👉 严格 `toEqual` 响应体是把"形状"钉死；这里要钉的**性质**是
+    //    "429 + 那句中文 + 现在还要带码"，所以照实加上 `code`（而不是改成 objectContaining 放松掉）。
+    expect(thrown.getResponse()).toEqual({
+      statusCode: 429,
+      message: '图片检测过于频繁，请稍后再试',
+      code: 'imgDetectRateLimited',
+    });
     expect(Number(headers['Retry-After'] || 0)).toBeGreaterThanOrEqual(1);
     // ⚠️ 被挡住的那次**不能**已经把图解码了（那正是我们要省的成本）
     expect(calls).toHaveLength(10);
@@ -188,15 +196,30 @@ describe('assertUploadedImage：可选的 maxPixels 不改变既有默认', () =
     expect(() => assertUploadedImage(PNG_1x1, 'a.png')).not.toThrow();
   });
 
-  it('传了更小的 maxPixels 就按它判，并给出调用方自己的文案', () => {
+  // 🔴 期 9 第六批：调用方自定义的那句文案从 **`tooLargeHint: string`** 换成了
+  //    **`tooLarge: { code, params }`** —— 因为"把一句中文当参数传进来"会让英文界面夹中文
+  //    （第 4 次踩这个坑）。性质没放：调用方仍然能决定"超限时说哪句话"，只是现在说的是**一个码**。
+  it('传了更小的 maxPixels 就按它判，并用调用方指定的错误码（而不是通用那条）', () => {
     mockedImageSize.mockReturnValue({ type: 'png', width: 6000, height: 6000 });
     let msg = '';
+    let body: any = null;
     try {
-      assertUploadedImage(PNG_1x1, 'a.png', { maxPixels: MAX_STEGO_DETECT_PIXELS, tooLargeHint: '自定义文案' });
+      assertUploadedImage(PNG_1x1, 'a.png', {
+        maxPixels: MAX_STEGO_DETECT_PIXELS,
+        tooLarge: { code: 'stegoImageTooLarge', params: { max: 8 } },
+      });
     } catch (err: any) {
       msg = String(err.message);
+      body = typeof err.getResponse === 'function' ? err.getResponse() : null;
     }
-    expect(msg).toBe('自定义文案');
+    // ① 用的是调用方指定的那个码（不是通用那条 uploadTooLargePixels）
+    expect(body?.code).toBe('stegoImageTooLarge');
+    // ② params 真的被填进去了（不许残留 `{max}`），且中文正文与码表一致
+    expect(msg).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+    expect(msg).toContain('上限约 8MP');
+    expect(msg).toContain('这张图太大了');
+    // ③ 反向：通用那条的文案不许出现（证明真的是"调用方覆盖了"）
+    expect(msg).not.toContain('图片尺寸过大');
   });
 });
 

@@ -128,7 +128,13 @@ describe('后台健壮性：请求失败也要把 loading 收掉', () => {
       /try \{[\s\S]*?\} catch \(err\) \{[\s\S]*?\} finally \{\s*setLoading\(false\);/,
     );
     // 🔴 期 6 第六批起走 t()（性质没放：catch 里仍然必须弹「导出失败！」）
-    assert.match(fn, /message\.error\(t\('[^']+', '导出失败！'\)\)/);
+    // 🔴 期 9 第六批：catch 里那句从 `message.error(t(…))` 改成了 `reportRequestError(message, err, t(…), { t })`
+    //    （服务端的具体原因优先，笼统文案只兜底）⇒ 锚点两种形状都认。
+    //    性质没放：① catch 里**必须**给用户一句话；② 下面那条 finally 判据仍然要求收掉 loading。
+    assert.match(
+      fn,
+      /(?:message\.error\(t\('[^']+', '导出失败！'\)\)|reportRequestError\(\s*message,\s*err,\s*t\('[^']+', '导出失败！')/,
+    );
     assert.match(fn, /URL\.revokeObjectURL\(url\)/);
     assert.equal((codeOnly(fn).match(/setLoading\(false\)/g) || []).length, 1);
   });
@@ -358,5 +364,54 @@ describe('后台文档外壳：语言标签', () => {
     // 注意 readRepo 的根是 packages/（不是仓库根），路径别多写一层 packages
     const doc = readRepo('website/pages/_document.tsx');
     assert.match(doc, /<Html lang="zh-CN"/);
+  });
+});
+
+  // 🔴 本文件的 `read` 是 **admin 相对**、`readRepo` 是 **packages 相对**（`repoRoot = adminRoot/..`）
+  //    ⇒ 都不是仓库根。这里自己算一个（不去改既有常量：别的用例可能正依赖它现在的语义）。
+  const readFromRepoRoot = (rel) => readFileSync(path.join(adminRoot, '..', '..', rel), 'utf8');
+
+describe('🔴 裸 fetch 的调用点必须自己判状态码（否则失败会被当成正常结果渲染）', () => {
+  it('「检测水印」在 statusCode !== 200 时必须报错，**不许**进结果弹窗', () => {
+    // ## 为什么要这条（2026-09-28 期 9 第六批，活体撞出来的真缺陷）
+    // `detectStegoByFile()` 用的是**裸 fetch** + `return res.json()` —— 🔴 **不看 `res.ok`**。
+    // 于是服务端 400（例如"这不是可识别的图片文件"）时它照样 resolve，
+    // `showDetectResult()` 把错误体当正常结果渲染 ⇒ 界面弹出一个**看起来完全正常**的
+    // 「检测水印：xxx.png / 没有检测到本站的水印」弹窗，还列了四条"常见原因"
+    // （不是在本站上传的 / 上传时关了水印 / 被缩放裁剪过 / 密钥换了）——
+    // 🔴 而真正的原因是"你传的根本不是图片"，用户会照着那四条去查水印设置，方向完全错。
+    // 取证：网络面板 `400 /api/admin/img/stego/detect`，页面弹窗 `Watermark check: … No watermark … found.`。
+    //
+    // 👉 🔴 **裸 fetch 绕开了 umi-request 的 adaptor 与全局 errorHandler**，所以"失败也会 resolve"，
+    //    调用点必须自己判 `res.ok` / `statusCode`，并且**自己取原因**（`serverErrorText(res, t)`）——
+    //    ⚠️ 这里不能用 `reportRequestError`：那个助手是给"umi-request 抛出的异常"用的
+    //    （它会先问"全局弹过了吗"，弹过就闭嘴，而且显示的是 fallbackText）⇒ 裸 fetch 的错误
+    //    从来没进过全局，用它就等于**又吞掉原因**。
+    const src = readFromRepoRoot('packages/admin/src/pages/Static/img/index.tsx');
+    const i = src.indexOf('async function handleDetectFile');
+    assert.ok(i > 0, '找不到 handleDetectFile（锚点失效？）');
+    // 🔴 **先剥注释再找锚点**（本文件已有 `codeOnly()` 这个助手）：我写的那段解释性注释里
+    //    正好出现了 `showDetectResult()` 这个词 ⇒ 不剥注释就会"自己匹配自己"，
+    //    顺序判据当场假红（实测：注释里的位置 314 < 真正的判据位置 1205）。
+    const rawFn = src.slice(i, src.indexOf('\n  function ', i + 10) > 0 ? src.indexOf('\n  function ', i + 10) : i + 2000);
+    const fn = codeOnly(rawFn);
+    // ① 必须有状态码判据
+    assert.match(fn, /statusCode\s*!==\s*200|!res\.ok/, '🔴 handleDetectFile 里没有对失败状态做判断（裸 fetch 会 resolve）');
+    // ② 判据必须在 `showDetectResult(` **之前**（顺序错了等于没判）
+    const iCheck = fn.search(/statusCode\s*!==\s*200|!res\.ok/);
+    const iShow = fn.indexOf('showDetectResult(');
+    assert.ok(iShow > 0, '找不到 showDetectResult 调用（锚点失效？）');
+    assert.ok(iCheck < iShow, `状态码判据（${iCheck}）必须在 showDetectResult（${iShow}）之前`);
+    // ③ 失败分支必须给出**服务端的具体原因**（有错误码就显示译文），而不是笼统的"检测失败"
+    const failBranch = fn.slice(iCheck, iShow);
+    assert.match(
+      failBranch,
+      /serverErrorText\(/,
+      '🔴 失败分支没有用 serverErrorText 取服务端原因 ⇒ 具体原因（与错误码译文）会被吞掉',
+    );
+    // ④ 服务侧那个 API 函数确实是裸 fetch（这条判据的前提；哪天它改用 umi-request 了，本条要跟着改）
+    const api = readFromRepoRoot('packages/admin/src/services/van-blog/api.js');
+    const fnApi = api.slice(api.indexOf('export async function detectStegoByFile'));
+    assert.match(fnApi.slice(0, 600), /await fetch\(/, 'detectStegoByFile 不再是裸 fetch ⇒ 本条判据的前提变了，请重新评估');
   });
 });

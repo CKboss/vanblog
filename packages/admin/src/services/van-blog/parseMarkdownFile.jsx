@@ -1,4 +1,5 @@
 import { getAllCategories } from '@/services/van-blog/api';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { pathnameFromFrontMatter } from '@/services/van-blog/importPathname';
 import { message, Modal } from 'antd';
 import fm from 'front-matter';
@@ -34,7 +35,9 @@ export const parseMarkdownFile = async (file, allowNotExistCategory, t = IDENTIT
     const { data } = await getAllCategories();
     allCategories = data;
   } catch (err) {
-    message.error(t('common.loadCategoriesFailed', '获取当前分类信息失败！'));
+    // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+    //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+    reportRequestError(message, err, t('common.loadCategoriesFailed', '获取当前分类信息失败！'), { t });
     return;
   }
   let category = undefined;

@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError, ServerErrorCode } from 'src/utils/serverErrorCodes';
 import compressing from 'compressing';
 import * as yaml from 'yaml';
 import { findUnsafeArchiveMember } from 'src/utils/fullBackup';
@@ -93,7 +94,7 @@ export async function readMdzEntries(
   StreamCtor?: any,
 ): Promise<{ entries: Map<string, Buffer>; notes: string[] }> {
   if (!buffer || !buffer.length) {
-    throw new BadRequestException('上传内容为空：请选择一个 .mdz 文件');
+    throw codedError('mdzImportEmpty');
   }
   const entries = new Map<string, Buffer>();
   const notes: string[] = [];
@@ -594,9 +595,7 @@ export async function importMdzBuffer(buffer: Buffer, ingest: MdzIngestFn): Prom
   const selected = selectMarkdownMember(entries.keys());
   notes.push(...selected.notes);
   if (!selected.name) {
-    throw new BadRequestException(
-      '压缩包里没有找到 Markdown 文件（*.md）：.mdz 应该是「一个 .md + 同名 .assets 图片目录」的 zip 包',
-    );
+    throw codedError('mdzImportNoMarkdown');
   }
   const markdownMember = selected.name;
   const mdText = entries.get(markdownMember)!.toString('utf8');

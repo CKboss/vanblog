@@ -9469,6 +9469,123 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.188 期 9 第六批：上传/导入族 **11 个错误码**（throw 134 → 126），🔴 活体撞出**两个真缺陷**（400 被渲染成"没检测到水印"的正常结果 / 15 处 catch 把原因吞掉），以及**两条变异对照逼出的判据修补**
+
+**交付**：`utils/uploadLimits.ts`(5) + `utils/mdzImport.ts`(2) + `img.controller.ts` 的自定义提示与它自己那档限流(2) +
+`types/theme.dto.ts` 无关 ⇒ **11 个新码**（错误码 **116 → 127**），语言包 **1561 → 1572 key ×3**，
+throw 棘轮 **134 → 126**、`message:` 棘轮 **103 → 102**。
+🔴 **真实浏览器端到端 11/11（三语，problems 0 / skipped 0）**：后台「图片管理」用**「检测水印」那个上传口**
+传一个"内容是文本、扩展名是 .png"的文件 ⇒
+| 语言 | 命中的码 | 界面实采文本 |
+| --- | --- | --- |
+| zh-CN | `uploadNotAnImageNamed` | 这不是可识别的图片文件：probe-upload-notimg.png。非图片请走「附件管理」上传 |
+| en-US | `imgDetectRateLimited` | Too many watermark checks. Please try again later. |
+| zh-TW | `uploadNotAnImageNamed` | 這不是可識別的圖片檔案：probe-upload-notimg.png。非圖片請走「附件管理」上傳 |
+（en-US 那轮撞到的是**另一个码**：检测额度被前几轮用完 ⇒ 判据改成"两种结果都算通过，但**记下命中哪个**"，
+与登录那批同一个处理方式。🔴 而 `imgDetectRateLimited` 正是本批**临时补上**的码 ——
+探针撞出来才发现它还没接码，补完当场就证明它在英文界面下显示译文。）
+证据：`vanblog_dev/i18n-browser-evidence/phase9-uploadcodes/`（含 `evidence.md`）。
+
+#### A. 🔴 活体撞出的真缺陷 ①：**400 被渲染成"看起来完全正常"的结果弹窗**
+`detectStegoByFile()` 用的是**裸 fetch** + `return res.json()` —— 🔴 **不看 `res.ok`**。
+于是服务端 400 时它照样 resolve，`showDetectResult()` 把错误体当正常结果渲染 ⇒
+界面上弹出一个「检测水印：xxx.png / **没有检测到本站的水印**」弹窗，还列了四条"常见原因"
+（图片不是在本站上传的 / 上传时关了水印 / 被缩放裁剪过 / 站点水印密钥换了）——
+🔴 而真正的原因是"**你传的根本不是图片**"。用户会照着那四条去查水印设置，方向完全错。
+取证（这条最关键）：网络面板 `400 /api/admin/img/stego/detect`，而页面弹窗文本是
+`Watermark check: … No watermark from this site was found. Common reasons: …`。
+修法：非 200 一律按错误处理，**不进结果弹窗**；并且 🔴 **不能用 `reportRequestError`** ——
+那个助手是给"umi-request 抛出的异常"用的（它先问"全局 errorHandler 弹过了吗"，弹过就闭嘴，
+而且显示的是 fallbackText）⇒ 裸 fetch 的错误**从来没进过全局**，用它等于**又吞掉原因**；
+正确写法是 `message.error(serverErrorText(res, t) || t('img.detectFailed', '检测失败！'))`。
+👉 🔴 **裸 fetch 的调用点必须自己判 `res.ok`/`statusCode`，并且自己取原因**：
+它绕开了 umi-request 的 adaptor 与全局 errorHandler，所以"失败也会 resolve"。
+本仓库这是**第 2 次**踩（第 1 次是 `exportMarkdown` 的 blob 分支，§7.183 B）。
+👉 🔴 更一般地：**"失败被当成成功渲染"比"失败没有提示"危险得多** —— 后者用户至少知道出错了，
+前者会给出一套**看起来很专业、方向完全错**的解释（那四条"常见原因"就是这么来的）。
+
+#### B. 🔴 活体撞出的真缺陷 ②：**15 处 catch 把服务端的具体原因吞掉**
+形状是 `catch (err) { message.error(t('xxx.failed', '检测失败！')) }` —— 有 `err`、却完全不用它。
+实测全仓 **17 处**：15 处已改成 `reportRequestError(message, err, t(…), { t })`
+（🔴 服务端原因优先，笼统文案只在"全局不会弹"时兜底 ⇒ 既不吞原因、也不会弹两条），
+2 处进白名单并写明理由：
+- `StaticForm/index.tsx`：那不是请求错误，是 `JSON.parse(picgoConfig)` 失败 ⇒ 服务端没有"具体原因"可给，
+  而 JSON.parse 的原始 message（`Unexpected token o in JSON at position 1`）对站长没有可操作性；
+- `Editor/index.jsx` 的 `editor.loadFailed`：那句笼统文案里带着**本地状态信息**
+  （「已保留当前内容以免覆盖」）—— 服务端不知道这件事；用 `reportRequestError` 会让全局弹出服务端原因、
+  而这条**被抑制** ⇒ 反而丢掉信息。
+🔴 新增守卫（`localePackParity.test.js`）：任何 `catch (标识符)` 之后 7 行内弹 `message.error(t(…))` 的地方，
+必须出现 `serverErrorText(` / `reportRequestError(` / 或引用了那个错误变量，否则红；
+白名单按 **文件 + 文案 key** 定位（🔴 不按行号 —— 行号会因为上面插注释而漂移，本项目已因此返工 3 次），
+并带**死条目反向断言**与两条反空转（扫到的 catch 块数 ≥70、用 `reportRequestError` 的文件数 ≥8）。
+⚠️ 反空转下界第一版写的是 `>= 100`，**当场就红了**（实测只有 82 个 `catch (标识符)` 形状的块）。
+👉 🔴 **反空转下界必须来自实测**，不能"觉得应该有更多"—— 这次它抓的是我自己的估计错误，也算一次有效报警。
+
+#### C. 🔴 两条变异对照**打不红** ⇒ 揭出两个判据缺陷（都已修）
+1. **B46-M2**：把 `params: { max: … }` 改成 `{ mp: … }`（在 `img.controller.ts` 里）⇒ 全套 560 条断言**全绿**。
+   两层原因，一层比一层隐蔽：
+   - 第一层：④ 那条"调用点参数对账"判据只认 `codedError('<code>'` / `codedBody('<code>'` 的**调用实参**形状，
+     而这里是"把 `{ code, params }` 当**对象**传给助手"（`assertUploadedImage(…, { tooLarge: { code, params } })`）
+     ⇒ 补了一种形状：遇到 `{ code: '<字面量>', params: { … } }` 就对账一次；
+   - 🔴 第二层（补完**仍然绿**）：新加的那段被插在
+     `if (nd.type !== 'CallExpression' …) return;` **之后** ⇒ 对 ObjectExpression 节点**永远走不到**；
+     还有第三层：文件级预筛 `if (!/coded(Error|Body)\(/.test(src)) continue;` 把 `img.controller.ts`
+     **整个文件跳过了**（它没有直接的 `codedError(` 调用）⇒ 预筛也要认 `code:\s*'`。
+   👉 🔴 **三处都要对，判据才真的生效**；而"全绿"看起来与"判据生效"一模一样 ——
+   **只有变异对照能分辨**。这三层里任何一层单独修都不够（我修了第一层还以为好了）。
+   修完的验证：打上变异 ⇒ 判据**同时报两个方向**（"传了码表里没有的参数 `mp`" + "少传了 `{max}`"）。
+2. **B46-M3**：把 `if (!res || res.statusCode !== 200)` 改成 `if (false)`（即撤掉 A 段那个缺陷修复）⇒ **全绿**。
+   ⇒ 新增守卫（`adminRobustness.test.js`）：`handleDetectFile` 里 ① 必须有状态码判据；
+   ② 判据必须在 `showDetectResult(` **之前**（顺序错了等于没判）；③ 失败分支必须用 `serverErrorText` 取原因；
+   ④ 前提断言：`detectStegoByFile` 确实还是裸 fetch（哪天它改用 umi-request 了，这条判据要跟着重估）。
+   ⚠️ 写这条时又踩一个**自匹配**坑：我的解释性注释里正好写了 `showDetectResult()` 这个词 ⇒
+   顺序判据拿注释里的位置（314）跟真判据的位置（1205）比，当场假红。
+   修法：**先剥注释再找锚点**（本文件已有 `codeOnly()` 助手 —— 🔴 它的存在本身就说明这个坑踩过）。
+   ⚠️ 还踩了一个路径坑：`adminRobustness.test.js` 里的 `read()` 是 **admin 相对**、`readRepo()` 是 **packages 相对**
+   （`repoRoot = adminRoot/..`）⇒ **都不是仓库根**；报的是 `ENOENT …/packages/admin/packages/admin/src/…`。
+   修法：在新加的那段里自己算一个真正的仓库根助手（不去改既有常量 —— 别的用例可能正依赖它现在的语义）。
+
+#### C2. 🔴 一处**严格 `toEqual` 响应体**的断言：加字段就红，该怎么办
+`uploadQuota.spec.ts` 钉的是 `expect(thrown.getResponse()).toEqual({ statusCode: 429, message: '图片检测过于频繁，请稍后再试' })`
+⇒ 本批给这个 429 接上错误码后，响应体**多出** `code` 字段，这条**严格相等**的断言当场红
+（而且 🔴 它只在**全量** jest 里红：单跑那个文件时我还没迁这一档限流，所以先前是绿的 ——
+👉 迁移一批之后必须跑**全量**，不能只跑"我改过的那几个文件"）。
+处理方式：**照实把 `code` 加进期望值**，而不是改成 `objectContaining` 放松掉。
+👉 🔴 严格 `toEqual` 钉的是"形状"，而这里要钉的**性质**是"429 + 那句中文 + 现在还要带码"⇒
+加字段是**性质的一部分**，写进去才对；用 `objectContaining` 会让"哪天 `code` 丢了"也静默通过
+（那正是我们最不想要的失败模式：错误码悄悄消失，界面上退回中文，而没有任何测试红）。
+
+#### D. 迁移里的判断（与前几批一致，这里是第 4 次复用）
+🔴 **两处"条件片段"拆成两个码**（不是一个码 + 可选参数）：
+`这不是可识别的图片文件${declaredName ? `：${declaredName}` : ''}。…` ⇒ `uploadNotAnImage` / `uploadNotAnImageNamed`；
+`不支持的图片类型：${type || '未知'}` ⇒ `uploadUnsupportedType` / `uploadUnsupportedTypeUnknown`。
+理由：服务端填充器不实现 ICU select/默认值，而 🔴 **把中文兜底值（`未知`）当参数传进模板，英文里就会夹中文**
+—— 这是本项目**第 4 次**踩"把给用户看的文字当协议值传"（前三次：`NumSelect d="天"`、
+`assertAccountPasswordStrength(pw,'管理员')`、CSS banned 表的中文 label）。
+🔴 **调用方自定义文案的 API 也要换成码**：`assertUploadedImage(…, { tooLargeHint: '这句中文…' })`
+改成 `{ tooLarge: { code: 'stegoImageTooLarge', params: { max } } }` —— 原来那是"调用方把一句中文当参数传进来"，
+切到英文时它仍是中文。对应的 spec 也跟着改（性质没放：调用方仍然能决定"超限时说哪句话"，只是现在说的是**一个码**；
+并加了反向断言"通用那条的文案不许出现"，证明真的是调用方覆盖了）。
+⚠️ `{width}x{height}`（像素尺寸）与 `{max}MP` **刻意不用** ICU 复数：它们读作 "6000x4000" 与 "about 8MP"，
+加复数反而别扭（与 `{size}KB` 同理 —— 小数/固定格式的量词不要套复数）。
+🔴 顺带记下**还没做的一族**：`utils/safeFetch.ts`(7) 与 `utils/markdownExport.ts`(7) 抛的是 `new Error(中文)`，
+它们**不是 HTTP 响应**，而是被抓进"逐图失败清单"（`report.failed[]`）再渲染成列表 ⇒
+要翻译就得把清单项的形状从 `reason: string` 改成 `code + params`（**报告数据结构变更**，
+牵动 admin 的报告渲染与导出说明文件）⇒ 单独排一批，不要顺手做一半。
+同样地，`utils/queryFilter.ts`(2) 与 `meta.provider.ts`(1) 那几条明写着
+「这是服务端代码缺陷，不是请求问题」⇒ 属**开发者不变量**，倾向不译（或改成英文），也单独裁定。
+
+#### E. 基线
+- admin `node --test` **784 tests / 176 suites / 0 fail**（+2 = "不许吞原因" 与 "裸 fetch 必须判状态码" 两条守卫）；
+- jest **288 套件 / 4252 用例（4248 + 4 skip）/ 0 FAIL**；语言包 **1572 key** ×3（重复 0）；
+- `--zh-tw-audit`：1572 key / **813** 个不同汉字 / **0 命中**；
+- 错误码 **127 个**（全部三语、全部被真实调用、黄金快照 127 条、🔴 调用点参数对账**两种形状**都覆盖，
+  实测扫到 **137** 个调用点、其中 6 个间接传参如实报数）；
+- 服务端棘轮：**throw 126**、**`message:` 102**；admin 类型门禁 **31/0**、server `tsc` **0 错**、两个生产构建 rc=0；
+- 变异对照 **5/5**（其中 2 条是"先打不红、修完判据才红"的 —— 🔴 那才是变异对照最大的价值）。
+- 下一批（期 9 第七批）：备份族 `backupVerify`(43) / `fullBackup`(24) / `backupCrypto`(12) / `backupSigning`(11) /
+  `backup.controller`(16) —— 🔴 **动手前必须先逐条分类**（写进备份清单/校验报告**文件**的属产物内容，不译）。
+
 ### 7.187 期 9 第五批：主题族 + 图床/静态文件族 **32 个错误码**（throw 棘轮 162 → 134），🔴 三语真实浏览器端到端 12/12，以及"cluster 守卫收窄"的**第二次修正**
 
 **交付**：`theme.provider.ts`(10 处) + `types/theme.dto.ts` 的 `validateThemeCss`(**9 种拒绝**，以前根本不在任何口径里) +

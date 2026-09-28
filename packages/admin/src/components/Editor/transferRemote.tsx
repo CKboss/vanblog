@@ -1,4 +1,5 @@
 import { transferRemoteImages } from '@/services/van-blog/api';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import { message, Modal } from 'antd';
 import { BytemdPlugin } from 'bytemd';
 
@@ -83,7 +84,9 @@ export function transferRemotePlugin(
                     );
                   }
                 } catch (err) {
-                  message.error(t('editor.transferFailed', '外链图片转存失败！'));
+                  // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+                  //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+                  reportRequestError(message, err, t('editor.transferFailed', '外链图片转存失败！'), { t });
                 } finally {
                   setLoading(false);
                 }

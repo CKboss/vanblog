@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError, ServerErrorCode } from 'src/utils/serverErrorCodes';
 import type { Request } from 'express';
 import { imageSize } from 'image-size';
 import { isAvifBuffer } from './avif';
@@ -72,13 +73,18 @@ export interface VerifiedImage {
 export function assertUploadedImage(
   buffer: Buffer,
   declaredName?: string,
-  opts?: { maxPixels?: number; tooLargeHint?: string },
+  // 🔴 期 9 第六批：`tooLargeHint`（调用方自定义的中文提示）换成 **`tooLarge`（错误码 + params）**。
+  //    原来那是"调用方把一句中文当参数传进来"⇒ 界面切到英文时这句话仍是中文（第 4 次踩同一个坑）。
+  opts?: {
+    maxPixels?: number;
+    tooLarge?: { code: ServerErrorCode; params?: Record<string, string | number> };
+  },
 ): VerifiedImage {
   if (!buffer || !buffer.length) {
-    throw new BadRequestException('上传内容为空');
+    throw codedError('uploadEmpty');
   }
   if (isSvgish(buffer)) {
-    throw new BadRequestException('图床不接受 SVG（可内嵌脚本），请作为附件上传');
+    throw codedError('uploadSvgRejected');
   }
   let meta: { type?: string; width?: number; height?: number };
   try {
@@ -87,22 +93,30 @@ export function assertUploadedImage(
     if (isAvifBuffer(buffer)) {
       meta = { type: 'avif' };
     } else {
-      throw new BadRequestException(
-        `这不是可识别的图片文件${declaredName ? `：${declaredName}` : ''}。非图片请走「附件管理」上传`,
-      );
+      // 🔴 条件片段（有没有文件名）⇒ **拆成两个码**，不用"一个码 + 可选参数"：
+      //    服务端的填充器不实现 ICU select/默认值，而空参数会让英文里出现 `: ` 这种残句。
+      if (declaredName) {
+        throw codedError('uploadNotAnImageNamed', { name: declaredName });
+      }
+      throw codedError('uploadNotAnImage');
     }
   }
   const type = String(meta?.type || '').toLowerCase();
   if (!ALLOWED_IMAGE_TYPES.includes(type as any)) {
-    throw new BadRequestException(`不支持的图片类型：${type || '未知'}`);
+    // 🔴 同上：`type || '未知'` 那个中文兜底**不能当参数传**（英文里会夹中文）⇒ 拆成两个码。
+    if (type) {
+      throw codedError('uploadUnsupportedType', { type });
+    }
+    throw codedError('uploadUnsupportedTypeUnknown');
   }
   const pixels = Number(meta?.width || 0) * Number(meta?.height || 0);
   // 上限可以被调用方收紧（例如隐写检测只要 8MP）；不传就仍是全站那个 40MP。
   const maxPixels = Number(opts?.maxPixels ?? MAX_IMAGE_PIXELS);
   if (pixels > maxPixels) {
-    throw new BadRequestException(
-      opts?.tooLargeHint || `图片尺寸过大（${meta.width}x${meta.height}），请缩小后再上传`,
-    );
+    if (opts?.tooLarge) {
+      throw codedError(opts.tooLarge.code, opts.tooLarge.params);
+    }
+    throw codedError('uploadTooLargePixels', { width: meta.width, height: meta.height });
   }
   return { type, width: meta?.width, height: meta?.height };
 }

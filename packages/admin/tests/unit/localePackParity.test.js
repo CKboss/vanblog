@@ -2267,3 +2267,95 @@ describe('🔴 服务端错误文案不许**直通**（有 code 就必须显示�
     assert.ok(users.length >= 6, `只有 ${users.length} 个文件在用 serverErrorText（下界 6）⇒ 判据可能空转`);
   });
 });
+
+describe('🔴 catch 到的错误不许被一句笼统文案**吞掉**（服务端的具体原因要能到用户眼前）', () => {
+  const FILES2 = discoverI18nFiles(path.join(adminRoot, 'src'), [])
+    .map((abs) => path.relative(adminRoot, abs).split(path.sep).join('/'))
+    .filter((rel) => rel.startsWith('src/'));
+  const read2 = (rel) => readFileSync(path.join(adminRoot, rel), 'utf8');
+
+  // 🔴 白名单：**刻意**只弹笼统文案的两处（每条都写明理由；有反向断言防死条目）
+  // 🔴 白名单的形状是 `{ file, idKey, why }`：按**文件 + 那条文案的 key** 定位，不按行号
+  //    （行号会因为上面插入注释而漂移 —— 本项目已经因此返工过两次）。
+  const ALLOWED_GENERIC = [
+    {
+      file: 'src/components/StaticForm/index.tsx',
+      idKey: 'storage.picgoJsonInvalid',
+      why: 'JSON.parse 失败（不是请求错误）⇒ 服务端没有"具体原因"可给，而 JSON.parse 的原始 message 对站长没有可操作性',
+    },
+    {
+      file: 'src/pages/Editor/index.jsx',
+      idKey: 'editor.loadFailed',
+      why: '文案含**本地状态**信息（已保留当前内容以免覆盖），服务端不知道；用 reportRequestError 会让它被抑制 ⇒ 反而丢信息',
+    },
+  ];
+
+  it('每个 `catch (err)` 里弹的提示，要么带上服务端原因，要么在白名单里写明理由', () => {
+    // ## 为什么要这条（2026-09-28 期 9 第六批，活体撞出来的）
+    // 在后台「图片管理 → 检测水印」上传一个非图片文件，服务端返回的是**很具体**的 400：
+    //   `这不是可识别的图片文件：probe.png。非图片请走「附件管理」上传`（还带 code 与 params）
+    // 而界面上只弹了一句 `检测失败！` —— 🔴 具体原因被 catch 块**吞掉**了。
+    // 这类缺陷比"没翻译"更难发现：文案确实有、也确实跟着语言走、静态判据全绿，
+    // 只有**真的触发一次失败**才会发现"我根本没看到原因"。
+    // 实测全仓有 **17 处**这种形状；其中 15 处已改成 `reportRequestError(message, err, t(…), { t })`
+    // （服务端原因优先、笼统文案只在全局不会弹时兜底 ⇒ 既不吞原因也不弹两条），2 处进白名单。
+    const offenders = [];
+    for (const rel of FILES2) {
+      const src = read2(rel);
+      const lines = src.split('\n');
+      lines.forEach((line, i) => {
+        const m = /catch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(line);
+        if (!m) return;
+        const v = m[1];
+        const win = lines.slice(i, i + 7).join('\n');
+        if (!/message\.(error|warning)\(\s*t\(/.test(win)) return;
+        // 已经带上原因的三种写法都算合格
+        if (/serverErrorText\(|reportRequestError\(/.test(win)) return;
+        if (new RegExp('\\b' + v + '\\b').test(win.replace(line, ''))) return;
+        if (ALLOWED_GENERIC.some((a) => a.file === rel && win.includes(a.idKey))) return;
+        offenders.push(rel + ':' + (i + 1) + '  ' + line.trim().slice(0, 70));
+      });
+    }
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      '🔴 这些地方 catch 到错误却只弹一句笼统文案（服务端的**具体原因**被吞掉了）：\n  ' +
+        offenders.slice(0, 10).join('\n  ') +
+        '\n修法：`reportRequestError(message, err, t(\'<兜底 key>\', \'兜底中文\'), { t })`' +
+        '（服务端原因优先、笼统文案只在全局不会弹时兜底）；' +
+        '若那处**刻意**只要笼统文案（例如不是请求错误、或文案含本地状态信息），' +
+        '就登记进 ALLOWED_GENERIC 并写明理由。',
+    );
+    // 🔴 反空转：白名单不许有死条目（每条都要真的命中一次）
+    const hits = new Set();
+    for (const rel of FILES2) {
+      const src = read2(rel);
+      const lines = src.split('\n');
+      lines.forEach((line, i) => {
+        const m = /catch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(line);
+        if (!m) return;
+        const win = lines.slice(i, i + 7).join('\n');
+        if (!/message\.(error|warning)\(\s*t\(/.test(win)) return;
+        if (/serverErrorText\(|reportRequestError\(/.test(win)) return;
+        if (new RegExp('\\b' + m[1] + '\\b').test(win.replace(line, ''))) return;
+        for (const a of ALLOWED_GENERIC) {
+          if (a.file === rel && win.includes(a.idKey)) hits.add(a.file + '|' + a.idKey);
+        }
+      });
+    }
+    const dead = ALLOWED_GENERIC.map((a) => a.file + '|' + a.idKey).filter((k) => !hits.has(k));
+    assert.deepStrictEqual(dead, [], '🔴 白名单里有死条目（那处已经改成带原因的写法了）：' + dead.join(', '));
+    // 🔴 反空转：这条判据必须真的扫到了 catch 块（否则"0 处违规"是空的绿）
+    const catchCount = FILES2.reduce(
+      (n, rel) => n + (read2(rel).match(/catch\s*\(\s*[A-Za-z_$][\w$]*\s*\)/g) || []).length,
+      0,
+    );
+    // ⚠️ 下界是**实测值**（82）再留出余量取的 70，不是拍脑袋写的 100 ——
+    //    第一版写 `>= 100` 当场就红了（实测只有 82 个 `catch (标识符)` 形状的块）。
+    //    👉 🔴 **反空转下界必须来自实测**：写下界时"觉得应该有更多"恰恰是这条判据要抓的东西
+    //    （这次它抓的是我自己的估计错误，也算一次有效报警）。
+    assert.ok(catchCount >= 70, `只扫到 ${catchCount} 个 catch 块（下界 70，2026-09-28 实测 82）⇒ 遍历或判据坏了`);
+    const fixed = FILES2.filter((rel) => /reportRequestError\(/.test(read2(rel)));
+    assert.ok(fixed.length >= 8, `只有 ${fixed.length} 个文件在用 reportRequestError（下界 8）⇒ 判据可能空转`);
+  });
+});

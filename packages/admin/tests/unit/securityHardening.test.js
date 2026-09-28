@@ -71,7 +71,15 @@ describe('安全加固：上传与静态文件', () => {
     assert.match(stat, /assertUploadedImage\(buffer, originalName\)/);
     assert.match(stat, /safeImageExtension\(fileType, verified\.type\)/);
     const limits = read('packages/server/src/utils/uploadLimits.ts');
-    assert.match(limits, /不支持的图片类型/);
+    // 🔴 期 9 第六批：那句中文搬进了错误码登记表（`uploadUnsupportedType` / `uploadUnsupportedTypeUnknown`）
+    //    ⇒ 锚点跨文件搬：① uploadLimits 里必须抛这两个码（白名单校验还在）；
+    //    ② 登记表里那条的中文必须仍然是「不支持的图片类型」（文案没被改软）。
+    assert.match(limits, /codedError\('uploadUnsupportedType'/);
+    assert.match(limits, /codedError\('uploadUnsupportedTypeUnknown'\)/);
+    assert.match(
+      read('packages/server/src/utils/serverErrorCodes.ts'),
+      /uploadUnsupportedType: entry\('不支持的图片类型：\{type\}'/,
+    );
     assert.match(limits, /MAX_IMAGE_PIXELS/);
     const allowed = limits.match(/ALLOWED_IMAGE_TYPES = \[([\s\S]*?)\] as const/)[1];
     assert.doesNotMatch(allowed, /'svg'/);

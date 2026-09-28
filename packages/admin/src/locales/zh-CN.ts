@@ -2069,4 +2069,22 @@ export default {
   'error.themeCssForbiddenMozBinding': 'CSS 里含有 -moz-binding，已拒绝（主题只能是样式）',
   'error.themeCssForbiddenStyleClose': 'CSS 里含有 </style> 闭合标签，已拒绝（主题只能是样式）',
   'error.themeCssForbiddenScriptTag': 'CSS 里含有 <script> 标签，已拒绝（主题只能是样式）',
+
+  // ── 🔴 期 9 第六批：上传校验与 .mdz 导入 10 个服务端错误码（`utils/uploadLimits.ts` 5 处 +
+  //    `img.controller.ts` 的自定义提示 + `utils/mdzImport.ts` 2 处）。
+  //    🔴 两处"条件片段"刻意**拆成两个码**（`uploadNotAnImage` / `uploadNotAnImageNamed`、
+  //    `uploadUnsupportedType` / `uploadUnsupportedTypeUnknown`）：服务端填充器不实现 ICU select/默认值，
+  //    而"把中文兜底值（`未知`）当参数传进模板"会让英文里夹中文（本项目第 4 次踩这个坑）。
+  'error.uploadEmpty': '上传内容为空',
+  'error.uploadSvgRejected': '图床不接受 SVG（可内嵌脚本），请作为附件上传',
+  'error.uploadNotAnImage': '这不是可识别的图片文件。非图片请走「附件管理」上传',
+  'error.uploadNotAnImageNamed': '这不是可识别的图片文件：{name}。非图片请走「附件管理」上传',
+  'error.uploadUnsupportedType': '不支持的图片类型：{type}',
+  'error.uploadUnsupportedTypeUnknown': '不支持的图片类型：未知',
+  'error.uploadTooLargePixels': '图片尺寸过大（{width}x{height}），请缩小后再上传',
+  'error.stegoImageTooLarge': '这张图太大了，没法在线检测（上限约 {max}MP）。要验更大的图，请先把它上传到图床，然后在图片列表里用「检测水印」按 sign 验。',
+  'error.mdzImportEmpty': '上传内容为空：请选择一个 .mdz 文件',
+  'error.mdzImportNoMarkdown': '压缩包里没有找到 Markdown 文件（*.md）：.mdz 应该是「一个 .md + 同名 .assets 图片目录」的 zip 包',
+  // 🔴 期 9 第六批补：图片隐写检测那一档自己的限流（与 error.rateLimited 不是同一句）
+  'error.imgDetectRateLimited': '图片检测过于频繁，请稍后再试',
 };

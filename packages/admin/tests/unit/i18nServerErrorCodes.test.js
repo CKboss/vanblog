@@ -75,7 +75,10 @@ for (const l of LOCALES) {
 // 🔴 162 → **134**（期 9 第五批）：主题族 10 处 + 图床/静态文件族 18 处 throw 迁进码表（32 个新码，
 //   重复文本共用码 ⇒ 站点数 28、码数 32；另外 `validateThemeCss` 的 9 种拒绝**从来不在 throw 口径里**，
 //   它们是 `reason:` 属性 ⇒ 那 9 个码是"新增覆盖"，不减 throw 计数）。
-const THROW_BUDGET = 134;
+// 🔴 134 → **127**（期 9 第六批）：上传校验（uploadLimits 5 处 + img.controller 的自定义提示）
+//   与 .mdz 导入（2 处）迁进码表 ⇒ 10 个新码（两处"条件片段"各拆成两个码）。
+// 🔴 127 → **126**（期 9 第六批补：图片隐写检测那一档自己的限流也迁进了码表）
+const THROW_BUDGET = 126;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -85,7 +88,8 @@ const THROW_BUDGET = 134;
  */
 // 🔴 108 → **103**（期 9 第二批）：auth.controller 那 5 处 `new UnauthorizedException({ statusCode, message: '中文' })`
 //   与 login.guard 那 1 处的对象体一并迁进码表 ⇒ 这一族少了 5 处。
-const MESSAGE_BODY_BUDGET = 103;
+// 🔴 103 → **102**（同上：`img.controller.ts` 那处 429 信封迁进了码表）
+const MESSAGE_BODY_BUDGET = 102;
 
 /** 码 → 码表里的中文模板（`{name}` 占位符的权威来源）；供"调用点参数对账"那条判据用 */
 const CODE_ZH = (() => {
@@ -509,7 +513,11 @@ test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里�
     if (abs.endsWith('serverErrorCodes.ts')) continue; // 登记表本身不含调用点
     const rel = path.relative(ROOT, abs).split(path.sep).join('/');
     const src = fs.readFileSync(abs, 'utf8');
-    if (!/coded(Error|Body)\(/.test(src)) continue;
+    // 🔴 预筛要**同时**认两种形状：`codedError(`/`codedBody(` 调用，以及 `{ code: '<码>', params: {…} }`
+    //    对象（后者出现在"把码当数据传给助手"的地方，例如 `assertUploadedImage(…, { tooLarge: { code, params } })`）。
+    //    第一版只筛前者 ⇒ `img.controller.ts` 整个文件被 `continue` 跳过，
+    //    变异对照 B46-M2（把 `max` 改成 `mp`）因此**全绿**（这是"预筛把该看的文件筛掉了"的典型）。
+    if (!/coded(Error|Body)\(|code:\s*'/.test(src)) continue;
     // 🔴 解析失败会抛（fail-loud）："解析不到"绝不等于"没有问题"
     const ast = astInventory.parseSource(src, rel);
     // ⚠️ babel 的形状是 StringLiteral / ObjectProperty（acorn 是 Literal / Property）⇒ 两种都认。
@@ -532,6 +540,49 @@ test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里�
       }
     };
     walk(ast.program || ast, (nd) => {
+      // 🔴 这一段必须在下面那句 CallExpression 早退**之前**：第一版把它插在早退之后 ⇒
+      //    对 ObjectExpression 节点**永远走不到**（变异对照 B46-M2 因此一直是绿的：
+      //    把 params 的 `max` 改成 `mp`，560 条断言全过）。
+      //    👉 🔴 **插判据前先看清它在回调里的位置**：早退之后的代码只对一个子集生效，
+      //    而"全绿"看起来与"判据生效"一模一样 —— 只有变异对照能分辨。
+      // 🔴 期 9 第六批补：还有一种形状是"**把 `{ code, params }` 当对象传给助手**"
+      //    （`assertUploadedImage(buf, name, { tooLarge: { code: 'stegoImageTooLarge', params: { max } } })`）
+      //    ⇒ 它既不是 `codedError('<code>'`，params 也不在调用实参位上，第一版判据**完全看不见**
+      //    （变异对照 B46-M2 把 `max` 改成 `mp`，全套 560 条断言全绿）。
+      //    下面这段在**同一个 AST 遍历**里顺手处理：遇到 `{ code: '<字面量>', params: { … } }` 就对账一次。
+      if (nd.type === 'ObjectExpression') {
+        const props = {};
+        for (const pp of nd.properties || []) {
+          if (!pp || (pp.type !== 'ObjectProperty' && pp.type !== 'Property') || !pp.key) continue;
+          props[pp.key.name || pp.key.value] = pp.value;
+        }
+        const codeLit = str(props.code);
+        if (codeLit && CODE_ZH[codeLit] && props.params && props.params.type === 'ObjectExpression') {
+          callSites += 1;
+          const wantP = new Set(
+            [...String(CODE_ZH[codeLit]).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
+          );
+          const gotP = new Set();
+          for (const pp of props.params.properties || []) {
+            if (!pp || (pp.type !== 'ObjectProperty' && pp.type !== 'Property') || !pp.key) continue;
+            const k = pp.key.name || pp.key.value;
+            if (typeof k === 'string') gotP.add(k);
+          }
+          const unk = [...gotP].filter((k) => !wantP.has(k));
+          const miss = [...wantP].filter((k) => !gotP.has(k));
+          if (unk.length) {
+            problems.push(
+              `${rel}: { code: '${codeLit}', params: { ${unk.join(', ')} } } 传了码表里没有的参数` +
+                `（码表占位符是 {${[...wantP].join(', ') || '无'}}）⇒ 这些参数永远不会被渲染`,
+            );
+          }
+          if (miss.length) {
+            problems.push(
+              `${rel}: { code: '${codeLit}', … } 少传了 {${miss.join(', ')}} ⇒ 用户会看到字面占位符`,
+            );
+          }
+        }
+      }
       if (nd.type !== 'CallExpression' || !nd.callee || nd.callee.type !== 'Identifier') return;
       if (!/^coded(Error|Body)$/.test(nd.callee.name)) return;
       const code = str(nd.arguments && nd.arguments[0]);

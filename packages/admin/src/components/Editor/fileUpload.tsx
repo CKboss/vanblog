@@ -1,5 +1,5 @@
 import { message } from 'antd';
-import { serverErrorText } from '@/services/van-blog/requestError';
+import { serverErrorText, reportRequestError } from '@/services/van-blog/requestError';
 import { BytemdPlugin } from 'bytemd';
 
 const ATTACHMENT_UPLOAD_URL = '/api/admin/file/upload';
@@ -28,7 +28,9 @@ export const uploadAttachment = async (
     message.error(serverErrorText(data, t) || t('editor.attachmentUploadFailed', '附件上传失败！'));
     return null;
   } catch (err) {
-    message.error(t('editor.attachmentUploadFailed', '附件上传失败！'));
+    // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+    //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+    reportRequestError(message, err, t('editor.attachmentUploadFailed', '附件上传失败！'), { t });
     return null;
   }
 };

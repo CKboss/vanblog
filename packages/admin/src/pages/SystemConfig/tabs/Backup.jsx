@@ -9,7 +9,7 @@ import {
   listFullBackups,
   restoreFullBackup,
 } from '@/services/van-blog/api';
-import { serverErrorText } from '@/services/van-blog/requestError';
+import { serverErrorText, reportRequestError } from '@/services/van-blog/requestError';
 import {
   Alert,
   Button,
@@ -121,7 +121,9 @@ export default function (props) {
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      message.error(t('backup.exportFailed', '导出失败！'));
+      // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+      //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+      reportRequestError(message, err, t('backup.exportFailed', '导出失败！'), { t });
     } finally {
       setLoading(false);
     }
@@ -184,7 +186,9 @@ export default function (props) {
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      message.error(t('backup.downloadFailed', '下载失败！'));
+      // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+      //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+      reportRequestError(message, err, t('backup.downloadFailed', '下载失败！'), { t });
     } finally {
       setLoading(false);
     }

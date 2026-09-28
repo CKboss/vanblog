@@ -303,6 +303,36 @@ export const SERVER_ERROR_CODES = {
   //    `打包错误！` 2 处、`找不到这张图片！` 2 处）⇒ 18 处 throw → 13 个码。
   // ⚠️ `imgPackFailed` 迁移前是 `new HttpException({ statusCode: 500, message: '打包错误！' }, 500)`
   //    （**对象体** + 显式 500）⇒ 码表里用 `HttpException` + `status: 500`，形状与状态码都由黄金快照钉住。
+  // ── 上传校验与 .mdz 导入（utils/uploadLimits.ts / utils/mdzImport.ts / img.controller.ts，期 9 第六批）──
+  // 🔴 两处"条件片段"刻意**拆成两个码**（而不是一个码 + 可选参数）：
+  //    `${declaredName ? `：${declaredName}` : ''}` 与 `${type || '未知'}` ——
+  //    服务端的 `fillServerErrorMessage` 只做 `{name}` 替换、不实现 ICU select/默认值，
+  //    而且 🔴 把中文兜底值（'未知'）当参数传进模板，英文里就会夹中文（第 4 次踩这个坑）。
+  uploadEmpty: entry('上传内容为空', BadRequestException),
+  uploadSvgRejected: entry('图床不接受 SVG（可内嵌脚本），请作为附件上传', BadRequestException),
+  uploadNotAnImage: entry('这不是可识别的图片文件。非图片请走「附件管理」上传', BadRequestException),
+  uploadNotAnImageNamed: entry(
+    '这不是可识别的图片文件：{name}。非图片请走「附件管理」上传',
+    BadRequestException,
+  ),
+  uploadUnsupportedType: entry('不支持的图片类型：{type}', BadRequestException),
+  uploadUnsupportedTypeUnknown: entry('不支持的图片类型：未知', BadRequestException),
+  uploadTooLargePixels: entry('图片尺寸过大（{width}x{height}），请缩小后再上传', BadRequestException),
+  stegoImageTooLarge: entry(
+    '这张图太大了，没法在线检测（上限约 {max}MP）。要验更大的图，请先把它上传到图床，然后在图片列表里用「检测水印」按 sign 验。',
+    BadRequestException,
+  ),
+  // 🔴 期 9 第六批补一个：图片隐写检测那一档**自己的**限流（`img.controller.ts`），
+  //    与 `rateLimited`（全局/公开写/静态三个桶共用的那句）不是同一句文案 ⇒ 单独一个码。
+  //    ⚠️ 这一处是活体撞出来的：探针在 en-US 那轮把检测额度用掉了，zh-CN / zh-TW 两轮就吃到
+  //    这句**还没有码**的中文 ⇒ 界面上是中文、其它地方是译文（正是"漏一个码"会长什么样）。
+  imgDetectRateLimited: entry('图片检测过于频繁，请稍后再试', HttpException, 429),
+  mdzImportEmpty: entry('上传内容为空：请选择一个 .mdz 文件', BadRequestException),
+  mdzImportNoMarkdown: entry(
+    '压缩包里没有找到 Markdown 文件（*.md）：.mdz 应该是「一个 .md + 同名 .assets 图片目录」的 zip 包',
+    BadRequestException,
+  ),
+
   staticFileNotFound: entry('文件不存在', HttpException, 404),
   staticPathNotLocal: entry('只能处理本站 /static/ 下的文件！', BadRequestException),
   staticPathIllegal: entry('非法的静态文件路径！', BadRequestException),

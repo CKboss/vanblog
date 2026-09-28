@@ -266,6 +266,18 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   themeCssForbiddenMozBinding: { status: 400, error: 'Bad Request' },
   themeCssForbiddenStyleClose: { status: 400, error: 'Bad Request' },
   themeCssForbiddenScriptTag: { status: 400, error: 'Bad Request' },
+  // 🔴 期 9 第六批：上传校验与 .mdz 导入 10 个码（全部 BadRequestException）
+  uploadEmpty: { status: 400, error: 'Bad Request' },
+  uploadSvgRejected: { status: 400, error: 'Bad Request' },
+  uploadNotAnImage: { status: 400, error: 'Bad Request' },
+  uploadNotAnImageNamed: { status: 400, error: 'Bad Request' },
+  uploadUnsupportedType: { status: 400, error: 'Bad Request' },
+  uploadUnsupportedTypeUnknown: { status: 400, error: 'Bad Request' },
+  uploadTooLargePixels: { status: 400, error: 'Bad Request' },
+  stegoImageTooLarge: { status: 400, error: 'Bad Request' },
+  imgDetectRateLimited: { status: 429 },
+  mdzImportEmpty: { status: 400, error: 'Bad Request' },
+  mdzImportNoMarkdown: { status: 400, error: 'Bad Request' },
 };
 
   it('🔴 码名必须是合法的 i18n key 段（admin 侧的 key 就是 error.<code>）', () => {

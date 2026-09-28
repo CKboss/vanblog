@@ -1,4 +1,5 @@
 import { saveExportArchive } from '@/services/van-blog/downloadArchive';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import TipTitle from '@/components/TipTitle';
 import UploadBtn from '@/components/UploadBtn';
 import {
@@ -47,7 +48,9 @@ export default () => {
       await deleteAttachmentBySign(record.sign);
       message.success(t('file.deleteOkPurged', '删除成功！已彻底删除本地文件。'));
     } catch (err) {
-      message.error(t('img.deleteFailed', '删除失败！'));
+      // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+      //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+      reportRequestError(message, err, t('img.deleteFailed', '删除失败！'), { t });
     }
     actionRef.current?.reload();
   }

@@ -1,5 +1,5 @@
 import CopyUploadBtn from '@/components/CopyUploadBtn';
-import { serverErrorText } from '@/services/van-blog/requestError';
+import { serverErrorText, reportRequestError } from '@/services/van-blog/requestError';
 import ObjTable from '@/components/ObjTable';
 import UploadBtn from '@/components/UploadBtn';
 import {
@@ -186,9 +186,30 @@ const ImgPage = () => {
     setLoading(true);
     try {
       const res = await detectStegoByFile(file);
+      // 🔴 修一个**活体撞出来的真缺陷**（2026-09-28）：`detectStegoByFile` 用的是**裸 fetch**，
+      //    `return res.json()` —— 🔴 **不看 `res.ok`**！于是服务端返回 400（例如"这不是可识别的图片文件"）时，
+      //    它照样 resolve，`showDetectResult()` 把那个错误体当成正常结果渲染 ⇒
+      //    界面上弹出一个**看起来完全正常**的「检测水印：xxx.png / 没有检测到本站的水印」弹窗，
+      //    还列了一串"常见原因"（图片不是在本站上传的 / 上传时关了水印 / 被缩放裁剪过 / 密钥换了）——
+      //    🔴 而真正的原因是"你传的根本不是图片"。用户会照着那四条去查水印设置，方向完全错。
+      //    取证：网络面板 `400 /api/admin/img/stego/detect`，而页面上的弹窗是 `Watermark check: … No watermark … found.`。
+      //    修法：非 200 一律按错误处理（有 code 就显示译文），**不要**进结果弹窗。
+      //    👉 🔴 **裸 fetch 的调用点必须自己判 `res.ok`/`statusCode`**：它绕开了 umi-request 的
+      //    adaptor 与全局 errorHandler，所以"失败也会 resolve"（本仓库里这是第 2 次踩：
+      //    上一处是 `exportMarkdown` 的 blob 分支）。
+      // ⚠️ 这里**不能**用 `reportRequestError(message, res, …)`：那个助手是给"umi-request 抛出的异常"用的
+      //    （它会先问"全局 errorHandler 弹过了吗"，弹过就闭嘴），而裸 fetch 的错误**从来没进过全局**，
+      //    且它显示的是 fallbackText（笼统文案）⇒ 具体原因又会被吞掉。
+      //    🔴 裸 fetch 的路径要自己取原因：`serverErrorText(res, t)`（有 code 就翻译，没码就用服务端那句）。
+      if (!res || res.statusCode !== 200) {
+        message.error(serverErrorText(res, t) || t('img.detectFailed', '检测失败！'));
+        return;
+      }
       showDetectResult(res, t('img.detectTitle', '检测水印：{name}', { name: file.name }));
     } catch (err) {
-      message.error(t('img.detectFailed', '检测失败！'));
+      // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+      //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+      reportRequestError(message, err, t('img.detectFailed', '检测失败！'), { t });
     } finally {
       setLoading(false);
     }
@@ -224,7 +245,9 @@ const ImgPage = () => {
           );
           fetchData();
         } catch (err) {
-          message.error(t('img.backfillFailed', '补缩略图失败！'));
+          // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+          //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+          reportRequestError(message, err, t('img.backfillFailed', '补缩略图失败！'), { t });
         } finally {
           setBackfilling(false);
         }
@@ -247,7 +270,9 @@ const ImgPage = () => {
           : t('img.deleteOkLocal', '删除成功！已彻底删除'),
       );
     } catch (err) {
-      message.error(t('img.deleteFailed', '删除失败！'));
+      // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+      //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+      reportRequestError(message, err, t('img.deleteFailed', '删除失败！'), { t });
     } finally {
       // ⚠️ 以前 setLoading(false) 只写在 try 的成功路径上：删除一失败，
       // 整页的 Spin 就永远转下去（只能刷新页面），错误提示还被遮罩盖住。

@@ -1,4 +1,5 @@
 import Editor from '@/components/Editor';
+import { reportRequestError } from '@/services/van-blog/requestError';
 import EditorProfileModal from '@/components/EditorProfileModal';
 import { useIntl } from 'umi';
 import PublishDraftModal from '@/components/PublishDraftModal';
@@ -377,7 +378,9 @@ export default function () {
         },
       });
     } catch (err) {
-      message.error(t('editor.importFailed', '导入失败！请检查文件格式！'));
+      // 🔴 期 9 第六批：改用 `reportRequestError` —— 服务端那句**具体原因**（有错误码就显示译文）优先，
+      //    这句笼统文案只在「全局不会弹」时兜底（避免同一次失败弹两条，也避免把原因吞掉）。
+      reportRequestError(message, err, t('editor.importFailed', '导入失败！请检查文件格式！'), { t });
     }
     setLoading(false);
   };

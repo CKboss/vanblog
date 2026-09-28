@@ -1899,4 +1899,21 @@ export default {
   'error.themeCssForbiddenMozBinding': 'The CSS contains -moz-binding, so it was rejected (a theme can only be styles)',
   'error.themeCssForbiddenStyleClose': 'The CSS contains a </style> closing tag, so it was rejected (a theme can only be styles)',
   'error.themeCssForbiddenScriptTag': 'The CSS contains a <script> tag, so it was rejected (a theme can only be styles)',
+
+  // ── 🔴 期 9 第六批（10 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 后台菜单名用 ASCII 双引号：「附件管理」→ `"Attachments"`、「检测水印」→ `"Detect watermark"`。
+  //    ⚠️ `{width}x{height}`（像素尺寸）与 `{max}MP`（百万像素，可能是四舍五入的整数）
+  //    **刻意不用** ICU 复数：它们读作 "6000x4000" 与 "about 8MP"，加复数反而别扭。
+  'error.uploadEmpty': 'Uploaded content is empty',
+  'error.uploadSvgRejected': 'The image host does not accept SVG (it can embed scripts). Please upload it as an attachment',
+  'error.uploadNotAnImage': 'This is not a recognizable image file. To upload non-image files, please use "Attachments"',
+  'error.uploadNotAnImageNamed': 'This is not a recognizable image file: {name}. To upload non-image files, please use "Attachments"',
+  'error.uploadUnsupportedType': 'Unsupported image type: {type}',
+  'error.uploadUnsupportedTypeUnknown': 'Unsupported image type: unknown',
+  'error.uploadTooLargePixels': 'Image dimensions are too large ({width}x{height}). Please resize the image and upload again',
+  'error.stegoImageTooLarge': 'This image is too large for online detection (limit is about {max}MP). To verify a larger image, upload it to the image host first, then verify by sign using "Detect watermark" in the image list.',
+  'error.mdzImportEmpty': 'Uploaded content is empty: select a .mdz file',
+  'error.mdzImportNoMarkdown': 'No Markdown file (*.md) found in the archive: a .mdz should be a zip package containing "one .md + an .assets image directory with the same name"',
+  // 🔴 期 9 第六批补：图片隐写检测那一档自己的限流（与 error.rateLimited 不是同一句）
+  'error.imgDetectRateLimited': 'Too many watermark checks. Please try again later.',
 };

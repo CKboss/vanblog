@@ -1846,4 +1846,21 @@ export default {
   'error.themeCssForbiddenMozBinding': 'CSS 裡含有 -moz-binding，已拒絕（主題只能是樣式）',
   'error.themeCssForbiddenStyleClose': 'CSS 裡含有 </style> 閉合標籤，已拒絕（主題只能是樣式）',
   'error.themeCssForbiddenScriptTag': 'CSS 裡含有 <script> 標籤，已拒絕（主題只能是樣式）',
+
+  // ── 🔴 期 9 第六批（10 條）── 地區用詞：**上傳** / **內容** / **檔案**（文件）/ **圖床** /
+  //    **可內嵌指令碼**（可内嵌脚本）/ **不支援**（不支持）/ **圖片清單**（图片列表）/ **壓縮檔**（压缩包）/
+  //    **無法線上檢測** / **浮水印**（水印）/ **請縮小後再上傳** / 未知 / 識別 / 選擇。
+  //    🔴 `SVG`、`.mdz`、`.md`、`.assets`、`Markdown`、`zip`、`MP`、`sign` 三份逐字相同。
+  'error.uploadEmpty': '上傳內容為空',
+  'error.uploadSvgRejected': '圖床不接受 SVG（可內嵌指令碼），請作為附件上傳',
+  'error.uploadNotAnImage': '這不是可識別的圖片檔案。非圖片請走「附件管理」上傳',
+  'error.uploadNotAnImageNamed': '這不是可識別的圖片檔案：{name}。非圖片請走「附件管理」上傳',
+  'error.uploadUnsupportedType': '不支援的圖片類型：{type}',
+  'error.uploadUnsupportedTypeUnknown': '不支援的圖片類型：未知',
+  'error.uploadTooLargePixels': '圖片尺寸過大（{width}x{height}），請縮小後再上傳',
+  'error.stegoImageTooLarge': '這張圖太大了，無法線上檢測（上限約 {max}MP）。要驗更大的圖，請先把它上傳到圖床，然後在圖片清單裡用「檢測浮水印」按 sign 驗。',
+  'error.mdzImportEmpty': '上傳內容為空：請選擇一個 .mdz 檔案',
+  'error.mdzImportNoMarkdown': '壓縮檔裡沒有找到 Markdown 檔案（*.md）：.mdz 應該是「一個 .md + 同名的 .assets 圖片目錄」的 zip 包',
+  // 🔴 期 9 第六批补：图片隐写检测那一档自己的限流（与 error.rateLimited 不是同一句）
+  'error.imgDetectRateLimited': '圖片檢測過於頻繁，請稍後再試',
 };
