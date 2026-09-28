@@ -4,6 +4,7 @@ const SEARCH_MAX_TIME_MS = 5000;
 const SEARCH_MAX_RESULTS = 200;
 
 import { pickCoverFromContent } from 'src/utils/coverFromContent';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { articleOverviewMarkdown } from 'src/utils/articleExcerpt';
 import { safeDecodeURIComponent } from 'src/utils/safeDecode';
 import {
@@ -481,7 +482,7 @@ export class ArticleProvider {
     if (manual) {
       assertUsablePathname(manual);
       if (await this.isPathnameTaken(manual)) {
-        throw new BadRequestException(`路径别名 "${manual}" 已被其它文章占用`);
+        throw codedError('pathnameTaken', { pathname: manual });
       }
       return manual;
     }

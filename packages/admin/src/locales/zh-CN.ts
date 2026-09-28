@@ -2124,4 +2124,27 @@ export default {
   'error.articleUnlockThrottled': '这篇文章的密码尝试次数过多，请 {seconds} 秒后再试',
   'error.backupNameIllegal': '备份文件名不合法！',
   'error.backupFileNotFound': '找不到这个备份文件！',
+
+  // ── 🔴 期 9 第九批：访问密码 / 改写 baseUrl / 附件 / 路径别名 / 图片压缩 / 非法路径 / 流水线 id / 定时发布（18 个码）。
+  //    🔴 `assertHttpBaseUrl` 的第二个参数原来是**中文 label**（'旧地址'/'新地址'）⇒ 按 label **拆成 6 个码**
+  //    （第 6 次处理"中文当参数传"；服务端填充器不实现 ICU select，所以一律拆码）。
+  //    🔴 `customPagePath` 与 `pipeline.provider` 抛的是**同一句**「非法路径」⇒ 共用 `illegalPath`。
+  'error.accessPasswordTooShort': '访问密码太短：至少 {min} 个字符（当前 {count} 个）。解锁接口是匿名可达的（20 次/10 分钟/(IP×文章)），短密码用几个代理 IP 就能穷尽。',
+  'error.accessPasswordMustBeString': '访问密码必须是字符串',
+  'error.accessPasswordClearConflict': '不能同时"设置新密码"和"{field}=true"：要换密码就只填新密码，要解除加密就只勾清除',
+  'error.oldBaseUrlNeedsProtocol': '旧地址请填写包含协议的完整 URL，例如 https://example.com',
+  'error.oldBaseUrlHttpOnly': '旧地址只支持 http 或 https 地址',
+  'error.oldBaseUrlMissingHost': '旧地址缺少主机名',
+  'error.newBaseUrlNeedsProtocol': '新地址请填写包含协议的完整 URL，例如 https://example.com',
+  'error.newBaseUrlHttpOnly': '新地址只支持 http 或 https 地址',
+  'error.newBaseUrlMissingHost': '新地址缺少主机名',
+  'error.attachmentEmpty': '上传内容为空！',
+  'error.attachmentTooLarge': '附件超过单文件上限 {max}（当前 {size}）',
+  'error.pathnameTaken': '路径别名 "{pathname}" 已被其它文章占用',
+  'error.imgCompressUnsupportedFormat': '不支持的图片压缩格式：{value}，可选 webp 或 avif',
+  'error.illegalPath': '非法路径',
+  'error.pipelineIdInvalid': '流水线 id 不合法：{id}',
+  'error.publishAtInvalid': 'publishAt 不是合法时间',
+  'error.publishAtInvalidValue': 'publishAt 不是合法时间：{value}',
+  'error.publishAtWrongType': 'publishAt 只接受 ISO 时间字符串、毫秒数或 null',
 };

@@ -1897,4 +1897,29 @@ export default {
   'error.articleUnlockThrottled': '這篇文章的密碼嘗試次數過多，請 {seconds} 秒後再試',
   'error.backupNameIllegal': '備份檔名不合法！',
   'error.backupFileNotFound': '找不到這個備份檔案！',
+
+  // ── 🔴 期 9 第九批（18 條）── 地區用詞：**訪問密碼** / **字串**（字符串）/ **個字元** / **目前**（当前）/
+  //    **解鎖介面**（解锁接口）/ **匿名可達** / **分鐘** / **窮盡** / **設定新密碼** / **協定**（协议）/
+  //    **只支援** / **主機名** / **單檔案**（单文件）/ **路徑別名** / **佔用** / **不支援** / **流水線** /
+  //    **舊地址** / **新地址** / **請填寫**。
+  //    🔴 `https://example.com`、`http`、`https`、`URL`、`webp`、`avif`、`publishAt`、`ISO`、`null`、`IP`、`id`、`true`
+  //    三份逐字相同；限流預算 `20 次/10 分鐘/(IP×文章)` 的數字與结构不变。
+  'error.accessPasswordTooShort': '訪問密碼太短：至少 {min} 個字元（目前 {count} 個）。解鎖介面是匿名可達的（20 次/10 分鐘/(IP×文章)），短密碼用幾個代理 IP 就能窮盡。',
+  'error.accessPasswordMustBeString': '訪問密碼必須是字串',
+  'error.accessPasswordClearConflict': '不能同時「設定新密碼」和 "{field}=true"：要換密碼就只填新密碼，要解除加密就只勾清除',
+  'error.oldBaseUrlNeedsProtocol': '舊地址請填寫包含協定的完整 URL，例如 https://example.com',
+  'error.oldBaseUrlHttpOnly': '舊地址只支援 http 或 https 地址',
+  'error.oldBaseUrlMissingHost': '舊地址缺少主機名',
+  'error.newBaseUrlNeedsProtocol': '新地址請填寫包含協定的完整 URL，例如 https://example.com',
+  'error.newBaseUrlHttpOnly': '新地址只支援 http 或 https 地址',
+  'error.newBaseUrlMissingHost': '新地址缺少主機名',
+  'error.attachmentEmpty': '上傳內容為空！',
+  'error.attachmentTooLarge': '附件超過單檔案上限 {max}（目前 {size}）',
+  'error.pathnameTaken': '路徑別名 "{pathname}" 已被其它文章佔用',
+  'error.imgCompressUnsupportedFormat': '不支援的圖片壓縮格式：{value}，可選 webp 或 avif',
+  'error.illegalPath': '非法路徑',
+  'error.pipelineIdInvalid': '流水線 id 不合法：{id}',
+  'error.publishAtInvalid': 'publishAt 不是合法時間',
+  'error.publishAtInvalidValue': 'publishAt 不是合法時間：{value}',
+  'error.publishAtWrongType': 'publishAt 只接受 ISO 時間字串、毫秒數或 null',
 };

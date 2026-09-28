@@ -1,4 +1,5 @@
 import { DANGEROUS_INLINE_EXTENSIONS } from './uploadLimits';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { BadRequestException } from '@nestjs/common';
 import { compressImgToWebp, CWEBP_QUALITY } from './webp';
 import { compressImgToAvif, tryLoadSharp } from './avif';
@@ -30,7 +31,8 @@ export function parseCompressFormat(value: unknown): CompressFormat {
   if (isCompressFormat(normalized)) {
     return normalized;
   }
-  throw new BadRequestException(`不支持的图片压缩格式：${value}，可选 webp 或 avif`);
+  // ⚠️ `value` 的静态类型是 `unknown` ⇒ 必须 `String(...)` 才能当 params（`Record<string, string|number>`）。
+  throw codedError('imgCompressUnsupportedFormat', { value: String(value) });
 }
 
 /** Read path: missing or corrupt stored values keep WebP. Write path still rejects. */

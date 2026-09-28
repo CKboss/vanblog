@@ -2361,3 +2361,66 @@ describe('🔴 catch 到的错误不许被一句笼统文案**吞掉**（服务�
     assert.ok(fixed.length >= 8, `只有 ${fixed.length} 个文件在用 reportRequestError（下界 8）⇒ 判据可能空转`);
   });
 });
+
+describe('🔴 英文的 ICU plural 只许用在"中文里紧跟量词"的占位符上（防止把**已格式化的字符串**塞进复数块）', () => {
+  it('每个 en-US 里用了 plural 的占位符，zh-CN 里都必须紧跟一个中文量词', () => {
+    // ## 为什么要这条（2026-09-28 期 9 第九批，变异对照 B49-M4 打不红揭出来的）
+    // `attachmentTooLarge` 的 `{max}` / `{size}` 传的是**已经格式化好的字节串**（`formatBytes()` ⇒ `20.0 MB`）。
+    // 我打了个变异：把英文改成 `limit of {max, plural, one {# byte} other {# bytes}}` ⇒
+    // 🔴 **全套 562 条断言全绿**，而运行时 ICU 会把 `"20.0 MB"` 当数字解析 ⇒ 渲染出 **`NaN bytes`**。
+    // 这类缺陷静态判据一个都抓不到（占位符名一致、数字契约也没变），只有真的渲染一次才看得见。
+    //
+    // 🔴 判据（可静态判定、且理由正当）：**英文能给某个占位符套 ICU 复数，当且仅当
+    //    zh-CN 里那个占位符紧跟一个中文量词**（`{min} 个字符`、`{seconds} 秒`、`{count} 条`…）。
+    //    因为"紧跟量词"正说明它是个**纯数字**；而 `{max}（当前 {size}）` 这种后面直接跟标点的，
+    //    说明它是**已经带好单位的字符串** ⇒ 套复数就会出 NaN。
+    const MEASURE = '(?:个|個|秒|次|分|条|條|张|張|篇|份|位|天|小时|小時|分钟|分鐘|字节|字節|字符|字元|项|处|步|倍|岁|歲|周年|年|月|日|人|台|臺|只|隻|颗|顆|行|页|頁|章|节|節|段|句|词|詞|字)';
+    // 🔴 例外：这两条的占位符**确实是纯数字**，只是中文把量词写在占位符**前面**
+    //    （`字数 {count}`、`上限 {max}）`——单位在句子更前面：`（{size} 字节，上限 {max}）`）
+    //    ⇒ "紧跟量词"这条判据对它们不成立，但英文用复数是**对的**。
+    //    ⚠️ 白名单不许有死条目（下面那条断言会逐条验证真的命中）。
+    const PLURAL_OK_WITHOUT_MEASURE = {
+      'revision.wordCountValue': '中文是「字数 {count}」—— 量词在占位符**前面**，值确实是纯数字',
+      'error.initRestoreSigTooLarge': '中文是「（{size} 字节，上限 {max}）」—— 单位在句子更前面，{max} 是纯数字（字节数）',
+    };
+    const offenders = [];
+    const whitelistHits = new Set();
+    let pluralCount = 0;
+    for (const [key, enValue] of Object.entries(packs['en-US'])) {
+      const zhValue = packs['zh-CN'][key];
+      if (typeof enValue !== 'string' || !/, plural,/.test(enValue)) continue;
+      for (const m of String(enValue).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*), plural,/g)) {
+        pluralCount += 1;
+        const name = m[1];
+        if (typeof zhValue !== 'string') {
+          offenders.push(`${key}: en-US 对 {${name}} 用了 plural，但 zh-CN 没有这条`);
+          continue;
+        }
+        // zh-CN 里该占位符后面必须紧跟（可有一个空格）一个量词
+        const re = new RegExp('\\{' + name + '\\}\\s*' + MEASURE);
+        if (!re.test(zhValue) && key in PLURAL_OK_WITHOUT_MEASURE) {
+          whitelistHits.add(key);
+          continue;
+        }
+        if (!re.test(zhValue)) {
+          offenders.push(
+            `${key}: en-US 对 {${name}} 用了 ICU plural，但 zh-CN 里它后面没有量词（`
+            + `zh-CN = ${JSON.stringify(zhValue).slice(0, 90)}）⇒ 这个参数多半是**已格式化的字符串**`
+            + `（例如 "20.0 MB"），套复数会让 ICU 把它当数字解析 ⇒ 渲染出 NaN`,
+          );
+        }
+      }
+    }
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      '🔴 这些英文译文给"不是纯数字"的占位符套了 ICU 复数（运行时会渲染出 NaN）：\n  ' +
+        offenders.slice(0, 6).join('\n  '),
+    );
+    // 🔴 反空转：这条判据必须真的扫到了 plural（否则"0 处违规"是空的绿）
+    assert.ok(pluralCount >= 20, `只扫到 ${pluralCount} 个 ICU plural 用法（下界 20）⇒ 判据可能空转`);
+    // 🔴 白名单反腐烂：每条都必须真的命中（否则白名单在掩盖别的东西）
+    const dead = Object.keys(PLURAL_OK_WITHOUT_MEASURE).filter((k) => !whitelistHits.has(k));
+    assert.deepStrictEqual(dead, [], '🔴 PLURAL_OK_WITHOUT_MEASURE 里有死条目：' + dead.join(', '));
+  });
+});

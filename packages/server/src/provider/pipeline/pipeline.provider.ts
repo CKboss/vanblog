@@ -1,5 +1,6 @@
 import { envPositiveInt } from 'src/utils/envNumber';
 
+import { codedError } from 'src/utils/serverErrorCodes';
 /**
  * 单个流水线的执行上限：超时直接杀进程，避免 await 永久挂起。
  *
@@ -87,16 +88,16 @@ export function resolvePipelineFilePath(runnerPath: string, id: unknown): string
   const raw = typeof id === 'string' ? id.trim() : id;
   const n = typeof raw === 'number' ? raw : Number(raw);
   if (typeof raw !== 'number' && !/^-?\d+$/.test(String(raw ?? ''))) {
-    throw new BadRequestException(`流水线 id 不合法：${String(id).slice(0, 40) || '(空)'}`);
+    throw codedError('pipelineIdInvalid', { id: String(id).slice(0, 40) || '(空)' });
   }
   if (!Number.isSafeInteger(n)) {
-    throw new BadRequestException(`流水线 id 不合法：${String(id).slice(0, 40) || '(空)'}`);
+    throw codedError('pipelineIdInvalid', { id: String(id).slice(0, 40) || '(空)' });
   }
   const root = path.resolve(String(runnerPath ?? ''));
   const abs = path.resolve(root, `${n}.js`);
   const rel = path.relative(root, abs);
   if (!rel || rel === '..' || rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new ForbiddenException('非法路径');
+    throw codedError('illegalPath');
   }
   return abs;
 }

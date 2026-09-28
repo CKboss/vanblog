@@ -33,6 +33,7 @@
  */
 
 import { BadRequestException, Logger } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { hashAccessPassword, hashAccessPasswordAsync, isScryptHash, needsPasswordUpgrade } from './crypto';
 
 /** 显式清除密码的请求字段名（文章 / 分类共用） */
@@ -144,10 +145,10 @@ export function assertAccessPasswordLength(value: unknown): void {
   }
   const effective = text.trim();
   if (effective.length < MIN_ACCESS_PASSWORD_LENGTH) {
-    throw new BadRequestException(
-      `访问密码太短：至少 ${MIN_ACCESS_PASSWORD_LENGTH} 个字符（当前 ${effective.length} 个）。` +
-        `解锁接口是匿名可达的（20 次/10 分钟/(IP×文章)），短密码用几个代理 IP 就能穷尽。`,
-    );
+    throw codedError('accessPasswordTooShort', {
+      min: MIN_ACCESS_PASSWORD_LENGTH,
+      count: effective.length,
+    });
   }
   if (effective.length < ACCESS_PASSWORD_WARN_BELOW_LENGTH) {
     accessPasswordLogger.warn(
@@ -179,16 +180,14 @@ function resolveAccessPasswordIntent(
   const clear = isClearPasswordFlag(input?.clearPassword);
 
   if (raw !== undefined && raw !== null && typeof raw !== 'string') {
-    throw new BadRequestException('访问密码必须是字符串');
+    throw codedError('accessPasswordMustBeString');
   }
   const text = typeof raw === 'string' ? raw : '';
   // 全空白按"没填"处理：否则用户手滑敲几个空格就把文章锁在一个看不见的密码上
   const blank = text.trim() === '';
 
   if (clear && !blank) {
-    throw new BadRequestException(
-      `不能同时"设置新密码"和"${CLEAR_PASSWORD_FIELD}=true"：要换密码就只填新密码，要解除加密就只勾清除`,
-    );
+    throw codedError('accessPasswordClearConflict', { field: CLEAR_PASSWORD_FIELD });
   }
   if (clear) {
     return { kind: 'clear' };

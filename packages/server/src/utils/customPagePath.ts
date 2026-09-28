@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import * as fs from 'fs';
 import * as path from 'path';
 import { config } from 'src/config';
@@ -14,7 +15,7 @@ export function normalizeCustomPageRel(...parts: string[]): string {
     .flatMap((p) => toPosixRel(p).split('/'))
     .filter((seg) => seg && seg !== '.');
   if (segs.some((seg) => seg === '..')) {
-    throw new ForbiddenException('非法路径');
+    throw codedError('illegalPath');
   }
   return segs.join('/');
 }
@@ -25,7 +26,7 @@ export function resolveCustomPageAbs(...parts: string[]): string {
   const abs = rel ? path.resolve(root, ...rel.split('/')) : root;
   const toRoot = path.relative(root, abs);
   if (toRoot.startsWith('..') || path.isAbsolute(toRoot)) {
-    throw new ForbiddenException('非法路径');
+    throw codedError('illegalPath');
   }
   return abs;
 }

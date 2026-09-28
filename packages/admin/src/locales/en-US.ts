@@ -1952,4 +1952,27 @@ export default {
   'error.articleUnlockThrottled': 'Too many password attempts for this article. Please try again in {seconds, plural, one {# second} other {# seconds}}.',
   'error.backupNameIllegal': 'Invalid backup file name!',
   'error.backupFileNotFound': 'The backup file was not found!',
+
+  // ── 🔴 期 9 第九批（18 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 `{min}` / `{count}` 用 ICU plural（字符数）；⚠️ `{max}` / `{size}`（附件那条）**不用**复数 ——
+  //    它们是**已格式化好的字节串**（`20.0 MB`），复数配它会读成怪话。
+  //    🔴 限流预算在英文里写成 `20 attempts / 10 minutes / (IP x article)`（用 ASCII 的 x，不用 ×）。
+  'error.accessPasswordTooShort': 'Access password too short: at least {min, plural, one {# character} other {# characters}} (currently {count, plural, one {# character} other {# characters}}). The unlock endpoint is anonymously reachable (20 attempts / 10 minutes / (IP x article)); a short password can be exhausted with a few proxy IPs.',
+  'error.accessPasswordMustBeString': 'The access password must be a string',
+  'error.accessPasswordClearConflict': 'Do not combine "set a new password" with "{field}=true": to change the password, provide only the new password; to remove encryption, check clear only.',
+  'error.oldBaseUrlNeedsProtocol': 'For the old address, enter a complete URL including the protocol, for example https://example.com',
+  'error.oldBaseUrlHttpOnly': 'The old address supports only http or https addresses',
+  'error.oldBaseUrlMissingHost': 'The old address is missing a hostname',
+  'error.newBaseUrlNeedsProtocol': 'For the new address, enter a complete URL including the protocol, for example https://example.com',
+  'error.newBaseUrlHttpOnly': 'The new address supports only http or https addresses',
+  'error.newBaseUrlMissingHost': 'The new address is missing a hostname',
+  'error.attachmentEmpty': 'The uploaded content is empty!',
+  'error.attachmentTooLarge': 'The attachment exceeds the per-file limit of {max} (currently {size})',
+  'error.pathnameTaken': 'The path alias "{pathname}" is already taken by another article',
+  'error.imgCompressUnsupportedFormat': 'Unsupported image compression format: {value}; available options are webp or avif',
+  'error.illegalPath': 'Illegal path',
+  'error.pipelineIdInvalid': 'Invalid pipeline id: {id}',
+  'error.publishAtInvalid': 'The publishAt value is not a valid time',
+  'error.publishAtInvalidValue': 'The publishAt value is not a valid time: {value}',
+  'error.publishAtWrongType': 'The publishAt field accepts only an ISO time string, milliseconds, or null',
 };

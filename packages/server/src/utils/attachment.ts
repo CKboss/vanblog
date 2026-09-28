@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import * as path from 'path';
 import { formatBytes } from './size';
 
@@ -172,11 +173,14 @@ export function attachmentHeadersFor(filePath: string): Record<string, string> {
 export function assertAttachmentSize(bytes: unknown): void {
   const size = Number(bytes);
   if (!Number.isFinite(size) || size <= 0) {
-    throw new BadRequestException('上传内容为空！');
+    throw codedError('attachmentEmpty');
   }
   if (size > ATTACHMENT_MAX_BYTES) {
-    throw new BadRequestException(
-      `附件超过单文件上限 ${formatBytes(ATTACHMENT_MAX_BYTES)}（当前 ${formatBytes(size)}）`,
-    );
+    // 🔴 上限与当前值都是**已格式化好的字节串**（`20.0 MB` 这种）⇒ 走 params，
+    //    英文那份**刻意不用** ICU 复数（复数配"20.0 MB"会读成怪话）。
+    throw codedError('attachmentTooLarge', {
+      max: formatBytes(ATTACHMENT_MAX_BYTES),
+      size: formatBytes(size),
+    });
   }
 }

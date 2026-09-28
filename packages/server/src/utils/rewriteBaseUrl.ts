@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
+import { codedError } from 'src/utils/serverErrorCodes';
 export type RewriteBaseUrlTextResult = {
   text: string;
   replacements: number;
@@ -48,18 +49,26 @@ export function rewriteBaseUrlInText(
   return { text: next, replacements };
 }
 
-export function assertHttpBaseUrl(raw: string, label: string): void {
+// 🔴 期 9 第九批：第二个参数从**中文 label**（'旧地址' / '新地址'）改成**语义 which**（'old' | 'new'）。
+//    原来那句是 `${label}只支持 http 或 https 地址` ⇒ 中文当参数拼进消息，英文界面里就会夹中文
+//    （本项目**第 6 次**处理这个形状）。拆成 6 个码而不是"3 个码 + {label} 参数"：
+//    服务端的 `fillServerErrorMessage` 不实现 ICU select。
+export function assertHttpBaseUrl(raw: string, which: 'old' | 'new'): void {
+  const prefix = which === 'old' ? 'old' : 'new';
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new BadRequestException(`${label}请填写包含协议的完整 URL，例如 https://example.com`);
+    if (prefix === 'old') throw codedError('oldBaseUrlNeedsProtocol');
+    throw codedError('newBaseUrlNeedsProtocol');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new BadRequestException(`${label}只支持 http 或 https 地址`);
+    if (prefix === 'old') throw codedError('oldBaseUrlHttpOnly');
+    throw codedError('newBaseUrlHttpOnly');
   }
   if (!parsed.hostname) {
-    throw new BadRequestException(`${label}缺少主机名`);
+    if (prefix === 'old') throw codedError('oldBaseUrlMissingHost');
+    throw codedError('newBaseUrlMissingHost');
   }
 }
 
@@ -77,8 +86,8 @@ export function prepareRewriteBases(
   if (!oldNorm || !newNorm || oldNorm === newNorm) {
     return null;
   }
-  assertHttpBaseUrl(oldNorm, '旧地址');
-  assertHttpBaseUrl(newNorm, '新地址');
+  assertHttpBaseUrl(oldNorm, 'old');
+  assertHttpBaseUrl(newNorm, 'new');
   return { oldBase: oldNorm, newBase: newNorm };
 }
 

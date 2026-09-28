@@ -267,6 +267,48 @@ export const SERVER_ERROR_CODES = {
   //      （`issues.map(i => `[${i.check}] ${i.message}`).join('；')`），而这些结论**同时会被写进
   //      校验报告文件**（产物内容）⇒ 只翻外壳会得到"英文外壳 + 中文内核"的半截译文。
   //      必须连 `backupVerify` 的报告形状一起改（`reason: string` → `code + params`），单独排一批。
+  // ── 访问密码 / 改写 baseUrl / 附件 / 路径别名 / 图片压缩 / 非法路径 / 流水线 id / 定时发布（期 9 第九批）──
+  // 🔴 `assertHttpBaseUrl(raw, label)` 的 `label` 原来是**中文**（'旧地址' / '新地址'）⇒ 按 label **拆成 6 个码**
+  //    （第 6 次处理"中文当参数传"这个形状；服务端的填充器不实现 ICU select，所以一律拆码）。
+  // 🔴 `customPagePath.ts` 与 `pipeline.provider.ts` 抛的是**同一句**「非法路径」⇒ 共用 `illegalPath` 一个码。
+  // ⚠️ 刻意**不含**三处开发者不变量：`thumbnail.ts`（"生成成功就必须有 buffer"这个不变量被破坏）、
+  //    `backupCodec.ts`（解析不出 BSON 构造器）、`public.controller.ts` 的 `publicListCacheKey: 未知的 kind`
+  //    —— 它们是给运维/开发者看的（消息里带函数名或内部字段名），等"开发者不变量保持中文还是改英文"的裁定。
+  accessPasswordTooShort: entry(
+    '访问密码太短：至少 {min} 个字符（当前 {count} 个）。' +
+      '解锁接口是匿名可达的（20 次/10 分钟/(IP×文章)），短密码用几个代理 IP 就能穷尽。',
+    BadRequestException,
+  ),
+  accessPasswordMustBeString: entry('访问密码必须是字符串', BadRequestException),
+  accessPasswordClearConflict: entry(
+    '不能同时"设置新密码"和"{field}=true"：要换密码就只填新密码，要解除加密就只勾清除',
+    BadRequestException,
+  ),
+  oldBaseUrlNeedsProtocol: entry(
+    '旧地址请填写包含协议的完整 URL，例如 https://example.com',
+    BadRequestException,
+  ),
+  oldBaseUrlHttpOnly: entry('旧地址只支持 http 或 https 地址', BadRequestException),
+  oldBaseUrlMissingHost: entry('旧地址缺少主机名', BadRequestException),
+  newBaseUrlNeedsProtocol: entry(
+    '新地址请填写包含协议的完整 URL，例如 https://example.com',
+    BadRequestException,
+  ),
+  newBaseUrlHttpOnly: entry('新地址只支持 http 或 https 地址', BadRequestException),
+  newBaseUrlMissingHost: entry('新地址缺少主机名', BadRequestException),
+  attachmentEmpty: entry('上传内容为空！', BadRequestException),
+  attachmentTooLarge: entry('附件超过单文件上限 {max}（当前 {size}）', BadRequestException),
+  pathnameTaken: entry('路径别名 "{pathname}" 已被其它文章占用', BadRequestException),
+  imgCompressUnsupportedFormat: entry(
+    '不支持的图片压缩格式：{value}，可选 webp 或 avif',
+    BadRequestException,
+  ),
+  illegalPath: entry('非法路径', ForbiddenException),
+  pipelineIdInvalid: entry('流水线 id 不合法：{id}', BadRequestException),
+  publishAtInvalid: entry('publishAt 不是合法时间', BadRequestException),
+  publishAtInvalidValue: entry('publishAt 不是合法时间：{value}', BadRequestException),
+  publishAtWrongType: entry('publishAt 只接受 ISO 时间字符串、毫秒数或 null', BadRequestException),
+
   themeIdMissing: entry('缺少 id', BadRequestException),
   themeNotFoundForRead: entry('没有这个主题：{id}', NotFoundException),
   themeBuiltinNoCssFile: entry(

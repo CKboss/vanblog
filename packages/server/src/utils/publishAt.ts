@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
+import { codedError } from 'src/utils/serverErrorCodes';
 /**
  * 定时发布（P5）的公共语义。
  *
@@ -39,18 +40,18 @@ export function normalizePublishAt(value: unknown): NormalizedPublishAt {
   }
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime())) {
-      throw new BadRequestException('publishAt 不是合法时间');
+      throw codedError('publishAtInvalid');
     }
     return value;
   }
   if (typeof value === 'string' || typeof value === 'number') {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) {
-      throw new BadRequestException(`publishAt 不是合法时间：${String(value).slice(0, 100)}`);
+      throw codedError('publishAtInvalidValue', { value: String(value).slice(0, 100) });
     }
     return parsed;
   }
-  throw new BadRequestException('publishAt 只接受 ISO 时间字符串、毫秒数或 null');
+  throw codedError('publishAtWrongType');
 }
 
 /** publishAt 是否还在未来（= 公开面不可见）。缺失/null/非法一律按"不定时"处理。 */
