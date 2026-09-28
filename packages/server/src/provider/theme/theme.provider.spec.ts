@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { SERVER_ERROR_CODES } from 'src/utils/serverErrorCodes';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import {
@@ -245,5 +246,52 @@ describe('ThemeProvider', () => {
     await expect(fs.access(abs)).rejects.toBeTruthy();
     const all = await provider.list();
     expect(all.find((t) => t.id === 'gone')).toBeUndefined();
+  });
+});
+
+describe('🔴 validateThemeCss 的 reason 与错误码表**逐字一致**（期 9 第五批）', () => {
+  // ## 为什么要这条
+  // 迁移之后同一句话存在**两处**：`theme.dto.ts` 里的 `reason`（给日志与既有 spec 用）
+  // 与 `serverErrorCodes.ts` 里那个码的 `zh`（给响应体 + admin 的 zh-CN 回退用）。
+  // 🔴 两处口径迟早漂 —— 而漂了之后**没有任何测试会红**（reason 只被 `toContain('太大')` 这类模糊断言盯着）。
+  // ⇒ 这条判据把两处**逐字**钉在一起：改了任何一边，另一边必须同步改。
+  const CASES: Array<[string, Buffer | string, string]> = [
+    ['CSS 是空的', Buffer.from('   \n  '), 'themeCssEmpty'],
+    ['NUL 字节', Buffer.from('a\u0000b'), 'themeCssHasNul'],
+    ['javascript: 伪协议', 'body{background:url(javascript:alert(1))}', 'themeCssForbiddenJsProtocol'],
+    ['expression()', 'body{width:expression(alert(1))}', 'themeCssForbiddenExpression'],
+    ['behavior', 'body{behavior:url(x.htc)}', 'themeCssForbiddenBehavior'],
+    ['-moz-binding', 'body{-moz-binding:url(x.xml#y)}', 'themeCssForbiddenMozBinding'],
+    ['</style> 闭合标签', 'body{}</style><b>x', 'themeCssForbiddenStyleClose'],
+    ['<script> 标签', 'body{}<script>alert(1)</script>', 'themeCssForbiddenScriptTag'],
+  ];
+  it.each(CASES)('%s ⇒ reason 与码表的 zh 逐字相同', (_name, input, code) => {
+    const res: any = validateThemeCss(input as any);
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(code);
+    expect(typeof res.reason).toBe('string');
+    // 🔴 逐字对账（不是 toContain）：把 reason 里的插值数字换回占位符后再比
+    const zh = String((SERVER_ERROR_CODES as any)[code].zh);
+    const normalize = (x: string) => x.replace(/\d+(?:\.\d+)?/g, '#');
+    expect(normalize(res.reason)).toBe(normalize(zh));
+  });
+
+  it('🔴 反空转：上面那批用例必须真的都被拒（否则"逐字一致"是在比两个 undefined）', () => {
+    let rejected = 0;
+    for (const [, input] of CASES) {
+      const r: any = validateThemeCss(input as any);
+      if (r && r.ok === false && typeof r.code === 'string') rejected += 1;
+    }
+    expect(rejected).toBe(CASES.length);
+  });
+
+  it('CSS 太大 ⇒ reason 与码表一致，且 params 里带真实的 KB 数字（不是占位符）', () => {
+    const big = 'a'.repeat(600 * 1024);
+    const res: any = validateThemeCss(big);
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe('themeCssTooLarge');
+    expect(res.params).toEqual({ size: expect.any(String), max: expect.any(Number) });
+    expect(String(res.reason)).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+    expect(String(res.reason)).toMatch(/CSS 太大（\d+\.\d+KB > \d+KB）/);
   });
 });

@@ -290,10 +290,18 @@ describe('多进程（cluster）守卫', () => {
     //    🔴 收窄之后必须证明**没把真桶放跑**：下面那条反空转下界 `thinned.length >= 11` 保留（实测仍是 11），
     //      并且变异对照验过"在限流文件里新写一个没摊薄的桶 ⇒ 仍然红"。
     const LIMITER_HINT = /scaleLimit\(|Throttler|consumeAttempt|\bwindow\b|\bttl\b|attempts|bucket|rateLimit/i;
+    // 🔴 收窄的**第二次**修正（2026-09-28 期 9 第五批）：第一版写的是"取值里**有数字**就算桶"，
+    //    结果 `max: THEME_MAX_BYTES / 1024`（主题 CSS 的**字节上限**换算成 KB）被误判 —— 第 4 次假阳性。
+    //    👉 教训：`/\d/` 这种"含有数字"的判据太宽 —— 领域常量里到处是 `1024`、`60`、`2-40` 这种数字。
+    //    改成"**取值以数字字面量开头**，或取值里出现摊薄/取上限的函数"：
+    //      ✓ 算桶：`max: 600`、`max: 60 * 5`、`max: scaleLimit(X)`、`maxPoolSize: Math.max(10, …)`
+    //      ✗ 不算：`max: THEME_MAX_BYTES / 1024`、`max: maxLength`、`max: RESTORE_SIG_MAX_BYTES`
+    //    （后一类是"把一个领域常量当上限传出去"，与 worker 数无关。）
     const looksLikeBucket = (line: string, prev: string, next: string) => {
       const m = /max(?:PoolSize)?:\s*([^,;}]*)/.exec(line);
-      const value = m ? m[1] : '';
-      if (/\d/.test(value)) return true;
+      const value = m ? m[1].trim() : '';
+      if (/^\d/.test(value)) return true;
+      if (/scaleLimit\(|Math\.max\(|Throttler/.test(value)) return true;
       return LIMITER_HINT.test(line) || LIMITER_HINT.test(prev) || LIMITER_HINT.test(next);
     };
     // 真桶、但摊薄对它无意义：预算为 1，按 worker 数除会得到 0（等于把这道闸关掉）。

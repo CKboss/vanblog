@@ -116,7 +116,13 @@ describe('附件管理：服务端存储与安全', () => {
 
     const local = readRepo('packages/server/src/provider/static/local.provider.ts');
     assert.match(local, /async saveAttachment/);
-    assert.match(local, /非法的附件文件名/);
+    // 🔴 期 9 第五批：那句中文搬进了错误码登记表（`staticAttachmentNameIllegal`）⇒ 锚点跨文件搬：
+    //    ① provider 必须抛这个码（那道便宜检查还在）；② 登记表里那条的中文必须仍然是原文。
+    assert.match(local, /codedError\('staticAttachmentNameIllegal'\)/);
+    assert.match(
+      readRepo('packages/server/src/utils/serverErrorCodes.ts'),
+      /staticAttachmentNameIllegal: entry\('非法的附件文件名！'/,
+    );
     assert.match(local, /async exportAllAttachments/);
   });
 

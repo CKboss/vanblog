@@ -72,7 +72,10 @@ for (const l of LOCALES) {
 //   等前台多语言那一批直接按 code 取译文。
 //   （实测 162：24 处 throw 里有两处重复文本共用同一个码，另一处 `个人主页地址只支持 http/https`
 //   也出现两次 ⇒ 站点数 24、码数 22。）
-const THROW_BUDGET = 162;
+// 🔴 162 → **134**（期 9 第五批）：主题族 10 处 + 图床/静态文件族 18 处 throw 迁进码表（32 个新码，
+//   重复文本共用码 ⇒ 站点数 28、码数 32；另外 `validateThemeCss` 的 9 种拒绝**从来不在 throw 口径里**，
+//   它们是 `reason:` 属性 ⇒ 那 9 个码是"新增覆盖"，不减 throw 计数）。
+const THROW_BUDGET = 134;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -193,7 +196,15 @@ test('服务端错误码 · ② 反向：每个登记的码都真的被服务端
   for (const code of CODES) {
     // 🔴 判据用"只有代码才会出现的形状"：`codedError('<code>'` / `codedBody('<code>'`。
     //    不能用裸 `'<code>'`：登记表自己就含这个字符串，会**恒真**（本仓库已多次栽在恒真判据上）。
-    const needles = [`codedError('${code}'`, `codedBody('${code}'`];
+    // 🔴 三种形状都算"被用到"（期 9 第五批加的第三种）：
+    //   ① `codedError('<code>'` / ② `codedBody('<code>'` —— 码名直接出现在调用点；
+    //   ③ `code: '<code>'` —— **动态派发**：`validateThemeCss()` 这类校验函数返回
+    //      `{ ok:false, reason, code }`，调用点写的是 `throw codedError(checked.code || '兜底码')`
+    //      （第一个实参是 Identifier，不是字面量）⇒ 按 ①② 找不到，会把 9 个活码判成死码。
+    //      ⚠️ 这条放宽是**有边界**的：仍然要求"码名以字符串字面量的形式出现在源码里"，
+    //      只是允许它出现在 `code:` 属性位而不是调用实参位；🔴 登记表自己那个文件被排除在外
+    //      （否则恒真），所以"登记了没人用"仍然会被抓（变异对照 B45-M4 验的就是这条）。
+    const needles = [`codedError('${code}'`, `codedBody('${code}'`, `code: '${code}'`];
     let used = false;
     for (const abs of walkServerSources(SERVER_SRC, [])) {
       if (abs.endsWith('serverErrorCodes.ts')) continue; // 登记表本身不算"使用"

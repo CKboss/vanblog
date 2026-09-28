@@ -17,6 +17,7 @@ import {
   slugifyThemeId,
   validateThemeCss,
 } from 'src/types/theme.dto';
+import { codedError } from 'src/utils/serverErrorCodes';
 
 /** 上传的主题 CSS 放在图床目录下的 themes/，由 caddy 直接服务，URL 是 /static/themes/... */
 const THEME_SUBDIR = 'themes';
@@ -129,14 +130,14 @@ export class ThemeProvider {
     meta: { id?: string; name?: string; description?: string; author?: string; version?: string },
   ): Promise<{ theme: ThemeMeta; warnings: string[] }> {
     if (!file || !file.buffer || !file.buffer.length) {
-      throw new BadRequestException('没有收到文件（表单字段名要是 file）');
+      throw codedError('themeUploadNoFile');
     }
     if (file.buffer.byteLength > THEME_MAX_BYTES) {
-      throw new BadRequestException(
-        `文件太大（${(file.buffer.byteLength / 1024).toFixed(1)}KB），主题 CSS 上限 ${
-          THEME_MAX_BYTES / 1024
-        }KB`,
-      );
+      // 🔴 期 9 第五批：KB 数字走 params（`{size}` / `{max}`），文案在码表里。
+      throw codedError('themeUploadTooLarge', {
+        size: (file.buffer.byteLength / 1024).toFixed(1),
+        max: THEME_MAX_BYTES / 1024,
+      });
     }
     const originalName = String(file.originalname || '');
     // multer/busboy 按 latin1 解码文件名，中文名会变乱码（附件那条路径早有同样的处理）
@@ -149,24 +150,31 @@ export class ThemeProvider {
       }
     })();
     if (!/\.css$/i.test(decodedName)) {
-      throw new BadRequestException('只接受 .css 文件（主题就是一份样式表）');
+      throw codedError('themeUploadNotCss');
     }
 
     const checked = validateThemeCss(file.buffer);
     if (!checked.ok || !checked.css) {
-      throw new BadRequestException(checked.reason || 'CSS 校验没通过');
+      // 🔴 `validateThemeCss()` 现在同时返回 `code`（与可选 params）⇒ 用码抛，
+      //    `reason` 保留是给日志与既有 spec 用的（两者由 spec 断言**逐字一致**，不许漂）。
+      //    ⚠️ 兜底码 `themeCssInvalid`：万一将来新增一种拒绝却忘了给 code，
+      //    用户看到的仍是"CSS 校验没通过"（而不是 undefined 或裸 reason）。
+      // ⚠️ 写成**两个分支**而不是 `codedError(checked.code || 'themeCssInvalid', …)`：
+      //    admin 侧"防死码"判据按 `codedError('<code>'` 这个形状找码名 ⇒ 兜底码藏在 `||` 右边会被判成死码。
+      if (checked.code) {
+        throw codedError(checked.code, checked.params);
+      }
+      throw codedError('themeCssInvalid');
     }
 
     // id：表单给了就用，否则从文件名推；内置 id 是保留字
     const requested = String(meta?.id || '').trim();
     const id = slugifyThemeId(requested || decodedName);
     if (!id || !THEME_ID_RE.test(id)) {
-      throw new BadRequestException(
-        '主题 id 不合法：只能是小写字母、数字、- 和 _，2-40 位，且以字母或数字开头',
-      );
+      throw codedError('themeIdInvalid');
     }
     if (BUILTIN_THEMES.some((t) => t.id === id)) {
-      throw new BadRequestException(`「${id}」是内置主题的名字，换一个 id`);
+      throw codedError('themeIdIsBuiltin', { id });
     }
 
     const css = checked.css;
@@ -225,7 +233,7 @@ export class ThemeProvider {
   async activate(id: string): Promise<{ uiStyle: string; theme: ThemeMeta | null }> {
     const theme = await this.findOne(id);
     if (!theme) {
-      throw new BadRequestException(`没有这个主题：${id}`);
+      throw codedError('themeNotFound', { id });
     }
     await this.metaProvider.updateSiteInfo({ uiStyle: id } as any);
     // 主题只影响样式，但前台是静态生成的，必须重新渲染才看得到
@@ -238,16 +246,16 @@ export class ThemeProvider {
   /** 删除一个上传的主题（内置的、正在用的都不给删） */
   async remove(id: string): Promise<{ deleted: string }> {
     if (BUILTIN_THEMES.some((t) => t.id === id)) {
-      throw new BadRequestException('内置主题不能删除');
+      throw codedError('themeBuiltinCannotDelete');
     }
     const uploaded = await this.readUploaded();
     const target = uploaded.find((t) => t.id === id);
     if (!target) {
-      throw new BadRequestException(`没有这个上传主题：${id}`);
+      throw codedError('themeUploadedNotFound', { id });
     }
     const active = await this.getActive();
     if (active.uiStyle === id) {
-      throw new BadRequestException('这个主题正在使用中，先切换到别的主题再删');
+      throw codedError('themeInUseCannotDelete');
     }
     // ⚠️ 同 upload 的清理：target.url 是库里的值，收敛不通过就只删元数据、绝不 unlink
     if (target.url) {

@@ -9469,6 +9469,104 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.187 期 9 第五批：主题族 + 图床/静态文件族 **32 个错误码**（throw 棘轮 162 → 134），🔴 三语真实浏览器端到端 12/12，以及"cluster 守卫收窄"的**第二次修正**
+
+**交付**：`theme.provider.ts`(10 处) + `types/theme.dto.ts` 的 `validateThemeCss`(**9 种拒绝**，以前根本不在任何口径里) +
+`static.provider.ts`(11 处) + `static/local.provider.ts`(7 处) ⇒ **32 个新码**（重复文本共用码 ⇒ 28 处 throw + 9 个 reason），
+admin 三份包各 +32（**1529 → 1561 key**），throw 棘轮 **162 → 134**，错误码总数 **84 → 116**。
+🔴 **真实浏览器端到端 12/12（zh-CN 4 + en-US 6 + zh-TW 4 判据全过，problems 0 / skipped 0）**：
+在后台「系统设置 → 主题」里**真的上传**两个坏文件 ——
+| 触发 | zh-CN | en-US | zh-TW |
+| --- | --- | --- | --- |
+| 上传 `.txt`（`themeUploadNotCss`） | 只接受 .css 文件（主题就是一份样式表） | Only .css files are accepted (a theme is just a stylesheet) | 只接受 .css 檔案（主題就是一份樣式表） |
+| 上传含 `javascript:` 的 `.css`（`themeCssForbiddenJsProtocol`） | CSS 里含有 javascript: 伪协议，已拒绝（主题只能是样式） | The CSS contains the javascript: pseudo-protocol, so it was rejected (a theme can only be styles) | CSS 裡含有 javascript: 偽協議，已拒絕（主題只能是樣式） |
+证据：`vanblog_dev/i18n-browser-evidence/phase9-themecodes/`（含 `evidence.md` 摘要与逐轮实采文本）。
+🔴 第二条同时证明了一条**新链路**：校验函数返回 `code` → provider 用它抛异常 → 响应体带码 → admin 按码显示译文。
+
+#### A. 🔴 一个**从来不在任何口径里**的用户可见族：校验函数返回的 `reason`
+`validateThemeCss()` 拒绝时返回 `{ ok:false, reason:'CSS 是空的' }`，而 provider 写的是
+`throw new BadRequestException(checked.reason || 'CSS 校验没通过')` ⇒
+🔴 那 9 句拒绝原因（空的 / 太大 / NUL 字节 / 6 条被禁规则）**既不是 throw 里的字面量、也不是 `message:` 属性**
+⇒ 两个棘轮都数不到（与上一批的"响应助手族"是同一类盲区，只是形状不同）。
+修法：`validateThemeCss` **同时**返回 `code`（与可选 `params`），`reason` 保留不动（有 4 条 spec 钉着它的内容）。
+🔴 **两处口径必须钉在一起**：迁移之后同一句话存在两处（`reason` 与码表的 `zh`）⇒
+新增 spec 断言 `normalize(reason) === normalize(SERVER_ERROR_CODES[code].zh)`（把数字换成 `#` 再比，
+因为"太大"那条含插值数字），并带**反空转**（那 8 个用例必须真的都被拒，否则"逐字一致"是在比两个 undefined）。
+变异对照 M6（把 `reason` 改一个字）⇒ jest 侧**1 条红**（`Expected: "CSS 是空的" / Received: "CSS 为空"`）。
+👉 🔴 **一般化：任何"函数返回文案、调用点拿去抛"的形状都是口径盲区。** 判据只认 `throw new X('中文')`
+与 `{ message: '中文' }` 两种形状，而真实代码里至少有三种（还有"当实参传给响应助手"）。
+🔴 待办（口径）：把"返回体里带中文的 `reason:` / `detail:` / `hint:` 属性"也纳入清点。
+
+#### B. 🔴 6 条"CSS 里含有 X"按 X **拆成 6 个码**（第三次遇到同一个坑）
+那张 banned 表的 label **本身含中文**：`javascript: 伪协议`、`</style> 闭合标签`、`<script> 标签`
+⇒ 若做成"一个码 + `{label}` 参数"，英文里就会夹中文。
+这是本项目**第三次**踩"把给用户看的文字当协议值传"：① `NumSelect d="天"`（单位当 prop）；
+② `assertAccountPasswordStrength(pw, '管理员')`（账号类型当参数）；③ 本次（被禁规则名当参数）。
+👉 🔴 规矩：**参数只能是 ASCII 的语义键或数字**；需要按类型分文案就**拆码**，或者传语义键 + ICU select
+（而服务端的 `fillServerErrorMessage` 不实现 select ⇒ 现阶段一律拆码）。
+
+#### C. 🔴 "防死码"判据的形状要求，第二次反向约束了代码组织
+`validateThemeCss` 返回的码最终是这样抛的：`throw codedError(checked.code || 'themeCssInvalid', checked.params)`
+⇒ 🔴 admin 侧"防死码"判据（按 `codedError('<code>'` 找码名）**一个都找不到**，把 10 个活码判成死码。
+两处修法（都做了）：
+1. **判据加一种形状**：`code: '<code>'`（属性位）也算"被用到" —— 因为动态派发是正当的；
+   ⚠️ 边界：仍然要求"码名以字符串字面量出现在源码里"，且登记表自己那个文件被排除（否则恒真）。
+2. **代码改形状**：banned 表从三元组 `[re, label, code]` 改成**对象数组** `{ re, label, code }`
+   ⇒ 源码里出现 `code: 'themeCssForbiddenJsProtocol'`，判据能认（三元组里它只是个裸字符串）。
+   兜底那处也从 `codedError(checked.code || 'themeCssInvalid', …)` 改成**两个分支**
+   （`if (checked.code) throw codedError(checked.code, …); throw codedError('themeCssInvalid');`）
+   ⇒ 兜底码也出现在判据认得的形状里，而且读起来更清楚。
+👉 🔴 这是"判据的形状要求反向约束代码组织"的**第二例**（第一例：响应助手收 body 而不是码名，§7.186 C）。
+两次的处理原则一致：**优先改代码去满足判据**（因为判据要求的形状通常也是更好的可读性），
+只有当那种形状确实表达不了（动态派发）时才**给判据加一种形状**，并且写清边界与理由。
+
+#### D. 🔴 cluster 守卫收窄的**第二次修正**：`/\d/`（"含有数字"）太宽
+上一批我把判据收窄成"取值里**有数字**就算桶"，这批立刻被 `max: THEME_MAX_BYTES / 1024`
+（主题 CSS 字节上限换算成 KB）绊到 —— **第 4 次假阳性**。
+👉 教训：`/\d/` 这种"含有数字"的判据太宽 ⇒ 领域常量里到处是 `1024`、`60`、`2-40`。
+改成"**取值以数字字面量开头**，或取值里出现摊薄/取上限的函数"：
+- ✓ 算桶：`max: 600`、`max: 60 * 5`、`max: scaleLimit(X)`、`maxPoolSize: Math.max(10, …)`
+- ✗ 不算：`max: THEME_MAX_BYTES / 1024`、`max: maxLength`、`max: RESTORE_SIG_MAX_BYTES`
+🔴 **两个方向都重新做了变异对照**（这次是**孤立插入**，否则相邻行会互相干扰）：
+- 变异 A：`const MUT_BUCKET_A = { max: 600, window: 60 };` ⇒ **红**（点名那一行）；
+- 变异 B：`const MUT_DOMAIN_B = { max: THEME_LIKE_CONST / 1024 };` ⇒ **绿**。
+⚠️ 第一次把 A 与 B **挨着插**在一起测 ⇒ B 也被判红了（因为 B 的"相邻一行"是 A，而 A 含 `window`
+这个限流词汇）⇒ 🔴 **测"相邻行"类判据时，变异必须孤立插入**，否则两条变异会互相污染。
+
+#### E. 🔴 探针尺子：转义层数（三连坑）与"找不到 ≠ 不存在"
+按钮正则第一版 `split('').join('\s*')` —— 在 JS 里 `'\s'` 就是字母 `s` ⇒ 正则变成 `Us*ps*ls*o…`，永远匹配不上；
+第二版"先整体转义再 split/join" ⇒ 把分隔符自己转义了（产出 `\\s*` 字面量），照样不匹配；
+第三版才对：**逐字符转义**再拼接分隔符（escape 与 join 分开做）。
+👉 🔴 这类坑在"Python 生成 JS 生成 RegExp"三层嵌套里特别容易踩 ⇒ **生成后必须把正则打印出来**。
+这次就是靠打印 `想找的正则：Us*ps*ls*o…` 一眼定位的；而**第一版只报"找不到按钮"**，
+加了"把页面上所有按钮文本打出来"之后立刻看到 `Upload a theme (.css)` 就在列表里 ⇒ 问题在尺子不在页面。
+👉 🔴 **"找不到"必须同时打印"我到底看到了什么"**：这与"reverse checks must first prove they captured something"
+同源 —— 找不到 ≠ 不存在。
+
+#### F. 顺带修的锚点（4 处，都是"中文搬进码表 ⇒ 源码文本锚点失效"）
+`storedFileName.spec.ts`（`非法的附件文件名` / `非法的缩略图文件名`）、`imagePipeline.test.js`
+（`远程图床（PicGo / OSS）暂不支持替换`）、`securityHardening.test.js`（`找不到该文件（可能已经被删除）`）⇒
+全部改成**跨文件双钉**：① provider 必须抛那个码；② **码表里**那条的中文必须仍然是原文
+（🔴 只钉①不够：那只证明抛了这个码，不证明文案没被改软）。
+另外 `localePackParity` 的"zh-TW 与 zh-CN 逐字相同"白名单 +2（`error.themeCssEmpty` = `CSS 是空的`、
+`error.themeCssTooLarge` = `CSS 太大（{size}KB > {max}KB）` —— 两条都**没有简体专用字**，同形是正确译文，不是漏翻）。
+⚠️ `{size}KB` / `{max}KB` **刻意不用 ICU 复数**：KB 值可能是小数（`toFixed(1)`），复数配小数会读成 "12.3 bytes" 那种怪话。
+🔴 还有一个自己的失误要记：给翻译子代理的清单里**多写了一个不存在的码**（`themeActivateFailedGeneric`，
+我把 admin 侧的兜底文案当成了服务端消息）⇒ 子代理照翻了，我在入库时**没插**它。
+👉 **委派翻译前先从码表把 key 列表导出来**，不要手敲（手敲就会多/漏，而多出来的那条会变成死条目）。
+
+#### G. 基线
+- admin `node --test` **782 tests / 174 suites / 0 fail**；jest **288 套件 / 4252 用例（4248 + 4 skip）/ 0 FAIL**（+10 = reason 逐字对账那批）；
+- 语言包 **1561 key** ×3（重复 0）；`--zh-tw-audit`：1561 key / **813** 个不同汉字 / **0 命中**；
+- 错误码 **116 个**（全部三语、全部被真实调用、黄金快照 116 条、调用点参数两向对账）；
+- 服务端棘轮：**throw 134**、**`message:` 103**；admin 类型门禁 **31/0**、server `tsc` **0 错**、两个生产构建 rc=0；
+- 变异对照 **8/8**：admin harness 5 条（退回硬编码 throw / 🔴 把 banned 表某项的 code 换成别的码（防死码红）/
+  改码表中文一个字 / 删一条 en-US 译文（**4 条断言同时红**）/ 语义空操作）+ jest 侧 3 条
+  （reason 漂移、cluster 变异 A、cluster 变异 B）。
+- 下一批（期 9 第六批）：备份族 —— `backupVerify`(43) / `fullBackup`(24) / `backupCrypto`(12) / `backupSigning`(11) /
+  `backup.controller`(16)。🔴 **动手前必须先逐条分类**：写进备份清单/校验报告**文件**的文本属**产物内容**
+  （与 `导出说明.md` 那个文件名同族，不译），只有回到界面的那部分才进码表。
+
 ### 7.186 期 9 第四批：限流信封 —— 🔴 找到了两个棘轮**都数不到**的一族用户可见中文（5 处），并且一条变异对照证明我新写的反向判据是**形状依赖的假绿**
 
 **交付**：`utils/rateLimit.ts` 的 **5 处** 429 文案 ⇒ **3 个码**（`rateLimited` 短的那句被 3 个桶共用、

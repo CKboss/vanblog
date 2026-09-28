@@ -224,7 +224,13 @@ describe('安全加固：认证与权限', () => {
     );
     const stat = read('packages/server/src/provider/static/static.provider.ts');
     assert.match(stat, /deleteOneBySign\(sign: string, staticType\?: string\)/);
-    assert.match(stat, /找不到该文件（可能已经被删除）/);
+    // 🔴 期 9 第五批：那句中文搬进了服务端错误码登记表（`imgFileRecordMissing`）⇒ 锚点跨文件搬：
+    //    ① provider 必须抛这个码（"空值要可读报错"那道性质还在）；② 登记表里那条的中文必须仍然是原文。
+    assert.match(stat, /codedError\('imgFileRecordMissing'\)/);
+    assert.match(
+      read('packages/server/src/utils/serverErrorCodes.ts'),
+      /imgFileRecordMissing: entry\('找不到该文件（可能已经被删除）'/,
+    );
     assert.match(stat, /getOneBySignAndType\(currentSign, 'img'\)/);
   });
 

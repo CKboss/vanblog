@@ -4,6 +4,7 @@ import {
   HttpException,
   InternalServerErrorException,
   NotAcceptableException,
+  NotImplementedException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -290,6 +291,76 @@ export const SERVER_ERROR_CODES = {
     HttpException,
     429,
   ),
+  // ── 主题族（theme.provider.ts / types/theme.dto.ts 的 `validateThemeCss`，期 9 第五批）──────
+  // 🔴 `validateThemeCss()` 返回的 `reason` 也是**用户可见**的（provider 把它当异常消息抛出去）⇒
+  //    这一批给它**同时**返回 `code`（与可选 `params`），reason 保留（有 spec 钉着它的内容），
+  //    并由 spec 断言 `reason === SERVER_ERROR_CODES[code].zh`（🔴 否则同一句话就有两处口径，迟早漂）。
+  // 🔴 6 条"CSS 里含有 X"刻意**按 X 拆成 6 个码**，而不是一个码 + `{label}` 参数：
+  //    那张 banned 表里的 label **本身含中文**（`javascript: 伪协议`、`</style> 闭合标签`、`<script> 标签`）
+  //    ⇒ 当参数传进 ICU，英文里就会夹中文（与 `${label}密码太短` / `NumSelect d="天"` 同一个形状的坑）。
+  // ── 图床与静态文件族（static.provider.ts / static/local.provider.ts，期 9 第五批）──────────
+  // 🔴 重复文本各**共用一个码**（`文件不存在` 2 处、`非法的静态文件路径！` 2 处、`上传失败` 2 处、
+  //    `打包错误！` 2 处、`找不到这张图片！` 2 处）⇒ 18 处 throw → 13 个码。
+  // ⚠️ `imgPackFailed` 迁移前是 `new HttpException({ statusCode: 500, message: '打包错误！' }, 500)`
+  //    （**对象体** + 显式 500）⇒ 码表里用 `HttpException` + `status: 500`，形状与状态码都由黄金快照钉住。
+  staticFileNotFound: entry('文件不存在', HttpException, 404),
+  staticPathNotLocal: entry('只能处理本站 /static/ 下的文件！', BadRequestException),
+  staticPathIllegal: entry('非法的静态文件路径！', BadRequestException),
+  staticThumbNameIllegal: entry('非法的缩略图文件名！', BadRequestException),
+  staticAttachmentNameIllegal: entry('非法的附件文件名！', BadRequestException),
+  imgUploadFailed: entry('上传失败', HttpException, 500),
+  imgPackFailed: entry('打包错误！', HttpException, 500),
+  imgPackUnsupportedProvider: entry('其他图床暂不支持打包导出！', NotImplementedException),
+  imgFileRecordMissing: entry('找不到该文件（可能已经被删除）', BadRequestException),
+  imgNoFileReceived: entry('没有收到文件！', BadRequestException),
+  imgNotFound: entry('找不到这张图片！', BadRequestException),
+  imgReplaceUnsupportedRemote: entry(
+    '远程图床（PicGo / OSS）暂不支持替换，请删除后重新上传！',
+    BadRequestException,
+  ),
+  imgNoDetectableImages: entry('没有可检测的图片！', BadRequestException),
+
+  themeUploadNoFile: entry('没有收到文件（表单字段名要是 file）', BadRequestException),
+  themeUploadTooLarge: entry('文件太大（{size}KB），主题 CSS 上限 {max}KB', BadRequestException),
+  themeUploadNotCss: entry('只接受 .css 文件（主题就是一份样式表）', BadRequestException),
+  themeCssInvalid: entry('CSS 校验没通过', BadRequestException),
+  themeIdInvalid: entry(
+    '主题 id 不合法：只能是小写字母、数字、- 和 _，2-40 位，且以字母或数字开头',
+    BadRequestException,
+  ),
+  themeIdIsBuiltin: entry('「{id}」是内置主题的名字，换一个 id', BadRequestException),
+  themeNotFound: entry('没有这个主题：{id}', BadRequestException),
+  themeBuiltinCannotDelete: entry('内置主题不能删除', BadRequestException),
+  themeUploadedNotFound: entry('没有这个上传主题：{id}', BadRequestException),
+  themeInUseCannotDelete: entry('这个主题正在使用中，先切换到别的主题再删', BadRequestException),
+  themeCssEmpty: entry('CSS 是空的', BadRequestException),
+  themeCssTooLarge: entry('CSS 太大（{size}KB > {max}KB）', BadRequestException),
+  themeCssHasNul: entry('文件里有 NUL 字节，看起来不是 CSS 文本', BadRequestException),
+  themeCssForbiddenJsProtocol: entry(
+    'CSS 里含有 javascript: 伪协议，已拒绝（主题只能是样式）',
+    BadRequestException,
+  ),
+  themeCssForbiddenExpression: entry(
+    'CSS 里含有 CSS expression()，已拒绝（主题只能是样式）',
+    BadRequestException,
+  ),
+  themeCssForbiddenBehavior: entry(
+    'CSS 里含有 CSS behavior（HTC），已拒绝（主题只能是样式）',
+    BadRequestException,
+  ),
+  themeCssForbiddenMozBinding: entry(
+    'CSS 里含有 -moz-binding，已拒绝（主题只能是样式）',
+    BadRequestException,
+  ),
+  themeCssForbiddenStyleClose: entry(
+    'CSS 里含有 </style> 闭合标签，已拒绝（主题只能是样式）',
+    BadRequestException,
+  ),
+  themeCssForbiddenScriptTag: entry(
+    'CSS 里含有 <script> 标签，已拒绝（主题只能是样式）',
+    BadRequestException,
+  ),
+
   publicListRateLimited: entry(
     '分类/标签列表接口调用过于频繁，请稍后再试。' +
       '这一档默认每 IP 每分钟 {max} 次，' +

@@ -1857,4 +1857,46 @@ export default {
   //    🔴 不用缩写、不用全角标点、不用 em dash（用 ` - `）。
   'error.initRateLimited': 'Too many calls to the initialization/recovery endpoint: at most {max, plural, one {# write request} other {# write requests}} every 10 minutes, and you can retry in about {seconds, plural, one {# second} other {# seconds}}. Only **write operations** (POST and other non-safe methods) count against this quota; GET/HEAD/OPTIONS do not. If you are running a health check or probing whether the site is already initialized, use GET /api/public/health instead - it does not consume this quota and will not lock out a real initialization/disaster recovery. If you truly need more recovery attempts (for example, trying the password repeatedly), temporarily raise VANBLOG_INIT_LIMIT_PER_10MIN.',
   'error.publicListRateLimited': 'Too many calls to the category/tag list endpoint; please try again later. This tier defaults to {max, plural, one {# request} other {# requests}} per IP per minute and can be adjusted with VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN. If you are performing site aggregation, use /api/public/article?category=…&page=…&pageSize=… instead (that is database-level pagination).',
+
+  // ── 🔴 期 9 第五批（13 keys）── 英文人工写，后台 toast 口吻：短、直接、不加原文没有的解释。
+  //    🔴 不用缩写（ICU 把单引号当转义符）、不用全角标点；`/static/`、`PicGo`、`OSS` 逐字保留。
+  'error.staticFileNotFound': 'File not found',
+  'error.staticPathNotLocal': 'Only files under this site /static/ can be processed!',
+  'error.staticPathIllegal': 'Illegal static file path!',
+  'error.staticThumbNameIllegal': 'Illegal thumbnail file name!',
+  'error.staticAttachmentNameIllegal': 'Illegal attachment file name!',
+  'error.imgUploadFailed': 'Upload failed',
+  'error.imgPackFailed': 'Packing error!',
+  'error.imgPackUnsupportedProvider': 'Other image hosts do not support archive export!',
+  'error.imgFileRecordMissing': 'File not found (it may have been deleted)',
+  'error.imgNoFileReceived': 'No file received!',
+  'error.imgNotFound': 'Image not found!',
+  'error.imgReplaceUnsupportedRemote': 'Remote image hosts (PicGo / OSS) do not support replacement. Delete the image and upload it again!',
+  'error.imgNoDetectableImages': 'No detectable images!',
+
+  // ── 🔴 期 9 第五批（19 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 6 条 forbidden-rule 用**同一个句式**（`The CSS contains <token>, so it was rejected (a theme can only be styles)`）
+  //    ⇒ 便于对比，也便于将来一起改。
+  //    ⚠️ `{size}KB` / `{max}KB` 刻意**不用** ICU plural：这些是 KB 数、可能是小数（12.3），
+  //    复数形式配小数会读成 "12.3 bytes" 那种怪话；三份都写成 `{size}KB`。
+  //    🔴 `「{id}」` 在英文里用 ASCII 双引号 `"{id}"`（全角引号在英文里是错的）。
+  'error.themeUploadNoFile': 'No file received (the form field must be named file)',
+  'error.themeUploadTooLarge': 'The file is too large ({size}KB); the theme CSS limit is {max}KB',
+  'error.themeUploadNotCss': 'Only .css files are accepted (a theme is just a stylesheet)',
+  'error.themeCssInvalid': 'CSS validation failed',
+  'error.themeIdInvalid': 'Invalid theme id: only lowercase letters, digits, - and _ are allowed; 2-40 characters; must start with a letter or digit',
+  'error.themeIdIsBuiltin': '"{id}" is the name of a built-in theme; use a different id',
+  'error.themeNotFound': 'No such theme: {id}',
+  'error.themeBuiltinCannotDelete': 'Built-in themes cannot be deleted',
+  'error.themeUploadedNotFound': 'No such uploaded theme: {id}',
+  'error.themeInUseCannotDelete': 'This theme is in use; switch to another theme before deleting it',
+  'error.themeCssEmpty': 'The CSS is empty',
+  'error.themeCssTooLarge': 'The CSS is too large ({size}KB > {max}KB)',
+  'error.themeCssHasNul': 'The file contains NUL bytes, so it does not look like CSS text',
+  'error.themeCssForbiddenJsProtocol': 'The CSS contains the javascript: pseudo-protocol, so it was rejected (a theme can only be styles)',
+  'error.themeCssForbiddenExpression': 'The CSS contains CSS expression(), so it was rejected (a theme can only be styles)',
+  'error.themeCssForbiddenBehavior': 'The CSS contains CSS behavior (HTC), so it was rejected (a theme can only be styles)',
+  'error.themeCssForbiddenMozBinding': 'The CSS contains -moz-binding, so it was rejected (a theme can only be styles)',
+  'error.themeCssForbiddenStyleClose': 'The CSS contains a </style> closing tag, so it was rejected (a theme can only be styles)',
+  'error.themeCssForbiddenScriptTag': 'The CSS contains a <script> tag, so it was rejected (a theme can only be styles)',
 };

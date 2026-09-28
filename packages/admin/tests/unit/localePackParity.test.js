@@ -186,6 +186,11 @@ const IDENTICAL_ZH_TW_OK = [
   'editor.redo',
   // 🔴 期 6 第四批：`查看前台` 简繁同形
   'editor.viewFrontend',
+  // 🔴 期 9 第五批（主题族）：这两条繁中与简体**逐字相同**，因为没有简体专用字 ——
+  //   `CSS 是空的`（CSS / 是 / 空 / 的 全部简繁同形）、`CSS 太大（{size}KB > {max}KB）`
+  //   （太大 同形，括号是全角、三份一致，KB 与占位符是技术标识符）⇒ 进白名单，不是"没翻"。
+  'error.themeCssEmpty',
+  'error.themeCssTooLarge',
   // 🔴 期 6 第六批（备份页）：这四个繁中与简体**逐字相同**，因为没有简体专用字
   //   （`{seconds} 秒` 是 ICU 占位符 + 单位、`格式`、`包含`、`，以及`）⇒ 进白名单，不是"没翻"
   'backup.secondsValue',

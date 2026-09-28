@@ -54,6 +54,10 @@ export const BUILTIN_THEMES: ThemeMeta[] = [
 export const THEME_ID_RE = /^[a-z0-9][a-z0-9-_]{1,39}$/;
 
 /** 单个主题 CSS 的上限（512KB）。再大就该考虑是不是把图片 base64 塞进来了。 */
+// 🔴 只用 `import type`：这是个纯类型/工具文件，运行期不该因为一个类型别名而多出依赖边
+//    （`serverErrorCodes.ts` 会 import @nestjs/common，而本文件被前台/工具链多处引用）。
+import type { ServerErrorCode } from 'src/utils/serverErrorCodes';
+
 export const THEME_MAX_BYTES = 512 * 1024;
 
 /**
@@ -68,6 +72,14 @@ export const THEME_MAX_BYTES = 512 * 1024;
 export function validateThemeCss(input: string | Buffer): {
   ok: boolean;
   reason?: string;
+  /**
+   * 🔴 期 9 第五批：拒绝时**同时**给出服务端错误码（与可选 params），
+   * 让调用方能 `throw codedError(code, params)` ⇒ 后台按当前语言显示译文。
+   * ⚠️ `reason` **保留且逐字不变**（`theme.provider.spec.ts` 有 4 条断言钉着它的内容），
+   * 并由 spec 断言 `reason === SERVER_ERROR_CODES[code].zh` —— 🔴 否则同一句话就有两处口径，迟早漂。
+   */
+  code?: ServerErrorCode;
+  params?: Record<string, string | number>;
   css?: string;
   warnings?: string[];
 } {
@@ -76,17 +88,25 @@ export function validateThemeCss(input: string | Buffer): {
   css = css.replace(/^\uFEFF/, '');
   const bytes = Buffer.byteLength(css, 'utf8');
   if (!css.trim()) {
-    return { ok: false, reason: 'CSS 是空的' };
+    return { ok: false, reason: 'CSS 是空的', code: 'themeCssEmpty' };
   }
   if (bytes > THEME_MAX_BYTES) {
     return {
       ok: false,
       reason: `CSS 太大（${(bytes / 1024).toFixed(1)}KB > ${THEME_MAX_BYTES / 1024}KB）`,
+      code: 'themeCssTooLarge',
+      // 🔴 数字走 params（不写死在译文里）。⚠️ KB 值可能是小数（`toFixed(1)`）⇒ 英文**不用** ICU 复数
+      //    （复数配小数会读成 "1.0 bytes" 那种怪话），三份都写成 `{size}KB`。
+      params: { size: (bytes / 1024).toFixed(1), max: THEME_MAX_BYTES / 1024 },
     };
   }
   // 二进制/乱码：出现 NUL 就说明传的不是文本
   if (css.indexOf('\u0000') >= 0) {
-    return { ok: false, reason: '文件里有 NUL 字节，看起来不是 CSS 文本' };
+    return {
+      ok: false,
+      reason: '文件里有 NUL 字节，看起来不是 CSS 文本',
+      code: 'themeCssHasNul',
+    };
   }
   // ⚠️ 扫描前先去掉注释，两个理由：
   //  1) 注释里**提到**这些关键词是正当的（示例主题就会写"javascript: 会被拒绝"），
@@ -98,17 +118,24 @@ export function validateThemeCss(input: string | Buffer): {
   // 宁可保守（正常 CSS 里不可能出现 java/*x*/script: 这种写法）。
   const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const lower = withoutComments.toLowerCase();
-  const banned: Array<[RegExp, string]> = [
-    [/javascript\s*:/, 'javascript: 伪协议'],
-    [/expression\s*\(/, 'CSS expression()'],
-    [/behavior\s*:/, 'CSS behavior（HTC）'],
-    [/-moz-binding/, '-moz-binding'],
-    [/<\/style/i, '</style> 闭合标签'],
-    [/<script/i, '<script> 标签'],
+  // 🔴 期 9 第五批：每一项多带一个**错误码**。刻意按 label 拆成 6 个码，而不是"一个码 + {label} 参数"：
+  //    这些 label **本身含中文**（`javascript: 伪协议`、`</style> 闭合标签`、`<script> 标签`）⇒
+  //    当参数传进 ICU，英文里就会夹中文（与 `${label}密码太短`、`NumSelect d="天"` 同一个形状的坑）。
+  // ⚠️ 写成**对象数组**而不是三元组：admin 侧那条"防死码"判据按 `code: '<code>'` 这个形状找码名
+  //    （动态派发的那一族，见 `i18nServerErrorCodes.test.js` 第 ② 条的注释）⇒
+  //    三元组里的 `'themeCssForbiddenXxx'` 只是个裸字符串，判据找不到，会把 6 个活码判成死码。
+  //    🔴 这也是"判据的形状要求反向约束代码组织"的又一例（上一例：响应助手收 body 而不是码名）。
+  const banned: Array<{ re: RegExp; label: string; code: ServerErrorCode }> = [
+    { re: /javascript\s*:/, label: 'javascript: 伪协议', code: 'themeCssForbiddenJsProtocol' },
+    { re: /expression\s*\(/, label: 'CSS expression()', code: 'themeCssForbiddenExpression' },
+    { re: /behavior\s*:/, label: 'CSS behavior（HTC）', code: 'themeCssForbiddenBehavior' },
+    { re: /-moz-binding/, label: '-moz-binding', code: 'themeCssForbiddenMozBinding' },
+    { re: /<\/style/i, label: '</style> 闭合标签', code: 'themeCssForbiddenStyleClose' },
+    { re: /<script/i, label: '<script> 标签', code: 'themeCssForbiddenScriptTag' },
   ];
-  for (const [re, label] of banned) {
-    if (re.test(lower)) {
-      return { ok: false, reason: `CSS 里含有 ${label}，已拒绝（主题只能是样式）` };
+  for (const b of banned) {
+    if (b.re.test(lower)) {
+      return { ok: false, reason: `CSS 里含有 ${b.label}，已拒绝（主题只能是样式）`, code: b.code };
     }
   }
   const warnings: string[] = [];

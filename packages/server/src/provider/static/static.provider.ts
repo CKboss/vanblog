@@ -1,4 +1,5 @@
 import { assertImageBuffer, fetchRemoteSafely } from 'src/utils/safeFetch';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { envPositiveInt } from 'src/utils/envNumber';
 
 /**
@@ -346,7 +347,7 @@ export class StaticProvider {
       extraMeta,
     );
     if (!realPath) {
-      throw new HttpException('上传失败', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw codedError('imgUploadFailed');
     }
     return {
       src: realPath,
@@ -382,7 +383,7 @@ export class StaticProvider {
       sign,
     );
     if (!realPath) {
-      throw new HttpException('上传失败', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw codedError('imgUploadFailed');
     }
     return {
       src: realPath,
@@ -642,10 +643,10 @@ export class StaticProvider {
       if (success && path) {
         return path;
       } else {
-        throw new HttpException({ statusCode: 500, message: '打包错误！' }, 500);
+        throw codedError('imgPackFailed');
       }
     } else {
-      throw new NotImplementedException('其他图床暂不支持打包导出！');
+      throw codedError('imgPackUnsupportedProvider');
     }
   }
 
@@ -655,7 +656,7 @@ export class StaticProvider {
     if (success && path) {
       return path;
     }
-    throw new HttpException({ statusCode: 500, message: '打包错误！' }, 500);
+    throw codedError('imgPackFailed');
   }
 
   async saveFile(
@@ -816,7 +817,7 @@ export class StaticProvider {
       .findOne(staticType ? { sign, staticType } : { sign })
       .exec();
     if (!toDeleteData) {
-      throw new BadRequestException('找不到该文件（可能已经被删除）');
+      throw codedError('imgFileRecordMissing');
     }
     const storageType = toDeleteData.storageType;
     switch (storageType) {
@@ -853,14 +854,14 @@ export class StaticProvider {
     context?: UploadContext,
   ) {
     if (!file?.buffer) {
-      throw new BadRequestException('没有收到文件！');
+      throw codedError('imgNoFileReceived');
     }
     const item = await this.staticModel.findOne({ sign, staticType: 'img' }).exec();
     if (!item) {
-      throw new BadRequestException('找不到这张图片！');
+      throw codedError('imgNotFound');
     }
     if (item.storageType && item.storageType !== 'local') {
-      throw new BadRequestException('远程图床（PicGo / OSS）暂不支持替换，请删除后重新上传！');
+      throw codedError('imgReplaceUnsupportedRemote');
     }
     const settings = await this.settingProvider.getStaticSetting();
     const arr = String(file.originalname || '').split('.');
@@ -1086,7 +1087,7 @@ export class StaticProvider {
     if (!buffer && input?.sign) {
       item = await this.staticModel.findOne({ sign: input.sign, staticType: 'img' }).exec();
       if (!item) {
-        throw new BadRequestException('找不到这张图片！');
+        throw codedError('imgNotFound');
       }
       if (item.storageType && item.storageType !== 'local') {
         return {
@@ -1099,7 +1100,7 @@ export class StaticProvider {
       buffer = await this.localProvider.readStaticFile(item.realPath);
     }
     if (!buffer) {
-      throw new BadRequestException('没有可检测的图片！');
+      throw codedError('imgNoDetectableImages');
     }
     const key = await this.settingProvider.getStegoKey();
     const res = await extractStegoWatermark(buffer, key);

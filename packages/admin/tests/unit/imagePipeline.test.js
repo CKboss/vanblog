@@ -255,7 +255,14 @@ describe('服务端：替换图片', () => {
     assert.match(provider, /forceFormat: targetFormat/);
     assert.match(provider, /overwriteStaticFile\(realPath, processed\.buffer\)/);
     // 远程图床不支持替换（URL 会变）
-    assert.match(provider, /远程图床（PicGo \/ OSS）暂不支持替换/);
+    // 🔴 期 9 第五批：那句中文**搬进了服务端错误码登记表**（`imgReplaceUnsupportedRemote`）⇒
+    //    锚点跟着搬并**跨文件钉住**：① provider 必须抛这个码（那道闸门还在）；
+    //    ② 登记表里那条的中文必须仍然是原文（文案没被改软，PicGo / OSS 两个名字也还在）。
+    assert.match(provider, /codedError\('imgReplaceUnsupportedRemote'\)/);
+    assert.match(
+      readRepo('packages/server/src/utils/serverErrorCodes.ts'),
+      /imgReplaceUnsupportedRemote: entry\(\s*'远程图床（PicGo \/ OSS）暂不支持替换，请删除后重新上传！'/,
+    );
 
     const encode = readRepo('packages/server/src/utils/imgEncode.ts');
     assert.match(encode, /export async function encodeImageToFormat/);

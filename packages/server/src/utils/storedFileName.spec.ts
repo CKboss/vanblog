@@ -321,8 +321,15 @@ describe('图片落盘名：净化 + 容器化校验', () => {
     });
 
     it('附件与缩略图既有的那道便宜检查没被顺手删掉', () => {
-      expect(localSrc).toContain('非法的附件文件名');
-      expect(localSrc).toContain('非法的缩略图文件名');
+      // 🔴 期 9 第五批：那两句中文**搬进了服务端错误码登记表**（`staticAttachmentNameIllegal` /
+      //    `staticThumbNameIllegal`），`local.provider.ts` 里现在只剩码名 ⇒ 锚点跟着搬，
+      //    而且**跨文件钉住**：① provider 里那两道检查必须还在（抛这两个码）；
+      //    ② 登记表里那两条的中文必须仍然是原文（性质没放：便宜检查不许被顺手删掉，文案也不许被改软）。
+      expect(localSrc).toContain("codedError('staticAttachmentNameIllegal')");
+      expect(localSrc).toContain("codedError('staticThumbNameIllegal')");
+      const codes = readFileSync(path.join(__dirname, 'serverErrorCodes.ts'), 'utf8');
+      expect(codes).toMatch(/staticAttachmentNameIllegal: entry\('非法的附件文件名！'/);
+      expect(codes).toMatch(/staticThumbNameIllegal: entry\('非法的缩略图文件名！'/);
     });
   });
 });

@@ -2025,4 +2025,48 @@ export default {
   //    ⚠️ 里面的 `scaleLimit(...)` 值走 params（`{max}` / `{seconds}`）⇒ 多进程部署下提示的额度与实际一致。
   'error.initRateLimited': '初始化/恢复接口调用过于频繁：每 10 分钟最多 {max} 次写请求，约 {seconds} 秒后可以重试。只有**写操作**（POST 等非安全方法）计入这个额度，GET/HEAD/OPTIONS 不计。如果你是在做健康检查或"站点是否已初始化"的状态探测，请改用 GET /api/public/health —— 它不占这个额度，也不会把真正的初始化/灾难恢复锁在门外。确需更多次恢复尝试（例如反复试口令）可临时调高 VANBLOG_INIT_LIMIT_PER_10MIN。',
   'error.publicListRateLimited': '分类/标签列表接口调用过于频繁，请稍后再试。这一档默认每 IP 每分钟 {max} 次，可用 VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN 调整。若你在做站点聚合，请改用 /api/public/article?category=…&page=…&pageSize=…（那是数据库级分页）。',
+
+  // ── 🔴 期 9 第五批：图床与静态文件族 13 个服务端错误码（`static.provider.ts` 11 处 +
+  //    `static/local.provider.ts` 7 处 = 18 处 throw，重复文本共用码）。
+  //    🔴 zh-CN 与码表逐字相同；`imgPackFailed` 迁移前是 `HttpException({statusCode:500,message},500)`
+  //    （对象体 + 显式 500）⇒ 形状与状态码由黄金快照钉住。
+  'error.staticFileNotFound': '文件不存在',
+  'error.staticPathNotLocal': '只能处理本站 /static/ 下的文件！',
+  'error.staticPathIllegal': '非法的静态文件路径！',
+  'error.staticThumbNameIllegal': '非法的缩略图文件名！',
+  'error.staticAttachmentNameIllegal': '非法的附件文件名！',
+  'error.imgUploadFailed': '上传失败',
+  'error.imgPackFailed': '打包错误！',
+  'error.imgPackUnsupportedProvider': '其他图床暂不支持打包导出！',
+  'error.imgFileRecordMissing': '找不到该文件（可能已经被删除）',
+  'error.imgNoFileReceived': '没有收到文件！',
+  'error.imgNotFound': '找不到这张图片！',
+  'error.imgReplaceUnsupportedRemote': '远程图床（PicGo / OSS）暂不支持替换，请删除后重新上传！',
+  'error.imgNoDetectableImages': '没有可检测的图片！',
+
+  // ── 🔴 期 9 第五批：主题族 19 个服务端错误码（`theme.provider.ts` 10 处 + `validateThemeCss` 的 9 种拒绝）。
+  //    🔴 `validateThemeCss()` 现在**同时**返回 `reason`（给日志与既有 spec）与 `code`（给响应体）⇒
+  //    两处口径由 `theme.provider.spec.ts` 里那条"逐字一致"判据钉住（改一边不改另一边就红）。
+  //    🔴 6 条"CSS 里含有 X"刻意**按 X 拆成 6 个码**，而不是"一个码 + `{label}` 参数"：
+  //    那张 banned 表里的 label **本身含中文**（`javascript: 伪协议`、`</style> 闭合标签`、`<script> 标签`）
+  //    ⇒ 当参数传进 ICU，英文里就会夹中文（与 `${label}密码太短`、`NumSelect d="天"` 同一个形状的坑）。
+  'error.themeUploadNoFile': '没有收到文件（表单字段名要是 file）',
+  'error.themeUploadTooLarge': '文件太大（{size}KB），主题 CSS 上限 {max}KB',
+  'error.themeUploadNotCss': '只接受 .css 文件（主题就是一份样式表）',
+  'error.themeCssInvalid': 'CSS 校验没通过',
+  'error.themeIdInvalid': '主题 id 不合法：只能是小写字母、数字、- 和 _，2-40 位，且以字母或数字开头',
+  'error.themeIdIsBuiltin': '「{id}」是内置主题的名字，换一个 id',
+  'error.themeNotFound': '没有这个主题：{id}',
+  'error.themeBuiltinCannotDelete': '内置主题不能删除',
+  'error.themeUploadedNotFound': '没有这个上传主题：{id}',
+  'error.themeInUseCannotDelete': '这个主题正在使用中，先切换到别的主题再删',
+  'error.themeCssEmpty': 'CSS 是空的',
+  'error.themeCssTooLarge': 'CSS 太大（{size}KB > {max}KB）',
+  'error.themeCssHasNul': '文件里有 NUL 字节，看起来不是 CSS 文本',
+  'error.themeCssForbiddenJsProtocol': 'CSS 里含有 javascript: 伪协议，已拒绝（主题只能是样式）',
+  'error.themeCssForbiddenExpression': 'CSS 里含有 CSS expression()，已拒绝（主题只能是样式）',
+  'error.themeCssForbiddenBehavior': 'CSS 里含有 CSS behavior（HTC），已拒绝（主题只能是样式）',
+  'error.themeCssForbiddenMozBinding': 'CSS 里含有 -moz-binding，已拒绝（主题只能是样式）',
+  'error.themeCssForbiddenStyleClose': 'CSS 里含有 </style> 闭合标签，已拒绝（主题只能是样式）',
+  'error.themeCssForbiddenScriptTag': 'CSS 里含有 <script> 标签，已拒绝（主题只能是样式）',
 };

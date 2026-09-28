@@ -1803,4 +1803,47 @@ export default {
   //    健康檢查 / 探測 / 請改用 / 稍後再試。🔴 環境變量名、HTTP 方法、端點路徑逐字保留。
   'error.initRateLimited': '初始化/恢復介面呼叫過於頻繁：每 10 分鐘最多 {max} 次寫入請求，約 {seconds} 秒後可以重試。只有**寫入操作**（POST 等非安全方法）計入這個額度，GET/HEAD/OPTIONS 不計。如果你是在做健康檢查或「站點是否已初始化」的狀態探測，請改用 GET /api/public/health —— 它不佔這個額度，也不會把真正的初始化/災難恢復鎖在門外。確需更多次恢復嘗試（例如反覆試口令）可臨時調高 VANBLOG_INIT_LIMIT_PER_10MIN。',
   'error.publicListRateLimited': '分類/標籤列表介面呼叫過於頻繁，請稍後再試。這一檔預設每 IP 每分鐘 {max} 次，可用 VANBLOG_PUBLIC_LIST_LIMIT_PER_MIN 調整。若你在做站點聚合，請改用 /api/public/article?category=…&page=…&pageSize=…（那是資料庫層級分頁）。',
+
+  // ── 🔴 期 9 第五批（13 條）── 地區用詞：**檔案**（文件）/ **縮圖**（缩略图）/ **檔名**（文件名）/
+  //    **圖床** / **遠端**（远程）/ **暫時不支援**（暂不支持）/ **匯出** / **上傳** / **刪除** / **檢測** /
+  //    **路徑** / 靜態 / 附件 / 打包錯誤 / 找不到。🔴 `/static/`、`PicGo`、`OSS` 三份逐字相同。
+  'error.staticFileNotFound': '檔案不存在',
+  'error.staticPathNotLocal': '只能處理本站 /static/ 下的檔案！',
+  'error.staticPathIllegal': '非法的靜態檔案路徑！',
+  'error.staticThumbNameIllegal': '非法的縮圖檔名！',
+  'error.staticAttachmentNameIllegal': '非法的附件檔名！',
+  'error.imgUploadFailed': '上傳失敗',
+  'error.imgPackFailed': '打包錯誤！',
+  'error.imgPackUnsupportedProvider': '其他圖床暫時不支援打包匯出！',
+  'error.imgFileRecordMissing': '找不到這個檔案（可能已經被刪除）',
+  'error.imgNoFileReceived': '沒有收到檔案！',
+  'error.imgNotFound': '找不到這張圖片！',
+  'error.imgReplaceUnsupportedRemote': '遠端圖床（PicGo / OSS）暫時不支援替換，請刪除後重新上傳！',
+  'error.imgNoDetectableImages': '沒有可檢測的圖片！',
+
+  // ── 🔴 期 9 第五批（19 條）── 地區用詞：**主題** / **檔案**（文件）/ **樣式表** / **校驗** /
+  //    **內建**（内置）/ **換一個** / **使用中** / **先切換到別的主題再刪** / **位元組**（字节）/
+  //    **偽協議** / **已拒絕** / **閉合標籤** / **表單欄位名** / **小寫字母** / **個字元** / **以…開頭**。
+  //    🔴 `.css`、`file`、`id`、`CSS`、`NUL`、`javascript:`、`expression()`、`behavior`、`HTC`、
+  //    `-moz-binding`、`</style>`、`<script>`、`2-40` 三份逐字相同（技术标识符契约）。
+  //    ⚠️ `{size}KB` / `{max}KB` **不用** ICU 复数：KB 值可能是小数（`toFixed(1)`），复数配小数会读成怪话。
+  'error.themeUploadNoFile': '沒有收到檔案（表單欄位名必須是 file）',
+  'error.themeUploadTooLarge': '檔案太大（{size}KB），主題 CSS 上限 {max}KB',
+  'error.themeUploadNotCss': '只接受 .css 檔案（主題就是一份樣式表）',
+  'error.themeCssInvalid': 'CSS 校驗沒通過',
+  'error.themeIdInvalid': '主題 id 不合法：只能是小寫字母、數字、- 和 _，2-40 個字元，且以字母或數字開頭',
+  'error.themeIdIsBuiltin': '「{id}」是內建主題的名字，換一個 id',
+  'error.themeNotFound': '沒有這個主題：{id}',
+  'error.themeBuiltinCannotDelete': '內建主題不能刪除',
+  'error.themeUploadedNotFound': '沒有這個上傳主題：{id}',
+  'error.themeInUseCannotDelete': '這個主題正在使用中，先切換到別的主題再刪',
+  'error.themeCssEmpty': 'CSS 是空的',
+  'error.themeCssTooLarge': 'CSS 太大（{size}KB > {max}KB）',
+  'error.themeCssHasNul': '檔案裡有 NUL 位元組，看起來不是 CSS 文字',
+  'error.themeCssForbiddenJsProtocol': 'CSS 裡含有 javascript: 偽協議，已拒絕（主題只能是樣式）',
+  'error.themeCssForbiddenExpression': 'CSS 裡含有 CSS expression()，已拒絕（主題只能是樣式）',
+  'error.themeCssForbiddenBehavior': 'CSS 裡含有 CSS behavior（HTC），已拒絕（主題只能是樣式）',
+  'error.themeCssForbiddenMozBinding': 'CSS 裡含有 -moz-binding，已拒絕（主題只能是樣式）',
+  'error.themeCssForbiddenStyleClose': 'CSS 裡含有 </style> 閉合標籤，已拒絕（主題只能是樣式）',
+  'error.themeCssForbiddenScriptTag': 'CSS 裡含有 <script> 標籤，已拒絕（主題只能是樣式）',
 };

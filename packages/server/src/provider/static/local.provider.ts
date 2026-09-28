@@ -1,4 +1,5 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { StaticType, StoragePath, THUMB_FOLDER } from 'src/types/setting.dto';
 import { ATTACHMENT_FOLDER } from 'src/utils/attachment';
 import { thumbNameFor } from 'src/utils/thumbnail';
@@ -71,7 +72,7 @@ export class LocalProvider {
   async deleteCustomPageFile(pathname: string, filePath: string) {
     const absPath = resolveCustomPageAbs(pathname, filePath);
     if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
-      throw new HttpException('文件不存在', HttpStatus.NOT_FOUND);
+      throw codedError('staticFileNotFound');
     }
     fs.rmSync(absPath);
   }
@@ -117,16 +118,16 @@ export class LocalProvider {
   resolveStaticAbs(realPath: string): string {
     const raw = String(realPath || '');
     if (!raw.startsWith('/static/')) {
-      throw new BadRequestException('只能处理本站 /static/ 下的文件！');
+      throw codedError('staticPathNotLocal');
     }
     const rel = raw.slice('/static/'.length);
     if (!rel || rel.includes('\0')) {
-      throw new BadRequestException('非法的静态文件路径！');
+      throw codedError('staticPathIllegal');
     }
     const abs = path.resolve(config.staticPath, rel);
     const root = path.resolve(config.staticPath);
     if (abs !== root && !abs.startsWith(root + path.sep)) {
-      throw new BadRequestException('非法的静态文件路径！');
+      throw codedError('staticPathIllegal');
     }
     return abs;
   }
@@ -142,7 +143,7 @@ export class LocalProvider {
   async readStaticFile(realPath: string): Promise<Buffer> {
     const abs = this.resolveStaticAbs(realPath);
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      throw new HttpException('文件不存在', HttpStatus.NOT_FOUND);
+      throw codedError('staticFileNotFound');
     }
     return fs.readFileSync(abs);
   }
@@ -162,7 +163,7 @@ export class LocalProvider {
    */
   async saveThumb(baseFileName: string, buffer: Buffer, ext: string): Promise<string> {
     if (!baseFileName || /[\\/]/.test(baseFileName) || baseFileName.includes('..')) {
-      throw new BadRequestException('非法的缩略图文件名！');
+      throw codedError('staticThumbNameIllegal');
     }
     const dir = path.join(config.staticPath, StoragePath['img'], THUMB_FOLDER);
     checkOrCreate(dir);
@@ -193,7 +194,7 @@ export class LocalProvider {
    */
   async saveAttachment(fileName: string, buffer: Buffer, type: StaticType) {
     if (!fileName || /[\\/]/.test(fileName) || fileName.includes('..')) {
-      throw new BadRequestException('非法的附件文件名！');
+      throw codedError('staticAttachmentNameIllegal');
     }
     const storagePath = StoragePath[type] || ATTACHMENT_FOLDER;
     const dir = path.join(config.staticPath, storagePath);
