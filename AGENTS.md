@@ -9469,6 +9469,102 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.194 期 9 第十二批：备份签名密钥 **9 个码**（throw 74 → 64），🔴 以及"内层原因 + 外层指引"这种嵌套结构的正确迁法（`isCodedError` + 完整句码）
+
+**交付**：`utils/backupSigning.ts` 的 10 处 throw ⇒ **9 个码**（`signingKeyFileReadFailed` /
+`signingKeyFileTooLarge` / `signingKeyFileEmpty` / `signingKeyUnusableWrongType` / `signingKeyUnusable` /
+`verifyKeyUnusableWrongType` / `verifyKeyUnusable` / `signingKeyExistsRefuseOverwrite` / `signingRejectBadSha`），
+错误码 **185 → 194**，语言包 **1630 → 1639 key ×3**（🔴 每份包 +9；草稿里第一版心算成 1657，
+是被"9 × 3 = 27"带偏了 —— 那是**三份合计的记录数**，不是每份的 key 数。
+👉 这个错我在期 9 第九批已经犯过一次（1651 vs 实测 1615），**这是第二次** ⇒ 基线数字一律用 `readPack()` 量）。
+
+#### A. 🔴 嵌套结构（内层给原因、外层给指引）不能"只翻外壳"
+原来的结构是：
+```ts
+try {
+  if (priv.asymmetricKeyType !== 'ed25519')
+    throw new Error(`密钥类型是 ${priv.asymmetricKeyType}，本功能只支持 ed25519`);   // ← 内层：中文原因
+} catch (err) {
+  throw new BadRequestException(
+    `签名私钥不可用：${(err as Error)?.message || err}。需要一把 ed25519 私钥（PEM，PKCS#8）；` +
+    `可以用 POST /api/admin/backup/signing/key 生成一对，或 openssl genpkey -algorithm ed25519 自己生成。`);  // ← 外层：中文指引
+}
+```
+🔴 如果只把**外层**迁进码表（`signingKeyUnusable` + `{reason}` 参数），英文界面就会渲染出
+`The signing key is unusable: 密钥类型是 rsa，本功能只支持 ed25519. You need an ed25519 …`
+—— **"英文外壳 + 中文内核"**。这比全中文更糟：它让人以为翻译做完了，而站长看到的仍是一句夹中文的话。
+（这与 §7.190 C-② 的 `整站备份校验失败：{原因}` 是**同一个形状**；那次我选择**整批推迟**，
+这次因为内层原因只有**一种**（类型不对），可以就地解决。）
+**正确迁法**（两条一起做）：
+1. 🔴 把内层那个"我们自己写的原因"升级成**完整句码**：`signingKeyUnusableWrongType` 的中文
+   **自己就带上外层那句指引**（`签名私钥不可用：密钥类型是 {type}，本功能只支持 ed25519。需要一把 ed25519 私钥（PEM，PKCS#8）；可以用 POST … 生成一对，或 openssl genpkey -algorithm ed25519 自己生成。`）
+   ⇒ 信息一条不少，而且**整句都能翻**；
+2. 🔴 外层 catch 先问一句"这个异常已经带码了吗"，带码就**原样重抛** —— 新增
+   `isCodedError(err)`（只看"响应体里有没有 `code` 字段"，不看是哪个码）：
+```ts
+} catch (err) {
+  if (isCodedError(err)) throw err;      // ← 内层已给出完整句 + 指引 ⇒ 不要再包一层
+  throw codedError('signingKeyUnusable', { reason: (err as Error)?.message || String(err) });
+}
+```
+   `{reason}` 这时只会是 **Node crypto 自己的报错**（`error:1e000065:Cipher functions:OPENSSL_internal:…`
+   这种技术串）⇒ 三语里都一样，不是"夹中文"。
+👉 🔴 **一般化：凡是"内层抛原因、外层 catch 拼指引"的结构，迁移时必须判断内层原因是谁写的**：
+- 内层原因是**我们自己写的中文** ⇒ 要么把它升级成"完整句码"并让外层重抛（本批做法），
+  要么整批推迟到能一起改（§7.190 的 `backupVerify` 做法）；
+- 内层原因是**第三方/运行时的技术串**（Node crypto、mongoose、tar）⇒ 直接当 `{reason}` 传没问题。
+🔴 **判据**：新增两条**行为断言**（`backupSigning.spec.ts`）钉住这个性质：
+① 给一把 rsa 私钥 ⇒ `body.code === 'signingKeyUnusableWrongType'`、`params` 恰好 `{type:'rsa'}`、
+消息含 `密钥类型是 rsa`、**含 `openssl genpkey -algorithm ed25519`（指引没丢）**、
+不含 `[object Object]`、不残留 `{占位符}`；
+② 🔴 `msg.split('签名私钥不可用').length - 1 === 1` —— **"外壳那句只许出现一次"**，
+这就是"没有被二次包装"的可判定形状（比"不包含某串"更硬：它同时防住了"包了两层"和"一层都没包"）。
+验签钥那条同样两条断言。
+🔴 **变异对照**：把 `if (isCodedError(err)) throw err;` 删掉 ⇒ **1 条用例红**（`code` 变成
+`signingKeyUnusable`、外壳那句出现两次）；还原 ⇒ 46/46 绿。
+⚠️ 行为上的细微变化（**如实记录**）：验签钥那条以前"公钥类型不对"时还会**再试一次当私钥解析**、
+然后把两个原因拼在一起报；现在类型不对就直接报"类型不对 + 需要什么样的钥"（更准，也少一次无用解析）。
+
+#### A2. 🔴 我给译者的指令**本身错了**（"这批一律不用复数"），是判据把它抓出来的
+派发翻译任务时我写了"🔴 **No ICU plural anywhere**：`{size}` 与 `{max}` 是字节数，但中文已经明说了字节，
+英文写成 `{size} bytes` 就行"。🔴 这是**错的**：`{size}` 传的是 `stat.size`（**纯数字**），
+英文不用复数就会渲染出 `has 1 bytes`。
+判据（"占位符紧跟复数名词必须用 ICU plural"）当场红了 2 条（真实语料那条 + "收窄判据应当 0 命中"那条）。
+修法：`has {size, plural, one {# byte} other {# bytes}}, which exceeds the {max}-byte limit …`
+（⚠️ `{max}-byte limit` 是**形容词性**的连字符结构，英文里恒用单数 ⇒ 不该套复数，而判据也不会命中它，
+因为形态判据要求"占位符 + 空格 + 以 s 结尾的词"）。
+👉 🔴 我把两条不同的规则搞混了：
+- "**已格式化好的字符串**"（`formatBytes()` 的 `20.0 MB`）⇒ **不套**复数（套了会渲染出 `NaN bytes`，见 §7.191 B）；
+- "**纯数字**"（`stat.size`、`retryAfterSeconds`、`PATHNAME_MAX_LENGTH`）⇒ **必须套**复数（否则 `1 bytes`）。
+判别的办法是**看调用点传的是什么**，不是看中文文案里有没有"字节"两个字。
+👉 🔴 更一般地：**派发给译者的规则要按"值的类型"写，不要按"文案的样子"写** ——
+而且派发前最好把每条的**调用点实参**贴给译者（这次我没贴，所以我自己判断错了）。
+幸好这类错误**判据能抓**（这正是"复数判据"存在的意义）；抓不到的那类（例如措辞不好）才真的只能靠复核。
+
+#### B. 🔴 一次"临时保留旧代码"的坏味道，及时清掉了
+迁移 `generateSigningKeyPair` 那处时，我第一版写成
+`throw codedError(…); // eslint-disable-next-line no-unreachable` + `const __unusedLegacyMessage = \`旧中文\`;`
+—— 想用"留一个不可达的旧字符串"来保住某个源码锚点。🔴 这是坏味道：
+它留下一段**永远不会执行**的中文，既污染"还有多少中文没迁"的口径，又会误导下一个人。
+当场删掉了。👉 **迁移就是迁移**：如果某个测试锚点依赖旧文案，就按老规矩做**跨文件双钉**
+（调用点必须抛这个码 **且** 码表里那条中文必须仍是原文），而不是把旧文案以死代码的形式留在源码里。
+
+#### C. 刻意不迁的两处（分类结论）
+① L731 `拒绝恢复：${result.message}（…skipSignatureCheck=true…）` —— 那个 `result.message` 来自
+   `signatureVerifyMessage()`（一个 **5 状态** switch：`ok` / `mismatch` / `key-mismatch` / …），
+   而它**同时被写进日志**（`logger.log(result.message)`）并被上层拿去拼校验报告
+   ⇒ 属 §7.190 C-② 的"外壳可译、内核不可译"，必须先决定"日志/报告里放什么、界面里放什么"，单独排一批。
+② `signatureVerifyMessage()` 自己那 5 条（同上）。
+
+#### D. 基线
+- jest **288 套件 / 4260 用例（4256 + 4 skip）/ 0 FAIL**（+2 = 上面那两条行为断言）；`backupSigning.spec.ts` **46/46**；
+- 错误码 **194 个**（黄金快照 194 条）；服务端棘轮 **throw 64** / **`message:` 18**；
+- 语言包 **1639 key** ×3（重复 0）；`--zh-tw-audit`：1639 key / **825** 汉字 / **0 命中**；
+- admin `node --test`、类型门禁、两个 tsc、两个生产构建见本批矩阵输出。
+- 🔴 剩余 64 处：`fullBackup.ts` 24、`backupCrypto.ts` 12、`markdownExport.ts` 7 + `safeFetch.ts` 7
+  （报告形状族）、`backup.controller.ts` 5？（已在第十批迁完 ⇒ 实为 0）、`fullBackup.provider.ts` 2
+  （`整站备份校验失败：{原因}`，等 C-① 那批）、开发者不变量 8、协议字符串 3、`signatureVerifyMessage` 5 状态。
+
 ### 7.193 期 9 第十一批：零散 UI 文案 **10 个码**（throw 86 → 74），🔴 自查抓出**我自己上两批引入的回归**（中文兜底值 `(空)` 被当参数传），并给 `codedError/codedBody` 加上"保留自定义线路字段"的能力
 
 **交付**：12 处 throw ⇒ **10 个新码**（两处复用既有码：`pathnameTaken`、`pipelineIdInvalid`），

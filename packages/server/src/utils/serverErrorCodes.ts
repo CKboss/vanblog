@@ -285,6 +285,65 @@ export const SERVER_ERROR_CODES = {
   //    英文界面会渲染出 `Invalid pipeline id: (空)`（半截中文）。这是本项目**第 7 次**踩
   //    "把给用户看的文字当协议值传"。修法与前几次一致：**拆成"带值"与"空值"两个码**。
   //    👉 🔴 迁移时凡是看到 `x || '中文兜底'` 这种形状，都要拆码 —— 兜底值也是文案。
+  // ── 备份签名密钥（utils/backupSigning.ts，期 9 第十二批）──────────────────────
+  // 🔴 这一批**刻意不含**两处：
+  //   ① L731 `拒绝恢复：${result.message}（…skipSignatureCheck=true…）` —— 那个 `result.message` 来自
+  //      `signatureVerifyMessage()`（一个 5 状态的 switch，返回"签名校验通过 / 不匹配 / 密钥指纹不匹配 …"），
+  //      而它**同时被写进日志**（`logger.log(result.message)`）并被上层拿去拼报告
+  //      ⇒ 🔴 只翻外壳会得到"英文外壳 + 中文内核"（比全中文更糟：它让人以为翻译做完了）。
+  //      必须先决定"日志/报告里放什么、界面里放什么"，单独排一批。
+  //   ② `signatureVerifyMessage()` 自己那 5 条（同上）。
+  // 🔴 `signingKeyWrongType` 原来是**内层** `throw new Error(中文)`、被外层 catch 拼进
+  //    `签名私钥不可用：${err.message}。…` ⇒ 迁移时把它改成**直接抛码**，并让外层 catch
+  //    "已经是带码的 HttpException 就原样重抛"（否则会被二次包装成 `签名私钥不可用：…`）。
+  signingKeyFileReadFailed: entry(
+    '读取 {env}（{path}）失败：{reason} —— 已拒绝继续（不会静默回落到"不签名"）。' +
+      '请检查路径与读权限，或改用内联变量。',
+    BadRequestException,
+  ),
+  signingKeyFileTooLarge: entry(
+    '{env}（{path}）有 {size} 字节，超过 {max} 字节上限：' +
+      '这不像是一个 ed25519 PEM 密钥（正常几百字节），已拒绝读入',
+    BadRequestException,
+  ),
+  signingKeyFileEmpty: entry('{env}（{path}）去掉尾部空白后是空的：拒绝把它当密钥', BadRequestException),
+  // 🔴 原来这里是**内层** `throw new Error('密钥类型是 X，本功能只支持 ed25519')`、被外层 catch 拼进
+  //    `签名私钥不可用：${err.message}。需要一把 ed25519 私钥…` ⇒ 只翻外壳会得到"英文外壳 + 中文内核"。
+  //    改成**两个"完整句"码**（各自带上原本外层那句的指引），并让外层 catch 遇到"已带码的异常"就**原样重抛**
+  //    （见 `isCodedError`）⇒ 信息一条不少，而且整句都能翻。
+  //    ⚠️ 行为上的细微变化（如实记录）：验签钥那条以前"公钥类型不对"时还会**再试一次当私钥解析**、
+  //    然后把两个原因拼在一起报；现在类型不对就直接报"类型不对 + 需要什么样的钥"（更准，也少一次无用解析）。
+  signingKeyUnusableWrongType: entry(
+    '签名私钥不可用：密钥类型是 {type}，本功能只支持 ed25519。' +
+      '需要一把 ed25519 私钥（PEM，PKCS#8）；可以用 POST /api/admin/backup/signing/key 生成一对，' +
+      '或 openssl genpkey -algorithm ed25519 自己生成。',
+    BadRequestException,
+  ),
+  verifyKeyUnusableWrongType: entry(
+    '验签公钥不可用：密钥类型是 {type}，本功能只支持 ed25519。需要一把 ed25519 公钥（PEM，SPKI）。',
+    BadRequestException,
+  ),
+  signingKeyUnusable: entry(
+    '签名私钥不可用：{reason}。需要一把 ed25519 私钥（PEM，PKCS#8）；' +
+      '可以用 POST /api/admin/backup/signing/key 生成一对，或 openssl genpkey -algorithm ed25519 自己生成。',
+    BadRequestException,
+  ),
+  verifyKeyUnusable: entry(
+    '验签公钥不可用：{reason}（当作私钥解析也失败：{reason2}）。需要一把 ed25519 公钥（PEM，SPKI）。',
+    BadRequestException,
+  ),
+  signingKeyExistsRefuseOverwrite: entry(
+    '签名密钥已经存在（{path}）：拒绝覆盖。' +
+      '覆盖会让**所有已签名归档的 .sig 永久无法验证**（旧签名是旧私钥签的，而旧私钥会被删掉）。' +
+      '确实要换密钥：先确认所有还需要验证的归档都已经用旧公钥验过（或把旧公钥也离线留一份），' +
+      '再带 confirm=true 重新调用一次。',
+    BadRequestException,
+  ),
+  signingRejectBadSha: entry(
+    '拒绝签名：archiveSha256 不是 64 位十六进制的 sha256（收到 {value}…）',
+    BadRequestException,
+  ),
+
   pipelineIdInvalidEmpty: entry('流水线 id 不合法：(空)', BadRequestException),
   initRestoreBadArchiveNameEmpty: entry(
     '文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：(空)',
@@ -601,6 +660,33 @@ function lookup(code: ServerErrorCode | string, fn: string): ServerErrorEntry {
  * 🔴 组装"带码"的**响应体对象**（用于 `return { statusCode, message }` 这一族，例如"演示站禁止…"）。
  * 形状：`{ statusCode, message(中文), code, params? }`。
  */
+/**
+ * 🔴 判断一个异常**是不是本机制造出来的"带码异常"**（期 9 第十二批加的）。
+ *
+ * ## 为什么需要它
+ * 有些地方的结构是"内层抛一个具体原因、外层 catch 再拼一句带指引的话"
+ * （`backupSigning.ts` 的密钥解析就是这样）。迁移之后，内层已经能抛出**完整的带码消息**
+ * （含指引），外层如果照旧"把 `err.message` 拼进自己的模板"，就会得到
+ * 🔴 **"英文外壳 + 中文内核"**（外壳按码翻好了，内核还是内层那句中文）——
+ * 那比全中文更糟：它让人以为翻译做完了。
+ * 所以外层 catch 要先问一句"这个异常已经带码了吗"，带码就**原样重抛**。
+ *
+ * ⚠️ 判据只看"响应体里有没有 `code` 字段"，不看具体是哪个码 ⇒ 任何一层先给出了带码消息，
+ *    更外层就不该再包装它（要包装就得连内层的码一起考虑，那是另一批的活）。
+ */
+export function isCodedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { getResponse?: () => unknown };
+  if (typeof e.getResponse !== 'function') return false;
+  let body: unknown;
+  try {
+    body = e.getResponse();
+  } catch {
+    return false;
+  }
+  return !!body && typeof body === 'object' && typeof (body as { code?: unknown }).code === 'string';
+}
+
 export function codedBody(
   code: ServerErrorCode,
   params?: ServerErrorParams,

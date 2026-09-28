@@ -1950,4 +1950,21 @@ export default {
   'error.draftMissingOrPublished': '草稿不存在或已經發布過了',
   'error.exportDraftNotFound': '草稿不存在！',
   'error.exportArticleNotFound': '文章不存在！',
+
+  // ── 🔴 期 9 第十二批（9 條）── 地區用詞：**金鑰**（密钥）/ **私密金鑰**（私钥）/ **公開金鑰**（公钥）/
+  //    **讀取權限** / **內聯變數**（内联变量）/ **位元組**（字节）/ **支援**（支持）/ **產生**（生成）/
+  //    **呼叫**（调用）/ **十六進位**（十六进制）/ **拒絕** / **靜默回落** / **已簽名歸檔** / **永久無法驗證** /
+  //    **離線留一份** / **覆蓋** / **尾部空白**。
+  //    🔴 `ed25519`、`PEM`、`PKCS#8`、`SPKI`、`POST /api/admin/backup/signing/key`、
+  //    `openssl genpkey -algorithm ed25519`、`.sig`、`confirm=true`、`archiveSha256`、`sha256`、`64` 三份逐字相同；
+  //    `**…**` 那对 Markdown 粗体标记三份都保留。
+  'error.signingKeyUnusableWrongType': '簽名私密金鑰不可用：金鑰類型是 {type}，本功能只支援 ed25519。需要一把 ed25519 私密金鑰（PEM，PKCS#8）；可以用 POST /api/admin/backup/signing/key 產生一對，或 openssl genpkey -algorithm ed25519 自己產生。',
+  'error.verifyKeyUnusableWrongType': '驗簽公開金鑰不可用：金鑰類型是 {type}，本功能只支援 ed25519。需要一把 ed25519 公開金鑰（PEM，SPKI）。',
+  'error.signingKeyFileReadFailed': '讀取 {env}（{path}）失敗：{reason} —— 已拒絕繼續（不會靜默回落到「不簽名」）。請檢查路徑與讀取權限，或改用內聯變數。',
+  'error.signingKeyFileTooLarge': '{env}（{path}）有 {size} 位元組，超過 {max} 位元組上限：這不像是一個 ed25519 PEM 金鑰（正常幾百位元組），已拒絕讀入',
+  'error.signingKeyFileEmpty': '{env}（{path}）去掉尾部空白後是空的：拒絕把它當金鑰',
+  'error.signingKeyUnusable': '簽名私密金鑰不可用：{reason}。需要一把 ed25519 私密金鑰（PEM，PKCS#8）；可以用 POST /api/admin/backup/signing/key 產生一對，或 openssl genpkey -algorithm ed25519 自己產生。',
+  'error.verifyKeyUnusable': '驗簽公開金鑰不可用：{reason}（當作私密金鑰解析也失敗：{reason2}）。需要一把 ed25519 公開金鑰（PEM，SPKI）。',
+  'error.signingKeyExistsRefuseOverwrite': '簽名金鑰已經存在（{path}）：拒絕覆蓋。覆蓋會讓**所有已簽名歸檔的 .sig 永久無法驗證**（舊簽名是舊私密金鑰簽的，而舊私密金鑰會被刪掉）。確實要換金鑰：先確認所有還需要驗證的歸檔都已經用舊公開金鑰驗過（或把舊公開金鑰也離線留一份），再帶 confirm=true 重新呼叫一次。',
+  'error.signingRejectBadSha': '拒絕簽名：archiveSha256 不是 64 位十六進位的 sha256（收到 {value}…）',
 };

@@ -1999,4 +1999,19 @@ export default {
   'error.draftMissingOrPublished': 'The draft does not exist or has already been published',
   'error.exportDraftNotFound': 'The draft does not exist!',
   'error.exportArticleNotFound': 'The article does not exist!',
+
+  // ── 🔴 期 9 第十二批（9 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点；
+  //    中文的 `——` 在英文里是 ` - `，`…` 是 `...`（三个 ASCII 点）。
+  //    ⚠️ 这批**刻意不用** ICU 复数：`{size}` / `{max}` 虽然是字节数，但英文写成
+  //    `has {size} bytes, which exceeds the {max}-byte limit` 对任何取值都通顺（复数块反而会让句子变笨重）。
+  //    🔴 `signingKeyExistsRefuseOverwrite` 里的 `**…**` 是 Markdown 粗体（后台按 Markdown 渲染）⇒ 保留星号。
+  'error.signingKeyUnusableWrongType': 'The signing private key is unusable: the key type is {type}; this feature only supports ed25519. An ed25519 private key (PEM, PKCS#8) is required; you can generate a pair via POST /api/admin/backup/signing/key, or generate one yourself with openssl genpkey -algorithm ed25519.',
+  'error.verifyKeyUnusableWrongType': 'The verification public key is unusable: the key type is {type}; this feature only supports ed25519. An ed25519 public key (PEM, SPKI) is required.',
+  'error.signingKeyFileReadFailed': 'Failed to read {env} ({path}): {reason} - refused to continue (will not silently fall back to "unsigned"). Check the path and read permissions, or use an inline variable instead.',
+  'error.signingKeyFileTooLarge': '{env} ({path}) has {size, plural, one {# byte} other {# bytes}}, which exceeds the {max}-byte limit: this does not look like an ed25519 PEM key (normally a few hundred bytes), and reading it was refused',
+  'error.signingKeyFileEmpty': '{env} ({path}) is empty after stripping trailing whitespace: refusing to treat it as a key',
+  'error.signingKeyUnusable': 'The signing private key is unusable: {reason}. An ed25519 private key (PEM, PKCS#8) is required; you can generate a pair via POST /api/admin/backup/signing/key, or generate one yourself with openssl genpkey -algorithm ed25519.',
+  'error.verifyKeyUnusable': 'The verification public key is unusable: {reason} (parsing it as a private key also failed: {reason2}). An ed25519 public key (PEM, SPKI) is required.',
+  'error.signingKeyExistsRefuseOverwrite': 'A signing key already exists ({path}): refusing to overwrite. Overwriting would make **the .sig files of all signed archives permanently unverifiable** (the old signatures were signed with the old private key, and the old private key would be deleted). If you really want to replace the key: first confirm that all archives that still need verification have already been verified with the old public key (or keep an offline copy of the old public key as well), then call once more with confirm=true.',
+  'error.signingRejectBadSha': 'Refusing to sign: archiveSha256 is not a 64-character hexadecimal sha256 (received {value}...)',
 };

@@ -703,3 +703,64 @@ describe('接线（源码级，剥注释后断言，每条都带负向对照）'
     expect(statusSrc).toMatch(/lastSuccessSigned: info\.signed \?\? null,/);
   });
 });
+
+describe('🔴 期 9 第十二批：密钥"类型不对"必须给出**完整句 + 指引**的带码消息（不许被外层再包一层）', () => {
+  // ## 为什么要这条
+  // 原来的结构是"内层 `throw new Error('密钥类型是 X，本功能只支持 ed25519')`，外层 catch 再拼
+  // `签名私钥不可用：${err.message}。需要一把 ed25519 私钥（PEM，PKCS#8）；可以用 POST … 生成一对…`"。
+  // 🔴 迁移之后如果照旧包装，就会得到 **"英文外壳 + 中文内核"**：外壳按码翻好了，
+  //    内核（`{reason}`）还是内层那句中文 —— 那比全中文更糟（它让人以为翻译做完了）。
+  // 现在的做法：内层直接抛**完整句码**（`signingKeyUnusableWrongType` / `verifyKeyUnusableWrongType`，
+  //    句子里已经带上"需要什么样的钥 + 怎么生成"），外层 catch 用 `isCodedError()` 判断后**原样重抛**。
+  // 👉 这条断言钉的就是"重抛"这一步：① 码正确；② 消息**没有**被二次包装（不含嵌套的两段指引）；
+  //    ③ 指引仍然在（不能因为不包装就把 `openssl genpkey` 那句弄丢）。
+  it('签名私钥给了 rsa ⇒ code=signingKeyUnusableWrongType，消息里有 type、有指引、没有二次包装', () => {
+    const dir = tmpDir('vanblog-signing-code-');
+    try {
+      const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+      let err: any;
+      try {
+        resolveSigningKey(dir, { [SIGNING_KEY_ENV]: pem });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = err.getResponse();
+      expect(body.code).toBe('signingKeyUnusableWrongType');
+      expect(body.params).toEqual({ type: 'rsa' });
+      const msg = String(body.message);
+      expect(msg).toContain('密钥类型是 rsa');
+      expect(msg).toContain('openssl genpkey -algorithm ed25519'); // 指引没丢
+      expect(msg).not.toContain('[object Object]');
+      // 🔴 "没有二次包装"：外壳那句的开头只许出现一次
+      expect(msg.split('签名私钥不可用').length - 1).toBe(1);
+      expect(msg).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/); // 不残留占位符
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('验签公钥给了 rsa ⇒ code=verifyKeyUnusableWrongType（同样不许被外层包一层）', () => {
+    const dir = tmpDir('vanblog-signing-code-');
+    try {
+      const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+      let err: any;
+      try {
+        resolveVerifyKey(dir, { [VERIFY_KEY_ENV]: pem });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = err.getResponse();
+      expect(body.code).toBe('verifyKeyUnusableWrongType');
+      expect(body.params).toEqual({ type: 'rsa' });
+      const msg = String(body.message);
+      expect(msg).toContain('需要一把 ed25519 公钥（PEM，SPKI）'); // 指引没丢
+      expect(msg.split('验签公钥不可用').length - 1).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

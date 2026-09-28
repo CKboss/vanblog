@@ -1,4 +1,5 @@
 import { BadRequestException, Logger } from '@nestjs/common';
+import { codedError, isCodedError } from 'src/utils/serverErrorCodes';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -135,23 +136,26 @@ function readKeyFile(envName: string, rawPath: string): string {
     // 设了 _FILE 却读不到 ⇒ **失败关闭**（与 `VANBLOG_BACKUP_PASSPHRASE_FILE` 同一契约）。
     // 静默回落到"没配密钥"会让站长以为归档签了名，实际没签 —— 那比不做这个功能更糟，
     // 因为他会照着"我有签名保护"去规划异地副本。
-    throw new BadRequestException(
-      `读取 ${envName}（${rawPath}）失败：${(err as Error)?.message || err}` +
-        ` —— 已拒绝继续（不会静默回落到"不签名"）。请检查路径与读权限，或改用内联变量。`,
-    );
+    throw codedError('signingKeyFileReadFailed', {
+      env: envName,
+      path: rawPath,
+      reason: (err as Error)?.message || String(err),
+    });
   }
   if (stat.size > MAX_KEY_FILE_BYTES) {
-    throw new BadRequestException(
-      `${envName}（${rawPath}）有 ${stat.size} 字节，超过 ${MAX_KEY_FILE_BYTES} 字节上限：` +
-        `这不像是一个 ed25519 PEM 密钥（正常几百字节），已拒绝读入`,
-    );
+    throw codedError('signingKeyFileTooLarge', {
+      env: envName,
+      path: rawPath,
+      size: stat.size,
+      max: MAX_KEY_FILE_BYTES,
+    });
   }
   const raw = fs.readFileSync(rawPath, 'utf8');
   // 只 trimEnd：与 secret-file 的既有契约一致（尾部换行几乎一定是 echo/编辑器带进来的，
   // 而前导空白理论上可能是内容的一部分 —— PEM 不会有，但契约统一比逐处特例更好）。
   const value = raw.replace(/\s+$/, '');
   if (!value) {
-    throw new BadRequestException(`${envName}（${rawPath}）去掉尾部空白后是空的：拒绝把它当密钥`);
+    throw codedError('signingKeyFileEmpty', { env: envName, path: rawPath });
   }
   return value;
 }
@@ -162,7 +166,7 @@ function toSigningMaterial(pem: string, source: SigningKeySource): SigningKeyMat
   try {
     const priv = crypto.createPrivateKey(pem);
     if (priv.asymmetricKeyType !== 'ed25519') {
-      throw new Error(`密钥类型是 ${priv.asymmetricKeyType}，本功能只支持 ed25519`);
+      throw codedError('signingKeyUnusableWrongType', { type: priv.asymmetricKeyType });
     }
     privateKeyPem = priv.export({ type: 'pkcs8', format: 'pem' }).toString();
     publicKeyPem = crypto
@@ -170,11 +174,10 @@ function toSigningMaterial(pem: string, source: SigningKeySource): SigningKeyMat
       .export({ type: 'spki', format: 'pem' })
       .toString();
   } catch (err) {
-    throw new BadRequestException(
-      `签名私钥不可用：${(err as Error)?.message || err}。` +
-        `需要一把 ed25519 私钥（PEM，PKCS#8）；可以用 POST /api/admin/backup/signing/key 生成一对，` +
-        `或 openssl genpkey -algorithm ed25519 自己生成。`,
-    );
+    // 🔴 内层已经抛出"完整句 + 指引"的带码异常（类型不对那条）⇒ **原样重抛**，不要再包一层：
+    //    包一层会得到"英文外壳 + 中文内核"（外壳按码翻好了，内核还是内层那句中文）。
+    if (isCodedError(err)) throw err;
+    throw codedError('signingKeyUnusable', { reason: (err as Error)?.message || String(err) });
   }
   return { privateKeyPem, publicKeyPem, fingerprint: keyFingerprint(publicKeyPem), source };
 }
@@ -186,23 +189,28 @@ function toVerifyMaterial(pem: string, source: SigningKeySource): VerifyKeyMater
     //    这不是安全降级（能验签的前提是拿到公钥；拿到私钥的人当然也能验）。
     const pub = crypto.createPublicKey(pem);
     if (pub.asymmetricKeyType !== 'ed25519') {
-      throw new Error(`密钥类型是 ${pub.asymmetricKeyType}，本功能只支持 ed25519`);
+      throw codedError('verifyKeyUnusableWrongType', { type: pub.asymmetricKeyType });
     }
     publicKeyPem = pub.export({ type: 'spki', format: 'pem' }).toString();
   } catch (err) {
+    // 🔴 "类型不对"是**我们已经给出完整句 + 指引**的带码异常 ⇒ 原样重抛（不要再包一层，
+    //    否则会得到"英文外壳 + 中文内核"）。⚠️ 行为上的细微变化：以前这种情况还会**再试一次
+    //    当私钥解析**、然后把两个原因拼在一起报；现在类型不对就直接报"类型不对 + 需要什么样的钥"
+    //    （更准，也少一次无用解析）—— 已如实记进手册。
+    if (isCodedError(err)) throw err;
     // 也可能给的是私钥 PEM
     try {
       const priv = crypto.createPrivateKey(pem);
       if (priv.asymmetricKeyType !== 'ed25519') {
-        throw new Error(`密钥类型是 ${priv.asymmetricKeyType}，本功能只支持 ed25519`);
+        throw codedError('verifyKeyUnusableWrongType', { type: priv.asymmetricKeyType });
       }
       publicKeyPem = crypto.createPublicKey(priv).export({ type: 'spki', format: 'pem' }).toString();
     } catch (err2) {
-      throw new BadRequestException(
-        `验签公钥不可用：${(err as Error)?.message || err}（当作私钥解析也失败：${
-          (err2 as Error)?.message || err2
-        }）。需要一把 ed25519 公钥（PEM，SPKI）。`,
-      );
+      if (isCodedError(err2)) throw err2;
+      throw codedError('verifyKeyUnusable', {
+        reason: (err as Error)?.message || String(err),
+        reason2: (err2 as Error)?.message || String(err2),
+      });
     }
   }
   return { publicKeyPem, fingerprint: keyFingerprint(publicKeyPem), source };
@@ -307,12 +315,7 @@ export function generateSigningKeyPair(
       'signing-overwrite-refused',
       `签名密钥已存在且请求没有带显式确认，已拒绝覆盖（私钥路径 ${privatePath}）`,
     );
-    throw new BadRequestException(
-      `签名密钥已经存在（${privatePath}）：拒绝覆盖。` +
-        `覆盖会让**所有已签名归档的 .sig 永久无法验证**（旧签名是旧私钥签的，而旧私钥会被删掉）。` +
-        `确实要换密钥：先确认所有还需要验证的归档都已经用旧公钥验过（或把旧公钥也离线留一份），` +
-        `再带 confirm=true 重新调用一次。`,
-    );
+    throw codedError('signingKeyExistsRefuseOverwrite', { path: privatePath });
   }
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
   const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -419,9 +422,7 @@ export function signArchiveDigest(input: {
     // 走到这里说明调用方给的哈希不是 sha256 十六进制（编程错误）。
     // ⚠️ 宁可抛也不要签一个畸形值：签出来的 `.sig` 会**永远验不过**，
     //    而那看起来像"归档被篡改了"，会把排障带到完全错误的方向。
-    throw new BadRequestException(
-      `拒绝签名：archiveSha256 不是 64 位十六进制的 sha256（收到 ${String(input.archiveSha256).slice(0, 20)}…）`,
-    );
+    throw codedError('signingRejectBadSha', { value: String(input.archiveSha256).slice(0, 20) });
   }
   const signedAt = (input.now ?? new Date()).toISOString();
   const payload = signingPayload({

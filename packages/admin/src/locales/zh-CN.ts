@@ -2177,4 +2177,21 @@ export default {
   'error.draftMissingOrPublished': '草稿不存在或已经发布过了',
   'error.exportDraftNotFound': '草稿不存在！',
   'error.exportArticleNotFound': '文章不存在！',
+
+  // ── 🔴 期 9 第十二批：备份签名密钥 9 个码（`utils/backupSigning.ts` 的 10 处 throw）。
+  //    🔴 其中 `signingKeyUnusableWrongType` / `verifyKeyUnusableWrongType` 是**"完整句"码**：
+  //    原来的结构是"内层 `throw new Error('密钥类型是 X，本功能只支持 ed25519')`、外层 catch 再拼
+  //    `签名私钥不可用：${err.message}。需要一把 ed25519 私钥…`"⇒ 只翻外壳会得到
+  //    **"英文外壳 + 中文内核"**（比全中文更糟：它让人以为翻译做完了）。
+  //    现在内层直接抛**自带指引的完整句**，外层 catch 用 `isCodedError()` 判断后**原样重抛**。
+  //    ⚠️ `{reason}` 这时只会是 Node crypto 自己的技术报错串（三语一样，不是夹中文）。
+  'error.signingKeyUnusableWrongType': '签名私钥不可用：密钥类型是 {type}，本功能只支持 ed25519。需要一把 ed25519 私钥（PEM，PKCS#8）；可以用 POST /api/admin/backup/signing/key 生成一对，或 openssl genpkey -algorithm ed25519 自己生成。',
+  'error.verifyKeyUnusableWrongType': '验签公钥不可用：密钥类型是 {type}，本功能只支持 ed25519。需要一把 ed25519 公钥（PEM，SPKI）。',
+  'error.signingKeyFileReadFailed': '读取 {env}（{path}）失败：{reason} —— 已拒绝继续（不会静默回落到"不签名"）。请检查路径与读权限，或改用内联变量。',
+  'error.signingKeyFileTooLarge': '{env}（{path}）有 {size} 字节，超过 {max} 字节上限：这不像是一个 ed25519 PEM 密钥（正常几百字节），已拒绝读入',
+  'error.signingKeyFileEmpty': '{env}（{path}）去掉尾部空白后是空的：拒绝把它当密钥',
+  'error.signingKeyUnusable': '签名私钥不可用：{reason}。需要一把 ed25519 私钥（PEM，PKCS#8）；可以用 POST /api/admin/backup/signing/key 生成一对，或 openssl genpkey -algorithm ed25519 自己生成。',
+  'error.verifyKeyUnusable': '验签公钥不可用：{reason}（当作私钥解析也失败：{reason2}）。需要一把 ed25519 公钥（PEM，SPKI）。',
+  'error.signingKeyExistsRefuseOverwrite': '签名密钥已经存在（{path}）：拒绝覆盖。覆盖会让**所有已签名归档的 .sig 永久无法验证**（旧签名是旧私钥签的，而旧私钥会被删掉）。确实要换密钥：先确认所有还需要验证的归档都已经用旧公钥验过（或把旧公钥也离线留一份），再带 confirm=true 重新调用一次。',
+  'error.signingRejectBadSha': '拒绝签名：archiveSha256 不是 64 位十六进制的 sha256（收到 {value}…）',
 };

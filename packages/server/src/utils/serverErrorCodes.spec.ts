@@ -265,6 +265,17 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   // 🔴 期 9 第十一批：10 个码。⚠️ `customPageNoUpload` 迁移前是 `HttpException(msg, HttpStatus.BAD_REQUEST)`
   //    （基类 + 显式 400 ⇒ **没有 error 字段**）；`setupKeyUnavailable` 是基类 + 500，
   //    而且它的响应体还带一个自定义字段 `setupKeyUnavailable: true`（后台按它分支）⇒ 由专门的行为断言钉住。
+  // 🔴 期 9 第十二批：备份签名密钥 9 个码（🔴 其中两个是"完整句"码：内层"类型不对"不再抛裸 Error
+  //    让外层拼中文，而是自己带上指引 ⇒ 外层 catch 用 `isCodedError` 判断后**原样重抛**）
+  signingKeyFileReadFailed: { status: 400, error: 'Bad Request' },
+  signingKeyFileTooLarge: { status: 400, error: 'Bad Request' },
+  signingKeyFileEmpty: { status: 400, error: 'Bad Request' },
+  signingKeyUnusableWrongType: { status: 400, error: 'Bad Request' },
+  signingKeyUnusable: { status: 400, error: 'Bad Request' },
+  verifyKeyUnusableWrongType: { status: 400, error: 'Bad Request' },
+  verifyKeyUnusable: { status: 400, error: 'Bad Request' },
+  signingKeyExistsRefuseOverwrite: { status: 400, error: 'Bad Request' },
+  signingRejectBadSha: { status: 400, error: 'Bad Request' },
   pipelineIdInvalidEmpty: { status: 400, error: 'Bad Request' },
   initRestoreBadArchiveNameEmpty: { status: 400, error: 'Bad Request' },
   setupKeyUnavailable: { status: 500 },
