@@ -1985,4 +1985,18 @@ export default {
   'error.backupRestoreNeedsConfirm': 'Restore will overwrite all current data; call again with confirm=true (only the literal true or the string "true" is accepted; "1"/"yes"/"TRUE" do not count as confirmation)',
   'error.backupRestoreNeedsTarget': 'Specify the backup to restore (name), or upload a backup file directly',
   'error.backupSigMissing': 'This archive is missing {ext} ({name}): it may predate the signing feature, or no signing key was configured when the backup was made. Use GET /api/admin/backup/signing/key to view the current signing configuration.',
+
+  // ── 🔴 期 9 第十一批（10 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 `(空)` 在英文里是 `(empty)`；两条 shell 命令与示例归档名逐字保留；`<归档>` → `<archive>`。
+  //    ⚠️ `collaboratorAdminMissingForList` 是**给运维看的长指引**（含 doctor / restore 两条命令）⇒ 按运维文档口吻写。
+  'error.pipelineIdInvalidEmpty': 'Invalid pipeline id: (empty)',
+  'error.initRestoreBadArchiveNameEmpty': 'The file name does not look like a full-site backup exported by this feature (expected form: vanblog-full-20260913-140955.tar.zst), received: (empty)',
+  'error.setupKeyUnavailable': 'No initialization key is currently available on the server (the expected file {path} does not exist, and it is not in the memory of this process either): restarting vanblog will regenerate it and print it to the log. The site status is not affected.',
+  'error.collaboratorAdminMissingForList': 'The administrator account does not exist (there is no user with id=0 in the database), so the collaborator list cannot be generated. This usually means the data was restored from a corrupted or empty backup: first run ./vanblog.sh doctor to see the health check, and if necessary use ./vanblog.sh restore --offline-full <archive> to rebuild from a good archive (this also works when the database cannot start).',
+  'error.customPageNoUpload': 'No uploaded file received',
+  'error.fileNoUpload': 'No file received!',
+  'error.commentMissingPaths': 'Missing paths parameter',
+  'error.draftMissingOrPublished': 'The draft does not exist or has already been published',
+  'error.exportDraftNotFound': 'The draft does not exist!',
+  'error.exportArticleNotFound': 'The article does not exist!',
 };

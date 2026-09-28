@@ -81,7 +81,8 @@ for (const l of LOCALES) {
 // 🔴 126 → **107**（期 9 第八批：主题读取 4 + 路径别名 4 + 落盘文件名 4 + 公开接口 4 + 备份文件名 3 = 19 处迁进码表）
 // 🔴 107 → **91**（期 9 第九批：访问密码 3 + baseUrl 3 + 附件 2 + 路径别名 1 + 图片压缩 1 + 非法路径 3 + 流水线 id 2 + 定时发布 3 = 16 处（18 个码））
 // 🔴 91 → **86**（期 9 第十批：整站备份接口 5 处迁进码表）
-const THROW_BUDGET = 86;
+// 🔴 86 → **74**（期 9 第十一批：零散 UI 文案 12 处迁进码表（含 2 处 `(空)` 中文兜底回归的修复））
+const THROW_BUDGET = 74;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -593,6 +594,34 @@ test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里�
             const k = pp.key.name || pp.key.value;
             if (typeof k === 'string') gotP.add(k);
           }
+          // 🔴 期 9 第十一批新增：**params 的值不许是中文字面量**。
+          //    起因是我自己在期 9 第八/九批引入的回归：`codedError('pipelineIdInvalid', { id: x || '(空)' })`
+          //    —— `(空)` 是**中文兜底文案**，当参数传进去 ⇒ 英文界面渲染出 `Invalid pipeline id: (空)`。
+          //    🔴 这类缺陷**所有既有判据都看不见**（三份包逐字对账 ✓、占位符一致 ✓、复数 ✓、防死码 ✓），
+          //    因为问题不在"文案"里，而在**调用点传的值**里 ⇒ 只能靠这条判据（或人肉盘点）。
+          //    修法永远是**拆码**（`…Empty` 那条），不是把中文兜底改成英文兜底（那会让中文界面夹英文）。
+          for (const pp of props.params.properties || []) {
+            if (!pp || (pp.type !== 'ObjectProperty' && pp.type !== 'Property')) continue;
+            const k = pp.key && (pp.key.name || pp.key.value);
+            const walkLiterals = (nd) => {
+              if (!nd || typeof nd !== 'object') return;
+              if (Array.isArray(nd)) { nd.forEach(walkLiterals); return; }
+              if ((nd.type === 'StringLiteral' || nd.type === 'Literal') &&
+                  typeof nd.value === 'string' && /[\u3400-\u4dbf\u4e00-\u9fff]/.test(nd.value)) {
+                problems.push(
+                  `${rel}: codedError/codedBody('${codeLit}') 的 params.${k} 里出现中文字面量 ` +
+                    `${JSON.stringify(nd.value)} ⇒ 英文/繁中界面会夹中文。修法：**拆码**` +
+                    `（另立一个"空值/兜底"码），不要把中文兜底值当参数传`,
+                );
+              }
+              for (const kk of Object.keys(nd)) {
+                if (kk === 'loc' || kk === 'start' || kk === 'end') continue;
+                const v = nd[kk];
+                if (v && typeof v === 'object') walkLiterals(v);
+              }
+            };
+            walkLiterals(pp.value);
+          }
           const unk = [...gotP].filter((k) => !wantP.has(k));
           const miss = [...wantP].filter((k) => !gotP.has(k));
           if (unk.length) {
@@ -628,6 +657,28 @@ test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里�
           if (!p || (p.type !== 'ObjectProperty' && p.type !== 'Property') || !p.key) continue;
           const k = p.key.name || p.key.value;
           if (typeof k === 'string') got.add(k);
+        }
+        // 🔴 同上：`codedError('<code>', { … })` 这一支也要查"params 值里不许有中文字面量"
+        const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+        const scan = (nd, keyName) => {
+          if (!nd || typeof nd !== 'object') return;
+          if (Array.isArray(nd)) { nd.forEach((x) => scan(x, keyName)); return; }
+          if ((nd.type === 'StringLiteral' || nd.type === 'Literal') &&
+              typeof nd.value === 'string' && HAN.test(nd.value)) {
+            problems.push(
+              `${rel}: codedError/codedBody('${code}') 的 params.${keyName} 里出现中文字面量 ` +
+                `${JSON.stringify(nd.value)} ⇒ 英文/繁中界面会夹中文。修法：**拆码**（另立一个"空值/兜底"码）`,
+            );
+          }
+          for (const kk of Object.keys(nd)) {
+            if (kk === 'loc' || kk === 'start' || kk === 'end') continue;
+            const v = nd[kk];
+            if (v && typeof v === 'object') scan(v, keyName);
+          }
+        };
+        for (const p of arg.properties || []) {
+          if (!p || (p.type !== 'ObjectProperty' && p.type !== 'Property') || !p.key) continue;
+          scan(p.value, p.key.name || p.key.value);
         }
       } else if (arg && arg.type === 'Identifier') {
         // 传的是一个变量（例如 `LIMITS` / `shortParams`）⇒ 静态看不出键名，**跳过但不算通过**：

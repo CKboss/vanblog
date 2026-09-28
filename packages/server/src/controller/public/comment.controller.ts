@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { CommentProvider } from 'src/provider/comment/comment.provider';
 import { SettingProvider } from 'src/provider/setting/setting.provider';
@@ -39,7 +40,7 @@ export class PublicCommentController {
       .filter(Boolean)
       .slice(0, 50);
     if (!list.length) {
-      throw new BadRequestException('缺少 paths 参数');
+      throw codedError('commentMissingPaths');
     }
     return {
       statusCode: 200,

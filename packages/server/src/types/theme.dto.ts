@@ -58,6 +58,7 @@ export const THEME_ID_RE = /^[a-z0-9][a-z0-9-_]{1,39}$/;
 //    （`serverErrorCodes.ts` 会 import @nestjs/common，而本文件被前台/工具链多处引用）。
 import type { ServerErrorCode } from 'src/utils/serverErrorCodes';
 
+import { codedError } from 'src/utils/serverErrorCodes';
 export const THEME_MAX_BYTES = 512 * 1024;
 
 /**

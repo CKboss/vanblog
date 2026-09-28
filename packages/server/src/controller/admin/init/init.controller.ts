@@ -443,7 +443,12 @@ export class InitController {
       if (!FULL_BACKUP_ARCHIVE_RE.test(originalName)) {
         // 🔴 期 9 第二批：迁进码表。⚠️ `(空)` 那个兜底**留在调用点**（它是"没有文件名"时的填充值，
         //    不是文案本体的一部分；码表里的 `{name}` 只是把它接上去）。
-        throw codedError('initRestoreBadArchiveName', { name: originalName.slice(0, 120) || '(空)' });
+        // 🔴 同款回归自查：`'(空)'` 是中文兜底文案 ⇒ 空值走自己的码（不许当参数传）。
+        const archiveName = originalName.slice(0, 120);
+        if (!archiveName) {
+          throw codedError('initRestoreBadArchiveNameEmpty');
+        }
+        throw codedError('initRestoreBadArchiveName', { name: archiveName });
       }
       // 收到 `.sig` 就把它落到归档旁边，让**既有的**验签闸门能找到它。
       // ⚠️ 顺序：在所有"该不该处理这个请求"的闸门（demo / 409 / 已初始化 403 / setupKey /

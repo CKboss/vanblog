@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { codedError } from 'src/utils/serverErrorCodes';
 import path from 'path';
 import { BadRequestException, HttpException } from '@nestjs/common';
 import { config } from 'src/config';
@@ -306,16 +307,10 @@ export function enforceSetupKey(supplied: unknown, logDir?: string): void {
     return;
   }
   if (verdict.reason === 'unavailable') {
-    throw new HttpException(
-      {
-        statusCode: 500,
-        message:
-          `服务端当前没有可用的初始化密钥（预期文件 ${verdict.filePath} 不存在，本进程内存里也没有）：` +
-          `重启 vanblog 会重新生成并打印到日志。站点状态未受影响`,
-        setupKeyUnavailable: true,
-      },
-      500,
-    );
+    // 🔴 期 9 第十一批：迁进码表，但 `setupKeyUnavailable: true` 这个**自定义线路字段必须原样保留** ——
+    //    后台 `pages/InitPage/setupKeyCore.js` 会按它分支（"服务端自己丢了密钥 ⇒ 填什么都没用，不骗人"）。
+    //    👉 🔴 迁移前先查"响应体里有没有**调用方在读的额外字段**"：只搬 message 会把线路契约搬坏。
+    throw codedError('setupKeyUnavailable', { path: verdict.filePath }, { setupKeyUnavailable: true });
   }
   // strictNullChecks:false 下没有判别窄化：显式归一成两个字面值（unavailable 上面已经 throw）
   const reason: 'missing' | 'wrong' = verdict.reason === 'wrong' ? 'wrong' : 'missing';

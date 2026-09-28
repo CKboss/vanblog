@@ -1,4 +1,5 @@
 import { safeSearchPattern } from 'src/utils/regex';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -219,7 +220,7 @@ export class DraftProvider {
     // 双击「发布」时第二次请求拿到的是 null（第一次已把草稿软删），
     // 以前会在 draft.title 上抛 TypeError → 500，用户只看到「Internal server error」
     if (!draft) {
-      throw new BadRequestException('草稿不存在或已经发布过了');
+      throw codedError('draftMissingOrPublished');
     }
     // 没有 <!-- more --> 也允许发布：前台会自动截取正文前 200 字作为摘要
     // （packages/website/utils/articleExcerpt.ts 的 DEFAULT_OVERVIEW_CHARS）。

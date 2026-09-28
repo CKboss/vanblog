@@ -190,6 +190,10 @@ const IDENTICAL_ZH_TW_OK = [
   //   `CSS 是空的`（CSS / 是 / 空 / 的 全部简繁同形）、`CSS 太大（{size}KB > {max}KB）`
   //   （太大 同形，括号是全角、三份一致，KB 与占位符是技术标识符）⇒ 进白名单，不是"没翻"。
   // 🔴 期 9 第八批：`缺少 id` 四个字全部简繁同形（缺 / 少 都是同形字，`id` 是技术标识符）⇒ 同形是正确译文
+  // 🔴 期 9 第十一批：`文章不存在！` 与 `草稿不存在！` —— 每个字都简繁同形
+  //   （文/章/草/稿/不/存/在/！）⇒ 同形是**正确译文**，不是"复制简体充数"。
+  'error.exportArticleNotFound',
+  'error.exportDraftNotFound',
   'error.themeIdMissing',
   'error.themeCssEmpty',
   'error.themeCssTooLarge',

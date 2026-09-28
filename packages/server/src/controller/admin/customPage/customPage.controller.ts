@@ -13,7 +13,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
-import { codedBody } from 'src/utils/serverErrorCodes';
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CUSTOM_PAGE_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
 import { ApiTags } from '@nestjs/swagger';
@@ -46,7 +46,7 @@ export class CustomPageController {
       return codedBody('demoSiteBlocked');
     }
     if (!file) {
-      throw new HttpException('未收到上传文件', HttpStatus.BAD_REQUEST);
+      throw codedError('customPageNoUpload');
     }
     if (name) {
       file.originalname = name.replace(/\\/g, '/');

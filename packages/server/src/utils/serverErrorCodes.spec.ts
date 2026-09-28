@@ -262,6 +262,19 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   // 🔴 期 9 第八批：17 个码（主题读取 / 路径别名 / 落盘文件名 / 公开接口限流 / 备份文件名）
   // 🔴 期 9 第九批：18 个码（访问密码 / 改写 baseUrl / 附件 / 路径别名 / 图片压缩 / 非法路径 / 流水线 id / 定时发布）
   // 🔴 期 9 第十批：整站备份接口 5 个码
+  // 🔴 期 9 第十一批：10 个码。⚠️ `customPageNoUpload` 迁移前是 `HttpException(msg, HttpStatus.BAD_REQUEST)`
+  //    （基类 + 显式 400 ⇒ **没有 error 字段**）；`setupKeyUnavailable` 是基类 + 500，
+  //    而且它的响应体还带一个自定义字段 `setupKeyUnavailable: true`（后台按它分支）⇒ 由专门的行为断言钉住。
+  pipelineIdInvalidEmpty: { status: 400, error: 'Bad Request' },
+  initRestoreBadArchiveNameEmpty: { status: 400, error: 'Bad Request' },
+  setupKeyUnavailable: { status: 500 },
+  collaboratorAdminMissingForList: { status: 404, error: 'Not Found' },
+  customPageNoUpload: { status: 400 },
+  fileNoUpload: { status: 400, error: 'Bad Request' },
+  commentMissingPaths: { status: 400, error: 'Bad Request' },
+  draftMissingOrPublished: { status: 400, error: 'Bad Request' },
+  exportDraftNotFound: { status: 400, error: 'Bad Request' },
+  exportArticleNotFound: { status: 400, error: 'Bad Request' },
   backupGraceDaysInvalid: { status: 400, error: 'Bad Request' },
   backupManifestUnreadable: { status: 400, error: 'Bad Request' },
   backupRestoreNeedsConfirm: { status: 400, error: 'Bad Request' },

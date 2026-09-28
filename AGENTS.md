@@ -9469,6 +9469,108 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.193 期 9 第十一批：零散 UI 文案 **10 个码**（throw 86 → 74），🔴 自查抓出**我自己上两批引入的回归**（中文兜底值 `(空)` 被当参数传），并给 `codedError/codedBody` 加上"保留自定义线路字段"的能力
+
+**交付**：12 处 throw ⇒ **10 个新码**（两处复用既有码：`pathnameTaken`、`pipelineIdInvalid`），
+错误码 **175 → 185**，语言包 **1620 → 1630 key ×3**，throw 棘轮 **86 → 74**。
+覆盖：流水线 id 不合法（含"空值"那条）、初始化页恢复的归档名（含"空值"那条）、
+**初始化密钥不可用**（500）、协作者清单生成不出来（管理员账号缺失，长运维指引）、
+自定义页面/附件上传没收到文件、公开评论接口缺 `paths` 参数、草稿不存在或已发布、导出的草稿/文章不存在。
+
+#### A. 🔴 自查抓出**我自己上两批引入的回归**：`x || '(空)'` 把中文兜底值当参数传
+期 9 第八/九批迁移时，我把这两处照原样搬进了码表：
+```ts
+throw codedError('pipelineIdInvalid', { id: String(id).slice(0, 40) || '(空)' });
+throw codedError('initRestoreBadArchiveName', { name: originalName.slice(0, 120) || '(空)' });
+```
+🔴 `(空)` 是**中文兜底文案**，当参数传进去 ⇒ 英文界面会渲染出 `Invalid pipeline id: (空)`（半截中文），
+繁中界面会渲染出 `流水線 id 不合法：(空)`（"空"是简体字形吗？不是，但`(空)`这个词组在繁中应作`(空)`——
+真正的问题是**英文**）。这是本项目**第 7 次**踩"把给用户看的文字当协议值传"，
+也是**第一次由我自己引入、又被我自己在下一次盘点时抓到**的。
+修法与前六次一致：**拆码** —— 新增 `pipelineIdInvalidEmpty`（`流水线 id 不合法：(空)`）与
+`initRestoreBadArchiveNameEmpty`，调用点按"值是否为空"分支。
+👉 🔴 **迁移时凡是看到 `x || '中文兜底'`、`x ?? '中文'`、三元里的中文字面量，都要拆码** ——
+**兜底值也是文案**，而且它恰恰是最容易漏的（它藏在参数位里，不在消息模板里，
+所以"三份包逐字对账""占位符一致""复数"这些判据**全都看不见它**）。
+👉 🔴 这类回归**只能靠"迁移后重新读一遍调用点"发现**（这次就是这么发现的：
+盘点剩余站点时看到 `'(空)'` 还留在 params 里）。建议把它固化成一条判据（见 E 段待办）。
+🔴 变异对照 B51-M1 就是钉这件事：把兜底改回 `|| '(空)'` ⇒ **红**（那个"空值码"立刻变成死码）。
+
+#### B. 🔴 `codedError` / `codedBody` 新增第三参 `extra`：迁移**不许弄丢自定义线路字段**
+`setupKey.ts` 那处 500 的响应体是
+`{ statusCode: 500, message: '…', setupKeyUnavailable: true }` ——
+🔴 那个 `setupKeyUnavailable: true` 是**线路契约**：后台 `pages/InitPage/setupKeyCore.js:123`
+会 `if (body.setupKeyUnavailable === true)` 分支（"服务端自己丢了密钥 ⇒ 填什么都没用，不骗人"）。
+如果迁移时只搬 `message`，这个字段就没了 ⇒ **翻译一条消息顺手改坏了初始化页的行为**
+（那比没翻译严重得多，而且它是"静默"的：后台会走到另一个分支，看起来只是提示不对）。
+修法：给 `codedError(code, params?, extra?)` / `codedBody(code, params?, extra?)` 加第三参，
+把调用方原有的自定义字段**原样合并**进响应体；🔴 但 `statusCode` / `message` / `code` / `params`
+这四个**地基字段不许被 extra 覆盖**（被覆盖就等于码白加了）。
+👉 🔴 **迁移前必须查"这个响应体里有没有调用方在读的额外字段"**（grep 那个字段名，看前端有没有分支）。
+这次是**先查后改**：`grep -rn setupKeyUnavailable` 一下就看到了后台的分支与 spec 的断言。
+证据：既有 spec 本来就断言 `err.getResponse().setupKeyUnavailable === true`（迁移后仍然绿 ⇒ 字段保住了），
+本批又补了两条（响应体带 `code`、`message` 里**不残留占位符**且含"初始化密钥"）。
+🔴 变异对照（jest 侧手工打）：把 `extra` 去掉 ⇒ `Expected: true / Received: undefined`，**1 条用例红**；还原 ⇒ 42/42 绿。
+
+#### C. 🔴 复数尺子的停用词表漏了**第三人称单数动词**（`{path} does not exist` 被当成复数名词）
+新码 `setupKeyUnavailable` 的英文是 `… the expected file {path} does not exist …` ⇒
+`needsIcuPlural()` 的形态判据（`\{占位符\}\s+([A-Za-z]+)s`）把 **`does`** 当成了"复数名词"，
+判据假红。修法：往 `ICU_PLURAL_STOPWORDS` 里补一批**动词第三人称单数**
+（`does` / `exists` / `means` / `happens` / `belongs` / `appears` / `occurs` / `differs` / `refers`）。
+🔴 **收词纪律照旧**（与"简体专用字表"同一条）：只收"**绝不可能是复数名词**"的词 ——
+这几个都是动词变位，没有"一个 does / 两个 does"的用法；
+⚠️ 刻意**不收** `points` / `needs` / `files` / `items` 这类"既能当动词又能当复数名词"的词（收了就会漏掉真缺陷）。
+🔴 **改完尺子必须正反两向验**（这次用 7 个合成用例）：
+`{path} does not exist` ⇒ 不需要复数 ✓、`{count} items` ⇒ 需要 ✓、`{n} collections and {m} documents` ⇒ 需要 ✓、
+`{max} MB` ⇒ 不需要 ✓、`at least {min} characters` ⇒ 需要 ✓、`{x} means nothing` ⇒ 不需要 ✓、`{y} files` ⇒ 需要 ✓。
+👉 🔴 **停用词表是"假红"与"漏报"之间的旋钮**：加词能消假红，但每加一个词都可能开一个漏报口子
+⇒ 所以每加一个都要写清"它为什么绝不可能是复数名词"，并且**当场用合成用例验正反两向**。
+变异对照 B51-M4：把 `does` 从表里删掉 ⇒ 判据**假红**（2 条断言红）⇒ 证明这个表在承重
+（🔴 注意这条变异的方向是"造成假红"而不是"造成漏报"，所以它红得对，但**理由**要写清楚）。
+
+#### D. 🔴 刻意不迁的两处（分类结论）
+1. `caddy.controller.ts` 的 `未授权的域名`（403）：那个响应是给 **caddy** 看的
+   （ACME on-demand TLS 的 ask 端点），不是给站长看的界面文案 ⇒ 属**机器消费方**，
+   与日志同一类（翻它没有任何人能看到，反而会让 caddy 侧排障文本跟着界面语言漂）。
+2. `init.controller.ts` 的 `已初始化`（2 处）：协议字符串（后台拿它与响应文本比对），
+   已在硬编码棘轮的永久例外清单里 ⇒ 要改得前后端一起改成按 `code` 判断，单独排一批。
+
+#### E. 基线与待办
+- admin `node --test` **786 tests / 177 suites / 0 fail**；jest **288 套件 / 4258 用例（4254 + 4 skip）/ 0 FAIL**；
+- 语言包 **1630 key** ×3（重复 0）；`--zh-tw-audit`：1630 key / **821** 汉字 / **0 命中**；
+- `localePackParity` 的 TW==CN 白名单 +2（`error.exportArticleNotFound` = `文章不存在！`、
+  `error.exportDraftNotFound` = `草稿不存在！` —— 每个字都简繁同形 ⇒ 同形是正确译文，不是复制简体充数）；
+- 错误码 **185 个**（全部三语、全部被真实调用、黄金快照 185 条、调用点参数两向对账）；
+- 服务端棘轮：**throw 74**、**`message:` 18**；admin 类型门禁 **31/0**、server `tsc` **0 错**；
+- 变异对照 **5/5**（4 条在 admin harness + 1 条在 jest 侧手工，🔴 跨运行器的那条不在 harness 里假装验过）；
+- 🔴 **A 段那个回归已经固化成判据**（不再靠人肉盘点）：④ 那条"调用点参数对账"里新增
+  "**params 的值不许含中文字面量**"—— 扫所有 `codedError/codedBody` 调用点（两种形状都扫：
+  实参对象 与 `{ code, params }` 对象），只要 params 的**值**里出现汉字就红，
+  报错信息点名 `文件 / 码 / 参数名 / 那个字面量`，并直接给出修法（"拆码，不要把中文兜底值当参数传"）。
+  🔴 **变异对照验过**：把 `|| '(空)'` 改回去 ⇒ **5 条断言红**、消息里点名
+  `params.id 里出现中文字面量 "(空)"`；还原 ⇒ 0 红。
+  👉 这条判据补上的是一个**所有既有判据都看不见**的盲区：问题不在"文案"里，而在**调用点传的值**里
+  （三份包逐字对账 ✓、占位符一致 ✓、复数 ✓、防死码 ✓ —— 全都绿）。
+#### F. 🔴 本批又撞见一次**间歇性红**（第三个不同的套件），照规矩如实记录、不猜原因
+矩阵那一跑红在 `markdownExport.provider.spec.ts` › "磁盘上不存在的图片记为失败，不会让整个导出崩掉"
+（jest 汇总：`1 failed, 4253 passed, 4258`）。处理与上一批一致：
+① **单跑该套件** ⇒ 9/9 绿；② **全量重跑** ⇒ 4258 / 0 FAIL 绿；③ 矩阵**再跑一次** ⇒ 见下（本次结果如实记）。
+⇒ **不可复现**，记为"间歇性"。
+🔴 不猜原因，但把**可能的敏感点**记下来供下次取证：那条用例断言的是
+`expect(built.report.failed).toHaveLength(1)` + `failed[0].reason` 含「不在磁盘上」——
+即"**失败清单里恰好只有一条**"。这类"恰好 N 条"的断言对**并发/超时**天然敏感
+（多一张图因为别的原因失败，或某个 mock 慢了一拍，都会让它变成 2 条）。
+👉 下次它再红时，**第一件事是把 `built.report.failed` 整个数组打印出来**（现在只打印长度差），
+而不是再去改并发代码。⚠️ 上一批我就是先改了并发（`Promise.all` → `allSettled`）结果**没能证明**因果。
+⚠️ 另注：这条用例钉的正是 `report.failed[].reason`（**报告形状族**）⇒
+期 9 后面要改 `reason: string` → `code + params` 时，这条断言会**必然**红，那时是预期内的。
+🔴 间歇性红的清单因此变成：**11 次观测、0 次可复现**，涉及 4 个不同套件
+（`rss.provider` / `backupSigning` / `backupVerify.integrity`（这条已查明是**判据本身**数了共享 /tmp，已修） / `markdownExport.provider`）。
+
+- 🔴 剩余 74 处的构成：备份族 `fullBackup` 24 / `backupCrypto` 12 / `backupSigning` 11 / `fullBackup.provider` 2、
+  报告形状族 `markdownExport` 7 + `safeFetch` 7、开发者不变量 8、协议字符串 3 ⇒
+  下一批（期 9 第十二批）做 `backupSigning`(11)，它最接近纯界面文案。
+
 ### 7.192 期 9 第十批：整站备份接口 **5 个码**（throw 91 → 86），🔴 以及一次**没能证明**的因果推断 —— 间歇性红三次复现失败，如实记成"原因未查明"
 
 **交付**：`controller/admin/backup/backup.controller.ts` 的 5 处 throw ⇒ **5 个码**

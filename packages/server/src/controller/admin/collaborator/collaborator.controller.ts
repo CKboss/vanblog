@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { codedBody } from 'src/utils/serverErrorCodes';
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
 
@@ -38,11 +38,7 @@ export class CollaboratorController {
       // 库里没有 id:0 的管理员。以前这里直接读 `admin.name` ⇒ TypeError ⇒ 500。
       // ⚠️ 不能"退而求其次只返回协作者"：这份清单的第一行**就是**管理员，
       //    少了它后台会显示成"这个站没有管理员"，那是比报错更糟的静默错误答案。
-      throw new NotFoundException(
-        '管理员账号不存在（库里没有 id=0 的用户），无法生成协作者清单。' +
-          '这通常意味着数据被恢复成了一份损坏或空的备份：先跑 ./vanblog.sh doctor 看体检，' +
-          '必要时用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建（数据库起不来时也能用）',
-      );
+      throw codedError('collaboratorAdminMissingForList');
     }
     const adminUser = {
       name: admin.name,

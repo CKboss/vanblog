@@ -3,8 +3,7 @@ import { pickSocketIp } from 'src/provider/log/utils';
 import { pickTrustedClientIp } from './trustedProxy';
 import { consumeAttempt } from './attemptLimit';
 import { scaleLimit } from './clusterRole';
-import { codedBody } from 'src/utils/serverErrorCodes';
-
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 /**
  * 粗粒度的全局速率限制 + 安全响应头。
  *

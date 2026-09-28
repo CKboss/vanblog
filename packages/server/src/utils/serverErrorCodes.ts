@@ -279,6 +279,42 @@ export const SERVER_ERROR_CODES = {
   //    `backupVerify` 里有很多是**写进备份清单与校验报告文件**的产物内容，要先分类再动手）。
   //    ⚠️ `backupRestoreNeedsConfirm` 里的 `confirm=true` / `"true"` / `"1"` / `"yes"` / `"TRUE"`
   //    是**接口契约**（调用方照着敲的字面量）⇒ 三份译文都必须逐字保留。
+  // ── 零散 UI 文案（期 9 第十一批）──────────────────────────────────────────
+  // 🔴 前两个是**自查发现的回归**：期 9 第八/九批把 `流水线 id 不合法：${id || '(空)'}` 与
+  //    `…收到：${originalName || '(空)'}` 迁进码表时，把中文兜底值 `(空)` 当**参数**传了进去 ⇒
+  //    英文界面会渲染出 `Invalid pipeline id: (空)`（半截中文）。这是本项目**第 7 次**踩
+  //    "把给用户看的文字当协议值传"。修法与前几次一致：**拆成"带值"与"空值"两个码**。
+  //    👉 🔴 迁移时凡是看到 `x || '中文兜底'` 这种形状，都要拆码 —— 兜底值也是文案。
+  pipelineIdInvalidEmpty: entry('流水线 id 不合法：(空)', BadRequestException),
+  initRestoreBadArchiveNameEmpty: entry(
+    '文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：(空)',
+    BadRequestException,
+  ),
+  // 🔴 `setupKeyUnavailable` 的响应体带一个**自定义字段** `setupKeyUnavailable: true`，
+  //    后台 `pages/InitPage/setupKeyCore.js` 会按它分支（"服务端自己丢了密钥 ⇒ 填什么都没用，不骗人"）
+  //    ⇒ 迁移时用 `codedError(code, params, { setupKeyUnavailable: true })` 把它**原样保留**。
+  setupKeyUnavailable: entry(
+    '服务端当前没有可用的初始化密钥（预期文件 {path} 不存在，本进程内存里也没有）：' +
+      '重启 vanblog 会重新生成并打印到日志。站点状态未受影响',
+    HttpException,
+    500,
+  ),
+  collaboratorAdminMissingForList: entry(
+    '管理员账号不存在（库里没有 id=0 的用户），无法生成协作者清单。' +
+      '这通常意味着数据被恢复成了一份损坏或空的备份：先跑 ./vanblog.sh doctor 看体检，' +
+      '必要时用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建（数据库起不来时也能用）',
+    NotFoundException,
+  ),
+  customPageNoUpload: entry('未收到上传文件', HttpException, 400),
+  fileNoUpload: entry('没有收到文件！', BadRequestException),
+  commentMissingPaths: entry('缺少 paths 参数', BadRequestException),
+  draftMissingOrPublished: entry('草稿不存在或已经发布过了', BadRequestException),
+  exportDraftNotFound: entry('草稿不存在！', BadRequestException),
+  exportArticleNotFound: entry('文章不存在！', BadRequestException),
+  // ⚠️ 刻意**不迁**：`caddy.controller.ts` 的 `未授权的域名`（403）—— 那个响应是给 **caddy** 看的
+  //    （ACME on-demand TLS 的 ask 端点），不是给站长看的界面文案 ⇒ 属"机器消费方"，
+  //    与日志同一类（翻它没有任何用户能看到，反而会让 caddy 侧的排障文本跟着界面语言漂）。
+
   backupGraceDaysInvalid: entry(
     'graceDays 必须是 0 到 365 之间的数字（0 = 旧密钥立即失效），收到：{value}',
     BadRequestException,
@@ -568,11 +604,23 @@ function lookup(code: ServerErrorCode | string, fn: string): ServerErrorEntry {
 export function codedBody(
   code: ServerErrorCode,
   params?: ServerErrorParams,
+  extra?: Record<string, unknown>,
 ): { statusCode: number; message: string; code: string; params?: ServerErrorParams } {
   const e = lookup(code, 'codedBody');
   const status = e.status ?? new (e.Ctor as ExceptionCtor)('').getStatus();
+  // 🔴 `extra`：**调用方原有的自定义响应体字段**（例如 `setupKeyUnavailable: true`，
+  //    后台 `setupKeyCore.js` 会**按这个标志分支**）⇒ 迁进码表时必须原样保留，
+  //    否则"翻译了一条消息"就顺手**改坏了线路契约**（那是比没翻译严重得多的回归）。
+  //    ⚠️ 放在最后展开：不允许 extra 覆盖 `statusCode` / `message` / `code` / `params`
+  //    （那四个是本机制的地基，被覆盖就等于码白加了）。
   const body: any = { statusCode: status, message: fillServerErrorMessage(e.zh, params), code };
   if (params) body.params = params;
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (k === 'statusCode' || k === 'message' || k === 'code' || k === 'params') continue;
+      body[k] = v;
+    }
+  }
   return body;
 }
 
@@ -589,7 +637,11 @@ export function codedBody(
  * 4. 用**同一个异常类**重新构造 ⇒ `instanceof` 判断、Nest 的状态码推导、
  *    以及任何按异常类分支的既有代码（例如 guard 里 `catch (e) { if (e instanceof ForbiddenException) }`）都不受影响。
  */
-export function codedError(code: ServerErrorCode, params?: ServerErrorParams): HttpException {
+export function codedError(
+  code: ServerErrorCode,
+  params?: ServerErrorParams,
+  extra?: Record<string, unknown>,
+): HttpException {
   const e = lookup(code, 'codedError');
   const message = fillServerErrorMessage(e.zh, params);
   const Ctor = e.Ctor;
@@ -600,5 +652,12 @@ export function codedError(code: ServerErrorCode, params?: ServerErrorParams): H
   base.message = message;
   base.code = code;
   if (params) base.params = params;
+  // 🔴 `extra`：同 `codedBody` —— 保留调用方原有的自定义字段（线路契约），但**不许覆盖**那四个地基字段。
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (k === 'statusCode' || k === 'message' || k === 'code' || k === 'params') continue;
+      base[k] = v;
+    }
+  }
   return e.status === undefined ? new Ctor(base) : new Ctor(base, e.status);
 }

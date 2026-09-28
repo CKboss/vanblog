@@ -1,5 +1,5 @@
 import { config } from 'src/config';
-import { codedBody } from 'src/utils/serverErrorCodes';
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 import {
   BadRequestException,
   Body,
@@ -31,7 +31,11 @@ import { ApiToken } from 'src/provider/swagger/token';
 function parsePipelineId(raw: string): number {
   const trimmed = String(raw ?? '').trim();
   if (!/^-?\d+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed))) {
-    throw new BadRequestException(`流水线 id 不合法：${trimmed.slice(0, 40) || '(空)'}`);
+    // 🔴 与 `pipeline.provider.ts` 是**同一句话** ⇒ 复用同一对码（一句话登记两遍就是两处口径）。
+    //    ⚠️ `'(空)'` 那个中文兜底**不许当参数传**（英文会渲染出半截中文）⇒ 空值走自己的码。
+    const idText = trimmed.slice(0, 40);
+    if (!idText) throw codedError('pipelineIdInvalidEmpty');
+    throw codedError('pipelineIdInvalid', { id: idText });
   }
   return Number(trimmed);
 }

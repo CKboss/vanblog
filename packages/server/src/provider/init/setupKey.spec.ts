@@ -210,6 +210,13 @@ describe('enforceSetupKey：控制器闸门的 wire 契约（400/500 的 body �
     expect(err).toBeInstanceOf(HttpException);
     expect(err.getStatus()).toBe(500);
     expect(err.getResponse().setupKeyUnavailable).toBe(true);
+    // 🔴 期 9 第十一批：这条消息迁进了错误码表，但那个**自定义线路字段必须原样保留** ——
+    //    后台 `pages/InitPage/setupKeyCore.js` 会按 `setupKeyUnavailable === true` 分支
+    //    （"服务端自己丢了密钥 ⇒ 填什么都没用，不骗人"）。上面那条断言就是它的守卫，
+    //    这里再补两条：① 响应体现在带 `code`（后台据此查译文）；② `message` 里的路径占位符**已被真实路径填掉**。
+    expect(err.getResponse().code).toBe('setupKeyUnavailable');
+    expect(String(err.getResponse().message)).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+    expect(String(err.getResponse().message)).toContain('初始化密钥');
   });
 });
 

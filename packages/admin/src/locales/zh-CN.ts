@@ -2158,4 +2158,23 @@ export default {
   'error.backupRestoreNeedsConfirm': '恢复会覆盖当前全部数据，请带 confirm=true 再调用一次（只接受字面量 true 或字符串 "true"；"1"/"yes"/"TRUE" 都不算确认）',
   'error.backupRestoreNeedsTarget': '请指定要恢复的备份（name），或直接上传备份文件',
   'error.backupSigMissing': '这份归档没有 {ext}（{name}）：它可能早于签名功能，或备份时没有配签名密钥。用 GET /api/admin/backup/signing/key 看当前签名配置。',
+
+  // ── 🔴 期 9 第十一批：零散 UI 文案 10 个码（12 处 throw）。
+  //    🔴 前两个是**自查发现的回归**：期 9 第八/九批把 `流水线 id 不合法：${id || '(空)'}` 与
+  //    `…收到：${originalName || '(空)'}` 迁进码表时，把中文兜底值 `(空)` 当**参数**传了进去
+  //    ⇒ 英文界面会渲染出 `Invalid pipeline id: (空)`（半截中文）。这是**第 7 次**踩
+  //    "把给用户看的文字当协议值传"⇒ 修法一致：拆成"带值"与"空值"两个码。
+  //    👉 🔴 迁移时凡是看到 `x || '中文兜底'` 这种形状都要拆码 —— **兜底值也是文案**。
+  //    ⚠️ `setupKeyUnavailable` 的响应体带自定义线路字段（后台按它分支），迁移时用
+  //    `codedError(code, params, { setupKeyUnavailable: true })` 原样保留（有行为断言钉住）。
+  'error.pipelineIdInvalidEmpty': '流水线 id 不合法：(空)',
+  'error.initRestoreBadArchiveNameEmpty': '文件名不像是本功能导出的整站备份（应形如 vanblog-full-20260913-140955.tar.zst），收到：(空)',
+  'error.setupKeyUnavailable': '服务端当前没有可用的初始化密钥（预期文件 {path} 不存在，本进程内存里也没有）：重启 vanblog 会重新生成并打印到日志。站点状态未受影响',
+  'error.collaboratorAdminMissingForList': '管理员账号不存在（库里没有 id=0 的用户），无法生成协作者清单。这通常意味着数据被恢复成了一份损坏或空的备份：先跑 ./vanblog.sh doctor 看体检，必要时用 ./vanblog.sh restore --offline-full <归档> 从一份好归档重建（数据库起不来时也能用）',
+  'error.customPageNoUpload': '未收到上传文件',
+  'error.fileNoUpload': '没有收到文件！',
+  'error.commentMissingPaths': '缺少 paths 参数',
+  'error.draftMissingOrPublished': '草稿不存在或已经发布过了',
+  'error.exportDraftNotFound': '草稿不存在！',
+  'error.exportArticleNotFound': '文章不存在！',
 };

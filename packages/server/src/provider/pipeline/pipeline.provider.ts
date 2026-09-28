@@ -88,10 +88,18 @@ export function resolvePipelineFilePath(runnerPath: string, id: unknown): string
   const raw = typeof id === 'string' ? id.trim() : id;
   const n = typeof raw === 'number' ? raw : Number(raw);
   if (typeof raw !== 'number' && !/^-?\d+$/.test(String(raw ?? ''))) {
-    throw codedError('pipelineIdInvalid', { id: String(id).slice(0, 40) || '(空)' });
+    // 🔴 自查发现的回归（期 9 第九批引入）：`|| '(空)'` 是**中文兜底文案**，当参数传进去
+    //    ⇒ 英文界面会渲染出 `Invalid pipeline id: (空)`（半截中文）。改成"空值走自己的码"。
+    const idText = String(id).slice(0, 40);
+    if (!idText) throw codedError('pipelineIdInvalidEmpty');
+    throw codedError('pipelineIdInvalid', { id: idText });
   }
   if (!Number.isSafeInteger(n)) {
-    throw codedError('pipelineIdInvalid', { id: String(id).slice(0, 40) || '(空)' });
+    // 🔴 自查发现的回归（期 9 第九批引入）：`|| '(空)'` 是**中文兜底文案**，当参数传进去
+    //    ⇒ 英文界面会渲染出 `Invalid pipeline id: (空)`（半截中文）。改成"空值走自己的码"。
+    const idText = String(id).slice(0, 40);
+    if (!idText) throw codedError('pipelineIdInvalidEmpty');
+    throw codedError('pipelineIdInvalid', { id: idText });
   }
   const root = path.resolve(String(runnerPath ?? ''));
   const abs = path.resolve(root, `${n}.js`);

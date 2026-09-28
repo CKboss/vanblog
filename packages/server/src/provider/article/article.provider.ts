@@ -2152,7 +2152,8 @@ export class ArticleProvider {
       const nextPathname = normalizePathname(patch.pathname);
       assertUsablePathname(nextPathname);
       if (await this.isPathnameTaken(nextPathname, numericId)) {
-        throw new BadRequestException(`路径别名 "${nextPathname}" 已被其它文章占用`);
+        // 🔴 与 `utils/articlePathname.ts` 那条**同一句话** ⇒ 复用 `pathnameTaken`（期 9 第九批登记的）
+        throw codedError('pathnameTaken', { pathname: nextPathname });
       }
       patch.pathname = nextPathname;
     }

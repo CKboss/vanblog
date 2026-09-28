@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import axios from 'axios';
 import { assertImageBuffer, fetchRemoteSafely } from 'src/utils/safeFetch';
 import compressing from 'compressing';
@@ -313,7 +314,10 @@ export class MarkdownExportProvider {
         ? await this.draftProvider.getById(id)
         : await this.articleProvider.getById(id, 'admin');
     if (!doc) {
-      throw new BadRequestException(type === 'draft' ? '草稿不存在！' : '文章不存在！');
+      // 🔴 三元里的两句中文 ⇒ **拆成两个码**（服务端填充器不实现 ICU select；
+    //    而且这两句语义不同，合成一个码会让英文只能说一句含糊的话）。
+    if (type === 'draft') throw codedError('exportDraftNotFound');
+    throw codedError('exportArticleNotFound');
     }
     return doc;
   }

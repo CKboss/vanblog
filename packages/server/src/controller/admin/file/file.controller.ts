@@ -10,7 +10,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { codedBody } from 'src/utils/serverErrorCodes';
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
@@ -49,7 +49,7 @@ export class FileController {
       return codedBody('demoSiteBlocked');
     }
     if (!file || !file.buffer) {
-      throw new BadRequestException('没有收到文件！');
+      throw codedError('fileNoUpload');
     }
     const data = await this.staticProvider.upload(file, 'file');
     return {

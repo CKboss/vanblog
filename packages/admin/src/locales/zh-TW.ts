@@ -1933,4 +1933,21 @@ export default {
   'error.backupRestoreNeedsConfirm': '恢復會覆蓋目前全部資料，請帶 confirm=true 再呼叫一次（只接受字面量 true 或字串 "true"；"1"/"yes"/"TRUE" 都不算確認）',
   'error.backupRestoreNeedsTarget': '請指定要恢復的備份（name），或直接上傳備份檔案',
   'error.backupSigMissing': '這份歸檔沒有 {ext}（{name}）：它可能早於簽名功能，或備份時沒有配簽名金鑰。用 GET /api/admin/backup/signing/key 看目前簽名設定。',
+
+  // ── 🔴 期 9 第十一批（10 條）── 地區用詞：**流水線** / **檔名** / **匯出** / **應形如** / **金鑰**（密钥）/
+  //    **預期檔案** / **行程記憶體**（进程内存）/ **重新啟動** / **產生**（生成）/ **列印到日誌**（打印到日志）/
+  //    **帳號** / **使用者** / **協作者清單** / **意味著** / **資料** / **損壞** / **體檢** / **資料庫** /
+  //    **上傳檔案** / **參數** / **發布** / **歸檔**。
+  //    🔴 `(空)`、`id=0`、`vanblog-full-20260913-140955.tar.zst`、`./vanblog.sh doctor`、
+  //    `./vanblog.sh restore --offline-full`、`vanblog`、`paths` 三份逐字相同；`<归档>` 在繁中是 `<歸檔>`、英文是 `<archive>`。
+  'error.pipelineIdInvalidEmpty': '流水線 id 不合法：(空)',
+  'error.initRestoreBadArchiveNameEmpty': '檔名不像是本功能匯出的整站備份（應形如 vanblog-full-20260913-140955.tar.zst），收到：(空)',
+  'error.setupKeyUnavailable': '服務端目前沒有可用的初始化金鑰（預期檔案 {path} 不存在，本行程記憶體裡也沒有）：重新啟動 vanblog 會重新產生並列印到日誌。站點狀態未受影響',
+  'error.collaboratorAdminMissingForList': '管理員帳號不存在（庫裡沒有 id=0 的使用者），無法產生協作者清單。這通常意味著資料被恢復成了一份損壞或空的備份：先跑 ./vanblog.sh doctor 看體檢，必要時用 ./vanblog.sh restore --offline-full <歸檔> 從一份好歸檔重建（資料庫起不來時也能用）',
+  'error.customPageNoUpload': '未收到上傳檔案',
+  'error.fileNoUpload': '沒有收到檔案！',
+  'error.commentMissingPaths': '缺少 paths 參數',
+  'error.draftMissingOrPublished': '草稿不存在或已經發布過了',
+  'error.exportDraftNotFound': '草稿不存在！',
+  'error.exportArticleNotFound': '文章不存在！',
 };

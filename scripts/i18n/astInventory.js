@@ -868,6 +868,12 @@ const ICU_PLURAL_RE = /\{[A-Za-z_][A-Za-z0-9_]*\s*,\s*plural\s*,/;
 const ICU_PLURAL_STOPWORDS = new Set([
   'is', 'was', 'as', 'has', 'this', 'that', 'thus', 'us', 'vs', 'his', 'its',
   'ours', 'yours', 'theirs', 'always', 'sometimes', 'perhaps', 'yes', 'plus', 'minus',
+  // 🔴 2026-09-28（期 9 第十一批）补一批**第三人称单数动词**：`{path} does not exist` 被误判成
+  //    "占位符紧跟复数名词"（`does` 的形态确实是 `…s\b`）。收词标准与上面一致：
+  //    **只收"绝不可能是复数名词"的词** —— 这几个都是动词变位，没有"一个 does / 两个 does"的用法。
+  //    ⚠️ 刻意**不收** `points` / `needs` / `files` / `items` 这类"既能当动词又能当复数名词"的词
+  //    （收了就会漏掉真缺陷）。逐个核实过。
+  'does', 'exists', 'means', 'happens', 'belongs', 'appears', 'occurs', 'differs', 'refers',
 ]);
 
 /** 全局版（要逐个匹配来看命中词是不是功能词，`test()` 那种"有一个就算"的语义不够用）。 */
