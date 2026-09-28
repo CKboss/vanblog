@@ -203,7 +203,13 @@ describe('整站备份：服务端', () => {
     const provider = readRepo('packages/server/src/provider/backup/fullBackup.provider.ts');
     assert.match(provider, /path\.basename\(String\(name \|\| ''\)\)/);
     assert.match(provider, /startsWith\('vanblog-full-'\)/);
-    assert.match(provider, /备份文件名不合法/);
+    // 🔴 期 9 第八批：那句中文搬进了错误码登记表（`backupNameIllegal`）⇒ 锚点跨文件搬：
+    //    ① provider 必须抛这个码（"文件名要先校验"那道闸门还在）；② 码表里那条的中文必须仍是原文。
+    assert.match(provider, /codedError\('backupNameIllegal'\)/);
+    assert.match(
+      readRepo('packages/server/src/utils/serverErrorCodes.ts'),
+      /backupNameIllegal: entry\('备份文件名不合法！'/,
+    );
     assert.match(provider, /connection\.getClient\(\)/);
     assert.match(provider, /config\.walineDB/);
   });

@@ -2099,4 +2099,29 @@ export default {
   'error.demoSitePasswordChangeBlocked': '演示站禁止修改账号密码！',
   'error.demoSiteLoginSecurityBlocked': '演示站禁止修改登录安全策略设置！',
   'error.demoSiteCustomizingBlocked': '演示站禁止修改定制化设置！',
+
+  // ── 🔴 期 9 第八批：主题读取 / 路径别名 / 落盘文件名 / 公开接口限流 / 备份文件名（17 个码）。
+  //    🔴 码名差点撞车：登记表里早就有 `customPageNotFound`（中文是「未找到该页面！」），
+  //    而这一批的那句是「找不到自定义页面」⇒ **两句不同的话**，用 `customPageMissing`。
+  //    👉 加码前先 grep 登记表**并比对中文**（只比码名会漏掉"以为在复用、其实覆盖了另一句话"）。
+  //    ⚠️ `storedFileNameIllegal` / `storedImageNameIllegal`：原来是一句 `非法的${what}名`，
+  //    `what` 是**中文参数**（'文件'/'图片'）⇒ 拆成两个码，函数第二参改成传**码**
+  //    （第 5 次踩"把给用户看的文字当协议值传"）。
+  'error.themeIdMissing': '缺少 id',
+  'error.themeNotFoundForRead': '没有这个主题：{id}',
+  'error.themeBuiltinNoCssFile': '「{id}」是内置主题，样式打包在前台产物里，没有单独的文件',
+  'error.themeFileMissing': '主题文件不在了（可能被手工删掉），重新上传一次即可',
+  'error.pathnameTooLong': '路径别名过长（最多 {max} 个字符）：{pathname}',
+  'error.pathnameHasSlash': '路径别名不能包含 "/"：{pathname}',
+  'error.pathnameNumeric': '路径别名不能是纯数字（会与文章 id 冲突）：{pathname}',
+  'error.pathnameControlChars': '路径别名不能包含控制字符',
+  'error.storedFileNameIllegal': '非法的文件名：{name}',
+  'error.storedImageNameIllegal': '非法的图片名：{name}',
+  'error.storedFileNameEscapes': '非法的文件名（会指向 {dir} 目录之外）：{name}',
+  'error.storedImageNameEscapes': '非法的图片名（会写出 {dir} 目录之外）：{name}',
+  'error.customPageMissing': '找不到自定义页面',
+  'error.accessUnlockThrottled': '尝试次数过多，请 {seconds} 秒后再试',
+  'error.articleUnlockThrottled': '这篇文章的密码尝试次数过多，请 {seconds} 秒后再试',
+  'error.backupNameIllegal': '备份文件名不合法！',
+  'error.backupFileNotFound': '找不到这个备份文件！',
 };

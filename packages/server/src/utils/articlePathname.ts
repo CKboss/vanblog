@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
+import { codedError } from 'src/utils/serverErrorCodes';
 /**
  * Pathnames end up as a single URL segment (`/post/<pathname>`), so they are
  * kept short and free of separators. `/c/<pathname*>` (custom pages) and the
@@ -27,20 +28,16 @@ export function assertUsablePathname(pathname: string): void {
     return;
   }
   if (pathname.length > PATHNAME_MAX_LENGTH) {
-    throw new BadRequestException(
-      `路径别名过长（最多 ${PATHNAME_MAX_LENGTH} 个字符）：${pathname}`,
-    );
+    throw codedError('pathnameTooLong', { max: PATHNAME_MAX_LENGTH, pathname });
   }
   if (pathname.includes('/')) {
-    throw new BadRequestException(`路径别名不能包含 "/"：${pathname}`);
+    throw codedError('pathnameHasSlash', { pathname });
   }
   if (/^\d+$/.test(pathname)) {
-    throw new BadRequestException(
-      `路径别名不能是纯数字（会与文章 id 冲突）：${pathname}`,
-    );
+    throw codedError('pathnameNumeric', { pathname });
   }
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(pathname)) {
-    throw new BadRequestException('路径别名不能包含控制字符');
+    throw codedError('pathnameControlChars');
   }
 }

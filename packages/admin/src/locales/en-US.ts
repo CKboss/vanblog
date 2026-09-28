@@ -1929,4 +1929,27 @@ export default {
   'error.demoSitePasswordChangeBlocked': 'The account password cannot be changed on the demo site!',
   'error.demoSiteLoginSecurityBlocked': 'The login security policy cannot be changed on the demo site!',
   'error.demoSiteCustomizingBlocked': 'The customization settings cannot be changed on the demo site!',
+
+  // ── 🔴 期 9 第八批（17 keys）── 英文人工写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    🔴 计数用 ICU plural（`{max, plural, one {# character} other {# characters}}`、
+  //    `{seconds, plural, one {# second} other {# seconds}}`）；`{id}` / `{pathname}` / `{name}` / `{dir}` 不用复数。
+  //    🔴 中文的「{id}」在英文里用 ASCII 双引号 `"{id}"`；`"/"` 那个被引起来的斜杠三份都保留原样。
+  //    ⚠️ 14/15 两条是**访客可见**的（前台文章密码解锁的限流）⇒ 语气要客气、简短。
+  'error.themeIdMissing': 'Missing id',
+  'error.themeNotFoundForRead': 'No such theme: {id}',
+  'error.themeBuiltinNoCssFile': '"{id}" is a built-in theme; its styles are bundled into the front-end build and there is no separate file',
+  'error.themeFileMissing': 'The theme file is gone (it may have been deleted manually); just upload it again',
+  'error.pathnameTooLong': 'Path alias too long (at most {max, plural, one {# character} other {# characters}}): {pathname}',
+  'error.pathnameHasSlash': 'Path alias cannot contain "/": {pathname}',
+  'error.pathnameNumeric': 'Path alias cannot be purely numeric (it would conflict with the article id): {pathname}',
+  'error.pathnameControlChars': 'Path alias cannot contain control characters',
+  'error.storedFileNameIllegal': 'Invalid file name: {name}',
+  'error.storedImageNameIllegal': 'Invalid image name: {name}',
+  'error.storedFileNameEscapes': 'Invalid file name (it would point outside the {dir} directory): {name}',
+  'error.storedImageNameEscapes': 'Invalid image name (it would be written outside the {dir} directory): {name}',
+  'error.customPageMissing': 'Custom page not found',
+  'error.accessUnlockThrottled': 'Too many attempts. Please try again in {seconds, plural, one {# second} other {# seconds}}.',
+  'error.articleUnlockThrottled': 'Too many password attempts for this article. Please try again in {seconds, plural, one {# second} other {# seconds}}.',
+  'error.backupNameIllegal': 'Invalid backup file name!',
+  'error.backupFileNotFound': 'The backup file was not found!',
 };

@@ -2,6 +2,7 @@ import {
   HttpException,
   HttpStatus,
   NotFoundException, Body, Controller, Get, Header, Param, Post, Query, Req } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { SortOrder } from 'src/types/sort';
@@ -183,11 +184,11 @@ export class PublicController {
     // path 来自查询串：`?path[$ne]=/x` 会被解析成对象，直接进 findOne 会 500。
     const rawPath = asQueryString(path);
     if (!rawPath) {
-      throw new NotFoundException('找不到自定义页面');
+      throw codedError('customPageMissing');
     }
     const doc: any = await this.customPageProvider.getCustomPageByPath(rawPath);
     if (!doc) {
-      throw new NotFoundException('找不到自定义页面');
+      throw codedError('customPageMissing');
     }
     // 不能 `{...doc}`：mongoose 文档展开后会把 `$__` / `$isNew` / `_doc` 这些内部结构
     // 一起吐给公网（实测过），只挑真正需要的字段返回。
@@ -232,10 +233,7 @@ export class PublicController {
     // 否则 N 个 worker = N 倍的爆破预算
     const attempt = consumeAttempt(key, { max: scaleLimit(20), windowMs: 10 * 60 * 1000 });
     if (!attempt.allowed) {
-      throw new HttpException(
-        `尝试次数过多，请 ${attempt.retryAfterSeconds} 秒后再试`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      throw codedError('accessUnlockThrottled', { seconds: attempt.retryAfterSeconds });
     }
     // ⚠️ 第二道闸：**按文章的全局预算**（跨 IP），理由见 UNLOCK_GLOBAL_BUDGET_PER_10MIN。
     //    key 用的是**归一化后**的 id，与上面那道闸同源 —— 否则 `7` 打满之后换 `0000007`
@@ -249,10 +247,7 @@ export class PublicController {
     });
     if (!globalAttempt.allowed) {
       // ⚠️ 文案不能泄露"这篇文章被爆破过"以外的信息，也不要回显 id。
-      throw new HttpException(
-        `这篇文章的密码尝试次数过多，请 ${globalAttempt.retryAfterSeconds} 秒后再试`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      throw codedError('articleUnlockThrottled', { seconds: globalAttempt.retryAfterSeconds });
     }
     const data = await this.articleProvider.getByIdWithPassword(id, body?.password);
     if (data) {

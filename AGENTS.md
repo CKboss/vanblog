@@ -9469,6 +9469,82 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.190 期 9 第八批：主题读取 / 路径别名 / 落盘文件名 / 公开接口限流 / 备份文件名 **17 个码**（throw 126 → 107），🔴 一次码名撞车暴露"加码前只比码名不够、要比中文"
+
+**交付**：`theme.controller.ts`(4) + `articlePathname.ts`(4) + `storedFileName.ts`(4) +
+`public.controller.ts`(4) + `fullBackup.provider.ts`(3) ⇒ **19 处 throw → 17 个码**（重复文本共用码），
+错误码 **135 → 151**（🔴 其中 `customPageMissing` 是**新名**，见 A 段），语言包 **1580 → 1597 key ×3**，
+throw 棘轮 **126 → 107**。
+🔴 **线路级活体**（一次性栈 + 管理员 token，故意传三种不合法的路径别名）：
+`pathnameTooLong`（`params:{max:100,pathname:'aaa…'}`）、`pathnameNumeric`（`params:{pathname:'12345'}`）、
+`pathnameHasSlash`（`params:{pathname:'a/b'}`）三个码在响应体里验到，`message` 与迁移前逐字相同、
+**params 真的被填进去**（不是字面占位符）。证据：`vanblog_dev/i18n-browser-evidence/phase9-misccodes/wire-evidence.md`。
+
+#### A. 🔴 码名撞车：`customPageNotFound` **早就存在**，而且中文**不是同一句**
+我按"找不到自定义页面"新登记了一个 `customPageNotFound` ⇒ `tsc` 当场报
+**TS1117（对象字面量不能有同名属性）**。查下去才发现登记表里那条 `customPageNotFound` 的中文是
+**`未找到该页面！`**（`HttpException` 404），而 `public.controller.ts` 这两处是 **`找不到自定义页面`**
+（`NotFoundException`）⇒ 🔴 **两句不同的话**，必须用不同的码名（改成 `customPageMissing`）。
+👉 🔴 这次是 **tsc 帮我抓到的**；但更隐蔽的失败模式是"以为在复用、其实**覆盖**了另一句话"——
+如果登记表是 `Map` 或者后写的键静默覆盖前一个，那条 `未找到该页面！` 就会被悄悄改成 `找不到自定义页面`，
+而**所有测试都还是绿的**（因为两边都"有码、有三语、逐字一致"）。
+👉 **规矩：加新码之前先 grep 登记表，而且要比对`中文`，不是只看码名在不在。**
+（本批还把这条写进了码表注释与语言包注释，免得下一个人再撞一次。）
+⚠️ 顺带一个流程教训：我那次批量替换是**分文件串行**写的，第一个文件（码表）写完就抛错退出 ⇒
+🔴 出现了"码表里叫 `customPageMissing`、调用点还写着 `customPageNotFound`"的**中间态**（而 `customPageNotFound`
+这时指向的是**另一句话** ⇒ 消息文本被悄悄换掉，是真正的行为回归）。修法：把两处一起改完再验。
+👉 🔴 **改名类的编辑必须"定义与所有引用"一次性改完**，中间态比报错更危险（它可能**能编译、能跑、只是语义错了**）。
+
+#### B. 🔴 第 5 次踩"把给用户看的文字当协议值传"：`assertSingleFileName(name, what = '文件')`
+`storedFileName.ts` 的 `assertSingleFileName(fileName, what = '文件')` 把中文 `what`（'文件' / '图片'）
+拼进 `非法的${what}名：…` ⇒ 英文界面里必然夹中文。
+修法与前面几次一致：**拆码 + 参数改成语义值** —— 第二参从 `what: string` 改成 `code: ServerErrorCode`
+（默认 `'storedFileNameIllegal'`，图片那条调用点传 `'storedImageNameIllegal'`）。
+🔴 这直接导致"防死码"判据**找不到** `storedImageNameIllegal`（它以字符串实参的形式出现在
+`assertSingleFileName(fileName, 'storedImageNameIllegal')` 里，不是 `codedError('…')`）⇒
+判据再加两种 needle 形状：`('<code>'` 与 `, '<code>')`。
+⚠️ 边界（为什么这两种仍然够严）：要求码名**带引号**且**紧贴左括号或", "之后** ⇒
+注释里随手提到码名（没有这对括号/逗号）不会被误认成"已使用"；而登记表自己那个文件被排除 ⇒
+"登记了没人用"照样会被抓。🔴 **变异对照 B48-M2 就是验这条**：把图片那处的码改成文件那个码
+⇒ `storedImageNameIllegal` 变死码 ⇒ **红**。
+👉 🔴 到现在为止，"防死码"判据已经需要认 **5 种形状**（`codedError('x'` / `codedBody('x'` / `code: 'x'` /
+`('x'` / `, 'x')`）。这本身是个信号：**码的"使用点"形状越来越多** ⇒
+🔴 待办：考虑让码表导出一个**常量对象**（`CODE.storedImageNameIllegal`）供调用点引用，
+那样"使用点"就只有一种形状（成员访问），判据也不用再逐个形状补 —— 但那是**破坏性重构**（要改 219 个调用点），
+单独排一批，并且要先量化"改完之后判据能不能仍然抓住死码"。
+
+#### C. 🔴 两类**刻意不迁**的（分类结论，写清楚免得下一个人重新判一遍）
+1. **开发者不变量**：`public.controller.ts` 的 `throw new TypeError('publicListCacheKey: 未知的 kind（只接受 category 或 tag）')`
+   —— 消息里带着**函数名**，注释写明"不要静默降级成一个共用键"，它会以 500 的形式暴露给**运维**而不是站长
+   ⇒ 与 `queryFilter.ts`(2) / `meta.provider.ts`(1) 那几条同类（那几条明写「这是服务端代码缺陷，不是请求问题」）。
+   🔴 待裁定：这一族是**保持中文**、还是**改成英文**（开发者界面）？在裁定前**不迁进码表**
+   （迁了就等于宣布它是用户可见文案，三份译文会给人"已支持多语言"的错觉）。
+2. **外壳可译、内核不可译**：`fullBackup.provider.ts` 的
+   `整站备份校验失败：${message}（归档已保留：${result.name}）` ——
+   🔴 那个 `${message}` 本身是 `backupVerify.ts` 里**若干条中文校验结论**拼出来的
+   （`issues.map(i => `[${i.check}] ${i.message}`).join('；')`），而这些结论**同时会被写进校验报告文件**（产物内容）。
+   ⇒ 只翻外壳会得到"**英文外壳 + 中文内核**"的半截译文（比全中文更糟：它让人以为翻译做完了）。
+   必须连 `backupVerify` 的**报告形状**一起改（`message: string` → `code + params`），单独排一批。
+👉 🔴 **"能翻一半"不等于"该翻一半"**：当一条消息的内容由另一层未迁移的数据拼出来时，
+先迁外层只会制造"看起来已经国际化了"的假象。这类**依赖顺序**要在动手前识别出来。
+
+#### D. 变异对照 5/5 + 基线
+① 退回硬编码中文 throw ⇒ 棘轮红（2 条断言）；② 🔴 把图片名那处的码改成文件那个码 ⇒ **防死码红**
+（验的正是 B 段新加的那两种 needle 形状）；③ 删一条 zh-TW 译文 ⇒ **5 条断言同时红**；
+④ 改码表中文一个字 ⇒ 逐字对账红；⑤ 语义空操作 ⇒ 绿。
+- admin `node --test` **785 tests / 176 suites / 0 fail**；jest **288 套件 / 4252 用例 / 0 FAIL**；
+  server `tsc` **0 错**、admin 类型门禁 **31/0**、server 生产构建 rc=0；
+- 语言包 **1597 key** ×3（重复 0）；`--zh-tw-audit`：1597 key / **816** 汉字 / **0 命中**；
+- `localePackParity` 的"TW==CN"白名单 +1（`error.themeIdMissing` = `缺少 id`：四个字全部简繁同形 ⇒ 同形是正确译文）；
+- 服务端棘轮：**throw 107**、**`message:` 18**；错误码 **151 个**（黄金快照 151 条）；
+- 🔴 未验证的两条如实记录：`customPageMissing`(404) 与 `backupNameIllegal` 这轮**没打到**
+  （我猜的两个路由在 Express 层就 404 了，`Cannot GET …` 是**框架兜底**、不是应用的错误码）
+  ⇒ 记为"未验证"，不拿框架的 404 冒充应用的错误码。它们的证据是黄金快照 + admin 侧三条判据 +
+  "按 code 查译文"这条链路已在前四批活体验过四次。
+- 下一批（期 9 第九批）：备份族本体 —— `backupVerify`(43，🔴 先做 C-2 那个报告形状改造) /
+  `fullBackup`(24) / `backupCrypto`(12) / `backupSigning`(11) / `backup.controller`(5)；
+  之后 `safeFetch`+`markdownExport`(14，同样是"报告形状"改造)。
+
 ### 7.189 期 9 第七批：**演示站守卫族** 8 个码覆盖 **82 个站点**（`message:` 棘轮 102 → 18，一次砍掉 82%），以及"批量改写"必须先全量试算再落盘
 
 **交付**：全仓 24 个 admin controller 里的 **82 处** `return { statusCode: 401, message: '演示站禁止…' }`

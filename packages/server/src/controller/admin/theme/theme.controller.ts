@@ -11,7 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { codedBody } from 'src/utils/serverErrorCodes';
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { promises as fs } from 'fs';
@@ -85,7 +85,7 @@ export class ThemeController {
     }
     const id = String(body?.id || '').trim();
     if (!id) {
-      throw new BadRequestException('缺少 id');
+      throw codedError('themeIdMissing');
     }
     const data = await this.themeProvider.activate(id);
     return { statusCode: 200, data, message: `已切换到 ${id}` };
@@ -116,17 +116,17 @@ export class ThemeController {
   async css(@Param('id') id: string) {
     const theme = await this.themeProvider.findOne(id);
     if (!theme) {
-      throw new NotFoundException(`没有这个主题：${id}`);
+      throw codedError('themeNotFoundForRead', { id });
     }
     if (!theme.url) {
-      throw new NotFoundException(`「${id}」是内置主题，样式打包在前台产物里，没有单独的文件`);
+      throw codedError('themeBuiltinNoCssFile', { id });
     }
     const abs = path.join(config.staticPath, theme.url.replace(/^\/static\//, ''));
     let text = '';
     try {
       text = await fs.readFile(abs, 'utf8');
     } catch {
-      throw new NotFoundException('主题文件不在了（可能被手工删掉），重新上传一次即可');
+      throw codedError('themeFileMissing');
     }
     return {
       statusCode: 200,

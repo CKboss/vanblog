@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { PipelineProvider } from '../pipeline/pipeline.provider';
@@ -168,15 +169,15 @@ export class FullBackupProvider implements OnApplicationBootstrap {
   resolveArchive(name: string): string {
     const base = path.basename(String(name || ''));
     if (!base || !base.startsWith('vanblog-full-')) {
-      throw new BadRequestException('备份文件名不合法！');
+      throw codedError('backupNameIllegal');
     }
     const full = path.resolve(this.backupDir(), base);
     const root = path.resolve(this.backupDir());
     if (!full.startsWith(root + path.sep)) {
-      throw new BadRequestException('备份文件名不合法！');
+      throw codedError('backupNameIllegal');
     }
     if (!fs.existsSync(full)) {
-      throw new BadRequestException('找不到这个备份文件！');
+      throw codedError('backupFileNotFound');
     }
     return full;
   }

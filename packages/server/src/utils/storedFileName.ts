@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError, ServerErrorCode } from 'src/utils/serverErrorCodes';
 import * as path from 'path';
 import { sanitizeAttachmentName } from './attachment';
 
@@ -72,7 +73,14 @@ export function sanitizeStoredImageName(originalName: unknown): string {
  * 落盘就叫这个、写不出目录；解码反而会把"看起来像转义"的合法名字改坏。
  * 真正解码 URL 的是服务层（express static + `utils/staticGuard`），它们各自有容器化校验。
  */
-export function assertSingleFileName(fileName: unknown, what = '文件'): string {
+// 🔴 期 9 第八批：第二个参数从**中文的 `what`**（'文件' / '图片'）改成**错误码**。
+//    原来那句是 `非法的${what}名：…` ⇒ 中文当参数拼进消息，英文界面里就会夹中文
+//    （本项目**第 5 次**踩"把给用户看的文字当协议值传"：前有 `NumSelect d="天"`、
+//    `assertAccountPasswordStrength(pw,'管理员')`、CSS banned 表的中文 label、`tooLargeHint`）。
+export function assertSingleFileName(
+  fileName: unknown,
+  code: ServerErrorCode = 'storedFileNameIllegal',
+): string {
   const name = String(fileName ?? '');
   if (
     !name ||
@@ -82,7 +90,7 @@ export function assertSingleFileName(fileName: unknown, what = '文件'): string
     // eslint-disable-next-line no-control-regex
     /[\u0000-\u001f\u007f]/.test(name)
   ) {
-    throw new BadRequestException(`非法的${what}名：${describeUnsafeNameForLog(name)}`);
+    throw codedError(code, { name: describeUnsafeNameForLog(name) });
   }
   return name;
 }
@@ -113,15 +121,16 @@ export function resolveWithinStorageAbs(staticRoot: string, subDir: string, relN
     // eslint-disable-next-line no-control-regex
     /[\u0000-\u001f\u007f]/.test(raw)
   ) {
-    throw new BadRequestException(`非法的文件名：${describeUnsafeNameForLog(raw)}`);
+    throw codedError('storedFileNameIllegal', { name: describeUnsafeNameForLog(raw) });
   }
   const root = path.resolve(staticRoot, subDir);
   const abs = path.resolve(root, raw);
   const rel = path.relative(root, abs);
   if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-    throw new BadRequestException(
-      `非法的文件名（会指向 ${subDir} 目录之外）：${describeUnsafeNameForLog(raw)}`,
-    );
+    throw codedError('storedFileNameEscapes', {
+      dir: subDir,
+      name: describeUnsafeNameForLog(raw),
+    });
   }
   return abs;
 }
@@ -143,7 +152,7 @@ export function resolveStoredFileAbs(
   subDir: string,
   fileName: unknown,
 ): string {
-  const name = assertSingleFileName(fileName, '图片');
+  const name = assertSingleFileName(fileName, 'storedImageNameIllegal');
   const root = path.resolve(staticRoot, subDir);
   const abs = path.resolve(root, name);
   const rel = path.relative(root, abs);
@@ -154,9 +163,10 @@ export function resolveStoredFileAbs(
   //    最后那条 `rel.includes(path.sep)` 是防御性的：assertSingleFileName 已经拒掉分隔符，
   //    所以正常走不到；万一将来那道检查被放宽，嵌套路径仍会在这里被拦住。
   if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) || rel.includes(path.sep)) {
-    throw new BadRequestException(
-      `非法的图片名（会写出 ${subDir} 目录之外）：${describeUnsafeNameForLog(name)}`,
-    );
+    throw codedError('storedImageNameEscapes', {
+      dir: subDir,
+      name: describeUnsafeNameForLog(name),
+    });
   }
   return abs;
 }

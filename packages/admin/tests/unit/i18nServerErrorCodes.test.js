@@ -78,7 +78,8 @@ for (const l of LOCALES) {
 // 🔴 134 → **127**（期 9 第六批）：上传校验（uploadLimits 5 处 + img.controller 的自定义提示）
 //   与 .mdz 导入（2 处）迁进码表 ⇒ 10 个新码（两处"条件片段"各拆成两个码）。
 // 🔴 127 → **126**（期 9 第六批补：图片隐写检测那一档自己的限流也迁进了码表）
-const THROW_BUDGET = 126;
+// 🔴 126 → **107**（期 9 第八批：主题读取 4 + 路径别名 4 + 落盘文件名 4 + 公开接口 4 + 备份文件名 3 = 19 处迁进码表）
+const THROW_BUDGET = 107;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -213,7 +214,19 @@ test('服务端错误码 · ② 反向：每个登记的码都真的被服务端
     //      ⚠️ 这条放宽是**有边界**的：仍然要求"码名以字符串字面量的形式出现在源码里"，
     //      只是允许它出现在 `code:` 属性位而不是调用实参位；🔴 登记表自己那个文件被排除在外
     //      （否则恒真），所以"登记了没人用"仍然会被抓（变异对照 B45-M4 验的就是这条）。
-    const needles = [`codedError('${code}'`, `codedBody('${code}'`, `code: '${code}'`];
+    // 🔴 期 9 第八批再加两种形状：**码名被当成字符串实参传给一个"会转发给 codedError"的助手**
+    //    （`assertSingleFileName(fileName, 'storedImageNameIllegal')` —— 助手内部才 `codedError(code, …)`）。
+    //    这与 `code: '<code>'`（对象属性位）是同一类"动态派发"，只是形状不同。
+    //    ⚠️ 边界（为什么这两种形状仍然够严）：要求码名**带引号**且**紧贴左括号或", "之后**
+    //    （`('<code>'` / `, '<code>')`）⇒ 注释里随手提到码名（不带这对括号/逗号）不会被误认成"已使用"。
+    //    🔴 反向仍然有效：登记表自己那个文件被排除，"登记了没人用"照样会被抓（变异对照验过两次）。
+    const needles = [
+      `codedError('${code}'`,
+      `codedBody('${code}'`,
+      `code: '${code}'`,
+      `('${code}'`,
+      `, '${code}')`,
+    ];
     let used = false;
     for (const abs of walkServerSources(SERVER_SRC, [])) {
       if (abs.endsWith('serverErrorCodes.ts')) continue; // 登记表本身不算"使用"

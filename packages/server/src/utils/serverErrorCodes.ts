@@ -256,6 +256,48 @@ export const SERVER_ERROR_CODES = {
   // ⚠️ `UnauthorizedException` 只用来让 `codedBody` 算出 `statusCode: 401`（与迁移前逐字相同）。
   // 🔴 8 种文案刻意**不合并成一个码**：它们分别对应"改文章/删文章/建文章/发草稿/改口令/改登录安全策略/
   //    改定制化/其它"，合并之后英文就只能说 "Not allowed"，站长看不出**哪一类操作**被演示站挡住了。
+  // ── 主题读取 / 路径别名 / 落盘文件名 / 公开接口限流 / 备份文件名（期 9 第八批）──────────
+  // 🔴 这一批**刻意不含**两类：
+  //   ① `public.controller.ts` 的 `throw new TypeError('publicListCacheKey: 未知的 kind…')` ——
+  //      那是**开发者不变量**（注释写明"不要静默降级成一个共用键"），不是给用户看的文案，
+  //      它会以 500 的形式暴露给运维而不是站长 ⇒ 与 `queryFilter.ts` / `meta.provider.ts` 那几条同类，
+  //      统一留待"开发者不变量要不要改英文"那次裁定；
+  //   ② `fullBackup.provider.ts` 的 `整站备份校验失败：{message}（归档已保留：{name}）` ——
+  //      🔴 那个 `{message}` 本身是 `backupVerify.ts` 里**若干条中文校验结论**拼出来的
+  //      （`issues.map(i => `[${i.check}] ${i.message}`).join('；')`），而这些结论**同时会被写进
+  //      校验报告文件**（产物内容）⇒ 只翻外壳会得到"英文外壳 + 中文内核"的半截译文。
+  //      必须连 `backupVerify` 的报告形状一起改（`reason: string` → `code + params`），单独排一批。
+  themeIdMissing: entry('缺少 id', BadRequestException),
+  themeNotFoundForRead: entry('没有这个主题：{id}', NotFoundException),
+  themeBuiltinNoCssFile: entry(
+    '「{id}」是内置主题，样式打包在前台产物里，没有单独的文件',
+    NotFoundException,
+  ),
+  themeFileMissing: entry('主题文件不在了（可能被手工删掉），重新上传一次即可', NotFoundException),
+  pathnameTooLong: entry('路径别名过长（最多 {max} 个字符）：{pathname}', BadRequestException),
+  pathnameHasSlash: entry('路径别名不能包含 "/"：{pathname}', BadRequestException),
+  pathnameNumeric: entry('路径别名不能是纯数字（会与文章 id 冲突）：{pathname}', BadRequestException),
+  pathnameControlChars: entry('路径别名不能包含控制字符', BadRequestException),
+  storedFileNameIllegal: entry('非法的文件名：{name}', BadRequestException),
+  storedImageNameIllegal: entry('非法的图片名：{name}', BadRequestException),
+  storedFileNameEscapes: entry('非法的文件名（会指向 {dir} 目录之外）：{name}', BadRequestException),
+  storedImageNameEscapes: entry('非法的图片名（会写出 {dir} 目录之外）：{name}', BadRequestException),
+  // 🔴 名字差点撞车：登记表里**早就有** `customPageNotFound`，但它的中文是 `未找到该页面！`
+  //    （HttpException 404），而 `public.controller.ts` 这两处是 `找不到自定义页面`（NotFoundException）
+  //    ⇒ **两句不同的话**，必须用不同的码名（`customPageMissing`）。
+  //    👉 🔴 重复登记会被 tsc 抓（TS1117 对象字面量不能有同名属性）—— 这次就是这么发现的；
+  //    但更隐蔽的失败是"以为在复用、其实覆盖了另一句话" ⇒ **加码前先 grep 一遍登记表**，
+  //    而且要比对**中文**，不只是看码名在不在。
+  customPageMissing: entry('找不到自定义页面', NotFoundException),
+  accessUnlockThrottled: entry('尝试次数过多，请 {seconds} 秒后再试', HttpException, 429),
+  articleUnlockThrottled: entry(
+    '这篇文章的密码尝试次数过多，请 {seconds} 秒后再试',
+    HttpException,
+    429,
+  ),
+  backupNameIllegal: entry('备份文件名不合法！', BadRequestException),
+  backupFileNotFound: entry('找不到这个备份文件！', NotFoundException),
+
   demoSiteBlocked: entry('演示站禁止修改此项！', UnauthorizedException),
   demoSiteArticleEditBlocked: entry('演示站禁止修改文章！', UnauthorizedException),
   demoSiteArticleDeleteBlocked: entry('演示站禁止删除文章！', UnauthorizedException),

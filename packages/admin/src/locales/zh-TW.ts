@@ -1874,4 +1874,27 @@ export default {
   'error.demoSitePasswordChangeBlocked': '示範站禁止修改帳號密碼！',
   'error.demoSiteLoginSecurityBlocked': '示範站禁止修改登入安全策略設定！',
   'error.demoSiteCustomizingBlocked': '示範站禁止修改客製化設定！',
+
+  // ── 🔴 期 9 第八批（17 條）── 地區用詞：**內建**（内置）/ **樣式** / **前台產物** / **單獨的檔案** /
+  //    **手動刪掉**（手工删掉）/ **重新上傳** / **路徑別名** / **過長** / **個字元**（个字符）/ **純數字** /
+  //    **衝突** / **控制字元** / **非法的檔名** / **圖片名** / **目錄之外** / **自訂頁面**（自定义页面）/
+  //    **嘗試次數過多** / **備份檔名不合法** / **備份檔案**。
+  //    🔴 `id`、`/`、`{dir}` 三份逐字相同；「」在繁中保留。
+  'error.themeIdMissing': '缺少 id',
+  'error.themeNotFoundForRead': '沒有這個主題：{id}',
+  'error.themeBuiltinNoCssFile': '「{id}」是內建主題，樣式打包在前台產物裡，沒有單獨的檔案',
+  'error.themeFileMissing': '主題檔案不在了（可能被手動刪掉），重新上傳一次即可',
+  'error.pathnameTooLong': '路徑別名過長（最多 {max} 個字元）：{pathname}',
+  'error.pathnameHasSlash': '路徑別名不能包含 "/"：{pathname}',
+  'error.pathnameNumeric': '路徑別名不能是純數字（會與文章 id 衝突）：{pathname}',
+  'error.pathnameControlChars': '路徑別名不能包含控制字元',
+  'error.storedFileNameIllegal': '非法的檔名：{name}',
+  'error.storedImageNameIllegal': '非法的圖片名：{name}',
+  'error.storedFileNameEscapes': '非法的檔名（會指向 {dir} 目錄之外）：{name}',
+  'error.storedImageNameEscapes': '非法的圖片名（會寫出 {dir} 目錄之外）：{name}',
+  'error.customPageMissing': '找不到自訂頁面',
+  'error.accessUnlockThrottled': '嘗試次數過多，請 {seconds} 秒後再試',
+  'error.articleUnlockThrottled': '這篇文章的密碼嘗試次數過多，請 {seconds} 秒後再試',
+  'error.backupNameIllegal': '備份檔名不合法！',
+  'error.backupFileNotFound': '找不到這個備份檔案！',
 };
