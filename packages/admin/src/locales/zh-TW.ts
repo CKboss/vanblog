@@ -1922,4 +1922,15 @@ export default {
   'error.publishAtInvalid': 'publishAt 不是合法時間',
   'error.publishAtInvalidValue': 'publishAt 不是合法時間：{value}',
   'error.publishAtWrongType': 'publishAt 只接受 ISO 時間字串、毫秒數或 null',
+
+  // ── 🔴 期 9 第十批（5 條）── 地區用詞：**金鑰**（密钥）/ **清單** / **檔案損壞**（文件损坏）/ **匯出**（导出）/
+  //    **恢復會覆蓋目前全部資料** / **請帶…再呼叫一次**（调用→呼叫）/ **字串**（字符串）/ **確認** /
+  //    **歸檔** / **早於簽名功能** / **簽名金鑰** / **目前簽名設定**（当前签名配置）/ **上傳備份檔案**。
+  //    🔴 `graceDays`、`0`、`365`、`confirm=true`、`true`、`"true"`、`"1"`、`"yes"`、`"TRUE"`、`name`、
+  //    `GET /api/admin/backup/signing/key` 三份逐字相同（接口契约与技术标识符）。
+  'error.backupGraceDaysInvalid': 'graceDays 必須是 0 到 365 之間的數字（0 = 舊金鑰立即失效），收到：{value}',
+  'error.backupManifestUnreadable': '讀不出這個備份的清單：檔案損壞，或不是本功能匯出的整站備份',
+  'error.backupRestoreNeedsConfirm': '恢復會覆蓋目前全部資料，請帶 confirm=true 再呼叫一次（只接受字面量 true 或字串 "true"；"1"/"yes"/"TRUE" 都不算確認）',
+  'error.backupRestoreNeedsTarget': '請指定要恢復的備份（name），或直接上傳備份檔案',
+  'error.backupSigMissing': '這份歸檔沒有 {ext}（{name}）：它可能早於簽名功能，或備份時沒有配簽名金鑰。用 GET /api/admin/backup/signing/key 看目前簽名設定。',
 };

@@ -274,6 +274,34 @@ export const SERVER_ERROR_CODES = {
   // ⚠️ 刻意**不含**三处开发者不变量：`thumbnail.ts`（"生成成功就必须有 buffer"这个不变量被破坏）、
   //    `backupCodec.ts`（解析不出 BSON 构造器）、`public.controller.ts` 的 `publicListCacheKey: 未知的 kind`
   //    —— 它们是给运维/开发者看的（消息里带函数名或内部字段名），等"开发者不变量保持中文还是改英文"的裁定。
+  // ── 整站备份接口（controller/admin/backup/backup.controller.ts，期 9 第十批）──────────────
+  // 🔴 这一批是备份族里**唯一纯界面文案**的一族（其余 `fullBackup` / `backupCrypto` / `backupSigning` /
+  //    `backupVerify` 里有很多是**写进备份清单与校验报告文件**的产物内容，要先分类再动手）。
+  //    ⚠️ `backupRestoreNeedsConfirm` 里的 `confirm=true` / `"true"` / `"1"` / `"yes"` / `"TRUE"`
+  //    是**接口契约**（调用方照着敲的字面量）⇒ 三份译文都必须逐字保留。
+  backupGraceDaysInvalid: entry(
+    'graceDays 必须是 0 到 365 之间的数字（0 = 旧密钥立即失效），收到：{value}',
+    BadRequestException,
+  ),
+  backupManifestUnreadable: entry(
+    '读不出这个备份的清单：文件损坏，或不是本功能导出的整站备份',
+    BadRequestException,
+  ),
+  backupRestoreNeedsConfirm: entry(
+    '恢复会覆盖当前全部数据，请带 confirm=true 再调用一次（只接受字面量 true 或字符串 "true"；' +
+      '"1"/"yes"/"TRUE" 都不算确认）',
+    BadRequestException,
+  ),
+  backupRestoreNeedsTarget: entry(
+    '请指定要恢复的备份（name），或直接上传备份文件',
+    BadRequestException,
+  ),
+  backupSigMissing: entry(
+    '这份归档没有 {ext}（{name}）：它可能早于签名功能，' +
+      '或备份时没有配签名密钥。用 GET /api/admin/backup/signing/key 看当前签名配置。',
+    NotFoundException,
+  ),
+
   accessPasswordTooShort: entry(
     '访问密码太短：至少 {min} 个字符（当前 {count} 个）。' +
       '解锁接口是匿名可达的（20 次/10 分钟/(IP×文章)），短密码用几个代理 IP 就能穷尽。',

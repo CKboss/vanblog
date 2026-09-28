@@ -366,11 +366,41 @@ describe('verifyFullBackup：integrity 那一组（P1）', () => {
 });
 
 describe('hashArchiveMembers（deep 校验用的那一遍流）', () => {
+  // 🔴 2026-09-28：这条断言以前数的是 `os.tmpdir()` 里的**全部**条目（`后 - 前 <= 1`）⇒
+  //    机器上任何其它进程在这几毫秒里建一个临时文件就会红：实测矩阵那一跑就是
+  //    `Expected: <= 38656 / Received: 38657`（**差 1**，与被测代码毫无关系）。
+  //    👉 🔴 **数"共享目录里的条目总数"天生就是 flaky 的判据**：它把别的进程的行为算进了自己的性质。
+  //
+  // ⚠️ 第一版修法是"给这个 describe 注入私有 `TMPDIR`"，**实测无效**：
+  //    `beforeAll` 里设了 `process.env.TMPDIR = privateTmp`，而 `os.tmpdir()` 仍然返回 `/tmp`
+  //    （Node 不会在每次调用时重读 TMPDIR）⇒ 是我加的那条反空转断言
+  //    `expect(os.tmpdir()).toBe(privateTmp)` 当场把它抓出来的（`Expected: /tmp/vanblog-verify-private-… / Received: /tmp`）。
+  //    👉 🔴 **"我修好了 flaky 判据"这种改动，必须有一条断言证明修法真的生效** ——
+  //    否则只是把假红换了个地方，而且看起来更"专业"。
+  //
+  // 现在的修法：**只数"看起来是被测代码留下的"条目**（本仓库的临时目录前缀 `vanblog-` / `full-backup-` /
+  //    `full-restore-`，以及 `*.tmp-<pid>` 这种半成品名），把别的进程的噪音排除掉；
+  //    并且 🔴 带一条**合成反证**（canary）：故意在 /tmp 里造一个符合这些前缀的条目，判据必须抓到它
+  //    （否则"过滤"可能过滤掉了 everything，断言变成恒真）。
+  const OURS = /^vanblog-|^full-backup-|^full-restore-|\.tmp-\d+$/;
+  const ourTmpEntries = () => fs.readdirSync(os.tmpdir()).filter((n) => OURS.test(n)).sort();
+
+  it('🔴 反证：判据真的在看"我们自己那类"条目（canary 必须被抓到）', () => {
+    const canary = path.join(os.tmpdir(), `vanblog-verify-canary-${process.pid}`);
+    fs.writeFileSync(canary, 'x');
+    try {
+      expect(ourTmpEntries()).toContain(`vanblog-verify-canary-${process.pid}`);
+    } finally {
+      fs.rmSync(canary, { force: true });
+    }
+    expect(ourTmpEntries()).not.toContain(`vanblog-verify-canary-${process.pid}`);
+  });
+
   it('不落盘、不解包，直接给出每个成员的哈希（内存与临时目录都不涨）', async () => {
     const dir = tmpDir();
     try {
       const { archivePath, expectedHashes } = await buildArchive(dir);
-      const before = fs.readdirSync(os.tmpdir()).length;
+      const beforeOurs = ourTmpEntries();
       const { result, decompressError } = await hashArchiveMembers(archivePath, specFor('gzip')!);
       expect(decompressError).toBeNull();
       expect(result.complete).toBe(true);
@@ -378,7 +408,10 @@ describe('hashArchiveMembers（deep 校验用的那一遍流）', () => {
         expect(result.members[name]).toEqual(expected);
       }
       // 没有在临时目录里留下解包出来的东西
-      expect(fs.readdirSync(os.tmpdir()).length).toBeLessThanOrEqual(before + 1);
+      // 🔴 只比"我们自己那类"条目（见上面 OURS）：本 spec 自己用 `vanblog-verify-int-*` 建过目录，
+      //    所以按**名字集合**比（新增的才算），而不是比总数。
+      const added = ourTmpEntries().filter((n) => !beforeOurs.includes(n) && !n.startsWith('vanblog-verify-int-'));
+      expect(added).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

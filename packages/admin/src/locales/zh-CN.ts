@@ -2147,4 +2147,15 @@ export default {
   'error.publishAtInvalid': 'publishAt 不是合法时间',
   'error.publishAtInvalidValue': 'publishAt 不是合法时间：{value}',
   'error.publishAtWrongType': 'publishAt 只接受 ISO 时间字符串、毫秒数或 null',
+
+  // ── 🔴 期 9 第十批：整站备份接口 5 个码（`backup.controller.ts`）。
+  //    这是备份族里**唯一纯界面文案**的一族 —— 其余 `fullBackup` / `backupCrypto` / `backupSigning` /
+  //    `backupVerify` 里有很多是**写进备份清单与校验报告文件**的产物内容，要先分类再动手。
+  //    ⚠️ `backupRestoreNeedsConfirm` 里的 `confirm=true` / `"true"` / `"1"` / `"yes"` / `"TRUE"`
+  //    是**接口契约**（调用方照着敲的字面量）⇒ 三份译文都逐字保留。
+  'error.backupGraceDaysInvalid': 'graceDays 必须是 0 到 365 之间的数字（0 = 旧密钥立即失效），收到：{value}',
+  'error.backupManifestUnreadable': '读不出这个备份的清单：文件损坏，或不是本功能导出的整站备份',
+  'error.backupRestoreNeedsConfirm': '恢复会覆盖当前全部数据，请带 confirm=true 再调用一次（只接受字面量 true 或字符串 "true"；"1"/"yes"/"TRUE" 都不算确认）',
+  'error.backupRestoreNeedsTarget': '请指定要恢复的备份（name），或直接上传备份文件',
+  'error.backupSigMissing': '这份归档没有 {ext}（{name}）：它可能早于签名功能，或备份时没有配签名密钥。用 GET /api/admin/backup/signing/key 看当前签名配置。',
 };

@@ -261,6 +261,12 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   imgNoDetectableImages: { status: 400, error: 'Bad Request' },
   // 🔴 期 9 第八批：17 个码（主题读取 / 路径别名 / 落盘文件名 / 公开接口限流 / 备份文件名）
   // 🔴 期 9 第九批：18 个码（访问密码 / 改写 baseUrl / 附件 / 路径别名 / 图片压缩 / 非法路径 / 流水线 id / 定时发布）
+  // 🔴 期 9 第十批：整站备份接口 5 个码
+  backupGraceDaysInvalid: { status: 400, error: 'Bad Request' },
+  backupManifestUnreadable: { status: 400, error: 'Bad Request' },
+  backupRestoreNeedsConfirm: { status: 400, error: 'Bad Request' },
+  backupRestoreNeedsTarget: { status: 400, error: 'Bad Request' },
+  backupSigMissing: { status: 404, error: 'Not Found' },
   accessPasswordTooShort: { status: 400, error: 'Bad Request' },
   accessPasswordMustBeString: { status: 400, error: 'Bad Request' },
   accessPasswordClearConflict: { status: 400, error: 'Bad Request' },

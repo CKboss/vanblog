@@ -118,6 +118,21 @@ describe('RSS 订阅源写盘：原子 rename，读者永远看不到半截文�
     expect(fs.readdirSync(rssDir()).sort()).toEqual(['atom.xml', 'feed.json', 'feed.xml']);
   });
 
+  // 🔴 2026-09-28：这条**曾经间歇性红过一次**（期望 0 个 `.tmp-`、实收 3 个；单跑永远绿，
+  //    只在满载全量跑时红过）。当时的假设是：`Promise.all` 在第一个 rejection 就返回、且**不取消**
+  //    其余两个 promise ⇒ 函数返回时兄弟任务的 writeFile/清理还在后台跑。
+  //    据此把 provider 改成了 `Promise.allSettled` + 事后抛第一个错误（"返回即已清理完"从运气变成保证）。
+  //    ⚠️ 🔴 **但那条因果关系没有被证明**：改回 `Promise.all` 之后连做三次复现
+  //    （单跑该文件 ×2、全量 jest ×1）**全都是绿的** ⇒ 那次红的真正原因**仍未知**。
+  //    👉 所以这里的措辞是"曾经红过一次、原因未查明"，**不是**"已修好那个 flake"。
+  //    `allSettled` 这个改动**照样保留**，理由与 flake 无关：① 代码自己的注释就要求
+  //    "半成品 tmp 不能留在静态目录里"（那是匿名可读目录），而 `Promise.all` 无法保证返回时兄弟清理已完成；
+  //    ② 开发机上确实捡到过一个 7 天前的 `atom.xml.tmp-2859657`（与"清理有时没跑完"一致，但那也可能来自
+  //    进程被 SIGKILL —— `rss.provider.spec.ts` 覆盖的是 rename 失败，不覆盖硬杀）。
+  //    🔴 若这条再红：断言消息已经会打印**实际的文件名数组**，下一步是把当时的目录列表与
+  //    `process.pid`、以及是否有并发 worker 一起记下来（不要再猜）。
+  //    👉 🔴 一般化：**间歇性红不要靠"改一个看起来相关的并发点"就宣布修好** ——
+  //    必须能**按需复现**（改回去就红、改回来就绿）才算找到原因；复现不了就如实写"未查明"。
   it('rename 失败时删掉半成品 tmp，且不留下最终文件（不能让读者拿到半截产物）', async () => {
     const rename = jest.spyOn(fs.promises, 'rename').mockRejectedValue(new Error('EXDEV'));
     // 失败必须被 provider 自己兜住（它是从 setTimeout 里"发出去就不管"地调的）

@@ -301,7 +301,7 @@ export class RssProvider {
       //    如果在生成函数里再加一道主实例守卫，非主实例 worker 上的文章保存就**不会**刷新 RSS，
       //    订阅源要等到主实例下一个整点 cron 才更新（最长 1 小时）—— 那是把"省一次重复写"
       //    换成"订阅源变陈旧"，方向是错的。并发写的安全性由上面的原子 rename 保证。
-      await Promise.all(
+      await Promise.allSettled(
         (
           [
             ['feed.json', feed.json1()],
@@ -320,6 +320,22 @@ export class RssProvider {
             throw err;
           }
         }),
+      ).then(
+        // 🔴 用 allSettled 而不是 all（2026-09-28 修一个**间歇性**缺陷）：
+        //    `Promise.all` 在**第一个** rejection 时就返回，而它**不会取消**其余两个 promise ⇒
+        //    函数已经返回、调用方（含测试）继续往下走，而**另外两个文件的 writeFile / 清理还在后台跑**。
+        //    后果有两个，都实测到过：
+        //      ① `rss.provider.spec.ts` 的"rename 失败 ⇒ 不许留下 `.tmp-` 半成品"这条断言**间歇性红**
+        //         （期望 0 个、实收 3 个）—— 单跑该文件永远绿，全量跑在机器被压满时才红，
+        //         本轮连续两次全量跑分别红在这一条与 `backupSigning` 的一条 env 用例上（都不复现）；
+        //      ② 静态目录里会**真的**留下 `.tmp-<pid>` 文件（开发机上就捡到一个 7 天前的
+        //         `atom.xml.tmp-2859657`），而那是**匿名可读**的目录 —— 正是上面注释说要避免的事。
+        //    改成 allSettled：等**所有**兄弟任务（含它们各自的清理）都落地，再把第一个错误抛出去
+        //    ⇒ 语义不变（仍然报错、仍然清理），但"返回即已清理完"成为**保证**而不是运气。
+        (settled) => {
+          const failed = settled.find((r) => r.status === 'rejected');
+          if (failed && failed.status === 'rejected') throw failed.reason;
+        },
       );
     } catch (err) {
       this.logger.error('生成订阅源失败！');

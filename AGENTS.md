@@ -9469,6 +9469,87 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.192 期 9 第十批：整站备份接口 **5 个码**（throw 91 → 86），🔴 以及一次**没能证明**的因果推断 —— 间歇性红三次复现失败，如实记成"原因未查明"
+
+**交付**：`controller/admin/backup/backup.controller.ts` 的 5 处 throw ⇒ **5 个码**
+（`backupGraceDaysInvalid` / `backupManifestUnreadable` / `backupRestoreNeedsConfirm` /
+`backupRestoreNeedsTarget` / `backupSigMissing`），错误码 **170 → 175**（黄金快照 175 条），
+语言包 **1615 → 1620 key ×3**（🔴 用 `readPack()` **量**出来的，不是心算 —— 上一批就是因为心算"18×3=+54"
+把基线写成 1651 而当场红），throw 棘轮 **91 → 86**。
+这是备份族里**唯一纯界面文案**的一族；其余 `fullBackup`(24) / `backupCrypto`(12) / `backupSigning`(11) /
+`backupVerify`(6 个 `message:`) 里有大量**写进备份清单与校验报告文件**的产物内容，要先分类再动手。
+⚠️ `backupRestoreNeedsConfirm` 里的 `confirm=true` / `"true"` / `"1"` / `"yes"` / `"TRUE"` 是**接口契约**
+（调用方照着敲的字面量）⇒ 三份译文逐字保留，并有变异对照钉住（B50-M3：把 `confirm=true` 改成 `confirm=1` ⇒ 红）。
+⚠️ 同一文件里还有一处中文**刻意没动**：`recordRestoreRejection('confirm-missing', '破坏性恢复请求缺少有效的 confirm=true（来源：…）')`
+—— 那是**安全审计日志**的内容（开发者/运维界面），不是响应文案 ⇒ 两个棘轮也都不数它（形状是普通函数实参）。
+
+#### A. 🔴 一次**没能证明**的因果推断（这一段比那 5 个码更值得读）
+全量 jest 连续两次各红一条、且**两次红的不是同一条**：
+第一次 `backupSigning.spec.ts`（"env 里给内联私钥就能签名"）、第二次 `rss.provider.spec.ts`
+（"rename 失败时删掉半成品 tmp，且不留下最终文件" ⇒ `期望 [] / 实收 3 个 .tmp-`）。
+两个都**单跑永远绿**。我对 RSS 那条提出了一个看起来很合理的解释：
+`Promise.all` 在**第一个** rejection 就返回、而且**不取消**其余两个 promise ⇒
+函数返回时另外两个订阅源文件的 `writeFile` / `rm` 清理**还在后台跑** ⇒ 断言那一刻还能看到 3 个 `.tmp-`。
+于是把 provider 改成 `Promise.allSettled` + 事后抛第一个错误（"返回即已清理完"从运气变成保证）。
+🔴 **然后我按规矩去打变异对照（改回 `Promise.all` 就应该红）—— 三次全绿**：
+单跑该文件 ×2、**全量 jest** ×1（当初红就是在全量满载时）。
+⇒ **因果关系没有被证明**。那次红的真正原因**仍未知**。
+处理（三条，缺一不可）：
+1. 🔴 **措辞改回如实**：spec 里那段注释从"根因是 Promise.all、已修"改成
+   "**曾经红过一次、原因未查明**；`allSettled` 这个改动照样保留，但理由与 flake 无关"；
+2. **保留改动的独立理由**（不靠 flake 背书）：① 代码自己的注释就要求"半成品 tmp 不能留在静态目录里"
+   （`<static>/rss/` 是**匿名可读**的），而 `Promise.all` 确实无法保证返回时兄弟任务的清理已完成；
+   ② 开发机上确实捡到过一个 **7 天前**的 `atom.xml.tmp-2859657`（与"清理有时没跑完"一致 ——
+   但也可能来自进程被 SIGKILL，而 spec 覆盖的是 rename 失败、不覆盖硬杀 ⇒ 不能拿它当证据）；
+3. **给下一次留好取证**：断言消息本来就会打印**实际的文件名数组**；注释里写明"若再红，
+   把当时的目录列表、`process.pid`、是否有并发 worker 一起记下来，**不要再猜**"。
+👉 🔴 **一般化：间歇性红不要靠"改一个看起来相关的并发点"就宣布修好。**
+判定标准是**能不能按需复现**（改回去就红、改回来就绿）；复现不了就写"未查明"，
+并把改动降级成"独立的健壮性改进"（要么给出与 flake 无关的理由，要么就别改）。
+👉 这条与"结论对不等于理由对"是同一件事的另一面：**这次是"改动可能是对的，但理由是错的"** ——
+如果我把错误的因果写进注释，下一个人遇到同类 flake 就会照抄这个解释，
+而真正的原因（可能是 worker 并发、可能是 mock 时序、可能是磁盘慢）会继续藏着。
+⚠️ 顺带如实记录：`backupSigning.spec.ts` 那条（env 内联私钥）**也没有再复现过**，同样记为"未查明"。
+本项目"负载敏感/间歇性"的清单因此从 8 次变成 **10 次观测、0 次可复现**。
+
+#### B. 变异对照 4/4
+① 把"读不出清单"那处退回硬编码中文 throw ⇒ 棘轮红（2 条断言）；
+② 把 `backupSigMissing` 的 params 名 `ext` 写成 `ext2` ⇒ 调用点参数对账红；
+③ 🔴 把码表里 `confirm=true` 改成 `confirm=1`（**接口契约字面量**）⇒ 逐字对账/契约红；
+④ 语义空操作（相邻码换序）⇒ 绿。
+（另：`allSettled` 那条**没有**变异对照 —— 因为它复现不出来，见 A 段。🔴 **没有变异对照的改动要写清为什么**，
+不能假装它被验过。）
+
+#### A2. 🔴 第三次被"/tmp 条目计数"假红绊到 ⇒ 这次真的修了它，而**第一版修法是无效的**（被自己的反空转抓住）
+矩阵那一跑红在 `backupVerify.integrity.spec.ts`：`Expected: <= 38656 / Received: 38657`（**差 1**）。
+那条判据数的是 `os.tmpdir()` 里的**全部**条目（"跑完之后不超过 before + 1"）⇒
+🔴 机器上**任何**其它进程在这几毫秒里建一个临时文件就会红，与被测代码毫无关系。
+👉 🔴 **数"共享目录里的条目总数"天生就是 flaky 的判据**：它把别的进程的行为算进了自己的性质。
+（这条待办在手册里挂了很久，这是第三次撞见 —— 前两次分别在 `rss.provider.spec.ts` 与全量 jest 里。）
+- **第一版修法（无效）**：给那个 describe 注入私有 `TMPDIR`（`beforeAll` 里 `process.env.TMPDIR = privateTmp`）。
+  🔴 实测**根本没生效**：`os.tmpdir()` 仍然返回 `/tmp`（Node 不会在每次调用时重读 `TMPDIR`）。
+  抓住它的是我顺手加的那条反空转断言 `expect(os.tmpdir()).toBe(privateTmp)`
+  （`Expected: /tmp/vanblog-verify-private-… / Received: /tmp`）——
+  如果没有这条，我会以为 flaky 判据已经修好，而它只是**换了个地方继续假红**，而且看起来更"专业"。
+  👉 🔴 **"我修好了某个 flaky/判据"这种改动，必须自带一条断言证明修法真的生效。**
+- **第二版修法（有效）**：只数"**看起来是被测代码留下的**"条目 ——
+  `OURS = /^vanblog-|^full-backup-|^full-restore-|\.tmp-\d+$/`，并按**名字集合**比"新增的"（不是比总数）。
+  🔴 并且带一条**合成反证（canary）**：故意在 `/tmp` 里造一个 `vanblog-verify-canary-<pid>`，
+  断言判据**必须**抓到它、删掉后必须不再看到 —— 否则"过滤"可能把 everything 都过滤掉，断言变成**恒真**。
+- 验证：单跑 17/17 绿；在 `/tmp` 里先造 5 个无关临时文件再跑仍然绿；全量 jest 绿（**4258** 用例，+1 = canary）。
+
+#### C. 基线
+- admin `node --test` **786 tests / 177 suites / 0 fail**；jest **288 套件 / 4258 用例（4254 + 4 skip）/ 0 FAIL**
+  （🔴 连续多次全量跑全绿；用例数以 jest 汇总行为准，上一批我手算错过一次）；
+- 语言包 **1620 key** ×3（重复 0）；`--zh-tw-audit`：1620 key / **819** 汉字 / **0 命中**；
+- 错误码 **175 个**；服务端棘轮 **throw 86** / **`message:` 18**；admin 类型门禁 **31/0**、server `tsc` **0 错**；
+- 🔴 剩余 86 处的构成：`fullBackup.ts` 24、`backupCrypto.ts` 12、`backupSigning.ts` 11、
+  `markdownExport.ts` 7 + `safeFetch.ts` 7（要先改**报告数据形状**）、三处**开发者不变量**待裁定
+  （`thumbnail.ts` / `backupCodec.ts` / `publicListCacheKey`），其余为零散 1–3 处的小文件。
+- 下一批（期 9 第十一批）：`backupSigning.ts`(11) —— 它是备份族里**最接近纯界面文案**的一族
+  （签名/验签的拒绝原因都会回到后台）；然后 `backupCrypto.ts`(12)；
+  `fullBackup.ts`(24) 与 `backupVerify`(6) 要先做"产物内容 vs 界面文案"的逐条分类。
+
 ### 7.191 期 9 第九批：小工具族 **18 个码**（throw 107 → 91），🔴 两条变异对照打不红 ⇒ 又补上两个"没人守的性质"（分支↔码的语义错配 / 给已格式化字符串套 ICU 复数会渲染出 NaN）
 
 **交付**：`accessPassword.ts`(3) + `rewriteBaseUrl.ts`(3) + `attachment.ts`(2) + `article.provider.ts`(2→1 码) +
@@ -9526,7 +9607,8 @@ zh-CN 里那个占位符紧跟一个中文量词**（`{min} 个字符`、`{secon
 
 #### D. 基线
 - admin `node --test` **786 tests / 177 suites / 0 fail**（+1 = "ICU 复数只许用在紧跟量词的占位符上"）；
-- jest **288 套件 / 4258 用例 / 0 FAIL**（+6 = rewriteBaseUrl 的行为断言）；
+- jest **288 套件 / 4257 用例 / 0 FAIL**（+5 = rewriteBaseUrl 的 4 个 `it.each` case + 1 条反空转）；
+  🔴 上一版这里写的是 4258 / +6 —— **数错了**。👉 用例数一律从 jest 的汇总行**抄**，不要自己加。
 - 语言包 **1615 key** ×3（重复 0）；`--zh-tw-audit`：1615 key / **819** 汉字 / **0 命中**；
 - 错误码 **170 个**（全部三语、全部被真实调用、黄金快照 170 条、调用点参数两向对账）；
 - 服务端棘轮：**throw 91**、**`message:` 18**；admin 类型门禁 **31/0**、server `tsc` **0 错**；

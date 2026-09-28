@@ -1975,4 +1975,14 @@ export default {
   'error.publishAtInvalid': 'The publishAt value is not a valid time',
   'error.publishAtInvalidValue': 'The publishAt value is not a valid time: {value}',
   'error.publishAtWrongType': 'The publishAt field accepts only an ISO time string, milliseconds, or null',
+
+  // ── 🔴 期 9 第十批（5 keys）── 英文按"运维文档"的口吻写（这些显示在后台「备份与恢复」里）。
+  //    🔴 接口契约字面量逐字保留：`confirm=true`、`true`、`"true"`、`"1"`、`"yes"`、`"TRUE"`、`name`、
+  //    `graceDays`、`GET /api/admin/backup/signing/key`、数字 `0` 与 `365`。
+  //    ⚠️ 不用缩写（ICU 把单引号当转义符）、不用全角标点；`：` → `: `、`（）` → `()`。
+  'error.backupGraceDaysInvalid': 'Parameter graceDays must be a number between 0 and 365 (0 = old keys are invalidated immediately); received: {value}',
+  'error.backupManifestUnreadable': 'Cannot read the manifest of this backup: the file is corrupt, or it is not a full-site backup exported by this feature',
+  'error.backupRestoreNeedsConfirm': 'Restore will overwrite all current data; call again with confirm=true (only the literal true or the string "true" is accepted; "1"/"yes"/"TRUE" do not count as confirmation)',
+  'error.backupRestoreNeedsTarget': 'Specify the backup to restore (name), or upload a backup file directly',
+  'error.backupSigMissing': 'This archive is missing {ext} ({name}): it may predate the signing feature, or no signing key was configured when the backup was made. Use GET /api/admin/backup/signing/key to view the current signing configuration.',
 };

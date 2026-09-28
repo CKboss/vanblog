@@ -13,7 +13,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { codedBody } from 'src/utils/serverErrorCodes';
+import { codedBody, codedError } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import {
   BACKUP_SIG_EXT,
@@ -122,9 +122,7 @@ export class BackupController {
     if (body?.graceDays !== undefined && body?.graceDays !== null && `${body.graceDays}` !== '') {
       const parsed = Number(body.graceDays);
       if (!Number.isFinite(parsed) || parsed < 0 || parsed > 365) {
-        throw new BadRequestException(
-          `graceDays 必须是 0 到 365 之间的数字（0 = 旧密钥立即失效），收到：${String(body.graceDays).slice(0, 40)}`,
-        );
+        throw codedError('backupGraceDaysInvalid', { value: String(body.graceDays).slice(0, 40) });
       }
       graceDays = parsed;
     }
@@ -457,7 +455,7 @@ export class BackupController {
   async inspectFull(@Body() body: { name?: string }) {
     const manifest = await this.fullBackupProvider.inspect(body?.name || '');
     if (!manifest) {
-      throw new BadRequestException('读不出这个备份的清单：文件损坏，或不是本功能导出的整站备份');
+      throw codedError('backupManifestUnreadable');
     }
     return { statusCode: 200, data: manifest };
   }
@@ -508,16 +506,13 @@ export class BackupController {
           uploadedPath ? '上传的文件' : `已有备份 ${String(body?.name ?? '(未指定)')}`
         }）`,
       );
-      throw new BadRequestException(
-        '恢复会覆盖当前全部数据，请带 confirm=true 再调用一次（只接受字面量 true 或字符串 "true"；' +
-          '"1"/"yes"/"TRUE" 都不算确认）',
-      );
+      throw codedError('backupRestoreNeedsConfirm');
     }
     let archivePath = uploadedPath;
     const uploaded = Boolean(uploadedPath);
     if (!archivePath) {
       if (!body?.name) {
-        throw new BadRequestException('请指定要恢复的备份（name），或直接上传备份文件');
+        throw codedError('backupRestoreNeedsTarget');
       }
       archivePath = this.fullBackupProvider.resolveArchive(body.name);
     }
@@ -616,10 +611,10 @@ export class BackupController {
     if (!fs.existsSync(sigPath)) {
       // ⚠️ 明确 404 而不是返回空文件：空文件会被 `readSignatureSidecar` 判成 malformed，
       //    于是站长看到的是"签名坏了"，而真相是"这份归档从没被签过"。
-      throw new NotFoundException(
-        `这份归档没有 ${BACKUP_SIG_EXT}（${path.basename(archivePath)}）：它可能早于签名功能，` +
-          `或备份时没有配签名密钥。用 GET /api/admin/backup/signing/key 看当前签名配置。`,
-      );
+      throw codedError('backupSigMissing', {
+        ext: BACKUP_SIG_EXT,
+        name: path.basename(archivePath),
+      });
     }
     res.download(sigPath, path.basename(sigPath), (err) => {
       if (err) {
