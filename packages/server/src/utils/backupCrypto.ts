@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { Transform, TransformCallback, Readable } from 'stream';
@@ -151,16 +152,16 @@ export function resolveBackupPassphrase(
     } catch (err) {
       // 设了 _FILE 却读不到 ⇒ **失败关闭**。静默回落到"没口令"会让站长以为
       // 归档是加密的，实际写出的是明文 —— 那比不做这个功能更糟。
-      throw new BadRequestException(
-        `读取 ${BACKUP_PASSPHRASE_FILE_ENV}（${filePath}）失败：${(err as Error)?.message || err}` +
-          ` —— 已拒绝继续（不会静默回落到明文备份）。请检查路径与读权限，或改用 ${BACKUP_PASSPHRASE_ENV}。`,
-      );
+            throw codedError('passphraseFileReadFailed', {
+        env: BACKUP_PASSPHRASE_FILE_ENV,
+        path: filePath,
+        reason: (err as Error)?.message || String(err),
+        envInline: BACKUP_PASSPHRASE_ENV,
+      });
     }
     const value = raw.replace(/\s+$/, '');
     if (!value) {
-      throw new BadRequestException(
-        `${BACKUP_PASSPHRASE_FILE_ENV}（${filePath}）去掉尾部空白后是空的：拒绝用它加密备份`,
-      );
+            throw codedError('passphraseFileEmpty', { env: BACKUP_PASSPHRASE_FILE_ENV, path: filePath });
     }
     return { passphrase: value, source: 'file', describe: () => describePassphrase(value) };
   }
@@ -177,12 +178,12 @@ export function resolveBackupPassphrase(
 export function assertPassphraseUsableForEncryption(passphrase: string): void {
   const bytes = Buffer.byteLength(passphrase, 'utf8');
   if (bytes < MIN_BACKUP_PASSPHRASE_LENGTH) {
-    throw new BadRequestException(
-      `备份口令太短（${bytes} 字节，最少 ${MIN_BACKUP_PASSPHRASE_LENGTH} 字节）：` +
-        `scrypt 再贵也救不了短口令，而一份能被离线爆破的归档只会给人虚假的安全感。` +
-        `请用更长的口令（一句只有你知道的话就够），或清掉 ${BACKUP_PASSPHRASE_ENV} / ` +
-        `${BACKUP_PASSPHRASE_FILE_ENV} 回到明文备份（明文归档请按凭据保管，权限已是 0600）。`,
-    );
+        throw codedError('passphraseTooShort', {
+      size: bytes,
+      min: MIN_BACKUP_PASSPHRASE_LENGTH,
+      env: BACKUP_PASSPHRASE_ENV,
+      envFile: BACKUP_PASSPHRASE_FILE_ENV,
+    });
   }
 }
 
@@ -212,24 +213,28 @@ export function readEncryptionHeader(archivePath: string): BackupEncryptionHeade
     const lenBuf = Buffer.alloc(5); // 1 字节 headerVersion + 4 字节 headerLen
     const gotLen = fs.readSync(fd, lenBuf, 0, 5, MAGIC_BUF.length);
     if (gotLen < 5) {
-      throw new BadRequestException(`加密归档头部被截断（${archivePath}）：读不到版本/长度字段`);
+            throw codedError('encHeaderTruncatedNoVersion', { path: archivePath });
     }
     const version = lenBuf[0];
     if (version !== HEADER_VERSION) {
-      throw new BadRequestException(
-        `不支持的加密归档版本 ${version}（本程序只认 ${HEADER_VERSION}）：${archivePath}`,
-      );
+            throw codedError('encVersionUnsupported', {
+        version,
+        expected: HEADER_VERSION,
+        path: archivePath,
+      });
     }
     const headerLen = lenBuf.readUInt32LE(1);
     if (headerLen <= 0 || headerLen > MAX_HEADER_JSON_BYTES) {
-      throw new BadRequestException(
-        `加密归档头部长度非法（${headerLen} 字节，上限 ${MAX_HEADER_JSON_BYTES}）：${archivePath}`,
-      );
+            throw codedError('encHeaderLenInvalid', {
+        size: headerLen,
+        max: MAX_HEADER_JSON_BYTES,
+        path: archivePath,
+      });
     }
     const jsonBuf = Buffer.alloc(headerLen);
     const gotJson = fs.readSync(fd, jsonBuf, 0, headerLen, MAGIC_BUF.length + 5);
     if (gotJson < headerLen) {
-      throw new BadRequestException(`加密归档头部被截断（${archivePath}）：JSON 不完整`);
+            throw codedError('encHeaderTruncatedJson', { path: archivePath });
     }
     const header = JSON.parse(jsonBuf.toString('utf8')) as BackupEncryptionHeader;
     assertHeaderShape(header, archivePath);
@@ -241,9 +246,10 @@ export function readEncryptionHeader(archivePath: string): BackupEncryptionHeade
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
       return null;
     }
-    throw new BadRequestException(
-      `读不出加密归档头部（${archivePath}）：${(err as Error)?.message || err}`,
-    );
+        throw codedError('encHeaderUnreadable', {
+      path: archivePath,
+      reason: (err as Error)?.message || String(err),
+    });
   } finally {
     if (fd !== null) {
       try {
@@ -607,10 +613,7 @@ function decryptRecord(
   // 后者去查拷贝/传输链路）。
   const expectedIv = chunkIv(baseIv, index);
   if (!iv.equals(expectedIv)) {
-    throw new BadRequestException(
-      `加密归档的块顺序不对（第 ${index + 1} 块的 IV 与序号不匹配）：` +
-        '归档可能被重排、丢块，或截断后又被拼接过。',
-    );
+        throw codedError('encChunkOrderWrong', { index: index + 1 });
   }
   const decipher = crypto.createDecipheriv(ENC_CIPHER, key, iv);
   decipher.setAAD(chunkAad(headerPrefix, headerJson, index, flags));
@@ -618,10 +621,7 @@ function decryptRecord(
   try {
     return Buffer.concat([decipher.update(ct), decipher.final()]);
   } catch {
-    throw new BadRequestException(
-      `解密失败（第 ${index + 1} 块）：口令不正确，或归档已被篡改/损坏` +
-        `（${ENC_CIPHER} 认证未通过）。口令与 salt 都不会写进日志。`,
-    );
+        throw codedError('encDecryptFailed', { index: index + 1, cipher: ENC_CIPHER });
   }
 }
 
@@ -643,12 +643,12 @@ export async function openDecryptedSource(
   }
   const resolved = resolveBackupPassphrase(env, explicitPassphrase);
   if (!resolved.passphrase) {
-    throw new BadRequestException(
-      `这份归档是加密的（${BACKUP_ENC_MAGIC}，scrypt + ${ENC_CIPHER}），但当前没有可用的解密口令。` +
-        `两个办法任选：①在恢复请求的 body 里带 \`backupPassphrase\`（只走 body，不会进 URL 或访问日志）；` +
-        `②给 server 设置 ${BACKUP_PASSPHRASE_ENV} 或 ${BACKUP_PASSPHRASE_FILE_ENV} 后重试。` +
-        `（口令不会被回显，报错与日志里只有长度。）`,
-    );
+        throw codedError('encNeedsPassphrase', {
+      magic: BACKUP_ENC_MAGIC,
+      cipher: ENC_CIPHER,
+      env: BACKUP_PASSPHRASE_ENV,
+      envFile: BACKUP_PASSPHRASE_FILE_ENV,
+    });
   }
   const key = await deriveBackupKeyFromHeader(resolved.passphrase, header);
   const fileStream = fs.createReadStream(archivePath);

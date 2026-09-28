@@ -296,6 +296,61 @@ export const SERVER_ERROR_CODES = {
   // 🔴 `signingKeyWrongType` 原来是**内层** `throw new Error(中文)`、被外层 catch 拼进
   //    `签名私钥不可用：${err.message}。…` ⇒ 迁移时把它改成**直接抛码**，并让外层 catch
   //    "已经是带码的 HttpException 就原样重抛"（否则会被二次包装成 `签名私钥不可用：…`）。
+  // ── 备份加密（utils/backupCrypto.ts，期 9 第十三批 13a）─────────────────────
+  // 🔴 这一批**只做 11 处"独立句"**；`assertHeaderShape()` 里那 13 个 `bad('中文原因')` 变体
+  //    是**下一批（13b）**的活 —— 它是"内层给原因、外层拼一句 `加密归档头部不可信（{原因}）：{路径}`"
+  //    的形状（与 §7.194 A 段的签名密钥同型），要么把 13 个原因各升级成完整句码，
+  //    要么整批推迟；🔴 绝不能只翻外壳（那会得到"英文外壳 + 中文内核"）。
+  // ⚠️ `{env}` / `{envFile}` / `{envInline}` / `{cipher}` / `{magic}` 传的都是**ASCII 技术标识符**
+  //    （环境变量名、算法名、magic 串）⇒ 三语一样，不是"把文案当参数传"。
+  passphraseFileReadFailed: entry(
+    '读取 {env}（{path}）失败：{reason} —— 已拒绝继续（不会静默回落到明文备份）。' +
+      '请检查路径与读权限，或改用 {envInline}。',
+    BadRequestException,
+  ),
+  passphraseFileEmpty: entry(
+    '{env}（{path}）去掉尾部空白后是空的：拒绝用它加密备份',
+    BadRequestException,
+  ),
+  passphraseTooShort: entry(
+    '备份口令太短（{size} 字节，最少 {min} 字节）：' +
+      'scrypt 再贵也救不了短口令，而一份能被离线爆破的归档只会给人虚假的安全感。' +
+      '请用更长的口令（一句只有你知道的话就够），或清掉 {env} / {envFile} ' +
+      '回到明文备份（明文归档请按凭据保管，权限已是 0600）。',
+    BadRequestException,
+  ),
+  encHeaderTruncatedNoVersion: entry(
+    '加密归档头部被截断（{path}）：读不到版本/长度字段',
+    BadRequestException,
+  ),
+  encVersionUnsupported: entry(
+    '不支持的加密归档版本 {version}（本程序只认 {expected}）：{path}',
+    BadRequestException,
+  ),
+  encHeaderLenInvalid: entry(
+    '加密归档头部长度非法（{size} 字节，上限 {max}）：{path}',
+    BadRequestException,
+  ),
+  encHeaderTruncatedJson: entry('加密归档头部被截断（{path}）：JSON 不完整', BadRequestException),
+  encHeaderUnreadable: entry('读不出加密归档头部（{path}）：{reason}', BadRequestException),
+  encChunkOrderWrong: entry(
+    '加密归档的块顺序不对（第 {index} 块的 IV 与序号不匹配）：' +
+      '归档可能被重排、丢块，或截断后又被拼接过。',
+    BadRequestException,
+  ),
+  encDecryptFailed: entry(
+    '解密失败（第 {index} 块）：口令不正确，或归档已被篡改/损坏' +
+      '（{cipher} 认证未通过）。口令与 salt 都不会写进日志。',
+    BadRequestException,
+  ),
+  encNeedsPassphrase: entry(
+    '这份归档是加密的（{magic}，scrypt + {cipher}），但当前没有可用的解密口令。' +
+      '两个办法任选：①在恢复请求的 body 里带 `backupPassphrase`（只走 body，不会进 URL 或访问日志）；' +
+      '②给 server 设置 {env} 或 {envFile} 后重试。' +
+      '（口令不会被回显，报错与日志里只有长度。）',
+    BadRequestException,
+  ),
+
   signingKeyFileReadFailed: entry(
     '读取 {env}（{path}）失败：{reason} —— 已拒绝继续（不会静默回落到"不签名"）。' +
       '请检查路径与读权限，或改用内联变量。',

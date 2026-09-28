@@ -2386,6 +2386,13 @@ describe('🔴 英文的 ICU plural 只许用在"中文里紧跟量词"的占位
     const PLURAL_OK_WITHOUT_MEASURE = {
       'revision.wordCountValue': '中文是「字数 {count}」—— 量词在占位符**前面**，值确实是纯数字',
       'error.initRestoreSigTooLarge': '中文是「（{size} 字节，上限 {max}）」—— 单位在句子更前面，{max} 是纯数字（字节数）',
+      // 🔴 期 9 第十三批（13a）新增：与上一条**同一个形状**（单位在同一句更前面出现过，后面那个占位符把单位省了）
+      //    `加密归档头部长度非法（{size} 字节，上限 {max}）` ⇒ `{max}` 传的是 `MAX_HEADER_JSON_BYTES`
+      //    （**纯数字**，不是 `formatBytes()` 那种已格式化字符串）⇒ 英文用复数是对的（否则 "limit 1 bytes"）。
+      //    👉 这条白名单现在有两个同形状条目 ⇒ 说明"量词在前一句"是**常见的中文写法**，
+      //    不是孤例；如果将来这类条目继续变多，就该把判据从"紧跟量词"改成
+      //    "**同一句里**（前后各 20 字符内）出现过量词"，而不是继续往白名单里堆。
+      'error.encHeaderLenInvalid': '中文是「（{size} 字节，上限 {max}）」—— 单位在句子更前面，{max} 是纯数字（字节数）',
     };
     const offenders = [];
     const whitelistHits = new Set();

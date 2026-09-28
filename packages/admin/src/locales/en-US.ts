@@ -2014,4 +2014,25 @@ export default {
   'error.verifyKeyUnusable': 'The verification public key is unusable: {reason} (parsing it as a private key also failed: {reason2}). An ed25519 public key (PEM, SPKI) is required.',
   'error.signingKeyExistsRefuseOverwrite': 'A signing key already exists ({path}): refusing to overwrite. Overwriting would make **the .sig files of all signed archives permanently unverifiable** (the old signatures were signed with the old private key, and the old private key would be deleted). If you really want to replace the key: first confirm that all archives that still need verification have already been verified with the old public key (or keep an offline copy of the old public key as well), then call once more with confirm=true.',
   'error.signingRejectBadSha': 'Refusing to sign: archiveSha256 is not a 64-character hexadecimal sha256 (received {value}...)',
+
+  // ── 🔴 期 9 第十三批（11 keys）── 英文按"运维文档"口吻写；不用缩写（ICU 把单引号当转义符）；不用全角标点。
+  //    ⚠️ 本批**刻意不用** ICU 复数：`{size}` / `{min}` / `{max}` 是字节数，英文写成
+  //    `({size} bytes, minimum {min} bytes)` / `({size} bytes, limit {max} bytes)` 对任何取值都通顺；
+  //    `{index}` 是**序号位置**（`chunk {index}`），也不是可数名词短语。
+  //    🔴 中文的 `——` 在英文里是 ` - `；`①`/`②` 是 `(1)`/`(2)`；`篡改/损坏` 是 `tampered with or corrupted`。
+  //    🔴 必须保留的三句安全说明：`refused to continue (it will not silently fall back to an unencrypted backup)`、
+  //    `The passphrase and salt are never written to the log.`、
+  //    `(The passphrase is never echoed; errors and logs contain only its length.)`。
+  //    ⚠️ 有 6 条英文**刻意不加句尾句点**（#2/#4/#5/#6/#7/#8）—— 因为中文原文也没有；标点与原文 1:1 对应。
+  'error.passphraseFileReadFailed': 'Failed to read {env} ({path}): {reason} - refused to continue (it will not silently fall back to an unencrypted backup). Check the path and read permissions, or use {envInline} instead.',
+  'error.passphraseFileEmpty': '{env} ({path}) is empty after stripping trailing whitespace: refusing to use it to encrypt the backup',
+  'error.passphraseTooShort': 'The backup passphrase is too short ({size, plural, one {# byte} other {# bytes}}, minimum {min, plural, one {# byte} other {# bytes}}): no matter how expensive scrypt is, it cannot save a short passphrase, and an archive that can be brute-forced offline only gives a false sense of security. Use a longer passphrase (a sentence only you know is enough), or clear {env} / {envFile} to return to unencrypted backups (treat an unencrypted archive like a credential; permissions are already 0600).',
+  'error.encHeaderTruncatedNoVersion': 'Encrypted archive header truncated ({path}): cannot read the version/length fields',
+  'error.encVersionUnsupported': 'Unsupported encrypted archive version {version} (this program only accepts {expected}): {path}',
+  'error.encHeaderLenInvalid': 'Invalid encrypted archive header length ({size, plural, one {# byte} other {# bytes}}, limit {max, plural, one {# byte} other {# bytes}}): {path}',
+  'error.encHeaderTruncatedJson': 'Encrypted archive header truncated ({path}): incomplete JSON',
+  'error.encHeaderUnreadable': 'Cannot read the encrypted archive header ({path}): {reason}',
+  'error.encChunkOrderWrong': 'The chunk order in the encrypted archive is wrong (the IV of chunk {index} does not match its sequence number): the archive may have been reordered, may be missing chunks, or may have been truncated and then spliced back together.',
+  'error.encDecryptFailed': 'Decryption failed (chunk {index}): the passphrase is incorrect, or the archive has been tampered with or corrupted ({cipher} authentication failed). The passphrase and salt are never written to the log.',
+  'error.encNeedsPassphrase': 'This archive is encrypted ({magic}, scrypt + {cipher}), but no decryption passphrase is currently available. Either include `backupPassphrase` in the body of the restore request (it travels only in the body and never reaches the URL or the access log), or set {env} or {envFile} for the server and retry. (The passphrase is never echoed; errors and logs contain only its length.)',
 };

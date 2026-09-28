@@ -1967,4 +1967,23 @@ export default {
   'error.verifyKeyUnusable': '驗簽公開金鑰不可用：{reason}（當作私密金鑰解析也失敗：{reason2}）。需要一把 ed25519 公開金鑰（PEM，SPKI）。',
   'error.signingKeyExistsRefuseOverwrite': '簽名金鑰已經存在（{path}）：拒絕覆蓋。覆蓋會讓**所有已簽名歸檔的 .sig 永久無法驗證**（舊簽名是舊私密金鑰簽的，而舊私密金鑰會被刪掉）。確實要換金鑰：先確認所有還需要驗證的歸檔都已經用舊公開金鑰驗過（或把舊公開金鑰也離線留一份），再帶 confirm=true 重新呼叫一次。',
   'error.signingRejectBadSha': '拒絕簽名：archiveSha256 不是 64 位十六進位的 sha256（收到 {value}…）',
+
+  // ── 🔴 期 9 第十三批（11 條）── 地區用詞：**讀取** / **失敗** / **已拒絕繼續** / **靜默回落** / **明文備份** /
+  //    **讀取權限** / **位元組**（字节）/ **歸檔**（归档）/ **憑證**（凭据）/ **頭部** / **欄位**（字段）/
+  //    **不支援** / **本程式只認**（本程序只认）/ **區塊**（块）/ **序號不符**（序号不匹配）/ **丟區塊** /
+  //    **篡改/損壞** / **認證未通過** / **日誌** / **目前**（当前）/ **恢復請求** / **存取日誌**（访问日志）/
+  //    **設定**（设置）/ **回顯** / **報錯**。
+  //    🔴 `scrypt`、`0600`、`JSON`、`IV`、`salt`、`` `backupPassphrase` ``、`body`、`URL`、`server`、
+  //    `①`/`②`（繁中保留圈号，英文用 `(1)`/`(2)`）三份按各自约定；`——` 在繁中保留。
+  'error.passphraseFileReadFailed': '讀取 {env}（{path}）失敗：{reason} —— 已拒絕繼續（不會靜默回落到明文備份）。請檢查路徑與讀取權限，或改用 {envInline}。',
+  'error.passphraseFileEmpty': '{env}（{path}）去掉尾部空白後是空的：拒絕用它加密備份',
+  'error.passphraseTooShort': '備份口令太短（{size} 位元組，最少 {min} 位元組）：scrypt 再貴也救不了短口令，而一份能被離線爆破的歸檔只會給人虛假的安全感。請用更長的口令（一句只有你知道的話就夠），或清掉 {env} / {envFile} 回到明文備份（明文歸檔請按憑證保管，權限已是 0600）。',
+  'error.encHeaderTruncatedNoVersion': '加密歸檔頭部被截斷（{path}）：讀不到版本/長度欄位',
+  'error.encVersionUnsupported': '不支援的加密歸檔版本 {version}（本程式只認 {expected}）：{path}',
+  'error.encHeaderLenInvalid': '加密歸檔頭部長度非法（{size} 位元組，上限 {max}）：{path}',
+  'error.encHeaderTruncatedJson': '加密歸檔頭部被截斷（{path}）：JSON 不完整',
+  'error.encHeaderUnreadable': '讀不出加密歸檔頭部（{path}）：{reason}',
+  'error.encChunkOrderWrong': '加密歸檔的區塊順序不對（第 {index} 區塊的 IV 與序號不符）：歸檔可能被重排、丟區塊，或截斷後又被拼接過。',
+  'error.encDecryptFailed': '解密失敗（第 {index} 區塊）：口令不正確，或歸檔已被篡改/損壞（{cipher} 認證未通過）。口令與 salt 都不會寫進日誌。',
+  'error.encNeedsPassphrase': '這份歸檔是加密的（{magic}，scrypt + {cipher}），但目前沒有可用的解密口令。兩個辦法任選：①在恢復請求的 body 裡帶 `backupPassphrase`（只走 body，不會進 URL 或存取日誌）；②給 server 設定 {env} 或 {envFile} 後重試。（口令不會被回顯，報錯與日誌裡只有長度。）',
 };

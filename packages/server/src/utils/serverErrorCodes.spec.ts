@@ -267,6 +267,18 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   //    而且它的响应体还带一个自定义字段 `setupKeyUnavailable: true`（后台按它分支）⇒ 由专门的行为断言钉住。
   // 🔴 期 9 第十二批：备份签名密钥 9 个码（🔴 其中两个是"完整句"码：内层"类型不对"不再抛裸 Error
   //    让外层拼中文，而是自己带上指引 ⇒ 外层 catch 用 `isCodedError` 判断后**原样重抛**）
+  // 🔴 期 9 第十三批（13a）：备份加密 11 个码
+  passphraseFileReadFailed: { status: 400, error: 'Bad Request' },
+  passphraseFileEmpty: { status: 400, error: 'Bad Request' },
+  passphraseTooShort: { status: 400, error: 'Bad Request' },
+  encHeaderTruncatedNoVersion: { status: 400, error: 'Bad Request' },
+  encVersionUnsupported: { status: 400, error: 'Bad Request' },
+  encHeaderLenInvalid: { status: 400, error: 'Bad Request' },
+  encHeaderTruncatedJson: { status: 400, error: 'Bad Request' },
+  encHeaderUnreadable: { status: 400, error: 'Bad Request' },
+  encChunkOrderWrong: { status: 400, error: 'Bad Request' },
+  encDecryptFailed: { status: 400, error: 'Bad Request' },
+  encNeedsPassphrase: { status: 400, error: 'Bad Request' },
   signingKeyFileReadFailed: { status: 400, error: 'Bad Request' },
   signingKeyFileTooLarge: { status: 400, error: 'Bad Request' },
   signingKeyFileEmpty: { status: 400, error: 'Bad Request' },

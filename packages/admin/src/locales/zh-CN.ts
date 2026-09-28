@@ -2194,4 +2194,22 @@ export default {
   'error.verifyKeyUnusable': '验签公钥不可用：{reason}（当作私钥解析也失败：{reason2}）。需要一把 ed25519 公钥（PEM，SPKI）。',
   'error.signingKeyExistsRefuseOverwrite': '签名密钥已经存在（{path}）：拒绝覆盖。覆盖会让**所有已签名归档的 .sig 永久无法验证**（旧签名是旧私钥签的，而旧私钥会被删掉）。确实要换密钥：先确认所有还需要验证的归档都已经用旧公钥验过（或把旧公钥也离线留一份），再带 confirm=true 重新调用一次。',
   'error.signingRejectBadSha': '拒绝签名：archiveSha256 不是 64 位十六进制的 sha256（收到 {value}…）',
+
+  // ── 🔴 期 9 第十三批（13a）：备份加密 11 个码（`utils/backupCrypto.ts`）。
+  //    ⚠️ `{env}` / `{envFile}` / `{envInline}` / `{cipher}` / `{magic}` 传的都是 **ASCII 技术标识符**
+  //    （环境变量名、算法名、magic 串）⇒ 三语一样，不是"把文案当参数传"。
+  //    🔴 本批**刻意不含** `assertHeaderShape()` 里那 13 个 `bad('中文原因')` 变体（下一批 13b）：
+  //    那是"内层给原因、外层拼 `加密归档头部不可信（{原因}）：{路径}`"的形状 ⇒ 只翻外壳会得到
+  //    "英文外壳 + 中文内核"（见 §7.194 A）。
+  'error.passphraseFileReadFailed': '读取 {env}（{path}）失败：{reason} —— 已拒绝继续（不会静默回落到明文备份）。请检查路径与读权限，或改用 {envInline}。',
+  'error.passphraseFileEmpty': '{env}（{path}）去掉尾部空白后是空的：拒绝用它加密备份',
+  'error.passphraseTooShort': '备份口令太短（{size} 字节，最少 {min} 字节）：scrypt 再贵也救不了短口令，而一份能被离线爆破的归档只会给人虚假的安全感。请用更长的口令（一句只有你知道的话就够），或清掉 {env} / {envFile} 回到明文备份（明文归档请按凭据保管，权限已是 0600）。',
+  'error.encHeaderTruncatedNoVersion': '加密归档头部被截断（{path}）：读不到版本/长度字段',
+  'error.encVersionUnsupported': '不支持的加密归档版本 {version}（本程序只认 {expected}）：{path}',
+  'error.encHeaderLenInvalid': '加密归档头部长度非法（{size} 字节，上限 {max}）：{path}',
+  'error.encHeaderTruncatedJson': '加密归档头部被截断（{path}）：JSON 不完整',
+  'error.encHeaderUnreadable': '读不出加密归档头部（{path}）：{reason}',
+  'error.encChunkOrderWrong': '加密归档的块顺序不对（第 {index} 块的 IV 与序号不匹配）：归档可能被重排、丢块，或截断后又被拼接过。',
+  'error.encDecryptFailed': '解密失败（第 {index} 块）：口令不正确，或归档已被篡改/损坏（{cipher} 认证未通过）。口令与 salt 都不会写进日志。',
+  'error.encNeedsPassphrase': '这份归档是加密的（{magic}，scrypt + {cipher}），但当前没有可用的解密口令。两个办法任选：①在恢复请求的 body 里带 `backupPassphrase`（只走 body，不会进 URL 或访问日志）；②给 server 设置 {env} 或 {envFile} 后重试。（口令不会被回显，报错与日志里只有长度。）',
 };

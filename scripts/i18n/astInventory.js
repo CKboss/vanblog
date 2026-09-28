@@ -879,12 +879,51 @@ const ICU_PLURAL_STOPWORDS = new Set([
 /** 全局版（要逐个匹配来看命中词是不是功能词，`test()` 那种"有一个就算"的语义不够用）。 */
 const PLACEHOLDER_PLURAL_GLOBAL_RE = /\{[A-Za-z_][A-Za-z0-9_]*\}\s+([A-Za-z]+)s\b/g;
 
+/**
+ * 🔴 把字符串里**已经写好**的 ICU plural 块整段挖掉（换成等长的空格），返回剩下的部分。
+ *
+ * ## 为什么需要它（2026-09-29 期 9 第十三批，变异对照 B53-M4 打不红揭出来的）
+ * 原来 `needsIcuPlural()` 的第一行是 `if (ICU_PLURAL_RE.test(value)) return false;`
+ * —— 意思是"这条已经用了复数，就不查了"。🔴 但一条文案里可以有**好几个**计数占位符：
+ * `加密归档头部长度非法（{size} 字节，上限 {max}）` 的英文是
+ * `({size} bytes, limit {max, plural, one {# byte} other {# bytes}})` ——
+ * 因为 `{max}` 已经套了复数，整条就被"豁免"了，于是 🔴 **`{size} bytes` 这个真缺陷被掩盖**
+ * （把 `{size}` 的复数块删掉，全套判据仍然全绿）。
+ * 修法：**逐个占位符**判定 —— 先把已经合规的 plural 块挖掉，再在剩下的文本上跑形态判据。
+ */
+function maskIcuPluralBlocks(value) {
+  let out = value;
+  let guard = 0;
+  while (guard++ < 64) {
+    const m = ICU_PLURAL_RE.exec(out);
+    if (!m) break;
+    // 🔴 从 `{name, plural,` 往后扫到**配平的**那个 `}`（plural 块里还嵌着 `one {…} other {…}`）
+    const start = m.index;
+    let i = out.indexOf('{', start + m[0].length - 1);
+    let depth = 0;
+    let end = -1;
+    for (let k = start; k < out.length; k += 1) {
+      if (out[k] === '{') depth += 1;
+      else if (out[k] === '}') {
+        depth -= 1;
+        if (depth === 0) { end = k + 1; break; }
+      }
+    }
+    if (end < 0) break;
+    out = out.slice(0, start) + ' '.repeat(end - start) + out.slice(end);
+    void i;
+  }
+  return out;
+}
+
 function needsIcuPlural(value) {
   if (typeof value !== 'string') return false;
-  if (ICU_PLURAL_RE.test(value)) return false;
+  // 🔴 不再"整条豁免"：把已合规的 plural 块挖掉，剩下的部分再逐个占位符查
+  const rest = maskIcuPluralBlocks(value);
+  if (!rest.trim()) return false;
   PLACEHOLDER_PLURAL_GLOBAL_RE.lastIndex = 0;
   let m;
-  while ((m = PLACEHOLDER_PLURAL_GLOBAL_RE.exec(value)) !== null) {
+  while ((m = PLACEHOLDER_PLURAL_GLOBAL_RE.exec(rest)) !== null) {
     const word = (m[1] + 's').toLowerCase();
     // 🔴 功能词（is / this / as …）不是复数名词 ⇒ 跳过；其它命中就是真缺陷
     if (!ICU_PLURAL_STOPWORDS.has(word)) return true;
