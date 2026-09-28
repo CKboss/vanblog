@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { CommentProvider } from 'src/provider/comment/comment.provider';
@@ -17,7 +18,7 @@ export class CommentController {
 
   private demoBlock() {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     return null;
   }

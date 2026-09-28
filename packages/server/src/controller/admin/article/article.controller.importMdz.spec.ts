@@ -67,7 +67,12 @@ describe('POST /api/admin/article/import-mdz（ArticleController.importMdz）', 
     expect(uploads[0].context).toEqual(
       expect.objectContaining({ uploader: '管理员', baseUrl: 'https://blog.example.com/', author: '作者' }),
     );
-    const data = res.data;
+    // 🔴 期 9 第七批：演示站那一支现在返回 `codedBody(...)`（类型是精确的 `{ statusCode; message; code; params? }`）
+    //    ⇒ 与成功支的 `{ statusCode, data }` 组成联合后，TS 不再允许直接 `.data`
+    //    （联合类型只能访问**所有**成员都有的属性）。⚠️ 这是好方向（返回体形状被精确钉住），
+    //    所以在测试侧显式 `as any`，而不是把 `codedBody` 的返回类型放宽成带索引签名
+    //    （那会让所有调用点都失去形状检查）。
+    const data = (res as any).data;
     expect(data.title).toBe('导入我');
     expect(data.content).toContain('/static/img/served-1.webp');
     expect(data.content).not.toContain('导入我.assets');
@@ -111,8 +116,8 @@ describe('POST /api/admin/article/import-mdz（ArticleController.importMdz）', 
       { relativePath: 't.assets/x.svg', source: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>') },
     ]);
     const res = await controller.importMdz({ buffer: zip } as any, { user: {} } as any);
-    expect(res.data.importedImages).toBe(0);
-    expect(res.data.skippedImages[0].reason).toContain('SVG');
-    expect(res.data.content).toContain('t.assets/x.svg'); // 链接原样保留
+    expect((res as any).data.importedImages).toBe(0);
+    expect((res as any).data.skippedImages[0].reason).toContain('SVG');
+    expect((res as any).data.content).toContain('t.assets/x.svg'); // 链接原样保留
   });
 });

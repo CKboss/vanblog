@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Logger, Put, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { UpdateSiteInfoDto } from 'src/types/site.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -35,10 +36,7 @@ export class SiteMetaController {
   @Put()
   async update(@Body() updateDto: UpdateSiteInfoDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.updateSiteInfo(updateDto);
     this.pipelineProvider.dispatchEvent('updateSiteInfo', updateDto);

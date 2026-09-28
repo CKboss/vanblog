@@ -11,6 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { LinkDto } from 'src/types/link.dto';
@@ -42,10 +43,7 @@ export class LinkMetaController {
   @Put()
   async update(@Body() updateLinkDto: LinkDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.addOrUpdateLink(updateLinkDto);
     this.isrProvider.activeLink('更新友链触发增量渲染！');
@@ -58,10 +56,7 @@ export class LinkMetaController {
   @Post()
   async create(@Body() updateLinkDto: LinkDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.addOrUpdateLink(updateLinkDto);
     this.isrProvider.activeLink('创建友链触发增量渲染！');
@@ -91,10 +86,7 @@ export class LinkMetaController {
       throw new BadRequestException('name is required');
     }
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.deleteLink(name);
     this.isrProvider.activeLink('删除友链触发增量渲染！');

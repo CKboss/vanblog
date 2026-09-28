@@ -204,7 +204,14 @@ describe('安全加固：认证与权限', () => {
 
   it('演示站禁止管线（fork 执行任意 JS）等写操作', () => {
     const pipeline = read('packages/server/src/controller/admin/pipeline/pipeline.controller.ts');
-    assert.ok((pipeline.match(/演示站禁止修改此项/g) || []).length >= 4);
+    // 🔴 期 9 第七批：演示站信封改成 `codedBody('demoSiteBlocked')` ⇒ 数**码名**出现次数（性质没放：
+    //    pipeline 那几条"能 fork 执行任意 JS"的写操作必须**每一条**都被演示站拦住，所以是"至少 4 处"）。
+    //    ② 并且跨文件钉住登记表里那条的中文没被改软。
+    assert.ok((pipeline.match(/codedBody\('demoSiteBlocked'\)/g) || []).length >= 4);
+    assert.match(
+      read('packages/server/src/utils/serverErrorCodes.ts'),
+      /demoSiteBlocked: entry\('演示站禁止修改此项！', UnauthorizedException\)/,
+    );
     for (const rel of [
       'packages/server/src/controller/admin/draft/draft.controller.ts',
       'packages/server/src/controller/admin/isr/isr.controller.ts',

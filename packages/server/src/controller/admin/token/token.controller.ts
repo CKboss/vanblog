@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { config } from 'src/config';
@@ -24,10 +25,7 @@ export class TokenController {
   @Post()
   async createApiToken(@Body() body: { name: string }) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.tokenProvider.createAPIToken(body.name);
     return {
@@ -39,10 +37,7 @@ export class TokenController {
   @Delete('/:id')
   async deleteApiTokenByName(@Param('id') id: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.tokenProvider.disableAPITokenById(id);
     return {

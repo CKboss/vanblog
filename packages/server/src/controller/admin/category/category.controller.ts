@@ -1,5 +1,6 @@
 import {
   Req, Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { CreateCategoryDto, ReorderCategoriesDto, UpdateCategoryDto } from 'src/types/category.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -52,10 +53,7 @@ export class CategoryController {
   @Post()
   async createCategory(@Body() body: CreateCategoryDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.categoryProvider.addOne(body.name);
     this.isrProvider.activeAll('创建分类触发增量渲染！');
@@ -68,10 +66,7 @@ export class CategoryController {
   @Delete('/:name')
   async deleteCategory(@Param('name') name: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.categoryProvider.deleteOne(name);
     this.isrProvider.activeAll('删除分类触发增量渲染！');
@@ -84,10 +79,7 @@ export class CategoryController {
   @Put('/all/order')
   async reorderCategories(@Body() body: ReorderCategoriesDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.categoryProvider.reorderCategories(body?.names);
     this.isrProvider.activeAll('调整分类顺序触发增量渲染！');
@@ -100,10 +92,7 @@ export class CategoryController {
   @Put('/:name')
   async updateCategoryByName(@Param('name') name: string, @Body() updateDto: UpdateCategoryDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.categoryProvider.updateCategoryByName(name, updateDto);
     this.isrProvider.activeAll('更新分类触发增量渲染！');

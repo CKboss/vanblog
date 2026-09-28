@@ -10,6 +10,7 @@ import {
   Query,
   BadRequestException,
 } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
 import { config } from 'src/config';
@@ -105,10 +106,7 @@ export class CaddyController {
   @Delete('log')
   async clearLog() {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     await this.caddyProvider.clearLog();
     return {
@@ -138,10 +136,7 @@ export class CaddyController {
   @Put('https')
   async updateHttpsConfig(@Body() dto: HttpsSetting) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const result = await this.caddyProvider.setRedirect(dto.redirect || false);
     if (!result) {

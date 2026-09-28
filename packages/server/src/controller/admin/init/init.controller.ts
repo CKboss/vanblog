@@ -10,7 +10,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, codedBody } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import * as fs from 'fs';
@@ -416,7 +416,7 @@ export class InitController {
       if (config.demo && config.demo == 'true') {
         // 演示站：什么也没做就返回。⚠️ 这里**不需要**显式释放闸门 —— return 在 try 里，
         // finally 会带归属检查地放掉（此时 dbLockOwner 还是 null，跨进程那把也没拿）。
-        return { statusCode: 401, message: '演示站禁止修改此项！' };
+        return codedBody('demoSiteBlocked');
       }
       if (localOwner === null) {
         throw codedError('initRestoreBusySameProcess');

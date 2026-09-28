@@ -228,6 +228,18 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   // 🔴 期 9 第四批：限流信封 3 个码。基类 `HttpException` + 显式 429 ⇒ **没有 error 字段**
   //    （与 `customPageNotFound` 同理），而迁移前 `tooManyRequests()` 手写的是
   //    `{ statusCode: 429, message }`（也没有 error）⇒ 形状一致，只是多了 `code`（与可选 `params`）。
+  // 🔴 期 9 第七批：演示站守卫族 8 个码。⚠️ 它们走 **`codedBody()`**（返回体，不是抛异常）⇒
+  //    HTTP 状态码仍是 **200**（VanBlog 既有约定：演示站信封是"HTTP 200 + body.statusCode 401"），
+  //    而这份快照钉的是 `codedBody` 造出来的**响应体里的 statusCode**（= 401，与迁移前逐字相同）
+  //    与 `error` 字段（基类语义 ⇒ 'Unauthorized'；迁移前的手写信封**没有**这个字段，是新增的）。
+  demoSiteBlocked: { status: 401, error: 'Unauthorized' },
+  demoSiteArticleEditBlocked: { status: 401, error: 'Unauthorized' },
+  demoSiteArticleDeleteBlocked: { status: 401, error: 'Unauthorized' },
+  demoSiteArticleCreateBlocked: { status: 401, error: 'Unauthorized' },
+  demoSiteDraftPublishBlocked: { status: 401, error: 'Unauthorized' },
+  demoSitePasswordChangeBlocked: { status: 401, error: 'Unauthorized' },
+  demoSiteLoginSecurityBlocked: { status: 401, error: 'Unauthorized' },
+  demoSiteCustomizingBlocked: { status: 401, error: 'Unauthorized' },
   rateLimited: { status: 429 },
   initRateLimited: { status: 429 },
   publicListRateLimited: { status: 429 },

@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { promises as fs } from 'fs';
@@ -38,7 +39,7 @@ export class ThemeController {
 
   private assertNotDemo() {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     return null;
   }

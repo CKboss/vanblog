@@ -1916,4 +1916,17 @@ export default {
   'error.mdzImportNoMarkdown': 'No Markdown file (*.md) found in the archive: a .mdz should be a zip package containing "one .md + an .assets image directory with the same name"',
   // 🔴 期 9 第六批补：图片隐写检测那一档自己的限流（与 error.rateLimited 不是同一句）
   'error.imgDetectRateLimited': 'Too many watermark checks. Please try again later.',
+
+  // ── 🔴 期 9 第七批（8 keys）── `error.demoSiteBlocked` 与既有的 `common.demoBlocked` 用**同一句英文**
+  //    （`Not allowed on the demo site`）：同一个操作在"前端先拦"与"服务端拦"两条路上必须说同一句话。
+  //    其余 7 条按"哪一类操作被挡住"分别说清（合并成一句会让站长看不出被挡的是什么）。
+  //    🔴 不用缩写（ICU 把单引号当转义符）、不用全角标点。
+  'error.demoSiteBlocked': 'Not allowed on the demo site',
+  'error.demoSiteArticleEditBlocked': 'Articles cannot be modified on the demo site!',
+  'error.demoSiteArticleDeleteBlocked': 'Articles cannot be deleted on the demo site!',
+  'error.demoSiteArticleCreateBlocked': 'Articles cannot be created on the demo site!',
+  'error.demoSiteDraftPublishBlocked': 'Drafts cannot be published on the demo site!',
+  'error.demoSitePasswordChangeBlocked': 'The account password cannot be changed on the demo site!',
+  'error.demoSiteLoginSecurityBlocked': 'The login security policy cannot be changed on the demo site!',
+  'error.demoSiteCustomizingBlocked': 'The customization settings cannot be changed on the demo site!',
 };

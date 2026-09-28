@@ -13,6 +13,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import {
   BACKUP_SIG_EXT,
@@ -114,7 +115,7 @@ export class BackupController {
   @Post('jwt/rotate')
   async rotateJwtSecretEndpoint(@Body() body: { graceDays?: number | string }) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     // 宽限期：不传就用 env/默认值；传了就要是个 0..365 的数（0 = 立刻作废旧密钥）
     let graceDays: number | undefined;
@@ -233,7 +234,7 @@ export class BackupController {
   @Post('signing/key')
   async createSigningKey(@Body() body: { confirm?: string; overwrite?: string }) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const backupDir = this.fullBackupProvider.backupDir();
     // overwrite 与 confirm 是同一个意思的两种写法，都只认字面 true
@@ -266,7 +267,7 @@ export class BackupController {
   async getAll(@Res() res: Response) {
     // 导出会打包整站数据
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     // ⚠️ 必须用 getAllForExport()（`toObject()` 原样文档）而不是 getAll('admin')：
     // ArticleSchema 挂了 toJSON transform 把 password 换成布尔 hasPassword，
@@ -333,7 +334,7 @@ export class BackupController {
   @Post('full/export')
   async exportFull(@Body() body: { format?: string }) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     // 导出成功返回时**必然已通过写后校验**（校验失败会抛 400，见 FullBackupProvider.doExport）
     const result = await this.fullBackupProvider.export(body?.format);
@@ -487,7 +488,7 @@ export class BackupController {
     const uploadedPath = file?.path;
     try {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     // ⚠️ 这道闸门**必须**用最严的布尔口径（`isTrue`：只认 boolean true 与字符串 'true'），
     //    不能用曾经宽松的 `checkTrue`（旧实现 `s == true` 会让 `confirm:"1"`、`confirm:1`、
@@ -576,7 +577,7 @@ export class BackupController {
   @Post('full/delete')
   async deleteFull(@Body() body: { name?: string }) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const archivePath = this.fullBackupProvider.resolveArchive(body?.name || '');
     fs.rmSync(archivePath, { force: true });
@@ -631,10 +632,7 @@ export class BackupController {
   @UseInterceptors(FileInterceptor('file', JSON_IMPORT_UPLOAD_OPTIONS))
   async importAll(@UploadedFile() file: Express.Multer.File) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const json = file.buffer.toString();
     const data = JSON.parse(json);

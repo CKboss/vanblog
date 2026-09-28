@@ -169,7 +169,16 @@ describe('整站备份：服务端', () => {
     assert.match('if (!body?.confirm) {', /if \(!body\?\.confirm\) \{/);
     assert.match('if (!checkTrue(body?.confirm)) {', /checkTrue\(body\?\.confirm\)/);
     assert.doesNotMatch('if (!isTrue(body?.confirm)) {', /checkTrue\(body\?\.confirm\)/);
-    assert.match(controller, /演示站禁止修改此项/);
+    // 🔴 期 9 第七批：演示站那句中文搬进了错误码登记表（`demoSiteBlocked`）⇒ 锚点跨文件搬：
+    //    ① 控制器必须走 `codedBody('demoSiteBlocked')`（演示站拦截还在）；
+    //    ② 登记表里那条的中文必须仍然是「演示站禁止修改此项！」（文案没被改软）。
+    assert.match(controller, /codedBody\('demoSiteBlocked'\)/);
+    assert.match(
+      // ⚠️ 本文件的 `read()` 是 **admin 相对**、`readRepo()` 才是仓库根 ⇒ 读服务端文件要用后者
+      //    （第一版写成 `read('packages/server/…')` ⇒ ENOENT `…/packages/admin/packages/server/…`）。
+      readRepo('packages/server/src/utils/serverErrorCodes.ts'),
+      /demoSiteBlocked: entry\('演示站禁止修改此项！'/,
+    );
     assert.match(controller, /RESTORE_UPLOAD_OPTIONS/);
     // 上传选项（落盘 + 8GB + parts 收紧）从控制器私有搬进了共享模块
     // `utils/restoreUpload.ts`，让「init 页直接上传恢复」复用同一份 ——

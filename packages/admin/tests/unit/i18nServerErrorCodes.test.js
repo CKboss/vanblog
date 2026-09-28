@@ -89,7 +89,9 @@ const THROW_BUDGET = 126;
 // 🔴 108 → **103**（期 9 第二批）：auth.controller 那 5 处 `new UnauthorizedException({ statusCode, message: '中文' })`
 //   与 login.guard 那 1 处的对象体一并迁进码表 ⇒ 这一族少了 5 处。
 // 🔴 103 → **102**（同上：`img.controller.ts` 那处 429 信封迁进了码表）
-const MESSAGE_BODY_BUDGET = 102;
+// 🔴 102 → **18**（期 9 第七批）：演示站守卫族 **82 处**（8 种文案 ⇒ 8 个码）全部迁进 `codedBody()`。
+//   这是单批覆盖最多站点的一族 —— 它此前占了这个口径的 **80%**（102 里 84 处是它）。
+const MESSAGE_BODY_BUDGET = 18;
 
 /** 码 → 码表里的中文模板（`{name}` 占位符的权威来源）；供"调用点参数对账"那条判据用 */
 const CODE_ZH = (() => {
@@ -147,9 +149,12 @@ test('服务端错误码 · 反空转：登记表、语言包与源码遍历都�
   assert.ok(scan.total > 100, `只数出 ${scan.total} 个带中文的 throw 站点（应远大于 100）⇒ 尺子坏了`);
   const scan2 = scanServerMessageProps();
   assert.ok(scan2.files === scan.files, `两个口径遍历到的文件数不一致（${scan2.files} vs ${scan.files}）⇒ 有一把尺子遍历坏了`);
+  // ⚠️ 下界随迁移**下调**（期 9 第七批把演示站那一族 82 处迁走了，实测从 102 降到 18）：
+  //    这条反空转要防的是"尺子坏了数出 0"，不是"数字必须很大"⇒ 下界取实测值的一半左右，
+  //    🔴 并且**每次下调都要在注释里写明是哪一批迁走的**（否则下界会悄悄失去意义）。
   assert.ok(
-    scan2.total > 50,
-    `只数出 ${scan2.total} 个「message: 中文」站点（应远大于 50）⇒ 尺子坏了（而 0 ≤ 预算 会让棘轮恒真）`,
+    scan2.total > 8,
+    `只数出 ${scan2.total} 个「message: 中文」站点（下界 8，2026-09-28 实测 18）⇒ 尺子坏了（而 0 ≤ 预算 会让棘轮恒真）`,
   );
 });
 
@@ -687,5 +692,51 @@ test('🔴 服务端错误码 · ⑤ 响应助手 `tooManyRequests()` 必须走 
     withChinese,
     [],
     '🔴 这些 `tooManyRequests()` 调用点还在传中文文案（应该传错误码）：\n  ' + withChinese.join('\n  '),
+  );
+});
+
+test('🔴 服务端错误码 · ⑥ 演示站信封：前端预拦截与服务端拦截必须说**同一句话**（三语都对齐）', () => {
+  // ## 为什么要这条（2026-09-27 期 9 第七批）
+  // 演示站的写操作有**两道**拦截：
+  //   ① 前端预拦截（`common.demoBlocked`，点了就直接弹 Modal，不发请求）；
+  //   ② 服务端拦截（`error.demoSiteBlocked`，绕过前端直接打接口时才会看到）。
+  // 🔴 同一个操作在两条路上给用户的必须是**同一句话** —— 否则"我用界面点是 A，用脚本打是 B"，
+  //    站长会以为是两个不同的限制（而 `common.demoBlocked` 与 `backup.demoBlockedEdit` 早就各写了一份，
+  //    英文还**不一样**：`Not allowed on the demo site` vs `This cannot be changed on the demo site!`
+  //    ⇒ 本条判据把服务端那条与 `common.demoBlocked` 对齐，并把既有的两处不一致**如实报出来**）。
+  for (const l of LOCALES) {
+    const viaServer = packs[l]['error.demoSiteBlocked'];
+    const viaUi = packs[l]['common.demoBlocked'];
+    assert.ok(viaServer, `${l} 缺 error.demoSiteBlocked`);
+    assert.ok(viaUi, `${l} 缺 common.demoBlocked`);
+    assert.strictEqual(
+      viaServer,
+      viaUi,
+      `🔴 ${l} 里"演示站禁止"这句话在**前端预拦截**与**服务端拦截**两条路上不一致：\n` +
+        `   common.demoBlocked   = ${JSON.stringify(viaUi)}\n` +
+        `   error.demoSiteBlocked = ${JSON.stringify(viaServer)}\n` +
+        '   同一个操作必须说同一句话（改一边就要改另一边）。',
+    );
+  }
+  // 🔴 8 个演示站码必须都在（少一个就意味着某一类操作在英文下退回中文）
+  const demoCodes = CODES.filter((c) => c.startsWith('demoSite'));
+  assert.strictEqual(demoCodes.length, 8, `演示站码应该是 8 个，实测 ${demoCodes.length}：${demoCodes.join(', ')}`);
+  for (const c of demoCodes) {
+    for (const l of LOCALES) {
+      const v = packs[l]['error.' + c];
+      assert.ok(v && String(v).length > 3, `${l} 的 error.${c} 缺失或太短`);
+      if (l === 'en-US') {
+        assert.ok(!/[\u3400-\u4dbf\u4e00-\u9fff]/.test(v), `🔴 en-US 的 error.${c} 里夹了中文：${v}`);
+        assert.ok(!/'/.test(v), `🔴 en-US 的 error.${c} 里有单引号（ICU 会当转义符）：${v}`);
+      }
+    }
+  }
+  // 🔴 反向：8 种文案不许在英文里**合并成一句**（合并之后站长看不出哪一类操作被挡住）
+  const enTexts = demoCodes.map((c) => packs['en-US']['error.' + c]);
+  assert.strictEqual(
+    new Set(enTexts).size,
+    demoCodes.length,
+    '🔴 演示站那 8 条英文译文有重复 ⇒ 说明被合并成同一句了（站长会看不出被挡的是哪一类操作）：' +
+      enTexts.join(' | '),
   );
 });

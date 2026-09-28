@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -30,10 +31,7 @@ export class MenuMetaController {
   @Put()
   async update(@Body() dto: MenuSetting) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     await this.settingProvider.updateMenuSetting(dto);
     const data = await this.isrProvider.activeAll('更新导航栏配置触发增量渲染！');

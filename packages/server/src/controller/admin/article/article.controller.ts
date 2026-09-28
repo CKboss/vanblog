@@ -17,7 +17,7 @@ import {
 // 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
 //    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变、`error` 字段保留），
 //    admin 侧**有码用码、无码回落 message** ⇒ 渐进迁移任何时刻都可用。
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, codedBody } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiHeader, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
@@ -117,10 +117,7 @@ export class ArticleController {
   @Put('/:id')
   async update(@Param('id') id: number, @Body() updateDto: UpdateArticleDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改文章！',
-      };
+      return codedBody('demoSiteArticleEditBlocked');
     }
     // 质量赋值防护：`deleted` 只能由删除接口设置（否则只有 article:update 权限的
     // 协作者可以 {"deleted":true} 批量软删全站，绕过 article:delete）；
@@ -171,10 +168,7 @@ export class ArticleController {
   @Post()
   async create(@Req() req: any, @Body() createDto: CreateArticleDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止创建文章！',
-      };
+      return codedBody('demoSiteArticleCreateBlocked');
     }
     const author = req?.user?.nickname || undefined;
     if (!createDto.author) {
@@ -235,7 +229,7 @@ export class ArticleController {
     @Body() body?: { withWaterMark?: string | boolean },
   ) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     if (!file?.buffer?.length) {
       throw codedError('articleImportMdzNoFile');
@@ -285,7 +279,7 @@ export class ArticleController {
     @Body() body: { dryRun?: boolean; onlyMissing?: boolean; ids?: number[] },
   ) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.articleProvider.backfillCoversFromContent({
       dryRun: body?.dryRun === true,
@@ -303,7 +297,7 @@ export class ArticleController {
   @Post('covers/revert')
   async revertCovers(@Body() body: { items?: Array<{ id: number; cover: string }> }) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.articleProvider.revertCovers(Array.isArray(body?.items) ? body.items : []);
     if (data.reverted > 0) {
@@ -315,7 +309,7 @@ export class ArticleController {
   @Post('backfill-pathname')
   async backfillPathname(@Body() body: { dryRun?: boolean | string }) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改文章！' };
+      return codedBody('demoSiteArticleEditBlocked');
     }
     const dryRun = body?.dryRun === true || body?.dryRun === 'true';
     const data = await this.articleProvider.backfillPathname({ dryRun });
@@ -330,7 +324,7 @@ export class ArticleController {
   @Delete('/:id')
   async delete(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止删除文章！' };
+      return codedBody('demoSiteArticleDeleteBlocked');
     }
     const toDeleteArticle = await this.articleProvider.getById(id, 'admin');
     this.pipelineProvider.dispatchEvent('deleteArticle', toDeleteArticle).catch((err) =>
@@ -360,7 +354,7 @@ export class ArticleController {
   @Put('/:id/restore')
   async restore(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改文章！' };
+      return codedBody('demoSiteArticleEditBlocked');
     }
     const restored: any = await this.articleProvider.restoreById(id);
     if (!restored) {
@@ -392,7 +386,7 @@ export class ArticleController {
   @Delete('/:id/purge')
   async purge(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止删除文章！' };
+      return codedBody('demoSiteArticleDeleteBlocked');
     }
     // 先取软删文档（普通 getById 过滤 deleted，这里要反过来）：purge 之后文档就没了，
     // ISR 需要它的 pathname 去失效 /post/<pathname> 与 /post/<id> 两条路径。
@@ -472,7 +466,7 @@ export class ArticleController {
     @Param('revisionId') revisionId: string,
   ) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改文章！' };
+      return codedBody('demoSiteArticleEditBlocked');
     }
     const numericId = parseNumericId(id);
     if (!this.revisionProvider) {

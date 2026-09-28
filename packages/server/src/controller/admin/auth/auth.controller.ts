@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 // 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
 //    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变），admin 有码用码、无码回落 message。
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, codedBody } from 'src/utils/serverErrorCodes';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config/index';
@@ -210,7 +210,7 @@ export class AuthController {
   @Put()
   async updateUser(@Body() updateUserDto: UpdateUserDto) {
     if (config?.demo == true || config?.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改账号密码！' };
+      return codedBody('demoSitePasswordChangeBlocked');
     }
     const data = await this.userProvider.updateUser(updateUserDto);
     // ⚠️ 同样改成 await（旧实现是 setTimeout(..., 1000)）：改完管理员口令之后，

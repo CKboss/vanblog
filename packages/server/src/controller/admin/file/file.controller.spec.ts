@@ -106,9 +106,14 @@ describe('FileController', () => {
     const exportRes: any = await controller.exportAllAttachments();
     const del: any = await controller.delete(SIGN);
 
-    expect(upload).toEqual({ statusCode: 401, message: '演示站禁止修改此项！' });
-    expect(exportRes).toEqual({ statusCode: 401, message: '演示站禁止修改此项！' });
-    expect(del).toEqual({ statusCode: 401, message: '演示站禁止修改此项！' });
+    // 🔴 期 9 第七批：演示站信封现在由 `codedBody()` 组装 ⇒ 响应体**多出** `code` 字段。
+    //    这里**照实把 code 写进期望值**，而不是改成 objectContaining 放松：
+    //    严格 toEqual 钉的是形状，而要钉的性质是「401 + 那句中文 + 现在还要带码」；
+    //    放松会让「哪天 code 丢了」也静默通过（那正是最不想要的失败模式）。
+
+    expect(upload).toEqual({ statusCode: 401, message: '演示站禁止修改此项！', code: 'demoSiteBlocked' });
+    expect(exportRes).toEqual({ statusCode: 401, message: '演示站禁止修改此项！', code: 'demoSiteBlocked' });
+    expect(del).toEqual({ statusCode: 401, message: '演示站禁止修改此项！', code: 'demoSiteBlocked' });
     expect(staticProvider.upload).not.toHaveBeenCalled();
     expect(staticProvider.deleteOneBySign).not.toHaveBeenCalled();
   });

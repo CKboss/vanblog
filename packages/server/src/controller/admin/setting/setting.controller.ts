@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
 
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config/index';
 import {
@@ -38,10 +39,7 @@ export class SettingController {
   @Put('static')
   async updateStaticSetting(@Body() body: Partial<StaticSetting>) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const res = await this.settingProvider.updateStaticSetting(body);
     return {
@@ -66,10 +64,7 @@ export class SettingController {
   @Put('comment')
   async updateCommentSetting(@Body() body: CommentSetting) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const before = await this.settingProvider.getCommentSetting();
     const res = await this.settingProvider.updateCommentSetting(body || ({} as CommentSetting));
@@ -92,10 +87,7 @@ export class SettingController {
   @Put('waline')
   async updateWalineSetting(@Body() body: WalineSetting) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const res = await this.settingProvider.updateWalineSetting(body);
     await this.walineProvider.restart('更新 waline 设置，');
@@ -121,10 +113,7 @@ export class SettingController {
   @Put('layout')
   async updateLayoutSetting(@Body() body: LayoutSetting) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改定制化设置！',
-      };
+      return codedBody('demoSiteCustomizingBlocked');
     }
     const res = await this.settingProvider.updateLayoutSetting(body);
     this.isrProvider.activeAll('更新 layout 设置');
@@ -144,10 +133,7 @@ export class SettingController {
   @Put('login')
   async updateLoginSetting(@Body() body: LoginSetting) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改登录安全策略设置！',
-      };
+      return codedBody('demoSiteLoginSecurityBlocked');
     }
     const res = await this.settingProvider.updateLoginSetting(body);
     return {

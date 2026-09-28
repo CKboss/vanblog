@@ -13,7 +13,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { codedError, ServerErrorCode } from 'src/utils/serverErrorCodes';
+import { codedError, ServerErrorCode, codedBody } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   assertUploadedImage,
@@ -62,7 +62,7 @@ export class ImgController {
     @Request() req?: any,
   ) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     let isFavicon = false;
     if (favicon && favicon == 'true') {
@@ -100,10 +100,7 @@ export class ImgController {
   @Post('thumb/backfill')
   async backfillThumbnails(@Body() body: { force?: boolean }) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const res = await this.staticProvider.backfillThumbnails({ force: checkTrue(body?.force) });
     return {
@@ -140,10 +137,7 @@ export class ImgController {
     @Request() req?: any,
   ) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const siteInfo = await this.metaProvider.getSiteInfo();
     const res = await this.staticProvider.replaceBySign(
@@ -238,10 +232,7 @@ export class ImgController {
   @Post('scan')
   async scanImgsOfArticles() {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const res = await this.staticProvider.scanLinksOfArticles();
     return {
@@ -252,10 +243,7 @@ export class ImgController {
   @Post('transfer-remote')
   async transferRemote(@Body() body: { content?: string; siteHost?: string }) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const siteInfo = await this.metaProvider.getSiteInfo();
     const res = await this.staticProvider.transferRemoteImages(body?.content || '', {
@@ -270,10 +258,7 @@ export class ImgController {
   @Post('rewrite-base-url')
   async rewriteBaseUrl(@Body() body: { oldBase?: string; newBase?: string }) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const articles = await this.articleProvider.rewriteBaseUrl(body?.oldBase, body?.newBase);
     const drafts = await this.draftProvider.rewriteBaseUrl(body?.oldBase, body?.newBase);
@@ -300,10 +285,7 @@ export class ImgController {
   @Delete('/all/delete')
   async deleteALL() {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const res = await this.staticProvider.deleteAllIMG();
     return {
@@ -314,10 +296,7 @@ export class ImgController {
   @Delete('/:sign')
   async delete(@Param('sign') sign: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const res = await this.staticProvider.deleteOneBySign(sign, 'img');
     return {

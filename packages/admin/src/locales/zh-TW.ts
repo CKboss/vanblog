@@ -1863,4 +1863,15 @@ export default {
   'error.mdzImportNoMarkdown': '壓縮檔裡沒有找到 Markdown 檔案（*.md）：.mdz 應該是「一個 .md + 同名的 .assets 圖片目錄」的 zip 包',
   // 🔴 期 9 第六批补：图片隐写检测那一档自己的限流（与 error.rateLimited 不是同一句）
   'error.imgDetectRateLimited': '圖片檢測過於頻繁，請稍後再試',
+
+  // ── 🔴 期 9 第七批（8 條）── 地區用詞：**示範站**（演示站）/ **帳號密碼** / **登入** / **策略設定**（策略设置）/
+  //    **客製化**（定制化）/ **建立**（创建）/ **發布**（发布）/ **刪除**。與 `common.demoBlocked` 的繁中逐字相同。
+  'error.demoSiteBlocked': '示範站禁止修改此項！',
+  'error.demoSiteArticleEditBlocked': '示範站禁止修改文章！',
+  'error.demoSiteArticleDeleteBlocked': '示範站禁止刪除文章！',
+  'error.demoSiteArticleCreateBlocked': '示範站禁止建立文章！',
+  'error.demoSiteDraftPublishBlocked': '示範站禁止發布草稿！',
+  'error.demoSitePasswordChangeBlocked': '示範站禁止修改帳號密碼！',
+  'error.demoSiteLoginSecurityBlocked': '示範站禁止修改登入安全策略設定！',
+  'error.demoSiteCustomizingBlocked': '示範站禁止修改客製化設定！',
 };

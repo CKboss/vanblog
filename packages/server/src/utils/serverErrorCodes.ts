@@ -248,6 +248,22 @@ export const SERVER_ERROR_CODES = {
   //    `rejects.toThrow(/今天评论太多了/)` 这类**行为断言**钉着它们 ⇒ 迁移不许改一个字。
   // ⚠️ 两处重复文本各**共用一个码**（`个人主页地址只支持 http/https` 有两个调用点、
   //    `评论不存在` 有两个调用点）：同一句话登记两遍就是"两处口径"，迟早漂。
+  // ── 演示站守卫族（各 admin controller 的 `return { statusCode: 401, message: … }`，期 9 第七批）────
+  // 🔴 这是**单批覆盖最多站点**的一族：88 处（8 种文案）⇒ 8 个码。
+  //    形状是"HTTP 200 + 响应体里的 statusCode:401"（VanBlog 的既有约定，`vanblog-drill.test.sh`
+  //    专门有一条钉住"演示站信封必须被判失败"）⇒ 用 **`codedBody()`**（返回体）而不是 `codedError()`（抛异常），
+  //    HTTP 状态码因此**保持 200 不变**，只是响应体多出 `code`。
+  // ⚠️ `UnauthorizedException` 只用来让 `codedBody` 算出 `statusCode: 401`（与迁移前逐字相同）。
+  // 🔴 8 种文案刻意**不合并成一个码**：它们分别对应"改文章/删文章/建文章/发草稿/改口令/改登录安全策略/
+  //    改定制化/其它"，合并之后英文就只能说 "Not allowed"，站长看不出**哪一类操作**被演示站挡住了。
+  demoSiteBlocked: entry('演示站禁止修改此项！', UnauthorizedException),
+  demoSiteArticleEditBlocked: entry('演示站禁止修改文章！', UnauthorizedException),
+  demoSiteArticleDeleteBlocked: entry('演示站禁止删除文章！', UnauthorizedException),
+  demoSiteArticleCreateBlocked: entry('演示站禁止创建文章！', UnauthorizedException),
+  demoSiteDraftPublishBlocked: entry('演示站禁止发布草稿！', UnauthorizedException),
+  demoSitePasswordChangeBlocked: entry('演示站禁止修改账号密码！', UnauthorizedException),
+  demoSiteLoginSecurityBlocked: entry('演示站禁止修改登录安全策略设置！', UnauthorizedException),
+  demoSiteCustomizingBlocked: entry('演示站禁止修改定制化设置！', UnauthorizedException),
   commentDemoBlocked: entry('演示站禁止发表评论', ForbiddenException),
   commentNotBuiltin: entry('当前评论系统不是内置评论，无法通过该接口发表', ForbiddenException),
   commentClosedForArticle: entry('该文章未开放评论', ForbiddenException),

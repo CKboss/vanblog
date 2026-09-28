@@ -13,7 +13,7 @@ import {
 // 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
 //    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变、`error` 字段保留），
 //    admin 侧**有码用码、无码回落 message** ⇒ 渐进迁移任何时刻都可用。
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { CreateDraftDto, PublishDraftDto, UpdateDraftDto } from 'src/types/draft.dto';
 import { SortOrder } from 'src/types/sort';
@@ -96,7 +96,7 @@ export class DraftController {
   @Put('/:id')
   async update(@Param('id') id: number, @Body() updateDto: UpdateDraftDto) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     // 同文章接口：deleted 只能由删除接口设置，id 是服务端主键；deletedAt 同 deleted（P3）
     delete (updateDto as any)?.deleted;
@@ -122,7 +122,7 @@ export class DraftController {
   @Post()
   async create(@Req() req: any, @Body() createDto: CreateDraftDto) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const author = req?.user?.nickname || undefined;
     if (!createDto.author) {
@@ -146,10 +146,7 @@ export class DraftController {
   @Post('/publish')
   async publish(@Query('id') id: number, @Body() publishDto: PublishDraftDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止发布草稿！',
-      };
+      return codedBody('demoSiteDraftPublishBlocked');
     }
     const callerPublishDto = publishDto;
     const result = await this.pipelineProvider.dispatchEvent('beforeUpdateArticle', publishDto);
@@ -175,7 +172,7 @@ export class DraftController {
   @Delete('/:id')
   async delete(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const toDeleteDraft = await this.draftProvider.findById(id);
     const data = await this.draftProvider.deleteById(id);
@@ -190,7 +187,7 @@ export class DraftController {
   @Put('/:id/restore')
   async restore(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const restored: any = await this.draftProvider.restoreById(id);
     if (!restored) {
@@ -207,7 +204,7 @@ export class DraftController {
   @Delete('/:id/purge')
   async purge(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const target = await this.draftProvider.findDeletedById(id);
     if (!target) {

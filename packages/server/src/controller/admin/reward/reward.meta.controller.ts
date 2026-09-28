@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { RewardDto } from 'src/types/reward.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -28,10 +29,7 @@ export class RewardMetaController {
   @Put()
   async update(@Body() updateDto: RewardDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.addOrUpdateReward(updateDto);
     this.isrProvider.activeAbout('更新打赏信息触发增量渲染！');
@@ -44,10 +42,7 @@ export class RewardMetaController {
   @Post()
   async create(@Body() updateDto: RewardDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.addOrUpdateReward(updateDto);
     this.isrProvider.activeAbout('新建打赏信息触发增量渲染！');
@@ -60,10 +55,7 @@ export class RewardMetaController {
   @Delete('/:name')
   async delete(@Param('name') name: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.deleteReward(name);
     this.isrProvider.activeAbout('删除打赏信息触发增量渲染！');

@@ -10,6 +10,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
@@ -45,7 +46,7 @@ export class FileController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: ATTACHMENT_MAX_BYTES } }))
   async upload(@UploadedFile() file: any) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     if (!file || !file.buffer) {
       throw new BadRequestException('没有收到文件！');
@@ -93,7 +94,7 @@ export class FileController {
   @Post('export')
   async exportAllAttachments() {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const path = await this.staticProvider.exportAllAttachments();
     return {
@@ -105,7 +106,7 @@ export class FileController {
   @Delete('/:sign')
   async delete(@Param('sign') sign: string) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.staticProvider.deleteOneBySign(sign, 'file');
     return {

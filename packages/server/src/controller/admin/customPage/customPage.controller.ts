@@ -13,6 +13,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CUSTOM_PAGE_UPLOAD_OPTIONS } from 'src/utils/uploadLimits';
 import { ApiTags } from '@nestjs/swagger';
@@ -42,7 +43,7 @@ export class CustomPageController {
   ) {
     // 会往静态目录写文件
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     if (!file) {
       throw new HttpException('未收到上传文件', HttpStatus.BAD_REQUEST);
@@ -89,10 +90,7 @@ export class CustomPageController {
   @Post()
   async createOne(@Body() dto: CustomPage) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.customPageProvider.createCustomPage(dto);
     return {
@@ -103,10 +101,7 @@ export class CustomPageController {
   @Post('file')
   async createFile(@Query('path') pathname: string, @Query('subPath') subPath: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.staticProvider.createFile(pathname, subPath);
     return {
@@ -117,10 +112,7 @@ export class CustomPageController {
   @Post('folder')
   async createFolder(@Query('path') pathname: string, @Query('subPath') subPath: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.staticProvider.createFolder(pathname, subPath);
     return {
@@ -132,10 +124,7 @@ export class CustomPageController {
   @Delete('file')
   async deleteFile(@Query('path') pagePath: string, @Query('key') key: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.staticProvider.deleteCustomPageFile(pagePath, key);
     return {
@@ -147,10 +136,7 @@ export class CustomPageController {
   @Put('file')
   async updateFileInFolder(@Body() dto: { filePath: string; pathname: string; content: string }) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
 
     const data = await this.staticProvider.updateCustomPageFileContent(
@@ -166,10 +152,7 @@ export class CustomPageController {
   @Put()
   async updateOne(@Body() dto: CustomPage) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.customPageProvider.updateCustomPage(dto);
     return {
@@ -180,10 +163,7 @@ export class CustomPageController {
   @Delete()
   async deleteOne(@Query('path') path: string) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const toDelete = await this.customPageProvider.getCustomPageByPath(path);
     if (toDelete && toDelete.type == 'folder') {

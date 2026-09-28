@@ -1,4 +1,5 @@
 import { config } from 'src/config';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import {
   BadRequestException,
   Body,
@@ -69,7 +70,7 @@ export class PipelineController {
   async createPipeline(@Body() createPipelineDto: CreatePipelineDto) {
     // 管线会 fork 子进程执行任意 JS，演示站必须禁掉（否则等于公开 RCE）
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const pipeline = await this.pipelineProvider.createPipeline(createPipelineDto);
     return {
@@ -80,7 +81,7 @@ export class PipelineController {
   @Delete('/:id')
   async deletePipelineById(@Param('id') idString: string) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const id = parsePipelineId(idString);
     const pipeline = await this.pipelineProvider.deletePipelineById(id);
@@ -96,7 +97,7 @@ export class PipelineController {
   ) {
     // 同上
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const id = parsePipelineId(idString);
     const pipeline = await this.pipelineProvider.updatePipelineById(id, updatePipelineDto);
@@ -109,7 +110,7 @@ export class PipelineController {
   async triggerPipelineById(@Param('id') idString: string, @Body() triggerDto: { input?: any }) {
     // 触发即执行任意 JS
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     const id = parsePipelineId(idString);
     const result = await this.pipelineProvider.triggerById(id, triggerDto.input);

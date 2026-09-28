@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { config } from 'src/config';
 
@@ -62,10 +63,7 @@ export class CollaboratorController {
   @Delete('/:id')
   async deleteCollaboratorById(@Param('id') id: number) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.userProvider.deleteCollaborator(id);
     await this.tokenProvider.disableAllCollaborator();
@@ -77,10 +75,7 @@ export class CollaboratorController {
   @Post()
   async createCollaborator(@Body() dto: Collaborator) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.userProvider.createCollaborator(dto);
     return {
@@ -91,10 +86,7 @@ export class CollaboratorController {
   @Put()
   async updateCollaborator(@Body() dto: Collaborator) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.userProvider.updateCollaborator(dto);
     await this.tokenProvider.disableAllCollaborator();

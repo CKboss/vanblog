@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { SocialDto, SocialType } from 'src/types/social.dto';
 import { AdminGuard } from 'src/provider/auth/auth.guard';
@@ -38,10 +39,7 @@ export class SocialMetaController {
   @Put()
   async update(@Body() updateDto: SocialDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.addOrUpdateSocial(updateDto);
     this.isrProvider.activeAll('更新联系方式触发增量渲染！');
@@ -54,10 +52,7 @@ export class SocialMetaController {
   @Post()
   async create(@Body() updateDto: SocialDto) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.addOrUpdateSocial(updateDto);
     this.isrProvider.activeAll('创建联系方式触发增量渲染！');
@@ -70,10 +65,7 @@ export class SocialMetaController {
   @Delete('/:type')
   async delete(@Param('type') type: SocialType) {
     if (config.demo && config.demo == 'true') {
-      return {
-        statusCode: 401,
-        message: '演示站禁止修改此项！',
-      };
+      return codedBody('demoSiteBlocked');
     }
     const data = await this.metaProvider.deleteSocial(type);
     this.isrProvider.activeAll('删除联系方式触发增量渲染！');

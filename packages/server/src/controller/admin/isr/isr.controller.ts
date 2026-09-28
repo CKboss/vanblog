@@ -1,4 +1,5 @@
 import { config } from 'src/config';
+import { codedBody } from 'src/utils/serverErrorCodes';
 import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
 
 import { ApiTags } from '@nestjs/swagger';
@@ -24,7 +25,7 @@ export class ISRController {
   async activeISR() {
     // 全站重渲染，代价很大
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     await this.isrProvider.activeAll('手动触发 ISR', undefined, {
       forceActice: true,
@@ -37,7 +38,7 @@ export class ISRController {
   @Put()
   async updateISRSetting(@Body() dto: ISRSetting) {
     if (config.demo && config.demo == 'true') {
-      return { statusCode: 401, message: '演示站禁止修改此项！' };
+      return codedBody('demoSiteBlocked');
     }
     await this.settingProvider.updateISRSetting(dto);
     await this.websiteProvider.restart('更新 ISR 配置');

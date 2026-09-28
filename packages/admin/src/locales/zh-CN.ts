@@ -2087,4 +2087,16 @@ export default {
   'error.mdzImportNoMarkdown': '压缩包里没有找到 Markdown 文件（*.md）：.mdz 应该是「一个 .md + 同名 .assets 图片目录」的 zip 包',
   // 🔴 期 9 第六批补：图片隐写检测那一档自己的限流（与 error.rateLimited 不是同一句）
   'error.imgDetectRateLimited': '图片检测过于频繁，请稍后再试',
+
+  // ── 🔴 期 9 第七批：演示站守卫族 8 个码（服务端 88 处 `return { statusCode: 401, message: … }`）。
+  //    🔴 `error.demoSiteBlocked` 的译文与既有的 `common.demoBlocked`（前端预拦截用的那句）**刻意一致**：
+  //    同一个操作在"前端先拦"与"服务端拦"两条路上，用户看到的必须是同一句话。
+  'error.demoSiteBlocked': '演示站禁止修改此项！',
+  'error.demoSiteArticleEditBlocked': '演示站禁止修改文章！',
+  'error.demoSiteArticleDeleteBlocked': '演示站禁止删除文章！',
+  'error.demoSiteArticleCreateBlocked': '演示站禁止创建文章！',
+  'error.demoSiteDraftPublishBlocked': '演示站禁止发布草稿！',
+  'error.demoSitePasswordChangeBlocked': '演示站禁止修改账号密码！',
+  'error.demoSiteLoginSecurityBlocked': '演示站禁止修改登录安全策略设置！',
+  'error.demoSiteCustomizingBlocked': '演示站禁止修改定制化设置！',
 };
