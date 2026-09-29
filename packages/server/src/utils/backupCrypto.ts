@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, ServerErrorCode, ServerErrorParams } from 'src/utils/serverErrorCodes';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { Transform, TransformCallback, Readable } from 'stream';
@@ -266,34 +266,47 @@ export function readEncryptionHeader(archivePath: string): BackupEncryptionHeade
  * scrypt 与解密循环，一个被替换的头部（例如 `keyLen: 1`）会让解密端做出蠢事。
  * 虽然 GCM 最终会拒绝，但**在花钱派生密钥之前**就把话说清楚更好。
  */
+/**
+ * 头部形状校验。⚠️ 这不是洁癖：头部里的 `N/r/p/keyLen/chunkPlainBytes` 会直接喂给
+ * scrypt 与解密循环，一个被替换的头部（例如 `keyLen: 1`）会让解密端做出蠢事。
+ * 虽然 GCM 最终会拒绝，但**在花钱派生密钥之前**就把话说清楚更好。
+ *
+ * 🔴 期 9 第十三批（13b）：`bad()` 的签名从 `(why: string)` 改成 `(code, params?)` ——
+ *    原来它把**中文原因**拼进 `加密归档头部不可信（${why}）：${archivePath}`，
+ *    只翻外壳会得到"英文外壳 + 中文内核"（见 §7.194 A / §7.195）。现在每个原因都是**一个完整句码**。
+ *    ⚠️ `{value}` / `{cipher}` / `{name}` 是**回显攻击者可控的值** ⇒ 一律 `String(...)` 过再传，
+ *    且不参与任何本地化改写（三份译文都原样插值）。
+ */
 function assertHeaderShape(header: any, archivePath: string): void {
-  const bad = (why: string): never => {
-    throw new BadRequestException(`加密归档头部不可信（${why}）：${archivePath}`);
+  const bad = (code: ServerErrorCode, params?: ServerErrorParams): never => {
+    throw codedError(code, { ...params, path: archivePath });
   };
-  if (!header || typeof header !== 'object') bad('不是对象');
-  if (header.v !== HEADER_VERSION) bad(`版本 ${header.v} != ${HEADER_VERSION}`);
-  if (header.cipher !== ENC_CIPHER) bad(`未知 cipher ${String(header.cipher)}`);
+  if (!header || typeof header !== 'object') bad('encHeaderNotObject');
+  if (header.v !== HEADER_VERSION) {
+    bad('encHeaderVersionMismatch', { version: String(header.v), expected: HEADER_VERSION });
+  }
+  if (header.cipher !== ENC_CIPHER) bad('encHeaderUnknownCipher', { cipher: String(header.cipher) });
   const kdf = header.kdf;
-  if (!kdf || typeof kdf !== 'object') bad('缺 kdf');
-  if (kdf.name !== 'scrypt') bad(`未知 kdf ${String(kdf.name)}`);
+  if (!kdf || typeof kdf !== 'object') bad('encHeaderMissingKdf');
+  if (kdf.name !== 'scrypt') bad('encHeaderUnknownKdf', { name: String(kdf.name) });
   for (const key of ['N', 'r', 'p', 'keyLen', 'saltLen'] as const) {
     const n = kdf[key];
-    if (!Number.isInteger(n) || n <= 0) bad(`kdf.${key} 非法（${String(n)}）`);
+    if (!Number.isInteger(n) || n <= 0) bad('encHeaderKdfParamInvalid', { key, value: String(n) });
   }
   // 上限：防止一个恶意头部让解密端申请天文数字的内存（scrypt 的 N 必须是 2 的幂）
-  if (kdf.N > 2 ** 21) bad(`kdf.N 过大（${kdf.N}）`);
-  if (kdf.keyLen !== 32) bad(`kdf.keyLen 必须是 32（AES-256），实际 ${kdf.keyLen}`);
-  if (kdf.saltLen !== 16) bad(`kdf.saltLen 必须是 16，实际 ${kdf.saltLen}`);
+  if (kdf.N > 2 ** 21) bad('encHeaderKdfNTooLarge', { value: String(kdf.N) });
+  if (kdf.keyLen !== 32) bad('encHeaderKeyLenNot32', { value: String(kdf.keyLen) });
+  if (kdf.saltLen !== 16) bad('encHeaderSaltLenNot16', { value: String(kdf.saltLen) });
   if (typeof header.salt !== 'string' || Buffer.from(header.salt, 'base64').length !== kdf.saltLen) {
-    bad('salt 不是合法 base64 或长度不符');
+    bad('encHeaderSaltInvalid');
   }
   if (typeof header.iv !== 'string' || Buffer.from(header.iv, 'base64').length !== IV_BYTES) {
-    bad(`iv 必须是 ${IV_BYTES} 字节的 base64`);
+    bad('encHeaderIvInvalid', { bytes: IV_BYTES });
   }
   if (!Number.isInteger(header.chunkPlainBytes) || header.chunkPlainBytes <= 0) {
-    bad(`chunkPlainBytes 非法（${String(header.chunkPlainBytes)}）`);
+    bad('encHeaderChunkBytesInvalid', { value: String(header.chunkPlainBytes) });
   }
-  if (!header.inner || typeof header.inner.format !== 'string') bad('缺 inner.format');
+  if (!header.inner || typeof header.inner.format !== 'string') bad('encHeaderMissingInnerFormat');
 }
 
 /** 序列化头部为"进 AAD 的那份字节"（必须与写盘那份逐字节相同）。 */

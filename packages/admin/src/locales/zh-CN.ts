@@ -2212,4 +2212,26 @@ export default {
   'error.encChunkOrderWrong': '加密归档的块顺序不对（第 {index} 块的 IV 与序号不匹配）：归档可能被重排、丢块，或截断后又被拼接过。',
   'error.encDecryptFailed': '解密失败（第 {index} 块）：口令不正确，或归档已被篡改/损坏（{cipher} 认证未通过）。口令与 salt 都不会写进日志。',
   'error.encNeedsPassphrase': '这份归档是加密的（{magic}，scrypt + {cipher}），但当前没有可用的解密口令。两个办法任选：①在恢复请求的 body 里带 `backupPassphrase`（只走 body，不会进 URL 或访问日志）；②给 server 设置 {env} 或 {envFile} 后重试。（口令不会被回显，报错与日志里只有长度。）',
+
+  // ── 🔴 期 9 第十三批（13b）：加密归档头部形状校验 13 个码（`assertHeaderShape()` 的 `bad()` 变体）。
+  //    🔴 原来是一个 `bad(why: string)` 助手把**中文原因**拼进 `加密归档头部不可信（${why}）：${path}`
+  //    ⇒ 只翻外壳会得到"英文外壳 + 中文内核"。现在**每个原因都是一个完整句码**（外壳那句重复 13 次）。
+  //    重复是有意的：🔴 每个码都必须能独立翻译成一整句 —— 这是"拆码"这条纪律的代价，
+  //    收益是"任何一条都不会夹中文"。
+  //    ⚠️ `{value}` / `{cipher}` / `{name}` / `{version}` 是**回显攻击者可控的值**（`String(...)` 过）⇒
+  //    它们是数据不是文案，三份译文都原样插值、不做任何本地化改写；`{key}` 只会是
+  //    `N` / `r` / `p` / `keyLen` / `saltLen`（ASCII 字段名）。
+  'error.encHeaderNotObject': '加密归档头部不可信（不是对象）：{path}',
+  'error.encHeaderVersionMismatch': '加密归档头部不可信（版本 {version} != {expected}）：{path}',
+  'error.encHeaderUnknownCipher': '加密归档头部不可信（未知 cipher {cipher}）：{path}',
+  'error.encHeaderMissingKdf': '加密归档头部不可信（缺 kdf）：{path}',
+  'error.encHeaderUnknownKdf': '加密归档头部不可信（未知 kdf {name}）：{path}',
+  'error.encHeaderKdfParamInvalid': '加密归档头部不可信（kdf.{key} 非法（{value}））：{path}',
+  'error.encHeaderKdfNTooLarge': '加密归档头部不可信（kdf.N 过大（{value}））：{path}',
+  'error.encHeaderKeyLenNot32': '加密归档头部不可信（kdf.keyLen 必须是 32（AES-256），实际 {value}）：{path}',
+  'error.encHeaderSaltLenNot16': '加密归档头部不可信（kdf.saltLen 必须是 16，实际 {value}）：{path}',
+  'error.encHeaderSaltInvalid': '加密归档头部不可信（salt 不是合法 base64 或长度不符）：{path}',
+  'error.encHeaderIvInvalid': '加密归档头部不可信（iv 必须是 {bytes} 字节的 base64）：{path}',
+  'error.encHeaderChunkBytesInvalid': '加密归档头部不可信（chunkPlainBytes 非法（{value}））：{path}',
+  'error.encHeaderMissingInnerFormat': '加密归档头部不可信（缺 inner.format）：{path}',
 };

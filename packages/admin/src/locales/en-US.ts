@@ -2035,4 +2035,22 @@ export default {
   'error.encChunkOrderWrong': 'The chunk order in the encrypted archive is wrong (the IV of chunk {index} does not match its sequence number): the archive may have been reordered, may be missing chunks, or may have been truncated and then spliced back together.',
   'error.encDecryptFailed': 'Decryption failed (chunk {index}): the passphrase is incorrect, or the archive has been tampered with or corrupted ({cipher} authentication failed). The passphrase and salt are never written to the log.',
   'error.encNeedsPassphrase': 'This archive is encrypted ({magic}, scrypt + {cipher}), but no decryption passphrase is currently available. Either include `backupPassphrase` in the body of the restore request (it travels only in the body and never reaches the URL or the access log), or set {env} or {envFile} for the server and retry. (The passphrase is never echoed; errors and logs contain only its length.)',
+
+  // ── 🔴 期 9 第十三批（13 keys）── frame: `The encrypted archive header is not trustworthy (<reason>): {path}`。
+  //    ⚠️ 本批**刻意不用** ICU 复数：`{bytes}`（#11）是规格陈述（`the base64 of {bytes} bytes`，实际恒为 12），
+  //    `{value}` / `{version}` / `{cipher}` / `{name}` / `{key}` 是**回显的标识符或非法值**（类型不定）⇒ 都不套复数。
+  //    🔴 嵌套括号必须保留（#6/#7/#8/#12）；`!=`、`AES-256`、`32`、`16` 与所有字段名逐字保留。
+  'error.encHeaderNotObject': 'The encrypted archive header is not trustworthy (not an object): {path}',
+  'error.encHeaderVersionMismatch': 'The encrypted archive header is not trustworthy (version {version} != {expected}): {path}',
+  'error.encHeaderUnknownCipher': 'The encrypted archive header is not trustworthy (unknown cipher {cipher}): {path}',
+  'error.encHeaderMissingKdf': 'The encrypted archive header is not trustworthy (missing kdf): {path}',
+  'error.encHeaderUnknownKdf': 'The encrypted archive header is not trustworthy (unknown kdf {name}): {path}',
+  'error.encHeaderKdfParamInvalid': 'The encrypted archive header is not trustworthy (kdf.{key} is invalid ({value})): {path}',
+  'error.encHeaderKdfNTooLarge': 'The encrypted archive header is not trustworthy (kdf.N is too large ({value})): {path}',
+  'error.encHeaderKeyLenNot32': 'The encrypted archive header is not trustworthy (kdf.keyLen must be 32 (AES-256), actual {value}): {path}',
+  'error.encHeaderSaltLenNot16': 'The encrypted archive header is not trustworthy (kdf.saltLen must be 16, actual {value}): {path}',
+  'error.encHeaderSaltInvalid': 'The encrypted archive header is not trustworthy (salt is not valid base64 or has the wrong length): {path}',
+  'error.encHeaderIvInvalid': 'The encrypted archive header is not trustworthy (iv must be the base64 of {bytes, plural, one {# byte} other {# bytes}}): {path}',
+  'error.encHeaderChunkBytesInvalid': 'The encrypted archive header is not trustworthy (chunkPlainBytes is invalid ({value})): {path}',
+  'error.encHeaderMissingInnerFormat': 'The encrypted archive header is not trustworthy (missing inner.format): {path}',
 };

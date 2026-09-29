@@ -382,36 +382,72 @@ describe('hashArchiveMembers（deep 校验用的那一遍流）', () => {
   //    `full-restore-`，以及 `*.tmp-<pid>` 这种半成品名），把别的进程的噪音排除掉；
   //    并且 🔴 带一条**合成反证**（canary）：故意在 /tmp 里造一个符合这些前缀的条目，判据必须抓到它
   //    （否则"过滤"可能过滤掉了 everything，断言变成恒真）。
-  const OURS = /^vanblog-|^full-backup-|^full-restore-|\.tmp-\d+$/;
-  const ourTmpEntries = () => fs.readdirSync(os.tmpdir()).filter((n) => OURS.test(n)).sort();
-
-  it('🔴 反证：判据真的在看"我们自己那类"条目（canary 必须被抓到）', () => {
-    const canary = path.join(os.tmpdir(), `vanblog-verify-canary-${process.pid}`);
-    fs.writeFileSync(canary, 'x');
-    try {
-      expect(ourTmpEntries()).toContain(`vanblog-verify-canary-${process.pid}`);
-    } finally {
-      fs.rmSync(canary, { force: true });
-    }
-    expect(ourTmpEntries()).not.toContain(`vanblog-verify-canary-${process.pid}`);
+  // 🔴 2026-09-29（期 9 第十三批 13b）：这条判据的**第五次**修订。前四次失败的原因各不相同，都记下来：
+  //    ① 最初数 `os.tmpdir()` 里的**全部**条目（`后 - 前 <= 1`）⇒ 别的进程建一个临时文件就红
+  //       （实测 `Expected <= 38656 / Received 38657`，差 1）；
+  //    ② 改成"注入私有 TMPDIR" ⇒ **实测无效**（Node 的 `os.tmpdir()` 不重读 `TMPDIR`），
+  //       是反空转断言 `expect(os.tmpdir()).toBe(privateTmp)` 抓出来的；
+  //    ③ 改成"只数看起来是我们自己的条目"（`/^vanblog-|^full-backup-|^full-restore-|\.tmp-\d+$/`）
+  //       ⇒ 🔴 **仍然假红**：jest **并行**跑套件，同仓库**别的 spec**（`vanblog-hardening-*`）
+  //       也在这个窗口里建临时目录，实测抓到 3 个（`Expected [] / Received ["vanblog-hardening-EtKr70", …]`）；
+  //    ④ 改成"对 `fs.mkdtempSync` / `writeFileSync` / `mkdir(Sync)` 装 spy，断言一次都没被调用"
+  //       ⇒ 🔴 **装不上**：`TypeError: Cannot redefine property: mkdtempSync`
+  //       （Node 的 `fs` 导出属性在这个环境下不可重定义 ⇒ `jest.spyOn` 直接抛）。
+  //       👉 🔴 **"盯 API"这个方向是对的（它最贴性质、且与别的进程无关），但 `fs` 这个对象盯不了**；
+  //       要盯就得让被测代码通过一个**可注入的门面**访问 fs（那是产品代码的重构，不是一条测试该顺手做的事）。
+  //    ⑤ 改成"两条互补判据"：(a) 源码级 + (b) 目录级但只认这一族的三个前缀
+  //       ⇒ 🔴 **(b) 仍然假红**（第 6 次）：同仓库的**兄弟套件**也在 `os.tmpdir()` 下用同一族前缀建目录
+  //       （`backupVerify.spec.ts` → `vanblog-verify-`、`backupVerifyManifestNote.spec.ts` → `vanblog-verify-note-`），
+  //       而 jest **并行**跑套件 ⇒ 前缀收窄到任何程度都无法区分。⇒ 🔴 **(b) 已删除**，只保留 (a)。
+  //       **结论（不要再试第七种花样）**：👉 "扫共享目录"这条路在本仓库**彻底不可用**
+  //       （不是"收窄前缀就能修好"）；要判"某段代码不落盘"只有两条可行路：
+  //       **源码级判据**（本文件用的：确定性 + 可变异对照），或**让产品代码通过可注入的 fs 门面**
+  //       （那是产品重构，不该由一条测试顺手做）。
+  //    下面是保留下来的 (a)：
+  //       (a) 🔴 **源码级**：`hashArchiveMembers` 的函数体里不许出现任何"建目录/写文件"的 API 名
+  //           （`mkdtemp` / `mkdir` / `writeFile` / `createWriteStream` / `appendFile`）。
+  //           确定性、与并行套件无关，而且直接钉住"不落盘"这个**意图**；
+  //       (b) **目录级（收窄前缀）**：只看**这一族备份代码自己会用的**三个前缀
+  //           （`full-backup-` / `full-restore-` / `vanblog-verify-`）——
+  //           ⚠️ 刻意**不再**用宽泛的 `^vanblog-`（那会把兄弟套件的 `vanblog-hardening-*` 算进来），
+  //           也**不再**用 `\.tmp-\d+$`（那是 rss/sitemap 族的命名，它们各自有私有目录）。
+  //           🔴 残余风险如实写清：如果将来有别的套件**在同一个窗口**用这三个前缀建目录，这条还是会假红
+  //           ⇒ 那时应当**只保留 (a)**，因为 (a) 已经足够钉住性质。
+  it('🔴 反证 (a)：源码级判据真的在看那个函数体（canary 必须被抓到）', () => {
+    // ⚠️ 本文件只 import 了 `fs` / `path`（没有 `readFileSync` / `resolve as resolvePath`）⇒ 用带命名空间的形式。
+    // 🔴 而且要读的是 **`fullBackup.ts`** —— `hashArchiveMembers` 定义在那里，
+    //    `backupVerify.ts` 只是 `import { hashArchiveMembers } from './fullBackup'` 再用
+    //    （第一版读错文件 ⇒ `indexOf` 返回 -1，反空转那条 `expect(start).toBeGreaterThan(0)` 当场抓住）。
+    //    👉 源码级判据**必须先证明"锚点真的找到了"**，否则"函数体里没有写盘 API"是空的绿。
+    const src = fs.readFileSync(path.resolve(__dirname, 'fullBackup.ts'), 'utf8');
+    const start = src.indexOf('export async function hashArchiveMembers');
+    expect(start).toBeGreaterThan(0);
+    // 函数体到下一个顶层 `export `/`function ` 为止
+    const rest = src.slice(start);
+    const nextTop = rest.search(/\n(?:export )?(?:async )?function /);
+    const body = nextTop > 0 ? rest.slice(0, nextTop) : rest;
+    expect(body.length).toBeGreaterThan(200); // 反空转：真的截到了一段函数体
+    // canary：往这段文本里塞一个"写文件"的调用，判据必须报出来
+    const FORBIDDEN = /mkdtemp|mkdir|writeFile|createWriteStream|appendFile/;
+    expect(FORBIDDEN.test(body)).toBe(false);
+    expect(FORBIDDEN.test(body + '\n  fs.writeFileSync(p, x);')).toBe(true);
   });
 
   it('不落盘、不解包，直接给出每个成员的哈希（内存与临时目录都不涨）', async () => {
     const dir = tmpDir();
     try {
       const { archivePath, expectedHashes } = await buildArchive(dir);
-      const beforeOurs = ourTmpEntries();
       const { result, decompressError } = await hashArchiveMembers(archivePath, specFor('gzip')!);
       expect(decompressError).toBeNull();
       expect(result.complete).toBe(true);
       for (const [name, expected] of Object.entries(expectedHashes)) {
         expect(result.members[name]).toEqual(expected);
       }
-      // 没有在临时目录里留下解包出来的东西
-      // 🔴 只比"我们自己那类"条目（见上面 OURS）：本 spec 自己用 `vanblog-verify-int-*` 建过目录，
-      //    所以按**名字集合**比（新增的才算），而不是比总数。
-      const added = ourTmpEntries().filter((n) => !beforeOurs.includes(n) && !n.startsWith('vanblog-verify-int-'));
-      expect(added).toEqual([]);
+      // 🔴 这里**不再扫 /tmp**（第 6 次修订，见上面那段记录）：同仓库的兄弟套件
+      //    （`backupVerify.spec.ts` 用 `vanblog-verify-`、`backupVerifyManifestNote.spec.ts` 用 `vanblog-verify-note-`）
+      //    也在 `os.tmpdir()` 下建目录，而 jest 是**并行**跑套件的 ⇒ 前缀收窄到任何程度都无法区分
+      //    "我留下的"与"兄弟套件留下的"。"不落盘"这个性质由**上面那条源码级判据**钉住
+      //    （它有 canary 反证，也有真变异对照：往函数体插一句 writeFileSync 就红）。
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

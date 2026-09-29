@@ -1986,4 +1986,24 @@ export default {
   'error.encChunkOrderWrong': '加密歸檔的區塊順序不對（第 {index} 區塊的 IV 與序號不符）：歸檔可能被重排、丟區塊，或截斷後又被拼接過。',
   'error.encDecryptFailed': '解密失敗（第 {index} 區塊）：口令不正確，或歸檔已被篡改/損壞（{cipher} 認證未通過）。口令與 salt 都不會寫進日誌。',
   'error.encNeedsPassphrase': '這份歸檔是加密的（{magic}，scrypt + {cipher}），但目前沒有可用的解密口令。兩個辦法任選：①在恢復請求的 body 裡帶 `backupPassphrase`（只走 body，不會進 URL 或存取日誌）；②給 server 設定 {env} 或 {envFile} 後重試。（口令不會被回顯，報錯與日誌裡只有長度。）',
+
+  // ── 🔴 期 9 第十三批（13 條）── 外框：`加密歸檔頭部不可信（…）：{path}`。
+  //    地區用詞：**歸檔**（归档）/ **頭部** / **物件**（对象）/ **版本** / **未知** / **缺** / **非法** /
+  //    **過大**（过大）/ **必須是** / **實際**（实际）/ **長度不符** / **位元組**（字节）。
+  //    🔴 `kdf`、`kdf.N`、`kdf.keyLen`、`kdf.saltLen`、`cipher`、`salt`、`iv`、`base64`、
+  //    `chunkPlainBytes`、`inner.format`、`AES-256`、`!=`、`32`、`16` 三份逐字相同；
+  //    嵌套括号（`kdf.{key} 非法（{value}）`）原样保留。
+  'error.encHeaderNotObject': '加密歸檔頭部不可信（不是物件）：{path}',
+  'error.encHeaderVersionMismatch': '加密歸檔頭部不可信（版本 {version} != {expected}）：{path}',
+  'error.encHeaderUnknownCipher': '加密歸檔頭部不可信（未知 cipher {cipher}）：{path}',
+  'error.encHeaderMissingKdf': '加密歸檔頭部不可信（缺 kdf）：{path}',
+  'error.encHeaderUnknownKdf': '加密歸檔頭部不可信（未知 kdf {name}）：{path}',
+  'error.encHeaderKdfParamInvalid': '加密歸檔頭部不可信（kdf.{key} 非法（{value}））：{path}',
+  'error.encHeaderKdfNTooLarge': '加密歸檔頭部不可信（kdf.N 過大（{value}））：{path}',
+  'error.encHeaderKeyLenNot32': '加密歸檔頭部不可信（kdf.keyLen 必須是 32（AES-256），實際 {value}）：{path}',
+  'error.encHeaderSaltLenNot16': '加密歸檔頭部不可信（kdf.saltLen 必須是 16，實際 {value}）：{path}',
+  'error.encHeaderSaltInvalid': '加密歸檔頭部不可信（salt 不是合法 base64 或長度不符）：{path}',
+  'error.encHeaderIvInvalid': '加密歸檔頭部不可信（iv 必須是 {bytes} 位元組的 base64）：{path}',
+  'error.encHeaderChunkBytesInvalid': '加密歸檔頭部不可信（chunkPlainBytes 非法（{value}））：{path}',
+  'error.encHeaderMissingInnerFormat': '加密歸檔頭部不可信（缺 inner.format）：{path}',
 };

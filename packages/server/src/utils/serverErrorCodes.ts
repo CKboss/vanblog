@@ -303,6 +303,30 @@ export const SERVER_ERROR_CODES = {
   //    要么整批推迟；🔴 绝不能只翻外壳（那会得到"英文外壳 + 中文内核"）。
   // ⚠️ `{env}` / `{envFile}` / `{envInline}` / `{cipher}` / `{magic}` 传的都是**ASCII 技术标识符**
   //    （环境变量名、算法名、magic 串）⇒ 三语一样，不是"把文案当参数传"。
+  // ── 加密归档头部形状校验（`assertHeaderShape()` 的 13 个 `bad('中文原因')` 变体，期 9 第十三批 13b）──
+  // 🔴 原来是一个 `bad(why: string)` 助手把**中文原因**拼进 `加密归档头部不可信（${why}）：${path}`
+  //    ⇒ 与 §7.194 A 段同型（内层给原因、外层拼一句）。只翻外壳会得到"英文外壳 + 中文内核"，
+  //    所以这里把 **13 个原因各升级成一个完整句码**（外壳那句在每个码里重复一次）——
+  //    重复是有意的：🔴 **每个码都必须能独立翻译成一整句**，这是"拆码"这条纪律的代价，
+  //    而收益是"任何一条都不会夹中文"。
+  // ⚠️ 嵌套括号（`kdf.{key} 非法（{value}）`）与 `!=`、`AES-256`、`32`、`16` 都按原文保留。
+  // 🔴 `{key}` 只会是 `N` / `r` / `p` / `keyLen` / `saltLen`（**ASCII 字段名**，来自那个 for 循环的常量数组），
+  //    `{value}` / `{cipher}` / `{name}` / `{version}` 是**回显攻击者可控的值**（`String(...)` 过）⇒
+  //    它们不是文案，是数据；🔴 也正因为是"回显不可信输入"，三份译文都必须原样插值、不做任何本地化改写。
+  encHeaderNotObject: entry('加密归档头部不可信（不是对象）：{path}', BadRequestException),
+  encHeaderVersionMismatch: entry('加密归档头部不可信（版本 {version} != {expected}）：{path}', BadRequestException),
+  encHeaderUnknownCipher: entry('加密归档头部不可信（未知 cipher {cipher}）：{path}', BadRequestException),
+  encHeaderMissingKdf: entry('加密归档头部不可信（缺 kdf）：{path}', BadRequestException),
+  encHeaderUnknownKdf: entry('加密归档头部不可信（未知 kdf {name}）：{path}', BadRequestException),
+  encHeaderKdfParamInvalid: entry('加密归档头部不可信（kdf.{key} 非法（{value}））：{path}', BadRequestException),
+  encHeaderKdfNTooLarge: entry('加密归档头部不可信（kdf.N 过大（{value}））：{path}', BadRequestException),
+  encHeaderKeyLenNot32: entry('加密归档头部不可信（kdf.keyLen 必须是 32（AES-256），实际 {value}）：{path}', BadRequestException),
+  encHeaderSaltLenNot16: entry('加密归档头部不可信（kdf.saltLen 必须是 16，实际 {value}）：{path}', BadRequestException),
+  encHeaderSaltInvalid: entry('加密归档头部不可信（salt 不是合法 base64 或长度不符）：{path}', BadRequestException),
+  encHeaderIvInvalid: entry('加密归档头部不可信（iv 必须是 {bytes} 字节的 base64）：{path}', BadRequestException),
+  encHeaderChunkBytesInvalid: entry('加密归档头部不可信（chunkPlainBytes 非法（{value}））：{path}', BadRequestException),
+  encHeaderMissingInnerFormat: entry('加密归档头部不可信（缺 inner.format）：{path}', BadRequestException),
+
   passphraseFileReadFailed: entry(
     '读取 {env}（{path}）失败：{reason} —— 已拒绝继续（不会静默回落到明文备份）。' +
       '请检查路径与读权限，或改用 {envInline}。',

@@ -84,7 +84,8 @@ for (const l of LOCALES) {
 // 🔴 86 → **74**（期 9 第十一批：零散 UI 文案 12 处迁进码表（含 2 处 `(空)` 中文兜底回归的修复））
 // 🔴 74 → **64**（期 9 第十二批：备份签名密钥 10 处 throw 迁进 9 个码）
 // 🔴 64 → **53**（期 9 第十三批（13a）：备份加密 11 处 throw 迁进 11 个码）
-const THROW_BUDGET = 53;
+// 🔴 53 → **52**（期 9 第十三批（13b）：assertHeaderShape 的 bad() 助手改成传码 ⇒ 那 1 处 throw 站点消失（13 个变体各成一个码））
+const THROW_BUDGET = 52;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -636,6 +637,71 @@ test('🔴 服务端错误码 · ④ 调用点传的 params 必须与码表里�
             problems.push(
               `${rel}: { code: '${codeLit}', … } 少传了 {${miss.join(', ')}} ⇒ 用户会看到字面占位符`,
             );
+          }
+        }
+      }
+      // 🔴 期 9 第十三批（13b）新增：**"码名当第一个实参传给一个本地助手"这种形状也要对账**。
+      //    起因：`backupCrypto.ts` 的 `assertHeaderShape()` 里有个助手
+      //    `const bad = (code, params?) => { throw codedError(code, { ...params, path: archivePath }); }`，
+      //    调用点写成 `bad('encHeaderKdfParamInvalid', { key, value })` ——
+      //    🔴 变异对照 B54-M2 把 `key` 改成 `field`（那个占位符就永远不会被渲染）⇒ **全套 563 条断言全绿**，
+      //    因为判据只认 `codedError(` / `codedBody(` 这两种**函数名**。
+      //    这是 §7.188 C 那个教训的**第二次重演**（"判据只认某几种形状 ⇒ 换个形状就隐身"）。
+      //    修法：只要"第一个实参是**已登记的码名字面量**、第二个实参是对象字面量"，就对账一次。
+      //    ⚠️ 🔴 但**只查"多传了码表里没有的参数"这一个方向**，不查"少传了"：
+      //    本地助手**可以合法地补参数**（`bad()` 就补了 `path`），所以在调用点上"少了 {path}"
+      //    不是缺陷而是设计；而"多传了一个码表里没有的名字"在任何形状下都是缺陷
+      //    （助手是透传的，那个参数永远不会被渲染）。
+      //    👉 🔴 **判据的两个方向可以有不同的适用范围**：一个方向能推广，另一个不能 —— 要分别说清理由，
+      //    不要"为了对称"把两个方向都放开（那会立刻制造假红）或都关掉（那会留下真盲区）。
+      if (nd.type === 'CallExpression' && nd.callee && nd.arguments && nd.arguments.length >= 2) {
+        const helperCode = str(nd.arguments[0]);
+        const calleeName = nd.callee.type === 'Identifier' ? nd.callee.name : '';
+        if (
+          helperCode &&
+          CODE_ZH[helperCode] &&
+          !/^coded(Error|Body)$/.test(calleeName) &&
+          nd.arguments[1] &&
+          nd.arguments[1].type === 'ObjectExpression'
+        ) {
+          const want = new Set(
+            [...String(CODE_ZH[helperCode]).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
+          );
+          const got = [];
+          for (const pp of nd.arguments[1].properties || []) {
+            if (!pp || (pp.type !== 'ObjectProperty' && pp.type !== 'Property') || !pp.key) continue;
+            const k = pp.key.name || pp.key.value;
+            if (typeof k === 'string') got.push(k);
+          }
+          const unknown = got.filter((k) => !want.has(k));
+          if (unknown.length) {
+            problems.push(
+              `${rel}: ${calleeName || '(?)'}('${helperCode}', { ${unknown.join(', ')} }) 传了码表里没有的参数` +
+                `（码表占位符是 {${[...want].join(', ') || '无'}}）⇒ 这些参数永远不会被渲染。` +
+                `⚠️ 这里只查"多传"，不查"少传"：本地助手可以合法地补参数（例如 bad() 会补 path）`,
+            );
+          }
+          // 🔴 同一个对象里也不许出现**中文字面量**（与上面 codedError 那支同一条纪律）
+          for (const pp of nd.arguments[1].properties || []) {
+            if (!pp || (pp.type !== 'ObjectProperty' && pp.type !== 'Property')) continue;
+            const keyName = pp.key && (pp.key.name || pp.key.value);
+            const scan = (x) => {
+              if (!x || typeof x !== 'object') return;
+              if (Array.isArray(x)) { x.forEach(scan); return; }
+              if ((x.type === 'StringLiteral' || x.type === 'Literal') &&
+                  typeof x.value === 'string' && /[\u3400-\u4dbf\u4e00-\u9fff]/.test(x.value)) {
+                problems.push(
+                  `${rel}: ${calleeName || '(?)'}('${helperCode}') 的 params.${keyName} 里出现中文字面量 ` +
+                    `${JSON.stringify(x.value)} ⇒ 英文/繁中界面会夹中文。修法：**拆码**`,
+                );
+              }
+              for (const kk of Object.keys(x)) {
+                if (kk === 'loc' || kk === 'start' || kk === 'end') continue;
+                const v = x[kk];
+                if (v && typeof v === 'object') scan(v);
+              }
+            };
+            scan(pp.value);
           }
         }
       }

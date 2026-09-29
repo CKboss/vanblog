@@ -268,6 +268,20 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   // 🔴 期 9 第十二批：备份签名密钥 9 个码（🔴 其中两个是"完整句"码：内层"类型不对"不再抛裸 Error
   //    让外层拼中文，而是自己带上指引 ⇒ 外层 catch 用 `isCodedError` 判断后**原样重抛**）
   // 🔴 期 9 第十三批（13a）：备份加密 11 个码
+  // 🔴 期 9 第十三批（13b）：加密归档头部形状校验 13 个码（`assertHeaderShape` 的 `bad()` 变体）
+  encHeaderNotObject: { status: 400, error: 'Bad Request' },
+  encHeaderVersionMismatch: { status: 400, error: 'Bad Request' },
+  encHeaderUnknownCipher: { status: 400, error: 'Bad Request' },
+  encHeaderMissingKdf: { status: 400, error: 'Bad Request' },
+  encHeaderUnknownKdf: { status: 400, error: 'Bad Request' },
+  encHeaderKdfParamInvalid: { status: 400, error: 'Bad Request' },
+  encHeaderKdfNTooLarge: { status: 400, error: 'Bad Request' },
+  encHeaderKeyLenNot32: { status: 400, error: 'Bad Request' },
+  encHeaderSaltLenNot16: { status: 400, error: 'Bad Request' },
+  encHeaderSaltInvalid: { status: 400, error: 'Bad Request' },
+  encHeaderIvInvalid: { status: 400, error: 'Bad Request' },
+  encHeaderChunkBytesInvalid: { status: 400, error: 'Bad Request' },
+  encHeaderMissingInnerFormat: { status: 400, error: 'Bad Request' },
   passphraseFileReadFailed: { status: 400, error: 'Bad Request' },
   passphraseFileEmpty: { status: 400, error: 'Bad Request' },
   passphraseTooShort: { status: 400, error: 'Bad Request' },
