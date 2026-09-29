@@ -427,6 +427,19 @@ export const SERVER_ERROR_CODES = {
     BadRequestException,
   ),
 
+  // ── 导出与 caddy 的响应体短提示（期 9 第十七批）────────────────────────────
+  // 🔴 这 5 条是 `res.status(…).json({ statusCode, message })` 的**裸响应体**（不经过 Nest 的异常管道）
+  //    ⇒ 用 `codedBody()`（返回体）而不是 `codedError()`（抛异常）。
+  //    ⚠️ `exportNoImagesToPack` 那条响应体里已经有一个**后台在读的协议码** `code: 'NO_IMAGES_FOR_MDZ'`
+  //    （`packages/admin/src/services/van-blog/exportFormats.js` 的 `EXPORT_NO_IMAGES_CODE`，
+  //    后台按它分支"这不是失败，只是没有图片"）⇒ 🔴 迁移时必须用 `codedBody(code, params, extra)`
+  //    把那个字段**原样保留**，而 `codedBody` 自己的 `code` 字段会是 `exportNoImagesToPack`
+  //    —— 两个 code 字段会撞名！所以这一条**刻意不迁**，见收口台账里的说明。
+  exportMissingContent: entry('缺少要导出的正文内容！', HttpException, 400),
+  exportMissingArticleId: entry('缺少文章 id！', HttpException, 400),
+  exportGenerateFailed: entry('导出产物生成失败', HttpException, 500),
+  caddyUpdateFailedSeeLog: entry('更新失败！请查看 Caddy 日志获取详细信息！', HttpException, 500),
+
   archiveFormatUnknown: entry(
     '无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）',
     BadRequestException,

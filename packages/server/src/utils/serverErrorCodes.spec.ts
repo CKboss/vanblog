@@ -286,6 +286,11 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   restoreRejectSigMismatch: { status: 400, error: 'Bad Request' },
   restoreRejectSigKeyMismatch: { status: 400, error: 'Bad Request' },
   restoreRejectSigMalformed: { status: 400, error: 'Bad Request' },
+  // 🔴 期 9 第十七批：4 条走 `codedBody()` 的裸响应体（⚠️ 基类 + 显式 status ⇒ **没有 error 字段**）
+  exportMissingContent: { status: 400 },
+  exportMissingArticleId: { status: 400 },
+  exportGenerateFailed: { status: 500 },
+  caddyUpdateFailedSeeLog: { status: 500 },
   archiveFormatUnknown: { status: 400, error: 'Bad Request' },
   archiveToolMissingForInspect: { status: 400, error: 'Bad Request' },
   archiveToolMissingForRestore: { status: 400, error: 'Bad Request' },

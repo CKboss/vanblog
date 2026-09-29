@@ -192,6 +192,8 @@ const IDENTICAL_ZH_TW_OK = [
   // 🔴 期 9 第八批：`缺少 id` 四个字全部简繁同形（缺 / 少 都是同形字，`id` 是技术标识符）⇒ 同形是正确译文
   // 🔴 期 9 第十一批：`文章不存在！` 与 `草稿不存在！` —— 每个字都简繁同形
   //   （文/章/草/稿/不/存/在/！）⇒ 同形是**正确译文**，不是"复制简体充数"。
+  // 🔴 期 9 第十七批：`缺少文章 id！` —— 缺/少/文/章/id/！ 全部简繁同形 ⇒ 同形是正确译文
+  'error.exportMissingArticleId',
   'error.exportArticleNotFound',
   'error.exportDraftNotFound',
   'error.themeIdMissing',

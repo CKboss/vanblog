@@ -2286,4 +2286,17 @@ export default {
   'error.backupRenameFailed': '备份文件改名就位失败（{from} -> {to}）：{reason}',
   'error.backupVerifyThrew': '整站备份校验失败：{reason}（归档已保留：{name}）',
   'error.backupVerifyFailedSummary': '整站备份校验失败：{count} 项不通过（第一项：{first}）（归档已保留：{name}）。逐项原因见服务端日志与校验报告。',
+
+  // ── 🔴 期 9 第十七批：导出与 caddy 的响应体短提示 4 个码。
+  //    🔴 这几条是 `res.status(…).json({ statusCode, message })` 的**裸响应体**（不经过 Nest 异常管道）
+  //    ⇒ 用 `codedBody()`（返回体）而不是 `codedError()`（抛异常）。
+  //    ⚠️ 同族那条「这篇内容里没有可打包的图片…」**刻意没迁**：它的响应体里已经有一个
+  //    **后台在读的协议码** `code: 'NO_IMAGES_FOR_MDZ'`（`exportFormats.js` 的 `EXPORT_NO_IMAGES_CODE`，
+  //    后台按它分支"这不是失败，只是没有图片"），而 `codedBody()` 自己也要写 `code` 字段 ⇒
+  //    🔴 **两个 code 会撞名**（`extra` 刻意不许覆盖那四个地基字段，所以协议码会被丢掉、后台分支会坏）。
+  //    要迁得先决定"字段改名（`errorCode`）还是嵌套"，那是**线路契约变更**，单独排一批。
+  'error.exportMissingContent': '缺少要导出的正文内容！',
+  'error.exportMissingArticleId': '缺少文章 id！',
+  'error.exportGenerateFailed': '导出产物生成失败',
+  'error.caddyUpdateFailedSeeLog': '更新失败！请查看 Caddy 日志获取详细信息！',
 };

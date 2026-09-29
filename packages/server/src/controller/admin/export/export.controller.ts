@@ -11,7 +11,7 @@ import {
 // 🔴 期 9（服务端错误码框架）：消息的**权威中文**在 `src/utils/serverErrorCodes.ts` 的登记表里，这里只写码。
 //    响应体仍是 Nest 的规范形状 + `code`（`message` 逐字不变、`error` 字段保留），
 //    admin 侧**有码用码、无码回落 message** ⇒ 渐进迁移任何时刻都可用。
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, codedBody } from 'src/utils/serverErrorCodes';
 import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import * as fs from 'fs';
@@ -76,11 +76,12 @@ export class ExportController {
     // raw 模式（编辑器未保存内容 / 关于页）不需要 id，但必须有正文
     if (type === 'raw') {
       if (typeof body?.content !== 'string') {
-        res.status(400).json({ statusCode: 400, message: '缺少要导出的正文内容！' });
+        // 🔴 裸响应体 ⇒ 用 `codedBody()`（不是 `codedError()`：这里不抛异常，是 `res.json` + `return`）。
+        res.status(400).json(codedBody('exportMissingContent'));
         return;
       }
     } else if (id === undefined || id === null || id === '') {
-      res.status(400).json({ statusCode: 400, message: '缺少文章 id！' });
+      res.status(400).json(codedBody('exportMissingArticleId'));
       return;
     }
     const built = await this.markdownExportProvider.build({
@@ -136,7 +137,7 @@ export class ExportController {
       format === 'md' ? built.mdPath : format === 'mdz' ? built.mdzPath : built.zipPath;
     if (!target) {
       // 理论上到不了这里；真到了也不要留垃圾
-      res.status(500).json({ statusCode: 500, message: '导出产物生成失败' });
+      res.status(500).json(codedBody('exportGenerateFailed'));
       fs.rmSync(built.tmpDir, { recursive: true, force: true });
       return;
     }

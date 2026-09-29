@@ -101,7 +101,8 @@ const THROW_BUDGET = 27;
 // 🔴 103 → **102**（同上：`img.controller.ts` 那处 429 信封迁进了码表）
 // 🔴 102 → **18**（期 9 第七批）：演示站守卫族 **82 处**（8 种文案 ⇒ 8 个码）全部迁进 `codedBody()`。
 //   这是单批覆盖最多站点的一族 —— 它此前占了这个口径的 **80%**（102 里 84 处是它）。
-const MESSAGE_BODY_BUDGET = 18;
+// 🔴 18 → **14**（期 9 第十七批：export.controller 3 处 + caddy.controller 1 处迁进 codedBody()）
+const MESSAGE_BODY_BUDGET = 14;
 
 /** 码 → 码表里的中文模板（`{name}` 占位符的权威来源）；供"调用点参数对账"那条判据用 */
 const CODE_ZH = (() => {

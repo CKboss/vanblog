@@ -2057,4 +2057,12 @@ export default {
   'error.backupRenameFailed': '備份檔案改名就位失敗（{from} -> {to}）：{reason}',
   'error.backupVerifyThrew': '整站備份校驗失敗：{reason}（歸檔已保留：{name}）',
   'error.backupVerifyFailedSummary': '整站備份校驗失敗：{count} 項不通過（第一項：{first}）（歸檔已保留：{name}）。逐項原因見服務端日誌與校驗報告。',
+
+  // ── 🔴 期 9 第十七批（4 條）── 地區用詞：**缺少要匯出的正文內容**（导出→匯出）/ **缺少文章 id** /
+  //    **匯出產物產生失敗**（生成→產生）/ **更新失敗** / **請查看 Caddy 日誌取得詳細資訊**（获取详细信息→取得詳細資訊）。
+  //    🔴 `Caddy`、`id` 三份逐字相同；中文的 `！` 在英文是 `!`。
+  'error.exportMissingContent': '缺少要匯出的正文內容！',
+  'error.exportMissingArticleId': '缺少文章 id！',
+  'error.exportGenerateFailed': '匯出產物產生失敗',
+  'error.caddyUpdateFailedSeeLog': '更新失敗！請查看 Caddy 日誌取得詳細資訊！',
 };

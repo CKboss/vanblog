@@ -140,10 +140,8 @@ export class CaddyController {
     }
     const result = await this.caddyProvider.setRedirect(dto.redirect || false);
     if (!result) {
-      return {
-        statusCode: 500,
-        message: '更新失败！请查看 Caddy 日志获取详细信息！',
-      };
+      // 🔴 这条是给**后台界面**看的（与同文件那个给 caddy 看的 403「未授权的域名」不同 ⇒ 那个不迁）。
+      return codedBody('caddyUpdateFailedSeeLog');
     }
     await this.settingProvider.updateHttpsSetting(dto);
     return {

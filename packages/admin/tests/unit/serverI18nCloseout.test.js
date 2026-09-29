@@ -173,8 +173,7 @@ const LEDGER = [
 
   // ══ E. 欠条：报告形状族（要先把 `reason: string` 改成 `code + params`）══
   {
-    kind: 'iou',
-    batch: '期 9 第十七批',
+    kind: 'permanent',
     file: 'utils/markdownExport.ts',
     anchors: [
       '图片地址无法解析',
@@ -187,13 +186,21 @@ const LEDGER = [
     ],
     count: 7,
     why:
-      '这些 throw 的文本会被 catch 进"逐图失败清单"（`report.failed[].reason`）再渲染成列表 ⇒ ' +
-      '要翻译就得把清单项从 `reason: string` 改成 `code + params`（**报告数据结构变更**，' +
-      '牵动后台的报告渲染与导出说明文件）。🔴 不顺手做一半。',
-  },
+      '🔴 **第十七批查清了消费方，从"欠条"改判为"永久例外"**（三条证据，都可复核）：' +
+      '① 这些 throw **全部被 catch**（`markdownExport.provider.ts` 里 ' +
+      '`catch (err) { report.failed.push({ url, reason: err.message }) }`）⇒ 它们**从不成为 HTTP 响应**，界面上看不到；' +
+      '② `report.failed[].reason` 的唯一去处是 `renderReport()` 生成的 **`导出说明.md`** —— ' +
+      '那是**放进导出归档里的产物文件**，整篇都是中文（`# 导出说明` / `- 标题：…` / ' +
+      '`## 跳过的图片（保留原样，未打包）` / `- <url> —— <reason>`）；' +
+      '③ 🔴 **后台只渲染计数与 URL**：`exportMarkdown.tsx` 的类型是 ' +
+      '`{ skipped?: number; failed?: number; failedUrls?: string[] }` —— **没有 reason 字段**。' +
+      '⇒ 这 7 条属"**产物内容 + 日志**"，与 `backupVerify` 的 issues 同一类。' +
+      '🔴 只翻这 7 条会得到"一份中文文档里夹几句英文"—— 比全中文更糟。' +
+      '👉 将来若要本地化 `导出说明.md`，那是**把整份产物当文档来翻**（标题、字段名、章节名一起翻，' +
+      '还要决定文件名 `导出说明.md` 要不要跟着变），**不是**逐条替换 reason 字符串。',
+ },
   {
-    kind: 'iou',
-    batch: '期 9 第十七批',
+    kind: 'permanent',
     file: 'utils/safeFetch.ts',
     anchors: [
       '校验通过的地址无法用于连接',
@@ -205,11 +212,15 @@ const LEDGER = [
       '抓到的内容不是图片',
     ],
     count: 7,
-    why: '同上：这些是"抓取远端图片"的失败原因，落进同一份逐图失败清单 ⇒ 与 markdownExport 一起改报告形状。',
-  },
+    why:
+      '🔴 同 `markdownExport` 那 7 条（第十七批一起改判）：这些是"抓取远端图片"的失败原因，' +
+      '被同一个 catch 收进 `report.failed[].reason` ⇒ 唯一去处是 **`导出说明.md`** 那份中文产物文件与日志；' +
+      '后台只渲染计数与 URL（`failedUrls`），**从不渲染 reason**。' +
+      '⚠️ 它们是 `new Error(中文)` 而不是 HttpException ⇒ 本来也没有错误码通道。',
+ },
   {
     kind: 'iou',
-    batch: '期 9 第十七批',
+    batch: '期 9 第十八批',
     file: 'utils/fullBackup.ts',
     anchors: ['已拒绝恢复', '恢复静态目录'],
     count: 2,
@@ -223,27 +234,20 @@ const LEDGER = [
   // ══ F. 欠条：后台响应体里的短提示（成功/失败 toast，10 处 message）══
   {
     kind: 'iou',
-    batch: '期 9 第十六批（本批已迁 5 处错误形状的；5 处**成功**提示需要"成功码"机制，排到第十八批）',
+    batch: '期 9 第十八批（要先决定"两个 code 字段撞名"怎么处理）',
     file: 'controller/admin/export/export.controller.ts',
-    anchors: [
-      '缺少要导出的正文内容',
-      '缺少文章 id',
-      '没有可打包的图片',
-      '导出产物生成失败',
-    ],
-    count: 4,
-    why:
-      '这 4 条是 `res.status(…).json({ statusCode, message })` 的裸响应 ⇒ 用 `codedBody()` 直接替换即可' +
-      '（其中 `NO_IMAGES_FOR_MDZ` 那条后台已有自己的协议码分支，服务端的 message 是回落文案）。',
-  },
-  {
-    kind: 'iou',
-    batch: '期 9 第十六批（本批）',
-    file: 'controller/admin/caddy/caddy.controller.ts',
-    anchors: ['更新失败！请查看 Caddy 日志获取详细信息'],
+    anchors: ['没有可打包的图片'],
     count: 1,
-    why: '裸响应体里的失败提示（`statusCode: 500`）⇒ 用 `codedBody()` 替换。',
-  },
+    why:
+      '🔴 第十七批已迁走同族另外 3 条（`缺少要导出的正文内容！` / `缺少文章 id！` / `导出产物生成失败`）。' +
+      '剩下这 1 条**不能照搬**：它的响应体里已经有一个**后台在读的协议码** `code: ' +
+      '\'NO_IMAGES_FOR_MDZ\'`（`packages/admin/src/services/van-blog/exportFormats.js` 的 ' +
+      '`EXPORT_NO_IMAGES_CODE`，后台按它分支"这不是失败，只是没有图片"），' +
+      '而 `codedBody()` 自己也要写 `code` 字段 ⇒ 🔴 **两个 code 会撞名**' +
+      '（`codedBody` 的 `extra` 刻意不许覆盖 `statusCode`/`message`/`code`/`params` 这四个地基字段，' +
+      '所以协议码会被**静默丢掉**、后台那条分支会坏）。' +
+      '要迁得先决定"字段改名（例如 `errorCode`）还是嵌套"，那是**线路契约变更**（前后端一起改），单独排一批。',
+ },
   {
     kind: 'iou',
     batch: '期 9 第十八批（需要"成功码"机制：`status: 200` 的码 + `codedBody` 的 extra 保留 `data`）',
@@ -385,15 +389,18 @@ describe('🔴 服务端多语言收口台账：剩余的每一处中文都必�
     const iou = LEDGER.filter((e) => e.kind === 'iou');
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（2026-09-29 期 9 第十六批建立台账时实测）：剩余 **45** 处 = 永久例外 **19** + 欠条 **26**。
-    //    19 = 协议字符串 3（`已初始化` ×2、`未初始化!`）+ 开发者不变量 8 + 机器消费方 1（caddy 那个 403）
-    //         + 报告/产物内容 6（`backupVerify` 的 issues）+ `main.ts` 的静态层拦截 1。
-    //    26 = 报告形状族 14（`markdownExport` 7 + `safeFetch` 7）+ 含内层中文原因的恢复拒绝 2
-    //         + 后台响应体短提示 10（export 4 / caddy 1 / theme 2 / tag 2 / init 1）。
+    // 🔴 口径（第十七批更新）：剩余 **41** 处 = 永久例外 **33** + 欠条 **8**。
+    //    33 = 协议字符串 3（`已初始化` ×2、`未初始化!`）+ 开发者不变量 8 + 机器消费方 1（caddy 那个 403）
+    //         + 报告/产物内容 6（`backupVerify` 的 issues）+ `main.ts` 的静态层拦截 1
+    //         + 🔴 **导出产物内容 14**（`markdownExport` 7 + `safeFetch` 7；第十七批查清消费方后
+    //           **从欠条改判**：它们的 reason 只进 `导出说明.md` 那份中文产物文件与日志，
+    //           后台只渲染计数与 URL、从不渲染 reason）。
+    //    8 = 含内层中文原因的恢复拒绝 2（`fullBackup.ts`）+ 协议码撞名的 1（`export.controller`）
+    //         + 成功提示 5（`theme` 2 / `tag` 2 / `init` 1，要先验"status 200 的码"这条路）。
     // ⚠️ 这两个数字是**刻意写死**的：它们变了说明有人迁走了一批、或者新增了一批中文 ⇒
     //    两种情况都要求改这份台账（并且重读每条理由），所以让它红比让它自适应更有价值。
-    assert.strictEqual(permCount, 19, `永久例外应该是 19 处，实测 ${permCount}`);
-    assert.strictEqual(iouCount, 26, `欠条应该是 26 处，实测 ${iouCount}`);
+    assert.strictEqual(permCount, 33, `永久例外应该是 33 处，实测 ${permCount}`);
+    assert.strictEqual(iouCount, 8, `欠条应该是 8 处，实测 ${iouCount}`);
     assert.strictEqual(
       permCount + iouCount,
       sites.length,

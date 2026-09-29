@@ -2102,4 +2102,11 @@ export default {
   'error.backupRenameFailed': 'Renaming the backup file into place failed ({from} -> {to}): {reason}',
   'error.backupVerifyThrew': 'Full-site backup verification failed: {reason} (the archive was kept: {name})',
   'error.backupVerifyFailedSummary': 'Full-site backup verification failed: {count, plural, one {# check} other {# checks}} did not pass (first item: {first}) (the archive was kept: {name}). See the server log and the verification report for the per-item reasons.',
+
+  // ── 🔴 期 9 第十七批（4 keys）── 后台 toast 口吻，简短；不用缩写（ICU 把单引号当转义符）、不用全角标点。
+  //    ⚠️ 这 4 条都**没有占位符**，也都不需要 ICU 复数。
+  'error.exportMissingContent': 'Missing body content to export!',
+  'error.exportMissingArticleId': 'Missing article id!',
+  'error.exportGenerateFailed': 'Failed to generate export output',
+  'error.caddyUpdateFailedSeeLog': 'Update failed! Check the Caddy log for details!',
 };

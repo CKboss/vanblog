@@ -9469,6 +9469,103 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.201 期 9 第十七批：4 个裸响应体码（`message:` 18 → 14），🔴 以及**查清消费方之后把 14 处欠条改判成永久例外**（`导出说明.md` 是产物，不是界面）
+
+**交付**：`export.controller.ts` 3 处 + `caddy.controller.ts` 1 处 ⇒ **4 个码**
+（`exportMissingContent` / `exportMissingArticleId` / `exportGenerateFailed` / `caddyUpdateFailedSeeLog`），
+错误码 **243 → 247**，语言包 **1688 → 1692 key ×3**，`message:` 棘轮 **18 → 14**（throw 仍 27）。
+🔴 **收口台账同步更新**：剩余 **45 → 41** 处 = 永久例外 **19 → 33** + 欠条 **26 → 8**。
+
+#### A. 🔴 这批最重要的产出不是那 4 个码，而是**把 14 处欠条改判成永久例外**（因为查清了消费方）
+第十六批建台账时，我把 `markdownExport.ts`(7) + `safeFetch.ts`(7) 登记成**欠条**，
+理由是"要先把报告形状从 `reason: string` 改成 `code + params`"。这批动手前先去查消费方，
+🔴 **结论反了**：那 14 处**根本不该翻**。三条证据（都可复核）：
+1. **它们从不成为 HTTP 响应**：那些 throw 全部被 `markdownExport.provider.ts` 的
+   `catch (err) { report.failed.push({ url, reason: err.message }) }` 收掉；
+   而且 `safeFetch.ts` 抛的是 `new Error(中文)`（连 HttpException 都不是）⇒ 本来也没有错误码通道；
+2. **`reason` 的唯一去处是一份中文产物文件**：`renderReport()` 生成 **`导出说明.md`**
+   （`relativePath: '导出说明.md'`）打进导出的 zip 里，整篇都是中文 ——
+   `# 导出说明` / `- 标题：…` / `- 类型：草稿|文章|编辑器内容（未入库）` / `## 包里有什么` /
+   `## 跳过的图片（保留原样，未打包）` / `- \`url\` —— ${reason}`；
+3. 🔴 **后台只渲染计数与 URL**：`packages/admin/src/services/van-blog/exportMarkdown.tsx` 的类型是
+   `{ skipped?: number; failed?: number; failedUrls?: string[] }` —— **没有 reason 字段**
+   （`grep -rn "\.failed" packages/admin/src` 可复核：命中的都是 `failedUrls` 与计数）。
+⇒ 所以那 14 条属"**产物内容 + 日志**"，与 `backupVerify` 的 issues（第十五批已判为永久例外）**同一类**。
+🔴 **只翻这 14 条会得到"一份中文文档里夹几句英文"—— 比全中文更糟**（它让人以为这份产物已经国际化了）。
+👉 将来若要本地化 `导出说明.md`，那是**把整份产物当文档来翻**（标题、字段名、章节名一起翻，
+还要决定**文件名** `导出说明.md` 要不要跟着变 —— 那会牵动 `report.entries` 与后台的列表），
+是一个**独立特性**，不是"逐条替换 reason 字符串"。
+👉 🔴 **一般化：台账里的"欠条"必须在动手前重新查一次消费方** ——
+建台账时的分类是**基于形状**的猜测（"这些中文被塞进一个 report 结构 ⇒ 大概要改数据形状"），
+而**真正的分类依据是"谁会读到它"**。这批证明：**基于形状的猜测会把"不该翻的"登记成欠条**，
+于是排了一批根本不该做的工作（而且还会在做完之后让产物变差）。
+🔴 反向也成立：如果只凭"它进了 report 结构"就判成永久例外，也可能漏掉真的界面文案
+（`backupVerifyFailedSummary` 那条就是**从 report 里提炼出来给界面**的）。
+👉 **判据只有一条：追到最终消费方**（界面 / 日志 / 产物文件 / 机器），别在中间层下结论。
+
+#### B. 🔴 同族里有 1 条**不能照搬**：响应体里已经有一个后台在读的 `code` 字段（会撞名）
+`export.controller.ts` 那条「这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。」
+的响应体是 `{ …, code: 'NO_IMAGES_FOR_MDZ', imageRefs, message }` ——
+🔴 那个 `code` 是**后台在读的协议码**（`packages/admin/src/services/van-blog/exportFormats.js` 的
+`EXPORT_NO_IMAGES_CODE`，后台按它分支"这不是失败，只是没有图片"）。
+而 `codedBody()` 自己也要写 `code` 字段 ⇒ **两个 code 撞名**；
+又因为 `codedBody(code, params, extra)` 的 `extra` **刻意不许覆盖**那四个地基字段
+（`statusCode` / `message` / `code` / `params`，见 §7.198 A），
+所以协议码会被**静默丢掉** ⇒ 🔴 后台那条分支会坏，而且**没有任何测试会红**
+（后台是按 `code === 'NO_IMAGES_FOR_MDZ'` 判断的，字段没了就走另一条路，看起来只是"提示不对"）。
+⇒ 这一条**留在台账里当欠条**，并写明"要迁得先决定字段改名（例如 `errorCode`）还是嵌套，
+那是**线路契约变更**（前后端一起改）"。
+👉 🔴 **`extra` 不许覆盖地基字段**这个设计在这里救了命：如果它允许覆盖，
+我会"成功地"迁完这一条、测试全绿、而后台的分支静默坏掉。
+👉 🔴 迁移前必查的第二件事（第一件事是 §7.198 的"有没有前端在读的额外字段"）：
+**响应体里有没有一个已经叫 `code` / `message` / `statusCode` / `params` 的字段**（撞名检查）。
+
+#### C. 🔴 裸响应体（`res.status(…).json({…})`）用 `codedBody()`，不是 `codedError()`
+这 4 处都不经过 Nest 的异常管道（`res.json` + `return`，或 `return { statusCode, message }`）
+⇒ 用 `codedBody(code)`（返回体）。⚠️ 黄金快照里这 4 条**没有 `error` 字段**
+（`{ status: 400 }` 而不是 `{ status: 400, error: 'Bad Request' }`）——
+因为 `entry(zh, HttpException, 400)` 走的是"基类 + 显式 status"，`new HttpException(msg, 400).getResponse()`
+只产出 `{ statusCode, message }`。🔴 **这正是黄金快照的价值**：它把"基类语义 vs 派生类语义"的差别钉住了
+（派生类如 `BadRequestException` 会多出 `error: 'Bad Request'`）。
+🔴 同文件那个给 **caddy** 看的 403「未授权的域名」**仍然不迁**（机器消费方，台账里 permanent）——
+同一个文件里两种分类并存，这正是"追到最终消费方"的意义。
+
+#### C2. 🔴 变异 harness 的**文件清单**没包含新判据文件 ⇒ 一条变异"打了个空"（假绿）
+B58-M2 是"把台账里写死的 `permCount` 从 33 改成 34"，我预期它红 ⇒ 实测**全绿**。
+原因不在判据：`vanblog_dev/mutation-controls-batchNN.cjs` 里有一份**显式的测试文件清单**
+（`const TESTS = ['tests/unit/localePackParity.test.js', …]`），
+而第十六批新建的 `serverI18nCloseout.test.js` **不在清单里** ⇒ 那条变异根本没被任何判据看到。
+把文件加进清单后：M2 **红 1 条**，而且 harness 的总测试数从 **563 → 567**（🔴 这个数字变化本身就是
+"清单确实生效了"的证据 —— 只看红不红是不够的，还要看**跑到的断言数变了**）。
+👉 🔴 **harness 的文件清单是"判据覆盖面"的一部分**：新建判据文件时必须同步加进来，
+否则变异对照会**假绿**，而"假绿"与"判据不承重"看起来一模一样（都是 rc=0）。
+🔴 分辨办法：看 harness 打印的 `# tests N` —— **N 没变就说明新判据没被跑到**。
+（这与 §7.188 C 那个"文件级预筛把整个文件跳过"是同一类错误：**判据/变异都可能有"根本没执行"的失败模式**，
+而它的表现是"绿"，不是"报错"。）
+👉 待办（已记）：把 harness 的 `TESTS` 清单改成"**跑 `tests/unit/*.test.js` 全量**"，
+从根上消掉"忘了加文件"这个失败模式（代价是每轮变异慢一些；但变异对照本来就只在收尾时跑一轮）。
+⚠️ 同批还有一次 harness 生成失败：写它的 Python 脚本**少了一个引号**（`exp=[…])` 少了 `'`）⇒
+`SyntaxError` ⇒ **harness 文件根本没生成**，而那轮后台任务里矩阵照跑、显示全绿 ⇒
+🔴 我差点把"没有变异对照的一批"当成"变异对照通过的一批"提交上去。
+👉 🔴 **后台任务里串多件事时，前一件的失败会被后一件的成功输出盖住** ——
+必须**逐段检查输出**（这次是 stderr 里那段 Python traceback 救了它）。
+
+#### D. 基线
+- admin `node --test` **790 tests / 178 suites / 0 fail**；jest **288 套件 / 4264 用例（4260 + 4 skip）/ 0 FAIL**；
+- 语言包 **1692 key** ×3（重复 0）；`--zh-tw-audit`：1692 key / **845** 汉字 / **0 命中**；
+- `localePackParity` 的 TW==CN 白名单 +1（`error.exportMissingArticleId` = `缺少文章 id！`：
+  缺/少/文/章/id/！ 全部简繁同形 ⇒ 同形是正确译文）；
+- 错误码 **247 个**（黄金快照 247 条）；服务端棘轮 **throw 27** / **`message:` 14**；
+  admin 类型门禁 **31/0**、server `tsc` **0 错**；
+- 🔴 **收口台账**：41 处 = permanent **33**（协议字符串 3 + 开发者不变量 8 + 机器消费方 1 +
+  `backupVerify` 报告内容 6 + `main.ts` 静态层 1 + 🔴 导出产物内容 14）+ iou **8**
+  （`fullBackup` 含内层中文原因的恢复拒绝 2 + `export.controller` 协议码撞名 1 + 成功提示 5）；
+- 变异对照 **4/4**（其中 M2 是"第一版打了个空、把判据文件加进 harness 清单后才红"的，见 C2 段）；
+- 🔴 下一批（第十八批）就是**最后一批**：`fullBackup` 那 2 处（内层原因升级成完整句码，与 14b 同型）
+  + 5 条成功提示（要先验"status 200 的码"这条路：`codedBody` 已支持 `extra` 保留 `data`）
+  + 决定 `NO_IMAGES_FOR_MDZ` 的撞名处理 ⇒ 做完之后服务端就进入**收口状态**
+  （throw 剩 19、`message:` 剩 6，全部是台账里写明理由的永久例外）。
+
 ### 7.200 期 9 第十六批：建立**服务端多语言收口台账**（45 处逐条登记：19 永久例外 + 26 欠条），🔴 从此"新加一处中文"不再静默
 
 **交付**：新判据文件 `packages/admin/tests/unit/serverI18nCloseout.test.js`（4 条断言），
