@@ -269,6 +269,18 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   //    让外层拼中文，而是自己带上指引 ⇒ 外层 catch 用 `isCodedError` 判断后**原样重抛**）
   // 🔴 期 9 第十三批（13a）：备份加密 11 个码
   // 🔴 期 9 第十三批（13b）：加密归档头部形状校验 13 个码（`assertHeaderShape` 的 `bad()` 变体）
+  // 🔴 期 9 第十四批（14a）：整站备份"检查/恢复"路径 11 个码
+  archiveFormatUnknown: { status: 400, error: 'Bad Request' },
+  archiveToolMissingForInspect: { status: 400, error: 'Bad Request' },
+  archiveToolMissingForRestore: { status: 400, error: 'Bad Request' },
+  restoreSigHashFailed: { status: 400, error: 'Bad Request' },
+  restoreMemberListUnreadable: { status: 400, error: 'Bad Request' },
+  restoreTooLarge: { status: 400, error: 'Bad Request' },
+  restoreCollectionFailed: { status: 400, error: 'Bad Request' },
+  restoreArchiveMissing: { status: 400, error: 'Bad Request' },
+  restoreArchiveUnreadable: { status: 400, error: 'Bad Request' },
+  restoreNoManifest: { status: 400, error: 'Bad Request' },
+  restoreManifestInvalid: { status: 400, error: 'Bad Request' },
   encHeaderNotObject: { status: 400, error: 'Bad Request' },
   encHeaderVersionMismatch: { status: 400, error: 'Bad Request' },
   encHeaderUnknownCipher: { status: 400, error: 'Bad Request' },

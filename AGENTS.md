@@ -9469,6 +9469,78 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.197 期 9 第十四批（14a）：整站备份"检查/恢复"路径 **11 个码覆盖 14 处**（throw 52 → 38），🔴 动手前先查消费方（分类），以及"复数该不该套"这条规则的**两个方向**第一次都被变异对照钉住
+
+**交付**：`utils/fullBackup.ts` 的 **14 处 throw ⇒ 11 个码**（3 处共用一个码），
+错误码 **218 → 229**，语言包 **1663 → 1674 key ×3**，throw 棘轮 **52 → 38**。
+覆盖：无法识别压缩格式（3 处共用）/ 本机没有解压工具（**两个不同结尾 ⇒ 两个码**：
+"无法检查这个备份" vs "装一个再试（或在有该工具的机器上导出成 gzip 格式）"）/
+为验签回读算 sha256 失败 / 读不出归档成员表 / **归档解包后超过上限**（压缩炸弹那道闸门，
+含"给 server 设 `{env}=<字节数>` 放宽上限、并先确认磁盘够"）/ 恢复集合失败 / 备份文件不存在 /
+备份文件解不开 / 归档里没有 `manifest.json` / `manifest.json` 校验失败。
+
+#### A. 🔴 动手前先查消费方：这批**是**界面文案（而"验签消息"那族**不是**）
+上一批我把 `signatureVerifyMessage()` 那 6 个状态**推迟**了，理由是"它同时进日志与报告，要先分类"。
+这批动手前把消费方查清了，结论要分开记：
+- ✅ **本批这 14 处**：全部经 `POST /api/admin/backup/full/restore` 与**初始化页那个匿名恢复端点**
+  直接回到界面（`BadRequestException` ⇒ 响应体 `message`）⇒ **界面文案，进码表**。
+- 🔴 **`signatureVerifyMessage()` 的 6 个状态**：查了三条消费路径 ——
+  ① `logger.log(result.message)`（**服务端日志** = 开发者界面）；
+  ② `verifyOne()` 把它拼进 `issues: ['[check] message']`，而 `verifyArchive()` 会把整个
+     `BackupVerifyResult` 作为 JSON 返回给 `POST /api/admin/backup/full/verify` ——
+     🔴 **但全仓 grep 下来 admin 一次都没调过这个端点**（`grep -rn "backup/full/verify" packages/admin/src` 命中 0）；
+  ③ `assertArchiveSignatureForRestore` 把它拼进 `拒绝恢复：${result.message}（…）` ⇒ **这一条是界面文案**。
+  ⇒ 结论：**那 6 条主体是"日志/报告文案"，只有 ③ 那条路径是界面文案**。
+  🔴 所以正确做法不是"整族不译"，也不是"整族进码表"，而是：
+  **让 `signatureVerifyMessage()` 同时产出两份** —— 中文串继续给日志/报告（开发者界面，保持现状），
+  另加一个 `signatureVerifyCode(state)` 映射出 6 个码给 ③ 那条路径用（界面按码取译文）。
+  这样"日志里有 Markdown 粗体与 emoji（那是给终端读的）"与"界面里是三语译文"两件事各得其所。
+  ⚠️ 这批**没做**（留给 14b），但**分类结论与做法已经定死**，不用再讨论一遍。
+- 🔴 同类结论（也定死）：`createFullBackup` 那 8 处（备份**创建**路径）的文案**同时被
+  `recordFailureSafely()` 写进备份状态文件**（`vanblog_dev/logs/` 下那个状态 JSON，运维会直接读）
+  ⇒ 与 `signatureVerifyMessage` 同型：**日志/状态文件保留中文，界面那条路径另给码**。
+
+#### B. 🔴 "复数该不该套"这条规则，第一次**两个方向**都被变异对照钉住
+同一条英文（`error.restoreTooLarge`）里有两个占位符，性质**相反**：
+- `{count}` = `entries.length`（**纯数字**）⇒ 英文**必须**套 ICU 复数（否则 `1 members`）；
+- `{size}` / `{cap}` / `{needed}` = `formatBytes(...)`（**已格式化字符串**，`20.0 MB`）⇒ **一律不套**
+  （套了 ICU 会把字符串当数字解析 ⇒ 渲染出 `NaN bytes`）。
+两条相反的变异都打了，都红：
+- **B55-M3**：给 `{size}` **加上**复数 ⇒ 红（守它的是 §7.191 B 那条"英文用复数 ⇔ 中文里紧跟量词"判据：
+  `{size}（` 后面是标点不是量词 ⇒ 判据认定它是已格式化字符串）；
+- **B55-M4**：把 `{count}` 的复数**去掉** ⇒ 红 2 条（守它的是复数形态判据 + 它的反证用例）。
+👉 🔴 **一条规则的两个方向都要有变异对照**：只验"该套的套了"会漏掉"不该套的套了"（那会渲染出 NaN），
+只验后者会漏掉前者（那会渲染出 `1 members`）。这是我第一次对**同一条文案**同时打两个相反方向的变异。
+🔴 顺带把"我给译者的指令错了三次"这件事收口成一条**硬规则**（写进派发模板）：
+**判别只看调用点实参的类型** —— `formatBytes(x)` / `sizeText` 这类 ⇒ 不套；`stat.size` /
+`Buffer.byteLength()` / `.length` / 上限常量这类纯数字 ⇒ 必须套。**与中文文案里有没有"字节"两个字无关**，
+也与"这批看起来像不像上一批"无关。
+
+#### C. 🔴 三个测试文件的 `read()` 约定**各不相同**（我因此写错过 4 次）
+| 文件 | `read(rel)` 的根 | `readRepo(rel)` 的根 |
+|---|---|---|
+| `securityHardening.test.js` | **仓库根** | （没有这个 helper） |
+| `adminRobustness.test.js` | **admin 根** | **`packages/`**（`repoRoot = adminRoot/..`，名字骗人） |
+| `fullBackup.test.js` | **admin 根** | **仓库根** |
+本批加断言时我先写了 `readRepo(...)`（在 `securityHardening.test.js` 里）⇒ `ReferenceError: readRepo is not defined`；
+前两批则在另外两个文件里写 `read('packages/server/…')` ⇒ `ENOENT …/packages/admin/packages/server/…`。
+👉 🔴 **加断言前先看那个文件头部的 helper 定义**，不要凭印象（这是第 4 次）。
+🔴 待办（一次性小重构，能永久消掉这类错）：把这三个 helper 统一成 `readAdmin()` / `readRepo()` 两个名字，
+并让 `adminRobustness.test.js` 里那个名为 `repoRoot` 实际指向 `packages/` 的常量改名。
+
+#### D. 基线
+- admin `node --test` **786 tests / 177 suites / 0 fail**；jest **288 套件 / 4260 用例（4256 + 4 skip）/ 0 FAIL**；
+- 语言包 **1674 key** ×3（重复 0）；`--zh-tw-audit`：1674 key / **834** 汉字 / **0 命中**；
+- 错误码 **229 个**（黄金快照 229 条）；服务端棘轮 **throw 38**（反空转下界随之 `>45` → `>18`，
+  🔴 **每次大迁移都要复查这条下界**，它已经跟着迁移下调过三次）/ **`message:` 18**；
+  admin 类型门禁 **31/0**、server `tsc` **0 错**；
+- 变异对照 **5/5**（含 B 段那两个方向相反的）；
+- 🔴 剩余 38 处：`createFullBackup` 8（A 段已定做法：状态文件保留中文、界面另给码）、
+  `signatureVerifyMessage` 6 状态 + `拒绝恢复` 外壳 + `fullBackup.provider` 2（同上做法）、
+  `backupVerify.ts` 的 issues 族（6 个 `message:`，同型）、报告形状族 14
+  （`markdownExport` 7 + `safeFetch` 7）、开发者不变量 8、协议字符串 3、
+  `assertHeaderShape` 已清（13b）、`backupCrypto`/`backupSigning` 已清。
+
 ### 7.196 期 9 第十三批（13b）：`assertHeaderShape` 的 **13 个变体各成一个完整句码**（错误码 205 → 218），🔴 同一条判据的**第二次**"换个形状就隐身"，以及一条 flaky 判据的**第五次**修订
 
 **交付**：`utils/backupCrypto.ts` 的 `assertHeaderShape()` —— 原来是一个

@@ -2053,4 +2053,21 @@ export default {
   'error.encHeaderIvInvalid': 'The encrypted archive header is not trustworthy (iv must be the base64 of {bytes, plural, one {# byte} other {# bytes}}): {path}',
   'error.encHeaderChunkBytesInvalid': 'The encrypted archive header is not trustworthy (chunkPlainBytes is invalid ({value})): {path}',
   'error.encHeaderMissingInnerFormat': 'The encrypted archive header is not trustworthy (missing inner.format): {path}',
+
+  // ── 🔴 期 9 第十四批（11 keys）── 英文按"运维文档"口吻写（显示在后台「备份与恢复」与初始化页）。
+  //    🔴 复数**只用在 `{count}`**（`entries.length`，纯数字）；`{size}` / `{cap}` / `{needed}` 传的是
+  //    `formatBytes()` 的**已格式化字符串**（`20.0 MB`）⇒ **一律不套**复数（套了会渲染出 `NaN bytes`）。
+  //    🔴 判别标准只有一条：**看调用点传的是什么类型**（这条规则我在三批里错过三次，判据每次都抓住了）。
+  //    ⚠️ `——` 在英文里是 ` - `；`<字节数>` 是 `<bytes>`；不用缩写、不用全角标点。
+  'error.archiveFormatUnknown': 'Unable to recognize the compression format of the backup file (supported: .tar.zst / .tar.xz / .tar.gz)',
+  'error.archiveToolMissingForInspect': 'This machine has no {format} decompression tool, so this backup cannot be inspected',
+  'error.archiveToolMissingForRestore': 'This machine has no {format} decompression tool - install one and retry (or export it as gzip on a machine that has the tool)',
+  'error.restoreSigHashFailed': 'Failed to compute sha256 over the archive read back for signature verification ({path}): {reason} - refused to restore (if the signature cannot be verified, nothing is unpacked)',
+  'error.restoreMemberListUnreadable': 'Unable to read the archive member list: {reason}',
+  'error.restoreTooLarge': 'The backup archive unpacks to {size} ({count, plural, one {# member} other {# members}}), over the allowed {cap}, refused to restore (nothing was unpacked, nothing was written). This usually means it is not a full-site backup exported by this feature, or it is a compression bomb. If you really need to restore a large site: set {env}=<bytes> on the server to raise the limit, and confirm the disk is big enough first (it currently needs about {needed})',
+  'error.restoreCollectionFailed': 'Failed to restore collection {name}: {reason}',
+  'error.restoreArchiveMissing': 'The backup file does not exist: {path}',
+  'error.restoreArchiveUnreadable': 'The backup file cannot be unpacked (it may be damaged or incomplete): {reason}',
+  'error.restoreNoManifest': 'The archive contains no manifest.json, so it is not a full-site backup exported by this feature',
+  'error.restoreManifestInvalid': 'Failed to validate manifest.json: this is not a VanBlog full-site backup, or the version is too new (the copy MANIFEST.copy.json could not be read either)',
 };

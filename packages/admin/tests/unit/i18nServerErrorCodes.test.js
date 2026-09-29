@@ -85,7 +85,8 @@ for (const l of LOCALES) {
 // 🔴 74 → **64**（期 9 第十二批：备份签名密钥 10 处 throw 迁进 9 个码）
 // 🔴 64 → **53**（期 9 第十三批（13a）：备份加密 11 处 throw 迁进 11 个码）
 // 🔴 53 → **52**（期 9 第十三批（13b）：assertHeaderShape 的 bad() 助手改成传码 ⇒ 那 1 处 throw 站点消失（13 个变体各成一个码））
-const THROW_BUDGET = 52;
+// 🔴 52 → **38**（期 9 第十四批（14a）：整站备份检查/恢复路径 14 处 throw 迁进 11 个码（3 处共用一个码））
+const THROW_BUDGET = 38;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -156,8 +157,8 @@ test('服务端错误码 · 反空转：登记表、语言包与源码遍历都�
   // ⚠️ 下界随迁移**下调**（期 9 第九批之后实测 91）：这条反空转要防的是"尺子坏了数出 0"，
   //    不是"数字必须很大"⇒ 下界取实测值的一半左右，并写明实测日期与数值。
   assert.ok(
-    scan.total > 45,
-    `只数出 ${scan.total} 个带中文的 throw 站点（下界 45，2026-09-28 实测 91）⇒ 尺子坏了`,
+    scan.total > 18,
+    `只数出 ${scan.total} 个带中文的 throw 站点（下界 18，2026-09-29 实测 38）⇒ 尺子坏了`,
   );
   const scan2 = scanServerMessageProps();
   assert.ok(scan2.files === scan.files, `两个口径遍历到的文件数不一致（${scan2.files} vs ${scan.files}）⇒ 有一把尺子遍历坏了`);

@@ -313,6 +313,52 @@ export const SERVER_ERROR_CODES = {
   // 🔴 `{key}` 只会是 `N` / `r` / `p` / `keyLen` / `saltLen`（**ASCII 字段名**，来自那个 for 循环的常量数组），
   //    `{value}` / `{cipher}` / `{name}` / `{version}` 是**回显攻击者可控的值**（`String(...)` 过）⇒
   //    它们不是文案，是数据；🔴 也正因为是"回显不可信输入"，三份译文都必须原样插值、不做任何本地化改写。
+  // ── 整站备份"检查/恢复"路径（utils/fullBackup.ts，期 9 第十四批 14a）─────────────
+  // 🔴 分类结论（动手前先查了消费方）：这 14 处 throw 都会经
+  //    `POST /api/admin/backup/full/restore` 与**初始化页那个匿名恢复端点**回到界面 ⇒ 是**界面文案**，进码表。
+  // 🔴 **同一句话在多处出现 ⇒ 共用一个码**：`无法识别备份文件的压缩格式（…）` 出现在
+  //    `listArchiveEntries` / `listArchiveMembers` / `restoreFullBackup` **三处**（一句话登记三遍就是三处口径）；
+  //    `本机没有 {format} 解压工具…` 有**两个不同结尾**（"无法检查这个备份" vs "装一个再试（或…导出成 gzip 格式）"）
+  //    ⇒ 按结尾**拆成两个码**（不是"一个码 + 可选参数"）。
+  // 🔴 **刻意不含**（本批只做 14a，其余留给 14b/15）：
+  //   ① `备份归档里有会写到解包目录之外的成员（{name}：{reason}），已拒绝恢复` ——
+  //      那个 `{reason}` 来自 `findUnsafeArchiveEntry()`，是**另一层中文**（含 `'(空)'` 这种中文兜底），
+  //      属"内层原因 + 外层拼装"⇒ 要连内层一起改（§7.194 A 的形状）；
+  //   ② `createFullBackup` 那 8 处（备份**创建**路径：它们同时被 `recordFailureSafely` 写进
+  //      备份状态文件 ⇒ 要先分类"产物内容 vs 界面文案"）；
+  //   ③ `signatureVerifyMessage()` 的 6 个状态 + `拒绝恢复：{result.message}` 外壳
+  //      （那 6 条**同时进日志**（`logger.log`）与巡检结果 ⇒ 要先定"日志放什么、界面放什么"）。
+  archiveFormatUnknown: entry(
+    '无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）',
+    BadRequestException,
+  ),
+  archiveToolMissingForInspect: entry('本机没有 {format} 解压工具，无法检查这个备份', BadRequestException),
+  archiveToolMissingForRestore: entry(
+    '本机没有 {format} 解压工具，装一个再试（或在有该工具的机器上导出成 gzip 格式）',
+    BadRequestException,
+  ),
+  restoreSigHashFailed: entry(
+    '为验签回读归档算 sha256 失败（{path}）：{reason} —— 已拒绝恢复（验不了签名就不解包）',
+    BadRequestException,
+  ),
+  restoreMemberListUnreadable: entry('读不出归档成员表：{reason}', BadRequestException),
+  restoreTooLarge: entry(
+    '备份归档解包后有 {size}（{count} 个成员），' +
+      '超过允许的 {cap}，已拒绝恢复（没有解包、没有写盘）。' +
+      '这通常说明它不是本功能导出的整站备份，或是一个压缩炸弹。' +
+      '确有大站要恢复：给 server 设 {env}=<字节数> 放宽上限，' +
+      '并先确认磁盘够（当前需要约 {needed}）',
+    BadRequestException,
+  ),
+  restoreCollectionFailed: entry('恢复集合 {name} 失败：{reason}', BadRequestException),
+  restoreArchiveMissing: entry('备份文件不存在：{path}', BadRequestException),
+  restoreArchiveUnreadable: entry('备份文件解不开（可能已损坏或不完整）：{reason}', BadRequestException),
+  restoreNoManifest: entry('归档里没有 manifest.json，不是本功能导出的整站备份', BadRequestException),
+  restoreManifestInvalid: entry(
+    'manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新（副本 MANIFEST.copy.json 同样读不出）',
+    BadRequestException,
+  ),
+
   encHeaderNotObject: entry('加密归档头部不可信（不是对象）：{path}', BadRequestException),
   encHeaderVersionMismatch: entry('加密归档头部不可信（版本 {version} != {expected}）：{path}', BadRequestException),
   encHeaderUnknownCipher: entry('加密归档头部不可信（未知 cipher {cipher}）：{path}', BadRequestException),

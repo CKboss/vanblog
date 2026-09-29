@@ -356,7 +356,20 @@ describe('安全加固：加密内容与恢复', () => {
     const backup = read('packages/server/src/utils/fullBackup.ts');
     assert.match(backup, /await db\.createCollection\(tmpName\)/);
     assert.match(backup, /await tmp\.drop\(\)/);
-    assert.match(backup, /恢复集合 \$\{name\} 失败/);
+    // 🔴 期 9 第十四批（14a）：那句中文搬进了错误码登记表（`restoreCollectionFailed`）⇒ 锚点跨文件搬：
+    //    ① 恢复集合失败时必须抛这个码（"失败要给可读错误"这道性质还在）；
+    //    ② 登记表里那条的中文必须仍是原文（文案没被改软）。
+    assert.match(backup, /codedError\('restoreCollectionFailed', \{/);
+    // ⚠️ 本文件的 `read()` **就是仓库根相对**（`path.join(repoRoot, rel)`），没有 `readRepo`
+    //    —— 而 `adminRobustness.test.js` 里 `read()` 是 **admin 相对**、`readRepo()` 是 **packages 相对**，
+    //    `fullBackup.test.js` 里 `read()` 是 admin 相对、`readRepo()` 才是仓库根。
+    //    🔴 **三个文件三种约定**，我因此写错过 4 次（`ReferenceError` / `ENOENT …/packages/admin/packages/…`）。
+    //    👉 加断言前**先看那个文件头部的 helper 定义**，不要凭印象；
+    //    🔴 待办：把这三个 helper 统一成 `readAdmin()` / `readRepo()` 两个名字（一次性小重构，能永久消掉这类错）。
+    assert.match(
+      read('packages/server/src/utils/serverErrorCodes.ts'),
+      /restoreCollectionFailed: entry\('恢复集合 \{name\} 失败：\{reason\}'/,
+    );
     // 失败留下的半成品归档必须删掉，否则列表里会出现一个坏备份
     assert.match(backup, /fs\.rmSync\(outFile, \{ force: true \}\)/);
     assert.match(backup, /code !== 1/);

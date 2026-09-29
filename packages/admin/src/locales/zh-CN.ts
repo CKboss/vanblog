@@ -2234,4 +2234,22 @@ export default {
   'error.encHeaderIvInvalid': '加密归档头部不可信（iv 必须是 {bytes} 字节的 base64）：{path}',
   'error.encHeaderChunkBytesInvalid': '加密归档头部不可信（chunkPlainBytes 非法（{value}））：{path}',
   'error.encHeaderMissingInnerFormat': '加密归档头部不可信（缺 inner.format）：{path}',
+
+  // ── 🔴 期 9 第十四批（14a）：整站备份"检查/恢复"路径 11 个码（`utils/fullBackup.ts` 的 14 处 throw）。
+  //    🔴 分类结论（动手前查过消费方）：这些 throw 都会经 `POST /api/admin/backup/full/restore`
+  //    与**初始化页那个匿名恢复端点**回到界面 ⇒ 是**界面文案**，进码表。
+  //    🔴 **同一句话多处出现 ⇒ 共用一个码**：`无法识别备份文件的压缩格式（…）` 在
+  //    `listArchiveEntries` / `listArchiveMembers` / `restoreFullBackup` **三处**共用 `archiveFormatUnknown`；
+  //    而 `本机没有 {format} 解压工具…` 有**两个不同结尾** ⇒ 按结尾**拆成两个码**。
+  'error.archiveFormatUnknown': '无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）',
+  'error.archiveToolMissingForInspect': '本机没有 {format} 解压工具，无法检查这个备份',
+  'error.archiveToolMissingForRestore': '本机没有 {format} 解压工具，装一个再试（或在有该工具的机器上导出成 gzip 格式）',
+  'error.restoreSigHashFailed': '为验签回读归档算 sha256 失败（{path}）：{reason} —— 已拒绝恢复（验不了签名就不解包）',
+  'error.restoreMemberListUnreadable': '读不出归档成员表：{reason}',
+  'error.restoreTooLarge': '备份归档解包后有 {size}（{count} 个成员），超过允许的 {cap}，已拒绝恢复（没有解包、没有写盘）。这通常说明它不是本功能导出的整站备份，或是一个压缩炸弹。确有大站要恢复：给 server 设 {env}=<字节数> 放宽上限，并先确认磁盘够（当前需要约 {needed}）',
+  'error.restoreCollectionFailed': '恢复集合 {name} 失败：{reason}',
+  'error.restoreArchiveMissing': '备份文件不存在：{path}',
+  'error.restoreArchiveUnreadable': '备份文件解不开（可能已损坏或不完整）：{reason}',
+  'error.restoreNoManifest': '归档里没有 manifest.json，不是本功能导出的整站备份',
+  'error.restoreManifestInvalid': 'manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新（副本 MANIFEST.copy.json 同样读不出）',
 };

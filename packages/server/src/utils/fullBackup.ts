@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { codedError } from 'src/utils/serverErrorCodes';
 import { spawn, spawnSync, ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -946,11 +947,11 @@ export async function listArchiveEntries(
 ): Promise<{ entries: TarEntryInfo[]; decompressError: string | null }> {
   const format = detectFormat(archivePath);
   if (!format) {
-    throw new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）');
+    throw codedError('archiveFormatUnknown');
   }
   const spec = specFor(format);
   if (!spec) {
-    throw new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`);
+    throw codedError('archiveToolMissingForInspect', { format });
   }
   // 成员条数上限：默认取 env（`restoreMaxMembers()`），调用方可以显式覆盖或传 null 关掉。
   // ⚠️ 上限是在**解析过程中**生效的（`hashTarStreamCapped` 数到第 cap+1 个成员就中止并
@@ -2089,11 +2090,11 @@ export async function listArchiveMembers(
 ): Promise<string[]> {
   const format = detectFormat(archivePath);
   if (!format) {
-    throw new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）');
+    throw codedError('archiveFormatUnknown');
   }
   const spec = specFor(format);
   if (!spec) {
-    throw new BadRequestException(`本机没有 ${format} 解压工具，无法检查这个备份`);
+    throw codedError('archiveToolMissingForInspect', { format });
   }
   let upstreamError: string | null = null;
   // ⚠️ 同 decompressUntar：await 必须在 new Promise 之外，否则 executor 里的
@@ -2422,10 +2423,10 @@ export async function assertRestorableArchive(
         // 记日志再抛：这条意味着"配了公钥、有 .sig，但连算哈希都做不到"，
         // 恢复被拒而响应体之外**无痕**（见 utils/restoreSecurityLog.ts 的动机）。
         recordRestoreRejection('signature-hash-failed', `${detail}（归档 ${path.basename(archivePath)}）`);
-        throw new BadRequestException(
-          `为验签回读归档算 sha256 失败（${archivePath}）：${(err as Error)?.message || err}` +
-            ` —— 已拒绝恢复（验不了签名就不解包）`,
-        );
+        throw codedError('restoreSigHashFailed', {
+          path: archivePath,
+          reason: (err as Error)?.message || String(err),
+        });
       }
     }
     // ⚠️ 这里不再自己打日志：`assertArchiveSignatureForRestore` 内部已经用 BackupSigning
@@ -2451,7 +2452,7 @@ export async function assertRestorableArchive(
       'member-table-unreadable',
       `读不出归档成员表：${decompressError}（归档 ${path.basename(archivePath)}）`,
     );
-    throw new BadRequestException(`读不出归档成员表：${decompressError}`);
+    throw codedError('restoreMemberListUnreadable', { reason: decompressError });
   }
   const unsafe = findUnsafeArchiveEntry(entries);
   if (unsafe) {
@@ -2475,13 +2476,16 @@ export async function assertRestorableArchive(
       `解包后 ${formatBytes(totalBytes)}（${entries.length} 个成员）超过上限 ${formatBytes(cap)}` +
         `（归档 ${path.basename(archivePath)}）`,
     );
-    throw new BadRequestException(
-      `备份归档解包后有 ${formatBytes(totalBytes)}（${entries.length} 个成员），` +
-        `超过允许的 ${formatBytes(cap)}，已拒绝恢复（没有解包、没有写盘）。` +
-        `这通常说明它不是本功能导出的整站备份，或是一个压缩炸弹。` +
-        `确有大站要恢复：给 server 设 ${RESTORE_MAX_TOTAL_BYTES_ENV}=<字节数> 放宽上限，` +
-        `并先确认磁盘够（当前需要约 ${formatBytes(totalBytes)}）`,
-    );
+    // 🔴 `{size}` / `{cap}` / `{needed}` 传的是 `formatBytes()` 的**已格式化字符串**（`20.0 MB` 这种）
+    //    ⇒ 英文**不套** ICU 复数（套了会渲染出 `NaN bytes`）；而 `{count}` 是 `entries.length`（**纯数字**）
+    //    ⇒ 英文**必须套**复数。🔴 判别只看"调用点传的是什么类型"（这条我在三批里错过三次）。
+    throw codedError('restoreTooLarge', {
+      size: formatBytes(totalBytes),
+      count: entries.length,
+      cap: formatBytes(cap),
+      env: RESTORE_MAX_TOTAL_BYTES_ENV,
+      needed: formatBytes(totalBytes),
+    });
   }
   const targetDir = String(options.targetDir ?? '').trim();
   if (targetDir) {
@@ -2732,9 +2736,10 @@ async function restoreCollection(
     } catch {
       // 本来就不存在
     }
-    throw new BadRequestException(
-      `恢复集合 ${name} 失败：${(error as Error)?.message || error}`,
-    );
+    throw codedError('restoreCollectionFailed', {
+      name,
+      reason: (error as Error)?.message || String(error),
+    });
   }
 
   if (fs.existsSync(indexPath)) {
@@ -2784,17 +2789,15 @@ export async function restoreFullBackup(
   const started = Date.now();
   const archivePath = options.archivePath;
   if (!fs.existsSync(archivePath)) {
-    throw new BadRequestException(`备份文件不存在：${archivePath}`);
+    throw codedError('restoreArchiveMissing', { path: archivePath });
   }
   const format = detectFormat(archivePath);
   if (!format) {
-    throw new BadRequestException('无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）');
+    throw codedError('archiveFormatUnknown');
   }
   const spec = specFor(format);
   if (!spec) {
-    throw new BadRequestException(
-      `本机没有 ${format} 解压工具，装一个再试（或在有该工具的机器上导出成 gzip 格式）`,
-    );
+    throw codedError('archiveToolMissingForRestore', { format });
   }
   const pruneEnabled = options.pruneStatic ?? restorePruneStaticEnabled();
   const dropAbsent = options.dropAbsentCollections ?? restoreDropAbsentEnabled();
@@ -2861,7 +2864,7 @@ export async function restoreFullBackup(
         'unpack-failed',
         `备份文件解不开（可能已损坏或不完整）：${(err as Error)?.message}（归档 ${path.basename(archivePath)}）`,
       );
-      throw new BadRequestException(`备份文件解不开（可能已损坏或不完整）：${(err as Error)?.message}`);
+      throw codedError('restoreArchiveUnreadable', { reason: (err as Error)?.message || String(err) });
     }
 
     const manifestPath = path.join(staging, 'manifest.json');
@@ -2897,15 +2900,13 @@ export async function restoreFullBackup(
           'not-our-archive',
           `归档里没有 manifest.json（归档 ${path.basename(archivePath)}）`,
         );
-        throw new BadRequestException('归档里没有 manifest.json，不是本功能导出的整站备份');
+        throw codedError('restoreNoManifest');
       }
       recordRestoreRejection(
         'not-our-archive',
         `manifest.json 校验失败（副本 MANIFEST.copy.json 同样读不出）（归档 ${path.basename(archivePath)}）`,
       );
-      throw new BadRequestException(
-        'manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新（副本 MANIFEST.copy.json 同样读不出）',
-      );
+      throw codedError('restoreManifestInvalid');
     }
 
     // P3：归档里到底有哪些库/表 —— 先写进 journal，崩溃时才知道"计划换哪些、换完了哪些"

@@ -2006,4 +2006,24 @@ export default {
   'error.encHeaderIvInvalid': '加密歸檔頭部不可信（iv 必須是 {bytes} 位元組的 base64）：{path}',
   'error.encHeaderChunkBytesInvalid': '加密歸檔頭部不可信（chunkPlainBytes 非法（{value}））：{path}',
   'error.encHeaderMissingInnerFormat': '加密歸檔頭部不可信（缺 inner.format）：{path}',
+
+  // ── 🔴 期 9 第十四批（11 條）── 地區用詞：**無法識別** / **備份檔案**（备份文件）/ **壓縮格式** / **支援** /
+  //    **本機沒有** / **解壓工具** / **無法檢查這個備份** / **裝一個再試** / **匯出**（导出）/ **驗簽**（验签）/
+  //    **回讀歸檔** / **已拒絕恢復** / **驗不了簽名就不解包** / **讀不出歸檔成員表** / **解包後有** / **個成員** /
+  //    **超過允許的** / **沒有寫盤** / **壓縮炸彈** / **確有大站要恢復** / **放寬上限** / **磁碟夠**（磁盘→磁碟）/
+  //    **目前需要約**（当前→目前）/ **恢復集合…失敗** / **備份檔案不存在** / **解不開** / **損壞** / **校驗失敗** /
+  //    **版本過新** / **副本…同樣讀不出**。
+  //    🔴 `.tar.zst`、`.tar.xz`、`.tar.gz`、`gzip`、`sha256`、`manifest.json`、`MANIFEST.copy.json`、
+  //    `VanBlog`、`server` 三份逐字相同；`<字节数>` 在繁中是 `<位元組數>`、英文是 `<bytes>`；`——` 繁中保留。
+  'error.archiveFormatUnknown': '無法識別備份檔案的壓縮格式（支援 .tar.zst / .tar.xz / .tar.gz）',
+  'error.archiveToolMissingForInspect': '本機沒有 {format} 解壓工具，無法檢查這個備份',
+  'error.archiveToolMissingForRestore': '本機沒有 {format} 解壓工具，裝一個再試（或在有該工具的機器上匯出成 gzip 格式）',
+  'error.restoreSigHashFailed': '為驗簽回讀歸檔算 sha256 失敗（{path}）：{reason} —— 已拒絕恢復（驗不了簽名就不解包）',
+  'error.restoreMemberListUnreadable': '讀不出歸檔成員表：{reason}',
+  'error.restoreTooLarge': '備份歸檔解包後有 {size}（{count} 個成員），超過允許的 {cap}，已拒絕恢復（沒有解包、沒有寫盤）。這通常說明它不是本功能匯出的整站備份，或是一個壓縮炸彈。確有大站要恢復：給 server 設 {env}=<位元組數> 放寬上限，並先確認磁碟夠（目前需要約 {needed}）',
+  'error.restoreCollectionFailed': '恢復集合 {name} 失敗：{reason}',
+  'error.restoreArchiveMissing': '備份檔案不存在：{path}',
+  'error.restoreArchiveUnreadable': '備份檔案解不開（可能已損壞或不完整）：{reason}',
+  'error.restoreNoManifest': '歸檔裡沒有 manifest.json，不是本功能匯出的整站備份',
+  'error.restoreManifestInvalid': 'manifest.json 校驗失敗：不是 VanBlog 整站備份，或版本過新（副本 MANIFEST.copy.json 同樣讀不出）',
 };
