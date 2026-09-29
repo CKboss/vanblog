@@ -270,6 +270,10 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   // 🔴 期 9 第十三批（13a）：备份加密 11 个码
   // 🔴 期 9 第十三批（13b）：加密归档头部形状校验 13 个码（`assertHeaderShape` 的 `bad()` 变体）
   // 🔴 期 9 第十四批（14a）：整站备份"检查/恢复"路径 11 个码
+  // 🔴 期 9 第十四批（14b）：验签拒绝恢复 3 个码（双产出：日志仍走中文串，界面走码）
+  restoreRejectSigMismatch: { status: 400, error: 'Bad Request' },
+  restoreRejectSigKeyMismatch: { status: 400, error: 'Bad Request' },
+  restoreRejectSigMalformed: { status: 400, error: 'Bad Request' },
   archiveFormatUnknown: { status: 400, error: 'Bad Request' },
   archiveToolMissingForInspect: { status: 400, error: 'Bad Request' },
   archiveToolMissingForRestore: { status: 400, error: 'Bad Request' },

@@ -729,14 +729,44 @@ export function assertArchiveSignatureForRestore(input: {
     //    坏的只是**指路**。所以修法是把话说准：逃生口在哪条路上、匿名路为什么没有、以及在那里
     //    重试多少次都会得到同样的拒绝。⚠️ 不要改成"按路由传布尔进来再决定说不说"——
     //    那会把"哪条路有逃生口"这个事实分散到调用方，将来加第三条路由时又会漏。
-    throw new BadRequestException(
-      `拒绝恢复：${result.message}` +
-        `（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，` +
-        `可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），` +
-        `且会打一条 WARN 记录跳过了什么。` +
-        `⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），` +
-        `所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）`,
-    );
+    // 🔴 期 9 第十四批（14b）：这条**回到界面**的拒绝改用错误码（三语可译），
+    //    而 `result.message`（`signatureVerifyMessage()` 的中文串）**保持不动**继续进日志与巡检 issues ——
+    //    双产出：日志/报告是开发者界面（保留中文与 Markdown 粗体、emoji），界面走码。
+    //    🔴 三个状态各一个**完整句码**（状态句 + 逃生口指引），因为服务端的消息填充器不实现 ICU select。
+    //    ⚠️ `{name}` 传 basename（**不带**尾随空格）：原来 `${name}` 是 `archiveName + ' '`，
+    //    而码表里写的是 `{name} 签名…` ⇒ 输出**逐字节相同**（已用脚本比对过）。
+    // 🔴 三支都**显式列全参数**，不用 `{ ...sigCommon, … }` 展开：
+    //    ④"调用点参数对账"那条判据是**静态**的，展开元素（SpreadElement）它看不见里面的键
+    //    ⇒ 会报"少传了 {name}/{ext}/{sigFingerprint}"（实测就是这么红的）。
+    //    👉 与其教判据去猜展开的内容（那等于放松它），不如在调用点写清楚 ——
+    //    **判据的形状要求反向约束代码组织**，这条纪律在本项目已经是第 4 次生效
+    //    （前 3 次：`{ code, params }` 对象形状、early return 位置、本地助手透传）。
+    const sigName = path.basename(input.archivePath);
+    const sigFingerprint = result.sigFingerprint ?? '(none)';
+    if (result.state === 'key-mismatch') {
+      // ⚠️ 这一支**不传 `ext`**：`restoreRejectSigKeyMismatch` 的文案里 `.sig` 是**字面量**
+      //    （那句话没有 `{ext}` 占位符）⇒ 传了就是"没人用的参数"。
+      //    🔴 这条是 ④"调用点参数对账"判据**当场抓住我自己写的缺陷**（第一版三支都照抄了 `ext`）。
+      throw codedError('restoreRejectSigKeyMismatch', {
+        name: sigName,
+        sigFingerprint,
+        expectedFingerprint: result.expectedFingerprint ?? '(none)',
+        envVerify: VERIFY_KEY_ENV,
+        envVerifyFile: VERIFY_KEY_FILE_ENV,
+      });
+    }
+    if (result.state === 'malformed-sig') {
+      throw codedError('restoreRejectSigMalformed', {
+        name: sigName,
+        ext: BACKUP_SIG_EXT,
+        sigPath: signatureSidecarPath(input.archivePath),
+      });
+    }
+    throw codedError('restoreRejectSigMismatch', {
+      name: sigName,
+      ext: BACKUP_SIG_EXT,
+      sigFingerprint,
+    });
   }
   logger.log(result.message);
   return { checked: true, result, warning: null };

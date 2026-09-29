@@ -2252,4 +2252,15 @@ export default {
   'error.restoreArchiveUnreadable': '备份文件解不开（可能已损坏或不完整）：{reason}',
   'error.restoreNoManifest': '归档里没有 manifest.json，不是本功能导出的整站备份',
   'error.restoreManifestInvalid': 'manifest.json 校验失败：不是 VanBlog 整站备份，或版本过新（副本 MANIFEST.copy.json 同样读不出）',
+
+  // ── 🔴 期 9 第十四批（14b）：验签拒绝恢复 3 个码（**双产出**设计）。
+  //    `signatureVerifyMessage()` 的中文串**保持不动**（它进 `logger.log` 与巡检 `issues[]`，
+  //    那是开发者界面，带 Markdown 粗体与 emoji、给终端读）；**回到界面**的这条路径改用下面 3 个完整句码。
+  //    🔴 3 个而不是 6 个：那个 throw 只在 `result.ok !== true` 时发生，`missing-sig` 更早的分支就放行 + WARN，
+  //    `no-key` 进不到这个函数 ⇒ 实际可达的只有 mismatch / key-mismatch / malformed-sig。
+  //    🔴 这 3 条 zh 是用源码里现有的字符串**程序化拼出来**的，并与迁移前的输出**逐字比对过**
+  //    （脚本 `vanblog_dev/add-sigwrap-codes.cjs`；400 字长句手抄一定会错，而且错了看不出来）。
+  'error.restoreRejectSigMismatch': '拒绝恢复：🔴 {name} 签名**不匹配**（密钥指纹对得上：{sigFingerprint}，但签名验不过）。这说明归档或 {ext} 文件在签名之后**被改动过**（篡改、截断、或拷坏）。⚠️ 不要用这份归档恢复：先换一份，或用 ./vanblog.sh backup-verify --all 找出最近一份校验通过的。（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）',
+  'error.restoreRejectSigKeyMismatch': '拒绝恢复：🔴 {name} 的签名是**另一把密钥**签的（.sig 里的指纹 {sigFingerprint}，本机配置的验签公钥指纹 {expectedFingerprint}）。归档本身**不一定有问题** —— 更可能是你手上这把公钥不对。请找回签名时那把密钥对应的公钥（离线副本/密码管理器），配到 {envVerify} 或 {envVerifyFile} 后重试；确认过公钥确实换了、且你接受风险，才考虑跳过验签。（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）',
+  'error.restoreRejectSigMalformed': '拒绝恢复：🔴 {name} 的 {ext} 读不出来或形状不对（{sigPath}）：既不能当成"验过了"，也不该断言"被篡改"。请检查这个文件是否被截断/改格式，或从另一份副本重新拷一个 {ext} 过来。（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）',
 };

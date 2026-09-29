@@ -764,3 +764,114 @@ describe('🔴 期 9 第十二批：密钥"类型不对"必须给出**完整句 
     }
   });
 });
+
+describe('🔴 期 9 第十四批（14b）：验签拒绝恢复必须按**状态**给出各自的错误码（界面可译，日志仍走中文串）', () => {
+  // ## 为什么要这条
+  // 迁移把 `拒绝恢复：${result.message}（逃生口指引…）` 换成了**三个完整句码**
+  // （`restoreRejectSigMismatch` / `restoreRejectSigKeyMismatch` / `restoreRejectSigMalformed`），
+  // 按 `result.state` 分派。🔴 这是"按判别式拆码"的形状 ⇒ 与 §7.194 A / §7.191 那两处一样，
+  // **分支 ↔ 码的对应关系只能靠行为断言钉**（静态判据看不出"用错了哪个码"，因为三个码都合法、都在用）。
+  // ⚠️ 同时钉住"双产出"：`signatureVerifyMessage()` 的中文串**没被改动**（它继续进日志与巡检 issues），
+  //    所以这里还断言响应体的 message 与"中文串 + 逃生口指引"逐字一致（⇒ 站长看到的字没变，只是多了 code）。
+  const setup = () => {
+    const dir = tmpDir('vanblog-signing-code-');
+    const archivePath = writeArchive(dir, 'vanblog-full-20260929-010101.tar.zst', 'C'.repeat(2048));
+    const key = makeEd25519Pem();
+    return { dir, archivePath, key };
+  };
+  const bodyOf = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err: any) {
+      return typeof err.getResponse === 'function' ? err.getResponse() : null;
+    }
+    return null;
+  };
+
+  it('签名不匹配（归档被改过）⇒ code=restoreRejectSigMismatch', async () => {
+    const { dir, archivePath, key } = setup();
+    try {
+      const sha = (await hashFile(archivePath)).sha256;
+      signArchiveDigest({ archivePath, archiveSha256: sha, archiveBytes: 2048, signingKey: resolveSigningKey(dir, { [SIGNING_KEY_ENV]: key.privateKeyPem }) });
+      const buf = fs.readFileSync(archivePath);
+      buf[7] = buf[7] ^ 0x01; // 改一个字节 ⇒ 摘要变了，签名验不过（但指纹对得上）
+      fs.writeFileSync(archivePath, buf);
+      const actual = (await hashFile(archivePath)).sha256;
+      const body = bodyOf(() =>
+        assertArchiveSignatureForRestore({
+          archivePath,
+          actualSha256: actual,
+          verifyKey: resolveVerifyKey(dir, { [VERIFY_KEY_ENV]: key.publicKeyPem }),
+        }),
+      );
+      expect(body).not.toBeNull();
+      expect(body.code).toBe('restoreRejectSigMismatch');
+      expect(body.params.name).toBe(path.basename(archivePath));
+      expect(String(body.message)).toContain('拒绝恢复：');
+      expect(String(body.message)).toContain('skipSignatureCheck=true');
+      expect(String(body.message)).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('公钥不对（另一把密钥签的）⇒ code=restoreRejectSigKeyMismatch，并带上两个指纹与环境变量名', async () => {
+    const { dir, archivePath, key } = setup();
+    try {
+      const sha = (await hashFile(archivePath)).sha256;
+      signArchiveDigest({ archivePath, archiveSha256: sha, archiveBytes: 2048, signingKey: resolveSigningKey(dir, { [SIGNING_KEY_ENV]: key.privateKeyPem }) });
+      const other = makeEd25519Pem(); // 🔴 用**另一把**公钥验 ⇒ key-mismatch
+      const body = bodyOf(() =>
+        assertArchiveSignatureForRestore({
+          archivePath,
+          actualSha256: sha,
+          verifyKey: resolveVerifyKey(dir, { [VERIFY_KEY_ENV]: other.publicKeyPem }),
+        }),
+      );
+      expect(body).not.toBeNull();
+      expect(body.code).toBe('restoreRejectSigKeyMismatch');
+      expect(body.params.envVerify).toBe(VERIFY_KEY_ENV);
+      expect(body.params.envVerifyFile).toBe(VERIFY_KEY_FILE_ENV);
+      expect(String(body.params.sigFingerprint)).not.toBe(String(body.params.expectedFingerprint));
+      expect(String(body.message)).toContain('另一把密钥');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('.sig 形状不对 ⇒ code=restoreRejectSigMalformed，并带上 sidecar 路径', async () => {
+    const { dir, archivePath, key } = setup();
+    try {
+      const sha = (await hashFile(archivePath)).sha256;
+      signArchiveDigest({ archivePath, archiveSha256: sha, archiveBytes: 2048, signingKey: resolveSigningKey(dir, { [SIGNING_KEY_ENV]: key.privateKeyPem }) });
+      fs.writeFileSync(signatureSidecarPath(archivePath), 'not-a-real-sig'); // 截断/改格式
+      const body = bodyOf(() =>
+        assertArchiveSignatureForRestore({
+          archivePath,
+          actualSha256: sha,
+          verifyKey: resolveVerifyKey(dir, { [VERIFY_KEY_ENV]: key.publicKeyPem }),
+        }),
+      );
+      expect(body).not.toBeNull();
+      expect(body.code).toBe('restoreRejectSigMalformed');
+      expect(String(body.params.sigPath)).toBe(signatureSidecarPath(archivePath));
+      expect(String(body.message)).toContain('读不出来或形状不对');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('🔴 双产出：日志/报告用的中文串没被改动（signatureVerifyMessage 仍然返回原文）', () => {
+    // 迁移只动了"回到界面"的那条路径；`signatureVerifyMessage()` 保持原样（进 logger 与 issues[]）。
+    // 这条断言钉住"没有顺手把日志文案也改掉"—— 那是开发者界面，改它会破坏排障时按关键词搜日志的习惯。
+    const msg = signatureVerifyMessage({
+      state: 'mismatch',
+      sigFingerprint: 'aa:bb',
+      expectedFingerprint: 'aa:bb',
+      archiveName: 'x.tar.zst',
+    });
+    expect(msg).toContain('签名**不匹配**');
+    expect(msg).toContain('./vanblog.sh backup-verify --all');
+    expect(msg).not.toContain('{');
+  });
+});

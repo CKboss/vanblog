@@ -328,6 +328,47 @@ export const SERVER_ERROR_CODES = {
   //      备份状态文件 ⇒ 要先分类"产物内容 vs 界面文案"）；
   //   ③ `signatureVerifyMessage()` 的 6 个状态 + `拒绝恢复：{result.message}` 外壳
   //      （那 6 条**同时进日志**（`logger.log`）与巡检结果 ⇒ 要先定"日志放什么、界面放什么"）。
+  // ── 验签拒绝恢复（utils/backupSigning.ts，期 9 第十四批 14b）───────────────────────
+  // 🔴 **双产出**设计（分类结论见 §7.197 A）：`signatureVerifyMessage()` 那 6 个状态的中文串
+  //    **保持不动** —— 它进 `logger.log`（服务端日志 = 开发者界面）与巡检结果的 `issues[]`，
+  //    那里有 Markdown 粗体与 emoji，是给终端/日志读的；
+  //    而**回到界面**的那条路径（`assertArchiveSignatureForRestore` 的 `拒绝恢复：${result.message}（…）`）
+  //    改用下面 3 个**完整句码**（每个 = 对应状态的界面句 + 逃生口指引）。
+  //    🔴 为什么是 3 个而不是 6 个：那个 throw 只在 `result.ok !== true` 时发生，而
+  //    `missing-sig` 在更早的分支就 `return { checked: false, … }`（放行 + WARN，不抛），
+  //    `no-key` 根本进不到这个函数（调用方已判过 `input.verifyKey`）⇒ 实际可达的只有
+  //    `mismatch` / `key-mismatch` / `malformed-sig` 三种。
+  //    ⚠️ `{name}` 传 `path.basename(archivePath)`（**不带**尾随空格）：原来的 `${name}` 是
+  //    `archiveName + ' '`，所以 `{name} 签名` 与原来的输出**逐字节相同**。
+  //    🔴 这 3 条 zh 是**用源码里现有的字符串程序化拼出来的**（不是手抄），并与迁移前的输出逐字比对过
+  //    （脚本：`vanblog_dev/add-sigwrap-codes.cjs`）。
+  restoreRejectSigMismatch: entry(
+    '拒绝恢复：🔴 {name} 签名**不匹配**（密钥指纹对得上：{sigFingerprint}，但签名验不过）。' +
+      '这说明归档或 {ext} 文件在签名之后**被改动过**（篡改、截断、或拷坏）。' +
+      '⚠️ 不要用这份归档恢复：先换一份，或用 ./vanblog.sh backup-verify --all 找出最近一份校验通过的。' +
+      '（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。' +
+      '⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。' +
+      '）',
+    BadRequestException,
+  ),
+  restoreRejectSigKeyMismatch: entry(
+    '拒绝恢复：🔴 {name} 的签名是**另一把密钥**签的（.sig 里的指纹 {sigFingerprint}，本机配置的验签公钥指纹 {expectedFingerprint}）。' +
+      '归档本身**不一定有问题** —— 更可能是你手上这把公钥不对。' +
+      '请找回签名时那把密钥对应的公钥（离线副本/密码管理器），配到 {envVerify} 或 {envVerifyFile} 后重试；确认过公钥确实换了、且你接受风险，才考虑跳过验签。' +
+      '（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。' +
+      '⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。' +
+      '）',
+    BadRequestException,
+  ),
+  restoreRejectSigMalformed: entry(
+    '拒绝恢复：🔴 {name} 的 {ext} 读不出来或形状不对（{sigPath}）：既不能当成"验过了"，也不该断言"被篡改"。' +
+      '请检查这个文件是否被截断/改格式，或从另一份副本重新拷一个 {ext} 过来。' +
+      '（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。' +
+      '⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。' +
+      '）',
+    BadRequestException,
+  ),
+
   archiveFormatUnknown: entry(
     '无法识别备份文件的压缩格式（支持 .tar.zst / .tar.xz / .tar.gz）',
     BadRequestException,
