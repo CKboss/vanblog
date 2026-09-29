@@ -271,6 +271,18 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   // 🔴 期 9 第十三批（13b）：加密归档头部形状校验 13 个码（`assertHeaderShape` 的 `bad()` 变体）
   // 🔴 期 9 第十四批（14a）：整站备份"检查/恢复"路径 11 个码
   // 🔴 期 9 第十四批（14b）：验签拒绝恢复 3 个码（双产出：日志仍走中文串，界面走码）
+  // 🔴 期 9 第十五批：整站备份创建与校验 11 个码
+  backupNoCompressor: { status: 400, error: 'Bad Request' },
+  backupNoCompressorNoneAvailable: { status: 400, error: 'Bad Request' },
+  backupTarStreamIncomplete: { status: 400, error: 'Bad Request' },
+  backupBadTarHeaders: { status: 400, error: 'Bad Request' },
+  backupDuplicateMembers: { status: 400, error: 'Bad Request' },
+  backupReadBackFailed: { status: 400, error: 'Bad Request' },
+  backupReadBackMismatch: { status: 400, error: 'Bad Request' },
+  backupChecksumMismatch: { status: 400, error: 'Bad Request' },
+  backupRenameFailed: { status: 400, error: 'Bad Request' },
+  backupVerifyThrew: { status: 400, error: 'Bad Request' },
+  backupVerifyFailedSummary: { status: 400, error: 'Bad Request' },
   restoreRejectSigMismatch: { status: 400, error: 'Bad Request' },
   restoreRejectSigKeyMismatch: { status: 400, error: 'Bad Request' },
   restoreRejectSigMalformed: { status: 400, error: 'Bad Request' },

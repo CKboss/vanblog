@@ -2038,4 +2038,23 @@ export default {
   'error.restoreRejectSigMismatch': '拒絕恢復：🔴 {name} 簽名**不匹配**（金鑰指紋對得上：{sigFingerprint}，但簽名驗不過）。這說明歸檔或 {ext} 檔案在簽名之後**被改動過**（篡改、截斷、或拷壞）。⚠️ 不要用這份歸檔恢復：先換一份，或用 ./vanblog.sh backup-verify --all 找出最近一份校驗通過的。（如果你確認公開金鑰就是不對、且你接受風險：**登入後台**走「備份與恢復 → 整站恢復」時，可以在請求 body 裡帶 skipSignatureCheck=true 顯式跳過 —— 它只認字面量 true（1/yes/TRUE 都不算），且會打一條 WARN 記錄跳過了什麼。⚠️ 初始化頁那個**匿名**恢復入口沒有這個開關（那條路徑刻意不提供跳過驗簽的能力），所以在那裡重試多少次都會得到同樣的拒絕：要嘛把正確的驗簽公開金鑰配上，要嘛改用後台的恢復入口。）',
   'error.restoreRejectSigKeyMismatch': '拒絕恢復：🔴 {name} 的簽名是**另一把金鑰**簽的（.sig 裡的指紋 {sigFingerprint}，本機配置的驗簽公開金鑰指紋 {expectedFingerprint}）。歸檔本身**不一定有問題** —— 更可能是你手上這把公開金鑰不對。請找回簽名時那把金鑰對應的公開金鑰（離線副本/密碼管理器），配到 {envVerify} 或 {envVerifyFile} 後重試；確認過公開金鑰確實換了、且你接受風險，才考慮跳過驗簽。（如果你確認公開金鑰就是不對、且你接受風險：**登入後台**走「備份與恢復 → 整站恢復」時，可以在請求 body 裡帶 skipSignatureCheck=true 顯式跳過 —— 它只認字面量 true（1/yes/TRUE 都不算），且會打一條 WARN 記錄跳過了什麼。⚠️ 初始化頁那個**匿名**恢復入口沒有這個開關（那條路徑刻意不提供跳過驗簽的能力），所以在那裡重試多少次都會得到同樣的拒絕：要嘛把正確的驗簽公開金鑰配上，要嘛改用後台的恢復入口。）',
   'error.restoreRejectSigMalformed': '拒絕恢復：🔴 {name} 的 {ext} 讀不出來或形狀不對（{sigPath}）：既不能當成"驗過了"，也不該斷言"被篡改"。請檢查這個檔案是否被截斷/改格式，或從另一份副本重新拷一個 {ext} 過來。（如果你確認公開金鑰就是不對、且你接受風險：**登入後台**走「備份與恢復 → 整站恢復」時，可以在請求 body 裡帶 skipSignatureCheck=true 顯式跳過 —— 它只認字面量 true（1/yes/TRUE 都不算），且會打一條 WARN 記錄跳過了什麼。⚠️ 初始化頁那個**匿名**恢復入口沒有這個開關（那條路徑刻意不提供跳過驗簽的能力），所以在那裡重試多少次都會得到同樣的拒絕：要嘛把正確的驗簽公開金鑰配上，要嘛改用後台的恢復入口。）',
+
+  // ── 🔴 期 9 第十五批（11 條）── 地區用詞：**壓縮器** / **本機可用** / **計算歸檔成員雜湊時**（哈希→雜湊）/
+  //    **暫存目錄**（暂存→暫存）/ **已中止** / **頭部校驗和** / **暫存樹裡出現同名成員** / **回讀** /
+  //    **剩餘空間** / **備份檔案落盤後與寫出的內容不一致**（文件→檔案）/ **已刪除半成品** / **這次備份按失敗計** /
+  //    **清單記錄** / **實測** / **歸檔失去自我校驗能力** / **改名就位失敗** / **整站備份校驗失敗** /
+  //    **歸檔已保留** / **項不通過** / **第一項** / **逐項原因見服務端日誌與校驗報告** / **位元組**（字节）。
+  //    🔴 `gzip`、`tar`、`sha256`、`->`、`無`（对应简体"无"）三份按各自约定；
+  //    `…`（两个 sha256 前缀后面）繁中保留、英文是 `...`；`——` 繁中保留、英文是 ` - `。
+  'error.backupNoCompressor': '沒有可用的壓縮器（想要 {want}，本機可用：{available}；至少需要 gzip）',
+  'error.backupNoCompressorNoneAvailable': '沒有可用的壓縮器（想要 {want}，本機可用：無；至少需要 gzip）',
+  'error.backupTarStreamIncomplete': '計算歸檔成員雜湊時 tar 流未正常結束（暫存目錄讀不完整），本次備份已中止',
+  'error.backupBadTarHeaders': '計算歸檔成員雜湊時發現 tar 頭部校驗和不對的成員：{members}',
+  'error.backupDuplicateMembers': '暫存樹裡出現同名成員：{members}',
+  'error.backupReadBackFailed': '回讀剛寫出的備份失敗（剩餘空間 {free}）：{reason}',
+  'error.backupReadBackMismatch': '備份檔案落盤後與寫出的內容不一致（寫出 {written} 位元組 / sha256 {writtenHash}…，回讀 {read} 位元組 / sha256 {readHash}…；剩餘空間 {free}）—— 已刪除半成品，這次備份按失敗計',
+  'error.backupChecksumMismatch': '壓縮器內容校驗位與清單記錄不一致（清單 {declared}，實測 {actual}：{detail}） —— 歸檔失去自我校驗能力，已刪除半成品',
+  'error.backupRenameFailed': '備份檔案改名就位失敗（{from} -> {to}）：{reason}',
+  'error.backupVerifyThrew': '整站備份校驗失敗：{reason}（歸檔已保留：{name}）',
+  'error.backupVerifyFailedSummary': '整站備份校驗失敗：{count} 項不通過（第一項：{first}）（歸檔已保留：{name}）。逐項原因見服務端日誌與校驗報告。',
 };

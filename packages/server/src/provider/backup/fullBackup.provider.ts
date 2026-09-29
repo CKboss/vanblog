@@ -275,7 +275,9 @@ export class FullBackupProvider implements OnApplicationBootstrap {
       this.recordFailureSafely('verify', message, result.name);
       this.logger.error(`整站备份校验异常（${result.name}）：${message}`);
       this.warnIfStale();
-      throw new BadRequestException(`整站备份校验失败：${message}（归档已保留：${result.name}）`);
+      // 🔴 双产出：`message`（中文，来自异常本身）继续进 `recordFailureSafely` 与 `logger.error`，
+      //    界面这条走码；`{reason}` 传的是**异常消息**（fs/tar 的技术串，不是我们写的文案）。
+      throw codedError('backupVerifyThrew', { reason: message, name: result.name });
     }
     if (!verification.ok) {
       const message = verification.issues.map((i) => `[${i.check}] ${i.message}`).join('；');
@@ -286,9 +288,16 @@ export class FullBackupProvider implements OnApplicationBootstrap {
           `——归档已保留在 ${result.path} 供排障，但这次备份按失败计`,
       );
       this.warnIfStale();
-      throw new BadRequestException(
-        `整站备份校验失败：${message}（归档已保留：${result.name}）`,
-      );
+      // 🔴 这一条是**本批唯一刻意改变界面文案**的地方：原来把逐项原因（`[check] 中文原因；…`）
+      //    全塞进响应消息，而那些原因是 `backupVerify.ts` 产的中文 ⇒ 只翻外壳会得到
+      //    "英文外壳 + 中文内核"（比全中文更糟）。现在界面给**摘要**：几项不通过 +
+      //    第一项的 `check` 名（**ASCII 标识符**，如 `manifest` / `archiveSha256`，可 grep）+ 归档已保留；
+      //    逐项原因仍在**服务端日志的 ERROR 行**（上面那条 `logger.error` 一字未改）与状态文件里。
+      throw codedError('backupVerifyFailedSummary', {
+        count: verification.issues.length,
+        first: String(verification.issues[0]?.check ?? 'unknown'),
+        name: result.name,
+      });
     }
     recordBackupSuccess(this.backupDir(), {
       name: result.name,

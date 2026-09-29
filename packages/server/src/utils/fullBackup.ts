@@ -1417,11 +1417,20 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
   const started = Date.now();
   const spec = pickSpec(options.format);
   if (!spec) {
-    throw new BadRequestException(
-      `没有可用的压缩器（想要 ${options.format || 'zstd/xz/gzip'}，本机可用：${
-        availableFormats().join(', ') || '无'
-      }；至少需要 gzip）`,
-    );
+    // 🔴 `availableFormats().join(', ') || '无'` 是**中文兜底值当参数传**（本项目第 9 次踩这个形状）
+    //    ⇒ 按"有可用列表 / 一个都没有"拆两个码（不许把 `无` 塞进 params）。
+    //    ⚠️ 同一条语句里还有第二个兜底 `options.format || 'zstd/xz/gzip'` —— 那是 **ASCII**，
+    //    可以当参数传 ⇒ 🔴 判别标准是"兜底值是不是给用户看的文字"，不是"有没有 `||`"。
+    const compressorsAvailable = availableFormats().join(', ');
+    if (!compressorsAvailable) {
+      throw codedError('backupNoCompressorNoneAvailable', {
+        want: options.format || 'zstd/xz/gzip',
+      });
+    }
+    throw codedError('backupNoCompressor', {
+      want: options.format || 'zstd/xz/gzip',
+      available: compressorsAvailable,
+    });
   }
   // ── 可选加密：默认关，配了口令就开 ──────────────────────────────────────
   // ⚠️ 口令解析要**早**（在任何磁盘工作之前）：`_FILE` 读不到时必须失败关闭，
@@ -1548,19 +1557,17 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       if (!tarMembers.complete) {
         // tar 流没走到全零结束块 = 打包前的这一遍就没读完；宁可导出失败也不要一份
         // "看起来有哈希、其实哈希表本身残缺"的清单
-        throw new BadRequestException(
-          '计算归档成员哈希时 tar 流未正常结束（暂存目录读不完整），本次备份已中止',
-        );
+                throw codedError('backupTarStreamIncomplete');
       }
       if (tarMembers.badHeaders.length) {
-        throw new BadRequestException(
-          `计算归档成员哈希时发现 tar 头部校验和不对的成员：${tarMembers.badHeaders.slice(0, 5).join(', ')}`,
-        );
+                throw codedError('backupBadTarHeaders', {
+                  members: tarMembers.badHeaders.slice(0, 5).join(', '),
+                });
       }
       if (tarMembers.duplicateNames.length) {
-        throw new BadRequestException(
-          `暂存树里出现同名成员：${tarMembers.duplicateNames.slice(0, 5).join(', ')}`,
-        );
+                throw codedError('backupDuplicateMembers', {
+                  members: tarMembers.duplicateNames.slice(0, 5).join(', '),
+                });
       }
       // 压缩器的内容校验位：这里按 spec 声明（zstd 显式带 --check），
       // 打包完成后**再实测一次帧头**并比对（见下面第 5 步），对不上就是响亮失败
@@ -1636,19 +1643,20 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       readBack = await hashFile(tempPath);
     } catch (err) {
       rmTemp(tempPath);
-      throw new BadRequestException(
-        `回读刚写出的备份失败（剩余空间 ${freeSpaceText(outDir)}）：${(err as Error)?.message || err}`,
-      );
+            throw codedError('backupReadBackFailed', {
+              free: freeSpaceText(outDir),
+              reason: (err as Error)?.message || String(err),
+            });
     }
     if (readBack.bytes !== streamed.bytes || readBack.sha256 !== streamed.sha256) {
       rmTemp(tempPath);
-      throw new BadRequestException(
-        `备份文件落盘后与写出的内容不一致（写出 ${streamed.bytes} 字节 / sha256 ${streamed.sha256.slice(
-          0,
-          12,
-        )}…，回读 ${readBack.bytes} 字节 / sha256 ${readBack.sha256.slice(0, 12)}…；` +
-          `剩余空间 ${freeSpaceText(outDir)}）—— 已删除半成品，这次备份按失败计`,
-      );
+            throw codedError('backupReadBackMismatch', {
+              written: streamed.bytes,
+              writtenHash: streamed.sha256.slice(0, 12),
+              read: readBack.bytes,
+              readHash: readBack.sha256.slice(0, 12),
+              free: freeSpaceText(outDir),
+            });
     }
     // 压缩器自带的内容校验位：清单里记的值必须与归档头部的实测值一致
     if (integrity && encryptor) {
@@ -1664,10 +1672,11 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
         logger.warn(`读不出压缩器的内容校验位（${probe.detail}），清单里记的 ${integrity.zstdFrameChecksum} 未经实测复核`);
       } else if (probe.enabled !== integrity.zstdFrameChecksum) {
         rmTemp(tempPath);
-        throw new BadRequestException(
-          `压缩器内容校验位与清单记录不一致（清单 ${integrity.zstdFrameChecksum}，实测 ${probe.enabled}：${probe.detail}）` +
-            ' —— 归档失去自校验能力，已删除半成品',
-        );
+                throw codedError('backupChecksumMismatch', {
+                  declared: String(integrity.zstdFrameChecksum),
+                  actual: String(probe.enabled),
+                  detail: String(probe.detail),
+                });
       }
     }
     // 原子就位：临时名 -> 正式名（同目录 rename，读者要么看不到、要么看到完整的一份）
@@ -1675,9 +1684,11 @@ export async function createFullBackup(options: CreateFullBackupOptions): Promis
       fs.renameSync(tempPath, archivePath);
     } catch (err) {
       rmTemp(tempPath);
-      throw new BadRequestException(
-        `备份文件改名就位失败（${tempPath} -> ${archivePath}）：${(err as Error)?.message || err}`,
-      );
+            throw codedError('backupRenameFailed', {
+              from: tempPath,
+              to: archivePath,
+              reason: (err as Error)?.message || String(err),
+            });
     }
     const bytes = fs.statSync(archivePath).size;
     manifest.totals.archiveBytes = bytes;

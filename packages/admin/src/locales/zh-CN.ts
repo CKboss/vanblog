@@ -2263,4 +2263,27 @@ export default {
   'error.restoreRejectSigMismatch': '拒绝恢复：🔴 {name} 签名**不匹配**（密钥指纹对得上：{sigFingerprint}，但签名验不过）。这说明归档或 {ext} 文件在签名之后**被改动过**（篡改、截断、或拷坏）。⚠️ 不要用这份归档恢复：先换一份，或用 ./vanblog.sh backup-verify --all 找出最近一份校验通过的。（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）',
   'error.restoreRejectSigKeyMismatch': '拒绝恢复：🔴 {name} 的签名是**另一把密钥**签的（.sig 里的指纹 {sigFingerprint}，本机配置的验签公钥指纹 {expectedFingerprint}）。归档本身**不一定有问题** —— 更可能是你手上这把公钥不对。请找回签名时那把密钥对应的公钥（离线副本/密码管理器），配到 {envVerify} 或 {envVerifyFile} 后重试；确认过公钥确实换了、且你接受风险，才考虑跳过验签。（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）',
   'error.restoreRejectSigMalformed': '拒绝恢复：🔴 {name} 的 {ext} 读不出来或形状不对（{sigPath}）：既不能当成"验过了"，也不该断言"被篡改"。请检查这个文件是否被截断/改格式，或从另一份副本重新拷一个 {ext} 过来。（如果你确认公钥就是不对、且你接受风险：**登录后台**走「备份与恢复 → 整站恢复」时，可以在请求 body 里带 skipSignatureCheck=true 显式跳过 —— 它只认字面量 true（1/yes/TRUE 都不算），且会打一条 WARN 记录跳过了什么。⚠️ 初始化页那个**匿名**恢复入口没有这个开关（那条路径刻意不提供跳过验签的能力），所以在那里重试多少次都会得到同样的拒绝：要么把正确的验签公钥配上，要么改用后台的恢复入口。）',
+
+  // ── 🔴 期 9 第十五批：整站备份创建与校验 11 个码（`utils/fullBackup.ts` 8 处 + provider 2 处）。
+  //    🔴 **双产出是免费的**：这些 throw 的中文同时被 `recordFailureSafely()` 写进备份状态文件、
+  //    被 `logger.error()` 写进日志 —— 而 `codedError()` 造出的异常，它的 `message` 就是
+  //    **码表里那条中文**（填充后的）⇒ 日志与状态文件里仍然是中文，界面按 `code` 取三语译文，
+  //    **不需要维护两份文案**。
+  //    🔴 `backupNoCompressorNoneAvailable`：源码是 `availableFormats().join(', ') || '无'` ——
+  //    **中文兜底值当参数传**（本项目第 9 次踩这个形状）⇒ 按"有可用列表 / 一个都没有"拆两个码。
+  //    ⚠️ `backupVerifyFailedSummary` 是本批**唯一刻意改变界面文案**的一处：原来把逐项原因
+  //    （`[check] 中文原因；…`）全塞进响应消息 ⇒ 只翻外壳会得到"英文外壳 + 中文内核"。
+  //    现在界面给摘要（几项不通过 + 第一项的 `check` 名，那是 **ASCII 标识符**、可 grep + 归档已保留），
+  //    逐项原因仍在**服务端日志的 ERROR 行**与状态文件里（`logger.error` 一字未改）。
+  'error.backupNoCompressor': '没有可用的压缩器（想要 {want}，本机可用：{available}；至少需要 gzip）',
+  'error.backupNoCompressorNoneAvailable': '没有可用的压缩器（想要 {want}，本机可用：无；至少需要 gzip）',
+  'error.backupTarStreamIncomplete': '计算归档成员哈希时 tar 流未正常结束（暂存目录读不完整），本次备份已中止',
+  'error.backupBadTarHeaders': '计算归档成员哈希时发现 tar 头部校验和不对的成员：{members}',
+  'error.backupDuplicateMembers': '暂存树里出现同名成员：{members}',
+  'error.backupReadBackFailed': '回读刚写出的备份失败（剩余空间 {free}）：{reason}',
+  'error.backupReadBackMismatch': '备份文件落盘后与写出的内容不一致（写出 {written} 字节 / sha256 {writtenHash}…，回读 {read} 字节 / sha256 {readHash}…；剩余空间 {free}）—— 已删除半成品，这次备份按失败计',
+  'error.backupChecksumMismatch': '压缩器内容校验位与清单记录不一致（清单 {declared}，实测 {actual}：{detail}） —— 归档失去自校验能力，已删除半成品',
+  'error.backupRenameFailed': '备份文件改名就位失败（{from} -> {to}）：{reason}',
+  'error.backupVerifyThrew': '整站备份校验失败：{reason}（归档已保留：{name}）',
+  'error.backupVerifyFailedSummary': '整站备份校验失败：{count} 项不通过（第一项：{first}）（归档已保留：{name}）。逐项原因见服务端日志与校验报告。',
 };

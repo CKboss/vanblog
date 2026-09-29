@@ -342,6 +342,64 @@ export const SERVER_ERROR_CODES = {
   //    `archiveName + ' '`，所以 `{name} 签名` 与原来的输出**逐字节相同**。
   //    🔴 这 3 条 zh 是**用源码里现有的字符串程序化拼出来的**（不是手抄），并与迁移前的输出逐字比对过
   //    （脚本：`vanblog_dev/add-sigwrap-codes.cjs`）。
+  // ── 整站备份创建与校验（utils/fullBackup.ts + provider/backup/fullBackup.provider.ts，期 9 第十五批）──
+  // 🔴 **双产出是免费的**：这些 throw 的中文同时被 `recordFailureSafely()` 写进备份状态文件、
+  //    被 `logger.error()` 写进日志 —— 而 `codedError()` 造出的异常，它的 `message` 就是
+  //    **码表里那条中文**（填充后的）⇒ 日志与状态文件里仍然是中文，界面按 `code` 取三语译文。
+  //    👉 这就是 §7.198 A 那个"双产出"设计的好处：**不需要维护两份文案**。
+  // 🔴 `backupNoCompressorNoneAvailable`：源码是 `availableFormats().join(', ') || '无'` ——
+  //    🔴 **中文兜底值当参数传**（本项目第 9 次踩这个形状）⇒ 按"有可用列表 / 一个都没有"拆两个码。
+  // 🔴 `backupVerifyFailedSummary` 是**刻意改变界面文案**的一处（原来把逐项原因全塞进消息里，
+  //    而那些原因是 `backupVerify.ts` 产的中文）：界面改成"{count} 项不通过（第一项：{first}）"，
+  //    `{first}` 是 `issue.check`（**ASCII 标识符**，如 `manifest` / `archiveSha256`）⇒ 不夹中文、可 grep；
+  //    逐项原因仍在**服务端日志的 ERROR 行**与状态文件里（`recordFailureSafely` 照旧记中文）。
+  //    ⚠️ 这是本批**唯一**一处界面文案变化，已在 CHANGELOG 里单独点明。
+  backupNoCompressor: entry(
+    '没有可用的压缩器（想要 {want}，本机可用：{available}；至少需要 gzip）',
+    BadRequestException,
+  ),
+  backupNoCompressorNoneAvailable: entry(
+    '没有可用的压缩器（想要 {want}，本机可用：无；至少需要 gzip）',
+    BadRequestException,
+  ),
+  backupTarStreamIncomplete: entry(
+    '计算归档成员哈希时 tar 流未正常结束（暂存目录读不完整），本次备份已中止',
+    BadRequestException,
+  ),
+  backupBadTarHeaders: entry(
+    '计算归档成员哈希时发现 tar 头部校验和不对的成员：{members}',
+    BadRequestException,
+  ),
+  backupDuplicateMembers: entry(
+    '暂存树里出现同名成员：{members}',
+    BadRequestException,
+  ),
+  backupReadBackFailed: entry(
+    '回读刚写出的备份失败（剩余空间 {free}）：{reason}',
+    BadRequestException,
+  ),
+  backupReadBackMismatch: entry(
+    '备份文件落盘后与写出的内容不一致（写出 {written} 字节 / sha256 {writtenHash}…，回读 {read} 字节 / sha256 {readHash}…；剩余空间 {free}）—— 已删除半成品，这次备份按失败计',
+    BadRequestException,
+  ),
+  backupChecksumMismatch: entry(
+    '压缩器内容校验位与清单记录不一致（清单 {declared}，实测 {actual}：{detail}） —— 归档失去自校验能力，已删除半成品',
+    BadRequestException,
+  ),
+  backupRenameFailed: entry(
+    '备份文件改名就位失败（{from} -> {to}）：{reason}',
+    BadRequestException,
+  ),
+  backupVerifyThrew: entry(
+    '整站备份校验失败：{reason}（归档已保留：{name}）',
+    BadRequestException,
+  ),
+  backupVerifyFailedSummary: entry(
+    '整站备份校验失败：{count} 项不通过（第一项：{first}）（归档已保留：{name}）。' +
+      '逐项原因见服务端日志与校验报告。',
+    BadRequestException,
+  ),
+
   restoreRejectSigMismatch: entry(
     '拒绝恢复：🔴 {name} 签名**不匹配**（密钥指纹对得上：{sigFingerprint}，但签名验不过）。' +
       '这说明归档或 {ext} 文件在签名之后**被改动过**（篡改、截断、或拷坏）。' +

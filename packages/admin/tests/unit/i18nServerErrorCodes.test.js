@@ -87,7 +87,8 @@ for (const l of LOCALES) {
 // 🔴 53 → **52**（期 9 第十三批（13b）：assertHeaderShape 的 bad() 助手改成传码 ⇒ 那 1 处 throw 站点消失（13 个变体各成一个码））
 // 🔴 52 → **38**（期 9 第十四批（14a）：整站备份检查/恢复路径 14 处 throw 迁进 11 个码（3 处共用一个码））
 // 🔴 38 → **37**（期 9 第十四批（14b）：验签拒绝恢复那 1 处 throw 换成按状态分派的 3 个码）
-const THROW_BUDGET = 37;
+// 🔴 37 → **27**（期 9 第十五批：整站备份创建 8 处 + provider 2 处迁进 11 个码）
+const THROW_BUDGET = 27;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
