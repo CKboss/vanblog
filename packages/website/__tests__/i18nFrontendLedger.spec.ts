@@ -39,7 +39,14 @@ type Entry = {
   file: string;
   /** 这个文件里**还剩**多少条裸中文（必须与实测一致） */
   count: number;
-  kind: "permanent" | "iou";
+  kind: "permanent" | "iou" | "seamed";
+  /**
+   * 🔴 `kind: "seamed"` 专用：这个文件里**已经过接缝**的条数（它们剩下的中文是
+   * `t(ID, 默认值)` 里的**默认值**，尺子仍然数得到，但性质已经变了 —— 不再是"硬编码文案"）。
+   * 判据会**逐条验证**：文件里必须真的能找到 `t(<某个 ID>, <这个常量>)` 的调用，
+   * 否则就是"我声称接了接缝，其实没接"（🔴 这是最危险的假账：数字看起来在降，实际没接上）。
+   */
+  seamWired?: number;
   /** 欠条必须点名批次 */
   batch?: string;
   why: string;
@@ -152,12 +159,18 @@ const LEDGER: Entry[] = [
   {
     file: "components/PostCard/titleCopyA11y.ts",
     count: 6,
-    kind: "iou",
-    batch: "期 10 第二批（无障碍标签族）",
+    kind: "seamed",
+    seamWired: 6,
     why:
-      "🔴 **无障碍标签与复制提示**（读屏软件会念出来）⇒ 访客可见（而且是最需要正确语种的一族：" +
-      "读屏按 `<html lang>` 选发音规则，标签语言与页面语言不一致会念错）。" +
-      "⚠️ 这是**纯函数模块** ⇒ 用「注入的尾参 `t: TFunc = IDENTITY_T`」这个形状，不能在模块级调用 hook。",
+      "🔴 **期 10 第三批已过接缝**：6 条（3 个 aria-label + 3 个复制成功 toast）现在都是 " +
+      "`t(ID, 默认值)` 里的**默认值** —— 常量本身**刻意保留**（它们既是默认文案、又被测试钉住），" +
+      "取文案改成 `titleCopyLabel(kind, t)` / `titleCopyToast(kind, t)` / `buildTitleCopyControl(kind, t)`，" +
+      "消费方（`PostCard/title.tsx`、`NavBar/index.tsx`）改成传 `useT()` 的结果。" +
+      "🔴 **为什么常量不能直接改成 `t(...)` 的求值结果**：模块级常量在 **import 期**就求值，" +
+      "那时词典还没注入（`setDictionary` 是运行时调的）⇒ 中文会被**永久固化**进模块，接了词典也没用。" +
+      "👉 规矩（本批定下）：**常量留作默认值 + 另加取文案的函数（尾参 `t = IDENTITY_T`）+ 消费方改调函数**。" +
+      "⚠️ 尺子仍然把这 6 条数成「裸中文」（它看不出「这个常量被当作 defaultMessage 用了」）⇒ " +
+      "所以台账给它一个**独立的 kind**（`seamed`）并用 `seamWired` 逐条验证，而不是把数字改成 0 造假账。",
   },
   {
     file: "components/UnLockCard/index.tsx",
@@ -289,13 +302,6 @@ const LEDGER: Entry[] = [
     kind: "iou",
     batch: "期 10 第二批",
     why: "🔴 文章卡片的固定标签（「阅读全文」/「置顶」等）⇒ 访客可见。",
-  },
-  {
-    file: "components/PostCard/title.tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 标题的 aria-label 与复制提示 ⇒ 读屏可见。",
   },
   {
     file: "components/Reward/index.tsx",
@@ -503,7 +509,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(140);
+    expect(total).toBeGreaterThan(130);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -511,10 +517,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
   });
 
   it("棘轮：裸中文总数只许减不许增（预算写死，迁完一批就来下调）", () => {
-    // 🔴 253 = 期 10 第二批之后的实测值（第一批建台账时是 261；第二批迁走了 8 条：
-    //    `relativeTime` 5 + `readingTime` 1 + `timelineMonths` 1 + 它们各自的常量 1）。
+    // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
+    //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(253);
+    expect(total).toBeLessThanOrEqual(251);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -555,7 +561,20 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
       //    admin 的 catch 块数 100 vs 实测 82、throw 站点 >100 vs 实测 91、这里的 30 vs 实测 21）。
       expect(e.why.length).toBeGreaterThan(12);
       if (e.kind === "iou") expect(e.batch, `${e.file}: 欠条必须点名批次`).toBeTruthy();
-      expect(["iou", "permanent"]).toContain(e.kind);
+      expect(["iou", "permanent", "seamed"]).toContain(e.kind);
+      if (e.kind === "seamed") {
+        // 🔴 逐条验证"接缝真的接上了"：文件里必须能找到 `t(<ID 常量>, <默认值常量>)` 这样的调用，
+        //    而且数量不少于声称的 `seamWired`。否则就是"声称接了、其实没接"的假账。
+        expect(e.seamWired, `${e.file}: kind=seamed 必须写明 seamWired`).toBeTruthy();
+        const src = readFileSync(path.join(websiteRoot, e.file), "utf8");
+        const wired = Array.from(
+          src.matchAll(/\bt\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*[A-Z_][A-Z0-9_]*\s*\)/g)
+        ).length;
+        expect(
+          wired,
+          `${e.file}: 声称有 ${e.seamWired} 条过了接缝，但只找到 ${wired} 处 t(ID, 默认值常量) 的调用`
+        ).toBeGreaterThanOrEqual(e.seamWired as number);
+      }
     }
     expect(dead).toEqual([]);
   });
@@ -565,15 +584,22 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第二批更新）：**253** 条 = 永久例外 **33** + 欠条 **220**。
-    //    第二批迁走 8 条（`utils/relativeTime` 5 + `utils/readingTime` 1 + `utils/timelineMonths` 1 +
-    //    那个 `MONTH_LABEL_SUFFIX` 常量 1）⇒ 这三个文件已从台账**销账**（整条删掉，不是把数字改成 0）。
+    // 🔴 口径（期 10 第三批更新）：**251** 条 = 永久例外 **33** + 欠条 **212** + **已过接缝的默认值 6**。
+    //    第二批迁走 8 条（`relativeTime` 5 + `readingTime` 1 + `timelineMonths` 1 + 那个后缀常量 1）；
+    //    第三批迁走 `PostCard/title.tsx` 的 2 条（阅读时间的 title 与「编辑」标签）、
+    //    并把 `titleCopyA11y.ts` 的 6 条**接上接缝**（它们仍在计数里，因为尺子数的是"文件里的中文字面量"，
+    //    而常量作为 `t()` 的默认值仍然是中文字面量 ⇒ 🔴 用独立的 kind 如实区分，**不是把数字改成 0 造假账**）。
+    //    销账方式：迁完的文件**整条删掉**（不是把 count 改成 0）。
     //    33 = 内部不变量 24（`utils/searchIndex.ts`）+ 3（`api/searchIndex.ts`）+ 6（`pages/api/revalidate.ts`，机器消费方）。
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
     expect(permCount).toBe(33);
-    expect(iouCount).toBe(220);
+    const seamed = LEDGER.filter((e) => e.kind === "seamed");
+    const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
+    expect(iouCount).toBe(212);
+    expect(seamedCount).toBe(6);
+    expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
     const byBatch = new Map<string, number>();
     for (const e of iou) byBatch.set(e.batch || "?", (byBatch.get(e.batch || "?") || 0) + e.count);

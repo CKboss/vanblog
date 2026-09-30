@@ -1,4 +1,5 @@
 import { stopHeadroom } from "../../utils/headroom";
+import useT from "../../hooks/useT";
 import Link from "next/link";
 import Headroom from "headroom.js";
 import { useRouter } from "next/router";
@@ -17,8 +18,8 @@ import { encodeQuerystring } from "../../utils/encode";
 import { CopyIcon } from "../CopyIcons";
 import {
   SITE_NAME_COPY_CLASS,
-  SITE_NAME_COPY_LABEL,
-  SITE_NAME_COPY_TOAST,
+  titleCopyLabel,
+  titleCopyToast,
 } from "../PostCard/titleCopyA11y";
 import {
   HEADER_ACTION_LABELS,
@@ -49,6 +50,8 @@ export default function (props: {
   subMenuOffset: number;
   openArticleLinksInNewWindow: boolean;
 }) {
+  // 🔴 期 10 第三批：站点名复制按钮的 aria-label / title / toast 走 i18n 接缝
+  const t = useT();
   const [showSearch, setShowSearch] = useState(false);
   const [headroom, setHeadroom] = useState<Headroom>();
   const searchCardRef = useRef<SearchCardHandle>(null);
@@ -163,13 +166,14 @@ export default function (props: {
               <CopyToClipboard
                 text={props.siteName}
                 onCopy={() => {
-                  toast.success(SITE_NAME_COPY_TOAST, { className: "toast" });
+                  // 🔴 期 10 第三批：走 i18n 接缝（渲染期取），不再直接用模块级常量
+                  toast.success(titleCopyToast("siteName", t), { className: "toast" });
                 }}
               >
                 <button
                   type="button"
-                  aria-label={SITE_NAME_COPY_LABEL}
-                  title={SITE_NAME_COPY_LABEL}
+                  aria-label={titleCopyLabel("siteName", t)}
+                  title={titleCopyLabel("siteName", t)}
                   className={`${SITE_NAME_COPY_CLASS} bg-transparent border-0 appearance-none p-1 ml-1 cursor-pointer text-gray-400 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-hover transition-opacity opacity-0 focus:opacity-100 group-hover/site-name:opacity-100 group-focus-within/site-name:opacity-100`}
                 >
                   <CopyIcon />

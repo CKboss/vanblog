@@ -79,8 +79,14 @@ describe("article / about title markup", () => {
     expect(title).toMatch(/TITLE_COPY_CLASS/);
     expect(title).toMatch(/TITLE_LINK_COPY_CLASS/);
     expect(title).toMatch(/CopyToClipboard/);
-    expect(title).toMatch(/aria-label=\{[^}]*(TITLE_COPY_LABEL|SITE_NAME_COPY_LABEL)\}/);
-    expect(title).toMatch(/aria-label=\{TITLE_LINK_COPY_LABEL\}/);
+    // 🔴 期 10 第三批：aria-label 不再直接引用模块级常量，而是**过 i18n 接缝**
+    //    （`titleCopyLabel(kind, t)`，`t` 来自 `useT()`）⇒ 锚点跟着搬，但**性质不变**：
+    //    复制按钮必须有可访问名，而且那个名字必须走接缝（否则英文界面上读屏还是念中文）。
+    expect(title).toMatch(/aria-label=\{titleCopyLabel\((?:"title"|"siteName"|isAbout \? "siteName" : "title"), t\)\}/);
+    expect(title).toMatch(/aria-label=\{titleCopyLabel\("link", t\)\}/);
+    // 🔴 反向：不许再出现"直接用常量当 aria-label"的旧形状（那等于把接缝拆了）
+    expect(title).not.toMatch(/aria-label=\{(TITLE|SITE_NAME|TITLE_LINK)_COPY_LABEL\}/);
+    expect(title).toMatch(/const t = useT\(\)/);
     expect(title).toMatch(/type="button"/);
     // 复制链接用绝对地址，SSR 阶段先拿到 origin
     expect(title).toMatch(/articleUrl\(origin, props\.id\)/);
@@ -103,7 +109,9 @@ describe("article / about title markup", () => {
     expect(title).toMatch(/post-card-title-actions justify-self-end/);
 
     const actionsIndex = title.indexOf("post-card-title-actions");
-    const editIndex = title.indexOf("<div>编辑</div>");
+    // 🔴 「编辑」那个标签现在也过接缝（`{t("postCard.edit", "编辑")}`）⇒ 锚点换成接缝形状，
+    //    并且**同时**要求默认文案还是「编辑」（防止有人把默认值也改掉，那会让中文界面变样）。
+    const editIndex = title.indexOf('{t("postCard.edit", "编辑")}');
     expect(actionsIndex).toBeGreaterThan(-1);
     // 「编辑」在操作格内部，和复制按钮同一行、互不重叠
     expect(editIndex).toBeGreaterThan(actionsIndex);
@@ -132,7 +140,10 @@ describe("navbar site name markup", () => {
 
   it("offers a copy button with an accessible name", () => {
     expect(nav).toMatch(/SITE_NAME_COPY_CLASS/);
-    expect(nav).toMatch(/aria-label=\{SITE_NAME_COPY_LABEL\}/);
+    // 🔴 同上：走接缝 + 反向断言（不许退回常量）+ 必须取了 useT()
+    expect(nav).toMatch(/aria-label=\{titleCopyLabel\("siteName", t\)\}/);
+    expect(nav).not.toMatch(/aria-label=\{SITE_NAME_COPY_LABEL\}/);
+    expect(nav).toMatch(/const t = useT\(\)/);
     expect(nav).toMatch(/CopyToClipboard/);
     expect(nav).toMatch(/group\/site-name/);
     // 桌面端站点名仍然是回首页的链接

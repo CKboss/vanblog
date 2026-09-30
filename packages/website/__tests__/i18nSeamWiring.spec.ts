@@ -83,3 +83,86 @@ describe("前台 i18n 接缝 · 注入尾参 t（readingTime / relativeTime / ti
     expect(formatReadingTime(null, sentinelT)).toBeNull();
   });
 });
+
+// ── 期 10 第三批：`titleCopyA11y` 那一族（导出常量 + 工厂函数）的接缝验证 ──────────────
+import {
+  SITE_NAME_COPY_LABEL,
+  TITLE_COPY_LABEL,
+  TITLE_LINK_COPY_LABEL,
+  buildTitleCopyControl,
+  describeTitleCopyControls,
+  titleCopyLabel,
+  titleCopyToast,
+} from "../components/PostCard/titleCopyA11y";
+
+const COPY_EN: Record<string, string> = {
+  "postCard.copyTitle": "Copy title",
+  "postCard.copyArticleLink": "Copy article link",
+  "postCard.copySiteName": "Copy site name",
+  "postCard.copiedTitle": "Title copied to the clipboard!",
+  "postCard.copiedArticleLink": "Article link copied to the clipboard!",
+  "postCard.copiedSiteName": "Site name copied to the clipboard!",
+};
+const copyT: TFunc = (id, defaultMessage, values) => {
+  const hit = COPY_EN[id];
+  let out = typeof hit === "string" && hit ? hit : defaultMessage;
+  for (const [k, v] of Object.entries(values || {})) out = out.split("{" + k + "}").join(String(v));
+  return out;
+};
+
+describe("前台 i18n 接缝 · 导出常量族（titleCopyA11y）", () => {
+  it("① 常量与默认行为不变（既有调用点/测试零改动）", () => {
+    expect(TITLE_COPY_LABEL).toBe("复制标题");
+    expect(titleCopyLabel("title")).toBe("复制标题");
+    expect(titleCopyLabel("link")).toBe("复制文章链接");
+    expect(titleCopyLabel("siteName")).toBe("复制站点名");
+    expect(titleCopyToast("title")).toMatch(/已复制标题到剪切板/);
+    const c = buildTitleCopyControl("siteName");
+    expect(c.ariaLabel).toBe("复制站点名");
+    expect(c.className).toBe("site-name-copy-btn");
+    expect(c.tag).toBe("button");
+    expect(describeTitleCopyControls()).toHaveLength(3);
+  });
+
+  it("② 传入词典就换语言（三个 kind 各自对，不许串）", () => {
+    expect(titleCopyLabel("title", copyT)).toBe("Copy title");
+    expect(titleCopyLabel("link", copyT)).toBe("Copy article link");
+    expect(titleCopyLabel("siteName", copyT)).toBe("Copy site name");
+    expect(titleCopyToast("link", copyT)).toBe("Article link copied to the clipboard!");
+    const c = buildTitleCopyControl("title", copyT);
+    expect(c.ariaLabel).toBe("Copy title");
+    expect(c.toast).toBe("Title copied to the clipboard!");
+    // 🔴 className / tag / activateKeys 这些**不是文案**，不许被词典影响
+    expect(c.className).toBe("title-copy-btn");
+    expect(describeTitleCopyControls(copyT).map((x) => x.ariaLabel)).toEqual([
+      "Copy title",
+      "Copy article link",
+      "Copy site name",
+    ]);
+  });
+
+  it("③ 🔴 反向：哨兵 t 证明「接缝真的接上了」（把 t(...) 改回常量就会红）", () => {
+    const SENTINEL = "__I18N_SEAM_WAS_USED__";
+    const sentinelT: TFunc = () => SENTINEL;
+    expect(titleCopyLabel("title", sentinelT)).toBe(SENTINEL);
+    expect(titleCopyLabel("link", sentinelT)).toBe(SENTINEL);
+    expect(titleCopyLabel("siteName", sentinelT)).toBe(SENTINEL);
+    expect(titleCopyToast("title", sentinelT)).toBe(SENTINEL);
+    expect(titleCopyToast("link", sentinelT)).toBe(SENTINEL);
+    expect(titleCopyToast("siteName", sentinelT)).toBe(SENTINEL);
+    const c = buildTitleCopyControl("link", sentinelT);
+    expect(c.ariaLabel).toBe(SENTINEL);
+    expect(c.toast).toBe(SENTINEL);
+    // 🔴 但**非文案字段**不许被 t 影响（否则哨兵会污染 className ⇒ 样式与测试锚点全坏）
+    expect(c.className).toBe("title-link-copy-btn");
+    expect(c.kind).toBe("link");
+    expect(describeTitleCopyControls(sentinelT).every((x) => x.ariaLabel === SENTINEL)).toBe(true);
+  });
+
+  it("④ 🔴 词典缺 key 时回落中文默认值（不是裸 key、不是 undefined）", () => {
+    const partial: TFunc = (id, dm) => (id === "postCard.copyTitle" ? "Copy title" : dm);
+    expect(titleCopyLabel("title", partial)).toBe("Copy title");
+    expect(titleCopyLabel("link", partial)).toBe(TITLE_LINK_COPY_LABEL);
+    expect(titleCopyLabel("siteName", partial)).toBe(SITE_NAME_COPY_LABEL);
+  });
+});

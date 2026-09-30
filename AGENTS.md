@@ -9469,6 +9469,91 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.205 期 10 第三批：前台"**导出常量族**"怎么过接缝（常量留作默认值 + 工厂函数 + 消费方改调），🔴 以及台账新增第三种状态 `seamed`（尺子数得到、但性质已经变了）
+
+**交付**：`components/PostCard/titleCopyA11y.ts`（6 条：3 个 aria-label + 3 个复制成功 toast）**接上接缝**，
+`components/PostCard/title.tsx` 的 2 条（阅读时间的 `title`、「编辑」标签）**迁走**，
+两个消费方（`PostCard/title.tsx` 的 `Title` 与 `SubTitle`、`NavBar/index.tsx`）改成用 `useT()`。
+前台裸中文 **253 → 251**；台账：永久例外 **33** + 欠条 **220 → 212** + 🔴 **新增一类 `seamed` 6**。
+新增 4 条接缝断言（`i18nSeamWiring.spec.ts` 的第二个 describe）。
+
+#### A. 🔴 规矩：**导出常量不能改成 `t(...)` 的求值结果**（会在 import 期把中文永久固化）
+前台这一族的形状是 `export const TITLE_COPY_LABEL = "复制标题";`（还有把 label/toast/className 打包好的
+`TITLE_COPY_CONTROL` 对象与 `describeTitleCopyControls()`）。
+🔴 **最直觉的做法是错的**：把常量改成 `export const TITLE_COPY_LABEL = t("postCard.copyTitle", "复制标题")` ——
+模块级常量在 **import 期**求值，而词典是**运行时**注入的（`setDictionary()`）⇒
+中文会被永久固化进这个模块，接了词典也没用（而且 SSR 期就更不可能有词典）。
+👉 本批定下的规矩（后面几批都照这个来）：
+**① 常量原样保留**（它就是"默认文案"，而且既有测试钉着它）；
+**② 另加 `*_ID` 常量与"按 kind 取文案"的函数**（`titleCopyLabel(kind, t = IDENTITY_T)` /
+`titleCopyToast(kind, t = IDENTITY_T)`）；
+**③ 打包好的对象改成工厂**（`buildTitleCopyControl(kind, t = IDENTITY_T)`），
+导出的那几个常量对象 = 用默认 `t` 造出来的（⇒ 值与今天**逐字节相同**，向后兼容）；
+**④ 消费方改调函数**，`t` 来自 `useT()`。
+🔴 这样"零行为变化"是可证的：不传 `t` 时所有输出与迁移前一致（有断言），
+既有调用点与测试**一个都不用改**（`titleCopy.spec.ts` 的 9 条常量断言原样通过）。
+
+#### B. 🔴 台账新增第三种状态 `seamed`：尺子数得到、但性质已经变了（**不许把数字改成 0 造假账**）
+迁完之后实测：`titleCopyA11y.ts` 里**仍然有 6 条"裸中文"** —— 因为尺子（`bareChinese`）数的是
+"文件里的中文字面量"，而常量作为 `t(ID, 默认值)` 的**第二个实参**仍然是中文字面量。
+🔴 这 6 条的性质**已经变了**（它们是 defaultMessage，不是硬编码文案），但**尺子看不出来**。
+两种错误做法都要避免：
+- ❌ 把台账里的 `count` 改成 0（**造假账**：数字好看了，但"这个文件还有 6 条中文字面量"这个事实被抹掉，
+  将来谁把接缝拆了、把常量直接渲染出去，台账也发现不了）；
+- ❌ 改尺子让它"认出 defaultMessage"（那要做跨引用的数据流分析，代价大且容易误判；
+  而且 🔴 尺子是三个包共用的，改它会影响后台与服务端的既有口径）。
+✅ 本批的做法：台账加**第三种 kind `seamed`** + 一个 `seamWired` 数字，并且
+🔴 **逐条验证接缝真的接上了**：文件里必须能找到不少于 `seamWired` 处 `t(<ID 常量>, <默认值常量>)` 形状的调用
+（正则 `\bt\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*[A-Z_][A-Z0-9_]*\s*\)`），否则红。
+⇒ 收口口径变成三类：**永久例外 33（故意不翻）+ 欠条 212（还没接）+ `seamed` 6（已接、常量是默认值）**，
+三类之和必须**等于实测总数**（`expect(permCount + iouCount + seamedCount).toBe(total)`）。
+👉 🔴 一般化：**当"判据的计数口径"与"事情的真实性质"出现偏差时，正确做法是加一个如实的状态类别，
+而不是把数字改成好看的那个数**。数字必须始终能被实测复核（这也是为什么三类之和要断言等于 total）。
+
+#### C. 🔴 接缝的可判定验证：哨兵 `t` 要连"非文案字段不许被污染"一起钉
+新增的 4 条断言（`i18nSeamWiring.spec.ts`）：
+① **常量与默认行为不变**（`TITLE_COPY_LABEL === "复制标题"`、`titleCopyLabel("title") === "复制标题"`、
+`buildTitleCopyControl("siteName").className === "site-name-copy-btn"`、`describeTitleCopyControls()` 长度 3）；
+② **传词典就换语言，且三个 kind 各自对、不许串**（`Copy title` / `Copy article link` / `Copy site name`），
+🔴 并且**非文案字段不许被词典影响**（`className` / `tag` / `kind` / `activateKeys` 原样）；
+③ 🔴 **哨兵反向**：传一个总是返回 `"__I18N_SEAM_WAS_USED__"` 的 `t` ⇒ 6 个取文案函数的返回值
+**都必须等于哨兵**（把任何一处 `t(...)` 改回常量就会红），同时 `className` / `kind` **不许**变成哨兵
+（否则哨兵会污染样式类名 ⇒ 那是另一种坏法，而且更难查）；
+④ **词典缺 key 时回落中文默认值**（不是裸 key、不是 undefined）。
+🔴 **变异对照**：把 `titleCopyLabel` 的 `link` 那一支改回 `return TITLE_LINK_COPY_LABEL;` ⇒
+②③ 两条断言红；还原 ⇒ 全绿。
+👉 ③ 里"非文案字段不许被哨兵污染"这半边是**新学到的**：只断言"文案被 t 处理了"不够，
+还要断言"**只有**文案被 t 处理了"—— 否则有人把整个对象都塞进 `t()` 也能过（而 className 一变，样式与测试锚点全坏）。
+
+#### D. 🔴 三次被"源码级锚点"与"引号"绊到（都是同一类：批量文本操作的边界）
+1. `titleCopy.spec.ts` 有 3 条**源码级锚点**（`aria-label={SITE_NAME_COPY_LABEL}`、`<div>编辑</div>`）
+   ⇒ 迁移后必然红。改法与老规矩一致：**锚点跟着搬 + 性质不变 + 加反向断言**
+   （`expect(title).not.toMatch(/aria-label=\{(TITLE|SITE_NAME|TITLE_LINK)_COPY_LABEL\}/)` 钉住"不许退回常量"，
+   并要求文件里有 `const t = useT()`）。
+2. 🔴 我写了一个"把内层 ASCII 双引号换成 「」"的**批量修复脚本**（因为 TS 字符串里的中文引号写成了 ASCII `"`），
+   结果它**误伤了 8 行正常代码**：那些行有 **4 个**引号（两个字符串字面量），
+   脚本按"第一个与最后一个是定界符、中间的都是文本"处理 ⇒ 把 `expect(at("…Z")).toBe("刚刚")`
+   改成了 `expect(at("…Z「)).toBe(」刚刚")`（`TS1005`）。
+   👉 🔴 **按"引号配对"做批量替换，必须先排除"一行里有多个字符串字面量"的情况** ——
+   判据不能是"引号数 > 2"，得是"这一行只有一个字符串字面量"（或者干脆逐处手工改）。
+   🔴 而且这类误伤**在 `vitest run` 下只表现为"1 个文件 failed / no tests"**，
+   要看 `tsc` 或 esbuild 的报错行号才找得到 ⇒ 又一次印证"改完必须跑 tsc"。
+3. `const t = useT()` 要插在**每个**用到它的组件里：`title.tsx` 有**两个**导出组件（`Title` 与 `SubTitle`），
+   我只在第一个里插了 ⇒ 第二处 `t` 未定义（`TS2304`）。
+   👉 🔴 一个文件里可能有多个组件；**按"文件"迁移时要按"作用域"检查**。
+
+#### E. 基线
+- vitest **100 文件 / 1114 用例 / 0 失败**（+4）；website `tsc` **0 错**；
+- 前台裸中文 **251 条 / 52 个文件**（台账三类之和 = 251 ✓）；
+- admin **791 / 178 / 0**、jest **288 套件 / 4264 用例 / 0 FAIL**、守卫 **35 文件 / 3160 断言 / 0 失败**；
+- 🔴 下一批（期 10 第四批）：无障碍标签与提示的其余 7 个文件（`NavBar/a11y` 5 / `PageNav/jump` 5 /
+  `SearchCard/a11y` 4 / `TocDrawer/model` 3 / `pageCopy` 3 / `codeCopyA11y` 1 / `UnLockCard/copy` 1 = **22 条**）——
+  全是"导出常量族"，照 A 段的规矩做。
+  ⚠️ 其中 `utils/pageCopy.ts` 那 3 条要先裁定：它们是**站长可编辑内容的默认值**
+  （`resolvePageCopy(value, fallback)`：站长在设置里填了就用站长的，没填才用这些默认），
+  而 `DEFAULT_FRIEND_LINK_APPLY_CONTENT` 是一整段**友链申领规则**（站长的政策声明）⇒
+  🔴 倾向判为**永久例外（内容默认值）**：翻它等于替站长说话，而且站长本来就能在设置里覆盖。
+
 ### 7.204 期 10 第二批：前台第一批文案过接缝（3 个纯函数模块 / 8 条），🔴 "注入尾参"接缝的**可判定验证**（哨兵 `t`），以及一条"粗略代理判据"被合法演进顶掉时的正确改法
 
 **交付**：`utils/relativeTime.ts`(5) + `utils/readingTime.ts`(1) + `utils/timelineMonths.ts`(1 + 那个

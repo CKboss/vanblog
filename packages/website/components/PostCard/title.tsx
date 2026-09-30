@@ -1,5 +1,6 @@
 import CommentCount from "../Comment/Count";
 import useCommentProvider from "../../hooks/useCommentProvider";
+import useT from "../../hooks/useT";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -13,15 +14,13 @@ import { COUNT_LOADING_PLACEHOLDER } from "../../utils/countPlaceholder";
 import { formatReadingTime } from "../../utils/readingTime";
 import { CopyIcon, LinkIcon } from "../CopyIcons";
 import {
-  SITE_NAME_COPY_LABEL,
   TITLE_COPY_CLASS,
-  TITLE_COPY_LABEL,
-  TITLE_COPY_TOAST,
   TITLE_LINK_COPY_CLASS,
   TITLE_LINK_COPY_LABEL,
-  TITLE_LINK_COPY_TOAST,
   TITLE_SELECTABLE_CLASS,
   articleUrl,
+  titleCopyLabel,
+  titleCopyToast,
 } from "./titleCopyA11y";
 
 /** Shared look for the small icon buttons that sit next to a title. */
@@ -42,6 +41,9 @@ export function Title(props: {
   showEditButton: boolean;
 }) {
   const showEditButton = props.showEditButton && checkLogin();
+  // 🔴 期 10 第三批：复制按钮的 aria-label / title / toast 走 i18n 接缝（**渲染期**取，
+  //    不是模块级常量 —— 常量在 import 期就求值，那时词典还没注入）
+  const t = useT();
   const newTab = useMemo(() => {
     if (props.type == "overview" && props.openArticleLinksInNewWindow) {
       return true;
@@ -91,13 +93,14 @@ export function Title(props: {
           <CopyToClipboard
             text={props.title}
             onCopy={() => {
-              toast.success(TITLE_COPY_TOAST, { className: "toast" });
+              // 🔴 期 10 第三批：文案走接缝（`useT()` 的结果在渲染期取），不再直接用模块级常量
+              toast.success(titleCopyToast(isAbout ? "siteName" : "title", t), { className: "toast" });
             }}
           >
             <button
               type="button"
-              aria-label={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
-              title={isAbout ? SITE_NAME_COPY_LABEL : TITLE_COPY_LABEL}
+              aria-label={titleCopyLabel(isAbout ? "siteName" : "title", t)}
+              title={titleCopyLabel(isAbout ? "siteName" : "title", t)}
               className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_COPY_CLASS}`}
             >
               <CopyIcon />
@@ -107,12 +110,12 @@ export function Title(props: {
             <CopyToClipboard
               text={shareUrl}
               onCopy={() => {
-                toast.success(TITLE_LINK_COPY_TOAST, { className: "toast" });
+                toast.success(titleCopyToast("link", t), { className: "toast" });
               }}
             >
               <button
                 type="button"
-                aria-label={TITLE_LINK_COPY_LABEL}
+                aria-label={titleCopyLabel("link", t)}
                 title={TITLE_LINK_COPY_LABEL}
                 className={`${TITLE_ACTION_BUTTON_CLASS} ${TITLE_LINK_COPY_CLASS}`}
               >
@@ -132,7 +135,8 @@ export function Title(props: {
             target="_blank"
           >
             <div className=" text-dark dark:text-gray-700">
-              <div>编辑</div>
+              {/* 🔴 期 10 第三批：走 i18n 接缝（后台那个「编辑」入口的标签） */}
+              <div>{t("postCard.edit", "编辑")}</div>
             </div>
           </a>
         )}
@@ -171,6 +175,8 @@ export function SubTitle(props: {
     () => formatReadingTime(props.readingMinutes),
     [props.readingMinutes],
   );
+  // 🔴 期 10 第三批：这个组件（副标题/阅读时间/评论数那一行）也要走 i18n 接缝
+  const t = useT();
   const dataPath = useMemo(() => {
     if (props.type == "about") {
       return "/about";
@@ -243,7 +249,7 @@ export function SubTitle(props: {
         <span
           className="inline-flex px-2 items-center"
           data-reading-time={props.readingMinutes ?? undefined}
-          title="阅读时间（服务端估算）"
+          title={t("postCard.readingTimeHint", "阅读时间（服务端估算）")}
         >
           <span className={iconClass}>
             <svg
