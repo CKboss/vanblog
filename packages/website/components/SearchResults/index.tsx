@@ -16,6 +16,7 @@ import {
   handleSearchJumpSubmit,
 } from "./jumpForm";
 
+import useT from "../../hooks/useT";
 /**
  * `/search` 结果页的结果区。
  *
@@ -209,7 +210,10 @@ function SearchJumpForm(props: {
   // 输入框的原始文本。放在这个子组件里而不是 SearchResults 里，好让 SearchResults 保持
   // 无状态（既有测试用 renderToStaticMarkup 直接渲染它）。
   const [raw, setRaw] = useState("");
-  const model = describeSearchJumpForm(props);
+  // 🔴 期 10 第七批：`describeSearchJumpForm` 是**纯函数**（不是组件）⇒ 不能在里面调 hook，
+  //    `t` 必须由组件传进去（"注入尾参"这个形状，与后台一致）。
+  const tForJump = useT();
+  const model = describeSearchJumpForm(props, tForJump);
   if (!model.visible) {
     return null;
   }

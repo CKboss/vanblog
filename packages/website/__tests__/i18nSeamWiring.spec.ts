@@ -221,3 +221,90 @@ describe("前台 i18n 接缝 · map 形状的族（headerActionLabel）与单条
     expect(lockedArticlePrompt(sentinelT)).toBe(SENTINEL);
   });
 });
+
+// ── 期 10 第七批：分页跳转那一族（组件 + **纯函数描述符工厂**两种形状）──
+import {
+  PAGE_NAV_JUMP_GO_LABEL,
+  PAGE_NAV_JUMP_LABEL,
+  pageNavJumpGoLabel,
+  pageNavJumpInputLabel,
+  pageNavJumpLabel,
+  pageNavJumpPrefix,
+  pageNavJumpSentence,
+  pageNavJumpUnit,
+} from "../components/PageNav/jump";
+import { describeSearchJumpForm } from "../components/SearchResults/jumpForm";
+
+const JUMP_EN: Record<string, string> = {
+  "pageNav.jumpLabel": "Go to page number",
+  "pageNav.jumpPrefix": "Go to",
+  "pageNav.jumpUnit": "page",
+  "pageNav.jumpInputLabel": "Page number",
+  "pageNav.jumpGoLabel": "Go",
+  "pageNav.jumpSentence": "Go to page {input}",
+};
+const jumpT: TFunc = (id, dm, values) => {
+  const hit = JUMP_EN[id];
+  let out = typeof hit === "string" && hit ? hit : dm;
+  for (const [k, v] of Object.entries(values || {})) out = out.split("{" + k + "}").join(String(v));
+  return out;
+};
+
+describe("前台 i18n 接缝 · 分页跳转族（组件 + 纯函数描述符工厂）", () => {
+  const baseProps = { total: 100, perPage: 10, pageHref: "/page/{p}", currentPage: 2, totalPages: 10 } as never;
+
+  it("① 默认行为不变（常量原样，描述符工厂不传 t 时逐字节相同）", () => {
+    expect(PAGE_NAV_JUMP_LABEL).toBe("跳转到页码");
+    expect(pageNavJumpLabel()).toBe("跳转到页码");
+    expect(pageNavJumpPrefix()).toBe("跳转");
+    expect(pageNavJumpUnit()).toBe("页");
+    expect(pageNavJumpGoLabel()).toBe("前往");
+    expect(pageNavJumpSentence("[INPUT]")).toBe("跳转 [INPUT] 页");
+    const d = describeSearchJumpForm(baseProps);
+    expect(d.labels.form).toBe("跳转到页码");
+    expect(d.labels.go).toBe(PAGE_NAV_JUMP_GO_LABEL);
+    expect(d.input.ariaLabel).toBe("页码");
+    expect(d.submit.label).toBe("前往");
+  });
+
+  it("② 传词典就换语言（🔴 整句模板那条语序要真的重排）", () => {
+    expect(pageNavJumpLabel(jumpT)).toBe("Go to page number");
+    expect(pageNavJumpSentence("[INPUT]", jumpT)).toBe("Go to page [INPUT]");
+    const d = describeSearchJumpForm(baseProps, jumpT);
+    expect(d.labels).toEqual({
+      form: "Go to page number",
+      prefix: "Go to",
+      unit: "page",
+      input: "Page number",
+      go: "Go",
+    });
+    expect(d.input.ariaLabel).toBe("Page number");
+    expect(d.submit.ariaLabel).toBe("Go");
+    // 🔴 非文案字段不许被词典影响（参数名 / id / min / max / method）
+    expect(d.input.name).toBe("p");
+    expect(d.input.id).toBe("vanblog-search-jump");
+    expect(d.input.max).toBe(10);
+    expect(d.form.method).toBe("get");
+  });
+
+  it("③ 🔴 哨兵反向：5 条文案 + 描述符工厂里的每一处都必须过 t", () => {
+    const SENTINEL = "__I18N_SEAM_WAS_USED__";
+    const sentinelT: TFunc = () => SENTINEL;
+    expect(pageNavJumpLabel(sentinelT)).toBe(SENTINEL);
+    expect(pageNavJumpPrefix(sentinelT)).toBe(SENTINEL);
+    expect(pageNavJumpUnit(sentinelT)).toBe(SENTINEL);
+    expect(pageNavJumpInputLabel(sentinelT)).toBe(SENTINEL);
+    expect(pageNavJumpGoLabel(sentinelT)).toBe(SENTINEL);
+    expect(pageNavJumpSentence("X", sentinelT)).toBe(SENTINEL);
+    const d = describeSearchJumpForm(baseProps, sentinelT);
+    // 🔴 labels 的 5 个字段 + input.ariaLabel + submit.ariaLabel + submit.label 全都要是哨兵
+    expect(Object.values(d.labels)).toEqual([SENTINEL, SENTINEL, SENTINEL, SENTINEL, SENTINEL]);
+    expect(d.input.ariaLabel).toBe(SENTINEL);
+    expect(d.submit.ariaLabel).toBe(SENTINEL);
+    expect(d.submit.label).toBe(SENTINEL);
+    // 🔴 但**非文案字段**不许被哨兵污染（否则参数名/id 变了，表单会提交到错的地方）
+    expect(d.input.name).toBe("p");
+    expect(d.input.id).toBe("vanblog-search-jump");
+    expect(d.form.attr).toBe("data-search-jump-form");
+  });
+});

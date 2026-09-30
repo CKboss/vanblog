@@ -365,15 +365,21 @@ describe("PageNav jump markup", () => {
   const index = readSrc("components/PageNav/index.tsx");
 
   it("renders a focusable number input and submit button when jump is shown", () => {
-    expect(render).toMatch(/<form[\s\S]*aria-label=\{PAGE_NAV_JUMP_LABEL\}/);
+    // 🔴 期 10 第七批：锚点跟着搬（文案改成过 i18n 接缝），**性质不变**（表单必须有可访问名），
+    //    并加反向断言钉住「不许退回直接渲染常量」。
+    expect(render).toMatch(/<form[\s\S]*aria-label=\{pageNavJumpLabel\(t\)\}/);
+    expect(render).not.toMatch(/aria-label=\{PAGE_NAV_JUMP_(LABEL|INPUT_LABEL|GO_LABEL)\}/);
+    expect(render).toMatch(/const t = useT\(\)/);
     expect(render).toMatch(/noValidate/);
     expect(render).toMatch(/handlePageNavJumpSubmit/);
     expect(render).toMatch(/handlePageNavJumpKeyDown/);
     expect(render).toMatch(/type="number"/);
-    expect(render).toMatch(/aria-label=\{PAGE_NAV_JUMP_INPUT_LABEL\}/);
+    // 🔴 期 10 第七批：同上（锚点跟着搬 + 性质不变）
+    expect(render).toMatch(/aria-label=\{pageNavJumpInputLabel\(t\)\}/);
     expect(render).toMatch(/PAGE_NAV_JUMP_INPUT_ATTR/);
     expect(render).toMatch(/<button type="submit"/);
-    expect(render).toMatch(/PAGE_NAV_JUMP_GO_LABEL/);
+    // 🔴 期 10 第七批：提交按钮的文案与 aria-label 都过接缝
+    expect(render).toMatch(/pageNavJumpGoLabel\(t\)/);
     expect(render).toMatch(/router\.push/);
     expect(render).toMatch(/shouldShowPageNavJump/);
     expect(render).not.toMatch(

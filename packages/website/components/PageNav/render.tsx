@@ -20,6 +20,11 @@ import {
 } from "./classes";
 import {
   PAGE_NAV_JUMP_GO_LABEL,
+  pageNavJumpGoLabel,
+  pageNavJumpInputLabel,
+  pageNavJumpLabel,
+  pageNavJumpPrefix,
+  pageNavJumpUnit,
   PAGE_NAV_JUMP_INPUT_ATTR,
   PAGE_NAV_JUMP_INPUT_ID,
   PAGE_NAV_JUMP_INPUT_LABEL,
@@ -32,6 +37,7 @@ import {
   shouldShowPageNavJump,
 } from "./jump";
 
+import useT from "../../hooks/useT";
 const commonStyle: CSSProperties = {
   height: "28px",
   width: "28px",
@@ -81,6 +87,8 @@ const onPageNavKeyDown = (event: KeyboardEvent<HTMLElement>) => {
 };
 
 const PageNavJump = (props: PageNavProps) => {
+  // 🔴 期 10 第七批：跳转表单的 5 处文案走 i18n 接缝（这是个组件 ⇒ 可以在这里调 hook）
+  const t = useT();
   const router = useRouter();
   const [raw, setRaw] = useState("");
   const model = describePageNavJump(props);
@@ -96,11 +104,11 @@ const PageNavJump = (props: PageNavProps) => {
   return (
     <form
       className={pageNavJumpFormCls}
-      aria-label={PAGE_NAV_JUMP_LABEL}
+      aria-label={pageNavJumpLabel(t)}
       noValidate
       onSubmit={onSubmit}
     >
-      <label htmlFor={PAGE_NAV_JUMP_INPUT_ID}>{PAGE_NAV_JUMP_PREFIX}</label>
+      <label htmlFor={PAGE_NAV_JUMP_INPUT_ID}>{pageNavJumpPrefix(t)}</label>
       <input
         id={PAGE_NAV_JUMP_INPUT_ID}
         type="number"
@@ -108,16 +116,16 @@ const PageNavJump = (props: PageNavProps) => {
         max={model.input.max}
         step={model.input.step}
         inputMode="numeric"
-        aria-label={PAGE_NAV_JUMP_INPUT_LABEL}
+        aria-label={pageNavJumpInputLabel(t)}
         className={pageNavJumpInputCls}
         value={raw}
         onChange={(event) => setRaw(event.target.value)}
         onKeyDown={onInputKeyDown}
         {...{ [PAGE_NAV_JUMP_INPUT_ATTR]: "" }}
       />
-      <span aria-hidden="true">{PAGE_NAV_JUMP_UNIT}</span>
-      <button type="submit" aria-label={PAGE_NAV_JUMP_GO_LABEL} className={pageNavJumpGoCls}>
-        {PAGE_NAV_JUMP_GO_LABEL}
+      <span aria-hidden="true">{pageNavJumpUnit(t)}</span>
+      <button type="submit" aria-label={pageNavJumpGoLabel(t)} className={pageNavJumpGoCls}>
+        {pageNavJumpGoLabel(t)}
       </button>
     </form>
   );

@@ -8,6 +8,14 @@ import {
   shouldShowPageNavJump,
 } from "../PageNav/jump";
 
+import {
+  pageNavJumpGoLabel,
+  pageNavJumpInputLabel,
+  pageNavJumpLabel,
+  pageNavJumpPrefix,
+  pageNavJumpUnit,
+} from "../PageNav/jump";
+import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 /**
  * `/search` 结果页的「输入页码跳转」——**纯逻辑**部分（不含 React，便于单测）。
  *
@@ -194,8 +202,16 @@ export interface DescribeSearchJumpInput {
  * 于是"该不该显示""参数名叫什么""min/max 是多少"都能被单测直接钉住。
  *
  * 文案一律复用 `PAGE_NAV_JUMP_*` 常量 —— 不新写一套字符串，否则中英措辞会在两个控件间漂移。
+ *
+ * 🔴 期 10 第七批：那个"复用常量"的纪律**保留**，但常量现在只是**默认值** ——
+ * 取文案改成调 `PageNav/jump.ts` 里的接缝函数（`pageNavJumpLabel(t)` 等），
+ * 本函数因此多了一个**注入的尾参** `t: TFunc = IDENTITY_T`（它是纯函数、不是组件 ⇒ 不能在里面调 hook）。
+ * ⚠️ 不传 `t` 时输出与迁移前**逐字节相同**（既有单测一个都不用改）。
  */
-export function describeSearchJumpForm(props: DescribeSearchJumpInput) {
+export function describeSearchJumpForm(
+  props: DescribeSearchJumpInput,
+  t: TFunc = IDENTITY_T
+) {
   const totalPages = Math.max(1, Math.floor(Number(props.totalPages) || 1));
   const target = readSearchJumpTarget(props.pageHref);
   return {
@@ -205,11 +221,11 @@ export function describeSearchJumpForm(props: DescribeSearchJumpInput) {
     target,
     totalPages,
     labels: {
-      form: PAGE_NAV_JUMP_LABEL,
-      prefix: PAGE_NAV_JUMP_PREFIX,
-      unit: PAGE_NAV_JUMP_UNIT,
-      input: PAGE_NAV_JUMP_INPUT_LABEL,
-      go: PAGE_NAV_JUMP_GO_LABEL,
+      form: pageNavJumpLabel(t),
+      prefix: pageNavJumpPrefix(t),
+      unit: pageNavJumpUnit(t),
+      input: pageNavJumpInputLabel(t),
+      go: pageNavJumpGoLabel(t),
     },
     form: {
       method: "get" as const,
@@ -224,13 +240,13 @@ export function describeSearchJumpForm(props: DescribeSearchJumpInput) {
       max: totalPages,
       step: 1,
       inputMode: "numeric" as const,
-      ariaLabel: PAGE_NAV_JUMP_INPUT_LABEL,
+      ariaLabel: pageNavJumpInputLabel(t),
       attr: SEARCH_JUMP_INPUT_ATTR,
     },
     submit: {
       type: "submit" as const,
-      ariaLabel: PAGE_NAV_JUMP_GO_LABEL,
-      label: PAGE_NAV_JUMP_GO_LABEL,
+      ariaLabel: pageNavJumpGoLabel(t),
+      label: pageNavJumpGoLabel(t),
     },
   };
 }

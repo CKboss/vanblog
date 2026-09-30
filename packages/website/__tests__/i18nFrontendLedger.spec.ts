@@ -238,9 +238,19 @@ const LEDGER: Entry[] = [
   {
     file: "components/PageNav/jump.ts",
     count: 5,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 分页跳转的提示与校验文案（「请输入页码」/「超出范围」）⇒ 访客可见。纯函数模块 ⇒ 注入尾参。",
+    kind: "seamed",
+    // 🔴 `seamWired: 5` 而不是 6：第 6 条（整句模板 `pageNav.jumpSentence`）的默认值是**模板串**
+    //    （`t(ID, `${A} {input} ${B}`, { input })`），而 `seamWired` 判据数的是
+    //    `t(<ID 常量>, <默认值常量>)` 这个形状 ⇒ 模板串那条数不到。
+    //    ⚠️ 我第一版写了 6，被这条判据**当场抓住**（`声称有 6 条…只找到 5 处`）——
+    //    🔴 这正是「下限判据」该有的行为：**宁可让我把数字改小、也不许我随口写个大数**。
+    //    （那第 6 条由 `i18nSeamWiring.spec.ts` 的哨兵断言负责，它连模板串那条一起验。）
+    seamWired: 5,
+    why:
+      "🔴 分页跳转的提示与校验文案（「请输入页码」/「超出范围」）⇒ 访客可见。纯函数模块 ⇒ 注入尾参。" +
+      "🔴 **期 10 第七批已过接缝**：5 条常量（跳转到页码 / 跳转 / 页 / 页码 / 前往）现在都由取文案函数取(`pageNavJumpLabel(t)` 等)，`seamWired: 6` 是因为还多一条**整句模板** `pageNav.jumpSentence`（`跳转 {input} 页` → `Go to page {input}`）。" +
+      "🔴 两个消费方都接上了：① `PageNav/render.tsx` 的 `PageNavJump` 是**组件** ⇒ 在里面调 `useT()`；② `SearchResults/jumpForm.ts` 的 `describeSearchJumpForm()` 是**纯函数描述符工厂**（不是组件）⇒ hook 不能在里面调，`t` 由 `SearchResults/index.tsx` 传进去（注入尾参）。" +
+      "⚠️ 那两个常量 `PREFIX`（跳转）与 `UNIT`（页）是**拼接式**文案的两半 ⇒ 🔴 英文语序不同（`Go to page [input]`），**只翻这两半永远拼不对** ⇒ 所以额外给了整句模板 `pageNavJumpSentence(input, t)`；两个常量保留是给「已经在用它们的旧渲染路径」兜底（接缝期它按中文语序拼回来，与今天逐字节相同）。",
   },
   {
     file: "components/RunningTime/index.tsx",
@@ -633,7 +643,9 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第六批更新）：**255** 条 = 永久例外 **37** + 欠条 **197** + **已过接缝的默认值 21**。
+    // 🔴 口径（期 10 第七批更新）：**255** 条 = 永久例外 **37** + 欠条 **192** + **已过接缝的默认值 26**。
+    //    第七批把 `PageNav/jump.ts` 那 5 条接完（两个消费方：组件里用 `useT()`、纯函数工厂用注入尾参）
+    //    ⇒ seamed 21 → 26、欠条 197 → 192；🔴 总数仍不变。
     //    第六批把 3 个族的消费方接完（`SearchCard/a11y` 4 + `TocDrawer/model` 3 + `categoryExpand` 2 = 9 条）
     //    ⇒ seamed 12 → 21、欠条 206 → 197；🔴 **总数仍不变**（常量作为默认值仍在文件里，尺子照数）。
     //    第五批新增的 4 条是 `utils/applyFrontLocale.ts` 里的**语言自称**（`简` / `繁` / `繁體中文` / `简体中文`）
@@ -655,8 +667,8 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     expect(permCount).toBe(37);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(197);
-    expect(seamedCount).toBe(21);
+    expect(iouCount).toBe(192);
+    expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
     const byBatch = new Map<string, number>();
