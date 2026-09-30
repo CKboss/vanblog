@@ -447,11 +447,15 @@ describe("search dialog markup", () => {
   it("uses dialog semantics and focuses the input on open", () => {
     expect(card).toMatch(/role=\{describeSearchDialog\(\)\.role\}/);
     expect(card).toMatch(/aria-modal=\{props\.visible\}/);
-    expect(card).toMatch(/aria-label=\{SEARCH_DIALOG_LABEL\}/);
+    // 🔴 期 10 第六批：锚点跟着搬（文案改成过 i18n 接缝），**性质不变**，并加反向断言钉住「不许退回常量」。
+    expect(card).toMatch(/aria-label=\{searchDialogLabel\(t\)\}/);
+    expect(card).not.toMatch(/aria-label=\{SEARCH_(DIALOG|INPUT|CLEAR|RESULTS)_LABEL\}/);
+    expect(card).toMatch(/const t = useT\(\)/);
     expect(card).toMatch(/focusSearchDialogInput/);
     expect(card).toMatch(/handleSearchDialogKeyDown/);
     expect(card).toMatch(/handleSearchShortcutKeyDown/);
-    expect(card).toMatch(/aria-label=\{SEARCH_INPUT_LABEL\}/);
+    // 🔴 期 10 第六批：锚点跟着搬（文案过 i18n 接缝），性质不变
+    expect(card).toMatch(/aria-label=\{searchInputLabel\(t\)\}/);
   });
 
   it("opens from the header tap via the same-turn focus helper (iOS Safari)", () => {
@@ -471,8 +475,8 @@ describe("search dialog markup", () => {
   });
 
   it("makes the clear control a native button, not a click-only div", () => {
-    expect(card).toMatch(/<button[\s\S]*type="button"[\s\S]*SEARCH_CLEAR_LABEL/);
-    expect(card).toMatch(/aria-label=\{SEARCH_CLEAR_LABEL\}/);
+    expect(card).toMatch(/<button[\s\S]*type="button"[\s\S]*searchClearLabel\(t\)/);
+    expect(card).toMatch(/aria-label=\{searchClearLabel\(t\)\}/);
     expect(card).toMatch(/className=\{SEARCH_CLEAR_BUTTON_CLASS\}/);
     expect(card).not.toMatch(/hover:scale-125/);
     expect(card).not.toMatch(

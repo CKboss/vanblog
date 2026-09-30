@@ -111,7 +111,11 @@ describe("mobile TOC drawer markup", () => {
   });
 
   it("uses a native FAB above back-to-top and a right-side dialog", () => {
-    expect(drawer).toContain(`aria-label={TOC_DRAWER_OPEN_LABEL}`);
+    // 🔴 期 10 第六批：文案改成过 i18n 接缝 ⇒ 锚点跟着搬，**性质不变**（FAB 仍必须有可访问名），
+    //    并加反向断言钉住「不许退回直接渲染常量」。
+    expect(drawer).toContain(`aria-label={tocDrawerOpenLabel(t)}`);
+    expect(drawer).not.toContain(`aria-label={TOC_DRAWER_OPEN_LABEL}`);
+    expect(drawer).toMatch(/const t = useT\(\)/);
     expect(drawer).toContain(`type="button"`);
     expect(drawer).toContain("data-toc-fab");
     expect(drawer).toContain("data-toc-drawer");
@@ -123,7 +127,9 @@ describe("mobile TOC drawer markup", () => {
     expect(TOC_DRAWER_OVERLAY_ATTR).toBe("data-toc-drawer-overlay");
     expect(TOC_DRAWER_ROOT_CLASS).toBe("toc-drawer-root");
     expect(drawer).toContain('role="dialog"');
-    expect(drawer).toContain(`aria-label={TOC_DRAWER_TITLE}`);
+    // 🔴 期 10 第六批：锚点跟着搬（文案过 i18n 接缝），性质不变
+    expect(drawer).toContain(`aria-label={tocDrawerTitle(t)}`);
+    expect(drawer).not.toContain(`aria-label={TOC_DRAWER_TITLE}`);
     expect(TOC_DRAWER_OPEN_LABEL).toBe("打开目录");
     expect(TOC_DRAWER_CLOSE_LABEL).toBe("关闭目录");
     expect(TOC_DRAWER_TITLE).toBe("目录");

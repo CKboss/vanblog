@@ -1,21 +1,27 @@
 import { useEffect, useState } from "react";
 import MarkdownTocBar from "../MarkdownTocBar";
+import useT from "../../hooks/useT";
 import {
   reduceTocDrawerOpen,
   shouldShowMobileTocFab,
   TOC_DRAWER_CLOSE_LABEL,
+  tocDrawerCloseLabel,
   TOC_DRAWER_FAB_CLASS,
   TOC_DRAWER_OPEN_LABEL,
+  tocDrawerOpenLabel,
   TOC_DRAWER_PANEL_CLASS,
   TOC_DRAWER_PANEL_ID,
   TOC_DRAWER_ROOT_CLASS,
   TOC_DRAWER_TITLE,
+  tocDrawerTitle,
 } from "./model";
 
 export default function TocDrawer(props: {
   content: string;
   headingOffset?: number;
 }) {
+  // 🔴 期 10 第六批：目录抽屉的三处文案走 i18n 接缝（渲染期取）
+  const t = useT();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -41,10 +47,10 @@ export default function TocDrawer(props: {
         type="button"
         data-toc-fab
         className={`${TOC_DRAWER_FAB_CLASS} dark:nav-shadow-dark text-gray-600 rounded-xl transform transition-all dark:bg-dark hover:scale-110 fill-dark dark:text-dark`}
-        aria-label={TOC_DRAWER_OPEN_LABEL}
+        aria-label={tocDrawerOpenLabel(t)}
         aria-expanded={open}
         aria-controls={TOC_DRAWER_PANEL_ID}
-        title={TOC_DRAWER_OPEN_LABEL}
+        title={tocDrawerOpenLabel(t)}
         onClick={() => setOpen((current) => reduceTocDrawerOpen(current, "open"))}
       >
         <svg
@@ -73,13 +79,13 @@ export default function TocDrawer(props: {
             className={`${TOC_DRAWER_PANEL_CLASS} toc-mobile bg-white dark:bg-dark dark:nav-shadow-dark`}
             role="dialog"
             aria-modal="true"
-            aria-label={TOC_DRAWER_TITLE}
+            aria-label={tocDrawerTitle(t)}
           >
             <button
               type="button"
               className="toc-drawer-close text-gray-600 dark:text-dark"
-              aria-label={TOC_DRAWER_CLOSE_LABEL}
-              title={TOC_DRAWER_CLOSE_LABEL}
+              aria-label={tocDrawerCloseLabel(t)}
+              title={tocDrawerCloseLabel(t)}
               onClick={() =>
                 setOpen((current) => reduceTocDrawerOpen(current, "close"))
               }

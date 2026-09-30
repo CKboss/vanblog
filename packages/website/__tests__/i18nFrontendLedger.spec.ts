@@ -262,9 +262,15 @@ const LEDGER: Entry[] = [
   {
     file: "components/SearchCard/a11y.ts",
     count: 4,
-    kind: "iou",
-    batch: "期 10 第二批（无障碍标签族）",
-    why: "🔴 搜索卡片的无障碍标签 ⇒ 读屏可见。纯函数模块 ⇒ 注入尾参。",
+    kind: "seamed",
+    seamWired: 4,
+    why:
+      "🔴 搜索卡片的无障碍标签 ⇒ 读屏可见。纯函数模块 ⇒ 注入尾参。" +
+      "🔴 **期 10 第六批已过接缝**：4 条（对话框 / 输入框 / 清除按钮 / 结果区的无障碍标签与占位符）现在由" +
+      "`searchDialogLabel(t)` / `searchInputLabel(t)` / `searchClearLabel(t)` / `searchResultsLabel(t)` 取，" +
+      "消费方 `SearchCard/index.tsx` 已改成传 `useT()` 的结果（在 `forwardRef` 的渲染函数内，合法）。" +
+      "🔴 浏览器实测（上一批它们还是中文、是台账里的欠条）：切到英文后这 4 个 aria-label 变成" +
+      "`Search` / `Search content` / `Clear search` / `Search results`。",
   },
   {
     file: "pages/404.tsx",
@@ -290,9 +296,12 @@ const LEDGER: Entry[] = [
   {
     file: "components/TocDrawer/model.ts",
     count: 3,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 目录抽屉的标题与空态 ⇒ 访客可见。纯函数/模型模块 ⇒ 注入尾参。",
+    kind: "seamed",
+    seamWired: 3,
+    why:
+      "🔴 目录抽屉的标题与空态 ⇒ 访客可见。纯函数/模型模块 ⇒ 注入尾参。" +
+      "🔴 **期 10 第六批已过接缝**：3 条（打开目录 / 关闭目录 / 目录标题）现在由 `tocDrawerOpenLabel(t)` /" +
+      "`tocDrawerCloseLabel(t)` / `tocDrawerTitle(t)` 取，消费方 `TocDrawer/index.tsx` 已改成传 `useT()` 的结果。",
   },
   {
     file: "pages/tag/[tag].tsx",
@@ -377,9 +386,12 @@ const LEDGER: Entry[] = [
   {
     file: "utils/categoryExpand.ts",
     count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 `全部展开` / `全部收起` ⇒ 访客可见（按钮文案）。纯函数模块 ⇒ 注入尾参。",
+    kind: "seamed",
+    seamWired: 2,
+    why:
+      "🔴 `全部展开` / `全部收起` ⇒ 访客可见（按钮文案）。纯函数模块 ⇒ 注入尾参。" +
+      "🔴 **期 10 第六批已过接缝**：`全部展开` / `全部收起` 现在由 `categoryExpandAllLabel(t)` /" +
+      "`categoryCollapseAllLabel(t)` 取，消费方 `CategoryList/index.tsx` 已改成传 `useT()` 的结果。",
   },
   {
     file: "utils/commentApi.ts",
@@ -621,7 +633,9 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第五批更新）：**255** 条 = 永久例外 **37** + 欠条 **206** + **已过接缝的默认值 12**。
+    // 🔴 口径（期 10 第六批更新）：**255** 条 = 永久例外 **37** + 欠条 **197** + **已过接缝的默认值 21**。
+    //    第六批把 3 个族的消费方接完（`SearchCard/a11y` 4 + `TocDrawer/model` 3 + `categoryExpand` 2 = 9 条）
+    //    ⇒ seamed 12 → 21、欠条 206 → 197；🔴 **总数仍不变**（常量作为默认值仍在文件里，尺子照数）。
     //    第五批新增的 4 条是 `utils/applyFrontLocale.ts` 里的**语言自称**（`简` / `繁` / `繁體中文` / `简体中文`）
     //    ⇒ 🔴 判为永久例外（endonym 必须用那种语言自己的写法，理由见该条）。
     //    ⚠️ 本批**总数涨了 4**（251 → 255）：这不是退步，而是"新增了一个文件、里面的中文是故意不翻的"⇒
@@ -641,8 +655,8 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     expect(permCount).toBe(37);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(206);
-    expect(seamedCount).toBe(12);
+    expect(iouCount).toBe(197);
+    expect(seamedCount).toBe(21);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
     const byBatch = new Map<string, number>();

@@ -18,13 +18,17 @@ import { searchPageUrl } from "../../utils/searchUrls";
 import {
   SEARCH_CLEAR_BUTTON_CLASS,
   SEARCH_CLEAR_LABEL,
+  searchClearLabel,
   SEARCH_DIALOG_INPUT_ATTR,
   SEARCH_DIALOG_LABEL,
+  searchDialogLabel,
   SEARCH_ICON_STROKE_WIDTH,
   SEARCH_INPUT_CLASS,
   SEARCH_INPUT_LABEL,
+  searchInputLabel,
   SEARCH_RESULT_ATTR,
   SEARCH_RESULTS_LABEL,
+  searchResultsLabel,
   describeSearchDialog,
   focusSearchDialogInput,
   handleSearchDialogKeyDown,
@@ -32,6 +36,7 @@ import {
   openSearchFromUserGesture,
 } from "./a11y";
 
+import useT from "../../hooks/useT";
 export type SearchCardHandle = {
   openFromUserGesture: () => boolean;
 };
@@ -76,6 +81,8 @@ const SearchCard = forwardRef<
     openArticleLinksInNewWindow: boolean;
   }
 >(function SearchCard(props, ref) {
+  // 🔴 期 10 第六批：搜索卡片的 4 处无障碍标签/占位符走 i18n 接缝（渲染期取）
+  const t = useT();
   const [result, setResult] = useState<any>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -262,7 +269,7 @@ const SearchCard = forwardRef<
         ref={innerRef}
         role={describeSearchDialog().role}
         aria-modal={props.visible}
-        aria-label={SEARCH_DIALOG_LABEL}
+        aria-label={searchDialogLabel(t)}
         aria-hidden={!props.visible}
         className="bg-white w-3/4  p-4 rounded-xl card-shadow dark:card-shadow-dark transition-all dark:bg-dark vanblog-search-panel"
         style={{
@@ -310,7 +317,7 @@ const SearchCard = forwardRef<
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            aria-label={SEARCH_INPUT_LABEL}
+            aria-label={searchInputLabel(t)}
             {...{ [SEARCH_DIALOG_INPUT_ATTR]: "" }}
             onChange={(ev) => {
               setTyping(true);
@@ -320,7 +327,7 @@ const SearchCard = forwardRef<
                 setFailed(false);
               }
             }}
-            placeholder={SEARCH_INPUT_LABEL}
+            placeholder={searchInputLabel(t)}
             className={`w-full ml-2 text-base ${SEARCH_INPUT_CLASS}`}
             style={{
               height: 32,
@@ -333,7 +340,7 @@ const SearchCard = forwardRef<
 
           <button
             type="button"
-            aria-label={SEARCH_CLEAR_LABEL}
+            aria-label={searchClearLabel(t)}
             tabIndex={showClear ? 0 : -1}
             className={SEARCH_CLEAR_BUTTON_CLASS}
             style={{
@@ -368,7 +375,7 @@ const SearchCard = forwardRef<
         <hr className="my-2 dark:border-hr-dark"></hr>
         <div
           className="dark:text-dark"
-          aria-label={SEARCH_RESULTS_LABEL}
+          aria-label={searchResultsLabel(t)}
           style={{ maxHeight: 400, overflowY: "auto" }}
         >
           {renderResult()}

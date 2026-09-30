@@ -1,4 +1,5 @@
 import { useState } from "react";
+import useT from "../../hooks/useT";
 // ⚠️ 刻意**不要** `Article`：本组件只把 sortedArticles 透传给 TimeLineItem，
 //    而那条链每篇只读 4 个字段（见 utils/timelineMonths.ts 的 TimelineArticleRef）。
 //    声明成完整 Article 会让调用方以为"必须传整篇"，从而把没人读的字段一路带进 pageProps
@@ -7,7 +8,9 @@ import { type TimelineArticleRef } from "../../utils/timelineMonths";
 import TimeLineItem from "../TimeLineItem";
 import {
   CATEGORY_COLLAPSE_ALL_LABEL,
+  categoryCollapseAllLabel,
   CATEGORY_EXPAND_ALL_LABEL,
+  categoryExpandAllLabel,
   initialCategoryOpenMap,
   setAllCategoryOpen,
 } from "../../utils/categoryExpand";
@@ -17,6 +20,8 @@ export default function CategoryList(props: {
   defaultExpandAll: boolean;
   openArticleLinksInNewWindow: boolean;
 }) {
+  // 🔴 期 10 第六批：「全部展开 / 全部收起」走 i18n 接缝
+  const t = useT();
   const names = Object.keys(props.sortedArticles);
   const [openByName, setOpenByName] = useState(() =>
     initialCategoryOpenMap(names, props.defaultExpandAll)
@@ -32,7 +37,7 @@ export default function CategoryList(props: {
             className="bg-transparent border-0 p-0 cursor-pointer hover:text-gray-800 dark:hover:text-dark"
             onClick={() => setOpenByName(setAllCategoryOpen(names, true))}
           >
-            {CATEGORY_EXPAND_ALL_LABEL}
+            {categoryExpandAllLabel(t)}
           </button>
           <button
             type="button"
@@ -40,7 +45,7 @@ export default function CategoryList(props: {
             className="bg-transparent border-0 p-0 cursor-pointer hover:text-gray-800 dark:hover:text-dark"
             onClick={() => setOpenByName(setAllCategoryOpen(names, false))}
           >
-            {CATEGORY_COLLAPSE_ALL_LABEL}
+            {categoryCollapseAllLabel(t)}
           </button>
         </div>
       )}

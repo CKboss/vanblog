@@ -93,7 +93,9 @@ describe("SearchCard：只加了一个「查看全部结果」的出口，没有
     expect(raw).toContain("const SearchCard = forwardRef<");
     expect(raw).toContain("export default SearchCard;");
     expect(raw).toContain("export type SearchCardHandle = {");
-    expect(raw).toContain('aria-label={SEARCH_DIALOG_LABEL}');
+    // 🔴 期 10 第六批：文案改成过 i18n 接缝（`searchDialogLabel(t)`）⇒ 锚点跟着搬，性质不变
+    expect(raw).toContain('aria-label={searchDialogLabel(t)}');
+    expect(raw).not.toContain('aria-label={SEARCH_DIALOG_LABEL}');
     expect(raw).toContain('type="search"');
     // 默认导出还是那个 forwardRef 组件（换掉它会让所有引用它的地方静默变味）
     expect(typeof SearchCard).toBe("object");
