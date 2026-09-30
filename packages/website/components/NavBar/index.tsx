@@ -23,6 +23,7 @@ import {
 } from "../PostCard/titleCopyA11y";
 import {
   HEADER_ACTION_LABELS,
+  headerActionLabel,
   ICON_ACTION_BUTTON_CLASS,
 } from "./a11y";
 import { SEARCH_ICON_STROKE_WIDTH } from "../SearchCard/a11y";
@@ -112,7 +113,7 @@ export default function (props: {
             <button
               type="button"
               className={`${ICON_ACTION_BUTTON_CLASS} cursor-pointer block md:hidden`}
-              aria-label={HEADER_ACTION_LABELS.menu}
+              aria-label={headerActionLabel("menu", t)}
               aria-expanded={props.isOpen}
               aria-controls="nav-mobile"
               onClick={() => {
@@ -194,8 +195,8 @@ export default function (props: {
                 onClick={() => {
                   searchCardRef.current?.openFromUserGesture();
                 }}
-                title={HEADER_ACTION_LABELS.search}
-                aria-label={HEADER_ACTION_LABELS.search}
+                title={headerActionLabel("search", t)}
+                aria-label={headerActionLabel("search", t)}
                 className={`${ICON_ACTION_BUTTON_CLASS} flex group transform hover:scale-110 transition-all select-none cursor-pointer`}
               >
                 <div className="flex items-center mr-0 sm:mr-2 hover:cursor-pointer   transition-all dark:text-dark fill-gray-600">

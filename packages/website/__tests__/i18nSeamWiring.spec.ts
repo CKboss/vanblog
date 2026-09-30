@@ -166,3 +166,58 @@ describe("前台 i18n 接缝 · 导出常量族（titleCopyA11y）", () => {
     expect(titleCopyLabel("siteName", partial)).toBe(SITE_NAME_COPY_LABEL);
   });
 });
+
+// ── 期 10 第四批：map 形状的族（`NavBar/a11y`）与单条常量（`UnLockCard/copy`）──
+import {
+  HEADER_ACTION_LABELS,
+  headerActionLabel,
+} from "../components/NavBar/a11y";
+import {
+  LOCKED_ARTICLE_PROMPT,
+  lockedArticlePrompt,
+} from "../components/UnLockCard/copy";
+
+const NAV_EN: Record<string, string> = {
+  "nav.actionSearch": "Search",
+  "nav.actionTheme": "Toggle theme",
+  "nav.actionRss": "RSS feed",
+  "nav.actionAdmin": "Admin panel",
+  "nav.actionMenu": "Open menu",
+  "unlock.lockedPrompt": "This article is password protected. Enter the password to view it:",
+};
+const navT: TFunc = (id, dm) => (typeof NAV_EN[id] === "string" && NAV_EN[id] ? NAV_EN[id] : dm);
+
+describe("前台 i18n 接缝 · map 形状的族（headerActionLabel）与单条常量", () => {
+  it("① 默认行为不变（map 与常量都原样，五个 kind 各自对）", () => {
+    expect(HEADER_ACTION_LABELS.search).toBe("搜索");
+    expect(headerActionLabel("search")).toBe("搜索");
+    expect(headerActionLabel("theme")).toBe("切换主题");
+    expect(headerActionLabel("rss")).toBe("RSS 订阅");
+    expect(headerActionLabel("admin")).toBe("管理后台");
+    expect(headerActionLabel("menu")).toBe("打开菜单");
+    expect(lockedArticlePrompt()).toBe(LOCKED_ARTICLE_PROMPT);
+    expect(LOCKED_ARTICLE_PROMPT).toBe("文章已加密，请输入密码后查看：");
+  });
+
+  it("② 传词典就换语言，五个 kind 不许串", () => {
+    expect(headerActionLabel("search", navT)).toBe("Search");
+    expect(headerActionLabel("theme", navT)).toBe("Toggle theme");
+    expect(headerActionLabel("rss", navT)).toBe("RSS feed");
+    expect(headerActionLabel("admin", navT)).toBe("Admin panel");
+    expect(headerActionLabel("menu", navT)).toBe("Open menu");
+    expect(lockedArticlePrompt(navT)).toBe(
+      "This article is password protected. Enter the password to view it:"
+    );
+    // 🔴 词典缺 key 时回落中文默认值
+    expect(headerActionLabel("search", (id, dm) => dm)).toBe("搜索");
+  });
+
+  it("③ 🔴 哨兵反向：五个 kind 与那条提示都必须过 t（改回 map/常量就会红）", () => {
+    const SENTINEL = "__I18N_SEAM_WAS_USED__";
+    const sentinelT: TFunc = () => SENTINEL;
+    for (const kind of ["search", "theme", "rss", "admin", "menu"] as const) {
+      expect(headerActionLabel(kind, sentinelT), `kind=${kind} 没有过接缝`).toBe(SENTINEL);
+    }
+    expect(lockedArticlePrompt(sentinelT)).toBe(SENTINEL);
+  });
+});

@@ -1,4 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useRef } from "react";
+import useT from "../../hooks/useT";
 import {
   applyTheme,
   getTheme,
@@ -9,10 +10,13 @@ import {
 import { ThemeContext } from "../../utils/themeContext";
 import {
   HEADER_ACTION_LABELS,
+  headerActionLabel,
   ICON_ACTION_BUTTON_CLASS,
 } from "../NavBar/a11y";
 
 export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
+  // 🔴 期 10 第四批：aria-label / title 走 i18n 接缝（渲染期取）
+  const t = useT();
   const { current } = useRef<any>({ hasInit: false });
   const { current: currentTimer } = useRef<any>({ timer: null });
   const { theme, setTheme: setState } = useContext(ThemeContext);
@@ -102,8 +106,8 @@ export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
       type="button"
       className={`${ICON_ACTION_BUTTON_CLASS} flex items-center cursor-pointer hover:scale-125 transform transition-all mr-4 ml-4 sm:ml-2 lg:ml-6`}
       onClick={handleSwitch}
-      aria-label={HEADER_ACTION_LABELS.theme}
-      title={HEADER_ACTION_LABELS.theme}
+      aria-label={headerActionLabel("theme", t)}
+      title={headerActionLabel("theme", t)}
     >
       <div
         style={{

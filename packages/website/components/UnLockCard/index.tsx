@@ -2,13 +2,16 @@ import { useState } from "react";
 import { getArticleByIdOrPathnameWithPassword } from "../../api/getArticles";
 import toast from "react-hot-toast";
 import Loading from "../Loading";
-import { LOCKED_ARTICLE_PROMPT } from "./copy";
+import { LOCKED_ARTICLE_PROMPT, lockedArticlePrompt } from "./copy";
+import useT from "../../hooks/useT";
 
 export default function (props: {
   id: number | string;
   setLock: (l: boolean) => void;
   setContent: (s: string) => void;
 }) {
+  // 🔴 期 10 第四批："文章已加密，请输入密码后查看：" 走 i18n 接缝（渲染期取）
+  const t = useT();
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -61,7 +64,7 @@ export default function (props: {
       <Loading loading={loading}>
         <div className="mb-2">
           <p className="mb-2 text-gray-600 dark:text-dark ">
-            {LOCKED_ARTICLE_PROMPT}
+            {lockedArticlePrompt(t)}
           </p>
           <div className="flex items-center">
             <div className=" bg-gray-100 rounded-md dark:bg-dark-2 overflow-hidden flex-grow">

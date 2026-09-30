@@ -122,23 +122,31 @@ describe("header action markup", () => {
   const admin = readSrc("components/AdminButton/index.tsx");
 
   it("uses native buttons for search, theme, RSS, and hamburger", () => {
-    expect(nav).toMatch(/<button[\s\S]*type="button"[\s\S]*HEADER_ACTION_LABELS\.search/);
-    expect(nav).toMatch(/<button[\s\S]*type="button"[\s\S]*HEADER_ACTION_LABELS\.menu/);
-    expect(theme).toMatch(/<button[\s\S]*type="button"[\s\S]*HEADER_ACTION_LABELS\.theme/);
-    expect(rss).toMatch(/<button[\s\S]*type="button"[\s\S]*HEADER_ACTION_LABELS\.rss/);
+    // 🔴 期 10 第四批：aria-label 不再直接引用 map，而是过 i18n 接缝（`headerActionLabel(kind, t)`）
+    //    ⇒ 锚点跟着搬，但**性质不变**：这四个动作必须是原生 <button>、必须有可访问名，
+    //    而且那个名字必须**走接缝**（否则英文界面上读屏还是念中文）。
+    expect(nav).toMatch(/<button[\s\S]*type="button"[\s\S]*headerActionLabel\("search", t\)/);
+    expect(nav).toMatch(/<button[\s\S]*type="button"[\s\S]*headerActionLabel\("menu", t\)/);
+    expect(theme).toMatch(/<button[\s\S]*type="button"[\s\S]*headerActionLabel\("theme", t\)/);
+    expect(rss).toMatch(/<button[\s\S]*type="button"[\s\S]*headerActionLabel\("rss", t\)/);
+    // 🔴 反向：不许退回"直接渲染 map 里的中文"（那等于把接缝拆了）
+    for (const src of [nav, theme, rss, admin]) {
+      expect(src).not.toMatch(/HEADER_ACTION_LABELS\./);
+      expect(src).toMatch(/const t = useT\(\)/);
+    }
     expect(nav).not.toMatch(/<div\s+onClick=\{\(\) => \{\s+setShowSearch/);
     expect(theme).not.toMatch(/<div\s+className="flex items-center cursor-pointer/);
   });
 
   it("keeps RSS as copy-to-clipboard on a keyboard-accessible button", () => {
     expect(rss).toMatch(/CopyToClipboard/);
-    expect(rss).toMatch(/HEADER_ACTION_LABELS\.rss/);
+    expect(rss).toMatch(/headerActionLabel\("rss", t\)/);
     expect(rss).toMatch(/<button/);
   });
 
   it("makes admin a real /admin link when shown", () => {
     expect(admin).toMatch(/<a\s+href="\/admin"/);
-    expect(admin).toMatch(/HEADER_ACTION_LABELS\.admin/);
+    expect(admin).toMatch(/headerActionLabel\("admin", t\)/);
     expect(admin).toMatch(/target="_blank"/);
     expect(admin).not.toMatch(/window\.open/);
   });

@@ -1,9 +1,25 @@
 import { parseNavStructure } from "../MarkdownTocBar/tools";
 import { hasToc } from "../../utils/hasToc";
+import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 
 export const TOC_DRAWER_OPEN_LABEL = "打开目录";
 export const TOC_DRAWER_CLOSE_LABEL = "关闭目录";
 export const TOC_DRAWER_TITLE = "目录";
+
+// 🔴 期 10 第四批：接上 i18n 接缝（常量保留当默认值，另加取文案的函数；规矩见 §7.205 A）
+export const TOC_DRAWER_OPEN_LABEL_ID = "toc.openLabel";
+export const TOC_DRAWER_CLOSE_LABEL_ID = "toc.closeLabel";
+export const TOC_DRAWER_TITLE_ID = "toc.title";
+
+export function tocDrawerOpenLabel(t: TFunc = IDENTITY_T): string {
+  return t(TOC_DRAWER_OPEN_LABEL_ID, TOC_DRAWER_OPEN_LABEL);
+}
+export function tocDrawerCloseLabel(t: TFunc = IDENTITY_T): string {
+  return t(TOC_DRAWER_CLOSE_LABEL_ID, TOC_DRAWER_CLOSE_LABEL);
+}
+export function tocDrawerTitle(t: TFunc = IDENTITY_T): string {
+  return t(TOC_DRAWER_TITLE_ID, TOC_DRAWER_TITLE);
+}
 export const TOC_DRAWER_PANEL_ID = "toc-drawer-panel";
 export const TOC_DRAWER_FAB_ATTR = "data-toc-fab";
 export const TOC_DRAWER_PANEL_ATTR = "data-toc-drawer";

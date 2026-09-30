@@ -4,6 +4,7 @@ import {
   pageHref,
   shouldShowPageNav,
 } from "./core";
+import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 
 /** Landmark / form name for the jump-to-page control. */
 export const PAGE_NAV_JUMP_LABEL = "跳转到页码";
@@ -11,6 +12,41 @@ export const PAGE_NAV_JUMP_PREFIX = "跳转";
 export const PAGE_NAV_JUMP_UNIT = "页";
 export const PAGE_NAV_JUMP_INPUT_LABEL = "页码";
 export const PAGE_NAV_JUMP_GO_LABEL = "前往";
+
+// 🔴 期 10 第四批：接上 i18n 接缝（常量保留当默认值，另加取文案的函数；规矩见 §7.205 A）。
+// ⚠️ `PREFIX` / `UNIT` 是"跳转 [输入框] 页"这种**拼接式**文案的两半 ⇒
+// 🔴 英文语序不同（`Go to page [input]`），**只翻这两半永远拼不对**。
+// 所以除了逐条的取文案函数，还额外给一个**整句模板**接缝 `pageNavJumpSentence(t)`：
+// 它用 `{input}` 占位符表示输入框的位置，接词典时英文可以整句重排。
+// 现在（接缝期）它按中文语序拼回来 ⇒ 与今天的渲染结果**逐字节相同**。
+export const PAGE_NAV_JUMP_LABEL_ID = "pageNav.jumpLabel";
+export const PAGE_NAV_JUMP_PREFIX_ID = "pageNav.jumpPrefix";
+export const PAGE_NAV_JUMP_UNIT_ID = "pageNav.jumpUnit";
+export const PAGE_NAV_JUMP_INPUT_LABEL_ID = "pageNav.jumpInputLabel";
+export const PAGE_NAV_JUMP_GO_LABEL_ID = "pageNav.jumpGoLabel";
+export const PAGE_NAV_JUMP_SENTENCE_ID = "pageNav.jumpSentence";
+
+export function pageNavJumpLabel(t: TFunc = IDENTITY_T): string {
+  return t(PAGE_NAV_JUMP_LABEL_ID, PAGE_NAV_JUMP_LABEL);
+}
+export function pageNavJumpPrefix(t: TFunc = IDENTITY_T): string {
+  return t(PAGE_NAV_JUMP_PREFIX_ID, PAGE_NAV_JUMP_PREFIX);
+}
+export function pageNavJumpUnit(t: TFunc = IDENTITY_T): string {
+  return t(PAGE_NAV_JUMP_UNIT_ID, PAGE_NAV_JUMP_UNIT);
+}
+export function pageNavJumpInputLabel(t: TFunc = IDENTITY_T): string {
+  return t(PAGE_NAV_JUMP_INPUT_LABEL_ID, PAGE_NAV_JUMP_INPUT_LABEL);
+}
+export function pageNavJumpGoLabel(t: TFunc = IDENTITY_T): string {
+  return t(PAGE_NAV_JUMP_GO_LABEL_ID, PAGE_NAV_JUMP_GO_LABEL);
+}
+/** 🔴 整句模板：`{input}` 是输入框的位置（英文可以整句重排，中文就是"跳转 {input} 页"）。 */
+export function pageNavJumpSentence(input: string, t: TFunc = IDENTITY_T): string {
+  return t(PAGE_NAV_JUMP_SENTENCE_ID, `${PAGE_NAV_JUMP_PREFIX} {input} ${PAGE_NAV_JUMP_UNIT}`, {
+    input,
+  });
+}
 export const PAGE_NAV_JUMP_INPUT_ID = "page-nav-jump";
 export const PAGE_NAV_JUMP_INPUT_ATTR = "data-page-nav-jump-input";
 

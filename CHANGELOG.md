@@ -36,6 +36,54 @@
 - 📈 进度：服务端"带中文的 throw 站点"棘轮 **186 → 162**；错误码 **59 → 81**；语言包 **1504 → 1526 key ×3**。
 
 
+### 2026-09-30：多语言 —— 前台 7 个"导出常量族"铺上接缝、4 个消费方接完；🔴 发现一类新难点：文案的使用点不在渲染期
+
+- ✅ 7 个模块加上接缝函数（`NavBar/a11y`、`SearchCard/a11y`、`PageNav/jump`、`TocDrawer/model`、
+  `categoryExpand`、`UnLockCard/copy`、`Markdown/codeCopyA11y`），其中 **2 个族的消费方也接完**：
+  `NavBar/a11y` 的 5 条 → `NavBar` / `AdminButton` / `RssButton` / `ThemeButton/core` 四个组件；
+  `UnLockCard/copy` 的 1 条 → `UnLockCard/index.tsx`。台账：`seamed` **6 → 12**、欠条 **212 → 206**。
+- 🔴 **"一张 map"这一族的接缝形状**（与"一个个常量"不同）：`HEADER_ACTION_LABELS = { search: "搜索", … }`
+  ⇒ map 保留当默认值，另加 id 表与**一个**取文案函数 `headerActionLabel(kind, t = IDENTITY_T)`。
+  🔴 id 表要写成 `Record<keyof typeof HEADER_ACTION_LABELS, string>` ⇒
+  "map 里加了一个 kind 但忘了给它 id"会**编译期就红**（而不是运行时 `t(undefined, …)`）。
+  ⚠️ 台账的 `seamWired` 判据原来只认 `t(ID_CONST, DEFAULT_CONST)` ⇒ map 形状一处都匹配不上（会假红）⇒
+  已放宽到允许成员表达式。👉 🔴 这是**第 7 次**"判据只认一种形状 ⇒ 合法的新形状被误判"；
+  规律很清楚：**每引入一种新写法，就要问一遍"所有静态判据认不认它"**。
+- 🔴 **`seamWired` 是下限，不是等式**：map 那一族 5 条文案**共用一个**取文案函数 ⇒ 文件里只有 **1 处**
+  `t(ID, 默认值)` 调用而 `count` 是 5 ⇒ `seamWired: 1` 的含义是"有 1 处接缝调用"，**不是**"只有 1 条过了接缝"。
+  🔴 所以它**不足以**证明"每条都接上了"（有人把 `headerActionLabel` 改成"只有 search 走 t、其余直接返回 map"，
+  `seamWired: 1` 依然满足）⇒ 那半边由**哨兵断言**负责（**逐个 kind** 都必须返回哨兵）。
+  👉 🔴 **静态判据（数形状）与行为判据（哨兵）各管一半，谁都不能替代谁。**
+  🔴 **变异对照**：把 `headerActionLabel` 改成直接返回 map ⇒ 哨兵红**且** `seamWired` 判据也红；还原 ⇒ 全绿。
+- 🔴 **进度体现在"欠条 → seamed"，不是"总数下降"**（这条最容易被误读）：本批接完 6 条，
+  但前台裸中文**总数一个字没降**（251 → 251）—— 常量作为 `t()` 的**默认值**仍在文件里，尺子照数。
+  ⇒ 三个指标各管一件事：**总数**（棘轮 ≤251）管"别新增硬编码文案"、**欠条数**（→206）管"还剩多少没接"、
+  **`seamed` 数**（→12）管"接了多少"。👉 报进度必须说清是哪一个。
+  ⚠️ 🔴 **不许为了让总数下降而删掉常量**（把默认值内联进 `t()`）：那样能骗过尺子，但会破坏既有测试、
+  并让同一句话散落在各个调用点（迟早不一致 —— 这正是"常量族"存在的理由）。
+- 🔴 **一类新难点：文案的使用点不在渲染期**。`Markdown/codeCopyA11y.ts` 那 1 条**加了接缝函数但消费方接不上**：
+  唯一消费方 `Markdown/codeBlock.tsx` 是在 **markdown 处理管线里构造 AST 节点**
+  （`properties: { ariaLabel: CODE_COPY_LABEL }`）⇒ 🔴 那里不是 React 渲染期，用不了 hook。
+  要接就得把 `t`（或已取好的字符串）从组件**透传进 processor 的配置** ⇒ 跨层改造，单独排一批。
+  👉 这与 `api/getAllData.ts`（在 `getStaticProps` 里构造导航数据）**同一类**：
+  两处都要求先回答"**语种从哪来、什么时候来**"与"**ISR 一份产物怎么服务多个语种**"
+  ⇒ 🔴 "接词典"那一批**必须**先做这个决定，不能先翻简单的把这两处留着（留着就等于前台永远有一半是中文）。
+  ⚠️ 本批刻意**没有**动 `codeBlock.tsx`：只做"能确证零行为变化"的部分，
+  不能确证的部分**如实登记为欠条并写明原因**（🔴 不留半改状态）。
+- 🔴 又踩两次工具边界：① **批量换引号的脚本第二次误伤**（上一批它误伤 8 行代码；这批写台账文案时
+  又用了 ASCII 双引号包中文引语 ⇒ TS1005）⇒ 这次**逐处手工改**，并定下规矩：**中文引语一律用 「」**；
+  ② **源码级锚点又红了 3 条**（`headerActionA11y.spec.ts` 钉着 `HEADER_ACTION_LABELS.search/.rss/.admin`）⇒
+  照老规矩"锚点跟着搬 + 性质不变 + **加反向断言**"（`not.toMatch(/HEADER_ACTION_LABELS\./)` +
+  四个组件都要有 `const t = useT()`）。👉 🔴 这已是**第 4 次**"迁移 ⇒ 源码级锚点红"⇒
+  待办：把源码级锚点尽量换成**符号锚点**，或在迁移脚本里**同步**改锚点。
+- 📈 基线：vitest **100 文件 / 1117 用例 / 0 失败**（+3）；website `tsc` **0 错**；
+  前台裸中文 **251 条 / 52 个文件**（永久例外 33 + 欠条 206 + `seamed` 12 = 251 ✓）。
+- 🔴 下一批（期 10 第五批）：接完剩下 4 个族的消费方（`SearchCard/a11y` 4、`PageNav/jump` 5、
+  `TocDrawer/model` 3、`categoryExpand` 2），然后才是最大三处（`Comment` 44 / `SearchResults` 28 / `search.tsx` 9）。
+  ⚠️ `PageNav/render.tsx` 要先确认它**是不是** React 组件（若是被组件调用的普通渲染函数，hook 不能在它里面调 ⇒
+  `t` 要从组件传进去，与上面那类难点同型）。
+
+
 ### 2026-09-30：多语言 —— 前台"导出常量族"怎么过接缝；台账新增第三种状态 `seamed`（不许把数字改成 0 造假账）
 
 - ✅ `components/PostCard/titleCopyA11y.ts` 的 **6 条**（3 个 aria-label + 3 个复制成功 toast）**接上接缝**，

@@ -1,14 +1,17 @@
-import { HEADER_ACTION_LABELS } from "../NavBar/a11y";
+import { headerActionLabel } from "../NavBar/a11y";
+import useT from "../../hooks/useT";
 
 export default function () {
+  // 🔴 期 10 第四批：aria-label / title 走 i18n 接缝（渲染期取）
+  const t = useT();
   return (
     <a
       href="/admin"
       target="_blank"
       rel="noopener noreferrer"
       className="hidden md:flex items-center cursor-pointer hover:scale-125 transform transition-all mr-4 sm:-ml-2 lg:ml-2 fill-gray-600 dark:text-dark"
-      title={HEADER_ACTION_LABELS.admin}
-      aria-label={HEADER_ACTION_LABELS.admin}
+      title={headerActionLabel("admin", t)}
+      aria-label={headerActionLabel("admin", t)}
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

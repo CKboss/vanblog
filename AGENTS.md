@@ -9469,6 +9469,88 @@ C10K 评估 → 文档更新（`docs/advanced/benchmark.md` §2.1/§5.4/§7/§10
 `[AuthGuard('jwt'), TokenGuard, AccessGuard]`（`grep -rn "class AdminGuard"` 0 命中）⇒
 **找不到一个"应该有"的实体时，先搜它的引用而不是搜它的定义**（它可能是别名、常量或 re-export）。
 
+### 7.206 期 10 第四批：7 个"导出常量族"文件全部铺上接缝函数，4 个消费方接完；🔴 发现一类新难点 —— **文案的使用点不在渲染期**（markdown 管线 / `getStaticProps`）
+
+**交付**：7 个模块加上接缝（`NavBar/a11y`、`SearchCard/a11y`、`PageNav/jump`、`TocDrawer/model`、
+`categoryExpand`、`UnLockCard/copy`、`Markdown/codeCopyA11y`），其中 **2 个族的消费方也接完**
+（`NavBar/a11y` 5 条 → `NavBar` / `AdminButton` / `RssButton` / `ThemeButton/core` 四个组件；
+`UnLockCard/copy` 1 条 → `UnLockCard/index.tsx`）。
+台账：`seamed` **6 → 12**、欠条 **212 → 206**，🔴 **总数仍是 251**（见 C 段）。新增 3 条哨兵断言。
+
+#### A. 🔴 "一张 map"这一族的接缝形状（与"一个个常量"不同）
+`NavBar/a11y.ts` 的形状是 `export const HEADER_ACTION_LABELS = { search: "搜索", theme: "切换主题", … } as const`
+（消费方写 `HEADER_ACTION_LABELS.search`）。照第三批的规矩做，但取文案函数只有**一个**：
+`headerActionLabel(kind, t = IDENTITY_T)` ⇒ `t(HEADER_ACTION_LABEL_IDS[kind], HEADER_ACTION_LABELS[kind])`。
+🔴 **map 与 id 表要一一对应**，而且 id 表要写成 `Record<keyof typeof HEADER_ACTION_LABELS, string>` ——
+这样"map 里加了一个 kind 但忘了给它 id"会**编译期就红**（而不是运行时 `t(undefined, …)`）。
+⚠️ 台账的 `seamWired` 判据原来只认 `t(ID_CONST, DEFAULT_CONST)` 这一种形状 ⇒
+map 形状（`t(ID_MAP[kind], DEFAULT_MAP[kind])`）**一处都匹配不上**，会红"声称接了、其实没有"。
+已把正则放宽到"允许成员表达式"（`[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?`）。
+👉 🔴 这是**第 7 次**"判据只认一种形状 ⇒ 合法的新形状被误判"（前 6 次见 §7.188 C、§7.196 A、§7.202 D）。
+规律已经很清楚了：**每引入一种新的写法，就要问一遍"所有静态判据认不认它"**。
+
+#### B. 🔴 `seamWired` 是**下限**，不是等式 —— 它抓得住"一处都没接"，抓不住"5 条里只接了 1 条"
+map 那一族 5 条文案**共用一个**取文案函数 ⇒ 文件里只有 **1 处** `t(ID, 默认值)` 形状的调用，
+而 `count` 是 5。所以 `seamWired: 1` 的含义是"文件里有 1 处接缝调用"，**不是**"只有 1 条过了接缝"。
+🔴 这意味着 `seamWired` 判据本身**不足以**证明"每条文案都接上了"：
+如果有人把 `headerActionLabel` 改成"只有 search 走 t、其余四个直接返回 map"，`seamWired: 1` 依然满足。
+⇒ 那半边由**哨兵断言**负责（`i18nSeamWiring.spec.ts` 里 `for (const kind of [...]) expect(headerActionLabel(kind, sentinelT)).toBe(SENTINEL)`，
+**逐个 kind** 都要返回哨兵）。
+👉 🔴 一般化：**静态判据（数形状）与行为判据（哨兵）各管一半，谁都不能替代谁** ——
+静态判据管"文件里有没有接缝"，行为判据管"每条文案是不是都真的过了接缝"。
+🔴 **变异对照**：把 `headerActionLabel` 改成 `return HEADER_ACTION_LABELS[kind];`（拆掉接缝）⇒
+哨兵那 3 条断言红（而且台账的 `seamWired` 判据**也**红，因为文件里再没有 `t(…)` 调用）；还原 ⇒ 全绿。
+
+#### C. 🔴 进度体现在"欠条 → seamed"，**不是"总数下降"**（这条最容易被误读）
+本批接完了 6 条，但前台裸中文**总数一个字没降**（251 → 251）——
+因为常量作为 `t()` 的**默认值**仍在文件里，尺子照数。
+🔴 所以"总数"这个指标在 `seamed` 类别存在之后**不再是进度指标**：
+- **总数**（棘轮 ≤251）管的是"别新增硬编码文案"；
+- **欠条数**（212 → 206）管的是"还剩多少没接接缝"；
+- **`seamed` 数**（6 → 12）管的是"接了多少"。
+👉 报进度必须说清是哪一个（本项目已经因为"口径不明"报错过几次数字）。
+⚠️ 而且 🔴 **不许为了让总数下降而删掉常量**（把默认值内联进 `t()` 调用里）：
+那样确实能让尺子少数字，但会 ① 破坏既有测试对常量的断言、② 让默认值散落在各个调用点
+（同一句话在 5 个组件里各写一遍 ⇒ 迟早不一致，这正是"常量族"存在的理由）。
+
+#### D. 🔴 一类新难点：**文案的使用点不在渲染期**
+`Markdown/codeCopyA11y.ts` 那 1 条（`复制代码`）**加了接缝函数但消费方接不上**：
+唯一的消费方 `Markdown/codeBlock.tsx` 是在 **markdown 处理管线里构造 AST 节点**
+（`properties: { ariaLabel: CODE_COPY_LABEL, title: CODE_COPY_LABEL }`）——
+🔴 那里**不是 React 渲染期**，用不了 hook，也没法就地调 `codeCopyLabel(t)`。
+要接就得把 `t`（或**已取好的字符串**）从组件透传进 processor 的配置 ⇒ 一次跨层改造，单独排一批。
+👉 🔴 这是与 `api/getAllData.ts`（在 `getStaticProps` 里构造导航数据）**同一类**难点：
+**文案的使用点不在渲染期**（一个在构建/处理管线里，一个在数据获取里）。
+这两处都要求先回答同一个问题：**语种从哪来、什么时候来**（请求头 / cookie / 路径前缀），
+以及**产物缓存怎么办**（ISR 是一份产物服务多个语种）。
+⇒ 🔴 所以"接词典"那一批**必须**先做这个决定，不能先翻简单的、把这两处留着
+（留着就等于前台永远有一半文案是中文）。
+⚠️ 本批刻意**没有**动 `codeBlock.tsx`：只做"能确证零行为变化"的部分，
+把不能确证的部分**如实登记为欠条并写明原因**（🔴 不留半改状态 —— 见 §7.190 那条纪律）。
+
+#### E. 🔴 又踩两次工具边界（都记进手册）
+1. **批量换引号的脚本第二次误伤**：上一批我写了"把内层 ASCII 双引号换成 「」"的脚本并**误伤 8 行代码**，
+   这批写台账文案时又用了 ASCII 双引号包中文引语 ⇒ `TS1005`。修法：**逐处手工替换**（3 行），
+   并且 🔴 这次**没有**再用那个批量脚本（它的判据"引号数 > 2"本来就不可靠）。
+   👉 规矩：**中文引语一律用 「」**，从源头上避免"字符串里嵌 ASCII 双引号"。
+2. **源码级锚点又红了 3 条**（`headerActionA11y.spec.ts` 钉着 `HEADER_ACTION_LABELS.search/.rss/.admin`）⇒
+   照老规矩"锚点跟着搬 + 性质不变 + **加反向断言**"：
+   改成 `headerActionLabel("search", t)`，并加 `expect(src).not.toMatch(/HEADER_ACTION_LABELS\./)`
+   与 `expect(src).toMatch(/const t = useT\(\)/)`（四个组件都查）。
+   👉 🔴 这已经是**第 4 次**"迁移 ⇒ 源码级锚点红"（前三次：paginationQuickJumper、titleCopy、readingTimeUi）⇒
+   待办（已记多次）：把源码级锚点尽量换成**符号锚点**（函数名 / 导出名），
+   或者在迁移脚本里**同步**改锚点（而不是事后被红一次改一次）。
+
+#### F. 基线
+- vitest **100 文件 / 1117 用例 / 0 失败**（+3）；website `tsc` **0 错**；
+- 前台裸中文 **251 条 / 52 个文件**；台账：永久例外 **33** + 欠条 **206** + `seamed` **12**（三类之和 = 251 ✓）；
+- admin **791 / 178 / 0**、jest **288 套件 / 4264 用例 / 0 FAIL**、守卫 **35 文件 / 3160 断言 / 0 失败**；
+- 🔴 下一批（期 10 第五批）：接完剩下 4 个族的消费方（`SearchCard/a11y` 4 → `SearchCard/index.tsx`、
+  `PageNav/jump` 5 → `PageNav/render.tsx`、`TocDrawer/model` 3、`categoryExpand` 2），
+  然后才是最大三处（`Comment` 44 / `SearchResults` 28 / `search.tsx` 9）。
+  ⚠️ `PageNav/render.tsx` 要先确认它**是不是** React 组件（如果是被组件调用的普通渲染函数，
+  hook 不能在它里面调 ⇒ `t` 要从组件传进去，与 D 段那类难点同型）。
+
 ### 7.205 期 10 第三批：前台"**导出常量族**"怎么过接缝（常量留作默认值 + 工厂函数 + 消费方改调），🔴 以及台账新增第三种状态 `seamed`（尺子数得到、但性质已经变了）
 
 **交付**：`components/PostCard/titleCopyA11y.ts`（6 条：3 个 aria-label + 3 个复制成功 toast）**接上接缝**，

@@ -2,12 +2,32 @@ import {
   activatesWithKey,
   isFocusableActionControl,
 } from "../../utils/keyboardA11y";
+import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 
 /** Accessible name for the public search `<div role="dialog">`. */
 export const SEARCH_DIALOG_LABEL = "搜索";
 export const SEARCH_INPUT_LABEL = "搜索内容";
 export const SEARCH_CLEAR_LABEL = "清除搜索";
 export const SEARCH_RESULTS_LABEL = "搜索结果";
+
+// 🔴 期 10 第四批：接上 i18n 接缝（常量保留当默认值，另加取文案的函数；规矩见 §7.205 A）
+export const SEARCH_DIALOG_LABEL_ID = "search.dialogLabel";
+export const SEARCH_INPUT_LABEL_ID = "search.inputLabel";
+export const SEARCH_CLEAR_LABEL_ID = "search.clearLabel";
+export const SEARCH_RESULTS_LABEL_ID = "search.resultsLabel";
+
+export function searchDialogLabel(t: TFunc = IDENTITY_T): string {
+  return t(SEARCH_DIALOG_LABEL_ID, SEARCH_DIALOG_LABEL);
+}
+export function searchInputLabel(t: TFunc = IDENTITY_T): string {
+  return t(SEARCH_INPUT_LABEL_ID, SEARCH_INPUT_LABEL);
+}
+export function searchClearLabel(t: TFunc = IDENTITY_T): string {
+  return t(SEARCH_CLEAR_LABEL_ID, SEARCH_CLEAR_LABEL);
+}
+export function searchResultsLabel(t: TFunc = IDENTITY_T): string {
+  return t(SEARCH_RESULTS_LABEL_ID, SEARCH_RESULTS_LABEL);
+}
 
 /** Class on the dialog `<input type="search">` so native WebKit clear is hidden. */
 export const SEARCH_INPUT_CLASS = "search-dialog-input";

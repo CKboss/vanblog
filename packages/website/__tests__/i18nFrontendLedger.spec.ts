@@ -209,9 +209,17 @@ const LEDGER: Entry[] = [
   {
     file: "components/NavBar/a11y.ts",
     count: 5,
-    kind: "iou",
-    batch: "期 10 第二批（无障碍标签族）",
-    why: "🔴 导航栏的无障碍标签与跳转提示 ⇒ 读屏可见。纯函数模块 ⇒ 用注入尾参的形状。",
+    kind: "seamed",
+    seamWired: 1,
+    why:
+      "🔴 **期 10 第四批已过接缝**：这一族是**一张 map**（`HEADER_ACTION_LABELS = { search, theme, rss, admin, menu }`）" +
+      "⇒ map 保留当默认值，另加 `HEADER_ACTION_LABEL_IDS` 与 `headerActionLabel(kind, t = IDENTITY_T)`；" +
+      "四个消费方（`NavBar`、`AdminButton`、`RssButton`、`ThemeButton/core`）已改成传 `useT()` 的结果。" +
+      "⚠️ `seamWired: 1` 不是「只有 1 条过了接缝」，而是「文件里有 1 处 `t(ID, 默认值)` 形状的调用」—— " +
+      "🔴 因为这一族**共用一个取文案函数**（5 个 label 走同一个 `headerActionLabel`），" +
+      "所以「接缝处数」与「文案条数」本来就不相等。判据要的是**下限**（≥ seamWired），" +
+      "它能抓住「声称接了、其实一处都没有」，但抓不住「5 条里只接了 1 条」⇒ " +
+      "🔴 那半边由**哨兵断言**负责（`i18nSeamWiring.spec.ts` 里逐个 kind 都要返回哨兵）。",
   },
   {
     file: "components/PageNav/jump.ts",
@@ -408,7 +416,14 @@ const LEDGER: Entry[] = [
     count: 1,
     kind: "iou",
     batch: "期 10 第二批（无障碍标签族）",
-    why: "🔴 复制成功/失败的无障碍播报 ⇒ 读屏可见。纯函数模块 ⇒ 注入尾参。",
+    why:
+      "🔴 **第四批给它加了接缝函数（`codeCopyLabel(t)`），但消费方还没接** —— 原因不是偷懒：" +
+      "唯一的消费方 `Markdown/codeBlock.tsx` 是在 **markdown 处理管线里构造 AST 节点**" +
+      "（`properties: { ariaLabel: CODE_COPY_LABEL, title: CODE_COPY_LABEL }`），" +
+      "🔴 **那里不是 React 渲染期** ⇒ 用不了 hook，也没法就地调 `codeCopyLabel(t)`。" +
+      "要接就得把 `t`（或已取好的字符串）从组件**透传进 processor 的配置** ⇒ 一次跨层改造，单独排一批。" +
+      "👉 🔴 这是一类新的接缝难点：**文案的使用点不在渲染期**（同类还有 `getStaticProps` 里构造的数据，" +
+      "见 `api/getAllData.ts` 那条）。",
   },
   {
     file: "components/MarkdownTocBar/core.tsx",
@@ -455,9 +470,13 @@ const LEDGER: Entry[] = [
   {
     file: "components/UnLockCard/copy.ts",
     count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 解锁卡片的复制提示 ⇒ 访客可见。纯函数模块 ⇒ 注入尾参。",
+    kind: "seamed",
+    seamWired: 1,
+    why:
+      "🔴 **期 10 第四批已过接缝**：`LOCKED_ARTICLE_PROMPT`（文章已加密，请输入密码后查看：）保留当默认值，" +
+      "另加 `lockedArticlePrompt(t = IDENTITY_T)`，消费方 `UnLockCard/index.tsx` 已改成传 `useT()` 的结果。" +
+      "⚠️ 这个组件还会显示**服务端错误消息**（密码错误、限流）⇒ 那部分必须走 `translateServerMessage()`，" +
+      "登记在 `components/UnLockCard/index.tsx` 那一条里（6 条，仍是欠条）。",
   },
   {
     file: "pages/page/[p].tsx",
@@ -568,7 +587,11 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
         expect(e.seamWired, `${e.file}: kind=seamed 必须写明 seamWired`).toBeTruthy();
         const src = readFileSync(path.join(websiteRoot, e.file), "utf8");
         const wired = Array.from(
-          src.matchAll(/\bt\(\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*[A-Z_][A-Z0-9_]*\s*\)/g)
+          // 🔴 两种形状都要认：`t(ID_CONST, DEFAULT_CONST)`（第三批）与
+          //    `t(ID_MAP[kind], DEFAULT_MAP[kind])`（第四批：那一族是**一张 map**，不是一个个常量）
+          src.matchAll(
+            /\bt\(\s*[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\s*,\s*[A-Z_][A-Z0-9_]*(?:\[[^\]]*\])?\s*\)/g
+          )
         ).length;
         expect(
           wired,
@@ -584,7 +607,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第三批更新）：**251** 条 = 永久例外 **33** + 欠条 **212** + **已过接缝的默认值 6**。
+    // 🔴 口径（期 10 第四批更新）：**251** 条 = 永久例外 **33** + 欠条 **206** + **已过接缝的默认值 12**。
+    //    第四批把 `NavBar/a11y`（5，map 形状）与 `UnLockCard/copy`（1）接上接缝 ⇒ seamed 6 → 12、欠条 212 → 206；
+    //    🔴 **总数不变**（常量作为默认值仍在文件里，尺子照数）⇒ 这正是 `seamed` 这个类别存在的理由：
+    //    进度体现在"欠条 → seamed"的迁移上，而不是"总数下降"。
     //    第二批迁走 8 条（`relativeTime` 5 + `readingTime` 1 + `timelineMonths` 1 + 那个后缀常量 1）；
     //    第三批迁走 `PostCard/title.tsx` 的 2 条（阅读时间的 title 与「编辑」标签）、
     //    并把 `titleCopyA11y.ts` 的 6 条**接上接缝**（它们仍在计数里，因为尺子数的是"文件里的中文字面量"，
@@ -597,8 +623,8 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     expect(permCount).toBe(33);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(212);
-    expect(seamedCount).toBe(6);
+    expect(iouCount).toBe(206);
+    expect(seamedCount).toBe(12);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
     const byBatch = new Map<string, number>();
