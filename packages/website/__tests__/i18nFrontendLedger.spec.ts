@@ -225,17 +225,6 @@ const LEDGER: Entry[] = [
     why: "🔴 主题切换按钮的 aria-label 与提示（浅色/深色/跟随系统）⇒ 读屏可见。",
   },
   {
-    file: "utils/relativeTime.ts",
-    count: 5,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 相对时间的单位词（`刚刚` / `分钟前` / `小时前` / `天前` …）⇒ 访客可见，" +
-      "而且是**语序会随语言变**的一族（英文是 `3 hours ago`，中文是 `3 小时前`）⇒ " +
-      "不能只翻单位词，整句都要进词典。⚠️ 与后台 `services/van-blog/relativeTime.js` 是一对" +
-      "（后台那份已在期 6 迁完）⇒ 两边的 key 命名要对齐，便于复用译文。",
-  },
-  {
     file: "components/SearchCard/a11y.ts",
     count: 4,
     kind: "iou",
@@ -374,15 +363,6 @@ const LEDGER: Entry[] = [
       "⚠️ 括号里拼的是底层技术串（可保留），外层这句要过接缝。",
   },
   {
-    file: "utils/readingTime.ts",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 `约 X 分钟` 阅读时长 ⇒ 访客可见，而且**需要复数**（英文 `1 min` / `5 mins`）⇒ " +
-      "与 `RunningTime` 一起决定 ICU 方案。纯函数模块 ⇒ 注入尾参。",
-  },
-  {
     file: "api/getArticles.ts",
     count: 1,
     kind: "iou",
@@ -480,16 +460,6 @@ const LEDGER: Entry[] = [
     batch: "期 10 第二批",
     why: "🔴 分页页的标题/空态 ⇒ 访客可见。",
   },
-  {
-    file: "utils/timelineMonths.ts",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 那个 `月` 是**日期后缀**（`2026 年 9 月`）⇒ 属「日期格式化」，不是普通文案：" +
-      "英文是 `Sep 2026`（语序与词形都变）⇒ 接词典时必须整条走 `Intl.DateTimeFormat(locale)` " +
-      "或词典里的整句模板，不能只翻那个字。",
-  },
 ];
 
 /** 扫描前台源码，得到"每个文件还剩多少条裸中文"。 */
@@ -533,7 +503,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(150);
+    expect(total).toBeGreaterThan(140);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -541,8 +511,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
   });
 
   it("棘轮：裸中文总数只许减不许增（预算写死，迁完一批就来下调）", () => {
-    // 🔴 261 = 2026-09-30 期 10 第一批建立台账时的实测值（本批只建接缝与台账，没迁任何文案）。
-    expect(total).toBeLessThanOrEqual(261);
+    // 🔴 253 = 期 10 第二批之后的实测值（第一批建台账时是 261；第二批迁走了 8 条：
+    //    `relativeTime` 5 + `readingTime` 1 + `timelineMonths` 1 + 它们各自的常量 1）。
+    //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
+    expect(total).toBeLessThanOrEqual(253);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -593,13 +565,15 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（2026-09-30 期 10 第一批建台账时实测）：**261** 条 = 永久例外 **33** + 欠条 **228**。
+    // 🔴 口径（期 10 第二批更新）：**253** 条 = 永久例外 **33** + 欠条 **220**。
+    //    第二批迁走 8 条（`utils/relativeTime` 5 + `utils/readingTime` 1 + `utils/timelineMonths` 1 +
+    //    那个 `MONTH_LABEL_SUFFIX` 常量 1）⇒ 这三个文件已从台账**销账**（整条删掉，不是把数字改成 0）。
     //    33 = 内部不变量 24（`utils/searchIndex.ts`）+ 3（`api/searchIndex.ts`）+ 6（`pages/api/revalidate.ts`，机器消费方）。
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
     expect(permCount).toBe(33);
-    expect(iouCount).toBe(228);
+    expect(iouCount).toBe(220);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
     const byBatch = new Map<string, number>();
     for (const e of iou) byBatch.set(e.batch || "?", (byBatch.get(e.batch || "?") || 0) + e.count);

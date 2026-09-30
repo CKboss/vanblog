@@ -1,3 +1,5 @@
+import { IDENTITY_T, type TFunc } from "./i18n";
+
 /**
  * 服务端下发的「阅读时间」展示工具。
  *
@@ -23,8 +25,15 @@ export function normalizeReadingMinutes(raw: unknown): number | null {
   return Math.floor(n);
 }
 
-/** 展示文案："约 N 分钟"；不可展示时返回 null，调用方据此整块不渲染。 */
-export function formatReadingTime(raw: unknown): string | null {
+/**
+ * 展示文案："约 N 分钟"；不可展示时返回 null，调用方据此整块不渲染。
+ *
+ * 🔴 期 10 第二批：接上多语言**接缝** —— 尾参 `t` 默认是 `IDENTITY_T`（原样返回中文默认值）
+ * ⇒ **所有既有调用点与测试都不用改、行为逐字节相同**；将来接词典时由组件传 `useT()` 的结果进来。
+ * ⚠️ 这一条**需要英文复数**（`1 minute` / `7 minutes`）⇒ 已记进台账：接词典那一批要同时定 ICU 方案
+ * （接缝层刻意只实现 `{name}` 插值，不实现 ICU，理由见 `utils/i18n.ts`）。
+ */
+export function formatReadingTime(raw: unknown, t: TFunc = IDENTITY_T): string | null {
   const n = normalizeReadingMinutes(raw);
-  return n == null ? null : `约 ${n} 分钟`;
+  return n == null ? null : t("readingTime.minutes", "约 {n} 分钟", { n });
 }

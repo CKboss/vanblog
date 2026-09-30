@@ -1,3 +1,5 @@
+import { IDENTITY_T, type TFunc } from "./i18n";
+
 import { Article } from "../types/article";
 
 /**
@@ -61,14 +63,21 @@ export interface TimelineArchiveOutline {
   years: TimelineArchiveYearOutline[];
 }
 
-const MONTH_LABEL_SUFFIX = "月";
+// 🔴 期 10 第二批：原来是个模块级常量 `MONTH_LABEL_SUFFIX = "月"`，标签由 `${month}${后缀}` 拼出来。
+//    接上接缝后改成**整句模板**（`{m}月`）：因为英文是 `Sep 2026` / `March`（**语序与词形都变**，
+//    不是"数字 + 后缀"能表达的）⇒ 只翻那个"月"字永远翻不对。
+//    ⚠️ 真接词典时，这一条更应该走 `Intl.DateTimeFormat(locale, { month: 'long' })`，
+//    词典模板只是退路（已记进台账）。
 
 export function padTimelineMonth(month: number): string {
   return String(month).padStart(2, "0");
 }
 
-export function formatTimelineMonthLabel(month: number): string {
-  return `${month}${MONTH_LABEL_SUFFIX}`;
+export function formatTimelineMonthLabel(
+  month: number,
+  t: TFunc = IDENTITY_T,
+): string {
+  return t("timeline.monthLabel", "{m}月", { m: month });
 }
 
 export function timelineMonthKey(year: number, month: number): string {

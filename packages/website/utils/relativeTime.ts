@@ -1,3 +1,5 @@
+import { IDENTITY_T, type TFunc } from "./i18n";
+
 /**
  * Relative time ("N秒前") from UTC instants so visitor TZ vs site TZ
  * cannot render a negative duration for a past event (#369).
@@ -47,9 +49,17 @@ export function daysAgo(value: unknown, now: number = Date.now()): number {
   return Math.max(0, Math.floor((now - then) / 86400000));
 }
 
+/**
+ * 🔴 期 10 第二批：接上多语言**接缝** —— 尾参 `t` 默认 `IDENTITY_T`（原样返回中文默认值）
+ * ⇒ 既有调用点与测试（含与后台 `relativeTime.js` 的**对等断言**）都不用改、行为逐字节相同。
+ * ⚠️ 这一族**语序会随语言变**（`3 小时前` vs `3 hours ago`）⇒ 整句进词典、不是只翻单位词；
+ * 而且英文需要复数。⚠️ 与后台 `services/van-blog/relativeTime.js` 是**一对** ⇒
+ * 🔴 两边的 key 命名要对齐（后台那批用的是 `relativeTime.*`），便于将来复用同一份译文。
+ */
 export function formatTimeAgo(
   value: unknown,
   now: number = Date.now(),
+  t: TFunc = IDENTITY_T,
 ): string {
   if (value == null || value === "") {
     return "-";
@@ -59,16 +69,16 @@ export function formatTimeAgo(
     return "-";
   }
   if (seconds <= 0) {
-    return "刚刚";
+    return t("relativeTime.justNow", "刚刚");
   }
   if (seconds < 60) {
-    return `${seconds}秒前`;
+    return t("relativeTime.seconds", "{n}秒前", { n: seconds });
   }
   if (seconds < 3600) {
-    return `${Math.floor(seconds / 60)}分钟前`;
+    return t("relativeTime.minutes", "{n}分钟前", { n: Math.floor(seconds / 60) });
   }
   if (seconds < 86400) {
-    return `${Math.floor(seconds / 3600)}小时前`;
+    return t("relativeTime.hours", "{n}小时前", { n: Math.floor(seconds / 3600) });
   }
-  return `${Math.floor(seconds / 86400)}天前`;
+  return t("relativeTime.days", "{n}天前", { n: Math.floor(seconds / 86400) });
 }

@@ -328,7 +328,19 @@ describe("接线（源码级钉子）", () => {
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^\s*\/\/.*$/gm, "");
     expect(rt).not.toMatch(/\bcontent\b/);
-    expect(rt).not.toContain("import"); // 纯函数，不依赖任何正文/接口数据
+    // 🔴 期 10 第二批：这条断言原来是 `not.toContain("import")` —— 它是"纯函数"的**粗略代理**。
+    //    现在这个文件有了一个**合法**的 import（`./i18n`：只有类型 `TFunc` 与恒等翻译器 `IDENTITY_T`，
+    //    不碰任何正文/接口数据）⇒ 把断言**收窄成它真正的意图**："不许依赖正文或接口数据"，
+    //    而不是"不许有任何 import"。
+    //    👉 🔴 判据要钉**性质**，不要钉"性质的一个粗略代理"：代理判据在合法演进时会假红，
+    //    而改它的时候必须**说清原意图**并给出更精确的等价断言（不是简单删掉了事）。
+    //    这里用"import 白名单"表达：只允许接缝模块，任何 api/正文相关模块都会红。
+    // ⚠️ 用 `Array.from(...)` 而不是 `[...iter]`：website 的 tsconfig target < es2015，
+    //    展开一个迭代器会报 TS2802（要 `--downlevelIteration`）。🔴 这与台账那份文件里
+    //    "别用 for…of 迭代 Map"是同一条约束（**别为一条测试去改全局 target**）。
+    const imports = Array.from(rt.matchAll(/from\s+["']([^"']+)["']/g)).map((m) => m[1]);
+    expect(imports).toEqual(["./i18n"]);
+    expect(rt).not.toMatch(/\bwordCount\b/); // 也不许有"字数/速度"式的本地估算
     const subtitle = read("components/PostCard/title.tsx");
     expect(subtitle).toContain("formatReadingTime(props.readingMinutes)");
     expect(subtitle).not.toMatch(/wordCount\s*\//); // 没有"字数/速度"式的本地估算
