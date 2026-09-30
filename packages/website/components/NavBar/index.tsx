@@ -8,6 +8,7 @@ import CopyToClipboard from "react-copy-to-clipboard";
 import toast from "react-hot-toast";
 import SearchCard, { SearchCardHandle } from "../SearchCard";
 import ThemeButton from "../ThemeButton";
+import LocaleSwitcher from "../LocaleSwitcher";
 import KeyCard from "../KeyCard";
 import { MenuItem } from "../../api/getAllData";
 import AdminButton from "../AdminButton";
@@ -228,6 +229,9 @@ export default function (props: {
                   <KeyCard type="search"></KeyCard>
                 </div>
               </button>
+              {/* 🔴 期 10 第五批：语言切换按钮（站长裁定「前台界面上增加一个切换按钮就可以了」）。
+                  放在主题按钮**左边**：它和主题按钮一样是"站点级偏好"，而 RSS/后台是"入口链接"。 */}
+              <LocaleSwitcher />
               <ThemeButton defaultTheme={props.defaultTheme} />
               {props.showRSS == "true" && (
                 <RssButton showAdminButton={props.showAdminButton == "true"} />

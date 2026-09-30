@@ -1,4 +1,6 @@
 import { slide as Menu } from "react-burger-menu";
+import LocaleSwitcher from "../LocaleSwitcher";
+import useT from "../../hooks/useT";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback } from "react";
@@ -10,6 +12,8 @@ export default function (props: {
   showAdminButton: "true" | "false";
   menus: MenuItem[];
 }) {
+  // 🔴 期 10 第五批：那一行「语言」小标题走 i18n 接缝
+  const t = useT();
   const { asPath } = useRouter();
   const renderItem = useCallback(
     (item: MenuItem, state: ReturnType<typeof describeNavItem>, isSub?: boolean) => {
@@ -93,6 +97,15 @@ export default function (props: {
             className=" sm:flex h-full items-center  text-sm text-gray-600 hidden divide-y divide-dashed dark:text-dark "
           >
             {renderLinks()}
+            {/* 🔴 期 10 第五批：移动端也要有语言切换按钮（否则手机访客切不了语种）。
+                ⚠️ 放在 `renderLinks()` 之后、"管理后台"那一项之前 ⇒ 它是"站点级偏好"，
+                与桌面端把它放在主题按钮旁边是同一个分类逻辑。 */}
+            <li className="side-bar-item dark:border-dark-2 dark:hover:bg-dark-2" key={"locale-switch-phone-nav-btn"}>
+              <span className="w-full inline-flex items-center justify-between px-4">
+                <span className="text-sm">{t("locale.switcherShort", "语言")}</span>
+                <LocaleSwitcher />
+              </span>
+            </li>
             {props.showAdminButton == "true" && (
               <li
                 className="side-bar-item dark:border-dark-2 dark:hover:bg-dark-2"

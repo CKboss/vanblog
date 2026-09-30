@@ -79,6 +79,20 @@ const LEDGER: Entry[] = [
       "`t(…)` 文案，而不是把这里的技术串透出去。",
   },
   {
+    file: "utils/applyFrontLocale.ts",
+    count: 4,
+    kind: "permanent",
+    why:
+      "🔴 **语言自称（endonym），故意不翻**：这 4 条是 `简` / `繁` / `繁體中文` / `简体中文` —— " +
+      "语言切换按钮上显示的**当前语种名字**。它们必须**用那种语言自己的写法**，" +
+      "否则会出现「要读得懂这个按钮，先得懂它指向的那种语言」的鸡生蛋问题" +
+      "（例：界面是英文时，按钮若显示 `Traditional Chinese`，繁体用户反而找不到入口；" +
+      "显示 `繁體中文` 他一眼就认得）。这是语言切换器的通用做法，不是漏翻。" +
+      "⚠️ 对照：同一个组件的 `aria-label`（「切换语言：当前 X，点击切换到 Y」）" +
+      "**是**界面文案 ⇒ 它走接缝（`locale.switcher`，词典里有译文）；" +
+      "🔴 **短标签是数据、aria-label 是文案**，两者性质不同，别一并处理。",
+  },
+  {
     file: "pages/api/revalidate.ts",
     count: 6,
     kind: "permanent",
@@ -528,7 +542,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(130);
+    expect(total).toBeGreaterThan(140);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -539,7 +553,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(251);
+    expect(total).toBeLessThanOrEqual(255);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -607,7 +621,11 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第四批更新）：**251** 条 = 永久例外 **33** + 欠条 **206** + **已过接缝的默认值 12**。
+    // 🔴 口径（期 10 第五批更新）：**255** 条 = 永久例外 **37** + 欠条 **206** + **已过接缝的默认值 12**。
+    //    第五批新增的 4 条是 `utils/applyFrontLocale.ts` 里的**语言自称**（`简` / `繁` / `繁體中文` / `简体中文`）
+    //    ⇒ 🔴 判为永久例外（endonym 必须用那种语言自己的写法，理由见该条）。
+    //    ⚠️ 本批**总数涨了 4**（251 → 255）：这不是退步，而是"新增了一个文件、里面的中文是故意不翻的"⇒
+    //    台账如实登记，棘轮预算跟着上调（🔴 上调预算必须在同一条注释里写明原因，否则棘轮就失去意义）。
     //    第四批把 `NavBar/a11y`（5，map 形状）与 `UnLockCard/copy`（1）接上接缝 ⇒ seamed 6 → 12、欠条 212 → 206；
     //    🔴 **总数不变**（常量作为默认值仍在文件里，尺子照数）⇒ 这正是 `seamed` 这个类别存在的理由：
     //    进度体现在"欠条 → seamed"的迁移上，而不是"总数下降"。
@@ -620,7 +638,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
-    expect(permCount).toBe(33);
+    expect(permCount).toBe(37);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
     expect(iouCount).toBe(206);

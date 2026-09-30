@@ -21,9 +21,35 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { getPageview, updatePageview } from "../api/pageview";
 import Head from "next/head";
+// 🔴 期 10 第五批：前台多语言的词典与"记住访客选过的语种"。
+//    站长裁定「前台界面上增加一个切换按钮就可以了」⇒ **不做 locale 路由**，
+//    语种是**客户端偏好**（cookie），切换时重渲染（见 utils/localePreference.ts 的三条后果说明）。
+import { setDictionary } from "../utils/i18n";
+import { detectInitialLocale } from "../utils/localePreference";
+import { applyFrontLocale } from "../utils/applyFrontLocale";
+import dictZhTW from "../locales/zh-TW";
+import dictEnUS from "../locales/en-US";
+
+// 🔴 词典在**模块加载期**注册（不是渲染期）：它只是数据，注册完就等着被 `t()` 查；
+//    而"当前语种"仍然是默认的 zh-CN ⇒ SSR 与客户端首帧**逐字节相同**（不会水合不匹配）。
+setDictionary("zh-TW", dictZhTW);
+setDictionary("en-US", dictEnUS);
 
 function MyApp({ Component, pageProps }: AppProps) {
   const { current } = useRef({ hasInit: false });
+
+  // 🔴 期 10 第五批：**挂载之后**才恢复访客上次选的语种（cookie 只能在客户端读）。
+  //    ⚠️ 刻意不放在渲染期：那样 SSR 与客户端首帧会不一致 ⇒ React 水合不匹配告警。
+  //    🔴 已知限制（如实登记，§7.207 D）：因此刷新页面时会**先看到一帧默认语种（中文）再切换**。
+  //    要消掉这一帧只有两条路（都不在"只加个按钮"的范围内）：
+  //    ① 在 `_document` 注入内联脚本在绘制前读 cookie（CSP / 内联脚本问题）；
+  //    ② 改成 SSR/边缘渲染按请求头决定（那就不是客户端偏好了）。
+  useEffect(() => {
+    const saved = detectInitialLocale();
+    // 🔴 即使等于默认语种也要调一次：`applyFrontLocale` 还负责同步 `<html lang>`，
+    //    而 `_document.tsx` 里的 `lang="zh-CN"` 是构建期写死的（客户端只能改 DOM）。
+    applyFrontLocale(saved);
+  }, []);
 
   const [globalState, setGlobalState] = useState<GlobalState>({
     viewer: 0,
