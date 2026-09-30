@@ -122,12 +122,18 @@ export class ExportController {
     // ⚠️ 带一个**机器可读的 code**：前端要靠它把这种情况显示成"提示 + 一键改导 md"，
     // 而不是一个红色报错。让前端去匹配中文文案是脆的（改一个字就静默失效）。
     if (format === 'mdz' && !built.mdzPath) {
+      // 🔴 期 9 第十八批：这条**是**界面文案（后台 `classifyExportFailure()` 明写
+      //    "服务端的消息仍然照实显示（它是权威文案）"⇒ `b.message` 会直接进那条 info 提示）⇒ 必须能翻。
+      //    🔴 但 `code` 已经被**后台在读的协议值** `NO_IMAGES_FOR_MDZ` 占了（上面那段注释就是在说它）⇒
+      //    把 i18n 码放进**新字段** `errorCode`，`code` 原样保留（协议不变），
+      //    后台的 `translateServerErrorMessage()` 改成 `errorCode` 优先、`code` 兜底。
+      //    ⚠️ `message` 仍是码表里那句中文（`codedBody` 填的）⇒ 没有翻译器时行为与今天**逐字相同**。
+      const noImagesBody = codedBody('exportNoImagesToPack');
       res.status(400).json({
-        statusCode: 400,
+        ...noImagesBody,
+        errorCode: noImagesBody.code,
         code: 'NO_IMAGES_FOR_MDZ',
         imageRefs: report.imageRefs,
-        message:
-          '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
       });
       fs.rmSync(built.tmpDir, { recursive: true, force: true });
       return;

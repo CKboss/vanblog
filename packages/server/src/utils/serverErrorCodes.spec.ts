@@ -287,6 +287,18 @@ const HTTP_SNAPSHOT: Record<string, { status: number; error?: string }> = {
   restoreRejectSigKeyMismatch: { status: 400, error: 'Bad Request' },
   restoreRejectSigMalformed: { status: 400, error: 'Bad Request' },
   // 🔴 期 9 第十七批：4 条走 `codedBody()` 的裸响应体（⚠️ 基类 + 显式 status ⇒ **没有 error 字段**）
+  // 🔴 期 9 第十八批：`exportNoImagesToPack` 走 `errorCode` 字段（`code` 被后台协议值占用）
+  // 🔴 期 9 第十九批：恢复拒绝（归档成员会逃出解包目录）8 个完整句码 + 静态目录失败 1 个
+  restoreUnsafeNameAbsolute: { status: 400, error: 'Bad Request' },
+  restoreUnsafeNameWindows: { status: 400, error: 'Bad Request' },
+  restoreUnsafeNameDotDot: { status: 400, error: 'Bad Request' },
+  restoreUnsafeSymlink: { status: 400, error: 'Bad Request' },
+  restoreUnsafeHardlinkAbsolute: { status: 400, error: 'Bad Request' },
+  restoreUnsafeHardlinkWindows: { status: 400, error: 'Bad Request' },
+  restoreUnsafeHardlinkDotDot: { status: 400, error: 'Bad Request' },
+  restoreUnsafeHardlinkNoTarget: { status: 400, error: 'Bad Request' },
+  restoreStaticDirFailed: { status: 400, error: 'Bad Request' },
+  exportNoImagesToPack: { status: 400 },
   exportMissingContent: { status: 400 },
   exportMissingArticleId: { status: 400 },
   exportGenerateFailed: { status: 500 },

@@ -2065,4 +2065,25 @@ export default {
   'error.exportMissingArticleId': '缺少文章 id！',
   'error.exportGenerateFailed': '匯出產物產生失敗',
   'error.caddyUpdateFailedSeeLog': '更新失敗！請查看 Caddy 日誌取得詳細資訊！',
+
+  // ── 🔴 期 9 第十八批（1 條）── 地區用詞：**这篇内容里没有可打包的图片** → **這篇內容裡沒有可打包的圖片**、
+  //    **完全等價**、**請改選**。🔴 `.mdz`、`.md`、`Markdown` 三份逐字相同；`——` 繁中保留。
+  'error.exportNoImagesToPack': '這篇內容裡沒有可打包的圖片，.mdz 與 .md 完全等價 —— 請改選 Markdown (.md)。',
+
+  // ── 🔴 期 9 第十九批（9 條）── 地區用詞：**備份歸檔** / **解包目錄之外的成員** / **絕對路徑** /
+  //    **含 .. 段** / **已拒絕恢復** / **符號連結成員**（符号链接→符號連結）/ **目標** /
+  //    **拷進靜態目錄並被 web 層跟隨** / **等於匿名任意檔案讀取** / **硬連結成員的目標不安全** /
+  //    **硬連結成員沒有目標名** / **恢復靜態目錄…失敗** / **目標盤剩餘空間** / **資料庫…不會回滾** /
+  //    **尚未修剪** / **一個檔案都沒刪**。
+  //    🔴 `Windows`、`..`、`web`、`(空)`、`**…**`（Markdown 粗体）三份按各自约定保留；
+  //    **嵌套括号**（外层一对 + 内层一对）在三份里都必须配平（有判据逐条数）。
+  'error.restoreUnsafeNameAbsolute': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：絕對路徑），已拒絕恢復',
+  'error.restoreUnsafeNameWindows': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：Windows 絕對路徑），已拒絕恢復',
+  'error.restoreUnsafeNameDotDot': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：含 .. 段），已拒絕恢復',
+  'error.restoreUnsafeSymlink': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：符號連結成員（目標 {target}）：解包後會被拷進靜態目錄並被 web 層跟隨，等於匿名任意檔案讀取），已拒絕恢復',
+  'error.restoreUnsafeHardlinkAbsolute': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：硬連結成員的目標不安全（{target}：絕對路徑）），已拒絕恢復',
+  'error.restoreUnsafeHardlinkWindows': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：硬連結成員的目標不安全（{target}：Windows 絕對路徑）），已拒絕恢復',
+  'error.restoreUnsafeHardlinkDotDot': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：硬連結成員的目標不安全（{target}：含 .. 段）），已拒絕恢復',
+  'error.restoreUnsafeHardlinkNoTarget': '備份歸檔裡有會寫到解包目錄之外的成員（{name}：硬連結成員的目標不安全（(空)：硬連結成員沒有目標名）），已拒絕恢復',
+  'error.restoreStaticDirFailed': '恢復靜態目錄 {folder}/ 失敗（{reason}；目標盤剩餘空間 {free}）：資料庫已恢復的部分不會回滾，靜態目錄**尚未修剪**（一個檔案都沒刪）',
 };

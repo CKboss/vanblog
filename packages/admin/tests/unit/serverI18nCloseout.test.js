@@ -218,64 +218,48 @@ const LEDGER = [
       '后台只渲染计数与 URL（`failedUrls`），**从不渲染 reason**。' +
       '⚠️ 它们是 `new Error(中文)` 而不是 HttpException ⇒ 本来也没有错误码通道。',
  },
-  {
-    kind: 'iou',
-    batch: '期 9 第十八批',
-    file: 'utils/fullBackup.ts',
-    anchors: ['已拒绝恢复', '恢复静态目录'],
-    count: 2,
-    why:
-      '两处都含**内层中文原因**：① "备份归档里有会写到解包目录之外的成员（{name}：{reason}）" 的 `{reason}` ' +
-      '来自 `findUnsafeArchiveEntry()`（它自己还有一个 `|| \'(空)\'` 的中文兜底）；' +
-      '② "恢复静态目录 … 失败（…）" 里嵌了底层异常文本。⇒ 与 §7.194 A / §7.198 同型，' +
-      '要么把内层原因也升级成完整句码，要么双产出；不能只翻外壳。',
-  },
 
   // ══ F. 欠条：后台响应体里的短提示（成功/失败 toast，10 处 message）══
   {
-    kind: 'iou',
-    batch: '期 9 第十八批（要先决定"两个 code 字段撞名"怎么处理）',
-    file: 'controller/admin/export/export.controller.ts',
-    anchors: ['没有可打包的图片'],
-    count: 1,
-    why:
-      '🔴 第十七批已迁走同族另外 3 条（`缺少要导出的正文内容！` / `缺少文章 id！` / `导出产物生成失败`）。' +
-      '剩下这 1 条**不能照搬**：它的响应体里已经有一个**后台在读的协议码** `code: ' +
-      '\'NO_IMAGES_FOR_MDZ\'`（`packages/admin/src/services/van-blog/exportFormats.js` 的 ' +
-      '`EXPORT_NO_IMAGES_CODE`，后台按它分支"这不是失败，只是没有图片"），' +
-      '而 `codedBody()` 自己也要写 `code` 字段 ⇒ 🔴 **两个 code 会撞名**' +
-      '（`codedBody` 的 `extra` 刻意不许覆盖 `statusCode`/`message`/`code`/`params` 这四个地基字段，' +
-      '所以协议码会被**静默丢掉**、后台那条分支会坏）。' +
-      '要迁得先决定"字段改名（例如 `errorCode`）还是嵌套"，那是**线路契约变更**（前后端一起改），单独排一批。',
- },
-  {
-    kind: 'iou',
-    batch: '期 9 第十八批（需要"成功码"机制：`status: 200` 的码 + `codedBody` 的 extra 保留 `data`）',
+    kind: 'permanent',
     file: 'controller/admin/theme/theme.controller.ts',
     anchors: ['上传成功', '已删除'],
     count: 2,
     why:
-      '🔴 这两条是**成功**提示（`{ statusCode: 200, data, message: \'上传成功\' }`），不是错误 ⇒ ' +
-      '现在码表是错误导向的（`entry(zh, Ctor, status)`），要先确认"status 200 的码"这条路走得通' +
-      '（`codedBody` 已支持 `extra` 保留 `data`），再迁。⚠️ 不要在没验过之前先迁一半。',
+      '🔴 **第十八批查清了消费方，从「欠条」改判为「永久例外」**：这两条是**成功**提示' +
+      '（`{ statusCode: 200, data, message: \u0027上传成功\u0027 }`），而 🔴 **后台根本不显示服务端这句 message** —— ' +
+      '它显示自己那份三语文案：`Theme.jsx:335` 是 ' +
+      '`message.success(t(\u0027theme.uploadedOk\u0027, \u0027主题「{id}」上传成功\u0027, { id }))`、' +
+      '`Theme.jsx:82` 是 `message.success(t(\u0027common.deletedToast\u0027, \u0027已删除\u0027))`。' +
+      '而且 🔴 **全仓没有任何字面量比对**（`grep -rn "=== \u0027上传成功\u0027" packages/admin/src` 命中 0）⇒ ' +
+      '它不是协议字符串，只是给**非后台调用方**（curl / CLI / 脚本）看的兜底文案。' +
+      '⇒ 与 caddy 那个 403、`导出说明.md` 那 14 条同一类：**最终消费方不是界面**。' +
+      '👉 🔴 这是第十七批那条教训的第二次应用：**建台账时按形状猜的分类，动手前必须重新查消费方**' +
+      '（这次猜的是「成功提示当然要翻」，查完发现后台早自己翻了 ⇒ 翻它反而会造成' +
+      '「同一件事有两份文案、还可能不一致」）。',
   },
   {
-    kind: 'iou',
-    batch: '期 9 第十八批（同上）',
+    kind: 'permanent',
     file: 'provider/tag/tag.provider.ts',
     anchors: ['更新成功', '删除成功'],
     count: 2,
-    why: '同 theme 那两条：成功提示，等"成功码"机制。',
+    why:
+      '🔴 同 theme 那两条（第十八批改判）：`更新成功！` / `删除成功！` 是 provider 返回给 controller 的' +
+      '**成功**提示，后台显示的是自己的 `t(…)` 文案（例如 `Advance.jsx` / `Article/columns.jsx` 里的' +
+      '`t(\u0027common.updateSuccess\u0027, \u0027更新成功！\u0027)`），🔴 且全仓没有对这两句的字面量比对。' +
+      '⇒ 最终消费方不是界面（是给 curl / CLI 的兜底），不翻。',
   },
   {
-    kind: 'iou',
-    batch: '期 9 第十八批（同上）',
+    kind: 'permanent',
     file: 'controller/admin/init/init.controller.ts',
     anchors: ['初始化成功!'],
     count: 1,
     why:
-      '成功提示；⚠️ 而且它与同文件那两处 `已初始化`（协议字符串）在同一个响应族里 ⇒ ' +
-      '迁它之前要先确认前端没有按字面量比对 `初始化成功!`（`已初始化` 就是被比对的）。',
+      '🔴 **第十八批改判为永久例外**：后台 `InitPage/index.tsx:177` 显示的是自己的 ' +
+      '`t(\u0027init.success.title\u0027, \u0027初始化成功!\u0027)`（**不是**服务端那句），且全仓没有对它的字面量比对。' +
+      '⚠️ 而且它与同文件那两处 `已初始化`（**协议字符串**，后台按字面量比对）在同一个响应族里 ⇒ ' +
+      '在这一族里动 message 的风险高于收益（万一哪天前端的比对从 `已初始化` 扩到 `初始化成功!`，' +
+      '只翻服务端就会静默坏掉）⇒ 与那两处一起保持中文，等「前后端一起改成按 code 判断」那一批统一处理。',
   },
 ];
 
@@ -389,18 +373,17 @@ describe('🔴 服务端多语言收口台账：剩余的每一处中文都必�
     const iou = LEDGER.filter((e) => e.kind === 'iou');
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（第十七批更新）：剩余 **41** 处 = 永久例外 **33** + 欠条 **8**。
-    //    33 = 协议字符串 3（`已初始化` ×2、`未初始化!`）+ 开发者不变量 8 + 机器消费方 1（caddy 那个 403）
+    // 🔴 口径（第十九批 = **服务端收口**）：剩余 **38** 处 = 永久例外 **38** + 欠条 **0**。
+    //    38 = 协议字符串 3（`已初始化` ×2、`未初始化!`）+ 开发者不变量 8 + 机器消费方 1（caddy 那个 403）
     //         + 报告/产物内容 6（`backupVerify` 的 issues）+ `main.ts` 的静态层拦截 1
-    //         + 🔴 **导出产物内容 14**（`markdownExport` 7 + `safeFetch` 7；第十七批查清消费方后
-    //           **从欠条改判**：它们的 reason 只进 `导出说明.md` 那份中文产物文件与日志，
-    //           后台只渲染计数与 URL、从不渲染 reason）。
-    //    8 = 含内层中文原因的恢复拒绝 2（`fullBackup.ts`）+ 协议码撞名的 1（`export.controller`）
-    //         + 成功提示 5（`theme` 2 / `tag` 2 / `init` 1，要先验"status 200 的码"这条路）。
+    //         + 导出产物内容 14（`markdownExport` 7 + `safeFetch` 7）+ 成功提示 5（后台显示自己的 `t(…)`）。
+    //    🔴 **欠条 0** ⇒ 服务端多语言进入**收口状态**：剩下的每一处都是"故意不翻、且写了理由"的，
+    //    而任何**新增**的中文站点都会被"全覆盖"断言当场抓住。
     // ⚠️ 这两个数字是**刻意写死**的：它们变了说明有人迁走了一批、或者新增了一批中文 ⇒
     //    两种情况都要求改这份台账（并且重读每条理由），所以让它红比让它自适应更有价值。
-    assert.strictEqual(permCount, 33, `永久例外应该是 33 处，实测 ${permCount}`);
-    assert.strictEqual(iouCount, 8, `欠条应该是 8 处，实测 ${iouCount}`);
+    assert.strictEqual(permCount, 38, `永久例外应该是 38 处，实测 ${permCount}`);
+    // 🔴 期 9 第十九批：**欠条清零**（服务端收口）⇒ 剩下 38 处全部是写明理由的永久例外。
+    assert.strictEqual(iouCount, 0, `欠条应该是 0 处（服务端已收口），实测 ${iouCount}`);
     assert.strictEqual(
       permCount + iouCount,
       sites.length,
@@ -410,6 +393,8 @@ describe('🔴 服务端多语言收口台账：剩余的每一处中文都必�
     //    并且**同一批的欠条不许超过 20 处**（否则那一批根本做不完，等于没有计划）
     const byBatch = new Map();
     for (const e of iou) byBatch.set(e.batch, (byBatch.get(e.batch) || 0) + e.count);
+    // ⚠️ `iou` 为空时上面那个循环空转、下面这条也空转 ⇒ 这是**预期**（收口状态）；
+    //    一旦有人重新登记欠条，这两条立刻恢复作用。
     for (const [batch, n] of byBatch) {
       assert.ok(n <= 20, `🔴 「${batch}」这一批挂了 ${n} 处欠条（>20）⇒ 拆成多批，否则等于没有计划`);
     }

@@ -2109,4 +2109,27 @@ export default {
   'error.exportMissingArticleId': 'Missing article id!',
   'error.exportGenerateFailed': 'Failed to generate export output',
   'error.caddyUpdateFailedSeeLog': 'Update failed! Check the Caddy log for details!',
+
+  // ── 🔴 期 9 第十八批（1 key）── `——` 在英文里是 ` - `；`.mdz` / `.md` / `Markdown` 逐字保留；
+  //    不用缩写（ICU 把单引号当转义符）、不用全角标点。⚠️ 这条在后台是 **info** 语气（不是报错），
+  //    所以英文用 "please choose … instead" 这种建议口吻。
+  'error.exportNoImagesToPack': 'This content has no images to pack, and .mdz is fully equivalent to .md - please choose Markdown (.md) instead.',
+
+  // ── 🔴 期 9 第十九批（9 keys）── 统一外框：
+  //    `The backup archive contains a member that would be written outside the unpack directory ({name}: <reason>) - restore refused`。
+  //    ⚠️ 本批**不用** ICU 复数：`{free}` 是 `freeSpaceText()` 的**已格式化字符串**（`12.3 GB`，读不出时是 `?`），
+  //    `{name}` / `{target}` / `{folder}` 是路径，`{reason}` 是底层技术错误串 ⇒ 都不是可数名词。
+  //    🔴 **嵌套括号**用 ASCII `(` `)`（两层都是）；`(空)` 在英文里是 `(empty)`；
+  //    `**尚未修剪**` 的粗体标记保留（`**not been pruned**`）；`{folder}/` 的尾斜杠保留。
+  //    🔴 必须保留的信息（#9）：目录名、底层原因、目标盘剩余空间、
+  //    "已经恢复的数据库部分不会回滚"、"静态目录**尚未修剪**（一个文件都没删）"。
+  'error.restoreUnsafeNameAbsolute': 'The backup archive contains a member that would be written outside the unpack directory ({name}: absolute path) - restore refused',
+  'error.restoreUnsafeNameWindows': 'The backup archive contains a member that would be written outside the unpack directory ({name}: Windows absolute path) - restore refused',
+  'error.restoreUnsafeNameDotDot': 'The backup archive contains a member that would be written outside the unpack directory ({name}: contains a .. segment) - restore refused',
+  'error.restoreUnsafeSymlink': 'The backup archive contains a member that would be written outside the unpack directory ({name}: a symbolic link (target {target}): after unpacking it would be copied into the static directory and followed by the web layer, which amounts to anonymous arbitrary file read) - restore refused',
+  'error.restoreUnsafeHardlinkAbsolute': 'The backup archive contains a member that would be written outside the unpack directory ({name}: the hard link target is unsafe ({target}: absolute path)) - restore refused',
+  'error.restoreUnsafeHardlinkWindows': 'The backup archive contains a member that would be written outside the unpack directory ({name}: the hard link target is unsafe ({target}: Windows absolute path)) - restore refused',
+  'error.restoreUnsafeHardlinkDotDot': 'The backup archive contains a member that would be written outside the unpack directory ({name}: the hard link target is unsafe ({target}: contains a .. segment)) - restore refused',
+  'error.restoreUnsafeHardlinkNoTarget': 'The backup archive contains a member that would be written outside the unpack directory ({name}: the hard link target is unsafe ((empty): the hard link member has no target name)) - restore refused',
+  'error.restoreStaticDirFailed': 'Failed to restore the static directory {folder}/ ({reason}; free space on the target disk {free}): the part of the database that was already restored will not be rolled back, and the static directory has **not been pruned** (no file was deleted)',
 };

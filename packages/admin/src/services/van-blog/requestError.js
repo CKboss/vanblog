@@ -144,7 +144,16 @@ function shouldSuppressSessionExpiredToast({ pathname, now = Date.now() } = {}) 
  * @returns {string|undefined} 译文；没有码或没有翻译器时返回 `undefined`（表示"交回原逻辑"）
  */
 function translateServerErrorMessage(resData, t) {
-  const code = resData?.code;
+  // 🔴 期 9 第十八批：**`errorCode` 优先、`code` 兜底**。
+  //    起因：`export.controller.ts` 那条"这篇内容里没有可打包的图片…"的响应体里，
+  //    `code` 已经被**后台自己在读的协议值** `NO_IMAGES_FOR_MDZ` 占用
+  //    （`exportFormats.js` 的 `classifyExportFailure()` 按它分支"这不是失败，只是没有图片"，
+  //    并且明写"服务端的消息仍然照实显示"⇒ 那句 message **是**界面文案，必须能翻）。
+  //    而 `codedBody()` 也要写 `code` ⇒ 撞名。处理是**加一个新字段** `errorCode` 装 i18n 码，
+  //    🔴 而不是把协议码挪走（`NO_IMAGES_FOR_MDZ` 是既有线路契约，改它要动后台分支与它的守卫；
+  //    新增字段谁都不读 ⇒ 加字段比改字段安全）。
+  //    ⚠️ 向后兼容：既有响应只有 `code` ⇒ `errorCode || code` 对它们完全等价。
+  const code = resData?.errorCode || resData?.code;
   if (!code || typeof t !== 'function') {
     return undefined;
   }

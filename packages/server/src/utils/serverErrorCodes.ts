@@ -435,6 +435,65 @@ export const SERVER_ERROR_CODES = {
   //    后台按它分支"这不是失败，只是没有图片"）⇒ 🔴 迁移时必须用 `codedBody(code, params, extra)`
   //    把那个字段**原样保留**，而 `codedBody` 自己的 `code` 字段会是 `exportNoImagesToPack`
   //    —— 两个 code 字段会撞名！所以这一条**刻意不迁**，见收口台账里的说明。
+  // 🔴 期 9 第十八批：这一条的响应体里**已经有一个后台在读的 `code`**（`NO_IMAGES_FOR_MDZ`，
+  //    `exportFormats.js` 的 `EXPORT_NO_IMAGES_CODE`，后台按它分支"这不是失败，只是没有图片"）⇒
+  //    `codedBody()` 自己的 `code` 字段会**撞名**。处理：调用点把 i18n 码搬到 **`errorCode`** 字段，
+  //    `code` 留给那个协议值；后台的 `translateServerErrorMessage()` 同步改成
+  //    **`errorCode` 优先、`code` 兜底**（向后兼容：既有响应只有 `code`）。
+  //    🔴 为什么不能反过来（把协议码挪走）：`NO_IMAGES_FOR_MDZ` 是**既有线路契约**，
+  //    改它要动后台的分支与它的守卫；而 `errorCode` 是**新增字段**，谁都不读 ⇒ 加字段比改字段安全。
+  // ── 恢复拒绝：归档里有会写到解包目录之外的成员（utils/fullBackup.ts，期 9 第十九批）────────
+  // 🔴 原来是"外层一句 + 内层中文 reason"的**嵌套**结构（`findUnsafeArchiveEntry()` 返回中文 reason，
+  //    `unsafeNameReason()` 又返回更内层的中文标签）⇒ 只翻外壳会得到"英文外壳 + 中文内核"。
+  //    因为内层原因是**我们自己写的**（不是第三方技术串），所以按 §7.194 A 的做法：
+  //    **把每一种组合成一个完整句码**（3 种名字问题 + 符号链接 + 3 种硬链接目标问题 + 硬链接没有目标 = 8）。
+  // 🔴 `restoreUnsafeHardlinkNoTarget` 那条：源码是 `${target || '(空)'}`，而"没有目标名"这一支
+  //    恰恰就是 target 为空 ⇒ `(空)` **写进文案**，不当参数传（第 10 次处理这个形状）。
+  // ⚠️ 这 8 条 zh 是**程序化拼出来的**（`vanblog_dev/add-unsafe-entry-codes.cjs`），拼完逐字回读比对过。
+  // 🔴 安全日志那一份（`recordRestoreRejection('unsafe-entry', …)`）继续用中文（`err.message`），
+  //    与 §7.199 A 的"双产出是免费的"同理。
+  restoreUnsafeNameAbsolute: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：绝对路径），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeNameWindows: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：Windows 绝对路径），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeNameDotDot: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：含 .. 段），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeSymlink: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：符号链接成员（目标 {target}）：解包后会被拷进静态目录并被 web 层跟随，等于匿名任意文件读），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeHardlinkAbsolute: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（{target}：绝对路径）），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeHardlinkWindows: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（{target}：Windows 绝对路径）），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeHardlinkDotDot: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（{target}：含 .. 段）），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreUnsafeHardlinkNoTarget: entry(
+    '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（(空)：硬链接成员没有目标名）），已拒绝恢复',
+    BadRequestException,
+  ),
+  restoreStaticDirFailed: entry(
+    '恢复静态目录 {folder}/ 失败（{reason}；目标盘剩余空间 {free}）：数据库已恢复的部分不会回滚，静态目录**尚未修剪**（一个文件都没删）',
+    BadRequestException,
+  ),
+
+  exportNoImagesToPack: entry(
+    '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
+    HttpException,
+    400,
+  ),
   exportMissingContent: entry('缺少要导出的正文内容！', HttpException, 400),
   exportMissingArticleId: entry('缺少文章 id！', HttpException, 400),
   exportGenerateFailed: entry('导出产物生成失败', HttpException, 500),

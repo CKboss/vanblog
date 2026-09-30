@@ -2299,4 +2299,29 @@ export default {
   'error.exportMissingArticleId': '缺少文章 id！',
   'error.exportGenerateFailed': '导出产物生成失败',
   'error.caddyUpdateFailedSeeLog': '更新失败！请查看 Caddy 日志获取详细信息！',
+
+  // ── 🔴 期 9 第十八批：`exportNoImagesToPack`（走 **`errorCode`** 字段，因为 `code` 被后台协议值占了）。
+  //    后台 `exportFormats.js` 的 `classifyExportFailure()` 按 `code === 'NO_IMAGES_FOR_MDZ'` 分支
+  //    "这不是失败，只是没有图片"，并且明写"服务端的消息仍然照实显示（它是权威文案）"
+  //    ⇒ 🔴 这句 message **是**界面文案（会以 info 提示显示），必须能翻。
+  'error.exportNoImagesToPack': '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
+
+  // ── 🔴 期 9 第十九批（**服务端收口批**）：恢复拒绝 8 个完整句码 + 静态目录失败 1 个。
+  //    原来是"外层一句 + 内层中文 reason"的**嵌套**结构（`findUnsafeArchiveEntry()` 返回中文 reason，
+  //    `unsafeNameReason()` 又返回更内层的中文标签）⇒ 只翻外壳会得到"英文外壳 + 中文内核"。
+  //    因为内层原因是**我们自己写的**（不是第三方技术串），所以按 §7.194 A 的做法：
+  //    **把每一种组合成一个完整句码**（3 种名字问题 + 符号链接 + 3 种硬链接目标问题 + 硬链接没有目标 = 8）。
+  //    🔴 `restoreUnsafeHardlinkNoTarget` 那条：源码是 `${target || '(空)'}`，而"没有目标名"这一支
+  //    恰恰就是 target 为空 ⇒ `(空)` **写进文案**、不当参数传（第 10 次处理这个形状）。
+  //    🔴 安全审计日志那一份继续用中文 `reason`（`recordRestoreRejection('unsafe-entry', …)`），
+  //    日志文本与迁移前**逐字相同**（双产出：日志是开发者界面，按中文关键词检索的习惯不能坏）。
+  'error.restoreUnsafeNameAbsolute': '备份归档里有会写到解包目录之外的成员（{name}：绝对路径），已拒绝恢复',
+  'error.restoreUnsafeNameWindows': '备份归档里有会写到解包目录之外的成员（{name}：Windows 绝对路径），已拒绝恢复',
+  'error.restoreUnsafeNameDotDot': '备份归档里有会写到解包目录之外的成员（{name}：含 .. 段），已拒绝恢复',
+  'error.restoreUnsafeSymlink': '备份归档里有会写到解包目录之外的成员（{name}：符号链接成员（目标 {target}）：解包后会被拷进静态目录并被 web 层跟随，等于匿名任意文件读），已拒绝恢复',
+  'error.restoreUnsafeHardlinkAbsolute': '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（{target}：绝对路径）），已拒绝恢复',
+  'error.restoreUnsafeHardlinkWindows': '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（{target}：Windows 绝对路径）），已拒绝恢复',
+  'error.restoreUnsafeHardlinkDotDot': '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（{target}：含 .. 段）），已拒绝恢复',
+  'error.restoreUnsafeHardlinkNoTarget': '备份归档里有会写到解包目录之外的成员（{name}：硬链接成员的目标不安全（(空)：硬链接成员没有目标名）），已拒绝恢复',
+  'error.restoreStaticDirFailed': '恢复静态目录 {folder}/ 失败（{reason}；目标盘剩余空间 {free}）：数据库已恢复的部分不会回滚，静态目录**尚未修剪**（一个文件都没删）',
 };

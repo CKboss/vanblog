@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { codedError } from 'src/utils/serverErrorCodes';
+import { codedError, ServerErrorCode } from 'src/utils/serverErrorCodes';
 import { spawn, spawnSync, ChildProcessWithoutNullStreams } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -2467,11 +2467,14 @@ export async function assertRestorableArchive(
   }
   const unsafe = findUnsafeArchiveEntry(entries);
   if (unsafe) {
+    // 🔴 期 9 第十九批：界面走**完整句码**（8 种组合各一个码，见 `UnsafeArchiveEntry`），
+    //    安全审计日志仍用中文 `reason`（双产出：日志是开发者界面，按中文关键词检索的习惯不能坏）。
+    //    ⚠️ 日志文本与迁移前**逐字相同**：`备份归档里有…（name：reason）（归档 X）`。
     const detail = `备份归档里有会写到解包目录之外的成员（${unsafe.name}：${unsafe.reason}）`;
     // 🔴 error 级：路径穿越/软链成员是"来路不正的归档"才有的形状，诚实站长不会自己撞上。
     //    这一条尤其要留痕：它对应的攻击是"种一个指向 /etc/passwd 的 x.webp"⇒ 匿名任意文件读。
     recordRestoreRejection('unsafe-entry', `${detail}（归档 ${path.basename(archivePath)}）`);
-    throw new BadRequestException(`${detail}，已拒绝恢复`);
+    throw codedError(unsafe.code, unsafe.params);
   }
   // 成员 size 取自 tar 头部（`utils/backupTarStream.ts` 的 TarEntryInfo.size），
   // 所以这一步**不需要解包**就能知道要写多少字节。目录/软链/硬链的 size 是 0，天然不计。
@@ -2544,7 +2547,7 @@ export async function assertRestorableArchive(
  */
 export function findUnsafeArchiveEntry(
   entries: Array<{ name: string; kind: string; linkTarget: string | null }>,
-): { name: string; reason: string } | null {
+): UnsafeArchiveEntry | null {
   for (const entry of entries || []) {
     const name = String(entry?.name || '');
     if (!name) {
@@ -2552,25 +2555,64 @@ export function findUnsafeArchiveEntry(
     }
     const nameProblem = unsafeNameReason(name);
     if (nameProblem) {
-      return { name, reason: nameProblem };
-    }
-    if (entry.kind === 'symlink') {
+      // 🔴 期 9 第十九批：`reason`（中文）继续给**安全审计日志**用；界面走 `code` + `params`。
+      //    ⚠️ `code` 与 `params` 必须写成**字面量对象**（不要 spread、不要变量间接）——
+      //    ④"调用点参数对账"判据是静态的，它认 `{ code: '<码>', params: { … } }` 这个形状。
       return {
         name,
-        reason: `符号链接成员（目标 ${entry.linkTarget || '?'}）：解包后会被拷进静态目录并被 web 层跟随，等于匿名任意文件读`,
+        reason: nameProblem,
+        code: NAME_PROBLEM_CODE[nameProblem],
+        params: { name },
+      };
+    }
+    if (entry.kind === 'symlink') {
+      const reason = `符号链接成员（目标 ${entry.linkTarget || '?'}）：解包后会被拷进静态目录并被 web 层跟随，等于匿名任意文件读`;
+      return {
+        name,
+        reason,
+        code: 'restoreUnsafeSymlink',
+        params: { name, target: String(entry.linkTarget || '?') },
       };
     }
     if (entry.kind === 'hardlink') {
       const target = String(entry.linkTarget || '');
-      const targetProblem = target
-        ? unsafeNameReason(target)
-        : '硬链接成员没有目标名';
+      const targetProblem = target ? unsafeNameReason(target) : '硬链接成员没有目标名';
       if (targetProblem) {
-        return { name, reason: `硬链接成员的目标不安全（${target || '(空)'}：${targetProblem}）` };
+        const reason = `硬链接成员的目标不安全（${target || '(空)'}：${targetProblem}）`;
+        // 🔴 "没有目标名"那一支的 `(空)` 是**中文兜底值** ⇒ 它自己有一个码（文案里直接写 `(空)`），
+        //    不当参数传（本项目第 10 次处理这个形状）。
+        return {
+          name,
+          reason,
+          code: target
+            ? HARDLINK_PROBLEM_CODE[targetProblem]
+            : 'restoreUnsafeHardlinkNoTarget',
+          params: target ? { name, target } : { name },
+        };
       }
     }
   }
   return null;
+}
+
+/** 🔴 内层中文标签 → 完整句码（界面用）。键必须与 `unsafeNameReason()` 的返回值**逐字**一致。 */
+const NAME_PROBLEM_CODE: Record<string, ServerErrorCode> = {
+  绝对路径: 'restoreUnsafeNameAbsolute',
+  'Windows 绝对路径': 'restoreUnsafeNameWindows',
+  '含 .. 段': 'restoreUnsafeNameDotDot',
+};
+const HARDLINK_PROBLEM_CODE: Record<string, ServerErrorCode> = {
+  绝对路径: 'restoreUnsafeHardlinkAbsolute',
+  'Windows 绝对路径': 'restoreUnsafeHardlinkWindows',
+  '含 .. 段': 'restoreUnsafeHardlinkDotDot',
+};
+
+/** 不安全的归档成员：`reason` 给安全审计日志（中文），`code`+`params` 给界面（三语）。 */
+export interface UnsafeArchiveEntry {
+  name: string;
+  reason: string;
+  code: ServerErrorCode;
+  params: Record<string, string>;
 }
 
 /** 名字层面的不安全原因：绝对路径（含盘号）或任何一段是 `..`；安全时返回 null */
@@ -2979,11 +3021,11 @@ export async function restoreFullBackup(
           // ⚠️ 必须包成 BadRequestException：这里抛的是裸 fs 错误（ENOSPC / EEXIST / ENOTDIR），
           // Nest 会把它变成 500 + "Internal server error"，用户看不到原因；
           // 而且这句话还要说清"修剪没做"—— 拷贝失败时一个文件都不该被删（见下面的顺序铁律）
-          throw new BadRequestException(
-            `恢复静态目录 ${folder}/ 失败（${(err as Error)?.message || err}；` +
-              `目标盘剩余空间 ${freeSpaceText(options.staticPath)}）：` +
-              `数据库已恢复的部分不会回滚，静态目录**尚未修剪**（一个文件都没删）`,
-          );
+          throw codedError('restoreStaticDirFailed', {
+            folder,
+            reason: (err as Error)?.message || String(err),
+            free: freeSpaceText(options.staticPath),
+          });
         }
         restoredStatic[folder] = { files: treeStats(src).files };
         copiedFolders.push({ folder, src, dst });

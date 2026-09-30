@@ -88,7 +88,8 @@ for (const l of LOCALES) {
 // 🔴 52 → **38**（期 9 第十四批（14a）：整站备份检查/恢复路径 14 处 throw 迁进 11 个码（3 处共用一个码））
 // 🔴 38 → **37**（期 9 第十四批（14b）：验签拒绝恢复那 1 处 throw 换成按状态分派的 3 个码）
 // 🔴 37 → **27**（期 9 第十五批：整站备份创建 8 处 + provider 2 处迁进 11 个码）
-const THROW_BUDGET = 27;
+// 🔴 27 → **25**（期 9 第十九批：fullBackup 那 2 处（含内层中文原因的恢复拒绝）迁进 9 个完整句码 ⇒ 服务端收口）
+const THROW_BUDGET = 25;
 
 /**
  * 🔴 **第二个**棘轮：`message:` 属性带中文的站点（`return { statusCode, message: '中文' }` 那一族）。
@@ -102,7 +103,8 @@ const THROW_BUDGET = 27;
 // 🔴 102 → **18**（期 9 第七批）：演示站守卫族 **82 处**（8 种文案 ⇒ 8 个码）全部迁进 `codedBody()`。
 //   这是单批覆盖最多站点的一族 —— 它此前占了这个口径的 **80%**（102 里 84 处是它）。
 // 🔴 18 → **14**（期 9 第十七批：export.controller 3 处 + caddy.controller 1 处迁进 codedBody()）
-const MESSAGE_BODY_BUDGET = 14;
+// 🔴 14 → **13**（期 9 第十八批：export.controller 那条"没有可打包的图片"迁进 codedBody（i18n 码走 errorCode 字段））
+const MESSAGE_BODY_BUDGET = 13;
 
 /** 码 → 码表里的中文模板（`{name}` 占位符的权威来源）；供"调用点参数对账"那条判据用 */
 const CODE_ZH = (() => {
@@ -241,6 +243,17 @@ test('服务端错误码 · ② 反向：每个登记的码都真的被服务端
       `code: '${code}'`,
       `('${code}'`,
       `, '${code}')`,
+      // 🔴 期 9 第十九批再加一种形状：**码名当"查表对象的值"**（`: '<code>'`）。
+      //    起因：`fullBackup.ts` 的 `findUnsafeArchiveEntry()` 要按"内层中文标签"选码，
+      //    于是有了 `const NAME_PROBLEM_CODE: Record<string, ServerErrorCode> = { 绝对路径: 'restoreUnsafeNameAbsolute', … }`
+      //    —— 这个形状上面五种 needle 一个都不认 ⇒ 那 6 个码被误判成**死码**。
+      //    ⚠️ 边界（为什么这条仍然够严）：要求"冒号 + 空格 + **带引号的完整码名**"，
+      //    而码名本身是 `restoreUnsafeNameAbsolute` 这种长驼峰 ⇒ 注释里随口提到、或别的字符串里
+      //    出现同样文本的概率极低；🔴 而且登记表自己那个文件被排除在扫描之外
+      //    （否则每个码都会"自己引用自己"⇒ 判据恒真）。
+      //    👉 这已经是**第 6 种**"码的使用点"形状了 ⇒ §7.196 B 那条待办（让码表导出常量对象
+      //    `CODE.xxx`，使用点只剩一种形状）现在更值得做了。
+      `: '${code}'`,
     ];
     let used = false;
     for (const abs of walkServerSources(SERVER_SRC, [])) {
@@ -881,5 +894,75 @@ test('🔴 服务端错误码 · ⑥ 演示站信封：前端预拦截与服务�
     demoCodes.length,
     '🔴 演示站那 8 条英文译文有重复 ⇒ 说明被合并成同一句了（站长会看不出被挡的是哪一类操作）：' +
       enTexts.join(' | '),
+  );
+});
+
+test('🔴 服务端错误码 · ⑦ `errorCode` 优先、`code` 兜底（响应体里 `code` 被业务协议值占用时）', () => {
+  // ## 为什么要这条（2026-09-30 期 9 第十八批）
+  // `export.controller.ts` 那条「这篇内容里没有可打包的图片…」的响应体里，`code` **早就被占用**了：
+  // `code: 'NO_IMAGES_FOR_MDZ'` 是后台 `exportFormats.js` 的 `classifyExportFailure()` 在读的**协议值**
+  // （它按这个值把这种情况显示成"提示 + 一键改导 md"，而不是红色报错）。
+  // 而那句 `message` **是界面文案**（同一个函数明写"服务端的消息仍然照实显示（它是权威文案）"）⇒ 必须能翻。
+  // 🔴 两个 `code` 会撞名，而 `codedBody()` 的 `extra` **刻意不许覆盖** `code`
+  //    （地基字段被覆盖就等于码白加了）⇒ 所以处理是**新增一个字段** `errorCode` 装 i18n 码，
+  //    `code` 留给业务协议值；翻译器改成 `errorCode || code`。
+  // 🔴 为什么不是"把协议码挪到别的字段"：`NO_IMAGES_FOR_MDZ` 是**既有线路契约**，
+  //    挪它要同时改后台分支与钉住它的守卫；而 `errorCode` 是新增字段、**当前没有别的读者** ⇒ 加字段比改字段安全。
+  const { serverErrorText } = require('../../src/services/van-blog/requestError.js');
+  const t = (id, dm, values) => {
+    // 极简翻译器：只认 error.<code>，并做 {name} 替换（与服务端填充器同口径）
+    if (!String(id).startsWith('error.')) return dm;
+    const table = {
+      'error.exportNoImagesToPack': 'EN: no images to pack',
+      'error.themeCssEmpty': 'EN: empty css',
+    };
+    let out = table[id] || dm;
+    for (const [k, v] of Object.entries(values || {})) out = out.split('{' + k + '}').join(String(v));
+    return out;
+  };
+
+  // ① 两个字段都在 ⇒ **errorCode 赢**（i18n 码），而业务协议值原样保留在响应体里
+  const both = {
+    statusCode: 400,
+    message: '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
+    code: 'NO_IMAGES_FOR_MDZ',
+    errorCode: 'exportNoImagesToPack',
+    imageRefs: 3,
+  };
+  assert.strictEqual(serverErrorText(both, t), 'EN: no images to pack');
+  assert.strictEqual(both.code, 'NO_IMAGES_FOR_MDZ', '🔴 业务协议值不许被改动（后台还按它分支）');
+
+  // ② 只有 `code`（既有响应，占绝大多数）⇒ 行为与今天**完全一致**（向后兼容）
+  assert.strictEqual(
+    serverErrorText({ statusCode: 400, message: '主题样式为空', code: 'themeCssEmpty' }, t),
+    'EN: empty css',
+  );
+
+  // ③ 🔴 反向：`code` 是**业务协议值**（不是错误码）且没有 `errorCode` ⇒ 找不到译文，
+  //    必须**原样回落**到服务端那句中文（与今天逐字相同），绝不显示裸 key
+  const legacy = {
+    statusCode: 400,
+    message: '这篇内容里没有可打包的图片，.mdz 与 .md 完全等价 —— 请改选 Markdown (.md)。',
+    code: 'NO_IMAGES_FOR_MDZ',
+  };
+  assert.strictEqual(serverErrorText(legacy, t), legacy.message);
+
+  // ④ 🔴 服务端那一侧也要钉住：调用点必须**同时**给出 `errorCode`（i18n 码）与 `code`（协议值），
+  //    少一个都会坏（少 errorCode ⇒ 英文界面退回中文；少 code ⇒ 后台那条"这不是失败"的分支失效）
+  // ⚠️ 本文件的助手叫 `readServer(rel)`（**仓库根**相对）与 `ADMIN`（后台根）——
+  //    🔴 不叫 `readRepo`。这是本项目**第 6 次**踩"各测试文件的 read 助手名字/根不一致"这个坑
+  //    （`adminRobustness` 的 `read`=admin 相对、`readRepo`=packages 相对；`fullBackup` 的 `readRepo`=仓库根；
+  //    `securityHardening` 的 `read`=仓库根；本文件是 `readServer`）。
+  //    👉 加断言前**先看那个文件头部的助手定义**；🔴 待办（已记三次）：统一成 `readAdmin()` / `readRepo()`。
+  const ctl = readServer('packages/server/src/controller/admin/export/export.controller.ts');
+  assert.match(ctl, /errorCode: noImagesBody\.code/, '🔴 调用点必须把 i18n 码放进 errorCode 字段');
+  assert.match(ctl, /code: 'NO_IMAGES_FOR_MDZ'/, '🔴 业务协议值必须原样保留在 code 字段');
+  assert.match(ctl, /codedBody\('exportNoImagesToPack'\)/, '🔴 这条必须走 codedBody（否则 message 仍是硬编码中文）');
+  // ⑤ 翻译器必须是 `errorCode` 优先（写反了就会拿业务协议值去查译文 ⇒ 静默回落中文）
+  const re = fs.readFileSync(path.join(ADMIN, 'src/services/van-blog/requestError.js'), 'utf8');
+  assert.match(
+    re,
+    /const code = resData\?\.errorCode \|\| resData\?\.code;/,
+    '🔴 顺序必须是 errorCode 优先、code 兜底（写反了会拿业务协议值去查译文）',
   );
 });
