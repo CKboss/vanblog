@@ -17,6 +17,7 @@ import {
 } from "./jumpForm";
 
 import useT from "../../hooks/useT";
+import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 /**
  * `/search` 结果页的结果区。
  *
@@ -64,9 +65,13 @@ export interface SearchResultsProps {
 }
 
 export default function SearchResults(props: SearchResultsProps) {
+  // 🔴 期 10 第八批：搜索结果区的 28 处文案走 i18n 接缝（渲染期取）。
+  //    ⚠️ 其中两处是**模块级纯函数**（`metaLine` 与导出的 `buildStatusText`）⇒
+  //    hook 不能在它们里面调，`t` 由这里传进去（注入尾参，与后台同一套纪律）。
+  const t = useT();
   const perPage = props.perPage || SEARCH_RESULTS_PER_PAGE;
   const pagination = paginate(props.results || [], props.page, perPage);
-  const statusText = buildStatusText(props, pagination.total, pagination.totalPages);
+  const statusText = buildStatusText(props, pagination.total, pagination.totalPages, t);
 
   return (
     <div>
@@ -91,7 +96,7 @@ export default function SearchResults(props: SearchResultsProps) {
             rel="noreferrer"
             target="_blank"
           >
-            服务端全文搜索
+            {t("search.serverFullText", "服务端全文搜索")}
           </a>
         </p>
       ) : null}
@@ -106,26 +111,35 @@ export default function SearchResults(props: SearchResultsProps) {
 
       {props.capped ? (
         <p className="text-xs text-gray-500 dark:text-dark-400 mb-3" data-testid="search-capped">
-          {`匹配到 ${props.matched} 篇，超过上限 ${SEARCH_MAX_RESULTS} 篇：显示前 ${SEARCH_MAX_RESULTS} 条，请增加关键词`}
+          {/* 🔴 期 10 第八批：这是"拼接式"文案 ⇒ 用**整句模板 + 占位符**（英文语序不同，
+              只翻"匹配到 / 篇 / 显示前 / 条"这几段永远拼不对；见 §7.209 B）。 */}
+          {t("search.overLimit", "匹配到 {matched} 篇，超过上限 {max} 篇：显示前 {shown} 条，请增加关键词", {
+            matched: props.matched,
+            max: SEARCH_MAX_RESULTS,
+            shown: SEARCH_MAX_RESULTS,
+          })}
         </p>
       ) : null}
 
       {props.loading ? (
-        <p className="mt-10 text-center text-gray-500 dark:text-dark-400">搜索中…</p>
+        <p className="mt-10 text-center text-gray-500 dark:text-dark-400">{t("search.searching", "搜索中…")}</p>
       ) : props.failed ? (
         <p className="mt-10 text-center text-gray-500 dark:text-dark-400">
-          搜索失败，请稍后再试
+          {t("search.failedRetry", "搜索失败，请稍后再试")}
         </p>
       ) : props.idle ? (
         <p className="mt-10 text-center text-gray-500 dark:text-dark-400">
-          输入关键词开始搜索（标题、标签、分类与摘要；正文深处的词请用服务端全文搜索）
+          {t(
+            "search.emptyHint",
+            "输入关键词开始搜索（标题、标签、分类与摘要；正文深处的词请用服务端全文搜索）"
+          )}
         </p>
       ) : pagination.items.length === 0 ? (
         <p className="mt-10 text-center text-gray-500 dark:text-dark-400">
-          没有找到与「{props.query}」相关的文章
+          {t("search.noResults", "没有找到与「{query}」相关的文章", { query: props.query })}
         </p>
       ) : (
-        <ol className="space-y-4" aria-label="搜索结果">
+        <ol className="space-y-4" aria-label={t("search.resultsTitle", "搜索结果")}>
           {pagination.items.map((hit) => (
             <li key={`${hit.doc.id}-${hit.doc.u}`}>
               <Link
@@ -143,7 +157,7 @@ export default function SearchResults(props: SearchResultsProps) {
                   </p>
                 ) : null}
                 <p className="mt-1 text-xs text-gray-400 dark:text-dark-400">
-                  {metaLine(hit, props.query)}
+                  {metaLine(hit, props.query, t)}
                 </p>
               </Link>
             </li>
@@ -152,15 +166,18 @@ export default function SearchResults(props: SearchResultsProps) {
       )}
 
       {pagination.totalPages > 1 ? (
-        <nav className="mt-6 flex flex-wrap items-center gap-2" aria-label="搜索结果分页">
+        <nav
+          className="mt-6 flex flex-wrap items-center gap-2"
+          aria-label={t("search.resultsPagination", "搜索结果分页")}
+        >
           {pagination.page > 1 ? (
-            <PageLink href={props.pageHref(pagination.page - 1)} label="上一页" />
+            <PageLink href={props.pageHref(pagination.page - 1)} label={t("search.prevPage", "上一页")} />
           ) : null}
           <span className="text-sm text-gray-500 dark:text-dark-400">
             {`${pagination.page} / ${pagination.totalPages}`}
           </span>
           {pagination.page < pagination.totalPages ? (
-            <PageLink href={props.pageHref(pagination.page + 1)} label="下一页" />
+            <PageLink href={props.pageHref(pagination.page + 1)} label={t("search.nextPage", "下一页")} />
           ) : null}
           <SearchJumpForm
             total={pagination.total}
@@ -273,13 +290,17 @@ function SearchJumpForm(props: {
 }
 
 /** 日期 · 分类 · 标签 · 字数（每一块都带高亮，因为分类与标签本身就是匹配面） */
-function metaLine(hit: RankedDoc, query: string): ReactNode[] {
+function metaLine(hit: RankedDoc, query: string, t: TFunc = IDENTITY_T): ReactNode[] {
   const parts: ReactNode[] = [];
   if (hit.doc.d) {
     parts.push(<span key="d">{hit.doc.d}</span>);
   }
   const tierLabel =
-    hit.tier === TIER_TITLE ? "标题命中" : hit.tier === TIER_TAG_OR_CATEGORY ? "标签/分类命中" : "摘要命中";
+    hit.tier === TIER_TITLE
+      ? t("search.hitTitle", "标题命中")
+      : hit.tier === TIER_TAG_OR_CATEGORY
+        ? t("search.hitTagCategory", "标签/分类命中")
+        : t("search.hitExcerpt", "摘要命中");
   parts.push(<span key="tier">{tierLabel}</span>);
   if (hit.doc.c) {
     parts.push(<span key="c">{renderHighlighted(hit.doc.c, query)}</span>);
@@ -288,7 +309,7 @@ function metaLine(hit: RankedDoc, query: string): ReactNode[] {
     parts.push(<span key={`g-${tag}`}>{renderHighlighted(tag, query)}</span>);
   }
   if (hit.doc.w > 0) {
-    parts.push(<span key="w">{`${hit.doc.w} 字`}</span>);
+    parts.push(<span key="w">{t("search.wordCount", "{w} 字", { w: hit.doc.w })}</span>);
   }
   // 用 " · " 分隔，而不是把分隔符拼进各个片段里（拼进去会被当成可匹配的文本）
   const out: ReactNode[] = [];
@@ -306,22 +327,35 @@ export function buildStatusText(
   props: Pick<SearchResultsProps, "query" | "loading" | "failed" | "idle" | "matched" | "backend">,
   total: number,
   totalPages: number,
+  // 🔴 期 10 第八批：这是**导出的纯函数**（有单测直接调它）⇒ 用注入尾参，默认 `IDENTITY_T`
+  //    保证既有调用与断言**一字不改、输出逐字节相同**。
+  t: TFunc = IDENTITY_T,
 ): string {
   if (props.loading) {
-    return "搜索中…";
+    return t("search.searching", "搜索中…");
   }
   if (props.failed) {
-    return "搜索失败，请稍后再试";
+    return t("search.failedRetry", "搜索失败，请稍后再试");
   }
   if (props.idle) {
-    return "请输入关键词";
+    return t("search.enterKeyword", "请输入关键词");
   }
   if (!props.query) {
-    return "请输入关键词";
+    return t("search.enterKeyword", "请输入关键词");
   }
-  const source = props.backend === "index" ? "静态索引" : "服务端搜索";
+  const source =
+    props.backend === "index"
+      ? t("search.sourceStatic", "静态索引")
+      : t("search.sourceServer", "服务端搜索");
   if (total === 0) {
-    return `没有找到与「${props.query}」相关的文章（来源：${source}）`;
+    return t("search.noResultsSource", "没有找到与「{query}」相关的文章（来源：{source}）", {
+      query: props.query,
+      source,
+    });
   }
-  return `找到 ${total} 条结果，共 ${totalPages} 页（来源：${source}）`;
+  return t("search.foundSummary", "找到 {total} 条结果，共 {pages} 页（来源：{source}）", {
+    total,
+    pages: totalPages,
+    source,
+  });
 }

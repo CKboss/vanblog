@@ -52,6 +52,40 @@ const dict: Record<string, string> = {
   'toc.openLabel': 'Open table of contents',
   'toc.title': 'Table of contents',
   'unlock.lockedPrompt': 'This article is encrypted. Please enter the password to view:',
+
+  // ── 🔴 期 10 第八批：搜索界面 27 个 key。
+  //    ⚠️ **不用 ICU 复数**（接缝层只做 {name} 替换，本仓库不装 intl 库）⇒
+  //    `1 results` / `1 articles` 这种读起来别扭的形式是**已知且已登记**的代价（接真 ICU 那批一起解决）。
+  //    🔴 英文里**不给 {query} 加引号**（写成 `No articles found for {query}`）：
+  //    引号在 ICU 里有转义语义，而这一族将来很可能要接真 ICU ⇒ 现在就不引入。
+  //    `{w} characters` 用的是"字符"口径（对应中文的"字"）；省略号 `…` 保留单字符；全文无撇号。
+  'search.pageTitle': 'Search',
+  'search.pageTitleWithQuery': 'Search: {query}',
+  'search.pageSubtitle': 'Titles, tags, categories and excerpts; substring matching, no fuzzy matching or typo correction',
+  'search.pageSubmit': 'Search articles',
+  'search.pagePlaceholder': 'Type a keyword and press Enter to search',
+  'search.noJsHint': 'JavaScript is not enabled in your current browser, and search on this page requires it. You can use the server-side search API directly:',
+  'search.noJsKeywordLabel': 'Keyword',
+  'search.noJsSubmit': 'Search (returns JSON)',
+  'search.resultsTitle': 'Search results',
+  'search.resultsPagination': 'Search results pagination',
+  'search.prevPage': 'Previous page',
+  'search.nextPage': 'Next page',
+  'search.hitTitle': 'Title match',
+  'search.hitTagCategory': 'Tag/category match',
+  'search.hitExcerpt': 'Excerpt match',
+  'search.searching': 'Searching…',
+  'search.failedRetry': 'Search failed, please try again later',
+  'search.enterKeyword': 'Please enter a keyword',
+  'search.sourceStatic': 'Static index',
+  'search.sourceServer': 'Server-side search',
+  'search.serverFullText': 'Server-side full-text search',
+  'search.emptyHint': 'Enter a keyword to start searching (titles, tags, categories and excerpts; for words deep in the article body, use server-side full-text search)',
+  'search.overLimit': 'Matched {matched} articles, above the limit of {max} articles: showing the first {shown} results, please add more keywords',
+  'search.noResults': 'No articles found for {query}',
+  'search.noResultsSource': 'No articles found for {query} (source: {source})',
+  'search.foundSummary': 'Found {total} results across {pages} pages (source: {source})',
+  'search.wordCount': '{w} characters',
 };
 
 export default dict;

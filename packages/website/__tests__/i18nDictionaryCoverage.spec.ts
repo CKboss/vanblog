@@ -264,10 +264,11 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
   });
 
   it("⑥ 🔴 覆盖率**棘轮**：词典 key 数只许增不许减（迁一批就该涨）", () => {
-    // 39 = 期 10 第五批的实测值（37 条已过接缝的文案 + 切换器自己的 2 条）
-    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(39);
-    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(39);
-    expect(ids.size).toBeGreaterThanOrEqual(39);
+    // 🔴 66 = 期 10 第八批之后的实测值（第五批 39 + 第八批搜索界面 27）。
+    //    ⚠️ 每迁一批就要来上调这个下限（棘轮只许增不许减）。
+    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(66);
+    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(66);
+    expect(ids.size).toBeGreaterThanOrEqual(66);
   });
 });
 

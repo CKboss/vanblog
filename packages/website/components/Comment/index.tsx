@@ -41,6 +41,13 @@ function timeAgo(iso: string): string {
   if (diff < hour) return `${Math.floor(diff / minute)} 分钟前`;
   if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
   if (diff < 30 * day) return `${Math.floor(diff / day)} 天前`;
+  // 🔴 **站长裁定（2026-10-01）：日期跟着浏览器的 locale 走，不跟站点语种。**
+  //    `toLocaleDateString()` 不传 locale 参数 ⇒ 用浏览器/系统的语言与地区格式，这一行**刻意保持原样**。
+  //    ⚠️ 已知代价（裁定接受的，不是缺陷）：站点语种设成英文、而浏览器是中文时，
+  //    会出现「界面英文 + 这一处日期中文」并存。
+  //    👉 下一批迁这个文件的其余文案时，**这一行不动**；上面那 4 条相对时间
+  //    （刚刚 / N 分钟前 / N 小时前 / N 天前）则要过接缝 —— 它们是**我们自己写的文案**，
+  //    不是 `Intl` 的输出（🔴 别把两者混为一谈：一个是"我们的字符串"，一个是"平台的格式化结果"）。
   return new Date(time).toLocaleDateString();
 }
 

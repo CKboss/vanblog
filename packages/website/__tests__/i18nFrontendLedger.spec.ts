@@ -134,20 +134,6 @@ const LEDGER: Entry[] = [
       "它自己的界面文案由 waline 的 locale 配置决定（不归我们翻）⇒ 只翻我们自己的部分。",
   },
   {
-    file: "components/SearchResults/index.tsx",
-    count: 28,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 搜索结果页的界面文案（命中条数、无结果提示、高亮说明、加载/失败提示）⇒ 访客可见，必须过接缝。",
-  },
-  {
-    file: "pages/search.tsx",
-    count: 9,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 搜索页的标题、占位符与提示（含「搜索不可用」这类由 catch 生成的界面提示）⇒ 访客可见。",
-  },
-  {
     file: "components/Footer/index.tsx",
     count: 7,
     kind: "iou",
@@ -564,7 +550,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(140);
+    expect(total).toBeGreaterThan(120);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -575,7 +561,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(255);
+    expect(total).toBeLessThanOrEqual(218);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -643,7 +629,12 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第七批更新）：**255** 条 = 永久例外 **37** + 欠条 **192** + **已过接缝的默认值 26**。
+    // 🔴 口径（期 10 第八批更新）：**218** 条 = 永久例外 **37** + 欠条 **155** + **已过接缝的默认值 26**。
+    //    第八批**销账两个大文件**：`components/SearchResults/index.tsx`（28 条）与 `pages/search.tsx`（9 条）
+    //    ⇒ 这两个文件现在**一条裸中文都没有**（全部改成 `t("search.*", 中文默认值)`），
+    //    所以台账里**整条删掉**（🔴 不是把 count 改成 0 —— 留着 0 的条目会让人以为"这个文件还有东西要迁"）。
+    //    ⚠️ 这两处的中文默认值现在住在**代码里**（`t()` 的第二参），译文住在 `locales/*.ts`
+    //    （27 个新 key，词典共 66 key）⇒ 覆盖率对账判据会把两边对上（缺 key / 孤儿 key / 占位符不一致都会红）。
     //    第七批把 `PageNav/jump.ts` 那 5 条接完（两个消费方：组件里用 `useT()`、纯函数工厂用注入尾参）
     //    ⇒ seamed 21 → 26、欠条 197 → 192；🔴 总数仍不变。
     //    第六批把 3 个族的消费方接完（`SearchCard/a11y` 4 + `TocDrawer/model` 3 + `categoryExpand` 2 = 9 条）
@@ -667,7 +658,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     expect(permCount).toBe(37);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(192);
+    expect(iouCount).toBe(155);
     expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）

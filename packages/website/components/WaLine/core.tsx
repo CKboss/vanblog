@@ -1,6 +1,12 @@
 import "@waline/client/dist/waline.css";
 import { useEffect } from "react";
 import { init, commentCount } from "@waline/client";
+// 🔴 **站长裁定（2026-10-01）：只翻译我们自己的部分，先不要把站点语种透传给 waline。**
+//    ⇒ 这里**刻意不**给 waline 传 `locale` 选项：waline 是**外挂子进程 + 它自己的前端**，
+//    它的界面文案由它自己的 locale 配置决定（不归我们翻，也不该由我们替它决定）。
+//    ⚠️ 已知代价（裁定接受的）：站点语种切到英文时，waline 那套评论区**仍然是它自己的默认语言**。
+//    👉 将来若要透传，要先解决"waline 支持的语种集合与我们的 {zh-CN, zh-TW, en-US} 不一致"
+//    （映射表 + 不支持时的回落），并且要有真浏览器证据 —— 🔴 不是加一行 `locale: getLocale()` 就完事。
 import {
   buildWalineInitOptions,
   WalineCommentSetting,

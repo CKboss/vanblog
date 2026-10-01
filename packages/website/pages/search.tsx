@@ -12,6 +12,7 @@ import { revalidate } from "../utils/loadConfig";
 import { readSearchQueryParams, searchPageUrl } from "../utils/searchUrls";
 import { displayQuery } from "../utils/searchHighlight";
 
+import useT from "../hooks/useT";
 /**
  * `/search` —— 全站搜索结果页。
  *
@@ -63,6 +64,8 @@ const IDLE_STATE: SearchState = {
 };
 
 export default function SearchPage(props: SearchPageProps) {
+  // 🔴 期 10 第八批：搜索页的 9 处文案走 i18n 接缝（渲染期取）
+  const t = useT();
   const router = useRouter();
   const ready = router.isReady;
   const { q, page } = readSearchQueryParams(router.query);
@@ -139,20 +142,23 @@ export default function SearchPage(props: SearchPageProps) {
 
   return (
     <Layout
-      title={shown ? `搜索：${shown}` : "搜索"}
+      title={shown ? t("search.pageTitleWithQuery", "搜索：{query}", { query: shown }) : t("search.pageTitle", "搜索")}
       option={props.layoutProps}
       sideBar={<AuthorCard option={props.authorCardProps} />}
     >
       <div className="bg-white card-shadow dark:bg-dark dark:card-shadow-dark py-4 px-6 md:py-6 md:px-8">
-        <h1 className="text-2xl md:text-3xl text-gray-700 text-center dark:text-dark">搜索</h1>
+        <h1 className="text-2xl md:text-3xl text-gray-700 text-center dark:text-dark">{t("search.pageTitle", "搜索")}</h1>
         <p className="text-center text-gray-500 text-sm mt-2 mb-5 font-light dark:text-dark-400">
-          标题、标签、分类与摘要；子串匹配，不做模糊与纠错
+          {t(
+            "search.pageSubtitle",
+            "标题、标签、分类与摘要；子串匹配，不做模糊与纠错"
+          )}
         </p>
 
         <form onSubmit={onSubmit} role="search" action="/search" method="get">
           {/* 输入框必须有真实 label（读屏软件念的就是它）；用 sr-only 藏起来但保留可访问名 */}
           <label htmlFor="vanblog-search-input" className="sr-only">
-            搜索文章
+            {t("search.pageSubmit", "搜索文章")}
           </label>
           <div className="flex items-center gap-2 border border-gray-200 dark:border-dark-2 rounded-lg px-3 py-2">
             <input
@@ -167,14 +173,14 @@ export default function SearchPage(props: SearchPageProps) {
               autoCorrect="off"
               value={input}
               onChange={(event) => setInput(event.currentTarget.value)}
-              placeholder="输入关键词，回车搜索"
+              placeholder={t("search.pagePlaceholder", "输入关键词，回车搜索")}
               className="w-full bg-transparent outline-none border-none text-base text-gray-800 dark:text-dark"
             />
             <button
               type="submit"
               className="flex-none text-sm px-3 py-1 rounded border border-gray-200 dark:border-dark-2 text-gray-600 dark:text-dark hover:border-gray-400"
             >
-              搜索
+              {t("search.pageTitle", "搜索")}
             </button>
           </div>
         </form>
@@ -208,11 +214,17 @@ export default function SearchPage(props: SearchPageProps) {
         <noscript>
           <div className="mt-6 border-t border-gray-200 dark:border-dark-2 pt-4">
             <p className="text-sm text-gray-600 dark:text-dark-400">
-              当前浏览器没有启用 JavaScript，这一页的搜索需要它。可以直接用服务端搜索接口：
+              {/* 🔴 `<noscript>` 里的文案**永远只能是服务端渲染时的语种**：没有 JS 就不可能切换语种
+                  （切换按钮也是 JS）⇒ 这里过接缝只是"与其余文案同一套 key/词典"，
+                  实际渲染出来的一定是默认语种（zh-CN）。这是**正确**的，不是缺陷。 */}
+              {t(
+                "search.noJsHint",
+                "当前浏览器没有启用 JavaScript，这一页的搜索需要它。可以直接用服务端搜索接口："
+              )}
             </p>
             <form method="get" action="/api/public/search" className="mt-2 flex gap-2">
               <label htmlFor="vanblog-search-noscript" className="text-sm text-gray-600 dark:text-dark-400">
-                关键词
+                {t("search.noJsKeywordLabel", "关键词")}
               </label>
               <input
                 id="vanblog-search-noscript"
@@ -224,7 +236,7 @@ export default function SearchPage(props: SearchPageProps) {
                 type="submit"
                 className="text-sm px-3 py-1 rounded border border-gray-200 dark:border-dark-2 text-gray-600 dark:text-dark"
               >
-                搜索（返回 JSON）
+                {t("search.noJsSubmit", "搜索（返回 JSON）")}
               </button>
             </form>
           </div>
