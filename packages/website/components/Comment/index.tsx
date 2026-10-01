@@ -9,7 +9,8 @@ import {
 } from "../../utils/commentApi";
 
 import useT from "../../hooks/useT";
-import { IDENTITY_T, translateServerMessage, type TFunc } from "../../utils/i18n";
+import { translateServerMessage } from "../../utils/i18n";
+import { formatTimeAgoOrDate } from "../../utils/relativeTime";
 const PAGE_SIZE = 20;
 const IDENTITY_KEY = "van-comment-identity";
 
@@ -30,35 +31,11 @@ function readIdentity(): { nick: string; email: string; site: string } {
   }
 }
 
-function timeAgo(iso: string, t: TFunc = IDENTITY_T): string {
-  const time = new Date(iso).getTime();
-  if (!Number.isFinite(time)) {
-    return "";
-  }
-  const diff = Date.now() - time;
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  // 🔴 期 10 第九批：这 4 条是**我们自己写的文案** ⇒ 过接缝（与下面那行 `toLocaleDateString()` 性质不同：
-  //    那是**平台的格式化结果**，站长裁定跟浏览器 locale 走）。
-  //    ⚠️ 刻意**没有**复用 `utils/relativeTime.ts` 的 `relativeTime.*` key：那边是 `{n}分钟前`（**无空格**）、
-  //    且没有"30 天后改用日期"这个分支 ⇒ 🔴 两套措辞与两套行为都不同，硬凑成同一个 key 会造成
-  //    "改一处译文、另一处跟着变"的意外（那比多 4 个 key 更难查）。这个取舍已写进台账。
-  if (diff < minute) return t("comment.timeJustNow", "刚刚");
-  if (diff < hour) return t("comment.timeMinutes", "{n} 分钟前", { n: Math.floor(diff / minute) });
-  if (diff < day) return t("comment.timeHours", "{n} 小时前", { n: Math.floor(diff / hour) });
-  if (diff < 30 * day) return t("comment.timeDays", "{n} 天前", { n: Math.floor(diff / day) });
-  // 🔴 **站长裁定（2026-10-01）：日期跟着浏览器的 locale 走，不跟站点语种。**
-  //    `toLocaleDateString()` 不传 locale 参数 ⇒ 用浏览器/系统的语言与地区格式，这一行**刻意保持原样**。
-  //    ⚠️ 已知代价（裁定接受的，不是缺陷）：站点语种设成英文、而浏览器是中文时，
-  //    会出现「界面英文 + 这一处日期中文」并存。
-  //    👉 下一批迁这个文件的其余文案时，**这一行不动**；上面那 4 条相对时间
-  //    （刚刚 / N 分钟前 / N 小时前 / N 天前）则要过接缝 —— 它们是**我们自己写的文案**，
-  //    不是 `Intl` 的输出（🔴 别把两者混为一谈：一个是"我们的字符串"，一个是"平台的格式化结果"）。
-  return new Date(time).toLocaleDateString();
-}
-
-/** 昵称/主页都当作纯文本渲染，绝不进 href（主页地址服务端已校验过 http/https） */
+// 🔴 期 10 第十批：**本地那份 `timeAgo()` 已删除**，改用 `utils/relativeTime.ts` 的
+//    `formatTimeAgoOrDate()`（站长裁定"超过 30 天显示日期"之后的**唯一**实现）。
+//    ⚠️ 合并带来一处刻意的界面变化：评论时间从 `30 分钟前` 变成 `30分钟前`（少一个空格，
+//    统一到与后台一致的口径）；`comment.time*` 那 4 个 key 已从两份词典里移除。
+//    🔴 `invalidText` 传 `""` 是为了保持评论区今天的行为（坏日期什么都不显示，不多一个 `-`）。
 function Nick({ item }: { item: PublicCommentItem }) {
   const safeSite = useMemo(() => {
     const site = String(item.site || "");
@@ -109,7 +86,7 @@ function Item({
             </span>
           ) : null}
           <time className="van-comment-time" dateTime={item.createdAt} title={item.createdAt}>
-            {timeAgo(item.createdAt, t)}
+            {formatTimeAgoOrDate(item.createdAt, Date.now(), t, "")}
           </time>
         </div>
         <CommentContent content={item.content} />

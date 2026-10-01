@@ -308,3 +308,98 @@ describe("前台 i18n 接缝 · 分页跳转族（组件 + 纯函数描述符工
     expect(d.form.attr).toBe("data-search-jump-form");
   });
 });
+
+// ── 期 10 第十批：合并两份 `timeAgo` 实现（站长裁定「超过 30 天显示日期」）──
+import { readFileSync } from "fs";
+import path from "path";
+import { formatTimeAgoOrDate } from "../utils/relativeTime";
+
+const websiteRoot = path.join(__dirname, "..");
+
+describe("前台 i18n 接缝 · 相对时间的**唯一**实现（formatTimeAgoOrDate）", () => {
+  const NOW = Date.parse("2026-10-01T12:00:00Z");
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+  const MIN = 60 * 1000;
+  const HOUR = 60 * MIN;
+  const DAY = 24 * HOUR;
+
+  it("① 30 天以内：与 `formatTimeAgo` **同一套 key 与措辞**（一份实现、一套译文）", () => {
+    // 🔴 **合并带来第二处刻意的行为变化**（如实报，别藏）：一分钟以内现在显示 `N秒前`，
+    //    而评论区原来那份本地实现是"**一分钟内一律显示 刚刚**"。
+    //    统一到共享实现后取**更精确**的那个口径（也与后台一致：后台 `formatTimeAgo` 同样是 `45秒前`，
+    //    `relativeTime.spec.ts` 里有两边的对等断言钉着）。`刚刚` 只在 `seconds <= 0`
+    //    （同一秒、或客户端时钟略快于服务器）时出现。
+    expect(formatTimeAgoOrDate(ago(10 * 1000), NOW)).toBe("10秒前");
+    expect(formatTimeAgoOrDate(ago(0), NOW)).toBe("刚刚");
+    expect(formatTimeAgoOrDate(ago(45 * 1000), NOW)).toBe("45秒前");
+    expect(formatTimeAgoOrDate(ago(30 * MIN), NOW)).toBe("30分钟前");
+    expect(formatTimeAgoOrDate(ago(3 * HOUR), NOW)).toBe("3小时前");
+    expect(formatTimeAgoOrDate(ago(5 * DAY), NOW)).toBe("5天前");
+    // 🔴 合并后**没有空格**（统一到与后台一致的口径；`relativeTime.spec.ts` 里有对等断言钉着 `45秒前`）
+    expect(formatTimeAgoOrDate(ago(30 * MIN), NOW)).not.toContain(" 分钟前");
+    // 传词典就换语言（证明它把 t 透传给了 formatTimeAgo，而不是自己另写一套）
+    const en: TFunc = (id, dm, values) => {
+      const table: Record<string, string> = {
+        "relativeTime.justNow": "just now",
+        "relativeTime.seconds": "{n}s ago",
+        "relativeTime.minutes": "{n} minutes ago",
+        "relativeTime.hours": "{n} hours ago",
+        "relativeTime.days": "{n} days ago",
+      };
+      let out = table[id] || dm;
+      for (const [k, v] of Object.entries(values || {})) out = out.split("{" + k + "}").join(String(v));
+      return out;
+    };
+    expect(formatTimeAgoOrDate(ago(3 * HOUR), NOW, en)).toBe("3 hours ago");
+  });
+
+  it("② 🔴 超过 30 天：**显示日期**（站长裁定），而且**不过接缝**（那是平台的格式化结果）", () => {
+    const out = formatTimeAgoOrDate(ago(31 * DAY), NOW);
+    const expected = new Date(NOW - 31 * DAY).toLocaleDateString();
+    expect(out).toBe(expected);
+    expect(out).not.toBe("31天前");
+    // 🔴 哨兵：日期那一段**不许**过 t（它是 `toLocaleDateString()` 的输出，不是我们写的文案；
+    //    站长另一条裁定是"时间跟着浏览器的 locale 走"⇒ 它由平台决定，不由词典决定）
+    const SENTINEL = "__I18N_SEAM_WAS_USED__";
+    expect(formatTimeAgoOrDate(ago(31 * DAY), NOW, () => SENTINEL)).not.toBe(SENTINEL);
+    expect(formatTimeAgoOrDate(ago(31 * DAY), NOW, () => SENTINEL)).toBe(expected);
+    // 而 30 天以内**必须**过 t
+    expect(formatTimeAgoOrDate(ago(5 * DAY), NOW, () => SENTINEL)).toBe(SENTINEL);
+  });
+
+  it("③ 🔴 边界与兜底：正好 30 天算「以内」，坏日期用调用方给的 invalidText", () => {
+    // 边界：29.9 天 → 相对时间；30 天整 → 日期（实现是 `seconds >= 30 * 86400`）
+    expect(formatTimeAgoOrDate(ago(30 * DAY - 1000), NOW)).toBe("29天前");
+    expect(formatTimeAgoOrDate(ago(30 * DAY), NOW)).toBe(new Date(NOW - 30 * DAY).toLocaleDateString());
+    // 兜底：默认 "-"（与 formatTimeAgo 一致），评论区传 "" 保持它今天的行为
+    expect(formatTimeAgoOrDate(null, NOW)).toBe("-");
+    expect(formatTimeAgoOrDate("", NOW)).toBe("-");
+    expect(formatTimeAgoOrDate("不是日期", NOW)).toBe("-");
+    expect(formatTimeAgoOrDate("不是日期", NOW, undefined, "")).toBe("");
+    expect(formatTimeAgoOrDate(null, NOW, undefined, "")).toBe("");
+  });
+
+  it("④ 🔴 源码级钉子：评论区里**不许再有第二份实现**（合并的意义就在于此）", () => {
+    // ⚠️ **先剥掉注释再断言**（本仓库的老规矩）：我在评论区写的那段说明里就提到了
+    //    "从 `30 分钟前` 变成 `30分钟前`" ⇒ 不剥注释的话，这条断言会被**我自己的解释文字**打红。
+    //    👉 🔴 "源码里不许出现某个字符串"这类判据，必须先剥注释（文档里的引用是合法的，代码里的才是违规）。
+    const src = readFileSync(path.join(websiteRoot, "components/Comment/index.tsx"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    expect(src).not.toMatch(/function timeAgo\(/);
+    // 🔴 也不许把相对时间的中文措辞再写一遍（那等于又开了一份实现）
+    expect(src).not.toContain("分钟前");
+    expect(src).not.toContain("小时前");
+    expect(src).not.toContain("天前");
+    expect(src).toMatch(/formatTimeAgoOrDate\(item\.createdAt, Date\.now\(\), t, ""\)/);
+    // 🔴 `comment.time*` 那 4 个 key 必须真的从两份词典里移除（否则就是孤儿 key，
+    //    覆盖率对账第 ② 条也会红 —— 这里是**双保险**，因为孤儿 key 判据只看"代码里有没有用"，
+    //    而这条还钉住"评论区不许再引用它们"）
+    for (const loc of ["zh-TW", "en-US"]) {
+      const dict = readFileSync(path.join(websiteRoot, "locales/" + loc + ".ts"), "utf8");
+      expect(dict, `${loc} 词典里不应再有 comment.time*`).not.toMatch(/'comment\.time/);
+    }
+    expect(src).not.toMatch(/comment\.time[A-Z]/);
+  });
+});

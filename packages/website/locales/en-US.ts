@@ -87,6 +87,10 @@ const dict: Record<string, string> = {
   'search.foundSummary': 'Found {total} results across {pages} pages (source: {source})',
   'search.wordCount': '{w} characters',
 
+  // 🔴 期 10 第十批：`comment.time*` 那 4 个 key **已移除**（站长裁定「超过 30 天显示日期」之后，
+  //    评论区的本地 `timeAgo()` 被删掉、改用 `utils/relativeTime.ts` 的 `formatTimeAgoOrDate()`
+  //    ⇒ 相对时间统一用 `relativeTime.*` 那 5 个 key，这 4 个变成**孤儿 key**（覆盖率对账第 ② 条抓到了）。
+  //    ⚠️ 因此评论时间的措辞从 `30 分钟前` 变成 `30分钟前`（少一个空格，统一到与后台一致的口径）。
   // ── 🔴 期 10 第九批：评论区 39 个 key。
   //    ⚠️ **不用 ICU 复数**（接缝层只做 {name} 替换）⇒ `1 replies` / `1 characters` 这种形式是
   //    **已知且已登记**的代价（接真 ICU 那批一起解决）。
@@ -95,10 +99,6 @@ const dict: Record<string, string> = {
   //    🔴 `comment.honeypotLabel` 是**蜜罐**诱饵文案 ⇒ 必须读起来像一句普通指示
   //    （"Please leave this field empty"），**绝不能**暴露它是反垃圾字段。
   //    ⚠️ 只有 `comment.empty` 以句号结尾（中文原文就是「…来说两句吧。」）；标签/按钮一律不加句号。
-  'comment.timeJustNow': 'just now',
-  'comment.timeMinutes': '{n} minutes ago',
-  'comment.timeHours': '{n} hours ago',
-  'comment.timeDays': '{n} days ago',
   'comment.authorBadge': 'Author',
   'comment.replyTo': 'Reply to @{nick}',
   'comment.cancelReply': 'Cancel reply',

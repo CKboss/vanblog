@@ -264,11 +264,16 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
   });
 
   it("⑥ 🔴 覆盖率**棘轮**：词典 key 数只许增不许减（迁一批就该涨）", () => {
-    // 🔴 105 = 期 10 第九批之后的实测值（第五批 39 + 第八批搜索界面 27 + 第九批评论区 39）。
-    //    ⚠️ 每迁一批就要来上调这个下限（棘轮只许增不许减）。
-    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(105);
-    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(105);
-    expect(ids.size).toBeGreaterThanOrEqual(105);
+    // 🔴 101 = 期 10 第十批之后的实测值（第九批曾是 105，第十批**移除**了 `comment.time*` 4 个孤儿 key：
+    //    站长裁定「超过 30 天显示日期」⇒ 评论区的本地 `timeAgo()` 被删、改用共享的
+    //    `formatTimeAgoOrDate()` ⇒ 相对时间统一走 `relativeTime.*` 那 5 个 key）。
+    //    ⚠️ 🔴 这是棘轮**第一次下调**，所以要把原因写在这里：下调的唯一合法理由是
+    //    "**key 被合并/删除了**"（不是"懒得翻所以删掉"）；而上调的理由是"又迁了一批"。
+    //    👉 棘轮的语义是"覆盖率不许退步"，而**合并重复 key 是让覆盖率更真实**（一份文案一条译文），
+    //    所以这种下调是**进步**，不是退步 —— 但必须在注释里说清，否则下一个人会以为可以随便调小。
+    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(101);
+    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(101);
+    expect(ids.size).toBeGreaterThanOrEqual(101);
   });
 });
 

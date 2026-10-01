@@ -82,3 +82,51 @@ export function formatTimeAgo(
   }
   return t("relativeTime.days", "{n}天前", { n: Math.floor(seconds / 86400) });
 }
+
+/**
+ * 🔴 期 10 第十批：**合并两份 `timeAgo` 实现**（站长裁定：`超过 30 天显示日期`）。
+ *
+ * ## 之前的问题
+ * `components/Comment/index.tsx` 里有一个**本地的** `timeAgo()`，与本文件的 `formatTimeAgo()` 是
+ * **同一件事的两份实现**，而且已经开始漂了：
+ * - 措辞：本地版 `{n} 分钟前`（**有空格**）vs 这里 `{n}分钟前`（无空格，也是后台的口径，
+ *   `__tests__/relativeTime.spec.ts` 里有**两边的对等断言**钉着 `45秒前`）；
+ * - 行为：本地版超过 30 天**改用 `toLocaleDateString()`**，这里一直是 `{n}天前`；
+ * - 兜底：本地版解析失败返回 `""`，这里返回 `"-"`。
+ * 🔴 "两份实现会漂"是本仓库的老问题（§7.42 那条教训），而 i18n 让它更糟：
+ * 两份实现 ⇒ **两套词典 key**（`comment.time*` 与 `relativeTime.*`），译文各写一遍、迟早不一致。
+ *
+ * ## 站长裁定与落实
+ * 裁定：**超过 30 天显示日期**（不是"N 天前"）⇒ 这个函数就是裁定后的**唯一**实现，
+ * 评论区改成调它，本地那份删掉，`comment.time*` 那 4 个 key 从两份词典里**移除**（否则就是孤儿 key）。
+ * 🔴 **刻意保留的两个差异**（用参数表达，不是用第二份实现表达）：
+ * ① `invalidText`：解析不出来时返回什么 —— 默认 `"-"`（与 `formatTimeAgo` 一致），
+ *    评论区传 `""`（保持它今天的行为：坏日期就什么都不显示，而不是多一个 `-`）；
+ * ② 🔴 **日期那一段跟浏览器 locale 走**（`toLocaleDateString()` 不传 locale）——
+ *    这是站长 2026-10-01 的另一条裁定（"时间跟着浏览器的 locale 走"），
+ *    所以它**不过接缝**：那是**平台的格式化结果**，不是我们写的文案。
+ * ⚠️ 合并带来一处**刻意的界面文案变化**（如实报）：评论时间从 `30 分钟前` 变成 `30分钟前`
+ *    （少一个空格）—— 因为统一到"无空格"这个口径（与后台一致、且有对等断言钉着）。
+ *    🔴 这类"看得见的变化"必须单独点明：它不会让任何测试变红，只有人读 CHANGELOG 才能发现。
+ */
+export function formatTimeAgoOrDate(
+  value: unknown,
+  now: number = Date.now(),
+  t: TFunc = IDENTITY_T,
+  invalidText = "-",
+): string {
+  if (value == null || value === "") {
+    return invalidText;
+  }
+  const then = parseInstantMs(value);
+  if (Number.isNaN(then)) {
+    return invalidText;
+  }
+  const seconds = Math.floor((now - then) / 1000);
+  // 🔴 30 天以上：改用**日期**（站长裁定），并且跟浏览器 locale 走（另一条裁定）⇒ 不过接缝
+  if (seconds >= 30 * 86400) {
+    return new Date(then).toLocaleDateString();
+  }
+  // 30 天以内：与 `formatTimeAgo` **完全同一套 key 与措辞**（一份实现、一套译文）
+  return formatTimeAgo(value, now, t);
+}

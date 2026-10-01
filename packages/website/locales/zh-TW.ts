@@ -88,6 +88,10 @@ const dict: Record<string, string> = {
   'search.foundSummary': '找到 {total} 條結果，共 {pages} 頁（來源：{source}）',
   'search.wordCount': '{w} 字',
 
+  // 🔴 期 10 第十批：`comment.time*` 那 4 个 key **已移除**（站长裁定「超过 30 天显示日期」之后，
+  //    评论区的本地 `timeAgo()` 被删掉、改用 `utils/relativeTime.ts` 的 `formatTimeAgoOrDate()`
+  //    ⇒ 相对时间统一用 `relativeTime.*` 那 5 个 key，这 4 个变成**孤儿 key**（覆盖率对账第 ② 条抓到了）。
+  //    ⚠️ 因此评论时间的措辞从 `30 分钟前` 变成 `30分钟前`（少一个空格，统一到与后台一致的口径）。
   // ── 🔴 期 10 第九批：评论区 39 个 key（前台最大的一批）。
   //    地区用词：**留言**（评论→留言）、**回覆**（回复）、**暱稱**、**電子郵件**（邮箱）、
   //    **字元**（字符）、**載入**（加载）、**送出**（提交）、**部落客**（博主）、**個人首頁**（个人主页）、
@@ -97,10 +101,6 @@ const dict: Record<string, string> = {
   //    **绝不能**写成「这是防垃圾字段」（那等于告诉垃圾脚本别填）。
   //    ⚠️ `comment.time*` 刻意**不复用** `relativeTime.*`：那边是「{n}分钟前」（无空格）且没有
   //    「30 天后改用日期」的分支 ⇒ 两套措辞与行为都不同，硬凑同一个 key 会造成「改一处、另一处跟着变」。
-  'comment.timeJustNow': '剛剛',
-  'comment.timeMinutes': '{n} 分鐘前',
-  'comment.timeHours': '{n} 小時前',
-  'comment.timeDays': '{n} 天前',
   'comment.authorBadge': '部落客',
   'comment.replyTo': '回覆 @{nick}',
   'comment.cancelReply': '取消回覆',
