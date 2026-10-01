@@ -87,6 +87,55 @@ const dict: Record<string, string> = {
   'search.noResultsSource': '沒有找到與「{query}」相關的文章（來源：{source}）',
   'search.foundSummary': '找到 {total} 條結果，共 {pages} 頁（來源：{source}）',
   'search.wordCount': '{w} 字',
+
+  // ── 🔴 期 10 第九批：评论区 39 个 key（前台最大的一批）。
+  //    地区用词：**留言**（评论→留言）、**回覆**（回复）、**暱稱**、**電子郵件**（邮箱）、
+  //    **字元**（字符）、**載入**（加载）、**送出**（提交）、**部落客**（博主）、**個人首頁**（个人主页）、
+  //    **支援基礎 Markdown**、**依字面顯示**（按字面）、**外部連結**（外链）、**則**（量词：条→則）。
+  //    🔴 `@{nick}` 的 `@` 紧贴占位符；省略号是单字符 `…`（U+2026）；`Markdown` / `HTML` / `http/https` 三份逐字相同。
+  //    🔴 `comment.honeypotLabel` 是**蜜罐**字段的诱饵文案 ⇒ 必须仍是「請留空這一項」这种人话，
+  //    **绝不能**写成「这是防垃圾字段」（那等于告诉垃圾脚本别填）。
+  //    ⚠️ `comment.time*` 刻意**不复用** `relativeTime.*`：那边是「{n}分钟前」（无空格）且没有
+  //    「30 天后改用日期」的分支 ⇒ 两套措辞与行为都不同，硬凑同一个 key 会造成「改一处、另一处跟着变」。
+  'comment.timeJustNow': '剛剛',
+  'comment.timeMinutes': '{n} 分鐘前',
+  'comment.timeHours': '{n} 小時前',
+  'comment.timeDays': '{n} 天前',
+  'comment.authorBadge': '部落客',
+  'comment.replyTo': '回覆 @{nick}',
+  'comment.cancelReply': '取消回覆',
+  'comment.reply': '回覆',
+  'comment.permalink': '連結到這則留言',
+  'comment.repliesSummary': '共 {count} 則回覆，僅顯示前 {shown} 則',
+  'comment.loadFailed': '留言載入失敗',
+  'comment.emptyContent': '先寫點內容吧',
+  'comment.tooLong': '內容不能超過 {max} 個字元',
+  'comment.nickRequired': '暱稱必填',
+  'comment.emailRequired': '本站要求填寫電子郵件（不會公開顯示）',
+  'comment.pendingNotice': '留言已送出，審核通過後顯示',
+  'comment.success': '留言成功',
+  'comment.submitFailed': '送出失敗，請稍後再試',
+  'comment.title': '留言',
+  'comment.nickPlaceholder': '暱稱（必填）',
+  'comment.nickLabel': '暱稱',
+  'comment.emailPlaceholderRequired': '電子郵件（必填，不會公開）',
+  'comment.emailPlaceholderOptional': '電子郵件（選填，不會公開）',
+  'comment.emailLabel': '電子郵件',
+  'comment.sitePlaceholder': '個人首頁（選填，http/https）',
+  'comment.siteLabel': '個人首頁',
+  'comment.textareaReplyPlaceholder': '回覆 @{nick}…（支援基礎 Markdown，原始 HTML 會依字面顯示）',
+  'comment.textareaPlaceholder': '寫下你的留言…（支援基礎 Markdown，原始 HTML 會依字面顯示）',
+  'comment.contentLabel': '留言內容',
+  'comment.honeypotLabel': '請留空這一項',
+  'comment.replyingTo': '正在回覆 @{nick}',
+  'comment.cancel': '取消',
+  'comment.moderationNotice': '本站留言需審核後顯示',
+  'comment.markdownNotice': '支援基礎 Markdown；含外部連結或敏感詞會轉人工審核',
+  'comment.submitting': '送出中…',
+  'comment.submit': '發表留言',
+  'comment.empty': '還沒有留言，來說兩句吧。',
+  'comment.loading': '載入中…',
+  'comment.loadMore': '載入更多留言（還有 {count} 則）',
 };
 
 export default dict;

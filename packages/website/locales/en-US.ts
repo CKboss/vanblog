@@ -86,6 +86,54 @@ const dict: Record<string, string> = {
   'search.noResultsSource': 'No articles found for {query} (source: {source})',
   'search.foundSummary': 'Found {total} results across {pages} pages (source: {source})',
   'search.wordCount': '{w} characters',
+
+  // ── 🔴 期 10 第九批：评论区 39 个 key。
+  //    ⚠️ **不用 ICU 复数**（接缝层只做 {name} 替换）⇒ `1 replies` / `1 characters` 这种形式是
+  //    **已知且已登记**的代价（接真 ICU 那批一起解决）。
+  //    🔴 英文里**不给昵称加引号**、不用撇号（ICU 转义）；省略号保留单字符 `…`；
+  //    `Markdown` / `HTML` / `http/https` / `@{nick}` 逐字保留。
+  //    🔴 `comment.honeypotLabel` 是**蜜罐**诱饵文案 ⇒ 必须读起来像一句普通指示
+  //    （"Please leave this field empty"），**绝不能**暴露它是反垃圾字段。
+  //    ⚠️ 只有 `comment.empty` 以句号结尾（中文原文就是「…来说两句吧。」）；标签/按钮一律不加句号。
+  'comment.timeJustNow': 'just now',
+  'comment.timeMinutes': '{n} minutes ago',
+  'comment.timeHours': '{n} hours ago',
+  'comment.timeDays': '{n} days ago',
+  'comment.authorBadge': 'Author',
+  'comment.replyTo': 'Reply to @{nick}',
+  'comment.cancelReply': 'Cancel reply',
+  'comment.reply': 'Reply',
+  'comment.permalink': 'Link to this comment',
+  'comment.repliesSummary': '{count} replies in total, showing the first {shown}',
+  'comment.loadFailed': 'Failed to load comments',
+  'comment.emptyContent': 'Write something first',
+  'comment.tooLong': 'Content cannot exceed {max} characters',
+  'comment.nickRequired': 'A nickname is required',
+  'comment.emailRequired': 'This site requires an email address (it will not be shown publicly)',
+  'comment.pendingNotice': 'Comment submitted; it will appear after approval',
+  'comment.success': 'Comment posted',
+  'comment.submitFailed': 'Submission failed, please try again later',
+  'comment.title': 'Comments',
+  'comment.nickPlaceholder': 'Nickname (required)',
+  'comment.nickLabel': 'Nickname',
+  'comment.emailPlaceholderRequired': 'Email (required, not shown publicly)',
+  'comment.emailPlaceholderOptional': 'Email (optional, not shown publicly)',
+  'comment.emailLabel': 'Email',
+  'comment.sitePlaceholder': 'Website (optional, http/https)',
+  'comment.siteLabel': 'Website',
+  'comment.textareaReplyPlaceholder': 'Reply to @{nick}… (basic Markdown is supported, raw HTML will be shown literally)',
+  'comment.textareaPlaceholder': 'Write your comment… (basic Markdown is supported, raw HTML will be shown literally)',
+  'comment.contentLabel': 'Comment content',
+  'comment.honeypotLabel': 'Please leave this field empty',
+  'comment.replyingTo': 'Replying to @{nick}',
+  'comment.cancel': 'Cancel',
+  'comment.moderationNotice': 'Comments on this site appear after approval',
+  'comment.markdownNotice': 'Basic Markdown is supported; links or sensitive words will be sent to manual review',
+  'comment.submitting': 'Submitting…',
+  'comment.submit': 'Post comment',
+  'comment.empty': 'No comments yet - be the first to say something.',
+  'comment.loading': 'Loading…',
+  'comment.loadMore': 'Load more comments ({count} remaining)',
 };
 
 export default dict;

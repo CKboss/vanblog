@@ -121,19 +121,6 @@ const LEDGER: Entry[] = [
 
   // ══ C. UI 文案：组件与纯函数里的界面字符串（本批的欠条主体）══
   {
-    file: "components/Comment/index.tsx",
-    count: 44,
-    kind: "iou",
-    batch: "期 10 第二批（前台最大单文件：评论区的按钮/占位/提示/时间）",
-    why:
-      "🔴 全部是**访客可见**的界面文案（评论框占位、提交按钮、登录提示、时间显示、错误提示…）⇒ " +
-      "必须过接缝（组件里用 `useT()`）。" +
-      "⚠️ 这里有两条要特别小心：① 时间显示用了 `new Date(time).toLocaleDateString()` —— " +
-      "**它已经跟着浏览器 locale 走了**，接词典时要决定「跟浏览器还是跟站点语种」（两者会打架）；" +
-      "② 评论系统是三种（`builtin` / `waline` / `off`），waline 那条路是**外挂子进程**、" +
-      "它自己的界面文案由 waline 的 locale 配置决定（不归我们翻）⇒ 只翻我们自己的部分。",
-  },
-  {
     file: "components/Footer/index.tsx",
     count: 7,
     kind: "iou",
@@ -550,7 +537,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(120);
+    expect(total).toBeGreaterThan(100);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -561,7 +548,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(218);
+    expect(total).toBeLessThanOrEqual(174);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -629,7 +616,14 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第八批更新）：**218** 条 = 永久例外 **37** + 欠条 **155** + **已过接缝的默认值 26**。
+    // 🔴 口径（期 10 第九批更新）：**174** 条 = 永久例外 **37** + 欠条 **111** + **已过接缝的默认值 26**。
+    //    第九批**销账前台最大的单文件**：`components/Comment/index.tsx`（44 条，现在裸中文 **0**）
+    //    ⇒ 218 - 44 = 174；词条全部进词典（39 个新 key，词典共 **105 key ×2**）。
+    //    🔴 有一处**刻意没迁**：`new Date(time).toLocaleDateString()`（站长裁定：日期跟浏览器 locale 走），
+    //    它是**平台的格式化结果**、不是我们的字符串 ⇒ 尺子也数不到它（没有中文字面量）。
+    //    ⚠️ 那 4 条相对时间（刚刚 / N 分钟前 / N 小时前 / N 天前）**是**我们的文案 ⇒ 迁了，
+    //    并且刻意**没有**复用 `relativeTime.*` 的 key（那边无空格、且没有"30 天后改用日期"的分支
+    //    ⇒ 两套措辞与行为都不同，硬凑同一个 key 会造成"改一处、另一处跟着变"）。
     //    第八批**销账两个大文件**：`components/SearchResults/index.tsx`（28 条）与 `pages/search.tsx`（9 条）
     //    ⇒ 这两个文件现在**一条裸中文都没有**（全部改成 `t("search.*", 中文默认值)`），
     //    所以台账里**整条删掉**（🔴 不是把 count 改成 0 —— 留着 0 的条目会让人以为"这个文件还有东西要迁"）。
@@ -658,7 +652,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     expect(permCount).toBe(37);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(155);
+    expect(iouCount).toBe(111);
     expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
