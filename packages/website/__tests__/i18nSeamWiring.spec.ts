@@ -403,3 +403,45 @@ describe("前台 i18n 接缝 · 相对时间的**唯一**实现（formatTimeAgoO
     expect(src).not.toMatch(/comment\.time[A-Z]/);
   });
 });
+
+// ── 期 10 第十二批：404 页那个**语言中立**的大数字（站长裁定："让所有语言的人都能看懂这是 404"）──
+describe("404 页的语言中立数字（不进词典，但要醒目）", () => {
+  const src = readFileSync(path.join(websiteRoot, "pages/404.tsx"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+
+  it("① 有一个 class 为 vanblog-notfound-code 的元素，内容就是 404", () => {
+    expect(src).toMatch(/vanblog-notfound-code/);
+    expect(src).toMatch(/>\s*404\s*</);
+  });
+
+  it("② 🔴 它**够醒目**（字号 ≥64px、字重 ≥700）—— " + '"醒目"必须是可量的，不是形容词', () => {
+    const fontSize = src.match(/fontSize:\s*(\d+)/);
+    const fontWeight = src.match(/fontWeight:\s*(\d+)/);
+    expect(fontSize, "404 那个数字必须显式设定字号").toBeTruthy();
+    expect(fontWeight, "404 那个数字必须显式设定字重").toBeTruthy();
+    expect(Number(fontSize![1])).toBeGreaterThanOrEqual(64);
+    expect(Number(fontWeight![1])).toBeGreaterThanOrEqual(700);
+  });
+
+  it("③ 🔴 它**不进词典**（语言中立；塞进词典只会让覆盖率虚高）", () => {
+    // 不许出现 t("…", "404") 这类调用，也不许有 notFound.code 之类的 key
+    expect(src).not.toMatch(/t\(\s*"[^"]*"\s*,\s*"404"/);
+    expect(src).not.toMatch(/notFound\.code/);
+    for (const loc of ["zh-TW", "en-US"]) {
+      const dict = readFileSync(path.join(websiteRoot, "locales/" + loc + ".ts"), "utf8");
+      expect(dict, `${loc} 词典里不该有 404 这个条目`).not.toMatch(/:\s*'404'/);
+    }
+  });
+
+  it("④ 🔴 它**不加 aria-hidden**（数字对读屏同样有意义），也不加会与可见文本不一致的 aria-label", () => {
+    const block = src.slice(src.indexOf("vanblog-notfound-code"), src.indexOf("vanblog-notfound-code") + 400);
+    expect(block).not.toMatch(/aria-hidden/);
+    expect(block).not.toMatch(/aria-label/);
+  });
+
+  it("⑤ 🔴 这一页仍然**没有**语言切换按钮（站长裁定的另一半，别只记住一半）", () => {
+    expect(src).not.toMatch(/LocaleSwitcher/);
+  });
+});

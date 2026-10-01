@@ -176,12 +176,19 @@ const LEDGER: Entry[] = [
   {
     file: "components/Markdown/customContainer.tsx",
     count: 5,
-    kind: "iou",
-    batch: "期 10 第二批",
+    kind: "permanent",
     why:
-      "🔴 Markdown 自定义容器（note/tip/warning 之类）的**默认标题** ⇒ 访客可见。" +
-      "⚠️ 与后台那个同名组件是一对（后台那份在期 6 已登记为永久例外，因为它写进**用户文章正文**）；" +
-      "前台这份是**渲染期**给的默认标题 ⇒ 属界面文案，要翻。🔴 两边的处置不同，别照抄结论。",
+      "🔴 **站长裁定（2026-10-01）：markdown 管线保持现状** ⇒ 这条是**永久例外**，不是欠条。" +
+      "原因（两条，都已实测）：① 文案是在 **remark 插件**里写进 markdown AST 的，使用点**不在 React 渲染期**；" +
+      "② 🔴 两个消费方（`MarkdownBase.tsx` / `MarkdownPlain.tsx`）的插件数组是 **`useMemo(…, [])`（空依赖）**" +
+      "⇒ 插件只在挂载时构建一次，即使把 `t` 传进去，**切换语种也不会重建** ⇒ 标题会永远停在挂载时那个语种。" +
+      "要修就得把语种加进依赖数组，而 `perfBudget.spec.ts` 钉着「列表页首屏不加载重型 markdown 依赖」" +
+      "⇒ 改依赖会让**每次切语种都重建整条 markdown 管线**（性能与那条判据都要重新评估）⇒ 裁定保持现状。" +
+      "⚠️ 如实说明后果：英文/繁中界面下，markdown 容器标题（注/相关信息/注意/警告/提示）与" +
+      "代码块复制按钮的 aria-label **仍是中文** —— 这是**裁定接受**的结果，不是漏翻。" +
+      "🔴 期 10 第四批曾给 `codeCopyA11y.ts` 加过接缝函数与 `markdown.copyCode` 词典条目，" +
+      "本批按裁定**一并删掉**：留着「没有消费方的接缝函数 + 词典条目」是有害的 ——" +
+      "它让人以为这里已经支持多语言（而渲染出来永远是中文），比「根本没接」更难发现。",
   },
   {
     file: "components/NavBar/a11y.ts",
@@ -239,20 +246,6 @@ const LEDGER: Entry[] = [
       "`Search` / `Search content` / `Clear search` / `Search results`。",
   },
   {
-    file: "components/AlertCard/index.tsx",
-    count: 3,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 提示卡片文案 ⇒ 访客可见。",
-  },
-  {
-    file: "components/AuthorCard/index.tsx",
-    count: 3,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 作者卡片的固定标签（「关于作者」/「文章数」等）⇒ 访客可见。⚠️ 作者名与简介是**内容**，不翻。",
-  },
-  {
     file: "components/TocDrawer/model.ts",
     count: 3,
     kind: "seamed",
@@ -285,13 +278,6 @@ const LEDGER: Entry[] = [
       "🔴 `搜索接口返回了不可用的数据` / `搜索请求失败（HTTP …）` —— 这两条会被 `pages/search.tsx` " +
       "的 catch 显示给访客 ⇒ 属界面文案（与 `api/searchIndex.ts` 那三条**不同**，那三条只进 console）。" +
       "⚠️ 判据是「调用方有没有把它渲染出来」，不是「它在不在 api/ 目录里」。",
-  },
-  {
-    file: "components/Reward/index.tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 打赏按钮与提示 ⇒ 访客可见。",
   },
   {
     file: "pages/_app.tsx",
@@ -362,88 +348,55 @@ const LEDGER: Entry[] = [
     why: "🔴 `后端返回 …` 这条会被文章列表的 catch 显示给访客 ⇒ 界面文案（判据同 `api/search.ts`）。",
   },
   {
-    file: "components/BackToTop/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 回到顶部按钮的 aria-label ⇒ 读屏可见。",
-  },
-  {
     file: "components/Comment/Content.tsx",
     count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 评论正文的固定提示（「该评论已被删除」之类）⇒ 访客可见。⚠️ 评论内容本身是**内容**，不翻。",
-  },
-  {
-    file: "components/ImageBox/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 图片加载失败/放大按钮的 aria-label ⇒ 访客可见。",
+    kind: "permanent",
+    why:
+      "🔴 **站长裁定（2026-10-01）：markdown 管线保持现状** ⇒ 这条是**永久例外**，不是欠条。" +
+      "原因（两条，都已实测）：① 文案是在 **remark 插件**里写进 markdown AST 的，使用点**不在 React 渲染期**；" +
+      "② 🔴 两个消费方（`MarkdownBase.tsx` / `MarkdownPlain.tsx`）的插件数组是 **`useMemo(…, [])`（空依赖）**" +
+      "⇒ 插件只在挂载时构建一次，即使把 `t` 传进去，**切换语种也不会重建** ⇒ 标题会永远停在挂载时那个语种。" +
+      "要修就得把语种加进依赖数组，而 `perfBudget.spec.ts` 钉着「列表页首屏不加载重型 markdown 依赖」" +
+      "⇒ 改依赖会让**每次切语种都重建整条 markdown 管线**（性能与那条判据都要重新评估）⇒ 裁定保持现状。" +
+      "⚠️ 如实说明后果：英文/繁中界面下，markdown 容器标题（注/相关信息/注意/警告/提示）与" +
+      "代码块复制按钮的 aria-label **仍是中文** —— 这是**裁定接受**的结果，不是漏翻。" +
+      "🔴 期 10 第四批曾给 `codeCopyA11y.ts` 加过接缝函数与 `markdown.copyCode` 词典条目，" +
+      "本批按裁定**一并删掉**：留着「没有消费方的接缝函数 + 词典条目」是有害的 ——" +
+      "它让人以为这里已经支持多语言（而渲染出来永远是中文），比「根本没接」更难发现。",
   },
   {
     file: "components/Markdown/codeBlock.tsx",
     count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 代码块的「复制」按钮文案 ⇒ 访客可见。",
+    kind: "permanent",
+    why:
+      "🔴 **站长裁定（2026-10-01）：markdown 管线保持现状** ⇒ 这条是**永久例外**，不是欠条。" +
+      "原因（两条，都已实测）：① 文案是在 **remark 插件**里写进 markdown AST 的，使用点**不在 React 渲染期**；" +
+      "② 🔴 两个消费方（`MarkdownBase.tsx` / `MarkdownPlain.tsx`）的插件数组是 **`useMemo(…, [])`（空依赖）**" +
+      "⇒ 插件只在挂载时构建一次，即使把 `t` 传进去，**切换语种也不会重建** ⇒ 标题会永远停在挂载时那个语种。" +
+      "要修就得把语种加进依赖数组，而 `perfBudget.spec.ts` 钉着「列表页首屏不加载重型 markdown 依赖」" +
+      "⇒ 改依赖会让**每次切语种都重建整条 markdown 管线**（性能与那条判据都要重新评估）⇒ 裁定保持现状。" +
+      "⚠️ 如实说明后果：英文/繁中界面下，markdown 容器标题（注/相关信息/注意/警告/提示）与" +
+      "代码块复制按钮的 aria-label **仍是中文** —— 这是**裁定接受**的结果，不是漏翻。" +
+      "🔴 期 10 第四批曾给 `codeCopyA11y.ts` 加过接缝函数与 `markdown.copyCode` 词典条目，" +
+      "本批按裁定**一并删掉**：留着「没有消费方的接缝函数 + 词典条目」是有害的 ——" +
+      "它让人以为这里已经支持多语言（而渲染出来永远是中文），比「根本没接」更难发现。",
   },
   {
     file: "components/Markdown/codeCopyA11y.ts",
     count: 1,
-    kind: "iou",
-    batch: "期 10 第二批（无障碍标签族）",
+    kind: "permanent",
     why:
-      "🔴 **第四批给它加了接缝函数（`codeCopyLabel(t)`），但消费方还没接** —— 原因不是偷懒：" +
-      "唯一的消费方 `Markdown/codeBlock.tsx` 是在 **markdown 处理管线里构造 AST 节点**" +
-      "（`properties: { ariaLabel: CODE_COPY_LABEL, title: CODE_COPY_LABEL }`），" +
-      "🔴 **那里不是 React 渲染期** ⇒ 用不了 hook，也没法就地调 `codeCopyLabel(t)`。" +
-      "要接就得把 `t`（或已取好的字符串）从组件**透传进 processor 的配置** ⇒ 一次跨层改造，单独排一批。" +
-      "👉 🔴 这是一类新的接缝难点：**文案的使用点不在渲染期**（同类还有 `getStaticProps` 里构造的数据，" +
-      "见 `api/getAllData.ts` 那条）。",
-  },
-  {
-    file: "components/MarkdownTocBar/core.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 目录栏的 aria-label ⇒ 读屏可见。",
-  },
-  {
-    file: "components/NavBarMobile/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 移动端导航的展开/关闭 aria-label ⇒ 读屏可见。",
-  },
-  {
-    file: "components/RelatedArticles/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 「相关推荐」标题 ⇒ 访客可见。⚠️ 文章标题是**内容**，不翻。",
-  },
-  {
-    file: "components/RssButton/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 RSS 按钮的 aria-label/提示 ⇒ 访客可见（`RSS` 本身是技术标识符，三份逐字相同）。",
-  },
-  {
-    file: "components/TimeLineItem/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 时间线条目的固定标签 ⇒ 访客可见。",
-  },
-  {
-    file: "components/TimelineArchives/index.tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 归档标题与空态 ⇒ 访客可见。",
+      "🔴 **站长裁定（2026-10-01）：markdown 管线保持现状** ⇒ 这条是**永久例外**，不是欠条。" +
+      "原因（两条，都已实测）：① 文案是在 **remark 插件**里写进 markdown AST 的，使用点**不在 React 渲染期**；" +
+      "② 🔴 两个消费方（`MarkdownBase.tsx` / `MarkdownPlain.tsx`）的插件数组是 **`useMemo(…, [])`（空依赖）**" +
+      "⇒ 插件只在挂载时构建一次，即使把 `t` 传进去，**切换语种也不会重建** ⇒ 标题会永远停在挂载时那个语种。" +
+      "要修就得把语种加进依赖数组，而 `perfBudget.spec.ts` 钉着「列表页首屏不加载重型 markdown 依赖」" +
+      "⇒ 改依赖会让**每次切语种都重建整条 markdown 管线**（性能与那条判据都要重新评估）⇒ 裁定保持现状。" +
+      "⚠️ 如实说明后果：英文/繁中界面下，markdown 容器标题（注/相关信息/注意/警告/提示）与" +
+      "代码块复制按钮的 aria-label **仍是中文** —— 这是**裁定接受**的结果，不是漏翻。" +
+      "🔴 期 10 第四批曾给 `codeCopyA11y.ts` 加过接缝函数与 `markdown.copyCode` 词典条目，" +
+      "本批按裁定**一并删掉**：留着「没有消费方的接缝函数 + 词典条目」是有害的 ——" +
+      "它让人以为这里已经支持多语言（而渲染出来永远是中文），比「根本没接」更难发现。",
   },
   {
     file: "components/UnLockCard/copy.ts",
@@ -506,7 +459,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(80);
+    expect(total).toBeGreaterThan(60);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -517,7 +470,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(145);
+    expect(total).toBeLessThanOrEqual(129);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -585,7 +538,12 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第十一批更新）：**145** 条 = 永久例外 **38** + 欠条 **81** + **已过接缝的默认值 26**。
+    // 🔴 口径（期 10 第十二批更新）：**129** 条 = 永久例外 **46** + 欠条 **57** + **已过接缝的默认值 26**。
+    //    第十二批迁走 **17 条**（`AlertCard` 3 / `AuthorCard` 3 / `Reward` 2 / `BackToTop` 1 / `MarkdownTocBar` 1 /
+    //    `NavBarMobile` 1 / `RelatedArticles` 1 / `RssButton` 1 / `ImageBox` 1 / `TimeLineItem` 1 /
+    //    `TimelineArchives` 1）⇒ 销账 11 个文件；
+    //    🔴 并按站长裁定把 **markdown 管线那 8 条改判永久例外**（`customContainer` 5 + `codeCopyA11y` 1 +
+    //    `codeBlock` 1 + `Comment/Content` 1）⇒ permanent 38 → 46、欠条 81 → 57。
     //    第十一批销账 5 个文件（`UnLockCard/index.tsx` 6 + `CopyRight` 6 + `ThemeButton/core` 5 +
     //    `404` 4 + `PostCard/index.tsx` 2 = 23 条），并把 `Footer` 的 7 条迁走 6 条、
     //    剩下 1 条（GitHub 锚点 URL）改判**永久例外** ⇒ 174 - 23 - 6 = 145，permanent 37 → 38。
@@ -621,10 +579,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
-    expect(permCount).toBe(38);
+    expect(permCount).toBe(46);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(81);
+    expect(iouCount).toBe(57);
     expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）

@@ -8,6 +8,7 @@ import {
   expandControlAriaExpanded,
 } from "../../utils/categoryExpand";
 
+import useT from "../../hooks/useT";
 export default function (props: {
   date: string;
   articles: TimelineArticleRef[];
@@ -18,6 +19,8 @@ export default function (props: {
   compact?: boolean;
   openArticleLinksInNewWindow: boolean;
 }) {
+  // 🔴 期 10 第十二批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const [internalOpen, setInternalOpen] = useState(Boolean(props.defaultOpen));
   const isControlled = props.open !== undefined;
   const visible = isControlled ? Boolean(props.open) : internalOpen;
@@ -49,7 +52,7 @@ export default function (props: {
       >
         <div className={dateClass}>{props.date}</div>
 
-        <div className="ml-2 text-sm md:text-base text-gray-400 font-normal dark:text-dark-400">{`${props.articles.length}篇`}</div>
+        <div className="ml-2 text-sm md:text-base text-gray-400 font-normal dark:text-dark-400">{t("timeline.articleCount", "{n}篇", { n: props.articles.length })}</div>
         <span
           aria-hidden="true"
           data-expand-chevron=""

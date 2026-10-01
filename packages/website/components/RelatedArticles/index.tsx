@@ -10,6 +10,7 @@ import {
   type RelatedArticle,
 } from "../../utils/relatedArticles";
 
+import useT from "../../hooks/useT";
 /**
  * 文章页末尾的「相关文章」块（数据来自详情 payload 的 `relatedArticles`，最多 5 条）。
  *
@@ -59,6 +60,8 @@ export default function RelatedArticles(props: {
   items?: unknown;
   openArticleLinksInNewWindow?: boolean;
 }) {
+  // 🔴 期 10 第十二批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const items = useMemo(
     () => normalizeRelatedArticles(props.items),
     [props.items],
@@ -75,9 +78,7 @@ export default function RelatedArticles(props: {
       <h2
         id="related-articles-heading"
         className="text-sm font-normal text-gray-400 dark:text-dark tracking-wide mb-3 select-none"
-      >
-        相关文章
-      </h2>
+      >{t("relatedArticles.title", "相关文章")}</h2>
       <ul className="related-articles-list space-y-3">
         {items.map((item, index) => {
           const href = relatedArticleHref(item);

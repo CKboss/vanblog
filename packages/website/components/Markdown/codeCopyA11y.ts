@@ -1,17 +1,18 @@
 import { activatesWithKey, isFocusableActionControl } from "../../utils/keyboardA11y";
 import { readFencedCodeText } from "./codeBlockLines";
-import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 
-// 🔴 期 10 第四批：接上 i18n 接缝 —— **常量原样保留当默认值**（模块级常量在 import 期求值，
-//    那时词典还没注入 ⇒ 绝不能把常量本身改成 `t(...)` 的结果），另加"取文案的函数"（尾参 `t = IDENTITY_T`），
-//    消费方在**渲染期**用 `useT()` 的结果调它。规矩见 §7.205 A。
+// 🔴 **站长裁定（2026-10-01）：markdown 管线保持现状** ⇒ 「复制代码」这条**不接多语言**（永久例外）。
+//    原因与 `customContainer.tsx` 那 5 条完全相同：唯一的消费方 `codeBlock.tsx` 是在
+//    **markdown 处理管线里构造 AST 节点**（`properties: { ariaLabel: CODE_COPY_LABEL }`），
+//    不在 React 渲染期；而且两个消费方的插件数组是 `useMemo(…, [])`（空依赖）⇒ 切语种不会重建插件。
+//    ⚠️ 如实说明后果：英文/繁中界面下，代码块复制按钮的 aria-label / title 仍是中文「复制代码」。
+//    🔴 期 10 第四批曾给它加过接缝函数（`codeCopyLabel(t)` + `CODE_COPY_LABEL_ID`），
+//    本批按裁定**一并删掉**，并把词典里的 `markdown.copyCode` 也移除 ——
+//    👉 **留着"没有消费方的接缝函数 + 词典条目"是有害的**：它让人以为这里已经支持多语言了
+//    （而实际渲染出来的永远是中文），比"根本没接"更难发现。
+//    ⚠️ 若将来裁定改了，恢复方式见 §7.213 F（要连 `useMemo` 依赖与 `perfBudget` 判据一起评估）。
 export const CODE_COPY_LABEL = "复制代码";
-export const CODE_COPY_LABEL_ID = "markdown.copyCode";
 
-/** 🔴 取"复制代码"按钮的 aria-label（渲染期调用）。 */
-export function codeCopyLabel(t: TFunc = IDENTITY_T): string {
-  return t(CODE_COPY_LABEL_ID, CODE_COPY_LABEL);
-}
 export const CODE_COPY_CLASS = "code-copy-btn";
 
 export const CODE_COPY_CONTROL = {

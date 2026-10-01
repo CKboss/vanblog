@@ -16,7 +16,6 @@ const dict: Record<string, string> = {
   'category.collapseAll': '全部收起',
   'category.expandAll': '全部展開',
   'locale.switcher': '切換語言：目前 {current}，按一下切換到 {next}',
-  'markdown.copyCode': '複製程式碼',
   'nav.actionAdmin': '管理後台',
   'nav.actionMenu': '開啟選單',
   'nav.actionRss': 'RSS 訂閱',
@@ -170,6 +169,30 @@ const dict: Record<string, string> = {
   'notFound.backHome': '返回首頁',
   'postCard.encryptedHint': '該文章已加密，點擊 `閱讀全文` 並輸入密碼後方可查看。',
   'postCard.readMore': '閱讀全文',
+
+  // ── 🔴 期 10 第十二批：前台零散界面文案（过期提示 / 作者卡统计 / 打赏 / 返回顶部 / 目录 /
+  //    移动端后台入口 / 相关文章 / RSS toast / 图片加载失败 / 时间线篇数）。
+  //    地区用词：**撰寫於**（编写于）/ **資訊**（信息）/ **贊助**（打赏）/ **載入**（加载）/
+  //    **剪貼簿**（剪切板）/ **返回頂部** / **目錄** / **後台** / **相關文章** / **日誌**（指博文，不是日志文件）。
+  //    🔴 `alert.outdatedNotice` 是**整句模板**（两个天数占位符）：原来是"前半句 + 变量 + 中段 + 变量 + 后半句"
+  //    的拼接式文案 ⇒ 英文语序不同，只翻片段拼不出来。
+  //    🔴 `timeline.articleCount` 的繁中用 `{n}篇`（**无空格**，与简体源文案一致：
+  //    切换语种时不该看到间距变化）。
+  //    ⚠️ `comment.imageFallbackAlt` **刻意不加**：它属于 markdown 管线（`collapseImages` 插件），
+  //    站长裁定保持现状 ⇒ 加了就是孤儿 key。
+  'alert.outdatedNotice': '請注意，本文撰寫於 {created} 天前，最後修改於 {updated} 天前，其中某些資訊可能已經過時。',
+  'authorCard.postsLabel': '日誌',
+  'authorCard.categoriesLabel': '分類',
+  'authorCard.tagsLabel': '標籤',
+  'reward.hint': '如果對你有用的話，可以贊助哦',
+  'reward.button': '贊助',
+  'backToTop.label': '返回頂部',
+  'image.loadFailedTitle': '圖片載入失敗: {src}',
+  'toc.barTitle': '目錄',
+  'nav.mobileAdmin': '後台',
+  'relatedArticles.title': '相關文章',
+  'rss.copied': '已複製 RSS 訂閱地址到剪貼簿！',
+  'timeline.articleCount': '{n}篇',
 };
 
 export default dict;

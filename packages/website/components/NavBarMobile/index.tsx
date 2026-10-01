@@ -116,7 +116,7 @@ export default function (props: {
                   target="_blank"
                   href={"/admin"}
                 >
-                  {"后台"}
+                  {t("nav.mobileAdmin", "后台")}
                 </a>
               </li>
             )}

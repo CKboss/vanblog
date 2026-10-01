@@ -17,7 +17,6 @@ const dict: Record<string, string> = {
   'category.collapseAll': 'Collapse all',
   'category.expandAll': 'Expand all',
   'locale.switcher': 'Change language: currently {current}, click to switch to {next}',
-  'markdown.copyCode': 'Copy code',
   'nav.actionAdmin': 'Admin panel',
   'nav.actionMenu': 'Open menu',
   'nav.actionRss': 'RSS Feed',
@@ -170,6 +169,25 @@ const dict: Record<string, string> = {
   'notFound.backHome': 'Back to home',
   'postCard.encryptedHint': 'This article is encrypted. Click `Read more` and enter the password to view it.',
   'postCard.readMore': 'Read more',
+
+  // ── 🔴 期 10 第十二批：前台零散界面文案 13 个 key。
+  //    ⚠️ **不用 ICU 复数**（接缝层只做 {name} 替换）⇒ `1 articles` / `1 days ago` 是**已知且已登记**的代价。
+  //    🔴 `alert.outdatedNotice` 与 `image.loadFailedTitle` 是**整句模板**（占位符在句中，英文语序自然）。
+  //    🔴 `image.loadFailedTitle` 保留"冒号 + 空格"（与中文源文案一致），`{src}` 是图片 URL（技术值，不翻）。
+  //    🔴 `rss.copied` 里的 RSS 三份逐字相同；全文无撇号（ICU 转义）。
+  'alert.outdatedNotice': 'Please note: this article was written {created} days ago and last modified {updated} days ago; some of the information may be out of date.',
+  'authorCard.postsLabel': 'Posts',
+  'authorCard.categoriesLabel': 'Categories',
+  'authorCard.tagsLabel': 'Tags',
+  'reward.hint': 'If you found this useful, consider buying me a coffee',
+  'reward.button': 'Donate',
+  'backToTop.label': 'Back to top',
+  'image.loadFailedTitle': 'Failed to load image: {src}',
+  'toc.barTitle': 'Contents',
+  'nav.mobileAdmin': 'Admin',
+  'relatedArticles.title': 'Related articles',
+  'rss.copied': 'RSS feed URL copied to the clipboard!',
+  'timeline.articleCount': '{n} articles',
 };
 
 export default dict;

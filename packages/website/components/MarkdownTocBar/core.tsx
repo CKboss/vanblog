@@ -11,6 +11,7 @@ import {
   headingHashMatches,
 } from "../../utils/headingHash";
 
+import useT from "../../hooks/useT";
 function findHeadingElByHash(rawHash: string): HTMLElement | null {
   const decoded = decodeHeadingHash(rawHash);
   if (!decoded || typeof document === "undefined") return null;
@@ -34,6 +35,8 @@ export default function (props: {
   mobile?: boolean;
   onNavigate?: (item: NavItem) => void;
 }) {
+  // 🔴 期 10 第十二批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const { items } = props;
   const [currIndex, setCurrIndex] = useState(-1);
 
@@ -204,9 +207,7 @@ export default function (props: {
             <h2
               style={{ fontWeight: 600, fontSize: "1.5em", marginBottom: 4 }}
               className="text-gray-700 dark:text-dark "
-            >
-              目录
-            </h2>
+            >{t("toc.barTitle", "目录")}</h2>
           </>
         ) : (
           <div
@@ -219,7 +220,8 @@ export default function (props: {
               });
             }}
           >
-            目录
+            {/* 🔴 期 10 第十二批：移动端那个"目录"浮层的标题（与上面 <h2> 里的同一个 key） */}
+            {t("toc.barTitle", "目录")}
           </div>
         )}
 

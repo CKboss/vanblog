@@ -212,7 +212,11 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
     setLocale("en-US");
     expect(t("nav.actionSearch", "搜索")).toBe("Search");
     expect(t("nav.actionMenu", "打开菜单")).toBe("Open menu");
-    expect(t("markdown.copyCode", "复制代码")).toBe("Copy code");
+    // 🔴 期 10 第十二批：这一行原来断言的是 `markdown.copyCode`，但**站长裁定 markdown 管线保持现状**
+    //    ⇒ 那条接缝函数与词典条目都被删掉了（留着"没有消费方的接缝 + 词典条目"会让人以为已经支持多语言）。
+    //    换成另一个确定在用的 key。👉 🔴 这类"点名某个 key"的断言在**裁定变化**时会红 ——
+    //    红了不是坏事，它逼着来改断言的人**读到裁定**（比让断言自动适配更有价值）。
+    expect(t("nav.actionAdmin", "管理后台")).toBe("Admin panel");
     expect(t("unlock.lockedPrompt", "文章已加密，请输入密码后查看：")).toMatch(/:$/);
     expect(t("relativeTime.hours", "{n}小时前", { n: 3 })).toBe("3 hours ago");
     expect(t("readingTime.minutes", "约 {n} 分钟", { n: 7 })).toBe("About 7 min");
@@ -247,7 +251,8 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
 
     setLocale("zh-TW");
     expect(t("nav.actionSearch", "搜索")).toBe("搜尋");
-    expect(t("markdown.copyCode", "复制代码")).toBe("複製程式碼");
+    // 🔴 同上：`markdown.copyCode` 已按站长裁定移除 ⇒ 换成确定在用的 key
+    expect(t("nav.actionSearch", "搜索")).toBe("搜尋");
     expect(t("postCard.copiedTitle", "已复制标题到剪切板！")).toMatch(/剪貼簿/);
     // 🔴 繁中词典里不许出现**简体专用字**。
     // ⚠️ 这个字符类第一版写错了：我把 `搜`/`打`/`制`/`寻` 也放了进去，而它们是**简繁共用**的
@@ -264,6 +269,9 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
   });
 
   it("⑥ 🔴 覆盖率**棘轮**：词典 key 数只许增不许减（迁一批就该涨）", () => {
+    // 🔴 140 = 期 10 第十二批之后的实测值（第十一批 128 - 1 条按裁定移除的 `markdown.copyCode` + 13 条新迁）
+    //    历史：第五批 39 → 第八批 66 → 第九批 105 → 第十批 101（合并去重）→ 第十一批 128 → 第十二批 **140**。
+    //    （下面这段是第十批留下的说明，保留：）
     // 🔴 101 = 期 10 第十批之后的实测值（第九批曾是 105，第十批**移除**了 `comment.time*` 4 个孤儿 key：
     //    站长裁定「超过 30 天显示日期」⇒ 评论区的本地 `timeAgo()` 被删、改用共享的
     //    `formatTimeAgoOrDate()` ⇒ 相对时间统一走 `relativeTime.*` 那 5 个 key）。
@@ -271,9 +279,9 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
     //    "**key 被合并/删除了**"（不是"懒得翻所以删掉"）；而上调的理由是"又迁了一批"。
     //    👉 棘轮的语义是"覆盖率不许退步"，而**合并重复 key 是让覆盖率更真实**（一份文案一条译文），
     //    所以这种下调是**进步**，不是退步 —— 但必须在注释里说清，否则下一个人会以为可以随便调小。
-    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(101);
-    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(101);
-    expect(ids.size).toBeGreaterThanOrEqual(101);
+    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(140);
+    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(140);
+    expect(ids.size).toBeGreaterThanOrEqual(140);
   });
 });
 

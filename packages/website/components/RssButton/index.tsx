@@ -20,7 +20,7 @@ export default function (props: { showAdminButton: boolean }) {
     <CopyToClipboard
       text={url}
       onCopy={() => {
-        toast.success("已复制 RSS 订阅地址到剪切板！", {
+        toast.success(t("rss.copied", "已复制 RSS 订阅地址到剪切板！"), {
           className: "toast",
         });
       }}

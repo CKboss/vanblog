@@ -6,6 +6,7 @@ import { SocialItem } from "../../api/getAllData";
 import SocialCard from "../SocialCard";
 import { ThemeContext } from "../../utils/themeContext";
 import ImageBox from "../ImageBox";
+import useT from "../../hooks/useT";
 export interface AuthorCardProps {
   author: string;
   desc: string;
@@ -21,6 +22,8 @@ export interface AuthorCardProps {
 }
 
 export default function (props: { option: AuthorCardProps }) {
+  // 🔴 期 10 第十二批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const { theme } = useContext(ThemeContext);
 
   const logoUrl = useMemo(() => {
@@ -84,9 +87,7 @@ export default function (props: { option: AuthorCardProps }) {
                 <div className="group-hover:text-gray-900 font-bold group-hover:font-black dark:group-hover:text-dark-hover">
                   {props.option.postNum}
                 </div>
-                <div className="group-hover:text-gray-900 group-hover:font-normal text-gray-500 dark:text-dark-light dark:group-hover:text-dark-hover">
-                  日志
-                </div>
+                <div className="group-hover:text-gray-900 group-hover:font-normal text-gray-500 dark:text-dark-light dark:group-hover:text-dark-hover">{t("authorCard.postsLabel", "日志")}</div>
               </div>
             </Link>
             <Link href="/category">
@@ -94,9 +95,7 @@ export default function (props: { option: AuthorCardProps }) {
                 <div className="group-hover:text-gray-900 font-bold group-hover:font-black dark:group-hover:text-dark-hover">
                   {props.option.catelogNum}
                 </div>
-                <div className="group-hover:text-gray-900 group-hover:font-normal text-gray-500 dark:text-dark-light dark:group-hover:text-dark-hover">
-                  分类
-                </div>
+                <div className="group-hover:text-gray-900 group-hover:font-normal text-gray-500 dark:text-dark-light dark:group-hover:text-dark-hover">{t("authorCard.categoriesLabel", "分类")}</div>
               </div>
             </Link>
             <Link href="/tag">
@@ -104,9 +103,7 @@ export default function (props: { option: AuthorCardProps }) {
                 <div className="group-hover:text-gray-900 font-bold group-hover:font-black dark:group-hover:text-dark-hover">
                   {props.option.tagNum}
                 </div>
-                <div className=" group-hover:text-gray-900 group-hover:font-normal text-gray-500 dark:text-dark-light dark:group-hover:text-dark-hover">
-                  标签
-                </div>
+                <div className=" group-hover:text-gray-900 group-hover:font-normal text-gray-500 dark:text-dark-light dark:group-hover:text-dark-hover">{t("authorCard.tagsLabel", "标签")}</div>
               </div>
             </Link>
           </div>

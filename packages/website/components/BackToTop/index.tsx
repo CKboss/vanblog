@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import style from "../../styles/back-to-top.module.css";
 import { scrollTo } from "../../utils/scroll";
 
+import useT from "../../hooks/useT";
 const getScrollTop = (): number =>
   window.pageYOffset ||
   document.documentElement.scrollTop ||
@@ -18,6 +19,8 @@ const scrollToTop = () =>
   });
 
 export default () => {
+  // 🔴 期 10 第十二批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const [display, setDisplay] = useState(false);
 
   useEffect(() => {
@@ -42,7 +45,7 @@ export default () => {
     <>
       {display && (
         <div
-          title="返回顶部"
+          title={t("backToTop.label", "返回顶部")}
           className={`${style.backToTop} dark:nav-shadow-dark text-gray-600 rounded-xl transform  transition-all  dark:bg-dark hover:scale-110 fill-dark dark:text-dark`}
           onClick={scrollToTop}
         >

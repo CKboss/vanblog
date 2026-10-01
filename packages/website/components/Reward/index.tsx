@@ -1,6 +1,7 @@
 import { useContext, useMemo, useState } from "react";
 import { ThemeContext } from "../../utils/themeContext";
 
+import useT from "../../hooks/useT";
 export default function (props: {
   aliPay: string;
   weChatPay: string;
@@ -9,6 +10,8 @@ export default function (props: {
   author: string;
   id: number | string;
 }) {
+  // 🔴 期 10 第十二批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const [show, setShow] = useState(false);
   const { theme } = useContext(ThemeContext);
 
@@ -33,15 +36,13 @@ export default function (props: {
       {props.aliPay != "" && (
         <>
           <div className="text-center  select-none text-sm md:text-base mb-2 dark:text-dark">
-            如果对你有用的话，可以打赏哦
+            {t("reward.hint", "如果对你有用的话，可以打赏哦")}
           </div>
           <div className="flex justify-center mb-6 ">
             <div
               onClick={() => [setShow(!show)]}
               className="text-sm md:text-base   text-gray-100 bg-red-600 rounded px-4 select-none cursor-pointer hover:bg-red-400 py-1"
-            >
-              打赏
-            </div>
+            >{t("reward.button", "打赏")}</div>
           </div>
           <div
             className=" justify-center overflow-hidden transition-all"
