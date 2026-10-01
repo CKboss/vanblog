@@ -48,6 +48,7 @@ const OverviewCodeMarkdown = dynamic(() => import("../Markdown/MarkdownBase"), {
 import { articleOverviewMarkdown } from "../../utils/articleExcerpt";
 import { hasFencedCode } from "../../utils/hasFencedCode";
 
+import useT from "../../hooks/useT";
 export default function (props: {
   id: number | string;
   title: string;
@@ -107,6 +108,8 @@ export default function (props: {
    */
   relatedArticles?: unknown;
 }) {
+  // 🔴 期 10 第十一批：加密提示与「阅读全文」按钮走 i18n 接缝（渲染期取）
+  const t = useT();
   const [lock, setLock] = useState(props.type != "overview" && props.private);
   const { content, setContent } = props;
   // 内置评论的规范键：**数字 id**。
@@ -144,7 +147,13 @@ export default function (props: {
   const calContent = useMemo(() => {
     if (props.type == "overview") {
       if (props.private) {
-        return "该文章已加密，点击 `阅读全文` 并输入密码后方可查看。";
+        // 🔴 期 10 第十一批：这句里用**反引号**引了按钮名（`阅读全文`）⇒ 译文必须保留反引号，
+        //    而且英文里反引号内的那几个字必须与 `postCard.readMore` 的译文**逐字相同**
+        //    （否则读者会去找一个界面上不存在的按钮名）。
+        return t(
+          "postCard.encryptedHint",
+          "该文章已加密，点击 `阅读全文` 并输入密码后方可查看。"
+        );
       }
       // 列表摘要里的图换成 300px 缩略图（原图实测能到 3.5MB，摘要里根本看不清）；
       // 点开放大仍然是原图（img.tsx 会补 data-zoom-src）。文章页正文不走这个分支。
@@ -278,7 +287,7 @@ export default function (props: {
               target={getTarget(props.openArticleLinksInNewWindow)}
             >
               <div className=" dark:bg-dark dark:hover:bg-dark-light dark:hover:text-dark-r dark:border-dark dark:text-dark hover:bg-gray-800 hover:text-gray-50 border-2 border-gray-800 text-sm md:text-base text-gray-700 px-2 py-1 transition-all rounded">
-                阅读全文
+                {t("postCard.readMore", "阅读全文")}
               </div>
             </Link>
           </div>

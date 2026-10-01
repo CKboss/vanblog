@@ -122,10 +122,19 @@ const LEDGER: Entry[] = [
   // ══ C. UI 文案：组件与纯函数里的界面字符串（本批的欠条主体）══
   {
     file: "components/Footer/index.tsx",
-    count: 7,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 页脚文案（版权、备案位、运行时间等）⇒ 访客可见。⚠️ 其中「由 XX 驱动」这类若含站点数据，只翻固定部分。",
+    count: 1,
+    kind: "permanent",
+    why:
+      "🔴 **期 10 第十一批：6 条已迁走，剩下的 1 条是永久例外** —— 它是一个 **URL**：" +
+      "`https://github.com/CKboss/vanblog/blob/dev/dsh/README.md#出处与许可`。" +
+      "🔴 那个 `#出处与许可` 是 **GitHub 上真实存在的中文标题锚点**（README 里那个小节就叫「出处与许可」）⇒ " +
+      "**绝不能翻译**：翻了就是一个不存在的锚点（浏览器会跳到页面顶部，访客以为「文档里没有这一节」）。" +
+      "它是**链接的一部分**，不是界面文案。" +
+      "⚠️ 尺子（bareChinese）会把它数成一条裸中文 ⇒ 所以在这里登记为永久例外并写明理由；" +
+      "代码里那一行上方也写了同样的理由（免得下一个人以为是漏翻）。" +
+      "👉 🔴 一般化：**URL / 文件名 / 锚点里的中文属于「标识符」，不是文案** —— " +
+      "同类还有服务端那个 `导出说明.md`（产物文件名）。判据是「改了它会不会**指向另一个东西**」：" +
+      "会 ⇒ 标识符，不翻；不会 ⇒ 文案，翻。",
   },
   {
     file: "components/SearchCard/index.tsx",
@@ -133,15 +142,6 @@ const LEDGER: Entry[] = [
     kind: "iou",
     batch: "期 10 第二批",
     why: "🔴 搜索卡片的标题/占位/快捷键提示 ⇒ 访客可见。",
-  },
-  {
-    file: "components/CopyRight/index.tsx",
-    count: 6,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 版权声明与转载提示 ⇒ 访客可见。⚠️ 这一族要留意「协议名（CC BY-NC-SA 4.0）」是**技术标识符**，" +
-      "三份译文里必须逐字保留（与后台同一条纪律）。",
   },
   {
     file: "components/PostCard/titleCopyA11y.ts",
@@ -158,16 +158,6 @@ const LEDGER: Entry[] = [
       "👉 规矩（本批定下）：**常量留作默认值 + 另加取文案的函数（尾参 `t = IDENTITY_T`）+ 消费方改调函数**。" +
       "⚠️ 尺子仍然把这 6 条数成「裸中文」（它看不出「这个常量被当作 defaultMessage 用了」）⇒ " +
       "所以台账给它一个**独立的 kind**（`seamed`）并用 `seamWired` 逐条验证，而不是把数字改成 0 造假账。",
-  },
-  {
-    file: "components/UnLockCard/index.tsx",
-    count: 6,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 文章密码解锁卡片（输入框、按钮、错误与限流提示）⇒ 访客可见。" +
-      "⚠️ 这里会显示**服务端错误消息**（`articleUnlockThrottled` 等）⇒ 必须走 `translateServerMessage()`，" +
-      "不能直通 `err.message`（后台已经修过同一类缺陷：21 处 `message.error(err.message)`）。",
   },
   {
     file: "pages/category.tsx",
@@ -236,13 +226,6 @@ const LEDGER: Entry[] = [
       "接缝层刻意只实现 `{name}` 插值，见 `utils/i18n.ts` 的注释）。",
   },
   {
-    file: "components/ThemeButton/core.tsx",
-    count: 5,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 主题切换按钮的 aria-label 与提示（浅色/深色/跟随系统）⇒ 读屏可见。",
-  },
-  {
     file: "components/SearchCard/a11y.ts",
     count: 4,
     kind: "seamed",
@@ -254,13 +237,6 @@ const LEDGER: Entry[] = [
       "消费方 `SearchCard/index.tsx` 已改成传 `useT()` 的结果（在 `forwardRef` 的渲染函数内，合法）。" +
       "🔴 浏览器实测（上一批它们还是中文、是台账里的欠条）：切到英文后这 4 个 aria-label 变成" +
       "`Search` / `Search content` / `Clear search` / `Search results`。",
-  },
-  {
-    file: "pages/404.tsx",
-    count: 4,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 404 页标题与「回到首页」按钮 ⇒ 访客可见（而且是最容易被非中文用户撞到的一页）。",
   },
   {
     file: "components/AlertCard/index.tsx",
@@ -309,13 +285,6 @@ const LEDGER: Entry[] = [
       "🔴 `搜索接口返回了不可用的数据` / `搜索请求失败（HTTP …）` —— 这两条会被 `pages/search.tsx` " +
       "的 catch 显示给访客 ⇒ 属界面文案（与 `api/searchIndex.ts` 那三条**不同**，那三条只进 console）。" +
       "⚠️ 判据是「调用方有没有把它渲染出来」，不是「它在不在 api/ 目录里」。",
-  },
-  {
-    file: "components/PostCard/index.tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 文章卡片的固定标签（「阅读全文」/「置顶」等）⇒ 访客可见。",
   },
   {
     file: "components/Reward/index.tsx",
@@ -537,7 +506,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(100);
+    expect(total).toBeGreaterThan(80);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -548,7 +517,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(174);
+    expect(total).toBeLessThanOrEqual(145);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -616,7 +585,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第九批更新）：**174** 条 = 永久例外 **37** + 欠条 **111** + **已过接缝的默认值 26**。
+    // 🔴 口径（期 10 第十一批更新）：**145** 条 = 永久例外 **38** + 欠条 **81** + **已过接缝的默认值 26**。
+    //    第十一批销账 5 个文件（`UnLockCard/index.tsx` 6 + `CopyRight` 6 + `ThemeButton/core` 5 +
+    //    `404` 4 + `PostCard/index.tsx` 2 = 23 条），并把 `Footer` 的 7 条迁走 6 条、
+    //    剩下 1 条（GitHub 锚点 URL）改判**永久例外** ⇒ 174 - 23 - 6 = 145，permanent 37 → 38。
     //    第九批**销账前台最大的单文件**：`components/Comment/index.tsx`（44 条，现在裸中文 **0**）
     //    ⇒ 218 - 44 = 174；词条全部进词典（39 个新 key，词典共 **105 key ×2**）。
     //    🔴 有一处**刻意没迁**：`new Date(time).toLocaleDateString()`（站长裁定：日期跟浏览器 locale 走），
@@ -649,10 +621,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
-    expect(permCount).toBe(37);
+    expect(permCount).toBe(38);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(111);
+    expect(iouCount).toBe(81);
     expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）

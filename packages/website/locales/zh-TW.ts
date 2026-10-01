@@ -136,6 +136,40 @@ const dict: Record<string, string> = {
   'comment.empty': '還沒有留言，來說兩句吧。',
   'comment.loading': '載入中…',
   'comment.loadMore': '載入更多留言（還有 {count} 則）',
+
+  // ── 🔴 期 10 第十一批：站点外围文案（页脚备案与 fork 说明 / 版权块 / 解锁卡 / 主题按钮 / 404 / 文章卡）。
+  //    地区用词：**編號** / **公安備案** / **增強修改版** / **部落格**（博客）/ **授權條款**（许可协议）/
+  //    **註明出處** / **本文連結** / **版權聲明** / **密碼錯誤** / **解鎖** / **確認** / **自動模式** /
+  //    **亮色 / 暗色模式** / **頁面** / **返回首頁**（主页→首頁）/ **閱讀全文**。
+  //    🔴 技术标识符三份逐字相同：ICP / logo / VanBlog / CKboss/vanblog / dev/dsh / {license} 的值（如 CC BY-NC-SA 4.0）。
+  //    🔴 标签末尾的冒号：繁中用全角「：」，英文用半角「:」。
+  'footer.icpLabel': 'ICP 編號：',
+  'footer.policeLabel': '公安備案：',
+  'footer.policeLogoAlt': '公安備案 logo',
+  'footer.forkTitle': 'VanBlog 增強修改版（CKboss/vanblog，分支 dev/dsh）',
+  'footer.forkChangesTitle': '看看這個分支相對原版改了什麼',
+  'footer.forkBadge': '增強修改版',
+  'copyright.copied': '複製成功！',
+  'copyright.licenseNotice': '本部落格所有文章除特別聲明外，均採用 {license} 授權條款。轉載請註明出處！',
+  'copyright.authorLabel': '本文作者：',
+  'copyright.linkLabel': '本文連結：',
+  'copyright.declarationLabel': '版權聲明：',
+  'unlock.wrongPassword': '密碼錯誤！請重試！',
+  'unlock.emptyInput': '輸入不能為空！',
+  'unlock.success': '解鎖成功！',
+  'unlock.failed': '解鎖失敗！',
+  'unlock.passwordPlaceholder': '請輸入密碼',
+  'unlock.confirm': '確認',
+  'theme.auto': '自動模式',
+  'theme.autoLight': '自動模式-亮色',
+  'theme.autoDark': '自動模式-暗色',
+  'theme.light': '亮色模式',
+  'theme.dark': '暗色模式',
+  'notFound.pageWord': '頁面',
+  'notFound.missingSentence': '此{thing}不存在',
+  'notFound.backHome': '返回首頁',
+  'postCard.encryptedHint': '該文章已加密，點擊 `閱讀全文` 並輸入密碼後方可查看。',
+  'postCard.readMore': '閱讀全文',
 };
 
 export default dict;

@@ -15,7 +15,8 @@ import {
 } from "../NavBar/a11y";
 
 export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
-  // 🔴 期 10 第四批：aria-label / title 走 i18n 接缝（渲染期取）
+  // 🔴 期 10 第四批加了 `useT()`；第十一批把剩下的 3 处 title（自动模式那一族）也接上，
+  //    **复用同一个 `t`**，不重复声明（第一版我在这里又声明了一次 ⇒ TS2451 重复声明）。
   const t = useT();
   const { current } = useRef<any>({ hasInit: false });
   const { current: currentTimer } = useRef<any>({ timer: null });
@@ -38,12 +39,12 @@ export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
   };
   const getThemeTitleAuto = () => {
     if ((theme as any) == "auto") {
-      return "自动模式";
+      return t("theme.auto", "自动模式");
     }
     if (theme.includes("light")) {
-      return "自动模式-亮色";
+      return t("theme.autoLight", "自动模式-亮色");
     } else {
-      return "自动模式-暗色";
+      return t("theme.autoDark", "自动模式-暗色");
     }
   };
 
@@ -115,7 +116,7 @@ export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
           height: 20,
         }}
         className="dark:text-dark "
-        title="亮色模式"
+        title={t("theme.light", "亮色模式")}
       >
         <svg
           className="fill-gray-600"
@@ -135,7 +136,7 @@ export default function (props: { defaultTheme: "auto" | "dark" | "light" }) {
           display: theme == "dark" ? "block" : "none",
           height: 20,
         }}
-        title="暗色模式"
+        title={t("theme.dark", "暗色模式")}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"

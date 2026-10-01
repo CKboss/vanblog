@@ -2,11 +2,18 @@ import Image from "next/image";
 import Head from "next/head";
 import Link from "next/link";
 
+import useT from "../hooks/useT";
 export default function (props: { name?: string }) {
+  // 🔴 期 10 第十一批：404 页的标题/句子/按钮走 i18n 接缝
+  const t = useT();
   return (
     <>
       <Head>
-        <title>{`此${props?.name ? props.name : "页面"}不存在`}</title>
+        <title>
+          {t("notFound.missingSentence", "此{thing}不存在", {
+            thing: props?.name ? props.name : t("notFound.pageWord", "页面"),
+          })}
+        </title>
         <link rel="icon" href={"/logo.svg"}></link>
       </Head>
       <div
@@ -19,11 +26,13 @@ export default function (props: { name?: string }) {
         >
           <Image alt="logo" src="/logo.svg" width={200} height={200} />
           <div className="mt-4 text-gray-600 font-base text-xl dark:text-dark">
-            {`此${props?.name ? props.name : "页面"}不存在`}
+            {t("notFound.missingSentence", "此{thing}不存在", {
+              thing: props?.name ? props.name : t("notFound.pageWord", "页面"),
+            })}
           </div>
           <Link href="/">
             <div className="mt-4 ua ua-link text-base text-gray-600 dark:text-dark">
-              返回主页
+              {t("notFound.backHome", "返回主页")}
             </div>
           </Link>
         </div>

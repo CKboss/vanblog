@@ -134,6 +134,42 @@ const dict: Record<string, string> = {
   'comment.empty': 'No comments yet - be the first to say something.',
   'comment.loading': 'Loading…',
   'comment.loadMore': 'Load more comments ({count} remaining)',
+
+  // ── 🔴 期 10 第十一批：站点外围文案 27 个 key。
+  //    🔴 postCard.encryptedHint 里的反引号内必须与 postCard.readMore 的译文**逐字相同**
+  //    （否则读者会去找一个界面上不存在的按钮名）⇒ 两条由同一批译文保证一致。
+  //    ⚠️ copyright.licenseNotice 是**整句模板**（{license} 是技术标识符，不翻）；
+  //    notFound.missingSentence 也是整句模板（{thing} 由 notFound.pageWord 填）。
+  //    🔴 全文无撇号（ICU 转义）、无全角标点；不用 ICU 复数。
+  //    🔴 这批**没有**加 markdown.* 那 5 个容器标题：它们在 markdown 处理管线里、
+  //    而且插件数组是 useMemo([]) 缓存的 ⇒ 切语种不会重建（见台账里那一条的理由）。
+  'footer.icpLabel': 'ICP License:',
+  'footer.policeLabel': 'Public Security Filing:',
+  'footer.policeLogoAlt': 'Public Security Filing logo',
+  'footer.forkTitle': 'VanBlog enhanced fork (CKboss/vanblog, branch dev/dsh)',
+  'footer.forkChangesTitle': 'See what this fork changed compared with the original',
+  'footer.forkBadge': 'Enhanced fork',
+  'copyright.copied': 'Copied!',
+  'copyright.licenseNotice': 'Unless otherwise stated, all articles on this blog are licensed under {license}. Please credit the source when reposting!',
+  'copyright.authorLabel': 'Author:',
+  'copyright.linkLabel': 'Link:',
+  'copyright.declarationLabel': 'Copyright:',
+  'unlock.wrongPassword': 'Wrong password! Please try again!',
+  'unlock.emptyInput': 'The input cannot be empty!',
+  'unlock.success': 'Unlocked!',
+  'unlock.failed': 'Failed to unlock!',
+  'unlock.passwordPlaceholder': 'Enter the password',
+  'unlock.confirm': 'Confirm',
+  'theme.auto': 'Auto mode',
+  'theme.autoLight': 'Auto mode - light',
+  'theme.autoDark': 'Auto mode - dark',
+  'theme.light': 'Light mode',
+  'theme.dark': 'Dark mode',
+  'notFound.pageWord': 'page',
+  'notFound.missingSentence': 'This {thing} does not exist',
+  'notFound.backHome': 'Back to home',
+  'postCard.encryptedHint': 'This article is encrypted. Click `Read more` and enter the password to view it.',
+  'postCard.readMore': 'Read more',
 };
 
 export default dict;

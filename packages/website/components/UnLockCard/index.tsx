@@ -29,18 +29,19 @@ export default function (props: {
     try {
       const res = await getArticleByIdOrPathnameWithPassword(props.id, value);
       if (!res) {
-        onError("密码错误！请重试！");
+        onError(t("unlock.wrongPassword", "密码错误！请重试！"));
         return false;
       }
       return res;
     } catch (err) {
-      onError("密码错误！请重试！");
+      // 🔴 期 10 第十一批：这几条是**本地兜底文案**；服务端有码时由上层 `translateServerMessage()` 覆盖
+      onError(t("unlock.wrongPassword", "密码错误！请重试！"));
       return false;
     }
   };
   const handleClick = async () => {
     if (value == "") {
-      onError("输入不能为空！");
+      onError(t("unlock.emptyInput", "输入不能为空！"));
       return;
     }
     setLoading(true);
@@ -48,14 +49,14 @@ export default function (props: {
       const article = await fetchArticle();
       if (article) {
         setLoading(false);
-        onSuccess("解锁成功！");
+        onSuccess(t("unlock.success", "解锁成功！"));
         props.setContent(article.content);
         props.setLock(false);
       } else {
         setLoading(false);
       }
     } catch (err) {
-      onError("解锁失败！");
+      onError(t("unlock.failed", "解锁失败！"));
       setLoading(false);
     }
   };
@@ -74,7 +75,7 @@ export default function (props: {
                 onChange={(ev) => {
                   setValue(ev.currentTarget.value);
                 }}
-                placeholder={"请输入密码"}
+                placeholder={t("unlock.passwordPlaceholder", "请输入密码")}
                 className="ml-2 w-full text-base dark:text-dark "
                 style={{
                   height: 32,
@@ -89,7 +90,7 @@ export default function (props: {
               onClick={handleClick}
               className="flex-grow-0 text-gray-500 dark:text-dark ml-2 rounded-md dark:bg-dark-2 bg-gray-200 transition-all hover:text-lg  w-20 h-8"
             >
-              确认
+              {t("unlock.confirm", "确认")}
             </button>
           </div>
         </div>

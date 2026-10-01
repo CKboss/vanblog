@@ -2,6 +2,7 @@ import ImageBox from "../ImageBox";
 import RunningTime, { sinceYear } from "../RunningTime";
 import Viewer from "../Viewer";
 
+import useT from "../../hooks/useT";
 export default function ({
   ipcHref,
   ipcNumber,
@@ -21,12 +22,14 @@ export default function ({
   since: string;
   version: string;
 }) {
+  // 🔴 期 10 第十一批：页脚的备案号标签与 fork 说明走 i18n 接缝
+  const t = useT();
   return (
     <>
       <footer className="text-center text-sm space-y-1 mt-8 md:mt-12 dark:text-dark footer-icp-number">
         {Boolean(ipcNumber) && (
           <p className="">
-            ICP 编号:&nbsp;
+            {t("footer.icpLabel", "ICP 编号:")}&nbsp;
             <a
               href={ipcHref}
               target="_blank"
@@ -38,12 +41,12 @@ export default function ({
         )}
         {Boolean(gaBeianNumber) && (
           <p className="flex justify-center items-center footer-gongan-beian">
-            公安备案:&nbsp;
+            {t("footer.policeLabel", "公安备案:")}&nbsp;
             {Boolean(gaBeianLogoUrl) && (
               <ImageBox
                 src={gaBeianLogoUrl}
                 lazyLoad={true}
-                alt="公安备案 logo"
+                alt={t("footer.policeLogoAlt", "公安备案 logo")}
                 width={20}
               />
             )}
@@ -68,20 +71,27 @@ export default function ({
             href="https://github.com/CKboss/vanblog"
             target={"_blank"}
             rel="noreferrer"
-            title="VanBlog 增强修改版（CKboss/vanblog，分支 dev/dsh）"
+            title={t(
+              "footer.forkTitle",
+              "VanBlog 增强修改版（CKboss/vanblog，分支 dev/dsh）"
+            )}
             className="hover:text-gray-900 dark:hover:text-dark-hover transition ua ua-link"
           >
             VanBlog <span>{version}</span>
           </a>
           &nbsp;·&nbsp;
           <a
+            /* 🔴 这个 URL 里的 `#出处与许可` 是 **GitHub 上真实存在的中文标题锚点**（README 里那个小节就叫
+               「出处与许可」）⇒ 🔴 **绝不能翻译**：翻了就是一个 404 的锚点（链接会跳到页面顶部，
+               访客以为"文档里没有这一节"）。它是**链接的一部分**，不是界面文案。
+               ⚠️ 尺子（bareChinese）会把它数成一条裸中文 ⇒ 已在收口台账里登记为**永久例外**并写明这条理由。 */
             href="https://github.com/CKboss/vanblog/blob/dev/dsh/README.md#出处与许可"
             target={"_blank"}
             rel="noreferrer"
-            title="看看这个分支相对原版改了什么"
+            title={t("footer.forkChangesTitle", "看看这个分支相对原版改了什么")}
             className="hover:text-gray-900 dark:hover:text-dark-hover transition ua ua-link"
           >
-            增强修改版
+            {t("footer.forkBadge", "增强修改版")}
           </a>
         </p>
 
