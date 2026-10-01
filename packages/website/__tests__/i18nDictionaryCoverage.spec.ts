@@ -269,7 +269,11 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
   });
 
   it("⑥ 🔴 覆盖率**棘轮**：词典 key 数只许增不许减（迁一批就该涨）", () => {
-    // 🔴 140 = 期 10 第十二批之后的实测值（第十一批 128 - 1 条按裁定移除的 `markdown.copyCode` + 13 条新迁）
+    // 🔴 153 = 期 10 第十三批之后的实测值（第十二批 140 + 页面级 **13**）。
+    //    ⚠️ b69 交了 16 条译文，但只有 13 条进了词典：`stats.tagSummary`（那两个页面的统计行本批没迁）、
+    //    `app.initializing` / `app.pageNavigation`（🔴 查清消费方后发现它们是 `console.log` 的**参数**，
+    //    是开发者日志不是界面文案 ⇒ 改判永久例外）⇒ 加了就是孤儿 key。
+    //    历史：140 = 期 10 第十二批之后的实测值（第十一批 128 - 1 条按裁定移除的 `markdown.copyCode` + 13 条新迁）
     //    历史：第五批 39 → 第八批 66 → 第九批 105 → 第十批 101（合并去重）→ 第十一批 128 → 第十二批 **140**。
     //    （下面这段是第十批留下的说明，保留：）
     // 🔴 101 = 期 10 第十批之后的实测值（第九批曾是 105，第十批**移除**了 `comment.time*` 4 个孤儿 key：
@@ -279,9 +283,9 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
     //    "**key 被合并/删除了**"（不是"懒得翻所以删掉"）；而上调的理由是"又迁了一批"。
     //    👉 棘轮的语义是"覆盖率不许退步"，而**合并重复 key 是让覆盖率更真实**（一份文案一条译文），
     //    所以这种下调是**进步**，不是退步 —— 但必须在注释里说清，否则下一个人会以为可以随便调小。
-    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(140);
-    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(140);
-    expect(ids.size).toBeGreaterThanOrEqual(140);
+    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(153);
+    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(153);
+    expect(ids.size).toBeGreaterThanOrEqual(153);
   });
 });
 

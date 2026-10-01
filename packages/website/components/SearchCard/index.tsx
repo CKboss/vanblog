@@ -37,12 +37,20 @@ import {
 } from "./a11y";
 
 import useT from "../../hooks/useT";
+import { IDENTITY_T, type TFunc } from "../../utils/i18n";
 export type SearchCardHandle = {
   openFromUserGesture: () => boolean;
 };
 
 /** 弹窗里"查看全部结果"的入口文案（单测按这个字符串找它） */
+// 🔴 期 10 第十三批：常量保留当默认值，另加取文案的函数（规矩见 §7.205 A）
 export const SEARCH_VIEW_ALL_LABEL = "查看全部结果";
+export const SEARCH_VIEW_ALL_LABEL_ID = "search.viewAllResults";
+
+/** 🔴 取「查看全部结果」按钮文案（渲染期调用）。 */
+export function searchViewAllLabel(t: TFunc = IDENTITY_T): string {
+  return t(SEARCH_VIEW_ALL_LABEL_ID, SEARCH_VIEW_ALL_LABEL);
+}
 
 /**
  * 「查看全部结果」→ `/search?q=<关键词>`。
@@ -200,22 +208,26 @@ const SearchCard = forwardRef<
   const renderResult = () => {
     let text = "";
     if (loading) {
-      text = "搜索中...";
+      // 🔴 期 10 第十三批：**统一到 `search.searching` 这个 key**（`SearchResults` 用的是同一个 key）。
+      //    ⚠️ 这里原来是三个 ASCII 点 `搜索中...`，而 SearchResults 那边是单字符省略号 `搜索中…`
+      //    ⇒ 🔴 **合并后统一用 `…`**（与后台/其余部分一致）。这是一处**刻意的界面文案变化**
+      //    （两个点变成一个省略号字符），已在 CHANGELOG 单独点明。
+      text = t("search.searching", "搜索中…");
     } else if (failed) {
-      text = "搜索失败，请稍后再试";
+      text = t("search.failedRetry", "搜索失败，请稍后再试");
     } else {
       if (search.trim() == "") {
-        text = "请输入并搜索";
+        text = t("search.enterAndSearch", "请输入并搜索");
       } else {
         // 有数字，有结果
         if (result.length) {
-          text = "有结果";
+          text = t("search.stateHasResults", "有结果");
         } else {
           // 可能是暂无结果或者输入中
           if (typing) {
-            text = "输入中";
+            text = t("search.stateTyping", "输入中");
           } else {
-            text = "暂无结果";
+            text = t("search.stateNoResults", "暂无结果");
           }
         }
       }

@@ -8,6 +8,7 @@ import {
   type TimelineArticleRef,
 } from "../utils/timelineMonths";
 import { revalidate } from "../utils/loadConfig";
+import useT from "../hooks/useT";
 export interface TimeLinePageProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
@@ -25,6 +26,8 @@ export interface TimeLinePageProps {
   wordTotal: number;
 }
 const TimeLine = (props: TimeLinePageProps) => {
+  // 🔴 期 10 第十三批：走 i18n 接缝（渲染期取）
+  const t = useT();
   return (
     <Layout
       title={"时间线"}
@@ -34,9 +37,14 @@ const TimeLine = (props: TimeLinePageProps) => {
       <div className="bg-white card-shadow dark:bg-dark dark:card-shadow-dark py-4 px-8 md:py-6 md:px-8">
         <div>
           <div className="text-2xl md:text-3xl text-gray-700 text-center dark:text-dark">
-            时间线
+            {t("page.timelineTitle", "时间线")}
           </div>
-          <div className="text-center text-gray-600 text-sm mt-2 mb-4 font-light dark:text-dark">{`${props.authorCardProps.catelogNum} 分类 × ${props.authorCardProps.postNum} 文章 × ${props.authorCardProps.tagNum} 标签 × ${props.wordTotal} 字`}</div>
+          <div className="text-center text-gray-600 text-sm mt-2 mb-4 font-light dark:text-dark">{t("stats.categorySummary", "{categories} 分类 × {posts} 文章 × {tags} 标签 × {words} 字", {
+              categories: props.authorCardProps.catelogNum,
+              posts: props.authorCardProps.postNum,
+              tags: props.authorCardProps.tagNum,
+              words: props.wordTotal,
+            })}</div>
         </div>
         <TimelineArchives
           yearGroups={props.yearGroups}

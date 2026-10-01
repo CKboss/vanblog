@@ -193,6 +193,27 @@ const dict: Record<string, string> = {
   'relatedArticles.title': '相關文章',
   'rss.copied': '已複製 RSS 訂閱地址到剪貼簿！',
   'timeline.articleCount': '{n}篇',
+
+  // ── 🔴 期 10 第十三批：页面级文案（站点统计行 / 各页标题 / 面包屑 / 搜索卡片状态）。
+  //    地区用词：**分類** / **標籤** / **時間線** / **友情連結**（链接→連結）/ **頁碼** / **首頁** /
+  //    **頁面跳轉** / **查看全部結果** / **請輸入並搜尋**（搜索→搜尋）/ **有結果** / **輸入中** / **暫無結果**。
+  //    🔴 统计行是**整句模板**：`{categories} 分類 × {posts} 文章 × {tags} 標籤 × {words} 字`
+  //    —— 分隔符 `×`（U+00D7）三份逐字相同、空格位置也一致（原来是拼接式，英文语序不同 ⇒ 必须整句）。
+  //    🔴 `search.searching` / `search.failedRetry` 与 SearchResults **共用同一条**（第八批已建）：
+  //    这一批把 SearchCard 里那份"搜索中..."（三个 ASCII 点）**统一**成同一个 key（单字符省略号 `…`）。
+  'stats.categorySummary': '{categories} 分類 × {posts} 文章 × {tags} 標籤 × {words} 字',
+  'page.categoryTitle': '分類',
+  'page.timelineTitle': '時間線',
+  'page.linkTitle': '友情連結',
+  'page.tagTitle': '標籤',
+  'page.pageNumberTitle': '頁碼',
+  'post.breadcrumbHome': '首頁',
+  'post.breadcrumbArticle': '文章',
+  'search.viewAllResults': '查看全部結果',
+  'search.enterAndSearch': '請輸入並搜尋',
+  'search.stateHasResults': '有結果',
+  'search.stateTyping': '輸入中',
+  'search.stateNoResults': '暫無結果',
 };
 
 export default dict;

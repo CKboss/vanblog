@@ -28,6 +28,7 @@ import { toSafeIsoString } from "../../utils/safeDate";
 import Custom404 from "../404";
 import dynamic from "next/dynamic";
 
+import useT from "../../hooks/useT";
 // 完整渲染器（按正文内容在 轻量/含 KaTeX+mermaid 之间挑）只由文章页/关于页引用，
 // 列表页不会因此背上 KaTeX。
 const FullMarkdown = dynamic(() => import("../../components/Markdown"), {
@@ -59,6 +60,8 @@ export interface PostPagesProps {
   relatedArticles?: RelatedArticle[];
 }
 const PostPages = (props: PostPagesProps) => {
+  // 🔴 期 10 第十三批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const [content, setContent] = useState(props?.article?.content || "");
   // 文章摘要（meta description / og:description 共用）：正文压成纯文本，最多 160 字
   const articleDescription = useMemo(
@@ -94,7 +97,7 @@ const PostPages = (props: PostPagesProps) => {
         logoUrl: resolveArticleCoverUrl(props.layoutProps.logo, props.siteUrl),
       }),
     ];
-    const crumbs = [{ name: props.layoutProps.siteName || "首页", path: "/" }];
+    const crumbs = [{ name: props.layoutProps.siteName || t("post.breadcrumbHome", "首页"), path: "/" }];
     if (props.article.category) {
       crumbs.push({
         name: props.article.category,
@@ -118,7 +121,7 @@ const PostPages = (props: PostPagesProps) => {
   // 每次重渲染（访客统计 setState、路由事件都会触发）都全文重解析一遍
   const sideBarHasToc = useMemo(() => hasToc(content), [content]);
   if (!props.article) {
-    return <Custom404 name="文章" />;
+    return <Custom404 name={t("post.breadcrumbArticle", "文章")} />;
   }
   return (
     <Layout

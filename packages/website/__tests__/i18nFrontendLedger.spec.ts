@@ -138,7 +138,7 @@ const LEDGER: Entry[] = [
   },
   {
     file: "components/SearchCard/index.tsx",
-    count: 7,
+    count: 2,
     kind: "iou",
     batch: "期 10 第二批",
     why: "🔴 搜索卡片的标题/占位/快捷键提示 ⇒ 访客可见。",
@@ -160,15 +160,8 @@ const LEDGER: Entry[] = [
       "所以台账给它一个**独立的 kind**（`seamed`）并用 `seamWired` 逐条验证，而不是把数字改成 0 造假账。",
   },
   {
-    file: "pages/category.tsx",
-    count: 6,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 分类页标题与空态文案 ⇒ 访客可见。",
-  },
-  {
     file: "pages/timeline.tsx",
-    count: 6,
+    count: 1,
     kind: "iou",
     batch: "期 10 第二批",
     why: "🔴 时间线页标题与空态文案 ⇒ 访客可见。⚠️ 月份/年份的显示要走 `utils/timelineMonths.ts`（见下）。",
@@ -265,9 +258,13 @@ const LEDGER: Entry[] = [
   {
     file: "utils/pageCopy.ts",
     count: 3,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 复制成功/失败的 toast 与「内容来自本站」那段版权尾注 ⇒ 访客可见。",
+    kind: "permanent",
+    why:
+      "🔴 **站长裁定（2026-10-01）：友链申领规则等 3 条判为永久例外，不接多语言。" +
+      "** 理由（三条，都是消费方层面的）：① 它们是**站长可编辑内容的默认值**（`resolvePageCopy(value, fallback)`：站长在后台填了就用站长的，没填才用这里的默认）⇒ 它们**站在内容那一侧**，不是界面 chrome，而站长已裁定内容不做多语言；" +
+      "② 🔴 `DEFAULT_FRIEND_LINK_APPLY_CONTENT` 是一整段**友链申领规则**（站长的政策声明）⇒ **翻它等于替站长说话**：那是站长对别人提出的要求，措辞与立场都属于站长；" +
+      "③ 里面还有 `{{siteName}}` / `{{url}}` 这种**双重花括号占位符**（另一套替换机制），与 i18n 的 `{name}` 混在一条文案里，将来接 ICU 时极易互相踩。" +
+      "👉 若将来改主意，要同时决定「站长自己填的那一份要不要翻」（答案只能是不翻）⇒ 于是会出现「默认值多语言、站长填的单语言」的混合状态 —— 这正是当初判它永久例外的原因之一。",
   },
   {
     file: "api/search.ts",
@@ -282,16 +279,21 @@ const LEDGER: Entry[] = [
   {
     file: "pages/_app.tsx",
     count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 全局提示（例如加载中/错误边界）⇒ 访客可见。⚠️ 这里也是将来注入词典与语种的地方。",
+    kind: "permanent",
+    why:
+      "🔴 **查清消费方后改判永久例外**（原登记为欠条）：`初始化` 与 `页面跳转` 这两个字符串是 `reloadViewer(reason)` 的**参数**，而 `reason` 的唯一去处是 `console.log('[更新访客]', reason, pathname)` ⇒ 🔴 **它们是开发者日志字段，不是界面文案**。" +
+      "⚠️ 而且它们是**日志检索关键词**（运维按「[更新访客] 初始化」搜日志）⇒ 翻成三语会让日志检索失效（与服务端那 8 条开发者不变量、6 条 backupVerify issues 同一类处置）。" +
+      "👉 🔴 这是「按形状猜会猜错」的又一例：尺子只看到「_app.tsx 里有两条中文」，而**真正的判据是「谁会读到它」**（第十七批那条教训，误差率实测约 42%）。",
   },
   {
     file: "pages/about.tsx",
     count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 关于页的固定标题与提示 ⇒ 访客可见。⚠️ 页面**正文**是内容，不翻。",
+    kind: "permanent",
+    why:
+      "🔴 **查清消费方后改判永久例外**：这 2 条是一段 **Markdown 表格模板**（`## 捐赠信息` + `| 捐赠人 | 捐赠金额|捐赠时间|` 表头 + `元|` 单元格后缀），它被**拼进关于页的正文**再交给 markdown 渲染 ⇒ 🔴 属**内容**，不是界面 chrome。" +
+      "⚠️ 而站长已裁定**内容不做多语言**；" +
+      "而且这段是 Markdown 语法（表格分隔行 `|---|---|---|`），翻译表头会让「表头与数据的列对应关系」在两种语言下不一致（捐赠人姓名与金额是数据，不会跟着翻）。" +
+      "👉 与服务端那个 `导出说明.md`（产物文件）同一类：**整份都是中文文档时，只翻其中几个词更糟**。",
   },
   {
     file: "pages/category/[category].tsx",
@@ -299,27 +301,6 @@ const LEDGER: Entry[] = [
     kind: "iou",
     batch: "期 10 第二批",
     why: "🔴 分类详情页标题与空态 ⇒ 访客可见。",
-  },
-  {
-    file: "pages/link.tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 友链页标题与空态 ⇒ 访客可见。⚠️ 友链名称与描述是**内容**，不翻。",
-  },
-  {
-    file: "pages/post/[id].tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 文章页的固定标签（「目录」/「相关推荐」等）⇒ 访客可见。⚠️ 文章正文与标题是**内容**，不翻。",
-  },
-  {
-    file: "pages/tag.tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 标签页标题与空态 ⇒ 访客可见。",
   },
   {
     file: "utils/categoryExpand.ts",
@@ -409,13 +390,6 @@ const LEDGER: Entry[] = [
       "⚠️ 这个组件还会显示**服务端错误消息**（密码错误、限流）⇒ 那部分必须走 `translateServerMessage()`，" +
       "登记在 `components/UnLockCard/index.tsx` 那一条里（6 条，仍是欠条）。",
   },
-  {
-    file: "pages/page/[p].tsx",
-    count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 分页页的标题/空态 ⇒ 访客可见。",
-  },
 ];
 
 /** 扫描前台源码，得到"每个文件还剩多少条裸中文"。 */
@@ -459,7 +433,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(60);
+    expect(total).toBeGreaterThan(50);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -470,7 +444,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(129);
+    expect(total).toBeLessThanOrEqual(106);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -538,7 +512,13 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第十二批更新）：**129** 条 = 永久例外 **46** + 欠条 **57** + **已过接缝的默认值 26**。
+    // 🔴 口径（期 10 第十三批更新）：**106** 条 = 永久例外 **53** + 欠条 **27** + **已过接缝的默认值 26**。
+    //    第十三批迁走 **23 条**（`SearchCard` 5 / `category` 6 / `timeline` 5 / `link` 2 / `tag` 2 /
+    //    `post/[id]` 2 / `page/[p]` 1）⇒ 销账 5 个文件；
+    //    🔴 并按站长裁定与"追消费方"把 **7 条改判永久例外**：`utils/pageCopy.ts` 3（站长裁定：
+    //    友链申领规则是站长的政策声明，翻它等于替站长说话）、`pages/_app.tsx` 2（🔴 查清是
+    //    `console.log` 的**日志字段**，不是界面文案）、`pages/about.tsx` 2（捐赠信息的 **Markdown 表格模板**，
+    //    属内容且站长已裁定内容不翻）⇒ permanent 46 → 53、欠条 57 → 27。
     //    第十二批迁走 **17 条**（`AlertCard` 3 / `AuthorCard` 3 / `Reward` 2 / `BackToTop` 1 / `MarkdownTocBar` 1 /
     //    `NavBarMobile` 1 / `RelatedArticles` 1 / `RssButton` 1 / `ImageBox` 1 / `TimeLineItem` 1 /
     //    `TimelineArchives` 1）⇒ 销账 11 个文件；
@@ -579,10 +559,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
-    expect(permCount).toBe(46);
+    expect(permCount).toBe(53);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(57);
+    expect(iouCount).toBe(27);
     expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）

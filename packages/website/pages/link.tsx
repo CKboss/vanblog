@@ -12,6 +12,7 @@ import { getLinkPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
 import { renderFriendLinkApplyContent } from "../utils/pageCopy";
 
+import useT from "../hooks/useT";
 export interface LinkPageProps {
   layoutProps: LayoutProps & FriendLinkCopy;
   authorCardProps: AuthorCardProps;
@@ -19,6 +20,8 @@ export interface LinkPageProps {
 }
 
 const LinkPage = (props: LinkPageProps) => {
+  // 🔴 期 10 第十三批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const [url, setUrl] = useState("");
   useEffect(() => {
     setUrl(window.location.origin);
@@ -46,13 +49,13 @@ const LinkPage = (props: LinkPageProps) => {
   return (
     <Layout
       option={props.layoutProps}
-      title="友情链接"
+      title={t("page.linkTitle", "友情链接")}
       sideBar={<AuthorCard option={props.authorCardProps} />}
     >
       <div className="bg-white dark:text-dark card-shadow dark:bg-dark dark:card-shadow-dark py-4 px-8 md:py-6 md:px-8">
         <div>
           <div className="text-2xl md:text-3xl text-gray-700 dark:text-dark text-center">
-            友情链接
+            {t("page.linkTitle", "友情链接")}
           </div>
         </div>
         <div className="flex flex-col mt-6 mb-2">

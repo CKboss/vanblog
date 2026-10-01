@@ -7,21 +7,24 @@ import { getTagPageProps } from "../utils/getPageProps";
 import { revalidate } from "../utils/loadConfig";
 import { getTarget } from "../components/Link/tools";
 
+import useT from "../hooks/useT";
 export interface TagPageProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
   tags: string[];
 }
 const TagPage = (props: TagPageProps) => {
+  // 🔴 期 10 第十三批：走 i18n 接缝（渲染期取）
+  const t = useT();
   return (
     <Layout
       option={props.layoutProps}
-      title="标签"
+      title={t("page.tagTitle", "标签")}
       sideBar={<AuthorCard option={props.authorCardProps}></AuthorCard>}
     >
       <div className="bg-white card-shadow dark:bg-dark dark:card-shadow-dark py-4 px-8 md:py-6 md:px-8">
         <div className="text-lg md:text-xl text-gray-700 dark:text-dark">
-          标签
+          {t("page.tagTitle", "标签")}
         </div>
         <div className="flex flex-wrap mt-2">
           {props.tags.map((tag) => (

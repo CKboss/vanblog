@@ -188,6 +188,28 @@ const dict: Record<string, string> = {
   'relatedArticles.title': 'Related articles',
   'rss.copied': 'RSS feed URL copied to the clipboard!',
   'timeline.articleCount': '{n} articles',
+
+  // ── 🔴 期 10 第十三批：页面级文案 13 个 key。
+  //    ⚠️ **不用 ICU 复数** ⇒ `1 categories` / `1 posts` / `1 words` 是**已知且已登记**的代价。
+  //    🔴 统计行保留 `×`（U+00D7）作分隔符，语序按英文自然读法重排
+  //    （`{categories} categories × {posts} posts × {tags} tags × {words} words`）。
+  //    ⚠️ `{words}` 在中文里数的是**字符**（字），英文写成 words 是**已登记的近似**（不是错译，
+  //    但接真 ICU / 真字数统计那批要一起复核）。
+  //    🔴 搜索卡片那三条状态（Has results / Typing / No results yet）是 **aria-live 播报**
+  //    ⇒ 刻意写得短而明确（读屏会打断当前朗读，长了很吵）。
+  'stats.categorySummary': '{categories} categories × {posts} posts × {tags} tags × {words} words',
+  'page.categoryTitle': 'Categories',
+  'page.timelineTitle': 'Timeline',
+  'page.linkTitle': 'Friend links',
+  'page.tagTitle': 'Tags',
+  'page.pageNumberTitle': 'Page number',
+  'post.breadcrumbHome': 'Home',
+  'post.breadcrumbArticle': 'Article',
+  'search.viewAllResults': 'View all results',
+  'search.enterAndSearch': 'Type to search',
+  'search.stateHasResults': 'Has results',
+  'search.stateTyping': 'Typing',
+  'search.stateNoResults': 'No results yet',
 };
 
 export default dict;

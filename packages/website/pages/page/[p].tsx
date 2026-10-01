@@ -17,6 +17,7 @@ import { sanitizeArticlesPerPage } from "../../utils/articlesPerPage";
 import { parsePageNumberParam } from "../../utils/pageParamShape";
 import { pageCount } from "../../components/PageNav/core";
 import Custom404 from "../404";
+import useT from "../../hooks/useT";
 export interface PagePagesProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
@@ -24,9 +25,11 @@ export interface PagePagesProps {
   articles: Article[];
 }
 const PagePages = (props: PagePagesProps) => {
+  // 🔴 期 10 第十三批：走 i18n 接缝（渲染期取）
+  const t = useT();
   const commentProvider = useCommentProvider();
   if (props.articles.length == 0) {
-    return <Custom404 name="页码" />;
+    return <Custom404 name={t("page.pageNumberTitle", "页码")} />;
   }
   return (
     <Layout
