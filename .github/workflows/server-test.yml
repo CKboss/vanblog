@@ -482,6 +482,14 @@ jobs:
         run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-reset-https.test.sh
       - name: vanblog.sh uninstall
         run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-uninstall.test.sh
+      # 🔴 期 11 第一批：`vanblog.sh` 的**输出语言**判据（站长裁定：安装说明默认英文、`--lang zh` 切中文）。
+      #    为什么放在这个 job：它和其它 `vanblog.sh` 判据一样**只读脚本 + 跑 `--help`**，
+      #    不需要 root、不需要 docker、不写 /var/vanblog（脚本刻意把帮助放在 pre_check 之前，
+      #    就是为了让非 root 用户也能看到帮助）。
+      #    ⚠️ 这条判据里有一项**反空转**（默认帮助必须 >40 行）：否则"帮助没打印出来"也会被算成
+      #    "输出里没有汉字"⇒ 假绿。
+      - name: vanblog.sh output language (default English, --lang zh)
+        run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-sh-i18n.test.sh
       - name: vanblog.sh download fallback
         run: bash scripts/tests/run-guard.sh scripts/tests/vanblog-download-fallback.test.sh
       - name: Reverse-proxy nginx Host header and cache-bypass docs

@@ -403,11 +403,17 @@ assert_contains "${W_OUT}" "没有验签" "服务端的 signatureWarning 被显�
 
 # ── G. 帮助与用法（docs-consistency 有一条守卫专查"子命令必须在 --help 里"）──────
 echo "-- G. 帮助文本 --"
-USAGE="$(show_usage 2>&1)"
+# 🔴 期 11 第一批：帮助现在**默认是英文**（站长裁定：安装说明默认英文、`--lang zh` 切中文）⇒
+#    凡是"帮助里必须写清某个后果"的判据，都要**两种语言各查一遍**：
+#    只查中文会因为默认变英文而红（本批就红了 3 条），只查英文则放过了中文那份的退化。
+#    👉 🔴 这不是"守卫太严"，而是**双语交付物的判据必须覆盖两份**（漏一份就等于那份没人守）。
+USAGE="$(show_usage 2>&1)"                       # 默认 = 英文
+USAGE_ZH="$(VANBLOG_LANG=zh show_usage 2>&1)"     # 中文那份
 assert_contains "${USAGE}" "signing-key" "--help 里有 signing-key"
 assert_contains "${USAGE}" "signing-export" "--help 里有 signing-export"
 assert_contains "${USAGE}" "--skip-signature-check" "--help 里有 --skip-signature-check"
-assert_contains "${USAGE}" "安全绕过" "并标明它是安全绕过（不是普通开关）"
+assert_contains "${USAGE_ZH}" "安全绕过" "（中文帮助）标明它是安全绕过（不是普通开关）"
+assert_contains "${USAGE}" "security bypass" "（英文帮助）同样标明它是 security bypass（不是普通开关）"
 PU="$(print_restore_usage 2>&1)"
 assert_contains "${PU}" "--skip-signature-check" "restore 的用法里有这个 flag"
 assert_contains "${PU}" "VANBLOG_BACKUP_VERIFY_KEY" "并指出正常做法是配验签公钥后重试"

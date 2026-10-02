@@ -49,7 +49,14 @@ for c in drill verify-deep backup-verify backup-status; do
     fail "vanblog.sh 没有把 ${c} 转发给 vanblog-drill.sh（pre_check 之前那行 case 被删了/改名了？）"
   fi
 done
-DOC_CMDS="$(grep -rhoE '\./vanblog\.sh [a-z_-]+' "${ROOT}/docs" --include='*.md' 2>/dev/null |
+# 🔴 期 11 第一批：正则从 `[a-z_-]+` 收紧成 `[a-z][a-z_-]*`（**必须以字母开头**）。
+#    起因：帮助文案里新增了全局选项 `--lang zh|en`，文档里一写 `./vanblog.sh --lang zh`，
+#    旧正则就把 `--lang` 当成"子命令"抓出来 ⇒ 报 `文档写了脚本不支持的子命令: --lang`。
+#    👉 🔴 这不是"守卫太严"，而是**它一直在抓错东西**：`-` 在字符类里，所以任何选项都会被当成子命令
+#    （以前没暴露是因为文档里从没在 `./vanblog.sh ` 后面直接写过选项）。
+#    收紧之后**不减弱**原意（"文档不许写脚本没有的子命令"照旧），但 🔴 **选项就没人管了** ⇒
+#    所以下面补一条**专门**针对 `--lang` 的判据（它必须真的被脚本支持），把这块覆盖补回来。
+DOC_CMDS="$(grep -rhoE '\./vanblog\.sh [a-z][a-z_-]*' "${ROOT}/docs" --include='*.md' 2>/dev/null |
   awk '{print $2}' | sort -u)"
 missing=""
 for c in ${DOC_CMDS}; do
@@ -60,6 +67,30 @@ if [[ -z "${missing}" ]]; then
 else
   fail "文档写了脚本不支持的子命令:${missing}"
 fi
+# 🔴 期 11 第一批：文档里出现的**全局选项**必须真的被脚本支持（补上"选项没人管"的缺口）
+DOC_OPTS="$(grep -rhoE '\./vanblog\.sh --[a-z-]+' "${ROOT}/docs" --include='*.md' 2>/dev/null |
+  awk '{print $2}' | sort -u)"
+missing_opt=""
+for o in ${DOC_OPTS}; do
+  # 脚本里必须真的解析这个选项（`--opt` 或 `--opt=*` 出现在 case 分支里）
+  grep -qF -- "${o}" "${ROOT}/scripts/vanblog.sh" || missing_opt="${missing_opt} ${o}"
+done
+if [[ -z "${DOC_OPTS}" ]]; then
+  pass "文档里没有提到 ./vanblog.sh 的全局选项（无需对账）"
+elif [[ -z "${missing_opt}" ]]; then
+  pass "文档里出现的全局选项脚本都支持（$(printf '%s' "${DOC_OPTS}" | tr '\n' ' ')）"
+else
+  fail "文档写了脚本不支持的选项:${missing_opt}"
+fi
+# 🔴 反向：脚本支持的 `--lang` 必须在文档里出现过（否则这个功能等于没发布）
+if grep -qF -- '--lang' "${ROOT}/scripts/vanblog.sh"; then
+  if printf '%s\n' "${DOC_OPTS}" | grep -qx -- '--lang'; then
+    pass "--lang 在文档里出现过（功能有文档）"
+  else
+    fail "脚本支持 --lang 但文档里没提 ⇒ 用户不知道有语言选项"
+  fi
+fi
+
 # 反向：脚本新增的子命令应该在文档里出现过（status 这种新命令最容易漏）
 for c in backup restore status update install config log; do
   if printf '%s' "${DOC_CMDS}" | grep -qx "${c}"; then

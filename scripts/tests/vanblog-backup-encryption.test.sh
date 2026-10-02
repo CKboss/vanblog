@@ -376,11 +376,18 @@ fi
 # ═══ F. rotate-jwt ═══
 echo "-- F. rotate-jwt --"
 assert_contains "${SRC}" "rotate-jwt" "--help/脚本里出现 rotate-jwt"
-usage_out="$(show_usage 2>&1)"
+# 🔴 期 11 第一批：帮助现在**默认是英文**（站长裁定：安装说明默认英文、`--lang zh` 切中文）⇒
+#    凡是"帮助里必须写清某个后果"的判据，都要**两种语言各查一遍**：
+#    只查中文会因为默认变英文而红（本批就红了 3 条），只查英文则放过了中文那份的退化。
+#    👉 🔴 这不是"守卫太严"，而是**双语交付物的判据必须覆盖两份**（漏一份就等于那份没人守）。
+usage_out="$(show_usage 2>&1)"                     # 默认 = 英文
+usage_out_zh="$(VANBLOG_LANG=zh show_usage 2>&1)"   # 中文那份
 assert_contains "${usage_out}" "rotate-jwt" "show_usage 列出了 rotate-jwt（有一条守卫专查'dispatcher 认的子命令必须在 --help 里'）"
 assert_contains "${usage_out}" "--grace-days" "show_usage 说明了 --grace-days"
-assert_contains "${usage_out}" "全部 API Token" "show_usage 说清了'宽限期一过全部 API Token 失效'这个后果"
-assert_contains "${usage_out}" "waline" "show_usage 提示了 waline 会话的耦合"
+assert_contains "${usage_out_zh}" "全部 API Token" "（中文帮助）说清了'宽限期一过全部 API Token 失效'这个后果"
+assert_contains "${usage_out}" "all API Tokens" "（英文帮助）同样说清了'all API Tokens expire'这个后果"
+assert_contains "${usage_out}" "waline" "（英文帮助）提示了 waline 会话的耦合"
+assert_contains "${usage_out_zh}" "waline" "（中文帮助）提示了 waline 会话的耦合"
 
 # 参数校验：超范围/非数字都要在**发请求之前**失败
 reset_apilog

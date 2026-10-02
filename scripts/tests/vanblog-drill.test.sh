@@ -1406,14 +1406,27 @@ fi
 # 行为级：真跑一次（当前 uid 是不是 root 都该出帮助、都该 rc=0）
 HELP_OUT="$(bash "${MAIN}" --help 2>&1 </dev/null)"; HELP_RC=$?
 assert_rc "${HELP_RC}" "0" "./vanblog.sh --help 退出码 0（当前 uid=$(id -u)）"
-assert_contains "${HELP_OUT}" "VanBlog 管理脚本" "--help 真的打印了帮助正文"
+# 🔴 期 11 第一批：帮助**默认是英文**（站长裁定：安装说明默认英文、`--lang zh` 切中文）⇒
+#    "帮助正文真的打印出来了"这个判据要改成**语言中立**的证据，并且**两种语言各查一遍**：
+#    ① 标题行：默认英文 `VanBlog management script`、`--lang zh` 时中文 `VanBlog 管理脚本`；
+#    ② 🔴 还要查"帮助确实很长"（>200 行）—— 只查标题的话，"只剩标题的残缺帮助"也能过。
+assert_contains "${HELP_OUT}" "VanBlog management script" "--help 真的打印了帮助正文（默认英文）"
+assert_contains "${HELP_OUT}" "Usage: ./vanblog.sh" "--help 里有 Usage 行（英文）"
+HELP_LINES="$(printf '%s\n' "${HELP_OUT}" | grep -c '')"
+if [[ "${HELP_LINES}" -gt 200 ]]; then
+  pass "--help 正文有 ${HELP_LINES} 行（>200 ⇒ 不是只剩标题的残缺帮助）"
+else
+  fail "--help 正文只有 ${HELP_LINES} 行（应 >200）⇒ 帮助可能被截断/英文那份没同步"
+fi
+HELP_ZH_OUT="$(VANBLOG_LANG=zh bash "${MAIN}" --help 2>&1 </dev/null || true)"
+assert_contains "${HELP_ZH_OUT}" "VanBlog 管理脚本" "--lang zh 时打印中文帮助正文"
 assert_contains "${HELP_OUT}" "verify-deep" "帮助里能看到那四条免 root 的子命令"
 assert_not_contains "${HELP_OUT}" "必须使用root" "帮助路径上没有冒出 root 门槛的报错"
 # 另外两个等价入口也要一样（-h / help），否则只修了一个形状
 for a in -h help; do
   A_OUT="$(bash "${MAIN}" "${a}" 2>&1 </dev/null)"; A_RC=$?
   assert_rc "${A_RC}" "0" "./vanblog.sh ${a} 同样退出码 0"
-  assert_contains "${A_OUT}" "VanBlog 管理脚本" "./vanblog.sh ${a} 同样打印帮助"
+  assert_contains "${A_OUT}" "VanBlog management script" "./vanblog.sh ${a} 同样打印帮助（默认英文标题）"
 done
 # 反证（位置那条断言不是空转）：pre_check 里确实有 root 门槛，否则"挪到它前面"毫无意义
 if grep -qF 'EUID -ne 0' "${MAIN}"; then

@@ -19,6 +19,56 @@ _vb_data_sed="${_vb_data_sed//&/\\&}"
 VANBLOG_DATA_PATH_RAW="${VANBLOG_DATA_PATH_RAW:-${_vb_data_sed//|/\\|}}"
 VANBLOG_SCRIPT_VERSION="v0.6.0"
 
+# ── 输出语言（期 11 第一批，2026-10-02）────────────────────────────────────
+# 🔴 **站长裁定：安装说明文案要有英文版，而且默认是英文，可以用选项切成中文。**
+#    优先级（高 → 低）：命令行 `--lang zh|en` / `-l zh|en` / `--lang=zh`  >  环境变量 `VANBLOG_LANG`  >  **默认 en**。
+#    ⚠️ 刻意**不**去猜系统的 `LANG`/`LC_ALL`：站长要的是"默认英文"这个**确定**行为，
+#    而"跟着系统 locale 走"会让同一份文档在不同机器上表现不同（排障时最容易骗人）。
+#    🔴 解析必须在这里做（脚本最顶部），因为它要**在 `$1` 被任何分支读走之前**把 `--lang` 摘掉 ——
+#    否则 `./vanblog.sh --lang zh install` 会把 `--lang` 当成子命令。
+_vb_rest=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --lang | --language | -l)
+      VANBLOG_LANG="${2:-}"
+      if [[ $# -ge 2 ]]; then shift 2; else shift; fi
+      ;;
+    --lang=* | --language=*)
+      VANBLOG_LANG="${1#*=}"
+      shift
+      ;;
+    *)
+      _vb_rest+=("$1")
+      shift
+      ;;
+  esac
+done
+# 🔴 `set --` 要写成这种"数组可能为空"的安全形式：脚本开了 `set -u` 时 `"${arr[@]}"` 在空数组上会炸。
+set -- ${_vb_rest[@]+"${_vb_rest[@]}"}
+unset _vb_rest
+
+case "$(printf '%s' "${VANBLOG_LANG:-en}" | tr '[:upper:]' '[:lower:]')" in
+  zh | zh-cn | zh_cn | zh_tw | chinese | cn) VANBLOG_LANG="zh" ;;
+  en | en-us | en_us | english | "") VANBLOG_LANG="en" ;;
+  *)
+    echo "⚠️  Unknown --lang value: ${VANBLOG_LANG} (use 'en' or 'zh'). Falling back to English." >&2
+    VANBLOG_LANG="en"
+    ;;
+esac
+export VANBLOG_LANG
+
+# 🔴 迁移期用的双语输出助手：`say "<english>" "<中文>"`。
+#    ⚠️ 用 `echo -e`（与脚本里既有写法一致，正文里有 \033 颜色码）。
+#    👉 规矩：**新写的用户可见文案一律走 `say`**（或 `msg` 表），不要再写裸的中文 `echo` ——
+#    `scripts/tests/vanblog-sh-i18n.test.sh` 里有一条棘轮判据盯着"用户可见输出里的中文行数"，只许减不许增。
+say() {
+  if [[ "${VANBLOG_LANG:-en}" == "zh" ]]; then
+    echo -e "$2"
+  else
+    echo -e "$1"
+  fi
+}
+
 # ── 装的是哪一个 VanBlog ──────────────────────────────────────────────
 # 装的是本仓库 CKboss/vanblog 构建出来的镜像。
 #
@@ -5883,6 +5933,13 @@ reset() {
 }
 
 show_usage() {
+  # 🔴 期 11 第一批：**站长裁定 —— 安装说明默认英文，`--lang zh` 切中文。**
+  #    两份文案各自是一个**引号 heredoc**（`<<'USAGE'` / `<<'USAGE_EN'`）：正文里有大量 `$VAR`、`$(...)` 示例，
+  #    不加引号的 heredoc 会被当场展开甚至执行（这条注意事项原来只写在中文那份上面，现在两份都适用）。
+  #    ⚠️ 两份必须**同步维护**：改了子命令/参数/退出码，两边都要改。
+  #    🔴 `scripts/tests/vanblog-sh-i18n.test.sh` 里有判据钉住这件事（英文版里不许出现中文、
+  #    `--help` 默认必须出英文、`--lang zh` 必须出中文），漏改一边会红。
+  if [[ "${VANBLOG_LANG:-en}" == "zh" ]]; then
   # ⚠️ 这里用**引号 heredoc**（<<'USAGE'）：正文里有大量 `$VAR`、`$(...)` 形式的示例，
   #    用不加引号的 heredoc 会被当场展开甚至执行。需要显示实际默认值的几行单独 echo。
   cat <<'USAGE'
@@ -6164,12 +6221,294 @@ VanBlog 管理脚本（CKboss/vanblog @ dev/dsh；原始项目 https://github.co
     <安装目录>/caddy/{config,data}            caddy 配置与证书
 
 USAGE
-  echo "本机实际取值："
+  else
+    cat <<'USAGE_EN'
+VanBlog management script (CKboss/vanblog @ dev/dsh; upstream project https://github.com/Mereithhh/vanblog)
+
+Usage: ./vanblog.sh [subcommand] [args]     no args = interactive menu
+      ./vanblog.sh --help | -h | help    show this page
+      ./vanblog.sh --lang zh|en           output language (default: en; also VANBLOG_LANG=zh)
+
+──────────────────── install & daily use ────────────────────
+  install                 Install / reinstall. Default: pull the image first, build from source if the pull fails.
+                          If VANBLOG_RESTORE_FROM=<archive> is set, the full-site backup is restored after install.
+  config                  Regenerate the compose file (email, HTTP/HTTPS ports, image, mongo version).
+                          ⚠️ Overwrites hand-written environment / volume mappings; saves .bak-<timestamp> first.
+                          ⚠️ Will not switch back to the upstream official image; keeps the one in the compose file.
+                          It probes the local docker-compose: if the long depends_on form works (>=1.27/compose v2),
+                          it writes in "vanblog waits for mongo's healthcheck to pass"; older versions (e.g. 1.25 on
+                          Ubuntu 20.04) keep the list form and print a note (mongo's healthcheck exists either way).
+  start | stop | restart  Start / stop / restart (restart runs without -v, so no volumes are removed).
+                          All three return docker-compose's exit code as-is, with troubleshooting hints on failure.
+  update                  Update: **prepare the new image first, stop containers** (old site keeps running if
+                          pull/build fails); removes only unused old images; success only on a real version advance.
+      update <version>    upgrade to a given release: update v2026.9.2 ⇒ uses image ${VANBLOG_FORK_IMAGE}:v2026.9.2
+                          (equivalent to VANBLOG_IMAGE_REF=<that ref> $0 update)
+      update <full ref>   an argument with / or :// is used as-is as the image address (private registry / mirror)
+      update dev-dsh-<short sha>  back to one specific build (for rollback)
+                          ⚠️ No args = upgrade to default tag ${VANBLOG_IMAGE_REF}, tracking releases; to pin one,
+                            pass the release number. A bad arg is **rejected** (exit code 2), never a silent default.
+                          ⚠️ Before stopping it prints both versions "running → new"; if the new one is older or not
+                            provably newer, loud WARN prompts (VANBLOG_ASSUME_YES=1 won't block; WARN still prints).
+  status                  Status overview (read-only): script version, install/data dirs, vanblog & mongo images in
+                          compose, mongo data present, HTTP port, API probe, container status, per-dir usage, backup
+                          count and the last three archives, free disk, **days left on the certificate**.
+  doctor                  Health check (read-only, changes nothing): container status and restarts, health probe in
+                          effect, health endpoint (503 = server alive but mongo unreachable), free disk, age of the
+                          last backup, last cron backup failure, caddy cert dir persistence, **days left on the
+                          certificate** (<21 days = notice, <7 days = red), fatal error keywords in logs.
+                          Exit code 0 = no fatal problem (notices possible), **1 = problem** ⇒ cron/monitoring ready.
+                          ⚠️ No readable cert (HTTP/IP-only, not yet issued) is valid: one note only, not a problem.
+  log                     View logs (docker-compose logs).
+  uninstall               Uninstall. Prompts; **does not delete backups**; clears branch images, build tags, shim.
+  reset_https             Reset https settings (cert won't issue, domain changed, or caddy config broken).
+  update_script           Update this script itself (checks syntax and head/tail markers; same version not replaced).
+────────────────── backup / restore / reset / verify / schedule ──────────────────
+  backup                          Full-site backup (default): calls the server API to export
+                                  vanblog-full-<timestamp>.tar.zst to <data dir>/log/vanblog-backups/.
+                                  Consistent snapshot, NDJSON restorable across MongoDB versions, manifest preview.
+        --format zstd|xz|gzip     Change compression format (default zstd)
+        --offline                 Instead pack the whole data dir (vanblog-backup-*.tar.gz):
+                                  fallback when the site won't start, and the only mode that **includes caddy certs**
+        --offline --consistent    stop mongo first, then pack (better consistency, unwritable for tens of seconds)
+        --keep N                  keep only the newest N **after success**; delete the rest (incl. .manifest.json)
+                                  Needed for cron: a full backup is tens of MB, so without cleanup the disk fills.
+                                  Empty or 0 = no cleanup (default). Deletes only vanblog-full-* / vanblog-backup-*,
+                                  never any other file. Also settable via VANBLOG_BACKUP_KEEP=N.
+        --verbose                 print the full JSON (default prints only a summary)
+                                  ⚠️ Disk-space precheck before export: if the estimate (previous archive size, or
+                                     +64MB) plus margin over free space => refuse the backup (non-zero exit); merely
+                                     tight => warn and go on; no estimate => says "check skipped", never faking it.
+                                  On success the script records a <archive>.sha256 checksum (compared at verify).
+  restore                         Restore from a full-site backup. No args = list server archives to pick by number
+        restore <archive-name>    archive in the server backup dir → no upload, starts in seconds (even 100s of MB)
+        restore <local-path>      local file → multipart upload
+        --no-static               restore the database only; keep the current image host / attachments
+        --skip-signature-check    Skip the ed25519 check on the archive (**security bypass**). The only proof it
+                                  was not swapped after leaving the host (.sha256 beside it ⇒ guards copy rot, not
+                                  swapping); if swapped you restore attacker data site-wide, and it reports success.
+                                  Fix: recover the public key, set VANBLOG_BACKUP_VERIFY_KEY(_FILE), then retry.
+                                  ⚠️ This flag only (no env var, so cron/orchestration cannot silently enable it).
+        --offline-full            🔴 **Use when the site already won't start** (usually corrupt mongo data): verify
+                                  the archive → stop the stack → **rename and keep** the db dir (not delete) → start
+                                  the stack → reset the site from the archive → check each item; any failed step
+                                  prints copy-paste rollback commands. Why: restore/reset both call the site API,
+                                  and server needs mongo ⇒ a dead db = deadlock; the only path needing no site help.
+        --with-static             explicitly restore static files (that is the default anyway)
+        --verbose                 print the full manifest JSON
+                                  ⚠️ Restore = **no downtime**: atomic per-collection swap + reindex + full render.
+                                  ⚠️ After a restore you must log back into the admin UI (the JWT key is read at
+                                     startup); automation calling /api/admin/** must restart the container once.
+                                  Old vanblog-backup-*.tar.gz archives use offline restore (unpack stopped), and
+                                  **won't unpack unless stopped** (overwrite files while mongod writes = corrupt db)
+  reset                           One command to move the whole site onto a new machine:
+                                  probe → if uninitialized, init with a temp account and a random password → log in →
+                                  print manifest → require yes → restore → restart container → check each → report.
+        reset <archive|path>      specify the archive (omit it to list the ones on the server and pick)
+        --no-static               restore the database only
+        --no-restart              do not restart after restoring (then you must restart it yourself once)
+        --verbose                 print the full manifest JSON
+        --skip-signature-check    Skip the archive's ed25519 signature check (**security bypass**; same meaning as
+                                  the restore one); reset uses the same restore API, so the flag applies there too)
+                                  ⚠️ If the restore fails it prints the temp admin account, so you are not locked out.
+  rotate-jwt                    Rotate the JWT signing key. **Use on suspected leak**: a full backup holds the
+                                  jwt key ⇒ its holder mints admin tokens (new password won't help: tokens skip it).
+        --grace-days N            grace period in days (0..365, 0 = old key invalidated now). Omit = server default.
+        --yes                     skip the interactive confirm (for scripts/cron; irreversible, so think it over)
+                                  ⚠️ Past the grace period all old logins and **all API Tokens** expire (external
+                                  must be re-issued in the admin UI); an old restore rolls the key back; rotate again;
+                                  waline commenter sessions expire on next waline restart (key derived from jwt key).
+                                  Only admins can call this endpoint (a collaborator with "all permissions" cannot).
+  signing-key                     Generate an ed25519 **backup signing key** pair; private key (0600) in-container at
+                                  <backup dir>/signing/, **never returned nor printed**; backups emit <archive>.sig.
+        --overwrite               Overwrite an existing key. ⚠️ Overwriting makes **all old .sig fail forever** (old
+                                  deleted); without it the script refuses and first shows the signing-export command.
+        --yes                     Skip interactive confirmation (for scripts/cron).
+                                  Why sign: the .sha256 sidecar sits with the archive ⇒ whoever swaps the archive can
+                                  swap it too: it catches bit rot, not swaps; archives hold jwt + all password hashes.
+                                  ⚠️ the public key must be kept **offline** (signing-export); else whoever gets root
+                                  can swap the public key too, and signatures lose all meaning.
+  signing-export                  Print the backup signing **public key** (PEM) + fingerprint for offline storage. Key
+                                  goes to stdout, metadata to stderr ⇒ `signing-export > pub.pem` yields a clean PEM.
+                                  ⚠️ Read-only, no changes; the private key is never exported (no API returns it).
+  verify                          Verify backup archives (**no decompression to disk**), in three steps:
+                                    a) stream through the decompressor (zstd/xz/gzip -t): truncation/corruption caught
+                                    b) sha256 check -- only backups by **this script** have a <archive>.sha256 record;
+                                       no record: says skip (⚠️ server exports have an **internal** integrity block:
+                                       per-member sha256 + merkleRoot + dual manifests -- used by verify-deep below)
+                                    c) member listing: manifest.json, per-collection NDJSON, static tree present?
+        verify <archive|path>...  verify the specified archives (names are looked up in the backup dir);
+                                  no args = verify **all** vanblog-full-* archives in the backup dir
+                                  any archive FAIL → nonzero exit code (can go into monitoring/cron).
+                                  ⚠️ verify takes no flags: a typo exits 2 and prints usage -- not silently ignored.
+                                  Semantic checks: verify-deep; "scan all + results table": verify-deep --all.
+  verify-deep                     All of verify's output (verbatim, nothing dropped) + a "restorable?" semantic check:
+                                  manifest kind/version recognized, declared collections match .ndjson files, member
+                                  paths not absolute, no .. (restore 400s), counts add up, static + themes there,
+                                  needed decompressor present. With an integrity block, dig one layer down: per-member
+                                  sha256, merkleRoot recompute, dual-manifest byte diff, full sha256 vs external ref.
+                                  Anything that would block a restore → FAIL (nonzero exit); merely degraded → WARN.
+        --all                     Scan all kept archives; adds a results table + machine-readable VERIFY-RESULT lines
+                                  ⚠️ Beside verify above by design: verify: old, lax, **needs root**, exit codes kept
+                                  (old crons keep it); verify-deep: new, strict, **no root**; new cron/monitoring
+                                  uses this. But however deep, checks stay **static** -- only drill proves restore.
+  drill                           Restore drill: spins up **throwaway** containers (temp mongo + vanblog), restores
+                                  the archive for real, asserts each item via the real user path (anonymous restore
+                                  endpoint, open only when uninitialized); asserts semantics, not just "200"; failure
+                                  prints container-log error lines + tail; always cleans up (trap; kept with --keep).
+        drill [archive|path]      no args = use the newest vanblog-full-* archive in the backup dir
+        --image <ref>             vanblog image for the drill (default: same as the real stack)
+        --http-port N             host HTTP port (auto-picked by default; mongo port never targets the real 27017 db)
+        --keep                    **no teardown** after the drill; prints how to access it and how to remove it
+        --dry-run                 print only what it would do (engine/image/names/ports/volumes/steps); no writes
+                                  Verdict: RESULT: PASS pass=... warn=... fail=... note=... (fail != 0: no upgrade)
+  backup-verify                   Back up **and verify now**: runs backup; if OK, the above checks on the new archive
+                                  + staleness; any failure → nonzero exit. Cron: replace backup (install-cron writes
+                                  word on that line; new arguments need --force to replace the old entry).
+        --all                     deep-verify **every** retained archive in the backup dir (bit rot picks no time)
+        --drill                   also run a drill against this new archive (needs a container engine and image)
+        --stale-days N            fail when the newest archive is older than N days (default 7; 0=skip)
+        --reverify-days N         any archive unverified for over N days → fail and name it (default 0=off)
+  backup-status                   answers without digging through logs: when was the last backup? verified? drilled?
+                                  three-way check: filesystem / ledger / server backup-status.json; mismatch is WARN;
+                                  and stale → non-zero exit (fits monitoring).
+        --strict                  also exit non-zero when the newest archive has no "verified" record
+        --stale-days N            staleness threshold (default 7 days)
+                                  ⚠️ verify-deep / drill / backup-verify / backup-status are implemented by
+                                  vanblog-drill.sh; vanblog.sh hands off **before** pre_check ⇒ **no root** needed,
+                                  and no mkdir /var/vanblog. Full args and more switches: ./vanblog.sh drill --help
+  backup-cron-run                 **dedicated entry point** for scheduled backups (this is what install-cron puts in
+                                  the crontab; rarely typed). Unlike bare backup, it makes "failure" a visible event:
+                                    1. full backup fails ⇒ falls back to `backup --offline` (packs the data dir,
+                                       no live server needed -- the only way to get a backup when the site is down,
+                                       and the only one that also backs up the caddy certs);
+                                    2. the result is written to <backup dir>/cron-status.json (0600, temp name + mv),
+                                       `doctor` and `status` read it ⇒ chronic backup failure is no longer log-only;
+                                    3. if VANBLOG_BACKUP_ALERT_WEBHOOK is set, POST one alert on failure
+                                       (⚠️ an undeliverable POST never affects the backup result or exit code);
+                                    4. also runs backup-status --strict, adding stale/unverified to the status file.
+                                  The exit code = the backup's own result (non-zero only if both ways fail).
+  install-cron                    installs "one full-site backup a day" into root's crontab (idempotent: an
+                                  same entry is never added twice; differing arguments need explicit --force).
+        --hour N                  hour of day to run (0-23, default 3)
+        --every N                 run every N hours (1-23, mutually exclusive with --hour) ⇒ RPO = N hours
+        --keep N                  after a successful backup keep the newest N (default VANBLOG_BACKUP_KEEP or 7)
+        --with-verify             also install a "weekly verify": Sundays at <hour+1>:00 run backup-verify
+                                  (fresh backup, verified immediately; failure exits non-zero). Cheap; recommended.
+        --with-drill              also install a "monthly drill": day 1 at <hour+2>:00 run drill (starts a throwaway
+                                  container, does a real restore, reconciling item by item). **Off by default**: needs
+                                  engine + disk (over twice the archive size). Do not enable on small machines.
+                                  ⚠️ --remove deletes **all** three tasks; --force rewrites only those requested now;
+                                  duplicate installs never yield two lines; --remove and --with-* conflict (exit 2).
+        --remove                  remove from the crontab (the token file stays; its path is printed)
+        --force                   replace the existing entry with the new arguments
+                                  The token comes from VANBLOG_ADMIN_TOKEN (or is typed at install), written to
+                                  <install dir>/vanblog-cron.env (0600, root only); the cron line sources it.
+                                  ⚠️ Trade-off: admin token stays on disk in cleartext; revoke then --force if leaked.
+                                  No crontab command or no token: it says so plainly, never pretending it worked.
+
+────────────────── Environment Variables ──────────────────
+  What to install:
+    VANBLOG_INSTALL_MODE=auto|image|source   default auto: pull the image first, build from source if that fails
+    VANBLOG_IMAGE_REF=<ref>                  default ghcr.io/ckboss/vanblog:latest (the most recent release build);
+                                             can point to a registry mirror, or `update <release>` pins one version
+    VANBLOG_USE_UPSTREAM_IMAGE=true          use the upstream official image (none of this branch's changes)
+    VANBLOG_MONGO_IMAGE=mongo:7.0            **applies to fresh installs only**; existing data dirs keep their tag
+                                             (data dir is tied to its FCV; mongod refuses to start on a new major)
+                                             set mongo:4.4.16 if the CPU has no avx (old machines)
+    VANBLOG_RESTORE_FROM=<archive>           auto reset after install (one step when moving machines)
+    VANBLOG_RELEASE_TAG=latest               Release asset tag for this branch in the fallback (default latest;
+                                             order: this-branch raw → this-branch jsDelivr → this-branch Release
+                                             → upstream docs site → upstream raw → upstream jsDelivr)
+  Where things live:
+    VANBLOG_BASE_PATH=/var/vanblog           install dir (compose file, offline backup tarballs)
+    VANBLOG_DATA_PATH=<dir>                  data dir (default <install-dir>/data)
+    VANBLOG_BACKUP_DIR=<dir>                 full-site backup dir (default <data-dir>/log/vanblog-backups)
+    VANBLOG_SRC_DIR=<dir>                    clone dir used by source builds
+  Build sources (empty = auto-pick the fastest by measured latency; overseas machines need nothing):
+    VANBLOG_NPM_REGISTRY                     pnpm registry (npmmirror / npmjs)
+    VANBLOG_ALPINE_MIRROR                    Alpine package repo inside the container (none = official dl-cdn)
+    VANBLOG_NODE_DIST_URL                    node-gyp Node header source (none = default)
+    VANBLOG_SHARP_DIST_HOST                  sharp / libvips prebuilt package host (none = official GitHub)
+    VAN_BLOG_ADMIN_BUILD_SCRIPT=build|build:lowmem   admin webpack heap: 4096MB / 1536MB
+  Backup and restore:
+    VANBLOG_ADMIN_TOKEN=<token>              skip password login (browser F12 → Application → Local Storage → token)
+    VANBLOG_API_BASE=http://127.0.0.1:80     site API base (default: host port for container 80, read from compose)
+    VANBLOG_ASSUME_YES=1                     skip all yes prompts (for cron jobs)
+    VANBLOG_VERBOSE=1                        print the full JSON
+    VANBLOG_BACKUP_FORMAT=zstd|xz|gzip       compression format for backup
+    VANBLOG_BACKUP_CONSISTENT=1              same as backup --offline --consistent
+    VANBLOG_BACKUP_KEEP=7                    same as backup --keep 7 (keep only the newest 7)
+    VANBLOG_BACKUP_MIRROR_DIR=               after a successful backup, copy the archive (and .sha256) to a **second
+                                           destination** (another disk / NFS / object-storage FUSE mount all work).
+                                           ⚠️ empty by default = no mirroring; behavior is exactly as before.
+                                           Why: by default the archive lives in <data-dir>/log/vanblog-backups,
+                                           **same tree, usually same disk** ⇒ dead disk / rm / ransomware: all lost
+                                           verified after copy (sha256 → zstd -t → byte count only, and it says so)
+                                           a bad copy is deleted. ⚠️ mirror faults **never** fail the local backup.
+    VANBLOG_BACKUP_MIRROR_KEEP=              copies kept at the mirror (default: same as VANBLOG_BACKUP_KEEP).
+                                           prune touches vanblog-full-*.tar.zst (+ .enc) / *-data.tar.gz; no others
+    VANBLOG_BACKUP_ALERT_WEBHOOK=            on **failed** cron backups, POST one JSON ({"text": "..."}) to this URL.
+                                           only on failure; 10s timeout; ⚠️ a dead URL never changes backup/exit code
+    VANBLOG_SKIP_PULL=1                      no network at all; use only local images (air-gapped install/upgrade).
+                                           if missing locally, it errors clearly and shows the docker load command.
+                                           ⚠️ unset = pull as usual (else moving tags like latest never update);
+                                           pull fails but a local image exists ⇒ use it, warn "maybe not latest".
+    VANBLOG_BACKUP_SPACE_MARGIN_MB=256       space-check margin (MB) before backup: free < estimate+margin → refused
+    VANBLOG_BACKUP_SKIP_SPACE_CHECK=1        skip the space check (if it cannot estimate, it says so and proceeds)
+    VANBLOG_RESTORE_FILE=<path>              same as restore <path> (old spelling, still supported)
+    VANBLOG_RESET_INIT_USER / _PASS          temp account for reset's auto-init (default: random password)
+    VANBLOG_SETUP_KEY_WAIT=15                seconds to wait for the setup key when the server **really** needs it
+                                             (reads <data-dir>/log/setup.key; else the container log's
+                                             "Setup key: " line; 0 = no wait). An initialized site
+                                             never waits in vain - the key file is absent then anyway; it peeks
+                                             first, waits only if refused. Key auto-sent, never echoed (length only)
+                                             to turn this protection off: VANBLOG_INIT_REQUIRE_SETUP_KEY=false
+  Other:
+    VANBLOG_SKIP_MAIN=1                      load functions only, do not run the main flow (for writing tests)
+
+──────────────────── Common scenarios ────────────────────
+  Fresh install:          ./vanblog.sh install
+  Migrate (one step):     VANBLOG_RESTORE_FROM=/path/to/vanblog-full-xxx.tar.zst ./vanblog.sh install
+  Migrate (two steps):    ./vanblog.sh install && ./vanblog.sh reset /path/to/vanblog-full-xxx.tar.zst
+  Full-site backup daily at 03:00 (keep 7):
+                          VANBLOG_ADMIN_TOKEN=<token> ./vanblog.sh install-cron --hour 3 --keep 7
+                          (one command writes root's crontab; the token is stored in vanblog-cron.env at 0600,
+                            remove via install-cron --remove; hand-written crontab equivalent: docs/guide/backup.md)
+  Backups still usable:   ./vanblog.sh verify            # all archives; or verify <archive-name|path>
+  Update (pin a release): ./vanblog.sh update v2026.9.2
+  Update (track latest):  ./vanblog.sh update            # uses the default :latest
+  Roll back the image:    ./vanblog.sh update <old-release> (or dev-dsh-<short-sha> to return to a build)
+                          you can also set the image in the compose file to that ref, then restart
+  Site won't open, debug: ./vanblog.sh status → ./vanblog.sh log
+                          (status tells you whether the API answers, the container is up, and the disk is full)
+  Cert / HTTPS trouble:   ./vanblog.sh reset_https
+  Disk full:              ./vanblog.sh status shows per-dir usage; full-site backup archives and logs dominate
+
+──────────────────── Conventions ─────────────────────
+  Exit codes: 0 = success; non-zero = failure (safe to branch on in automation).
+          ⚠️ lifecycle commands once returned 0 win or lose, printing "success" everywhere; now they tell the truth.
+  Needs root (the script checks id -u up front).
+  Every write asks first; destructive ones (uninstall, restore, reset) need the full word yes typed in.
+  Paths and files:
+    <install-dir>/docker-compose.yaml         compose file (config rewrites it, old one kept as .bak-<timestamp>)
+    <install-dir>/vanblog-cron.env            scheduled-backup env from install-cron (0600, holds the admin token)
+    <data-dir>/data/static                    image host and attachments
+    <data-dir>/data/mongo                     MongoDB data files
+    <data-dir>/log                            logs (/var/log inside the container)
+    <data-dir>/log/vanblog-backup-cron.log    scheduled backup output log (install-cron's cron line redirects here)
+    <data-dir>/log/vanblog-backups            full-site backup archives + .manifest.json inventory + .sha256 sums
+    <install-dir>/caddy/{config,data}         caddy config and certificates
+USAGE_EN
+  fi
+  # 🔴 期 11 第一批：这几行是"本机实际取值"，两种语言都要出 ⇒ 走 `say`（英文在前、中文在后）。
+  #    ⚠️ 变量值本身（路径、镜像 ref）**不翻** —— 它们是标识符，翻了就指向别的东西了。
+  say "Effective values on this machine:" "本机实际取值："
   echo "  VANBLOG_BASE_PATH=${VANBLOG_BASE_PATH}"
   echo "  VANBLOG_DATA_PATH=${VANBLOG_DATA_PATH}"
-  echo "  整站备份目录=$(full_backup_dir 2>/dev/null)"
+  say "  Full-site backup dir=$(full_backup_dir 2>/dev/null)" "  整站备份目录=$(full_backup_dir 2>/dev/null)"
   echo "  VANBLOG_INSTALL_MODE=${VANBLOG_INSTALL_MODE:-auto}   VANBLOG_IMAGE_REF=${VANBLOG_IMAGE_REF}"
-  echo "  VANBLOG_MONGO_IMAGE=${VANBLOG_MONGO_IMAGE}（仅全新安装生效）"
+  say "  VANBLOG_MONGO_IMAGE=${VANBLOG_MONGO_IMAGE} (only applies to a fresh install)" "  VANBLOG_MONGO_IMAGE=${VANBLOG_MONGO_IMAGE}（仅全新安装生效）"
   echo "  VANBLOG_REPO=${VANBLOG_REPO}   VANBLOG_BRANCH=${VANBLOG_BRANCH}"
   echo "  VANBLOG_SRC_DIR=${VANBLOG_SRC_DIR}   VANBLOG_IMAGE_TAG=${VANBLOG_IMAGE_TAG}"
   echo "--------------------------------------------------------"
