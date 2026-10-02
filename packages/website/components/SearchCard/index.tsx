@@ -174,7 +174,8 @@ const SearchCard = forwardRef<
     setTyping(false);
     setLoading(true);
     try {
-      const resultFromServer = await searchArticles(search);
+      // 🔴 期 10 第十四批：把 `t` 传进数据层（搜索失败的消息要能翻）
+      const resultFromServer = await searchArticles(search, t);
       if (seq !== seqRef.current) {
         return; // 已经有更新的搜索在飞/完成了，这个响应作废
       }

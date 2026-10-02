@@ -7,6 +7,7 @@ import { LayoutProps } from "../../utils/getLayoutProps";
 import { type TimelineArticleRef } from "../../utils/timelineMonths";
 import { getCategoryPagesProps } from "../../utils/getPageProps";
 import { revalidate } from "../../utils/loadConfig";
+import useT from "../../hooks/useT";
 export interface CategoryPagesProps {
   layoutProps: LayoutProps;
   authorCardProps: AuthorCardProps;
@@ -16,6 +17,11 @@ export interface CategoryPagesProps {
   wordTotal: number;
 }
 const CategoryPages = (props: CategoryPagesProps) => {
+  // 🔴 期 10 第十四批：走 i18n 接缝。
+  // ⚠️ 这一行必须在**所有 early return 之前**（这个组件开头就有 `if (…) return <Custom404 …/>`）——
+  // 🔴 rules of hooks：hook 的调用顺序在每次渲染必须一致，放到 early return 之后就会
+  //    "有时调有时不调" ⇒ React 报 "Rendered fewer hooks than expected" 并把整棵树卸掉。
+  const t = useT();
   return (
     <Layout
       option={props.layoutProps}
@@ -27,7 +33,10 @@ const CategoryPages = (props: CategoryPagesProps) => {
           <div className="text-2xl md:text-3xl text-gray-700 text-center dark:text-dark">
             {props.curCategory}
           </div>
-          <div className="text-center text-gray-600 text-sm mt-2 mb-4 font-light dark:text-dark">{`${props.curNum} 文章 × ${props.wordTotal} 字`}</div>
+          <div className="text-center text-gray-600 text-sm mt-2 mb-4 font-light dark:text-dark">{t("stats.tagSummary", "{posts} 文章 × {words} 字", {
+              posts: props.curNum,
+              words: props.wordTotal,
+            })}</div>
         </div>
         <div className="flex flex-col mt-2">
           {Object.keys(props.sortedArticles)

@@ -161,7 +161,8 @@ function CommentSection({
       setLoading(true);
       setListError("");
       try {
-        const res = await fetchComments(path, target, PAGE_SIZE);
+        // 🔴 期 10 第十四批：把 `t` 传进数据层（那里抛的兜底消息也要能翻）
+        const res = await fetchComments(path, target, PAGE_SIZE, t);
         setTotal(res.total);
         setPage(res.page);
         setItems((prev) => (append ? [...prev, ...res.data] : res.data));
@@ -221,7 +222,8 @@ function CommentSection({
         site: site.trim(),
         content: text,
         hp,
-      });
+        // 🔴 期 10 第十四批：`t` 作为第二个实参传进数据层（提交失败的兜底消息也要能翻）
+      }, t);
       try {
         window.localStorage.setItem(
           IDENTITY_KEY,

@@ -214,6 +214,18 @@ const dict: Record<string, string> = {
   'search.stateHasResults': '有結果',
   'search.stateTyping': '輸入中',
   'search.stateNoResults': '暫無結果',
+
+  // ── 🔴 期 10 第十四批：数据层的错误消息（搜索 / 评论）+ 上一批预留的 stats.tagSummary。
+  //    地区用词：**搜尋請求失敗** / **搜尋介面傳回了不可用的資料**（接口→介面、返回→傳回、数据→資料）/
+  //    **讀取留言失敗**（评论→留言）/ **送出失敗**（提交→送出）。
+  //    🔴 HTTP 三份逐字相同；繁中用全角（），英文用半角 ()。
+  //    ⚠️ articles.backendStatus **刻意不加**：那条抛给 **ISR**（源码注释明写「抛出去让 ISR 保留上一次的页面」）
+  //    ⇒ 访客永远看不到，属构建期/日志 ⇒ 已改判永久例外（加了就是孤儿 key）。
+  'search.requestFailed': '搜尋請求失敗（HTTP {status}）',
+  'search.badResponseData': '搜尋介面傳回了不可用的資料',
+  'comment.loadFailedStatus': '讀取留言失敗（{status}）',
+  'comment.submitFailedStatus': '送出失敗（HTTP {status}）',
+  'stats.tagSummary': '{posts} 文章 × {words} 字',
 };
 
 export default dict;

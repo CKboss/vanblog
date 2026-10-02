@@ -1,3 +1,4 @@
+import { IDENTITY_T, type TFunc } from "./i18n";
 /**
  * 内置评论的前台数据层。
  *
@@ -65,10 +66,17 @@ export function resetCommentSettingCache(): void {
   settingPromise = null;
 }
 
+/**
+ * 🔴 期 10 第十四批：错误消息接上 i18n 接缝（尾参 `t`，默认 `IDENTITY_T`）。
+ * ⚠️ 这两条**是**界面文案：`Comment/index.tsx` 的 catch 会把消息显示给访客
+ * （那里已经改成先过 `translateServerMessage(err)` —— 服务端有码就按码翻，
+ * 没有码才回落到这里这句本地兜底 ⇒ 🔴 两层都要能翻，否则英文界面会夹一句中文）。
+ */
 export async function fetchComments(
   path: string,
   page = 1,
   pageSize = 20,
+  t: TFunc = IDENTITY_T,
 ): Promise<{ total: number; page: number; pageSize: number; data: PublicCommentItem[] }> {
   const query = new URLSearchParams({
     path,
@@ -77,21 +85,24 @@ export async function fetchComments(
   });
   const res = await fetch(`/api/public/comments?${query.toString()}`);
   if (!res.ok) {
-    throw new Error(`读取评论失败（${res.status}）`);
+    throw new Error(t("comment.loadFailedStatus", "读取评论失败（{status}）", { status: res.status }));
   }
   const json = await res.json();
   return json?.data || { total: 0, page, pageSize, data: [] };
 }
 
-export async function createComment(body: {
-  path: string;
-  parentId?: number;
-  nick: string;
-  email?: string;
-  site?: string;
-  content: string;
-  hp?: string;
-}): Promise<{ pending: boolean; message?: string }> {
+export async function createComment(
+  body: {
+    path: string;
+    parentId?: number;
+    nick: string;
+    email?: string;
+    site?: string;
+    content: string;
+    hp?: string;
+  },
+  t: TFunc = IDENTITY_T
+): Promise<{ pending: boolean; message?: string }> {
   const res = await fetch("/api/public/comments", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -100,7 +111,10 @@ export async function createComment(body: {
   const json = await res.json().catch(() => null);
   if (!res.ok) {
     const message =
-      (json && (json.message || json.error)) || `提交失败（HTTP ${res.status}）`;
+      // 🔴 优先用**服务端给的消息**（它可能带错误码 ⇒ 上层 `translateServerMessage` 会翻），
+      //    服务端没给才回落到本地这句（走接缝）。
+      (json && (json.message || json.error)) ||
+      t("comment.submitFailedStatus", "提交失败（HTTP {status}）", { status: res.status });
     throw new Error(Array.isArray(message) ? message.join("；") : String(message));
   }
   return {

@@ -210,6 +210,16 @@ const dict: Record<string, string> = {
   'search.stateHasResults': 'Has results',
   'search.stateTyping': 'Typing',
   'search.stateNoResults': 'No results yet',
+
+  // ── 🔴 期 10 第十四批：数据层的错误消息 5 个 key（搜索 / 评论 / 标签统计行）。
+  //    🔴 这些消息会被**调用方的 catch 显示给访客** ⇒ 属界面文案
+  //    （判据是「调用方有没有渲染它」，不是「它在不在 api/ 目录里」）。
+  //    ⚠️ 无 ICU 复数、无撇号；HTTP 逐字保留；{status} 是数字。
+  'search.requestFailed': 'Search request failed (HTTP {status})',
+  'search.badResponseData': 'The search endpoint returned unusable data',
+  'comment.loadFailedStatus': 'Failed to load comments ({status})',
+  'comment.submitFailedStatus': 'Submission failed (HTTP {status})',
+  'stats.tagSummary': '{posts} posts × {words} words',
 };
 
 export default dict;

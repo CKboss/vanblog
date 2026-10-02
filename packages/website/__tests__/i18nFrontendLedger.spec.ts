@@ -249,13 +249,6 @@ const LEDGER: Entry[] = [
       "`tocDrawerCloseLabel(t)` / `tocDrawerTitle(t)` 取，消费方 `TocDrawer/index.tsx` 已改成传 `useT()` 的结果。",
   },
   {
-    file: "pages/tag/[tag].tsx",
-    count: 3,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 标签详情页标题与空态 ⇒ 访客可见。⚠️ 标签名本身是**内容**，不翻。",
-  },
-  {
     file: "utils/pageCopy.ts",
     count: 3,
     kind: "permanent",
@@ -265,16 +258,6 @@ const LEDGER: Entry[] = [
       "② 🔴 `DEFAULT_FRIEND_LINK_APPLY_CONTENT` 是一整段**友链申领规则**（站长的政策声明）⇒ **翻它等于替站长说话**：那是站长对别人提出的要求，措辞与立场都属于站长；" +
       "③ 里面还有 `{{siteName}}` / `{{url}}` 这种**双重花括号占位符**（另一套替换机制），与 i18n 的 `{name}` 混在一条文案里，将来接 ICU 时极易互相踩。" +
       "👉 若将来改主意，要同时决定「站长自己填的那一份要不要翻」（答案只能是不翻）⇒ 于是会出现「默认值多语言、站长填的单语言」的混合状态 —— 这正是当初判它永久例外的原因之一。",
-  },
-  {
-    file: "api/search.ts",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 `搜索接口返回了不可用的数据` / `搜索请求失败（HTTP …）` —— 这两条会被 `pages/search.tsx` " +
-      "的 catch 显示给访客 ⇒ 属界面文案（与 `api/searchIndex.ts` 那三条**不同**，那三条只进 console）。" +
-      "⚠️ 判据是「调用方有没有把它渲染出来」，不是「它在不在 api/ 目录里」。",
   },
   {
     file: "pages/_app.tsx",
@@ -296,13 +279,6 @@ const LEDGER: Entry[] = [
       "👉 与服务端那个 `导出说明.md`（产物文件）同一类：**整份都是中文文档时，只翻其中几个词更糟**。",
   },
   {
-    file: "pages/category/[category].tsx",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 分类详情页标题与空态 ⇒ 访客可见。",
-  },
-  {
     file: "utils/categoryExpand.ts",
     count: 2,
     kind: "seamed",
@@ -313,20 +289,13 @@ const LEDGER: Entry[] = [
       "`categoryCollapseAllLabel(t)` 取，消费方 `CategoryList/index.tsx` 已改成传 `useT()` 的结果。",
   },
   {
-    file: "utils/commentApi.ts",
-    count: 2,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why:
-      "🔴 `读取评论失败（…）` / `提交失败（HTTP …）` —— 会被评论组件显示给访客 ⇒ 界面文案。" +
-      "⚠️ 括号里拼的是底层技术串（可保留），外层这句要过接缝。",
-  },
-  {
     file: "api/getArticles.ts",
     count: 1,
-    kind: "iou",
-    batch: "期 10 第二批",
-    why: "🔴 `后端返回 …` 这条会被文章列表的 catch 显示给访客 ⇒ 界面文案（判据同 `api/search.ts`）。",
+    kind: "permanent",
+    why:
+      "🔴 **查清消费方后改判永久例外**（原登记为欠条）：这条 `后端返回 {status}` 是 `getArticleByIdOrPathname()` 在**非 404 的失败**（5xx / 网关错误）时抛的，而源码注释明写它的用途是「抛出去让 **ISR** 保留上一次的页面，别把好页面换成软 404」⇒ 🔴 **消费方是 Next 的 ISR 机制与构建日志，访客永远看不到这句话**。"
+      +"翻它没有任何用户能看到，而且它是**运维排障关键词**（按「后端返回 5xx」搜构建日志）⇒ 与服务端那 8 条开发者不变量同一类处置。"
+      +"👉 🔴 判据仍然是「追到最终消费方」：同目录的 `api/search.ts` 那两条**是**界面文案（调用方的 catch 会渲染给访客）⇒ **同一个目录里两种分类并存**，别按目录一刀切。",
   },
   {
     file: "components/Comment/Content.tsx",
@@ -433,7 +402,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
 
   it("反空转：扫描真的拿到了东西（否则「0 条裸中文」是空的绿）", () => {
     expect(files).toBeGreaterThan(120);
-    expect(total).toBeGreaterThan(50);
+    expect(total).toBeGreaterThan(40);
     const ledgerTotal = LEDGER.reduce((n, e) => n + e.count, 0);
     // 🔴 台账登记的总数必须与实测**完全相等**（不是"不超过"）：
     //    少了说明有条目漏登记，多了说明台账里有死条目 ⇒ 两个方向都要抓。
@@ -444,7 +413,7 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     // 🔴 251 = 期 10 第三批之后的实测值（第一批 261 → 第二批 253 → 第三批 251；
     //    第二批迁走 8 条，第三批迁走 `PostCard/title.tsx` 的 2 条并把 `titleCopyA11y` 的 6 条接上接缝）。
     //    ⚠️ 每迁一批就要来下调这个预算（棘轮只许减不许增）。
-    expect(total).toBeLessThanOrEqual(106);
+    expect(total).toBeLessThanOrEqual(97);
   });
 
   it("全覆盖：每个还有裸中文的文件都必须在台账里（新增文件/多写几条都会红）", () => {
@@ -512,7 +481,13 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     const iou = LEDGER.filter((e) => e.kind === "iou");
     const permCount = perm.reduce((n, e) => n + e.count, 0);
     const iouCount = iou.reduce((n, e) => n + e.count, 0);
-    // 🔴 口径（期 10 第十三批更新）：**106** 条 = 永久例外 **53** + 欠条 **27** + **已过接缝的默认值 26**。
+    // 🔴 口径（期 10 第十四批更新）：**97** 条 = 永久例外 **54** + 欠条 **17** + **已过接缝的默认值 26**。
+    //    第十四批迁走 **9 条**（`tag/[tag]` 3 + `category/[category]` 2 + `api/search` 2 + `utils/commentApi` 2）
+    //    ⇒ 销账 4 个文件；并把 `api/getArticles.ts` 那 1 条**改判永久例外**
+    //    （🔴 它抛给 **ISR**，源码注释明写「抛出去让 ISR 保留上一次的页面」⇒ 访客永远看不到）
+    //    ⇒ permanent 53 → 54、欠条 27 → 17。
+    //    🔴 剩下的 17 条欠条只有三族：`api/getAllData.ts` 9（构建期数据，硬骨头）、
+    //    `RunningTime` 5（需要英文复数，要连 ICU 方案一起定）、`SearchCard` 常量 1 + 其它零散 2。
     //    第十三批迁走 **23 条**（`SearchCard` 5 / `category` 6 / `timeline` 5 / `link` 2 / `tag` 2 /
     //    `post/[id]` 2 / `page/[p]` 1）⇒ 销账 5 个文件；
     //    🔴 并按站长裁定与"追消费方"把 **7 条改判永久例外**：`utils/pageCopy.ts` 3（站长裁定：
@@ -559,10 +534,10 @@ describe("🔴 前台多语言收口台账：棘轮 + 全覆盖 + 无死条目",
     //    228 = 52 个文件里的界面文案（最大三处：`components/Comment` 44、`components/SearchResults` 28、
     //          `pages/search.tsx` 9；其余是导航/页脚/无障碍标签/相对时间/404 等）。
     // ⚠️ 这两个数字**刻意写死**：变了就说明有人迁了一批或新增了文案 ⇒ 两种情况都要求改台账并重读理由。
-    expect(permCount).toBe(53);
+    expect(permCount).toBe(54);
     const seamed = LEDGER.filter((e) => e.kind === "seamed");
     const seamedCount = seamed.reduce((n, e) => n + e.count, 0);
-    expect(iouCount).toBe(27);
+    expect(iouCount).toBe(17);
     expect(seamedCount).toBe(26);
     expect(permCount + iouCount + seamedCount).toBe(total);
     // 🔴 欠条不许"永远欠着"：每条都点名了批次（上面已断言），且同一批不超过 250 条（前台按文件分批）
