@@ -42,14 +42,25 @@ export type SearchCardHandle = {
   openFromUserGesture: () => boolean;
 };
 
-/** 弹窗里"查看全部结果"的入口文案（单测按这个字符串找它） */
+/** 弹窗里"查看全部结果"的入口文案 —— 🔴 期 12 第二批起它是**整句模板**（含 `{query}`） */
 // 🔴 期 10 第十三批：常量保留当默认值，另加取文案的函数（规矩见 §7.205 A）
-export const SEARCH_VIEW_ALL_LABEL = "查看全部结果";
-export const SEARCH_VIEW_ALL_LABEL_ID = "search.viewAllResults";
+// 🔴 期 12 第二批：key 从 `search.viewAllResults`（光秃秃的标签）改成
+//    `search.viewAllResultsFor`（**整句 + `{query}` 占位符**），本常量的值也跟着从
+//    `查看全部结果` 变成 `查看全部结果（{query}）`。
+//    为什么：原来渲染的是 `${SEARCH_VIEW_ALL_LABEL}（${query}）` —— 🔴 **代码里拼全角括号**，
+//    英文语序下会渲染成 `View all results（安装）`（半句英文 + 全角括号 + 中文关键词）。
+//    与 `PageNav` 的「跳转 {input} 页」、`RunningTime` 的时长模板同一个教训：
+//    **拼接式文案只翻零件永远拼不对**，要给整句模板。
+//    ⚠️ 旧 key 必须**同时从两份词典里改名**（留着就是 orphan key，覆盖率对账会红）。
+//    ⚠️ 常量名必须是 `<ID 常量名去掉 _ID>`：覆盖率对账就是按这个约定去源码里取中文默认值的
+//    （`i18nDictionaryCoverage.spec.ts` 的"常量形状"分支）⇒ 起个 `_TEMPLATE`／`_DEFAULT` 之类的名字，
+//    对账会报"没能从源码里取出中文默认值"（本批就这么红过一次）。
+export const SEARCH_VIEW_ALL_LABEL = "查看全部结果（{query}）";
+export const SEARCH_VIEW_ALL_LABEL_ID = "search.viewAllResultsFor";
 
-/** 🔴 取「查看全部结果」按钮文案（渲染期调用）。 */
-export function searchViewAllLabel(t: TFunc = IDENTITY_T): string {
-  return t(SEARCH_VIEW_ALL_LABEL_ID, SEARCH_VIEW_ALL_LABEL);
+/** 🔴 取「查看全部结果」入口的整句文案（渲染期调用；`query` 会填进 `{query}`）。 */
+export function searchViewAllLabel(query: string, t: TFunc = IDENTITY_T): string {
+  return t(SEARCH_VIEW_ALL_LABEL_ID, SEARCH_VIEW_ALL_LABEL, { query });
 }
 
 /**
@@ -63,6 +74,11 @@ export function searchViewAllLabel(t: TFunc = IDENTITY_T): string {
  * 读屏软件念得出来。点击后关掉弹窗（`onClick` 里做的只是关弹窗，导航交给 Link）。
  */
 export function ViewAllResultsLink(props: { query: string; onClick: () => void }) {
+  // 🔴 期 12 第二批：**接上那个一直没人调的接缝函数**。
+  //    改之前的形状是"接缝函数 + 词典条目都在，但消费方仍然用常量"⇒ 英文/繁中界面下
+  //    这一行**永远中文**，而且比"根本没接"更难发现（台账上看它是 seamed、词典里也有译文）。
+  //    ⚠️ `useT()` 必须在 early return 之前（rules of hooks）。
+  const t = useT();
   const query = String(props.query ?? "").trim();
   if (!query) {
     return null;
@@ -75,7 +91,7 @@ export function ViewAllResultsLink(props: { query: string; onClick: () => void }
         className="text-sm text-gray-500 hover:text-gray-800 dark:text-dark-400 dark:hover:text-dark underline"
         data-search-view-all=""
       >
-        {`${SEARCH_VIEW_ALL_LABEL}（${query}）`}
+        {searchViewAllLabel(query, t)}
       </Link>
     </div>
   );
@@ -206,6 +222,8 @@ const SearchCard = forwardRef<
   const showClear = useMemo(() => {
     return search.trim() !== "";
   }, [search]);
+  // 🔴 状态判据用**状态**，不用文案（见下面 `if (hasResults)` 那段注释）
+  const hasResults = !loading && !failed && search.trim() !== "" && result.length > 0;
   const renderResult = () => {
     let text = "";
     if (loading) {
@@ -233,7 +251,15 @@ const SearchCard = forwardRef<
         }
       }
     }
-    if (text == "有结果") {
+    // 🔴 期 12 第二批修掉一个**真 bug**：这里原来写的是 `if (text == "有结果")` ——
+    //    拿**翻译后的显示文案**当状态判据。切到英文/繁中后 `text` 是 `Has results`／`有結果`，
+    //    于是这个分支**永远进不去** ⇒ 弹窗里明明搜到 7 条，结果列表一条都不渲染
+    //    （只剩一行状态字 + "查看全部结果"链接），而 `/search` 页是好的 ⇒ 看起来像"搜索坏了"。
+    //    🔴 已用真浏览器复现：zh-CN 渲染 7 条，en-US 渲染 **0** 条（证据
+    //    `vanblog_dev/i18n-browser-evidence/phase12-batch2-searchcard/`）。
+    //    👉 一般化（比这个 bug 本身值钱）：🔴 **`t()` 的返回值只能拿去显示，绝不能拿去比较**。
+    //    只要出现 `== "中文"` 而左边是 `t(...)` 的结果，就是一个"只在中文下正确"的分支。
+    if (hasResults) {
       return (
         <div>
           <ArticleList

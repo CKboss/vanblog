@@ -445,3 +445,272 @@ describe("404 页的语言中立数字（不进词典，但要醒目）", () => 
     expect(src).not.toMatch(/LocaleSwitcher/);
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔴 期 12 第二批：`RunningTime`（页脚运行时长）与 `SearchCard`（查看全部结果）两族接缝
+//
+// 这两族各自代表一种"**看起来接了、其实没接**"的坏法：
+// ① `RunningTime` 需要**英文复数**，站长裁定 `接受1days` ⇒ 不上 ICU，用整句模板 + 四个占位符；
+// ② `SearchCard` 的接缝函数与词典条目**期 10 就有了**，但消费方一直在用常量（死接缝）⇒
+//    英文界面下永远中文。所以这里除了哨兵反向，还**渲染一次组件**证明消费方真的接上了。
+// ═══════════════════════════════════════════════════════════════════════════════
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import dayjs from "dayjs";
+
+import {
+  formatRunningTime,
+  runningTimePrefix,
+  RUNNING_TIME_DURATION,
+  RUNNING_TIME_PREFIX,
+} from "../components/RunningTime";
+import {
+  searchViewAllLabel,
+  ViewAllResultsLink,
+  SEARCH_VIEW_ALL_LABEL,
+} from "../components/SearchCard";
+
+// 🔴 `renderToStaticMarkup` 走的是经典 JSX 运行时 ⇒ 渲染期要在**全局**找 React
+//    （与 `searchPageWiring.spec.ts` 同一手法）。少了这一行会报 `React is not defined`。
+(globalThis as { React?: typeof React }).React = React;
+
+describe("前台 i18n 接缝 · RunningTime（页脚运行时长）", () => {
+  const SINCE = "2024-07-07T00:00:00Z";
+  const NOW = dayjs("2026-10-03T05:06:07Z");
+  const EN_RT: Record<string, string> = {
+    "runningTime.prefix": "This site has been running for",
+    "runningTime.duration": "{days} days, {hours} hours, {mins} minutes, {secs} seconds",
+  };
+  const enT: TFunc = (id, defaultMessage, values) => {
+    const tpl = EN_RT[id] || defaultMessage;
+    let out = tpl;
+    for (const [k, v] of Object.entries(values || {})) out = out.split("{" + k + "}").join(String(v));
+    return out;
+  };
+
+  it("① 不传 t 时与改造前**逐字节相同**（IDENTITY_T 是默认值；老站点行为不变）", () => {
+    const out = formatRunningTime(SINCE, NOW);
+    expect(out).toBe("818天5小时6分7秒");
+    // 反证：这个字符串确实是"数字 + 单位"拼出来的（不是巧合对上一个常量）
+    expect(out).toMatch(/^\d+天\d+小时\d+分\d+秒$/);
+    expect(RUNNING_TIME_PREFIX).toBe("本站居然运行了");
+    expect(runningTimePrefix()).toBe("本站居然运行了");
+  });
+
+  it("② 传入词典就换成英文，且**四个占位符都被真的插值**", () => {
+    const out = String(formatRunningTime(SINCE, NOW, enT));
+    expect(out).toBe("818 days, 5 hours, 6 minutes, 7 seconds");
+    expect(out).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/);
+    expect(runningTimePrefix(enT)).toBe("This site has been running for");
+    // 🔴 站长裁定「接受 1 days」⇒ 这里如实钉住：1 天时英文**就是** `1 days`（不是漏翻）
+    const oneDay = String(formatRunningTime("2026-10-02T05:06:07Z", NOW, enT));
+    expect(oneDay).toContain("1 days");
+  });
+
+  it("③ 🔴 哨兵反向：两处文案都必须过 t（把 t(...) 改回硬编码中文就会红）", () => {
+    const SENTINEL = "__SENTINEL_RT__";
+    const sentinelT: TFunc = () => SENTINEL;
+    expect(runningTimePrefix(sentinelT)).toBe(SENTINEL);
+    expect(formatRunningTime(SINCE, NOW, sentinelT)).toBe(SENTINEL);
+    // 反证：哨兵真的被调用了两次（前缀 + 时长各一次），不是"只有一处过 t"
+    const seen: string[] = [];
+    const spyT: TFunc = (id, dm) => {
+      seen.push(id);
+      return dm;
+    };
+    runningTimePrefix(spyT);
+    formatRunningTime(SINCE, NOW, spyT);
+    expect(seen).toEqual(["runningTime.prefix", "runningTime.duration"]);
+  });
+
+  it("④ 无效日期仍然返回 null（不许因为接了 i18n 就把 NaN 渲染出来）", () => {
+    expect(formatRunningTime("", NOW, enT)).toBeNull();
+    expect(formatRunningTime("不是日期", NOW, enT)).toBeNull();
+    expect(RUNNING_TIME_DURATION).toContain("{days}");
+  });
+});
+
+describe("前台 i18n 接缝 · SearchCard「查看全部结果」（原来是**死接缝**）", () => {
+  it("① 默认（不传 t）渲染出中文整句，且 `{query}` 已被替换", () => {
+    expect(searchViewAllLabel("docker")).toBe("查看全部结果（docker）");
+    expect(SEARCH_VIEW_ALL_LABEL).toBe("查看全部结果（{query}）");
+  });
+
+  it("② 传入词典就换成英文整句（🔴 语序由模板决定，不是代码拼括号）", () => {
+    const enT: TFunc = (id, dm, values) => {
+      const tpl = id === "search.viewAllResultsFor" ? "View all results for {query}" : dm;
+      let out = tpl;
+      for (const [k, v] of Object.entries(values || {})) out = out.split("{" + k + "}").join(String(v));
+      return out;
+    };
+    expect(searchViewAllLabel("docker", enT)).toBe("View all results for docker");
+    // 🔴 反证：英文里**不许**出现全角括号（那正是"代码里拼括号"的老形状）
+    expect(searchViewAllLabel("docker", enT)).not.toContain("（");
+  });
+
+  it("③ 🔴 **消费方真的接上了**（渲染组件，而不只是调用函数）—— 死接缝就是死在这一条上", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ViewAllResultsLink, { query: "docker", onClick: () => {} })
+    );
+    expect(html).toContain("查看全部结果（docker）");
+    expect(html).not.toContain("{query}");
+    // 🔴 源码级：组件里不许再出现"常量 + 代码拼括号"那个老形状
+    // ⚠️ 必须传 "utf8"：不传编码 `readFileSync` 返回 **Buffer**，
+    //    而 `expect(buffer).not.toContain("字符串")` 会报"参数组合非法"（那不是断言红，是尺子用错了）。
+    const src = readFileSyncForSeam(
+      joinForSeam(resolveForSeam(__dirname, ".."), "components/SearchCard/index.tsx"),
+      "utf8"
+    );
+    // ⚠️ **必须先剥注释再断言 not.toContain**：那个文件里的说明注释**逐字引用了老形状**
+    //    （用来解释为什么改），不剥的话这条 `not.toContain` 会被我自己的注释打红
+    //    （本项目已因此踩过多次：「断言被自己的注释绊倒」）。
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("//"))
+      .join("\n");
+    expect(code).not.toContain("${SEARCH_VIEW_ALL_LABEL}（${query}）");
+    expect(code).toContain("searchViewAllLabel(query, t)");
+    expect(code).toContain("const t = useT();");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔴 期 12 第二批新增的**性质守卫**：不许拿"中文字面量"当状态判据
+//
+// 起因（真 bug，已用真浏览器复现）：`SearchCard` 里原来写
+//     text = t("search.stateHasResults", "有结果");
+//     …
+//     if (text == "有结果") { return <ArticleList … /> }
+// 切到英文/繁中后 `text` 是 `Has results`／`有結果` ⇒ 分支永远进不去 ⇒
+// **搜到 7 条也一条都不渲染**（zh-CN 7 条 / en-US 0 条），而 `/search` 页是好的 ⇒ 看起来像"搜索坏了"。
+// 👉 一般化：🔴 **`t()` 的返回值只能拿去显示，绝不能拿去比较**。
+// 这条守卫钉的是**整个前台源码**（不是那一个文件），因为同一类错误可以在任何地方再犯。
+// ⚠️ 加它之前先量过：全站命中 **0 处**（唯一一处"命中"是注释里的 `==高亮==`）⇒ 不是给既有代码开豁免，
+//    而是**把已经修好的性质钉住**（这类守卫最值：它防的是"下次有人再写一遍"）。
+// ═══════════════════════════════════════════════════════════════════════════════
+import { readdirSync as readdirSyncForSeam, readFileSync as readFileSyncForSeam, statSync as statSyncForSeam } from "node:fs";
+import { join as joinForSeam, relative as relativeForSeam, resolve as resolveForSeam } from "node:path";
+
+describe("🔴 前台源码里不许出现「与中文字面量比较」（拿译文当状态判据那一类 bug）", () => {
+  const websiteRoot = resolveForSeam(__dirname, "..");
+  const stripComments = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .map((l) => l.replace(/\/\/.*$/, ""))
+      .join("\n");
+
+  function scan(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSyncForSeam(dir)) {
+      if (entry === "node_modules" || entry === ".next" || entry.startsWith(".")) continue;
+      const full = joinForSeam(dir, entry);
+      const st = statSyncForSeam(full);
+      if (st.isDirectory()) scan(full, out);
+      else if (
+        /\.(ts|tsx)$/.test(entry) &&
+        !/\.(spec|test)\.(ts|tsx)$/.test(entry) &&
+        !full.includes("__tests__")
+      )
+        out.push(full);
+    }
+    return out;
+  }
+
+  it("① 全站扫描：`== / === / != / !== / case` 右边不许是含中文的字面量", () => {
+    const files = scan(websiteRoot);
+    expect(files.length).toBeGreaterThan(120); // 反空转：扫描本身必须真的扫到东西
+    const bad: string[] = [];
+    for (const f of files) {
+      const src = stripComments(readFileSyncForSeam(f, "utf8"));
+      src.split("\n").forEach((line, i) => {
+        const re = /(===?|!==?)\s*("[^"]*[\u4e00-\u9fff][^"]*"|'[^']*[\u4e00-\u9fff][^']*'|`[^`]*[\u4e00-\u9fff][^`]*`)|\bcase\s+("[^"]*[\u4e00-\u9fff][^"]*"|'[^']*[\u4e00-\u9fff][^']*')/;
+        if (re.test(line)) bad.push(`${relativeForSeam(websiteRoot, f)}:${i + 1}: ${line.trim().slice(0, 100)}`);
+      });
+    }
+    expect(
+      bad,
+      "🔴 这些行在拿**中文字面量**当判据。如果左边是 t(...) 的结果，那么切语种后分支就永远进不去" +
+        "（本仓库已因此出过一个真 bug：搜索弹窗在英文下搜到结果也不渲染）。" +
+        "修法：判据换成**状态**（布尔/枚举/数量），中文只留在 t() 的默认值里。命中：\n" +
+        bad.join("\n")
+    ).toEqual([]);
+  });
+
+  it("② 🔴 尺子有效性反证：那个真 bug 的形状必须被上面这条抓到", () => {
+    const buggy = 'if (text == "有结果") {';
+    const fixed = "if (hasResults) {";
+    const re = /(===?|!==?)\s*("[^"]*[\u4e00-\u9fff][^"]*"|'[^']*[\u4e00-\u9fff][^']*'|`[^`]*[\u4e00-\u9fff][^`]*`)|\bcase\s+("[^"]*[\u4e00-\u9fff][^"]*"|'[^']*[\u4e00-\u9fff][^']*')/;
+    expect(re.test(buggy)).toBe(true); // 老形状 ⇒ 红
+    expect(re.test(fixed)).toBe(false); // 新形状 ⇒ 绿
+    // 且"注释里提到这个形状"不会误报（尺子剥注释）
+    expect(stripComments('// if (text == "有结果") {\nconst a = 1;')).not.toContain("有结果");
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔴 期 12 第二批（后半）：`KeyCard`（快捷键提示的**读屏文案**）
+//
+// 这一族与前面几族**方向相反**：原来是**硬编码英文**，中文用户用读屏软件听到夹生英文。
+// 🔴 而尺子（`bareChinese`）只量"裸中文"⇒ **从来没报过它**。它是真浏览器探针打出来的
+// （弹窗渲染文本里那句 `Press esc to close`）。👉 判据量不到的方向，只能靠看。
+// ═══════════════════════════════════════════════════════════════════════════════
+import KeyCard, { keyHint } from "../components/KeyCard";
+
+describe("前台 i18n 接缝 · KeyCard（快捷键提示的读屏文案）", () => {
+  const EN_KH: Record<string, string> = {
+    "keyHint.press": "Press ",
+    "keyHint.and": " and ",
+    "keyHint.toSearch": " to search",
+    "keyHint.toClose": " to close",
+  };
+  const enT: TFunc = (id, dm) => EN_KH[id] || dm;
+
+  it("① 默认（不传 t）是**中文**（zh-CN 的载体就是代码里的默认值）", () => {
+    expect(keyHint("press")).toBe("按下 ");
+    expect(keyHint("and")).toBe(" 和 ");
+    expect(keyHint("toSearch")).toBe(" 搜索");
+    expect(keyHint("toClose")).toBe(" 关闭");
+  });
+
+  it("② 传入词典就换成英文（且**前后空格保留** —— 它们是围着 <kbd> 拼的片段）", () => {
+    expect(keyHint("press", enT)).toBe("Press ");
+    expect(keyHint("and", enT)).toBe(" and ");
+    expect(keyHint("toSearch", enT)).toBe(" to search");
+    expect(keyHint("toClose", enT)).toBe(" to close");
+  });
+
+  it("③ 🔴 哨兵反向：四段都必须过 t（改回硬编码就会红）", () => {
+    const SENTINEL = "__SENTINEL_KH__";
+    const sentinelT: TFunc = () => SENTINEL;
+    for (const part of ["press", "and", "toSearch", "toClose"] as const) {
+      expect(keyHint(part, sentinelT), `${part} 没有过接缝`).toBe(SENTINEL);
+    }
+    // 反证：哨兵确实被调了 4 次、而且 id 各不相同（不是"四段共用一个 key"）
+    const seen: string[] = [];
+    const spyT: TFunc = (id, dm) => {
+      seen.push(id);
+      return dm;
+    };
+    for (const part of ["press", "and", "toSearch", "toClose"] as const) keyHint(part, spyT);
+    expect(seen).toEqual(["keyHint.press", "keyHint.and", "keyHint.toSearch", "keyHint.toClose"]);
+  });
+
+  it("④ 🔴 **消费方**（组件）也接上了：两种 type 的 sr-only 文本都来自接缝", () => {
+    const search = renderToStaticMarkup(React.createElement(KeyCard, { type: "search" }));
+    const esc = renderToStaticMarkup(React.createElement(KeyCard, { type: "esc" }));
+    expect(search).toContain("按下 ");
+    expect(search).toContain(" 搜索");
+    expect(esc).toContain("按下 ");
+    expect(esc).toContain(" 关闭");
+    // 🔴 老形状（硬编码英文）不许再出现 —— 这才是"死接缝"与"真接上"的分界
+    expect(search).not.toContain("Press ");
+    expect(search).not.toContain(" to search");
+    expect(esc).not.toContain(" to close");
+    // 反证：键帽本身（可见部分）不受影响
+    expect(search).toContain("<kbd");
+    expect(esc).toContain("esc");
+  });
+});

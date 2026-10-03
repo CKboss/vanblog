@@ -264,11 +264,26 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
       expect(v).not.toMatch(/[复开时阅读关闭单显设让说话马]/);
     });
 
+    // 🔴 期 12 第二批：**空格归属**判据（真浏览器才发现的缺陷）。
+    //    `RunningTime` 把前缀与时长放在两个**相邻的 `<span>`** 里，JSX 里没有任何空白 ⇒
+    //    英文渲染出来是 `This site has been running for818 days`（中文不需要空格，所以看不出来）。
+    //    修法是把空格写进**前一段的值**里；这条判据钉住它，免得有人"顺手 trim 一下"又坏回去。
+    //    ⚠️ 单测**抓不到**这类缺陷（两段是分开断言的，各自都对）⇒ 只能靠渲染级证据 + 这条口径判据。
+    expect(dictEnUS["runningTime.prefix"]).toMatch(/\s$/);
+    expect(dictEnUS["runningTime.duration"]).not.toMatch(/^\s/);
+
     setLocale(DEFAULT_FRONT_LOCALE);
     expect(t("nav.actionSearch", "搜索")).toBe("搜索");
   });
 
   it("⑥ 🔴 覆盖率**棘轮**：词典 key 数只许增不许减（迁一批就该涨）", () => {
+    // 🔴 164 = 期 12 第二批（后半）之后的实测值（160 + `keyHint.*` 4：快捷键提示的**读屏文案**，
+    //    原来是组件里硬编码的英文 ⇒ 中文用户听到夹生英文。⚠️ 这一族是**真浏览器探针**打出来的，
+    //    不是判据抓到的：尺子只量"裸中文"，🔴 而它是**反方向的同类问题**（裸英文）⇒ 判据量不到，只能靠看）。
+    // 🔴 160 = 期 12 第二批之后的实测值（158 + `runningTime.prefix` + `runningTime.duration`；
+    //    ⚠️ 同批还把 `search.viewAllResults` **改名**成 `search.viewAllResultsFor`（值从"光秃秃的标签"
+    //    变成"整句 + `{query}`"）⇒ 那是**改名不是新增**，所以只 +2 而不是 +3。
+    //    🔴 改名必须**同时**改两份词典，否则旧的成了 orphan key、新的成了 missing key，两边一起红）。
     // 🔴 158 = 期 10 第十四批之后的实测值（第十三批 153 + 数据层错误消息 4 + 补上 `stats.tagSummary` 1）。
     //    历史：153 = 期 10 第十三批之后的实测值（第十二批 140 + 页面级 **13**）。
     //    ⚠️ b69 交了 16 条译文，但只有 13 条进了词典：`stats.tagSummary`（那两个页面的统计行本批没迁）、
@@ -284,9 +299,9 @@ describe("🔴 前台词典覆盖率对账（缺 key / 孤儿 key / 两份词典
     //    "**key 被合并/删除了**"（不是"懒得翻所以删掉"）；而上调的理由是"又迁了一批"。
     //    👉 棘轮的语义是"覆盖率不许退步"，而**合并重复 key 是让覆盖率更真实**（一份文案一条译文），
     //    所以这种下调是**进步**，不是退步 —— 但必须在注释里说清，否则下一个人会以为可以随便调小。
-    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(158);
-    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(158);
-    expect(ids.size).toBeGreaterThanOrEqual(158);
+    expect(Object.keys(dictEnUS).length).toBeGreaterThanOrEqual(164);
+    expect(Object.keys(dictZhTW).length).toBeGreaterThanOrEqual(164);
+    expect(ids.size).toBeGreaterThanOrEqual(164);
   });
 });
 

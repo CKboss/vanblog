@@ -72,7 +72,24 @@ describe("接线：页脚不再把 Invalid Date 渲染出来", () => {
     expect(rt).toContain("if (!valid)");
     expect(rt).toContain("return null;");
     // 旧实现没有依赖数组：每秒 setT → 重渲染 → clearInterval+setInterval 重建一轮
-    expect(rt).toContain("}, [valid, props.since]);");
+    // 🔴 期 12 第二批：这里原来钉的是**逐字源码** `}, [valid, props.since]);`，
+    //    把 i18n 的 `t` 加进依赖之后它就红了。这是「源码级钉子」的老毛病（本仓库已因此吃过多次）：
+    //    它钉的是**写法**，不是**性质** ⇒ 任何等价改写都会假红，而真正的退步（删掉依赖数组）反而可能不红。
+    //    改成断言性质：① 那个 effect **有**依赖数组（否则每秒重建定时器）；
+    //    ② 数组里含 `props.since`（建站时间变了要重算）；
+    //    ③ 🔴 还必须含 `t` —— 否则**切换语种后这一行会一直停在旧语种**，直到下一次 tick 才悄悄跟上
+    //    （属于「看起来接了 i18n、其实只在部分路径上生效」）。
+    const depArray = rt.match(/\}, \[([^\]]*)\]\);/);
+    expect(depArray, "RunningTime 的定时器 effect 必须有依赖数组（不许每秒重建定时器）").toBeTruthy();
+    const deps = String(depArray?.[1] ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    expect(deps).toContain("props.since");
+    expect(deps).toContain("t");
+    // 反证：这把尺子确实能抓到「没有依赖数组」那种退步（否则上面三条可能是空的绿）
+    expect("}, [valid]);".match(/\}, \[([^\]]*)\]\);/)?.[1]).toBe("valid");
+    expect(rt).not.toContain("setInterval(tick, 1000);\n  });");
     // 首帧就有值（tick() 立即跑一次），不再空等第一个 1s
     expect(rt).toMatch(/tick\(\);/);
   });

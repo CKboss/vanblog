@@ -21,6 +21,13 @@ const dict: Record<string, string> = {
   'nav.actionMenu': 'Open menu',
   'nav.actionRss': 'RSS Feed',
   'nav.actionSearch': 'Search',
+  // 🔴 Batch 12-2: screen-reader fragments of the keyboard hint (they used to be hardcoded
+  //    English in the component; now the Chinese lives in the code as the default and English here).
+  //    ⚠️ The leading/trailing spaces are deliberate: these are glued around <kbd> elements.
+  'keyHint.press': 'Press ',
+  'keyHint.and': ' and ',
+  'keyHint.toSearch': ' to search',
+  'keyHint.toClose': ' to close',
   'nav.actionTheme': 'Toggle theme',
   'pageNav.jumpGoLabel': 'Go',
   'pageNav.jumpInputLabel': 'Page number',
@@ -205,7 +212,17 @@ const dict: Record<string, string> = {
   'page.pageNumberTitle': 'Page number',
   'post.breadcrumbHome': 'Home',
   'post.breadcrumbArticle': 'Article',
-  'search.viewAllResults': 'View all results',
+  // 🔴 Batch 12-2: full sentence with a {query} placeholder (the bare label forced the caller
+  //    to glue on full-width parentheses in code, which reads wrong in English).
+  'search.viewAllResultsFor': 'View all results for {query}',
+  // 🔴 Batch 12-2: footer uptime line. Owner ruling: accept "1 days" (no English plurals,
+  //    no ICU) => one whole-sentence template with four placeholders instead of concatenation.
+  // 🔴 值**以一个空格结尾**是必需的：组件把前缀与时长放在两个相邻的 <span> 里，
+  //    中间没有任何空白 ⇒ 中文（本站居然运行了818天…）不需要空格、英文需要。
+  //    ⚠️ 这个缺陷**只有真浏览器渲染才看得见**（单测是分开比两段的，各自都对）。
+  //    👉 规矩：**拼接式渲染的空格归属于前一段的值**，不要指望 JSX 里有空白。
+  'runningTime.prefix': 'This site has been running for ',
+  'runningTime.duration': '{days} days, {hours} hours, {mins} minutes, {secs} seconds',
   'search.enterAndSearch': 'Type to search',
   'search.stateHasResults': 'Has results',
   'search.stateTyping': 'Typing',

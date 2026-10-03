@@ -5,7 +5,7 @@ import path from "path";
 import { describe, expect, it } from "vitest";
 
 import SearchCard, {
-  SEARCH_VIEW_ALL_LABEL,
+  searchViewAllLabel,
   ViewAllResultsLink,
 } from "../components/SearchCard";
 
@@ -49,8 +49,15 @@ describe("SearchCard：只加了一个「查看全部结果」的出口，没有
     );
     expect(html).toContain("<a");
     expect(html).toContain('href="/search?q=docker"');
-    expect(html).toContain(SEARCH_VIEW_ALL_LABEL);
+    // 🔴 期 12 第二批：原来断言的是 `SEARCH_VIEW_ALL_LABEL` 那个**常量**，而它现在是
+    //    整句模板（`查看全部结果（{query}）`）⇒ 直接拿常量比会永远红（渲染出来的是替换后的句子）。
+    //    改成断言**接缝函数的返回值**：这样一条判据同时钉住 ①文案接了接缝 ②`{query}` 真的被替换了
+    //    （比原来只比"包含那个中文标签"更强 —— 原来那条对"渲染出未替换的 {query}"是**绿**的）。
+    expect(html).toContain(searchViewAllLabel("docker"));
+    expect(html).toContain("查看全部结果");
     expect(html).toContain("docker");
+    // 反证：占位符必须已经被替换掉（否则上面那条可能只是"模板原样渲染"也算过）
+    expect(html).not.toContain("{query}");
   });
 
   it("关键词被百分号编码（C# / a&b / 中文 / 攻击串都不会破坏 href）", () => {

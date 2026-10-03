@@ -30,7 +30,13 @@ const TimeLine = (props: TimeLinePageProps) => {
   const t = useT();
   return (
     <Layout
-      title={"时间线"}
+      // 🔴 期 12 第二批：这里原来是硬编码的 `"时间线"`，而**下面第 40 行**同一个标题已经走了接缝
+      //    ⇒ 结果是"页面正文的标题会跟着语种变，浏览器标签页/SEO 的 title 永远中文"。
+      //    👉 同一个文案**两处口径**（一处接了、一处没接）是最容易漏的一类：
+      //    尺子（bareChinese）数出这个文件还剩 1 条，才把它翻出来。
+      //    ⚠️ 复用**同一个 key**（`page.timelineTitle`），不要新造一个：
+      //    两个 key 同义 ⇒ 迟早一个改了一个忘了改。
+      title={t("page.timelineTitle", "时间线")}
       option={props.layoutProps}
       sideBar={<AuthorCard option={props.authorCardProps} />}
     >

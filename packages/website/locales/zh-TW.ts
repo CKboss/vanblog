@@ -20,6 +20,12 @@ const dict: Record<string, string> = {
   'nav.actionMenu': '開啟選單',
   'nav.actionRss': 'RSS 訂閱',
   'nav.actionSearch': '搜尋',
+  // 🔴 期 12 第二批：快捷键提示的**读屏文案**（原来是硬编码英文，中文用户听到的是夹生英文）。
+  //    ⚠️ 值里**带前后空格**是刻意的：它们是围着 <kbd> 键帽拼的片段。
+  'keyHint.press': '按下 ',
+  'keyHint.and': ' 和 ',
+  'keyHint.toSearch': ' 搜尋',
+  'keyHint.toClose': ' 關閉',
   'nav.actionTheme': '切換主題',
   'pageNav.jumpGoLabel': '前往',
   'pageNav.jumpInputLabel': '頁碼',
@@ -209,7 +215,13 @@ const dict: Record<string, string> = {
   'page.pageNumberTitle': '頁碼',
   'post.breadcrumbHome': '首頁',
   'post.breadcrumbArticle': '文章',
-  'search.viewAllResults': '查看全部結果',
+  // 🔴 期 12 第二批：改成**整句 + {query}**（原来是光秃秃的标签，消费方在代码里拼全角括号
+  //    ⇒ 英文语序下会渲染成 `View all results（安装）`）。旧 key 已改名，不留 orphan。
+  'search.viewAllResultsFor': '查看全部結果（{query}）',
+  // 🔴 期 12 第二批：页脚「本站已运行 N 天…」过接缝。站长裁定**接受 1 days**（不做英文单复数、
+  //    不引入 ICU）⇒ 用一条整句模板 + 四个占位符，而不是一段段拼（拼接在英文里语序与分隔符都不同）。
+  'runningTime.prefix': '本站居然運行了',
+  'runningTime.duration': '{days}天{hours}小時{mins}分{secs}秒',
   'search.enterAndSearch': '請輸入並搜尋',
   'search.stateHasResults': '有結果',
   'search.stateTyping': '輸入中',
