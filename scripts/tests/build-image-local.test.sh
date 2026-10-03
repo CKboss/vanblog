@@ -40,6 +40,15 @@ has "传 node-gyp 头文件源 build-arg（musl 默认的 unofficial-builds 国�
 has "头文件源默认走 npmmirror 的 CDN" 'cdn.npmmirror.com/binaries/node'
 has "支持只构建单个 stage（迭代时快得多）" '--target'
 
+# 🔴 期 12 第一批：离线/受限网络下能用**本地已缓存**的基础镜像构建（PULL_POLICY）
+#    起因：本机 buildah 1.33 的默认策略实测是"每次都去 ping 仓库"⇒ 连不上 docker.io 时，
+#    即使 `podman images` 里已经有 node:24-alpine，构建也在 STEP 1 就失败，
+#    而报错只说 "pinging container registry"（完全没提"本地其实有镜像"）⇒ 极易误判成 Dockerfile 的问题。
+has "--help 里说明了 PULL_POLICY" 'PULL_POLICY'
+has "PULL_POLICY 真的被传给 buildah（否则是个摆设）" '--pull="${PULL_POLICY}"'
+has "非法的 PULL_POLICY 立刻退出（拼错却'以为生效了'比报错更糟）" '无效的 PULL_POLICY'
+has "docker 下忽略 PULL_POLICY 时要**说出来**（不静默忽略）" '已忽略：docker'
+
 # 引擎：docker 组常常是空的，podman rootless 是免 sudo 的那条路
 has "自动探测引擎" 'pick_engine'
 has "支持 podman（rootless，不需要 docker 组）" 'podman'

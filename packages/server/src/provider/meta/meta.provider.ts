@@ -20,6 +20,7 @@ import { invalidatePublicMetaCache } from 'src/utils/publicMetaCache';
 import { assertSafeWriteFilter } from 'src/utils/queryFilter';
 import { sanitizeArticlesPerPage } from 'src/utils/articlesPerPage';
 import { sanitizePageCopy } from 'src/utils/pageCopy';
+import { sanitizeRobotsTxt } from 'src/utils/robotsTxt';
 import { isTrue } from 'src/utils/isTrue';
 import { ViewStatsProvider } from '../stats/viewStats.provider';
 import { Optional } from '@nestjs/common';
@@ -108,6 +109,29 @@ export const PUBLIC_SITE_INFO_FIELDS = [
 const PUBLIC_SITE_INFO_FIELD_SET: ReadonlySet<string> = new Set<string>(PUBLIC_SITE_INFO_FIELDS);
 
 /**
+ * 🔴 **已经决定"就是私有"**的 siteInfo 字段（期 12 第一批新增）。
+ *
+ * 为什么要这张表：未在白名单里的字段会打一条 WARN，那条 WARN 的用意是
+ * "**新加了字段却忘了决定它是否公开**"要在日志里留下痕迹。可是"已经决定私有"的字段
+ * 每次进程启动都 WARN 一遍就成了噪音 —— 而 🔴 **噪音会训练人忽略 WARN**，
+ * 那才是真正贵的后果（下一次真的有人忘了决定，那条 WARN 会被当背景刷过去）。
+ *
+ * ⇒ 所以三态要分清：
+ *   - 在 `PUBLIC_SITE_INFO_FIELDS` 里 ⇒ 公开下发；
+ *   - 在本表里 ⇒ **决定过**是私有，静默剔除（不打 WARN）；
+ *   - 两边都不在 ⇒ 🔴 **没人决定过**，打 WARN（原有行为不变）。
+ *
+ * ⚠️ 加进本表等于声明"这个字段永远不该匿名下发"⇒ 有守卫钉住：本表与白名单**不许有交集**
+ * （见 `metaPublicProjection.spec.ts`），否则一个字段的公开性就有两处互相矛盾的口径。
+ */
+export const PRIVATE_SITE_INFO_FIELDS = [
+  // robots.txt 自定义正文：爬虫直接读 `/robots.txt`，匿名 meta 响应不需要它
+  'robotsTxt',
+] as const;
+
+const PRIVATE_SITE_INFO_FIELD_SET: ReadonlySet<string> = new Set<string>(PRIVATE_SITE_INFO_FIELDS);
+
+/**
  * 已经 WARN 过的"未在白名单里的字段"，每进程每字段只提醒一次。
  * 公开 meta 有 5 秒缓存但仍是热路径，逐次打印会把日志冲掉（而日志本身在攻击期间是稀缺资源）。
  */
@@ -158,13 +182,18 @@ export function projectPublicSiteInfo(siteInfo: any): Record<string, any> {
   for (const [key, value] of Object.entries(source)) {
     if (!PUBLIC_SITE_INFO_FIELD_SET.has(key)) {
       withheld.push(key);
-      if (!warnedNonPublicSiteInfoFields.has(key)) {
+      // 🔴 期 12 第一批：已登记为"**决定过是私有**"的字段静默剔除，不打 WARN。
+      //    WARN 的用意是抓"**没人决定过**"的字段；对已经决定过的字段每次都 WARN 是噪音，
+      //    而 🔴 **噪音会训练人忽略 WARN**（下一次真的有人忘了决定，那条 WARN 就被当背景刷过去）。
+      if (!PRIVATE_SITE_INFO_FIELD_SET.has(key) && !warnedNonPublicSiteInfoFields.has(key)) {
         warnedNonPublicSiteInfoFields.add(key);
         publicSiteInfoLogger.warn(
           `siteInfo 字段「${key}」不在公开白名单里，已从匿名 /api/public/meta 响应中剔除。` +
             `如果前台确实需要它，请把它加进 meta.provider.ts 的 PUBLIC_SITE_INFO_FIELDS` +
             `（并同步"清单与前台实际用量一致"那条守卫）；如果它是内部/凭据类字段，` +
-            `那这条 WARN 就是它没有被误公开的证据。`,
+            `请把它登记进 PRIVATE_SITE_INFO_FIELDS（那样本条 WARN 就不再出现，` +
+            `而"决定过"这件事由那条'公开表与私有表不许有交集'的守卫看着）；` +
+            `两边都不登记 ⇒ 说明这个字段的公开性还没人决定过，这条 WARN 就是提醒。`,
         );
       }
       continue;
@@ -484,6 +513,12 @@ export class MetaProvider {
       friendLinkIntro: sanitizePageCopy(siteInfo.friendLinkIntro, ''),
       friendLinkApplyContent: sanitizePageCopy(siteInfo.friendLinkApplyContent, ''),
       aboutTitle: sanitizePageCopy(siteInfo.aboutTitle, ''),
+      // 🔴 期 12 第一批：robots.txt 自定义正文。读侧也过一遍**同一个** `sanitizeRobotsTxt`，
+      //    这样"后台表单里显示的"与"爬虫拿到的"是同一份口径（写入侧 `updateSiteInfo` 也调它）。
+      //    ⚠️ 缺失/脏数据一律回落 `''`（= 用服务端默认那份开放收录的 robots.txt），
+      //    🔴 **不要**在这里把默认正文塞进 siteInfo —— 那样后台表单会显示一大段"看起来是我填的"内容，
+      //    站长一改就把默认逻辑冻结成了他那一刻的快照（以后默认内容升级他也拿不到）。
+      robotsTxt: sanitizeRobotsTxt(siteInfo.robotsTxt, ''),
       // 主题 id：`default` / `apple` 是内置的，**其它值是后台上传的自定义主题 id，必须原样保留**。
       // ⚠️ 以前这里写的是 `=== 'default' ? 'default' : 'apple'`，把非 default 的值一律压成 apple ——
       // 自定义主题一启用就会被吃掉（前台读的是 getAll() 的原始值所以看着正常，
@@ -567,6 +602,13 @@ export class MetaProvider {
       oldSiteInfo?.friendLinkApplyContent,
     );
     nextSiteInfo.aboutTitle = sanitizePageCopy((updateDto as any).aboutTitle, oldSiteInfo?.aboutTitle);
+    // 🔴 期 12 第一批：robots.txt 自定义正文（匿名可达 ⇒ 净化必须在**写入侧**做完）。
+    //    `fallback` 传库里的旧值：这次带来的值不可用（不是字符串）时**保持原样**，
+    //    而不是把站长的 robots.txt 悄悄清空（清空 = 从"自定义"退回"默认"，是一次静默的行为变更）。
+    nextSiteInfo.robotsTxt = sanitizeRobotsTxt(
+      (updateDto as any).robotsTxt,
+      sanitizeRobotsTxt(oldSiteInfo?.robotsTxt, ''),
+    );
     // 🔴 不再用 `{}`：这是后台"站点设置"的保存入口，形状与 `updateAbout` 完全相同
     //    （集合为空 ⇒ 静默无事发生；多条 ⇒ 改错文档）。⚠️ 注意这里**必须**用
     //    `requireMetaDocument()` 重新取一次，不能复用上面的 `oldSiteInfo`：

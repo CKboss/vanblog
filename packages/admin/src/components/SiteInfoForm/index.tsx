@@ -221,6 +221,32 @@ export default function (props: {
             label={t('siteInfo.since.label', '建站时间')}
             placeholder={t('siteInfo.since.placeholder', '不填默认为此刻')}
           />
+          {/* 🔴 期 12 第一批：robots.txt 自定义正文。
+              ⚠️ 这里是**整份替换**，不是"在默认内容上追加"⇒ tooltip 必须把默认内容说清楚，
+              否则站长填一行就把默认的 Disallow 全冲掉了（而后果要等收录掉了才发现）。
+              ⚠️ 刻意不做"内容校验/拦截"（例如禁止 `Disallow: /`）：那是站长的裁定，
+              后台只负责把后果讲明白。净化（\r、控制字符、长度上限）在服务端写入侧统一做。
+              🔴 上面两个 t() 的第二个实参**必须是一整个字符串字面量，不要用 `+` 折行**：
+              共享的 AST 抽取器（`scripts/i18n/astInventory.js` 的 `collectTCalls`）只认
+              `StringLiteral` 形状的 defaultMessage，拼起来的那一段会被抽成 null
+              ⇒ `localePackParity` 就查不到"defaultMessage 与 zh-CN 语言包逐字一致"这条性质了
+              （🔴 而且它是**静默**查不到：守卫不会红，只是少了一处对账）。 */}
+          <ProFormTextArea
+            name={'robotsTxt'}
+            label={t('siteInfo.robotsTxt.label', 'robots.txt（爬虫规则）')}
+            placeholder={t('siteInfo.robotsTxt.placeholder', '留空则使用默认内容：开放收录，只挡接口、后台、API 文档与临时目录')}
+            tooltip={t('siteInfo.robotsTxt.tooltip', '搜索引擎爬虫读取的 /robots.txt 正文。留空 = 使用默认内容（开放收录：User-agent: * 与 Allow: /，只挡 /api/、/admin、/swagger 与导出、临时目录）。填了内容就是整份替换，连默认的 Disallow 也一起被替换掉；没写 Sitemap: 行时会自动补一条（用「网站 URL」拼绝对地址）。⚠️ 写 Disallow: / 等于让本站从所有搜索引擎消失，请确认这是你要的。改完最多一小时后对爬虫生效（有缓存头）。')}
+            fieldProps={{
+              autoSize: {
+                minRows: 8,
+                maxRows: 24,
+              },
+              // 🔴 与服务端 `ROBOTS_TXT_MAX_BYTES`（16 KiB）同口径：超长在服务端是**按行截断**的，
+              //    前端先挡住，免得站长贴进去一大段、保存后却发现尾巴没了（静默截断比报错更难查）。
+              maxLength: 16000,
+              showCount: true,
+            }}
+          />
         </>
       )}
       {/* 布局选项 */}

@@ -5,7 +5,12 @@ import { Logger } from '@nestjs/common';
 
 import { DEFAULT_ARTICLES_PER_PAGE } from 'src/utils/articlesPerPage';
 
-import { MetaProvider, PUBLIC_SITE_INFO_FIELDS, projectPublicSiteInfo } from './meta.provider';
+import {
+  MetaProvider,
+  PRIVATE_SITE_INFO_FIELDS,
+  PUBLIC_SITE_INFO_FIELDS,
+  projectPublicSiteInfo,
+} from './meta.provider';
 
 /**
  * 匿名 `/api/public/meta` 的 `siteInfo` **白名单投影**守卫。
@@ -356,5 +361,103 @@ describe('projectPublicSiteInfo：控制器直接用的**纯函数**（不读库
     const viaPure = projectPublicSiteInfo(input);
     expect(Object.keys(viaProvider!).sort()).toEqual(Object.keys(viaPure!).sort());
     expect(viaProvider!.siteName).toBe(viaPure!.siteName);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔴 期 12 第一批：robots.txt 自定义正文（`siteInfo.robotsTxt`）的公开性裁定
+//
+// 这个字段是**匿名可达内容**（爬虫直接读 `/robots.txt`），但它**不该**出现在匿名 meta 响应里：
+// ① 爬虫不需要从 meta 拿它；② 它是站长手写的一大段文本，公开下发只是白白增加响应体与侦察面。
+// ⇒ 裁定为**私有**。而"私有"这件事本身也要有判据钉住，否则下一个人重构白名单时
+//    很容易"顺手"把它加进公开清单（那不会有任何测试变红，因为前台不读它）。
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('siteInfo 字段的三态：公开 / 决定过是私有 / 没人决定过', () => {
+  it('🔴 公开表与私有表不许有交集（否则同一个字段的公开性有两处互相矛盾的口径）', () => {
+    const pub = PUBLIC_SITE_INFO_FIELDS as readonly string[];
+    const priv = PRIVATE_SITE_INFO_FIELDS as readonly string[];
+    // 反空转：两张表都真的解析出了东西，否则"没有交集"是空的绿
+    expect(pub.length).toBeGreaterThan(20);
+    expect(priv.length).toBeGreaterThan(0);
+    const both = priv.filter((f) => pub.includes(f));
+    expect(both).toEqual([]);
+    expect(new Set(priv).size).toBe(priv.length);
+  });
+
+  it('robotsTxt 被裁定为私有：在私有表里、不在公开白名单里', () => {
+    expect(PRIVATE_SITE_INFO_FIELDS as readonly string[]).toContain('robotsTxt');
+    expect(PUBLIC_SITE_INFO_FIELDS as readonly string[]).not.toContain('robotsTxt');
+  });
+
+  it('🔴 匿名投影绝不泄露 robotsTxt（哪怕库里存了一大段）', () => {
+    const stored = {
+      siteName: 'n',
+      baseUrl: 'https://x/',
+      robotsTxt: 'User-agent: *\nDisallow: /secret-admin-path/',
+    };
+    const out = projectPublicSiteInfo(stored);
+    expect(Object.prototype.hasOwnProperty.call(out, 'robotsTxt')).toBe(false);
+    expect(JSON.stringify(out)).not.toContain('secret-admin-path');
+    // 反证：同一份输入里"公开字段"确实被带出来了（否则上面那条可能只是"什么都没投影"的空绿）
+    expect(out.siteName).toBe('n');
+  });
+
+  it('🔴 三态的日志行为：登记过的私有字段**静默**，没登记的字段**打 WARN**', () => {
+    // WARN 走的是**模块级** logger（投影是纯函数，拿不到 provider 实例的 logger）⇒ 只能 spy 原型
+    const spy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      projectPublicSiteInfo({ siteName: 'n', robotsTxt: 'x' });
+      const warnedForRobots = spy.mock.calls.some((c) => String(c[0]).includes('robotsTxt'));
+      expect(warnedForRobots).toBe(false);
+
+      spy.mockClear();
+      projectPublicSiteInfo({ siteName: 'n', zzNeverDecidedField: 1 });
+      const warnedForUnknown = spy.mock.calls.some((c) => String(c[0]).includes('zzNeverDecidedField'));
+      // 🔴 这条是"没人决定过"的唯一信号，绝不能因为上面那条静默而一起消失
+      expect(warnedForUnknown).toBe(true);
+      expect(String(spy.mock.calls[0][0])).toContain('PRIVATE_SITE_INFO_FIELDS');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('robotsTxt 的写入侧与读出侧共用同一份净化口径', () => {
+  it('写入侧：\\r 与控制字符被去掉（匿名可达的内容，净化必须在落库前做完）', async () => {
+    const { provider } = makeProvider({ siteName: 'old', baseUrl: 'https://old.example/' });
+    await provider.updateSiteInfo({ robotsTxt: 'User-agent: *\r\nDisallow: /x/\u0000   \n\n\n' } as any);
+    const written = provider.metaModel.updateOne.mock.calls[0][1].siteInfo;
+    expect(written.robotsTxt).toBe('User-agent: *\nDisallow: /x/');
+    expect(written.robotsTxt).not.toContain('\r');
+    // 旧字段保留（是合并而不是替换）
+    expect(written.siteName).toBe('old');
+  });
+
+  it('🔴 写入侧：这次带来的值不是字符串 ⇒ **保持库里的旧值**，而不是悄悄清空', async () => {
+    // 清空 = 从"自定义"退回"默认"，是一次静默的行为变更（站长没点"恢复默认"却丢了内容）
+    const { provider } = makeProvider({ siteName: 'old', robotsTxt: 'User-agent: *\nDisallow: /keep/' });
+    await provider.updateSiteInfo({ robotsTxt: 42 } as any);
+    const written = provider.metaModel.updateOne.mock.calls[0][1].siteInfo;
+    expect(written.robotsTxt).toBe('User-agent: *\nDisallow: /keep/');
+  });
+
+  it('写入侧：显式空串 = 站长选择"恢复默认"（与"没带这个字段"是两件事）', async () => {
+    const { provider } = makeProvider({ siteName: 'old', robotsTxt: 'User-agent: *\nDisallow: /keep/' });
+    await provider.updateSiteInfo({ robotsTxt: '' } as any);
+    const written = provider.metaModel.updateOne.mock.calls[0][1].siteInfo;
+    expect(written.robotsTxt).toBe('');
+  });
+
+  it('读出侧：getSiteInfo() 给出净化后的值；缺失时是空串（**不是**默认正文）', async () => {
+    const withRaw: any = Object.create(MetaProvider.prototype);
+    withRaw.getAll = jest.fn(async () => ({ _id: 'm', siteInfo: { robotsTxt: 'a\r\nb   \n\n' } }));
+    expect((await withRaw.getSiteInfo()).robotsTxt).toBe('a\nb');
+
+    const missing: any = Object.create(MetaProvider.prototype);
+    missing.getAll = jest.fn(async () => ({ _id: 'm', siteInfo: { siteName: 'n' } }));
+    const out = await missing.getSiteInfo();
+    // 🔴 必须是空串而不是默认正文：否则后台表单会显示一大段"看起来是我填的"内容，
+    //    站长一改就把默认逻辑冻结成他那一刻的快照（以后默认内容升级他也拿不到）
+    expect(out.robotsTxt).toBe('');
   });
 });

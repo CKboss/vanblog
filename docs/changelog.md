@@ -42,6 +42,127 @@ redirectFrom: /ref/changelog.html
 - 📈 进度：服务端"带中文的 throw 站点"棘轮 **186 → 162**；错误码 **59 → 81**；语言包 **1504 → 1526 key ×3**。
 
 
+### 2026-10-03：robots.txt —— 默认立场写成"**开放收录**"（`Allow: /`），后台新增"整份替换"的设置项
+
+站长要求：`现在这个blog没有robot.txt, 需要提供一个开放搜索引擎检索权限的robot.txt做为默认robot.txt. 并在后台提供设置robot.txt的选项`
+
+#### 🔴 先实测"没有"这个前提 —— 结果是**有**，缺的是另外两件事
+`curl -i http://127.0.0.1:3000/robots.txt` ⇒ **200 / 348 字节**：`robots.controller.ts` 一直在**动态生成**，
+`CaddyfileTemplate` 有 `handle /robots.txt { reverse_proxy 127.0.0.1:3000 }`（生产），
+`website/next.config.js` 有 `/robots.txt` 的 rewrite（开发）⇒ **三条路径都通**。
+👉 🔴 **"站长说没有 X"必须先实测**：站长看到的是**现象**（收录不好 / 某个环境 404），不是代码事实。
+若照字面去"新建一个 `packages/website/public/robots.txt` 静态文件"，就会造出**第二处口径**，
+而且 🔴 **它永远不生效**（caddy 与 next 都把 `/robots.txt` 转给了 server）——
+一次"看起来做了、其实什么都没变"的**静默无效改动**（本仓库最贵的一类）。
+⇒ 需求重述为：① 把默认内容的**立场写明确**（原来只有 `Disallow` 列表 + `Allow: /static/`，没有一句"其余全部允许"）；
+② 后台**可以整份替换**（原来完全没有）。
+
+#### 交付
+- ✅ **新的纯函数模块 `packages/server/src/utils/robotsTxt.ts`**：`buildRobotsTxt()` / `buildDefaultRobotsTxt()` /
+  `sanitizeRobotsTxt()` / `normalizeRobotsBaseUrl()` / `DEFAULT_ROBOTS_DISALLOW` / `ROBOTS_TXT_MAX_BYTES`（16 KiB）。
+  默认正文新增 🔴 **`Allow: /`** 与两行说明注释（"默认立场是开放收录：只挡接口、后台、API 文档与临时目录"）。
+  ⚠️ `Allow: /` **不会**让 `/api/` 重新可抓：robots.txt 是**最长路径前缀优先**，
+  而这份文件本来就依赖这条规则（`Allow: /static/` 与 `Disallow: /static/export/` 同时存在）。
+- ✅ **`SiteInfo.robotsTxt?: string`** + 后台「站点设置 → **高级设置** → robots.txt（爬虫规则）」一个多行输入框
+  （`autoSize` 8–24 行、`maxLength` 16000 + 字数计数，与服务端上限同口径 ⇒ 不会"保存后尾巴静默没了"）。
+  三份语言包各 **+3 key** ⇒ `BASELINE_KEY_COUNT` 1702 → **1705**（这条判据是**精确等值**，漏更就红）。
+- ✅ **`RobotsController` 不再自己拼字符串**，改成调 `buildRobotsTxt(siteInfo, washUrl)`；
+  **净化只有一份**：写入侧 `updateSiteInfo` 与读出侧 `getSiteInfo()` 都调 `sanitizeRobotsTxt`
+  （去 `\r` 与控制字符、去行尾空白、🔴 超长按**整行**截断 —— 半行会被爬虫当成一条残缺规则）。
+  🔴 拼装留在控制器里就意味着**写入侧与读出侧各有一份口径**，而"后台看到的与爬虫拿到的不一样"
+  是这类字段最难查的漂移。
+- ✅ **`Sitemap:` 只在站长没写的时候补一条**（写了就不许覆盖、不许出现两条；`sitemap:` 大小写与行首空白都算"写了"）。
+
+#### 🔴 三条设计裁定（都写进代码注释，不只是文档）
+1. **默认必须"开放收录"**，且🔴 **刻意不写 `Crawl-delay`**（它拖慢收录，本站没有需要保护带宽的动态页面）。
+   判据钉的是**性质**而不是全文快照：`不许出现 ^Disallow: /[ \t]*$`、`不许出现 crawl-delay`、`必须有 ^Allow: /$`。
+   👉 这是"**没有测试会红的静默坏法**"的典型：有人把默认改成全站禁抓 ⇒ 站点从所有搜索引擎消失，
+   而**所有测试照样绿**（爬虫行为不在我们的测试里）⇒ 必须专门钉。
+2. **站长写了内容就完全以他为准** —— 哪怕写的是 `Disallow: /`（全站禁抓）也照发。
+   🔴 那是站长的裁定，代码不替他改主意；后台只负责**把后果讲明白**（tooltip：
+   "写 Disallow: / 等于让本站从所有搜索引擎消失，请确认这是你要的"）。刻意**不做**内容校验/拦截。
+3. **读库失败也要 200 + 一份默认内容**：robots.txt 返回 500 会让爬虫**拿不到任何规则**，
+   搜索引擎按"无 robots.txt"处理 ⇒ 连 `/api/` 与后台都会去撞一遍（比下发默认内容更糟）。
+
+#### 🔴 `siteInfo` 字段的公开性从"二态"改成"**三态**"（顺手补掉一个会腐烂的机制）
+`projectPublicSiteInfo()` 用白名单投影，并对"不在白名单里的字段"打一条 WARN ——
+那条 WARN 的用意是抓"**新加了字段却忘了决定它是否公开**"。而 robotsTxt 是**已经决定过**是私有的
+（爬虫直接读 `/robots.txt`，匿名 meta 不需要它），每次进程启动都 WARN 就成了噪音。
+🔴 而**噪音会训练人忽略 WARN** —— 下一次真有人忘了决定，那条 WARN 会被当背景刷过去
+（与"假红训练人忽略断言"同一条原理）。⇒ 新增 `PRIVATE_SITE_INFO_FIELDS`，三态分清：
+在公开表 ⇒ 下发；在私有表 ⇒ **决定过**，静默剔除；两边都不在 ⇒ 🔴 **没人决定过**，打 WARN（原行为不变）。
+判据：🔴 两张表**不许有交集** + 反空转（两张表都非空）+ "登记过的静默 / 没登记的仍然 WARN"
+（🔴 后者是"没人决定过"的**唯一信号**，绝不能因为前者而一起消失）+ 投影结果 `hasOwnProperty('robotsTxt') === false`。
+**变异对照 4 条全部打红**（加进公开表 / 从私有表删掉 / 写入侧 fallback 改成空串 / 读侧不净化），
+且还原后 sha256 与改前逐字节相同。
+
+#### 🔴 "加一个后台字段"会踩到的 4 条既有判据（都是好事，但要知道它们在那儿）
+1. **`siteInfoFieldParity`：表单 ↔ DTO ↔ 文档 三方对账** ⇒ DTO 加字段必须同时加表单项与
+   `docs/reference/config.md` 的一行（🔴 只比数量：硬编码 label↔字段名映射表只会新造一处会漂移的口径）。
+2. **`i18nKeyNaming` 的 key 数基线是精确等值**（以前是 `>=`，结果**连续两批忘了抬**而它一直绿 ⇒ 判据在悄悄变松）。
+3. 🔴 **`localePackParity` 的"en-US 每一条都必须与 zh-CN 不同"没有豁免表**：
+   label 本来三份都写 `robots.txt`（纯 ASCII 文件名）⇒ 英文那条红了。
+   两个修法：① 往"简繁同形白名单"加一条 ②**让三份真的不同**。选了 ②：
+   `robots.txt（爬虫规则）` / `robots.txt（爬蟲規則）` / `robots.txt (crawler rules)`。
+   👉 🔴 那张白名单的性质是"**必须恰好等于**实际相同的那一批"⇒ 每加一条就少一分区分力；
+   能用"让内容真的不同"解决的，就不要用"扩大豁免"解决（而且对使用者更清楚）。
+4. 🔴 **`t()` 的 defaultMessage 不许用 `+` 折行**：共享 AST 抽取器
+   （`scripts/i18n/astInventory.js` 的 `collectTCalls`）只认第二个实参是 `StringLiteral` 的形状，
+   拼起来的那段会被抽成 `null` ⇒ 少查一处"defaultMessage 与 zh-CN 逐字一致"。
+   🔴 而且它是**静默**查不到：守卫不会红，只是少了一处对账（比红更糟）。
+   ⇒ 长 tooltip 改回**一整个字符串字面量**，并在表单里写注释说明为什么"不要好心折行"。
+
+#### 🔴 顺手修掉"离线机器上构建不了镜像"的坑（`PULL_POLICY`）
+为了做**真浏览器**验证要构建本地镜像，结果连续两次在 STEP 1 就失败：
+`Error: creating build container: initializing source docker://node:24-alpine: pinging container registry registry-1.docker.io`
+—— 而 `podman images` 里**明明已经有** `node:24-alpine`。本机 buildah 1.33 的默认策略实测是
+"**每次都去 ping 仓库**"⇒ 连不上 docker.io 就直接失败，🔴 而报错完全没提"本地其实有这个镜像"
+（极易误判成 Dockerfile 写错 / 必须先配代理）。
+⇒ `scripts/build-image-local.sh` 新增 `PULL_POLICY=always|missing|never|newer`（默认空 = 引擎默认），
+非法值**立刻退出**（"拼错却以为生效了"比报错更糟：那会又去联网拉一次，正是本旋钮要解决的问题）；
+🔴 且只对 podman 传 `--pull=<policy>`（docker 的 `--pull` 是**布尔开关**），ENGINE=docker 时**说出来**地忽略。
+守卫 `build-image-local.test.sh` **+4 条**（53/0）。
+⚠️ 改这个脚本时踩坑：替换 `SMOKE_KEEP="${SMOKE_KEEP:-0}` 时 old_string **少写了行尾那个双引号**
+⇒ 它被留在新块末尾变成 `esac"` ⇒ bash 语法错。👉 🔴 **替换 shell 变量赋值行时 old_string 必须含整行**（含收尾引号），
+改完立刻 `bash -n`（这次是 `bash -n` 当场抓住的）。
+🔴 另一个坑：构建**不能**在 `HOME=$PWD/.tools/home` 下跑 —— podman rootless 的镜像库在 `$HOME/.local/share/containers`，
+换了 HOME 就等于换了一个**空镜像库**（表现为"明明有镜像却说 image not known"）。
+
+#### 🔴 真浏览器 + 真镜像端到端验证（**37/37**）
+后台 UI 的改动必须真浏览器验证（jest 里 provider 是替身、控制器是手 new 的，
+"渲染不出来 / 存不进去 / 存进去了但 `/robots.txt` 没变"这三种坏法单测**全都抓不到**）。
+用 `PULL_POLICY=never` 构建出的镜像起了**一次性栈**（18074，🔴 不是 18080 那套演练栈），
+`--stack-only` 只起容器不恢复备份，再用**真实模块** `encryptPwd.js` 算派生口令 + 读 `setup.key` 做初始化，
+浏览器**从登录页输密码进去**（等于对派生公式又做了一次活体交叉验证）。
+覆盖：默认内容含 `Allow: /` 且无全站禁抓 / 后台字段渲染（中英两种 label）/ 起点为空 /
+**保存自定义内容后爬虫真的拿到它** / 默认的 `Disallow` 与 `Allow: /` **被整份替换掉**（不是合并）/
+没写 Sitemap 时**自动补一条绝对地址** / 站长自己写了 Sitemap 就**保留且只有一条** / 响应体无 `\r` /
+清空后**回到默认、且重开后台仍是空**（存住了）/ 🔴 匿名 `/api/public/meta` 里**没有** `robotsTxt`
+（反证：同一响应里确有 10 个公开字段）。证据截图 7 张在 `vanblog_dev/i18n-browser-evidence/phase12-batch1-robots/`。
+🔴 **构建出来的镜像**（生产形状 caddy → server）返回的 `/robots.txt` 同样是新默认内容，`Sitemap:` 是本站绝对地址。
+
+探针路上连踩 4 个坑，每个都值得记（详见手册 §7.218 H）：
+1. 🔴 **路由不要猜**：第一版去 `/admin/system-config` ⇒ 空页面 ⇒ 后面 8 条判据**全部假红**。真值在 `config/routes.js`：`/site/setting`。
+2. 🔴 **同名页签有两个**：外层 SystemConfig 有一个"高级设置"（登录安全策略那页），内层站点配置**也**有一个。
+   按文本点 ⇒ 命中外层 ⇒ 又是 8 条假红。修法不是"点最后一个"（碰运气），而是**按结构定位**
+   （找"同时含基本设置与布局设置"的那个 `.ant-tabs` 组）。
+3. 🔴 **antd 会在两个汉字之间插空格**：提交按钮的 textContent 实测是 **`提 交`**（登录按钮是 `登 录`）⇒ `/提交/` 匹配不上；
+   而我写了"退而求其次点第一个 primary"的兜底 ⇒ 点到了**上传图片**，🔴 **判据还报了绿**（它只检查"点到了某个按钮"）。
+   修法：匹配前 `replace(/\s+/g,'')` + 🔴 **去掉兜底**（匹配不到就返回 null 让判据红）。
+   👉 一般化：**"点了某个按钮"不是判据，"点了那个正确的按钮"才是**；兜底会把"选错元素"变成绿。
+4. 🔴 **公开 meta 的形状不要猜**：siteInfo 在 `data.meta.siteInfo`。写错的后果极典型：
+   `没有泄露 robotsTxt` 这条**假绿**（整个对象是空的），而旁边的反证 `siteInfo 里确实有公开字段` 如实报红（0 个）
+   ⇒ 🔴 **反证救场**。这就是"每条'变绿'的判据旁边都要有一条'这把尺子确实能量到东西'的反证"的具体价值。
+
+#### 📈 基线
+- server：`tsc --noEmit` **0 错**；jest **289 套件 / 4296 用例（4292 + 4 skip）/ 0 FAIL**
+  （新增 `src/utils/robotsTxt.spec.ts` **24** 条 + `metaPublicProjection.spec.ts` **+8** 条）。
+- admin：`node --test` **791 / 0 fail**；`localePackParity` **58/0**；`siteInfoFieldParity` **6/0**。
+- 守卫：`build-image-local` **53/0**；`docs-links` **5/0**。
+- 🔴 **活体证据（开发栈）**：`curl http://127.0.0.1:3000/robots.txt` 已返回新默认内容
+  （`Allow: /` + 两行说明注释 + 原有 Disallow 列表 + `Sitemap:` 绝对地址）。
+
+
 ### 2026-10-02：🎉 `vanblog.sh` **默认英文帮助**上线（`--lang zh` 切中文）—— 276 行英文帮助 + 16 条判据的新守卫
 
 站长裁定：`vanblog.sh 也要提供英文版的安装说明文案, 并且默认需要是英文的, 但可以通过选项切换成中文`。

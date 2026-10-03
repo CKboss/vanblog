@@ -70,6 +70,22 @@ export class SiteInfo {
    * 只影响样式，不动 DOM 结构；随时可以切回去。
    */
   uiStyle?: string;
+  /**
+   * 自定义 robots.txt 正文（后台「站点设置 → 高级设置 → robots.txt」）。
+   *
+   * - **留空 / 未设置 = 用服务端生成的默认内容**，而默认的立场是 🔴 **开放收录**
+   *   （`User-agent: *` + `Allow: /`，只挡 `/api/`、`/admin`、`/swagger`、导出与临时目录）。
+   *   老站点升级后行为**不变**（这个字段是可选的，缺失就走默认）。
+   * - 一旦填了内容，`/robots.txt` 就**完全以站长写的为准**（连"全站禁止收录"也照发 ——
+   *   那是站长的裁定，代码不替他改主意）；只在他**没写 `Sitemap:` 行**且站点 URL 已配置时补一条
+   *   （`Sitemap:` 必须是绝对 URL，而只有服务端知道域名，这正是动态生成的理由）。
+   * - 🔴 净化口径只有一份：`src/utils/robotsTxt.ts` 的 `sanitizeRobotsTxt()`，
+   *   **写入侧**（`MetaProvider.updateSiteInfo`）与**读出侧**（`RobotsController`）都调它 ⇒
+   *   "后台看到的" 与 "爬虫拿到的" 永远一致。
+   * - 🔴 本字段**刻意不在** `PUBLIC_SITE_INFO_FIELDS` 白名单里：匿名 `/api/public/meta`
+   *   不需要它（爬虫直接读 `/robots.txt`），少一个字段就少一分匿名信息面。
+   */
+  robotsTxt?: string;
 }
 export interface updateUserDto {
   username: string;

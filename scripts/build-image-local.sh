@@ -28,6 +28,17 @@
 #                          🔴 但"向它打压测"与"把临时容器 bind 到它的端口"是两件不同的事：
 #                          前者是它的用途，后者是端口冲突 ⇒ **任何脚本都不该把这个端口当作自己要 bind 的默认值**。
 #   SMOKE_KEEP             设 1 则测完不拆容器（自己进去看）
+#   PULL_POLICY            基础镜像的拉取策略，**只对 podman/buildah 有效**：
+#                          always | missing | never | newer（默认空 = 用引擎自己的默认）。
+#                          🔴 什么时候需要它：本机 buildah 1.33 的默认策略实测是"**每次都去 ping 仓库**"，
+#                          于是在**连不上 registry-1.docker.io**（离线 / 只走代理 / 内网）的机器上，
+#                          即使 `podman images` 里**已经有** `node:24-alpine`，构建也会在 STEP 1 就失败：
+#                          `Error: creating build container: initializing source docker://node:24-alpine: pinging
+#                          container registry registry-1.docker.io`（🔴 报错完全没提"本地其实有镜像"，
+#                          很容易误判成"Dockerfile 写错了"或"必须先配代理"）。
+#                          ⇒ 这种情况用 `PULL_POLICY=never`（只用本地镜像，绝不联网）。
+#                          ⚠️ docker 的 `--pull` 是**布尔开关**（没有 never/missing 这些取值），
+#                          所以 ENGINE=docker 时本旋钮会被**忽略并明确说一声**（不静默忽略）。
 #
 # 下载源（国内默认全部走镜像；海外或想验证"官方源也能构建"就设成 none）：
 #   NPM_REGISTRY           默认 https://registry.npmmirror.com（海外换 https://registry.npmjs.org）
@@ -50,6 +61,14 @@ cd "${ROOT}" || exit 1
 IMAGE_TAG="${IMAGE_TAG:-vanblog:local-test}"
 SMOKE_HTTP_PORT="${SMOKE_HTTP_PORT:-18074}"
 SMOKE_KEEP="${SMOKE_KEEP:-0}"
+# 🔴 基础镜像拉取策略（见 --help 里的 PULL_POLICY）：空 = 用引擎默认。
+PULL_POLICY="${PULL_POLICY:-}"
+case "${PULL_POLICY}" in
+  ''|always|missing|never|newer) ;;
+  # 🔴 拼错就立刻停：把垃圾值传给 buildah 会得到一句看不懂的报错，
+  #    而"以为设了 never、其实没生效"的后果是又去联网拉一次（正是本旋钮要解决的问题）。
+  *) echo "无效的 PULL_POLICY：${PULL_POLICY}（可选 always|missing|never|newer，留空 = 引擎默认）" >&2; exit 2 ;;
+esac
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 # Alpine 源：官方 dl-cdn 在国内经常 10 秒以上（构建会看起来卡死在 apk add），
 # 默认走阿里云镜像；ALPINE_MIRROR=none 表示用官方源
@@ -141,6 +160,16 @@ if [[ "${DO_BUILD}" == "1" ]]; then
     --build-arg "VAN_BLOG_SHARP_BINARY_HOST=${SHARP_BINARY_HOST}"
     --build-arg "VAN_BLOG_SHARP_LIBVIPS_HOST=${SHARP_LIBVIPS_HOST}"
   )
+  # 🔴 PULL_POLICY 只在 podman/buildah 下传：docker 的 `--pull` 是布尔开关，
+  #    `--pull=never` 会被它当成非法参数（而"忽略"必须是**说出来**的忽略，不能静默）。
+  if [[ -n "${PULL_POLICY}" ]]; then
+    if [[ "${ENGINE}" == "podman" ]]; then
+      BUILD_ARGS+=(--pull="${PULL_POLICY}")
+      say "> 基础镜像拉取策略：${yellow}${PULL_POLICY}${plain}（PULL_POLICY）"
+    else
+      say "${yellow}⚠️  PULL_POLICY=${PULL_POLICY} 已忽略：docker 的 --pull 只是布尔开关，不支持这个取值${plain}"
+    fi
+  fi
   if [[ -n "${STAGE}" ]]; then
     say "> 只构建 stage ${yellow}${STAGE}${plain}（不打 tag，层缓存照样留着）"
     "${ENGINE}" build "${BUILD_ARGS[@]}" --target "${STAGE}" . || die "构建 ${STAGE} 失败"

@@ -539,6 +539,10 @@ export default {
   'siteInfo.enableComment.tooltip': '默认开启',
   'siteInfo.since.label': '建站时间',
   'siteInfo.since.placeholder': '不填默认为此刻',
+  // 🔴 期 12 第一批：robots.txt 自定义正文（后台「站点设置 → 高级设置」）
+  'siteInfo.robotsTxt.label': 'robots.txt（爬虫规则）',
+  'siteInfo.robotsTxt.placeholder': '留空则使用默认内容：开放收录，只挡接口、后台、API 文档与临时目录',
+  'siteInfo.robotsTxt.tooltip': '搜索引擎爬虫读取的 /robots.txt 正文。留空 = 使用默认内容（开放收录：User-agent: * 与 Allow: /，只挡 /api/、/admin、/swagger 与导出、临时目录）。填了内容就是整份替换，连默认的 Disallow 也一起被替换掉；没写 Sitemap: 行时会自动补一条（用「网站 URL」拼绝对地址）。⚠️ 写 Disallow: / 等于让本站从所有搜索引擎消失，请确认这是你要的。改完最多一小时后对爬虫生效（有缓存头）。',
   'siteInfo.articlesPerPage.label': '每页文章数',
   'siteInfo.articlesPerPage.tooltip': '前台首页与 /page/n 每页展示的文章数量。默认 5，范围 1–50。分类/标签/时间线仍是完整列表。',
   'siteInfo.uiStyle.label': '界面风格',

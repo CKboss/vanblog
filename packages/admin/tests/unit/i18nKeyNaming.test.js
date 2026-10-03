@@ -117,7 +117,8 @@ const KEYS = Object.keys(PACKS['zh-CN']);
 // 🔴 1688 → **1692**（期 9 第十七批：4 个码 ⇒ 每份包 +4；1688 → 1692（用 readPack() 量的））
 // 🔴 1692 → **1693**（期 9 第十八批：+1 个码；1692 → 1693（用 readPack() 量的））
 // 🔴 1693 → **1702**（期 9 第十九批：9 个码 ⇒ 每份包 +9；1693 → 1702，用 readPack() 量的）
-const BASELINE_KEY_COUNT = 1702;
+// 🔴 1702 → **1705**（期 12 第一批：robots.txt 自定义正文 ⇒ 每份包 +3（label/placeholder/tooltip）；用 readPack() 量的）
+const BASELINE_KEY_COUNT = 1705;
 // 🔴 20 → **19**（2026-09-26 期 7 第四批）：这是这张表**第一次减少** ——
 //   `init.restore.count.unknownSize`（四段）被提升成 `common.unknownSize`（两段、本来就合规）⇒ 从祖父条款里除名。
 //   方向是对的（存量 key 改成合规形状），所以这里的基线跟着调小；🔴 调大永远不允许。
