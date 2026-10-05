@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>简洁、实用、优雅的个人博客系统</strong><br />
-  全自动按需 HTTPS · 静态化前台（ISR 秒级增量渲染）· 内置图床与评论 · 整站备份可<b>演练</b>验证 · 一条命令部署
+  全自动按需 HTTPS · 静态化前台（ISR 秒级增量渲染）· 内置图床与评论 · 整站备份可<b>演练</b>验证 · 前台/后台三语界面 · 一条命令部署
 </p>
 
 <p align="center">
@@ -63,6 +63,12 @@
 - **阅读时长**、相关文章推荐、TOC 抽屉、代码复制、访客数/阅读量、暗黑模式（可自动切换）、响应式
 - Apple 风格皮肤（后台一键切换）；也可上传自己的主题 CSS（主题文件会随整站备份一起走）
 - SEO：自定义路径与 301、JSON-LD、OG/Twitter 卡片、sitemap、RSS（feed/atom/json）
+- **robots.txt**：默认立场是**开放收录**（`User-agent: *` + `Allow: /`，只挡 `/api/`、后台、`/swagger` 与导出/临时目录），
+  `Sitemap:` 用后台的站点 URL 自动拼成绝对地址；后台「站点设置 → 高级设置 → robots.txt」可以**整份替换**
+  （留空 = 用默认；自己写了 `Sitemap:` 就不会再补一条）
+- **前台多语言**：导航栏一键切换 简体中文 / 繁體中文 / English，偏好写进 cookie（`vanblog_locale`）、
+  `<html lang>` 与排版方向跟着走；🔴 **不做 `/zh` 这类路径前缀** ⇒ 既有链接、sitemap、RSS 与 ISR 缓存全不受影响
+  （代价：首屏永远是简中，挂载后按 cookie 切换）
 - 内置评论系统（存在本站 Mongo，不必外挂），也可接 Waline
 
 **图床与附件**
@@ -86,18 +92,23 @@
   加密文章解锁限次、请求体上限、request-id 与慢请求日志、协作者细粒度权限、API Token 管理、忘记密码恢复密钥
 - 内置访问统计与看板（访客/浏览量/每日快照），也可注入 GA、百度统计等
 
-**多语言后台**
+**多语言（后台 · 前台 · 服务端 · 安装脚本）**
 
 - 后台界面**三种语言**：简体中文 / 繁體中文 / English，侧边栏底部一键切换，`<html lang>` 与排版方向（`dir`）跟着走；
-  语言包 1400+ 个 key，三份 key 集合逐条对齐（有守卫钉住，漏译 / 多译 / 漂移都会红）
+  语言包 **1705 个 key**，三份 key 集合逐条对齐（有守卫钉住，漏译 / 多译 / 漂移都会红）
+- **前台（访客站点）也能切**：导航栏一个按钮循环三语，词典 **164 key ×2**（繁中 / 英文），
+  偏好落 cookie、`<html lang>` 与 `dir` 同步；🔴 不加路径前缀，所以不影响既有链接与 SEO。
+  收口台账如实记数：**欠条 0**、永久例外 63（含按站长裁定不做的导航标题）、已过接缝的中文默认值 33
+- **安装脚本 `vanblog.sh` 的 `--help` 默认是英文**（276 行），要中文加 `--lang zh`（或 `VANBLOG_LANG=zh`）；
+  🔴 刻意**不跟随**系统 `LANG`：同一份文档在不同机器上表现不同，是排障时最容易骗人的那种不一致
 - 繁体用**地区用词**而不是字形转换（儲存 / 匯入·匯出 / 檔案 / 資料 / 使用者 / 登入 / 快取 / 指令碼 / 金鑰 /
   圓餅圖·長條圖），有一条守卫逐字扫"繁中包里不许出现简体专用字"
 - 英文的计数用**正确的复数**（ICU `plural`）：`1 comment` / `3 comments`、`Last 1 day` / `Last 30 days`，
   不会出现 "1 items"
 - 编辑器（bytemd）界面同样跟随语言：直接复用上游 `zh_Hans` / `zh_Hant` / `en` 三份 locale，
   上游缺的（mermaid 的繁中图表名、math 插件）自己补 ⇒ 不与库升级漂移
-- 服务端的用户可见错误带**错误码**（`code` + `params`），后台按码显示当前语言的译文并插值；
-  🔴 找不到译文时回落到服务端那句中文，**不会显示裸码**
+- 服务端的用户可见错误带**错误码**（`code` + `params`，共 **257 个码**，登记台账里**欠条为 0**），
+  后台按码显示当前语言的译文并插值；🔴 找不到译文时回落到服务端那句中文，**不会显示裸码**
 - 🔴 **写代码时的硬性要求**（新增界面文案必须走 `t()`、服务端错误必须登记错误码、日志刻意不翻 …）
   写在 [多语言（i18n）：硬性要求](docs/contribution.md)，每一条都有守卫盯着
 
@@ -125,6 +136,11 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 （实测 `v2026.9.2` 的附件既没有 `update <版本号>`，也**不会带初始化密钥** —— 拿它在全新站点上跑 `reset` 或
 `VANBLOG_RESTORE_FROM=… install` 会被服务端 400 拒绝，报 `setupKeyRequired`）。
 
+🔴 脚本的帮助与提示**默认是英文**（`./vanblog.sh --help`）；要中文加 `--lang zh`（`-l zh` / `--lang=zh` /
+环境变量 `VANBLOG_LANG=zh` 都认，命令行优先于环境变量）。选项放在子命令后面也行：`./vanblog.sh help --lang zh`。
+⚠️ 刻意**不跟随**系统 `LANG`/`LC_ALL`：跟着 locale 走会让同一份文档在不同机器上表现不同（排障时最容易骗人）。
+脚本流程里的进度与提示目前仍以中文为主（棘轮盯着，只许减不许增），帮助文案是**已经双语**的那部分。
+
 > ⚠️ `raw.githubusercontent.com` 对**分支**地址有几分钟 CDN 缓存：刚推完就装可能拿到上一版脚本。
 > 真在意就把 URL 里的 `dev/dsh` 换成具体 commit sha。**要可复现该钉的是镜像版本**
 > （`./vanblog.sh update v2026.9.2`），而不是安装器。
@@ -142,6 +158,7 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 | 命令 | 作用 |
 | --- | --- |
 | `./vanblog.sh` | 打开菜单 |
+| `./vanblog.sh --lang zh` | 帮助与提示切中文（**默认英文**）；也可写 `-l zh` / `--lang=zh` / `VANBLOG_LANG=zh` |
 | `./vanblog.sh update` | 升到**最近一次发布**（默认镜像 `:latest`）；先把新镜像准备好再停容器，**失败不会动正在跑的容器** |
 | `./vanblog.sh update v2026.9.2` | 升到（或钉到）**指定发布号**；内容固定不变，回滚也是这条 |
 | `./vanblog.sh config` | 重新生成 compose（改了环境变量之后跑这个） |
@@ -217,11 +234,16 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 `drill` 断言的不是"接口返回了 200"，而是**对账**：信封里的 counts 与归档 manifest 一致、
 公开列表的 total 等于**从归档自己的 `articles.ndjson` 逐文档数出来的公开篇数**、
 真实静态文件可取、**主题 CSS 可取**、日志里没有 BSON 指纹、第二次恢复必须 403。
-最近一次真机演练（podman rootless、69MB 生产整站备份、镜像 `v2026.9.2` 同源构建）：
-`RESULT: PASS pass=37 warn=1 fail=0 note=5`，站点恢复后在 `:18080` 上正常出页面，第二次恢复正确 403。
-⚠️ 那 1 条 WARN 与 5 条 NOTE 都是**如实降级**而不是问题：这份归档早于成员级哈希（`integrity` 块）与
-`migrations` 集合，所以"逐成员内容比对"没做、恢复库里多出的 8 条 migrations 是新 server 自己建的 ——
-用当前版本导出的归档再演练，这两条就会变成真正的成员级校验。
+最近一次真机演练（2026-10-06，podman rootless、69MB 生产整站备份 2026-09-17、镜像 = 本机按当前 `dev/dsh` 构建的
+`vanblog:local-test`）：`RESULT: PASS pass=41 warn=0 fail=0 note=8`，站点恢复后正常出页面，第二次恢复被正确拒绝。
+⚠️ 那 8 条 NOTE 都是**如实降级/如实解释**而不是问题，其中两条值得单独说：
+- **迁移账本改成按 `key` 对账**（原来是比条数）：账本是 append-only，而**新版本 server 启动时会登记自己的迁移**
+  ⇒ "旧归档 × 新镜像"这个最常见的演练组合下，恢复库必然多出几条（本次多出 `install:initialised`）。
+  🔴 只比条数会把它判成 `FAIL 归档 12 条 vs 恢复库 13 条`（实测就是这么红的，看着像恢复丢数据）；
+  按 key 对账之后：**归档的 key 少一个就 FAIL**（真丢数据），多出来的记 NOTE 并**点名是哪几个 key**
+  ⇒ 判据比原来**更强**（条数相等但 key 不同，原来判 PASS、现在判 FAIL）。
+- **第二次恢复这次是被限流（429）挡的**，不是被"站点已初始化 ⇒ 403"挡的：两条路都拒绝，但演练如实记了一条 NOTE
+  说明"这一轮没验到 403 那条路径"（要验它得等 10 分钟限流窗口过去）。🔴 201 仍然判 FAIL。
 
 细节与输出示例见 [`docs/advanced/backup.md`](docs/advanced/backup.md)。
 
@@ -328,16 +350,17 @@ ENGINE=podman ./scripts/build-image-local.sh         # 没有 docker 组权限�
 
 ### 测试
 
-| 套件 | 命令 | 现状（2026-09-21 依赖升级后本机实测；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39 与最新一轮记账 §7.97） |
+| 套件 | 命令 | 现状（**2026-10-06 发版前全量实测**；⚠️ 数字会随每轮新增守卫增长，权威基线见 `AGENTS.md` §7.39 与最新一轮记账 §7.97） |
 | --- | --- | --- |
-| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **288 套件 / 4238 用例（4234 通过 + 4 skip）、0 真红**（约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（曾因此漏过一次真红，`68d7ac6f` 修的） |
-| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **97 文件 / 1095 用例全绿** |
-| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **174 套件 / 780 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
-| admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件）。CI 里跑并且是绿的；本机没装浏览器所以没跑。⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开 |
-| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **35 文件 / 3160 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
-| 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **61/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
+| server（jest） | `cd packages/server && ./node_modules/.bin/jest` | **289 套件 / 4296 用例（4292 通过 + 4 skip）、0 真红**（约 200s，`-w 2`）。⚠️ 机器被压满时另有若干负载敏感用例会假红（单独重跑就绿 ⇒ 判据是"没有任何代码改动、红自己消失"），清单见 `AGENTS.md` §7.39。⚠️ 这套里有**读 server 源码文本的跨文件锚点**，所以改了 `utils/rateLimit.ts` 这类被钉住的文件，**定向套件抓不到、必须跑全量**（曾因此漏过一次真红，`68d7ac6f` 修的） |
+| website（vitest） | `cd packages/website && ./node_modules/.bin/vitest run` | **101 文件 / 1153 用例全绿** |
+| admin（node:test） | `cd packages/admin && node --test --test-reporter=tap tests/unit/*.test.js` | **178 套件 / 791 用例全绿**（⚠️ Node 24 换了默认 reporter，不加 `--test-reporter=tap` 就没有汇总行）；⚠️ 这套里有**读 server 源码**的跨包锚点，只改 server 也要跑它 |
+| admin（playwright e2e） | `cd packages/admin && ./node_modules/.bin/playwright test` | **111** 用例（37 个 spec，真浏览器渲染真组件）。CI（`admin-e2e.yml`）里跑并且是绿的；⚠️ 本机**有**浏览器（chromium-1208 与 google-chrome 都在，旧记录里"本机没装浏览器"是错的、已实测推翻），但**整套 e2e 尚未在本机跑过** —— 本机跑的是下面那 5 个前台探针。⚠️ 默认的 3002 端口与开发栈冲突，本地跑要把 7 个 `*_E2E_PORT` 都改开 |
+| 部署脚本（bash） | `for t in scripts/tests/*.test.sh; do bash "$t"; done` | **36 文件 / 3202 条断言 / 0 失败**（约 8 分钟串行；单个守卫的条数清单见 `AGENTS.md` §7.39，那些数字**只增不减**才正常） |
+| 文档守卫 | `bash scripts/tests/docs-links.test.sh`；`bash scripts/tests/docs-consistency.test.sh` | 死链 **5/5**、一致性 **63/0**（含"文档写的每个 `VANBLOG_*` 代码里都真的读"）。⚠️ 改文档还要自己跑一次 `cd docs && pnpm run docs:build`（约 20 秒，65 页）—— vuepress **不会**报相对路径写错 |
 | 类型检查 | `cd packages/server && ./node_modules/.bin/tsc -p tsconfig.json --noEmit`；`cd packages/website && ./node_modules/.bin/tsc --noEmit -p tsconfig.json` | **入库的三份配置各 0 错**（CI 查 server 的 `tsconfig.json` 与 `tsconfig.build.json`、再加 website 的 `tsconfig.json`；本机的 `tsconfig.dev.json` 没有入库） |
 | 空值解引用棘轮 | `bash scripts/tests/strict-null-ratchet.test.sh` | **11 条断言 / 0 失败**（约 29 秒）。`strictNullChecks` 在 tsconfig 里是关的，这条守卫让"四类确定性空值解引用"的命中数**只减不增**（当前基线 **10**，2026-09-21 清掉三个热点文件后由 32 下调）。🔴 它必须用**单项开关**而不是伞形 `--strict`：tsconfig 里显式的 `false` 能压过伞形开关、压不过单项开关，实测 `--strict` 下这四类是 **0**、单项开关下是 **10** ⇒ 用伞形开关写的守卫会**恒绿**（守卫里有一条断言专门钉住这件事）。详见 `docs/contribution.md` |
+| 真浏览器探针（前台多语言/搜索/评论/404） | `BASE=http://127.0.0.1:3001 node vanblog_dev/verify-*.cjs`（探针在 `vanblog_dev/`，本机专用不入库） | **5 个探针 / 101 项断言 / 0 失败**（切换器 27、界面文案与 404 23、`/search` 页 19、搜索弹窗与页脚 18、评论表单 14）。🔴 这类判据抓的是"静态判据全绿、界面上却是半截中文/少空格/结果不渲染"那一族问题 —— 本项目已多次只有真浏览器能看见（含一个"英文下搜到结果也不渲染"的真 bug） |
 | 访问性能 | `scripts/benchmark/measure.sh --base http://127.0.0.1:18080 …` | 见 [benchmark.md](docs/advanced/benchmark.md)。⚠️ `--c10k N` 的 **N 是「目标连接数」不是秒数**；采集完**必须检查退出码**，`2` 表示 C10K 有目标未产出结果、那份报告不能用 |
 
 用 `./dev-env.sh bootstrap` 装的工具链跑（Node 24 + pnpm 8 + MongoDB 7）；系统 Node 也可以，但版本要 ≥ 24
@@ -387,10 +410,23 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 - **前台全局 CSS 拆不开**：apple 皮肤 46KB + markdown 专用表约 27KB 对 `/link`、`/tag`、`/timeline` 是死重，
   被 Next 的 pages router 挡住（只允许在 `_app` 引第一方全局 CSS）。字体已自托管，
   但**站点数据里的自定义 CSS/HTML 仍可能引用第三方**（那是用户数据，只能在后台「定制化」里清）。
-- **多语言只覆盖后台**：前台（访客站点）与文档仍是中文；服务端还有约 **200 处**用户可见错误消息没接错误码
-  （棘轮只许减不许增，进度可查：`node scripts/i18n/inventory.js --server-throws`）。后台里剩下的 35 条中文
-  全部是**登记在册的永久例外**（协议字符串、要照着敲的命令、指向中文文档的 URL 锚点、服务端产物文件名、
-  插入用户文章正文的 Markdown 模板、上游 locale 数据、静态双语标签），**欠条为 0**。
+- **多语言：后台全量、前台大部分、文档仍是中文**。后台 **1705 key ×3**、欠条 0；服务端 **257 个错误码**、欠条 0；
+  前台（访客站点）词典 **164 key ×2**、欠条 0，但有 **63 条登记在册的永久例外**，其中三条是访客**看得见**的：
+  ① 🔴 **英文/繁中界面下，导航栏与浏览器标签页标题仍是中文**（它们在 `getStaticProps` 里被构造成**数据**，
+  要跟着语种变就得把文案解析从构建期挪到渲染期，会动 ISR 的缓存键与 `Layout`/`NavBar` 的 props 契约 ——
+  站长裁定不做）⇒ 会出现"正文英文、导航中文"的混排；
+  ② markdown 管线里的容器标题（注 / 相关信息 / 注意 / 警告 / 提示）与代码块复制按钮的 aria-label 仍是中文
+  （插件数组是 `useMemo(…, [])`，切语种不会重建；改它要重估首屏性能预算）；
+  ③ 英文的运行时长是 `1 days`（站长裁定接受，不引入 ICU 复数）。
+  另外前台**首屏永远是简中**（语种偏好存在 cookie、只在客户端读），挂载后才切过去；文档站（`docs/`）仍是中文。
+  安装脚本 `vanblog.sh` 的**帮助已双语**（默认英文、`--lang zh` 切中文），但流程里的进度与提示仍有约 **1199 行**中文
+  （棘轮盯着，只许减不许增）。进度可查：`node scripts/i18n/inventory.js`（后台/服务端）与
+  `packages/website/__tests__/i18nFrontendLedger.spec.ts`（前台收口台账）。
+- **「定制化」注入的第三方 CSS/JS 会阻塞首屏**：后台可以把任意 `<style>` / `<script>` / head 标签注入前台，
+  其中 CSS 里的 `@import`（或不带 `media` 的 `<link rel=stylesheet>`）是**渲染阻塞**的；那个第三方域名慢或不通时，
+  页面会长时间停在"文档还在 loading、样式没生效"的状态（本机实测：字体 CDN 不可达时 **90 秒**都没渲染完，
+  探针因此间歇性超时）。产品自己那份字体 CSS 是 `media="print"` + 水合后翻 `all`（**不阻塞**，有守卫钉着），
+  所以这条只影响站长自己在「定制化」里贴的内容 —— 慢网/内网部署建议把它换成非阻塞写法或自托管。
 - 内置评论没有邮件 / webhook 通知（Waline 有）、没有点赞 UI（`likeCount` 已存着）、没有验证码。
 - 没有全局 `ValidationPipe`（`class-validator` 不是依赖），参数校验靠各处手写；净化中间件是黑名单不是白名单。
 - `/api/admin/init` 仍靠「库里有没有用户」判断是否已初始化，但现在有三层缓解：初始化密钥**默认开启**、

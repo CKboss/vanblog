@@ -2140,6 +2140,42 @@ RC=$?
 assert_rc "${RC}" "0" "恢复库读不出条数 → WARN 而不是 FAIL（环境问题不冤枉归档）"
 assert_eq "$(n_kind "${OUT}" WARN)" "1" "记的是 WARN"
 assert_contains "${OUT}" "没有验证" "明说这项没有验证（不是通过）"
+# 🔴 期 12 第三批：迁移账本按 **key** 对账（条数对账在"旧归档 × 新镜像"下必然误判）
+#    起因（发版前实测）：用 2026-09-17 的归档演练当前镜像 ⇒
+#    `FAIL migrations 的往返 归档 12 条 vs 恢复库 13 条`，而真相是**新 server 启动时登记了一条新迁移**
+#    （账本是 append-only）⇒ 演练在发版前报 FAIL，会让人以为恢复丢数据。
+#    👉 修法不是"放宽条数差"，而是**换一把更强的尺子**：按 key 对账（少一个 key = 真丢数据 = FAIL）。
+echo "-- 迁移账本按 key 对账（纯函数，不起容器）--"
+assert_reset
+OUT="$(drill_assert_migrations_roundtrip "$(printf 'a\nb\nc')" "$(printf 'a\nb\nc')" 3 3 2>&1)"
+assert_rc "$?" "0" "两边 key 集合相同 → PASS"
+assert_contains "${OUT}" "逐个相同" "并说明这比条数相等更强"
+assert_reset
+OUT="$(drill_assert_migrations_roundtrip "$(printf 'a\nb\nc')" "$(printf 'a\nb\nc\nd')" 3 4 2>&1)"
+assert_rc "$?" "0" "🔴 恢复库多出 key（新镜像登记了新迁移）→ PASS + NOTE，不是 FAIL"
+assert_eq "$(n_kind "${OUT}" "·")" "1" "多出来的那条记的是 NOTE"
+assert_contains "${OUT}" "多出 1 条：d" "🔴 并且**点名**多出来的是哪个 key（人得能判断它眼不眼熟）"
+assert_contains "${OUT}" "append-only" "并解释为什么多出是正常的"
+assert_reset
+OUT="$(drill_assert_migrations_roundtrip "$(printf 'a\nb\nc')" "$(printf 'a\nc\nd')" 3 3 2>&1)"
+assert_rc "$?" "1" "🔴 归档的 key 在恢复库里不见了 → FAIL（条数都是 3 也一样红 ⇒ 比条数对账更强）"
+# ⚠️ 期望值要照**真实输出**写：消息里那三个字是带 markdown 粗体的（`**不见了**：b`），
+#    第一版写成 `不见了：b` ⇒ 断言假红（这是"我写的期望"错，不是被测代码错）。
+assert_contains "${OUT}" "不见了**：b" "点名丢的是哪个 key"
+assert_reset
+OUT="$(drill_assert_migrations_roundtrip "absent" "$(printf 'a\nb')" "" 2 2>&1)"
+assert_rc "$?" "0" "归档没有 migrations.ndjson → NOTE（如实说明，不冒充通过）"
+assert_eq "$(n_kind "${OUT}" "·")" "1" "记的是 NOTE"
+assert_reset
+OUT="$(drill_assert_migrations_roundtrip "$(printf 'a\nb')" "unreadable" 2 "" 2>&1)"
+assert_rc "$?" "0" "恢复库的 key 读不出来 → WARN（环境问题不冤枉归档）"
+assert_eq "$(n_kind "${OUT}" WARN)" "1" "记的是 WARN"
+assert_contains "${OUT}" "没有验证" "明说这项没有验证"
+# 🔴 反证：新的尺子确实抓到了旧尺子抓不到的东西 —— 条数相等但 key 不同
+OUT_OLD="$(drill_assert_count_roundtrip migrations 3 3 "迁移账本" 2>&1)"
+assert_contains "${OUT_OLD}" "PASS" "旧的条数对账在「丢了 b、多了 d」时判 PASS（这就是它不够用的证据）"
+assert_reset
+
 assert_reset
 OUT="$(drill_assert_deleted_roundtrip 6 6 6 0 2>&1)"
 assert_rc "$?" "0" "软删除往返相等 + deletedAt 齐全 → PASS"

@@ -1452,6 +1452,95 @@ drill_assert_count_roundtrip() { # <集合名> <归档条数|absent> <恢复后�
   _no_new_fail "${f0}"
 }
 
+# 🔴 迁移账本（migrations）的往返**不能只比条数** —— 它是一个 **append-only 的账本**，
+#    而**新版本的 server 启动时会往里追加自己那几条迁移**。于是"用旧归档演练新镜像"必然出现
+#    `恢复库 = 归档 + N 条`（实测：2026-09-17 的归档 12 条，当前镜像恢复后 13 条）。
+#    ⚠️ 这**不是**恢复丢数据，但只比条数的判据会判 FAIL（本批实测就是这么红的：
+#    `FAIL migrations 的往返 归档 12 条 vs 恢复库 13 条`）⇒ 🔴 演练在发版前报 FAIL，
+#    而真相是"判据的形状没覆盖这个合法现实"。
+#    👉 修法**不是**放宽成"条数差一点也算过"（那会把真的丢数据也放过去），而是**按 key 对账**：
+#      · 归档里的 key **少了一个** ⇒ 🔴 FAIL（恢复真的丢了账本条目）；
+#      · 恢复库**多出**若干 key ⇒ PASS + NOTE，并**把多出来的 key 名打出来**
+#        （人能一眼看出是不是"新 server 自己登记的那几条"，而不是别的东西混进来了）；
+#      · 两边 key 集合相同 ⇒ PASS（逐 key 相同，比条数相等强）。
+#    🔴 这条判据因此**比原来更强**：条数相等但 key 不同（丢一条 + 多一条）原来判 PASS，现在判 FAIL。
+drill_assert_migrations_roundtrip() { # <归档 key 列表(换行分隔)|absent|unreadable> <恢复库 key 列表|unreadable> [归档条数] [恢复条数]
+  local arch="$1" rest="$2" an="${3:-}" rn="${4:-}"
+  local f0=${ASSERT_FAIL}
+  if [[ "${arch}" == "absent" ]]; then
+    rec_note "migrations 的往返" "归档里没有 migrations.ndjson（这份归档早于该集合），无从按 key 对账 —— 如实说明，不冒充通过"
+    _no_new_fail "${f0}"; return 0
+  fi
+  if [[ "${arch}" == "unreadable" || "${rest}" == "unreadable" ]]; then
+    rec_warn "migrations 的往返" "key 列表读不出来（归档侧=${arch:0:12} 恢复侧=${rest:0:12}）—— 这一项**没有验证**（条数对账另见下一条）"
+    _no_new_fail "${f0}"; return 0
+  fi
+  local missing="" extra="" k
+  while IFS= read -r k; do
+    [[ -n "${k}" ]] || continue
+    printf '%s\n' "${rest}" | grep -qxF -- "${k}" || missing="${missing}${missing:+, }${k}"
+  done <<< "${arch}"
+  while IFS= read -r k; do
+    [[ -n "${k}" ]] || continue
+    printf '%s\n' "${arch}" | grep -qxF -- "${k}" || extra="${extra}${extra:+, }${k}"
+  done <<< "${rest}"
+  local n_arch n_rest
+  n_arch="$(printf '%s\n' "${arch}" | grep -c '' || true)"
+  n_rest="$(printf '%s\n' "${rest}" | grep -c '' || true)"
+  if [[ -n "${missing}" ]]; then
+    rec_fail "migrations 的往返（按 key 对账）" "归档里的这些迁移账本条目在恢复库里**不见了**：${missing}（归档 ${n_arch} 个 key / 恢复库 ${n_rest} 个）⇒ 恢复丢了账本"
+  elif [[ -n "${extra}" ]]; then
+    rec_pass "migrations 的往返（按 key 对账）" "归档的 ${n_arch} 个 key 全部在恢复库里（一个不少）"
+    # 🔴 数**条数**不是数字符（`${#extra}` 是字符长度，第一版就写错了）：按逗号分隔数
+    local n_extra
+    n_extra="$(printf '%s' "${extra}" | awk -F', ' '{print NF}')"
+    rec_note "migrations 恢复库多出的 key" "多出 ${n_extra} 条：${extra} —— 迁移账本是 append-only，**新版本 server 启动时会登记自己的迁移**，所以「用旧归档演练新镜像」必然多出几条；🔴 请扫一眼这些 key 是不是都眼熟（不眼熟就要查是谁写进去的）"
+  else
+    rec_pass "migrations 的往返（按 key 对账）" "归档 ${n_arch} 个 key 与恢复库**逐个相同**（比条数相等更强：条数相等但 key 不同也能被抓到）"
+  fi
+  _no_new_fail "${f0}"
+}
+
+# 从归档的 migrations.ndjson 里取 key（每行一个文档，key 形如 deps:pipelineStartup）
+# 🔴 入参是**内容**不是路径：`drill_archive_member` 把成员内容打到 stdout（与 `drill_ndjson_count`
+#    同一约定）。第一版我按"路径"写（`[[ -s "$1" ]]`）⇒ 永远判 unreadable ⇒ 悄悄退回条数对账，
+#    而演练照样报 FAIL（🔴 这正是"退了一档"必须**说出来**的理由：否则看不出来尺子没用上）。
+# 🔴 取字段用**JSON 扫描器**（`_jval`）而不是 grep 字面量：迁移记录的 `detail` 字段是自由文本，
+#    里面完全可能出现 `"key":"..."` 这样的字样（`drill_deleted_stats` 的注释早就写明这条纪律）。
+drill_migration_keys_from_ndjson() { # <ndjson 内容> → 换行分隔的 key（读不出打印 unreadable）
+  local out
+  out="$(LC_ALL=C awk "${_JSON_AWK_FUNCS}"'
+    {
+      line = $0
+      if (line ~ /^[ \t]*$/) next
+      k = _jval(line, "key")
+      if (k == "" || k == "null") next
+      # 🔴 `_jval` 对字符串值返回的是**带引号的 JSON 记号**（`"dedupe:visits"`），
+      #    而 mongo 那边 `print(d.key)` 出来是**裸值**（`dedupe:visits`）⇒ 不剥引号两边永远不相等，
+      #    会把 12 条全判成"丢了"（🔴 假 FAIL，而且看起来像真的恢复丢数据 —— 最坏的一种假红）。
+      gsub(/^"/, "", k); gsub(/"$/, "", k)
+      print k
+    }' <<<"${1:-}" | sort -u)"
+  [[ -n "${out}" ]] || { printf 'unreadable\n'; return 0; }
+  printf '%s\n' "${out}"
+}
+
+# 从一次性 mongo 里取某个集合的某个字段值（每行一个）
+drill_mongo_field_values() { # <engine> <容器> <db> <集合> <字段>
+  local eng="$1" c="$2" db="$3" coll="$4" field="$5"
+  [[ -n "${eng}" && -n "${c}" ]] || { printf 'unreadable\n'; return 0; }
+  command -v "${eng}" >/dev/null 2>&1 || { printf 'unreadable\n'; return 0; }
+  # 🔴 引号形状照抄 `drill_mongo_count`（外层 sh -c 用双引号、`--eval` 用**单引号**、JS 里用双引号）：
+  #    第一版我自己拼了 `--eval \"${js}\"`（双引号 eval + JS 里单引号）⇒ 嵌套引号在 sh 里被吃掉一层，
+  #    mongosh 收到的是残缺脚本 ⇒ 输出空 ⇒ 判 unreadable（而**失败是静默的**：只会看到"退回条数对账"）。
+  #    👉 已有能跑通的同类函数时，**照抄它的引号形状**，不要自己另拼一套。
+  local jsfield="db.getCollection(\"${coll}\").find({}, {\"${field}\":1,_id:0}).forEach(function(d){ if (d && d[\"${field}\"]) print(d[\"${field}\"]); })"
+  local out
+  out="$("${eng}" exec "${c}" sh -c "if command -v mongosh >/dev/null 2>&1; then mongosh --quiet '${db}' --eval '${jsfield}'; else mongo --quiet '${db}' --eval '${jsfield}'; fi" 2>/dev/null | grep -E '^[A-Za-z0-9_:.-]+$' | sort -u)"
+  [[ -n "${out}" ]] || { printf 'unreadable\n'; return 0; }
+  printf '%s\n' "${out}"
+}
+
 # 软删除文章往返：deleted:true 的行必须带着 deletedAt 回来，且不进公开列表
 # （公开列表那半句由上面 total==public 那条断言覆盖，这里对账的是回收站本身）
 drill_assert_deleted_roundtrip() { # <归档 deleted 数> <其中带 deletedAt> <恢复库 deleted 数> <其中 deletedAt:null>
@@ -2199,7 +2288,16 @@ drill_assert_second_restore() {
   elif [[ "${code}" == "201" ]]; then
     rec_fail "恢复接口在已初始化站点上被挡住（403）" "又恢复了一次（HTTP 201）⇒ 匿名恢复接口没有「只在未初始化时开放」这道闸，任何人都能反复覆盖整站"
   else
-    rec_warn "恢复接口在已初始化站点上被挡住（403）" "期望 403，实际 HTTP ${code}：$(printf '%s' "${body}" | head -c 200)"
+    # 🔴 期 12 第三批：429 也算"被挡住"—— 初始化/恢复接口有"每 10 分钟最多 1 次"的限流，
+    #    演练里第一次恢复与这次调用往往在同一个窗口内 ⇒ **限流先于 403 生效**。
+    #    两者都满足性质"不能又恢复一次"，但 🔴 必须如实说明：这一轮**没有验到 403 那条路径**
+    #    （要验它得等限流窗口过去）。⚠️ 201 仍然是 FAIL（真的又恢复了一次）。
+    if [[ "${code}" == "429" ]]; then
+      rec_pass "恢复接口在已初始化站点上被挡住" "HTTP 429：限流先挡下了（每 10 分钟 1 次）⇒ 没有又恢复一次"
+      rec_note "这一轮没验到 403 那条路径" "第二次恢复是被**限流**（429）挡的，不是被「站点已初始化 ⇒ 403」挡的；两条路都拒绝，但要验 403 得等限流窗口过去（10 分钟）再调一次"
+    else
+      rec_warn "恢复接口在已初始化站点上被挡住（403）" "期望 403 或 429，实际 HTTP ${code}：$(printf '%s' "${body}" | head -c 200)"
+    fi
   fi
   _no_new_fail "${f0}"
 }
@@ -3132,13 +3230,18 @@ cmd_drill() {
   # ⚠️ 5 个计数合并成**一次** mongosh 调用（冷启动 1–2 秒/次，分开调会白白拖长演练）
   step "数据往返（在一次性 mongo 里直接数 —— 版本历史/迁移账本/草稿/回收站）"
   local arch_revisions="absent" arch_migrations="absent" arch_drafts="absent" coll
+  # 🔴 迁移账本要按 **key** 对账（条数对账会把"新镜像多登记了几条迁移"误判成 FAIL）
+  local arch_migrations_keys="absent"
   for coll in revisions migrations drafts; do
     if printf '%s\n' "${members}" | grep -qE "(^|/)db/vanBlog/${coll}\.ndjson$"; then
       local nd
       nd="$(drill_archive_member "${archive}" "./db/vanBlog/${coll}.ndjson")"
       case "${coll}" in
       revisions) arch_revisions="$(drill_ndjson_count "${nd}")" ;;
-      migrations) arch_migrations="$(drill_ndjson_count "${nd}")" ;;
+      migrations)
+        arch_migrations="$(drill_ndjson_count "${nd}")"
+        arch_migrations_keys="$(drill_migration_keys_from_ndjson "${nd}")"
+        ;;
       drafts) arch_drafts="$(drill_ndjson_count "${nd}")" ;;
       esac
     fi
@@ -3151,7 +3254,18 @@ cmd_drill() {
     deleted articles '{deleted:true}' \
     deleted_noat articles '{deleted:true,deletedAt:null}' || true)"
   drill_assert_count_roundtrip revisions "${arch_revisions}" "$(drill_counts_get "${counts_out}" revisions)" "文章版本历史：每篇改过几次都在这里面"
-  drill_assert_count_roundtrip migrations "${arch_migrations}" "$(drill_counts_get "${counts_out}" migrations)" "迁移账本"
+  # 🔴 迁移账本：**优先按 key 对账**（append-only 账本 + 新 server 会追加自己的迁移 ⇒
+  #    只比条数在"旧归档 × 新镜像"这个最常见的演练组合下必然误判 FAIL，实测就是这么红的）。
+  #    key 读不出来时才退回条数对账，并**明说退了一档**（条数相等也可能 key 不同）。
+  local rest_migrations_keys
+  rest_migrations_keys="$(drill_mongo_field_values "${eng}" "${DRILL_MONGO_NAME}" vanBlog migrations key)"
+  if [[ "${arch_migrations_keys}" == "unreadable" || "${arch_migrations_keys}" == "absent" || "${rest_migrations_keys}" == "unreadable" ]]; then
+    drill_assert_count_roundtrip migrations "${arch_migrations}" \
+      "$(drill_counts_get "${counts_out}" migrations)" "迁移账本（按 key 对账不可用，退回条数对账）"
+  else
+    drill_assert_migrations_roundtrip "${arch_migrations_keys}" "${rest_migrations_keys}" \
+      "${arch_migrations}" "$(drill_counts_get "${counts_out}" migrations)"
+  fi
   drill_assert_count_roundtrip drafts "${arch_drafts}" "$(drill_counts_get "${counts_out}" drafts)" "草稿"
   # 软删除文章（回收站）：deleted:true 的行必须带着 deletedAt 回来，且不进公开列表
   local del_stats arch_del arch_del_at

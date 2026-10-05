@@ -146,9 +146,28 @@ jobs:
             bash scripts/build-image-local.sh 2>&1 | tee "${log}"
           rc=${PIPESTATUS[0]}
           if [ "${rc}" -ne 0 ]; then
-            tail -40 "${log}" | while IFS= read -r l; do echo "::error::image-build 尾部输出 ${l}"; done
+            # 🔴 2026-10-06 修：原来这里是 `tail -40` 逐行转注解，但 **GitHub 每个 check run 只保留 10 条注解**
+            #    ⇒ 40 行里只有**最前面**那 10 行活下来，而错误在**最后**几行 ⇒ 真正的错误行被挤掉了。
+            #    后果实测：nightly 的 image-build **连续 12 天失败**（2026-09-23 起，每天 3–5 分钟就死），
+            #    而公开 API 能读到的 10 条注解全是构建进度行（`#125 [runner 25/35] COPY …`），一句错误都没有
+            #    ⇒ 🔴 "失败被记录下来了"却**没人能知道为什么**（deploy key 读不了 job 日志，403）。
+            #    修法：① 先打**匹配错误特征**的行（最多 5 条）② 再打**最后 4 行**（错误通常在末尾）
+            #    ③ 完整日志上传成 artifact（有仓库读权限的人能下载）⇒ 一共不超过 9 条注解，留一条余量。
+            grep -nE "ERROR|Error:|error:|[Ff]ailed|Cannot|No space|denied|not found|Killed|exit code" "${log}" \
+              | tail -5 | while IFS= read -r l; do echo "::error::image-build 错误行 ${l}"; done
+            tail -4 "${log}" | while IFS= read -r l; do echo "::error::image-build 尾部 ${l}"; done
           fi
           exit "${rc}"
+
+      - name: Upload the full build log (failure only)
+        # 🔴 注解只有 10 条位置，完整日志必须走 artifact（否则"红了一个月也查不出原因"会重演）
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: image-build-log
+          path: ${{ runner.temp }}/image-build.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Record what was built
         if: always()
