@@ -18,6 +18,10 @@ on:
       - 'scripts/**'
       - 'docs/**'
       - 'README.md'
+      # 🔴 期 12 第三批：`release-notes.test.sh` 用**真 CHANGELOG** 当输入（发布说明就是从它里面取的），
+      #    所以改 CHANGELOG 必须触发这条守卫 —— 否则"某一版累积到超过 Release 正文长度上限"这件事
+      #    只会在打 tag 那天暴露。⚠️ push 与 pull_request 两侧都要加（ci-paths-coverage 要求同口径）。
+      - 'CHANGELOG.md'
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'caddyTemplate.json'
@@ -46,6 +50,10 @@ on:
       - 'scripts/**'
       - 'docs/**'
       - 'README.md'
+      # 🔴 期 12 第三批：`release-notes.test.sh` 用**真 CHANGELOG** 当输入（发布说明就是从它里面取的），
+      #    所以改 CHANGELOG 必须触发这条守卫 —— 否则"某一版累积到超过 Release 正文长度上限"这件事
+      #    只会在打 tag 那天暴露。⚠️ push 与 pull_request 两侧都要加（ci-paths-coverage 要求同口径）。
+      - 'CHANGELOG.md'
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'caddyTemplate.json'
@@ -429,6 +437,11 @@ jobs:
           fi
           zstd --version
 
+      - name: Release notes generator (CHANGELOG section -> Release body, with length cap)
+        # 🔴 期 12 第三批：这段逻辑原来**内联在 release-fork.yml 里**，只在打 tag 那一刻才第一次真跑；
+        #    搬进仓库后本机能跑真脚本，也才轮得到守卫盯它（当前 [Unreleased] 有 12.6 万字符，
+        #    超过 Release 正文长度上限 ⇒ 生成器必须会压成摘要，否则发版那天创建 Release 会被 API 拒）。
+        run: bash scripts/tests/run-guard.sh scripts/tests/release-notes.test.sh
       - name: Docs internal links
         run: bash scripts/tests/run-guard.sh scripts/tests/docs-links.test.sh
       - name: Docs ↔ code consistency (env var names, script copies, --help coverage)

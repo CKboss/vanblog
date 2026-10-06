@@ -52,34 +52,23 @@ jobs:
 
       # 发布说明直接取 CHANGELOG.md 里对应 tag 的那一节（人工写好的，比自动生成的提交列表有用）。
       # 找不到就退回 [Unreleased] 一节，再找不到就用自动生成的提交列表。
+      # 🔴 这一步的逻辑在仓库里（`scripts/releaseNotes.py`），守卫是 `scripts/tests/release-notes.test.sh`
+      #    （由 server-test.yml 跑）。⚠️ 这句指针**刻意写在 YAML 注释里、不写进下面的 run 块**：
+      #    run 块里的 `#` 行仍然是 run 字符串的一部分，`ci-paths-coverage` 会据此认为
+      #    "本 workflow 也跑那条守卫"⇒ 反过来要求**本文件**的 paths 覆盖守卫读到的每个文件
+      #    （实测就是这么报出 4 处 MISSING 的）。👉 在 workflow 里提到别的守卫时，写在 YAML 注释里。
       - name: 从 CHANGELOG 提取发布说明
         id: notes
         run: |
           tag="${{ steps.tag.outputs.tag }}"
-          python3 - "$tag" "${GITHUB_REPOSITORY}" <<'PY' > RELEASE_BODY.md
-          import re, sys
-          tag, repo = sys.argv[1], sys.argv[2]
-          text = open('CHANGELOG.md', encoding='utf-8').read()
-          # 按 `## [xxx]` 切段：parts = [前言, 标题1, 正文1, 标题2, 正文2, ...]
-          parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
-          sections = {}
-          for i in range(1, len(parts) - 1, 2):
-              sections[parts[i].strip()] = parts[i + 1].strip()
-          body = sections.get(tag) or sections.get('Unreleased') or ''
-          if not body:
-              print('（CHANGELOG 里没有找到 %s 或 Unreleased 一节，下面用自动生成的提交列表）' % tag)
-          else:
-              # CHANGELOG 里的相对链接（docs/xxx.md、README.md#锚点）在 Release 页面上是死的，
-              # 统一改写成指向这个 tag 的绝对地址。
-              base = 'https://github.com/%s/blob/%s/' % (repo, tag)
-              def fix(m):
-                  target = m.group(1)
-                  if target.startswith(('http://', 'https://', '#', 'mailto:')):
-                      return m.group(0)
-                  return '](' + base + target.lstrip('/') + ')'
-              body = re.sub(r'\]\(([^)\s]+)\)', fix, body)
-              print(body)
-          PY
+          # 🔴 2026-10-06：原来这里是一段**内联 python heredoc**。搬进仓库（`scripts/releaseNotes.py`）有两个理由：
+          #    ① 内联在 workflow 里的逻辑**本机跑不了**⇒ 只有发版那天才知道它坏没坏（而发版失败是要重来一次的）；
+          #    ② 🔴 它缺一段**必需**的逻辑：当前 `[Unreleased]` 一节实测 **126,276 字符 / 241 KB**（47 个批次），
+          #       而 GitHub 对 Release 正文有长度上限（业界常引用 124,000 字符；本机取不到 docs.github.com 核实
+          #       ⇒ 脚本里取**保守值 100,000**）⇒ 照原样发，创建 Release 那一步很可能被 API 拒（422），
+          #       或者发出去是一篇 24 万字节的"发布说明"。脚本会在超限时压成"每批一段摘要 + 完整 CHANGELOG 链接"，
+          #       一个字都不丢（完整记录仍在仓库与文档站）。
+          python3 scripts/releaseNotes.py "${tag}" "${GITHUB_REPOSITORY}" > RELEASE_BODY.md
           lines=$(wc -l < RELEASE_BODY.md)
           echo "发布说明 ${lines} 行"
           head -5 RELEASE_BODY.md
