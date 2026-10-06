@@ -214,6 +214,54 @@ else
   fail "tag 不存在时没有退回 [Unreleased]（指纹「${UNREL_MARK:0:36}」不在输出里；输出开头是：$(head -1 "${TMP}/fallback.md" | cut -c1-50)）"
 fi
 
+# ── ④b 🔴 小节引言里"自称的批次数/日期跨度"必须与正文**对得上** ────────────────
+# 起因（发版当天实测）：我在 `## [v2026.10.1]` 的引言里写了"**47 批**，2026-09-28 → 2026-10-06"，
+# 而那一节实际有 **48** 个 `###`、日期跨度是 **2026-09-24 → 2026-10-06**（末尾还有一条 09-24 的更正）
+# ⇒ 🔴 生成的 Release 正文里同时出现"47 批"（我写的）与"48 个批次"（生成器数的），自相矛盾。
+# 根因是**用了上一轮的测量值**而没有现量 —— 与本仓库"数字必须现量"的纪律同源。
+# 👉 所以把这条变成判据：同一份文件里出现两处口径（人写的引言 vs 可数的正文），就必须对账。
+INTRO="$("${PY}" - "${CHANGELOG}" <<'PYINTRO'
+import re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
+sec = {}
+for i in range(1, len(parts) - 1, 2):
+    sec[parts[i].strip()] = parts[i + 1].strip()
+bad = 0
+checked = 0
+for key, body in sec.items():
+    if key == 'Unreleased':
+        continue
+    # 引言 = 第一个 `### ` 之前的部分
+    head = re.split(r'(?m)^### ', body)[0]
+    n_real = len(re.findall(r'(?m)^### ', body))
+    m = re.search(r'\*\*(\d+)\s*批\*\*', head)
+    if m:
+        checked += 1
+        if int(m.group(1)) != n_real:
+            print('BADCOUNT %s 自称 %s 批 / 实际 %d 批' % (key, m.group(1), n_real)); bad += 1
+    d = re.findall(r'(\d{4}-\d{2}-\d{2})', head)
+    dates = sorted({x[:10] for x in re.findall(r'(?m)^### (\d{4}-\d{2}-\d{2})', body)})
+    if len(d) >= 2 and dates:
+        checked += 1
+        if d[0] != dates[0] or d[-1] != dates[-1]:
+            print('BADRANGE %s 自称 %s → %s / 实际 %s → %s' % (key, d[0], d[-1], dates[0], dates[-1])); bad += 1
+print('CHECKED=%d BAD=%d' % (checked, bad))
+PYINTRO
+)"
+CHECKED="$(printf '%s\n' "${INTRO}" | sed -n 's/^CHECKED=\([0-9]*\) BAD=.*/\1/p')"
+BADN="$(printf '%s\n' "${INTRO}" | sed -n 's/^CHECKED=[0-9]* BAD=\([0-9]*\)/\1/p')"
+if [[ "${CHECKED:-0}" -ge 1 ]]; then
+  pass "反空转：真的对账了 ${CHECKED} 处"自称批次数/日期跨度"的引言（不是没扫到）"
+else
+  fail "一处"自称批次数"的引言都没扫到 ⇒ 口径变了（或正则失效），这条判据成了空的绿"
+fi
+if [[ "${BADN:-1}" -eq 0 ]]; then
+  pass "所有已发布小节的引言与正文对得上（自称的批次数 == 实际 \`###\` 数、日期跨度 == 实际首末日期）"
+else
+  fail "🔴 引言与正文对不上：$(printf '%s\n' "${INTRO}" | grep -E '^BAD' | tr '\n' '; ') ⇒ Release 说明会自相矛盾（人写的数字必须现量，不能用上一轮的）"
+fi
+
 # ── ⑤ 单一口径：workflow 必须**调用这个脚本**，不许再自己内联一份 ────────────
 # 🔴 否则就是"同一性质两处口径"：改了脚本、workflow 还是老逻辑（发版那天才炸）。
 if grep -q "python3 scripts/releaseNotes.py" "${WORKFLOW}"; then
