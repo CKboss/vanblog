@@ -71,37 +71,130 @@ else
   fail "输出里还留着相对链接：$(grep -oE '\]\((docs/|README\.md|CHANGELOG\.md|scripts/|packages/)[^)]*' "${TMP}/small.md" | head -2 | tr '\n' ' ')"
 fi
 
-# ── ② 超大的一节：必须压成摘要，且**真的压了** ─────────────────────────────
-run v2026.10.1-not-exists "${TMP}/big.md" "${TMP}/big.err"
-RAW_CHARS="$("${PY}" - "${CHANGELOG}" <<'PYRAW'
+# ── ②③ 超长的节：必须压成摘要、**真的压了**、且不丢批次 ─────────────────────
+# 🔴 2026-10-06：这一整块原来**写死了"[Unreleased] 就是那节超长的"**（用一个不存在的 tag 退回去测）。
+#    发版把 `[Unreleased]` 收成 `## [v2026.10.1]` 之后，Unreleased 只剩 309 字符 ⇒ 6 条断言全红。
+#    ⚠️ 值得夸一句：它们的**反空转**那条如实报了"压缩路径没被走到 ⇒ 下面几条都是空的绿"，
+#    🔴 没有假装通过 —— 这正是反空转判据存在的意义（否则发版之后守卫会悄悄变成空的绿，
+#    而"发版之后"恰恰是它最该继续工作的时候）。
+#    修法：① 不再写死哪一节大，而是**把所有超过阈值的节都测一遍**（这样"马上要打 tag 的那一节"必然被覆盖，
+#          而不是由"历史上最大的那一节"碰巧代表 —— 实测 v2026.9.3 有 16.6 万字符却只有 2 个批次，
+#          拿它当唯一样本 ⇒ "摘要不丢批次"几乎验不到东西）；
+#          ② 一节都不超长时（刚发完版就是这种状态），退回"最大的那节 + `--limit 2000` **强制**走压缩路径"。
+PLAN="$("${PY}" - "${CHANGELOG}" <<'PYPLAN'
 import re, sys
 text = open(sys.argv[1], encoding='utf-8').read()
 parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
 sec = {}
 for i in range(1, len(parts) - 1, 2):
     sec[parts[i].strip()] = parts[i + 1].strip()
-print(len(sec.get('Unreleased', '')))
+if not sec:
+    print('BIG_KEY='); print('BIG_CHARS=0'); print('OVER_KEYS='); sys.exit(0)
+big = max(sec.items(), key=lambda kv: len(kv[1]))
+print('BIG_KEY=%s' % big[0])
+print('BIG_CHARS=%d' % len(big[1]))
+over = sorted([k for k, v in sec.items() if len(v) > 100000], key=lambda k: -len(sec[k]))
+print('OVER_KEYS=%s' % ','.join(over))
+PYPLAN
+)"
+eval "${PLAN}"
+
+# 每一节的检查（含反空转、"确实压了"的反证、批次不丢、链接）
+check_section() { # <key> <eff_limit> [额外参数…]
+  local key="$1" eff="$2"
+  shift 2
+  local extra=("$@")
+  local out="${TMP}/sec-${key}.md" err="${TMP}/sec-${key}.err" long="${TMP}/sec-${key}.long"
+  run "${key}" "${out}" "${err}" ${extra+"${extra[@]}"}
+  local raw heads outchars
+  raw="$("${PY}" - "${CHANGELOG}" "${key}" <<'PYRAW'
+import re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
+sec = {}
+for i in range(1, len(parts) - 1, 2):
+    sec[parts[i].strip()] = parts[i + 1].strip()
+body = sec.get(sys.argv[2], '')
+print(len(body))
+print(len(re.findall(r'(?m)^### ', body)))
+cands = [l.strip() for l in body.split('\n')
+         if len(l.strip()) >= 80 and not l.strip().startswith(('|', '#', '```', '>'))]
+cands.sort(key=len, reverse=True)
+open(sys.argv[1] + '.long.tmp', 'w', encoding='utf-8').write(cands[0][:60] if cands else '')
 PYRAW
 )"
-OUT_CHARS="$(wc -m < "${TMP}/big.md" | tr -d ' ')"
-# 反空转：原文必须**确实**超过阈值，否则"压成摘要"这条断言是空的绿
-if [[ "${RAW_CHARS}" -gt 100000 ]]; then
-  pass "反空转成立：[Unreleased] 原文有 ${RAW_CHARS} 字符（> 阈值 100000）⇒ 压缩路径是真的被走到了"
+  heads="$(printf '%s\n' "${raw}" | sed -n 2p)"
+  raw="$(printf '%s\n' "${raw}" | sed -n 1p)"
+  long="$(cat "${CHANGELOG}.long.tmp" 2>/dev/null)"
+  rm -f "${CHANGELOG}.long.tmp"
+  outchars="$(wc -m < "${out}" | tr -d ' ')"
+  if [[ "${raw}" -gt "${eff}" ]]; then
+    pass "[${key}] 反空转：原文 ${raw} 字符 > 阈值 ${eff} ⇒ 压缩路径真的被走到"
+  else
+    fail "[${key}] 原文只有 ${raw} 字符（≤ 阈值 ${eff}）⇒ 压缩路径没被走到，本节其余断言都是空的绿"
+  fi
+  if [[ "${outchars}" -lt "${eff}" ]]; then
+    pass "[${key}] 压到 ${outchars} 字符（< ${eff} ⇒ 不会撞 Release 正文长度上限）"
+  else
+    fail "🔴 [${key}] 输出仍有 ${outchars} 字符（≥ ${eff}）⇒ 压缩没生效，发版那天创建 Release 会被 API 拒"
+  fi
+  if grep -q "超过阈值" "${err}"; then
+    pass "[${key}] 压缩这件事**说出来**了（stderr 写了原文字符数与阈值）—— 静默压缩会让人以为发的是全文"
+  else
+    fail "[${key}] 压缩了却没在 stderr 里说明（静默降级：读日志的人会以为 Release 里是完整正文）"
+  fi
+  # 🔴 反证：完整正文里最长的那行不许出现在摘要里（否则"压了"是假的）
+  # 🔴 必须写 `grep -qF --`：样本行以 `- ` 开头，不加 `--` 时 grep 把它当**选项**
+  #    （实测报 `grep: invalid option -- ' '` 并非 0 退出）⇒ `if grep …` 判假 ⇒
+  #    这条反证会变成**空的绿**（"grep 出错"与"确实没有"分不开）。
+  #    👉 一般化：**把变量当 grep 的模式用，一律加 `--`**。
+  if [[ -n "${long}" ]]; then
+    if grep -qF -- "${long}" "${out}"; then
+      fail "🔴 [${key}] 摘要里出现了完整正文的长句（${long:0:40}…）⇒ 其实没压缩，只是截断了前面部分"
+    else
+      pass "[${key}] 反证成立：原文最长的那行（${long:0:30}…）不在摘要里 ⇒ 真的压了"
+    fi
+  else
+    fail "[${key}] 反证取不到样本（没有 >=80 字的正文行）⇒ 换一个反证口径，别留着空的绿"
+  fi
+  local hout
+  hout="$(grep -c '^### ' "${out}" || true)"
+  if [[ "${hout}" -eq "${heads}" ]]; then
+    pass "[${key}] 摘要里 ${hout} 个批次标题 == 原文 ${heads} 个（一个批次都没丢）"
+  else
+    fail "[${key}] 批次标题数不一致：原文 ${heads} / 摘要 ${hout} ⇒ 摘要丢批次（读者会以为那一版没做这些）"
+  fi
+  if grep -q "CHANGELOG.md](https://github.com/CKboss/vanblog/blob/" "${out}"; then
+    pass "[${key}] 摘要给了完整 CHANGELOG 的**绝对**链接（内容一个字都没丢，只是不在 Release 正文里）"
+  else
+    fail "[${key}] 摘要里没有指向完整 CHANGELOG 的绝对链接 ⇒ 读者拿到摘要就以为那是全部"
+  fi
+}
+
+if [[ -z "${BIG_KEY:-}" ]]; then
+  fail "CHANGELOG 里一节都没解析出来 ⇒ 切段口径坏了，后面几条都是空的绿"
 else
-  fail "[Unreleased] 原文只有 ${RAW_CHARS} 字符（≤ 100000）⇒ 压缩路径没被走到，下面几条断言都是空的绿（换个更小的 --limit 再跑）"
+  TARGETS="${OVER_KEYS:-}"
+  if [[ -n "${TARGETS}" ]]; then
+    echo "  · 本轮被测的节（都超过默认阈值 100000）：${TARGETS}"
+    IFS=',' read -ra KEYS <<< "${TARGETS}"
+    for k in ${KEYS+"${KEYS[@]}"}; do
+      [[ -n "${k}" ]] && check_section "${k}" 100000
+    done
+  else
+    # 刚发完版的状态：一节都不超长 ⇒ 用 --limit 2000 **强制**把压缩路径走出来
+    echo "  · 没有超过 100000 字符的节（刚发完版就是这种状态）⇒ 用 --limit 2000 强制测压缩路径：[${BIG_KEY}]"
+    check_section "${BIG_KEY}" 2000 --limit 2000
+  fi
 fi
-if [[ "${OUT_CHARS}" -lt 100000 ]]; then
-  pass "输出被压到 ${OUT_CHARS} 字符（< 100000 ⇒ 不会撞 Release 正文长度上限）"
-else
-  fail "🔴 输出仍有 ${OUT_CHARS} 字符（≥ 100000）⇒ 压缩没生效，发版那天创建 Release 会被 API 拒"
-fi
-if grep -q "超过阈值" "${TMP}/big.err"; then
-  pass "压缩这件事**说出来**了（stderr 里写了原文字符数与阈值）—— 静默压缩会让人以为发的是全文"
-else
-  fail "压缩了却没在 stderr 里说明（静默降级：读日志的人会以为 Release 里是完整正文）"
-fi
-# 🔴 反证：完整正文里的长句不许出现在摘要里（否则"压了"是假的）
-LONG_LINE="$("${PY}" - "${CHANGELOG}" <<'PYLONG'
+
+# ── ④ 找不到 tag 时退回 [Unreleased] ──────────────────────────────────────
+# 🔴 2026-10-06 改：这条原来复用 ②③ 那个"大节"的输出文件，并靠 `grep "累积了"` 认它 ——
+#    两处都写死了旧状态（文件已改名；`[Unreleased]` 现在是空的、里面根本没有"累积了"这三个字）。
+#    改成：自己跑一次不存在的 tag，然后拿**当前 [Unreleased] 一节的第一行非空文本**当指纹来比对
+#    （🔴 指纹从 CHANGELOG 现取，不写死字面量 ⇒ 以后 Unreleased 写成什么样都不用改判据）。
+run "v-does-not-exist-$$" "${TMP}/fallback.md" "${TMP}/fallback.err"
+UNREL_MARK="$("${PY}" - "${CHANGELOG}" <<'PYMARK'
 import re, sys
 text = open(sys.argv[1], encoding='utf-8').read()
 parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
@@ -109,53 +202,16 @@ sec = {}
 for i in range(1, len(parts) - 1, 2):
     sec[parts[i].strip()] = parts[i + 1].strip()
 body = sec.get('Unreleased', '')
-# ⚠️ 门槛原来是 >260 字，实测**取不到样本**（CHANGELOG 是手工折行的，正文行大多 100 字上下）
-#    ⇒ 反证变成"取不到样本就 fail"。改成取**最长的那一行**（≥80 字即可当样本），
-#    并在下面保留"取不到就 fail"的分支（🔴 宁可红，也不要留一条空的绿）。
-cands = [l.strip() for l in body.split('\n')
-         if len(l.strip()) >= 80 and not l.strip().startswith(('|', '#', '```', '>'))]
-cands.sort(key=len, reverse=True)
-print(cands[0][:60] if cands else '')
-PYLONG
+lines = [l.strip() for l in body.split('\n') if l.strip()]
+print(lines[0][:60] if lines else '')
+PYMARK
 )"
-if [[ -n "${LONG_LINE}" ]]; then
-  if grep -qF "${LONG_LINE}" "${TMP}/big.md"; then
-    fail "🔴 摘要里出现了完整正文的长句（${LONG_LINE:0:40}…）⇒ 其实没压缩，只是截断了前面部分"
-  else
-    pass "反证成立：完整正文里的长句（${LONG_LINE:0:32}…）没有出现在摘要里 ⇒ 真的压了，不是假压缩"
-  fi
+if [[ -z "${UNREL_MARK}" ]]; then
+  fail "[Unreleased] 一节是空的/不存在 ⇒ 这条退回判据没有指纹可比（先给 Unreleased 写点内容，或换一个口径）"
+elif grep -qF -- "${UNREL_MARK}" "${TMP}/fallback.md"; then
+  pass "tag 不存在时退回了 [Unreleased] 一节（指纹：${UNREL_MARK:0:36}…）⇒ 不会空手去建 Release"
 else
-  fail "反证取不到样本（CHANGELOG 里没有 >=80 字的正文行）⇒ 换一个反证口径，别留着空的绿"
-fi
-
-# ── ③ 摘要不许丢批次 + 必须给完整记录的链接 ───────────────────────────────
-HEADINGS_RAW="$("${PY}" - "${CHANGELOG}" <<'PYH'
-import re, sys
-text = open(sys.argv[1], encoding='utf-8').read()
-parts = re.split(r'(?m)^## \[([^\]]+)\][^\n]*\n', text)
-sec = {}
-for i in range(1, len(parts) - 1, 2):
-    sec[parts[i].strip()] = parts[i + 1].strip()
-print(len(re.findall(r'(?m)^### ', sec.get('Unreleased', ''))))
-PYH
-)"
-HEADINGS_OUT="$(grep -c '^### ' "${TMP}/big.md" || true)"
-if [[ "${HEADINGS_OUT}" -eq "${HEADINGS_RAW}" && "${HEADINGS_RAW}" -gt 10 ]]; then
-  pass "摘要里 ${HEADINGS_OUT} 个批次标题 == 原文 ${HEADINGS_RAW} 个（一个批次都没丢）"
-else
-  fail "批次标题数不一致：原文 ${HEADINGS_RAW} / 摘要 ${HEADINGS_OUT} ⇒ 摘要丢批次（读者会以为那一版没做这些）"
-fi
-if grep -q "CHANGELOG.md](https://github.com/CKboss/vanblog/blob/" "${TMP}/big.md"; then
-  pass "摘要末尾给了完整 CHANGELOG 的**绝对**链接（内容一个字都没丢，只是不在 Release 正文里）"
-else
-  fail "摘要里没有指向完整 CHANGELOG 的绝对链接 ⇒ 读者拿到摘要就以为那是全部"
-fi
-
-# ── ④ 找不到 tag 时退回 [Unreleased] ──────────────────────────────────────
-if grep -q "累积了" "${TMP}/big.md"; then
-  pass "tag 不存在时退回了 [Unreleased] 一节（不是空手去建 Release）"
-else
-  fail "tag 不存在时没有退回 [Unreleased]（输出开头是：$(head -1 "${TMP}/big.md" | cut -c1-60)）"
+  fail "tag 不存在时没有退回 [Unreleased]（指纹「${UNREL_MARK:0:36}」不在输出里；输出开头是：$(head -1 "${TMP}/fallback.md" | cut -c1-50)）"
 fi
 
 # ── ⑤ 单一口径：workflow 必须**调用这个脚本**，不许再自己内联一份 ────────────

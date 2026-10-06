@@ -143,10 +143,10 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 
 > ⚠️ `raw.githubusercontent.com` 对**分支**地址有几分钟 CDN 缓存：刚推完就装可能拿到上一版脚本。
 > 真在意就把 URL 里的 `dev/dsh` 换成具体 commit sha。**要可复现该钉的是镜像版本**
-> （`./vanblog.sh update v2026.9.2`），而不是安装器。
+> （`./vanblog.sh update v2026.10.1`），而不是安装器。
 
 脚本会：检测环境 → 默认**先拉镜像** `ghcr.io/ckboss/vanblog:latest`（= 最近一次发布构建；
-`v2026.9.2` 这类发布号内容固定，`latest` 会随下次发版移动）→
+`v2026.10.1` 这类发布号内容固定，`latest` 会随下次发版移动）→
 拉不到就**自动退回源码构建**（构建前实测 CPU 与可用内存，决定并发还是串行、admin 用 4096MB 还是 1536MB 堆；
 可用内存不足 1.8GB 时直接劝退并给出两条出路，不让你白等 20 分钟）→ 生成 compose → 起容器 → 打印访问地址。
 
@@ -160,7 +160,7 @@ curl -L https://raw.githubusercontent.com/CKboss/vanblog/dev/dsh/scripts/vanblog
 | `./vanblog.sh` | 打开菜单 |
 | `./vanblog.sh --lang zh` | 帮助与提示切中文（**默认英文**）；也可写 `-l zh` / `--lang=zh` / `VANBLOG_LANG=zh` |
 | `./vanblog.sh update` | 升到**最近一次发布**（默认镜像 `:latest`）；先把新镜像准备好再停容器，**失败不会动正在跑的容器** |
-| `./vanblog.sh update v2026.9.2` | 升到（或钉到）**指定发布号**；内容固定不变，回滚也是这条 |
+| `./vanblog.sh update v2026.10.1` | 升到（或钉到）**指定发布号**；内容固定不变，回滚也是这条 |
 | `./vanblog.sh config` | 重新生成 compose（改了环境变量之后跑这个） |
 | `./vanblog.sh backup` / `restore` | 整站备份 / 恢复 |
 | `./vanblog.sh backup-verify` | 备份 + **立刻深度校验** + 陈旧检查 + 台账（适合放 cron） |
@@ -283,7 +283,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:latest` | 用哪个镜像。`latest` = 最近一次发布构建（会移动）；**要钉版本/回滚就写发布号**，如 `ghcr.io/ckboss/vanblog:v2026.9.2`；也可换成自己的 registry |
+| `VANBLOG_IMAGE_REF` | `ghcr.io/ckboss/vanblog:latest` | 用哪个镜像。`latest` = 最近一次发布构建（会移动）；**要钉版本/回滚就写发布号**，如 `ghcr.io/ckboss/vanblog:v2026.10.1`；也可换成自己的 registry |
 | `VANBLOG_INSTALL_MODE` | `auto` | `auto` 先拉镜像、失败退回源码构建；`image` 只拉；`source` 只本地构建 |
 | `VANBLOG_USE_UPSTREAM_IMAGE` | `false` | 设 `true` 回到上游官方镜像（**不含本仓库的任何改动**，优先级最高） |
 | `VANBLOG_RATE_LIMIT_PER_MIN` | `600` | 每 IP 每分钟的全局请求上限（静态资源另有 10 倍独立桶） |
@@ -301,7 +301,7 @@ docker compose、宝塔面板、群晖、Kubernetes、前后端分离部署：�
 
 ```bash
 ./vanblog.sh update              # 升到最近一次发布（默认镜像 :latest）；失败不会动正在跑的容器
-./vanblog.sh update v2026.9.2    # 升到 / 钉到指定发布号（回滚也是这条，换成旧发布号即可）
+./vanblog.sh update v2026.10.1    # 升到 / 钉到指定发布号（回滚也是这条，换成旧发布号即可）
 ./vanblog.sh config              # 改了环境变量之后重新生成 compose
 ```
 
@@ -478,7 +478,7 @@ AGENTS.md           工程运行手册：环境、测试、排错速查、每一
 直接[新建 issue](https://github.com/CKboss/vanblog/issues/new) 即可）；交流也可以走
 [VanBlog 开发群](https://jq.qq.com/?_wv=1027&k=mf2CguM8)，代码改动照样走 PR（目标分支 `dev/dsh`）。
 报问题时请带上：`./vanblog.sh status` 的输出、容器日志里的相关片段（`./vanblog.sh log`）、
-以及后台「关于」里显示的版本号（形如 `v2026.9.2@<短 sha>`：tag + 构建时的 commit，能直接对上）。
+以及后台「关于」里显示的版本号（形如 `v2026.10.1@<短 sha>`：tag + 构建时的 commit，能直接对上）。
 
 如果是上游版本的问题（比如你装的是 `VANBLOG_USE_UPSTREAM_IMAGE=true`），请到
 [上游仓库](https://github.com/Mereithhh/vanblog/issues/new/choose)反馈。
