@@ -142,6 +142,29 @@ ENGINE="$(pick_engine)"
 say "> 构建引擎：${yellow}${ENGINE}${plain}（ENGINE=docker|podman 可强制指定）"
 command -v "${ENGINE}" >/dev/null 2>&1 || die "找不到 ${ENGINE}"
 
+# 🔴 期 12 第三批：镜像存在性检查必须**按引擎**来。
+#    `podman image exists` 是 **podman 独有**的子命令 —— `docker image` 下面**根本没有 exists**
+#    （实测 `docker image --help` 只有 build/history/import/inspect/load/ls/prune/pull/push/rm/save/tag）
+#    ⇒ 在 docker 上那句永远失败，于是"**构建成功**"被误报成"镜像不存在（多半是构建被打断了）"。
+#    🔴 这就是 nightly 的 image-build 从 2026-09-23 起**连续 13 次失败**的真因（GitHub runner 用的是 docker）：
+#    把失败诊断改成"错误特征行 + 末尾 4 行 + 完整日志 artifact"之后，注解里终于看到了
+#    `#136 writing image sha256:… done` / `#136 naming to docker.io/library/vanblog:ci-nightly done`
+#    紧跟着一句 `构建命令返回 0，但镜像 vanblog:ci-nightly 并不存在` ⇒ **镜像其实建出来了**。
+#    👉 🔴 教训（两层）：① 本机只用 podman 跑，就永远撞不到 docker 分支 —— **双引擎脚本的每条命令都要
+#    逐个核对两个引擎都支持**（`--pull=never`、`image exists` 都是这么栽的）；
+#    ② 那 13 次失败**一直查不出来**，是因为诊断通道自己坏了（`tail -40` 撞上 GitHub 每个 check run
+#    **只保留 10 条注解**的上限）⇒ 先修诊断，才看得见真因。
+image_exists() { # <engine> <tag> → rc 0 = 存在；rc 2 = 查不了（引擎不在/参数空）
+  local eng="$1" tag="$2"
+  [[ -n "${eng}" && -n "${tag}" ]] || return 2
+  command -v "${eng}" >/dev/null 2>&1 || return 2
+  if [[ "${eng}" == "podman" ]]; then
+    "${eng}" image exists "${tag}" 2>/dev/null
+  else
+    "${eng}" image inspect "${tag}" >/dev/null 2>&1
+  fi
+}
+
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 VERSION_LABEL="local@${GIT_SHA}"
 
@@ -183,7 +206,7 @@ if [[ "${DO_BUILD}" == "1" ]]; then
   "${ENGINE}" build "${BUILD_ARGS[@]}" -t "${IMAGE_TAG}" . || die "镜像构建失败"
   # ⚠️ 光看退出码不够：被 SIGTERM 打断的 podman build 实测会**退出 0**，
   #    日志停在半截（apk 装到 18/218）却报"构建成功"。所以必须再确认镜像真的存在。
-  if ! "${ENGINE}" image exists "${IMAGE_TAG}" 2>/dev/null; then
+  if ! image_exists "${ENGINE}" "${IMAGE_TAG}"; then
     die "构建命令返回 0，但镜像 ${IMAGE_TAG} 并不存在（多半是构建被打断了）—— 请重新构建"
   fi
   say "${green}镜像构建成功${plain}：${IMAGE_TAG}"

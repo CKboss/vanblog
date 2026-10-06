@@ -102,7 +102,66 @@ fi
 has "容器名带 PID（并发跑两次不会互相拆）" 'vanblog-smoke-$$'
 has "可以保留容器排查" "SMOKE_KEEP"
 # 被 SIGTERM 打断的 podman build 会退出 0（实测），只信退出码就会宣布"构建成功"
-has "构建后确认镜像真的存在（podman build 被打断时也会返回 0）" 'image exists "${IMAGE_TAG}"'
+has "构建后确认镜像真的存在（podman build 被打断时也会返回 0）" 'image_exists "${ENGINE}" "${IMAGE_TAG}"'
+
+# 🔴 期 12 第三批：那个存在性检查必须**按引擎**用各自的命令。
+#    `podman image exists` 是 podman 独有的 —— `docker image` 下面**没有 exists**
+#    （实测 `docker image --help` 只有 build/history/import/inspect/load/ls/prune/pull/push/rm/save/tag）
+#    ⇒ 原来那句 `"${ENGINE}" image exists "${IMAGE_TAG}"` 在 docker 上**永远失败**，
+#    于是"构建成功"被误报成"镜像不存在（多半是构建被打断了）"。
+#    🔴 这就是 nightly 的 image-build 从 2026-09-23 起**连续 13 次失败**的真因（runner 用 docker）：
+#    注解里 `#136 writing image sha256:… done` 之后紧跟那句误报 ⇒ 镜像其实建出来了。
+#    ⚠️ 本机只用 podman 跑，所以这条**在本机永远撞不到** ⇒ 只能用"假引擎"把它测出来（下面就是这么做的）。
+echo "-- image_exists：双引擎行为（用假引擎跑真函数）--"
+FAKE_BIN="$(mktemp -d)"
+cat > "${FAKE_BIN}/podman" <<'FK'
+#!/usr/bin/env bash
+# 假 podman：支持 `image exists`（tag=good 时存在）；也支持 `image inspect` 以便对照
+[[ "$1" == "image" ]] || exit 64
+case "$2" in
+  exists)  [[ "$3" == "good" ]] && exit 0 || exit 1 ;;
+  inspect) [[ "$3" == "good" ]] && exit 0 || exit 1 ;;
+  *) exit 64 ;;
+esac
+FK
+cat > "${FAKE_BIN}/docker" <<'FK'
+#!/usr/bin/env bash
+# 假 docker：**照真 docker 的行为**——没有 `image exists` 这个子命令
+[[ "$1" == "image" ]] || exit 64
+case "$2" in
+  inspect) [[ "$3" == "good" ]] && exit 0 || exit 1 ;;
+  exists)  echo "docker: 'exists' is not a docker command." >&2; exit 1 ;;
+  *) exit 64 ;;
+esac
+FK
+chmod +x "${FAKE_BIN}/podman" "${FAKE_BIN}/docker"
+# 反证：假引擎必须**忠实**（假 docker 真的要拒绝 `image exists`），否则下面的绿是假的
+if PATH="${FAKE_BIN}:${PATH}" docker image exists good >/dev/null 2>&1; then
+  fail "假 docker 居然接受了 image exists ⇒ 它不忠实，下面几条断言都是空的绿"
+else
+  pass "反证：假 docker 拒绝 image exists（与真 docker 一致）⇒ 下面的断言有区分力"
+fi
+# 把真函数抽出来跑（不 source 整个脚本：它会执行主流程）
+eval "$(sed -n '/^image_exists()/,/^}$/p' "${SCRIPT}")"
+if declare -F image_exists >/dev/null 2>&1; then
+  pass "能从脚本里抽出 image_exists 这个函数（它是可测的，不是内联在构建流程里）"
+else
+  fail "抽不出 image_exists 函数 ⇒ 这段逻辑没法单测（这正是它当初在 docker 上坏了 13 天没人知道的原因）"
+fi
+PATH="${FAKE_BIN}:${PATH}" image_exists podman good && pass "podman + 镜像存在 → rc 0" || fail "podman + 镜像存在 应该是 rc 0"
+PATH="${FAKE_BIN}:${PATH}" image_exists podman nope; [[ $? -ne 0 ]] && pass "podman + 镜像不存在 → 非 0" || fail "podman + 镜像不存在 应该非 0"
+PATH="${FAKE_BIN}:${PATH}" image_exists docker good && pass "🔴 docker + 镜像存在 → rc 0（原来这里必红：docker 没有 image exists）" || fail "🔴 docker + 镜像存在 应该是 rc 0（用 docker image inspect 查）"
+PATH="${FAKE_BIN}:${PATH}" image_exists docker nope; [[ $? -ne 0 ]] && pass "docker + 镜像不存在 → 非 0（不能因为换了命令就把"没有"也判成"有"）" || fail "docker + 镜像不存在 应该非 0"
+PATH="${FAKE_BIN}:${PATH}" image_exists nosuchengine good; [[ $? -eq 2 ]] && pass "引擎不存在 → rc 2（查不了 ≠ 不存在，两种都要与"有"区分开）" || fail "引擎不存在 应该 rc 2"
+PATH="${FAKE_BIN}:${PATH}" image_exists podman ""; [[ $? -eq 2 ]] && pass "tag 为空 → rc 2（不许把空 tag 判成"存在"）" || fail "tag 为空 应该 rc 2"
+rm -rf "${FAKE_BIN}"
+# 🔴 源码级：不许再有"不分引擎就调 image exists"的形状（那正是坏掉的那一句）
+# 🔴 这里**刻意不加**"源码里不许出现 image exists"那种形状判据：
+#    `image exists` 在 `image_exists()` 的 **podman 分支里是正确写法**，形状判据分不清
+#    "在 podman 分支里"与"不分引擎直接调"⇒ 第一版我就写了这么一条，结果它在**没被变异的正确代码上就红**
+#    （把 `${eng}` 也算进来了），放宽成只认 `${ENGINE}` 又漏掉了"函数体里退回坏形状"的变异。
+#    👉 结论：**这种"要看上下文才知道对错"的性质，交给上面那组假引擎行为断言**（它们直接跑真函数），
+#    不要用源码正则去近似 —— 近似出来的判据要么假红、要么漏红，两边都坏。
 has "mongo 版本跟着脚本的 pick_mongo_image 走（和真实安装一致）" "pick_mongo_image"
 
 # 不该有的东西
