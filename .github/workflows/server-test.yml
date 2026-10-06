@@ -437,6 +437,11 @@ jobs:
           fi
           zstd --version
 
+      - name: Image publish policy (publish only on v* tag / manual; no build per commit)
+        # 🔴 站长裁定（2026-10-06）：`我主动要求你进行publish, 你再publish 镜像. 不用每次commit都要build镜像`
+        #    这条裁定被钉成不变量：publish-ghcr 只能由 v* tag / workflow_dispatch 触发；
+        #    PR 档（每次 push 都跑）里不许有真镜像构建；nightly 的构建不许推送。
+        run: bash scripts/tests/run-guard.sh scripts/tests/image-publish-policy.test.sh
       - name: Release notes generator (CHANGELOG section -> Release body, with length cap)
         # 🔴 期 12 第三批：这段逻辑原来**内联在 release-fork.yml 里**，只在打 tag 那一刻才第一次真跑；
         #    搬进仓库后本机能跑真脚本，也才轮得到守卫盯它（当前 [Unreleased] 有 12.6 万字符，

@@ -556,10 +556,13 @@ pnpm release-doc     # 把根 CHANGELOG.md 同步成 docs/changelog.md，并 bum
 
 | 流水线 | 做什么 |
 | --- | --- |
-| `release-fork.yml` | 建 GitHub Release：发布说明取 `CHANGELOG.md` 里**与 tag 同名**的那一节（找不到才退回 `[Unreleased]`），附件是 `vanblog.sh` 与 `docker-compose-template.yml` |
+| `release-fork.yml` | 建 GitHub Release：发布说明由 **`scripts/releaseNotes.py`** 生成 —— 取 `CHANGELOG.md` 里**与 tag 同名**的那一节（找不到才退回 `[Unreleased]`）、相对链接改写成指向该 tag 的绝对地址、🔴 **超过 10 万字符就压成「每批一段摘要 + 完整 CHANGELOG 链接」**（GitHub 对 Release 正文有长度上限）；附件是 `vanblog.sh` 与 `docker-compose-template.yml` |
 | `publish-ghcr.yml` | 构建镜像并推到 `ghcr.io/ckboss/vanblog`：发版 tag 会同时更新 `latest` 与该 tag（只发 linux/amd64） |
 
-所以发版前要先把 `CHANGELOG.md` 的 `[Unreleased]` 切成 `## [vX.Y.Z] - 日期`，否则 Release 说明会是空的。
+发版前**建议**把 `CHANGELOG.md` 的 `[Unreleased]` 切成 `## [vX.Y.Z] - 日期`（这样 Release 说明就是那一节，
+而不是「还没发版」那一整坨）；⚠️ 但**不切也不会是空的** —— 生成器会退回 `[Unreleased]` 一节
+（并在超长时自动压成摘要）。🔴 生成器有守卫：`bash scripts/tests/release-notes.test.sh`（13 条，
+用真 CHANGELOG 当输入，含「确实压缩了」「批次一个都没丢」两条反证）。
 版本号用 [standard-version](https://github.com/conventional-changelog/standard-version) 按 Conventional Commits 生成：
 
 ```bash
@@ -568,6 +571,31 @@ pnpm release
 ```
 
 ⚠️ 请不要自行执行 `pnpm release` 或推送 `v*` tag —— 那是真的发版：会公开建 Release 并推镜像。
+🔴 **站长裁定（2026-10-06）**：`我主动要求你进行publish, 你再publish 镜像. 不用每次commit都要build镜像`
+⇒ **只有站长主动要求时才 publish**；代理（与人）都不许为了「顺手验证」就在每次提交后构建/推送镜像。
+这条裁定已钉成不变量，有守卫盯着：`bash scripts/tests/image-publish-policy.test.sh`（13 条）——
+① `publish-ghcr.yml` 只能由 `v*` tag / `workflow_dispatch` 触发（**不许**有分支触发）；
+② PR 档（`server-test` / `admin-e2e` / `docs-test`，每次 push 都跑）里**不许有真镜像构建**
+（跑 `build-image-local.sh` 的**静态契约守卫**是允许且必要的：它只 grep 脚本，不构建）；
+③ `nightly` 那次**定时**构建不许推送（它只回答「镜像今天还建得出来吗」）。
+
+### 发版前检查清单（本机可跑，实测口径）
+
+```bash
+bash vanblog_dev/run-matrix.sh                       # 五阶段：admin / 守卫 / jest / vitest / tsc（约 10 分钟）
+node scripts/i18n/inventory.js --zh-tw-audit         # 繁中用字审计（0 命中才算干净）
+bash scripts/tests/release-notes.test.sh             # 发布说明生成器（长度上限、摘要不丢批次）
+bash scripts/tests/image-publish-policy.test.sh      # 发布策略不变量
+ENGINE=podman PULL_POLICY=never bash scripts/build-image-local.sh   # 🔴 真构建 + 冒烟（15–40 分钟，只在发版前跑）
+VANBLOG_DRILL_IMAGE=vanblog:local-test ./vanblog.sh drill <一份真整站归档>   # 🔴 活体恢复演练（CI 里跑不了）
+```
+
+🔴 最后两项**只在发版前跑**（一次全量构建 + 一次演练要一小时上下），日常提交跑矩阵就够了
+（这正是上面那条裁定的意思：不用每次 commit 都 build 镜像）。
+另外：发版前顺手看一眼 CI 的近期结论（含 `nightly`）——
+`curl -sS "https://api.github.com/repos/CKboss/vanblog/actions/workflows/nightly.yml/runs?per_page=12"`
+匿名可读；失败原因看 `/check-runs/<job_id>/annotations`（下载 job 日志需要仓库 admin 权限）。
+⚠️ 本仓库吃过这个亏：nightly 连续红了 **13 天**而没人查得出来（诊断通道自己坏了，见 `AGENTS.md` §7.220）。
 
 镜像标签的含义：
 

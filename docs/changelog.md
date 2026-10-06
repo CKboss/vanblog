@@ -42,6 +42,70 @@ redirectFrom: /ref/changelog.html
 - 📈 进度：服务端"带中文的 throw 站点"棘轮 **186 → 162**；错误码 **59 → 81**；语言包 **1504 → 1526 key ×3**。
 
 
+### 2026-10-06（续）：站长裁定"**只有我主动要求才 publish 镜像**"⇒ 把它钉成不变量（不靠记性）
+
+**站长裁定（2026-10-06，逐字）**：`我主动要求你进行publish, 你再publish 镜像. 不用每次commit都要build镜像`
+
+#### A. 先**实测**当前状态是否已经合规（不是假设）
+把 6 个 workflow 的触发条件与"哪些 job 会构建/推送镜像"全解析了一遍（PyYAML）：
+| workflow | 触发 | 会构建镜像？ | 会推送镜像？ |
+|---|---|---|---|
+| `server-test.yml` | push(dev/dsh) + PR | 🔴 **否**（只跑 `build-image-local.sh` 的**静态契约守卫**，即 grep 脚本）| 否 |
+| `admin-e2e.yml` / `docs-test.yml` | push + PR | 否 | 否 |
+| `nightly.yml` | **schedule + workflow_dispatch** | ✅ 每天一次（构建 + 冒烟）| 🔴 **否** |
+| `publish-ghcr.yml` | **`v*` tag** + workflow_dispatch | ✅ | ✅（`latest` + `:<tag>`）|
+| `release-fork.yml` | `v*` tag + workflow_dispatch | 否（建 Release）| 否 |
+⇒ 结论：**发布镜像本来就只由 tag / 人工触发**，PR 档不构建，nightly 只构建不推送 ⇒ 现状**已合规**。
+⚠️ 但"已合规"是**此刻的事实**，不是不变量：谁给 `publish-ghcr.yml` 加一行 `branches: [dev/dsh]`，
+就变成"每次 commit 都构建并推 `latest`"（几十分钟 runner 时间 + 把 `latest` 从"最近一次发布"污染成
+"任意一次提交的产物"，而 README 明确写着 `latest` = 最近一次**发布**）⇒ 所以要钉住。
+
+#### B. 新守卫 `scripts/tests/image-publish-policy.test.sh`（13 条，全绿）
+① **会推送镜像的 workflow 不许有分支触发**，且必须由 tag 触发（发布是**显式动作**）；
+② **PR 档里不许有真镜像构建**（`docker build` / `podman build` / `build-push-action` / 直接调
+   `build-image-local.sh`）—— ⚠️ 但跑它的**静态契约守卫**（`run-guard.sh …/build-image-local.test.sh`）
+   **是允许且必要的**，所以判据要能区分"真构建"与"只 grep 脚本"（否则 PR 档永远红，人就会去改判据）；
+③ **nightly 的构建不许推送**（定时构建只回答"镜像今天还建得出来吗"）；
+④ 反空转（解析到 ≥5 个 workflow、全部能 YAML 解析、**尺子确实抓到了 publish-ghcr**）；
+⑤ 🔴 **两条尺子有效性反证**：合成一个"分支触发 + `docker build` + `docker push`"的假 workflow 必须被点名；
+   合成一个"只跑静态契约守卫"的假 workflow **不许**被误判成真构建。
+**变异对照 3 条全部打红**（给 publish-ghcr 加分支触发 / 往 server-test 里塞 `docker build` / 给 nightly 加
+`docker push`），且报错里能点名到具体 workflow 与 job；还原后 sha256 逐字节相同。
+已接进 CI（`server-test.yml` 新一步）+ 本机矩阵清单（37 → **38** 条）。
+
+#### C. 🔴 写这条守卫时踩的三个坑，第二个尤其值得记
+1. **字段号取错**：分析器输出 `PUSHES=<workflow>:<job>`，我用 `cut -d: -f2` 取"推送镜像的 workflow"
+   ⇒ 取到的是 **job 名**（`build-and-push`）⇒ 后面拿它去匹配 `TAGTRIG=…` 全部落空，
+   报出一条**假红**（"会推送镜像却不由 tag 触发"）。👉 改成 `sed 's/^PUSHES=\([^:]*\):.*/\1/p'` 取第一段。
+2. 🔴 **批量改引号的脚本误伤了命令替换，而守卫照样 13/0 全绿**：
+   为了修"双引号串里写 ASCII 双引号"（第 7 次踩），我写了个脚本把 `pass/fail` 那几行里**成对**的 ASCII
+   引号换成 「」 —— 但它只数引号、**分不清"消息文本里的引号"与 `$( … )` 里的 shell 引号**，
+   于是把 `printf '%s\n' "${OUT}"` 改成了 `printf '%s\n' 「${OUT}」`（**5 处**）。
+   🔴 后果极其隐蔽：那 5 处都在 **FAIL 分支**里，正常跑永远不会执行 ⇒ **守卫仍然 13/0 全绿**；
+   直到做变异对照，才发现"打红了，但报错细节是**空的**"（`「${OUT}」` 成了字面量，grep 拿到垃圾）。
+   👉 🔴 一般化：**批量文本改写之后，必须把每条错误路径都触发一次看输出**，不能只看 pass/fail 计数 ——
+   计数全绿只证明"正常路径没坏"，而批量改写最容易坏的恰恰是**平时不走的那些分支**。
+   （与"变异对照里编译失败的 `no tests` 不能当成断言红"是同族：都是**只看结论不看过程**。）
+3. ⚠️ 同类：`BUILDS=<wf>:<job>` 只有两段，我却写 `cut -d: -f3` ⇒ 细节永远为空（改成 `sed 's/^[^:]*://'`）。
+
+#### D. 落到文档
+- `AGENTS.md` 那份**给代理的硬性规矩**清单里新增第 **7** 条（原 7–10 顺延为 8–11）：
+  🔴 只有站长主动要求时才可以 publish / 推 `v*` tag；不要为了"顺手验证"就每次提交都构建镜像；
+  要验证镜像就**一次说清**（构建 + 冒烟，必要时加活体演练）。⚠️ 改编号前先搜过"按编号引用"的地方：
+  全仓库只有"§6 第 4 条"这一处引用该清单，而第 4 条没动 ⇒ 顺延不会打断引用
+  （🔴 **改编号前必须先搜按编号的引用**，否则会造出一堆指错的指针）。
+- `docs/contribution.md` 的 Release 一节：写清裁定原文 + 新守卫；修正一处**不准确的旧话**
+  （原文说"发版前必须先把 `[Unreleased]` 切成 `## [vX.Y.Z]`，否则 Release 说明会是空的"——
+  🔴 其实生成器会**退回** `[Unreleased]`，不切也不会空；现在还会在超长时自动压成摘要）；
+  并补上**发版前检查清单**（矩阵 / 繁中审计 / 发布说明守卫 / 发布策略守卫 / 🔴 真构建+冒烟 / 🔴 活体演练），
+  明说后两项**只在发版前跑**（一次要一小时上下）—— 这正是本批裁定的意思。
+
+#### E. 🔴 本轮**没有**发布任何东西（如实交代）
+`git tag --points-at HEAD` = **0**；远端最新 tag 仍是 **v2026.9.6**；没有推过任何 `v*` tag，
+没有触发过 `publish-ghcr` / `release-fork`。本机那两次镜像构建是**站长上一轮明确要求**的
+"检查 build 镜像流程"（构建 + 冒烟，产物只在本地：`vanblog:local-test`），**没有推送**。
+👉 下一步等站长点名版本号与"可以 publish"，才走 `git tag -a v… && git push ckboss v…`。
+
 ### 2026-10-06：发版前**全量验证** —— 演练判据换成"按 key 对账"（比原来更强）、修好 nightly 的失败诊断、README 刷新
 
 站长要求：`对当前版本进行一次全量的测试, 如果验证通过, 就更新readme文档, 并检查build镜像流程, 为发版做准备`
